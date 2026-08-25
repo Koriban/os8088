@@ -23,7 +23,16 @@ here — every record this writer needs exists in BIFF3.
 | `XF`     | 0043H | **0243H** | 0443H | 00E0H | writes 0243H, reads 0243H **and** 0443H |
 | `RK`     | —     | **027EH** | 027EH | 027EH | writes 027EH |
 | `NUMBER` | 0003H | **0203H** | 0203H | 0203H | writes 0203H |
+| `LABEL`  | 0004H | **0204H** | 0204H | 0204H | writes 0204H |
 | `EOF`    | 000AH | 000AH | 000AH | 000AH | writes 000AH |
+
+`LABEL` is the second trap, for a different reason than `FONT`: the opcode is
+easy, but the BODY changed shape. BIFF2's `LABEL` (0004H) carries a **one-byte**
+length and a three-byte cell attribute where later versions put a two-byte XF
+index; BIFF3's (0204H) is row(2), col(2), ixfe(2), **cch(2)**, then the bytes.
+A reader that takes the length as one byte reads the high half of a 16-bit
+count as its first character and desynchronises from there to the end of the
+stream. Sheet writes and accepts only the BIFF3 form.
 
 `FONT` is the trap in that table: it is `0031H` in BIFF2 **and again** in
 BIFF5/7/8, but `0231H` in exactly BIFF3 and BIFF4. Getting it from a BIFF8

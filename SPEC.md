@@ -67048,6 +67048,85 @@ shortfall. Read the **line number** and not just the sign: the two report the
 same shortfall with opposite signs, so which one fired is what says whether the
 literal is too small or too large.
 
+### 81.11 Text cells
+
+Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything
+else had to parse as a number — and the else-of-the-else was `sh_clearcell`.
+Typing `Sales` into a cell left the cell **empty**.
+
+**Content decides the type**, which is Excel's own rule: `'='` is a formula, a
+COMPLETE number is a number, everything else is a label. `3.5kg` is a label,
+because `fp_atof` stopping part-way through means the text was never a number —
+that test already existed to stop a typo silently becoming `3.5`, and it turns
+out to be exactly the test that separates the two kinds. There is **no forcing
+prefix**: the leading `'` `"` `^` `\` are Lotus 1-2-3's, and Excel 2.1 has
+none.
+
+The characters live in the **formula arena** at `SH_C_FOFF`, and the two never
+collide because a cell is one thing or the other — `HASFORMULA` clear plus the
+`SH_T_TEXT` tag stage 4.0 reserved is the whole discrimination.
+`sh_getcell2` publishes that tag in `sh_curtype` beside the format byte it
+already published, which is what lets a caller tell a label from the zero it
+would otherwise read as this cell's value. Like a formula, retyping a label
+appends and abandons the old bytes; the arena has no free list.
+
+**`sh_setformula` had to start writing `SH_C_TYPE`**, which did not matter
+while there was only one type. A formula typed over a label reuses that label's
+record, so without the retag the cell drew its old text forever while computing
+the right answer underneath.
+
+#### 81.11.1 General means a different thing for each
+
+`sh_justify_t` intercepts exactly `SH_FMT_ALIGN_GENERAL` — right for a number,
+left for a label — and hands every explicit alignment to `sh_justify`
+unchanged. A label is **clipped to its column** rather than overflowing into
+empty neighbours the way Excel does: that needs the neighbours' occupancy at
+draw time, which is a drawing-order change rather than a storage one.
+
+`sh_numbuf` grew from 10 bytes to 41 in the same change. It held the widest
+DECORATED number (`$-32768`) and that was its whole job until labels started
+going through the same three justifiers; a label is as wide as its column, and
+a column runs to `SH_CW_MAXCH`.
+
+#### 81.11.2 COUNT and COUNTA can now disagree
+
+Every numeric fold steps over a label. `AVERAGE` for a second reason on top of
+the first: it divides by `sh_pcnt`, so counting a label would drag the mean
+toward zero without ever adding to the total. `COUNTA` is the one fold that
+wants it, and this is the first release in which the two can differ at all.
+
+#### 81.11.3 The charset gate is a range now, not a list
+
+That allow-list grew one character at a time as the formula language did —
+`'='`, the operators, `<` `>`, `!` and `"`, `.`, `$`, `^` — and **every**
+addition was found the same way: the parser handled the character correctly and
+never saw it, because the gate dropped it first. A cell that can hold a label
+ends the argument, since there is no subset of printable ASCII a column heading
+may not contain. The gate now asks the only question it can answer — is this
+printable — and leaves what the characters MEAN to `sh_commit`, which is where
+that decision already lived.
+
+#### 81.11.4 What each file format does with a label
+
+| format | a label | a number |
+|---|---|---|
+| SYLK | `;K"Total"` — **quoted**, which is the whole signal | `;K3.5` |
+| DIF  | `1,0` then `"Total"` — data type 1, STRING | `0,3.5` then `V` |
+| BIFF | `LABEL` 0204H, 2-byte `cch` | `RK` 027EH or `NUMBER` 0203H |
+
+SYLK doubles an embedded quote, because the widened charset gate admits one and
+a bare one would end the field early and leave the rest of the label looking
+like malformed SYLK. **DIF has no escape for one at all**, so it is dropped:
+the label loses a character and the file stays parseable, which is the right
+way round.
+
+**The DIF writer was also emitting the truncated integer** — `mov ax, dx` — so
+a sheet holding `3.5` saved to DIF as `3`, in silence, and reloaded as `3`.
+Stage 4.0 converted SYLK's `K` field to a full decimal and left this one
+behind. Both halves are fixed: the writer runs `fp_ftoa` and the reader
+`sh_esatof`, where it had been `sh_pint`. DIF's numeric item was never
+restricted to integers; only this app's was.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

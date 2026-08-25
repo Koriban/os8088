@@ -6635,6 +6635,10 @@ sh_dowrite_sylk:
     mov [sh_wrec_val], ax
     mov al, [es:si+5]
     mov [sh_wrec_fmt], al
+    mov al, [es:si+SH_C_TYPE]         ; stage 4.5: and the tag, because a LABEL
+    mov [sh_wrec_type], al            ; goes out as a QUOTED K field rather
+    mov ax, [es:si+SH_C_FOFF]         ; than as a number, and its characters
+    mov [sh_wrec_toff], ax            ; come from the same arena a formula's do
     pop es                            ; ES = stgseg again
 
     mov si, sh_s_c
@@ -6687,6 +6691,8 @@ sh_dowrite_sylk:
 .noexpr:
     mov si, sh_s_k
     call sh_stgput
+    cmp byte [sh_wrec_type], SH_T_TEXT
+    je .ktext
     push si                           ; SYLK's K field IS a decimal literal,
     push di                           ; so the full value goes out, not a
     mov si, sh_wrec_dval              ; truncation of it
@@ -6698,6 +6704,34 @@ sh_dowrite_sylk:
     pop si
     mov si, sh_numbuf
     call sh_stgput
+    jmp .kdone
+.ktext:
+    ; A LABEL'S K FIELD IS QUOTED, and that is the whole of how SYLK tells text
+    ; from a number - there is no type field to consult, on either side.
+    ; An embedded quote is DOUBLED, because the charset gate admits one now and
+    ; a bare one would end the field early and leave the rest of the label
+    ; looking like malformed SYLK.
+    mov al, 34
+    call sh_stgputb
+    mov si, [sh_wrec_toff]
+.kt:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    or al, al
+    jz .ktend
+    inc si
+    cmp al, 34
+    jne .kt1
+    call sh_stgputb                   ; doubled: a quote inside a label
+.kt1:
+    call sh_stgputb
+    jmp .kt
+.ktend:
+    mov al, 34
+    call sh_stgputb
+.kdone:
     mov si, sh_s_crlf
     call sh_stgput
 
@@ -7077,22 +7111,59 @@ sh_dowrite_dif:
     cmp ax, [sh_bbcol]
     ja .rnext
     mov ax, di
-    add ax, 16                        ; worst case "0,-32768\r\nV\r\n"
-    cmp ax, SH_STAGE_MAX
+    add ax, SH_EDITMAX + 24           ; worst case is now a LABEL and its
+    cmp ax, SH_STAGE_MAX              ; quotes, not "0,-32768\r\nV\r\n"
     ja .footer
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
     call sh_getcell2
     jnc .na
-    mov si, sh_s_dif_zc
-    call sh_stgput
-    mov ax, dx
-    call sh_itoa
+    cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: DIF's type 1 is STRING -
+    je .dtext                          ; "1,0" then the quoted text on the
+    mov si, sh_s_dif_zc                ; following line, which is the real
+    call sh_stgput                     ; format's own grammar
+    push si                            ; ...and the value goes out as a FULL
+    push di                            ; DECIMAL. This wrote `mov ax, dx` -
+    mov si, sh_acc                     ; the TRUNCATED integer - so a sheet
+    call fp_unpack_a                   ; holding 3.5 saved to DIF as 3, in
+    mov di, sh_numbuf                  ; silence, and reloaded as 3. Stage 4.0
+    mov ax, 10                         ; converted SYLK's K field and left this
+    call fp_ftoa                       ; one behind; DIF's numeric item has
+    pop di                             ; never been restricted to integers.
+    pop si
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_crlf
     call sh_stgput
     mov si, sh_s_dif_v
+    call sh_stgput
+    jmp .cnext
+.dtext:
+    mov si, sh_s_dif_1c
+    call sh_stgput                     ; "1,0" CRLF, then the quoted string
+    mov al, 34
+    call sh_stgputb
+    mov si, [sh_curtoff]
+.dt:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    or al, al
+    jz .dtend
+    inc si
+    cmp al, 34                         ; DIF has no escape for an embedded
+    je .dt                             ; quote, so one is DROPPED rather than
+    cmp al, 13                         ; written out to break the line - the
+    je .dt                             ; label loses a character, the file
+    cmp al, 10                         ; stays parseable
+    je .dt
+    call sh_stgputb
+    jmp .dt
+.dtend:
+    mov al, 34
+    call sh_stgputb
+    mov si, sh_s_crlf
     call sh_stgput
     jmp .cnext
 .na:
@@ -7219,17 +7290,17 @@ sh_doread_dif:
     mov al, [es:si]
     cmp al, '-'
     je .rowloop                        ; the next row's "-1,0"
-    cmp al, '0'
-    jne .skipunknown                   ; this app never writes anything
-                                        ; else here (type 1/STRING, say) -
-                                        ; skip defensively rather than
-                                        ; misread a foreign file's line
+    cmp al, '1'
+    je .dstring                        ; stage 4.5: type 1 IS a string item,
+    cmp al, '0'                        ; and this app writes them now - the
+    jne .skipunknown                   ; comment that used to sit here said it
+                                        ; never would, and skipping them was
+                                        ; the right defence at the time
     add si, 2                          ; past "0,"
     mov bx, di
-    call sh_pint                       ; -> AX=value, SI past the digits
-    mov [sh_wrec_val], ax
-    call sh_difskipline                ; finish the "0,<value>" line
-    cmp si, di
+    call sh_esatof                     ; a full decimal into sh_acc, not
+    call sh_difskipline                ; sh_pint's integer: the writer emits
+    cmp si, di                         ; 3.5 and this read it back as 3
     jae .cellnext
     cmp byte [es:si], 'V'              ; the real DIF value-indicator: V
     jne .notvalid                      ; (valid) is the only one this app
@@ -7238,10 +7309,48 @@ sh_doread_dif:
                                         ; "leave this cell blank" here
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
-    mov dx, [sh_wrec_val]
-    call sh_setval
+    call sh_setvald
 .notvalid:
     call sh_difskipline                ; the indicator line
+    jmp .cellnext
+.dstring:
+    call sh_difskipline                ; past the "1,0" line; the quoted text
+    cmp si, di                         ; is the line after it
+    jae .cellnext
+    cmp byte [es:si], 34
+    jne .notvalid                      ; not quoted: not a string item this
+    inc si                             ; app can use - skip the line
+    push di                            ; DI is the buffer END and is needed
+    push di                            ; again below, so it is banked twice:
+    mov di, SH_TEXPR                   ; once for the loop bound in CX terms
+    mov cx, SH_EDITMAX                 ; and once as the cursor here
+    pop bx                             ; BX = the end offset
+.ds:
+    jcxz .dsend
+    cmp si, bx
+    jae .dsend
+    mov al, [es:si]
+    cmp al, 34
+    je .dsend
+    cmp al, 13
+    je .dsend
+    cmp al, 10
+    je .dsend
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .ds
+.dsend:
+    mov byte [di], 0
+    pop di
+    push si
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    mov si, SH_TEXPR
+    call sh_settext
+    pop si
+    call sh_difskipline
     jmp .cellnext
 .skipunknown:
     call sh_difskipline
@@ -7707,7 +7816,14 @@ sh_dowrite_biff:
     pop si
     mov al, [es:si+5]
     mov [sh_wrec_fmt], al
+    mov al, [es:si+SH_C_TYPE]
+    mov [sh_wrec_type], al            ; stage 4.5: a LABEL takes neither RK nor
+    mov ax, [es:si+SH_C_FOFF]         ; NUMBER
+    mov [sh_wrec_toff], ax
     pop es                            ; ES = stgseg again
+
+    cmp byte [sh_wrec_type], SH_T_TEXT
+    je .aslabel
 
     ; --- which record? -------------------------------------------------------
     ; AN EXACT IN-RANGE INTEGER STILL GOES OUT AS RK, byte for byte as before,
@@ -7767,6 +7883,65 @@ sh_dowrite_biff:
     call sh_biffw
     mov ax, [sh_wrec_dval+6]
     call sh_biffw
+    jmp .recnext
+.aslabel:
+    ; LABEL, 0204H in BIFF3 - and NOT 0004H, which is BIFF2's. The body is the
+    ; same row/col/xf head RK and NUMBER use, then a SIXTEEN-BIT length and the
+    ; bytes. BIFF2's LABEL has a one-byte length and a three-byte cell
+    ; attribute where the xf index goes, so a file mixing the two conventions
+    ; desynchronises the moment a reader trusts the length field.
+    push si                            ; measure it first: the length goes in
+    push es                            ; the record BEFORE the bytes do
+    mov es, [sh_txtseg]
+    mov si, [sh_wrec_toff]
+    xor cx, cx
+.llen:
+    cmp byte [es:si], 0
+    je .lhavelen
+    inc si
+    inc cx
+    cmp cx, 255                        ; BIFF3 allows 255; the arena string
+    jb .llen                           ; cannot be longer than SH_EDITMAX
+                                       ; anyway, and this is the format's own
+                                       ; ceiling rather than ours
+.lhavelen:
+    pop es
+    pop si
+    mov [sh_wrec_len], cx
+    mov ax, di                         ; and only now check for room, because
+    add ax, cx                         ; the length is what decides how much
+    add ax, 12
+    cmp ax, SH_STAGE_MAX
+    jbe .lroom
+    mov byte [sh_trunc], 1
+    jmp .recnext
+.lroom:
+    mov ax, 0x0204                     ; LABEL
+    call sh_biffw
+    mov ax, [sh_wrec_len]
+    add ax, 8                          ; row+col+xf+cch = 8, then the bytes
+    call sh_biffw
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    xor ah, ah
+    mov al, [sh_wrec_fmt]
+    call sh_biffw
+    mov ax, [sh_wrec_len]
+    call sh_biffw
+    mov si, [sh_wrec_toff]
+    mov cx, [sh_wrec_len]
+    jcxz .recnext
+.lput:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    inc si
+    call sh_stgputb
+    dec cx
+    jnz .lput
     jmp .recnext
 .recskip:
     pop es
@@ -7834,7 +8009,8 @@ sh_doread_biff:
     mov word [sh_biff_nfont], 0
     mov word [sh_biff_nxf], 0
     mov cx, ax                         ; CX = end offset (bytes read)
-    xor si, si
+    mov [sh_biff_end], ax              ; ...and banked, because .islabel needs
+    xor si, si                         ; a counter and CX is the only one free
 .rechdr:
     mov ax, si
     add ax, 4                          ; a record header is 4 bytes; EOF's
@@ -7861,7 +8037,9 @@ sh_doread_biff:
     je .isrk
     cmp ax, 0x0203                     ; NUMBER: a whole IEEE-754 double, and
     je .isnum                          ; the only way a fraction can travel
-    jmp .skip
+    cmp ax, 0x0204                     ; LABEL (BIFF3/4). 0004H is BIFF2's,
+    je .islabel                        ; with a one-byte length, and is NOT
+    jmp .skip                          ; accepted here for that reason
 .isfont:
     mov bx, [sh_biff_nfont]
     cmp bx, SH_BIFF_FONT_CAP
@@ -7983,6 +8161,53 @@ sh_doread_biff:
     pop es
     pop dx
     jmp .skip
+.islabel:
+    push dx
+    mov ax, si
+    add ax, dx
+    cmp ax, cx
+    ja .toolong
+    mov ax, [es:si]                    ; row
+    mov [sh_wrec_row], ax
+    mov ax, [es:si+2]                  ; col
+    mov [sh_wrec_col], ax
+    mov ax, [es:si+4]                  ; xf index
+    mov [sh_wrec_xf], ax
+    mov ax, [es:si+6]                  ; cch, sixteen bits in BIFF3
+    cmp ax, SH_EDITMAX                 ; a longer label is TRUNCATED, not
+    jbe .lcap                          ; refused: the record's own length
+    mov ax, SH_EDITMAX                 ; field still governs the skip below,
+.lcap:                                 ; so the stream stays in step
+    mov [sh_wrec_len], ax
+    push si
+    push di
+    add si, 8                          ; past row/col/xf/cch
+    mov di, SH_TEXPR
+    mov cx, [sh_wrec_len]              ; CX HOLDS THE FILE END for this whole
+    jcxz .lrdend                       ; routine and is the only register free
+.lrd:                                  ; to count with, so it is reloaded from
+    mov al, [es:si]                    ; sh_biff_end after the copy - every
+    mov [di], al                       ; record after this one is bounded by it
+    inc si
+    inc di
+    dec cx
+    jnz .lrd
+.lrdend:
+    mov byte [di], 0
+    pop di
+    pop si
+    push es
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    push si
+    mov si, SH_TEXPR
+    call sh_settext
+    pop si
+    call sh_biff_applyfmt
+    pop es
+    mov cx, [sh_biff_end]              ; CX restored: the loop bound, banked at
+    pop dx                             ; the top of this routine, because the
+    jmp .skip                          ; copy above used CX as its counter
 .toolong:
     pop dx
     jmp .done
@@ -8087,6 +8312,7 @@ sh_parsecrec:
     mov word [SH_TROW], 0
     mov word [SH_TVAL], 0
     mov byte [SH_THASE], 0
+    mov byte [SH_TISTXT], 0
     mov word [SH_TDVAL], 0
     mov word [SH_TDVAL+2], 0
     mov word [SH_TDVAL+4], 0
@@ -8129,6 +8355,43 @@ sh_parsecrec:
     jmp .tok
 .isk:
     inc si
+    cmp si, bx                        ; stage 4.5: a QUOTED K field is a label.
+    jae .knum                         ; SYLK has no type field - the quotes are
+    cmp byte [es:si], 34              ; the entire signal, on both sides
+    jne .knum
+    inc si                            ; past the opening quote
+    push di
+    mov di, SH_TEXPR                  ; the same buffer ;E uses, and never at
+    mov cx, SH_EDITMAX                ; the same time: a label has no formula
+.kt:
+    jcxz .ktend
+    cmp si, bx
+    jae .ktend
+    mov al, [es:si]
+    cmp al, 13
+    je .ktend
+    cmp al, 10
+    je .ktend
+    cmp al, 34
+    jne .ktkeep
+    inc si                            ; a quote: doubled means one literal
+    cmp si, bx                        ; quote, single means end of field
+    jae .ktend
+    cmp byte [es:si], 34
+    jne .ktend
+.ktkeep:
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .kt
+.ktend:
+    mov byte [di], 0
+    pop di
+    mov byte [SH_TISTXT], 1
+    mov byte [SH_THAVE], 1
+    jmp .tok
+.knum:
     call sh_esatof                    ; a full decimal, not an integer
     push ax
     push si
@@ -8191,7 +8454,7 @@ sh_parsecrec:
     dec cx
     mov bx, cx
     cmp byte [SH_THASE], 0            ; a ;E field wins over ;K: the value is
-    je .plainval_c                    ; only the cached result of it, and
+    je .notformula_c                  ; only the cached result of it, and
     push ax                           ; storing that instead would flatten the
     push bx                           ; formula exactly as this used to
     push si
@@ -8208,6 +8471,14 @@ sh_parsecrec:
     call sh_setformula                ; put the saved value straight back over
                                       ; it, and sh_setformula stored whatever
                                       ; the staging pointer happened to be
+    jmp .out
+.notformula_c:
+    cmp byte [SH_TISTXT], 0
+    je .plainval_c
+    push si
+    mov si, SH_TEXPR
+    call sh_settext
+    pop si
     jmp .out
 .plainval_c:
     push si
@@ -13781,6 +14052,7 @@ sh_s_dif_hdr2: db 13, 10, '""', 13, 10, 'TUPLES', 13, 10, '0,', 0
 sh_s_dif_hdr3: db 13, 10, '""', 13, 10, 'DATA', 13, 10, '0,0', 13, 10, '""', 13, 10, 0
 sh_s_dif_bot:  db '-1,0', 13, 10, 'BOT', 13, 10, 0
 sh_s_dif_zc:   db '0,', 0
+sh_s_dif_1c:   db '1,0', 13, 10, 0        ; stage 4.5: a STRING data item
 sh_s_dif_v:    db 'V', 13, 10, 0           ; the real DIF value-indicator
                                             ; for "this numeric data is
                                             ; valid" - NOT a comment string;
@@ -13838,7 +14110,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2240
+    OS88_BSS 2248
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -13873,7 +14145,9 @@ SH_TVAL       equ SH_TROW + 2               ; the integer form, still used by
 SH_TDVAL      equ SH_TVAL + 2               ; 8: SYLK's, as a real double
 SH_THASE      equ SH_TDVAL + 8              ; byte: this record had a ;E field
 SH_TEXPR      equ SH_THASE + 1              ; SH_EDITMAX+1: its text
-SH_THAVE      equ SH_TEXPR + SH_EDITMAX + 1
+SH_TISTXT     equ SH_TEXPR + SH_EDITMAX + 1 ; byte: the ;K field was QUOTED,
+                                             ; so SH_TEXPR holds a label
+SH_THAVE      equ SH_TISTXT + 1
 SH_TALIGN     equ SH_THAVE + 1             ; sh_parsefrec's own scratch -
 SH_TNUMFMT    equ SH_TALIGN + 1            ; an "F" record's parsed
 SH_TCOMMA     equ SH_TNUMFMT + 1           ; alignment/number-format/;K
@@ -14022,7 +14296,11 @@ sh_rc_tfmt    equ sh_rc_tflags + 1          ; than a few named bytes
 sh_wrec_foff  equ sh_rc_tfmt + 1            ; word: the formula text offset of
                                              ; the cell being written, or FFFF
 sh_wrec_dval  equ sh_wrec_foff + 2          ; 8: the SYLK writer's banked value
-sh_rc_tval    equ sh_wrec_dval + 8          ; 8: a whole double, not a word
+sh_wrec_type  equ sh_wrec_dval + 8          ; byte: SH_T_* of the cell being
+sh_wrec_toff  equ sh_wrec_type + 1          ; written, where its label is, and
+sh_wrec_len   equ sh_wrec_toff + 2          ; how long that label is
+sh_biff_end   equ sh_wrec_len + 2           ; the BIFF reader's banked file end
+sh_rc_tval    equ sh_biff_end + 2           ; 8: a whole double, not a word
 sh_rc_tfml    equ sh_rc_tval + 8
 
 sh_sort_cnt   equ sh_rc_tfml + 2            ; word: sh_docmd_sortcol's own
