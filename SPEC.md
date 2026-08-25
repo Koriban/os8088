@@ -66744,10 +66744,8 @@ them all at once would have made any fault impossible to localise.
 
 What is still integer, and deliberately: the thirteen fixed-arity functions
 (`MOD`, `FACT`, `ROW`, `CHOOSE` and the rest) take whole numbers and return
-one, because a fractional `MOD` is not a thing they mean. What is still
-integer and *should not be*: the BIFF writer emits the RK integer subtype, so
-saving a non-integer to that format truncates — SYLK round-trips decimals in
-both directions, and BIFF's `NUMBER` record is the fix.
+one, because a fractional `MOD` is not a thing they mean. All three file
+formats round-trip decimals.
 
 ### 81.1 The cell array — sorted, sparse, and shared by four sheets
 
@@ -66934,12 +66932,30 @@ selected at OK time would attach the result to the wrong cell.
 
 ### 81.7 File formats
 
-**SYLK**, **DIF** and **BIFF** (Excel 2.x), read and written, chosen by
-extension. Staging goes through `sh_stgseg`. The BIFF writer emits the integer
-RK subtype for every value, which is exactly what a 16-bit integer model can
-produce; a later widening adds `NUMBER` for the rest and should keep emitting
-RK whenever a value is an exact in-range integer, so files this app has already
-written stay byte-identical.
+**SYLK**, **DIF** and **BIFF**, read and written, chosen by extension. Staging
+goes through `sh_stgseg`. All three carry decimals.
+
+**BIFF is written as BIFF3**, not BIFF4, and that is the deliberate choice: a
+reader is backward compatible and not forward compatible, so Excel 4 and
+everything after it read a BIFF3 stream happily, while a program that knows
+only BIFF3 does not even recognise a BIFF4 `BOF`. Emitting the older stream is
+therefore strictly the wider audience and costs nothing — every record this
+writer uses exists in BIFF3. The opcodes are `BOF` 0x0209 with version 0x0300,
+`FONT` 0x0231, `XF` 0x0243, `RK` 0x027E, `NUMBER` 0x0203, `EOF` 0x000A. The
+reader accepts BIFF4's `XF` (0x0443) as well, so files written before the
+switch — and real Excel 4 files — still read back with their formats.
+
+**A value goes out as `RK` when it is an exact in-range integer and as
+`NUMBER` otherwise.** That keeps every integer file byte-identical to what
+this app wrote before doubles existed, and it means a reader that only knows
+the old RK integer subtype still gets those cells. `NUMBER` carries the
+IEEE-754 double verbatim, which is the same eight bytes the working form packs
+to, so it needs no conversion in either direction.
+
+On read, **all four RK subtypes** are accepted — including the ÷100 and
+float-top-32 forms, which are precisely the ones a 16-bit integer had to
+refuse and which a real Excel file uses freely. Refusing them meant silently
+dropping cells.
 
 ### 81.8 The macro language
 

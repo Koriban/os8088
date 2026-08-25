@@ -7308,6 +7308,91 @@ sh_rkenc:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_rkdec_d - in: DX:AX = a packed RK value; out: sh_acc = it, as a double.
+;
+; ALL FOUR SUBTYPES, where sh_rkdec below handles only the one an integer
+; could represent. The other three - divided by 100, and the float form that
+; is the TOP 32 BITS of an IEEE-754 double with the low 32 zero - are exactly
+; the ones a 16-bit integer had to refuse, and refusing them meant silently
+; dropping cells from any file Excel itself had written.
+;
+;   bit0 = 1: the value is 100x what was meant
+;   bit1 = 1: integer form, a signed 30-bit value in the top 30 bits
+;   bit1 = 0: float form, the top 32 bits of a double
+; -----------------------------------------------------------------------------
+sh_rkdec_d:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, ax                        ; bl bit0/bit1 = the subtype flags
+    test al, 0x02
+    jz .float
+    mov cx, 2                         ; integer form: an arithmetic shift, so
+.shr:                                 ; a negative value stays negative
+    sar dx, 1
+    rcr ax, 1
+    loop .shr
+    push bx
+    call fp_i32_to_a                  ; DX:AX (signed 32) -> A
+    pop bx
+    jmp .div100
+.float:
+    and ax, 0xFFFC                    ; the two flag bits are not mantissa
+    mov word [sh_acc], 0              ; the low 32 bits of the double are zero
+    mov word [sh_acc+2], 0            ; by construction in this form
+    mov [sh_acc+4], ax
+    mov [sh_acc+6], dx
+    push bx
+    call sh_acc_load_a
+    pop bx
+.div100:
+    test bl, 0x01
+    jz .out
+    mov ax, 100                       ; bit0: it was scaled up by a hundred
+    call fp_i2b
+    call fp_div
+.out:
+    call sh_acc_store
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_i32_to_a - DX:AX, a SIGNED 32-bit integer, becomes A.
+fp_i32_to_a:
+    push ax
+    push bx
+    push cx
+    push di
+    mov byte [fp_as], 0
+    or dx, dx
+    jns .abs
+    mov byte [fp_as], 1
+    neg dx                            ; the 32-bit negate idiom
+    neg ax
+    sbb dx, 0
+.abs:
+    mov [fp_am0], ax
+    mov [fp_am1], dx
+    mov word [fp_am2], 0
+    mov word [fp_am3], 0
+    mov word [fp_ae], 0
+    mov bx, fp_am0
+    mov di, fp_ae
+    call fp_norm
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_rkdec - in: DX:AX = a packed RK value (AX low word, DX high word); out:
 ; CF=0 and AX=the signed 16-bit value if it's the "integer, not multiplied"
 ; subtype this project writes, else CF=1 (out of this subset's scope - the
@@ -7419,14 +7504,29 @@ sh_dowrite_biff:
     mov es, [sh_stgseg]
     xor di, di
 
-    mov ax, 0x0409                   ; BOF (BIFF4)
+    mov ax, 0x0209                   ; BOF (BIFF3). NOT BIFF4, deliberately:
+                                      ; a reader is BACKWARD compatible and
+                                      ; not forward compatible, so Excel 4 and
+                                      ; everything after it read a BIFF3 file
+                                      ; happily, while a program that knows
+                                      ; only BIFF3 cannot read a BIFF4 one -
+                                      ; it does not even recognise the BOF.
+                                      ; Emitting the older stream is therefore
+                                      ; strictly the wider audience, and costs
+                                      ; nothing: every record this writer uses
+                                      ; exists in BIFF3.
     call sh_biffw
-    mov ax, 4
+    mov ax, 6
     call sh_biffw
-    mov ax, 0x0400                   ; vers (this project's own subset)
+    mov ax, 0x0300                   ; vers = BIFF3, matching the BOF above
     call sh_biffw
     mov ax, 0x0010                   ; dt = worksheet
     call sh_biffw
+    xor ax, ax                       ; BIFF3's BOF carries two more bytes,
+    call sh_biffw                    ; documented as "not used" - BIFF2's
+                                      ; record is the four-byte one, and a
+                                      ; reader that trusts the length would
+                                      ; desynchronise on the short form
 
     ; 4 FONT records (indices 0-3: normal, bold, underline, bold+underline)
     ; and 64 XF records (indices 0-63) - one per possible SH_FMT_* byte
@@ -7472,7 +7572,14 @@ sh_dowrite_biff:
     mov si, [sh_wrow]
     cmp si, 64
     jae .xfsdone
-    mov ax, 0x0443                   ; XF (BIFF4)
+    mov ax, 0x0243                   ; XF (BIFF3). Same twelve bytes as the
+                                      ; BIFF4 record in the fields this uses -
+                                      ; font index, format index, attributes,
+                                      ; alignment, area, border - which is why
+                                      ; the body below did not have to change
+                                      ; with the opcode. BIFF4's additions to
+                                      ; that record (orientation, notably) sit
+                                      ; in bits this never sets.
     call sh_biffw
     mov ax, 12
     call sh_biffw
@@ -7485,8 +7592,15 @@ sh_dowrite_biff:
     and bx, 3                        ; bx = our number-format code
     mov ah, [sh_biff_numfmt_tab + bx] ; ah = real BIFF built-in format id
     call sh_biffw                    ; offset0-1: font idx, format idx
-    xor ax, ax                       ; offset2-3: type/prot=0 (cell XF,
-    call sh_biffw                    ; unlocked), parent style idx=0
+    mov ax, 0xFC00                   ; BIFF3 offset2 = XF_TYPE_PROT (0: a
+    call sh_biffw                    ; cell XF, unlocked, not hidden), and
+                                      ; offset3 = XF_USED_ATTRIB (FCH:
+                                      ; override every inherited attribute,
+                                      ; since no style XFs are written).
+                                      ; BIFF4 puts those in DIFFERENT places -
+                                      ; a word at 2, and a byte at 5 - which
+                                      ; is why the body had to change with the
+                                      ; opcode after all.
     mov ax, si
     mov cl, 2
     shr ax, cl
@@ -7494,9 +7608,11 @@ sh_dowrite_biff:
                                       ; format byte) - matches XF_HOR_ALIGN
                                       ; 0-3 (General/Left/Center/Right)
                                       ; directly, no translation needed
-    mov ah, 0xFC                     ; XF_USED_ATTRIB: override every
-    call sh_biffw                    ; inherited attribute (no style XFs
-                                      ; are written, so nothing to inherit)
+    xor ah, ah                       ; BIFF3 offset4 is a WORD: alignment in
+    or ax, 0xFFF0                    ; bits 2-0, and the parent style XF index
+    call sh_biffw                    ; in bits 15-4. FFFH is the documented
+                                      ; "no parent", which is the honest value
+                                      ; when no style XF exists to point at.
     xor ax, ax                       ; XF_AREA_34: no fill
     call sh_biffw
     xor ax, ax                       ; XF_BORDER_34 low word: no borders
@@ -7540,11 +7656,45 @@ sh_dowrite_biff:
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
-    mov ax, [es:si+SH_C_VAL]
-    mov [sh_wrec_val], ax
+    call sh_cellval_to_acc_si         ; the whole value, banked - the choice
+    push si                           ; of record below needs all eight bytes
+    push di
+    mov si, sh_acc
+    mov di, sh_wrec_dval
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    pop si
     mov al, [es:si+5]
     mov [sh_wrec_fmt], al
     pop es                            ; ES = stgseg again
+
+    ; --- which record? -------------------------------------------------------
+    ; AN EXACT IN-RANGE INTEGER STILL GOES OUT AS RK, byte for byte as before,
+    ; so every file this app has already written is unchanged and a reader that
+    ; only knows the old subtype still reads those cells. Anything else - a
+    ; fraction, or a magnitude past a signed word - needs the NUMBER record,
+    ; which carries the IEEE-754 double verbatim.
+    push si
+    mov si, sh_wrec_dval
+    call fp_unpack_a
+    pop si
+    call fp_a2i                       ; CF=1: no signed word can hold it
+    jc .asnumber
+    mov [sh_wrec_val], ax
+    call fp_i2a                       ; round-trip it and see if anything was
+    push si                           ; lost - 3.5 truncates to 3, and 3 is
+    mov si, sh_wrec_dval              ; not the value we were asked to write
+    call fp_unpack_b
+    pop si
+    call fp_cmpab
+    jne .asnumber
 
     mov ax, 0x027E                    ; RK cell record
     call sh_biffw
@@ -7562,6 +7712,27 @@ sh_dowrite_biff:
     call sh_biffw                     ; low word
     mov ax, dx
     call sh_biffw                     ; high word
+    jmp .recnext
+.asnumber:
+    mov ax, 0x0203                    ; NUMBER: row, col, xf, then an 8-byte
+    call sh_biffw                     ; IEEE-754 double, little-endian - the
+    mov ax, 14                        ; same layout the working form packs to,
+    call sh_biffw                     ; so it goes out with no conversion
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    xor ah, ah
+    mov al, [sh_wrec_fmt]
+    call sh_biffw
+    mov ax, [sh_wrec_dval]
+    call sh_biffw
+    mov ax, [sh_wrec_dval+2]
+    call sh_biffw
+    mov ax, [sh_wrec_dval+4]
+    call sh_biffw
+    mov ax, [sh_wrec_dval+6]
+    call sh_biffw
     jmp .recnext
 .recskip:
     pop es
@@ -7642,14 +7813,20 @@ sh_doread_biff:
     je .done
     cmp ax, 0x0231                     ; FONT
     je .isfont
-    cmp ax, 0x0443                     ; XF (BIFF4) - the only XF opcode
-    je .isxf                           ; this reader understands; a real
-                                        ; BIFF3 (0x0243) or BIFF5-8 (0x00E0)
-                                        ; file's XFs are skipped generically
-                                        ; below, so its cells just read back
-                                        ; unformatted rather than misread
+    cmp ax, 0x0243                     ; XF (BIFF3) - what this app writes
+    je .isxf                           ; now, and what a real Excel 3 file
+    cmp ax, 0x0443                     ; carries. BIFF4's is accepted too, so
+    je .isxf                           ; files written before the switch still
+                                        ; read back with their formats, as do
+                                        ; real Excel 4 files. BIFF5-8's XF
+                                        ; (0x00E0) has a different layout and
+                                        ; is skipped generically below, so
+                                        ; those cells read back unformatted
+                                        ; rather than misformatted.
     cmp ax, 0x027E                     ; RK cell record
     je .isrk
+    cmp ax, 0x0203                     ; NUMBER: a whole IEEE-754 double, and
+    je .isnum                          ; the only way a fraction can travel
     jmp .skip
 .isfont:
     mov bx, [sh_biff_nfont]
@@ -7697,13 +7874,17 @@ sh_doread_biff:
     xor al, al                         ; Filled/Justified/CenterAcrossSel:
                                         ; out of this subset's scope
 .alignok:
-    mov cl, SH_FMT_ALIGN_SHIFT
-    shl al, cl
-    mov ah, al                         ; ah = align packed into bits2-3
-    mov al, [es:si+1]                  ; format index (offset1, the real
-    call sh_biff_numfmt_from_id        ; BIFF built-in id) -> al = our code
+    push cx                            ; CX IS THE FILE'S END OFFSET here, and
+    mov cl, SH_FMT_ALIGN_SHIFT         ; `mov cl` destroys its low byte. With
+    shl al, cl                         ; 64 XF records to read, the walk then
+    pop cx                             ; ran off a length of ~1028 instead of
+    mov ah, al                         ; 1160 and stopped BEFORE the first cell
+    mov al, [es:si+1]                  ; record - so every BIFF file this app
+    call sh_biff_numfmt_from_id        ; wrote read back as "Loaded" and empty.
+    push cx
     mov cl, SH_FMT_NUM_SHIFT
     shl al, cl
+    pop cx
     or al, ah                          ; al = align|numfmt packed byte
     mov di, sh_xf_fmt
     add di, bx
@@ -7728,17 +7909,44 @@ sh_doread_biff:
     mov [sh_wrec_xf], ax
     mov ax, [es:si+6]                  ; rk value low word
     mov dx, [es:si+8]                  ; rk value high word
-    call sh_rkdec                      ; -> CF=1 if out of scope, else AX
-    jc .rkdone                         ; unsupported RK subtype: skip cell
-    mov [sh_wrec_val], ax
+    push es                            ; sh_rkdec_d works in sh_acc, which is
+    call sh_rkdec_d                    ; ours, not the staging segment's
+    pop es
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    mov dx, [sh_wrec_val]
-    call sh_setval
+    call sh_setvald
     call sh_biff_applyfmt              ; uses sh_wrec_col/row/xf; looks up
                                         ; the format and writes it to the
                                         ; cell record sh_setval just made
 .rkdone:
+    pop dx
+    jmp .skip
+.isnum:
+    push dx
+    mov ax, si
+    add ax, dx
+    cmp ax, cx
+    ja .toolong
+    mov ax, [es:si]                    ; row
+    mov [sh_wrec_row], ax
+    mov ax, [es:si+2]                  ; col
+    mov [sh_wrec_col], ax
+    mov ax, [es:si+4]                  ; xf index
+    mov [sh_wrec_xf], ax
+    mov ax, [es:si+6]                  ; the eight value bytes, verbatim
+    mov [sh_acc], ax
+    mov ax, [es:si+8]
+    mov [sh_acc+2], ax
+    mov ax, [es:si+10]
+    mov [sh_acc+4], ax
+    mov ax, [es:si+12]
+    mov [sh_acc+6], ax
+    push es
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_setvald
+    call sh_biff_applyfmt
+    pop es
     pop dx
     jmp .skip
 .toolong:
