@@ -100,6 +100,9 @@ FAST = [
     Row("checkdocs", "fast", py("tools/checkdocs.py"), 1.0,
         "stale SPEC.md citations and slot numbers in prose (already in `make`; "
         "here too so the suite is a complete statement)"),
+    Row("docindex", "fast", py("tools/os88index.py", "--check"), 0.5,
+        "docs/INDEX.md still matches the tree - an index that has drifted is "
+        "worse than none, because it is consulted and believed"),
     Row("checkreadme", "fast", py("tools/checkreadme.py", "readme.txt"), 0.3,
         "README.TXT's width and size rules - Note Pad refuses a file one byte "
         "too long and shows nothing at all"),

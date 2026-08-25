@@ -1094,8 +1094,15 @@ test-soak: $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
 # text and writes nothing. It builds no artifact, so it is PHONY and every
 # `make` pays it; that is deliberate, because the drift it catches arrives in
 # commits that touch no source at all.
+#
+# docs/INDEX.md rides the same rule and for a stronger reason. It is GENERATED
+# from apps/os88api.inc, SPEC.md and this file, and it exists to be consulted
+# before designing something - so an index that has drifted is worse than no
+# index at all, because it is believed. `tools/os88index.py --check` fails the
+# build if a regeneration would change a byte; `tools/os88index.py` fixes it.
 checkdocs:
 	@python3 tools/checkdocs.py
+	@python3 tools/os88index.py --check
 
 $(BUILD):
 	@mkdir -p $(BUILD)
