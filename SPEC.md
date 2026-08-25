@@ -67287,6 +67287,24 @@ behind. Both halves are fixed: the writer runs `fp_ftoa` and the reader
 `sh_esatof`, where it had been `sh_pint`. DIF's numeric item was never
 restricted to integers; only this app's was.
 
+### 81.12 Enter after Tab returns to the column the row began in
+
+Typing across a row with Tab and then pressing Enter puts the cursor at the
+start of the **next** row, not below wherever Tab happened to stop. That is
+Excel's behaviour and it is what makes entering a table row by row work at all;
+without it every Enter walks the cursor diagonally down and to the right.
+
+One bss word, `sh_tabanchor`, carries it. The first Tab of a run records the
+column it started from; later Tabs leave it alone; Enter consumes it; and
+**`sh_select` clears it unconditionally**, so any other way of moving — an
+arrow, a click, Goto, a scroll into view — ends the run without the key
+handlers having to know about each other. The Tab arm is the single exception
+and puts the anchor back *after* its own `sh_select` call rather than before.
+
+The column is stored **plus one**, so zero means "no run in progress". A
+package's bss arrives zeroed, so the sentinel costs no initialisation pass and
+cannot be got wrong by a code path that forgets to run one.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

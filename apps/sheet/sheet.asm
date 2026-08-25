@@ -797,7 +797,8 @@ sh_onclick:
 sh_select:
     push ax
     push bx
-    call sh_commit
+    mov word [sh_tabanchor], 0       ; ANY other move ends a Tab run - only the
+    call sh_commit                   ; Tab arm puts the anchor back afterwards
     mov [sh_selcol], ax
     mov [sh_selrow], bx
     mov [sh_selcol2], ax               ; stage 3.0a: a plain select COLLAPSES
@@ -1259,10 +1260,17 @@ sh_onkey:
     call sh_repaint
     jmp .out
 .notesc:
-    cmp al, 13                       ; Enter: commit, move down
-    jne .nottab
-    call sh_commit
+    cmp al, 13                       ; Enter: commit, move down - and back to
+    jne .nottab                      ; the column this ROW's entry started in,
+    call sh_commit                   ; which is what Excel does after a run of
+    mov ax, [sh_tabanchor]           ; Tabs. sh_select clears the anchor, so
+    or ax, ax                        ; Enter consuming it needs no extra step
+    jz .noanchor
+    dec ax                           ; stored as col+1, see the Tab arm below
+    jmp .enterrow
+.noanchor:
     mov ax, [sh_selcol]
+.enterrow:
     mov bx, [sh_selrow]
     inc bx
     cmp bx, SH_ROWS
@@ -1275,7 +1283,14 @@ sh_onkey:
     cmp al, 9                        ; Tab: commit, move right
     jne .notbs
     call sh_commit
-    mov ax, [sh_selcol]
+    mov ax, [sh_tabanchor]           ; the first Tab of a run records where it
+    or ax, ax                        ; started; later ones keep that. Stored as
+    jnz .haveanchor                  ; col+1, so a ZEROED bss reads as "none"
+    mov ax, [sh_selcol]              ; and no init pass is needed
+    inc ax
+.haveanchor:
+    push ax                          ; sh_select clears it, so it is put back
+    mov ax, [sh_selcol]              ; afterwards rather than before
     mov bx, [sh_selrow]
     inc ax
     cmp ax, SH_COLS
@@ -1283,6 +1298,8 @@ sh_onkey:
     mov ax, SH_COLS - 1
 .tabgo:
     call sh_select
+    pop ax
+    mov [sh_tabanchor], ax
     jmp .out
 .notbs:
     cmp al, 8                        ; Backspace: the field owns it now, so it
@@ -16821,7 +16838,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2982
+    OS88_BSS 2984
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -17431,7 +17448,9 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-sh_bss_end        equ fp_sw + 2
+sh_tabanchor      equ fp_sw + 2        ; word: 0 = no Tab run in progress,
+                                       ; else the run's start column PLUS ONE
+sh_bss_end        equ sh_tabanchor + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
