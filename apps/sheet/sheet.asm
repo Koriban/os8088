@@ -123,6 +123,10 @@ SH_RH_TALL   equ 18
 ; Height.../Column Width... take a typed number instead of a 3-way radio.
 ; Width is in CHARACTERS (Excel's own unit); height is in pixels.
 SH_CW_MINCH  equ 1
+SH_NUMBUF_MAX equ 40                ; stage 4.5: sh_numbuf's usable length,
+                                    ; which is SH_CW_MAXCH because a label is
+                                    ; clipped to its column and nothing wider
+                                    ; can ever reach a justifier
 SH_CW_MAXCH  equ 40                 ; 320px - wider than the window, but the
                                     ; renderer clips and the user asked
 SH_RH_MIN    equ 8                  ; one glyph cell: below this no text fits
@@ -1248,66 +1252,26 @@ sh_onkey:
     call sh_flkey
     jmp .out
 .notdigit:
-    ; the formula charset: '=' starts a formula, digits/'-' a plain number
-    ; (unchanged from before), and once editing, letters (cell refs and
-    ; function names), +-*/(),: and now <>  (comparisons, stage 1.4), and
-    ; now ! and " (cross-sheet references and ALERT's string literal), .
-    ; (stage 2.0's SET.VALUE, the one macro keyword with a dot in its name -
-    ; not a decimal point; this project's cells are still whole numbers,
-    ; never fractional), and now '$' (stage 3.0e absolute references), and
-    ; space (only meaningful inside an ALERT string
-    ; literal, but the charset gate has no notion of "inside a string" - a
-    ; bare space elsewhere in a formula is simply malformed, same as any
-    ; other out-of-place character already tolerated here) on top of that.
+    ; STAGE 4.5 REPLACED AN ALLOW-LIST WITH A RANGE, and the reason is that
+    ; the list had stopped describing anything. It grew one character at a
+    ; time as the formula language did - '=' then the operators, then <> for
+    ; comparisons, then ! and " for cross-sheet refs and ALERT's string
+    ; literal, then '.' for SET.VALUE, then '$' for absolute references, then
+    ; '^' for the power operator - and each addition was found the same way:
+    ; the parser handled the character perfectly and the character never
+    ; reached it, because THIS gate dropped it first.
+    ;
+    ; A cell that can hold a LABEL ends the argument. A label is arbitrary
+    ; text; there is no subset of printable ASCII a column heading is not
+    ; allowed to contain, and an apostrophe or a percent sign being rejected
+    ; is a bug with no upside. So the gate now asks the only question it can
+    ; actually answer - is this a printable character - and leaves deciding
+    ; what the characters MEAN to sh_commit, which is where that decision
+    ; belongs and where it already lives.
     cmp al, ' '
-    je .accept
-    cmp al, '='
-    je .accept
-    cmp al, '-'
-    je .accept
-    cmp al, '+'
-    je .accept
-    cmp al, '*'
-    je .accept
-    cmp al, '/'
-    je .accept
-    cmp al, '('
-    je .accept
-    cmp al, ')'
-    je .accept
-    cmp al, ','
-    je .accept
-    cmp al, ':'
-    je .accept
-    cmp al, '<'
-    je .accept
-    cmp al, '>'
-    je .accept
-    cmp al, '!'
-    je .accept
-    cmp al, '"'
-    je .accept
-    cmp al, '.'
-    je .accept
-    cmp al, '$'                      ; stage 3.0e: absolute references. This
-    je .accept                       ; gate is why the parser accepting '$'
-                                     ; was not enough on its own - without
-                                     ; this the character never reaches it
-    cmp al, '^'                      ; stage 3.0d: the power operator, and the
-    je .accept                       ; same trap
-    cmp al, '0'
-    jb .notletter
-    cmp al, '9'
-    jbe .accept
-.notletter:
-    cmp al, 'A'
-    jb .out
-    cmp al, 'Z'
-    jbe .accept
-    cmp al, 'a'
-    jb .out
-    cmp al, 'z'
-    ja .out
+    jb .out                            ; control characters are handled above
+    cmp al, 0x7E                       ; (Enter, Escape, Backspace, arrows)
+    ja .out                            ; and are not text
 .accept:
     cmp byte [sh_editing], 0
     jnz .append
@@ -1503,19 +1467,27 @@ sh_commit:
 .numeric:
     mov si, sh_editbuf                ; stage 4.0: a full decimal, not a signed
     call fp_atof                      ; integer. "3.5", "-0.25" and "1e3" are
-    jc .invalid                       ; all values now; anything fp_atof does
-    mov al, [si]                      ; not consume entirely is still refused,
-    or al, al                         ; which is what keeps a typo from
-    jnz .invalid                      ; silently becoming a number
+    jc .astext                        ; all values now; anything fp_atof does
+    mov al, [si]                      ; not consume ENTIRELY is not a number,
+    or al, al                         ; which is what keeps "3.5kg" from
+    jnz .astext                       ; silently becoming 3.5
     call sh_acc_store
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_setvald
     jmp .out
-.invalid:
+.astext:
+    ; stage 4.5: what used to happen here was sh_clearcell - anything that
+    ; would not parse as a number was DISCARDED, and typing a column heading
+    ; left the cell empty. Content decides the type, exactly as Excel does it:
+    ; '=' is a formula, a complete number is a number, and everything else is
+    ; a label. There is no forcing prefix because Excel 2.1 has none either
+    ; (the leading ' " ^ \ are Lotus's, not Excel's) - a cell that must hold
+    ; "1990" as text is a Format problem, not an entry one.
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_clearcell
+    mov si, sh_editbuf
+    call sh_settext
 .out:
     pop es
     pop si
@@ -2408,7 +2380,17 @@ sh_drawbar:
     push es
     mov es, [sh_cellseg]
     test byte [es:di+4], 1
-    jz .plainval2
+    jnz .isformula
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT     ; stage 4.5: a label shows its
+    jne .plainval2                     ; own text here, unprefixed - the '='
+    mov ax, [es:di+SH_C_FOFF]          ; below is what makes a formula look
+    pop es                             ; like one, and a label is not one
+    pop di
+    mov si, ax
+    push es
+    mov es, [sh_txtseg]
+    jmp .copyfm
+.isformula:
     mov ax, [es:di+SH_C_FOFF]                 ; formula_off
     pop es
     pop di                             ; DI = content cursor, restored
@@ -2671,10 +2653,18 @@ sh_drawgrid:
 .noformula3:
     pop es
 .valpath:
+    cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: a label draws its own
+    je .textpath                       ; characters, not its value
     mov ax, dx
     mov bl, [sh_curfmt]
     call sh_numfmt
     call sh_justify
+    mov si, sh_tbuf
+    jmp .got
+.textpath:
+    call sh_text_to_numbuf             ; the arena string, clipped to the cell
+    mov bl, [sh_curfmt]
+    call sh_justify_t                  ; General means LEFT for a label
     mov si, sh_tbuf
 .got:
     mov ax, [sh_wcol]
@@ -10618,6 +10608,10 @@ sh_getcell2:
     mov es, [sh_cellseg]
     mov al, [es:di+5]
     mov [sh_curfmt], al
+    mov al, [es:di+SH_C_TYPE]         ; stage 4.5: and the tag, so a caller can
+    mov [sh_curtype], al              ; tell a label from the zero it would
+    mov ax, [es:di+SH_C_FOFF]         ; otherwise read as this cell's value
+    mov [sh_curtoff], ax
     test byte [es:di+4], 1            ; HASFORMULA
     jz .plain
     pop es
@@ -10645,6 +10639,7 @@ sh_getcell2:
     jmp .out
 .empty:
     mov byte [sh_curfmt], 0
+    mov byte [sh_curtype], SH_T_BLANK
     push ax                           ; an empty cell is a zero value, and
     xor ax, ax                        ; sh_acc must say so rather than keeping
     call sh_acc_int                   ; whatever the last cell left there
@@ -10833,10 +10828,99 @@ sh_setformula:
     push es
     mov es, [sh_cellseg]
     mov byte [es:di+4], 1             ; HASFORMULA
+    mov byte [es:di+SH_C_TYPE], SH_T_NUM   ; stage 4.5: and RETAG it. Typing a
+                                      ; formula over a label reuses that
+                                      ; label's record, and without this the
+                                      ; TEXT tag survived and the cell drew
+                                      ; its old text forever while quietly
+                                      ; computing the right answer underneath
     mov ax, [sh_newoff]
     mov [es:di+SH_C_FOFF], ax
     mov word [es:di+SH_C_PASS], 0xFFFF       ; a pass stamp sh_pass can never equal,
                                        ; forcing at least one real evaluation
+    pop es
+.noroom:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_settext - stage 4.5: store TEXT in a cell.
+; in: AX = col, BX = row, SI = the NUL-terminated text
+;
+; Deliberately a near-twin of sh_setformula above rather than a shared routine
+; the two both call. They agree on the arena copy and disagree on every flag
+; that follows it, and a merged version would have been a copy of the first
+; half wrapped in a parameter deciding the second - which is the same amount
+; of code with a branch through the middle of it.
+;
+; THE TEXT LIVES IN THE FORMULA ARENA, at SH_C_FOFF, and the two never collide
+; because a cell is one thing or the other: HASFORMULA clear plus a TEXT tag
+; is the whole discrimination. Notes share this arena too (stage 3.0b) and are
+; keyed separately, in their own table.
+;
+; Like a formula, retyping a label APPENDS and abandons the old bytes - the
+; arena has no free list and never compacts. 8 KB is a lot of labels and this
+; matches what formulas have always done, but it is a real ceiling rather than
+; an oversight, and it is why .noroom below is a silent no-op rather than a
+; wrong value written.
+; -----------------------------------------------------------------------------
+sh_settext:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [sh_fcol], ax
+    mov [sh_frow], bx
+    mov dx, si
+    xor cx, cx
+.len:
+    cmp byte [si], 0
+    je .havelen
+    inc si
+    inc cx
+    jmp .len
+.havelen:
+    mov si, dx
+    mov ax, [sh_txtlen]
+    add ax, cx
+    inc ax                            ; +1 for the NUL
+    cmp ax, SH_TXT_CAP
+    ja .noroom
+    mov es, [sh_txtseg]
+    mov di, [sh_txtlen]
+    mov [sh_newoff], di
+.copy:
+    lodsb
+    stosb
+    or al, al
+    jnz .copy
+    mov [sh_txtlen], di
+    mov ax, [sh_fcol]
+    mov bx, [sh_frow]
+    call sh_addcell
+    jc .noroom
+    push es
+    mov es, [sh_cellseg]
+    mov byte [es:di+4], 0             ; NOT a formula: the tag is what says
+    mov byte [es:di+SH_C_TYPE], SH_T_TEXT
+    mov byte [es:di+SH_C_AUX], 0
+    mov ax, [sh_newoff]
+    mov [es:di+SH_C_FOFF], ax
+    mov word [es:di+SH_C_PASS], 0
+    xor ax, ax                        ; and a numeric value of zero, so every
+    mov [es:di+SH_C_VAL], ax          ; reader that has never heard of text
+    mov [es:di+SH_C_VAL+2], ax        ; still gets a defined number out of it
+    mov [es:di+SH_C_VAL+4], ax
+    mov [es:di+SH_C_VAL+6], ax
     pop es
 .noroom:
     pop es
@@ -11561,6 +11645,19 @@ sh_foldrange:
 sh_foldvalue:
     push ax
     push bx
+    cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: a LABEL is not a number and
+    jne .counted                       ; every numeric fold steps over it -
+    cmp word [sh_pfid], 11             ; SUM, MIN, MAX and PRODUCT because a
+    jne .out                           ; label has no value, and AVERAGE for a
+    inc word [sh_pcnt]                 ; second reason on top of that: it
+    jmp .out                           ; divides by sh_pcnt, so counting a
+                                       ; label would drag the mean toward zero
+                                       ; without ever adding to the total.
+                                       ; COUNTA (11) is the one that WANTS it,
+                                       ; and this is the first release in
+                                       ; which COUNT and COUNTA can disagree
+                                       ; about anything at all.
+.counted:
     inc word [sh_pcnt]
     mov bx, [sh_pfid]
     cmp bx, 0
@@ -13125,6 +13222,76 @@ sh_justify:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_justify_t - sh_justify for a LABEL rather than a number.
+;
+; The one difference, and it is Excel's: General aligns a number RIGHT and a
+; label LEFT. An EXPLICIT alignment means the same thing for both, so this
+; only intercepts General and hands everything else straight over.
+; in: BL = the format byte
+; -----------------------------------------------------------------------------
+sh_justify_t:
+    push ax
+    push cx
+    mov al, bl
+    and al, SH_FMT_ALIGN_MASK
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shr al, cl
+    cmp al, SH_FMT_ALIGN_GENERAL
+    jne .explicit
+    call sh_ljust
+    jmp .out
+.explicit:
+    call sh_justify
+.out:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_text_to_numbuf - copy the label at sh_curtoff (in sh_txtseg) into
+; sh_numbuf, clipped to what the cell can show, so that the justifiers - which
+; all read sh_numbuf and write sh_tbuf - need to know nothing about text.
+;
+; Clipped rather than scrolled or spilled: real Excel lets a label OVERFLOW
+; into the empty cells to its right, which needs the neighbours' occupancy
+; before this cell is drawn and a draw order that respects it. That is a
+; drawing-order change, not a storage one, and it is deliberately not in this
+; step - a clipped label is honest about being clipped.
+; -----------------------------------------------------------------------------
+sh_text_to_numbuf:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov es, [sh_txtseg]
+    mov si, [sh_curtoff]
+    mov di, sh_numbuf
+    mov cx, [sh_cellch]
+    cmp cx, SH_NUMBUF_MAX             ; sh_numbuf is a fixed buffer and the
+    jbe .cap                          ; cell width is a RUNTIME value now
+    mov cx, SH_NUMBUF_MAX             ; (stage 3.0c's Column Width), so the
+.cap:                                 ; clip is against both
+    jcxz .term
+.copy:
+    mov al, [es:si]
+    or al, al
+    jz .term
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .copy
+.term:
+    mov byte [di], 0
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_strlen - in: SI=NUL-terminated string; out: AX=length (SI preserved)
 ; -----------------------------------------------------------------------------
 sh_strlen:
@@ -13671,7 +13838,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2206
+    OS88_BSS 2240
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -13714,9 +13881,16 @@ sh_stagelen   equ SH_TCOMMA + 1
 sh_tbuf       equ sh_stagelen + 2           ; 96: formula bar text (a formula
                                              ; can run to SH_EDITMAX chars)
 sh_colbuf     equ sh_tbuf + 96              ; 4: up to 2 letters + NUL
-sh_numbuf     equ sh_colbuf + 4             ; 10: up to "$-32768" + NUL
-                                             ; (stage 1.6's widest decoration)
-sh_msg        equ sh_numbuf + 10            ; 2: pointer to a status string
+sh_numbuf     equ sh_colbuf + 4             ; SH_NUMBUF_MAX+1: what all three
+                                             ; justifiers read. Ten bytes held
+                                             ; the widest DECORATED number
+                                             ; ("$-32768", stage 1.6) and that
+                                             ; was its whole job until stage
+                                             ; 4.5 put LABELS through the same
+                                             ; three routines - a label is as
+                                             ; wide as the column, and a
+                                             ; column runs to SH_CW_MAXCH
+sh_msg        equ sh_numbuf + SH_NUMBUF_MAX + 1  ; 2: pointer to a status string
 sh_errbuf     equ sh_msg + 2                ; 8: "Err " + up to 2 digits + NUL
 sh_cellseg    equ sh_errbuf + 8
 sh_txtseg     equ sh_cellseg + 2
@@ -13767,7 +13941,9 @@ sh_pass       equ sh_rcol + 2               ; recalculation pass counter
 sh_bbrow      equ sh_pass + 2               ; sh_difbbox's used bounding box
 sh_bbcol      equ sh_bbrow + 2
 sh_curfmt     equ sh_bbcol + 2              ; sh_getcell2's format-byte output
-sh_jlen       equ sh_curfmt + 1             ; sh_cjust's stashed text length
+sh_curtype    equ sh_curfmt + 1             ; ...and its SH_T_* tag, and where
+sh_curtoff    equ sh_curtype + 1            ; a TEXT cell's characters live
+sh_jlen       equ sh_curtoff + 2             ; sh_cjust's stashed text length
 sh_ulx        equ sh_jlen + 2               ; sh_drawunderline's stashed
 sh_uly        equ sh_ulx + 2                ; cell text origin (x, y)
 sh_wrec_xf    equ sh_uly + 2                ; sh_doread_biff's per-record
