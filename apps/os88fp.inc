@@ -337,6 +337,7 @@ fp_b_to_a:
 ; fp_push_a / fp_pop_a - bank A on the stack (6 words), for the two places
 ; that need a third operand's worth of room
 fp_push_a:
+    ; STKBALANCE-NET: +6 - banks the unpacked A on the caller's stack; fp_pop_a takes it off
     pop ax                            ; the return address, put back last
     push word [fp_am3]
     push word [fp_am2]
@@ -354,6 +355,7 @@ fp_push_a:
 ; presented as "every operation with a negative operand is wrong" while
 ; same-sign addition looked perfect.
 fp_pop_a:
+    ; STKBALANCE-NET: -6 - the other half of fp_push_a
     pop ax
     pop word [fp_tmp]                 ; the saved (as, bs) pair
     pop word [fp_ae]

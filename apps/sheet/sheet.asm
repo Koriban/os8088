@@ -13053,6 +13053,7 @@ sh_acc_toint:
 ; goes through it), which is safe because the evaluator's value now lives in
 ; sh_acc rather than in a register.
 sh_vpush:
+    ; STKBALANCE-NET: +4 - banks sh_acc on the CALLER's stack for a binary operator; sh_binop_pre takes it off
     pop ax
     push word [sh_acc+6]
     push word [sh_acc+4]
@@ -13064,6 +13065,7 @@ sh_vpush:
 ; sh_binop_pre - recover a banked left operand into fp A and load sh_acc, the
 ; right operand, into fp B. Pairs with exactly one sh_vpush.
 sh_binop_pre:
+    ; STKBALANCE-NET: -4 - the other half of sh_vpush - one call each, always paired
     pop ax
     pop word [sh_lhs]
     pop word [sh_lhs+2]
