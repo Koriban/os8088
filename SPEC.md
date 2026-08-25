@@ -67505,8 +67505,8 @@ offscreen canvas costs nothing but time.
 **The horizontal bar chart gets no scale**, and that is a scope cut rather than
 an oversight: its value axis runs along X — `ch_base` is an x origin for that
 type — so a scale belongs under the plot, and the categories already fill the
-canvas top to bottom. At `CH_BARW+CH_GAP` per bar, forty bars is 240 rows
-against a 160-row canvas; a bottom gutter would have to come out of the bars.
+canvas top to bottom — §82.9 divides the 160 rows among however many there
+are — so a bottom gutter would have to come out of the bars themselves.
 
 #### 82.7.3 A `ret` to nowhere
 
@@ -67558,6 +67558,47 @@ it away — it is the next-lowest by construction.
 
 Neither app invents data. A file with one column of numbers gets a scatter
 against the row index and a combination that is just its columns.
+
+### 82.9 A category's band is derived from the count, never fixed
+
+`ch_band` answers *"which pixels belong to category N"* for every type that
+has categories, and it answers it by dividing the axis:
+
+```
+    ch_band   in:  AX = index, BX = the axis length, CX = the count
+              out: AX = the band's first pixel, DX = its last
+    ch_inset  in/out: AX/DX = the band -> the bar drawn inside it
+```
+
+Edges come from the index (`lo = i*span/cnt`, `hi = (i+1)*span/cnt - 1`)
+rather than being accumulated, so rounding cannot drift and band N's first
+pixel is always band N-1's last plus one. `ch_inset` then takes **a third of
+the band** as the gap, which is Excel's default gap width stated the other way
+round — a gap of half a bar means bar and gap are two thirds and one third of
+their band.
+
+It replaced a constant `CH_BARW+CH_GAP` = 6px pitch, which was wrong in three
+separate ways and is worth recording because each failed silently:
+
+- **A column chart used a fraction of its plot.** Nine bars at a 6px pitch is
+  54 of `CH_PLOT_W`'s 218 pixels, bunched against the left edge with two thirds
+  of the plot empty. Excel divides the plot among the categories; measured
+  after the change, nine bars are 16px wide on a 24px pitch with a uniform 8px
+  gap, spanning the plot end to end.
+- **The types disagreed with each other.** `ch_xfor` already spread Line and
+  Area across the full plot, so a Line and a Column chart of the *same* data
+  put category five in two different places. Both now come off the same
+  division.
+- **The horizontal Bar chart silently lost categories.** Its category axis runs
+  down a **160**-row canvas, but `CH_MAXBARS` = 40 was derived from the
+  *column* axis (`CH_W`/6). From index 27 on, `idx*6` exceeds 159 and
+  `ch_fillrect`'s clamp folded every remaining bar onto the last row: a
+  thirty-bar chart drew twenty-seven and stacked three on top of one another,
+  with nothing to see but a slightly thicker line at the bottom.
+
+`CH_MAXBARS` therefore no longer means "how many bars fit". It is the width of
+the caller's `ct_vals`-style arrays and nothing more; any count up to it now
+fits any axis, because the axis is divided rather than filled.
 
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 

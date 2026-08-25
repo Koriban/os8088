@@ -39,13 +39,13 @@
 ;
 ; --- WHAT THIS FILE NEEDS FROM YOU ------------------------------------------
 ; The CH_* geometry constants (CH_W/CH_H/CH_STRIDE/CH_HDRSZ/CH_PXOFF/
-; CH_MAXBARS/CH_BARW/CH_GAP) are NOT declared here - equ constants can't be
+; CH_MAXBARS) are NOT declared here - equ constants can't be
 ; forward-referenced, and this file's CODE has to live at the end of your
 ; package (same fixed-offset reason os88ui.inc's own header gives), so your
 ; OWN code, earlier in the file, needs them to already exist. Declare them
 ; yourself, identically, near your other constants (apps/sheet/sheet.asm's
 ; own copy is the reference - CH_W=240, CH_H=160, CH_STRIDE=120, CH_HDRSZ=118,
-; CH_PXOFF=CH_HDRSZ, CH_MAXBARS=40, CH_BARW=4, CH_GAP=2).
+; CH_PXOFF=CH_HDRSZ, CH_MAXBARS=40).
 ;
 ; You also need these bss words of your own, named exactly this (the same
 ; "the engine's own scratch, not stack juggling" idea sh_fdlg_*'s own bss
@@ -384,14 +384,18 @@ ch_bars_draw:
     mul word [ch_base]
     div word [ch_max]
     mov bx, ax                           ; bx = bar length in pixels
+    push bx                              ; the bar LENGTH, live across this
     mov ax, [ch_idx]
-    mov cx, CH_BARW + CH_GAP
-    mul cx
+    mov bx, CH_PLOT_W                    ; the plot, not the canvas: the first
+    mov cx, [ch_cnt]                     ; CH_PLOT_X0 columns are the labels'
+    call ch_band
+    call ch_inset
     add ax, CH_PLOT_X0                   ; clear of the value-axis labels
+    add dx, CH_PLOT_X0
     mov es, [ch_stgseg]                  ; back to the buffer for the fillrect
     mov [ch_bx1], ax
-    add ax, CH_BARW - 1
-    mov [ch_bx2], ax
+    mov [ch_bx2], dx
+    pop bx
     or di, di                            ; di still holds the sign, saved
     jnz .barneg                          ; above before es/mul/div clobbered
                                           ; the value itself
@@ -446,6 +450,86 @@ ch_getval:
     mov ax, [es:si]
     mov es, [ch_stgseg]
     pop si
+    pop bx
+    ret
+
+; ch_band - the pixel band ONE CATEGORY occupies on its own axis.
+; in:  AX = category index, BX = the axis length in pixels, CX = the count
+; out: AX = the band's first pixel, DX = its last (inclusive). Preserves the
+;      rest, so a caller holding a bar length in BX only has to bank that one.
+;
+; The band is DERIVED FROM THE COUNT rather than being a fixed width, and both
+; of the things that fixes were live defects. A nine-bar column chart drew its
+; bars at a constant 6px pitch and so used 54 of its 218 plot pixels, bunched
+; against the left edge, while ch_xfor below spread a LINE chart of the same
+; data across the whole plot - so the two chart types disagreed about where
+; category five was. And the horizontal Bar chart ran its categories down a
+; 160-row canvas at that same 6px pitch, so from index 27 on, ch_fillrect's
+; clamp folded every remaining bar onto row 159: a thirty-bar chart silently
+; drew twenty-seven and stacked the last three on top of each other.
+;
+; Edges are computed from the index rather than accumulated, so the rounding
+; cannot drift and band N's first pixel is always band N-1's last plus one.
+ch_band:
+    push bx
+    push cx
+    push si
+    mov si, ax
+    mul bx                               ; dx:ax = idx * span. idx < 40 and
+    div cx                               ; span <= 240, so dx is always 0 and
+    push ax                              ; the divide cannot overflow
+    mov ax, si
+    inc ax
+    mul bx
+    div cx
+    dec ax
+    mov dx, ax
+    pop ax
+    cmp dx, ax
+    jae .out
+    mov dx, ax                           ; a band under one pixel wide still
+.out:                                    ; gets one, rather than inverting
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; ch_inset - Excel's 50% gap width: the drawn bar keeps the middle two thirds
+; of its band, so neighbours are parted by half a bar. in/out: AX = band start
+; -> bar start, DX = band end -> bar end.
+ch_inset:
+    push bx
+    push cx
+    push si
+    mov cx, dx
+    sub cx, ax
+    inc cx                               ; cx = the band's width
+    push ax
+    push dx
+    mov ax, cx
+    xor dx, dx
+    mov bx, 3                            ; a gap of half a bar means the gap is
+    div bx                               ; a THIRD of the band, not a sixth off
+    mov bx, ax                           ; each side - the sixth rounded to
+    or bx, bx                            ; nothing on a 5px band and thirty
+    jnz .havegap                         ; bars ran together into solid blocks
+    cmp cx, 2
+    jb .havegap                          ; 1px bands cannot be parted at all
+    mov bx, 1                            ; anything wider always parts
+.havegap:
+    mov si, bx
+    shr si, 1                            ; si = the left half of the gap, bx
+    sub bx, si                           ; the right: an odd gap leans right
+    pop dx
+    pop ax
+    add ax, si
+    sub dx, bx
+    cmp dx, ax
+    jae .out
+    mov dx, ax                           ; never let the gap eat the bar
+.out:
+    pop si
+    pop cx
     pop bx
     ret
 
@@ -778,12 +862,15 @@ ch_hbar_draw:
     mul bx
     div word [ch_max]
     mov bx, ax                          ; bx = bar length in pixels
-    mov ax, [ch_idx]                    ; its row band
-    mov cx, CH_BARW + CH_GAP
-    mul cx
+    push bx                             ; the bar LENGTH, live across this
+    mov ax, [ch_idx]                    ; its row band - down the whole canvas,
+    mov bx, CH_H                        ; since this type's category axis is Y
+    mov cx, [ch_cnt]                    ; and has no label gutter to leave
+    call ch_band
+    call ch_inset
     mov [ch_by1], ax
-    add ax, CH_BARW - 1
-    mov [ch_by2], ax
+    mov [ch_by2], dx
+    pop bx
     or di, di
     jnz .neg
     mov ax, [ch_base]
@@ -897,9 +984,9 @@ ch_deco:
     ; THE HORIZONTAL BAR CHART GETS NO SCALE, and that is a scope cut rather
     ; than an oversight. Its value axis runs along X - ch_base is an x origin
     ; for that type, not a y one - so a scale belongs under the plot, and the
-    ; categories already fill the canvas top to bottom: at CH_BARW+CH_GAP per
-    ; bar, forty bars is 240 rows against a 160-row canvas. A bottom gutter
-    ; would have to come out of the bars themselves. The title still draws.
+    ; categories fill the canvas top to bottom - ch_band divides the 160 rows
+    ; among however many there are - so a bottom gutter would have to come out
+    ; of the bars themselves. The title still draws.
 
     ; --- the title, centred -------------------------------------------------
     mov si, [ch_title]
@@ -1264,10 +1351,15 @@ ch_combo_draw:
     mov ax, [ch_idx]
     cmp ax, [ch_cnt2]
     jae .deco
-    mov cx, CH_BARW + CH_GAP           ; the middle of this category's band,
-    mul cx                             ; so the line sits over its column
-    add ax, CH_PLOT_X0 + CH_BARW / 2
+    push bx
+    mov bx, CH_PLOT_W                  ; the middle of this category's band -
+    mov cx, [ch_cnt]                   ; ch_cnt, the COLUMNS' count, so the
+    call ch_band                       ; line sits over its own column even
+    add ax, dx                         ; when the two series differ in length
+    shr ax, 1
+    add ax, CH_PLOT_X0
     mov [ch_cbx], ax
+    pop bx
     mov ax, [ch_idx]
     call ch_val2
     push ax

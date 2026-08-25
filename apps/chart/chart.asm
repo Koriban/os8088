@@ -40,8 +40,11 @@ CH_H       equ 160
 CH_STRIDE  equ 120                  ; CH_W / 2 (4bpp, 2px/byte)
 CH_HDRSZ   equ 118                  ; 54-byte BMP header + 64-byte palette
 CH_PXOFF   equ CH_HDRSZ             ; pixel data starts right after
-CH_MAXBARS equ 40                   ; CH_W / (4px bar + 2px gap), no partial
-                                     ; column at the edge
+CH_MAXBARS equ 40                   ; how many values the caller's arrays
+                                     ; hold - NOT a drawing limit: ch_band
+                                     ; divides the axis among however many
+                                     ; there are, so any count up to this one
+                                     ; fits the canvas
 CH_T_COLUMN equ 0                   ; stage 3.0f: the gallery. Excel calls the
 CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
 CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
@@ -53,8 +56,6 @@ CH_T_COMBO   equ 6                  ; needed a SECOND series (SPEC.md 82.8)
                                     ; and Combination need TWO series, which
                                     ; is a data-model problem rather than a
                                     ; drawing one
-CH_BARW    equ 4
-CH_GAP     equ 2
 
 CT_CLAIM_CHART_KB equ 19            ; the offscreen 4bpp canvas (19200 bytes
                                      ; needed -> 19KB claimed, 256B slack)
