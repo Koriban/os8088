@@ -50,8 +50,8 @@ fpt_s_fail: db 'FAIL', 0
 fpt_s_hdr:  db 'os88fp', 0
 fpt_s_all:  db 'ALL PASS', 0
 fpt_s_some: db 'FAILURES', 0
-fpt_s_fpu:   db '[8087 present]', 0
-fpt_s_nofpu: db '[no 8087]', 0
+fpt_s_soft:  db 'soft ', 0
+fpt_s_hw:    db '8087 ', 0
 
 ; fpt_itoa - AX signed -> the string at DI. Diagnostics only.
 fpt_itoa:
@@ -126,18 +126,145 @@ fpt_paint:
     add dx, 2
     mov si, fpt_s_hdr
     call OSAPI_FONT_STR
-    call OSAPI_CPU_INFO               ; AL = tier, AH = CPU_F_* feature bits
-    mov si, fpt_s_nofpu               ; which path Sheet would take on this
-    test ah, CPU_F_X87                ; machine, and the reason this app knows
-    jz .nofpu                         ; about the kernel probe at all
-    mov si, fpt_s_fpu
-.nofpu:
+
+    mov byte [fpt_draw], 1
+    mov byte [fp_hw], 0               ; --- pass 1: the software path, always,
+    call fpt_runall                   ; on every machine ---
+    mov ax, [fpt_bad]
+    mov [fpt_badsoft], ax
+
+    mov word [fpt_badhw], -1          ; -1 = "not run", which is not the same
+    call OSAPI_CPU_INFO               ; answer as 0 and must not read like it
+    test ah, CPU_F_X87
+    jz .nohw
+    call fp_init                      ; --- pass 2: the SAME 61 cases against
+    mov byte [fpt_draw], 0            ; the SAME host-computed bytes, on the
+    call fpt_runall                   ; coprocessor. Rows are not redrawn: the
+    mov byte [fpt_draw], 1            ; two paths agreeing is the point, so
+    mov ax, [fpt_bad]                 ; there is nothing new to show per case
+    mov [fpt_badhw], ax
+    mov byte [fp_hw], 0
+.nohw:
+
+    mov si, fpt_s_all                 ; the verdict is BOTH passes: a machine
+    cmp word [fpt_badsoft], 0         ; with a coprocessor has to be right
+    jne .some                         ; twice to read ALL PASS here
+    cmp word [fpt_badhw], 0
+    jle .allok                        ; -1 is "not run", which is not a failure
+.some:
+    mov si, fpt_s_some
+.allok:
     mov cx, [fpt_ox]
-    add cx, 150
+    add cx, 60
     mov dx, [fpt_oy]
     add dx, 2
     call OSAPI_FONT_STR
 
+    mov di, fpt_line                  ; "soft 0  8087 0", or "8087 -" when
+    mov ax, [fpt_badsoft]             ; there is no part in the socket
+    call fpt_lbl_soft
+    mov ax, [fpt_badhw]
+    call fpt_lbl_hw
+    mov byte [di], 0
+    mov cx, [fpt_ox]
+    add cx, 140
+    mov dx, [fpt_oy]
+    add dx, 2
+    mov si, fpt_line
+    call OSAPI_FONT_STR
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; fpt_lbl_soft / fpt_lbl_hw - AX = a bad count, DI = where to write; append
+; "soft N  " / "8087 N". A count of -1 prints as '-': the pass did not run.
+fpt_lbl_soft:
+    push si
+    mov si, fpt_s_soft
+    call fpt_apps
+    call fpt_appn
+    mov byte [di], ' '
+    inc di
+    mov byte [di], ' '
+    inc di
+    pop si
+    ret
+
+fpt_lbl_hw:
+    push si
+    mov si, fpt_s_hw
+    call fpt_apps
+    call fpt_appn
+    pop si
+    ret
+
+fpt_apps:                             ; SI -> a NUL string, append it at DI
+    push ax
+.l:
+    mov al, [si]
+    or al, al
+    jz .e
+    mov [di], al
+    inc di
+    inc si
+    jmp .l
+.e:
+    pop ax
+    ret
+
+fpt_appn:                             ; AX -> decimal at DI, or '-' if -1
+    cmp ax, -1
+    jne .num
+    mov byte [di], '-'
+    inc di
+    ret
+.num:
+    push di
+    mov di, fpt_num
+    call fpt_itoa
+    pop di
+    push si
+    mov si, fpt_num
+    call fpt_apps
+    pop si
+    ret
+
+; fpt_row - OSAPI_FONT_STR, unless this pass is the silent one. Every per-case
+; row in fpt_runall goes through here; the COUNTING does not, because a pass
+; that does not draw still has to fail when it is wrong.
+fpt_row:
+    cmp byte [fpt_draw], 0
+    je .skip
+    call OSAPI_FONT_STR
+.skip:
+    ret
+
+; -----------------------------------------------------------------------------
+; fpt_runall - the whole suite, on whichever path fp_hw currently selects.
+;
+; It was inline in fpt_paint until the coprocessor arrived. Running the SAME
+; cases against the SAME host-computed IEEE-754 bytes on both paths is the
+; acceptance test for the hardware path, and it is stronger than diffing the
+; two against each other: agreeing with one another while both being wrong is
+; a thing two implementations of the same algorithm can do, and agreeing with
+; a real IEEE-754 implementation is not.
+;
+; Leaves the count in fpt_bad. Draws a row per case unless fpt_draw is zero.
+; -----------------------------------------------------------------------------
+fpt_runall:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
     mov word [fpt_bad], 0
     mov word [fpt_i], 0
     mov si, fpt_cases
@@ -211,14 +338,14 @@ fpt_paint:
 .verdict:
     push si
     mov si, di
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
     mov cx, [fpt_ox]
     add cx, 46
     push si
     add si, 26                        ; the name pointer, last in the record
     mov si, [si]
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
 
     pop si
@@ -288,13 +415,13 @@ fpt_paint:
     mov si, fpt_s_fail
     inc word [fpt_bad]
 .mverd:
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
     mov cx, [fpt_ox]
     add cx, 190
     push si
     mov si, [si]                      ; the case's name
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
     add si, 2
     inc word [fpt_m]
@@ -345,7 +472,7 @@ fpt_paint:
     mov si, fpt_s_fail
     inc word [fpt_bad]
 .averd:
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
     inc word [fpt_k]
     jmp .acase
@@ -407,32 +534,21 @@ fpt_paint:
     mov si, fpt_s_fail
     inc word [fpt_bad]
 .sverdict:
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
     mov cx, [fpt_ox]
     add cx, 46
     push si
     mov si, fpt_out                   ; show what we actually produced
-    call OSAPI_FONT_STR
+    call fpt_row
     mov cx, [fpt_ox]                  ; ...and the raw digits + decimal
     add cx, 150                       ; exponent behind it
     mov si, fp_dig
-    call OSAPI_FONT_STR
+    call fpt_row
     pop si
     inc word [fpt_j]
     jmp .scase
 .sdone:
-
-    mov cx, [fpt_ox]
-    add cx, 60
-    mov dx, [fpt_oy]
-    add dx, 2
-    mov si, fpt_s_all
-    cmp word [fpt_bad], 0
-    je .sdraw
-    mov si, fpt_s_some
-.sdraw:
-    call OSAPI_FONT_STR
 
     pop bp
     pop di
@@ -568,7 +684,7 @@ fpt_str:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 158
+    OS88_BSS 218
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -581,7 +697,13 @@ fpt_k       equ fpt_m + 2
 fpt_j       equ fpt_k + 2           ; the round-trip case index
 fpt_out     equ fpt_j + 2             ; 32: the formatted text under test
 
-fp_as       equ fpt_out + 32          ; --- os88fp.inc's scratch ---
+fpt_draw    equ fpt_out + 32          ; non-zero: draw a row per case
+fpt_badsoft equ fpt_draw + 1          ; each pass's verdict, kept apart so the
+fpt_badhw   equ fpt_badsoft + 2       ; summary can name which path failed
+fpt_line    equ fpt_badhw + 2         ; 24: the summary being built
+fpt_num     equ fpt_line + 24         ; 8: one number on its way into it
+
+fp_as       equ fpt_num + 8           ; --- os88fp.inc's scratch ---
 fp_bs       equ fp_as + 1
 fp_ae       equ fp_bs + 1
 fp_be       equ fp_ae + 2
@@ -607,7 +729,11 @@ fp_sgn      equ fp_nd + 2
 fp_sq       equ fp_sgn + 2            ; 8: fp_sqrt's input
 fp_g        equ fp_sq + 8             ; 8: its running guess
 fp_tv       equ fp_g + 8              ; 8: a general packed temporary            ; word: digits in fp_dig
-fpt_bss_end equ fp_tv + 8
+fp_hw       equ fp_tv + 8             ; --- the coprocessor path ---
+fp_x1       equ fp_hw + 1             ; 10: A in 80-bit form
+fp_x2       equ fp_x1 + 10            ; 10: B
+fp_sw       equ fp_x2 + 10            ; where the status word lands
+fpt_bss_end equ fp_sw + 2
 
 %define FPT_BSS_NEED (fpt_bss_end - os88_image_end)
     times (FPT_BSS_NEED - OS88_BSS_SIZE) db 0

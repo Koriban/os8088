@@ -55,19 +55,21 @@ pre-empted background task, updating live while the user types or drags).
    `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers, no
    `imul r,r,imm`. `rep movsb/stosb/lodsb`, `mul`, `div` are fine.
 
-   **One exception, added with §84.6: a `cpu 8087` island.** The floating
-   point coprocessor is the only newer part this rule admits, and only because
-   it is not a *newer CPU* — it is a socket an 8088 machine could always have
-   had, empty on most 5150s and filled on some. The exception is narrow and
-   carries its own conditions: the island holds coprocessor instructions only
-   (never a 186+ integer instruction that happens to assemble inside it), it
-   is closed with `cpu 8086` immediately after, and **every entry to it is
-   gated at run time on `CPU_F_X87`** from `OSAPI_CPU_INFO` — because the
-   assembler's opinion of the machine is not the machine. On a CPU with no
-   coprocessor an unguarded `fadd` does not fault: it hangs, waiting on a
-   `BUSY` line nothing will ever lower. No other `cpu` directive is admitted
-   anywhere, in the kernel, a driver or a package; `cpu 386` in particular is
-   still refused with no exception (§41).
+   **The 8087 needs no exception, and that is worth stating rather than
+   leaving to be rediscovered.** The coprocessor's base instruction set —
+   `FLD`, `FSTP`, `FADDP`, `FDIVP`, `FCOMPP`, `FNINIT`, `FSTSW`, the 80-bit
+   `tword` forms, all of it — assembles at `cpu 8086` already, because the
+   8087 shipped *with* the 8086 and NASM classes it accordingly. So §84.6's
+   coprocessor path carries **no `cpu` directive at all**, and this rule is
+   unchanged: no `cpu 386`, no 186+ integer instruction, no exception.
+
+   **What the coprocessor needs instead is a run-time gate, and it is not
+   optional.** On a machine with an empty socket a coprocessor instruction
+   does not fault — the `WAIT` the assembler puts in front of it blocks
+   forever on a `BUSY` line nothing will lower, and the machine simply stops.
+   Every entry to such a path must therefore test `CPU_F_X87` from
+   `OSAPI_CPU_INFO` first. The assembler accepting the instruction says
+   nothing about the machine executing it.
 2. **Near model.** CS = DS = `KERNEL_SEG` (0x0800) for all kernel code and
    tasks; **SS = `LOW_SEG`** (0x0440), because every task stack lives outside
    the kernel segment (§2.1). ES is scratch — any routine may change and use
@@ -67350,3 +67352,100 @@ asking for it always heard "no coprocessor". It now masks to its own three:
 one writer, so **every** writer sets and clears only the bits it owns. A whole
 byte store into a shared capability byte is a bug even when it is correct on
 the day it is written.
+
+### 84.7 The coprocessor path in `os88fp.inc`
+
+Five routines dispatch: `fp_add`, `fp_sub`, `fp_mul`, `fp_div`, `fp_cmpab`.
+Each is three instructions — test `fp_hw`, jump to `fpx_*` or to `fps_*` — and
+the jump is a **tail jump, not a call**, so `fps_div`'s CF and `fps_cmpab`'s
+AX-and-flags reach the original caller untouched. Every call site in the file
+and in every package goes through the dispatcher, so `fp_scale10`, `fp_sqrt`
+and `fp_atof` get the coprocessor without knowing it exists.
+
+`fp_init` sets `fp_hw` and must be called once at startup. It is not called
+lazily and it does not default to on: a package that never calls it runs the
+software path, which is the safe direction to fail in.
+
+#### 84.7.1 The 80-bit form, and why not `fld qword`
+
+The obvious shape — pack A and B back into doubles and `fld qword` them — is
+wrong twice.
+
+**It rounds.** A value part-way through `fp_atof` or `fp_scale10` carries all
+64 mantissa bits of this file's working form. Squeezing it into a 53-bit
+double to hand to the coprocessor discards exactly the bits the software path
+is keeping, so the two paths would disagree in the last place on values that
+had nothing wrong with them. **And it is slow**, because `fp_pack_a` is one of
+the longest routines in the file and this would run it three times per
+operation.
+
+The 80-bit temporary real is instead a near-exact match for the working form,
+which is not a coincidence — both are a 64-bit normalized mantissa with an
+explicit top bit, a sign, and a biased exponent:
+
+```
+    os88fp.inc:  value = (-1)^s · m · 2^ae            m in [2^63, 2^64)
+    80-bit:      value = (-1)^s · m · 2^(E - 16446)
+    so           E = ae + 16446                       (16383 + 63)
+```
+
+Five word moves and one add, exact in both directions. Both paths then compute
+with 64 mantissa bits and round to 53 exactly once, in `fp_pack_a`, at the
+end. **That is what makes them agree**, and agreement is the acceptance test.
+
+Three cases are converted rather than copied. A **zero** has no normalized
+80-bit form, so it is written as a true zero rather than a live exponent over
+an empty mantissa — which is an "unnormal" an 8087 will compute with and later
+parts will not. A **denormal** coming back flushes to zero, matching what the
+software unpack does with the same case. An **infinity** coming back converts
+to an enormous exponent and `fp_pack_a` clamps it to the largest finite
+double, which is precisely what the software path does with its own overflow.
+
+#### 84.7.2 Two encodings worth being careful about
+
+For the register forms the reversed variant has the **lower** opcode — `DE
+E0+i` is `FSUBRP` and `DE E8+i` is `FSUBP`, `DE F0+i` is `FDIVRP` and `DE
+F8+i` is `FDIVP` — which is the opposite way round from the memory forms
+(`/4` FSUB, `/5` FSUBR). This is the source of the operand-reversal confusion
+that has followed x87 assemblers for decades. NASM emits `DE E9` for `fsubp
+st1, st0`, Intel's `FSUBP ST(1), ST(0)` computing `ST(1) = ST(1) - ST(0)`, so
+**A is pushed first and ends up underneath**, exactly as for addition. This
+was read off the disassembly and then confirmed by the arithmetic, because a
+swap here is silent and yields `B - A`.
+
+`fpx_cmpab` loads in the **other** order, A last, so `FCOMPP` compares
+`ST(0)`=A against `ST(1)`=B. The condition codes then read as an ordinary
+unsigned compare: `SAHF` puts C0 in CF and C3 in ZF, where `JB` and `JE`
+already look for them.
+
+#### 84.7.3 `FWAIT` after the store, not before
+
+`fstp tword [fp_x1]` assembles with a `WAIT` **prefix**, and that prefix
+guards the *previous* operation — it does not mean the store has landed. The
+8088 reading those ten bytes back needs its own `fwait` after the instruction.
+Every `fpx_*` routine has one, and on a 386-class host it is invisible; on the
+target it is the difference between reading the result and reading whatever
+was there before.
+
+#### 84.7.4 Division tests the divisor itself
+
+`fpx_div` calls `fp_iszero` on B before touching the coprocessor and returns
+CF=1 with A zero, which is `fps_div`'s contract exactly. Left to the part, a
+masked divide by zero produces an infinity, and **this file never produces
+one** (§84.2). The test is cheaper than the special case it avoids.
+
+#### 84.7.5 How both paths are proven
+
+`apps/fptest` runs its **61 cases twice** — once with `fp_hw` forced to zero,
+once on the coprocessor — against the same host-computed IEEE-754 bytes, and
+reports the two counts separately (`soft 0  8087 0`). Two implementations of
+the same algorithm can agree with each other while both being wrong; agreeing
+with a real IEEE-754 implementation is a different claim, and that is the one
+made here.
+
+**A verdict of `ALL PASS` on a machine with no coprocessor is not evidence
+about the coprocessor path**, so the count reads `8087 -` there rather than
+`8087 0`. On a machine that has one, the path was confirmed to actually
+execute by deliberately breaking `fpx_mul` and watching the hardware count go
+to 23 while the software count stayed at 0 — without that check, a dispatcher
+that never fired would report exactly the same `ALL PASS` as one that worked.

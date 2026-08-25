@@ -717,13 +717,16 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
                                  ; later, so this is a per-machine fact rather
                                  ; than a tier fact, which is why it lives
                                  ; here and not in CPU_8086/286/386.
-                                 ; AND IT IS THE ONE EXCEPTION to rule 1's
-                                 ; ban on a package opening a `cpu` island:
-                                 ; an 8087 arithmetic path may sit in a
-                                 ; `cpu 8087` island IF this bit gates every
-                                 ; entry to it at run time (SPEC.md 1 rule 1,
-                                 ; 84.6). Nothing else is exempt - the ban on
-                                 ; `cpu 386` above stands exactly as written.
+                                 ; TEST IT BEFORE EVERY COPROCESSOR PATH, and
+                                 ; understand what happens if you do not: on a
+                                 ; machine with an empty socket an `fadd` does
+                                 ; NOT fault, it HANGS - the WAIT in front of
+                                 ; it blocks forever on a BUSY line nothing
+                                 ; will lower. No `cpu` island is involved:
+                                 ; the 8087's base instructions assemble at
+                                 ; `cpu 8086` already, so rule 1 stands with
+                                 ; no exception and the gate here is a
+                                 ; RUN-TIME one (SPEC.md 1 rule 1, 84.6).
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE

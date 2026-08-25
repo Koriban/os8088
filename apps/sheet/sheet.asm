@@ -447,6 +447,10 @@ sh_entry:
     push dx
     push si
     push di
+    call fp_init                      ; before the first claim, because every
+                                      ; other thing here can fail and be
+                                      ; recovered from and this one decides
+                                      ; which arithmetic the session gets
     mov ax, SH_CLAIM_CELLS_KB
     call OSAPI_MEM_CLAIM
     jc .fail
@@ -13667,7 +13671,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2183
+    OS88_BSS 2206
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -14141,7 +14145,11 @@ fp_sgn            equ fp_nd + 2
 fp_sq             equ fp_sgn + 2       ; 8: fp_sqrt's input, across iterations
 fp_g              equ fp_sq + 8        ; 8: its running guess
 fp_tv             equ fp_g + 8         ; 8: fp_floor's general temporary
-sh_bss_end        equ fp_tv + 8
+fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
+fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
+fp_x2             equ fp_x1 + 10       ; 10: B
+fp_sw             equ fp_x2 + 10       ; where the status word lands
+sh_bss_end        equ fp_sw + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

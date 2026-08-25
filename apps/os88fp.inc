@@ -631,7 +631,7 @@ fp_b_to_t:
 ; SMALLER operand is the one shifted right - shifting the larger one would
 ; throw away the bits that matter instead of the ones that do not.
 ; -----------------------------------------------------------------------------
-fp_add:
+fps_add:
     push ax
     push bx
     push cx
@@ -693,7 +693,7 @@ fp_add:
 
 ; fp_sub - A = A - B. One flip and a sum; there is no separate subtraction path
 ; to get wrong.
-fp_sub:
+fps_sub:
     push ax
     mov al, [fp_bs]
     xor al, 1
@@ -714,7 +714,7 @@ fp_sub:
 ; propagation; the loop is indexed rather than unrolled because sixteen copies
 ; of the same six lines is where a transcription error hides.
 ; -----------------------------------------------------------------------------
-fp_mul:
+fps_mul:
     push ax
     push bx
     push cx
@@ -854,7 +854,7 @@ fp_cmpt_b:
 ; Restoring shift-and-subtract, 64 iterations, producing 64 quotient bits.
 ; A is brought below B first so the quotient cannot need a 65th bit.
 ; -----------------------------------------------------------------------------
-fp_div:
+fps_div:
     push ax
     push bx
     push cx
@@ -956,7 +956,7 @@ fp_div:
 ; out: AX = -1 (A < B), 0 (equal) or 1 (A > B), and the flags set from it, so
 ; a caller may use either. Preserves both accumulators.
 ; -----------------------------------------------------------------------------
-fp_cmpab:
+fps_cmpab:
     push bx
     push cx
     mov bx, fp_am0
@@ -1948,3 +1948,342 @@ fp_half_add:
     ret
 
 fp_half:  dw 0x0000, 0x0000, 0x0000, 0x3FE0    ; 0.5, exactly
+
+; =============================================================================
+; THE COPROCESSOR PATH
+;
+; Everything above this line runs on an 8088 with an empty socket. This part
+; runs when the socket is filled, and the two must agree to the last bit -
+; that is the acceptance test, not a hope.
+;
+; --- WHY THE 80-BIT FORM AND NOT `fld qword` ---------------------------------
+; The obvious shape is to pack A and B back into doubles, `fld qword` them and
+; let the part work. It is wrong twice. It ROUNDS: a value part-way through
+; fp_atof or fp_scale10 carries all 64 mantissa bits, and squeezing it into 53
+; to hand it to the coprocessor throws away exactly the bits the software path
+; is keeping - the two paths would then disagree in the last place on values
+; that had nothing wrong with them. And it is SLOW, because fp_pack_a is one
+; of the longest routines in this file and this would run it three times per
+; operation.
+;
+; The 80-bit temporary real is instead a NEAR-EXACT MATCH FOR THIS FILE'S OWN
+; WORKING FORM, which is not a coincidence - both are a 64-bit normalized
+; mantissa with an explicit top bit, a sign, and a biased exponent. So the
+; conversion is five word moves and one add, it is exact in both directions,
+; and both paths then compute with 64 mantissa bits and round to 53 exactly
+; once, in fp_pack_a, at the end. That is what makes them agree.
+;
+;       this file:  value = (-1)^s * m * 2^ae          m in [2^63, 2^64)
+;       80-bit:     value = (-1)^s * m * 2^(E - 16446)
+;       so          E = ae + 16446
+;
+; --- THE ONE THING THAT WOULD HANG A MACHINE ---------------------------------
+; A coprocessor instruction on a machine with no coprocessor does not fault on
+; an 8088 - the WAIT the assembler puts in front of it blocks forever, waiting
+; on a BUSY line nothing will lower. So NOTHING below is reached without
+; fp_hw, and fp_hw is only set by fp_init after the kernel's boot probe says
+; the part answered. Call fp_init once before any arithmetic; if it is never
+; called, fp_hw is zero and the software path runs, which is the safe default
+; in the right direction.
+;
+; SPEC.md 1 rule 1 needs no exception for any of this: the 8087 shipped WITH
+; the 8086 and NASM assembles its base instruction set at `cpu 8086` already.
+; The gate here is a RUN-TIME one, and no `cpu` directive appears anywhere.
+;
+; The caller owes four more scratch items:
+;   fp_hw    db      0 = software, non-zero = the part is there and is used
+;   fp_x1    resb 10  A in 80-bit form
+;   fp_x2    resb 10  B in 80-bit form
+;   fp_sw    dw       where the status word lands
+; =============================================================================
+
+FPX_EADJ   equ 16446                  ; 16383 + 63: the extended bias, plus the
+                                      ; 63 places between "mantissa is the
+                                      ; integer part" and "bit 63 is the 1s"
+
+; -----------------------------------------------------------------------------
+; fp_init - decide which path this machine gets. Call once, at startup.
+;
+; A package that wants the software path on a machine that has the part - to
+; compare them, which is exactly what apps/fptest does - clears fp_hw after
+; this returns. Nothing else reads the capability, so that is the whole toggle.
+; -----------------------------------------------------------------------------
+fp_init:
+    push ax
+    mov byte [fp_hw], 0
+    call OSAPI_CPU_INFO               ; AL = tier, AH = CPU_F_* bits
+    test ah, CPU_F_X87
+    jz .done
+    mov byte [fp_hw], 1
+    fninit                            ; round to nearest, EXTENDED precision,
+                                      ; every exception masked - the defaults,
+                                      ; and the three this file depends on
+.done:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_a_to_x / fp_b_to_x - BX = a 10-byte buffer; write A (or B) into it.
+;
+; A zero has no normalized 80-bit form, so it is written as a true zero rather
+; than as a mantissa of 0 with a live exponent - which is an "unnormal" the
+; 8087 will happily compute with and later parts will not.
+; -----------------------------------------------------------------------------
+fp_a_to_x:
+    push ax
+    mov ax, [fp_am0]
+    mov [bx], ax
+    mov ax, [fp_am1]
+    mov [bx+2], ax
+    mov ax, [fp_am2]
+    mov [bx+4], ax
+    mov ax, [fp_am3]
+    mov [bx+6], ax
+    or ax, [fp_am0]                   ; AX still holds am3, so this ORs all
+    or ax, [fp_am1]                   ; four words together
+    or ax, [fp_am2]
+    jz .zero
+    mov ax, [fp_ae]
+    add ax, FPX_EADJ
+    jmp .sign
+.zero:
+    xor ax, ax
+.sign:
+    cmp byte [fp_as], 0
+    je .st
+    or ax, 0x8000
+.st:
+    mov [bx+8], ax
+    pop ax
+    ret
+
+fp_b_to_x:
+    push ax
+    mov ax, [fp_bm0]
+    mov [bx], ax
+    mov ax, [fp_bm1]
+    mov [bx+2], ax
+    mov ax, [fp_bm2]
+    mov [bx+4], ax
+    mov ax, [fp_bm3]
+    mov [bx+6], ax
+    or ax, [fp_bm0]
+    or ax, [fp_bm1]
+    or ax, [fp_bm2]
+    jz .zero
+    mov ax, [fp_be]
+    add ax, FPX_EADJ
+    jmp .sign
+.zero:
+    xor ax, ax
+.sign:
+    cmp byte [fp_bs], 0
+    je .st
+    or ax, 0x8000
+.st:
+    mov [bx+8], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_x_to_a - BX = a 10-byte buffer; make it A.
+;
+; An exponent of 0 is a zero or a denormal and both flush, which is what the
+; software path's unpack does with the same case. An exponent of 0x7FFF is an
+; infinity the part produced on overflow; it is left as the enormous exponent
+; it converts to, and fp_pack_a clamps it to the largest finite double - which
+; is precisely what the software path does with its own overflow, so the two
+; agree there too.
+; -----------------------------------------------------------------------------
+fp_x_to_a:
+    push ax
+    mov ax, [bx+8]
+    mov byte [fp_as], 0
+    test ax, 0x8000
+    jz .pos
+    mov byte [fp_as], 1
+.pos:
+    and ax, 0x7FFF
+    jz .zero
+    sub ax, FPX_EADJ
+    mov [fp_ae], ax
+    mov ax, [bx]
+    mov [fp_am0], ax
+    mov ax, [bx+2]
+    mov [fp_am1], ax
+    mov ax, [bx+4]
+    mov [fp_am2], ax
+    mov ax, [bx+6]
+    mov [fp_am3], ax
+    test ax, 0x8000                   ; not normalized: a denormal the part
+    jz .zero                          ; produced, which this file flushes
+    jmp .out
+.zero:
+    call fp_azero
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; The five dispatchers. Every call site in this file and in every package goes
+; through these, so an internal caller (fp_scale10, fp_sqrt, fp_atof) gets the
+; coprocessor exactly as an external one does, without knowing about it.
+;
+; A jump, not a call, so the tail routine's return value and flags are the
+; dispatcher's - fps_div's CF and fps_cmpab's AX-and-flags survive untouched.
+; -----------------------------------------------------------------------------
+fp_add:
+    cmp byte [fp_hw], 0
+    jne fpx_add
+    jmp fps_add
+
+fp_sub:
+    cmp byte [fp_hw], 0
+    jne fpx_sub
+    jmp fps_sub
+
+fp_mul:
+    cmp byte [fp_hw], 0
+    jne fpx_mul
+    jmp fps_mul
+
+fp_div:
+    cmp byte [fp_hw], 0
+    jne fpx_div
+    jmp fps_div
+
+fp_cmpab:
+    cmp byte [fp_hw], 0
+    jne fpx_cmpab
+    jmp fps_cmpab
+
+; -----------------------------------------------------------------------------
+; fpx_stage - both operands into their 10-byte buffers. Which one is pushed
+; onto the coprocessor stack first is each operation's own business: the four
+; arithmetic ones want A underneath, and fpx_cmpab wants it on top.
+; -----------------------------------------------------------------------------
+fpx_stage:
+    mov bx, fp_x1
+    call fp_a_to_x
+    mov bx, fp_x2
+    call fp_b_to_x
+    ret
+
+; A = A + B
+fpx_add:
+    push ax
+    push bx
+    call fpx_stage
+    fld tword [fp_x1]                 ; ST(0) = A
+    fld tword [fp_x2]                 ; ST(0) = B, ST(1) = A
+    faddp st1, st0                    ; ST(1) += ST(0), pop: ST(0) = A + B
+    fstp tword [fp_x1]
+    fwait                             ; the STORE has to have LANDED before the
+                                      ; 8088 reads it back - the WAIT the
+                                      ; assembler puts in FRONT of an
+                                      ; instruction guards the previous
+                                      ; operation, not this one's memory write
+    mov bx, fp_x1
+    call fp_x_to_a
+    pop bx
+    pop ax
+    ret
+
+; A = A - B.
+;
+; THE ONE ENCODING WORTH BEING CAREFUL ABOUT. For the register forms the
+; reversed variant has the LOWER opcode - DE E0+i is FSUBRP and DE E8+i is
+; FSUBP - which is the opposite way round from the memory forms (/4 FSUB, /5
+; FSUBR), and is why assemblers have historically disagreed here. NASM emits
+; DE E9 for `fsubp st1, st0`, which is Intel's FSUBP ST(1), ST(0) computing
+; ST(1) = ST(1) - ST(0). So A goes on FIRST and ends up underneath, exactly as
+; in fpx_add. This was checked against the disassembly and then against the
+; arithmetic, because a swap here is silent and gives B - A.
+fpx_sub:
+    push ax
+    push bx
+    call fpx_stage
+    fld tword [fp_x1]                 ; ST(0) = A
+    fld tword [fp_x2]                 ; ST(0) = B, ST(1) = A
+    fsubp st1, st0                    ; ST(1) = A - B, pop
+    fstp tword [fp_x1]
+    fwait
+    mov bx, fp_x1
+    call fp_x_to_a
+    pop bx
+    pop ax
+    ret
+
+; A = A * B
+fpx_mul:
+    push ax
+    push bx
+    call fpx_stage
+    fld tword [fp_x1]
+    fld tword [fp_x2]
+    fmulp st1, st0
+    fstp tword [fp_x1]
+    fwait
+    mov bx, fp_x1
+    call fp_x_to_a
+    pop bx
+    pop ax
+    ret
+
+; A = A / B, CF=1 and A=0 if B was zero - the software path's contract exactly,
+; and the reason the divisor is tested HERE rather than left to the part: a
+; masked divide by zero produces an infinity, and this file never produces one.
+fpx_div:
+    push ax
+    push bx
+    mov bx, fp_bm0
+    call fp_iszero
+    jc .divzero
+    call fpx_stage
+    fld tword [fp_x1]                 ; ST(0) = A
+    fld tword [fp_x2]                 ; ST(0) = B, ST(1) = A
+    fdivp st1, st0                    ; ST(1) = A / B, pop - DE F8+i, the same
+    fstp tword [fp_x1]                ; asymmetry fpx_sub explains
+    fwait
+    mov bx, fp_x1
+    call fp_x_to_a
+    clc
+    pop bx
+    pop ax
+    ret
+.divzero:
+    call fp_azero
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fpx_cmpab - AX = -1 / 0 / 1 with the flags to match, as fps_cmpab returns.
+;
+; A is loaded LAST so FCOMPP compares ST(0)=A against ST(1)=B in that order,
+; and the condition codes then read as an ordinary unsigned compare of A to B:
+; C0 is "less", C3 is "equal", and SAHF puts them in CF and ZF where JB and JE
+; already look for them.
+; -----------------------------------------------------------------------------
+fpx_cmpab:
+    push bx
+    call fpx_stage
+    fld tword [fp_x2]                 ; ST(0) = B
+    fld tword [fp_x1]                 ; ST(0) = A, ST(1) = B
+    fcompp                            ; compare A with B, pop both
+    fstsw word [fp_sw]
+    fwait
+    mov ah, [fp_sw+1]                 ; C3 -> bit 6, C2 -> bit 2, C0 -> bit 0
+    sahf                              ; ZF = C3 = equal, CF = C0 = A < B
+    jne .ne
+    xor ax, ax
+    jmp .done
+.ne:
+    mov ax, 1
+    jnc .done
+    mov ax, -1
+.done:
+    pop bx
+    cmp ax, 0
+    ret
