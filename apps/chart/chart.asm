@@ -47,6 +47,8 @@ CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
 CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
 CH_T_AREA   equ 3                   ; rather than the intuitive-but-wrong one
 CH_T_PIE    equ 4                   ; stage 3.0f, and the last of the four
+CH_T_SCATTER equ 5                  ; ...and stage 3.0f's own last two, which
+CH_T_COMBO   equ 6                  ; needed a SECOND series (SPEC.md 82.8)
                                     ; Excel types this app can draw: Scatter
                                     ; and Combination need TWO series, which
                                     ; is a data-model problem rather than a
@@ -171,6 +173,11 @@ ct_render:
     push dx
     push si
     push es
+    mov word [ch_arr2], ct_t2val        ; the second series, if the file had a
+    mov ax, [ct_t2cnt]                  ; second column (82.8)
+    mov [ch_cnt2], ax
+    mov ax, ds
+    mov [ch_srcseg2], ax
     mov word [ch_title], ct_name        ; the file it charted, which is the
     cmp byte [ct_name], 0               ; only name this app has for the data
     jne .titled
@@ -570,10 +577,54 @@ ct_record:
     cmp word [ct_tcnt], 0
     je .newcol                        ; nothing yet: this cell defines it
     cmp ax, [ct_mincol]
-    ja .out                           ; a higher column is not the series
     je .append
-.newcol:                              ; a LOWER column supersedes everything
-    mov [ct_mincol], ax               ; collected so far
+    jb .newcol                        ; a LOWER column supersedes everything
+    ; --- higher than the series: it may still be the SECOND one -------------
+    ; Scatter and Combination need two (SPEC.md 82.8), so the next-lowest
+    ; column is kept as well. The same three-way test, one level along.
+    cmp word [ct_t2cnt], 0
+    je .new2
+    cmp ax, [ct_mincol2]
+    ja .out
+    je .append2
+.new2:
+    mov [ct_mincol2], ax
+    mov word [ct_t2cnt], 0
+.append2:
+    mov cx, [ct_t2cnt]
+    cmp cx, CH_MAXBARS
+    jae .out
+    mov si, cx
+    shl si, 1
+    mov [ct_t2row + si], bx
+    mov [ct_t2val + si], dx
+    inc word [ct_t2cnt]
+    jmp .out
+.newcol:                              ; the old series becomes the second one,
+    push ax                           ; rather than being thrown away - it IS
+    push bx                           ; the next-lowest column by construction
+    push dx
+    mov ax, [ct_mincol]
+    cmp word [ct_tcnt], 0
+    je .nodemote
+    mov [ct_mincol2], ax
+    mov cx, [ct_tcnt]
+    mov [ct_t2cnt], cx
+    xor si, si
+.demote:
+    jcxz .nodemote
+    mov ax, [ct_trow + si]
+    mov [ct_t2row + si], ax
+    mov ax, [ct_tval + si]
+    mov [ct_t2val + si], ax
+    add si, 2
+    dec cx
+    jmp .demote
+.nodemote:
+    pop dx
+    pop bx
+    pop ax
+    mov [ct_mincol], ax
     mov word [ct_tcnt], 0
 .append:
     mov cx, [ct_tcnt]
@@ -1074,7 +1125,7 @@ ct_tpl:
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET ct_menus, ct_name_app, ct_oncmd
         OS88_MENU ct_m_file, ct_i_file, 2
-        OS88_MENU ct_m_gallery, ct_i_gallery, 5
+        OS88_MENU ct_m_gallery, ct_i_gallery, 7
     OS88_MENUSET_END ct_menus
 
 ct_name_app: db 'Chart', 0
@@ -1084,20 +1135,21 @@ ct_it_open:  db 'Open...', 0
 ct_it_exp:   db 'Export as BMP...', 0
 
 ; Excel 2.1d's Gallery menu is Area/Bar/Column/Line/Pie/Scatter/Combination.
-; These FIVE are the ones a single series can express - Pie joined them once
-; os88chart.inc got its own sine table (82.6). Scatter and Combination need
-; TWO series, which is a data-model problem rather than a drawing one, and
-; they stay out rather than appear and disappoint. THE ORDER MATCHES
+; ALL SEVEN now. Scatter and Combination needed a second series, which this
+; reader supplies by keeping the two lowest-numbered columns rather than only
+; the lowest (82.8) - the data-model problem that kept them out until now. THE ORDER MATCHES
 ; ct_gal_map below, which is indexed by the item number - keep them in step.
 ct_m_gallery: db 'Gallery', 0
-ct_i_gallery: dw ct_it_area, ct_it_bar, ct_it_col, ct_it_line, ct_it_pie
+ct_i_gallery: dw ct_it_area, ct_it_bar, ct_it_col, ct_it_line, ct_it_pie, ct_it_sca, ct_it_cmb
 ct_it_area:   db 'Area', 0
 ct_it_bar:    db 'Bar', 0
 ct_it_col:    db 'Column', 0
 ct_it_line:   db 'Line', 0
 ct_it_pie:    db 'Pie', 0
+ct_it_sca:    db 'Scatter', 0
+ct_it_cmb:    db 'Combination', 0
 
-ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE
+ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE, CH_T_SCATTER, CH_T_COMBO
 ct_s_title:    db 'Chart', 0
 ct_s_about:    db 'Chart - charts a column of a SYLK, DIF or BIFF sheet', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
@@ -1121,7 +1173,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 551
+    OS88_BSS 755
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1208,7 +1260,31 @@ ch_tnum        equ ch_tbits + 2       ; 8: ch_itoa_t's output
 ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
 ch_legy        equ ch_title + 2     ; the legend row being drawn...
 ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
-ct_bss_end  equ ch_legr + 2
+ch_arr2        equ ch_legr + 2       ; --- the SECOND series (82.8) ---
+ch_cnt2        equ ch_arr2 + 2      ; 0 = there is no second series
+ch_srcseg2     equ ch_cnt2 + 2
+ch_max2        equ ch_srcseg2 + 2   ; its own scale, independent of the first
+ch_mkx         equ ch_max2 + 2      ; ch_mark's centre
+ch_mky         equ ch_mkx + 2
+ch_scx         equ ch_mky + 2       ; a scatter point's x, across the y maths
+ch_cbx         equ ch_scx + 2       ; a combination point...
+ch_cby         equ ch_cbx + 2
+ch_lcy         equ ch_cby + 2       ; ...and the previous one's y
+ch_l2x         equ ch_lcy + 2       ; ch_line2's Bresenham state
+ch_l2y         equ ch_l2x + 2
+ch_l2ex        equ ch_l2y + 2
+ch_l2ey        equ ch_l2ex + 2
+ch_l2dx        equ ch_l2ey + 2
+ch_l2dy        equ ch_l2dx + 2
+ch_l2sx        equ ch_l2dy + 2
+ch_l2sy        equ ch_l2sx + 2
+ch_l2err       equ ch_l2sy + 2
+ch_l2e2        equ ch_l2err + 2
+ct_mincol2  equ ch_l2e2 + 2         ; the SECOND series' column...
+ct_t2cnt    equ ct_mincol2 + 2      ; ...how many cells it has...
+ct_t2row    equ ct_t2cnt + 2        ; ...and its rows and values
+ct_t2val    equ ct_t2row + CH_MAXBARS * 2
+ct_bss_end  equ ct_t2val + CH_MAXBARS * 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting

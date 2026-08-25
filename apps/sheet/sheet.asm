@@ -230,6 +230,10 @@ SH_CLAIM_BORD_KB  equ 4             ; stage 2.x: the border table (below) -
                                      ; cell ever has a border and this app
                                      ; already has 3 claims plus its own
                                      ; region (MEM_OWNER_MAX=8, room to spare)
+SH_CHART_S2  equ 512                ; where a chart's SECOND series lands in
+                                    ; sh_stgseg - the first sits at 0 and needs
+                                    ; CH_MAXBARS words, so 512 is clear of it
+                                    ; with room to spare
 SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; offscreen 4bpp canvas - 240x160px, 120
                                      ; bytes/row (already a multiple of 4, so
@@ -344,6 +348,8 @@ CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
 CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
 CH_T_AREA   equ 3                   ; rather than the intuitive-but-wrong one
 CH_T_PIE    equ 4                   ; stage 3.0f, and the last of the four
+CH_T_SCATTER equ 5                  ; ...and stage 3.0f's own last two, which
+CH_T_COMBO   equ 6                  ; needed a SECOND series (SPEC.md 82.8)
                                     ; Excel types this app can draw: Scatter
                                     ; and Combination need TWO series, which
                                     ; is a data-model problem rather than a
@@ -4386,7 +4392,38 @@ sh_docmd_filldown:
 ; is reflected without retargeting the chart to wherever the selection
 ; happens to be at the time.
 ; -----------------------------------------------------------------------------
+; sh_chart_scan - series ONE from [sh_chart_col], then series TWO from the
+; column to its right if that column holds anything. Two passes rather than one
+; because the cell array is sorted by row and then column, so a single walk
+; would interleave them and both series must come out in row order.
 sh_chart_scan:
+    push ax
+    mov ax, [sh_chart_col]
+    mov [sh_scan_col], ax
+    mov word [sh_scan_off], 0
+    call sh_chart_scan1
+    mov ax, [sh_chart_cnt2]           ; sh_chart_scan1 leaves its count here
+    mov [sh_chart_cnt], ax
+    mov ax, [sh_chart_col]
+    inc ax
+    cmp ax, SH_COLS
+    jae .nosecond
+    mov [sh_scan_col], ax
+    mov word [sh_scan_off], SH_CHART_S2
+    call sh_chart_scan1
+    jmp .done
+.nosecond:
+    mov word [sh_chart_cnt2], 0
+.done:
+    mov word [ch_arr2], SH_CHART_S2
+    mov ax, [sh_chart_cnt2]
+    mov [ch_cnt2], ax
+    mov ax, [sh_stgseg]
+    mov [ch_srcseg2], ax
+    pop ax
+    ret
+
+sh_chart_scan1:
     push ax
     push bx
     push cx
@@ -4394,10 +4431,10 @@ sh_chart_scan:
     push si
     push di
     push es
-    mov word [sh_chart_cnt], 0
+    mov word [sh_chart_cnt2], 0
     xor cx, cx
 .scan:
-    mov ax, [sh_chart_cnt]
+    mov ax, [sh_chart_cnt2]
     cmp ax, CH_MAXBARS
     jae .scandone
     cmp cx, [sh_ncells]
@@ -4412,7 +4449,7 @@ sh_chart_scan:
     cmp bx, [sh_chart_sheet]
     jne .next
     mov dx, [es:si+2]                  ; col
-    cmp dx, [sh_chart_col]
+    cmp dx, [sh_scan_col]
     jne .next
     test byte [es:si+4], 1             ; HASFORMULA: chart its CURRENT value
     jz .plainval                       ; (sh_getcell2 evaluates transparently
@@ -4421,7 +4458,7 @@ sh_chart_scan:
                                         ; used to chart as completely empty.
                                         ; AX still holds this record's row
                                         ; from sh_unpackrow above.
-    mov ax, [sh_chart_col]
+    mov ax, [sh_scan_col]
     push cx                            ; CX is this scan's own index and
     push si                            ; sh_getcell2 does not preserve it -
     call sh_getcell2                   ; see the matching note in
@@ -4432,12 +4469,13 @@ sh_chart_scan:
     call sh_cellint_si                 ; the chart plots whole numbers, so the
     mov dx, ax                         ; value is truncated here rather than
 .havevalue:                            ; read as the low half of its double
-    mov bx, [sh_chart_cnt]
+    mov bx, [sh_chart_cnt2]
     shl bx, 1
     mov di, bx
+    add di, [sh_scan_off]
     mov es, [sh_stgseg]
     mov [es:di], dx
-    inc word [sh_chart_cnt]
+    inc word [sh_chart_cnt2]
 .next:
     inc cx
     jmp .scan
@@ -5112,7 +5150,7 @@ SH_FDLG_NITEMS equ 4
 ; Alignment, Font, Insert, Delete, Column Width and Row Height since stage 1.8,
 ; and the four stage 3.0c added. Deriving it means the next kind that needs a
 ; taller body cannot reintroduce this by changing one of the two.
-SH_FDLG_MAXROWS equ 5                ; the tallest kind's row count, and the
+SH_FDLG_MAXROWS equ 7                ; the tallest kind's row count, and the
                                      ; reason the button row is derived from
                                      ; it rather than fixed: the Gallery kind
                                      ; has five rows and the row at index 4
@@ -5168,13 +5206,15 @@ sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_
 ; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
 ; happens to be in - sh_gal_map translates, the same way chart.asm's own
 ; ct_gal_map does, rather than either side renumbering to suit the other.
-sh_fd_i_gal:    dw sh_fd_garea, sh_fd_gbar, sh_fd_gcol, sh_fd_gline, sh_fd_gpie
+sh_fd_i_gal:    dw sh_fd_garea, sh_fd_gbar, sh_fd_gcol, sh_fd_gline, sh_fd_gpie, sh_fd_gsca, sh_fd_gcmb
 sh_fd_garea:    db 'Area', 0
 sh_fd_gbar:     db 'Bar', 0
 sh_fd_gcol:     db 'Column', 0
 sh_fd_gline:    db 'Line', 0
 sh_fd_gpie:     db 'Pie', 0
-sh_gal_map:     dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE
+sh_fd_gsca:     db 'Scatter', 0
+sh_fd_gcmb:     db 'Combination', 0
+sh_gal_map:     dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE, CH_T_SCATTER, CH_T_COMBO
 sh_fd_i_clear:  dw sh_fd_clall, sh_fd_clform, sh_fd_clfmt
 sh_fd_clall:    db 'All', 0
 sh_fd_clform:   db 'Formulas', 0       ; Excel's own order and its own words:
@@ -5224,7 +5264,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 5
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -5273,7 +5313,7 @@ sh_fdlg_open:
     jmp .cellpre
 .prefillgal:
     xor bx, bx                        ; find [ch_type] in the map rather than
-    mov cx, 5                         ; inverting it - five entries, and an
+    mov cx, 7                         ; inverting it - seven entries, and an
 .galpre:                              ; inverse table is one more thing to
     mov ax, [sh_gal_map + bx]         ; keep in step
     cmp ax, [ch_type]
@@ -16778,7 +16818,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2936
+    OS88_BSS 2982
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -17177,8 +17217,31 @@ ch_tnum        equ ch_tbits + 2       ; 8: ch_itoa_t's output
 ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
 ch_legy        equ ch_title + 2     ; the legend row being drawn...
 ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
-sh_chart_title equ ch_legr + 2      ; 16: "Column A"
-sh_rpn_p       equ sh_chart_title + 16  ; --- stage 4.5: the RPN emitter ---
+ch_arr2        equ ch_legr + 2       ; --- the SECOND series (82.8) ---
+ch_cnt2        equ ch_arr2 + 2      ; 0 = there is no second series
+ch_srcseg2     equ ch_cnt2 + 2
+ch_max2        equ ch_srcseg2 + 2   ; its own scale, independent of the first
+ch_mkx         equ ch_max2 + 2      ; ch_mark's centre
+ch_mky         equ ch_mkx + 2
+ch_scx         equ ch_mky + 2       ; a scatter point's x, across the y maths
+ch_cbx         equ ch_scx + 2       ; a combination point...
+ch_cby         equ ch_cbx + 2
+ch_lcy         equ ch_cby + 2       ; ...and the previous one's y
+ch_l2x         equ ch_lcy + 2       ; ch_line2's Bresenham state
+ch_l2y         equ ch_l2x + 2
+ch_l2ex        equ ch_l2y + 2
+ch_l2ey        equ ch_l2ex + 2
+ch_l2dx        equ ch_l2ey + 2
+ch_l2dy        equ ch_l2dx + 2
+ch_l2sx        equ ch_l2dy + 2
+ch_l2sy        equ ch_l2sx + 2
+ch_l2err       equ ch_l2sy + 2
+ch_l2e2        equ ch_l2err + 2
+sh_chart_title equ ch_l2e2 + 2      ; 16: "Column A"
+sh_scan_col    equ sh_chart_title + 16  ; which column a scan pass reads...
+sh_scan_off    equ sh_scan_col + 2      ; ...and where in sh_stgseg it lands
+sh_chart_cnt2  equ sh_scan_off + 2      ; the second series' own count
+sh_rpn_p       equ sh_chart_cnt2 + 2  ; --- stage 4.5: the RPN emitter ---
 sh_rpn_len     equ sh_rpn_p + 2
 sh_rpn_bad     equ sh_rpn_len + 2    ; byte: this formula cannot be expressed
 sh_rpn_rel     equ sh_rpn_bad + 1    ; the two relative-reference flags

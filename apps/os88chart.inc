@@ -1046,6 +1046,354 @@ ch_legswatch:
     pop ax
     ret
 
+; =============================================================================
+; TWO SERIES - Scatter and Combination, the last two Excel gallery types.
+;
+; Every type above this reads ONE array. These read two, and that is the whole
+; reason they waited: it is a data-model change, not a drawing one. The second
+; series is optional state the CALLER fills in beside the first - ch_arr2,
+; ch_cnt2, ch_srcseg2 - and zero in ch_cnt2 means "there is no second", which
+; both types below handle rather than refuse.
+;
+; Sheet charts the selected column and the one to its right; CHART.O88 reads
+; the two lowest-numbered columns in the file. Neither invents data: a sheet
+; with one column of numbers gets a scatter against the row index and a
+; combination that is just its columns, which is what those charts degrade to
+; honestly.
+; =============================================================================
+CH_C_SERIES2 equ CRED                ; the second series, against CBLUE's first
+
+; -----------------------------------------------------------------------------
+; ch_prep2 - the second series' own largest abs(), into ch_max2. Its scale is
+; independent of the first's: a scatter's two axes measure different things,
+; and forcing one maximum on both would flatten whichever has the smaller
+; range into the axis.
+; -----------------------------------------------------------------------------
+ch_prep2:
+    push ax
+    push cx
+    push dx
+    push si
+    push es
+    mov word [ch_max2], 1
+    mov cx, [ch_cnt2]
+    or cx, cx
+    jz .out
+    mov si, [ch_arr2]
+    mov es, [ch_srcseg2]
+    mov word [ch_max2], 0
+.scan:
+    or cx, cx
+    jz .done
+    es lodsw
+    or ax, ax
+    jns .pos
+    neg ax
+.pos:
+    cmp ax, [ch_max2]
+    jbe .next
+    mov [ch_max2], ax
+.next:
+    dec cx
+    jmp .scan
+.done:
+    cmp word [ch_max2], 0
+    jnz .out
+    mov word [ch_max2], 1
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; ch_val2 - in: AX = index; out: AX = that entry of the SECOND series
+ch_val2:
+    push bx
+    push si
+    push es
+    mov bx, ax
+    shl bx, 1
+    mov si, [ch_arr2]
+    add si, bx
+    mov es, [ch_srcseg2]
+    mov ax, [es:si]
+    pop es
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_mark - a 3x3 plus at (AX, BX) in DL. A single pixel is invisible against
+; a grid on a 240x160 canvas, and a filled square hides the point it marks.
+; -----------------------------------------------------------------------------
+ch_mark:
+    push ax
+    push bx
+    push cx
+    mov [ch_pie_pen], dl
+    mov byte [ch_pie_pat], 0xFF
+    mov [ch_mkx], ax
+    mov [ch_mky], bx
+    call ch_pie_plot
+    mov ax, [ch_mkx]
+    dec ax
+    mov bx, [ch_mky]
+    call ch_pie_plot
+    mov ax, [ch_mkx]
+    inc ax
+    mov bx, [ch_mky]
+    call ch_pie_plot
+    mov ax, [ch_mkx]
+    mov bx, [ch_mky]
+    dec bx
+    call ch_pie_plot
+    mov ax, [ch_mkx]
+    mov bx, [ch_mky]
+    inc bx
+    call ch_pie_plot
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_scatter_draw - CH_T_SCATTER. Series one is X, series two is Y, and each
+; pair is one marker. With no second series the X is the point's INDEX, which
+; is the same picture a line chart draws without the line.
+; -----------------------------------------------------------------------------
+ch_scatter_draw:
+    call ch_prep
+    jc .nodata
+    call ch_prep2
+    call ch_axis_h                     ; the zero line, and ch_base with it
+    mov word [ch_bx1], 0
+    mov word [ch_bx2], CH_W - 1
+    mov ax, [ch_base]
+    mov [ch_by1], ax
+    mov [ch_by2], ax
+    mov dl, CH_C_AXIS
+    call ch_fillrect
+
+    mov word [ch_idx], 0
+.pt:
+    mov ax, [ch_idx]
+    cmp ax, [ch_cnt]
+    jae .done
+    cmp word [ch_cnt2], 0
+    je .byindex
+    cmp ax, [ch_cnt2]
+    jae .done                          ; the pairs run out with the shorter
+.byindex:                              ; series; a lone X is not a point
+    mov ax, [ch_idx]                   ; --- X ---
+    cmp word [ch_cnt2], 0
+    je .xindex
+    call ch_getval                     ; series one supplies it
+    or ax, ax
+    jns .xpos
+    neg ax
+.xpos:
+    mov dx, CH_PLOT_W - 1
+    mul dx
+    div word [ch_max]
+    add ax, CH_PLOT_X0
+    jmp .havex
+.xindex:
+    call ch_xfor                       ; no second series: spread by index
+.havex:
+    mov [ch_scx], ax
+    mov ax, [ch_idx]                   ; --- Y ---
+    cmp word [ch_cnt2], 0
+    je .yfromone
+    call ch_val2
+    jmp .yscale
+.yfromone:
+    call ch_getval
+.yscale:
+    push ax
+    or ax, ax
+    jns .ypos
+    neg ax
+.ypos:
+    mov dx, [ch_base]
+    mul dx
+    cmp word [ch_cnt2], 0
+    je .ybyone
+    div word [ch_max2]
+    jmp .yhave
+.ybyone:
+    div word [ch_max]
+.yhave:
+    mov bx, ax
+    pop ax
+    mov cx, [ch_base]
+    or ax, ax
+    js .yneg
+    sub cx, bx
+    jmp .haveyy
+.yneg:
+    add cx, bx
+.haveyy:
+    mov ax, [ch_scx]
+    mov bx, cx
+    mov dl, CH_C_SERIES
+    call ch_mark
+    inc word [ch_idx]
+    jmp .pt
+.done:
+    call ch_deco
+.nodata:
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_combo_draw - CH_T_COMBINATION. Series one as columns, series two as a
+; line over them, which is Excel's own combination and the reason the type
+; exists: two quantities that share a category axis and do not share a scale.
+; -----------------------------------------------------------------------------
+ch_combo_draw:
+    call ch_bars_draw                  ; the columns, and ch_prep with them
+    cmp word [ch_cnt], 0
+    je .out
+    cmp word [ch_cnt2], 0
+    je .deco                           ; nothing to overlay: it is a column
+    call ch_prep2                      ; chart, honestly
+    mov word [ch_idx], 0
+    mov word [ch_lcx], 0xFFFF          ; "no previous point yet"
+.seg:
+    mov ax, [ch_idx]
+    cmp ax, [ch_cnt2]
+    jae .deco
+    mov cx, CH_BARW + CH_GAP           ; the middle of this category's band,
+    mul cx                             ; so the line sits over its column
+    add ax, CH_PLOT_X0 + CH_BARW / 2
+    mov [ch_cbx], ax
+    mov ax, [ch_idx]
+    call ch_val2
+    push ax
+    or ax, ax
+    jns .cpos
+    neg ax
+.cpos:
+    mov dx, [ch_base]
+    mul dx
+    div word [ch_max2]
+    mov bx, ax
+    pop ax
+    mov cx, [ch_base]
+    or ax, ax
+    js .cneg
+    sub cx, bx
+    jmp .cy
+.cneg:
+    add cx, bx
+.cy:
+    mov [ch_cby], cx
+    cmp word [ch_lcx], 0xFFFF
+    je .first
+    mov ax, [ch_lcx]                   ; a segment from the previous point
+    mov bx, [ch_lcy]
+    mov cx, [ch_cbx]
+    mov dx, [ch_cby]
+    call ch_line2
+.first:
+    mov ax, [ch_cbx]
+    mov [ch_lcx], ax
+    mov ax, [ch_cby]
+    mov [ch_lcy], ax
+    mov ax, [ch_cbx]
+    mov bx, [ch_cby]
+    mov dl, CH_C_SERIES2
+    call ch_mark
+    inc word [ch_idx]
+    jmp .seg
+.deco:
+    call ch_deco
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_line2 - a straight segment from (AX,BX) to (CX,DX) in CH_C_SERIES2.
+; Bresenham again rather than ch_seg_draw, which interpolates a data series
+; against ch_base and is the wrong shape for an arbitrary pair of points.
+; -----------------------------------------------------------------------------
+ch_line2:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov [ch_l2ex], cx
+    mov [ch_l2ey], dx
+    mov [ch_l2x], ax
+    mov [ch_l2y], bx
+    mov byte [ch_pie_pen], CH_C_SERIES2
+    mov byte [ch_pie_pat], 0xFF
+    mov ax, [ch_l2ex]
+    sub ax, [ch_l2x]
+    mov word [ch_l2sx], 1
+    or ax, ax
+    jge .dxp
+    neg ax
+    mov word [ch_l2sx], -1
+.dxp:
+    mov [ch_l2dx], ax
+    mov ax, [ch_l2ey]
+    sub ax, [ch_l2y]
+    mov word [ch_l2sy], 1
+    or ax, ax
+    jge .dyp
+    neg ax
+    mov word [ch_l2sy], -1
+.dyp:
+    mov [ch_l2dy], ax
+    mov ax, [ch_l2dx]
+    sub ax, [ch_l2dy]
+    mov [ch_l2err], ax
+.step:
+    mov ax, [ch_l2x]
+    mov bx, [ch_l2y]
+    call ch_pie_plot
+    mov ax, [ch_l2x]
+    cmp ax, [ch_l2ex]
+    jne .go
+    mov ax, [ch_l2y]
+    cmp ax, [ch_l2ey]
+    je .done
+.go:
+    mov ax, [ch_l2err]
+    add ax, ax
+    mov [ch_l2e2], ax
+    mov bx, [ch_l2dy]
+    neg bx
+    cmp ax, bx
+    jle .nox
+    mov ax, [ch_l2err]
+    sub ax, [ch_l2dy]
+    mov [ch_l2err], ax
+    mov ax, [ch_l2x]
+    add ax, [ch_l2sx]
+    mov [ch_l2x], ax
+.nox:
+    mov ax, [ch_l2e2]
+    cmp ax, [ch_l2dx]
+    jge .noy
+    mov ax, [ch_l2err]
+    add ax, [ch_l2dx]
+    mov [ch_l2err], ax
+    mov ax, [ch_l2y]
+    add ax, [ch_l2sy]
+    mov [ch_l2y], ax
+.noy:
+    jmp .step
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ch_draw:
     cmp word [ch_type], CH_T_BAR
     je .bar
@@ -1055,8 +1403,18 @@ ch_draw:
     je .area
     cmp word [ch_type], CH_T_PIE
     je .pie
+    cmp word [ch_type], CH_T_SCATTER
+    je .scatter
+    cmp word [ch_type], CH_T_COMBO
+    je .combo
     call ch_bars_draw
     call ch_deco
+    ret
+.scatter:
+    call ch_scatter_draw
+    ret
+.combo:
+    call ch_combo_draw
     ret
 .pie:
     call ch_pie_draw

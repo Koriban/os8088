@@ -67520,6 +67520,45 @@ So the check that finds this has to be path-aware — net depth zero at every
 `ret` — and a count that cries wolf one time in ten would be worse than none,
 by the same argument §20.8 makes about a stale index.
 
+### 82.8 Two series — Scatter and Combination
+
+Every other type reads **one** array. These read two, and that is why they
+waited: it is a data-model change, not a drawing one. The second series is
+optional state the caller fills in beside the first — `ch_arr2`, `ch_cnt2`,
+`ch_srcseg2` — and **zero in `ch_cnt2` means there is no second**, which both
+types handle rather than refuse.
+
+- **Scatter** — series one is X, series two is Y, each pair one marker. With no
+  second series the X is the point's *index*, which is the picture a line chart
+  draws without the line.
+- **Combination** — series one as columns, series two as a line over them. That
+  is Excel's own combination and the reason the type exists: two quantities
+  that share a category axis and do not share a scale. With no second series it
+  is a column chart, honestly.
+
+**The two scales are independent** (`ch_max` and `ch_max2`). A scatter's axes
+measure different things, and forcing one maximum on both flattens whichever
+has the smaller range into the axis.
+
+Markers are a **3×3 plus**: a single pixel is invisible on a 240×160 canvas
+against a grid, and a filled square hides the point it marks.
+
+#### 82.8.1 Where the second series comes from
+
+**Sheet** scans the selected column and then the one to its right — two passes,
+not one, because the cell array is sorted by row and then column, so a single
+walk would interleave them and both series must come out in row order. The
+second lands at `SH_CHART_S2` in the staging segment, clear of the first.
+
+**CHART.O88** kept only the lowest-numbered column in the file; it keeps the
+**two** lowest now. `ct_record`'s three-way test (below the series → restart,
+in it → append, above it → drop) gains the same test one level along, and a
+column that supersedes the series **demotes** it to second rather than throwing
+it away — it is the next-lowest by construction.
+
+Neither app invents data. A file with one column of numbers gets a scatter
+against the row index and a combination that is just its columns.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot
