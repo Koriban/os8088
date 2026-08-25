@@ -189,16 +189,29 @@ SH_CLAIM_STG_KB   equ 32            ; file I/O staging
 ; values[] arrays it also needs a source-index permutation, an
 ; is-this-a-formula flag, and staged formula text for each one - see the
 ; section comment above sh_docmd_sortcol for the full design)
-SH_SORT_VALS_OFF  equ 4096           ; word/entry (unchanged from before)
-SH_SORT_ORIG_OFF  equ 8192           ; word/entry: origidx[] (which
+; STAGE 4.5 RELAID THIS OUT because values[] had to grow. It was a WORD per
+; entry - the truncated integer - which was right while every cell held one and
+; became silently wrong the moment cells held doubles: 1.2, 1.5 and 1.9 all
+; truncate to 1, so a column of decimals sorted into whatever order the
+; insertion sort's stability happened to leave them in. Nothing reported it,
+; because a sorted-looking column IS what you get.
+;
+; Entries are capped at SH_SORT_CAP now as well. There was no cap before, and
+; nothing stopped a long column walking off the end of one array into the next.
+SH_MENU_CHK       equ 2              ; a leading byte meaning "checked", the
+                                     ; companion to the kernel's MENU_DIS
+SH_SORT_CAP       equ 512            ; entries one sort can carry
+SH_SORT_ROWS_OFF  equ 0              ; word/entry
+SH_SORT_VALS_OFF  equ 1024           ; EIGHT bytes/entry: a whole double
+SH_SORT_ORIG_OFF  equ 5120           ; word/entry: origidx[] (which
                                      ; pre-sort entry ended up here)
-SH_SORT_ISF_OFF   equ 12288         ; byte/entry: 1 if that entry is a
+SH_SORT_ISF_OFF   equ 6144           ; byte/entry: 1 if that entry is a
                                      ; formula cell
-SH_SORT_FIDX_OFF  equ 16384         ; word/entry: which SH_SORT_FTXT_OFF
+SH_SORT_FIDX_OFF  equ 6656           ; word/entry: which SH_SORT_FTXT_OFF
                                      ; slot holds that formula's own text
                                      ; (only meaningful when ISF is set)
-SH_SORT_FTXT_OFF  equ 20480         ; SH_SORT_FCAP slots of 64 bytes each,
-                                     ; ending at 20480+180*64=32000, safely
+SH_SORT_FTXT_OFF  equ 7680           ; SH_SORT_FCAP slots of 64 bytes each,
+                                     ; ending at 7680+180*64=19200, safely
                                      ; inside the 32KB claim
 SH_SORT_FCAP      equ 180           ; max formula cells one sort can carry
                                      ; through - far more than any real
@@ -432,6 +445,12 @@ SH_ROW_MASK  equ 0x3FFF
 SH_MBAR_H    equ 14                  ; the in-window menu bar strip
 SH_MI_H      equ 12                  ; a dropdown item's row height
 SH_MPAD      equ 8                   ; left/right pixel pad per title/item
+SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
+                                     ; gutter, where a checked item's mark
+                                     ; goes. Not folded into SH_MPAD because
+                                     ; that one also sets the spacing of the
+                                     ; BAR's own titles, which have no marks
+                                     ; and would just drift apart
 SH_MENU_N    equ 9                   ; File,Edit,Formula,Format,Data,Options,
                                       ; Macro,Sheets,Help - Excel 2.1d's own
                                       ; bar order (see sh_mtab). NOTE this
@@ -522,6 +541,7 @@ sh_entry:
     mov word [sh_cellch], SH_CW_NORMAL / 8   ; SH_RH_* section comment
     call sh_mkblank
     call sh_mtab_calc
+    call sh_sheetmark
 
     ; stage 3.0a: drag-to-select. BX is still the window OSAPI_WM_CREATE just
     ; answered. CF=1 means kern_small, which carries the slot and not the body
@@ -1508,9 +1528,13 @@ sh_drawall:
     push dx
     push si
     push di
-    inc word [sh_pass]                ; one recalculation pass per full
-                                       ; repaint; sh_eval_cell's memoization
-                                       ; keys off this
+    cmp byte [sh_calcmanual], 0       ; stage 3.0c Options > Calculation. NOT
+    jne .nocalc                       ; advancing the pass stamp is the whole
+    inc word [sh_pass]                ; mechanism: sh_eval_cell's memoization
+.nocalc:                              ; keys off it, so every formula reads as
+                                       ; a cache hit and nothing re-evaluates.
+                                       ; One recalculation pass per full
+                                       ; repaint, when it is automatic.
     call sh_mbar_draw
     call sh_drawbar
     call sh_drawstatus
@@ -2470,6 +2494,24 @@ sh_drawstatus:
     add dx, 4
     call OSAPI_FONT_STR
 
+    ; The right-hand indicator block, which real Excel uses for NUM/CAPS/SCRL
+    ; and for the word CALCULATE when Manual mode has left the sheet stale.
+    ; CALCULATE takes precedence, because it is the one that means something
+    ; is WRONG on screen rather than something is set on the keyboard.
+    mov si, sh_s_num
+    cmp byte [sh_calcmanual], 0
+    je .indi
+    mov si, sh_s_calcind
+.indi:
+    mov cx, [sh_ox]
+    add cx, [sh_cw]
+    sub cx, 88
+    mov dx, [sh_oy]
+    add dx, [sh_ch]
+    sub dx, SH_SB_H
+    add dx, 4
+    call OSAPI_FONT_STR
+
     pop si
     pop dx
     pop cx
@@ -3343,7 +3385,7 @@ sh_mdrop_geo:
     jmp .wloop
 .wdone:
     mov ax, [sh_mmaxw]
-    add ax, SH_MPAD*2
+    add ax, SH_MPAD*2 + SH_MCHKW
     mov bx, [sh_mrx1]
     add bx, ax
     dec bx
@@ -3407,7 +3449,14 @@ sh_mdrop_draw:
     shl cx, 1
     add bx, cx
     mov si, [bx]
+    mov byte [sh_mchk], 0
     mov al, [si]
+    cmp al, SH_MENU_CHK               ; stage 3.0c: the same relabel-by-
+    jne .notchk                       ; repointing trick MENU_DIS documents,
+    inc si                            ; for a mark rather than for grey
+    mov byte [sh_mchk], 1
+    mov al, [si]
+.notchk:
     cmp al, MENU_DIS
     jne .live
     inc si
@@ -3439,8 +3488,41 @@ sh_mdrop_draw:
     clc
     call OSAPI_GFX_PEN
 .drawtext:
+    cmp byte [sh_mchk], 0
+    je .nochk
+    push si                           ; the check: two strokes, because the
+    push ax                           ; kernel font stops at 0x7E and has no
+    push bx                           ; glyph for one. The pen is already the
+    push cx                           ; right colour - set by the highlight
+    push dx                           ; branch above, so the mark inverts with
+    mov ax, [sh_mrx1]                 ; the row exactly as the text does
+    add ax, 4
+    mov bx, [sh_mry_row]
+    add bx, 5
+    mov cx, ax
+    add cx, 2
+    mov dx, bx
+    add dx, 2
+    xor si, si
+    call OSAPI_GFX_LINE
+    mov ax, [sh_mrx1]
+    add ax, 7
+    mov bx, [sh_mry_row]
+    add bx, 7
+    mov cx, ax
+    add cx, 3
+    mov dx, bx
+    sub dx, 5
+    xor si, si
+    call OSAPI_GFX_LINE
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    pop si
+.nochk:
     mov cx, [sh_mrx1]
-    add cx, SH_MPAD
+    add cx, SH_MPAD + SH_MCHKW
     mov dx, [sh_mry_row]
     call OSAPI_FONT_STR
     mov ax, [sh_mli]
@@ -3616,7 +3698,8 @@ sh_mfire:
 .file:
     or al, al
     jnz .fopen
-    call sh_new
+    mov al, SH_FDK_NEW
+    call sh_fdlg_open
     jmp .out
 .fopen:
     cmp al, 1
@@ -3655,7 +3738,8 @@ sh_mfire:
                                         ; so every click ran it regardless.
                                         ; Now a real dispatch, matching the
                                         ; or al,al chains above.
-    call sh_docmd_sortcol
+    mov al, SH_FDK_SORT
+    call sh_fdlg_open
     jmp .out
 .data1:
     cmp al, 1
@@ -3690,6 +3774,8 @@ sh_mfire:
 ; -----------------------------------------------------------------------------
 sh_docmd_options:
     push si
+    cmp al, 2
+    je .calc
     or al, al
     jnz .formulas
     xor byte [sh_gridlines], 1
@@ -3708,6 +3794,11 @@ sh_docmd_options:
     jmp .repaint
 .foff:
     mov word [sh_i_options+2], sh_it_form_off
+.calc:
+    mov al, SH_FDK_CALC
+    call sh_fdlg_open
+    pop si
+    ret
 .repaint:
     mov si, [sh_ownwin]
     call sh_repaint
@@ -3805,7 +3896,8 @@ sh_docmd_edit:
     call sh_docmd_paste
     ret
 .clear:
-    call sh_docmd_clear
+    mov al, SH_FDK_CLEAR
+    call sh_fdlg_open
     ret
 .delete:
     mov al, 4
@@ -4464,6 +4556,56 @@ sh_s_nochart:  db 'No chart to export.', 0
 sh_s_experr:   db 'Chart export failed.', 0
 sh_s_exported: db 'Chart exported.', 0
 
+; -----------------------------------------------------------------------------
+; sh_sort_vof / sh_sort_ldds / sh_sort_cmp - the three places the sort's value
+; array is touched, so its EIGHT-BYTE stride lives in exactly one of them.
+; It was a word per entry and the multiply was written inline six times; a
+; widening done that way is how a missed site returns a plausible wrong number
+; with no crash (the risk this file's own record-layout comment names).
+;
+; sh_sort_vof - in: BX = entry index, out: DI = its offset in sh_stgseg
+; -----------------------------------------------------------------------------
+sh_sort_vof:
+    push ax
+    push cx
+    mov ax, bx
+    mov cx, 8
+    mul cx
+    add ax, SH_SORT_VALS_OFF
+    mov di, ax
+    pop cx
+    pop ax
+    ret
+
+; sh_sort_ldds - copy 8 bytes from ES:DI (the staging array) to DS:SI
+sh_sort_ldds:
+    push ax
+    mov ax, [es:di]
+    mov [si], ax
+    mov ax, [es:di+2]
+    mov [si+2], ax
+    mov ax, [es:di+4]
+    mov [si+4], ax
+    mov ax, [es:di+6]
+    mov [si+6], ax
+    pop ax
+    ret
+
+; sh_sort_cmp - compare sh_sort_cmpv against sh_sort_keyval, leaving the flags
+; a signed JL/JE/JG can read. ES is preserved because the caller is mid-walk
+; through the staging segment and fp_unpack_* work in DS.
+sh_sort_cmp:
+    push ax
+    push si
+    mov si, sh_sort_cmpv
+    call fp_unpack_a
+    mov si, sh_sort_keyval
+    call fp_unpack_b
+    call fp_cmpab                     ; AX = -1/0/1 and the flags to match
+    pop si
+    pop ax
+    ret
+
 sh_docmd_sortcol:
     push ax
     push bx
@@ -4543,24 +4685,67 @@ sh_docmd_sortcol:
     or al, al
     jnz .copyout
     inc word [sh_sort_fcnt]
+    push ax                           ; a formula sorts on its RESULT, which
+    push si                           ; sh_getcell2 already left in sh_acc
+    push di                           ; above - re-reading it here would use
+    mov si, sh_acc                    ; the SI and ES the text copy just left,
+                                      ; which point into the staging segment
+    mov di, sh_sort_val
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    pop si
+    pop ax
     mov al, 1                         ; isformula flag
     jmp .stage
 .isplainval:
-    mov dx, [es:si+SH_S_VAL]                 ; plain value
-    mov [sh_sort_val], dx
+    call sh_cellval_to_acc_si         ; the WHOLE value into sh_acc, not the
+    push si                           ; word at SH_S_VAL - sorting on the
+    push di                           ; truncated integer made every decimal
+    mov si, sh_acc                    ; in a column compare equal
+    mov di, sh_sort_val
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    pop si
     xor al, al                        ; isformula flag
 .stage:
     mov bx, [sh_sort_cnt]
+    cmp bx, SH_SORT_CAP
+    jae .next                         ; the array is full: this cell sits the
+                                       ; sort out, the same "clip, don't
+                                       ; crash" policy SH_SORT_FCAP uses
     mov es, [sh_stgseg]
     mov di, bx
     shl di, 1
     mov dx, [sh_sort_row]
     mov [es:di], dx                   ; rows[cnt] = row
-    mov di, bx
-    shl di, 1
-    add di, SH_SORT_VALS_OFF
-    mov dx, [sh_sort_val]
-    mov [es:di], dx                   ; values[cnt] = value
+    call sh_sort_vof                  ; DI = &values[cnt]
+    push ax                           ; AL IS THE ISFORMULA FLAG and the copy
+    push si                           ; below moves eight bytes through AX. It
+    mov si, sh_sort_val               ; was two bytes when this was a word
+    mov ax, [si]                      ; array, and the flag survived by luck;
+    mov [es:di], ax                   ; now the value's top word lands in AL
+    mov ax, [si+2]                    ; and every ordinary number stages as a
+    mov [es:di+2], ax                 ; FORMULA, whose write-back then reads a
+    mov ax, [si+4]                    ; text slot that was never written
+    mov [es:di+4], ax
+    mov ax, [si+6]
+    mov [es:di+6], ax
+    pop si
+    pop ax
     mov di, bx
     shl di, 1
     add di, SH_SORT_ORIG_OFF
@@ -4589,36 +4774,63 @@ sh_docmd_sortcol:
 .outer:
     cmp bx, cx
     jae .sortdone
-    mov si, bx
-    shl si, 1
-    add si, SH_SORT_VALS_OFF
-    mov dx, [es:si]                   ; dx = key = values[bx]
+    push bx
+    call sh_sort_vof                  ; DI = &values[bx]
+    mov si, sh_sort_keyval
+    call sh_sort_ldds                 ; key = values[bx], all eight bytes
+    pop bx
     mov si, bx
     shl si, 1
     add si, SH_SORT_ORIG_OFF
     mov ax, [es:si]                   ; ax = key's own origidx
-    mov [sh_sort_keyval], dx
     mov [sh_sort_keyorig], ax
     mov di, bx
 .inner:
     or di, di
     jz .insert
-    mov si, di
-    dec si
-    shl si, 1
-    add si, SH_SORT_VALS_OFF
-    mov ax, [es:si]                   ; values[j-1]
-    cmp ax, [sh_sort_keyval]
-    jle .insert
-    mov si, di
-    dec si
-    shl si, 1
-    add si, SH_SORT_VALS_OFF
+    push bx
+    mov bx, di
+    dec bx
+    push di
+    call sh_sort_vof                  ; DI = &values[j-1]
+    mov si, sh_sort_cmpv
+    call sh_sort_ldds
+    pop di
+    pop bx
+    call sh_sort_cmp                  ; CF/ZF as a signed compare of
+    je .insert                        ; values[j-1] against the key
+    jl .isless
+    cmp byte [sh_sort_desc], 0        ; values[j-1] > key: ascending shifts,
+    jne .insert                       ; descending is already in order
+    jmp .shift
+.isless:
+    cmp byte [sh_sort_desc], 0        ; values[j-1] < key: the other way round
+    je .insert
+.shift:
+    ; DI IS THE LOOP INDEX j and sh_sort_vof RETURNS IN DI, so every use of it
+    ; as a pointer here is bracketed - the origidx block below needs j back,
+    ; and getting a byte offset instead is a sort that silently does nothing.
+    push bx
+    push di                           ; j, banked for the whole value copy
+    mov bx, di
+    dec bx
+    call sh_sort_vof
+    mov si, di                        ; SI = &values[j-1]
+    pop bx                            ; BX = j (from the push di above)
+    push bx
+    push si
+    call sh_sort_vof                  ; DI = &values[j]
+    pop si
     mov ax, [es:si]
-    mov si, di
-    shl si, 1
-    add si, SH_SORT_VALS_OFF
-    mov [es:si], ax                   ; values[j] = values[j-1]
+    mov [es:di], ax
+    mov ax, [es:si+2]
+    mov [es:di+2], ax
+    mov ax, [es:si+4]
+    mov [es:di+4], ax
+    mov ax, [es:si+6]
+    mov [es:di+6], ax
+    pop di                            ; j, restored
+    pop bx
     mov si, di
     dec si
     shl si, 1
@@ -4631,11 +4843,21 @@ sh_docmd_sortcol:
     dec di
     jmp .inner
 .insert:
-    mov si, di
-    shl si, 1
-    add si, SH_SORT_VALS_OFF
-    mov ax, [sh_sort_keyval]
-    mov [es:si], ax
+    push bx
+    push di                           ; j, banked - same trap as .shift
+    mov bx, di
+    call sh_sort_vof
+    mov si, sh_sort_keyval
+    mov ax, [si]
+    mov [es:di], ax
+    mov ax, [si+2]
+    mov [es:di+2], ax
+    mov ax, [si+4]
+    mov [es:di+4], ax
+    mov ax, [si+6]
+    mov [es:di+6], ax
+    pop di                            ; j, restored
+    pop bx
     mov si, di
     shl si, 1
     add si, SH_SORT_ORIG_OFF
@@ -4700,14 +4922,23 @@ sh_docmd_sortcol:
     pop cx
     jmp .wbnext
 .wbplain:
-    mov si, cx
-    shl si, 1
-    add si, SH_SORT_VALS_OFF
-    mov dx, [es:si]                   ; sorted value at this position
     push cx
+    push bx
+    mov bx, cx
+    call sh_sort_vof                  ; DI = &values[cx]
+    mov si, sh_acc                    ; straight into the accumulator
+    mov ax, [es:di]
+    mov [si], ax
+    mov ax, [es:di+2]
+    mov [si+2], ax
+    mov ax, [es:di+4]
+    mov [si+4], ax
+    mov ax, [es:di+6]
+    mov [si+6], ax
+    pop bx
     mov ax, [sh_selcol]
     mov bx, [sh_sort_trow]
-    call sh_setval
+    call sh_setvald                   ; sh_setval would truncate it again
     pop cx
 .wbnext:
     inc cx
@@ -4753,10 +4984,28 @@ sh_docmd_sortcol:
 ; plain mask-and-OR, no translation table needed anywhere.
 ; =============================================================================
 SH_FDLG_W      equ 170
-SH_FDLG_H      equ 116
 SH_FDLG_ROWTOP equ 12
 SH_FDLG_ROWH   equ 16
 SH_FDLG_NITEMS equ 4
+; THE BUTTON ROW AND THE WINDOW HEIGHT ARE ONE NUMBER, not two that have to be
+; kept in agreement by hand. They were two, and they disagreed: the height was
+; a flat 116 while the buttons were drawn at content-relative 86..102, and a
+; window's content is only W_H - TITLE_H - 1 tall (wm_content: the origin is
+; W_X+1, W_Y+TITLE_H). 116 - 18 - 1 = 97, so the bottom HALF of OK and Cancel
+; was outside the window in every one of this engine's kinds - Number,
+; Alignment, Font, Insert, Delete, Column Width and Row Height since stage 1.8,
+; and the four stage 3.0c added. Deriving it means the next kind that needs a
+; taller body cannot reintroduce this by changing one of the two.
+SH_FDLG_BTY1   equ 86                ; the button row, content-relative
+SH_FDLG_BTY2   equ 102
+SH_DLG_BMARG   equ 8                 ; the gap every dialog leaves below its
+                                     ; lowest element, and the reason all four
+                                     ; heights below are DERIVED: a window's
+                                     ; content is W_H - TITLE_H - 1 tall, so a
+                                     ; hand-written height is a second number
+                                     ; that has to agree with the first and
+                                     ; silently did not
+SH_FDLG_H      equ SH_FDLG_BTY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_fdlg_tpl:
     dw 0, 0, SH_FDLG_W, SH_FDLG_H
@@ -4772,7 +5021,16 @@ sh_fdlg_tpl:
 ; whole sheet's runtime sh_cellw/sh_cellh (see the section comment above
 ; sh_entry for why these are presets rather than real Excel's free-text
 ; entry).
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh
+; Kinds 7-10 (stage 3.0c) are the last four radio dialogs Excel 2.1d has and
+; this app was doing as immediate menu commands: Clear, New, Calculation and
+; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
+; asks, and asking is what lets Clear mean something other than "everything"
+; and Sort mean something other than "ascending".
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort
+sh_s_fd_clear:  db 'Clear', 0
+sh_s_fd_new:    db 'New', 0
+sh_s_fd_calc:   db 'Calculation', 0
+sh_s_fd_sort:   db 'Sort', 0
 sh_s_fd_num:    db 'Format Number', 0
 sh_s_fd_align:  db 'Alignment', 0
 sh_s_fd_font:   db 'Font', 0
@@ -4781,7 +5039,22 @@ sh_s_fd_delete: db 'Delete', 0
 sh_s_fd_colw:   db 'Column Width', 0
 sh_s_fd_rowh:   db 'Row Height', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort
+sh_fd_i_clear:  dw sh_fd_clall, sh_fd_clform, sh_fd_clfmt
+sh_fd_clall:    db 'All', 0
+sh_fd_clform:   db 'Formulas', 0       ; Excel's own order and its own words:
+sh_fd_clfmt:    db 'Formats', 0        ; "Formulas" means the CONTENTS
+sh_fd_i_new:    dw sh_fd_nwsheet, sh_fd_nwchart, sh_fd_nwmacro
+sh_fd_nwsheet:  db 'Worksheet', 0
+sh_fd_nwchart:  db 'Chart', 0
+sh_fd_nwmacro:  db 'Macro Sheet', 0
+sh_fd_i_calc:   dw sh_fd_cauto, sh_fd_cmanual, sh_fd_cnow
+sh_fd_cauto:    db 'Automatic', 0
+sh_fd_cmanual:  db 'Manual', 0
+sh_fd_cnow:     db 'Calculate Now', 0
+sh_fd_i_sort:   dw sh_fd_sasc, sh_fd_sdesc
+sh_fd_sasc:     db 'Ascending', 0
+sh_fd_sdesc:    db 'Descending', 0
 sh_fd_i_num:    dw sh_fd_numgen, sh_fd_numcur, sh_fd_numcomma, sh_fd_numpct
 sh_fd_numgen:   db 'General', 0
 sh_fd_numcur:   db 'Currency', 0
@@ -4816,7 +5089,13 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2
+
+SH_FDK_CLEAR equ 7
+SH_FDK_NEW   equ 8
+SH_FDK_CALC  equ 9
+SH_FDK_SORT  equ 10
+SH_FDK_N     equ 11
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -4841,6 +5120,10 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
+    cmp al, SH_FDK_CALC
+    je .prefillcalc                   ; Calculation opens SHOWING the mode it
+    cmp al, SH_FDK_CLEAR              ; is in, so OK alone cannot change it
+    jae .noprefill                    ; Clear/New/Sort have nothing current
     cmp al, 5
     jae .prefillsize                  ; Column Width/Row Height (kinds
                                        ; 5/6): preselect from the CURRENT
@@ -4849,6 +5132,13 @@ sh_fdlg_open:
     jae .noprefill                    ; Insert/Delete (kinds 3/4): no
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
+    jmp .cellpre
+.prefillcalc:
+    xor ah, ah
+    mov al, [sh_calcmanual]
+    mov [sh_fdlg_sel], ax
+    jmp .noprefill
+.cellpre:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_findcell
@@ -5003,13 +5293,13 @@ sh_fdlg_paint:
     add ax, 8
     mov [sh_fdlg_rect], ax
     mov ax, [sh_fdlg_oy]
-    add ax, 86
+    add ax, SH_FDLG_BTY1
     mov [sh_fdlg_rect+2], ax
     mov ax, [sh_fdlg_ox]
     add ax, 62
     mov [sh_fdlg_rect+4], ax
     mov ax, [sh_fdlg_oy]
-    add ax, 102
+    add ax, SH_FDLG_BTY2
     mov [sh_fdlg_rect+6], ax
     mov bx, sh_fdlg_rect
     mov si, sh_s_fd_ok
@@ -5019,13 +5309,13 @@ sh_fdlg_paint:
     add ax, 96
     mov [sh_fdlg_rect], ax
     mov ax, [sh_fdlg_oy]
-    add ax, 86
+    add ax, SH_FDLG_BTY1
     mov [sh_fdlg_rect+2], ax
     mov ax, [sh_fdlg_ox]
     add ax, 150
     mov [sh_fdlg_rect+4], ax
     mov ax, [sh_fdlg_oy]
-    add ax, 102
+    add ax, SH_FDLG_BTY2
     mov [sh_fdlg_rect+6], ax
     mov bx, sh_fdlg_rect
     mov si, sh_s_fd_cancel
@@ -5060,9 +5350,9 @@ sh_fdlg_onclick:
     jb .checkcancel
     cmp cx, 62
     ja .checkcancel
-    cmp bx, 86
+    cmp bx, SH_FDLG_BTY1
     jb .checkcancel
-    cmp bx, 102
+    cmp bx, SH_FDLG_BTY2
     ja .checkcancel
     jmp .doOK
 .checkcancel:
@@ -5070,9 +5360,9 @@ sh_fdlg_onclick:
     jb .checkrows
     cmp cx, 150
     ja .checkrows
-    cmp bx, 86
+    cmp bx, SH_FDLG_BTY1
     jb .checkrows
-    cmp bx, 102
+    cmp bx, SH_FDLG_BTY2
     ja .checkrows
     jmp .doCancel
 .checkrows:
@@ -5119,6 +5409,14 @@ sh_fdlg_apply:
     push cx
     push di
     push es
+    cmp byte [sh_fdlg_kind], SH_FDK_CLEAR
+    je .doclear
+    cmp byte [sh_fdlg_kind], SH_FDK_NEW
+    je .donew
+    cmp byte [sh_fdlg_kind], SH_FDK_CALC
+    je .docalc
+    cmp byte [sh_fdlg_kind], SH_FDK_SORT
+    je .dosort
     cmp byte [sh_fdlg_kind], 5
     je .colwidth
     cmp byte [sh_fdlg_kind], 6
@@ -5218,6 +5516,94 @@ sh_fdlg_apply:
     call sh_rowcol_op
     mov si, [sh_ownwin]
     call sh_repaint
+    jmp .out
+
+; --- stage 3.0c: the four that used to be immediate menu commands -----------
+.doclear:
+    ; 0 All / 1 Formulas / 2 Formats. "Formulas" is Excel's word for the
+    ; CONTENTS - a cell cleared that way keeps its border, its number format
+    ; and its font, which is the whole reason the dialog exists.
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    cmp word [sh_fdlg_sel], 2
+    je .clfmt
+    cmp word [sh_fdlg_sel], 1
+    je .clcontents
+    call sh_clearcell                 ; All: the record goes, border and all
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call sh_bt_removecell
+    jmp .cldone
+.clcontents:
+    call sh_findcell
+    jnc .cldone
+    mov es, [sh_cellseg]
+    mov byte [es:di+4], 0             ; not a formula any more...
+    mov byte [es:di+SH_C_TYPE], SH_T_NUM
+    mov word [es:di+SH_C_VAL], 0      ; ...and zero, but the format byte at
+    mov word [es:di+SH_C_VAL+2], 0    ; +5 is deliberately untouched
+    mov word [es:di+SH_C_VAL+4], 0
+    mov word [es:di+SH_C_VAL+6], 0
+    mov word [es:di+SH_C_PASS], 0
+    jmp .cldone
+.clfmt:
+    call sh_findcell
+    jnc .cldone
+    mov es, [sh_cellseg]
+    mov byte [es:di+5], 0             ; Formats: only the format byte, and the
+    mov ax, [sh_selcol]               ; border table entry beside it
+    mov bx, [sh_selrow]
+    call sh_bt_removecell
+.cldone:
+    mov si, [sh_ownwin]
+    call sh_repaint
+    jmp .out
+
+.donew:
+    ; Excel asks which KIND of new document. This app has one grid type, so
+    ; Chart and Macro Sheet do the honest thing rather than the flattering
+    ; one: a new sheet, and a status line saying what was actually made.
+    call sh_new
+    mov word [sh_msg], sh_s_nw_sheet
+    cmp word [sh_fdlg_sel], 1
+    jne .nwnotchart
+    mov word [sh_msg], sh_s_nw_chart
+.nwnotchart:
+    cmp word [sh_fdlg_sel], 2
+    jne .nwdone
+    mov word [sh_msg], sh_s_nw_macro
+.nwdone:
+    mov si, [sh_ownwin]
+    call sh_repaint
+    jmp .out
+
+.docalc:
+    ; 0 Automatic / 1 Manual / 2 Calculate Now. Manual is not a no-op with a
+    ; label on it: sh_drawgrid re-evaluates every formula cell on every
+    ; repaint, so switching it off is what a big sheet on a 4.77MHz 8088
+    ; actually needs, and Calculate Now is then the only way to catch up.
+    cmp word [sh_fdlg_sel], 2
+    je .calcnow
+    mov ax, [sh_fdlg_sel]
+    mov [sh_calcmanual], al
+    mov word [sh_msg], sh_s_calc_auto
+    or al, al
+    jz .calcrepaint
+    mov word [sh_msg], sh_s_calc_man
+    jmp .calcrepaint
+.calcnow:
+    inc word [sh_pass]                ; a pass stamp nothing has cached, which
+    mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
+.calcrepaint:
+    mov si, [sh_ownwin]
+    call sh_repaint
+    jmp .out
+
+.dosort:
+    mov ax, [sh_fdlg_sel]
+    mov [sh_sort_desc], al
+    call sh_docmd_sortcol
+    jmp .out
 .out:
     pop es
     pop di
@@ -5271,11 +5657,15 @@ sh_fdlg_close:
 ; because sh_bdlg_open recomputes it from them.
 ; =============================================================================
 SH_BDLG_W      equ 190
-SH_BDLG_H      equ 150
 SH_BDLG_GX1    equ 10                ; the "Border" group box, inset from
 SH_BDLG_GY1    equ 12                ; the dialog's own content origin
 SH_BDLG_GX2    equ 104
-SH_BDLG_GY2    equ 132
+SH_BDLG_GY2    equ 132                ; the LOWEST element here, so the height
+SH_BDLG_H      equ SH_BDLG_GY2 + SH_DLG_BMARG + TITLE_H + 1
+                                     ; comes from it. At a flat 150 the content
+                                     ; was 131 tall and this line sat at 132 -
+                                     ; the group box's bottom edge was one
+                                     ; pixel outside the window
 SH_BDLG_ROWTOP equ 26                ; first checkbox row, and OK/Cancel
 SH_BDLG_ROWH   equ 18                ; both measured from the SAME origin
 SH_BDLG_NITEMS equ 6
@@ -5614,7 +6004,6 @@ SH_ID_COLW   equ 2                   ; Format > Column Width...
 SH_ID_NKIND  equ 3
 
 SH_IDLG_W    equ 268
-SH_IDLG_H    equ 104
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
 SH_IDLG_FY1  equ 28
 SH_IDLG_FX2  equ 176
@@ -5625,6 +6014,7 @@ SH_IDLG_OKY1 equ 26
 SH_IDLG_OKY2 equ 46
 SH_IDLG_CAY1 equ 54
 SH_IDLG_CAY2 equ 74
+SH_IDLG_H    equ SH_IDLG_CAY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_idlg_tpl:
     dw 0, 0, SH_IDLG_W, SH_IDLG_H
@@ -6056,7 +6446,6 @@ sh_pnum_at:
 ; cell, which is exactly the kind of quiet wrongness that is hard to notice.
 ; =============================================================================
 SH_NDLG_W    equ 300
-SH_NDLG_H    equ 138
 SH_NDLG_BX1  equ 8                   ; the text box, content-relative
 SH_NDLG_BY1  equ 24
 SH_NDLG_BX2  equ 214
@@ -6071,6 +6460,8 @@ SH_NDLG_OKY1 equ 24
 SH_NDLG_OKY2 equ 44
 SH_NDLG_CAY1 equ 52
 SH_NDLG_CAY2 equ 72
+SH_NDLG_H    equ SH_NDLG_BY2 + SH_DLG_BMARG + TITLE_H + 1   ; the text box is
+                                     ; the lowest element, not the buttons
 
 sh_ndlg_tpl:
     dw 0, 0, SH_NDLG_W, SH_NDLG_H
@@ -6478,6 +6869,31 @@ sh_new:
 ; outgoing sheet's selection/scroll into its slot and restores the
 ; incoming sheet's own (all-zero the first time it's ever visited)
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_sheetmark - point every Sheets item at its plain string, then the CURRENT
+; one at its marked twin. Called at startup and after every switch, so the mark
+; is derived from sh_cursheet rather than tracked alongside it.
+; -----------------------------------------------------------------------------
+sh_sheetmark:
+    push ax
+    push bx
+    push cx
+    xor bx, bx
+    mov cx, SH_SHEETS
+.lp:
+    mov ax, [sh_sheet_plain + bx]
+    mov [sh_i_sheet + bx], ax
+    add bx, 2
+    loop .lp
+    mov bx, [sh_cursheet]
+    shl bx, 1
+    mov ax, [sh_sheet_chk + bx]
+    mov [sh_i_sheet + bx], ax
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 sh_switchsheet:
     push ax
     push bx
@@ -6497,6 +6913,7 @@ sh_switchsheet:
     mov ax, [sh_scrollrow]
     mov [sh_scrsave+bx], ax
     mov [sh_cursheet], cx
+    call sh_sheetmark
     mov bx, cx
     shl bx, 1
     mov ax, [sh_selsave+bx]
@@ -13871,7 +14288,7 @@ sh_mtab:
     dw sh_m_formula, sh_i_formula, 2
     dw sh_m_format,  sh_i_format,  6
     dw sh_m_data,    sh_i_data,    3
-    dw sh_m_options, sh_i_options, 2
+    dw sh_m_options, sh_i_options, 3
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
@@ -13889,7 +14306,7 @@ sh_ttl:        db 'Sheet', 0
 sh_s_appname:  db 'Sheet', 0
 sh_m_file:     db 'File', 0
 sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas, sh_it_print
-sh_it_new:     db 'New', 0
+sh_it_new:     db 'New...', 0
 sh_it_open:    db 'Open...', 0
 sh_it_save:    db 'Save', 0
 sh_it_saveas:  db 'Save As...', 0
@@ -13933,6 +14350,13 @@ sh_it_sheet1:  db 'Sheet1', 0
 sh_it_sheet2:  db 'Sheet2', 0
 sh_it_sheet3:  db 'Sheet3', 0
 sh_it_sheet4:  db 'Sheet4', 0
+; ...and the same four with the mark, which sh_sheetmark repoints between.
+sh_it_sheet1c: db SH_MENU_CHK, 'Sheet1', 0
+sh_it_sheet2c: db SH_MENU_CHK, 'Sheet2', 0
+sh_it_sheet3c: db SH_MENU_CHK, 'Sheet3', 0
+sh_it_sheet4c: db SH_MENU_CHK, 'Sheet4', 0
+sh_sheet_plain: dw sh_it_sheet1, sh_it_sheet2, sh_it_sheet3, sh_it_sheet4
+sh_sheet_chk:   dw sh_it_sheet1c, sh_it_sheet2c, sh_it_sheet3c, sh_it_sheet4c
 
 ; Stage 2.0: no generic text-prompt dialog exists in this OS (only a FILE
 ; picker), so "Run" starts a macro at whatever cell is CURRENTLY SELECTED,
@@ -13948,13 +14372,16 @@ sh_it_run:     db 'Run', 0
 ; placeholders. Sort Column now lives in its own Data menu (below) - it
 ; only had to share Edit's list while the bar was the kernel's own
 ; MENU_APPMAX=5 one; Sheet's own in-window bar (sh_mtab) has no such cap.
+; SH_MENU_CHK is Sheet's own leading-byte convention beside the kernel's
+; MENU_DIS: the item is drawn with a check in the left margin. It is 2 rather
+; than 1 so the two can never be confused, and sh_mdrop_draw handles both.
 sh_m_edit:     db 'Edit', 0
 sh_i_edit:     dw sh_it_undo, sh_it_cut, sh_it_copy, sh_it_paste, sh_it_clear, sh_it_delete, sh_it_insert, sh_it_fillright, sh_it_filldown
 sh_it_undo:    db MENU_DIS, "Can't Undo", 0
 sh_it_cut:     db 'Cut', 0
 sh_it_copy:    db 'Copy', 0
 sh_it_paste:   db 'Paste', 0
-sh_it_clear:   db 'Clear', 0
+sh_it_clear:   db 'Clear...', 0
 sh_it_delete:  db 'Delete...', 0
 sh_it_insert:  db 'Insert...', 0
 sh_it_fillright: db 'Fill Right', 0
@@ -13966,7 +14393,7 @@ sh_it_filldown:  db 'Fill Down', 0
 ; see sh_docmd_chart's header comment for the design.
 sh_m_data:     db 'Data', 0
 sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_chartexp
-sh_it_sort:    db 'Sort Column', 0
+sh_it_sort:    db 'Sort...', 0
 sh_it_chart:   db 'Chart Column...', 0
 sh_it_chartexp: db 'Export Chart as BMP...', 0
 
@@ -13974,11 +14401,12 @@ sh_it_chartexp: db 'Export Chart as BMP...', 0
 ; between an On/Off pair (same relabel-by-repointing idea MENU_DIS's own
 ; doc shows) rather than drawing a separate checkmark glyph.
 sh_m_options:  db 'Options', 0
-sh_i_options:  dw sh_it_grid_off, sh_it_form_off
+sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_calc
 sh_it_grid_on:  db 'Gridlines: On', 0
 sh_it_grid_off: db 'Gridlines: Off', 0
 sh_it_form_on:  db 'Formulas: On', 0
 sh_it_form_off: db 'Formulas: Off', 0
+sh_it_calc:     db 'Calculation...', 0
 
 ; Help
 sh_m_help:     db 'Help', 0
@@ -13988,6 +14416,14 @@ sh_s_about:    db 'Sheet - a spreadsheet for os8088', 0
 
 sh_defname:    db 'SHEET1.SLK', 0
 sh_s_ready:    db 'Ready', 0
+sh_s_num:      db 'NUM', 0
+sh_s_calcind:  db 'CALCULATE', 0
+sh_s_nw_sheet: db 'New worksheet.', 0
+sh_s_nw_chart: db 'New sheet - use Data > Chart Column to chart it.', 0
+sh_s_nw_macro: db 'New sheet - Macro > Run reads commands from cells.', 0
+sh_s_calc_auto: db 'Calculation: Automatic', 0
+sh_s_calc_man:  db 'Calculation: Manual - Calculate Now to recompute.', 0
+sh_s_calc_now:  db 'Recalculated.', 0
 sh_s_id:       db 'ID;PWXL;N;E', 13, 10, 0
 sh_s_c:        db 'C;X', 0
 sh_s_y:        db ';Y', 0
@@ -14110,7 +14546,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2248
+    OS88_BSS 2271
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -14310,12 +14746,21 @@ sh_sort_fcnt  equ sh_sort_cnt + 2           ; word: how many formula text
 sh_sort_row   equ sh_sort_fcnt + 2          ; word: the scan's own current
                                              ; row, stashed across the
                                              ; sh_getcell2 call below it
-sh_sort_val   equ sh_sort_row + 2           ; word: that same cell's value
-sh_sort_fslot equ sh_sort_val + 2           ; word: which text slot a
+sh_sort_val   equ sh_sort_row + 2           ; 8: that same cell's value, a
+                                             ; whole double since stage 4.5
+sh_sort_fslot equ sh_sort_val + 8           ; word: which text slot a
                                              ; formula cell just staged into
-sh_sort_keyval  equ sh_sort_fslot + 2       ; word: the insertion sort's
-sh_sort_keyorig equ sh_sort_keyval + 2      ; own (value, origidx) key pair
-sh_sort_trow  equ sh_sort_keyorig + 2       ; word: the write-back loop's
+sh_sort_keyval  equ sh_sort_fslot + 2       ; 8: the insertion sort's key...
+sh_sort_cmpv    equ sh_sort_keyval + 8      ; 8: ...and what it is compared
+                                             ; against, both in DS because
+                                             ; fp_unpack_* read DS:SI and the
+                                             ; array lives in sh_stgseg
+sh_sort_keyorig equ sh_sort_cmpv + 8        ; word: the key's own origidx
+sh_sort_desc    equ sh_sort_keyorig + 2     ; byte: 0 ascending, 1 descending
+sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
+sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
+                                             ; checked one
+sh_sort_trow  equ sh_mchk + 1               ; word: the write-back loop's
 sh_sort_src   equ sh_sort_trow + 2          ; own (target row, source idx)
 
 ; Sheet's own in-window menu bar (stage 2.x, see the SH_MBAR_H section
