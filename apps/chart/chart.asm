@@ -56,14 +56,11 @@ CT_CLAIM_STG_KB   equ 32            ; file-read staging AND BMP-export
 CT_NAMEMAX equ 12                   ; 8.3 name, no NUL
 CT_WIN_W   equ 260                  ; a little margin around the CH_W x
 CT_WIN_H   equ 200                  ; CH_H canvas
-CT_TCAP    equ 256                  ; temp-array capacity while scanning a
-                                     ; file for candidate cells, BEFORE the
-                                     ; lowest-column filter narrows them down
-                                     ; to at most CH_MAXBARS - decoupled from
-                                     ; CH_MAXBARS on purpose: the true first
-                                     ; numeric column might not become known
-                                     ; until deep into a file whose other
-                                     ; columns are seen first
+; The temp arrays hold the KEPT SERIES, not the scanned candidates - see
+; ct_record for why that distinction was a silent data-loss bug. They are
+; therefore sized by CH_MAXBARS, the most that can ever be drawn, rather than
+; by a separate and much larger scan cap (CT_TCAP, 256, now retired: it cost
+; ~1.3KB of bss to hold cells that were going to be discarded anyway).
 
 FDLG_OPEN equ 0
 FDLG_SAVE equ 1
@@ -488,6 +485,57 @@ ct_pint:
 ; ct_vals/ct_valcnt (capped at CH_MAXBARS) - the shared last step for all
 ; three readers below.
 ; -----------------------------------------------------------------------------
+; ct_record - offer one cell to the series (the CT_TCAP fix)
+; in:  AX = col, BX = row, DX = value. All registers preserved.
+;
+; THE CAP USED TO BOUND THE SCAN, AND THAT LOST DATA SILENTLY. Each reader
+; collected every numeric cell it met into ct_trow/ct_tcol/ct_tval, stopped at
+; CT_TCAP of them, and only then did ct_finalize pick the lowest column and
+; filter to it. On a wide sheet the temp arrays filled with OTHER columns'
+; cells, so two things went wrong at once and neither announced itself: the
+; tail of the chosen column was never read, and - worse - ct_mincol was derived
+; from a truncated sample, so a lower column appearing later in the file was
+; never seen and THE WRONG COLUMN WAS CHARTED. Both produced a plausible chart.
+;
+; So the filter runs as the file is read instead. The lowest column seen so far
+; is the series; a cell BELOW it restarts the collection, a cell IN it is
+; appended, a cell ABOVE it is dropped. One pass still, no second read, and the
+; cap now bounds the KEPT SERIES rather than the scanned candidates - which is
+; why it is CH_MAXBARS here and not CT_TCAP.
+; -----------------------------------------------------------------------------
+ct_record:
+    push ax
+    push bx
+    push cx
+    push si
+    cmp word [ct_tcnt], 0
+    je .newcol                        ; nothing yet: this cell defines it
+    cmp ax, [ct_mincol]
+    ja .out                           ; a higher column is not the series
+    je .append
+.newcol:                              ; a LOWER column supersedes everything
+    mov [ct_mincol], ax               ; collected so far
+    mov word [ct_tcnt], 0
+.append:
+    mov cx, [ct_tcnt]
+    cmp cx, CH_MAXBARS
+    jae .out                          ; the series is full; a longer column is
+                                       ; truncated, which ct_finalize's own
+                                       ; CH_MAXBARS limit already implied
+    mov si, cx
+    shl si, 1
+    mov [ct_tcol + si], ax
+    mov [ct_trow + si], bx
+    mov [ct_tval + si], dx
+    inc word [ct_tcnt]
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ct_finalize:
     push ax
     push bx
@@ -497,22 +545,15 @@ ct_finalize:
     mov word [ct_valcnt], 0
     cmp word [ct_tcnt], 0
     je .done
-    mov ax, 0xFFFF
-    xor cx, cx
-.mincol:
-    cmp cx, [ct_tcnt]
-    jae .havemincol
-    mov si, cx
-    shl si, 1
-    mov bx, [ct_tcol + si]
-    cmp bx, ax
-    jae .mcnext
-    mov ax, bx
-.mcnext:
-    inc cx
-    jmp .mincol
-.havemincol:
-    mov [ct_mincol], ax
+                                        ; ct_mincol is ALREADY the lowest
+                                        ; column and every collected cell is
+                                        ; already in it - ct_record maintained
+                                        ; both as the file was read, so the
+                                        ; scan that used to derive it here is
+                                        ; gone. The column test below is kept
+                                        ; as a cheap invariant check rather
+                                        ; than as a filter that still does
+                                        ; work.
     xor cx, cx
 .collect:
     cmp cx, [ct_tcnt]
@@ -605,7 +646,8 @@ ct_rkdec:
 ; Walks real [opcode:word][length:word] BIFF record headers; on an RK cell
 ; record (0x027E: row,col,xf,rk_lo,rk_hi, 10 bytes) decodes the value via
 ; ct_rkdec and records (row,col,value) for ct_finalize, capped at
-; CT_TCAP. Stops at EOF (0x000A) or a truncated trailing record.
+; ct_record, which keeps only the lowest column. Stops at EOF (0x000A) or
+; a truncated trailing record.
 ; -----------------------------------------------------------------------------
 ct_read_biff:
     push ax
@@ -631,23 +673,16 @@ ct_read_biff:
     add ax, dx
     cmp ax, cx
     ja .toolong
-    mov bx, [ct_tcnt]
-    cmp bx, CT_TCAP
-    jae .rkdone
     push word [es:si]                   ; row
     push word [es:si+2]                 ; col
     mov ax, [es:si+6]                   ; rk lo
     mov dx, [es:si+8]                   ; rk hi
     call ct_rkdec                       ; -> CF=1 unsupported, else AX=value
     jc .rkskip
-    mov bx, [ct_tcnt]
-    shl bx, 1
-    pop dx                              ; col
-    mov [ct_tcol + bx], dx
-    pop dx                              ; row
-    mov [ct_trow + bx], dx
-    mov [ct_tval + bx], ax
-    inc word [ct_tcnt]
+    mov dx, ax                          ; dx = value
+    pop ax                              ; ax = col
+    pop bx                              ; bx = row
+    call ct_record
     jmp .rkdone
 .rkskip:
     pop dx                              ; discard col
@@ -677,7 +712,7 @@ ct_read_biff:
 ; explicit K is recorded (an omitted X or Y is treated as invalid, not
 ; "sticky" from a prior line - the same simplification Sheet's own
 ; sh_parsecrec makes). Records (row,col,value) for ct_finalize, capped at
-; CT_TCAP.
+; ct_record, which keeps only the lowest column.
 ; -----------------------------------------------------------------------------
 ct_read_sylk:
     push ax
@@ -801,17 +836,11 @@ ct_parse_c:
     mov cx, [ct_prow]
     cmp cx, 1
     jb .out
-    mov bx, [ct_tcnt]
-    cmp bx, CT_TCAP
-    jae .out
     dec ax                              ; 1-based -> 0-based
     dec cx
-    shl bx, 1
-    mov [ct_tcol + bx], ax
-    mov [ct_trow + bx], cx
-    mov ax, [ct_pval]
-    mov [ct_tval + bx], ax
-    inc word [ct_tcnt]
+    mov bx, cx                          ; bx = row, ax = col
+    mov dx, [ct_pval]
+    call ct_record
 .out:
     pop si
     pop dx
@@ -897,7 +926,8 @@ ct_is_bot_line:
 ; assuming any particular header length. From there, walks rows exactly
 ; like the grammar this project's own writer emits (each row: "-1,0" then
 ; "BOT"; each cell: "0,<value>" then "V", or anything else, meaning
-; NA/blank). Records (row,col,value) for ct_finalize, capped at CT_TCAP.
+; NA/blank). Offers (row,col,value) to ct_record, which keeps the lowest
+; column and caps the series at CH_MAXBARS.
 ; -----------------------------------------------------------------------------
 ct_read_dif:
     push ax
@@ -951,17 +981,10 @@ ct_read_dif:
     jae .cellnext
     cmp byte [es:si], 'V'               ; the real DIF value-indicator
     jne .notvalid
-    mov bx, [ct_tcnt]
-    cmp bx, CT_TCAP
-    jae .notvalid
-    shl bx, 1
-    mov ax, [ct_wrow]
-    mov [ct_trow + bx], ax
+    mov bx, [ct_wrow]
     mov ax, [ct_wcol]
-    mov [ct_tcol + bx], ax
-    mov ax, [ct_pval]
-    mov [ct_tval + bx], ax
-    inc word [ct_tcnt]
+    mov dx, [ct_pval]
+    call ct_record
 .notvalid:
     call ct_difskipline                 ; the indicator line
     jmp .cellnext
@@ -1022,7 +1045,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 1752
+    OS88_BSS 456
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1036,10 +1059,10 @@ ct_vrow     equ ct_vals + CH_MAXBARS*2   ; CH_MAXBARS words: scratch rows,
 ct_mincol   equ ct_vrow + CH_MAXBARS*2   ; word: ct_finalize's own scratch
 ct_tcnt     equ ct_mincol + 2       ; word: how many candidates are in
                                      ; ct_trow/ct_tcol/ct_tval right now
-ct_trow     equ ct_tcnt + 2         ; CT_TCAP words: every candidate's row
-ct_tcol     equ ct_trow + CT_TCAP*2 ; CT_TCAP words: every candidate's col
-ct_tval     equ ct_tcol + CT_TCAP*2 ; CT_TCAP words: every candidate's value
-ct_pcol     equ ct_tval + CT_TCAP*2 ; word: ct_parse_c's own scratch
+ct_trow     equ ct_tcnt + 2         ; CH_MAXBARS words: the series' rows
+ct_tcol     equ ct_trow + CH_MAXBARS*2  ; ...their columns (all equal)
+ct_tval     equ ct_tcol + CH_MAXBARS*2  ; ...and their values
+ct_pcol     equ ct_tval + CH_MAXBARS*2  ; word: ct_parse_c's own scratch
 ct_prow     equ ct_pcol + 2         ; word: ct_parse_c's own scratch
 ct_pval     equ ct_prow + 2         ; word: shared scratch (ct_parse_c AND
                                      ; ct_read_dif's own per-cell value -
@@ -1060,3 +1083,23 @@ ch_bx2      equ ch_by1 + 2
 ch_by2      equ ch_bx2 + 2
 ch_srcseg   equ ch_by2 + 2
 ch_stgseg   equ ch_srcseg + 2
+ct_bss_end  equ ch_stgseg + 2
+
+; -----------------------------------------------------------------------------
+; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting
+; it low is silent corruption of whatever the loader placed next rather than a
+; build error. It cannot be written as an expression: OS88_BSS_SIZE goes into
+; the package header's dw at a FIXED OFFSET (SPEC.md 20.2), so it must be known
+; on pass 1, and a forward reference to a label defined down here makes NASM
+; size instructions differently per pass.
+;
+; So it stays a literal and this asserts it. A mismatch drives one of the two
+; TIMES counts negative, which -w+error turns into a build failure naming the
+; exact shortfall; both are zero when the literal is right, so nothing is
+; emitted. READ THE LINE NUMBER, not just the sign - the two report the same
+; shortfall with opposite signs, so which one fired is what says whether the
+; literal is too small or too large.
+; -----------------------------------------------------------------------------
+%define CT_BSS_NEED (ct_bss_end - os88_image_end)
+    times (CT_BSS_NEED - OS88_BSS_SIZE) db 0
+    times (OS88_BSS_SIZE - CT_BSS_NEED) db 0
