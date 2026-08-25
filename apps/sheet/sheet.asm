@@ -172,7 +172,10 @@ SH_RW_CAP    equ 80                  ; stage 2.x: sh_formula_reidx's own
                                      ; col Z->AA), so a little more than
                                      ; SH_EDITMAX+1
 
-SH_CLAIM_CELLS_KB equ 16            ; -> SH_CELL_CAP records of 12 bytes
+SH_CLAIM_CELLS_KB equ 32            ; -> SH_CELL_CAP records of SH_C_SZ.
+                                    ; Doubled with the widening: 20 bytes in
+                                    ; 16KB would have DROPPED capacity to 819,
+                                    ; and 32KB takes it up to 1638 instead
 SH_CLAIM_TXT_KB   equ 8             ; formula text arena (used from the next
                                      ; pass on; claimed now so entry needs no
                                      ; second edit)
@@ -225,7 +228,65 @@ SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; OSAPI_GFX_BLIT4 of it) and the exported
                                      ; .BMP (one OSAPI_FILE_WRITE of it, same
                                      ; bytes) are drawn from.
-SH_CELL_CAP  equ 1365               ; floor(16384 / 12)
+; =============================================================================
+; THE CELL RECORD (stage 4.0). Every offset below is named, and every stride
+; goes through SH_C_SZ, because this layout has now moved once and the plan's
+; own risk list puts "a missed stride site" first: it reads a MISALIGNED
+; record and hands back a plausible wrong number, with no crash to notice.
+; Naming them makes the next move a four-line edit instead of an 87-site
+; audit.
+;
+; +0 and +2 and +4 and +5 are shared in shape with the border and note tables
+; (sh_bt_* / sh_nt_*), which is why those four are deliberately NOT renamed
+; here - a rename would have had to reach into two other tables to stay
+; honest, and they have their own strides.
+; =============================================================================
+SH_C_ROW     equ 0                  ; word: packed row | sheet
+SH_C_COL     equ 2                  ; word
+SH_C_FLAGS   equ 4                  ; byte: bit0 HASFORMULA, bit1 EVALUATING
+SH_C_FMT     equ 5                  ; byte: SH_FMT_*, and the BIFF XF index
+SH_C_TYPE    equ 6                  ; byte: SH_T_* - reserved by stage 4.0's
+SH_C_AUX     equ 7                  ; byte: ...error code, likewise reserved.
+                                    ; THE TAG IS ITS OWN BYTE AND NOT SPARE
+                                    ; BITS OF SH_C_FMT: that byte's numeric
+                                    ; value IS the XF index the BIFF writer
+                                    ; emits, so borrowing bits 6-7 would
+                                    ; silently change every XF in every file
+                                    ; this app has ever written.
+SH_C_VAL     equ 8                  ; 8 bytes: an IEEE-754 double. Still
+                                    ; written and read as a WORD in the low
+                                    ; half for now - the widening and the
+                                    ; switch to real doubles are separate
+                                    ; steps on purpose, so that a fault in
+                                    ; either one is unambiguous.
+SH_C_FOFF    equ 16                 ; word: formula text offset in sh_txtseg
+SH_C_PASS    equ 18                 ; word: the repaint pass that cached VAL
+; The value tags stage 4.0 reserves. Numbered so that BLANK is 0 and a
+; zeroed record is therefore a blank one.
+SH_T_BLANK   equ 0
+SH_T_NUM     equ 1
+SH_T_TEXT    equ 2
+SH_T_BOOL    equ 3
+SH_T_ERR     equ 4
+
+SH_C_SZ      equ 20                 ; ...and an EVEN stride, so the array
+                                    ; shuffle can move words rather than bytes
+
+; sh_rowcol_op stages every record through sh_stgseg while it shifts a row or
+; column, and THAT record kept its original 12-byte shape - it is a transient
+; copy, not storage, and nothing about it needs to grow. Named for exactly the
+; reason above: the two layouts look alike and one was silently edited into
+; the other.
+SH_S_SHEET   equ 0
+SH_S_ROW     equ 2
+SH_S_COL     equ 4
+SH_S_FLAGS   equ 6
+SH_S_FMT     equ 7
+SH_S_VAL     equ 8
+SH_S_FML     equ 10
+SH_S_SZ      equ 12
+
+SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
 SH_STAGE_MAX equ 32768
 SH_BORD_CAP  equ 819                ; floor(4096 / 5)
@@ -1345,7 +1406,7 @@ sh_beginedit:
     mov es, [sh_cellseg]
     test byte [es:di+4], 1
     jz .plainval
-    mov ax, [es:di+8]                 ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                 ; formula_off
     pop es
     mov byte [sh_editbuf], '='
     mov di, sh_editbuf + 1
@@ -1362,7 +1423,7 @@ sh_beginedit:
     pop es
     jmp .havelen
 .plainval:
-    mov ax, [es:di+6]
+    mov ax, [es:di+SH_C_VAL]
     pop es
     call sh_itoa
     mov si, sh_numbuf
@@ -2344,7 +2405,7 @@ sh_drawbar:
     mov es, [sh_cellseg]
     test byte [es:di+4], 1
     jz .plainval2
-    mov ax, [es:di+8]                 ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                 ; formula_off
     pop es
     pop di                             ; DI = content cursor, restored
     mov byte [di], '='
@@ -2362,7 +2423,7 @@ sh_drawbar:
     pop es
     jmp .draw
 .plainval2:
-    mov ax, [es:di+6]
+    mov ax, [es:di+SH_C_VAL]
     pop es
     pop di                             ; DI = content cursor, restored
     call sh_itoa
@@ -2568,7 +2629,7 @@ sh_drawgrid:
     mov es, [sh_cellseg]
     test byte [es:di+4], 1             ; HASFORMULA
     jz .noformula3
-    mov ax, [es:di+8]                  ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                  ; formula_off
     pop es
     mov byte [sh_tbuf], '='
     mov di, sh_tbuf + 1
@@ -3799,7 +3860,7 @@ sh_docmd_copy:
     mov es, [sh_cellseg]
     test byte [es:di+4], 1
     jz .plainval
-    mov ax, [es:di+8]                 ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                 ; formula_off
     pop es
     mov byte [sh_clipbuf], '='
     mov di, sh_clipbuf + 1
@@ -3816,7 +3877,7 @@ sh_docmd_copy:
     pop es
     jmp .havelen
 .plainval:
-    mov ax, [es:di+6]
+    mov ax, [es:di+SH_C_VAL]
     pop es
     call sh_itoa
     mov si, sh_numbuf
@@ -3995,7 +4056,7 @@ sh_docmd_fillright:
     mov es, [sh_cellseg]
     test byte [es:di+4], 1             ; HASFORMULA
     jz .plain
-    mov ax, [es:di+8]                  ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                  ; formula_off
     mov si, ax
     mov es, [sh_txtseg]
     mov di, sh_rwsrc
@@ -4054,7 +4115,7 @@ sh_docmd_filldown:
     mov es, [sh_cellseg]
     test byte [es:di+4], 1             ; HASFORMULA
     jz .plain
-    mov ax, [es:di+8]                  ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                  ; formula_off
     mov si, ax
     mov es, [sh_txtseg]
     mov di, sh_rwsrc
@@ -4157,7 +4218,7 @@ sh_chart_scan:
     cmp cx, [sh_ncells]
     jae .scandone
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov si, ax
     mov es, [sh_cellseg]
@@ -4183,7 +4244,7 @@ sh_chart_scan:
     pop cx
     jmp .havevalue
 .plainval:
-    mov dx, [es:si+6]                  ; dx = value
+    mov dx, [es:si+SH_C_VAL]           ; dx = value
 .havevalue:
     mov bx, [sh_chart_cnt]
     shl bx, 1
@@ -4424,7 +4485,7 @@ sh_docmd_sortcol:
     cmp cx, [sh_ncells]
     jae .scandone
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov si, ax
     mov es, [sh_cellseg]
@@ -4461,7 +4522,7 @@ sh_docmd_sortcol:
     pop cx
     mov [sh_sort_val], dx
     mov es, [sh_cellseg]
-    mov ax, [es:si+8]                 ; formula_off
+    mov ax, [es:si+SH_C_FOFF]         ; formula_off
     mov si, ax
     mov es, [sh_txtseg]
     mov di, sh_rwsrc
@@ -4491,7 +4552,7 @@ sh_docmd_sortcol:
     mov al, 1                         ; isformula flag
     jmp .stage
 .isplainval:
-    mov dx, [es:si+6]                 ; plain value
+    mov dx, [es:si+SH_S_VAL]                 ; plain value
     mov [sh_sort_val], dx
     xor al, al                        ; isformula flag
 .stage:
@@ -6539,7 +6600,7 @@ sh_dowrite_sylk:
     jmp .footer
 .room:
     mov ax, bx
-    mov cx, 12
+    mov cx, SH_C_SZ
     mul cx
     mov si, ax                        ; SI = this record's offset in cellseg
     push es
@@ -6555,7 +6616,7 @@ sh_dowrite_sylk:
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
-    mov ax, [es:si+6]
+    mov ax, [es:si+SH_C_VAL]
     mov [sh_wrec_val], ax
     mov al, [es:si+5]
     mov [sh_wrec_fmt], al
@@ -6881,7 +6942,7 @@ sh_difbbox:
     cmp cx, [sh_ncells]
     jae .out
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov si, ax                        ; si = this record's byte offset
     mov ax, [es:si]                   ; packed row/sheet (stage 2.0)
@@ -7442,7 +7503,7 @@ sh_dowrite_biff:
     jmp .footer
 .room:
     mov ax, bx
-    mov cx, 12
+    mov cx, SH_C_SZ
     mul cx
     mov si, ax                        ; SI = this record's offset in cellseg
     push es
@@ -7457,7 +7518,7 @@ sh_dowrite_biff:
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
-    mov ax, [es:si+6]
+    mov ax, [es:si+SH_C_VAL]
     mov [sh_wrec_val], ax
     mov al, [es:si+5]
     mov [sh_wrec_fmt], al
@@ -8152,7 +8213,7 @@ sh_findcell:
     shr si, 1
     add si, cx                        ; SI = mid
     mov ax, si
-    mov bx, 12
+    mov bx, SH_C_SZ
     push dx                           ; MUL clobbers DX (the high word of
     mul bx                            ; the product) - DX is also this
     pop dx                            ; loop's search bound, so it must
@@ -8181,7 +8242,7 @@ sh_findcell:
     jmp .loop
 .notfound:
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov di, ax
     clc
@@ -8212,7 +8273,7 @@ sh_addcell:
     push di                            ; insertion offset, kept across the
                                         ; shift below
     mov ax, [sh_ncells]
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx                             ; AX = current end-of-array offset
     mov cx, ax
     sub cx, di                         ; CX = bytes to shift up (may be 0)
@@ -8225,7 +8286,7 @@ sh_addcell:
     mov si, ax
     dec si
     mov di, si
-    add di, 12
+    add di, SH_C_SZ
     std
     rep movsb
     cld
@@ -8242,9 +8303,18 @@ sh_addcell:
     mov [es:di+2], ax
     mov byte [es:di+4], 0
     mov byte [es:di+5], 0
-    mov word [es:di+6], 0
-    mov word [es:di+8], 0xFFFF
-    mov word [es:di+10], 0
+    mov byte [es:di+SH_C_TYPE], SH_T_NUM
+    mov byte [es:di+SH_C_AUX], 0
+    mov word [es:di+SH_C_VAL], 0      ; ALL EIGHT value bytes, not just the low
+    mov word [es:di+SH_C_VAL+2], 0    ; word the integer model uses today. The
+    mov word [es:di+SH_C_VAL+4], 0    ; array is shuffled with a byte move, so
+    mov word [es:di+SH_C_VAL+6], 0    ; a "new" record inherits whatever the
+                                      ; record above it left here - harmless
+                                      ; while only the low word is read, and a
+                                      ; genuinely nasty surprise the moment the
+                                      ; full double goes live
+    mov word [es:di+SH_C_FOFF], 0xFFFF
+    mov word [es:di+SH_C_PASS], 0
     pop es
     clc
     jmp .out
@@ -8274,7 +8344,7 @@ sh_removecell:
     call sh_findcell
     jnc .out
     mov ax, [sh_ncells]
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx                             ; AX = end offset (before shrink)
     mov cx, ax
     sub cx, di
@@ -8286,7 +8356,7 @@ sh_removecell:
     mov es, dx
     jcxz .noshift
     mov si, di
-    add si, 12
+    add si, SH_C_SZ
     cld
     rep movsb
 .noshift:
@@ -8782,7 +8852,7 @@ sh_rowcol_op:
     cmp cx, [sh_ncells]
     jae .scandone
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov si, ax
     mov es, [sh_cellseg]
@@ -8796,9 +8866,9 @@ sh_rowcol_op:
     mov [sh_rc_tflags], al
     mov al, [es:si+5]
     mov [sh_rc_tfmt], al
-    mov ax, [es:si+6]
+    mov ax, [es:si+SH_C_VAL]
     mov [sh_rc_tval], ax
-    mov ax, [es:si+8]
+    mov ax, [es:si+SH_C_FOFF]
     mov [sh_rc_tfml], ax
     mov ax, [sh_rc_tsheet]
     cmp ax, [sh_rc_savedsheet]
@@ -8846,7 +8916,7 @@ sh_rowcol_op:
     mov [sh_rc_tcol], ax
 .stage:
     mov ax, [sh_rc_stgcnt]
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov di, ax
     mov es, [sh_stgseg]
@@ -8857,13 +8927,13 @@ sh_rowcol_op:
     mov ax, [sh_rc_tcol]
     mov [es:di+4], ax
     mov al, [sh_rc_tflags]
-    mov [es:di+6], al
-    mov al, [sh_rc_tfmt]
-    mov [es:di+7], al
-    mov ax, [sh_rc_tval]
-    mov [es:di+8], ax
-    mov ax, [sh_rc_tfml]
-    mov [es:di+10], ax
+    mov [es:di+SH_S_FLAGS], al        ; THE STAGING RECORD IS NOT THE CELL
+    mov al, [sh_rc_tfmt]              ; RECORD. It is its own 12-byte layout in
+    mov [es:di+SH_S_FMT], al          ; sh_stgseg and it did NOT widen with the
+    mov ax, [sh_rc_tval]              ; cell array - which is precisely why
+    mov [es:di+SH_S_VAL], ax          ; both are named now: converting this
+    mov ax, [sh_rc_tfml]              ; block to the cell offsets by mistake
+    mov [es:di+SH_S_FML], ax          ; was silent, and staged garbage
     inc word [sh_rc_stgcnt]
 .next:
     inc cx
@@ -8875,7 +8945,7 @@ sh_rowcol_op:
     cmp cx, [sh_rc_stgcnt]
     jae .reinsdone
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov si, ax
     mov es, [sh_stgseg]
@@ -8888,13 +8958,13 @@ sh_rowcol_op:
     mov [sh_rc_trow], ax
     mov ax, [es:si+4]
     mov [sh_rc_tcol], ax
-    mov al, [es:si+6]
+    mov al, [es:si+SH_S_FLAGS]
     mov [sh_rc_tflags], al
-    mov al, [es:si+7]
+    mov al, [es:si+SH_S_FMT]
     mov [sh_rc_tfmt], al
-    mov ax, [es:si+8]
+    mov ax, [es:si+SH_S_VAL]
     mov [sh_rc_tval], ax
-    mov ax, [es:si+10]
+    mov ax, [es:si+SH_S_FML]
     mov [sh_rc_tfml], ax
     mov ax, [sh_rc_tcol]
     mov bx, [sh_rc_trow]
@@ -8908,9 +8978,9 @@ sh_rowcol_op:
     mov al, [sh_rc_tfmt]
     mov [es:di+5], al
     mov ax, [sh_rc_tval]
-    mov [es:di+6], ax
+    mov [es:di+SH_C_VAL], ax
     mov ax, [sh_rc_tfml]
-    mov [es:di+8], ax
+    mov [es:di+SH_C_FOFF], ax
 .reinsnext:
     inc cx
     jmp .reins
@@ -9405,7 +9475,7 @@ sh_rowcol_reidx:
     cmp cx, [sh_ncells]
     jae .done
     mov ax, cx
-    mov bx, 12
+    mov bx, SH_C_SZ
     mul bx
     mov [sh_rw_recdi], ax
     mov si, ax
@@ -9420,7 +9490,7 @@ sh_rowcol_reidx:
     mov byte [sh_rw_home], 1
 .gothome:
     mov si, [sh_rw_recdi]
-    mov ax, [es:si+8]                  ; formula_off
+    mov ax, [es:si+SH_C_FOFF]          ; formula_off
     mov si, ax
     mov es, [sh_txtseg]
     mov di, sh_rwsrc
@@ -9445,8 +9515,8 @@ sh_rowcol_reidx:
                                         ; the formula entirely
     mov es, [sh_cellseg]
     mov di, [sh_rw_recdi]
-    mov [es:di+8], ax
-    mov word [es:di+10], 0xFFFF        ; force re-evaluation
+    mov [es:di+SH_C_FOFF], ax
+    mov word [es:di+SH_C_PASS], 0xFFFF        ; force re-evaluation
 .next:
     inc cx
     jmp .scan
@@ -9736,7 +9806,7 @@ sh_getcell2:
     stc
     jmp .out
 .plain:
-    mov dx, [es:di+6]
+    mov dx, [es:di+SH_C_VAL]
     pop es
     stc
     jmp .out
@@ -9762,7 +9832,7 @@ sh_setval:
     push es
     mov es, [sh_cellseg]
     mov byte [es:di+4], 0             ; a plain value has no formula
-    mov [es:di+6], dx
+    mov [es:di+SH_C_VAL], dx
     pop es
 .full:
     pop di
@@ -9818,8 +9888,8 @@ sh_setformula:
     mov es, [sh_cellseg]
     mov byte [es:di+4], 1             ; HASFORMULA
     mov ax, [sh_newoff]
-    mov [es:di+8], ax
-    mov word [es:di+10], 0xFFFF       ; a pass stamp sh_pass can never equal,
+    mov [es:di+SH_C_FOFF], ax
+    mov word [es:di+SH_C_PASS], 0xFFFF       ; a pass stamp sh_pass can never equal,
                                        ; forcing at least one real evaluation
     pop es
 .noroom:
@@ -9845,12 +9915,12 @@ sh_eval_cell:
     push di
     push es
     mov es, [sh_cellseg]
-    mov ax, [es:di+10]                ; this cell's last-computed pass
+    mov ax, [es:di+SH_C_PASS]                ; this cell's last-computed pass
     cmp ax, [sh_pass]
     jne .stale
     test byte [es:di+4], 2            ; EVALUATING - already mid-computation
     jnz .cycle                        ; means a cycle, not a cache hit
-    mov dx, [es:di+6]
+    mov dx, [es:di+SH_C_VAL]
     jmp .out
 .stale:
     test byte [es:di+4], 2
@@ -9869,7 +9939,7 @@ sh_eval_cell:
     mov [sh_evrow], ax                ; is per-frame, not set once
     mov ax, [es:di+2]
     mov [sh_evcol], ax
-    mov ax, [es:di+8]                 ; formula_off
+    mov ax, [es:di+SH_C_FOFF]                 ; formula_off
     mov si, ax
     mov es, [sh_txtseg]
     cmp word [sh_evaldepth], SH_EVAL_MAXDEPTH
@@ -9908,9 +9978,9 @@ sh_eval_cell:
     pop di                            ; this cell's record offset, restored
     mov es, [sh_cellseg]
     and byte [es:di+4], 0xFD          ; EVALUATING = 0 (HASFORMULA untouched)
-    mov [es:di+6], dx
+    mov [es:di+SH_C_VAL], dx
     mov ax, [sh_pass]
-    mov [es:di+10], ax
+    mov [es:di+SH_C_PASS], ax
     jmp .out
 .cycle:
     xor dx, dx
@@ -11220,7 +11290,7 @@ sh_macro_eval:
     push dx
     push es
     mov es, [sh_cellseg]
-    mov si, [es:di+8]                  ; formula text offset, in sh_txtseg
+    mov si, [es:di+SH_C_FOFF]                  ; formula text offset, in sh_txtseg
     mov es, [sh_txtseg]
     mov di, sh_macrobuf
 .copyin:
