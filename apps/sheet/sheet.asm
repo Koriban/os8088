@@ -343,6 +343,11 @@ CH_T_COLUMN equ 0                   ; stage 3.0f: the gallery. Excel calls the
 CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
 CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
 CH_T_AREA   equ 3                   ; rather than the intuitive-but-wrong one
+CH_T_PIE    equ 4                   ; stage 3.0f, and the last of the four
+                                    ; Excel types this app can draw: Scatter
+                                    ; and Combination need TWO series, which
+                                    ; is a data-model problem rather than a
+                                    ; drawing one
 CH_BARW    equ 4
 CH_GAP     equ 2
 SH_CHARTWIN_W equ 260                ; a little margin around the CH_W x
@@ -3806,6 +3811,12 @@ sh_mfire:
     call sh_docmd_chart
     jmp .out
 .data2:
+    cmp al, 2
+    jne .data3
+    mov al, SH_FDK_GAL
+    call sh_fdlg_open
+    jmp .out
+.data3:
     call sh_docmd_chartexport
     jmp .out
 .sheets:
@@ -4484,12 +4495,13 @@ sh_chart_render:
     mov es, [sh_chartseg]
     mov dx, [sh_stgseg]
     xor si, si
-    call ch_draw                        ; stage 3.0f: the gallery. Sheet has no
-                                        ; Gallery menu of its own yet, so
-                                        ; [ch_type] stays CH_T_COLUMN - but
-                                        ; going through the dispatcher now
-                                        ; means the two apps cannot drift into
-                                        ; drawing the same data differently
+    call ch_draw                        ; stage 3.0f: the gallery, which Data >
+                                        ; Chart Gallery... now sets. Going
+                                        ; through the dispatcher rather than
+                                        ; calling one drawing routine is what
+                                        ; keeps this app and CHART.O88 from
+                                        ; drifting into drawing the same data
+                                        ; differently
     pop es
     pop si
     pop dx
@@ -5055,8 +5067,16 @@ SH_FDLG_NITEMS equ 4
 ; Alignment, Font, Insert, Delete, Column Width and Row Height since stage 1.8,
 ; and the four stage 3.0c added. Deriving it means the next kind that needs a
 ; taller body cannot reintroduce this by changing one of the two.
-SH_FDLG_BTY1   equ 86                ; the button row, content-relative
-SH_FDLG_BTY2   equ 102
+SH_FDLG_MAXROWS equ 5                ; the tallest kind's row count, and the
+                                     ; reason the button row is derived from
+                                     ; it rather than fixed: the Gallery kind
+                                     ; has five rows and the row at index 4
+                                     ; landed ON the buttons, because 86 was
+                                     ; chosen when four was the most any kind
+                                     ; had. A new kind with more rows changes
+                                     ; this one number.
+SH_FDLG_BTY1   equ SH_FDLG_ROWTOP + SH_FDLG_MAXROWS * SH_FDLG_ROWH + 4
+SH_FDLG_BTY2   equ SH_FDLG_BTY1 + 16
 SH_DLG_BMARG   equ 8                 ; the gap every dialog leaves below its
                                      ; lowest element, and the reason all four
                                      ; heights below are DERIVED: a window's
@@ -5085,7 +5105,8 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal
+sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
 sh_s_fd_new:    db 'New', 0
 sh_s_fd_calc:   db 'Calculation', 0
@@ -5098,7 +5119,17 @@ sh_s_fd_delete: db 'Delete', 0
 sh_s_fd_colw:   db 'Column Width', 0
 sh_s_fd_rowh:   db 'Row Height', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal
+; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
+; happens to be in - sh_gal_map translates, the same way chart.asm's own
+; ct_gal_map does, rather than either side renumbering to suit the other.
+sh_fd_i_gal:    dw sh_fd_garea, sh_fd_gbar, sh_fd_gcol, sh_fd_gline, sh_fd_gpie
+sh_fd_garea:    db 'Area', 0
+sh_fd_gbar:     db 'Bar', 0
+sh_fd_gcol:     db 'Column', 0
+sh_fd_gline:    db 'Line', 0
+sh_fd_gpie:     db 'Pie', 0
+sh_gal_map:     dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE
 sh_fd_i_clear:  dw sh_fd_clall, sh_fd_clform, sh_fd_clfmt
 sh_fd_clall:    db 'All', 0
 sh_fd_clform:   db 'Formulas', 0       ; Excel's own order and its own words:
@@ -5148,13 +5179,14 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 5
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
 SH_FDK_CALC  equ 9
 SH_FDK_SORT  equ 10
-SH_FDK_N     equ 11
+SH_FDK_GAL   equ 11
+SH_FDK_N     equ 12
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -5179,7 +5211,9 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
-    cmp al, SH_FDK_CALC
+    cmp al, SH_FDK_GAL
+    je .prefillgal                    ; Gallery opens on the type in use, so
+    cmp al, SH_FDK_CALC               ; OK alone cannot silently change it
     je .prefillcalc                   ; Calculation opens SHOWING the mode it
     cmp al, SH_FDK_CLEAR              ; is in, so OK alone cannot change it
     jae .noprefill                    ; Clear/New/Sort have nothing current
@@ -5192,6 +5226,20 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
+.prefillgal:
+    xor bx, bx                        ; find [ch_type] in the map rather than
+    mov cx, 5                         ; inverting it - five entries, and an
+.galpre:                              ; inverse table is one more thing to
+    mov ax, [sh_gal_map + bx]         ; keep in step
+    cmp ax, [ch_type]
+    je .galprefound
+    add bx, 2
+    loop .galpre
+    xor bx, bx
+.galprefound:
+    shr bx, 1
+    mov [sh_fdlg_sel], bx
+    jmp .noprefill
 .prefillcalc:
     xor ah, ah
     mov al, [sh_calcmanual]
@@ -5476,6 +5524,8 @@ sh_fdlg_apply:
     je .docalc
     cmp byte [sh_fdlg_kind], SH_FDK_SORT
     je .dosort
+    cmp byte [sh_fdlg_kind], SH_FDK_GAL
+    je .dogallery
     cmp byte [sh_fdlg_kind], 5
     je .colwidth
     cmp byte [sh_fdlg_kind], 6
@@ -5662,6 +5712,20 @@ sh_fdlg_apply:
     mov ax, [sh_fdlg_sel]
     mov [sh_sort_desc], al
     call sh_docmd_sortcol
+    jmp .out
+.dogallery:
+    mov bx, [sh_fdlg_sel]
+    shl bx, 1
+    mov ax, [sh_gal_map + bx]
+    mov [ch_type], ax
+    cmp word [sh_chartwin], 0         ; no chart window yet: the type is still
+    je .galdone                       ; remembered, and the next Chart Column
+    call sh_chart_render              ; uses it
+    mov si, [sh_chartwin]
+    call sh_chart_paint
+.galdone:
+    mov si, [sh_ownwin]
+    call sh_repaint
     jmp .out
 .out:
     pop es
@@ -15321,7 +15385,7 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    9
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  6
-    dw sh_m_data,    sh_i_data,    3
+    dw sh_m_data,    sh_i_data,    4
     dw sh_m_options, sh_i_options, 3
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -15435,9 +15499,10 @@ sh_it_filldown:  db 'Fill Down', 0
 ; equivalent - Excel's own charting is a whole separate document type) -
 ; see sh_docmd_chart's header comment for the design.
 sh_m_data:     db 'Data', 0
-sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_chartexp
+sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_gallery, sh_it_chartexp
 sh_it_sort:    db 'Sort...', 0
 sh_it_chart:   db 'Chart Column...', 0
+sh_it_gallery: db 'Chart Gallery...', 0
 sh_it_chartexp: db 'Export Chart as BMP...', 0
 
 ; Options - Display toggles (stage 2.x). Each item's own string SWAPS
@@ -15589,7 +15654,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2713
+    OS88_BSS 2754
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -15938,7 +16003,29 @@ ch_lcx         equ ch_ly1 + 2
 
 ; sh_rowcol_reidx and friends (stage 2.x) - see the section comment above
 ; sh_rowcol_reidx itself for what each of these holds
-sh_rwsrc          equ ch_lcx + 2             ; SH_EDITMAX+1: the formula
+ch_pie_px      equ ch_lcx + 2       ; --- stage 3.0f: the pie ---
+ch_pie_py      equ ch_pie_px + 2
+ch_pie_ex      equ ch_pie_py + 2    ; ch_ray's endpoint and its Bresenham
+ch_pie_ey      equ ch_pie_ex + 2    ; state - in bss for the same DS reason
+ch_pie_x       equ ch_pie_ey + 2    ; every other ch_* word is
+ch_pie_y       equ ch_pie_x + 2
+ch_pie_dx      equ ch_pie_y + 2
+ch_pie_dy      equ ch_pie_dx + 2
+ch_pie_sx      equ ch_pie_dy + 2
+ch_pie_sy      equ ch_pie_sx + 2
+ch_pie_err     equ ch_pie_sy + 2
+ch_pie_e2      equ ch_pie_err + 2
+ch_pie_tlo     equ ch_pie_e2 + 2    ; the 32-bit total and how far it was
+ch_pie_thi     equ ch_pie_tlo + 2   ; shifted to fit a word
+ch_pie_shift   equ ch_pie_thi + 2
+ch_pie_a0      equ ch_pie_shift + 2 ; this slice's first half-degree...
+ch_pie_span    equ ch_pie_a0 + 2    ; ...how many it covers...
+ch_pie_a       equ ch_pie_span + 2  ; ...and the sweep's current one
+ch_pie_col     equ ch_pie_a + 2
+ch_pie_thick   equ ch_pie_col + 2    ; byte: this ray fills, so it is 3px
+ch_pie_pen     equ ch_pie_thick + 1  ; byte: the colour ch_setpixel keeps
+ch_pie_pat     equ ch_pie_pen + 1    ; byte: this slice's hatch, FF = solid
+sh_rwsrc          equ ch_pie_pat + 1             ; SH_EDITMAX+1: the formula
                                               ; text copied out for rewriting
 sh_rwdst          equ sh_rwsrc + SH_EDITMAX + 1  ; SH_RW_CAP: the rewritten
                                               ; text being built

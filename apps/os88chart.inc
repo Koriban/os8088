@@ -125,8 +125,9 @@ ch_pal_bgra_end:
 
 ; -----------------------------------------------------------------------------
 ; ch_setpixel - in: ES=buffer segment, AX=x (0..CH_W-1), BX=y (0..CH_H-1),
-; DL=color (0-15). A private helper for ch_fillrect, not meant to be
-; called directly.
+; DL=color (0-15). Preserves DX; clobbers CL. Bounds are the CALLER's to
+; enforce - this writes wherever it is told (ch_fillrect clips, ch_pie_plot
+; range-checks).
 ; -----------------------------------------------------------------------------
 ch_setpixel:
     push ax
@@ -136,8 +137,20 @@ ch_setpixel:
     shr ax, 1                          ; ax = x / 2 (byte index within row)
     push ax
     mov ax, bx                         ; ax = y
-    mov bx, CH_STRIDE
-    mul bx                             ; dx:ax = y * CH_STRIDE (fits in ax)
+    mov bx, ax
+    mov cl, 7                          ; y * CH_STRIDE, AS SHIFTS. It was
+    shl ax, cl                         ; `mul bx`, and MUL WRITES DX:AX - so
+    mov cl, 3                          ; this routine destroyed the colour it
+    shl bx, cl                         ; was passed in DL, three instructions
+    sub ax, bx                         ; before reading it, and every pixel
+                                       ; came out colour 0. Nothing noticed for
+                                       ; as long as the only thing this package
+                                       ; drew was black bars; the pie is the
+                                       ; first caller to ask for a colour.
+                                       ; CH_STRIDE is 120 = 128 - 8, so the
+                                       ; shifts are also FASTER than the
+                                       ; multiply they replace, on the machine
+                                       ; this targets.
     pop bx                             ; bx = x / 2
     add ax, bx
     add ax, CH_PXOFF
@@ -801,7 +814,12 @@ ch_draw:
     je .line
     cmp word [ch_type], CH_T_AREA
     je .area
+    cmp word [ch_type], CH_T_PIE
+    je .pie
     call ch_bars_draw
+    ret
+.pie:
+    call ch_pie_draw
     ret
 .bar:
     call ch_hbar_draw
@@ -811,6 +829,449 @@ ch_draw:
     ret
 .area:
     call ch_area_draw
+    ret
+
+; =============================================================================
+; CH_T_PIE - the one Excel gallery type that is not a rectangle.
+;
+; NO TRIGONOMETRY EXISTS ANYWHERE IN THIS TREE, which is the whole reason this
+; type waited. It gets a table instead: a quarter sine at HALF-DEGREE
+; resolution, host-computed so it is exact rather than accumulated, in Q8 -
+; sin*256, which is the largest scale where r*sin still fits a signed word for
+; every radius this canvas can hold, so each coordinate costs ONE imul and no
+; 32-bit shifting.
+;
+; Half a degree rather than one is not fussiness. The fill is drawn as radii
+; swept from the centre, and the gap between two adjacent radii at the rim is
+; r*step: at r=70 a one-degree step leaves 1.2px of white between them, and a
+; half-degree step leaves 0.6px, which rounds shut. Sweeping radii rather than
+; scanning the bounding box also avoids deciding which wedge each pixel is in,
+; a question that costs two cross products per pixel and answers itself here.
+;
+; SLICES ARE HATCHED AS WELL AS COLOURED, which is what Excel 2.1 did and for
+; the reason it did it: this OS runs on Hercules and on CGA in two colours as
+; well as on sixteen, and a pie whose slices differ only in colour is one solid
+; shape on any of them. A hatch survives the trip. It costs a test rather than
+; a second pass, because a clear bit in the pattern simply leaves the white
+; ch_prep already put there.
+;
+; (The first working version of this drew a solid black disc, and the display
+; was NOT the reason - ch_setpixel was destroying the colour it was handed. It
+; is worth saying plainly, because "correct but unshowable" and "broken" look
+; identical on screen and it took a BMP export to tell them apart.)
+;
+; Negative values are drawn by their MAGNITUDE, which is what Excel does: a
+; pie shows composition, and a negative share of a whole is not a thing a
+; circle can express. The alternative - refusing to draw - is worse, because
+; the sheet is usually right and one stray sign is not worth a blank chart.
+; =============================================================================
+CH_PIE_CX  equ CH_W / 2
+CH_PIE_CY  equ CH_H / 2
+CH_PIE_R   equ (CH_H / 2) - 12       ; the canvas is wider than it is tall, so
+                                     ; the HEIGHT is what bounds the radius
+CH_PIE_STEPS equ 720                 ; half-degrees in a full turn
+
+; sin(i * 0.5 degrees) * 256, i = 0..180. Host-computed.
+ch_sintab:
+    dw 0, 2, 4, 7, 9, 11, 13, 16, 18, 20
+    dw 22, 25, 27, 29, 31, 33, 36, 38, 40, 42
+    dw 44, 47, 49, 51, 53, 55, 58, 60, 62, 64
+    dw 66, 68, 71, 73, 75, 77, 79, 81, 83, 85
+    dw 88, 90, 92, 94, 96, 98, 100, 102, 104, 106
+    dw 108, 110, 112, 114, 116, 118, 120, 122, 124, 126
+    dw 128, 130, 132, 134, 136, 138, 139, 141, 143, 145
+    dw 147, 149, 150, 152, 154, 156, 158, 159, 161, 163
+    dw 165, 166, 168, 170, 171, 173, 175, 176, 178, 179
+    dw 181, 183, 184, 186, 187, 189, 190, 192, 193, 195
+    dw 196, 198, 199, 200, 202, 203, 204, 206, 207, 208
+    dw 210, 211, 212, 213, 215, 216, 217, 218, 219, 221
+    dw 222, 223, 224, 225, 226, 227, 228, 229, 230, 231
+    dw 232, 233, 234, 235, 236, 237, 237, 238, 239, 240
+    dw 241, 241, 242, 243, 243, 244, 245, 245, 246, 247
+    dw 247, 248, 248, 249, 249, 250, 250, 251, 251, 252
+    dw 252, 252, 253, 253, 254, 254, 254, 254, 255, 255
+    dw 255, 255, 255, 256, 256, 256, 256, 256, 256, 256
+    dw 256
+
+; -----------------------------------------------------------------------------
+; ch_sin - in: AX = angle in half-degrees, 0..719; out: AX = sin * 256, signed
+; -----------------------------------------------------------------------------
+ch_sin:
+    push bx
+    push cx
+    push dx
+    xor dx, dx
+    mov cx, 180
+    div cx                            ; ax = quadrant 0..3, dx = index 0..179
+    mov bx, dx
+    test al, 1                        ; quadrants 1 and 3 read the table
+    jz .direct                        ; BACKWARDS: sin(90+x) = sin(90-x)
+    mov bx, 180
+    sub bx, dx
+.direct:
+    shl bx, 1
+    push ax
+    mov ax, [ch_sintab + bx]
+    mov cx, ax
+    pop ax
+    cmp al, 2                         ; quadrants 2 and 3 are negative
+    jb .pos
+    neg cx
+.pos:
+    mov ax, cx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ch_cos - the same table, a quarter turn along
+ch_cos:
+    push bx
+    add ax, 180
+    cmp ax, CH_PIE_STEPS
+    jb .nowrap
+    sub ax, CH_PIE_STEPS
+.nowrap:
+    call ch_sin
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_arcpt - in: AX = angle in half-degrees; out: AX = x, BX = y on the rim.
+; Y is SUBTRACTED because the buffer is top-down, so a positive sine has to
+; move up the screen rather than down it.
+; -----------------------------------------------------------------------------
+ch_arcpt:
+    push cx
+    push dx
+    push ax
+    call ch_cos
+    mov cx, CH_PIE_R
+    imul cx                           ; signed: AX = r*cos, DX its sign only
+    add ax, 128                       ; round to NEAREST - a bare SAR rounds
+    mov cl, 8                         ; toward minus infinity, which biases
+    sar ax, cl                        ; every left-hand and upper point outward
+    add ax, CH_PIE_CX                 ; and cost 0.7px of radius accuracy
+    mov [ch_pie_px], ax
+    pop ax
+    push ax
+    call ch_sin
+    mov cx, CH_PIE_R
+    imul cx
+    add ax, 128
+    mov cl, 8
+    sar ax, cl
+    neg ax
+    add ax, CH_PIE_CY
+    mov [ch_pie_py], ax
+    pop ax
+    mov ax, [ch_pie_px]
+    mov bx, [ch_pie_py]
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_ray - a line from the pie's centre to (AX, BX) in colour DL. Bresenham,
+; integer, no division - the same shape ch_seg_draw uses, kept separate
+; because that one interpolates a data series and this one does not.
+; -----------------------------------------------------------------------------
+ch_ray:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [ch_pie_pen], dl              ; banked once: see ch_pie_plot
+    mov [ch_pie_ex], ax
+    mov [ch_pie_ey], bx
+    mov word [ch_pie_x], CH_PIE_CX
+    mov word [ch_pie_y], CH_PIE_CY
+    mov ax, [ch_pie_ex]               ; dx = |ex - cx|, sx = its sign
+    sub ax, CH_PIE_CX
+    mov word [ch_pie_sx], 1
+    or ax, ax
+    jge .dxpos
+    neg ax
+    mov word [ch_pie_sx], -1
+.dxpos:
+    mov [ch_pie_dx], ax
+    mov ax, [ch_pie_ey]
+    sub ax, CH_PIE_CY
+    mov word [ch_pie_sy], 1
+    or ax, ax
+    jge .dypos
+    neg ax
+    mov word [ch_pie_sy], -1
+.dypos:
+    mov [ch_pie_dy], ax
+    mov ax, [ch_pie_dx]               ; err = dx - dy
+    sub ax, [ch_pie_dy]
+    mov [ch_pie_err], ax
+.step:
+    mov ax, [ch_pie_x]
+    mov bx, [ch_pie_y]
+    call ch_pie_plot
+    cmp byte [ch_pie_thick], 0        ; A FILL RAY PAINTS THREE PIXELS, not one,
+    je .thin                          ; and that is not decoration - it is what
+    mov ax, [ch_pie_x]                ; makes the fill solid. Two Bresenham rays
+    inc ax                            ; from a common origin can differ by two
+    mov bx, [ch_pie_y]                ; pixels in one step, so a swept fan of
+    call ch_pie_plot                  ; them leaves scattered holes: 452 of them
+    mov ax, [ch_pie_x]                ; inside this circle, measured. Painting
+    mov bx, [ch_pie_y]                ; the pixel right of and below each one
+    inc bx                            ; closes every last one, at a cost of four
+    call ch_pie_plot                  ; pixels spilled past the rim - which the
+.thin:                                ; black rim is drawn over afterwards.
+    mov ax, [ch_pie_x]
+    cmp ax, [ch_pie_ex]
+    jne .go
+    mov ax, [ch_pie_y]
+    cmp ax, [ch_pie_ey]
+    je .done
+.go:
+    mov ax, [ch_pie_err]              ; e2 = 2*err, and BOTH comparisons below
+    add ax, ax                        ; are SIGNED - err runs negative, and an
+    mov [ch_pie_e2], ax               ; unsigned test reads that as enormous
+    mov bx, [ch_pie_dy]
+    neg bx
+    cmp ax, bx                        ; e2 > -dy: step in x
+    jle .noxstep
+    mov ax, [ch_pie_err]
+    sub ax, [ch_pie_dy]
+    mov [ch_pie_err], ax
+    mov ax, [ch_pie_x]
+    add ax, [ch_pie_sx]
+    mov [ch_pie_x], ax
+.noxstep:
+    mov ax, [ch_pie_e2]
+    cmp ax, [ch_pie_dx]               ; e2 < dx: step in y
+    jge .noystep
+    mov ax, [ch_pie_err]
+    add ax, [ch_pie_dx]
+    mov [ch_pie_err], ax
+    mov ax, [ch_pie_y]
+    add ax, [ch_pie_sy]
+    mov [ch_pie_y], ax
+.noystep:
+    jmp .step
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_pie_plot - one pixel, in [ch_pie_pen], with the canvas bounds enforced.
+;
+; TWO REASONS THE COLOUR COMES FROM MEMORY rather than from DL, which is what
+; ch_setpixel actually reads. ch_setpixel does `mul bx` to find the row, and
+; MUL WRITES DX - so the colour survives exactly one pixel and every one after
+; it is drawn in whatever the high word of y*CH_STRIDE was, which is zero, which
+; is black. That is why the first pie drawn here was a solid black disc.
+; ch_fillrect has always known this: it stashes the colour in AH and reloads DL
+; before each call. It is the reason ch_setpixel's own header says it is a
+; private helper of ch_fillrect and not meant to be called directly - so a
+; second caller has to bring its own answer, and this is it.
+;
+; And ch_setpixel does no bounds checking at all (ch_fillrect's comment says
+; what that costs), which a radius rounded outward by half a pixel reaches.
+; -----------------------------------------------------------------------------
+; The eight fills, as 4x4 bit masks - one nibble per row, bit 0 leftmost. A set
+; bit paints, a clear one leaves the white ch_prep already put there, so a
+; patterned fill costs a test rather than a second colour.
+ch_pie_pattab:
+    db 0x0F, 0x0F, 0x0F, 0x0F         ; 0 solid
+    db 0x05, 0x0A, 0x05, 0x0A         ; 1 50% checker
+    db 0x0F, 0x00, 0x0F, 0x00         ; 2 horizontal bands
+    db 0x05, 0x05, 0x05, 0x05         ; 3 vertical lines
+    db 0x01, 0x02, 0x04, 0x08         ; 4 diagonal
+    db 0x0D, 0x07, 0x0D, 0x07         ; 5 75%
+    db 0x01, 0x00, 0x04, 0x00         ; 6 12.5% dots
+    db 0x09, 0x06, 0x09, 0x06         ; 7 basket
+
+ch_pie_plot:
+    cmp ax, 0
+    jl .out
+    cmp ax, CH_W
+    jge .out
+    cmp bx, 0
+    jl .out
+    cmp bx, CH_H
+    jge .out
+    cmp byte [ch_pie_pat], 0xFF       ; 0xFF = solid: the rim and the slice
+    je .paint                         ; separators, which are one pixel wide
+    push ax                           ; and must not be dotted
+    push bx
+    push cx
+    push si
+    mov si, bx
+    and si, 3                         ; the pattern row
+    push ax
+    mov al, [ch_pie_pat]
+    xor ah, ah
+    mov cl, 2
+    shl ax, cl                        ; four bytes per pattern
+    add si, ax
+    pop ax
+    mov ch, [ch_pie_pattab + si]
+    and ax, 3                         ; the pattern column
+    mov cl, al
+    shr ch, cl
+    test ch, 1
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    jz .out                           ; a clear bit leaves the background
+.paint:
+    push dx
+    mov dl, [ch_pie_pen]
+    call ch_setpixel
+    pop dx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_pie_draw - CH_T_PIE
+; -----------------------------------------------------------------------------
+ch_pie_draw:
+    call ch_prep
+    jc .nodata
+
+    ; --- the total, as a 32-bit sum scaled down until it fits a word --------
+    ; A slice's angle is value*720/total and both halves of that have to fit
+    ; the 8086's own 32-by-16 divide. Forty values of up to 32767 reach 1.3M,
+    ; so the sum is accumulated wide and then shifted - dropping low bits
+    ; costs nothing here, since the answer is one of 720 half-degrees.
+    mov word [ch_pie_tlo], 0
+    mov word [ch_pie_thi], 0
+    mov si, [ch_arr]
+    push es
+    mov es, [ch_srcseg]
+    mov cx, [ch_cnt]
+.sum:
+    jcxz .summed
+    es lodsw
+    or ax, ax
+    jns .sumpos
+    neg ax                            ; magnitude: see the header
+.sumpos:
+    add [ch_pie_tlo], ax
+    adc word [ch_pie_thi], 0
+    dec cx
+    jmp .sum
+.summed:
+    pop es
+    mov word [ch_pie_shift], 0
+.narrow:
+    cmp word [ch_pie_thi], 0
+    jne .doshift
+    cmp word [ch_pie_tlo], 32768
+    jb .narrowed
+.doshift:
+    shr word [ch_pie_thi], 1
+    rcr word [ch_pie_tlo], 1
+    inc word [ch_pie_shift]
+    jmp .narrow
+.narrowed:
+    cmp word [ch_pie_tlo], 0
+    jne .havetotal
+    mov word [ch_pie_tlo], 1          ; every value was zero: one empty slice
+.havetotal:
+
+    ; --- the slices --------------------------------------------------------
+    mov word [ch_pie_a0], 0
+    mov word [ch_idx], 0
+.slice:
+    mov ax, [ch_idx]
+    cmp ax, [ch_cnt]
+    jae .rim
+    push es                           ; this slice's magnitude, scaled the
+    mov es, [ch_srcseg]               ; same way the total was
+    mov si, [ch_arr]
+    shl ax, 1
+    add si, ax
+    mov ax, [es:si]
+    pop es
+    or ax, ax
+    jns .vpos
+    neg ax
+.vpos:
+    mov cx, [ch_pie_shift]
+    jcxz .scaled
+.shiftv:
+    shr ax, 1
+    loop .shiftv
+.scaled:
+    mov dx, CH_PIE_STEPS              ; span = v * 720 / total
+    mul dx
+    div word [ch_pie_tlo]
+    mov [ch_pie_span], ax
+
+    mov ax, [ch_idx]                  ; colour 1..14, skipping black and white
+    xor dx, dx
+    mov cx, 14
+    div cx
+    mov ax, dx
+    inc ax
+    mov [ch_pie_col], ax
+    mov ax, [ch_idx]                  ; ...and one of the eight hatches, which
+    and ax, 7                         ; is what actually distinguishes them on
+    mov [ch_pie_pat], al              ; a two-colour display
+
+    mov ax, [ch_pie_a0]               ; sweep this slice's radii
+    mov [ch_pie_a], ax
+.sweep:
+    mov ax, [ch_pie_a]
+    mov bx, [ch_pie_a0]
+    sub ax, bx
+    cmp ax, [ch_pie_span]
+    jae .slicedone
+    mov ax, [ch_pie_a]
+    cmp ax, CH_PIE_STEPS
+    jb .nowrap
+    sub ax, CH_PIE_STEPS
+.nowrap:
+    call ch_arcpt
+    mov dx, [ch_pie_col]
+    mov byte [ch_pie_thick], 1
+    call ch_ray
+    inc word [ch_pie_a]
+    jmp .sweep
+.slicedone:
+    mov ax, [ch_pie_a0]               ; the boundary radius, in black, so two
+    cmp ax, CH_PIE_STEPS              ; adjacent slices of a similar colour
+    jb .bnowrap                       ; still read as two
+    sub ax, CH_PIE_STEPS
+.bnowrap:
+    call ch_arcpt
+    xor dx, dx
+    mov byte [ch_pie_thick], 0        ; the separator stays one pixel wide
+    mov byte [ch_pie_pat], 0xFF       ; ...and solid
+    call ch_ray
+    mov ax, [ch_pie_a0]
+    add ax, [ch_pie_span]
+    mov [ch_pie_a0], ax
+    inc word [ch_idx]
+    jmp .slice
+.rim:
+    mov word [ch_pie_a], 0            ; and the circle itself
+.rimloop:
+    mov ax, [ch_pie_a]
+    cmp ax, CH_PIE_STEPS
+    jae .nodata
+    call ch_arcpt
+    mov byte [ch_pie_pen], 0
+    mov byte [ch_pie_pat], 0xFF
+    call ch_pie_plot
+    inc word [ch_pie_a]
+    jmp .rimloop
+.nodata:
     ret
 
 ; -----------------------------------------------------------------------------

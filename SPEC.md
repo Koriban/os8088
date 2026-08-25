@@ -67214,6 +67214,66 @@ also does not exist yet; `apps/paint`'s glyph-stamping into its own private
 canvas is the model, since it is buffer-targeted rather than screen-targeted
 and maps onto `ch_fillrect` almost directly.
 
+### 82.6 CH_T_PIE — the one type that is not a rectangle
+
+**No trigonometry exists anywhere in this tree**, which is the whole reason
+Pie waited while Bar, Line and Area landed. It gets a table instead: a quarter
+sine at **half-degree** resolution, host-computed so it is exact rather than
+accumulated, in Q8 — `sin·256`, the largest scale at which `r·sin` still fits
+a signed word for any radius this canvas holds, so a coordinate costs **one
+`imul` and no 32-bit shifting**.
+
+Half a degree rather than one is not fussiness. The fill is swept as radii from
+the centre, and the gap between adjacent radii at the rim is `r·step`: at r=68
+a one-degree step leaves 1.2px of white, a half-degree step 0.6px, which rounds
+shut.
+
+#### 82.6.1 A fill ray paints three pixels
+
+Two Bresenham rays from a common origin can differ by two pixels in one step,
+so a swept fan of them leaves scattered holes — **452 of them** inside this
+circle, counted by transcribing the same integer arithmetic on the host before
+building anything. Painting the pixel to the right of and below each one closes
+every last one, at a cost of four pixels spilled past the rim, which the black
+rim is drawn over afterwards. The slice separators are drawn thin, so they stay
+one pixel wide.
+
+#### 82.6.2 Slices are hatched as well as coloured
+
+Excel 2.1 hatched its pie slices, and for the reason this does: os8088 runs on
+Hercules and on two-colour CGA as well as on sixteen colours, and a pie whose
+slices differ only in colour is one solid shape on any of them. Eight 4x4 bit
+masks, one per slice; a clear bit leaves the white `ch_prep` already put there,
+so the hatch costs a test rather than a second pass.
+
+#### 82.6.3 `ch_setpixel` was destroying the colour it was handed
+
+`ch_setpixel` found its row with `mul bx` — and **`MUL` writes DX:AX**, three
+instructions before the routine reads the colour out of DL. Every pixel it drew
+came out colour 0. Nothing noticed for as long as the only thing this package
+drew was black bars; the pie is its first caller to ask for a colour, and it
+drew a solid black disc.
+
+It is worth recording how that was found, because **"correct but unshowable"
+and "broken" look identical on screen**. Three rounds of reasoning about the
+drawing code found nothing, because nothing was wrong with it. What settled it
+was writing the live values into the buffer as pixels — the slice's colour at
+(i, 0), its pattern at (i, 2), its span at (i, 4) — exporting the BMP and
+reading them off on the host. All three read 0, including one that arithmetic
+guarantees is at least 1, and a value that cannot be zero being zero is what
+pointed at the store between the write and the read.
+
+The row offset is now `(y<<7) - (y<<3)`, since `CH_STRIDE` is 120 = 128 − 8.
+That preserves DX and is also **faster** than the multiply it replaces on the
+machine this targets. `ch_setpixel`'s header documents what it preserves now,
+rather than describing itself as a private helper of `ch_fillrect` — which was
+true and is no longer.
+
+Negative values are drawn by their **magnitude**, as Excel does: a pie shows
+composition, and a negative share of a whole is not something a circle can
+express. Refusing to draw is worse, since the sheet is usually right and one
+stray sign is not worth a blank chart.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

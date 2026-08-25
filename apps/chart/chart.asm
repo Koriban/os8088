@@ -46,6 +46,11 @@ CH_T_COLUMN equ 0                   ; stage 3.0f: the gallery. Excel calls the
 CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
 CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
 CH_T_AREA   equ 3                   ; rather than the intuitive-but-wrong one
+CH_T_PIE    equ 4                   ; stage 3.0f, and the last of the four
+                                    ; Excel types this app can draw: Scatter
+                                    ; and Combination need TWO series, which
+                                    ; is a data-model problem rather than a
+                                    ; drawing one
 CH_BARW    equ 4
 CH_GAP     equ 2
 
@@ -1044,7 +1049,7 @@ ct_tpl:
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET ct_menus, ct_name_app, ct_oncmd
         OS88_MENU ct_m_file, ct_i_file, 2
-        OS88_MENU ct_m_gallery, ct_i_gallery, 4
+        OS88_MENU ct_m_gallery, ct_i_gallery, 5
     OS88_MENUSET_END ct_menus
 
 ct_name_app: db 'Chart', 0
@@ -1054,18 +1059,20 @@ ct_it_open:  db 'Open...', 0
 ct_it_exp:   db 'Export as BMP...', 0
 
 ; Excel 2.1d's Gallery menu is Area/Bar/Column/Line/Pie/Scatter/Combination.
-; These four are the ones a single series of integers can express; Scatter and
-; Combination need two series, and Pie needs a filled-wedge primitive this file
-; does not have yet. THE ORDER MATCHES ct_settype's dispatch, which is the item
-; index - keep them in step.
+; These FIVE are the ones a single series can express - Pie joined them once
+; os88chart.inc got its own sine table (82.6). Scatter and Combination need
+; TWO series, which is a data-model problem rather than a drawing one, and
+; they stay out rather than appear and disappoint. THE ORDER MATCHES
+; ct_gal_map below, which is indexed by the item number - keep them in step.
 ct_m_gallery: db 'Gallery', 0
-ct_i_gallery: dw ct_it_area, ct_it_bar, ct_it_col, ct_it_line
+ct_i_gallery: dw ct_it_area, ct_it_bar, ct_it_col, ct_it_line, ct_it_pie
 ct_it_area:   db 'Area', 0
 ct_it_bar:    db 'Bar', 0
 ct_it_col:    db 'Column', 0
 ct_it_line:   db 'Line', 0
+ct_it_pie:    db 'Pie', 0
 
-ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE
+ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE
 ct_s_title:    db 'Chart', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
 ct_s_noexp:    db 'No chart to export.', 0
@@ -1088,7 +1095,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 470
+    OS88_BSS 511
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1136,7 +1143,29 @@ ch_ly0      equ ch_lx0 + 2       ; the column being interpolated -
 ch_lx1      equ ch_ly0 + 2       ; CALLER bss like every other ch_*
 ch_ly1      equ ch_lx1 + 2       ; word, for the same DS reason
 ch_lcx      equ ch_ly1 + 2
-ct_bss_end  equ ch_lcx + 2
+ch_pie_px      equ ch_lcx + 2       ; --- stage 3.0f: the pie ---
+ch_pie_py      equ ch_pie_px + 2
+ch_pie_ex      equ ch_pie_py + 2    ; ch_ray's endpoint and its Bresenham
+ch_pie_ey      equ ch_pie_ex + 2    ; state - in bss for the same DS reason
+ch_pie_x       equ ch_pie_ey + 2    ; every other ch_* word is
+ch_pie_y       equ ch_pie_x + 2
+ch_pie_dx      equ ch_pie_y + 2
+ch_pie_dy      equ ch_pie_dx + 2
+ch_pie_sx      equ ch_pie_dy + 2
+ch_pie_sy      equ ch_pie_sx + 2
+ch_pie_err     equ ch_pie_sy + 2
+ch_pie_e2      equ ch_pie_err + 2
+ch_pie_tlo     equ ch_pie_e2 + 2    ; the 32-bit total and how far it was
+ch_pie_thi     equ ch_pie_tlo + 2   ; shifted to fit a word
+ch_pie_shift   equ ch_pie_thi + 2
+ch_pie_a0      equ ch_pie_shift + 2 ; this slice's first half-degree...
+ch_pie_span    equ ch_pie_a0 + 2    ; ...how many it covers...
+ch_pie_a       equ ch_pie_span + 2  ; ...and the sweep's current one
+ch_pie_col     equ ch_pie_a + 2
+ch_pie_thick   equ ch_pie_col + 2    ; byte: this ray fills, so it is 3px
+ch_pie_pen     equ ch_pie_thick + 1  ; byte: the colour ch_setpixel keeps
+ch_pie_pat     equ ch_pie_pen + 1    ; byte: this slice's hatch, FF = solid
+ct_bss_end  equ ch_pie_pat + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting
