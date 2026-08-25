@@ -6616,6 +6616,12 @@ sh_dowrite_sylk:
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
+    mov word [sh_wrec_foff], 0xFFFF   ; ...and this cell's formula, if it has
+    test byte [es:si+4], 1            ; one: SYLK carries the EXPRESSION in a
+    jz .noformula_w                   ; ;E field beside the cached ;K value,
+    mov ax, [es:si+SH_C_FOFF]         ; which is what makes a saved sheet a
+    mov [sh_wrec_foff], ax            ; spreadsheet rather than a table of
+.noformula_w:                         ; numbers
     call sh_cellval_to_acc_si         ; bank the whole value: the row and
     push si                           ; column are formatted through sh_numbuf
     push di                           ; before it is wanted, so it cannot be
@@ -6651,6 +6657,40 @@ sh_dowrite_sylk:
     call sh_itoa
     mov si, sh_numbuf
     call sh_stgput
+    cmp word [sh_wrec_foff], 0xFFFF   ; ";E<expr>" comes BEFORE ";K", the
+    je .noexpr                        ; order a real file from the period uses
+    push si
+    push di
+    mov ax, [sh_wrec_col]             ; every relative offset is measured from
+    mov [sh_rc_ccol], ax              ; the cell being written
+    mov ax, [sh_wrec_row]
+    mov [sh_rc_crow], ax
+    push es
+    mov es, [sh_txtseg]               ; copy the formula text out of the arena
+    mov si, [sh_wrec_foff]            ; into DS, where the converter reads
+    mov di, sh_rwsrc
+    mov cx, SH_EDITMAX
+.ecopy:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .ecopied
+    inc si
+    inc di
+    dec cx
+    jnz .ecopy
+    mov byte [di], 0
+.ecopied:
+    pop es
+    mov si, sh_rwsrc
+    call sh_formula_to_r1c1
+    pop di
+    pop si
+    mov si, sh_s_e
+    call sh_stgput
+    mov si, sh_rwdst
+    call sh_stgput
+.noexpr:
     mov si, sh_s_k
     call sh_stgput
     push si                           ; SYLK's K field IS a decimal literal,
@@ -8052,6 +8092,7 @@ sh_parsecrec:
     mov word [SH_TCOL], 0
     mov word [SH_TROW], 0
     mov word [SH_TVAL], 0
+    mov byte [SH_THASE], 0
     mov word [SH_TDVAL], 0
     mov word [SH_TDVAL+2], 0
     mov word [SH_TDVAL+4], 0
@@ -8069,6 +8110,8 @@ sh_parsecrec:
     je .isy
     cmp al, 'K'
     je .isk
+    cmp al, 'E'
+    je .ise
 .scan:
     cmp si, bx
     jae .apply
@@ -8111,6 +8154,32 @@ sh_parsecrec:
     pop ax
     mov byte [SH_THAVE], 1
     jmp .tok
+.ise:
+    inc si
+    push di                           ; the expression, copied out of the
+    mov di, SH_TEXPR                  ; staging segment into DS so the R1C1
+    mov cx, SH_EDITMAX                ; converter can read it
+.ecpy:
+    jcxz .ecpyd
+    cmp si, bx
+    jae .ecpyd
+    mov al, [es:si]
+    cmp al, ';'
+    je .ecpyd
+    cmp al, 13
+    je .ecpyd
+    cmp al, 10
+    je .ecpyd
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .ecpy
+.ecpyd:
+    mov byte [di], 0
+    pop di
+    mov byte [SH_THASE], 1
+    jmp .tok
 .apply:
     cmp byte [SH_THAVE], 0
     je .out
@@ -8127,6 +8196,26 @@ sh_parsecrec:
     dec ax
     dec cx
     mov bx, cx
+    cmp byte [SH_THASE], 0            ; a ;E field wins over ;K: the value is
+    je .plainval_c                    ; only the cached result of it, and
+    push ax                           ; storing that instead would flatten the
+    push bx                           ; formula exactly as this used to
+    push si
+    push di
+    mov [sh_rc_ccol], ax
+    mov [sh_rc_crow], bx
+    mov si, SH_TEXPR
+    call sh_formula_from_r1c1
+    pop di
+    pop si
+    pop bx
+    pop ax
+    mov si, sh_rwdst                  ; AFTER the pops: setting SI before them
+    call sh_setformula                ; put the saved value straight back over
+                                      ; it, and sh_setformula stored whatever
+                                      ; the staging pointer happened to be
+    jmp .out
+.plainval_c:
     push si
     push di
     mov si, SH_TDVAL
@@ -9663,6 +9752,432 @@ sh_reidx_cellpart:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; A1 <-> R1C1, for SYLK's ;E field (stage 4.x)
+;
+; SYLK CARRIES FORMULAS IN R1C1 RELATIVE FORM, not in the A1 form this app
+; stores and shows. That is not a preference - it is what the format is, and a
+; real file from the period reads
+;
+;     C;X3;E+R[-6]C[-1]-RC[-1];K100.73
+;
+; where R[-6]C[-1] is "six rows up, one column left" of the cell being defined.
+; An ABSOLUTE reference has no brackets: R6C3 means row 6, column 3 outright,
+; which is exactly what '$' means in A1 form - so the two notations carry the
+; same distinction and it survives the trip.
+;
+; Both directions reuse sh_formula_reidx's scanner shape: walk the text, copy
+; everything that is not a reference verbatim, and transform the references.
+; A quoted string is passed through untouched, as it is there.
+;
+; THE CROSS-SHEET PREFIX IS AN EXTENSION. SYLK has no notion of a second sheet
+; - it is a single-grid format - so "Sheet2!" is written through verbatim. It
+; round-trips within this app and means nothing to anything else, which is the
+; honest position: the alternative is silently dropping the reference.
+; =============================================================================
+
+; sh_emit_num - AX as signed decimal, into sh_rwdst via sh_rw_emit
+sh_emit_num:
+    push ax
+    push bx
+    call sh_itoa
+    mov bx, sh_numbuf
+.e:
+    mov al, [bx]
+    or al, al
+    jz .o
+    call sh_rw_emit
+    inc bx
+    jmp .e
+.o:
+    pop bx
+    pop ax
+    ret
+
+; sh_emit_rc - one R or C part. in: AL = 'R' or 'C', BX = the value,
+; CL = 0 relative (bracketed offset, omitted entirely when zero) or 1 absolute
+; (a bare 1-based index).
+sh_emit_rc:
+    push ax
+    push bx
+    call sh_rw_emit                   ; the letter itself
+    or cl, cl
+    jnz .abs
+    or bx, bx
+    jz .out                           ; a zero offset is written as nothing:
+    mov al, '['                       ; "RC" means "this row, this column"
+    call sh_rw_emit
+    mov ax, bx
+    call sh_emit_num
+    mov al, ']'
+    call sh_rw_emit
+    jmp .out
+.abs:
+    mov ax, bx
+    inc ax                            ; absolute parts are 1-based
+    call sh_emit_num
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_formula_to_r1c1 - in: SI = A1-form formula text (no leading '='),
+; [sh_rc_ccol]/[sh_rc_crow] = the cell that owns it.
+; out: sh_rwdst holds the R1C1 form, [sh_rw_di] its length.
+; -----------------------------------------------------------------------------
+sh_formula_to_r1c1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [sh_rw_di], 0
+.loop:
+    mov al, [si]
+    or al, al
+    jz .done
+    cmp al, '"'
+    jne .tryref
+    call sh_rw_emit
+    inc si
+.instr:
+    mov al, [si]
+    or al, al
+    jz .done
+    call sh_rw_emit
+    inc si
+    cmp al, '"'
+    jne .instr
+    jmp .loop
+.tryref:
+    call sh_isletter_at
+    jnc .literal
+    mov [sh_rw_ostart], si
+    call sh_psheetpfx
+    jnc .noxsheet
+    mov si, [sh_rw_ostart]            ; the prefix goes through verbatim
+    mov bx, 7
+.pfx:
+    mov al, [si]
+    call sh_rw_emit
+    inc si
+    dec bx
+    jnz .pfx
+    mov [sh_rw_ostart], si
+.noxsheet:
+    call sh_reidx_cellpart_probe      ; is this really a reference?
+    jc .isref
+    mov si, [sh_rw_ostart]            ; no: a function name or a bare word
+.word:
+    call sh_isletter_at
+    jnc .loop
+    mov al, [si]
+    call sh_rw_emit
+    inc si
+    jmp .word
+.isref:
+    mov al, 'R'                       ; ...the row part
+    mov bx, [sh_rw_refrow]
+    mov cl, [sh_rw_absr]
+    or cl, cl
+    jnz .rowabs
+    sub bx, [sh_rc_crow]              ; relative: an offset from this cell
+.rowabs:
+    call sh_emit_rc
+    mov al, 'C'                       ; ...and the column part
+    mov bx, [sh_rw_refcol]
+    mov cl, [sh_rw_absc]
+    or cl, cl
+    jnz .colabs
+    sub bx, [sh_rc_ccol]
+.colabs:
+    call sh_emit_rc
+    jmp .loop
+.literal:
+    mov al, [si]
+    call sh_rw_emit
+    inc si
+    jmp .loop
+.done:
+    mov bx, [sh_rw_di]
+    mov byte [sh_rwdst + bx], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_reidx_cellpart_probe - SI at a possible reference. Fills sh_rw_refcol/
+; refrow/absc/absr and returns CF=1 with SI past it. CF=0 means the letters
+; were NOT followed by a row number (a function name, say) - SI is left where
+; the scan stopped, and the caller rewinds it from sh_rw_ostart, which is the
+; same contract sh_reidx_cellpart works to.
+sh_reidx_cellpart_probe:
+    push ax
+    push cx
+    push di
+    mov di, sh_ident
+    xor cx, cx
+    mov byte [sh_rw_absc], 0
+    mov byte [sh_rw_absr], 0
+    cmp byte [si], '$'
+    jne .nc
+    mov byte [sh_rw_absc], 1
+    inc si
+.nc:
+.letters:
+    mov al, [si]
+    cmp al, 'A'
+    jb .doneletters
+    cmp al, 'Z'
+    jbe .isl
+    cmp al, 'a'
+    jb .doneletters
+    cmp al, 'z'
+    ja .doneletters
+.isl:
+    cmp cx, 2
+    jae .doneletters
+    and al, 0xDF
+    mov [di], al
+    inc di
+    inc cx
+    inc si
+    jmp .letters
+.doneletters:
+    mov byte [di], 0
+    or cx, cx
+    jz .no
+    cmp byte [si], '$'
+    jne .nr
+    mov byte [sh_rw_absr], 1
+    inc si
+.nr:
+    mov al, [si]
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    ja .no
+    call sh_identcol
+    mov [sh_rw_refcol], ax
+    push bx
+    mov bx, si
+    add bx, SH_EDITMAX + 1
+    push es
+    mov ax, ds
+    mov es, ax
+    call sh_pint
+    pop es
+    pop bx
+    dec ax
+    mov [sh_rw_refrow], ax
+    pop di
+    pop cx
+    pop ax
+    stc
+    ret
+.no:
+    pop di
+    pop cx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_formula_from_r1c1 - in: SI = R1C1-form text, [sh_rc_ccol]/[sh_rc_crow] =
+; the cell that owns it. out: sh_rwdst holds the A1 form, NUL-terminated.
+;
+; The inverse of the above. A reference starts at an 'R' that is followed by
+; '[', a digit, '-' or 'C' - which is what tells "R[-1]C" apart from a function
+; name beginning with R, and the reason this looks one character further ahead
+; than the A1 scanner needs to.
+; -----------------------------------------------------------------------------
+sh_formula_from_r1c1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [sh_rw_di], 0
+.loop:
+    mov al, [si]
+    or al, al
+    jz .done
+    cmp al, '"'
+    jne .tryref
+    call sh_rw_emit
+    inc si
+.instr:
+    mov al, [si]
+    or al, al
+    jz .done
+    call sh_rw_emit
+    inc si
+    cmp al, '"'
+    jne .instr
+    jmp .loop
+.tryref:
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'R'
+    jne .literal
+    mov [sh_rw_ostart], si
+    inc si
+    call sh_read_rc                   ; -> BX = value, CL = 1 if absolute
+    jc .notref
+    mov [sh_rw_refrow], bx
+    mov [sh_rw_absr], cl
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'C'
+    jne .notref
+    inc si
+    call sh_read_rc
+    jc .notref
+    mov [sh_rw_refcol], bx
+    mov [sh_rw_absc], cl
+    ; --- emit it as A1 ---
+    cmp byte [sh_rw_absc], 0
+    je .colrel
+    mov al, '$'
+    call sh_rw_emit
+    jmp .colemit
+.colrel:
+    mov ax, [sh_rw_refcol]
+    add ax, [sh_rc_ccol]
+    mov [sh_rw_refcol], ax
+.colemit:
+    mov ax, [sh_rw_refcol]
+    call sh_colname
+    mov bx, sh_colbuf
+.cl:
+    mov al, [bx]
+    or al, al
+    jz .rowpart
+    call sh_rw_emit
+    inc bx
+    jmp .cl
+.rowpart:
+    cmp byte [sh_rw_absr], 0
+    je .rowrel
+    mov al, '$'
+    call sh_rw_emit
+    jmp .rowemit
+.rowrel:
+    mov ax, [sh_rw_refrow]
+    add ax, [sh_rc_crow]
+    mov [sh_rw_refrow], ax
+.rowemit:
+    mov ax, [sh_rw_refrow]
+    inc ax                            ; back to the 1-based display row
+    call sh_emit_num
+    jmp .loop
+.notref:
+    mov si, [sh_rw_ostart]            ; not a reference after all: the 'R' and
+    mov al, [si]                      ; whatever follows go through as text
+    call sh_rw_emit
+    inc si
+    jmp .loop
+.literal:
+    mov al, [si]
+    call sh_rw_emit
+    inc si
+    jmp .loop
+.done:
+    mov bx, [sh_rw_di]
+    mov byte [sh_rwdst + bx], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_read_rc - SI just past an 'R' or 'C'. out: BX = the value (a signed offset
+; when relative, a 0-based index when absolute), CL = 1 if absolute, SI
+; advanced. CF=1 if what follows is neither a bracket nor a digit.
+sh_read_rc:
+    push ax
+    push dx
+    xor bx, bx
+    xor cl, cl
+    cmp byte [si], '['
+    je .rel
+    mov al, [si]                      ; a bare digit means absolute
+    cmp al, '0'
+    jb .zero                          ; neither: "RC" - a zero offset
+    cmp al, '9'
+    ja .zero
+    mov cl, 1
+    call sh_read_int
+    dec bx                            ; absolute parts are 1-based on the wire
+    jmp .ok
+.rel:
+    inc si
+    call sh_read_int                  ; the bracketed offset, sign and all
+    cmp byte [si], ']'
+    jne .bad
+    inc si
+    jmp .ok
+.zero:
+    cmp byte [si], 'C'                ; "RC..." - this part is simply zero
+    je .ok
+    cmp byte [si], 'c'
+    je .ok
+    or bx, bx                         ; end of the reference is fine too
+    jmp .ok
+.ok:
+    pop dx
+    pop ax
+    clc
+    ret
+.bad:
+    pop dx
+    pop ax
+    stc
+    ret
+
+; sh_read_int - a signed decimal at SI into BX; SI advanced. Used only by the
+; R1C1 reader, where the number is known to be short.
+sh_read_int:
+    push ax
+    push cx
+    push dx
+    xor bx, bx
+    xor cx, cx                        ; cx = 1 when negative
+    cmp byte [si], '-'
+    jne .d
+    mov cx, 1
+    inc si
+.d:
+    mov al, [si]
+    cmp al, '0'
+    jb .fin
+    cmp al, '9'
+    ja .fin
+    sub al, '0'
+    xor ah, ah
+    push ax
+    mov ax, bx
+    mov dx, 10
+    imul dx
+    mov bx, ax
+    pop ax
+    add bx, ax
+    inc si
+    jmp .d
+.fin:
+    or cx, cx
+    jz .o
+    neg bx
+.o:
+    pop dx
+    pop cx
     pop ax
     ret
 
@@ -13034,6 +13549,7 @@ sh_s_ready:    db 'Ready', 0
 sh_s_id:       db 'ID;PWXL;N;E', 13, 10, 0
 sh_s_c:        db 'C;X', 0
 sh_s_y:        db ';Y', 0
+sh_s_e:        db ';E', 0                  ; the expression field (stage 4.x)
 sh_s_k:        db ';K', 0                  ; also the "commas are set" flag
                                             ; on an F record (stage 1.6)
 sh_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
@@ -13151,7 +13667,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2112
+    OS88_BSS 2183
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -13184,7 +13700,9 @@ SH_TROW       equ SH_TCOL + 2
 SH_TVAL       equ SH_TROW + 2               ; the integer form, still used by
                                              ; the DIF and BIFF readers
 SH_TDVAL      equ SH_TVAL + 2               ; 8: SYLK's, as a real double
-SH_THAVE      equ SH_TDVAL + 8
+SH_THASE      equ SH_TDVAL + 8              ; byte: this record had a ;E field
+SH_TEXPR      equ SH_THASE + 1              ; SH_EDITMAX+1: its text
+SH_THAVE      equ SH_TEXPR + SH_EDITMAX + 1
 SH_TALIGN     equ SH_THAVE + 1             ; sh_parsefrec's own scratch -
 SH_TNUMFMT    equ SH_TALIGN + 1            ; an "F" record's parsed
 SH_TCOMMA     equ SH_TNUMFMT + 1           ; alignment/number-format/;K
@@ -13321,7 +13839,9 @@ sh_rc_trow    equ sh_rc_tsheet + 2          ; there are enough of them
 sh_rc_tcol    equ sh_rc_trow + 2            ; that stack-relative addressing
 sh_rc_tflags  equ sh_rc_tcol + 2            ; would be more error-prone
 sh_rc_tfmt    equ sh_rc_tflags + 1          ; than a few named bytes
-sh_wrec_dval  equ sh_rc_tfmt + 1            ; 8: the SYLK writer's banked value
+sh_wrec_foff  equ sh_rc_tfmt + 1            ; word: the formula text offset of
+                                             ; the cell being written, or FFFF
+sh_wrec_dval  equ sh_wrec_foff + 2          ; 8: the SYLK writer's banked value
 sh_rc_tval    equ sh_wrec_dval + 8          ; 8: a whole double, not a word
 sh_rc_tfml    equ sh_rc_tval + 8
 
@@ -13585,7 +14105,10 @@ sh_cp_absr        equ sh_cp_absc + 1
 ; stage 3.0d: which cell the evaluator is CURRENTLY inside, for ROW()/COLUMN().
 ; Saved and restored around each sh_eval_cell so a formula reached through
 ; another cell's reference still answers for itself, not for whoever asked.
-sh_evrow          equ sh_cp_absr + 1   ; word: 0-based
+sh_rc_ccol        equ sh_cp_absr + 1   ; the cell that OWNS the formula being
+sh_rc_crow        equ sh_rc_ccol + 2   ; converted to or from R1C1 - every
+                                       ; relative offset is measured from it
+sh_evrow          equ sh_rc_crow + 2   ; word: 0-based
 sh_evcol          equ sh_evrow + 2     ; word: 0-based
 ; stage 4.0: the value accumulator the evaluator now carries, and every
 ; scratch word apps/os88fp.inc's header says the caller owes it.

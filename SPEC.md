@@ -66933,7 +66933,38 @@ selected at OK time would attach the result to the wrong cell.
 ### 81.7 File formats
 
 **SYLK**, **DIF** and **BIFF**, read and written, chosen by extension. Staging
-goes through `sh_stgseg`. All three carry decimals.
+goes through `sh_stgseg`. All three carry decimals; **SYLK also carries
+formulas**, and is currently the only format that does.
+
+#### 81.7.1 SYLK's `;E` field, and R1C1
+
+A `C` record carries the cached value in `;K` and the *expression* in `;E`,
+written before it. Without `;E` a save flattens every formula to its last
+computed value — the file reloads showing the right numbers and is dead, which
+is the quiet kind of wrong: nothing recalculates because there is no formula
+left to recalculate.
+
+**SYLK expressions are in R1C1 relative form**, not the A1 form Sheet stores
+and shows. That is what the format is; a real file of the period reads
+
+```
+C;X3;E+R[-6]C[-1]-RC[-1];K100.73
+```
+
+where `R[-6]C[-1]` is "six rows up, one column left" of the cell being defined,
+and a bracket-free `R6C3` is an outright row 6, column 3. That bracket
+distinction is exactly what `$` means in A1 form, so absolute and relative
+survive the trip in both directions: `=$A$1+5` is written `;ER1C1+5`.
+
+`sh_formula_to_r1c1` and `sh_formula_from_r1c1` do the conversion, both built
+on the same scanner shape as the reference rewriters (§81.3.1) — walk the text,
+copy everything that is not a reference verbatim, transform the references,
+pass quoted strings through untouched.
+
+**The cross-sheet prefix is an extension.** SYLK is a single-grid format and
+has no notion of a second sheet, so `Sheet2!` is written through verbatim. It
+round-trips within this app and means nothing to anything else. The alternative
+was silently dropping the reference, which is worse.
 
 **BIFF is written as BIFF3**, not BIFF4, and that is the deliberate choice: a
 reader is backward compatible and not forward compatible, so Excel 4 and
