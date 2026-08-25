@@ -2188,6 +2188,21 @@ $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/sheet.bin -o $@
 
+# FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
+# Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
+# disk has no room to spare. Built here so it cannot rot: a change to
+# os88fp.inc that breaks the test app breaks the build. Run it by hand with
+#   python3 tools/os88disk.py -o build/fptest.img --size 1440 build/fptest.o88
+#   make test TESTAPPS=build/fptest.img
+# and read the window: every row is one case against a host-computed IEEE-754
+# expectation, and the header says ALL PASS or FAILURES.
+$(BUILD)/fptest.bin: apps/fptest/fptest.asm apps/fptest/fpcases.inc apps/os88fp.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/fptest/ -o $@ apps/fptest/fptest.asm
+	@echo "fptest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fptest.bin -o $@
+
 # Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
 # rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).
 $(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc | $(BUILD)
