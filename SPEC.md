@@ -67029,16 +67029,38 @@ has to already exist. This is the same split that keeps `apps/os88api.inc`
 code-free on purpose: the constants are the half that must be declarable early,
 and a shared include whose code must come last cannot also supply them.
 
-### 82.4 Scope
+### 82.4 The gallery
 
-One chart type today — a column/bar chart of a single series. Excel 2.1d's
-gallery is seven (Area, Bar, Column, Line, Pie, Scatter, Combination) with
-`Preferred`/`Set Preferred`, and the remainder is planned work rather than
-declined work. The prerequisite for all of the labelled elements — axis scale
-and tick labels, category labels, titles, a legend — is **text into the 4bpp
-buffer**, which does not exist yet; `apps/paint`'s glyph-stamping into its own
-private canvas is the model, since it is buffer-targeted rather than
-screen-targeted and maps onto `ch_fillrect` almost directly.
+Four of Excel 2.1d's seven types, selected by `ch_type` and dispatched by
+`ch_draw`: **Column** (`ch_bars_draw`, the original), **Bar**, **Line** and
+**Area**. Excel's naming is followed rather than the intuitive one — *Bar* is
+the **horizontal** chart and *Column* the vertical.
+
+`ch_prep` is the setup they share: clear the canvas, find the largest `abs()`
+value, and record in `ch_neg` whether anything was negative. `ch_neg` is its
+own word because the axis is now type-dependent — a column chart wants a
+horizontal axis, a bar chart a vertical one — so "was anything negative" has to
+outlive that choice, which it did not when `ch_base` carried both.
+
+Line and Area share their interpolation: `ch_seg_draw` steps x by one and
+interpolates y, which is simpler than Bresenham here because points are laid
+out left to right so the x span is never negative — and it is exactly what Area
+needs anyway, since Area is the same walk with each column filled down to the
+axis rather than plotted as a single pixel. The fill and the outline are
+therefore the same arithmetic and cannot disagree.
+
+**Scatter and Combination need two series**, which is a data-model problem
+rather than a drawing one: something has to hand this file more than one
+column. **Pie** needs a filled-wedge primitive that does not exist yet — there
+are no trig tables anywhere in the tree, so it wants either a small packed sine
+table or the scanline approach `apps/paint`'s `pt_oval` takes with its own
+integer square root.
+
+The prerequisite for every labelled element — axis scale and tick labels,
+category labels, titles, a legend — is **text into the 4bpp buffer**, which
+also does not exist yet; `apps/paint`'s glyph-stamping into its own private
+canvas is the model, since it is buffer-targeted rather than screen-targeted
+and maps onto `ch_fillrect` almost directly.
 
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 

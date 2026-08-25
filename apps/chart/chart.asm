@@ -42,6 +42,10 @@ CH_HDRSZ   equ 118                  ; 54-byte BMP header + 64-byte palette
 CH_PXOFF   equ CH_HDRSZ             ; pixel data starts right after
 CH_MAXBARS equ 40                   ; CH_W / (4px bar + 2px gap), no partial
                                      ; column at the edge
+CH_T_COLUMN equ 0                   ; stage 3.0f: the gallery. Excel calls the
+CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
+CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
+CH_T_AREA   equ 3                   ; rather than the intuitive-but-wrong one
 CH_BARW    equ 4
 CH_GAP     equ 2
 
@@ -162,7 +166,10 @@ ct_render:
     mov es, [ct_chartseg]
     mov dx, ds
     mov si, ct_vals
-    call ch_bars_draw
+    call ch_draw                        ; stage 3.0f: the type comes from
+                                        ; [ch_type], which the Gallery menu
+                                        ; sets; ch_draw falls back to the
+                                        ; column chart for an unknown one
     pop es
     pop si
     pop dx
@@ -175,6 +182,8 @@ ct_render:
 ; BMP...); SI = the owning window, gfx lock already held (SPEC.md 12.2)
 ; -----------------------------------------------------------------------------
 ct_oncmd:
+    or ah, ah                           ; AH = the menu, AL = the item
+    jnz .gallery
     or al, al
     jnz .export
     push bx
@@ -207,6 +216,26 @@ ct_oncmd:
     mov al, FDLG_SAVE
     call OSAPI_FILE_DLG
     pop di
+    pop si
+    pop bx
+    ret
+; --- Gallery: pick a type and redraw what is already loaded -------------------
+; The item index maps to CH_T_* through this table rather than by arithmetic,
+; because the menu is in Excel's alphabetical order (Area, Bar, Column, Line)
+; and CH_T_* is in the order the drawing code was written.
+.gallery:
+    push bx
+    push si
+    xor bh, bh
+    mov bl, al
+    shl bl, 1
+    mov ax, [ct_gal_map + bx]
+    mov [ch_type], ax
+    cmp word [ct_valcnt], 0
+    je .galout                          ; nothing loaded: the type is still
+    call ct_render                      ; remembered for the next Open
+    call ct_paint
+.galout:
     pop si
     pop bx
     ret
@@ -1015,6 +1044,7 @@ ct_tpl:
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
     OS88_MENUSET ct_menus, ct_name_app, ct_oncmd
         OS88_MENU ct_m_file, ct_i_file, 2
+        OS88_MENU ct_m_gallery, ct_i_gallery, 4
     OS88_MENUSET_END ct_menus
 
 ct_name_app: db 'Chart', 0
@@ -1023,6 +1053,19 @@ ct_i_file:   dw ct_it_open, ct_it_exp
 ct_it_open:  db 'Open...', 0
 ct_it_exp:   db 'Export as BMP...', 0
 
+; Excel 2.1d's Gallery menu is Area/Bar/Column/Line/Pie/Scatter/Combination.
+; These four are the ones a single series of integers can express; Scatter and
+; Combination need two series, and Pie needs a filled-wedge primitive this file
+; does not have yet. THE ORDER MATCHES ct_settype's dispatch, which is the item
+; index - keep them in step.
+ct_m_gallery: db 'Gallery', 0
+ct_i_gallery: dw ct_it_area, ct_it_bar, ct_it_col, ct_it_line
+ct_it_area:   db 'Area', 0
+ct_it_bar:    db 'Bar', 0
+ct_it_col:    db 'Column', 0
+ct_it_line:   db 'Line', 0
+
+ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE
 ct_s_title:    db 'Chart', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
 ct_s_noexp:    db 'No chart to export.', 0
@@ -1045,7 +1088,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 456
+    OS88_BSS 470
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1083,7 +1126,17 @@ ch_bx2      equ ch_by1 + 2
 ch_by2      equ ch_bx2 + 2
 ch_srcseg   equ ch_by2 + 2
 ch_stgseg   equ ch_srcseg + 2
-ct_bss_end  equ ch_stgseg + 2
+ch_neg      equ ch_stgseg + 2     ; stage 3.0f: 1 = some value is
+                                       ; negative. Its own word now: the axis
+                                       ; row is type-dependent, so ch_base
+                                       ; cannot carry this as well.
+ch_type     equ ch_neg + 2       ; CH_T_* - which chart to draw
+ch_lx0      equ ch_type + 2      ; the current segment's endpoints and
+ch_ly0      equ ch_lx0 + 2       ; the column being interpolated -
+ch_lx1      equ ch_ly0 + 2       ; CALLER bss like every other ch_*
+ch_ly1      equ ch_lx1 + 2       ; word, for the same DS reason
+ch_lcx      equ ch_ly1 + 2
+ct_bss_end  equ ch_lcx + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting

@@ -255,6 +255,10 @@ CH_HDRSZ   equ 118                  ; 54-byte BMP header + 64-byte palette
 CH_PXOFF   equ CH_HDRSZ             ; pixel data starts right after
 CH_MAXBARS equ 40                   ; CH_W / (4px bar + 2px gap), no partial
                                      ; column at the right edge
+CH_T_COLUMN equ 0                   ; stage 3.0f: the gallery. Excel calls the
+CH_T_BAR    equ 1                   ; vertical one Column and the horizontal
+CH_T_LINE   equ 2                   ; one Bar, and this follows that naming
+CH_T_AREA   equ 3                   ; rather than the intuitive-but-wrong one
 CH_BARW    equ 4
 CH_GAP     equ 2
 SH_CHARTWIN_W equ 260                ; a little margin around the CH_W x
@@ -404,6 +408,7 @@ sh_entry:
     mov [sh_chartseg], dx
     mov word [sh_chartwin], 0
     mov word [sh_chart_cnt], 0
+    mov word [ch_type], CH_T_COLUMN
     push si
     push di
     push cx
@@ -4273,7 +4278,12 @@ sh_chart_render:
     mov es, [sh_chartseg]
     mov dx, [sh_stgseg]
     xor si, si
-    call ch_bars_draw
+    call ch_draw                        ; stage 3.0f: the gallery. Sheet has no
+                                        ; Gallery menu of its own yet, so
+                                        ; [ch_type] stays CH_T_COLUMN - but
+                                        ; going through the dispatcher now
+                                        ; means the two apps cannot drift into
+                                        ; drawing the same data differently
     pop es
     pop si
     pop dx
@@ -12300,7 +12310,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 1950
+    OS88_BSS 1964
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -12575,10 +12585,20 @@ ch_bx2         equ ch_by1 + 2
 ch_by2         equ ch_bx2 + 2
 ch_srcseg      equ ch_by2 + 2
 ch_stgseg      equ ch_srcseg + 2
+ch_neg         equ ch_stgseg + 2     ; stage 3.0f: 1 = some value is
+                                       ; negative. Its own word now: the axis
+                                       ; row is type-dependent, so ch_base
+                                       ; cannot carry this as well.
+ch_type        equ ch_neg + 2       ; CH_T_* - which chart to draw
+ch_lx0         equ ch_type + 2      ; the current segment's endpoints and
+ch_ly0         equ ch_lx0 + 2       ; the column being interpolated -
+ch_lx1         equ ch_ly0 + 2       ; CALLER bss like every other ch_*
+ch_ly1         equ ch_lx1 + 2       ; word, for the same DS reason
+ch_lcx         equ ch_ly1 + 2
 
 ; sh_rowcol_reidx and friends (stage 2.x) - see the section comment above
 ; sh_rowcol_reidx itself for what each of these holds
-sh_rwsrc          equ ch_stgseg + 2          ; SH_EDITMAX+1: the formula
+sh_rwsrc          equ ch_lcx + 2             ; SH_EDITMAX+1: the formula
                                               ; text copied out for rewriting
 sh_rwdst          equ sh_rwsrc + SH_EDITMAX + 1  ; SH_RW_CAP: the rewritten
                                               ; text being built

@@ -256,15 +256,27 @@ ch_fillrect:
 ; ch_bmp_write's own two words, since the two routines are never active at
 ; once.
 ; -----------------------------------------------------------------------------
-ch_bars_draw:
+; -----------------------------------------------------------------------------
+; ch_prep (stage 3.0f) - the setup every chart type needs, lifted out of
+; ch_bars_draw so the gallery below does not have four copies of it.
+; in:  ES = buffer segment, DX = array segment, SI = array offset, CX = count
+; out: ch_cnt/ch_arr/ch_srcseg/ch_stgseg filled, the pixel area cleared to
+;      white, ch_max = the largest abs() value (never 0), ch_neg = 1 if any
+;      value is negative. ES = the BUFFER on return. CF=1 means there is
+;      nothing to draw and the caller should return immediately.
+;
+; ch_neg is a separate word rather than ch_base doing double duty as it used
+; to: the axis row is type-dependent now - a column chart wants a horizontal
+; axis, a bar chart a vertical one, a pie none at all - so "was anything
+; negative" has to outlive the choice.
+; -----------------------------------------------------------------------------
+ch_prep:
     mov [ch_cnt], cx
     mov [ch_arr], si
     mov [ch_srcseg], dx                 ; the array's own segment
     mov [ch_stgseg], es                 ; the buffer's own segment
 
-    ; clear the pixel area to white (both nibbles = 15) - ES is already the
-    ; buffer here, exactly what this needs
-    mov di, CH_PXOFF
+    mov di, CH_PXOFF                    ; clear the pixel area to white
     mov ax, CH_STRIDE * CH_H
     mov cx, ax
     mov al, 0xFF
@@ -273,13 +285,12 @@ ch_bars_draw:
 
     mov cx, [ch_cnt]
     or cx, cx
-    jz .nodata
+    jz .empty
 
-    ; pass 1: largest abs() value, and whether any value is negative
-    mov si, [ch_arr]
+    mov si, [ch_arr]                    ; largest abs(), and any negative?
     mov es, [ch_srcseg]
     mov word [ch_max], 0
-    mov word [ch_base], 0               ; reused here as "any negative?" flag
+    mov word [ch_neg], 0
     mov dx, cx
 .scan:
     or dx, dx
@@ -287,7 +298,7 @@ ch_bars_draw:
     es lodsw
     or ax, ax
     jns .pos
-    mov word [ch_base], 1
+    mov word [ch_neg], 1
     neg ax
 .pos:
     cmp ax, [ch_max]
@@ -299,18 +310,28 @@ ch_bars_draw:
 .scandone:
     cmp word [ch_max], 0
     jnz .havemax
-    mov word [ch_max], 1                 ; every value was 0: avoid a divide
-                                          ; by zero, draw flat bars at the axis
-.havemax:
-    cmp word [ch_base], 0
+    mov word [ch_max], 1                ; every value was 0: avoid a divide by
+.havemax:                               ; zero and draw flat at the axis
+    mov es, [ch_stgseg]                 ; ES = the buffer, which is what every
+    clc                                 ; drawing routine below assumes
+    ret
+.empty:
+    mov es, [ch_stgseg]
+    stc
+    ret
+
+ch_bars_draw:
+    call ch_prep
+    jc .nodata
+
+    cmp word [ch_neg], 0
     je .axisbottom
     mov word [ch_base], CH_H / 2
     jmp .axisdone
 .axisbottom:
     mov word [ch_base], CH_H - 1
 .axisdone:
-    ; the axis line itself
-    mov es, [ch_stgseg]                  ; back to the buffer for the fillrect
+    ; the axis line itself (ES is already the buffer, from ch_prep)
     mov word [ch_bx1], 0
     mov word [ch_bx2], CH_W - 1
     mov ax, [ch_base]
@@ -374,6 +395,422 @@ ch_bars_draw:
     jmp .bar
 .out:
 .nodata:
+    ret
+
+; =============================================================================
+; The gallery (stage 3.0f) - Excel 2.1d's chart types that a SINGLE SERIES of
+; signed integers can express. Every one of them shares ch_prep's setup, so
+; what differs below is only where the axis goes and what is drawn between the
+; points.
+;
+; Scatter and Combination are absent because they need TWO series, which needs
+; the range selection to hand this file more than one column - not a drawing
+; problem, a data-model one.
+;
+; ch_type selects; ch_draw dispatches. ch_bars_draw stays as its own entry
+; point because Sheet and chart.asm both already call it by that name and a
+; column chart is still the default.
+; =============================================================================
+
+; ch_getval - in: AX = index; out: AX = that value. ES is left as the BUFFER,
+; which is what every drawing routine here assumes; the array's own segment is
+; borrowed and given back inside.
+ch_getval:
+    push bx
+    push si
+    mov si, [ch_arr]
+    shl ax, 1
+    add si, ax
+    mov es, [ch_srcseg]
+    mov ax, [es:si]
+    mov es, [ch_stgseg]
+    pop si
+    pop bx
+    ret
+
+; ch_xfor - in: AX = index; out: AX = the x pixel for it. Points are spread
+; across the full width, so two points sit at the extreme ends and a single
+; point sits in the middle rather than hard against the left edge.
+ch_xfor:
+    push bx
+    push dx
+    mov bx, [ch_cnt]
+    dec bx
+    or bx, bx
+    jz .single
+    mov dx, CH_W - 1
+    mul dx
+    div bx
+    jmp .out
+.single:
+    mov ax, (CH_W - 1) / 2
+.out:
+    pop dx
+    pop bx
+    ret
+
+; ch_yfor - in: AX = a signed value; out: AX = its y row, measured from
+; ch_base exactly the way ch_bars_draw measures a bar's length.
+ch_yfor:
+    push bx
+    push cx
+    push dx
+    xor cx, cx                          ; cx = 1 if the value was negative
+    mov bx, ax
+    or bx, bx
+    jns .pos
+    mov cx, 1
+    neg bx
+.pos:
+    mov ax, bx
+    mul word [ch_base]
+    div word [ch_max]                   ; ax = the offset from the axis
+    mov bx, [ch_base]
+    or cx, cx
+    jnz .below
+    sub bx, ax
+    jmp .out
+.below:
+    add bx, ax
+    cmp bx, CH_H - 1
+    jbe .out
+    mov bx, CH_H - 1
+.out:
+    mov ax, bx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; ch_vline - a one-pixel column from y=BX to y=CX at x=AX, in colour DL.
+; Ordering is fixed here so callers need not sort their endpoints.
+ch_vline:
+    push ax
+    push bx
+    push cx
+    cmp bx, cx
+    jbe .ordered
+    xchg bx, cx
+.ordered:
+    mov [ch_bx1], ax
+    mov [ch_bx2], ax
+    mov [ch_by1], bx
+    mov [ch_by2], cx
+    call ch_fillrect
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ch_axis_h - the horizontal zero axis, and ch_base set for it.
+ch_axis_h:
+    cmp word [ch_neg], 0
+    je .bottom
+    mov word [ch_base], CH_H / 2
+    jmp .draw
+.bottom:
+    mov word [ch_base], CH_H - 1
+.draw:
+    mov word [ch_bx1], 0
+    mov word [ch_bx2], CH_W - 1
+    mov ax, [ch_base]
+    mov [ch_by1], ax
+    mov [ch_by2], ax
+    mov dl, 0
+    call ch_fillrect
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_line_draw - CH_T_LINE. A polyline through the points, plus a tick at each
+; one so a single-point series still shows something.
+; -----------------------------------------------------------------------------
+ch_line_draw:
+    call ch_prep
+    jc .out
+    call ch_axis_h
+    mov word [ch_idx], 0
+.seg:
+    mov ax, [ch_idx]
+    inc ax
+    cmp ax, [ch_cnt]
+    jae .points
+    mov ax, [ch_idx]                    ; this point
+    call ch_xfor
+    mov [ch_lx0], ax
+    mov ax, [ch_idx]
+    call ch_getval
+    call ch_yfor
+    mov [ch_ly0], ax
+    mov ax, [ch_idx]                    ; the next one
+    inc ax
+    call ch_xfor
+    mov [ch_lx1], ax
+    mov ax, [ch_idx]
+    inc ax
+    call ch_getval
+    call ch_yfor
+    mov [ch_ly1], ax
+    call ch_seg_draw
+    inc word [ch_idx]
+    jmp .seg
+.points:
+    mov word [ch_idx], 0
+.pt:
+    mov ax, [ch_idx]
+    cmp ax, [ch_cnt]
+    jae .out
+    call ch_xfor
+    mov bx, ax
+    mov ax, [ch_idx]
+    call ch_getval
+    call ch_yfor
+    mov cx, ax                          ; cx = y
+    mov [ch_bx1], bx
+    mov [ch_bx2], bx
+    mov [ch_by1], cx
+    mov [ch_by2], cx
+    mov dl, 0
+    call ch_fillrect
+    inc word [ch_idx]
+    jmp .pt
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_seg_draw - one line segment, ch_lx0/ch_ly0 to ch_lx1/ch_ly1, in black.
+;
+; NOT Bresenham: the x span is always non-negative and non-zero here (points
+; are laid out left to right), so stepping x by one and interpolating y is
+; both simpler and exactly what the area chart below needs as well. One
+; division per column, which at 240 columns is nothing.
+; -----------------------------------------------------------------------------
+ch_seg_draw:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [ch_lx0]
+    mov [ch_lcx], ax
+.col:
+    mov ax, [ch_lcx]
+    cmp ax, [ch_lx1]
+    ja .out
+    call ch_interp_y                    ; ax = the interpolated y
+    mov bx, ax
+    mov cx, ax
+    mov ax, [ch_lcx]
+    mov dl, 0
+    call ch_vline                       ; a single pixel; a segment steeper
+                                        ; than 1:1 would show gaps, which
+                                        ; ch_area_draw's fill hides and a
+                                        ; plain line accepts
+    inc word [ch_lcx]
+    jmp .col
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ch_interp_y - out: AX = y at x = [ch_lcx], linear between the two endpoints.
+ch_interp_y:
+    push bx
+    push cx
+    push dx
+    mov ax, [ch_lx1]
+    sub ax, [ch_lx0]
+    mov cx, ax                          ; cx = the x span
+    or cx, cx
+    jz .flat
+    mov ax, [ch_lcx]
+    sub ax, [ch_lx0]                    ; ax = how far along
+    mov bx, [ch_ly1]
+    sub bx, [ch_ly0]                    ; bx = the y delta, SIGNED
+    jns .up
+    neg bx
+    mul bx
+    div cx
+    mov bx, [ch_ly0]
+    sub bx, ax
+    jmp .done
+.up:
+    mul bx
+    div cx
+    mov bx, [ch_ly0]
+    add bx, ax
+.done:
+    mov ax, bx
+    jmp .out
+.flat:
+    mov ax, [ch_ly0]
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_area_draw - CH_T_AREA. The line chart, filled down to the axis: each
+; column is a vertical run from the interpolated y to ch_base, so the fill and
+; the outline are the same arithmetic and cannot disagree.
+; -----------------------------------------------------------------------------
+ch_area_draw:
+    call ch_prep
+    jc .out
+    call ch_axis_h
+    mov word [ch_idx], 0
+.seg:
+    mov ax, [ch_idx]
+    inc ax
+    cmp ax, [ch_cnt]
+    jae .single
+    mov ax, [ch_idx]
+    call ch_xfor
+    mov [ch_lx0], ax
+    mov ax, [ch_idx]
+    call ch_getval
+    call ch_yfor
+    mov [ch_ly0], ax
+    mov ax, [ch_idx]
+    inc ax
+    call ch_xfor
+    mov [ch_lx1], ax
+    mov ax, [ch_idx]
+    inc ax
+    call ch_getval
+    call ch_yfor
+    mov [ch_ly1], ax
+    mov ax, [ch_lx0]
+    mov [ch_lcx], ax
+.col:
+    mov ax, [ch_lcx]
+    cmp ax, [ch_lx1]
+    ja .segdone
+    call ch_interp_y
+    mov bx, ax
+    mov cx, [ch_base]
+    mov ax, [ch_lcx]
+    mov dl, 0
+    call ch_vline
+    inc word [ch_lcx]
+    jmp .col
+.segdone:
+    inc word [ch_idx]
+    jmp .seg
+.single:
+    cmp word [ch_cnt], 1                ; one point has no segment at all, so
+    jne .out                            ; draw its column directly
+    xor ax, ax
+    call ch_getval
+    call ch_yfor
+    mov bx, ax
+    mov cx, [ch_base]
+    mov ax, (CH_W - 1) / 2
+    mov dl, 0
+    call ch_vline
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_hbar_draw - CH_T_BAR. Excel's "Bar" is the horizontal one; the vertical
+; one it calls "Column". A transpose of ch_bars_draw: the axis is a COLUMN and
+; each value runs left to right from it.
+; -----------------------------------------------------------------------------
+ch_hbar_draw:
+    call ch_prep
+    jc .out
+    cmp word [ch_neg], 0                ; the axis is vertical here, so ch_base
+    je .axisleft                        ; is an x, not a y
+    mov word [ch_base], CH_W / 2
+    jmp .axisdraw
+.axisleft:
+    mov word [ch_base], 0
+.axisdraw:
+    mov ax, [ch_base]
+    mov [ch_bx1], ax
+    mov [ch_bx2], ax
+    mov word [ch_by1], 0
+    mov word [ch_by2], CH_H - 1
+    mov dl, 0
+    call ch_fillrect
+    mov word [ch_idx], 0
+.bar:
+    mov ax, [ch_idx]
+    cmp ax, [ch_cnt]
+    jae .out
+    call ch_getval                      ; ax = the value
+    xor di, di
+    mov bx, ax
+    or bx, bx
+    jns .pos
+    mov di, 1
+    neg bx
+.pos:
+    mov ax, bx                          ; length, against the WIDTH this time
+    mov bx, CH_W - 1
+    cmp word [ch_neg], 0
+    je .havespan
+    mov bx, CH_W / 2
+.havespan:
+    mul bx
+    div word [ch_max]
+    mov bx, ax                          ; bx = bar length in pixels
+    mov ax, [ch_idx]                    ; its row band
+    mov cx, CH_BARW + CH_GAP
+    mul cx
+    mov [ch_by1], ax
+    add ax, CH_BARW - 1
+    mov [ch_by2], ax
+    or di, di
+    jnz .neg
+    mov ax, [ch_base]
+    mov [ch_bx1], ax
+    add ax, bx
+    cmp ax, CH_W - 1
+    jbe .setx2
+    mov ax, CH_W - 1
+.setx2:
+    mov [ch_bx2], ax
+    jmp .rect
+.neg:
+    mov ax, [ch_base]
+    mov [ch_bx2], ax
+    mov ax, [ch_base]
+    sub ax, bx
+    jns .setx1
+    xor ax, ax
+.setx1:
+    mov [ch_bx1], ax
+.rect:
+    mov dl, 0
+    call ch_fillrect
+    inc word [ch_idx]
+    jmp .bar
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_draw - in: the same arguments ch_bars_draw takes, plus [ch_type].
+; An unknown type falls back to the column chart rather than drawing nothing.
+; -----------------------------------------------------------------------------
+ch_draw:
+    cmp word [ch_type], CH_T_BAR
+    je .bar
+    cmp word [ch_type], CH_T_LINE
+    je .line
+    cmp word [ch_type], CH_T_AREA
+    je .area
+    call ch_bars_draw
+    ret
+.bar:
+    call ch_hbar_draw
+    ret
+.line:
+    call ch_line_draw
+    ret
+.area:
+    call ch_area_draw
     ret
 
 ; -----------------------------------------------------------------------------
