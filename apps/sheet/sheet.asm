@@ -2363,7 +2363,13 @@ sh_drawbar:
     call OSAPI_GFX_VLINE
 
     ; --- reference text, into sh_tbuf ---
+    ; Formula > Reference switches this between A1 and R1C1, which is the only
+    ; place in the app that had an answer to show: the A1<->R1C1 converters
+    ; already existed for SYLK's own ;E field (81.7.1), and this is what makes
+    ; the setting visible rather than a file-format detail.
     mov di, sh_tbuf
+    cmp byte [sh_a1style], 0
+    jne .refrc
     mov ax, [sh_selcol]
     call sh_colname
     mov si, sh_colbuf
@@ -2373,6 +2379,23 @@ sh_drawbar:
     call sh_itoa
     mov si, sh_numbuf
     call sh_strcpy_to_di
+    jmp .refdone
+.refrc:
+    mov byte [di], 'R'
+    inc di
+    mov ax, [sh_selrow]
+    inc ax
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_strcpy_to_di
+    mov byte [di], 'C'
+    inc di
+    mov ax, [sh_selcol]
+    inc ax
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_strcpy_to_di
+.refdone:
     mov cx, [sh_ox]
     add cx, 4
     mov dx, [sh_goy]
@@ -3688,11 +3711,47 @@ sh_mfire:
     jmp .out
 .formula:
     or al, al
-    jnz .fgoto
+    jnz .fm1
+    mov al, SH_LD_NAME
+    call sh_ldlg_open
+    jmp .out
+.fm1:
+    cmp al, 1
+    jne .fm2
+    mov al, SH_LD_FUNC
+    call sh_ldlg_open
+    jmp .out
+.fm2:
+    cmp al, 2
+    jne .fm3
+    xor byte [sh_a1style], 1          ; Reference: the item relabels itself,
+    mov word [sh_i_formula+4], sh_it_ref_a1
+    cmp byte [sh_a1style], 0
+    je .fmref
+    mov word [sh_i_formula+4], sh_it_ref_rc
+.fmref:
+    mov si, [sh_ownwin]
+    call sh_repaint
+    jmp .out
+.fm3:
+    cmp al, 3
+    jne .fm4
+    mov al, SH_ID_DEFN
+    call sh_idlg_open
+    jmp .out
+.fm4:
+    cmp al, 4
+    jne .fm5
     call sh_ndlg_open
     jmp .out
-.fgoto:
+.fm5:
+    cmp al, 5
+    jne .fm6
     mov al, SH_ID_GOTO
+    call sh_idlg_open
+    jmp .out
+.fm6:
+    mov al, SH_ID_FIND
     call sh_idlg_open
     jmp .out
 .file:
@@ -6001,7 +6060,9 @@ sh_bdlg_close:
 SH_ID_GOTO   equ 0                   ; Formula > Goto...
 SH_ID_ROWH   equ 1                   ; Format > Row Height...
 SH_ID_COLW   equ 2                   ; Format > Column Width...
-SH_ID_NKIND  equ 3
+SH_ID_DEFN   equ 3                   ; Formula > Define Name...
+SH_ID_FIND   equ 4                   ; Formula > Find...
+SH_ID_NKIND  equ 5
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -6025,14 +6086,21 @@ sh_idlg_tpl:
 ; into the template itself - putting it in a cell and pointing the template at
 ; that cell makes the kernel letter the pointer's own two bytes and then run on
 ; into whatever follows, which is exactly what it did.
-sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw
-sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw
+sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
+sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
 sh_s_id_tgoto: db 'Goto', 0
 sh_s_id_trowh: db 'Row Height', 0
 sh_s_id_tcolw: db 'Column Width', 0
+sh_s_id_tdefn: db 'Define Name', 0
+sh_s_id_tfind: db 'Find', 0
 sh_s_id_pgoto: db 'Reference:', 0
 sh_s_id_prowh: db 'Row height:', 0
 sh_s_id_pcolw: db 'Column width:', 0
+sh_s_id_pdefn: db 'Name:', 0
+sh_s_id_pfind: db 'Find what:', 0
+sh_s_id_nofit: db 'Name table full.', 0
+sh_s_id_named: db 'Name defined.', 0
+sh_s_id_nofnd: db 'Not found.', 0
 sh_s_idlg_ok:  db 'OK', 0
 sh_s_idlg_can: db 'Cancel', 0
 
@@ -6060,8 +6128,10 @@ sh_idlg_open:
     mov ax, [sh_id_titles + bx]
     mov [sh_idlg_tpl + WT_TITLE], ax
     mov byte [sh_idlg_buf], 0
-    cmp byte [sh_idlg_kind], SH_ID_GOTO
-    je .pregoto
+    cmp byte [sh_idlg_kind], SH_ID_DEFN
+    jae .prenone                       ; Define Name and Find open EMPTY: there
+    cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
+    je .pregoto                        ; prefilling one would be a wrong guess
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .prerowh
     mov ax, [sh_cellch]                ; characters, matching what OK reads
@@ -6085,6 +6155,7 @@ sh_idlg_open:
     call sh_itoa
     mov si, sh_numbuf
     call sh_strcpy_to_di
+.prenone:
 .haveinit:
     mov si, sh_idlg_line
     mov word [si + LN_BUF], sh_idlg_buf
@@ -6287,6 +6358,10 @@ sh_idlg_apply:
     push cx
     push dx
     push si
+    cmp byte [sh_idlg_kind], SH_ID_DEFN
+    je .defname
+    cmp byte [sh_idlg_kind], SH_ID_FIND
+    je .find
     cmp byte [sh_idlg_kind], SH_ID_GOTO
     je .goto
     mov si, sh_idlg_buf                ; the two numeric kinds
@@ -6324,6 +6399,18 @@ sh_idlg_apply:
     mov si, [sh_ownwin]                ; sh_select's own contract: SI must be
     call sh_select                     ; the window and it leaves it alone so
     call sh_scrollto                   ; sh_repaint below still has it
+.defname:
+    mov si, sh_idlg_buf                ; the name binds THE SELECTION, which is
+    mov ax, [sh_selcol]                ; where it was when the dialog opened -
+    mov bx, [sh_selrow]                ; nothing can move it while a modal
+    call sh_name_def                   ; dialog owns the input
+    mov word [sh_msg], sh_s_id_named
+    jnc .redraw
+    mov word [sh_msg], sh_s_id_nofit
+    jmp .redraw
+.find:
+    call sh_docmd_find
+    jmp .redraw
 .redraw:
     call sh_geom                       ; the cell size may have changed, so the
     mov si, [sh_ownwin]                ; visible row/column counts must be
@@ -6346,6 +6433,936 @@ sh_idlg_close:
     or bx, bx
     jz .out
     mov word [sh_idlg_win], 0
+    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_find - Formula > Find...: move the selection to the next cell whose
+; DISPLAYED TEXT contains what was typed.
+;
+; Displayed text, not stored value, and that is the useful definition rather
+; than the easy one: it finds 3.5 in a cell holding 3.5, "Total" in a label,
+; and - because a formula cell displays its result - 1003.5 in a cell holding
+; =A2+A3. A search over stored bytes would have matched none of those the way
+; a user expects, since a double's eight bytes look nothing like what is on
+; screen.
+;
+; Case-insensitive, and it wraps: the walk starts at the cell AFTER the
+; selection and comes back round to it, so Find repeated from the same box
+; steps through every match rather than sticking on the first.
+; -----------------------------------------------------------------------------
+sh_docmd_find:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov si, sh_idlg_buf
+    call sh_upcase_at
+    cmp byte [sh_idlg_buf], 0
+    je .none
+    ; the scan order is the CELL ARRAY's, which is sorted by row then column -
+    ; so "next" here means next in reading order, which is what it looks like
+    mov cx, [sh_ncells]
+    or cx, cx                         ; not jcxz: it is short-only and .none
+    jz .none                          ; is past its reach from here
+    xor bx, bx                        ; bx = index into the array
+.each:
+    push cx
+    mov ax, bx
+    mov cx, SH_C_SZ
+    mul cx
+    mov si, ax
+    pop cx
+    mov es, [sh_cellseg]
+    mov ax, [es:si]
+    push bx
+    call sh_unpackrow                 ; ax = row, bx = sheet
+    mov dx, bx
+    pop bx
+    cmp dx, [sh_cursheet]
+    jne .next
+    mov [sh_find_row], ax
+    mov ax, [es:si+2]
+    mov [sh_find_col], ax
+    ; skip everything at or before the current selection on this pass
+    mov ax, [sh_find_row]
+    cmp ax, [sh_selrow]
+    jb .next
+    ja .test
+    mov ax, [sh_find_col]
+    cmp ax, [sh_selcol]
+    jbe .next
+.test:
+    call sh_find_text                 ; builds the cell's displayed text
+    call sh_find_match
+    jc .found
+.next:
+    inc bx
+    cmp bx, cx
+    jb .each
+    ; nothing after the selection: go round again from the top, so a repeated
+    ; Find wraps rather than stopping
+    xor bx, bx
+.each2:
+    push cx
+    mov ax, bx
+    mov cx, SH_C_SZ
+    mul cx
+    mov si, ax
+    pop cx
+    mov es, [sh_cellseg]
+    mov ax, [es:si]
+    push bx
+    call sh_unpackrow
+    mov dx, bx
+    pop bx
+    cmp dx, [sh_cursheet]
+    jne .next2
+    mov [sh_find_row], ax
+    mov ax, [es:si+2]
+    mov [sh_find_col], ax
+    call sh_find_text
+    call sh_find_match
+    jc .found
+.next2:
+    inc bx
+    cmp bx, cx
+    jb .each2
+.none:
+    mov word [sh_msg], sh_s_id_nofnd
+    jmp .out
+.found:
+    mov ax, [sh_find_col]
+    mov bx, [sh_find_row]
+    mov si, [sh_ownwin]
+    call sh_select
+    call sh_scrollto
+    mov word [sh_msg], 0
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_find_text - the cell at (sh_find_col, sh_find_row) as UPPERCASE text in
+; sh_find_buf. Goes through sh_getcell2 so a formula cell yields its RESULT,
+; which is what the grid shows and therefore what a search should match.
+sh_find_text:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [sh_find_buf], 0
+    mov ax, [sh_find_col]
+    mov bx, [sh_find_row]
+    call sh_getcell2
+    jnc .out
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .istext
+    call sh_acc_load_a                ; a number: the same ten significant
+    mov di, sh_find_buf               ; digits the cell itself shows
+    mov ax, 10
+    call fp_ftoa
+    jmp .up
+.istext:
+    push es
+    mov es, [sh_txtseg]
+    mov si, [sh_curtoff]
+    mov di, sh_find_buf
+    mov cx, SH_EDITMAX
+.tc:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .tcd
+    inc si
+    inc di
+    dec cx
+    jnz .tc
+    mov byte [di], 0
+.tcd:
+    pop es
+.up:
+    mov si, sh_find_buf
+    call sh_upcase_at
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_find_match - CF=1 if sh_idlg_buf occurs anywhere in sh_find_buf
+sh_find_match:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, sh_find_buf
+.at:
+    cmp byte [si], 0
+    je .no
+    mov bx, si
+    mov di, sh_idlg_buf
+.cmp:
+    mov al, [di]
+    or al, al
+    jz .yes
+    cmp al, [bx]
+    jne .adv
+    inc bx
+    inc di
+    jmp .cmp
+.adv:
+    inc si
+    jmp .at
+.no:
+    ; an empty needle would have matched at the first character above, so
+    ; reaching here means it really is absent
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.yes:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; =============================================================================
+; DEFINED NAMES (stage 3.0c) - Formula > Define Name... binds a name to the
+; cell the selection is on, and a formula may then use that name anywhere a
+; reference would go.
+;
+; A FIXED TABLE IN BSS rather than a claim: SH_NAME_CAP names at SH_NAME_REC
+; bytes is under 400, which is small enough that a whole segment claim for it
+; would be the wrong shape - and unlike the cell array it never grows during
+; a repaint, so nothing here needs the shuffling that made the cells' claim
+; worth having.
+;
+; Each record is a name, uppercased on entry, then its column and row. Names
+; are compared uppercase because sh_pident already uppercases what it reads,
+; and a spreadsheet where Total and TOTAL are different cells would be a trap
+; rather than a feature.
+;
+; SCOPE, stated rather than discovered: a name binds ONE CELL, not a range,
+; and it belongs to the whole instance rather than to a sheet. A range needs
+; the reference-typed argument the value model still does not have (the same
+; thing blocking VLOOKUP and the array functions), and per-sheet names need a
+; sheet field here plus a rule for what an unqualified name means from another
+; sheet - both are Stage 4.5 work and both would be worse guessed at.
+; =============================================================================
+SH_NAME_CAP  equ 16
+SH_NAME_MAX  equ 12                  ; characters, not counting the NUL
+SH_NAME_REC  equ SH_NAME_MAX + 1 + 4 ; text + NUL + col + row
+
+; -----------------------------------------------------------------------------
+; sh_name_find - in: SI = an uppercase NUL name
+; out: CF=1 and BX = its record offset in sh_names; CF=0 = no such name
+; -----------------------------------------------------------------------------
+sh_name_find:
+    push ax
+    push cx
+    push si
+    push di
+    xor bx, bx
+    mov cx, [sh_nnames]
+    jcxz .no
+.each:
+    push cx
+    push si
+    mov di, sh_names
+    add di, bx
+.cmp:
+    mov al, [si]
+    cmp al, [di]
+    jne .next
+    or al, al
+    jz .hit
+    inc si
+    inc di
+    jmp .cmp
+.next:
+    pop si
+    pop cx
+    add bx, SH_NAME_REC
+    loop .each
+.no:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    clc
+    ret
+.hit:
+    pop si
+    pop cx
+    pop di
+    pop si
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_name_def - in: SI = a NUL name (uppercased here), AX = col, BX = row.
+; out: CF=1 the table is full. Redefining an existing name REBINDS it, which
+; is what Excel does and what makes the dialog usable twice.
+; -----------------------------------------------------------------------------
+sh_name_def:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov [sh_nm_col], ax
+    mov [sh_nm_row], bx
+    push si
+    call sh_upcase_at
+    mov di, sh_nm_buf                 ; clipped to SH_NAME_MAX, so a long name
+    mov cx, SH_NAME_MAX               ; cannot run past its record
+.copy:
+    mov al, [si]
+    or al, al
+    jz .copied
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .copy
+.copied:
+    mov byte [di], 0
+    pop si
+    cmp byte [sh_nm_buf], 0
+    je .full                          ; an empty name is not a name
+    mov si, sh_nm_buf
+    call sh_name_find
+    jc .bind
+    mov ax, [sh_nnames]
+    cmp ax, SH_NAME_CAP
+    jae .full
+    mov cx, SH_NAME_REC
+    mul cx
+    mov bx, ax
+    inc word [sh_nnames]
+.bind:
+    mov di, sh_names
+    add di, bx
+    mov si, sh_nm_buf
+.wr:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .wr
+    mov di, sh_names
+    add di, bx
+    add di, SH_NAME_MAX + 1
+    mov ax, [sh_nm_col]
+    mov [di], ax
+    mov ax, [sh_nm_row]
+    mov [di+2], ax
+    clc
+    jmp .out
+.full:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_name_lookup - in: SI = an uppercase NUL name
+; out: CF=1 and AX = col, BX = row; CF=0 = not a defined name
+; -----------------------------------------------------------------------------
+sh_name_lookup:
+    push di
+    call sh_name_find
+    jnc .no
+    mov di, sh_names
+    add di, bx
+    add di, SH_NAME_MAX + 1
+    mov ax, [di]
+    mov bx, [di+2]
+    stc
+    pop di
+    ret
+.no:
+    pop di
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_name_list - build the pointer array sh_ldlg wants. out: CX = count.
+; The pointers are into sh_names itself, which is fine because the list dialog
+; only ever READS them and nothing can redefine a name while it is open.
+; -----------------------------------------------------------------------------
+sh_name_list:
+    push ax
+    push bx
+    push di
+    xor bx, bx
+    xor di, di
+    mov cx, [sh_nnames]
+    jcxz .done
+    push cx
+.each:
+    mov ax, sh_names
+    add ax, bx
+    mov [sh_nameptr + di], ax
+    add di, 2
+    add bx, SH_NAME_REC
+    loop .each
+    pop cx
+.done:
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; The SCROLLING LIST dialog (stage 3.0c) - a framed list with a real scroll
+; bar, OK and Cancel. Formula > Paste Function... and Formula > Paste Name...
+; are both "pick one of a list too long to show at once", which is the one
+; shape sh_fdlg_* cannot take: its radio rows are a fixed short array chosen
+; by kind, and 25 function names is neither fixed nor short.
+;
+; The item source is a POINTER ARRAY plus a count, filled at open time, so the
+; two kinds differ only in where that array comes from - sh_functab as it
+; stands for the functions, and the name table built at run time for the names.
+; That is also what makes a third kind free later.
+;
+; The bar is os88ui.inc's (SPEC.md 13.10), already opted into by this file for
+; the grid's own two, so the dialog gets arrow cells, page regions and a
+; proportional thumb without a line of its own.
+; =============================================================================
+SH_LD_FUNC   equ 0                   ; Formula > Paste Function...
+SH_LD_NAME   equ 1                   ; Formula > Paste Name...
+SH_LD_NKIND  equ 2
+
+SH_LDLG_W    equ 222
+SH_LDLG_LX1  equ 8                   ; the list box, content-relative
+SH_LDLG_LY1  equ 22
+SH_LDLG_LX2  equ 130
+SH_LDLG_ROWH equ 12
+SH_LDLG_ROWS equ 8                   ; visible at once
+SH_LDLG_LY2  equ SH_LDLG_LY1 + SH_LDLG_ROWS * SH_LDLG_ROWH + 2
+SH_LDLG_SBW  equ 14                  ; the bar sits just right of the list
+SH_LDLG_BTX1 equ 152                 ; clear of the bar, which ends at
+SH_LDLG_BTX2 equ 212                 ; SH_LDLG_LX2 + 2 + SH_LDLG_SBW
+SH_LDLG_OKY1 equ 22
+SH_LDLG_OKY2 equ 42
+SH_LDLG_CAY1 equ 50
+SH_LDLG_CAY2 equ 70
+SH_LDLG_H    equ SH_LDLG_LY2 + SH_DLG_BMARG + TITLE_H + 1
+
+sh_ldlg_tpl:
+    dw 0, 0, SH_LDLG_W, SH_LDLG_H
+    dw sh_s_ld_tfunc, sh_ldlg_paint, 0, sh_ldlg_onclick
+sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname
+sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname
+sh_s_ld_tfunc: db 'Paste Function', 0
+sh_s_ld_tname: db 'Paste Name', 0
+sh_s_ld_pfunc: db 'Paste function:', 0
+sh_s_ld_pname: db 'Paste name:', 0
+sh_s_ld_none:  db '(none defined)', 0
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_open - in: AL = SH_LD_*
+; -----------------------------------------------------------------------------
+sh_ldlg_open:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp word [sh_ldlg_win], 0
+    jne .out
+    cmp al, SH_LD_NKIND
+    jae .out
+    mov [sh_ldlg_kind], al
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    mov ax, [sh_ld_titles + bx]
+    mov [sh_ldlg_tpl + WT_TITLE], ax
+    mov word [sh_ldlg_sel], 0
+    mov word [sh_ldlg_top], 0
+    cmp byte [sh_ldlg_kind], SH_LD_NAME
+    je .names
+    mov word [sh_ldlg_items], sh_functab   ; the function table IS the list -
+    xor cx, cx                             ; it is already a NUL-terminated
+    mov si, sh_functab                     ; pointer array, which is what this
+.fcount:                                   ; dialog wants
+    cmp word [si], 0
+    je .fdone
+    inc cx
+    add si, 2
+    jmp .fcount
+.fdone:
+    mov [sh_ldlg_count], cx
+    jmp .have
+.names:
+    call sh_name_list                      ; -> sh_nameptr[] and CX
+    mov word [sh_ldlg_items], sh_nameptr
+    mov [sh_ldlg_count], cx
+.have:
+    call OSAPI_VIDEO                  ; centred the same way every other
+    sub ax, SH_LDLG_W                 ; dialog here is
+    sar ax, 1
+    mov [sh_ldlg_tpl + WT_X], ax
+    sub bx, SH_LDLG_H
+    sar bx, 1
+    cmp bx, MBAR_H + 8
+    jge .placed
+    mov bx, MBAR_H + 8
+.placed:
+    mov [sh_ldlg_tpl + WT_Y], bx
+    mov si, sh_ldlg_tpl
+    call OSAPI_WM_CREATE               ; the window comes back in BX, NOT SI -
+    jc .out                            ; SI is still the template - and it is
+    mov [sh_ldlg_win], bx              ; created HIDDEN, so the show is not
+    call OSAPI_WM_SHOW                 ; optional
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_sbset - fill the scroll block from the live list state. One place,
+; because the painter and the hit-tester must not disagree about the geometry
+; (which is the whole reason os88ui_sbhit derives everything from the block).
+; -----------------------------------------------------------------------------
+sh_ldlg_sbset:
+    push ax
+    mov ax, [sh_ldlg_ox]
+    add ax, SH_LDLG_LX2 + 2
+    mov [sh_ldsb + 0], ax
+    add ax, SH_LDLG_SBW - 1
+    mov [sh_ldsb + 4], ax
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_LY1
+    mov [sh_ldsb + 2], ax
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_LY2
+    mov [sh_ldsb + 6], ax
+    mov ax, [sh_ldlg_count]
+    cmp ax, SH_LDLG_ROWS
+    jae .tot
+    mov ax, SH_LDLG_ROWS
+.tot:
+    mov [sh_ldsb + 8], ax
+    mov word [sh_ldsb + 10], SH_LDLG_ROWS
+    mov ax, [sh_ldlg_top]
+    mov [sh_ldsb + 12], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_paint
+; -----------------------------------------------------------------------------
+sh_ldlg_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call OSAPI_WM_CONTENT
+    mov [sh_ldlg_ox], ax
+    mov [sh_ldlg_oy], dx
+
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [sh_ldlg_ox]
+    mov bx, [sh_ldlg_oy]
+    mov cx, ax
+    add cx, SH_LDLG_W - 3
+    mov dx, bx
+    add dx, SH_LDLG_H - TITLE_H - 3
+    call OSAPI_GFX_FILL
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+
+    mov cx, [sh_ldlg_ox]              ; the prompt
+    add cx, SH_LDLG_LX1
+    mov dx, [sh_ldlg_oy]
+    add dx, 6
+    mov bl, [sh_ldlg_kind]
+    xor bh, bh
+    shl bx, 1
+    mov si, [sh_ld_prompts + bx]
+    call OSAPI_FONT_STR
+
+    mov ax, [sh_ldlg_ox]              ; the list box's own frame
+    add ax, SH_LDLG_LX1
+    mov bx, [sh_ldlg_oy]
+    add bx, SH_LDLG_LY1
+    mov cx, [sh_ldlg_ox]
+    add cx, SH_LDLG_LX2
+    mov dx, [sh_ldlg_oy]
+    add dx, SH_LDLG_LY2
+    call OSAPI_GFX_FRAME
+
+    cmp word [sh_ldlg_count], 0
+    jne .rows
+    mov cx, [sh_ldlg_ox]              ; an empty list says so rather than
+    add cx, SH_LDLG_LX1 + 6           ; showing a blank box
+    mov dx, [sh_ldlg_oy]
+    add dx, SH_LDLG_LY1 + 4
+    mov si, sh_s_ld_none
+    call OSAPI_FONT_STR
+    jmp .buttons
+.rows:
+    mov word [sh_ldlg_i], 0
+.rloop:
+    mov ax, [sh_ldlg_i]
+    cmp ax, SH_LDLG_ROWS
+    jae .rdone
+    add ax, [sh_ldlg_top]
+    cmp ax, [sh_ldlg_count]
+    jae .rdone
+    mov [sh_ldlg_idx], ax
+    mov ax, [sh_ldlg_i]
+    mov cx, SH_LDLG_ROWH
+    mul cx
+    add ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_LY1 + 2
+    mov [sh_ldlg_rowy], ax
+    mov ax, [sh_ldlg_idx]
+    cmp ax, [sh_ldlg_sel]
+    jne .plain
+    mov ax, [sh_ldlg_ox]              ; the selected row is inverted, the same
+    add ax, SH_LDLG_LX1 + 1           ; way the menu's hot item is
+    mov bx, [sh_ldlg_rowy]
+    mov cx, [sh_ldlg_ox]
+    add cx, SH_LDLG_LX2 - 1
+    mov dx, bx
+    add dx, SH_LDLG_ROWH - 1
+    call OSAPI_GFX_FILL
+    clc
+    call OSAPI_GFX_PEN
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    jmp .rtext
+.plain:
+    clc
+    call OSAPI_GFX_PEN
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+.rtext:
+    mov bx, [sh_ldlg_items]
+    mov ax, [sh_ldlg_idx]
+    shl ax, 1
+    add bx, ax
+    mov si, [bx]
+    mov cx, [sh_ldlg_ox]
+    add cx, SH_LDLG_LX1 + 4
+    mov dx, [sh_ldlg_rowy]
+    add dx, 2
+    call OSAPI_FONT_STR
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [sh_ldlg_i]
+    inc ax
+    mov [sh_ldlg_i], ax
+    jmp .rloop
+.rdone:
+    call sh_ldlg_sbset
+    mov bx, sh_ldsb
+    call os88ui_sbar
+.buttons:
+    mov ax, [sh_ldlg_ox]
+    add ax, SH_LDLG_BTX1
+    mov [sh_ldlg_rect+0], ax
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_OKY1
+    mov [sh_ldlg_rect+2], ax
+    mov ax, [sh_ldlg_ox]
+    add ax, SH_LDLG_BTX2
+    mov [sh_ldlg_rect+4], ax
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_OKY2
+    mov [sh_ldlg_rect+6], ax
+    mov bx, sh_ldlg_rect
+    mov si, sh_s_fd_ok
+    mov di, OS88UI_DEF
+    call os88ui_btn
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_CAY1
+    mov [sh_ldlg_rect+2], ax
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_CAY2
+    mov [sh_ldlg_rect+6], ax
+    mov bx, sh_ldlg_rect
+    mov si, sh_s_fd_cancel
+    xor di, di
+    call os88ui_btn
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_onclick - in: CX/DX = absolute click point
+; -----------------------------------------------------------------------------
+sh_ldlg_onclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, [sh_ldlg_win]
+    or bx, bx
+    jz .out
+    push cx
+    push dx
+    call OSAPI_WM_CONTENT
+    mov [sh_ldlg_ox], ax
+    mov [sh_ldlg_oy], dx
+    pop dx
+    pop cx
+
+    call sh_ldlg_sbset                ; the bar first: it owns a strip of its
+    mov ax, cx                        ; own and a click there is never a row
+    mov bx, dx
+    mov cx, ax
+    mov dx, bx
+    mov bx, sh_ldsb
+    call os88ui_sbhit
+    or al, al
+    jz .notbar
+    cmp al, OS88UI_SBUP
+    je .up
+    cmp al, OS88UI_SBDOWN
+    je .down
+    cmp al, OS88UI_SBPGUP
+    je .pgup
+    cmp al, OS88UI_SBPGDN
+    je .pgdn
+    jmp .out
+.up:
+    cmp word [sh_ldlg_top], 0
+    je .out
+    dec word [sh_ldlg_top]
+    jmp .redraw
+.down:
+    call sh_ldlg_maxtop
+    cmp [sh_ldlg_top], ax
+    jae .out
+    inc word [sh_ldlg_top]
+    jmp .redraw
+.pgup:
+    mov ax, [sh_ldlg_top]
+    cmp ax, SH_LDLG_ROWS
+    jae .pgu2
+    xor ax, ax
+    jmp .pgset
+.pgu2:
+    sub ax, SH_LDLG_ROWS
+    jmp .pgset
+.pgdn:
+    mov ax, [sh_ldlg_top]
+    add ax, SH_LDLG_ROWS
+    push ax
+    call sh_ldlg_maxtop
+    mov bx, ax
+    pop ax
+    cmp ax, bx
+    jbe .pgset
+    mov ax, bx
+.pgset:
+    mov [sh_ldlg_top], ax
+    jmp .redraw
+.notbar:
+    mov ax, cx                        ; --- the buttons ---
+    sub ax, [sh_ldlg_ox]
+    mov bx, dx
+    sub bx, [sh_ldlg_oy]
+    cmp ax, SH_LDLG_BTX1
+    jb .list
+    cmp ax, SH_LDLG_BTX2
+    ja .list
+    cmp bx, SH_LDLG_OKY1
+    jb .notok
+    cmp bx, SH_LDLG_OKY2
+    ja .notok
+    call sh_ldlg_apply
+    call sh_ldlg_close
+    jmp .out
+.notok:
+    cmp bx, SH_LDLG_CAY1
+    jb .out
+    cmp bx, SH_LDLG_CAY2
+    ja .out
+    call sh_ldlg_close
+    jmp .out
+.list:
+    cmp ax, SH_LDLG_LX1
+    jb .out
+    cmp ax, SH_LDLG_LX2
+    ja .out
+    sub bx, SH_LDLG_LY1 + 2
+    jb .out
+    mov ax, bx
+    xor dx, dx
+    mov bx, SH_LDLG_ROWH
+    div bx
+    cmp ax, SH_LDLG_ROWS
+    jae .out
+    add ax, [sh_ldlg_top]
+    cmp ax, [sh_ldlg_count]
+    jae .out
+    mov [sh_ldlg_sel], ax
+.redraw:
+    mov si, [sh_ldlg_win]             ; sh_ldlg_paint, NOT sh_repaint: that one
+    call sh_ldlg_paint                ; repaints THE SHEET into whatever window
+                                       ; SI names, so calling it here drew the
+                                       ; grid, the menu bar and the status line
+                                       ; inside this dialog's own rect. Every
+                                       ; other dialog here calls its own
+                                       ; painter for exactly this reason.
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_ldlg_maxtop - AX = the largest legal sh_ldlg_top
+sh_ldlg_maxtop:
+    mov ax, [sh_ldlg_count]
+    cmp ax, SH_LDLG_ROWS
+    ja .some
+    xor ax, ax
+    ret
+.some:
+    sub ax, SH_LDLG_ROWS
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_apply - paste the chosen item into the cell being edited.
+;
+; A FUNCTION arrives with its opening parenthesis, because that is what the
+; user would type next and Excel's own Paste Function does the same; a NAME
+; arrives bare. Both go through sh_editstart/sh_flkey so the field's caret and
+; bounds behave exactly as they do for typing - there is no second path into
+; the edit buffer to keep in step.
+; -----------------------------------------------------------------------------
+sh_ldlg_apply:
+    push ax
+    push bx
+    push si
+    cmp word [sh_ldlg_count], 0
+    je .out
+    mov bx, [sh_ldlg_items]
+    mov ax, [sh_ldlg_sel]
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx]
+    mov [sh_ldlg_src], ax             ; the chosen string, in BSS rather than
+                                       ; in SI - see sh_ldlg_putc
+    cmp byte [sh_editing], 0
+    jne .append
+    call sh_editstart                 ; nothing being edited: start a formula,
+    mov al, '='                       ; since a bare function name is not one
+    call sh_ldlg_putc
+.append:
+    call sh_ldlg_puts
+    cmp byte [sh_ldlg_kind], SH_LD_FUNC
+    jne .done
+    mov al, '('                       ; a function arrives with its opening
+    call sh_ldlg_putc                 ; parenthesis, as Excel's own does
+.done:
+    mov si, [sh_ownwin]
+    call sh_repaint
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_putc - one character into the edit field, in: AL.
+;
+; TWO REGISTER CONTRACTS MEET HERE and they want different things in the same
+; register. os88line_key reads AH as a SCAN CODE, so AH must be cleared or a
+; leftover one makes the field do something else with a perfectly good
+; character. And sh_flkey ENDS by calling sh_repaint, which takes SI as THE
+; WINDOW - so SI must be the sheet's window and not, as it was, the string
+; being copied out. Both are set here, once, instead of at each call site.
+; -----------------------------------------------------------------------------
+sh_ldlg_putc:
+    push ax
+    push si
+    xor ah, ah
+    mov si, [sh_ownwin]
+    call sh_flkey
+    pop si
+    pop ax
+    ret
+
+; sh_ldlg_puts - every character of the string at sh_ldlg_src
+sh_ldlg_puts:
+    push ax
+    push si
+    mov si, [sh_ldlg_src]
+.lp:
+    mov al, [si]
+    or al, al
+    jz .done
+    inc si
+    push si
+    call sh_ldlg_putc
+    pop si
+    jmp .lp
+.done:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ldlg_close
+; -----------------------------------------------------------------------------
+sh_ldlg_close:
+    push ax
+    push bx
+    mov bx, [sh_ldlg_win]
+    or bx, bx
+    jz .out
+    mov word [sh_ldlg_win], 0
     call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
 .out:
     pop bx
@@ -12065,8 +13082,10 @@ sh_pident:
     cmp al, 'z'
     ja .doneletters
 .isletter:
-    cmp cx, 7
-    jae .doneletters                  ; safety cap; no valid token is longer
+    cmp cx, SH_NAME_MAX               ; a DEFINED NAME can be this long, so the
+    jae .doneletters                  ; cap is its length rather than a column
+                                       ; pair's - a function name is shorter
+                                       ; than either
     and al, 0xDF                      ; normalize to uppercase
     mov [di], al
     inc di
@@ -12116,6 +13135,21 @@ sh_pident:
                                       ; which is what both branches here used
                                       ; to arrange by hand
 .isfunc:
+    cmp byte [si], '('                ; stage 3.0c: a DEFINED NAME is an
+    je .reallyfunc                    ; identifier that is not a call. Excel
+    push si                           ; resolves it the same way, and the
+    mov si, sh_ident                  ; parenthesis is the only thing that
+    call sh_name_lookup               ; separates SUM from a cell called SUM
+    pop si
+    jnc .reallyfunc
+    ; AX = col, BX = row: the same shape sh_pcellref hands on, so the name
+    ; reaches the evaluator as an ordinary reference and everything that
+    ; already works for one - the cycle check, the memoization - works for it
+    call sh_getcell2                  ; which leaves the value in sh_acc, and
+    jmp .out                          ; a zero there for a cell that does not
+                                       ; exist yet - exactly as a reference to
+                                       ; an empty cell already behaves
+.reallyfunc:
     call sh_pfunc
 .out:
     pop di
@@ -14285,7 +15319,7 @@ sh_mf_ret:
 sh_mtab:
     dw sh_m_file,    sh_i_file,    5
     dw sh_m_edit,    sh_i_edit,    9
-    dw sh_m_formula, sh_i_formula, 2
+    dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  6
     dw sh_m_data,    sh_i_data,    3
     dw sh_m_options, sh_i_options, 3
@@ -14293,14 +15327,23 @@ sh_mtab:
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
 
-; Excel 2.1d's Formula menu is Paste Name.../Paste Function.../Reference/
-; Define Name.../Note.../Goto.../Find... - only Note... exists yet, and the
-; rest arrive with the features behind them rather than as items that open
-; nothing. A short menu that works beats a faithful one that does not.
+; Excel 2.1d's Formula menu, in its own order: Paste Name.../Paste Function.../
+; Reference/Define Name.../Note.../Goto.../Find... - all seven now. The note
+; this replaced said the rest would arrive with the features behind them rather
+; than as items that open nothing, and that is what happened: the list dialog
+; is what Paste Name and Paste Function were waiting on, the name table is what
+; Define Name needed, and Reference had nowhere to show its answer until the
+; reference box existed.
 sh_m_formula:    db 'Formula', 0
-sh_i_formula:    dw sh_it_note, sh_it_goto
+sh_i_formula:    dw sh_it_pname, sh_it_pfunc, sh_it_ref_a1, sh_it_defname, sh_it_note, sh_it_goto, sh_it_find
+sh_it_pname:     db 'Paste Name...', 0
+sh_it_pfunc:     db 'Paste Function...', 0
+sh_it_ref_a1:    db 'Reference: A1', 0     ; the same relabel-by-repointing
+sh_it_ref_rc:    db 'Reference: R1C1', 0   ; the Options toggles use
+sh_it_defname:   db 'Define Name...', 0
 sh_it_note:      db 'Note...', 0
 sh_it_goto:      db 'Goto...', 0
+sh_it_find:      db 'Find...', 0
 
 sh_ttl:        db 'Sheet', 0
 sh_s_appname:  db 'Sheet', 0
@@ -14546,7 +15589,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2271
+    OS88_BSS 2713
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -14627,8 +15670,8 @@ sh_fbuf       equ sh_evaldepth + 2          ; SH_EVAL_MAXDEPTH * 64: one
                                              ; sh_eval_cell), copied out of
                                              ; sh_txtseg so the parser never
                                              ; needs a segment override
-sh_ident      equ sh_fbuf + (SH_EVAL_MAXDEPTH * 64) ; 8: a collected name/column
-sh_pxsheet    equ sh_ident + 8              ; stage 2.0: a "SheetN!" prefix
+sh_ident      equ sh_fbuf + (SH_EVAL_MAXDEPTH * 64) ; SH_NAME_MAX+1: a collected name/column
+sh_pxsheet    equ sh_ident + SH_NAME_MAX + 1              ; stage 2.0: a "SheetN!" prefix
                                              ; sh_pident just consumed,
                                              ; 0xFF = none (see sh_psheetpfx)
 sh_pcol       equ sh_pxsheet + 1              ; sh_pident's cell-ref column
@@ -14760,7 +15803,34 @@ sh_sort_desc    equ sh_sort_keyorig + 2     ; byte: 0 ascending, 1 descending
 sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
 sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
                                              ; checked one
-sh_sort_trow  equ sh_mchk + 1               ; word: the write-back loop's
+sh_a1style      equ sh_mchk + 1             ; byte: 0 = A1, 1 = R1C1 - what
+                                             ; the reference box and Goto show
+; --- stage 3.0c: the list dialog ---
+sh_ldlg_win     equ sh_a1style + 1
+sh_ldlg_kind    equ sh_ldlg_win + 2
+sh_ldlg_sel     equ sh_ldlg_kind + 1
+sh_ldlg_top     equ sh_ldlg_sel + 2          ; first visible row
+sh_ldlg_count   equ sh_ldlg_top + 2
+sh_ldlg_items   equ sh_ldlg_count + 2        ; -> the pointer array in use
+sh_ldlg_ox      equ sh_ldlg_items + 2
+sh_ldlg_oy      equ sh_ldlg_ox + 2
+sh_ldlg_i       equ sh_ldlg_oy + 2           ; the paint loop's row counter
+sh_ldlg_idx     equ sh_ldlg_i + 2            ; ...and the item it maps to
+sh_ldlg_rowy    equ sh_ldlg_idx + 2
+sh_ldlg_rect    equ sh_ldlg_rowy + 2         ; 8: os88ui_btn takes a POINTER
+sh_ldsb         equ sh_ldlg_rect + 8         ; 14: os88ui_sbar's seven words
+sh_ldlg_src     equ sh_ldsb + 14             ; -> the string being pasted
+; --- stage 3.0c: defined names ---
+sh_nnames       equ sh_ldlg_src + 2
+sh_names        equ sh_nnames + 2            ; SH_NAME_CAP * SH_NAME_REC
+sh_nameptr      equ sh_names + SH_NAME_CAP * SH_NAME_REC   ; SH_NAME_CAP words
+sh_nm_buf       equ sh_nameptr + SH_NAME_CAP * 2           ; SH_NAME_MAX+1
+sh_nm_col       equ sh_nm_buf + SH_NAME_MAX + 1
+sh_nm_row       equ sh_nm_col + 2
+sh_find_col     equ sh_nm_row + 2            ; the walk's current cell...
+sh_find_row     equ sh_find_col + 2
+sh_find_buf     equ sh_find_row + 2          ; SH_EDITMAX+1: ...as displayed
+sh_sort_trow  equ sh_find_buf + SH_EDITMAX + 1   ; word: the write-back loop's
 sh_sort_src   equ sh_sort_trow + 2          ; own (target row, source idx)
 
 ; Sheet's own in-window menu bar (stage 2.x, see the SH_MBAR_H section
