@@ -1730,3 +1730,221 @@ fp_umod32_10e5:
     pop dx
     pop cx
     ret
+
+; =============================================================================
+; Whole-number and root operations (stage 4.0, after the evaluator went
+; double). These were integer stand-ins while every value was an integer:
+; SQRT was floor(sqrt(n)) and ROUND could only round to tens and up. Once a
+; cell can hold 3.14159 both of those are visibly wrong rather than merely
+; limited.
+;
+; Three more scratch items the caller owes:
+;   fp_sq  resb 8    the input to fp_sqrt, kept across its iterations
+;   fp_g   resb 8    the running guess
+;   fp_tv  resb 8    a general packed temporary
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; fp_trunc - A = A truncated toward zero, still a double.
+;
+; No conversion to an integer and back: that would cap the result at a signed
+; word and lose everything above 32767. The fraction bits are simply CLEARED -
+; the mantissa is normalized, so bit 63 survives and the result needs no
+; renormalizing.
+; -----------------------------------------------------------------------------
+fp_trunc:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, fp_am0
+    call fp_iszero
+    jc .out
+    mov cx, [fp_ae]
+    cmp cx, 0
+    jge .out                          ; 2^63 or more: already whole
+    neg cx                            ; cx = how many bits are fraction
+    cmp cx, 64
+    jb .mask
+    call fp_azero                     ; |value| < 1 truncates to zero
+    jmp .out
+.mask:
+    mov ax, cx
+    mov dx, cx
+    and dx, 15                        ; dx = the partial word's bit count
+    mov cl, 4
+    shr ax, cl                        ; ax = whole words to clear
+    mov cx, ax
+    mov bx, fp_am0
+    jcxz .partial
+.clrw:
+    mov word [bx], 0
+    add bx, 2
+    dec cx
+    jnz .clrw
+.partial:
+    or dx, dx
+    jz .out
+    mov cx, dx
+    mov ax, 0xFFFF
+    shl ax, cl                        ; keep the high bits of the straddled
+    and [bx], ax                      ; word, drop the fractional low ones
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; fp_a_to_tv / fp_tv_to_a - park A in the general temporary and get it back
+fp_a_to_tv:
+    push di
+    mov di, fp_tv
+    call fp_pack_a
+    pop di
+    ret
+fp_tv_to_a:
+    push si
+    mov si, fp_tv
+    call fp_unpack_a
+    pop si
+    ret
+fp_tv_to_b:
+    push si
+    mov si, fp_tv
+    call fp_unpack_b
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_floor - A = the largest whole number <= A. Excel's INT, which is NOT
+; truncation: INT(-3.7) is -4 where TRUNC(-3.7) is -3.
+; -----------------------------------------------------------------------------
+fp_floor:
+    push ax
+    call fp_a_to_tv                   ; keep the original to compare against
+    call fp_trunc
+    cmp byte [fp_as], 0
+    je .out                           ; positive: truncation IS the floor
+    call fp_a_to_b                    ; negative: did anything get cut off?
+    call fp_tv_to_a
+    call fp_cmpab
+    je .out                           ; it was already whole
+    call fp_b_to_a                    ; step one below the truncation
+    mov ax, 1
+    call fp_i2b
+    call fp_sub
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_sqrt - A = sqrt(A). CF=1 and A=0 if A was negative.
+;
+; Newton-Raphson, from an initial guess built by HALVING THE BINARY EXPONENT:
+; the value is in [2^(e+63), 2^(e+64)), so 2^((e+63)/2) is within a factor of
+; two of the answer. Newton doubles the correct bits each pass, so from one
+; correct bit six passes reach 53 - and six is what this does, unconditionally,
+; because a convergence test costs more than the iteration it would save.
+; -----------------------------------------------------------------------------
+fp_sqrt:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov bx, fp_am0
+    call fp_iszero
+    jc .out                           ; sqrt(0) = 0
+    cmp byte [fp_as], 0
+    jne .neg
+    mov di, fp_sq                     ; bank the input: every pass needs it
+    call fp_pack_a
+    mov ax, [fp_ae]                   ; the guess: 2^((e+63)/2)
+    add ax, 63
+    sar ax, 1
+    sub ax, 63
+    mov word [fp_am0], 0
+    mov word [fp_am1], 0
+    mov word [fp_am2], 0
+    mov word [fp_am3], 0x8000
+    mov [fp_ae], ax
+    mov byte [fp_as], 0
+    mov cx, 6
+.iter:
+    push cx
+    mov di, fp_g                      ; g, banked for this pass
+    call fp_pack_a
+    mov si, fp_sq                     ; A = a / g
+    call fp_unpack_a
+    mov si, fp_g
+    call fp_unpack_b
+    call fp_div
+    mov si, fp_g                      ; A = a/g + g
+    call fp_unpack_b
+    call fp_add
+    mov ax, 2                         ; A = that / 2
+    call fp_i2b
+    call fp_div
+    pop cx
+    dec cx
+    jnz .iter
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.neg:
+    call fp_azero
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_round - A = A rounded to CX decimal places, half away from zero, which is
+; the rule Excel's ROUND states. CX may be negative (round to tens, hundreds).
+; -----------------------------------------------------------------------------
+fp_round:
+    push ax
+    push cx
+    call fp_scale10                   ; bring the wanted digits above the point
+    mov al, [fp_as]                   ; work on the MAGNITUDE, so "half away
+    push ax                           ; from zero" is one rule and not two
+    mov byte [fp_as], 0
+    call fp_half_add                  ; + 0.5 then truncate is the standard
+    call fp_trunc                     ; way to say "nearest, ties outward"
+    pop ax
+    mov [fp_as], al                   ; the sign goes back on; a zero result
+    neg cx                            ; still packs as +0
+    call fp_scale10                   ; and the point goes back where it was
+    pop cx
+    pop ax
+    ret
+
+; fp_half_add - A = A + 0.5. Its own routine because 0.5 has no integer form
+; to build B from, and one exact constant is cheaper than a division.
+fp_half_add:
+    push ax
+    push si
+    mov si, fp_half
+    call fp_unpack_b
+    call fp_add
+    pop si
+    pop ax
+    ret
+
+fp_half:  dw 0x0000, 0x0000, 0x0000, 0x3FE0    ; 0.5, exactly

@@ -214,6 +214,80 @@ fpt_paint:
     jmp .case
 
 .summary:
+    ; --- sqrt / trunc / floor / round, against host-computed bytes ---
+    mov word [fpt_m], 0
+    mov si, fpt_math
+.mcase:
+    mov ax, [fpt_m]
+    cmp ax, FPT_MN
+    jae .mdone
+    push si
+    call fp_unpack_a
+    add si, 8
+    mov cx, [si+2]                    ; the digit count, for ROUND
+    mov ax, [si]                      ; the operation
+    or ax, ax
+    jnz .mnotsqrt
+    call fp_sqrt
+    jmp .mgot
+.mnotsqrt:
+    cmp ax, 1
+    jne .mnotrunc
+    call fp_trunc
+    jmp .mgot
+.mnotrunc:
+    cmp ax, 2
+    jne .mnotfloor
+    call fp_floor
+    jmp .mgot
+.mnotfloor:
+    call fp_round
+.mgot:
+    mov di, fpt_got
+    call fp_pack_a
+    pop si
+    add si, 12                        ; past the input, op and digits
+    mov di, fpt_got
+    mov cx, 4
+    mov bp, 1
+.mcmp:
+    mov ax, [si]
+    cmp ax, [di]
+    je .mcmpn
+    xor bp, bp
+.mcmpn:
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .mcmp
+    mov ax, [fpt_m]
+    mov cx, FPT_ROWH
+    mul cx
+    add ax, 14
+    add ax, [fpt_oy]
+    mov dx, ax
+    mov cx, [fpt_ox]
+    add cx, 150
+    push si
+    mov si, fpt_s_pass
+    or bp, bp
+    jnz .mverd
+    mov si, fpt_s_fail
+    inc word [fpt_bad]
+.mverd:
+    call OSAPI_FONT_STR
+    pop si
+    mov cx, [fpt_ox]
+    add cx, 190
+    push si
+    mov si, [si]                      ; the case's name
+    call OSAPI_FONT_STR
+    pop si
+    add si, 2
+    inc word [fpt_m]
+    jmp .mcase
+.mdone:
+
     ; --- atof-only cases: text -> double, against host-computed bytes. This
     ; exists to SPLIT a round-trip failure: if these pass, the parser is right
     ; and the formatter is the one that is wrong.
@@ -377,6 +451,84 @@ fpt_atof:
     times (10 - 6) db 0
     dw 0xA9FC, 0xD2F1, 0x624D, 0x3F50
 
+FPT_MN equ 15
+fpt_math:
+    dw 0x0000, 0x0000, 0x0000, 0x4000
+    dw 0, 0
+    dw 0x3BCD, 0x667F, 0xA09E, 0x3FF6      ; sqrt2 -> 1.4142135623730951
+    dw fpt_m0
+    dw 0x0000, 0x0000, 0x0000, 0x4062
+    dw 0, 0
+    dw 0x0000, 0x0000, 0x0000, 0x4028      ; sqrt144 -> 12.0
+    dw fpt_m1
+    dw 0x0000, 0x0000, 0x0000, 0x3FD0
+    dw 0, 0
+    dw 0x0000, 0x0000, 0x0000, 0x3FE0      ; sqrt.25 -> 0.5
+    dw fpt_m2
+    dw 0x0000, 0x0000, 0x8480, 0x412E
+    dw 0, 0
+    dw 0x0000, 0x0000, 0x4000, 0x408F      ; sqrt1e6 -> 1000.0
+    dw fpt_m3
+    dw 0x0000, 0x0000, 0x0000, 0x4002
+    dw 0, 0
+    dw 0x0000, 0x0000, 0x0000, 0x3FF8      ; sqrt2.25 -> 1.5
+    dw fpt_m4
+    dw 0x999A, 0x9999, 0x9999, 0x400D
+    dw 1, 0
+    dw 0x0000, 0x0000, 0x0000, 0x4008      ; trunc3.7 -> 3.0
+    dw fpt_m5
+    dw 0x999A, 0x9999, 0x9999, 0xC00D
+    dw 1, 0
+    dw 0x0000, 0x0000, 0x0000, 0xC008      ; trunc-3.7 -> -3.0
+    dw fpt_m6
+    dw 0xCCCD, 0xCCCC, 0xCCCC, 0x3FEC
+    dw 1, 0
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; trunc.9 -> 0.0
+    dw fpt_m7
+    dw 0x999A, 0x9999, 0x9999, 0x400D
+    dw 2, 0
+    dw 0x0000, 0x0000, 0x0000, 0x4008      ; floor3.7 -> 3.0
+    dw fpt_m8
+    dw 0x999A, 0x9999, 0x9999, 0xC00D
+    dw 2, 0
+    dw 0x0000, 0x0000, 0x0000, 0xC010      ; floor-3.7 -> -4.0
+    dw fpt_m9
+    dw 0x866E, 0xF01B, 0x21F9, 0x4009
+    dw 3, 2
+    dw 0x851F, 0x51EB, 0x1EB8, 0x4009      ; rnd pi,2 -> 3.14
+    dw fpt_m10
+    dw 0x0000, 0x0000, 0x0000, 0x4004
+    dw 3, 0
+    dw 0x0000, 0x0000, 0x0000, 0x4008      ; rnd 2.5 -> 3.0
+    dw fpt_m11
+    dw 0x0000, 0x0000, 0x0000, 0xC004
+    dw 3, 0
+    dw 0x0000, 0x0000, 0x0000, 0xC008      ; rnd -2.5 -> -3.0
+    dw fpt_m12
+    dw 0x0000, 0x0000, 0x4800, 0x4093
+    dw 3, -2
+    dw 0x0000, 0x0000, 0xC000, 0x4092      ; rnd1234,-2 -> 1200.0
+    dw fpt_m13
+    dw 0x0000, 0x0000, 0x0000, 0x3FC0
+    dw 3, 2
+    dw 0x70A4, 0x0A3D, 0xA3D7, 0x3FC0      ; rnd.125,2 -> 0.13
+    dw fpt_m14
+fpt_m0: db 'sqrt2', 0
+fpt_m1: db 'sqrt144', 0
+fpt_m2: db 'sqrt.25', 0
+fpt_m3: db 'sqrt1e6', 0
+fpt_m4: db 'sqrt2.25', 0
+fpt_m5: db 'trunc3.7', 0
+fpt_m6: db 'trunc-3.7', 0
+fpt_m7: db 'trunc.9', 0
+fpt_m8: db 'floor3.7', 0
+fpt_m9: db 'floor-3.7', 0
+fpt_m10: db 'rnd pi,2', 0
+fpt_m11: db 'rnd 2.5', 0
+fpt_m12: db 'rnd -2.5', 0
+fpt_m13: db 'rnd1234,-2', 0
+fpt_m14: db 'rnd.125,2', 0
+
 ; Round-trip cases: each is an input string then the expected output string,
 ; both NUL-terminated. Ten significant digits, which is what a spreadsheet
 ; cell shows. These are what prove the two conversions agree with each other
@@ -403,7 +555,7 @@ fpt_str:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 132
+    OS88_BSS 158
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -411,7 +563,8 @@ fpt_oy      equ fpt_ox + 2
 fpt_i       equ fpt_oy + 2
 fpt_bad     equ fpt_i + 2
 fpt_got     equ fpt_bad + 2          ; 8: the packed result under test
-fpt_k       equ fpt_got + 8
+fpt_m       equ fpt_got + 8
+fpt_k       equ fpt_m + 2
 fpt_j       equ fpt_k + 2           ; the round-trip case index
 fpt_out     equ fpt_j + 2             ; 32: the formatted text under test
 
@@ -437,8 +590,11 @@ fp_tmp      equ fp_sticky + 2
 fp_dig      equ fp_tmp + 2            ; 24: the digit string fp_ftoa builds
 fp_d10      equ fp_dig + 24           ; word: the decimal exponent
 fp_nd       equ fp_d10 + 2
-fp_sgn      equ fp_nd + 2            ; word: digits in fp_dig
-fpt_bss_end equ fp_sgn + 2
+fp_sgn      equ fp_nd + 2
+fp_sq       equ fp_sgn + 2            ; 8: fp_sqrt's input
+fp_g        equ fp_sq + 8             ; 8: its running guess
+fp_tv       equ fp_g + 8              ; 8: a general packed temporary            ; word: digits in fp_dig
+fpt_bss_end equ fp_tv + 8
 
 %define FPT_BSS_NEED (fpt_bss_end - os88_image_end)
     times (FPT_BSS_NEED - OS88_BSS_SIZE) db 0

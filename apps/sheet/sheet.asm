@@ -11269,11 +11269,62 @@ sh_pspecial:
     push di
     mov di, ax                        ; DI holds the id: every sh_pcmp below
                                       ; clobbers AX/BX/CX/DX
+    cmp di, 13                        ; the four that are REAL functions of a
+    je .dfloor                        ; real number now that cells hold one -
+    cmp di, 14                        ; everything else here is a function of
+    je .dtrunc                        ; whole numbers by nature and stays
+    cmp di, 17                        ; integer (see .close)
+    je .dsqrt
+    cmp di, 19
+    je .dround
     cmp di, 20
-    jb .arg1                          ; 12..19 take one or two arguments
+    jb .arg1                          ; 12..18 take one or two arguments
     cmp di, 23
     jbe .noargs                       ; 20..23 take none
     jmp .choose                       ; 24 CHOOSE takes a list
+
+; ---- INT / TRUNC / SQRT / ROUND, on doubles ---------------------------------
+; INT FLOORS and TRUNC cuts toward zero, which differ for negatives: Excel's
+; INT(-3.7) is -4 and TRUNC(-3.7) is -3. While every value was an integer the
+; two were indistinguishable and both were the identity; they are not any more.
+.dfloor:
+    call sh_pcmp
+    call sh_acc_load_a
+    call fp_floor
+    jmp .dstore
+.dtrunc:
+    call sh_pcmp
+    call sh_acc_load_a
+    call fp_trunc
+    jmp .dstore
+.dsqrt:
+    call sh_pcmp
+    call sh_acc_load_a
+    call fp_sqrt                      ; a REAL root: SQRT(2) is 1.414213562,
+    jmp .dstore                       ; where the integer version gave 1
+.dround:
+    call sh_pcmp                      ; the value, banked across the second
+    call sh_vpush                     ; argument's parse
+    xor cx, cx
+    cmp byte [si], ','
+    jne .dround1                      ; ROUND(x) with no count means 0 places
+    inc si
+    call sh_parg                      ; the digit count IS a whole number
+    mov cx, ax
+.dround1:
+    call sh_binop_pre                 ; A = the value again
+    call fp_round
+.dstore:
+    call sh_acc_store
+    cmp byte [si], ')'
+    jne .dout
+    inc si
+.dout:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
 
 ; ---- TRUE() FALSE() ROW() COLUMN() ------------------------------------------
 .noargs:
@@ -12892,7 +12943,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2088
+    OS88_BSS 2112
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -13356,7 +13407,10 @@ fp_dig            equ fp_tmp + 2       ; 24: fp_ftoa's digit string
 fp_d10            equ fp_dig + 24
 fp_nd             equ fp_d10 + 2
 fp_sgn            equ fp_nd + 2
-sh_bss_end        equ fp_sgn + 2
+fp_sq             equ fp_sgn + 2       ; 8: fp_sqrt's input, across iterations
+fp_g              equ fp_sq + 8        ; 8: its running guess
+fp_tv             equ fp_g + 8         ; 8: fp_floor's general temporary
+sh_bss_end        equ fp_tv + 8
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

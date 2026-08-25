@@ -66735,12 +66735,19 @@ bar, the reference box and formula bar above the grid, the "Ready" status line
 below it, and the dialogs, are meant to be that program rather than something
 like it.
 
-**The value model is a signed 16-bit integer and that is a stated limit, not
-an oversight.** Entering `123456` commits as `-7616`, because that is
-123456 mod 65536 read as signed. Division truncates toward zero and division
-by zero yields 0 rather than faulting. Every text, date, trigonometric and
-financial function in Excel's library — the substantial majority of it — is
-waiting on this, not on effort.
+**The value model is an IEEE-754 double**, computed in software by
+`apps/os88fp.inc` (§84). A cell holds 3.5, `=1/3` is 0.3333333333, and
+`AVERAGE(1,2)` is 1.5. It was a signed 16-bit integer until stage 4.0, which is
+why so much of the surrounding code converts at a boundary rather than carrying
+doubles throughout: roughly forty callers pass values as words, and rewriting
+them all at once would have made any fault impossible to localise.
+
+What is still integer, and deliberately: the thirteen fixed-arity functions
+(`MOD`, `FACT`, `ROW`, `CHOOSE` and the rest) take whole numbers and return
+one, because a fractional `MOD` is not a thing they mean. What is still
+integer and *should not be*: the BIFF writer emits the RK integer subtype, so
+saving a non-integer to that format truncates — SYLK round-trips decimals in
+both directions, and BIFF's `NUMBER` record is the fix.
 
 ### 81.1 The cell array — sorted, sparse, and shared by four sheets
 
@@ -66826,7 +66833,10 @@ selected, so `sh_eval_cell` banks and restores `sh_evrow`/`sh_evcol` per frame.
 A formula reached through another cell's reference still answers for itself.
 
 25 functions, dispatched through `sh_functab` where **the id is the entry's
-index**, so adding one is a string and a table word. `ISBLANK`, `ISNUMBER` and
+index**, so adding one is a string and a table word. `SQRT` is a real root and
+`ROUND` takes a real digit count; `INT` floors while `TRUNC` cuts toward zero,
+which differ for negatives (`INT(-3.7)` is -4, `TRUNC(-3.7)` is -3) and could
+not differ at all while every value was whole. `ISBLANK`, `ISNUMBER` and
 `ISNA` are **deliberately absent**: an empty cell already evaluates to 0 and is
 indistinguishable from a cell holding 0 without reference-typed arguments, and
 every value here is a number, so those three could only be constants or
@@ -67142,3 +67152,77 @@ Both are silent, and both only bite past 255 bytes:
   no symptom until the buffer grew.
 * **`BP` addresses `SS` by default**, so it cannot be used as a memory base for
   a buffer in `DS`.
+
+## 84. Software floating point (`apps/os88fp.inc`)
+
+An IEEE-754 double, in software, for a machine with no FPU. It is what stage
+4.0 of the spreadsheet is built on (§81), and it is an include rather than an
+API slot for §75.3's reason: a slot is a published contract that can never
+change, and this is still being learned.
+
+**Binary double rather than decimal, and that was a decision.**
+`apps/calc/calc.asm` already carries a complete decimal engine (§65.2) —
+sign-magnitude, nine digits, 64-bit intermediates, correct rounding — and
+reusing it would have been far less code, with the real virtue that 0.1 + 0.2
+is exactly 0.3. It was rejected for two reasons specific to a spreadsheet:
+BIFF's `NUMBER` record **is** an IEEE-754 double, so a decimal core means a
+lossy conversion at every file boundary in both directions; and an 8087
+accelerates binary doubles directly (`fld` / `faddp` / `fstp qword`) while
+doing essentially nothing for sign-magnitude decimal, whose BCD support is
+load and store rather than arithmetic. Nine significant digits against Excel's
+fifteen settled it.
+
+### 84.1 The two forms
+
+Stored: 8 bytes, little-endian, exactly as IEEE-754 and exactly as BIFF wants
+them. Working: a sign byte, a **signed unbiased** exponent, and a 64-bit
+mantissa normalized so bit 63 is always set —
+
+```
+      value = (-1)^sign * m * 2^exp        with m in [2^63, 2^64)
+```
+
+The eleven bits of headroom above the 53-bit significand are guard bits, and
+they are the whole reason results round correctly rather than merely plausibly.
+Packing rounds **to nearest, ties to even**: half-up biases every long column
+of sums upward, which in a spreadsheet is the visible kind of wrong.
+
+### 84.2 Stated simplifications
+
+Subnormals flush to zero; overflow clamps to the largest finite double; **no
+infinity and no NaN is ever produced**; division by zero returns `CF=1` with a
+zero result. Turning that into `#DIV/0!` is the *cell's* business — an error
+type is a value-model decision and belongs one layer up.
+
+### 84.3 It declares no storage
+
+Like `apps/os88chart.inc`, the caller declares the scratch — two unpacked
+accumulators, a 64-bit temporary, the 128-bit product, and the digit buffer —
+and **DS is never changed anywhere in the file**.
+
+### 84.4 The test app is part of the design
+
+`apps/fptest` is why any of this can be believed. Floating point is the worst
+thing to debug from inside a spreadsheet: a wrong bit in the guard region
+surfaces as one cell being slightly off, on some inputs. So the expectations
+are **generated on the host in real double precision** and embedded as exact
+bytes — the reference is not the same arithmetic restated in assembly — and a
+case passes only if all eight bytes match. 61 cases: carrying, cancellation,
+mixed signs, ties that must round to even, an operand lost below the guard,
+1e±300 extremes, non-terminating quotients, `0.1+0.2`, the text round trip, and
+`sqrt`/`floor`/`trunc`/`round`.
+
+It is built by the Makefile but put on **no disk** — a developer tool, and the
+360KB apps disk has nothing to spare — so a change that breaks it breaks the
+build rather than going unnoticed.
+
+### 84.5 A design note worth keeping
+
+`fp_ftoa`'s first version estimated the decimal exponent from the binary one
+(`d10 ≈ (e+63)·log10 2`) with a hand-written 32-by-100000 divide behind it. It
+was faster, it was wrong, and it resisted a long reading. Replacing all of it
+with a loop that divides by ten until the value is in `[1,10)` fixed it
+outright and deleted three helper routines: a spreadsheet value sits within a
+few decades of 1, so the loop runs a handful of times, and unlike the estimate
+it **cannot** be off by a decade because it stops exactly when the value is in
+range. The optimisation was the bug.
