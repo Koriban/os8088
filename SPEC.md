@@ -67238,13 +67238,29 @@ every last one, at a cost of four pixels spilled past the rim, which the black
 rim is drawn over afterwards. The slice separators are drawn thin, so they stay
 one pixel wide.
 
-#### 82.6.2 Slices are hatched as well as coloured
+#### 82.6.2 Slices are coloured, and hatched as well
 
-Excel 2.1 hatched its pie slices, and for the reason this does: os8088 runs on
-Hercules and on two-colour CGA as well as on sixteen colours, and a pie whose
-slices differ only in colour is one solid shape on any of them. Eight 4x4 bit
-masks, one per slice; a clear bit leaves the white `ch_prep` already put there,
-so the hatch costs a test rather than a second pass.
+**os8088 is 16-colour EGA/VGA** (§5) — the UI chrome is drawn black on white
+because that is what chrome should be, not because the palette stops there. Pie
+slices take one of the sixteen each.
+
+They are **also** hatched, which is what Excel 2.1 did and for the reason it
+did it: the same OS runs on Hercules and on two-colour CGA, where slices that
+differ only in colour all round to one solid shape. The hatch is the fallback,
+not the mechanism. Eight 4x4 bit masks, one per slice; a clear bit leaves the
+white `ch_prep` already put there, so it costs a test rather than a second pass.
+
+#### 82.6.4 Every other chart type was black, and not by choice
+
+`ch_bars_draw`, `ch_line_draw`, `ch_area_draw` and `ch_hbar_draw` drew their
+data in colour 0 — because §82.6.3's bug meant black was the only thing this
+package could produce, so nobody had cause to question it. They take
+`CH_C_SERIES` now (CBLUE, Excel 2.1's own first-series colour) with
+`CH_C_AXIS` left black for axes, ticks, outlines and separators.
+
+**One colour for the whole series**, which is what Excel does with a single
+series. The pie is the exception and cycles per slice, because there each wedge
+is a different category rather than another point in one.
 
 #### 82.6.3 `ch_setpixel` was destroying the colour it was handed
 

@@ -2180,7 +2180,14 @@ $(SBSTAMP): | $(BUILD)
 	@touch $@
 # Sheet (spreadsheet roadmap stage 1.0): a 64x64 numeric grid, no formulas,
 # no formatting, SYLK only.
-$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc | $(BUILD)
+# EVERY .inc A PACKAGE INCLUDES BELONGS IN ITS RULE, and this one is the reason
+# the rule says so out loud: sheet.bin listed only sheet.asm and os88api.inc, so
+# an edit to os88chart.inc rebuilt CHART.O88 and left SHEET.O88 stale - which
+# presents as a fix that did not work, on a binary that never contained it.
+# Four other rules had the same hole and were fixed with this one.
+$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
+                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+                    apps/os88chart.inc apps/os88fp.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
 	@echo "sheet:  $(call FILESIZE,$@) bytes"
 
@@ -2240,7 +2247,7 @@ $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py
 # implementation and tests/htm/ is what both are checked against.
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
                       apps/os88api.inc \
-                      apps/os88ui.inc apps/os88line.inc \
+                      apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I drivers/net/ \
 	        $(PKGSBDEF) -o $@ apps/browser/browser.asm
@@ -2251,7 +2258,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
 # the two cannot drift (SPEC.md 20.11) - the same reason tests/socktest has it.
 $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
                      apps/os88api.inc \
-                     apps/os88ui.inc apps/os88line.inc \
+                     apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                      drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/telnet/ -I drivers/net/ -o $@ apps/telnet/telnet.asm
 	@echo "telnet: $(call FILESIZE,$@) bytes"
@@ -2288,7 +2295,7 @@ $(FTPDSTAMP): | $(BUILD)
 	touch $@
 
 $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
-                   apps/os88line.inc apps/os88sock.inc \
+                   apps/os88line.inc apps/os88sock.inc apps/os88pit.inc \
                    drivers/net/netpkg.inc $(FTPDSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(FTPDSLOWDEF) -I apps/ -I apps/ftpd/ -I drivers/net/ -o $@ apps/ftpd/ftpd.asm
 	@echo "ftpd:   $(call FILESIZE,$@) bytes"
@@ -2353,7 +2360,7 @@ $(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
 # It needs no card to be USEFUL -
 # DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
 # ships on every disk and greys REC on a machine with no Sound Blaster.
-$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
 	@echo "recorder: $(call FILESIZE,$@) bytes"
 

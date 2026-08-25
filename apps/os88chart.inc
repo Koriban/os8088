@@ -194,7 +194,15 @@ ch_fillrect:
     push cx
     push dx
     push si
-    mov ah, dl                         ; stash the color - dl is reused below
+    ; THE COLOUR STAYS IN DL, and there is a story in that. This banked it in
+    ; AH and reloaded DL from there before each ch_setpixel - a workaround for
+    ; ch_setpixel eating DL (82.6.3). The workaround HAD THE SAME BUG: `mov ax,
+    ; [ch_bx1]` at the top of the row loop below overwrites AH with the high
+    ; byte of an x coordinate, which is 0 for every x this canvas has, so the
+    ; colour was gone by the first pixel of the first row. Two routines, one
+    ; register-half clobber each, and neither could be seen for as long as the
+    ; only colour anything asked for was 0. ch_setpixel preserves DX now, so
+    ; the bank is not merely fixed but unnecessary.
     mov si, [ch_by1]
     mov cx, [ch_by2]                   ; CLIP to the canvas. ch_setpixel does
     cmp cx, CH_H                       ; no bounds checking of its own, so an
@@ -217,7 +225,6 @@ ch_fillrect:
     jg .nextrow
     push ax
     mov bx, si
-    mov dl, ah
     call ch_setpixel
     pop ax
     inc ax
@@ -350,7 +357,7 @@ ch_bars_draw:
     mov ax, [ch_base]
     mov [ch_by1], ax
     mov [ch_by2], ax
-    mov dl, 0
+    mov dl, CH_C_AXIS
     call ch_fillrect
 
     ; pass 2: one bar per value
@@ -400,7 +407,7 @@ ch_bars_draw:
     add ax, bx
     mov [ch_by2], ax
 .barrect:
-    mov dl, 0
+    mov dl, CH_C_SERIES
     call ch_fillrect
     mov ax, [ch_idx]
     inc ax
@@ -529,7 +536,7 @@ ch_axis_h:
     mov ax, [ch_base]
     mov [ch_by1], ax
     mov [ch_by2], ax
-    mov dl, 0
+    mov dl, CH_C_AXIS
     call ch_fillrect
     ret
 
@@ -582,7 +589,7 @@ ch_line_draw:
     mov [ch_bx2], bx
     mov [ch_by1], cx
     mov [ch_by2], cx
-    mov dl, 0
+    mov dl, CH_C_SERIES
     call ch_fillrect
     inc word [ch_idx]
     jmp .pt
@@ -612,7 +619,7 @@ ch_seg_draw:
     mov bx, ax
     mov cx, ax
     mov ax, [ch_lcx]
-    mov dl, 0
+    mov dl, CH_C_SERIES
     call ch_vline                       ; a single pixel; a segment steeper
                                         ; than 1:1 would show gaps, which
                                         ; ch_area_draw's fill hides and a
@@ -704,7 +711,7 @@ ch_area_draw:
     mov bx, ax
     mov cx, [ch_base]
     mov ax, [ch_lcx]
-    mov dl, 0
+    mov dl, CH_C_SERIES
     call ch_vline
     inc word [ch_lcx]
     jmp .col
@@ -720,7 +727,7 @@ ch_area_draw:
     mov bx, ax
     mov cx, [ch_base]
     mov ax, (CH_W - 1) / 2
-    mov dl, 0
+    mov dl, CH_C_SERIES
     call ch_vline
 .out:
     ret
@@ -745,7 +752,7 @@ ch_hbar_draw:
     mov [ch_bx2], ax
     mov word [ch_by1], 0
     mov word [ch_by2], CH_H - 1
-    mov dl, 0
+    mov dl, CH_C_AXIS
     call ch_fillrect
     mov word [ch_idx], 0
 .bar:
@@ -796,7 +803,7 @@ ch_hbar_draw:
 .setx1:
     mov [ch_bx1], ax
 .rect:
-    mov dl, 0
+    mov dl, CH_C_SERIES
     call ch_fillrect
     inc word [ch_idx]
     jmp .bar
@@ -848,12 +855,13 @@ ch_draw:
 ; scanning the bounding box also avoids deciding which wedge each pixel is in,
 ; a question that costs two cross products per pixel and answers itself here.
 ;
-; SLICES ARE HATCHED AS WELL AS COLOURED, which is what Excel 2.1 did and for
-; the reason it did it: this OS runs on Hercules and on CGA in two colours as
-; well as on sixteen, and a pie whose slices differ only in colour is one solid
-; shape on any of them. A hatch survives the trip. It costs a test rather than
-; a second pass, because a clear bit in the pattern simply leaves the white
-; ch_prep already put there.
+; SLICES ARE COLOURED, one of the sixteen per slice - os8088 is 16-colour
+; EGA/VGA, and only the UI chrome is black on white. THEY ARE ALSO HATCHED,
+; which is what Excel 2.1 did and for the reason it did it: the same OS runs on
+; Hercules and on CGA in two colours, where every slice would otherwise round
+; to one solid shape. The hatch is the fallback, not the mechanism, and it
+; costs a test rather than a second pass - a clear bit in the pattern simply
+; leaves the white ch_prep already put there.
 ;
 ; (The first working version of this drew a solid black disc, and the display
 ; was NOT the reason - ch_setpixel was destroying the colour it was handed. It
@@ -865,6 +873,19 @@ ch_draw:
 ; circle can express. The alternative - refusing to draw - is worse, because
 ; the sheet is usually right and one stray sign is not worth a blank chart.
 ; =============================================================================
+; --- the two pens every non-pie type draws with ------------------------------
+; The data was drawn in BLACK, all of it, in every chart type - and not as a
+; choice: ch_setpixel destroyed the colour it was handed (82.6.3), so black was
+; the only thing this package could produce and nobody had reason to notice.
+; os8088 is SIXTEEN-COLOUR EGA/VGA; the UI chrome is drawn black on white
+; because that is what chrome should be, not because the palette stops there.
+;
+; One colour for the whole series, which is what Excel 2.1 does with a single
+; series - the PIE is the exception, and cycles per slice, because there each
+; wedge is a different category rather than another point in one.
+CH_C_SERIES equ CBLUE                ; Excel 2.1's own first-series colour
+CH_C_AXIS   equ CBLACK               ; axes, ticks, outlines and separators
+
 CH_PIE_CX  equ CH_W / 2
 CH_PIE_CY  equ CH_H / 2
 CH_PIE_R   equ (CH_H / 2) - 12       ; the canvas is wider than it is tall, so
