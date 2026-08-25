@@ -4240,32 +4240,44 @@ sh_docmd_paste:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_docmd_fillright / sh_docmd_filldown - copy the selected cell into the
-; next cell over. Stage 2.x: a formula source now has its own text copied
-; (via sh_formula_copyshift, the same relative-reference shift Copy/Paste
-; uses) with a (+1,0) or (0,+1) delta, matching real Excel's own Fill
-; Right/Down behavior; a plain value is still just copied as its current
-; value (sh_getcell2/sh_setval, unchanged from before this fix).
+; sh_docmd_fillright / sh_docmd_filldown - fill the SELECTED RANGE from its
+; own first column/row, the way Excel does: Fill Down copies the selection's
+; top row into every row under it, for every column in the selection, and
+; Fill Right copies its left column across.
+;
+; These two used to copy exactly one cell into exactly one neighbour, because
+; they were written before range selection existed (stage 3.0a) and were never
+; taught about sh_selcol2/sh_selrow2. Selecting a block and choosing Fill Down
+; changed a single cell and reported nothing - the selection stayed drawn over
+; cells that had not been touched. A SINGLE-CELL selection still fills the one
+; neighbour, which is what the old behaviour was and what collapsing the
+; anchor and extent already means here.
+;
+; A formula source has its text copied through sh_formula_copyshift (the same
+; relative-reference shift Copy/Paste uses), and the delta is the FULL offset
+; from the source rather than always one - filling five rows down has to shift
+; the fifth by five. A plain value is copied as its current value.
 ; -----------------------------------------------------------------------------
-sh_docmd_fillright:
+; sh_fill_copy - one cell to another. in: sh_fl_scol/srow = source,
+; sh_fl_dcol/drow = destination. An empty source copies nothing. Preserves
+; every register, so the loops below can keep their bounds in theirs.
+; -----------------------------------------------------------------------------
+sh_fill_copy:
     push ax
     push bx
+    push cx
     push dx
     push si
     push di
     push es
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
+    mov ax, [sh_fl_scol]
+    mov bx, [sh_fl_srow]
     call sh_findcell
     jnc .out                           ; empty source: nothing to fill
-    mov ax, [sh_selcol]
-    inc ax
-    cmp ax, SH_COLS
-    jae .out
     mov es, [sh_cellseg]
     test byte [es:di+4], 1             ; HASFORMULA
     jz .plain
-    mov ax, [es:di+SH_C_FOFF]                  ; formula_off
+    mov ax, [es:di+SH_C_FOFF]
     mov si, ax
     mov es, [sh_txtseg]
     mov di, sh_rwsrc
@@ -4276,32 +4288,84 @@ sh_docmd_fillright:
     inc di
     or al, al
     jnz .copyin
-    mov word [sh_cp_coldelta], 1
-    mov word [sh_cp_rowdelta], 0
+    mov ax, [sh_fl_dcol]
+    sub ax, [sh_fl_scol]
+    mov [sh_cp_coldelta], ax
+    mov ax, [sh_fl_drow]
+    sub ax, [sh_fl_srow]
+    mov [sh_cp_rowdelta], ax
     mov si, sh_rwsrc
     call sh_formula_copyshift
-    mov ax, [sh_selcol]
-    inc ax
-    mov bx, [sh_selrow]
+    mov ax, [sh_fl_dcol]
+    mov bx, [sh_fl_drow]
     mov si, sh_rwdst
     call sh_setformula
-    jmp .done
+    jmp .out
 .plain:
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
+    mov ax, [sh_fl_scol]
+    mov bx, [sh_fl_srow]
     call sh_getcell2
-    mov ax, [sh_selcol]
-    inc ax
-    mov bx, [sh_selrow]
+    mov ax, [sh_fl_dcol]
+    mov bx, [sh_fl_drow]
     call sh_setval
-.done:
-    mov si, [sh_ownwin]
-    call sh_repaint
 .out:
     pop es
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+; -----------------------------------------------------------------------------
+sh_docmd_fillright:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [sh_selcol]                ; normalise: a drag can run either way
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .colsok
+    xchg ax, bx
+.colsok:
+    mov [sh_fl_scol], ax               ; the source is the LEFTMOST column
+    cmp ax, bx
+    jne .haverange
+    inc bx                             ; a one-column selection fills the one
+    cmp bx, SH_COLS                    ; column over, as this always did
+    jae .out
+.haverange:
+    mov cx, [sh_selrow]                ; ...for every row of the selection
+    mov si, [sh_selrow2]
+    cmp cx, si
+    jbe .rowsok
+    xchg cx, si
+.rowsok:
+.rowloop:
+    mov [sh_fl_srow], cx
+    mov [sh_fl_drow], cx
+    mov dx, [sh_fl_scol]
+.colloop:
+    inc dx
+    cmp dx, bx
+    ja .nextrow
+    mov [sh_fl_dcol], dx
+    call sh_fill_copy
+    jmp .colloop
+.nextrow:
+    inc cx
+    cmp cx, si
+    jbe .rowloop
+    mov si, [sh_ownwin]                ; ONE repaint for the whole fill, not
+    call sh_repaint                    ; one per cell
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -4309,58 +4373,51 @@ sh_docmd_fillright:
 sh_docmd_filldown:
     push ax
     push bx
+    push cx
     push dx
     push si
     push di
-    push es
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_findcell
-    jnc .out                           ; empty source: nothing to fill
-    mov bx, [sh_selrow]
-    inc bx
-    cmp bx, SH_ROWS
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .rowsok
+    xchg ax, bx
+.rowsok:
+    mov [sh_fl_srow], ax               ; the source is the TOP row
+    cmp ax, bx
+    jne .haverange
+    inc bx                             ; a one-row selection fills the one
+    cmp bx, SH_ROWS                    ; row below, as this always did
     jae .out
-    mov es, [sh_cellseg]
-    test byte [es:di+4], 1             ; HASFORMULA
-    jz .plain
-    mov ax, [es:di+SH_C_FOFF]                  ; formula_off
-    mov si, ax
-    mov es, [sh_txtseg]
-    mov di, sh_rwsrc
-.copyin:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .copyin
-    mov word [sh_cp_coldelta], 0
-    mov word [sh_cp_rowdelta], 1
-    mov si, sh_rwsrc
-    call sh_formula_copyshift
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    inc bx
-    mov si, sh_rwdst
-    call sh_setformula
-    jmp .done
-.plain:
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_getcell2
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    inc bx
-    call sh_setval
-.done:
+.haverange:
+    mov cx, [sh_selcol]                ; ...for every column of the selection
+    mov si, [sh_selcol2]
+    cmp cx, si
+    jbe .colsok
+    xchg cx, si
+.colsok:
+.colloop:
+    mov [sh_fl_scol], cx
+    mov [sh_fl_dcol], cx
+    mov dx, [sh_fl_srow]
+.rowloop:
+    inc dx
+    cmp dx, bx
+    ja .nextcol
+    mov [sh_fl_drow], dx
+    call sh_fill_copy
+    jmp .rowloop
+.nextcol:
+    inc cx
+    cmp cx, si
+    jbe .colloop
     mov si, [sh_ownwin]
     call sh_repaint
 .out:
-    pop es
     pop di
     pop si
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -16838,7 +16895,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2984
+    OS88_BSS 2992
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -17450,7 +17507,11 @@ fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
 sh_tabanchor      equ fp_sw + 2        ; word: 0 = no Tab run in progress,
                                        ; else the run's start column PLUS ONE
-sh_bss_end        equ sh_tabanchor + 2
+sh_fl_scol        equ sh_tabanchor + 2 ; sh_fill_copy's source cell...
+sh_fl_srow        equ sh_fl_scol + 2
+sh_fl_dcol        equ sh_fl_srow + 2   ; ...and its destination
+sh_fl_drow        equ sh_fl_dcol + 2
+sh_bss_end        equ sh_fl_drow + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

@@ -67305,6 +67305,32 @@ The column is stored **plus one**, so zero means "no run in progress". A
 package's bss arrives zeroed, so the sentinel costs no initialisation pass and
 cannot be got wrong by a code path that forgets to run one.
 
+### 81.13 Fill Right and Fill Down fill the SELECTION
+
+Fill Down copies the selection's top row into every row beneath it, for every
+column in the selection; Fill Right copies its left column across. A
+single-cell selection fills the one neighbour, which is what these commands
+did before and what collapsing the anchor onto the extent already means here.
+
+They are a worked example of **a feature that silently stopped matching the
+one underneath it**. Both were written when a selection was one cell, and they
+took `sh_selcol`/`sh_selrow` and wrote to `+1`. Range selection arrived in
+stage 3.0a and gave every command `sh_selcol2`/`sh_selrow2` to read — these two
+were never taught to. Selecting a block and choosing Fill Down changed exactly
+one cell, left the selection drawn over cells it had not touched, and reported
+nothing. Nothing failed; the command was simply answering an older question.
+
+The subtle half is the **delta**. Both used a fixed `(+1,0)` / `(0,+1)` shift,
+which is right only for the neighbour. `sh_fill_copy` computes
+`destination - source`, so filling five rows down shifts the fifth reference by
+five. A version that kept the constant would fill the block and put `=A2` in
+every row of it — the failure that looks like it worked.
+
+`$` still means *"do not adjust when copied"*, so an absolute reference is
+pinned down the whole fill while the relative one beside it walks (§81.7).
+One `sh_repaint` runs after the whole fill rather than per cell, because a
+repaint is priced in primitive calls (PERFORMANCE.md).
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
