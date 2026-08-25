@@ -9361,10 +9361,18 @@ sh_dowrite_biff:
     mov [sh_wrec_type], al            ; stage 4.5: a LABEL takes neither RK nor
     mov ax, [es:si+SH_C_FOFF]         ; NUMBER
     mov [sh_wrec_toff], ax
+    mov al, [es:si+4]                 ; ...and a FORMULA cell may take a real
+    and al, 1                         ; FORMULA record, if its text is one this
+    mov [sh_wrec_hasf], al            ; writer can tokenise
     pop es                            ; ES = stgseg again
 
     cmp byte [sh_wrec_type], SH_T_TEXT
     je .aslabel
+    cmp byte [sh_wrec_hasf], 0
+    je .notformula
+    call sh_biff_formula              ; CF=0 = it wrote the record
+    jnc .recnext
+.notformula:
 
     ; --- which record? -------------------------------------------------------
     ; AN EXACT IN-RANGE INTEGER STILL GOES OUT AS RK, byte for byte as before,
@@ -9529,6 +9537,114 @@ sh_dowrite_biff:
 ; understood subtype, until EOF or the buffer end (a truncated/foreign
 ; file).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_biff_formula - a FORMULA record (0206H in BIFF3) for the cell being
+; written. out: CF=0 it was written; CF=1 = not expressible, and the caller
+; falls through to RK/NUMBER exactly as before.
+;
+; The result field carries the CACHED VALUE as an IEEE double, which is what
+; the record is for: a reader that does not recalculate still shows the right
+; number, and one that does gets the same answer from the tokens.
+; -----------------------------------------------------------------------------
+sh_biff_formula:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    ; DI IS NOT SAVED, AND MUST NOT BE. It is the staging write cursor this
+    ; whole writer advances through the file, and sh_biffw both reads and
+    ; advances it - so a record emitted here has to leave it moved on, exactly
+    ; as the RK and NUMBER paths do. The first version pushed it and then used
+    ; it as the text-copy destination, which put every FORMULA record into the
+    ; staging segment at sh_rwsrc's offset - written, past the cursor, and
+    ; invisible to the file the writer then saved. BX carries the copy instead.
+    mov es, [sh_txtseg]               ; the formula text out of the arena into
+    mov si, [sh_wrec_toff]            ; DS, where the emitter reads
+    mov bx, sh_rwsrc
+    mov cx, SH_EDITMAX
+.copy:
+    mov al, [es:si]
+    mov [bx], al
+    or al, al
+    jz .copied
+    inc si
+    inc bx
+    dec cx
+    jnz .copy
+    mov byte [bx], 0
+.copied:
+    mov es, [sh_stgseg]               ; AND BACK TO THE STAGING SEGMENT, which
+                                      ; is where sh_biffw writes. The first
+                                      ; version left ES pointing at DS through
+                                      ; the whole record emit, so every word of
+                                      ; every FORMULA record went into Sheet's
+                                      ; own data segment instead of the file -
+                                      ; no crash, no record, and a corrupted
+                                      ; variable wherever DI happened to be.
+    mov si, sh_rwsrc
+    call sh_rpn_emit                  ; CX = token bytes, or CF=1
+    jc .no
+    mov [sh_wrec_len], cx
+    mov ax, di                        ; room? header + body + the tokens
+    add ax, cx
+    add ax, 22
+    cmp ax, SH_STAGE_MAX
+    ja .no
+    mov ax, 0x0206                    ; FORMULA, BIFF3
+    call sh_biffw
+    mov ax, [sh_wrec_len]
+    add ax, 18                        ; row+col+xf+result(8)+flags+cce = 18
+    call sh_biffw
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    xor ah, ah
+    mov al, [sh_wrec_fmt]
+    call sh_biffw
+    mov ax, [sh_wrec_dval]            ; the cached result, verbatim
+    call sh_biffw
+    mov ax, [sh_wrec_dval+2]
+    call sh_biffw
+    mov ax, [sh_wrec_dval+4]
+    call sh_biffw
+    mov ax, [sh_wrec_dval+6]
+    call sh_biffw
+    xor ax, ax                        ; option flags: neither recalc bit
+    call sh_biffw
+    mov ax, [sh_wrec_len]             ; cce, the token array's own length
+    call sh_biffw
+    mov si, sh_rpn_buf
+    mov cx, [sh_wrec_len]
+    jcxz .done
+.put:
+    mov al, [si]
+    call sh_stgputb
+    inc si
+    dec cx
+    jnz .put
+.done:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+
 sh_doread_biff:
     push ax
     push bx
@@ -9580,7 +9696,9 @@ sh_doread_biff:
     je .isnum                          ; the only way a fraction can travel
     cmp ax, 0x0204                     ; LABEL (BIFF3/4). 0004H is BIFF2's,
     je .islabel                        ; with a one-byte length, and is NOT
-    jmp .skip                          ; accepted here for that reason
+    cmp ax, 0x0206                     ; accepted here for that reason
+    je .isformula                      ; FORMULA: its CACHED RESULT is read,
+    jmp .skip                          ; the token array skipped - see below
 .isfont:
     mov bx, [sh_biff_nfont]
     cmp bx, SH_BIFF_FONT_CAP
@@ -9687,6 +9805,40 @@ sh_doread_biff:
     mov ax, [es:si+4]                  ; xf index
     mov [sh_wrec_xf], ax
     mov ax, [es:si+6]                  ; the eight value bytes, verbatim
+    mov [sh_acc], ax
+    mov ax, [es:si+8]
+    mov [sh_acc+2], ax
+    mov ax, [es:si+10]
+    mov [sh_acc+4], ax
+    mov ax, [es:si+12]
+    mov [sh_acc+6], ax
+    push es
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_setvald
+    call sh_biff_applyfmt
+    pop es
+    pop dx
+    jmp .skip
+.isformula:
+    ; ONLY THE RESULT IS READ, and the token array is stepped over. Sheet keeps
+    ; formulas as TEXT (81.3) and re-parses them; turning RPN back into text is
+    ; a decompiler, and one built against a spec section (3.12) that is marked
+    ; *2do* would guess at exactly the function names it could not verify. The
+    ; value is right either way, which is the same trade this app's SYLK reader
+    ; makes when a file has no ;E field.
+    push dx
+    mov ax, si
+    add ax, dx
+    cmp ax, cx
+    ja .toolong
+    mov ax, [es:si]                    ; row
+    mov [sh_wrec_row], ax
+    mov ax, [es:si+2]                  ; col
+    mov [sh_wrec_col], ax
+    mov ax, [es:si+4]                  ; xf index
+    mov [sh_wrec_xf], ax
+    mov ax, [es:si+6]                  ; the eight result bytes
     mov [sh_acc], ax
     mov ax, [es:si+8]
     mov [sh_acc+2], ax
@@ -12658,6 +12810,590 @@ sh_setformula:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; RPN TOKENS - a formula that reaches BIFF as a FORMULA record instead of a
+; flattened number.
+;
+; WHAT THIS DELIBERATELY DOES NOT DO, first, because the boundary is the whole
+; design. It refuses any formula containing a FUNCTION CALL, and falls back to
+; writing the cached value as NUMBER or RK exactly as before. The reason is not
+; effort: docs/excelfileformat.pdf's section 3.12, "Built-in Sheet Functions",
+; is marked *2do* - the index table is not written in that revision. A guessed
+; index does not produce a broken file, it produces a file Excel opens happily
+; and computes SOMETHING ELSE from, silently. That is strictly worse than
+; carrying the value, which is at least right.
+;
+; BIFF3's tFunc and tFuncVar also take a ONE-BYTE index, so several of Sheet's
+; own functions could not be expressed even with the table - POWER is 337.
+;
+; So: numbers, cell references, ranges, the six comparisons, + - * / ^, unary
+; minus and parentheses. That is most of what a sheet actually holds, and every
+; one of them is verifiable against a spec section that IS written.
+;
+; THE PARSER HERE IS A SECOND ONE, not the evaluator with a mode bolted on.
+; sh_pexpr and friends compute; this walks the same grammar and emits. Two
+; parsers can drift - but this one only ever has to answer "can I express
+; this", and when it cannot the writer falls back to a path that was already
+; correct. A shared parser with an emit flag would have put a second set of
+; states inside the routine every cell value already depends on.
+; =============================================================================
+SH_PTG_ADD     equ 0x03                 ; the operator tokens (excelfileformat 3.5.7)
+SH_PTG_SUB     equ 0x04
+SH_PTG_MUL     equ 0x05
+SH_PTG_DIV     equ 0x06
+SH_PTG_POWER   equ 0x07
+SH_PTG_LT      equ 0x09
+SH_PTG_LE      equ 0x0A
+SH_PTG_EQ      equ 0x0B
+SH_PTG_GE      equ 0x0C
+SH_PTG_GT      equ 0x0D
+SH_PTG_NE      equ 0x0E
+SH_PTG_UMINUS  equ 0x13
+SH_PTG_PAREN   equ 0x15
+SH_PTG_INT     equ 0x1E                 ; + a 16-bit unsigned
+SH_PTG_NUM     equ 0x1F                 ; + an IEEE double
+SH_PTG_REFV    equ 0x44                 ; value class: 3.3.4's transformation
+SH_PTG_AREAV   equ 0x45                 ; turns the default R class into V inside
+                                      ; an ordinary cell formula
+SH_RPN_MAX   equ 96                   ; a token array longer than this is
+                                      ; refused rather than truncated
+
+; -----------------------------------------------------------------------------
+; sh_rpn_emit - in: SI = the formula text (no leading '=')
+; out: CF=0 and CX = bytes in sh_rpn_buf; CF=1 = cannot be expressed
+; -----------------------------------------------------------------------------
+sh_rpn_emit:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    mov [sh_rpn_p], si
+    mov word [sh_rpn_len], 0
+    mov byte [sh_rpn_bad], 0
+    call sh_rpn_cmp
+    cmp byte [sh_rpn_bad], 0
+    jne .no
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]                ; anything left over means the grammar
+    cmp byte [si], 0                  ; above did not account for all of it
+    jne .no
+    cmp word [sh_rpn_len], 0
+    je .no
+    mov cx, [sh_rpn_len]
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; sh_rpn_put - AL into the buffer; sets sh_rpn_bad if it would overflow
+sh_rpn_put:
+    push bx
+    mov bx, [sh_rpn_len]
+    cmp bx, SH_RPN_MAX
+    jae .full
+    mov [sh_rpn_buf + bx], al
+    inc word [sh_rpn_len]
+    pop bx
+    ret
+.full:
+    mov byte [sh_rpn_bad], 1
+    pop bx
+    ret
+
+sh_rpn_putw:                          ; AX, little-endian
+    push ax
+    call sh_rpn_put
+    pop ax
+    push ax
+    mov al, ah
+    call sh_rpn_put
+    pop ax
+    ret
+
+sh_rpn_skip:                          ; past spaces
+    push si
+    mov si, [sh_rpn_p]
+.lp:
+    cmp byte [si], ' '
+    jne .done
+    inc si
+    jmp .lp
+.done:
+    mov [sh_rpn_p], si
+    pop si
+    ret
+
+; --- the grammar, one level per routine, mirroring sh_pcmp/sh_pexpr/... ------
+; sh_rpn_cmp - the comparison level, lowest precedence
+sh_rpn_cmp:
+    push ax
+    push si
+    call sh_rpn_add
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    mov al, [si]
+    cmp al, '='
+    je .eq
+    cmp al, '<'
+    je .lt
+    cmp al, '>'
+    je .gt
+    jmp .out
+.eq:
+    inc si
+    mov [sh_rpn_p], si
+    mov ah, SH_PTG_EQ
+    jmp .rhs
+.lt:
+    inc si
+    mov ah, SH_PTG_LT
+    cmp byte [si], '='
+    jne .lt2
+    inc si
+    mov ah, SH_PTG_LE
+    jmp .ltdone
+.lt2:
+    cmp byte [si], '>'
+    jne .ltdone
+    inc si
+    mov ah, SH_PTG_NE
+.ltdone:
+    mov [sh_rpn_p], si
+    jmp .rhs
+.gt:
+    inc si
+    mov ah, SH_PTG_GT
+    cmp byte [si], '='
+    jne .gtdone
+    inc si
+    mov ah, SH_PTG_GE
+.gtdone:
+    mov [sh_rpn_p], si
+.rhs:
+    push ax
+    call sh_rpn_add                   ; ONE comparison only, which is what the
+    pop ax                            ; evaluator does too - a<b<c is not a
+    cmp byte [sh_rpn_bad], 0          ; thing either of them accepts
+    jne .out
+    mov al, ah
+    call sh_rpn_put
+.out:
+    pop si
+    pop ax
+    ret
+
+; sh_rpn_add - additive level, left-associative
+sh_rpn_add:
+    push ax
+    push si
+    call sh_rpn_term
+.more:
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    mov al, [si]
+    cmp al, '+'
+    je .add
+    cmp al, '-'
+    je .sub
+    jmp .out
+.add:
+    mov ah, SH_PTG_ADD
+    jmp .go
+.sub:
+    mov ah, SH_PTG_SUB
+.go:
+    inc si
+    mov [sh_rpn_p], si
+    push ax
+    call sh_rpn_term
+    pop ax
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov al, ah
+    call sh_rpn_put
+    jmp .more
+.out:
+    pop si
+    pop ax
+    ret
+
+; sh_rpn_term - multiplicative level
+sh_rpn_term:
+    push ax
+    push si
+    call sh_rpn_pow
+.more:
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    mov al, [si]
+    cmp al, '*'
+    je .mul
+    cmp al, '/'
+    je .div
+    jmp .out
+.mul:
+    mov ah, SH_PTG_MUL
+    jmp .go
+.div:
+    mov ah, SH_PTG_DIV
+.go:
+    inc si
+    mov [sh_rpn_p], si
+    push ax
+    call sh_rpn_pow
+    pop ax
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov al, ah
+    call sh_rpn_put
+    jmp .more
+.out:
+    pop si
+    pop ax
+    ret
+
+; sh_rpn_pow - '^', RIGHT-associative, exactly as sh_ppow is
+sh_rpn_pow:
+    push ax
+    push si
+    call sh_rpn_unary
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], '^'
+    jne .out
+    inc si
+    mov [sh_rpn_p], si
+    call sh_rpn_pow                   ; recursion is what makes it right-assoc
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov al, SH_PTG_POWER
+    call sh_rpn_put
+.out:
+    pop si
+    pop ax
+    ret
+
+; sh_rpn_unary - a leading minus becomes tUminus AFTER its operand
+sh_rpn_unary:
+    push ax
+    push si
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], '-'
+    jne .plain
+    inc si
+    mov [sh_rpn_p], si
+    call sh_rpn_unary
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov al, SH_PTG_UMINUS
+    call sh_rpn_put
+    jmp .out
+.plain:
+    cmp byte [si], '+'                ; a leading plus is a no-op, and tUplus
+    jne .factor                       ; would only add a byte
+    inc si
+    mov [sh_rpn_p], si
+.factor:
+    call sh_rpn_factor
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rpn_factor - a number, a cell reference, a range, or a parenthesised
+; expression. ANYTHING ELSE REFUSES, which is where a function call lands and
+; is the whole safety property of this emitter.
+; -----------------------------------------------------------------------------
+sh_rpn_factor:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    mov al, [si]
+    cmp al, '('
+    je .paren
+    cmp al, '$'
+    je .ref
+    cmp al, '0'
+    jb .notdigit
+    cmp al, '9'
+    jbe .num
+.notdigit:
+    cmp al, '.'                       ; a leading decimal point is a number
+    je .num
+    cmp al, 'A'                       ; A LETTER STARTS A REFERENCE - and only
+    jb .bad                           ; a reference, because a function call is
+    cmp al, 'Z'                       ; refused a level down when sh_rpn_one
+    jbe .ref                          ; finds a '(' where digits should be
+    cmp al, 'a'
+    jb .bad
+    cmp al, 'z'
+    jbe .ref
+    jmp .bad
+.paren:
+    inc si
+    mov [sh_rpn_p], si
+    call sh_rpn_cmp
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], ')'
+    jne .bad
+    inc si
+    mov [sh_rpn_p], si
+    mov al, SH_PTG_PAREN                ; kept, because Excel round-trips it into
+    call sh_rpn_put                   ; the formula it shows the user
+    jmp .out
+.num:
+    call sh_rpn_number
+    jmp .out
+.ref:
+    call sh_rpn_ref
+    jmp .out
+.bad:
+    mov byte [sh_rpn_bad], 1
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rpn_number - tInt for a whole number that fits 0..65535, tNum otherwise.
+; The value comes from fp_atof, so what BIFF carries and what the cell computes
+; are parsed by ONE routine rather than two that could disagree about "1e3".
+; -----------------------------------------------------------------------------
+sh_rpn_number:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, [sh_rpn_p]
+    call fp_atof                      ; SI advances past what it consumed
+    jc .bad
+    mov [sh_rpn_p], si
+    call sh_acc_store                 ; the packed double, in sh_acc
+    call sh_acc_load_a
+    call fp_a2i                       ; CF=1: no signed word holds it
+    jc .asnum
+    or ax, ax
+    js .asnum                         ; tInt is UNSIGNED; a negative literal
+    mov bx, ax                        ; arrives as tUminus over a positive one
+    call fp_i2a                       ; and only an exact integer may use it
+    push si
+    mov si, sh_acc
+    call fp_unpack_b
+    pop si
+    call fp_cmpab
+    jne .asnum
+    mov al, SH_PTG_INT
+    call sh_rpn_put
+    mov ax, bx
+    call sh_rpn_putw
+    jmp .out
+.asnum:
+    mov al, SH_PTG_NUM
+    call sh_rpn_put
+    mov si, sh_acc                    ; the eight bytes, verbatim - BIFF wants
+    mov cx, 8                         ; exactly the IEEE double this file
+.nbyte:                               ; already stores
+    mov al, [si]
+    call sh_rpn_put
+    inc si
+    dec cx
+    jnz .nbyte
+    jmp .out
+.bad:
+    mov byte [sh_rpn_bad], 1
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rpn_ref - a cell reference, or a range if a ':' follows.
+;
+; The row word carries BOTH relative flags (excelfileformat 3.4.1): bit 15 is
+; the ROW's, bit 14 the COLUMN's, and set means RELATIVE. So $A$1 is 0x0000 and
+; A1 is 0xC000 - the opposite polarity from how the '$' reads, which is the one
+; thing here worth checking twice.
+;
+; A "SheetN!" prefix refuses: a cross-sheet reference is tRef3d and needs an
+; EXTERNSHEET table this writer does not build.
+; -----------------------------------------------------------------------------
+sh_rpn_ref:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call sh_rpn_one                   ; -> BX = row word, DL = col
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov [sh_rpn_r1], bx
+    mov [sh_rpn_c1], dl
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], ':'
+    je .range
+    mov al, SH_PTG_REFV
+    call sh_rpn_put
+    mov ax, [sh_rpn_r1]
+    call sh_rpn_putw
+    mov al, [sh_rpn_c1]
+    call sh_rpn_put
+    jmp .out
+.range:
+    inc si
+    mov [sh_rpn_p], si
+    call sh_rpn_one
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov al, SH_PTG_AREAV
+    call sh_rpn_put
+    mov ax, [sh_rpn_r1]               ; first row, last row, first col, last col
+    call sh_rpn_putw
+    mov ax, bx
+    call sh_rpn_putw
+    mov al, [sh_rpn_c1]
+    call sh_rpn_put
+    mov al, dl
+    call sh_rpn_put
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_rpn_one - one [$]COL[$]ROW at sh_rpn_p. out: BX = the row word with its
+; two relative flags, DL = the column. Sets sh_rpn_bad and nothing else on a
+; token that is not a reference.
+sh_rpn_one:
+    push ax
+    push cx
+    push si
+    push di
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    mov word [sh_rpn_rel], 0xC000     ; relative until a '$' says otherwise
+    cmp byte [si], '$'
+    jne .colletters
+    inc si
+    and word [sh_rpn_rel], 0x8000     ; absolute COLUMN clears bit 14
+.colletters:
+    mov di, sh_ident
+    xor cx, cx
+.gather:
+    mov al, [si]
+    cmp al, 'A'
+    jb .gathered
+    cmp al, 'Z'
+    jbe .keep
+    cmp al, 'a'
+    jb .gathered
+    cmp al, 'z'
+    ja .gathered
+.keep:
+    cmp cx, 2                         ; two letters is the whole of 256 columns
+    jae .bad
+    and al, 0xDF
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp .gather
+.gathered:
+    jcxz .bad
+    mov byte [di], 0
+    cmp byte [si], '$'
+    jne .rowdigits
+    inc si
+    and word [sh_rpn_rel], 0x4000     ; absolute ROW clears bit 15
+.rowdigits:
+    mov al, [si]
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    xor bx, bx
+.digit:
+    mov al, [si]
+    cmp al, '0'
+    jb .haverow
+    cmp al, '9'
+    ja .haverow
+    sub al, '0'
+    xor ah, ah
+    push ax
+    mov ax, bx
+    mov cx, 10
+    mul cx
+    mov bx, ax
+    pop ax
+    add bx, ax
+    cmp bx, SH_ROWS
+    ja .bad
+    inc si
+    jmp .digit
+.haverow:
+    or bx, bx
+    jz .bad                           ; row 0 does not exist; A0 is not a cell
+    dec bx                            ; BIFF rows are zero-based
+    call sh_identcol                  ; AX = the 0-based column
+    cmp ax, SH_COLS
+    jae .bad
+    mov dl, al
+    or bx, [sh_rpn_rel]
+    mov [sh_rpn_p], si
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+.bad:
+    mov byte [sh_rpn_bad], 1
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -15697,7 +16433,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2810
+    OS88_BSS 2918
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -15886,7 +16622,8 @@ sh_wrec_dval  equ sh_wrec_foff + 2          ; 8: the SYLK writer's banked value
 sh_wrec_type  equ sh_wrec_dval + 8          ; byte: SH_T_* of the cell being
 sh_wrec_toff  equ sh_wrec_type + 1          ; written, where its label is, and
 sh_wrec_len   equ sh_wrec_toff + 2          ; how long that label is
-sh_biff_end   equ sh_wrec_len + 2           ; the BIFF reader's banked file end
+sh_wrec_hasf  equ sh_wrec_len + 2      ; byte: this cell is a formula
+sh_biff_end   equ sh_wrec_hasf + 1           ; the BIFF reader's banked file end
 sh_rc_tval    equ sh_biff_end + 2           ; 8: a whole double, not a word
 sh_rc_tfml    equ sh_rc_tval + 8
 
@@ -16086,7 +16823,14 @@ ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
 ch_legy        equ ch_title + 2     ; the legend row being drawn...
 ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
 sh_chart_title equ ch_legr + 2      ; 16: "Column A"
-sh_rwsrc          equ sh_chart_title + 16             ; SH_EDITMAX+1: the formula
+sh_rpn_p       equ sh_chart_title + 16  ; --- stage 4.5: the RPN emitter ---
+sh_rpn_len     equ sh_rpn_p + 2
+sh_rpn_bad     equ sh_rpn_len + 2    ; byte: this formula cannot be expressed
+sh_rpn_rel     equ sh_rpn_bad + 1    ; the two relative-reference flags
+sh_rpn_r1      equ sh_rpn_rel + 2    ; a range's first cell, held across the
+sh_rpn_c1      equ sh_rpn_r1 + 2     ; second one's parse
+sh_rpn_buf     equ sh_rpn_c1 + 2     ; SH_RPN_MAX: the token array
+sh_rwsrc          equ sh_rpn_buf + SH_RPN_MAX             ; SH_EDITMAX+1: the formula
                                               ; text copied out for rewriting
 sh_rwdst          equ sh_rwsrc + SH_EDITMAX + 1  ; SH_RW_CAP: the rewritten
                                               ; text being built

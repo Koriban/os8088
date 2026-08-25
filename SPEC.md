@@ -67061,6 +67061,68 @@ menu item stays, and calls the same routine, so the two cannot say different
 things: Excel has a Help menu and this app follows Excel, while the pull-down
 is the convention of the system it runs on.
 
+### 81.10.2 Formulas reach BIFF as formulas
+
+A formula cell is written as a **FORMULA record (0206H in BIFF3)** carrying an
+RPN token array, not as the flattened value it used to be. The result field
+still carries the cached double, so a reader that does not recalculate shows
+the right number and one that does gets the same answer from the tokens.
+
+**It refuses any formula containing a function call**, falling back to
+NUMBER/RK exactly as before, and the reason is not effort:
+`docs/excelfileformat.pdf` §3.12, *Built-in Sheet Functions*, is marked **2do**
+— the index table is not written in that revision. A guessed index does not
+produce a broken file; it produces one Excel opens happily and computes
+**something else** from, silently. Carrying the value is at least right. BIFF3's
+`tFunc`/`tFuncVar` also take a one-byte index, so several of Sheet's own
+functions could not be expressed even with the table — POWER is 337.
+
+So: numbers, cell references, ranges, the six comparisons, `+ - * / ^`, unary
+minus and parentheses. Every one is verifiable against a spec section that *is*
+written.
+
+**The parser is a second one**, not the evaluator with a mode bolted on.
+`sh_pexpr` and friends compute; `sh_rpn_*` walks the same grammar and emits.
+Two parsers can drift — but this one only ever has to answer *can I express
+this*, and when it cannot, the writer falls back to a path that was already
+correct. A shared parser with an emit flag would have put a second set of
+states inside the routine every cell value already depends on.
+
+The row word carries **both** relative flags (§3.4.1): bit 15 the row's, bit 14
+the column's, and **set means relative** — so `$A$1` is 0x0000 and `A1` is
+0xC000, the opposite polarity from how the `$` reads.
+
+#### 81.10.3 Three bugs, and what each one looked like
+
+None of them crashed, and none produced a wrong file — they produced **no
+FORMULA records at all**, three times over, with the file byte-identical each
+run.
+
+1. **`sh_rpn_factor` only routed `$` to the reference path.** A plain `A1`
+   starts with a letter and fell straight through to the refusal.
+2. **ES was left pointing at DS** for the whole record emit, so every word of
+   every FORMULA record went into Sheet's own data segment instead of the file.
+3. **DI is the staging write cursor** this whole writer advances through the
+   file, and `sh_biffw` both reads and advances it. The routine pushed it and
+   then used it as the text-copy destination, so the records were written into
+   the staging segment at `sh_rwsrc`'s offset — past the cursor, and invisible
+   to the file that was then saved. BX carries the copy now, and **DI is
+   deliberately not saved**: a record emitted here must leave it moved on,
+   exactly as the RK and NUMBER paths do.
+
+What found all three was a **throwaway record in the output** — opcode 00FEH
+carrying the emitter's own state, decoded on the host. Bug 2 was found by that
+probe failing to appear, which was itself the evidence: a probe that cannot
+write is a probe pointing at the wrong segment.
+
+### 81.10.4 DIF carries no formulas because DIF has none
+
+Listed as a gap and closed as **not applicable**: DIF's data items are type 0
+(numeric) and type 1 (string), and the format has no formula representation at
+all. Writing one would mean inventing a non-standard extension no DIF reader
+would understand. SYLK's `;E` field (§81.7.1) is the one interchange format
+here that does carry the expression, and it has since stage 4.x.
+
 ### 81.11 Text cells
 
 Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything
