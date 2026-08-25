@@ -105,11 +105,11 @@ SH_ROWS      equ 16384
 ; stage 2.x: Format > Column Width.../Row Height... make these RUNTIME
 ; values (sh_cellw/sh_cellh/sh_cellch bss words, set from one of these
 ; presets) rather than compile-time constants - every site below that used
-; to read the equ now reads the bss word instead. Real Excel's own dialogs
-; are free-text numeric entry; this app has no text-input widget at the
-; app level (only the kernel's own Standard File dialog has one), so
-; Column Width/Row Height are a 3-preset radio choice instead, the same
-; honest scope reduction already used for Number/Alignment/Font. Widths
+; to read the equ now reads the bss word instead. The three presets below
+; are what Column Width.../Row Height... offered while this app had no
+; text-input widget of its own; stage 3.0c gave it one (sh_idlg_*, over
+; os88line.inc), so both dialogs are REAL NUMERIC ENTRY now and these are
+; only the startup defaults. Widths
 ; must stay multiples of 8 - sh_blank and every OSAPI_FONT_RUN cell text
 ; is built one glyph (8px) at a time, so a non-multiple would leave a
 ; fractional glyph column with nothing sensible to draw there.

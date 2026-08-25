@@ -66721,3 +66721,402 @@ machinery — `drutil list` to know a burner is attached at all (none: the
 menu row says so and does nothing, §47's shape), `hdiutil burn` to burn and
 verify. macOS only, and it says so: on Linux the same job is `lsblk` and
 `dd`, and a guide pretending to cover both would test as neither.
+
+## 81. SHEET — the spreadsheet (`apps/sheet/sheet.asm`)
+
+A worksheet package: a grid of cells, formulas over them, formats on them, a
+macro language that drives them, three interchange formats, and a chart window
+onto a column of them. It is the largest package in the tree and the only one
+whose **document is a data structure rather than a stream**, which is what
+shapes almost every decision below.
+
+The target is **Excel 2.1d**, in look as well as function — the in-window menu
+bar, the reference box and formula bar above the grid, the "Ready" status line
+below it, and the dialogs, are meant to be that program rather than something
+like it.
+
+**The value model is a signed 16-bit integer and that is a stated limit, not
+an oversight.** Entering `123456` commits as `-7616`, because that is
+123456 mod 65536 read as signed. Division truncates toward zero and division
+by zero yields 0 rather than faulting. Every text, date, trigonometric and
+financial function in Excel's library — the substantial majority of it — is
+waiting on this, not on effort.
+
+### 81.1 The cell array — sorted, sparse, and shared by four sheets
+
+Cells live in a claimed heap segment (`SH_CLAIM_CELLS_KB` = 16KB) as a
+**sorted sparse array** of 12-byte records, `SH_CELL_CAP` = 1365 of them,
+binary-searched by `sh_findcell`:
+
+```
+  +0  packed row | sheet   word: bits 0-13 the row (SH_ROW_MASK, 16384 rows),
+                           bits 14-15 the sheet index (SH_SHEETS = 4)
+  +2  col                  word: 0..SH_COLS-1 (256)
+  +4  flags                byte: bit 0 HASFORMULA, bit 1 EVALUATING
+  +5  format               byte: SH_FMT_* — see 81.4
+  +6  value                word: the signed 16-bit value, or a formula's
+                           cached result
+  +8  formula_off          word: offset into the text arena
+  +10 pass                 word: the repaint pass that cached +6
+```
+
+**Sparse means no record is default**, and the array is sorted so a repaint can
+walk only the cells that exist. **Four sheets share one array** rather than
+having four of their own: the sheet index is packed into the row word, so the
+sort order is (sheet, row, col) and one instance holds a workbook. That is why
+`sh_findcell` builds its key from `[sh_cursheet]` and why a cross-sheet
+reference (`Sheet2!A1`) temporarily repoints that word instead of reaching into
+a different structure.
+
+**A cell with no record and a cell holding 0 are the same thing** by design,
+and the same philosophy governs the two side tables below: no record means the
+default, and clearing the last bit removes the record again.
+
+### 81.2 Seven claims, and what each is for
+
+`MEM_OWNER_MAX` is 8 (§29 and `kernel/memory.inc`) and Sheet holds **seven** —
+its own region plus six:
+
+| claim | size | holds |
+|---|---|---|
+| `sh_cellseg`  | 16KB | the cell array above |
+| `sh_txtseg`   | 8KB  | the formula/note text arena |
+| `sh_stgseg`   | 32KB | file I/O staging, and the row/column shift |
+| `sh_bordseg`  | 4KB  | the border table (5-byte records) |
+| `sh_noteseg`  | 4KB  | the note table (6-byte records) |
+| `sh_chartseg` | 19KB | the live chart window's offscreen canvas (§82) |
+
+**The text arena is append-only and never compacted.** Re-editing a formula
+appends a new copy and orphans the old one; notes share the arena and behave
+the same way. That is a stated cost rather than a hidden one — a compacting
+arena means every `formula_off` in the cell array has to be rewritten in
+lockstep, which is the same class of invalidation the array's own insert
+shifting already makes dangerous, and 8KB is a great many formulas.
+
+### 81.3 Formulas — a text grammar, re-parsed on demand
+
+A formula is stored as **text** and parsed each time it is evaluated. There is
+no compiled form and no dependency graph. The grammar is recursive descent:
+
+```
+  cmp    := expr (('='|'<'|'>'|'<='|'>='|'<>') expr)?
+  expr   := term (('+'|'-') term)*
+  term   := pow (('*'|'/') pow)*
+  pow    := factor ('^' pow)?              ; RIGHT-associative
+  factor := '-' factor | '(' cmp ')' | NUMBER | CELLREF | NAME '(' args ')'
+  args   := arg (',' arg)*
+  arg    := CELLREF ':' CELLREF | cmp
+```
+
+`^` is right-associative, so `2^3^2` is 512 and not 64, and it binds tighter
+than `*` and looser than unary minus — Excel's own precedence, in which `-2^2`
+is `-(2^2)`.
+
+**Cycle detection is the EVALUATING flag, not a graph.** `sh_eval_cell` sets
+bit 1 of `+4` on entry and clears it on exit; a nested evaluation that reaches
+a cell already marked has found a cycle and yields 0. **Memoization is the pass
+stamp**: `+10` records the repaint pass that produced `+6`, so a cell
+referenced ten times in one repaint is evaluated once. Recursion is bounded at
+`SH_EVAL_MAXDEPTH` = 6, and **each level gets its own copy of the formula
+text** — a nested evaluation must not overwrite the buffer its caller is still
+parsing.
+
+**`ROW()` and `COLUMN()` answer for the cell being evaluated**, not the one
+selected, so `sh_eval_cell` banks and restores `sh_evrow`/`sh_evcol` per frame.
+A formula reached through another cell's reference still answers for itself.
+
+25 functions, dispatched through `sh_functab` where **the id is the entry's
+index**, so adding one is a string and a table word. `ISBLANK`, `ISNUMBER` and
+`ISNA` are **deliberately absent**: an empty cell already evaluates to 0 and is
+indistinguishable from a cell holding 0 without reference-typed arguments, and
+every value here is a number, so those three could only be constants or
+unanswerable. Absent beats plausible-but-wrong.
+
+#### 81.3.1 Reference rewriting, and the one rule that is easy to invert
+
+Four operations move cells and must rewrite the references in every formula
+that names them: Insert/Delete Row/Column, Copy/Paste, Fill Right/Down, and
+Sort Column. All four work on the **text**, by scanning rather than
+re-parsing — a scan is sufficient because a cell reference has exactly one
+shape and a quoted string is copied verbatim.
+
+`$A$1` pins a reference, and **the two rewriter families need opposite
+behaviour**:
+
+* **Copy/Paste and Fill** (`sh_copy_cellpart`) **honour** `$` and decline to
+  shift the pinned half. That refusal is the whole feature.
+* **Insert/Delete** (`sh_reidx_cellpart`) **always shift, absolute included**,
+  and only preserve the markers. Inserting a row above physically moves the
+  referenced cell, so `$A$1` must become `$A$2`. Pinning it there would leave
+  the formula quietly naming different data — a silent wrongness, not a
+  visible one.
+
+`$` is otherwise purely textual: it changes what the rewriters do, never what
+an expression evaluates to. It must be accepted in **four** places — the
+character gate in `sh_onkey` (an allow-list, so an unlisted character never
+reaches the parser at all), `sh_pfactor`'s router (which decides a token's type
+from its first character), `sh_pident`/`sh_pcellref`, and `sh_isletter_at`,
+which is where both rewriters' scanners decide a reference starts.
+
+Sort Column cannot use a uniform delta, because a sort is an arbitrary
+permutation: it stages an `origidx[]` and rewrites each item by its own shift.
+
+### 81.4 The format byte — and why nothing else may live in it
+
+`+5` carries bold, underline, alignment and number format in one byte
+(`SH_FMT_*`). **Its numeric value IS the BIFF XF index** that the writer emits,
+which is what `SH_BIFF_XF_CAP` = 64 means — six used bits. **The two spare bits
+are not spare.** Putting anything else there would silently change every XF in
+every file this app writes. The value-model tag that a later stage needs
+therefore goes in a **new byte**, never in bits 6-7.
+
+Borders are a **separate sparse table** in their own claim, 5 bytes per record
+and the same shape and packing as the cell array, precisely because almost no
+cell has a border and widening the main record for them would cost every cell
+the space. Notes are a **third** such table, 6 bytes, whose payload is an offset
+into the shared text arena rather than storage of its own.
+
+### 81.5 The in-window menu bar
+
+Sheet draws **its own menu bar inside its window** rather than using the kernel
+menu set (§12). The kernel's is capped at five menus and Sheet has nine —
+**File, Edit, Formula, Format, Data, Options, Macro, Sheets, Help**, which is
+Excel 2.1d's own bar with Sheet's multi-sheet menu standing in for Window and
+sitting where Window sits. Menus are press-hold-move-release, tracked by
+`sh_mtrack`'s own polling loop rather than by kernel command callbacks, which
+is why `sh_mfire` sets `SI` itself and cannot assume the window pointer the way
+a kernel callback could.
+
+**`sh_mfire`'s `cmp ah, N` chain is the only place a menu index is hard-coded.**
+The macro language names commands, not menu positions. That is what makes
+inserting a menu — as Formula was inserted at index 2 — a contained change
+rather than a search across the file.
+
+**Exit is not in Sheet's File menu**: the OS menu owns closing a package.
+**Print... is a stub** that says so in the status bar, because there is no
+print backend anywhere in this OS; an item that opened a dialog which could not
+print would be worse than one that is honest.
+
+### 81.6 Dialogs — and the window slot they must free
+
+Sheet's dialogs are **second windows of a package** (§38.1), and they are
+closed with **`OSAPI_WM_DESTROY`, never `OSAPI_WM_CLOSE`**.
+
+Close means *"quit the instance owning this window"*, which reaches
+`app_close_win` (§29.4). A dialog has **no owning instance**, so that path falls
+through to a plain hide: the pixels come down, the window looks closed, and
+**the slot stays allocated with the package's segment still in it**. `MAX_WIN`
+is 12, so roughly ten dialog opens into a session `OSAPI_WM_CREATE` begins
+failing and no dialog will open again — in this app or any other — with nothing
+reported and the menu item simply doing nothing. Destroy frees the record. The
+gfx lock is already held by every window callback, which is what destroy wants.
+
+Two dialog engines serve most of the menu: `sh_fdlg_*`, a radio-list dialog
+with a **kind** byte serving Number/Alignment/Font/Insert/Delete, and
+`sh_idlg_*`, a **one-line input** dialog whose kind serves Goto, Row Height and
+Column Width. One implementation with a kind is the pattern here, not five
+copies. `sh_bdlg_*` (Border, six checkboxes) and `sh_ndlg_*` (Note, a
+multi-line field over §83) are their own.
+
+**A dialog pins the cell it was opened on.** These windows are not modal, so
+the selection can move while one is up; writing to whatever happens to be
+selected at OK time would attach the result to the wrong cell.
+
+### 81.7 File formats
+
+**SYLK**, **DIF** and **BIFF** (Excel 2.x), read and written, chosen by
+extension. Staging goes through `sh_stgseg`. The BIFF writer emits the integer
+RK subtype for every value, which is exactly what a 16-bit integer model can
+produce; a later widening adds `NUMBER` for the rest and should keep emitting
+RK whenever a value is an exact in-range integer, so files this app has already
+written stay byte-identical.
+
+### 81.8 The macro language
+
+Five commands — `GOTO`, `RETURN`, `SET.VALUE`, `SELECT`, `ALERT` — read from a
+macro sheet and executed with a step ceiling (`SH_MACRO_MAXSTEPS` = 5000) so a
+runaway macro ends rather than hangs the machine. `ALERT` uses `os88ui_ask`
+from `apps/os88ui.inc`, a per-package include: there is deliberately **no
+kernel alert primitive**, and §75.3 states why a windowed dialog with buttons
+does not belong in a budget the whole machine pays for.
+
+### 81.9 Scroll bars, and the one that is not shared yet
+
+The **vertical** bar is `os88ui.inc`'s shared element (§13.10), used as
+`kernel/files.inc` and texpad use it. **There is no horizontal bar in the OS**,
+by design: that element is structurally vertical — its arrow cells are derived
+from `y1`/`y2` and its tracker takes DX and never reads CX. A text editor can
+dodge the problem by wrapping; a spreadsheet cannot.
+
+So `sh_hsb_*` is written **inside Sheet but to the shared element's exact
+contract** — the same seven-word block (`x1,y1,x2,y2,total,fit,pos`), the same
+part codes, the same geometry-not-policy split, the same refusal to draw a
+thumb when everything fits — and is **staged for promotion into `os88ui.inc`**,
+where the shared shape should be one axis flag rather than two copies.
+
+**Scroll extent is the used range floored at `fit`**, not `SH_ROWS`: a bar over
+16384 rows has a one-pixel thumb that tells the user nothing, and flooring at
+`fit` means an empty sheet correctly shows no thumb at all.
+
+### 81.10 The bss literal, asserted rather than trusted
+
+`OS88_BSS` takes a **plain literal that nothing cross-checks**, and setting it
+low is silent corruption of whatever the loader placed next rather than a build
+error. It cannot be written as an expression: the size goes into the package
+header's `dw` at a fixed offset (§20.2), so it must be known on pass 1, and a
+forward reference to a label at the end of the file makes NASM size
+instructions differently per pass.
+
+So Sheet keeps the literal and **asserts it** — two `times` lines at the end of
+the file whose counts are the difference between the bss chain's terminator and
+the declared size. Both are zero when the literal is right; a mismatch drives
+one negative, which `-w+error` turns into a build failure naming the exact
+shortfall. Read the **line number** and not just the sign: the two report the
+same shortfall with opposite signs, so which one fired is what says whether the
+literal is too small or too large.
+
+## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
+
+Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
+a SYLK, DIF or BIFF file and draws a bar chart of one column of it; **Sheet's
+Data > Chart Column...** opens a live chart window onto the column the user has
+selected. `apps/os88chart.inc` is the half they share, so the two cannot drift
+into drawing the same data differently.
+
+### 82.1 The offscreen canvas, and why it is not optional
+
+Everything is drawn into a **private 4bpp buffer** in a claimed segment
+(`CH_W` × `CH_H`), and only then put on screen with one `OSAPI_GFX_BLIT4`.
+
+**This is forced, not preferred: there is no pixel-readback API anywhere in
+this OS.** Every `OSAPI_GFX_*` slot was checked. So a chart that drew straight
+to the screen could never be exported, because there would be no way to get the
+pixels back. The buffer is what makes **Export Chart as BMP...** a single
+`OSAPI_FILE_WRITE` of bytes that are already in the right layout, and it is
+what guarantees the exported file and the visible chart are the same image
+rather than two renderings that agree by inspection.
+
+The 118-byte BMP header and palette are written into the buffer **once at
+startup** and never rebuilt; the writer stages whatever is already there.
+
+### 82.2 `ch_bars_draw` takes a segment in DX and never touches DS
+
+The array of values to plot lives in the caller's claimed segment, not in the
+package's own. The obvious way to reach it is to point `DS` at it — and that is
+the bug this contract exists to prevent.
+
+An earlier revision did exactly that inside Sheet, and read its own bss
+**after** the switch. It therefore read garbage, fed a poisoned `ES` to a
+19,200-byte `rep stosb`, and scribbled over low memory: **the whole machine
+hung, not just the application.** A package that misreads its own data is a
+wrong chart; a package that hands a bad segment to a string instruction is a
+dead system.
+
+So the rule is stated as an interface: **`ch_bars_draw` takes the array's
+segment in `DX` and does not change `DS` at all.** Anything a routine needs
+from its own bss must be read before any segment register is touched.
+`ch_fillrect` clips — an earlier revision wrote one row past the canvas — and
+it clamps *and writes back* its rect words, so a caller emitting a run must set
+all four each time.
+
+### 82.3 Constants are duplicated on purpose
+
+`chart.asm` and `sheet.asm` each carry their own copies of the `CH_*` geometry
+`equ` lines rather than sharing them. NASM's `equ` cannot be forward-referenced,
+and `os88chart.inc`'s **code** has to sit at the end of the file for the
+fixed-offset reason §20.2 gives — so anything used by code earlier in the file
+has to already exist. This is the same split that keeps `apps/os88api.inc`
+code-free on purpose: the constants are the half that must be declarable early,
+and a shared include whose code must come last cannot also supply them.
+
+### 82.4 Scope
+
+One chart type today — a column/bar chart of a single series. Excel 2.1d's
+gallery is seven (Area, Bar, Column, Line, Pie, Scatter, Combination) with
+`Preferred`/`Set Preferred`, and the remainder is planned work rather than
+declined work. The prerequisite for all of the labelled elements — axis scale
+and tick labels, category labels, titles, a legend — is **text into the 4bpp
+buffer**, which does not exist yet; `apps/paint`'s glyph-stamping into its own
+private canvas is the model, since it is buffer-targeted rather than
+screen-targeted and maps onto `ch_fillrect` almost directly.
+
+## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
+
+Two editable text controls, as **source** rather than as API slots. A slot
+costs a published contract that can never change; an include costs each package
+its own copy and can be revised freely — and a text field is exactly the kind
+of thing whose behaviour is still being learned. §75.3 makes the same argument
+for the alert.
+
+`os88line.inc` is **one line**; `os88text.inc` is the same control with a
+document behind it. Neither is Note Pad (§27), which is a whole application
+with word wrap and a layout worker; these are for the places a dialog wants a
+reference typed, a width entered, or a paragraph of note written.
+
+### 83.1 The conventions both follow
+
+* **`%include` at the END of the package, before `OS88_BSS`.** The package
+  header and any icon block are at fixed offsets in the image (§20.2), so code
+  emitted between them fails the icon macro's own assertion. Both need
+  `os88ui.inc`'s `UI_*` macros and so must come after it.
+* **The caller owns the state.** Neither file declares any storage. Every
+  routine takes **`SI` = a block the caller declares**, so one window may have
+  two fields and a package may have one per window. `SI` and not `BX` because
+  the gfx primitives already take `AX/BX/CX/DX` as their rect, and a block
+  pointer in `BX` would mean a shuffle at every call.
+* **The rect is four inclusive screen coordinates**, `gfx_frame`'s own
+  convention, so the drawn control and the clickable control read the same four
+  words and cannot drift apart.
+* **`*_key` answers `CF=0` "I used that keystroke" / `CF=1` "it is yours".**
+  What a key *means* beyond editing is not decided here, so Escape, Tab and
+  anything else the caller wants come back to it.
+* **`*_click` answers `CF=0` inside (focus set, caret placed) / `CF=1`
+  outside**, and never clears focus itself: what an outside click means is the
+  caller's business, not one control's opinion about another's.
+* **The text pen is rounded up to a multiple of 8.** `OSAPI_FONT_RUN` has a
+  single-store fast path that needs an 8-aligned pen (§6); without it every
+  keystroke repaints the row through the slower erase-then-letter pair.
+
+### 83.2 The multi-line block, and what it does not do
+
+```
+  TX_X1,TX_Y1,TX_X2,TX_Y2   the rect, inclusive, screen coordinates
+  TX_BUF                    -> the caller's NUL-terminated buffer
+  TX_MAX                    its capacity INCLUDING the NUL
+  TX_LEN                    bytes in it now
+  TX_CAR                    the caret, a BYTE OFFSET, 0..TX_LEN
+  TX_TOP                    the first visible line
+  TX_FOCUS                  1 = the caret is drawn and keys land here
+```
+`OS88TEXT_SZ` = 20 bytes. Lines are separated by a single **LF**; a CR is
+tolerated on input and never stored.
+
+**The caret is an offset, not a (line, column) pair**, because a pair has to be
+re-derived after every edit anyway and an offset never goes stale. Lines are
+found by **scanning**, not by an index: a line table would have to be rebuilt
+or patched by every insert, and texpad scans for the same reason.
+
+**Each visible row is one opaque `OSAPI_FONT_RUN`.** A fill-then-letter pair
+leaves the box empty between the two calls, which is tens of milliseconds on a
+4.77MHz machine on every keystroke (§5.4.2). The byte just past the visible
+span is **banked, NUL'd, drawn, and put back** — that is what lets the file own
+no scratch buffer, and therefore no storage at all.
+
+**No word wrap and no horizontal scroll**: a long line is clipped at the right
+edge. Wrapping turns a horizontal move into a whole-pane repaint on every
+keystroke, and this control is for short paragraphs whose box the caller can
+size. **No selection and no undo**, which is `os88line.inc`'s boundary exactly.
+
+**Enter is consumed as a newline** — the one deliberate divergence from the
+single-line field, where Enter is the caller's submit.
+
+### 83.3 Two register traps these files pay for
+
+Both are silent, and both only bite past 255 bytes:
+
+* **A scratch byte must not be loaded into the half of a register whose other
+  half is live.** `mov ch, [si]` while `CX` was the running offset, and
+  `mov ah, [di]` while `AX` held `TX_MAX - 1`, each corrupted a live value with
+  no symptom until the buffer grew.
+* **`BP` addresses `SS` by default**, so it cannot be used as a memory base for
+  a buffer in `DS`.
