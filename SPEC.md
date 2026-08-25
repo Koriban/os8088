@@ -67070,7 +67070,7 @@ the right number and one that does gets the same answer from the tokens.
 
 **It refuses any formula containing a function call**, falling back to
 NUMBER/RK exactly as before, and the reason is not effort:
-`docs/excelfileformat.pdf` §3.12, *Built-in Sheet Functions*, is marked **2do**
+`docs/excelfileformat.pdf`'s section 3.12, *Built-in Sheet Functions*, is marked **2do**
 — the index table is not written in that revision. A guessed index does not
 produce a broken file; it produces one Excel opens happily and computes
 **something else** from, silently. Carrying the value is at least right. BIFF3's
@@ -67088,7 +67088,8 @@ this*, and when it cannot, the writer falls back to a path that was already
 correct. A shared parser with an emit flag would have put a second set of
 states inside the routine every cell value already depends on.
 
-The row word carries **both** relative flags (§3.4.1): bit 15 the row's, bit 14
+The row word carries **both** relative flags (that spec's section 3.4.1):
+bit 15 the row's, bit 14
 the column's, and **set means relative** — so `$A$1` is 0x0000 and `A1` is
 0xC000, the opposite polarity from how the `$` reads.
 
