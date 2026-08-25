@@ -4591,6 +4591,8 @@ sh_chart_tpl:
 sh_s_chart_title: db 'Chart', 0
 sh_s_charted:      db 'Charted.', 0
 sh_s_coltitle:     db 'Column ', 0
+sh_s_onesheet:     db 'Saved - THIS SHEET ONLY; use .BIF to keep them all.', 0
+sh_s_sheetnm:      db 'Sheet', 0
 
 ; sh_docmd_chartexport - Data > Export Chart as BMP...: a no-op
 ; informational message if there's nothing charted yet (same "still runs,
@@ -8064,6 +8066,70 @@ sh_switchsheet:
 ; (SPEC-free scope decision, this project's own: ".DIF" writes DIF,
 ; everything else writes SYLK, matching stage 1.0's default).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_sheets_used - out: AX = how many of the SH_SHEETS grids hold at least one
+; cell, and BX = a bitmap of which. One walk of the array, not four.
+; -----------------------------------------------------------------------------
+sh_sheets_used:
+    push cx
+    push dx
+    push si
+    push es
+    xor bx, bx
+    xor cx, cx
+    mov es, [sh_cellseg]
+.each:
+    cmp cx, [sh_ncells]
+    jae .counted
+    mov ax, cx
+    push bx
+    mov bx, SH_C_SZ
+    mul bx
+    pop bx
+    mov si, ax
+    mov ax, [es:si]
+    push bx
+    call sh_unpackrow                 ; BX = this record's sheet
+    mov dx, bx
+    pop bx
+    mov ax, 1
+    push cx
+    mov cx, dx
+    jcxz .noshift
+.shift:
+    shl ax, 1
+    loop .shift
+.noshift:
+    pop cx
+    or bx, ax
+    inc cx
+    jmp .each
+.counted:
+    mov ax, bx                        ; popcount of the bitmap
+    xor dx, dx
+    mov cx, SH_SHEETS
+.pop1:
+    shr ax, 1
+    jnc .pop2
+    inc dx
+.pop2:
+    loop .pop1
+    mov ax, dx
+    pop es
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dowrite - pick the writer from the file name's extension.
+;
+; AND SAY SO WHEN A SAVE CANNOT CARRY EVERYTHING. SYLK and DIF have no
+; multi-sheet concept at all - SYLK has no notion of a sheet and DIF is one
+; table - so a workbook with data on more than one of them loses the rest, and
+; used to lose it in silence. It says so in the status bar now. BIFF is the one
+; format here that CAN carry them, and does (81.10.5).
+; -----------------------------------------------------------------------------
 sh_dowrite:
     push si
     push di
@@ -8081,11 +8147,24 @@ sh_dowrite:
     pop di
     pop si
     jc .biff
-    jmp sh_dowrite_sylk
+    call sh_dowrite_sylk
+    jmp .warn
 .dif:
-    jmp sh_dowrite_dif
+    call sh_dowrite_dif
+    jmp .warn
 .biff:
     jmp sh_dowrite_biff
+.warn:
+    push ax
+    push bx
+    call sh_sheets_used
+    cmp ax, 2
+    jb .warned
+    mov word [sh_msg], sh_s_onesheet
+.warned:
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_dowrite_sylk - write the sheet to [sh_name] as SYLK. Walks the sorted
@@ -9185,6 +9264,12 @@ sh_dowrite_biff:
     push di
     push es
 
+    call sh_sheets_used               ; ONE sheet keeps the BIFF3 stream this
+    cmp ax, 2                         ; writer has always produced, byte for
+    jb .single                        ; byte. More than one needs a WORKBOOK,
+    call sh_biff_workbook             ; and BIFF3 has no such thing (81.10.5)
+    jmp .wdone
+.single:
     mov es, [sh_stgseg]
     xor di, di
 
@@ -9212,16 +9297,78 @@ sh_dowrite_biff:
                                       ; reader that trusts the length would
                                       ; desynchronise on the short form
 
+    call sh_biff_fontsxfs
+
+    mov byte [sh_trunc], 0
+    mov ax, [sh_cursheet]            ; the BIFF3 stream is ONE sheet, and says
+    mov [sh_wsheet], ax              ; so in the status bar when there are more
+    call sh_biff_cells
+.footer:
+    mov ax, 0x000A                    ; EOF
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw
+    mov [sh_stagelen], di
+
+    mov ax, [sh_stgseg]
+    mov es, ax
+    xor bx, bx
+    mov cx, [sh_stagelen]
+    xor dx, dx
+    mov si, sh_name
+    call OSAPI_FILE_WRITE
+    jc .werr
+    mov word [sh_msg], sh_m_saved
+    jmp .wdone
+.werr:
+    call sh_setferr
+.wdone:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_doread_biff - read [sh_name] as BIFF, replacing the sheet. Skips the
+; BOF record (and every other record type this subset doesn't know, by its
+; length - so a real file's extra records, e.g. a workbook-globals BOF,
+; FONT, or FORMAT record, are tolerated rather than misparsed), then
+; applies every RK cell record found whose value is this subset's
+; understood subtype, until EOF or the buffer end (a truncated/foreign
+; file).
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_biff_formula - a FORMULA record (0206H in BIFF3) for the cell being
+; written. out: CF=0 it was written; CF=1 = not expressible, and the caller
+; falls through to RK/NUMBER exactly as before.
+;
+; The result field carries the CACHED VALUE as an IEEE double, which is what
+; the record is for: a reader that does not recalculate still shows the right
+; number, and one that does gets the same answer from the tokens.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_biff_fontsxfs - the four FONT records and the sixty-four XF records, at
+; ES:DI. [sh_wb_xf4] picks BIFF4's XF opcode and body layout over BIFF3's.
+;
+; Extracted so the BIFF4 workbook's globals section and the BIFF3 stream share
+; one copy: they differ in two version-dependent details and in nothing else,
+; and two copies would have drifted on the first change to a font.
+; -----------------------------------------------------------------------------
+sh_biff_fontsxfs:
     ; 4 FONT records (indices 0-3: normal, bold, underline, bold+underline)
     ; and 64 XF records (indices 0-63) - one per possible SH_FMT_* byte
     ; value, so a cell's own format byte IS its BIFF ixfe with no lookup
     ; table needed on either side. See the section comment above for why
     ; this pairing is safe and the honesty scope around it.
     mov word [sh_wrow], 0            ; reused as the font index, 0..3
-.fontloop:
+.ffontloop:
     mov ax, [sh_wrow]
     cmp ax, 4
-    jae .fontsdone
+    jae .ffontsdone
     mov ax, 0x0231                   ; FONT (BIFF3/4)
     call sh_biffw
     mov ax, 11                       ; height+options+palette(6) + len(1) +
@@ -9231,13 +9378,13 @@ sh_dowrite_biff:
     mov bx, [sh_wrow]
     xor ax, ax
     test bl, 1
-    jz .nobold_f
+    jz .fnobold
     or ax, 0x0001                    ; bit0: bold
-.nobold_f:
+.fnobold:
     test bl, 2
-    jz .nounder_f
+    jz .fnounder
     or ax, 0x0004                    ; bit2: underlined
-.nounder_f:
+.fnounder:
     call sh_biffw
     xor ax, ax                       ; palette index (default)
     call sh_biffw
@@ -9249,14 +9396,18 @@ sh_dowrite_biff:
     mov ax, [sh_wrow]
     inc ax
     mov [sh_wrow], ax
-    jmp .fontloop
-.fontsdone:
+    jmp .ffontloop
+.ffontsdone:
     mov word [sh_wrow], 0            ; reused as the XF index, 0..63
-.xfloop:
+.fxfloop:
     mov si, [sh_wrow]
     cmp si, 64
-    jae .xfsdone
-    mov ax, 0x0243                   ; XF (BIFF3). Same twelve bytes as the
+    jae .fxfsdone
+    mov ax, 0x0243                   ; XF - or BIFF4's own number and body
+    cmp byte [sh_wb_xf4], 0          ; layout, which differ (docs/BIFF-NOTES.md
+    je .xfop3                        ; tabulates the two side by side)
+    mov ax, 0x0443
+.xfop3:                              ; XF (BIFF3). Same twelve bytes as the
                                       ; BIFF4 record in the fields this uses -
                                       ; font index, format index, attributes,
                                       ; alignment, area, border - which is why
@@ -9276,27 +9427,38 @@ sh_dowrite_biff:
     and bx, 3                        ; bx = our number-format code
     mov ah, [sh_biff_numfmt_tab + bx] ; ah = real BIFF built-in format id
     call sh_biffw                    ; offset0-1: font idx, format idx
-    mov ax, 0xFC00                   ; BIFF3 offset2 = XF_TYPE_PROT (0: a
-    call sh_biffw                    ; cell XF, unlocked, not hidden), and
-                                      ; offset3 = XF_USED_ATTRIB (FCH:
-                                      ; override every inherited attribute,
-                                      ; since no style XFs are written).
-                                      ; BIFF4 puts those in DIFFERENT places -
-                                      ; a word at 2, and a byte at 5 - which
-                                      ; is why the body had to change with the
-                                      ; opcode after all.
-    mov ax, si
-    mov cl, 2
-    shr ax, cl
-    and ax, 3                        ; al = align code (bits2-3 of the
-                                      ; format byte) - matches XF_HOR_ALIGN
-                                      ; 0-3 (General/Left/Center/Right)
-                                      ; directly, no translation needed
-    xor ah, ah                       ; BIFF3 offset4 is a WORD: alignment in
-    or ax, 0xFFF0                    ; bits 2-0, and the parent style XF index
-    call sh_biffw                    ; in bits 15-4. FFFH is the documented
-                                      ; "no parent", which is the honest value
-                                      ; when no style XF exists to point at.
+    ; THE TWO MIDDLE WORDS ARE SWAPPED BETWEEN THE VERSIONS, and that is the
+    ; whole of the layout difference this record's used fields feel:
+    ;
+    ;   BIFF3 (0243H)                    BIFF4 (0443H)
+    ;     +2  XF_TYPE_PROT      (1)        +2  type/prot + parent   (2)
+    ;     +3  XF_USED_ATTRIB    (1)        +4  align/vert/orient    (1)
+    ;     +4  align + parent    (2)        +5  XF_USED_ATTRIB       (1)
+    ;
+    ; So BIFF3 writes FC00H then align|FFF0H, and BIFF4 writes FFF0H then
+    ; align|FC00H. FCH means "override every inherited attribute", which is the
+    ; honest value when no style XF is written, and FFFH is the documented
+    ; "no parent" for the same reason.
+    mov ax, si                       ; the alignment code, bits 2-3 of the
+    mov cl, 2                        ; format byte - it matches XF_HOR_ALIGN
+    shr ax, cl                       ; 0-3 (General/Left/Center/Right)
+    and ax, 3                        ; directly, with no translation
+    mov [sh_wb_align], ax
+    cmp byte [sh_wb_xf4], 0
+    jne .xf4body
+    mov ax, 0xFC00                   ; BIFF3: type/prot, then used-attrib
+    call sh_biffw
+    mov ax, [sh_wb_align]
+    or ax, 0xFFF0
+    call sh_biffw
+    jmp .xfmid
+.xf4body:
+    mov ax, 0xFFF0                   ; BIFF4: type/prot + parent, then the
+    call sh_biffw                    ; align byte with used-attrib above it
+    mov ax, [sh_wb_align]
+    or ax, 0xFC00
+    call sh_biffw
+.xfmid:
     xor ax, ax                       ; XF_AREA_34: no fill
     call sh_biffw
     xor ax, ax                       ; XF_BORDER_34 low word: no borders
@@ -9306,23 +9468,206 @@ sh_dowrite_biff:
     mov ax, si
     inc ax
     mov [sh_wrow], ax
-    jmp .xfloop
-.xfsdone:
+    jmp .fxfloop
+.fxfsdone:
 
+    ret
+
+; =============================================================================
+; THE BIFF4 WORKBOOK - the only way this app can save more than one sheet.
+;
+; SYLK has no notion of a sheet and DIF is a single table, so for those two the
+; loss is the format's and all this app can do is say so. BIFF3 is single-sheet
+; too: its stream is one BOF...EOF pair. BIFF4 is the first version with a
+; workbook, and its shape is (excelfileformat 4.1.2):
+;
+;     BOF          dt = 0100H, workbook globals
+;     FONT x4, XF x64
+;     SHEETSOFFSET stream position of the first SHEETHDR
+;     SHEETHDR     byte length of the substream, and the sheet's name
+;       BOF        dt = 0010H, worksheet
+;       cells
+;       EOF
+;     SHEETHDR ... BOF ... EOF        (once per sheet)
+;     EOF          the outer one
+;
+; WRITTEN ONLY WHEN IT IS NEEDED. A reader is backward compatible and not
+; forward compatible, so a BIFF3 file reaches strictly more programs - which is
+; why the single-sheet case still emits one and this path exists beside it
+; rather than replacing it. A workbook that will not open in a BIFF3-only
+; reader is still better than three sheets that were never written at all.
+;
+; THE SUBSTREAM LENGTH IS BACKPATCHED. SHEETHDR carries the byte length of the
+; substream that FOLLOWS it, which is not known until that substream is built.
+; The whole file is assembled in the staging segment before a single byte
+; reaches the disk, so the header's offset is remembered and the length written
+; into it afterwards - which is why this is easy here and would not be if the
+; writer streamed.
+;
+; XF IS 0443H HERE, NOT 0243H, AND ITS BODY IS LAID OUT DIFFERENTLY - see
+; docs/BIFF-NOTES.md, which tabulates both. FONT keeps 0231H in both versions.
+; =============================================================================
+sh_biff_workbook:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [sh_stgseg]
+    xor di, di
+    mov byte [sh_trunc], 0
+    call sh_sheets_used
+    mov [sh_wb_map], bx               ; which sheets to write
+
+    mov ax, 0x0409                    ; BOF, BIFF4
+    call sh_biffw
+    mov ax, 6
+    call sh_biffw
+    mov ax, 0x0400                    ; vers = BIFF4
+    call sh_biffw
+    mov ax, 0x0100                    ; dt = workbook globals
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw
+
+    mov byte [sh_wb_xf4], 1           ; the globals' FONT/XF block, in BIFF4
+    call sh_biff_fontsxfs             ; opcodes and layout
+
+    mov ax, 0x008E                    ; SHEETSOFFSET
+    call sh_biffw
+    mov ax, 4
+    call sh_biffw
+    mov ax, di                        ; the first SHEETHDR begins right after
+    add ax, 4                         ; this record's own four bytes
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw
+
+    mov word [sh_wb_i], 0
+.sheet:
+    mov ax, [sh_wb_i]
+    cmp ax, SH_SHEETS
+    jae .alldone
+    mov cx, ax                        ; is this one used?
+    mov ax, 1
+    jcxz .nosh
+.shl1:
+    shl ax, 1
+    loop .shl1
+.nosh:
+    test [sh_wb_map], ax
+    jz .next
+    cmp byte [sh_trunc], 0
+    jne .next
+
+    mov ax, 0x008F                    ; SHEETHDR
+    call sh_biffw
+    mov ax, 11                        ; 4 length + 1 count + "SheetN"(6)
+    call sh_biffw
+    mov [sh_wb_lenat], di             ; ...backpatched once the substream is
+    xor ax, ax                        ; built, because SHEETHDR carries the
+    call sh_biffw                     ; size of what FOLLOWS it
+    call sh_biffw
+    mov al, 6
+    call sh_stgputb
+    mov si, sh_s_sheetnm              ; "Sheet"
+.nm:
+    mov al, [si]
+    or al, al
+    jz .nmdone
+    call sh_stgputb
+    inc si
+    jmp .nm
+.nmdone:
+    mov ax, [sh_wb_i]
+    add al, '1'
+    call sh_stgputb
+
+    mov [sh_wb_subat], di             ; the substream starts here
+    mov ax, 0x0409                    ; BOF, worksheet
+    call sh_biffw
+    mov ax, 6
+    call sh_biffw
+    mov ax, 0x0400
+    call sh_biffw
+    mov ax, 0x0010                    ; dt = worksheet
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw
+
+    mov ax, [sh_wb_i]                 ; ...its cells...
+    mov [sh_wsheet], ax
+    call sh_biff_cells
+
+    mov ax, 0x000A                    ; ...and its EOF
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw
+
+    mov ax, di                        ; backpatch the substream length
+    sub ax, [sh_wb_subat]
+    mov bx, [sh_wb_lenat]
+    mov [es:bx], ax
+    mov word [es:bx+2], 0
+.next:
+    inc word [sh_wb_i]
+    jmp .sheet
+.alldone:
+    mov ax, 0x000A                    ; the workbook's own EOF
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw
+    mov [sh_stagelen], di
+
+    mov ax, [sh_stgseg]
+    mov es, ax
+    xor bx, bx
+    mov cx, [sh_stagelen]
+    xor dx, dx
+    mov si, sh_name
+    call OSAPI_FILE_WRITE
+    jc .err
+    mov word [sh_msg], sh_m_saved
+    jmp .out
+.err:
+    call sh_setferr
+.out:
+    mov byte [sh_wb_xf4], 0
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_biff_cells - every cell record for ONE sheet, appended at ES:DI.
+; in: [sh_wsheet] = which of the SH_SHEETS grids; ES = staging, DI = cursor
+; out: DI advanced past what was written; [sh_trunc] set if the buffer filled
+;
+; Extracted from sh_dowrite_biff so a BIFF4 WORKBOOK can call it once per
+; sheet (81.10.5). The BIFF3 path calls it exactly once, with sh_wsheet set to
+; sh_cursheet, and emits the same bytes it always did.
+; -----------------------------------------------------------------------------
+sh_biff_cells:
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
 .rec:
     mov bx, [sh_wrow]
     cmp bx, [sh_ncells]
-    jae .footer
+    jae .cdone
     cmp byte [sh_trunc], 0
-    jne .footer
+    jne .cdone
     mov ax, di
     add ax, 14                       ; opcode+len(4) + row+col+xf+rk(10)
     cmp ax, SH_STAGE_MAX
     jbe .room
     mov byte [sh_trunc], 1
-    jmp .footer
+    jmp .cdone
 .room:
     mov ax, bx
     mov cx, SH_C_SZ
@@ -9333,7 +9678,7 @@ sh_dowrite_biff:
     mov ax, [es:si]
     call sh_unpackrow                 ; -> ax=real row, bx=this record's
                                        ; sheet (stage 2.0)
-    cmp bx, [sh_cursheet]
+    cmp bx, [sh_wsheet]
     jne .recskip                      ; a save only ever writes the CURRENT
                                        ; sheet - see sh_dowrite_sylk's own
                                        ; copy of this same filter
@@ -9499,53 +9844,9 @@ sh_dowrite_biff:
     inc ax
     mov [sh_wrow], ax
     jmp .rec
-.footer:
-    mov ax, 0x000A                    ; EOF
-    call sh_biffw
-    xor ax, ax
-    call sh_biffw
-    mov [sh_stagelen], di
-
-    mov ax, [sh_stgseg]
-    mov es, ax
-    xor bx, bx
-    mov cx, [sh_stagelen]
-    xor dx, dx
-    mov si, sh_name
-    call OSAPI_FILE_WRITE
-    jc .werr
-    mov word [sh_msg], sh_m_saved
-    jmp .wdone
-.werr:
-    call sh_setferr
-.wdone:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+.cdone:
     ret
 
-; -----------------------------------------------------------------------------
-; sh_doread_biff - read [sh_name] as BIFF, replacing the sheet. Skips the
-; BOF record (and every other record type this subset doesn't know, by its
-; length - so a real file's extra records, e.g. a workbook-globals BOF,
-; FONT, or FORMAT record, are tolerated rather than misparsed), then
-; applies every RK cell record found whose value is this subset's
-; understood subtype, until EOF or the buffer end (a truncated/foreign
-; file).
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
-; sh_biff_formula - a FORMULA record (0206H in BIFF3) for the cell being
-; written. out: CF=0 it was written; CF=1 = not expressible, and the caller
-; falls through to RK/NUMBER exactly as before.
-;
-; The result field carries the CACHED VALUE as an IEEE double, which is what
-; the record is for: a reader that does not recalculate still shows the right
-; number, and one that does gets the same answer from the tokens.
-; -----------------------------------------------------------------------------
 sh_biff_formula:
     push ax
     push bx
@@ -9592,7 +9893,11 @@ sh_biff_formula:
     add ax, 22
     cmp ax, SH_STAGE_MAX
     ja .no
-    mov ax, 0x0206                    ; FORMULA, BIFF3
+    mov ax, 0x0206                    ; FORMULA - 0206H in BIFF3 and 0406H in
+    cmp byte [sh_wb_xf4], 0           ; BIFF4, and a BIFF4 workbook must carry
+    je .op3                           ; the BIFF4 number or its own reader
+    mov ax, 0x0406                    ; skips the record by length and loses
+.op3:                                 ; the cell
     call sh_biffw
     mov ax, [sh_wrec_len]
     add ax, 18                        ; row+col+xf+result(8)+flags+cce = 18
@@ -9668,6 +9973,14 @@ sh_doread_biff:
     mov cx, ax                         ; CX = end offset (bytes read)
     mov [sh_biff_end], ax              ; ...and banked, because .islabel needs
     xor si, si                         ; a counter and CX is the only one free
+    ; AX STILL HELD THE BYTE COUNT two lines ago, which is why this bank sits
+    ; below and not above: reading sh_cursheet into AX before those two lines
+    ; made the file end ZERO, and the record walk finished before its first
+    ; record while still reporting "Loaded".
+    mov ax, [sh_cursheet]              ; a workbook read MOVES sh_cursheet as
+    mov [sh_rd_home], ax               ; it walks the substreams, so where the
+    mov word [sh_rd_sheet], -1         ; user actually was is banked and put
+    mov byte [sh_rd_wb], 0             ; back at the end
 .rechdr:
     mov ax, si
     add ax, 4                          ; a record header is 4 bytes; EOF's
@@ -9676,8 +9989,9 @@ sh_doread_biff:
     mov ax, [es:si]                    ; opcode
     mov dx, [es:si+2]                  ; length
     add si, 4                          ; SI = this record's data start
-    cmp ax, 0x000A                     ; EOF
-    je .done
+    cmp ax, 0x000A                     ; EOF - but a WORKBOOK has one per sheet
+    je .iseof                          ; substream plus its own, so the first
+                                       ; is not the end of anything (81.10.5)
     cmp ax, 0x0231                     ; FONT
     je .isfont
     cmp ax, 0x0243                     ; XF (BIFF3) - what this app writes
@@ -9698,7 +10012,11 @@ sh_doread_biff:
     je .islabel                        ; with a one-byte length, and is NOT
     cmp ax, 0x0206                     ; accepted here for that reason
     je .isformula                      ; FORMULA: its CACHED RESULT is read,
-    jmp .skip                          ; the token array skipped - see below
+    cmp ax, 0x0406                     ; the token array skipped - see below.
+    je .isformula                      ; 0406H is BIFF4's own number for it
+    cmp ax, 0x008F                     ; SHEETHDR: the substream that follows
+    je .issheethdr                     ; belongs to the NEXT sheet
+    jmp .skip
 .isfont:
     mov bx, [sh_biff_nfont]
     cmp bx, SH_BIFF_FONT_CAP
@@ -9820,6 +10138,27 @@ sh_doread_biff:
     pop es
     pop dx
     jmp .skip
+.iseof:
+    cmp byte [sh_rd_wb], 0             ; a plain single-sheet stream ends here,
+    je .done                           ; as it always did. In a workbook this
+    jmp .skip                          ; only closes one substream, and the
+                                       ; walk stops when the bytes run out
+.issheethdr:
+    mov byte [sh_rd_wb], 1             ; from here on, an EOF closes a sheet
+    ; A BIFF4 WORKBOOK (81.10.5). Every SHEETHDR starts another sheet's
+    ; substream, so the reader simply counts them: the first is sheet 0, the
+    ; next sheet 1, and the cell records in between land on whichever is
+    ; current. The name in the record is IGNORED - this app's four sheets are
+    ; positional and named by position (81.2), so honouring a name would mean
+    ; inventing a mapping the rest of the app has no way to express.
+    inc word [sh_rd_sheet]
+    mov ax, [sh_rd_sheet]
+    cmp ax, SH_SHEETS
+    jb .rdsheetok
+    mov ax, SH_SHEETS - 1              ; a workbook with more sheets than this
+.rdsheetok:                            ; app has: the surplus piles onto the
+    mov [sh_cursheet], ax              ; last one rather than being dropped
+    jmp .skip
 .isformula:
     ; ONLY THE RESULT IS READ, and the token array is stepped over. Sheet keeps
     ; formulas as TEXT (81.3) and re-parses them; turning RPN back into text is
@@ -9908,6 +10247,12 @@ sh_doread_biff:
     add si, dx
     jmp .rechdr
 .done:
+    mov ax, [sh_rd_home]               ; the user's own sheet, back where it
+    cmp word [sh_rd_sheet], 0          ; was - unless the file was a plain
+    jl .nowb                           ; single-sheet stream, which never
+    xor ax, ax                         ; touched sh_cursheet and whose data
+.nowb:                                 ; landed on sheet 0
+    mov [sh_cursheet], ax
     mov word [sh_msg], sh_m_loaded
     jmp .out
 .rerr:
@@ -16433,7 +16778,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2918
+    OS88_BSS 2936
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -16623,7 +16968,17 @@ sh_wrec_type  equ sh_wrec_dval + 8          ; byte: SH_T_* of the cell being
 sh_wrec_toff  equ sh_wrec_type + 1          ; written, where its label is, and
 sh_wrec_len   equ sh_wrec_toff + 2          ; how long that label is
 sh_wrec_hasf  equ sh_wrec_len + 2      ; byte: this cell is a formula
-sh_biff_end   equ sh_wrec_hasf + 1           ; the BIFF reader's banked file end
+sh_wsheet     equ sh_wrec_hasf + 1      ; which sheet a BIFF write is on
+sh_wb_map     equ sh_wsheet + 2         ; --- the BIFF4 workbook writer ---
+sh_wb_i       equ sh_wb_map + 2
+sh_wb_lenat   equ sh_wb_i + 2           ; where a SHEETHDR's length goes...
+sh_wb_subat   equ sh_wb_lenat + 2       ; ...and where its substream began
+sh_wb_xf4     equ sh_wb_subat + 2       ; byte: emit BIFF4 XFs, not BIFF3
+sh_wb_align   equ sh_wb_xf4 + 1         ; this XF's alignment code
+sh_rd_sheet   equ sh_wb_align + 2       ; the BIFF reader's substream counter
+sh_rd_home    equ sh_rd_sheet + 2       ; ...and the sheet the user was on
+sh_rd_wb      equ sh_rd_home + 2        ; byte: this file is a BIFF4 workbook
+sh_biff_end   equ sh_rd_wb + 1           ; the BIFF reader's banked file end
 sh_rc_tval    equ sh_biff_end + 2           ; 8: a whole double, not a word
 sh_rc_tfml    equ sh_rc_tval + 8
 

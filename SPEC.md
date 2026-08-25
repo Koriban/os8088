@@ -67124,6 +67124,90 @@ all. Writing one would mean inventing a non-standard extension no DIF reader
 would understand. SYLK's `;E` field (§81.7.1) is the one interchange format
 here that does carry the expression, and it has since stage 4.x.
 
+### 81.10.5 More than one sheet: the BIFF4 workbook
+
+Sheet holds four grids in one instance (§81.2) and used to save **one** of them
+— the current one — dropping the rest in silence. That is data loss, and the
+worst kind: the file opens, looks right, and is missing two thirds of the work.
+
+**For SYLK and DIF the loss is the format's.** SYLK has no notion of a sheet
+and DIF is a single table, so there is nothing to write the others into. Both
+now say so in the status bar when a second sheet holds data, which is the whole
+of what an app can honestly do there.
+
+**BIFF can carry them, and does.** BIFF3's stream is one `BOF…EOF` pair; BIFF4
+is the first version with a workbook (excelfileformat's 4.1.2):
+
+```
+BOF            dt = 0100H, workbook globals
+FONT x4, XF x64
+SHEETSOFFSET   stream position of the first SHEETHDR
+SHEETHDR       byte length of the substream, and the sheet's name
+  BOF          dt = 0010H, worksheet
+  cells
+  EOF
+SHEETHDR … BOF … EOF          (once per sheet that holds data)
+EOF            the outer one
+```
+
+**Written only when it is needed.** A reader is backward compatible and not
+forward compatible, so a BIFF3 file reaches strictly more programs — which is
+why one sheet still emits one, and this path sits beside it rather than
+replacing it. A workbook that will not open in a BIFF3-only reader still beats
+three sheets that were never written.
+
+**The substream length is backpatched.** SHEETHDR carries the length of the
+substream that *follows* it, which is not known until that substream is built.
+The whole file is assembled in the staging segment before a byte reaches disk,
+so the header's offset is remembered and the length written in afterwards —
+easy here, and impossible if the writer streamed.
+
+`sh_biff_cells` and `sh_biff_fontsxfs` were **extracted** from the single-sheet
+writer so both paths share one copy: they differ in two version-dependent
+details and nothing else, and two copies would have drifted on the first change
+to a font.
+
+#### 81.10.6 The three version-dependent details
+
+| record | BIFF3 | BIFF4 |
+|---|---|---|
+| `BOF` | 0209H, ver 0300H | 0409H, ver 0400H |
+| `XF` | 0243H | 0443H |
+| `FORMULA` | 0206H | 0406H |
+
+`FONT` is 0231H in both. The XF **body** differs too, and in exactly one way
+this record's used fields feel — the two middle words are swapped:
+
+```
+BIFF3 (0243H)                    BIFF4 (0443H)
+  +2  XF_TYPE_PROT      (1)        +2  type/prot + parent   (2)
+  +3  XF_USED_ATTRIB    (1)        +4  align/vert/orient    (1)
+  +4  align + parent    (2)        +5  XF_USED_ATTRIB       (1)
+```
+
+So BIFF3 writes FC00H then `align|FFF0H`, and BIFF4 writes FFF0H then
+`align|FC00H`.
+
+#### 81.10.7 Reading one back, and two bugs in doing it
+
+The reader counts SHEETHDR records: the first is sheet 0, the next sheet 1, and
+the cells between them land on whichever is current. **The name is ignored** —
+this app's four sheets are positional and named by position, so honouring a
+name would mean inventing a mapping the rest of the app cannot express. A
+workbook with more sheets than four piles the surplus onto the last rather than
+dropping it.
+
+Two bugs, both of which reported **"Loaded"** over an empty grid:
+
+1. **A workbook has four EOF records** — one per substream plus its own — and
+   the reader treated the first as end-of-file. Sheet 1 arrived because its
+   cells precede its EOF; sheets 2 and 3 were never reached. An EOF now ends
+   the read only when no SHEETHDR has been seen.
+2. **`AX` still held the byte count** from `OSAPI_FILE_READ` when the
+   sheet-banking lines were inserted above the two that consume it. The file
+   end became zero and the record walk finished before its first record — while
+   still reporting success, because nothing had failed.
+
 ### 81.11 Text cells
 
 Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything
