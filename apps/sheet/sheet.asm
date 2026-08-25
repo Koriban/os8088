@@ -1492,21 +1492,16 @@ sh_commit:
     call sh_setformula
     jmp .out
 .numeric:
-    mov si, sh_editbuf
-    mov bx, si
-    add bx, SH_EDITMAX + 1
-    push es
-    mov ax, ds
-    mov es, ax
-    call sh_pint
-    mov dx, ax                        ; DX = parsed value
-    mov al, [es:si]
-    pop es
-    or al, al
-    jnz .invalid
+    mov si, sh_editbuf                ; stage 4.0: a full decimal, not a signed
+    call fp_atof                      ; integer. "3.5", "-0.25" and "1e3" are
+    jc .invalid                       ; all values now; anything fp_atof does
+    mov al, [si]                      ; not consume entirely is still refused,
+    or al, al                         ; which is what keeps a typo from
+    jnz .invalid                      ; silently becoming a number
+    call sh_acc_store
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_setval                    ; AX=col, BX=row, DX=value
+    call sh_setvald
     jmp .out
 .invalid:
     mov ax, [sh_selcol]
@@ -9803,15 +9798,37 @@ sh_getcell2:
     jz .plain
     pop es
     call sh_eval_cell                 ; in: DI=record offset; out: DX=value
+    push ax                           ; the evaluator is still integer-valued,
+    mov ax, dx                        ; so mirror its answer into sh_acc for
+    call sh_acc_int                   ; the formatter downstream
+    pop ax
     stc
     jmp .out
 .plain:
-    mov dx, [es:di+SH_C_VAL]
+    push si                           ; stage 4.0: the stored value is a full
+    push cx                           ; double, so it comes out into sh_acc.
+    mov si, sh_acc                    ; DX stays the truncated integer for the
+    mov cx, 4                         ; callers that still want one.
+.pcopy:
+    mov ax, [es:di+SH_C_VAL]
+    mov [si], ax
+    add di, 2
+    add si, 2
+    dec cx
+    jnz .pcopy
+    pop cx
+    pop si
     pop es
+    call sh_acc_toint
+    mov dx, ax
     stc
     jmp .out
 .empty:
     mov byte [sh_curfmt], 0
+    push ax                           ; an empty cell is a zero value, and
+    xor ax, ax                        ; sh_acc must say so rather than keeping
+    call sh_acc_int                   ; whatever the last cell left there
+    pop ax
     clc
 .out:
     pop di
@@ -9819,22 +9836,131 @@ sh_getcell2:
     pop ax
     ret
 
+; =============================================================================
+; The value accumulator (stage 4.0). The evaluator's working value is a double
+; in sh_acc, not an integer in AX - a double does not fit a register, so it
+; lives in memory and the machine stack carries a binary operator's left
+; operand across the parse of its right.
+;
+; The INTEGER entry points below are kept as converting wrappers rather than
+; being deleted. Roughly forty callers pass values as words - file readers,
+; the chart scan, sort, fill, the macro engine - and converting them all in
+; one change would have made a fault impossible to localise. They convert at
+; the boundary and are correct for any value an integer can hold.
+; =============================================================================
+
+; sh_acc_store - pack the fp A accumulator into sh_acc
+sh_acc_store:
+    push di
+    mov di, sh_acc
+    call fp_pack_a
+    pop di
+    ret
+
+; sh_acc_load_a - unpack sh_acc into fp A
+sh_acc_load_a:
+    push si
+    mov si, sh_acc
+    call fp_unpack_a
+    pop si
+    ret
+
+; sh_acc_load_b - unpack sh_acc into fp B
+sh_acc_load_b:
+    push si
+    mov si, sh_acc
+    call fp_unpack_b
+    pop si
+    ret
+
+; sh_acc_int - AX (signed) -> sh_acc
+sh_acc_int:
+    call fp_i2a
+    call sh_acc_store
+    ret
+
+; sh_acc_toint - sh_acc -> AX (signed, truncated); CF=1 if it did not fit
+sh_acc_toint:
+    call sh_acc_load_a
+    call fp_a2i
+    ret
+
+; sh_vpush - bank sh_acc on the machine stack. CLOBBERS AX (the return address
+; goes through it), which is safe because the evaluator's value now lives in
+; sh_acc rather than in a register.
+sh_vpush:
+    pop ax
+    push word [sh_acc+6]
+    push word [sh_acc+4]
+    push word [sh_acc+2]
+    push word [sh_acc]
+    push ax
+    ret
+
+; sh_binop_pre - recover a banked left operand into fp A and load sh_acc, the
+; right operand, into fp B. Pairs with exactly one sh_vpush.
+sh_binop_pre:
+    pop ax
+    pop word [sh_lhs]
+    pop word [sh_lhs+2]
+    pop word [sh_lhs+4]
+    pop word [sh_lhs+6]
+    push ax
+    push si
+    mov si, sh_lhs
+    call fp_unpack_a
+    pop si
+    call sh_acc_load_b
+    ret
+
 ; -----------------------------------------------------------------------------
-; sh_setval - in: AX=col, BX=row, DX=value
+; sh_setvald - in: AX=col, BX=row; the value is sh_acc.
+; -----------------------------------------------------------------------------
+sh_setvald:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    call sh_addcell
+    jc .dfull
+    push es
+    mov es, [sh_cellseg]
+    mov byte [es:di+4], 0             ; a plain value has no formula
+    mov byte [es:di+SH_C_TYPE], SH_T_NUM
+    mov si, sh_acc                    ; all EIGHT bytes of it
+    mov cx, 4
+.dcopy:
+    mov ax, [si]
+    mov [es:di+SH_C_VAL], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .dcopy
+    pop es
+.dfull:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_setval - in: AX=col, BX=row, DX=value. The integer wrapper (see above).
 ; -----------------------------------------------------------------------------
 sh_setval:
     push ax
     push bx
     push dx
     push di
-    call sh_addcell
-    jc .full
-    push es
-    mov es, [sh_cellseg]
-    mov byte [es:di+4], 0             ; a plain value has no formula
-    mov [es:di+SH_C_VAL], dx
-    pop es
-.full:
+    push ax                           ; the column, across the conversion -
+    mov ax, dx                        ; fp_i2a takes its integer in AX
+    call sh_acc_int
+    pop ax
+    call sh_setvald
     pop di
     pop dx
     pop bx
@@ -11989,12 +12115,26 @@ sh_pct_app:
 ; the whole of BX across its own body) so the format nibble is still there
 ; to dispatch on afterward.
 ; -----------------------------------------------------------------------------
+; stage 4.0: the value being formatted is the DOUBLE in sh_acc, not the
+; integer in AX. Its one caller is sh_drawgrid, immediately after
+; sh_getcell2, which leaves sh_acc set - so the grid shows 3.5 as "3.5"
+; rather than as the 3 an integer cell could hold. The currency, comma and
+; percent decorations below are unchanged: they work on the digit string,
+; whatever produced it.
+;
+; Ten significant digits, which is what fits a cell and what Excel shows in a
+; General column before it starts rounding to fit.
 sh_numfmt:
     push ax
     push bx
     push cx
+    push di
     mov bh, bl
-    call sh_itoa
+    mov di, sh_numbuf
+    call sh_acc_load_a                ; fp_ftoa formats the A accumulator, so
+    mov ax, 10                        ; sh_acc has to be put there first
+    call fp_ftoa
+    pop di
     mov bl, bh
     and bl, SH_FMT_NUM_MASK
     mov cl, SH_FMT_NUM_SHIFT
@@ -12374,13 +12514,18 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; stage 2.x: Data > Chart Column.../Export Chart as BMP...'s shared
 ; rasterizer + BMP writer - see that file's own header comment for the
 ; CH_* constants and ch_* bss words it requires, both declared above
+; stage 4.0: the software IEEE-754 double. Included before os88chart.inc for
+; no reason other than tidiness - it depends on nothing but the caller's own
+; scratch, declared in the bss chain below.
+%include "os88fp.inc"
+
 %include "os88chart.inc"
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 1964
+    OS88_BSS 2060
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -12810,7 +12955,35 @@ sh_cp_absr        equ sh_cp_absc + 1
 ; another cell's reference still answers for itself, not for whoever asked.
 sh_evrow          equ sh_cp_absr + 1   ; word: 0-based
 sh_evcol          equ sh_evrow + 2     ; word: 0-based
-sh_bss_end        equ sh_evcol + 2
+; stage 4.0: the value accumulator the evaluator now carries, and every
+; scratch word apps/os88fp.inc's header says the caller owes it.
+sh_acc            equ sh_evcol + 2     ; 8: the expression's current value
+sh_lhs            equ sh_acc + 8       ; 8: a binary operator's left operand,
+                                       ; recovered from the stack
+fp_as             equ sh_lhs + 8
+fp_bs             equ fp_as + 1
+fp_ae             equ fp_bs + 1
+fp_be             equ fp_ae + 2
+fp_am0            equ fp_be + 2
+fp_am1            equ fp_am0 + 2
+fp_am2            equ fp_am1 + 2
+fp_am3            equ fp_am2 + 2
+fp_bm0            equ fp_am3 + 2
+fp_bm1            equ fp_bm0 + 2
+fp_bm2            equ fp_bm1 + 2
+fp_bm3            equ fp_bm2 + 2
+fp_t0             equ fp_bm3 + 2
+fp_t1             equ fp_t0 + 2
+fp_t2             equ fp_t1 + 2
+fp_t3             equ fp_t2 + 2
+fp_p0             equ fp_t3 + 2        ; 8 words: the 128-bit product
+fp_sticky         equ fp_p0 + 16
+fp_tmp            equ fp_sticky + 2
+fp_dig            equ fp_tmp + 2       ; 24: fp_ftoa's digit string
+fp_d10            equ fp_dig + 24
+fp_nd             equ fp_d10 + 2
+fp_sgn            equ fp_nd + 2
+sh_bss_end        equ fp_sgn + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
