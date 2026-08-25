@@ -282,9 +282,15 @@ SH_S_ROW     equ 2
 SH_S_COL     equ 4
 SH_S_FLAGS   equ 6
 SH_S_FMT     equ 7
-SH_S_VAL     equ 8
-SH_S_FML     equ 10
-SH_S_SZ      equ 12
+SH_S_VAL     equ 8                  ; 8 bytes since stage 4.0: this record
+                                    ; CARRIES a cell's value across a row or
+                                    ; column shift, so it had to grow with the
+                                    ; cell record or every decimal in the
+                                    ; sheet would have been truncated to the
+                                    ; low half of its own double - silently,
+                                    ; on an Insert Row
+SH_S_FML     equ 16
+SH_S_SZ      equ 18
 
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
@@ -1423,9 +1429,8 @@ sh_beginedit:
     pop es
     jmp .havelen
 .plainval:
-    mov ax, [es:di+SH_C_VAL]
+    call sh_cellnum                   ; the value as decimal text
     pop es
-    call sh_itoa
     mov si, sh_numbuf
     mov di, sh_editbuf
     call sh_strcpy
@@ -2418,10 +2423,9 @@ sh_drawbar:
     pop es
     jmp .draw
 .plainval2:
-    mov ax, [es:di+SH_C_VAL]
-    pop es
-    pop di                             ; DI = content cursor, restored
-    call sh_itoa
+    call sh_cellnum                    ; sh_numbuf already holds the decimal
+    pop es                             ; text; sh_itoa would overwrite it with
+    pop di                             ; the low word's worth
     mov si, sh_numbuf
     call sh_strcpy_to_di
     jmp .draw
@@ -4239,8 +4243,9 @@ sh_chart_scan:
     pop cx
     jmp .havevalue
 .plainval:
-    mov dx, [es:si+SH_C_VAL]           ; dx = value
-.havevalue:
+    call sh_cellint_si                 ; the chart plots whole numbers, so the
+    mov dx, ax                         ; value is truncated here rather than
+.havevalue:                            ; read as the low half of its double
     mov bx, [sh_chart_cnt]
     shl bx, 1
     mov di, bx
@@ -6611,6 +6616,21 @@ sh_dowrite_sylk:
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
+    call sh_cellval_to_acc_si         ; bank the whole value: the row and
+    push si                           ; column are formatted through sh_numbuf
+    push di                           ; before it is wanted, so it cannot be
+    mov si, sh_acc                    ; turned into text here
+    mov di, sh_wrec_dval
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    pop si
     mov ax, [es:si+SH_C_VAL]
     mov [sh_wrec_val], ax
     mov al, [es:si+5]
@@ -6633,8 +6653,15 @@ sh_dowrite_sylk:
     call sh_stgput
     mov si, sh_s_k
     call sh_stgput
-    mov ax, [sh_wrec_val]
-    call sh_itoa
+    push si                           ; SYLK's K field IS a decimal literal,
+    push di                           ; so the full value goes out, not a
+    mov si, sh_wrec_dval              ; truncation of it
+    call fp_unpack_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    pop di
+    pop si
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_crlf
@@ -7817,6 +7844,10 @@ sh_parsecrec:
     mov word [SH_TCOL], 0
     mov word [SH_TROW], 0
     mov word [SH_TVAL], 0
+    mov word [SH_TDVAL], 0
+    mov word [SH_TDVAL+2], 0
+    mov word [SH_TDVAL+4], 0
+    mov word [SH_TDVAL+6], 0
     mov byte [SH_THAVE], 0
 .tok:
     cmp si, bx
@@ -7853,8 +7884,23 @@ sh_parsecrec:
     jmp .tok
 .isk:
     inc si
-    call sh_pint
-    mov [SH_TVAL], ax
+    call sh_esatof                    ; a full decimal, not an integer
+    push ax
+    push si
+    push di
+    mov si, sh_acc
+    mov di, SH_TDVAL
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    pop si
+    pop ax
     mov byte [SH_THAVE], 1
     jmp .tok
 .apply:
@@ -7873,8 +7919,23 @@ sh_parsecrec:
     dec ax
     dec cx
     mov bx, cx
-    mov dx, [SH_TVAL]
-    call sh_setval
+    push si
+    push di
+    mov si, SH_TDVAL
+    mov di, sh_acc
+    push ax
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop ax
+    pop di
+    pop si
+    call sh_setvald
 .out:
     pop si
     pop bx
@@ -8861,8 +8922,20 @@ sh_rowcol_op:
     mov [sh_rc_tflags], al
     mov al, [es:si+5]
     mov [sh_rc_tfmt], al
+    push di
+    push cx
+    mov di, sh_rc_tval
+    mov cx, 4
+.rcget:
     mov ax, [es:si+SH_C_VAL]
-    mov [sh_rc_tval], ax
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .rcget
+    sub si, 8
+    pop cx
+    pop di
     mov ax, [es:si+SH_C_FOFF]
     mov [sh_rc_tfml], ax
     mov ax, [sh_rc_tsheet]
@@ -8957,8 +9030,20 @@ sh_rowcol_op:
     mov [sh_rc_tflags], al
     mov al, [es:si+SH_S_FMT]
     mov [sh_rc_tfmt], al
+    push di
+    push cx
+    mov di, sh_rc_tval
+    mov cx, 4
+.rstval:
     mov ax, [es:si+SH_S_VAL]
-    mov [sh_rc_tval], ax
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .rstval
+    sub si, 8
+    pop cx
+    pop di
     mov ax, [es:si+SH_S_FML]
     mov [sh_rc_tfml], ax
     mov ax, [sh_rc_tcol]
@@ -8972,8 +9057,20 @@ sh_rowcol_op:
     mov [es:di+4], al
     mov al, [sh_rc_tfmt]
     mov [es:di+5], al
-    mov ax, [sh_rc_tval]
+    push si
+    push cx
+    mov si, sh_rc_tval
+    mov cx, 4
+.rcput:
+    mov ax, [si]
     mov [es:di+SH_C_VAL], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .rcput
+    sub di, 8
+    pop cx
+    pop si
     mov ax, [sh_rc_tfml]
     mov [es:di+SH_C_FOFF], ax
 .reinsnext:
@@ -9797,12 +9894,8 @@ sh_getcell2:
     test byte [es:di+4], 1            ; HASFORMULA
     jz .plain
     pop es
-    call sh_eval_cell                 ; in: DI=record offset; out: DX=value
-    push ax                           ; the evaluator is still integer-valued,
-    mov ax, dx                        ; so mirror its answer into sh_acc for
-    call sh_acc_int                   ; the formatter downstream
-    pop ax
-    stc
+    call sh_eval_cell                 ; leaves the full result in sh_acc, and
+    stc                               ; DX as its truncated form
     jmp .out
 .plain:
     push si                           ; stage 4.0: the stored value is a full
@@ -10046,7 +10139,9 @@ sh_eval_cell:
     jne .stale
     test byte [es:di+4], 2            ; EVALUATING - already mid-computation
     jnz .cycle                        ; means a cycle, not a cache hit
-    mov dx, [es:di+SH_C_VAL]
+    call sh_cellval_to_acc            ; a cache hit is a full double now, not
+    call sh_acc_toint                 ; a word; DX stays the truncated form
+    mov dx, ax                        ; for the callers that still want one
     jmp .out
 .stale:
     test byte [es:di+4], 2
@@ -10091,25 +10186,34 @@ sh_eval_cell:
     or al, al
     jnz .copyin
     mov si, bx
-    call sh_pcmp                      ; -> AX = result; may recurse
-    mov dx, ax
-    pop bx
+    call sh_pcmp                      ; the result lands in sh_acc, and may
+    pop bx                            ; have recursed to get there
     dec word [sh_evaldepth]
     jmp .writeback
 .toodeep:
     xor dx, dx
+    push ax
+    xor ax, ax
+    call sh_acc_int                   ; too deep is a zero, in both forms
+    pop ax
 .writeback:
     pop word [sh_evcol]               ; stage 3.0d: ROW()/COLUMN() context,
     pop word [sh_evrow]               ; restored in the order it was pushed
     pop di                            ; this cell's record offset, restored
     mov es, [sh_cellseg]
     and byte [es:di+4], 0xFD          ; EVALUATING = 0 (HASFORMULA untouched)
-    mov [es:di+SH_C_VAL], dx
+    call sh_acc_to_cellval            ; cache the whole double
+    call sh_acc_toint
+    mov dx, ax
     mov ax, [sh_pass]
     mov [es:di+SH_C_PASS], ax
     jmp .out
 .cycle:
     xor dx, dx
+    push ax
+    xor ax, ax
+    call sh_acc_int                   ; a cycle is a zero, in both forms
+    pop ax
 .out:
     pop es
     pop di
@@ -10158,63 +10262,65 @@ sh_pcmpcont:
     ret
 .eq:
     inc si
-    push ax
+    call sh_vpush
     call sh_pexpr
-    pop bx
-    cmp bx, ax
-    je .true
-    jmp .false
+    call sh_binop_pre
+    call fp_cmpab                     ; AX = -1/0/1 with the flags to match,
+    je .true                          ; so the six tests below read exactly as
+    jmp .false                        ; the integer CMPs they replace
 .lt_le_ne:
     inc si
     cmp byte [si], '='
     je .le
     cmp byte [si], '>'
     je .ne
-    push ax
+    call sh_vpush
     call sh_pexpr
-    pop bx
-    cmp bx, ax
+    call sh_binop_pre
+    call fp_cmpab
     jl .true
     jmp .false
 .le:
     inc si
-    push ax
+    call sh_vpush
     call sh_pexpr
-    pop bx
-    cmp bx, ax
+    call sh_binop_pre
+    call fp_cmpab
     jle .true
     jmp .false
 .ne:
     inc si
-    push ax
+    call sh_vpush
     call sh_pexpr
-    pop bx
-    cmp bx, ax
+    call sh_binop_pre
+    call fp_cmpab
     jne .true
     jmp .false
 .gt_ge:
     inc si
     cmp byte [si], '='
     je .ge
-    push ax
+    call sh_vpush
     call sh_pexpr
-    pop bx
-    cmp bx, ax
+    call sh_binop_pre
+    call fp_cmpab
     jg .true
     jmp .false
 .ge:
     inc si
-    push ax
+    call sh_vpush
     call sh_pexpr
-    pop bx
-    cmp bx, ax
+    call sh_binop_pre
+    call fp_cmpab
     jge .true
     jmp .false
 .true:
     mov ax, 1
+    call sh_acc_int
     ret
 .false:
     xor ax, ax
+    call sh_acc_int
     ret
 
 ; sh_pexpr / sh_pexprcont - additive level. sh_pexprcont is a real entry
@@ -10230,18 +10336,19 @@ sh_pexprcont:
     ret
 .add:
     inc si
-    push ax
-    call sh_pterm
-    pop bx
-    add ax, bx
+    call sh_vpush                     ; the left operand goes on the machine
+    call sh_pterm                     ; stack: a double does not fit a register
+    call sh_binop_pre                 ; and the parse of the right may recurse
+    call fp_add
+    call sh_acc_store
     jmp sh_pexprcont
 .sub:
     inc si
-    push ax
+    call sh_vpush
     call sh_pterm
-    pop bx
-    sub bx, ax
-    mov ax, bx
+    call sh_binop_pre
+    call fp_sub
+    call sh_acc_store
     jmp sh_pexprcont
 
 ; sh_pterm / sh_ptermcont - multiplicative level, same reasoning as above.
@@ -10255,24 +10362,24 @@ sh_ptermcont:
     ret
 .mul:
     inc si
-    push ax
+    call sh_vpush
     call sh_ppow
-    pop bx
-    mul bx
+    call sh_binop_pre
+    call fp_mul
+    call sh_acc_store
     jmp sh_ptermcont
 .div:
     inc si
-    push ax
+    call sh_vpush
     call sh_ppow
-    mov cx, ax
-    pop ax
-    or cx, cx
-    jnz .divok
-    xor ax, ax                        ; divide by zero -> 0, never IDIV
-    jmp sh_ptermcont
+    call sh_binop_pre
+    call fp_div                       ; CF=1 means the divisor was zero. The
+    jnc .divok                        ; standing policy here is still 0 rather
+    xor ax, ax                        ; than an error value: #DIV/0! needs the
+    call sh_acc_int                   ; error TYPE the record now has room for
+    jmp sh_ptermcont                  ; but nothing yet reads
 .divok:
-    cwd
-    idiv cx
+    call sh_acc_store
     jmp sh_ptermcont
 
 ; sh_ppow (stage 3.0d) - the '^' level, between multiplication and the
@@ -10292,23 +10399,35 @@ sh_ppow:
     cmp byte [si], '^'
     jne .out
     inc si
-    push ax
+    call sh_vpush                     ; the BASE, banked
     call sh_ppow                      ; recurse: right-associative
-    mov cx, ax
-    pop bx                            ; BX = base, CX = exponent
-    mov ax, 1
+    call sh_acc_toint                 ; the exponent is still a whole number -
+    mov cx, ax                        ; a fractional power needs logarithms,
+    pop word [sh_lhs]                 ; which this file does not have
+    pop word [sh_lhs+2]
+    pop word [sh_lhs+4]
+    pop word [sh_lhs+6]
+    mov ax, 1                         ; the running product starts at one
+    call sh_acc_int
     or cx, cx
-    js .zero
+    js .zero                          ; a negative exponent is a fraction
     jz .out                           ; anything^0 = 1
 .loop:
-    push dx
-    imul bx
-    pop dx
+    push cx
+    push si
+    mov si, sh_lhs                    ; B = the base, reloaded each time -
+    call fp_unpack_b                  ; fp_mul consumes it
+    pop si
+    call sh_acc_load_a
+    call fp_mul
+    call sh_acc_store
+    pop cx
     dec cx
     jnz .loop
     jmp .out
 .zero:
     xor ax, ax
+    call sh_acc_int
 .out:
     ret
 
@@ -10319,8 +10438,10 @@ sh_pfactor:
     jne .notneg
     inc si
     call sh_pfactor
-    neg ax
-    ret
+    xor byte [sh_acc+7], 0x80         ; negate by flipping the sign BIT of the
+    ret                               ; packed double - cheaper than unpacking
+                                      ; and, unlike `neg`, exact for every
+                                      ; value including zero
 .notneg:
     cmp byte [si], '('
     jne .notparen
@@ -10346,15 +10467,13 @@ sh_pfactor:
     call sh_pident
     ret
 .maybenum:
-    push bx
-    mov bx, si
-    add bx, SH_EDITMAX + 1
-    push es
-    mov ax, ds
-    mov es, ax
-    call sh_pint
-    pop es
-    pop bx
+    call fp_atof                      ; a literal is a full decimal now: 3.5
+    jnc .numok                        ; and 1e3 are values, not the leading
+    xor ax, ax                        ; digit of one. Nothing parseable here
+    call sh_acc_int                   ; is a zero, which is what the integer
+    ret                               ; path did too.
+.numok:
+    call sh_acc_store
 .out:
     ret
 
@@ -10492,12 +10611,11 @@ sh_pident:
 .samesheet:
     call sh_getcell2
 .havecell:
-    jc .refval
-    xor ax, ax
-    jmp .out
-.refval:
-    mov ax, dx
-    jmp .out
+    jmp .out                          ; nothing to do: sh_getcell2 leaves the
+                                      ; value in sh_acc, and leaves a ZERO
+                                      ; there for a cell that does not exist -
+                                      ; which is what both branches here used
+                                      ; to arrange by hand
 .isfunc:
     call sh_pfunc
 .out:
@@ -10635,12 +10753,9 @@ sh_prange:
     call sh_foldrange
     jmp .out
 .singlecell:
-    call sh_getcell2
-    jc .havev
-    xor dx, dx
-.havev:
-    mov ax, dx
-    call sh_ptermcont
+    call sh_getcell2                  ; the value lands in sh_acc either way -
+.havev:                               ; getcell2 puts a zero there for a cell
+    call sh_ptermcont                 ; that does not exist
     call sh_pexprcont
     call sh_pcmpcont
     call sh_foldvalue
@@ -10690,8 +10805,7 @@ sh_foldrange:
     mov bx, [sh_rrow]
     call sh_getcell2
     jnc .skip
-    mov ax, dx
-    call sh_foldvalue
+    call sh_foldvalue                 ; sh_acc is the value; see sh_foldvalue
 .skip:
     mov ax, [sh_rcol]
     inc ax
@@ -10707,9 +10821,18 @@ sh_foldrange:
     pop ax
     ret
 
-; sh_foldvalue - in: AX = one value; folds it into sh_pacc/sh_pcnt/sh_phave
-; per the function currently being parsed (sh_pfid)
+; -----------------------------------------------------------------------------
+; sh_foldvalue - fold the value in sh_acc into the running sh_pacc, per the
+; function being parsed (sh_pfid).
+;
+; sh_pacc is EIGHT BYTES now, not a word: SUM over a column of decimals has to
+; keep them. The incoming value arrives in sh_acc rather than in AX for the
+; same reason, and both are packed doubles - fp A and B are scratch here and
+; are reloaded on every fold, because the range walker between calls uses them
+; itself.
+; -----------------------------------------------------------------------------
 sh_foldvalue:
+    push ax
     push bx
     inc word [sh_pcnt]
     mov bx, [sh_pfid]
@@ -10731,51 +10854,262 @@ sh_foldvalue:
     jmp .out                          ; COUNT (4), COUNTA (11) or unknown:
                                        ; pcnt alone is enough
 .sum:
-    add [sh_pacc], ax
+    call sh_pacc_to_a
+    call sh_acc_load_b
+    call fp_add
+    call sh_pacc_from_a
+    jmp .out
+.product:
+    call sh_pacc_to_a
+    call sh_acc_load_b
+    call fp_mul
+    call sh_pacc_from_a
     jmp .out
 .min:
     cmp word [sh_phave], 0
     jnz .mincmp
-    mov [sh_pacc], ax
+    call sh_acc_to_pacc
     mov word [sh_phave], 1
     jmp .out
 .mincmp:
-    cmp ax, [sh_pacc]
+    call sh_acc_load_a                ; is the new value below the running one?
+    call sh_pacc_to_b
+    call fp_cmpab
     jge .out
-    mov [sh_pacc], ax
+    call sh_acc_to_pacc
     jmp .out
 .max:
     cmp word [sh_phave], 0
     jnz .maxcmp
-    mov [sh_pacc], ax
+    call sh_acc_to_pacc
     mov word [sh_phave], 1
     jmp .out
 .maxcmp:
-    cmp ax, [sh_pacc]
+    call sh_acc_load_a
+    call sh_pacc_to_b
+    call fp_cmpab
     jle .out
-    mov [sh_pacc], ax
-    jmp .out
-.product:
-    push ax
-    push dx
-    mov bx, ax                        ; the incoming value (BX held the id,
-    mov ax, [sh_pacc]                 ; which is finished with by here)
-    imul bx                           ; dx:ax = acc * value; the low word is
-    mov [sh_pacc], ax                 ; kept, the same 16-bit wrap every other
-    pop dx                            ; path in this evaluator already has
-    pop ax
+    call sh_acc_to_pacc
     jmp .out
 .and:
-    or ax, ax
-    jnz .out                          ; nonzero folds in as true: no-op
-    mov word [sh_pacc], 0             ; any false value forces AND to false
+    call sh_acc_iszero
+    jnc .out                          ; nonzero folds in as true: no-op
+    xor ax, ax                        ; any false value forces AND to false
+    call sh_int_to_pacc
     jmp .out
 .or:
-    or ax, ax
-    jz .out                           ; zero folds in as false: no-op
-    mov word [sh_pacc], 1             ; any true value forces OR to true
+    call sh_acc_iszero
+    jc .out                           ; zero folds in as false: no-op
+    mov ax, 1                         ; any true value forces OR to true
+    call sh_int_to_pacc
 .out:
     pop bx
+    pop ax
+    ret
+
+; --- the small movers the fold above is written in terms of ------------------
+sh_pacc_to_a:
+    push si
+    mov si, sh_pacc
+    call fp_unpack_a
+    pop si
+    ret
+
+sh_pacc_to_b:
+    push si
+    mov si, sh_pacc
+    call fp_unpack_b
+    pop si
+    ret
+
+sh_pacc_from_a:
+    push di
+    mov di, sh_pacc
+    call fp_pack_a
+    pop di
+    ret
+
+sh_acc_to_pacc:
+    push ax
+    push si
+    push di
+    mov si, sh_acc
+    mov di, sh_pacc
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    pop si
+    pop ax
+    ret
+
+; sh_int_to_pacc - AX (signed) -> sh_pacc
+sh_int_to_pacc:
+    call fp_i2a
+    call sh_pacc_from_a
+    ret
+
+; sh_esatof - parse a decimal number from ES:SI into sh_acc, advancing SI past
+; it. fp_atof reads DS:SI and the file staging buffer is in ES, so the token is
+; copied across first - up to a ';' or the record's end. Without this, a SYLK
+; K field would still be read by the integer parser and "3.5" would come back
+; as 3, which is what the round trip actually did before this existed.
+sh_esatof:
+    push ax
+    push cx
+    push di
+    mov di, sh_numbuf
+    mov cx, 24
+.copy:
+    jcxz .done
+    cmp si, bx
+    jae .done
+    mov al, [es:si]
+    cmp al, ';'
+    je .done
+    cmp al, 13
+    je .done
+    cmp al, 10
+    je .done
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .copy
+.done:
+    mov byte [di], 0
+    push si
+    mov si, sh_numbuf
+    call fp_atof
+    pop si
+    call sh_acc_store
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; The same three, for a record addressed through SI - the file writers, the
+; chart scan and sort all walk the array with SI rather than DI.
+sh_cellval_to_acc_si:
+    push ax
+    push cx
+    push si
+    push di
+    mov di, sh_acc
+    mov cx, 4
+.s2a:
+    mov ax, [es:si+SH_C_VAL]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .s2a
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; sh_cellnum_si - ...formatted into sh_numbuf
+sh_cellnum_si:
+    push ax
+    push di
+    call sh_cellval_to_acc_si
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    pop di
+    pop ax
+    ret
+
+; sh_cellint_si - ...truncated to a signed word in AX
+sh_cellint_si:
+    call sh_cellval_to_acc_si
+    call sh_acc_toint
+    ret
+
+; sh_cellnum - the value of the record at ES:DI, formatted into sh_numbuf as
+; a decimal. What "read the word and sh_itoa it" used to do, except that the
+; value is eight bytes now and its low word on its own is meaningless.
+sh_cellnum:
+    push ax
+    push di
+    call sh_cellval_to_acc
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    pop di
+    pop ax
+    ret
+
+; sh_cellval_to_acc / sh_acc_to_cellval - the eight value bytes of the record
+; at ES:DI. DI is left where it started, which matters: every caller is still
+; using it as the record's offset.
+sh_cellval_to_acc:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, sh_acc
+    mov cx, 4
+.c2a:
+    mov ax, [es:di+SH_C_VAL]
+    mov [si], ax
+    add di, 2
+    add si, 2
+    dec cx
+    jnz .c2a
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+sh_acc_to_cellval:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, sh_acc
+    mov cx, 4
+.a2c:
+    mov ax, [si]
+    mov [es:di+SH_C_VAL], ax
+    add di, 2
+    add si, 2
+    dec cx
+    jnz .a2c
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; sh_acc_iszero - CF=1 if sh_acc is zero. The exponent and mantissa are all
+; that matter; a negative zero is still zero, so the sign byte is masked off.
+sh_acc_iszero:
+    push ax
+    push bx
+    mov ax, [sh_acc]
+    or ax, [sh_acc+2]
+    or ax, [sh_acc+4]
+    mov bx, [sh_acc+6]
+    and bx, 0x7FFF
+    or ax, bx
+    pop bx
+    pop ax
+    jnz .no
+    stc
+    ret
+.no:
+    clc
     ret
 
 ; sh_funcfinish - the accumulated sh_pacc/sh_pcnt -> the function's result
@@ -10796,20 +11130,27 @@ sh_funcfinish:
                                        ; apart. Without this it returned
                                        ; sh_pacc, which for a non-summing fold
                                        ; is always 0.
-    mov ax, [sh_pacc]                 ; SUM/MIN/MAX (and unknown): 0 if
-    jmp .out                          ; nothing was folded
+    call sh_pacc_to_a                 ; SUM/MIN/MAX/PRODUCT (and unknown):
+    call sh_acc_store                 ; whatever was folded, zero if nothing
+    jmp .fout
 .average:
     cmp word [sh_pcnt], 0
     jne .avgok
     xor ax, ax
-    jmp .out
+    call sh_acc_int
+    jmp .fout
 .avgok:
-    mov ax, [sh_pacc]
-    cwd
-    idiv word [sh_pcnt]
-    jmp .out
+    call sh_pacc_to_a                 ; A REAL MEAN NOW, not a truncated one:
+    mov ax, [sh_pcnt]                 ; AVERAGE(1,2) is 1.5 where the integer
+    call fp_i2b                       ; evaluator gave 1
+    call fp_div
+    call sh_acc_store
+    jmp .fout
 .count:
     mov ax, [sh_pcnt]
+    call sh_acc_int
+    jmp .fout
+.fout:
 .out:
     pop bx
     ret
@@ -10843,14 +11184,17 @@ sh_pfunc:
     jae .dospecial                     ; fixed arity, parsed by sh_pspecial,
                                        ; not folded over ranges
     mov [sh_pfid], ax
-    mov word [sh_pacc], 0
-    cmp ax, 8                          ; AND folds by ANDing in each value,
-    je .accone                         ; so it must start true (1), not the
-    cmp ax, 10                         ; false (0) every other fold starts at.
+    push ax
+    xor ax, ax
+    cmp word [sh_pfid], 8              ; AND folds by ANDing in each value, so
+    je .accone                         ; it must start true (1), not the false
+    cmp word [sh_pfid], 10             ; (0) every other fold starts at.
     jne .accset                        ; PRODUCT starts at 1 for the same
 .accone:                               ; reason - a running product seeded with
-    mov word [sh_pacc], 1              ; 0 can only ever be 0
+    mov ax, 1                          ; 0 can only ever be 0
 .accset:
+    call sh_int_to_pacc
+    pop ax
     mov word [sh_pcnt], 0
     mov word [sh_phave], 0
 .args:
@@ -10910,6 +11254,14 @@ sh_pfunc:
 ;
 ; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
 ; =============================================================================
+; sh_parg - one argument, as an integer. The special forms below are integer
+; functions by nature; a fractional MOD or FACT is not a thing they mean.
+; Truncation is the same rule TRUNC itself uses, so INT(3.7) is 3.
+sh_parg:
+    call sh_pcmp
+    call sh_acc_toint
+    ret
+
 sh_pspecial:
     push bx
     push cx
@@ -10943,7 +11295,7 @@ sh_pspecial:
 
 ; ---- the one- and two-argument forms ----------------------------------------
 .arg1:
-    call sh_pcmp                      ; every id from here takes a first value
+    call sh_parg                      ; every id from here takes a first value
     mov bx, ax                        ; BX = first argument
     cmp di, 12
     je .two
@@ -10993,7 +11345,7 @@ sh_pspecial:
     jne .zeroout
     inc si
     push bx                           ; first argument, across the second parse
-    call sh_pcmp
+    call sh_parg
     mov cx, ax                        ; CX = second argument
     pop bx
     cmp di, 12
@@ -11071,7 +11423,7 @@ sh_pspecial:
 ; no side effects to avoid, and stopping early would leave SI mid-expression
 ; with no way to find the closing paren. Same reasoning as sh_pif's.
 .choose:
-    call sh_pcmp                      ; the 1-based index
+    call sh_parg                      ; the 1-based index
     mov bx, ax
     xor cx, cx                        ; CX = how many values seen
     xor dx, dx                        ; DX = the one that matched
@@ -11079,7 +11431,7 @@ sh_pspecial:
     cmp byte [si], ','
     jne .chdone
     inc si
-    call sh_pcmp
+    call sh_parg
     inc cx
     cmp cx, bx
     jne .chloop
@@ -11092,6 +11444,10 @@ sh_pspecial:
 .zeroout:
     xor ax, ax
 .close:
+    call sh_acc_int                   ; these thirteen are integer functions by
+                                      ; nature - MOD, FACT, ROW, CHOOSE - so
+                                      ; they take integers and give one back,
+                                      ; converting only at this boundary
     cmp byte [si], ')'
     jne .out
     inc si
@@ -11137,23 +11493,34 @@ sh_isqrt:
 sh_pif:
     push bx
     push cx
-    call sh_pcmp                      ; condition
-    mov bx, ax
+    call sh_pcmp                      ; the condition, kept as a truth value
+    call sh_acc_iszero                ; rather than as a number
+    mov bx, 0
+    jc .condfalse
+    mov bx, 1
+.condfalse:
     cmp byte [si], ','
     jne .bad
     inc si
-    call sh_pcmp                      ; then-value
-    mov cx, ax
+    call sh_pcmp                      ; the then-value, banked whole
+    call sh_vpush
     cmp byte [si], ','
-    jne .bad
+    jne .badpop
     inc si
-    call sh_pcmp                      ; else-value, already in AX
+    call sh_pcmp                      ; the else-value, left in sh_acc
     or bx, bx
-    jz .out
-    mov ax, cx
+    jz .dropthen                      ; false: sh_acc already holds the else
+    call sh_binop_pre                 ; true: recover the then-value from the
+    call sh_acc_store                 ; stack (it lands in fp A) and keep it
     jmp .out
+.dropthen:
+    add sp, 8                         ; the banked then-value is not wanted
+    jmp .out
+.badpop:
+    add sp, 8
 .bad:
     xor ax, ax
+    call sh_acc_int
 .out:
     cmp byte [si], ')'
     jne .noclose
@@ -11167,12 +11534,14 @@ sh_pif:
 ; in: SI right after "NOT("; out: AX=1 or 0, SI advanced past ')' if found
 sh_pnot:
     call sh_pcmp
-    or ax, ax
-    jz .true
+    call sh_acc_iszero
+    jc .true
     xor ax, ax
+    call sh_acc_int
     jmp .close
 .true:
     mov ax, 1
+    call sh_acc_int
 .close:
     cmp byte [si], ')'
     jne .out
@@ -11184,10 +11553,8 @@ sh_pnot:
 ; in: SI right after "ABS("; out: AX=|x|, SI advanced past ')' if found
 sh_pabs:
     call sh_pcmp
-    or ax, ax
-    jns .close
-    neg ax
-.close:
+    and byte [sh_acc+7], 0x7F         ; clear the sign bit: |x| for a packed
+.close:                               ; double is one AND, and it is exact
     cmp byte [si], ')'
     jne .out
     inc si
@@ -12525,7 +12892,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2060
+    OS88_BSS 2088
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -12555,8 +12922,10 @@ sh_ly2        equ sh_ly1 + 2
 sh_trunc      equ sh_ly2 + 2
 SH_TCOL       equ sh_trunc + 1
 SH_TROW       equ SH_TCOL + 2
-SH_TVAL       equ SH_TROW + 2
-SH_THAVE      equ SH_TVAL + 2
+SH_TVAL       equ SH_TROW + 2               ; the integer form, still used by
+                                             ; the DIF and BIFF readers
+SH_TDVAL      equ SH_TVAL + 2               ; 8: SYLK's, as a real double
+SH_THAVE      equ SH_TDVAL + 8
 SH_TALIGN     equ SH_THAVE + 1             ; sh_parsefrec's own scratch -
 SH_TNUMFMT    equ SH_TALIGN + 1            ; an "F" record's parsed
 SH_TCOMMA     equ SH_TNUMFMT + 1           ; alignment/number-format/;K
@@ -12601,8 +12970,11 @@ sh_pcol       equ sh_pxsheet + 1              ; sh_pident's cell-ref column
 sh_pfid       equ sh_pcol + 2               ; the function currently parsing:
                                              ; 0 SUM 1 AVERAGE 2 MIN 3 MAX
                                              ; 4 COUNT 0xFF unknown
-sh_pacc       equ sh_pfid + 2               ; running sum / min / max
-sh_pcnt       equ sh_pacc + 2               ; cells folded so far
+sh_pacc       equ sh_pfid + 2               ; 8: the running sum / min / max /
+                                             ; product, a packed double since
+                                             ; stage 4.0 - SUM over a column of
+                                             ; decimals has to keep them
+sh_pcnt       equ sh_pacc + 8               ; cells folded so far
 sh_phave      equ sh_pcnt + 2               ; MIN/MAX has a candidate yet
 sh_r1col      equ sh_phave + 2              ; a range's two corners...
 sh_r1row      equ sh_r1col + 2
@@ -12690,8 +13062,9 @@ sh_rc_trow    equ sh_rc_tsheet + 2          ; there are enough of them
 sh_rc_tcol    equ sh_rc_trow + 2            ; that stack-relative addressing
 sh_rc_tflags  equ sh_rc_tcol + 2            ; would be more error-prone
 sh_rc_tfmt    equ sh_rc_tflags + 1          ; than a few named bytes
-sh_rc_tval    equ sh_rc_tfmt + 1
-sh_rc_tfml    equ sh_rc_tval + 2
+sh_wrec_dval  equ sh_rc_tfmt + 1            ; 8: the SYLK writer's banked value
+sh_rc_tval    equ sh_wrec_dval + 8          ; 8: a whole double, not a word
+sh_rc_tfml    equ sh_rc_tval + 8
 
 sh_sort_cnt   equ sh_rc_tfml + 2            ; word: sh_docmd_sortcol's own
                                              ; staged-pair count
