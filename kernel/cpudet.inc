@@ -53,6 +53,7 @@
 CPU_F_A20       equ 0x01
 CPU_F_HMA       equ 0x02
 CPU_F_UNREAL    equ 0x04
+CPU_F_X87       equ 0x08
 
 
 cpu_tier        db CPU_8086     ; the published tier (SPEC.md 41.1). .text,
@@ -63,6 +64,11 @@ cpu_tier        db CPU_8086     ; the published tier (SPEC.md 41.1). .text,
 cpu_feat        db 0            ; CPU_F_* - what actually verified, as
                                 ; opposed to what the CPU could in principle
                                 ; do. Initialized data for the same reason.
+
+cpu_x87sw       dw 0            ; the x87 probe's landing pad. In .text for
+                                ; cpu_tier's reason and because cpu_detect is
+                                ; boot overlay - it cannot own bss that
+                                ; outlives it.
 
 ; -----------------------------------------------------------------------------
 ; cpu_detect - publish the CPU tier (SPEC.md 41.1)
@@ -119,12 +125,45 @@ cpu_detect:
     and ax, 0xF000
     jz .is286                   ; all four forced to zero: 286 in real mode
     mov byte [cpu_tier], CPU_386
-    jmp short .out
+    jmp short .tierdone
 .is286:
     mov byte [cpu_tier], CPU_286
-    jmp short .out
+    jmp short .tierdone
 .is8086:
     mov byte [cpu_tier], CPU_8086
+.tierdone:
+
+    ; --- is a coprocessor socketed? (SPEC.md 41.1) ---------------------------
+    ; A 5150 shipped with an EMPTY 8087 socket, and plenty were filled later,
+    ; so this is a per-machine fact and not a tier fact - which is why it is a
+    ; feature bit rather than a new CPU_* level.
+    ;
+    ; The probe is FNINIT then read the status word back: on a part that is
+    ; there, FNINIT clears it to zero, and the control word comes back with
+    ; every exception masked. A sentinel goes in first so that "nothing wrote
+    ; here" is distinguishable from "an FPU wrote a zero".
+    ;
+    ; EVERY FORM USED HERE IS A NO-WAIT ONE - FNINIT, FNSTSW, FNSTCW, never
+    ; FINIT or FSTSW. The waiting forms assemble to a WAIT ahead of the ESC,
+    ; and on a machine with no coprocessor to lower BUSY that WAIT is a hang
+    ; rather than a wrong answer. An ESC with nothing listening is simply
+    ; ignored by an 8086/8088, which is what makes running this unconditionally
+    ; safe on the floor machine.
+    ;
+    ; This beats INT 11h's equipment word, whose bit 1 on a 5150 is a DIP
+    ; SWITCH someone set by hand - it reports what the owner claimed, not what
+    ; is in the socket.
+    mov word [cpu_x87sw], 0x5A5A
+    fninit
+    fnstsw word [cpu_x87sw]
+    cmp word [cpu_x87sw], 0
+    jne .out
+    fnstcw word [cpu_x87sw]
+    mov ax, [cpu_x87sw]
+    and ax, 0x103F
+    cmp ax, 0x003F              ; a just-initialised control word: all
+    jne .out                    ; exceptions masked, extended precision
+    or byte [cpu_feat], CPU_F_X87
 .out:
     popf
     pop cx

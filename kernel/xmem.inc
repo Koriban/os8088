@@ -248,9 +248,15 @@ xm_boot_x:
     loop .stage
     pop dx
     pop ax
-    mov [cpu_feat], dl          ; the A20/HMA/UNREAL bits, so cpu_info's AH
+    and dl, CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL
+    and byte [cpu_feat], ~(CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL) & 0xFF
+    or [cpu_feat], dl           ; the A20/HMA/UNREAL bits, so cpu_info's AH
                                 ; (slot 0x0188) keeps meaning what it always
-                                ; meant. The image is their only writer now,
+                                ; meant. THREE BITS, not the whole byte: this
+                                ; runs after cpu_detect, and a plain store
+                                ; here silently wiped the coprocessor bit that
+                                ; probe had just set. The image owns these
+                                ; three and must say so.
                                 ; and on a machine where it never loads this
                                 ; byte reads 0 - no gate verified, no HMA, no
                                 ; unreal mode - which is true and is exactly

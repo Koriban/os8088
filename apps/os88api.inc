@@ -696,8 +696,9 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ;
 ; ...and OSAPI_CPU_INFO's AH, which this file described in prose and did not
 ; name. They are one contract with three readers now - the kernel publishes
-; them, XMEM.DRV is the only thing that SETS them (SPEC.md 41.12.2), and a
-; package may test them - so they are spelled once here rather than three
+; them, XMEM.DRV sets the three memory bits (SPEC.md 41.12.2) and the boot
+; probe sets CPU_F_X87 - so XMEM.DRV must write ITS THREE and leave the byte's
+; other bits alone, which it did not always do - and a package may test them - so they are spelled once here rather than three
 ; times. NONE OF THEM IS THE THING TO BRANCH ON: a package asks
 ; OSAPI_XMEM_CAPS for KB, always, because these say what the machine can do
 ; and that one says what is actually there.
@@ -707,6 +708,22 @@ CPU_F_A20           equ 0x01     ; the A20 line VERIFIED open - by a
 CPU_F_HMA           equ 0x02     ; the High Memory Area is claimed (41.3)
 CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
                                  ; data limit (41.4). Tier 2 only
+CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
+                                 ; at boot with FNINIT and a status-word read
+                                 ; back - not INT 11h's equipment word, whose
+                                 ; bit on a 5150 is a DIP switch reporting
+                                 ; what the owner claimed. A 5150 shipped with
+                                 ; that socket EMPTY and many were filled
+                                 ; later, so this is a per-machine fact rather
+                                 ; than a tier fact, which is why it lives
+                                 ; here and not in CPU_8086/286/386.
+                                 ; AND IT IS THE ONE EXCEPTION to rule 1's
+                                 ; ban on a package opening a `cpu` island:
+                                 ; an 8087 arithmetic path may sit in a
+                                 ; `cpu 8087` island IF this bit gates every
+                                 ; entry to it at run time (SPEC.md 1 rule 1,
+                                 ; 84.6). Nothing else is exempt - the ban on
+                                 ; `cpu 386` above stands exactly as written.
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE
@@ -714,6 +731,12 @@ CPU_F_UNREAL        equ 0x04     ; unreal mode armed: FS and GS carry a 4GB
 ; published, so a package gets CF=1 and nothing else. They are published here
 ; because drivers include this file (drivers/os88drv.inc does), and because a
 ; slot number belongs in one place (SPEC.md 20.8).
+                                 ;
+                                 ; SPEC.md 1 rule 1 forbids a package its own
+                                 ; `cpu` island - THIS BIT IS THE ONE
+                                 ; EXCEPTION, and only for x87 code guarded by
+                                 ; a run-time test of it (SPEC.md 84.6).
+
 %define OSAPI_VOL_ADD       KERNEL_SEG:0x0270   ; AL = the driver's own volume
                                  ; handle, CX = the volume's sector count,
                                  ; DX = a listing claim's segment (0 = the

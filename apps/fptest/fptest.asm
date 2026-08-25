@@ -47,9 +47,11 @@ fpt_tpl:
 fpt_title:  db 'FP self-test', 0
 fpt_s_pass: db 'ok  ', 0
 fpt_s_fail: db 'FAIL', 0
-fpt_s_hdr:  db 'os88fp.inc vs IEEE-754', 0
+fpt_s_hdr:  db 'os88fp', 0
 fpt_s_all:  db 'ALL PASS', 0
 fpt_s_some: db 'FAILURES', 0
+fpt_s_fpu:   db '[8087 present]', 0
+fpt_s_nofpu: db '[no 8087]', 0
 
 ; fpt_itoa - AX signed -> the string at DI. Diagnostics only.
 fpt_itoa:
@@ -123,6 +125,17 @@ fpt_paint:
     mov dx, [fpt_oy]
     add dx, 2
     mov si, fpt_s_hdr
+    call OSAPI_FONT_STR
+    call OSAPI_CPU_INFO               ; AL = tier, AH = CPU_F_* feature bits
+    mov si, fpt_s_nofpu               ; which path Sheet would take on this
+    test ah, CPU_F_X87                ; machine, and the reason this app knows
+    jz .nofpu                         ; about the kernel probe at all
+    mov si, fpt_s_fpu
+.nofpu:
+    mov cx, [fpt_ox]
+    add cx, 150
+    mov dx, [fpt_oy]
+    add dx, 2
     call OSAPI_FONT_STR
 
     mov word [fpt_bad], 0
@@ -411,7 +424,7 @@ fpt_paint:
 .sdone:
 
     mov cx, [fpt_ox]
-    add cx, 150
+    add cx, 60
     mov dx, [fpt_oy]
     add dx, 2
     mov si, fpt_s_all

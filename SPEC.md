@@ -54,6 +54,20 @@ pre-empted background task, updating live while the user types or drags).
    anything newer. Consequences: no `pusha/popa`, no `push imm`, no
    `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers, no
    `imul r,r,imm`. `rep movsb/stosb/lodsb`, `mul`, `div` are fine.
+
+   **One exception, added with §84.6: a `cpu 8087` island.** The floating
+   point coprocessor is the only newer part this rule admits, and only because
+   it is not a *newer CPU* — it is a socket an 8088 machine could always have
+   had, empty on most 5150s and filled on some. The exception is narrow and
+   carries its own conditions: the island holds coprocessor instructions only
+   (never a 186+ integer instruction that happens to assemble inside it), it
+   is closed with `cpu 8086` immediately after, and **every entry to it is
+   gated at run time on `CPU_F_X87`** from `OSAPI_CPU_INFO` — because the
+   assembler's opinion of the machine is not the machine. On a CPU with no
+   coprocessor an unguarded `fadd` does not fault: it hangs, waiting on a
+   `BUSY` line nothing will ever lower. No other `cpu` directive is admitted
+   anywhere, in the kernel, a driver or a package; `cpu 386` in particular is
+   still refused with no exception (§41).
 2. **Near model.** CS = DS = `KERNEL_SEG` (0x0800) for all kernel code and
    tasks; **SS = `LOW_SEG`** (0x0440), because every task stack lives outside
    the kernel segment (§2.1). ES is scratch — any routine may change and use
@@ -67273,3 +67287,66 @@ outright and deleted three helper routines: a spreadsheet value sits within a
 few decades of 1, so the loop runs a handful of times, and unlike the estimate
 it **cannot** be off by a decade because it stops exactly when the value is in
 range. The optimisation was the bug.
+
+### 84.6 The coprocessor: probed at boot, gated at every call
+
+`CPU_F_X87` (0x08) joins `CPU_F_A20`/`HMA`/`UNREAL` in `OSAPI_CPU_INFO`'s AH
+(slot 0x0188). It needed **no new slot** — the byte had the bit free, a
+package that wants it already calls that slot for the tier, and one more
+capability bit is what that byte is for.
+
+**Probed with the coprocessor itself, never with INT 11h.** The equipment
+word's bit 1 on a 5150 is a **DIP switch**: it reports what the owner set,
+which is not what is in the socket. The probe instead asks the part:
+
+```
+    mov word [cpu_x87sw], 0x5A5A   ; poison, so "nothing wrote here" is visible
+    fninit                          ; no-wait forms throughout - a WAIT prefix
+    fnstsw word [cpu_x87sw]         ; on a machine with no 8087 hangs forever
+    cmp  word [cpu_x87sw], 0        ; a reset part reports a zero status word
+    jne  .out
+    fnstcw word [cpu_x87sw]         ; and a control word with the low six
+    mov  ax, [cpu_x87sw]            ; exception masks set
+    and  ax, 0x103F
+    cmp  ax, 0x003F
+    jne  .out
+    or   byte [cpu_feat], CPU_F_X87
+```
+
+Two things make it safe on a machine with no part. Every instruction is a
+**no-wait form** (`FNINIT`, `FNSTSW`, `FNSTCW`) — the waiting forms assemble a
+`WAIT` prefix that blocks until a coprocessor lowers `BUSY`, and with no
+coprocessor that is a hang, not a fault. And the memory is **poisoned first**,
+so the "nothing at all happened" case fails the compare rather than reading
+whatever was there.
+
+Two checks, not one, because a floating bus can read back as zero. The control
+word test is the confirming one: a part just reset by `FNINIT` has all six
+exception masks set, and 0x103F/0x003F accepts that on an 8087 (whose bit 12
+is the infinity-control bit later parts dropped) and on a 287/387 alike.
+
+#### 84.6.1 It is a bit, not a tier
+
+`CPU_8086`/`286`/`386` say what the processor can execute. `CPU_F_X87` says
+what is **socketed**, and the two are independent in both directions: an 8088
+with an 8087 is tier 0 with the bit set, and a 386SX with an empty socket is
+tier 2 without it. Never infer one from the other.
+
+#### 84.6.2 XMEM.DRV must write three bits, not the byte
+
+`kernel/xmem.inc` published its results with `mov [cpu_feat], dl`, which was
+correct while the image was the byte's only writer. The boot probe made it
+wrong: `cpu_detect` runs first, and that store then wiped `CPU_F_X87` on every
+machine — the bit was set correctly and erased a moment later, so a package
+asking for it always heard "no coprocessor". It now masks to its own three:
+
+```
+    and dl, CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL
+    and byte [cpu_feat], ~(CPU_F_A20 | CPU_F_HMA | CPU_F_UNREAL) & 0xFF
+    or  [cpu_feat], dl
+```
+
+**The rule this establishes for the whole byte:** `cpu_feat` now has more than
+one writer, so **every** writer sets and clears only the bits it owns. A whole
+byte store into a shared capability byte is a bug even when it is correct on
+the day it is written.
