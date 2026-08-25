@@ -4521,6 +4521,18 @@ sh_chart_render:
     push dx
     push si
     push es
+    push bx                             ; the title: "Column A", built here
+    push di                             ; because only Sheet knows which column
+    mov di, sh_chart_title              ; the series came from
+    mov si, sh_s_coltitle
+    call sh_strcpy_to_di
+    mov ax, [sh_chart_col]
+    call sh_colname
+    mov si, sh_colbuf
+    call sh_strcpy_to_di
+    mov word [ch_title], sh_chart_title
+    pop di
+    pop bx
     mov cx, [sh_chart_cnt]
     mov es, [sh_chartseg]
     mov dx, [sh_stgseg]
@@ -4578,6 +4590,7 @@ sh_chart_tpl:
     dw sh_s_chart_title, sh_chart_paint, 0, 0
 sh_s_chart_title: db 'Chart', 0
 sh_s_charted:      db 'Charted.', 0
+sh_s_coltitle:     db 'Column ', 0
 
 ; sh_docmd_chartexport - Data > Export Chart as BMP...: a no-op
 ; informational message if there's nothing charted yet (same "still runs,
@@ -15684,7 +15697,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2754
+    OS88_BSS 2810
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -16055,7 +16068,25 @@ ch_pie_col     equ ch_pie_a + 2
 ch_pie_thick   equ ch_pie_col + 2    ; byte: this ray fills, so it is 3px
 ch_pie_pen     equ ch_pie_thick + 1  ; byte: the colour ch_setpixel keeps
 ch_pie_pat     equ ch_pie_pen + 1    ; byte: this slice's hatch, FF = solid
-sh_rwsrc          equ ch_pie_pat + 1             ; SH_EDITMAX+1: the formula
+ch_tx          equ ch_pie_pat + 1   ; --- stage 3.0f: text into the canvas ---
+ch_ty          equ ch_tx + 2
+ch_tpen        equ ch_ty + 2
+ch_tsrc        equ ch_tpen + 2        ; the string cursor, across ch_glyph
+ch_tseg        equ ch_tsrc + 2        ; the GLYPH TABLE's segment, not KERNEL_SEG
+ch_ttab        equ ch_tseg + 2
+ch_tfirst      equ ch_ttab + 2        ; the character range the table covers
+ch_tlast       equ ch_tfirst + 2
+ch_tglyph      equ ch_tlast + 2       ; -> the current character's 8 rows
+ch_trow        equ ch_tglyph + 2
+ch_tcol        equ ch_trow + 2
+ch_tpy         equ ch_tcol + 2
+ch_tbits       equ ch_tpy + 2
+ch_tnum        equ ch_tbits + 2       ; 8: ch_itoa_t's output
+ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
+ch_legy        equ ch_title + 2     ; the legend row being drawn...
+ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
+sh_chart_title equ ch_legr + 2      ; 16: "Column A"
+sh_rwsrc          equ sh_chart_title + 16             ; SH_EDITMAX+1: the formula
                                               ; text copied out for rewriting
 sh_rwdst          equ sh_rwsrc + SH_EDITMAX + 1  ; SH_RW_CAP: the rewritten
                                               ; text being built

@@ -67303,6 +67303,76 @@ composition, and a negative share of a whole is not something a circle can
 express. Refusing to draw is worse, since the sheet is usually right and one
 stray sign is not worth a blank chart.
 
+### 82.7 Text in the canvas, and the elements it unblocks
+
+**The glyphs come from the kernel**, through `OSAPI_FONT_GLYPHS` (slot 0x0218).
+That is worth stating because the obvious move is wrong twice.
+`OSAPI_FONT_CHAR` draws to the *screen*, and this canvas is a private 4bpp
+buffer blitted later, so a drawn character cannot help. The tempting fallback
+is to lift a glyph table out of `apps/paint`, which keeps its own — and the
+plan document said to. But the kernel publishes **its** table for exactly this
+case, in the slot's own words: *"for an app that needs the BITMAP of a
+character rather than a drawn one — scaling it, stamping it into a canvas"*.
+Same table `OSAPI_FONT_CHAR` draws from, so a label in a chart and a label on
+screen are one typeface on all three adapters, and no second copy can drift.
+
+`ES` is `DX`, not `KERNEL_SEG` — the table lives elsewhere, and that is a
+recorded amendment to the slot (§20.8). The canvas is reached through ES too,
+so the two swap around each glyph fetch rather than being held at once.
+
+**This is what `docs/INDEX.md` is for.** The slot was found by reading the
+index's "Text and fonts" group before writing anything, which is the rule
+§20.8's own preamble now carries.
+
+#### 82.7.1 Shift the bits, do not build a mask
+
+`ch_glyph`'s first version walked a `0x80` mask rightward with `shr ch, 1`
+inside a `loop`. **`CH` is the high half of the `CX` that `loop` counts down**,
+so each shift corrupted the counter and each decrement corrupted the mask. It
+drew nothing at all, which is the mild version of that mistake. Shifting the
+row byte *left* by the column index and testing bit 7 needs no second register.
+
+#### 82.7.2 The elements
+
+Drawn **after** the data, deliberately: the scale labels need `ch_max`, which
+`ch_prep` only knows once it has scanned the series, and a second pass over an
+offscreen canvas costs nothing but time.
+
+- **The value axis** — the maximum at the canvas top, zero just above the axis
+  line, and `-max` at the bottom when the series is mixed-sign. `ch_base` is
+  where the *zero line* sits, not the top: `CH_H-1` for an all-positive series
+  and `CH_H/2` for a mixed one. The first version read it as a top and put
+  every label in the bottom eight rows.
+- **`CH_PLOT_X0`** — a 22-pixel gutter the plot leaves the labels. Without it
+  the scale and the first bar occupy the same pixels and the chart reads as
+  broken. Excel indents its plot area for the same reason.
+- **The title** — centred; Sheet passes `"Column A"`, CHART.O88 passes the
+  file it loaded.
+- **A legend, for the pie only.** A bar sits over its own place on the
+  category axis and a slice does not, so the pie is the one type here whose
+  slices cannot label themselves. Excel gives every type a legend because every
+  type can carry several series; this app charts one. The swatches are drawn
+  through `ch_pie_plot`, so a key square and the slice it names cannot disagree
+  about colour or hatch.
+
+**The horizontal bar chart gets no scale**, and that is a scope cut rather than
+an oversight: its value axis runs along X — `ch_base` is an x origin for that
+type — so a scale belongs under the plot, and the categories already fill the
+canvas top to bottom. At `CH_BARW+CH_GAP` per bar, forty bars is 240 rows
+against a 160-row canvas; a bottom gutter would have to come out of the bars.
+
+#### 82.7.3 A `ret` to nowhere
+
+`ch_legend` pushed SI at entry and never popped it, so its `ret` took the saved
+SI as a return address and jumped into the data. The canvas went solid black
+and the app wedged — no crash, no message.
+
+A naive push-versus-pop count over the tree flags **409 of 4130 routines**,
+because a multi-exit routine legitimately repeats its pops on each return path.
+So the check that finds this has to be path-aware — net depth zero at every
+`ret` — and a count that cries wolf one time in ten would be worse than none,
+by the same argument §20.8 makes about a stale index.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

@@ -387,6 +387,7 @@ ch_bars_draw:
     mov ax, [ch_idx]
     mov cx, CH_BARW + CH_GAP
     mul cx
+    add ax, CH_PLOT_X0                   ; clear of the value-axis labels
     mov es, [ch_stgseg]                  ; back to the buffer for the fillrect
     mov [ch_bx1], ax
     add ax, CH_BARW - 1
@@ -458,12 +459,13 @@ ch_xfor:
     dec bx
     or bx, bx
     jz .single
-    mov dx, CH_W - 1
-    mul dx
-    div bx
+    mov dx, CH_PLOT_W - 1                ; the plot, not the canvas: the first
+    mul dx                               ; CH_PLOT_X0 columns belong to the
+    div bx                               ; value-axis labels
+    add ax, CH_PLOT_X0
     jmp .out
 .single:
-    mov ax, (CH_W - 1) / 2
+    mov ax, CH_PLOT_X0 + (CH_PLOT_W - 1) / 2
 .out:
     pop dx
     pop bx
@@ -814,6 +816,236 @@ ch_hbar_draw:
 ; ch_draw - in: the same arguments ch_bars_draw takes, plus [ch_type].
 ; An unknown type falls back to the column chart rather than drawing nothing.
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; CHART ELEMENTS - the value axis, the title, the legend.
+;
+; DRAWN AFTER THE DATA, ON PURPOSE. The scale labels need ch_max, which ch_prep
+; only knows once it has scanned the series, and the whole point of the
+; offscreen canvas is that a second pass costs nothing but time. The gutters
+; are not reserved either: the data still uses the full canvas and the labels
+; sit over the left and top edges of it. That is a real trade - a bar reaching
+; x=0 is drawn under the axis text - and it is the right one here, because
+; reserving 32 pixels of a 240-pixel canvas for every chart costs more than it
+; buys on the one chart in twenty that reaches the left edge.
+;
+; The Pie is skipped: a pie has no value axis, and Excel does not give it one.
+; =============================================================================
+CH_DECO_TY   equ 1                   ; the title's row
+CH_DECO_LX   equ 2                   ; the axis labels' left edge
+CH_PLOT_X0   equ 22                  ; ...and the gutter the PLOT leaves them.
+                                     ; Without it the scale label and the first
+                                     ; bar occupy the same pixels and the chart
+                                     ; reads as broken. Excel indents its plot
+                                     ; area for the same reason; 22 is three
+                                     ; glyphs plus a margin, which is what a
+                                     ; five-digit value needs at this size.
+CH_PLOT_W    equ CH_W - CH_PLOT_X0
+CH_LEG_SW    equ 6                   ; the legend's colour swatch
+
+; -----------------------------------------------------------------------------
+; ch_deco - the value axis labels and the title. Called by every type but Pie.
+; -----------------------------------------------------------------------------
+ch_deco:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp word [ch_cnt], 0
+    je .out
+    cmp word [ch_type], CH_T_BAR
+    je .titleonly                     ; see below
+
+    ; --- the value axis ------------------------------------------------------
+    ; ch_base is where the ZERO LINE sits, not the top: CH_H-1 for an
+    ; all-positive series and CH_H/2 for a mixed one. So the maximum belongs at
+    ; the canvas top and zero just above the axis, which is the opposite of what
+    ; the first version computed - it put every label in the bottom eight rows.
+    mov ax, [ch_max]
+    call ch_itoa_t
+    mov ax, CH_DECO_LX
+    xor bx, bx                        ; the top
+    mov si, ch_tnum
+    mov dl, CH_C_AXIS
+    call ch_text
+
+    xor ax, ax                        ; zero, just above the axis line
+    call ch_itoa_t
+    mov ax, CH_DECO_LX
+    mov bx, [ch_base]
+    sub bx, CH_GLYPH_H
+    cmp bx, 0
+    jge .zeroy
+    xor bx, bx
+.zeroy:
+    mov si, ch_tnum
+    mov dl, CH_C_AXIS
+    call ch_text
+
+    cmp word [ch_neg], 0              ; a mixed series also gets -max, at the
+    je .nolow                         ; bottom, because the axis is mid-canvas
+    mov ax, [ch_max]
+    neg ax
+    call ch_itoa_t
+    mov ax, CH_DECO_LX
+    mov bx, CH_H - CH_GLYPH_H
+    mov si, ch_tnum
+    mov dl, CH_C_AXIS
+    call ch_text
+.nolow:
+.titleonly:
+    ; THE HORIZONTAL BAR CHART GETS NO SCALE, and that is a scope cut rather
+    ; than an oversight. Its value axis runs along X - ch_base is an x origin
+    ; for that type, not a y one - so a scale belongs under the plot, and the
+    ; categories already fill the canvas top to bottom: at CH_BARW+CH_GAP per
+    ; bar, forty bars is 240 rows against a 160-row canvas. A bottom gutter
+    ; would have to come out of the bars themselves. The title still draws.
+
+    ; --- the title, centred -------------------------------------------------
+    mov si, [ch_title]
+    or si, si
+    jz .out
+    cmp byte [si], 0
+    je .out
+    call ch_textw                     ; AX = its pixel width
+    mov bx, CH_W
+    sub bx, ax
+    sar bx, 1
+    cmp bx, 0
+    jge .titlex
+    xor bx, bx
+.titlex:
+    mov ax, bx
+    mov bx, CH_DECO_TY
+    mov si, [ch_title]
+    mov dl, CH_C_AXIS
+    call ch_text
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_legend - the PIE's key: a swatch in each slice's own colour and hatch,
+; with the value beside it, down the right-hand side.
+;
+; Only the pie gets one, and only because a pie is the one type here whose
+; slices are not self-labelling: a bar sits over its own place on the category
+; axis and a slice does not. Excel gives every type a legend because every type
+; can carry several series; this app charts one.
+; -----------------------------------------------------------------------------
+ch_legend:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov word [ch_idx], 0
+.each:
+    mov ax, [ch_idx]
+    cmp ax, [ch_cnt]
+    jae .out
+    cmp ax, 8                         ; eight rows is what the canvas holds;
+    jae .out                          ; past that the key would run off it
+    mov cx, CH_GLYPH_H + 2            ; this row's y
+    mul cx
+    add ax, CH_DECO_TY + CH_GLYPH_H + 2
+    mov [ch_legy], ax
+
+    mov ax, [ch_idx]                  ; the same colour and hatch the slice got
+    xor dx, dx
+    mov cx, 14
+    div cx
+    mov ax, dx
+    inc ax
+    mov [ch_pie_pen], al
+    mov ax, [ch_idx]
+    and ax, 7
+    mov [ch_pie_pat], al
+    mov ax, CH_W - 46                 ; the swatch
+    mov [ch_bx1], ax
+    add ax, CH_LEG_SW
+    mov [ch_bx2], ax
+    mov ax, [ch_legy]
+    mov [ch_by1], ax
+    add ax, CH_LEG_SW - 1
+    mov [ch_by2], ax
+    call ch_legswatch
+    mov ax, CH_W - 46                 ; ...and its outline, so a light hatch
+    mov [ch_bx1], ax                  ; still reads as a box
+    add ax, CH_LEG_SW
+    mov [ch_bx2], ax
+    mov ax, [ch_legy]
+    mov [ch_by1], ax
+    mov [ch_by2], ax
+    mov dl, CH_C_AXIS
+    call ch_fillrect
+
+    push es                           ; the value itself
+    mov es, [ch_srcseg]
+    mov si, [ch_arr]
+    mov ax, [ch_idx]
+    shl ax, 1
+    add si, ax
+    mov ax, [es:si]
+    pop es
+    call ch_itoa_t
+    mov ax, CH_W - 46 + CH_LEG_SW + 3
+    mov bx, [ch_legy]
+    dec bx
+    mov si, ch_tnum
+    mov dl, CH_C_AXIS
+    call ch_text
+
+    inc word [ch_idx]
+    jmp .each
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ch_legswatch - fill ch_b{x,y}{1,2} through the pie's own hatched plotter, so
+; a key square and the slice it names cannot disagree about either.
+ch_legswatch:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [ch_by1]
+    mov [ch_legr], ax
+.row:
+    mov ax, [ch_legr]
+    cmp ax, [ch_by2]
+    jg .out
+    mov cx, [ch_bx1]
+.col:
+    cmp cx, [ch_bx2]
+    jg .next
+    mov ax, cx
+    mov bx, [ch_legr]
+    push cx
+    call ch_pie_plot
+    pop cx
+    inc cx
+    jmp .col
+.next:
+    inc word [ch_legr]
+    jmp .row
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ch_draw:
     cmp word [ch_type], CH_T_BAR
     je .bar
@@ -824,18 +1056,231 @@ ch_draw:
     cmp word [ch_type], CH_T_PIE
     je .pie
     call ch_bars_draw
+    call ch_deco
     ret
 .pie:
     call ch_pie_draw
+    call ch_legend                    ; a slice cannot label itself
     ret
 .bar:
     call ch_hbar_draw
+    call ch_deco
     ret
 .line:
     call ch_line_draw
+    call ch_deco
     ret
 .area:
     call ch_area_draw
+    call ch_deco
+    ret
+
+; =============================================================================
+; TEXT INTO THE CANVAS - the prerequisite for every label.
+;
+; THE GLYPHS COME FROM THE KERNEL, via OSAPI_FONT_GLYPHS (slot 0x0218), and
+; that is worth saying because the obvious move is wrong. OSAPI_FONT_CHAR draws
+; to the SCREEN; this canvas is a private 4bpp buffer that is blitted later, so
+; a drawn character cannot help. The tempting answer is to lift a glyph table
+; out of apps/paint, which keeps its own - but the kernel publishes ITS table
+; for exactly this case: "for an app that needs the BITMAP of a character
+; rather than a drawn one - scaling it, stamping it into a canvas". Same table
+; OSAPI_FONT_CHAR uses, so a label here and a label on screen are one typeface
+; on all three adapters, and no second copy can drift.
+;
+; ES is DX, not KERNEL_SEG - the table lives elsewhere and the slot's own note
+; calls that a recorded amendment. The canvas is also reached through ES, so
+; the two swap around each glyph fetch rather than being held at once.
+; =============================================================================
+CH_GLYPH_W equ 8
+CH_GLYPH_H equ 8
+
+; -----------------------------------------------------------------------------
+; ch_text - in: AX = x, BX = y (top-left, canvas pixels), SI = NUL string,
+; DL = colour. Clipped to the canvas; a character the table does not cover is
+; drawn as a space. Preserves everything.
+; -----------------------------------------------------------------------------
+ch_text:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [ch_tx], ax
+    mov [ch_ty], bx
+    mov [ch_tpen], dl
+    mov [ch_tsrc], si
+    call OSAPI_FONT_GLYPHS            ; DX:SI = table, AL/AH = first/last, CX = 8
+    mov [ch_tseg], dx
+    mov [ch_ttab], si
+    mov [ch_tfirst], al
+    mov [ch_tlast], ah
+    mov si, [ch_tsrc]
+.each:
+    mov al, [si]
+    or al, al
+    jz .done
+    inc si
+    mov [ch_tsrc], si
+    cmp al, [ch_tfirst]
+    jb .next                          ; outside the table: leave a gap, which
+    cmp al, [ch_tlast]                ; is what a space would have looked like
+    ja .next
+    sub al, [ch_tfirst]
+    xor ah, ah
+    mov cl, 3                         ; * CH_GLYPH_H, the table's stride
+    shl ax, cl
+    add ax, [ch_ttab]
+    mov [ch_tglyph], ax
+    call ch_glyph
+.next:
+    mov ax, [ch_tx]
+    add ax, CH_GLYPH_W
+    mov [ch_tx], ax
+    cmp ax, CH_W                      ; ran off the right edge: stop rather
+    jge .done                         ; than wrap into the next row
+    mov si, [ch_tsrc]
+    jmp .each
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_glyph - one 8x8 character at (ch_tx, ch_ty) in ch_tpen. Private to
+; ch_text. Bit 7 of each row byte is the LEFTMOST pixel, matching the kernel's
+; own font layout (SPEC.md 6).
+; -----------------------------------------------------------------------------
+ch_glyph:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov word [ch_trow], 0
+.row:
+    mov ax, [ch_trow]
+    cmp ax, CH_GLYPH_H
+    jae .out
+    mov bx, [ch_ty]                   ; this row's y, clipped away entirely if
+    add bx, ax                        ; it falls off the canvas
+    cmp bx, 0
+    jl .rownext
+    cmp bx, CH_H
+    jge .out
+    mov [ch_tpy], bx
+    mov es, [ch_tseg]                 ; the GLYPH TABLE's segment, briefly
+    mov si, [ch_tglyph]
+    add si, ax
+    mov dl, [es:si]                   ; the row's eight bits
+    mov [ch_tbits], dl
+    mov es, [ch_stgseg]               ; ...and back to the canvas
+    mov word [ch_tcol], 0
+.col:
+    mov ax, [ch_tcol]
+    cmp ax, CH_GLYPH_W
+    jae .rownext
+    ; SHIFT THE BITS, DO NOT BUILD A MASK. The first version walked a 0x80 mask
+    ; right with `shr ch,1` inside a `loop` - and CH is the high half of the CX
+    ; that `loop` counts down, so each shift corrupted the counter and each
+    ; decrement corrupted the mask. It drew nothing at all, which is the mild
+    ; version of this mistake. Shifting the row byte left by the column and
+    ; testing bit 7 needs no second register.
+    mov dl, [ch_tbits]
+    mov cl, al                        ; the column IS the shift count
+    shl dl, cl
+    test dl, 0x80                     ; bit 7 is the leftmost pixel
+    jz .colnext
+    mov ax, [ch_tx]
+    add ax, [ch_tcol]
+    cmp ax, 0
+    jl .colnext
+    cmp ax, CH_W
+    jge .colnext
+    mov bx, [ch_tpy]
+    push dx
+    mov dl, [ch_tpen]
+    call ch_setpixel
+    pop dx
+.colnext:
+    mov ax, [ch_tcol]
+    inc ax
+    mov [ch_tcol], ax
+    jmp .col
+.rownext:
+    mov ax, [ch_trow]
+    inc ax
+    mov [ch_trow], ax
+    jmp .row
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_itoa_t - AX signed -> the NUL string at ch_tnum. Labels need numbers and
+; this file had no formatter of its own; Sheet's lives in Sheet.
+; -----------------------------------------------------------------------------
+ch_itoa_t:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ch_tnum
+    or ax, ax
+    jns .pos
+    mov byte [di], '-'
+    inc di
+    neg ax
+.pos:
+    mov bx, 10
+    xor cx, cx
+.split:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .split
+.emit:
+    pop dx
+    add dl, '0'
+    mov [di], dl
+    inc di
+    loop .emit
+    mov byte [di], 0
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ch_textw - AX = the pixel width a NUL string at SI would occupy
+ch_textw:
+    push si
+    xor ax, ax
+.lp:
+    cmp byte [si], 0
+    je .done
+    add ax, CH_GLYPH_W
+    inc si
+    jmp .lp
+.done:
+    pop si
     ret
 
 ; =============================================================================

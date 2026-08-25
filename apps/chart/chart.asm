@@ -171,6 +171,11 @@ ct_render:
     push dx
     push si
     push es
+    mov word [ch_title], ct_name        ; the file it charted, which is the
+    cmp byte [ct_name], 0               ; only name this app has for the data
+    jne .titled
+    mov word [ch_title], 0
+.titled:
     mov cx, [ct_valcnt]
     mov es, [ct_chartseg]
     mov dx, ds
@@ -1116,7 +1121,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 511
+    OS88_BSS 551
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1186,7 +1191,24 @@ ch_pie_col     equ ch_pie_a + 2
 ch_pie_thick   equ ch_pie_col + 2    ; byte: this ray fills, so it is 3px
 ch_pie_pen     equ ch_pie_thick + 1  ; byte: the colour ch_setpixel keeps
 ch_pie_pat     equ ch_pie_pen + 1    ; byte: this slice's hatch, FF = solid
-ct_bss_end  equ ch_pie_pat + 1
+ch_tx          equ ch_pie_pat + 1   ; --- stage 3.0f: text into the canvas ---
+ch_ty          equ ch_tx + 2
+ch_tpen        equ ch_ty + 2
+ch_tsrc        equ ch_tpen + 2        ; the string cursor, across ch_glyph
+ch_tseg        equ ch_tsrc + 2        ; the GLYPH TABLE's segment, not KERNEL_SEG
+ch_ttab        equ ch_tseg + 2
+ch_tfirst      equ ch_ttab + 2        ; the character range the table covers
+ch_tlast       equ ch_tfirst + 2
+ch_tglyph      equ ch_tlast + 2       ; -> the current character's 8 rows
+ch_trow        equ ch_tglyph + 2
+ch_tcol        equ ch_trow + 2
+ch_tpy         equ ch_tcol + 2
+ch_tbits       equ ch_tpy + 2
+ch_tnum        equ ch_tbits + 2       ; 8: ch_itoa_t's output
+ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
+ch_legy        equ ch_title + 2     ; the legend row being drawn...
+ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
+ct_bss_end  equ ch_legr + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting
