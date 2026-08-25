@@ -578,6 +578,14 @@ sh_entry:
 
     mov si, sh_menus
     call OSAPI_MENU_SET
+    mov bx, [sh_ownwin]               ; ...and 'About Sheet' above its Close,
+    mov si, sh_about                  ; which is the OS's own convention and
+    call OSAPI_ABOUT_SET              ; not a Help menu of one's own devising
+                                       ; (SPEC.md 12.2). Seventeen packages
+                                       ; already did this; Sheet had a Help >
+                                       ; About... item instead, which put the
+                                       ; same text somewhere nobody looks for
+                                       ; it on this system.
     mov si, sh_defname
     mov di, sh_name
     call sh_strcpy
@@ -3879,11 +3887,33 @@ sh_docmd_options:
 ; sh_docmd_help - the only Help item, About Sheet...
 ; -----------------------------------------------------------------------------
 sh_docmd_help:
+    call sh_about
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2).
+; in: SI = our window ptr; the UI task, gfx lock HELD, far-called at our own
+; segment - a window callback in every respect that matters.
+;
+; Help > About Sheet... calls the SAME routine, so the two cannot say different
+; things. Keeping the menu item as well as the name pull-down is deliberate:
+; Excel 2.1d has a Help menu and this app follows Excel, while the pull-down is
+; what os8088 users reach for.
+; -----------------------------------------------------------------------------
+sh_about:
+    push ax
+    push bx
+    push si
+    push di
     mov al, OS88UI_AOK
     mov bx, [sh_ownwin]
     mov si, sh_s_about
     mov di, sh_help_ack
     call os88ui_ask
+    pop di
+    pop si
+    pop bx
+    pop ax
     ret
 sh_help_ack:
     ret

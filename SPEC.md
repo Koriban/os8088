@@ -67048,6 +67048,19 @@ shortfall. Read the **line number** and not just the sign: the two report the
 same shortfall with opposite signs, so which one fired is what says whether the
 literal is too small or too large.
 
+### 81.10.1 The name menu
+
+Sheet and Chart both declare an About handler through `OSAPI_ABOUT_SET` (slot
+0x01E0, §12.2), so the bar carries the package's name as a pull-down with
+`About Sheet` / `About Chart` above `Close`.
+
+Neither did, for a long time. Sheet had a `Help > About Sheet...` item of its
+own instead, which is what Excel 2.1d has and is **not** where an os8088 user
+looks — seventeen other packages in the tree already declared the handler. The
+menu item stays, and calls the same routine, so the two cannot say different
+things: Excel has a Help menu and this app follows Excel, while the pull-down
+is the convention of the system it runs on.
+
 ### 81.11 Text cells
 
 Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything

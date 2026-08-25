@@ -109,6 +109,10 @@ ct_entry:
     jc .fail
     mov si, ct_menus
     call OSAPI_MENU_SET                 ; preserves CF (SPEC.md 20.3)
+    mov si, ct_about                    ; ...and 'About Chart' above its Close
+    call OSAPI_ABOUT_SET                ; (SPEC.md 12.2), which every other
+                                         ; package in the tree declares and
+                                         ; this one did not
     jmp .out
 .fail:
     stc
@@ -246,6 +250,22 @@ ct_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; ct_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2). SI = our
+; window on entry; the UI task, gfx lock held.
+;
+; A TOAST rather than a drawn card, because this package already has the toast
+; and has no alert include: SPEC.md 59 is a one-line transient and an About is
+; one line here. It says what the package is; a card would say the same thing
+; and cost the package os88ui.inc.
+; -----------------------------------------------------------------------------
+ct_about:
+    push si
+    mov si, ct_s_about
+    call ct_toast
+    pop si
+    ret
+
 ; ct_toast - in: SI = NUL message; shows it as a menu-bar toast for the
 ; default ~3s (SPEC.md 59). Preserves all registers except flags.
 ; -----------------------------------------------------------------------------
@@ -1074,6 +1094,7 @@ ct_it_pie:    db 'Pie', 0
 
 ct_gal_map:    dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE
 ct_s_title:    db 'Chart', 0
+ct_s_about:    db 'Chart - charts a column of a SYLK, DIF or BIFF sheet', 0
 ct_s_chartbmp: db 'CHART.BMP', 0
 ct_s_noexp:    db 'No chart to export.', 0
 ct_s_experr:   db 'Chart export failed.', 0
