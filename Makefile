@@ -2178,6 +2178,25 @@ $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 $(SBSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.sbpkg*
 	@touch $@
+# Sheet (spreadsheet roadmap stage 1.0): a 64x64 numeric grid, no formulas,
+# no formatting, SYLK only.
+$(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
+	@echo "sheet:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sheet.bin -o $@
+
+# Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
+# rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).
+$(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/chart/chart.asm
+	@echo "chart:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/chart.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
 $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc \
@@ -4673,10 +4692,10 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/fractal.o88 \
+              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/cyclone.o88 $(BUILD)/mines.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
