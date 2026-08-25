@@ -15092,16 +15092,22 @@ sh_pfunc:
 ; do not fold over a range the way SUM does; each parses exactly the arguments
 ; it takes and computes a value.
 ;
-; WHAT IS DELIBERATELY ABSENT, and why - every one of these needs the value
-; model Stage 4.0 brings, and a version that merely returns a plausible number
-; would be worse than its absence:
-;   ISBLANK  an empty cell already evaluates to 0, indistinguishable from a
-;            cell holding 0, so this cannot be answered without reference-typed
-;            arguments
-;   ISNUMBER every value here IS a number, so it would be a constant TRUE
-;   ISNA/NA  there is no error type to return or test for
-;   SQRT/PI/the trig and financial families all need fractions
-; SQRT is present only because floor(sqrt(n)) is a genuine integer answer.
+; WHAT IS DELIBERATELY ABSENT, and why. This list used to say "all of these
+; need the value model Stage 4.0 brings", and that reason EXPIRED when Stage
+; 4.0 landed - values are IEEE-754 doubles now and cells carry an SH_T_* tag,
+; so SQRT really does return 1.41421 and the fraction-dependent families are
+; no longer blocked on arithmetic. What still blocks these three is a
+; different thing:
+;   ISBLANK  an argument is FOLDED TO A VALUE before the function sees it, so
+;   ISNUMBER by the time either of these is called there is no reference left
+;            to ask about - an empty cell and a cell holding 0 both arrive as
+;            0, and a label arrives as its numeric value. Answering them needs
+;            reference-typed arguments in the evaluator, not a wider number.
+;   ISNA/NA  SH_T_BOOL and SH_T_ERR are reserved, but nothing in the evaluator
+;            ever produces one, so there is still no error value to return or
+;            to test for.
+; A version of any of them that returned a plausible constant would be worse
+; than its absence.
 ;
 ; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
 ; =============================================================================
