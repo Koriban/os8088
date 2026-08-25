@@ -699,11 +699,12 @@ fp_sub:
     xor al, 1
     mov [fp_bs], al
     call fp_add
-    mov al, [fp_bs]                   ; put B back as the caller left it
-    xor al, 1
-    mov [fp_bs], al
     pop ax
-    ret
+    ret                               ; B IS LEFT UNDEFINED on purpose: fp_add
+                                      ; may swap the two operands to align
+                                      ; them, so "flip B's sign back" would
+                                      ; flip whichever one ended up there.
+                                      ; Every caller reloads B before using it.
 
 ; -----------------------------------------------------------------------------
 ; fp_mul - A = A * B
@@ -1021,4 +1022,711 @@ fp_cmpab:
     pop cx
     pop bx
     cmp ax, 0
+    ret
+
+; =============================================================================
+; DECIMAL CONVERSION - the half that makes any of this visible to a user.
+;
+; Everything above computes; nothing above can read "3.5" or write it back.
+; These two are what a spreadsheet cell actually needs, and they are the
+; reason the whole file exists rather than being an exercise.
+;
+; The caller owes three more scratch items for these:
+;   fp_dig   resb 24    the digit string being built
+;   fp_d10   dw         the decimal exponent
+;   fp_nd    dw         how many digits are in fp_dig
+; =============================================================================
+
+; 10^(2^i) for i = 0..8, host-computed so the table is exact rather than
+; accumulated. Any 10^k for |k| <= 511 is then a product of at most nine of
+; these, chosen by the bits of k - which costs nine multiplies at worst and,
+; more importantly, does not drift the way repeated x10 does.
+fp_pow10tab:                          ; 10^(2^i), i = 0..8, host-computed
+    dw 0x0000, 0x0000, 0x0000, 0x4024      ; 1e1
+    dw 0x0000, 0x0000, 0x0000, 0x4059      ; 1e2
+    dw 0x0000, 0x0000, 0x8800, 0x40C3      ; 1e4
+    dw 0x0000, 0x0000, 0xD784, 0x4197      ; 1e8
+    dw 0x8000, 0x37E0, 0xC379, 0x4341      ; 1e16
+    dw 0x6E17, 0xB505, 0xB8B5, 0x4693      ; 1e32
+    dw 0xF9F5, 0xE93F, 0x4F03, 0x4D38      ; 1e64
+    dw 0x1D32, 0xF930, 0x7748, 0x5A82      ; 1e128
+    dw 0xBF3C, 0x7F73, 0x4FDD, 0x7515      ; 1e256
+
+; -----------------------------------------------------------------------------
+; fp_scale10 - A = A * 10^CX, with CX signed. Preserves CX.
+; -----------------------------------------------------------------------------
+fp_scale10:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    or cx, cx
+    jz .out
+    mov di, 0                         ; di = 0 multiply, 1 divide
+    jns .pos
+    neg cx
+    mov di, 1
+.pos:
+    mov si, fp_pow10tab
+    mov bx, 1                         ; bx = the bit under test
+.bit:
+    cmp bx, 512
+    jae .out
+    push cx
+    and cx, bx
+    pop cx
+    jz .nextbit
+    push cx
+    push si
+    call fp_unpack_b                  ; B = this power of ten
+    pop si
+    or di, di
+    jnz .div
+    call fp_mul
+    jmp .bitdone
+.div:
+    call fp_div
+.bitdone:
+    pop cx
+.nextbit:
+    add si, 8
+    shl bx, 1
+    jmp .bit
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_u64_to_a - the unsigned 64-bit integer in fp_t becomes A (sign cleared).
+; -----------------------------------------------------------------------------
+fp_u64_to_a:
+    push ax
+    push bx
+    push di
+    mov ax, [fp_t0]
+    mov [fp_am0], ax
+    mov ax, [fp_t1]
+    mov [fp_am1], ax
+    mov ax, [fp_t2]
+    mov [fp_am2], ax
+    mov ax, [fp_t3]
+    mov [fp_am3], ax
+    mov byte [fp_as], 0
+    mov word [fp_ae], 0
+    mov bx, fp_am0
+    mov di, fp_ae
+    call fp_norm
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; fp_t = fp_t * 10 + AL, as a 64-bit unsigned integer. Used only while the
+; digits still fit, so no overflow check is needed here - fp_atof stops
+; feeding it at 18 digits and counts the rest as exponent.
+fp_t_mul10add:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, ax                        ; si = the digit, banked
+    mov bx, fp_t0                     ; t * 2
+    call fp_shl1
+    mov ax, [fp_t0]                   ; ...banked as t*2
+    mov [fp_p0], ax
+    mov ax, [fp_t1]
+    mov [fp_p0+2], ax
+    mov ax, [fp_t2]
+    mov [fp_p0+4], ax
+    mov ax, [fp_t3]
+    mov [fp_p0+6], ax
+    call fp_shl1                      ; t*4
+    call fp_shl1                      ; t*8
+    mov ax, [fp_p0]                   ; t*8 + t*2 = t*10
+    add [fp_t0], ax
+    mov ax, [fp_p0+2]
+    adc [fp_t1], ax
+    mov ax, [fp_p0+4]
+    adc [fp_t2], ax
+    mov ax, [fp_p0+6]
+    adc [fp_t3], ax
+    mov ax, si                        ; ...and the digit
+    xor ah, ah
+    add [fp_t0], ax
+    adc word [fp_t1], 0
+    adc word [fp_t2], 0
+    adc word [fp_t3], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_atof - DS:SI = text -> A. SI advances past what was consumed.
+; out: CF=1 and A=0 if there was no number here at all.
+;
+; Digits accumulate into a 64-bit INTEGER first and are converted once, rather
+; than being folded in one at a time as `A = A*10 + d`. Eighteen digits fit
+; exactly that way, so "0.1" comes back as the nearest double to 0.1 instead
+; of the nearest double to a chain of nine rounded multiplications.
+; -----------------------------------------------------------------------------
+fp_atof:
+    push bx
+    push cx
+    push dx
+    mov word [fp_t0], 0
+    mov word [fp_t1], 0
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    mov byte [fp_sgn], 0              ; The sign gets its OWN word, not fp_tmp:
+                                      ; fp_scale10 below reaches fp_pop_a
+                                      ; through fp_unpack_b, and fp_pop_a uses
+                                      ; fp_tmp itself - so a sign parked there
+                                      ; was destroyed by any value with a
+                                      ; fraction or an exponent.
+    xor bx, bx                        ; bx = digits taken
+    xor cx, cx                        ; cx = digits after the point
+    xor dx, dx                        ; dx = digits dropped past 18
+    cmp byte [si], '-'
+    jne .noneg
+    mov byte [fp_sgn], 1
+    inc si
+    jmp .intpart
+.noneg:
+    cmp byte [si], '+'
+    jne .intpart
+    inc si
+.intpart:
+    mov al, [si]
+    cmp al, '0'
+    jb .dot
+    cmp al, '9'
+    ja .dot
+    inc si
+    inc bx
+    cmp bx, 18
+    ja .dropint
+    sub al, '0'
+    call fp_t_mul10add
+    jmp .intpart
+.dropint:
+    inc dx                            ; too many: count it as a power of ten
+    jmp .intpart
+.dot:
+    cmp byte [si], '.'
+    jne .expo
+    inc si
+.frac:
+    mov al, [si]
+    cmp al, '0'
+    jb .expo
+    cmp al, '9'
+    ja .expo
+    inc si
+    inc bx
+    cmp bx, 18
+    ja .frac_next                     ; past 18 digits a fraction digit is
+    sub al, '0'                       ; simply dropped - it cannot matter
+    call fp_t_mul10add
+    inc cx
+.frac_next:
+    jmp .frac
+.expo:
+    or bx, bx
+    jz .none                          ; not a number at all
+    push cx
+    push dx
+    call fp_u64_to_a
+    pop dx
+    pop cx
+    mov al, [si]
+    cmp al, 'e'
+    je .haveexp
+    cmp al, 'E'
+    jne .scale
+.haveexp:
+    push si
+    inc si
+    push cx
+    call fp_pexp                      ; ax = the exponent, or CF=1
+    pop cx
+    jc .noexp
+    add sp, 2                         ; the parse stuck: keep the advanced SI
+    add dx, ax
+    jmp .scale
+.noexp:
+    pop si                            ; not really an exponent: leave SI on it
+.scale:
+    mov ax, dx
+    sub ax, cx
+    mov cx, ax
+    call fp_scale10
+    mov al, [fp_sgn]
+    mov [fp_as], al
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.none:
+    call fp_azero
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; fp_pexp - DS:SI at an exponent's sign/digits. out: AX = it, SI advanced,
+; CF=1 if there were no digits.
+fp_pexp:
+    push bx
+    push cx
+    xor ax, ax
+    xor cx, cx
+    xor bx, bx                        ; BL = 1 if negative, BH = a digit was
+                                      ; seen. NOT CX: CL is reloaded with each
+                                      ; character below, so a flag kept there
+                                      ; is destroyed on the way round - which
+                                      ; made every exponent look absent and
+                                      ; "1e3" parse as 1.
+    cmp byte [si], '-'
+    jne .nopos
+    mov bl, 1
+    inc si
+    jmp .dig
+.nopos:
+    cmp byte [si], '+'
+    jne .dig
+    inc si
+.dig:
+    mov cl, [si]
+    cmp cl, '0'
+    jb .done
+    cmp cl, '9'
+    ja .done
+    sub cl, '0'
+    push dx
+    mov dx, 10
+    mul dx
+    pop dx
+    xor ch, ch
+    add ax, cx
+    inc si
+    mov bh, 1
+    jmp .dig
+.done:
+    or bh, bh
+    jz .nodigits
+    or bl, bl
+    jz .out
+    neg ax
+.out:
+    pop cx
+    pop bx
+    clc
+    ret
+.nodigits:
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_i2b - AX (signed int) -> the B accumulator, leaving A untouched.
+;
+; Written out rather than expressed as "bank A, use fp_i2a, copy, restore":
+; fp_push_a CLOBBERS AX (it routes the return address through it), so that
+; version handed fp_i2a a CODE ADDRESS instead of the caller's integer, and
+; every B came out as the same meaningless constant. It cost a long hunt,
+; because the arithmetic underneath was provably correct the whole time and
+; only the operands were wrong.
+; -----------------------------------------------------------------------------
+fp_i2b:
+    push ax
+    push bx
+    push di
+    mov byte [fp_bs], 0
+    or ax, ax
+    jge .abs
+    mov byte [fp_bs], 1
+    neg ax
+.abs:
+    mov [fp_bm0], ax
+    mov word [fp_bm1], 0
+    mov word [fp_bm2], 0
+    mov word [fp_bm3], 0
+    mov word [fp_be], 0
+    mov bx, fp_bm0
+    mov di, fp_be
+    call fp_norm
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_ftoa - A -> a NUL-terminated decimal string at DS:DI.
+; in:  AX = how many significant digits to show (clamped to 1..17)
+; out: DI preserved; the string is written in place.
+;
+; %g's shape: fixed notation when the decimal exponent sits in a readable
+; range, scientific outside it, and trailing zeros trimmed either way -
+; which is what makes 2.5 print as "2.5" and not "2.500000000".
+;
+; The decimal exponent is ESTIMATED from the binary one and then corrected,
+; rather than found by dividing by ten until the value is small enough. The
+; estimate costs one multiply; the loop would cost up to 308 divisions and
+; would drift a little with each of them.
+; -----------------------------------------------------------------------------
+fp_ftoa:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp ax, 1
+    jge .clamp1
+    mov ax, 1
+.clamp1:
+    cmp ax, 17
+    jle .clamp2
+    mov ax, 17
+.clamp2:
+    mov [fp_nd], ax
+    push di                           ; the caller's buffer, kept for the end
+    mov bx, fp_am0
+    call fp_iszero
+    jnc .nonzero
+    pop di
+    mov byte [di], '0'
+    mov byte [di+1], 0
+    jmp .out
+.nonzero:
+    pop di
+    cmp byte [fp_as], 0
+    je .positive
+    mov byte [di], '-'
+    inc di
+    mov byte [fp_as], 0               ; the magnitude from here on
+.positive:
+    push di                           ; where the digits begin
+
+    ; --- bring the value into [1, 10), counting decades as we go ---
+    ;
+    ; A FIRST VERSION ESTIMATED this from the binary exponent
+    ; (d10 ~ (e+63)*log10(2)) and corrected it once. It was faster and it was
+    ; wrong, and finding out why cost far more than the loop it was avoiding
+    ; ever could. A spreadsheet value sits within a few decades of 1, so this
+    ; runs a handful of times - and unlike the estimate it CANNOT be off by a
+    ; decade, because it stops exactly when the value is in range.
+    mov word [fp_d10], 0
+.toobig:
+    mov ax, 10
+    call fp_i2b
+    call fp_cmpab
+    jl .notbig
+    call fp_div
+    inc word [fp_d10]
+    jmp .toobig
+.notbig:
+    mov ax, 1
+    call fp_i2b
+    call fp_cmpab
+    jge .haverange
+    mov ax, 10
+    call fp_i2b
+    call fp_mul
+    dec word [fp_d10]
+    jmp .notbig
+.haverange:
+
+    ; --- extract the digits ---
+    mov si, fp_dig
+    mov cx, [fp_nd]
+    inc cx                            ; one extra, to round on
+.digit:
+    push cx
+    call fp_a2i                       ; ax = floor(A), A in [0,10)
+    cmp ax, 0
+    jge .dok
+    xor ax, ax
+.dok:
+    cmp ax, 9
+    jle .dok2
+    mov ax, 9
+.dok2:
+    push ax
+    add al, '0'
+    mov [si], al
+    inc si
+    pop ax
+    call fp_i2b
+    call fp_sub                       ; A -= that digit
+    mov ax, 10
+    call fp_i2b
+    call fp_mul                       ; A *= 10
+    pop cx
+    dec cx
+    jnz .digit
+
+    ; --- round on the extra digit, carrying leftward ---
+    mov si, fp_dig
+    add si, [fp_nd]
+    cmp byte [si], '5'
+    jb .trim
+    mov cx, [fp_nd]
+.carry:
+    dec si
+    inc byte [si]
+    cmp byte [si], '9'
+    jbe .trim
+    mov byte [si], '0'
+    dec cx
+    jnz .carry
+    mov si, fp_dig                    ; carried off the front: 999 -> 1000, so
+    mov byte [si], '1'                ; the value gained a decimal place
+    inc word [fp_d10]
+.trim:
+    mov cx, [fp_nd]                   ; drop trailing zeros
+    mov si, fp_dig
+    add si, cx
+.trimloop:
+    cmp cx, 1
+    jle .trimmed
+    dec si
+    cmp byte [si], '0'
+    jne .trimmed
+    dec cx
+    jmp .trimloop
+.trimmed:
+    mov [fp_nd], cx
+    push si                           ; NUL-terminate the digit string, so a
+    mov si, fp_dig                    ; caller (or a test) can look at exactly
+    add si, cx                        ; what was extracted before formatting
+    mov byte [si], 0
+    pop si
+    pop di                            ; back to where the digits go
+
+    ; --- fixed or scientific? ---
+    mov ax, [fp_d10]
+    cmp ax, -5
+    jle .sci
+    cmp ax, 15
+    jge .sci
+
+    ; fixed
+    or ax, ax
+    jl .lessthan1
+    ; d10 >= 0: some digits before the point
+    mov cx, ax
+    inc cx                            ; digits before the point
+    mov si, fp_dig
+    mov bx, [fp_nd]
+.fint:
+    or cx, cx
+    jz .fpoint
+    or bx, bx
+    jz .fzero
+    mov al, [si]
+    inc si
+    dec bx
+    jmp .fput
+.fzero:
+    mov al, '0'
+.fput:
+    mov [di], al
+    inc di
+    dec cx
+    jmp .fint
+.fpoint:
+    or bx, bx
+    jz .done                          ; nothing after the point
+    mov byte [di], '.'
+    inc di
+.ffrac:
+    or bx, bx
+    jz .done
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec bx
+    jmp .ffrac
+.lessthan1:
+    mov byte [di], '0'
+    inc di
+    mov byte [di], '.'
+    inc di
+    mov cx, [fp_d10]
+    neg cx
+    dec cx                            ; that many leading zeros
+.lzero:
+    or cx, cx
+    jz .lzdone
+    mov byte [di], '0'
+    inc di
+    dec cx
+    jmp .lzero
+.lzdone:
+    mov si, fp_dig
+    mov cx, [fp_nd]
+.lfrac:
+    or cx, cx
+    jz .done
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .lfrac
+
+.sci:
+    mov si, fp_dig
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    mov cx, [fp_nd]
+    dec cx
+    jcxz .expo
+    mov byte [di], '.'
+    inc di
+.sfrac:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .sfrac
+.expo:
+    mov byte [di], 'E'
+    inc di
+    mov ax, [fp_d10]
+    or ax, ax
+    jge .eplus
+    mov byte [di], '-'
+    neg ax
+    jmp .edig
+.eplus:
+    mov byte [di], '+'
+.edig:
+    inc di
+    mov cx, 0
+    mov bx, 10
+.epush:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .epush
+.epop:
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    dec cx
+    jnz .epop
+.done:
+    mov byte [di], 0
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; fp_div32_10e5 - DX:AX / 100000, rounded toward MINUS INFINITY, into AX.
+; A plain idiv truncates toward zero, which for a negative exponent estimate
+; gives the wrong decade and puts the decimal point one place out.
+fp_div32_10e5:
+    push bx
+    push cx
+    push dx
+    mov cx, dx
+    or cx, cx
+    jns .pos
+    ; negative: negate, divide, negate, and step down unless it divided exactly
+    neg dx
+    neg ax
+    sbb dx, 0
+    mov cx, ax
+    mov bx, dx
+    call fp_udiv32_10e5
+    push ax
+    mov ax, cx
+    mov dx, bx
+    call fp_umod32_10e5
+    or ax, ax
+    pop ax
+    jz .negexact
+    neg ax
+    dec ax
+    jmp .out
+.negexact:
+    neg ax
+    jmp .out
+.pos:
+    call fp_udiv32_10e5
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; unsigned DX:AX / 100000 -> AX. Repeated subtraction, which is fine here
+; because the dividend is at most |exp|*30103 and the quotient is therefore
+; well under 400 - a 32-by-32 divide routine would be more code for a loop
+; that runs a few hundred times at most, once per number formatted.
+fp_udiv32_10e5:
+    push bx
+    push cx
+    push dx
+    xor cx, cx                        ; quotient
+.loop:
+    cmp dx, 1                         ; is DX:AX >= 100000 (0x000186A0)?
+    jb .done
+    ja .sub
+    cmp ax, 0x86A0
+    jb .done
+.sub:
+    sub ax, 0x86A0
+    sbb dx, 1
+    inc cx
+    jmp .loop
+.done:
+    mov ax, cx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; unsigned DX:AX mod 100000 -> AX
+fp_umod32_10e5:
+    push cx
+    push dx
+.loop:
+    cmp dx, 1
+    jb .done
+    ja .sub
+    cmp ax, 0x86A0
+    jb .done
+.sub:
+    sub ax, 0x86A0
+    sbb dx, 1
+    jmp .loop
+.done:
+    pop dx
+    pop cx
     ret

@@ -25,7 +25,7 @@
     OS88_HEADER 'FPTEST', fpt_entry
 
 FPT_W      equ 300
-FPT_H      equ 330
+FPT_H      equ 440
 FPT_ROWH   equ 10
 FPT_REC    equ 26                   ; 8 a + 8 b + 2 op + 8 expected... the name
                                     ; pointer makes 28; see fpt_cases' layout
@@ -50,6 +50,43 @@ fpt_s_fail: db 'FAIL', 0
 fpt_s_hdr:  db 'os88fp.inc vs IEEE-754', 0
 fpt_s_all:  db 'ALL PASS', 0
 fpt_s_some: db 'FAILURES', 0
+
+; fpt_itoa - AX signed -> the string at DI. Diagnostics only.
+fpt_itoa:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    or ax, ax
+    jge .pos
+    mov byte [di], '-'
+    inc di
+    neg ax
+.pos:
+    xor cx, cx
+    mov bx, 10
+.push:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .push
+.pop:
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    dec cx
+    jnz .pop
+    mov byte [di], 0
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fpt_paint - run every case and draw the result table. Running the tests in
@@ -177,6 +214,128 @@ fpt_paint:
     jmp .case
 
 .summary:
+    ; --- atof-only cases: text -> double, against host-computed bytes. This
+    ; exists to SPLIT a round-trip failure: if these pass, the parser is right
+    ; and the formatter is the one that is wrong.
+    mov word [fpt_k], 0
+    mov si, fpt_atof
+.acase:
+    mov ax, [fpt_k]
+    cmp ax, FPT_AN
+    jae .adone
+    push si
+    call fp_atof
+    mov di, fpt_got
+    call fp_pack_a
+    pop si
+    add si, 10                        ; past the padded text
+    mov di, fpt_got
+    mov cx, 4
+    mov bp, 1
+.acmp:
+    mov ax, [si]
+    cmp ax, [di]
+    je .acmpn
+    xor bp, bp
+.acmpn:
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .acmp
+    mov ax, [fpt_i]
+    add ax, [fpt_k]
+    mov cx, FPT_ROWH
+    mul cx
+    add ax, 14
+    add ax, [fpt_oy]
+    mov dx, ax
+    mov cx, [fpt_ox]
+    add cx, 200
+    push si
+    mov si, fpt_s_pass
+    or bp, bp
+    jnz .averd
+    mov si, fpt_s_fail
+    inc word [fpt_bad]
+.averd:
+    call OSAPI_FONT_STR
+    pop si
+    inc word [fpt_k]
+    jmp .acase
+.adone:
+
+    ; --- round-trip cases: text -> double -> text ---
+    mov word [fpt_j], 0
+    mov si, fpt_str
+.scase:
+    mov ax, [fpt_j]
+    cmp ax, FPT_SN
+    jae .sdone
+    push si
+    call fp_atof                      ; si -> the input text
+    pop si
+    push si
+    mov di, fpt_out
+    mov ax, 10                        ; ten significant digits, as a cell shows
+    call fp_ftoa
+    pop si
+.snext:
+    mov al, [si]                      ; step past the input string
+    inc si
+    or al, al
+    jnz .snext
+    mov di, fpt_out                   ; compare against the expected text
+    mov bp, 1
+.scmp:
+    mov al, [si]
+    mov ah, [di]
+    cmp al, ah
+    je .scmpok
+    xor bp, bp
+    jmp .scmpend
+.scmpok:
+    or al, al
+    jz .scmpend
+    inc si
+    inc di
+    jmp .scmp
+.scmpend:
+    mov al, [si]                      ; step past the expected string
+    inc si
+    or al, al
+    jnz .scmpend
+    mov ax, [fpt_i]
+    add ax, [fpt_j]
+    mov cx, FPT_ROWH
+    mul cx
+    add ax, 14
+    add ax, [fpt_oy]
+    mov dx, ax
+    mov cx, [fpt_ox]
+    add cx, 6
+    push si
+    mov si, fpt_s_pass
+    or bp, bp
+    jnz .sverdict
+    mov si, fpt_s_fail
+    inc word [fpt_bad]
+.sverdict:
+    call OSAPI_FONT_STR
+    pop si
+    mov cx, [fpt_ox]
+    add cx, 46
+    push si
+    mov si, fpt_out                   ; show what we actually produced
+    call OSAPI_FONT_STR
+    mov cx, [fpt_ox]                  ; ...and the raw digits + decimal
+    add cx, 150                       ; exponent behind it
+    mov si, fp_dig
+    call OSAPI_FONT_STR
+    pop si
+    inc word [fpt_j]
+    jmp .scase
+.sdone:
+
     mov cx, [fpt_ox]
     add cx, 150
     mov dx, [fpt_oy]
@@ -197,6 +356,46 @@ fpt_paint:
     pop ax
     ret
 
+FPT_AN equ 6
+fpt_atof:
+    db '1', 0
+    times (10 - 2) db 0
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    db '2.5', 0
+    times (10 - 4) db 0
+    dw 0x0000, 0x0000, 0x0000, 0x4004
+    db '100', 0
+    times (10 - 4) db 0
+    dw 0x0000, 0x0000, 0x0000, 0x4059
+    db '0.1', 0
+    times (10 - 4) db 0
+    dw 0x999A, 0x9999, 0x9999, 0x3FB9
+    db '1e3', 0
+    times (10 - 4) db 0
+    dw 0x0000, 0x0000, 0x4000, 0x408F
+    db '0.001', 0
+    times (10 - 6) db 0
+    dw 0xA9FC, 0xD2F1, 0x624D, 0x3F50
+
+; Round-trip cases: each is an input string then the expected output string,
+; both NUL-terminated. Ten significant digits, which is what a spreadsheet
+; cell shows. These are what prove the two conversions agree with each other
+; AND with the arithmetic between them.
+FPT_SN equ 12
+fpt_str:
+    db '1', 0,            '1', 0
+    db '2.5', 0,          '2.5', 0
+    db '-3.75', 0,        '-3.75', 0
+    db '0.1', 0,          '0.1', 0
+    db '100', 0,          '100', 0
+    db '0.001', 0,        '0.001', 0
+    db '123.456', 0,      '123.456', 0
+    db '1e3', 0,          '1000', 0
+    db '-0.5', 0,         '-0.5', 0
+    db '1000000', 0,      '1000000', 0
+    db '0', 0,            '0', 0
+    db '3.14159', 0,      '3.14159', 0
+
 %include "fpcases.inc"
 %include "os88fp.inc"
 
@@ -204,7 +403,7 @@ fpt_paint:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 66
+    OS88_BSS 132
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -212,8 +411,11 @@ fpt_oy      equ fpt_ox + 2
 fpt_i       equ fpt_oy + 2
 fpt_bad     equ fpt_i + 2
 fpt_got     equ fpt_bad + 2          ; 8: the packed result under test
+fpt_k       equ fpt_got + 8
+fpt_j       equ fpt_k + 2           ; the round-trip case index
+fpt_out     equ fpt_j + 2             ; 32: the formatted text under test
 
-fp_as       equ fpt_got + 8          ; --- os88fp.inc's scratch ---
+fp_as       equ fpt_out + 32          ; --- os88fp.inc's scratch ---
 fp_bs       equ fp_as + 1
 fp_ae       equ fp_bs + 1
 fp_be       equ fp_ae + 2
@@ -232,7 +434,11 @@ fp_t3       equ fp_t2 + 2
 fp_p0       equ fp_t3 + 2            ; 8 words: the 128-bit product
 fp_sticky   equ fp_p0 + 16
 fp_tmp      equ fp_sticky + 2
-fpt_bss_end equ fp_tmp + 2
+fp_dig      equ fp_tmp + 2            ; 24: the digit string fp_ftoa builds
+fp_d10      equ fp_dig + 24           ; word: the decimal exponent
+fp_nd       equ fp_d10 + 2
+fp_sgn      equ fp_nd + 2            ; word: digits in fp_dig
+fpt_bss_end equ fp_sgn + 2
 
 %define FPT_BSS_NEED (fpt_bss_end - os88_image_end)
     times (FPT_BSS_NEED - OS88_BSS_SIZE) db 0
