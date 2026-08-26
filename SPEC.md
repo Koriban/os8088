@@ -67491,6 +67491,43 @@ heading ran the numeric path over its text offset. `sh_cell_totext` is the one
 routine now. `sh_cellnum` had existed for exactly this since stage 4.0, and
 its own comment describes the very pattern Copy was still using.
 
+### 81.19 Sort moves ROWS, and only the rows you selected
+
+Sort took the anchor's whole column and reordered its values. Two things follow
+from the selection now existing, and the second is the one that matters:
+
+**It sorts the rows the selection covers.** A single cell still means the whole
+column, which is what this always did and what a one-item Sort implies.
+
+**It carries every other column in the selection with it.** Reordering one
+column of a table and leaving its neighbours where they are does not sort the
+table — it breaks the correspondence between the columns, silently, and the
+sheet looks perfectly ordinary afterwards. Excel sorts whole rows by a key
+column; so does this.
+
+The key column is **the one the selection is anchored in** — the column the
+drag started from. There is no key picker in the Sort dialog, so a key that is
+not an edge of the range cannot be expressed; that is a real limit of the
+dialog rather than of the sort.
+
+The permutation is computed once, by the existing single-column machinery:
+`rows[]` are the target rows and `origidx[i]` says which entry belongs at
+position `i`. `sh_sort_carry` then applies that same permutation to each other
+column. Each column is **snapshot as text first**, because writing a column in
+place would overwrite cells the permutation still has to read, and text is the
+intermediate because it covers values, labels and formulas with one
+representation — `sh_cell_totext` out, `sh_commit` back, the same pair the
+block clipboard uses (§81.18). A formula is shifted by its own row delta, so a
+row that moves three down takes its `=B1*2` with it as `=B4*2`.
+
+**Two faults found building it, both the session's recurring shape.**
+`sh_cell_totext` did not bank **DX**, which was the carry loop's index — the
+loop never advanced and the machine stopped dead. And `sh_sort_permcol` moves
+`sh_selcol` in order to commit into the column it is writing, so the later
+"skip the key column" test read whichever column had been carried last: the
+key was carried too, permuted a second time on top of its own sort. It is
+banked once, before anything runs.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

@@ -232,6 +232,12 @@ SH_SORT_FTXT_OFF  equ 7680           ; SH_SORT_FCAP slots of 64 bytes each,
                                      ; ending at 7680+180*64=19200, safely
                                      ; inside the 32KB claim
 SH_SORT_FCAP      equ 180           ; max formula cells one sort can carry
+SH_SORT_SNAP_OFF  equ 19200          ; SH_SORT_SNAPCAP slots of 64 bytes: ONE
+                                     ; other column's cells as text, while the
+                                     ; permutation is applied to it. It starts
+                                     ; where the formula slots end (7680 +
+                                     ; 180*64) and fits inside SH_STAGE_MAX
+SH_SORT_SNAPCAP   equ 180            ; rows a multi-column sort can carry
                                      ; through - far more than any real
                                      ; column needs; a cell beyond this cap
                                      ; is simply excluded from the sort
@@ -4229,7 +4235,8 @@ sh_docmd_edit:
 sh_cell_totext:
     push ax
     push bx
-    push si
+    push dx                           ; callers loop on DX; sh_cellnum and the
+    push si                           ; arena copy below both go through it
     push di
     push es
     mov byte [sh_clipbuf], 0
@@ -4276,6 +4283,7 @@ sh_cell_totext:
     pop es
     pop di
     pop si
+    pop dx
     pop bx
     pop ax
     ret
@@ -4817,6 +4825,255 @@ sh_docmd_filldown:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_sort_carry - apply the key column's permutation to every OTHER column in
+; the selection, so a table sorts as ROWS rather than as one column sliding
+; past its neighbours.
+;
+; This is what "why can't we sort multiple columns" wanted. Sorting one column
+; of a table and leaving the others put does not sort anything - it breaks the
+; correspondence between them, silently, and the sheet looks ordinary
+; afterwards. Excel sorts whole rows by a key column; so does this now.
+;
+; The permutation is already computed: rows[] are the target rows and
+; origidx[i] says which original entry belongs at position i. Each column is
+; SNAPSHOT AS TEXT first, because writing a column in place would overwrite
+; cells the permutation still has to read. Text is the intermediate because it
+; covers values, labels and formulas with one representation - sh_cell_totext
+; on the way out and sh_commit on the way back, which is the same pair the
+; block clipboard uses (81.18) and the same single decision about what a
+; string means.
+; -----------------------------------------------------------------------------
+sh_sort_carry:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp word [sh_sort_cnt], 2
+    jb .out
+    cmp word [sh_sort_cnt], SH_SORT_SNAPCAP
+    ja .out                           ; more rows than the snapshot holds: the
+                                      ; key column is still sorted, the others
+                                      ; are left alone rather than half moved
+    mov ax, [sh_selcol]               ; THE KEY COLUMN, banked before anything
+    mov [sh_cry_key], ax              ; else runs: sh_sort_permcol moves
+    mov bx, [sh_selrow]               ; sh_selcol to commit into each carried
+    mov [sh_cry_keyrow], bx           ; column, so reading it later names
+    mov bx, [sh_selcol2]              ; whichever column was carried last and
+    cmp ax, bx                        ; the key gets carried too - permuted a
+    jbe .cols                         ; second time, on top of its own sort
+    xchg ax, bx
+.cols:
+    mov [sh_cry_c1], ax
+    mov [sh_cry_c2], bx
+    cmp ax, bx
+    je .out                           ; one column: the write-back did it all
+    mov cx, ax
+.colloop:
+    cmp cx, [sh_cry_c2]
+    ja .done
+    cmp cx, [sh_cry_key]
+    je .nextcol                       ; the key column is already written
+    mov [sh_cry_col], cx
+    call sh_sort_snapcol
+    call sh_sort_permcol
+.nextcol:
+    inc cx
+    jmp .colloop
+.done:
+    mov ax, [sh_cry_key]              ; put the selection back where it was
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov ax, [sh_cry_keyrow]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_sort_snapcol - column [sh_cry_col]'s cells, for the sorted rows, as text
+; in the snapshot slots. An empty cell snapshots as an empty string, which is
+; what makes the permutation able to move emptiness around like anything else.
+sh_sort_snapcol:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [sh_cry_i], 0            ; THE COUNTER LIVES IN BSS, not in a
+.snap:                                ; register: this loop calls out to
+    mov dx, [sh_cry_i]                ; sh_cell_totext and multiplies, and an
+    cmp dx, [sh_sort_cnt]             ; index in DX did not survive either -
+    jae .out                          ; the loop simply never ended and the
+                                      ; machine stopped
+    mov es, [sh_stgseg]
+    mov si, dx
+    shl si, 1
+    mov bx, [es:si]                   ; rows[i]
+    mov ax, [sh_cry_col]
+    call sh_cell_totext               ; -> sh_clipbuf, CX = length
+    cmp cx, 63
+    jbe .fits
+    mov cx, 63
+.fits:
+    mov ax, [sh_cry_i]                ; slot = SNAP + i*64
+    mov di, 64
+    mul di
+    add ax, SH_SORT_SNAP_OFF
+    mov di, ax
+    mov es, [sh_stgseg]
+    mov si, sh_clipbuf
+    jcxz .term
+.scopy:
+    mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jnz .scopy
+.term:
+    mov byte [es:di], 0
+    inc word [sh_cry_i]
+    jmp .snap
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_sort_permcol - write column [sh_cry_col] back in the sorted order, each
+; cell shifted by its own row delta the way the key column's own write-back
+; shifts formulas.
+sh_sort_permcol:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [sh_cry_i], 0            ; in bss for sh_sort_snapcol's reason
+.perm:
+    mov dx, [sh_cry_i]
+    cmp dx, [sh_sort_cnt]
+    jae .out
+    mov es, [sh_stgseg]
+    mov si, dx
+    shl si, 1
+    add si, SH_SORT_ORIG_OFF
+    mov bx, [es:si]                   ; src = origidx[dx]
+    cmp bx, dx
+    je .nextperm                      ; already in place: nothing to rewrite
+    mov [sh_cry_src], bx
+    mov si, dx                        ; target row = rows[dx]
+    shl si, 1
+    mov ax, [es:si]
+    mov [sh_cry_trow], ax
+    mov si, bx                        ; source row = rows[src]
+    shl si, 1
+    mov ax, [es:si]
+    mov [sh_cry_srow], ax
+    ; the snapshot slot for src, into sh_editbuf
+    mov ax, [sh_cry_src]
+    mov di, 64
+    mul di
+    add ax, SH_SORT_SNAP_OFF
+    mov si, ax
+    mov di, sh_editbuf
+    xor cx, cx
+.load:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .loaded
+    inc si
+    inc di
+    inc cx
+    jmp .load
+.loaded:
+    mov [sh_editlen], cl
+    mov ax, [sh_cry_col]               ; where it is going
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov ax, [sh_cry_trow]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+    cmp byte [sh_editbuf], '='
+    jne .commit
+    mov ax, [sh_cry_trow]              ; a formula follows its own row
+    sub ax, [sh_cry_srow]
+    mov [sh_cp_rowdelta], ax
+    mov word [sh_cp_coldelta], 0
+    or ax, ax
+    jz .commit
+    mov si, sh_editbuf
+    inc si
+    mov di, sh_rwsrc
+.fcopy:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .fcopy
+    mov si, sh_rwsrc
+    call sh_formula_copyshift
+    mov byte [sh_editbuf], '='
+    mov si, sh_rwdst
+    mov di, sh_editbuf + 1
+    mov cx, SH_EDITMAX - 1
+.fout:
+    mov al, [si]
+    or al, al
+    jz .fdone
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .fout
+.fdone:
+    mov byte [di], 0
+    xor cx, cx
+    mov si, sh_editbuf
+.flen:
+    cmp byte [si], 0
+    je .fhave
+    inc si
+    inc cx
+    jmp .flen
+.fhave:
+    mov [sh_editlen], cl
+.commit:
+    mov byte [sh_editing], 1
+    call sh_commit
+.nextperm:
+    inc word [sh_cry_i]
+    jmp .perm
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
 ; current sheet) ascending by value; empty rows are left exactly where
 ; they are, so occupied cells are compacted toward the top the same way
@@ -5237,6 +5494,22 @@ sh_docmd_sortcol:
     push si
     push di
     push es
+    ; Sort the ROWS THE SELECTION COVERS, not the whole column. A single cell
+    ; still means the whole column, which is what this always did and what the
+    ; Data menu's one-item Sort implies.
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .sortrows
+    xchg ax, bx
+.sortrows:
+    cmp ax, bx
+    jne .haverows
+    xor ax, ax
+    mov bx, SH_ROWS - 1
+.haverows:
+    mov [sh_sort_r1], ax
+    mov [sh_sort_r2], bx
     mov word [sh_sort_cnt], 0
     mov word [sh_sort_fcnt], 0
     xor cx, cx
@@ -5255,6 +5528,10 @@ sh_docmd_sortcol:
     mov dx, [es:si+2]                 ; col
     cmp dx, [sh_selcol]
     jne .next
+    cmp ax, [sh_sort_r1]              ; outside the rows asked for
+    jb .next
+    cmp ax, [sh_sort_r2]
+    ja .next
     mov [sh_sort_row], ax             ; ax = row, stashed (0-based)
     test byte [es:si+4], 1            ; HASFORMULA
     jz .isplainval
@@ -5567,6 +5844,7 @@ sh_docmd_sortcol:
     inc cx
     jmp .wb
 .wbdone:
+    call sh_sort_carry                ; ...and bring the other columns with it
     mov si, [sh_ownwin]
     call sh_repaint
     pop es
@@ -17703,7 +17981,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3009
+    OS88_BSS 3031
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18313,7 +18591,18 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-sh_pb_c0          equ fp_sw + 2        ; the paste block's landing
+sh_cry_key         equ fp_sw + 2        ; the key column and cell, banked
+sh_cry_keyrow      equ sh_cry_key + 2   ; before any carry moves them
+sh_cry_i           equ sh_cry_keyrow + 2 ; the carry loops' index
+sh_cry_c1          equ sh_cry_i + 2        ; sh_sort_carry's column span...
+sh_cry_c2          equ sh_cry_c1 + 2
+sh_cry_col         equ sh_cry_c2 + 2     ; ...the one being carried...
+sh_cry_src         equ sh_cry_col + 2    ; ...and the entry it is taking from
+sh_cry_trow       equ sh_cry_src + 2
+sh_cry_srow       equ sh_cry_trow + 2
+sh_sort_r1        equ sh_cry_srow + 2   ; the rows Sort was asked for
+sh_sort_r2        equ sh_sort_r1 + 2
+sh_pb_c0          equ sh_sort_r2 + 2        ; the paste block's landing
 sh_pb_r0          equ sh_pb_c0 + 2     ; corner...
 sh_pb_x           equ sh_pb_r0 + 2     ; ...the cell being written
 sh_pb_y           equ sh_pb_x + 2
