@@ -67616,6 +67616,49 @@ so it comes back as **`#N/A`** — the one error that means exactly "a value was
 not available", which is all the file said. Reading a specific error out of a
 file that does not contain one would be inventing it.
 
+### 81.21 A buffer sized for the feature it replaced
+
+`sh_blank` is the row of spaces a blank cell is painted with, `sh_mkblank`
+refills it whenever the column width changes, and it was **11 bytes**:
+`SH_CW_WIDE / 8` — ten characters — plus a NUL. That was exactly right while
+Column Width was three radio buttons whose widest preset was ten characters.
+
+The numeric Column Width dialog (§81.9) replaced those radios with a typed
+value and validates it against `SH_CW_MINCH`..`SH_CW_MAXCH`, which is **1..40**.
+Nothing resized the buffer. A width of 12 writes 13 bytes into 11, and what
+the two spare bytes land on is the very next word in the bss chain:
+**`sh_chartseg`**, the segment of the chart window's offscreen canvas.
+
+The consequence is not a wrong column width. It is that the next chart draws
+into a **poisoned segment**: `ch_prep` opens by clearing the canvas with a
+19,200-byte `rep stosb`, which then lands wherever the corrupted word points.
+**The whole machine stops** — not the app, the machine — and the chart window
+shows uninitialised memory, because the buffer it blits was never written.
+
+Three things are worth keeping from it:
+
+**The symptom named the wrong subsystem.** The visible failure was a chart of
+noise, and the chart code was the code that had just changed, so that is where
+the search started. Charting the same figures from a bare column worked; from a
+labelled column worked; from a second sheet worked; after a BIFF save worked.
+Only after all four came back clean was the remaining difference — a column
+width typed into a dialog several minutes earlier — the thing left to try. The
+bug was **pre-existing** and had nothing to do with the chart.
+
+**A buffer whose size is a literal outlives the reason for the literal.**
+`sh_numbuf` was widened to `SH_NUMBUF_MAX` = `SH_CW_MAXCH` when labels started
+going through the justifiers, and its comment says so. `sh_blank` was missed in
+the same pass. It is now `SH_CW_MAXCH + 1`, and `sh_chartseg` is placed at
+`sh_blank + SH_CW_MAXCH + 1`, so both follow the cap rather than a number that
+was true once.
+
+**A segment word is the worst possible neighbour.** Every other kind of
+overrun corrupts a value; this one corrupts an *address*, and the next large
+`rep` turns a two-byte mistake into a dead machine. That is the same failure
+`ch_bars_draw`'s own header warns about from the other direction (§82.1), and
+it is worth knowing that bss adjacency can arrange it without anyone loading a
+segment register wrongly at all.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
@@ -68084,6 +68127,13 @@ restarted the walk; in `ct_read_biff` the NUMBER path ate the walk's own end
 bound, which is why `ct_biffend` exists. The same shape as §81.19's `DX` and
 §82.10's `BX`: a register that is correct when it is written and destroyed by
 the loop body added underneath it.
+
+**And a third, in the same shape as the register traps but quieter.**
+`ch_scale` pushes `ax bx cx dx si di es` and unwound them `es di dx si cx bx
+ax` — SI and DX exchanged. The stack is balanced, so `stkbalance` passes and
+the build is clean; every caller simply gets two registers back swapped. Both
+callers happen to bank those registers themselves, so nothing failed — which
+is the worst version of it: a latent fault that the next caller inherits.
 
 **And one that a helper invited.** Widening four arrays from words to doubles
 means a stride-8 multiply at every site, so it went into one routine — which

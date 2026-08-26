@@ -18433,7 +18433,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3071
+    OS88_BSS 3101
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18754,14 +18754,24 @@ sh_bti         equ sh_by2 + 2              ; word: the scan loop's own index
 sh_cellw       equ sh_bti + 2              ; word: current column width, px
 sh_cellh       equ sh_cellw + 2            ; word: current row height, px
 sh_cellch      equ sh_cellh + 2            ; word: sh_cellw / 8, in chars
-sh_blank       equ sh_cellch + 2           ; 11: up to SH_CW_WIDE/8 (10)
-                                             ; spaces + NUL (sh_mkblank)
+sh_blank       equ sh_cellch + 2           ; SH_CW_MAXCH+1: as many spaces as
+                                             ; the WIDEST column the Column
+                                             ; Width dialog will accept, plus
+                                             ; the NUL (sh_mkblank). It was 11
+                                             ; - SH_CW_WIDE/8 plus a NUL, right
+                                             ; for the three presets it was
+                                             ; written for and wrong the moment
+                                             ; a numeric width could be typed:
+                                             ; a width of 12 wrote 13 bytes and
+                                             ; the two that fell off the end
+                                             ; landed on sh_chartseg, one word
+                                             ; further down. See 81.21
 
 ; Data > Chart Column... (stage 2.x) - a live second window; see the
 ; SH_CLAIM_CHART_KB comment above sh_entry for why it exists and the
 ; window-lifecycle note above sh_docmd_chart for why sh_chartwin, once
 ; set, is never zeroed again this session (only shown/hidden)
-sh_chartseg    equ sh_blank + 11           ; word: the offscreen canvas claim
+sh_chartseg    equ sh_blank + SH_CW_MAXCH + 1  ; word: the offscreen canvas claim
 sh_chartwin    equ sh_chartseg + 2         ; word: 0 = never created; else its
                                              ; window ptr, permanently valid
 sh_chart_sheet equ sh_chartwin + 2         ; word: which sheet the open chart

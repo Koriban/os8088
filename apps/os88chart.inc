@@ -2050,12 +2050,12 @@ ch_scale:
     cmp bx, [ch_sc_cnt]
     jb .p2
 .out:
-    pop es
-    pop di
-    pop dx
-    pop si
-    pop cx
-    pop bx
+    pop es                            ; the pushes are ax bx cx dx si di es,
+    pop di                            ; so these unwind es di si dx cx bx ax -
+    pop si                            ; an earlier version swapped SI and DX
+    pop dx                            ; here, which balances the stack and so
+    pop cx                            ; passes stkbalance while handing every
+    pop bx                            ; caller two exchanged registers
     pop ax
     ret
 
