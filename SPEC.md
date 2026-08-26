@@ -67364,6 +67364,29 @@ both are the same mistake at different depths:
 Neither produced an error. The clock stopped, which is the tell that a package
 has taken the UI task down rather than merely broken its own window.
 
+### 81.15 Save As asks for the format
+
+`sh_dowrite` picks the writer off the file name's extension — `.DIF`, `.BIF`,
+else SYLK — which is a fine rule and was, on its own, the whole interface. The
+only way to save DIF was to know that and type it, so Save As silently meant
+SYLK forever.
+
+`SH_FDK_SAVEFMT` puts Excel's own **File Format** list in front of the file
+dialog: *Normal*, *SYLK*, *DIF*, in Excel's order and with Excel's word for
+the application's own format. Picking one rewrites the extension on `sh_name`
+through `sh_setext`, so the name follows the choice and `sh_dowrite`'s rule is
+left exactly as it was — the extension is still the thing that decides, it is
+just no longer the thing the user has to know.
+
+It **opens on the format the current name already implies**, so a document
+loaded as SYLK offers SYLK and OK alone cannot silently convert it.
+
+**The file dialog opens after the format dialog is destroyed, not from inside
+its OK handler.** `sh_fdlg_apply` only sets `sh_savepend`; `.doOK` calls
+`sh_fdlg_close` and then opens the file dialog. Stacking the second dialog on
+a window slot the first still holds is how one ends up orphaned behind the
+other, and `MAX_WIN` is 12.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

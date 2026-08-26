@@ -3916,9 +3916,9 @@ sh_mfire:
 .fsaveas:
     cmp al, 3                          ; 3 is Save As...; 4 is Print..., which
     jne .fprint                        ; used to be this label's fall-through
-    mov al, FDLG_SAVE
-    call sh_dlg
-    jmp .out
+    mov al, SH_FDK_SAVEFMT             ; ASK for the format, then name it. The
+    call sh_fdlg_open                  ; format used to be whatever extension
+    jmp .out                           ; the typed name happened to end in
 .fprint:
     mov word [sh_msg], sh_s_noprint
     mov si, [sh_ownwin]
@@ -5366,7 +5366,8 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt
+sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
 sh_s_fd_new:    db 'New', 0
@@ -5380,7 +5381,13 @@ sh_s_fd_delete: db 'Delete', 0
 sh_s_fd_colw:   db 'Column Width', 0
 sh_s_fd_rowh:   db 'Row Height', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt
+; Excel's own words: the app's OWN format is "Normal", and the interchange
+; formats are named after themselves. The order is Excel's too.
+sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif
+sh_fd_sfnormal: db 'Normal', 0
+sh_fd_sfsylk:   db 'SYLK', 0
+sh_fd_sfdif:    db 'DIF', 0
 ; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
 ; happens to be in - sh_gal_map translates, the same way chart.asm's own
 ; ct_gal_map does, rather than either side renumbering to suit the other.
@@ -5442,14 +5449,15 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 3
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
 SH_FDK_CALC  equ 9
 SH_FDK_SORT  equ 10
 SH_FDK_GAL   equ 11
-SH_FDK_N     equ 12
+SH_FDK_SAVEFMT equ 12                 ; stage 4.6: Save As asks for the format
+SH_FDK_N     equ 13                   ; instead of deriving it silently
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -5474,7 +5482,9 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
-    cmp al, SH_FDK_GAL
+    cmp al, SH_FDK_SAVEFMT
+    je .prefillfmt                    ; File Format opens on the format the
+    cmp al, SH_FDK_GAL                ; current NAME already implies
     je .prefillgal                    ; Gallery opens on the type in use, so
     cmp al, SH_FDK_CALC               ; OK alone cannot silently change it
     je .prefillcalc                   ; Calculation opens SHOWING the mode it
@@ -5489,6 +5499,31 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
+.prefillfmt:
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_dif
+    call sh_nameends
+    pop di
+    pop si
+    jc .fmtdif
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_biff
+    call sh_nameends
+    pop di
+    pop si
+    jc .fmtbiff
+    mov word [sh_fdlg_sel], 1         ; anything else is SYLK, which is what
+    jmp .noprefill                    ; sh_dowrite itself falls through to
+.fmtdif:
+    mov word [sh_fdlg_sel], 2
+    jmp .noprefill
+.fmtbiff:
+    mov word [sh_fdlg_sel], 0
+    jmp .noprefill
 .prefillgal:
     xor bx, bx                        ; find [ch_type] in the map rather than
     mov cx, 7                         ; inverting it - seven entries, and an
@@ -5754,13 +5789,66 @@ sh_fdlg_onclick:
 .doOK:
     call sh_fdlg_apply
     call sh_fdlg_close
-    jmp .out
+    cmp byte [sh_savepend], 0         ; File Format's OK owes a Save As, and it
+    je .out                           ; runs only now that the format dialog's
+    mov byte [sh_savepend], 0         ; window is DESTROYED. Opening the file
+    mov si, [sh_ownwin]               ; dialog from inside apply would stack a
+    mov al, FDLG_SAVE                 ; second dialog on a window slot that is
+    call sh_dlg                       ; still in use, which is how one gets
+    jmp .out                          ; orphaned behind the other
 .doCancel:
     call sh_fdlg_close
 .out:
     pop di
     pop si
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_setext - in: SI -> a 4-byte ".XXX". Replaces [sh_name]'s extension, or
+; appends one if it has none, so picking a format in the Save As dialog
+; renames BUDGET.SLK to BUDGET.BIF rather than leaving the name disagreeing
+; with the bytes. sh_dowrite still decides by extension - this makes the
+; extension follow the CHOICE instead of the other way round.
+;
+; sh_name is 13 bytes and holds an 8.3 name, so the worst case (an 8-char
+; stem with no dot) writes 8+4+1 = 13. Nothing longer can arrive: the file
+; dialog is what fills this buffer and it enforces 8.3.
+; -----------------------------------------------------------------------------
+sh_setext:
+    push ax
+    push cx
+    push si
+    push di
+    mov di, sh_name
+    xor cx, cx                        ; cx = where the '.' is, 0 = none yet
+.scan:
+    mov al, [di]
+    or al, al
+    jz .atend
+    cmp al, '.'
+    jne .next
+    mov cx, di
+.next:
+    inc di
+    jmp .scan
+.atend:
+    or cx, cx
+    jz .append                        ; no extension: write one on the end
+    mov di, cx                        ; there is one: overwrite from the '.'
+.append:
+    mov cx, 4
+.cp:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cp
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -5777,6 +5865,7 @@ sh_fdlg_apply:
     push ax
     push bx
     push cx
+    push si
     push di
     push es
     cmp byte [sh_fdlg_kind], SH_FDK_CLEAR
@@ -5789,6 +5878,8 @@ sh_fdlg_apply:
     je .dosort
     cmp byte [sh_fdlg_kind], SH_FDK_GAL
     je .dogallery
+    cmp byte [sh_fdlg_kind], SH_FDK_SAVEFMT
+    je .dosavefmt
     cmp byte [sh_fdlg_kind], 5
     je .colwidth
     cmp byte [sh_fdlg_kind], 6
@@ -5990,9 +6081,24 @@ sh_fdlg_apply:
     mov si, [sh_ownwin]
     call sh_repaint
     jmp .out
+.dosavefmt:
+    mov si, sh_s_ext_biff             ; 0 Normal is this app's OWN format,
+    mov ax, [sh_fdlg_sel]             ; which is BIFF - the same thing
+    or ax, ax                         ; Excel means by "Normal"
+    jz .fmtset
+    mov si, sh_s_ext_sylk
+    cmp ax, 1
+    je .fmtset
+    mov si, sh_s_ext_dif
+.fmtset:
+    call sh_setext
+    mov byte [sh_savepend], 1         ; the file dialog cannot open until
+    jmp .out                          ; THIS one is destroyed - see .doOK
+
 .out:
     pop es
     pop di
+    pop si
     pop cx
     pop bx
     pop ax
@@ -16932,6 +17038,7 @@ sh_functab:
     dw sh_f_true, sh_f_false, sh_f_row, sh_f_column, sh_f_choose
     dw 0
 sh_s_errpfx:   db 'Err ', 0
+sh_s_ext_sylk: db '.SLK', 0
 sh_s_ext_dif:  db '.DIF', 0
 sh_s_ext_biff: db '.BIF', 0
 sh_s_biff_fontname: db 'Helv', 0     ; Excel's own historical default face
@@ -17004,7 +17111,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2996
+    OS88_BSS 2997
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -17624,7 +17731,8 @@ sh_needld         equ sh_fl_drow + 2   ; byte: an ARG_FILE document is
                                        ; noted and not yet read
 sh_argdir         equ sh_needld + 1    ; word: the directory it is in
 sh_argdrv         equ sh_argdir + 2    ; byte: ...and that volume
-sh_bss_end        equ sh_argdrv + 1
+sh_savepend       equ sh_argdrv + 1    ; byte: File Format's OK owes a Save As
+sh_bss_end        equ sh_savepend + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
