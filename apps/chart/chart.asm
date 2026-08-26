@@ -214,8 +214,10 @@ ct_render:
 ; BMP...); SI = the owning window, gfx lock already held (SPEC.md 12.2)
 ; -----------------------------------------------------------------------------
 ct_oncmd:
-    or ah, ah                           ; AH = the menu, AL = the item
-    jnz .gallery
+    cmp ah, 1                           ; AH = the menu, AL = the item
+    je .gallery
+    cmp ah, 2
+    je .data
     or al, al
     jnz .export
     push bx
@@ -251,6 +253,17 @@ ct_oncmd:
     pop si
     pop bx
     ret
+; --- Data: pick the column, and READ THE FILE AGAIN ---------------------------
+; Re-reading rather than re-filtering what is in memory, because the readers
+; keep only the two columns they chose - the rest was never stored. The file
+; is already on the disk this instance came from, so this is one more read of
+; a file that was just read.
+.data:
+    xor ah, ah
+    mov [ct_wantcol], ax                ; 0 = Automatic, else the 1-based column
+    call ct_reread
+    ret
+
 ; --- Gallery: pick a type and redraw what is already loaded -------------------
 ; The item index maps to CH_T_* through this table rather than by arithmetic,
 ; because the menu is in Excel's alphabetical order (Area, Bar, Column, Line)
@@ -343,30 +356,9 @@ ct_ondlg:
     jnz .copy
     mov byte [di], 0
 .copied:
-    mov si, ct_name
-    mov di, ct_s_ext_dif
-    call ct_nameends
-    jc .dif
-    mov si, ct_name
-    mov di, ct_s_ext_biff
-    call ct_nameends
-    jc .biff
-    jmp .sylk
-.dif:
-    call ct_load_common
+    mov word [ct_wantcol], 0            ; a newly opened file starts on
+    call ct_read_by_ext                 ; Automatic, whatever the last one used
     jc .rerr
-    call ct_read_dif
-    jmp .loaded
-.biff:
-    call ct_load_common
-    jc .rerr
-    call ct_read_biff
-    jmp .loaded
-.sylk:
-    call ct_load_common
-    jc .rerr
-    call ct_read_sylk
-.loaded:
     call ct_render
     mov si, bx
     call ct_paint
@@ -409,6 +401,82 @@ ct_load_common:
 .out:
     pop si
     pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_read_by_ext - load [ct_name] and run the reader its extension names.
+; out: CF=1 = the file could not be read. BX is preserved (every one of these
+; banks it - 82.10), so a caller may keep its window pointer there.
+; -----------------------------------------------------------------------------
+ct_read_by_ext:
+    push si
+    push di
+    mov si, ct_name
+    mov di, ct_s_ext_dif
+    call ct_nameends
+    jc .dif
+    mov si, ct_name
+    mov di, ct_s_ext_biff
+    call ct_nameends
+    jc .biff
+    call ct_load_common
+    jc .err
+    call ct_read_sylk
+    jmp .ok
+.dif:
+    call ct_load_common
+    jc .err
+    call ct_read_dif
+    jmp .ok
+.biff:
+    call ct_load_common
+    jc .err
+    call ct_read_biff
+.ok:
+    pop di
+    pop si
+    clc
+    ret
+.err:
+    pop di
+    pop si
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_reread - read the open file again under the current [ct_wantcol] and
+; redraw. in: SI = our window ptr. Preserves everything.
+; -----------------------------------------------------------------------------
+ct_reread:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [ct_name], 0
+    je .out                             ; nothing open: the choice is remembered
+    mov bx, si                          ; and applies to the next Open
+    call ct_read_by_ext
+    jc .err
+    call ct_render
+    mov si, bx                          ; BX survives the readers AND ct_render
+    call ct_paint                       ; now - which is the whole of 82.10
+    cmp word [ct_valcnt], 0
+    jne .out
+    mov si, ct_s_nocol
+    call ct_toast
+    jmp .out
+.err:
+    mov si, ct_s_readerr
+    call ct_toast
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -593,6 +661,16 @@ ct_record:
     push bx
     push cx
     push si
+    mov cx, [ct_wantcol]                ; Data > Column: anything to the LEFT of
+    or cx, cx                           ; the chosen column is not a candidate,
+    je .anycol                          ; so the chosen one becomes the lowest
+    dec cx                              ; and the existing two-lowest logic
+    cmp ax, cx                          ; picks the next one along as series 2.
+    jb .out                             ; THE MENU IS 1-BASED AND AX IS NOT -
+.anycol:                                ; ct_parse_c's .apply already did the
+                                        ; dec - comparing the two directly
+                                        ; charted the column after the one
+                                        ; asked for
     cmp word [ct_tcnt], 0
     je .newcol                        ; nothing yet: this cell defines it
     cmp ax, [ct_mincol]
@@ -1165,9 +1243,29 @@ ct_tpl:
     OS88_MENUSET ct_menus, ct_name_app, ct_oncmd
         OS88_MENU ct_m_file, ct_i_file, 2
         OS88_MENU ct_m_gallery, ct_i_gallery, 7
+        OS88_MENU ct_m_data, ct_i_data, 9
     OS88_MENUSET_END ct_menus
 
 ct_name_app: db 'Chart', 0
+; WHICH COLUMN TO CHART. Excel needs no such menu because it charts a
+; SELECTION; this app opens a FILE, so nothing in it says which column was
+; meant and the reader can only fall back on "the lowest one". That is right
+; for a sheet of figures and wrong for one whose first column is a year or an
+; index, so it is offered as a choice rather than guessed (SPEC.md 82.11).
+; Automatic is the old behaviour and stays the default.
+ct_m_data:   db 'Data', 0
+ct_i_data:   dw ct_it_auto, ct_it_ca, ct_it_cb, ct_it_cc, ct_it_cd, ct_it_ce, ct_it_cf, ct_it_cg, ct_it_ch
+ct_it_auto:  db 'Automatic', 0
+ct_it_ca:    db 'Column A', 0
+ct_it_cb:    db 'Column B', 0
+ct_it_cc:    db 'Column C', 0
+ct_it_cd:    db 'Column D', 0
+ct_it_ce:    db 'Column E', 0
+ct_it_cf:    db 'Column F', 0
+ct_it_cg:    db 'Column G', 0
+ct_it_ch:    db 'Column H', 0
+ct_s_nocol:  db 'No data in that column.', 0
+
 ct_m_file:   db 'File', 0
 ct_i_file:   dw ct_it_open, ct_it_exp
 ct_it_open:  db 'Open...', 0
@@ -1212,7 +1310,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 755
+    OS88_BSS 757
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1323,7 +1421,10 @@ ct_mincol2  equ ch_l2e2 + 2         ; the SECOND series' column...
 ct_t2cnt    equ ct_mincol2 + 2      ; ...how many cells it has...
 ct_t2row    equ ct_t2cnt + 2        ; ...and its rows and values
 ct_t2val    equ ct_t2row + CH_MAXBARS * 2
-ct_bss_end  equ ct_t2val + CH_MAXBARS * 2
+ct_wantcol  equ ct_t2val + CH_MAXBARS * 2   ; word: 0 = chart the lowest
+                                             ; column, else the 1-based column
+                                             ; Data > Column asked for
+ct_bss_end  equ ct_wantcol + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting

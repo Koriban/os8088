@@ -67757,12 +67757,40 @@ anything, so a text column is simply absent from the candidates and the lowest
 NUMERIC column becomes the series.
 
 **What this deliberately does NOT do is guess which numeric column you meant.**
-A file whose columns are all numbers still charts the lowest one, and that is
-sometimes not the interesting one — a sheet of `Year, Population` charts the
-years. Nothing in the file distinguishes an index column from a data column,
-and Excel resolves it with the SELECTION, which `CHART.O88` has no equivalent
-of: it opens a file rather than charting a range. The honest options are to
-put the data column first, or to use Combination, which plots both.
+A file whose columns are all numbers still charts the lowest one by default,
+and that is sometimes not the interesting one — a sheet of `Year, Population`
+charts the years. Nothing in the file distinguishes an index column from a
+data column, so §82.12 asks instead of guessing.
+
+### 82.12 `Data > Column` — asking instead of guessing
+
+Excel needs no such menu because it charts a **selection**. This app opens a
+**file**, so nothing in what it is given says which column was meant, and
+§82.11's fallback — the lowest numeric column — is right for a sheet of
+figures and wrong for one whose first column is a year or an index.
+
+The `Data` menu is `Automatic` plus `Column A`…`Column H`. `Automatic` is the
+old behaviour and remains the default; a newly opened file resets to it, so
+one file's choice never silently applies to the next. Picking a column sets
+`ct_wantcol` and **reads the file again**, because the readers keep only the
+two columns they chose — the rest was never stored — and the file is on the
+disk this instance was launched from.
+
+`ct_record` then ignores every cell to the left of the choice, so the chosen
+column becomes the lowest and the existing two-lowest logic picks the next one
+along as series 2 with no further change. A column with nothing in it charts
+nothing and says so.
+
+**`ct_wantcol` is 1-based and `ct_record`'s AX is not.** `ct_parse_c`'s
+`.apply` already does the `dec` from SYLK's 1-based column to a 0-based index,
+so comparing the two directly charted *the column after the one asked for* —
+which on the test sheet meant a single bar built from an unrelated summary
+cell two columns away. It read like the picker being ignored rather than
+off-by-one, because the chart it drew was a real chart of real data.
+
+`ct_read_by_ext` was factored out of `ct_ondlg` for this: opening a file and
+re-reading it under a new column now run the same dispatch, rather than two
+copies that drift.
 
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
