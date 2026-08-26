@@ -40,6 +40,8 @@ CH_H       equ 160
 CH_STRIDE  equ 120                  ; CH_W / 2 (4bpp, 2px/byte)
 CH_HDRSZ   equ 118                  ; 54-byte BMP header + 64-byte palette
 CH_PXOFF   equ CH_HDRSZ             ; pixel data starts right after
+CT_NTXT_MAX equ 24                  ; ct_esatof: the longest number text
+                                    ; it will copy out of a staged file
 CH_MAXBARS equ 40                   ; how many values the caller's arrays
                                      ; hold - NOT a drawing limit: ch_band
                                      ; divides the axis among however many
@@ -91,6 +93,11 @@ ct_entry:
     push si
     push di
     push es
+    call fp_init                        ; stage 4.6: before the first claim,
+                                        ; for the reason sheet.asm's own call
+                                        ; states - it decides which arithmetic
+                                        ; the session gets, and nothing else
+                                        ; here can recover from it being wrong
     mov ax, CT_CLAIM_CHART_KB
     call OSAPI_MEM_CLAIM
     jc .fail
@@ -182,7 +189,7 @@ ct_render:
                                         ; own frame, destroyed, with no error.
                                         ; DI is banked for the same reason
                                         ; before it costs someone else a day.
-    mov word [ch_arr2], ct_t2val        ; the second series, if the file had a
+    mov word [ch_arr2], ct_w2vals       ; the second series, if the file had a
     mov ax, [ct_t2cnt]                  ; second column (82.8)
     mov [ch_cnt2], ax
     mov ax, ds
@@ -195,7 +202,7 @@ ct_render:
     mov cx, [ct_valcnt]
     mov es, [ct_chartseg]
     mov dx, ds
-    mov si, ct_vals
+    mov si, ct_wvals                    ; the SCALED words, not the doubles
     call ch_draw                        ; stage 3.0f: the type comes from
                                         ; [ch_type], which the Gallery menu
                                         ; sets; ch_draw falls back to the
@@ -632,6 +639,89 @@ ct_pint:
     ret
 
 ; -----------------------------------------------------------------------------
+; ct_esatof (stage 4.6) - the decimal number at ES:SI (bounded by BX) becomes
+; the packed double in ch_dbl; SI advances past it. os88fp.inc's fp_atof reads
+; DS, and every one of these readers has the file staged in ES, so the text is
+; copied into a DS scratch first - the same shape sheet.asm's sh_esatof uses,
+; and for the same reason.
+; -----------------------------------------------------------------------------
+ct_esatof:
+    push ax
+    push cx
+    push di
+    mov di, ct_ntxt
+    mov cx, CT_NTXT_MAX
+.copy:
+    jcxz .done
+    cmp si, bx
+    jae .done
+    mov al, [es:si]
+    cmp al, ';'
+    je .done
+    cmp al, ','
+    je .done
+    cmp al, 13
+    je .done
+    cmp al, 10
+    je .done
+    or al, al
+    jz .done
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .copy
+.done:
+    mov byte [di], 0
+    push si
+    push es
+    mov si, ct_ntxt
+    mov ax, ds                        ; fp_atof is DS-only, and ES is the
+    mov es, ax                        ; staging segment right now
+    call fp_atof
+    pop es
+    pop si
+    mov di, ch_dbl
+    call fp_pack_a
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_i32_dbl - the SIGNED 32-bit integer in DX:AX becomes ch_dbl. RK's integer
+; subtype is THIRTY bits, so a word was never enough for it either.
+; -----------------------------------------------------------------------------
+ct_i32_dbl:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    xor cx, cx                        ; CL = the sign
+    or dx, dx
+    jns .abs
+    mov cl, 1
+    neg ax                            ; negate DX:AX
+    adc dx, 0
+    neg dx
+.abs:
+    mov [fp_t0], ax
+    mov [fp_t1], dx
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    mov [fp_as], cl
+    mov di, ch_dbl
+    call fp_pack_a
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; ct_finalize - given ct_trow/ct_tcol/ct_tval (ct_tcnt entries, any file
 ; order, any columns), find the LOWEST column among them, keep only the
 ; entries at that column, sort those by row ascending, and set
@@ -639,7 +729,10 @@ ct_pint:
 ; three readers below.
 ; -----------------------------------------------------------------------------
 ; ct_record - offer one cell to the series (the CT_TCAP fix)
-; in:  AX = col, BX = row, DX = value. All registers preserved.
+; in:  AX = col, BX = row, and THE VALUE IN ch_dbl - eight bytes, not a word
+; in DX. Stage 4.6: a cell holds an IEEE-754 double, and truncating it here
+; was the whole of why 43.6 charted as a bar of 43 (82.13). All registers
+; preserved.
 ;
 ; THE CAP USED TO BOUND THE SCAN, AND THAT LOST DATA SILENTLY. Each reader
 ; collected every numeric cell it met into ct_trow/ct_tcol/ct_tval, stopped at
@@ -694,7 +787,14 @@ ct_record:
     mov si, cx
     shl si, 1
     mov [ct_t2row + si], bx
-    mov [ct_t2val + si], dx
+    mov si, cx
+    call ct_doff
+    add si, ct_t2val                    ; SI = &ct_t2val[cx]
+    push di
+    mov di, si
+    mov si, ch_dbl
+    call ch_sc_copy8
+    pop di
     inc word [ct_t2cnt]
     jmp .out
 .newcol:                              ; the old series becomes the second one,
@@ -712,8 +812,16 @@ ct_record:
     jcxz .nodemote
     mov ax, [ct_trow + si]
     mov [ct_t2row + si], ax
-    mov ax, [ct_tval + si]
-    mov [ct_t2val + si], ax
+    push si
+    push di
+    shr si, 1
+    call ct_doff
+    mov di, si
+    add si, ct_tval                     ; from ct_tval[i]...
+    add di, ct_t2val                    ; ...to ct_t2val[i]
+    call ch_sc_copy8
+    pop di
+    pop si
     add si, 2
     dec cx
     jmp .demote
@@ -733,7 +841,16 @@ ct_record:
     shl si, 1
     mov [ct_tcol + si], ax
     mov [ct_trow + si], bx
-    mov [ct_tval + si], dx
+    push si
+    push di
+    shr si, 1
+    call ct_doff
+    mov di, si
+    add di, ct_tval                     ; DI = &ct_tval[cx]
+    mov si, ch_dbl
+    call ch_sc_copy8
+    pop di
+    pop si
     inc word [ct_tcnt]
 .out:
     pop si
@@ -774,12 +891,23 @@ ct_finalize:
     cmp bx, [ct_mincol]
     jne .cnext
     mov dx, [ct_trow + si]
-    mov bx, [ct_tval + si]
+    shr si, 1                           ; SI = the candidate's index
+    push si
+    call ct_doff
+    add si, ct_tval                     ; -> &ct_tval[i]
+    mov ax, [ct_valcnt]
+    push si
+    mov si, ax
+    call ct_doff
+    mov di, si
+    add di, ct_vals                     ; -> &ct_vals[valcnt]
+    pop si
+    call ch_sc_copy8
+    pop si
     mov ax, [ct_valcnt]
     mov si, ax
     shl si, 1
     mov [ct_vrow + si], dx
-    mov [ct_vals + si], bx
     inc word [ct_valcnt]
 .cnext:
     inc cx
@@ -801,17 +929,43 @@ ct_finalize:
     xchg ax, bx
     mov [ct_vrow + si], ax
     mov [ct_vrow + si - 2], bx
-    mov ax, [ct_vals + si]
-    mov bx, [ct_vals + si - 2]
-    xchg ax, bx
-    mov [ct_vals + si], ax
-    mov [ct_vals + si - 2], bx
+    push si                             ; and the eight bytes that belong with
+    shr si, 1                           ; the row, swapped the same way
+    call ct_doff
+    add si, ct_vals                     ; ct_vals, NOT ct_tval - the sort runs
+    mov di, si                          ; on the COLLECTED series
+    sub di, 8
+    mov cx, 4
+.swap8:
+    mov ax, [si]
+    mov bx, [di]
+    mov [si], bx
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .swap8
+    pop si
     sub si, 2
     jmp .inner
 .outernext:
     inc cx
     jmp .outer
 .done:
+    ; --- the doubles become the words the drawing runs on (82.13) ----------
+    ; SERIES TWO FIRST, so [ch_e10] is left holding SERIES ONE's exponent -
+    ; that is the one the value axis is labelled from, and the second series
+    ; is drawn against its own ch_max2 with no scale of its own.
+    mov dx, ds
+    mov si, ct_t2val
+    mov di, ct_w2vals
+    mov cx, [ct_t2cnt]
+    call ch_scale
+    mov dx, ds
+    mov si, ct_vals
+    mov di, ct_wvals
+    mov cx, [ct_valcnt]
+    call ch_scale
     pop si
     pop dx
     pop cx
@@ -819,33 +973,76 @@ ct_finalize:
     pop ax
     ret
 
+; ct_doff - SI = SI * 8, the byte offset of the SI'th double. The CALLER adds
+; the array's base: an earlier version folded ct_tval in here and two of its
+; four call sites wanted a different array, so the second series and the sort
+; both addressed the first one. Everything else preserved.
+ct_doff:
+    push ax
+    push dx
+    mov ax, si
+    mov dx, 8
+    mul dx
+    mov si, ax
+    pop dx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
-; ct_rkdec - a verbatim duplicate of apps/sheet/sheet.asm's own sh_rkdec:
-; small and fully self-contained (no dependency on anything else in that
-; file), so duplicating it exactly here is safe where reusing a whole
-; reader would not be (see this file's own header comment).
-; in: DX:AX = a packed RK value (AX low word, DX high word); out: CF=0 and
-; AX=the signed 16-bit value if it's the "integer, not multiplied"
-; subtype this project's own writer emits, else CF=1 (out of this
-; subset's scope - skip the cell rather than guess at a float or *100
-; value)
+; ct_rkdec (stage 4.6) - ALL FOUR RK SUBTYPES, into ch_dbl.
+; in: DX:AX = a packed RK value (AX low word, DX high word). Always succeeds.
+;
+; The two low bits are the subtype. Bit 1 set means the upper 30 bits are a
+; signed integer; clear means the 32-bit value with those two bits masked off
+; IS THE TOP HALF of an IEEE-754 double, low half zero. Bit 0 set means divide
+; the result by 100 either way.
+;
+; This used to accept the integer-times-one form ALONE and skip the cell
+; otherwise - which was defensible while the array was signed words and the
+; other three forms could only have been guessed at. It is not defensible now:
+; Sheet writes real doubles, and "skip the cell" meant a column of 43.6 and
+; 44.1 charted as an EMPTY sheet with no message.
 ; -----------------------------------------------------------------------------
 ct_rkdec:
-    test al, 0x01
-    jnz .unsupported
-    test al, 0x02
-    jz .unsupported
+    push ax
+    push bx
     push cx
-    mov cx, 2
+    push dx
+    push si                             ; the caller's record-walk cursor -
+    push di                             ; .div100 needs SI for fp_unpack_a
+    mov bl, al                          ; the subtype bits, banked
+    test al, 0x02
+    jz .isfloat
+    mov cx, 2                           ; a signed 30-bit integer
 .shr:
     sar dx, 1
     rcr ax, 1
     loop .shr
+    call ct_i32_dbl
+    jmp .div100
+.isfloat:
+    and al, 0xFC                        ; the top 32 bits of a double
+    mov word [ch_dbl], 0
+    mov word [ch_dbl+2], 0
+    mov [ch_dbl+4], ax
+    mov [ch_dbl+6], dx
+.div100:
+    test bl, 0x01
+    jz .out
+    mov si, ch_dbl
+    call fp_unpack_a
+    mov cx, -2                          ; /100, exactly as scaling by 10^-2
+    call fp_scale10
+    mov di, ch_dbl
+    call fp_pack_a
+.out:
+    pop di
+    pop si
+    pop dx
     pop cx
+    pop bx
+    pop ax
     clc
-    ret
-.unsupported:
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -861,7 +1058,8 @@ ct_read_biff:
     push bx
     push dx
     push si
-    mov word [ct_tcnt], 0
+    mov [ct_biffend], cx                ; the walk's end bound, banked - the
+    mov word [ct_tcnt], 0               ; NUMBER path needs CX as a counter
     xor si, si
 .rechdr:
     mov ax, si
@@ -874,7 +1072,11 @@ ct_read_biff:
     cmp ax, 0x000A                      ; EOF
     je .done
     cmp ax, 0x027E                      ; RK cell record
-    jne .skip
+    je .isrk
+    cmp ax, 0x0203                      ; NUMBER: eight bytes of IEEE-754,
+    je .isnum                           ; verbatim, and the ONLY way a value
+    jmp .skip                           ; that is not an exact small integer
+.isrk:                                  ; reaches a BIFF file at all
     push dx                             ; length, saved across the decode
     mov ax, si
     add ax, dx
@@ -884,22 +1086,48 @@ ct_read_biff:
     push word [es:si+2]                 ; col
     mov ax, [es:si+6]                   ; rk lo
     mov dx, [es:si+8]                   ; rk hi
-    call ct_rkdec                       ; -> CF=1 unsupported, else AX=value
-    jc .rkskip
-    mov dx, ax                          ; dx = value
+    call ct_rkdec                       ; -> ch_dbl
     pop ax                              ; ax = col
     pop bx                              ; bx = row
     call ct_record
-    jmp .rkdone
-.rkskip:
-    pop dx                              ; discard col
-    pop dx                              ; discard row
-.rkdone:
     pop dx                              ; length, restored
     jmp .skip
+.isnum:
+    push dx
+    mov ax, si
+    add ax, dx
+    cmp ax, cx
+    ja .toolong
+    push word [es:si]                   ; row
+    push word [es:si+2]                 ; col
+    push di
+    push si
+    add si, 6                           ; past row/col/xf: the eight bytes
+    mov di, ch_dbl
+    mov cx, 4
+.ncopy:
+    mov ax, [es:si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .ncopy
+    pop si
+    pop di
+    pop ax                              ; col
+    pop bx                              ; row
+    ; CX was the buffer END and .ncopy just ate it - restore it from the
+    ; record walk's own bookkeeping before the next header is read.
+    call ct_record
+    pop dx
+    jmp .nskip
 .toolong:
     pop dx                              ; length, restored (discard)
     jmp .done
+.nskip:
+    add si, dx
+    mov cx, [ct_biffend]                ; .ncopy used CX as a counter, so the
+    jmp .rechdr                         ; walk's own end bound is re-read here
 .skip:
     add si, dx
     jmp .rechdr
@@ -1034,8 +1262,16 @@ ct_parse_c:
     jae .tok
     cmp byte [es:si], '"'               ; K"..." is a LABEL, not a number, and
     je .istext                          ; a label is not a data point
-    call ct_pint
-    mov [ct_pval], ax
+    cmp byte [es:si], '#'               ; ...and ;K#DIV/0! is an ERROR VALUE
+    je .tok                             ; (81.20.1), which is not one either
+    call ct_esatof                      ; -> ch_dbl
+    push si
+    push di
+    mov si, ch_dbl
+    mov di, ct_pval
+    call ch_sc_copy8
+    pop di
+    pop si
     mov byte [ct_phave], 1
     jmp .tok
 .istext:
@@ -1066,7 +1302,13 @@ ct_parse_c:
     dec ax                              ; 1-based -> 0-based
     dec cx
     mov bx, cx                          ; bx = row, ax = col
-    mov dx, [ct_pval]
+    push si
+    push di
+    mov si, ct_pval
+    mov di, ch_dbl
+    call ch_sc_copy8
+    pop di
+    pop si
     call ct_record
 .out:
     pop si
@@ -1201,8 +1443,14 @@ ct_read_dif:
     jne .skipunknown                    ; type 1 (string/NA) or unknown
     add si, 2                           ; past "0,"
     mov bx, di
-    call ct_pint                        ; -> ax=value, si past the digits
-    mov [ct_pval], ax
+    call ct_esatof                      ; -> ch_dbl, si past the digits
+    push si
+    push di
+    mov si, ch_dbl
+    mov di, ct_pval
+    call ch_sc_copy8
+    pop di
+    pop si
     call ct_difskipline                 ; finish the "0,<value>" line
     cmp si, di
     jae .cellnext
@@ -1210,7 +1458,13 @@ ct_read_dif:
     jne .notvalid
     mov bx, [ct_wrow]
     mov ax, [ct_wcol]
-    mov dx, [ct_pval]
+    push si
+    push di
+    mov si, ct_pval
+    mov di, ch_dbl
+    call ch_sc_copy8
+    pop di
+    pop si
     call ct_record
 .notvalid:
     call ct_difskipline                 ; the indicator line
@@ -1305,20 +1559,25 @@ ct_s_ext_biff: db '.BIF', 0
 ; here would break the icon macro's fixed-offset assertion (this package
 ; has no icon, but the same %include-at-the-end rule still applies) and
 ; would move the entry point.
+%include "os88fp.inc"                  ; stage 4.6: the readers meet real
+                                       ; decimals now (a BIFF NUMBER record IS
+                                       ; an IEEE-754 double), and ch_scale
+                                       ; below needs it. Before os88chart.inc,
+                                       ; which calls into it.
 %include "os88chart.inc"
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 757
+    OS88_BSS 1431
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
 ct_stgseg   equ ct_chartseg + 2     ; word: file-read/BMP-export staging
 ct_name     equ ct_stgseg + 2       ; 13: the opened/exported file's 8.3 name
 ct_valcnt   equ ct_name + 13        ; word: values currently charted
-ct_vals     equ ct_valcnt + 2       ; CH_MAXBARS words: the charted values
-ct_vrow     equ ct_vals + CH_MAXBARS*2   ; CH_MAXBARS words: scratch rows,
+ct_vals     equ ct_valcnt + 2       ; CH_MAXBARS DOUBLES: the charted values
+ct_vrow     equ ct_vals + CH_MAXBARS*8   ; CH_MAXBARS words: scratch rows,
                                           ; paired with ct_vals during
                                           ; ct_finalize's sort, unused after
 ct_mincol   equ ct_vrow + CH_MAXBARS*2   ; word: ct_finalize's own scratch
@@ -1326,14 +1585,17 @@ ct_tcnt     equ ct_mincol + 2       ; word: how many candidates are in
                                      ; ct_trow/ct_tcol/ct_tval right now
 ct_trow     equ ct_tcnt + 2         ; CH_MAXBARS words: the series' rows
 ct_tcol     equ ct_trow + CH_MAXBARS*2  ; ...their columns (all equal)
-ct_tval     equ ct_tcol + CH_MAXBARS*2  ; ...and their values
-ct_pcol     equ ct_tval + CH_MAXBARS*2  ; word: ct_parse_c's own scratch
+ct_tval     equ ct_tcol + CH_MAXBARS*2  ; ...and their values, as DOUBLES
+ct_pcol     equ ct_tval + CH_MAXBARS*8  ; word: ct_parse_c's own scratch
 ct_prow     equ ct_pcol + 2         ; word: ct_parse_c's own scratch
-ct_pval     equ ct_prow + 2         ; word: shared scratch (ct_parse_c AND
+ct_pval     equ ct_prow + 2         ; 8: shared scratch (ct_parse_c AND
                                      ; ct_read_dif's own per-cell value -
                                      ; never live across both at once)
-ct_phave    equ ct_pval + 2         ; byte: ct_parse_c's own scratch
-ct_wrow     equ ct_phave + 1        ; word: ct_read_dif's own row counter
+ct_phave    equ ct_pval + 8         ; byte: ct_parse_c's own scratch
+ct_ntxt     equ ct_phave + 1        ; CT_NTXT_MAX+1: ct_esatof's DS copy of
+                                     ; one number, out of the staged file
+ct_biffend  equ ct_ntxt + CT_NTXT_MAX + 1  ; word: ct_read_biff's end bound
+ct_wrow     equ ct_biffend + 2      ; word: ct_read_dif's own row counter
 ct_wcol     equ ct_wrow + 2         ; word: ct_read_dif's own col counter
 
 ; --- apps/os88chart.inc's own required scratch (see its header comment) -------
@@ -1393,8 +1655,19 @@ ch_trow        equ ch_tglyph + 2
 ch_tcol        equ ch_trow + 2
 ch_tpy         equ ch_tcol + 2
 ch_tbits       equ ch_tpy + 2
-ch_tnum        equ ch_tbits + 2       ; 8: ch_itoa_t's output
-ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
+ch_tnum        equ ch_tbits + 2       ; 16: ch_itoa_t's/ch_num_t's output -
+                                      ; eight held "-32768" and nothing more,
+                                      ; and a scaled label can carry a point
+                                      ; and four digits, or nine trailing
+                                      ; zeros (see ch_scale)
+ch_e10         equ ch_tnum + 16     ; the series' decimal exponent (82.13)
+ch_sc_seg      equ ch_e10 + 2       ; ch_scale's own scratch
+ch_sc_src      equ ch_sc_seg + 2
+ch_sc_dst      equ ch_sc_src + 2
+ch_sc_cnt      equ ch_sc_dst + 2
+ch_dbl         equ ch_sc_cnt + 2    ; 8: the value being converted...
+ch_dmax        equ ch_dbl + 8       ; 8: ...and the largest seen
+ch_title       equ ch_dmax + 8      ; -> the chart's title, or 0 for none
 ch_legy        equ ch_title + 2     ; the legend row being drawn...
 ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
 ch_arr2        equ ch_legr + 2       ; --- the SECOND series (82.8) ---
@@ -1420,11 +1693,44 @@ ch_l2e2        equ ch_l2err + 2
 ct_mincol2  equ ch_l2e2 + 2         ; the SECOND series' column...
 ct_t2cnt    equ ct_mincol2 + 2      ; ...how many cells it has...
 ct_t2row    equ ct_t2cnt + 2        ; ...and its rows and values
-ct_t2val    equ ct_t2row + CH_MAXBARS * 2
+ct_t2val    equ ct_t2row + CH_MAXBARS * 2   ; ...as DOUBLES, like ct_tval
+ct_wvals    equ ct_t2val + CH_MAXBARS * 8   ; ch_scale's output: the signed
+ct_w2vals   equ ct_wvals + CH_MAXBARS * 2   ; words the drawing reads, plus
+                                             ; [ch_e10] to say what they mean
 ct_wantcol  equ ct_t2val + CH_MAXBARS * 2   ; word: 0 = chart the lowest
                                              ; column, else the 1-based column
                                              ; Data > Column asked for
-ct_bss_end  equ ct_wantcol + 2
+fp_as             equ ct_wantcol + 2   ; --- os88fp.inc's caller-declared
+fp_bs             equ fp_as + 1        ; storage, exactly as its header lists
+fp_ae             equ fp_bs + 1        ; it and exactly as sheet.asm declares
+fp_be             equ fp_ae + 2        ; it
+fp_am0            equ fp_be + 2
+fp_am1            equ fp_am0 + 2
+fp_am2            equ fp_am1 + 2
+fp_am3            equ fp_am2 + 2
+fp_bm0            equ fp_am3 + 2
+fp_bm1            equ fp_bm0 + 2
+fp_bm2            equ fp_bm1 + 2
+fp_bm3            equ fp_bm2 + 2
+fp_t0             equ fp_bm3 + 2
+fp_t1             equ fp_t0 + 2
+fp_t2             equ fp_t1 + 2
+fp_t3             equ fp_t2 + 2
+fp_p0             equ fp_t3 + 2        ; 8 words: the 128-bit product
+fp_sticky         equ fp_p0 + 16
+fp_tmp            equ fp_sticky + 2
+fp_dig            equ fp_tmp + 2       ; 24: fp_ftoa's digit string
+fp_d10            equ fp_dig + 24
+fp_nd             equ fp_d10 + 2
+fp_sgn            equ fp_nd + 2
+fp_sq             equ fp_sgn + 2       ; 8: fp_sqrt's input, across iterations
+fp_g              equ fp_sq + 8        ; 8: its running guess
+fp_tv             equ fp_g + 8         ; 8: fp_floor's general temporary
+fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
+fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
+fp_x2             equ fp_x1 + 10       ; 10: B
+fp_sw             equ fp_x2 + 10       ; where the status word lands
+ct_bss_end  equ fp_sw + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting

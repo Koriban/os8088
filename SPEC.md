@@ -68021,6 +68021,81 @@ off-by-one, because the chart it drew was a real chart of real data.
 re-reading it under a new column now run the same dispatch, rather than two
 copies that drift.
 
+### 82.13 The series carries a decimal exponent
+
+Every value the chart touched was a **signed 16-bit integer**, and by stage 4.0
+the thing being charted was not. A column of 43.6 and 44.1 drew two bars of 43
+and 44 — visibly the wrong heights, with a scale that said 44 — and a column in
+millions arrived *already wrapped*, so the chart drawn from it was not so much
+wrong as unrelated. CHART.O88 had it worse still: its BIFF reader accepted the
+one RK subtype that is an integer and **skipped the cell** otherwise, so a file
+holding 43.6 charted as an empty sheet with no message.
+
+**The geometry never needed doubles.** A bar's length is `value * span / max`,
+which is unchanged if every value in the series is multiplied by the same power
+of ten. So the arithmetic change is one decision per series, not a rewrite of
+the drawing: `ch_scale` reads the doubles, picks an exponent `E`, and writes the
+signed words the drawing already runs on. Only the LABELS need to know, and
+`ch_e10` is how they are told.
+
+`E` puts the largest absolute value as close to 32767 as it will go, capped at
+`CH_E10_MAX` = 4 and `CH_E10_MIN` = -9:
+
+- **Positive `E`** keeps fractions — 44.1 becomes 4410 with `E` = 2.
+- **Negative `E`** is what makes a large series chartable at all — 3,400,000
+  becomes 3400 with `E` = -3. This was not a fidelity improvement; it was a
+  whole range of data that could not previously be drawn.
+
+Scaling rounds rather than truncates (`fp_round` then `fp_a2i`): `fp_a2i` alone
+is short by up to a whole unit at the top of the scale, which is a visible
+pixel error on the tallest bar.
+
+`ch_num_t` turns a scaled word back into what it stands for — `E` digits after
+a point, or `|E|` zeros on the end — and then **trims trailing zeros and a bare
+point**, because the scale is chosen for the largest value in the series and
+every other label would otherwise wear its decimals whether it needed them or
+not: `44.10` where the number is 44.1, and `0.00` — or, at a negative exponent,
+`0000` — where the number is 0.
+
+**Two series, one exponent word.** Scatter and Combination (§82.8) each draw
+against their own `ch_max`/`ch_max2`, and only the first is labelled. So both
+callers scale **series two first and series one last**, leaving `ch_e10`
+holding the series the value axis is drawn from.
+
+#### 82.13.1 What each caller had to change
+
+**CHART.O88 now includes `os88fp.inc`.** It had no floating point at all, and
+it needs it in three places: `ct_esatof` for SYLK's and DIF's decimal text
+(`fp_atof` reads DS and every reader has the file staged in ES, so the number
+is copied into a DS scratch first — sheet.asm's `sh_esatof` is the same shape),
+`ct_rkdec` for **all four** RK subtypes rather than the one, and the NUMBER
+record (0203H), which is the only way a value that is not an exact small
+integer reaches a BIFF file at all. Its collection arrays widen from words to
+doubles, and `ct_dslot` is the one place the stride-8 multiply lives.
+
+**Sheet's live chart** stages doubles at `SH_CHART_D1`/`SH_CHART_D2` in
+`sh_stgseg` and scales them into the word arrays at 0 and `SH_CHART_S2` that
+`ch_draw` already read. Its scan takes the whole value with
+`sh_cellval_to_acc_si` rather than the truncation `sh_cellint_si` gave it.
+
+**One trap, twice.** Both scans keep their record index in **CX**, and both new
+eight-byte copies wanted CX as a counter. In `sh_chart_scan1` that would have
+restarted the walk; in `ct_read_biff` the NUMBER path ate the walk's own end
+bound, which is why `ct_biffend` exists. The same shape as §81.19's `DX` and
+§82.10's `BX`: a register that is correct when it is written and destroyed by
+the loop body added underneath it.
+
+**And one that a helper invited.** Widening four arrays from words to doubles
+means a stride-8 multiply at every site, so it went into one routine — which
+folded the BASE address in as well, `SI = &ct_tval[i]`. Two of its four callers
+wanted a different array: the second series wrote over the first, and
+`ct_finalize`'s sort swapped `ct_tval` rather than the collected `ct_vals`. It
+returns the OFFSET now and each site names its own base. Neither fault showed
+in any of the charts tested up to that point, because both need data the
+earlier tests did not have — a second column, and rows arriving out of order.
+The fixture that caught the sort is a SYLK file whose rows are written 4, 1, 3,
+2; it charts 40, 30, 15, 5.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

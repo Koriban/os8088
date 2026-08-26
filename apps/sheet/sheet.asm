@@ -258,6 +258,10 @@ SH_CHART_S2  equ 512                ; where a chart's SECOND series lands in
                                     ; sh_stgseg - the first sits at 0 and needs
                                     ; CH_MAXBARS words, so 512 is clear of it
                                     ; with room to spare
+SH_CHART_D1  equ 1024               ; stage 4.6: and where the DOUBLES the scan
+SH_CHART_D2  equ 1536               ; collects sit, before ch_scale turns them
+                                    ; into the two word arrays above. Same 512
+                                    ; spacing; CH_MAXBARS doubles is 320
 SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; offscreen 4bpp canvas - 240x160px, 120
                                      ; bytes/row (already a multiple of 4, so
@@ -5145,7 +5149,7 @@ sh_chart_scan:
     push ax
     mov ax, [sh_chart_col]
     mov [sh_scan_col], ax
-    mov word [sh_scan_off], 0
+    mov word [sh_scan_off], SH_CHART_D1
     call sh_chart_scan1
     mov ax, [sh_chart_cnt2]           ; sh_chart_scan1 leaves its count here
     mov [sh_chart_cnt], ax
@@ -5154,7 +5158,7 @@ sh_chart_scan:
     cmp ax, SH_COLS
     jae .nosecond
     mov [sh_scan_col], ax
-    mov word [sh_scan_off], SH_CHART_S2
+    mov word [sh_scan_off], SH_CHART_D2
     call sh_chart_scan1
     jmp .done
 .nosecond:
@@ -5165,6 +5169,29 @@ sh_chart_scan:
     mov [ch_cnt2], ax
     mov ax, [sh_stgseg]
     mov [ch_srcseg2], ax
+    ; --- the doubles become the words the drawing runs on (82.13) ----------
+    ; SERIES TWO FIRST, so [ch_e10] is left holding SERIES ONE's exponent:
+    ; that is the series the value axis is labelled from.
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, [sh_stgseg]
+    mov si, SH_CHART_D2
+    mov di, SH_CHART_S2
+    mov cx, [sh_chart_cnt2]
+    call ch_scale
+    mov dx, [sh_stgseg]
+    mov si, SH_CHART_D1
+    xor di, di
+    mov cx, [sh_chart_cnt]
+    call ch_scale
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -5211,15 +5238,31 @@ sh_chart_scan1:
     pop cx
     jmp .havevalue
 .plainval:
-    call sh_cellint_si                 ; the chart plots whole numbers, so the
-    mov dx, ax                         ; value is truncated here rather than
-.havevalue:                            ; read as the low half of its double
-    mov bx, [sh_chart_cnt2]
-    shl bx, 1
-    mov di, bx
-    add di, [sh_scan_off]
+    call sh_cellval_to_acc_si          ; the WHOLE double, not the truncation
+                                        ; of it: the chart plots 43.6 as 43.6
+                                        ; now (82.13), and ch_scale is what
+                                        ; turns the series into the words the
+                                        ; drawing runs on
+.havevalue:                            ; the value is in sh_acc either way
+    mov ax, [sh_chart_cnt2]
+    mov dx, 8
+    mul dx
+    add ax, [sh_scan_off]
+    mov di, ax
     mov es, [sh_stgseg]
-    mov [es:di], dx
+    push cx                            ; CX IS THIS SCAN'S OWN RECORD INDEX -
+    push si                            ; the copy below needs a counter, and
+    mov si, sh_acc                     ; borrowing it would restart the walk
+    mov cx, 4
+.vcopy:
+    mov ax, [si]
+    mov [es:di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .vcopy
+    pop si
+    pop cx
     inc word [sh_chart_cnt2]
 .next:
     inc cx
@@ -18390,7 +18433,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3037
+    OS88_BSS 3071
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18794,8 +18837,19 @@ ch_trow        equ ch_tglyph + 2
 ch_tcol        equ ch_trow + 2
 ch_tpy         equ ch_tcol + 2
 ch_tbits       equ ch_tpy + 2
-ch_tnum        equ ch_tbits + 2       ; 8: ch_itoa_t's output
-ch_title       equ ch_tnum + 8      ; -> the chart's title, or 0 for none
+ch_tnum        equ ch_tbits + 2       ; 16: ch_itoa_t's/ch_num_t's output -
+                                      ; eight held "-32768" and nothing more,
+                                      ; and a scaled label can carry a point
+                                      ; and four digits, or nine trailing
+                                      ; zeros (see ch_scale)
+ch_e10         equ ch_tnum + 16     ; the series' decimal exponent (82.13)
+ch_sc_seg      equ ch_e10 + 2       ; ch_scale's own scratch
+ch_sc_src      equ ch_sc_seg + 2
+ch_sc_dst      equ ch_sc_src + 2
+ch_sc_cnt      equ ch_sc_dst + 2
+ch_dbl         equ ch_sc_cnt + 2    ; 8: the value being converted...
+ch_dmax        equ ch_dbl + 8       ; 8: ...and the largest seen
+ch_title       equ ch_dmax + 8      ; -> the chart's title, or 0 for none
 ch_legy        equ ch_title + 2     ; the legend row being drawn...
 ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
 ch_arr2        equ ch_legr + 2       ; --- the SECOND series (82.8) ---

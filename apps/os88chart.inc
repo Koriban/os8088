@@ -54,6 +54,11 @@
 ;   ch_bx1, ch_by1, ch_bx2, ch_by2, ch_srcseg, ch_stgseg
 ; (11 words, 22 bytes total)
 ;
+; ...and, if you call ch_scale (stage 4.6, the decimal series - see its own
+; header), these as well, plus `%include "os88fp.inc"` BEFORE this file:
+;   ch_e10, ch_sc_seg, ch_sc_src, ch_sc_dst, ch_sc_cnt   (5 words)
+;   ch_dbl, ch_dmax, ch_dtmp                             (3 x 8 bytes)
+;
 ; --- IN A PACKAGE ------------------------------------------------------------
 ; `%include "os88chart.inc"` AT THE END OF YOUR CODE, just before OS88_BSS -
 ; not up beside os88api.inc, for the same fixed-offset reason os88ui.inc's
@@ -949,7 +954,7 @@ ch_deco:
     ; the canvas top and zero just above the axis, which is the opposite of what
     ; the first version computed - it put every label in the bottom eight rows.
     mov ax, [ch_max]
-    call ch_itoa_t
+    call ch_num_t 
     mov ax, CH_DECO_LX
     xor bx, bx                        ; the top
     mov si, ch_tnum
@@ -957,7 +962,7 @@ ch_deco:
     call ch_text
 
     xor ax, ax                        ; zero, just above the axis line
-    call ch_itoa_t
+    call ch_num_t 
     mov ax, CH_DECO_LX
     mov bx, [ch_base]
     sub bx, CH_GLYPH_H
@@ -973,7 +978,7 @@ ch_deco:
     je .nolow                         ; bottom, because the axis is mid-canvas
     mov ax, [ch_max]
     neg ax
-    call ch_itoa_t
+    call ch_num_t 
     mov ax, CH_DECO_LX
     mov bx, CH_H - CH_GLYPH_H
     mov si, ch_tnum
@@ -1080,7 +1085,7 @@ ch_legend:
     add si, ax
     mov ax, [es:si]
     pop es
-    call ch_itoa_t
+    call ch_num_t 
     mov ax, CH_W - 46 + CH_LEG_SW + 3
     mov bx, [ch_legy]
     dec bx
@@ -1716,6 +1721,390 @@ ch_itoa_t:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_num_t (stage 4.6) - AX = one of the scaled words, [ch_e10] = the series'
+; exponent; the VALUE that word stands for, as text, into ch_tnum.
+;
+; value = word / 10^E. A positive E means the series was multiplied up to keep
+; its fractions, so E digits come after the point; a NEGATIVE one means it was
+; divided down to fit a signed word at all, so |E| zeros go on the end. E = 0
+; is ch_itoa_t exactly, and that is the common case.
+; -----------------------------------------------------------------------------
+CH_TNUM_MAX equ 15                    ; ch_tnum is 16 bytes in both callers
+
+ch_num_t:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov cx, [ch_e10]
+    or cx, cx
+    jz .plain
+    js .zeros
+    ; --- E > 0: a whole part, a point, and exactly E digits ----------------
+    mov bx, 1                         ; BX = 10^E; ch_scale caps E at 4, so
+.fpow:                                ; this cannot overflow a word
+    cmp cx, 0
+    jle .fhave
+    push ax
+    mov ax, bx
+    mov dx, 10
+    mul dx
+    mov bx, ax
+    pop ax
+    dec cx
+    jmp .fpow
+.fhave:
+    push bx                           ; the divisor, wanted again below
+    mov cx, 0                         ; CX = 1 once a '-' has been emitted
+    or ax, ax
+    jns .fpos
+    neg ax
+    mov cx, 1
+.fpos:
+    xor dx, dx
+    div bx                            ; AX = whole part, DX = the remainder
+    push dx
+    push cx
+    call ch_itoa_t                    ; the whole part, from the START of
+    pop cx                            ; ch_tnum - which is why the sign is
+    pop dx                            ; re-applied afterwards rather than
+    pop bx                            ; written first and overwritten
+    or cx, cx
+    jz .fnosign
+    call ch_tnum_neg                  ; shuffle a '-' in at the front
+.fnosign:
+    mov di, ch_tnum
+.fend:
+    cmp byte [di], 0
+    je .fpoint
+    inc di
+    jmp .fend
+.fpoint:
+    mov byte [di], '.'
+    inc di
+.floop:
+    mov ax, bx                        ; the next place value down
+    push dx
+    xor dx, dx
+    mov cx, 10
+    div cx
+    mov bx, ax
+    pop dx
+    or bx, bx
+    jz .fdone
+    mov ax, dx
+    xor dx, dx
+    div bx                            ; AL = this digit, DX = what is left
+    add al, '0'
+    mov [di], al
+    inc di
+    jmp .floop
+.fdone:
+    mov byte [di], 0
+    call ch_tnum_trim                 ; 44.10 is what the SCALE happens to be
+    jmp .out                          ; in; 44.1 is the number
+    ; --- E < 0: the mantissa, then |E| zeros -------------------------------
+.zeros:
+    or ax, ax                         ; ...but zero is zero at every scale,
+    jz .plain                         ; and "0000" is not how anyone writes it
+    call ch_itoa_t
+    neg cx
+    mov di, ch_tnum
+.zend:
+    cmp byte [di], 0
+    je .zput
+    inc di
+    jmp .zend
+.zput:
+    cmp cx, 0
+    jle .zdone
+    mov ax, di
+    sub ax, ch_tnum
+    cmp ax, CH_TNUM_MAX               ; never past the buffer: a truncated
+    jae .zdone                        ; label beats a smashed neighbour
+    mov byte [di], '0'
+    inc di
+    dec cx
+    jmp .zput
+.zdone:
+    mov byte [di], 0
+    jmp .out
+.plain:
+    call ch_itoa_t
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ch_tnum_trim - drop trailing zeros from a fractional ch_tnum, and then the
+; point if nothing is left after it. The scale is chosen for the largest value
+; in the series, so every OTHER label wears its decimals whether it needs them
+; or not - 44.10 rather than 44.1, and 0.00 rather than 0.
+ch_tnum_trim:
+    push ax
+    push si
+    push di
+    mov di, ch_tnum
+    xor ax, ax                        ; AL = 1 once a '.' has been seen
+.scan:
+    cmp byte [di], 0
+    je .atend
+    cmp byte [di], '.'
+    jne .nodot
+    mov al, 1
+.nodot:
+    inc di
+    jmp .scan
+.atend:
+    or al, al
+    jz .out                           ; no point: nothing to trim
+.back:
+    dec di
+    cmp byte [di], '0'
+    jne .maybedot
+    mov byte [di], 0
+    jmp .back
+.maybedot:
+    cmp byte [di], '.'
+    jne .out
+    mov byte [di], 0
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; ch_tnum_neg - put a '-' in front of what is already in ch_tnum, shuffling
+; the rest along. Used by ch_num_t, whose whole part is formatted unsigned.
+ch_tnum_neg:
+    push ax
+    push cx
+    push si
+    push di
+    mov di, ch_tnum
+    xor cx, cx
+.len:
+    cmp byte [di], 0
+    je .have
+    inc di
+    inc cx
+    jmp .len
+.have:
+    cmp cx, CH_TNUM_MAX - 1
+    jae .out
+    mov si, di                        ; DI is the NUL; move everything up one,
+    inc di                            ; right to left, the NUL included
+.shift:
+    mov al, [si]
+    mov [di], al
+    cmp si, ch_tnum
+    je .signit
+    dec si
+    dec di
+    jmp .shift
+.signit:
+    mov byte [ch_tnum], '-'
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ch_scale (stage 4.6) - a series of DOUBLES becomes the signed words the
+; drawing runs on, plus the decimal exponent that says what they mean.
+;
+; in:  DX = the segment holding BOTH arrays, SI = the double array's offset,
+;      DI = the word array's offset, CX = the count
+; out: the word array filled, [ch_e10] = E, where value = word / 10^E.
+;
+; The geometry never needed doubles: a bar's length is value*span/max, which
+; is unchanged if every value in the series is multiplied by the same power of
+; ten. Only the LABELS need to know, so the whole of the arithmetic change is
+; choosing one exponent per series and telling ch_num_t about it.
+;
+; E is chosen to put the largest value as close to 32767 as it will go:
+;   * POSITIVE E keeps fractions - a column of 43.6 and 44.1 charted as 43 and
+;     44, two bars of visibly wrong height and a scale that said 44.
+;   * NEGATIVE E is what makes a series in millions chartable AT ALL. The
+;     array is signed words, so 1,200,000 used to arrive already wrapped, and
+;     the chart drawn from it was not wrong so much as unrelated.
+; E is capped at 4 above (a word cannot hold more than four useful decimals)
+; and 9 below (the largest a double-digit label will carry).
+;
+; Requires os88fp.inc, %included BEFORE this file.
+; -----------------------------------------------------------------------------
+CH_E10_MAX equ 4
+CH_E10_MIN equ -9
+
+ch_scale:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [ch_sc_seg], dx
+    mov [ch_sc_src], si
+    mov [ch_sc_dst], di
+    mov [ch_sc_cnt], cx
+    mov word [ch_e10], 0
+    or cx, cx
+    jz .out
+
+    ; --- pass 1: the largest abs() in the series ---------------------------
+    mov word [ch_dmax], 0
+    mov word [ch_dmax+2], 0
+    mov word [ch_dmax+4], 0
+    mov word [ch_dmax+6], 0
+    xor bx, bx
+.p1:
+    call ch_sc_fetch                  ; ch_dbl = value[BX]
+    and byte [ch_dbl+7], 0x7F         ; abs(), by the sign BIT - exact, and
+    mov si, ch_dbl                    ; cheaper than unpacking to negate
+    call fp_unpack_a
+    mov si, ch_dmax
+    call fp_unpack_b
+    call fp_cmpab
+    jle .p1n
+    mov si, ch_dbl                    ; a new largest
+    mov di, ch_dmax
+    call ch_sc_copy8
+.p1n:
+    inc bx
+    cmp bx, [ch_sc_cnt]
+    jb .p1
+
+    ; --- choose E ----------------------------------------------------------
+    mov si, ch_dmax                   ; a series of nothing but zeros has no
+    call fp_unpack_a                  ; scale to choose, and walking the loops
+    mov bx, fp_am0                    ; below would settle on E=4 and label
+    call fp_iszero                    ; every tick "0.0000"
+    jc .havee0
+    ; Walk UP while max*10^(E+1) still fits a signed word, then DOWN while it
+    ; does not fit at all. Both loops are bounded by the caps, and the test is
+    ; the same one either way: scale a copy and ask fp_a2i.
+    xor cx, cx
+.up:
+    cmp cx, CH_E10_MAX
+    jge .down
+    mov si, ch_dmax
+    call fp_unpack_a
+    push cx
+    inc cx
+    call fp_scale10
+    pop cx
+    call fp_a2i
+    jc .down                          ; would not fit: CX is already the most
+    inc cx                            ; we can keep
+    jmp .up
+.down:
+    mov si, ch_dmax
+    call fp_unpack_a
+    call fp_scale10
+    call fp_a2i
+    jnc .havee                        ; fits: this E is the one
+    cmp cx, CH_E10_MIN
+    jle .havee                        ; nothing more we can do - the clamp in
+    dec cx                            ; pass 2 catches what is left
+    jmp .down
+.havee:
+    mov [ch_e10], cx
+    jmp .p2start
+.havee0:
+    mov word [ch_e10], 0
+
+    ; --- pass 2: every value, scaled and rounded --------------------------
+.p2start:
+    xor bx, bx
+.p2:
+    call ch_sc_fetch
+    mov si, ch_dbl
+    call fp_unpack_a
+    mov cx, [ch_e10]
+    call fp_scale10
+    xor cx, cx
+    call fp_round                     ; to the nearest whole one, half away
+    call fp_a2i                       ; from zero - fp_a2i truncates, and a
+                                      ; truncated bar is short by up to one
+                                      ; whole unit at the top of the scale
+    push ax
+    mov ax, bx
+    shl ax, 1
+    add ax, [ch_sc_dst]
+    mov di, ax
+    pop ax
+    mov es, [ch_sc_seg]
+    mov [es:di], ax
+    inc bx
+    cmp bx, [ch_sc_cnt]
+    jb .p2
+.out:
+    pop es
+    pop di
+    pop dx
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ch_sc_fetch - ch_dbl = the BX'th double of the source array. BX preserved.
+ch_sc_fetch:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov ax, bx
+    mov cx, 8
+    mul cx
+    add ax, [ch_sc_src]
+    mov si, ax
+    mov es, [ch_sc_seg]
+    mov di, ch_dbl
+    mov cx, 4
+.c:
+    mov ax, [es:si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .c
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; ch_sc_copy8 - eight bytes, DS:SI -> DS:DI. Both preserved.
+ch_sc_copy8:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, 4
+.c:
+    mov ax, [si]
+    mov [di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .c
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
