@@ -67452,6 +67452,45 @@ not duplicated, and `sh_fdlg_apply` walks the normalised range over it. A
 single-cell selection is a 1x1 range, so the old behaviour is a special case of
 the new one rather than a branch. One `sh_repaint` runs after the whole block.
 
+### 81.18 Copy, Cut and Paste move a BLOCK, as tab-separated text
+
+Copy took the anchor cell, Cut cleared the anchor after copying the anchor,
+and Paste wrote one cell. Selecting a table and copying it gave you one corner
+of it — the last of the range-blind commands (§81.17), and the only one that
+needed more than a loop, because **the clipboard held one cell's text**.
+
+The block goes out as **tabs between columns, CR/LF between rows, and nothing
+after the last one**. That is what Excel puts on the clipboard; it makes a 1x1
+block byte-identical to what this wrote before, so nothing that pasted from
+Sheet has to change; and because it is plain text on the *system* clipboard
+(§59), a copied table pastes into Word as a table that lines up.
+
+It is built in **the staging segment**, not in bss — the same scratch a file
+save already uses, so a block costs no resident bytes and is bounded by
+`SH_STAGE_MAX` rather than by a new buffer.
+
+**Paste moves the selection and calls `sh_commit` for each cell** rather than
+reimplementing the decision. `sh_commit` is the one place that decides whether
+text is a formula, a number or a label; a second copy of that rule would be a
+second answer, and this file has already been bitten by two copies of one
+decision (§81.17's dead `sh_docmd_clear`). The selection is put back when the
+block is done.
+
+**Every cell shifts by the same delta** — where the block landed, less where
+it was copied from — which is Excel's rule and what keeps a copied column of
+`=A1*B1` lining up a column over. `sh_clip_col`/`sh_clip_row` are now the
+selection's **top-left**, not the anchor: a drag can start at any corner, and
+the shift must be measured from where the block begins.
+
+**A bug this uncovered, in the old single-cell path.** Copy built its text
+inline and got two of the three cases wrong: it read a **word** at `SH_C_VAL`
+and ran `sh_itoa` over it — which is what everything did before stage 4.0, and
+is meaningless now that the value is an eight-byte double whose low word is
+mantissa bits — and it had no case for a **label** at all, so copying a column
+heading ran the numeric path over its text offset. `sh_cell_totext` is the one
+routine now. `sh_cellnum` had existed for exactly this since stage 4.0, and
+its own comment describes the very pattern Copy was still using.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

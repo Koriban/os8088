@@ -4214,6 +4214,73 @@ sh_docmd_edit:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_cell_totext - the text of the cell at (AX,BX) into sh_clipbuf: a formula's
+; own source with its '=' restored, a label's characters, or a number as
+; decimal. An empty cell gives an empty string. out: CX = the length.
+;
+; Copy used to do this inline and got two of the three wrong. It read a WORD at
+; SH_C_VAL and ran sh_itoa over it - which is what everything did before stage
+; 4.0, and is meaningless now that the value is an eight-byte double whose low
+; word is mantissa bits (sh_cellnum exists to say exactly that). And it had no
+; case for a label at all, so copying a column heading ran the numeric path
+; over its text offset. One routine now, so the next thing that needs a cell as
+; text cannot get a third answer.
+; -----------------------------------------------------------------------------
+sh_cell_totext:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    mov byte [sh_clipbuf], 0
+    call sh_findcell
+    jnc .count
+    mov es, [sh_cellseg]
+    test byte [es:di+4], 1            ; HASFORMULA
+    jz .notformula
+    mov ax, [es:di+SH_C_FOFF]
+    mov byte [sh_clipbuf], '='
+    mov di, sh_clipbuf + 1
+    jmp .arena
+.notformula:
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    je .label
+    call sh_cellnum                   ; the eight value bytes, as decimal
+    mov si, sh_numbuf
+    mov di, sh_clipbuf
+    call sh_strcpy
+    jmp .count
+.label:
+    mov ax, [es:di+SH_C_FOFF]         ; a label shares the formula arena
+    mov di, sh_clipbuf
+.arena:
+    mov si, ax
+    mov es, [sh_txtseg]
+.acopy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .acopy
+.count:
+    xor cx, cx
+    mov si, sh_clipbuf
+.cnt:
+    cmp byte [si], 0
+    je .out
+    inc si
+    inc cx
+    jmp .cnt
+.out:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_docmd_copy - builds the selected cell's text (a formula's own source
 ; text with its '=' restored, or a plain value's decimal text - the same
 ; two cases sh_beginedit already knows how to build, just targeting
@@ -4228,63 +4295,85 @@ sh_docmd_copy:
     push si
     push di
     push es
+    ; THE TOP-LEFT of the selection, not the anchor: a drag can start at any
+    ; corner, and Paste's reference shift is measured from where the block
+    ; began rather than from where the mouse went down.
     mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    mov [sh_clip_col], ax              ; stage 2.x: remember where this
-    mov [sh_clip_row], bx              ; copy came from, so a later Paste
-    mov byte [sh_clip_valid], 1        ; can adjust relative references -
-                                        ; see the section comment above
-                                        ; sh_copy_shift
-    call sh_findcell
-    jnc .empty
-    push es
-    mov es, [sh_cellseg]
-    test byte [es:di+4], 1
-    jz .plainval
-    mov ax, [es:di+SH_C_FOFF]                 ; formula_off
-    pop es
-    mov byte [sh_clipbuf], '='
-    mov di, sh_clipbuf + 1
-    mov si, ax
-    push es
-    mov es, [sh_txtseg]
-.copyf:
-    mov al, [es:si]
-    mov [di], al
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .cpc
+    xchg ax, bx
+.cpc:
+    mov [sh_clip_col], ax
+    mov cx, bx                         ; cx = last column
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .cpr
+    xchg ax, bx
+.cpr:
+    mov [sh_clip_row], ax
+    mov byte [sh_clip_valid], 1
+    ; --- build the block as TAB-SEPARATED TEXT in the staging segment ------
+    ; Tabs between columns, CR/LF between rows, and nothing after the last
+    ; one - which is exactly what Excel puts on the clipboard, makes a 1x1
+    ; block byte-identical to what this used to write, and means a copied
+    ; block pastes into Word as text that lines up.
+    push bp
+    mov es, [sh_stgseg]
+    xor di, di                         ; di = the write cursor
+    mov dx, ax                         ; dx = the current row
+.rowloop:
+    mov bp, [sh_clip_col]              ; bp = the current column
+.colloop:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, bp
+    mov bx, dx
+    call sh_cell_totext                ; -> sh_clipbuf, CX = length
+    mov si, sh_clipbuf
+.emit:
+    or cx, cx
+    jz .emitted
+    cmp di, SH_STAGE_MAX - 4           ; the staging area is the bound here
+    jae .emitted
+    mov al, [si]
+    mov [es:di], al
     inc si
     inc di
-    or al, al
-    jnz .copyf
-    pop es
-    jmp .havelen
-.plainval:
-    mov ax, [es:di+SH_C_VAL]
-    pop es
-    call sh_itoa
-    mov si, sh_numbuf
-    mov di, sh_clipbuf
-    call sh_strcpy
-.havelen:
-    xor cx, cx
-    mov si, sh_clipbuf
-.cnt:
-    cmp byte [si], 0
-    je .putclip
-    inc si
-    inc cx
-    jmp .cnt
-.putclip:
-    mov ax, ds
-    mov es, ax
-    mov si, sh_clipbuf
-    call OSAPI_CLIP_PUT
-    jmp .out
-.empty:
-    mov ax, ds
-    mov es, ax
-    mov si, sh_clipbuf
-    xor cx, cx
-    call OSAPI_CLIP_PUT
+    dec cx
+    jmp .emit
+.emitted:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    cmp bp, cx
+    jae .rowend
+    cmp di, SH_STAGE_MAX - 4
+    jae .rowend
+    mov byte [es:di], 9                ; TAB between columns
+    inc di
+    inc bp
+    jmp .colloop
+.rowend:
+    cmp dx, bx                         ; bx is still the last row
+    jae .blockdone
+    cmp di, SH_STAGE_MAX - 4
+    jae .blockdone
+    mov byte [es:di], 13               ; CR/LF between rows, none after the
+    inc di                             ; last - so a single cell is exactly
+    mov byte [es:di], 10               ; its own text, as before
+    inc di
+    inc dx
+    jmp .rowloop
+.blockdone:
+    pop bp
+    mov cx, di
+    xor si, si
+    call OSAPI_CLIP_PUT                ; ES is already the staging segment
 .out:
     pop es
     pop di
@@ -4296,15 +4385,48 @@ sh_docmd_copy:
 
 ; sh_docmd_cut - Copy, then Clear
 sh_docmd_cut:
-    call sh_docmd_copy
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    call sh_docmd_copy                 ; the whole block goes to the clipboard,
+    mov ax, [sh_selrow]                ; so the whole block has to leave the
+    mov bx, [sh_selrow2]               ; sheet - it cleared the anchor alone
+    cmp ax, bx                         ; and left the rest of what it had just
+    jbe .cutrows                       ; copied sitting there
+    xchg ax, bx
+.cutrows:
+    mov cx, [sh_selcol]
+    mov si, [sh_selcol2]
+    cmp cx, si
+    jbe .cutcols
+    xchg cx, si
+.cutcols:
+.cutcolloop:
+    mov di, ax
+.cutrowloop:
+    push ax
+    push bx
+    mov ax, cx
+    mov bx, di
     call sh_clearcell
+    pop bx
+    pop ax
+    inc di
+    cmp di, bx
+    jbe .cutrowloop
+    inc cx
+    cmp cx, si
+    jbe .cutcolloop
     mov si, [sh_ownwin]
     call sh_repaint
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
-
-; sh_docmd_clear
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_paste - reads the system clipboard straight into sh_editbuf
@@ -4321,37 +4443,150 @@ sh_docmd_paste:
     push ax
     push bx
     push cx
+    push dx
     push si
     push di
     push es
     call OSAPI_CLIP_SIZE
     jc .out
-    cmp ax, SH_EDITMAX
-    jbe .fits
-    mov ax, SH_EDITMAX
+    or ax, ax
+    jz .out
+    cmp ax, SH_STAGE_MAX - 2           ; the staging segment holds the block
+    jbe .fits                          ; while it is taken apart
+    mov ax, SH_STAGE_MAX - 2
 .fits:
     mov cx, ax
-    mov ax, ds
-    mov es, ax
-    mov di, sh_editbuf
+    mov es, [sh_stgseg]
+    xor di, di
     call OSAPI_CLIP_GET
-    mov bx, cx
-    mov byte [sh_editbuf + bx], 0
+    mov [sh_pb_len], cx
+    mov ax, [sh_selcol]                ; where the block lands
+    mov [sh_pb_c0], ax
+    mov ax, [sh_selrow]
+    mov [sh_pb_r0], ax
+    mov word [sh_pb_x], 0
+    mov word [sh_pb_y], 0
+    mov word [sh_pb_cur], 0
+.cell:
+    mov ax, [sh_pb_cur]
+    cmp ax, [sh_pb_len]
+    jae .done
+    ; --- one cell's text out of the block, up to TAB, CR, LF or the end ----
+    mov es, [sh_stgseg]
+    mov si, ax
+    mov di, sh_editbuf
+    xor cx, cx
+.take:
+    cmp si, [sh_pb_len]
+    jae .took
+    mov al, [es:si]
+    cmp al, 9
+    je .took
+    cmp al, 13
+    je .took
+    cmp al, 10
+    je .took
+    cmp cx, SH_EDITMAX
+    jae .took
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp .take
+.took:
+    mov byte [di], 0
+    mov [sh_editlen], cl
+    mov [sh_pb_cur], si                ; the terminator is consumed below
+    call sh_paste_cell
+    ; --- what ended it decides where the next one goes --------------------
+    mov es, [sh_stgseg]
+    mov si, [sh_pb_cur]
+    cmp si, [sh_pb_len]
+    jae .done
+    mov al, [es:si]
+    inc si
+    mov [sh_pb_cur], si
+    cmp al, 9                          ; TAB: the next column
+    jne .newrow
+    inc word [sh_pb_x]
+    jmp .cell
+.newrow:
+    cmp al, 13                         ; CR, and swallow an LF behind it
+    jne .lfonly
+    cmp si, [sh_pb_len]
+    jae .rowdone
+    cmp byte [es:si], 10
+    jne .rowdone
+    inc si
+    mov [sh_pb_cur], si
+.rowdone:
+.lfonly:
+    mov word [sh_pb_x], 0
+    inc word [sh_pb_y]
+    jmp .cell
+.done:
+    mov ax, [sh_pb_c0]                 ; put the selection back where it was
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov ax, [sh_pb_r0]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+    mov si, [sh_ownwin]                ; ONE repaint for the whole block
+    call sh_repaint
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_paste_cell - commit sh_editbuf into the block cell at (sh_pb_x, sh_pb_y),
+; shifting a formula's relative references by the SAME delta for every cell in
+; the block: where the block landed, less where it was copied from. That is
+; Excel's rule, and it is what makes a copied column of =A1*B1 still line up a
+; column over.
+;
+; It moves sh_selcol/sh_selrow and calls sh_commit rather than reimplementing
+; the decision, because sh_commit is the ONE place that decides whether text
+; is a formula, a number or a label - a second copy of that would be a second
+; answer. The selection is restored by the caller when the block is done.
+; -----------------------------------------------------------------------------
+sh_paste_cell:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov ax, [sh_pb_c0]
+    add ax, [sh_pb_x]
+    cmp ax, SH_COLS
+    jae .out                           ; a block that runs off the edge stops
+    mov [sh_selcol], ax                ; at it rather than wrapping
+    mov [sh_selcol2], ax
+    mov bx, [sh_pb_r0]
+    add bx, [sh_pb_y]
+    cmp bx, SH_ROWS
+    jae .out
+    mov [sh_selrow], bx
+    mov [sh_selrow2], bx
     cmp byte [sh_clip_valid], 0
-    je .noshift
+    je .commit
     cmp byte [sh_editbuf], '='
-    jne .noshift
-    mov ax, [sh_selcol]
+    jne .commit
+    mov ax, [sh_pb_c0]
     sub ax, [sh_clip_col]
     mov [sh_cp_coldelta], ax
-    mov bx, [sh_selrow]
+    mov bx, [sh_pb_r0]
     sub bx, [sh_clip_row]
     mov [sh_cp_rowdelta], bx
     or ax, bx
-    jz .noshift                        ; pasting to the very cell copied
-                                        ; from - nothing to adjust
+    jz .commit                         ; pasted onto the cell it came from
     mov si, sh_editbuf
-    inc si                             ; past the '='
+    inc si
     mov di, sh_rwsrc
 .copyin:
     mov al, [si]
@@ -4365,11 +4600,8 @@ sh_docmd_paste:
     mov byte [sh_editbuf], '='
     mov si, sh_rwdst
     mov di, sh_editbuf + 1
-    mov cx, SH_EDITMAX - 1             ; room left in sh_editbuf after the
-                                        ; '=' - a shifted reference can
-                                        ; grow a digit or two, so clip
-                                        ; rather than overrun
-.copyout:
+    mov cx, SH_EDITMAX - 1             ; a shifted reference can grow a digit
+.copyout:                              ; or two, so clip rather than overrun
     mov al, [si]
     or al, al
     jz .copyoutdone
@@ -4380,23 +4612,20 @@ sh_docmd_paste:
     jnz .copyout
 .copyoutdone:
     mov byte [di], 0
-.noshift:
     xor cx, cx
     mov si, sh_editbuf
-.lenloop:
+.relen:
     cmp byte [si], 0
-    je .havenewlen
+    je .haverelen
     inc si
     inc cx
-    jmp .lenloop
-.havenewlen:
+    jmp .relen
+.haverelen:
     mov [sh_editlen], cl
+.commit:
     mov byte [sh_editing], 1
     call sh_commit
-    mov si, [sh_ownwin]
-    call sh_repaint
 .out:
-    pop es
     pop di
     pop si
     pop cx
@@ -17474,7 +17703,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2997
+    OS88_BSS 3009
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18084,7 +18313,13 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-sh_tabanchor      equ fp_sw + 2        ; word: 0 = no Tab run in progress,
+sh_pb_c0          equ fp_sw + 2        ; the paste block's landing
+sh_pb_r0          equ sh_pb_c0 + 2     ; corner...
+sh_pb_x           equ sh_pb_r0 + 2     ; ...the cell being written
+sh_pb_y           equ sh_pb_x + 2
+sh_pb_cur         equ sh_pb_y + 2      ; ...and where the reader is
+sh_pb_len         equ sh_pb_cur + 2
+sh_tabanchor      equ sh_pb_len + 2        ; word: 0 = no Tab run in progress,
                                        ; else the run's start column PLUS ONE
 sh_fl_scol        equ sh_tabanchor + 2 ; sh_fill_copy's source cell...
 sh_fl_srow        equ sh_fl_scol + 2
