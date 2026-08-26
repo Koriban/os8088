@@ -67700,6 +67700,43 @@ separate ways and is worth recording because each failed silently:
 the caller's `ct_vals`-style arrays and nothing more; any count up to it now
 fits any axis, because the axis is divided rather than filled.
 
+### 82.10 `ct_render` must bank BX — the window pointer lives there
+
+`ch_draw` clobbers AX–DX, SI and DI, and says so in its own header. `ct_render`
+banked AX, CX, DX, SI and ES, and **not BX** — while `ct_ondlg` keeps the
+window pointer in BX across the call:
+
+```
+    mov bx, si          ; bx = our window ptr, stashed
+    ...
+    call ct_render      ; ch_draw clobbers BX
+    mov si, bx          ; ...and this hands ct_paint a GARBAGE window
+    call ct_paint       ; which blits 240x160 through whatever it points at
+```
+
+`ct_paint` reads the window's origin and size out of that record, so the blit
+landed at coordinates taken from unrelated memory. What it destroyed depended
+entirely on the data being charted, because the value left in BX is whatever
+`ch_draw`'s arithmetic happened to end on:
+
+- one document wiped the **kernel menu bar and the chart window's own frame** —
+  the bar redrew as the loaded file's name beside a menu titled "1", and the
+  window lost its title strip;
+- another blitted somewhere inert, so the canvas simply **stayed black** and
+  the chart looked like it had failed to load;
+- picking a type from the **Gallery afterwards fixed it**, because that path
+  restores SI through its own push/pop and never reads BX — which made the
+  fault look like "Open is broken" rather than a clobber.
+
+Nothing reported an error in any of the three.
+
+**The rule this restates:** a routine that calls into `os88chart.inc` banks
+every register it still needs, because the drawing entry points are documented
+as clobbering nearly all of them. `sh_chart_render` already did; `ct_render`
+is now the same. `tools/stkbalance.py` cannot see this class — the stack is
+balanced throughout, and what is wrong is the *contents* of a register, which
+needs a different gate than a depth walk.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

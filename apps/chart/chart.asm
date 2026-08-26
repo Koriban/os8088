@@ -170,10 +170,18 @@ ct_paint:
 ; -----------------------------------------------------------------------------
 ct_render:
     push ax
-    push cx
-    push dx
-    push si
-    push es
+    push bx                             ; ch_draw's own header says it clobbers
+    push cx                             ; ax-dx, si and di. BX was NOT banked
+    push dx                             ; here, and ct_ondlg keeps the WINDOW
+    push si                             ; POINTER in it across this call - so
+    push di                             ; `mov si, bx` fed ct_paint a garbage
+    push es                             ; window and OSAPI_GFX_BLIT4 wrote a
+                                        ; 240x160 image through whatever
+                                        ; coordinates that address happened to
+                                        ; hold: the menu bar and the window's
+                                        ; own frame, destroyed, with no error.
+                                        ; DI is banked for the same reason
+                                        ; before it costs someone else a day.
     mov word [ch_arr2], ct_t2val        ; the second series, if the file had a
     mov ax, [ct_t2cnt]                  ; second column (82.8)
     mov [ch_cnt2], ax
@@ -193,9 +201,11 @@ ct_render:
                                         ; sets; ch_draw falls back to the
                                         ; column chart for an unknown one
     pop es
+    pop di
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -284,14 +294,22 @@ ct_about:
 ; -----------------------------------------------------------------------------
 ct_toast:
     push ax
-    push cx
-    push es
-    push ds
+    push bx                             ; its header says "preserves all
+    push cx                             ; registers", and it banked only AX,
+    push dx                             ; CX and ES - a contract that was not
+    push si                             ; true. Nothing relies on it today,
+    push di                             ; but ct_render's missing `push bx`
+    push es                             ; cost a corrupted menu bar and a
+    push ds                             ; destroyed window frame (82.10), and
     pop es                              ; the kernel COPIES it (SPEC.md 59.3)
-    xor cx, cx
-    call OSAPI_TOAST
+    xor cx, cx                          ; that started as a contract someone
+    call OSAPI_TOAST                    ; read and believed
     pop es
+    pop di
+    pop si
+    pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
