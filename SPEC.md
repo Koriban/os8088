@@ -67737,6 +67737,33 @@ is now the same. `tools/stkbalance.py` cannot see this class — the stack is
 balanced throughout, and what is wrong is the *contents* of a register, which
 needs a different gate than a depth walk.
 
+### 82.11 A label is not a data point
+
+`ct_parse_c` recorded any `K` field as a number, and `ct_pint` on `K"Rent"`
+parses the opening quote as **0**. So every text cell became a zero-valued data
+point:
+
+- a column of row headings charted as a row of **zero bars** — and if it was
+  the lowest column, that was the whole chart: a flat line, or a pie of eight
+  zero slices with an empty circle;
+- every **header row** cell became a spurious leading zero in its own column,
+  so a chart of six figures drew seven bars.
+
+The other two readers already had this right, which is what makes it a defect
+rather than a design: `ct_read_biff` records only `RK` (numeric) cells and
+never `LABEL`, and `ct_read_dif` skips its type 1 explicitly. SYLK was the one
+format that turned text into data. It now skips a quoted `K` without recording
+anything, so a text column is simply absent from the candidates and the lowest
+NUMERIC column becomes the series.
+
+**What this deliberately does NOT do is guess which numeric column you meant.**
+A file whose columns are all numbers still charts the lowest one, and that is
+sometimes not the interesting one — a sheet of `Year, Population` charts the
+years. Nothing in the file distinguishes an index column from a data column,
+and Excel resolves it with the SELECTION, which `CHART.O88` has no equivalent
+of: it opens a file rather than charting a range. The honest options are to
+put the data column first, or to use Combination, which plots both.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

@@ -952,9 +952,29 @@ ct_parse_c:
     jmp .tok
 .isk:
     inc si
+    cmp si, bx
+    jae .tok
+    cmp byte [es:si], '"'               ; K"..." is a LABEL, not a number, and
+    je .istext                          ; a label is not a data point
     call ct_pint
     mov [ct_pval], ax
     mov byte [ct_phave], 1
+    jmp .tok
+.istext:
+    ; SKIP IT, recording nothing. ct_pint would have parsed the opening quote
+    ; as the number 0, so a column of row headings charted as a row of zero
+    ; bars and every header cell became a spurious leading zero in its own
+    ; column. The other two readers already got this right - BIFF records only
+    ; RK (numeric) cells and never LABEL, and the DIF reader skips its type 1
+    ; - so SYLK was the one that turned text into data.
+    inc si                              ; past the opening quote
+.txtskip:
+    cmp si, bx
+    jae .apply
+    mov al, [es:si]
+    inc si
+    cmp al, '"'
+    jne .txtskip
     jmp .tok
 .apply:
     cmp byte [ct_phave], 0
