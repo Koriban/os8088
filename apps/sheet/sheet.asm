@@ -13248,8 +13248,24 @@ sh_getcell2:
     test byte [es:di+4], 1            ; HASFORMULA
     jz .plain
     pop es
+    ; BANK THIS CELL'S OWN IDENTITY ACROSS THE EVALUATION. sh_eval_cell
+    ; recurses back through sh_getcell2 for every cell the formula names, and
+    ; each of those overwrites all three of these - so a formula rendered with
+    ; the FORMAT of the last cell it referenced, and, worse, with that cell's
+    ; TYPE and text offset: `=A2+0` where A2 holds a label drew the label.
+    ; The cell showed something that was not its value, and said nothing.
+    mov al, [sh_curfmt]
+    mov ah, [sh_curtype]
+    mov bx, [sh_curtoff]
+    push ax
+    push bx
     call sh_eval_cell                 ; leaves the full result in sh_acc, and
-    stc                               ; DX as its truncated form
+    pop bx                            ; DX as its truncated form
+    pop ax
+    mov [sh_curfmt], al
+    mov [sh_curtype], ah
+    mov [sh_curtoff], bx
+    stc
     jmp .out
 .plain:
     push si                           ; stage 4.0: the stored value is a full

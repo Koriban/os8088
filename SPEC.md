@@ -67387,6 +67387,32 @@ its OK handler.** `sh_fdlg_apply` only sets `sh_savepend`; `.doOK` calls
 a window slot the first still holds is how one ends up orphaned behind the
 other, and `MAX_WIN` is 12.
 
+### 81.16 A formula must not wear the last cell it referenced
+
+`sh_getcell2` reads a cell's format byte, `SH_T_*` tag and text offset into
+`sh_curfmt` / `sh_curtype` / `sh_curtoff`, and *then*, for a formula cell,
+calls `sh_eval_cell`. Evaluation recurses back through `sh_getcell2` for every
+cell the formula names, and each of those overwrites all three. A formula
+therefore rendered wearing the identity of **the last cell its own evaluation
+happened to touch**:
+
+- **the wrong format.** Giving `C2` a Currency format made `D2` — an
+  `=AVERAGE(B2:C2)` that was never formatted — start drawing as `$90`.
+- **the wrong TEXT.** `=A2+0`, where `A2` holds the label `Ann`, drew **`Ann`**.
+  `sh_curtype` said TEXT and `sh_curtoff` pointed at A2's string, so the
+  painter took its label path and printed another cell's words where a number
+  belonged.
+
+Both are display-only — the stored value was right the whole time, and the
+formula bar showed the real formula — which is exactly what makes it bad: the
+grid is what anyone reads. The three are now banked across the `sh_eval_cell`
+call and put back after.
+
+This is the same shape as §82.10: state that is correct when it is written and
+destroyed by a call made afterwards. There the register was BX and the callee
+was `ch_draw`; here it is three bss bytes and the callee is the evaluator
+re-entering the routine that set them.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
