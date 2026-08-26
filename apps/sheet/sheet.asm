@@ -59,7 +59,8 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'SHEET', sh_entry, 1
+    OS88_HEADER 'SHEET', sh_entry, 3   ; bit 0 = icon, bit 1 = the
+                                        ; association block below
 
 ; --- embedded 16x16 icon: a blank page with a 3x3 grid on it -------------------
     OS88_ICON16
@@ -96,6 +97,23 @@
     dw 0x0000
     dw 0x0000
     OS88_ICON16_END
+
+; The three sheet formats this app reads and writes, claimed so a document
+; opens on a DOUBLE-CLICK rather than only through File > Open (SPEC.md 54.6).
+; Declaring costs nothing at runtime - the mount's icon harvest already reads
+; this sector - and it works before Sheet has ever been run, which a runtime
+; OSAPI_ASSOC_SET claim does not.
+;
+; CHART.O88 reads the same three formats and deliberately does NOT claim them:
+; there is no ownership model (54.5), so a second declaration would simply
+; take the extension, and a spreadsheet file belongs to the spreadsheet. Chart
+; opens one through its own File > Open.
+    OS88_ASSOC16
+    db 3
+    OS88_ASSOC_EXT 'SLK'
+    OS88_ASSOC_EXT 'DIF'
+    OS88_ASSOC_EXT 'BIF'
+    OS88_ASSOC16_END
 
 ; =============================================================================
 ; Geometry / grid / storage constants
@@ -596,6 +614,9 @@ sh_entry:
     mov si, sh_defname
     mov di, sh_name
     call sh_strcpy
+    call sh_note_arg                  ; a document double-clicked in the Disk
+                                       ; window. NOTED here, READ at the first
+                                       ; paint - see sh_note_arg's header
     clc
     jmp .out
 .fail:
@@ -676,8 +697,90 @@ sh_geom:
 ; Callbacks
 ; =============================================================================
 
+; -----------------------------------------------------------------------------
+; sh_note_arg - take the document this instance was launched with, if any.
+; OSAPI_ARG_FILE is READ-AND-CLEAR (SPEC.md 54.5), so asking once here spends
+; it and a later instance can never inherit it.
+;
+; THIS COPIES A NAME AND TOUCHES NO DISK, and that is the whole point of
+; splitting it from sh_deferred_ld. A floppy read inside the entry proc runs
+; under the LOADER LOCK and freezes the desktop (SPEC.md 69.6) - texpad's own
+; ARG_FILE note carries the same warning, having paid for it.
+; -----------------------------------------------------------------------------
+sh_note_arg:
+    push ax
+    push bx                           ; ARG_FILE answers in BL, and the entry
+    push cx                           ; proc that calls this has not banked BX
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_ARG_FILE
+    jc .none                          ; CF=1 = launched empty, the usual case
+    mov [sh_argdir], dx
+    mov [sh_argdrv], bl
+    mov ax, KERNEL_SEG                ; the name lives in the KERNEL's segment,
+    mov es, ax                        ; not ours
+    mov di, sh_name
+    mov cx, SH_NAMEMAX
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .named
+    inc si
+    inc di
+    loop .cp
+    mov byte [di], 0
+.named:
+    mov byte [sh_needld], 1
+.none:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_deferred_ld - and NOW the disk read, from the first paint, which happens
+; after the window is up and the loader lock is long gone. Clears the flag
+; first, so a read that fails is not retried on every repaint for the rest of
+; the session.
+; -----------------------------------------------------------------------------
+sh_deferred_ld:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si                           ; sh_paint takes SI as its window ptr
+    push di                           ; the instruction after this returns -
+    push es                           ; OSAPI_FILE_GOTO documents no output
+    mov byte [sh_needld], 0           ; but promises nothing about SI either
+
+    mov dx, [sh_argdir]
+    mov bl, [sh_argdrv]
+    call OSAPI_FILE_GOTO
+    jc .out                           ; could not list it: the volume is back
+    call sh_doread                    ; at the root and sh_name still names a
+.out:                                 ; file that is not here - leave the
+    pop es                            ; sheet empty rather than half-read
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 sh_paint:
     push bx
+    cmp byte [sh_needld], 0           ; the associated document lands HERE, so
+    je .nold                          ; it is on screen at the first paint
+    call sh_deferred_ld               ; instead of waiting for a key or click
+.nold:
     mov bx, si
     call sh_geom
     call sh_drawall
@@ -16901,7 +17004,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 2992
+    OS88_BSS 2996
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -17517,7 +17620,11 @@ sh_fl_scol        equ sh_tabanchor + 2 ; sh_fill_copy's source cell...
 sh_fl_srow        equ sh_fl_scol + 2
 sh_fl_dcol        equ sh_fl_srow + 2   ; ...and its destination
 sh_fl_drow        equ sh_fl_dcol + 2
-sh_bss_end        equ sh_fl_drow + 2
+sh_needld         equ sh_fl_drow + 2   ; byte: an ARG_FILE document is
+                                       ; noted and not yet read
+sh_argdir         equ sh_needld + 1    ; word: the directory it is in
+sh_argdrv         equ sh_argdir + 2    ; byte: ...and that volume
+sh_bss_end        equ sh_argdrv + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

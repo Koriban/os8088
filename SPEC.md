@@ -67331,6 +67331,39 @@ pinned down the whole fill while the relative one beside it walks (§81.7).
 One `sh_repaint` runs after the whole fill rather than per cell, because a
 repaint is priced in primitive calls (PERFORMANCE.md).
 
+### 81.14 The `.SLK`/`.DIF`/`.BIF` associations, and why the load is deferred
+
+Sheet's header claims all three extensions through `OS88_ASSOC16` (§54.6), so
+a double-click on a spreadsheet opens it. Declaring costs nothing at runtime —
+the mount's icon harvest already reads that sector — and unlike a runtime
+`OSAPI_ASSOC_SET` claim it works before Sheet has ever been run.
+
+**CHART.O88 reads the same three formats and deliberately claims none of
+them.** There is no ownership model (§54.5): a second declaration simply takes
+the extension. A spreadsheet file belongs to the spreadsheet, and Chart opens
+one through its own File > Open.
+
+**The entry proc copies the NAME and reads nothing.** `sh_note_arg` calls
+`OSAPI_ARG_FILE`, stores the name, directory cluster and volume, and sets a
+pending flag; `sh_deferred_ld` does the `OSAPI_FILE_GOTO` and the read at the
+**first paint**, which §69.6 establishes as the earliest moment not under the
+loader's lock. Reading a floppy from the entry proc freezes the desktop for
+the length of the read — seconds on the target machine.
+
+Two register faults made this freeze the whole machine before it worked, and
+both are the same mistake at different depths:
+
+- `sh_note_arg` did not bank **BX**, which is where `OSAPI_ARG_FILE` returns
+  the volume. The entry proc does not push BX either, so it returned to the
+  loader with it clobbered.
+- `sh_deferred_ld` did not bank **SI**, and the very next instruction in
+  `sh_paint` is `mov bx, si` — the window pointer. `OSAPI_FILE_GOTO` documents
+  no output and promises nothing about SI, so paint carried on with whatever
+  it left there.
+
+Neither produced an error. The clock stopped, which is the tell that a package
+has taken the UI task down rather than merely broken its own window.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
