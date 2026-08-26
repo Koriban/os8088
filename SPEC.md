@@ -67413,6 +67413,24 @@ destroyed by a call made afterwards. There the register was BX and the callee
 was `ch_draw`; here it is three bss bytes and the callee is the evaluator
 re-entering the routine that set them.
 
+### 81.17 Number, Alignment and Font apply to the SELECTION
+
+They read `sh_selcol`/`sh_selrow` and formatted the anchor cell alone, so
+selecting a column of figures and choosing Currency changed exactly one cell
+and left the rest of the highlighted block untouched.
+
+That is the third command found with this defect, after Fill Right and Fill
+Down (§81.13), and all three have one cause: they were written when a
+selection *was* one cell, range selection arrived in stage 3.0a, and nothing
+went back to teach them about `sh_selcol2`/`sh_selrow2`. **A feature that
+widens the model does not widen the commands built on it** — the commands go
+on answering the older question, correctly and uselessly, and report nothing.
+
+`sh_fmt_one` does the read-modify-write for one cell so the per-field merge is
+not duplicated, and `sh_fdlg_apply` walks the normalised range over it. A
+single-cell selection is a 1x1 range, so the old behaviour is a special case of
+the new one rather than a branch. One `sh_repaint` runs after the whole block.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

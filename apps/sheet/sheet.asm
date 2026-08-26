@@ -4236,13 +4236,6 @@ sh_docmd_cut:
     ret
 
 ; sh_docmd_clear
-sh_docmd_clear:
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_clearcell
-    mov si, [sh_ownwin]
-    call sh_repaint
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_paste - reads the system clipboard straight into sh_editbuf
@@ -5853,6 +5846,93 @@ sh_setext:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_clear_one - Clear's work for ONE cell, by [sh_fdlg_sel]: 0 All /
+; 1 Formulas / 2 Formats. "Formulas" is Excel's word for the CONTENTS - a cell
+; cleared that way keeps its border, its number format and its font, which is
+; the whole reason the dialog exists. in: AX = col, BX = row. Preserves all.
+; -----------------------------------------------------------------------------
+sh_clear_one:
+    push ax
+    push bx
+    push di
+    push es
+    cmp word [sh_fdlg_sel], 2
+    je .fmt
+    cmp word [sh_fdlg_sel], 1
+    je .contents
+    call sh_clearcell                 ; All: the record goes, border and all
+    call sh_bt_removecell             ; (sh_clearcell preserves AX/BX)
+    jmp .out
+.contents:
+    call sh_findcell
+    jnc .out
+    mov es, [sh_cellseg]
+    mov byte [es:di+4], 0             ; not a formula any more...
+    mov byte [es:di+SH_C_TYPE], SH_T_NUM
+    mov word [es:di+SH_C_VAL], 0      ; ...and zero, but the format byte at
+    mov word [es:di+SH_C_VAL+2], 0    ; +5 is deliberately untouched
+    mov word [es:di+SH_C_VAL+4], 0
+    mov word [es:di+SH_C_VAL+6], 0
+    mov word [es:di+SH_C_PASS], 0
+    jmp .out
+.fmt:
+    call sh_findcell
+    jnc .out
+    mov es, [sh_cellseg]
+    mov byte [es:di+5], 0             ; Formats: only the format byte, and the
+    call sh_bt_removecell             ; border table entry beside it
+.out:
+    pop es
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_fmt_one - apply the format dialog's current choice to ONE cell.
+; in: AX = col, BX = row. An empty cell has no record to carry a format and is
+; skipped, which is what the single-cell version did too. Preserves all.
+; -----------------------------------------------------------------------------
+sh_fmt_one:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+    call sh_findcell
+    jnc .out
+    mov es, [sh_cellseg]
+    mov bl, [es:di+5]
+    mov al, [sh_fdlg_sel]
+    cmp byte [sh_fdlg_kind], 0
+    je .num
+    cmp byte [sh_fdlg_kind], 1
+    je .align
+    and bl, SH_FMT_BU_CLR              ; Font: bits0-1 directly
+    or bl, al
+    jmp .put
+.num:
+    and bl, SH_FMT_NUM_CLR
+    mov cl, SH_FMT_NUM_SHIFT
+    shl al, cl
+    or bl, al
+    jmp .put
+.align:
+    and bl, SH_FMT_ALIGN_CLR
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shl al, cl
+    or bl, al
+.put:
+    mov [es:di+5], bl
+.out:
+    pop es
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_fdlg_apply - kinds 0-2 (Number/Alignment/Font): write [sh_fdlg_sel]
 ; into the selected cell's format byte, in the field [sh_fdlg_kind] names -
 ; a no-op if the cell has no record (see sh_fdlg_open's own comment on
@@ -5888,34 +5968,41 @@ sh_fdlg_apply:
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
     je .deleterc
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_findcell
-    jnc .out
-    mov es, [sh_cellseg]
-    mov bl, [es:di+5]
-    mov al, [sh_fdlg_sel]
-    cmp byte [sh_fdlg_kind], 0
-    je .num
-    cmp byte [sh_fdlg_kind], 1
-    je .align
-    and bl, SH_FMT_BU_CLR              ; Font: bits0-1 directly
-    or bl, al
-    jmp .apply
-.num:
-    and bl, SH_FMT_NUM_CLR
-    mov cl, SH_FMT_NUM_SHIFT
-    shl al, cl
-    or bl, al
-    jmp .apply
-.align:
-    and bl, SH_FMT_ALIGN_CLR
-    mov cl, SH_FMT_ALIGN_SHIFT
-    shl al, cl
-    or bl, al
-.apply:
-    mov [es:di+5], bl
-    call sh_repaint
+    ; Number/Alignment/Font apply to the WHOLE SELECTION. They used to read
+    ; sh_selcol/sh_selrow and format the anchor alone, so selecting a column
+    ; of figures and choosing Currency changed exactly one cell - the same
+    ; thing Fill Right/Down did before 81.13, and for the same reason: written
+    ; before range selection existed and never taught about sh_selcol2/
+    ; sh_selrow2. A single-cell selection is a 1x1 range, so it still works.
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .fmtrows
+    xchg ax, bx
+.fmtrows:                              ; ax = top row, bx = bottom row
+    mov cx, [sh_selcol]
+    mov si, [sh_selcol2]
+    cmp cx, si
+    jbe .fmtcols
+    xchg cx, si
+.fmtcols:                              ; cx = first col, si = last col
+.fmtcolloop:
+    mov di, ax                         ; di = the current row, from the top
+.fmtrowloop:
+    push ax
+    push bx
+    mov ax, cx
+    mov bx, di
+    call sh_fmt_one
+    pop bx
+    pop ax
+    inc di
+    cmp di, bx
+    jbe .fmtrowloop
+    inc cx
+    cmp cx, si
+    jbe .fmtcolloop
+    call sh_repaint                    ; ONE repaint for the whole block
     jmp .out
 .colwidth:
     mov ax, [sh_fdlg_sel]
@@ -5983,42 +6070,39 @@ sh_fdlg_apply:
 
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
 .doclear:
-    ; 0 All / 1 Formulas / 2 Formats. "Formulas" is Excel's word for the
-    ; CONTENTS - a cell cleared that way keeps its border, its number format
-    ; and its font, which is the whole reason the dialog exists.
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    cmp word [sh_fdlg_sel], 2
-    je .clfmt
-    cmp word [sh_fdlg_sel], 1
-    je .clcontents
-    call sh_clearcell                 ; All: the record goes, border and all
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_bt_removecell
-    jmp .cldone
-.clcontents:
-    call sh_findcell
-    jnc .cldone
-    mov es, [sh_cellseg]
-    mov byte [es:di+4], 0             ; not a formula any more...
-    mov byte [es:di+SH_C_TYPE], SH_T_NUM
-    mov word [es:di+SH_C_VAL], 0      ; ...and zero, but the format byte at
-    mov word [es:di+SH_C_VAL+2], 0    ; +5 is deliberately untouched
-    mov word [es:di+SH_C_VAL+4], 0
-    mov word [es:di+SH_C_VAL+6], 0
-    mov word [es:di+SH_C_PASS], 0
-    jmp .cldone
-.clfmt:
-    call sh_findcell
-    jnc .cldone
-    mov es, [sh_cellseg]
-    mov byte [es:di+5], 0             ; Formats: only the format byte, and the
-    mov ax, [sh_selcol]               ; border table entry beside it
-    mov bx, [sh_selrow]
-    call sh_bt_removecell
+    ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
+    ; has highlighted. It used to clear the anchor alone (81.17's third case,
+    ; after Fill and the format dialogs).
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .clrows
+    xchg ax, bx
+.clrows:                              ; ax = top row, bx = bottom row
+    mov cx, [sh_selcol]
+    mov si, [sh_selcol2]
+    cmp cx, si
+    jbe .clcols
+    xchg cx, si
+.clcols:                              ; cx = first col, si = last col
+.clcolloop:
+    mov di, ax
+.clrowloop:
+    push ax
+    push bx
+    mov ax, cx
+    mov bx, di
+    call sh_clear_one
+    pop bx
+    pop ax
+    inc di
+    cmp di, bx
+    jbe .clrowloop
+    inc cx
+    cmp cx, si
+    jbe .clcolloop
 .cldone:
-    mov si, [sh_ownwin]
+    mov si, [sh_ownwin]               ; ONE repaint for the block
     call sh_repaint
     jmp .out
 
