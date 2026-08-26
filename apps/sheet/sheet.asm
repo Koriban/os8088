@@ -1595,6 +1595,64 @@ sh_beginedit:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_paren_ok - do the parentheses in [sh_editbuf] balance? out: CF=1 = no.
+;
+; Lexical only, and deliberately so: it runs at COMMIT, where re-running the
+; evaluator would mean recursion, cycle marks and memoisation stamps as a side
+; effect of typing. It catches the bracket a person actually drops; it does not
+; claim to be a syntax check, and something like `=1+` still commits and reads
+; as 0. A real answer needs an error VALUE - SH_T_ERR is reserved and nothing
+; produces one yet - and that is a feature, not this.
+;
+; A quoted string is skipped whole, so a bracket inside a label literal does
+; not count toward the balance.
+; -----------------------------------------------------------------------------
+sh_paren_ok:
+    push ax
+    push cx
+    push si
+    mov si, sh_editbuf
+    xor cx, cx                        ; cx = how many are still open
+.scan:
+    mov al, [si]
+    or al, al
+    jz .done
+    inc si
+    cmp al, '"'
+    je .instr
+    cmp al, '('
+    je .open
+    cmp al, ')'
+    jne .scan
+    or cx, cx
+    jz .bad                           ; a ')' with nothing open
+    dec cx
+    jmp .scan
+.open:
+    inc cx
+    jmp .scan
+.instr:
+    mov al, [si]
+    or al, al
+    jz .done
+    inc si
+    cmp al, '"'
+    jne .instr
+    jmp .scan
+.done:
+    or cx, cx
+    jnz .bad
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_commit - if a cell is being edited, parse the buffer and store it (an
 ; empty buffer, or one that doesn't parse as a single signed integer,
 ; clears the cell instead); either way stop editing. SI is not touched.
@@ -1618,12 +1676,23 @@ sh_commit:
 .have:
     cmp byte [sh_editbuf], '='
     jne .numeric
+    call sh_paren_ok                  ; ...and a formula must be well formed,
+    jc .badformula                    ; for the same reason "3.5kg" is not 3.5
     mov si, sh_editbuf
     inc si                            ; past the '='
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_setformula
     jmp .out
+.badformula:
+    ; `=SUM(E2:E5` - one missing bracket - used to be STORED AS A FORMULA and
+    ; quietly evaluated to 0, which is the worst answer available: a plausible
+    ; number, in the right place, that nobody has reason to doubt. It is kept
+    ; as a LABEL instead, so the cell shows the text that was typed, and the
+    ; status bar says why. That is this app's existing rule for input that
+    ; cannot be what it looks like, applied to the one type that was exempt.
+    mov word [sh_msg], sh_s_badparen
+    jmp .astext
 .numeric:
     mov si, sh_editbuf                ; stage 4.0: a full decimal, not a signed
     call fp_atof                      ; integer. "3.5", "-0.25" and "1e3" are
@@ -17080,6 +17149,7 @@ sh_s_about:    db 'Sheet - a spreadsheet for os8088', 0
 
 sh_defname:    db 'SHEET1.SLK', 0
 sh_s_ready:    db 'Ready', 0
+sh_s_badparen: db 'Unbalanced ( ) - kept as text.', 0
 sh_s_num:      db 'NUM', 0
 sh_s_calcind:  db 'CALCULATE', 0
 sh_s_nw_sheet: db 'New worksheet.', 0
