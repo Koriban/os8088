@@ -314,6 +314,17 @@ SH_T_TEXT    equ 2
 SH_T_BOOL    equ 3
 SH_T_ERR     equ 4
 
+; Error codes, in SH_C_AUX. These are EXCEL'S OWN ERROR.TYPE numbers, so
+; ERROR.TYPE and ISERR become a table lookup if they are ever added, and the
+; BIFF BOOLERR record can carry them without a translation step.
+SH_ERR_NULL  equ 1                  ; #NULL!
+SH_ERR_DIV0  equ 2                  ; #DIV/0!   - the only one produced today
+SH_ERR_VALUE equ 3                  ; #VALUE!
+SH_ERR_REF   equ 4                  ; #REF!
+SH_ERR_NAME  equ 5                  ; #NAME?
+SH_ERR_NUM   equ 6                  ; #NUM!
+SH_ERR_NA    equ 7                  ; #N/A
+
 SH_C_SZ      equ 20                 ; ...and an EVEN stride, so the array
                                     ; shuffle can move words rather than bytes
 
@@ -2933,12 +2944,20 @@ sh_drawgrid:
 .noformula3:
     pop es
 .valpath:
+    cmp byte [sh_curtype], SH_T_ERR    ; an error draws its NAME - the number
+    je .errpath                        ; underneath it is meaningless
     cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: a label draws its own
     je .textpath                       ; characters, not its value
     mov ax, dx
     mov bl, [sh_curfmt]
     call sh_numfmt
     call sh_justify
+    mov si, sh_tbuf
+    jmp .got
+.errpath:
+    call sh_errname                    ; -> sh_numbuf
+    mov bl, [sh_curfmt]
+    call sh_justify                    ; right, like the number it replaces
     mov si, sh_tbuf
     jmp .got
 .textpath:
@@ -9239,6 +9258,8 @@ sh_dowrite_sylk:
     mov [sh_wrec_val], ax
     mov al, [es:si+5]
     mov [sh_wrec_fmt], al
+    mov al, [es:si+SH_C_AUX]
+    mov [sh_wrec_aux], al
     mov al, [es:si+SH_C_TYPE]         ; stage 4.5: and the tag, because a LABEL
     mov [sh_wrec_type], al            ; goes out as a QUOTED K field rather
     mov ax, [es:si+SH_C_FOFF]         ; than as a number, and its characters
@@ -9297,6 +9318,8 @@ sh_dowrite_sylk:
     call sh_stgput
     cmp byte [sh_wrec_type], SH_T_TEXT
     je .ktext
+    cmp byte [sh_wrec_type], SH_T_ERR ; ...and an ERROR is its NAME, bare. The
+    je .kerr                          ; leading '#' is what tells it from a
     push si                           ; SYLK's K field IS a decimal literal,
     push di                           ; so the full value goes out, not a
     mov si, sh_wrec_dval              ; truncation of it
@@ -9306,6 +9329,23 @@ sh_dowrite_sylk:
     call fp_ftoa
     pop di
     pop si
+    mov si, sh_numbuf
+    call sh_stgput
+    jmp .kdone
+.kerr:
+    ; number, on both sides - no number starts with one, and SYLK has no type
+    ; field to consult. Writing the value UNDERNEATH an error instead (a zero)
+    ; is what this did, and it turned #DIV/0! into a perfectly ordinary 0 on
+    ; the next load.
+    push ax
+    mov al, [sh_curaux]               ; sh_errname names the CURRENT cell, and
+    push ax                           ; a save is not a paint - bank what the
+    mov al, [sh_wrec_aux]             ; painter left there
+    mov [sh_curaux], al
+    call sh_errname                   ; -> sh_numbuf
+    pop ax
+    mov [sh_curaux], al
+    pop ax
     mov si, sh_numbuf
     call sh_stgput
     jmp .kdone
@@ -9724,6 +9764,8 @@ sh_dowrite_dif:
     jnc .na
     cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: DIF's type 1 is STRING -
     je .dtext                          ; "1,0" then the quoted text on the
+    cmp byte [sh_curtype], SH_T_ERR    ; ...and an ERROR takes DIF's own ERROR
+    je .derr                           ; indicator. DIF cannot say WHICH error,
     mov si, sh_s_dif_zc                ; following line, which is the real
     call sh_stgput                     ; format's own grammar
     push si                            ; ...and the value goes out as a FULL
@@ -9769,6 +9811,10 @@ sh_dowrite_dif:
     call sh_stgputb
     mov si, sh_s_crlf
     call sh_stgput
+    jmp .cnext
+.derr:
+    mov si, sh_s_dif_err0              ; but a file that says ERROR is honest,
+    call sh_stgput                     ; where the 0 underneath one is a lie
     jmp .cnext
 .na:
     mov si, sh_s_dif_na0
@@ -9907,13 +9953,18 @@ sh_doread_dif:
     cmp si, di                         ; 3.5 and this read it back as 3
     jae .cellnext
     cmp byte [es:si], 'V'              ; the real DIF value-indicator: V
-    jne .notvalid                      ; (valid) is the only one this app
-                                        ; ever writes; NA/ERROR/TRUE/FALSE
-                                        ; from a foreign file all just mean
-                                        ; "leave this cell blank" here
-    mov ax, [sh_wcol]
-    mov bx, [sh_wrow]
-    call sh_setvald
+    je .isvalid                        ; (valid) is the ordinary one; ERROR is
+    cmp byte [es:si], 'E'              ; the other one this app writes, and
+    jne .notvalid                      ; NA/TRUE/FALSE from a foreign file
+    mov dl, SH_ERR_NA                  ; still just mean "leave this cell
+    mov ax, [sh_wcol]                  ; blank" here.
+    mov bx, [sh_wrow]                  ; #N/A is what an ERROR comes back as:
+    call sh_seterr                     ; the file said a value was not
+    jmp .notvalid                      ; available and could not say more, and
+.isvalid:                              ; #N/A is the one error that means
+    mov ax, [sh_wcol]                  ; exactly that. Guessing a specific one
+    mov bx, [sh_wrow]                  ; would be inventing what the file does
+    call sh_setvald                    ; not contain
 .notvalid:
     call sh_difskipline                ; the indicator line
     jmp .cellnext
@@ -10688,7 +10739,9 @@ sh_biff_cells:
     mov [sh_wrec_fmt], al
     mov al, [es:si+SH_C_TYPE]
     mov [sh_wrec_type], al            ; stage 4.5: a LABEL takes neither RK nor
-    mov ax, [es:si+SH_C_FOFF]         ; NUMBER
+    mov al, [es:si+SH_C_AUX]          ; NUMBER, and an ERROR takes neither
+    mov [sh_wrec_aux], al             ; either - see .aserr
+    mov ax, [es:si+SH_C_FOFF]
     mov [sh_wrec_toff], ax
     mov al, [es:si+4]                 ; ...and a FORMULA cell may take a real
     and al, 1                         ; FORMULA record, if its text is one this
@@ -10702,6 +10755,12 @@ sh_biff_cells:
     call sh_biff_formula              ; CF=0 = it wrote the record
     jnc .recnext
 .notformula:
+    cmp byte [sh_wrec_type], SH_T_ERR  ; an error whose formula this writer
+    je .aserr                          ; could not tokenise still has to go out
+                                        ; AS AN ERROR: the number underneath one
+                                        ; is zero, and a file saying 0 where the
+                                        ; sheet said #DIV/0! is worse than a
+                                        ; file that lost the formula
 
     ; --- which record? -------------------------------------------------------
     ; AN EXACT IN-RANGE INTEGER STILL GOES OUT AS RK, byte for byte as before,
@@ -10761,6 +10820,27 @@ sh_biff_cells:
     call sh_biffw
     mov ax, [sh_wrec_dval+6]
     call sh_biffw
+    jmp .recnext
+.aserr:
+    ; BOOLERR, 0205H: the row/col/xf head every cell record shares, then the
+    ; value byte and a flag saying whether it is a BOOLEAN or an ERROR. The
+    ; code stored is Excel's own ERROR.TYPE number, which is what SH_C_AUX
+    ; holds, so it travels with no translation.
+    mov ax, 0x0205
+    call sh_biffw
+    mov ax, 8
+    call sh_biffw
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    xor ah, ah
+    mov al, [sh_wrec_fmt]
+    call sh_biffw
+    mov al, [sh_wrec_aux]
+    call sh_stgputb
+    mov al, 1                          ; fError
+    call sh_stgputb
     jmp .recnext
 .aslabel:
     ; LABEL, 0204H in BIFF3 - and NOT 0004H, which is BIFF2's. The body is the
@@ -10893,14 +10973,28 @@ sh_biff_formula:
     xor ah, ah
     mov al, [sh_wrec_fmt]
     call sh_biffw
-    mov ax, [sh_wrec_dval]            ; the cached result, verbatim
+    cmp byte [sh_wrec_type], SH_T_ERR ; BIFF's own encoding for a cached result
+    je .errresult                     ; that is not a number: the top word all
+    mov ax, [sh_wrec_dval]            ; ones, byte 0 naming the kind and byte 2
+    call sh_biffw                     ; carrying the value. Without this the
+    mov ax, [sh_wrec_dval+2]          ; result field says 0.0, and a reader
+    call sh_biffw                     ; that trusts it - including this app's,
+    mov ax, [sh_wrec_dval+4]          ; which reads the result and skips the
+    call sh_biffw                     ; tokens - turns #DIV/0! back into a
+    mov ax, [sh_wrec_dval+6]          ; perfectly ordinary zero
     call sh_biffw
-    mov ax, [sh_wrec_dval+2]
+    jmp .resdone
+.errresult:
+    mov ax, 2                         ; byte 0 = 2: an error code
     call sh_biffw
-    mov ax, [sh_wrec_dval+4]
+    mov al, [sh_wrec_aux]             ; byte 2 = which one
+    xor ah, ah
     call sh_biffw
-    mov ax, [sh_wrec_dval+6]
+    xor ax, ax
     call sh_biffw
+    mov ax, 0xFFFF
+    call sh_biffw
+.resdone:
     xor ax, ax                        ; option flags: neither recalc bit
     call sh_biffw
     mov ax, [sh_wrec_len]             ; cce, the token array's own length
@@ -10994,6 +11088,8 @@ sh_doread_biff:
     je .isnum                          ; the only way a fraction can travel
     cmp ax, 0x0204                     ; LABEL (BIFF3/4). 0004H is BIFF2's,
     je .islabel                        ; with a one-byte length, and is NOT
+    cmp ax, 0x0205                     ; BOOLERR: a boolean or an ERROR VALUE
+    je .isboolerr
     cmp ax, 0x0206                     ; accepted here for that reason
     je .isformula                      ; FORMULA: its CACHED RESULT is read,
     cmp ax, 0x0406                     ; the token array skipped - see below.
@@ -11169,10 +11265,58 @@ sh_doread_biff:
     mov [sh_acc+4], ax
     mov ax, [es:si+12]
     mov [sh_acc+6], ax
+    cmp word [sh_acc+6], 0xFFFF        ; not a number at all: see .errresult in
+    jne .fresnum                       ; the writer for the encoding
+    cmp byte [sh_acc], 2
+    jne .fresnum
+    push es
+    mov dl, [sh_acc+2]
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_seterr
+    call sh_biff_applyfmt
+    pop es
+    pop dx
+    jmp .skip
+.fresnum:
     push es
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     call sh_setvald
+    call sh_biff_applyfmt
+    pop es
+    pop dx
+    jmp .skip
+.isboolerr:
+    push dx
+    mov ax, si
+    add ax, dx
+    cmp ax, cx
+    ja .toolong
+    mov ax, [es:si]                    ; row
+    mov [sh_wrec_row], ax
+    mov ax, [es:si+2]                  ; col
+    mov [sh_wrec_col], ax
+    mov ax, [es:si+4]                  ; xf index
+    mov [sh_wrec_xf], ax
+    mov al, [es:si+6]                  ; the value...
+    mov dl, al
+    mov al, [es:si+7]                  ; ...and what kind of value it is
+    push es
+    or al, al
+    jz .isbool
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_seterr
+    jmp .bedone
+.isbool:
+    mov al, dl                         ; TRUE/FALSE reads back as 1/0: this app
+    xor ah, ah                         ; has no BOOL type of its own yet, and a
+    call sh_acc_int                    ; number is what its formulas expect
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_setvald
+.bedone:
     call sh_biff_applyfmt
     pop es
     pop dx
@@ -11335,6 +11479,7 @@ sh_parsecrec:
     mov word [SH_TVAL], 0
     mov byte [SH_THASE], 0
     mov byte [SH_TISTXT], 0
+    mov byte [SH_TISERR], 0
     mov word [SH_TDVAL], 0
     mov word [SH_TDVAL+2], 0
     mov word [SH_TDVAL+4], 0
@@ -11379,7 +11524,9 @@ sh_parsecrec:
     inc si
     cmp si, bx                        ; stage 4.5: a QUOTED K field is a label.
     jae .knum                         ; SYLK has no type field - the quotes are
-    cmp byte [es:si], 34              ; the entire signal, on both sides
+    cmp byte [es:si], '#'             ; the entire signal, on both sides, and
+    je .kerr                          ; a leading '#' is an ERROR VALUE for
+    cmp byte [es:si], 34              ; the same reason
     jne .knum
     inc si                            ; past the opening quote
     push di
@@ -11411,6 +11558,40 @@ sh_parsecrec:
     mov byte [di], 0
     pop di
     mov byte [SH_TISTXT], 1
+    mov byte [SH_THAVE], 1
+    jmp .tok
+.kerr:
+    push di                           ; the name goes into sh_rwsrc, NOT into
+    mov di, sh_rwsrc                  ; SH_TEXPR: a FORMULA cell writes both
+    mov cx, SH_EDITMAX                ; ;E and ;K, ;E comes first, and parsing
+                                       ; the ;K into ;E's buffer overwrote the
+                                       ; formula with the error's name - which
+                                       ; then went in as the cell's formula,
+                                       ; `=#DIV/0!`, and evaluated to #VALUE!
+.ke:
+    jcxz .keend
+    cmp si, bx
+    jae .keend
+    mov al, [es:si]
+    cmp al, ';'
+    je .keend
+    cmp al, 13
+    je .keend
+    cmp al, 10
+    je .keend
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .ke
+.keend:
+    mov byte [di], 0
+    pop di
+    push si
+    mov si, sh_rwsrc
+    call sh_errcode                   ; -> AL, 0 for a spelling we do not know
+    pop si
+    mov [SH_TISERR], al
     mov byte [SH_THAVE], 1
     jmp .tok
 .knum:
@@ -11495,6 +11676,12 @@ sh_parsecrec:
                                       ; the staging pointer happened to be
     jmp .out
 .notformula_c:
+    cmp byte [SH_TISERR], 0
+    je .noterr_c
+    mov dl, [SH_TISERR]
+    call sh_seterr
+    jmp .out
+.noterr_c:
     cmp byte [SH_TISTXT], 0
     je .plainval_c
     push si
@@ -13903,6 +14090,12 @@ sh_getcell2:
     mov [sh_curfmt], al
     mov al, [es:di+SH_C_TYPE]         ; stage 4.5: and the tag, so a caller can
     mov [sh_curtype], al              ; tell a label from the zero it would
+    mov al, [es:di+SH_C_AUX]          ; the error code travels with the tag,
+    mov [sh_curaux], al               ; so the painter can name it
+    cmp byte [sh_curtype], SH_T_ERR   ; ...and an ERROR spreads: anything built
+    jne .noterr                       ; on a broken cell is broken too, which
+    mov [sh_evalerr], al              ; is what every spreadsheet does and what
+.noterr:                              ; makes one #DIV/0! visible at the total
     mov ax, [es:di+SH_C_FOFF]         ; otherwise read as this cell's value
     mov [sh_curtoff], ax
     test byte [es:di+4], 1            ; HASFORMULA
@@ -13910,12 +14103,13 @@ sh_getcell2:
     pop es
     ; BANK THIS CELL'S OWN IDENTITY ACROSS THE EVALUATION. sh_eval_cell
     ; recurses back through sh_getcell2 for every cell the formula names, and
-    ; each of those overwrites all three of these - so a formula rendered with
+    ; each of those overwrites every one of these - so a formula rendered with
     ; the FORMAT of the last cell it referenced, and, worse, with that cell's
     ; TYPE and text offset: `=A2+0` where A2 holds a label drew the label.
     ; The cell showed something that was not its value, and said nothing.
+    ; Only the two the EVALUATION cannot change are banked here; the type and
+    ; the error code come back from sh_eval_cell's own writeback instead.
     mov al, [sh_curfmt]
-    mov ah, [sh_curtype]
     mov bx, [sh_curtoff]
     push ax
     push bx
@@ -13923,8 +14117,9 @@ sh_getcell2:
     pop bx                            ; DX as its truncated form
     pop ax
     mov [sh_curfmt], al
-    mov [sh_curtype], ah
-    mov [sh_curtoff], bx
+    mov [sh_curtoff], bx               ; sh_curtype/sh_curaux are NOT banked:
+                                       ; the evaluation is what decides them,
+                                       ; and it publishes them at its writeback
     stc
     jmp .out
 .plain:
@@ -14066,6 +14261,44 @@ sh_setvald:
     jnz .dcopy
     pop es
 .dfull:
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_seterr - in: AX=col, BX=row, DL=an Excel error code (1..7). The cell
+; becomes an ERROR VALUE with a zero underneath it, which is exactly what a
+; file carrying one means. Used by the BIFF reader; the SYLK and DIF readers
+; do not need it, because those formats carry the FORMULA and the error is
+; regenerated by evaluating it.
+; -----------------------------------------------------------------------------
+sh_seterr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    mov cl, dl                        ; the code, across sh_setvald
+    push cx
+    push ax                           ; the column, across sh_acc_int
+    xor ax, ax
+    call sh_acc_int
+    pop ax
+    call sh_setvald                   ; creates the record, tagged SH_T_NUM
+    call sh_findcell                  ; ...and now say what it really is
+    pop cx
+    jnc .out
+    push es
+    mov es, [sh_cellseg]
+    mov byte [es:di+SH_C_TYPE], SH_T_ERR
+    mov [es:di+SH_C_AUX], cl
+    pop es
+.out:
     pop si
     pop di
     pop dx
@@ -15064,6 +15297,10 @@ sh_eval_cell:
     mov es, [sh_txtseg]
     cmp word [sh_evaldepth], SH_EVAL_MAXDEPTH
     jae .toodeep
+    cmp word [sh_evaldepth], 0        ; a FRESH evaluation starts clean; a
+    jne .depthok                      ; nested one must not, or a referenced
+    mov byte [sh_evalerr], 0          ; cell's error would be wiped on the way
+.depthok:                             ; back up
     mov bx, [sh_evaldepth]
     inc word [sh_evaldepth]
     push bx                           ; this recursion level's buffer slot
@@ -15104,6 +15341,20 @@ sh_eval_cell:
     call sh_acc_to_cellval            ; cache the whole double
     call sh_acc_toint
     mov dx, ax
+    mov al, [sh_evalerr]              ; the cell is stored by what it IS: an
+    or al, al                         ; error, or a number again once whatever
+    jz .notanerr                      ; broke it has been fixed
+    mov byte [es:di+SH_C_TYPE], SH_T_ERR
+    mov [es:di+SH_C_AUX], al
+    mov byte [sh_curtype], SH_T_ERR   ; and PUBLISH it: the caller banked these
+    mov [sh_curaux], al               ; two before the evaluation ran, so its
+    jmp .errdone                      ; copy names the cell as it USED to be -
+.notanerr:                            ; which paints #DIV/0! on a cell whose
+    mov byte [es:di+SH_C_TYPE], SH_T_NUM  ; divisor has since been fixed, and
+    mov byte [es:di+SH_C_AUX], 0      ; #ERR on the one that is still broken
+    mov byte [sh_curtype], SH_T_NUM   ; (its code having been overwritten by
+    mov byte [sh_curaux], 0           ; the last cell the formula referenced)
+.errdone:
     mov ax, [sh_pass]
     mov [es:di+SH_C_PASS], ax
     jmp .out
@@ -15234,17 +15485,21 @@ sh_pexprcont:
     je .sub
     ret
 .add:
-    inc si
+    call sh_chktext                   ; the LEFT operand, which sh_curtype
+    inc si                            ; still describes
     call sh_vpush                     ; the left operand goes on the machine
     call sh_pterm                     ; stack: a double does not fit a register
+    call sh_chktext                   ; ...and now the right
     call sh_binop_pre                 ; and the parse of the right may recurse
     call fp_add
     call sh_acc_store
     jmp sh_pexprcont
 .sub:
+    call sh_chktext
     inc si
     call sh_vpush
     call sh_pterm
+    call sh_chktext
     call sh_binop_pre
     call fp_sub
     call sh_acc_store
@@ -15260,23 +15515,28 @@ sh_ptermcont:
     je .div
     ret
 .mul:
+    call sh_chktext
     inc si
     call sh_vpush
     call sh_ppow
+    call sh_chktext
     call sh_binop_pre
     call fp_mul
     call sh_acc_store
     jmp sh_ptermcont
 .div:
+    call sh_chktext
     inc si
     call sh_vpush
     call sh_ppow
+    call sh_chktext
     call sh_binop_pre
-    call fp_div                       ; CF=1 means the divisor was zero. The
-    jnc .divok                        ; standing policy here is still 0 rather
-    xor ax, ax                        ; than an error value: #DIV/0! needs the
-    call sh_acc_int                   ; error TYPE the record now has room for
-    jmp sh_ptermcont                  ; but nothing yet reads
+    call fp_div                       ; CF=1 means the divisor was zero
+    jnc .divok
+    mov byte [sh_evalerr], SH_ERR_DIV0
+    xor ax, ax                        ; the value is still zero underneath -
+    call sh_acc_int                   ; the flag is what the cell is stored by
+    jmp sh_ptermcont
 .divok:
     call sh_acc_store
     jmp sh_ptermcont
@@ -15297,9 +15557,11 @@ sh_ppow:
     call sh_pfactor
     cmp byte [si], '^'
     jne .out
+    call sh_chktext
     inc si
     call sh_vpush                     ; the BASE, banked
     call sh_ppow                      ; recurse: right-associative
+    call sh_chktext
     call sh_acc_toint                 ; the exponent is still a whole number -
     mov cx, ax                        ; a fractional power needs logarithms,
     pop word [sh_lhs]                 ; which this file does not have
@@ -15337,6 +15599,7 @@ sh_pfactor:
     jne .notneg
     inc si
     call sh_pfactor
+    call sh_chktext                   ; -"text" is arithmetic too
     xor byte [sh_acc+7], 0x80         ; negate by flipping the sign BIT of the
     ret                               ; packed double - cheaper than unpacking
                                       ; and, unlike `neg`, exact for every
@@ -15366,11 +15629,13 @@ sh_pfactor:
     call sh_pident
     ret
 .maybenum:
-    call fp_atof                      ; a literal is a full decimal now: 3.5
-    jnc .numok                        ; and 1e3 are values, not the leading
-    xor ax, ax                        ; digit of one. Nothing parseable here
-    call sh_acc_int                   ; is a zero, which is what the integer
-    ret                               ; path did too.
+    mov byte [sh_curtype], SH_T_NUM   ; a LITERAL is a number - say so, or the
+    call fp_atof                      ; tag left by the last cell referenced
+    jnc .numok                        ; still stands and `=B4+1` is judged by
+    mov byte [sh_evalerr], SH_ERR_VALUE ; B4's type twice over
+    xor ax, ax                        ; nothing parseable at all: `=1+` used to
+    call sh_acc_int                   ; read as 1, an answer to a formula the
+    ret                               ; user never finished writing
 .numok:
     call sh_acc_store
 .out:
@@ -16099,10 +16364,12 @@ sh_pfunc:
     push word [sh_phave]
     xor dx, dx                        ; DX = result; 0 covers every bad exit
     cmp byte [si], '('
-    jne .done
-    inc si
-    call sh_funcid
-    xor ah, ah
+    jne .noparen                      ; a bare word that resolved to no defined
+    inc si                            ; name is #NAME?, exactly as in Excel -
+    call sh_funcid                    ; sh_pident only routes one here once
+    xor ah, ah                        ; sh_name_lookup has already declined it
+    cmp ax, 0xFF                      ; ...and so is a CALL to a function this
+    je .noname                        ; app does not have. Reading either as a
     cmp ax, 5
     je .doif
     cmp ax, 6
@@ -16154,6 +16421,17 @@ sh_pfunc:
 .dospecial:
     call sh_pspecial
     mov dx, ax
+    jmp .typed
+.noname:                              ; zero is how a typo silently becomes an
+    call sh_skipargs                  ; answer, and the whole point of an error
+.noparen:                             ; value is that it cannot be mistaken for
+    mov byte [sh_evalerr], SH_ERR_NAME  ; one. Only the CALL form has arguments
+.typed:                               ; to step over - `=FOO+1` has none, and
+                                       ; skipping there would eat the `+1`                               ; mistaken for one
+    mov byte [sh_curtype], SH_T_NUM   ; a call's RESULT is a number whatever it
+                                       ; folded over: without this the TEXT tag
+                                       ; left by the last cell a range touched
+                                       ; would make `=SUM(A1:A9)*2` a #VALUE!
 .done:
     pop word [sh_phave]
     pop word [sh_pcnt]
@@ -16234,6 +16512,10 @@ sh_pspecial:
     jmp .dstore
 .dsqrt:
     call sh_pcmp
+    test byte [sh_acc+7], 0x80        ; the sign bit of the packed double: a
+    jz .sqrtok                        ; negative has no real square root, and
+    mov byte [sh_evalerr], SH_ERR_NUM ; Excel says #NUM! rather than 0
+.sqrtok:
     call sh_acc_load_a
     call fp_sqrt                      ; a REAL root: SQRT(2) is 1.414213562,
     jmp .dstore                       ; where the integer version gave 1
@@ -16313,9 +16595,9 @@ sh_pspecial:
     jmp .close
 .fact:
     or ax, ax
-    js .zeroout                       ; negative has no factorial here
+    js .factnum                       ; negative has no factorial here
     cmp ax, 7
-    ja .zeroout                       ; 8! = 40320 does not fit a signed word,
+    ja .factnum                       ; 8! = 40320 does not fit a signed word,
     mov cx, ax                        ; so refuse rather than hand back a
     mov ax, 1                         ; wrapped number that looks like an answer
     or cx, cx
@@ -16325,6 +16607,9 @@ sh_pspecial:
     dec cx
     jnz .factloop
     jmp .close
+.factnum:                             ; out of FACT's domain, or out of the
+    mov byte [sh_evalerr], SH_ERR_NUM ; range a word can hold: #NUM! either
+    jmp .zeroout                      ; way, which is what Excel reports
 
 .two:
     cmp byte [si], ','
@@ -16994,6 +17279,47 @@ sh_funcid:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_chktext - the operand sh_curtype describes is TEXT, and something
+; arithmetic is about to happen to it: raise #VALUE!. Excel's own answer, and
+; the reason it is raised HERE rather than in sh_getcell2 is that a bare `=B4`
+; must still SHOW the label, and SUM must still skip it - only an operator
+; makes a label a mistake.
+; -----------------------------------------------------------------------------
+sh_chktext:
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .out
+    mov byte [sh_evalerr], SH_ERR_VALUE
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_skipargs - SI is just past an unknown function's '('; leave it just past
+; the matching ')'. Counting depth rather than scanning for the first ')' is
+; what keeps `=FOO(SUM(A1:A2))` from leaving a stray parenthesis behind for
+; the rest of the parse to trip over.
+; -----------------------------------------------------------------------------
+sh_skipargs:
+    push cx
+    mov cx, 1
+.loop:
+    mov al, [si]
+    or al, al
+    jz .out                           ; end of the formula: unbalanced, and
+    inc si                            ; sh_paren_ok already refuses those at
+    cmp al, '('                       ; entry - this is belt and braces
+    jne .notopen
+    inc cx
+    jmp .loop
+.notopen:
+    cmp al, ')'
+    jne .loop
+    dec cx
+    jnz .loop
+.out:
+    pop cx
+    ret
+
 ; sh_streq - in: SI, DI (two NUL-terminated strings); out: CF=1 equal
 sh_streq:
     push ax
@@ -17532,6 +17858,85 @@ sh_pct_app:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_errname - the current cell's error, by name, into sh_numbuf. Excel's own
+; spellings, because they are what a person recognises and what every book
+; about spreadsheets prints. An unknown code cannot arise from this app's own
+; evaluator, but a file could carry one, so it reads as #ERR rather than
+; running off the end of the table.
+; -----------------------------------------------------------------------------
+sh_errname:
+    push ax
+    push bx
+    push si
+    push di
+    mov al, [sh_curaux]
+    or al, al
+    jz .unknown
+    cmp al, 7
+    ja .unknown
+    xor ah, ah
+    dec ax
+    shl ax, 1
+    mov bx, ax
+    mov si, [sh_errtab + bx]
+    jmp .copy
+.unknown:
+    mov si, sh_s_err_unk
+.copy:
+    mov di, sh_numbuf
+    call sh_strcpy
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_errcode - in: SI = a NUL-terminated error name; out: AL = its Excel
+; ERROR.TYPE number, or 0 if this is not a spelling we write. The inverse of
+; sh_errname, and it reads the SAME table, so the two cannot drift apart.
+; -----------------------------------------------------------------------------
+sh_errcode:
+    push bx
+    push cx
+    push si
+    push di
+    xor cx, cx
+.loop:
+    cmp cx, 7
+    jae .unknown
+    mov bx, cx
+    shl bx, 1
+    mov di, [sh_errtab + bx]
+    call sh_streq
+    jc .found
+    inc cx
+    jmp .loop
+.found:
+    mov ax, cx
+    inc ax
+    jmp .out
+.unknown:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+sh_errtab:  dw sh_s_err_null, sh_s_err_div0, sh_s_err_value, sh_s_err_ref
+            dw sh_s_err_name, sh_s_err_num, sh_s_err_na
+sh_s_err_null:  db '#NULL!', 0
+sh_s_err_div0:  db '#DIV/0!', 0
+sh_s_err_value: db '#VALUE!', 0
+sh_s_err_ref:   db '#REF!', 0
+sh_s_err_name:  db '#NAME?', 0
+sh_s_err_num:   db '#NUM!', 0
+sh_s_err_na:    db '#N/A', 0
+sh_s_err_unk:   db '#ERR', 0
+
+; -----------------------------------------------------------------------------
 ; sh_numfmt - in: AX=value, BL=format byte; writes the decorated display
 ; text into sh_numbuf (General is exactly sh_itoa's plain decimal; Currency/
 ; Comma/Percent decorate it further). BL survives sh_itoa (which preserves
@@ -17929,6 +18334,10 @@ sh_s_dif_v:    db 'V', 13, 10, 0           ; the real DIF value-indicator
                                             ; valid" - NOT a comment string;
                                             ; a type-0 (numeric) data item
                                             ; has no third line at all
+sh_s_dif_err0: db '0,0', 13, 10, 'ERROR', 13, 10, 0 ; the ERROR indicator, on
+                                                    ; a numeric item, which is
+                                                    ; DIF's whole vocabulary
+                                                    ; for one
 sh_s_dif_na0:  db '0,0', 13, 10, 'NA', 13, 10, 0  ; a numeric item (type 0)
                                             ; whose indicator is NA - NOT
                                             ; type 1 (that's DIF's STRING
@@ -17981,7 +18390,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3031
+    OS88_BSS 3037
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18018,7 +18427,8 @@ SH_THASE      equ SH_TDVAL + 8              ; byte: this record had a ;E field
 SH_TEXPR      equ SH_THASE + 1              ; SH_EDITMAX+1: its text
 SH_TISTXT     equ SH_TEXPR + SH_EDITMAX + 1 ; byte: the ;K field was QUOTED,
                                              ; so SH_TEXPR holds a label
-SH_THAVE      equ SH_TISTXT + 1
+SH_TISERR     equ SH_TISTXT + 1             ; byte: ...or was an ERROR NAME,
+SH_THAVE      equ SH_TISERR + 1             ; and which one
 SH_TALIGN     equ SH_THAVE + 1             ; sh_parsefrec's own scratch -
 SH_TNUMFMT    equ SH_TALIGN + 1            ; an "F" record's parsed
 SH_TCOMMA     equ SH_TNUMFMT + 1           ; alignment/number-format/;K
@@ -18055,7 +18465,14 @@ sh_wrec_fmt   equ sh_wrec_val + 2           ; SYLK's and BIFF's writers'
                                              ; byte (DIF carries no format
                                              ; at all, see sh_dowrite_dif)
 sh_newoff     equ sh_wrec_fmt + 1           ; sh_setformula's new text offset
-sh_evaldepth  equ sh_newoff + 2             ; sh_eval_cell's recursion depth
+sh_curaux     equ sh_newoff + 2             ; sh_getcell2's error-code output
+sh_evalerr    equ sh_curaux + 2             ; byte: the error this evaluation
+                                             ; ran into, 0 = none. STICKY for
+                                             ; the whole of one top-level
+                                             ; evaluation, which is what makes
+                                             ; propagation free: no operator
+                                             ; has to test it
+sh_evaldepth  equ sh_evalerr + 2             ; sh_eval_cell's recursion depth
 sh_fbuf       equ sh_evaldepth + 2          ; SH_EVAL_MAXDEPTH * 64: one
                                              ; formula-text copy per
                                              ; recursion level (see
@@ -18171,7 +18588,8 @@ sh_wrec_type  equ sh_wrec_dval + 8          ; byte: SH_T_* of the cell being
 sh_wrec_toff  equ sh_wrec_type + 1          ; written, where its label is, and
 sh_wrec_len   equ sh_wrec_toff + 2          ; how long that label is
 sh_wrec_hasf  equ sh_wrec_len + 2      ; byte: this cell is a formula
-sh_wsheet     equ sh_wrec_hasf + 1      ; which sheet a BIFF write is on
+sh_wrec_aux   equ sh_wrec_hasf + 1      ; byte: and, if it is an ERROR, which
+sh_wsheet     equ sh_wrec_aux + 1        ; which sheet a BIFF write is on
 sh_wb_map     equ sh_wsheet + 2         ; --- the BIFF4 workbook writer ---
 sh_wb_i       equ sh_wb_map + 2
 sh_wb_lenat   equ sh_wb_i + 2           ; where a SHEETHDR's length goes...

@@ -67426,8 +67426,14 @@ happened to touch**:
 
 Both are display-only — the stored value was right the whole time, and the
 formula bar showed the real formula — which is exactly what makes it bad: the
-grid is what anyone reads. The three are now banked across the `sh_eval_cell`
-call and put back after.
+grid is what anyone reads. The **format and the text offset** are now banked
+across the `sh_eval_cell` call and put back after.
+
+The **tag** is not, and §81.20 says why: once an evaluation can decide a cell's
+type — a number this pass, an error the next — restoring a copy taken *before*
+it ran is restoring the answer to the previous question. `sh_eval_cell`'s
+writeback publishes `sh_curtype` and `sh_curaux` instead. Bank what the callee
+cannot change; take what it can from the callee.
 
 This is the same shape as §82.10: state that is correct when it is written and
 destroyed by a call made afterwards. There the register was BX and the callee
@@ -67527,6 +67533,88 @@ loop never advanced and the machine stopped dead. And `sh_sort_permcol` moves
 "skip the key column" test read whichever column had been carried last: the
 key was carried too, permuted a second time on top of its own sort. It is
 banked once, before anything runs.
+
+### 81.20 Error values
+
+A formula that cannot produce a number produced **zero**, and a zero is
+indistinguishable from an answer. `=A1/A2` with an empty divisor read as 0;
+`=1+` read as 1; a typo'd function name read as 0 and summed into the total
+below it. Excel has had error values since its first release for exactly this
+reason, and this is them.
+
+**The tag, and the code.** `SH_C_TYPE` becomes `SH_T_ERR` and `SH_C_AUX`
+carries the code. The codes are **Excel's own `ERROR.TYPE` numbers** —
+1 `#NULL!`, 2 `#DIV/0!`, 3 `#VALUE!`, 4 `#REF!`, 5 `#NAME?`, 6 `#NUM!`,
+7 `#N/A` — so `ERROR.TYPE`, `ISERR` and `ISNA` become table lookups if they are
+ever added, and BIFF's own error byte needs no translation on the way out.
+`sh_errname` turns a code into the spelling and `sh_errcode` turns a spelling
+back into a code; both read `sh_errtab`, so the two directions cannot drift.
+
+**What raises one.** `#DIV/0!` from `fp_div` returning CF=1. `#VALUE!` from a
+LABEL used as an operand, and from a factor that parses as nothing at all
+(`=1+`). `#NAME?` from an identifier that is neither a known function nor a
+defined name, called or bare. `#NUM!` from `SQRT` of a negative and from `FACT`
+outside its domain or its range. `#REF!` and `#NULL!` have codes and spellings
+but nothing raises them yet — the reference rewriters clamp rather than
+invalidate (§81.11).
+
+**Propagation is the point.** `sh_evalerr` is a single sticky byte, cleared
+**only when `sh_evaldepth` is 0** — a fresh evaluation starts clean, a nested
+one must not, or the referenced cell's error would be wiped on the way back up.
+`sh_getcell2` raises it again whenever the cell it just read is tagged
+`SH_T_ERR`, which is what makes one `#DIV/0!` visible at the total: the range
+fold reaches the broken cell through the same routine an operand does.
+
+**Where the tag is decided, and who publishes it.** `sh_eval_cell`'s writeback
+stores `SH_T_ERR` + code, or `SH_T_NUM` + 0 — the cell is stored by what it IS,
+so fixing the divisor turns the error back into a number with no separate
+"clear" step. That writeback **also publishes `sh_curtype`/`sh_curaux`**, and
+`sh_getcell2` deliberately does **not** bank those two across the evaluation
+the way it banks the format and the text offset (§81.16). Banking them was the
+first attempt and it is wrong twice over: the banked copy predates the
+evaluation, so a cell whose divisor had since been fixed still painted
+`#DIV/0!`, and a cell that was still broken painted the `#ERR` fallback,
+because its code had been overwritten by the last cell its formula referenced.
+The format and the offset are banked because an evaluation cannot change them;
+the type and the code are not, because the evaluation is what decides them.
+
+**Drawing one.** The painter's value path tests `SH_T_ERR` before it tests
+`SH_T_TEXT`, and draws the name right-justified where the number would have
+been — the number underneath an error is meaningless, and showing it is the
+defect this whole section exists to remove.
+
+#### 81.20.1 An error value in a file
+
+An error that saves as `0` is the same lie in a more durable form, so all three
+formats carry it.
+
+**BIFF** carries it twice, because a cell can reach the file two ways. A
+tokenised formula's **cached result** uses BIFF's own encoding for a result
+that is not a number: top word `FFFFH`, byte 0 naming the kind (2 = an error)
+and byte 2 the code. This matters more here than in Excel, because this app's
+BIFF reader **reads the cached result and skips the token array** (§81.7) —
+without the encoding every error came back as the perfectly ordinary zero
+underneath it. An error whose formula could not be tokenised takes a
+**BOOLERR** record (0205H) instead, whose value byte is the same code and whose
+flag byte says error rather than boolean. The reader accepts both, and reads a
+BOOLERR with the flag clear as the number 0 or 1, since there is no BOOL type
+here yet.
+
+**SYLK** writes the name into the `K` field, bare: `;K#DIV/0!`. No number
+begins with `#` and SYLK has no type field, so the leading character is the
+whole signal — the same trick the quotes play for a label (§81.7). A formula
+cell writes `;E` *and* `;K`, and `;E` wins on the way back in, so an error with
+a formula regenerates by being recalculated; the `K` literal is what a
+formula-less error needs. **The reader must not parse the name into
+`SH_TEXPR`** — that is `;E`'s buffer, `;E` comes first in the record, and
+overwriting it put `=#DIV/0!` in as the cell's formula, which then evaluated to
+`#VALUE!`. It parses into `sh_rwsrc`.
+
+**DIF** has one word for the whole subject, and the cell goes out as a numeric
+item with the `ERROR` indicator instead of `V`. DIF cannot say *which* error,
+so it comes back as **`#N/A`** — the one error that means exactly "a value was
+not available", which is all the file said. Reading a specific error out of a
+file that does not contain one would be inventing it.
 
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
