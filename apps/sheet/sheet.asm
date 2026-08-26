@@ -13695,11 +13695,199 @@ SH_PTG_UMINUS  equ 0x13
 SH_PTG_PAREN   equ 0x15
 SH_PTG_INT     equ 0x1E                 ; + a 16-bit unsigned
 SH_PTG_NUM     equ 0x1F                 ; + an IEEE double
+SH_PTG_FUNCV   equ 0x41                 ; tFuncV / tFuncVarV (3.7.1, 3.7.2).
+SH_PTG_FUNCVARV equ 0x42                ; VALUE class throughout, like the refs
+                                         ; below: a cell formula's result is a
+                                         ; value, whatever the function's own
+                                         ; default return class is
 SH_PTG_REFV    equ 0x44                 ; value class: 3.3.4's transformation
 SH_PTG_AREAV   equ 0x45                 ; turns the default R class into V inside
                                       ; an ordinary cell formula
 SH_RPN_MAX   equ 96                   ; a token array longer than this is
                                       ; refused rather than truncated
+
+; The BIFF function index for each of Sheet's own functions, INDEXED BY
+; sh_functab's order - so the id sh_funcid already returns indexes straight
+; into these, and adding a function to one table without the other is a
+; visible hole rather than a silent mismatch.
+;
+; The numbers are OpenOffice.org's Documentation of the Microsoft Excel File
+; Format, revision 1.42, section 3.11 (Built-In Sheet Functions). SPEC.md
+; 81.10.2 was written against an EARLIER revision of the same document, in
+; which that section reads only "2do" - which is why every function used to
+; fall back to a cached value.
+;
+; 0xFF = cannot be written at the BIFF version this app emits. POWER is the
+; only one: it is index 337, new in BIFF5, and past the byte BIFF3 allows.
+sh_rpn_fid:
+    db 4, 5, 6, 7, 0                  ; SUM AVERAGE MIN MAX COUNT
+    db 1, 38, 24, 36, 37              ; IF NOT ABS AND OR
+    db 183, 169, 39, 25, 197          ; PRODUCT COUNTA MOD INT TRUNC
+    db 26, 184, 20, 0xFF, 27          ; SIGN FACT SQRT POWER(no) ROUND
+    db 34, 35, 8, 9, 100              ; TRUE FALSE ROW COLUMN CHOOSE
+
+; 1 = the function takes a variable number of arguments and so is written as
+; tFuncVar (which carries a count byte); 0 = fixed, written as tFunc. This is
+; "min par != max par" in that same table, NOT a guess about how it is used -
+; TRUNC is 1..2 in BIFF3 even though this app only ever passes it one.
+sh_rpn_fvar:
+    db 1, 1, 1, 1, 1                  ; SUM AVERAGE MIN MAX COUNT
+    db 1, 0, 0, 1, 1                  ; IF NOT ABS AND OR
+    db 1, 1, 0, 0, 1                  ; PRODUCT COUNTA MOD INT TRUNC
+    db 0, 0, 0, 0, 0                  ; SIGN FACT SQRT POWER ROUND
+    db 0, 0, 1, 1, 1                  ; TRUE FALSE ROW COLUMN CHOOSE
+
+; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
+; Looks ahead and RESTORES nothing because it consumes nothing: sh_rpn_p is
+; untouched either way, so whichever path runs next reads the name itself.
+sh_rpn_isfunc:
+    push ax
+    push si
+    mov si, [sh_rpn_p]
+.skipname:
+    mov al, [si]
+    cmp al, 'A'
+    jb .past
+    cmp al, 'Z'
+    jbe .next
+    cmp al, 'a'
+    jb .past
+    cmp al, 'z'
+    ja .past
+.next:
+    inc si
+    jmp .skipname
+.past:
+    cmp al, ' '                       ; "SUM (" is still a call
+    jne .test
+.spaces:
+    inc si
+    mov al, [si]
+    cmp al, ' '
+    je .spaces
+.test:
+    cmp al, '('
+    je .yes
+    stc
+    jmp .out
+.yes:
+    clc
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rpn_func - a built-in function call at sh_rpn_p: NAME ( arg , arg ... )
+; Emits the arguments in order, then the function token. Re-entrant, because
+; an argument can be another call - the function's own id and its argument
+; count are kept in registers banked across the recursion rather than in bss,
+; which a nested call would overwrite.
+; -----------------------------------------------------------------------------
+sh_rpn_func:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, [sh_rpn_p]
+    mov di, sh_ident
+    xor cx, cx
+.gather:
+    mov al, [si]
+    cmp al, 'a'
+    jb .nolower
+    cmp al, 'z'
+    ja .nolower
+    sub al, 32                        ; sh_funcid matches uppercase
+.nolower:
+    cmp al, 'A'
+    jb .gathered
+    cmp al, 'Z'
+    ja .gathered
+    cmp cx, SH_NAME_MAX
+    jae .bad
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp .gather
+.gathered:
+    mov byte [di], 0
+    or cx, cx
+    jz .bad
+    mov [sh_rpn_p], si
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], '('
+    jne .bad
+    inc si
+    mov [sh_rpn_p], si
+    call sh_funcid                    ; AL = this app's own id, 0xFF unknown
+    cmp al, 0xFF
+    je .bad
+    xor ah, ah
+    mov bx, ax                        ; BX = that id, kept across the arguments
+    mov al, [sh_rpn_fid + bx]
+    cmp al, 0xFF
+    je .bad                           ; no index at this BIFF version
+    xor cx, cx                        ; CX = how many arguments were seen
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], ')'
+    je .closed                        ; NAME() - legal for TRUE, ROW, COUNT...
+.arg:
+    push bx                           ; sh_rpn_cmp banks only AX and SI
+    push cx
+    call sh_rpn_cmp
+    pop cx
+    pop bx
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    inc cx
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], ','
+    jne .closed
+    inc si
+    mov [sh_rpn_p], si
+    jmp .arg
+.closed:
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], ')'
+    jne .bad
+    inc si
+    mov [sh_rpn_p], si
+    cmp byte [sh_rpn_fvar + bx], 0
+    jne .variable
+    mov al, SH_PTG_FUNCV
+    call sh_rpn_put
+    jmp .index
+.variable:
+    mov al, SH_PTG_FUNCVARV
+    call sh_rpn_put
+    mov al, cl                        ; the count comes before the index
+    call sh_rpn_put
+.index:
+    mov al, [sh_rpn_fid + bx]
+    call sh_rpn_put
+    cmp byte [sh_wb_xf4], 0           ; BIFF2-3 carry a ONE-byte index and
+    je .out                           ; BIFF4-8 a word (3.7.1/3.7.2) - the
+    xor al, al                        ; workbook writer emits BIFF4, so the
+    call sh_rpn_put                   ; high byte goes out there and not here
+    jmp .out
+.bad:
+    mov byte [sh_rpn_bad], 1
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_rpn_emit - in: SI = the formula text (no leading '=')
@@ -13989,15 +14177,20 @@ sh_rpn_factor:
 .notdigit:
     cmp al, '.'                       ; a leading decimal point is a number
     je .num
-    cmp al, 'A'                       ; A LETTER STARTS A REFERENCE - and only
-    jb .bad                           ; a reference, because a function call is
-    cmp al, 'Z'                       ; refused a level down when sh_rpn_one
-    jbe .ref                          ; finds a '(' where digits should be
+    cmp al, 'A'                       ; A letter starts either a reference or a
+    jb .bad                           ; FUNCTION CALL, and only the character
+    cmp al, 'Z'                       ; after the name tells them apart: a '('
+    jbe .word                         ; means a call, anything else a reference
     cmp al, 'a'
     jb .bad
     cmp al, 'z'
-    jbe .ref
+    jbe .word
     jmp .bad
+.word:
+    call sh_rpn_isfunc                ; LOOKS AHEAD without consuming, because
+    jc .ref                           ; sh_rpn_ref must re-read from the name
+    call sh_rpn_func
+    jmp .out
 .paren:
     inc si
     mov [sh_rpn_p], si

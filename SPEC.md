@@ -67068,18 +67068,39 @@ RPN token array, not as the flattened value it used to be. The result field
 still carries the cached double, so a reader that does not recalculate shows
 the right number and one that does gets the same answer from the tokens.
 
-**It refuses any formula containing a function call**, falling back to
-NUMBER/RK exactly as before, and the reason is not effort:
-`docs/excelfileformat.pdf`'s section 3.12, *Built-in Sheet Functions*, is marked **2do**
-— the index table is not written in that revision. A guessed index does not
-produce a broken file; it produces one Excel opens happily and computes
-**something else** from, silently. Carrying the value is at least right. BIFF3's
-`tFunc`/`tFuncVar` also take a one-byte index, so several of Sheet's own
-functions could not be expressed even with the table — POWER is 337.
+**Function calls are written too**, as of the revision note below. Numbers,
+cell references, ranges, the six comparisons, `+ - * / ^`, unary minus,
+parentheses, and **24 of this app's 25 built-in functions**.
 
-So: numbers, cell references, ranges, the six comparisons, `+ - * / ^`, unary
-minus and parentheses. Every one is verifiable against a spec section that *is*
-written.
+**This used to refuse every function, and the reason was the document, not
+effort.** The revision of `excelfileformat.pdf` this section was first written
+against has section 3.12, *Built-in Sheet Functions*, reading only **`2do`** —
+the index table is simply not in it. A guessed index does not produce a broken
+file; it produces one Excel opens happily and computes **something else** from,
+silently, so carrying the cached value was the honest answer.
+
+**Revision 1.42 of the same document has the table**, renumbered to section
+3.11 and split by version: 3.11.1 BIFF2, 3.11.2 new in BIFF3, and so on. It is
+the same OpenOffice.org documentation by the same author, so this is a newer
+copy of the reference already cited rather than a new source. `sh_rpn_fid` and
+`sh_rpn_fvar` carry those numbers, **indexed by `sh_functab`'s own order**, so
+the id `sh_funcid` already returns indexes straight into them and a function
+added to one table without the other is a hole rather than a mismatch.
+
+**POWER is still the exception, and for exactly the reason guessed here
+before the table was in hand:** it is index **337**, new in BIFF5, past the
+byte BIFF3 allows. It falls back to its cached value.
+
+Two details the table decides rather than the code:
+
+- **`tFunc` or `tFuncVar`** follows *min par vs max par*, not how this app
+  happens to call the function. `TRUNC` is 1..2 parameters in BIFF3 and so is
+  written as `tFuncVar` even though Sheet only ever passes it one.
+- **The index is one byte in BIFF2-3 and a word in BIFF4-8** (3.7.1, 3.7.2).
+  This app writes both — 0206H for a single sheet, 0406H inside a workbook —
+  so the emitter reads `sh_wb_xf4` and pads accordingly. Verified in both: the
+  same `=SUM(A1:A3)` emits `42 01 04` in a BIFF3 file and `42 01 04 00` in a
+  BIFF4 workbook.
 
 **The parser is a second one**, not the evaluator with a mode bolted on.
 `sh_pexpr` and friends compute; `sh_rpn_*` walks the same grammar and emits.
