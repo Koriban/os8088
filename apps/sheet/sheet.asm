@@ -333,10 +333,11 @@ SH_C_SZ      equ 20                 ; ...and an EVEN stride, so the array
                                     ; shuffle can move words rather than bytes
 
 ; sh_rowcol_op stages every record through sh_stgseg while it shifts a row or
-; column, and THAT record kept its original 12-byte shape - it is a transient
-; copy, not storage, and nothing about it needs to grow. Named for exactly the
-; reason above: the two layouts look alike and one was silently edited into
-; the other.
+; column. It is a transient copy, not storage - but it CARRIES the whole
+; cell across the shift, so it had to grow with the cell record: the value
+; at stage 4.0, the type tag and error code at stage 4.5. Named for exactly
+; the reason above: the two layouts look alike and one was silently edited
+; into the other.
 SH_S_SHEET   equ 0
 SH_S_ROW     equ 2
 SH_S_COL     equ 4
@@ -350,7 +351,13 @@ SH_S_VAL     equ 8                  ; 8 bytes since stage 4.0: this record
                                     ; low half of its own double - silently,
                                     ; on an Insert Row
 SH_S_FML     equ 16
-SH_S_SZ      equ 18
+SH_S_TYPE    equ 18                 ; byte: SH_C_TYPE, carried for the same
+SH_S_AUX     equ 19                 ; byte: ...reason - sh_addcell retags a
+                                    ; fresh record SH_T_NUM, so a label whose
+                                    ; tag was not carried came back a number.
+                                    ; Free bytes: the staging stride in the
+                                    ; code is SH_C_SZ, so 18..19 already exist
+SH_S_SZ      equ 20
 
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
@@ -9014,6 +9021,10 @@ sh_new:
     mov si, dx                       ; SI = window ptr, restored
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
+    mov word [sh_nbord], 0           ; the discarded document's borders and
+    mov word [sh_nnote], 0           ; notes go with it - a note record holds
+                                     ; an OFFSET into the arena reset above,
+                                     ; and would read new text through it
     mov word [sh_cursheet], 0
     mov cx, SH_SHEETS * 4            ; 4 words per sheet: sel/row/scl/scr
     mov di, sh_selsave
@@ -9588,6 +9599,9 @@ sh_doread_sylk:
     jc .rerr
 
     mov word [sh_ncells], 0
+    mov word [sh_txtlen], 0           ; "replacing the sheet" means the old
+    mov word [sh_nbord], 0            ; document's arena text, borders and
+    mov word [sh_nnote], 0            ; notes too, not just its cells
     mov cx, ax                        ; a file this small never exceeds 64KB
     xor si, si
     call sh_parseslk
@@ -9955,6 +9969,9 @@ sh_doread_dif:
     jc .rerr
 
     mov word [sh_ncells], 0
+    mov word [sh_txtlen], 0            ; "replacing the sheet" - see
+    mov word [sh_nbord], 0             ; sh_doread_sylk's same three
+    mov word [sh_nnote], 0
     mov es, [sh_stgseg]
     mov di, ax                         ; DI = end (bytes read)
     xor si, si
@@ -11089,6 +11106,9 @@ sh_doread_biff:
     jc .rerr
 
     mov word [sh_ncells], 0
+    mov word [sh_txtlen], 0            ; "replacing the sheet" - see
+    mov word [sh_nbord], 0             ; sh_doread_sylk's same three
+    mov word [sh_nnote], 0
     mov word [sh_biff_nfont], 0
     mov word [sh_biff_nxf], 0
     mov cx, ax                         ; CX = end offset (bytes read)
@@ -12218,7 +12238,7 @@ sh_removecell:
     mul bx                             ; AX = end offset (before shrink)
     mov cx, ax
     sub cx, di
-    sub cx, 12                         ; CX = bytes after this record
+    sub cx, SH_C_SZ                    ; CX = bytes after this record
     push ds
     push es
     mov dx, [sh_cellseg]
@@ -12736,6 +12756,10 @@ sh_rowcol_op:
     mov [sh_rc_tflags], al
     mov al, [es:si+5]
     mov [sh_rc_tfmt], al
+    mov al, [es:si+SH_C_TYPE]
+    mov [sh_rc_ttype], al
+    mov al, [es:si+SH_C_AUX]
+    mov [sh_rc_taux], al
     push di
     push cx
     mov di, sh_rc_tval
@@ -12810,12 +12834,28 @@ sh_rowcol_op:
     mov [es:di+4], ax
     mov al, [sh_rc_tflags]
     mov [es:di+SH_S_FLAGS], al        ; THE STAGING RECORD IS NOT THE CELL
-    mov al, [sh_rc_tfmt]              ; RECORD. It is its own 12-byte layout in
-    mov [es:di+SH_S_FMT], al          ; sh_stgseg and it did NOT widen with the
-    mov ax, [sh_rc_tval]              ; cell array - which is precisely why
-    mov [es:di+SH_S_VAL], ax          ; both are named now: converting this
-    mov ax, [sh_rc_tfml]              ; block to the cell offsets by mistake
-    mov [es:di+SH_S_FML], ax          ; was silent, and staged garbage
+    mov al, [sh_rc_tfmt]              ; RECORD. It is its own SH_S_* layout in
+    mov [es:di+SH_S_FMT], al          ; sh_stgseg - which is precisely why
+    push si                           ; both are named now: converting this
+    push cx                           ; block to the cell offsets by mistake
+    mov si, sh_rc_tval                ; was silent, and staged garbage
+    mov cx, 4
+.stval:
+    mov ax, [si]                      ; ALL FOUR value words: .rstval reads
+    mov [es:di+SH_S_VAL], ax          ; four back, so staging only one left
+    add si, 2                         ; six bytes of whatever sh_stgseg last
+    add di, 2                         ; held (file text, a sort) inside every
+    dec cx                            ; plain number, on every Insert/Delete
+    jnz .stval
+    sub di, 8
+    pop cx
+    pop si
+    mov ax, [sh_rc_tfml]
+    mov [es:di+SH_S_FML], ax
+    mov al, [sh_rc_ttype]             ; the tag and the error code ride too -
+    mov [es:di+SH_S_TYPE], al         ; see the SH_S_TYPE comment in the
+    mov al, [sh_rc_taux]              ; layout block above
+    mov [es:di+SH_S_AUX], al
     inc word [sh_rc_stgcnt]
 .next:
     inc cx
@@ -12860,6 +12900,10 @@ sh_rowcol_op:
     pop di
     mov ax, [es:si+SH_S_FML]
     mov [sh_rc_tfml], ax
+    mov al, [es:si+SH_S_TYPE]
+    mov [sh_rc_ttype], al
+    mov al, [es:si+SH_S_AUX]
+    mov [sh_rc_taux], al
     mov ax, [sh_rc_tcol]
     mov bx, [sh_rc_trow]
     call sh_addcell
@@ -12871,6 +12915,10 @@ sh_rowcol_op:
     mov [es:di+4], al
     mov al, [sh_rc_tfmt]
     mov [es:di+5], al
+    mov al, [sh_rc_ttype]             ; over sh_addcell's SH_T_NUM default -
+    mov [es:di+SH_C_TYPE], al         ; a label keeps being a label, an error
+    mov al, [sh_rc_taux]              ; keeps its code
+    mov [es:di+SH_C_AUX], al
     push si
     push cx
     mov si, sh_rc_tval
@@ -18433,7 +18481,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3101
+    OS88_BSS 3103
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18645,8 +18693,10 @@ sh_rd_wb      equ sh_rd_home + 2        ; byte: this file is a BIFF4 workbook
 sh_biff_end   equ sh_rd_wb + 1           ; the BIFF reader's banked file end
 sh_rc_tval    equ sh_biff_end + 2           ; 8: a whole double, not a word
 sh_rc_tfml    equ sh_rc_tval + 8
+sh_rc_ttype   equ sh_rc_tfml + 2            ; byte: SH_C_TYPE in transit
+sh_rc_taux    equ sh_rc_ttype + 1           ; byte: ...and SH_C_AUX
 
-sh_sort_cnt   equ sh_rc_tfml + 2            ; word: sh_docmd_sortcol's own
+sh_sort_cnt   equ sh_rc_taux + 1            ; word: sh_docmd_sortcol's own
                                              ; staged-pair count
 sh_sort_fcnt  equ sh_sort_cnt + 2           ; word: how many formula text
                                              ; slots are staged so far
