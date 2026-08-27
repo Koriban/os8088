@@ -66842,6 +66842,27 @@ referenced ten times in one repaint is evaluated once. Recursion is bounded at
 text** — a nested evaluation must not overwrite the buffer its caller is still
 parsing.
 
+**A formula's OWN nesting is bounded too.** Every `(`, unary `-`, `^` and
+function call recurses the parser, and a pending binary operator banks its
+8-byte left operand on the machine stack — which is task 0's 1,024-byte stack
+(§2.1), the one every package callback runs on. `sh_pnest_enter` charges each
+of those recursion points, cell depth included, against one shared budget
+(`SH_PNEST_MAX` = 12 — enough for the deepest `SH_EVAL_MAXDEPTH` chain of
+folds); past it the parse refuses with `#VALUE!` instead of running SP off the
+stack's floor into `.lowbss`, the same refusal shape too-deep cell recursion
+already has.
+
+**A range folds by walking the RECORD ARRAY, not the rectangle.** The array
+is sorted by (packed row, col) — §81.1 — so `sh_foldrange` binary-searches the
+rectangle's first corner once and scans forward until the packed row passes
+the far corner, folding each record whose column lands inside. The cost is
+O(records in the row span), where walking every coordinate was O(area × log n):
+the ordinary `=SUM(A1:A16384)` idiom was 16,384 binary searches inside the
+paint callback, seconds per repaint on the 8088 and invisible in an emulator
+(PERFORMANCE.md rule 6). Each hit still goes through `sh_getcell2`, so a
+formula cell inside the range still evaluates, memoizes and propagates its
+error exactly as an operand does.
+
 **`ROW()` and `COLUMN()` answer for the cell being evaluated**, not the one
 selected, so `sh_eval_cell` banks and restores `sh_evrow`/`sh_evcol` per frame.
 A formula reached through another cell's reference still answers for itself.
@@ -67352,6 +67373,12 @@ pinned down the whole fill while the relative one beside it walks (§81.7).
 One `sh_repaint` runs after the whole fill rather than per cell, because a
 repaint is priced in primitive calls (PERFORMANCE.md).
 
+A plain source copies by what it IS: a number as the full eight-byte double
+(`sh_setvald` — `sh_setval` is the integer wrapper and would fill 3.5 as 3),
+a label as its text through `sh_settext`. This is the same stage-4.0 defect
+class §81.18 records as found and fixed in Copy — a word read at `SH_C_VAL`,
+and no case for a label at all, which filled every heading as the number 0.
+
 ### 81.14 The `.SLK`/`.DIF`/`.BIF` associations, and why the load is deferred
 
 Sheet's header claims all three extensions through `OS88_ASSOC16` (§54.6), so
@@ -67551,8 +67578,11 @@ ever added, and BIFF's own error byte needs no translation on the way out.
 back into a code; both read `sh_errtab`, so the two directions cannot drift.
 
 **What raises one.** `#DIV/0!` from `fp_div` returning CF=1. `#VALUE!` from a
-LABEL used as an operand, and from a factor that parses as nothing at all
-(`=1+`). `#NAME?` from an identifier that is neither a known function nor a
+LABEL used as an operand, from a factor that parses as nothing at all
+(`=1+`), from a function-argument tail the grammar cannot parse (a range with
+an operator behind it, `=SUM(A1:A9^2)` — a partial fold is an answer to a
+different question), and from a parse that runs past the nesting budget
+(§81.3). `#NAME?` from an identifier that is neither a known function nor a
 defined name, called or bare. `#NUM!` from `SQRT` of a negative and from `FACT`
 outside its domain or its range. `#REF!` and `#NULL!` have codes and spellings
 but nothing raises them yet — the reference rewriters clamp rather than
@@ -67563,7 +67593,16 @@ invalidate (§81.11).
 one must not, or the referenced cell's error would be wiped on the way back up.
 `sh_getcell2` raises it again whenever the cell it just read is tagged
 `SH_T_ERR`, which is what makes one `#DIV/0!` visible at the total: the range
-fold reaches the broken cell through the same routine an operand does.
+fold reaches the broken cell through the same routine an operand does. It
+raises it from the tag the writeback **just published** on the formula path,
+and from the stored tag only for a formula-less cell — raising from the stored
+tag before re-evaluating is restoring the answer to the previous question, and
+it made a fixed divisor's `#DIV/0!` immortal whenever the erroring cell was
+first reached through another formula. Stickiness has one exception:
+`IF` and `CHOOSE` still parse every branch (the parse is what advances SI),
+but the error a NOT-chosen branch raises is banked and unraised — otherwise
+`=IF(B1=0,0,A1/B1)`, the exact guard these error values exist to make
+writable, answered `#DIV/0!` for the case it guards.
 
 **Where the tag is decided, and who publishes it.** `sh_eval_cell`'s writeback
 stores `SH_T_ERR` + code, or `SH_T_NUM` + 0 — the cell is stored by what it IS,

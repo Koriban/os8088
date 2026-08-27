@@ -415,6 +415,15 @@ SH_EVAL_MAXDEPTH equ 6               ; a formula referencing a formula
                                       ; reference just reads as 0 - the same
                                       ; honest simplification as every other
                                       ; unbounded case here.
+SH_PNEST_MAX equ 12                  ; the parser's own nesting budget (81.3):
+                                      ; live recursion points plus cell depth,
+                                      ; charged by sh_pnest_enter. 12 is what
+                                      ; the deepest SH_EVAL_MAXDEPTH chain of
+                                      ; folds needs (one call + one depth per
+                                      ; level); each level holds tens of bytes
+                                      ; of task 0's 1,024-byte stack, so the
+                                      ; cap is sized to that stack, not to the
+                                      ; grammar
 
 ; --- stage 1.6: per-cell text formatting -----------------------------------
 ; Packed into the cell record's byte at +5 (previously unused padding, see
@@ -4736,10 +4745,28 @@ sh_fill_copy:
 .plain:
     mov ax, [sh_fl_scol]
     mov bx, [sh_fl_srow]
-    call sh_getcell2
+    call sh_getcell2                   ; the full double lands in sh_acc, and
+    cmp byte [sh_curtype], SH_T_TEXT   ; the tag says label or number (81.13 -
+    je .text                           ; 81.18's Copy defect, closed here too)
     mov ax, [sh_fl_dcol]
     mov bx, [sh_fl_drow]
-    call sh_setval
+    call sh_setvald                    ; sh_setval would truncate 3.5 to 3
+    jmp .out
+.text:
+    mov si, [sh_curtoff]               ; a LABEL: copy its text out of
+    mov es, [sh_txtseg]                ; sh_txtseg into DS scratch, because
+    mov di, sh_rwsrc                   ; sh_settext reads DS:SI
+.tcopy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .tcopy
+    mov ax, [sh_fl_dcol]
+    mov bx, [sh_fl_drow]
+    mov si, sh_rwsrc
+    call sh_settext
 .out:
     pop es
     pop di
@@ -14183,14 +14210,15 @@ sh_getcell2:
     mov [sh_curtype], al              ; tell a label from the zero it would
     mov al, [es:di+SH_C_AUX]          ; the error code travels with the tag,
     mov [sh_curaux], al               ; so the painter can name it
-    cmp byte [sh_curtype], SH_T_ERR   ; ...and an ERROR spreads: anything built
-    jne .noterr                       ; on a broken cell is broken too, which
-    mov [sh_evalerr], al              ; is what every spreadsheet does and what
-.noterr:                              ; makes one #DIV/0! visible at the total
     mov ax, [es:di+SH_C_FOFF]         ; otherwise read as this cell's value
     mov [sh_curtoff], ax
-    test byte [es:di+4], 1            ; HASFORMULA
-    jz .plain
+    test byte [es:di+4], 1            ; HASFORMULA. An ERROR tag raises
+    jz .plain                         ; sh_evalerr only AFTER this split
+                                      ; (81.20): a formula cell's stored tag
+                                      ; may predate the fix that unbreaks it,
+                                      ; and raising from it here survived the
+                                      ; clean re-evaluation below and wrote
+                                      ; the old error back for the whole pass
     pop es
     ; BANK THIS CELL'S OWN IDENTITY ACROSS THE EVALUATION. sh_eval_cell
     ; recurses back through sh_getcell2 for every cell the formula names, and
@@ -14211,9 +14239,19 @@ sh_getcell2:
     mov [sh_curtoff], bx               ; sh_curtype/sh_curaux are NOT banked:
                                        ; the evaluation is what decides them,
                                        ; and it publishes them at its writeback
+    cmp byte [sh_curtype], SH_T_ERR   ; ...and an ERROR spreads: anything built
+    jne .fresh                        ; on a broken cell is broken too - raised
+    mov al, [sh_curaux]               ; from what the writeback (or a cache
+    mov [sh_evalerr], al              ; hit's current tag) JUST published,
+.fresh:                               ; never from the pre-evaluation one
     stc
     jmp .out
 .plain:
+    cmp byte [sh_curtype], SH_T_ERR   ; a formula-less error cell (sh_seterr,
+    jne .pnum                         ; the BIFF reader) has no evaluation to
+    mov al, [sh_curaux]               ; republish its tag, so the stored one
+    mov [sh_evalerr], al              ; is current and spreads as before
+.pnum:
     push si                           ; stage 4.0: the stored value is a full
     push cx                           ; double, so it comes out into sh_acc.
     mov si, sh_acc                    ; DX stays the truncated integer for the
@@ -15644,14 +15682,22 @@ sh_ptermcont:
 ; A negative exponent is a fraction and there is no fraction here, so it
 ; yields 0 - the same answer this evaluator already gives for division by
 ; zero, and for the same stated reason.
+; sh_ppowcont is a real entry point of its own, like sh_ptermcont's: sh_prange
+; calls it FIRST to resume a lone cell reference that turned out not to start
+; a range - without it, `=SUM(A1^2)` left the '^' for sh_pfunc's argument loop,
+; which can only stop at it.
 sh_ppow:
     call sh_pfactor
+sh_ppowcont:
     cmp byte [si], '^'
     jne .out
     call sh_chktext
     inc si
+    call sh_pnest_enter               ; '^' recurses too (81.3)
+    jc .nestfull
     call sh_vpush                     ; the BASE, banked
     call sh_ppow                      ; recurse: right-associative
+    call sh_pnest_leave
     call sh_chktext
     call sh_acc_toint                 ; the exponent is still a whole number -
     mov cx, ax                        ; a fractional power needs logarithms,
@@ -15682,6 +15728,46 @@ sh_ppow:
     call sh_acc_int
 .out:
     ret
+.nestfull:
+    push ax                           ; over the budget: the base is dropped,
+    xor ax, ax                        ; and the #VALUE! sh_pnest_enter raised
+    call sh_acc_int                   ; stands
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_pnest_enter / sh_pnest_leave - the parser's shared nesting budget (81.3).
+; SH_EVAL_MAXDEPTH bounds cell-to-cell recursion, but nothing bounded a
+; formula's OWN nesting: every '(', unary '-', '^' and nested call recurses
+; the parser and banks bytes on task 0's 1,024-byte stack, and six
+; memoization-cold cells chained that way could run SP off the stack's floor
+; into .lowbss - silent corruption that fails later, somewhere unrelated.
+; One counter charges every recursion point, with the cell depth folded in;
+; over SH_PNEST_MAX the parse refuses with #VALUE! - the same refusal shape
+; sh_eval_cell's .toodeep already has.
+; out: CF=1 refused (sh_evalerr raised, NOTHING charged - do not leave),
+;      CF=0 charged - pair with exactly one sh_pnest_leave
+; -----------------------------------------------------------------------------
+sh_pnest_enter:
+    push ax
+    mov ax, [sh_pnest]
+    inc ax
+    add ax, [sh_evaldepth]
+    cmp ax, SH_PNEST_MAX
+    ja .full
+    inc word [sh_pnest]
+    pop ax
+    clc
+    ret
+.full:
+    pop ax
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    stc
+    ret
+
+sh_pnest_leave:
+    dec word [sh_pnest]
+    ret
 
 ; sh_pfactor - unary minus, parens, a number, or an identifier (cell
 ; reference or function call, sh_pident tells them apart)
@@ -15689,7 +15775,10 @@ sh_pfactor:
     cmp byte [si], '-'
     jne .notneg
     inc si
+    call sh_pnest_enter               ; unary minus recurses (81.3)
+    jc .nestfull
     call sh_pfactor
+    call sh_pnest_leave
     call sh_chktext                   ; -"text" is arithmetic too
     xor byte [sh_acc+7], 0x80         ; negate by flipping the sign BIT of the
     ret                               ; packed double - cheaper than unpacking
@@ -15699,10 +15788,19 @@ sh_pfactor:
     cmp byte [si], '('
     jne .notparen
     inc si
+    call sh_pnest_enter               ; ...and so does a parenthesis
+    jc .nestfull
     call sh_pcmp
+    call sh_pnest_leave
     cmp byte [si], ')'
     jne .out                          ; malformed; return whatever we have
     inc si
+    ret
+.nestfull:
+    push ax                           ; over the budget: sh_pnest_enter has
+    xor ax, ax                        ; raised #VALUE!, and the refusal
+    call sh_acc_int                   ; answers zero underneath it
+    pop ax
     ret
 .notparen:
     mov al, [si]
@@ -16027,8 +16125,9 @@ sh_prange:
 .singlecell:
     call sh_getcell2                  ; the value lands in sh_acc either way -
 .havev:                               ; getcell2 puts a zero there for a cell
-    call sh_ptermcont                 ; that does not exist
-    call sh_pexprcont
+    call sh_ppowcont                  ; that does not exist. '^' binds tighter
+    call sh_ptermcont                 ; than the levels below, so its
+    call sh_pexprcont                 ; continuation must run first
     call sh_pcmpcont
     call sh_foldvalue
     jmp .out
@@ -16041,10 +16140,26 @@ sh_prange:
     ret
 
 ; sh_foldrange - in: sh_r1col/row, sh_r2col/row (either corner order);
-; folds every OCCUPIED cell in the rectangle via sh_foldvalue
+; folds every OCCUPIED cell in the rectangle via sh_foldvalue.
+;
+; It walks the RECORD ARRAY, not the rectangle (81.3): records are sorted by
+; (packed row, col) - the stage 2.0 comment above sh_findcell - so ONE binary
+; search finds the first corner and a forward scan visits exactly the records
+; in the row span. Walking every coordinate was O(area x log n): the ordinary
+; =SUM(A1:A16384) idiom was 16,384 searches inside the paint callback, seconds
+; per repaint on the 8088 and invisible in an emulator (PERFORMANCE.md rule 6).
+; The bound rides in SI and the cursor in DI because sh_getcell2 preserves
+; both across the evaluation a formula cell runs; the end offset is a
+; function of [sh_ncells] alone, the same for a nested fold, so sh_rrow can
+; hold it.
 sh_foldrange:
     push ax
     push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
     mov ax, [sh_r1col]
     mov bx, [sh_r2col]
     cmp ax, bx
@@ -16062,33 +16177,45 @@ sh_foldrange:
     mov [sh_r1row], ax
     mov [sh_r2row], bx
 
-    mov ax, [sh_r1row]
-    mov [sh_rrow], ax
-.rloop:
-    mov ax, [sh_rrow]
-    cmp ax, [sh_r2row]
-    ja .done
+    mov ax, [sh_ncells]
+    mov bx, SH_C_SZ
+    mul bx
+    mov [sh_rrow], ax                  ; end-of-array offset
+    mov ax, [sh_cursheet]              ; the far corner, PACKED the way the
+    mov cl, SH_ROW_BITS                ; records store a row (sh_findcell)
+    shl ax, cl
+    or ax, [sh_r2row]
+    mov si, ax                         ; SI = the packed bound
     mov ax, [sh_r1col]
-    mov [sh_rcol], ax
-.cloop:
-    mov ax, [sh_rcol]
-    cmp ax, [sh_r2col]
-    ja .rnext
-    mov bx, [sh_rrow]
-    call sh_getcell2
-    jnc .skip
-    call sh_foldvalue                 ; sh_acc is the value; see sh_foldvalue
-.skip:
-    mov ax, [sh_rcol]
-    inc ax
-    mov [sh_rcol], ax
-    jmp .cloop
-.rnext:
-    mov ax, [sh_rrow]
-    inc ax
-    mov [sh_rrow], ax
-    jmp .rloop
+    mov bx, [sh_r1row]
+    call sh_findcell                   ; found or not, DI = the first record
+                                        ; at or after the near corner
+.scan:
+    cmp di, [sh_rrow]
+    jae .done                          ; past the last record
+    mov es, [sh_cellseg]               ; reloaded every pass: an evaluation
+    mov ax, [es:di]                    ; below moves ES. AX = packed row
+    cmp ax, si
+    jg .done                           ; sorted (signed, as sh_findcell
+    mov bx, [es:di+2]                  ; compares): past the last row is done
+    cmp bx, [sh_r1col]
+    jb .next
+    cmp bx, [sh_r2col]
+    ja .next
+    and ax, SH_ROW_MASK                ; a hit: unpack the row and fold it
+    xchg ax, bx                        ; AX = col, BX = row
+    call sh_getcell2                   ; tag, format and sh_acc, exactly as
+    jnc .next                          ; an operand's read loads them
+    call sh_foldvalue                  ; sh_acc is the value; see sh_foldvalue
+.next:
+    add di, SH_C_SZ
+    jmp .scan
 .done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -16450,10 +16577,15 @@ sh_pfunc:
     push cx
     push dx
     push word [sh_pfid]
-    push word [sh_pacc]
+    push word [sh_pacc+6]             ; ALL EIGHT bytes: sh_pacc is a packed
+    push word [sh_pacc+4]             ; double (stage 4.0), and banking only
+    push word [sh_pacc+2]             ; its low word handed the outer fold the
+    push word [sh_pacc]               ; inner call's accumulator back
     push word [sh_pcnt]
     push word [sh_phave]
     xor dx, dx                        ; DX = result; 0 covers every bad exit
+    call sh_pnest_enter               ; a nested call is a recursion point too
+    jc .popout                        ; (81.3); too deep answers 0 + #VALUE!
     cmp byte [si], '('
     jne .noparen                      ; a bare word that resolved to no defined
     inc si                            ; name is #NAME?, exactly as in Excel -
@@ -16492,11 +16624,15 @@ sh_pfunc:
     jmp .args
 .argsdone:
     cmp byte [si], ')'
-    jne .done
+    jne .badtail
     inc si
     call sh_funcfinish
     mov dx, ax
     jmp .done
+.badtail:
+    mov byte [sh_evalerr], SH_ERR_VALUE ; an argument tail this grammar cannot
+    jmp .done                          ; parse (=SUM(A1:A9^2)) must ERR, not
+                                       ; answer with a partial fold (81.20)
 .doif:
     call sh_pif
     mov dx, ax
@@ -16524,9 +16660,14 @@ sh_pfunc:
                                        ; left by the last cell a range touched
                                        ; would make `=SUM(A1:A9)*2` a #VALUE!
 .done:
+    call sh_pnest_leave
+.popout:
     pop word [sh_phave]
     pop word [sh_pcnt]
     pop word [sh_pacc]
+    pop word [sh_pacc+2]
+    pop word [sh_pacc+4]
+    pop word [sh_pacc+6]
     pop word [sh_pfid]
     mov ax, dx
     pop dx
@@ -16781,9 +16922,12 @@ sh_pspecial:
     jmp .close
 
 ; ---- CHOOSE(index, v1, v2, ...) ---------------------------------------------
-; Every argument is parsed whether or not it is the chosen one - parsing has
-; no side effects to avoid, and stopping early would leave SI mid-expression
-; with no way to find the closing paren. Same reasoning as sh_pif's.
+; Every argument is parsed whether or not it is the chosen one - stopping
+; early would leave SI mid-expression with no way to find the closing paren -
+; but only the CHOSEN one's raise of the sticky sh_evalerr may stand (81.20).
+; Same reasoning as sh_pif's, and the bank rides in DI because sh_pcmp
+; preserves it (see the comment at sh_pspecial's entry) where it clobbers
+; AX/BX/CX/DX; the id DI held is not needed once .choose is reached.
 .choose:
     call sh_parg                      ; the 1-based index
     mov bx, ax
@@ -16793,11 +16937,18 @@ sh_pspecial:
     cmp byte [si], ','
     jne .chdone
     inc si
+    mov al, [sh_evalerr]              ; banked across this value's parse...
+    xor ah, ah
+    mov di, ax
     call sh_parg
     inc cx
     cmp cx, bx
-    jne .chloop
-    mov dx, ax
+    jne .chskip
+    mov dx, ax                        ; the chosen one - its raise stands
+    jmp .chloop
+.chskip:
+    mov ax, di                        ; ...and restored: not the chosen one
+    mov [sh_evalerr], al
     jmp .chloop
 .chdone:
     mov ax, dx
@@ -16849,8 +17000,11 @@ sh_isqrt:
 ; sh_pif - IF(cond,then,else): the one function that does not fold - its
 ; branches are not even both evaluated the way a real spreadsheet expects
 ; only ONE side effect-free path to matter, but here both sides just get
-; parsed unconditionally (parsing has no side effects to avoid) and the
-; condition alone picks which value survives.
+; parsed unconditionally (the parse is what advances SI) and the condition
+; alone picks which value survives. Parsing IS evaluation here, and it has
+; one side effect since errors landed: a raise of the sticky sh_evalerr - so
+; the raise of the branch the condition did NOT pick is banked and unraised
+; (81.20), or =IF(B1=0,0,A1/B1) answered #DIV/0! for the case it guards.
 ; in: SI right after "IF("; out: AX=result, SI advanced past ')' if found
 sh_pif:
     push bx
@@ -16864,12 +17018,26 @@ sh_pif:
     cmp byte [si], ','
     jne .bad
     inc si
+    mov al, [sh_evalerr]              ; banked across the then-parse, and
+    push ax                           ; restored if then was NOT chosen
     call sh_pcmp                      ; the then-value, banked whole
+    pop ax
+    or bx, bx
+    jnz .thenkept
+    mov [sh_evalerr], al
+.thenkept:
     call sh_vpush
     cmp byte [si], ','
     jne .badpop
     inc si
+    mov al, [sh_evalerr]              ; ...and the same for the else-parse
+    push ax
     call sh_pcmp                      ; the else-value, left in sh_acc
+    pop ax
+    or bx, bx
+    jz .elsekept
+    mov [sh_evalerr], al
+.elsekept:
     or bx, bx
     jz .dropthen                      ; false: sh_acc already holds the else
     call sh_binop_pre                 ; true: recover the then-value from the
@@ -18481,7 +18649,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3103
+    OS88_BSS 3105
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -18564,7 +18732,10 @@ sh_evalerr    equ sh_curaux + 2             ; byte: the error this evaluation
                                              ; propagation free: no operator
                                              ; has to test it
 sh_evaldepth  equ sh_evalerr + 2             ; sh_eval_cell's recursion depth
-sh_fbuf       equ sh_evaldepth + 2          ; SH_EVAL_MAXDEPTH * 64: one
+sh_pnest      equ sh_evaldepth + 2           ; live parser recursion points -
+                                             ; sh_pnest_enter's counter (81.3),
+                                             ; balanced so it needs no reset
+sh_fbuf       equ sh_pnest + 2              ; SH_EVAL_MAXDEPTH * 64: one
                                              ; formula-text copy per
                                              ; recursion level (see
                                              ; sh_eval_cell), copied out of
@@ -18588,8 +18759,9 @@ sh_r1col      equ sh_phave + 2              ; a range's two corners...
 sh_r1row      equ sh_r1col + 2
 sh_r2col      equ sh_r1row + 2
 sh_r2row      equ sh_r2col + 2
-sh_rrow       equ sh_r2row + 2              ; ...and sh_foldrange's own
-sh_rcol       equ sh_rrow + 2               ; iteration cursor
+sh_rrow       equ sh_r2row + 2              ; ...and sh_foldrange's end-of-
+sh_rcol       equ sh_rrow + 2               ; array bound (sh_rcol is spare
+                                             ; since the record-array walk)
 sh_pass       equ sh_rcol + 2               ; recalculation pass counter
 sh_bbrow      equ sh_pass + 2               ; sh_difbbox's used bounding box
 sh_bbcol      equ sh_bbrow + 2
