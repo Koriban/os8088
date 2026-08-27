@@ -312,6 +312,11 @@ SH_C_FOFF    equ 16                 ; word: formula text offset in sh_txtseg
 SH_C_PASS    equ 18                 ; word: the repaint pass that cached VAL
 ; The value tags stage 4.0 reserves. Numbered so that BLANK is 0 and a
 ; zeroed record is therefore a blank one.
+SH_SSTK_N    equ 6                   ; string-stack levels. The text
+                                     ; functions bank one argument each, so six
+                                     ; is several frames deep; past that a
+                                     ; formula gets #VALUE! rather than a
+                                     ; quietly overwritten argument
 SH_STR_MAX   equ 64                 ; stage 4.5: the string accumulator's
                                     ; usable length, and the size of a text
                                     ; formula's result slot (81.22). A cell
@@ -15357,6 +15362,9 @@ sh_rpn_fid:
                                        ; cannot lex the '.' either, so it
                                        ; declines twice over and the cell goes
                                        ; out as its cached value
+    db 32, 115, 116, 31, 112          ; LEN LEFT RIGHT MID UPPER
+    db 113, 114, 118, 30, 111         ; LOWER PROPER TRIM REPT CHAR
+    db 121, 117, 130, 33              ; CODE EXACT T VALUE
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -15372,6 +15380,9 @@ sh_rpn_fvar:
     db 0, 0, 0, 0, 0                  ; the twelve information functions are
     db 0, 0, 0, 0, 0                  ; every one of them fixed-arity, NA()
     db 0, 0                           ; included (0 parameters, min = max)
+    db 0, 1, 1, 0, 0                  ; LEN LEFT(1..2) RIGHT(1..2) MID UPPER
+    db 0, 0, 0, 0, 0                  ; LOWER PROPER TRIM REPT CHAR
+    db 0, 0, 0, 0                     ; CODE EXACT T VALUE
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -16203,7 +16214,10 @@ sh_eval_cell:
     cmp word [sh_evaldepth], 0        ; a FRESH evaluation starts clean; a
     jne .depthok                      ; nested one must not, or a referenced
     mov byte [sh_evalerr], 0          ; cell's error would be wiped on the way
-.depthok:                             ; back up
+    mov word [sh_sstk_sp], 0          ; back up. The string bank is reset with
+.depthok:                             ; it, so an error path that returned
+                                       ; early cannot leak a level into the
+                                       ; next formula
     mov bx, [sh_evaldepth]
     inc word [sh_evaldepth]
     push bx                           ; this recursion level's buffer slot
@@ -17528,6 +17542,8 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 37                         ; stage 4.5: 37+ are the TEXT functions,
+    jae .dotext                        ; whose RESULT may be a string
     cmp ax, 25                         ; stage 4.5: 25+ are the INFORMATION
     jae .doinfo                        ; functions, whose argument stays a
                                        ; REFERENCE instead of folding (81.23)
@@ -17577,6 +17593,12 @@ sh_pfunc:
     call sh_pabs
     mov dx, ax
     jmp .done
+.dotext:
+    call sh_ptext
+    mov dx, ax
+    jmp .done                          ; NOT .typed: a text function's answer
+                                       ; is TEXT, and .typed exists to stamp
+                                       ; SH_T_NUM on a fold's result
 .doinfo:
     call sh_pinfo
     mov dx, ax
@@ -18199,6 +18221,559 @@ sh_pinfo:
     pop dx
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; THE STRING STACK (stage 4.5)
+;
+; A text function with more than one string argument has to hold the first one
+; while the second is parsed - and parsing the second can reach any text
+; function again, which writes sh_sacc. sh_sacc alone is therefore not enough,
+; and neither is a second fixed buffer: `=FIND(A1, LEFT(A2,3))` would have the
+; inner LEFT overwrite the outer FIND's banked needle.
+;
+; This is NOT the machine stack. SPEC.md 20.6 rule 6 gives a task 384 bytes
+; and says in as many words: no deep recursion, no big stack buffers. Banking
+; 65 bytes per argument per frame there, under six levels of sh_eval_cell
+; recursion, is exactly the buffer that rule forbids. So the bank is bss, it
+; is bounded at SH_SSTK_N levels, and running out is a #VALUE! rather than a
+; silent overwrite.
+; =============================================================================
+; sh_smove - copy SH_STR_MAX+1 bytes SI -> DI, both DS-relative. Not `rep
+; movsb`, because ES belongs to the cell segment through most of this file.
+sh_smove:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, SH_STR_MAX + 1
+.l:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .l
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; sh_sslot - in: AX = depth from the TOP (0 = the string banked last)
+; out: SI = its address. Reading past the bottom gives the EMPTY string, not
+; whatever bss lies below it.
+sh_sslot:
+    push ax
+    push dx
+    mov si, sh_snull
+    mov dx, [sh_sstk_sp]
+    inc ax
+    cmp ax, dx
+    ja .out
+    sub dx, ax
+    mov ax, dx
+    mov dx, SH_STR_MAX + 1
+    mul dx
+    add ax, sh_sstk
+    mov si, ax
+.out:
+    pop dx
+    pop ax
+    ret
+
+; sh_spush - bank sh_sacc. out: CF=1 the stack is full, and #VALUE! is raised
+sh_spush:
+    push ax
+    push dx
+    push si
+    push di
+    mov ax, [sh_sstk_sp]
+    cmp ax, SH_SSTK_N
+    jae .full
+    inc word [sh_sstk_sp]
+    mov dx, SH_STR_MAX + 1
+    mul dx                            ; DX:AX, and SH_SSTK_N * 65 is far
+    add ax, sh_sstk                   ; inside a segment, so DX is zero
+    mov di, ax
+    mov si, sh_sacc
+    call sh_smove
+    clc
+    jmp .out
+.full:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop ax
+    ret
+
+; sh_spop - drop the top bank
+sh_spop:
+    cmp word [sh_sstk_sp], 0
+    je .out
+    dec word [sh_sstk_sp]
+.out:
+    ret
+
+; sh_srestore - put the top bank back in sh_sacc and drop it
+sh_srestore:
+    push ax
+    push si
+    push di
+    xor ax, ax
+    call sh_sslot
+    mov di, sh_sacc
+    call sh_smove
+    call sh_spop
+    pop di
+    pop si
+    pop ax
+    ret
+
+; sh_pstrarg - one argument, AS TEXT in sh_sacc, whatever it was worth
+sh_pstrarg:
+    call sh_pcmp
+    call sh_str_want
+    ret
+
+; =============================================================================
+; sh_ptext (stage 4.5) - the TEXT functions, ids 37 and up. The whole category
+; was blocked on two things and both have now landed: a formula could not
+; return a string at all until 81.22, and a function could not keep an
+; argument as a string across the next one until the bank above.
+;
+; in: AX = the id, SI just past '('.
+; out: AX = the integer form of the result, SI past ')', and sh_curtype says
+; which half of the result pair is live - these are the FIRST functions in
+; this file whose answer may be either.
+;
+; EVERY ONE THAT TAKES A SECOND ARGUMENT BANKS ITS STRING FIRST. Parsing the
+; second argument can reach any text function, and every one of those writes
+; sh_sacc; `=LEFT(A1, LEN("abc"))` destroyed A1's text between reading it and
+; cutting it.
+; =============================================================================
+sh_ptext:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax
+    cmp di, 46
+    je .char                          ; CHAR takes a NUMBER, not a string
+    cmp di, 49
+    je .t                             ; T asks the TYPE, so it must see the
+    call sh_pstrarg                   ; argument before sh_str_want converts it
+    cmp di, 37
+    je .len
+    cmp di, 38
+    je .left
+    cmp di, 39
+    je .right
+    cmp di, 40
+    je .mid
+    cmp di, 41
+    je .upper
+    cmp di, 42
+    je .lower
+    cmp di, 43
+    je .proper
+    cmp di, 44
+    je .trim
+    cmp di, 45
+    je .rept
+    cmp di, 47
+    je .code
+    cmp di, 48
+    je .exact
+    push si                           ; 50 VALUE
+    mov si, sh_sacc
+    call fp_atof                      ; CF=1 = nothing parseable in there
+    pop si
+    jc .valbad
+    call sh_acc_store
+    call sh_acc_toint
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .close2
+.valbad:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    jmp .num
+
+.len:
+    push si
+    mov si, sh_sacc
+    call sh_strlen                    ; LEN of a NUMBER is the length of the
+    pop si                            ; text it displays as, which is what
+    jmp .num                          ; sh_str_want already produced
+
+.code:
+    mov al, [sh_sacc]
+    or al, al
+    jnz .code1
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; CODE("") has no answer to give
+.code1:
+    xor ah, ah
+    jmp .num
+
+.char:
+    call sh_parg
+    cmp ax, 1
+    jl .charbad
+    cmp ax, 255
+    jle .charok
+.charbad:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    mov byte [sh_sacc], 0
+    jmp .text
+.charok:
+    mov [sh_sacc], al
+    mov byte [sh_sacc+1], 0
+    jmp .text
+
+.t:
+    call sh_pcmp
+    cmp byte [sh_curtype], SH_T_TEXT  ; T passes TEXT through and answers the
+    je .text                          ; empty string for everything else -
+    mov byte [sh_sacc], 0             ; which is the whole of what it is for
+    jmp .text
+
+.left:
+    call sh_spush
+    jc .text
+    mov cx, 1                         ; LEFT(t) with no count means one
+    cmp byte [si], ','
+    jne .left1
+    inc si
+    call sh_parg
+    mov cx, ax
+.left1:
+    call sh_srestore
+    or cx, cx
+    jns .left2
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; a negative count is Excel's #VALUE!
+    xor cx, cx
+.left2:
+    push si
+    mov si, sh_sacc
+.leftl:
+    jcxz .leftcut
+    cmp byte [si], 0
+    je .leftd
+    inc si
+    dec cx
+    jmp .leftl
+.leftcut:
+    mov byte [si], 0
+.leftd:
+    pop si
+    jmp .text
+
+.right:
+    call sh_spush
+    jc .text
+    mov cx, 1
+    cmp byte [si], ','
+    jne .right1
+    inc si
+    call sh_parg
+    mov cx, ax
+.right1:
+    call sh_srestore
+    or cx, cx
+    jns .right2
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor cx, cx
+.right2:
+    push si
+    mov si, sh_sacc
+    call sh_strlen
+    sub ax, cx                        ; AX = where the tail starts
+    jns .right3
+    xor ax, ax                        ; asking for more than there is gives
+.right3:                              ; all of it, not an error
+    mov si, sh_sacc
+    add si, ax
+    push di
+    mov di, sh_sacc
+    call sh_strcpy                    ; destination BELOW source, so a forward
+    pop di                            ; copy of an overlap is safe
+    pop si
+    jmp .text
+
+.mid:
+    call sh_spush
+    jc .text
+    xor bx, bx
+    xor cx, cx
+    cmp byte [si], ','
+    jne .midrest
+    inc si
+    call sh_parg
+    mov bx, ax                        ; BX = the 1-based start
+    cmp byte [si], ','
+    jne .midrest
+    inc si
+    call sh_parg
+    mov cx, ax
+.midrest:
+    call sh_srestore
+    or bx, bx
+    jg .mid1
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; MID's start is 1-based and a start
+    mov byte [sh_sacc], 0             ; below 1 is #VALUE!, not a clamp
+    jmp .text
+.mid1:
+    or cx, cx
+    jns .mid2
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor cx, cx
+.mid2:
+    dec bx
+    push si
+    mov si, sh_sacc
+    call sh_strlen
+    cmp bx, ax
+    jb .mid3
+    mov byte [sh_sacc], 0             ; a start past the end is the empty
+    pop si                            ; string, which is not an error
+    jmp .text
+.mid3:
+    mov si, sh_sacc
+    add si, bx
+    push di
+    mov di, sh_sacc
+.midcopy:
+    jcxz .midterm
+    mov al, [si]
+    or al, al
+    jz .midterm
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .midcopy
+.midterm:
+    mov byte [di], 0
+    pop di
+    pop si
+    jmp .text
+
+.upper:
+    push si
+    mov si, sh_sacc
+.ul:
+    mov al, [si]
+    or al, al
+    jz .uld
+    cmp al, 'a'
+    jb .uln
+    cmp al, 'z'
+    ja .uln
+    sub al, 32
+    mov [si], al
+.uln:
+    inc si
+    jmp .ul
+.uld:
+    pop si
+    jmp .text
+
+.lower:
+    push si
+    mov si, sh_sacc
+.ll:
+    mov al, [si]
+    or al, al
+    jz .lld
+    cmp al, 'A'
+    jb .lln
+    cmp al, 'Z'
+    ja .lln
+    add al, 32
+    mov [si], al
+.lln:
+    inc si
+    jmp .ll
+.lld:
+    pop si
+    jmp .text
+
+.proper:
+    push si
+    mov si, sh_sacc
+    xor bl, bl                        ; BL = the previous character was a letter
+.pl:
+    mov al, [si]
+    or al, al
+    jz .pld
+    call sh_isalpha                   ; CF=1 = a letter
+    jnc .pnotal
+    or bl, bl
+    jnz .plow                         ; inside a word: lower case
+    cmp al, 'a'                       ; starting one: upper
+    jb .pset
+    cmp al, 'z'
+    ja .pset
+    sub al, 32
+    jmp .pset
+.plow:
+    cmp al, 'A'
+    jb .pset
+    cmp al, 'Z'
+    ja .pset
+    add al, 32
+.pset:
+    mov [si], al
+    mov bl, 1
+    jmp .pnext
+.pnotal:
+    xor bl, bl                        ; anything that is not a letter starts a
+.pnext:                               ; new word, digits and punctuation alike
+    inc si
+    jmp .pl
+.pld:
+    pop si
+    jmp .text
+
+; TRIM removes the leading and trailing spaces AND collapses every internal
+; run to one. That last part is the half people forget, and it is the half
+; that makes TRIM worth having on data pasted out of a report.
+.trim:
+    push si
+    push di
+    mov si, sh_sacc
+    mov di, sh_sacc
+.tskip:
+    cmp byte [si], ' '
+    jne .tloop
+    inc si
+    jmp .tskip
+.tloop:
+    mov al, [si]
+    or al, al
+    jz .tend
+    cmp al, ' '
+    jne .tkeep
+    inc si
+    cmp byte [si], 0                  ; a run at the very END leaves nothing
+    je .tend
+    cmp byte [si], ' '
+    je .tloop
+    mov byte [di], ' '
+    inc di
+    jmp .tloop
+.tkeep:
+    mov [di], al
+    inc di
+    inc si
+    jmp .tloop
+.tend:
+    mov byte [di], 0
+    pop di
+    pop si
+    jmp .text
+
+.rept:
+    call sh_spush                     ; the pattern stays banked for the whole
+    jc .text                          ; build, because sh_sacc becomes the
+    xor cx, cx                        ; RESULT
+    cmp byte [si], ','
+    jne .rept0
+    inc si
+    call sh_parg
+    mov cx, ax
+.rept0:
+    or cx, cx
+    jns .rept1
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor cx, cx
+.rept1:
+    cmp cx, SH_STR_MAX                ; the result clips at SH_STR_MAX and each
+    jbe .rept2                        ; round adds at least one character, so
+    mov cx, SH_STR_MAX                ; REPT("x",30000) is 64 rounds, not 30000
+.rept2:
+    mov byte [sh_sacc], 0
+.reptl:
+    jcxz .reptd
+    push cx
+    push si
+    xor ax, ax
+    call sh_sslot
+    call sh_str_cat
+    pop si
+    pop cx
+    dec cx
+    jmp .reptl
+.reptd:
+    call sh_spop
+    jmp .text
+
+.exact:
+    call sh_spush
+    jc .exzero
+    cmp byte [si], ','
+    jne .exdrop
+    inc si
+    call sh_pstrarg
+    push si
+    push di
+    xor ax, ax
+    call sh_sslot
+    mov di, sh_sacc
+    call sh_streq                     ; CASE-SENSITIVE, which is the whole
+    pop di                            ; difference between EXACT and '='
+    pop si
+    mov ax, 0
+    jnc .ex1
+    mov ax, 1
+.ex1:
+    call sh_spop
+    jmp .num
+.exdrop:
+    call sh_spop
+.exzero:
+    xor ax, ax
+    jmp .num
+
+.num:
+    mov byte [sh_curtype], SH_T_NUM
+    call sh_acc_int
+    jmp .close2
+.text:
+    mov byte [sh_curtype], SH_T_TEXT
+    xor ax, ax
+    call sh_acc_int                   ; the number underneath a string is zero
+    xor ax, ax                        ; ...and so is the integer form sh_pfunc
+                                       ; hands its own caller
+.close2:
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_isalpha - in: AL; out: CF=1 if it is a letter (AL untouched)
+sh_isalpha:
+    cmp al, 'A'
+    jb .no
+    cmp al, 'Z'
+    jbe .yes
+    cmp al, 'a'
+    jb .no
+    cmp al, 'z'
+    ja .no
+.yes:
+    stc
+    ret
+.no:
+    clc
     ret
 
 ; sh_pif - IF(cond,then,else): the one function that does not fold - its
@@ -19929,6 +20504,24 @@ sh_f_n:        db 'N', 0
 sh_f_errtype:  db 'ERROR.TYPE', 0     ; the only name here with a '.' in it,
                                        ; which is what sh_pident's .trydot is
                                        ; for
+; stage 4.5: the TEXT functions - Excel 2.1's own category, less the seven
+; that search and format
+sh_f_len:      db 'LEN', 0
+sh_f_left:     db 'LEFT', 0
+sh_f_right:    db 'RIGHT', 0
+sh_f_mid:      db 'MID', 0
+sh_f_upper:    db 'UPPER', 0
+sh_f_lower:    db 'LOWER', 0
+sh_f_proper:   db 'PROPER', 0
+sh_f_trim:     db 'TRIM', 0
+sh_f_rept:     db 'REPT', 0
+sh_f_char:     db 'CHAR', 0
+sh_f_code:     db 'CODE', 0
+sh_f_exact:    db 'EXACT', 0
+sh_f_t:        db 'T', 0
+sh_f_value:    db 'VALUE', 0
+sh_snull:      db 0                   ; sh_sslot's answer for a read below the
+                                       ; bottom of the string stack
 
 ; sh_functab - the id is the INDEX. 0 terminates.
 sh_functab:
@@ -19940,6 +20533,9 @@ sh_functab:
     dw sh_f_isblank, sh_f_isnumber, sh_f_istext, sh_f_islogicl, sh_f_iserror
     dw sh_f_iserr, sh_f_isna, sh_f_isref, sh_f_na, sh_f_type
     dw sh_f_n, sh_f_errtype
+    dw sh_f_len, sh_f_left, sh_f_right, sh_f_mid, sh_f_upper
+    dw sh_f_lower, sh_f_proper, sh_f_trim, sh_f_rept, sh_f_char
+    dw sh_f_code, sh_f_exact, sh_f_t, sh_f_value
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -20035,7 +20631,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3344
+    OS88_BSS 3736
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -20177,7 +20773,11 @@ sh_arg1row    equ sh_arg1col + 2            ; FOUR WORDS OF ITS OWN. Sharing
 sh_arg2col    equ sh_arg1row + 2            ; sh_r1col/sh_r2col with the range
 sh_arg2row    equ sh_arg2col + 2            ; folder overwrote its loop bounds
                                              ; mid-walk - see sh_pargref
-sh_jlen       equ sh_arg2row + 2             ; sh_cjust's stashed text length
+sh_sstk_sp    equ sh_arg2row + 2            ; the string stack's depth...
+sh_sstk       equ sh_sstk_sp + 2            ; ...and SH_SSTK_N slots of
+                                             ; SH_STR_MAX+1 bytes each
+sh_jlen       equ sh_sstk + SH_SSTK_N * (SH_STR_MAX + 1)  ; sh_cjust's stashed
+                                             ; text length
 sh_ulx        equ sh_jlen + 2               ; sh_drawunderline's stashed
 sh_uly        equ sh_ulx + 2                ; cell text origin (x, y)
 sh_wrec_xf    equ sh_uly + 2                ; sh_doread_biff's per-record

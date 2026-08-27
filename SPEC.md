@@ -74859,6 +74859,89 @@ idiom `OS88_BSS`'s literal uses (§81.21). Read the **line number** to see which
 table is short. Proven to bite by deleting one `sh_rpn_fid` entry: `TIMES value
 -1 is negative`.
 
+### 81.24 The text functions
+
+Fourteen of Excel 2.1's twenty-one text functions: `LEN LEFT RIGHT MID UPPER
+LOWER PROPER TRIM REPT CHAR CODE EXACT T VALUE`, ids 37..50. The seven that
+search or format (`FIND SEARCH SUBSTITUTE REPLACE TEXT DOLLAR FIXED`) are the
+next pass.
+
+The whole category was blocked on two separate things, and both had to land
+first: a formula could not **return** a string at all until §81.22, and a
+function could not **keep** an argument as a string across the next one until
+the bank below.
+
+**These are the first functions in this file whose answer may be either half
+of the result pair.** `sh_ptext` sets `sh_curtype` itself and `sh_pfunc`
+routes it to `.done` rather than `.typed` — `.typed` exists to stamp
+`SH_T_NUM` on a fold's result, and stamping it here would turn every `UPPER`
+into the zero underneath its string.
+
+#### 81.24.1 The string stack, and why it is not the machine stack
+
+A text function with more than one string argument has to hold the first while
+the second is parsed, and parsing the second can reach any text function
+again — every one of which writes `sh_sacc`. A second fixed buffer does not
+fix it either: in `=FIND(A1, LEFT(A2,3))` the inner `LEFT` would overwrite the
+outer `FIND`'s banked needle. The bank has to be per-frame.
+
+**The machine stack is the wrong place for it.** §20.6 rule 6 gives a task 384
+bytes and says in as many words: no deep recursion, no big stack buffers.
+Banking 65 bytes per argument per frame there, under `SH_EVAL_MAXDEPTH` = 6
+levels of `sh_eval_cell` recursion, is exactly the buffer that rule forbids —
+and unlike `sh_vpush`'s eight bytes it is not a rounding error against 384.
+
+So the bank is bss: `sh_sstk`, `SH_SSTK_N` = 6 slots of `SH_STR_MAX + 1`.
+`sh_spush` banks `sh_sacc`, `sh_sslot` addresses one by depth from the top,
+`sh_srestore` puts the top back and drops it. **Running out is a `#VALUE!`,
+not a silent overwrite**, and a read below the bottom returns the empty string
+rather than whatever bss lies there. `sh_eval_cell` resets the depth to zero
+whenever a *fresh* evaluation starts, so an error path that returned early
+cannot leak a level into the next formula.
+
+**Every function that takes a second argument banks its string before parsing
+it.** `=LEFT(A1, LEN("ab"))` destroyed A1's text between reading it and
+cutting it, because `LEN` writes `sh_sacc` on its way to a number.
+
+#### 81.24.2 What each one actually does
+
+Where Excel's rule is not the obvious one, this follows Excel:
+
+- **`TRIM` collapses internal runs**, not just the ends — that is the half of
+  it people forget and the half that makes it worth having.
+- **`PROPER` starts a new word at anything that is not a letter**, digits and
+  punctuation alike, so `"hELLO bIG wORLD"` is `"Hello Big World"`.
+- **`MID`'s start is 1-based and a start below 1 is `#VALUE!`**, not a clamp.
+  A start *past the end* is the empty string, which is not an error.
+- **`RIGHT(t, n)` with `n` past the length gives the whole string**, again not
+  an error; a *negative* count is `#VALUE!` in both `LEFT` and `RIGHT`.
+- **`EXACT` is case-sensitive**, which is the whole difference between it and
+  `=`.
+- **`CODE("")` is `#VALUE!`** and `CHAR` outside 1..255 likewise.
+- **`T` passes text through and answers the empty string for everything
+  else**, so it sees its argument *before* `sh_str_want` would convert it —
+  which is why it is dispatched ahead of the shared argument parse, as `CHAR`
+  is for taking a number.
+- **`LEN` of a number is the length of the text it displays as**, `LEN(12.5)`
+  = 4, because `sh_str_want` has already produced exactly that text.
+- **`REPT` clips at `SH_STR_MAX`**, and the count is clamped to it first:
+  each round adds at least one character, so `REPT("x",30000)` is 64 rounds
+  and not 30,000.
+
+#### 81.24.3 In files
+
+SYLK keeps everything — the expression in `;E` and the string result in `;K`,
+quoted. A round-trip of all fourteen comes back byte-identical.
+
+**BIFF writes a text-valued formula as a `LABEL`, not as a `FORMULA` with a
+string result.** That follows from §81.22.2's rule that a writer emitting a
+label takes the characters from the result; the consequence, which is worth
+stating rather than discovering, is that **the formula itself does not survive
+a BIFF round-trip when its answer is text** — the value does. A numeric one
+(`LEN`, `MID`, `EXACT`) still goes out as a real `FORMULA` with its `ftab`
+index, and any formula holding a string *literal* declines to RPN and goes out
+as its cached value, because `sh_rpn_factor` has no token for one.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
