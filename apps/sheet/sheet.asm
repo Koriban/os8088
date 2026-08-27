@@ -312,6 +312,11 @@ SH_C_FOFF    equ 16                 ; word: formula text offset in sh_txtseg
 SH_C_PASS    equ 18                 ; word: the repaint pass that cached VAL
 ; The value tags stage 4.0 reserves. Numbered so that BLANK is 0 and a
 ; zeroed record is therefore a blank one.
+SH_STR_MAX   equ 64                 ; stage 4.5: the string accumulator's
+                                    ; usable length, and the size of a text
+                                    ; formula's result slot (81.22). A cell
+                                    ; shows SH_CW_MAXCH=40 at most, so this is
+                                    ; headroom for an intermediate concat
 SH_T_BLANK   equ 0
 SH_T_NUM     equ 1
 SH_T_TEXT    equ 2
@@ -9986,6 +9991,13 @@ sh_dowrite_sylk:
     mov [sh_wrec_type], al            ; goes out as a QUOTED K field rather
     mov ax, [es:si+SH_C_FOFF]         ; than as a number, and its characters
     mov [sh_wrec_toff], ax            ; come from the same arena a formula's do
+    test byte [es:si+4], 1            ; A FORMULA THAT RETURNED TEXT keeps its
+    jz .toffok1                          ; result in SH_C_VAL, because FOFF is
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT  ; already holding the formula's own
+    jne .toffok1                         ; text (81.22.1) - so the label this
+    mov ax, [es:si+SH_C_VAL]          ; writer emits is the RESULT, not the
+    mov [sh_wrec_toff], ax            ; expression that produced it
+.toffok1:
     pop es                            ; ES = stgseg again
 
     mov si, sh_s_c
@@ -11498,6 +11510,13 @@ sh_biff_cells:
     mov [sh_wrec_aux], al             ; either - see .aserr
     mov ax, [es:si+SH_C_FOFF]
     mov [sh_wrec_toff], ax
+    test byte [es:si+4], 1            ; A FORMULA THAT RETURNED TEXT keeps its
+    jz .toffok2                          ; result in SH_C_VAL, because FOFF is
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT  ; already holding the formula's own
+    jne .toffok2                         ; text (81.22.1) - so the label this
+    mov ax, [es:si+SH_C_VAL]          ; writer emits is the RESULT, not the
+    mov [sh_wrec_toff], ax            ; expression that produced it
+.toffok2:
     mov al, [es:si+4]                 ; ...and a FORMULA cell may take a real
     and al, 1                         ; FORMULA record, if its text is one this
     mov [sh_wrec_hasf], al            ; writer can tokenise
@@ -14920,6 +14939,13 @@ sh_getcell2:
     mov [sh_curtype], al              ; tell a label from the zero it would
     mov al, [es:di+SH_C_AUX]          ; the error code travels with the tag,
     mov [sh_curaux], al               ; so the painter can name it
+    cmp byte [sh_curtype], SH_T_TEXT   ; ...and a LABEL loads its characters
+    jne .nottext                       ; into sh_sacc, so a formula that names
+    push ax                            ; one has something to work WITH rather
+    call sh_txtslot                    ; than the zero underneath it (81.22)
+    call sh_str_load
+    pop ax
+.nottext:
     mov ax, [es:di+SH_C_FOFF]         ; otherwise read as this cell's value
     mov [sh_curtoff], ax
     test byte [es:di+4], 1            ; HASFORMULA. An ERROR tag raises
@@ -14936,8 +14962,11 @@ sh_getcell2:
     ; the FORMAT of the last cell it referenced, and, worse, with that cell's
     ; TYPE and text offset: `=A2+0` where A2 holds a label drew the label.
     ; The cell showed something that was not its value, and said nothing.
-    ; Only the two the EVALUATION cannot change are banked here; the type and
-    ; the error code come back from sh_eval_cell's own writeback instead.
+    ; Only the FORMAT is banked here - the one thing an evaluation cannot
+    ; change. The type, the error code and the text offset all come back from
+    ; sh_eval_cell's own writeback, because a text result's offset is its
+    ; RESULT slot and not the formula text the banked copy would restore
+    ; (81.22.1).
     mov al, [sh_curfmt]
     mov bx, [sh_curtoff]
     push ax
@@ -14946,9 +14975,14 @@ sh_getcell2:
     pop bx                            ; DX as its truncated form
     pop ax
     mov [sh_curfmt], al
-    mov [sh_curtoff], bx               ; sh_curtype/sh_curaux are NOT banked:
-                                       ; the evaluation is what decides them,
-                                       ; and it publishes them at its writeback
+    cmp byte [sh_curtype], SH_T_TEXT   ; A TEXT RESULT KEEPS THE OFFSET THE
+    je .offkept                        ; WRITEBACK PUBLISHED: it is the RESULT
+    mov [sh_curtoff], bx               ; slot, and the banked one is the
+.offkept:                              ; formula's own source text, which the
+                                       ; cell would then draw instead (81.22.1).
+                                       ; sh_curtype/sh_curaux are not banked at
+                                       ; all: the evaluation decides them and
+                                       ; publishes them at its writeback
     cmp byte [sh_curtype], SH_T_ERR   ; ...and an ERROR spreads: anything built
     jne .fresh                        ; on a broken cell is broken too - raised
     mov al, [sh_curaux]               ; from what the writeback (or a cache
@@ -16194,18 +16228,39 @@ sh_eval_cell:
     pop di                            ; this cell's record offset, restored
     mov es, [sh_cellseg]
     and byte [es:di+4], 0xFD          ; EVALUATING = 0 (HASFORMULA untouched)
-    call sh_acc_to_cellval            ; cache the whole double
-    call sh_acc_toint
+    call sh_acc_toint                 ; DX = the truncated form, for callers
     mov dx, ax
+    ; CACHING THE DOUBLE IS NOT THE FIRST THING ANY MORE, and it cannot be:
+    ; sh_acc_to_cellval writes eight bytes over SH_C_VAL, and a TEXT result's
+    ; slot offset lives in that same union (81.22.1). Doing it up front wiped
+    ; the slot on every pass, so sh_str_store found VAL zero, allocated a fresh
+    ; 65 bytes, and the arena was empty inside a hundred repaints - after which
+    ; every text formula quietly fell back to the number underneath it, which
+    ; is 0. Each branch below caches for itself, and the text one does not.
     mov al, [sh_evalerr]              ; the cell is stored by what it IS: an
     or al, al                         ; error, or a number again once whatever
     jz .notanerr                      ; broke it has been fixed
+    call sh_acc_to_cellval
     mov byte [es:di+SH_C_TYPE], SH_T_ERR
     mov [es:di+SH_C_AUX], al
     mov byte [sh_curtype], SH_T_ERR   ; and PUBLISH it: the caller banked these
     mov [sh_curaux], al               ; two before the evaluation ran, so its
     jmp .errdone                      ; copy names the cell as it USED to be -
 .notanerr:                            ; which paints #DIV/0! on a cell whose
+    cmp byte [sh_curtype], SH_T_TEXT  ; stage 4.5: ...or the answer is a
+    jne .notatext                     ; STRING, which SH_C_FOFF cannot hold
+    call sh_str_store                 ; because the formula's own text is
+    jc .notatext                      ; already there (81.22.1)
+    mov byte [es:di+SH_C_TYPE], SH_T_TEXT
+    mov byte [es:di+SH_C_AUX], 0
+    mov ax, [es:di+SH_C_VAL]          ; the painter reads the RESULT, not the
+    mov [sh_curtoff], ax              ; formula, so publish where it went
+    jmp .errdone
+.notatext:
+    call sh_acc_to_cellval            ; cache the whole double
+    mov ax, [es:di+SH_C_FOFF]         ; and a NUMERIC result publishes the
+    mov [sh_curtoff], ax              ; formula's own text, which is what every
+                                       ; reader of it has always expected
     mov byte [es:di+SH_C_TYPE], SH_T_NUM  ; divisor has since been fixed, and
     mov byte [es:di+SH_C_AUX], 0      ; #ERR on the one that is still broken
     mov byte [sh_curtype], SH_T_NUM   ; (its code having been overwritten by
@@ -16257,7 +16312,7 @@ sh_eval_cell:
 ; project's general rule of degrading a malformed tail rather than
 ; raising an error nothing here has a channel to report through.
 sh_pcmp:
-    call sh_pexpr
+    call sh_pconcat
 sh_pcmpcont:
     cmp byte [si], '='
     je .eq
@@ -16360,6 +16415,75 @@ sh_pexprcont:
     call fp_sub
     call sh_acc_store
     jmp sh_pexprcont
+
+; -----------------------------------------------------------------------------
+; sh_pconcat (stage 4.5) - the '&' level. Excel binds it LOOSER than '+' and
+; TIGHTER than a comparison, so `="a"&"b"="ab"` compares two concatenations
+; rather than concatenating a comparison (81.22.2).
+;
+; Either side may be a number - `=A1&"x"` with A1 holding 12 gives "12x", which
+; is what every spreadsheet does - so a numeric operand is formatted into
+; sh_sacc first. The left operand is banked in sh_sacc2 across the right one's
+; parse, because parsing the right may recurse all the way back through here.
+; -----------------------------------------------------------------------------
+sh_pconcat:
+    call sh_pexpr
+sh_pconcatcont:
+    cmp byte [si], '&'
+    je .cat
+    ret
+.cat:
+    inc si
+    call sh_str_want                  ; the LEFT operand, as text...
+    push si
+    push di
+    mov si, sh_sacc                   ; ...banked, because the right one's
+    mov di, sh_sacc2                  ; parse can reach this routine again
+    call sh_strcpy
+    pop di
+    pop si
+    call sh_pexpr
+    call sh_str_want                  ; the RIGHT operand, as text
+    push si
+    push di
+    mov si, sh_sacc                   ; right operand out of the way first,
+    mov di, sh_sacc2 + SH_STR_MAX + 1 ; then left, then append right
+    call sh_strcpy
+    mov si, sh_sacc2
+    mov di, sh_sacc
+    call sh_strcpy
+    mov si, sh_sacc2 + SH_STR_MAX + 1
+    call sh_str_cat
+    pop di
+    pop si
+    mov byte [sh_curtype], SH_T_TEXT
+    xor ax, ax
+    call sh_acc_int
+    jmp sh_pconcatcont
+
+; -----------------------------------------------------------------------------
+; sh_str_want - make sh_sacc hold the current result AS TEXT, whatever it is.
+; A number is formatted the way the General format shows it, so `=1.5&"x"` is
+; "1.5x" and not "1.500000x".
+; -----------------------------------------------------------------------------
+sh_str_want:
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .done
+    push ax
+    push si
+    push di
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    mov si, sh_numbuf
+    mov di, sh_sacc
+    call sh_strcpy
+    pop di
+    pop si
+    pop ax
+.done:
+    ret
 
 ; sh_pterm / sh_ptermcont - multiplicative level, same reasoning as above.
 sh_pterm:
@@ -16531,6 +16655,8 @@ sh_pfactor:
     ret
 .notparen:
     mov al, [si]
+    cmp al, 34                        ; stage 4.5: a QUOTED LITERAL is a text
+    je .strlit                        ; value (81.22)
     cmp al, '$'                       ; stage 3.0e: '$A$1' is an IDENTIFIER,
     je .ident                         ; and this router decides that on the
     cmp al, 'A'                       ; FIRST character - without this line a
@@ -16545,6 +16671,42 @@ sh_pfactor:
     call sh_pident
     ret
 .maybenum:
+    jmp .maybenum2
+.strlit:
+    inc si                            ; past the opening quote
+    push cx
+    push di
+    mov di, sh_sacc
+    mov cx, SH_STR_MAX
+.slc:
+    jcxz .slend
+    mov al, [si]
+    or al, al
+    jz .slend
+    cmp al, 34                        ; a DOUBLED quote is one literal quote,
+    jne .slkeep                       ; the same rule SYLK's K field uses
+    cmp byte [si+1], 34
+    jne .slend
+    inc si
+.slkeep:
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .slc
+.slend:
+    mov byte [di], 0
+    cmp byte [si], 34                 ; step over the closing quote if it is
+    jne .slnoq                        ; there; an unterminated literal ends at
+    inc si                            ; the end of the formula rather than
+.slnoq:                               ; running off it
+    pop di
+    pop cx
+    mov byte [sh_curtype], SH_T_TEXT
+    xor ax, ax                        ; the number underneath a string is zero,
+    call sh_acc_int                   ; so a reader that wants one gets a
+    ret                               ; defined answer
+.maybenum2:
     mov byte [sh_curtype], SH_T_NUM   ; a LITERAL is a number - say so, or the
     call fp_atof                      ; tag left by the last cell referenced
     jnc .numok                        ; still stands and `=B4+1` is judged by
@@ -16852,9 +17014,10 @@ sh_prange:
 .singlecell:
     call sh_getcell2                  ; the value lands in sh_acc either way -
 .havev:                               ; getcell2 puts a zero there for a cell
-    call sh_ppowcont                  ; that does not exist. '^' binds tighter
-    call sh_ptermcont                 ; than the levels below, so its
-    call sh_pexprcont                 ; continuation must run first
+    call sh_ppowcont                  ; that does not exist. Tightest binding
+    call sh_ptermcont                 ; first: '^', then '*', then '+', then
+    call sh_pexprcont                 ; '&', then the comparison (81.22.2)
+    call sh_pconcatcont
     call sh_pcmpcont
     call sh_foldvalue
     jmp .out
@@ -18305,6 +18468,153 @@ sh_skipargs:
     pop cx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_str_load - in: AX = an offset in sh_txtseg; copies that NUL string into
+; sh_sacc, clipped to SH_STR_MAX. Every register preserved.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_txtslot - in: ES:DI = a cell record whose type is SH_T_TEXT
+; out: AX = the arena offset its characters live at.
+;
+; A plain LABEL keeps them in SH_C_FOFF. A FORMULA whose result is text keeps
+; SH_C_FOFF for its own SOURCE and the result in SH_C_VAL (81.22.1), so
+; reading FOFF for both loads the formula's own text - which is what the cell
+; would draw on a pass-cache hit, with no evaluation to correct it.
+;
+; It is a proc rather than four inline instructions because the caller needs
+; it inside a push/pop pair, and a label there is a chunk boundary stkbalance
+; walks into without the push - which reads as an unbalanced path.
+; -----------------------------------------------------------------------------
+sh_txtslot:
+    mov ax, [es:di+SH_C_FOFF]
+    test byte [es:di+4], 1            ; HASFORMULA
+    jz .out
+    mov ax, [es:di+SH_C_VAL]
+.out:
+    ret
+
+sh_str_load:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov es, [sh_txtseg]
+    mov si, ax
+    mov di, sh_sacc
+    mov cx, SH_STR_MAX
+.c:
+    jcxz .term
+    mov al, [es:si]
+    or al, al
+    jz .term
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .c
+.term:
+    mov byte [di], 0
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_str_store - ES:DI = a cell record whose result is TEXT; put sh_sacc into
+; that cell's result slot, claiming the slot on first use (81.22.1).
+; out: CF=1 if the arena had no room, in which case the cell keeps whatever it
+; had. Every register preserved.
+; -----------------------------------------------------------------------------
+sh_str_store:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT  ; VAL IS ONLY A SLOT OFFSET IF THE
+    jne .newslot                      ; CELL ALREADY HELD TEXT. On a formula
+    mov ax, [es:di+SH_C_VAL]          ; that returned a number last time it is
+    or ax, ax                         ; the low word of a DOUBLE, and treating
+    jnz .haveslot                     ; that as an arena offset writes 64 bytes
+.newslot:                             ; wherever the mantissa happens to point
+    mov ax, [sh_txtlen]               ; claim one: SH_STR_MAX+1, once, for the
+    mov bx, ax                        ; life of the cell - the arena never
+    add bx, SH_STR_MAX + 1            ; frees, so a slot PER RECALCULATION
+    cmp bx, SH_TXT_CAP                ; would empty it in seconds
+    ja .noroom
+    mov [sh_txtlen], bx
+    mov [es:di+SH_C_VAL], ax          ; the union's first word IS the offset
+    mov word [es:di+SH_C_VAL+2], 0
+    mov word [es:di+SH_C_VAL+4], 0
+    mov word [es:di+SH_C_VAL+6], 0
+.haveslot:
+    mov di, ax                        ; DI = the slot, ES = the arena
+    mov es, [sh_txtseg]
+    mov si, sh_sacc
+    mov cx, SH_STR_MAX
+.c:
+    jcxz .term
+    mov al, [si]
+    or al, al
+    jz .term
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jmp .c
+.term:
+    mov byte [es:di], 0
+    clc
+    jmp .out
+.noroom:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_str_cat - append the NUL string at SI to sh_sacc, clipped to SH_STR_MAX.
+; -----------------------------------------------------------------------------
+sh_str_cat:
+    push ax
+    push cx
+    push si
+    push di
+    mov di, sh_sacc
+    mov cx, SH_STR_MAX
+.find:
+    cmp byte [di], 0
+    je .app
+    inc di
+    dec cx
+    jnz .find
+.app:
+    jcxz .term
+    mov al, [si]
+    or al, al
+    jz .term
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .app
+.term:
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; sh_streq - in: SI, DI (two NUL-terminated strings); out: CF=1 equal
 sh_streq:
     push ax
@@ -19376,7 +19686,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3137
+    OS88_BSS 3332
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -19451,7 +19761,21 @@ sh_wrec_fmt   equ sh_wrec_val + 2           ; SYLK's and BIFF's writers'
                                              ; byte (DIF carries no format
                                              ; at all, see sh_dowrite_dif)
 sh_newoff     equ sh_wrec_fmt + 1           ; sh_setformula's new text offset
-sh_curaux     equ sh_newoff + 2             ; sh_getcell2's error-code output
+sh_sacc       equ sh_newoff + 2             ; SH_STR_MAX+1: THE STRING HALF of
+                                             ; the evaluator's result, the way
+                                             ; sh_acc is the numeric half -
+                                             ; sh_curtype says which is live
+sh_sacc2      equ sh_sacc + SH_STR_MAX + 1  ; 2 x (SH_STR_MAX+1): the left
+                                             ; operand of '&', banked while the
+                                             ; right one is parsed, AND the
+                                             ; scratch that holds the right one
+                                             ; while the left is moved back.
+                                             ; TWO buffers, sized as two - one
+                                             ; buffer's worth would have put the
+                                             ; second copy straight through
+                                             ; sh_curaux below, which is 81.21
+                                             ; over again
+sh_curaux     equ sh_sacc2 + 2 * (SH_STR_MAX + 1)  ; sh_getcell2's error code
 sh_evalerr    equ sh_curaux + 2             ; byte: the error this evaluation
                                              ; ran into, 0 = none. STICKY for
                                              ; the whole of one top-level

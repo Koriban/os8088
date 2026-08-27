@@ -74664,6 +74664,91 @@ overrun corrupts a value; this one corrupts an *address*, and the next large
 it is worth knowing that bss adjacency can arrange it without anyone loading a
 segment register wrongly at all.
 
+### 81.22 A formula may answer with TEXT
+
+Cells have held labels since stage 4.5; *formulas* could not produce one.
+`=B4`, where B4 holds `hello`, read as **0** — not because the reference failed
+but because the evaluator's only result was `sh_acc`, eight bytes of double,
+and a string has nowhere to go in it. That blocks the whole text category:
+`LEFT`, `UPPER`, `CONCATENATE` and the other eighteen have no way to hand back
+what they computed.
+
+**The result is a pair, and `sh_curtype` says which half is live.** `sh_acc`
+holds a number; `sh_sacc` — `SH_STR_MAX + 1` bytes of DS scratch — holds a
+string; `sh_curtype` is `SH_T_NUM` or `SH_T_TEXT` accordingly. That is not a
+new convention, it is the one already in use: `sh_chktext` reads `sh_curtype`
+to decide whether arithmetic on this operand is a `#VALUE!`, `sh_pfactor` sets
+it to `SH_T_NUM` for a literal, and `sh_pfunc` sets it at every exit. The last
+operation to complete owns it, so at `sh_eval_cell`'s writeback it describes
+the whole expression.
+
+`SH_STR_MAX` is **64**. A cell displays at most `SH_CW_MAXCH` = 40 characters,
+so 64 is headroom for an intermediate concatenation rather than a limit anyone
+meets in a cell. Excel's own limit is 255 and this is not that; a result past
+64 is **truncated, not refused**, because half a label is legible and an error
+in its place is not.
+
+#### 81.22.1 Where a text result is stored, and why not in `SH_C_FOFF`
+
+`SH_C_FOFF` is already two things: a **label's** arena offset for a plain text
+cell, and a **formula's** arena offset for a formula cell, told apart by the
+`HASFORMULA` flag. A formula that *returns* text needs both at once, so the
+result cannot go there.
+
+It goes in **`SH_C_VAL`**, the eight-byte value union — its first word is the
+result string's arena offset. A text cell's number is meaningless by
+definition, which is what makes the union a union; this is the first thing to
+actually use it as one.
+
+**Deciding the type comes before caching the number**, and that ordering is
+load-bearing. `sh_eval_cell`'s writeback used to open with `sh_acc_to_cellval`,
+which writes eight bytes over `SH_C_VAL` - the union the slot offset lives in.
+So every pass wiped the slot, `sh_str_store` found `VAL` zero, claimed another
+65 bytes, and the arena was dry inside a hundred repaints; after that every
+text formula fell silently back to the number underneath it, which is `0`. Each
+branch caches for itself now, and the text branch does not cache at all,
+because a text result has no meaningful double to keep.
+
+**The slot is allocated once per cell and rewritten in place.** The arena is a
+bump allocator that never frees — `sh_setformula`'s own header says so, and an
+edit is "append new, abandon old" everywhere else in this file. That is fine at
+one allocation per *edit* and fatal at one per *repaint*: a text formula
+recalculates on every paint, and 8KB would be gone in seconds of sitting
+there. So the first text result claims `SH_STR_MAX + 1` bytes, keeps the offset
+in `SH_C_VAL`, and every later result overwrites that slot. A cell that stops
+returning text keeps its slot; the waste is bounded by the number of cells that
+have ever returned one.
+
+#### 81.22.2 `&`, and the level it binds at
+
+Excel's concatenation operator is `&`, and it binds **looser than `+`** and
+**tighter than a comparison** — so `="a" & "b" = "ab"` is a comparison of two
+concatenations, not a concatenation of a comparison. `sh_pconcat` is that
+level, inserted between `sh_pcmp` and `sh_pexpr`, with `sh_pconcatcont` joining
+the continuation chain `sh_prange` walks when a range turns out to be an
+ordinary expression that merely began with a cell reference.
+
+Two things it did **not** need, both worth recording because both were expected
+to bite:
+
+- **The charset gate already admits `&`.** Stage 4.5 replaced the allow-list
+  with a printable-ASCII range, and the comment above it lists the six
+  characters that each had to be discovered the hard way — `=`, the operators,
+  `<>`, `!` and `"`, `.`, `$`, `^` — every one of them a case where "the parser
+  handled the character perfectly and the character never reached it". That
+  gate is why this one is free.
+- **A writer that emits a label must take it from the result.** The SYLK and
+  BIFF writers read a label's characters from `SH_C_FOFF`, which for a text
+  *result* is the formula - so they wrote the expression where the answer
+  belonged. Both take the offset from `SH_C_VAL` now when the cell has a
+  formula and its type is text. The DIF writer needed no change: it goes
+  through `sh_getcell2`, which already publishes the result offset.
+
+- **The reference rewriters already treat `"..."` as opaque.** `sh_formula_reidx`
+  copies anything inside double quotes byte-for-byte and never scans it, so a
+  string literal containing something shaped like `A1` does not get renumbered
+  by an Insert Row.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
