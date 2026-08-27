@@ -15365,6 +15365,8 @@ sh_rpn_fid:
     db 32, 115, 116, 31, 112          ; LEN LEFT RIGHT MID UPPER
     db 113, 114, 118, 30, 111         ; LOWER PROPER TRIM REPT CHAR
     db 121, 117, 130, 33              ; CODE EXACT T VALUE
+    db 124, 82, 120, 119, 48          ; FIND SEARCH SUBSTITUTE REPLACE TEXT
+    db 13, 14                         ; DOLLAR FIXED
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -15383,6 +15385,9 @@ sh_rpn_fvar:
     db 0, 1, 1, 0, 0                  ; LEN LEFT(1..2) RIGHT(1..2) MID UPPER
     db 0, 0, 0, 0, 0                  ; LOWER PROPER TRIM REPT CHAR
     db 0, 0, 0, 0                     ; CODE EXACT T VALUE
+    db 1, 1, 1, 0, 0                  ; FIND(2..3) SEARCH(2..3)
+                                       ;   SUBSTITUTE(3..4) REPLACE TEXT
+    db 1, 1                           ; DOLLAR(1..2) FIXED(1..3)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -18223,6 +18228,393 @@ sh_pinfo:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_ins_at - in: DI = where in sh_numbuf to insert, AL = the byte. Everything
+; from DI to the NUL moves right one, the NUL included. The building block
+; both the thousands grouping and TEXT's leading zeros are made of.
+; -----------------------------------------------------------------------------
+sh_ins_at:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov bl, al
+    mov cx, di                        ; CX = where to stop shifting
+    mov si, di
+.flen:
+    cmp byte [si], 0
+    je .found
+    inc si
+    jmp .flen
+.found:
+    mov di, si
+    inc di
+.shift:
+    mov al, [si]
+    mov [di], al
+    cmp si, cx
+    je .place
+    dec si
+    dec di
+    jmp .shift
+.place:
+    mov di, cx
+    mov [di], bl
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_group3 - thousands separators through sh_numbuf's INTEGER part, however
+; many it takes.
+;
+; IT REPLACES sh_comma_ins, WHICH HAD SILENTLY BECOME WRONG. That routine's
+; own comment said "a 16-bit value never needs more than one - max 5 digits",
+; and that was true right up until stage 4.0 made every value a double. It
+; counted digits to the NUL, so the fraction counted as part of the run:
+; 1234.5 in the Comma format drew as "123,4.5", and 1234567 as "1234,567".
+; Nothing in the app could show a number that large or that precise when the
+; routine was written.
+;
+; Separators go in RIGHT TO LEFT, which is why each insertion can ignore the
+; ones already placed - they are all to its right.
+; -----------------------------------------------------------------------------
+sh_group3:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, sh_numbuf
+    cmp byte [si], '-'
+    jne .nosign
+    inc si
+.nosign:
+    cmp byte [si], '$'
+    jne .nodollar
+    inc si
+.nodollar:
+    mov bx, si                        ; BX = the first integer digit
+.ilen:
+    mov al, [si]
+    cmp al, '0'
+    jb .iend
+    cmp al, '9'
+    ja .iend
+    inc si
+    jmp .ilen
+.iend:
+    mov cx, si
+    sub cx, bx                        ; CX = how many integer digits
+.loop:
+    cmp cx, 4
+    jb .out                           ; three or fewer need no separator
+    sub cx, 3
+    mov di, bx
+    add di, cx
+    mov al, ','
+    call sh_ins_at
+    jmp .loop
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_numdp - fp A -> sh_numbuf with EXACTLY CX decimal places, rounded.
+;
+; fp_ftoa counts SIGNIFICANT digits and trims trailing zeros, which is right
+; for General and wrong for money: 1.5 to two places has to be "1.50". So the
+; value is rounded first (fp_round, the same one ROUND() uses) and the places
+; are then padded back on.
+;
+; A value big or small enough that fp_ftoa reaches for scientific notation is
+; left exactly as it came - padding a mantissa and grouping an exponent would
+; both be nonsense, and passing it through is the one honest answer.
+; -----------------------------------------------------------------------------
+sh_numdp:
+    push ax
+    push cx
+    push si
+    push di
+    or cx, cx
+    jns .cap
+    xor cx, cx                        ; a negative place count rounds left of
+.cap:                                 ; the point, and shows none to the right
+    cmp cx, 9
+    jbe .round
+    mov cx, 9
+.round:
+    push cx
+    call fp_round
+    call sh_acc_store
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 15
+    call fp_ftoa
+    pop cx
+    mov si, sh_numbuf
+.scan:
+    mov al, [si]
+    or al, al
+    jz .nopoint
+    cmp al, 'e'
+    je .asis                          ; scientific: leave it exactly as it came
+    cmp al, 'E'
+    je .asis
+    cmp al, '.'
+    je .haspoint
+    inc si
+    jmp .scan
+.nopoint:
+    jcxz .out                         ; SI is at the NUL
+    mov byte [si], '.'
+    inc si
+    jmp .pad
+.haspoint:
+    inc si
+.count:
+    cmp byte [si], 0
+    je .padded
+    inc si
+    or cx, cx
+    jz .count                         ; more digits than asked for: leave them
+    dec cx                            ; rather than cut a rounded value short
+    jmp .count
+.padded:
+.pad:
+    jcxz .out
+    mov byte [si], '0'
+    inc si
+    dec cx
+    jmp .pad
+.out:
+    mov byte [si], 0
+.asis:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dollar_ins - '$' in front of sh_numbuf's digits but AFTER a leading '-',
+; so -123 in a currency format is "-$123" and not "$-123".
+; -----------------------------------------------------------------------------
+sh_dollar_ins:
+    push ax
+    push di
+    mov di, sh_numbuf
+    cmp byte [di], '-'
+    jne .here
+    inc di
+.here:
+    mov al, '$'
+    call sh_ins_at
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_padzero - pad sh_numbuf's integer part with leading zeros to CL digits,
+; which is what the '0' placeholders in a TEXT format ask for ("00000").
+; -----------------------------------------------------------------------------
+sh_padzero:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    xor ch, ch
+    mov si, sh_numbuf
+    cmp byte [si], '-'
+    jne .ns
+    inc si
+.ns:
+    mov bx, si
+.ilen:
+    mov al, [si]
+    cmp al, '0'
+    jb .iend
+    cmp al, '9'
+    ja .iend
+    inc si
+    jmp .ilen
+.iend:
+    mov ax, si
+    sub ax, bx                        ; AX = integer digits present
+.pad:
+    cmp ax, cx
+    jae .out
+    mov di, bx
+    push ax
+    mov al, '0'
+    call sh_ins_at
+    pop ax
+    inc ax
+    jmp .pad
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_upcase - AL and AH both to upper case, for SEARCH's folded compare
+; -----------------------------------------------------------------------------
+sh_upcase:
+    cmp al, 'a'
+    jb .a1
+    cmp al, 'z'
+    ja .a1
+    sub al, 32
+.a1:
+    cmp ah, 'a'
+    jb .a2
+    cmp ah, 'z'
+    ja .a2
+    sub ah, 32
+.a2:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_matchat - in: SI, DI; out: CF=1 if the string at DI is a prefix of the
+; one at SI. Both preserved.
+;
+; AN EMPTY NEEDLE NEVER MATCHES, deliberately: SUBSTITUTE walks the text one
+; character at a time and advances by the needle's length on a hit, so an
+; empty one that matched would advance by nothing and never terminate.
+; -----------------------------------------------------------------------------
+sh_matchat:
+    push ax
+    push si
+    push di
+    cmp byte [di], 0
+    je .no
+.l:
+    mov al, [di]
+    or al, al
+    jz .yes
+    mov ah, [si]
+    cmp al, ah
+    jne .no
+    inc si
+    inc di
+    jmp .l
+.yes:
+    stc
+    jmp .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_strfind - in: SI = haystack, DI = needle, AX = 0-based start,
+;              DL = 0 exact / 1 case-folded (which is FIND vs SEARCH, and the
+;              only difference between them)
+; out: AX = the 0-based position, or 0xFFFF for no match.
+;
+; The two bases live in bss rather than on the stack because the inner compare
+; needs SI and DI, the outer scan needs a third pointer, and the 8086 will
+; only address memory through BX, BP, SI and DI - with BP belonging to SS.
+; -----------------------------------------------------------------------------
+sh_strfind:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [sh_fnd_hb], si
+    mov [sh_fnd_nd], di
+    mov bx, si
+    or ax, ax
+    js .none                          ; a start before the string has no answer
+.adv:
+    or ax, ax
+    jz .outer
+    cmp byte [bx], 0
+    je .none                          ; a start past the end likewise
+    inc bx
+    dec ax
+    jmp .adv
+.outer:
+    mov si, bx
+    mov di, [sh_fnd_nd]
+.inner:
+    mov al, [di]
+    or al, al
+    jz .hit                           ; the needle ran out: a match
+    mov ah, [si]
+    or ah, ah
+    jz .nohit                         ; the haystack ran out first
+    or dl, dl
+    jz .same
+    call sh_upcase
+.same:
+    cmp al, ah
+    jne .nohit
+    inc si
+    inc di
+    jmp .inner
+.nohit:
+    cmp byte [bx], 0
+    je .none
+    inc bx
+    jmp .outer
+.hit:
+    mov ax, bx
+    sub ax, [sh_fnd_hb]
+    jmp .out
+.none:
+    mov ax, 0xFFFF
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sacc_putc - append AL to sh_sacc, dropping it once SH_STR_MAX is reached.
+; It finds the end each time, which is O(n^2) over 64 bytes and costs less
+; than the cursor a caller would otherwise have to thread through two loops.
+; -----------------------------------------------------------------------------
+sh_sacc_putc:
+    push ax
+    push cx
+    push si
+    mov si, sh_sacc
+    mov cx, SH_STR_MAX
+.f:
+    cmp byte [si], 0
+    je .at
+    inc si
+    dec cx
+    jnz .f
+    jmp .out
+.at:
+    mov [si], al
+    mov byte [si+1], 0
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; =============================================================================
 ; THE STRING STACK (stage 4.5)
 ;
@@ -18365,7 +18757,9 @@ sh_ptext:
     je .char                          ; CHAR takes a NUMBER, not a string
     cmp di, 49
     je .t                             ; T asks the TYPE, so it must see the
-    call sh_pstrarg                   ; argument before sh_str_want converts it
+    cmp di, 55                        ; argument before sh_str_want converts it
+    jae .numfmt3                      ; TEXT/DOLLAR/FIXED open with a NUMBER
+    call sh_pstrarg
     cmp di, 37
     je .len
     cmp di, 38
@@ -18388,6 +18782,14 @@ sh_ptext:
     je .code
     cmp di, 48
     je .exact
+    cmp di, 51
+    je .find
+    cmp di, 52
+    je .find                          ; SEARCH is FIND with the compare folded
+    cmp di, 53
+    je .subst
+    cmp di, 54
+    je .replace
     push si                           ; 50 VALUE
     mov si, sh_sacc
     call fp_atof                      ; CF=1 = nothing parseable in there
@@ -18737,6 +19139,435 @@ sh_ptext:
 .exzero:
     xor ax, ax
     jmp .num
+
+; ---- FIND (51) and SEARCH (52) ----------------------------------------------
+; The same scan; SEARCH folds case. Neither takes wildcards - Excel's SEARCH
+; does, and saying so is better than a '?' that silently matches itself.
+.find:
+    call sh_spush                     ; the needle
+    jc .textzero
+    cmp byte [si], ','
+    jne .find1drop
+    inc si
+    call sh_pstrarg                   ; the haystack
+    call sh_spush
+    jc .find1drop
+    mov bx, 1                         ; the start defaults to the first
+    cmp byte [si], ','                ; character
+    jne .findgo
+    inc si
+    call sh_parg
+    mov bx, ax
+.findgo:
+    dec bx                            ; 0-based
+    push si
+    push di
+    xor dl, dl
+    cmp di, 52
+    jne .findcs
+    mov dl, 1
+.findcs:
+    xor ax, ax
+    call sh_sslot                     ; SI = the haystack
+    push si
+    mov ax, 1
+    call sh_sslot                     ; SI = the needle
+    mov di, si
+    pop si
+    mov ax, bx
+    call sh_strfind
+    pop di
+    pop si
+    call sh_spop
+    call sh_spop
+    cmp ax, 0xFFFF
+    je .findnone
+    inc ax                            ; FIND answers 1-based, as Excel does
+    jmp .num
+.findnone:
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; not found is #VALUE!, which is what
+    xor ax, ax                        ; makes ISERROR the standard way to ask
+    jmp .num                          ; whether it was there at all
+.find1drop:
+    call sh_spop
+    xor ax, ax
+    jmp .num
+
+; ---- SUBSTITUTE(text, old, new, [instance]) (53) -----------------------------
+.subst:
+    call sh_spush                     ; the text
+    jc .textzero
+    cmp byte [si], ','
+    jne .sub1drop
+    inc si
+    call sh_pstrarg
+    call sh_spush                     ; old
+    jc .sub1drop
+    cmp byte [si], ','
+    jne .sub2drop
+    inc si
+    call sh_pstrarg
+    call sh_spush                     ; new
+    jc .sub2drop
+    xor bx, bx                        ; 0 = every occurrence, which is what no
+    cmp byte [si], ','                ; fourth argument means
+    jne .subgo
+    inc si
+    call sh_parg
+    mov bx, ax
+    or bx, bx
+    jg .subgo
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; instance 0 or negative
+    xor bx, bx
+.subgo:
+    push si
+    push di
+    xor cx, cx                        ; CX = occurrences seen so far
+    mov ax, 2
+    call sh_sslot
+    mov di, si                        ; DI = the cursor through the text
+    mov byte [sh_sacc], 0
+.subl:
+    cmp byte [di], 0
+    je .subend
+    mov ax, 1
+    call sh_sslot                     ; SI = old
+    xchg si, di
+    call sh_matchat                   ; does old start here?
+    xchg si, di
+    jnc .subcopy
+    inc cx
+    or bx, bx
+    jz .subrepl
+    cmp cx, bx
+    jne .subkeep                      ; a numbered instance, and not this one
+.subrepl:
+    xor ax, ax
+    call sh_sslot                     ; SI = new
+    call sh_str_cat
+    mov ax, 1
+    call sh_sslot                     ; SI = old, to measure the skip
+.subskip:
+    cmp byte [si], 0
+    je .subl
+    inc si
+    inc di
+    jmp .subskip
+.subkeep:
+    mov ax, 1
+    call sh_sslot
+.subkeepl:
+    cmp byte [si], 0
+    je .subl
+    mov al, [di]
+    call sh_sacc_putc
+    inc si
+    inc di
+    jmp .subkeepl
+.subcopy:
+    mov al, [di]
+    call sh_sacc_putc
+    inc di
+    jmp .subl
+.subend:
+    pop di
+    pop si
+    call sh_spop
+    call sh_spop
+    call sh_spop
+    jmp .text
+.sub2drop:
+    call sh_spop
+.sub1drop:
+    call sh_spop
+    jmp .textzero
+
+; ---- REPLACE(old_text, start, num_chars, new_text) (54) ----------------------
+.replace:
+    call sh_spush                     ; old_text
+    jc .textzero
+    xor bx, bx
+    xor cx, cx
+    cmp byte [si], ','
+    jne .rep1drop
+    inc si
+    call sh_parg
+    mov bx, ax                        ; BX = the 1-based start
+    cmp byte [si], ','
+    jne .rep1drop
+    inc si
+    call sh_parg
+    mov cx, ax                        ; CX = how many characters go
+    cmp byte [si], ','
+    jne .rep1drop
+    inc si
+    call sh_pstrarg                   ; new_text
+    call sh_spush
+    jc .rep1drop
+    or bx, bx
+    jg .repgo
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; REPLACE's start is 1-based too
+    mov bx, 1
+.repgo:
+    dec bx
+    or cx, cx
+    jns .rep2
+    xor cx, cx
+.rep2:
+    push si
+    push di
+    mov ax, 1
+    call sh_sslot                     ; SI = old_text
+    mov di, sh_sacc
+    mov dx, bx                        ; DX = how many head characters to keep
+.rephead:
+    or dx, dx
+    jz .repheadend
+    mov al, [si]
+    or al, al
+    jz .repheadend
+    mov [di], al
+    inc si
+    inc di
+    dec dx
+    jmp .rephead
+.repheadend:
+    mov byte [di], 0
+.repskip:
+    jcxz .reptail
+    cmp byte [si], 0
+    je .reptail
+    inc si
+    dec cx
+    jmp .repskip
+.reptail:
+    push si                           ; where the tail starts
+    xor ax, ax
+    call sh_sslot                     ; SI = new_text
+    call sh_str_cat
+    pop si
+    call sh_str_cat
+    pop di
+    pop si
+    call sh_spop
+    call sh_spop
+    jmp .text
+.rep1drop:
+    call sh_spop
+    jmp .textzero
+
+; ---- TEXT / DOLLAR / FIXED (55, 56, 57) --------------------------------------
+; The three that turn a number into text. All open with a VALUE rather than a
+; string, so they are dispatched before the shared sh_pstrarg above.
+.numfmt3:
+    call sh_pcmp                      ; the value
+    cmp di, 55
+    je .dotext55
+    call sh_vpush                     ; banked across the count's own parse
+    mov cx, 2                         ; DOLLAR and FIXED both default to two
+    cmp byte [si], ','
+    jne .nfnone
+    inc si
+    call sh_parg
+    mov cx, ax
+    xor bl, bl                        ; BL = FIXED's "no commas" flag, zeroed
+    cmp di, 57                        ; AFTER sh_parg rather than before it -
+    jne .nf1                          ; sh_pcmp underneath it clobbers BL
+    cmp byte [si], ','                ; FIXED's third argument suppresses the
+    jne .nf1                          ; separators
+    inc si
+    push cx
+    call sh_parg
+    or ax, ax
+    jz .nf0
+    mov bl, 1
+.nf0:
+    pop cx
+    jmp .nf1
+.nfnone:
+    xor bl, bl
+.nf1:
+    ; NOTHING MAY SIT ON THE STACK ACROSS sh_vpush -> sh_binop_pre: the pair
+    ; banks the value in the CALLER's frame, below the return address, so a
+    ; push in between is what sh_binop_pre would pop as the value. BL and CX
+    ; go to bss for the one instruction it takes.
+    mov [sh_fmt_fl], bl
+    mov [sh_fmt_cx], cx
+    call sh_binop_pre                 ; A = the value again
+    mov bl, [sh_fmt_fl]
+    mov cx, [sh_fmt_cx]
+    cmp di, 56
+    je .dollar
+    call sh_numdp
+    or bl, bl
+    jnz .nfdone
+    call sh_group3
+.nfdone:
+    jmp .numtext
+
+; DOLLAR wraps a NEGATIVE in parentheses - "($1,234.57)" - which is Excel's
+; own rendering and not the same as a minus sign.
+.dollar:
+    push cx
+    call sh_acc_store
+    mov cl, [sh_acc+7]
+    mov [sh_dol_neg], cl              ; the packed double's sign bit
+    and byte [sh_acc+7], 0x7F         ; format the magnitude
+    call sh_acc_load_a
+    pop cx
+    call sh_numdp
+    call sh_group3
+    call sh_dollar_ins
+    test byte [sh_dol_neg], 0x80
+    jz .numtext
+    push di
+    mov di, sh_numbuf
+    mov al, '('
+    call sh_ins_at
+    pop di
+    push si
+    mov si, sh_numbuf
+    call sh_strlen
+    mov si, sh_numbuf
+    add si, ax
+    mov byte [si], ')'
+    mov byte [si+1], 0
+    pop si
+    jmp .numtext
+
+; TEXT(value, format). The format is read for the four things a 2.1-era code
+; can say that this app can honour: a '$', a ',' for grouping, the '0'/'#'
+; placeholders either side of the '.', and a trailing '%'. A code with NO
+; placeholder at all - "General", or anything this does not understand - falls
+; back to General, which is the one answer that is never misleading.
+.dotext55:
+    call sh_vpush
+    cmp byte [si], ','
+    jne .t55none
+    inc si
+    call sh_pstrarg                   ; the format string
+    call sh_spush
+    jc .t55none
+    push si
+    push di
+    xor bx, bx                        ; BL: 1 = '$', 2 = grouping, 4 = '%'
+    xor cx, cx                        ; CH = decimals, CL = minimum integers
+    xor dh, dh                        ; DH = past the '.' yet
+    xor dl, dl                        ; DL = any placeholder seen at all
+    xor ax, ax
+    call sh_sslot                     ; SI = the format
+.fmtl:
+    mov al, [si]
+    or al, al
+    jz .fmtdone
+    cmp al, '$'
+    jne .fmt1
+    or bl, 1
+    jmp .fmtn
+.fmt1:
+    cmp al, '%'
+    jne .fmt2
+    or bl, 4
+    jmp .fmtn
+.fmt2:
+    cmp al, ','
+    jne .fmt3
+    or bl, 2
+    jmp .fmtn
+.fmt3:
+    cmp al, '.'
+    jne .fmt4
+    mov dh, 1
+    jmp .fmtn
+.fmt4:
+    cmp al, '0'
+    je .fmtph
+    cmp al, '#'
+    jne .fmtn
+    mov dl, 1                         ; '#' is a placeholder but never forces a
+    or dh, dh                         ; digit, so it counts toward the decimals
+    jz .fmtn                          ; and not toward the minimum integers
+    inc ch
+    jmp .fmtn
+.fmtph:
+    mov dl, 1
+    or dh, dh
+    jz .fmtint
+    inc ch
+    jmp .fmtn
+.fmtint:
+    inc cl
+.fmtn:
+    inc si
+    jmp .fmtl
+.fmtdone:
+    pop di
+    pop si
+    call sh_spop
+    mov [sh_fmt_fl], bl               ; bss, not the stack - see the note at
+    mov [sh_fmt_cx], cx               ; .nf1 above
+    mov [sh_fmt_ph], dl
+    call sh_binop_pre                 ; A = the value again
+    call sh_acc_store
+    mov bl, [sh_fmt_fl]
+    mov cx, [sh_fmt_cx]
+    mov dl, [sh_fmt_ph]
+    or dl, dl
+    jz .t55gen                        ; no placeholder anywhere: General
+    test bl, 4
+    jz .t55nopct
+    call sh_vpush                     ; a percent format scales by a hundred
+    mov ax, 100
+    call sh_acc_int
+    call sh_binop_pre
+    call fp_mul
+    call sh_acc_store
+.t55nopct:
+    push bx
+    push cx
+    call sh_acc_load_a
+    mov cl, ch
+    xor ch, ch
+    call sh_numdp
+    pop cx
+    pop bx
+    push bx
+    call sh_padzero                   ; CL = the minimum integer digits
+    pop bx
+    test bl, 2
+    jz .t55nogrp
+    call sh_group3
+.t55nogrp:
+    test bl, 1
+    jz .t55nodol
+    call sh_dollar_ins
+.t55nodol:
+    test bl, 4
+    jz .numtext
+    call sh_pct_app
+    jmp .numtext
+.t55gen:
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    jmp .numtext
+.t55none:
+    call sh_binop_pre                 ; unwind the bank, whatever went wrong
+.textzero:
+    mov byte [sh_sacc], 0
+    jmp .text
+
+; sh_numbuf now holds the formatted text: hand it over as the result
+.numtext:
+    push si
+    push di
+    mov si, sh_numbuf
+    mov di, sh_sacc
+    call sh_strcpy
+    pop di
+    pop si
+    jmp .text
 
 .num:
     mov byte [sh_curtype], SH_T_NUM
@@ -19963,65 +20794,6 @@ sh_curr_ins:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_comma_ins - insert a thousands separator into sh_numbuf's digit run
-; (a 16-bit value never needs more than one - max 5 digits), skipping any
-; leading sign
-; -----------------------------------------------------------------------------
-sh_comma_ins:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    mov si, sh_numbuf
-    cmp byte [si], '-'
-    jne .nosign
-    inc si
-.nosign:
-    push si                           ; start of the digit run
-    xor cx, cx
-.dlen:
-    cmp byte [si], 0
-    je .havedlen
-    inc si
-    inc cx
-    jmp .dlen
-.havedlen:                            ; cx = digit count
-    pop si                            ; si = start of digit run again
-    cmp cx, 4
-    jb .nocomma                       ; <=3 digits: no comma needed
-    mov ax, cx
-    sub ax, 3
-    add ax, si
-    mov di, ax                        ; di = insertion point (fixed)
-    mov bx, si
-.elen:
-    cmp byte [bx], 0
-    je .haveend
-    inc bx
-    jmp .elen
-.haveend:                             ; bx -> the NUL
-    mov si, bx
-    inc bx                            ; bx = shift destination (one past)
-.shift:
-    mov al, [si]
-    mov [bx], al
-    cmp si, di
-    je .placecomma
-    dec si
-    dec bx
-    jmp .shift
-.placecomma:
-    mov byte [di], ','
-.nocomma:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; sh_pct_app - append '%' to sh_numbuf
 ; -----------------------------------------------------------------------------
 sh_pct_app:
@@ -20162,8 +20934,9 @@ sh_numfmt:
     call sh_curr_ins
     jmp .out
 .comma:
-    call sh_comma_ins
-    jmp .out
+    call sh_group3                    ; NOT sh_comma_ins, which counted the
+    jmp .out                          ; fraction digits as part of the integer
+                                       ; run and placed exactly one separator
 .percent:
     call sh_pct_app
 .out:
@@ -20520,6 +21293,13 @@ sh_f_code:     db 'CODE', 0
 sh_f_exact:    db 'EXACT', 0
 sh_f_t:        db 'T', 0
 sh_f_value:    db 'VALUE', 0
+sh_f_find:     db 'FIND', 0
+sh_f_search:   db 'SEARCH', 0
+sh_f_subst:    db 'SUBSTITUTE', 0
+sh_f_replace:  db 'REPLACE', 0
+sh_f_text:     db 'TEXT', 0
+sh_f_dollar:   db 'DOLLAR', 0
+sh_f_fixed:    db 'FIXED', 0
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
 
@@ -20536,6 +21316,8 @@ sh_functab:
     dw sh_f_len, sh_f_left, sh_f_right, sh_f_mid, sh_f_upper
     dw sh_f_lower, sh_f_proper, sh_f_trim, sh_f_rept, sh_f_char
     dw sh_f_code, sh_f_exact, sh_f_t, sh_f_value
+    dw sh_f_find, sh_f_search, sh_f_subst, sh_f_replace, sh_f_text
+    dw sh_f_dollar, sh_f_fixed
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -20631,7 +21413,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3736
+    OS88_BSS 3748
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -20776,8 +21558,22 @@ sh_arg2row    equ sh_arg2col + 2            ; folder overwrote its loop bounds
 sh_sstk_sp    equ sh_arg2row + 2            ; the string stack's depth...
 sh_sstk       equ sh_sstk_sp + 2            ; ...and SH_SSTK_N slots of
                                              ; SH_STR_MAX+1 bytes each
-sh_jlen       equ sh_sstk + SH_SSTK_N * (SH_STR_MAX + 1)  ; sh_cjust's stashed
-                                             ; text length
+sh_fnd_hb     equ sh_sstk + SH_SSTK_N * (SH_STR_MAX + 1)  ; sh_strfind's two
+sh_fnd_nd     equ sh_fnd_hb + 2             ; bases: the inner compare needs
+                                             ; SI and DI and the outer scan a
+                                             ; third pointer, and the 8086
+                                             ; addresses memory through four
+                                             ; registers of which one is BP
+sh_fmt_fl     equ sh_fnd_nd + 2             ; TEXT's parsed format: the flag
+sh_fmt_cx     equ sh_fmt_fl + 2             ; byte, the two digit counts and
+sh_fmt_ph     equ sh_fmt_cx + 2             ; whether any placeholder appeared.
+                                             ; In bss because nothing may sit
+                                             ; on the stack between sh_vpush
+                                             ; and sh_binop_pre
+sh_dol_neg    equ sh_fmt_ph + 2             ; DOLLAR formats the MAGNITUDE and
+                                             ; parenthesises it afterwards, so
+                                             ; the sign is banked here
+sh_jlen       equ sh_dol_neg + 2             ; sh_cjust's stashed text length
 sh_ulx        equ sh_jlen + 2               ; sh_drawunderline's stashed
 sh_uly        equ sh_ulx + 2                ; cell text origin (x, y)
 sh_wrec_xf    equ sh_uly + 2                ; sh_doread_biff's per-record

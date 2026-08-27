@@ -74942,6 +74942,83 @@ a BIFF round-trip when its answer is text** — the value does. A numeric one
 index, and any formula holding a string *literal* declines to RPN and goes out
 as its cached value, because `sh_rpn_factor` has no token for one.
 
+### 81.25 The seven that search and format
+
+`FIND SEARCH SUBSTITUTE REPLACE TEXT DOLLAR FIXED`, ids 51..57, completing
+Excel 2.1's text category at twenty-one.
+
+- **`FIND` and `SEARCH` are one scan.** They differ only in whether the
+  compare folds case, which is the whole of the difference in Excel too.
+  Neither takes wildcards; Excel's `SEARCH` does, and saying so is better
+  than a `?` that silently matches itself. Not found is `#VALUE!`, which is
+  what makes `ISERROR` the standard way to ask whether it was there at all
+  (§81.23).
+- **`sh_strfind` keeps its two bases in bss.** The inner compare needs `SI`
+  and `DI`, the outer scan needs a third pointer, and the 8086 addresses
+  memory through four registers of which one is `BP` — which belongs to `SS`
+  here (§20.1).
+- **An empty needle never matches.** `sh_matchat` refuses one on purpose:
+  `SUBSTITUTE` walks the text one character at a time and advances by the
+  needle's length on a hit, so an empty needle that matched would advance by
+  nothing. `SUBSTITUTE(t,"",n)` returns `t`.
+- **`SUBSTITUTE` banks three strings at once** — text, old and new — which is
+  what sets `SH_SSTK_N`'s floor (§81.24.1). Its fourth argument picks one
+  occurrence; absent, it replaces all.
+- **`REPLACE`'s start is 1-based** and below 1 is `#VALUE!`, matching `MID`.
+
+#### 81.25.1 Turning a number into text
+
+`fp_ftoa` counts **significant** digits and trims trailing zeros, which is
+right for General and wrong for money — `1.5` to two places has to be `"1.50"`.
+So `sh_numdp` rounds first, with the same `fp_round` that `ROUND()` uses, and
+pads the places back on afterwards.
+
+A value big or small enough that `fp_ftoa` reaches for **scientific notation**
+is passed through exactly as it came. Padding a mantissa and grouping an
+exponent would both be nonsense, and this is the one honest answer.
+
+**`DOLLAR` formats the magnitude and parenthesises it**: `-1234.567` is
+`"($1,234.57)"`, which is Excel's own rendering and not a minus sign. `TEXT`'s
+`$` goes *after* a leading `-`, so `TEXT(-x,"$#,##0.00")` is `"-$1,234,567.89"`
+— the two functions genuinely disagree, and both match Excel.
+
+**`TEXT` reads four things out of a format code**: a `$`, a `,` for grouping,
+the `0`/`#` placeholders either side of the `.`, and a trailing `%`. `0`
+before the point forces a digit (so `"00000"` on 42 is `"00042"`); `#` never
+does. A code with **no placeholder at all** — `"General"`, or anything this
+does not understand — falls back to General, which is the one answer that is
+never misleading. This is a real subset and not the whole of Excel's format
+language: no date codes, no sections, no literal text runs.
+
+#### 81.25.2 A separator routine that had quietly gone wrong
+
+`sh_comma_ins` inserted **exactly one** thousands separator and found its
+position by counting digits to the NUL. Its own comment explained why that
+was enough: *"a 16-bit value never needs more than one — max 5 digits."*
+
+That was true when it was written and stopped being true at **stage 4.0**,
+when every value became a double. Counting to the NUL makes the fraction part
+of the run, so `1234.5` in the Comma format drew as `"123,4.5"`, and one
+separator is not enough for `1234567`, which drew as `"1234,567"`. Nothing in
+the app could produce a number that large or that precise when the routine was
+written, so nothing had ever shown it.
+
+`sh_group3` replaces it: as many separators as the integer part needs, placed
+**right to left** so each insertion can ignore the ones already made — they
+are all to its right. `sh_comma_ins` is deleted rather than left beside it.
+`sh_numfmt`'s Comma format goes through the new one, so the fix reaches the
+grid and not only `FIXED`/`DOLLAR`/`TEXT`.
+
+#### 81.25.3 Nothing on the stack between `sh_vpush` and `sh_binop_pre`
+
+The pair banks a value **in the caller's frame**, below the return address:
+`sh_vpush` pops the return address, pushes four words, and pushes it back.
+Anything pushed between the two is therefore what `sh_binop_pre` pops as the
+value. `DOLLAR`/`FIXED` need their flags and digit count across exactly that
+gap, so those go to bss (`sh_fmt_fl`, `sh_fmt_cx`, `sh_fmt_ph`) for the one
+instruction it takes. `stkbalance` cannot see this class of error — the stack
+is balanced either way; only the *contents* are wrong.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
