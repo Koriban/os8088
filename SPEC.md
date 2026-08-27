@@ -74749,6 +74749,116 @@ to bite:
   string literal containing something shaped like `A1` does not get renumbered
   by an Insert Row.
 
+### 81.23 Reference-typed arguments
+
+Every argument in Sheet's evaluator was **folded to a value before the
+function saw it**. `sh_prange` reads a range, folds each occupied cell through
+`sh_foldvalue`, and hands the accumulator on; a single cell goes through
+`sh_getcell2` and then the same fold. By the time a function ran there was no
+reference left to ask about, and three consequences followed from that one
+fact:
+
+- an **empty cell and a cell holding 0 both arrived as `0`**, so `ISBLANK`
+  could not be written;
+- a **label arrived as the zero underneath it**, so `ISTEXT` could not either;
+- an **error in an argument had already spread into `sh_evalerr`**, so
+  `ISERROR` would have been an error itself rather than an answer about one.
+
+That is why the comment above `sh_pspecial` listed `ISBLANK`, `ISNUMBER` and
+`ISNA` as deliberately absent for three stages. A version of any of them that
+returned a plausible constant would have been worse than its absence.
+
+**`sh_pargref` is the probe, and it is strict on purpose.** It asks whether an
+argument is a reference *and nothing else*: `sh_pcellref`, optionally a `:`
+and a second one, and then the argument must **end** — the next character has
+to be `,` or `)`. `ISNUMBER(A1+1)` is a question about the sum, not about A1,
+and without that terminator test it would have been answered about A1. On
+failure `SI` is restored exactly as `sh_pcellref` leaves it and the caller
+parses an ordinary expression instead, so the strictness costs nothing: an
+argument that is not a reference still gets evaluated, it just gets classified
+by its value's tag rather than by a cell's.
+
+**`sh_pargclass` is the argument, classified rather than folded.** It publishes
+four things — `sh_argtype` (the `SH_T_*` the argument *is*, `SH_T_BLANK` for a
+cell that does not exist), `sh_argaux` (its error code), `sh_argisref`, and
+`sh_acc` (its value, for the callers that still want a number). An area is
+classified by its **top-left corner**, which is what a 1×1 use of one would
+intersect to anyway.
+
+#### 81.23.1 An argument's error is the function's answer, not the sheet's
+
+`sh_getcell2` copies a referenced cell's error code into `sh_evalerr`, and that
+spreading is correct and wanted: it is what puts one `#DIV/0!` at the bottom of
+a column that contains one. It is exactly wrong here. `ISERROR(1/0)` must be
+`TRUE`, not `#DIV/0!`.
+
+So `sh_pargclass` **banks `sh_evalerr` across the argument and puts it back**,
+and reports what the argument raised through `sh_argtype`/`sh_argaux` instead.
+The banking lives in `sh_pargclass` and not in `sh_getcell2` precisely because
+every *other* caller wants the spread. An error the argument raised also
+**outranks the tag it left behind**: `1/0` leaves `sh_acc` holding zero and
+`sh_curtype` saying `SH_T_NUM`, and it is an error value, so the error is
+checked last and wins.
+
+#### 81.23.2 Arithmetic now says its result is a number
+
+Making a mid-expression tag answerable exposed something that had been true and
+unobservable: **the arithmetic operators never set `sh_curtype`**. `=A1*2`
+left behind whatever tag the last operand carried. Nothing could see it,
+because `sh_eval_cell`'s writeback normalises a non-text result to `SH_T_NUM`
+before storing it, and no function had ever been able to ask.
+
+`sh_pargclass` can ask. Every operator that produces a number — `+ - * /`, the
+power loop, the comparisons, and the divide-by-zero path — now publishes
+`SH_T_NUM`, so `ISNUMBER(A1*2)` is `TRUE` where A1 is blank, instead of
+inheriting `SH_T_BLANK` from A1 and answering `FALSE`.
+
+#### 81.23.3 The twelve functions, and the one with a `.` in its name
+
+`ISBLANK ISNUMBER ISTEXT ISLOGICAL ISERROR ISERR ISNA ISREF NA TYPE N
+ERROR.TYPE` — ids 25..36, appended to `sh_functab` in the usual way, and
+routed out of `sh_pfunc` **before** the id-12 test that sends the rest to
+`sh_pspecial`.
+
+- **`ISERR` is `ISERROR` minus `#N/A`**, which is the only reason both exist.
+- **`ISLOGICAL` is `FALSE` for everything**, because nothing in this evaluator
+  produces an `SH_T_BOOL` yet. That is the honest answer rather than a
+  placeholder one, and it becomes right by itself the day comparisons return a
+  real boolean.
+- **`ERROR.TYPE` is a copy.** The `SH_ERR_*` codes *are* Excel's own
+  `ERROR.TYPE` numbers 1..7 — they were numbered that way when error values
+  landed, precisely so that this function would be one `mov`.
+- **`N` cannot leave by the integer path** the rest of these use: it passes a
+  number through unchanged, fraction and all, so it returns `sh_acc` as it
+  stands. `N` of an error re-raises that error.
+
+`ERROR.TYPE` is the first name in the language with a `.` in it. `sh_pident`
+takes one **only after a letter**, so a leading `.` is still the start of a
+number (`.5`) and a cell reference still cannot contain one — and it does
+**not** go through the uppercase fold, because `'.' AND 0xDF` is `0x0E` and
+would have put a control character in the middle of the name. The charset gate
+needed no change: stage 4.5 had already replaced its allow-list with a
+printable-ASCII range.
+
+BIFF writes these through `sh_rpn_fid` with their real `ftab` indices — 129,
+128, 127, 198, 3, 126, 2, 105, 10, 86, 131. **`ERROR.TYPE` is `ftab` 261,
+which does not fit the byte table**, so its entry is `0xFF` and the formula
+declines; `sh_rpn_func` cannot lex the `.` either, so it declines twice over
+and the cell goes out as its cached value.
+
+#### 81.23.4 Three tables indexed by the same number
+
+`sh_functab`, `sh_rpn_fid` and `sh_rpn_fvar` are all indexed by the id
+`sh_funcid` returns, which *is* a position in `sh_functab`. Nothing checked
+they were the same length. Appending a function and forgetting one of the other
+two reads whatever byte follows that table and writes **that** as the BIFF
+function index — a wrong number in a saved file, no crash and no message.
+
+Four `TIMES` lines after `sh_functab` make it a build error instead, the same
+idiom `OS88_BSS`'s literal uses (§81.21). Read the **line number** to see which
+table is short. Proven to bite by deleting one `sh_rpn_fid` entry: `TIMES value
+-1 is negative`.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

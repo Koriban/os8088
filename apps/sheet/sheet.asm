@@ -15349,6 +15349,15 @@ sh_rpn_fid:
     db 183, 169, 39, 25, 197          ; PRODUCT COUNTA MOD INT TRUNC
     db 26, 184, 20, 0xFF, 27          ; SIGN FACT SQRT POWER(no) ROUND
     db 34, 35, 8, 9, 100              ; TRUE FALSE ROW COLUMN CHOOSE
+    db 129, 128, 127, 198, 3          ; ISBLANK ISNUMBER ISTEXT ISLOGICAL
+                                       ;   ISERROR
+    db 126, 2, 105, 10, 86            ; ISERR ISNA ISREF NA TYPE
+    db 131, 0xFF                      ; N; ERROR.TYPE is ftab index 261, which
+                                       ; does not fit a byte - and sh_rpn_func
+                                       ; cannot lex the '.' either, so it
+                                       ; declines twice over and the cell goes
+                                       ; out as its cached value
+sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
 ; tFuncVar (which carries a count byte); 0 = fixed, written as tFunc. This is
@@ -15360,6 +15369,10 @@ sh_rpn_fvar:
     db 1, 1, 0, 0, 1                  ; PRODUCT COUNTA MOD INT TRUNC
     db 0, 0, 0, 0, 0                  ; SIGN FACT SQRT POWER ROUND
     db 0, 0, 1, 1, 1                  ; TRUE FALSE ROW COLUMN CHOOSE
+    db 0, 0, 0, 0, 0                  ; the twelve information functions are
+    db 0, 0, 0, 0, 0                  ; every one of them fixed-arity, NA()
+    db 0, 0                           ; included (0 parameters, min = max)
+sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
 ; Looks ahead and RESTORES nothing because it consumes nothing: sh_rpn_p is
@@ -16378,10 +16391,12 @@ sh_pcmpcont:
 .true:
     mov ax, 1
     call sh_acc_int
-    ret
-.false:
-    xor ax, ax
+    mov byte [sh_curtype], SH_T_NUM   ; a COMPARISON is a number here (this
+    ret                               ; evaluator has no BOOL value yet), and
+.false:                               ; it is certainly not whatever its
+    xor ax, ax                        ; operands were
     call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
     ret
 
 ; sh_pexpr / sh_pexprcont - additive level. sh_pexprcont is a real entry
@@ -16404,7 +16419,13 @@ sh_pexprcont:
     call sh_binop_pre                 ; and the parse of the right may recurse
     call fp_add
     call sh_acc_store
-    jmp sh_pexprcont
+    mov byte [sh_curtype], SH_T_NUM   ; stage 4.5: the RESULT of arithmetic is
+    jmp sh_pexprcont                  ; a NUMBER whatever its operands were
+                                       ; tagged. Nothing used to say so, so the
+                                       ; tag left by the last cell an operand
+                                       ; touched still stood - unobservable
+                                       ; until sh_pargclass below made a
+                                       ; mid-expression tag answerable
 .sub:
     call sh_chktext
     inc si
@@ -16414,6 +16435,7 @@ sh_pexprcont:
     call sh_binop_pre
     call fp_sub
     call sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_pexprcont
 
 ; -----------------------------------------------------------------------------
@@ -16503,6 +16525,7 @@ sh_ptermcont:
     call sh_binop_pre
     call fp_mul
     call sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_ptermcont
 .div:
     call sh_chktext
@@ -16516,9 +16539,11 @@ sh_ptermcont:
     mov byte [sh_evalerr], SH_ERR_DIV0
     xor ax, ax                        ; the value is still zero underneath -
     call sh_acc_int                   ; the flag is what the cell is stored by
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_ptermcont
 .divok:
     call sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_ptermcont
 
 ; sh_ppow (stage 3.0d) - the '^' level, between multiplication and the
@@ -16550,6 +16575,7 @@ sh_ppowcont:
     call sh_ppow                      ; recurse: right-associative
     call sh_pnest_leave
     call sh_chktext
+    mov byte [sh_curtype], SH_T_NUM
     call sh_acc_toint                 ; the exponent is still a whole number -
     mov cx, ax                        ; a fractional power needs logarithms,
     pop word [sh_lhs]                 ; which this file does not have
@@ -16800,19 +16826,32 @@ sh_pident:
 .collect:
     mov al, [si]
     cmp al, 'A'
-    jb .doneletters
+    jb .trydot
     cmp al, 'Z'
     jbe .isletter
     cmp al, 'a'
-    jb .doneletters
+    jb .trydot
     cmp al, 'z'
-    ja .doneletters
+    ja .trydot
+    jmp .isletter
+.trydot:
+    cmp al, '.'                       ; stage 4.5: a '.' INSIDE a name, which
+    jne .doneletters                  ; is how ERROR.TYPE is spelled. Only
+    or cx, cx                         ; after a letter, so a LEADING '.' is
+    jz .doneletters                   ; still the start of a number (`.5`) and
+    cmp cx, SH_NAME_MAX               ; a cell reference still cannot hold one
+    jae .doneletters
+    jmp .store                        ; ...and it does NOT go through the
+                                       ; uppercase fold below: '.' AND 0xDF is
+                                       ; 0x0E, which would have put a control
+                                       ; character in the middle of the name
 .isletter:
     cmp cx, SH_NAME_MAX               ; a DEFINED NAME can be this long, so the
     jae .doneletters                  ; cap is its length rather than a column
                                        ; pair's - a function name is shorter
                                        ; than either
     and al, 0xDF                      ; normalize to uppercase
+.store:
     mov [di], al
     inc di
     inc cx
@@ -17489,6 +17528,9 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 25                         ; stage 4.5: 25+ are the INFORMATION
+    jae .doinfo                        ; functions, whose argument stays a
+                                       ; REFERENCE instead of folding (81.23)
     cmp ax, 12                         ; 12+ are stage 3.0d's special forms:
     jae .dospecial                     ; fixed arity, parsed by sh_pspecial,
                                        ; not folded over ranges
@@ -17535,6 +17577,10 @@ sh_pfunc:
     call sh_pabs
     mov dx, ax
     jmp .done
+.doinfo:
+    call sh_pinfo
+    mov dx, ax
+    jmp .typed
 .dospecial:
     call sh_pspecial
     mov dx, ax
@@ -17883,6 +17929,274 @@ sh_isqrt:
     xor cx, cx
 .done:
     mov ax, cx
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; REFERENCE-TYPED ARGUMENTS (stage 4.5)
+;
+; Every argument in this evaluator has always been FOLDED TO A VALUE before
+; the function saw it, so by the time ISBLANK was called there was no
+; reference left to ask about: an empty cell and a cell holding 0 both arrived
+; as 0, and a label arrived as the zero underneath it. That is why the comment
+; above sh_pspecial listed ISBLANK, ISNUMBER and ISNA as deliberately absent -
+; a version of any of them that returned a plausible constant would have been
+; worse than its absence. These two routines are what ends that (81.23).
+;
+; sh_pargref - is the argument at SI a reference AND NOTHING ELSE? It is
+; deliberately strict about "nothing else": ISNUMBER(A1+1) is a question about
+; the sum, not about A1, so a reference only counts when the ',' or the ')'
+; follows it immediately.
+;
+; in:  SI at the start of an argument
+; out: CF=1 - sh_arg1col/sh_arg1row/sh_arg2col/sh_arg2row hold it (a single
+;             cell puts the same cell in both corners), sh_refarea = 1 for an
+;             A1:B9 form, and SI is past it
+;
+; THESE ARE NOT sh_r1col/sh_r2col, AND THE DISTINCTION IS NOT COSMETIC. Those
+; four are sh_foldrange's loop bounds, read on EVERY iteration of its walk -
+; so a cell inside the range that itself calls an information function used to
+; overwrite the bounds mid-walk. `=SUM(A5:A9)` over a column of ISBLANK()
+; formulas answered 1: A5's own argument reset the corners to A3, and the
+; second iteration compared row 4 against row 2 and stopped. The right answer
+; on the first cell and then nothing, with no error anywhere.
+;
+; The caller must still CONSUME these before evaluating anything, because a
+; nested reference argument overwrites them in turn. sh_pargclass reads them
+; into AX/BX on the line before its sh_getcell2 call for exactly that reason.
+;      CF=0 - not a reference; SI is UNCHANGED, exactly as sh_pcellref leaves
+;             it, and the caller parses an ordinary expression instead
+; =============================================================================
+sh_pargref:
+    push ax
+    push bx
+    push si                           ; the only way back out on failure
+    mov byte [sh_refarea], 0
+    call sh_pcellref
+    jnc .fail
+    mov [sh_arg1col], ax
+    mov [sh_arg1row], bx
+    mov [sh_arg2col], ax
+    mov [sh_arg2row], bx
+    cmp byte [si], ':'
+    jne .whole
+    inc si
+    call sh_pcellref
+    jnc .fail
+    mov [sh_arg2col], ax
+    mov [sh_arg2row], bx
+    mov byte [sh_refarea], 1
+.whole:
+    mov al, [si]
+    cmp al, ','
+    je .ok
+    cmp al, ')'
+    jne .fail
+.ok:
+    add sp, 2                         ; discard the saved SI - keep advancing
+    pop bx
+    pop ax
+    stc
+    ret
+.fail:
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+
+; =============================================================================
+; sh_pargclass - one argument, CLASSIFIED rather than folded.
+;
+; out: sh_argtype  = the SH_T_* the argument IS. SH_T_BLANK for a cell that
+;                    does not exist, which is the distinction this whole
+;                    routine exists to make
+;      sh_argaux   = its error code, 0 when it is not an error
+;      sh_argisref = 1 when the argument was a bare reference
+;      sh_acc      = its value, for the callers that want the number too
+;      SI past the argument
+;
+; THE ARGUMENT'S ERROR IS THIS FUNCTION'S ANSWER, NOT THE SHEET'S. sh_evalerr
+; is banked across the argument and put back afterwards, so ISERROR(1/0) is
+; TRUE rather than being a #DIV/0! itself - trapping the error is the entire
+; point of asking. Every other caller in this file WANTS an argument's error
+; to spread (that is what puts one #DIV/0! at the bottom of a column), which
+; is why the banking lives here and not in sh_getcell2.
+; =============================================================================
+sh_pargclass:
+    push bx
+    push cx
+    push dx
+    push di
+    mov al, [sh_evalerr]
+    push ax
+    mov byte [sh_evalerr], 0
+    mov byte [sh_argisref], 0
+    mov byte [sh_argaux], 0
+    call sh_pargref
+    jnc .expr
+    mov byte [sh_argisref], 1
+    mov ax, [sh_arg1col]              ; an AREA is classified by its top-left
+    mov bx, [sh_arg1row]              ; corner - what a 1x1 use of one would
+    call sh_getcell2                  ; intersect to anyway
+    jc .occupied
+    mov byte [sh_argtype], SH_T_BLANK ; the cell does not exist. Not zero: the
+    xor ax, ax                        ; whole point
+    call sh_acc_int                   ; ...though its value is still a defined
+    jmp .fin                          ; zero for anyone who asks for one
+.occupied:
+    mov al, [sh_curtype]
+    mov [sh_argtype], al
+    mov al, [sh_curaux]
+    mov [sh_argaux], al
+    jmp .fin
+.expr:
+    call sh_pcmp
+    mov al, [sh_curtype]
+    mov [sh_argtype], al
+.fin:
+    mov al, [sh_evalerr]              ; an error RAISED by the argument outranks
+    or al, al                         ; whatever tag it left behind: 1/0 is an
+    jz .noerr                         ; error value, not the zero underneath it
+    mov byte [sh_argtype], SH_T_ERR
+    mov [sh_argaux], al
+.noerr:
+    pop ax
+    mov [sh_evalerr], al
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
+; question about what an argument IS rather than what it is worth, so each is
+; one sh_pargclass call and a comparison.
+;
+; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
+; =============================================================================
+sh_pinfo:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax                        ; DI = the id; sh_pargclass clobbers
+    cmp di, 33                        ; everything else. NA() is the one that
+    je .na                            ; takes no argument at all
+    call sh_pargclass
+    mov bl, [sh_argtype]
+    mov bh, [sh_argaux]
+    cmp di, 34
+    je .type
+    cmp di, 35
+    je .n
+    cmp di, 36
+    je .errtype
+    xor ax, ax                        ; every remaining id answers TRUE or
+    cmp di, 25                        ; FALSE, and FALSE is the default
+    je .isblank
+    cmp di, 26
+    je .isnumber
+    cmp di, 27
+    je .istext
+    cmp di, 28
+    je .islogical
+    cmp di, 29
+    je .iserror
+    cmp di, 30
+    je .iserr
+    cmp di, 31
+    je .isna
+    cmp byte [sh_argisref], 0         ; 32 ISREF - the one question only
+    je .close                         ; sh_pargref can answer
+    jmp .yes
+.isblank:
+    cmp bl, SH_T_BLANK
+    je .yes
+    jmp .close
+.isnumber:
+    cmp bl, SH_T_NUM
+    je .yes
+    jmp .close
+.istext:
+    cmp bl, SH_T_TEXT
+    je .yes
+    jmp .close
+.islogical:
+    cmp bl, SH_T_BOOL                 ; nothing produces one YET, so this is
+    je .yes                           ; FALSE for everything - which is the
+    jmp .close                        ; honest answer, not a placeholder one
+.iserror:
+    cmp bl, SH_T_ERR
+    je .yes
+    jmp .close
+.iserr:
+    cmp bl, SH_T_ERR                  ; ISERR is ISERROR MINUS #N/A, and that
+    jne .close                        ; distinction is the only reason both
+    cmp bh, SH_ERR_NA                 ; exist
+    je .close
+    jmp .yes
+.isna:
+    cmp bl, SH_T_ERR
+    jne .close
+    cmp bh, SH_ERR_NA
+    jne .close
+.yes:
+    mov ax, 1
+    jmp .close
+.type:
+    mov ax, 1                         ; Excel's own numbering: 1 number,
+    cmp bl, SH_T_TEXT                 ; 2 text, 4 logical, 16 error. A BLANK
+    jne .ty1                          ; cell is a 1 there too
+    mov ax, 2
+    jmp .close
+.ty1:
+    cmp bl, SH_T_BOOL
+    jne .ty2
+    mov ax, 4
+    jmp .close
+.ty2:
+    cmp bl, SH_T_ERR
+    jne .close
+    mov ax, 16
+    jmp .close
+.errtype:
+    cmp bl, SH_T_ERR                  ; THE SH_ERR_* CODES ARE Excel's OWN
+    jne .errna                        ; ERROR.TYPE NUMBERS - they were numbered
+    xor ah, ah                        ; that way when error values landed,
+    mov al, bh                        ; precisely so this could be a copy
+    jmp .close
+.errna:
+    mov byte [sh_evalerr], SH_ERR_NA  ; ERROR.TYPE of something that is not an
+    xor ax, ax                        ; error is #N/A, not zero
+    jmp .close
+.na:
+    mov byte [sh_evalerr], SH_ERR_NA
+    xor ax, ax
+    jmp .close
+.n:
+    cmp bl, SH_T_NUM                  ; N() passes a NUMBER through unchanged,
+    je .nnum                          ; fraction and all, so it cannot leave by
+    cmp bl, SH_T_ERR                  ; the integer path the rest of these use
+    jne .nzero
+    mov [sh_evalerr], bh              ; N of an error IS that error
+.nzero:
+    xor ax, ax
+    call sh_acc_int
+.nnum:
+    call sh_acc_toint
+    jmp .step
+.close:
+    call sh_acc_int
+.step:
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop di
+    pop dx
     pop cx
     pop bx
     ret
@@ -19599,6 +19913,22 @@ sh_f_false:    db 'FALSE', 0
 sh_f_row:      db 'ROW', 0
 sh_f_column:   db 'COLUMN', 0
 sh_f_choose:   db 'CHOOSE', 0
+; stage 4.5: the INFORMATION functions. Absent until now because an argument
+; was folded to a value before the function saw it - see sh_pargclass.
+sh_f_isblank:  db 'ISBLANK', 0
+sh_f_isnumber: db 'ISNUMBER', 0
+sh_f_istext:   db 'ISTEXT', 0
+sh_f_islogicl: db 'ISLOGICAL', 0
+sh_f_iserror:  db 'ISERROR', 0
+sh_f_iserr:    db 'ISERR', 0
+sh_f_isna:     db 'ISNA', 0
+sh_f_isref:    db 'ISREF', 0
+sh_f_na:       db 'NA', 0
+sh_f_type:     db 'TYPE', 0
+sh_f_n:        db 'N', 0
+sh_f_errtype:  db 'ERROR.TYPE', 0     ; the only name here with a '.' in it,
+                                       ; which is what sh_pident's .trydot is
+                                       ; for
 
 ; sh_functab - the id is the INDEX. 0 terminates.
 sh_functab:
@@ -19607,7 +19937,26 @@ sh_functab:
     dw sh_f_product, sh_f_counta, sh_f_mod, sh_f_int, sh_f_trunc
     dw sh_f_sign, sh_f_fact, sh_f_sqrt, sh_f_power, sh_f_round
     dw sh_f_true, sh_f_false, sh_f_row, sh_f_column, sh_f_choose
+    dw sh_f_isblank, sh_f_isnumber, sh_f_istext, sh_f_islogicl, sh_f_iserror
+    dw sh_f_iserr, sh_f_isna, sh_f_isref, sh_f_na, sh_f_type
+    dw sh_f_n, sh_f_errtype
     dw 0
+sh_functab_end:
+; -----------------------------------------------------------------------------
+; THREE TABLES INDEXED BY THE SAME NUMBER, and nothing used to check they were
+; the same length. sh_rpn_func indexes sh_rpn_fid and sh_rpn_fvar by the id
+; sh_funcid returns, which is a position in sh_functab - so appending a
+; function here and forgetting one of the other two reads whatever byte
+; follows it and writes THAT as the BIFF function index. A wrong number in a
+; saved file, no crash, no message. These four TIMES lines make it a build
+; error instead, the same idiom OS88_BSS's literal uses; read the LINE NUMBER
+; to see which table is short.
+; -----------------------------------------------------------------------------
+%define SH_NFUNCS ((sh_functab_end - sh_functab) / 2 - 1)
+    times ((sh_rpn_fid_end - sh_rpn_fid) - SH_NFUNCS) db 0
+    times (SH_NFUNCS - (sh_rpn_fid_end - sh_rpn_fid)) db 0
+    times ((sh_rpn_fvar_end - sh_rpn_fvar) - SH_NFUNCS) db 0
+    times (SH_NFUNCS - (sh_rpn_fvar_end - sh_rpn_fvar)) db 0
 sh_s_errpfx:   db 'Err ', 0
 sh_s_ext_sylk: db '.SLK', 0
 sh_s_ext_dif:  db '.DIF', 0
@@ -19686,7 +20035,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3332
+    OS88_BSS 3344
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -19819,7 +20168,16 @@ sh_bbcol      equ sh_bbrow + 2
 sh_curfmt     equ sh_bbcol + 2              ; sh_getcell2's format-byte output
 sh_curtype    equ sh_curfmt + 1             ; ...and its SH_T_* tag, and where
 sh_curtoff    equ sh_curtype + 1            ; a TEXT cell's characters live
-sh_jlen       equ sh_curtoff + 2             ; sh_cjust's stashed text length
+sh_argtype    equ sh_curtoff + 2            ; stage 4.5: sh_pargclass's answer
+sh_argaux     equ sh_argtype + 1            ; - what the argument IS, its error
+sh_argisref   equ sh_argaux + 1             ; code, and whether it was a bare
+sh_refarea    equ sh_argisref + 1           ; reference; sh_pargref's A1:B9 flag
+sh_arg1col    equ sh_refarea + 1            ; ...and the reference itself, in
+sh_arg1row    equ sh_arg1col + 2            ; FOUR WORDS OF ITS OWN. Sharing
+sh_arg2col    equ sh_arg1row + 2            ; sh_r1col/sh_r2col with the range
+sh_arg2row    equ sh_arg2col + 2            ; folder overwrote its loop bounds
+                                             ; mid-walk - see sh_pargref
+sh_jlen       equ sh_arg2row + 2             ; sh_cjust's stashed text length
 sh_ulx        equ sh_jlen + 2               ; sh_drawunderline's stashed
 sh_uly        equ sh_ulx + 2                ; cell text origin (x, y)
 sh_wrec_xf    equ sh_uly + 2                ; sh_doread_biff's per-record
