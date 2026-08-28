@@ -365,9 +365,11 @@ SH_S_TYPE    equ 18                 ; byte: SH_C_TYPE, carried for the same
 SH_S_AUX     equ 19                 ; byte: ...reason - sh_addcell retags a
                                     ; fresh record SH_T_NUM, so a label whose
                                     ; tag was not carried came back a number.
-                                    ; Free bytes: the staging stride in the
-                                    ; code is SH_C_SZ, so 18..19 already exist
-SH_S_SZ      equ 20
+                                    ; Free bytes: SH_S_SZ was already 20, so
+                                    ; 18..19 existed before anything used them
+SH_S_SZ      equ 20                 ; ...and the code says SH_S_SZ where it
+                                    ; means this, so changing it is a change
+                                    ; to ONE layout and not silently to both
 
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
@@ -13643,10 +13645,12 @@ sh_rowcol_op:
     mov [sh_rc_tcol], ax
 .stage:
     mov ax, [sh_rc_stgcnt]
-    mov bx, SH_C_SZ
-    mul bx
-    mov di, ax
-    mov es, [sh_stgseg]
+    mov bx, SH_S_SZ                   ; the STAGING record's own size. It is
+    mul bx                            ; 20 like SH_C_SZ and this changes no
+    mov di, ax                        ; byte - but saying SH_C_SZ here made
+    mov es, [sh_stgseg]               ; the two layouts one constant apart
+                                       ; from being independent, which is the
+                                       ; whole reason they have two names
     mov ax, [sh_rc_tsheet]
     mov [es:di], ax
     mov ax, [sh_rc_trow]
@@ -13688,8 +13692,8 @@ sh_rowcol_op:
     cmp cx, [sh_rc_stgcnt]
     jae .reinsdone
     mov ax, cx
-    mov bx, SH_C_SZ
-    mul bx
+    mov bx, SH_S_SZ                   ; ...and its other half, for the same
+    mul bx                            ; reason
     mov si, ax
     mov es, [sh_stgseg]
     mov ax, [es:si]
