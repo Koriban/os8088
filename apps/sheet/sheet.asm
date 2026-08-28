@@ -845,17 +845,22 @@ sh_repaint:
     call sh_drawall
     cmp word [sh_chartwin], 0           ; stage 2.x: keep the live Chart Column
     je .nochart                         ; window in sync with every data-
-    push bx                            ; changing command that already routes
-    mov bx, [sh_chartwin]              ; through sh_repaint - skip the redraw
-    call OSAPI_WM_OBSCURED              ; entirely while nobody can see it
-    jc .chartobscured                   ; (also covers "hidden via its own
-    call sh_chart_scan                  ; close box", which only hides it -
-    call sh_chart_render                ; see sh_docmd_chart's window-lifecycle
-    mov si, [sh_chartwin]               ; comment). sh_chart_render only
-    call sh_chart_paint                 ; re-rasterizes whatever is already
-                                         ; staged - sh_chart_scan is what
-                                         ; actually re-reads the charted
-                                         ; column's current values first.
+    cmp byte [sh_chartdirty], 0         ; changing command that already routes
+    je .nochart                         ; through sh_repaint - and ONLY those:
+    push bx                            ; sh_addcell/sh_removecell set the dirty
+    mov bx, [sh_chartwin]              ; byte, so a selection move, an edit
+    call OSAPI_WM_OBSCURED              ; keystroke or a scroll (which change no
+    jc .chartobscured                   ; cell) skips the re-scan and the whole
+    call sh_chart_scan                  ; 240x160 re-raster. Skipped too while
+    call sh_chart_render                ; nobody can see it (also covers
+    mov si, [sh_chartwin]               ; "hidden via its own close box", which
+    call sh_chart_paint                 ; only hides it - see sh_docmd_chart's
+    mov byte [sh_chartdirty], 0         ; window-lifecycle comment); the byte
+                                         ; then STAYS set, so the first repaint
+                                         ; with the chart visible resyncs it.
+                                         ; sh_chart_scan is what re-reads the
+                                         ; charted column's current values;
+                                         ; sh_chart_render re-rasterizes them.
 .chartobscured:
     pop bx
 .nochart:
@@ -938,7 +943,8 @@ sh_select:
     push ax
     push bx
     mov word [sh_tabanchor], 0       ; ANY other move ends a Tab run - only the
-    call sh_commit                   ; Tab arm puts the anchor back afterwards
+    call sh_selbank                  ; Tab arm puts the anchor back afterwards
+    call sh_commit
     mov [sh_selcol], ax
     mov [sh_selrow], bx
     mov [sh_selcol2], ax               ; stage 3.0a: a plain select COLLAPSES
@@ -947,7 +953,9 @@ sh_select:
                                         ; old single-cell behaviour every
                                         ; existing caller still expects
     call sh_scrollto
-    call sh_repaint
+    call sh_selpaint                   ; only what the move dirtied - the full
+                                        ; repaint costs ~1s on a 4.77MHz 8088
+                                        ; and this path runs per arrow key
     pop bx
     pop ax
     ret
@@ -964,6 +972,7 @@ sh_select:
 sh_select_to:
     push ax
     push bx
+    call sh_selbank
     cmp ax, SH_COLS
     jb .colok
     mov ax, SH_COLS - 1
@@ -975,7 +984,162 @@ sh_select_to:
     mov [sh_selcol2], ax
     mov [sh_selrow2], bx
     call sh_scrollto2
+    call sh_selpaint
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_selbank - bank the rect and the scroll origin a selection move starts
+; from, so sh_selpaint can price the damage afterwards. Preserves everything.
+; -----------------------------------------------------------------------------
+sh_selbank:
+    push ax
+    call sh_selrect
+    mov ax, [sh_selc1]
+    mov [sh_oldc1], ax
+    mov ax, [sh_selc2]
+    mov [sh_oldc2], ax
+    mov ax, [sh_selr1]
+    mov [sh_oldr1], ax
+    mov ax, [sh_selr2]
+    mov [sh_oldr2], ax
+    mov ax, [sh_scrollcol]
+    mov [sh_oldscol], ax
+    mov ax, [sh_scrollrow]
+    mov [sh_oldsrow], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_selpaint - repaint after a selection move: as little of the window as
+; the move actually dirtied. SI = the window (sh_repaint's own contract).
+;
+; The full repaint is ~1s on the target (PERFORMANCE.md's own table: one
+; OSAPI_FONT_RUN per visible cell, plus all the chrome, plus a recalc pass),
+; and this path runs once per keystroke-repeat and per drag packet - so it
+; pays that price only when it must:
+;   * sh_commit stored something -> full, because a dependent formula
+;     anywhere on screen may now show a new value and only sh_drawall's
+;     pass advance re-evaluates them;
+;   * the view scrolled by rows only -> blit the surviving rows
+;     (sh_scrollrow_blit) and letter just the vacated ones;
+;   * by columns only -> the grid and its column half, nothing else
+;     (sh_scrollcol_part - OSAPI_GFX_SCROLL is vertical-only, SPEC.md 5.5);
+;   * no scroll at all -> the old cells and the new ones (sh_updsel).
+; -----------------------------------------------------------------------------
+sh_selpaint:
+    push ax
+    push cx
+    cmp byte [sh_commitdirty], 0
+    jne .full
+    mov ax, [sh_oldscol]
+    cmp ax, [sh_scrollcol]
+    jne .cols
+    mov cx, [sh_oldsrow]
+    cmp cx, [sh_scrollrow]
+    jne .rows
+    call sh_updsel
+    jmp .out
+.rows:
+    call sh_scrollrow_blit             ; CX = the row the view is leaving
+    jc .full                           ; refused: pay the full price
+    call sh_updsel                     ; old cells + new cells + the bars
+    jmp .out
+.cols:
+    mov cx, [sh_oldsrow]
+    cmp cx, [sh_scrollrow]
+    jne .full                          ; both axes moved: a Goto, not a walk
+    call sh_scrollcol_part
+    call sh_drawbar                    ; the reference box changed too
+    call sh_drawstatus
+    jmp .out
+.full:
+    mov byte [sh_commitdirty], 0
     call sh_repaint
+.out:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_updsel - the no-scroll damage path: redraw the union of the old and the
+; new selection rects (which covers both frames), then the two bars whose
+; text names the selection. SI = the window.
+; -----------------------------------------------------------------------------
+sh_updsel:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call sh_geom
+    cmp word [sh_vcols], 0
+    je .chrome
+    cmp word [sh_vrows], 0
+    je .chrome
+    call sh_selrect                    ; the NEW rect, ordered
+    mov ax, [sh_selc1]                 ; the union's columns...
+    cmp ax, [sh_oldc1]
+    jbe .c1
+    mov ax, [sh_oldc1]
+.c1:
+    mov cx, [sh_selc2]
+    cmp cx, [sh_oldc2]
+    jae .c2
+    mov cx, [sh_oldc2]
+.c2:
+    mov dx, [sh_scrollcol]             ; ...clamped to the viewport, in
+    cmp cx, dx                         ; window cells
+    jb .chrome                         ; wholly left of the view
+    sub cx, dx
+    cmp cx, [sh_vcols]
+    jb .c2ok
+    mov cx, [sh_vcols]
+    dec cx
+.c2ok:
+    sub ax, dx
+    jns .c1ok
+    xor ax, ax
+.c1ok:
+    cmp ax, [sh_vcols]
+    jae .chrome                        ; wholly right of it
+    mov [sh_dmgc1], ax
+    mov [sh_dmgc2], cx
+    mov ax, [sh_selr1]                 ; the union's rows, the same
+    cmp ax, [sh_oldr1]
+    jbe .r1
+    mov ax, [sh_oldr1]
+.r1:
+    mov cx, [sh_selr2]
+    cmp cx, [sh_oldr2]
+    jae .r2
+    mov cx, [sh_oldr2]
+.r2:
+    mov dx, [sh_scrollrow]
+    cmp cx, dx
+    jb .chrome
+    sub cx, dx
+    cmp cx, [sh_vrows]
+    jb .r2ok
+    mov cx, [sh_vrows]
+    dec cx
+.r2ok:
+    sub ax, dx
+    jns .r1ok
+    xor ax, ax
+.r1ok:
+    cmp ax, [sh_vrows]
+    jae .chrome
+    mov [sh_dmgr1], ax
+    mov [sh_dmgr2], cx
+    call sh_dmgdraw
+    call sh_drawsel
+.chrome:
+    call sh_drawbar
+    call sh_drawstatus
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1031,7 +1195,13 @@ sh_gridhit:
 ; sh_flkey - stage 3.0b: hand one keystroke to the formula bar's field, then
 ; resync this app's own sh_editlen from the field's LN_LEN so sh_commit and
 ; every other existing reader keeps working unchanged.
-; in: AL = ascii, AH = scan, SI = the window (this callback's own).
+; in: AL = ascii, AH = scan.
+;
+; REDRAWS ONLY THE FIELD. An editing keystroke changes no cell, so the full
+; sh_repaint this used to end with - every visible cell re-lettered plus a
+; recalc pass, ~1s per keystroke on a 4.77MHz 8088 - repainted identical
+; pixels and dropped keys on the target. os88line_draw is one opaque run
+; plus the strip past the text; sh_flmarg covers the one span it does not.
 ; -----------------------------------------------------------------------------
 sh_flkey:
     push ax
@@ -1046,9 +1216,48 @@ sh_flkey:
                                         ; 63, so the low byte is the whole of
                                         ; it - but keep them in step, because
                                         ; sh_commit still reads sh_editlen
+    call sh_flmarg
+    call os88line_draw
     pop si
     pop ax
-    call sh_repaint
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_flmarg - white the strip between the content box's frame and os88line's
+; 8-aligned pen. The field's own draw covers its run and the strip PAST the
+; text (os88line_draw's header), so this margin is the one span neither
+; touches - and on the first keystroke of an edit it still holds the leftmost
+; pixels of the static text sh_drawbar drew there. SI = sh_fline, whose rect
+; sh_flrect has already refreshed. Preserves everything.
+; -----------------------------------------------------------------------------
+sh_flmarg:
+    push ax
+    push bx
+    push cx
+    push dx
+    call os88line_pen
+    mov cx, ax
+    dec cx                             ; the margin's right edge...
+    mov ax, [si + LN_X1]
+    inc ax                             ; ...and its left, inside the frame
+    cmp ax, cx
+    jg .none
+    mov bx, [si + LN_Y1]
+    inc bx
+    mov dx, [si + LN_Y2]
+    dec dx
+    cmp bx, dx
+    jg .none
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+.none:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1704,6 +1913,11 @@ sh_commit:
     cmp byte [sh_editing], 0
     je .out
     mov byte [sh_editing], 0
+    mov byte [sh_commitdirty], 1      ; cell data changes below (even an empty
+                                      ; buffer clears the cell) - sh_selpaint
+                                      ; reads this and pays the full repaint,
+                                      ; whose pass advance is what re-shows
+                                      ; every dependent formula
     cmp byte [sh_editlen], 0
     jne .have
     mov ax, [sh_selcol]
@@ -1791,12 +2005,100 @@ sh_drawall:
     call sh_hsb_draw
     call sh_drawcolhdrs
     call sh_drawrowhdrs
-    call sh_drawgrid
-    call sh_drawlines
+    call sh_dmgfull                   ; the three grid painters below are
+    call sh_drawgrid                  ; RANGED now (sh_dmgc1..sh_dmgr2); a
+    call sh_drawlines                 ; full draw is the whole viewport
     call sh_drawborders
     call sh_drawsel
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dmgfull - point the damage range at the whole viewport. The ranged grid
+; painters guard [sh_vcols]/[sh_vrows] == 0 themselves, so the wrapped-around
+; bounds an empty viewport produces here are never read. Preserves everything.
+; -----------------------------------------------------------------------------
+sh_dmgfull:
+    push ax
+    xor ax, ax
+    mov [sh_dmgc1], ax
+    mov [sh_dmgr1], ax
+    mov ax, [sh_vcols]
+    dec ax
+    mov [sh_dmgc2], ax
+    mov ax, [sh_vrows]
+    dec ax
+    mov [sh_dmgr2], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dmgdraw - redraw ONLY the cells in [sh_dmgc1..c2] x [sh_dmgr1..r2]
+; (window-relative, inclusive, already clamped to the viewport), plus the
+; gridline segments and border edges over them. This is the partial-repaint
+; core: OSAPI_FONT_RUN owns each cell's 8 glyph rows, so when a cell is
+; taller the band below them is filled here - the full repaint's window-wide
+; white fill does not run on this path, and the mover owns its stale pixels
+; (the old selection frame's edges land in exactly that band).
+; -----------------------------------------------------------------------------
+sh_dmgdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp word [sh_vcols], 0
+    je .out
+    cmp word [sh_vrows], 0
+    je .out
+    cmp word [sh_cellh], 8
+    jbe .nobands                       ; 8px cells: the runs cover everything
+    mov ax, [sh_dmgc1]                 ; the damaged columns' pixel span
+    mov dx, [sh_cellw]
+    mul dx
+    add ax, [sh_ox]
+    add ax, SH_RH_W
+    mov [sh_blitx1], ax
+    mov ax, [sh_dmgc2]
+    inc ax
+    mov dx, [sh_cellw]
+    mul dx
+    add ax, [sh_ox]
+    add ax, SH_RH_W
+    dec ax
+    mov [sh_blitx2], ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov cx, [sh_dmgr1]
+.band:
+    cmp cx, [sh_dmgr2]
+    ja .nobands
+    mov ax, cx
+    mov dx, [sh_cellh]
+    mul dx
+    add ax, [sh_goy]
+    add ax, SH_FB_H + SH_CH_H
+    mov bx, ax
+    add bx, 8                          ; below the glyphs...
+    mov dx, ax
+    add dx, [sh_cellh]
+    dec dx                             ; ...down to the row's last pixel line
+    mov ax, [sh_blitx1]
+    push cx
+    mov cx, [sh_blitx2]
+    call OSAPI_GFX_FILL
+    pop cx
+    inc cx
+    jmp .band
+.nobands:
+    call sh_drawgrid
+    call sh_drawlines
+    call sh_drawborders
+.out:
     pop dx
     pop cx
     pop bx
@@ -1872,7 +2174,13 @@ sh_sbsync:
     mov ax, [sh_vrows]
     mov [sh_vsb + 10], ax              ; fit
     mov ax, [sh_scrollrow]
-    mov [sh_vsb + 12], ax              ; pos
+    mov dx, [sh_vsb + 8]               ; pos, CLAMPED to total - fit: keyboard
+    sub dx, [sh_vsb + 10]              ; navigation and Goto move the origin
+    cmp ax, dx                         ; without consulting the bars, and both
+    jbe .vpos                          ; thumb routines divide pos * track by
+    mov ax, dx                         ; total - unclamped, the quotient can
+.vpos:                                 ; overflow 16 bits and the DIV raises
+    mov [sh_vsb + 12], ax              ; INT 0 (a crash on real hardware)
 
     ; --- horizontal: the strip below the grid, left of the vertical bar
     mov ax, [sh_ox]
@@ -1902,7 +2210,13 @@ sh_sbsync:
     mov ax, [sh_vcols]
     mov [sh_hsb + 10], ax              ; fit
     mov ax, [sh_scrollcol]
-    mov [sh_hsb + 12], ax              ; pos
+    mov dx, [sh_hsb + 8]               ; pos, clamped to total - fit, for the
+    sub dx, [sh_hsb + 10]              ; vertical bar's reason above
+    cmp ax, dx
+    jbe .hpos
+    mov ax, dx
+.hpos:
+    mov [sh_hsb + 12], ax
 
     pop dx
     pop cx
@@ -2488,7 +2802,10 @@ sh_sbclick:
 
 ; -----------------------------------------------------------------------------
 ; sh_setscrollrow / sh_setscrollcol - move the view to AX, clamped to the
-; scrollable extent, and repaint if it actually moved. SI = the window.
+; scrollable extent, and paint the move if it actually happened - the
+; surviving rows blitted and only the vacated ones lettered (vertical), or
+; the grid's own strip repainted (horizontal; OSAPI_GFX_SCROLL is
+; vertical-only, SPEC.md 5.5). SI = the window.
 ; -----------------------------------------------------------------------------
 sh_setscrollrow:
     push ax
@@ -2505,8 +2822,11 @@ sh_setscrollrow:
 .rset:
     cmp ax, [sh_scrollrow]
     je .rout                           ; no movement: draw nothing
+    mov cx, [sh_scrollrow]             ; the row the view is leaving
     mov [sh_scrollrow], ax
-    call sh_repaint
+    call sh_scrollrow_blit
+    jnc .rout
+    call sh_repaint                    ; the blit refused: pay the full price
 .rout:
     pop cx
     pop bx
@@ -2529,8 +2849,184 @@ sh_setscrollcol:
     cmp ax, [sh_scrollcol]
     je .cout
     mov [sh_scrollcol], ax
-    call sh_repaint
+    call sh_scrollcol_part
 .cout:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_scrollrow_blit - move the grid by whole rows with OSAPI_GFX_SCROLL
+; instead of repainting every visible cell: the surviving rows are one blit,
+; and only the |delta| vacated ones are lettered (~7 runs for an arrow click
+; instead of ~119).
+; in:  CX = the scroll row the view is leaving, SI = the window;
+;      [sh_scrollrow] already holds the new one.
+; out: CF=0 the view is painted; CF=1 nothing was drawn and the caller owes
+;      the full repaint - the blit refused (the clip does not wholly contain
+;      the rect, SPEC.md 5.5), the byte-alignment round-up would reach the
+;      vertical bar, or the delta leaves no surviving band worth keeping.
+; -----------------------------------------------------------------------------
+sh_scrollrow_blit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call sh_geom                       ; fresh geometry: the drag path arrives
+                                        ; without sh_onclick's own sh_geom
+    cmp word [sh_vcols], 0
+    je .no
+    cmp word [sh_vrows], 0
+    je .no
+    mov ax, [sh_scrollrow]
+    sub ax, cx                         ; ax = the delta, in rows (signed)
+    mov [sh_blitdel], ax
+    mov di, ax
+    or di, di
+    jns .abs
+    neg di                             ; di = |delta|
+.abs:
+    cmp di, [sh_vrows]
+    jae .no                            ; nothing survives: repaint instead
+
+    ; The rect. x1 and x2+1 must be multiples of 8 (the blit is byte-column
+    ; granular, SPEC.md 5.5): x1 rounds DOWN into the row-header strip,
+    ; which is redrawn whole below anyway; x2+1 rounds UP into the dead
+    ; space right of the last gridline - refused if that would reach the
+    ; vertical bar, whose pixels must not move.
+    mov ax, [sh_ox]
+    add ax, SH_RH_W
+    and ax, 0xFFF8
+    mov [sh_blitx1], ax
+    mov ax, [sh_vcols]
+    mov dx, [sh_cellw]
+    mul dx
+    add ax, [sh_ox]
+    add ax, SH_RH_W                    ; ax = one past the grid's right edge
+    add ax, 7
+    and ax, 0xFFF8                     ; ...rounded up to the byte column
+    mov dx, [sh_ox]
+    add dx, [sh_cw]
+    sub dx, SH_VSB_W                   ; dx = the vertical bar's x1
+    cmp ax, dx
+    ja .no
+    dec ax
+    mov [sh_blitx2], ax
+    mov ax, [sh_goy]
+    add ax, SH_FB_H + SH_CH_H
+    mov [sh_blity1], ax
+    mov bx, ax
+    mov ax, [sh_vrows]
+    mov dx, [sh_cellh]
+    mul dx
+    add ax, bx
+    dec ax
+    mov [sh_blity2], ax
+
+    mov ax, [sh_blitdel]
+    mov dx, [sh_cellh]
+    imul dx                            ; the delta is under vrows, so AX is
+    mov si, ax                         ; the whole of it: SI = signed dy
+    mov ax, [sh_blitx1]
+    mov bx, [sh_blity1]
+    mov cx, [sh_blitx2]
+    mov dx, [sh_blity2]
+    call OSAPI_GFX_SCROLL              ; positive dy = content UP = view DOWN
+    jc .no                             ; refused: nothing moved, fall back
+
+    xor ax, ax                         ; the vacated rows, and only them:
+    cmp word [sh_blitdel], 0           ; scrolled up = new rows on top,
+    jl .vac                            ; scrolled down = at the bottom
+    mov ax, [sh_vrows]
+    sub ax, di
+.vac:
+    mov [sh_dmgr1], ax
+    add ax, di
+    dec ax
+    mov [sh_dmgr2], ax
+    xor ax, ax
+    mov [sh_dmgc1], ax
+    mov ax, [sh_vcols]
+    dec ax
+    mov [sh_dmgc2], ax
+    call sh_dmgdraw
+    call sh_drawsel                    ; the frame's share of the vacated
+                                        ; band - its surviving part moved
+                                        ; WITH the blit, to exactly where the
+                                        ; frame now belongs
+
+    mov al, CWHITE                     ; the row headers: every number
+    call OSAPI_SET_COLOR               ; changed places, and their text is
+    mov ax, [sh_ox]                    ; transparent, so the strip is erased
+    mov bx, [sh_blity1]                ; first
+    mov cx, [sh_ox]
+    add cx, SH_RH_W - 1
+    mov dx, [sh_blity2]
+    call OSAPI_GFX_FILL
+    call sh_drawrowhdrs
+
+    call sh_sbsync                     ; ...and the thumb moved
+    mov bx, sh_vsb
+    call os88ui_sbar
+    clc
+    jmp .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_scrollcol_part - a horizontal scroll has no blit primitive to lean on,
+; but it still owes nothing to the menu bar, the formula bar, the status bar
+; or the vertical scroll bar: the grid, the column letters and the
+; horizontal thumb are the whole of what moved - and no recalc pass, because
+; no cell changed. SI = the window.
+; -----------------------------------------------------------------------------
+sh_scrollcol_part:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call sh_geom                       ; sh_scrollrow_blit's reason
+    call sh_dmgfull
+    call sh_dmgdraw
+    call sh_drawsel
+    cmp word [sh_vcols], 0
+    je .nohdr
+    mov al, CWHITE                     ; the column letters all changed
+    call OSAPI_SET_COLOR               ; places; their text is transparent,
+    mov ax, [sh_ox]                    ; so the strip is erased first
+    add ax, SH_RH_W
+    mov bx, [sh_goy]
+    add bx, SH_FB_H
+    push ax
+    mov ax, [sh_vcols]
+    mov dx, [sh_cellw]
+    mul dx
+    mov cx, ax
+    pop ax
+    add cx, ax
+    dec cx
+    mov dx, [sh_goy]
+    add dx, SH_FB_H + SH_CH_H - 1
+    call OSAPI_GFX_FILL
+    call sh_drawcolhdrs
+.nohdr:
+    call sh_sbsync                     ; the horizontal thumb moved
+    mov bx, sh_hsb
+    call sh_hsb_draw
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -2608,6 +3104,23 @@ sh_drawbar:
     add dx, SH_FB_H - 1
     call OSAPI_GFX_VLINE
 
+    ; --- the reference box's interior, erased: its text is transparent and
+    ; this bar repaints on every selection move WITHOUT the window-wide
+    ; white fill behind it now (sh_selpaint), so it owns its own pixels ---
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [sh_ox]
+    inc ax
+    mov bx, [sh_goy]
+    inc bx
+    mov cx, [sh_ox]
+    add cx, SH_REF_W - 2
+    mov dx, [sh_goy]
+    add dx, SH_FB_H - 2
+    call OSAPI_GFX_FILL
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+
     ; --- reference text, into sh_tbuf ---
     ; Formula > Reference switches this between A1 and R1C1, which is the only
     ; place in the app that had an answer to show: the A1<->R1C1 converters
@@ -2656,8 +3169,10 @@ sh_drawbar:
     je .static
     call sh_flrect
     mov si, sh_fline
-    call os88line_draw
-    jmp .done
+    call sh_flmarg                     ; the span between the frame and the
+    call os88line_draw                 ; field's 8-aligned pen, which the
+    jmp .done                          ; field's own one-pass draw never
+                                        ; touches
 
 .static:
     ; --- not editing: the cell's current value/formula, as static text, into
@@ -2712,10 +3227,26 @@ sh_drawbar:
     pop di                             ; DI = content cursor, restored
     mov byte [di], 0
 .draw:
+    mov al, CWHITE                     ; the content box's interior, erased:
+    call OSAPI_SET_COLOR               ; the text below is transparent and of
+    mov ax, [sh_ox]                    ; varying length (the ref box's reason
+    add ax, SH_REF_W + 1               ; above)
+    mov bx, [sh_goy]
+    inc bx
+    mov cx, [sh_ox]
+    add cx, [sh_cw]
+    sub cx, 2
+    mov dx, [sh_goy]
+    add dx, SH_FB_H - 2
+    call OSAPI_GFX_FILL
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
     mov cx, [sh_ox]
     add cx, SH_REF_W + 4
     mov dx, [sh_goy]
-    add dx, 4
+    add dx, 3                          ; the same row os88line's own run uses
+                                        ; (LN_INSET), so the field covers this
+                                        ; text exactly when an edit begins
     mov si, sh_tbuf + 16
     call OSAPI_FONT_STR
 .done:
@@ -2738,6 +3269,21 @@ sh_drawstatus:
     push cx
     push dx
     push si
+
+    mov al, CWHITE                     ; the strip's interior, erased: the
+    call OSAPI_SET_COLOR               ; message is transparent text of
+    mov ax, [sh_ox]                    ; varying length, and this bar repaints
+    mov bx, [sh_oy]                    ; on selection moves without the
+    add bx, [sh_ch]                    ; window-wide white fill behind it
+    sub bx, SH_SB_H                    ; (sh_selpaint)
+    inc bx
+    mov cx, [sh_ox]
+    add cx, [sh_cw]
+    dec cx
+    mov dx, [sh_oy]
+    add dx, [sh_ch]
+    dec dx
+    call OSAPI_GFX_FILL
 
     mov al, CBLACK
     call OSAPI_SET_COLOR
@@ -2881,9 +3427,10 @@ sh_drawrowhdrs:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_drawgrid - every visible cell as one fixed-width OSAPI_FONT_RUN,
-; number-formatted and justified per its own SH_FMT_* bits (stage 1.6),
-; all spaces for empty. Sparse lookup: no bitmap.
+; sh_drawgrid - every cell in the damage range (sh_dmgc1..sh_dmgr2, window-
+; relative - sh_dmgfull for the whole viewport) as one fixed-width
+; OSAPI_FONT_RUN, number-formatted and justified per its own SH_FMT_* bits
+; (stage 1.6), all spaces for empty. Sparse lookup: no bitmap.
 ; -----------------------------------------------------------------------------
 sh_drawgrid:
     push ax
@@ -2891,16 +3438,22 @@ sh_drawgrid:
     push cx
     push dx
     push si
-    mov word [sh_wrow], 0
+    cmp word [sh_vcols], 0
+    je .out
+    cmp word [sh_vrows], 0
+    je .out
+    mov ax, [sh_dmgr1]
+    mov [sh_wrow], ax
 .row:
     mov ax, [sh_wrow]
-    cmp ax, [sh_vrows]
-    jae .out
-    mov word [sh_wcol], 0
+    cmp ax, [sh_dmgr2]
+    ja .out
+    mov ax, [sh_dmgc1]
+    mov [sh_wcol], ax
 .col:
     mov ax, [sh_wcol]
-    cmp ax, [sh_vcols]
-    jae .rownext
+    cmp ax, [sh_dmgc2]
+    ja .rownext
     mov ax, [sh_wcol]
     add ax, [sh_scrollcol]
     mov bx, [sh_wrow]
@@ -3068,10 +3621,12 @@ sh_drawgrid:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_drawlines - visible cell-boundary lines, vcols+1 vertical and vrows+1
-; horizontal, each a degenerate (1px) OSAPI_GFX_FILL rectangle. Drawn AFTER
-; sh_drawgrid: OSAPI_FONT_RUN's opaque erase is exactly one cell wide and
-; would otherwise paint back over a line drawn first.
+; sh_drawlines - the cell-boundary lines over the damage range (sh_dmgc1..
+; sh_dmgr2; sh_dmgfull for the whole viewport): c2-c1+2 vertical and r2-r1+2
+; horizontal, each a degenerate (1px) OSAPI_GFX_FILL rectangle spanning just
+; the damaged cells. Drawn AFTER sh_drawgrid: OSAPI_FONT_RUN's opaque erase
+; is exactly one cell wide and would otherwise paint back over a line drawn
+; first.
 ; -----------------------------------------------------------------------------
 sh_drawlines:
     push ax
@@ -3081,39 +3636,55 @@ sh_drawlines:
     cmp byte [sh_gridlines], 0         ; stage 2.x Options > Gridlines: Off
     je .out                            ; skips this whole pass, same as real
                                         ; Excel's Display dialog
+    cmp word [sh_vcols], 0
+    je .out
+    cmp word [sh_vrows], 0
+    je .out
     mov al, CBLACK
     call OSAPI_SET_COLOR
 
-    mov ax, [sh_goy]
+    mov ax, [sh_dmgr1]                 ; the damaged rows' pixel span...
+    mov dx, [sh_cellh]
+    mul dx
+    add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     mov [sh_ly1], ax
-    mov bx, [sh_vrows]
+    mov ax, [sh_dmgr2]
+    inc ax
     mov dx, [sh_cellh]
-    mov ax, bx
     mul dx
-    add ax, [sh_ly1]
+    add ax, [sh_goy]
+    add ax, SH_FB_H + SH_CH_H
     dec ax
     mov [sh_ly2], ax
 
-    mov ax, [sh_ox]
+    mov ax, [sh_dmgc1]                 ; ...and the damaged columns'
+    mov dx, [sh_cellw]
+    mul dx
+    add ax, [sh_ox]
     add ax, SH_RH_W
     mov [sh_lx1], ax
-    mov bx, [sh_vcols]
+    mov ax, [sh_dmgc2]
+    inc ax
     mov dx, [sh_cellw]
-    mov ax, bx
     mul dx
-    add ax, [sh_lx1]
+    add ax, [sh_ox]
+    add ax, SH_RH_W
     dec ax
     mov [sh_lx2], ax
 
-    mov word [sh_wcol], 0
+    mov ax, [sh_dmgc1]
+    mov [sh_wcol], ax
 .vline:
     mov ax, [sh_wcol]
-    cmp ax, [sh_vcols]
+    mov dx, [sh_dmgc2]
+    inc dx
+    cmp ax, dx
     ja .vdone
     mov dx, [sh_cellw]
     mul dx
-    add ax, [sh_lx1]
+    add ax, [sh_ox]
+    add ax, SH_RH_W
     mov cx, ax
     mov bx, [sh_ly1]
     mov dx, [sh_ly2]
@@ -3123,14 +3694,18 @@ sh_drawlines:
     mov [sh_wcol], ax
     jmp .vline
 .vdone:
-    mov word [sh_wrow], 0
+    mov ax, [sh_dmgr1]
+    mov [sh_wrow], ax
 .hline:
     mov ax, [sh_wrow]
-    cmp ax, [sh_vrows]
+    mov dx, [sh_dmgr2]
+    inc dx
+    cmp ax, dx
     ja .hdone
     mov dx, [sh_cellh]
     mul dx
-    add ax, [sh_ly1]
+    add ax, [sh_goy]
+    add ax, SH_FB_H + SH_CH_H
     mov bx, ax
     mov dx, ax
     mov ax, [sh_lx1]
@@ -3151,7 +3726,8 @@ sh_drawlines:
 ; -----------------------------------------------------------------------------
 ; sh_drawborders - the four directional edges (Left/Right/Top/Bottom) of
 ; every bordered cell (sh_bordseg) on the current sheet, within the visible
-; scroll window. Shade is drawn from INSIDE sh_drawgrid instead, since it
+; scroll window AND the damage range (sh_dmgc1..sh_dmgr2; sh_dmgfull for the
+; whole viewport). Shade is drawn from INSIDE sh_drawgrid instead, since it
 ; has to happen BEFORE that cell's own opaque text run, not after (see the
 ; comment there) - this routine only ever draws the four edge lines.
 ; Sparse walk of sh_bordseg (typically tiny - almost no cell has a border)
@@ -3196,12 +3772,20 @@ sh_drawborders:
     js .next
     cmp bx, [sh_vcols]
     jae .next
+    cmp bx, [sh_dmgc1]                ; ...and inside the damage range, so a
+    jb .next                          ; partial redraw (sh_dmgdraw) does not
+    cmp bx, [sh_dmgc2]                ; re-edge cells it never repainted
+    ja .next
     mov [sh_wcol], bx
     mov bx, ax
     sub bx, [sh_scrollrow]
     js .next
     cmp bx, [sh_vrows]
     jae .next
+    cmp bx, [sh_dmgr1]
+    jb .next
+    cmp bx, [sh_dmgr2]
+    ja .next
     mov [sh_wrow], bx
     mov al, [es:si+4]
     mov [sh_bdrawflags], al
@@ -8509,9 +9093,9 @@ sh_ldlg_apply:
 ; TWO REGISTER CONTRACTS MEET HERE and they want different things in the same
 ; register. os88line_key reads AH as a SCAN CODE, so AH must be cleared or a
 ; leftover one makes the field do something else with a perfectly good
-; character. And sh_flkey ENDS by calling sh_repaint, which takes SI as THE
-; WINDOW - so SI must be the sheet's window and not, as it was, the string
-; being copied out. Both are set here, once, instead of at each call site.
+; character. And SI must not be the string being copied out, as it was:
+; sh_flkey points SI at the field's own block. Both are set here, once,
+; instead of at each call site.
 ; -----------------------------------------------------------------------------
 sh_ldlg_putc:
     push ax
@@ -8874,9 +9458,16 @@ sh_ndlg_onkey:
     mov si, sh_notebox
     call os88text_key
     jc .out                             ; the field did not want it
-    mov si, [sh_ndlg_win]
-    call sh_ndlg_paint
-    jmp .out
+    call os88text_draw                  ; the BOX, not the whole dialog: the
+    jmp .out                            ; labels and both buttons did not
+                                        ; change, and os88ui_btn's own erase
+                                        ; would flash them on every keystroke.
+                                        ; The block's rect is refreshed by
+                                        ; every real paint and the window
+                                        ; cannot move mid-callback (the gfx
+                                        ; lock is held) - the same trust the
+                                        ; onclick hit-test below already
+                                        ; places in it
 .cancel:
     call sh_ndlg_close
 .out:
@@ -8919,8 +9510,8 @@ sh_ndlg_onclick:
     jle .doCancel
     jmp .out
 .redraw:
-    mov si, [sh_ndlg_win]
-    call sh_ndlg_paint
+    mov si, sh_notebox                  ; only the caret moved: redraw the
+    call os88text_draw                  ; box, not the dialog's chrome
     jmp .out
 .doOK:
     call sh_ndlg_apply
@@ -12183,6 +12774,10 @@ sh_addcell:
     push cx
     push dx
     push si
+    mov byte [sh_chartdirty], 1        ; whoever asked is about to write this
+                                        ; record - sh_repaint's chart tail
+                                        ; reads the byte instead of rescanning
+                                        ; the column on every repaint
     call sh_findcell
     jc .found
     cmp word [sh_ncells], SH_CELL_CAP
@@ -12258,6 +12853,7 @@ sh_removecell:
     push dx
     push si
     push di
+    mov byte [sh_chartdirty], 1        ; sh_addcell's reason
     call sh_findcell
     jnc .out
     mov ax, [sh_ncells]
@@ -18649,7 +19245,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3105
+    OS88_BSS 3137
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -19323,7 +19919,32 @@ sh_needld         equ sh_fl_drow + 2   ; byte: an ARG_FILE document is
 sh_argdir         equ sh_needld + 1    ; word: the directory it is in
 sh_argdrv         equ sh_argdir + 2    ; byte: ...and that volume
 sh_savepend       equ sh_argdrv + 1    ; byte: File Format's OK owes a Save As
-sh_bss_end        equ sh_savepend + 1
+
+; The damage-rect machinery (perf review): what a selection move or a scroll
+; actually dirtied, so the hot paths stop paying the ~1s full repaint.
+sh_commitdirty    equ sh_savepend + 1  ; byte: sh_commit stored something -
+                                       ; sh_selpaint consumes it and pays the
+                                       ; full repaint (dependent formulas)
+sh_chartdirty     equ sh_commitdirty + 1 ; byte: a cell record changed since
+                                       ; the chart last resynced (sh_repaint's
+                                       ; tail reads it, sh_addcell/
+                                       ; sh_removecell set it)
+sh_oldc1          equ sh_chartdirty + 1 ; sh_selbank's bank of the ordered
+sh_oldc2          equ sh_oldc1 + 2     ; rect a selection move started from...
+sh_oldr1          equ sh_oldc2 + 2
+sh_oldr2          equ sh_oldr1 + 2
+sh_oldscol        equ sh_oldr2 + 2     ; ...and the scroll origin
+sh_oldsrow        equ sh_oldscol + 2
+sh_dmgc1          equ sh_oldsrow + 2   ; the range the ranged grid painters
+sh_dmgc2          equ sh_dmgc1 + 2     ; draw (window-relative cells,
+sh_dmgr1          equ sh_dmgc2 + 2     ; inclusive; sh_dmgfull = the whole
+sh_dmgr2          equ sh_dmgr1 + 2     ; viewport)
+sh_blitx1         equ sh_dmgr2 + 2     ; sh_scrollrow_blit's rect (also
+sh_blitx2         equ sh_blitx1 + 2    ; sh_dmgdraw's band-fill x span)...
+sh_blity1         equ sh_blitx2 + 2
+sh_blity2         equ sh_blity1 + 2
+sh_blitdel        equ sh_blity2 + 2    ; ...and its signed row delta
+sh_bss_end        equ sh_blitdel + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

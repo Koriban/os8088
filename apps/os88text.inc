@@ -309,20 +309,49 @@ os88text_draw:
     mov dx, [si + TX_Y2]
     UI_FRAME
 
-    UI_WHITE                           ; the interior, cleared once
-    mov ax, [si + TX_X1]
-    inc ax
-    mov bx, [si + TX_Y1]
-    inc bx
+    mov ax, [si + TX_X1]               ; a degenerate rect draws its frame
+    inc ax                             ; and nothing else
     mov cx, [si + TX_X2]
     dec cx
-    mov dx, [si + TX_Y2]
-    dec dx
     cmp ax, cx
     jg .nolines
+    mov bx, [si + TX_Y1]
+    inc bx
+    mov dx, [si + TX_Y2]
+    dec dx
     cmp bx, dx
     jg .nolines
+
+    ; The interior is NOT cleared whole: that is the fill-then-letter pair
+    ; the header forbids, at box scale - the box sat blank while the runs
+    ; re-covered it, a visible flash on every keystroke of a note. Instead
+    ; each span is owned by exactly one draw: the LEFT MARGIN here (the pen
+    ; is rounded up to a multiple of 8, so 3..10px belong to no run), the
+    ; strip above the first row's band, each row as one opaque run plus the
+    ; strip past its text, and one fill below the last line.
+    UI_WHITE
+    call os88text_pen
+    mov cx, ax
+    dec cx                             ; the margin's right edge
+    mov ax, [si + TX_X1]
+    inc ax
+    cmp ax, cx
+    jg .nomargin
+    UI_FILL                            ; bx/dx: the full inner height, still
+.nomargin:
+    call os88text_pen                  ; the strip above the first band
+    mov cx, [si + TX_X2]
+    dec cx
+    cmp ax, cx
+    jg .notop
+    mov bx, [si + TX_Y1]
+    inc bx
+    mov dx, [si + TX_Y1]
+    add dx, TX_INSET - 1
+    cmp bx, dx
+    jg .notop
     UI_FILL
+.notop:
 
     call os88text_rows
     mov bp, cx                         ; bp = rows still to draw
@@ -332,11 +361,11 @@ os88text_draw:
     add dx, TX_INSET
 .row:
     or bp, bp
-    jz .caret
+    jz .below
     mov ax, [si + TX_BUF]
     add ax, [si + TX_LEN]
     cmp di, ax
-    ja .caret                          ; past the end of the document
+    ja .below                          ; past the end of the document
     call os88text_llen                 ; cx = this line's length
     push cx
     call os88text_cols                 ; cx = how many fit
@@ -366,6 +395,21 @@ os88text_draw:
     pop ax
     pop bx
     mov [bx], al                       ; ...and the banked byte back
+    mov ax, bx                         ; the strip past this row's text: the
+    sub ax, di                         ; byte past the span, minus the line's
+    shl ax, 1                          ; start = the characters just drawn...
+    shl ax, 1
+    shl ax, 1                          ; ...times 8 (8086 shifts by 1 or CL)
+    add ax, cx                         ; + the pen = the strip's left edge
+    mov cx, [si + TX_X2]
+    dec cx                             ; ...and its right
+    cmp ax, cx
+    jg .nostrip                        ; the text reaches the frame
+    UI_WHITE
+    mov bx, dx                         ; this row's own 8px band and nothing
+    add dx, TX_CELL - 1                ; more - the rows below are the tail
+    UI_FILL                            ; fill's, after the loop
+.nostrip:
     pop di
     pop dx
     pop bp
@@ -375,11 +419,28 @@ os88text_draw:
     mov ax, [si + TX_BUF]
     add ax, [si + TX_LEN]
     cmp di, ax
-    jae .caret                         ; no LF follows: that was the last line,
+    jae .lastrow                       ; no LF follows: that was the last line,
     inc di                             ; and stopping here is what keeps a
     add dx, TX_CELL                    ; document with no trailing newline from
     dec bp                             ; drawing blank rows forever
     jmp .row
+.lastrow:
+    add dx, TX_CELL                    ; the tail fill starts under it
+.below:
+    ; everything below the last text row, in ONE fill - the whole-interior
+    ; clear's only remaining job
+    call os88text_pen
+    mov cx, [si + TX_X2]
+    dec cx
+    cmp ax, cx
+    jg .caret
+    mov bx, dx
+    mov dx, [si + TX_Y2]
+    dec dx
+    cmp bx, dx
+    jg .caret
+    UI_WHITE
+    UI_FILL
 .caret:
     cmp byte [si + TX_FOCUS], 0
     je .nolines
