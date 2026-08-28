@@ -947,6 +947,16 @@ ch_deco:
     je .out
     cmp word [ch_type], CH_T_BAR
     je .titleonly                     ; see below
+    cmp word [ch_type], CH_T_SCATTER
+    jne .axis
+    cmp word [ch_cnt2], 0
+    jne .titleonly                    ; a two-series scatter's vertical axis
+                                      ; is series TWO's scale (ch_max2), and
+                                      ; ch_max/ch_e10 are series ONE's - the
+                                      ; label would be a confidently wrong
+                                      ; number, so no scale is drawn instead,
+                                      ; the same honesty CH_T_BAR buys below
+.axis:
 
     ; --- the value axis ------------------------------------------------------
     ; ch_base is where the ZERO LINE sits, not the top: CH_H-1 for an

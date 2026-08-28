@@ -67936,6 +67936,13 @@ type — so a scale belongs under the plot, and the categories already fill the
 canvas top to bottom — §82.9 divides the 160 rows among however many there
 are — so a bottom gutter would have to come out of the bars themselves.
 
+**Neither does a two-series scatter**, for a sibling reason: its vertical axis
+is series *two's* (§82.8's independent `ch_max2`), while `ch_max` and `ch_e10`
+— the only figures the labels have — are series one's. The label would be a
+confidently wrong number at the wrong magnitude, and no scale is honest where
+a wrong one is not. A one-series scatter plots Y from series one and keeps its
+labels.
+
 #### 82.7.3 A `ret` to nowhere
 
 `ch_legend` pushed SI at entry and never popped it, so its `ret` took the saved
@@ -68157,9 +68164,12 @@ not: `44.10` where the number is 44.1, and `0.00` — or, at a negative exponent
 `0000` — where the number is 0.
 
 **Two series, one exponent word.** Scatter and Combination (§82.8) each draw
-against their own `ch_max`/`ch_max2`, and only the first is labelled. So both
-callers scale **series two first and series one last**, leaving `ch_e10`
-holding the series the value axis is drawn from.
+against their own `ch_max`/`ch_max2`, and only the first is labelled —
+Combination's value axis measures its columns, which *are* series one, and a
+two-series Scatter, whose vertical axis is series two's, draws no value-axis
+labels at all rather than series one's number (§82.7.2). So both callers scale
+**series two first and series one last**, leaving `ch_e10` holding the series
+the value axis is drawn from.
 
 #### 82.13.1 What each caller had to change
 

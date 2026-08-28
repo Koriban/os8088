@@ -6101,19 +6101,20 @@ sh_docmd_chartexport:
 sh_chartexp_ondlg:
     push ax
     push bx
+    push cx
     push si
     push di
     mov si, di
     mov di, sh_chart_name
-    mov ax, SH_NAMEMAX
-.copy:
+    mov cx, SH_NAMEMAX               ; the count lives in CX - the loop
+.copy:                               ; body writes AL, so AX cannot hold it
     mov al, [es:si]
     mov [di], al
     or al, al
     jz .copied
     inc si
     inc di
-    dec ax
+    dec cx
     jnz .copy
     mov byte [di], 0
 .copied:
@@ -6131,6 +6132,7 @@ sh_chartexp_ondlg:
     call sh_repaint
     pop di
     pop si
+    pop cx
     pop bx
     pop ax
     ret
@@ -9628,21 +9630,22 @@ sh_ondlg:
     push ax
     push bx
     push cx
+    push dx
     push si
     push di
     mov bl, al
     mov cx, si                       ; CX = our window ptr (SI about to move)
     mov si, di
     mov di, sh_name
-    mov ax, SH_NAMEMAX
-.copy:
-    mov al, [es:si]
+    mov dx, SH_NAMEMAX               ; the count lives in DX - the loop body
+.copy:                               ; writes AL, so AX cannot hold it, and
+    mov al, [es:si]                  ; CX holds the window
     mov [di], al
     or al, al
     jz .copied
     inc si
     inc di
-    dec ax
+    dec dx
     jnz .copy
     mov byte [di], 0
 .copied:
@@ -9657,6 +9660,7 @@ sh_ondlg:
     call sh_repaint
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax

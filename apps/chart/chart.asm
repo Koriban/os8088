@@ -351,15 +351,15 @@ ct_ondlg:
     mov bx, si                          ; bx = our window ptr, stashed
     mov si, di
     mov di, ct_name
-    mov ax, CT_NAMEMAX
-.copy:
+    mov cx, CT_NAMEMAX                  ; the count lives in CX - the loop
+.copy:                                  ; body writes AL, so AX cannot hold it
     mov al, [es:si]
     mov [di], al
     or al, al
     jz .copied
     inc si
     inc di
-    dec ax
+    dec cx
     jnz .copy
     mov byte [di], 0
 .copied:
@@ -495,19 +495,20 @@ ct_reread:
 ct_expdlg:
     push ax
     push bx
+    push cx
     push si
     push di
     mov si, di
     mov di, ct_name
-    mov ax, CT_NAMEMAX
-.copy:
+    mov cx, CT_NAMEMAX                  ; the count lives in CX - the loop
+.copy:                                  ; body writes AL, so AX cannot hold it
     mov al, [es:si]
     mov [di], al
     or al, al
     jz .copied
     inc si
     inc di
-    dec ax
+    dec cx
     jnz .copy
     mov byte [di], 0
 .copied:
@@ -525,6 +526,7 @@ ct_expdlg:
 .out:
     pop di
     pop si
+    pop cx
     pop bx
     pop ax
     ret
@@ -935,8 +937,9 @@ ct_finalize:
     add si, ct_vals                     ; ct_vals, NOT ct_tval - the sort runs
     mov di, si                          ; on the COLLECTED series
     sub di, 8
-    mov cx, 4
-.swap8:
+    push cx                             ; the sort's OUTER index lives in CX -
+    mov cx, 4                           ; counting the four words in it reset
+.swap8:                                 ; the outer walk after every swap
     mov ax, [si]
     mov bx, [di]
     mov [si], bx
@@ -945,6 +948,7 @@ ct_finalize:
     add di, 2
     dec cx
     jnz .swap8
+    pop cx
     pop si
     sub si, 2
     jmp .inner
@@ -1046,6 +1050,18 @@ ct_rkdec:
     ret
 
 ; -----------------------------------------------------------------------------
+; ct_reset_series - both series' collection state, zeroed. Every reader
+; calls this first: ct_t2cnt/ct_mincol2 are written only inside ct_record,
+; so a reader that zeroed just ct_tcnt carried the PREVIOUS file's second
+; column into this one's chart. Preserves everything.
+; -----------------------------------------------------------------------------
+ct_reset_series:
+    mov word [ct_tcnt], 0
+    mov word [ct_t2cnt], 0
+    mov word [ct_mincol2], 0
+    ret
+
+; -----------------------------------------------------------------------------
 ; ct_read_biff - in: ES=[ct_stgseg], CX=byte length already read there.
 ; Walks real [opcode:word][length:word] BIFF record headers; on an RK cell
 ; record (0x027E: row,col,xf,rk_lo,rk_hi, 10 bytes) decodes the value via
@@ -1059,11 +1075,12 @@ ct_read_biff:
     push dx
     push si
     mov [ct_biffend], cx                ; the walk's end bound, banked - the
-    mov word [ct_tcnt], 0               ; NUMBER path needs CX as a counter
+    call ct_reset_series                ; NUMBER path needs CX as a counter
     xor si, si
 .rechdr:
     mov ax, si
     add ax, 4
+    jc .done                            ; a wrapped sum passes the compare
     cmp ax, cx
     ja .done
     mov ax, [es:si]                     ; opcode
@@ -1077,9 +1094,12 @@ ct_read_biff:
     je .isnum                           ; verbatim, and the ONLY way a value
     jmp .skip                           ; that is not an exact small integer
 .isrk:                                  ; reaches a BIFF file at all
+    cmp dx, 10                          ; too short to hold row/col/xf/rk:
+    jb .skip                            ; stale buffer bytes are not a value
     push dx                             ; length, saved across the decode
     mov ax, si
     add ax, dx
+    jc .toolong                         ; a wrapped sum passes the compare
     cmp ax, cx
     ja .toolong
     push word [es:si]                   ; row
@@ -1093,9 +1113,12 @@ ct_read_biff:
     pop dx                              ; length, restored
     jmp .skip
 .isnum:
+    cmp dx, 14                          ; too short to hold row/col/xf plus
+    jb .skip                            ; the eight bytes
     push dx
     mov ax, si
     add ax, dx
+    jc .toolong                         ; a wrapped sum passes the compare
     cmp ax, cx
     ja .toolong
     push word [es:si]                   ; row
@@ -1125,11 +1148,15 @@ ct_read_biff:
     pop dx                              ; length, restored (discard)
     jmp .done
 .nskip:
-    add si, dx
     mov cx, [ct_biffend]                ; .ncopy used CX as a counter, so the
-    jmp .rechdr                         ; walk's own end bound is re-read here
+                                        ; walk's own end bound is re-read here
 .skip:
-    add si, dx
+    mov ax, si                          ; the advance is bounds-checked HERE,
+    add ax, dx                          ; not just per record type: a hostile
+    jc .done                            ; length near 0xFFFF wraps SI back onto
+    cmp ax, cx                          ; the same header and the walk never
+    ja .done                            ; ends - on the UI task with the gfx
+    mov si, ax                          ; lock held, that is the whole desktop
     jmp .rechdr
 .done:
     pop si
@@ -1155,7 +1182,7 @@ ct_read_sylk:
     push dx
     push si
     push di
-    mov word [ct_tcnt], 0
+    call ct_reset_series
     mov di, cx                          ; di = end offset
     xor si, si
 .lineloop:
@@ -1404,7 +1431,7 @@ ct_read_dif:
     push dx
     push si
     push di
-    mov word [ct_tcnt], 0
+    call ct_reset_series
     mov di, cx                          ; di = end offset
     xor si, si
 .hdrscan:
@@ -1569,7 +1596,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 1431
+    OS88_BSS 1831
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -1697,7 +1724,7 @@ ct_t2val    equ ct_t2row + CH_MAXBARS * 2   ; ...as DOUBLES, like ct_tval
 ct_wvals    equ ct_t2val + CH_MAXBARS * 8   ; ch_scale's output: the signed
 ct_w2vals   equ ct_wvals + CH_MAXBARS * 2   ; words the drawing reads, plus
                                              ; [ch_e10] to say what they mean
-ct_wantcol  equ ct_t2val + CH_MAXBARS * 2   ; word: 0 = chart the lowest
+ct_wantcol  equ ct_w2vals + CH_MAXBARS * 2  ; word: 0 = chart the lowest
                                              ; column, else the 1-based column
                                              ; Data > Column asked for
 fp_as             equ ct_wantcol + 2   ; --- os88fp.inc's caller-declared
