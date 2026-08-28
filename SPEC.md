@@ -75021,55 +75021,13 @@ is balanced either way; only the *contents* are wrong.
 
 <<<<<<< HEAD
 =======
-### 81.26 Insert Row destroyed every number on the sheet
-
-One menu command, every plain numeric cell in the sheet set to **0**, and no
-error anywhere. Present in Insert Row, Delete Row, Insert Column and Delete
-Column since stage 4.0.
-
-`sh_rowcol_op` shifts a row by copying every cell record out to `sh_stgseg`,
-renumbering, and re-inserting. `SH_S_VAL`, the staging record's value field,
-**is eight bytes** — it was widened when stage 4.0 widened the cell, and the
-comment above it says exactly why: *"this record CARRIES a cell's value across
-a row or column shift, so it had to grow with the cell record or every decimal
-in the sheet would have been truncated."*
-
-The constant grew. **The store did not.**
-
-```
-    mov ax, [sh_rc_tval]              ; ONE WORD
-    mov [es:di+SH_S_VAL], ax
-```
-
-The restore has always read four words back. So each shift staged a double's
-bottom sixteen bits and reconstructed the top six bytes from `SH_S_FML` and
-whatever followed it. An IEEE-754 integer keeps its **exponent in the top
-word**, so `10` — mantissa all zeros, exponent `0x4024` — staged as `0x0000`
-and came back as a denormal that prints as `0`. A column of 10, 20, 30 became
-a column of zeros.
-
-**The failure is louder than the usual reader/writer mismatch and was missed
-for the same reason it is loud.** A truncated *fraction* would have been a
-subtle wrong number; a truncated *exponent* is total, so the cell reads `0`
-rather than something plausible — and nothing in the suite fills a sheet,
-shifts a row and reads the numbers back.
-
-The fix is four words instead of one. Two stride sites in the same routine
-also said `SH_C_SZ` where they meant `SH_S_SZ`; that worked only because 20 >
-18 and both sides said the same wrong thing, and it is precisely the confusion
-the two prefixes were introduced to prevent. Both now use the staging
-record's own size.
-
-**Found by a regression check, not by the build**: an unrelated `#REF!` test
-put five numbers in a column, deleted a row, and read back zeros.
-
-### 81.27 `#REF!` and `#NULL!` — the two errors nothing could raise
+### 81.26 `#REF!` and `#NULL!` — the two errors nothing could raise
 
 `SH_ERR_NULL` and `SH_ERR_REF` sat in the table from the day error values
 landed with nothing able to set either. The names printed; no code path
 produced one.
 
-#### 81.27.1 `#REF!`: a reference whose cell is gone
+#### 81.26.1 `#REF!`: a reference whose cell is gone
 
 The reference rewriters **clamped**, and clamping is the wrong shape of
 answer. Delete Row 3 with `=A3` somewhere left the index alone, so the formula
@@ -75098,7 +75056,7 @@ in a comment while doing the opposite: *"the cell it names is genuinely gone;
 naming the last real row is the same closest sane fallback."* It is not a
 fallback anyone can see. Both cases are `#REF!` now.
 
-#### 81.27.2 Error values are literals
+#### 81.26.2 Error values are literals
 
 A rewriter that writes `#REF!` into a formula needs a parser that can read it
 back. `sh_perrlit` handles a `#` in `sh_pfactor`, matching against `sh_errtab`
@@ -75111,7 +75069,7 @@ Typing `=#N/A` therefore works too, which is what Excel does and the reason
 `#NAME?` — what an unknown word already gets — and `SI` steps over the `#` so
 the parse still makes progress.
 
-#### 81.27.3 `#NULL!` needs the intersection operator
+#### 81.26.3 `#NULL!` needs the intersection operator
 
 `#NULL!` has exactly one producer in Excel: an **empty intersection**. Without
 the operator there was nothing to raise it with, so the operator is what this
@@ -75135,7 +75093,56 @@ lesson as §81.23's `sh_pargref`, one increment later.
 
 `SH_ERR_NULL` is `ERROR.TYPE` 1, so `=ERROR.TYPE(SUM(A1:A2 A4:A5))` answers 1.
 
+<<<<<<< HEAD
 >>>>>>> 0eb94b5 (sheet: #REF! and #NULL!, the two errors nothing could raise)
+=======
+### 81.27 The Sort key picker
+
+§81.19 recorded a limit rather than a design: *"The key column is the one the
+selection is anchored in… there is no key picker in the Sort dialog, so a key
+that is not an edge of the range cannot be expressed."* Sorting `A:C` by `B`
+was unreachable, because anchoring a drag in `B` cannot cover `A`.
+
+**Excel 2.1's Sort dialog takes its keys as cell references typed into
+fields**, and `sh_idlg_*` — the single-line input engine stage 3.0c built for
+Goto / Row Height / Column Width / Define Name / Find — is exactly that. Sort
+becomes `SH_ID_SORT`, prompt `1st Key:`, prefilled with the anchor so pressing
+Enter gives the old behaviour.
+
+**Two dialogs in sequence, not one.** The key needs a text field; the order
+needs radios; no engine here has both. Asking twice is what File > Save As...
+already does — the format radio first, then the file dialog — so this follows
+the app's own idiom rather than growing a third engine. The order dialog is
+the existing `SH_FDK_SORT` radio, opened from inside the key dialog's apply.
+Eight consecutive cycles all opened, so the pair leaks no window slot (§81.15).
+
+**A key outside the selection is refused, not clamped.** Outside it the sort
+would reorder a column the carry does not move, which breaks exactly the
+correspondence §81.19 exists to keep — and a clamp answers a different
+question silently, which is the failure mode §81.26.1 was written about. The
+status bar says so. A single-column selection sorts by itself whatever was
+typed.
+
+#### 81.27.1 Two things the key and the anchor had been sharing
+
+Both were `sh_selcol`, and both looked correct until they stopped being the
+same column:
+
+- **`sh_sort_carry`'s column span** was read out of the same register as the
+  key. With the key at `B` the span became `B..C`, so sorting `A:C` by `B`
+  left column `A` exactly where it was — every other column moved and one did
+  not, which is worse than not sorting. The span is the selection's;
+  the key is `sh_sort_key`.
+- **The formula write-back** committed to `sh_selcol` while the value
+  write-back committed to the key, so a sorted *formula* cell would have
+  landed in the anchor's column. No test reached it, because the sheet under
+  test held no formulas in a non-anchor key column — it would have appeared
+  as a formula silently moving one column left.
+
+Found by running it: the first sort of `A:C` by `B` moved `B` and `C` and left
+`A` untouched, in the screenshot, immediately.
+
+>>>>>>> a1efbce (sheet: a Sort key that is not the anchor)
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

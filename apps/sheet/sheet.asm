@@ -4649,8 +4649,8 @@ sh_mfire:
                                         ; so every click ran it regardless.
                                         ; Now a real dispatch, matching the
                                         ; or al,al chains above.
-    mov al, SH_FDK_SORT
-    call sh_fdlg_open
+    mov al, SH_ID_SORT                 ; stage 4.5: the KEY first, then the
+    call sh_idlg_open                  ; order - see sh_idlg_apply's .sortkey
     jmp .out
 .data1:
     cmp al, 1
@@ -5518,13 +5518,23 @@ sh_sort_carry:
     ja .out                           ; more rows than the snapshot holds: the
                                       ; key column is still sorted, the others
                                       ; are left alone rather than half moved
-    mov ax, [sh_selcol]               ; THE KEY COLUMN, banked before anything
+    mov ax, [sh_sort_keycol]             ; THE KEY COLUMN, banked before anything
     mov [sh_cry_key], ax              ; else runs: sh_sort_permcol moves
     mov bx, [sh_selrow]               ; sh_selcol to commit into each carried
     mov [sh_cry_keyrow], bx           ; column, so reading it later names
-    mov bx, [sh_selcol2]              ; whichever column was carried last and
-    cmp ax, bx                        ; the key gets carried too - permuted a
-    jbe .cols                         ; second time, on top of its own sort
+                                      ; whichever column was carried last and
+                                      ; the key gets carried too - permuted a
+                                      ; second time, on top of its own sort
+    ; THE SPAN IS THE SELECTION'S, NOT THE KEY'S. These two used to be the
+    ; same register because the key WAS the anchor; now that the dialog picks
+    ; the key (81.27), deriving the span from it carried only the columns to
+    ; the key's right - sorting A:C by B left column A exactly where it was,
+    ; which is the correspondence-breaking this whole routine exists to
+    ; prevent.
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .cols
     xchg ax, bx
 .cols:
     mov [sh_cry_c1], ax
@@ -6242,8 +6252,8 @@ sh_docmd_sortcol:
     cmp bx, [sh_cursheet]
     jne .next
     mov dx, [es:si+2]                 ; col
-    cmp dx, [sh_selcol]
-    jne .next
+    cmp dx, [sh_sort_keycol]             ; stage 4.5: the KEY, which the dialog
+    jne .next                         ; picks and which need not be the anchor
     cmp ax, [sh_sort_r1]              ; outside the rows asked for
     jb .next
     cmp ax, [sh_sort_r2]
@@ -6256,7 +6266,7 @@ sh_docmd_sortcol:
                                        ; this sort: exclude this one
                                        ; entirely (see SH_SORT_FCAP's own
                                        ; comment)
-    mov ax, dx                        ; col (== sh_selcol, just compared)
+    mov ax, dx                        ; col (== sh_sort_keycol, just compared)
     mov bx, [sh_sort_row]
     push cx                           ; CX is this scan's own cell index and
                                        ; sh_getcell2 does NOT preserve it: for
@@ -6539,9 +6549,9 @@ sh_docmd_sortcol:
     push cx
     mov si, sh_rwsrc
     call sh_formula_copyshift
-    mov ax, [sh_selcol]
-    mov bx, [sh_sort_trow]
-    mov si, sh_rwdst
+    mov ax, [sh_sort_keycol]             ; the KEY column, the same one .wbplain
+    mov bx, [sh_sort_trow]            ; writes to - this said sh_selcol, which
+    mov si, sh_rwdst                  ; was the anchor and is no longer the key
     call sh_setformula
     pop cx
     jc .wbfull                        ; the arena refused: stop the write-back
@@ -6561,7 +6571,7 @@ sh_docmd_sortcol:
     mov ax, [es:di+6]
     mov [si+6], ax
     pop bx
-    mov ax, [sh_selcol]
+    mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
     call sh_setvald                   ; sh_setval would truncate it again
     pop cx
@@ -7885,7 +7895,15 @@ SH_ID_ROWH   equ 1                   ; Format > Row Height...
 SH_ID_COLW   equ 2                   ; Format > Column Width...
 SH_ID_DEFN   equ 3                   ; Formula > Define Name...
 SH_ID_FIND   equ 4                   ; Formula > Find...
-SH_ID_NKIND  equ 5
+SH_ID_SORT   equ 5                   ; Data > Sort... (stage 4.5): the KEY.
+                                     ; Excel 2.1's Sort dialog takes its keys
+                                     ; as cell references typed into fields,
+                                     ; which is exactly what this engine is,
+                                     ; and it is the only way to name a key
+                                     ; that is not an edge of the selection
+                                     ; (81.19 recorded that as a known limit;
+                                     ; 81.27 is this)
+SH_ID_NKIND  equ 6
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -7910,17 +7928,22 @@ sh_idlg_tpl:
 ; that cell makes the kernel letter the pointer's own two bytes and then run on
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
+               dw sh_s_id_tsort
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
+               dw sh_s_id_psort
 sh_s_id_tgoto: db 'Goto', 0
 sh_s_id_trowh: db 'Row Height', 0
 sh_s_id_tcolw: db 'Column Width', 0
 sh_s_id_tdefn: db 'Define Name', 0
 sh_s_id_tfind: db 'Find', 0
+sh_s_id_tsort: db 'Sort', 0
+sh_s_id_badkey: db 'Sort key must be inside the selection', 0
 sh_s_id_pgoto: db 'Reference:', 0
 sh_s_id_prowh: db 'Row height:', 0
 sh_s_id_pcolw: db 'Column width:', 0
 sh_s_id_pdefn: db 'Name:', 0
 sh_s_id_pfind: db 'Find what:', 0
+sh_s_id_psort: db '1st Key:', 0     ; Excel 2.1's own label for the field
 sh_s_id_nofit: db 'Name table full.', 0
 sh_s_id_named: db 'Name defined.', 0
 sh_s_id_nofnd: db 'Not found.', 0
@@ -7951,7 +7974,9 @@ sh_idlg_open:
     mov ax, [sh_id_titles + bx]
     mov [sh_idlg_tpl + WT_TITLE], ax
     mov byte [sh_idlg_buf], 0
-    cmp byte [sh_idlg_kind], SH_ID_DEFN
+    cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
+    je .pregoto                        ; same reference Goto shows - it is the
+    cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
     je .pregoto                        ; prefilling one would be a wrong guess
@@ -8187,6 +8212,8 @@ sh_idlg_apply:
     je .find
     cmp byte [sh_idlg_kind], SH_ID_GOTO
     je .goto
+    cmp byte [sh_idlg_kind], SH_ID_SORT
+    je .sortkey
     mov si, sh_idlg_buf                ; the two numeric kinds
     call sh_pnum_at
     jc .out                            ; not a number at all
@@ -8234,6 +8261,39 @@ sh_idlg_apply:
     jmp .redraw
 .find:
     call sh_docmd_find
+    jmp .redraw
+; Data > Sort..., part one of two. The KEY is a reference, so it needs a field;
+; the ORDER is a two-way pick, so it needs radios; and no dialog engine here
+; has both. Asking in sequence is what File > Save As... already does - the
+; format radio first, then the file dialog - so this follows the app's own
+; idiom rather than growing a third engine.
+.sortkey:
+    mov si, sh_idlg_buf
+    call sh_upcase_at                  ; 'b3' names the same column as 'B3'
+    mov si, sh_idlg_buf
+    call sh_pcellref                   ; AX = col, and only the COLUMN matters:
+    jnc .badkey                        ; a key is a column, and the row the
+    cmp ax, SH_COLS                    ; user happened to point at is not part
+    jae .badkey                        ; of the question
+    mov bx, [sh_selcol]                ; IT HAS TO BE INSIDE THE SELECTION.
+    mov cx, [sh_selcol2]               ; Outside it, the sort would reorder a
+    cmp bx, cx                         ; column the carry does not move, which
+    jbe .keyspan                       ; breaks exactly the correspondence
+    xchg bx, cx                        ; 81.19 exists to keep. REFUSED rather
+.keyspan:                              ; than clamped - a clamp answers a
+    cmp bx, cx                         ; different question, silently
+    je .keyok                          ; a single-column selection sorts by
+    cmp ax, bx                         ; itself whatever was typed
+    jb .badkey
+    cmp ax, cx
+    ja .badkey
+.keyok:
+    mov [sh_sort_keycol], ax
+    mov al, SH_FDK_SORT                ; ...and now ask for the order
+    call sh_fdlg_open
+    jmp .out
+.badkey:
+    mov word [sh_msg], sh_s_id_badkey
     jmp .redraw
 .redraw:
     call sh_geom                       ; the cell size may have changed, so the
@@ -16744,7 +16804,7 @@ sh_pfactor:
     cmp al, 34                        ; stage 4.5: a QUOTED LITERAL is a text
     je .strlit                        ; value (81.22)
     cmp al, '#'                       ; ...and an ERROR VALUE spelled out is a
-    je .errlit                        ; literal too (81.27.2)
+    je .errlit                        ; literal too (81.26.2)
     cmp al, '$'                       ; stage 3.0e: '$A$1' is an IDENTIFIER,
     je .ident                         ; and this router decides that on the
     cmp al, 'A'                       ; FIRST character - without this line a
@@ -16814,7 +16874,7 @@ sh_pfactor:
 ; sh_perrlit (stage 4.5) - SI is at a '#'. An error value written out in full
 ; is a LITERAL, as it is in Excel, and this file needs to read one for a
 ; reason of its own: Delete Row and Delete Column now write `#REF!` into every
-; formula that named a deleted cell (81.27.1), so the parser has to be able to
+; formula that named a deleted cell (81.26.1), so the parser has to be able to
 ; read back what the rewriter wrote. Typing `=#N/A` works for the same reason,
 ; which is also what Excel does.
 ;
@@ -17175,7 +17235,7 @@ sh_prange:
     cmp byte [si], ' '                ; stage 4.5: Excel's INTERSECTION
     jne .fold                         ; operator is a space, and an empty
     mov ax, si                        ; intersection is the one and only
-    call sh_pintersect                ; thing that produces #NULL! (81.27.3)
+    call sh_pintersect                ; thing that produces #NULL! (81.26.3)
     jc .out                           ; empty: there is nothing to fold
     cmp ax, si
     je .fold                          ; nothing consumed - the space was not
@@ -21625,7 +21685,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3757
+    OS88_BSS 3759
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -21906,7 +21966,11 @@ sh_sort_cmpv    equ sh_sort_keyval + 8      ; 8: ...and what it is compared
                                              ; fp_unpack_* read DS:SI and the
                                              ; array lives in sh_stgseg
 sh_sort_keyorig equ sh_sort_cmpv + 8        ; word: the key's own origidx
-sh_sort_desc    equ sh_sort_keyorig + 2     ; byte: 0 ascending, 1 descending
+sh_sort_keycol     equ sh_sort_keyorig + 2     ; word: the column the sort is
+                                            ; keyed on, which since stage 4.5
+                                            ; the dialog picks and which need
+                                            ; not be the selection's anchor
+sh_sort_desc    equ sh_sort_keycol + 2         ; byte: 0 ascending, 1 descending
 sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
 sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
                                              ; checked one
@@ -22273,7 +22337,7 @@ sh_rw_absr        equ sh_rw_absc + 1
 sh_cp_absc        equ sh_rw_absr + 1   ; byte: Copy/Paste + Fill's scanner
 sh_cp_absr        equ sh_cp_absc + 1
 sh_cp_dead        equ sh_cp_absr + 1   ; byte: the paste shift took this
-                                       ; reference off the sheet (81.27.1)
+                                       ; reference off the sheet (81.26.1)
 
 ; stage 3.0d: which cell the evaluator is CURRENTLY inside, for ROW()/COLUMN().
 ; Saved and restored around each sh_eval_cell so a formula reached through
