@@ -67553,6 +67553,23 @@ representation — `sh_cell_totext` out, `sh_commit` back, the same pair the
 block clipboard uses (§81.18). A formula is shifted by its own row delta, so a
 row that moves three down takes its `=B1*2` with it as `=B4*2`.
 
+**A label or an error value in the key column sits the sort out.** The scan
+stages a key cell's eight value bytes, and a label keeps a numeric zero under
+its text (§81.11) — staging it through the value path wrote the number 0 over
+the word it held. It is skipped instead: its row never enters `rows[]`, so the
+whole row stays where it is, the same clip-don't-crash policy `SH_SORT_FCAP`
+applies to an over-cap formula — and exactly what the header row above a
+sorted table wants. A formula whose *result* is an error still carries, as
+text, losslessly.
+
+**A sort the text arena refuses says so.** Every moved label or formula
+re-commits through the append-only arena (§81.11), and a sort that filled it
+mid-permutation used to keep going silently, leaving the rows in two different
+orderings at once. `sh_settext`/`sh_setformula` answer CF=1 when they refuse,
+`sh_commit` passes it up, and the sort stops at the first refusal — key
+column or carried — with "Sort incomplete" on the status line instead of a
+sheet that looks sorted and is not.
+
 **Two faults found building it, both the session's recurring shape.**
 `sh_cell_totext` did not bank **DX**, which was the carry loop's index — the
 loop never advanced and the machine stopped dead. And `sh_sort_permcol` moves

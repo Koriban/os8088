@@ -1902,6 +1902,9 @@ sh_paren_ok:
 ; sh_commit - if a cell is being edited, parse the buffer and store it (an
 ; empty buffer, or one that doesn't parse as a single signed integer,
 ; clears the cell instead); either way stop editing. SI is not touched.
+; Out: CF=1 when the store was REFUSED (text arena or cell table full) and
+; the cell keeps what it had - sh_sort_permcol stops on it; every older
+; caller ignores it, which is what the silence always was.
 ; -----------------------------------------------------------------------------
 sh_commit:
     push ax
@@ -1923,6 +1926,7 @@ sh_commit:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_clearcell
+    clc                               ; clearing is never refused
     jmp .out
 .have:
     cmp byte [sh_editbuf], '='
@@ -5118,12 +5122,18 @@ sh_docmd_paste:
     cmp al, 10
     je .took
     cmp cx, SH_EDITMAX
-    jae .took
+    jae .skiptail
     mov [di], al
     inc di
     inc si
     inc cx
     jmp .take
+.skiptail:
+    inc si                             ; over-long cell: drop the rest, so the
+    jmp .take                          ; dispatch below sees the cell's real
+                                       ; terminator - its 64th character read
+                                       ; as "new row" and smeared each further
+                                       ; 63-byte chunk one row down
 .took:
     mov byte [di], 0
     mov [sh_editlen], cl
@@ -5520,6 +5530,9 @@ sh_sort_carry:
     mov [sh_cry_col], cx
     call sh_sort_snapcol
     call sh_sort_permcol
+    jc .done                          ; the arena refused (message already
+                                      ; set): stop carrying, restore the
+                                      ; selection and let the repaint say so
 .nextcol:
     inc cx
     jmp .colloop
@@ -5598,7 +5611,9 @@ sh_sort_snapcol:
 
 ; sh_sort_permcol - write column [sh_cry_col] back in the sorted order, each
 ; cell shifted by its own row delta the way the key column's own write-back
-; shifts formulas.
+; shifts formulas. Out: CF=1 = the text arena refused a commit mid-permutation:
+; [sh_msg] says so and the caller must stop carrying further columns - going
+; on would keep burning the arena and keep half-applying.
 sh_sort_permcol:
     push ax
     push bx
@@ -5701,10 +5716,17 @@ sh_sort_permcol:
 .commit:
     mov byte [sh_editing], 1
     call sh_commit
-.nextperm:
-    inc word [sh_cry_i]
-    jmp .perm
+    jc .arenafull                     ; the text arena refused: entries already
+.nextperm:                            ; written hold the new order, the rest
+    inc word [sh_cry_i]               ; the old - stop and SAY SO rather than
+    jmp .perm                         ; keep half-applying in silence
 .out:
+    clc
+    jmp .ret
+.arenafull:
+    mov word [sh_msg], sh_s_sortfull
+    stc
+.ret:
     pop es
     pop di
     pop si
@@ -5713,6 +5735,8 @@ sh_sort_permcol:
     pop bx
     pop ax
     ret
+
+sh_s_sortfull: db 'Sort incomplete - text area full.', 0
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
@@ -6285,6 +6309,14 @@ sh_docmd_sortcol:
     mov al, 1                         ; isformula flag
     jmp .stage
 .isplainval:
+    mov al, [es:si+SH_C_TYPE]         ; a LABEL or an ERROR VALUE has no
+    cmp al, SH_T_TEXT                 ; number to sort on, and staging one
+    je .next                          ; through the value path wrote 0.0 back
+    cmp al, SH_T_ERR                  ; over its text: it sits the sort out
+    je .next                          ; instead - its row never enters rows[],
+                                       ; the same clip-don't-crash policy
+                                       ; SH_SORT_FCAP uses, which is what a
+                                       ; header row over a table wants anyway
     call sh_cellval_to_acc_si         ; the WHOLE value into sh_acc, not the
     push si                           ; word at SH_S_VAL - sorting on the
     push di                           ; truncated integer made every decimal
@@ -6500,6 +6532,7 @@ sh_docmd_sortcol:
     mov si, sh_rwdst
     call sh_setformula
     pop cx
+    jc .wbfull                        ; the arena refused: stop the write-back
     jmp .wbnext
 .wbplain:
     push cx
@@ -6523,8 +6556,13 @@ sh_docmd_sortcol:
 .wbnext:
     inc cx
     jmp .wb
+.wbfull:
+    mov word [sh_msg], sh_s_sortfull  ; ...and SKIP the carry: permuting the
+    jmp .wbpaint                      ; other columns under a half-moved key
+                                       ; would shear the table row from row
 .wbdone:
     call sh_sort_carry                ; ...and bring the other columns with it
+.wbpaint:
     mov si, [sh_ownwin]
     call sh_repaint
     pop es
@@ -8170,8 +8208,9 @@ sh_idlg_apply:
     cmp bx, SH_ROWS
     jae .out
     mov si, [sh_ownwin]                ; sh_select's own contract: SI must be
-    call sh_select                     ; the window and it leaves it alone so
-    call sh_scrollto                   ; sh_repaint below still has it
+    call sh_select                     ; the window; it scrolls and repaints
+    jmp .out                           ; itself - and a Goto DEFINES NO NAME,
+                                       ; so it must not fall into .defname
 .defname:
     mov si, sh_idlg_buf                ; the name binds THE SELECTION, which is
     mov ax, [sh_selcol]                ; where it was when the dialog opened -
@@ -14960,7 +14999,8 @@ sh_binop_pre:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_setvald - in: AX=col, BX=row; the value is sh_acc.
+; sh_setvald - in: AX=col, BX=row; the value is sh_acc. Out: CF=1 when
+; refused (cell table full) - the cell keeps what it had.
 ; -----------------------------------------------------------------------------
 sh_setvald:
     push ax
@@ -14985,7 +15025,11 @@ sh_setvald:
     dec cx
     jnz .dcopy
     pop es
+    clc                               ; stored
+    jmp .ddone
 .dfull:
+    stc                               ; refused - see the header
+.ddone:
     pop si
     pop di
     pop dx
@@ -15053,7 +15097,9 @@ sh_setval:
 
 ; -----------------------------------------------------------------------------
 ; sh_setformula - in: AX=col, BX=row, SI=formula text (DS-resident,
-; NUL-terminated, NOT including the leading '=')
+; NUL-terminated, NOT including the leading '='). Out: CF=1 when refused
+; (arena or cell table full) - the cell keeps what it had (sh_settext's
+; contract, which this is a near-twin of).
 ; -----------------------------------------------------------------------------
 sh_setformula:
     push ax
@@ -15108,7 +15154,11 @@ sh_setformula:
     mov word [es:di+SH_C_PASS], 0xFFFF       ; a pass stamp sh_pass can never equal,
                                        ; forcing at least one real evaluation
     pop es
+    clc                               ; stored
+    jmp .done
 .noroom:
+    stc                               ; refused - see the header
+.done:
     pop es
     pop di
     pop si
@@ -15913,8 +15963,10 @@ sh_rpn_one:
 ; Like a formula, retyping a label APPENDS and abandons the old bytes - the
 ; arena has no free list and never compacts. 8 KB is a lot of labels and this
 ; matches what formulas have always done, but it is a real ceiling rather than
-; an oversight, and it is why .noroom below is a silent no-op rather than a
-; wrong value written.
+; an oversight, and it is why .noroom below is a no-op rather than a wrong
+; value written. Out: CF=1 when refused (arena or cell table full) - the cell
+; keeps what it had, and a caller mid-permutation must STOP (see
+; sh_sort_permcol).
 ; -----------------------------------------------------------------------------
 sh_settext:
     push ax
@@ -15968,7 +16020,11 @@ sh_settext:
     mov [es:di+SH_C_VAL+4], ax
     mov [es:di+SH_C_VAL+6], ax
     pop es
+    clc                               ; stored
+    jmp .done
 .noroom:
+    stc                               ; refused - see the header
+.done:
     pop es
     pop di
     pop si
@@ -17954,21 +18010,20 @@ sh_macro_eval:
     cmp byte [si], ','
     jne .noop
     inc si
-    call sh_pcmp
-    mov dx, ax
-    mov ax, [sh_macro_tcol]
-    mov bx, [sh_macro_trow]
-    call sh_setval
+    call sh_pcmp                       ; the result lives in sh_acc, NOT in AX
+    mov ax, [sh_macro_tcol]            ; (stage 4.0) - sh_setvald reads it from
+    mov bx, [sh_macro_trow]            ; there, decimals intact, where sh_setval
+    call sh_setvald                    ; with AX stored parser scratch
     xor ax, ax
     jmp .out
 .doSELECT:
     call sh_pmacroref
     jnc .noop
-    mov [sh_selcol], ax
-    mov [sh_selrow], bx
-    call sh_repaint
-    xor ax, ax
-    jmp .out
+    mov si, [sh_ownwin]                ; SI was the parse cursor, and
+    call sh_select                     ; sh_select's contract needs the WINDOW:
+    xor ax, ax                         ; it collapses the range, scrolls the
+    jmp .out                           ; cell into view and repaints, exactly
+                                       ; as a click does (.out restores SI)
 .doALERT:
     cmp byte [si], '"'
     jne .noop
