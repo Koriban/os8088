@@ -698,10 +698,10 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ; name. They are one contract with three readers now - the kernel publishes
 ; them, XMEM.DRV sets the three memory bits (SPEC.md 41.12.2) and the boot
 ; probe sets CPU_F_X87 - so XMEM.DRV must write ITS THREE and leave the byte's
-; other bits alone, which it did not always do - and a package may test them - so they are spelled once here rather than three
-; times. NONE OF THEM IS THE THING TO BRANCH ON: a package asks
-; OSAPI_XMEM_CAPS for KB, always, because these say what the machine can do
-; and that one says what is actually there.
+; other bits alone, which it did not always do - and a package may test them -
+; so they are spelled once here rather than three times. NONE OF THEM IS THE
+; THING TO BRANCH ON: a package asks OSAPI_XMEM_CAPS for KB, always, because
+; these say what the machine can do and that one says what is actually there.
 CPU_F_A20           equ 0x01     ; the A20 line VERIFIED open - by a
                                  ; wraparound read, never by "we wrote to the
                                  ; gate" (SPEC.md 41.2)
@@ -734,12 +734,6 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
 ; published, so a package gets CF=1 and nothing else. They are published here
 ; because drivers include this file (drivers/os88drv.inc does), and because a
 ; slot number belongs in one place (SPEC.md 20.8).
-                                 ;
-                                 ; SPEC.md 1 rule 1 forbids a package its own
-                                 ; `cpu` island - THIS BIT IS THE ONE
-                                 ; EXCEPTION, and only for x87 code guarded by
-                                 ; a run-time test of it (SPEC.md 84.6).
-
 %define OSAPI_VOL_ADD       KERNEL_SEG:0x0270   ; AL = the driver's own volume
                                  ; handle, CX = the volume's sector count,
                                  ; DX = a listing claim's segment (0 = the

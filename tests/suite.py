@@ -126,7 +126,10 @@ FAST = [
         "path-aware because a naive push-vs-pop count flags one routine in ten "
         "and would just be ignored. SCOPED to these files on purpose - the "
         "kernel's ISR tails push in one global label and pop in another, which "
-        "this cannot follow, so pointing it there would report noise"),
+        "this cannot follow, so pointing it there would report noise. Two "
+        "stated gaps, both counted in the tool's own summary line: a routine "
+        "whose every exit is a tail jmp is not walked, and loop back-edge "
+        "conflicts are suppressed"),
 ]
 
 # --------------------------------------------------------------------------

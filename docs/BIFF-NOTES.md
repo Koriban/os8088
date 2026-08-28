@@ -6,7 +6,7 @@ between BIFF versions in ways that are easy to get subtly wrong — the same
 record has a different opcode in BIFF2, BIFF3/4 and BIFF5+, and picking the
 wrong one produces a file that looks plausible and no program will open.
 
-## Sheet writes BIFF3, deliberately
+## Sheet writes BIFF3 for a single sheet, deliberately
 
 **A reader is backward compatible and not forward compatible.** Excel 4 and
 everything after it read a BIFF3 stream happily; a program that knows only
@@ -14,13 +14,18 @@ BIFF3 does not even recognise a BIFF4 `BOF` and rejects the file outright. So
 emitting the older stream is strictly the wider audience, and it costs nothing
 here — every record this writer needs exists in BIFF3.
 
+That is the **single-sheet** save. A workbook of more than one sheet has no
+BIFF3 form at all — the workbook stream arrived with BIFF4 — so a multi-sheet
+save emits the BIFF4 workbook of §81.10.5 instead: `BOF` 0409H, and `XF` 0443H
+with the BIFF4 body layout below. One sheet keeps the BIFF3 stream.
+
 ## The records, with their verified opcodes
 
 | record | BIFF2 | **BIFF3** | BIFF4 | BIFF5+ | Sheet |
 |---|---|---|---|---|---|
-| `BOF`    | 0009H | **0209H** | 0409H | 0809H | writes 0209H |
+| `BOF`    | 0009H | **0209H** | 0409H | 0809H | writes 0209H; 0409H in the §81.10.5 workbook |
 | `FONT`   | 0031H | **0231H** | 0231H | 0031H | writes 0231H |
-| `XF`     | 0043H | **0243H** | 0443H | 00E0H | writes 0243H, reads 0243H **and** 0443H |
+| `XF`     | 0043H | **0243H** | 0443H | 00E0H | writes 0243H (0443H in the workbook), reads 0243H **and** 0443H |
 | `RK`     | —     | **027EH** | 027EH | 027EH | writes 027EH |
 | `NUMBER` | 0003H | **0203H** | 0203H | 0203H | writes 0203H |
 | `LABEL`  | 0004H | **0204H** | 0204H | 0204H | writes 0204H |

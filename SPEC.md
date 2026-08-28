@@ -66765,20 +66765,25 @@ formats round-trip decimals.
 
 ### 81.1 The cell array — sorted, sparse, and shared by four sheets
 
-Cells live in a claimed heap segment (`SH_CLAIM_CELLS_KB` = 16KB) as a
-**sorted sparse array** of 12-byte records, `SH_CELL_CAP` = 1365 of them,
-binary-searched by `sh_findcell`:
+Cells live in a claimed heap segment (`SH_CLAIM_CELLS_KB` = 32KB) as a
+**sorted sparse array** of 20-byte records, `SH_CELL_CAP` = 1638 of them,
+binary-searched by `sh_findcell`. The claim doubled with stage 4.0's widening
+to doubles — 20-byte records in the old 16KB would have *dropped* capacity to
+819:
 
 ```
   +0  packed row | sheet   word: bits 0-13 the row (SH_ROW_MASK, 16384 rows),
                            bits 14-15 the sheet index (SH_SHEETS = 4)
   +2  col                  word: 0..SH_COLS-1 (256)
   +4  flags                byte: bit 0 HASFORMULA, bit 1 EVALUATING
-  +5  format               byte: SH_FMT_* — see 81.4
-  +6  value                word: the signed 16-bit value, or a formula's
+  +5  format               byte: SH_FMT_* — see 81.4, and the BIFF XF index
+  +6  type                 byte: SH_T_* — reserved by stage 4.0
+  +7  aux                  byte: the error code (Excel's own ERROR.TYPE
+                           numbers), likewise reserved
+  +8  value                8 bytes: an IEEE-754 double, or a formula's
                            cached result
-  +8  formula_off          word: offset into the text arena
-  +10 pass                 word: the repaint pass that cached +6
+  +16 formula_off          word: offset into the text arena
+  +18 pass                 word: the repaint pass that cached +8
 ```
 
 **Sparse means no record is default**, and the array is sorted so a repaint can
@@ -66800,7 +66805,7 @@ its own region plus six:
 
 | claim | size | holds |
 |---|---|---|
-| `sh_cellseg`  | 16KB | the cell array above |
+| `sh_cellseg`  | 32KB | the cell array above |
 | `sh_txtseg`   | 8KB  | the formula/note text arena |
 | `sh_stgseg`   | 32KB | file I/O staging, and the row/column shift |
 | `sh_bordseg`  | 4KB  | the border table (5-byte records) |
@@ -68399,9 +68404,10 @@ word's bit 1 on a 5150 is a **DIP switch**: it reports what the owner set,
 which is not what is in the socket. The probe instead asks the part:
 
 ```
-    mov word [cpu_x87sw], 0x5A5A   ; poison, so "nothing wrote here" is visible
     fninit                          ; no-wait forms throughout - a WAIT prefix
-    fnstsw word [cpu_x87sw]         ; on a machine with no 8087 hangs forever
+                                    ; on a machine with no 8087 hangs forever
+    mov word [cpu_x87sw], 0x5A5A    ; poison, so "nothing wrote here" is
+    fnstsw word [cpu_x87sw]         ; visible - and the store paces the ESCs
     cmp  word [cpu_x87sw], 0        ; a reset part reports a zero status word
     jne  .out
     fnstcw word [cpu_x87sw]         ; and a control word with the low six
@@ -68415,9 +68421,12 @@ which is not what is in the socket. The probe instead asks the part:
 Two things make it safe on a machine with no part. Every instruction is a
 **no-wait form** (`FNINIT`, `FNSTSW`, `FNSTCW`) — the waiting forms assemble a
 `WAIT` prefix that blocks until a coprocessor lowers `BUSY`, and with no
-coprocessor that is a hang, not a fault. And the memory is **poisoned first**,
-so the "nothing at all happened" case fails the compare rather than reading
-whatever was there.
+coprocessor that is a hang, not a fault. And the memory is **poisoned before
+the read-back**, so the "nothing at all happened" case fails the compare
+rather than reading whatever was there. The sentinel store sits *between* the
+two ESCs, which is Intel's own canonical detection order: the no-wait forms
+carry no `BUSY` interlock, so the store's bus cycles are what give a real
+8087 time to finish `FNINIT` before `FNSTSW` reaches it.
 
 Two checks, not one, because a floating bus can read back as zero. The control
 word test is the confirming one: a part just reset by `FNINIT` has all six

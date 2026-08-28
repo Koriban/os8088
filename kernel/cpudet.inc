@@ -23,13 +23,16 @@
 ; THIS MODULE HAS NO %ifdef IN IT - it is in both builds, entire.
 ;
 ; [cpu_tier] is one of CPU_8086 / CPU_286 / CPU_386 and [cpu_feat] carries the
-; three feature bits, which xmem.inc writes and this module publishes. Both
-; are INITIALIZED DATA IN .text, not .bss: -f bin zeroes nothing at boot, and
-; the answer a machine reads when the probe never ran has to be the safe one -
-; the sw_avail / snd_live idiom of SPEC.md 32/34.7. cpu_detect writes the tier
-; on every path. On kern_small nothing ever writes [cpu_feat] and it reads 0,
-; which is true - no gate verified, no HMA, no unreal mode - and is also
-; exactly what tier 0 answers.
+; four feature bits, with two writers that each own their bits (SPEC.md
+; 84.6.2): xmem.inc writes the three memory bits, this module's probe writes
+; CPU_F_X87, and this module publishes the byte. Both are INITIALIZED DATA IN
+; .text, not .bss: -f bin zeroes nothing at boot, and the answer a machine
+; reads when the probe never ran has to be the safe one - the sw_avail /
+; snd_live idiom of SPEC.md 32/34.7. cpu_detect writes the tier on every
+; path. On kern_small nothing ever writes the three memory bits and they read
+; 0, which is true - no gate verified, no HMA, no unreal mode - and is
+; exactly what tier 0 answers; the x87 probe has no %ifdef, so CPU_F_X87 is
+; live on kern_small too.
 ;
 ; THE TIER IS INFORMATION, NOT PERMISSION (SPEC.md 60.2), and that is this
 ; module's whole contract. Nothing branches on [cpu_tier] to decide whether
@@ -49,7 +52,8 @@
 
 ; Feature bits in [cpu_feat]. Mirrored in the osapi_cpu_info contract
 ; (SPEC.md 20.3): bit 0 A20 verified open, bit 1 HMA claimed, bit 2 unreal
-; mode armed. Module-private - SPEC.md 3 does not carry them.
+; mode armed, bit 3 a coprocessor socketed (SPEC.md 84.6). Module-private -
+; SPEC.md 3 does not carry them.
 CPU_F_A20       equ 0x01
 CPU_F_HMA       equ 0x02
 CPU_F_UNREAL    equ 0x04
@@ -140,8 +144,12 @@ cpu_detect:
     ;
     ; The probe is FNINIT then read the status word back: on a part that is
     ; there, FNINIT clears it to zero, and the control word comes back with
-    ; every exception masked. A sentinel goes in first so that "nothing wrote
-    ; here" is distinguishable from "an FPU wrote a zero".
+    ; every exception masked. A sentinel goes in BETWEEN the two - it still
+    ; precedes the read-back, which is all it needs to make "nothing wrote
+    ; here" distinguishable from "an FPU wrote a zero", and the store's own
+    ; bus cycles give a real 8087 time to finish FNINIT before FNSTSW reaches
+    ; it, which is Intel's own canonical detection order - the no-wait forms
+    ; carry no BUSY interlock, so the spacing has to come from the code.
     ;
     ; EVERY FORM USED HERE IS A NO-WAIT ONE - FNINIT, FNSTSW, FNSTCW, never
     ; FINIT or FSTSW. The waiting forms assemble to a WAIT ahead of the ESC,
@@ -153,8 +161,8 @@ cpu_detect:
     ; This beats INT 11h's equipment word, whose bit 1 on a 5150 is a DIP
     ; SWITCH someone set by hand - it reports what the owner claimed, not what
     ; is in the socket.
-    mov word [cpu_x87sw], 0x5A5A
     fninit
+    mov word [cpu_x87sw], 0x5A5A
     fnstsw word [cpu_x87sw]
     cmp word [cpu_x87sw], 0
     jne .out

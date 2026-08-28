@@ -2219,7 +2219,8 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
 
 # Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
 # rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).
-$(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc | $(BUILD)
+$(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc \
+                    apps/os88fp.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/chart/chart.asm
 	@echo "chart:  $(call FILESIZE,$@) bytes"
 
@@ -5155,8 +5156,13 @@ burn:
 # they have 713 and 2,847 clusters, the reason for the cut does not exist
 # there, and COMBO144ARGS below is therefore built from the FULL lists rather
 # than from COMBOARGS as it used to be.
+#
+# SHEET and CHART went with the spreadsheet: 57 clusters between them, sheet
+# is the largest package on the disk, and neither is a field-calibration
+# tool - Calc stays for the arithmetic a field run needs.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/modplug.o88 $(BUILD)/texpad.o88 \
-              $(BUILD)/tracker.o88 $(BUILD)/recorder.o88
+              $(BUILD)/tracker.o88 $(BUILD)/recorder.o88 \
+              $(BUILD)/sheet.o88 $(BUILD)/chart.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 

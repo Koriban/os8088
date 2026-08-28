@@ -32,6 +32,11 @@ this tree. The count lives in a register, so no static walk can pair them;
 conflicts arriving on a BACK EDGE are therefore not reported, and the count of
 suppressed ones is printed so the suppression is visible rather than silent.
 
+A routine with NO `ret` of its own - every exit a tail jmp to a shared core -
+is not walked at all: its depths cannot be checked without following the jmp
+into the other routine. The count of such chunks that move SP is printed for
+the back-edge count's reason, so the gap is visible rather than silent.
+
 `; STKBALANCE-OK: <reason>` skips a routine outright. The reason is the point -
 an unexplained exemption is how a gate stops meaning anything.
 
@@ -78,16 +83,28 @@ def strip(line):
 
 
 def routines(path):
-    """[(name, [(idx, text, raw)], {label: idx})] - one entry per global label."""
+    """([(name, [(idx, text, raw)], {label: idx})], skipped) - one entry per
+    global label whose body reaches a `ret`. A chunk with no ret at all - every
+    exit a tail jmp to a shared core - is NOT walked, and `skipped` counts the
+    ones that move SP anyway, so the gap is printed rather than silent."""
     with open(path, encoding="utf-8", errors="replace") as f:
         lines = f.read().split("\n")
-    out, cur, body, labels = [], None, [], {}
+    out, cur, body, labels, skipped = [], None, [], {}, 0
+
+    def flush():
+        nonlocal skipped
+        if not cur:
+            return
+        if any(RET.match(t) for _, t, _ in body):
+            out.append((cur, body, labels))
+        elif any(delta(t) is not None for _, t, _ in body):
+            skipped += 1
+
     for raw in lines:
         text = strip(raw)
         m = GLOBAL.match(text)
         if m and not text.startswith("."):
-            if cur and any(RET.match(t) for _, t, _ in body):
-                out.append((cur, body, labels))
+            flush()
             cur, body, labels = m.group(1), [], {}
             rest = text[m.end():].strip()
             if rest:
@@ -105,9 +122,8 @@ def routines(path):
         # a comment-only line is kept, with empty text: the STKBALANCE markers
         # live in comments, and dropping the line drops the marker with it
         body.append((len(body), text, raw))
-    if cur and any(RET.match(t) for _, t, _ in body):
-        out.append((cur, body, labels))
-    return out
+    flush()
+    return out, skipped
 
 
 def delta(text):
@@ -130,7 +146,7 @@ def declared_nets(files):
     """{routine: net stack delta} from every ; STKBALANCE-NET: marker."""
     nets = {}
     for path in files:
-        for name, body, _ in routines(path):
+        for name, body, _ in routines(path)[0]:
             for _, _, raw in body:
                 m = NET.search(raw)
                 if m:
@@ -142,7 +158,8 @@ def declared_nets(files):
 def check(path, nets):
     findings = []
     suppressed = 0
-    for name, body, labels in routines(path):
+    chunks, skipped = routines(path)
+    for name, body, labels in chunks:
         if any("STKBALANCE-OK" in raw for _, _, raw in body):
             continue
         if name in nets:
@@ -214,7 +231,7 @@ def check(path, nets):
                 else:
                     depth[j] = jd
                     work.append(j)
-    return findings, suppressed
+    return findings, suppressed, skipped
 
 
 def main():
@@ -226,16 +243,18 @@ def main():
                        glob.glob(os.path.join(ROOT, "apps", "*", "*.asm")) +
                        glob.glob(os.path.join(ROOT, "kernel", "*.inc")))
     nets = declared_nets(files)
-    all_f, sup = [], 0
+    all_f, sup, skp = [], 0, 0
     for f in files:
-        got, n = check(f, nets)
+        got, n, k = check(f, nets)
         all_f += got
         sup += n
+        skp += k
     for path, name, line, why in all_f:
         print("%s: %s: %s\n    %s" % (os.path.relpath(path, ROOT), name, why, line))
     print("stkbalance: %d routine(s) with an unbalanced path"
-          "  (%d declared banking routines, %d loop back-edges not reported)"
-          % (len(all_f), len(nets), sup))
+          "  (%d declared banking routines, %d loop back-edges not reported,"
+          " %d no-ret chunks not walked)"
+          % (len(all_f), len(nets), sup, skp))
     return 1 if all_f else 0
 
 

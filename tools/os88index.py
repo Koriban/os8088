@@ -27,6 +27,7 @@ trust is worse than no index, because it is consulted and believed.
 
 import os
 import re
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -178,9 +179,24 @@ def packages():
 
 
 def doc_files():
-    """[(name, kind)] for docs/*.md - PLAN files are design records, not reference."""
+    """[(name, kind)] for docs/*.md - PLAN files are design records, not reference.
+
+    TRACKED files, deliberately: --check runs in every `make`, so listing the
+    live directory means an untracked draft parked in docs/ fails every build -
+    and regenerating writes the local-only name into INDEX.md, which then fails
+    --check on every other machine. A plain listdir is the fallback for a tree
+    without git (a release tarball)."""
+    try:
+        names = subprocess.check_output(
+            ["git", "-C", ROOT, "ls-files", "docs/*.md"],
+            text=True, stderr=subprocess.DEVNULL).split("\n")
+        names = [os.path.basename(n) for n in names if n]
+    except (OSError, subprocess.CalledProcessError):
+        names = []
+    if not names:
+        names = os.listdir(os.path.join(ROOT, "docs"))
     out = []
-    for n in sorted(os.listdir(os.path.join(ROOT, "docs"))):
+    for n in sorted(names):
         if not n.endswith(".md") or n == "INDEX.md":
             continue
         out.append((n, "plan" if "PLAN" in n else "notes"))
