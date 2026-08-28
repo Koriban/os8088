@@ -75019,6 +75019,123 @@ gap, so those go to bss (`sh_fmt_fl`, `sh_fmt_cx`, `sh_fmt_ph`) for the one
 instruction it takes. `stkbalance` cannot see this class of error — the stack
 is balanced either way; only the *contents* are wrong.
 
+<<<<<<< HEAD
+=======
+### 81.26 Insert Row destroyed every number on the sheet
+
+One menu command, every plain numeric cell in the sheet set to **0**, and no
+error anywhere. Present in Insert Row, Delete Row, Insert Column and Delete
+Column since stage 4.0.
+
+`sh_rowcol_op` shifts a row by copying every cell record out to `sh_stgseg`,
+renumbering, and re-inserting. `SH_S_VAL`, the staging record's value field,
+**is eight bytes** — it was widened when stage 4.0 widened the cell, and the
+comment above it says exactly why: *"this record CARRIES a cell's value across
+a row or column shift, so it had to grow with the cell record or every decimal
+in the sheet would have been truncated."*
+
+The constant grew. **The store did not.**
+
+```
+    mov ax, [sh_rc_tval]              ; ONE WORD
+    mov [es:di+SH_S_VAL], ax
+```
+
+The restore has always read four words back. So each shift staged a double's
+bottom sixteen bits and reconstructed the top six bytes from `SH_S_FML` and
+whatever followed it. An IEEE-754 integer keeps its **exponent in the top
+word**, so `10` — mantissa all zeros, exponent `0x4024` — staged as `0x0000`
+and came back as a denormal that prints as `0`. A column of 10, 20, 30 became
+a column of zeros.
+
+**The failure is louder than the usual reader/writer mismatch and was missed
+for the same reason it is loud.** A truncated *fraction* would have been a
+subtle wrong number; a truncated *exponent* is total, so the cell reads `0`
+rather than something plausible — and nothing in the suite fills a sheet,
+shifts a row and reads the numbers back.
+
+The fix is four words instead of one. Two stride sites in the same routine
+also said `SH_C_SZ` where they meant `SH_S_SZ`; that worked only because 20 >
+18 and both sides said the same wrong thing, and it is precisely the confusion
+the two prefixes were introduced to prevent. Both now use the staging
+record's own size.
+
+**Found by a regression check, not by the build**: an unrelated `#REF!` test
+put five numbers in a column, deleted a row, and read back zeros.
+
+### 81.27 `#REF!` and `#NULL!` — the two errors nothing could raise
+
+`SH_ERR_NULL` and `SH_ERR_REF` sat in the table from the day error values
+landed with nothing able to set either. The names printed; no code path
+produced one.
+
+#### 81.27.1 `#REF!`: a reference whose cell is gone
+
+The reference rewriters **clamped**, and clamping is the wrong shape of
+answer. Delete Row 3 with `=A3` somewhere left the index alone, so the formula
+quietly started naming whatever slid up into row 3 — a different number, with
+nothing to show for it. Copy `=A1` one column left clamped to column A and
+read as `=A1` again. In both cases the sheet went on computing confidently
+with data the user never named.
+
+Excel's answer is `#REF!`, and the whole value of it is that it **cannot be
+mistaken for a working reference** the way a clamped one can. Three sites now
+produce it:
+
+- `sh_reidx_shift` reports **CF=1** when a *delete* lands exactly on the pivot
+  (the cell is gone), and when an *insert* pushes a reference past the last
+  row or column (it has moved off the sheet). `sh_reidx_apply` then emits
+  `#REF!` in place of the reference text.
+- `sh_copy_shift` reports CF=1 when a paste displacement takes an index
+  negative or past the edge. `sh_copy_cellpart` **defers** the decision to its
+  emit step, because `SI` still has to advance past the whole reference either
+  way — hence the `sh_cp_dead` flag rather than an early exit.
+- `sh_rw_emitref` writes the literal, reading the **same** `sh_errtab` string
+  `sh_errname` prints.
+
+**An insert that clamps is also a dead reference**, and the old code said so
+in a comment while doing the opposite: *"the cell it names is genuinely gone;
+naming the last real row is the same closest sane fallback."* It is not a
+fallback anyone can see. Both cases are `#REF!` now.
+
+#### 81.27.2 Error values are literals
+
+A rewriter that writes `#REF!` into a formula needs a parser that can read it
+back. `sh_perrlit` handles a `#` in `sh_pfactor`, matching against `sh_errtab`
+— the same table `sh_errname` prints and `sh_errcode` reads, so the spelling
+written and the spelling recognised cannot drift. No name is a prefix of
+another, so first match wins.
+
+Typing `=#N/A` therefore works too, which is what Excel does and the reason
+`NA()` is not the only way to get one. A `#` followed by anything else is
+`#NAME?` — what an unknown word already gets — and `SI` steps over the `#` so
+the parse still makes progress.
+
+#### 81.27.3 `#NULL!` needs the intersection operator
+
+`#NULL!` has exactly one producer in Excel: an **empty intersection**. Without
+the operator there was nothing to raise it with, so the operator is what this
+adds. Excel's three reference operators are `:` (range), `,` (union) and a
+**space** (intersection); `sh_prange` now reads the third.
+
+`sh_pintersect` reduces the running rectangle to its intersection with the
+range that follows — the later start and the earlier end on each axis, both
+rectangles normalised first so `B5:A1` intersects the same as `A1:B5`. Empty
+is `#NULL!` and nothing is folded. It **loops**, so `A1:C9 A1:B9 B1:B5` works,
+and the caller detects "the space was not an operator after all" by comparing
+`SI` before and against after, which is the only way to tell that apart from a
+successful intersection that consumed nothing else.
+
+`sh_normrange` is split out of `sh_foldrange` so both can rely on the corners
+being in top-left/bottom-right order before any edge is compared.
+
+The second rectangle gets **four words of its own** (`sh_ix1col`…): it cannot
+borrow `sh_r1col`, which is the running result being reduced — the same
+lesson as §81.23's `sh_pargref`, one increment later.
+
+`SH_ERR_NULL` is `ERROR.TYPE` 1, so `=ERROR.TYPE(SUM(A1:A2 A4:A5))` answers 1.
+
+>>>>>>> 0eb94b5 (sheet: #REF! and #NULL!, the two errors nothing could raise)
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

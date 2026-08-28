@@ -13876,22 +13876,25 @@ sh_reidx_shift:
     cmp ax, bx
     jb .out
     inc ax
-    mov cx, SH_ROWS                    ; clamp at the grid edge rather than
-    cmp dl, 2                          ; letting an insert push a reference
-    jb .havecap                        ; past it - a row 16384 reference
-    mov cx, SH_COLS                    ; shifted down would otherwise be
-.havecap:                              ; written as "A16385", which
-    cmp ax, cx                         ; sh_pident then resolves wrongly.
-    jb .out                            ; (The cell it names is genuinely
-    mov ax, cx                         ; gone; naming the last real row is
-    dec ax                             ; the same "closest sane fallback"
-    jmp .out                           ; the delete branch below already
-.delete:                               ; uses for a reference ON the pivot.)
+    mov cx, SH_ROWS                    ; an insert that pushes a reference
+    cmp dl, 2                          ; PAST the last row or column has moved
+    jb .havecap                        ; the cell it names off the sheet, so
+    mov cx, SH_COLS                    ; the reference is dead. It used to
+.havecap:                              ; clamp to the last real index, which
+    cmp ax, cx                         ; silently named different data
+    jb .out
+    jmp .dead
+.delete:
     cmp ax, bx
-    jbe .out                           ; < pivot: untouched; == pivot:
-                                        ; clamped (see the header comment)
-    dec ax
-.out:
+    jb .out                            ; before the pivot: untouched
+    je .dead                           ; ON THE PIVOT: THE CELL IS GONE. This
+    dec ax                             ; used to leave the index alone, so the
+.out:                                  ; reference quietly started naming
+    clc                                ; whatever slid into the vacated slot -
+    jmp .ret                           ; a wrong number with nothing to show
+.dead:                                 ; for it. #REF! is Excel's answer and
+    stc                                ; the whole point of it is that it
+.ret:                                  ; cannot be mistaken for a live one
     pop dx
     pop cx
     ret
@@ -13911,6 +13914,7 @@ sh_reidx_apply:
     mov ax, [sh_rw_refrow]             ; INSERT/DELETE SHIFTS AN ABSOLUTE
     mov bx, [sh_rw_pivot]              ; REFERENCE TOO, and that is not an
     call sh_reidx_shift                ; oversight. '$' means "do not adjust
+    jc .dead
     mov [sh_rw_refrow], ax             ; when this formula is COPIED"; it does
 .rowletcopy:                           ; not mean "keep pointing at row 1 no
                                        ; matter what". Inserting a row above
@@ -13950,6 +13954,7 @@ sh_reidx_apply:
     mov ax, [sh_rw_refcol]             ; same rule for a column insert/delete
     mov bx, [sh_rw_pivot]              ; as for a row - see .rowletcopy above
     call sh_reidx_shift
+    jc .dead
     mov [sh_rw_refcol], ax
 .colemitstart:
     cmp byte [sh_rw_absc], 0           ; the letters are REGENERATED here, so
@@ -13976,6 +13981,29 @@ sh_reidx_apply:
     call sh_rw_emit
     inc bx
     jmp .coldigcopy
+.dead:
+    call sh_rw_emitref                 ; the cell this named no longer exists
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rw_emitref - put the literal "#REF!" in a rewritten formula, in place of
+; a reference whose cell is gone. It reads the SAME string sh_errname prints,
+; so the text a Delete writes is exactly the text sh_perrlit reads back.
+; -----------------------------------------------------------------------------
+sh_rw_emitref:
+    push ax
+    push bx
+    mov bx, sh_s_err_ref
+.l:
+    mov al, [bx]
+    or al, al
+    jz .out
+    call sh_rw_emit
+    inc bx
+    jmp .l
 .out:
     pop bx
     pop ax
@@ -14714,14 +14742,16 @@ sh_rowcol_reidx:
 sh_copy_shift:
     add ax, bx
     jns .nonneg
-    xor ax, ax
-    jmp .out
-.nonneg:
-    cmp ax, cx
-    jb .out
-    mov ax, cx
-    dec ax
+    jmp .dead                         ; off the top or the left edge: Excel
+.nonneg:                              ; writes #REF! rather than clamping to
+    cmp ax, cx                        ; A1, and clamping is what made
+    jb .out                           ; `=A1` pasted one column left read as
+    jmp .dead                         ; `=A1` again
 .out:
+    clc
+    ret
+.dead:
+    stc
     ret
 
 ; sh_copy_cellpart - in: SI at a cell reference's first letter (the
@@ -14739,10 +14769,12 @@ sh_copy_cellpart:
     mov [sh_cp_ostart], si
     mov byte [sh_cp_absc], 0           ; stage 3.0e: see sh_rw_absc
     mov byte [sh_cp_absr], 0
-    cmp byte [si], '$'
-    jne .nocoldollar
-    mov byte [sh_cp_absc], 1
-    inc si
+    mov byte [sh_cp_dead], 0           ; ...and stage 4.5: whether the shift
+    cmp byte [si], '$'                 ; took this reference off the sheet.
+    jne .nocoldollar                   ; The DECISION is deferred to the emit
+    mov byte [sh_cp_absc], 1           ; below, because SI still has to be
+    inc si                             ; advanced past the whole reference
+                                       ; either way
 .nocoldollar:
     mov di, sh_ident
     xor cx, cx
@@ -14785,6 +14817,8 @@ sh_copy_cellpart:
     mov bx, [sh_cp_coldelta]
     mov cx, SH_COLS
     call sh_copy_shift
+    jnc .colpinned
+    mov byte [sh_cp_dead], 1
 .colpinned:
     mov [sh_cp_refcol], ax
     mov bx, si
@@ -14800,9 +14834,16 @@ sh_copy_cellpart:
     mov bx, [sh_cp_rowdelta]
     mov cx, SH_ROWS
     call sh_copy_shift
+    jnc .rowpinned
+    mov byte [sh_cp_dead], 1
 .rowpinned:
     mov [sh_cp_refrow], ax
     mov [sh_cp_refend], si
+    cmp byte [sh_cp_dead], 0
+    je .cpalive
+    call sh_rw_emitref
+    jmp .out
+.cpalive:
     cmp byte [sh_cp_absc], 0           ; both halves are REGENERATED below, so
     je .cpnocoldollar                  ; both markers have to be re-emitted
     mov al, '$'
@@ -16702,6 +16743,8 @@ sh_pfactor:
     mov al, [si]
     cmp al, 34                        ; stage 4.5: a QUOTED LITERAL is a text
     je .strlit                        ; value (81.22)
+    cmp al, '#'                       ; ...and an ERROR VALUE spelled out is a
+    je .errlit                        ; literal too (81.27.2)
     cmp al, '$'                       ; stage 3.0e: '$A$1' is an IDENTIFIER,
     je .ident                         ; and this router decides that on the
     cmp al, 'A'                       ; FIRST character - without this line a
@@ -16751,6 +16794,9 @@ sh_pfactor:
     xor ax, ax                        ; the number underneath a string is zero,
     call sh_acc_int                   ; so a reader that wants one gets a
     ret                               ; defined answer
+.errlit:
+    call sh_perrlit
+    ret
 .maybenum2:
     mov byte [sh_curtype], SH_T_NUM   ; a LITERAL is a number - say so, or the
     call fp_atof                      ; tag left by the last cell referenced
@@ -16762,6 +16808,63 @@ sh_pfactor:
 .numok:
     call sh_acc_store
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_perrlit (stage 4.5) - SI is at a '#'. An error value written out in full
+; is a LITERAL, as it is in Excel, and this file needs to read one for a
+; reason of its own: Delete Row and Delete Column now write `#REF!` into every
+; formula that named a deleted cell (81.27.1), so the parser has to be able to
+; read back what the rewriter wrote. Typing `=#N/A` works for the same reason,
+; which is also what Excel does.
+;
+; The names come from sh_errtab - the same table sh_errname prints and
+; sh_errcode reads - so the spelling written and the spelling recognised
+; cannot drift apart. No name is a prefix of another, so first match wins.
+;
+; out: the error raised in sh_evalerr, sh_acc zero, SI past the name. A '#'
+; followed by something else is #NAME?, which is what an unknown word already
+; gets, and SI steps over the '#' so the parse can still make progress.
+; -----------------------------------------------------------------------------
+sh_perrlit:
+    push bx
+    push cx
+    push di
+    xor cx, cx
+.try:
+    cmp cx, 7
+    jae .unknown
+    mov bx, cx
+    shl bx, 1
+    mov di, [sh_errtab + bx]
+    call sh_matchat                   ; is that name a prefix of SI?
+    jc .found
+    inc cx
+    jmp .try
+.found:
+    mov bx, cx
+    shl bx, 1
+    mov di, [sh_errtab + bx]
+.skip:
+    cmp byte [di], 0
+    je .done
+    inc di
+    inc si
+    jmp .skip
+.done:
+    inc cx                            ; the table is 0-based, the ERROR.TYPE
+    mov [sh_evalerr], cl              ; codes are 1-based
+    jmp .out
+.unknown:
+    mov byte [sh_evalerr], SH_ERR_NAME
+    inc si
+.out:
+    mov byte [sh_curtype], SH_T_NUM
+    xor ax, ax
+    call sh_acc_int
+    pop di
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -17067,6 +17170,17 @@ sh_prange:
     jnc .out                          ; malformed range; contributes nothing
     mov [sh_r2col], ax
     mov [sh_r2row], bx
+    call sh_normrange
+.isect:
+    cmp byte [si], ' '                ; stage 4.5: Excel's INTERSECTION
+    jne .fold                         ; operator is a space, and an empty
+    mov ax, si                        ; intersection is the one and only
+    call sh_pintersect                ; thing that produces #NULL! (81.27.3)
+    jc .out                           ; empty: there is nothing to fold
+    cmp ax, si
+    je .fold                          ; nothing consumed - the space was not
+    jmp .isect                        ; an operator after all
+.fold:
     call sh_foldrange
     jmp .out
 .singlecell:
@@ -17087,27 +17201,12 @@ sh_prange:
     pop ax
     ret
 
-; sh_foldrange - in: sh_r1col/row, sh_r2col/row (either corner order);
-; folds every OCCUPIED cell in the rectangle via sh_foldvalue.
-;
-; It walks the RECORD ARRAY, not the rectangle (81.3): records are sorted by
-; (packed row, col) - the stage 2.0 comment above sh_findcell - so ONE binary
-; search finds the first corner and a forward scan visits exactly the records
-; in the row span. Walking every coordinate was O(area x log n): the ordinary
-; =SUM(A1:A16384) idiom was 16,384 searches inside the paint callback, seconds
-; per repaint on the 8088 and invisible in an emulator (PERFORMANCE.md rule 6).
-; The bound rides in SI and the cursor in DI because sh_getcell2 preserves
-; both across the evaluation a formula cell runs; the end offset is a
-; function of [sh_ncells] alone, the same for a nested fold, so sh_rrow can
-; hold it.
-sh_foldrange:
+; sh_normrange - put sh_r1col/row..sh_r2col/row in top-left/bottom-right
+; order. Split out of sh_foldrange so sh_pintersect can rely on both
+; rectangles being normalised before it compares their edges.
+sh_normrange:
     push ax
     push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
     mov ax, [sh_r1col]
     mov bx, [sh_r2col]
     cmp ax, bx
@@ -17124,7 +17223,120 @@ sh_foldrange:
 .rowok:
     mov [sh_r1row], ax
     mov [sh_r2row], bx
+    pop bx
+    pop ax
+    ret
 
+; -----------------------------------------------------------------------------
+sh_pintersect:
+    push ax
+    push bx
+    push si
+.spaces:
+    cmp byte [si], ' '
+    jne .second
+    inc si
+    jmp .spaces
+.second:
+    call sh_pcellref
+    jnc .nope
+    mov [sh_ix1col], ax
+    mov [sh_ix1row], bx
+    mov [sh_ix2col], ax
+    mov [sh_ix2row], bx
+    cmp byte [si], ':'
+    jne .haveit
+    inc si
+    call sh_pcellref
+    jnc .nope
+    mov [sh_ix2col], ax
+    mov [sh_ix2row], bx
+.haveit:
+    mov ax, [sh_ix1col]               ; normalise the second rectangle too -
+    mov bx, [sh_ix2col]               ; `B5:A1` names the same block as
+    cmp ax, bx                        ; `A1:B5` and must intersect the same
+    jle .c2ok
+    xchg ax, bx
+.c2ok:
+    mov [sh_ix1col], ax
+    mov [sh_ix2col], bx
+    mov ax, [sh_ix1row]
+    mov bx, [sh_ix2row]
+    cmp ax, bx
+    jle .r2ok
+    xchg ax, bx
+.r2ok:
+    mov [sh_ix1row], ax
+    mov [sh_ix2row], bx
+    mov ax, [sh_ix1col]               ; the intersection is the later start
+    cmp ax, [sh_r1col]                ; and the earlier end, on each axis
+    jbe .e1
+    mov [sh_r1col], ax
+.e1:
+    mov ax, [sh_ix2col]
+    cmp ax, [sh_r2col]
+    jae .e2
+    mov [sh_r2col], ax
+.e2:
+    mov ax, [sh_ix1row]
+    cmp ax, [sh_r1row]
+    jbe .e3
+    mov [sh_r1row], ax
+.e3:
+    mov ax, [sh_ix2row]
+    cmp ax, [sh_r2row]
+    jae .e4
+    mov [sh_r2row], ax
+.e4:
+    mov ax, [sh_r1col]
+    cmp ax, [sh_r2col]
+    ja .empty
+    mov ax, [sh_r1row]
+    cmp ax, [sh_r2row]
+    ja .empty
+    add sp, 2                         ; discard the saved SI - keep advancing
+    pop bx
+    pop ax
+    clc
+    ret
+.empty:
+    mov byte [sh_evalerr], SH_ERR_NULL
+    add sp, 2
+    pop bx
+    pop ax
+    stc
+    ret
+.nope:
+    pop si                            ; not a range after the space: put SI
+    pop bx                            ; back, and the caller folds the first
+    pop ax                            ; range alone
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_foldrange - in: sh_r1col/row, sh_r2col/row (either corner order);
+; folds every OCCUPIED cell in the rectangle via sh_foldvalue.
+;
+; It walks the RECORD ARRAY, not the rectangle (81.3): records are sorted by
+; (packed row, col) - the stage 2.0 comment above sh_findcell - so ONE binary
+; search finds the first corner and a forward scan visits exactly the records
+; in the row span. Walking every coordinate was O(area x log n): the ordinary
+; =SUM(A1:A16384) idiom was 16,384 searches inside the paint callback, seconds
+; per repaint on the 8088 and invisible in an emulator (PERFORMANCE.md rule 6).
+; The bound rides in SI and the cursor in DI because sh_getcell2 preserves
+; both across the evaluation a formula cell runs; the end offset is a
+; function of [sh_ncells] alone, the same for a nested fold, so sh_rrow can
+; hold it.
+; -----------------------------------------------------------------------------
+sh_foldrange:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call sh_normrange                  ; split out for sh_pintersect's sake
     mov ax, [sh_ncells]
     mov bx, SH_C_SZ
     mul bx
@@ -21413,7 +21625,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3748
+    OS88_BSS 3757
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -21537,7 +21749,11 @@ sh_r1col      equ sh_phave + 2              ; a range's two corners...
 sh_r1row      equ sh_r1col + 2
 sh_r2col      equ sh_r1row + 2
 sh_r2row      equ sh_r2col + 2
-sh_rrow       equ sh_r2row + 2              ; ...and sh_foldrange's end-of-
+sh_ix1col     equ sh_r2row + 2              ; sh_pintersect's SECOND rectangle
+sh_ix1row     equ sh_ix1col + 2             ; - it cannot borrow sh_r1col,
+sh_ix2col     equ sh_ix1row + 2             ; which is the running result it
+sh_ix2row     equ sh_ix2col + 2             ; is reducing
+sh_rrow       equ sh_ix2row + 2             ; ...and sh_foldrange's end-of-
 sh_rcol       equ sh_rrow + 2               ; array bound (sh_rcol is spare
                                              ; since the record-array walk)
 sh_pass       equ sh_rcol + 2               ; recalculation pass counter
@@ -22056,11 +22272,13 @@ sh_rw_absc        equ sh_idlg_rect + 8 ; byte: Insert/Delete's scanner
 sh_rw_absr        equ sh_rw_absc + 1
 sh_cp_absc        equ sh_rw_absr + 1   ; byte: Copy/Paste + Fill's scanner
 sh_cp_absr        equ sh_cp_absc + 1
+sh_cp_dead        equ sh_cp_absr + 1   ; byte: the paste shift took this
+                                       ; reference off the sheet (81.27.1)
 
 ; stage 3.0d: which cell the evaluator is CURRENTLY inside, for ROW()/COLUMN().
 ; Saved and restored around each sh_eval_cell so a formula reached through
 ; another cell's reference still answers for itself, not for whoever asked.
-sh_rc_ccol        equ sh_cp_absr + 1   ; the cell that OWNS the formula being
+sh_rc_ccol        equ sh_cp_dead + 1   ; the cell that OWNS the formula being
 sh_rc_crow        equ sh_rc_ccol + 2   ; converted to or from R1C1 - every
                                        ; relative offset is measured from it
 sh_evrow          equ sh_rc_crow + 2   ; word: 0-based
