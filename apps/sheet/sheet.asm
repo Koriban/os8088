@@ -9871,6 +9871,10 @@ sh_dowrite:
 .warn:
     push ax
     push bx
+    cmp word [sh_msg], sh_m_saved     ; only upgrade a plain success: a failed
+    jne .warned                       ; write's "Err N" (or a truncated save's
+                                      ; message) must not be replaced by a
+                                      ; string that begins with "Saved"
     call sh_sheets_used
     cmp ax, 2
     jb .warned
@@ -9919,9 +9923,12 @@ sh_dowrite_sylk:
     cmp byte [sh_trunc], 0
     jne .footer
     mov ax, di
-    add ax, 56                       ; worst case a C line ("C;X256;Y16384;
-                                      ; K-32768\r\n") plus its F line
-                                      ; ("F;X256;Y16384;F$0R;K\r\n")
+    add ax, 200                      ; worst case a LABEL's C line: the head
+                                      ; ("C;X256;Y16384;K"), the quoted text
+                                      ; with every embedded quote DOUBLED
+                                      ; (2 + 2*SH_EDITMAX), CRLF, plus its
+                                      ; F line ("F;X256;Y16384;F$0R;K\r\n");
+                                      ; the ;E formula case is smaller
     cmp ax, SH_STAGE_MAX
     jbe .room
     mov byte [sh_trunc], 1
@@ -10176,6 +10183,9 @@ sh_dowrite_sylk:
     call OSAPI_FILE_WRITE
     jc .werr
     mov word [sh_msg], sh_m_saved
+    cmp byte [sh_trunc], 0            ; cells dropped for room must not be
+    je .wdone                         ; reported as a plain success
+    mov word [sh_msg], sh_m_trunc
     jmp .wdone
 .werr:
     call sh_setferr
@@ -10432,6 +10442,7 @@ sh_dowrite_dif:
     push es
 
     call sh_difbbox
+    mov byte [sh_trunc], 0
     mov es, [sh_stgseg]
     xor di, di
     mov si, sh_s_dif_hdr1
@@ -10459,7 +10470,7 @@ sh_dowrite_dif:
     mov ax, di
     add ax, 16
     cmp ax, SH_STAGE_MAX
-    ja .footer                        ; truncate - documented, same spirit
+    ja .truncf                        ; truncate - documented, same spirit
                                        ; as the SYLK writer's own room check
     mov si, sh_s_dif_bot
     call sh_stgput
@@ -10471,7 +10482,7 @@ sh_dowrite_dif:
     mov ax, di
     add ax, SH_EDITMAX + 24           ; worst case is now a LABEL and its
     cmp ax, SH_STAGE_MAX              ; quotes, not "0,-32768\r\nV\r\n"
-    ja .footer
+    ja .truncf
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
     call sh_getcell2
@@ -10543,6 +10554,10 @@ sh_dowrite_dif:
     inc ax
     mov [sh_wrow], ax
     jmp .rloop
+.truncf:
+    mov byte [sh_trunc], 1            ; the buffer filled before the bounding
+                                       ; box was covered - the header already
+                                       ; promised the full box, so say so
 .footer:
     mov si, sh_s_dif_eod
     call sh_stgput
@@ -10557,6 +10572,9 @@ sh_dowrite_dif:
     call OSAPI_FILE_WRITE
     jc .werr
     mov word [sh_msg], sh_m_saved
+    cmp byte [sh_trunc], 0            ; cells dropped for room must not be
+    je .wdone                         ; reported as a plain success
+    mov word [sh_msg], sh_m_trunc
     jmp .wdone
 .werr:
     call sh_setferr
@@ -10669,6 +10687,10 @@ sh_doread_dif:
     call sh_difskipline                ; sh_pint's integer: the writer emits
     cmp si, di                         ; 3.5 and this read it back as 3
     jae .cellnext
+    cmp word [sh_wcol], SH_COLS        ; a file with more data items per row
+    jae .notvalid                      ; than the grid has columns walks
+                                       ; sh_wcol off it - drop the surplus,
+                                       ; but still consume its indicator line
     cmp byte [es:si], 'V'              ; the real DIF value-indicator: V
     je .isvalid                        ; (valid) is the ordinary one; ERROR is
     cmp byte [es:si], 'E'              ; the other one this app writes, and
@@ -10689,6 +10711,8 @@ sh_doread_dif:
     call sh_difskipline                ; past the "1,0" line; the quoted text
     cmp si, di                         ; is the line after it
     jae .cellnext
+    cmp word [sh_wcol], SH_COLS        ; off-grid column: skip the text line
+    jae .notvalid                      ; too (see the numeric item above)
     cmp byte [es:si], 34
     jne .notvalid                      ; not quoted: not a string item this
     inc si                             ; app can use - skip the line
@@ -11071,6 +11095,9 @@ sh_dowrite_biff:
     call OSAPI_FILE_WRITE
     jc .werr
     mov word [sh_msg], sh_m_saved
+    cmp byte [sh_trunc], 0            ; cells dropped for room must not be
+    je .wdone                         ; reported as a plain success
+    mov word [sh_msg], sh_m_trunc
     jmp .wdone
 .werr:
     call sh_setferr
@@ -11382,6 +11409,9 @@ sh_biff_workbook:
     call OSAPI_FILE_WRITE
     jc .err
     mov word [sh_msg], sh_m_saved
+    cmp byte [sh_trunc], 0            ; cells dropped for room must not be
+    je .out                           ; reported as a plain success
+    mov word [sh_msg], sh_m_trunc
     jmp .out
 .err:
     call sh_setferr
@@ -11415,7 +11445,11 @@ sh_biff_cells:
     cmp byte [sh_trunc], 0
     jne .cdone
     mov ax, di
-    add ax, 14                       ; opcode+len(4) + row+col+xf+rk(10)
+    add ax, 18                       ; the NUMBER record - opcode+len(4) +
+                                      ; row+col+xf(6) + double(8), the largest
+                                      ; fixed-size cell record (RK is 14,
+                                      ; BOOLERR 12; LABEL and FORMULA re-check
+                                      ; with their own exact sizes)
     cmp ax, SH_STAGE_MAX
     jbe .room
     mov byte [sh_trunc], 1
@@ -11787,6 +11821,15 @@ sh_doread_biff:
     mov ax, [es:si]                    ; opcode
     mov dx, [es:si+2]                  ; length
     add si, 4                          ; SI = this record's data start
+    mov bx, si                         ; the record must END inside the file:
+    add bx, dx                         ; a crafted length near 0xFFFF wraps
+    jc .done                           ; the 16-bit add and walks the stream
+    cmp bx, cx                         ; BACKWARD - onto this same header,
+    ja .done                           ; forever - so the wrap (CF) and the
+                                       ; file end are both refused here, which
+                                       ; also bounds every unknown-opcode
+                                       ; .skip (every byte off a disk is
+                                       ; hostile)
     cmp ax, 0x000A                     ; EOF - but a WORKBOOK has one per sheet
     je .iseof                          ; substream plus its own, so the first
                                        ; is not the end of anything (81.10.5)
@@ -11896,6 +11939,8 @@ sh_doread_biff:
     mov [sh_wrec_col], ax
     mov ax, [es:si+4]                  ; xf index
     mov [sh_wrec_xf], ax
+    call sh_biff_rcok                  ; off-grid row/col: skip the record
+    jc .rkdone                         ; rather than cross onto another sheet
     mov ax, [es:si+6]                  ; rk value low word
     mov dx, [es:si+8]                  ; rk value high word
     push es                            ; sh_rkdec_d works in sh_acc, which is
@@ -11922,6 +11967,8 @@ sh_doread_biff:
     mov [sh_wrec_col], ax
     mov ax, [es:si+4]                  ; xf index
     mov [sh_wrec_xf], ax
+    call sh_biff_rcok                  ; off-grid row/col: skip the record
+    jc .rkdone
     mov ax, [es:si+6]                  ; the eight value bytes, verbatim
     mov [sh_acc], ax
     mov ax, [es:si+8]
@@ -11977,6 +12024,8 @@ sh_doread_biff:
     mov [sh_wrec_col], ax
     mov ax, [es:si+4]                  ; xf index
     mov [sh_wrec_xf], ax
+    call sh_biff_rcok                  ; off-grid row/col: skip the record
+    jc .rkdone
     mov ax, [es:si+6]                  ; the eight result bytes
     mov [sh_acc], ax
     mov ax, [es:si+8]
@@ -12019,6 +12068,8 @@ sh_doread_biff:
     mov [sh_wrec_col], ax
     mov ax, [es:si+4]                  ; xf index
     mov [sh_wrec_xf], ax
+    call sh_biff_rcok                  ; off-grid row/col: skip the record
+    jc .rkdone
     mov al, [es:si+6]                  ; the value...
     mov dl, al
     mov al, [es:si+7]                  ; ...and what kind of value it is
@@ -12053,6 +12104,8 @@ sh_doread_biff:
     mov [sh_wrec_col], ax
     mov ax, [es:si+4]                  ; xf index
     mov [sh_wrec_xf], ax
+    call sh_biff_rcok                  ; off-grid row/col: skip the record
+    jc .rkdone
     mov ax, [es:si+6]                  ; cch, sixteen bits in BIFF3
     cmp ax, SH_EDITMAX                 ; a longer label is TRUNCATED, not
     jbe .lcap                          ; refused: the record's own length
@@ -12113,6 +12166,24 @@ sh_doread_biff:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_biff_rcok - out: CF=0 if [sh_wrec_row] < SH_ROWS and [sh_wrec_col] <
+; SH_COLS, CF=1 otherwise. A file's row with bit 14 set would OR into the
+; SHEET bits of the packed key (see sh_findcell) and land the cell on a
+; DIFFERENT sheet - the same clamp the SYLK reader's .apply performs on X/Y.
+; Preserves all registers.
+; -----------------------------------------------------------------------------
+sh_biff_rcok:
+    cmp word [sh_wrec_row], SH_ROWS
+    jae .bad
+    cmp word [sh_wrec_col], SH_COLS
+    jae .bad
+    clc
+    ret
+.bad:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -19184,6 +19255,7 @@ sh_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
 sh_s_crlf:     db 13, 10, 0
 sh_s_end:      db 'E', 13, 10, 0
 sh_m_saved:    db 'Saved', 0
+sh_m_trunc:    db 'Saved - TRUNCATED; sheet too large for this format.', 0
 sh_m_loaded:   db 'Loaded', 0
 sh_f_sum:      db 'SUM', 0
 sh_f_average:  db 'AVERAGE', 0
