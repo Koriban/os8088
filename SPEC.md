@@ -75143,6 +75143,82 @@ Found by running it: the first sort of `A:C` by `B` moved `B` and `C` and left
 `A` untouched, in the screenshot, immediately.
 
 >>>>>>> a1efbce (sheet: a Sort key that is not the anchor)
+### 81.28 Date serials
+
+A date is a **number**: days since the epoch, with the time of day in the
+fraction. That is Excel's model and it is the reason dates arithmetic at all —
+tomorrow is `+1`, an interval is a subtraction, and a date sorts because it is
+a number that happens to be *shown* as a date.
+
+Eleven functions: `DATE DAY MONTH YEAR WEEKDAY TIME HOUR MINUTE SECOND
+DATEVALUE TIMEVALUE`, ids 58..68.
+
+#### 81.28.1 Serial 60 is 29 February 1900, a day that never existed
+
+1900 was not a leap year. Lotus 1-2-3 thought it was, Excel copied the mistake
+so the two could exchange files, and every version since has kept it for the
+same reason.
+
+**Reproducing the bug is the correct behaviour here.** Getting it "right"
+would put every date in a shared file one day out from what Excel shows —
+a worse bug than the one being reproduced, and a silent one. So serial 1 is
+1 January 1900, serial 59 is 28 February, serial **60 is the phantom day**,
+and 61 is 1 March. `sh_ser_to_ymd` special-cases 60 rather than contorting the
+walk, because the day is not in any real calendar to be found by walking one.
+
+One divergence, recorded rather than fixed: `DATE(1900,2,29)` answers **61**
+here and 60 in Excel. The rollover that makes `DATE(1990,13,1)` mean January
+1991 also makes 29 February 1900 mean 1 March, and special-casing the phantom
+day on the way *in* would cost more than a date nobody enters is worth.
+
+The range is what an **unsigned word** holds — serial 65535 is 5 June 2079 —
+which is almost exactly Excel 2.1's own limit of 31 December 2078.
+
+#### 81.28.2 An unsigned word, because the signed one stops in 1989
+
+`fp_a2i` is signed and clamps at 32767. As a date serial that is **24
+September 1989**, so every date this app will ever be asked about is past it
+and the signed conversion is not usable for serials at all. `sh_acc_toudw`
+takes the top bit off by hand, converts the remainder, and adds it back
+unsigned; `sh_acc_fromudw` goes the other way through `fp_u64_to_a`.
+
+**`fp_cmpab` sets SIGNED flags**, which is what it is for — it answers −1/0/1
+in `AX` and sets the flags from that. Writing `jb` after it, as if it were an
+unsigned magnitude compare, means the branch is never taken: every serial past
+32767 fell down the clamping path and `HOUR`, `MINUTE` and `SECOND` all
+answered 0. `sh_pcmp` had used `jl`/`jg` correctly since stage 4.0; this is the
+one place that did not.
+
+#### 81.28.3 Seconds-of-day do not fit either
+
+86,399 is past 65,535, so there is no single number for "the time of day in
+seconds" to hand back. `sh_dt_hms` therefore returns **minutes since midnight**
+(0..1439) and the seconds within that minute (0..59), split off the *same*
+rounded value so the two can never disagree about which second it is.
+
+The rounding still happens in the seconds domain, in floating point where it
+fits. A time built as h/m/s is not exact in binary, and truncating a
+`TIME(10,30,0)` that came back as 10:29:59.9999 would show 10:29:59.
+
+#### 81.28.4 `NOW()` is absent, and cannot be written here
+
+It is the twelfth function of the category and the only one that is not
+arithmetic. **No kernel call publishes the calendar date.** The kernel has it —
+it draws `Aug 28 2026` in the menu bar every second — but the only clocks a
+package can read are `OSAPI_GET_TICKS` and `OSAPI_BOOT_TICKS`, and both count
+since boot. A `NOW()` built on those would answer with the uptime, which is
+not the time and would be believed.
+
+It needs **one new API slot** publishing what the clock already reads. That is
+a kernel change with its own review and its own SPEC amendment, not something
+to approximate inside a package — the same judgement §75.3 records for the
+alert box, where a kernel primitive was added, measured, and reverted.
+
+`DATEVALUE` takes the numeric forms only (`8/28/2026`, `28-8-2026` — the
+separator carries no meaning), not `28-Aug-2026`. A month *name* is a
+different parse, and a half-supported one that quietly returned `#VALUE!` for
+the spelled form would be worse than a documented limit.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

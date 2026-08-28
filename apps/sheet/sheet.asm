@@ -15472,6 +15472,9 @@ sh_rpn_fid:
     db 121, 117, 130, 33              ; CODE EXACT T VALUE
     db 124, 82, 120, 119, 48          ; FIND SEARCH SUBSTITUTE REPLACE TEXT
     db 13, 14                         ; DOLLAR FIXED
+    db 65, 67, 68, 69, 70             ; DATE DAY MONTH YEAR WEEKDAY
+    db 66, 71, 72, 73, 140            ; TIME HOUR MINUTE SECOND DATEVALUE
+    db 141                            ; TIMEVALUE
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -15493,6 +15496,9 @@ sh_rpn_fvar:
     db 1, 1, 1, 0, 0                  ; FIND(2..3) SEARCH(2..3)
                                        ;   SUBSTITUTE(3..4) REPLACE TEXT
     db 1, 1                           ; DOLLAR(1..2) FIXED(1..3)
+    db 0, 0, 0, 0, 0                  ; DATE DAY MONTH YEAR WEEKDAY
+    db 0, 0, 0, 0, 0                  ; TIME HOUR MINUTE SECOND DATEVALUE
+    db 0                              ; TIMEVALUE - all fixed-arity in 2.1
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -17823,6 +17829,8 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 58                         ; stage 4.5: 58+ are the DATE functions,
+    jae .dodate                        ; which are numbers all the way down
     cmp ax, 37                         ; stage 4.5: 37+ are the TEXT functions,
     jae .dotext                        ; whose RESULT may be a string
     cmp ax, 25                         ; stage 4.5: 25+ are the INFORMATION
@@ -17874,6 +17882,10 @@ sh_pfunc:
     call sh_pabs
     mov dx, ax
     jmp .done
+.dodate:
+    call sh_pdate
+    mov dx, ax
+    jmp .typed
 .dotext:
     call sh_ptext
     mov dx, ax
@@ -19883,6 +19895,654 @@ sh_isalpha:
     clc
     ret
 
+; =============================================================================
+; DATE SERIALS (stage 4.5)
+;
+; A date is a NUMBER: the count of days since the epoch, with the time of day
+; in the fraction. That is Excel's model and it is why dates arithmetic at all
+; - tomorrow is +1, an interval is a subtraction, and a date sorts because it
+; is a number that happens to be shown as a date.
+;
+; THE EPOCH IS SERIAL 1 = 1 JANUARY 1900, AND SERIAL 60 IS 29 FEBRUARY 1900 -
+; A DAY THAT NEVER EXISTED. 1900 was not a leap year; Lotus 1-2-3 thought it
+; was, Excel copied the mistake so the two could exchange files, and every
+; version since has kept it for the same reason. Getting it "right" here would
+; put every date in a shared file one day out from what Excel shows, which is
+; a worse bug than the one being reproduced. So serial 60 is the phantom day,
+; and 61 is 1 March 1900.
+;
+; The range is what an UNSIGNED word holds, which is almost exactly Excel
+; 2.1's own: serial 65535 is 5 June 2079, and 2.1 stops at 31 December 2078.
+; -----------------------------------------------------------------------------
+; sh_fp_32768_b - B = 32768.0. Clobbers A, so build it BEFORE loading the
+; value. fp_i2b cannot: 32768 is not a signed 16-bit integer.
+; -----------------------------------------------------------------------------
+sh_fp_32768_b:
+    push ax
+    mov word [fp_t0], 0x8000
+    mov word [fp_t1], 0
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call fp_a_to_b
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_acc_toudw - sh_acc, truncated toward zero, as an UNSIGNED word in AX.
+;
+; fp_a2i is signed and clamps at 32767 - as a date serial that is 24 September
+; 1989, so every date this app will ever be asked about is past it and the
+; signed conversion is not usable for serials at all. The top bit is taken off
+; by hand and put back with an unsigned add.
+;
+; out: AX = the word; CF=1 if the value was negative or 65536 or more, with
+; AX = 0. Every other register preserved.
+; -----------------------------------------------------------------------------
+sh_acc_toudw:
+    push bx
+    call sh_acc_load_a
+    call fp_trunc
+    call sh_acc_store
+    test byte [sh_acc+7], 0x80        ; a negative serial has no unsigned form
+    jnz .bad
+    call sh_fp_32768_b
+    call sh_acc_load_a
+    call fp_cmpab                     ; SIGNED flags: fp_cmpab answers -1/0/1
+    jl .small                         ; in AX and sets them from that, so `jb`
+                                       ; is never taken and every serial past
+                                       ; 32767 fell down the clamping path
+    call sh_fp_32768_b
+    call sh_acc_load_a
+    call fp_sub                       ; A = value - 32768, now 0..32767
+    call fp_a2i
+    jc .bad
+    add ax, 32768                     ; ...and back on, unsigned
+    clc
+    jmp .out
+.small:
+    call sh_acc_load_a
+    call fp_a2i
+    jc .bad
+.out:
+    pop bx
+    ret
+.bad:
+    xor ax, ax
+    stc
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_acc_fromudw - AX, an unsigned word, becomes sh_acc. fp_i2a is signed and
+; would make 46265 negative.
+; -----------------------------------------------------------------------------
+sh_acc_fromudw:
+    push ax
+    mov [fp_t0], ax
+    mov word [fp_t1], 0
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call sh_acc_store
+    pop ax
+    ret
+
+; sh_isleap - in: sh_dt_ly = the year; out: CF=1 if it is a leap year.
+; The full rule, not "divisible by four": 1900 is not a leap year and 2000 is,
+; and both are inside the range this app covers.
+sh_isleap:
+    push ax
+    push bx
+    push dx
+    mov ax, [sh_dt_ly]
+    mov bx, 400
+    xor dx, dx
+    div bx
+    or dx, dx
+    jz .yes                           ; a multiple of 400 always is
+    mov ax, [sh_dt_ly]
+    mov bx, 100
+    xor dx, dx
+    div bx
+    or dx, dx
+    jz .no                            ; a multiple of 100 (but not 400) is not
+    mov ax, [sh_dt_ly]
+    mov bx, 4
+    xor dx, dx
+    div bx
+    or dx, dx
+    jz .yes
+.no:
+    clc
+    jmp .out
+.yes:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; sh_yearlen - in: AX = year; out: AX = 365 or 366
+sh_yearlen:
+    mov [sh_dt_ly], ax
+    call sh_isleap
+    mov ax, 365
+    jnc .out
+    inc ax
+.out:
+    ret
+
+; sh_monlen - in: AX = month 1..12, BX = year; out: AX = days in it
+sh_monlen:
+    push bx
+    push si
+    cmp ax, 1
+    jb .bad
+    cmp ax, 12
+    ja .bad
+    mov si, ax
+    dec si
+    mov [sh_dt_ly], bx
+    xor bh, bh
+    mov bl, [sh_dt_mlen + si]
+    mov ax, bx
+    cmp si, 1                         ; February
+    jne .out
+    call sh_isleap
+    jnc .out
+    inc ax
+    jmp .out
+.bad:
+    xor ax, ax
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ser_to_ymd - in: AX = an unsigned date serial; out: sh_dt_y/m/d.
+; A serial of 0 or one past the range answers 1900/1/0, which is what Excel
+; shows for serial 0 and is not an error.
+; -----------------------------------------------------------------------------
+sh_ser_to_ymd:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov word [sh_dt_y], 1900
+    mov word [sh_dt_m], 1
+    mov word [sh_dt_d], 0
+    or ax, ax
+    jz .out                           ; serial 0 is Excel's own 0-January-1900
+    cmp ax, 60
+    jne .notphantom
+    mov word [sh_dt_m], 2             ; THE PHANTOM DAY. It is not reachable by
+    mov word [sh_dt_d], 29            ; walking a real calendar, because it is
+    jmp .out                          ; not in one
+.notphantom:
+    cmp ax, 61
+    jb .haven
+    dec ax                            ; past it: the real calendar is one day
+.haven:                               ; behind the serial
+    mov cx, ax                        ; CX = days, 1 = 1900-01-01
+.yloop:
+    mov ax, [sh_dt_y]
+    call sh_yearlen
+    cmp cx, ax
+    jbe .haveyear
+    sub cx, ax
+    inc word [sh_dt_y]
+    jmp .yloop
+.haveyear:
+.mloop:
+    mov ax, [sh_dt_m]
+    mov bx, [sh_dt_y]
+    call sh_monlen
+    cmp cx, ax
+    jbe .havemonth
+    sub cx, ax
+    inc word [sh_dt_m]
+    jmp .mloop
+.havemonth:
+    mov [sh_dt_d], cx
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ymd_to_ser - in: sh_dt_y/m/d; out: AX = the serial, CF=1 if the date is
+; outside 1900-01-01 .. 2079-06-06 (what an unsigned word holds).
+;
+; The month is allowed to run outside 1..12 and the day outside a month's
+; length, exactly as Excel's DATE() does: DATE(1990,13,1) is January 1991 and
+; DATE(1990,1,32) is 1 February. Rolling the month first and then simply
+; ADDING the days is what makes both fall out for free.
+; -----------------------------------------------------------------------------
+sh_ymd_to_ser:
+    push bx
+    push cx
+    push dx
+.mroll:
+    mov ax, [sh_dt_m]
+    cmp ax, 1
+    jge .mrollhi
+    add word [sh_dt_m], 12            ; month 0 is December of the year before
+    dec word [sh_dt_y]
+    jmp .mroll
+.mrollhi:
+    cmp ax, 12
+    jle .mdone
+    sub word [sh_dt_m], 12
+    inc word [sh_dt_y]
+    jmp .mroll
+.mdone:
+    mov ax, [sh_dt_y]
+    cmp ax, 1900
+    jb .bad
+    cmp ax, 2080
+    ja .bad
+    xor cx, cx                        ; CX = whole days before this year
+    mov word [sh_dt_ys], 1900
+.yloop:
+    mov ax, [sh_dt_ys]
+    cmp ax, [sh_dt_y]
+    jae .ydone
+    call sh_yearlen
+    add cx, ax
+    inc word [sh_dt_ys]
+    jmp .yloop
+.ydone:
+    mov word [sh_dt_ms], 1
+.mloop:
+    mov ax, [sh_dt_ms]
+    cmp ax, [sh_dt_m]
+    jae .mdone2
+    mov bx, [sh_dt_y]
+    call sh_monlen
+    add cx, ax
+    inc word [sh_dt_ms]
+    jmp .mloop
+.mdone2:
+    add cx, [sh_dt_d]                 ; the day, which may itself overflow the
+    mov ax, cx                        ; month - Excel lets it, and adding is
+    cmp ax, 60                        ; what makes that work
+    jb .noskip
+    inc ax                            ; step over the phantom 29 February 1900
+.noskip:
+    clc
+    jmp .out
+.bad:
+    xor ax, ax
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_pdate - the DATE and TIME functions, ids 58 and up.
+;
+; NOW() IS DELIBERATELY ABSENT, and this is the one function in the category
+; that cannot be written: no kernel call publishes the calendar date. The
+; kernel HAS it - it draws "Aug 28 2026" in the menu bar every second - but
+; the only clocks a package can read are OSAPI_GET_TICKS and OSAPI_BOOT_TICKS,
+; both of which count since boot. A NOW() built on those would answer with the
+; uptime, which is not the time and would be believed. It needs one new API
+; slot publishing what the clock already reads, and that is a kernel change
+; with its own review, not something to fake here (81.28).
+;
+; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
+; -----------------------------------------------------------------------------
+sh_pdate:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax
+    cmp di, 58
+    je .fdate
+    cmp di, 63
+    je .ftime
+    cmp di, 67
+    je .fdatevalue
+    cmp di, 68
+    je .ftimevalue
+    ; 59..62, 64..66 all take one serial
+    call sh_pcmp
+    cmp di, 64
+    jae .timepart
+    call sh_acc_toudw                 ; the whole days
+    jc .zeroout
+    mov bx, ax
+    cmp di, 62
+    je .fweekday
+    call sh_ser_to_ymd
+    mov ax, [sh_dt_d]
+    cmp di, 59
+    je .close
+    mov ax, [sh_dt_m]
+    cmp di, 60
+    je .close
+    mov ax, [sh_dt_y]                 ; 61 YEAR
+    jmp .close
+.fweekday:
+    mov ax, bx                        ; 1 = Sunday, which is Excel's numbering
+    add ax, 6                         ; and its own serial 1 (a Sunday there)
+    xor dx, dx
+    mov bx, 7
+    div bx
+    mov ax, dx
+    inc ax
+    jmp .close
+
+; ---- HOUR / MINUTE / SECOND, off the same split ----------------------------
+.timepart:
+    call sh_dt_hms                    ; sh_dt_min = minutes, AX = seconds
+    cmp di, 66
+    je .close                         ; 66 SECOND is already in AX
+    mov ax, [sh_dt_min]
+    xor dx, dx
+    mov bx, 60
+    div bx                            ; AX = hours, DX = minutes within it
+    cmp di, 64
+    je .close                         ; 64 HOUR
+    mov ax, dx                        ; 65 MINUTE
+    jmp .close
+
+; ---- DATE(year, month, day) ------------------------------------------------
+.fdate:
+    call sh_parg
+    mov [sh_dt_y], ax
+    cmp ax, 1900                      ; a two-digit year is 19xx, as it is in
+    jae .dy4                          ; Excel 2.1 - the app predates the
+    cmp ax, 0                         ; question of what 00 means
+    jl .zeroout
+    add word [sh_dt_y], 1900
+.dy4:
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov [sh_dt_m], ax
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov [sh_dt_d], ax
+    call sh_ymd_to_ser
+    jc .numerr
+    call sh_acc_fromudw
+    jmp .closed
+
+; ---- TIME(hour, minute, second) --------------------------------------------
+.ftime:
+    call sh_parg
+    mov bx, ax                        ; hours
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov cx, ax                        ; minutes
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov dx, ax                        ; seconds
+    call sh_hms_to_acc
+    jmp .closed
+
+; ---- DATEVALUE / TIMEVALUE -------------------------------------------------
+.fdatevalue:
+    call sh_pstrarg
+    call sh_dt_parse3                 ; BX/CX/DX = the three fields
+    jc .numerr
+    mov [sh_dt_y], dx
+    mov ax, dx
+    cmp ax, 1900
+    jae .dv4
+    add word [sh_dt_y], 1900
+.dv4:
+    mov [sh_dt_m], bx
+    mov [sh_dt_d], cx
+    call sh_ymd_to_ser
+    jc .numerr
+    call sh_acc_fromudw
+    jmp .closed
+.ftimevalue:
+    call sh_pstrarg
+    call sh_dt_parse3
+    jc .numerr
+    call sh_hms_to_acc                ; BX/CX/DX are already h/m/s
+    jmp .closed
+
+.numerr:
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; Excel's own answer for a date it
+.zeroout:                                ; cannot make sense of
+    xor ax, ax
+.close:
+    call sh_acc_int
+.closed:
+    mov byte [sh_curtype], SH_T_NUM
+    call sh_acc_toint
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_hms_to_acc - BX/CX/DX = hours/minutes/seconds -> sh_acc as a fraction of
+; a day. The three are summed as SECONDS first, in 32 bits, because
+; 24 hours is 86,400 and a word stops at 65,535 - and Excel allows more than
+; 24 hours in, rolling it into the day count.
+; -----------------------------------------------------------------------------
+sh_hms_to_acc:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, bx                        ; hours -> seconds, in DX:AX
+    mov bx, 3600
+    mul bx                            ; unsigned: 24*3600 already needs 17 bits
+    push dx
+    push ax
+    mov ax, cx
+    mov bx, 60
+    mul bx
+    pop bx
+    pop cx                            ; CX:BX = the hours' seconds
+    add ax, bx
+    adc dx, cx
+    pop cx                            ; the ORIGINAL DX (seconds argument)
+    push cx
+    add ax, cx
+    adc dx, 0
+    mov [fp_t0], ax                   ; the whole thing as an unsigned 32-bit
+    mov [fp_t1], dx
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call sh_acc_store
+    call sh_dt_86400_b
+    call sh_acc_load_a
+    call fp_div                       ; a fraction of one day
+    call sh_acc_store
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dt_86400_b - B = 86400.0, the seconds in a day. Clobbers A.
+sh_dt_86400_b:
+    push ax
+    mov word [fp_t0], 86400 & 0xFFFF
+    mov word [fp_t1], 86400 >> 16
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call fp_a_to_b
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dt_hms - sh_acc holds a serial; out: sh_dt_min = whole minutes since
+; midnight (0..1439) and AX = the seconds within that minute (0..59).
+;
+; NOT SECONDS-OF-DAY: 86,399 does not fit an unsigned word, so there is no
+; single number to hand back. The rounding still happens in the seconds
+; domain, in floating point where it fits - a time built as h/m/s is not exact
+; in binary, and truncating a 10:30:00 that came back as 10:29:59.9999 would
+; show 10:29:59. Minutes and seconds are then split off the rounded value, so
+; the two can never disagree about which second it is.
+; -----------------------------------------------------------------------------
+sh_dt_hms:
+    call sh_acc_load_a
+    call fp_floor
+    call sh_dt_tmp_store              ; the whole days
+    call sh_acc_load_a
+    call sh_dt_tmp_load_b
+    call fp_sub                       ; A = the fraction
+    call sh_acc_store
+    call sh_dt_86400_b                ; clobbers A, so it goes first
+    call sh_acc_load_a
+    call fp_mul                       ; A = seconds, as a real
+    xor cx, cx
+    call fp_round                     ; ...to the nearest whole one
+    call sh_acc_store                 ; sh_acc = s, a whole 0..86400
+    mov ax, 60
+    call fp_i2b
+    call sh_acc_load_a
+    call fp_div
+    call fp_floor                     ; A = whole minutes, at most 1439
+    call sh_dt_tmp_store
+    call fp_a2i
+    mov [sh_dt_min], ax
+    mov ax, 60
+    call fp_i2b
+    call sh_dt_tmp_load_a             ; A = the minutes again
+    call fp_mul                       ; A = 60 * minutes
+    call sh_dt_tmp_store
+    call sh_acc_load_a                ; A = s
+    call sh_dt_tmp_load_b
+    call fp_sub                       ; A = the leftover seconds
+    call fp_a2i
+    ret
+
+; sh_dt_tmp_store / sh_dt_tmp_load_b - park fp A in bss and bring it back as
+; B. sh_vpush cannot be used here: it banks on the CALLER's stack and pairs
+; with exactly one sh_binop_pre (81.25.3).
+sh_dt_tmp_store:
+    push di
+    mov di, sh_dt_tmp                 ; fp_pack_a writes at DI; fp_unpack_b
+    call fp_pack_a                    ; reads at SI, and leaves A alone
+    pop di
+    ret
+sh_dt_tmp_load_b:
+    push si
+    mov si, sh_dt_tmp
+    call fp_unpack_b
+    pop si
+    ret
+sh_dt_tmp_load_a:
+    push si
+    mov si, sh_dt_tmp
+    call fp_unpack_a
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dt_parse3 - three unsigned numbers out of sh_sacc, separated by anything
+; that is not a digit. out: BX, CX, DX in the order they appear; CF=1 if
+; fewer than two were found.
+;
+; "8/28/2026" and "10:30:00" go through the same routine because the shape is
+; the same and the separator carries no meaning this needs - which is also why
+; DATEVALUE here takes only the numeric forms, and not "28-Aug-2026": a month
+; NAME is a different parse, and a half-supported one that quietly returned
+; #VALUE! for the spelled form would be worse than a documented limit.
+; -----------------------------------------------------------------------------
+sh_dt_parse3:
+    push si
+    push di
+    mov si, sh_sacc
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    xor di, di                        ; DI = how many fields have been read
+.field:
+    mov al, [si]
+    or al, al
+    je .done
+    cmp al, '0'
+    jb .skip
+    cmp al, '9'
+    ja .skip
+    mov word [sh_dt_acc], 0           ; THE ACCUMULATOR IS IN BSS, not AX: the
+.digits:                              ; digit under test needs a register half
+    mov al, [si]                      ; of its own, and AH is where the running
+    cmp al, '0'                       ; total's high byte lives
+    jb .store
+    cmp al, '9'
+    ja .store
+    sub al, '0'
+    xor ah, ah
+    push ax
+    push dx
+    mov ax, [sh_dt_acc]
+    mov dx, 10
+    mul dx                            ; unsigned: a year is four digits
+    mov [sh_dt_acc], ax
+    pop dx
+    pop ax
+    add [sh_dt_acc], ax
+    inc si
+    jmp .digits
+.store:
+    mov ax, [sh_dt_acc]
+    or di, di
+    jnz .st1
+    mov bx, ax
+    jmp .stnext
+.st1:
+    cmp di, 1
+    jne .st2
+    mov cx, ax
+    jmp .stnext
+.st2:
+    cmp di, 2
+    jne .stnext
+    mov dx, ax
+.stnext:
+    inc di
+    cmp di, 3
+    jae .done
+    jmp .field
+.skip:
+    inc si
+    jmp .field
+.done:
+    cmp di, 2
+    jb .bad
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop di
+    pop si
+    ret
+
 ; sh_pif - IF(cond,then,else): the one function that does not fold - its
 ; branches are not even both evaluated the way a real spreadsheet expects
 ; only ONE side effect-free path to matter, but here both sides just get
@@ -21576,6 +22236,20 @@ sh_f_replace:  db 'REPLACE', 0
 sh_f_text:     db 'TEXT', 0
 sh_f_dollar:   db 'DOLLAR', 0
 sh_f_fixed:    db 'FIXED', 0
+; stage 4.5: the DATE and TIME functions. NOW() is absent and sh_pdate's
+; header says why - no kernel call publishes the calendar date.
+sh_f_date:     db 'DATE', 0
+sh_f_day:      db 'DAY', 0
+sh_f_month:    db 'MONTH', 0
+sh_f_year:     db 'YEAR', 0
+sh_f_weekday:  db 'WEEKDAY', 0
+sh_f_time:     db 'TIME', 0
+sh_f_hour:     db 'HOUR', 0
+sh_f_minute:   db 'MINUTE', 0
+sh_f_second:   db 'SECOND', 0
+sh_f_datevalue: db 'DATEVALUE', 0
+sh_f_timevalue: db 'TIMEVALUE', 0
+sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
 
@@ -21594,6 +22268,9 @@ sh_functab:
     dw sh_f_code, sh_f_exact, sh_f_t, sh_f_value
     dw sh_f_find, sh_f_search, sh_f_subst, sh_f_replace, sh_f_text
     dw sh_f_dollar, sh_f_fixed
+    dw sh_f_date, sh_f_day, sh_f_month, sh_f_year, sh_f_weekday
+    dw sh_f_time, sh_f_hour, sh_f_minute, sh_f_second, sh_f_datevalue
+    dw sh_f_timevalue
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -21689,7 +22366,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3759
+    OS88_BSS 3783
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -21850,7 +22527,16 @@ sh_fmt_ph     equ sh_fmt_cx + 2             ; whether any placeholder appeared.
                                              ; In bss because nothing may sit
                                              ; on the stack between sh_vpush
                                              ; and sh_binop_pre
-sh_dol_neg    equ sh_fmt_ph + 2             ; DOLLAR formats the MAGNITUDE and
+sh_dt_y       equ sh_fmt_ph + 2             ; stage 4.5: a broken-down date,
+sh_dt_m       equ sh_dt_y + 2               ; shared by both directions of the
+sh_dt_d       equ sh_dt_m + 2               ; serial conversion
+sh_dt_ly      equ sh_dt_d + 2               ; sh_isleap's year
+sh_dt_ys      equ sh_dt_ly + 2              ; sh_ymd_to_ser's two counters
+sh_dt_ms      equ sh_dt_ys + 2
+sh_dt_acc     equ sh_dt_ms + 2              ; sh_dt_parse3's running total
+sh_dt_min     equ sh_dt_acc + 2             ; sh_dt_hms's minutes since midnight
+sh_dt_tmp     equ sh_dt_min + 2             ; 8: one parked double
+sh_dol_neg    equ sh_dt_tmp + 8             ; DOLLAR formats the MAGNITUDE and
                                              ; parenthesises it afterwards, so
                                              ; the sign is banked here
 sh_jlen       equ sh_dol_neg + 2             ; sh_cjust's stashed text length
