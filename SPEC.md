@@ -68327,12 +68327,27 @@ they are the whole reason results round correctly rather than merely plausibly.
 Packing rounds **to nearest, ties to even**: half-up biases every long column
 of sums upward, which in a spreadsheet is the visible kind of wrong.
 
+Bits that fall below the 64-bit working form *during* an operation — an
+alignment shift in addition, the low 64 bits of the 128-bit product, a
+division's non-zero remainder — are **jammed into the working form's low bit**
+rather than merely counted and forgotten: the low bit is inside packing's own
+sticky region, so an apparent tie that the operation made inexact still rounds
+away from it. Without the jam, exactly those ties round to even and land one
+ulp off from a real IEEE-754 double.
+
 ### 84.2 Stated simplifications
 
 Subnormals flush to zero; overflow clamps to the largest finite double; **no
 infinity and no NaN is ever produced**; division by zero returns `CF=1` with a
 zero result. Turning that into `#DIV/0!` is the *cell's* business — an error
 type is a value-model decision and belongs one layer up.
+
+A decimal exponent past what any double can hold **saturates to the same
+posture rather than folding**: `fp_scale10` treats `|k| > 511` (past its
+power-of-ten table) as the overflow clamp when growing and the underflow flush
+when shrinking, and `fp_pexp` caps the textual exponent it accumulates at 9999
+so it cannot wrap 16 bits first. Unvalidated cell text like `1e600` therefore
+reads back as the clamp, never as a plausible-looking `1e88`.
 
 ### 84.3 It declares no storage
 
@@ -68347,10 +68362,15 @@ thing to debug from inside a spreadsheet: a wrong bit in the guard region
 surfaces as one cell being slightly off, on some inputs. So the expectations
 are **generated on the host in real double precision** and embedded as exact
 bytes — the reference is not the same arithmetic restated in assembly — and a
-case passes only if all eight bytes match. 61 cases: carrying, cancellation,
-mixed signs, ties that must round to even, an operand lost below the guard,
-1e±300 extremes, non-terminating quotients, `0.1+0.2`, the text round trip, and
-`sqrt`/`floor`/`trunc`/`round`.
+case passes only if all eight bytes match. 70 cases: carrying, cancellation,
+mixed signs, ties that must round to even, ties broken only by bits lost below
+the working form, an operand lost below the guard, 1e±300 extremes,
+non-terminating quotients, `0.1+0.2`, the text round trip, negative and
+oversized text exponents, and `sqrt`/`floor`/`trunc`/`round`. The stated
+simplifications are covered too — the overflow clamp, the subnormal flush, and
+division by zero with its **CF asserted, not just its bytes** — and those
+expected values are the posture of §84.2, marked as such, where a real double
+produces an infinity or a subnormal instead.
 
 It is built by the Makefile but put on **no disk** — a developer tool, and the
 360KB apps disk has nothing to spare — so a change that breaks it breaks the
@@ -68443,6 +68463,18 @@ and `fp_atof` get the coprocessor without knowing it exists.
 lazily and it does not default to on: a package that never calls it runs the
 software path, which is the safe direction to fail in.
 
+**The register stack is one machine-wide resource and the kernel saves none of
+it across a pre-emption** — there is no `fnsave`/`frstor` in a task switch, on
+purpose: a 94-byte state save every tick would tax every task for the few
+that compute. So every `fpx_*` routine holds the part only inside the repo's
+critical-section idiom, `pushf`/`cli` … `popf`, from its first `fld` to the
+`fwait` after its store — and `fp_init` guards its `fninit` the same way.
+Without that, a tick landing mid-operation can run another fp-using instance
+whose `fp_init` empties the stack, and the interrupted `fstp` then pops an
+empty stack: with exceptions masked that stores an indeterminate value
+silently, into one cell, unreproducibly. The guarded stretch is at worst one
+divide plus two loads and a store, well under a tick at 4.77 MHz.
+
 #### 84.7.1 The 80-bit form, and why not `fld qword`
 
 The obvious shape — pack A and B back into doubles and `fld qword` them — is
@@ -68513,7 +68545,7 @@ one** (§84.2). The test is cheaper than the special case it avoids.
 
 #### 84.7.5 How both paths are proven
 
-`apps/fptest` runs its **61 cases twice** — once with `fp_hw` forced to zero,
+`apps/fptest` runs its **70 cases twice** — once with `fp_hw` forced to zero,
 once on the coprocessor — against the same host-computed IEEE-754 bytes, and
 reports the two counts separately (`soft 0  8087 0`). Two implementations of
 the same algorithm can agree with each other while both being wrong; agreeing

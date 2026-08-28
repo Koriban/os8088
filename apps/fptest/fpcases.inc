@@ -1,6 +1,9 @@
 ; GENERATED on the host: every expected value is what a real IEEE-754
 ; double produced, not my own arithmetic restated. See fptest's header.
-FPT_N equ 28
+; The two exceptions are deliberate and marked: the overflow clamp and the
+; subnormal flush are os88fp.inc's STATED simplifications (its header), where
+; a real double produces an infinity or a subnormal instead.
+FPT_N equ 33
 fpt_cases:
     dw 0x0000, 0x0000, 0x0000, 0x3FF0
     dw 0x0000, 0x0000, 0x0000, 0x3FF0
@@ -142,6 +145,31 @@ fpt_cases:
     dw 3
     dw 0x0000, 0x0000, 0x0000, 0x0000      ; 0/5 = 0.0
     dw fpt_n27
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 0x0000, 0x0000, 0x0300, 0x3CA0
+    dw 0
+    dw 0x0001, 0x0000, 0x0000, 0x3FF0      ; 1+(2^-53+2^-64+2^-65): the tie is
+    dw fpt_n28                             ; broken by bits below the working form
+    dw 0xD8F0, 0x0002, 0x0000, 0x3FF0
+    dw 0x7ABD, 0x4CF3, 0xF7A0, 0x3FF8
+    dw 2
+    dw 0xEC37, 0x4CF7, 0xF7A0, 0x3FF8      ; a product whose low 64 bits alone
+    dw fpt_n29                             ; break an apparent tie in the top 64
+    dw 0x759C, 0x8800, 0xE43C, 0x7E37
+    dw 0x759C, 0x8800, 0xE43C, 0x7E37
+    dw 2
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0x7FEF      ; 1e300*1e300 = the CLAMP (stated
+    dw fpt_n30                             ; posture; a real double is inf)
+    dw 0x0000, 0x0000, 0x0000, 0x4014
+    dw 0x0000, 0x0000, 0x0000, 0x0000
+    dw 3
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; 5/0 = CF=1 and A=0
+    dw fpt_n31
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0x000F
+    dw 0x759C, 0x8800, 0xE43C, 0x7E37
+    dw 2
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; subnormal*1e300 = 0: the FLUSH
+    dw fpt_n32                             ; (stated posture; a real double is 2.2e-8)
 fpt_n0: db '1+1', 0
 fpt_n1: db '0.1+0.2', 0
 fpt_n2: db '2.5+(-4)', 0
@@ -170,3 +198,8 @@ fpt_n24: db '7/7', 0
 fpt_n25: db '-1*-1', 0
 fpt_n26: db '0*5', 0
 fpt_n27: db '0/5', 0
+fpt_n28: db 'tie-sticky', 0
+fpt_n29: db 'mul-sticky', 0
+fpt_n30: db '1e300*1e300', 0
+fpt_n31: db '5/0', 0
+fpt_n32: db 'subn*1e300', 0

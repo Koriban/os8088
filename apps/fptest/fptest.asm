@@ -17,7 +17,9 @@
 ;
 ; Regenerate it with the recipe in the repository history for this file; the
 ; cases cover carrying, cancellation, mixed signs, wildly different exponents,
-; the classic 0.1+0.2, and quotients that do not terminate (1/3, 2/3).
+; the classic 0.1+0.2, quotients that do not terminate (1/3, 2/3), ties broken
+; only by bits lost below the working form, the overflow clamp, division by
+; zero (CF asserted too, not just the bytes), and the subnormal flush.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -26,7 +28,7 @@
 
 FPT_W      equ 300
 FPT_H      equ 440
-FPT_ROWH   equ 10
+FPT_ROWH   equ 9                    ; 45 row slots have to fit the content area
 FPT_REC    equ 26                   ; 8 a + 8 b + 2 op + 8 expected... the name
                                     ; pointer makes 28; see fpt_cases' layout
 
@@ -137,7 +139,7 @@ fpt_paint:
     call OSAPI_CPU_INFO               ; answer as 0 and must not read like it
     test ah, CPU_F_X87
     jz .nohw
-    call fp_init                      ; --- pass 2: the SAME 61 cases against
+    call fp_init                      ; --- pass 2: the SAME 70 cases against
     mov byte [fpt_draw], 0            ; the SAME host-computed bytes, on the
     call fpt_runall                   ; coprocessor. Rows are not redrawn: the
     mov byte [fpt_draw], 1            ; two paths agreeing is the point, so
@@ -282,6 +284,7 @@ fpt_runall:
     mov ax, [si]                      ; the operator
     add si, 2
     push si                           ; si -> the expected result
+    mov byte [fpt_cferr], 0
     or ax, ax
     jnz .notadd
     call fp_add
@@ -297,7 +300,18 @@ fpt_runall:
     call fp_mul
     jmp .done
 .notmul:
-    call fp_div
+    call fp_div                       ; CF is part of div's contract: set for
+    jc .refused                       ; a zero divisor, clear otherwise - so
+    mov bx, fp_bm0                    ; it is asserted, not just the bytes
+    call fp_iszero
+    jnc .done
+    jmp .badcf
+.refused:
+    mov bx, fp_bm0
+    call fp_iszero
+    jc .done
+.badcf:
+    mov byte [fpt_cferr], 1
 .done:
     mov di, fpt_got
     call fp_pack_a
@@ -317,6 +331,10 @@ fpt_runall:
     add di, 2
     dec cx
     jnz .cmpw
+    cmp byte [fpt_cferr], 0           ; a wrong CF fails the case even when
+    je .cfok                          ; all eight bytes match
+    xor bp, bp
+.cfok:
 
     pop si                            ; si -> the start of this record again
     push si
@@ -559,7 +577,7 @@ fpt_runall:
     pop ax
     ret
 
-FPT_AN equ 6
+FPT_AN equ 10
 fpt_atof:
     db '1', 0
     times (10 - 2) db 0
@@ -579,6 +597,18 @@ fpt_atof:
     db '0.001', 0
     times (10 - 6) db 0
     dw 0xA9FC, 0xD2F1, 0x624D, 0x3F50
+    db '1e-3', 0                           ; a NEGATIVE text exponent
+    times (10 - 5) db 0
+    dw 0xA9FC, 0xD2F1, 0x624D, 0x3F50
+    db '-2.5e-2', 0                        ; sign AND exponent together
+    times (10 - 8) db 0
+    dw 0x999A, 0x9999, 0x9999, 0xBF99
+    db '1e600', 0                          ; past any double: the CLAMP,
+    times (10 - 6) db 0                    ; never a folded 1e88
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0x7FEF
+    db '1e-600', 0                         ; ...and the FLUSH the other way
+    times (10 - 7) db 0
+    dw 0x0000, 0x0000, 0x0000, 0x0000
 
 FPT_MN equ 15
 fpt_math:
@@ -684,7 +714,7 @@ fpt_str:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 218
+    OS88_BSS 219
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -702,8 +732,9 @@ fpt_badsoft equ fpt_draw + 1          ; each pass's verdict, kept apart so the
 fpt_badhw   equ fpt_badsoft + 2       ; summary can name which path failed
 fpt_line    equ fpt_badhw + 2         ; 24: the summary being built
 fpt_num     equ fpt_line + 24         ; 8: one number on its way into it
+fpt_cferr   equ fpt_num + 8           ; non-zero: a div returned the wrong CF
 
-fp_as       equ fpt_num + 8           ; --- os88fp.inc's scratch ---
+fp_as       equ fpt_cferr + 1         ; --- os88fp.inc's scratch ---
 fp_bs       equ fp_as + 1
 fp_ae       equ fp_bs + 1
 fp_be       equ fp_ae + 2

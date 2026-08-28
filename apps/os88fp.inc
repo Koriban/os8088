@@ -655,6 +655,10 @@ fps_add:
     mov word [fp_sticky], 0
     mov bx, fp_t0
     call fp_shrn
+    cmp word [fp_sticky], 0           ; bits fell below the working form: JAM
+    je .nojam                         ; them into the aligned operand's low
+    or word [fp_t0], 1                ; bit, so the sum (or the borrow) still
+.nojam:                               ; carries them and rounding can see them
     mov al, [fp_as]
     cmp al, [fp_bs]
     jne .unlike
@@ -662,7 +666,10 @@ fps_add:
     call fp_addt
     jnc .out
     call fp_shr1                      ; it carried out of the top - the carry
-    or word [fp_am3], 0x8000          ; is the new leading 1
+    jnc .nodrop                       ; is the new leading 1, and the bit the
+    or word [fp_am0], 1               ; shift pushed out stays jammed in the
+.nodrop:                              ; low bit for the same reason
+    or word [fp_am3], 0x8000
     inc word [fp_ae]
     jmp .out
 .unlike:
@@ -806,6 +813,10 @@ fps_mul:
     mov bx, fp_am0
     mov di, fp_ae
     call fp_norm
+    cmp word [fp_sticky], 0           ; the low 64 bits recorded above: JAM
+    je .out                           ; them into the result's low bit, inside
+    or word [fp_am0], 1               ; fp_pack_a's sticky region, so an
+                                      ; apparent tie there stays inexact
     jmp .out
 .zero:
     call fp_azero
@@ -882,11 +893,14 @@ fps_div:
     mov [fp_t2], ax
     mov ax, [fp_am3]
     mov [fp_t3], ax
+    mov word [fp_sticky], 0
     call fp_cmpt_b
     jb .small
     mov bx, fp_t0                     ; A >= B: bring it under, and pay for it
     call fp_shr1                      ; with one exponent instead of a 65th bit
-    inc dx
+    inc dx                            ; (INC leaves CF alone)
+    jnc .small                        ; ...and a dividend bit pushed out here
+    mov word [fp_sticky], 1           ; makes the quotient inexact too
 .small:
     mov word [fp_p0], 0
     mov word [fp_p0 + 2], 0
@@ -918,15 +932,15 @@ fps_div:
     mov [fp_ae], dx
     mov ax, [fp_tmp]
     mov [fp_as], al
-    mov word [fp_sticky], 0
     mov bx, fp_t0                     ; a non-zero remainder means the quotient
-    call fp_iszero                    ; was cut short, which rounding must know
-    jc .nostick
-    mov word [fp_sticky], 1
-.nostick:
+    call fp_setsticky                 ; was cut short, which rounding must know
     mov bx, fp_am0
     mov di, fp_ae
     call fp_norm
+    cmp word [fp_sticky], 0           ; ...so JAM it into the low bit, where
+    je .exact                         ; fp_pack_a's sticky region can see it
+    or word [fp_am0], 1
+.exact:
     pop di
     pop dx
     pop cx
@@ -1070,6 +1084,17 @@ fp_scale10:
     neg cx
     mov di, 1
 .pos:
+    cmp cx, 512                       ; the table stops at 1e256, so |k| > 511
+    jb .inrange                       ; cannot walk it - and no double survives
+    or di, di                         ; 10^512 either way, so SATURATE to the
+    jnz .flush                        ; stated posture instead of silently
+                                      ; dropping exponent bits (1e600 as 1e88)
+    mov word [fp_ae], 0x1000          ; growing: overflow - an exponent this
+    jmp .out                          ; size is what fp_pack_a clamps
+.flush:
+    call fp_azero                     ; shrinking: underflow flushes to zero
+    jmp .out
+.inrange:
     mov si, fp_pow10tab
     mov bx, 1                         ; bx = the bit under test
 .bit:
@@ -1181,9 +1206,11 @@ fp_t_mul10add:
 ; of the nearest double to a chain of nine rounded multiplications.
 ; -----------------------------------------------------------------------------
 fp_atof:
+    push ax                           ; the value returns through A, never AX
     push bx
     push cx
     push dx
+    mov [fp_tmp], si                  ; where the text began, for the CF=1 path
     mov word [fp_t0], 0
     mov word [fp_t1], 0
     mov word [fp_t2], 0
@@ -1276,13 +1303,16 @@ fp_atof:
     pop dx
     pop cx
     pop bx
+    pop ax
     clc
     ret
 .none:
     call fp_azero
-    pop dx
+    mov si, [fp_tmp]                  ; nothing was a number, so nothing was
+    pop dx                            ; consumed - not even a leading sign
     pop cx
     pop bx
+    pop ax
     stc
     ret
 
@@ -1315,12 +1345,15 @@ fp_pexp:
     cmp cl, '9'
     ja .done
     sub cl, '0'
-    push dx
-    mov dx, 10
+    cmp ax, 1000                      ; CAPPED at 9999: one more x10 past here
+    jae .full                         ; could wrap AX, and 10^9999 is already
+    push dx                           ; past any double - fp_scale10 saturates
+    mov dx, 10                        ; it, so only SI still needs to move
     mul dx
     pop dx
     xor ch, ch
     add ax, cx
+.full:
     inc si
     mov bh, 1
     jmp .dig
@@ -2017,7 +2050,11 @@ fp_init:
     test ah, CPU_F_X87
     jz .done
     mov byte [fp_hw], 1
-    fninit                            ; round to nearest, EXTENDED precision,
+    pushf                             ; the stack this empties is SHARED: it
+    cli                               ; must not fire mid-way through another
+    fninit                            ; instance's fpx_* op (see fpx_add)
+    popf
+                                      ; round to nearest, EXTENDED precision,
                                       ; every exception masked - the defaults,
                                       ; and the three this file depends on
 .done:
@@ -2172,10 +2209,22 @@ fpx_stage:
     ret
 
 ; A = A + B
+;
+; EVERY fpx_* HOLDS THE PART ONLY INSIDE A CRITICAL SECTION. The kernel saves
+; no coprocessor state across a pre-emption, and the register stack is one
+; machine-wide resource: a tick landing between the fld and the fstp can run
+; another fp-using instance, whose fp_init runs fninit - and this routine then
+; resumes by popping an EMPTY stack, which with exceptions masked stores an
+; indeterminate value silently. So pushf/cli from the first fld to the fwait
+; after the store (the repo's idiom, never cli/sti), by which point the result
+; is back in this instance's own memory. The longest guarded stretch is one
+; divide plus two loads and a store - well under a tick even at 4.77 MHz.
 fpx_add:
     push ax
     push bx
     call fpx_stage
+    pushf
+    cli
     fld tword [fp_x1]                 ; ST(0) = A
     fld tword [fp_x2]                 ; ST(0) = B, ST(1) = A
     faddp st1, st0                    ; ST(1) += ST(0), pop: ST(0) = A + B
@@ -2185,6 +2234,7 @@ fpx_add:
                                       ; assembler puts in FRONT of an
                                       ; instruction guards the previous
                                       ; operation, not this one's memory write
+    popf
     mov bx, fp_x1
     call fp_x_to_a
     pop bx
@@ -2205,11 +2255,14 @@ fpx_sub:
     push ax
     push bx
     call fpx_stage
+    pushf                             ; fpx_add says why
+    cli
     fld tword [fp_x1]                 ; ST(0) = A
     fld tword [fp_x2]                 ; ST(0) = B, ST(1) = A
     fsubp st1, st0                    ; ST(1) = A - B, pop
     fstp tword [fp_x1]
     fwait
+    popf
     mov bx, fp_x1
     call fp_x_to_a
     pop bx
@@ -2221,11 +2274,14 @@ fpx_mul:
     push ax
     push bx
     call fpx_stage
+    pushf                             ; fpx_add says why
+    cli
     fld tword [fp_x1]
     fld tword [fp_x2]
     fmulp st1, st0
     fstp tword [fp_x1]
     fwait
+    popf
     mov bx, fp_x1
     call fp_x_to_a
     pop bx
@@ -2242,11 +2298,14 @@ fpx_div:
     call fp_iszero
     jc .divzero
     call fpx_stage
+    pushf                             ; fpx_add says why
+    cli
     fld tword [fp_x1]                 ; ST(0) = A
     fld tword [fp_x2]                 ; ST(0) = B, ST(1) = A
     fdivp st1, st0                    ; ST(1) = A / B, pop - DE F8+i, the same
     fstp tword [fp_x1]                ; asymmetry fpx_sub explains
     fwait
+    popf                              ; before the CLC: popf rewrites CF
     mov bx, fp_x1
     call fp_x_to_a
     clc
@@ -2271,11 +2330,14 @@ fpx_div:
 fpx_cmpab:
     push bx
     call fpx_stage
+    pushf                             ; fpx_add says why
+    cli
     fld tword [fp_x2]                 ; ST(0) = B
     fld tword [fp_x1]                 ; ST(0) = A, ST(1) = B
     fcompp                            ; compare A with B, pop both
     fstsw word [fp_sw]
     fwait
+    popf                              ; before the SAHF, which rewrites flags
     mov ah, [fp_sw+1]                 ; C3 -> bit 6, C2 -> bit 2, C0 -> bit 0
     sahf                              ; ZF = C3 = equal, CF = C0 = A < B
     jne .ne
