@@ -75267,7 +75267,7 @@ NN;NSALES;ER1C1:R4C1
 C;X1;Y1;K10
 ```
 
-This is what lets Chart chart a named range. DIF has no equivalent
+This is what lets Chart chart a named range (§82.15). DIF has no equivalent
 record and BIFF's `NAME` (0x0018) carries its reference as an RPN token
 stream, which is a bigger piece of work than the SYLK line and is not done.
 
@@ -75822,6 +75822,44 @@ silent-wrong:
   one; this app opens a file, and a file does not carry what was selected
   (§82.12). A row range would need a second pair of fields and a reader that
   bounds its walk by them.
+
+### 82.15 Charting a range Sheet named
+
+Chart is the **helper that keeps image generation out of Sheet**, so what it
+charts should be what the user pointed at — not "whatever the lowest column
+turned out to be", which is all a file used to say. Sheet now names ranges
+(§81.29) and writes them as SYLK `NN` records (§81.29.1), so there is
+something to point at.
+
+`ct_parse_nn` reads them into a small table and `Data` offers them by name.
+`ct_record` then admits only cells inside the chosen rectangle, and the
+existing two-lowest-column logic picks within it — which for the usual
+one-column name is that column and nothing else, so **no new selection
+machinery was needed**, only a filter in front of the old one.
+
+**It is a relabelling, not a second menu.** The `Data` menu's eight slots are
+buffers, filled at startup with `Column A`..`Column H` and overwritten with
+the names when a file supplies any — the same relabel-in-place idiom Sheet's
+Options menu uses. The kernel re-reads an item's text each time the menu
+drops, so nothing has to be rebuilt; a genuinely dynamic menu would have to
+be, and the kernel's menu set is a static structure (§13.5). Any slot past
+the last name keeps its column label, so a half-filled menu still says what
+the rest are.
+
+Names belong to **the file that is open**: a read clears the table first, and
+opening another file relabels from that one. `Automatic` clears both the
+column and the range choice.
+
+Only SYLK carries names. DIF has no equivalent record, and BIFF's `NAME`
+(0x0018) holds its reference as an RPN token stream — a bigger piece of work
+than the SYLK line, and not done, so a `.BIF` still charts by column.
+
+**`mul` writes DX:AX, and DX was the far corner's row.** Computing the
+record's address with the corner still live stored the multiply's high word —
+zero — as the row, so every named range came out one row tall and charted its
+first cell alone: one giant bar. Both halves are banked across the multiply
+now. The trap is the oldest one in this file and it still caught a fresh
+routine.
 
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
