@@ -1091,8 +1091,12 @@ ct_read_biff:
     cmp ax, 0x027E                      ; RK cell record
     je .isrk
     cmp ax, 0x0203                      ; NUMBER: eight bytes of IEEE-754,
-    je .isnum                           ; verbatim, and the ONLY way a value
-    jmp .skip                           ; that is not an exact small integer
+    je .isnum                           ; verbatim, and the way a value that is
+    cmp ax, 0x0206                      ; not an exact small integer travels
+    je .isfml                           ; FORMULA (BIFF3) and its BIFF4 twin -
+    cmp ax, 0x0406                      ; the CACHED RESULT, which is at the
+    je .isfml                           ; same offset as NUMBER's value and is
+    jmp .skip                           ; read the same way (82.14)
 .isrk:                                  ; reaches a BIFF file at all
     cmp dx, 10                          ; too short to hold row/col/xf/rk:
     jb .skip                            ; stale buffer bytes are not a value
@@ -1112,6 +1116,23 @@ ct_read_biff:
     call ct_record
     pop dx                              ; length, restored
     jmp .skip
+.isfml:
+    ; A FORMULA's cached result sits where NUMBER's value does, so the only
+    ; new thing is telling a NUMBER apart from a STRING, a BOOLEAN or an
+    ; ERROR: BIFF marks those by setting the cached double's TOP WORD to
+    ; 0xFFFF, which no finite double has. Sheet writes exactly that for a
+    ; #DIV/0! or a text result (81.24.3), and charting the bytes underneath
+    ; one would plot a NaN's mantissa as a data point.
+    cmp dx, 16                          ; row/col/xf + eight + grbit
+    jb .skip
+    mov ax, si
+    add ax, dx
+    jc .skip
+    cmp ax, cx
+    ja .skip
+    cmp word [es:si+12], 0xFFFF         ; the cached result's top word
+    je .skip                            ; not a number: nothing to plot
+    ; fall through: read it exactly as a NUMBER
 .isnum:
     cmp dx, 14                          ; too short to hold row/col/xf plus
     jb .skip                            ; the eight bytes

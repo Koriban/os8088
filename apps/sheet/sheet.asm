@@ -5887,6 +5887,24 @@ sh_chart_scan1:
     mov dx, [es:si+2]                  ; col
     cmp dx, [sh_scan_col]
     jne .next
+    ; A LABEL AND AN ERROR ARE NOT DATA POINTS, and this scan was the last
+    ; reader that did not know it. chart.o88's SYLK reader skips them (82.4),
+    ; its DIF reader skips type 1, and the sort scan skips both (81.19) - but
+    ; the LIVE chart, the one inside Sheet, fed them straight through. A plain
+    ; label leaves SH_C_VAL zero (sh_commit writes the value before the tag),
+    ; so a column with a heading charted a 0 bar at the top of it, and a
+    ; #DIV/0! charted the zero underneath the error.
+    ;
+    ; A formula is judged AFTER it runs, not from the stored tag: the tag may
+    ; predate the fix that unbroke it, which is the same reason sh_getcell2
+    ; raises from the freshly published one (81.20).
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT
+    je .next
+    cmp byte [es:si+SH_C_TYPE], SH_T_ERR
+    jne .typeok
+    test byte [es:si+4], 1             ; a stored error with no formula behind
+    jz .next                           ; it has nothing to re-evaluate
+.typeok:
     test byte [es:si+4], 1             ; HASFORMULA: chart its CURRENT value
     jz .plainval                       ; (sh_getcell2 evaluates transparently
     mov bx, ax                         ; and is never stale) rather than
@@ -5900,6 +5918,10 @@ sh_chart_scan1:
     call sh_getcell2                   ; see the matching note in
     pop si                             ; sh_docmd_sortcol.
     pop cx
+    cmp byte [sh_curtype], SH_T_TEXT   ; ...and what it ANSWERED decides it
+    je .next
+    cmp byte [sh_curtype], SH_T_ERR
+    je .next
     jmp .havevalue
 .plainval:
     call sh_cellval_to_acc_si          ; the WHOLE double, not the truncation

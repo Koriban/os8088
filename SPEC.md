@@ -75716,6 +75716,55 @@ earlier tests did not have — a second column, and rows arriving out of order.
 The fixture that caught the sort is a SYLK file whose rows are written 4, 1, 3,
 2; it charts 40, 30, 15, 5.
 
+### 82.14 Keeping Chart in step with what Sheet writes
+
+Sheet grew four stages of value model while Chart's readers stood still, and
+the two drifted in opposite directions — one reader was too generous and one
+was not generous enough.
+
+**The LIVE feeder was the generous one.** §82.11 taught chart.o88's *file*
+readers that a label is not a data point, and §81.19's sort scan learned the
+same about labels and errors. `sh_chart_scan1` — the feeder behind Sheet's own
+`Data > Chart Column...`, the one that does not go through a file at all —
+never did. A plain label leaves `SH_C_VAL` zero (`sh_commit` writes the value
+before the tag), so a column with a heading charted **a 0 bar at the top of
+it**, and a `#DIV/0!` charted the zero underneath the error. It now skips both,
+and judges a formula by what it **answered** rather than by its stored tag —
+the tag may predate the fix that unbroke it, which is the same reason
+`sh_getcell2` raises from the freshly published one (§81.20).
+
+**The BIFF reader was the stingy one.** It handled `RK` and `NUMBER` and
+skipped everything else, which was right until Sheet started writing real
+`FORMULA` records instead of flattened values. From then on, saving a column
+of formulas and opening it in Chart drew **nothing at all** — while the same
+column charted correctly inside Sheet, from the same data, one menu away.
+
+A `FORMULA`'s cached result sits at the same offset as `NUMBER`'s value, so
+reading it is the NUMBER path with one extra test: BIFF marks a cached
+**string, boolean or error** by setting the double's top word to `0xFFFF`,
+which no finite double has. Sheet writes exactly that for a `#DIV/0!` or a text
+result (§81.24.3), and charting the bytes underneath one would plot a NaN's
+mantissa as a data point.
+
+Verified against a file Sheet wrote and the host decoded: a `LABEL` heading,
+four `FORMULA` records cached at 20/30/40/50, and a fifth whose cached result
+is non-numeric. Chart draws four bars — the same four the live chart draws.
+
+#### 82.14.1 What Chart still does not know
+
+Recorded rather than fixed, because both are honest limits and neither is
+silent-wrong:
+
+- **A multi-sheet workbook is read as its first sheet.** Sheet writes BIFF4
+  with a `SHEETHDR` per sheet when more than one has data (§81.10.5); Chart
+  has no record for `0x008F` and stops at the first `EOF`, which is the end of
+  worksheet one. It plots that sheet and says nothing about the others.
+- **There is no range selection.** `Data > Column` picks a *column* — A..H, or
+  Automatic — and charts all of it. Excel charts a selection because it has
+  one; this app opens a file, and a file does not carry what was selected
+  (§82.12). A row range would need a second pair of fields and a reader that
+  bounds its walk by them.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot
