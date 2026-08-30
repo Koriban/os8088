@@ -75219,6 +75219,64 @@ separator carries no meaning), not `28-Aug-2026`. A month *name* is a
 different parse, and a half-supported one that quietly returned `#VALUE!` for
 the spelled form would be worse than a documented limit.
 
+### 81.29 A name binds a RANGE
+
+Stage 3.0c wrote the scope of a defined name down rather than leaving it to
+be discovered: *"a name binds ONE CELL, not a range… A range needs the
+reference-typed argument the value model still does not have (the same thing
+blocking VLOOKUP and the array functions)."*
+
+That argument landed in §81.23, so the reason expired and the record grew the
+second corner it had been waiting for. `SH_NAME_REC` is name + NUL + **two**
+coordinate pairs; `Formula > Define Name...` binds whatever the selection is,
+which for a single cell is a 1×1 rectangle. **Nothing that worked before
+behaves differently** — `=Total` still reads one cell, because a one-cell name
+is the same thing with both corners equal.
+
+**A name is a range argument wherever a range would go.** `sh_pnamerange` runs
+ahead of `sh_pcellref` in `sh_prange`, so `=SUM(SALES)` folds the block. It is
+strict about being the *whole* argument for the same reason `sh_pargref` is
+(§81.23): a `,` or the `)` must follow, so `=SUM(Sales+1)` stays an expression
+about Sales rather than a fold over it. A name followed by `(` is declined
+outright — that parenthesis is the only thing separating `SUM` from a cell
+called `SUM`, and `sh_pfunc` still needs to see it.
+
+A one-cell name resolves to a 1×1 rectangle and folds to the same single value
+the expression path already gave it, so nothing takes a different route to a
+different answer.
+
+Still **instance-wide, not per sheet**: that needs a sheet field in the record
+plus a rule for what an unqualified name means from another sheet, and it
+would be worse guessed at.
+
+#### 81.29.1 The names go in the file
+
+A name that only this app knows is a fact the file does not carry: a saved
+sheet would hold the data but not what any of it was called, and nothing else
+could find the range.
+
+SYLK has a record for exactly this. `NN;N<name>;E<ref>` goes out straight
+after the `ID` line, one per name, with the reference in **R1C1** because that
+is the notation every `;E` field in the file already uses — one convention,
+not two — and absolute, because a name is a fixed place rather than an offset
+from wherever it is read.
+
+```
+ID;PWXL;N;E
+NN;NSALES;ER1C1:R4C1
+C;X1;Y1;K10
+```
+
+This is what lets Chart chart a named range. DIF has no equivalent
+record and BIFF's `NAME` (0x0018) carries its reference as an RPN token
+stream, which is a bigger piece of work than the SYLK line and is not done.
+
+**A crossed pop, caught by the gate rather than by running it.** `sh_wr_names`
+pushed `ax, bx, cx, si` and popped `si, bx, cx, ax` — the depth is right, so
+nothing faults and nothing asserts; the routine simply returns with BX and CX
+swapped, into a caller entitled to keep a pointer in one of them. `asmrules`
+names that shape directly.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

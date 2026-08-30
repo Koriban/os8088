@@ -8278,7 +8278,9 @@ sh_idlg_apply:
     mov si, sh_idlg_buf                ; the name binds THE SELECTION, which is
     mov ax, [sh_selcol]                ; where it was when the dialog opened -
     mov bx, [sh_selrow]                ; nothing can move it while a modal
-    call sh_name_def                   ; dialog owns the input
+    mov cx, [sh_selcol2]               ; dialog owns the input. BOTH corners
+    mov dx, [sh_selrow2]               ; since 81.29: a dragged block names a
+    call sh_name_def                   ; range, a single cell names itself
     mov word [sh_msg], sh_s_id_named
     jnc .redraw
     mov word [sh_msg], sh_s_id_nofit
@@ -8573,16 +8575,24 @@ sh_find_match:
 ; and a spreadsheet where Total and TOTAL are different cells would be a trap
 ; rather than a feature.
 ;
-; SCOPE, stated rather than discovered: a name binds ONE CELL, not a range,
-; and it belongs to the whole instance rather than to a sheet. A range needs
-; the reference-typed argument the value model still does not have (the same
-; thing blocking VLOOKUP and the array functions), and per-sheet names need a
-; sheet field here plus a rule for what an unqualified name means from another
-; sheet - both are Stage 4.5 work and both would be worse guessed at.
+; A NAME BINDS A RECTANGLE (stage 4.6). It used to bind one cell, and the
+; reason written here was that "a range needs the reference-typed argument the
+; value model still does not have (the same thing blocking VLOOKUP and the
+; array functions)". That argument landed in 81.23, so the reason expired and
+; the record grew the second corner it had been waiting for.
+;
+; A one-cell name is the same thing with both corners equal, so nothing that
+; worked before behaves differently - `=Total` still reads one cell, and the
+; dialog still binds whatever the selection is, which for a single cell is a
+; 1x1 rectangle.
+;
+; STILL INSTANCE-WIDE, not per sheet: that needs a sheet field here plus a
+; rule for what an unqualified name means from another sheet, and it would be
+; worse guessed at.
 ; =============================================================================
 SH_NAME_CAP  equ 16
 SH_NAME_MAX  equ 12                  ; characters, not counting the NUL
-SH_NAME_REC  equ SH_NAME_MAX + 1 + 4 ; text + NUL + col + row
+SH_NAME_REC  equ SH_NAME_MAX + 1 + 8 ; text + NUL + col + row + col2 + row2
 
 ; -----------------------------------------------------------------------------
 ; sh_name_find - in: SI = an uppercase NUL name
@@ -8633,7 +8643,9 @@ sh_name_find:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_name_def - in: SI = a NUL name (uppercased here), AX = col, BX = row.
+; sh_name_def - in: SI = a NUL name (uppercased here), AX/BX = the near
+; corner, CX/DX = the far one. Both corners are stored as given; sh_foldrange
+; normalises when it walks, so the dialog does not have to.
 ; out: CF=1 the table is full. Redefining an existing name REBINDS it, which
 ; is what Excel does and what makes the dialog usable twice.
 ; -----------------------------------------------------------------------------
@@ -8641,10 +8653,13 @@ sh_name_def:
     push ax
     push bx
     push cx
+    push dx
     push si
     push di
     mov [sh_nm_col], ax
     mov [sh_nm_row], bx
+    mov [sh_nm_col2], cx
+    mov [sh_nm_row2], dx
     push si
     call sh_upcase_at
     mov di, sh_nm_buf                 ; clipped to SH_NAME_MAX, so a long name
@@ -8691,6 +8706,10 @@ sh_name_def:
     mov [di], ax
     mov ax, [sh_nm_row]
     mov [di+2], ax
+    mov ax, [sh_nm_col2]
+    mov [di+4], ax
+    mov ax, [sh_nm_row2]
+    mov [di+6], ax
     clc
     jmp .out
 .full:
@@ -8698,6 +8717,7 @@ sh_name_def:
 .out:
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -8705,7 +8725,12 @@ sh_name_def:
 
 ; -----------------------------------------------------------------------------
 ; sh_name_lookup - in: SI = an uppercase NUL name
-; out: CF=1 and AX = col, BX = row; CF=0 = not a defined name
+; out: CF=1 and AX = col, BX = row (the NEAR corner, which is what a caller
+; wanting one cell reads), with the far corner in CX/DX; CF=0 = not a name.
+;
+; The near corner stays in AX/BX because that is the shape sh_pcellref hands
+; on and sh_pident's name path already speaks it - a one-cell name goes on
+; behaving exactly as it did.
 ; -----------------------------------------------------------------------------
 sh_name_lookup:
     push di
@@ -8715,6 +8740,8 @@ sh_name_lookup:
     add di, bx
     add di, SH_NAME_MAX + 1
     mov ax, [di]
+    mov cx, [di+4]
+    mov dx, [di+6]
     mov bx, [di+2]
     stc
     pop di
@@ -9983,6 +10010,98 @@ sh_dowrite:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_wr_names - one NN record per defined name, straight after the ID line.
+;
+; NN;N<name>;E<ref> is SYLK's own defined-name record, and the reference goes
+; out in R1C1 because that is the notation every ;E field in this file already
+; uses - one convention, not two. Absolute R1C1 (no brackets): a name is a
+; fixed place, not an offset from wherever it is read.
+;
+; THIS IS WHAT LETS ANOTHER PROGRAM FIND THE RANGE. Chart charts a named range
+; by reading these (82.15); without them a name is a fact only this app knows,
+; and a saved sheet would carry the data but not what any of it was called.
+; -----------------------------------------------------------------------------
+sh_wr_names:
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, [sh_nnames]
+    jcxz .out
+    xor bx, bx
+.each:
+    mov ax, di
+    add ax, 64                        ; the longest NN line: name, two R1C1
+    cmp ax, SH_STAGE_MAX              ; refs and the punctuation
+    ja .out
+    push cx
+    push bx
+    mov si, sh_names
+    add si, bx
+    add si, SH_NAME_MAX + 1
+    mov ax, [si]
+    mov [sh_nm_col], ax
+    mov ax, [si+2]
+    mov [sh_nm_row], ax
+    mov ax, [si+4]
+    mov [sh_nm_col2], ax
+    mov ax, [si+6]
+    mov [sh_nm_row2], ax
+    mov si, sh_s_nn
+    call sh_stgput
+    mov si, sh_names
+    add si, bx
+    call sh_stgput                    ; the name itself
+    mov si, sh_s_nne
+    call sh_stgput
+    mov ax, [sh_nm_row]
+    mov bx, [sh_nm_col]
+    call sh_wr_r1c1
+    mov si, sh_s_colon
+    call sh_stgput
+    mov ax, [sh_nm_row2]
+    mov bx, [sh_nm_col2]
+    call sh_wr_r1c1
+    mov si, sh_s_crlf
+    call sh_stgput
+    pop bx
+    pop cx
+    add bx, SH_NAME_REC
+    loop .each
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_wr_r1c1 - in: AX = 0-based row, BX = 0-based col; emits "R<n>C<n>" at DI,
+; 1-based as the notation is. sh_itoa lands in sh_numbuf, so each half is
+; converted immediately before it is put and never both at once.
+sh_wr_r1c1:
+    push ax
+    push bx
+    push si
+    mov [sh_nm_tmp], bx
+    mov si, sh_s_r
+    call sh_stgput
+    inc ax
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    mov si, sh_s_cu
+    call sh_stgput
+    mov ax, [sh_nm_tmp]
+    inc ax
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_dowrite_sylk - write the sheet to [sh_name] as SYLK. Walks the sorted
 ; cell array directly (already row-major), so no grid loop is needed at
 ; all. A formatted cell's C (value) record is followed by a real SYLK F
@@ -10011,6 +10130,9 @@ sh_dowrite_sylk:
     xor di, di
     mov si, sh_s_id
     call sh_stgput
+    call sh_wr_names                  ; stage 4.6: the defined names, so a
+                                       ; reader that is not this app can find
+                                       ; the ranges too (81.29.1)
 
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
@@ -17251,6 +17373,8 @@ sh_pcellref:
 sh_prange:
     push ax
     push bx
+    call sh_pnamerange                ; stage 4.6: `=SUM(Sales)` where Sales
+    jc .fold                          ; names a block folds the block (81.29)
     call sh_pcellref
     jnc .plainexpr
     cmp byte [si], ':'
@@ -17293,6 +17417,90 @@ sh_prange:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; sh_pnamerange - is the argument at SI a DEFINED NAME and nothing else?
+;
+; in:  SI at the start of an argument
+; out: CF=1 - sh_r1col/row..sh_r2col/row hold the rectangle it names and SI is
+;             past it; CF=0 - not a name, SI UNCHANGED.
+;
+; Strict about "nothing else" for the same reason sh_pargref is (81.23): a ','
+; or the ')' has to follow, so `=SUM(Sales+1)` is an expression about Sales
+; and not a fold over it. A name followed by '(' is a FUNCTION CALL - that is
+; the only thing separating SUM from a cell called SUM - and is declined here
+; so sh_pfunc still gets it.
+;
+; A one-cell name resolves to a 1x1 rectangle and folds to the same single
+; value the expression path already gave it, so nothing that worked before
+; takes a different route to a different answer.
+; -----------------------------------------------------------------------------
+sh_pnamerange:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, sh_ident
+    xor cx, cx
+.collect:
+    mov al, [si]
+    cmp al, 'A'
+    jb .done
+    cmp al, 'Z'
+    jbe .keep
+    cmp al, 'a'
+    jb .done
+    cmp al, 'z'
+    ja .done
+.keep:
+    cmp cx, SH_NAME_MAX
+    jae .fail
+    and al, 0xDF
+    mov [di], al
+    inc di
+    inc cx
+    inc si
+    jmp .collect
+.done:
+    mov byte [di], 0
+    or cx, cx
+    jz .fail                          ; nothing here at all
+    mov al, [si]
+    cmp al, ','
+    je .look
+    cmp al, ')'
+    jne .fail                         ; '(' lands here too: a call, not a name
+.look:
+    push si
+    mov si, sh_ident
+    call sh_name_lookup
+    pop si
+    jnc .fail
+    mov [sh_r1col], ax
+    mov [sh_r1row], bx
+    mov [sh_r2col], cx
+    mov [sh_r2row], dx
+    call sh_normrange
+    pop di                            ; DI was pushed LAST, so it comes off
+    add sp, 2                         ; first - then discard the saved SI and
+    pop dx                            ; keep advancing
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.fail:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_normrange - put sh_r1col/row..sh_r2col/row in top-left/bottom-right
 ; order. Split out of sh_foldrange so sh_pintersect can rely on both
 ; rectangles being normalised before it compares their edges.
@@ -22187,6 +22395,11 @@ sh_s_k:        db ';K', 0                  ; also the "commas are set" flag
 sh_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 sh_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
 sh_s_crlf:     db 13, 10, 0
+sh_s_nn:       db 'NN;N', 0           ; SYLK's defined-name record (81.29.1)
+sh_s_nne:      db ';E', 0
+sh_s_colon:    db ':', 0
+sh_s_r:        db 'R', 0
+sh_s_cu:       db 'C', 0
 sh_s_end:      db 'E', 13, 10, 0
 sh_m_saved:    db 'Saved', 0
 sh_m_trunc:    db 'Saved - TRUNCATED; sheet too large for this format.', 0
@@ -22388,7 +22601,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3783
+    OS88_BSS 3853
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -22710,7 +22923,10 @@ sh_nameptr      equ sh_names + SH_NAME_CAP * SH_NAME_REC   ; SH_NAME_CAP words
 sh_nm_buf       equ sh_nameptr + SH_NAME_CAP * 2           ; SH_NAME_MAX+1
 sh_nm_col       equ sh_nm_buf + SH_NAME_MAX + 1
 sh_nm_row       equ sh_nm_col + 2
-sh_find_col     equ sh_nm_row + 2            ; the walk's current cell...
+sh_nm_col2      equ sh_nm_row + 2            ; stage 4.6: the far corner a
+sh_nm_row2      equ sh_nm_col2 + 2           ; named RANGE binds
+sh_nm_tmp       equ sh_nm_row2 + 2           ; sh_wr_r1c1's banked column
+sh_find_col     equ sh_nm_tmp + 2            ; the walk's current cell...
 sh_find_row     equ sh_find_col + 2
 sh_find_buf     equ sh_find_row + 2          ; SH_EDITMAX+1: ...as displayed
 sh_sort_trow  equ sh_find_buf + SH_EDITMAX + 1   ; word: the write-back loop's
