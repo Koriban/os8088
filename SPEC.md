@@ -75277,6 +75277,35 @@ nothing faults and nothing asserts; the routine simply returns with BX and CX
 swapped, into a caller entitled to keep a pointer in one of them. `asmrules`
 names that shape directly.
 
+### 81.30 A chart is of the SELECTION
+
+`Data > Chart Column...` froze the anchor's column and charted **all** of it,
+and that was the wrong primitive sitting next to the right one. Sheet is the
+half of this pair that *has* a selection: chart.o88 needed named ranges
+(§82.15) precisely because a file does not carry what was selected, while this
+command was throwing away an answer already in `sh_selrow`/`sh_selrow2`.
+
+It charts the selection's rectangle now — leftmost column for series one,
+whichever way the drag went, bounded by the selected rows. **A single cell
+still means the whole column**, the same rule Sort states (§81.19) and for the
+same reason: one cell is not a range, and the menu item still says Column.
+
+The scan gained two words (`sh_chart_r1`/`sh_chart_r2`) and one bounds test.
+The live-update hook in `sh_repaint` re-reads the *frozen* span, so editing a
+charted cell still updates the chart and moving the selection does not
+silently retarget it — which is the property §82's freeze existed to protect.
+
+#### 81.30.1 `Goto` a name selects the whole rectangle
+
+`sh_select` collapses the selection to one cell, so a name resolved through it
+would have selected only its corner — and then `Chart Column...` would have
+charted one cell's worth. `Goto` tries `sh_name_lookup` before `sh_pcellref`
+and puts the far corner back afterwards.
+
+That is what closes the loop: **`Goto SALES` then `Chart Column...` charts
+SALES**, without a name picker in the chart command at all. Chart needs one
+because it opens a file; Sheet needs only the selection it already had.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

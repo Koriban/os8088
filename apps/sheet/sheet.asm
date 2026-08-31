@@ -5887,6 +5887,10 @@ sh_chart_scan1:
     mov dx, [es:si+2]                  ; col
     cmp dx, [sh_scan_col]
     jne .next
+    cmp ax, [sh_chart_r1]              ; ...and inside the rows the selection
+    jb .next                           ; covered (81.30). AX is still the row
+    cmp ax, [sh_chart_r2]              ; sh_unpackrow left there
+    ja .next
     ; A LABEL AND AN ERROR ARE NOT DATA POINTS, and this scan was the last
     ; reader that did not know it. chart.o88's SYLK reader skips them (82.4),
     ; its DIF reader skips type 1, and the sort scan skips both (81.19) - but
@@ -5987,8 +5991,36 @@ sh_docmd_chart:
     push es
     mov ax, [sh_cursheet]
     mov [sh_chart_sheet], ax
+    ; THE SELECTION IS WHAT A CHART IS OF, and Sheet is the half of this pair
+    ; that HAS one. chart.o88 needed named ranges (82.15) because a file does
+    ; not carry what was selected; here the answer was always sitting in
+    ; sh_selrow/sh_selrow2 and this command was throwing it away and charting
+    ; the whole column instead. Select A1:A4 and Chart Column... now charts
+    ; four rows; select a name with Goto and it charts that name.
+    ;
+    ; A SINGLE CELL STILL MEANS THE WHOLE COLUMN - the same rule Sort states
+    ; (81.19) and for the same reason: one cell is not a range, and the menu
+    ; item still says Column.
     mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .chcol
+    mov ax, bx                        ; the LEFTMOST column of the selection is
+.chcol:                               ; series one, whichever way it was dragged
     mov [sh_chart_col], ax
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .chrows
+    xchg ax, bx
+.chrows:
+    cmp ax, bx
+    jne .chhave
+    xor ax, ax                        ; one cell: the whole column, as before
+    mov bx, SH_ROWS - 1
+.chhave:
+    mov [sh_chart_r1], ax
+    mov [sh_chart_r2], bx
     call sh_chart_scan
     cmp word [sh_chartwin], 0
     jne .haswin
@@ -8263,6 +8295,21 @@ sh_idlg_apply:
 .goto:
     mov si, sh_idlg_buf
     call sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
+    mov si, sh_idlg_buf
+    call sh_name_lookup                ; A NAME GOES TO ITS WHOLE RECTANGLE
+    jnc .gotoref                       ; (81.30): sh_select collapses the
+    push cx                            ; selection to one cell, so the far
+    push dx                            ; corner is put back afterwards - and
+    mov si, [sh_ownwin]                ; that is what makes Goto SALES then
+    call sh_select                     ; Chart Column... chart SALES
+    pop dx
+    pop cx
+    mov [sh_selcol2], cx
+    mov [sh_selrow2], dx
+    mov si, [sh_ownwin]
+    call sh_repaint                    ; the band is wider than sh_select drew
+    jmp .out
+.gotoref:
     mov si, sh_idlg_buf
     call sh_pcellref                   ; CF=1 = AX col, BX row
     jnc .out
@@ -22601,7 +22648,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3853
+    OS88_BSS 3857
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -23011,7 +23058,10 @@ sh_chartwin    equ sh_chartseg + 2         ; word: 0 = never created; else its
                                              ; window ptr, permanently valid
 sh_chart_sheet equ sh_chartwin + 2         ; word: which sheet the open chart
                                              ; is pinned to (frozen at open)
-sh_chart_col   equ sh_chart_sheet + 2      ; word: which column is pinned
+sh_chart_r1    equ sh_chart_sheet + 2      ; the ROW SPAN the chart is of -
+sh_chart_r2    equ sh_chart_r1 + 2         ; the selection's, frozen with the
+                                           ; column below (81.30)
+sh_chart_col   equ sh_chart_r2 + 2         ; word: which column is pinned
                                              ; (frozen at open - re-run the
                                              ; menu item to retarget)
 sh_chart_cnt   equ sh_chart_col + 2        ; word: values currently plotted,
