@@ -33,6 +33,7 @@ installs.
 """
 import argparse
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -154,15 +155,27 @@ def load_image(path):
         data = fh.read()
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return png_decode(data)
-    # Anything else goes through sips, which every macOS has. The temp PNG is
-    # deleted; nothing non-deterministic reaches the archive.
+    # Anything else goes through sips on macOS, or Pillow where sips is not on
+    # PATH (e.g. Linux). The temp PNG is deleted; nothing non-deterministic
+    # reaches the archive.
+    if shutil.which("sips"):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = os.path.join(td, "conv.png")
+            r = subprocess.run(["sips", "-s", "format", "png", path, "--out", tmp],
+                               capture_output=True)
+            if r.returncode != 0 or not os.path.exists(tmp):
+                fail(f"cannot read {path}: not a PNG, and sips could not convert it\n"
+                     f"  {r.stderr.decode(errors='replace').strip()}")
+            with open(tmp, "rb") as fh:
+                return png_decode(fh.read())
+    try:
+        from PIL import Image
+    except ImportError:
+        fail(f"cannot read {path}: not a PNG, and neither sips nor Pillow "
+             f"is available to convert it")
     with tempfile.TemporaryDirectory() as td:
         tmp = os.path.join(td, "conv.png")
-        r = subprocess.run(["sips", "-s", "format", "png", path, "--out", tmp],
-                           capture_output=True)
-        if r.returncode != 0 or not os.path.exists(tmp):
-            fail(f"cannot read {path}: not a PNG, and sips could not convert it\n"
-                 f"  {r.stderr.decode(errors='replace').strip()}")
+        Image.open(path).convert("RGB").save(tmp, "PNG")
         with open(tmp, "rb") as fh:
             return png_decode(fh.read())
 
