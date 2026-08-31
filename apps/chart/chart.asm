@@ -1976,7 +1976,15 @@ ct_s_ext_biff: db '.BIF', 0
     OS88_BSS 2110
     OS88_IMAGE_END
 
-ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
+; The ch_* block goes FIRST, at bss offset 0, for the reason sheet.asm's own
+; copy of this comment gives: one shared overlay, one address (82.16).
+%define CH_BSS_BASE (os88_image_end + 0)
+%include "os88chartbss.inc"
+%if CH_BSS_BASE != os88_image_end
+  %error "the ch_* block must start at bss offset 0 - see 82.16"
+%endif
+
+ct_chartseg equ CH_BSS_END          ; word: the offscreen canvas claim
 ct_stgseg   equ ct_chartseg + 2     ; word: file-read/BMP-export staging
 ct_name     equ ct_stgseg + 2       ; 13: the opened/exported file's 8.3 name
 ct_valcnt   equ ct_name + 13        ; word: values currently charted
@@ -2003,10 +2011,7 @@ ct_wrow     equ ct_biffend + 2      ; word: ct_read_dif's own row counter
 ct_wcol     equ ct_wrow + 2         ; word: ct_read_dif's own col counter
 
 ; --- apps/os88chart.inc's own required scratch (see its header comment) -------
-%define CH_BSS_BASE (ct_wcol + 2)
-%include "os88chartbss.inc"   ; the ch_* working set, declared once and
-                              ; shared with sheet.asm (82.16)
-ct_mincol2  equ CH_BSS_END          ; the SECOND series' column...
+ct_mincol2  equ ct_wcol + 2          ; the SECOND series' column...
 ct_t2cnt    equ ct_mincol2 + 2      ; ...how many cells it has...
 ct_t2row    equ ct_t2cnt + 2        ; ...and its rows and values
 ct_t2val    equ ct_t2row + CH_MAXBARS * 2   ; ...as DOUBLES, like ct_tval

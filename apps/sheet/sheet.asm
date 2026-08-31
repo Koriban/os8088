@@ -22651,7 +22651,19 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
     OS88_BSS 3857
     OS88_IMAGE_END
 
-sh_selcol     equ os88_image_end + 0
+; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
+; not a tidy-up: apps/os88chart.inc is about to become an OVERLAY shared by
+; both callers (82.16), the module keeps DS = the package's segment (SPEC.md
+; 68.10), so every ch_* reference in it assembles to THIS package's address.
+; One binary can serve both only if both put the block at the same offset, and
+; offset zero is the only one neither package has to negotiate for.
+%define CH_BSS_BASE (os88_image_end + 0)
+%include "os88chartbss.inc"
+%if CH_BSS_BASE != os88_image_end
+  %error "the ch_* block must start at bss offset 0 - see 82.16"
+%endif
+
+sh_selcol     equ CH_BSS_END
 sh_selrow     equ sh_selcol + 2
 sh_scrollcol  equ sh_selrow + 2
 sh_scrollrow  equ sh_scrollcol + 2
@@ -23073,10 +23085,7 @@ sh_chart_name  equ sh_chart_cnt + 2        ; 13: the exported .BMP's own 8.3
                                              ; load/save filename)
 
 ; apps/os88chart.inc's own required scratch (see that file's header comment)
-%define CH_BSS_BASE (sh_chart_name + 13)
-%include "os88chartbss.inc"   ; the ch_* working set, declared once and
-                              ; shared with chart.asm (82.16)
-sh_chart_title equ CH_BSS_END       ; 16: "Column A"
+sh_chart_title equ sh_chart_name + 13       ; 16: "Column A"
 sh_scan_col    equ sh_chart_title + 16  ; which column a scan pass reads...
 sh_scan_off    equ sh_scan_col + 2      ; ...and where in sh_stgseg it lands
 sh_chart_cnt2  equ sh_scan_off + 2      ; the second series' own count
