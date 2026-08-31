@@ -123,5 +123,30 @@ ch_l2sy        equ ch_l2sx + 2
 ch_l2err       equ ch_l2sy + 2
 ch_l2e2        equ ch_l2err + 2
 
-CH_BSS_END     equ ch_l2e2 + 2       ; where the caller's own chain resumes
+; --- the vectors out (82.16) -------------------------------------------------
+; SPEC.md 68.10 rule 1: a call from a module to resident code cannot be near,
+; so it goes through a dword of (offset, segment) that the caller stamps at
+; load. THESE LIVE IN THE ch_* BLOCK because the module reads them through the
+; caller's DS like every other ch_* word - so they need the same fixed offset,
+; and the block already has one.
+;
+; Each points at a SHIM, never at the routine: every routine in this tree is a
+; near proc ending in `ret`, so far-calling one pops the offset, leaves the
+; segment on the stack and returns into nothing.
+;
+; ch_v_aiszero is FUSED: the module's one reference to fp's own bss was
+; `mov bx, fp_am0` before `call fp_iszero`, and an address of the caller's bss
+; is exactly what a shared module cannot know. The shim supplies it, and the
+; module is left with no knowledge of where fp keeps anything.
+ch_v_first     equ ch_l2e2 + 2
+ch_v_unpacka   equ ch_v_first + 0
+ch_v_unpackb   equ ch_v_unpacka + 4
+ch_v_a2i       equ ch_v_unpackb + 4
+ch_v_cmpab     equ ch_v_a2i + 4
+ch_v_round     equ ch_v_cmpab + 4
+ch_v_scale10   equ ch_v_round + 4
+ch_v_aiszero   equ ch_v_scale10 + 4
+ch_v_end       equ ch_v_aiszero + 4
+
+CH_BSS_END     equ ch_v_end          ; where the caller's own chain resumes
 CH_BSS_SIZE    equ CH_BSS_END - CH_BSS_BASE

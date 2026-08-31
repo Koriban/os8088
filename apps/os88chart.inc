@@ -1982,10 +1982,10 @@ ch_scale:
     call ch_sc_fetch                  ; ch_dbl = value[BX]
     and byte [ch_dbl+7], 0x7F         ; abs(), by the sign BIT - exact, and
     mov si, ch_dbl                    ; cheaper than unpacking to negate
-    call fp_unpack_a
+    call far [ch_v_unpacka]
     mov si, ch_dmax
-    call fp_unpack_b
-    call fp_cmpab
+    call far [ch_v_unpackb]
+    call far [ch_v_cmpab]
     jle .p1n
     mov si, ch_dbl                    ; a new largest
     mov di, ch_dmax
@@ -1997,9 +1997,8 @@ ch_scale:
 
     ; --- choose E ----------------------------------------------------------
     mov si, ch_dmax                   ; a series of nothing but zeros has no
-    call fp_unpack_a                  ; scale to choose, and walking the loops
-    mov bx, fp_am0                    ; below would settle on E=4 and label
-    call fp_iszero                    ; every tick "0.0000"
+    call far [ch_v_unpacka]                  ; scale to choose, and walking the loops
+    call far [ch_v_aiszero]           ; below would settle on E=4 and label                    ; every tick "0.0000"
     jc .havee0
     ; Walk UP while max*10^(E+1) still fits a signed word, then DOWN while it
     ; does not fit at all. Both loops are bounded by the caps, and the test is
@@ -2009,20 +2008,20 @@ ch_scale:
     cmp cx, CH_E10_MAX
     jge .down
     mov si, ch_dmax
-    call fp_unpack_a
+    call far [ch_v_unpacka]
     push cx
     inc cx
-    call fp_scale10
+    call far [ch_v_scale10]
     pop cx
-    call fp_a2i
+    call far [ch_v_a2i]
     jc .down                          ; would not fit: CX is already the most
     inc cx                            ; we can keep
     jmp .up
 .down:
     mov si, ch_dmax
-    call fp_unpack_a
-    call fp_scale10
-    call fp_a2i
+    call far [ch_v_unpacka]
+    call far [ch_v_scale10]
+    call far [ch_v_a2i]
     jnc .havee                        ; fits: this E is the one
     cmp cx, CH_E10_MIN
     jle .havee                        ; nothing more we can do - the clamp in
@@ -2040,12 +2039,12 @@ ch_scale:
 .p2:
     call ch_sc_fetch
     mov si, ch_dbl
-    call fp_unpack_a
+    call far [ch_v_unpacka]
     mov cx, [ch_e10]
-    call fp_scale10
+    call far [ch_v_scale10]
     xor cx, cx
-    call fp_round                     ; to the nearest whole one, half away
-    call fp_a2i                       ; from zero - fp_a2i truncates, and a
+    call far [ch_v_round]                     ; to the nearest whole one, half away
+    call far [ch_v_a2i]                       ; from zero - fp_a2i truncates, and a
                                       ; truncated bar is short by up to one
                                       ; whole unit at the top of the scale
     push ax

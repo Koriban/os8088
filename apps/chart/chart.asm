@@ -96,6 +96,9 @@ ct_entry:
     call ct_labels_cols                 ; the Data menu says "Column A".. until
                                         ; a file gives it names to say instead
     call fp_init                        ; stage 4.6: before the first claim,
+    call ch_ovbind                      ; the chart module's vectors out (82.16):
+                                        ; our shims, our segment, before anything
+                                        ; can draw
                                         ; for the reason sheet.asm's own call
                                         ; states - it decides which arithmetic
                                         ; the session gets, and nothing else
@@ -1968,12 +1971,81 @@ ct_s_ext_biff: db '.BIF', 0
                                        ; an IEEE-754 double), and ch_scale
                                        ; below needs it. Before os88chart.inc,
                                        ; which calls into it.
+; -----------------------------------------------------------------------------
+; The shims apps/os88chart.inc's vectors point at (82.16).
+;
+; Each is a near call to the real routine and then the FAR return the module's
+; `call far [ch_v_*]` is waiting for. Registers and flags pass through both
+; ways untouched, so a shimmed routine keeps its own contract - which is the
+; whole reason the shim exists rather than the vector naming the routine: every
+; routine here is a near proc ending in `ret`, and far-calling one pops the
+; offset, leaves the segment on the stack and returns into nothing.
+;
+; ch_s_aiszero is the fused one. The module used to load `bx, fp_am0` itself,
+; which is an address in THIS package's bss and exactly what a module shared
+; with another package cannot know. The shim supplies it.
+; -----------------------------------------------------------------------------
+ch_s_unpacka:
+    call fp_unpack_a
+    retf
+ch_s_unpackb:
+    call fp_unpack_b
+    retf
+ch_s_a2i:
+    call fp_a2i
+    retf
+ch_s_cmpab:
+    call fp_cmpab
+    retf
+ch_s_round:
+    call fp_round
+    retf
+ch_s_scale10:
+    call fp_scale10
+    retf
+ch_s_aiszero:
+    mov bx, fp_am0
+    call fp_iszero
+    retf
+
+; ch_ovbind - fill the vector table: this package's shim offsets, and this
+; package's segment. The offsets are assembled in; only the segment is a
+; runtime fact, and it is the same one for all of them.
+ch_ovbind:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, ch_ovshims
+    mov di, ch_v_first
+    mov ax, cs
+    mov bx, 7
+.l:
+    push ax
+    mov ax, [si]
+    mov [di], ax                      ; the shim's offset...
+    pop ax
+    mov [di+2], ax                    ; ...and our own segment
+    add si, 2
+    add di, 4
+    dec bx
+    jnz .l
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+ch_ovshims:
+    dw ch_s_unpacka, ch_s_unpackb, ch_s_a2i, ch_s_cmpab
+    dw ch_s_round, ch_s_scale10, ch_s_aiszero
+
 %include "os88chart.inc"
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 2110
+    OS88_BSS 2138
     OS88_IMAGE_END
 
 ; The ch_* block goes FIRST, at bss offset 0, for the reason sheet.asm's own
