@@ -312,6 +312,16 @@ SH_C_FOFF    equ 16                 ; word: formula text offset in sh_txtseg
 SH_C_PASS    equ 18                 ; word: the repaint pass that cached VAL
 ; The value tags stage 4.0 reserves. Numbered so that BLANK is 0 and a
 ; zeroed record is therefore a blank one.
+SH_SSTK_N    equ 6                   ; string-stack levels. The text
+                                     ; functions bank one argument each, so six
+                                     ; is several frames deep; past that a
+                                     ; formula gets #VALUE! rather than a
+                                     ; quietly overwritten argument
+SH_STR_MAX   equ 64                 ; stage 4.5: the string accumulator's
+                                    ; usable length, and the size of a text
+                                    ; formula's result slot (81.22). A cell
+                                    ; shows SH_CW_MAXCH=40 at most, so this is
+                                    ; headroom for an intermediate concat
 SH_T_BLANK   equ 0
 SH_T_NUM     equ 1
 SH_T_TEXT    equ 2
@@ -355,9 +365,11 @@ SH_S_TYPE    equ 18                 ; byte: SH_C_TYPE, carried for the same
 SH_S_AUX     equ 19                 ; byte: ...reason - sh_addcell retags a
                                     ; fresh record SH_T_NUM, so a label whose
                                     ; tag was not carried came back a number.
-                                    ; Free bytes: the staging stride in the
-                                    ; code is SH_C_SZ, so 18..19 already exist
-SH_S_SZ      equ 20
+                                    ; Free bytes: SH_S_SZ was already 20, so
+                                    ; 18..19 existed before anything used them
+SH_S_SZ      equ 20                 ; ...and the code says SH_S_SZ where it
+                                    ; means this, so changing it is a change
+                                    ; to ONE layout and not silently to both
 
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
@@ -4639,8 +4651,8 @@ sh_mfire:
                                         ; so every click ran it regardless.
                                         ; Now a real dispatch, matching the
                                         ; or al,al chains above.
-    mov al, SH_FDK_SORT
-    call sh_fdlg_open
+    mov al, SH_ID_SORT                 ; stage 4.5: the KEY first, then the
+    call sh_idlg_open                  ; order - see sh_idlg_apply's .sortkey
     jmp .out
 .data1:
     cmp al, 1
@@ -5508,13 +5520,23 @@ sh_sort_carry:
     ja .out                           ; more rows than the snapshot holds: the
                                       ; key column is still sorted, the others
                                       ; are left alone rather than half moved
-    mov ax, [sh_selcol]               ; THE KEY COLUMN, banked before anything
+    mov ax, [sh_sort_keycol]             ; THE KEY COLUMN, banked before anything
     mov [sh_cry_key], ax              ; else runs: sh_sort_permcol moves
     mov bx, [sh_selrow]               ; sh_selcol to commit into each carried
     mov [sh_cry_keyrow], bx           ; column, so reading it later names
-    mov bx, [sh_selcol2]              ; whichever column was carried last and
-    cmp ax, bx                        ; the key gets carried too - permuted a
-    jbe .cols                         ; second time, on top of its own sort
+                                      ; whichever column was carried last and
+                                      ; the key gets carried too - permuted a
+                                      ; second time, on top of its own sort
+    ; THE SPAN IS THE SELECTION'S, NOT THE KEY'S. These two used to be the
+    ; same register because the key WAS the anchor; now that the dialog picks
+    ; the key (81.27), deriving the span from it carried only the columns to
+    ; the key's right - sorting A:C by B left column A exactly where it was,
+    ; which is the correspondence-breaking this whole routine exists to
+    ; prevent.
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .cols
     xchg ax, bx
 .cols:
     mov [sh_cry_c1], ax
@@ -5865,6 +5887,24 @@ sh_chart_scan1:
     mov dx, [es:si+2]                  ; col
     cmp dx, [sh_scan_col]
     jne .next
+    ; A LABEL AND AN ERROR ARE NOT DATA POINTS, and this scan was the last
+    ; reader that did not know it. chart.o88's SYLK reader skips them (82.4),
+    ; its DIF reader skips type 1, and the sort scan skips both (81.19) - but
+    ; the LIVE chart, the one inside Sheet, fed them straight through. A plain
+    ; label leaves SH_C_VAL zero (sh_commit writes the value before the tag),
+    ; so a column with a heading charted a 0 bar at the top of it, and a
+    ; #DIV/0! charted the zero underneath the error.
+    ;
+    ; A formula is judged AFTER it runs, not from the stored tag: the tag may
+    ; predate the fix that unbroke it, which is the same reason sh_getcell2
+    ; raises from the freshly published one (81.20).
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT
+    je .next
+    cmp byte [es:si+SH_C_TYPE], SH_T_ERR
+    jne .typeok
+    test byte [es:si+4], 1             ; a stored error with no formula behind
+    jz .next                           ; it has nothing to re-evaluate
+.typeok:
     test byte [es:si+4], 1             ; HASFORMULA: chart its CURRENT value
     jz .plainval                       ; (sh_getcell2 evaluates transparently
     mov bx, ax                         ; and is never stale) rather than
@@ -5878,6 +5918,10 @@ sh_chart_scan1:
     call sh_getcell2                   ; see the matching note in
     pop si                             ; sh_docmd_sortcol.
     pop cx
+    cmp byte [sh_curtype], SH_T_TEXT   ; ...and what it ANSWERED decides it
+    je .next
+    cmp byte [sh_curtype], SH_T_ERR
+    je .next
     jmp .havevalue
 .plainval:
     call sh_cellval_to_acc_si          ; the WHOLE double, not the truncation
@@ -6232,8 +6276,8 @@ sh_docmd_sortcol:
     cmp bx, [sh_cursheet]
     jne .next
     mov dx, [es:si+2]                 ; col
-    cmp dx, [sh_selcol]
-    jne .next
+    cmp dx, [sh_sort_keycol]             ; stage 4.5: the KEY, which the dialog
+    jne .next                         ; picks and which need not be the anchor
     cmp ax, [sh_sort_r1]              ; outside the rows asked for
     jb .next
     cmp ax, [sh_sort_r2]
@@ -6246,7 +6290,7 @@ sh_docmd_sortcol:
                                        ; this sort: exclude this one
                                        ; entirely (see SH_SORT_FCAP's own
                                        ; comment)
-    mov ax, dx                        ; col (== sh_selcol, just compared)
+    mov ax, dx                        ; col (== sh_sort_keycol, just compared)
     mov bx, [sh_sort_row]
     push cx                           ; CX is this scan's own cell index and
                                        ; sh_getcell2 does NOT preserve it: for
@@ -6529,9 +6573,9 @@ sh_docmd_sortcol:
     push cx
     mov si, sh_rwsrc
     call sh_formula_copyshift
-    mov ax, [sh_selcol]
-    mov bx, [sh_sort_trow]
-    mov si, sh_rwdst
+    mov ax, [sh_sort_keycol]             ; the KEY column, the same one .wbplain
+    mov bx, [sh_sort_trow]            ; writes to - this said sh_selcol, which
+    mov si, sh_rwdst                  ; was the anchor and is no longer the key
     call sh_setformula
     pop cx
     jc .wbfull                        ; the arena refused: stop the write-back
@@ -6551,7 +6595,7 @@ sh_docmd_sortcol:
     mov ax, [es:di+6]
     mov [si+6], ax
     pop bx
-    mov ax, [sh_selcol]
+    mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
     call sh_setvald                   ; sh_setval would truncate it again
     pop cx
@@ -7875,7 +7919,15 @@ SH_ID_ROWH   equ 1                   ; Format > Row Height...
 SH_ID_COLW   equ 2                   ; Format > Column Width...
 SH_ID_DEFN   equ 3                   ; Formula > Define Name...
 SH_ID_FIND   equ 4                   ; Formula > Find...
-SH_ID_NKIND  equ 5
+SH_ID_SORT   equ 5                   ; Data > Sort... (stage 4.5): the KEY.
+                                     ; Excel 2.1's Sort dialog takes its keys
+                                     ; as cell references typed into fields,
+                                     ; which is exactly what this engine is,
+                                     ; and it is the only way to name a key
+                                     ; that is not an edge of the selection
+                                     ; (81.19 recorded that as a known limit;
+                                     ; 81.27 is this)
+SH_ID_NKIND  equ 6
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -7900,17 +7952,22 @@ sh_idlg_tpl:
 ; that cell makes the kernel letter the pointer's own two bytes and then run on
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
+               dw sh_s_id_tsort
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
+               dw sh_s_id_psort
 sh_s_id_tgoto: db 'Goto', 0
 sh_s_id_trowh: db 'Row Height', 0
 sh_s_id_tcolw: db 'Column Width', 0
 sh_s_id_tdefn: db 'Define Name', 0
 sh_s_id_tfind: db 'Find', 0
+sh_s_id_tsort: db 'Sort', 0
+sh_s_id_badkey: db 'Sort key must be inside the selection', 0
 sh_s_id_pgoto: db 'Reference:', 0
 sh_s_id_prowh: db 'Row height:', 0
 sh_s_id_pcolw: db 'Column width:', 0
 sh_s_id_pdefn: db 'Name:', 0
 sh_s_id_pfind: db 'Find what:', 0
+sh_s_id_psort: db '1st Key:', 0     ; Excel 2.1's own label for the field
 sh_s_id_nofit: db 'Name table full.', 0
 sh_s_id_named: db 'Name defined.', 0
 sh_s_id_nofnd: db 'Not found.', 0
@@ -7941,7 +7998,9 @@ sh_idlg_open:
     mov ax, [sh_id_titles + bx]
     mov [sh_idlg_tpl + WT_TITLE], ax
     mov byte [sh_idlg_buf], 0
-    cmp byte [sh_idlg_kind], SH_ID_DEFN
+    cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
+    je .pregoto                        ; same reference Goto shows - it is the
+    cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
     je .pregoto                        ; prefilling one would be a wrong guess
@@ -8177,6 +8236,8 @@ sh_idlg_apply:
     je .find
     cmp byte [sh_idlg_kind], SH_ID_GOTO
     je .goto
+    cmp byte [sh_idlg_kind], SH_ID_SORT
+    je .sortkey
     mov si, sh_idlg_buf                ; the two numeric kinds
     call sh_pnum_at
     jc .out                            ; not a number at all
@@ -8217,13 +8278,48 @@ sh_idlg_apply:
     mov si, sh_idlg_buf                ; the name binds THE SELECTION, which is
     mov ax, [sh_selcol]                ; where it was when the dialog opened -
     mov bx, [sh_selrow]                ; nothing can move it while a modal
-    call sh_name_def                   ; dialog owns the input
+    mov cx, [sh_selcol2]               ; dialog owns the input. BOTH corners
+    mov dx, [sh_selrow2]               ; since 81.29: a dragged block names a
+    call sh_name_def                   ; range, a single cell names itself
     mov word [sh_msg], sh_s_id_named
     jnc .redraw
     mov word [sh_msg], sh_s_id_nofit
     jmp .redraw
 .find:
     call sh_docmd_find
+    jmp .redraw
+; Data > Sort..., part one of two. The KEY is a reference, so it needs a field;
+; the ORDER is a two-way pick, so it needs radios; and no dialog engine here
+; has both. Asking in sequence is what File > Save As... already does - the
+; format radio first, then the file dialog - so this follows the app's own
+; idiom rather than growing a third engine.
+.sortkey:
+    mov si, sh_idlg_buf
+    call sh_upcase_at                  ; 'b3' names the same column as 'B3'
+    mov si, sh_idlg_buf
+    call sh_pcellref                   ; AX = col, and only the COLUMN matters:
+    jnc .badkey                        ; a key is a column, and the row the
+    cmp ax, SH_COLS                    ; user happened to point at is not part
+    jae .badkey                        ; of the question
+    mov bx, [sh_selcol]                ; IT HAS TO BE INSIDE THE SELECTION.
+    mov cx, [sh_selcol2]               ; Outside it, the sort would reorder a
+    cmp bx, cx                         ; column the carry does not move, which
+    jbe .keyspan                       ; breaks exactly the correspondence
+    xchg bx, cx                        ; 81.19 exists to keep. REFUSED rather
+.keyspan:                              ; than clamped - a clamp answers a
+    cmp bx, cx                         ; different question, silently
+    je .keyok                          ; a single-column selection sorts by
+    cmp ax, bx                         ; itself whatever was typed
+    jb .badkey
+    cmp ax, cx
+    ja .badkey
+.keyok:
+    mov [sh_sort_keycol], ax
+    mov al, SH_FDK_SORT                ; ...and now ask for the order
+    call sh_fdlg_open
+    jmp .out
+.badkey:
+    mov word [sh_msg], sh_s_id_badkey
     jmp .redraw
 .redraw:
     call sh_geom                       ; the cell size may have changed, so the
@@ -8479,16 +8575,24 @@ sh_find_match:
 ; and a spreadsheet where Total and TOTAL are different cells would be a trap
 ; rather than a feature.
 ;
-; SCOPE, stated rather than discovered: a name binds ONE CELL, not a range,
-; and it belongs to the whole instance rather than to a sheet. A range needs
-; the reference-typed argument the value model still does not have (the same
-; thing blocking VLOOKUP and the array functions), and per-sheet names need a
-; sheet field here plus a rule for what an unqualified name means from another
-; sheet - both are Stage 4.5 work and both would be worse guessed at.
+; A NAME BINDS A RECTANGLE (stage 4.6). It used to bind one cell, and the
+; reason written here was that "a range needs the reference-typed argument the
+; value model still does not have (the same thing blocking VLOOKUP and the
+; array functions)". That argument landed in 81.23, so the reason expired and
+; the record grew the second corner it had been waiting for.
+;
+; A one-cell name is the same thing with both corners equal, so nothing that
+; worked before behaves differently - `=Total` still reads one cell, and the
+; dialog still binds whatever the selection is, which for a single cell is a
+; 1x1 rectangle.
+;
+; STILL INSTANCE-WIDE, not per sheet: that needs a sheet field here plus a
+; rule for what an unqualified name means from another sheet, and it would be
+; worse guessed at.
 ; =============================================================================
 SH_NAME_CAP  equ 16
 SH_NAME_MAX  equ 12                  ; characters, not counting the NUL
-SH_NAME_REC  equ SH_NAME_MAX + 1 + 4 ; text + NUL + col + row
+SH_NAME_REC  equ SH_NAME_MAX + 1 + 8 ; text + NUL + col + row + col2 + row2
 
 ; -----------------------------------------------------------------------------
 ; sh_name_find - in: SI = an uppercase NUL name
@@ -8539,7 +8643,9 @@ sh_name_find:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_name_def - in: SI = a NUL name (uppercased here), AX = col, BX = row.
+; sh_name_def - in: SI = a NUL name (uppercased here), AX/BX = the near
+; corner, CX/DX = the far one. Both corners are stored as given; sh_foldrange
+; normalises when it walks, so the dialog does not have to.
 ; out: CF=1 the table is full. Redefining an existing name REBINDS it, which
 ; is what Excel does and what makes the dialog usable twice.
 ; -----------------------------------------------------------------------------
@@ -8547,10 +8653,13 @@ sh_name_def:
     push ax
     push bx
     push cx
+    push dx
     push si
     push di
     mov [sh_nm_col], ax
     mov [sh_nm_row], bx
+    mov [sh_nm_col2], cx
+    mov [sh_nm_row2], dx
     push si
     call sh_upcase_at
     mov di, sh_nm_buf                 ; clipped to SH_NAME_MAX, so a long name
@@ -8597,6 +8706,10 @@ sh_name_def:
     mov [di], ax
     mov ax, [sh_nm_row]
     mov [di+2], ax
+    mov ax, [sh_nm_col2]
+    mov [di+4], ax
+    mov ax, [sh_nm_row2]
+    mov [di+6], ax
     clc
     jmp .out
 .full:
@@ -8604,6 +8717,7 @@ sh_name_def:
 .out:
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -8611,7 +8725,12 @@ sh_name_def:
 
 ; -----------------------------------------------------------------------------
 ; sh_name_lookup - in: SI = an uppercase NUL name
-; out: CF=1 and AX = col, BX = row; CF=0 = not a defined name
+; out: CF=1 and AX = col, BX = row (the NEAR corner, which is what a caller
+; wanting one cell reads), with the far corner in CX/DX; CF=0 = not a name.
+;
+; The near corner stays in AX/BX because that is the shape sh_pcellref hands
+; on and sh_pident's name path already speaks it - a one-cell name goes on
+; behaving exactly as it did.
 ; -----------------------------------------------------------------------------
 sh_name_lookup:
     push di
@@ -8621,6 +8740,8 @@ sh_name_lookup:
     add di, bx
     add di, SH_NAME_MAX + 1
     mov ax, [di]
+    mov cx, [di+4]
+    mov dx, [di+6]
     mov bx, [di+2]
     stc
     pop di
@@ -9889,6 +10010,98 @@ sh_dowrite:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_wr_names - one NN record per defined name, straight after the ID line.
+;
+; NN;N<name>;E<ref> is SYLK's own defined-name record, and the reference goes
+; out in R1C1 because that is the notation every ;E field in this file already
+; uses - one convention, not two. Absolute R1C1 (no brackets): a name is a
+; fixed place, not an offset from wherever it is read.
+;
+; THIS IS WHAT LETS ANOTHER PROGRAM FIND THE RANGE. Chart charts a named range
+; by reading these (82.15); without them a name is a fact only this app knows,
+; and a saved sheet would carry the data but not what any of it was called.
+; -----------------------------------------------------------------------------
+sh_wr_names:
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, [sh_nnames]
+    jcxz .out
+    xor bx, bx
+.each:
+    mov ax, di
+    add ax, 64                        ; the longest NN line: name, two R1C1
+    cmp ax, SH_STAGE_MAX              ; refs and the punctuation
+    ja .out
+    push cx
+    push bx
+    mov si, sh_names
+    add si, bx
+    add si, SH_NAME_MAX + 1
+    mov ax, [si]
+    mov [sh_nm_col], ax
+    mov ax, [si+2]
+    mov [sh_nm_row], ax
+    mov ax, [si+4]
+    mov [sh_nm_col2], ax
+    mov ax, [si+6]
+    mov [sh_nm_row2], ax
+    mov si, sh_s_nn
+    call sh_stgput
+    mov si, sh_names
+    add si, bx
+    call sh_stgput                    ; the name itself
+    mov si, sh_s_nne
+    call sh_stgput
+    mov ax, [sh_nm_row]
+    mov bx, [sh_nm_col]
+    call sh_wr_r1c1
+    mov si, sh_s_colon
+    call sh_stgput
+    mov ax, [sh_nm_row2]
+    mov bx, [sh_nm_col2]
+    call sh_wr_r1c1
+    mov si, sh_s_crlf
+    call sh_stgput
+    pop bx
+    pop cx
+    add bx, SH_NAME_REC
+    loop .each
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_wr_r1c1 - in: AX = 0-based row, BX = 0-based col; emits "R<n>C<n>" at DI,
+; 1-based as the notation is. sh_itoa lands in sh_numbuf, so each half is
+; converted immediately before it is put and never both at once.
+sh_wr_r1c1:
+    push ax
+    push bx
+    push si
+    mov [sh_nm_tmp], bx
+    mov si, sh_s_r
+    call sh_stgput
+    inc ax
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    mov si, sh_s_cu
+    call sh_stgput
+    mov ax, [sh_nm_tmp]
+    inc ax
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_dowrite_sylk - write the sheet to [sh_name] as SYLK. Walks the sorted
 ; cell array directly (already row-major), so no grid loop is needed at
 ; all. A formatted cell's C (value) record is followed by a real SYLK F
@@ -9917,6 +10130,9 @@ sh_dowrite_sylk:
     xor di, di
     mov si, sh_s_id
     call sh_stgput
+    call sh_wr_names                  ; stage 4.6: the defined names, so a
+                                       ; reader that is not this app can find
+                                       ; the ranges too (81.29.1)
 
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
@@ -9986,6 +10202,13 @@ sh_dowrite_sylk:
     mov [sh_wrec_type], al            ; goes out as a QUOTED K field rather
     mov ax, [es:si+SH_C_FOFF]         ; than as a number, and its characters
     mov [sh_wrec_toff], ax            ; come from the same arena a formula's do
+    test byte [es:si+4], 1            ; A FORMULA THAT RETURNED TEXT keeps its
+    jz .toffok1                          ; result in SH_C_VAL, because FOFF is
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT  ; already holding the formula's own
+    jne .toffok1                         ; text (81.22.1) - so the label this
+    mov ax, [es:si+SH_C_VAL]          ; writer emits is the RESULT, not the
+    mov [sh_wrec_toff], ax            ; expression that produced it
+.toffok1:
     pop es                            ; ES = stgseg again
 
     mov si, sh_s_c
@@ -11498,6 +11721,13 @@ sh_biff_cells:
     mov [sh_wrec_aux], al             ; either - see .aserr
     mov ax, [es:si+SH_C_FOFF]
     mov [sh_wrec_toff], ax
+    test byte [es:si+4], 1            ; A FORMULA THAT RETURNED TEXT keeps its
+    jz .toffok2                          ; result in SH_C_VAL, because FOFF is
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT  ; already holding the formula's own
+    jne .toffok2                         ; text (81.22.1) - so the label this
+    mov ax, [es:si+SH_C_VAL]          ; writer emits is the RESULT, not the
+    mov [sh_wrec_toff], ax            ; expression that produced it
+.toffok2:
     mov al, [es:si+4]                 ; ...and a FORMULA cell may take a real
     and al, 1                         ; FORMULA record, if its text is one this
     mov [sh_wrec_hasf], al            ; writer can tokenise
@@ -13559,10 +13789,12 @@ sh_rowcol_op:
     mov [sh_rc_tcol], ax
 .stage:
     mov ax, [sh_rc_stgcnt]
-    mov bx, SH_C_SZ
-    mul bx
-    mov di, ax
-    mov es, [sh_stgseg]
+    mov bx, SH_S_SZ                   ; the STAGING record's own size. It is
+    mul bx                            ; 20 like SH_C_SZ and this changes no
+    mov di, ax                        ; byte - but saying SH_C_SZ here made
+    mov es, [sh_stgseg]               ; the two layouts one constant apart
+                                       ; from being independent, which is the
+                                       ; whole reason they have two names
     mov ax, [sh_rc_tsheet]
     mov [es:di], ax
     mov ax, [sh_rc_trow]
@@ -13604,8 +13836,8 @@ sh_rowcol_op:
     cmp cx, [sh_rc_stgcnt]
     jae .reinsdone
     mov ax, cx
-    mov bx, SH_C_SZ
-    mul bx
+    mov bx, SH_S_SZ                   ; ...and its other half, for the same
+    mul bx                            ; reason
     mov si, ax
     mov es, [sh_stgseg]
     mov ax, [es:si]
@@ -13852,22 +14084,25 @@ sh_reidx_shift:
     cmp ax, bx
     jb .out
     inc ax
-    mov cx, SH_ROWS                    ; clamp at the grid edge rather than
-    cmp dl, 2                          ; letting an insert push a reference
-    jb .havecap                        ; past it - a row 16384 reference
-    mov cx, SH_COLS                    ; shifted down would otherwise be
-.havecap:                              ; written as "A16385", which
-    cmp ax, cx                         ; sh_pident then resolves wrongly.
-    jb .out                            ; (The cell it names is genuinely
-    mov ax, cx                         ; gone; naming the last real row is
-    dec ax                             ; the same "closest sane fallback"
-    jmp .out                           ; the delete branch below already
-.delete:                               ; uses for a reference ON the pivot.)
+    mov cx, SH_ROWS                    ; an insert that pushes a reference
+    cmp dl, 2                          ; PAST the last row or column has moved
+    jb .havecap                        ; the cell it names off the sheet, so
+    mov cx, SH_COLS                    ; the reference is dead. It used to
+.havecap:                              ; clamp to the last real index, which
+    cmp ax, cx                         ; silently named different data
+    jb .out
+    jmp .dead
+.delete:
     cmp ax, bx
-    jbe .out                           ; < pivot: untouched; == pivot:
-                                        ; clamped (see the header comment)
-    dec ax
-.out:
+    jb .out                            ; before the pivot: untouched
+    je .dead                           ; ON THE PIVOT: THE CELL IS GONE. This
+    dec ax                             ; used to leave the index alone, so the
+.out:                                  ; reference quietly started naming
+    clc                                ; whatever slid into the vacated slot -
+    jmp .ret                           ; a wrong number with nothing to show
+.dead:                                 ; for it. #REF! is Excel's answer and
+    stc                                ; the whole point of it is that it
+.ret:                                  ; cannot be mistaken for a live one
     pop dx
     pop cx
     ret
@@ -13887,6 +14122,7 @@ sh_reidx_apply:
     mov ax, [sh_rw_refrow]             ; INSERT/DELETE SHIFTS AN ABSOLUTE
     mov bx, [sh_rw_pivot]              ; REFERENCE TOO, and that is not an
     call sh_reidx_shift                ; oversight. '$' means "do not adjust
+    jc .dead
     mov [sh_rw_refrow], ax             ; when this formula is COPIED"; it does
 .rowletcopy:                           ; not mean "keep pointing at row 1 no
                                        ; matter what". Inserting a row above
@@ -13926,6 +14162,7 @@ sh_reidx_apply:
     mov ax, [sh_rw_refcol]             ; same rule for a column insert/delete
     mov bx, [sh_rw_pivot]              ; as for a row - see .rowletcopy above
     call sh_reidx_shift
+    jc .dead
     mov [sh_rw_refcol], ax
 .colemitstart:
     cmp byte [sh_rw_absc], 0           ; the letters are REGENERATED here, so
@@ -13952,6 +14189,29 @@ sh_reidx_apply:
     call sh_rw_emit
     inc bx
     jmp .coldigcopy
+.dead:
+    call sh_rw_emitref                 ; the cell this named no longer exists
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rw_emitref - put the literal "#REF!" in a rewritten formula, in place of
+; a reference whose cell is gone. It reads the SAME string sh_errname prints,
+; so the text a Delete writes is exactly the text sh_perrlit reads back.
+; -----------------------------------------------------------------------------
+sh_rw_emitref:
+    push ax
+    push bx
+    mov bx, sh_s_err_ref
+.l:
+    mov al, [bx]
+    or al, al
+    jz .out
+    call sh_rw_emit
+    inc bx
+    jmp .l
 .out:
     pop bx
     pop ax
@@ -14690,14 +14950,16 @@ sh_rowcol_reidx:
 sh_copy_shift:
     add ax, bx
     jns .nonneg
-    xor ax, ax
-    jmp .out
-.nonneg:
-    cmp ax, cx
-    jb .out
-    mov ax, cx
-    dec ax
+    jmp .dead                         ; off the top or the left edge: Excel
+.nonneg:                              ; writes #REF! rather than clamping to
+    cmp ax, cx                        ; A1, and clamping is what made
+    jb .out                           ; `=A1` pasted one column left read as
+    jmp .dead                         ; `=A1` again
 .out:
+    clc
+    ret
+.dead:
+    stc
     ret
 
 ; sh_copy_cellpart - in: SI at a cell reference's first letter (the
@@ -14715,10 +14977,12 @@ sh_copy_cellpart:
     mov [sh_cp_ostart], si
     mov byte [sh_cp_absc], 0           ; stage 3.0e: see sh_rw_absc
     mov byte [sh_cp_absr], 0
-    cmp byte [si], '$'
-    jne .nocoldollar
-    mov byte [sh_cp_absc], 1
-    inc si
+    mov byte [sh_cp_dead], 0           ; ...and stage 4.5: whether the shift
+    cmp byte [si], '$'                 ; took this reference off the sheet.
+    jne .nocoldollar                   ; The DECISION is deferred to the emit
+    mov byte [sh_cp_absc], 1           ; below, because SI still has to be
+    inc si                             ; advanced past the whole reference
+                                       ; either way
 .nocoldollar:
     mov di, sh_ident
     xor cx, cx
@@ -14761,6 +15025,8 @@ sh_copy_cellpart:
     mov bx, [sh_cp_coldelta]
     mov cx, SH_COLS
     call sh_copy_shift
+    jnc .colpinned
+    mov byte [sh_cp_dead], 1
 .colpinned:
     mov [sh_cp_refcol], ax
     mov bx, si
@@ -14776,9 +15042,16 @@ sh_copy_cellpart:
     mov bx, [sh_cp_rowdelta]
     mov cx, SH_ROWS
     call sh_copy_shift
+    jnc .rowpinned
+    mov byte [sh_cp_dead], 1
 .rowpinned:
     mov [sh_cp_refrow], ax
     mov [sh_cp_refend], si
+    cmp byte [sh_cp_dead], 0
+    je .cpalive
+    call sh_rw_emitref
+    jmp .out
+.cpalive:
     cmp byte [sh_cp_absc], 0           ; both halves are REGENERATED below, so
     je .cpnocoldollar                  ; both markers have to be re-emitted
     mov al, '$'
@@ -14920,6 +15193,13 @@ sh_getcell2:
     mov [sh_curtype], al              ; tell a label from the zero it would
     mov al, [es:di+SH_C_AUX]          ; the error code travels with the tag,
     mov [sh_curaux], al               ; so the painter can name it
+    cmp byte [sh_curtype], SH_T_TEXT   ; ...and a LABEL loads its characters
+    jne .nottext                       ; into sh_sacc, so a formula that names
+    push ax                            ; one has something to work WITH rather
+    call sh_txtslot                    ; than the zero underneath it (81.22)
+    call sh_str_load
+    pop ax
+.nottext:
     mov ax, [es:di+SH_C_FOFF]         ; otherwise read as this cell's value
     mov [sh_curtoff], ax
     test byte [es:di+4], 1            ; HASFORMULA. An ERROR tag raises
@@ -14936,8 +15216,11 @@ sh_getcell2:
     ; the FORMAT of the last cell it referenced, and, worse, with that cell's
     ; TYPE and text offset: `=A2+0` where A2 holds a label drew the label.
     ; The cell showed something that was not its value, and said nothing.
-    ; Only the two the EVALUATION cannot change are banked here; the type and
-    ; the error code come back from sh_eval_cell's own writeback instead.
+    ; Only the FORMAT is banked here - the one thing an evaluation cannot
+    ; change. The type, the error code and the text offset all come back from
+    ; sh_eval_cell's own writeback, because a text result's offset is its
+    ; RESULT slot and not the formula text the banked copy would restore
+    ; (81.22.1).
     mov al, [sh_curfmt]
     mov bx, [sh_curtoff]
     push ax
@@ -14946,9 +15229,14 @@ sh_getcell2:
     pop bx                            ; DX as its truncated form
     pop ax
     mov [sh_curfmt], al
-    mov [sh_curtoff], bx               ; sh_curtype/sh_curaux are NOT banked:
-                                       ; the evaluation is what decides them,
-                                       ; and it publishes them at its writeback
+    cmp byte [sh_curtype], SH_T_TEXT   ; A TEXT RESULT KEEPS THE OFFSET THE
+    je .offkept                        ; WRITEBACK PUBLISHED: it is the RESULT
+    mov [sh_curtoff], bx               ; slot, and the banked one is the
+.offkept:                              ; formula's own source text, which the
+                                       ; cell would then draw instead (81.22.1).
+                                       ; sh_curtype/sh_curaux are not banked at
+                                       ; all: the evaluation decides them and
+                                       ; publishes them at its writeback
     cmp byte [sh_curtype], SH_T_ERR   ; ...and an ERROR spreads: anything built
     jne .fresh                        ; on a broken cell is broken too - raised
     mov al, [sh_curaux]               ; from what the writeback (or a cache
@@ -15315,6 +15603,23 @@ sh_rpn_fid:
     db 183, 169, 39, 25, 197          ; PRODUCT COUNTA MOD INT TRUNC
     db 26, 184, 20, 0xFF, 27          ; SIGN FACT SQRT POWER(no) ROUND
     db 34, 35, 8, 9, 100              ; TRUE FALSE ROW COLUMN CHOOSE
+    db 129, 128, 127, 198, 3          ; ISBLANK ISNUMBER ISTEXT ISLOGICAL
+                                       ;   ISERROR
+    db 126, 2, 105, 10, 86            ; ISERR ISNA ISREF NA TYPE
+    db 131, 0xFF                      ; N; ERROR.TYPE is ftab index 261, which
+                                       ; does not fit a byte - and sh_rpn_func
+                                       ; cannot lex the '.' either, so it
+                                       ; declines twice over and the cell goes
+                                       ; out as its cached value
+    db 32, 115, 116, 31, 112          ; LEN LEFT RIGHT MID UPPER
+    db 113, 114, 118, 30, 111         ; LOWER PROPER TRIM REPT CHAR
+    db 121, 117, 130, 33              ; CODE EXACT T VALUE
+    db 124, 82, 120, 119, 48          ; FIND SEARCH SUBSTITUTE REPLACE TEXT
+    db 13, 14                         ; DOLLAR FIXED
+    db 65, 67, 68, 69, 70             ; DATE DAY MONTH YEAR WEEKDAY
+    db 66, 71, 72, 73, 140            ; TIME HOUR MINUTE SECOND DATEVALUE
+    db 141                            ; TIMEVALUE
+sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
 ; tFuncVar (which carries a count byte); 0 = fixed, written as tFunc. This is
@@ -15326,6 +15631,19 @@ sh_rpn_fvar:
     db 1, 1, 0, 0, 1                  ; PRODUCT COUNTA MOD INT TRUNC
     db 0, 0, 0, 0, 0                  ; SIGN FACT SQRT POWER ROUND
     db 0, 0, 1, 1, 1                  ; TRUE FALSE ROW COLUMN CHOOSE
+    db 0, 0, 0, 0, 0                  ; the twelve information functions are
+    db 0, 0, 0, 0, 0                  ; every one of them fixed-arity, NA()
+    db 0, 0                           ; included (0 parameters, min = max)
+    db 0, 1, 1, 0, 0                  ; LEN LEFT(1..2) RIGHT(1..2) MID UPPER
+    db 0, 0, 0, 0, 0                  ; LOWER PROPER TRIM REPT CHAR
+    db 0, 0, 0, 0                     ; CODE EXACT T VALUE
+    db 1, 1, 1, 0, 0                  ; FIND(2..3) SEARCH(2..3)
+                                       ;   SUBSTITUTE(3..4) REPLACE TEXT
+    db 1, 1                           ; DOLLAR(1..2) FIXED(1..3)
+    db 0, 0, 0, 0, 0                  ; DATE DAY MONTH YEAR WEEKDAY
+    db 0, 0, 0, 0, 0                  ; TIME HOUR MINUTE SECOND DATEVALUE
+    db 0                              ; TIMEVALUE - all fixed-arity in 2.1
+sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
 ; Looks ahead and RESTORES nothing because it consumes nothing: sh_rpn_p is
@@ -16156,7 +16474,10 @@ sh_eval_cell:
     cmp word [sh_evaldepth], 0        ; a FRESH evaluation starts clean; a
     jne .depthok                      ; nested one must not, or a referenced
     mov byte [sh_evalerr], 0          ; cell's error would be wiped on the way
-.depthok:                             ; back up
+    mov word [sh_sstk_sp], 0          ; back up. The string bank is reset with
+.depthok:                             ; it, so an error path that returned
+                                       ; early cannot leak a level into the
+                                       ; next formula
     mov bx, [sh_evaldepth]
     inc word [sh_evaldepth]
     push bx                           ; this recursion level's buffer slot
@@ -16194,18 +16515,39 @@ sh_eval_cell:
     pop di                            ; this cell's record offset, restored
     mov es, [sh_cellseg]
     and byte [es:di+4], 0xFD          ; EVALUATING = 0 (HASFORMULA untouched)
-    call sh_acc_to_cellval            ; cache the whole double
-    call sh_acc_toint
+    call sh_acc_toint                 ; DX = the truncated form, for callers
     mov dx, ax
+    ; CACHING THE DOUBLE IS NOT THE FIRST THING ANY MORE, and it cannot be:
+    ; sh_acc_to_cellval writes eight bytes over SH_C_VAL, and a TEXT result's
+    ; slot offset lives in that same union (81.22.1). Doing it up front wiped
+    ; the slot on every pass, so sh_str_store found VAL zero, allocated a fresh
+    ; 65 bytes, and the arena was empty inside a hundred repaints - after which
+    ; every text formula quietly fell back to the number underneath it, which
+    ; is 0. Each branch below caches for itself, and the text one does not.
     mov al, [sh_evalerr]              ; the cell is stored by what it IS: an
     or al, al                         ; error, or a number again once whatever
     jz .notanerr                      ; broke it has been fixed
+    call sh_acc_to_cellval
     mov byte [es:di+SH_C_TYPE], SH_T_ERR
     mov [es:di+SH_C_AUX], al
     mov byte [sh_curtype], SH_T_ERR   ; and PUBLISH it: the caller banked these
     mov [sh_curaux], al               ; two before the evaluation ran, so its
     jmp .errdone                      ; copy names the cell as it USED to be -
 .notanerr:                            ; which paints #DIV/0! on a cell whose
+    cmp byte [sh_curtype], SH_T_TEXT  ; stage 4.5: ...or the answer is a
+    jne .notatext                     ; STRING, which SH_C_FOFF cannot hold
+    call sh_str_store                 ; because the formula's own text is
+    jc .notatext                      ; already there (81.22.1)
+    mov byte [es:di+SH_C_TYPE], SH_T_TEXT
+    mov byte [es:di+SH_C_AUX], 0
+    mov ax, [es:di+SH_C_VAL]          ; the painter reads the RESULT, not the
+    mov [sh_curtoff], ax              ; formula, so publish where it went
+    jmp .errdone
+.notatext:
+    call sh_acc_to_cellval            ; cache the whole double
+    mov ax, [es:di+SH_C_FOFF]         ; and a NUMERIC result publishes the
+    mov [sh_curtoff], ax              ; formula's own text, which is what every
+                                       ; reader of it has always expected
     mov byte [es:di+SH_C_TYPE], SH_T_NUM  ; divisor has since been fixed, and
     mov byte [es:di+SH_C_AUX], 0      ; #ERR on the one that is still broken
     mov byte [sh_curtype], SH_T_NUM   ; (its code having been overwritten by
@@ -16257,7 +16599,7 @@ sh_eval_cell:
 ; project's general rule of degrading a malformed tail rather than
 ; raising an error nothing here has a channel to report through.
 sh_pcmp:
-    call sh_pexpr
+    call sh_pconcat
 sh_pcmpcont:
     cmp byte [si], '='
     je .eq
@@ -16323,10 +16665,12 @@ sh_pcmpcont:
 .true:
     mov ax, 1
     call sh_acc_int
-    ret
-.false:
-    xor ax, ax
+    mov byte [sh_curtype], SH_T_NUM   ; a COMPARISON is a number here (this
+    ret                               ; evaluator has no BOOL value yet), and
+.false:                               ; it is certainly not whatever its
+    xor ax, ax                        ; operands were
     call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
     ret
 
 ; sh_pexpr / sh_pexprcont - additive level. sh_pexprcont is a real entry
@@ -16349,7 +16693,13 @@ sh_pexprcont:
     call sh_binop_pre                 ; and the parse of the right may recurse
     call fp_add
     call sh_acc_store
-    jmp sh_pexprcont
+    mov byte [sh_curtype], SH_T_NUM   ; stage 4.5: the RESULT of arithmetic is
+    jmp sh_pexprcont                  ; a NUMBER whatever its operands were
+                                       ; tagged. Nothing used to say so, so the
+                                       ; tag left by the last cell an operand
+                                       ; touched still stood - unobservable
+                                       ; until sh_pargclass below made a
+                                       ; mid-expression tag answerable
 .sub:
     call sh_chktext
     inc si
@@ -16359,7 +16709,77 @@ sh_pexprcont:
     call sh_binop_pre
     call fp_sub
     call sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_pexprcont
+
+; -----------------------------------------------------------------------------
+; sh_pconcat (stage 4.5) - the '&' level. Excel binds it LOOSER than '+' and
+; TIGHTER than a comparison, so `="a"&"b"="ab"` compares two concatenations
+; rather than concatenating a comparison (81.22.2).
+;
+; Either side may be a number - `=A1&"x"` with A1 holding 12 gives "12x", which
+; is what every spreadsheet does - so a numeric operand is formatted into
+; sh_sacc first. The left operand is banked in sh_sacc2 across the right one's
+; parse, because parsing the right may recurse all the way back through here.
+; -----------------------------------------------------------------------------
+sh_pconcat:
+    call sh_pexpr
+sh_pconcatcont:
+    cmp byte [si], '&'
+    je .cat
+    ret
+.cat:
+    inc si
+    call sh_str_want                  ; the LEFT operand, as text...
+    push si
+    push di
+    mov si, sh_sacc                   ; ...banked, because the right one's
+    mov di, sh_sacc2                  ; parse can reach this routine again
+    call sh_strcpy
+    pop di
+    pop si
+    call sh_pexpr
+    call sh_str_want                  ; the RIGHT operand, as text
+    push si
+    push di
+    mov si, sh_sacc                   ; right operand out of the way first,
+    mov di, sh_sacc2 + SH_STR_MAX + 1 ; then left, then append right
+    call sh_strcpy
+    mov si, sh_sacc2
+    mov di, sh_sacc
+    call sh_strcpy
+    mov si, sh_sacc2 + SH_STR_MAX + 1
+    call sh_str_cat
+    pop di
+    pop si
+    mov byte [sh_curtype], SH_T_TEXT
+    xor ax, ax
+    call sh_acc_int
+    jmp sh_pconcatcont
+
+; -----------------------------------------------------------------------------
+; sh_str_want - make sh_sacc hold the current result AS TEXT, whatever it is.
+; A number is formatted the way the General format shows it, so `=1.5&"x"` is
+; "1.5x" and not "1.500000x".
+; -----------------------------------------------------------------------------
+sh_str_want:
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .done
+    push ax
+    push si
+    push di
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    mov si, sh_numbuf
+    mov di, sh_sacc
+    call sh_strcpy
+    pop di
+    pop si
+    pop ax
+.done:
+    ret
 
 ; sh_pterm / sh_ptermcont - multiplicative level, same reasoning as above.
 sh_pterm:
@@ -16379,6 +16799,7 @@ sh_ptermcont:
     call sh_binop_pre
     call fp_mul
     call sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_ptermcont
 .div:
     call sh_chktext
@@ -16392,9 +16813,11 @@ sh_ptermcont:
     mov byte [sh_evalerr], SH_ERR_DIV0
     xor ax, ax                        ; the value is still zero underneath -
     call sh_acc_int                   ; the flag is what the cell is stored by
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_ptermcont
 .divok:
     call sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
     jmp sh_ptermcont
 
 ; sh_ppow (stage 3.0d) - the '^' level, between multiplication and the
@@ -16426,6 +16849,7 @@ sh_ppowcont:
     call sh_ppow                      ; recurse: right-associative
     call sh_pnest_leave
     call sh_chktext
+    mov byte [sh_curtype], SH_T_NUM
     call sh_acc_toint                 ; the exponent is still a whole number -
     mov cx, ax                        ; a fractional power needs logarithms,
     pop word [sh_lhs]                 ; which this file does not have
@@ -16531,6 +16955,10 @@ sh_pfactor:
     ret
 .notparen:
     mov al, [si]
+    cmp al, 34                        ; stage 4.5: a QUOTED LITERAL is a text
+    je .strlit                        ; value (81.22)
+    cmp al, '#'                       ; ...and an ERROR VALUE spelled out is a
+    je .errlit                        ; literal too (81.26.2)
     cmp al, '$'                       ; stage 3.0e: '$A$1' is an IDENTIFIER,
     je .ident                         ; and this router decides that on the
     cmp al, 'A'                       ; FIRST character - without this line a
@@ -16545,6 +16973,45 @@ sh_pfactor:
     call sh_pident
     ret
 .maybenum:
+    jmp .maybenum2
+.strlit:
+    inc si                            ; past the opening quote
+    push cx
+    push di
+    mov di, sh_sacc
+    mov cx, SH_STR_MAX
+.slc:
+    jcxz .slend
+    mov al, [si]
+    or al, al
+    jz .slend
+    cmp al, 34                        ; a DOUBLED quote is one literal quote,
+    jne .slkeep                       ; the same rule SYLK's K field uses
+    cmp byte [si+1], 34
+    jne .slend
+    inc si
+.slkeep:
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp .slc
+.slend:
+    mov byte [di], 0
+    cmp byte [si], 34                 ; step over the closing quote if it is
+    jne .slnoq                        ; there; an unterminated literal ends at
+    inc si                            ; the end of the formula rather than
+.slnoq:                               ; running off it
+    pop di
+    pop cx
+    mov byte [sh_curtype], SH_T_TEXT
+    xor ax, ax                        ; the number underneath a string is zero,
+    call sh_acc_int                   ; so a reader that wants one gets a
+    ret                               ; defined answer
+.errlit:
+    call sh_perrlit
+    ret
+.maybenum2:
     mov byte [sh_curtype], SH_T_NUM   ; a LITERAL is a number - say so, or the
     call fp_atof                      ; tag left by the last cell referenced
     jnc .numok                        ; still stands and `=B4+1` is judged by
@@ -16555,6 +17022,63 @@ sh_pfactor:
 .numok:
     call sh_acc_store
 .out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_perrlit (stage 4.5) - SI is at a '#'. An error value written out in full
+; is a LITERAL, as it is in Excel, and this file needs to read one for a
+; reason of its own: Delete Row and Delete Column now write `#REF!` into every
+; formula that named a deleted cell (81.26.1), so the parser has to be able to
+; read back what the rewriter wrote. Typing `=#N/A` works for the same reason,
+; which is also what Excel does.
+;
+; The names come from sh_errtab - the same table sh_errname prints and
+; sh_errcode reads - so the spelling written and the spelling recognised
+; cannot drift apart. No name is a prefix of another, so first match wins.
+;
+; out: the error raised in sh_evalerr, sh_acc zero, SI past the name. A '#'
+; followed by something else is #NAME?, which is what an unknown word already
+; gets, and SI steps over the '#' so the parse can still make progress.
+; -----------------------------------------------------------------------------
+sh_perrlit:
+    push bx
+    push cx
+    push di
+    xor cx, cx
+.try:
+    cmp cx, 7
+    jae .unknown
+    mov bx, cx
+    shl bx, 1
+    mov di, [sh_errtab + bx]
+    call sh_matchat                   ; is that name a prefix of SI?
+    jc .found
+    inc cx
+    jmp .try
+.found:
+    mov bx, cx
+    shl bx, 1
+    mov di, [sh_errtab + bx]
+.skip:
+    cmp byte [di], 0
+    je .done
+    inc di
+    inc si
+    jmp .skip
+.done:
+    inc cx                            ; the table is 0-based, the ERROR.TYPE
+    mov [sh_evalerr], cl              ; codes are 1-based
+    jmp .out
+.unknown:
+    mov byte [sh_evalerr], SH_ERR_NAME
+    inc si
+.out:
+    mov byte [sh_curtype], SH_T_NUM
+    xor ax, ax
+    call sh_acc_int
+    pop di
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -16638,19 +17162,32 @@ sh_pident:
 .collect:
     mov al, [si]
     cmp al, 'A'
-    jb .doneletters
+    jb .trydot
     cmp al, 'Z'
     jbe .isletter
     cmp al, 'a'
-    jb .doneletters
+    jb .trydot
     cmp al, 'z'
-    ja .doneletters
+    ja .trydot
+    jmp .isletter
+.trydot:
+    cmp al, '.'                       ; stage 4.5: a '.' INSIDE a name, which
+    jne .doneletters                  ; is how ERROR.TYPE is spelled. Only
+    or cx, cx                         ; after a letter, so a LEADING '.' is
+    jz .doneletters                   ; still the start of a number (`.5`) and
+    cmp cx, SH_NAME_MAX               ; a cell reference still cannot hold one
+    jae .doneletters
+    jmp .store                        ; ...and it does NOT go through the
+                                       ; uppercase fold below: '.' AND 0xDF is
+                                       ; 0x0E, which would have put a control
+                                       ; character in the middle of the name
 .isletter:
     cmp cx, SH_NAME_MAX               ; a DEFINED NAME can be this long, so the
     jae .doneletters                  ; cap is its length rather than a column
                                        ; pair's - a function name is shorter
                                        ; than either
     and al, 0xDF                      ; normalize to uppercase
+.store:
     mov [di], al
     inc di
     inc cx
@@ -16836,6 +17373,8 @@ sh_pcellref:
 sh_prange:
     push ax
     push bx
+    call sh_pnamerange                ; stage 4.6: `=SUM(Sales)` where Sales
+    jc .fold                          ; names a block folds the block (81.29)
     call sh_pcellref
     jnc .plainexpr
     cmp byte [si], ':'
@@ -16847,14 +17386,26 @@ sh_prange:
     jnc .out                          ; malformed range; contributes nothing
     mov [sh_r2col], ax
     mov [sh_r2row], bx
+    call sh_normrange
+.isect:
+    cmp byte [si], ' '                ; stage 4.5: Excel's INTERSECTION
+    jne .fold                         ; operator is a space, and an empty
+    mov ax, si                        ; intersection is the one and only
+    call sh_pintersect                ; thing that produces #NULL! (81.26.3)
+    jc .out                           ; empty: there is nothing to fold
+    cmp ax, si
+    je .fold                          ; nothing consumed - the space was not
+    jmp .isect                        ; an operator after all
+.fold:
     call sh_foldrange
     jmp .out
 .singlecell:
     call sh_getcell2                  ; the value lands in sh_acc either way -
 .havev:                               ; getcell2 puts a zero there for a cell
-    call sh_ppowcont                  ; that does not exist. '^' binds tighter
-    call sh_ptermcont                 ; than the levels below, so its
-    call sh_pexprcont                 ; continuation must run first
+    call sh_ppowcont                  ; that does not exist. Tightest binding
+    call sh_ptermcont                 ; first: '^', then '*', then '+', then
+    call sh_pexprcont                 ; '&', then the comparison (81.22.2)
+    call sh_pconcatcont
     call sh_pcmpcont
     call sh_foldvalue
     jmp .out
@@ -16866,27 +17417,96 @@ sh_prange:
     pop ax
     ret
 
-; sh_foldrange - in: sh_r1col/row, sh_r2col/row (either corner order);
-; folds every OCCUPIED cell in the rectangle via sh_foldvalue.
+; -----------------------------------------------------------------------------
+; sh_pnamerange - is the argument at SI a DEFINED NAME and nothing else?
 ;
-; It walks the RECORD ARRAY, not the rectangle (81.3): records are sorted by
-; (packed row, col) - the stage 2.0 comment above sh_findcell - so ONE binary
-; search finds the first corner and a forward scan visits exactly the records
-; in the row span. Walking every coordinate was O(area x log n): the ordinary
-; =SUM(A1:A16384) idiom was 16,384 searches inside the paint callback, seconds
-; per repaint on the 8088 and invisible in an emulator (PERFORMANCE.md rule 6).
-; The bound rides in SI and the cursor in DI because sh_getcell2 preserves
-; both across the evaluation a formula cell runs; the end offset is a
-; function of [sh_ncells] alone, the same for a nested fold, so sh_rrow can
-; hold it.
-sh_foldrange:
+; in:  SI at the start of an argument
+; out: CF=1 - sh_r1col/row..sh_r2col/row hold the rectangle it names and SI is
+;             past it; CF=0 - not a name, SI UNCHANGED.
+;
+; Strict about "nothing else" for the same reason sh_pargref is (81.23): a ','
+; or the ')' has to follow, so `=SUM(Sales+1)` is an expression about Sales
+; and not a fold over it. A name followed by '(' is a FUNCTION CALL - that is
+; the only thing separating SUM from a cell called SUM - and is declined here
+; so sh_pfunc still gets it.
+;
+; A one-cell name resolves to a 1x1 rectangle and folds to the same single
+; value the expression path already gave it, so nothing that worked before
+; takes a different route to a different answer.
+; -----------------------------------------------------------------------------
+sh_pnamerange:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    push es
+    mov di, sh_ident
+    xor cx, cx
+.collect:
+    mov al, [si]
+    cmp al, 'A'
+    jb .done
+    cmp al, 'Z'
+    jbe .keep
+    cmp al, 'a'
+    jb .done
+    cmp al, 'z'
+    ja .done
+.keep:
+    cmp cx, SH_NAME_MAX
+    jae .fail
+    and al, 0xDF
+    mov [di], al
+    inc di
+    inc cx
+    inc si
+    jmp .collect
+.done:
+    mov byte [di], 0
+    or cx, cx
+    jz .fail                          ; nothing here at all
+    mov al, [si]
+    cmp al, ','
+    je .look
+    cmp al, ')'
+    jne .fail                         ; '(' lands here too: a call, not a name
+.look:
+    push si
+    mov si, sh_ident
+    call sh_name_lookup
+    pop si
+    jnc .fail
+    mov [sh_r1col], ax
+    mov [sh_r1row], bx
+    mov [sh_r2col], cx
+    mov [sh_r2row], dx
+    call sh_normrange
+    pop di                            ; DI was pushed LAST, so it comes off
+    add sp, 2                         ; first - then discard the saved SI and
+    pop dx                            ; keep advancing
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.fail:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_normrange - put sh_r1col/row..sh_r2col/row in top-left/bottom-right
+; order. Split out of sh_foldrange so sh_pintersect can rely on both
+; rectangles being normalised before it compares their edges.
+sh_normrange:
+    push ax
+    push bx
     mov ax, [sh_r1col]
     mov bx, [sh_r2col]
     cmp ax, bx
@@ -16903,7 +17523,120 @@ sh_foldrange:
 .rowok:
     mov [sh_r1row], ax
     mov [sh_r2row], bx
+    pop bx
+    pop ax
+    ret
 
+; -----------------------------------------------------------------------------
+sh_pintersect:
+    push ax
+    push bx
+    push si
+.spaces:
+    cmp byte [si], ' '
+    jne .second
+    inc si
+    jmp .spaces
+.second:
+    call sh_pcellref
+    jnc .nope
+    mov [sh_ix1col], ax
+    mov [sh_ix1row], bx
+    mov [sh_ix2col], ax
+    mov [sh_ix2row], bx
+    cmp byte [si], ':'
+    jne .haveit
+    inc si
+    call sh_pcellref
+    jnc .nope
+    mov [sh_ix2col], ax
+    mov [sh_ix2row], bx
+.haveit:
+    mov ax, [sh_ix1col]               ; normalise the second rectangle too -
+    mov bx, [sh_ix2col]               ; `B5:A1` names the same block as
+    cmp ax, bx                        ; `A1:B5` and must intersect the same
+    jle .c2ok
+    xchg ax, bx
+.c2ok:
+    mov [sh_ix1col], ax
+    mov [sh_ix2col], bx
+    mov ax, [sh_ix1row]
+    mov bx, [sh_ix2row]
+    cmp ax, bx
+    jle .r2ok
+    xchg ax, bx
+.r2ok:
+    mov [sh_ix1row], ax
+    mov [sh_ix2row], bx
+    mov ax, [sh_ix1col]               ; the intersection is the later start
+    cmp ax, [sh_r1col]                ; and the earlier end, on each axis
+    jbe .e1
+    mov [sh_r1col], ax
+.e1:
+    mov ax, [sh_ix2col]
+    cmp ax, [sh_r2col]
+    jae .e2
+    mov [sh_r2col], ax
+.e2:
+    mov ax, [sh_ix1row]
+    cmp ax, [sh_r1row]
+    jbe .e3
+    mov [sh_r1row], ax
+.e3:
+    mov ax, [sh_ix2row]
+    cmp ax, [sh_r2row]
+    jae .e4
+    mov [sh_r2row], ax
+.e4:
+    mov ax, [sh_r1col]
+    cmp ax, [sh_r2col]
+    ja .empty
+    mov ax, [sh_r1row]
+    cmp ax, [sh_r2row]
+    ja .empty
+    add sp, 2                         ; discard the saved SI - keep advancing
+    pop bx
+    pop ax
+    clc
+    ret
+.empty:
+    mov byte [sh_evalerr], SH_ERR_NULL
+    add sp, 2
+    pop bx
+    pop ax
+    stc
+    ret
+.nope:
+    pop si                            ; not a range after the space: put SI
+    pop bx                            ; back, and the caller folds the first
+    pop ax                            ; range alone
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_foldrange - in: sh_r1col/row, sh_r2col/row (either corner order);
+; folds every OCCUPIED cell in the rectangle via sh_foldvalue.
+;
+; It walks the RECORD ARRAY, not the rectangle (81.3): records are sorted by
+; (packed row, col) - the stage 2.0 comment above sh_findcell - so ONE binary
+; search finds the first corner and a forward scan visits exactly the records
+; in the row span. Walking every coordinate was O(area x log n): the ordinary
+; =SUM(A1:A16384) idiom was 16,384 searches inside the paint callback, seconds
+; per repaint on the 8088 and invisible in an emulator (PERFORMANCE.md rule 6).
+; The bound rides in SI and the cursor in DI because sh_getcell2 preserves
+; both across the evaluation a formula cell runs; the end offset is a
+; function of [sh_ncells] alone, the same for a nested fold, so sh_rrow can
+; hold it.
+; -----------------------------------------------------------------------------
+sh_foldrange:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call sh_normrange                  ; split out for sh_pintersect's sake
     mov ax, [sh_ncells]
     mov bx, SH_C_SZ
     mul bx
@@ -17326,6 +18059,13 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 58                         ; stage 4.5: 58+ are the DATE functions,
+    jae .dodate                        ; which are numbers all the way down
+    cmp ax, 37                         ; stage 4.5: 37+ are the TEXT functions,
+    jae .dotext                        ; whose RESULT may be a string
+    cmp ax, 25                         ; stage 4.5: 25+ are the INFORMATION
+    jae .doinfo                        ; functions, whose argument stays a
+                                       ; REFERENCE instead of folding (81.23)
     cmp ax, 12                         ; 12+ are stage 3.0d's special forms:
     jae .dospecial                     ; fixed arity, parsed by sh_pspecial,
                                        ; not folded over ranges
@@ -17372,6 +18112,20 @@ sh_pfunc:
     call sh_pabs
     mov dx, ax
     jmp .done
+.dodate:
+    call sh_pdate
+    mov dx, ax
+    jmp .typed
+.dotext:
+    call sh_ptext
+    mov dx, ax
+    jmp .done                          ; NOT .typed: a text function's answer
+                                       ; is TEXT, and .typed exists to stamp
+                                       ; SH_T_NUM on a fold's result
+.doinfo:
+    call sh_pinfo
+    mov dx, ax
+    jmp .typed
 .dospecial:
     call sh_pspecial
     mov dx, ax
@@ -17722,6 +18476,2301 @@ sh_isqrt:
     mov ax, cx
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; REFERENCE-TYPED ARGUMENTS (stage 4.5)
+;
+; Every argument in this evaluator has always been FOLDED TO A VALUE before
+; the function saw it, so by the time ISBLANK was called there was no
+; reference left to ask about: an empty cell and a cell holding 0 both arrived
+; as 0, and a label arrived as the zero underneath it. That is why the comment
+; above sh_pspecial listed ISBLANK, ISNUMBER and ISNA as deliberately absent -
+; a version of any of them that returned a plausible constant would have been
+; worse than its absence. These two routines are what ends that (81.23).
+;
+; sh_pargref - is the argument at SI a reference AND NOTHING ELSE? It is
+; deliberately strict about "nothing else": ISNUMBER(A1+1) is a question about
+; the sum, not about A1, so a reference only counts when the ',' or the ')'
+; follows it immediately.
+;
+; in:  SI at the start of an argument
+; out: CF=1 - sh_arg1col/sh_arg1row/sh_arg2col/sh_arg2row hold it (a single
+;             cell puts the same cell in both corners), sh_refarea = 1 for an
+;             A1:B9 form, and SI is past it
+;
+; THESE ARE NOT sh_r1col/sh_r2col, AND THE DISTINCTION IS NOT COSMETIC. Those
+; four are sh_foldrange's loop bounds, read on EVERY iteration of its walk -
+; so a cell inside the range that itself calls an information function used to
+; overwrite the bounds mid-walk. `=SUM(A5:A9)` over a column of ISBLANK()
+; formulas answered 1: A5's own argument reset the corners to A3, and the
+; second iteration compared row 4 against row 2 and stopped. The right answer
+; on the first cell and then nothing, with no error anywhere.
+;
+; The caller must still CONSUME these before evaluating anything, because a
+; nested reference argument overwrites them in turn. sh_pargclass reads them
+; into AX/BX on the line before its sh_getcell2 call for exactly that reason.
+;      CF=0 - not a reference; SI is UNCHANGED, exactly as sh_pcellref leaves
+;             it, and the caller parses an ordinary expression instead
+; =============================================================================
+sh_pargref:
+    push ax
+    push bx
+    push si                           ; the only way back out on failure
+    mov byte [sh_refarea], 0
+    call sh_pcellref
+    jnc .fail
+    mov [sh_arg1col], ax
+    mov [sh_arg1row], bx
+    mov [sh_arg2col], ax
+    mov [sh_arg2row], bx
+    cmp byte [si], ':'
+    jne .whole
+    inc si
+    call sh_pcellref
+    jnc .fail
+    mov [sh_arg2col], ax
+    mov [sh_arg2row], bx
+    mov byte [sh_refarea], 1
+.whole:
+    mov al, [si]
+    cmp al, ','
+    je .ok
+    cmp al, ')'
+    jne .fail
+.ok:
+    add sp, 2                         ; discard the saved SI - keep advancing
+    pop bx
+    pop ax
+    stc
+    ret
+.fail:
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+
+; =============================================================================
+; sh_pargclass - one argument, CLASSIFIED rather than folded.
+;
+; out: sh_argtype  = the SH_T_* the argument IS. SH_T_BLANK for a cell that
+;                    does not exist, which is the distinction this whole
+;                    routine exists to make
+;      sh_argaux   = its error code, 0 when it is not an error
+;      sh_argisref = 1 when the argument was a bare reference
+;      sh_acc      = its value, for the callers that want the number too
+;      SI past the argument
+;
+; THE ARGUMENT'S ERROR IS THIS FUNCTION'S ANSWER, NOT THE SHEET'S. sh_evalerr
+; is banked across the argument and put back afterwards, so ISERROR(1/0) is
+; TRUE rather than being a #DIV/0! itself - trapping the error is the entire
+; point of asking. Every other caller in this file WANTS an argument's error
+; to spread (that is what puts one #DIV/0! at the bottom of a column), which
+; is why the banking lives here and not in sh_getcell2.
+; =============================================================================
+sh_pargclass:
+    push bx
+    push cx
+    push dx
+    push di
+    mov al, [sh_evalerr]
+    push ax
+    mov byte [sh_evalerr], 0
+    mov byte [sh_argisref], 0
+    mov byte [sh_argaux], 0
+    call sh_pargref
+    jnc .expr
+    mov byte [sh_argisref], 1
+    mov ax, [sh_arg1col]              ; an AREA is classified by its top-left
+    mov bx, [sh_arg1row]              ; corner - what a 1x1 use of one would
+    call sh_getcell2                  ; intersect to anyway
+    jc .occupied
+    mov byte [sh_argtype], SH_T_BLANK ; the cell does not exist. Not zero: the
+    xor ax, ax                        ; whole point
+    call sh_acc_int                   ; ...though its value is still a defined
+    jmp .fin                          ; zero for anyone who asks for one
+.occupied:
+    mov al, [sh_curtype]
+    mov [sh_argtype], al
+    mov al, [sh_curaux]
+    mov [sh_argaux], al
+    jmp .fin
+.expr:
+    call sh_pcmp
+    mov al, [sh_curtype]
+    mov [sh_argtype], al
+.fin:
+    mov al, [sh_evalerr]              ; an error RAISED by the argument outranks
+    or al, al                         ; whatever tag it left behind: 1/0 is an
+    jz .noerr                         ; error value, not the zero underneath it
+    mov byte [sh_argtype], SH_T_ERR
+    mov [sh_argaux], al
+.noerr:
+    pop ax
+    mov [sh_evalerr], al
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
+; question about what an argument IS rather than what it is worth, so each is
+; one sh_pargclass call and a comparison.
+;
+; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
+; =============================================================================
+sh_pinfo:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax                        ; DI = the id; sh_pargclass clobbers
+    cmp di, 33                        ; everything else. NA() is the one that
+    je .na                            ; takes no argument at all
+    call sh_pargclass
+    mov bl, [sh_argtype]
+    mov bh, [sh_argaux]
+    cmp di, 34
+    je .type
+    cmp di, 35
+    je .n
+    cmp di, 36
+    je .errtype
+    xor ax, ax                        ; every remaining id answers TRUE or
+    cmp di, 25                        ; FALSE, and FALSE is the default
+    je .isblank
+    cmp di, 26
+    je .isnumber
+    cmp di, 27
+    je .istext
+    cmp di, 28
+    je .islogical
+    cmp di, 29
+    je .iserror
+    cmp di, 30
+    je .iserr
+    cmp di, 31
+    je .isna
+    cmp byte [sh_argisref], 0         ; 32 ISREF - the one question only
+    je .close                         ; sh_pargref can answer
+    jmp .yes
+.isblank:
+    cmp bl, SH_T_BLANK
+    je .yes
+    jmp .close
+.isnumber:
+    cmp bl, SH_T_NUM
+    je .yes
+    jmp .close
+.istext:
+    cmp bl, SH_T_TEXT
+    je .yes
+    jmp .close
+.islogical:
+    cmp bl, SH_T_BOOL                 ; nothing produces one YET, so this is
+    je .yes                           ; FALSE for everything - which is the
+    jmp .close                        ; honest answer, not a placeholder one
+.iserror:
+    cmp bl, SH_T_ERR
+    je .yes
+    jmp .close
+.iserr:
+    cmp bl, SH_T_ERR                  ; ISERR is ISERROR MINUS #N/A, and that
+    jne .close                        ; distinction is the only reason both
+    cmp bh, SH_ERR_NA                 ; exist
+    je .close
+    jmp .yes
+.isna:
+    cmp bl, SH_T_ERR
+    jne .close
+    cmp bh, SH_ERR_NA
+    jne .close
+.yes:
+    mov ax, 1
+    jmp .close
+.type:
+    mov ax, 1                         ; Excel's own numbering: 1 number,
+    cmp bl, SH_T_TEXT                 ; 2 text, 4 logical, 16 error. A BLANK
+    jne .ty1                          ; cell is a 1 there too
+    mov ax, 2
+    jmp .close
+.ty1:
+    cmp bl, SH_T_BOOL
+    jne .ty2
+    mov ax, 4
+    jmp .close
+.ty2:
+    cmp bl, SH_T_ERR
+    jne .close
+    mov ax, 16
+    jmp .close
+.errtype:
+    cmp bl, SH_T_ERR                  ; THE SH_ERR_* CODES ARE Excel's OWN
+    jne .errna                        ; ERROR.TYPE NUMBERS - they were numbered
+    xor ah, ah                        ; that way when error values landed,
+    mov al, bh                        ; precisely so this could be a copy
+    jmp .close
+.errna:
+    mov byte [sh_evalerr], SH_ERR_NA  ; ERROR.TYPE of something that is not an
+    xor ax, ax                        ; error is #N/A, not zero
+    jmp .close
+.na:
+    mov byte [sh_evalerr], SH_ERR_NA
+    xor ax, ax
+    jmp .close
+.n:
+    cmp bl, SH_T_NUM                  ; N() passes a NUMBER through unchanged,
+    je .nnum                          ; fraction and all, so it cannot leave by
+    cmp bl, SH_T_ERR                  ; the integer path the rest of these use
+    jne .nzero
+    mov [sh_evalerr], bh              ; N of an error IS that error
+.nzero:
+    xor ax, ax
+    call sh_acc_int
+.nnum:
+    call sh_acc_toint
+    jmp .step
+.close:
+    call sh_acc_int
+.step:
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ins_at - in: DI = where in sh_numbuf to insert, AL = the byte. Everything
+; from DI to the NUL moves right one, the NUL included. The building block
+; both the thousands grouping and TEXT's leading zeros are made of.
+; -----------------------------------------------------------------------------
+sh_ins_at:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov bl, al
+    mov cx, di                        ; CX = where to stop shifting
+    mov si, di
+.flen:
+    cmp byte [si], 0
+    je .found
+    inc si
+    jmp .flen
+.found:
+    mov di, si
+    inc di
+.shift:
+    mov al, [si]
+    mov [di], al
+    cmp si, cx
+    je .place
+    dec si
+    dec di
+    jmp .shift
+.place:
+    mov di, cx
+    mov [di], bl
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_group3 - thousands separators through sh_numbuf's INTEGER part, however
+; many it takes.
+;
+; IT REPLACES sh_comma_ins, WHICH HAD SILENTLY BECOME WRONG. That routine's
+; own comment said "a 16-bit value never needs more than one - max 5 digits",
+; and that was true right up until stage 4.0 made every value a double. It
+; counted digits to the NUL, so the fraction counted as part of the run:
+; 1234.5 in the Comma format drew as "123,4.5", and 1234567 as "1234,567".
+; Nothing in the app could show a number that large or that precise when the
+; routine was written.
+;
+; Separators go in RIGHT TO LEFT, which is why each insertion can ignore the
+; ones already placed - they are all to its right.
+; -----------------------------------------------------------------------------
+sh_group3:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, sh_numbuf
+    cmp byte [si], '-'
+    jne .nosign
+    inc si
+.nosign:
+    cmp byte [si], '$'
+    jne .nodollar
+    inc si
+.nodollar:
+    mov bx, si                        ; BX = the first integer digit
+.ilen:
+    mov al, [si]
+    cmp al, '0'
+    jb .iend
+    cmp al, '9'
+    ja .iend
+    inc si
+    jmp .ilen
+.iend:
+    mov cx, si
+    sub cx, bx                        ; CX = how many integer digits
+.loop:
+    cmp cx, 4
+    jb .out                           ; three or fewer need no separator
+    sub cx, 3
+    mov di, bx
+    add di, cx
+    mov al, ','
+    call sh_ins_at
+    jmp .loop
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_numdp - fp A -> sh_numbuf with EXACTLY CX decimal places, rounded.
+;
+; fp_ftoa counts SIGNIFICANT digits and trims trailing zeros, which is right
+; for General and wrong for money: 1.5 to two places has to be "1.50". So the
+; value is rounded first (fp_round, the same one ROUND() uses) and the places
+; are then padded back on.
+;
+; A value big or small enough that fp_ftoa reaches for scientific notation is
+; left exactly as it came - padding a mantissa and grouping an exponent would
+; both be nonsense, and passing it through is the one honest answer.
+; -----------------------------------------------------------------------------
+sh_numdp:
+    push ax
+    push cx
+    push si
+    push di
+    or cx, cx
+    jns .cap
+    xor cx, cx                        ; a negative place count rounds left of
+.cap:                                 ; the point, and shows none to the right
+    cmp cx, 9
+    jbe .round
+    mov cx, 9
+.round:
+    push cx
+    call fp_round
+    call sh_acc_store
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 15
+    call fp_ftoa
+    pop cx
+    mov si, sh_numbuf
+.scan:
+    mov al, [si]
+    or al, al
+    jz .nopoint
+    cmp al, 'e'
+    je .asis                          ; scientific: leave it exactly as it came
+    cmp al, 'E'
+    je .asis
+    cmp al, '.'
+    je .haspoint
+    inc si
+    jmp .scan
+.nopoint:
+    jcxz .out                         ; SI is at the NUL
+    mov byte [si], '.'
+    inc si
+    jmp .pad
+.haspoint:
+    inc si
+.count:
+    cmp byte [si], 0
+    je .padded
+    inc si
+    or cx, cx
+    jz .count                         ; more digits than asked for: leave them
+    dec cx                            ; rather than cut a rounded value short
+    jmp .count
+.padded:
+.pad:
+    jcxz .out
+    mov byte [si], '0'
+    inc si
+    dec cx
+    jmp .pad
+.out:
+    mov byte [si], 0
+.asis:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dollar_ins - '$' in front of sh_numbuf's digits but AFTER a leading '-',
+; so -123 in a currency format is "-$123" and not "$-123".
+; -----------------------------------------------------------------------------
+sh_dollar_ins:
+    push ax
+    push di
+    mov di, sh_numbuf
+    cmp byte [di], '-'
+    jne .here
+    inc di
+.here:
+    mov al, '$'
+    call sh_ins_at
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_padzero - pad sh_numbuf's integer part with leading zeros to CL digits,
+; which is what the '0' placeholders in a TEXT format ask for ("00000").
+; -----------------------------------------------------------------------------
+sh_padzero:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    xor ch, ch
+    mov si, sh_numbuf
+    cmp byte [si], '-'
+    jne .ns
+    inc si
+.ns:
+    mov bx, si
+.ilen:
+    mov al, [si]
+    cmp al, '0'
+    jb .iend
+    cmp al, '9'
+    ja .iend
+    inc si
+    jmp .ilen
+.iend:
+    mov ax, si
+    sub ax, bx                        ; AX = integer digits present
+.pad:
+    cmp ax, cx
+    jae .out
+    mov di, bx
+    push ax
+    mov al, '0'
+    call sh_ins_at
+    pop ax
+    inc ax
+    jmp .pad
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_upcase - AL and AH both to upper case, for SEARCH's folded compare
+; -----------------------------------------------------------------------------
+sh_upcase:
+    cmp al, 'a'
+    jb .a1
+    cmp al, 'z'
+    ja .a1
+    sub al, 32
+.a1:
+    cmp ah, 'a'
+    jb .a2
+    cmp ah, 'z'
+    ja .a2
+    sub ah, 32
+.a2:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_matchat - in: SI, DI; out: CF=1 if the string at DI is a prefix of the
+; one at SI. Both preserved.
+;
+; AN EMPTY NEEDLE NEVER MATCHES, deliberately: SUBSTITUTE walks the text one
+; character at a time and advances by the needle's length on a hit, so an
+; empty one that matched would advance by nothing and never terminate.
+; -----------------------------------------------------------------------------
+sh_matchat:
+    push ax
+    push si
+    push di
+    cmp byte [di], 0
+    je .no
+.l:
+    mov al, [di]
+    or al, al
+    jz .yes
+    mov ah, [si]
+    cmp al, ah
+    jne .no
+    inc si
+    inc di
+    jmp .l
+.yes:
+    stc
+    jmp .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_strfind - in: SI = haystack, DI = needle, AX = 0-based start,
+;              DL = 0 exact / 1 case-folded (which is FIND vs SEARCH, and the
+;              only difference between them)
+; out: AX = the 0-based position, or 0xFFFF for no match.
+;
+; The two bases live in bss rather than on the stack because the inner compare
+; needs SI and DI, the outer scan needs a third pointer, and the 8086 will
+; only address memory through BX, BP, SI and DI - with BP belonging to SS.
+; -----------------------------------------------------------------------------
+sh_strfind:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [sh_fnd_hb], si
+    mov [sh_fnd_nd], di
+    mov bx, si
+    or ax, ax
+    js .none                          ; a start before the string has no answer
+.adv:
+    or ax, ax
+    jz .outer
+    cmp byte [bx], 0
+    je .none                          ; a start past the end likewise
+    inc bx
+    dec ax
+    jmp .adv
+.outer:
+    mov si, bx
+    mov di, [sh_fnd_nd]
+.inner:
+    mov al, [di]
+    or al, al
+    jz .hit                           ; the needle ran out: a match
+    mov ah, [si]
+    or ah, ah
+    jz .nohit                         ; the haystack ran out first
+    or dl, dl
+    jz .same
+    call sh_upcase
+.same:
+    cmp al, ah
+    jne .nohit
+    inc si
+    inc di
+    jmp .inner
+.nohit:
+    cmp byte [bx], 0
+    je .none
+    inc bx
+    jmp .outer
+.hit:
+    mov ax, bx
+    sub ax, [sh_fnd_hb]
+    jmp .out
+.none:
+    mov ax, 0xFFFF
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sacc_putc - append AL to sh_sacc, dropping it once SH_STR_MAX is reached.
+; It finds the end each time, which is O(n^2) over 64 bytes and costs less
+; than the cursor a caller would otherwise have to thread through two loops.
+; -----------------------------------------------------------------------------
+sh_sacc_putc:
+    push ax
+    push cx
+    push si
+    mov si, sh_sacc
+    mov cx, SH_STR_MAX
+.f:
+    cmp byte [si], 0
+    je .at
+    inc si
+    dec cx
+    jnz .f
+    jmp .out
+.at:
+    mov [si], al
+    mov byte [si+1], 0
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; THE STRING STACK (stage 4.5)
+;
+; A text function with more than one string argument has to hold the first one
+; while the second is parsed - and parsing the second can reach any text
+; function again, which writes sh_sacc. sh_sacc alone is therefore not enough,
+; and neither is a second fixed buffer: `=FIND(A1, LEFT(A2,3))` would have the
+; inner LEFT overwrite the outer FIND's banked needle.
+;
+; This is NOT the machine stack. SPEC.md 20.6 rule 6 gives a task 384 bytes
+; and says in as many words: no deep recursion, no big stack buffers. Banking
+; 65 bytes per argument per frame there, under six levels of sh_eval_cell
+; recursion, is exactly the buffer that rule forbids. So the bank is bss, it
+; is bounded at SH_SSTK_N levels, and running out is a #VALUE! rather than a
+; silent overwrite.
+; =============================================================================
+; sh_smove - copy SH_STR_MAX+1 bytes SI -> DI, both DS-relative. Not `rep
+; movsb`, because ES belongs to the cell segment through most of this file.
+sh_smove:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, SH_STR_MAX + 1
+.l:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .l
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; sh_sslot - in: AX = depth from the TOP (0 = the string banked last)
+; out: SI = its address. Reading past the bottom gives the EMPTY string, not
+; whatever bss lies below it.
+sh_sslot:
+    push ax
+    push dx
+    mov si, sh_snull
+    mov dx, [sh_sstk_sp]
+    inc ax
+    cmp ax, dx
+    ja .out
+    sub dx, ax
+    mov ax, dx
+    mov dx, SH_STR_MAX + 1
+    mul dx
+    add ax, sh_sstk
+    mov si, ax
+.out:
+    pop dx
+    pop ax
+    ret
+
+; sh_spush - bank sh_sacc. out: CF=1 the stack is full, and #VALUE! is raised
+sh_spush:
+    push ax
+    push dx
+    push si
+    push di
+    mov ax, [sh_sstk_sp]
+    cmp ax, SH_SSTK_N
+    jae .full
+    inc word [sh_sstk_sp]
+    mov dx, SH_STR_MAX + 1
+    mul dx                            ; DX:AX, and SH_SSTK_N * 65 is far
+    add ax, sh_sstk                   ; inside a segment, so DX is zero
+    mov di, ax
+    mov si, sh_sacc
+    call sh_smove
+    clc
+    jmp .out
+.full:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop ax
+    ret
+
+; sh_spop - drop the top bank
+sh_spop:
+    cmp word [sh_sstk_sp], 0
+    je .out
+    dec word [sh_sstk_sp]
+.out:
+    ret
+
+; sh_srestore - put the top bank back in sh_sacc and drop it
+sh_srestore:
+    push ax
+    push si
+    push di
+    xor ax, ax
+    call sh_sslot
+    mov di, sh_sacc
+    call sh_smove
+    call sh_spop
+    pop di
+    pop si
+    pop ax
+    ret
+
+; sh_pstrarg - one argument, AS TEXT in sh_sacc, whatever it was worth
+sh_pstrarg:
+    call sh_pcmp
+    call sh_str_want
+    ret
+
+; =============================================================================
+; sh_ptext (stage 4.5) - the TEXT functions, ids 37 and up. The whole category
+; was blocked on two things and both have now landed: a formula could not
+; return a string at all until 81.22, and a function could not keep an
+; argument as a string across the next one until the bank above.
+;
+; in: AX = the id, SI just past '('.
+; out: AX = the integer form of the result, SI past ')', and sh_curtype says
+; which half of the result pair is live - these are the FIRST functions in
+; this file whose answer may be either.
+;
+; EVERY ONE THAT TAKES A SECOND ARGUMENT BANKS ITS STRING FIRST. Parsing the
+; second argument can reach any text function, and every one of those writes
+; sh_sacc; `=LEFT(A1, LEN("abc"))` destroyed A1's text between reading it and
+; cutting it.
+; =============================================================================
+sh_ptext:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax
+    cmp di, 46
+    je .char                          ; CHAR takes a NUMBER, not a string
+    cmp di, 49
+    je .t                             ; T asks the TYPE, so it must see the
+    cmp di, 55                        ; argument before sh_str_want converts it
+    jae .numfmt3                      ; TEXT/DOLLAR/FIXED open with a NUMBER
+    call sh_pstrarg
+    cmp di, 37
+    je .len
+    cmp di, 38
+    je .left
+    cmp di, 39
+    je .right
+    cmp di, 40
+    je .mid
+    cmp di, 41
+    je .upper
+    cmp di, 42
+    je .lower
+    cmp di, 43
+    je .proper
+    cmp di, 44
+    je .trim
+    cmp di, 45
+    je .rept
+    cmp di, 47
+    je .code
+    cmp di, 48
+    je .exact
+    cmp di, 51
+    je .find
+    cmp di, 52
+    je .find                          ; SEARCH is FIND with the compare folded
+    cmp di, 53
+    je .subst
+    cmp di, 54
+    je .replace
+    push si                           ; 50 VALUE
+    mov si, sh_sacc
+    call fp_atof                      ; CF=1 = nothing parseable in there
+    pop si
+    jc .valbad
+    call sh_acc_store
+    call sh_acc_toint
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .close2
+.valbad:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    jmp .num
+
+.len:
+    push si
+    mov si, sh_sacc
+    call sh_strlen                    ; LEN of a NUMBER is the length of the
+    pop si                            ; text it displays as, which is what
+    jmp .num                          ; sh_str_want already produced
+
+.code:
+    mov al, [sh_sacc]
+    or al, al
+    jnz .code1
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; CODE("") has no answer to give
+.code1:
+    xor ah, ah
+    jmp .num
+
+.char:
+    call sh_parg
+    cmp ax, 1
+    jl .charbad
+    cmp ax, 255
+    jle .charok
+.charbad:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    mov byte [sh_sacc], 0
+    jmp .text
+.charok:
+    mov [sh_sacc], al
+    mov byte [sh_sacc+1], 0
+    jmp .text
+
+.t:
+    call sh_pcmp
+    cmp byte [sh_curtype], SH_T_TEXT  ; T passes TEXT through and answers the
+    je .text                          ; empty string for everything else -
+    mov byte [sh_sacc], 0             ; which is the whole of what it is for
+    jmp .text
+
+.left:
+    call sh_spush
+    jc .text
+    mov cx, 1                         ; LEFT(t) with no count means one
+    cmp byte [si], ','
+    jne .left1
+    inc si
+    call sh_parg
+    mov cx, ax
+.left1:
+    call sh_srestore
+    or cx, cx
+    jns .left2
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; a negative count is Excel's #VALUE!
+    xor cx, cx
+.left2:
+    push si
+    mov si, sh_sacc
+.leftl:
+    jcxz .leftcut
+    cmp byte [si], 0
+    je .leftd
+    inc si
+    dec cx
+    jmp .leftl
+.leftcut:
+    mov byte [si], 0
+.leftd:
+    pop si
+    jmp .text
+
+.right:
+    call sh_spush
+    jc .text
+    mov cx, 1
+    cmp byte [si], ','
+    jne .right1
+    inc si
+    call sh_parg
+    mov cx, ax
+.right1:
+    call sh_srestore
+    or cx, cx
+    jns .right2
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor cx, cx
+.right2:
+    push si
+    mov si, sh_sacc
+    call sh_strlen
+    sub ax, cx                        ; AX = where the tail starts
+    jns .right3
+    xor ax, ax                        ; asking for more than there is gives
+.right3:                              ; all of it, not an error
+    mov si, sh_sacc
+    add si, ax
+    push di
+    mov di, sh_sacc
+    call sh_strcpy                    ; destination BELOW source, so a forward
+    pop di                            ; copy of an overlap is safe
+    pop si
+    jmp .text
+
+.mid:
+    call sh_spush
+    jc .text
+    xor bx, bx
+    xor cx, cx
+    cmp byte [si], ','
+    jne .midrest
+    inc si
+    call sh_parg
+    mov bx, ax                        ; BX = the 1-based start
+    cmp byte [si], ','
+    jne .midrest
+    inc si
+    call sh_parg
+    mov cx, ax
+.midrest:
+    call sh_srestore
+    or bx, bx
+    jg .mid1
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; MID's start is 1-based and a start
+    mov byte [sh_sacc], 0             ; below 1 is #VALUE!, not a clamp
+    jmp .text
+.mid1:
+    or cx, cx
+    jns .mid2
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor cx, cx
+.mid2:
+    dec bx
+    push si
+    mov si, sh_sacc
+    call sh_strlen
+    cmp bx, ax
+    jb .mid3
+    mov byte [sh_sacc], 0             ; a start past the end is the empty
+    pop si                            ; string, which is not an error
+    jmp .text
+.mid3:
+    mov si, sh_sacc
+    add si, bx
+    push di
+    mov di, sh_sacc
+.midcopy:
+    jcxz .midterm
+    mov al, [si]
+    or al, al
+    jz .midterm
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .midcopy
+.midterm:
+    mov byte [di], 0
+    pop di
+    pop si
+    jmp .text
+
+.upper:
+    push si
+    mov si, sh_sacc
+.ul:
+    mov al, [si]
+    or al, al
+    jz .uld
+    cmp al, 'a'
+    jb .uln
+    cmp al, 'z'
+    ja .uln
+    sub al, 32
+    mov [si], al
+.uln:
+    inc si
+    jmp .ul
+.uld:
+    pop si
+    jmp .text
+
+.lower:
+    push si
+    mov si, sh_sacc
+.ll:
+    mov al, [si]
+    or al, al
+    jz .lld
+    cmp al, 'A'
+    jb .lln
+    cmp al, 'Z'
+    ja .lln
+    add al, 32
+    mov [si], al
+.lln:
+    inc si
+    jmp .ll
+.lld:
+    pop si
+    jmp .text
+
+.proper:
+    push si
+    mov si, sh_sacc
+    xor bl, bl                        ; BL = the previous character was a letter
+.pl:
+    mov al, [si]
+    or al, al
+    jz .pld
+    call sh_isalpha                   ; CF=1 = a letter
+    jnc .pnotal
+    or bl, bl
+    jnz .plow                         ; inside a word: lower case
+    cmp al, 'a'                       ; starting one: upper
+    jb .pset
+    cmp al, 'z'
+    ja .pset
+    sub al, 32
+    jmp .pset
+.plow:
+    cmp al, 'A'
+    jb .pset
+    cmp al, 'Z'
+    ja .pset
+    add al, 32
+.pset:
+    mov [si], al
+    mov bl, 1
+    jmp .pnext
+.pnotal:
+    xor bl, bl                        ; anything that is not a letter starts a
+.pnext:                               ; new word, digits and punctuation alike
+    inc si
+    jmp .pl
+.pld:
+    pop si
+    jmp .text
+
+; TRIM removes the leading and trailing spaces AND collapses every internal
+; run to one. That last part is the half people forget, and it is the half
+; that makes TRIM worth having on data pasted out of a report.
+.trim:
+    push si
+    push di
+    mov si, sh_sacc
+    mov di, sh_sacc
+.tskip:
+    cmp byte [si], ' '
+    jne .tloop
+    inc si
+    jmp .tskip
+.tloop:
+    mov al, [si]
+    or al, al
+    jz .tend
+    cmp al, ' '
+    jne .tkeep
+    inc si
+    cmp byte [si], 0                  ; a run at the very END leaves nothing
+    je .tend
+    cmp byte [si], ' '
+    je .tloop
+    mov byte [di], ' '
+    inc di
+    jmp .tloop
+.tkeep:
+    mov [di], al
+    inc di
+    inc si
+    jmp .tloop
+.tend:
+    mov byte [di], 0
+    pop di
+    pop si
+    jmp .text
+
+.rept:
+    call sh_spush                     ; the pattern stays banked for the whole
+    jc .text                          ; build, because sh_sacc becomes the
+    xor cx, cx                        ; RESULT
+    cmp byte [si], ','
+    jne .rept0
+    inc si
+    call sh_parg
+    mov cx, ax
+.rept0:
+    or cx, cx
+    jns .rept1
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor cx, cx
+.rept1:
+    cmp cx, SH_STR_MAX                ; the result clips at SH_STR_MAX and each
+    jbe .rept2                        ; round adds at least one character, so
+    mov cx, SH_STR_MAX                ; REPT("x",30000) is 64 rounds, not 30000
+.rept2:
+    mov byte [sh_sacc], 0
+.reptl:
+    jcxz .reptd
+    push cx
+    push si
+    xor ax, ax
+    call sh_sslot
+    call sh_str_cat
+    pop si
+    pop cx
+    dec cx
+    jmp .reptl
+.reptd:
+    call sh_spop
+    jmp .text
+
+.exact:
+    call sh_spush
+    jc .exzero
+    cmp byte [si], ','
+    jne .exdrop
+    inc si
+    call sh_pstrarg
+    push si
+    push di
+    xor ax, ax
+    call sh_sslot
+    mov di, sh_sacc
+    call sh_streq                     ; CASE-SENSITIVE, which is the whole
+    pop di                            ; difference between EXACT and '='
+    pop si
+    mov ax, 0
+    jnc .ex1
+    mov ax, 1
+.ex1:
+    call sh_spop
+    jmp .num
+.exdrop:
+    call sh_spop
+.exzero:
+    xor ax, ax
+    jmp .num
+
+; ---- FIND (51) and SEARCH (52) ----------------------------------------------
+; The same scan; SEARCH folds case. Neither takes wildcards - Excel's SEARCH
+; does, and saying so is better than a '?' that silently matches itself.
+.find:
+    call sh_spush                     ; the needle
+    jc .textzero
+    cmp byte [si], ','
+    jne .find1drop
+    inc si
+    call sh_pstrarg                   ; the haystack
+    call sh_spush
+    jc .find1drop
+    mov bx, 1                         ; the start defaults to the first
+    cmp byte [si], ','                ; character
+    jne .findgo
+    inc si
+    call sh_parg
+    mov bx, ax
+.findgo:
+    dec bx                            ; 0-based
+    push si
+    push di
+    xor dl, dl
+    cmp di, 52
+    jne .findcs
+    mov dl, 1
+.findcs:
+    xor ax, ax
+    call sh_sslot                     ; SI = the haystack
+    push si
+    mov ax, 1
+    call sh_sslot                     ; SI = the needle
+    mov di, si
+    pop si
+    mov ax, bx
+    call sh_strfind
+    pop di
+    pop si
+    call sh_spop
+    call sh_spop
+    cmp ax, 0xFFFF
+    je .findnone
+    inc ax                            ; FIND answers 1-based, as Excel does
+    jmp .num
+.findnone:
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; not found is #VALUE!, which is what
+    xor ax, ax                        ; makes ISERROR the standard way to ask
+    jmp .num                          ; whether it was there at all
+.find1drop:
+    call sh_spop
+    xor ax, ax
+    jmp .num
+
+; ---- SUBSTITUTE(text, old, new, [instance]) (53) -----------------------------
+.subst:
+    call sh_spush                     ; the text
+    jc .textzero
+    cmp byte [si], ','
+    jne .sub1drop
+    inc si
+    call sh_pstrarg
+    call sh_spush                     ; old
+    jc .sub1drop
+    cmp byte [si], ','
+    jne .sub2drop
+    inc si
+    call sh_pstrarg
+    call sh_spush                     ; new
+    jc .sub2drop
+    xor bx, bx                        ; 0 = every occurrence, which is what no
+    cmp byte [si], ','                ; fourth argument means
+    jne .subgo
+    inc si
+    call sh_parg
+    mov bx, ax
+    or bx, bx
+    jg .subgo
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; instance 0 or negative
+    xor bx, bx
+.subgo:
+    push si
+    push di
+    xor cx, cx                        ; CX = occurrences seen so far
+    mov ax, 2
+    call sh_sslot
+    mov di, si                        ; DI = the cursor through the text
+    mov byte [sh_sacc], 0
+.subl:
+    cmp byte [di], 0
+    je .subend
+    mov ax, 1
+    call sh_sslot                     ; SI = old
+    xchg si, di
+    call sh_matchat                   ; does old start here?
+    xchg si, di
+    jnc .subcopy
+    inc cx
+    or bx, bx
+    jz .subrepl
+    cmp cx, bx
+    jne .subkeep                      ; a numbered instance, and not this one
+.subrepl:
+    xor ax, ax
+    call sh_sslot                     ; SI = new
+    call sh_str_cat
+    mov ax, 1
+    call sh_sslot                     ; SI = old, to measure the skip
+.subskip:
+    cmp byte [si], 0
+    je .subl
+    inc si
+    inc di
+    jmp .subskip
+.subkeep:
+    mov ax, 1
+    call sh_sslot
+.subkeepl:
+    cmp byte [si], 0
+    je .subl
+    mov al, [di]
+    call sh_sacc_putc
+    inc si
+    inc di
+    jmp .subkeepl
+.subcopy:
+    mov al, [di]
+    call sh_sacc_putc
+    inc di
+    jmp .subl
+.subend:
+    pop di
+    pop si
+    call sh_spop
+    call sh_spop
+    call sh_spop
+    jmp .text
+.sub2drop:
+    call sh_spop
+.sub1drop:
+    call sh_spop
+    jmp .textzero
+
+; ---- REPLACE(old_text, start, num_chars, new_text) (54) ----------------------
+.replace:
+    call sh_spush                     ; old_text
+    jc .textzero
+    xor bx, bx
+    xor cx, cx
+    cmp byte [si], ','
+    jne .rep1drop
+    inc si
+    call sh_parg
+    mov bx, ax                        ; BX = the 1-based start
+    cmp byte [si], ','
+    jne .rep1drop
+    inc si
+    call sh_parg
+    mov cx, ax                        ; CX = how many characters go
+    cmp byte [si], ','
+    jne .rep1drop
+    inc si
+    call sh_pstrarg                   ; new_text
+    call sh_spush
+    jc .rep1drop
+    or bx, bx
+    jg .repgo
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; REPLACE's start is 1-based too
+    mov bx, 1
+.repgo:
+    dec bx
+    or cx, cx
+    jns .rep2
+    xor cx, cx
+.rep2:
+    push si
+    push di
+    mov ax, 1
+    call sh_sslot                     ; SI = old_text
+    mov di, sh_sacc
+    mov dx, bx                        ; DX = how many head characters to keep
+.rephead:
+    or dx, dx
+    jz .repheadend
+    mov al, [si]
+    or al, al
+    jz .repheadend
+    mov [di], al
+    inc si
+    inc di
+    dec dx
+    jmp .rephead
+.repheadend:
+    mov byte [di], 0
+.repskip:
+    jcxz .reptail
+    cmp byte [si], 0
+    je .reptail
+    inc si
+    dec cx
+    jmp .repskip
+.reptail:
+    push si                           ; where the tail starts
+    xor ax, ax
+    call sh_sslot                     ; SI = new_text
+    call sh_str_cat
+    pop si
+    call sh_str_cat
+    pop di
+    pop si
+    call sh_spop
+    call sh_spop
+    jmp .text
+.rep1drop:
+    call sh_spop
+    jmp .textzero
+
+; ---- TEXT / DOLLAR / FIXED (55, 56, 57) --------------------------------------
+; The three that turn a number into text. All open with a VALUE rather than a
+; string, so they are dispatched before the shared sh_pstrarg above.
+.numfmt3:
+    call sh_pcmp                      ; the value
+    cmp di, 55
+    je .dotext55
+    call sh_vpush                     ; banked across the count's own parse
+    mov cx, 2                         ; DOLLAR and FIXED both default to two
+    cmp byte [si], ','
+    jne .nfnone
+    inc si
+    call sh_parg
+    mov cx, ax
+    xor bl, bl                        ; BL = FIXED's "no commas" flag, zeroed
+    cmp di, 57                        ; AFTER sh_parg rather than before it -
+    jne .nf1                          ; sh_pcmp underneath it clobbers BL
+    cmp byte [si], ','                ; FIXED's third argument suppresses the
+    jne .nf1                          ; separators
+    inc si
+    push cx
+    call sh_parg
+    or ax, ax
+    jz .nf0
+    mov bl, 1
+.nf0:
+    pop cx
+    jmp .nf1
+.nfnone:
+    xor bl, bl
+.nf1:
+    ; NOTHING MAY SIT ON THE STACK ACROSS sh_vpush -> sh_binop_pre: the pair
+    ; banks the value in the CALLER's frame, below the return address, so a
+    ; push in between is what sh_binop_pre would pop as the value. BL and CX
+    ; go to bss for the one instruction it takes.
+    mov [sh_fmt_fl], bl
+    mov [sh_fmt_cx], cx
+    call sh_binop_pre                 ; A = the value again
+    mov bl, [sh_fmt_fl]
+    mov cx, [sh_fmt_cx]
+    cmp di, 56
+    je .dollar
+    call sh_numdp
+    or bl, bl
+    jnz .nfdone
+    call sh_group3
+.nfdone:
+    jmp .numtext
+
+; DOLLAR wraps a NEGATIVE in parentheses - "($1,234.57)" - which is Excel's
+; own rendering and not the same as a minus sign.
+.dollar:
+    push cx
+    call sh_acc_store
+    mov cl, [sh_acc+7]
+    mov [sh_dol_neg], cl              ; the packed double's sign bit
+    and byte [sh_acc+7], 0x7F         ; format the magnitude
+    call sh_acc_load_a
+    pop cx
+    call sh_numdp
+    call sh_group3
+    call sh_dollar_ins
+    test byte [sh_dol_neg], 0x80
+    jz .numtext
+    push di
+    mov di, sh_numbuf
+    mov al, '('
+    call sh_ins_at
+    pop di
+    push si
+    mov si, sh_numbuf
+    call sh_strlen
+    mov si, sh_numbuf
+    add si, ax
+    mov byte [si], ')'
+    mov byte [si+1], 0
+    pop si
+    jmp .numtext
+
+; TEXT(value, format). The format is read for the four things a 2.1-era code
+; can say that this app can honour: a '$', a ',' for grouping, the '0'/'#'
+; placeholders either side of the '.', and a trailing '%'. A code with NO
+; placeholder at all - "General", or anything this does not understand - falls
+; back to General, which is the one answer that is never misleading.
+.dotext55:
+    call sh_vpush
+    cmp byte [si], ','
+    jne .t55none
+    inc si
+    call sh_pstrarg                   ; the format string
+    call sh_spush
+    jc .t55none
+    push si
+    push di
+    xor bx, bx                        ; BL: 1 = '$', 2 = grouping, 4 = '%'
+    xor cx, cx                        ; CH = decimals, CL = minimum integers
+    xor dh, dh                        ; DH = past the '.' yet
+    xor dl, dl                        ; DL = any placeholder seen at all
+    xor ax, ax
+    call sh_sslot                     ; SI = the format
+.fmtl:
+    mov al, [si]
+    or al, al
+    jz .fmtdone
+    cmp al, '$'
+    jne .fmt1
+    or bl, 1
+    jmp .fmtn
+.fmt1:
+    cmp al, '%'
+    jne .fmt2
+    or bl, 4
+    jmp .fmtn
+.fmt2:
+    cmp al, ','
+    jne .fmt3
+    or bl, 2
+    jmp .fmtn
+.fmt3:
+    cmp al, '.'
+    jne .fmt4
+    mov dh, 1
+    jmp .fmtn
+.fmt4:
+    cmp al, '0'
+    je .fmtph
+    cmp al, '#'
+    jne .fmtn
+    mov dl, 1                         ; '#' is a placeholder but never forces a
+    or dh, dh                         ; digit, so it counts toward the decimals
+    jz .fmtn                          ; and not toward the minimum integers
+    inc ch
+    jmp .fmtn
+.fmtph:
+    mov dl, 1
+    or dh, dh
+    jz .fmtint
+    inc ch
+    jmp .fmtn
+.fmtint:
+    inc cl
+.fmtn:
+    inc si
+    jmp .fmtl
+.fmtdone:
+    pop di
+    pop si
+    call sh_spop
+    mov [sh_fmt_fl], bl               ; bss, not the stack - see the note at
+    mov [sh_fmt_cx], cx               ; .nf1 above
+    mov [sh_fmt_ph], dl
+    call sh_binop_pre                 ; A = the value again
+    call sh_acc_store
+    mov bl, [sh_fmt_fl]
+    mov cx, [sh_fmt_cx]
+    mov dl, [sh_fmt_ph]
+    or dl, dl
+    jz .t55gen                        ; no placeholder anywhere: General
+    test bl, 4
+    jz .t55nopct
+    call sh_vpush                     ; a percent format scales by a hundred
+    mov ax, 100
+    call sh_acc_int
+    call sh_binop_pre
+    call fp_mul
+    call sh_acc_store
+.t55nopct:
+    push bx
+    push cx
+    call sh_acc_load_a
+    mov cl, ch
+    xor ch, ch
+    call sh_numdp
+    pop cx
+    pop bx
+    push bx
+    call sh_padzero                   ; CL = the minimum integer digits
+    pop bx
+    test bl, 2
+    jz .t55nogrp
+    call sh_group3
+.t55nogrp:
+    test bl, 1
+    jz .t55nodol
+    call sh_dollar_ins
+.t55nodol:
+    test bl, 4
+    jz .numtext
+    call sh_pct_app
+    jmp .numtext
+.t55gen:
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+    jmp .numtext
+.t55none:
+    call sh_binop_pre                 ; unwind the bank, whatever went wrong
+.textzero:
+    mov byte [sh_sacc], 0
+    jmp .text
+
+; sh_numbuf now holds the formatted text: hand it over as the result
+.numtext:
+    push si
+    push di
+    mov si, sh_numbuf
+    mov di, sh_sacc
+    call sh_strcpy
+    pop di
+    pop si
+    jmp .text
+
+.num:
+    mov byte [sh_curtype], SH_T_NUM
+    call sh_acc_int
+    jmp .close2
+.text:
+    mov byte [sh_curtype], SH_T_TEXT
+    xor ax, ax
+    call sh_acc_int                   ; the number underneath a string is zero
+    xor ax, ax                        ; ...and so is the integer form sh_pfunc
+                                       ; hands its own caller
+.close2:
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_isalpha - in: AL; out: CF=1 if it is a letter (AL untouched)
+sh_isalpha:
+    cmp al, 'A'
+    jb .no
+    cmp al, 'Z'
+    jbe .yes
+    cmp al, 'a'
+    jb .no
+    cmp al, 'z'
+    ja .no
+.yes:
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; =============================================================================
+; DATE SERIALS (stage 4.5)
+;
+; A date is a NUMBER: the count of days since the epoch, with the time of day
+; in the fraction. That is Excel's model and it is why dates arithmetic at all
+; - tomorrow is +1, an interval is a subtraction, and a date sorts because it
+; is a number that happens to be shown as a date.
+;
+; THE EPOCH IS SERIAL 1 = 1 JANUARY 1900, AND SERIAL 60 IS 29 FEBRUARY 1900 -
+; A DAY THAT NEVER EXISTED. 1900 was not a leap year; Lotus 1-2-3 thought it
+; was, Excel copied the mistake so the two could exchange files, and every
+; version since has kept it for the same reason. Getting it "right" here would
+; put every date in a shared file one day out from what Excel shows, which is
+; a worse bug than the one being reproduced. So serial 60 is the phantom day,
+; and 61 is 1 March 1900.
+;
+; The range is what an UNSIGNED word holds, which is almost exactly Excel
+; 2.1's own: serial 65535 is 5 June 2079, and 2.1 stops at 31 December 2078.
+; -----------------------------------------------------------------------------
+; sh_fp_32768_b - B = 32768.0. Clobbers A, so build it BEFORE loading the
+; value. fp_i2b cannot: 32768 is not a signed 16-bit integer.
+; -----------------------------------------------------------------------------
+sh_fp_32768_b:
+    push ax
+    mov word [fp_t0], 0x8000
+    mov word [fp_t1], 0
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call fp_a_to_b
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_acc_toudw - sh_acc, truncated toward zero, as an UNSIGNED word in AX.
+;
+; fp_a2i is signed and clamps at 32767 - as a date serial that is 24 September
+; 1989, so every date this app will ever be asked about is past it and the
+; signed conversion is not usable for serials at all. The top bit is taken off
+; by hand and put back with an unsigned add.
+;
+; out: AX = the word; CF=1 if the value was negative or 65536 or more, with
+; AX = 0. Every other register preserved.
+; -----------------------------------------------------------------------------
+sh_acc_toudw:
+    push bx
+    call sh_acc_load_a
+    call fp_trunc
+    call sh_acc_store
+    test byte [sh_acc+7], 0x80        ; a negative serial has no unsigned form
+    jnz .bad
+    call sh_fp_32768_b
+    call sh_acc_load_a
+    call fp_cmpab                     ; SIGNED flags: fp_cmpab answers -1/0/1
+    jl .small                         ; in AX and sets them from that, so `jb`
+                                       ; is never taken and every serial past
+                                       ; 32767 fell down the clamping path
+    call sh_fp_32768_b
+    call sh_acc_load_a
+    call fp_sub                       ; A = value - 32768, now 0..32767
+    call fp_a2i
+    jc .bad
+    add ax, 32768                     ; ...and back on, unsigned
+    clc
+    jmp .out
+.small:
+    call sh_acc_load_a
+    call fp_a2i
+    jc .bad
+.out:
+    pop bx
+    ret
+.bad:
+    xor ax, ax
+    stc
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_acc_fromudw - AX, an unsigned word, becomes sh_acc. fp_i2a is signed and
+; would make 46265 negative.
+; -----------------------------------------------------------------------------
+sh_acc_fromudw:
+    push ax
+    mov [fp_t0], ax
+    mov word [fp_t1], 0
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call sh_acc_store
+    pop ax
+    ret
+
+; sh_isleap - in: sh_dt_ly = the year; out: CF=1 if it is a leap year.
+; The full rule, not "divisible by four": 1900 is not a leap year and 2000 is,
+; and both are inside the range this app covers.
+sh_isleap:
+    push ax
+    push bx
+    push dx
+    mov ax, [sh_dt_ly]
+    mov bx, 400
+    xor dx, dx
+    div bx
+    or dx, dx
+    jz .yes                           ; a multiple of 400 always is
+    mov ax, [sh_dt_ly]
+    mov bx, 100
+    xor dx, dx
+    div bx
+    or dx, dx
+    jz .no                            ; a multiple of 100 (but not 400) is not
+    mov ax, [sh_dt_ly]
+    mov bx, 4
+    xor dx, dx
+    div bx
+    or dx, dx
+    jz .yes
+.no:
+    clc
+    jmp .out
+.yes:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; sh_yearlen - in: AX = year; out: AX = 365 or 366
+sh_yearlen:
+    mov [sh_dt_ly], ax
+    call sh_isleap
+    mov ax, 365
+    jnc .out
+    inc ax
+.out:
+    ret
+
+; sh_monlen - in: AX = month 1..12, BX = year; out: AX = days in it
+sh_monlen:
+    push bx
+    push si
+    cmp ax, 1
+    jb .bad
+    cmp ax, 12
+    ja .bad
+    mov si, ax
+    dec si
+    mov [sh_dt_ly], bx
+    xor bh, bh
+    mov bl, [sh_dt_mlen + si]
+    mov ax, bx
+    cmp si, 1                         ; February
+    jne .out
+    call sh_isleap
+    jnc .out
+    inc ax
+    jmp .out
+.bad:
+    xor ax, ax
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ser_to_ymd - in: AX = an unsigned date serial; out: sh_dt_y/m/d.
+; A serial of 0 or one past the range answers 1900/1/0, which is what Excel
+; shows for serial 0 and is not an error.
+; -----------------------------------------------------------------------------
+sh_ser_to_ymd:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov word [sh_dt_y], 1900
+    mov word [sh_dt_m], 1
+    mov word [sh_dt_d], 0
+    or ax, ax
+    jz .out                           ; serial 0 is Excel's own 0-January-1900
+    cmp ax, 60
+    jne .notphantom
+    mov word [sh_dt_m], 2             ; THE PHANTOM DAY. It is not reachable by
+    mov word [sh_dt_d], 29            ; walking a real calendar, because it is
+    jmp .out                          ; not in one
+.notphantom:
+    cmp ax, 61
+    jb .haven
+    dec ax                            ; past it: the real calendar is one day
+.haven:                               ; behind the serial
+    mov cx, ax                        ; CX = days, 1 = 1900-01-01
+.yloop:
+    mov ax, [sh_dt_y]
+    call sh_yearlen
+    cmp cx, ax
+    jbe .haveyear
+    sub cx, ax
+    inc word [sh_dt_y]
+    jmp .yloop
+.haveyear:
+.mloop:
+    mov ax, [sh_dt_m]
+    mov bx, [sh_dt_y]
+    call sh_monlen
+    cmp cx, ax
+    jbe .havemonth
+    sub cx, ax
+    inc word [sh_dt_m]
+    jmp .mloop
+.havemonth:
+    mov [sh_dt_d], cx
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ymd_to_ser - in: sh_dt_y/m/d; out: AX = the serial, CF=1 if the date is
+; outside 1900-01-01 .. 2079-06-06 (what an unsigned word holds).
+;
+; The month is allowed to run outside 1..12 and the day outside a month's
+; length, exactly as Excel's DATE() does: DATE(1990,13,1) is January 1991 and
+; DATE(1990,1,32) is 1 February. Rolling the month first and then simply
+; ADDING the days is what makes both fall out for free.
+; -----------------------------------------------------------------------------
+sh_ymd_to_ser:
+    push bx
+    push cx
+    push dx
+.mroll:
+    mov ax, [sh_dt_m]
+    cmp ax, 1
+    jge .mrollhi
+    add word [sh_dt_m], 12            ; month 0 is December of the year before
+    dec word [sh_dt_y]
+    jmp .mroll
+.mrollhi:
+    cmp ax, 12
+    jle .mdone
+    sub word [sh_dt_m], 12
+    inc word [sh_dt_y]
+    jmp .mroll
+.mdone:
+    mov ax, [sh_dt_y]
+    cmp ax, 1900
+    jb .bad
+    cmp ax, 2080
+    ja .bad
+    xor cx, cx                        ; CX = whole days before this year
+    mov word [sh_dt_ys], 1900
+.yloop:
+    mov ax, [sh_dt_ys]
+    cmp ax, [sh_dt_y]
+    jae .ydone
+    call sh_yearlen
+    add cx, ax
+    inc word [sh_dt_ys]
+    jmp .yloop
+.ydone:
+    mov word [sh_dt_ms], 1
+.mloop:
+    mov ax, [sh_dt_ms]
+    cmp ax, [sh_dt_m]
+    jae .mdone2
+    mov bx, [sh_dt_y]
+    call sh_monlen
+    add cx, ax
+    inc word [sh_dt_ms]
+    jmp .mloop
+.mdone2:
+    add cx, [sh_dt_d]                 ; the day, which may itself overflow the
+    mov ax, cx                        ; month - Excel lets it, and adding is
+    cmp ax, 60                        ; what makes that work
+    jb .noskip
+    inc ax                            ; step over the phantom 29 February 1900
+.noskip:
+    clc
+    jmp .out
+.bad:
+    xor ax, ax
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_pdate - the DATE and TIME functions, ids 58 and up.
+;
+; NOW() IS DELIBERATELY ABSENT, and this is the one function in the category
+; that cannot be written: no kernel call publishes the calendar date. The
+; kernel HAS it - it draws "Aug 28 2026" in the menu bar every second - but
+; the only clocks a package can read are OSAPI_GET_TICKS and OSAPI_BOOT_TICKS,
+; both of which count since boot. A NOW() built on those would answer with the
+; uptime, which is not the time and would be believed. It needs one new API
+; slot publishing what the clock already reads, and that is a kernel change
+; with its own review, not something to fake here (81.28).
+;
+; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
+; -----------------------------------------------------------------------------
+sh_pdate:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax
+    cmp di, 58
+    je .fdate
+    cmp di, 63
+    je .ftime
+    cmp di, 67
+    je .fdatevalue
+    cmp di, 68
+    je .ftimevalue
+    ; 59..62, 64..66 all take one serial
+    call sh_pcmp
+    cmp di, 64
+    jae .timepart
+    call sh_acc_toudw                 ; the whole days
+    jc .zeroout
+    mov bx, ax
+    cmp di, 62
+    je .fweekday
+    call sh_ser_to_ymd
+    mov ax, [sh_dt_d]
+    cmp di, 59
+    je .close
+    mov ax, [sh_dt_m]
+    cmp di, 60
+    je .close
+    mov ax, [sh_dt_y]                 ; 61 YEAR
+    jmp .close
+.fweekday:
+    mov ax, bx                        ; 1 = Sunday, which is Excel's numbering
+    add ax, 6                         ; and its own serial 1 (a Sunday there)
+    xor dx, dx
+    mov bx, 7
+    div bx
+    mov ax, dx
+    inc ax
+    jmp .close
+
+; ---- HOUR / MINUTE / SECOND, off the same split ----------------------------
+.timepart:
+    call sh_dt_hms                    ; sh_dt_min = minutes, AX = seconds
+    cmp di, 66
+    je .close                         ; 66 SECOND is already in AX
+    mov ax, [sh_dt_min]
+    xor dx, dx
+    mov bx, 60
+    div bx                            ; AX = hours, DX = minutes within it
+    cmp di, 64
+    je .close                         ; 64 HOUR
+    mov ax, dx                        ; 65 MINUTE
+    jmp .close
+
+; ---- DATE(year, month, day) ------------------------------------------------
+.fdate:
+    call sh_parg
+    mov [sh_dt_y], ax
+    cmp ax, 1900                      ; a two-digit year is 19xx, as it is in
+    jae .dy4                          ; Excel 2.1 - the app predates the
+    cmp ax, 0                         ; question of what 00 means
+    jl .zeroout
+    add word [sh_dt_y], 1900
+.dy4:
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov [sh_dt_m], ax
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov [sh_dt_d], ax
+    call sh_ymd_to_ser
+    jc .numerr
+    call sh_acc_fromudw
+    jmp .closed
+
+; ---- TIME(hour, minute, second) --------------------------------------------
+.ftime:
+    call sh_parg
+    mov bx, ax                        ; hours
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov cx, ax                        ; minutes
+    cmp byte [si], ','
+    jne .zeroout
+    inc si
+    call sh_parg
+    mov dx, ax                        ; seconds
+    call sh_hms_to_acc
+    jmp .closed
+
+; ---- DATEVALUE / TIMEVALUE -------------------------------------------------
+.fdatevalue:
+    call sh_pstrarg
+    call sh_dt_parse3                 ; BX/CX/DX = the three fields
+    jc .numerr
+    mov [sh_dt_y], dx
+    mov ax, dx
+    cmp ax, 1900
+    jae .dv4
+    add word [sh_dt_y], 1900
+.dv4:
+    mov [sh_dt_m], bx
+    mov [sh_dt_d], cx
+    call sh_ymd_to_ser
+    jc .numerr
+    call sh_acc_fromudw
+    jmp .closed
+.ftimevalue:
+    call sh_pstrarg
+    call sh_dt_parse3
+    jc .numerr
+    call sh_hms_to_acc                ; BX/CX/DX are already h/m/s
+    jmp .closed
+
+.numerr:
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; Excel's own answer for a date it
+.zeroout:                                ; cannot make sense of
+    xor ax, ax
+.close:
+    call sh_acc_int
+.closed:
+    mov byte [sh_curtype], SH_T_NUM
+    call sh_acc_toint
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_hms_to_acc - BX/CX/DX = hours/minutes/seconds -> sh_acc as a fraction of
+; a day. The three are summed as SECONDS first, in 32 bits, because
+; 24 hours is 86,400 and a word stops at 65,535 - and Excel allows more than
+; 24 hours in, rolling it into the day count.
+; -----------------------------------------------------------------------------
+sh_hms_to_acc:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, bx                        ; hours -> seconds, in DX:AX
+    mov bx, 3600
+    mul bx                            ; unsigned: 24*3600 already needs 17 bits
+    push dx
+    push ax
+    mov ax, cx
+    mov bx, 60
+    mul bx
+    pop bx
+    pop cx                            ; CX:BX = the hours' seconds
+    add ax, bx
+    adc dx, cx
+    pop cx                            ; the ORIGINAL DX (seconds argument)
+    push cx
+    add ax, cx
+    adc dx, 0
+    mov [fp_t0], ax                   ; the whole thing as an unsigned 32-bit
+    mov [fp_t1], dx
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call sh_acc_store
+    call sh_dt_86400_b
+    call sh_acc_load_a
+    call fp_div                       ; a fraction of one day
+    call sh_acc_store
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dt_86400_b - B = 86400.0, the seconds in a day. Clobbers A.
+sh_dt_86400_b:
+    push ax
+    mov word [fp_t0], 86400 & 0xFFFF
+    mov word [fp_t1], 86400 >> 16
+    mov word [fp_t2], 0
+    mov word [fp_t3], 0
+    call fp_u64_to_a
+    call fp_a_to_b
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dt_hms - sh_acc holds a serial; out: sh_dt_min = whole minutes since
+; midnight (0..1439) and AX = the seconds within that minute (0..59).
+;
+; NOT SECONDS-OF-DAY: 86,399 does not fit an unsigned word, so there is no
+; single number to hand back. The rounding still happens in the seconds
+; domain, in floating point where it fits - a time built as h/m/s is not exact
+; in binary, and truncating a 10:30:00 that came back as 10:29:59.9999 would
+; show 10:29:59. Minutes and seconds are then split off the rounded value, so
+; the two can never disagree about which second it is.
+; -----------------------------------------------------------------------------
+sh_dt_hms:
+    call sh_acc_load_a
+    call fp_floor
+    call sh_dt_tmp_store              ; the whole days
+    call sh_acc_load_a
+    call sh_dt_tmp_load_b
+    call fp_sub                       ; A = the fraction
+    call sh_acc_store
+    call sh_dt_86400_b                ; clobbers A, so it goes first
+    call sh_acc_load_a
+    call fp_mul                       ; A = seconds, as a real
+    xor cx, cx
+    call fp_round                     ; ...to the nearest whole one
+    call sh_acc_store                 ; sh_acc = s, a whole 0..86400
+    mov ax, 60
+    call fp_i2b
+    call sh_acc_load_a
+    call fp_div
+    call fp_floor                     ; A = whole minutes, at most 1439
+    call sh_dt_tmp_store
+    call fp_a2i
+    mov [sh_dt_min], ax
+    mov ax, 60
+    call fp_i2b
+    call sh_dt_tmp_load_a             ; A = the minutes again
+    call fp_mul                       ; A = 60 * minutes
+    call sh_dt_tmp_store
+    call sh_acc_load_a                ; A = s
+    call sh_dt_tmp_load_b
+    call fp_sub                       ; A = the leftover seconds
+    call fp_a2i
+    ret
+
+; sh_dt_tmp_store / sh_dt_tmp_load_b - park fp A in bss and bring it back as
+; B. sh_vpush cannot be used here: it banks on the CALLER's stack and pairs
+; with exactly one sh_binop_pre (81.25.3).
+sh_dt_tmp_store:
+    push di
+    mov di, sh_dt_tmp                 ; fp_pack_a writes at DI; fp_unpack_b
+    call fp_pack_a                    ; reads at SI, and leaves A alone
+    pop di
+    ret
+sh_dt_tmp_load_b:
+    push si
+    mov si, sh_dt_tmp
+    call fp_unpack_b
+    pop si
+    ret
+sh_dt_tmp_load_a:
+    push si
+    mov si, sh_dt_tmp
+    call fp_unpack_a
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dt_parse3 - three unsigned numbers out of sh_sacc, separated by anything
+; that is not a digit. out: BX, CX, DX in the order they appear; CF=1 if
+; fewer than two were found.
+;
+; "8/28/2026" and "10:30:00" go through the same routine because the shape is
+; the same and the separator carries no meaning this needs - which is also why
+; DATEVALUE here takes only the numeric forms, and not "28-Aug-2026": a month
+; NAME is a different parse, and a half-supported one that quietly returned
+; #VALUE! for the spelled form would be worse than a documented limit.
+; -----------------------------------------------------------------------------
+sh_dt_parse3:
+    push si
+    push di
+    mov si, sh_sacc
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    xor di, di                        ; DI = how many fields have been read
+.field:
+    mov al, [si]
+    or al, al
+    je .done
+    cmp al, '0'
+    jb .skip
+    cmp al, '9'
+    ja .skip
+    mov word [sh_dt_acc], 0           ; THE ACCUMULATOR IS IN BSS, not AX: the
+.digits:                              ; digit under test needs a register half
+    mov al, [si]                      ; of its own, and AH is where the running
+    cmp al, '0'                       ; total's high byte lives
+    jb .store
+    cmp al, '9'
+    ja .store
+    sub al, '0'
+    xor ah, ah
+    push ax
+    push dx
+    mov ax, [sh_dt_acc]
+    mov dx, 10
+    mul dx                            ; unsigned: a year is four digits
+    mov [sh_dt_acc], ax
+    pop dx
+    pop ax
+    add [sh_dt_acc], ax
+    inc si
+    jmp .digits
+.store:
+    mov ax, [sh_dt_acc]
+    or di, di
+    jnz .st1
+    mov bx, ax
+    jmp .stnext
+.st1:
+    cmp di, 1
+    jne .st2
+    mov cx, ax
+    jmp .stnext
+.st2:
+    cmp di, 2
+    jne .stnext
+    mov dx, ax
+.stnext:
+    inc di
+    cmp di, 3
+    jae .done
+    jmp .field
+.skip:
+    inc si
+    jmp .field
+.done:
+    cmp di, 2
+    jb .bad
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop di
+    pop si
     ret
 
 ; sh_pif - IF(cond,then,else): the one function that does not fold - its
@@ -18305,6 +21354,153 @@ sh_skipargs:
     pop cx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_str_load - in: AX = an offset in sh_txtseg; copies that NUL string into
+; sh_sacc, clipped to SH_STR_MAX. Every register preserved.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_txtslot - in: ES:DI = a cell record whose type is SH_T_TEXT
+; out: AX = the arena offset its characters live at.
+;
+; A plain LABEL keeps them in SH_C_FOFF. A FORMULA whose result is text keeps
+; SH_C_FOFF for its own SOURCE and the result in SH_C_VAL (81.22.1), so
+; reading FOFF for both loads the formula's own text - which is what the cell
+; would draw on a pass-cache hit, with no evaluation to correct it.
+;
+; It is a proc rather than four inline instructions because the caller needs
+; it inside a push/pop pair, and a label there is a chunk boundary stkbalance
+; walks into without the push - which reads as an unbalanced path.
+; -----------------------------------------------------------------------------
+sh_txtslot:
+    mov ax, [es:di+SH_C_FOFF]
+    test byte [es:di+4], 1            ; HASFORMULA
+    jz .out
+    mov ax, [es:di+SH_C_VAL]
+.out:
+    ret
+
+sh_str_load:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov es, [sh_txtseg]
+    mov si, ax
+    mov di, sh_sacc
+    mov cx, SH_STR_MAX
+.c:
+    jcxz .term
+    mov al, [es:si]
+    or al, al
+    jz .term
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .c
+.term:
+    mov byte [di], 0
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_str_store - ES:DI = a cell record whose result is TEXT; put sh_sacc into
+; that cell's result slot, claiming the slot on first use (81.22.1).
+; out: CF=1 if the arena had no room, in which case the cell keeps whatever it
+; had. Every register preserved.
+; -----------------------------------------------------------------------------
+sh_str_store:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT  ; VAL IS ONLY A SLOT OFFSET IF THE
+    jne .newslot                      ; CELL ALREADY HELD TEXT. On a formula
+    mov ax, [es:di+SH_C_VAL]          ; that returned a number last time it is
+    or ax, ax                         ; the low word of a DOUBLE, and treating
+    jnz .haveslot                     ; that as an arena offset writes 64 bytes
+.newslot:                             ; wherever the mantissa happens to point
+    mov ax, [sh_txtlen]               ; claim one: SH_STR_MAX+1, once, for the
+    mov bx, ax                        ; life of the cell - the arena never
+    add bx, SH_STR_MAX + 1            ; frees, so a slot PER RECALCULATION
+    cmp bx, SH_TXT_CAP                ; would empty it in seconds
+    ja .noroom
+    mov [sh_txtlen], bx
+    mov [es:di+SH_C_VAL], ax          ; the union's first word IS the offset
+    mov word [es:di+SH_C_VAL+2], 0
+    mov word [es:di+SH_C_VAL+4], 0
+    mov word [es:di+SH_C_VAL+6], 0
+.haveslot:
+    mov di, ax                        ; DI = the slot, ES = the arena
+    mov es, [sh_txtseg]
+    mov si, sh_sacc
+    mov cx, SH_STR_MAX
+.c:
+    jcxz .term
+    mov al, [si]
+    or al, al
+    jz .term
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jmp .c
+.term:
+    mov byte [es:di], 0
+    clc
+    jmp .out
+.noroom:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_str_cat - append the NUL string at SI to sh_sacc, clipped to SH_STR_MAX.
+; -----------------------------------------------------------------------------
+sh_str_cat:
+    push ax
+    push cx
+    push si
+    push di
+    mov di, sh_sacc
+    mov cx, SH_STR_MAX
+.find:
+    cmp byte [di], 0
+    je .app
+    inc di
+    dec cx
+    jnz .find
+.app:
+    jcxz .term
+    mov al, [si]
+    or al, al
+    jz .term
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .app
+.term:
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; sh_streq - in: SI, DI (two NUL-terminated strings); out: CF=1 equal
 sh_streq:
     push ax
@@ -18764,65 +21960,6 @@ sh_curr_ins:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_comma_ins - insert a thousands separator into sh_numbuf's digit run
-; (a 16-bit value never needs more than one - max 5 digits), skipping any
-; leading sign
-; -----------------------------------------------------------------------------
-sh_comma_ins:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    mov si, sh_numbuf
-    cmp byte [si], '-'
-    jne .nosign
-    inc si
-.nosign:
-    push si                           ; start of the digit run
-    xor cx, cx
-.dlen:
-    cmp byte [si], 0
-    je .havedlen
-    inc si
-    inc cx
-    jmp .dlen
-.havedlen:                            ; cx = digit count
-    pop si                            ; si = start of digit run again
-    cmp cx, 4
-    jb .nocomma                       ; <=3 digits: no comma needed
-    mov ax, cx
-    sub ax, 3
-    add ax, si
-    mov di, ax                        ; di = insertion point (fixed)
-    mov bx, si
-.elen:
-    cmp byte [bx], 0
-    je .haveend
-    inc bx
-    jmp .elen
-.haveend:                             ; bx -> the NUL
-    mov si, bx
-    inc bx                            ; bx = shift destination (one past)
-.shift:
-    mov al, [si]
-    mov [bx], al
-    cmp si, di
-    je .placecomma
-    dec si
-    dec bx
-    jmp .shift
-.placecomma:
-    mov byte [di], ','
-.nocomma:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; sh_pct_app - append '%' to sh_numbuf
 ; -----------------------------------------------------------------------------
 sh_pct_app:
@@ -18963,8 +22100,9 @@ sh_numfmt:
     call sh_curr_ins
     jmp .out
 .comma:
-    call sh_comma_ins
-    jmp .out
+    call sh_group3                    ; NOT sh_comma_ins, which counted the
+    jmp .out                          ; fraction digits as part of the integer
+                                       ; run and placed exactly one separator
 .percent:
     call sh_pct_app
 .out:
@@ -19257,6 +22395,11 @@ sh_s_k:        db ';K', 0                  ; also the "commas are set" flag
 sh_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 sh_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
 sh_s_crlf:     db 13, 10, 0
+sh_s_nn:       db 'NN;N', 0           ; SYLK's defined-name record (81.29.1)
+sh_s_nne:      db ';E', 0
+sh_s_colon:    db ':', 0
+sh_s_r:        db 'R', 0
+sh_s_cu:       db 'C', 0
 sh_s_end:      db 'E', 13, 10, 0
 sh_m_saved:    db 'Saved', 0
 sh_m_trunc:    db 'Saved - TRUNCATED; sheet too large for this format.', 0
@@ -19289,6 +22432,61 @@ sh_f_false:    db 'FALSE', 0
 sh_f_row:      db 'ROW', 0
 sh_f_column:   db 'COLUMN', 0
 sh_f_choose:   db 'CHOOSE', 0
+; stage 4.5: the INFORMATION functions. Absent until now because an argument
+; was folded to a value before the function saw it - see sh_pargclass.
+sh_f_isblank:  db 'ISBLANK', 0
+sh_f_isnumber: db 'ISNUMBER', 0
+sh_f_istext:   db 'ISTEXT', 0
+sh_f_islogicl: db 'ISLOGICAL', 0
+sh_f_iserror:  db 'ISERROR', 0
+sh_f_iserr:    db 'ISERR', 0
+sh_f_isna:     db 'ISNA', 0
+sh_f_isref:    db 'ISREF', 0
+sh_f_na:       db 'NA', 0
+sh_f_type:     db 'TYPE', 0
+sh_f_n:        db 'N', 0
+sh_f_errtype:  db 'ERROR.TYPE', 0     ; the only name here with a '.' in it,
+                                       ; which is what sh_pident's .trydot is
+                                       ; for
+; stage 4.5: the TEXT functions - Excel 2.1's own category, less the seven
+; that search and format
+sh_f_len:      db 'LEN', 0
+sh_f_left:     db 'LEFT', 0
+sh_f_right:    db 'RIGHT', 0
+sh_f_mid:      db 'MID', 0
+sh_f_upper:    db 'UPPER', 0
+sh_f_lower:    db 'LOWER', 0
+sh_f_proper:   db 'PROPER', 0
+sh_f_trim:     db 'TRIM', 0
+sh_f_rept:     db 'REPT', 0
+sh_f_char:     db 'CHAR', 0
+sh_f_code:     db 'CODE', 0
+sh_f_exact:    db 'EXACT', 0
+sh_f_t:        db 'T', 0
+sh_f_value:    db 'VALUE', 0
+sh_f_find:     db 'FIND', 0
+sh_f_search:   db 'SEARCH', 0
+sh_f_subst:    db 'SUBSTITUTE', 0
+sh_f_replace:  db 'REPLACE', 0
+sh_f_text:     db 'TEXT', 0
+sh_f_dollar:   db 'DOLLAR', 0
+sh_f_fixed:    db 'FIXED', 0
+; stage 4.5: the DATE and TIME functions. NOW() is absent and sh_pdate's
+; header says why - no kernel call publishes the calendar date.
+sh_f_date:     db 'DATE', 0
+sh_f_day:      db 'DAY', 0
+sh_f_month:    db 'MONTH', 0
+sh_f_year:     db 'YEAR', 0
+sh_f_weekday:  db 'WEEKDAY', 0
+sh_f_time:     db 'TIME', 0
+sh_f_hour:     db 'HOUR', 0
+sh_f_minute:   db 'MINUTE', 0
+sh_f_second:   db 'SECOND', 0
+sh_f_datevalue: db 'DATEVALUE', 0
+sh_f_timevalue: db 'TIMEVALUE', 0
+sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+sh_snull:      db 0                   ; sh_sslot's answer for a read below the
+                                       ; bottom of the string stack
 
 ; sh_functab - the id is the INDEX. 0 terminates.
 sh_functab:
@@ -19297,7 +22495,34 @@ sh_functab:
     dw sh_f_product, sh_f_counta, sh_f_mod, sh_f_int, sh_f_trunc
     dw sh_f_sign, sh_f_fact, sh_f_sqrt, sh_f_power, sh_f_round
     dw sh_f_true, sh_f_false, sh_f_row, sh_f_column, sh_f_choose
+    dw sh_f_isblank, sh_f_isnumber, sh_f_istext, sh_f_islogicl, sh_f_iserror
+    dw sh_f_iserr, sh_f_isna, sh_f_isref, sh_f_na, sh_f_type
+    dw sh_f_n, sh_f_errtype
+    dw sh_f_len, sh_f_left, sh_f_right, sh_f_mid, sh_f_upper
+    dw sh_f_lower, sh_f_proper, sh_f_trim, sh_f_rept, sh_f_char
+    dw sh_f_code, sh_f_exact, sh_f_t, sh_f_value
+    dw sh_f_find, sh_f_search, sh_f_subst, sh_f_replace, sh_f_text
+    dw sh_f_dollar, sh_f_fixed
+    dw sh_f_date, sh_f_day, sh_f_month, sh_f_year, sh_f_weekday
+    dw sh_f_time, sh_f_hour, sh_f_minute, sh_f_second, sh_f_datevalue
+    dw sh_f_timevalue
     dw 0
+sh_functab_end:
+; -----------------------------------------------------------------------------
+; THREE TABLES INDEXED BY THE SAME NUMBER, and nothing used to check they were
+; the same length. sh_rpn_func indexes sh_rpn_fid and sh_rpn_fvar by the id
+; sh_funcid returns, which is a position in sh_functab - so appending a
+; function here and forgetting one of the other two reads whatever byte
+; follows it and writes THAT as the BIFF function index. A wrong number in a
+; saved file, no crash, no message. These four TIMES lines make it a build
+; error instead, the same idiom OS88_BSS's literal uses; read the LINE NUMBER
+; to see which table is short.
+; -----------------------------------------------------------------------------
+%define SH_NFUNCS ((sh_functab_end - sh_functab) / 2 - 1)
+    times ((sh_rpn_fid_end - sh_rpn_fid) - SH_NFUNCS) db 0
+    times (SH_NFUNCS - (sh_rpn_fid_end - sh_rpn_fid)) db 0
+    times ((sh_rpn_fvar_end - sh_rpn_fvar) - SH_NFUNCS) db 0
+    times (SH_NFUNCS - (sh_rpn_fvar_end - sh_rpn_fvar)) db 0
 sh_s_errpfx:   db 'Err ', 0
 sh_s_ext_sylk: db '.SLK', 0
 sh_s_ext_dif:  db '.DIF', 0
@@ -19376,7 +22601,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3137
+    OS88_BSS 3853
     OS88_IMAGE_END
 
 sh_selcol     equ os88_image_end + 0
@@ -19451,7 +22676,21 @@ sh_wrec_fmt   equ sh_wrec_val + 2           ; SYLK's and BIFF's writers'
                                              ; byte (DIF carries no format
                                              ; at all, see sh_dowrite_dif)
 sh_newoff     equ sh_wrec_fmt + 1           ; sh_setformula's new text offset
-sh_curaux     equ sh_newoff + 2             ; sh_getcell2's error-code output
+sh_sacc       equ sh_newoff + 2             ; SH_STR_MAX+1: THE STRING HALF of
+                                             ; the evaluator's result, the way
+                                             ; sh_acc is the numeric half -
+                                             ; sh_curtype says which is live
+sh_sacc2      equ sh_sacc + SH_STR_MAX + 1  ; 2 x (SH_STR_MAX+1): the left
+                                             ; operand of '&', banked while the
+                                             ; right one is parsed, AND the
+                                             ; scratch that holds the right one
+                                             ; while the left is moved back.
+                                             ; TWO buffers, sized as two - one
+                                             ; buffer's worth would have put the
+                                             ; second copy straight through
+                                             ; sh_curaux below, which is 81.21
+                                             ; over again
+sh_curaux     equ sh_sacc2 + 2 * (SH_STR_MAX + 1)  ; sh_getcell2's error code
 sh_evalerr    equ sh_curaux + 2             ; byte: the error this evaluation
                                              ; ran into, 0 = none. STICKY for
                                              ; the whole of one top-level
@@ -19486,7 +22725,11 @@ sh_r1col      equ sh_phave + 2              ; a range's two corners...
 sh_r1row      equ sh_r1col + 2
 sh_r2col      equ sh_r1row + 2
 sh_r2row      equ sh_r2col + 2
-sh_rrow       equ sh_r2row + 2              ; ...and sh_foldrange's end-of-
+sh_ix1col     equ sh_r2row + 2              ; sh_pintersect's SECOND rectangle
+sh_ix1row     equ sh_ix1col + 2             ; - it cannot borrow sh_r1col,
+sh_ix2col     equ sh_ix1row + 2             ; which is the running result it
+sh_ix2row     equ sh_ix2col + 2             ; is reducing
+sh_rrow       equ sh_ix2row + 2             ; ...and sh_foldrange's end-of-
 sh_rcol       equ sh_rrow + 2               ; array bound (sh_rcol is spare
                                              ; since the record-array walk)
 sh_pass       equ sh_rcol + 2               ; recalculation pass counter
@@ -19495,7 +22738,43 @@ sh_bbcol      equ sh_bbrow + 2
 sh_curfmt     equ sh_bbcol + 2              ; sh_getcell2's format-byte output
 sh_curtype    equ sh_curfmt + 1             ; ...and its SH_T_* tag, and where
 sh_curtoff    equ sh_curtype + 1            ; a TEXT cell's characters live
-sh_jlen       equ sh_curtoff + 2             ; sh_cjust's stashed text length
+sh_argtype    equ sh_curtoff + 2            ; stage 4.5: sh_pargclass's answer
+sh_argaux     equ sh_argtype + 1            ; - what the argument IS, its error
+sh_argisref   equ sh_argaux + 1             ; code, and whether it was a bare
+sh_refarea    equ sh_argisref + 1           ; reference; sh_pargref's A1:B9 flag
+sh_arg1col    equ sh_refarea + 1            ; ...and the reference itself, in
+sh_arg1row    equ sh_arg1col + 2            ; FOUR WORDS OF ITS OWN. Sharing
+sh_arg2col    equ sh_arg1row + 2            ; sh_r1col/sh_r2col with the range
+sh_arg2row    equ sh_arg2col + 2            ; folder overwrote its loop bounds
+                                             ; mid-walk - see sh_pargref
+sh_sstk_sp    equ sh_arg2row + 2            ; the string stack's depth...
+sh_sstk       equ sh_sstk_sp + 2            ; ...and SH_SSTK_N slots of
+                                             ; SH_STR_MAX+1 bytes each
+sh_fnd_hb     equ sh_sstk + SH_SSTK_N * (SH_STR_MAX + 1)  ; sh_strfind's two
+sh_fnd_nd     equ sh_fnd_hb + 2             ; bases: the inner compare needs
+                                             ; SI and DI and the outer scan a
+                                             ; third pointer, and the 8086
+                                             ; addresses memory through four
+                                             ; registers of which one is BP
+sh_fmt_fl     equ sh_fnd_nd + 2             ; TEXT's parsed format: the flag
+sh_fmt_cx     equ sh_fmt_fl + 2             ; byte, the two digit counts and
+sh_fmt_ph     equ sh_fmt_cx + 2             ; whether any placeholder appeared.
+                                             ; In bss because nothing may sit
+                                             ; on the stack between sh_vpush
+                                             ; and sh_binop_pre
+sh_dt_y       equ sh_fmt_ph + 2             ; stage 4.5: a broken-down date,
+sh_dt_m       equ sh_dt_y + 2               ; shared by both directions of the
+sh_dt_d       equ sh_dt_m + 2               ; serial conversion
+sh_dt_ly      equ sh_dt_d + 2               ; sh_isleap's year
+sh_dt_ys      equ sh_dt_ly + 2              ; sh_ymd_to_ser's two counters
+sh_dt_ms      equ sh_dt_ys + 2
+sh_dt_acc     equ sh_dt_ms + 2              ; sh_dt_parse3's running total
+sh_dt_min     equ sh_dt_acc + 2             ; sh_dt_hms's minutes since midnight
+sh_dt_tmp     equ sh_dt_min + 2             ; 8: one parked double
+sh_dol_neg    equ sh_dt_tmp + 8             ; DOLLAR formats the MAGNITUDE and
+                                             ; parenthesises it afterwards, so
+                                             ; the sign is banked here
+sh_jlen       equ sh_dol_neg + 2             ; sh_cjust's stashed text length
 sh_ulx        equ sh_jlen + 2               ; sh_drawunderline's stashed
 sh_uly        equ sh_ulx + 2                ; cell text origin (x, y)
 sh_wrec_xf    equ sh_uly + 2                ; sh_doread_biff's per-record
@@ -19612,7 +22891,11 @@ sh_sort_cmpv    equ sh_sort_keyval + 8      ; 8: ...and what it is compared
                                              ; fp_unpack_* read DS:SI and the
                                              ; array lives in sh_stgseg
 sh_sort_keyorig equ sh_sort_cmpv + 8        ; word: the key's own origidx
-sh_sort_desc    equ sh_sort_keyorig + 2     ; byte: 0 ascending, 1 descending
+sh_sort_keycol     equ sh_sort_keyorig + 2     ; word: the column the sort is
+                                            ; keyed on, which since stage 4.5
+                                            ; the dialog picks and which need
+                                            ; not be the selection's anchor
+sh_sort_desc    equ sh_sort_keycol + 2         ; byte: 0 ascending, 1 descending
 sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
 sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
                                              ; checked one
@@ -19640,7 +22923,10 @@ sh_nameptr      equ sh_names + SH_NAME_CAP * SH_NAME_REC   ; SH_NAME_CAP words
 sh_nm_buf       equ sh_nameptr + SH_NAME_CAP * 2           ; SH_NAME_MAX+1
 sh_nm_col       equ sh_nm_buf + SH_NAME_MAX + 1
 sh_nm_row       equ sh_nm_col + 2
-sh_find_col     equ sh_nm_row + 2            ; the walk's current cell...
+sh_nm_col2      equ sh_nm_row + 2            ; stage 4.6: the far corner a
+sh_nm_row2      equ sh_nm_col2 + 2           ; named RANGE binds
+sh_nm_tmp       equ sh_nm_row2 + 2           ; sh_wr_r1c1's banked column
+sh_find_col     equ sh_nm_tmp + 2            ; the walk's current cell...
 sh_find_row     equ sh_find_col + 2
 sh_find_buf     equ sh_find_row + 2          ; SH_EDITMAX+1: ...as displayed
 sh_sort_trow  equ sh_find_buf + SH_EDITMAX + 1   ; word: the write-back loop's
@@ -19737,101 +23023,10 @@ sh_chart_name  equ sh_chart_cnt + 2        ; 13: the exported .BMP's own 8.3
                                              ; load/save filename)
 
 ; apps/os88chart.inc's own required scratch (see that file's header comment)
-ch_max         equ sh_chart_name + 13
-ch_base        equ ch_max + 2
-ch_arr         equ ch_base + 2
-ch_cnt         equ ch_arr + 2
-ch_idx         equ ch_cnt + 2
-ch_bx1         equ ch_idx + 2
-ch_by1         equ ch_bx1 + 2
-ch_bx2         equ ch_by1 + 2
-ch_by2         equ ch_bx2 + 2
-ch_srcseg      equ ch_by2 + 2
-ch_stgseg      equ ch_srcseg + 2
-ch_neg         equ ch_stgseg + 2     ; stage 3.0f: 1 = some value is
-                                       ; negative. Its own word now: the axis
-                                       ; row is type-dependent, so ch_base
-                                       ; cannot carry this as well.
-ch_type        equ ch_neg + 2       ; CH_T_* - which chart to draw
-ch_lx0         equ ch_type + 2      ; the current segment's endpoints and
-ch_ly0         equ ch_lx0 + 2       ; the column being interpolated -
-ch_lx1         equ ch_ly0 + 2       ; CALLER bss like every other ch_*
-ch_ly1         equ ch_lx1 + 2       ; word, for the same DS reason
-ch_lcx         equ ch_ly1 + 2
-
-; sh_rowcol_reidx and friends (stage 2.x) - see the section comment above
-; sh_rowcol_reidx itself for what each of these holds
-ch_pie_px      equ ch_lcx + 2       ; --- stage 3.0f: the pie ---
-ch_pie_py      equ ch_pie_px + 2
-ch_pie_ex      equ ch_pie_py + 2    ; ch_ray's endpoint and its Bresenham
-ch_pie_ey      equ ch_pie_ex + 2    ; state - in bss for the same DS reason
-ch_pie_x       equ ch_pie_ey + 2    ; every other ch_* word is
-ch_pie_y       equ ch_pie_x + 2
-ch_pie_dx      equ ch_pie_y + 2
-ch_pie_dy      equ ch_pie_dx + 2
-ch_pie_sx      equ ch_pie_dy + 2
-ch_pie_sy      equ ch_pie_sx + 2
-ch_pie_err     equ ch_pie_sy + 2
-ch_pie_e2      equ ch_pie_err + 2
-ch_pie_tlo     equ ch_pie_e2 + 2    ; the 32-bit total and how far it was
-ch_pie_thi     equ ch_pie_tlo + 2   ; shifted to fit a word
-ch_pie_shift   equ ch_pie_thi + 2
-ch_pie_a0      equ ch_pie_shift + 2 ; this slice's first half-degree...
-ch_pie_span    equ ch_pie_a0 + 2    ; ...how many it covers...
-ch_pie_a       equ ch_pie_span + 2  ; ...and the sweep's current one
-ch_pie_col     equ ch_pie_a + 2
-ch_pie_thick   equ ch_pie_col + 2    ; byte: this ray fills, so it is 3px
-ch_pie_pen     equ ch_pie_thick + 1  ; byte: the colour ch_setpixel keeps
-ch_pie_pat     equ ch_pie_pen + 1    ; byte: this slice's hatch, FF = solid
-ch_tx          equ ch_pie_pat + 1   ; --- stage 3.0f: text into the canvas ---
-ch_ty          equ ch_tx + 2
-ch_tpen        equ ch_ty + 2
-ch_tsrc        equ ch_tpen + 2        ; the string cursor, across ch_glyph
-ch_tseg        equ ch_tsrc + 2        ; the GLYPH TABLE's segment, not KERNEL_SEG
-ch_ttab        equ ch_tseg + 2
-ch_tfirst      equ ch_ttab + 2        ; the character range the table covers
-ch_tlast       equ ch_tfirst + 2
-ch_tglyph      equ ch_tlast + 2       ; -> the current character's 8 rows
-ch_trow        equ ch_tglyph + 2
-ch_tcol        equ ch_trow + 2
-ch_tpy         equ ch_tcol + 2
-ch_tbits       equ ch_tpy + 2
-ch_tnum        equ ch_tbits + 2       ; 16: ch_itoa_t's/ch_num_t's output -
-                                      ; eight held "-32768" and nothing more,
-                                      ; and a scaled label can carry a point
-                                      ; and four digits, or nine trailing
-                                      ; zeros (see ch_scale)
-ch_e10         equ ch_tnum + 16     ; the series' decimal exponent (82.13)
-ch_sc_seg      equ ch_e10 + 2       ; ch_scale's own scratch
-ch_sc_src      equ ch_sc_seg + 2
-ch_sc_dst      equ ch_sc_src + 2
-ch_sc_cnt      equ ch_sc_dst + 2
-ch_dbl         equ ch_sc_cnt + 2    ; 8: the value being converted...
-ch_dmax        equ ch_dbl + 8       ; 8: ...and the largest seen
-ch_title       equ ch_dmax + 8      ; -> the chart's title, or 0 for none
-ch_legy        equ ch_title + 2     ; the legend row being drawn...
-ch_legr        equ ch_legy + 2      ; ...and the swatch row inside it
-ch_arr2        equ ch_legr + 2       ; --- the SECOND series (82.8) ---
-ch_cnt2        equ ch_arr2 + 2      ; 0 = there is no second series
-ch_srcseg2     equ ch_cnt2 + 2
-ch_max2        equ ch_srcseg2 + 2   ; its own scale, independent of the first
-ch_mkx         equ ch_max2 + 2      ; ch_mark's centre
-ch_mky         equ ch_mkx + 2
-ch_scx         equ ch_mky + 2       ; a scatter point's x, across the y maths
-ch_cbx         equ ch_scx + 2       ; a combination point...
-ch_cby         equ ch_cbx + 2
-ch_lcy         equ ch_cby + 2       ; ...and the previous one's y
-ch_l2x         equ ch_lcy + 2       ; ch_line2's Bresenham state
-ch_l2y         equ ch_l2x + 2
-ch_l2ex        equ ch_l2y + 2
-ch_l2ey        equ ch_l2ex + 2
-ch_l2dx        equ ch_l2ey + 2
-ch_l2dy        equ ch_l2dx + 2
-ch_l2sx        equ ch_l2dy + 2
-ch_l2sy        equ ch_l2sx + 2
-ch_l2err       equ ch_l2sy + 2
-ch_l2e2        equ ch_l2err + 2
-sh_chart_title equ ch_l2e2 + 2      ; 16: "Column A"
+%define CH_BSS_BASE (sh_chart_name + 13)
+%include "os88chartbss.inc"   ; the ch_* working set, declared once and
+                              ; shared with chart.asm (82.16)
+sh_chart_title equ CH_BSS_END       ; 16: "Column A"
 sh_scan_col    equ sh_chart_title + 16  ; which column a scan pass reads...
 sh_scan_off    equ sh_scan_col + 2      ; ...and where in sh_stgseg it lands
 sh_chart_cnt2  equ sh_scan_off + 2      ; the second series' own count
@@ -19978,11 +23173,13 @@ sh_rw_absc        equ sh_idlg_rect + 8 ; byte: Insert/Delete's scanner
 sh_rw_absr        equ sh_rw_absc + 1
 sh_cp_absc        equ sh_rw_absr + 1   ; byte: Copy/Paste + Fill's scanner
 sh_cp_absr        equ sh_cp_absc + 1
+sh_cp_dead        equ sh_cp_absr + 1   ; byte: the paste shift took this
+                                       ; reference off the sheet (81.26.1)
 
 ; stage 3.0d: which cell the evaluator is CURRENTLY inside, for ROW()/COLUMN().
 ; Saved and restored around each sh_eval_cell so a formula reached through
 ; another cell's reference still answers for itself, not for whoever asked.
-sh_rc_ccol        equ sh_cp_absr + 1   ; the cell that OWNS the formula being
+sh_rc_ccol        equ sh_cp_dead + 1   ; the cell that OWNS the formula being
 sh_rc_crow        equ sh_rc_ccol + 2   ; converted to or from R1C1 - every
                                        ; relative offset is measured from it
 sh_evrow          equ sh_rc_crow + 2   ; word: 0-based

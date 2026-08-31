@@ -74664,6 +74664,619 @@ overrun corrupts a value; this one corrupts an *address*, and the next large
 it is worth knowing that bss adjacency can arrange it without anyone loading a
 segment register wrongly at all.
 
+### 81.22 A formula may answer with TEXT
+
+Cells have held labels since stage 4.5; *formulas* could not produce one.
+`=B4`, where B4 holds `hello`, read as **0** — not because the reference failed
+but because the evaluator's only result was `sh_acc`, eight bytes of double,
+and a string has nowhere to go in it. That blocks the whole text category:
+`LEFT`, `UPPER`, `CONCATENATE` and the other eighteen have no way to hand back
+what they computed.
+
+**The result is a pair, and `sh_curtype` says which half is live.** `sh_acc`
+holds a number; `sh_sacc` — `SH_STR_MAX + 1` bytes of DS scratch — holds a
+string; `sh_curtype` is `SH_T_NUM` or `SH_T_TEXT` accordingly. That is not a
+new convention, it is the one already in use: `sh_chktext` reads `sh_curtype`
+to decide whether arithmetic on this operand is a `#VALUE!`, `sh_pfactor` sets
+it to `SH_T_NUM` for a literal, and `sh_pfunc` sets it at every exit. The last
+operation to complete owns it, so at `sh_eval_cell`'s writeback it describes
+the whole expression.
+
+`SH_STR_MAX` is **64**. A cell displays at most `SH_CW_MAXCH` = 40 characters,
+so 64 is headroom for an intermediate concatenation rather than a limit anyone
+meets in a cell. Excel's own limit is 255 and this is not that; a result past
+64 is **truncated, not refused**, because half a label is legible and an error
+in its place is not.
+
+#### 81.22.1 Where a text result is stored, and why not in `SH_C_FOFF`
+
+`SH_C_FOFF` is already two things: a **label's** arena offset for a plain text
+cell, and a **formula's** arena offset for a formula cell, told apart by the
+`HASFORMULA` flag. A formula that *returns* text needs both at once, so the
+result cannot go there.
+
+It goes in **`SH_C_VAL`**, the eight-byte value union — its first word is the
+result string's arena offset. A text cell's number is meaningless by
+definition, which is what makes the union a union; this is the first thing to
+actually use it as one.
+
+**Deciding the type comes before caching the number**, and that ordering is
+load-bearing. `sh_eval_cell`'s writeback used to open with `sh_acc_to_cellval`,
+which writes eight bytes over `SH_C_VAL` - the union the slot offset lives in.
+So every pass wiped the slot, `sh_str_store` found `VAL` zero, claimed another
+65 bytes, and the arena was dry inside a hundred repaints; after that every
+text formula fell silently back to the number underneath it, which is `0`. Each
+branch caches for itself now, and the text branch does not cache at all,
+because a text result has no meaningful double to keep.
+
+**The slot is allocated once per cell and rewritten in place.** The arena is a
+bump allocator that never frees — `sh_setformula`'s own header says so, and an
+edit is "append new, abandon old" everywhere else in this file. That is fine at
+one allocation per *edit* and fatal at one per *repaint*: a text formula
+recalculates on every paint, and 8KB would be gone in seconds of sitting
+there. So the first text result claims `SH_STR_MAX + 1` bytes, keeps the offset
+in `SH_C_VAL`, and every later result overwrites that slot. A cell that stops
+returning text keeps its slot; the waste is bounded by the number of cells that
+have ever returned one.
+
+#### 81.22.2 `&`, and the level it binds at
+
+Excel's concatenation operator is `&`, and it binds **looser than `+`** and
+**tighter than a comparison** — so `="a" & "b" = "ab"` is a comparison of two
+concatenations, not a concatenation of a comparison. `sh_pconcat` is that
+level, inserted between `sh_pcmp` and `sh_pexpr`, with `sh_pconcatcont` joining
+the continuation chain `sh_prange` walks when a range turns out to be an
+ordinary expression that merely began with a cell reference.
+
+Two things it did **not** need, both worth recording because both were expected
+to bite:
+
+- **The charset gate already admits `&`.** Stage 4.5 replaced the allow-list
+  with a printable-ASCII range, and the comment above it lists the six
+  characters that each had to be discovered the hard way — `=`, the operators,
+  `<>`, `!` and `"`, `.`, `$`, `^` — every one of them a case where "the parser
+  handled the character perfectly and the character never reached it". That
+  gate is why this one is free.
+- **A writer that emits a label must take it from the result.** The SYLK and
+  BIFF writers read a label's characters from `SH_C_FOFF`, which for a text
+  *result* is the formula - so they wrote the expression where the answer
+  belonged. Both take the offset from `SH_C_VAL` now when the cell has a
+  formula and its type is text. The DIF writer needed no change: it goes
+  through `sh_getcell2`, which already publishes the result offset.
+
+- **The reference rewriters already treat `"..."` as opaque.** `sh_formula_reidx`
+  copies anything inside double quotes byte-for-byte and never scans it, so a
+  string literal containing something shaped like `A1` does not get renumbered
+  by an Insert Row.
+
+### 81.23 Reference-typed arguments
+
+Every argument in Sheet's evaluator was **folded to a value before the
+function saw it**. `sh_prange` reads a range, folds each occupied cell through
+`sh_foldvalue`, and hands the accumulator on; a single cell goes through
+`sh_getcell2` and then the same fold. By the time a function ran there was no
+reference left to ask about, and three consequences followed from that one
+fact:
+
+- an **empty cell and a cell holding 0 both arrived as `0`**, so `ISBLANK`
+  could not be written;
+- a **label arrived as the zero underneath it**, so `ISTEXT` could not either;
+- an **error in an argument had already spread into `sh_evalerr`**, so
+  `ISERROR` would have been an error itself rather than an answer about one.
+
+That is why the comment above `sh_pspecial` listed `ISBLANK`, `ISNUMBER` and
+`ISNA` as deliberately absent for three stages. A version of any of them that
+returned a plausible constant would have been worse than its absence.
+
+**`sh_pargref` is the probe, and it is strict on purpose.** It asks whether an
+argument is a reference *and nothing else*: `sh_pcellref`, optionally a `:`
+and a second one, and then the argument must **end** — the next character has
+to be `,` or `)`. `ISNUMBER(A1+1)` is a question about the sum, not about A1,
+and without that terminator test it would have been answered about A1. On
+failure `SI` is restored exactly as `sh_pcellref` leaves it and the caller
+parses an ordinary expression instead, so the strictness costs nothing: an
+argument that is not a reference still gets evaluated, it just gets classified
+by its value's tag rather than by a cell's.
+
+**`sh_pargclass` is the argument, classified rather than folded.** It publishes
+four things — `sh_argtype` (the `SH_T_*` the argument *is*, `SH_T_BLANK` for a
+cell that does not exist), `sh_argaux` (its error code), `sh_argisref`, and
+`sh_acc` (its value, for the callers that still want a number). An area is
+classified by its **top-left corner**, which is what a 1×1 use of one would
+intersect to anyway.
+
+#### 81.23.1 An argument's error is the function's answer, not the sheet's
+
+`sh_getcell2` copies a referenced cell's error code into `sh_evalerr`, and that
+spreading is correct and wanted: it is what puts one `#DIV/0!` at the bottom of
+a column that contains one. It is exactly wrong here. `ISERROR(1/0)` must be
+`TRUE`, not `#DIV/0!`.
+
+So `sh_pargclass` **banks `sh_evalerr` across the argument and puts it back**,
+and reports what the argument raised through `sh_argtype`/`sh_argaux` instead.
+The banking lives in `sh_pargclass` and not in `sh_getcell2` precisely because
+every *other* caller wants the spread. An error the argument raised also
+**outranks the tag it left behind**: `1/0` leaves `sh_acc` holding zero and
+`sh_curtype` saying `SH_T_NUM`, and it is an error value, so the error is
+checked last and wins.
+
+#### 81.23.2 Arithmetic now says its result is a number
+
+Making a mid-expression tag answerable exposed something that had been true and
+unobservable: **the arithmetic operators never set `sh_curtype`**. `=A1*2`
+left behind whatever tag the last operand carried. Nothing could see it,
+because `sh_eval_cell`'s writeback normalises a non-text result to `SH_T_NUM`
+before storing it, and no function had ever been able to ask.
+
+`sh_pargclass` can ask. Every operator that produces a number — `+ - * /`, the
+power loop, the comparisons, and the divide-by-zero path — now publishes
+`SH_T_NUM`, so `ISNUMBER(A1*2)` is `TRUE` where A1 is blank, instead of
+inheriting `SH_T_BLANK` from A1 and answering `FALSE`.
+
+#### 81.23.3 The twelve functions, and the one with a `.` in its name
+
+`ISBLANK ISNUMBER ISTEXT ISLOGICAL ISERROR ISERR ISNA ISREF NA TYPE N
+ERROR.TYPE` — ids 25..36, appended to `sh_functab` in the usual way, and
+routed out of `sh_pfunc` **before** the id-12 test that sends the rest to
+`sh_pspecial`.
+
+- **`ISERR` is `ISERROR` minus `#N/A`**, which is the only reason both exist.
+- **`ISLOGICAL` is `FALSE` for everything**, because nothing in this evaluator
+  produces an `SH_T_BOOL` yet. That is the honest answer rather than a
+  placeholder one, and it becomes right by itself the day comparisons return a
+  real boolean.
+- **`ERROR.TYPE` is a copy.** The `SH_ERR_*` codes *are* Excel's own
+  `ERROR.TYPE` numbers 1..7 — they were numbered that way when error values
+  landed, precisely so that this function would be one `mov`.
+- **`N` cannot leave by the integer path** the rest of these use: it passes a
+  number through unchanged, fraction and all, so it returns `sh_acc` as it
+  stands. `N` of an error re-raises that error.
+
+`ERROR.TYPE` is the first name in the language with a `.` in it. `sh_pident`
+takes one **only after a letter**, so a leading `.` is still the start of a
+number (`.5`) and a cell reference still cannot contain one — and it does
+**not** go through the uppercase fold, because `'.' AND 0xDF` is `0x0E` and
+would have put a control character in the middle of the name. The charset gate
+needed no change: stage 4.5 had already replaced its allow-list with a
+printable-ASCII range.
+
+BIFF writes these through `sh_rpn_fid` with their real `ftab` indices — 129,
+128, 127, 198, 3, 126, 2, 105, 10, 86, 131. **`ERROR.TYPE` is `ftab` 261,
+which does not fit the byte table**, so its entry is `0xFF` and the formula
+declines; `sh_rpn_func` cannot lex the `.` either, so it declines twice over
+and the cell goes out as its cached value.
+
+#### 81.23.4 Three tables indexed by the same number
+
+`sh_functab`, `sh_rpn_fid` and `sh_rpn_fvar` are all indexed by the id
+`sh_funcid` returns, which *is* a position in `sh_functab`. Nothing checked
+they were the same length. Appending a function and forgetting one of the other
+two reads whatever byte follows that table and writes **that** as the BIFF
+function index — a wrong number in a saved file, no crash and no message.
+
+Four `TIMES` lines after `sh_functab` make it a build error instead, the same
+idiom `OS88_BSS`'s literal uses (§81.21). Read the **line number** to see which
+table is short. Proven to bite by deleting one `sh_rpn_fid` entry: `TIMES value
+-1 is negative`.
+
+### 81.24 The text functions
+
+Fourteen of Excel 2.1's twenty-one text functions: `LEN LEFT RIGHT MID UPPER
+LOWER PROPER TRIM REPT CHAR CODE EXACT T VALUE`, ids 37..50. The seven that
+search or format (`FIND SEARCH SUBSTITUTE REPLACE TEXT DOLLAR FIXED`) are the
+next pass.
+
+The whole category was blocked on two separate things, and both had to land
+first: a formula could not **return** a string at all until §81.22, and a
+function could not **keep** an argument as a string across the next one until
+the bank below.
+
+**These are the first functions in this file whose answer may be either half
+of the result pair.** `sh_ptext` sets `sh_curtype` itself and `sh_pfunc`
+routes it to `.done` rather than `.typed` — `.typed` exists to stamp
+`SH_T_NUM` on a fold's result, and stamping it here would turn every `UPPER`
+into the zero underneath its string.
+
+#### 81.24.1 The string stack, and why it is not the machine stack
+
+A text function with more than one string argument has to hold the first while
+the second is parsed, and parsing the second can reach any text function
+again — every one of which writes `sh_sacc`. A second fixed buffer does not
+fix it either: in `=FIND(A1, LEFT(A2,3))` the inner `LEFT` would overwrite the
+outer `FIND`'s banked needle. The bank has to be per-frame.
+
+**The machine stack is the wrong place for it.** §20.6 rule 6 gives a task 384
+bytes and says in as many words: no deep recursion, no big stack buffers.
+Banking 65 bytes per argument per frame there, under `SH_EVAL_MAXDEPTH` = 6
+levels of `sh_eval_cell` recursion, is exactly the buffer that rule forbids —
+and unlike `sh_vpush`'s eight bytes it is not a rounding error against 384.
+
+So the bank is bss: `sh_sstk`, `SH_SSTK_N` = 6 slots of `SH_STR_MAX + 1`.
+`sh_spush` banks `sh_sacc`, `sh_sslot` addresses one by depth from the top,
+`sh_srestore` puts the top back and drops it. **Running out is a `#VALUE!`,
+not a silent overwrite**, and a read below the bottom returns the empty string
+rather than whatever bss lies there. `sh_eval_cell` resets the depth to zero
+whenever a *fresh* evaluation starts, so an error path that returned early
+cannot leak a level into the next formula.
+
+**Every function that takes a second argument banks its string before parsing
+it.** `=LEFT(A1, LEN("ab"))` destroyed A1's text between reading it and
+cutting it, because `LEN` writes `sh_sacc` on its way to a number.
+
+#### 81.24.2 What each one actually does
+
+Where Excel's rule is not the obvious one, this follows Excel:
+
+- **`TRIM` collapses internal runs**, not just the ends — that is the half of
+  it people forget and the half that makes it worth having.
+- **`PROPER` starts a new word at anything that is not a letter**, digits and
+  punctuation alike, so `"hELLO bIG wORLD"` is `"Hello Big World"`.
+- **`MID`'s start is 1-based and a start below 1 is `#VALUE!`**, not a clamp.
+  A start *past the end* is the empty string, which is not an error.
+- **`RIGHT(t, n)` with `n` past the length gives the whole string**, again not
+  an error; a *negative* count is `#VALUE!` in both `LEFT` and `RIGHT`.
+- **`EXACT` is case-sensitive**, which is the whole difference between it and
+  `=`.
+- **`CODE("")` is `#VALUE!`** and `CHAR` outside 1..255 likewise.
+- **`T` passes text through and answers the empty string for everything
+  else**, so it sees its argument *before* `sh_str_want` would convert it —
+  which is why it is dispatched ahead of the shared argument parse, as `CHAR`
+  is for taking a number.
+- **`LEN` of a number is the length of the text it displays as**, `LEN(12.5)`
+  = 4, because `sh_str_want` has already produced exactly that text.
+- **`REPT` clips at `SH_STR_MAX`**, and the count is clamped to it first:
+  each round adds at least one character, so `REPT("x",30000)` is 64 rounds
+  and not 30,000.
+
+#### 81.24.3 In files
+
+SYLK keeps everything — the expression in `;E` and the string result in `;K`,
+quoted. A round-trip of all fourteen comes back byte-identical.
+
+**BIFF writes a text-valued formula as a `LABEL`, not as a `FORMULA` with a
+string result.** That follows from §81.22.2's rule that a writer emitting a
+label takes the characters from the result; the consequence, which is worth
+stating rather than discovering, is that **the formula itself does not survive
+a BIFF round-trip when its answer is text** — the value does. A numeric one
+(`LEN`, `MID`, `EXACT`) still goes out as a real `FORMULA` with its `ftab`
+index, and any formula holding a string *literal* declines to RPN and goes out
+as its cached value, because `sh_rpn_factor` has no token for one.
+
+### 81.25 The seven that search and format
+
+`FIND SEARCH SUBSTITUTE REPLACE TEXT DOLLAR FIXED`, ids 51..57, completing
+Excel 2.1's text category at twenty-one.
+
+- **`FIND` and `SEARCH` are one scan.** They differ only in whether the
+  compare folds case, which is the whole of the difference in Excel too.
+  Neither takes wildcards; Excel's `SEARCH` does, and saying so is better
+  than a `?` that silently matches itself. Not found is `#VALUE!`, which is
+  what makes `ISERROR` the standard way to ask whether it was there at all
+  (§81.23).
+- **`sh_strfind` keeps its two bases in bss.** The inner compare needs `SI`
+  and `DI`, the outer scan needs a third pointer, and the 8086 addresses
+  memory through four registers of which one is `BP` — which belongs to `SS`
+  here (§20.1).
+- **An empty needle never matches.** `sh_matchat` refuses one on purpose:
+  `SUBSTITUTE` walks the text one character at a time and advances by the
+  needle's length on a hit, so an empty needle that matched would advance by
+  nothing. `SUBSTITUTE(t,"",n)` returns `t`.
+- **`SUBSTITUTE` banks three strings at once** — text, old and new — which is
+  what sets `SH_SSTK_N`'s floor (§81.24.1). Its fourth argument picks one
+  occurrence; absent, it replaces all.
+- **`REPLACE`'s start is 1-based** and below 1 is `#VALUE!`, matching `MID`.
+
+#### 81.25.1 Turning a number into text
+
+`fp_ftoa` counts **significant** digits and trims trailing zeros, which is
+right for General and wrong for money — `1.5` to two places has to be `"1.50"`.
+So `sh_numdp` rounds first, with the same `fp_round` that `ROUND()` uses, and
+pads the places back on afterwards.
+
+A value big or small enough that `fp_ftoa` reaches for **scientific notation**
+is passed through exactly as it came. Padding a mantissa and grouping an
+exponent would both be nonsense, and this is the one honest answer.
+
+**`DOLLAR` formats the magnitude and parenthesises it**: `-1234.567` is
+`"($1,234.57)"`, which is Excel's own rendering and not a minus sign. `TEXT`'s
+`$` goes *after* a leading `-`, so `TEXT(-x,"$#,##0.00")` is `"-$1,234,567.89"`
+— the two functions genuinely disagree, and both match Excel.
+
+**`TEXT` reads four things out of a format code**: a `$`, a `,` for grouping,
+the `0`/`#` placeholders either side of the `.`, and a trailing `%`. `0`
+before the point forces a digit (so `"00000"` on 42 is `"00042"`); `#` never
+does. A code with **no placeholder at all** — `"General"`, or anything this
+does not understand — falls back to General, which is the one answer that is
+never misleading. This is a real subset and not the whole of Excel's format
+language: no date codes, no sections, no literal text runs.
+
+#### 81.25.2 A separator routine that had quietly gone wrong
+
+`sh_comma_ins` inserted **exactly one** thousands separator and found its
+position by counting digits to the NUL. Its own comment explained why that
+was enough: *"a 16-bit value never needs more than one — max 5 digits."*
+
+That was true when it was written and stopped being true at **stage 4.0**,
+when every value became a double. Counting to the NUL makes the fraction part
+of the run, so `1234.5` in the Comma format drew as `"123,4.5"`, and one
+separator is not enough for `1234567`, which drew as `"1234,567"`. Nothing in
+the app could produce a number that large or that precise when the routine was
+written, so nothing had ever shown it.
+
+`sh_group3` replaces it: as many separators as the integer part needs, placed
+**right to left** so each insertion can ignore the ones already made — they
+are all to its right. `sh_comma_ins` is deleted rather than left beside it.
+`sh_numfmt`'s Comma format goes through the new one, so the fix reaches the
+grid and not only `FIXED`/`DOLLAR`/`TEXT`.
+
+#### 81.25.3 Nothing on the stack between `sh_vpush` and `sh_binop_pre`
+
+The pair banks a value **in the caller's frame**, below the return address:
+`sh_vpush` pops the return address, pushes four words, and pushes it back.
+Anything pushed between the two is therefore what `sh_binop_pre` pops as the
+value. `DOLLAR`/`FIXED` need their flags and digit count across exactly that
+gap, so those go to bss (`sh_fmt_fl`, `sh_fmt_cx`, `sh_fmt_ph`) for the one
+instruction it takes. `stkbalance` cannot see this class of error — the stack
+is balanced either way; only the *contents* are wrong.
+
+<<<<<<< HEAD
+=======
+### 81.26 `#REF!` and `#NULL!` — the two errors nothing could raise
+
+`SH_ERR_NULL` and `SH_ERR_REF` sat in the table from the day error values
+landed with nothing able to set either. The names printed; no code path
+produced one.
+
+#### 81.26.1 `#REF!`: a reference whose cell is gone
+
+The reference rewriters **clamped**, and clamping is the wrong shape of
+answer. Delete Row 3 with `=A3` somewhere left the index alone, so the formula
+quietly started naming whatever slid up into row 3 — a different number, with
+nothing to show for it. Copy `=A1` one column left clamped to column A and
+read as `=A1` again. In both cases the sheet went on computing confidently
+with data the user never named.
+
+Excel's answer is `#REF!`, and the whole value of it is that it **cannot be
+mistaken for a working reference** the way a clamped one can. Three sites now
+produce it:
+
+- `sh_reidx_shift` reports **CF=1** when a *delete* lands exactly on the pivot
+  (the cell is gone), and when an *insert* pushes a reference past the last
+  row or column (it has moved off the sheet). `sh_reidx_apply` then emits
+  `#REF!` in place of the reference text.
+- `sh_copy_shift` reports CF=1 when a paste displacement takes an index
+  negative or past the edge. `sh_copy_cellpart` **defers** the decision to its
+  emit step, because `SI` still has to advance past the whole reference either
+  way — hence the `sh_cp_dead` flag rather than an early exit.
+- `sh_rw_emitref` writes the literal, reading the **same** `sh_errtab` string
+  `sh_errname` prints.
+
+**An insert that clamps is also a dead reference**, and the old code said so
+in a comment while doing the opposite: *"the cell it names is genuinely gone;
+naming the last real row is the same closest sane fallback."* It is not a
+fallback anyone can see. Both cases are `#REF!` now.
+
+#### 81.26.2 Error values are literals
+
+A rewriter that writes `#REF!` into a formula needs a parser that can read it
+back. `sh_perrlit` handles a `#` in `sh_pfactor`, matching against `sh_errtab`
+— the same table `sh_errname` prints and `sh_errcode` reads, so the spelling
+written and the spelling recognised cannot drift. No name is a prefix of
+another, so first match wins.
+
+Typing `=#N/A` therefore works too, which is what Excel does and the reason
+`NA()` is not the only way to get one. A `#` followed by anything else is
+`#NAME?` — what an unknown word already gets — and `SI` steps over the `#` so
+the parse still makes progress.
+
+#### 81.26.3 `#NULL!` needs the intersection operator
+
+`#NULL!` has exactly one producer in Excel: an **empty intersection**. Without
+the operator there was nothing to raise it with, so the operator is what this
+adds. Excel's three reference operators are `:` (range), `,` (union) and a
+**space** (intersection); `sh_prange` now reads the third.
+
+`sh_pintersect` reduces the running rectangle to its intersection with the
+range that follows — the later start and the earlier end on each axis, both
+rectangles normalised first so `B5:A1` intersects the same as `A1:B5`. Empty
+is `#NULL!` and nothing is folded. It **loops**, so `A1:C9 A1:B9 B1:B5` works,
+and the caller detects "the space was not an operator after all" by comparing
+`SI` before and against after, which is the only way to tell that apart from a
+successful intersection that consumed nothing else.
+
+`sh_normrange` is split out of `sh_foldrange` so both can rely on the corners
+being in top-left/bottom-right order before any edge is compared.
+
+The second rectangle gets **four words of its own** (`sh_ix1col`…): it cannot
+borrow `sh_r1col`, which is the running result being reduced — the same
+lesson as §81.23's `sh_pargref`, one increment later.
+
+`SH_ERR_NULL` is `ERROR.TYPE` 1, so `=ERROR.TYPE(SUM(A1:A2 A4:A5))` answers 1.
+
+<<<<<<< HEAD
+>>>>>>> 0eb94b5 (sheet: #REF! and #NULL!, the two errors nothing could raise)
+=======
+### 81.27 The Sort key picker
+
+§81.19 recorded a limit rather than a design: *"The key column is the one the
+selection is anchored in… there is no key picker in the Sort dialog, so a key
+that is not an edge of the range cannot be expressed."* Sorting `A:C` by `B`
+was unreachable, because anchoring a drag in `B` cannot cover `A`.
+
+**Excel 2.1's Sort dialog takes its keys as cell references typed into
+fields**, and `sh_idlg_*` — the single-line input engine stage 3.0c built for
+Goto / Row Height / Column Width / Define Name / Find — is exactly that. Sort
+becomes `SH_ID_SORT`, prompt `1st Key:`, prefilled with the anchor so pressing
+Enter gives the old behaviour.
+
+**Two dialogs in sequence, not one.** The key needs a text field; the order
+needs radios; no engine here has both. Asking twice is what File > Save As...
+already does — the format radio first, then the file dialog — so this follows
+the app's own idiom rather than growing a third engine. The order dialog is
+the existing `SH_FDK_SORT` radio, opened from inside the key dialog's apply.
+Eight consecutive cycles all opened, so the pair leaks no window slot (§81.15).
+
+**A key outside the selection is refused, not clamped.** Outside it the sort
+would reorder a column the carry does not move, which breaks exactly the
+correspondence §81.19 exists to keep — and a clamp answers a different
+question silently, which is the failure mode §81.26.1 was written about. The
+status bar says so. A single-column selection sorts by itself whatever was
+typed.
+
+#### 81.27.1 Two things the key and the anchor had been sharing
+
+Both were `sh_selcol`, and both looked correct until they stopped being the
+same column:
+
+- **`sh_sort_carry`'s column span** was read out of the same register as the
+  key. With the key at `B` the span became `B..C`, so sorting `A:C` by `B`
+  left column `A` exactly where it was — every other column moved and one did
+  not, which is worse than not sorting. The span is the selection's;
+  the key is `sh_sort_key`.
+- **The formula write-back** committed to `sh_selcol` while the value
+  write-back committed to the key, so a sorted *formula* cell would have
+  landed in the anchor's column. No test reached it, because the sheet under
+  test held no formulas in a non-anchor key column — it would have appeared
+  as a formula silently moving one column left.
+
+Found by running it: the first sort of `A:C` by `B` moved `B` and `C` and left
+`A` untouched, in the screenshot, immediately.
+
+>>>>>>> a1efbce (sheet: a Sort key that is not the anchor)
+### 81.28 Date serials
+
+A date is a **number**: days since the epoch, with the time of day in the
+fraction. That is Excel's model and it is the reason dates arithmetic at all —
+tomorrow is `+1`, an interval is a subtraction, and a date sorts because it is
+a number that happens to be *shown* as a date.
+
+Eleven functions: `DATE DAY MONTH YEAR WEEKDAY TIME HOUR MINUTE SECOND
+DATEVALUE TIMEVALUE`, ids 58..68.
+
+#### 81.28.1 Serial 60 is 29 February 1900, a day that never existed
+
+1900 was not a leap year. Lotus 1-2-3 thought it was, Excel copied the mistake
+so the two could exchange files, and every version since has kept it for the
+same reason.
+
+**Reproducing the bug is the correct behaviour here.** Getting it "right"
+would put every date in a shared file one day out from what Excel shows —
+a worse bug than the one being reproduced, and a silent one. So serial 1 is
+1 January 1900, serial 59 is 28 February, serial **60 is the phantom day**,
+and 61 is 1 March. `sh_ser_to_ymd` special-cases 60 rather than contorting the
+walk, because the day is not in any real calendar to be found by walking one.
+
+One divergence, recorded rather than fixed: `DATE(1900,2,29)` answers **61**
+here and 60 in Excel. The rollover that makes `DATE(1990,13,1)` mean January
+1991 also makes 29 February 1900 mean 1 March, and special-casing the phantom
+day on the way *in* would cost more than a date nobody enters is worth.
+
+The range is what an **unsigned word** holds — serial 65535 is 5 June 2079 —
+which is almost exactly Excel 2.1's own limit of 31 December 2078.
+
+#### 81.28.2 An unsigned word, because the signed one stops in 1989
+
+`fp_a2i` is signed and clamps at 32767. As a date serial that is **24
+September 1989**, so every date this app will ever be asked about is past it
+and the signed conversion is not usable for serials at all. `sh_acc_toudw`
+takes the top bit off by hand, converts the remainder, and adds it back
+unsigned; `sh_acc_fromudw` goes the other way through `fp_u64_to_a`.
+
+**`fp_cmpab` sets SIGNED flags**, which is what it is for — it answers −1/0/1
+in `AX` and sets the flags from that. Writing `jb` after it, as if it were an
+unsigned magnitude compare, means the branch is never taken: every serial past
+32767 fell down the clamping path and `HOUR`, `MINUTE` and `SECOND` all
+answered 0. `sh_pcmp` had used `jl`/`jg` correctly since stage 4.0; this is the
+one place that did not.
+
+#### 81.28.3 Seconds-of-day do not fit either
+
+86,399 is past 65,535, so there is no single number for "the time of day in
+seconds" to hand back. `sh_dt_hms` therefore returns **minutes since midnight**
+(0..1439) and the seconds within that minute (0..59), split off the *same*
+rounded value so the two can never disagree about which second it is.
+
+The rounding still happens in the seconds domain, in floating point where it
+fits. A time built as h/m/s is not exact in binary, and truncating a
+`TIME(10,30,0)` that came back as 10:29:59.9999 would show 10:29:59.
+
+#### 81.28.4 `NOW()` is absent, and cannot be written here
+
+It is the twelfth function of the category and the only one that is not
+arithmetic. **No kernel call publishes the calendar date.** The kernel has it —
+it draws `Aug 28 2026` in the menu bar every second — but the only clocks a
+package can read are `OSAPI_GET_TICKS` and `OSAPI_BOOT_TICKS`, and both count
+since boot. A `NOW()` built on those would answer with the uptime, which is
+not the time and would be believed.
+
+It needs **one new API slot** publishing what the clock already reads. That is
+a kernel change with its own review and its own SPEC amendment, not something
+to approximate inside a package — the same judgement §75.3 records for the
+alert box, where a kernel primitive was added, measured, and reverted.
+
+`DATEVALUE` takes the numeric forms only (`8/28/2026`, `28-8-2026` — the
+separator carries no meaning), not `28-Aug-2026`. A month *name* is a
+different parse, and a half-supported one that quietly returned `#VALUE!` for
+the spelled form would be worse than a documented limit.
+
+### 81.29 A name binds a RANGE
+
+Stage 3.0c wrote the scope of a defined name down rather than leaving it to
+be discovered: *"a name binds ONE CELL, not a range… A range needs the
+reference-typed argument the value model still does not have (the same thing
+blocking VLOOKUP and the array functions)."*
+
+That argument landed in §81.23, so the reason expired and the record grew the
+second corner it had been waiting for. `SH_NAME_REC` is name + NUL + **two**
+coordinate pairs; `Formula > Define Name...` binds whatever the selection is,
+which for a single cell is a 1×1 rectangle. **Nothing that worked before
+behaves differently** — `=Total` still reads one cell, because a one-cell name
+is the same thing with both corners equal.
+
+**A name is a range argument wherever a range would go.** `sh_pnamerange` runs
+ahead of `sh_pcellref` in `sh_prange`, so `=SUM(SALES)` folds the block. It is
+strict about being the *whole* argument for the same reason `sh_pargref` is
+(§81.23): a `,` or the `)` must follow, so `=SUM(Sales+1)` stays an expression
+about Sales rather than a fold over it. A name followed by `(` is declined
+outright — that parenthesis is the only thing separating `SUM` from a cell
+called `SUM`, and `sh_pfunc` still needs to see it.
+
+A one-cell name resolves to a 1×1 rectangle and folds to the same single value
+the expression path already gave it, so nothing takes a different route to a
+different answer.
+
+Still **instance-wide, not per sheet**: that needs a sheet field in the record
+plus a rule for what an unqualified name means from another sheet, and it
+would be worse guessed at.
+
+#### 81.29.1 The names go in the file
+
+A name that only this app knows is a fact the file does not carry: a saved
+sheet would hold the data but not what any of it was called, and nothing else
+could find the range.
+
+SYLK has a record for exactly this. `NN;N<name>;E<ref>` goes out straight
+after the `ID` line, one per name, with the reference in **R1C1** because that
+is the notation every `;E` field in the file already uses — one convention,
+not two — and absolute, because a name is a fixed place rather than an offset
+from wherever it is read.
+
+```
+ID;PWXL;N;E
+NN;NSALES;ER1C1:R4C1
+C;X1;Y1;K10
+```
+
+This is what lets Chart chart a named range (§82.15). DIF has no equivalent
+record and BIFF's `NAME` (0x0018) carries its reference as an RPN token
+stream, which is a bigger piece of work than the SYLK line and is not done.
+
+**A crossed pop, caught by the gate rather than by running it.** `sh_wr_names`
+pushed `ax, bx, cx, si` and popped `si, bx, cx, ax` — the depth is right, so
+nothing faults and nothing asserts; the routine simply returns with BX and CX
+swapped, into a caller entitled to keep a pointer in one of them. `asmrules`
+names that shape directly.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
@@ -75160,6 +75773,93 @@ in any of the charts tested up to that point, because both need data the
 earlier tests did not have — a second column, and rows arriving out of order.
 The fixture that caught the sort is a SYLK file whose rows are written 4, 1, 3,
 2; it charts 40, 30, 15, 5.
+
+### 82.14 Keeping Chart in step with what Sheet writes
+
+Sheet grew four stages of value model while Chart's readers stood still, and
+the two drifted in opposite directions — one reader was too generous and one
+was not generous enough.
+
+**The LIVE feeder was the generous one.** §82.11 taught chart.o88's *file*
+readers that a label is not a data point, and §81.19's sort scan learned the
+same about labels and errors. `sh_chart_scan1` — the feeder behind Sheet's own
+`Data > Chart Column...`, the one that does not go through a file at all —
+never did. A plain label leaves `SH_C_VAL` zero (`sh_commit` writes the value
+before the tag), so a column with a heading charted **a 0 bar at the top of
+it**, and a `#DIV/0!` charted the zero underneath the error. It now skips both,
+and judges a formula by what it **answered** rather than by its stored tag —
+the tag may predate the fix that unbroke it, which is the same reason
+`sh_getcell2` raises from the freshly published one (§81.20).
+
+**The BIFF reader was the stingy one.** It handled `RK` and `NUMBER` and
+skipped everything else, which was right until Sheet started writing real
+`FORMULA` records instead of flattened values. From then on, saving a column
+of formulas and opening it in Chart drew **nothing at all** — while the same
+column charted correctly inside Sheet, from the same data, one menu away.
+
+A `FORMULA`'s cached result sits at the same offset as `NUMBER`'s value, so
+reading it is the NUMBER path with one extra test: BIFF marks a cached
+**string, boolean or error** by setting the double's top word to `0xFFFF`,
+which no finite double has. Sheet writes exactly that for a `#DIV/0!` or a text
+result (§81.24.3), and charting the bytes underneath one would plot a NaN's
+mantissa as a data point.
+
+Verified against a file Sheet wrote and the host decoded: a `LABEL` heading,
+four `FORMULA` records cached at 20/30/40/50, and a fifth whose cached result
+is non-numeric. Chart draws four bars — the same four the live chart draws.
+
+#### 82.14.1 What Chart still does not know
+
+Recorded rather than fixed, because both are honest limits and neither is
+silent-wrong:
+
+- **A multi-sheet workbook is read as its first sheet.** Sheet writes BIFF4
+  with a `SHEETHDR` per sheet when more than one has data (§81.10.5); Chart
+  has no record for `0x008F` and stops at the first `EOF`, which is the end of
+  worksheet one. It plots that sheet and says nothing about the others.
+- **There is no range selection.** `Data > Column` picks a *column* — A..H, or
+  Automatic — and charts all of it. Excel charts a selection because it has
+  one; this app opens a file, and a file does not carry what was selected
+  (§82.12). A row range would need a second pair of fields and a reader that
+  bounds its walk by them.
+
+### 82.15 Charting a range Sheet named
+
+Chart is the **helper that keeps image generation out of Sheet**, so what it
+charts should be what the user pointed at — not "whatever the lowest column
+turned out to be", which is all a file used to say. Sheet now names ranges
+(§81.29) and writes them as SYLK `NN` records (§81.29.1), so there is
+something to point at.
+
+`ct_parse_nn` reads them into a small table and `Data` offers them by name.
+`ct_record` then admits only cells inside the chosen rectangle, and the
+existing two-lowest-column logic picks within it — which for the usual
+one-column name is that column and nothing else, so **no new selection
+machinery was needed**, only a filter in front of the old one.
+
+**It is a relabelling, not a second menu.** The `Data` menu's eight slots are
+buffers, filled at startup with `Column A`..`Column H` and overwritten with
+the names when a file supplies any — the same relabel-in-place idiom Sheet's
+Options menu uses. The kernel re-reads an item's text each time the menu
+drops, so nothing has to be rebuilt; a genuinely dynamic menu would have to
+be, and the kernel's menu set is a static structure (§13.5). Any slot past
+the last name keeps its column label, so a half-filled menu still says what
+the rest are.
+
+Names belong to **the file that is open**: a read clears the table first, and
+opening another file relabels from that one. `Automatic` clears both the
+column and the range choice.
+
+Only SYLK carries names. DIF has no equivalent record, and BIFF's `NAME`
+(0x0018) holds its reference as an RPN token stream — a bigger piece of work
+than the SYLK line, and not done, so a `.BIF` still charts by column.
+
+**`mul` writes DX:AX, and DX was the far corner's row.** Computing the
+record's address with the corner still live stored the multiply's high word —
+zero — as the row, so every named range came out one row tall and charted its
+first cell alone: one giant bar. Both halves are banked across the multiply
+now. The trap is the oldest one in this file and it still caught a fresh
+routine.
 
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
