@@ -74199,6 +74199,70 @@ Two bugs, both of which reported **"Loaded"** over an empty grid:
    end became zero and the record walk finished before its first record — while
    still reporting success, because nothing had failed.
 
+
+#### 81.10.8 Defined names survive a round trip, in both formats
+
+**They did not, in any format, and the file was never the problem.**
+`sh_wr_names` has written SYLK `NN` records since stage 4.6 so that CHART
+could find a named range (§82.15). Nothing ever read one back: `sh_parseslk`
+handled `C` and `F` records and no others, and `sh_nnames` was not among the
+counters a load reset. A name therefore survived being saved, did not survive
+being loaded, and quietly outlived the document it belonged to — the next
+sheet opened inherited the last one's names, still pointing at cells that were
+no longer there.
+
+Three things closed it:
+
+**BIFF gets a `DEFINEDNAME` record, and its opcode is `0218H`.** Not `0018H`.
+`0018H` is BIFF2's number, and BIFF5 and BIFF8 took it back; BIFF3 and BIFF4 —
+the two versions this app writes — use `0218H` (excelfileformat 5.33). This is
+the same shape of trap as `FONT` (§81.10.6) and the newer one to fall into,
+because nearly all prose about "the BIFF NAME record" is written from BIFF8.
+Getting it wrong produces a file no reader complains about: an unknown opcode
+is skipped by its length and the names are simply absent. `docs/BIFF-NOTES.md`
+tabulates the body.
+
+The token array is one **`tAreaR` (25H)** and a six-byte cell-range address,
+so `sz` is always 7. `tAreaR` and not `tAreaN`: excelfileformat section 3.9.11
+says a defined name in BIFF2-BIFF4 uses `tAreaN`, the *relative* form, but
+*"if all components of the cell range address are absolute, a tArea token is
+used instead"* — and a name here is always absolute, the same rule
+`sh_wr_names` states for SYLK. Reference class and not the value class 45H the
+cell formulas use: the name **is** the range, not a value read out of one.
+
+Where it goes in the stream is **not documented for BIFF3/4** —
+excelfileformat's sections 4.2.3 and 4.10.1 both read `2do`, the same gap
+§81.10.2 hit over the function index table. It follows the BIFF5 worksheet
+stream that document does give: the link table after the globals, before the
+cell records. In the §81.10.5 workbook the records go in the **globals**
+substream, because a name here is instance-wide and belongs to no one sheet.
+
+**SYLK gets the reader it was missing.** `sh_parsenrec` takes the fields in
+any order, as the `C` record's parser does, because another program's SYLK
+writer is not obliged to emit them in ours. `NN` is the one record type in
+this format whose name is *two* letters, so its `;` is at offset 2 — the
+one-letter test above it is exactly why these records were written for a
+release and never read.
+
+**A load resets the table.** `sh_nnames` joins `sh_ncells`, `sh_txtlen`,
+`sh_nbord` and `sh_nnote` in all three readers and in File > New. DIF carries
+no names at all, so a DIF load leaves none — which is still a *replacement*,
+not an inheritance.
+
+Corners are **normalised on the way out** and range-checked on the way in. The
+table stores what the dialog gave it, because `sh_foldrange` normalises when it
+walks; a file has no walker, and BIFF's first/last are not "wherever you
+dragged from". Coming back, a name longer than `SH_NAME_MAX` or a rectangle
+outside the grid is **dropped rather than clipped** — a clipped name silently
+binds different data the next time it is looked up.
+
+Verified by writing the same in-memory sheet to both formats and decoding both
+on the host: `NN;NSALES;ER1C1:R6C1` and `0218H … 25 00 00 05 00 00 00`, which
+are the same A1:A6 in each format's own convention. Then `=SUM(SALES)` = 145
+after loading each file back, and `#NAME?` after loading a file with no names
+— which is what proves the first two were reading the file rather than
+remembering.
+
 ### 81.11 Text cells
 
 Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything
@@ -75889,6 +75953,29 @@ zero — as the row, so every named range came out one row tall and charted its
 first cell alone: one giant bar. Both halves are banked across the multiply
 now. The trap is the oldest one in this file and it still caught a fresh
 routine.
+
+### 82.17 Chart reads a named range out of BIFF too
+
+`ct_parse_nn` has read SYLK's `NN` record since §82.15. BIFF's `DEFINEDNAME`
+(0218H, §81.10.8) now feeds the same table, so the **Data** menu offers a
+document's named ranges whichever of the two formats it arrived in. The only
+token array accepted is a lone `tAreaR` — which is the only one Sheet writes,
+and the only one that *is* a rectangle rather than something needing a cell to
+be relative to.
+
+Two things this closed beyond the new record:
+
+**`ct_name_store` is shared by both readers.** The corner-writing tail used to
+live inside `ct_parse_nn`, and it is the part with the `mul` that must not run
+with `DX` live (§82.15). A second reader open-coding it would have been the
+obvious way to reintroduce exactly that bug in a place the first one no longer
+had it.
+
+**The name table is reset in `ct_reset_series`, not in one reader.** Clearing
+it was `ct_read_sylk`'s alone, so a BIFF or DIF file opened after a SYLK one
+inherited the SYLK file's names and the Data menu offered ranges that were not
+in the document it was showing. All three readers call `ct_reset_series`, and
+all three mean the same thing by it.
 
 ### 82.16 `CHART.OVL` — the rasterizer as an overlay, and why only SHEET takes it
 

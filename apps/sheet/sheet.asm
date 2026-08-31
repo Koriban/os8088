@@ -9929,6 +9929,9 @@ sh_new:
     mov word [sh_txtlen], 0
     mov word [sh_nbord], 0           ; the discarded document's borders and
     mov word [sh_nnote], 0           ; notes go with it - a note record holds
+    mov word [sh_nnames], 0          ; ...and its NAMES, which used to survive
+                                     ; into the next document and go on
+                                     ; pointing at cells no longer there
                                      ; an OFFSET into the arena reset above,
                                      ; and would read new text through it
     mov word [sh_cursheet], 0
@@ -10620,6 +10623,7 @@ sh_doread_sylk:
     mov word [sh_txtlen], 0           ; "replacing the sheet" means the old
     mov word [sh_nbord], 0            ; document's arena text, borders and
     mov word [sh_nnote], 0            ; notes too, not just its cells
+    mov word [sh_nnames], 0           ; ...and its defined names (81.10.8)
     mov cx, ax                        ; a file this small never exceeds 64KB
     xor si, si
     call sh_parseslk
@@ -10998,6 +11002,9 @@ sh_doread_dif:
     mov word [sh_txtlen], 0            ; "replacing the sheet" - see
     mov word [sh_nbord], 0             ; sh_doread_sylk's same three
     mov word [sh_nnote], 0
+    mov word [sh_nnames], 0            ; DIF carries no names, so a DIF load
+                                       ; leaves none - still a REPLACEMENT,
+                                       ; not an inheritance
     mov es, [sh_stgseg]
     mov di, ax                         ; DI = end (bytes read)
     xor si, si
@@ -11425,6 +11432,11 @@ sh_dowrite_biff:
                                       ; desynchronise on the short form
 
     call sh_biff_fontsxfs
+    call sh_biff_names                ; the link table sits before the cell
+                                      ; records - excelfileformat's own 4.2.3
+                                      ; and 4.10.1 are both "2do" for BIFF3/4,
+                                      ; so this follows the BIFF5 worksheet
+                                      ; stream it does document
 
     mov byte [sh_trunc], 0
     mov ax, [sh_cursheet]            ; the BIFF3 stream is ONE sheet, and says
@@ -11480,6 +11492,136 @@ sh_dowrite_biff:
 ; the record is for: a reader that does not recalculate still shows the right
 ; number, and one that does gets the same answer from the tokens.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_biff_names - one DEFINEDNAME record per defined name, at ES:DI.
+;
+; THE OPCODE IS 0218H, NOT 0018H, and that is the whole reason to read the
+; reference before writing this. 0018H is the BIFF2 number, and BIFF5 and
+; BIFF8 took it back; BIFF3 and BIFF4 - the two versions this app writes -
+; use 0218H (excelfileformat 5.33). Writing 0018H into a BIFF3 stream is not
+; an error any reader reports: it is an unknown record, skipped by its length,
+; and the names simply are not there.
+;
+; The body, BIFF3-4:
+;
+;   0  2  option flags: 0 = visible, user-defined, standard, simple formula
+;   2  1  keyboard shortcut (command macros only, so 0)
+;   3  1  ln = the name's length in characters
+;   4  2  sz = the size of the formula data
+;   6  ln the name, counted rather than NUL-terminated
+;   6+ln  sz  the RPN token array, with no size field of its own
+;
+; The token array is one tAreaR (25H) and a six-byte cell-range address, so
+; sz is always 7 here. tAreaR and not tAreaN: 3.9.11 says a defined name in
+; BIFF2-BIFF4 uses tAreaN, the RELATIVE form, "if all components of the cell
+; range address are absolute, a tArea token is used instead" - and a name in
+; this app is always absolute, which is the same rule sh_wr_names states for
+; SYLK. Reference class (25H), not the value class 45H the cell formulas use:
+; the name IS the range, it is not a value read out of one.
+;
+; The corners are NORMALISED here. The table stores them as the dialog gave
+; them, because sh_foldrange normalises when it walks; a file has no walker,
+; and BIFF's first/last are not "wherever you dragged from".
+; -----------------------------------------------------------------------------
+sh_biff_names:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov cx, [sh_nnames]
+    or cx, cx                         ; not JCXZ, for the same reach reason as
+    jnz .some                         ; the LOOP at the bottom of this routine
+    jmp .out
+.some:
+    xor bx, bx
+.each:
+    mov ax, di
+    add ax, 4 + 6 + SH_NAME_MAX + 7   ; the longest record this can emit; the
+    cmp ax, SH_STAGE_MAX              ; cells matter more than the names, so
+    ja .out                           ; a full staging area drops these first
+    push cx
+    push bx
+    mov si, sh_names
+    add si, bx
+    xor cx, cx
+.len:
+    cmp byte [si], 0
+    je .havelen
+    inc si
+    inc cx
+    cmp cx, SH_NAME_MAX
+    jb .len
+.havelen:
+    or cx, cx
+    jnz .named
+    jmp .nextname                     ; an empty name has nothing to define
+.named:
+    mov ax, 0x0218                    ; DEFINEDNAME (BIFF3/BIFF4)
+    call sh_biffw
+    mov ax, cx
+    add ax, 6 + 7                     ; header + tAreaR + its address
+    call sh_biffw
+    xor ax, ax
+    call sh_biffw                     ; option flags
+    xor al, al
+    call sh_stgputb                   ; keyboard shortcut
+    mov al, cl
+    call sh_stgputb                   ; ln
+    mov ax, 7
+    call sh_biffw                     ; sz
+    mov si, sh_names
+    add si, bx
+.nm:
+    mov al, [si]
+    call sh_stgputb
+    inc si
+    dec cx
+    jnz .nm
+    mov si, sh_names                  ; the corners, normalised into
+    add si, bx                        ; first/last
+    add si, SH_NAME_MAX + 1
+    mov ax, [si]                      ; col1, col2
+    mov dx, [si+4]
+    cmp ax, dx
+    jbe .colok
+    xchg ax, dx
+.colok:
+    mov [sh_nm_col], ax
+    mov [sh_nm_col2], dx
+    mov ax, [si+2]                    ; row1, row2
+    mov dx, [si+6]
+    cmp ax, dx
+    jbe .rowok
+    xchg ax, dx
+.rowok:
+    mov [sh_nm_row], ax
+    mov [sh_nm_row2], dx
+    mov al, 0x25                      ; tAreaR
+    call sh_stgputb
+    mov ax, [sh_nm_row]               ; the two relative-flag bits stay CLEAR:
+    call sh_biffw                     ; set means relative (81.10.2), and a
+    mov ax, [sh_nm_row2]              ; name does not move
+    call sh_biffw
+    mov al, [sh_nm_col]
+    call sh_stgputb
+    mov al, [sh_nm_col2]
+    call sh_stgputb
+.nextname:
+    pop bx
+    pop cx
+    add bx, SH_NAME_REC
+    dec cx                            ; not LOOP: the body above is well past
+    jz .out                           ; the 127 bytes a short jump reaches
+    jmp .each
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_biff_fontsxfs - the four FONT records and the sixty-four XF records, at
 ; ES:DI. [sh_wb_xf4] picks BIFF4's XF opcode and body layout over BIFF3's.
@@ -11664,6 +11806,9 @@ sh_biff_workbook:
 
     mov byte [sh_wb_xf4], 1           ; the globals' FONT/XF block, in BIFF4
     call sh_biff_fontsxfs             ; opcodes and layout
+    call sh_biff_names                ; ...and the names, which are instance-
+                                      ; wide and so belong to the GLOBALS
+                                      ; substream, not to any one sheet
 
     mov ax, 0x008E                    ; SHEETSOFFSET
     call sh_biffw
@@ -12158,6 +12303,8 @@ sh_doread_biff:
     mov word [sh_txtlen], 0            ; "replacing the sheet" - see
     mov word [sh_nbord], 0             ; sh_doread_sylk's same three
     mov word [sh_nnote], 0
+    mov word [sh_nnames], 0            ; the DEFINEDNAME records below refill
+                                       ; this; they precede the cell records
     mov word [sh_biff_nfont], 0
     mov word [sh_biff_nxf], 0
     mov cx, ax                         ; CX = end offset (bytes read)
@@ -12217,6 +12364,84 @@ sh_doread_biff:
     je .isformula                      ; 0406H is BIFF4's own number for it
     cmp ax, 0x008F                     ; SHEETHDR: the substream that follows
     je .issheethdr                     ; belongs to the NEXT sheet
+    cmp ax, 0x0218                     ; DEFINEDNAME (BIFF3/4) - 0018H is the
+    je .isname                         ; BIFF2/5/8 number and is NOT accepted
+    jmp .skip                          ; here, because its body is a different
+                                       ; shape (81.10.8)
+.isname:
+    ; ------------------------------------------------------------------
+    ; DEFINEDNAME. Every field is bounds-checked against CX, the file's
+    ; own end, before it is read: a name length and a formula size are
+    ; two more numbers off a disk, and either can be a lie.
+    ; ------------------------------------------------------------------
+    mov ax, si
+    add ax, 6                          ; the six-byte header must be there
+    jc .skip
+    cmp ax, cx
+    ja .skip
+    mov bl, [es:si+3]                  ; ln
+    xor bh, bh
+    or bx, bx
+    jz .skip
+    cmp bx, SH_NAME_MAX                ; a longer name than this app can hold
+    ja .skip                           ; is dropped, not clipped: a clipped
+                                       ; name silently binds the wrong thing
+                                       ; the next time it is looked up
+    mov ax, [es:si+4]                  ; sz - the token array's size. Seven is
+    cmp ax, 7                          ; one tAreaR, which is the only shape
+    jne .skip                          ; this app defines and the only one it
+                                       ; can turn back into a rectangle
+    mov ax, si
+    add ax, 6
+    add ax, bx
+    add ax, 7                          ; ...and all of it must be inside
+    jc .skip
+    cmp ax, cx
+    ja .skip
+    push si
+    push cx
+    push dx
+    add si, 6
+    mov di, sh_nm_in
+    mov cx, bx
+.nmcopy:
+    mov al, [es:si]                    ; the name is COUNTED in the file and
+    mov [di], al                       ; NUL-terminated in the table
+    inc si
+    inc di
+    dec cx
+    jnz .nmcopy
+    mov byte [di], 0
+    cmp byte [es:si], 0x25             ; tAreaR, the absolute reference form.
+    jne .nmdone                        ; tAreaN (2DH) is the relative one and
+                                       ; means something this app has no way
+                                       ; to resolve - a name relative to WHAT
+    mov ax, [es:si+1]                  ; first row; bits 14-15 are the two
+    and ax, 0x3FFF                     ; relative flags, not part of the index
+    mov [sh_nm_row], ax
+    mov ax, [es:si+3]                  ; last row
+    and ax, 0x3FFF
+    mov [sh_nm_row2], ax
+    mov al, [es:si+5]                  ; first and last column, a byte each
+    xor ah, ah
+    mov [sh_nm_col], ax
+    mov al, [es:si+6]
+    xor ah, ah
+    mov [sh_nm_col2], ax
+    cmp word [sh_nm_row2], SH_ROWS     ; a range this grid cannot hold is
+    jae .nmdone                        ; refused whole rather than clamped
+    cmp word [sh_nm_col2], SH_COLS
+    jae .nmdone
+    mov si, sh_nm_in
+    mov ax, [sh_nm_col]
+    mov bx, [sh_nm_row]
+    mov cx, [sh_nm_col2]
+    mov dx, [sh_nm_row2]
+    call sh_name_def                   ; CF=1 = the table is full, and the
+.nmdone:                               ; rest of the file still loads
+    pop dx
+    pop cx
+    pop si
     jmp .skip
 .isfont:
     mov bx, [sh_biff_nfont]
@@ -12574,6 +12799,20 @@ sh_parseslk:
 .goteol:
     mov ax, bx
     sub ax, si
+    cmp ax, 3                        ; NN is the one record here whose type is
+    jb .not2                         ; TWO letters, so its ';' is at +2 and it
+    cmp byte [es:si], 'N'            ; has to be tested before the one-letter
+    jne .not2                        ; shape below - which is why sh_wr_names
+    cmp byte [es:si+1], 'N'          ; wrote these for a release and nothing
+    jne .not2                        ; ever read one back (81.10.8)
+    cmp byte [es:si+2], ';'
+    jne .not2
+    push si
+    add si, 3
+    call sh_parsenrec                ; in: SI=tokens start, BX=line end
+    pop si
+    jmp .advance
+.not2:
     cmp ax, 2
     jb .advance
     cmp byte [es:si+1], ';'
@@ -12612,6 +12851,161 @@ sh_parseslk:
     pop dx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_parsenrec - one 'NN' record: NN;N<name>;E<R1C1>[:<R1C1>]
+; in: SI = start of tokens (right after "NN;"), BX = line end (exclusive);
+; ES = the buffer's segment, same as sh_parseslk's caller set
+;
+; This is the other half of sh_wr_names, and it was missing. Sheet wrote these
+; records so CHART could find a named range (82.15) and never read one itself,
+; so a name survived being saved and did not survive being loaded - the file
+; was right and the app forgot. Fields are taken in any order, like the 'C'
+; record's, because a SYLK writer is not obliged to emit them in ours.
+; -----------------------------------------------------------------------------
+sh_parsenrec:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [sh_nm_in], 0
+    mov word [sh_nm_row], 0xFFFF      ; "no ;E field seen yet"
+.tok:
+    cmp si, bx
+    jae .done
+    mov al, [es:si]
+    inc si
+    cmp al, 'N'
+    je .isn
+    cmp al, 'E'
+    je .ise
+.scan:                                ; a field this reader has no use for
+    cmp si, bx
+    jae .done
+    cmp byte [es:si], ';'
+    je .fieldend
+    inc si
+    jmp .scan
+.isn:
+    mov di, sh_nm_in
+    mov cx, SH_NAME_MAX
+.ncp:
+    cmp si, bx
+    jae .nend
+    mov al, [es:si]
+    cmp al, ';'
+    je .nend
+    cmp al, 13
+    je .nend
+    cmp al, 10
+    je .nend
+    jcxz .nskip                       ; past what the table holds: keep the
+    mov [di], al                      ; first SH_NAME_MAX and go on reading
+    inc di                            ; the field, so the ';' after it is
+    dec cx                            ; still found
+.nskip:
+    inc si
+    jmp .ncp
+.nend:
+    mov byte [di], 0
+    jmp .fieldend
+.ise:
+    call sh_slk_r1c1
+    jc .done
+    mov [sh_nm_row], ax
+    mov [sh_nm_col], dx
+    mov [sh_nm_row2], ax              ; a one-cell name is the same rectangle
+    mov [sh_nm_col2], dx              ; with both corners equal
+    cmp si, bx
+    jae .fieldend
+    cmp byte [es:si], ':'
+    jne .fieldend
+    inc si
+    call sh_slk_r1c1
+    jc .fieldend                      ; a broken far corner still leaves a
+    mov [sh_nm_row2], ax              ; usable one-cell name rather than
+    mov [sh_nm_col2], dx              ; discarding the record
+.fieldend:
+    cmp si, bx
+    jae .done
+    cmp byte [es:si], ';'
+    jne .done
+    inc si
+    jmp .tok
+.done:
+    cmp byte [sh_nm_in], 0            ; a record with no ;N or no ;E defines
+    je .out                           ; nothing
+    cmp word [sh_nm_row], 0xFFFF
+    je .out
+    mov ax, [sh_nm_row2]
+    cmp ax, SH_ROWS
+    jae .out
+    mov ax, [sh_nm_col2]
+    cmp ax, SH_COLS
+    jae .out
+    mov si, sh_nm_in
+    mov ax, [sh_nm_col]
+    mov bx, [sh_nm_row]
+    mov cx, [sh_nm_col2]
+    mov dx, [sh_nm_row2]
+    call sh_name_def                  ; CF=1 = the table is full; the rest of
+.out:                                 ; the file still loads
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_slk_r1c1 - one absolute R1C1 reference at ES:SI, the notation sh_wr_r1c1
+; emits. in: BX = limit. out: AX = 0-based row, DX = 0-based column, SI past
+; it; CF=1 = not one, and SI is wherever it gave up.
+;
+; R1C1 is ONE-BASED, so R0 or C0 is refused rather than wrapped to 65535 by
+; the decrement.
+; -----------------------------------------------------------------------------
+sh_slk_r1c1:
+    push cx
+    push di
+    cmp si, bx
+    jae .bad
+    cmp byte [es:si], 'R'
+    jne .bad
+    inc si
+    mov di, si
+    call sh_pint                      ; no CF of its own: SI not moving is
+    cmp si, di                        ; what "no digits" looks like
+    je .bad
+    or ax, ax
+    jle .bad
+    dec ax
+    mov cx, ax                        ; bank the row - sh_pint returns in AX
+    cmp si, bx
+    jae .bad
+    cmp byte [es:si], 'C'
+    jne .bad
+    inc si
+    mov di, si
+    call sh_pint
+    cmp si, di
+    je .bad
+    or ax, ax
+    jle .bad
+    dec ax
+    mov dx, ax
+    mov ax, cx
+    clc
+    jmp .out
+.bad:
+    stc
+.out:
+    pop di
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -22728,7 +23122,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3897
+    OS88_BSS 3910
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -23065,7 +23459,16 @@ sh_nm_row       equ sh_nm_col + 2
 sh_nm_col2      equ sh_nm_row + 2            ; stage 4.6: the far corner a
 sh_nm_row2      equ sh_nm_col2 + 2           ; named RANGE binds
 sh_nm_tmp       equ sh_nm_row2 + 2           ; sh_wr_r1c1's banked column
-sh_find_col     equ sh_nm_tmp + 2            ; the walk's current cell...
+sh_nm_in        equ sh_nm_tmp + 2            ; SH_NAME_MAX+1: a name arriving
+                                             ; from a FILE, which cannot be
+                                             ; sh_nm_buf - that is where
+                                             ; sh_name_def puts what it is
+                                             ; GIVEN, and handing a routine
+                                             ; its own destination as the
+                                             ; source is the kind of aliasing
+                                             ; that works until the copy grows
+                                             ; a step
+sh_find_col     equ sh_nm_in + SH_NAME_MAX + 1  ; the walk's current cell...
 sh_find_row     equ sh_find_col + 2
 sh_find_buf     equ sh_find_row + 2          ; SH_EDITMAX+1: ...as displayed
 sh_sort_trow  equ sh_find_buf + SH_EDITMAX + 1   ; word: the write-back loop's

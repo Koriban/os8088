@@ -30,6 +30,7 @@ with the BIFF4 body layout below. One sheet keeps the BIFF3 stream.
 | `NUMBER` | 0003H | **0203H** | 0203H | 0203H | writes 0203H |
 | `LABEL`  | 0004H | **0204H** | 0204H | 0204H | writes 0204H |
 | `EOF`    | 000AH | 000AH | 000AH | 000AH | writes 000AH |
+| `DEFINEDNAME` | 0018H | **0218H** | 0218H | 0018H | writes 0218H, reads 0218H |
 
 `LABEL` is the second trap, for a different reason than `FONT`: the opcode is
 easy, but the BODY changed shape. BIFF2's `LABEL` (0004H) carries a **one-byte**
@@ -42,6 +43,42 @@ stream. Sheet writes and accepts only the BIFF3 form.
 `FONT` is the trap in that table: it is `0031H` in BIFF2 **and again** in
 BIFF5/7/8, but `0231H` in exactly BIFF3 and BIFF4. Getting it from a BIFF8
 reference and using it in a BIFF3 file would be wrong.
+
+`DEFINEDNAME` is the **same trap as `FONT`, and the newer one to fall into**:
+`0018H` in BIFF2, back to `0018H` in BIFF5 and BIFF8, but `0218H` in exactly
+BIFF3 and BIFF4. Nearly every reference and every piece of prose about "the
+BIFF NAME record" says 0018H, because BIFF8 is what people read. Writing that
+into a BIFF3 stream produces a file no reader complains about: an unrecognised
+opcode is skipped by its length, so the names are simply not there.
+
+Its body, BIFF3-4:
+
+| offset | size | field |
+|---|---|---|
+| 0 | 2 | option flags — 0 = visible, user-defined, standard, simple formula |
+| 2 | 1 | keyboard shortcut (command macros only) |
+| 3 | 1 | `ln`, the name's length in characters |
+| 4 | 2 | `sz`, the size of the formula data |
+| 6 | `ln` | the name, **counted, not NUL-terminated** |
+| 6+`ln` | `sz` | the RPN token array, with no size field of its own |
+
+Sheet's `sz` is always 7: one `tAreaR` (25H) plus a six-byte cell-range
+address (row1(2), row2(2), col1(1), col2(1)), the same encoding §81.10.2's
+FORMULA tokens use, with the two relative-flag bits in each row word **clear**.
+
+`tAreaR` and not `tAreaN`: excelfileformat section 3.9.11 says a defined name in
+BIFF2-BIFF4 uses `tAreaN`, the relative form, but *"if all components of the
+cell range address are absolute, a tArea token is used instead"* — and a name
+in this app is always absolute, which is the same rule SYLK's `NN` record
+follows. Reference class (25H), not the value class (45H) the cell formulas
+use: the name **is** the range, it is not a value read out of one.
+
+Where the record goes in the stream is **not documented for BIFF3/4** —
+excelfileformat's section 4.2.3 (BIFF4 worksheet stream order) and section
+4.10.1 (references in BIFF2-BIFF4) both read `2do`, the same gap §81.10.2 hit
+over the function index table. Sheet follows the BIFF5 worksheet stream the same
+document *does* give: the link table sits after the globals and before the
+cell records.
 
 ## Record bodies that differ by version
 

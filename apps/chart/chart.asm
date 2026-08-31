@@ -1113,7 +1113,13 @@ ct_reset_series:
     mov word [ct_tcnt], 0
     mov word [ct_t2cnt], 0
     mov word [ct_mincol2], 0
-    ret
+    mov byte [ct_nnames], 0             ; THE NAMES BELONG TO THIS FILE. This
+    mov word [ct_wantrng], 0            ; used to sit in ct_read_sylk alone, so
+    ret                                 ; a BIFF or DIF file loaded after a
+                                        ; SYLK one inherited the SYLK file's
+                                        ; names - and the Data menu offered
+                                        ; ranges that were not in the document
+                                        ; it was showing (82.17)
 
 ; -----------------------------------------------------------------------------
 ; ct_read_biff - in: ES=[ct_stgseg], CX=byte length already read there.
@@ -1150,7 +1156,82 @@ ct_read_biff:
     je .isfml                           ; FORMULA (BIFF3) and its BIFF4 twin -
     cmp ax, 0x0406                      ; the CACHED RESULT, which is at the
     je .isfml                           ; same offset as NUMBER's value and is
-    jmp .skip                           ; read the same way (82.14)
+    cmp ax, 0x0218                      ; read the same way (82.14)
+    je .isname                          ; DEFINEDNAME (BIFF3/4): a named range,
+    jmp .skip                           ; the same thing SYLK's NN carries
+.isname:
+    ; ------------------------------------------------------------------
+    ; DEFINEDNAME, the BIFF twin of the NN record ct_parse_nn reads
+    ; (82.17). Body: flags(2) shortcut(1) ln(1) sz(2) name(ln) tokens(sz).
+    ; The only token array this understands is a lone tAreaR - which is the
+    ; only one Sheet writes, and the only one that IS a rectangle.
+    ; ------------------------------------------------------------------
+    mov al, [ct_nnames]
+    cmp al, CT_NAME_CAP
+    jae .skip                           ; the menu has no slot left for it
+    push dx
+    mov ax, si
+    add ax, 6
+    jc .nmbad
+    cmp ax, [ct_biffend]
+    ja .nmbad
+    mov bl, [es:si+3]                   ; ln
+    xor bh, bh
+    or bx, bx
+    jz .nmbad
+    cmp bx, CT_NAME_MAX
+    ja .nmbad                           ; longer than the menu can show: the
+                                        ; name is dropped, not clipped, so a
+                                        ; slot never claims a range it is not
+    mov ax, [es:si+4]                   ; sz
+    cmp ax, 7
+    jne .nmbad
+    mov ax, si
+    add ax, 6
+    add ax, bx
+    add ax, 7
+    jc .nmbad
+    cmp ax, [ct_biffend]
+    ja .nmbad
+    push si
+    push cx
+    mov cl, [ct_nnames]                 ; where this record's TEXT goes
+    xor ch, ch
+    mov ax, cx
+    mov di, CT_NAME_REC
+    mul di
+    add ax, ct_names
+    mov di, ax
+    add si, 6
+    mov cx, bx
+.nmcopy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .nmcopy
+    mov byte [di], 0
+    cmp byte [es:si], 0x25              ; tAreaR - the absolute form. tAreaN
+    jne .nmpop                          ; (2DH) is relative to a cell this
+                                        ; reader does not have
+    mov ax, [es:si+5]                   ; first column
+    xor ah, ah
+    mov [ct_nm_c1], ax
+    mov ax, [es:si+1]                   ; first row, less the two relative bits
+    and ax, 0x3FFF
+    mov [ct_nm_r1], ax
+    mov ax, [es:si+6]                   ; the far corner: column in AX, row in
+    xor ah, ah                          ; DX, which is ct_name_store's contract
+    mov dx, [es:si+3]
+    and dx, 0x3FFF
+    call ct_name_store
+.nmpop:
+    pop cx
+    pop si
+.nmbad:
+    pop dx
+    jmp .skip
 .isrk:                                  ; reaches a BIFF file at all
     cmp dx, 10                          ; too short to hold row/col/xf/rk:
     jb .skip                            ; stale buffer bytes are not a value
@@ -1431,11 +1512,37 @@ ct_parse_nn:
     mov ax, [ct_nm_c1]                  ; "R1C1" with no second corner names
     mov dx, [ct_nm_r1]                  ; one cell, which is a 1x1 rectangle
 .have:
-    ; DX IS THE FAR CORNER'S ROW and `mul` writes DX:AX, so the record's own
-    ; address cannot be computed with it live. Both halves of the corner are
-    ; banked across the multiply; without the DX save the row stored was the
-    ; multiply's high word, which is zero - every named range came out one row
-    ; tall and charted its first cell alone.
+    call ct_name_store
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ct_name_store - commit the record ct_nnames indexes, whose NAME the caller
+; has already copied in. in: ct_nm_c1/ct_nm_r1 = the near corner, AX = the far
+; corner's column, DX = its row. Bumps ct_nnames. Preserves everything.
+;
+; Shared by the SYLK and the BIFF readers so the two cannot store the same
+; name differently, which is the whole risk of a second reader.
+;
+; DX IS THE FAR CORNER'S ROW and `mul` writes DX:AX, so the record's own
+; address cannot be computed with it live. Both halves are banked across the
+; multiply; without the DX save the row stored was the multiply's high word,
+; which is zero - every named range came out one row tall and charted its
+; first cell alone.
+; -----------------------------------------------------------------------------
+ct_name_store:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     push ax
     push dx
     mov cl, [ct_nnames]
@@ -1455,7 +1562,6 @@ ct_parse_nn:
     mov [di+4], ax
     mov [di+6], dx
     inc byte [ct_nnames]
-.out:
     pop di
     pop si
     pop dx
@@ -1542,7 +1648,6 @@ ct_read_sylk:
     push dx
     push si
     push di
-    mov byte [ct_nnames], 0             ; the names belong to THIS file
     call ct_reset_series
     mov di, cx                          ; di = end offset
     xor si, si
