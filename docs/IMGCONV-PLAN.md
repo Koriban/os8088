@@ -67,6 +67,60 @@ colours**, which both outputs need and neither has: `os88pix.py` currently
 maps to the fixed palette, and a photograph wants dithering to survive it.
 That code is written once and serves both.
 
+## 3a. `.BM4` - BMP RLE4, under an extension of its own
+
+A 240x160 chart is 19,318 bytes uncompressed and charts are mostly flat
+colour, which is the case RLE4 was made for. The container is already here:
+`ch_bmp_write` emits the header Paint's `pt_bmp_in` reads, and RLE4 is
+`biCompression = 2` inside that same header - encoded mode is `(count, index)`
+pairs with two nibbles per byte, and `count == 0` escapes to end-of-line (0),
+end-of-bitmap (1), delta (2, then dx/dy) or an absolute run (3..255).
+
+**It gets a distinct extension, `.BM4`, and that is a deliberate divergence.**
+By the letter of the format such a file is a perfectly ordinary `.BMP`, and an
+outside program would read it as one. But this tree gates its decoders on the
+extension - `pt_readable` matches a table of three-character extensions before
+anything is read (SPEC.md 38.6), 8.3 names being all a mount gives it - so a
+compressed BMP called `.BMP` would be handed to a reader that refuses it at
+`biCompression` and reports a broken file. `.BM4` lets the gate route it, and
+keeps `.BMP` meaning the one thing every existing reader can take.
+
+The cost is stated rather than hidden: a `.BM4` copied to another machine will
+not be recognised by name, though its bytes are valid. That is the right trade
+for a format whose only readers are in this tree.
+
+## 3b. A `.PCX` decoder
+
+PCX is the format DOS-era artwork actually shipped in, and the cheapest of the
+three to decode: a 128-byte header, then bytes where `(b & 0xC0) == 0xC0`
+means the low six bits are a run of 1..63 and the next byte is the value, and
+anything else is a literal. Twenty instructions.
+
+It also fits the hardware better than BMP does. PCX is **planar** - one plane
+per pass, `nplanes` x `bytesperline` per row - which is the layout
+`OSAPI_GFX_BLITP` already takes, and 4bpp/4-plane is exactly EGA's. A PCX 5
+file carries its 256-colour palette after a `0x0C` marker at the end; a 16
+colour one carries it in the header.
+
+Two details to check against a real file rather than a summary, because both
+decode fine against your own encoder and fail against everyone else's:
+`bytesperline` is padded to an EVEN number independently of the image width,
+and the run tag can legally encode a run of one, so a literal byte >= 0xC0
+MUST be written as a run.
+
+## 3c. What Word takes
+
+`Picture...` reads **`.PIX`, `.BMP` and `.PCX`** - and not GIF. PIX because it
+is free (a seek and one blit, no decoder); BMP because it is what Sheet and
+Chart already export; PCX because it is what outside artwork arrives as. GIF
+stays Paint's alone: its LZW codec wants a 64KB transient claim and
+`PT_LZW_KB` of tables, which is a great deal to carry for a format nothing in
+this tree emits.
+
+That argues for the decoders living in a shared `apps/os88img.inc` rather than
+inside Word, since Paint already has BMP and would want PCX too - the same
+move `os88chartbss.inc` made, for the same reason.
+
 ## 4. What this unblocks
 
 Today a `.BMP` has exactly one consumer - Paint - because nothing else reads
