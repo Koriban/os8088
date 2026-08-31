@@ -95,6 +95,10 @@ INCLUDES = [
      "The ch_* working set os88chart.inc runs on, declared once instead of "
      "hand-copied into both callers. Set `CH_BSS_BASE` to where the block "
      "goes and carry on from `CH_BSS_END`."),
+    ("os88chartovl.inc", "82.16",
+     "The resident half of the CHART.OVL split: loader, verb dispatch and the "
+     "shims os88chart.inc calls back out through. Only a package that %defines "
+     "CH_OVERLAY needs it - today that is SHEET alone."),
     ("os88fp.inc", "84",
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "

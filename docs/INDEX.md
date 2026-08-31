@@ -261,6 +261,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
 | `apps/os88chartbss.inc` | §82 | The ch_* working set os88chart.inc runs on, declared once instead of hand-copied into both callers. Set `CH_BSS_BASE` to where the block goes and carry on from `CH_BSS_END`. |
+| `apps/os88chartovl.inc` | §82.16 | The resident half of the CHART.OVL split: loader, verb dispatch and the shims os88chart.inc calls back out through. Only a package that %defines CH_OVERLAY needs it - today that is SHEET alone. |
 | `apps/os88fp.inc` | §84 | IEEE-754 double arithmetic in software, with an 8087 path chosen at run time. Parse, format, add, subtract, multiply, divide, compare, sqrt, trunc, floor, round. |
 | `apps/os88sock.inc` | §62, 72 | The socket layer over NET.DRV or ETHER.DRV. |
 | `apps/os88pit.inc` | §37 | Sub-tick timing off the 8253. |

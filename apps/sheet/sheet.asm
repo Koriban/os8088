@@ -57,6 +57,23 @@
 ; true here.
 ; =============================================================================
 
+; -----------------------------------------------------------------------------
+; CH_OVERLAY - the chart module goes in CHART.OVL rather than in this image.
+;
+; THIS HAS TO BE THE FIRST LINE OF THE FILE AND IT IS NOT A STYLE POINT.
+; NASM's preprocessor runs top to bottom in one pass, so every %ifdef below -
+; the four CHMOD call sites, ch_ovbind, ch_ovneed - is tested WHERE IT SITS.
+; Defined down beside the %includes, all of them read "not an overlay" and
+; quietly assembled near calls to routines that had already been cut out of
+; the image, so SHEET jumped into unmapped memory and took the machine with
+; it (82.16). No error, no warning, no bytes.
+;
+; Comment it out and this file builds fully resident instead - same source,
+; 53,713 bytes rather than 49,264 plus a file. That switch is the only way to
+; tell an overlay-wiring bug from a drawing bug; it is worth keeping working.
+; -----------------------------------------------------------------------------
+%define CH_OVERLAY
+
 %include "os88api.inc"
 
     OS88_HEADER 'SHEET', sh_entry, 3   ; bit 0 = icon, bit 1 = the
@@ -394,6 +411,42 @@ SH_NOTEMAX   equ 240                ; the longest note the dialog will take,
 ; - these are the constant half of that split, just declared per-package
 ; instead of in a %include, since equ lines are too early-needed to live
 ; where the shared CODE has to live.
+; -----------------------------------------------------------------------------
+; CHMOD - call one of the module's entry points.
+;
+; The whole point of the %define: `CHMOD draw` is a near call to ch_draw when
+; the module is resident and a verb through the dispatcher when it is not, so
+; SHEET can be built BOTH WAYS from one source. That is not a nicety - it is
+; the only way to tell an overlay-wiring bug apart from a drawing bug, and it
+; was written after an afternoon spent unable to.
+;
+; CF=1 means the module could not be loaded, which the resident build cannot
+; produce - so `clc` there, and every caller's error path is dead code rather
+; than wrong code.
+; -----------------------------------------------------------------------------
+
+; The verb numbers again, keyed by the ROUTINE's own name, so one macro
+; argument serves both builds: `ch_%1` is the near call, `CHM_%1` the verb.
+%define CHM_draw      0
+%define CHM_scale     1
+%define CHM_bmp_write 2
+
+%ifndef CH_OVERLAY
+  %ifndef CH_RESIDENT
+    %error "neither CH_OVERLAY nor CH_RESIDENT is defined HERE - see the note at the top of this file. A %ifdef tested before the %define is not an error to NASM, it is just false."
+  %endif
+%endif
+
+%macro CHMOD 1
+  %ifdef CH_OVERLAY
+    mov bp, CHM_%1
+    call ch_ovcall
+  %else
+    call ch_%1
+    clc
+  %endif
+%endmacro
+
 CH_W       equ 240
 CH_H       equ 160
 CH_STRIDE  equ 120                  ; CH_W / 2 (4bpp, 2px/byte)
@@ -549,10 +602,16 @@ sh_entry:
     push dx
     push si
     push di
+    call OSAPI_FILE_HERE                ; where this package was LAUNCHED from,
+    mov [ch_ovdir], dx                  ; banked before anything can navigate
+    mov [ch_ovdrv], bl                  ; away - it is where CHART.OVL lives
+                                        ; (82.16, the shape SPEC.md 68.10 sets)
     call fp_init                      ; before the first claim, because every
+%ifdef CH_OVERLAY
     call ch_ovbind                      ; the chart module's vectors out (82.16):
                                         ; our shims, our segment, before anything
                                         ; can draw
+%endif
                                       ; other thing here can fail and be
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
@@ -582,6 +641,17 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_chartseg], dx
+%ifdef CH_OVERLAY
+    call ch_ovneed                      ; CHART.OVL's 8KB is claimed HERE, with
+                                        ; every other claim, because SPEC.md
+                                        ; 50.3 is not advice: a claim taken
+                                        ; mid-session can move a block, and the
+                                        ; chart path calls the module with
+                                        ; [sh_stgseg] ALREADY IN DX. CF is not
+                                        ; read - a machine too small for it
+                                        ; still runs the spreadsheet, and the
+                                        ; first chart is what says so (82.16.3)
+%endif
     mov word [sh_chartwin], 0
     mov word [sh_chart_cnt], 0
     mov word [ch_type], CH_T_COLUMN
@@ -5848,12 +5918,12 @@ sh_chart_scan:
     mov si, SH_CHART_D2
     mov di, SH_CHART_S2
     mov cx, [sh_chart_cnt2]
-    call ch_scale
+    CHMOD scale
     mov dx, [sh_stgseg]
     mov si, SH_CHART_D1
     xor di, di
     mov cx, [sh_chart_cnt]
-    call ch_scale
+    CHMOD scale
     pop di
     pop si
     pop dx
@@ -6039,7 +6109,10 @@ sh_docmd_chart:
     call sh_chart_render
     mov si, [sh_chartwin]
     call sh_chart_paint
-    mov word [sh_msg], sh_s_charted
+                                        ; sh_chart_render owns [sh_msg] now:
+                                        ; setting "Charted." here overwrote its
+                                        ; CHART.OVL refusal, so a chart that
+                                        ; never drew still reported success
     mov si, [sh_ownwin]                ; repaint OUR OWN window too - this
     call sh_repaint                    ; only ever painted the chart window
                                         ; above, so the status bar's own
@@ -6084,14 +6157,13 @@ sh_chart_render:
     mov es, [sh_chartseg]
     mov dx, [sh_stgseg]
     xor si, si
-    call ch_draw                        ; stage 3.0f: the gallery, which Data >
+    CHMOD draw                          ; stage 3.0f: the gallery, which Data >
                                         ; Chart Gallery... now sets. Going
-                                        ; through the dispatcher rather than
-                                        ; calling one drawing routine is what
-                                        ; keeps this app and CHART.O88 from
-                                        ; drifting into drawing the same data
-                                        ; differently
-    pop es
+    mov word [sh_msg], sh_s_charted     ; through the dispatcher rather than
+    jnc .drawn                          ; calling one drawing routine is what
+    mov word [sh_msg], sh_s_noovl       ; keeps this app and CHART.O88 from
+.drawn:                                 ; drifting into drawing the same data
+    pop es                              ; drifting into drawing the same data
     pop si
     pop dx
     pop cx
@@ -6200,8 +6272,9 @@ sh_chartexp_ondlg:
     mov es, [sh_chartseg]
     mov bx, [sh_stgseg]
     mov si, sh_chart_name
-    call ch_bmp_write
-    jnc .ok
+    CHMOD bmp_write                     ; a module that will not load returns
+                                        ; CF=1 too, so the export's own error
+    jnc .ok                             ; path already covers it
     mov word [sh_msg], sh_s_experr
     jmp .draw
 .ok:
@@ -6219,6 +6292,7 @@ sh_chartexp_ondlg:
 sh_s_chartbmp: db 'CHART.BMP', 0
 sh_s_nochart:  db 'No chart to export.', 0
 sh_s_experr:   db 'Chart export failed.', 0
+sh_s_noovl:    db 'CHART.OVL not found.', 0
 sh_s_exported: db 'Chart exported.', 0
 
 ; -----------------------------------------------------------------------------
@@ -22645,74 +22719,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; scratch, declared in the bss chain below.
 %include "os88fp.inc"
 
-; -----------------------------------------------------------------------------
-; The shims apps/os88chart.inc's vectors point at (82.16).
-;
-; Each is a near call to the real routine and then the FAR return the module's
-; `call far [ch_v_*]` is waiting for. Registers and flags pass through both
-; ways untouched, so a shimmed routine keeps its own contract - which is the
-; whole reason the shim exists rather than the vector naming the routine: every
-; routine here is a near proc ending in `ret`, and far-calling one pops the
-; offset, leaves the segment on the stack and returns into nothing.
-;
-; ch_s_aiszero is the fused one. The module used to load `bx, fp_am0` itself,
-; which is an address in THIS package's bss and exactly what a module shared
-; with another package cannot know. The shim supplies it.
-; -----------------------------------------------------------------------------
-ch_s_unpacka:
-    call fp_unpack_a
-    retf
-ch_s_unpackb:
-    call fp_unpack_b
-    retf
-ch_s_a2i:
-    call fp_a2i
-    retf
-ch_s_cmpab:
-    call fp_cmpab
-    retf
-ch_s_round:
-    call fp_round
-    retf
-ch_s_scale10:
-    call fp_scale10
-    retf
-ch_s_aiszero:
-    mov bx, fp_am0
-    call fp_iszero
-    retf
-
-; ch_ovbind - fill the vector table: this package's shim offsets, and this
-; package's segment. The offsets are assembled in; only the segment is a
-; runtime fact, and it is the same one for all of them.
-ch_ovbind:
-    push ax
-    push bx
-    push si
-    push di
-    mov si, ch_ovshims
-    mov di, ch_v_first
-    mov ax, cs
-    mov bx, 7
-.l:
-    push ax
-    mov ax, [si]
-    mov [di], ax                      ; the shim's offset...
-    pop ax
-    mov [di+2], ax                    ; ...and our own segment
-    add si, 2
-    add di, 4
-    dec bx
-    jnz .l
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
-
-ch_ovshims:
-    dw ch_s_unpacka, ch_s_unpackb, ch_s_a2i, ch_s_cmpab
-    dw ch_s_round, ch_s_scale10, ch_s_aiszero
+%include "os88chartovl.inc"   ; the resident half of the shared
+                              ; chart module: loader, shims, verbs (82.16)
 
 %include "os88chart.inc"
 
@@ -22720,7 +22728,7 @@ ch_ovshims:
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3885
+    OS88_BSS 3897
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and

@@ -1,6 +1,20 @@
 ; =============================================================================
 ; os8088 - apps/os88chart.inc
 ;
+; THIS FILE IS A MODULE (82.16). Everything below sits in `section .modc
+; vstart=0`, is cut out by tools/os88ovl.py, ships as CHART.OVL beside the
+; package, and is far-called through the dispatcher at its offset 0. Both
+; sheet.asm and chart.asm assemble it and both produce THE SAME BYTES - the
+; Makefile asserts that - because the module names nothing that differs
+; between them: its ch_* state is at a fixed bss offset in both, and the seven
+; things it calls in its host go out through vectors (os88chartovl.inc).
+;
+; vstart=0 because it is loaded at offset 0 of its claim, so its own labels
+; must be numbered from there. align=1 is load-bearing, not tidiness: a bin
+; section aligns to 4 by default and the pad would land between the image size
+; the header records and where the section really starts, so the cut would
+; take the pad with it and the dispatcher would not be at offset 0.
+;
 ; The bar-chart rasterizer and BMP writer shared between apps/sheet/sheet.asm
 ; (its own live "Data > Chart Column..." window) and apps/chart/chart.asm (a
 ; standalone SYLK/DIF/BIFF chart viewer). Same idea as apps/os88ui.inc: get
@@ -76,6 +90,90 @@
 ; your entry proc, right after claiming it) - ch_bmp_write just stages
 ; whatever is already sitting there, unmodified.
 ; -----------------------------------------------------------------------------
+; CHFP - the module's calls out to the soft-float core.
+;
+; Resident, that is a near call like any other. As an overlay it cannot be:
+; the module lives in its own segment, so every route back into the package
+; is a FAR call through a vector the package fills in at start-up
+; (os88chartovl.inc). One macro so the two builds cannot drift apart.
+; -----------------------------------------------------------------------------
+%macro CHFP 1
+  %ifdef CH_OVERLAY
+    call far [ch_v_%1]
+  %else
+    %ifidn %1,aiszero
+    mov bx, fp_am0
+    call fp_iszero
+    %else
+    call ch_res_%1
+    %endif
+  %endif
+%endmacro
+
+%ifndef CH_OVERLAY
+  %define ch_res_unpacka fp_unpack_a
+  %define ch_res_unpackb fp_unpack_b
+  %define ch_res_a2i     fp_a2i
+  %define ch_res_cmpab   fp_cmpab
+  %define ch_res_round   fp_round
+  %define ch_res_scale10 fp_scale10
+%endif
+
+; -----------------------------------------------------------------------------
+; ONLY THE CALLER THAT NEEDS THE SPACE PAYS FOR THE MODULE. %define CH_OVERLAY
+; and this becomes .modc, cut out and loaded on demand; leave it undefined and
+; the same source assembles straight into .text as it always did. Sheet is
+; over SPEC.md 68.10's 55,000-byte trigger and Chart has 46KB free, so exactly
+; one of them asks (82.16).
+%ifdef CH_OVERLAY
+section .modc vstart=0 align=1
+%endif
+
+%ifdef CH_OVERLAY
+ch_modc:                              ; +0: the dispatcher, and the only offset
+    cmp bp, CHM_MAX                   ; the resident half knows
+    ja .out
+    shl bp, 1
+    jmp word [cs:bp+ch_mverb]         ; INDEX THROUGH BP, NOT SI. Every verb
+                                      ; here takes SI as an argument - ch_scale
+                                      ; its source offset, ch_bmp_write its
+                                      ; filename - so a dispatcher that stages
+                                      ; the index in SI hands each of them a 0,
+                                      ; 2 or 4 instead. ch_draw survived it
+                                      ; (its SI is 0 and so is its verb), which
+                                      ; is why charts drew their title and axis
+                                      ; and no data at all. BP is the verb
+                                      ; already and no verb wants it.
+.out:
+    retf
+
+ch_mverb:
+    dw ch_m_draw, ch_m_scale, ch_m_bmpwrite
+
+; Each verb is a near call to the routine and then the far return ch_ovcall is
+; waiting for. The routines keep their own register contracts; a verb adds
+; nothing but the return kind.
+ch_m_draw:
+    call ch_draw
+    retf
+ch_m_scale:
+    call ch_scale
+    retf
+ch_m_bmpwrite:
+    call ch_bmp_write
+    retf
+
+%endif
+
+; The BMP header template and palette are the module's only DATA the resident
+; half reads: SHEET's entry proc copies all 118 bytes into the chart buffer
+; once, long before CHART.OVL is loaded (82.16). So they stay RESIDENT in both
+; builds - a module-relative address handed to resident code copies whatever
+; happens to sit at that offset in the package, which is a wrong BMP header
+; and no error anywhere.
+%ifdef CH_OVERLAY
+section .text
+%endif
 ch_hdrtpl:
     db 'BM'
     dd CH_HDRSZ + (CH_STRIDE * CH_H)   ; bfSize
@@ -126,6 +224,9 @@ ch_pal_bgra:
 ch_pal_bgra_end:
 %if (ch_pal_bgra_end - ch_pal_bgra) != 64
     %error "ch_pal_bgra drifted from the real 16x4-byte BMP palette size"
+%endif
+%ifdef CH_OVERLAY
+section .modc
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -1982,10 +2083,10 @@ ch_scale:
     call ch_sc_fetch                  ; ch_dbl = value[BX]
     and byte [ch_dbl+7], 0x7F         ; abs(), by the sign BIT - exact, and
     mov si, ch_dbl                    ; cheaper than unpacking to negate
-    call far [ch_v_unpacka]
+    CHFP unpacka
     mov si, ch_dmax
-    call far [ch_v_unpackb]
-    call far [ch_v_cmpab]
+    CHFP unpackb
+    CHFP cmpab
     jle .p1n
     mov si, ch_dbl                    ; a new largest
     mov di, ch_dmax
@@ -1997,8 +2098,9 @@ ch_scale:
 
     ; --- choose E ----------------------------------------------------------
     mov si, ch_dmax                   ; a series of nothing but zeros has no
-    call far [ch_v_unpacka]                  ; scale to choose, and walking the loops
-    call far [ch_v_aiszero]           ; below would settle on E=4 and label                    ; every tick "0.0000"
+    CHFP unpacka                  ; scale to choose, and walking the loops
+    CHFP aiszero                      ; below would settle on E=4 and label
+                                      ; every tick "0.0000"
     jc .havee0
     ; Walk UP while max*10^(E+1) still fits a signed word, then DOWN while it
     ; does not fit at all. Both loops are bounded by the caps, and the test is
@@ -2008,20 +2110,20 @@ ch_scale:
     cmp cx, CH_E10_MAX
     jge .down
     mov si, ch_dmax
-    call far [ch_v_unpacka]
+    CHFP unpacka
     push cx
     inc cx
-    call far [ch_v_scale10]
+    CHFP scale10
     pop cx
-    call far [ch_v_a2i]
+    CHFP a2i
     jc .down                          ; would not fit: CX is already the most
     inc cx                            ; we can keep
     jmp .up
 .down:
     mov si, ch_dmax
-    call far [ch_v_unpacka]
-    call far [ch_v_scale10]
-    call far [ch_v_a2i]
+    CHFP unpacka
+    CHFP scale10
+    CHFP a2i
     jnc .havee                        ; fits: this E is the one
     cmp cx, CH_E10_MIN
     jle .havee                        ; nothing more we can do - the clamp in
@@ -2039,12 +2141,12 @@ ch_scale:
 .p2:
     call ch_sc_fetch
     mov si, ch_dbl
-    call far [ch_v_unpacka]
+    CHFP unpacka
     mov cx, [ch_e10]
-    call far [ch_v_scale10]
+    CHFP scale10
     xor cx, cx
-    call far [ch_v_round]                     ; to the nearest whole one, half away
-    call far [ch_v_a2i]                       ; from zero - fp_a2i truncates, and a
+    CHFP round                     ; to the nearest whole one, half away
+    CHFP a2i                       ; from zero - fp_a2i truncates, and a
                                       ; truncated bar is short by up to one
                                       ; whole unit at the top of the scale
     push ax
@@ -2675,3 +2777,7 @@ ch_bmp_write:
     pop bx
     pop ax
     ret
+
+%ifdef CH_OVERLAY
+section .text
+%endif

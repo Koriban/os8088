@@ -2514,13 +2514,21 @@ $(SBSTAMP): | $(BUILD)
 # Four other rules had the same hole and were fixed with this one.
 $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
                     apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
-                    apps/os88chart.inc apps/os88fp.inc | $(BUILD)
+                    apps/os88chart.inc apps/os88chartbss.inc \
+                    apps/os88chartovl.inc apps/os88fp.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sheet/sheet.asm
 	@echo "sheet:  $(call FILESIZE,$@) bytes"
 
 
-$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/sheet.bin -o $@
+# SHEET carries the chart module OUT (82.16): os88ovl.py cuts .modc off the
+# end at the image size the header already records, leaving the resident half
+# for os88pkg.py and CHART.OVL beside it.
+$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py
+	python3 tools/os88ovl.py $(BUILD)/sheet.bin -o $(BUILD)/CHART.OVL \
+		--trim $(BUILD)/sheet.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/sheet.trim.bin -o $@
+
+$(BUILD)/CHART.OVL: $(BUILD)/sheet.o88 ;
 
 # FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
 # Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
@@ -2540,11 +2548,15 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
 # Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
 # rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).
 $(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc \
+                    apps/os88chartbss.inc apps/os88chartovl.inc \
                     apps/os88fp.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/chart/chart.asm
 	@echo "chart:  $(call FILESIZE,$@) bytes"
 
 
+# CHART does NOT overlay the module - it builds it straight in. It is 12KB of
+# a 60KB budget with nothing to save, and an overlay it does not need would
+# only buy it a way to fail (SPEC.md 82.16). Same source, one %define apart.
 $(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/chart.bin -o $@
 
@@ -5227,7 +5239,8 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/CHART.OVL \
+              $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/cyclone.o88 $(BUILD)/mines.o88 \
               $(BUILD)/missile.o88 $(BUILD)/solitair.o88 $(BUILD)/tamegram.o88
@@ -5664,7 +5677,7 @@ burn:
 # tool - Calc stays for the arithmetic a field run needs.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/modplug.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/sheet.o88 $(BUILD)/chart.o88
+              $(BUILD)/sheet.o88 $(BUILD)/chart.o88 $(BUILD)/CHART.OVL
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 

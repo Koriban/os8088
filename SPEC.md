@@ -75890,6 +75890,204 @@ first cell alone: one giant bar. Both halves are banked across the multiply
 now. The trap is the oldest one in this file and it still caught a fresh
 routine.
 
+### 82.16 `CHART.OVL` — the rasterizer as an overlay, and why only SHEET takes it
+
+`apps/os88chart.inc` is 4,735 bytes of drawing code shared by two packages.
+SHEET assembles it into a `.modc` section, cut out by `tools/os88ovl.py` and
+loaded on demand; CHART assembles it straight into `.text`. **Same source, one
+`%define` apart** — `CH_OVERLAY`.
+
+That asymmetry is the whole design, and it is deliberate:
+
+| | resident image | + bss | of 61,440 |
+|---|---|---|---|
+| SHEET, module resident | 53,713 | 3,897 | 57,610 — past §68.10's 55,000 trigger |
+| SHEET, module overlaid | 49,278 | 3,897 | **53,175** |
+| CHART, module resident | 12,154 | 2,150 | 14,304 |
+
+SHEET is the package with a problem. CHART has 47KB spare, so an overlay would
+buy it nothing and cost it a **new way to fail** — a missing file, a heap
+refusal, a volume it cannot navigate back from. A package takes an overlay
+when it must, not because a sibling did.
+
+#### 82.16.1 One overlay cannot serve two packages — the reason is addressing
+
+The obvious ambition was one `CHART.OVL` on disk, loaded by either package,
+proven identical by `cmp`ing the two independent cuts. **It does not work, and
+the reason is worth writing down because it will be reached for again.**
+
+§68.10's model keeps `DS` pointing at the *package's* segment while the module
+runs, so the module reads and writes the package's variables by their ordinary
+absolute offsets. Those offsets are the problem. Every `ch_*` variable lives in
+bss, and **bss begins where the image ends**:
+
+```
+    ch_type  =  os88_image_end + 6
+```
+
+`os88_image_end` is 49,278 in SHEET and 12,154 in CHART. Putting the `ch_*`
+block at the same *bss-relative offset* in both — which
+`apps/os88chartbss.inc` does, asserted at assembly time — makes the offsets
+match each other and does **not** make the addresses match. The cut files
+differed at byte 238:
+
+```
+    sheet : 8b 36 e8 bf     mov si, [0xbfe8]
+    chart : 8b 36 bf 1d     mov si, [0x1dbf]
+```
+
+1,026 bytes apart, all of them operands. **A shared module would have to stop
+addressing its state absolutely** — either by reaching everything through a
+base register the dispatcher loads, or by owning its state in its own segment
+and switching `DS` on entry, which then breaks every call back out to the
+package's soft-float. Both are real designs; neither is worth it to save 4,735
+bytes in a package that has 47,000 free.
+
+So: **`CH_OVERLAY` is opt-in per package, and today exactly one package opts
+in.** The `cmp` gate was removed along with the claim it was defending.
+
+#### 82.16.2 SHEET builds BOTH WAYS, and that is a test tool
+
+`%define CH_OVERLAY` at the top of `apps/sheet/sheet.asm` selects the overlay;
+`-DCH_RESIDENT` instead builds the identical source with the module compiled
+straight in. One of the two must be chosen — `sheet.asm` `%error`s if neither
+is — and that is not ceremony:
+
+**An overlay has two failure modes that look exactly alike from outside.** The
+module can be drawing wrongly, or the wiring around it can be handing it wrong
+arguments, and in both cases you get a chart that is blank or wrong with no
+error anywhere. Flipping one `%define` and rebuilding answers which in one
+step. It is what found the two bugs in §82.16.4 after an afternoon of reading
+the code and getting nowhere; the switch stays working for the next person.
+
+Three macros carry the difference, so no call site is written twice:
+
+- **`CHMOD <routine>`** — `call ch_draw` resident, `mov bp, CHM_draw` plus
+  `call ch_ovcall` overlaid. `CF=1` means the module could not be loaded,
+  which the resident build cannot produce, so it emits `clc` and every
+  caller's error path is dead code rather than wrong code.
+- **`CHFP <op>`** — the module's calls back out to the soft-float core
+  (§84): a near `call fp_unpack_a` resident, `call far [ch_v_unpacka]`
+  overlaid.
+- The `%ifdef` around `ch_ovbind` / `ch_ovneed` at entry.
+
+`CHMOD` and its `CHM_*` verb numbers live near the **top** of `sheet.asm`,
+beside the `CH_*` geometry constants, for the reason stated there: the shared
+code has to be `%include`d at the end of the file, and anything used by code
+before that has to already exist.
+
+#### 82.16.3 The four things the split required
+
+**1. The `ch_*` block sits at bss offset 0 in both packages**, and says so:
+
+```
+    %define CH_BSS_BASE (os88_image_end + 0)
+    %include "os88chartbss.inc"
+    %if CH_BSS_BASE != os88_image_end
+      %error "the ch_* block must start at bss offset 0 - see 82.16"
+    %endif
+```
+
+Not required by the split any more, but kept: it is what makes the two
+packages' copies of the module *structurally* the same, so a change to one
+cannot silently mean something else in the other.
+
+**2. Calls out go through vectors, and the vectors go through shims.** The
+module calls `fp_unpack_a` and five siblings, which are resident. From another
+segment that is a far call; every one of them is a near proc ending in `ret`.
+So each gets a shim in the resident half — `call` plus `retf` — and
+`ch_ovbind` fills `ch_v_*` with each shim's offset and the package's own
+segment at start-up.
+
+`ch_s_aiszero` is the **fused** one and shows the class of problem: the module
+used to load `bx, fp_am0` itself, which is an address in the package's bss —
+exactly what a module in its own segment cannot name. The shim supplies it.
+
+**3. The verbs.** `ch_modc` at the module's offset 0 is the dispatcher; `BP`
+carries the verb, because none of the entry points takes `BP` as an argument.
+Three verbs, and only three, because SHEET calls exactly three routines:
+
+```
+    CHM_draw = 0    CHM_scale = 1    CHM_bmp_write = 2
+```
+
+`ch_sc_copy8` is *in* the module and has no verb: CHART calls it, and CHART
+does not use the dispatcher. **An unreachable verb is a claim nothing tests**,
+so it is not there.
+
+**4. The launch directory is banked at start-up, and the claim is taken
+there too.** `CHART.OVL` lives beside `SHEET.O88`, and by the time a chart is
+drawn the user may have navigated anywhere, so SHEET's entry calls
+`OSAPI_FILE_HERE` **before anything can move** and `ch_ovneed` goes there,
+loads, and puts the volume back (`ch_ovback`) on every path including both
+failures. Same rule as `CWORD.OVL` (§54.9, §19.2.1).
+
+Entry is also where `ch_ovneed` is *first called*, so the module's 8KB is
+claimed with every other claim. §50.3 is not advice: a claim taken mid-session
+can move a block, and the chart path calls the module with `[sh_stgseg]`
+already in `DX`.
+
+#### 82.16.4 Two bugs this shape produces, both silent
+
+Neither was caught by the assembler, the 25-check suite, or reading the code.
+Both were found by building the same source the other way.
+
+**The dispatcher must not stage the verb index in a register a verb uses.**
+The first `ch_modc` did:
+
+```
+    shl bp, 1
+    mov si, bp                 ; <- destroys an argument
+    jmp word [cs:si+ch_mverb]
+```
+
+Every verb here takes `SI` as an argument — `ch_scale` its source offset,
+`ch_bmp_write` its filename — so each was handed a 0, 2 or 4 instead.
+`ch_draw` survived it, because its `SI` is 0 and so is its verb, which is
+precisely what made the failure so hard to read: **charts drew their title and
+their axis and no data at all**, and the axis collapsed to 0..1 because every
+value scaled to zero. Index through `BP`, which is the verb already and which
+no verb wants: `jmp word [cs:bp+ch_mverb]`.
+
+**`%define CH_OVERLAY` has to be the first line of the file.** NASM's
+preprocessor runs top to bottom in one pass, so a `%ifdef` is tested *where it
+sits*. With the `%define` down beside the `%include`s, all four `CHMOD` sites
+and both loader calls read "not an overlay" and quietly assembled near calls
+to routines that had already been cut out of the image. SHEET jumped into
+unmapped memory and **took the whole machine with it** — a frozen desktop
+clock, not an application error. No warning, no diagnostic, and one call site
+in the listing showing an instruction with no bytes beside it.
+
+That is why `sheet.asm` now `%error`s when neither `CH_OVERLAY` nor
+`CH_RESIDENT` is defined at that point in the file. A `%ifdef` tested before
+its `%define` is not an error to NASM; it is just false.
+
+**A related one, same class:** `ch_hdrtpl` and `ch_pal_bgra` — the 118-byte
+BMP header and palette — are the module's only *data* the resident half reads,
+copied into the chart buffer by SHEET's entry proc long before `CHART.OVL` is
+loaded. They stay in `.text` in both builds. A module-relative address handed
+to resident code copies whatever happens to sit at that offset in the package,
+which is a wrong BMP header and, again, no error anywhere.
+
+#### 82.16.5 Refusal is an ordinary path
+
+No heap, or a disk without the file, and `ch_ovcall` returns **CF=1**. The
+include has no toast of its own and should not grow one — the two packages
+report differently, and only one of them uses this at all. In SHEET:
+
+- `CHM_bmp_write` already had a CF contract, so the export's existing error
+  path covers it with no new code.
+- `CHM_draw` sets the status bar to `CHART.OVL not found.`
+- `CHM_scale` has no return contract; the `CHM_draw` that follows it reports.
+
+`sh_chart_render` **owns `[sh_msg]`** for this reason. Its caller used to set
+`"Charted."` unconditionally afterwards, which overwrote the refusal: a chart
+that never drew still reported success, and the status bar could not be used
+to tell the two failure modes apart.
+
+The chart simply does not appear. That is the right direction to fail in: a
+spreadsheet whose numbers are all still there.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

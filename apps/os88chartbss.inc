@@ -148,5 +148,16 @@ ch_v_scale10   equ ch_v_round + 4
 ch_v_aiszero   equ ch_v_scale10 + 4
 ch_v_end       equ ch_v_aiszero + 4
 
-CH_BSS_END     equ ch_v_end          ; where the caller's own chain resumes
+; --- the loader's own state (82.16) ------------------------------------------
+; Package-side, not module-side: the module never reads these. They sit in the
+; shared block anyway so the two packages cannot disagree about them either.
+ch_ovseg       equ ch_v_end          ; word: CHART.OVL's claim, 0 = not loaded
+ch_ovfar       equ ch_ovseg + 2      ; 4: the (offset, segment) ch_ovcall
+                                     ; far-calls - offset is always 0
+ch_ovdir       equ ch_ovfar + 4      ; word } the folder this package was
+ch_ovdrv       equ ch_ovdir + 2      ; byte } LAUNCHED from, banked at entry
+ch_ovwdr       equ ch_ovdrv + 1      ; byte } ...and where the USER had the
+ch_ovwas       equ ch_ovwdr + 1      ; word } volume, put back after the load
+
+CH_BSS_END     equ ch_ovwas + 2      ; where the caller's own chain resumes
 CH_BSS_SIZE    equ CH_BSS_END - CH_BSS_BASE
