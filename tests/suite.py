@@ -142,15 +142,22 @@ FAST = [
     Row("stkbalance", "fast",
         py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
            "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
-           "apps/os88line.inc"), 1.5,
-        "every `ret` in SHEET, CHART and the includes they share is reached at "
-        "the depth it started at. `ch_legend` pushed SI and never popped it, so "
-        "its `ret` jumped to the saved register: a black canvas and a wedged "
-        "app, with no crash and no message (SPEC.md 82.7.3). The walk is "
-        "path-aware because a naive push-vs-pop count flags one routine in ten "
-        "and would just be ignored. SCOPED to these files on purpose - the "
-        "kernel's ISR tails push in one global label and pop in another, which "
-        "this cannot follow, so pointing it there would report noise. Two "
+           "apps/os88line.inc", "apps/word/word.asm", "apps/os88img.inc"), 1.5,
+        "every `ret` in SHEET, CHART, WORD and the includes they share is "
+        "reached at the depth it started at. `ch_legend` pushed SI and never "
+        "popped it, so its `ret` jumped to the saved register: a black canvas "
+        "and a wedged app, with no crash and no message (SPEC.md 82.7.3). The "
+        "walk is path-aware because a naive push-vs-pop count flags one "
+        "routine in ten and would just be ignored. SCOPED to these files on "
+        "purpose - the kernel's ISR tails push in one global label and pop in "
+        "another, which this cannot follow, so pointing it there would report "
+        "noise. WORD JOINED THIS LIST LATE, and the reason is worth keeping: "
+        "wd_pictload pushed seven registers and popped six, and because Word "
+        "was outside the scope the suite stayed green while the machine went "
+        "to 000E:00DF inside the interrupt vector table (SPEC.md 68.15). Two "
+        "shared exit labels there carry `; STKBALANCE-OK` - they are jump "
+        "targets, not routines, and their pushes are in callers the walk "
+        "cannot follow back to. Two "
         "stated gaps, both counted in the tool's own summary line: a routine "
         "whose every exit is a tail jmp is not walked, and loop back-edge "
         "conflicts are suppressed"),

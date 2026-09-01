@@ -60,6 +60,29 @@
 ; need 32 bits and buy nothing over sixteen candidates.
 ; =============================================================================
 
+
+; -----------------------------------------------------------------------------
+; INCLUDING THIS TWICE, AND WHY THE OPTION EXISTS. NASM's preprocessor runs top
+; to bottom in one pass and its assembler needs two, so a `mov [si+IMG_W], ax`
+; written ABOVE this file sizes its displacement long on the first pass and
+; short on the second - which is a "label changed during code generation"
+; refusal, not a wrong instruction. The shared CODE has to live at the end of a
+; package (os88ui.inc's own placement rule), so a caller whose code comes
+; earlier needs the CONSTANTS earlier still.
+;
+;   %define OS88IMG_CONSTS_ONLY     ; near the top: the equs and nothing else
+;   %include "os88img.inc"
+;   %undef  OS88IMG_CONSTS_ONLY
+;   ...
+;   %include "os88img.inc"          ; at the end: the code, constants guarded
+;
+; A caller with no such problem includes it once and says nothing. Same split
+; apps/sheet/sheet.asm makes by hand for the CH_* geometry, made once here
+; instead of copied into every package that needs it.
+; -----------------------------------------------------------------------------
+%ifndef OS88IMG__HAVECONSTS
+%define OS88IMG__HAVECONSTS
+
 OS88IMG_RAW  equ 640               ; the raw-scanline half of the caller's row
                                    ; buffer: four 1-bit planes of a 1280-pixel
                                    ; row, which is also a 4bpp BMP row of that
@@ -117,6 +140,10 @@ IMG_E_DEPTH  equ 6                 ; a bit depth for the host tool
 IMG_E_COMP   equ 7                 ; a compressed BMP
 IMG_E_NOPIC  equ 8                 ; no such picture in the archive
 IMG_E_VER    equ 9                 ; a format version this does not know
+
+%endif  ; OS88IMG__HAVECONSTS
+
+%ifndef OS88IMG_CONSTS_ONLY
 
 ; -----------------------------------------------------------------------------
 ; img_load - decode the file in [SI+IMG_SRCSEG] into [SI+IMG_DSTSEG].
@@ -945,3 +972,5 @@ img_pcxrow:
     pop bx
     pop ax
     ret
+
+%endif  ; OS88IMG_CONSTS_ONLY

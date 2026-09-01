@@ -63734,6 +63734,105 @@ width, a tab stop and a byte column, and only a handful of the dozens of them
 are the height. Nothing but reading each one tells them apart, and a face whose
 height differs from its advance is the only test that separates them.
 
+### 68.15 Insert > Picture — reading one, and the three parts still to come
+
+**What works: a picture file is chosen, read and decoded, and its size
+reported.** `.PIX`, `.BMP` and `.PCX`, through `apps/os88img.inc` (§85). What
+does not: the picture is not yet put in the document. The toast says
+`30x9 - not placed` and not "inserted", because a command that reports a
+success it did not have is worse than one that refuses (§47).
+
+The three remaining parts, and why each is its own piece of work:
+
+- **The document model.** Word's own representation is character `0x01` in the
+  text with `sprmCFSpec` on its CHP. That maps onto this port cleanly and
+  needs no new bits: `0x01` cannot otherwise appear (§68.4's readers drop
+  every control under 32 except tab and ¶), so the character *is* the marker,
+  and its CHP byte can be an index into a picture table — exactly the trick a
+  ¶ mark already uses for its PAP index (§68.3). Note that **CHP bit 7 is not
+  available** for a flag, and §68.3 says why.
+- **The layout.** This is the delicate one. `wd_walk` is incremental, with a
+  row table, checkpoints and a caret-follow net (§27.7.7), all of which assume
+  the uniform 8/12/16-pixel row advance a face gives. A picture is a hundred
+  pixels tall.
+- **The file format.** A picture in a real Word file is a `PICF` in the data
+  stream, and **there is no reference for its layout here.** §81.10.2 records
+  exactly what guessing a binary structure costs: a guessed function index
+  "does not produce a broken file; it produces one Excel opens happily and
+  computes something else from, silently". The same applies. So this waits for
+  a reference rather than being invented.
+
+#### 68.15.1 The decoder is WORD.OVL's first real tenant
+
+§68.10 built the module mechanism and proved it as far as a ping, and recorded
+an open question beside it: a shim whose resident routine touched the UI froze
+the app for reasons that stayed unknown.
+
+`apps/os88img.inc` is the right thing to move out first **because it needs no
+shims at all**. It owns no state, calls no `OSAPI`, and reaches nothing in the
+package: one far call in, one `retf` out, and two segments the caller names in
+a block. So it exercises the path that *is* proven and none of the path that
+is not — which is why the open question above is still open and this still
+works. It is also 1,600-odd bytes that a package with 5,270 free could not
+have spent resident.
+
+`WORD.OVL` went from 18 bytes to 1,623, and the resident image did not grow.
+
+#### 68.15.2 Three bugs, two of them in gates rather than in code
+
+**The dispatcher clobbered `SI`.** `wd_modc` staged the doubled verb index in
+`SI` before the indirect jump — the identical line that cost an afternoon in
+CHART the same week (§82.16.4). It was dormant here only because `WDM_PING`
+takes no arguments, and it would have fired on the very first real verb:
+`img_load`'s whole contract is `SI` = the caller's block. Index through `BP`,
+which is the verb already.
+
+**`wd_pictload` pushed seven registers and popped six**, and `SI` was the one
+missed, so `ret` took its saved value as the return address. Every segment
+register ended up at `0x000E` with `IP` at `0xDF` — executing inside the
+interrupt vector table, the whole machine gone, no message.
+
+`tools/stkbalance.py` exists precisely to catch that, its own header cites the
+same bug in `ch_legend`, **and the suite stayed green** — because the row was
+scoped to SHEET, CHART and their includes, and WORD was not in the list. It is
+now, along with `os88img.inc`. Two labels there carry `; STKBALANCE-OK`:
+`wd_sbd_out` and `wd_fastcm` are shared jump targets rather than routines, and
+their pushes are in callers the walk cannot follow back to. The marker has to
+sit on a line *after* the label — the label's own raw line is discarded before
+the body is scanned.
+
+**Every message was too long.** `TOAST_MAX` is **24 characters** and
+`kernel/toast.inc` calls it "the tight one". The first draft ran to 58, and
+the strip simply stopped mid-word at the right edge of the screen — no error,
+no ellipsis, just a sentence with its end missing. The success line is built
+from a width and a height, so it is the longest that has to fit:
+`1280x65535 - not placed` is 23.
+
+#### 68.15.3 What the command actually does
+
+It borrows the ordinary file dialog with `[wd_pictwant]` raised, so `wd_ondlg`
+routes the answer to `wd_pictload` instead of to open-or-save. One flag rather
+than a third `FDLG` mode: the kernel's two modes are its contract, and a
+package's reason for opening the dialog is the package's own business.
+
+The answer is taken **before** the bookkeeping that follows a real open — a
+picture is not the document, so choosing one must not rename it, retitle the
+window, or move which folder it belongs to. (Confirmed by the dialog opening
+at the volume root afterwards rather than where the picture was.)
+
+Two transient claims, both handed straight back: the file's bytes and the
+decoded picture (`WD_PICKB`, 40KB). Transient because §50.3 is about a package
+*sizing itself* at entry, and neither is part of how big WORD is — they are
+the shape of one command. The block and row buffer `os88img.inc` works through
+are in **bss**, because that include reaches both through `DS`, which stays
+the package's segment even while the decoder runs out in `WORD.OVL`.
+
+`IMG_ERR` comes back as a number and WORD words the message (§85.2). Verified
+live on five files: a 4bpp BMP (`30x9`), a four-plane PCX (`37x11`), an 8-bit
+PCX (`Convert to 4-bit first`), a text file (`Not a picture file`), and a
+1152x90 PCX that packs to 51,840 bytes against a 40KB claim
+(`Picture too big`).
+
 ## 69. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 
 A two-pane editor for a small, paper-oriented subset of TeX: the source on the

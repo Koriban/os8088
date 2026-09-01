@@ -34,6 +34,15 @@
 
 %include "os88api.inc"
 
+; The picture decoders' CONSTANTS only (SPEC.md 85). Insert > Picture is
+; assembled a long way above where a shared include may put its code, and
+; the IMG_* offsets have to exist by then or every `mov [si+IMG_*]` sizes
+; its displacement differently on the two passes. The code itself is
+; %included into WORD.OVL further down.
+%define OS88IMG_CONSTS_ONLY
+%include "os88img.inc"
+%undef OS88IMG_CONSTS_ONLY
+
 ; SPEC.md 13.10.5's thumb GESTURE. AT THE TOP, not beside the %include that
 ; pulls os88ui.inc in - that one is 19,000 lines below here and a %ifdef is
 ; answered in FILE ORDER (13.10.7.4).
@@ -378,7 +387,8 @@ WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 68.9)
 WDA_RENUM    equ 24             ; Utilities > Renumber...
 WDA_TOC      equ 25             ; Insert > Table of Contents...
 WDA_PAGE     equ 26             ; View > Page (SPEC.md 68.11)
-WDA_MAX      equ 26
+WDA_PICT     equ 27             ; Insert > Picture... (SPEC.md 68.15)
+WDA_MAX      equ 27
 
 ; --- the CHP attribute byte (SPEC.md 68.3) -----------------------------------
 ; One byte per character, in a claim that mirrors every gap operation the text
@@ -578,6 +588,11 @@ WD_K_END     equ 0x4F
 WD_K_DOWN    equ 0x50
 WD_K_DEL     equ 0x53
 WD_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
+WD_PICKB     equ 40             ; the decoded picture's TRANSIENT claim
+                                ; (SPEC.md 68.15). 40KB holds a 640x128 or a
+                                ; 320x256 in packed 4bpp, and os88img.inc
+                                ; refuses anything past what it is given
+                                ; rather than writing past the claim
 
 ; --- keys (SPEC.md 27.8/68.3) ------------------------------------------------
 ; The control characters int 16h already hands over in AL. Backspace (8),
@@ -1152,6 +1167,10 @@ wd_sbd_go:                      ; FLAT labels: the two entries share one tail,
     jc wd_sbd_out               ; an end stop: not one pixel changes
     call wd_redraw
 wd_sbd_out:
+    ; STKBALANCE-OK: a shared EXIT label, not a routine. wd_sbdrag above
+    ; pushes these four and every one of its refusals jumps here to shed
+    ; them, so the walk sees four pops and no pushes - the pushes are in a
+    ; caller it cannot follow back to.
     pop dx
     pop cx
     pop bx
@@ -7737,6 +7756,9 @@ wd_fastokr:                         ; Right: it lands one FORWARD, and the cell
     xor cx, cx
     mov ax, [wd_cur]
 wd_fastcm:
+    ; STKBALANCE-OK: a shared CONTINUATION, not a routine - reached only by
+    ; `jmp short` from the four cases above, each of which pushed what the
+    ; tail here pops.
     mov word [wd_mvbot], 0x7FFF ; kind 4 arrives here as well (Left and Right),
                                 ; and neither measures the row it came from -
                                 ; so park the bound at "no idea" and let
@@ -9199,6 +9221,13 @@ wd_ondlg:
     pop di
     pop bx
 .noext:
+    cmp byte [wd_pictwant], 0       ; Insert > Picture borrowed the dialog
+    je .notpict                     ; (68.15). Answered HERE, before any of
+    mov byte [wd_pictwant], 0       ; the bookkeeping below: a picture is not
+    mov si, dx                      ; the document, so choosing one must not
+    call wd_pictload                ; rename it, retitle the window, or move
+    jmp .draw                       ; which folder it belongs to
+.notpict:
     push dx                         ; the window: FILE_HERE answers in DX
     push bx                         ; ...and the mode is in BL
     call OSAPI_FILE_HERE            ; where the dialog left the volume IS the
@@ -16364,8 +16393,177 @@ wd_ftab:
     dw wd_a_renum                   ; Utilities > Renumber...
     dw wd_a_toc                     ; Insert > Table of Contents...
     dw wd_a_page                    ; View > Page (SPEC.md 68.11)
+    dw wd_a_pict                    ; Insert > Picture... (SPEC.md 68.15)
 
 wd_mf_ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_a_pict - Insert > Picture... (SPEC.md 68.15)
+;
+; Ask for a file, read it, and decode it through WORD.OVL. The picture is
+; measured and reported and NOT yet put in the document: the model, the
+; layout and the file format are 68.15's remaining three parts, and the
+; message says which stage this is rather than implying more.
+;
+; It routes through the ordinary file dialog with [wd_pictwant] raised, so
+; wd_ondlg sends the answer here instead of to open-or-save. One flag rather
+; than a third FDLG mode, because the kernel's two modes are its contract and
+; a package's own reason for opening the dialog is the package's business.
+; -----------------------------------------------------------------------------
+wd_a_pict:
+    call wd_uclose
+    mov byte [wd_pictwant], 1
+    mov al, FDLG_OPEN
+    jmp wd_dlgopen                  ; no repaint: the dialog is over us
+
+; -----------------------------------------------------------------------------
+; wd_pictload - read [wd_name] and decode it. Reports either way.
+;
+; TWO TRANSIENT CLAIMS, both handed straight back: the file's bytes and the
+; decoded picture. Transient because 50.3 is about a package SIZING itself at
+; entry, and neither of these is part of how big WORD is - they are the shape
+; of one command. A refusal is an ordinary path (47): the document is
+; untouched and still editable.
+; -----------------------------------------------------------------------------
+wd_pictload:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [wd_picseg], 0
+    call wd_stghold                 ; the file's bytes (the toast is set on
+    jc .out                         ; failure, and it is the right one)
+    mov es, [wd_stgseg]
+    xor bx, bx
+    mov cx, 0xFFFF                  ; DX:CX is the capacity, and 64K does not
+    xor dx, dx                      ; fit the word CX is
+    mov si, wd_name
+    call OSAPI_FILE_READ            ; out DX:AX = the size read
+    jc .ioerr
+    or dx, dx
+    jnz .toobig                     ; a picture file past 64KB is past what one
+    mov si, wd_imgblk               ; segment addresses, which is os88img's own
+    mov [si+IMG_SRCLEN], ax         ; limit too
+    mov ax, [wd_stgseg]
+    mov [si+IMG_SRCSEG], ax
+    mov ax, WD_PICKB
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov [wd_picseg], dx
+    mov si, wd_imgblk
+    mov [si+IMG_DSTSEG], dx
+    mov word [si+IMG_DSTMAX], WD_PICKB * 1024 - 1
+    mov word [si+IMG_ROWBUF], wd_imgrow
+    mov word [si+IMG_PICNO], 0      ; a .PIX is an ARCHIVE: 0 = whichever is
+                                    ; first, since picture numbers are not
+                                    ; contiguous and a document does not know
+                                    ; what they are (85.1)
+    mov bp, WDM_IMGLOAD
+    call wd_ovcall                  ; ...out to WORD.OVL, and back
+    jc .decerr
+    mov si, wd_imgblk
+    mov ax, [si+IMG_W]
+    mov bx, [si+IMG_H]
+    call wd_pictsay                 ; "Picture 240x160 read..."
+    jmp short .done
+.decerr:
+    mov si, wd_imgblk
+    mov ax, [si+IMG_ERR]
+    call wd_picterr
+    jmp short .done
+.ioerr:
+    mov ax, wd_e_pictio
+    call wd_saymsg
+    jmp short .done
+.toobig:
+    mov ax, wd_e_pictbig
+    call wd_saymsg
+    jmp short .done
+.nomem:
+    mov ax, wd_e_nomem
+    call wd_saymsg
+.done:
+    mov dx, [wd_picseg]             ; both claims go straight back - nothing
+    or dx, dx                       ; holds the picture yet
+    jz .nofree
+    call OSAPI_MEM_FREE
+    mov word [wd_picseg], 0
+.nofree:
+    call wd_stgdrop
+.out:
+    pop es                          ; the pushes are ax bx cx dx si di es, so
+    pop di                          ; these unwind es di si dx cx bx ax. SI
+    pop si                          ; was missing here and `ret` took its
+    pop dx                          ; saved value for the return address: the
+    pop cx                          ; whole machine, segments and all, ended
+    pop bx                          ; up at 000E:00DF inside the vector table
+    pop ax
+    ret
+
+; wd_pictsay - AX = width, BX = height: "Picture 240x160 read - placing it
+; is not built yet". The last clause is there on purpose. A command that
+; reports a success it did not have is worse than one that refuses (47), and
+; this stage genuinely reads the file and genuinely does not insert it.
+wd_pictsay:
+    push ax
+    push bx
+    push si
+    push di
+    mov di, wd_pbuf
+    call wd_utoa                    ; AX = the width
+    mov si, wd_s_pictx
+    call wd_pcopy
+    mov ax, bx
+    call wd_utoa
+    mov si, wd_s_pict2
+    call wd_pcopy
+    mov byte [di], 0
+    mov ax, wd_pbuf
+    call wd_saymsg
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; wd_picterr - AX = an IMG_E_* code, said in THIS package's words. The include
+; returns a number and never a string, because a string out in WORD.OVL is at
+; a module-relative offset a resident reader takes for something else (85.2).
+wd_picterr:
+    push ax
+    push bx
+    push si
+    mov bx, ax
+    cmp bx, WD_PICTERRN
+    jbe .known
+    xor bx, bx
+.known:
+    shl bx, 1
+    mov ax, [bx+wd_picterrs]
+    call wd_saymsg
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; wd_pcopy - the NUL string SI to DI, DI advancing past it. wd_utoa's own
+; shape, so the two compose.
+wd_pcopy:
+    push ax
+.l:
+    mov al, [si]
+    or al, al
+    jz .done
+    mov [di], al
+    inc si
+    inc di
+    jmp short .l
+.done:
+    pop ax
     ret
 
 ; File > New / Open... ask the dirty question first (SPEC.md 68.4); the
@@ -19038,7 +19236,7 @@ wd_it_ins:                          ; &Insert
     WDMI WDMF_DIS, 0, WDA_NONE,   'T', wd_L_table,  0
     WDMS
     WDMI WDMF_DIS, 0, WDA_NONE,   'A', wd_L_annot,  0
-    WDMI WDMF_DIS, 0, WDA_NONE,   'P', wd_L_picture, 0
+    WDMI 0,        0, WDA_PICT,   'P', wd_L_picture, 0
     WDMI WDMF_DIS, 4, WDA_NONE,   'D', wd_L_field,  0
     WDMI WDMF_DIS, 6, WDA_NONE,   'E', wd_L_ixentry, 0
     WDMI WDMF_DIS, 0, WDA_NONE,   'I', wd_L_index,  0
@@ -19321,6 +19519,35 @@ wd_e_wprot:   db 'Write protected', 0
 wd_e_big:     db 'Too big', 0
 wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
+; Insert > Picture (SPEC.md 68.15). One string per IMG_E_* code, indexed by it
+; - the include hands back a NUMBER (85.2) and each package says what it means
+; in its own voice.
+; EVERY ONE OF THESE IS 24 CHARACTERS OR FEWER, because TOAST_MAX is 24 and
+; kernel/toast.inc calls it "the tight one". The first draft ran to 58 and the
+; strip simply stopped mid-word at the right edge of the screen - no error, no
+; ellipsis, just a sentence with its end missing. The success line is built
+; from a width and a height, so it is the longest possible one that has to
+; fit: '1280x65535 - not placed' is 23.
+wd_s_pictx:   db 'x', 0
+wd_s_pict2:   db ' - not placed', 0
+wd_e_pictio:  db 'Cannot read that file', 0
+wd_e_pictbig: db 'That file is too big', 0
+wd_e_pict0:   db 'Not a picture file', 0
+wd_e_pictw:   db 'Not a picture file', 0
+wd_e_picts:   db 'File is too short', 0
+wd_e_pictd:   db 'Bad picture size', 0
+wd_e_pictm:   db 'Picture too big', 0
+wd_e_pictt:   db 'Picture data ends early', 0
+wd_e_pictb:   db 'Convert to 4-bit first', 0
+wd_e_pictc:   db 'Compressed BMP not read', 0
+wd_e_pictn:   db 'No such picture', 0
+wd_e_pictv:   db 'Unknown file version', 0
+wd_picterrs:
+    dw wd_e_pict0                   ; 0 - never used: CF=0 means it worked
+    dw wd_e_pictw, wd_e_picts, wd_e_pictd, wd_e_pictm, wd_e_pictt
+    dw wd_e_pictb, wd_e_pictc, wd_e_pictn, wd_e_pictv
+WD_PICTERRN equ IMG_E_VER
+
 ; --- search and the clipboard (SPEC.md 68.7/55) ------------------------------
 wd_m_nopat:   db 'No search text', 0
 wd_m_repld:   db ' changes', 0       ; wd_saycnt's suffix: 'n changes' is the
@@ -19391,7 +19618,8 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 
 WD_OVKB      equ 8              ; the claim WORD.OVL is read into, KB
 WDM_PING     equ 0              ; verbs, the module's dispatch indices
-WDM_MAX      equ 0              ; ...and the highest of them
+WDM_IMGLOAD  equ 1              ; SI = an OS88IMG_SZ block; see os88img.inc
+WDM_MAX      equ 1              ; ...and the highest of them
 
 ; -----------------------------------------------------------------------------
 ; wd_ovneed - make sure WORD.OVL is loaded
@@ -19548,13 +19776,18 @@ wd_modc:                            ; +0: the dispatcher, and the only offset
     cmp bp, WDM_MAX                 ; the resident half knows
     ja .out
     shl bp, 1
-    mov si, bp
-    jmp word [cs:si+wd_mverb]
-.out:
-    retf
+    jmp word [cs:bp+wd_mverb]       ; INDEX THROUGH BP, NOT SI. This used to
+.out:                               ; stage the doubled verb in SI, and SI is
+    retf                            ; an ARGUMENT to a verb that takes one -
+                                    ; img_load's whole contract is SI = the
+                                    ; caller's block, and it would have been
+                                    ; handed a 0 or a 2. It lay dormant only
+                                    ; because WDM_PING takes nothing. The same
+                                    ; line was live in CHART's dispatcher and
+                                    ; cost an afternoon there (SPEC.md 82.16.4)
 
 wd_mverb:
-    dw wd_m_ping
+    dw wd_m_ping, wd_m_imgload
 
 ; wd_m_ping - what the mechanism has actually been PROVEN to do, and it is
 ; deliberately not more than that. Measured on the emulator, in this order:
@@ -19573,6 +19806,29 @@ wd_mverb:
 ; place to record that is here rather than in a commit message.
 wd_m_ping:
     retf
+
+; -----------------------------------------------------------------------------
+; wd_m_imgload - decode a picture. SI = the caller's block, as img_load takes
+; it; everything else is that routine's contract (SPEC.md 85).
+;
+; THE DECODER IS THIS MODULE'S FIRST REAL TENANT, and it is a deliberate
+; choice of first tenant rather than the most useful thing that happened to be
+; movable. The note above says what is unproven out here: a shim whose
+; resident routine touches the UI. os88img.inc HAS NO SHIMS. It owns no state,
+; it calls no OSAPI, it reads two segments the caller names and writes a third
+; - one far call in, one retf out, and nothing in between that needs the
+; package. So it exercises exactly the path that IS proven and none of the
+; path that is not, which is why the freeze is still an open question below
+; and this still works.
+;
+; It is also 1,600-odd bytes that WORD, with 5,270 free of 61,440, could not
+; have spent resident.
+; -----------------------------------------------------------------------------
+wd_m_imgload:
+    call img_load
+    retf
+
+%include "os88img.inc"
 
 section .text
 
@@ -20153,7 +20409,25 @@ section .text
     WDVAR wdb_ls,  2        ; word: where the line being composed began
     WDVAR wdb_t,   2        ; word } the row being emitted: ticks over
     WDVAR wdb_i,   2        ; word } iterations
+
 %endif
+
+; --- Insert > Picture (SPEC.md 68.15) ----------------------------------------
+; The block and the row buffer os88img.inc works through. They are HERE and
+; not in a claim because that include reaches both through DS, which stays the
+; package's segment even while the decoder itself is running out in WORD.OVL
+; (68.10) - so they must be in the package, and bss is where the package's
+; memory is.
+    WDVAR wd_pictwant, 1    ; byte: the file dialog is being opened FOR a
+                            ; picture, so wd_ondlg routes its answer here
+                            ; instead of to open-or-save
+    WDVAR wd_imgblk, OS88IMG_SZ
+    WDVAR wd_imgrow, OS88IMG_ROW
+    WDVAR wd_picseg, 2      ; word: the decoded picture's transient claim
+    WDVAR wd_pbuf,  32      ; the report. NOT wd_tbuf, which is 26 bytes and
+                            ; sized for 'Loaded ' plus an 8.3 name. 32 is
+                            ; TOAST_MAX (24) with room to compose past it and
+                            ; let the kernel do the cutting
 
 %assign WD_BSS_TOTAL WDB
 
