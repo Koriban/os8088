@@ -1263,8 +1263,14 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
-     $(MEDIAIMG360) $(BUILD)/wire.o88 $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
+     $(MEDIAIMG360) $(BUILD)/wire.o88 $(BUILD)/fptest.o88 $(BUILD)/imgtest.o88 \
+     $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
+# fptest.o88 and imgtest.o88 are here for wire.o88's reason below, and fptest
+# was NOT here until imgtest joined it: its own rule says "built here so it
+# cannot rot" and nothing depended on it, so `make` never compiled it and a
+# change to os88fp.inc that broke the self-test broke nothing anybody saw.
+# Neither ships on a disk (SPEC.md 84, 85); both are run by hand.
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
 # but does not ship (SPEC.md 78.9, `make wiredisk`). Keeping it in the default
 # build is the whole point of the arrangement: it is the bench for 78.5's draw
@@ -2544,6 +2550,29 @@ $(BUILD)/fptest.bin: apps/fptest/fptest.asm apps/fptest/fpcases.inc apps/os88fp.
 
 $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/fptest.bin -o $@
+
+# IMGTEST: the self-test for apps/os88img.inc, the .PIX/.BMP/.PCX decoders.
+# Same shape and same reasoning as FPTEST above - not on any disk, built here
+# so it cannot rot, and its expectations computed on the HOST from the format
+# documents rather than by running the decoder. Run it with
+#   python3 tools/os88imgcase.py
+#   python3 tools/os88disk.py -o build/imgtest.img --size 1440 \
+#       APPS:build/imgtest.o88 $(addprefix APPS:,$(wildcard build/imgcases/*))
+#   make test TESTAPPS=build/imgtest.img
+# and read the window: eleven rows, ALL PASS or FAILURES.
+#
+# build/imgcases/ carries two files this repository does not ship - MAIN.PCX
+# and HELP8.PCX, off the Dr. Dobb's File Formats disc - so the corpus is nine
+# generated cases without them and eleven with. The generator says which it
+# built; a third-party file is the only one that cannot share a misreading
+# with the decoder, so run it with them if you have them.
+$(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
+                      apps/os88img.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/imgtest/ -o $@ apps/imgtest/imgtest.asm
+	@echo "imgtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/imgtest.o88: $(BUILD)/imgtest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/imgtest.bin -o $@
 
 # Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
 # rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).

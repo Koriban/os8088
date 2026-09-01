@@ -121,6 +121,14 @@ That argues for the decoders living in a shared `apps/os88img.inc` rather than
 inside Word, since Paint already has BMP and would want PCX too - the same
 move `os88chartbss.inc` made, for the same reason.
 
+**DONE, and it is SPEC.md 85.** `apps/os88img.inc` reads all three into the
+packed 4bpp `OSAPI_GFX_BLIT4` takes, owns no state (the caller passes a block
+in SI), and returns an error NUMBER rather than a string, so it works
+identically resident and inside an overlay. `apps/imgtest` proves it against
+a corpus whose expectations are computed on the host from the format
+documents. What remains for Word is the document model, the layout and the
+dialog - the decoder is no longer the open question.
+
 ## 4. What this unblocks
 
 Today a `.BMP` has exactly one consumer - Paint - because nothing else reads

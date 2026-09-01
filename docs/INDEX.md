@@ -262,6 +262,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
 | `apps/os88chartbss.inc` | §82 | The ch_* working set os88chart.inc runs on, declared once instead of hand-copied into both callers. Set `CH_BSS_BASE` to where the block goes and carry on from `CH_BSS_END`. |
 | `apps/os88chartovl.inc` | §82.16 | The resident half of the CHART.OVL split: loader, verb dispatch and the shims os88chart.inc calls back out through. Only a package that %defines CH_OVERLAY needs it - today that is SHEET alone. |
+| `apps/os88img.inc` | §85 | Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block in SI. 8-bit files are refused by name, not approximated. |
 | `apps/os88fp.inc` | §84 | IEEE-754 double arithmetic in software, with an 8087 path chosen at run time. Parse, format, add, subtract, multiply, divide, compare, sqrt, trunc, floor, round. |
 | `apps/os88sock.inc` | §62, 72 | The socket layer over NET.DRV or ETHER.DRV. |
 | `apps/os88pit.inc` | §37 | Sub-tick timing off the 8253. |
@@ -283,6 +284,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
 | HELLO | `apps/hello/hello.asm` | §27 |
+| IMGTEST | `apps/imgtest/imgtest.asm` |  |
 | MINES | `apps/mines/mines.asm` | §23 |
 | MISSILE | `apps/missile/missile.asm` | §48 |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 |
@@ -388,6 +390,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 82 | CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`) |
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
+| 85 | Picture decoders (`apps/os88img.inc`) |
 
 ## docs/
 
