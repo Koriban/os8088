@@ -588,6 +588,17 @@ WD_K_END     equ 0x4F
 WD_K_DOWN    equ 0x50
 WD_K_DEL     equ 0x53
 WD_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
+WD_PICMAX    equ 8              ; pictures one document may hold. The CHP byte
+                                ; of the 0x01 that marks one is its INDEX here,
+                                ; exactly as a paragraph mark's CHP byte is its
+                                ; PAP dictionary index (SPEC.md 68.3) - so a
+                                ; picture needs no new bit anywhere, and bit 7
+                                ; stays as unavailable as 68.3 says it is
+WD_PICREC    equ 8              ; w, h, stride, segment
+WD_PICCH     equ 1              ; the character. Word's own (chPicture), and
+                                ; safe here because 68.4's readers drop every
+                                ; control below 32 except tab and CR - so a
+                                ; 0x01 in this buffer can only be ours
 WD_PICKB     equ 40             ; the decoded picture's TRANSIENT claim
                                 ; (SPEC.md 68.15). 40KB holds a 640x128 or a
                                 ; 320x256 in packed 4bpp, and os88img.inc
@@ -2199,6 +2210,20 @@ wd_papini:
 ; wd_rowhc - [wd_rowhv] = the entered row's height. Preserves all registers.
 wd_rowhc:
     push ax
+    push bx
+    mov word [wd_rowpic], 0xFFFF    ; "this row is not a picture"
+    mov bx, [wd_i]                  ; the row's FIRST character - wd_rowhc runs
+    cmp bx, [wd_len]                ; at row entry, so wd_i is it
+    jae .text
+    cmp byte [es:bx], WD_PICCH      ; ES is the document throughout the walk
+    jne .text                       ; (SPEC.md 27.6)
+    call wd_picidx                  ; -> AX = the index from its CHP byte
+    cmp ax, [wd_npic]
+    jae .text                       ; an index this document has no picture
+    mov [wd_rowpic], ax             ; for: draw it as ordinary text rather
+    call wd_pich                    ; than off the end of the table
+    jmp short .have
+.text:
     mov al, [wd_wadv]
     xor ah, ah
     cmp byte [wd_parafirst], 0
@@ -2208,7 +2233,79 @@ wd_rowhc:
     add ax, 8                       ; the open paragraph's blank line
 .have:
     mov [wd_rowhv], ax
+    pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; The three little readers the two above share. A picture's identity is the
+; CHP byte of its WD_PICCH, exactly as a paragraph's format is the CHP byte of
+; its mark (SPEC.md 68.3) - so reading one means reaching into the PARALLEL
+; attribute claim at the same offset, which is what wd_picidx is for.
+; -----------------------------------------------------------------------------
+; wd_picidx - AX = the picture index of the WD_PICCH at [wd_i]. Preserves all
+; but AX. 0xFFFF if there is no character there at all.
+wd_picidx:
+    push bx
+    push es
+    mov bx, [wd_i]
+    cmp bx, [wd_len]
+    jae .none
+    mov es, [wd_cseg]
+    mov al, [es:bx]
+    xor ah, ah
+    jmp short .out
+.none:
+    mov ax, 0xFFFF
+.out:
+    pop es
+    pop bx
+    ret
+
+; wd_picrec - BX = the table slot for picture AX, or CF=1. Preserves the rest.
+wd_picrec:
+    cmp ax, [wd_npic]
+    jae .no
+    push cx
+    push ax
+    mov cl, 3
+    shl ax, cl                      ; * WD_PICREC
+    add ax, wd_pictab
+    mov bx, ax
+    pop ax
+    pop cx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; wd_picw / wd_pich - AX = the width (height) of the picture the WD_PICCH at
+; [wd_i] names, or 8 if it names none. Preserves all but AX.
+wd_picw:
+    push bx
+    call wd_picidx
+    call wd_picrec
+    jc .no
+    mov ax, [bx]
+    jmp short .out
+.no:
+    mov ax, 8
+.out:
+    pop bx
+    ret
+
+wd_pich:
+    push bx
+    call wd_picidx
+    call wd_picrec
+    jc .no
+    mov ax, [bx+2]
+    jmp short .out
+.no:
+    mov ax, 8
+.out:
+    pop bx
     ret
 
 ; wd_advy - the pen enters row [wd_row]+1: move the glyph y by the ENTERED
@@ -2666,22 +2763,35 @@ wd_scapof:
 ; and 8 is what the fixed face asked for both.
 ; -----------------------------------------------------------------------------
 wd_penadv:
+    or bx, bx                       ; the picture test comes FIRST, and before
+    jz .noch                        ; the face test: a picture is its own width
+    cmp byte [es:si], WD_PICCH      ; in the kernel's 8x8 cell as much as in a
+    je .pictw                       ; proportional face (68.15)
+.noch:
     cmp byte [wd_pxon], 0
     jne .prop
 .eight:
     mov ax, 8
     ret
+.pictw:
+    call wd_picw
+    ret
 .prop:
     or bx, bx
     jz .eight
     mov al, [es:si]                 ; THE DOCUMENT IS ES:SI (SPEC.md 27.6)
-    cmp al, 13
+    cmp al, WD_PICCH                ; a picture's cell is as wide as the
+    je .pict                        ; picture, so the ordinary wrap rule ends
+    cmp al, 13                      ; the row after it with no special case
     je .eight
     cmp al, 9
     je .eight
     call ty_advof                   ; preserves BX, and AH with it
     xor ah, ah
     ret
+.pict:
+    call wd_picw                    ; AX = its width, or 8 if the index is not
+    ret                             ; one this document has
 
 ; -----------------------------------------------------------------------------
 ; wd_cellat - the cell index the pen is standing on (SPEC.md 68.13)
@@ -4009,6 +4119,54 @@ wd_rstart:
     ret
 
 ; -----------------------------------------------------------------------------
+; wd_picdraw - blit the row's picture. in: [wd_rowpic] is its index, [wd_rby]
+; the row's glyph y and [wd_rowx0] its start pen. Preserves all registers.
+;
+; OSAPI_GFX_BLIT4 and not OSAPI_GFX_BLITP, for SPEC.md 85's reason: BLITP
+; refuses an armed clip region, and a picture in a document that scrolls is
+; always inside one.
+;
+; BP IS PUSHED HERE and nowhere else in this file's drawing path, because BP is
+; the WALK's pen y - and BLIT4 takes the source stride in it.
+; -----------------------------------------------------------------------------
+wd_picdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [wd_rowpic]
+    call wd_picrec
+    jc .out
+    mov cx, [bx]                    ; width
+    mov dx, [bx+2]                  ; height
+    mov bp, [bx+4]                  ; stride - BLIT4's own argument
+    mov ax, [bx+6]
+    or ax, ax
+    jz .out
+    mov es, ax
+    xor si, si                      ; the picture is at offset 0 of its claim
+    mov ax, [wd_rowx0]              ; the row's own start pen: a picture obeys
+                                    ; the paragraph's indent like any row does
+    mov bx, [wd_rby]
+    add bx, [wd_gh]
+    sub bx, dx                      ; ...and sits ON the row, so its BOTTOM is
+    call OSAPI_GFX_BLIT4            ; where the glyphs' bottom would have been
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wd_rflush - draw the accumulated row: ONE opaque font_run, then its caret
 ; preserves all registers
 ;
@@ -4050,6 +4208,11 @@ wd_rflush:
                                     ; small y. Below: it does not fit, the pen
                                     ; still
                                     ; advanced, so every position below is true
+    cmp word [wd_rowpic], 0xFFFF    ; a PICTURE row: one blit, and none of the
+    je .notpic                      ; lettering below - the row buffer holds no
+    call wd_picdraw                 ; glyphs for it (SPEC.md 68.15)
+    jmp .caret
+.notpic:
     cmp word [wd_rcols], 0
     je .caret
 
@@ -7033,6 +7196,11 @@ wd_load:
     call wd_docparse            ; CF=1 = refused whole, document untouched
     jc .bad
 .loaded:
+    call wd_pictfree            ; the OLD document's pictures, now that this
+                                ; read has committed. Not before: wd_docparse
+                                ; refuses whole and leaves the document
+                                ; untouched, and a refusal must not cost the
+                                ; pictures it was not replacing (68.15)
     call wd_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
     call wd_ldpost              ; ...then the loaded facts go back
@@ -7105,6 +7273,8 @@ wd_load:
     pop di
     pop cx
     pop ax
+    call wd_pictfree            ; ...and the same on the plain-text path, whose
+                                ; commit point is its own
     call wd_clamp               ; a shorter file must not leave the caret
                                 ; past the end of it
     call wd_ldscan              ; any tab that survived re-raises the flag
@@ -9118,6 +9288,10 @@ wd_redraw:
 ; reason an ordinary keystroke retires it.
 ; -----------------------------------------------------------------------------
 wd_new:
+    call wd_pictfree                ; the pictures go with the document. Their
+                                    ; pixels are in claims of their own, and a
+                                    ; table that outlives its text describes
+                                    ; characters that are not there (68.15)
     mov word [wd_len], 0
     mov word [wd_cur], 0
     mov ax, wd_s_nul            ; retire the toast: 'Loaded DOCUMENT.DOC' over an
@@ -16465,10 +16639,17 @@ wd_pictload:
     mov bp, WDM_IMGLOAD
     call wd_ovcall                  ; ...out to WORD.OVL, and back
     jc .decerr
+    call wd_pictkeep                ; the scratch claim's contents into one
+    jc .full                        ; sized for them, and a table slot
+    call wd_pictput                 ; ...and WD_PICCH into the text
     mov si, wd_imgblk
     mov ax, [si+IMG_W]
     mov bx, [si+IMG_H]
-    call wd_pictsay                 ; "Picture 240x160 read..."
+    call wd_pictsay
+    jmp short .done
+.full:
+    mov ax, wd_e_pictfull
+    call wd_saymsg
     jmp short .done
 .decerr:
     mov si, wd_imgblk
@@ -16501,6 +16682,157 @@ wd_pictload:
     pop dx                          ; saved value for the return address: the
     pop cx                          ; whole machine, segments and all, ended
     pop bx                          ; up at 000E:00DF inside the vector table
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_pictkeep - the decoded picture is in the WD_PICKB scratch claim; move it
+; into a claim SIZED FOR IT and take a table slot. out: CF=1 = no slot or no
+; memory, and nothing was taken.
+;
+; Two claims and a copy rather than keeping the scratch, because the scratch is
+; 40KB whatever the picture is and eight of those is 320KB of a 640KB machine
+; for eight small drawings. The decoder cannot size its own destination - it
+; has to be given one before it knows the dimensions - so the sizing happens
+; here, afterwards, where they are known.
+; -----------------------------------------------------------------------------
+wd_pictkeep:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    mov ax, [wd_npic]
+    cmp ax, WD_PICMAX
+    jae .no
+    mov si, wd_imgblk
+    mov ax, [si+IMG_STRIDE]
+    mul word [si+IMG_H]             ; DX:AX = the bytes it actually occupies.
+    or dx, dx                       ; img_setgeom already proved this fits a
+    jnz .no                         ; word, so a high half means something is
+    mov cx, ax                      ; wrong rather than merely large
+    add ax, 1023
+    jc .no
+    mov cl, 10
+    shr ax, cl                      ; ...in kilobytes, rounded up
+    or ax, ax
+    jnz .kbok
+    mov ax, 1
+.kbok:
+    call OSAPI_MEM_CLAIM
+    jc .no
+    mov [wd_picnew], dx
+    mov si, wd_imgblk               ; scratch -> its own claim, a word at a
+    mov ax, [si+IMG_STRIDE]         ; time. rep movsw would need DS pointed at
+    mul word [si+IMG_H]             ; the source, and DS is the package here
+    mov cx, ax
+    inc cx
+    shr cx, 1
+    mov ax, [si+IMG_DSTSEG]
+    mov ds, ax
+    mov es, [cs:wd_picnew]
+    xor si, si
+    xor di, di
+.copy:
+    mov ax, [si]
+    mov [es:di], ax
+    add si, 2
+    add di, 2
+    dec cx
+    jnz .copy
+    pop ds
+    push ds
+    mov bx, [wd_npic]               ; the slot: w, h, stride, segment
+    mov ax, bx
+    mov cl, 3
+    shl ax, cl                      ; * WD_PICREC
+    add ax, wd_pictab
+    mov di, ax
+    mov si, wd_imgblk
+    mov ax, [si+IMG_W]
+    mov [di], ax
+    mov ax, [si+IMG_H]
+    mov [di+2], ax
+    mov ax, [si+IMG_STRIDE]
+    mov [di+4], ax
+    mov ax, [wd_picnew]
+    mov [di+6], ax
+    inc word [wd_npic]
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_pictput - put WD_PICCH in the text at the caret, its CHP byte the index
+; of the picture just kept. Preserves all registers.
+;
+; [wd_chp] is banked around the insert because wd_ins writes the TYPING
+; attributes as the character's CHP, and for this one character that byte is
+; not attributes at all.
+wd_pictput:
+    push ax
+    push bx
+    mov al, [wd_chp]
+    mov [wd_chpbank], al
+    mov ax, [wd_npic]
+    dec ax
+    mov [wd_chp], al
+    mov al, WD_PICCH
+    call wd_ins
+    mov al, [wd_chpbank]
+    mov [wd_chp], al
+    pop bx
+    pop ax
+    ret
+
+; wd_pictfree - hand every picture claim back and empty the table. Called
+; where the document is replaced (New, and each reader), for the reason
+; sh_nnames is cleared there: state that outlives its document goes on
+; describing one that is gone.
+wd_pictfree:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si                         ; SI is used as the slot pointer below and
+    mov cx, [wd_npic]               ; every caller is a document-replacing path
+                                    ; with its own state in it
+    jcxz .done
+    xor bx, bx
+.each:
+    mov ax, bx
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, wd_pictab
+    mov si, ax
+    mov dx, [si+6]
+    or dx, dx
+    jz .next
+    call OSAPI_MEM_FREE
+.next:
+    inc bx
+    loop .each
+.done:
+    mov word [wd_npic], 0
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -19542,6 +19874,7 @@ wd_e_pictb:   db 'Convert to 4-bit first', 0
 wd_e_pictc:   db 'Compressed BMP not read', 0
 wd_e_pictn:   db 'No such picture', 0
 wd_e_pictv:   db 'Unknown file version', 0
+wd_e_pictfull: db 'No room for a picture', 0
 wd_picterrs:
     dw wd_e_pict0                   ; 0 - never used: CF=0 means it worked
     dw wd_e_pictw, wd_e_picts, wd_e_pictd, wd_e_pictm, wd_e_pictt
@@ -20423,7 +20756,15 @@ section .text
                             ; instead of to open-or-save
     WDVAR wd_imgblk, OS88IMG_SZ
     WDVAR wd_imgrow, OS88IMG_ROW
-    WDVAR wd_picseg, 2      ; word: the decoded picture's transient claim
+    WDVAR wd_picseg, 2      ; word: the decode scratch claim, transient
+    WDVAR wd_npic,   2      ; word: pictures this document holds
+    WDVAR wd_pictab, WD_PICMAX * WD_PICREC
+    WDVAR wd_picnew, 2      ; word: the claim wd_pictkeep is filling
+    WDVAR wd_chpbank, 1     ; byte: [wd_chp] across the picture insert
+    WDVAR wd_rowpic, 2      ; word: the picture the row being built IS, or
+                            ; 0xFFFF. Set at row entry by wd_rowhc and read at
+                            ; row exit by wd_rflush - the same lifetime
+                            ; [wd_rby] and [wd_rowx0] already have
     WDVAR wd_pbuf,  32      ; the report. NOT wd_tbuf, which is 26 bytes and
                             ; sized for 'Loaded ' plus an 8.3 name. 32 is
                             ; TOAST_MAX (24) with room to compose past it and

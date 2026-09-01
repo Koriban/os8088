@@ -63736,31 +63736,59 @@ height differs from its advance is the only test that separates them.
 
 ### 68.15 Insert > Picture — reading one, and the three parts still to come
 
-**What works: a picture file is chosen, read and decoded, and its size
-reported.** `.PIX`, `.BMP` and `.PCX`, through `apps/os88img.inc` (§85). What
-does not: the picture is not yet put in the document. The toast says
-`30x9 - not placed` and not "inserted", because a command that reports a
-success it did not have is worse than one that refuses (§47).
+**A picture is chosen, decoded, and drawn in the document.** `.PIX`, `.BMP`
+and `.PCX`, through `apps/os88img.inc` (§85). What it does not yet do is
+survive a save, and that is a reference problem rather than a code one.
 
-The three remaining parts, and why each is its own piece of work:
+**The document model is Word's own.** A picture is character `0x01`
+(`WD_PICCH`) in the text, and that needs no new bits anywhere: §68.4's readers
+drop every control under 32 except tab and ¶, so a `0x01` in this buffer can
+only be ours, and the character *is* the marker. Its **CHP byte is the index**
+into `wd_pictab` — exactly the trick a ¶ mark already uses for its PAP index
+(§68.3), which matters because **CHP bit 7 is not available** for a flag and
+§68.3 says why. Real Word marks the same character with `sprmCFSpec`; the
+sprm is what a *file* needs, not what a document model needs.
 
-- **The document model.** Word's own representation is character `0x01` in the
-  text with `sprmCFSpec` on its CHP. That maps onto this port cleanly and
-  needs no new bits: `0x01` cannot otherwise appear (§68.4's readers drop
-  every control under 32 except tab and ¶), so the character *is* the marker,
-  and its CHP byte can be an index into a picture table — exactly the trick a
-  ¶ mark already uses for its PAP index (§68.3). Note that **CHP bit 7 is not
-  available** for a flag, and §68.3 says why.
-- **The layout.** This is the delicate one. `wd_walk` is incremental, with a
-  row table, checkpoints and a caret-follow net (§27.7.7), all of which assume
-  the uniform 8/12/16-pixel row advance a face gives. A picture is a hundred
-  pixels tall.
-- **The file format.** A picture in a real Word file is a `PICF` in the data
-  stream, and **there is no reference for its layout here.** §81.10.2 records
-  exactly what guessing a binary structure costs: a guessed function index
-  "does not produce a broken file; it produces one Excel opens happily and
-  computes something else from, silently". The same applies. So this waits for
-  a reference rather than being invented.
+Each picture's pixels live in a claim **sized for them**. The decoder cannot
+size its own destination — it has to be given one before it knows the
+dimensions — so `wd_pictkeep` decodes into a fixed `WD_PICKB` scratch claim,
+then claims exactly the bytes the picture turned out to occupy and copies.
+Eight 40KB scratch claims for eight small drawings would be 320KB of a 640KB
+machine.
+
+`wd_pictfree` gives them all back wherever a document is replaced — File > New
+and both of `wd_load`'s commit points. Not before the commit: `wd_docparse`
+refuses whole and leaves the document untouched, and a refusal must not cost
+the pictures it was not replacing. Same rule §81.10.8 states for Sheet's
+defined names.
+
+**The layout needed far less than expected**, and the reason is worth writing
+down because the first estimate was wrong. Row heights here are *already*
+variable: `wd_rowhc` sets `[wd_rowhv]` — 8, 12 or 16 from the paragraph's line
+spacing, plus 8 for space-before — and `wd_advy` moves the pen by exactly
+that. So a picture row is a row with a large `[wd_rowhv]`, and the incremental
+machinery, the row table and the caret net all keep working unchanged.
+
+Two hooks, both where every row already answers the same question:
+
+- `wd_rowhc` peeks the row's first character. `WD_PICCH` means the height is
+  the picture's and `[wd_rowpic]` is its index; anything else is the ordinary
+  text height and `[wd_rowpic]` is `0xFFFF`.
+- `wd_penadv` reports a picture's cell as the picture's **width**, so the
+  existing wrap rule ends the row after it with no special case at all.
+
+`[wd_rowpic]` is set at row entry and read at row exit by `wd_rflush`, which
+is the same lifetime `[wd_rby]` and `[wd_rowx0]` already have.
+
+**The file format is the part that waits.** A picture in a real Word file is a
+`PICF` in the data stream, and **there is no reference for its layout here** —
+not the Opus headers, not either Walden volume (whose RTF chapter predates
+bitmaps: `\wmetafile` and `\macpict` only), not the Dr. Dobb's disc. The port's
+own table shows why it cannot be filled in from memory: **sprm 68 is
+`sprmCFtc`** here, and in Word 6 that same number is `sprmCPicLocation`. The
+numbering differs between the versions. §81.10.2 records what guessing a
+binary structure costs — not a broken file, one that opens happily and means
+something else — so this waits for real Word 1.1a to write one.
 
 #### 68.15.1 The decoder is WORD.OVL's first real tenant
 
@@ -63809,6 +63837,24 @@ from a width and a height, so it is the longest that has to fit:
 `1280x65535 - not placed` is 23.
 
 #### 68.15.3 What the command actually does
+
+#### 68.15.4 Drawing it
+
+`wd_rflush` takes one branch: a row whose `[wd_rowpic]` is set is **one
+`OSAPI_GFX_BLIT4`** and none of the lettering below it, because the row buffer
+holds no glyphs for it. BLIT4 and not `OSAPI_GFX_BLITP` for §85's reason —
+BLITP refuses an armed clip region, and a picture in a document that scrolls
+is always inside one.
+
+`wd_picdraw` is the one routine in this file's drawing path that pushes **BP**,
+and that is not defensive: BP is the walk's pen y, and BLIT4 takes the source
+stride in it.
+
+The picture sits at `[wd_rowx0]`, the row's own start pen, so it obeys the
+paragraph's indent like any row; and its *bottom* is where the glyphs' bottom
+would have been, so it sits on the line rather than floating above it.
+
+#### 68.15.5 How the command runs
 
 It borrows the ordinary file dialog with `[wd_pictwant]` raised, so `wd_ondlg`
 routes the answer to `wd_pictload` instead of to open-or-save. One flag rather
