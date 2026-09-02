@@ -75575,6 +75575,68 @@ layer; and the **matrix and array** functions need array formulas, which is an
 evaluation-model change rather than a function.
 
 
+### 81.34 VAR, VARP, STDEV, STDEVP — the statistical category closes
+
+The manual's own list settles what was left: the statistical category is
+`AVERAGE`, `COUNT`, `COUNTA`, `GROWTH`, `LINEST`, `LOGEST`, `MAX`, `MIN`,
+`STDEV`, `STDEVP`, `SUM`, `TREND`, `VAR`, `VARP`. Six were already here and
+four of the rest are **array** functions — a gap in the evaluation model
+rather than in the function library — which leaves exactly these four. *Excel 2.1d does have the population forms* —
+checked in `excel_man/Microsoft Excel Functions and Macros.pdf` rather than
+assumed, because `STDEVP` and `VARP` read like later additions and are not.
+
+**They are folds, so they rejoin the fold path rather than getting one of
+their own.** `sh_pfunc` sends ids 77 and up straight to `.fold`; `sh_prange`
+walks their arguments exactly as `SUM`'s, and only `sh_foldvalue` and
+`sh_funcfinish` know the difference.
+
+`variance = (Σx² − (Σx)²/n) / d`, with `d` = *n* for the population forms and
+*n−1* for the sample ones; the standard deviations are its square root, which
+`fp_sqrt` already provided. **One pass** — which is what the fold machinery
+gives, and what Excel 2.1 itself did. Its accuracy comes with it: subtracting
+two large nearly-equal numbers loses digits when the mean is far from zero. The
+two-pass form is better and is not available here, because this parser folds as
+it **parses** and cannot walk the range twice.
+
+`VAR` or `STDEV` of a single value is **`#DIV/0!`**, which is Excel's own
+answer — *n−1* is zero and a sample of one has no spread.
+
+#### 81.34.1 One variance fold at a time
+
+`sh_pacc2` — the sum of squares — is a single accumulator beside `sh_pacc`, so
+a variance fold inside another variance fold's arguments would share it.
+`[sh_stbusy]` refuses the inner one (§47), the same shape §81.32.1's
+`[sh_lk_busy]` takes and for the same reason: a task stack is 384 bytes
+(§20.6 rule 6) and banking another eight per nesting level is not free.
+
+**The flag is banked by `sh_pfunc`, not cleared by `sh_funcfinish`.** Clearing
+it at the end of the arithmetic covers the path where the arithmetic runs; an
+argument list that fails to parse never reaches it, and the flag would have
+stayed set for the rest of the session with every later `VAR` refusing. Pushing
+it with `sh_pfid` and the accumulator covers every exit, including the ones
+that error.
+
+#### 81.34.2 Verified
+
+Over the textbook set `2,4,4,4,5,5,7,9` in `A1:A8`
+(`screenshots/sheet-statistical-var-stdev.png`), against Python's
+`statistics` module:
+
+| | Sheet | reference |
+|---|---|---|
+| `=VAR(A1:A8)` | 4.57142 | 4.571428571428571 |
+| `=VARP(A1:A8)` | 4 | 4 |
+| `=STDEV(A1:A8)` | 2.13808 | 2.138090 |
+| `=STDEVP(A1:A8)` | 2 | 2 |
+| `=VAR(A1)` | `#DIV/0!` | — |
+| `=AVERAGE(A1:A8)` | 5 | 5 |
+
+**Sheet knows 81 of Excel 2.1d's ~120**, and two of the four remaining groups
+are now the same blocker: trigonometry, the logarithms and the financial
+thirteen all wait on a transcendental layer `apps/os88fp.inc` does not have.
+The matrix and array functions wait on array formulas.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

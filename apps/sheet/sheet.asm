@@ -16147,6 +16147,7 @@ sh_rpn_fid:
                                        ; so a row inserted anywhere but the
                                        ; matching place writes another
                                        ; function's ftab index into the file
+    db 46, 194, 12, 193               ; VAR VARP STDEV STDEVP
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16174,6 +16175,8 @@ sh_rpn_fvar:
     db 0, 0, 0, 1                     ; ROWS COLUMNS AREAS INDEX(2..3)
     db 1, 0, 0, 1                     ; MATCH(2..3) VLOOKUP HLOOKUP
                                        ; LOOKUP(2..3)
+    db 1, 1, 1, 1                     ; VAR VARP STDEV STDEVP - every one
+                                       ; of them 1..14 arguments
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -18254,8 +18257,29 @@ sh_foldvalue:
     je .or
     cmp bx, 10
     je .product
+    cmp bx, 77
+    jae .stat
     jmp .out                          ; COUNT (4), COUNTA (11) or unknown:
                                        ; pcnt alone is enough
+.stat:
+    call sh_pacc_to_a                 ; the running sum, as SUM does...
+    call sh_acc_load_b
+    call fp_add
+    call sh_pacc_from_a
+    call sh_acc_load_a                ; ...and the sum of SQUARES beside it
+    call sh_acc_load_b
+    call fp_mul                       ; A = x * x
+    call fp_a_to_b                    ; ...to B, so the running total can
+    push si                           ; come into A
+    mov si, sh_pacc2
+    call fp_unpack_a
+    pop si
+    call fp_add
+    push di
+    mov di, sh_pacc2
+    call fp_pack_a
+    pop di
+    jmp .out
 .sum:
     call sh_pacc_to_a
     call sh_acc_load_b
@@ -18533,9 +18557,58 @@ sh_funcfinish:
                                        ; apart. Without this it returned
                                        ; sh_pacc, which for a non-summing fold
                                        ; is always 0.
+    cmp bx, 77
+    jae .stat
     call sh_pacc_to_a                 ; SUM/MIN/MAX/PRODUCT (and unknown):
     call sh_acc_store                 ; whatever was folded, zero if nothing
     jmp .fout
+; --- VAR / VARP / STDEV / STDEVP (SPEC.md 81.34) -----------------------------
+; variance = (sum of squares - sum*sum/n) / d, where d is n for the POPULATION
+; forms and n-1 for the SAMPLE ones; the standard deviations are its square
+; root. ONE PASS, which is what the fold machinery gives - Excel 2.1's own
+; arithmetic, and its accuracy: subtracting two large nearly-equal numbers
+; loses digits when the mean is far from zero. A spreadsheet of this era did
+; the same, and the two-pass form would need the range walked twice, which
+; this parser cannot do - it folds as it PARSES.
+.stat:
+    mov cx, [sh_pcnt]
+    cmp bx, 78                        ; VARP and STDEVP divide by n...
+    je .popn
+    cmp bx, 80
+    je .popn
+    dec cx                            ; ...VAR and STDEV by n-1, and a single
+.popn:                                ; value therefore has no sample variance
+    or cx, cx
+    jg .statok
+    mov byte [sh_evalerr], SH_ERR_DIV0  ; #DIV/0! is Excel's own answer to
+    xor ax, ax                        ; VAR of one number
+    call sh_acc_int
+    jmp .fout
+.statok:
+    push cx                           ; CX = the divisor, banked across the
+    call sh_pacc_to_a                 ; arithmetic below
+    call sh_pacc_to_b                 ; A = B = the sum
+    call fp_mul                       ; A = sum * sum
+    mov ax, [sh_pcnt]
+    call fp_i2b
+    call fp_div                       ; A = sum*sum/n
+    call fp_a_to_b                    ; ...to B
+    push si
+    mov si, sh_pacc2                  ; A = the sum of squares
+    call fp_unpack_a
+    pop si
+    call fp_sub                       ; A = sumsq - sum*sum/n
+    pop cx
+    mov ax, cx
+    call fp_i2b
+    call fp_div                       ; A = that / d
+    cmp bx, 79                        ; STDEV and STDEVP are its square root
+    jb .statdone
+    call fp_sqrt
+.statdone:
+    call sh_acc_store                 ; sh_stbusy is not cleared here: sh_pfunc
+    jmp .fout                         ; banks and restores it, so every exit
+                                       ; path is covered and not just this one
 .average:
     cmp word [sh_pcnt], 0
     jne .avgok
@@ -18574,6 +18647,12 @@ sh_pfunc:
     push word [sh_pacc]               ; inner call's accumulator back
     push word [sh_pcnt]
     push word [sh_phave]
+    push word [sh_stbusy]             ; BANKED, not cleared on the way out: an
+                                       ; error path that never reached
+                                       ; sh_funcfinish would otherwise leave a
+                                       ; variance fold marked live for the
+                                       ; rest of the session, and every VAR
+                                       ; after it would refuse (81.34.1)
     xor dx, dx                        ; DX = result; 0 covers every bad exit
     call sh_pnest_enter               ; a nested call is a recursion point too
     jc .popout                        ; (81.3); too deep answers 0 + #VALUE!
@@ -18590,6 +18669,17 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 77                         ; 77+ are the VARIANCE folds. They walk
+    jb .notstat                        ; their arguments exactly as SUM does,
+    cmp byte [sh_stbusy], 0            ; so they rejoin the fold path below
+    jne .statbusy                      ; rather than getting one of their own
+    mov byte [sh_stbusy], 1
+    jmp .fold
+.statbusy:
+    call sh_skipargs                   ; one variance fold inside another's
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; arguments would share sh_pacc2 -
+    jmp .typed                         ; refused rather than answered (81.34.1)
+.notstat:
     cmp ax, 69                         ; 69+ are the LOOKUP functions, whose
     jae .dolookup                      ; answer may be a REFERENCE's contents
                                        ; and so may be TEXT (81.31). This test
@@ -18605,6 +18695,7 @@ sh_pfunc:
     cmp ax, 12                         ; 12+ are stage 3.0d's special forms:
     jae .dospecial                     ; fixed arity, parsed by sh_pspecial,
                                        ; not folded over ranges
+.fold:
     mov [sh_pfid], ax
     push ax
     xor ax, ax
@@ -18619,6 +18710,10 @@ sh_pfunc:
     pop ax
     mov word [sh_pcnt], 0
     mov word [sh_phave], 0
+    mov word [sh_pacc2], 0             ; the sum of squares starts at zero for
+    mov word [sh_pacc2+2], 0           ; every fold; only the variance ones
+    mov word [sh_pacc2+4], 0           ; ever add to it
+    mov word [sh_pacc2+6], 0
 .args:
     call sh_prange
     cmp byte [si], ','
@@ -18686,6 +18781,7 @@ sh_pfunc:
 .done:
     call sh_pnest_leave
 .popout:
+    pop word [sh_stbusy]
     pop word [sh_phave]
     pop word [sh_pcnt]
     pop word [sh_pacc]
@@ -23653,6 +23749,10 @@ sh_f_match:     db 'MATCH', 0
 sh_f_vlookup:   db 'VLOOKUP', 0
 sh_f_hlookup:   db 'HLOOKUP', 0
 sh_f_lookup:    db 'LOOKUP', 0
+sh_f_var:       db 'VAR', 0
+sh_f_varp:      db 'VARP', 0
+sh_f_stdev:     db 'STDEV', 0
+sh_f_stdevp:    db 'STDEVP', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -23677,6 +23777,7 @@ sh_functab:
     dw sh_f_timevalue
     dw sh_f_rows, sh_f_columns, sh_f_areas, sh_f_index
     dw sh_f_match, sh_f_vlookup, sh_f_hlookup, sh_f_lookup
+    dw sh_f_var, sh_f_varp, sh_f_stdev, sh_f_stdevp
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -23775,7 +23876,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4015
+    OS88_BSS 4025
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -24499,7 +24600,12 @@ sh_lk_2c1     equ sh_lk_has2 + 2      ; ...and its corners, banked for the
 sh_lk_2r1     equ sh_lk_2c1 + 2       ; same reason the first reference's are
 sh_lk_2c2     equ sh_lk_2r1 + 2
 sh_lk_2r2     equ sh_lk_2c2 + 2
-sh_bss_end        equ sh_lk_2r2 + 2
+sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
+                                       ; sum, for the variance folds (81.34)
+sh_stbusy     equ sh_pacc2 + 8        ; byte: a variance fold is running. Only
+                                       ; ONE can be, for sh_pacc2's sake - see
+                                       ; 81.34.1
+sh_bss_end        equ sh_stbusy + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
