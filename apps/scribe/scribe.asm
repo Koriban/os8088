@@ -7214,9 +7214,9 @@ wd_load:
     call wd_isrtfimg            ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
     jc .nortf
     pop ax
-    call wd_rtfparse
-    jc .bad
-    jmp short .loaded
+    call wd_rtfparse            ; frees the OLD pictures ITSELF and may then
+    jc .bad                     ; register new ones (SPEC.md 86.6), so it
+    jmp short .loaded2          ; must not meet wd_pictfree on the way out
 .nortf:
     pop ax
     cmp ax, WD_HDRPAGE
@@ -7234,6 +7234,19 @@ wd_load:
                                 ; refuses whole and leaves the document
                                 ; untouched, and a refusal must not cost the
                                 ; pictures it was not replacing (68.15)
+                                ;
+                                ; THE RTF PATH DOES NOT COME THROUGH HERE. It
+                                ; frees at the top of wd_rtfparse instead,
+                                ; because that reader BUILDS pictures - one
+                                ; free after it would hand back the ones the
+                                ; file just supplied, and the table would come
+                                ; back empty with the text intact. It can
+                                ; free early without breaking the rule above,
+                                ; because wd_rtfparse zeroes [wd_len] on its
+                                ; first line: unlike wd_docparse it has never
+                                ; been able to refuse and leave the document
+                                ; untouched
+.loaded2:
     call wd_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
     call wd_ldpost              ; ...then the loaded facts go back
@@ -20868,6 +20881,19 @@ section .text
                             ; lives in a third segment (86.5.1)
     WDVAR wd_rpcol, 2       ; word: hex bytes on the line so far, so the
                             ; output wraps instead of being one enormous line
+    WDVAR wd_rpin,  2       ; word: the depth a \pict opened at, 0 = none.
+                            ; Shaped exactly like wd_rskip, which is the
+                            ; state it replaced for this one destination
+    WDVAR wd_rpseg, 2       ; word } the picture being COLLECTED: its claim,
+    WDVAR wd_rpoff, 2       ; word } how far in, and how big the header said
+    WDVAR wd_rpcap, 2       ; word } it would be
+    WDVAR wd_rpnib, 1       ; byte: a high nibble is held, waiting for its
+    WDVAR wd_rpacc, 1       ; byte: ...and this is it
+    WDVAR wd_rppl,  2       ; word } \wbmplanes, \wbmbitspixel,
+    WDVAR wd_rpbp,  2       ; word } \wbmwidthbytes, \picw and \pich, as the
+    WDVAR wd_rpwb,  2       ; word } group declares them. RTF's own defaults
+    WDVAR wd_rpiw,  2       ; word } are 1 plane of 1-bit pixels, so a group
+    WDVAR wd_rpih,  2       ; word } that says nothing is refused, not guessed
     WDVAR wd_pbuf,  32      ; the report. NOT wd_tbuf, which is 26 bytes and
                             ; sized for 'Loaded ' plus an 8.3 name. 32 is
                             ; TOAST_MAX (24) with room to compose past it and

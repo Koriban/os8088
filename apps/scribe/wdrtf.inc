@@ -661,6 +661,12 @@ wd_rtfparse:
     mov byte [wd_rat], 0
     mov word [wd_rdep], 0
     mov word [wd_rskip], 0
+    mov word [wd_rpin], 0           ; no \pict open, and no claim held from a
+    mov word [wd_rpseg], 0          ; parse that was refused half way
+    call wd_pictfree                ; the OLD document's pictures go back
+                                    ; HERE and not at wd_load's commit point,
+                                    ; which is past the ones this parse is
+                                    ; about to build (SPEC.md 86.6)
     xor si, si                      ; SI = where we are in the file
 .step:
     cmp si, [wd_dfsize]
@@ -680,10 +686,15 @@ wd_rtfparse:
     je .step
     cmp al, 10
     je .step
+    cmp word [wd_rpin], 0           ; inside \pict every character is data,
+    je .text                        ; and the hex pairs into bytes (86.6)
+    call wd_rpbyte
+    jmp .step
+.text:
     cmp word [wd_rskip], 0
     jne .step
     call wd_rput
-    jmp short .step
+    jmp .step
 .open:
     mov ax, [wd_rdep]
     cmp ax, WD_RTFDEPTH
@@ -693,7 +704,7 @@ wd_rtfparse:
     mov al, [wd_rat]
     mov [bx+wd_rstk], al
     inc word [wd_rdep]
-    jmp short .step
+    jmp .step
 .close:
     cmp word [wd_rdep], 0
     je .step
@@ -702,6 +713,13 @@ wd_rtfparse:
     shl bx, 1
     mov al, [bx+wd_rstk]
     mov [wd_rat], al
+    mov ax, [wd_rpin]               ; a \pict ends at the depth it opened at,
+    or ax, ax                       ; the same test wd_rskip makes below
+    jz .nopic
+    cmp [wd_rdep], ax
+    ja .nopic
+    call wd_rpfin
+.nopic:
     mov ax, [wd_rskip]
     or ax, ax
     jz .step
@@ -709,13 +727,13 @@ wd_rtfparse:
     cmp [wd_rdep], ax               ; started it closes
     ja .step
     mov word [wd_rskip], 0
-    jmp short .step
+    jmp .step
 .ctrl:
     call wd_rtok                    ; consumes the control word or symbol
-    jmp short .step
+    jmp .step
 .deep:
     mov byte [wd_dtrunc], 1         ; nested past what this reads: keep what
-    jmp short .done                 ; arrived and say so
+    jmp .done                 ; arrived and say so
 .done:
     call wd_rtail                   ; the tail paragraph's format
     clc
@@ -1047,12 +1065,253 @@ wd_rword:
     mov word [wd_pfb+2], 0
     jmp short .fin
 .n5:
+    cmp al, WDR_PICT
+    jb .n6
+    cmp al, WDR_PICPL
+    ja .n6
+    call wd_rword3                  ; the picture actions
+    jmp short .fin
+.n6:
     call wd_rword2                  ; the attribute, alignment and indent
                                     ; actions - split out because the block
                                     ; above ran out of short jumps
 .fin:
     pop di
     pop si
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; THE PICTURE READER (SPEC.md 86.6). \pict used to be a skipped destination
+; and is now a collected one. The shape mirrors wd_rskip exactly: [wd_rpin]
+; holds the depth the group opened at, .step routes text to the collector
+; while it is set, and .close finalises when that group's brace arrives.
+;
+; A GROUP THIS READER CANNOT USE IS DISCARDED AT THE CLOSING BRACE, which is
+; the same outcome skipping always gave. That is deliberately the only refusal
+; path: deciding mid-stream that a \wmetafile is not for us would mean a
+; second state to get wrong, and the bytes are bounded by the claim anyway.
+; wd_rpfin validates and frees; nothing reaches the document unless every
+; parameter agrees.
+; =============================================================================
+
+; wd_rword3 - the picture actions. in: AL = the action, CX = the parameter,
+; DX = it had one. Preserves all registers.
+wd_rword3:
+    push ax
+    cmp al, WDR_PICT
+    jne .param
+    mov ax, [wd_rdep]               ; the depth the group opened at, exactly
+    mov [wd_rpin], ax               ; as WDR_SKIP records it
+    mov word [wd_rpseg], 0
+    mov word [wd_rpoff], 0
+    mov byte [wd_rpnib], 0
+    mov word [wd_rppl], 1           ; RTF's own defaults for a \pict
+    mov word [wd_rpbp], 1
+    mov word [wd_rpwb], 0
+    mov word [wd_rpiw], 0
+    mov word [wd_rpih], 0
+    jmp short .out
+.param:
+    or dx, dx                       ; a picture parameter with no number is
+    jz .out                         ; not one
+    cmp al, WDR_PICWB
+    jne .n1
+    mov [wd_rpwb], cx
+    jmp short .out
+.n1:
+    cmp al, WDR_PICW
+    jne .n2
+    mov [wd_rpiw], cx
+    jmp short .out
+.n2:
+    cmp al, WDR_PICH
+    jne .n3
+    mov [wd_rpih], cx
+    jmp short .out
+.n3:
+    cmp al, WDR_PICBP
+    jne .n4
+    mov [wd_rpbp], cx
+    jmp short .out
+.n4:
+    mov [wd_rppl], cx
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_rpbyte - AL is a character inside a \pict group. Preserves all registers.
+;
+; Hex digits pair into bytes; everything else - the spaces and the line breaks
+; the writer puts in to keep the file readable - is ignored. The claim is taken
+; on the FIRST data byte and not at \pict, because its size comes from
+; \wbmwidthbytes and \pich and those are control words that arrive first.
+; -----------------------------------------------------------------------------
+wd_rpbyte:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    call wd_rhex                    ; the READER's hex-digit decoder, which
+    jc .out                         ; predates this and is exactly right
+    mov ah, al
+    cmp byte [wd_rpnib], 0
+    jne .low
+    mov [wd_rpacc], ah              ; the HIGH nibble, held for its partner
+    mov byte [wd_rpnib], 1
+    jmp short .out
+.low:
+    mov byte [wd_rpnib], 0
+    mov al, [wd_rpacc]
+    mov cl, 4
+    shl al, cl
+    or al, ah
+    cmp word [wd_rpseg], 0
+    jne .have
+    call wd_rpclaim                 ; first byte: size it and take it
+    jc .out
+.have:
+    mov bx, [wd_rpoff]
+    cmp bx, [wd_rpcap]
+    jae .out                        ; more data than the header described:
+    mov es, [wd_rpseg]              ; keep the picture it described and drop
+    mov [es:bx], al                 ; the rest, rather than run off the claim
+    inc word [wd_rpoff]
+.out:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_rpclaim - size the picture from its header and claim it.
+; out: CF=0 and [wd_rpseg]/[wd_rpcap] set; CF=1 = refused (and rpseg stays 0).
+; Preserves all but the flags.
+wd_rpclaim:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp word [wd_rppl], 1           ; ONE plane of FOUR-bit pixels is the only
+    jne .no                         ; arrangement this writes and the only one
+    cmp word [wd_rpbp], 4           ; it reads: 86.5 says why
+    jne .no
+    mov ax, [wd_rpwb]
+    or ax, ax
+    jz .no
+    mov cx, [wd_rpiw]
+    or cx, cx
+    jz .no
+    cmp cx, OS88IMG_WMAX            ; the same width ceiling os88img.inc has,
+    ja .no                          ; so a picture that arrives by this route
+    inc cx                          ; cannot be one the decoder would refuse
+    shr cx, 1
+    cmp ax, cx
+    jb .no                          ; a stride under (w+1)/2 cannot hold it
+    mov cx, [wd_rpih]
+    or cx, cx
+    jz .no
+    mul cx                          ; DX:AX = the whole picture
+    or dx, dx
+    jnz .no
+    mov [wd_rpcap], ax
+    add ax, 1023
+    jc .no
+    mov cl, 10
+    shr ax, cl
+    or ax, ax
+    jnz .kbok
+    mov ax, 1
+.kbok:
+    call OSAPI_MEM_CLAIM            ; out DX = the base segment
+    jc .no
+    mov [wd_rpseg], dx
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_rpfin - the \pict group has closed. Register it, or give it back.
+; Preserves all registers.
+;
+; A picture whose data ran short is refused WHOLE rather than padded: half a
+; picture drawn as if it were a picture is worse than the document arriving
+; without it, and 47 makes refusal an ordinary path.
+; -----------------------------------------------------------------------------
+wd_rpfin:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov word [wd_rpin], 0
+    mov byte [wd_rpnib], 0
+    cmp word [wd_rpseg], 0          ; never claimed: nothing we could use
+    je .out
+    mov ax, [wd_rpoff]
+    cmp ax, [wd_rpcap]
+    jb .drop                        ; short of what the header promised
+    mov ax, [wd_npic]
+    cmp ax, WD_PICMAX               ; a document may hold WD_PICMAX (68.15);
+    jae .drop                       ; the rest arrive as nothing
+    mov cl, 3
+    shl ax, cl                      ; * WD_PICREC
+    add ax, wd_pictab
+    mov di, ax
+    mov ax, [wd_rpiw]
+    mov [di], ax
+    mov ax, [wd_rpih]
+    mov [di+2], ax
+    mov ax, [wd_rpwb]
+    mov [di+4], ax
+    mov ax, [wd_rpseg]
+    mov [di+6], ax
+    mov ax, [wd_npic]               ; the CHP byte IS the index (68.15), and
+    inc word [wd_npic]              ; the character carries no other format.
+    call wd_rputp                   ; AL is that index and wd_rputp wants it
+    jmp short .out                  ; there - the character it writes is
+                                    ; WD_PICCH, which is the routine's own
+                                    ; business and not an argument to it
+.drop:
+    mov dx, [wd_rpseg]
+    call OSAPI_MEM_FREE
+.out:
+    mov word [wd_rpseg], 0
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_rputp - put WD_PICCH in the document with AL as its CHP byte, which is
+; the picture index rather than an attribute set. Preserves all registers.
+wd_rputp:
+    push ax
+    push bx
+    push es
+    mov bx, [wd_len]
+    cmp bx, [wd_cap]
+    jae .out                        ; the same ceiling every other character
+    mov ah, al                      ; meets; wd_rput's own refusal
+    mov es, [wd_dseg]
+    mov byte [es:bx], WD_PICCH
+    mov es, [wd_cseg]
+    mov [es:bx], ah
+    inc word [wd_len]
+.out:
+    pop es
     pop bx
     pop ax
     ret
@@ -1238,6 +1497,13 @@ WDR_FI      equ 20
 WDR_RI      equ 21
 WDR_SL      equ 22
 WDR_SB      equ 23
+WDR_PICT    equ 24                  ; \pict - the picture destination, which
+                                    ; this reader COLLECTS instead of skipping
+WDR_PICWB   equ 25                  ; \wbmwidthbytes  } the four that decide
+WDR_PICW    equ 26                  ; \picw           } whether the group is
+WDR_PICH    equ 27                  ; \pich           } one we can use, and
+WDR_PICBP   equ 28                  ; \wbmbitspixel   } what shape it is
+WDR_PICPL   equ 29                  ; \wbmplanes
 
 wd_r_bits:   db WDAT_BOLD, WDAT_ITAL, WDAT_SCAP, WDAT_HID
 wd_r_ulbits: db WDAT_UL, WDAT_WUL, WDAT_DUL
@@ -1295,8 +1561,18 @@ wd_r_tbl:
     db WDR_SKIP
     dw wd_rw_info
     db WDR_SKIP
-    dw wd_rw_pict
-    db WDR_SKIP
+    dw wd_rw_pict                   ; NOT WDR_SKIP any more (SPEC.md 86.6):
+    db WDR_PICT                     ; a \pict this reader understands is a
+    dw wd_rw_wbmwb                  ; picture, and one it does not is
+    db WDR_PICWB                    ; discarded at the closing brace, which
+    dw wd_rw_picw                   ; is the same outcome skipping gave
+    db WDR_PICW
+    dw wd_rw_pich
+    db WDR_PICH
+    dw wd_rw_wbmbp
+    db WDR_PICBP
+    dw wd_rw_wbmpl
+    db WDR_PICPL
     dw wd_rw_footnote
     db WDR_SKIP
     dw wd_rw_header
@@ -1337,6 +1613,12 @@ wd_rw_colortbl:   db 'colortbl', 0
 wd_rw_stylesheet: db 'stylesheet', 0
 wd_rw_info:       db 'info', 0
 wd_rw_pict:       db 'pict', 0
+wd_rw_wbmwb:      db 'wbmwidthbytes', 0
+wd_rw_wbmbp:      db 'wbmbitspixel', 0
+wd_rw_wbmpl:      db 'wbmplanes', 0
+wd_rw_picw:       db 'picw', 0      ; \picwgoal tokenises as its OWN word -
+wd_rw_pich:       db 'pich', 0      ; letters then digits - so these two do
+                                    ; not have to exclude it
 wd_rw_footnote:   db 'footnote', 0
 wd_rw_header:     db 'header', 0
 wd_rw_footer:     db 'footer', 0

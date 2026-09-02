@@ -77046,3 +77046,60 @@ into `wd_namebank` when `[wd_pictwant]` is set and puts it back after
 It is in **`apps/word` too** and is fixed in both. It was introduced with
 Insert ▸ Picture itself (§68.15) and had no way to show up until something
 saved after inserting — which is exactly what testing the RTF writer did.
+
+### 86.6 Reading it back: `\pict` becomes a collected destination
+
+`\pict` used to sit in `wd_r_tbl` with the action `WDR_SKIP`, beside
+`\fonttbl` and `\stylesheet` — swallowed whole to its matching brace (§68.8).
+It is `WDR_PICT` now, and the shape of the collector deliberately **mirrors
+`wd_rskip` exactly**: `[wd_rpin]` holds the depth the group opened at, the
+tokeniser's text case routes characters to `wd_rpbyte` while it is set, and the
+`}` case finalises when that group's brace arrives. One state machine, already
+proved by the one beside it.
+
+**A group this reader cannot use is discarded at the closing brace**, which is
+the same outcome skipping always gave. That is the only refusal path, on
+purpose: deciding mid-stream that a `\wmetafile` is not for us would be a
+second state to get wrong, and the bytes are bounded by the claim anyway.
+`wd_rpfin` validates and frees; nothing reaches the document unless every
+parameter agrees. RTF's own defaults for a `\pict` are one plane of 1-bit
+pixels, so a group that declares nothing is **refused, not guessed**.
+
+The claim is taken on the **first data byte** and not at `\pict`, because its
+size comes from `\wbmwidthbytes` and `\pich` and those are control words that
+arrive first. Data past what the header described is dropped rather than run
+off the claim; data short of it refuses the picture **whole**, because half a
+picture drawn as if it were a picture is worse than the document arriving
+without one (§47).
+
+#### 86.6.1 `wd_pictfree` had to move, and only on this path
+
+`wd_load` frees the old document's pictures at its commit point, *after* the
+parser has run — deliberately, because `wd_docparse` refuses whole and leaves
+the document untouched, and a refusal must not cost the pictures it was not
+replacing (§68.15).
+
+The RTF reader **builds** pictures, so one free after it hands back the ones
+the file just supplied: the text arrives and the table comes back empty. So the
+RTF path frees at the top of `wd_rtfparse` instead and skips the commit point's
+free. That is safe on this path and only on this path, because `wd_rtfparse`
+zeroes `[wd_len]` on its first line — unlike `wd_docparse` it has never been
+able to refuse and leave the document untouched, so there is nothing left to
+protect by waiting.
+
+#### 86.6.2 The bug that made the round trip look like it worked
+
+`wd_rpfin` ended by loading the new picture's index into `AL` and then, one
+line later, overwriting `AL` with `WD_PICCH` before calling `wd_rputp` — which
+takes the index in `AL` and writes the character itself. So every picture
+registered correctly and every `WD_PICCH` pointed at slot 1 when only slot 0
+existed.
+
+**It failed silently and looked like nothing had loaded at all.** `wd_picrec`
+refuses an index at or past `[wd_npic]`, so `wd_rowhc` fell through to the text
+path, `[wd_rowpic]` stayed `0xFFFF`, and `wd_penadv` gave the character the
+8-pixel cell an unknown index gets. The document was a picture wide and
+invisible — and the status bar said `Col 1`, which is also what an empty
+document says, because the caret sits *before* the character either way. Two
+independent readings agreeing on the wrong answer is what made it worth
+writing down.
