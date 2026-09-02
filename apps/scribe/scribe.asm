@@ -7229,23 +7229,17 @@ wd_load:
     call wd_docparse            ; CF=1 = refused whole, document untouched
     jc .bad
 .loaded:
-    call wd_pictfree            ; the OLD document's pictures, now that this
-                                ; read has committed. Not before: wd_docparse
-                                ; refuses whole and leaves the document
-                                ; untouched, and a refusal must not cost the
-                                ; pictures it was not replacing (68.15)
-                                ;
-                                ; THE RTF PATH DOES NOT COME THROUGH HERE. It
-                                ; frees at the top of wd_rtfparse instead,
-                                ; because that reader BUILDS pictures - one
-                                ; free after it would hand back the ones the
-                                ; file just supplied, and the table would come
-                                ; back empty with the text intact. It can
-                                ; free early without breaking the rule above,
-                                ; because wd_rtfparse zeroes [wd_len] on its
-                                ; first line: unlike wd_docparse it has never
-                                ; been able to refuse and leave the document
-                                ; untouched
+                                ; NO wd_pictfree HERE ANY MORE. Both readers
+                                ; BUILD pictures now (86.6/86.7), and a free
+                                ; after them hands back the ones the file just
+                                ; supplied - the text arrives and the table
+                                ; comes back empty. So each parser frees the
+                                ; old ones itself, at the point past its own
+                                ; last refusal: wd_rtfparse on its first line,
+                                ; wd_docparse after wd_dcompact. The rule this
+                                ; used to enforce is unchanged - a refusal
+                                ; still must not cost the pictures it was not
+                                ; replacing - it is enforced one level down
 .loaded2:
     call wd_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
@@ -20881,6 +20875,26 @@ section .text
                             ; lives in a third segment (86.5.1)
     WDVAR wd_rpcol, 2       ; word: hex bytes on the line so far, so the
                             ; output wraps instead of being one enormous line
+    WDVAR wd_dpicrun, 1     ; byte: the attribute run wd_dattr just found is
+                            ; a picture, so its CHPX is the fixed structure
+                            ; and not a sprm grpprl (SPEC.md 86.7)
+    WDVAR wd_dpicfc, WD_PICMAX * 2
+                            ; word each: where each picture's PICF landed,
+                            ; filled before the CHPX that names it is built
+    WDVAR wd_dpicn,  2      ; word } the picture being written, and the four
+    WDVAR wd_dpicwd, 2      ; word } table fields banked out of wd_pictab so
+    WDVAR wd_dpicht, 2      ; word } nothing has to hold a register on it
+    WDVAR wd_dpicst, 2      ; word } while DS is the picture's own segment
+    WDVAR wd_dpicsg, 2      ; word }
+    WDVAR wd_dpicbw, 2      ; word: bmWidthBytes, the 1bpp destination row
+    WDVAR wd_dpiclcb, 2     ; word: the whole record, 46 + bw * height
+    WDVAR wd_dpicx,  2      ; word } where the reduction has got to
+    WDVAR wd_dpicy,  2      ; word }
+    WDVAR wd_dpicbc, 2      ; word: bytes emitted on this row, so it pads
+    WDVAR wd_dpicac, 1      ; byte: the part-built output byte...
+    WDVAR wd_dpicnb, 1      ; byte: ...and how many bits are in it
+    WDVAR wd_dpicp,  2      ; word: the READER's cursor through the PICF
+                            ; records, which are in document order (86.7)
     WDVAR wd_rpin,  2       ; word: the depth a \pict opened at, 0 = none.
                             ; Shaped exactly like wd_rskip, which is the
                             ; state it replaced for this one destination

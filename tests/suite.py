@@ -142,7 +142,9 @@ FAST = [
     Row("stkbalance", "fast",
         py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
            "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
-           "apps/os88line.inc", "apps/word/word.asm", "apps/os88img.inc"), 1.5,
+           "apps/os88line.inc", "apps/word/word.asm", "apps/os88img.inc",
+           "apps/scribe/scribe.asm", "apps/scribe/wddoc.inc",
+           "apps/scribe/wdrtf.inc"), 1.5,
         "every `ret` in SHEET, CHART, WORD and the includes they share is "
         "reached at the depth it started at. `ch_legend` pushed SI and never "
         "popped it, so its `ret` jumped to the saved register: a black canvas "

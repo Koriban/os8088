@@ -77103,3 +77103,87 @@ invisible — and the status bar said `Col 1`, which is also what an empty
 document says, because the caret sits *before* the character either way. Two
 independent readings agreeing on the wrong answer is what made it worth
 writing down.
+
+### 86.7 `.DOC` converts down: a real PICF at one bit per pixel
+
+RTF keeps the colour (§86.5); `.DOC` is where a picture is **converted to what
+the format supports**. Every embedded picture in a Word 1.1a file that has been
+measured is `bmPlanes = 1, bmBitsPixel = 1` — both specimens, and there is no
+third to argue with — so a `.DOC` picture is monochrome and that is a property
+of the format rather than a shortcut taken here.
+
+**What was there before was worse than a gap.** `WD_PICCH` appeared in none of
+the three format engines, and `wd_docimg` copies the text with `rep movsb` — so
+the `0x01` went into the file raw, with no PICF anywhere and its CHP byte (a
+picture *index*) handed to `wd_dchpx` as character formatting. The file held a
+`chPicture` pointing at nothing. On the way back in, `wd_dcompact` dropped
+every control under 32 and it vanished.
+
+#### 86.7.1 The record, and where it goes
+
+The 46-byte PICF is written exactly as §86.5's derivation gives it, with
+`mm = 99`, `bmPlanes = 1`, `bmBitsPixel = 1`, `xExt`/`yExt` the pixel
+dimensions, the goal size in twips at 15 a pixel, and `mx`/`my` at 1000. A DDB
+row pads to a **word** — `SNAP.DOC`'s 44-pixel picture carries
+`bmWidthBytes = 6`, and 44 bits is 5.5 bytes, so 6 is ceil-to-even and the
+arithmetic closes on `lcb = 46 + 6 × 26 = 202`, which is exactly the spacing to
+that file's next record.
+
+The records go **immediately after the text and before the FKP pages**, which
+is both where Word puts them (`TECHREF.DOC`'s two sit between `fcMac` and the
+first FKP) and where they have to be here: `wd_dchps` builds the CHPX that
+names a picture, so the fc has to exist first.
+
+A picture is always **a run of one**. `wd_dattr` breaks the attribute run at
+one and `wd_dgrpc` emits, instead of a sprm grpprl, the twelve-byte structure
+both specimens carry with `fcPic` little-endian at bytes 8..10. `wd_dat1`
+already treated a `¶` specially because its CHP byte is a PAP index; a
+picture's is a picture index and needed the same.
+
+#### 86.7.2 The reduction, and why it round-trips
+
+`WD_PICWHITE` is a sixteen-bit mask: bit N set means colour N is light,
+computed once from `0.299R + 0.587G + 0.114B` over os8088's own palette against
+a midpoint, so 7 and 10..15 are white and 0..6, 8 and 9 are black. **A
+threshold and not a dither** — a dither is a decision about how a picture
+should *look*, and `docs/IMGCONV-PLAN.md` puts those on the host.
+
+Black-and-white art round-trips **exactly**, because 0 and 15 sit either side
+of the threshold and the reader expands 0 back to `CBLACK` and 1 to `CWHITE`.
+That is the case that matters: a `.DOC` picture came from monochrome art in the
+first place.
+
+#### 86.7.3 The reader walks records, not `fcPic`
+
+`wd_dpicr` runs after `wd_dcompact` — which now **keeps** `WD_PICCH`, the one
+control character below 32 this port renders — and pairs the Nth picture
+character with the Nth record. The records are in document order and the first
+begins exactly at `fcMac`, because `wd_docimg` writes the text, the trailing
+CR, and then calls `wd_dpicw`; each record's own `lcb` gives the next.
+
+So the CHPX is never parsed for this. It still **carries** `fcPic`, because
+that is what a real Word 1.1a reads and writing it costs nothing. The honest
+consequence: a `.DOC` whose pictures are laid out some other way will not load
+them here. os8088's `.DOC` is already its own dialect in the CHPX (§68.4.2) and
+this is inside that.
+
+#### 86.7.4 Two bugs, one of which the suite should have caught and now does
+
+**`wd_dpicr` pushed seven registers and popped six.** `SI` never came back, so
+`wd_docparse` returned through a shifted stack and **the document loaded
+completely empty — text and all**. It looked like a parser failure and was a
+missing `pop`. `tests/suite.py`'s `stkbalance` row is scoped to a file list and
+`apps/scribe/` was not on it; the three Scribe files are now, and re-breaking
+the routine makes the gate name it outright — `wd_dpicr: ret at depth +1`.
+This is the third time in this tree a push/pop mismatch has presented as
+something else entirely (§61.7, §68.15).
+
+**`wd_pictfree` had to move for `.DOC` too, and for §86.6.1's reason.**
+`wd_load` freed the old document's pictures at its commit point, *after* the
+parser — right, while parsers only consumed pictures. Both build them now, so
+the free handed back what the file had just supplied and the table came back
+empty with the text intact. Each parser frees the old ones itself now, at the
+point past its own last refusal: `wd_rtfparse` on its first line,
+`wd_docparse` after `wd_dcompact`. The rule the commit point enforced — that a
+refusal must not cost the pictures it was not replacing — is unchanged; it is
+enforced one level down.

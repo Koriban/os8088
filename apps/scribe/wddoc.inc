@@ -105,6 +105,28 @@ WD_MAXBTE    equ 64             ; FKP pages of each kind. 64 x 512 = 32KB,
 WD_MAXPCD    equ 1024           ; pieces a complex file may have. Read in
                                 ; place out of the staging image - no copy,
                                 ; so this bounds the WALK and nothing else
+; --- the picture record (SPEC.md 86.7) ---------------------------------------
+; Derived from two documents Microsoft itself wrote and cross-checked against
+; each other: TECHREF.DOC, which ships with Word 1.1a and holds exactly one
+; metafile picture, and SNAP.DOC, a Paint bitmap pasted into Word and saved.
+; They agree field for field and differ in `mm`, which is what makes `mm` the
+; discriminator rather than a guess.
+WD_PICF      equ 46             ; cbHeader, and the payload starts there
+WD_MM_BMP    equ 99             ; mm: a bitmap payload. A metafile is 7
+WD_PICTW     equ 15             ; twips a pixel, the 96dpi logical inch
+WD_PICWHITE  equ 0xFC80         ; WHICH OF THE SIXTEEN GO TO 1 when a 4bpp
+                                ; picture is reduced for a .DOC: bit N set
+                                ; means colour N is light. Computed once, from
+                                ; 0.299R + 0.587G + 0.114B over os8088's own
+                                ; palette against a midpoint - so 7 (light
+                                ; grey) and 10..15 are white, and 0..6, 8 and
+                                ; 9 are black. A threshold and not a dither: a
+                                ; dither is a decision about how a picture
+                                ; should LOOK, and docs/IMGCONV-PLAN.md puts
+                                ; those on the host. Black-and-white art -
+                                ; which is what a .DOC picture came from in
+                                ; the first place - round-trips EXACTLY,
+                                ; because 0 and 15 sit either side of it
 WD_GRPMAX    equ 24             ; the biggest grpprl either builder makes:
                                 ; six paragraph sprms at 3 bytes is 18
 
@@ -149,6 +171,10 @@ wd_docimg:
 .notext:
     mov al, 13
     stosb
+    call wd_dpicw                     ; THE PICTURES, BEFORE THE FKPs: their
+    jc .no                            ; offsets have to be known when the
+                                      ; CHPX that names them is built, and
+                                      ; wd_dchps runs below this (86.7)
     call wd_dalign                    ; the FKPs start on a page boundary
     mov ax, di                      ; --- the CHPX FKP pages ----------------
     call wd_dpnof
@@ -180,6 +206,239 @@ wd_docimg:
     ret
 .no:
     stc
+    ret
+
+; =============================================================================
+; wd_dpicw - write a PICF and its pixels for every picture in the document,
+; recording each one's fc in wd_dpicfc.
+; in/out: ES:DI, the staging cursor. CF=1 = it did not fit.
+;
+; RIGHT AFTER THE TEXT AND BEFORE THE FKP PAGES, because wd_dchps builds the
+; CHPX that names a picture and needs its fc to already exist. It is also
+; where Word puts them: TECHREF.DOC's two pictures sit between fcMac and the
+; first FKP page.
+;
+; THE 4bpp PICTURE IS REDUCED TO 1bpp HERE, and that is the conversion the
+; format asks for rather than a shortcut. Every embedded picture in a Word
+; 1.1a file that has been measured is bmPlanes 1, bmBitsPixel 1 - both
+; specimens, and there is no third to argue with - so a .DOC picture is
+; monochrome and 86.5's RTF is where the colour lives. WD_PICWHITE decides
+; which of the sixteen go to 1.
+;
+; A DDB row is padded to a WORD, not to a byte and not to a dword: SNAP.DOC's
+; 44-pixel picture carries bmWidthBytes 6, and 44 bits is 5.5 bytes, so 6 is
+; ceil to even and the arithmetic closes on lcb = 46 + 6*26 = 202, which is
+; exactly the spacing to that file's next record.
+; =============================================================================
+wd_dpicw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [wd_dpicn], 0          ; the picture being written
+.pic:
+    mov ax, [wd_dpicn]
+    cmp ax, [wd_npic]
+    jae .done
+    mov bx, ax
+    shl bx, 1
+    mov [bx+wd_dpicfc], di          ; where this one's PICF begins
+    mov cl, 3
+    shl ax, cl                      ; * WD_PICREC
+    add ax, wd_pictab
+    mov bx, ax
+    mov ax, [bx]                    ; bank the slot: every routine below
+    mov [wd_dpicwd], ax             ; works from bss, so nothing has to keep
+    mov ax, [bx+2]                  ; a register pointed at the table while
+    mov [wd_dpicht], ax             ; DS is the picture's own segment
+    mov ax, [bx+4]
+    mov [wd_dpicst], ax
+    mov ax, [bx+6]
+    mov [wd_dpicsg], ax
+    mov ax, [wd_dpicwd]             ; bmWidthBytes: ceil(w/8), rounded up to
+    add ax, 7                       ; an EVEN number. A DDB row is
+    mov cl, 3                       ; word-aligned - SNAP.DOC's 44-pixel
+    shr ax, cl                      ; picture carries 6, and 44 bits is 5.5
+    inc ax                          ; bytes, so 6 is ceil-to-even and the
+    and ax, 0xFFFE                  ; arithmetic closes on lcb = 46 + 6*26
+    mov [wd_dpicbw], ax             ; = 202, which is exactly the spacing to
+    mul word [wd_dpicht]            ; that file's NEXT record
+    or dx, dx
+    jnz .no
+    add ax, WD_PICF
+    jc .no
+    mov [wd_dpiclcb], ax
+    add ax, di                      ; ...and all of it has to fit what is left
+    jc .no
+    cmp ax, WD_DOCCAP * 1024 - 2
+    jae .no
+    call wd_dpichdr                 ; the 46 bytes...
+    call wd_dpicbits                ; ...and the reduced rows
+    inc word [wd_dpicn]
+    jmp short .pic
+.no:
+    stc
+    jmp short .out
+.done:
+    clc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_dpichdr - the 46-byte PICF at ES:DI, from the banked wd_dpic* words.
+; Advances DI by 46 and preserves everything else.
+wd_dpichdr:
+    push ax
+    push dx
+    mov ax, [wd_dpiclcb]            ; +0  lcb, a DWORD
+    stosw
+    xor ax, ax
+    stosw
+    mov ax, WD_PICF                 ; +4  cbHeader
+    stosw
+    mov ax, WD_MM_BMP               ; +6  mm = 99, the bitmap discriminator
+    stosw
+    mov ax, [wd_dpicwd]             ; +8  xExt  } SNAP.DOC carries the PIXEL
+    stosw                           ;           } dimensions here, not the
+    mov ax, [wd_dpicht]             ; +10 yExt  } display size
+    stosw
+    xor ax, ax
+    stosw                           ; +12 hMF, a live handle: 0 on disk
+    stosw                           ; +14 bmType
+    mov ax, [wd_dpicwd]             ; +16 bmWidth, pixels
+    stosw
+    mov ax, [wd_dpicht]             ; +18 bmHeight
+    stosw
+    mov ax, [wd_dpicbw]             ; +20 bmWidthBytes
+    stosw
+    mov ax, 0x0101                  ; +22 bmPlanes = 1, bmBitsPixel = 1
+    stosw
+    xor ax, ax                      ; +24 bmBits, a pointer: 0 on disk
+    stosw
+    stosw
+    mov ax, [wd_dpicwd]             ; +28 dxaGoal, twips
+    mov dx, WD_PICTW
+    mul dx
+    stosw
+    mov ax, [wd_dpicht]             ; +30 dyaGoal
+    mov dx, WD_PICTW
+    mul dx
+    stosw
+    mov ax, 1000                    ; +32 mx } tenths of a percent, so 1000 is
+    stosw                           ;        } 100% - both specimens agree
+    stosw                           ; +34 my } that this is the unit
+    xor ax, ax
+    stosw                           ; +36 } the four cropping words, zero in
+    stosw                           ; +38 } both specimens
+    stosw                           ; +40 }
+    stosw                           ; +42 }
+    mov ax, 4                       ; +44 the constant both specimens carry
+    stosw
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_dpicbits - the picture's rows at ES:DI, reduced 4bpp -> 1bpp.
+; Advances DI by bmWidthBytes * height; preserves everything else.
+;
+; Bit 7 is the LEFTMOST pixel, which is the same end os88img.inc reads a 1bpp
+; row from (SPEC.md 85) - so this and the decoder that will read it back agree
+; by construction rather than by testing.
+;
+; WD_PICWHITE is shifted right by the colour index and the low bit tested,
+; which is a sixteen-way lookup written as one shift. DS is the picture's own
+; segment for the fetch and the package for everything else, so it is swapped
+; around each pixel: two segment loads a pixel is nothing beside the shift.
+; -----------------------------------------------------------------------------
+wd_dpicbits:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [wd_dpicy], 0
+.row:
+    mov ax, [wd_dpicy]
+    cmp ax, [wd_dpicht]
+    jae .done
+    mul word [wd_dpicst]            ; DX:AX = the row's offset. wd_pictkeep
+    mov si, ax                      ; already proved a picture fits a segment
+    mov word [wd_dpicx], 0
+    mov byte [wd_dpicac], 0
+    mov byte [wd_dpicnb], 0
+    mov word [wd_dpicbc], 0
+.px:
+    mov ax, [wd_dpicx]
+    cmp ax, [wd_dpicwd]
+    jae .rowend
+    mov bx, ax
+    shr bx, 1
+    add bx, si
+    push ds
+    mov ds, [wd_dpicsg]
+    mov dl, [bx]
+    pop ds
+    test byte [wd_dpicx], 1         ; an even x is the HIGH nibble
+    jnz .low
+    mov cl, 4
+    shr dl, cl
+    jmp short .have
+.low:
+    and dl, 0x0F
+.have:
+    mov ax, WD_PICWHITE
+    mov cl, dl
+    shr ax, cl                      ; bit N of the mask says colour N is light
+    shl byte [wd_dpicac], 1
+    test al, 1
+    jz .black
+    or byte [wd_dpicac], 1
+.black:
+    inc byte [wd_dpicnb]
+    cmp byte [wd_dpicnb], 8
+    jb .nextpx
+    mov al, [wd_dpicac]
+    stosb
+    inc word [wd_dpicbc]
+    mov byte [wd_dpicac], 0
+    mov byte [wd_dpicnb], 0
+.nextpx:
+    inc word [wd_dpicx]
+    jmp short .px
+.rowend:
+    cmp byte [wd_dpicnb], 0         ; a width that is not a multiple of eight
+    je .pad                         ; leaves a part byte, shifted UP so its
+.flush:                             ; pixels stay leftmost
+    shl byte [wd_dpicac], 1
+    inc byte [wd_dpicnb]
+    cmp byte [wd_dpicnb], 8
+    jb .flush
+    mov al, [wd_dpicac]
+    stosb
+    inc word [wd_dpicbc]
+.pad:
+    mov cx, [wd_dpicbw]             ; ...and the row pads out to the stride
+    sub cx, [wd_dpicbc]
+    jbe .rowdone
+    xor al, al
+.padb:
+    stosb
+    loop .padb
+.rowdone:
+    inc word [wd_dpicy]
+    jmp .row                        ; NOT short: a row is a long way back
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; wd_dalign - advance ES:DI to the next 512-byte boundary, zeroing what it
@@ -235,6 +494,26 @@ wd_dgrpc:
     push ax
     push bx
     push dx
+    cmp byte [wd_dpicrun], 0        ; A PICTURE'S CHPX IS NOT A grpprl AND
+    je .attrs                       ; NOT AN ATTRIBUTE SET (SPEC.md 86.7).
+    xor ah, ah                      ; AL arrived as the picture INDEX; what
+    mov bx, ax                      ; goes out is the twelve-byte structure
+    shl bx, 1                       ; SNAP.DOC and TECHREF.DOC both carry,
+    mov ax, [bx+wd_dpicfc]          ; with fcPic little-endian at bytes 8..10
+    mov bx, wd_dgrp                 ; and the rest zero
+    mov word [bx+0], 0x0200         ; the two constants both specimens share
+    mov word [bx+2], 0
+    mov word [bx+4], 0
+    mov word [bx+6], 0
+    mov [bx+8], ax                  ; fcPic, low word...
+    mov byte [bx+10], 0             ; ...and its third byte. The staging claim
+                                    ; is WD_DOCCAP KB, so an fc here never
+                                    ; reaches the high byte - and the file's
+                                    ; own 64KB ceiling is checked in wd_droom
+    mov byte [bx+11], 3
+    mov cx, 12
+    jmp .out
+.attrs:
     mov dl, al
     xor bx, bx
     test dl, WDAT_BOLD
@@ -281,6 +560,7 @@ wd_dgrpc:
     add bx, 2
 .nu:
     mov cx, bx
+.out:
     pop dx
     pop bx
     pop ax
@@ -662,6 +942,15 @@ wd_dattr:
     push dx
     push ds
     mov bx, si
+    mov byte [cs:wd_dpicrun], 0
+    call wd_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
+    jne .notpic                     ; CHPX can carry its own fcPic and nothing
+    mov byte [cs:wd_dpicrun], 1     ; else shares it (SPEC.md 86.7)
+    call wd_dat1                    ; AL = the CHP byte, which for a picture
+    mov dl, al                      ; character is its INDEX (68.15)
+    inc bx
+    jmp short .end
+.notpic:
     call wd_dat1
     mov dl, al
     mov cx, [cs:wd_dvlen]
@@ -669,6 +958,8 @@ wd_dattr:
     inc bx
     cmp bx, cx
     jae .end
+    call wd_dispic                  ; ...and the run before one ends AT it
+    je .end
     call wd_dat1
     cmp al, dl
     je .scan
@@ -679,6 +970,21 @@ wd_dattr:
     pop dx
     pop cx
     pop bx
+    ret
+
+; wd_dispic - ZF=1 if the character at index BX is a picture. Clobbers DS only.
+wd_dispic:
+    push ax
+    cmp bx, [cs:wd_len]
+    jae .no
+    mov ds, [cs:wd_dseg]
+    mov al, [bx]
+    cmp al, WD_PICCH
+    pop ax
+    ret
+.no:
+    or al, 1                        ; anything that clears ZF
+    pop ax
     ret
 
 ; wd_dat1 - AL = the CHARACTER attribute at index BX (a ¶'s byte is its PAP
@@ -1123,6 +1429,19 @@ wd_docparse:
     call wd_dpapin                  ; the PAPX runs    -> the ¶ marks
     call wd_dtrim                   ; the file's last ¶ is our TAIL paragraph
     call wd_dcompact                ; drop what this port cannot render
+    call wd_pictfree                ; THE OLD DOCUMENT'S PICTURES GO BACK
+                                    ; HERE, not at wd_load's commit point,
+                                    ; which is past the ones wd_dpicr is
+                                    ; about to build (SPEC.md 86.7). Safe
+                                    ; this late: every refusal wd_docparse
+                                    ; can make is above this line, so by now
+                                    ; the read has committed and the rule the
+                                    ; commit point was protecting - that a
+                                    ; refusal must not cost the pictures it
+                                    ; was not replacing - still holds
+    call wd_dpicr                   ; ...then pair each surviving WD_PICCH
+                                    ; with its PICF. AFTER compaction, so the
+                                    ; indices it writes are the final ones
     mov al, [wd_pap_tail]           ; banked across wd_clamp, which clears it
     mov [wd_dtail], al
     clc
@@ -2142,8 +2461,10 @@ wd_dcompact:
     je .keep
     cmp al, 9
     je .keep
-    cmp al, 32
-    jb .drop
+    cmp al, WD_PICCH                ; a picture SURVIVES compaction now
+    je .keep                        ; (SPEC.md 86.7): it is the one control
+    cmp al, 32                      ; character below 32 this port renders,
+    jb .drop                        ; and wd_dpicr pairs it with its record
     cmp al, 126
     jbe .keep
 .drop:
@@ -2173,6 +2494,271 @@ wd_dcompact:
     ret
 
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; wd_dpicr - pair every WD_PICCH in the loaded text with its PICF, expanding
+; each one back to 4bpp. Preserves all registers; a picture that will not load
+; simply is not registered, and its character keeps the 8-pixel cell an
+; unknown index gets.
+;
+; IT WALKS THE RECORDS IN DOCUMENT ORDER AND DOES NOT READ fcPic. The writer
+; puts the PICFs immediately after the text, in the order their characters
+; appear, and the first one therefore begins exactly at fcMac - wd_docimg
+; writes the text, the trailing CR, and then calls wd_dpicw. Each record's own
+; lcb gives the next. So the Nth picture character takes the Nth record, and
+; the CHPX never has to be parsed for this at all.
+;
+; The CHPX still CARRIES fcPic, because that is what a real Word 1.1a reads
+; and writing it costs nothing. This reader does not need it, and the honest
+; consequence is worth stating: a .DOC whose pictures are laid out some other
+; way will not load them here. os8088's .DOC is already its own dialect in the
+; CHPX (SPEC.md 68.4.2), and this is inside that.
+; =============================================================================
+wd_dpicr:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [wd_stgseg]             ; the first record sits at fcMac, which
+    mov ax, [es:WDF_FCMAC]          ; wd_dvfib has already checked is inside
+    mov [wd_dpicp], ax              ; the file (WDF_FCMAC, offset 28)
+    xor bx, bx                      ; BX = the character index
+.scan:
+    cmp bx, [wd_len]
+    jae .out
+    push ds
+    mov ds, [cs:wd_dseg]
+    mov al, [bx]
+    pop ds
+    cmp al, WD_PICCH
+    jne .next
+    cmp word [wd_npic], WD_PICMAX
+    jae .out                        ; past what a document may hold (68.15)
+    call wd_dpic1                   ; -> CF=0 and the picture registered
+    jc .out                         ; a record that does not parse ends the
+    mov ax, [wd_npic]               ; walk: the ones after it are found by
+    dec ax                          ; stepping over this one, so there is
+    push ds                         ; nothing left to trust
+    mov ds, [cs:wd_cseg]
+    mov [bx], al                    ; the CHP byte IS the index (68.15)
+    pop ds
+.next:
+    inc bx
+    jmp short .scan
+.out:
+    pop es
+    pop di
+    pop si                          ; SEVEN pushed, and for one build six came
+    pop dx                          ; back: the missing pop left wd_docparse
+    pop cx                          ; returning through a shifted stack, and
+    pop bx                          ; the document loaded EMPTY - text and all
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_dpic1 - read the PICF at [wd_dpicp] and register it, advancing [wd_dpicp]
+; past the record. out: CF=0 registered; CF=1 = it is not one we can use.
+; -----------------------------------------------------------------------------
+wd_dpic1:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [wd_stgseg]
+    mov si, [wd_dpicp]
+    mov ax, si
+    add ax, WD_PICF
+    jc .no
+    cmp ax, [wd_dfsize]             ; the header has to be inside the file
+    ja .no
+    cmp word [es:si+4], WD_PICF     ; cbHeader
+    jne .no
+    cmp word [es:si+6], WD_MM_BMP   ; mm - a metafile is 7 and this port has
+    jne .no                         ; no renderer for one
+    cmp byte [es:si+22], 1          ; bmPlanes
+    jne .no
+    cmp byte [es:si+23], 1          ; bmBitsPixel: the only depth a .DOC
+    jne .no                         ; picture has ever been measured at
+    mov ax, [es:si+16]              ; bmWidth
+    mov [wd_dpicwd], ax
+    or ax, ax
+    jz .no
+    cmp ax, OS88IMG_WMAX
+    ja .no
+    mov ax, [es:si+18]              ; bmHeight
+    mov [wd_dpicht], ax
+    or ax, ax
+    jz .no
+    mov ax, [es:si+20]              ; bmWidthBytes
+    mov [wd_dpicbw], ax
+    or ax, ax
+    jz .no
+    mov cx, [wd_dpicwd]             ; ...and it must cover the width it claims
+    add cx, 7                       ; at one bit a pixel: ceil(w/8)
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    cmp ax, cx
+    jb .no
+    mul word [wd_dpicht]            ; DX:AX = the pixel bytes
+    or dx, dx
+    jnz .no
+    mov cx, ax
+    add ax, WD_PICF
+    jc .no
+    add ax, [wd_dpicp]
+    jc .no
+    cmp ax, [wd_dfsize]             ; ...and all of it is inside the file
+    ja .no
+    mov ax, [wd_dpicwd]             ; the 4bpp destination: (w+1)/2, no pad
+    inc ax
+    shr ax, 1
+    mov [wd_dpicst], ax
+    mul word [wd_dpicht]
+    or dx, dx
+    jnz .no
+    mov cx, ax
+    add ax, 1023
+    jc .no
+    push cx
+    mov cl, 10
+    shr ax, cl
+    pop cx
+    or ax, ax
+    jnz .kb
+    mov ax, 1
+.kb:
+    call OSAPI_MEM_CLAIM            ; out DX = the base segment
+    jc .no
+    mov [wd_dpicsg], dx
+    call wd_dpicexp                 ; 1bpp -> 4bpp, into that claim
+    mov ax, [wd_npic]               ; the slot: w, h, stride, segment
+    mov cl, 3
+    shl ax, cl
+    add ax, wd_pictab
+    mov di, ax
+    mov ax, [wd_dpicwd]
+    mov [di], ax
+    mov ax, [wd_dpicht]
+    mov [di+2], ax
+    mov ax, [wd_dpicst]
+    mov [di+4], ax
+    mov ax, [wd_dpicsg]
+    mov [di+6], ax
+    inc word [wd_npic]
+    mov ax, [wd_dpicbw]             ; step past the record: lcb bytes, and a
+    mul word [wd_dpicht]            ; record is padded to an even boundary -
+    add ax, WD_PICF                 ; the spacing SNAP.DOC's two pictures
+    inc ax                          ; showed
+    and ax, 0xFFFE
+    add [wd_dpicp], ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; wd_dpicexp - expand the 1bpp rows at ES:[wd_dpicp]+46 into the 4bpp claim.
+; Bit set -> CWHITE, clear -> CBLACK, which is the inverse of the reduction
+; WD_PICWHITE performs on the way out, so black-and-white art makes the round
+; trip byte for byte. Preserves all registers.
+; -----------------------------------------------------------------------------
+wd_dpicexp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [wd_dpicy], 0
+.row:
+    mov ax, [wd_dpicy]
+    cmp ax, [wd_dpicht]
+    jae .done
+    mul word [wd_dpicbw]            ; the SOURCE row
+    add ax, [wd_dpicp]
+    add ax, WD_PICF
+    mov si, ax
+    mov ax, [wd_dpicy]
+    mul word [wd_dpicst]            ; ...and the destination one
+    mov di, ax
+    mov word [wd_dpicx], 0
+    mov byte [wd_dpicac], 0
+.px:
+    mov ax, [wd_dpicx]
+    cmp ax, [wd_dpicwd]
+    jae .rowend
+    mov bx, ax
+    push cx
+    mov cl, 3
+    shr bx, cl
+    pop cx
+    add bx, si
+    mov es, [wd_stgseg]
+    mov dl, [es:bx]                 ; the byte holding this pixel
+    mov cx, [wd_dpicx]
+    and cx, 7
+    mov ax, 0x0080
+.bit:
+    or cx, cx
+    jz .masked
+    shr ax, 1
+    dec cx
+    jmp short .bit
+.masked:
+    test dl, al                     ; bit 7 is the LEFTMOST pixel
+    mov al, 0                       ; CBLACK
+    jz .have
+    mov al, 15                      ; CWHITE
+.have:
+    test byte [wd_dpicx], 1
+    jnz .odd
+    push cx
+    mov cl, 4
+    shl al, cl
+    pop cx
+    mov [wd_dpicac], al             ; an even x is the HIGH nibble and waits
+    jmp short .nextpx
+.odd:
+    or al, [wd_dpicac]
+    mov es, [wd_dpicsg]
+    mov [es:di], al
+    inc di
+.nextpx:
+    inc word [wd_dpicx]
+    jmp short .px
+.rowend:
+    test word [wd_dpicwd], 1        ; an odd width leaves one pixel in the
+    jz .rowdone                     ; high nibble with no partner, and the
+    mov al, [wd_dpicac]             ; stride (w+1)/2 has the room for it
+    mov es, [wd_dpicsg]
+    mov [es:di], al
+.rowdone:
+    inc word [wd_dpicy]
+    jmp .row
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; wd_ldpost - what every loader ends with, after wd_clamp
 ; Preserves all registers.
 ;
