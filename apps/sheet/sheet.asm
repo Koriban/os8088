@@ -16155,6 +16155,7 @@ sh_rpn_fid:
     db 18, 97                         ; ATAN ATAN2
     db 142, 143, 43, 56, 57           ; SLN SYD PMT PV FV
     db 11                             ; NPV
+    db 58, 144                        ; NPER DDB
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16189,6 +16190,7 @@ sh_rpn_fvar:
     db 0, 0                           ; ATAN ATAN2 - all fixed-arity
     db 0, 0, 1, 1, 1                  ; SLN SYD, and PMT/PV/FV(3..5)
     db 1                              ; NPV(2..15)
+    db 1, 1                           ; NPER(3..5) DDB(4..5)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19344,7 +19346,7 @@ sh_pfin:
     jmp .zero                         ; financial function inside another's
 .free:                                ; arguments refuses instead (47)
     mov byte [sh_fnbusy], 1
-    mov cx, 5
+    mov cx, 6
     call sh_pfargs
     mov [sh_trsi], si
     cmp word [sh_fnid], 93
@@ -19353,6 +19355,10 @@ sh_pfin:
     je .syd
     cmp word [sh_fnid], 98
     je .npv
+    cmp word [sh_fnid], 99
+    je .nper
+    cmp word [sh_fnid], 100
+    je .ddb
     jmp .annuity
 ; --- SLN(cost, salvage, life) = (cost - salvage) / life ---------------------
 .sln:
@@ -19610,6 +19616,166 @@ sh_pfin:
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
+; --- NPER(rate, pmt, pv, fv, type) -----------------------------------------
+; r = 0 is -(pv + fv)/pmt, and otherwise
+;   nper = ln((A - fv) / (A + pv)) / ln(1+r)   with A = pmt*(1+t*r)/r
+; A LOGARITHM OF A NEGATIVE means the payments never retire the balance - the
+; loan grows - and #NUM! is what Excel answers for it.
+.nper:
+    cmp word [sh_fnn], 3
+    jb .badargs
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jnc .nperr
+    mov si, sh_fnarg + 16             ; r = 0: -(pv + fv)/pmt
+    call fp_unpack_a
+    cmp word [sh_fnn], 4
+    jb .npr0
+    mov si, sh_fnarg + 24
+    call fp_unpack_b
+    call fp_add
+.npr0:
+    mov si, sh_fnarg + 8
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    xor byte [fp_as], 1
+    jmp .store
+.nperr:
+    mov si, sh_fnarg + 8              ; A = pmt * (1 + t*r) / r
+    call fp_unpack_a
+    mov di, sh_fnt
+    call fp_pack_a
+    call sh_fntype                    ; A = (1 + t*r)
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_mul
+    mov si, sh_fnarg
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    mov di, sh_fnu
+    call fp_pack_a                    ; u = A
+    call fp_azero                     ; A - fv
+    mov di, sh_fnt
+    call fp_pack_a
+    cmp word [sh_fnn], 4
+    jb .nprnf
+    mov si, sh_fnarg + 24
+    call fp_unpack_a
+    mov di, sh_fnt
+    call fp_pack_a
+.nprnf:
+    mov si, sh_fnt
+    call fp_unpack_b
+    mov si, sh_fnu
+    call fp_unpack_a
+    call fp_sub
+    mov di, sh_fnt
+    call fp_pack_a                    ; t = A - fv
+    mov si, sh_fnarg + 16             ; u = A + pv
+    call fp_unpack_b
+    mov si, sh_fnu
+    call fp_unpack_a
+    call fp_add
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_div
+    jc .divzero
+    test byte [fp_as], 1              ; the ratio must be positive to have a
+    jnz .badnum                       ; logarithm, and a negative one means the
+    call fp_ln                        ; balance never comes down
+    jc .badnum
+    mov di, sh_fnt
+    call fp_pack_a
+    mov si, sh_fnarg                  ; / ln(1+r)
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    call fp_ln
+    jc .badnum
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_div
+    jc .divzero
+    jmp .store
+; --- DDB(cost, salvage, life, period) ---------------------------------------
+; Double-declining balance, walked one period at a time because that is what
+; it IS: each period takes twice the straight-line fraction of what is LEFT,
+; and the walk stops taking anything once the book value reaches salvage. The
+; answer is the amount taken in `period` alone, not the total.
+;
+; Excel 2.1's DDB has no factor argument - that arrived later - so the factor
+; is 2, applied as `book * 2 / life`.
+.ddb:
+    cmp word [sh_fnn], 4
+    jb .badargs
+    mov si, sh_fnarg                  ; t = the running book value
+    call fp_unpack_a
+    mov di, sh_fnt
+    call fp_pack_a
+    call fp_azero                     ; u = this period's depreciation
+    mov di, sh_fnu
+    call fp_pack_a
+    mov si, sh_fnarg + 24             ; how many periods to walk
+    call fp_unpack_a
+    call fp_a2i
+    jc .badnum
+    mov cx, ax
+    or cx, cx
+    jle .badnum
+.ddbl:
+    mov si, sh_fnt                    ; book * 2 / life
+    call fp_unpack_a
+    inc word [fp_ae]
+    mov si, sh_fnarg + 16
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    mov di, sh_fnu
+    call fp_pack_a
+    mov si, sh_fnt                    ; ...but never below salvage
+    call fp_unpack_a
+    mov si, sh_fnarg + 8
+    call fp_unpack_b
+    call fp_sub
+    mov di, sh_tr0
+    call fp_pack_a                    ; tr0 = book - salvage
+    mov si, sh_fnu
+    call fp_unpack_a
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_cmpab
+    jle .ddbok
+    mov si, sh_tr0                    ; clipped
+    call fp_unpack_a
+    mov di, sh_fnu
+    call fp_pack_a
+.ddbok:
+    test byte [sh_fnu+7], 0x80        ; and never negative: once the book value
+    jz .ddbpos                        ; is at salvage there is nothing left to
+    call fp_azero                     ; take
+    mov di, sh_fnu
+    call fp_pack_a
+.ddbpos:
+    mov si, sh_fnt                    ; book -= this period's amount
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_sub
+    mov di, sh_fnt
+    call fp_pack_a
+    dec cx
+    jnz .ddbl
+    mov si, sh_fnu
+    call fp_unpack_a
+    jmp .store
 .divzero:
     mov byte [sh_evalerr], SH_ERR_DIV0
     jmp short .zero
@@ -19636,6 +19802,30 @@ sh_pfin:
     pop bx
     ret
 
+; sh_fntype - A = (1 + type*rate), which is 1 when no type came or it is zero.
+; Preserves everything but A.
+sh_fntype:
+    push si
+    cmp word [sh_fnn], 5
+    jb .one
+    mov si, sh_fnarg + 32
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jc .one
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    pop si
+    ret
+.one:
+    mov si, fp_c_one
+    call fp_unpack_a
+    pop si
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_pfargs - parse up to CX comma-separated numeric arguments into sh_fnarg[],
 ; [sh_fnn] = how many were there. Every slot is ZEROED first, so a function
@@ -19650,8 +19840,8 @@ sh_pfargs:
     push di
     mov word [sh_fnn], 0
     push cx
-    mov di, sh_fnarg                  ; wipe all five slots
-    mov cx, 20
+    mov di, sh_fnarg                  ; wipe all six slots
+    mov cx, 24
 .wipe:
     mov word [di], 0
     add di, 2
@@ -19660,7 +19850,7 @@ sh_pfargs:
 .arg:
     cmp byte [si], ')'
     je .done
-    cmp word [sh_fnn], 5
+    cmp word [sh_fnn], 6
     jae .done
     push cx
     call sh_pcmp
@@ -24489,6 +24679,8 @@ sh_f_pmt:       db 'PMT', 0
 sh_f_pv:        db 'PV', 0
 sh_f_fv:        db 'FV', 0
 sh_f_npv:       db 'NPV', 0
+sh_f_nper:      db 'NPER', 0
+sh_f_ddb:       db 'DDB', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -24518,6 +24710,7 @@ sh_functab:
     dw sh_f_sin, sh_f_cos, sh_f_tan, sh_f_asin, sh_f_acos
     dw sh_f_atan, sh_f_atan2
     dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
+    dw sh_f_nper, sh_f_ddb
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -24616,7 +24809,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4139
+    OS88_BSS 4147
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -25349,14 +25542,15 @@ sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
                                        ; sum, for the variance folds (81.34)
 sh_tr0        equ sh_pacc2 + 8        ; 8 } two packed doubles that survive a
 sh_tr1        equ sh_tr0 + 8          ; 8 } call to fp_ln, which OWNS fp_e0..3
-sh_fnarg      equ sh_tr1 + 8          ; 5 x 8: the financial functions' parsed
+sh_fnarg      equ sh_tr1 + 8          ; 6 x 8: the financial functions' parsed
                                        ; arguments (81.37). Not banked per
                                        ; nesting level - forty bytes against a
                                        ; 384-byte stack - so a financial
                                        ; function inside another's arguments
                                        ; REFUSES, the shape 81.32.1 and 81.34.1
                                        ; already take
-sh_fnn        equ sh_fnarg + 40       ; word: how many arrived
+sh_fnn        equ sh_fnarg + 48       ; word: how many arrived. SIX slots:
+                                       ; IPMT, PPMT and RATE take that many
 sh_fnid       equ sh_fnn + 2          ; word: which function is running
 sh_fnbusy     equ sh_fnid + 2          ; byte: one of them is parsing
 sh_fnt        equ sh_fnbusy + 2       ; 8: a packed temporary

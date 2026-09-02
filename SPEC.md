@@ -75797,11 +75797,31 @@ Python:
 | `=NPV(0.1,100,200,300)` | 481.592 | 481.592787 |
 | `=PMT(0.01,60,-20000,0,1)` | 440.484 | 440.4841 — paid at the start |
 
-**Seven remain**: `DDB`, `IPMT`, `PPMT`, `NPER`, `RATE`, `IRR` and `MIRR`.
-`NPER` is one more rearrangement of the identity above and `IPMT`/`PPMT` fall
-out of `PMT` and `FV`; `DDB` wants a loop over periods; and `RATE`, `IRR` and
-`MIRR` are **root-finders** — the first functions here that iterate toward an
-answer rather than computing one, and the first that can fail to converge.
+#### 81.37.3 NPER and DDB
+
+`NPER` is one more rearrangement of the same identity:
+`ln((A − fv)/(A + pv)) / ln(1+r)` with `A = pmt·(1+t·r)/r`, and `r = 0` again
+its own case at `−(pv + fv)/pmt`. **A logarithm of a negative** there means the
+payments never retire the balance — the debt grows — and `#NUM!` is Excel's
+answer for it.
+
+`DDB` is walked **one period at a time**, because that is what it *is*: each
+period takes twice the straight-line fraction of what is **left**, and the walk
+stops taking anything once the book value reaches salvage. The answer is the
+amount taken in `period` alone, not the total. Excel 2.1's `DDB` has no factor
+argument — that arrived later — so the factor is 2.
+
+Verified (`screenshots/sheet-financial-nper-ddb.png`):
+`=NPER(0.01,-500,20000)` 51.3375 (51.337552), `=NPER(0,-100,1000)` 10,
+`=DDB(10000,1000,5,1)` 4000, `=DDB(…,2)` 2400, and `=DDB(…,5)` **296** — the
+period where the salvage clip bites, and the one worth having a case for.
+
+The argument store is **six** slots now, because `IPMT`, `PPMT` and `RATE` take
+that many.
+
+**Five remain**: `IPMT` and `PPMT` fall out of `PMT` and `FV`; and `RATE`, `IRR`
+and `MIRR` are **root-finders** — the first functions here that iterate toward
+an answer rather than computing one, and the first that can fail to converge.
 
 
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
