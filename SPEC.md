@@ -75526,6 +75526,55 @@ by a fetch from a *second* reference, so it wants one more set of banked
 corners and is a small addition to this rather than a new mechanism.
 
 
+### 81.33 LOOKUP, and the lookup category closes
+
+Excel gives `LOOKUP` two forms and this has both:
+
+- **`LOOKUP(key, vector, result)`** — match along `vector`, answer with the
+  element of `result` at the same **position**. The two need not be the same
+  shape or even the same length.
+- **`LOOKUP(key, array)`** — search the array's first row or column, whichever
+  is longer, and answer from its **last** one.
+
+Which way the first reference runs is decided by shape: **wider than tall
+searches its row, anything else its column.** That makes a single cell a column
+of one and a square array a set of columns, both as Excel has them.
+
+It is **always approximate** — there is no match-type argument — so the key
+finds the largest entry not over it, and a key below every entry is `#N/A`.
+
+**A result vector shorter than the position found is `#N/A`**, not a clamp. The
+position is real and there is simply no element to answer with; clamping would
+hand back a different row's value and say nothing.
+
+`sh_plklookup` is entered from `sh_plksearch` with the key and the first
+reference already banked, and shares its exits — so the whole of `LOOKUP` is
+the walk it already had plus a second set of corners. That is what made it the
+right function to finish the category with rather than a new mechanism.
+
+**Verified live** (`screenshots/sheet-lookup-lookup.png`), over `A1:A4` =
+10/20/30/40 with `AAA`–`DDD` in B:
+
+| | |
+|---|---|
+| `=LOOKUP(30,A1:A4,B1:B4)` | `CCC` — the vector form |
+| `=LOOKUP(25,A1:A4,B1:B4)` | `BBB` — approximate |
+| `=LOOKUP(30,A1:B4)` | `CCC` — the array form, answering from the last column |
+| `=LOOKUP(5,A1:A4,B1:B4)` | `#N/A` — below every entry |
+| `=LOOKUP(30,A1:A4,B1:B2)` | `#N/A` — the result vector is too short |
+
+**The category is complete**: `ROWS`, `COLUMNS`, `AREAS`, `INDEX`, `MATCH`,
+`VLOOKUP`, `HLOOKUP`, `LOOKUP`. Sheet knows **77** of Excel 2.1d's ~120
+(its 131 less the 11 database functions deferred until a database app exists).
+What remains is three groups, and each is gated on one thing rather than on
+effort: the **statistical** rest needs nothing new; **trigonometry and the
+logarithms** need a transcendental layer `apps/os88fp.inc` does not have
+(add, subtract, multiply, divide, square root, floor, round and truncate is
+all of it today); the **financial** thirteen need real `pow` from that same
+layer; and the **matrix and array** functions need array formulas, which is an
+evaluation-model change rather than a function.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

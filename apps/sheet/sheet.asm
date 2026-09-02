@@ -16140,7 +16140,8 @@ sh_rpn_fid:
     db 76, 77, 75, 65                 ; ROWS COLUMNS AREAS INDEX - Excel's own
                                        ; ftab, the same table CHOOSE(100),
                                        ; ROW(8) and COLUMN(9) above came from
-    db 64, 102, 101                   ; MATCH VLOOKUP HLOOKUP - and THIS ORDER
+    db 64, 102, 101, 28               ; MATCH VLOOKUP HLOOKUP LOOKUP - and
+                                       ; THIS ORDER
                                        ; IS THE CONTRACT: these three tables
                                        ; are indexed by position in sh_functab,
                                        ; so a row inserted anywhere but the
@@ -16171,7 +16172,8 @@ sh_rpn_fvar:
     db 0, 0, 0, 0, 0                  ; TIME HOUR MINUTE SECOND DATEVALUE
     db 0                              ; TIMEVALUE - all fixed-arity in 2.1
     db 0, 0, 0, 1                     ; ROWS COLUMNS AREAS INDEX(2..3)
-    db 1, 0, 0                        ; MATCH(2..3) VLOOKUP HLOOKUP
+    db 1, 0, 0, 1                     ; MATCH(2..3) VLOOKUP HLOOKUP
+                                       ; LOOKUP(2..3)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19359,9 +19361,12 @@ sh_plksearch:
     mov [sh_lk_r2], ax
     mov word [sh_lk_idx], 1           ; a VLOOKUP with no third argument would
     mov word [sh_lk_mt], 1            ; want column 1; MATCH with none wants
-    cmp byte [si], ','                ; type 1. TWO fields - see sh_lkone
+    mov word [sh_lk_has2], 0          ; type 1. TWO fields - see sh_lkone
+    cmp byte [si], ','
     jne .noidx
     inc si
+    cmp di, 76                        ; LOOKUP's third argument is a RESULT
+    je .arg2ref                       ; VECTOR, not a number at all
     call sh_pcmp
     call sh_acc_toint
     jc .bad
@@ -19371,12 +19376,27 @@ sh_plksearch:
     jmp short .noidx
 .isidx:
     mov [sh_lk_idx], ax
+    jmp short .noidx
+.arg2ref:
+    call sh_pargref
+    jnc .bad
+    mov word [sh_lk_has2], 1
+    mov ax, [sh_arg1col]
+    mov [sh_lk_2c1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_lk_2r1], ax
+    mov ax, [sh_arg2col]
+    mov [sh_lk_2c2], ax
+    mov ax, [sh_arg2row]
+    mov [sh_lk_2r2], ax
 .noidx:
     cmp di, 73                        ; --- the walk ------------------------
     je .match
     cmp di, 74
     je .vlook
-    jmp short .hlook
+    cmp di, 75
+    je .hlook
+    jmp sh_plklookup
 .match:
     mov ax, [sh_lk_r2]                ; MATCH takes a vector: a single column
     cmp ax, [sh_lk_r1]                ; walks down, anything else walks across
@@ -19458,6 +19478,94 @@ sh_plksearch:
 ; sorted, and an unsorted one gives an answer this makes no promise about
 ; rather than an error - which is Excel's behaviour too.
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; sh_plklookup - LOOKUP, in both of the forms Excel gives it (SPEC.md 81.33).
+; Entered from sh_plksearch with the key and the first reference already
+; banked, so it shares that routine's exits.
+;
+;   LOOKUP(key, vector, result)  the VECTOR form: match along `vector`, answer
+;                                with the element of `result` at the same
+;                                POSITION - the two need not be the same shape
+;                                or even the same length
+;   LOOKUP(key, array)           the ARRAY form: search the array's first row
+;                                or column, whichever is longer, and answer
+;                                from its LAST one
+;
+; It is always approximate - there is no match-type argument - so the key
+; finds the largest entry not over it, and a key below every entry is #N/A.
+; =============================================================================
+sh_plklookup:
+    mov word [sh_lk_mt], 1            ; LOOKUP has no exact form
+    mov ax, [sh_lk_c2]                ; which way does the first reference
+    sub ax, [sh_lk_c1]                ; run? WIDER THAN TALL searches its row,
+    mov bx, [sh_lk_r2]                ; anything else its column - which makes
+    sub bx, [sh_lk_r1]                ; a single cell a column of one, and a
+    cmp ax, bx                        ; square array a set of columns, both as
+    ja .across                        ; Excel has them
+    call sh_lkdown
+    mov cx, 0                         ; CX = 0, the walk went DOWN
+    jmp short .found
+.across:
+    call sh_lkacross
+    mov cx, 1
+.found:
+    cmp word [sh_lk_got], 0
+    jne .fetch
+    jmp sh_plksearch.nomatch
+.fetch:
+    mov dx, [sh_lk_pos]               ; DX = the 1-based position
+    cmp word [sh_lk_has2], 0
+    jne .vector
+; --- the ARRAY form: the same array's last row or column ---------------------
+    or cx, cx
+    jz .arrdown
+    mov ax, [sh_lk_c1]                ; searched across: answer from the LAST
+    add ax, dx                        ; ROW, in the column that matched
+    dec ax
+    mov bx, [sh_lk_r2]
+    jmp short .read
+.arrdown:
+    mov ax, [sh_lk_c2]                ; searched down: the LAST COLUMN, in the
+    mov bx, [sh_lk_r1]                ; row that matched
+    add bx, dx
+    dec bx
+    jmp short .read
+; --- the VECTOR form: the result vector's Nth element ------------------------
+.vector:
+    mov ax, [sh_lk_2r2]
+    cmp ax, [sh_lk_2r1]
+    jne .vcol
+    mov ax, [sh_lk_2c1]               ; a result vector that is one ROW
+    add ax, dx
+    dec ax
+    cmp ax, [sh_lk_2c2]
+    ja .short
+    mov bx, [sh_lk_2r1]
+    jmp short .read
+.vcol:
+    mov bx, [sh_lk_2r1]               ; ...or one COLUMN
+    add bx, dx
+    dec bx
+    cmp bx, [sh_lk_2r2]
+    ja .short
+    mov ax, [sh_lk_2c1]
+.read:
+    push ax                           ; an empty cell answers 0, the rule
+    push bx                           ; INDEX and VLOOKUP both follow
+    xor ax, ax
+    call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    pop bx
+    pop ax
+    call sh_getcell2
+    jmp sh_plksearch.fin
+.short:
+    jmp sh_plksearch.nomatch          ; a result vector shorter than the
+                                       ; position found is #N/A: there is no
+                                       ; element to answer with, and a
+                                       ; silently clamped one would be a
+                                       ; different row's value
+
 sh_lkdown:
     push ax
     push bx
@@ -23544,6 +23652,7 @@ sh_f_index:     db 'INDEX', 0
 sh_f_match:     db 'MATCH', 0
 sh_f_vlookup:   db 'VLOOKUP', 0
 sh_f_hlookup:   db 'HLOOKUP', 0
+sh_f_lookup:    db 'LOOKUP', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -23567,7 +23676,7 @@ sh_functab:
     dw sh_f_time, sh_f_hour, sh_f_minute, sh_f_second, sh_f_datevalue
     dw sh_f_timevalue
     dw sh_f_rows, sh_f_columns, sh_f_areas, sh_f_index
-    dw sh_f_match, sh_f_vlookup, sh_f_hlookup
+    dw sh_f_match, sh_f_vlookup, sh_f_hlookup, sh_f_lookup
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -23666,7 +23775,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4005
+    OS88_BSS 4015
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -24385,7 +24494,12 @@ sh_lk_pos     equ sh_lk_hit + 2       ; ...and its 1-based position
 sh_lk_got     equ sh_lk_pos + 2       ; word: anything matched at all
 sh_lk_mt      equ sh_lk_got + 2       ; word: MATCH's match type, which is NOT
                                        ; sh_lk_idx - see sh_lkone
-sh_bss_end        equ sh_lk_mt + 2
+sh_lk_has2    equ sh_lk_mt + 2        ; word: LOOKUP was given a RESULT vector
+sh_lk_2c1     equ sh_lk_has2 + 2      ; ...and its corners, banked for the
+sh_lk_2r1     equ sh_lk_2c1 + 2       ; same reason the first reference's are
+sh_lk_2c2     equ sh_lk_2r1 + 2
+sh_lk_2r2     equ sh_lk_2c2 + 2
+sh_bss_end        equ sh_lk_2r2 + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
