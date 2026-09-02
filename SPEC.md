@@ -76863,3 +76863,87 @@ encoder, by the same hands as the decoder.
   an **all-zero image** — which a decoder that wrote nothing would have
   passed. It also reached only 8 of the 16 colours. The replacement is checked
   for distinct values and even counts at both widths.
+
+## 86. SCRIBE (`apps/scribe/`) — the fork of WORD
+
+A second word processor, forked from `apps/word/word.asm` (§68) so that it can
+diverge from it without either one having to care. It is **not** a second
+build of the same source and not a rename of the first: `SCRIBE.O88` and
+`WORD.O88` are two packages, and a disk may carry both, neither or either.
+
+`make scribe` builds the package, `make scribedisk` its floppy. Neither is in
+`all` and SCRIBE is on no shipped disk — WORD is the one that ships. Putting
+both on the apps floppy would spend 49KB to show two word processors that at
+the fork point differ only in their name. `apps/cword` is on demand for the
+same reason (§73.12).
+
+### 86.1 It keeps `wd_` and the `wd*.inc` filenames, deliberately
+
+Every symbol, every include filename and every line number is the one
+`word.asm` has. `diff -r apps/word apps/scribe` is therefore **exactly what
+the fork changed**, and an upstream fix to Word can be read straight across
+instead of being translated first.
+
+A mechanical `sc_` rename over 20,000 lines is the obvious thing to do and is
+the wrong thing to do. The assembler does not care — a package owns its
+segment (§20.2) and there is no global namespace to collide in — so the rename
+would buy nothing except tidiness, and it would cost the one thing a
+long-lived fork needs most, which is a readable diff against what it forked
+from. NASM resolves `wddoc.inc`, `wdrtf.inc` and `wdutil.inc` out of
+`apps/scribe/` because that is the `-I` on this package's own Makefile rule,
+which is also why the two cannot accidentally share a header.
+
+**What differs is identity and nothing else**, and there is a short list of
+it: the `OS88_HEADER` name, the icon glyph, the overlay's filename, the About
+box, the title bar and its prefix, and the association — which SCRIBE does not
+declare. The title prefix is *shorter* than Word's (`'Scribe - '` against
+`'Microsoft Word - '`), which is the safe direction: `wd_compttl` composes into
+a fixed bss buffer sized for the longer one, so a shorter prefix cannot overrun
+it.
+
+The icon is the same page silhouette with an **S** where Word's has a **W** —
+two word processors, and the outline should say so. The mask is untouched: it
+is the page dilated 1px and does not depend on the glyph inside.
+
+### 86.2 It declares no association, and that is the design
+
+WORD declares `.DOC` (§68.4). If SCRIBE declared it too, the owner of a
+double-click on a disk holding both would be **whichever registered last** —
+`kernel/assoc.inc`'s `assoc_ext_new` path ends in `mov [bx+3], dl`, which
+**overwrites** the row's app index rather than refusing the second claim. So
+the winner would be decided by directory order, silently, and would move when
+a disk was rebuilt. An extension has one owner.
+
+SCRIBE still opens and saves `.DOC`: File ▸ Open and Save As are untouched and
+it reads and writes exactly the bytes WORD does. What it does not do is take
+the double-click away.
+
+`apps/cword` arrived at the same place from the other side and is the
+precedent — it claims `.RTF` (`cword.c`'s `os88_assoc_set`) rather than fight
+for `.DOC`. Declaring **nothing** is the stronger form of that, because there
+is no third extension anything in this tree actually writes; inventing one
+would put an owner on documents that do not exist.
+
+To give SCRIBE the association instead: restore the `OS88_ASSOC16` block, set
+flags bit 1 in `OS88_HEADER`, and drop `word.o88` from the disk. Two edits,
+and the second is the one that matters.
+
+### 86.3 Verified
+
+`'SCRIBE' image=49483 bss=9206 icon=yes assoc=0` — 58,689 of `APP_MAX_SIZE`'s
+61,440, so the fork has the same headroom Word does, and `assoc=0` is the
+packager confirming §86.2 rather than a comment claiming it.
+
+On one 1440KB floppy carrying `word.o88`, `WORD.OVL`, `scribe.o88`,
+`SCRIBE.OVL`, `WELCOME.DOC` and a 1bpp `.BMP`, under QEMU:
+
+- the Locator shows **both**, with the S page and the W page telling them
+  apart at 16x16;
+- SCRIBE launches and says `Scribe` in the kernel bar, `Scribe - DOCUMENT.DOC`
+  in the title bar, and shows the S in the taskbar;
+- Insert ▸ Picture works, which is the load-bearing one: the decoder lives in
+  the overlay (§68.15), so a picture on the page proves `SCRIBE.OVL` was found
+  under its **new** name and far-called — a stale `WORD.OVL` string would have
+  produced "SCRIBE.OVL is not on this disk" instead;
+- double-clicking `WELCOME.DOC` opens **Microsoft Word**, with SCRIBE still
+  running beside it. That is §86.2 demonstrated rather than asserted.

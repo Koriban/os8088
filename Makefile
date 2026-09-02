@@ -1244,6 +1244,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
+        scribe scribedisk \
         cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
         xt-runcpm 286-runcpm \
@@ -3972,6 +3973,43 @@ $(BUILD)/word720.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC t
 
 $(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
+
+# --- SCRIBE: the fork of WORD (SPEC.md 86) -----------------------------------
+# A SEPARATE PACKAGE and not a second build of the same source. apps/scribe/
+# is a copy of apps/word/, keeping every symbol name, every include filename
+# and every line number, so `diff -r apps/word apps/scribe` is exactly what
+# the fork changed and an upstream fix reads straight across. NASM finds the
+# wd*.inc out of apps/scribe/ because that is this rule's own -I, which is
+# also why the two cannot accidentally share a header.
+#
+# It is NOT in `all` and it is not on any shipped disk: WORD is the one that
+# ships, SCRIBE is the fork, and putting both on the apps floppy would spend
+# 49KB to show two word processors that currently differ only in their name.
+# `make scribedisk` builds its floppy on demand, cword's arrangement (SPEC.md
+# 73.12) and for cword's reason.
+SCRIBESRC := apps/scribe/scribe.asm apps/scribe/wddoc.inc apps/scribe/wdrtf.inc \
+             apps/scribe/wdutil.inc
+
+$(BUILD)/scribe.bin: $(SCRIBESRC) apps/os88api.inc apps/os88ui.inc $(SBSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error $(PKGSBDEF) -I apps/ -I apps/scribe/ -o $@ apps/scribe/scribe.asm
+	@echo "scribe: $(call FILESIZE,$@) bytes"
+
+# One recipe for all three, for the reason word.o88's rule spells out above:
+# splitting the cut from the package let make decide the .o88 was up to date
+# against the PREVIOUS trim and ship a stale image.
+$(BUILD)/scribe.o88: $(BUILD)/scribe.bin tools/os88ovl.py tools/os88pkg.py
+	python3 tools/os88ovl.py $(BUILD)/scribe.bin -o $(BUILD)/SCRIBE.OVL \
+		--trim $(BUILD)/scribe.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/scribe.trim.bin -o $@
+
+$(BUILD)/SCRIBE.OVL: $(BUILD)/scribe.o88 ;
+
+scribe: $(BUILD)/scribe.o88
+
+scribedisk: $(BUILD)/scribe.img
+
+$(BUILD)/scribe.img: $(BUILD)/scribe.o88 $(BUILD)/SCRIBE.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/scribe.o88 $(BUILD)/SCRIBE.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
 # --- the .DOC format gate (ON DEMAND: `make wordcheck`) ----------------------
 # There is no copy of Word here to open the output with, and "it round-trips

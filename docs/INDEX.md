@@ -391,6 +391,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | Picture decoders (`apps/os88img.inc`) |
+| 86 | SCRIBE (`apps/scribe/`) — the fork of WORD |
 
 ## docs/
 
