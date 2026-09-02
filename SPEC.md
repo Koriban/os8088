@@ -75637,6 +75637,58 @@ thirteen all wait on a transcendental layer `apps/os88fp.inc` does not have.
 The matrix and array functions wait on array formulas.
 
 
+### 81.35 LN, LOG10, EXP, PI and LOG — the logarithms arrive
+
+Blocked on one thing and one thing only: `apps/os88fp.inc` had no logarithm
+(§84.8 is the layer that fixed it). The value model has been IEEE-754 double
+since stage 4.0, so nothing else stood in the way.
+
+`LN` and `EXP` are one call each. **`LOG10` and `LOG(number, base)` are a ratio
+of two logarithms**, and the order they are taken in is load-bearing:
+
+**The RAW values are banked, not their logarithms.** `fp_ln` owns `fp_e0`
+through `fp_e3` as its own scratch, so an intermediate parked there does not
+survive the second call. `LOG10(1000)` came back **0** and `LOG(100)` came back
+**0.04825** — the second dividing by a `ln(10)` computed over the wreckage of
+the first. `sh_tr0`/`sh_tr1` are Sheet's own and outlive it, and parking the
+*arguments* rather than their logs there also means nothing of value crosses
+the `sh_pcmp` that parses the base.
+
+A logarithm of zero or a negative is **`#NUM!`**, the answer `SQRT` already
+gives for the same kind of question.
+
+#### 81.35.1 A function name may end in digits
+
+`LOG10` is the first name in this app that does, and it did not work: `sh_pident`
+collects letters (and the `.` that `ERROR.TYPE` needs) and stops at a digit, so
+`LOG10(1000)` lexed as the **column** `LOG` and the **row** `10` and went down
+the cell-reference path. It answered 0 and said nothing.
+
+Excel's own rule settles it: letters then digits then `(` is a **function**;
+letters then digits then anything else is a **cell**. So the digits are looked
+past without being consumed, and only a `(` beyond them pulls them into the
+name. `A1` and `$A$1` reach the reference path untouched — which is what
+`=A1+A1` answering 14 in the verification below is there to prove, and not a
+throwaway.
+
+#### 81.35.2 Verified
+
+`screenshots/sheet-logarithms.png`, with 7 in A1:
+
+| | |
+|---|---|
+| `=LN(2)` | 0.69314 |
+| `=LOG10(1000)` | 3 |
+| `=EXP(1)` | 2.71828 |
+| `=PI()` | 3.14159 |
+| `=LOG(8,2)` | 3 |
+| `=LOG(100)` | 2 — the base defaults to ten |
+| `=LN(-1)` | `#NUM!` |
+| `=LOG10(0.001)` | −3 |
+| `=EXP(LN(5))` | 5 — a round trip through both series |
+| `=A1+A1` | 14 — the lexer change did not cost the reference path |
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
@@ -76792,6 +76844,54 @@ about the coprocessor path**, so the count reads `8087 -` there rather than
 execute by deliberately breaking `fpx_mul` and watching the hardware count go
 to 23 while the software count stayed at 0 — without that check, a dispatcher
 that never fired would report exactly the same `ALL PASS` as one that worked.
+
+
+### 84.8 The transcendental layer: `ln`, `exp`, `pow`
+
+**None of this is free on hardware either**, which is the first thing to say
+about it. The **8087 has no `FSIN` or `FCOS`** — those are 387 and later — and
+even a machine with a coprocessor in the socket builds them out of `FPTAN`,
+`FPATAN`, `F2XM1` and `FYL2X`. So this is shared work rather than a software
+fallback for something the FPU would otherwise have done.
+
+**`fp_ln`.** `value = f · 2^E` with `f` in `[√½, √2)`, so
+`ln(value) = E·ln2 + ln(f)`. The range reduction is the whole accuracy
+argument: an unreduced series over `[1,2)` has `s` up to ⅓ and needs three
+times the terms for the same answer. Then `ln(f) = 2·atanh(s)` with
+`s = (f−1)/(f+1)`, summed as `s + s³/3 + s⁵/5 + …` — twelve terms, because
+`|s| ≤ 0.1716` so `s² ≤ 0.0295` and `0.0295¹²` is under 1e-18, past the 53 bits
+a double carries. `ln(x)` for `x ≤ 0` returns CF=1 and leaves zero; naming the
+error is the *cell's* business, as it is everywhere else in this file.
+
+**`fp_exp`.** `k = round(x/ln2)` and `r = x − k·ln2`, so `|r| ≤ 0.3466` and
+`e^x = 2^k · e^r`; fifteen terms of `1 + r + r²/2! + …` take `0.3466¹⁵/15!` far
+below the last bit. **`2^k` goes onto the exponent** rather than through a
+multiply — it costs nothing and cannot round.
+
+**`fp_pow`.** A **whole-number exponent goes by repeated squaring**, and not
+for speed: `exp(y·ln x)` is inexact for cases everyone expects to be exact —
+`10^2` must be 100, not 99.999999999998 — and it cannot do a negative base at
+all, where `(−2)³` is perfectly ordinary. Everything else is `e^(y·ln x)`, for
+`x > 0` only. `0^0` is an error, as Excel has it.
+
+The three share four caller-declared temporaries `fp_e0`–`fp_e3` and a counter
+`fp_ek`, which is why those names joined the block a caller must provide.
+**They own that scratch**: a caller that parks something there across a call
+to `fp_ln` loses it, and §81.35 is what that cost the first time.
+
+#### 84.8.1 Tested to a tolerance, and the tolerance is the point
+
+`apps/fptest`'s algebraic rows compare **bytes** — `fp_sqrt`'s Newton iteration
+really is bit-exact against the host. **A truncated series is not**, and
+demanding it would be demanding the wrong thing. So `fp_ln` and `fp_exp` are
+compared exactly on the top three words and to within **64 units in the last
+place** on the fourth: a hundred times tighter than the series' own error bound
+and a hundred times looser than a bit-for-bit demand it cannot meet.
+
+Twelve cases, every expected value computed on the host from Python's `math`
+and packed as a real double: `LN` of 1, 2, 10, 0.5, 1e10 and 0.001; `EXP` of 0,
+1, −1, 10, 0.5 and −5. **All pass, on both the software and the 8087 path**
+(`screenshots/fptest-transcendental.png`).
 
 
 ## 85. Picture decoders (`apps/os88img.inc`)

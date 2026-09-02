@@ -16148,6 +16148,9 @@ sh_rpn_fid:
                                        ; matching place writes another
                                        ; function's ftab index into the file
     db 46, 194, 12, 193               ; VAR VARP STDEV STDEVP
+    db 22, 23, 21, 19, 109            ; LN LOG10 EXP PI LOG - Excel's ftab
+                                       ; again, and LOG is 109 because 2.1's
+                                       ; LOG takes a BASE where 1.x's did not
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16177,6 +16180,7 @@ sh_rpn_fvar:
                                        ; LOOKUP(2..3)
     db 1, 1, 1, 1                     ; VAR VARP STDEV STDEVP - every one
                                        ; of them 1..14 arguments
+    db 0, 0, 0, 0, 1                  ; LN LOG10 EXP PI, and LOG(1..2)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -17728,6 +17732,47 @@ sh_pident:
     inc si
     jmp .collect
 .doneletters:
+    ; A NAME MAY END IN DIGITS - LOG10 is the first one that does, and it lexed
+    ; as the column LOG followed by the row 10 (81.35). Excel's own rule is
+    ; what settles it: letters then digits then '(' is a FUNCTION, and letters
+    ; then digits then anything else is a CELL. So the digits are looked past
+    ; without being consumed, and only a '(' beyond them pulls them into the
+    ; name - a lookahead, so A1 and $A$1 reach the reference path untouched.
+    push si
+    push cx
+.lkdig:
+    mov al, [si]
+    cmp al, '0'
+    jb .lkend
+    cmp al, '9'
+    ja .lkend
+    inc si
+    inc cx
+    jmp short .lkdig
+.lkend:
+    cmp byte [si], '('
+    jne .nodigname
+    cmp cx, SH_NAME_MAX
+    ja .nodigname
+    pop cx
+    pop si
+.digname:                             ; take them after all
+    mov al, [si]
+    cmp al, '0'
+    jb .digdone
+    cmp al, '9'
+    ja .digdone
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp short .digname
+.digdone:
+    mov byte [di], 0
+    jmp .isfunc
+.nodigname:
+    pop cx
+    pop si
     mov byte [di], 0
     cmp byte [si], '$'                ; ...and before the row digits
     jne .norowdollar
@@ -18669,6 +18714,8 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 81                         ; 81+ are the LOGARITHMS and their
+    jae .dotrans                       ; friends, on the transcendental layer
     cmp ax, 77                         ; 77+ are the VARIANCE folds. They walk
     jb .notstat                        ; their arguments exactly as SUM does,
     cmp byte [sh_stbusy], 0            ; so they rejoin the fold path below
@@ -18681,7 +18728,7 @@ sh_pfunc:
     jmp .typed                         ; refused rather than answered (81.34.1)
 .notstat:
     cmp ax, 69                         ; 69+ are the LOOKUP functions, whose
-    jae .dolookup                      ; answer may be a REFERENCE's contents
+    jae .dolookup2                     ; answer may be a REFERENCE's contents
                                        ; and so may be TEXT (81.31). This test
                                        ; comes FIRST because the chain below
                                        ; is descending and 69 is also >= 58
@@ -18757,7 +18804,11 @@ sh_pfunc:
     call sh_pinfo
     mov dx, ax
     jmp .typed
-.dolookup:
+.dotrans:
+    call sh_ptrans
+    mov dx, ax
+    jmp .typed
+.dolookup2:
     call sh_plookup
     mov dx, ax
     jmp .done                          ; NOT .typed, for sh_ptext's reason: an
@@ -19253,6 +19304,135 @@ sh_pargclass:
     pop cx
     pop bx
     ret
+
+; =============================================================================
+; sh_ptrans - LN, LOG10, EXP, PI and LOG, ids 81 and up (SPEC.md 81.35).
+; in: AX = the id, SI just past '('. out: the answer in sh_acc, SI past ')'.
+;
+; Every one of these was blocked on apps/os88fp.inc having no logarithm, and
+; on nothing else - the value model has been IEEE-754 double since stage 4.0.
+; =============================================================================
+sh_ptrans:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax
+    cmp di, 84
+    je .pi                            ; PI() takes no argument at all
+    call sh_pcmp                      ; ...every other one takes a number
+    call sh_acc_load_a
+    cmp di, 83
+    je .exp
+    test byte [sh_acc+7], 0x80        ; A LOGARITHM OF A NEGATIVE, or of zero,
+    jnz .domain                       ; is #NUM! - the same answer SQRT gives
+    cmp di, 81
+    jne .ratio                        ; LOG10 and LOG bank the RAW number and
+    call fp_ln                        ; take BOTH logarithms at the end; only
+    jc .domain                        ; LN takes one here
+    jmp .store
+.ratio:
+; --- LOG10 and LOG(number, base): a RATIO of two logarithms ------------------
+; THE RAW VALUES ARE BANKED, NOT THEIR LOGARITHMS. fp_ln owns fp_e0..fp_e3 as
+; its own scratch, so an intermediate parked there does not survive the second
+; call - LOG10(1000) came back 0 and LOG(100) came back 0.04825, both from
+; dividing by a ln(10) computed over the wreckage of ln(1000). sh_tr0/sh_tr1
+; are Sheet's own and outlive it; parking the raw arguments there also means
+; nothing of value crosses the sh_pcmp that parses the base.
+    call sh_acc_store
+    push si
+    mov si, sh_acc
+    mov bx, sh_tr0
+    call sh_trcopy                    ; sh_tr0 = the number
+    pop si
+    mov ax, 10                        ; the base, defaulting to ten
+    call sh_acc_int
+    push si
+    mov si, sh_acc
+    mov bx, sh_tr1
+    call sh_trcopy
+    pop si
+    cmp di, 85
+    jne .lognum                       ; LOG10 keeps the ten
+    cmp byte [si], ','
+    jne .lognum
+    inc si
+    call sh_pcmp
+    test byte [sh_acc+7], 0x80
+    jnz .domain
+    push si
+    mov si, sh_acc
+    mov bx, sh_tr1
+    call sh_trcopy                    ; sh_tr1 = the base the user named
+    pop si
+.lognum:
+    push si
+    mov si, sh_tr0                    ; ln(number)
+    call fp_unpack_a
+    call fp_ln
+    push di
+    mov di, sh_tr0
+    call fp_pack_a
+    pop di
+    mov si, sh_tr1                    ; ln(base) - fp_ln may do what it likes
+    call fp_unpack_a                  ; to fp_e0..3 between the two, and does
+    call fp_ln
+    pop si
+    jc .domain
+    call fp_a_to_b
+    push si
+    mov si, sh_tr0
+    call fp_unpack_a
+    pop si
+    call fp_div
+    jmp short .store
+.exp:
+    call fp_exp
+    jmp short .store
+.pi:
+    mov si, sh_c_pi
+    call fp_unpack_a
+    jmp short .store
+.domain:
+    mov byte [sh_evalerr], SH_ERR_NUM
+    call fp_azero
+.store:
+    call sh_acc_store
+    call sh_skipargs
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    xor ax, ax
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_trcopy - eight bytes from DS:SI to DS:BX. BX and not DI, because DI holds
+; the FUNCTION ID all the way through sh_ptrans and using it here quietly
+; destroyed it. NOT `rep movsw` either: ES in this app is a claim far more
+; often than the package (81.32.2).
+sh_trcopy:
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, 4
+.c:
+    mov ax, [si]
+    mov [bx], ax
+    add si, 2
+    add bx, 2
+    loop .c
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_c_pi: dq 3.14159265358979323846
 
 ; =============================================================================
 ; sh_plookup - the LOOKUP functions, ids 69 and up (SPEC.md 81.31).
@@ -23753,6 +23933,11 @@ sh_f_var:       db 'VAR', 0
 sh_f_varp:      db 'VARP', 0
 sh_f_stdev:     db 'STDEV', 0
 sh_f_stdevp:    db 'STDEVP', 0
+sh_f_ln:        db 'LN', 0
+sh_f_log10:     db 'LOG10', 0
+sh_f_exp:       db 'EXP', 0
+sh_f_pi:        db 'PI', 0
+sh_f_log:       db 'LOG', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -23778,6 +23963,7 @@ sh_functab:
     dw sh_f_rows, sh_f_columns, sh_f_areas, sh_f_index
     dw sh_f_match, sh_f_vlookup, sh_f_hlookup, sh_f_lookup
     dw sh_f_var, sh_f_varp, sh_f_stdev, sh_f_stdevp
+    dw sh_f_ln, sh_f_log10, sh_f_exp, sh_f_pi, sh_f_log
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -23876,7 +24062,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4025
+    OS88_BSS 4075
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -24515,7 +24701,12 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-sh_cry_key         equ fp_sw + 2        ; the key column and cell, banked
+fp_e0             equ fp_sw + 2        ; --- the transcendental layer (84.8)
+fp_e1             equ fp_e0 + 8        ; four packed temporaries and a
+fp_e2             equ fp_e1 + 8        ; counter, which fp_ln, fp_exp and
+fp_e3             equ fp_e2 + 8        ; fp_pow share
+fp_ek             equ fp_e3 + 8
+sh_cry_key         equ fp_ek + 2        ; the key column and cell, banked
 sh_cry_keyrow      equ sh_cry_key + 2   ; before any carry moves them
 sh_cry_i           equ sh_cry_keyrow + 2 ; the carry loops' index
 sh_cry_c1          equ sh_cry_i + 2        ; sh_sort_carry's column span...
@@ -24602,7 +24793,10 @@ sh_lk_2c2     equ sh_lk_2r1 + 2
 sh_lk_2r2     equ sh_lk_2c2 + 2
 sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
                                        ; sum, for the variance folds (81.34)
-sh_stbusy     equ sh_pacc2 + 8        ; byte: a variance fold is running. Only
+sh_tr0        equ sh_pacc2 + 8        ; 8 } two packed doubles that survive a
+sh_tr1        equ sh_tr0 + 8          ; 8 } call to fp_ln, which OWNS fp_e0..3
+                                       ; as its own temporaries (81.35)
+sh_stbusy     equ sh_tr1 + 8        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
 sh_bss_end        equ sh_stbusy + 2

@@ -384,7 +384,8 @@ fpt_runall:
     add si, 8
     mov cx, [si+2]                    ; the digit count, for ROUND
     mov ax, [si]                      ; the operation
-    or ax, ax
+    mov [fpt_mop], ax                 ; ...banked, because the comparison below
+    or ax, ax                         ; treats a series result differently
     jnz .mnotsqrt
     call fp_sqrt
     jmp .mgot
@@ -399,6 +400,16 @@ fpt_runall:
     call fp_floor
     jmp .mgot
 .mnotfloor:
+    cmp ax, 4
+    jne .mnotln
+    call fp_ln
+    jmp .mgot
+.mnotln:
+    cmp ax, 5
+    jne .mnotexp
+    call fp_exp
+    jmp .mgot
+.mnotexp:
     call fp_round
 .mgot:
     mov di, fpt_got
@@ -412,6 +423,17 @@ fpt_runall:
     mov ax, [si]
     cmp ax, [di]
     je .mcmpn
+    cmp cx, 4                         ; THE LOW WORD OF A SERIES RESULT MAY
+    jne .mne                          ; DIFFER, and only that one. fp_ln and
+    cmp word [fpt_mop], 4             ; fp_exp sum a truncated series, so they
+    jb .mne                           ; are accurate to about 1e-14 relative
+    sub ax, [di]                      ; and not to the last bit - where sqrt,
+    jns .mabs                         ; trunc, floor and round are exact and
+    neg ax                            ; are still compared exactly. 64 units
+.mabs:                                ; in the last place is a hundred times
+    cmp ax, 64                        ; tighter than the series' own error
+    jbe .mcmpn                        ; bound and a hundred times looser than
+.mne:                                 ; a bit-for-bit demand it cannot meet
     xor bp, bp
 .mcmpn:
     add si, 2
@@ -610,7 +632,7 @@ fpt_atof:
     times (10 - 7) db 0
     dw 0x0000, 0x0000, 0x0000, 0x0000
 
-FPT_MN equ 15
+FPT_MN equ 27
 fpt_math:
     dw 0x0000, 0x0000, 0x0000, 0x4000
     dw 0, 0
@@ -672,6 +694,67 @@ fpt_math:
     dw 3, 2
     dw 0x70A4, 0x0A3D, 0xA3D7, 0x3FC0      ; rnd.125,2 -> 0.13
     dw fpt_m14
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 4, 0
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; ln(1) = 0
+    dw fpt_t0
+    dw 0x0000, 0x0000, 0x0000, 0x4000
+    dw 4, 0
+    dw 0x39EF, 0xFEFA, 0x2E42, 0x3FE6      ; ln(2) = 0.69314718055994529
+    dw fpt_t1
+    dw 0x0000, 0x0000, 0x0000, 0x4024
+    dw 4, 0
+    dw 0x5516, 0xBBB5, 0x6BB1, 0x4002      ; ln(10) = 2.3025850929940459
+    dw fpt_t2
+    dw 0x0000, 0x0000, 0x0000, 0x3FE0
+    dw 4, 0
+    dw 0x39EF, 0xFEFA, 0x2E42, 0xBFE6      ; ln(0.5) = -0.69314718055994529
+    dw fpt_t3
+    dw 0x0000, 0x2000, 0xA05F, 0x4202
+    dw 4, 0
+    dw 0xAA5B, 0x2AA2, 0x069E, 0x4037      ; ln(1e+10) = 23.025850929940457
+    dw fpt_t4
+    dw 0xA9FC, 0xD2F1, 0x624D, 0x3F50
+    dw 4, 0
+    dw 0xFFA0, 0x998F, 0xA18A, 0xC01B      ; ln(0.001) = -6.9077552789821368
+    dw fpt_t5
+    dw 0x0000, 0x0000, 0x0000, 0x0000
+    dw 5, 0
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0      ; exp(0) = 1
+    dw fpt_t6
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 5, 0
+    dw 0x5769, 0x8B14, 0xBF0A, 0x4005      ; exp(1) = 2.7182818284590451
+    dw fpt_t7
+    dw 0x0000, 0x0000, 0x0000, 0xBFF0
+    dw 5, 0
+    dw 0xEF38, 0x362C, 0x8B56, 0x3FD7      ; exp(-1) = 0.36787944117144233
+    dw fpt_t8
+    dw 0x0000, 0x0000, 0x0000, 0x4024
+    dw 5, 0
+    dw 0x0560, 0xCF95, 0x829D, 0x40D5      ; exp(10) = 22026.465794806718
+    dw fpt_t9
+    dw 0x0000, 0x0000, 0x0000, 0x3FE0
+    dw 5, 0
+    dw 0x069C, 0x8E1E, 0x6129, 0x3FFA      ; exp(0.5) = 1.6487212707001282
+    dw fpt_t10
+    dw 0x0000, 0x0000, 0x0000, 0xC014
+    dw 5, 0
+    dw 0x5376, 0xE00D, 0x993F, 0x3F7B      ; exp(-5) = 0.006737946999085467
+    dw fpt_t11
+fpt_t0: db 'LN1', 0
+fpt_t1: db 'LN2', 0
+fpt_t2: db 'LN10', 0
+fpt_t3: db 'LN0.5', 0
+fpt_t4: db 'LN1e+10', 0
+fpt_t5: db 'LN0.001', 0
+fpt_t6: db 'EXP0', 0
+fpt_t7: db 'EXP1', 0
+fpt_t8: db 'EXP-1', 0
+fpt_t9: db 'EXP10', 0
+fpt_t10: db 'EXP0.5', 0
+fpt_t11: db 'EXP-5', 0
+
 fpt_m0: db 'sqrt2', 0
 fpt_m1: db 'sqrt144', 0
 fpt_m2: db 'sqrt.25', 0
@@ -714,7 +797,7 @@ fpt_str:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 219
+    OS88_BSS 255
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -764,7 +847,13 @@ fp_hw       equ fp_tv + 8             ; --- the coprocessor path ---
 fp_x1       equ fp_hw + 1             ; 10: A in 80-bit form
 fp_x2       equ fp_x1 + 10            ; 10: B
 fp_sw       equ fp_x2 + 10            ; where the status word lands
-fpt_bss_end equ fp_sw + 2
+fp_e0       equ fp_sw + 2             ; --- the transcendental layer (84.8)
+fp_e1       equ fp_e0 + 8             ; four packed temporaries and a
+fp_e2       equ fp_e1 + 8             ; counter, which fp_ln, fp_exp and
+fp_e3       equ fp_e2 + 8             ; fp_pow share
+fp_ek       equ fp_e3 + 8
+fpt_mop     equ fp_ek + 2             ; the math op, for the comparison
+fpt_bss_end equ fpt_mop + 2
 
 %define FPT_BSS_NEED (fpt_bss_end - os88_image_end)
     times (FPT_BSS_NEED - OS88_BSS_SIZE) db 0

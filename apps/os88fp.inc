@@ -968,6 +968,337 @@ fps_div:
     ret
 
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; THE TRANSCENDENTAL LAYER (SPEC.md 84.8): ln, exp and pow.
+;
+; None of these is free on hardware either. THE 8087 HAS NO `FSIN` OR `FCOS` -
+; those are 387 and later - and even a machine with a coprocessor builds them
+; out of FPTAN/FPATAN/F2XM1/FYL2X. So this is shared work rather than a
+; software fallback for something the FPU would have done.
+;
+; Each takes its argument in A and leaves its answer there, like every other
+; routine here. Each uses the four caller-declared temporaries fp_e0..fp_e3
+; and the counter fp_ek, which is why those names are in the block a caller
+; must provide (see the header).
+; =============================================================================
+
+; fp_c_* - constants, as exact doubles. NASM's `dq` with a decimal literal
+; rounds to nearest, which for these five is the same bit pattern the host's
+; own libm carries - checked rather than assumed.
+fp_c_ln2:    dq 0.69314718055994530942
+fp_c_invln2: dq 1.44269504088896340736
+fp_c_rhalf:  dq 0.70710678118654752440
+fp_c_one:    dq 1.0
+fp_c_half:   dq 0.5
+
+; -----------------------------------------------------------------------------
+; fp_ln - A = ln(A). CF=1 if A <= 0, and A is left zero.
+;
+; value = f * 2^E with f in [sqrt(1/2), sqrt(2)), so ln(value) = E*ln2 + ln(f).
+; The range reduction is the whole accuracy argument: an unreduced series over
+; [1,2) has s up to 1/3 and needs three times the terms for the same answer.
+;
+; ln(f) = 2 * atanh(s) with s = (f-1)/(f+1), summed as
+; s + s^3/3 + s^5/5 + ... Twelve terms: |s| <= 0.1716 so s^2 <= 0.0295, and
+; 0.0295^12 is under 1e-18 - past the 53 bits a double carries.
+; -----------------------------------------------------------------------------
+fp_ln:
+    push bx
+    push cx
+    push si
+    push di
+    mov bx, fp_am0
+    call fp_iszero
+    jc .bad
+    cmp byte [fp_as], 0
+    jne .bad
+    mov cx, [fp_ae]                   ; E = exp + 64, the exponent of a
+    add cx, 64                        ; mantissa read as a fraction in [1/2,1)
+    mov word [fp_ae], -64             ; ...and f is what is left
+    mov di, fp_e0
+    call fp_pack_a
+    mov si, fp_e0                     ; f < sqrt(1/2) doubles, so the series
+    call fp_unpack_a                  ; sees [0.7071, 1.4142) either way
+    mov si, fp_c_rhalf
+    call fp_unpack_b
+    call fp_cmpab
+    jge .noscale
+    mov si, fp_e0
+    call fp_unpack_a
+    inc word [fp_ae]
+    dec cx
+    mov di, fp_e0
+    call fp_pack_a
+.noscale:
+    mov [fp_ek], cx                   ; E, banked across the series
+    mov si, fp_e0                     ; s = (f-1)/(f+1)
+    call fp_unpack_a
+    mov si, fp_c_one
+    call fp_unpack_b
+    call fp_sub
+    mov di, fp_e1
+    call fp_pack_a                    ; e1 = f-1
+    mov si, fp_e0
+    call fp_unpack_a
+    mov si, fp_c_one
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e2
+    call fp_pack_a                    ; e2 = f+1
+    mov si, fp_e1
+    call fp_unpack_a
+    mov si, fp_e2
+    call fp_unpack_b
+    call fp_div
+    mov di, fp_e0
+    call fp_pack_a                    ; e0 = s, and f is not needed again
+    mov si, fp_e0                     ; e1 = s*s
+    call fp_unpack_a
+    mov si, fp_e0
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e1
+    call fp_pack_a
+    mov si, fp_e0                     ; e2 = the running term, starting at s
+    call fp_unpack_a
+    mov di, fp_e2
+    call fp_pack_a
+    mov di, fp_e3                     ; e3 = the sum, starting at s too
+    call fp_pack_a
+    mov cx, 1
+.term:
+    cmp cx, 12
+    jae .summed
+    mov si, fp_e2                     ; term *= s*s
+    call fp_unpack_a
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e2
+    call fp_pack_a
+    mov ax, cx                        ; ...and the sum gains term/(2k+1)
+    shl ax, 1
+    inc ax
+    push cx
+    call fp_i2b
+    call fp_div
+    mov si, fp_e3
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e3
+    call fp_pack_a
+    pop cx
+    inc cx
+    jmp short .term
+.summed:
+    mov si, fp_e3                     ; ln(f) = 2 * the sum
+    call fp_unpack_a
+    inc word [fp_ae]
+    mov di, fp_e3
+    call fp_pack_a
+    mov ax, [fp_ek]                   ; ...plus E * ln2
+    call fp_i2a
+    mov si, fp_c_ln2
+    call fp_unpack_b
+    call fp_mul
+    mov si, fp_e3
+    call fp_unpack_b
+    call fp_add
+    clc
+    jmp short .out
+.bad:
+    call fp_azero
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_exp - A = e^A. Never fails: an argument too large CLAMPS, which is this
+; file's stated rule for overflow (see the header) rather than an infinity.
+;
+; k = round(x/ln2) and r = x - k*ln2, so |r| <= ln2/2 = 0.3466 and
+; e^x = 2^k * e^r. The series for e^r is 1 + r + r^2/2! + ... and fifteen
+; terms take 0.3466^15/15! far below the last bit.
+;
+; 2^k is applied to the EXPONENT rather than by multiplying, which costs
+; nothing and cannot round.
+; -----------------------------------------------------------------------------
+fp_exp:
+    push bx
+    push cx
+    push si
+    push di
+    mov di, fp_e0                     ; x, banked
+    call fp_pack_a
+    mov si, fp_c_invln2               ; k = round(x / ln2)
+    call fp_unpack_b
+    call fp_mul
+    call fp_round
+    call fp_a2i
+    jc .big                           ; past what a word holds is past what a
+    mov [fp_ek], ax                   ; double holds, either way
+    call fp_i2a                       ; r = x - k*ln2
+    mov si, fp_c_ln2
+    call fp_unpack_b
+    call fp_mul
+    call fp_a_to_b
+    mov si, fp_e0
+    call fp_unpack_a
+    call fp_sub
+    mov di, fp_e1
+    call fp_pack_a                    ; e1 = r
+    mov di, fp_e2
+    call fp_pack_a                    ; e2 = the running term, starting at r
+    mov si, fp_c_one                  ; e3 = the sum, starting at 1 + r
+    call fp_unpack_a
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e3
+    call fp_pack_a
+    mov cx, 2
+.term:
+    cmp cx, 16
+    jae .summed
+    mov si, fp_e2                     ; term = term * r / k
+    call fp_unpack_a
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_mul
+    mov ax, cx
+    push cx
+    call fp_i2b
+    call fp_div
+    mov di, fp_e2
+    call fp_pack_a
+    mov si, fp_e3                     ; ...and into the sum
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e3
+    call fp_pack_a
+    pop cx
+    inc cx
+    jmp short .term
+.summed:
+    mov si, fp_e3
+    call fp_unpack_a
+    mov ax, [fp_ek]                   ; * 2^k, straight onto the exponent
+    add [fp_ae], ax
+    call fp_norm
+    jmp short .out
+.big:
+    call fp_azero                     ; a magnitude this large is 0 or the
+    cmp byte [fp_e0+7], 0             ; largest finite double; the sign of x
+    jns .out                          ; decides which, and its top byte is
+    jmp short .out                    ; where that sign lives
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fp_pow - A = A^B.
+; out: CF=1 and A zero if the pair has no real answer - a negative base with a
+;      fractional exponent, or 0^0.
+;
+; A WHOLE-NUMBER EXPONENT GOES BY REPEATED SQUARING and not through the
+; logarithm, for two reasons rather than speed: exp(y*ln x) is inexact for
+; cases everyone expects to be exact - 10^2 must be 100, not 99.999999999998 -
+; and it cannot do a NEGATIVE base at all, where (-2)^3 is perfectly ordinary.
+; -----------------------------------------------------------------------------
+fp_pow:
+    push bx
+    push cx
+    push si
+    push di
+    mov di, fp_e0                     ; the base, banked
+    call fp_pack_a
+    call fp_b_to_a                    ; the exponent, to look at
+    mov di, fp_e1
+    call fp_pack_a
+    call fp_trunc                     ; is it a whole number?
+    mov di, fp_e2
+    call fp_pack_a
+    mov si, fp_e1
+    call fp_unpack_a
+    mov si, fp_e2
+    call fp_unpack_b
+    call fp_cmpab
+    jne .real
+    mov si, fp_e1                     ; ...and does it fit a word?
+    call fp_unpack_a
+    call fp_a2i
+    jc .real
+    mov cx, ax
+    mov si, fp_e0
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jnc .intpow
+    or cx, cx                         ; 0^0 has no agreed answer and Excel
+    jz .bad                           ; calls it an error; 0^n is 0
+    jmp short .out
+.intpow:
+    mov si, fp_c_one                  ; the running product
+    call fp_unpack_a
+    mov di, fp_e3
+    call fp_pack_a
+    mov bx, cx                        ; BX = |n|, CX kept for its sign
+    or bx, bx
+    jge .ploop
+    neg bx
+.ploop:
+    or bx, bx
+    jz .pdone
+    mov si, fp_e3
+    call fp_unpack_a
+    mov si, fp_e0
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e3
+    call fp_pack_a
+    dec bx
+    jmp short .ploop
+.pdone:
+    mov si, fp_e3
+    call fp_unpack_a
+    or cx, cx
+    jge .out
+    call fp_a_to_b                    ; a negative power is one over it
+    mov si, fp_c_one
+    call fp_unpack_a
+    call fp_div
+    jmp short .out
+.real:
+    mov si, fp_e0                     ; x^y = e^(y ln x), and only for x > 0
+    call fp_unpack_a
+    cmp byte [fp_as], 0
+    jne .bad
+    call fp_ln
+    jc .bad
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_mul
+    call fp_exp
+.out:
+    clc
+    jmp short .done
+.bad:
+    call fp_azero
+    stc
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
 ; fp_cmpab - compare A against B.
 ; out: AX = -1 (A < B), 0 (equal) or 1 (A > B), and the flags set from it, so
 ; a caller may use either. Preserves both accumulators.

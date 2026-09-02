@@ -2081,7 +2081,7 @@ ct_s_ext_biff: db '.BIF', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 2150
+    OS88_BSS 2184
     OS88_IMAGE_END
 
 ; The ch_* block goes FIRST, at bss offset 0, for the reason sheet.asm's own
@@ -2169,7 +2169,12 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-ct_bss_end  equ fp_sw + 2
+fp_e0             equ fp_sw + 2        ; --- the transcendental layer (84.8)
+fp_e1             equ fp_e0 + 8        ; four packed temporaries and a counter,
+fp_e2             equ fp_e1 + 8        ; which fp_ln, fp_exp and fp_pow share.
+fp_e3             equ fp_e2 + 8        ; CHART does not call any of them, but
+fp_ek             equ fp_e3 + 8        ; the block is the include's contract
+ct_bss_end  equ fp_ek + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL that nothing cross-checks, and setting
