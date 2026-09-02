@@ -1299,6 +1299,358 @@ fp_pow:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; fp_sin / fp_cos / fp_tan / fp_atan (SPEC.md 84.9)
+;
+; fp_cos IS fp_sin(x + pi/2) and not a second series, which costs one add and
+; removes a whole routine that could disagree with the first one.
+; -----------------------------------------------------------------------------
+fp_c_pi:     dq 3.14159265358979323846
+fp_c_pi2:    dq 1.57079632679489661923
+fp_c_2opi:   dq 0.63661977236758134308
+fp_c_atlim:  dq 0.2
+
+fp_cos:
+    push si
+    mov si, fp_c_pi2
+    call fp_unpack_b
+    pop si
+    call fp_add
+    ; ...and fall into fp_sin
+
+; fp_sin - A = sin(A).
+;
+; k = round(x * 2/pi) and r = x - k*(pi/2), so |r| <= pi/4 and the quadrant
+; k mod 4 says which of +-sin(r), +-cos(r) the answer is. THE REDUCTION IS THE
+; ACCURACY LIMIT and not the series: pi/2 is a double, so a very large x is
+; reduced against a pi/2 that is itself rounded, and the answer degrades as x
+; grows. Excel has the same limit and for the same reason.
+fp_sin:
+    push bx
+    push cx
+    push si
+    push di
+    mov di, fp_e0                     ; x, banked
+    call fp_pack_a
+    mov si, fp_c_2opi
+    call fp_unpack_b
+    call fp_mul
+    call fp_round
+    call fp_a2i
+    jc .huge                          ; past a word of quadrants: no digits of
+    mov [fp_ek], ax                   ; the answer would survive anyway
+    call fp_i2a
+    mov si, fp_c_pi2
+    call fp_unpack_b
+    call fp_mul
+    call fp_a_to_b
+    mov si, fp_e0
+    call fp_unpack_a
+    call fp_sub                       ; A = r, in [-pi/4, pi/4]
+    mov di, fp_e0
+    call fp_pack_a
+    mov cx, [fp_ek]                   ; the quadrant, folded to 0..3
+    and cx, 3
+    test cx, 1
+    jz .sinser                        ; even quadrants want sin(r), odd cos(r)
+    call fp_cosser
+    jmp short .signit
+.sinser:
+    call fp_sinser
+.signit:
+    cmp cx, 2                         ; quadrants 2 and 3 are negative
+    jb .out
+    xor byte [fp_as], 1
+    jmp short .out
+.huge:
+    call fp_azero
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; fp_sinser - A = sin(r) for r = [fp_e0], |r| <= pi/4. Ten terms:
+; (pi/4)^21/21! is beyond anything a double can hold.
+fp_sinser:
+    push cx
+    mov si, fp_e0
+    call fp_unpack_a
+    mov si, fp_e0
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e1
+    call fp_pack_a                    ; e1 = r*r
+    mov si, fp_e0
+    call fp_unpack_a
+    mov di, fp_e2                     ; e2 = the term, starting at r
+    call fp_pack_a
+    mov di, fp_e3                     ; e3 = the sum, likewise
+    call fp_pack_a
+    mov cx, 1
+.t:
+    cmp cx, 11
+    jae .done
+    mov si, fp_e2                     ; term *= -r*r / ((2k)(2k+1))
+    call fp_unpack_a
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_mul
+    xor byte [fp_as], 1
+    mov ax, cx
+    shl ax, 1
+    push cx
+    call fp_i2b
+    call fp_div
+    mov ax, cx
+    shl ax, 1
+    inc ax
+    call fp_i2b
+    call fp_div
+    mov di, fp_e2
+    call fp_pack_a
+    mov si, fp_e3
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e3
+    call fp_pack_a
+    pop cx
+    inc cx
+    jmp short .t
+.done:
+    mov si, fp_e3
+    call fp_unpack_a
+    pop cx
+    ret
+
+; fp_cosser - A = cos(r) for r = [fp_e0], the same shape starting at 1.
+fp_cosser:
+    push cx
+    mov si, fp_e0
+    call fp_unpack_a
+    mov si, fp_e0
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e1
+    call fp_pack_a                    ; e1 = r*r
+    mov si, fp_c_one
+    call fp_unpack_a
+    mov di, fp_e2
+    call fp_pack_a
+    mov di, fp_e3
+    call fp_pack_a
+    mov cx, 1
+.t:
+    cmp cx, 11
+    jae .done
+    mov si, fp_e2                     ; term *= -r*r / ((2k-1)(2k))
+    call fp_unpack_a
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_mul
+    xor byte [fp_as], 1
+    mov ax, cx
+    shl ax, 1
+    dec ax
+    push cx
+    call fp_i2b
+    call fp_div
+    mov ax, cx
+    shl ax, 1
+    call fp_i2b
+    call fp_div
+    mov di, fp_e2
+    call fp_pack_a
+    mov si, fp_e3
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e3
+    call fp_pack_a
+    pop cx
+    inc cx
+    jmp short .t
+.done:
+    mov si, fp_e3
+    call fp_unpack_a
+    pop cx
+    ret
+
+; fp_tan - A = tan(A). CF=1 where the cosine is zero.
+; x is banked ON THE STACK because fp_sin and fp_cos both own fp_e0..fp_e3.
+fp_tan:
+    push bx
+    push si
+    push di
+    mov di, fp_e0
+    call fp_pack_a
+    push word [fp_e0]
+    push word [fp_e0+2]
+    push word [fp_e0+4]
+    push word [fp_e0+6]
+    call fp_sin
+    mov di, fp_tv
+    call fp_pack_a                    ; fp_tv = sin(x); fp_floor's temporary is
+    pop word [fp_e0+6]                ; free here and this is the one place
+    pop word [fp_e0+4]                ; that borrows it
+    pop word [fp_e0+2]
+    pop word [fp_e0]
+    mov si, fp_e0
+    call fp_unpack_a
+    call fp_cos
+    call fp_a_to_b
+    mov bx, fp_bm0
+    call fp_iszero
+    jc .inf
+    mov si, fp_tv
+    call fp_unpack_a
+    call fp_div
+    clc
+    jmp short .out
+.inf:
+    call fp_azero
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
+    ret
+
+; fp_atan - A = atan(A), in radians and always in (-pi/2, pi/2).
+;
+; |x| > 1 goes through atan(x) = pi/2 - atan(1/x), and what is left is HALVED
+; until it is small: atan(x) = 2*atan(x / (1 + sqrt(1+x^2))). Three or four of
+; those take |x| <= 1 down under 0.2, where x^2 <= 0.04 and nine terms of
+; x - x^3/3 + x^5/5 - ... are past the last bit. The bare series is useless
+; near 1 - at x = 1 it is the Leibniz series and wants thousands of terms.
+fp_atan:
+    push bx
+    push cx
+    push si
+    push di
+    mov bx, fp_am0
+    call fp_iszero
+    jc .out                           ; atan(0) = 0
+    mov cl, [fp_as]                   ; work on |x| and put the sign back last
+    mov byte [fp_as], 0
+    mov ch, 0                         ; CH = "the reciprocal was taken"
+    mov si, fp_c_one
+    call fp_unpack_b
+    call fp_cmpab
+    jle .small
+    mov ch, 1
+    call fp_a_to_b
+    mov si, fp_c_one
+    call fp_unpack_a
+    call fp_div                       ; A = 1/x, now <= 1
+.small:
+    push cx
+    xor cx, cx                        ; CX = how many halvings
+.half:
+    mov di, fp_e0
+    call fp_pack_a
+    mov si, fp_c_atlim
+    call fp_unpack_b
+    mov si, fp_e0
+    call fp_unpack_a
+    call fp_cmpab
+    jle .series
+    mov di, fp_e0                     ; x / (1 + sqrt(1 + x*x))
+    call fp_pack_a
+    mov si, fp_e0
+    call fp_unpack_b
+    call fp_mul
+    mov si, fp_c_one
+    call fp_unpack_b
+    call fp_add
+    call fp_sqrt
+    mov si, fp_c_one
+    call fp_unpack_b
+    call fp_add
+    call fp_a_to_b
+    mov si, fp_e0
+    call fp_unpack_a
+    call fp_div
+    inc cx
+    jmp short .half
+.series:
+    call fp_atser                     ; A = atan of the reduced argument
+.scale:
+    or cx, cx
+    jz .scaled
+    inc word [fp_ae]                  ; ...doubled once per halving, which is
+    dec cx                            ; an exponent bump and cannot round
+    jmp short .scale
+.scaled:
+    pop cx
+    or ch, ch
+    jz .signed
+    call fp_a_to_b                    ; pi/2 - atan(1/x)
+    mov si, fp_c_pi2
+    call fp_unpack_a
+    call fp_sub
+.signed:
+    or cl, cl
+    jz .out
+    xor byte [fp_as], 1
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; fp_atser - A = atan(A) by the plain series, for |A| <= 0.2.
+fp_atser:
+    push cx
+    mov di, fp_e0
+    call fp_pack_a
+    mov si, fp_e0
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e1
+    call fp_pack_a                    ; e1 = x*x
+    mov si, fp_e0
+    call fp_unpack_a
+    mov di, fp_e2
+    call fp_pack_a
+    mov di, fp_e3
+    call fp_pack_a
+    mov cx, 1
+.t:
+    cmp cx, 10
+    jae .done
+    mov si, fp_e2
+    call fp_unpack_a
+    mov si, fp_e1
+    call fp_unpack_b
+    call fp_mul
+    mov di, fp_e2
+    call fp_pack_a                    ; the running power, unsigned
+    mov ax, cx
+    shl ax, 1
+    inc ax
+    push cx
+    call fp_i2b
+    call fp_div
+    pop cx
+    test cx, 1
+    jz .plus
+    xor byte [fp_as], 1               ; alternating
+.plus:
+    mov si, fp_e3
+    call fp_unpack_b
+    call fp_add
+    mov di, fp_e3
+    call fp_pack_a
+    inc cx
+    jmp short .t
+.done:
+    mov si, fp_e3
+    call fp_unpack_a
+    pop cx
+    ret
+
 ; fp_cmpab - compare A against B.
 ; out: AX = -1 (A < B), 0 (equal) or 1 (A > B), and the flags set from it, so
 ; a caller may use either. Preserves both accumulators.

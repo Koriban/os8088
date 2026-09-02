@@ -16151,6 +16151,8 @@ sh_rpn_fid:
     db 22, 23, 21, 19, 109            ; LN LOG10 EXP PI LOG - Excel's ftab
                                        ; again, and LOG is 109 because 2.1's
                                        ; LOG takes a BASE where 1.x's did not
+    db 15, 16, 17, 98, 99             ; SIN COS TAN ASIN ACOS
+    db 18, 97                         ; ATAN ATAN2
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16181,6 +16183,8 @@ sh_rpn_fvar:
     db 1, 1, 1, 1                     ; VAR VARP STDEV STDEVP - every one
                                        ; of them 1..14 arguments
     db 0, 0, 0, 0, 1                  ; LN LOG10 EXP PI, and LOG(1..2)
+    db 0, 0, 0, 0, 0                  ; SIN COS TAN ASIN ACOS
+    db 0, 0                           ; ATAN ATAN2 - all fixed-arity
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19318,10 +19322,16 @@ sh_ptrans:
     push dx
     push di
     mov di, ax
+    mov [sh_trsi], si                 ; PI() parses nothing: already final
+    cmp di, 92
+    je .atan2                         ; ATAN2 is the only one taking two
     cmp di, 84
     je .pi                            ; PI() takes no argument at all
     call sh_pcmp                      ; ...every other one takes a number
+    mov [sh_trsi], si                 ; parsing over - bank it
     call sh_acc_load_a
+    cmp di, 86
+    jae .trig                         ; SIN COS TAN ASIN ACOS ATAN
     cmp di, 83
     je .exp
     test byte [sh_acc+7], 0x80        ; A LOGARITHM OF A NEGATIVE, or of zero,
@@ -19358,6 +19368,7 @@ sh_ptrans:
     jne .lognum
     inc si
     call sh_pcmp
+    mov [sh_trsi], si                 ; parsing over - bank it
     test byte [sh_acc+7], 0x80
     jnz .domain
     push si
@@ -19385,18 +19396,166 @@ sh_ptrans:
     call fp_unpack_a
     pop si
     call fp_div
-    jmp short .store
+    jmp .store
 .exp:
     call fp_exp
-    jmp short .store
+    jmp .store
+; --- the trigonometric seven (SPEC.md 81.36) --------------------------------
+.trig:
+    cmp di, 86
+    jne .t1
+    call fp_sin
+    jmp .store
+.t1:
+    cmp di, 87
+    jne .t2
+    call fp_cos
+    jmp .store
+.t2:
+    cmp di, 88
+    jne .t3
+    call fp_tan                       ; the cosine reaching zero is #DIV/0!,
+    jc .divzero                       ; which is what a tangent's pole IS
+    jmp .store
+.t3:
+    cmp di, 91
+    jne .asin
+    call fp_atan
+    jmp .store
+; ASIN(x) = atan(x / sqrt(1 - x*x)), and ACOS(x) = pi/2 - ASIN(x). The domain
+; is [-1, 1]; at either end the square root is zero and the quotient has no
+; value, so +-pi/2 is written directly rather than divided for.
+.asin:
+    call sh_acc_store
+    push si
+    mov si, sh_acc
+    mov bx, sh_tr0
+    call sh_trcopy
+    pop si
+    mov si, sh_tr0
+    call fp_unpack_a
+    mov byte [fp_as], 0               ; |x|
+    mov si, fp_c_one
+    call fp_unpack_b
+    call fp_cmpab
+    jg .domain
+    je .atend
+    mov si, sh_tr0                    ; 1 - x*x
+    call fp_unpack_a
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_mul
+    call fp_a_to_b
+    mov si, fp_c_one
+    call fp_unpack_a
+    call fp_sub
+    call fp_sqrt
+    call fp_a_to_b
+    mov si, sh_tr0
+    call fp_unpack_a
+    call fp_div
+    call fp_atan
+    jmp .acostoo
+.atend:
+    mov si, sh_c_pi2                  ; asin(+-1) = +-pi/2
+    call fp_unpack_a
+    mov al, [sh_acc+7]
+    and al, 0x80
+    mov [fp_as], al
+    cmp byte [fp_as], 0
+    je .acostoo
+    mov byte [fp_as], 1
+.acostoo:
+    cmp di, 90
+    jne .store
+    call fp_a_to_b                    ; ACOS = pi/2 - ASIN
+    mov si, sh_c_pi2
+    call fp_unpack_a
+    call fp_sub
+    jmp .store
+; ATAN2(x_number, y_number) - Excel's argument order, which is the REVERSE of
+; C's atan2(y, x) and the one thing about this function everybody gets wrong.
+.atan2:
+    call sh_pcmp
+    mov [sh_trsi], si                 ; parsing over - bank it
+    push si                           ; NO sh_acc_store HERE: sh_pcmp leaves
+    mov si, sh_acc                    ; its answer in sh_acc, and storing A
+    mov bx, sh_tr0                    ; over it wrote whatever the last
+    call sh_trcopy                    ; arithmetic had left in the accumulator
+    pop si                            ; - which is why ATAN2(-1,1) came back
+                                       ; 0.78539 instead of 2.35619
+    cmp byte [si], ','
+    jne .badargs2
+    inc si
+    call sh_pcmp
+    mov [sh_trsi], si                 ; parsing over - bank it
+    push si                           ; ...and the same for y
+    mov si, sh_acc
+    mov bx, sh_tr1
+    call sh_trcopy
+    pop si
+    mov si, sh_tr0
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jnc .a2div
+    mov si, sh_tr1                    ; x is zero: straight up, straight down,
+    call fp_unpack_a                  ; or nowhere at all
+    mov bx, fp_am0
+    call fp_iszero
+    jc .divzero
+    mov cl, [fp_as]
+    mov si, sh_c_pi2
+    call fp_unpack_a
+    mov [fp_as], cl
+    jmp .store
+.a2div:
+    mov cl, [sh_tr1+7]                ; THE SIGN OF y, TAKEN NOW. The quadrant
+    and cl, 0x80                      ; rule below turns on it, and the atan
+    mov si, sh_tr0                    ; result is parked in sh_tr1 a moment
+    call fp_unpack_b                  ; from now - testing it there gave the
+    mov si, sh_tr1                    ; sign of the ANSWER instead, and
+    call fp_unpack_a                  ; ATAN2(-1,1) came back -3.9269 where
+    call fp_div                       ; 2.35619 was wanted
+    call fp_atan                      ; atan(y/x)
+    cmp byte [sh_tr0+7], 0            ; ...and the half-plane x < 0 needs pi
+    jns .store                        ; added or subtracted to place it
+    mov di, sh_tr1
+    call fp_pack_a                    ; y is finished with; park the atan
+    mov si, sh_c_pi
+    call fp_unpack_b
+    mov si, sh_tr1
+    call fp_unpack_a
+    or cl, cl
+    jnz .a2sub                        ; y < 0 takes pi away, y >= 0 adds it
+    call fp_add
+    jmp .store
+.a2sub:
+    call fp_sub
+    jmp .store
+.divzero:
+    mov byte [sh_evalerr], SH_ERR_DIV0
+    call fp_azero
+    jmp .store
+.badargs2:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    call fp_azero
+    jmp .store
 .pi:
     mov si, sh_c_pi
     call fp_unpack_a
-    jmp short .store
+    jmp .store
 .domain:
     mov byte [sh_evalerr], SH_ERR_NUM
     call fp_azero
 .store:
+    mov si, [sh_trsi]                 ; THE FORMULA AGAIN. Every constant here
+                                      ; is loaded with `mov si, <addr>` for
+                                      ; fp_unpack_*, so SI stops being the
+                                      ; formula the moment any of them runs -
+                                      ; PI()/6 answered 3.14159 because this
+                                      ; hunted the closing paren inside the
+                                      ; CONSTANT TABLE and never saw the '/'
     call sh_acc_store
     call sh_skipargs
     cmp byte [si], ')'
@@ -19432,7 +19591,8 @@ sh_trcopy:
     pop ax
     ret
 
-sh_c_pi: dq 3.14159265358979323846
+sh_c_pi:  dq 3.14159265358979323846
+sh_c_pi2: dq 1.57079632679489661923
 
 ; =============================================================================
 ; sh_plookup - the LOOKUP functions, ids 69 and up (SPEC.md 81.31).
@@ -23938,6 +24098,13 @@ sh_f_log10:     db 'LOG10', 0
 sh_f_exp:       db 'EXP', 0
 sh_f_pi:        db 'PI', 0
 sh_f_log:       db 'LOG', 0
+sh_f_sin:       db 'SIN', 0
+sh_f_cos:       db 'COS', 0
+sh_f_tan:       db 'TAN', 0
+sh_f_asin:      db 'ASIN', 0
+sh_f_acos:      db 'ACOS', 0
+sh_f_atan:      db 'ATAN', 0
+sh_f_atan2:     db 'ATAN2', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -23964,6 +24131,8 @@ sh_functab:
     dw sh_f_match, sh_f_vlookup, sh_f_hlookup, sh_f_lookup
     dw sh_f_var, sh_f_varp, sh_f_stdev, sh_f_stdevp
     dw sh_f_ln, sh_f_log10, sh_f_exp, sh_f_pi, sh_f_log
+    dw sh_f_sin, sh_f_cos, sh_f_tan, sh_f_asin, sh_f_acos
+    dw sh_f_atan, sh_f_atan2
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -24062,7 +24231,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4075
+    OS88_BSS 4077
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -24795,8 +24964,10 @@ sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
                                        ; sum, for the variance folds (81.34)
 sh_tr0        equ sh_pacc2 + 8        ; 8 } two packed doubles that survive a
 sh_tr1        equ sh_tr0 + 8          ; 8 } call to fp_ln, which OWNS fp_e0..3
+sh_trsi       equ sh_tr1 + 8          ; word: the formula pointer, banked
+                                       ; across the arithmetic (81.36)
                                        ; as its own temporaries (81.35)
-sh_stbusy     equ sh_tr1 + 8        ; byte: a variance fold is running. Only
+sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
 sh_bss_end        equ sh_stbusy + 2

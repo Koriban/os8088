@@ -75689,6 +75689,62 @@ throwaway.
 | `=A1+A1` | 14 — the lexer change did not cost the reference path |
 
 
+### 81.36 The trigonometric seven
+
+`SIN`, `COS`, `TAN`, `ASIN`, `ACOS`, `ATAN` and `ATAN2`, on §84.9's layer. With
+them Sheet knows **93** of Excel 2.1d's ~120, and the trigonometric category is
+complete.
+
+`ASIN(x) = atan(x / √(1−x²))` and `ACOS(x) = π/2 − ASIN(x)`. The domain is
+`[-1, 1]`; at either end the square root is zero and the quotient has no value,
+so `±π/2` is written directly rather than divided for. Outside it, `#NUM!`.
+`TAN` at a pole is `#DIV/0!`, which is what a tangent's pole *is*.
+
+**`ATAN2(x_number, y_number)` takes x first**, which is the reverse of C's
+`atan2(y, x)` and the one thing about this function everybody gets wrong. It is
+Excel's order, checked in the manual.
+
+#### 81.36.1 Three bugs, and all three were about a register or a slot
+
+**`SI` stopped being the formula.** Every constant here is loaded with
+`mov si, <addr>` for `fp_unpack_*`, so the moment one runs, `SI` is no longer
+the parse pointer. `PI()/6` answered **3.14159**: `.store` went looking for the
+closing parenthesis *inside the constant table*, never saw the `/`, and the
+whole trailing expression was lost. `[sh_trsi]` banks the pointer the moment
+parsing ends and `.store` restores it. `SIN` and `TAN` were never wrong — only
+`PI()` followed by an operator was, which is why `=SIN(0.5236)` passed while
+`=SIN(PI()/6)` did not.
+
+**`sh_acc_store` over a fresh parse.** `ATAN2` called it straight after
+`sh_pcmp`, which stores **A** into `sh_acc` — but `sh_pcmp` leaves its answer
+in `sh_acc` and says nothing about `A`. The parsed argument was overwritten
+with whatever the last arithmetic had left in the accumulator, and
+`ATAN2(-1,1)` came back 0.78539.
+
+**The quadrant read the wrong number's sign.** The rule turns on the sign of
+*y*, and the atan result is parked in `sh_tr1` — which is where y was. Testing
+it there tested the answer instead, and `ATAN2(-1,1)` became −3.9269 where
+2.35619 was wanted. The sign is taken into `CL` before anything overwrites it.
+
+#### 81.36.2 Verified
+
+`screenshots/sheet-trigonometry.png`:
+
+| | |
+|---|---|
+| `=SIN(PI()/6)` | 0.5 |
+| `=COS(0)` | 1 |
+| `=TAN(PI()/4)` | 1 |
+| `=ASIN(0.5)` | 0.52359 |
+| `=ACOS(0.5)` | 1.04719 |
+| `=ATAN(1)` | 0.78539 |
+| `=ATAN2(1,1)` | 0.78539 |
+| `=ATAN2(-1,1)` | 2.35619 |
+| `=ATAN2(-1,-1)` | −2.3561 |
+| `=ATAN2(0,1)` | 1.57079 |
+| `=ASIN(2)` | `#NUM!` |
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
@@ -76893,6 +76949,45 @@ and packed as a real double: `LN` of 1, 2, 10, 0.5, 1e10 and 0.001; `EXP` of 0,
 1, −1, 10, 0.5 and −5. **All pass, on both the software and the 8087 path**
 (`screenshots/fptest-transcendental.png`).
 
+
+### 84.9 sin, cos, tan and atan
+
+`fp_cos` **is** `fp_sin(x + π/2)` and not a second series — one add, and a
+whole routine that could disagree with the first one never exists.
+
+**`fp_sin`**: `k = round(x·2/π)`, `r = x − k·(π/2)`, so `|r| ≤ π/4` and the
+quadrant `k mod 4` says which of `±sin(r)`, `±cos(r)` the answer is; ten terms
+each. **The reduction is the accuracy limit, not the series**: π/2 is a double,
+so a very large `x` is reduced against a π/2 that is itself rounded and the
+answer degrades as `x` grows. Excel has the same limit for the same reason.
+
+**`fp_tan`** is sin/cos, with `x` banked **on the stack** because `fp_sin` and
+`fp_cos` both own `fp_e0`–`fp_e3`.
+
+**`fp_atan`**: `|x| > 1` goes through `atan(x) = π/2 − atan(1/x)`, and what is
+left is **halved** by `atan(x) = 2·atan(x/(1+√(1+x²)))` until it is under 0.2,
+where nine terms of `x − x³/3 + x⁵/5 …` are past the last bit. The bare series
+is useless near 1 — at `x = 1` it *is* the Leibniz series and wants thousands
+of terms.
+
+#### 84.9.1 The ulp comparison, and the case that had to go
+
+Adding trig broke fptest's near-equality rule and the break was instructive.
+The first version allowed **the low word** to differ and nothing else;
+`tan(π/4)` failed on it, because the answer is 1.0 and the reference
+0.9999999999999999 — **one ulp apart and on opposite sides of an exponent
+step**, so three of the four words differ. The distance is measured over all
+64 bits now: two same-signed doubles read as integers are monotonic, so a
+subtraction says it. 64 ulps, as before.
+
+**`sin(π)` was removed as a case.** The reference is 1.2246e-16 and this
+answers exactly 0, because the reduction cancels perfectly against a `π/2` that
+is exactly half the double `π`. No ulp rule can bridge 0 and 1.2e-16, and the
+case was testing the *reduction's* cancellation rather than the series. `sin(3)`
+replaced it, where the answer is O(0.14) and the series is what is under test.
+
+**46 cases, all passing, on both the software and the 8087 path**
+(`screenshots/fptest-trig.png`).
 
 ## 85. Picture decoders (`apps/os88img.inc`)
 

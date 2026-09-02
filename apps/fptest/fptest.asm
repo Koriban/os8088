@@ -410,6 +410,26 @@ fpt_runall:
     call fp_exp
     jmp .mgot
 .mnotexp:
+    cmp ax, 6
+    jne .mnotsin
+    call fp_sin
+    jmp .mgot
+.mnotsin:
+    cmp ax, 7
+    jne .mnotcos
+    call fp_cos
+    jmp .mgot
+.mnotcos:
+    cmp ax, 8
+    jne .mnottan
+    call fp_tan
+    jmp .mgot
+.mnottan:
+    cmp ax, 9
+    jne .mnotatn
+    call fp_atan
+    jmp .mgot
+.mnotatn:
     call fp_round
 .mgot:
     mov di, fpt_got
@@ -423,23 +443,70 @@ fpt_runall:
     mov ax, [si]
     cmp ax, [di]
     je .mcmpn
-    cmp cx, 4                         ; THE LOW WORD OF A SERIES RESULT MAY
-    jne .mne                          ; DIFFER, and only that one. fp_ln and
-    cmp word [fpt_mop], 4             ; fp_exp sum a truncated series, so they
-    jb .mne                           ; are accurate to about 1e-14 relative
-    sub ax, [di]                      ; and not to the last bit - where sqrt,
-    jns .mabs                         ; trunc, floor and round are exact and
-    neg ax                            ; are still compared exactly. 64 units
-.mabs:                                ; in the last place is a hundred times
-    cmp ax, 64                        ; tighter than the series' own error
-    jbe .mcmpn                        ; bound and a hundred times looser than
-.mne:                                 ; a bit-for-bit demand it cannot meet
     xor bp, bp
 .mcmpn:
     add si, 2
     add di, 2
     dec cx
     jnz .mcmp
+    or bp, bp
+    jnz .mnear                        ; bit for bit: nothing more to ask
+    cmp word [fpt_mop], 4
+    jb .mnear                         ; sqrt, trunc, floor and round ARE exact
+                                      ; and stay compared exactly
+; --- A SERIES IS NOT BIT-EXACT, so how far apart is it? ----------------------
+; The distance is measured in UNITS IN THE LAST PLACE, over the whole 64 bits,
+; which is the only comparison that behaves at a boundary. The first version
+; allowed the low word to differ and nothing else, and tan(pi/4) failed on it:
+; the answer is 1.0 and the reference 0.9999999999999999, ONE ulp apart and on
+; opposite sides of an exponent step, so three of the four words differ.
+; Treating two same-signed doubles as 64-bit integers makes them monotonic,
+; and then a subtraction says it.
+    push si                           ; PUSH/POP and not sub/add: the exact
+    push di                           ; path below jumps straight to .mnear
+    sub si, 8                         ; without having subtracted, and an
+    sub di, 8                         ; unbalanced `add` there walked every
+    mov bp, 1                         ; record pointer off the end of the
+                                      ; table - 44 failures and garbled names
+    mov ax, [si]                      ; want - got, 64 bits
+    sub ax, [di]
+    mov [fpt_ulp], ax
+    mov ax, [si+2]
+    sbb ax, [di+2]
+    mov [fpt_ulp+2], ax
+    mov ax, [si+4]
+    sbb ax, [di+4]
+    mov [fpt_ulp+4], ax
+    mov ax, [si+6]
+    sbb ax, [di+6]
+    mov [fpt_ulp+6], ax
+    jnc .mpos
+    mov cx, 4                         ; negative: negate it, word by word
+    mov bx, fpt_ulp
+    stc
+.mneg:
+    mov ax, [bx]
+    not ax
+    adc ax, 0
+    mov [bx], ax
+    add bx, 2
+    dec cx
+    jnz .mneg
+.mpos:
+    cmp word [fpt_ulp+6], 0
+    jne .mfar
+    cmp word [fpt_ulp+4], 0
+    jne .mfar
+    cmp word [fpt_ulp+2], 0
+    jne .mfar
+    cmp word [fpt_ulp], 64            ; 64 ulps: a hundred times tighter than
+    jbe .mulpout                      ; the series' own error bound and a
+.mfar:                                ; hundred times looser than a demand it
+    xor bp, bp                        ; cannot meet
+.mulpout:
+    pop di
+    pop si
+.mnear:
     mov ax, [fpt_m]
     mov cx, FPT_ROWH
     mul cx
@@ -632,7 +699,7 @@ fpt_atof:
     times (10 - 7) db 0
     dw 0x0000, 0x0000, 0x0000, 0x0000
 
-FPT_MN equ 27
+FPT_MN equ 46
 fpt_math:
     dw 0x0000, 0x0000, 0x0000, 0x4000
     dw 0, 0
@@ -742,6 +809,102 @@ fpt_math:
     dw 5, 0
     dw 0x5376, 0xE00D, 0x993F, 0x3F7B      ; exp(-5) = 0.006737946999085467
     dw fpt_t11
+    dw 0x0000, 0x0000, 0x0000, 0x0000
+    dw 6, 0
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; SIN(0) = 0
+    dw fpt_g0
+    dw 0x7365, 0x382D, 0xC152, 0x3FE0
+    dw 6, 0
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0x3FDF      ; SIN(0.523599) = 0.49999999999999994
+    dw fpt_g1
+    dw 0x2D18, 0x5444, 0x21FB, 0x3FF9
+    dw 6, 0
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0      ; SIN(1.5708) = 1
+    dw fpt_g2
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 6, 0
+    dw 0x0CEE, 0x8F09, 0xED54, 0x3FEA      ; SIN(1) = 0.8414709848078965
+    dw fpt_g3
+    dw 0x0000, 0x0000, 0x0000, 0xBFF0
+    dw 6, 0
+    dw 0x0CEE, 0x8F09, 0xED54, 0xBFEA      ; SIN(-1) = -0.8414709848078965
+    dw fpt_g4
+    dw 0x0000, 0x0000, 0x0000, 0x4008
+    dw 6, 0
+    dw 0xD55B, 0x6DB6, 0x1038, 0x3FC2      ; SIN(3) = 0.14112000805986721
+    dw fpt_g5
+    dw 0x0000, 0x0000, 0x0000, 0x0000
+    dw 7, 0
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0      ; COS(0) = 1
+    dw fpt_g6
+    dw 0x7365, 0x382D, 0xC152, 0x3FF0
+    dw 7, 0
+    dw 0x0001, 0x0000, 0x0000, 0x3FE0      ; COS(1.0472) = 0.50000000000000011
+    dw fpt_g7
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 7, 0
+    dw 0x068C, 0x0FB5, 0x4A28, 0x3FE1      ; COS(1) = 0.54030230586813977
+    dw fpt_g8
+    dw 0x2D18, 0x5444, 0x21FB, 0x4009
+    dw 7, 0
+    dw 0x0000, 0x0000, 0x0000, 0xBFF0      ; COS(3.14159) = -1
+    dw fpt_g9
+    dw 0x0000, 0x0000, 0x0000, 0x0000
+    dw 8, 0
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; TAN(0) = 0
+    dw fpt_g10
+    dw 0x2D18, 0x5444, 0x21FB, 0x3FE9
+    dw 8, 0
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0x3FEF      ; TAN(0.785398) = 0.99999999999999989
+    dw fpt_g11
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 8, 0
+    dw 0xE3A6, 0x5CBE, 0xEB24, 0x3FF8      ; TAN(1) = 1.5574077246549023
+    dw fpt_g12
+    dw 0x0000, 0x0000, 0x0000, 0x0000
+    dw 9, 0
+    dw 0x0000, 0x0000, 0x0000, 0x0000      ; ATN(0) = 0
+    dw fpt_g13
+    dw 0x0000, 0x0000, 0x0000, 0x3FF0
+    dw 9, 0
+    dw 0x2D18, 0x5444, 0x21FB, 0x3FE9      ; ATN(1) = 0.78539816339744828
+    dw fpt_g14
+    dw 0x0000, 0x0000, 0x0000, 0xBFF0
+    dw 9, 0
+    dw 0x2D18, 0x5444, 0x21FB, 0xBFE9      ; ATN(-1) = -0.78539816339744828
+    dw fpt_g15
+    dw 0x0000, 0x0000, 0x0000, 0x3FE0
+    dw 9, 0
+    dw 0xBB4F, 0x0561, 0xAC67, 0x3FDD      ; ATN(0.5) = 0.46364760900080609
+    dw fpt_g16
+    dw 0x0000, 0x0000, 0x0000, 0x4024
+    dw 9, 0
+    dw 0x0054, 0x2C16, 0x89BD, 0x3FF7      ; ATN(10) = 1.4711276743037347
+    dw fpt_g17
+    dw 0x0000, 0x0000, 0x4000, 0x408F
+    dw 9, 0
+    dw 0x58BD, 0xC0E6, 0x1DE2, 0x3FF9      ; ATN(1000) = 1.5697963271282298
+    dw fpt_g18
+fpt_g0: db 'SIN0', 0
+fpt_g1: db 'SIN0.5236', 0
+fpt_g2: db 'SIN1.571', 0
+fpt_g3: db 'SIN1', 0
+fpt_g4: db 'SIN-1', 0
+fpt_g5: db 'SIN3', 0
+fpt_g6: db 'COS0', 0
+fpt_g7: db 'COS1.047', 0
+fpt_g8: db 'COS1', 0
+fpt_g9: db 'COS3.142', 0
+fpt_g10: db 'TAN0', 0
+fpt_g11: db 'TAN0.7854', 0
+fpt_g12: db 'TAN1', 0
+fpt_g13: db 'ATN0', 0
+fpt_g14: db 'ATN1', 0
+fpt_g15: db 'ATN-1', 0
+fpt_g16: db 'ATN0.5', 0
+fpt_g17: db 'ATN10', 0
+fpt_g18: db 'ATN1000', 0
+
 fpt_t0: db 'LN1', 0
 fpt_t1: db 'LN2', 0
 fpt_t2: db 'LN10', 0
@@ -797,7 +960,7 @@ fpt_str:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 255
+    OS88_BSS 263
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -853,7 +1016,9 @@ fp_e2       equ fp_e1 + 8             ; counter, which fp_ln, fp_exp and
 fp_e3       equ fp_e2 + 8             ; fp_pow share
 fp_ek       equ fp_e3 + 8
 fpt_mop     equ fp_ek + 2             ; the math op, for the comparison
-fpt_bss_end equ fpt_mop + 2
+fpt_ulp     equ fpt_mop + 2           ; 8: the signed distance between
+                                      ; the answer and the reference
+fpt_bss_end equ fpt_ulp + 8
 
 %define FPT_BSS_NEED (fpt_bss_end - os88_image_end)
     times (FPT_BSS_NEED - OS88_BSS_SIZE) db 0
