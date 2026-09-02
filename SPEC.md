@@ -63787,18 +63787,31 @@ Two hooks, both where every row already answers the same question:
 `[wd_rowpic]` is set at row entry and read at row exit by `wd_rflush`, which
 is the same lifetime `[wd_rby]` and `[wd_rowx0]` already have.
 
-**Known defect: two picture rows overlap by exactly 8 pixels.** Insert two
-pictures and the second is drawn `[wd_gh]` too low, so its top row runs
-underneath the bottom of the one above. Measured on a 97-pixel picture: the
-first spans y 108..203 and the second starts at 195. `wd_rowhc` gives the row
-the picture's height, while `wd_picdraw` puts the picture's *bottom* at
-`[wd_rby] + [wd_gh]` — where a glyph's bottom would be — and those two are
-consistent for one picture and out by `[wd_gh]` for the next. It is
-**pre-existing**, which was established rather than assumed: it reproduces on
-the commit before the 1bpp/4bpp work, in a file format that build already
-accepted, so it belongs to the row model and not to the decoder. Not fixed
-here; the fix is a change to how a picture row's pen is placed, and that is
-its own piece of work.
+**Known defect: two picture rows overlap by about 8 pixels, cause unknown.**
+Insert two pictures and the second's top runs underneath the bottom of the one
+above. Measured on a 97-pixel picture: the first spans y 108..203 and the
+second starts at 195. It is **pre-existing**, which was established rather than
+assumed — it reproduces on the commit before the 1bpp/4bpp work, in a file
+format that build already accepted, so it belongs to the row model and not to
+the decoder.
+
+**A first explanation was recorded here and is wrong**, which is worth leaving
+written down. It said `wd_rowhc` gives the row the picture's height while
+`wd_picdraw` puts the picture's bottom at `[wd_rby] + [wd_gh]`, and that those
+are out by `[wd_gh]` for the second row. The arithmetic says otherwise:
+`wd_advy` sets row 0's pen to `[wd_ty] + [wd_rowhv] - [wd_gh]`, so
+`wd_picdraw`'s `rby + gh - h` lands at `[wd_ty]` exactly when `rowhv` is the
+picture's height; and each later row adds the *entered* row's height, which
+puts picture n+1's top at `rby(n) + gh` — precisely picture n's bottom. **They
+should touch, not overlap.** So one of the assumptions behind that reading does
+not hold in the case that was photographed — most likely that the second
+picture is the first character of its row, which is what `wd_rowhc` requires
+before it treats a row as a picture row at all.
+
+The observation is real and reproduced twice; the mechanism is not identified,
+and it was reasoned from screenshots rather than measured. Whoever fixes it
+should start by instrumenting `[wd_rowhv]` and `[wd_rby]` for the two rows
+rather than from this paragraph.
 
 **The file format is the part that waits.** A picture in a real Word file is a
 `PICF` in the data stream, and **there is no reference for its layout here** —
