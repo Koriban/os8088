@@ -16153,6 +16153,8 @@ sh_rpn_fid:
                                        ; LOG takes a BASE where 1.x's did not
     db 15, 16, 17, 98, 99             ; SIN COS TAN ASIN ACOS
     db 18, 97                         ; ATAN ATAN2
+    db 142, 143, 43, 56, 57           ; SLN SYD PMT PV FV
+    db 11                             ; NPV
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16185,6 +16187,8 @@ sh_rpn_fvar:
     db 0, 0, 0, 0, 1                  ; LN LOG10 EXP PI, and LOG(1..2)
     db 0, 0, 0, 0, 0                  ; SIN COS TAN ASIN ACOS
     db 0, 0                           ; ATAN ATAN2 - all fixed-arity
+    db 0, 0, 1, 1, 1                  ; SLN SYD, and PMT/PV/FV(3..5)
+    db 1                              ; NPV(2..15)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -18718,6 +18722,8 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 93                         ; 93+ are the FINANCIAL functions, on
+    jae .dofin                         ; the same layer one level up
     cmp ax, 81                         ; 81+ are the LOGARITHMS and their
     jae .dotrans                       ; friends, on the transcendental layer
     cmp ax, 77                         ; 77+ are the VARIANCE folds. They walk
@@ -18806,6 +18812,10 @@ sh_pfunc:
                                        ; SH_T_NUM on a fold's result
 .doinfo:
     call sh_pinfo
+    mov dx, ax
+    jmp .typed
+.dofin:
+    call sh_pfin
     mov dx, ax
     jmp .typed
 .dotrans:
@@ -19307,6 +19317,374 @@ sh_pargclass:
     pop dx
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; sh_pfin - the FINANCIAL functions, ids 93 and up (SPEC.md 81.37).
+; in: AX = the id, SI just past '('. out: the answer in sh_acc, SI past ')'.
+;
+; They differ from everything above in TAKING SEVERAL ARGUMENTS WITH TRAILING
+; ONES OPTIONAL, so they share one parser: sh_pfargs fills sh_fnarg[] and says
+; how many arrived, and each function then reads the slots it wants. A missing
+; argument is ZERO, which is Excel's rule for every one of them.
+; =============================================================================
+sh_pfin:
+    push bx
+    push cx
+    push dx
+    push di
+    mov [sh_fnid], ax                 ; THE ID, IN MEMORY. DI is fp_pack_a's
+    cmp byte [sh_fnbusy], 0           ; destination all through .annuity, so
+                                       ; it stops being the id long before the
+                                       ; dispatch at .havef - PV answered FV's
+                                       ; number because `cmp word [sh_fnid], 96` compared
+                                       ; a pointer to sh_fnt (81.37)           ; sh_fnarg[] is forty bytes and a task
+    je .free                          ; stack is 384 (20.6 rule 6), so it is
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; not banked per nesting level and a
+    jmp .zero                         ; financial function inside another's
+.free:                                ; arguments refuses instead (47)
+    mov byte [sh_fnbusy], 1
+    mov cx, 5
+    call sh_pfargs
+    mov [sh_trsi], si
+    cmp word [sh_fnid], 93
+    je .sln
+    cmp word [sh_fnid], 94
+    je .syd
+    cmp word [sh_fnid], 98
+    je .npv
+    jmp .annuity
+; --- SLN(cost, salvage, life) = (cost - salvage) / life ---------------------
+.sln:
+    cmp word [sh_fnn], 3
+    jb .badargs
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov si, sh_fnarg + 8
+    call fp_unpack_b
+    call fp_sub
+    mov si, sh_fnarg + 16
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    jmp .store
+; --- SYD(cost, salvage, life, per) ------------------------------------------
+; (cost - salvage) * (life - per + 1) * 2 / (life * (life + 1))
+.syd:
+    cmp word [sh_fnn], 4
+    jb .badargs
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov si, sh_fnarg + 8
+    call fp_unpack_b
+    call fp_sub
+    mov di, sh_fnt
+    call fp_pack_a                    ; t = cost - salvage
+    mov si, sh_fnarg + 16             ; u = life - per + 1
+    call fp_unpack_a
+    mov si, sh_fnarg + 24
+    call fp_unpack_b
+    call fp_sub
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_mul
+    inc word [fp_ae]                  ; * 2, on the exponent
+    mov di, sh_fnt
+    call fp_pack_a
+    mov si, sh_fnarg + 16             ; life * (life + 1)
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    call fp_a_to_b
+    mov si, sh_fnarg + 16
+    call fp_unpack_a
+    call fp_mul
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_div
+    jc .divzero
+    jmp .store
+; --- NPV(rate, v1, v2, ...) = sum of vi / (1+rate)^i -------------------------
+.npv:
+    cmp word [sh_fnn], 2
+    jb .badargs
+    mov si, sh_fnarg                  ; u = 1 + rate, the running divisor base
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    mov di, sh_fnu
+    call fp_pack_a
+    mov si, sh_fnu                    ; t = the running (1+rate)^i, from i=1
+    call fp_unpack_a
+    mov di, sh_fnt
+    call fp_pack_a
+    call fp_azero                     ; the sum
+    mov di, sh_tr0
+    call fp_pack_a
+    mov cx, 1
+.npvl:
+    cmp cx, [sh_fnn]
+    jae .npvdone
+    mov ax, cx                        ; sh_fnarg[cx] / t
+    mov bx, 8
+    mul bx
+    add ax, sh_fnarg
+    mov si, ax
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    call fp_a_to_b
+    mov si, sh_tr0
+    call fp_unpack_a
+    call fp_add
+    mov di, sh_tr0
+    call fp_pack_a
+    mov si, sh_fnt                    ; t *= (1+rate)
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_fnt
+    call fp_pack_a
+    inc cx
+    jmp .npvl
+.npvdone:
+    mov si, sh_tr0
+    call fp_unpack_a
+    jmp .store
+; --- PMT / PV / FV, the annuity three ---------------------------------------
+; With r the rate, n the periods and t the type (0 = paid at the end of a
+; period, 1 = at the beginning), all three come out of one identity:
+;
+;   pv*(1+r)^n + pmt*(1+t*r)*((1+r)^n - 1)/r + fv = 0
+;
+; sh_fnt holds (1+r)^n and sh_fnu the factor (1+t*r)*((1+r)^n-1)/r, and each
+; function then rearranges for the one it wants. r = 0 is its own case, where
+; that factor is simply n - the limit, and the formula divides by zero.
+.annuity:
+    cmp word [sh_fnn], 3
+    jb .badargs
+    mov si, sh_fnarg                  ; (1+r)^n
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    mov si, sh_fnarg + 8
+    call fp_unpack_b
+    call fp_pow
+    jc .badnum
+    mov di, sh_fnt
+    call fp_pack_a
+    mov si, sh_fnarg                  ; is the rate zero?
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jnc .ratenz
+    mov si, sh_fnarg + 8              ; r = 0: the factor is just n
+    call fp_unpack_a
+    mov di, sh_fnu
+    call fp_pack_a
+    jmp short .havef
+.ratenz:
+    mov si, sh_fnt                    ; ((1+r)^n - 1) / r
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_sub
+    mov si, sh_fnarg
+    call fp_unpack_b
+    call fp_div
+    mov di, sh_fnu
+    call fp_pack_a
+    cmp word [sh_fnn], 5              ; ...times (1 + t*r), when a type came
+    jb .havef
+    mov si, sh_fnarg + 32
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jc .havef
+    mov si, sh_fnarg                  ; any non-zero type means "at the start"
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    call fp_a_to_b
+    mov si, sh_fnu
+    call fp_unpack_a
+    call fp_mul
+    mov di, sh_fnu
+    call fp_pack_a
+.havef:
+    cmp word [sh_fnid], 95
+    je .pmt
+    cmp word [sh_fnid], 96
+    je .pvf
+; --- FV(rate, nper, pmt, pv, type) = -(pv*(1+r)^n + pmt*factor) -------------
+    mov si, sh_fnarg + 16             ; pmt * factor
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_tr0
+    call fp_pack_a
+    call fp_azero                     ; pv, if one came
+    mov di, sh_tr1
+    call fp_pack_a
+    cmp word [sh_fnn], 4
+    jb .fvsum
+    mov si, sh_fnarg + 24
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_tr1
+    call fp_pack_a
+.fvsum:
+    mov si, sh_tr0
+    call fp_unpack_a
+    mov si, sh_tr1
+    call fp_unpack_b
+    call fp_add
+    xor byte [fp_as], 1
+    jmp .store
+; --- PV(rate, nper, pmt, fv, type) = -(fv + pmt*factor) / (1+r)^n -----------
+.pvf:
+    mov si, sh_fnarg + 16
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_tr0
+    call fp_pack_a
+    cmp word [sh_fnn], 4
+    jb .pvnofv
+    mov si, sh_fnarg + 24
+    call fp_unpack_b
+    mov si, sh_tr0
+    call fp_unpack_a
+    call fp_add
+    mov di, sh_tr0
+    call fp_pack_a
+.pvnofv:
+    mov si, sh_tr0
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    xor byte [fp_as], 1
+    jmp .store
+; --- PMT(rate, nper, pv, fv, type) = -(pv*(1+r)^n + fv) / factor ------------
+.pmt:
+    mov si, sh_fnarg + 16
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_tr0
+    call fp_pack_a
+    cmp word [sh_fnn], 4
+    jb .pmtnofv
+    mov si, sh_fnarg + 24
+    call fp_unpack_b
+    mov si, sh_tr0
+    call fp_unpack_a
+    call fp_add
+    mov di, sh_tr0
+    call fp_pack_a
+.pmtnofv:
+    mov si, sh_tr0
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    xor byte [fp_as], 1
+    jmp .store
+.divzero:
+    mov byte [sh_evalerr], SH_ERR_DIV0
+    jmp short .zero
+.badnum:
+    mov byte [sh_evalerr], SH_ERR_NUM
+    jmp short .zero
+.badargs:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+.zero:
+    call fp_azero
+.store:
+    mov si, [sh_trsi]
+    call sh_acc_store
+    call sh_skipargs
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    mov byte [sh_fnbusy], 0
+    xor ax, ax
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_pfargs - parse up to CX comma-separated numeric arguments into sh_fnarg[],
+; [sh_fnn] = how many were there. Every slot is ZEROED first, so a function
+; reading past the end gets Excel's own default of nothing.
+; out: SI at the ')'; preserves nothing but SI.
+; -----------------------------------------------------------------------------
+sh_pfargs:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov word [sh_fnn], 0
+    push cx
+    mov di, sh_fnarg                  ; wipe all five slots
+    mov cx, 20
+.wipe:
+    mov word [di], 0
+    add di, 2
+    loop .wipe
+    pop cx
+.arg:
+    cmp byte [si], ')'
+    je .done
+    cmp word [sh_fnn], 5
+    jae .done
+    push cx
+    call sh_pcmp
+    pop cx
+    mov ax, [sh_fnn]
+    mov bx, 8
+    mul bx
+    add ax, sh_fnarg
+    mov bx, ax
+    push si
+    mov si, sh_acc
+    call sh_trcopy
+    pop si
+    inc word [sh_fnn]
+    cmp byte [si], ','
+    jne .done
+    inc si
+    jmp short .arg
+.done:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -24105,6 +24483,12 @@ sh_f_asin:      db 'ASIN', 0
 sh_f_acos:      db 'ACOS', 0
 sh_f_atan:      db 'ATAN', 0
 sh_f_atan2:     db 'ATAN2', 0
+sh_f_sln:       db 'SLN', 0
+sh_f_syd:       db 'SYD', 0
+sh_f_pmt:       db 'PMT', 0
+sh_f_pv:        db 'PV', 0
+sh_f_fv:        db 'FV', 0
+sh_f_npv:       db 'NPV', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -24133,6 +24517,7 @@ sh_functab:
     dw sh_f_ln, sh_f_log10, sh_f_exp, sh_f_pi, sh_f_log
     dw sh_f_sin, sh_f_cos, sh_f_tan, sh_f_asin, sh_f_acos
     dw sh_f_atan, sh_f_atan2
+    dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -24231,7 +24616,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4077
+    OS88_BSS 4139
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -24964,7 +25349,19 @@ sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
                                        ; sum, for the variance folds (81.34)
 sh_tr0        equ sh_pacc2 + 8        ; 8 } two packed doubles that survive a
 sh_tr1        equ sh_tr0 + 8          ; 8 } call to fp_ln, which OWNS fp_e0..3
-sh_trsi       equ sh_tr1 + 8          ; word: the formula pointer, banked
+sh_fnarg      equ sh_tr1 + 8          ; 5 x 8: the financial functions' parsed
+                                       ; arguments (81.37). Not banked per
+                                       ; nesting level - forty bytes against a
+                                       ; 384-byte stack - so a financial
+                                       ; function inside another's arguments
+                                       ; REFUSES, the shape 81.32.1 and 81.34.1
+                                       ; already take
+sh_fnn        equ sh_fnarg + 40       ; word: how many arrived
+sh_fnid       equ sh_fnn + 2          ; word: which function is running
+sh_fnbusy     equ sh_fnid + 2          ; byte: one of them is parsing
+sh_fnt        equ sh_fnbusy + 2       ; 8: a packed temporary
+sh_fnu        equ sh_fnt + 8          ; 8: ...and a second
+sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
                                        ; across the arithmetic (81.36)
                                        ; as its own temporaries (81.35)
 sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only

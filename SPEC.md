@@ -75745,6 +75745,65 @@ it there tested the answer instead, and `ATAN2(-1,1)` became −3.9269 where
 | `=ASIN(2)` | `#NUM!` |
 
 
+### 81.37 The financial functions, part one
+
+`SLN`, `SYD`, `PMT`, `PV`, `FV` and `NPV` — six of the manual's thirteen, on
+`fp_pow` from §84.8. Sheet knows **99** of Excel 2.1d's ~120.
+
+They differ from everything above in **taking several arguments with the
+trailing ones optional**, so they share one parser. `sh_pfargs` fills
+`sh_fnarg[]`, zeroing all five slots first, and says how many arrived; a
+missing argument is therefore **zero**, which is Excel's rule for every one of
+them.
+
+**One identity gives three of them.** With `r` the rate, `n` the periods and
+`t` the type (0 = paid at a period's end, 1 = its beginning):
+
+```
+pv·(1+r)^n  +  pmt·(1+t·r)·((1+r)^n − 1)/r  +  fv  =  0
+```
+
+`sh_fnt` holds `(1+r)^n` and `sh_fnu` that factor, and `PMT`, `PV` and `FV`
+each rearrange for the one they want. **`r = 0` is its own case**, where the
+factor is simply `n` — the limit — and the general form divides by zero.
+
+#### 81.37.1 DI held the id and was also a destination
+
+`PV` answered **FV's** number. `DI` carried the function id from the top of
+`sh_pfin`, and `.annuity` uses `DI` as `fp_pack_a`'s destination half a dozen
+times — so by the dispatch at `.havef`, `cmp di, 96` was comparing a pointer
+to `sh_fnt`. Both fell through to `FV`. The id lives in `[sh_fnid]` now.
+
+This is the **third** time in this session a register has been asked to be both
+an identifier and a working pointer — §81.35's `sh_trcopy` took `BX` for the
+same reason, and §81.36's `SI` stopped being the formula. The pattern is worth
+naming: in a routine long enough to call the float layer, nothing survives in a
+register unless the file says it does.
+
+#### 81.37.2 Verified
+
+`screenshots/sheet-financial.png`, against the same formulas evaluated in
+Python:
+
+| | Sheet | reference |
+|---|---|---|
+| `=SLN(10000,1000,5)` | 1800 | 1800 |
+| `=SYD(10000,1000,5,1)` | 3000 | 3000 |
+| `=SYD(10000,1000,5,5)` | 600 | 600 |
+| `=PMT(0.01,60,-20000)` | 444.888 | 444.888954 |
+| `=PV(0.01,60,-500)` | 22477.5 | 22477.519203 |
+| `=FV(0.01,60,-500)` | 40834.8 | 40834.834928 |
+| `=FV(0,10,-100)` | 1000 | 1000 — the zero-rate case |
+| `=NPV(0.1,100,200,300)` | 481.592 | 481.592787 |
+| `=PMT(0.01,60,-20000,0,1)` | 440.484 | 440.4841 — paid at the start |
+
+**Seven remain**: `DDB`, `IPMT`, `PPMT`, `NPER`, `RATE`, `IRR` and `MIRR`.
+`NPER` is one more rearrangement of the identity above and `IPMT`/`PPMT` fall
+out of `PMT` and `FV`; `DDB` wants a loop over periods; and `RATE`, `IRR` and
+`MIRR` are **root-finders** — the first functions here that iterate toward an
+answer rather than computing one, and the first that can fail to converge.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
