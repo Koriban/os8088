@@ -947,7 +947,7 @@ wd_dattr:
     jne .notpic                     ; CHPX can carry its own fcPic and nothing
     PKG_STB wd_dpicrun, 1     ; else shares it (SPEC.md 86.7)
     call wd_dat1                    ; AL = the CHP byte, which for a picture
-    mov dl, al                      ; character is its INDEX (68.15)
+    mov dl, al                      ; character is its INDEX (86.9)
     inc bx
     jmp short .end
 .notpic:
@@ -2535,14 +2535,14 @@ wd_dpicr:
     cmp al, WD_PICCH
     jne .next
     cmp word [wd_npic], WD_PICMAX
-    jae .out                        ; past what a document may hold (68.15)
+    jae .out                        ; past what a document may hold (86.9)
     call wd_dpic1                   ; -> CF=0 and the picture registered
     jc .out                         ; a record that does not parse ends the
     mov ax, [wd_npic]               ; walk: the ones after it are found by
     dec ax                          ; stepping over this one, so there is
     push ds                         ; nothing left to trust
     PKG_LDS wd_cseg
-    mov [bx], al                    ; the CHP byte IS the index (68.15)
+    mov [bx], al                    ; the CHP byte IS the index (86.9)
     pop ds
 .next:
     inc bx

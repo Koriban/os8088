@@ -138,7 +138,7 @@ wd_rpict:
     push es
     push ds
     PKG_LDS wd_cseg            ; the CHP byte IS the picture index
-    mov al, [bx]                    ; (SPEC.md 68.15)
+    mov al, [bx]                    ; (SPEC.md 86.9)
     pop ds
     xor ah, ah
     call far [wd_v_picrec]; -> BX = the table slot
@@ -1263,7 +1263,7 @@ wd_rpfin:
     cmp ax, [wd_rpcap]
     jb .drop                        ; short of what the header promised
     mov ax, [wd_npic]
-    cmp ax, WD_PICMAX               ; a document may hold WD_PICMAX (68.15);
+    cmp ax, WD_PICMAX               ; a document may hold WD_PICMAX (86.9);
     jae .drop                       ; the rest arrive as nothing
     mov cl, 3
     shl ax, cl                      ; * WD_PICREC
@@ -1277,7 +1277,7 @@ wd_rpfin:
     mov [di+4], ax
     mov ax, [wd_rpseg]
     mov [di+6], ax
-    mov ax, [wd_npic]               ; the CHP byte IS the index (68.15), and
+    mov ax, [wd_npic]               ; the CHP byte IS the index (86.9), and
     inc word [wd_npic]              ; the character carries no other format.
     call wd_rputp                   ; AL is that index and wd_rputp wants it
     jmp short .out                  ; there - the character it writes is

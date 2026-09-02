@@ -63734,183 +63734,23 @@ width, a tab stop and a byte column, and only a handful of the dozens of them
 are the height. Nothing but reading each one tells them apart, and a face whose
 height differs from its advance is the only test that separates them.
 
-### 68.15 Insert > Picture — reading one, and the three parts still to come
+### 68.15 Insert ▸ Picture is SCRIBE's, not Word's
 
-**A picture is chosen, decoded, and drawn in the document.** `.PIX`, `.BMP`
-and `.PCX` — at **4 bits per pixel and at 1**, in every arrangement §85
-accepts — through `apps/os88img.inc`. What it does not yet do is survive a
-save, and that is a reference problem rather than a code one.
+It was built here — the picture character, the claim per picture, the layout
+hooks and `WORD.OVL`'s first real tenant — and then **reverted out of Word
+entirely**, because that is the point of the fork: WORD is the package this
+tree ships and tracks upstream, and SCRIBE (§86) is where it is allowed to
+diverge. Carrying the same feature in both would have meant maintaining it
+twice and shipping 49KB to show two word processors that differ in their name.
 
-1bpp matters here more than anywhere else the include is used, and not for
-file-size reasons. A Windows 2.x machine cannot put anything else on a
-clipboard — its Paint is monochrome by construction, MSP has no bit-depth
-field at all — so a picture that came out of the era Word is modelled on has
-no other form. It is also the depth a scanned page and a fax arrive in.
+The whole of it, unchanged, is **§86.9**, and the file formats it needs are
+§86.5 to §86.8. What Word keeps from the episode is the three fixes that were
+not about pictures at all: `wd_ondlg`'s name bank is gone with the feature that
+needed it, but `tests/suite.py`'s `stkbalance` row still covers
+`apps/word/word.asm`, and `WORD.OVL`'s dispatcher still indexes through BP.
 
-**The document model is Word's own.** A picture is character `0x01`
-(`WD_PICCH`) in the text, and that needs no new bits anywhere: §68.4's readers
-drop every control under 32 except tab and ¶, so a `0x01` in this buffer can
-only be ours, and the character *is* the marker. Its **CHP byte is the index**
-into `wd_pictab` — exactly the trick a ¶ mark already uses for its PAP index
-(§68.3), which matters because **CHP bit 7 is not available** for a flag and
-§68.3 says why. Real Word marks the same character with `sprmCFSpec`; the
-sprm is what a *file* needs, not what a document model needs.
-
-Each picture's pixels live in a claim **sized for them**. The decoder cannot
-size its own destination — it has to be given one before it knows the
-dimensions — so `wd_pictkeep` decodes into a fixed `WD_PICKB` scratch claim,
-then claims exactly the bytes the picture turned out to occupy and copies.
-Eight 40KB scratch claims for eight small drawings would be 320KB of a 640KB
-machine.
-
-`wd_pictfree` gives them all back wherever a document is replaced — File > New
-and both of `wd_load`'s commit points. Not before the commit: `wd_docparse`
-refuses whole and leaves the document untouched, and a refusal must not cost
-the pictures it was not replacing. Same rule §81.10.8 states for Sheet's
-defined names.
-
-**The layout needed far less than expected**, and the reason is worth writing
-down because the first estimate was wrong. Row heights here are *already*
-variable: `wd_rowhc` sets `[wd_rowhv]` — 8, 12 or 16 from the paragraph's line
-spacing, plus 8 for space-before — and `wd_advy` moves the pen by exactly
-that. So a picture row is a row with a large `[wd_rowhv]`, and the incremental
-machinery, the row table and the caret net all keep working unchanged.
-
-Two hooks, both where every row already answers the same question:
-
-- `wd_rowhc` peeks the row's first character. `WD_PICCH` means the height is
-  the picture's and `[wd_rowpic]` is its index; anything else is the ordinary
-  text height and `[wd_rowpic]` is `0xFFFF`.
-- `wd_penadv` reports a picture's cell as the picture's **width**, so the
-  existing wrap rule ends the row after it with no special case at all.
-
-`[wd_rowpic]` is set at row entry and read at row exit by `wd_rflush`, which
-is the same lifetime `[wd_rby]` and `[wd_rowx0]` already have.
-
-**Known defect: two picture rows overlap by about 8 pixels, cause unknown.**
-Insert two pictures and the second's top runs underneath the bottom of the one
-above. Measured on a 97-pixel picture: the first spans y 108..203 and the
-second starts at 195. It is **pre-existing**, which was established rather than
-assumed — it reproduces on the commit before the 1bpp/4bpp work, in a file
-format that build already accepted, so it belongs to the row model and not to
-the decoder.
-
-**A first explanation was recorded here and is wrong**, which is worth leaving
-written down. It said `wd_rowhc` gives the row the picture's height while
-`wd_picdraw` puts the picture's bottom at `[wd_rby] + [wd_gh]`, and that those
-are out by `[wd_gh]` for the second row. The arithmetic says otherwise:
-`wd_advy` sets row 0's pen to `[wd_ty] + [wd_rowhv] - [wd_gh]`, so
-`wd_picdraw`'s `rby + gh - h` lands at `[wd_ty]` exactly when `rowhv` is the
-picture's height; and each later row adds the *entered* row's height, which
-puts picture n+1's top at `rby(n) + gh` — precisely picture n's bottom. **They
-should touch, not overlap.** So one of the assumptions behind that reading does
-not hold in the case that was photographed — most likely that the second
-picture is the first character of its row, which is what `wd_rowhc` requires
-before it treats a row as a picture row at all.
-
-The observation is real and reproduced twice; the mechanism is not identified,
-and it was reasoned from screenshots rather than measured. Whoever fixes it
-should start by instrumenting `[wd_rowhv]` and `[wd_rby]` for the two rows
-rather than from this paragraph.
-
-**The file format is the part that waits.** A picture in a real Word file is a
-`PICF` in the data stream, and **there is no reference for its layout here** —
-not the Opus headers, not either Walden volume (whose RTF chapter predates
-bitmaps: `\wmetafile` and `\macpict` only), not the Dr. Dobb's disc. The port's
-own table shows why it cannot be filled in from memory: **sprm 68 is
-`sprmCFtc`** here, and in Word 6 that same number is `sprmCPicLocation`. The
-numbering differs between the versions. §81.10.2 records what guessing a
-binary structure costs — not a broken file, one that opens happily and means
-something else — so this waits for real Word 1.1a to write one.
-
-#### 68.15.1 The decoder is WORD.OVL's first real tenant
-
-§68.10 built the module mechanism and proved it as far as a ping, and recorded
-an open question beside it: a shim whose resident routine touched the UI froze
-the app for reasons that stayed unknown.
-
-`apps/os88img.inc` is the right thing to move out first **because it needs no
-shims at all**. It owns no state, calls no `OSAPI`, and reaches nothing in the
-package: one far call in, one `retf` out, and two segments the caller names in
-a block. So it exercises the path that *is* proven and none of the path that
-is not — which is why the open question above is still open and this still
-works. It is also 1,600-odd bytes that a package with 5,270 free could not
-have spent resident.
-
-`WORD.OVL` went from 18 bytes to 1,623, and the resident image did not grow.
-
-#### 68.15.2 Three bugs, two of them in gates rather than in code
-
-**The dispatcher clobbered `SI`.** `wd_modc` staged the doubled verb index in
-`SI` before the indirect jump — the identical line that cost an afternoon in
-CHART the same week (§82.16.4). It was dormant here only because `WDM_PING`
-takes no arguments, and it would have fired on the very first real verb:
-`img_load`'s whole contract is `SI` = the caller's block. Index through `BP`,
-which is the verb already.
-
-**`wd_pictload` pushed seven registers and popped six**, and `SI` was the one
-missed, so `ret` took its saved value as the return address. Every segment
-register ended up at `0x000E` with `IP` at `0xDF` — executing inside the
-interrupt vector table, the whole machine gone, no message.
-
-`tools/stkbalance.py` exists precisely to catch that, its own header cites the
-same bug in `ch_legend`, **and the suite stayed green** — because the row was
-scoped to SHEET, CHART and their includes, and WORD was not in the list. It is
-now, along with `os88img.inc`. Two labels there carry `; STKBALANCE-OK`:
-`wd_sbd_out` and `wd_fastcm` are shared jump targets rather than routines, and
-their pushes are in callers the walk cannot follow back to. The marker has to
-sit on a line *after* the label — the label's own raw line is discarded before
-the body is scanned.
-
-**Every message was too long.** `TOAST_MAX` is **24 characters** and
-`kernel/toast.inc` calls it "the tight one". The first draft ran to 58, and
-the strip simply stopped mid-word at the right edge of the screen — no error,
-no ellipsis, just a sentence with its end missing. The success line is built
-from a width and a height, so it is the longest that has to fit:
-`1280x65535 - not placed` is 23.
-
-#### 68.15.3 What the command actually does
-
-#### 68.15.4 Drawing it
-
-`wd_rflush` takes one branch: a row whose `[wd_rowpic]` is set is **one
-`OSAPI_GFX_BLIT4`** and none of the lettering below it, because the row buffer
-holds no glyphs for it. BLIT4 and not `OSAPI_GFX_BLITP` for §85's reason —
-BLITP refuses an armed clip region, and a picture in a document that scrolls
-is always inside one.
-
-`wd_picdraw` is the one routine in this file's drawing path that pushes **BP**,
-and that is not defensive: BP is the walk's pen y, and BLIT4 takes the source
-stride in it.
-
-The picture sits at `[wd_rowx0]`, the row's own start pen, so it obeys the
-paragraph's indent like any row; and its *bottom* is where the glyphs' bottom
-would have been, so it sits on the line rather than floating above it.
-
-#### 68.15.5 How the command runs
-
-It borrows the ordinary file dialog with `[wd_pictwant]` raised, so `wd_ondlg`
-routes the answer to `wd_pictload` instead of to open-or-save. One flag rather
-than a third `FDLG` mode: the kernel's two modes are its contract, and a
-package's reason for opening the dialog is the package's own business.
-
-The answer is taken **before** the bookkeeping that follows a real open — a
-picture is not the document, so choosing one must not rename it, retitle the
-window, or move which folder it belongs to. (Confirmed by the dialog opening
-at the volume root afterwards rather than where the picture was.)
-
-Two transient claims, both handed straight back: the file's bytes and the
-decoded picture (`WD_PICKB`, 40KB). Transient because §50.3 is about a package
-*sizing itself* at entry, and neither is part of how big WORD is — they are
-the shape of one command. The block and row buffer `os88img.inc` works through
-are in **bss**, because that include reaches both through `DS`, which stays
-the package's segment even while the decoder runs out in `WORD.OVL`.
-
-`IMG_ERR` comes back as a number and WORD words the message (§85.2). Verified
-live on five files: a 4bpp BMP (`30x9`), a four-plane PCX (`37x11`), an 8-bit
-PCX (`Convert to 4-bit first`), a text file (`Not a picture file`), and a
-1152x90 PCX that packs to 51,840 bytes against a 40KB claim
-(`Picture too big`).
+Word's own overlay is back to the ping-only module it was: 18 bytes, the
+mechanism proven and no tenant.
 
 ## 69. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 
@@ -77296,3 +77136,184 @@ one floppy — every one of these goes through the overlay:
   `os88imgcase.py`'s independent decode of the source BMP — same rotate-xor,
   `BCE9`. Read and write both crossed the boundary and the bytes did not move
   (`screenshots/scribe-ovl-rtf-resaved.png`).
+
+### 86.9 Insert ▸ Picture — the document model
+
+Built in WORD first and reverted out of it (§68.15); this is where it
+lives. Every symbol below is `apps/scribe/`'s.
+
+**A picture is chosen, decoded, and drawn in the document.** `.PIX`, `.BMP`
+and `.PCX` — at **4 bits per pixel and at 1**, in every arrangement §85
+accepts — through `apps/os88img.inc`. What it does not yet do is survive a
+save, and that is a reference problem rather than a code one.
+
+1bpp matters here more than anywhere else the include is used, and not for
+file-size reasons. A Windows 2.x machine cannot put anything else on a
+clipboard — its Paint is monochrome by construction, MSP has no bit-depth
+field at all — so a picture that came out of the era Word is modelled on has
+no other form. It is also the depth a scanned page and a fax arrive in.
+
+**The document model is Word's own.** A picture is character `0x01`
+(`WD_PICCH`) in the text, and that needs no new bits anywhere: §68.4's readers
+drop every control under 32 except tab and ¶, so a `0x01` in this buffer can
+only be ours, and the character *is* the marker. Its **CHP byte is the index**
+into `wd_pictab` — exactly the trick a ¶ mark already uses for its PAP index
+(§68.3), which matters because **CHP bit 7 is not available** for a flag and
+§68.3 says why. Real Word marks the same character with `sprmCFSpec`; the
+sprm is what a *file* needs, not what a document model needs.
+
+Each picture's pixels live in a claim **sized for them**. The decoder cannot
+size its own destination — it has to be given one before it knows the
+dimensions — so `wd_pictkeep` decodes into a fixed `WD_PICKB` scratch claim,
+then claims exactly the bytes the picture turned out to occupy and copies.
+Eight 40KB scratch claims for eight small drawings would be 320KB of a 640KB
+machine.
+
+`wd_pictfree` gives them all back wherever a document is replaced — File > New
+and both of `wd_load`'s commit points. Not before the commit: `wd_docparse`
+refuses whole and leaves the document untouched, and a refusal must not cost
+the pictures it was not replacing. Same rule §81.10.8 states for Sheet's
+defined names.
+
+**The layout needed far less than expected**, and the reason is worth writing
+down because the first estimate was wrong. Row heights here are *already*
+variable: `wd_rowhc` sets `[wd_rowhv]` — 8, 12 or 16 from the paragraph's line
+spacing, plus 8 for space-before — and `wd_advy` moves the pen by exactly
+that. So a picture row is a row with a large `[wd_rowhv]`, and the incremental
+machinery, the row table and the caret net all keep working unchanged.
+
+Two hooks, both where every row already answers the same question:
+
+- `wd_rowhc` peeks the row's first character. `WD_PICCH` means the height is
+  the picture's and `[wd_rowpic]` is its index; anything else is the ordinary
+  text height and `[wd_rowpic]` is `0xFFFF`.
+- `wd_penadv` reports a picture's cell as the picture's **width**, so the
+  existing wrap rule ends the row after it with no special case at all.
+
+`[wd_rowpic]` is set at row entry and read at row exit by `wd_rflush`, which
+is the same lifetime `[wd_rby]` and `[wd_rowx0]` already have.
+
+**Known defect: two picture rows overlap by about 8 pixels, cause unknown.**
+Insert two pictures and the second's top runs underneath the bottom of the one
+above. Measured on a 97-pixel picture: the first spans y 108..203 and the
+second starts at 195. It is **pre-existing**, which was established rather than
+assumed — it reproduces on the commit before the 1bpp/4bpp work, in a file
+format that build already accepted, so it belongs to the row model and not to
+the decoder.
+
+**A first explanation was recorded here and is wrong**, which is worth leaving
+written down. It said `wd_rowhc` gives the row the picture's height while
+`wd_picdraw` puts the picture's bottom at `[wd_rby] + [wd_gh]`, and that those
+are out by `[wd_gh]` for the second row. The arithmetic says otherwise:
+`wd_advy` sets row 0's pen to `[wd_ty] + [wd_rowhv] - [wd_gh]`, so
+`wd_picdraw`'s `rby + gh - h` lands at `[wd_ty]` exactly when `rowhv` is the
+picture's height; and each later row adds the *entered* row's height, which
+puts picture n+1's top at `rby(n) + gh` — precisely picture n's bottom. **They
+should touch, not overlap.** So one of the assumptions behind that reading does
+not hold in the case that was photographed — most likely that the second
+picture is the first character of its row, which is what `wd_rowhc` requires
+before it treats a row as a picture row at all.
+
+The observation is real and reproduced twice; the mechanism is not identified,
+and it was reasoned from screenshots rather than measured. Whoever fixes it
+should start by instrumenting `[wd_rowhv]` and `[wd_rby]` for the two rows
+rather than from this paragraph.
+
+**The file format is the part that waits.** A picture in a real Word file is a
+`PICF` in the data stream, and **there is no reference for its layout here** —
+not the Opus headers, not either Walden volume (whose RTF chapter predates
+bitmaps: `\wmetafile` and `\macpict` only), not the Dr. Dobb's disc. The port's
+own table shows why it cannot be filled in from memory: **sprm 68 is
+`sprmCFtc`** here, and in Word 6 that same number is `sprmCPicLocation`. The
+numbering differs between the versions. §81.10.2 records what guessing a
+binary structure costs — not a broken file, one that opens happily and means
+something else — so this waits for real Word 1.1a to write one.
+
+#### 86.9.1 The decoder is SCRIBE.OVL's first real tenant
+
+§68.10 built the module mechanism and proved it as far as a ping, and recorded
+an open question beside it: a shim whose resident routine touched the UI froze
+the app for reasons that stayed unknown.
+
+`apps/os88img.inc` is the right thing to move out first **because it needs no
+shims at all**. It owns no state, calls no `OSAPI`, and reaches nothing in the
+package: one far call in, one `retf` out, and two segments the caller names in
+a block. So it exercises the path that *is* proven and none of the path that
+is not — which is why the open question above is still open and this still
+works. It is also 1,600-odd bytes that a package with 5,270 free could not
+have spent resident.
+
+`SCRIBE.OVL` went from 18 bytes to 1,623, and the resident image did not grow.
+
+#### 86.9.2 Three bugs, two of them in gates rather than in code
+
+**The dispatcher clobbered `SI`.** `wd_modc` staged the doubled verb index in
+`SI` before the indirect jump — the identical line that cost an afternoon in
+CHART the same week (§82.16.4). It was dormant here only because `WDM_PING`
+takes no arguments, and it would have fired on the very first real verb:
+`img_load`'s whole contract is `SI` = the caller's block. Index through `BP`,
+which is the verb already.
+
+**`wd_pictload` pushed seven registers and popped six**, and `SI` was the one
+missed, so `ret` took its saved value as the return address. Every segment
+register ended up at `0x000E` with `IP` at `0xDF` — executing inside the
+interrupt vector table, the whole machine gone, no message.
+
+`tools/stkbalance.py` exists precisely to catch that, its own header cites the
+same bug in `ch_legend`, **and the suite stayed green** — because the row was
+scoped to SHEET, CHART and their includes, and WORD was not in the list. It is
+now, along with `os88img.inc`. Two labels there carry `; STKBALANCE-OK`:
+`wd_sbd_out` and `wd_fastcm` are shared jump targets rather than routines, and
+their pushes are in callers the walk cannot follow back to. The marker has to
+sit on a line *after* the label — the label's own raw line is discarded before
+the body is scanned.
+
+**Every message was too long.** `TOAST_MAX` is **24 characters** and
+`kernel/toast.inc` calls it "the tight one". The first draft ran to 58, and
+the strip simply stopped mid-word at the right edge of the screen — no error,
+no ellipsis, just a sentence with its end missing. The success line is built
+from a width and a height, so it is the longest that has to fit:
+`1280x65535 - not placed` is 23.
+
+#### 86.9.3 What the command actually does
+
+#### 86.9.4 Drawing it
+
+`wd_rflush` takes one branch: a row whose `[wd_rowpic]` is set is **one
+`OSAPI_GFX_BLIT4`** and none of the lettering below it, because the row buffer
+holds no glyphs for it. BLIT4 and not `OSAPI_GFX_BLITP` for §85's reason —
+BLITP refuses an armed clip region, and a picture in a document that scrolls
+is always inside one.
+
+`wd_picdraw` is the one routine in this file's drawing path that pushes **BP**,
+and that is not defensive: BP is the walk's pen y, and BLIT4 takes the source
+stride in it.
+
+The picture sits at `[wd_rowx0]`, the row's own start pen, so it obeys the
+paragraph's indent like any row; and its *bottom* is where the glyphs' bottom
+would have been, so it sits on the line rather than floating above it.
+
+#### 86.9.5 How the command runs
+
+It borrows the ordinary file dialog with `[wd_pictwant]` raised, so `wd_ondlg`
+routes the answer to `wd_pictload` instead of to open-or-save. One flag rather
+than a third `FDLG` mode: the kernel's two modes are its contract, and a
+package's reason for opening the dialog is the package's own business.
+
+The answer is taken **before** the bookkeeping that follows a real open — a
+picture is not the document, so choosing one must not rename it, retitle the
+window, or move which folder it belongs to. (Confirmed by the dialog opening
+at the volume root afterwards rather than where the picture was.)
+
+Two transient claims, both handed straight back: the file's bytes and the
+decoded picture (`WD_PICKB`, 40KB). Transient because §50.3 is about a package
+*sizing itself* at entry, and neither is part of how big WORD is — they are
+the shape of one command. The block and row buffer `os88img.inc` works through
+are in **bss**, because that include reaches both through `DS`, which stays
+the package's segment even while the decoder runs out in `SCRIBE.OVL`.
+
+`IMG_ERR` comes back as a number and WORD words the message (§85.2). Verified
+live on five files: a 4bpp BMP (`30x9`), a four-plane PCX (`37x11`), an 8-bit
+PCX (`Convert to 4-bit first`), a text file (`Not a picture file`), and a
+1152x90 PCX that packs to 51,840 bytes against a 40KB claim
+(`Picture too big`).

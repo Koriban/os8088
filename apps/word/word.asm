@@ -34,15 +34,6 @@
 
 %include "os88api.inc"
 
-; The picture decoders' CONSTANTS only (SPEC.md 85). Insert > Picture is
-; assembled a long way above where a shared include may put its code, and
-; the IMG_* offsets have to exist by then or every `mov [si+IMG_*]` sizes
-; its displacement differently on the two passes. The code itself is
-; %included into WORD.OVL further down.
-%define OS88IMG_CONSTS_ONLY
-%include "os88img.inc"
-%undef OS88IMG_CONSTS_ONLY
-
 ; SPEC.md 13.10.5's thumb GESTURE. AT THE TOP, not beside the %include that
 ; pulls os88ui.inc in - that one is 19,000 lines below here and a %ifdef is
 ; answered in FILE ORDER (13.10.7.4).
@@ -387,8 +378,7 @@ WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 68.9)
 WDA_RENUM    equ 24             ; Utilities > Renumber...
 WDA_TOC      equ 25             ; Insert > Table of Contents...
 WDA_PAGE     equ 26             ; View > Page (SPEC.md 68.11)
-WDA_PICT     equ 27             ; Insert > Picture... (SPEC.md 68.15)
-WDA_MAX      equ 27
+WDA_MAX      equ 26
 
 ; --- the CHP attribute byte (SPEC.md 68.3) -----------------------------------
 ; One byte per character, in a claim that mirrors every gap operation the text
@@ -588,22 +578,6 @@ WD_K_END     equ 0x4F
 WD_K_DOWN    equ 0x50
 WD_K_DEL     equ 0x53
 WD_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
-WD_PICMAX    equ 8              ; pictures one document may hold. The CHP byte
-                                ; of the 0x01 that marks one is its INDEX here,
-                                ; exactly as a paragraph mark's CHP byte is its
-                                ; PAP dictionary index (SPEC.md 68.3) - so a
-                                ; picture needs no new bit anywhere, and bit 7
-                                ; stays as unavailable as 68.3 says it is
-WD_PICREC    equ 8              ; w, h, stride, segment
-WD_PICCH     equ 1              ; the character. Word's own (chPicture), and
-                                ; safe here because 68.4's readers drop every
-                                ; control below 32 except tab and CR - so a
-                                ; 0x01 in this buffer can only be ours
-WD_PICKB     equ 40             ; the decoded picture's TRANSIENT claim
-                                ; (SPEC.md 68.15). 40KB holds a 640x128 or a
-                                ; 320x256 in packed 4bpp, and os88img.inc
-                                ; refuses anything past what it is given
-                                ; rather than writing past the claim
 
 ; --- keys (SPEC.md 27.8/68.3) ------------------------------------------------
 ; The control characters int 16h already hands over in AL. Backspace (8),
@@ -2210,20 +2184,6 @@ wd_papini:
 ; wd_rowhc - [wd_rowhv] = the entered row's height. Preserves all registers.
 wd_rowhc:
     push ax
-    push bx
-    mov word [wd_rowpic], 0xFFFF    ; "this row is not a picture"
-    mov bx, [wd_i]                  ; the row's FIRST character - wd_rowhc runs
-    cmp bx, [wd_len]                ; at row entry, so wd_i is it
-    jae .text
-    cmp byte [es:bx], WD_PICCH      ; ES is the document throughout the walk
-    jne .text                       ; (SPEC.md 27.6)
-    call wd_picidx                  ; -> AX = the index from its CHP byte
-    cmp ax, [wd_npic]
-    jae .text                       ; an index this document has no picture
-    mov [wd_rowpic], ax             ; for: draw it as ordinary text rather
-    call wd_pich                    ; than off the end of the table
-    jmp short .have
-.text:
     mov al, [wd_wadv]
     xor ah, ah
     cmp byte [wd_parafirst], 0
@@ -2233,79 +2193,7 @@ wd_rowhc:
     add ax, 8                       ; the open paragraph's blank line
 .have:
     mov [wd_rowhv], ax
-    pop bx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; The three little readers the two above share. A picture's identity is the
-; CHP byte of its WD_PICCH, exactly as a paragraph's format is the CHP byte of
-; its mark (SPEC.md 68.3) - so reading one means reaching into the PARALLEL
-; attribute claim at the same offset, which is what wd_picidx is for.
-; -----------------------------------------------------------------------------
-; wd_picidx - AX = the picture index of the WD_PICCH at [wd_i]. Preserves all
-; but AX. 0xFFFF if there is no character there at all.
-wd_picidx:
-    push bx
-    push es
-    mov bx, [wd_i]
-    cmp bx, [wd_len]
-    jae .none
-    mov es, [wd_cseg]
-    mov al, [es:bx]
-    xor ah, ah
-    jmp short .out
-.none:
-    mov ax, 0xFFFF
-.out:
-    pop es
-    pop bx
-    ret
-
-; wd_picrec - BX = the table slot for picture AX, or CF=1. Preserves the rest.
-wd_picrec:
-    cmp ax, [wd_npic]
-    jae .no
-    push cx
-    push ax
-    mov cl, 3
-    shl ax, cl                      ; * WD_PICREC
-    add ax, wd_pictab
-    mov bx, ax
-    pop ax
-    pop cx
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; wd_picw / wd_pich - AX = the width (height) of the picture the WD_PICCH at
-; [wd_i] names, or 8 if it names none. Preserves all but AX.
-wd_picw:
-    push bx
-    call wd_picidx
-    call wd_picrec
-    jc .no
-    mov ax, [bx]
-    jmp short .out
-.no:
-    mov ax, 8
-.out:
-    pop bx
-    ret
-
-wd_pich:
-    push bx
-    call wd_picidx
-    call wd_picrec
-    jc .no
-    mov ax, [bx+2]
-    jmp short .out
-.no:
-    mov ax, 8
-.out:
-    pop bx
     ret
 
 ; wd_advy - the pen enters row [wd_row]+1: move the glyph y by the ENTERED
@@ -2763,35 +2651,22 @@ wd_scapof:
 ; and 8 is what the fixed face asked for both.
 ; -----------------------------------------------------------------------------
 wd_penadv:
-    or bx, bx                       ; the picture test comes FIRST, and before
-    jz .noch                        ; the face test: a picture is its own width
-    cmp byte [es:si], WD_PICCH      ; in the kernel's 8x8 cell as much as in a
-    je .pictw                       ; proportional face (68.15)
-.noch:
     cmp byte [wd_pxon], 0
     jne .prop
 .eight:
     mov ax, 8
     ret
-.pictw:
-    call wd_picw
-    ret
 .prop:
     or bx, bx
     jz .eight
     mov al, [es:si]                 ; THE DOCUMENT IS ES:SI (SPEC.md 27.6)
-    cmp al, WD_PICCH                ; a picture's cell is as wide as the
-    je .pict                        ; picture, so the ordinary wrap rule ends
-    cmp al, 13                      ; the row after it with no special case
+    cmp al, 13
     je .eight
     cmp al, 9
     je .eight
     call ty_advof                   ; preserves BX, and AH with it
     xor ah, ah
     ret
-.pict:
-    call wd_picw                    ; AX = its width, or 8 if the index is not
-    ret                             ; one this document has
 
 ; -----------------------------------------------------------------------------
 ; wd_cellat - the cell index the pen is standing on (SPEC.md 68.13)
@@ -4119,54 +3994,6 @@ wd_rstart:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_picdraw - blit the row's picture. in: [wd_rowpic] is its index, [wd_rby]
-; the row's glyph y and [wd_rowx0] its start pen. Preserves all registers.
-;
-; OSAPI_GFX_BLIT4 and not OSAPI_GFX_BLITP, for SPEC.md 85's reason: BLITP
-; refuses an armed clip region, and a picture in a document that scrolls is
-; always inside one.
-;
-; BP IS PUSHED HERE and nowhere else in this file's drawing path, because BP is
-; the WALK's pen y - and BLIT4 takes the source stride in it.
-; -----------------------------------------------------------------------------
-wd_picdraw:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    mov ax, [wd_rowpic]
-    call wd_picrec
-    jc .out
-    mov cx, [bx]                    ; width
-    mov dx, [bx+2]                  ; height
-    mov bp, [bx+4]                  ; stride - BLIT4's own argument
-    mov ax, [bx+6]
-    or ax, ax
-    jz .out
-    mov es, ax
-    xor si, si                      ; the picture is at offset 0 of its claim
-    mov ax, [wd_rowx0]              ; the row's own start pen: a picture obeys
-                                    ; the paragraph's indent like any row does
-    mov bx, [wd_rby]
-    add bx, [wd_gh]
-    sub bx, dx                      ; ...and sits ON the row, so its BOTTOM is
-    call OSAPI_GFX_BLIT4            ; where the glyphs' bottom would have been
-.out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; wd_rflush - draw the accumulated row: ONE opaque font_run, then its caret
 ; preserves all registers
 ;
@@ -4208,11 +4035,6 @@ wd_rflush:
                                     ; small y. Below: it does not fit, the pen
                                     ; still
                                     ; advanced, so every position below is true
-    cmp word [wd_rowpic], 0xFFFF    ; a PICTURE row: one blit, and none of the
-    je .notpic                      ; lettering below - the row buffer holds no
-    call wd_picdraw                 ; glyphs for it (SPEC.md 68.15)
-    jmp .caret
-.notpic:
     cmp word [wd_rcols], 0
     je .caret
 
@@ -7196,11 +7018,6 @@ wd_load:
     call wd_docparse            ; CF=1 = refused whole, document untouched
     jc .bad
 .loaded:
-    call wd_pictfree            ; the OLD document's pictures, now that this
-                                ; read has committed. Not before: wd_docparse
-                                ; refuses whole and leaves the document
-                                ; untouched, and a refusal must not cost the
-                                ; pictures it was not replacing (68.15)
     call wd_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
     call wd_ldpost              ; ...then the loaded facts go back
@@ -7273,8 +7090,6 @@ wd_load:
     pop di
     pop cx
     pop ax
-    call wd_pictfree            ; ...and the same on the plain-text path, whose
-                                ; commit point is its own
     call wd_clamp               ; a shorter file must not leave the caret
                                 ; past the end of it
     call wd_ldscan              ; any tab that survived re-raises the flag
@@ -9288,10 +9103,6 @@ wd_redraw:
 ; reason an ordinary keystroke retires it.
 ; -----------------------------------------------------------------------------
 wd_new:
-    call wd_pictfree                ; the pictures go with the document. Their
-                                    ; pixels are in claims of their own, and a
-                                    ; table that outlives its text describes
-                                    ; characters that are not there (68.15)
     mov word [wd_len], 0
     mov word [wd_cur], 0
     mov ax, wd_s_nul            ; retire the toast: 'Loaded DOCUMENT.DOC' over an
@@ -9346,25 +9157,6 @@ wd_dlgopen:
 ; been uncovered by wm_destroy.
 ; -----------------------------------------------------------------------------
 wd_ondlg:
-    cmp byte [wd_pictwant], 0       ; INSERT > PICTURE BORROWS THIS DIALOG,
-    je .nobank                      ; AND THE DIALOG RENAMES THE DOCUMENT.
-    push si                         ; The copy below puts the chosen name in
-    push di                         ; wd_name unconditionally, so picking a
-    push cx                         ; picture renamed the document to it -
-    mov si, wd_name                 ; and nothing recomposed the title, so the
-    mov di, wd_namebank             ; bar went on showing the OLD name while
-    mov cx, WD_NAMEMAX + 1          ; Save wrote to the new one. Choosing a
-.bank:                              ; .BMP therefore overwrote that .BMP with
-    mov al, [si]                    ; the document, in whatever format the
-    mov [di], al                    ; PICTURE's extension implied. It is
-    inc si                          ; banked here and put back below.
-    inc di
-    dec cx
-    jnz .bank
-    pop cx
-    pop di
-    pop si
-.nobank:
     mov [wd_fsz], cx                ; the file's size from the LISTING (38.6),
     mov [wd_fszh], dx               ; banked FIRST - the open gate reads it
                                     ; BEFORE any disk I/O (SPEC.md 68.4)
@@ -9414,32 +9206,6 @@ wd_ondlg:
     pop di
     pop bx
 .noext:
-    cmp byte [wd_pictwant], 0       ; Insert > Picture borrowed the dialog
-    je .notpict                     ; (68.15). Answered HERE, before any of
-    mov byte [wd_pictwant], 0       ; the bookkeeping below: a picture is not
-    mov si, dx                      ; the document, so choosing one must not
-    call wd_pictload                ; rename it, retitle the window, or move
-                                    ; which folder it belongs to. wd_pictload
-                                    ; reads [wd_name], so the restore comes
-                                    ; AFTER it and not before
-    push si
-    push di
-    push cx
-    mov si, wd_namebank             ; the document's own name, back
-    mov di, wd_name
-    mov cx, WD_NAMEMAX + 1
-.unbank:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    dec cx
-    jnz .unbank
-    pop cx
-    pop di
-    pop si
-    jmp .draw
-.notpict:
     push dx                         ; the window: FILE_HERE answers in DX
     push bx                         ; ...and the mode is in BL
     call OSAPI_FILE_HERE            ; where the dialog left the volume IS the
@@ -16605,335 +16371,8 @@ wd_ftab:
     dw wd_a_renum                   ; Utilities > Renumber...
     dw wd_a_toc                     ; Insert > Table of Contents...
     dw wd_a_page                    ; View > Page (SPEC.md 68.11)
-    dw wd_a_pict                    ; Insert > Picture... (SPEC.md 68.15)
 
 wd_mf_ret:
-    ret
-
-; -----------------------------------------------------------------------------
-; wd_a_pict - Insert > Picture... (SPEC.md 68.15)
-;
-; Ask for a file, read it, and decode it through WORD.OVL. The picture is
-; measured and reported and NOT yet put in the document: the model, the
-; layout and the file format are 68.15's remaining three parts, and the
-; message says which stage this is rather than implying more.
-;
-; It routes through the ordinary file dialog with [wd_pictwant] raised, so
-; wd_ondlg sends the answer here instead of to open-or-save. One flag rather
-; than a third FDLG mode, because the kernel's two modes are its contract and
-; a package's own reason for opening the dialog is the package's business.
-; -----------------------------------------------------------------------------
-wd_a_pict:
-    call wd_uclose
-    mov byte [wd_pictwant], 1
-    mov al, FDLG_OPEN
-    jmp wd_dlgopen                  ; no repaint: the dialog is over us
-
-; -----------------------------------------------------------------------------
-; wd_pictload - read [wd_name] and decode it. Reports either way.
-;
-; TWO TRANSIENT CLAIMS, both handed straight back: the file's bytes and the
-; decoded picture. Transient because 50.3 is about a package SIZING itself at
-; entry, and neither of these is part of how big WORD is - they are the shape
-; of one command. A refusal is an ordinary path (47): the document is
-; untouched and still editable.
-; -----------------------------------------------------------------------------
-wd_pictload:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov word [wd_picseg], 0
-    call wd_stghold                 ; the file's bytes (the toast is set on
-    jc .out                         ; failure, and it is the right one)
-    mov es, [wd_stgseg]
-    xor bx, bx
-    mov cx, 0xFFFF                  ; DX:CX is the capacity, and 64K does not
-    xor dx, dx                      ; fit the word CX is
-    mov si, wd_name
-    call OSAPI_FILE_READ            ; out DX:AX = the size read
-    jc .ioerr
-    or dx, dx
-    jnz .toobig                     ; a picture file past 64KB is past what one
-    mov si, wd_imgblk               ; segment addresses, which is os88img's own
-    mov [si+IMG_SRCLEN], ax         ; limit too
-    mov ax, [wd_stgseg]
-    mov [si+IMG_SRCSEG], ax
-    mov ax, WD_PICKB
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov [wd_picseg], dx
-    mov si, wd_imgblk
-    mov [si+IMG_DSTSEG], dx
-    mov word [si+IMG_DSTMAX], WD_PICKB * 1024 - 1
-    mov word [si+IMG_ROWBUF], wd_imgrow
-    mov word [si+IMG_PICNO], 0      ; a .PIX is an ARCHIVE: 0 = whichever is
-                                    ; first, since picture numbers are not
-                                    ; contiguous and a document does not know
-                                    ; what they are (85.1)
-    mov bp, WDM_IMGLOAD
-    call wd_ovcall                  ; ...out to WORD.OVL, and back
-    jc .decerr
-    call wd_pictkeep                ; the scratch claim's contents into one
-    jc .full                        ; sized for them, and a table slot
-    call wd_pictput                 ; ...and WD_PICCH into the text
-    mov si, wd_imgblk
-    mov ax, [si+IMG_W]
-    mov bx, [si+IMG_H]
-    call wd_pictsay
-    jmp short .done
-.full:
-    mov ax, wd_e_pictfull
-    call wd_saymsg
-    jmp short .done
-.decerr:
-    mov si, wd_imgblk
-    mov ax, [si+IMG_ERR]
-    call wd_picterr
-    jmp short .done
-.ioerr:
-    mov ax, wd_e_pictio
-    call wd_saymsg
-    jmp short .done
-.toobig:
-    mov ax, wd_e_pictbig
-    call wd_saymsg
-    jmp short .done
-.nomem:
-    mov ax, wd_e_nomem
-    call wd_saymsg
-.done:
-    mov dx, [wd_picseg]             ; both claims go straight back - nothing
-    or dx, dx                       ; holds the picture yet
-    jz .nofree
-    call OSAPI_MEM_FREE
-    mov word [wd_picseg], 0
-.nofree:
-    call wd_stgdrop
-.out:
-    pop es                          ; the pushes are ax bx cx dx si di es, so
-    pop di                          ; these unwind es di si dx cx bx ax. SI
-    pop si                          ; was missing here and `ret` took its
-    pop dx                          ; saved value for the return address: the
-    pop cx                          ; whole machine, segments and all, ended
-    pop bx                          ; up at 000E:00DF inside the vector table
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; wd_pictkeep - the decoded picture is in the WD_PICKB scratch claim; move it
-; into a claim SIZED FOR IT and take a table slot. out: CF=1 = no slot or no
-; memory, and nothing was taken.
-;
-; Two claims and a copy rather than keeping the scratch, because the scratch is
-; 40KB whatever the picture is and eight of those is 320KB of a 640KB machine
-; for eight small drawings. The decoder cannot size its own destination - it
-; has to be given one before it knows the dimensions - so the sizing happens
-; here, afterwards, where they are known.
-; -----------------------------------------------------------------------------
-wd_pictkeep:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    mov ax, [wd_npic]
-    cmp ax, WD_PICMAX
-    jae .no
-    mov si, wd_imgblk
-    mov ax, [si+IMG_STRIDE]
-    mul word [si+IMG_H]             ; DX:AX = the bytes it actually occupies.
-    or dx, dx                       ; img_setgeom already proved this fits a
-    jnz .no                         ; word, so a high half means something is
-    mov cx, ax                      ; wrong rather than merely large
-    add ax, 1023
-    jc .no
-    mov cl, 10
-    shr ax, cl                      ; ...in kilobytes, rounded up
-    or ax, ax
-    jnz .kbok
-    mov ax, 1
-.kbok:
-    call OSAPI_MEM_CLAIM
-    jc .no
-    mov [wd_picnew], dx
-    mov si, wd_imgblk               ; scratch -> its own claim, a word at a
-    mov ax, [si+IMG_STRIDE]         ; time. rep movsw would need DS pointed at
-    mul word [si+IMG_H]             ; the source, and DS is the package here
-    mov cx, ax
-    inc cx
-    shr cx, 1
-    mov ax, [si+IMG_DSTSEG]
-    mov ds, ax
-    mov es, [cs:wd_picnew]
-    xor si, si
-    xor di, di
-.copy:
-    mov ax, [si]
-    mov [es:di], ax
-    add si, 2
-    add di, 2
-    dec cx
-    jnz .copy
-    pop ds
-    push ds
-    mov bx, [wd_npic]               ; the slot: w, h, stride, segment
-    mov ax, bx
-    mov cl, 3
-    shl ax, cl                      ; * WD_PICREC
-    add ax, wd_pictab
-    mov di, ax
-    mov si, wd_imgblk
-    mov ax, [si+IMG_W]
-    mov [di], ax
-    mov ax, [si+IMG_H]
-    mov [di+2], ax
-    mov ax, [si+IMG_STRIDE]
-    mov [di+4], ax
-    mov ax, [wd_picnew]
-    mov [di+6], ax
-    inc word [wd_npic]
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop ds
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; wd_pictput - put WD_PICCH in the text at the caret, its CHP byte the index
-; of the picture just kept. Preserves all registers.
-;
-; [wd_chp] is banked around the insert because wd_ins writes the TYPING
-; attributes as the character's CHP, and for this one character that byte is
-; not attributes at all.
-wd_pictput:
-    push ax
-    push bx
-    mov al, [wd_chp]
-    mov [wd_chpbank], al
-    mov ax, [wd_npic]
-    dec ax
-    mov [wd_chp], al
-    mov al, WD_PICCH
-    call wd_ins
-    mov al, [wd_chpbank]
-    mov [wd_chp], al
-    pop bx
-    pop ax
-    ret
-
-; wd_pictfree - hand every picture claim back and empty the table. Called
-; where the document is replaced (New, and each reader), for the reason
-; sh_nnames is cleared there: state that outlives its document goes on
-; describing one that is gone.
-wd_pictfree:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si                         ; SI is used as the slot pointer below and
-    mov cx, [wd_npic]               ; every caller is a document-replacing path
-                                    ; with its own state in it
-    jcxz .done
-    xor bx, bx
-.each:
-    mov ax, bx
-    push cx
-    mov cl, 3
-    shl ax, cl
-    pop cx
-    add ax, wd_pictab
-    mov si, ax
-    mov dx, [si+6]
-    or dx, dx
-    jz .next
-    call OSAPI_MEM_FREE
-.next:
-    inc bx
-    loop .each
-.done:
-    mov word [wd_npic], 0
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; wd_pictsay - AX = width, BX = height: "Picture 240x160 read - placing it
-; is not built yet". The last clause is there on purpose. A command that
-; reports a success it did not have is worse than one that refuses (47), and
-; this stage genuinely reads the file and genuinely does not insert it.
-wd_pictsay:
-    push ax
-    push bx
-    push si
-    push di
-    mov di, wd_pbuf
-    call wd_utoa                    ; AX = the width
-    mov si, wd_s_pictx
-    call wd_pcopy
-    mov ax, bx
-    call wd_utoa
-    mov si, wd_s_pict2
-    call wd_pcopy
-    mov byte [di], 0
-    mov ax, wd_pbuf
-    call wd_saymsg
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; wd_picterr - AX = an IMG_E_* code, said in THIS package's words. The include
-; returns a number and never a string, because a string out in WORD.OVL is at
-; a module-relative offset a resident reader takes for something else (85.2).
-wd_picterr:
-    push ax
-    push bx
-    push si
-    mov bx, ax
-    cmp bx, WD_PICTERRN
-    jbe .known
-    xor bx, bx
-.known:
-    shl bx, 1
-    mov ax, [bx+wd_picterrs]
-    call wd_saymsg
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; wd_pcopy - the NUL string SI to DI, DI advancing past it. wd_utoa's own
-; shape, so the two compose.
-wd_pcopy:
-    push ax
-.l:
-    mov al, [si]
-    or al, al
-    jz .done
-    mov [di], al
-    inc si
-    inc di
-    jmp short .l
-.done:
-    pop ax
     ret
 
 ; File > New / Open... ask the dirty question first (SPEC.md 68.4); the
@@ -19606,7 +19045,7 @@ wd_it_ins:                          ; &Insert
     WDMI WDMF_DIS, 0, WDA_NONE,   'T', wd_L_table,  0
     WDMS
     WDMI WDMF_DIS, 0, WDA_NONE,   'A', wd_L_annot,  0
-    WDMI 0,        0, WDA_PICT,   'P', wd_L_picture, 0
+    WDMI WDMF_DIS, 0, WDA_NONE,   'P', wd_L_picture, 0
     WDMI WDMF_DIS, 4, WDA_NONE,   'D', wd_L_field,  0
     WDMI WDMF_DIS, 6, WDA_NONE,   'E', wd_L_ixentry, 0
     WDMI WDMF_DIS, 0, WDA_NONE,   'I', wd_L_index,  0
@@ -19889,36 +19328,6 @@ wd_e_wprot:   db 'Write protected', 0
 wd_e_big:     db 'Too big', 0
 wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
-; Insert > Picture (SPEC.md 68.15). One string per IMG_E_* code, indexed by it
-; - the include hands back a NUMBER (85.2) and each package says what it means
-; in its own voice.
-; EVERY ONE OF THESE IS 24 CHARACTERS OR FEWER, because TOAST_MAX is 24 and
-; kernel/toast.inc calls it "the tight one". The first draft ran to 58 and the
-; strip simply stopped mid-word at the right edge of the screen - no error, no
-; ellipsis, just a sentence with its end missing. The success line is built
-; from a width and a height, so it is the longest possible one that has to
-; fit: '1280x65535 - not placed' is 23.
-wd_s_pictx:   db 'x', 0
-wd_s_pict2:   db ' - not placed', 0
-wd_e_pictio:  db 'Cannot read that file', 0
-wd_e_pictbig: db 'That file is too big', 0
-wd_e_pict0:   db 'Not a picture file', 0
-wd_e_pictw:   db 'Not a picture file', 0
-wd_e_picts:   db 'File is too short', 0
-wd_e_pictd:   db 'Bad picture size', 0
-wd_e_pictm:   db 'Picture too big', 0
-wd_e_pictt:   db 'Picture data ends early', 0
-wd_e_pictb:   db 'Convert to 4-bit first', 0
-wd_e_pictc:   db 'Compressed BMP not read', 0
-wd_e_pictn:   db 'No such picture', 0
-wd_e_pictv:   db 'Unknown file version', 0
-wd_e_pictfull: db 'No room for a picture', 0
-wd_picterrs:
-    dw wd_e_pict0                   ; 0 - never used: CF=0 means it worked
-    dw wd_e_pictw, wd_e_picts, wd_e_pictd, wd_e_pictm, wd_e_pictt
-    dw wd_e_pictb, wd_e_pictc, wd_e_pictn, wd_e_pictv
-WD_PICTERRN equ IMG_E_VER
-
 ; --- search and the clipboard (SPEC.md 68.7/55) ------------------------------
 wd_m_nopat:   db 'No search text', 0
 wd_m_repld:   db ' changes', 0       ; wd_saycnt's suffix: 'n changes' is the
@@ -19989,8 +19398,7 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 
 WD_OVKB      equ 8              ; the claim WORD.OVL is read into, KB
 WDM_PING     equ 0              ; verbs, the module's dispatch indices
-WDM_IMGLOAD  equ 1              ; SI = an OS88IMG_SZ block; see os88img.inc
-WDM_MAX      equ 1              ; ...and the highest of them
+WDM_MAX      equ 0              ; ...and the highest of them
 
 ; -----------------------------------------------------------------------------
 ; wd_ovneed - make sure WORD.OVL is loaded
@@ -20147,18 +19555,13 @@ wd_modc:                            ; +0: the dispatcher, and the only offset
     cmp bp, WDM_MAX                 ; the resident half knows
     ja .out
     shl bp, 1
-    jmp word [cs:bp+wd_mverb]       ; INDEX THROUGH BP, NOT SI. This used to
-.out:                               ; stage the doubled verb in SI, and SI is
-    retf                            ; an ARGUMENT to a verb that takes one -
-                                    ; img_load's whole contract is SI = the
-                                    ; caller's block, and it would have been
-                                    ; handed a 0 or a 2. It lay dormant only
-                                    ; because WDM_PING takes nothing. The same
-                                    ; line was live in CHART's dispatcher and
-                                    ; cost an afternoon there (SPEC.md 82.16.4)
+    mov si, bp
+    jmp word [cs:si+wd_mverb]
+.out:
+    retf
 
 wd_mverb:
-    dw wd_m_ping, wd_m_imgload
+    dw wd_m_ping
 
 ; wd_m_ping - what the mechanism has actually been PROVEN to do, and it is
 ; deliberately not more than that. Measured on the emulator, in this order:
@@ -20177,29 +19580,6 @@ wd_mverb:
 ; place to record that is here rather than in a commit message.
 wd_m_ping:
     retf
-
-; -----------------------------------------------------------------------------
-; wd_m_imgload - decode a picture. SI = the caller's block, as img_load takes
-; it; everything else is that routine's contract (SPEC.md 85).
-;
-; THE DECODER IS THIS MODULE'S FIRST REAL TENANT, and it is a deliberate
-; choice of first tenant rather than the most useful thing that happened to be
-; movable. The note above says what is unproven out here: a shim whose
-; resident routine touches the UI. os88img.inc HAS NO SHIMS. It owns no state,
-; it calls no OSAPI, it reads two segments the caller names and writes a third
-; - one far call in, one retf out, and nothing in between that needs the
-; package. So it exercises exactly the path that IS proven and none of the
-; path that is not, which is why the freeze is still an open question below
-; and this still works.
-;
-; It is also 1,600-odd bytes that WORD, with 5,270 free of 61,440, could not
-; have spent resident.
-; -----------------------------------------------------------------------------
-wd_m_imgload:
-    call img_load
-    retf
-
-%include "os88img.inc"
 
 section .text
 
@@ -20780,37 +20160,7 @@ section .text
     WDVAR wdb_ls,  2        ; word: where the line being composed began
     WDVAR wdb_t,   2        ; word } the row being emitted: ticks over
     WDVAR wdb_i,   2        ; word } iterations
-
 %endif
-
-; --- Insert > Picture (SPEC.md 68.15) ----------------------------------------
-; The block and the row buffer os88img.inc works through. They are HERE and
-; not in a claim because that include reaches both through DS, which stays the
-; package's segment even while the decoder itself is running out in WORD.OVL
-; (68.10) - so they must be in the package, and bss is where the package's
-; memory is.
-    WDVAR wd_namebank, WD_NAMEMAX + 1
-                            ; the document's name across an Insert > Picture,
-                            ; which borrows the file dialog and would
-                            ; otherwise be renamed by it
-    WDVAR wd_pictwant, 1    ; byte: the file dialog is being opened FOR a
-                            ; picture, so wd_ondlg routes its answer here
-                            ; instead of to open-or-save
-    WDVAR wd_imgblk, OS88IMG_SZ
-    WDVAR wd_imgrow, OS88IMG_ROW
-    WDVAR wd_picseg, 2      ; word: the decode scratch claim, transient
-    WDVAR wd_npic,   2      ; word: pictures this document holds
-    WDVAR wd_pictab, WD_PICMAX * WD_PICREC
-    WDVAR wd_picnew, 2      ; word: the claim wd_pictkeep is filling
-    WDVAR wd_chpbank, 1     ; byte: [wd_chp] across the picture insert
-    WDVAR wd_rowpic, 2      ; word: the picture the row being built IS, or
-                            ; 0xFFFF. Set at row entry by wd_rowhc and read at
-                            ; row exit by wd_rflush - the same lifetime
-                            ; [wd_rby] and [wd_rowx0] already have
-    WDVAR wd_pbuf,  32      ; the report. NOT wd_tbuf, which is 26 bytes and
-                            ; sized for 'Loaded ' plus an 8.3 name. 32 is
-                            ; TOAST_MAX (24) with room to compose past it and
-                            ; let the kernel do the cutting
 
 %assign WD_BSS_TOTAL WDB
 

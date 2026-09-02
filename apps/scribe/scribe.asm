@@ -420,7 +420,7 @@ WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 68.9)
 WDA_RENUM    equ 24             ; Utilities > Renumber...
 WDA_TOC      equ 25             ; Insert > Table of Contents...
 WDA_PAGE     equ 26             ; View > Page (SPEC.md 68.11)
-WDA_PICT     equ 27             ; Insert > Picture... (SPEC.md 68.15)
+WDA_PICT     equ 27             ; Insert > Picture... (SPEC.md 86.9)
 WDA_MAX      equ 27
 
 ; --- the CHP attribute byte (SPEC.md 68.3) -----------------------------------
@@ -633,7 +633,7 @@ WD_PICCH     equ 1              ; the character. Word's own (chPicture), and
                                 ; control below 32 except tab and CR - so a
                                 ; 0x01 in this buffer can only be ours
 WD_PICKB     equ 40             ; the decoded picture's TRANSIENT claim
-                                ; (SPEC.md 68.15). 40KB holds a 640x128 or a
+                                ; (SPEC.md 86.9). 40KB holds a 640x128 or a
                                 ; 320x256 in packed 4bpp, and os88img.inc
                                 ; refuses anything past what it is given
                                 ; rather than writing past the claim
@@ -2799,7 +2799,7 @@ wd_penadv:
     or bx, bx                       ; the picture test comes FIRST, and before
     jz .noch                        ; the face test: a picture is its own width
     cmp byte [es:si], WD_PICCH      ; in the kernel's 8x8 cell as much as in a
-    je .pictw                       ; proportional face (68.15)
+    je .pictw                       ; proportional face (86.9)
 .noch:
     cmp byte [wd_pxon], 0
     jne .prop
@@ -4243,7 +4243,7 @@ wd_rflush:
                                     ; advanced, so every position below is true
     cmp word [wd_rowpic], 0xFFFF    ; a PICTURE row: one blit, and none of the
     je .notpic                      ; lettering below - the row buffer holds no
-    call wd_picdraw                 ; glyphs for it (SPEC.md 68.15)
+    call wd_picdraw                 ; glyphs for it (SPEC.md 86.9)
     jmp .caret
 .notpic:
     cmp word [wd_rcols], 0
@@ -9337,7 +9337,7 @@ wd_new:
     call wd_pictfree                ; the pictures go with the document. Their
                                     ; pixels are in claims of their own, and a
                                     ; table that outlives its text describes
-                                    ; characters that are not there (68.15)
+                                    ; characters that are not there (86.9)
     mov word [wd_len], 0
     mov word [wd_cur], 0
     mov ax, wd_s_nul            ; retire the toast: 'Loaded DOCUMENT.DOC' over an
@@ -9461,7 +9461,7 @@ wd_ondlg:
     pop bx
 .noext:
     cmp byte [wd_pictwant], 0       ; Insert > Picture borrowed the dialog
-    je .notpict                     ; (68.15). Answered HERE, before any of
+    je .notpict                     ; (86.9). Answered HERE, before any of
     mov byte [wd_pictwant], 0       ; the bookkeeping below: a picture is not
     mov si, dx                      ; the document, so choosing one must not
     call wd_pictload                ; rename it, retitle the window, or move
@@ -16669,17 +16669,17 @@ wd_ftab:
     dw wd_a_renum                   ; Utilities > Renumber...
     dw wd_a_toc                     ; Insert > Table of Contents...
     dw wd_a_page                    ; View > Page (SPEC.md 68.11)
-    dw wd_a_pict                    ; Insert > Picture... (SPEC.md 68.15)
+    dw wd_a_pict                    ; Insert > Picture... (SPEC.md 86.9)
 
 wd_mf_ret:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_a_pict - Insert > Picture... (SPEC.md 68.15)
+; wd_a_pict - Insert > Picture... (SPEC.md 86.9)
 ;
 ; Ask for a file, read it, and decode it through SCRIBE.OVL. The picture is
 ; measured and reported and NOT yet put in the document: the model, the
-; layout and the file format are 68.15's remaining three parts, and the
+; layout and the file format are 86.9's remaining three parts, and the
 ; message says which stage this is rather than implying more.
 ;
 ; It routes through the ordinary file dialog with [wd_pictwant] raised, so
@@ -19973,7 +19973,7 @@ wd_e_wprot:   db 'Write protected', 0
 wd_e_big:     db 'Too big', 0
 wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
-; Insert > Picture (SPEC.md 68.15). One string per IMG_E_* code, indexed by it
+; Insert > Picture (SPEC.md 86.9). One string per IMG_E_* code, indexed by it
 ; - the include hands back a NUMBER (85.2) and each package says what it means
 ; in its own voice.
 ; EVERY ONE OF THESE IS 24 CHARACTERS OR FEWER, because TOAST_MAX is 24 and
@@ -21022,7 +21022,7 @@ section .text
 
 %endif
 
-; --- Insert > Picture (SPEC.md 68.15) ----------------------------------------
+; --- Insert > Picture (SPEC.md 86.9) ----------------------------------------
 ; The block and the row buffer os88img.inc works through. They are HERE and
 ; not in a claim because that include reaches both through DS, which stays the
 ; package's segment even while the decoder itself is running out in SCRIBE.OVL
