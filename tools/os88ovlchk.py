@@ -33,7 +33,7 @@ that `.text` DOES dispatch through must name the resident thunk and not the
 
 Run it from `make`; it is worth more than any amount of reading.
 """
-import re, sys, glob
+import os, re, sys, glob
 
 CALL = re.compile(r'\b(?:call|jmp|j[a-z]{1,3}|loop[a-z]{0,2})\s+'
                   r'(?:(?:near|short)\s+)?(?:(\w+):)?([A-Za-z_]\w*)\b')
@@ -474,5 +474,121 @@ def main():
     print("os88ovlchk: every return kind matches how the routine is called")
 
 
+# =============================================================================
+# THE APPLICATION PACKAGES, which the walk above does not reach (SPEC.md 68.10)
+#
+# A package that carries an overlay has the same hazard the kernel does and had
+# no guard at all: `section .modc` code gets a CS of its own, so a near call
+# from it to a resident label assembles cleanly - NASM emits a relative
+# displacement, which is legal - and lands at that offset in the WRONG segment
+# at run time. There is no crash to read and no message; the app simply stops.
+#
+# It is checked differently from the kernel half, and better: instead of a map
+# saying which section each %included file lands in, this FOLLOWS the includes
+# and carries the current section across them. That is what NASM actually does,
+# so a file moved from `.text` into `.modc` by editing one %include line is
+# reclassified with no second edit here - which matters, because the whole
+# point of the overlay is that moving a subsystem out is a matter of moving its
+# text.
+#
+# Each package is its own address space, so each gets its own label map: two
+# packages may legitimately define the same wd_* label and neither can call the
+# other's.
+PKGS = ['apps/word/word.asm', 'apps/scribe/scribe.asm']
+
+
+def expand(path, seen):
+    """The package's source with %include inlined, as NASM assembles it."""
+    if path in seen:
+        return
+    seen = seen | {path}
+    here = os.path.dirname(path)
+    for n, raw in enumerate(open(path, errors='replace'), 1):
+        m = re.match(r'\s*%include\s+"([^"]+)"', raw)
+        if m:
+            for cand in (os.path.join(here, m.group(1)),
+                         os.path.join('apps', m.group(1))):
+                if os.path.exists(cand):
+                    for row in expand(cand, seen):
+                        yield row
+                    break
+            continue
+        yield path, n, raw
+
+
+def check_pkgs():
+    bad = []
+    for pkg in PKGS:
+        if not os.path.exists(pkg):
+            continue
+        stream = list(expand(pkg, frozenset()))
+        # one linear pass for the section each line lands in: a `section`
+        # directive inside an include stays in force after it, exactly as it
+        # does for NASM
+        rows, cur = [], '.text'
+        for f, n, raw in stream:
+            line = raw.split(';')[0]
+            m = re.match(r'\s*section\s+(\.\w+)', line)
+            if m:
+                cur = m.group(1)
+                continue
+            rows.append((cur, f, n, line))
+
+        # ONLY `.modc` IS ANOTHER ADDRESS SPACE. A package is one flat binary
+        # (SPEC.md 20.2) and tools/os88ovl.py cuts exactly one section off the
+        # end of it, so `.text`, `.cold` and `.bss` are all the same CS and a
+        # near call between them is correct. apps/os88ui.inc carries `.cold`
+        # directives for the KERNEL's benefit (it is %included into a cold
+        # block there) and those must not be read as a boundary here - without
+        # this fold, 70 correct calls were reported.
+        fold = lambda x: x if x == '.modc' else '.text'
+
+        # A FILE %included TWICE IS ONE FILE. apps/os88img.inc is deliberately
+        # included once for its constants and once for its code, guarded by
+        # OS88IMG_CONSTS_ONLY (SPEC.md 85) - and this does not evaluate
+        # %ifdef, so it would see every label defined in both sections and
+        # report the module calling itself. The code-bearing include is the
+        # LAST one, so that is the copy that counts.
+        last = {}
+        for i, (sect, f, n, line) in enumerate(rows):
+            last[f] = i
+        first_of = {}
+        for i, (sect, f, n, line) in enumerate(rows):
+            first_of.setdefault(f, i)
+        dup = {f for f in last if any(
+            r[1] == f for r in rows[:first_of[f]])}
+        keep = []
+        seenfile = {}
+        for sect, f, n, line in rows:
+            seenfile.setdefault((f, n), []).append(sect)
+        for sect, f, n, line in rows:
+            if len(seenfile[(f, n)]) > 1 and sect != seenfile[(f, n)][-1]:
+                continue                # an earlier, guarded-out inclusion
+            keep.append((sect, f, n, line))
+        rows = keep
+
+        where = {}
+        for sect, f, n, line in rows:
+            m = re.match(r'^([A-Za-z_]\w*):', line)
+            if m:
+                where[m.group(1)] = fold(sect)
+        for sect, f, n, line in rows:
+            for m in CALL.finditer(line):
+                seg, tgt = m.group(1), m.group(2)
+                if seg is not None:
+                    continue            # `call far [vec]` is the way across
+                t = where.get(tgt)
+                if t is not None and t != fold(sect):
+                    bad.append((f, n, '%s -> %s, near' % (fold(sect), t),
+                                tgt, pkg))
+    for f, n, why, tgt, pkg in bad:
+        print("%s:%d: %s: %s  (%s)" % (f, n, why, tgt, pkg), file=sys.stderr)
+    if bad:
+        sys.exit("os88ovlchk: %d package call(s) cross a section boundary near "
+                 "- SPEC.md 68.10 rule 1" % len(bad))
+    print("os88ovlchk: %d package(s) keep every overlay call far" % len(PKGS))
+
+
 if __name__ == '__main__':
     main()
+    check_pkgs()
