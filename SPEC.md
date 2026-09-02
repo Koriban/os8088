@@ -76947,3 +76947,102 @@ On one 1440KB floppy carrying `word.o88`, `WORD.OVL`, `scribe.o88`,
   produced "SCRIBE.OVL is not on this disk" instead;
 - double-clicking `WELCOME.DOC` opens **Microsoft Word**, with SCRIBE still
   running beside it. That is §86.2 demonstrated rather than asserted.
+
+### 86.4 RTF is Scribe's default format
+
+`wd_s_default` is `DOCUMENT.RTF`, where Word's is `DOCUMENT.DOC`. That one
+string is the whole mechanism: `wd_isrtf` already decides the *format* from the
+extension (§68.8), so changing the default **name** changes the default
+**format** and nothing else has to know. Save As onto a `.DOC` name still
+writes a real Word file.
+
+The reason is pictures. RTF can carry one losslessly at 4bpp (§86.5) and a
+`.DOC` cannot — every embedded picture in a Word 1.1a file that has been
+measured is `bmBitsPixel = 1`, so writing one there means converting down. The
+format a plain Save reaches for should be the one that keeps the document
+whole. It is Scribe's only behavioural divergence from
+Word — everything else about the fork is identity (§86.1).
+
+### 86.5 The picture extension: `\pict` at 4 bits per pixel
+
+`wd_rpict` emits the picture a `WD_PICCH` names as an RTF `\pict` group. **This
+is the one place Scribe writes something Word does not, and RTF is the format
+where that is safe rather than reckless.** RTF is text, and its own rule is
+that a reader skips a destination it does not understand — Scribe's own reader
+has been doing exactly that with `\pict` since it was written, from the
+`WDR_SKIP` table. So the worst a foreign reader can do with this group is drop
+it and keep the document. The same picture in a `.DOC` would be a binary field
+that a reader does not skip but *believes*.
+
+It is not an invented dialect either. Every control word is RTF's own:
+
+```
+{\pict\wbitmap0\wbmplanes1\wbmbitspixel4\wbmwidthbytes89 \picw177 \pich98
+ \picwgoal2655 \pichgoal1470 ffffff…}
+```
+
+`\wbmbitspixel4` with `\wbmplanes1` **is os8088's packed 4bpp exactly** — two
+pixels per byte, high nibble leftmost — so a load is a copy and not a
+conversion. `\wbmwidthbytes` carries the stride and it is never recomputed from
+the width, which is the lesson `.PCX`'s `BytesPerLine` taught (§85). The goal
+size is twips at **15 per pixel**, the 96dpi Windows logical inch; the widest
+picture `os88img.inc` will decode is 1280, and 1280 × 15 = 19,200, so it cannot
+overflow the word `wd_rnum` signs.
+
+**No palette, and that is correct rather than lazy.** A `\wbitmap` is a
+*device*-dependent bitmap: its indices mean whatever the device's colours are.
+os8088's sixteen are fixed (§6.3), so an index **is** a colour here and a
+palette would be restating the device. `\dibitmap` is the device-independent
+form that carries one, and it costs a `BITMAPINFO` and a second layout for a
+picture that is always displayed on the machine that wrote it.
+
+**The data is hex, at two characters a byte.** That is twice the size of RTF's
+`\bin` and it keeps §68.8's "pure text transform" property, which is worth more
+than the bytes: a `\bin` run can contain `0x7D`, and any reader not counting
+exactly right sees a group end in the middle of a picture. The cost is a real
+ceiling — the staging claim is `WD_DOCCAP` KB addressed by a 16-bit `DI`, so
+about 30KB of picture across a document. `wd_re` already stops on a full claim
+and `wd_rtfimg` already turns that into "it did not fit", so the limit
+**refuses rather than truncates**.
+
+#### 86.5.1 ES belongs to the staging claim, so the picture is a third segment
+
+`wd_rtfimg` writes through `ES:DI` for its whole run and the package is `DS`, so
+the picture's own segment has nowhere to live. `wd_rpict` banks the four
+`wd_pictab` fields into bss and then borrows `ES` **per byte** — `push es`,
+`mov es, [wd_rpg]`, read, `pop es`. Two segment loads a byte is nothing beside
+the two `wd_re` calls that follow it, and the alternative — keeping the picture
+in `ES` and the output somewhere else — would mean rewriting every emit
+primitive in the file.
+
+#### 86.5.2 Verified by decoding the output, not by reloading it
+
+A decoder that reads back what its own encoder wrote proves only that the pair
+agree. So the check is host-side and against an independent reference:
+`INSTALL.BMP` — a 177x98 1bpp BMP off the Dr. Dobb's disc, written by SAMS
+Publishing in 1993 — is inserted in Scribe under QEMU, saved, and the `.RTF`
+pulled off the floppy image with `mtools`. Its `\pict` group parses to
+`picw177 pich98 wbmwidthbytes89`, its 17,444 hex characters decode to 8,722
+bytes = 89 x 98 exactly, and those bytes are **identical** to what
+`tools/os88imgcase.py`'s `ref_bmp` computes from the BITMAPINFOHEADER layout.
+Same rotate-xor checksum, `BCE9`, by two paths that share no code.
+
+#### 86.5.3 A data-loss bug this found, in Insert > Picture
+
+Insert ▸ Picture borrows the file dialog with `[wd_pictwant]` raised, and
+`wd_ondlg` copies the chosen name into `wd_name` **before** any dispatch. So
+choosing a picture silently renamed the document to it — and nothing recomposed
+the title, so the bar went on showing the old name while Save wrote to the new
+one. Picking `INSTALL.BMP` and pressing Save therefore **overwrote
+`INSTALL.BMP` with the document**, in whatever format the picture's extension
+implied: a 2,414-byte BMP came back as a 1,657-byte Word binary.
+
+The dispatch's own comment said choosing a picture "must not rename it, retitle
+the window, or move which folder it belongs to" — the intent was right and the
+rename had already happened one screen earlier. `wd_ondlg` now banks `wd_name`
+into `wd_namebank` when `[wd_pictwant]` is set and puts it back after
+`wd_pictload` (after, because `wd_pictload` reads `[wd_name]` to find the file).
+
+It is in **`apps/word` too** and is fixed in both. It was introduced with
+Insert ▸ Picture itself (§68.15) and had no way to show up until something
+saved after inserting — which is exactly what testing the RTF writer did.

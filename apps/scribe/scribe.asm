@@ -9379,6 +9379,25 @@ wd_dlgopen:
 ; been uncovered by wm_destroy.
 ; -----------------------------------------------------------------------------
 wd_ondlg:
+    cmp byte [wd_pictwant], 0       ; INSERT > PICTURE BORROWS THIS DIALOG,
+    je .nobank                      ; AND THE DIALOG RENAMES THE DOCUMENT.
+    push si                         ; The copy below puts the chosen name in
+    push di                         ; wd_name unconditionally, so picking a
+    push cx                         ; picture renamed the document to it -
+    mov si, wd_name                 ; and nothing recomposed the title, so the
+    mov di, wd_namebank             ; bar went on showing the OLD name while
+    mov cx, WD_NAMEMAX + 1          ; Save wrote to the new one. Choosing a
+.bank:                              ; .BMP therefore overwrote that .BMP with
+    mov al, [si]                    ; the document, in whatever format the
+    mov [di], al                    ; PICTURE's extension implied. It is
+    inc si                          ; banked here and put back below.
+    inc di
+    dec cx
+    jnz .bank
+    pop cx
+    pop di
+    pop si
+.nobank:
     mov [wd_fsz], cx                ; the file's size from the LISTING (38.6),
     mov [wd_fszh], dx               ; banked FIRST - the open gate reads it
                                     ; BEFORE any disk I/O (SPEC.md 68.4)
@@ -9433,7 +9452,26 @@ wd_ondlg:
     mov byte [wd_pictwant], 0       ; the bookkeeping below: a picture is not
     mov si, dx                      ; the document, so choosing one must not
     call wd_pictload                ; rename it, retitle the window, or move
-    jmp .draw                       ; which folder it belongs to
+                                    ; which folder it belongs to. wd_pictload
+                                    ; reads [wd_name], so the restore comes
+                                    ; AFTER it and not before
+    push si
+    push di
+    push cx
+    mov si, wd_namebank             ; the document's own name, back
+    mov di, wd_name
+    mov cx, WD_NAMEMAX + 1
+.unbank:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .unbank
+    pop cx
+    pop di
+    pop si
+    jmp .draw
 .notpict:
     push dx                         ; the window: FILE_HERE answers in DX
     push bx                         ; ...and the mode is in BL
@@ -19862,10 +19900,24 @@ wd_s_tpre: db 'Scribe - ', 0
 ; PREFIXES: wd_setmsg composes them with the live name into wd_tbuf, because
 ; a toast that still said DOCUMENT.DOC after a Save As would be worse than no
 ; toast at all.
-wd_s_default: db 'DOCUMENT.DOC', 0  ; Word's Document1, folded to 8.3: a 9-char
+wd_s_default: db 'DOCUMENT.RTF', 0  ; Word's Document1, folded to 8.3: a 9-char
                                     ; stem is FERR_NAME on a FAT volume
                                     ; (SPEC.md 24), and a default that cannot
-                                    ; save is worse than a shorter one
+                                    ; save is worse than a shorter one.
+                                    ;
+                                    ; .RTF AND NOT .DOC IS SCRIBE'S ONE
+                                    ; BEHAVIOURAL DIVERGENCE FROM WORD (86.4).
+                                    ; wd_isrtf already decides the format from
+                                    ; the extension, so changing the default
+                                    ; NAME changes the default FORMAT and
+                                    ; nothing else has to know. The reason is
+                                    ; pictures: RTF can carry one losslessly
+                                    ; at 4bpp and .DOC cannot (86.5), so the
+                                    ; format that keeps the document whole is
+                                    ; the one a plain Save should reach for.
+                                    ; Save As onto a .DOC name still writes a
+                                    ; real Word file - it just converts the
+                                    ; pictures down on the way
 wd_m_saved:   db 'Saved ', 0
 wd_m_loaded:  db 'Loaded ', 0
 wd_m_trunc:   db 'Truncated', 0
@@ -20790,6 +20842,10 @@ section .text
 ; package's segment even while the decoder itself is running out in SCRIBE.OVL
 ; (68.10) - so they must be in the package, and bss is where the package's
 ; memory is.
+    WDVAR wd_namebank, WD_NAMEMAX + 1
+                            ; the document's name across an Insert > Picture,
+                            ; which borrows the file dialog and would
+                            ; otherwise be renamed by it
     WDVAR wd_pictwant, 1    ; byte: the file dialog is being opened FOR a
                             ; picture, so wd_ondlg routes its answer here
                             ; instead of to open-or-save
@@ -20804,6 +20860,14 @@ section .text
                             ; 0xFFFF. Set at row entry by wd_rowhc and read at
                             ; row exit by wd_rflush - the same lifetime
                             ; [wd_rby] and [wd_rowx0] already have
+    WDVAR wd_rpw,   2       ; word } the picture being emitted into RTF:
+    WDVAR wd_rph,   2       ; word } width, height, stride and the segment
+    WDVAR wd_rps,   2       ; word } its pixels are in. Banked out of the
+    WDVAR wd_rpg,   2       ; word } table because ES belongs to the staging
+                            ; claim for the whole of wd_rpict and the picture
+                            ; lives in a third segment (86.5.1)
+    WDVAR wd_rpcol, 2       ; word: hex bytes on the line so far, so the
+                            ; output wraps instead of being one enormous line
     WDVAR wd_pbuf,  32      ; the report. NOT wd_tbuf, which is 26 bytes and
                             ; sized for 'Loaded ' plus an 8.3 name. 32 is
                             ; TOAST_MAX (24) with room to compose past it and

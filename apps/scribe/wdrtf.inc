@@ -50,6 +50,8 @@ wd_rtfimg:
     pop ds
     cmp al, 13
     je .para
+    cmp al, WD_PICCH                ; a picture is its own group and wears no
+    je .pict                        ; character formatting (86.5)
     push ax
     push ds
     mov ds, [cs:wd_cseg]
@@ -58,6 +60,10 @@ wd_rtfimg:
     call wd_rdress                  ; open/close what this character wears
     pop ax
     call wd_rch
+    inc bx
+    jmp short .step
+.pict:
+    call wd_rpict
     inc bx
     jmp short .step
 .para:
@@ -78,6 +84,176 @@ wd_rtfimg:
     ret
 .no:
     stc
+    ret
+
+; =============================================================================
+; wd_rpict - emit the picture the WD_PICCH at BX names, as an RTF \pict group
+; in:  BX = the character index; ES = the staging claim, DS = the package
+; out: preserves every register. A character naming no picture emits NOTHING,
+;      which is the same thing the screen does with it (wd_rowhc).
+;
+; THIS IS THE ONE PLACE SCRIBE WRITES SOMETHING WORD DOES NOT, and RTF is the
+; format where that is safe rather than reckless (SPEC.md 86.5). RTF is text
+; and its own rule is that a reader skips a destination it does not know, so
+; the worst a foreign reader can do with this group is drop it and keep the
+; document. The same picture in a .DOC would be a binary field that a reader
+; does not skip but BELIEVES.
+;
+; It is not an invented dialect either - every control word here is RTF's own:
+;
+;   \pict           the destination
+;   \wbitmap 0      a Windows bitmap, bmType 0
+;   \wbmplanes 1    ONE plane of...
+;   \wbmbitspixel 4 ...4-bit pixels: os8088's packed 4bpp exactly, two to a
+;                   byte with the high nibble leftmost, so a load is a copy
+;                   and not a conversion
+;   \wbmwidthbytes  the stride, carried and never recomputed - the lesson
+;                   .PCX's BytesPerLine taught (SPEC.md 85)
+;   \picw \pich     pixels
+;   \picwgoal \pichgoal   twips, at 15 per pixel = 96dpi, the Windows
+;                   logical inch. Display size, not storage size.
+;
+; NO PALETTE, AND THAT IS CORRECT RATHER THAN LAZY. A \wbitmap is a
+; DEVICE-dependent bitmap: its indices mean whatever the device's colours are.
+; os8088's sixteen are fixed (SPEC.md 6.3), so an index IS a colour here and a
+; palette would be restating the device. \dibitmap is the device-INdependent
+; form that carries one, and it costs a BITMAPINFO and a second layout for a
+; picture that is always displayed on the machine that wrote it.
+;
+; THE DATA IS HEX, at two characters a byte. That is twice the size of RTF's
+; \bin and it keeps SPEC.md 68.8's "pure text transform" property, which is
+; worth more than the bytes: a \bin run can contain 0x7D and any reader that
+; is not counting exactly right sees a group end in the middle of a picture.
+; The cost is a real ceiling - the staging claim is WD_DOCCAP KB addressed by
+; a 16-bit DI - so about 30KB of picture across a document. wd_re already
+; stops on a full claim and wd_rtfimg already turns that into "it did not
+; fit", so the limit refuses rather than truncates.
+; =============================================================================
+wd_rpict:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    push ds
+    mov ds, [cs:wd_cseg]            ; the CHP byte IS the picture index
+    mov al, [bx]                    ; (SPEC.md 68.15)
+    pop ds
+    xor ah, ah
+    call wd_picrec                  ; -> BX = the table slot
+    jc .out                         ; names no picture: emit nothing
+    mov ax, [bx]
+    mov [wd_rpw], ax
+    mov ax, [bx+2]
+    mov [wd_rph], ax
+    mov ax, [bx+4]
+    mov [wd_rps], ax
+    mov ax, [bx+6]
+    mov [wd_rpg], ax
+    or ax, ax                       ; a slot with no segment is a picture that
+    jz .out                         ; was freed; it draws nothing either
+    mov si, wd_r_pict               ; '{\pict\wbitmap0\wbmplanes1'
+    call wd_res                     ; '\wbmbitspixel4\wbmwidthbytes'
+    mov ax, [wd_rps]
+    call wd_rnum
+    mov si, wd_r_picw
+    call wd_res
+    mov ax, [wd_rpw]
+    call wd_rnum
+    mov si, wd_r_pich
+    call wd_res
+    mov ax, [wd_rph]
+    call wd_rnum
+    mov si, wd_r_picwg              ; the GOAL size, in twips at 96dpi. The
+    call wd_res                     ; widest picture os88img.inc will decode
+    mov ax, [wd_rpw]                ; is 1280, and 1280*15 = 19200, so this
+    call wd_rtwip                   ; cannot overflow the word wd_rnum signs
+    mov si, wd_r_pichg
+    call wd_res
+    mov ax, [wd_rph]
+    call wd_rtwip
+    mov word [wd_rpcol], 0
+    mov dx, [wd_rph]                ; DX = rows left
+.row:
+    or dx, dx
+    jz .fin
+    mov cx, [wd_rps]                ; CX = bytes in this row
+    mov bx, [wd_rph]                ; the source offset: (h - dx) * stride
+    sub bx, dx
+    mov ax, bx
+    mul word [wd_rps]               ; DX is clobbered by mul, so it is banked
+    mov si, ax                      ; ...and restored below
+    mov dx, [wd_rph]
+    sub dx, bx
+    dec dx                          ; DX = rows left AFTER this one
+.byte:
+    push es
+    mov es, [wd_rpg]                ; the picture is a THIRD segment: ES is
+    mov al, [es:si]                 ; the staging claim everywhere else in
+    pop es                          ; this file, so it is borrowed per byte
+    call wd_rwhex
+    inc si
+    inc word [wd_rpcol]
+    cmp word [wd_rpcol], 64         ; wrap the hex, so the file is readable
+    jb .nowrap                      ; and no line is 17,000 characters long
+    mov word [wd_rpcol], 0
+    mov al, 13
+    call wd_re
+    mov al, 10
+    call wd_re
+.nowrap:
+    loop .byte
+    jmp short .row
+.fin:
+    mov al, '}'
+    call wd_re
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wd_rtwip - emit AX pixels as twips (x15) followed by a space. Preserves all
+; but flags. 15 twips is one pixel at the 96dpi Windows logical inch.
+wd_rtwip:
+    push ax
+    push dx
+    mov dx, 15
+    mul dx                          ; DX:AX, and the high half is always 0
+    call wd_rnum                    ; for a width os88img.inc would accept
+    pop dx
+    pop ax
+    ret
+
+; wd_rwhex - emit AL as two lowercase hex digits. Preserves all but flags.
+wd_rwhex:
+    push ax
+    push cx
+    mov ah, al
+    mov cl, 4
+    shr al, cl                      ; the HIGH nibble first, which is also the
+    call wd_rwhex1                   ; leftmost pixel (SPEC.md 85)
+    mov al, ah
+    and al, 0x0F
+    call wd_rwhex1
+    pop cx
+    pop ax
+    ret
+
+wd_rwhex1:
+    push ax
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .emit
+    add al, 'a' - '0' - 10
+.emit:
+    call wd_re
+    pop ax
     ret
 
 ; wd_rch - emit one document character, escaped. Preserves all but flags.
@@ -391,6 +567,11 @@ wd_rnum:
 wd_r_head: db '{\rtf1\ansi\deff0{\fonttbl{\f0\fmodern Courier New;}}', 13, 10
            db '{\stylesheet{\snext0 Normal;}}', 13, 10, 0
 wd_r_tail: db '}', 13, 10, 0
+wd_r_pict:  db '{\pict\wbitmap0\wbmplanes1\wbmbitspixel4\wbmwidthbytes', 0
+wd_r_picw:  db '\picw', 0
+wd_r_pich:  db '\pich', 0
+wd_r_picwg: db '\picwgoal', 0
+wd_r_pichg: db '\pichgoal', 0
 wd_r_pard: db '\pard\plain ', 0
 wd_r_par:  db '\par', 13, 10, 0
 wd_r_tab:  db '\tab ', 0

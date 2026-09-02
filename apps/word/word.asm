@@ -9346,6 +9346,25 @@ wd_dlgopen:
 ; been uncovered by wm_destroy.
 ; -----------------------------------------------------------------------------
 wd_ondlg:
+    cmp byte [wd_pictwant], 0       ; INSERT > PICTURE BORROWS THIS DIALOG,
+    je .nobank                      ; AND THE DIALOG RENAMES THE DOCUMENT.
+    push si                         ; The copy below puts the chosen name in
+    push di                         ; wd_name unconditionally, so picking a
+    push cx                         ; picture renamed the document to it -
+    mov si, wd_name                 ; and nothing recomposed the title, so the
+    mov di, wd_namebank             ; bar went on showing the OLD name while
+    mov cx, WD_NAMEMAX + 1          ; Save wrote to the new one. Choosing a
+.bank:                              ; .BMP therefore overwrote that .BMP with
+    mov al, [si]                    ; the document, in whatever format the
+    mov [di], al                    ; PICTURE's extension implied. It is
+    inc si                          ; banked here and put back below.
+    inc di
+    dec cx
+    jnz .bank
+    pop cx
+    pop di
+    pop si
+.nobank:
     mov [wd_fsz], cx                ; the file's size from the LISTING (38.6),
     mov [wd_fszh], dx               ; banked FIRST - the open gate reads it
                                     ; BEFORE any disk I/O (SPEC.md 68.4)
@@ -9400,7 +9419,26 @@ wd_ondlg:
     mov byte [wd_pictwant], 0       ; the bookkeeping below: a picture is not
     mov si, dx                      ; the document, so choosing one must not
     call wd_pictload                ; rename it, retitle the window, or move
-    jmp .draw                       ; which folder it belongs to
+                                    ; which folder it belongs to. wd_pictload
+                                    ; reads [wd_name], so the restore comes
+                                    ; AFTER it and not before
+    push si
+    push di
+    push cx
+    mov si, wd_namebank             ; the document's own name, back
+    mov di, wd_name
+    mov cx, WD_NAMEMAX + 1
+.unbank:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .unbank
+    pop cx
+    pop di
+    pop si
+    jmp .draw
 .notpict:
     push dx                         ; the window: FILE_HERE answers in DX
     push bx                         ; ...and the mode is in BL
@@ -20751,6 +20789,10 @@ section .text
 ; package's segment even while the decoder itself is running out in WORD.OVL
 ; (68.10) - so they must be in the package, and bss is where the package's
 ; memory is.
+    WDVAR wd_namebank, WD_NAMEMAX + 1
+                            ; the document's name across an Insert > Picture,
+                            ; which borrows the file dialog and would
+                            ; otherwise be renamed by it
     WDVAR wd_pictwant, 1    ; byte: the file dialog is being opened FOR a
                             ; picture, so wd_ondlg routes its answer here
                             ; instead of to open-or-save
