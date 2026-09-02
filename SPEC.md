@@ -77187,3 +77187,52 @@ point past its own last refusal: `wd_rtfparse` on its first line,
 `wd_docparse` after `wd_dcompact`. The rule the commit point enforced — that a
 refusal must not cost the pictures it was not replacing — is unchanged; it is
 enforced one level down.
+
+### 86.8 Moving the file formats into SCRIBE.OVL — attempted, measured, reverted
+
+Scribe is at **60,828 of `APP_MAX_SIZE`'s 61,440** and §68.10's overlay-split
+trigger is 55,000 resident, so the next feature of any size needs the module to
+take more than the picture decoder. `wddoc.inc` and `wdrtf.inc` are the obvious
+tenants: between them the largest thing in the package, and they run on exactly
+two commands — Open and Save — so the kilobytes they cost are kilobytes the
+*redraw* path is paying for a file dialog it sees twice a session.
+
+**The interface is small and was measured, not guessed.** Six entry points in
+(`wd_docimg`, `wd_docparse`, `wd_rtfimg`, `wd_rtfparse`, `wd_isrtfimg`,
+`wd_ldpost`), no `jmp`s in, and **five** calls out — `wd_resize`,
+`wd_pictfree`, `wd_papfind`, `wd_ldscan`, `wd_picrec`. Only `wd_papfind`
+touched the UI, and that is the shape §82.16 records an unexplained freeze
+against, so it was split into a UI-free `wd_papfind0` plus a rule worth keeping
+whatever happens next: **the module never speaks. It leaves a reason in
+`wd_ovmsg` and `wd_ovcall` says it on the way out** — `os88img.inc`'s own rule
+(`IMG_ERR` is a number and the caller words the message, §85), generalised and
+put in the one place every future verb passes through.
+
+**It built, and the numbers were good**: resident **51,538 → 43,955**, a
+7,583-byte reclaim, with `SCRIBE.OVL` going 1,774 → 9,507 and `WD_OVKB` 8 → 12.
+
+**It did not work, and the reason is `[cs:]`.** The two engines reach the
+package's bss through **`[cs:wd_*]` in 47 places** — `wd_dseg`, `wd_cseg`,
+`wd_len` and the rest — and they do that precisely because those routines run
+with `DS` *and* `ES` both pointed at the document, CHP or staging claims. `CS`
+was the package. In the module it is not.
+
+The attempted fix was `[ss:]`, on the reasoning that a package's stack is its
+own segment. **It is not**: §20.1 and the memory map both say `SS = LOW_SEG`
+(0x0440) — every task stack lives outside the package, and in a package
+`SS != DS`. So all 47 reads came from low memory, and both readers produced an
+empty document while still reporting "Loaded", because the parse ran to
+completion over garbage.
+
+**What a future attempt has to solve first**, stated so it is not rediscovered:
+there is no third segment register naming the package from inside the module.
+The options are to stamp the package segment into the module's own image at
+bind time and spend `push ds` / `mov ds,[cs:seg]` / read / `pop ds` at each of
+the 47 sites, or to restructure those routines so `DS` is the package when they
+need it. The first is mechanical and bloats the module; the second is the real
+fix and is not small. **Neither is the one-line-per-include move the overlay
+was supposed to make possible**, and that is the honest finding.
+
+What survives from the attempt is `tools/os88ovlchk.py`'s package walk, which
+was written first, caught all nine call-outs the moment they crossed, and is
+committed on its own.
