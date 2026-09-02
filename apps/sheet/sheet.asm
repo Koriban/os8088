@@ -16140,6 +16140,12 @@ sh_rpn_fid:
     db 76, 77, 75, 65                 ; ROWS COLUMNS AREAS INDEX - Excel's own
                                        ; ftab, the same table CHOOSE(100),
                                        ; ROW(8) and COLUMN(9) above came from
+    db 64, 102, 101                   ; MATCH VLOOKUP HLOOKUP - and THIS ORDER
+                                       ; IS THE CONTRACT: these three tables
+                                       ; are indexed by position in sh_functab,
+                                       ; so a row inserted anywhere but the
+                                       ; matching place writes another
+                                       ; function's ftab index into the file
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16165,6 +16171,7 @@ sh_rpn_fvar:
     db 0, 0, 0, 0, 0                  ; TIME HOUR MINUTE SECOND DATEVALUE
     db 0                              ; TIMEVALUE - all fixed-arity in 2.1
     db 0, 0, 0, 1                     ; ROWS COLUMNS AREAS INDEX(2..3)
+    db 1, 0, 0                        ; MATCH(2..3) VLOOKUP HLOOKUP
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19172,7 +19179,9 @@ sh_plookup:
     push dx
     push di
     mov di, ax                        ; DI = the id; everything else is scratch
-    call sh_pargref
+    cmp di, 73
+    jae sh_plksearch                  ; MATCH/VLOOKUP/HLOOKUP open with a VALUE
+    call sh_pargref                   ; the other four open with a reference
     jnc .notref
     cmp di, 72
     je .index
@@ -19281,6 +19290,382 @@ sh_plookup:
     pop dx
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; sh_plksearch - MATCH, VLOOKUP and HLOOKUP: the lookup functions that SEARCH
+; (SPEC.md 81.32). Entered from sh_plookup with DI = the id and the caller's
+; four registers already banked, so it shares that routine's exits.
+;
+; The shape is one comparison engine and three ways of asking it: every one of
+; these walks a single row or column comparing a key against each cell, and
+; they differ only in what they do with the position they find.
+; =============================================================================
+sh_plksearch:
+    cmp byte [sh_lk_busy], 0          ; SEE THE NOTE ON sh_lk_busy: a search
+    je .free                          ; reached from inside a searched range
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; would overwrite the outer one's key
+    jmp sh_plookup.zero               ; and answer both wrongly
+.free:
+    mov byte [sh_lk_busy], 1
+    call sh_pcmp                      ; --- the key -------------------------
+    mov al, [sh_curtype]
+    mov [sh_lk_kt], al
+    cmp al, SH_T_TEXT
+    je .keytext
+    push si                           ; a number: bank all eight bytes. NOT
+    push di                           ; `rep movsw` - that writes ES:DI, and
+    mov si, sh_acc                    ; ES in this app is a cell or text claim
+    mov di, sh_lk_kv                  ; far more often than it is the package.
+    mov cx, 4                         ; The key landed in another segment and
+.kv:                                  ; every numeric compare then missed,
+    mov ax, [si]                      ; while the TEXT path - a plain DS byte
+    mov [di], ax                      ; loop - worked: MATCH("CCC",..) found
+    add si, 2                         ; its row and MATCH(30,..) said #N/A
+    add di, 2
+    loop .kv
+    pop di
+    pop si
+    jmp short .keyed
+.keytext:
+    push si                           ; a label: bank the string
+    push di
+    mov si, sh_sacc
+    mov di, sh_lk_ks
+    mov cx, SH_STR_MAX + 1
+.kc:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    loopnz .kc
+    mov byte [di-1], 0
+    pop di
+    pop si
+.keyed:
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    call sh_pargref                   ; --- the range -----------------------
+    jnc .bad
+    mov ax, [sh_arg1col]              ; banked at once: sh_getcell2 recurses
+    mov [sh_lk_c1], ax                ; and the scan cannot trust sh_arg* to
+    mov ax, [sh_arg1row]              ; survive it (81.23)
+    mov [sh_lk_r1], ax
+    mov ax, [sh_arg2col]
+    mov [sh_lk_c2], ax
+    mov ax, [sh_arg2row]
+    mov [sh_lk_r2], ax
+    mov word [sh_lk_idx], 1           ; a VLOOKUP with no third argument would
+    mov word [sh_lk_mt], 1            ; want column 1; MATCH with none wants
+    cmp byte [si], ','                ; type 1. TWO fields - see sh_lkone
+    jne .noidx
+    inc si
+    call sh_pcmp
+    call sh_acc_toint
+    jc .bad
+    cmp di, 73                        ; MATCH's third argument is the TYPE,
+    jne .isidx                        ; the other two's is a column or row
+    mov [sh_lk_mt], ax
+    jmp short .noidx
+.isidx:
+    mov [sh_lk_idx], ax
+.noidx:
+    cmp di, 73                        ; --- the walk ------------------------
+    je .match
+    cmp di, 74
+    je .vlook
+    jmp short .hlook
+.match:
+    mov ax, [sh_lk_r2]                ; MATCH takes a vector: a single column
+    cmp ax, [sh_lk_r1]                ; walks down, anything else walks across
+    je .macross                       ; - which makes a 1x1 reference a row of
+    call sh_lkdown                    ; one, and both spellings work
+    jmp short .mpos
+.macross:
+    call sh_lkacross
+.mpos:
+    cmp word [sh_lk_got], 0
+    je .nomatch
+    mov ax, [sh_lk_pos]               ; the POSITION, 1-based, is the answer
+    call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .fin
+.vlook:
+    call sh_lkdown                    ; down the first column...
+    cmp word [sh_lk_got], 0
+    je .nomatch
+    mov ax, [sh_lk_idx]               ; ...then across to the wanted column
+    or ax, ax
+    jle .badidx
+    dec ax
+    add ax, [sh_lk_c1]
+    cmp ax, [sh_lk_c2]
+    ja .badidx
+    mov bx, [sh_lk_hit]
+    jmp short .fetch
+.hlook:
+    call sh_lkacross                  ; across the first row, then down
+    cmp word [sh_lk_got], 0
+    je .nomatch
+    mov ax, [sh_lk_idx]
+    or ax, ax
+    jle .badidx
+    dec ax
+    add ax, [sh_lk_r1]
+    cmp ax, [sh_lk_r2]
+    ja .badidx
+    mov bx, ax
+    mov ax, [sh_lk_hit]
+.fetch:
+    push ax                           ; an empty cell in the answer column is
+    push bx                           ; 0, the same rule INDEX follows
+    xor ax, ax
+    call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    pop bx
+    pop ax
+    call sh_getcell2
+    jmp short .fin
+.nomatch:
+    mov byte [sh_evalerr], SH_ERR_NA  ; #N/A is what "no match" IS - #VALUE!
+    jmp short .zero                   ; would say the arguments were wrong
+.badidx:
+    mov byte [sh_evalerr], SH_ERR_REF ; a column outside the range names no
+    jmp short .zero                   ; cell, exactly as INDEX's does
+.bad:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+.zero:
+    xor ax, ax
+    call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+.fin:
+    mov byte [sh_lk_busy], 0
+    jmp sh_plookup.close
+
+; -----------------------------------------------------------------------------
+; sh_lkdown / sh_lkacross - walk the reference's first column (row) comparing
+; each cell against the banked key. Preserves all registers.
+;
+; out: [sh_lk_got] = something matched, [sh_lk_hit] = the row (column) it is
+;      in, [sh_lk_pos] = its 1-based position along the vector.
+;
+; MATCH TYPE 0 IS EXACT AND ANYTHING ELSE IS APPROXIMATE: type 1 (the default,
+; and what VLOOKUP and HLOOKUP always do) keeps the LAST cell that is still
+; <= the key, which is the largest one not over it when the vector ascends;
+; type -1 keeps the last that is still >=. Excel says the vector must be
+; sorted, and an unsorted one gives an answer this makes no promise about
+; rather than an error - which is Excel's behaviour too.
+; -----------------------------------------------------------------------------
+sh_lkdown:
+    push ax
+    push bx
+    push cx
+    mov word [sh_lk_got], 0
+    mov word [sh_lk_pos], 0
+    xor cx, cx                        ; CX = the position, counted up
+    mov bx, [sh_lk_r1]
+.row:
+    cmp bx, [sh_lk_r2]
+    ja .out
+    inc cx
+    mov ax, [sh_lk_c1]
+    push ax
+    push bx
+    push cx
+    call sh_lkone
+    pop cx
+    pop bx
+    pop ax
+    jc .next
+    mov word [sh_lk_got], 1           ; THE WALKER RECORDS THE HIT, because it
+    mov [sh_lk_pos], cx               ; is the one that knows which axis it is
+    mov [sh_lk_hit], bx               ; on. A down-walk's hit is its ROW
+.next:
+    inc bx
+    jmp short .row
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_lkacross:
+    push ax
+    push bx
+    push cx
+    mov word [sh_lk_got], 0
+    mov word [sh_lk_pos], 0
+    xor cx, cx
+    mov ax, [sh_lk_c1]
+.col:
+    cmp ax, [sh_lk_c2]
+    ja .out
+    inc cx
+    mov bx, [sh_lk_r1]
+    push ax
+    push bx
+    push cx
+    call sh_lkone
+    pop cx
+    pop bx
+    pop ax
+    jc .next
+    mov word [sh_lk_got], 1
+    mov [sh_lk_pos], cx
+    mov [sh_lk_hit], ax               ; ...and an across-walk's is its COLUMN
+.next:
+    inc ax
+    jmp short .col
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_lkone - should the cell at AX,BX be kept? out: CF=0 keep, CF=1 pass over.
+; Preserves every register: the walkers bank theirs anyway, because
+; sh_getcell2 recurses into a whole evaluation for a formula cell.
+;
+; [sh_lk_mt] IS THE MATCH TYPE AND [sh_lk_idx] IS NOT. They were one field for
+; one build, and VLOOKUP - whose third argument is a COLUMN NUMBER - then read
+; that column number as a match type: VLOOKUP(x, r, 2) did an exact match and
+; VLOOKUP(x, r, 0) an approximate one, both silently.
+; -----------------------------------------------------------------------------
+sh_lkone:
+    push ax
+    push bx
+    push cx
+    push dx
+    call sh_getcell2                  ; the value lands in sh_acc/sh_sacc and
+    call sh_lkcmp                     ; the tag in sh_curtype
+    jc .no                            ; blank, an error, or the other type
+    cmp word [sh_lk_mt], 0
+    je .exact
+    jg .asc
+    or ax, ax                         ; type -1: keep while the key is still
+    jle .yes                          ; at or above this cell
+    jmp short .no
+.asc:
+    or ax, ax                         ; type 1: keep while the key is still at
+    jge .yes                          ; or above this cell, so the LAST one
+    jmp short .no                     ; kept is the largest not over it
+.exact:
+    or ax, ax
+    jnz .no
+.yes:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_lkcmp - compare the banked key against the value sh_getcell2 just left.
+; out: AX = -1 key below the cell, 0 equal, 1 key above it; CF=1 = the two are
+;      not comparable and the cell sits the search out.
+;
+; A BLANK OR AN ERROR IS NEVER A CANDIDATE, and neither is a cell of the other
+; type: Excel ignores text while looking for a number and the reverse, which
+; is what lets a lookup table carry a header row without the search finding it.
+; -----------------------------------------------------------------------------
+sh_lkcmp:
+    push bx
+    push cx
+    push si
+    push di
+    mov al, [sh_curtype]
+    cmp al, SH_T_BLANK
+    je .no
+    cmp al, SH_T_ERR
+    je .no
+    mov bl, [sh_lk_kt]
+    cmp bl, SH_T_TEXT
+    je .text
+    cmp al, SH_T_TEXT                 ; a number key against a text cell
+    je .no
+    push si                           ; both numbers: the key into A, the
+    mov si, sh_lk_kv                  ; cell's value into B
+    call fp_unpack_a
+    mov si, sh_acc
+    call fp_unpack_b
+    pop si
+    call fp_cmpab
+    clc
+    jmp short .out
+.text:
+    cmp al, SH_T_TEXT                 ; a text key against a number cell
+    jne .no
+    mov si, sh_lk_ks
+    mov di, sh_sacc
+    call sh_lkstrcmp
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; sh_lkstrcmp - SI against DI, case-insensitive; AX = -1/0/1. Preserves the
+; rest. Case-insensitive because Excel's lookups are: MATCH("abc",...) finds
+; "ABC", and EXACT is the function that does not.
+sh_lkstrcmp:
+    push bx
+    push cx
+    push si
+    push di
+.c:
+    mov al, [si]
+    mov bl, [di]
+    call sh_lkup
+    xchg al, bl
+    call sh_lkup
+    xchg al, bl
+    cmp al, bl
+    jb .lo
+    ja .hi
+    or al, al
+    jz .eq
+    inc si
+    inc di
+    jmp short .c
+.eq:
+    xor ax, ax
+    jmp short .out
+.lo:
+    mov ax, -1
+    jmp short .out
+.hi:
+    mov ax, 1
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; sh_lkup - AL to upper case. Preserves everything else.
+sh_lkup:
+    cmp al, 'a'
+    jb .out
+    cmp al, 'z'
+    ja .out
+    sub al, 32
+.out:
     ret
 
 ; =============================================================================
@@ -23156,6 +23541,9 @@ sh_f_rows:      db 'ROWS', 0
 sh_f_columns:   db 'COLUMNS', 0
 sh_f_areas:     db 'AREAS', 0
 sh_f_index:     db 'INDEX', 0
+sh_f_match:     db 'MATCH', 0
+sh_f_vlookup:   db 'VLOOKUP', 0
+sh_f_hlookup:   db 'HLOOKUP', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -23179,6 +23567,7 @@ sh_functab:
     dw sh_f_time, sh_f_hour, sh_f_minute, sh_f_second, sh_f_datevalue
     dw sh_f_timevalue
     dw sh_f_rows, sh_f_columns, sh_f_areas, sh_f_index
+    dw sh_f_match, sh_f_vlookup, sh_f_hlookup
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -23277,7 +23666,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3910
+    OS88_BSS 4005
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -23969,7 +24358,34 @@ sh_blitx2         equ sh_blitx1 + 2    ; sh_dmgdraw's band-fill x span)...
 sh_blity1         equ sh_blitx2 + 2
 sh_blity2         equ sh_blity1 + 2
 sh_blitdel        equ sh_blity2 + 2    ; ...and its signed row delta
-sh_bss_end        equ sh_blitdel + 2
+; --- the lookup search's banked state (SPEC.md 81.32) ------------------------
+; THE SCAN CALLS sh_getcell2 PER CANDIDATE, and that recurses into a whole
+; evaluation for any formula cell it lands on - which is exactly why 81.23's
+; sh_arg1col/sh_arg1row are not sh_r1col/sh_r1row. Everything the scan needs
+; across that call is banked here, out of the parser's reach.
+sh_lk_busy    equ sh_blitdel + 2      ; byte: a search is running. The key is
+                                       ; 65 bytes and the task stack is 384
+                                       ; (20.6 rule 6), so banking it per
+                                       ; nesting level is not available -
+                                       ; a search reached from inside a
+                                       ; searched range REFUSES instead (47),
+                                       ; which is a stated limit rather than
+                                       ; a silently wrong answer
+sh_lk_kt      equ sh_lk_busy + 2      ; byte: the key's SH_T_*
+sh_lk_kv      equ sh_lk_kt + 2        ; 8: ...its value, if a number
+sh_lk_ks      equ sh_lk_kv + 8        ; SH_STR_MAX+1: ...or its text
+sh_lk_c1      equ sh_lk_ks + SH_STR_MAX + 1
+sh_lk_r1      equ sh_lk_c1 + 2        ; the reference's corners, banked out of
+sh_lk_c2      equ sh_lk_r1 + 2        ; sh_arg*col/row for the reason above
+sh_lk_r2      equ sh_lk_c2 + 2
+sh_lk_idx     equ sh_lk_r2 + 2        ; VLOOKUP/HLOOKUP's column or row, or
+                                       ; MATCH's match type
+sh_lk_hit     equ sh_lk_idx + 2       ; the best row (or column) so far...
+sh_lk_pos     equ sh_lk_hit + 2       ; ...and its 1-based position
+sh_lk_got     equ sh_lk_pos + 2       ; word: anything matched at all
+sh_lk_mt      equ sh_lk_got + 2       ; word: MATCH's match type, which is NOT
+                                       ; sh_lk_idx - see sh_lkone
+sh_bss_end        equ sh_lk_mt + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

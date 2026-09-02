@@ -75447,6 +75447,85 @@ text, where these four need only addressing. `sh_streq` answers equality and
 nothing orders text yet, which is what an approximate match on a sorted column
 needs.
 
+### 81.32 MATCH, VLOOKUP and HLOOKUP — the searching half
+
+§81.31's four only had to *address*; these three have to **compare**, and one
+comparison engine serves all of them. Every one walks a single row or column
+matching a key against each cell, and they differ only in what they do with
+the position they find: `MATCH` answers it, `VLOOKUP` and `HLOOKUP` step from
+it to a cell in another column or row.
+
+**Match type 0 is exact and anything else is approximate.** Type 1 — the
+default, and what `VLOOKUP` and `HLOOKUP` always do — keeps the *last* cell
+still at or below the key, which is the largest one not over it when the
+vector ascends; type −1 keeps the last still at or above. Excel says the vector
+must be sorted; an unsorted one gets an answer this makes no promise about
+rather than an error, which is Excel's behaviour too.
+
+**`[sh_lk_mt]` is the match type and `[sh_lk_idx]` is not.** They were one
+field for one build, and `VLOOKUP` — whose third argument is a *column number*
+— then read that column number as a match type: `VLOOKUP(x,r,2)` did an exact
+match and `VLOOKUP(x,r,0)` an approximate one, both silently. Two fields now.
+
+**A blank, an error, or a cell of the other type is never a candidate.** Excel
+ignores text while looking for a number and the reverse, and that is what lets
+a lookup table carry a header row without the search finding it. Text compares
+**case-insensitively**, because Excel's lookups do — `MATCH("ccc",…)` finds
+`CCC`, and `EXACT` is the function that does not.
+
+`#N/A` is what "no match" is; `#REF!` is what a column outside the range is.
+The two are different questions and answering either with `#VALUE!` would say
+the arguments were wrong when they were not.
+
+#### 81.32.1 The scan recurses, so everything it needs is banked
+
+`sh_getcell2` runs a whole evaluation for any formula cell it lands on — which
+is exactly why §81.23's corners are `sh_arg1col`/`sh_arg1row` and not
+`sh_r1col`/`sh_r1row`. The key, the reference's four corners, the index and the
+best-so-far are all banked in `sh_lk_*` before the walk starts.
+
+That leaves one case the banking cannot cover: a search reached *from inside a
+searched range* would overwrite the outer search's key. The key is 65 bytes and
+a task stack is **384** (§20.6 rule 6), so banking it per nesting level is not
+available. `[sh_lk_busy]` **refuses** the inner search instead — a stated limit
+rather than a silently wrong answer (§47), and liftable later by moving the key
+into a claim.
+
+#### 81.32.2 `rep movsw` wrote the key into another segment
+
+The key's eight bytes were banked with `rep movsw`, which writes **ES:DI** —
+and `ES` in this app is a cell or text claim far more often than it is the
+package. So the key landed somewhere else and every numeric comparison missed.
+
+**The failure was beautifully specific**: `MATCH("ccc",B1:B4,0)` found its row
+and `MATCH(30,A1:A4,0)` said `#N/A`, because the *text* path banks its key with
+a plain DS byte loop and only the numeric path used the string instruction.
+Four functions failing and one working is what said "segment", not "logic".
+
+#### 81.32.3 Verified
+
+Over `A1:A4` = 10/20/30/40 with `AAA`–`DDD` beside them
+(`screenshots/sheet-lookup-match.png`), and a horizontal table in rows 13–14
+(`screenshots/sheet-lookup-hlookup.png`):
+
+| | |
+|---|---|
+| `=MATCH(30,A1:A4,0)` | 3 |
+| `=MATCH(25,A1:A4,1)` | 2 — the largest not over 25 |
+| `=MATCH(99,A1:A4,0)` | `#N/A` |
+| `=MATCH("ccc",B1:B4,0)` | 3 — a text key, case-insensitively |
+| `=MATCH(40,A13:D13,0)` | 4 — the same walk sideways |
+| `=VLOOKUP(30,A1:B4,2)` | `CCC` |
+| `=VLOOKUP(25,A1:B4,2)` | `BBB` — approximate |
+| `=VLOOKUP(30,A1:B4,5)` | `#REF!` |
+| `=HLOOKUP(30,A13:D14,2)` | `YYY` |
+| `=HLOOKUP(25,A13:D14,2)` | `XXX` |
+
+`LOOKUP` is the one left in the category. Its vector form is `MATCH` followed
+by a fetch from a *second* reference, so it wants one more set of banked
+corners and is a small addition to this rather than a new mechanism.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
