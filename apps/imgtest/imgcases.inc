@@ -7,7 +7,7 @@
 ;
 ; IMGC_REC = name(2) picno(2) err(2) w(2) h(2) stride(2) ck(2)
 IMGC_REC equ 14
-IMGC_N   equ 11
+IMGC_N   equ 23
 
 imgc_tab:
     dw imgc_n0, 0, 0, 37, 11, 19, 0x9B4C
@@ -18,9 +18,21 @@ imgc_tab:
     dw imgc_n5, 7, 0, 19, 6, 10, 0x8982
     dw imgc_n6, 4, 8, 0, 0, 0, 0x0000
     dw imgc_n7, 0, 0, 41, 8, 21, 0x553F
-    dw imgc_n8, 0, 6, 0, 0, 0, 0x0000
-    dw imgc_n9, 0, 5, 0, 0, 0, 0x0000
-    dw imgc_n10, 0, 1, 0, 0, 0, 0x0000
+    dw imgc_n8, 0, 0, 31, 9, 16, 0x0066
+    dw imgc_n9, 0, 0, 31, 9, 16, 0x0066
+    dw imgc_n10, 0, 0, 31, 9, 16, 0x006F
+    dw imgc_n11, 0, 0, 35, 10, 18, 0xF444
+    dw imgc_n12, 0, 0, 35, 10, 18, 0xF172
+    dw imgc_n13, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n14, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n15, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n16, 0, 0, 1152, 90, 576, 0x5D4C
+    dw imgc_n17, 0, 0, 177, 98, 89, 0xBCE9
+    dw imgc_n18, 0, 0, 334, 132, 167, 0xA6A9
+    dw imgc_n19, 0, 0, 184, 97, 92, 0x2E84
+    dw imgc_n20, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n21, 0, 5, 0, 0, 0, 0x0000
+    dw imgc_n22, 0, 1, 0, 0, 0, 0x0000
 
 imgc_n0: db 'P4.PCX', 0
 imgc_n1: db 'P1.PCX', 0
@@ -30,7 +42,19 @@ imgc_n4: db 'FOREIGN.BMP', 0
 imgc_n5: db 'TWO.PIX', 0
 imgc_n6: db 'TWO2.PIX', 0
 imgc_n7: db 'FOREIGN.PCX', 0
-imgc_n8: db 'EIGHT.PCX', 0
-imgc_n9: db 'CUT.PCX', 0
-imgc_n10: db 'NOPE.TXT', 0
+imgc_n8: db 'M1.BMP', 0
+imgc_n9: db 'M1DOWN.BMP', 0
+imgc_n10: db 'MFOR.BMP', 0
+imgc_n11: db 'PK4.PCX', 0
+imgc_n12: db 'PK4FOR.PCX', 0
+imgc_n13: db 'TWOBIT.BMP', 0
+imgc_n14: db 'P44.PCX', 0
+imgc_n15: db 'EIGHT.PCX', 0
+imgc_n16: db 'MAIN.PCX', 0
+imgc_n17: db 'INSTALL.BMP', 0
+imgc_n18: db 'START.BMP', 0
+imgc_n19: db 'SAMPLPIC.BMP', 0
+imgc_n20: db 'HELP8.PCX', 0
+imgc_n21: db 'CUT.PCX', 0
+imgc_n22: db 'NOPE.TXT', 0
 

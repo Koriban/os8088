@@ -2559,12 +2559,13 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
 #   python3 tools/os88disk.py -o build/imgtest.img --size 1440 \
 #       APPS:build/imgtest.o88 $(addprefix APPS:,$(wildcard build/imgcases/*))
 #   make test TESTAPPS=build/imgtest.img
-# and read the window: eleven rows, ALL PASS or FAILURES.
+# and read the window: one row a case, ALL PASS or FAILURES.
 #
-# build/imgcases/ carries two files this repository does not ship - MAIN.PCX
-# and HELP8.PCX, off the Dr. Dobb's File Formats disc - so the corpus is nine
-# generated cases without them and eleven with. The generator says which it
-# built; a third-party file is the only one that cannot share a misreading
+# build/imgcases/ can carry five files this repository does not ship, off the
+# Dr. Dobb's File Formats disc - MAIN.PCX, HELP8.PCX (its HELPSCRN.PCX),
+# INSTALL.BMP, START.BMP and SAMPLPIC.BMP - so the corpus is seventeen
+# generated cases without them and twenty-two with. The generator says which
+# it built; a third-party file is the only one that cannot share a misreading
 # with the decoder, so run it with them if you have them.
 $(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
                       apps/os88img.inc apps/os88api.inc | $(BUILD)

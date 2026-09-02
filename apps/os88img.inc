@@ -38,12 +38,25 @@
 ; WHAT IS ACCEPTED, AND WHAT GOES TO THE HOST TOOL INSTEAD
 ;
 ;   .PIX  any picture in the archive. No decoding at all - a block is already
-;         this format (61.7), so it is found and copied.
-;   .BMP  4bpp, BI_RGB, bottom-up or top-down. What SHEET, CHART and PAINT
-;         write.
-;   .PCX  1 bit per pixel with 1 or 4 PLANES - ZSoft's Technical Reference
-;         Manual revision 5, which is the shape PC Paintbrush wrote 16-colour
-;         art in. Four 1-bit planes ARE a 4-bit index, so it is exact.
+;         this format (61.7), so it is found and copied. There is no 1bpp
+;         .PIX and this file does not invent one: the format IS packed 4bpp
+;         by definition, apps/frotz/zpic.inc is its authority, and a second
+;         depth would be a change to a format three other things already
+;         agree about, bought for a file nothing writes.
+;   .BMP  BI_RGB, bottom-up or top-down, 4 OR 1 bit per pixel. 4bpp is what
+;         SHEET, CHART and PAINT write; 1bpp is what every paint program of
+;         the era wrote, and the only depth a Windows 2.x machine can put on
+;         a clipboard at all.
+;   .PCX  ZSoft's Technical Reference Manual revision 5, in all three of its
+;         sixteen-colour-or-fewer arrangements: 1 bit in 1 plane (mono),
+;         1 bit in 4 PLANES (EGA's own, and what PC Paintbrush wrote 16
+;         colours in), and 4 bits in 1 plane. Four 1-bit planes ARE a 4-bit
+;         index, so every one of them is exact.
+;
+; Five arrangements, and only TWO row routines - see img_rowconv. A 1bpp BMP
+; row is one 1-bit plane and a 4bpp PCX row is a 4bpp BMP row, so each new
+; depth reuses a loop the other format had already proved, rather than adding
+; one that has only ever run against its own test file.
 ;
 ; REFUSED BY NAME rather than approximated: 8-bit .PCX, and 8- or 24-bit .BMP.
 ; Those need a 256-to-16 nearest-colour quantisation, which is a decision
@@ -52,7 +65,7 @@
 ; to look at the answer. Refusal is an ordinary path (47).
 ;
 ; A SIXTEEN-ENTRY PALETTE IS HONOURED, which is not the same thing. A .BMP and
-; a 4-plane .PCX each carry 16 RGB triples, and img_pal16 maps every one to
+; a 4-plane .PCX each carry 16 RGB triples, and img_palmap maps every one to
 ; the nearest os8088 colour. For a file this tree wrote that is the identity;
 ; for a foreign one it is the difference between the picture and a
 ; colour-scrambled copy of it. Manhattan distance, not Euclidean:
@@ -119,15 +132,24 @@ IMG_FLIP     equ 32                ; word: 1 = the source's first row is the
                                    ; picture's LAST (a bottom-up BMP)
 IMG_RUNC     equ 34                ; word: PCX run bytes still owed
 IMG_RUNV     equ 36                ; word: ...and the value being repeated
-IMG_PI       equ 38                ; word: img_pal16's source entry
+IMG_PI       equ 38                ; word: img_palmap's source entry
 IMG_BESTI    equ 40                ; word: ...its closest os8088 colour
 IMG_BESTD    equ 42                ; word: ...and that colour's distance
 IMG_SRGB     equ 44                ; 3 bytes: the source triple being matched
-IMG_MASK     equ 48                ; byte: the bit img_pcxrow is gathering
+IMG_MASK     equ 48                ; byte: the bit img_row_planes gathers
 IMG_BPOS     equ 50                ; word: ...and the byte of the plane it is in
 IMG_ACC      equ 52                ; byte: its half-built output byte
 IMG_PAL      equ 54                ; 16 bytes: source index -> os8088 colour
-OS88IMG_SZ   equ 72
+IMG_BPP      equ 70                ; word: bits per pixel, PER PLANE: 1 or 4.
+                                   ; the whole choice of row routine, and the
+                                   ; only thing that differs between a 1bpp
+                                   ; BMP and a 4bpp one once the header is read
+IMG_NPAL     equ 72                ; word: how many palette entries the file
+                                   ; actually carries. 16 everywhere except a
+                                   ; 1bpp BMP, which carries TWO - and reading
+                                   ; sixteen out of a small one walks off the
+                                   ; end of the file
+OS88IMG_SZ   equ 76
 
 ; IMG_ERR values. Numbers, not strings - see the header note. A caller maps
 ; them to its own wording; 0 is always "loaded".
@@ -166,9 +188,27 @@ img_load:
     mov word [si+IMG_H], 0
     mov word [si+IMG_STRIDE], 0
     mov word [si+IMG_Y], 0
+    mov word [si+IMG_BPP], 4           ; what every path that does not say
+    mov word [si+IMG_NPL], 1           ; otherwise gets: one plane of 4-bit
+    mov word [si+IMG_NPAL], 16         ; pixels and a full sixteen colours
     mov es, [si+IMG_SRCSEG]
-    cmp word [si+IMG_SRCLEN], 128      ; the longest of the three headers, so
-    jb .short                          ; one test covers all of them
+    cmp word [si+IMG_SRCLEN], 16       ; enough to TELL THEM APART, and to
+    jb .short                          ; hold a whole .PIX header. Each
+                                       ; decoder then checks the length its
+                                       ; OWN header needs.
+                                       ;
+                                       ; ONE floor of 128 - the longest of the
+                                       ; three headers - covered all of them
+                                       ; and was simpler, and 1bpp made it
+                                       ; wrong: a monochrome file is a quarter
+                                       ; the size of the 4bpp one it replaces,
+                                       ; so a 16x16 icon is 126 bytes and a
+                                       ; whole legal picture was refused for
+                                       ; being SMALL. Nothing is admitted that
+                                       ; was not before - a file too short for
+                                       ; the header it claims is still
+                                       ; refused, by the test that knows which
+                                       ; header that is
     cmp word [es:0], 'O' | ('8' << 8)  ; 'O8PIX' - the 61.7 archive
     jne .notpix
     cmp word [es:2], 'P' | ('I' << 8)
@@ -301,17 +341,81 @@ img_rowout:
     ret
 
 ; -----------------------------------------------------------------------------
-; img_pal16 - fill [SI+IMG_PAL] with, for each of 16 source RGB triples at
-; ES:DI, the nearest os8088 colour. DL = 0 for a PCX's R,G,B triples or 1 for
-; a BMP's B,G,R,reserved quads. Preserves all.
+; img_rowconv - the raw half of the caller's row buffer holds one SOURCE row;
+; build the packed half from it. Preserves all.
+;
+; Five accepted arrangements, two row routines, and IMG_BPP alone decides:
+;
+;   BMP 4bpp  \  ONE plane of 4-bit pixels, already two to a byte with the
+;   PCX 4x1   /  high nibble leftmost. A palette pass - img_row_nib
+;
+;   BMP 1bpp  \
+;   PCX 1x1    >  IMG_NPL 1-bit planes of IMG_BPL bytes, bit 7 leftmost, plane
+;   PCX 1x4   /   p contributing bit p of the index - img_row_planes
+;
+; THE CROSS-USE IS THE POINT AND IT IS WHY THIS IS A DISPATCHER RATHER THAN
+; TWO MORE LOOPS. A 1bpp BMP row IS a single 1-bit plane, so it goes through
+; the routine written for PCX with IMG_NPL=1 and IMG_BPL=IMG_SBPR; a 4bpp PCX
+; row IS a 4bpp BMP row, byte for byte. Neither added depth needed a new pixel
+; loop, so neither one is a loop that has only ever run against the test file
+; written to exercise it - each arrived already proved by the other format's
+; corpus, including a 1152x90 file this project did not write.
 ; -----------------------------------------------------------------------------
-img_pal16:
+img_rowconv:
+    push ax
+    push bx
+    cmp word [si+IMG_BPP], 4
+    jne .planes
+    call img_row_nib
+    jmp .tail
+.planes:
+    call img_row_planes
+.tail:
+    test word [si+IMG_W], 1            ; AN ODD WIDTH LEAVES THE LAST LOW
+    jz .out                            ; NIBBLE UNUSED, AND IT IS ZERO.
+    mov bx, [si+IMG_ROWBUF]            ;
+    add bx, OS88IMG_RAW                ; It is outside the picture, so nothing
+    add bx, [si+IMG_STRIDE]            ; draws it and nothing looks at it -
+    dec bx                             ; and it still has to be decided,
+    mov al, [bx]                       ; because the two routines above did
+    and al, 0xF0                       ; not agree about it. img_row_planes
+    mov [bx], al                       ; stops at IMG_W and leaves it 0;
+.out:                                  ; img_row_nib works in whole BYTES, so
+    pop bx                             ; it mapped the source's own padding
+    pop ax                             ; nibble THROUGH THE PALETTE and left
+    ret                                ; PAL[0] there instead.
+                                       ;
+                                       ; Which made a decoded picture depend
+                                       ; on a colour it does not contain: the
+                                       ; same 35-wide image came out with a
+                                       ; different last byte per row under our
+                                       ; palette and under a reversed one.
+                                       ; Invisible, and exactly the kind of
+                                       ; difference that makes two readers of
+                                       ; one file disagree for a reason
+                                       ; neither of them can see. It is a
+                                       ; property of the OUTPUT format, so it
+                                       ; is decided once, here, and not twice.
+
+; -----------------------------------------------------------------------------
+; img_palmap - fill [SI+IMG_PAL] with, for each of [SI+IMG_NPAL] source RGB
+; triples at ES:DI, the nearest os8088 colour. DL = 0 for a PCX's R,G,B
+; triples or 1 for a BMP's B,G,R,reserved quads. Preserves all.
+;
+; The table is sixteen entries whatever the file carries, and the entries the
+; file does NOT carry are left as the IDENTITY rather than as zero. A 1bpp BMP
+; can only ever produce index 0 or 1, so the tail is unreachable through the
+; pixels - but it is reachable through a corrupt one, and a defined answer
+; there is a wrong colour instead of a whole picture in black.
+; -----------------------------------------------------------------------------
+img_palmap:
     push ax
     push bx
     push cx
     push dx
     push di
     push es
+    call img_palident                  ; the entries the file does not carry
     mov word [si+IMG_PI], 0
 .entry:
     cmp dl, 0
@@ -388,8 +492,9 @@ img_pal16:
 .step3:
     add di, 3
 .stepped:
+    mov ax, [si+IMG_NPAL]
     inc word [si+IMG_PI]
-    cmp word [si+IMG_PI], 16
+    cmp [si+IMG_PI], ax
     jb .entry
     pop es
     pop di
@@ -536,8 +641,11 @@ img_pix:
     ret
 
 ; =============================================================================
-; .BMP - 4bpp, BI_RGB. What SHEET, CHART and PAINT write, and the one format
-; in this tree that already travels between packages.
+; .BMP - BI_RGB at 4 or 1 bit per pixel. 4bpp is what SHEET, CHART and PAINT
+; write, and the one format in this tree that already travels between
+; packages. 1bpp is the other half of the era: MSP, Windows 2.x Paint, a fax,
+; a scanned page - and on a Windows 2.x machine it is the ONLY depth anything
+; can put on a clipboard, so a document that came from one has no other form.
 ;
 ; Everything the header says is checked before anything is believed, and above
 ; all that the pixel data it describes is inside the bytes actually read: the
@@ -550,6 +658,11 @@ img_bmp:
     push cx
     push dx
     push di
+    cmp word [si+IMG_SRCLEN], 54       ; 14 + the smallest BITMAPINFOHEADER.
+    jb .trunc                          ; every header word read below is
+                                       ; inside that, and the palette and the
+                                       ; pixels are bounds-checked where they
+                                       ; are used
     cmp word [es:16], 0                ; bfOffBits, high word: a picture past
     jne .trunc                         ; the 64KB horizon has its pixels past
     cmp word [es:20], 0                ; it too. biSize's high word likewise
@@ -558,10 +671,15 @@ img_bmp:
     cmp ax, 40
     jb .trunc
     mov [si+IMG_P], ax                 ; banked: the palette sits after it
-    cmp word [es:26], 1                ; biPlanes
+    cmp word [es:26], 1                ; biPlanes. A BMP states its depth in
+    jne .depth                         ; biBitCount and this is 1 in every
+    mov ax, [es:28]                    ; file that is not a planar oddity
+    cmp ax, 4                          ; biBitCount: four...
+    je .depthok
+    cmp ax, 1                          ; ...or one
     jne .depth
-    cmp word [es:28], 4                ; biBitCount - four, and only four
-    jne .depth
+.depthok:
+    mov [si+IMG_BPP], ax
     cmp word [es:30], 0                ; biCompression: BI_RGB. RLE4 is 2, and
     jne .comp                          ; docs/IMGCONV-PLAN.md 3a gives it its
     cmp word [es:32], 0                ; own extension rather than a branch here
@@ -583,23 +701,42 @@ img_bmp:
 .geom:
     call img_setgeom
     jc .out
-    mov ax, [si+IMG_W]                 ; the SOURCE row: (w+1)/2 rounded up to
-    inc ax                             ; four, which is the BMP rule and not
-    shr ax, 1                          ; ours
+    mov ax, [si+IMG_W]                 ; the SOURCE row, rounded up to a
+    cmp word [si+IMG_BPP], 1           ; multiple of FOUR BYTES - the BMP rule,
+    je .sbpr1                          ; not ours, and it is padding whichever
+    inc ax                             ; depth it is. 4bpp: two pixels a byte
+    shr ax, 1
+    jmp .sbprpad
+.sbpr1:
+    add ax, 7                          ; 1bpp: eight
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+.sbprpad:
     add ax, 3
     and ax, 0xFFFC
     mov [si+IMG_SBPR], ax
-    cmp ax, OS88IMG_RAW
-    ja .dim
+    mov [si+IMG_BPL], ax               ; ONE plane, so the plane stride IS the
+    cmp ax, OS88IMG_RAW                ; row - which is the whole of what lets
+    ja .dim                            ; a 1bpp row reach img_row_planes
+    mov ax, 16                         ; a 1bpp file carries TWO entries, and
+    cmp word [si+IMG_BPP], 1           ; reading sixteen out of one walks into
+    jne .havenpal                      ; its pixels - or off the end of a small
+    mov ax, 2                          ; file, which is the same bug in a hat
+.havenpal:
+    mov [si+IMG_NPAL], ax
+    mov cx, ax                         ; four bytes an entry
+    shl cx, 1
+    shl cx, 1
     mov di, 14                         ; the palette follows the info header
     add di, [si+IMG_P]
     mov ax, di
-    add ax, 64
+    add ax, cx
     jc .trunc
     cmp ax, [si+IMG_SRCLEN]
     ja .trunc
     mov dl, 1                          ; B,G,R,reserved
-    call img_pal16
+    call img_palmap
     mov ax, [es:10]                    ; bfOffBits, at last
     mov [si+IMG_P], ax
     mov ax, [si+IMG_SBPR]
@@ -623,7 +760,7 @@ img_bmp:
     inc di
     dec cx
     jnz .copy
-    call img_bmprow                    ; ...and through the palette map
+    call img_rowconv                   ; ...and through the palette map
     call img_rowout
     mov ax, [si+IMG_SBPR]
     add [si+IMG_P], ax
@@ -652,12 +789,15 @@ img_bmp:
     ret
 
 ; -----------------------------------------------------------------------------
-; img_bmprow - the raw half holds one 4bpp BMP row; build the packed half with
-; every nibble mapped through IMG_PAL.
+; img_row_nib - the raw half holds one row of 4-bit pixels, two to a byte with
+; the high nibble leftmost; build the packed half with every nibble mapped
+; through IMG_PAL.
 ;
-; Both halves are 4bpp two-to-a-byte with the high nibble leftmost already, so
-; this is a palette pass and not a repack - and for a file this tree wrote the
-; map is the identity and the bytes come out equal.
+; That is a 4bpp BMP row and it is equally a 4bpp one-plane PCX row - the two
+; formats differ in how the row got into the buffer and not at all in what is
+; in it. Both halves are already the output layout, so this is a palette pass
+; and not a repack, and for a file this tree wrote the map is the identity and
+; the bytes come out equal.
 ;
 ; XLAT is the whole routine: AL indexes a 16-byte table at DS:BX, which is
 ; exactly what a palette map is. It also frees SI, so the block moves out of
@@ -665,7 +805,7 @@ img_bmp:
 ; A TIME rather than by CL: an 8086 shifts by 1 or by CL and nothing else, and
 ; borrowing CL would mean banking the loop counter around every pixel.
 ; -----------------------------------------------------------------------------
-img_bmprow:
+img_row_nib:
     push ax
     push bx
     push cx
@@ -726,9 +866,19 @@ img_bmprow:
 ; run may span planes and may not span rows, which is why IMG_RUNC is carried
 ; across the plane loop and cleared at each row.
 ;
-; ONE BIT PER PIXEL, ONE OR FOUR PLANES. Four 1-bit planes ARE a 4-bit index -
-; that is EGA's own arrangement - so the conversion is exact. 8-bit PCX is
-; refused: it needs a 256-to-16 quantisation, which belongs on the host.
+; SIXTEEN COLOURS OR FEWER, IN ANY OF THE THREE WAYS THE FORMAT SPELLS THAT:
+; 1 bit in 1 plane, 1 bit in 4 PLANES, or 4 bits in 1 plane. The four-plane
+; form is EGA's own arrangement and the one PC Paintbrush actually wrote, but
+; the manual permits all three and a reader that assumes the popular one is a
+; reader that fails on a file it has no business failing on. Four 1-bit planes
+; ARE a 4-bit index, so every arrangement here is exact - nothing is
+; approximated and nothing is quantised. 8-bit PCX still is refused: THAT
+; needs a 256-to-16 quantisation, which belongs on the host.
+;
+; The header's sixteen RGB triples at offset 16 serve all three. They are the
+; palette for any PCX of sixteen colours or fewer whatever shape its pixels
+; are in - a 256-colour file is the one that keeps its palette elsewhere, and
+; that is the file this refuses.
 ; =============================================================================
 img_pcx:
     push ax
@@ -736,16 +886,28 @@ img_pcx:
     push cx
     push dx
     push di
-    cmp byte [es:3], 1                 ; BitsPerPixel, per plane
-    jne .depth
+    cmp word [si+IMG_SRCLEN], 128      ; the whole PCX header - which is where
+    jb .trunc                          ; the sixteen-colour palette lives, so
+                                       ; there is no shorter legal one
+    mov al, [es:3]                     ; BitsPerPixel, PER PLANE
+    xor ah, ah
+    mov [si+IMG_BPP], ax
     mov al, [es:65]                    ; NPlanes
     xor ah, ah
-    cmp ax, 1
+    mov [si+IMG_NPL], ax
+    cmp word [si+IMG_BPP], 1
+    je .onebit
+    cmp word [si+IMG_BPP], 4           ; 4 bits in ONE plane: the other legal
+    jne .depth                         ; sixteen-colour spelling, and already
+    cmp ax, 1                          ; the layout we want. 4 bits in FOUR
+    jne .depth                         ; planes would be 16-bit colour
+    jmp .npok
+.onebit:
+    cmp ax, 1                          ; one 1-bit plane is monochrome...
     je .npok
-    cmp ax, 4
+    cmp ax, 4                          ; ...and four ARE a 4-bit index
     jne .depth
 .npok:
-    mov [si+IMG_NPL], ax
     mov ax, [es:8]                     ; Xmax
     sub ax, [es:4]                     ; ...less Xmin
     jc .dim
@@ -763,11 +925,18 @@ img_pcx:
     jnz .dim                           ; "MUST be an EVEN number"
     mov [si+IMG_BPL], ax
     mov cx, [si+IMG_W]                 ; ...and it must still cover the width
-    add cx, 7                          ; it claims: 1bpp is eight pixels a byte
+    cmp word [si+IMG_BPP], 1           ; it claims, which is a different number
+    jne .min4                          ; at each depth
+    add cx, 7                          ; 1bpp: eight pixels a byte
     shr cx, 1
     shr cx, 1
     shr cx, 1
-    cmp ax, cx
+    jmp .havemin
+.min4:
+    inc cx                             ; 4bpp: two
+    shr cx, 1
+.havemin:
+    cmp ax, cx                         ; AX is still BytesPerLine
     jb .dim
     mul word [si+IMG_NPL]              ; DX:AX = one raw scanline
     or dx, dx
@@ -775,19 +944,13 @@ img_pcx:
     mov [si+IMG_TOT], ax
     cmp ax, OS88IMG_RAW
     ja .dim
-    cmp word [si+IMG_NPL], 4           ; a 4-plane file's sixteen triples are
-    jne .mono                          ; in the header at offset 16
-    mov di, 16
-    xor dl, dl                         ; R,G,B
-    call img_pal16
-    jmp .palok
-.mono:
-    mov di, 16                         ; one plane means indices 0 and 1, and
-    xor dl, dl                         ; the header's first two triples say
-    call img_pal16                     ; what they are. The identity would make
-                                       ; them black and BLUE, which is not what
-                                       ; a scanned page looks like
-.palok:
+    mov di, 16                         ; ONE call for all three arrangements:
+    xor dl, dl                         ; R,G,B triples, and sixteen of them at
+    call img_palmap                    ; offset 16 whatever the pixels look
+                                       ; like. A monochrome file uses only the
+                                       ; first two, and it MUST - the identity
+                                       ; would make a scanned page black and
+                                       ; BLUE, and it is on the page to say so
     mov word [si+IMG_P], 128           ; the pixel data begins after the header
     mov word [si+IMG_FLIP], 0          ; PCX is top-down
     mov word [si+IMG_Y], 0
@@ -802,7 +965,7 @@ img_pcx:
     inc di
     dec cx
     jnz .fill
-    call img_pcxrow
+    call img_rowconv
     call img_rowout
     inc word [si+IMG_Y]
     mov ax, [si+IMG_Y]
@@ -879,12 +1042,14 @@ img_pcxbyte:
     ret
 
 ; -----------------------------------------------------------------------------
-; img_pcxrow - the raw half holds one scanline, NPlanes bit-planes of
-; BytesPerLine each; build the packed half.
+; img_row_planes - the raw half holds one scanline as IMG_NPL 1-bit planes of
+; IMG_BPL bytes each; build the packed half.
 ;
 ; Plane p contributes BIT p of every pixel's index - EGA's own arrangement, so
-; four 1-bit planes are a 4-bit colour with nothing lost. One plane gives 0 or
-; 1. The result goes through IMG_PAL like every other path here.
+; four 1-bit planes are a 4-bit colour with nothing lost. ONE plane gives 0 or
+; 1, and that case is not only PCX's: a 1bpp BMP row is exactly one 1-bit
+; plane, MSB leftmost, so img_bmp sets IMG_NPL=1 and IMG_BPL=IMG_SBPR and
+; arrives here. The result goes through IMG_PAL like every other path.
 ;
 ; This is the slow routine in the file, and it is slow on purpose: a per-pixel
 ; loop with one test per plane. Twiddling eight pixels at a time is possible
@@ -892,7 +1057,7 @@ img_pcxbyte:
 ; one unrolled path - the sort of routine that works on the picture you tested
 ; and drops a column on the picture you did not.
 ; -----------------------------------------------------------------------------
-img_pcxrow:
+img_row_planes:
     push ax
     push bx
     push cx

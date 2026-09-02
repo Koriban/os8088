@@ -17,10 +17,13 @@ The same argument apps/fptest/fpcases.inc makes for the soft-float core: the
 reference is not my own arithmetic restated, it is what an independent
 implementation produced.
 
-One case is not generated at all. MAIN.PCX comes off the Dr. Dobb's File
-Formats disc, is 1152x90 in four planes, and was written by PC Paintbrush in
-1995 by somebody who had never heard of this project. Everything else here
-could share a misreading with the decoder; that one cannot.
+Some cases are not generated at all. They come off the Dr. Dobb's File
+Formats disc and were written by other people's programs in the 1990s -
+MAIN.PCX by PC Paintbrush, INSTALL.BMP and START.BMP at 1 bit per pixel,
+SAMPLPIC.BMP at 4. Everything generated here could share a misreading with
+the decoder; those cannot. They are not in this repository - the rule the
+format PDFs follow - so the corpus is seventeen cases without the disc and
+twenty-two with, and both numbers are correct.
 """
 
 import os
@@ -44,7 +47,7 @@ E_OK, E_WHAT, E_SHORT, E_DIM, E_BIG, E_TRUNC, E_DEPTH, E_COMP, E_NOPIC, E_VER = 
 
 
 def nearest(rgb):
-    """The os8088 colour closest to rgb, by |dR|+|dG|+|dB| - img_pal16's rule."""
+    """The os8088 colour closest to rgb, by |dR|+|dG|+|dB| - img_palmap's rule."""
     best, bestd = 0, 1 << 30
     for i, p in enumerate(PAL):
         d = abs(p[0] - rgb[0]) + abs(p[1] - rgb[1]) + abs(p[2] - rgb[2])
@@ -153,29 +156,75 @@ def rle(raw):
     return bytes(out)
 
 
-def enc_bmp4(rows, palette, topdown=False):
-    """A 4bpp BI_RGB BMP. Rows pad to a multiple of four bytes."""
+def enc_bmp(rows, palette, bpp=4, topdown=False):
+    """A BI_RGB BMP at 4 or 1 bit per pixel. Rows pad to a multiple of FOUR
+    BYTES, which is the rule at both depths and is where a 1bpp reader that
+    derives its stride from the width goes wrong.
+
+    A 1bpp file carries TWO palette entries and not sixteen, so bfOffBits
+    moves - and a reader that reads sixteen anyway walks into the pixels.
+    """
     h, w = len(rows), len(rows[0])
-    stride = ((w + 1) // 2 + 3) & ~3
+    ncol = 16 if bpp == 4 else 2
+    stride = (((w + 1) // 2 if bpp == 4 else (w + 7) // 8) + 3) & ~3
     px = bytearray()
     order = range(h) if topdown else range(h - 1, -1, -1)
     for y in order:
         line = bytearray(stride)
         for x, v in enumerate(rows[y]):
-            if x & 1:
-                line[x >> 1] |= v & 0x0F
-            else:
-                line[x >> 1] |= (v & 0x0F) << 4
+            if bpp == 4:
+                if x & 1:
+                    line[x >> 1] |= v & 0x0F
+                else:
+                    line[x >> 1] |= (v & 0x0F) << 4
+            elif v & 1:
+                line[x >> 3] |= 0x80 >> (x & 7)   # bit 7 is LEFTMOST
         px += line
-    off = 14 + 40 + 64
+    off = 14 + 40 + ncol * 4
     hdr = bytearray()
     hdr += b"BM"
     hdr += struct.pack("<IHHI", off + len(px), 0, 0, off)
     hdr += struct.pack("<IiiHHIIiiII", 40, w, -h if topdown else h,
-                       1, 4, 0, len(px), 0, 0, 16, 0)
-    for c in palette[:16]:
+                       1, bpp, 0, len(px), 0, 0, ncol, 0)
+    for c in palette[:ncol]:
         hdr += bytes((c[2], c[1], c[0], 0))     # B,G,R,reserved
     return bytes(hdr) + bytes(px)
+
+
+def enc_pcx_packed4(rows, palette):
+    """PCX, 4 bits per pixel in ONE plane - the third sixteen-colour spelling
+    the ZSoft manual allows, and byte-for-byte the same row a 4bpp BMP holds.
+
+    BytesPerLine is again padded two bytes past the minimum, and must again be
+    respected rather than recomputed.
+    """
+    h, w = len(rows), len(rows[0])
+    bpl = (w + 1) // 2
+    if bpl % 2:
+        bpl += 1
+    bpl += 2
+    hdr = bytearray(128)
+    hdr[0] = 10                           # Manufacturer
+    hdr[1] = 5                            # Version
+    hdr[2] = 1                            # Encoding: RLE
+    hdr[3] = 4                            # BitsPerPixel, per plane
+    struct.pack_into("<HHHH", hdr, 4, 0, 0, w - 1, h - 1)
+    struct.pack_into("<HH", hdr, 12, 72, 72)
+    for i, c in enumerate(palette[:16]):
+        hdr[16 + i * 3: 19 + i * 3] = bytes(c)
+    hdr[65] = 1                           # NPlanes
+    struct.pack_into("<H", hdr, 66, bpl)
+    struct.pack_into("<H", hdr, 68, 1)
+    body = bytearray()
+    for r in rows:
+        raw = bytearray(bpl)
+        for x, v in enumerate(r):
+            if x & 1:
+                raw[x >> 1] |= v & 0x0F
+            else:
+                raw[x >> 1] |= (v & 0x0F) << 4
+        body += rle(raw)
+    return bytes(hdr) + bytes(body)
 
 
 def enc_pix(pics):
@@ -218,11 +267,14 @@ def enc_pix(pics):
 
 def ref_pcx(data):
     """Decode a PCX the way ZSoft's manual describes. -> (w, h, rows) or None."""
-    if data[0] != 10 or data[2] != 1 or data[3] != 1:
+    if data[0] != 10 or data[2] != 1 or data[3] not in (1, 4):
         return None
+    bpp = data[3]
     x0, y0, x1, y1 = struct.unpack("<HHHH", data[4:12])
     w, h = x1 - x0 + 1, y1 - y0 + 1
     npl = data[65]
+    if bpp == 4 and npl != 1:
+        return None
     bpl = struct.unpack("<H", data[66:68])[0]
     total = npl * bpl
     pal = [nearest(tuple(data[16 + i * 3: 19 + i * 3])) for i in range(16)]
@@ -240,10 +292,14 @@ def ref_pcx(data):
         raw = raw[:total]                 # a run may overshoot the scan line
         row = []
         for x in range(w):
-            idx = 0
-            for pl in range(npl):
-                if raw[pl * bpl + (x >> 3)] & (0x80 >> (x & 7)):
-                    idx |= 1 << pl
+            if bpp == 4:                  # one plane, two pixels a byte
+                b = raw[x >> 1]
+                idx = (b >> 4) if not (x & 1) else (b & 15)
+            else:
+                idx = 0
+                for pl in range(npl):
+                    if raw[pl * bpl + (x >> 3)] & (0x80 >> (x & 7)):
+                        idx |= 1 << pl
             row.append(pal[idx])
         rows.append(row)
     return w, h, rows
@@ -255,20 +311,24 @@ def ref_bmp(data):
     w = struct.unpack("<i", data[18:22])[0]
     h = struct.unpack("<i", data[22:26])[0]
     bpp = struct.unpack("<H", data[28:30])[0]
-    assert bpp == 4
+    assert bpp in (4, 1)
     topdown = h < 0
     h = abs(h)
+    ncol = 16 if bpp == 4 else 2
     pstart = 14 + hsz
     pal = [nearest((data[pstart + i * 4 + 2], data[pstart + i * 4 + 1],
-                    data[pstart + i * 4])) for i in range(16)]
-    stride = ((w + 1) // 2 + 3) & ~3
+                    data[pstart + i * 4])) for i in range(ncol)]
+    stride = (((w + 1) // 2 if bpp == 4 else (w + 7) // 8) + 3) & ~3
     rows = []
     for i in range(h):
         line = data[off + i * stride: off + (i + 1) * stride]
         row = []
         for x in range(w):
-            b = line[x >> 1]
-            row.append(pal[(b >> 4) if not (x & 1) else (b & 15)])
+            if bpp == 4:
+                b = line[x >> 1]
+                row.append(pal[(b >> 4) if not (x & 1) else (b & 15)])
+            else:
+                row.append(pal[1 if line[x >> 3] & (0x80 >> (x & 7)) else 0])
         rows.append(row)
     if not topdown:
         rows.reverse()
@@ -323,16 +383,16 @@ def build():
 
     # 3-4. BMP both ways up. Bottom-up is what this tree writes.
     rows = pattern(30, 9, 16)
-    blob = enc_bmp4(rows, PAL, topdown=False)
+    blob = enc_bmp(rows, PAL, 4, topdown=False)
     emit("BUP.BMP", blob, 0, E_OK, ref_bmp(blob))
-    blob = enc_bmp4(rows, PAL, topdown=True)
+    blob = enc_bmp(rows, PAL, 4, topdown=True)
     emit("BDOWN.BMP", blob, 0, E_OK, ref_bmp(blob))
 
     # 5. A FOREIGN palette: the sixteen colours in reverse. Every index must
     #    come back mapped, and an identity map fails every pixel. This is the
-    #    case that proves img_pal16 does something.
+    #    case that proves img_palmap does something.
     rows = pattern(16, 5, 16)
-    blob = enc_bmp4(rows, list(reversed(PAL)), topdown=False)
+    blob = enc_bmp(rows, list(reversed(PAL)), 4, topdown=False)
     emit("FOREIGN.BMP", blob, 0, E_OK, ref_bmp(blob))
 
     # 6. A .PIX archive of two, asking for the SECOND by number - the archive
@@ -352,7 +412,57 @@ def build():
     blob = enc_pcx_planar(rows, list(reversed(PAL)), 4)
     emit("FOREIGN.PCX", blob, 0, E_OK, ref_pcx(blob))
 
-    # 9. An 8-bit PCX: REFUSED by name, not approximated. Synthesised rather
+    # 9-11. ONE BIT PER PIXEL, the .BMP half. 31 is odd, so the last pixel of
+    #    a row has no partner nibble on the way OUT while eight of them share
+    #    a byte on the way IN, and the source row pads to four bytes from a
+    #    number that is not the one a 4bpp reader would compute.
+    rows1 = pattern(31, 9, 2)
+    blob = enc_bmp(rows1, [PAL[0], PAL[15]], 1, topdown=False)
+    emit("M1.BMP", blob, 0, E_OK, ref_bmp(blob))
+    blob = enc_bmp(rows1, [PAL[0], PAL[15]], 1, topdown=True)
+    emit("M1DOWN.BMP", blob, 0, E_OK, ref_bmp(blob))
+
+    #    ...and with a palette that is NOT black and white. This is the case
+    #    that proves IMG_NPAL: the two entries must be READ and mapped, and
+    #    the fourteen that are not in the file must not be read at all - the
+    #    header is only eight bytes of palette long and sixteen entries would
+    #    reach into the pixels. An identity map gives 0 and 1, so every pixel
+    #    fails.
+    blob = enc_bmp(rows1, [PAL[9], PAL[6]], 1, topdown=False)
+    emit("MFOR.BMP", blob, 0, E_OK, ref_bmp(blob))
+
+    # 12-13. FOUR BITS IN ONE PLANE, the .PCX half - the third sixteen-colour
+    #    arrangement the manual allows. No file on the Dr. Dobb's disc is in
+    #    it (they are all 1x4 or 8x1), so unlike every other accepted shape
+    #    here this one has no third-party specimen and is generated twice
+    #    instead: once in our own palette and once in a foreign one, because
+    #    R,G,B order on the PACKED path is the combination neither
+    #    FOREIGN.BMP (B,G,R, packed) nor FOREIGN.PCX (R,G,B, planar) covers.
+    rows = pattern(35, 10, 16)
+    blob = enc_pcx_packed4(rows, PAL)
+    emit("PK4.PCX", blob, 0, E_OK, ref_pcx(blob))
+    blob = enc_pcx_packed4(rows, list(reversed(PAL)))
+    emit("PK4FOR.PCX", blob, 0, E_OK, ref_pcx(blob))
+
+    # 14. A 2bpp BMP: REFUSED. Widening the gate from "4 and only 4" to "4 or
+    #    1" is exactly the edit that turns a gate into a formality, so there
+    #    is a case standing on the far side of it.
+    rows = pattern(8, 4, 2)
+    blob = bytearray(enc_bmp(rows, [PAL[0], PAL[15]], 1, topdown=False))
+    struct.pack_into("<H", blob, 28, 2)
+    emit("TWOBIT.BMP", bytes(blob), 0, E_DEPTH, None)
+
+    # 15. ...and its PCX sibling: 4 bits in FOUR planes would be 16-bit
+    #    colour, not sixteen colours. The header is one byte away from the
+    #    case above it and must answer differently.
+    hdr = bytearray(128)
+    hdr[0], hdr[1], hdr[2], hdr[3] = 10, 5, 1, 4
+    struct.pack_into("<HHHH", hdr, 4, 0, 0, 15, 3)
+    hdr[65] = 4
+    struct.pack_into("<H", hdr, 66, 8)
+    emit("P44.PCX", bytes(hdr) + b"\x10" * 128, 0, E_DEPTH, None)
+
+    # 16. An 8-bit PCX: REFUSED by name, not approximated. Synthesised rather
     #    than taken off the disc so the refusal is covered without it.
     hdr = bytearray(128)
     hdr[0], hdr[1], hdr[2], hdr[3] = 10, 5, 1, 8
@@ -361,28 +471,39 @@ def build():
     struct.pack_into("<H", hdr, 66, 16)
     emit("EIGHT.PCX", bytes(hdr) + b"\x10" * 64, 0, E_DEPTH, None)
 
-    # 10-11. Two real third-party files, when the Dr. Dobb's File Formats disc
+    # 17-21. Real third-party files, when the Dr. Dobb's File Formats disc
     #    has been copied into build/imgcases/. They are NOT in this repository
-    #    (the same rule the format PDFs follow), so the corpus is eleven cases
-    #    without them and thirteen with. Everything above could share a
-    #    misreading with the decoder; MAIN.PCX - PC Paintbrush, 1152x90, four
-    #    planes, written by somebody who had never heard of this project -
-    #    cannot.
-    real = os.path.join(OUTDIR, "MAIN.PCX")
-    if os.path.exists(real):
-        blob = open(real, "rb").read()
-        emit("MAIN.PCX", blob, 0, E_OK, ref_pcx(blob))
+    #    (the same rule the format PDFs follow), so the corpus is seventeen
+    #    cases without them and twenty-two with. Everything above could share
+    #    a misreading with the decoder; these cannot - they were written by
+    #    other people's programs in the 1990s.
+    #
+    #      MAIN.PCX      FORMATS/MAIN.PCX      1152x90 1bpp x4  PC Paintbrush
+    #      HELP8.PCX     FORMATS/HELPSCRN.PCX  640x480 8bpp     refused
+    #      INSTALL.BMP   DISKS/INSIDE/         177x98  1bpp     ODD width
+    #      START.BMP     .../PNG_WIN/WEBIMAGE/ 334x132 1bpp     even width
+    #      SAMPLPIC.BMP  .../GT_HTML/          184x97  4bpp     not ours
+    #
+    #    SAMPLPIC.BMP earns its place on the OLD path, not a new one: every
+    #    4bpp BMP the corpus had until now was written by the encoder forty
+    #    lines above this, by the same hands as the decoder.
+    for name, ref in (("MAIN.PCX", ref_pcx), ("INSTALL.BMP", ref_bmp),
+                      ("START.BMP", ref_bmp), ("SAMPLPIC.BMP", ref_bmp)):
+        real = os.path.join(OUTDIR, name)
+        if os.path.exists(real):
+            blob = open(real, "rb").read()
+            emit(name, blob, 0, E_OK, ref(blob))
     real = os.path.join(OUTDIR, "HELP8.PCX")
     if os.path.exists(real):
         emit("HELP8.PCX", open(real, "rb").read(), 0, E_DEPTH, None)
 
-    # 10. A PCX whose pixel data stops early. Every byte off a disk is hostile
+    # 22. A PCX whose pixel data stops early. Every byte off a disk is hostile
     #     (19) and this is what that means in practice.
     rows = pattern(37, 11, 16)
     blob = enc_pcx_planar(rows, PAL, 4)
     emit("CUT.PCX", blob[:len(blob) // 2], 0, E_TRUNC, None)
 
-    # 11. Not a picture at all.
+    # 23. Not a picture at all.
     emit("NOPE.TXT", b"This is not a picture, it is a sentence." * 8,
          0, E_WHAT, None)
 

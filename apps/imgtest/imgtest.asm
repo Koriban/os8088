@@ -29,7 +29,10 @@
     OS88_HEADER 'IMGTEST', it_entry
 
 IT_W        equ 300
-IT_H        equ 240
+IT_H        equ 300                 ; twenty-three cases at IT_ROWH plus the
+                                    ; verdict under them. VGA-only, like the
+                                    ; rest of this tool: a CGA desktop band is
+                                    ; 155 rows (39.11.2) and never held it
 IT_ROWH     equ 9
 
 IT_SRCKB    equ 64                  ; the biggest file the corpus holds
