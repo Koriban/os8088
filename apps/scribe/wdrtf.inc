@@ -45,7 +45,7 @@ wd_rtfimg:
     cmp bx, [wd_len]
     jae .tail
     push ds
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     mov al, [bx]
     pop ds
     cmp al, 13
@@ -54,7 +54,7 @@ wd_rtfimg:
     je .pict                        ; character formatting (86.5)
     push ax
     push ds
-    mov ds, [cs:wd_cseg]
+    PKG_LDS wd_cseg
     mov al, [bx]
     pop ds
     call wd_rdress                  ; open/close what this character wears
@@ -137,11 +137,11 @@ wd_rpict:
     push si
     push es
     push ds
-    mov ds, [cs:wd_cseg]            ; the CHP byte IS the picture index
+    PKG_LDS wd_cseg            ; the CHP byte IS the picture index
     mov al, [bx]                    ; (SPEC.md 68.15)
     pop ds
     xor ah, ah
-    call wd_picrec                  ; -> BX = the table slot
+    call far [wd_v_picrec]; -> BX = the table slot
     jc .out                         ; names no picture: emit nothing
     mov ax, [bx]
     mov [wd_rpw], ax
@@ -386,7 +386,7 @@ wd_rpap:
     mov si, ax
     shl si, 1
     shl si, 1
-    mov ds, [cs:wd_pseg]
+    PKG_LDS wd_pseg
     mov ax, [si]
     mov bx, [si+2]
     push cs
@@ -400,7 +400,7 @@ wd_rpap:
     xor ah, ah
     mov bx, ax
     shl bx, 1
-    mov si, [bx+wd_r_qtab]
+    mov si, [cs:bx+wd_r_qtab]     ; (SPEC.md 86.8.2)
     call wd_res
 .nj:
     mov al, [wd_rpp+1]              ; left indent
@@ -478,8 +478,8 @@ wd_rpapidx:
     push bx
     push cx
     push ds
-    mov cx, [cs:wd_len]
-    mov ds, [cs:wd_dseg]
+    PKG_LD cx, wd_len
+    PKG_LDS wd_dseg
 .scan:
     cmp bx, cx
     jae .tail
@@ -488,11 +488,11 @@ wd_rpapidx:
     inc bx
     jmp short .scan
 .mark:
-    mov ds, [cs:wd_cseg]
+    PKG_LDS wd_cseg
     mov al, [bx]
     jmp short .out
 .tail:
-    mov al, [cs:wd_pap_tail]
+    PKG_LD al, wd_pap_tail
 .out:
     pop ds
     pop cx
@@ -647,7 +647,7 @@ wd_rtfparse:
     mov [wd_dfsize], ax
     mov byte [wd_dtrunc], 0
     mov ax, WD_MAXKB
-    call wd_resize
+    call far [wd_v_resize]
     jc .no
     mov word [wd_len], 0
     mov word [wd_papn], 1           ; a fresh dictionary: entry 0 is Normal
@@ -663,7 +663,7 @@ wd_rtfparse:
     mov word [wd_rskip], 0
     mov word [wd_rpin], 0           ; no \pict open, and no claim held from a
     mov word [wd_rpseg], 0          ; parse that was refused half way
-    call wd_pictfree                ; the OLD document's pictures go back
+    call far [wd_v_pictfree]; the OLD document's pictures go back
                                     ; HERE and not at wd_load's commit point,
                                     ; which is past the ones this parse is
                                     ; about to build (SPEC.md 86.6)
@@ -782,7 +782,7 @@ wd_rputm:
     push ax
     push bx
     push es
-    call wd_papfind                 ; AL = the dictionary index (CF=1 = full,
+    call far [wd_v_papfind]; AL = the dictionary index (CF=1 = full,
     jc .plain                       ; and Normal is the honest fallback)
     jmp short .have
 .plain:
@@ -811,7 +811,7 @@ wd_rputm:
 ; wd_rtail - the tail paragraph's format, for wd_ldpost. Preserves all.
 wd_rtail:
     push ax
-    call wd_papfind
+    call far [wd_v_papfind]
     jnc .have
     xor al, al
 .have:
@@ -1015,13 +1015,13 @@ wd_rword:
     push di
     mov bx, wd_r_tbl
 .look:
-    mov si, [bx]
-    or si, si
-    jz .none
-    mov di, wd_rcw
+    mov si, [cs:bx]                 ; THE TABLE AND THE NAMES IT POINTS AT are
+    or si, si                       ; the module's own image, so they are read
+    jz .none                        ; through CS and not DS - the package's
+    mov di, wd_rcw                  ; segment no longer holds them (86.8.2)
     call wd_rstreq
     jc .next
-    mov al, [bx+2]                  ; the action
+    mov al, [cs:bx+2]               ; the action
     jmp short .do
 .next:
     add bx, 3
@@ -1330,7 +1330,7 @@ wd_rword2:
     sub al, WDR_BOLD                ; the four flag attributes, in order
     xor ah, ah
     mov si, ax
-    mov ah, [si+wd_r_bits]
+    mov ah, [cs:si+wd_r_bits]     ; CS: this table travels WITH
     or dx, dx                       ; no parameter means ON; a 0 parameter
     jz .on                          ; means OFF
     or cx, cx
@@ -1358,7 +1358,7 @@ wd_rword2:
     sub al, WDR_UL
     xor ah, ah
     mov si, ax
-    mov al, [si+wd_r_ulbits]
+    mov al, [cs:si+wd_r_ulbits]   ; the code into SCRIBE.OVL
     or [wd_rat], al
     jmp short .out
 .nul:

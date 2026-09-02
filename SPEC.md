@@ -77188,51 +77188,98 @@ point past its own last refusal: `wd_rtfparse` on its first line,
 refusal must not cost the pictures it was not replacing — is unchanged; it is
 enforced one level down.
 
-### 86.8 Moving the file formats into SCRIBE.OVL — attempted, measured, reverted
+### 86.8 The file formats live in SCRIBE.OVL
 
-Scribe is at **60,828 of `APP_MAX_SIZE`'s 61,440** and §68.10's overlay-split
-trigger is 55,000 resident, so the next feature of any size needs the module to
-take more than the picture decoder. `wddoc.inc` and `wdrtf.inc` are the obvious
-tenants: between them the largest thing in the package, and they run on exactly
-two commands — Open and Save — so the kilobytes they cost are kilobytes the
-*redraw* path is paying for a file dialog it sees twice a session.
+Scribe was at **60,828 of `APP_MAX_SIZE`'s 61,440** — 612 bytes — and §68.10's
+split trigger is 55,000 resident, so the module had to take more than the
+picture decoder. `wddoc.inc` and `wdrtf.inc` are the right tenants: between
+them the largest thing in the package, and they run on exactly two commands —
+Open and Save — so the kilobytes they cost were kilobytes the **redraw** path
+was paying for a file dialog it sees twice a session.
 
-**The interface is small and was measured, not guessed.** Six entry points in
-(`wd_docimg`, `wd_docparse`, `wd_rtfimg`, `wd_rtfparse`, `wd_isrtfimg`,
-`wd_ldpost`), no `jmp`s in, and **five** calls out — `wd_resize`,
-`wd_pictfree`, `wd_papfind`, `wd_ldscan`, `wd_picrec`. Only `wd_papfind`
-touched the UI, and that is the shape §82.16 records an unexplained freeze
-against, so it was split into a UI-free `wd_papfind0` plus a rule worth keeping
-whatever happens next: **the module never speaks. It leaves a reason in
-`wd_ovmsg` and `wd_ovcall` says it on the way out** — `os88img.inc`'s own rule
-(`IMG_ERR` is a number and the caller words the message, §85), generalised and
-put in the one place every future verb passes through.
+**Resident 51,538 → 43,961**, a 7,577-byte reclaim; with bss that is 53,253 of
+61,440, so headroom went from 612 bytes to **8,187**. `SCRIBE.OVL` grew
+1,774 → 9,869 and `WD_OVKB` 8 → 12.
 
-**It built, and the numbers were good**: resident **51,538 → 43,955**, a
-7,583-byte reclaim, with `SCRIBE.OVL` going 1,774 → 9,507 and `WD_OVKB` 8 → 12.
+**The interface was measured, not guessed.** Six entry points in — `wd_docimg`,
+`wd_docparse`, `wd_rtfimg`, `wd_rtfparse`, `wd_isrtfimg`, `wd_ldpost`, each a
+verb with the same `call … / retf` wrapper the shims use in the other
+direction — no `jmp`s in, and **five** calls out: `wd_resize`, `wd_pictfree`,
+`wd_papfind`, `wd_ldscan`, `wd_picrec`.
 
-**It did not work, and the reason is `[cs:]`.** The two engines reach the
-package's bss through **`[cs:wd_*]` in 47 places** — `wd_dseg`, `wd_cseg`,
-`wd_len` and the rest — and they do that precisely because those routines run
-with `DS` *and* `ES` both pointed at the document, CHP or staging claims. `CS`
-was the package. In the module it is not.
+#### 86.8.1 The module never speaks
 
-The attempted fix was `[ss:]`, on the reasoning that a package's stack is its
-own segment. **It is not**: §20.1 and the memory map both say `SS = LOW_SEG`
-(0x0440) — every task stack lives outside the package, and in a package
-`SS != DS`. So all 47 reads came from low memory, and both readers produced an
-empty document while still reporting "Loaded", because the parse ran to
+Only `wd_papfind` touched the UI, in one refusal toast, and that is the shape
+§82.16 records an unexplained freeze against. It split into a UI-free
+`wd_papfind0` plus a rule worth keeping regardless: **the module leaves a
+reason in `wd_ovmsg` and `wd_ovcall` says it on the way out.** That is
+`os88img.inc`'s own rule — `IMG_ERR` is a number and the caller words the
+message (§85) — generalised and put in the one place every future verb passes
+through. `wd_papfind` survives as a thin resident wrapper so resident callers
+still get their toast.
+
+#### 86.8.2 The module's own data is reached through CS
+
+The engines' strings and tables travelled into `.modc` with their code, so
+`wd_r_tbl`, the control-word names it points at, `wd_r_bits`, `wd_r_ulbits`
+and `wd_r_qtab` are read `[cs:…]`. `wd_res` and `wd_rstreq` already read
+`[cs:si]` and needed no change; `wd_d_normal` is copied with `push cs / pop ds`
+and needed none either. The rest were four edits.
+
+#### 86.8.3 The package's segment, stamped into the module
+
+**This is what the split turns on.** The engines reach the package's bss —
+`wd_dseg`, `wd_cseg`, `wd_len` and the rest — at moments when `DS` *and* `ES`
+are both pointed at the document, CHP or staging claims. Resident they wrote
+`[cs:wd_len]`, because `CS` was the package. In the module it is not, and
+**there is no third segment register**: `SS` is `LOW_SEG` (§20.1), not the
+package.
+
+So `wd_ovneed` stamps the package's segment into a word in **the module's own
+image** the moment it is read — `mov ax, cs` / `mov [es:wd_pkgseg], ax`, with
+`ES` still the claim and `CS` still the package because that routine is
+resident — and six macros borrow `DS` around each access:
+
+| | |
+|---|---|
+| `PKG_LD reg, sym` | `reg` = the package's word or byte |
+| `PKG_LDS sym` / `PKG_LDE sym` | `DS` / `ES` = it — the 22 commonest sites are `PKG_LDS`, and they cannot use `PKG_LD` because its `pop ds` would undo the load |
+| `PKG_CMP reg, sym` | compare against it — `pop` does not touch the flags, which is what makes this end in one |
+| `PKG_ST` / `PKG_STB` | store |
+
+Each clobbers nothing but its destination, and the two segment forms clobber
+nothing at all — `AX` is banked and restored. **Macros and not a helper
+routine**, because a helper needs its arguments in registers and the whole
+problem at these sites is that there is no register to spare. The cost is four
+to seven instructions where the resident version cost one, at **47 sites**;
+`wd_dat1` is the hot one, reached per character by `wd_dattr`'s scan.
+
+**`[ss:]` was tried first and is wrong**, on the reasoning that a package's
+stack is its own segment. It is not, and the failure is worth recording because
+it is silent: all 47 reads came from low memory and both readers produced an
+**empty document while still reporting "Loaded"**, because the parse ran to
 completion over garbage.
 
-**What a future attempt has to solve first**, stated so it is not rediscovered:
-there is no third segment register naming the package from inside the module.
-The options are to stamp the package segment into the module's own image at
-bind time and spend `push ds` / `mov ds,[cs:seg]` / read / `pop ds` at each of
-the 47 sites, or to restructure those routines so `DS` is the package when they
-need it. The first is mechanical and bloats the module; the second is the real
-fix and is not small. **Neither is the one-line-per-include move the overlay
-was supposed to make possible**, and that is the honest finding.
+#### 86.8.4 The two gates
 
-What survives from the attempt is `tools/os88ovlchk.py`'s package walk, which
-was written first, caught all nine call-outs the moment they crossed, and is
-committed on its own.
+`tools/os88ovlchk.py` grew a package walk **before** the split, so the move was
+proved by the checker rather than by reading 170 call sites — it named all nine
+call-outs the moment they crossed and is clean now. And the Makefile compares
+the cut `SCRIBE.OVL` against `WD_OVKB`, reading the number out of the source so
+there is one of it and not two: a module that outgrows its claim fails the
+build instead of being read back truncated.
+
+#### 86.8.5 Verified
+
+Under QEMU, with `WELCOME.DOC`, an RTF carrying a picture and `INSTALL.BMP` on
+one floppy — every one of these goes through the overlay:
+
+- `WELCOME.DOC` opens with its text, bold, italics and centred heading intact
+  (`screenshots/scribe-ovl-doc-load.png`);
+- the RTF opens with its picture drawn
+  (`screenshots/scribe-ovl-rtf-picture.png`);
+- saving it back and pulling the file off the floppy gives a `\pict` group whose
+  17,444 hex characters decode to 8,722 bytes **identical** to
+  `os88imgcase.py`'s independent decode of the source BMP — same rotate-xor,
+  `BCE9`. Read and write both crossed the boundary and the bytes did not move
+  (`screenshots/scribe-ovl-rtf-resaved.png`).

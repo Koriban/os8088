@@ -7088,11 +7088,13 @@ wd_save:
                                 ; volume has been moved since (SPEC.md 19.2)
     call wd_isrtf               ; a .RTF name is the user naming a FORMAT,
     jnc .rtf                    ; and it is the one extension Save honours
-    call wd_docimg              ; the whole Word file - FIB, text, FKPs,
+    mov bp, WDM_DOCIMG          ; the whole Word file - FIB, text, FKPs,
+    call wd_ovcall
     jc .big                     ; STSH, plcfsed, bin tables, DOP (65.4)
     jmp short .write
 .rtf:
-    call wd_rtfimg              ; ...or the RTF text (SPEC.md 68.8)
+    mov bp, WDM_RTFIMG          ; ...or the RTF text (SPEC.md 68.8)
+    call wd_ovcall
     jc .big
 .write:
     mov cx, [wd_dend]           ; ES:BX = the image, DX:CX its byte count
@@ -7211,10 +7213,12 @@ wd_load:
     jc .err                     ; capacity is FERR_BIG decided from the
                                 ; directory entry, buffer untouched (18.4)
     push ax                     ; the byte count, kept across the sniffs
-    call wd_isrtfimg            ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
+    mov bp, WDM_ISRTF           ; '{\rtf' -> the RTF reader (SPEC.md 68.8)
+    call wd_ovcall
     jc .nortf
     pop ax
-    call wd_rtfparse            ; frees the OLD pictures ITSELF and may then
+    mov bp, WDM_RTFPARSE        ; frees the OLD pictures ITSELF and may then
+    call wd_ovcall
     jc .bad                     ; register new ones (SPEC.md 86.6), so it
     jmp short .loaded2          ; must not meet wd_pictfree on the way out
 .nortf:
@@ -7226,7 +7230,8 @@ wd_load:
     jne .plain
 
     ; --- a real Word file: FIB, pieces, FKPs, the lot (SPEC.md 68.4) ------
-    call wd_docparse            ; CF=1 = refused whole, document untouched
+    mov bp, WDM_DOCPARSE        ; CF=1 = refused whole, document untouched
+    call wd_ovcall
     jc .bad
 .loaded:
                                 ; NO wd_pictfree HERE ANY MORE. Both readers
@@ -7243,7 +7248,8 @@ wd_load:
 .loaded2:
     call wd_clamp               ; caret to the top; clears the has* flags,
                                 ; the tail and the typing attrs (65.3)
-    call wd_ldpost              ; ...then the loaded facts go back
+    mov bp, WDM_LDPOST          ; ...then the loaded facts go back
+    call wd_ovcall
     mov byte [wd_dirty], 0
     mov si, wd_m_loaded
     call wd_setmsg
@@ -10429,7 +10435,7 @@ wd_applyattr:
 ; gfx call, and an append never moves or renumbers an entry - which is what
 ; lets an undo blob's old index still mean the old format.
 ; -----------------------------------------------------------------------------
-wd_papfind:
+wd_papfind0:
     push bx
     push cx
     push si
@@ -10468,13 +10474,31 @@ wd_papfind:
     jmp short .out
 .full:
     mov ax, wd_m_papfull
-    call wd_saymsg
-    stc
-.out:
-    pop es
+    mov [wd_ovmsg], ax              ; NOT wd_saymsg. This runs inside
+    stc                             ; SCRIBE.OVL now (86.8.1) and the module
+.out:                               ; never speaks - it leaves the reason and
+    pop es                          ; wd_ovcall says it on the way out
     pop si
     pop cx
     pop bx
+    ret
+
+; wd_papfind - the dictionary lookup with its refusal said. Resident callers
+; use this; the module reaches wd_papfind0 through wd_v_papfind and lets
+; wd_ovcall speak, so the toast is raised on the resident side either way.
+wd_papfind:
+    call wd_papfind0
+    jnc .out
+    push ax
+    mov ax, [wd_ovmsg]
+    or ax, ax
+    jz .none
+    mov word [wd_ovmsg], 0
+    call wd_saymsg
+.none:
+    pop ax
+    stc
+.out:
     ret
 
 ; wd_cl0max - clamp signed AL into 0..WD_INDMAX; preserves all others
@@ -20001,14 +20025,80 @@ wd_m_renumd:  db 'Renumbered', 0   ; more FKP pages than
 wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
-; --- the real Word file format (SPEC.md 68.4) --------------------------------
-; The FIB, the FKP pages, the bin tables, the style sheet, the section table,
-; the DOP and the piece table - a separate file because it is a FORMAT, laid
-; out from Opus's own headers, and reads as one.
-%include "wddoc.inc"
+; =============================================================================
+; REACHING THE PACKAGE'S OWN VARIABLES FROM INSIDE THE MODULE (SPEC.md 86.8.3)
+;
+; The file-format engines read wd_dseg, wd_cseg, wd_len and the rest at moments
+; when DS *and* ES are both pointed at the document, CHP or staging claims.
+; Resident, they wrote `[cs:wd_len]`, because CS was the package. In the module
+; CS is the module, and there is no third segment register to use instead:
+; SS is LOW_SEG (SPEC.md 20.1), not the package.
+;
+; So the package's segment is stamped into the MODULE's own image at load time
+; (wd_ovneed above), where CS does reach it, and these macros borrow DS around
+; the access. Each one costs four to seven instructions where the resident
+; version cost one, and each CLOBBERS NOTHING but its own destination and - for
+; the two segment-loading forms - nothing at all: AX is banked and restored.
+; `pop` does not touch the flags, which is what lets PKG_CMP end with one.
+;
+; They are macros and not a helper routine on purpose: a helper would need its
+; arguments in registers, and the whole problem at these sites is that there is
+; no register to spare.
+%macro PKG_LD 2                     ; %1 = the package's word/byte at %2
+    push ds
+    mov ds, [cs:wd_pkgseg]
+    mov %1, [%2]
+    pop ds
+%endmacro
+%macro PKG_LDS 1                    ; DS = the package's word at %1. The 22
+    push ax                         ; commonest sites are this one, and it
+    push ds                         ; cannot use PKG_LD because the `pop ds`
+    mov ds, [cs:wd_pkgseg]          ; would undo the load
+    mov ax, [%1]
+    pop ds
+    mov ds, ax
+    pop ax
+%endmacro
+%macro PKG_LDE 1                    ; ES = the package's word at %1
+    push ax
+    push ds
+    mov ds, [cs:wd_pkgseg]
+    mov ax, [%1]
+    pop ds
+    mov es, ax
+    pop ax
+%endmacro
+%macro PKG_CMP 2                    ; cmp %1, [the package's %2]
+    push ds
+    mov ds, [cs:wd_pkgseg]
+    cmp %1, [%2]
+    pop ds
+%endmacro
+%macro PKG_ST 2                     ; [the package's %1] = %2
+    push ds
+    mov ds, [cs:wd_pkgseg]
+    mov [%1], %2
+    pop ds
+%endmacro
+%macro PKG_STB 2                    ; ...and the byte-sized store
+    push ds
+    mov ds, [cs:wd_pkgseg]
+    mov byte [%1], %2
+    pop ds
+%endmacro
+; =============================================================================
 
-; --- RTF, the other portable format (SPEC.md 68.8) ---------------------------
-%include "wdrtf.inc"
+; --- the two file formats now live in SCRIBE.OVL (SPEC.md 86.8) --------------
+; wddoc.inc and wdrtf.inc used to be %included here, in .text. They are
+; %included from inside `section .modc` further down instead, which is the
+; whole of what moving a subsystem out costs: the includes moved, and every
+; label in them was reclassified by the assembler and by tools/os88ovlchk.py
+; without either being told twice.
+;
+; They are the right tenants. Between them they are the largest thing in this
+; package and they run on exactly two commands - Open and Save - so the
+; kilobytes they cost are kilobytes the REDRAW path was paying for a file
+; dialog it sees twice a session.
 
 ; --- the search pattern and the Utilities commands (SPEC.md 68.7/68.9) -------
 %include "wdutil.inc"
@@ -20047,10 +20137,22 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 ; untouched (SPEC.md 47).
 ; =============================================================================
 
-WD_OVKB      equ 8              ; the claim SCRIBE.OVL is read into, KB
+WD_OVKB      equ 12             ; the claim SCRIBE.OVL is read into, KB. It
+                                ; was 8 when the module held only the picture
+                                ; decoder; the two file formats took it past
+                                ; 9KB (SPEC.md 86.8). THE MAKEFILE CHECKS THIS
+                                ; against the cut module and fails the build if
+                                ; the module outgrows it - the number is read
+                                ; out of this line, so there is one and not two
 WDM_PING     equ 0              ; verbs, the module's dispatch indices
 WDM_IMGLOAD  equ 1              ; SI = an OS88IMG_SZ block; see os88img.inc
-WDM_MAX      equ 1              ; ...and the highest of them
+WDM_DOCIMG   equ 2              ; the six file-format entry points (86.8).
+WDM_DOCPARSE equ 3              ; Each takes and returns exactly what the
+WDM_RTFIMG   equ 4              ; routine behind it always did - the far call
+WDM_RTFPARSE equ 5              ; passes every register through and `retf`
+WDM_ISRTF    equ 6              ; does not touch the flags, so CF comes back
+WDM_LDPOST   equ 7              ; on its own
+WDM_MAX      equ 7              ; ...and the highest of them
 
 ; -----------------------------------------------------------------------------
 ; wd_ovneed - make sure SCRIBE.OVL is loaded
@@ -20091,6 +20193,15 @@ wd_ovneed:
     mov si, wd_ovname
     call OSAPI_FILE_READ
     jc .noread
+    mov ax, cs                      ; THE PACKAGE'S SEGMENT, STAMPED INTO THE
+    mov [es:wd_pkgseg], ax          ; MODULE ITSELF (SPEC.md 86.8.3). ES is
+                                    ; still the claim from the read above, and
+                                    ; CS is the package because this routine
+                                    ; is resident. It is the module's ONLY way
+                                    ; to name the package: 20.1 says SS is
+                                    ; LOW_SEG and not the package, and DS and
+                                    ; ES are both busy at the sites that need
+                                    ; it
     call wd_ovbind                  ; fill the vectors with our own segment
     call wd_ovback
     pop es
@@ -20161,11 +20272,22 @@ wd_ovbind:
 wd_ovcall:
     call wd_ovneed
     jc .no                          ; CF=1 already, and it has said why
+    mov word [wd_ovmsg], 0
     call far [wd_ovfar]             ; the dispatcher is at the claim's offset
                                     ; 0, so the far pointer is (0, the claim)
                                     ; and the verb's own CF comes back through
-.no:
-    ret
+    push ax                         ; THE MODULE NEVER SPEAKS; IT LEAVES A
+    pushf                           ; REASON AND THIS SAYS IT (SPEC.md 86.8.1).
+    mov ax, [wd_ovmsg]              ; The one shim whose resident routine
+    or ax, ax                       ; touched the UI - wd_papfind's refusal
+    jz .quiet                       ; toast - is the shape 82.16 records a
+    mov word [wd_ovmsg], 0          ; freeze against, and this is not a way
+    call wd_saymsg                  ; round that so much as the rule
+.quiet:                             ; os88img.inc already follows: IMG_ERR is
+    popf                            ; a NUMBER and the caller words the
+    pop ax                          ; message (85). Generalised, and put in
+.no:                                ; the ONE place every future verb passes
+    ret                             ; through
 
 wd_ovname:  db 'SCRIBE.OVL', 0
 wd_m_noovl: db 'SCRIBE.OVL is not on this disk', 0
@@ -20184,10 +20306,35 @@ wd_m_noovl: db 'SCRIBE.OVL is not on this disk', 0
 wd_s_saymsg:
     call wd_saymsg
     retf
+wd_s_resize:
+    call wd_resize
+    retf
+wd_s_pictfree:
+    call wd_pictfree
+    retf
+wd_s_papfind:
+    call wd_papfind0                ; the UI-FREE half - see wd_papfind
+    retf
+wd_s_ldscan:
+    call wd_ldscan
+    retf
+wd_s_picrec:
+    call wd_picrec
+    retf
 
 wd_v_first:
-wd_v_saymsg:  dw wd_s_saymsg
-              dw 0
+wd_v_saymsg:   dw wd_s_saymsg
+               dw 0
+wd_v_resize:   dw wd_s_resize
+               dw 0
+wd_v_pictfree: dw wd_s_pictfree
+               dw 0
+wd_v_papfind:  dw wd_s_papfind
+               dw 0
+wd_v_ldscan:   dw wd_s_ldscan
+               dw 0
+wd_v_picrec:   dw wd_s_picrec
+               dw 0
 wd_v_end:
 
 ; --- the module itself -------------------------------------------------------
@@ -20217,8 +20364,15 @@ wd_modc:                            ; +0: the dispatcher, and the only offset
                                     ; line was live in CHART's dispatcher and
                                     ; cost an afternoon there (SPEC.md 82.16.4)
 
+; The package's segment, stamped here by wd_ovneed the moment the module is
+; read (SPEC.md 86.8.3). It is IN THE MODULE and not in the package's bss,
+; because the whole point is that module code can reach it with CS alone.
+wd_pkgseg: dw 0
+
 wd_mverb:
     dw wd_m_ping, wd_m_imgload
+    dw wd_m_docimg, wd_m_docparse, wd_m_rtfimg, wd_m_rtfparse
+    dw wd_m_isrtf, wd_m_ldpost
 
 ; wd_m_ping - what the mechanism has actually been PROVEN to do, and it is
 ; deliberately not more than that. Measured on the emulator, in this order:
@@ -20259,6 +20413,28 @@ wd_m_imgload:
     call img_load
     retf
 
+; --- the file formats, and the six ways in (SPEC.md 86.8) --------------------
+; Each is a near proc ending in `ret`, as every routine in this package is
+; (SPEC.md 20.1), so the verb table cannot point at one directly - the
+; dispatcher's `jmp` arrives with a far return address on the stack. Each gets
+; the same two-line wrapper the shims use in the other direction, and for the
+; same reason. Registers pass through untouched and `retf` does not alter the
+; flags, so CF comes back exactly as the routine set it.
+wd_m_docimg:    call wd_docimg
+                retf
+wd_m_docparse:  call wd_docparse
+                retf
+wd_m_rtfimg:    call wd_rtfimg
+                retf
+wd_m_rtfparse:  call wd_rtfparse
+                retf
+wd_m_isrtf:     call wd_isrtfimg
+                retf
+wd_m_ldpost:    call wd_ldpost
+                retf
+
+%include "wddoc.inc"
+%include "wdrtf.inc"
 %include "os88img.inc"
 
 section .text
@@ -20796,6 +20972,9 @@ section .text
     WDVAR wd_shl,   2       ; word } the sheet's left and right pixel edges,
     WDVAR wd_shr,   2       ; word } banked by wd_bounds for the painters
     WDVAR wd_ovseg, 2       ; word: SCRIBE.OVL's claim, 0 = not loaded yet
+    WDVAR wd_ovmsg, 2       ; word: a message the MODULE wants said, 0 = none.
+                            ; The module never touches the UI; wd_ovcall says
+                            ; this on the way back out (SPEC.md 86.8.1)
     WDVAR wd_ovfar, 4       ; the (offset, segment) wd_ovcall far-calls: an
                             ; 8086 has no `call far reg:reg`, so the pointer
                             ; lives in memory and DS reaches it

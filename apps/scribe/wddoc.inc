@@ -164,7 +164,7 @@ wd_docimg:
     mov cx, [wd_len]                ; (SPEC.md 68.3), so the two
     jcxz .notext                    ; representations differ by exactly this
     push ds                         ; one character - appended here, dropped
-    mov ds, [cs:wd_dseg]            ; by wd_dtrim on the way back in
+    PKG_LDS wd_dseg            ; by wd_dtrim on the way back in
     xor si, si
     rep movsb                       ; ES:DI is already at WD_HDRPAGE
     pop ds
@@ -583,7 +583,7 @@ wd_dgrpp:
     mov si, ax
     shl si, 1
     shl si, 1
-    mov ds, [cs:wd_pseg]
+    PKG_LDS wd_pseg
     mov dx, [si]                    ; DL = packed, DH = left
     mov si, [si+2]                  ; SL = first (signed), SH = right
     pop ds
@@ -942,10 +942,10 @@ wd_dattr:
     push dx
     push ds
     mov bx, si
-    mov byte [cs:wd_dpicrun], 0
+    PKG_STB wd_dpicrun, 0
     call wd_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
     jne .notpic                     ; CHPX can carry its own fcPic and nothing
-    mov byte [cs:wd_dpicrun], 1     ; else shares it (SPEC.md 86.7)
+    PKG_STB wd_dpicrun, 1     ; else shares it (SPEC.md 86.7)
     call wd_dat1                    ; AL = the CHP byte, which for a picture
     mov dl, al                      ; character is its INDEX (68.15)
     inc bx
@@ -953,7 +953,7 @@ wd_dattr:
 .notpic:
     call wd_dat1
     mov dl, al
-    mov cx, [cs:wd_dvlen]
+    PKG_LD cx, wd_dvlen
 .scan:
     inc bx
     cmp bx, cx
@@ -964,7 +964,7 @@ wd_dattr:
     cmp al, dl
     je .scan
 .end:
-    mov [cs:wd_dend], bx
+    PKG_ST wd_dend, bx
     mov al, dl
     pop ds
     pop dx
@@ -975,9 +975,9 @@ wd_dattr:
 ; wd_dispic - ZF=1 if the character at index BX is a picture. Clobbers DS only.
 wd_dispic:
     push ax
-    cmp bx, [cs:wd_len]
+    PKG_CMP bx, wd_len
     jae .no
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     mov al, [bx]
     cmp al, WD_PICCH
     pop ax
@@ -990,13 +990,13 @@ wd_dispic:
 ; wd_dat1 - AL = the CHARACTER attribute at index BX (a ¶'s byte is its PAP
 ; index, so it reads as plain). Clobbers AL and DS only.
 wd_dat1:
-    cmp bx, [cs:wd_len]
+    PKG_CMP bx, wd_len
     jae .plain                      ; the appended trailing mark
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     mov al, [bx]
     cmp al, 13
     je .plain
-    mov ds, [cs:wd_cseg]
+    PKG_LDS wd_cseg
     mov al, [bx]
     ret
 .plain:
@@ -1074,8 +1074,8 @@ wd_dpara:
     push cx
     push ds
     mov bx, si
-    mov cx, [cs:wd_len]
-    mov ds, [cs:wd_dseg]
+    PKG_LD cx, wd_len
+    PKG_LDS wd_dseg
 .scan:
     cmp bx, cx
     jae .tail
@@ -1084,15 +1084,15 @@ wd_dpara:
     inc bx
     jmp short .scan
 .mark:
-    mov ds, [cs:wd_cseg]
+    PKG_LDS wd_cseg
     mov al, [bx]                    ; the mark's CHP byte IS the index
     inc bx
     jmp short .end
 .tail:
-    mov al, [cs:wd_pap_tail]        ; the tail paragraph rides the mark this
+    PKG_LD al, wd_pap_tail        ; the tail paragraph rides the mark this
     inc bx                          ; writer appends, at index [wd_len]
 .end:
-    mov [cs:wd_dend], bx
+    PKG_ST wd_dend, bx
     pop ds
     pop cx
     pop bx
@@ -1416,7 +1416,7 @@ wd_docparse:
     shr ax, cl
     pop cx
     inc ax
-    call wd_resize
+    call far [wd_v_resize]
     jc .no
     mov word [wd_papn], 1           ; a fresh dictionary: entry 0 is Normal
     push es                         ; and wd_papfind grows it from there
@@ -1429,7 +1429,7 @@ wd_docparse:
     call wd_dpapin                  ; the PAPX runs    -> the ¶ marks
     call wd_dtrim                   ; the file's last ¶ is our TAIL paragraph
     call wd_dcompact                ; drop what this port cannot render
-    call wd_pictfree                ; THE OLD DOCUMENT'S PICTURES GO BACK
+    call far [wd_v_pictfree]; THE OLD DOCUMENT'S PICTURES GO BACK
                                     ; HERE, not at wd_load's commit point,
                                     ; which is past the ones wd_dpicr is
                                     ; about to build (SPEC.md 86.7). Safe
@@ -1752,23 +1752,23 @@ wd_dtext:
     push es
     xor bx, bx
 .piece:
-    cmp bx, [cs:wd_dpcn]
+    PKG_CMP bx, wd_dpcn
     jae .done
     call wd_dpget
     jc .next
-    cmp dx, [cs:wd_dccp]
+    PKG_CMP dx, wd_dccp
     jae .next
     mov si, ax
     mov di, dx
-    mov ax, [cs:wd_dccp]
+    PKG_LD ax, wd_dccp
     sub ax, di
     cmp cx, ax                      ; a piece that runs past the ceiling is
     jbe .fit                        ; clipped to it
     mov cx, ax
 .fit:
     jcxz .next
-    mov ds, [cs:wd_stgseg]
-    mov es, [cs:wd_dseg]
+    PKG_LDS wd_stgseg
+    PKG_LDE wd_dseg
     cld
     rep movsb
 .next:
@@ -1844,7 +1844,7 @@ wd_dchpin:
     push di
     push cx
     push es
-    mov es, [cs:wd_cseg]
+    PKG_LDE wd_cseg
     cld
     rep stosb                       ; AL is the attribute
     pop es
@@ -1886,13 +1886,13 @@ wd_dpapin:
     push di
     push ds
     push es
-    mov byte [cs:wd_pap_tail], 0
+    PKG_STB wd_pap_tail, 0
     xor si, si
-    mov cx, [cs:wd_len]
+    PKG_LD cx, wd_len
 .scan:
     cmp si, cx
     jae .tail
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     mov al, [si]
     push cs
     pop ds
@@ -1913,7 +1913,7 @@ wd_dpapin:
     dec ax                          ; is inside it, and its PAPX is the one
     call wd_dpapat                  ; that covers it
     jc .done
-    mov [cs:wd_pap_tail], al
+    PKG_ST wd_pap_tail, al
 .done:
     pop es
     pop ds
@@ -1956,7 +1956,7 @@ wd_dpapat:
     add si, 2 + WD_CBPHE
     call wd_dprl
 .find:
-    call wd_papfind                 ; CF=1 = the dictionary is full
+    call far [wd_v_papfind]; CF=1 = the dictionary is full
     jmp short .out
 .no:
     stc
@@ -2415,17 +2415,17 @@ wd_dtrim:
     push ax
     push bx
     push ds
-    mov bx, [cs:wd_len]
+    PKG_LD bx, wd_len
     or bx, bx
     jz .out
     dec bx
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     cmp byte [bx], 13
     jne .out
-    mov ds, [cs:wd_cseg]
+    PKG_LDS wd_cseg
     mov al, [bx]
-    mov [cs:wd_pap_tail], al
-    mov [cs:wd_len], bx
+    PKG_ST wd_pap_tail, al
+    PKG_ST wd_len, bx
 .out:
     pop ds
     pop bx
@@ -2449,13 +2449,13 @@ wd_dcompact:
     push di
     push ds
     push es
-    mov cx, [cs:wd_len]
+    PKG_LD cx, wd_len
     xor si, si
     xor di, di
 .step:
     cmp si, cx
     jae .done
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     mov al, [si]
     cmp al, 13
     je .keep
@@ -2471,12 +2471,12 @@ wd_dcompact:
     inc si
     jmp short .step
 .keep:
-    mov ds, [cs:wd_dseg]
-    mov es, [cs:wd_dseg]
+    PKG_LDS wd_dseg
+    PKG_LDE wd_dseg
     mov al, [si]
     mov [es:di], al
-    mov ds, [cs:wd_cseg]
-    mov es, [cs:wd_cseg]
+    PKG_LDS wd_cseg
+    PKG_LDE wd_cseg
     mov al, [si]
     mov [es:di], al
     inc si
@@ -2529,7 +2529,7 @@ wd_dpicr:
     cmp bx, [wd_len]
     jae .out
     push ds
-    mov ds, [cs:wd_dseg]
+    PKG_LDS wd_dseg
     mov al, [bx]
     pop ds
     cmp al, WD_PICCH
@@ -2541,7 +2541,7 @@ wd_dpicr:
     mov ax, [wd_npic]               ; walk: the ones after it are found by
     dec ax                          ; stepping over this one, so there is
     push ds                         ; nothing left to trust
-    mov ds, [cs:wd_cseg]
+    PKG_LDS wd_cseg
     mov [bx], al                    ; the CHP byte IS the index (68.15)
     pop ds
 .next:
@@ -2780,6 +2780,6 @@ wd_ldpost:
     jz .n2
     mov byte [wd_hasfmt], 1
 .n2:
-    call wd_ldscan                  ; tabs -> [wd_hastab], hidden -> [wd_hashid]
+    call far [wd_v_ldscan]; tabs -> [wd_hastab], hidden -> [wd_hashid]
     pop ax
     ret
