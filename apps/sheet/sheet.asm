@@ -16137,6 +16137,9 @@ sh_rpn_fid:
     db 65, 67, 68, 69, 70             ; DATE DAY MONTH YEAR WEEKDAY
     db 66, 71, 72, 73, 140            ; TIME HOUR MINUTE SECOND DATEVALUE
     db 141                            ; TIMEVALUE
+    db 76, 77, 75, 65                 ; ROWS COLUMNS AREAS INDEX - Excel's own
+                                       ; ftab, the same table CHOOSE(100),
+                                       ; ROW(8) and COLUMN(9) above came from
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16161,6 +16164,7 @@ sh_rpn_fvar:
     db 0, 0, 0, 0, 0                  ; DATE DAY MONTH YEAR WEEKDAY
     db 0, 0, 0, 0, 0                  ; TIME HOUR MINUTE SECOND DATEVALUE
     db 0                              ; TIMEVALUE - all fixed-arity in 2.1
+    db 0, 0, 0, 1                     ; ROWS COLUMNS AREAS INDEX(2..3)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -18577,6 +18581,11 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 69                         ; 69+ are the LOOKUP functions, whose
+    jae .dolookup                      ; answer may be a REFERENCE's contents
+                                       ; and so may be TEXT (81.31). This test
+                                       ; comes FIRST because the chain below
+                                       ; is descending and 69 is also >= 58
     cmp ax, 58                         ; stage 4.5: 58+ are the DATE functions,
     jae .dodate                        ; which are numbers all the way down
     cmp ax, 37                         ; stage 4.5: 37+ are the TEXT functions,
@@ -18644,6 +18653,13 @@ sh_pfunc:
     call sh_pinfo
     mov dx, ax
     jmp .typed
+.dolookup:
+    call sh_plookup
+    mov dx, ax
+    jmp .done                          ; NOT .typed, for sh_ptext's reason: an
+                                       ; INDEX onto a label answers with the
+                                       ; label, and .typed would stamp
+                                       ; SH_T_NUM over it
 .dospecial:
     call sh_pspecial
     mov dx, ax
@@ -19127,6 +19143,140 @@ sh_pargclass:
 .noerr:
     pop ax
     mov [sh_evalerr], al
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; sh_plookup - the LOOKUP functions, ids 69 and up (SPEC.md 81.31).
+;
+; in:  AX = the id, SI just past '('
+; out: SI past ')', the answer in sh_acc and [sh_curtype] set. AX is 0 and
+;      means nothing - the value has lived in sh_acc since stage 4.0.
+;
+; EVERY ONE OF THESE OPENS WITH A REFERENCE, and sh_pargref is strict about
+; that on purpose (81.23): `ROWS(A1:B9)` is a question about the rectangle, and
+; `ROWS(A1+1)` is not a question at all. An argument that is anything else is
+; #VALUE!, not a fold of it.
+;
+; THE ANSWER MAY BE TEXT, which is why the router sends these to `.done` and
+; not `.typed`. INDEX onto a label has to come back as the label; a number
+; stamped over it would be the zero underneath, which is exactly the bug 81.23
+; was written to end.
+; =============================================================================
+sh_plookup:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax                        ; DI = the id; everything else is scratch
+    call sh_pargref
+    jnc .notref
+    cmp di, 72
+    je .index
+    cmp di, 71
+    je .areas
+    mov ax, [sh_arg2row]              ; ROWS - the rectangle's height...
+    sub ax, [sh_arg1row]
+    inc ax
+    cmp di, 69
+    je .num
+    mov ax, [sh_arg2col]              ; ...and COLUMNS its width. sh_pargref
+    sub ax, [sh_arg1col]              ; puts a single cell in BOTH corners, so
+    inc ax                            ; ROWS(A1) is 1 with no special case
+    jmp short .num
+.areas:
+    mov ax, 1                         ; AREAS is 1 for every reference this
+                                       ; grammar can express. Excel answers >1
+                                       ; only for a UNION - `(A1:A9,C1:C9)` -
+                                       ; and there is no union operator here,
+                                       ; so 1 is the truth rather than a stub
+.num:
+    call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .close
+; --- INDEX(ref, n) / INDEX(ref, row, col) ------------------------------------
+; The two-argument form indexes along whichever way the reference runs, which
+; is what makes INDEX(A1:A9, 3) and INDEX(A1:I1, 3) both mean "the third one".
+; A rectangle given one subscript takes it as the ROW, as Excel does.
+.index:
+    cmp byte [si], ','
+    jne .badargs
+    inc si
+    call sh_pcmp                      ; the first subscript
+    call sh_acc_toint
+    jc .badnum
+    mov cx, ax                        ; CX = it
+    mov dx, 1                         ; DX = the second, defaulting to 1
+    cmp byte [si], ','
+    jne .oneidx
+    inc si
+    call sh_pcmp
+    call sh_acc_toint
+    jc .badnum
+    mov dx, ax
+    jmp short .haveidx
+.oneidx:
+    mov ax, [sh_arg2row]              ; one subscript: if the reference is a
+    cmp ax, [sh_arg1row]              ; single ROW then it counts columns
+    jne .haveidx
+    mov ax, [sh_arg2col]
+    cmp ax, [sh_arg1col]
+    je .haveidx                       ; ...a 1x1 reference is row 1, column 1
+    mov dx, cx
+    mov cx, 1
+.haveidx:
+    or cx, cx                         ; 0 or negative is #VALUE!, as it is for
+    jle .badnum                       ; every subscript in this app
+    or dx, dx
+    jle .badnum
+    mov ax, [sh_arg1row]              ; the cell: the corner plus (n-1)
+    add ax, cx
+    dec ax
+    mov bx, ax
+    cmp ax, [sh_arg2row]
+    ja .outofref
+    mov ax, [sh_arg1col]
+    add ax, dx
+    dec ax
+    cmp ax, [sh_arg2col]
+    ja .outofref
+    mov byte [sh_curtype], SH_T_NUM   ; an EMPTY cell answers 0, as Excel does,
+    push si                           ; and sh_getcell2 leaves sh_acc alone for
+    xor ax, ax                        ; one - so the zero is written first and
+    call sh_acc_int                   ; the read overwrites it when there is
+    pop si                            ; something to read
+    mov ax, [sh_arg1col]
+    add ax, dx
+    dec ax
+    call sh_getcell2                  ; BX is already the row; the value, the
+    jmp .close                        ; tag and any error land where the
+                                       ; caller reads them
+.outofref:
+    mov byte [sh_evalerr], SH_ERR_REF ; a subscript past the rectangle names no
+    jmp short .zero                   ; cell, and #REF! is what that is
+.badnum:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    jmp short .zero
+.notref:
+    call sh_skipargs                  ; step over whatever it was, so the
+    mov byte [sh_evalerr], SH_ERR_VALUE  ; caller still finds the ')'
+    jmp short .zero
+.badargs:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+.zero:
+    xor ax, ax
+    call sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+.close:
+    call sh_skipargs                  ; anything left before the ')' - a fourth
+    cmp byte [si], ')'                ; subscript, a stray comma - is stepped
+    jne .done                         ; over rather than re-parsed
+    inc si
+.done:
+    xor ax, ax
     pop di
     pop dx
     pop cx
@@ -23002,6 +23152,10 @@ sh_f_minute:   db 'MINUTE', 0
 sh_f_second:   db 'SECOND', 0
 sh_f_datevalue: db 'DATEVALUE', 0
 sh_f_timevalue: db 'TIMEVALUE', 0
+sh_f_rows:      db 'ROWS', 0
+sh_f_columns:   db 'COLUMNS', 0
+sh_f_areas:     db 'AREAS', 0
+sh_f_index:     db 'INDEX', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -23024,6 +23178,7 @@ sh_functab:
     dw sh_f_date, sh_f_day, sh_f_month, sh_f_year, sh_f_weekday
     dw sh_f_time, sh_f_hour, sh_f_minute, sh_f_second, sh_f_datevalue
     dw sh_f_timevalue
+    dw sh_f_rows, sh_f_columns, sh_f_areas, sh_f_index
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------

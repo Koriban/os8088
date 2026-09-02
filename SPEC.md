@@ -75388,6 +75388,65 @@ That is what closes the loop: **`Goto SALES` then `Chart Column...` charts
 SALES**, without a name picker in the chart command at all. Chart needs one
 because it opens a file; Sheet needs only the selection it already had.
 
+### 81.31 The lookup family — ROWS, COLUMNS, AREAS, INDEX
+
+The first four of Excel's lookup category, and the first functions in this app
+whose **answer may be a reference's contents** rather than a computation.
+
+They are ids 69 and up, and the router tests for them **first** — the chain in
+`sh_pfunc` is descending, and 69 is also ≥ 58, so a test placed after the date
+functions' would never be reached. They dispatch to `.done` and **not**
+`.typed`, for exactly the reason `sh_ptext` does: `.typed` stamps `SH_T_NUM` on
+a call's result so that `=SUM(A1:A9)*2` cannot inherit a TEXT tag from the last
+cell a fold touched, and an `INDEX` onto a label has to come back as the label.
+Stamping a number over it would answer with the zero underneath — the bug
+§81.23 exists to have ended.
+
+**Every one of them opens with `sh_pargref`**, which is strict about "a
+reference and nothing else" on purpose: `ROWS(A1:B9)` is a question about the
+rectangle and `ROWS(A1+1)` is not a question at all. Anything else is
+`#VALUE!`.
+
+- **`ROWS`** and **`COLUMNS`** are the rectangle's height and width. A single
+  cell lands in both of `sh_pargref`'s corners, so `ROWS(A1)` is 1 with no
+  special case.
+- **`AREAS`** is **1 for every reference this grammar can express**, and that
+  is the truth rather than a stub: Excel answers more than 1 only for a union
+  — `(A1:A9,C1:C9)` — and there is no union operator here.
+- **`INDEX(ref, n)`** and **`INDEX(ref, row, col)`**. The one-subscript form
+  indexes along whichever way the reference runs, so `INDEX(A1:A9,3)` and
+  `INDEX(A1:I1,3)` both mean "the third one"; a rectangle given one subscript
+  takes it as the row, as Excel does. A subscript of zero or less is
+  `#VALUE!`; one past the rectangle is **`#REF!`**, which is what naming no
+  cell is. An empty cell inside the rectangle answers **0**, so the zero is
+  written before the read and `sh_getcell2` overwrites it only when there is
+  something to read.
+
+Adding these meant four tables, not one: the name, `sh_functab`, the BIFF ftab
+index (`ROWS` 76, `COLUMNS` 77, `AREAS` 75, `INDEX` 65 — Excel's own table, the
+one `CHOOSE` 100 and `ROW` 8 already came from) and the fixed/variable arity
+byte. The four `TIMES` assertions above `sh_functab` are what makes forgetting
+one a build error rather than a wrong number in a saved file.
+
+**Verified live** (`screenshots/sheet-lookup-rows-columns-areas-index.png`),
+over `A1:A3` = 10/20/30 with `HELLO` in A5:
+
+| | |
+|---|---|
+| `=ROWS(A1:A3)` | 3 |
+| `=COLUMNS(A1:C1)` | 3 |
+| `=AREAS(A1:A3)` | 1 |
+| `=INDEX(A1:A3,2)` | 20 |
+| `=INDEX(A1:A3,5)` | `#REF!` |
+| `=INDEX(A1:A5,5)` | `HELLO`, left-aligned — **text survived the call** |
+| `=INDEX(A1:C3,3,1)` | 30 |
+
+`MATCH`, `VLOOKUP`, `HLOOKUP` and `LOOKUP` are the rest of the category and are
+not here yet: those four need a value **comparison** across mixed numbers and
+text, where these four need only addressing. `sh_streq` answers equality and
+nothing orders text yet, which is what an approximate match on a sorted column
+needs.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
