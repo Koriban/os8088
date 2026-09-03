@@ -76063,6 +76063,49 @@ a workbook written by the program, closed, and opened again by the program —
 which is what an application test does and a format test does not.
 
 
+#### 81.38.3 The application test: one document, three programs
+
+The run 81.38.2 came out of. A quarter's report produced **by** SHEET, CHART
+and SCRIBE rather than about them, driven through MartyPC on
+`os8088_xt_vga` — CGA's 200 lines show four rows of a spreadsheet, which is
+not enough to work in.
+
+| step | what it exercised | result |
+|---|---|---|
+| Host writes `XQ3.SLK`, association opens it | SYLK reader, `.SLK` claim | 4 divisions × 3 months |
+| Formulas typed into the running program | parser, entry path | — |
+| Edit ▸ Fill Down / Fill Right | reference adjustment | identical relative R1C1 down all four rows |
+| `STDEV VAR MAX VLOOKUP UPPER DATE NPV PMT LN` | 9 categories | every digit matched the host |
+| File ▸ Save, reopen | SYLK writer + reader | **found §81.38.2** |
+| Data ▸ Chart Column, Gallery | the rasterizer | Column drawn, gallery switches |
+| Data ▸ Export Chart as BMP | BMP writer | 240×160, 4bpp, valid header |
+| SCRIBE Insert ▸ Picture | `SCRIBE.OVL`'s decoder | chart on the page |
+| SCRIBE File ▸ Save | RTF writer | `\pict` payload **byte-identical to the BMP** |
+
+**The arithmetic is worth its own line.** `VAR` 1478912.447, `STDEV`
+1216.105442, `NPV` 32108.07102, `PMT` 830.3577453, `LN` 1.146477805, `DATE`
+46295 — all computed by `apps/os88fp.inc`'s software double and all equal to
+Python's to the last digit printed.
+
+**Two things a user would call defects, neither of them wrong answers.**
+
+`Data ▸ Chart Column` puts the chart window in front, so **the next click on
+SHEET's own menu bar is spent raising SHEET** and the command silently does not
+run — the status bar still shows the previous message. From the user's side a
+menu item did nothing, with no error. It cost two runs here before it was
+recognised.
+
+And CHART opened the workbook and **drew nothing, silently** — a white canvas
+where the black one had been, no message either way. §82.15 charts a range
+SHEET has *named* and this workbook defines none, so an empty plot may be
+correct; a program that cannot say *"nothing here to chart"* is not.
+
+**What only this could find.** §81.38's gate compares the file, and the file
+was right every time. §81.38.2 needed a workbook written by the program,
+closed, and opened again by the program — which is what using an application
+is, and what no unit gate in this tree does.
+
+
 #### 81.38.1 What it found on its first run
 
 Two defects, and **both are the same shape**: SHEET's writer and SHEET's
