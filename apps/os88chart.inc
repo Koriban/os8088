@@ -1,13 +1,23 @@
 ; =============================================================================
 ; os8088 - apps/os88chart.inc
 ;
-; THIS FILE IS A MODULE (82.16). Everything below sits in `section .modc
-; vstart=0`, is cut out by tools/os88ovl.py, ships as CHART.OVL beside the
-; package, and is far-called through the dispatcher at its offset 0. Both
-; sheet.asm and chart.asm assemble it and both produce THE SAME BYTES - the
-; Makefile asserts that - because the module names nothing that differs
-; between them: its ch_* state is at a fixed bss offset in both, and the seven
-; things it calls in its host go out through vectors (os88chartovl.inc).
+; THIS FILE IS A MODULE IN SHEET ONLY (82.16). Under CH_OVERLAY - which only
+; sheet.asm defines - everything below sits in `section .modc vstart=0`, is cut
+; out by tools/os88ovl.py, ships as CHART.OVL beside the package, and is
+; far-called through the dispatcher at its offset 0. chart.asm defines neither
+; CH_ symbol and assembles the whole file straight into `.text`.
+;
+; An earlier version of this header said both packages assemble it and "both
+; produce THE SAME BYTES - the Makefile asserts that". NEITHER IS TRUE: there
+; is no such Makefile rule, chart.asm produces no module at all, and 82.16.1
+; shows the two COULD NOT match anyway - the module reaches ch_* at absolute
+; offsets past its host's image end, and the two hosts' images are different
+; lengths. What is true is the design intent underneath it: the module names
+; nothing that differs between hosts, keeping its ch_* state at a fixed bss
+; offset and sending the seven things it calls in its host out through vectors
+; (os88chartovl.inc). That discipline is worth keeping - it is what would make
+; a second host possible - but it has never been enforced by a build rule, and
+; a comment that says it is checked when it is not is worse than no comment.
 ;
 ; vstart=0 because it is loaded at offset 0 of its claim, so its own labels
 ; must be numbered from there. align=1 is load-bearing, not tidiness: a bin

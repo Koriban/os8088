@@ -76834,6 +76834,49 @@ only symptom is that nobody ever proposes it. The comment now says what is
 true, and says that it used to say otherwise.
 
 
+#### 82.16.7 The move is designed, and it is blocked on a test that does not exist
+
+82.16.6 picked the tenant. This is the design, and the reason it has not been
+executed.
+
+**The boundary is unusually clean.** Of the 43 routines, resident code calls
+into only five — `sh_doread`, `sh_dowrite`, `sh_parsecrec`, `sh_slk_r1c1`,
+`sh_difbbox` — and the last three are small helpers the resident SYLK path
+uses, so leaving them behind reduces the module's public surface to **two
+verbs**, `SHM_read` and `SHM_write`, entered from File▸Open and File▸Save.
+Exactly one piece of data inside the tenant is named from outside it,
+`sh_biff_numfmt_tab`, and it stays in `.text`.
+
+**Data needs no vectors; only code does.** §68.10 keeps `DS` on the package, so
+module code reading a resident table by its ordinary offset is correct. It is
+`CS` that moves, so it is only *calls* that must become far — the ~144 of them,
+through the same shim-and-vector table `ch_ovbind` already fills, with a macro
+per §82.16's `CHFP` so the resident and overlaid builds cannot drift.
+
+**Ordering is the one structural change.** The dispatcher must be at the
+module's offset 0, and NASM lays `.modc` fragments down in source order — so
+the tenant cannot simply be bracketed where it sits, 14,000 lines above the
+`os88chart.inc` include. It moves to the end of the file, and `ch_modc` grows a
+single fall-through so a host can extend the verb table without editing a file
+CHART shares.
+
+**Why it is not done. Nothing tests the code it moves.** The suite's only SHEET
+row is `stkbalance`, a static check. There is **no SYLK, DIF or BIFF
+round-trip anywhere** — nothing writes a workbook, reads it back and compares.
+Moving 3,500 lines of file-format code across a segment boundary is precisely
+the change that produces a file which still loads and is quietly wrong in one
+column, and this stage found six defects of that shape in code written the same
+week.
+
+So the order is: **the round-trip gate first, the move second.** The gate is
+worth having on its own terms and is buildable from parts that exist — the
+guest writes the file, the host reads the floppy back and checks it, which is
+the shape §772's cross-format row already uses. Doing the move first would mean
+verifying it by opening a spreadsheet and looking at it, which is how the
+`rep movsw` that wrote MATCH's keys into another segment survived being looked
+at: text worked, numbers did not, and only one of the two was on screen.
+
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot
