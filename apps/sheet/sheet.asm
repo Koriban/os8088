@@ -16156,6 +16156,7 @@ sh_rpn_fid:
     db 142, 143, 43, 56, 57           ; SLN SYD PMT PV FV
     db 11                             ; NPV
     db 58, 144                        ; NPER DDB
+    db 167, 168                       ; IPMT PPMT
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16191,6 +16192,7 @@ sh_rpn_fvar:
     db 0, 0, 1, 1, 1                  ; SLN SYD, and PMT/PV/FV(3..5)
     db 1                              ; NPV(2..15)
     db 1, 1                           ; NPER(3..5) DDB(4..5)
+    db 1, 1                           ; IPMT(4..6) PPMT(4..6)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19359,6 +19361,8 @@ sh_pfin:
     je .nper
     cmp word [sh_fnid], 100
     je .ddb
+    cmp word [sh_fnid], 101
+    jae .ipmt
     jmp .annuity
 ; --- SLN(cost, salvage, life) = (cost - salvage) / life ---------------------
 .sln:
@@ -19479,56 +19483,13 @@ sh_pfin:
 .annuity:
     cmp word [sh_fnn], 3
     jb .badargs
-    mov si, sh_fnarg                  ; (1+r)^n
-    call fp_unpack_a
-    mov ax, 1
-    call fp_i2b
-    call fp_add
-    mov si, sh_fnarg + 8
-    call fp_unpack_b
-    call fp_pow
+    mov si, sh_fnarg + 8              ; n is argument 1 and the type argument 4
+    mov bx, sh_fnnp
+    call sh_trcopy
+    mov cx, 4
+    call sh_fnsetty
+    call sh_fnfac
     jc .badnum
-    mov di, sh_fnt
-    call fp_pack_a
-    mov si, sh_fnarg                  ; is the rate zero?
-    call fp_unpack_a
-    mov bx, fp_am0
-    call fp_iszero
-    jnc .ratenz
-    mov si, sh_fnarg + 8              ; r = 0: the factor is just n
-    call fp_unpack_a
-    mov di, sh_fnu
-    call fp_pack_a
-    jmp short .havef
-.ratenz:
-    mov si, sh_fnt                    ; ((1+r)^n - 1) / r
-    call fp_unpack_a
-    mov ax, 1
-    call fp_i2b
-    call fp_sub
-    mov si, sh_fnarg
-    call fp_unpack_b
-    call fp_div
-    mov di, sh_fnu
-    call fp_pack_a
-    cmp word [sh_fnn], 5              ; ...times (1 + t*r), when a type came
-    jb .havef
-    mov si, sh_fnarg + 32
-    call fp_unpack_a
-    mov bx, fp_am0
-    call fp_iszero
-    jc .havef
-    mov si, sh_fnarg                  ; any non-zero type means "at the start"
-    call fp_unpack_a
-    mov ax, 1
-    call fp_i2b
-    call fp_add
-    call fp_a_to_b
-    mov si, sh_fnu
-    call fp_unpack_a
-    call fp_mul
-    mov di, sh_fnu
-    call fp_pack_a
 .havef:
     cmp word [sh_fnid], 95
     je .pmt
@@ -19616,6 +19577,99 @@ sh_pfin:
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
+; --- IPMT / PPMT(rate, per, nper, pv, fv, type) -----------------------------
+; The interest in one period is the BALANCE STILL OWED BEFORE IT, times the
+; rate - and that balance is the same annuity evaluated at a smaller period
+; count, which is the whole reason sh_fnfac takes its `n` in a slot rather
+; than reading argument 1. PPMT is then simply PMT - IPMT: every payment is
+; one or the other.
+;
+; Its type sits at argument FIVE where PMT's is at four, and with a type of 1
+; the first period has no interest at all - the payment is made before any
+; has accrued.
+.ipmt:
+    cmp word [sh_fnn], 4
+    jb .badargs
+    mov cx, 5
+    call sh_fnsetty
+    mov si, sh_fnarg + 16             ; --- the payment, over nper ---
+    mov bx, sh_fnnp
+    call sh_trcopy
+    call sh_fnfac
+    jc .badnum
+    mov si, sh_fnarg + 24             ; pv * (1+r)^nper
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_mul
+    cmp word [sh_fnn], 5              ; ...+ fv
+    jb .ipnofv
+    mov si, sh_fnarg + 32
+    call fp_unpack_b
+    call fp_add
+.ipnofv:
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_div
+    jc .divzero
+    xor byte [fp_as], 1
+    mov di, sh_fnp
+    call fp_pack_a                    ; sh_fnp = pmt
+    mov si, sh_fnty                   ; --- which period to value at ---
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    mov ax, 1                         ; type 0: k = per - 1
+    jc .iphavek
+    mov si, sh_fnarg + 8              ; type 1 and per = 1: no interest yet
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_cmpab
+    jle .ipzero
+    mov ax, 2                         ; type 1 otherwise: k = per - 2
+.iphavek:
+    push ax
+    mov si, sh_fnarg + 8
+    call fp_unpack_a
+    pop ax
+    call fp_i2b
+    call fp_sub
+    mov di, sh_fnnp
+    call fp_pack_a
+    call sh_fnfac                     ; --- the balance before that period ---
+    jc .badnum
+    mov si, sh_fnarg + 24
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_tr0
+    call fp_pack_a
+    mov si, sh_fnp
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_mul
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_add
+    xor byte [fp_as], 1               ; A = the balance
+    mov si, sh_fnarg                  ; ...times the rate
+    call fp_unpack_b
+    call fp_mul
+.ipdone:
+    cmp word [sh_fnid], 102
+    jne .store
+    call fp_a_to_b                    ; PPMT = PMT - IPMT
+    mov si, sh_fnp
+    call fp_unpack_a
+    call fp_sub
+    jmp .store
+.ipzero:
+    call fp_azero
+    jmp short .ipdone
+
 ; --- NPER(rate, pmt, pv, fv, type) -----------------------------------------
 ; r = 0 is -(pv + fv)/pmt, and otherwise
 ;   nper = ln((A - fv) / (A + pv)) / ln(1+r)   with A = pmt*(1+t*r)/r
@@ -19648,7 +19702,9 @@ sh_pfin:
     call fp_unpack_a
     mov di, sh_fnt
     call fp_pack_a
-    call sh_fntype                    ; A = (1 + t*r)
+    mov cx, 4                         ; A = (1 + t*r)
+    call sh_fnsetty
+    call sh_fntyv
     call fp_a_to_b
     mov si, sh_fnt
     call fp_unpack_a
@@ -19802,28 +19858,128 @@ sh_pfin:
     pop bx
     ret
 
-; sh_fntype - A = (1 + type*rate), which is 1 when no type came or it is zero.
-; Preserves everything but A.
-sh_fntype:
+; sh_fntyv - A = (1 + type*rate) from sh_fnty, or 1 when that is zero.
+sh_fntyv:
+    push bx
     push si
-    cmp word [sh_fnn], 5
-    jb .one
-    mov si, sh_fnarg + 32
+    mov si, sh_fnty
     call fp_unpack_a
     mov bx, fp_am0
     call fp_iszero
-    jc .one
+    jnc .scaled
+    mov si, fp_c_one
+    call fp_unpack_a
+    jmp short .out
+.scaled:
     mov si, sh_fnarg
     call fp_unpack_a
     mov ax, 1
     call fp_i2b
     call fp_add
+.out:
     pop si
+    pop bx
     ret
-.one:
-    mov si, fp_c_one
-    call fp_unpack_a
+
+; -----------------------------------------------------------------------------
+; sh_fnsetty - copy argument CX into sh_fnty, or zero it if fewer arrived.
+; THE TYPE IS NOT ALWAYS ARGUMENT 4: PMT, PV and FV put it there, and IPMT and
+; PPMT at 5, so the caller names its index rather than the helper assuming one.
+sh_fnsetty:
+    push ax
+    push bx
+    push si
+    mov bx, sh_fnty
+    mov word [bx], 0
+    mov word [bx+2], 0
+    mov word [bx+4], 0
+    mov word [bx+6], 0
+    cmp [sh_fnn], cx
+    jbe .out
+    mov ax, cx
+    push dx
+    mov dx, 8
+    mul dx
+    pop dx
+    add ax, sh_fnarg
+    mov si, ax
+    call sh_trcopy
+.out:
     pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_fnfac - the two quantities every annuity function is built from, for the
+; rate in sh_fnarg[0], the period count in sh_fnnp and the type in sh_fnty:
+;
+;   sh_fnt = (1+r)^n
+;   sh_fnu = (1 + t*r) * ((1+r)^n - 1) / r
+;
+; out: CF=1 = the power refused. r = 0 is its own case, where that factor is
+; simply n - the limit - and the general form divides by zero.
+sh_fnfac:
+    push bx
+    push si
+    push di
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    mov si, sh_fnnp
+    call fp_unpack_b
+    call fp_pow
+    jc .no
+    mov di, sh_fnt
+    call fp_pack_a
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jnc .nz
+    mov si, sh_fnnp
+    call fp_unpack_a
+    mov di, sh_fnu
+    call fp_pack_a
+    jmp short .ok
+.nz:
+    mov si, sh_fnt
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_sub
+    mov si, sh_fnarg
+    call fp_unpack_b
+    call fp_div
+    mov di, sh_fnu
+    call fp_pack_a
+    mov si, sh_fnty                   ; (1 + t*r), when the type is non-zero
+    call fp_unpack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jc .ok
+    mov si, sh_fnarg
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    call fp_a_to_b
+    mov si, sh_fnu
+    call fp_unpack_a
+    call fp_mul
+    mov di, sh_fnu
+    call fp_pack_a
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -24681,6 +24837,8 @@ sh_f_fv:        db 'FV', 0
 sh_f_npv:       db 'NPV', 0
 sh_f_nper:      db 'NPER', 0
 sh_f_ddb:       db 'DDB', 0
+sh_f_ipmt:      db 'IPMT', 0
+sh_f_ppmt:      db 'PPMT', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -24710,7 +24868,7 @@ sh_functab:
     dw sh_f_sin, sh_f_cos, sh_f_tan, sh_f_asin, sh_f_acos
     dw sh_f_atan, sh_f_atan2
     dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
-    dw sh_f_nper, sh_f_ddb
+    dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -24809,7 +24967,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4147
+    OS88_BSS 4171
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -25552,7 +25710,14 @@ sh_fnarg      equ sh_tr1 + 8          ; 6 x 8: the financial functions' parsed
 sh_fnn        equ sh_fnarg + 48       ; word: how many arrived. SIX slots:
                                        ; IPMT, PPMT and RATE take that many
 sh_fnid       equ sh_fnn + 2          ; word: which function is running
-sh_fnbusy     equ sh_fnid + 2          ; byte: one of them is parsing
+sh_fnnp       equ sh_fnid + 2         ; 8: the period count sh_fnfac works on,
+                                       ; which is NOT always argument 1 - IPMT
+                                       ; evaluates the same annuity at per-1
+sh_fnty       equ sh_fnnp + 8         ; 8: ...and the type it works on, which
+                                       ; is argument 4 for PMT/PV/FV and
+                                       ; argument 5 for IPMT/PPMT
+sh_fnp        equ sh_fnty + 8         ; 8: the payment, once computed
+sh_fnbusy     equ sh_fnp + 8          ; byte: one of them is parsing
 sh_fnt        equ sh_fnbusy + 2       ; 8: a packed temporary
 sh_fnu        equ sh_fnt + 8          ; 8: ...and a second
 sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked

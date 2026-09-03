@@ -75819,9 +75819,42 @@ period where the salvage clip bites, and the one worth having a case for.
 The argument store is **six** slots now, because `IPMT`, `PPMT` and `RATE` take
 that many.
 
-**Five remain**: `IPMT` and `PPMT` fall out of `PMT` and `FV`; and `RATE`, `IRR`
-and `MIRR` are **root-finders** — the first functions here that iterate toward
-an answer rather than computing one, and the first that can fail to converge.
+#### 81.37.4 IPMT and PPMT, and the refactor that made them cheap
+
+The interest in one period is **the balance still owed before it, times the
+rate** — and that balance is the same annuity evaluated at a *smaller period
+count*. So the inline block inside `.annuity` became `sh_fnfac`, which takes
+its `n` in `sh_fnnp` and its type in `sh_fnty` rather than reading arguments 1
+and 4. `PPMT` is then simply `PMT − IPMT`: every payment is one or the other.
+
+**The type is not always argument 4.** `PMT`, `PV` and `FV` put it there;
+`IPMT` and `PPMT` at 5. `sh_fnsetty` takes the index from the caller instead of
+the helper assuming one — the alternative being a helper that is right for
+three functions and quietly wrong for two.
+
+With a type of 1 the **first period has no interest at all**: the payment is
+made before any has accrued, and Excel answers 0.
+
+Verified (`screenshots/sheet-financial-ipmt-ppmt.png`), on a 20,000 loan at 1%
+over 60 periods:
+
+| | Sheet | reference |
+|---|---|---|
+| `=IPMT(0.01,1,60,20000)` | −200 | −200 |
+| `=IPMT(0.01,2,60,20000)` | −197.55 | −197.551110 |
+| `=IPMT(0.01,60,60,20000)` | −4.4048 | −4.404841 |
+| `=PPMT(0.01,1,60,20000)` | −244.88 | −244.888954 |
+| `=PPMT(0.01,60,60,20000)` | −440.48 | −440.484113 |
+| `=IPMT(0.01,1,60,20000,0,1)` | 0 | 0 — paid before interest accrues |
+| `=PMT(0.01,60,20000)` | −444.88 | −444.888954 |
+
+The last row is there on purpose: **IPMT + PPMT = PMT** in every row above it,
+which is a consistency the three formulas cannot satisfy by accident. And the
+five values from §81.37.2 were re-checked after the refactor and are unchanged.
+
+**Three remain**: `RATE`, `IRR` and `MIRR` are **root-finders** — the first
+functions here that iterate toward an answer rather than computing one, and the
+first that can fail to converge.
 
 
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
