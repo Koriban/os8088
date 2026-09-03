@@ -60,8 +60,10 @@ make run-640  # the same, on a 640KB machine
 make run-720  # the same, off the 720KB pair
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
+make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
+make xt-ega   # ...and the same XT with an IBM EGA, at 640x350
 make xt-multimon  # ...and an XT with BOTH mono cards, a monitor window each
 make 286      # 86Box: 286 @ 12.5MHz, 1MB, VGA
 make 386sx    # 86Box: 386SX @ 16MHz, 2MB, VGA
@@ -90,13 +92,28 @@ make 386-runcpm # 86Box: the 386DX with the 1.44MB one - everything
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay and C64.ROM, the KERNAL/BASIC/CHARGEN sidecar
               # (make c64rom builds that from the ROMs in apps/c64/rom/)
-make c64disk  # ...in all three geometries: c64.img, c64720.img, c64360.img
+              # ...in all three geometries: c64.img, c64720.img, c64360.img
 make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
               # the speed figure on the status row is the one that matters
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
-make allapps  # one 1.44MB floppy with every program on it, both word
-              # processors, Frotz and RunCPM included
+make weavedisk # build the Weave floppy - web-style apps compiled to a .WAB
+              # bundle and run natively: the runtime, its two companion
+              # modules, three demo bundles, LOOM (the in-OS IDE that edits
+              # and packs them), the sources they were built from and a
+              # CATALOG.TXT saying what is on it. One folder, which the
+              # catalogue explains. All three geometries.
+              # BUNDLES='path/to/MYAPP.WAB' adds your own
+make xt-weave # 86Box: the 640KB 4.77MHz XT with the 360KB Weave disk in B:
+make 386-weave # 86Box: the 386DX with the 1.44MB one
+make xt-weave-256 # ...and the 256KB XT, which holds exactly ONE Weave app:
+              # the second one refuses before it touches the disk, with the
+              # arithmetic on the glass
+make loomdisk # the IDE's own floppy: LOOM and the runtime beside it, with
+              # the demo sources flat, in all three geometries
+make allapps  # one 1.44MB floppy with every program on it - both word
+              # processors, Frotz, RunCPM, the Commodore 64 and the Weave
+              # family included
 make live     # the live media (docs/LIVE-MEDIA.md): os8088-usb.img, a
               # bootable hard-disk image for a USB stick, and os8088.iso,
               # the same image as a live CD - the whole OS and every app
@@ -175,8 +192,10 @@ multi-instance:
 - **Apps** — Note Pad (word wrap, DOS-readable text files), TeXPad, Paint,
   ArtfulType, Fractal, Calculator, Piano, Recorder, Tracker and ModPlug Player
   (both play Amiga MOD files).
-- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Cyclone 88
-  and TameGram.
+- **Games** — Minesweeper, Solitaire, Arkanoid, Missile Command, Cyclone 88,
+  Tank Attack (a first-person wireframe tank duel that takes the whole
+  machine, in 320x200 colour on CGA, Mode X on VGA and 640x200 mono in the
+  middle of a Hercules) and TameGram.
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 
@@ -512,7 +531,10 @@ cleanly and runs wrong when C meets this machine.
 | `build/word*.img`      | 1.44MB / 720KB / 360KB   | Microsoft Word floppies (`make worddisk`) |
 | `build/cword*.img`     | 1.44MB / 720KB / 360KB   | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
 | `build/runcpm*.img`    | 1.44MB / 720KB / 360KB   | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`) |
-| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the four above included (`make allapps`) |
+| `build/c64*.img`       | 1.44MB / 720KB / 360KB   | Commodore 64, package + `C64.OVL` + the `C64.ROM` sidecar (`make c64disk`) |
+| `build/weave*.img`     | 1.44MB / 720KB / 360KB   | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
+| `build/loom*.img`      | 1.44MB / 720KB / 360KB   | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
+| `build/apps-all.img`   | 1.44MB FAT12             | every program on one floppy, the seven above included (`make allapps`) |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -557,14 +579,21 @@ fancy period configuration. Expect the real 4.77MHz experience: repaints
 you can watch. `make xt-640` boots the same setup with a full 640KB of
 RAM (`vm/xt640/86box.cfg`) — on the 1986 XT board revision (`ibmxt86`),
 because the original 1982 planar maxes out at 256KB and 86Box silently
-clamps `mem_size` back to the board's limit.
+clamps `mem_size` back to the board's limit. `make xt-mfm` is that machine
+with a **20MB MFM hard disk** (`vm/xt-mfm/86box.cfg`): an ST-225 on IBM's
+Fixed Disk Adapter, whose option ROM is the int 13h the kernel's hard-disk
+driver calls (SPEC.md 52.1). The image, `build/mfm20.img`, is created blank
+and kept between runs; partition and format it from Control Panel → Drivers
+→ Hard Drive → Format, and from then on it is C: — the machine to install
+to (SPEC.md 52.10) and to hibernate on (SPEC.md 86) at a real 4.77MHz.
 
-`make xt-cga` and `make xt-hercules` are the same 256KB XT with the other two
-adapters os8088 supports (`vm/xt-cga`, `vm/xt-hercules`) — CGA, and the
-Hercules mono card of 1982. **These two are the only way to exercise the
-adapter detection probe at all**: QEMU has no Hercules card, so `make test
-VIDEO=cga` drives the mono renderer but never the code that works out which
-card is fitted. A drawing change is not checked on 1bpp until it has been
+`make xt-cga`, `make xt-hercules` and `make xt-ega` are the same 256KB XT
+with the other three adapters os8088 supports (`vm/xt-cga`,
+`vm/xt-hercules`, `vm/xt-ega`) — CGA, the Hercules mono card of 1982, and the
+IBM EGA at 640x350 (SPEC.md §39.24). **These three are the only way to
+exercise the adapter detection probe at all**: QEMU has no Hercules and no
+EGA card, so `make test VIDEO=cga` and `make test VIDEO=ega` drive those
+geometries but never the code that works out which card is fitted. A drawing change is not checked on 1bpp until it has been
 looked at here — grey rounds to black on both, so a greyed-out menu item is
 a checkerboard rather than a pale one.
 
@@ -604,8 +633,10 @@ All targets, at a glance:
 |---|---|---|---|---|---|
 | `xt` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | OTI-067 VGA | — |
 | `xt-640` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `xt-mfm` | XT, 1986 board + 20MB ST-225 on a Xebec MFM controller | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `xt-cga` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | CGA | — |
 | `xt-hercules` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | Hercules | — |
+| `xt-ega` | IBM PC/XT | 8088 @ 4.77MHz | 256KB | IBM EGA (640x350) | — |
 | `xt-sound` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 2.0 |
 | `xt-sound-1.44` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | Sound Blaster 1.0 |
 | `286` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
@@ -620,6 +651,16 @@ All targets, at a glance:
 | `386-z` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | Sound Blaster 16 |
 | `xt-word` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
 | `386-word` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `386-c-word` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-runcpm` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `286-runcpm` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `386-runcpm` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-c64` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `286-c64` | AMI 286 clone | 286 @ 12.5MHz | 1MB | OTI-067 VGA | — |
+| `386-c64` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-weave` | XT, 1986 board | 8088 @ 4.77MHz | 640KB | OTI-067 VGA | — |
+| `386-weave` | Micronics 386 | 386DX @ 25MHz | 2MB | OTI-067 VGA | — |
+| `xt-weave-256` | IBM PC/XT | 8088 @ 4.77MHz | **256KB** | OTI-067 VGA | — |
 
 The XT-class machines boot the 360KB system disk; most pair it with the 360KB
 apps disk, while `xt-sound-1.44` mounts the everything disk in a 1.44MB B:
@@ -629,7 +670,11 @@ drive. The AT-class machines boot the 1.44MB pair.
 each — and the only 86Box machine that can show the extended desktop. It boots
 Single; Control Panel → Display → Desktop is what extends it.
 
-The last four put a **dedicated floppy** in B: instead of the apps disk.
+The last sixteen put a **dedicated floppy** in B: instead of the apps disk.
+`xt-weave-256` is the same 4.77MHz XT as `xt-weave` with 256KB rather than
+640KB, because that is the machine the Weave runtime's memory arithmetic is
+written about: it holds exactly one Weave app, and the second one refuses
+before it touches the disk.
 `xt-z` and `386-z` are the Frotz machines and take a **story floppy** — `xt-z`
 with a 720KB 3.5" DD drive (360KB does not hold a library), `386-z` with two
 1.44MB drives and a second library disk to swap in. Both carry the full 640KB,

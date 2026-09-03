@@ -105,7 +105,7 @@ WD_MAXBTE    equ 64             ; FKP pages of each kind. 64 x 512 = 32KB,
 WD_MAXPCD    equ 1024           ; pieces a complex file may have. Read in
                                 ; place out of the staging image - no copy,
                                 ; so this bounds the WALK and nothing else
-; --- the picture record (SPEC.md 86.7) ---------------------------------------
+; --- the picture record (SPEC.md 88.7) ---------------------------------------
 ; Derived from two documents Microsoft itself wrote and cross-checked against
 ; each other: TECHREF.DOC, which ships with Word 1.1a and holds exactly one
 ; metafile picture, and SNAP.DOC, a Paint bitmap pasted into Word and saved.
@@ -174,7 +174,7 @@ wd_docimg:
     call wd_dpicw                     ; THE PICTURES, BEFORE THE FKPs: their
     jc .no                            ; offsets have to be known when the
                                       ; CHPX that names them is built, and
-                                      ; wd_dchps runs below this (86.7)
+                                      ; wd_dchps runs below this (88.7)
     call wd_dalign                    ; the FKPs start on a page boundary
     mov ax, di                      ; --- the CHPX FKP pages ----------------
     call wd_dpnof
@@ -222,7 +222,7 @@ wd_docimg:
 ; format asks for rather than a shortcut. Every embedded picture in a Word
 ; 1.1a file that has been measured is bmPlanes 1, bmBitsPixel 1 - both
 ; specimens, and there is no third to argue with - so a .DOC picture is
-; monochrome and 86.5's RTF is where the colour lives. WD_PICWHITE decides
+; monochrome and 88.5's RTF is where the colour lives. WD_PICWHITE decides
 ; which of the sixteen go to 1.
 ;
 ; A DDB row is padded to a WORD, not to a byte and not to a dword: SNAP.DOC's
@@ -495,7 +495,7 @@ wd_dgrpc:
     push bx
     push dx
     cmp byte [wd_dpicrun], 0        ; A PICTURE'S CHPX IS NOT A grpprl AND
-    je .attrs                       ; NOT AN ATTRIBUTE SET (SPEC.md 86.7).
+    je .attrs                       ; NOT AN ATTRIBUTE SET (SPEC.md 88.7).
     xor ah, ah                      ; AL arrived as the picture INDEX; what
     mov bx, ax                      ; goes out is the twelve-byte structure
     shl bx, 1                       ; SNAP.DOC and TECHREF.DOC both carry,
@@ -945,9 +945,9 @@ wd_dattr:
     PKG_STB wd_dpicrun, 0
     call wd_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
     jne .notpic                     ; CHPX can carry its own fcPic and nothing
-    PKG_STB wd_dpicrun, 1     ; else shares it (SPEC.md 86.7)
+    PKG_STB wd_dpicrun, 1     ; else shares it (SPEC.md 88.7)
     call wd_dat1                    ; AL = the CHP byte, which for a picture
-    mov dl, al                      ; character is its INDEX (86.9)
+    mov dl, al                      ; character is its INDEX (88.9)
     inc bx
     jmp short .end
 .notpic:
@@ -1432,7 +1432,7 @@ wd_docparse:
     call far [wd_v_pictfree]; THE OLD DOCUMENT'S PICTURES GO BACK
                                     ; HERE, not at wd_load's commit point,
                                     ; which is past the ones wd_dpicr is
-                                    ; about to build (SPEC.md 86.7). Safe
+                                    ; about to build (SPEC.md 88.7). Safe
                                     ; this late: every refusal wd_docparse
                                     ; can make is above this line, so by now
                                     ; the read has committed and the rule the
@@ -2462,7 +2462,7 @@ wd_dcompact:
     cmp al, 9
     je .keep
     cmp al, WD_PICCH                ; a picture SURVIVES compaction now
-    je .keep                        ; (SPEC.md 86.7): it is the one control
+    je .keep                        ; (SPEC.md 88.7): it is the one control
     cmp al, 32                      ; character below 32 this port renders,
     jb .drop                        ; and wd_dpicr pairs it with its record
     cmp al, 126
@@ -2535,14 +2535,14 @@ wd_dpicr:
     cmp al, WD_PICCH
     jne .next
     cmp word [wd_npic], WD_PICMAX
-    jae .out                        ; past what a document may hold (86.9)
+    jae .out                        ; past what a document may hold (88.9)
     call wd_dpic1                   ; -> CF=0 and the picture registered
     jc .out                         ; a record that does not parse ends the
     mov ax, [wd_npic]               ; walk: the ones after it are found by
     dec ax                          ; stepping over this one, so there is
     push ds                         ; nothing left to trust
     PKG_LDS wd_cseg
-    mov [bx], al                    ; the CHP byte IS the index (86.9)
+    mov [bx], al                    ; the CHP byte IS the index (88.9)
     pop ds
 .next:
     inc bx

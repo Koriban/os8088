@@ -47,7 +47,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
 | **[docs/FTP-PERF.md](docs/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
-| **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader |
+| **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 | **[docs/WEAVE-PLAN.md](docs/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 
 ## Commands
@@ -137,6 +137,40 @@ make c64disk    #   3.10's x64 as a windowed Commodore 64 — a 6510 in a 64KB
                 #   in raw QEMU), `make c64bandbench` the composer's bench, and
                 #   `make c64cputest` the 6510's — it arrives with the core.
                 #   THE CONTRACT IS docs/C64-SPEC.md, not a section of SPEC.md
+make weave      # WEAVE (WEAVE-SPEC §1.2), the family's runtime: web-style
+make weavedisk  #   apps - markup, script and formulas - compiled at pack time
+                #   into one `.WAB` bundle and interpreted natively. `make
+                #   weavedisk` builds the family's floppy in all three
+                #   geometries: the runtime, `WEAVE.OVL`, `WEAVE.WSM`
+                #   (WEAVE-SPEC §1.2.2's canvas core), the three demo
+                #   bundles, LOOM and its `LOOM.WPV` (WEAVE-SPEC §1.2.4), the
+                #   demo sources and a `CATALOG.TXT` per geometry. TWO
+                #   FOLDERS — `WEAVE/` is the runtime and the compiled
+                #   bundles, `LOOM/` the IDE and the sources — and each is
+                #   WHOLE, because SPEC.md §73.14 resolves an overlay in the
+                #   LAUNCHED-FROM directory: a bundle opens only beside
+                #   WEAVE's three files, a source only beside LOOM's, so
+                #   `LOOM/` carries a second copy of the runtime for the
+                #   bundles Pack writes there (WEAVE-SPEC §11.2 has the
+                #   photographs of the folder-per-project layout refusing by
+                #   either route). `BUNDLES='path/MYAPP.WAB'`
+                #   adds your own to `WEAVE/`, the way `CPMSW=` and `STORIES=`
+                #   do — and the geometry still has to hold them, which is
+                #   what the recipe's cluster arithmetic refuses on
+make loom       # LOOM (WEAVE-SPEC §1.2), the family's second package: the
+make loomdisk   #   in-OS IDE that edits a project's sources and packs the
+                #   `.WAB` ON THE MACHINE, byte-identical to what
+                #   `tools/weavesim.py --pack` writes on the host. That
+                #   identity IS the gate (WEAVE-SPEC §11.1): `make` runs the
+                #   host half of it every time (the `lmpack` row, four
+                #   seconds), and `python3 tools/os88test.py soak -k
+                #   'weave*'` runs the machine's. `make loomdisk` puts both
+                #   packages, both overlays, WEAVE.WSM, LOOM.WPV, the demo
+                #   bundles and the demo SOURCES on one floppy in all three
+                #   geometries, in the same two folders as `make weavedisk`,
+                #   which is the same shape plus `CATALOG.TXT`: a WHOLE
+                #   program per folder is a correctness requirement on both
+                #   (WEAVE-SPEC §11.2), not a layout choice
 make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   FTPD.O88 on one disk, in all three geometries. ETHER.DRV
                 #   brackets its own ten stages with the PIT and this is the
@@ -154,8 +188,12 @@ make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   speed because the machine under it is not an 8088
 make browsertest # ...and the browser's page disk, for tests/br*.py
 make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
-              #   on it, Frotz, both Words and RunCPM (with its drive A)
-              #   included, for a release page. Needs the C toolchain and
+              #   on it, Frotz, both Words, RunCPM (with its drive A), the
+              #   C64 and the Weave family's two — one folder each, so
+              #   `WEAVE/` carries the package, both modules and the bundles
+              #   and `LOOM/` the IDE and its own — for a release page. The
+              #   payload is DERIVED, so `make live` carries it too and
+              #   neither list is edited twice. Needs the C toolchain and
               #   the RunCPM fetch, so it is on demand like cworddisk —
               #   it and the live media below are the only targets outside
               #   §73/§74 that do
@@ -182,7 +220,7 @@ make clean
 
 | knob | effect |
 |---|---|
-| `VIDEO=cga\|herc` | force an adapter instead of probing |
+| `VIDEO=cga\|herc\|ega` | force an adapter instead of probing. `ega` is SPEC.md 39.24's 640x350 geometry on a VGA - drive it with `tools/mouse.py --screen 640x350` |
 | `RTC=at\|ns\|rp\|bios\|none` | force one rung of the clock ladder |
 | `ADLIB=1` / `SB16=1` | give the sound driver a card to attach to |
 | `HDD=<MB>` | give the hard-disk driver a disk |
@@ -200,11 +238,14 @@ sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
 exactly like the feature being broken.
 
 86Box targets for period hardware, one per `vm/` directory: `xt`, `xt-640`,
-`xt-cga`, `xt-hercules`, `xt-multimon`, `xt-sound`, `xt-sound-1.44`, `286`,
+`xt-mfm` (a 20MB ST-225 on a Xebec MFM controller — the machine to install
+and hibernate on; `build/mfm20.img` is created blank and kept),
+`xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-sound`,
+`xt-sound-1.44`, `286`,
 `286-sound`,
 `386sx`, `386`, `386-sound`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-runcpm`, `286-runcpm`, `386-runcpm`, `xt-c64`,
-`286-c64`, `386-c64`, `xt-weave`, `386-weave`;
+`286-c64`, `386-c64`, `xt-weave`, `386-weave`, `xt-weave-256`;
 plus `marty` (MartyPC). `xt-multimon` is the
 **two-card** XT — a CGA and a Hercules, a monitor window each — and the only
 86Box machine that can show §39.12–§39.19's extended desktop; it boots Single,
@@ -215,11 +256,18 @@ machines (§68.5), `386-c-word` is the C word processor's (§73.12) and
 geometry because the three disks carry different software and the machines
 run at different speeds — which for a CP/M game IS the play speed (§74.5,
 §74.6) — `xt-c64`/`286-c64`/`386-c64` the C64 emulator's (C64-SPEC §14.3,
-one per geometry for that same reason), and `xt-weave`/`386-weave` the Weave
-runtime's (WEAVE-SPEC §13.1) — the thirteen that put a dedicated
+one per geometry for that same reason), and
+`xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
+(WEAVE-SPEC §13.1) — the fourteen that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
-disk rather than a 3.5" one — it fits in 33 of 354 clusters — so it is where
-that geometry of it is booted at all. `make zdisk` builds the story disk
+disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
+family on one floppy — so it is where that geometry of it is booted at all,
+and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,
+which is WEAVE-SPEC §1.4's floor machine: it holds exactly ONE Weave app and
+the second launch refuses before any I/O with the arithmetic on the glass.
+That machine is for LOOKING at the refusal — 86Box cannot assert anything
+(docs/TESTING.md) — and `tests/weaveone.py` asserts the same sentence under
+MartyPC. `make zdisk` builds the story disk
 (`tools/getstories.py` fetches the stories, which are never committed), `make
 worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 `WELCOME.RTF`, the same welcome document the Word disk carries as a `.DOC`,
@@ -228,7 +276,8 @@ runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
 applications that ride beside it, §74.6 — never committed, either of them;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
-and in raw QEMU). **`make wiredisk`** is the same shape for a package that
+and in raw QEMU), `make c64disk` the C64 disks, and `make weavedisk` /
+`make loomdisk` the Weave family's two. **`make wiredisk`** is the same shape for a package that
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
 so `all` builds `wire.o88` and no shipped floppy carries it, and the three
 tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk.
@@ -258,7 +307,12 @@ fork** — fetch it, merge `main` into it, review it, fix it, push the fixes
 back to their branch, comment — is `.claude/skills/review-fork-pr`
 (`/review-fork-pr <PR#>`), whose `LESSONS.md` is what seven of those reviews
 learned. `docs/UPSTREAM.md` is the same cycle seen from the fork's side and
-binds both.
+binds both. Verifying a change **on the glass** before it merges — boot the
+build in QEMU, drive the UI it claims over QMP, screenshot the evidence per
+claim, then (when asked) merge a stacked series in order — is
+`.claude/skills/functional-check` (`/functional-check [PR#|branch]`), whose
+`LESSONS.md` is what checking and merging the Weave waves (#124–#128)
+learned.
 
 ## Hard rules (§1 — these break silently if violated)
 
@@ -293,6 +347,18 @@ binds both.
   one 64KB window because offsets are 16 bits. They are relieved by different
   mechanisms. **Raising either is a decision to take with whoever asked for the
   feature, not a build fix.**
+- **Before spending a resident byte, ask whether the feature is an ON-DEMAND
+  MODULE** (§2.8, `kernel/mod.inc`, docs/ONDEMAND-PLAN.md §1's test): kernel
+  code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`, `CLONE.DRV`,
+  `HIBER.DRV`) and is
+  read into a heap claim when the feature is asked for, freed when it is
+  done. A feature qualifies when the system disk is already required to use
+  it, or can be required without interrupting what the user was doing. When
+  it qualifies, the resident part is the menu item, the greying predicate and
+  the thunks; everything else goes in the module. Only a feature that fails
+  the test may grow `.text`/`.cold`, and moving code to `.cold` or the boot
+  overlay relieves `KERN_CODE_MAX` but not `KERN_BUDGET` — a module relieves
+  both. Check `tools/kernsize.py` before and after: a byte costs a byte.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder

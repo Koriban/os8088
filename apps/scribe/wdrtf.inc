@@ -51,7 +51,7 @@ wd_rtfimg:
     cmp al, 13
     je .para
     cmp al, WD_PICCH                ; a picture is its own group and wears no
-    je .pict                        ; character formatting (86.5)
+    je .pict                        ; character formatting (88.5)
     push ax
     push ds
     PKG_LDS wd_cseg
@@ -93,7 +93,7 @@ wd_rtfimg:
 ;      which is the same thing the screen does with it (wd_rowhc).
 ;
 ; THIS IS THE ONE PLACE SCRIBE WRITES SOMETHING WORD DOES NOT, and RTF is the
-; format where that is safe rather than reckless (SPEC.md 86.5). RTF is text
+; format where that is safe rather than reckless (SPEC.md 88.5). RTF is text
 ; and its own rule is that a reader skips a destination it does not know, so
 ; the worst a foreign reader can do with this group is drop it and keep the
 ; document. The same picture in a .DOC would be a binary field that a reader
@@ -138,7 +138,7 @@ wd_rpict:
     push es
     push ds
     PKG_LDS wd_cseg            ; the CHP byte IS the picture index
-    mov al, [bx]                    ; (SPEC.md 86.9)
+    mov al, [bx]                    ; (SPEC.md 88.9)
     pop ds
     xor ah, ah
     call far [wd_v_picrec]; -> BX = the table slot
@@ -400,7 +400,7 @@ wd_rpap:
     xor ah, ah
     mov bx, ax
     shl bx, 1
-    mov si, [cs:bx+wd_r_qtab]     ; (SPEC.md 86.8.2)
+    mov si, [cs:bx+wd_r_qtab]     ; (SPEC.md 88.8.2)
     call wd_res
 .nj:
     mov al, [wd_rpp+1]              ; left indent
@@ -666,7 +666,7 @@ wd_rtfparse:
     call far [wd_v_pictfree]; the OLD document's pictures go back
                                     ; HERE and not at wd_load's commit point,
                                     ; which is past the ones this parse is
-                                    ; about to build (SPEC.md 86.6)
+                                    ; about to build (SPEC.md 88.6)
     xor si, si                      ; SI = where we are in the file
 .step:
     cmp si, [wd_dfsize]
@@ -687,7 +687,7 @@ wd_rtfparse:
     cmp al, 10
     je .step
     cmp word [wd_rpin], 0           ; inside \pict every character is data,
-    je .text                        ; and the hex pairs into bytes (86.6)
+    je .text                        ; and the hex pairs into bytes (88.6)
     call wd_rpbyte
     jmp .step
 .text:
@@ -1018,7 +1018,7 @@ wd_rword:
     mov si, [cs:bx]                 ; THE TABLE AND THE NAMES IT POINTS AT are
     or si, si                       ; the module's own image, so they are read
     jz .none                        ; through CS and not DS - the package's
-    mov di, wd_rcw                  ; segment no longer holds them (86.8.2)
+    mov di, wd_rcw                  ; segment no longer holds them (88.8.2)
     call wd_rstreq
     jc .next
     mov al, [cs:bx+2]               ; the action
@@ -1083,7 +1083,7 @@ wd_rword:
     ret
 
 ; =============================================================================
-; THE PICTURE READER (SPEC.md 86.6). \pict used to be a skipped destination
+; THE PICTURE READER (SPEC.md 88.6). \pict used to be a skipped destination
 ; and is now a collected one. The shape mirrors wd_rskip exactly: [wd_rpin]
 ; holds the depth the group opened at, .step routes text to the collector
 ; while it is set, and .close finalises when that group's brace arrives.
@@ -1198,7 +1198,7 @@ wd_rpclaim:
     push dx
     cmp word [wd_rppl], 1           ; ONE plane of FOUR-bit pixels is the only
     jne .no                         ; arrangement this writes and the only one
-    cmp word [wd_rpbp], 4           ; it reads: 86.5 says why
+    cmp word [wd_rpbp], 4           ; it reads: 88.5 says why
     jne .no
     mov ax, [wd_rpwb]
     or ax, ax
@@ -1263,7 +1263,7 @@ wd_rpfin:
     cmp ax, [wd_rpcap]
     jb .drop                        ; short of what the header promised
     mov ax, [wd_npic]
-    cmp ax, WD_PICMAX               ; a document may hold WD_PICMAX (86.9);
+    cmp ax, WD_PICMAX               ; a document may hold WD_PICMAX (88.9);
     jae .drop                       ; the rest arrive as nothing
     mov cl, 3
     shl ax, cl                      ; * WD_PICREC
@@ -1277,7 +1277,7 @@ wd_rpfin:
     mov [di+4], ax
     mov ax, [wd_rpseg]
     mov [di+6], ax
-    mov ax, [wd_npic]               ; the CHP byte IS the index (86.9), and
+    mov ax, [wd_npic]               ; the CHP byte IS the index (88.9), and
     inc word [wd_npic]              ; the character carries no other format.
     call wd_rputp                   ; AL is that index and wd_rputp wants it
     jmp short .out                  ; there - the character it writes is
@@ -1561,7 +1561,7 @@ wd_r_tbl:
     db WDR_SKIP
     dw wd_rw_info
     db WDR_SKIP
-    dw wd_rw_pict                   ; NOT WDR_SKIP any more (SPEC.md 86.6):
+    dw wd_rw_pict                   ; NOT WDR_SKIP any more (SPEC.md 88.6):
     db WDR_PICT                     ; a \pict this reader understands is a
     dw wd_rw_wbmwb                  ; picture, and one it does not is
     db WDR_PICWB                    ; discarded at the closing brace, which

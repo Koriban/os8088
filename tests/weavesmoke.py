@@ -62,12 +62,21 @@ left in build/, and a stale disk runs an earlier build's package while every
 assertion below reports on this one. `full` is the tier that is allowed to
 build (tools/os88test.py), and `make` is what knows whether anything is stale.
 
-WHY THE WHOLE DISK IS ONE FOLDER. WEAVE.OVL and the .WAB bundles ride the root
-beside WEAVE.O88: a double-click on a bundle leaves the launched instance's
-current directory on the DOCUMENT's (SPEC.md 54.9), and the overlay is
-resolved in that directory (SPEC.md 73.14) - so a bundle in a folder of its
-own opens a program whose every overlay path then refuses, politely and
-inexplicably.
+WHY THE RUNTIME AND ITS BUNDLES SHARE ONE FOLDER, AND WHY THIS ROW OPENS IT
+FIRST. WEAVE.OVL, WEAVE.WSM and the .WAB bundles ride the WEAVE/ folder beside
+WEAVE.O88 (WEAVE-SPEC 11.2): a double-click on a bundle leaves the launched
+instance's current directory on the DOCUMENT's (SPEC.md 54.9), and the overlay
+is resolved in that directory (SPEC.md 73.14) - so a bundle in a folder
+without the runtime opens a program whose every overlay path then refuses,
+politely and inexplicably. The disk's other folder, LOOM/, is the IDE and the
+demo sources (and a second copy of the runtime, for the bundles Pack writes
+there); weaveprev points FOLDER at it.
+
+So `_open_bundle` is two double-clicks and not one - the folder, then the
+file - and both go through open_named, which re-reads the listing before it
+clicks; the retry that covers a lost double-click covers either of them. The
+Disk window navigates IN PLACE (the same slot, and its rect is re-read after
+the folder opens), which is brpromise's APPS/BROWSER.O88 precedent.
 
 BOTH 1bpp ADAPTERS out of one body, because they are the target class and they
 differ in kind rather than in depth - 640x200 against 720x348, two different
@@ -132,7 +141,10 @@ MACHINES = [
 # The 360KB geometry, because the 5150 machines above have 360KB drives. It is
 # also the tightest of the three, which is the one worth booting.
 DISK = "build/weave360.img"
-BUNDLE = "FORM.WAB"             # the file this double-clicks in the B: window
+FOLDER = "WEAVE"                # the folder this opens first in the B: window
+                                # (WEAVE-SPEC 11.2's layout; weaveprev sets
+                                # it to LOOM). None: the file is in the root
+BUNDLE = "FORM.WAB"             # the file this double-clicks in it
 PKG = "WEAVE"                   # CC_PKG_NAME, as os88pkg.py stamps it at +16
 RENDER_WAB = "build/FORM.WAB"   # ...and the one weavesim renders for its cell
                                 # grid. The same file today and deliberately a
@@ -238,7 +250,7 @@ def _win(m, S, slot):
 
 
 def _flush(x, w, flags, vidw):
-    """Is this window's LEFT BORDER suppressed? (SPEC.md 11.95.2)
+    """Are this window's SIDE BORDERS suppressed? (SPEC.md 11.95.2/11.95.3)
 
     `wm_flush` is `wm_snap_want` AND `W_X == 0` AND `W_X + W_W >= [vid_w]`,
     and `wm_snap_want` is neither WF_NOSNAP nor WF_FULL (kernel/wm.inc). It is
@@ -261,12 +273,14 @@ def _oracle_cells(adapter):
     """(CW, CH) for this adapter, from tools/weavesim.py (WEAVE-SPEC 12.1).
 
     THE ORACLE ANSWERS, NOT THIS FILE. WEAVE-SPEC 7.1.1 ends "Nothing else in
-    this document may hard-code 79, 89, 17, 35 or 52", and a test that mirrors
+    this document may hard-code 80, 90, 17, 35 or 52", and a test that mirrors
     a constant is a constant that goes stale - so the numbers come from the
     reference implementation every differential in the family already diffs
-    against. The formula is `CW = floor(([vid_w]-1)/8)`,
+    against. The formula is `CW = floor([vid_w]/8)`,
     `CH = floor(([vid_h]-64)/8)`; it is here as documentation and is computed
-    nowhere in this file.
+    nowhere in this file. It was `([vid_w]-1)/8` while only SPEC.md 11.95.2's
+    LEFT border had gone; 11.95.3 took the right one and `_flush` below is
+    where that is decided.
 
     The grid is a property of the ADAPTER rather than of the bundle - it falls
     out of the standard rect - so which bundle is rendered does not matter.
@@ -408,6 +422,31 @@ def _open_bundle(m, mo, S, machine):
                             "drive B's Disk window to open", limit=20.0)
             disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
             wx, wy = dispcp.win_rect(m, S, disk)[:2]
+            # INTO THE FOLDER FIRST (the module docstring's second block). A
+            # Disk window navigates in place: the slot is the same one, the
+            # rect is re-read because a listing that changes length can move
+            # it, and open_named's settle has already waited out the
+            # directory read. Idempotent like the rest, BY LOOKING: a retry
+            # after a lost double-click on the bundle finds the window
+            # already inside the folder, where the bundle is listed and the
+            # folder is not, so the step is skipped rather than repeated; a
+            # window standing somewhere else again goes up by ".." first.
+            # (The first draft went up by ".." whenever the folder was not
+            # listed, and the very first retry it met turned into
+            # dispcp.scroll_to's "scrolled PAST entry 0" - a RuntimeError,
+            # which this loop deliberately does not catch.)
+            if FOLDER:
+                names = [r[0].upper() for r in dispcp.listing(m, S)]
+                if BUNDLE.upper() in names and FOLDER.upper() not in names:
+                    pass                        # already inside it
+                else:
+                    if FOLDER.upper() not in names and ".." in names:
+                        dispcp.open_named(m, mo, S, os88marty.settle,
+                                          wx, wy, "..")
+                        wx, wy = dispcp.win_rect(m, S, disk)[:2]
+                    dispcp.open_named(m, mo, S, os88marty.settle,
+                                      wx, wy, FOLDER)
+                    wx, wy = dispcp.win_rect(m, S, disk)[:2]
             # BEFORE is taken with the Disk window already open, not at the
             # desktop: taken earlier it counts the Disk window's own arrival
             # as the bundle's, and the gate then passes on a machine where
@@ -523,7 +562,7 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
     # out so a resized window would still be measured correctly.
     flush = _flush(x, w, flags, vidw)
     cl = x if flush else x + 1
-    cwpx = (w - 1) if flush else (w - 2)
+    cwpx = w if flush else (w - 2)
     ct, chpx = y + th, h - th - 1
     ox = (cl + 7) & ~7
     cells = ((cl + cwpx - ox) // 8, chpx // 8)
@@ -565,10 +604,11 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
           "rather than any lit region at that y",
           got=sep, want="< %d" % int(cwpx * 0.1))
 
-    # 3 - THE EDGES, AND HOW MANY OF THEM THERE ARE. SPEC.md 11.95.2: a
-    # snapped window spanning the screen draws THREE sides, because a
-    # border separates a window from what is beside it and at x = 0 there
-    # is nothing beside it. WEAVE's standard rect is exactly that window,
+    # 3 - THE EDGES, AND HOW MANY OF THEM THERE ARE. SPEC.md 11.95.2 and
+    # 11.95.3: a snapped window spanning the screen draws TWO sides, because
+    # a border separates a window from what is beside it and at x = 0 - and
+    # at the far edge, which is the same sentence - there is nothing beside
+    # it. It was three sides until 11.95.3 took the right border too. WEAVE's standard rect is exactly that window,
     # so a gate that asserted a dark column 0 would fail on the correct
     # build - and one that asserted it only for the non-flush case would
     # be asserting nothing at all here. Both shapes are checked, and which
@@ -578,10 +618,10 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
     # too, so "row y+h-1 is dark" is equally true of y+h. Each edge is
     # paired with something NOT dark just inside it.
     edges = [("top",    _row_lit(rows, y, x, x + w),         w),
-             ("bottom", _row_lit(rows, y + h - 1, x, x + w), w),
-             ("right",  _col_lit(rows, x + w - 1, y, y + h), h)]
+             ("bottom", _row_lit(rows, y + h - 1, x, x + w), w)]
     if not flush:
-        edges.append(("left", _col_lit(rows, x, y, y + h), h))
+        edges.append(("left",  _col_lit(rows, x, y, y + h), h))
+        edges.append(("right", _col_lit(rows, x + w - 1, y, y + h), h))
     for what, got, span in edges:
         check(got < span * 0.1,
               "%s: the %s frame edge is where the record says"

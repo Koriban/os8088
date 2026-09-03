@@ -443,7 +443,8 @@ cp_s_vid:   db 'Display', 0     ; list name AND the page heading
 cp_s_vvga:  db 'Vga 640x480', 0
 cp_s_vherc: db 'Hercules 720x348', 0
 cp_s_vcga:  db 'Cga 640x200', 0
-cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga
+cp_s_vega:  db 'Ega 640x350', 0
+cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega
 cp_s_vact:  db 'Set Primary', 0
 ; The caption, inside the pane's 27-character limit. It is ONE string and the
 ; page's only constant line: it says what the button does, on every state the
@@ -2021,6 +2022,50 @@ cp_divider:
     ret
 
 ; -----------------------------------------------------------------------------
+; cp_promise - the panel's content stands still unless the CLOCK is on it
+; in:  nothing; the gfx lock HELD by the caller (cp_page's contract)
+; out: nothing (every register and the flags preserved)
+;
+; SPEC.md 31.12, which is SPEC.md 11.96.1's promise answered per PAGE.
+;
+; The panel has NO WORKER, and on every page but one nothing in it changes
+; without a click - which cannot reach a window that is not frontmost, and a
+; frontmost window never holds a cache (11.96.4 drops it). The exception is
+; Date & Time: ui_task calls cp_tick once a second, and cp_tick_x SKIPS
+; DRAWING when wm_obscured says so. That is 11.96.1's disqualifier exactly -
+; the clock advances and the glass does not - so a cache taken before it
+; shows the wrong time on the raise.
+;
+; So the promise is [cp_sel] != CP_ITIME. No depth claim goes with it: the
+; panel's content is 22,190 bytes at four planes and already fits under
+; wm_su_kb's ceiling, and it draws in CDGRAY (SPEC.md 47), so a two-colour
+; claim would be a lie for nothing.
+; -----------------------------------------------------------------------------
+cp_promise:
+    pushf
+    push ax
+    push bx
+    push di
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind   ; CF = 1: no live panel, nothing to
+    jc .out                             ; promise about - cp_page runs from
+                                        ; the paint, and the record is what
+                                        ; carries the flag
+    mov bx, [di+I_WIN]
+    mov al, 1
+    cmp byte [cp_sel], CP_ITIME
+    jne .say
+    xor al, al                          ; the clock is on the pane: withdraw,
+.say:                                   ; and wm_saveu drops the claim with it
+    call KERNEL_SEG:cw_wm_saveu
+.out:
+    pop di
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; cp_page - draw the right pane: the selected item's page
 ;
 ; in:  DI = content left, BP = content top; caller holds the gfx lock
@@ -2031,6 +2076,12 @@ cp_divider:
 ; erase is what makes this the redraw path when the selection moves.
 ; -----------------------------------------------------------------------------
 cp_page:
+    call cp_promise             ; ...and WHICH page it is decides whether this
+                                ; window's content stands still (SPEC.md
+                                ; 31.12). Here because every path that
+                                ; changes the answer - the click, the paint,
+                                ; and cp_open's first draw - goes through this
+                                ; one routine
     push ax
     push bx
     push cx
@@ -2317,10 +2368,21 @@ cp_thm_btn:
 ; SPEC.md 47 rule 1: ONE predicate drives the greying, the glyph and the
 ; refusal, so the three cannot disagree - and it is a FACT (rule 3), not a
 ; guess: SPEC.md 39.4 reduces every index outside {0,15} to black, white or
-; the 50% dither, so on a 1bpp adapter Color would BE Bright.
+; the 50% dither, so on a 1bpp adapter Color would BE Bright. The test is the
+; PRIMARY'S DEPTH - VID_VGA and VID_EGA are the two 4-plane kinds - and it
+; must match thm_set's own refusal (SPEC.md 76.12.1). It was `cmp [vid_kind],
+; VID_VGA` while VGA was the only colour adapter. It is NOT [vid_mono]: this
+; is reached from the page's own paint and click, inside a lock hold in which
+; the panel has just drawn on ITS display, and on a two-card desktop that byte
+; names the display last drawn on (SPEC.md 39.14.3) - so spelt that way a
+; panel dragged onto the Hercules greyed Color, and cancelled the click, on a
+; machine whose primary is a VGA. [vid_kind] is the primary's and vid_ctx_act
+; never moves it.
 %ifdef KERN_BIG
 cp_thm_colgrey:
     cmp byte [vid_kind], VID_VGA
+    je .live
+    cmp byte [vid_kind], VID_EGA
     je .live
     stc
     ret
@@ -2686,7 +2748,9 @@ cp_vid_pick:
 ; -----------------------------------------------------------------------------
 ; cp_vid_slot - which adapter is drawn in row slot AL? (module internal)
 ;
-; in:  AL = slot, 0..2 (the visible row, top to bottom)
+; in:  AL = slot, 0..2 (the visible row, top to bottom - THREE is still the
+;      most any machine has, VID_VGA and VID_EGA being mutually exclusive at
+;      detection, so the bands below are still laid out for three)
 ; out: AL = the VID_* kind in it, CF = 0; CF = 1 = that slot has no row
 ; clobbers: AL, flags
 ;
@@ -2712,7 +2776,7 @@ cp_vid_slot:
     inc cl
 .skip:
     inc bl
-    cmp bl, 3
+    cmp bl, 4                   ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
     jb .n
     pop cx
     pop bx
