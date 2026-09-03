@@ -614,11 +614,226 @@ SH_M_NONE    equ 0xFF
 ; before anything else can, and jump to the real dispatcher wherever it ends
 ; up. Both are inside the module, so it is an ordinary near jump.
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; SHOUT - the module's calls back into the package (82.16.9).
+;
+; Resident, that is a near call like any other. In the module it cannot be:
+; 68.10 keeps DS on the package but moves CS, so every route back is a FAR call
+; through a vector the package fills in at start-up. One macro so the two
+; builds cannot drift - the same argument CHFP makes for the chart module.
+; -----------------------------------------------------------------------------
+%macro SHOUT 1
+  %ifdef SH_FMT_OVL
+    call far [sh_v_%1]
+  %else
+    call %1
+  %endif
+%endmacro
+
+%define SH_FMT_OVL
 %define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
+SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
+SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
+SHM_DIFBB  equ 5                    ; os88chart.inc include below
+SHM_N      equ 3
+
 section .modc vstart=0 align=1
 sh_modc0:
     jmp ch_modc
+
+; ch_modc falls through to here for any verb past CHM_MAX (82.16.8).
+sh_modc_ext:
+    sub bp, SHM_READ
+    cmp bp, SHM_N
+    jae .bad
+    shl bp, 1
+    jmp word [cs:bp+sh_mverb]       ; [cs:], because sh_mverb is the module's
+.bad:                               ; OWN data and DS is the package (68.10)
+    retf
+
+sh_mverb:
+    dw sh_m_doread, sh_m_dowrite, sh_m_difbbox
+
+sh_m_doread:
+    call shm_doread
+    retf
+sh_m_dowrite:
+    call shm_dowrite
+    retf
+sh_m_difbbox:
+    call shm_difbbox
+    retf
 section .text
+
+; -----------------------------------------------------------------------------
+; The three resident stubs. Every existing caller still says `call sh_doread`
+; and never learns the reader moved - which is the point of doing it this way
+; round rather than editing the call sites (82.16.9).
+; -----------------------------------------------------------------------------
+sh_doread:
+    push bp
+    mov bp, SHM_READ
+    call ch_ovcall
+    pop bp
+    ret
+sh_dowrite:
+    push bp
+    mov bp, SHM_WRITE
+    call ch_ovcall
+    pop bp
+    ret
+sh_difbbox:
+    push bp
+    mov bp, SHM_DIFBB
+    call ch_ovcall
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ovbind - fill the vector table: this package's shim offsets and its own
+; segment. The offsets are assembled in; only the segment is a runtime fact,
+; and it is the same one for all of them. ch_ovbind's shape exactly (82.16).
+; -----------------------------------------------------------------------------
+sh_ovbind:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, sh_ovshims
+    mov di, sh_v_first
+    mov ax, cs
+    mov bx, SH_NVEC
+.l:
+    push ax
+    mov ax, [si]
+    mov [di], ax
+    pop ax
+    mov [di+2], ax
+    add si, 2
+    add di, 4
+    dec bx
+    jnz .l
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; Each shim is a near call to the real routine and then the FAR return the
+; module's `call far` is waiting for. Registers and flags pass through both
+; ways untouched, so every routine keeps its own contract.
+
+sh_x_sh_itoa:
+    call sh_itoa
+    retf
+sh_x_sh_unpackrow:
+    call sh_unpackrow
+    retf
+sh_x_sh_pint:
+    call sh_pint
+    retf
+sh_x_sh_setvald:
+    call sh_setvald
+    retf
+sh_x_sh_rw_emit:
+    call sh_rw_emit
+    retf
+sh_x_sh_settext:
+    call sh_settext
+    retf
+sh_x_sh_findcell:
+    call sh_findcell
+    retf
+sh_x_sh_acc_store:
+    call sh_acc_store
+    retf
+sh_x_sh_cellval_to_acc_si:
+    call sh_cellval_to_acc_si
+    retf
+sh_x_sh_nameends:
+    call sh_nameends
+    retf
+sh_x_sh_acc_load_a:
+    call sh_acc_load_a
+    retf
+sh_x_sh_name_def:
+    call sh_name_def
+    retf
+sh_x_sh_acc_int:
+    call sh_acc_int
+    retf
+sh_x_sh_identcol:
+    call sh_identcol
+    retf
+sh_x_sh_setformula:
+    call sh_setformula
+    retf
+sh_x_sh_errname:
+    call sh_errname
+    retf
+sh_x_sh_streq:
+    call sh_streq
+    retf
+sh_x_sh_isletter_at:
+    call sh_isletter_at
+    retf
+sh_x_sh_psheetpfx:
+    call sh_psheetpfx
+    retf
+sh_x_sh_getcell2:
+    call sh_getcell2
+    retf
+sh_x_sh_funcid:
+    call sh_funcid
+    retf
+sh_x_sh_colname:
+    call sh_colname
+    retf
+sh_x_sh_strcpy_to_di:
+    call sh_strcpy_to_di
+    retf
+sh_x_fp_unpack_a:
+    call fp_unpack_a
+    retf
+sh_x_fp_cmpab:
+    call fp_cmpab
+    retf
+sh_x_fp_unpack_b:
+    call fp_unpack_b
+    retf
+sh_x_fp_atof:
+    call fp_atof
+    retf
+sh_x_fp_i2a:
+    call fp_i2a
+    retf
+sh_x_fp_a2i:
+    call fp_a2i
+    retf
+sh_x_fp_ftoa:
+    call fp_ftoa
+    retf
+sh_x_fp_div:
+    call fp_div
+    retf
+sh_x_fp_i2b:
+    call fp_i2b
+    retf
+sh_x_fp_norm:
+    call fp_norm
+    retf
+
+sh_ovshims:
+    dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
+    dw sh_x_sh_rw_emit, sh_x_sh_settext, sh_x_sh_findcell, sh_x_sh_acc_store
+    dw sh_x_sh_cellval_to_acc_si, sh_x_sh_nameends, sh_x_sh_acc_load_a, sh_x_sh_name_def
+    dw sh_x_sh_acc_int, sh_x_sh_identcol, sh_x_sh_setformula, sh_x_sh_errname
+    dw sh_x_sh_streq, sh_x_sh_isletter_at, sh_x_sh_psheetpfx, sh_x_sh_getcell2
+    dw sh_x_sh_funcid, sh_x_sh_colname, sh_x_sh_strcpy_to_di, sh_x_fp_unpack_a
+    dw sh_x_fp_cmpab, sh_x_fp_unpack_b, sh_x_fp_atof, sh_x_fp_i2a
+    dw sh_x_fp_a2i, sh_x_fp_ftoa, sh_x_fp_div, sh_x_fp_i2b
+    dw sh_x_fp_norm
 
 sh_entry:
     push ax
@@ -631,6 +846,8 @@ sh_entry:
                                         ; (82.16, the shape SPEC.md 68.10 sets)
     call fp_init                      ; before the first claim, because every
 %ifdef CH_OVERLAY
+    call sh_ovbind                      ; ...and the file-format module's
+                                        ; (82.16.9), the same shape
     call ch_ovbind                      ; the chart module's vectors out (82.16):
                                         ; our shims, our segment, before anything
                                         ; can draw
@@ -10059,6 +10276,7 @@ sh_switchsheet:
 ; sh_sheets_used - out: AX = how many of the SH_SHEETS grids hold at least one
 ; cell, and BX = a bitmap of which. One walk of the array, not four.
 ; -----------------------------------------------------------------------------
+section .modc                      ; 82.16.9
 sh_sheets_used:
     push cx
     push dx
@@ -10078,7 +10296,7 @@ sh_sheets_used:
     mov si, ax
     mov ax, [es:si]
     push bx
-    call sh_unpackrow                 ; BX = this record's sheet
+    SHOUT sh_unpackrow                 ; BX = this record's sheet
     mov dx, bx
     pop bx
     mov ax, 1
@@ -10119,12 +10337,12 @@ sh_sheets_used:
 ; used to lose it in silence. It says so in the status bar now. BIFF is the one
 ; format here that CAN carry them, and does (81.10.5).
 ; -----------------------------------------------------------------------------
-sh_dowrite:
+shm_dowrite:
     push si
     push di
     mov si, sh_name
     mov di, sh_s_ext_dif
-    call sh_nameends
+    SHOUT sh_nameends
     pop di
     pop si
     jc .dif
@@ -10132,7 +10350,7 @@ sh_dowrite:
     push di
     mov si, sh_name
     mov di, sh_s_ext_biff
-    call sh_nameends
+    SHOUT sh_nameends
     pop di
     pop si
     jc .biff
@@ -10236,14 +10454,14 @@ sh_wr_r1c1:
     mov si, sh_s_r
     call sh_stgput
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_cu
     call sh_stgput
     mov ax, [sh_nm_tmp]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     pop si
@@ -10311,7 +10529,7 @@ sh_dowrite_sylk:
     push es
     mov es, [sh_cellseg]
     mov ax, [es:si]
-    call sh_unpackrow                 ; -> ax=real row, bx=this record's
+    SHOUT sh_unpackrow                 ; -> ax=real row, bx=this record's
                                        ; sheet (see the stage 2.0 comment
                                        ; above the cell record layout)
     cmp bx, [sh_cursheet]
@@ -10327,7 +10545,7 @@ sh_dowrite_sylk:
     mov ax, [es:si+SH_C_FOFF]         ; which is what makes a saved sheet a
     mov [sh_wrec_foff], ax            ; spreadsheet rather than a table of
 .noformula_w:                         ; numbers
-    call sh_cellval_to_acc_si         ; bank the whole value: the row and
+    SHOUT sh_cellval_to_acc_si         ; bank the whole value: the row and
     push si                           ; column are formatted through sh_numbuf
     push di                           ; before it is wanted, so it cannot be
     mov si, sh_acc                    ; turned into text here
@@ -10365,14 +10583,14 @@ sh_dowrite_sylk:
     call sh_stgput
     mov ax, [sh_wrec_col]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_y
     call sh_stgput
     mov ax, [sh_wrec_row]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     cmp word [sh_wrec_foff], 0xFFFF   ; ";E<expr>" comes BEFORE ";K", the
@@ -10418,10 +10636,10 @@ sh_dowrite_sylk:
     push si                           ; SYLK's K field IS a decimal literal,
     push di                           ; so the full value goes out, not a
     mov si, sh_wrec_dval              ; truncation of it
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_numbuf
     mov ax, 10
-    call fp_ftoa
+    SHOUT fp_ftoa
     pop di
     pop si
     mov si, sh_numbuf
@@ -10437,7 +10655,7 @@ sh_dowrite_sylk:
     push ax                           ; a save is not a paint - bank what the
     mov al, [sh_wrec_aux]             ; painter left there
     mov [sh_curaux], al
-    call sh_errname                   ; -> sh_numbuf
+    SHOUT sh_errname                   ; -> sh_numbuf
     pop ax
     mov [sh_curaux], al
     pop ax
@@ -10495,14 +10713,14 @@ sh_dowrite_sylk:
     call sh_stgput
     mov ax, [sh_wrec_col]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_y
     call sh_stgput
     mov ax, [sh_wrec_row]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_sylk_ff                ; ";F"
@@ -10611,12 +10829,12 @@ sh_stgput:
 ; -----------------------------------------------------------------------------
 ; sh_doread - read [sh_name], format chosen by its extension (see sh_dowrite)
 ; -----------------------------------------------------------------------------
-sh_doread:
+shm_doread:
     push si
     push di
     mov si, sh_name
     mov di, sh_s_ext_dif
-    call sh_nameends
+    SHOUT sh_nameends
     pop di
     pop si
     jc .dif
@@ -10624,7 +10842,7 @@ sh_doread:
     push di
     mov si, sh_name
     mov di, sh_s_ext_biff
-    call sh_nameends
+    SHOUT sh_nameends
     pop di
     pop si
     jc .biff
@@ -10714,6 +10932,7 @@ sh_doread_sylk:
 ; already uppercase from the kernel, and so do the suffixes this file
 ; compares against)
 ; -----------------------------------------------------------------------------
+section .text
 sh_nameends:
     push ax
     push bx
@@ -10774,7 +10993,8 @@ sh_nameends:
 ; both 0 for an empty sheet. sh_bbrow is free (the array is row-sorted, so
 ; it is just the last record's row); sh_bbcol needs a scan.
 ; -----------------------------------------------------------------------------
-sh_difbbox:
+section .modc                      ; 82.16.9
+shm_difbbox:
     push ax
     push bx
     push cx
@@ -10794,7 +11014,7 @@ sh_difbbox:
     mul bx
     mov si, ax                        ; si = this record's byte offset
     mov ax, [es:si]                   ; packed row/sheet (stage 2.0)
-    call sh_unpackrow                 ; -> ax=real row, bx=sheet
+    SHOUT sh_unpackrow                 ; -> ax=real row, bx=sheet
     cmp bx, [sh_cursheet]
     jne .next                         ; a sheet's records aren't
                                        ; necessarily contiguous from index 0,
@@ -10831,7 +11051,13 @@ sh_dowrite_dif:
     push di
     push es
 
-    call sh_difbbox
+    call shm_difbbox                  ; THE MODULE'S OWN COPY, not the resident
+                                      ; stub of the same name. A near `call
+                                      ; sh_difbbox` from here targets that
+                                      ; offset in the MODULE's segment, which
+                                      ; is whatever code happens to sit there -
+                                      ; and the DIF writer simply stopped
+                                      ; producing a file (82.16.9)
     mov byte [sh_trunc], 0
     mov es, [sh_stgseg]
     xor di, di
@@ -10839,14 +11065,14 @@ sh_dowrite_dif:
     call sh_stgput
     mov ax, [sh_bbcol]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_dif_hdr2
     call sh_stgput
     mov ax, [sh_bbrow]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
     call sh_stgput
     mov si, sh_s_dif_hdr3
@@ -10875,7 +11101,7 @@ sh_dowrite_dif:
     ja .truncf
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
-    call sh_getcell2
+    SHOUT sh_getcell2
     jnc .na
     cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: DIF's type 1 is STRING -
     je .dtext                          ; "1,0" then the quoted text on the
@@ -10886,10 +11112,10 @@ sh_dowrite_dif:
     push si                            ; ...and the value goes out as a FULL
     push di                            ; DECIMAL. This wrote `mov ax, dx` -
     mov si, sh_acc                     ; the TRUNCATED integer - so a sheet
-    call fp_unpack_a                   ; holding 3.5 saved to DIF as 3, in
+    SHOUT fp_unpack_a                   ; holding 3.5 saved to DIF as 3, in
     mov di, sh_numbuf                  ; silence, and reloaded as 3. Stage 4.0
     mov ax, 10                         ; converted SYLK's K field and left this
-    call fp_ftoa                       ; one behind; DIF's numeric item has
+    SHOUT fp_ftoa                       ; one behind; DIF's numeric item has
     pop di                             ; never been restricted to integers.
     pop si
     mov si, sh_numbuf
@@ -11096,7 +11322,7 @@ sh_doread_dif:
 .isvalid:                              ; #N/A is the one error that means
     mov ax, [sh_wcol]                  ; exactly that. Guessing a specific one
     mov bx, [sh_wrow]                  ; would be inventing what the file does
-    call sh_setvald                    ; not contain
+    SHOUT sh_setvald                    ; not contain
 .notvalid:
     call sh_difskipline                ; the indicator line
     jmp .cellnext
@@ -11137,7 +11363,7 @@ sh_doread_dif:
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
     mov si, SH_TEXPR
-    call sh_settext
+    SHOUT sh_settext
     pop si
     call sh_difskipline
     jmp .cellnext
@@ -11278,16 +11504,16 @@ sh_rkdec_d:
     mov [sh_acc+4], ax
     mov [sh_acc+6], dx
     push bx
-    call sh_acc_load_a
+    SHOUT sh_acc_load_a
     pop bx
 .div100:
     test bl, 0x01
     jz .out
     mov ax, 100                       ; bit0: it was scaled up by a hundred
-    call fp_i2b
-    call fp_div
+    SHOUT fp_i2b
+    SHOUT fp_div
 .out:
-    call sh_acc_store
+    SHOUT sh_acc_store
     pop di
     pop si
     pop dx
@@ -11317,7 +11543,7 @@ fp_i32_to_a:
     mov word [fp_ae], 0
     mov bx, fp_am0
     mov di, fp_ae
-    call fp_norm
+    SHOUT fp_norm
     pop di
     pop cx
     pop bx
@@ -11330,6 +11556,7 @@ fp_i32_to_a:
 ; subtype this project writes, else CF=1 (out of this subset's scope - the
 ; caller should skip the cell rather than guess at a float or *100 value)
 ; -----------------------------------------------------------------------------
+section .text
 sh_rkdec:
     test al, 0x01
     jnz .unsupported        ; multiplied by 100
@@ -11355,6 +11582,7 @@ sh_rkdec:
 ; FORMAT record's id, or a built-in this app doesn't have an equivalent
 ; for, both just degrade to General rather than guessed at)
 ; -----------------------------------------------------------------------------
+section .modc                      ; 82.16.9
 sh_biff_numfmt_from_id:
     cmp al, 0x05
     je .cur
@@ -11408,7 +11636,7 @@ sh_biff_applyfmt:
                                         ; across the cell lookup below
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
     mov [es:di+5], cl
@@ -11993,7 +12221,7 @@ sh_biff_cells:
     push es
     mov es, [sh_cellseg]
     mov ax, [es:si]
-    call sh_unpackrow                 ; -> ax=real row, bx=this record's
+    SHOUT sh_unpackrow                 ; -> ax=real row, bx=this record's
                                        ; sheet (stage 2.0)
     cmp bx, [sh_wsheet]
     jne .recskip                      ; a save only ever writes the CURRENT
@@ -12002,7 +12230,7 @@ sh_biff_cells:
     mov [sh_wrec_row], ax
     mov ax, [es:si+2]
     mov [sh_wrec_col], ax
-    call sh_cellval_to_acc_si         ; the whole value, banked - the choice
+    SHOUT sh_cellval_to_acc_si         ; the whole value, banked - the choice
     push si                           ; of record below needs all eight bytes
     push di
     mov si, sh_acc
@@ -12059,17 +12287,17 @@ sh_biff_cells:
     ; which carries the IEEE-754 double verbatim.
     push si
     mov si, sh_wrec_dval
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     pop si
-    call fp_a2i                       ; CF=1: no signed word can hold it
+    SHOUT fp_a2i                       ; CF=1: no signed word can hold it
     jc .asnumber
     mov [sh_wrec_val], ax
-    call fp_i2a                       ; round-trip it and see if anything was
+    SHOUT fp_i2a                       ; round-trip it and see if anything was
     push si                           ; lost - 3.5 truncates to 3, and 3 is
     mov si, sh_wrec_dval              ; not the value we were asked to write
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     pop si
-    call fp_cmpab
+    SHOUT fp_cmpab
     jne .asnumber
 
     mov ax, 0x027E                    ; RK cell record
@@ -12475,7 +12703,7 @@ sh_doread_biff:
     mov bx, [sh_nm_row]
     mov cx, [sh_nm_col2]
     mov dx, [sh_nm_row2]
-    call sh_name_def                   ; CF=1 = the table is full, and the
+    SHOUT sh_name_def                   ; CF=1 = the table is full, and the
 .nmdone:                               ; rest of the file still loads
     pop dx
     pop cx
@@ -12569,7 +12797,7 @@ sh_doread_biff:
     pop es
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_setvald
+    SHOUT sh_setvald
     call sh_biff_applyfmt              ; uses sh_wrec_col/row/xf; looks up
                                         ; the format and writes it to the
                                         ; cell record sh_setval just made
@@ -12601,7 +12829,7 @@ sh_doread_biff:
     push es
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_setvald
+    SHOUT sh_setvald
     call sh_biff_applyfmt
     pop es
     pop dx
@@ -12672,7 +12900,7 @@ sh_doread_biff:
     push es
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_setvald
+    SHOUT sh_setvald
     call sh_biff_applyfmt
     pop es
     pop dx
@@ -12707,10 +12935,10 @@ sh_doread_biff:
 .isbool:
     mov al, dl                         ; TRUE/FALSE reads back as 1/0: this app
     xor ah, ah                         ; has no BOOL type of its own yet, and a
-    call sh_acc_int                    ; number is what its formulas expect
+    SHOUT sh_acc_int                    ; number is what its formulas expect
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_setvald
+    SHOUT sh_setvald
 .bedone:
     call sh_biff_applyfmt
     pop es
@@ -12758,7 +12986,7 @@ sh_doread_biff:
     mov bx, [sh_wrec_row]
     push si
     mov si, SH_TEXPR
-    call sh_settext
+    SHOUT sh_settext
     pop si
     call sh_biff_applyfmt
     pop es
@@ -12813,8 +13041,10 @@ sh_doread_biff:
 ; numberings really are "Excel's own", they really do describe the same seven
 ; errors, and one of them really is what SH_C_AUX holds.
 ; -----------------------------------------------------------------------------
+section .text
 sh_biff_errtab: db 0x00, 0x07, 0x0F, 0x17, 0x1D, 0x24, 0x2A
 
+section .modc                      ; 82.16.9
 sh_biff_e2b:                          ; ERROR.TYPE 1..7 -> the BIFF code
     push bx
     xor bh, bh
@@ -13050,7 +13280,7 @@ sh_parsenrec:
     mov bx, [sh_nm_row]
     mov cx, [sh_nm_col2]
     mov dx, [sh_nm_row2]
-    call sh_name_def                  ; CF=1 = the table is full; the rest of
+    SHOUT sh_name_def                  ; CF=1 = the table is full; the rest of
 .out:                                 ; the file still loads
     pop di
     pop si
@@ -13077,7 +13307,7 @@ sh_slk_r1c1:
     jne .bad
     inc si
     mov di, si
-    call sh_pint                      ; no CF of its own: SI not moving is
+    SHOUT sh_pint                      ; no CF of its own: SI not moving is
     cmp si, di                        ; what "no digits" looks like
     je .bad
     or ax, ax
@@ -13090,7 +13320,7 @@ sh_slk_r1c1:
     jne .bad
     inc si
     mov di, si
-    call sh_pint
+    SHOUT sh_pint
     cmp si, di
     je .bad
     or ax, ax
@@ -13154,12 +13384,12 @@ sh_parsecrec:
     jmp .tok
 .isx:
     inc si
-    call sh_pint
+    SHOUT sh_pint
     mov [SH_TCOL], ax
     jmp .tok
 .isy:
     inc si
-    call sh_pint
+    SHOUT sh_pint
     mov [SH_TROW], ax
     jmp .tok
 .isk:
@@ -13342,7 +13572,7 @@ sh_parsecrec:
     pop bx
     pop ax
     mov si, sh_rwdst                  ; AFTER the pops: setting SI before them
-    call sh_setformula                ; put the saved value straight back over
+    SHOUT sh_setformula                ; put the saved value straight back over
                                       ; it, and sh_setformula stored whatever
                                       ; the staging pointer happened to be
     jmp .out
@@ -13357,7 +13587,7 @@ sh_parsecrec:
     je .plainval_c
     push si
     mov si, sh_rwsrc                  ; where .isk's quoted ;K now lands
-    call sh_settext
+    SHOUT sh_settext
     pop si
     jmp .out
 .plainval_c:
@@ -13377,7 +13607,7 @@ sh_parsecrec:
     pop ax
     pop di
     pop si
-    call sh_setvald
+    SHOUT sh_setvald
 .out:
     pop si
     pop bx
@@ -13440,12 +13670,12 @@ sh_parsefrec:
     jmp .tok
 .isx:
     inc si
-    call sh_pint
+    SHOUT sh_pint
     mov [SH_TCOL], ax
     jmp .tok
 .isy:
     inc si
-    call sh_pint
+    SHOUT sh_pint
     mov [SH_TROW], ax
     jmp .tok
 .isk:
@@ -13507,7 +13737,7 @@ sh_parsefrec:
     dec ax
     dec cx
     mov bx, cx
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .out                          ; no prior C record for this cell:
                                        ; nothing to attach the format to
     mov al, [SH_TNUMFMT]
@@ -13584,6 +13814,7 @@ sh_sylk_align_from_c2:
 ; in: ES:SI=ptr, BX=limit (exclusive, an offset); also stops at NUL
 ; out: AX=value, SI=advanced; BX preserved; ES must be set by the caller
 ; -----------------------------------------------------------------------------
+section .text
 sh_pint:
     push bx
     push cx
@@ -13631,16 +13862,17 @@ sh_pint:
 ; sh_setferr - build "Err N" from a FERR_* code and point sh_msg at it
 ; in: AX = FERR_* (CF was set on the API call that produced it)
 ; -----------------------------------------------------------------------------
+section .modc                      ; 82.16.9
 sh_setferr:
     push di
     push si
     mov di, sh_errbuf
     mov si, sh_s_errpfx
-    call sh_strcpy_to_di              ; DI advances past "Err " to the new NUL
-    call sh_itoa                      ; AX (the FERR_* code) -> sh_numbuf;
+    SHOUT sh_strcpy_to_di              ; DI advances past "Err " to the new NUL
+    SHOUT sh_itoa                      ; AX (the FERR_* code) -> sh_numbuf;
                                        ; preserves DI
     mov si, sh_numbuf
-    call sh_strcpy_to_di
+    SHOUT sh_strcpy_to_di
     mov word [sh_msg], sh_errbuf
     pop si
     pop di
@@ -13671,6 +13903,7 @@ sh_setferr:
 ; sh_unpackrow - in: AX = a cell record's packed row/sheet word; out: AX =
 ; the real row (0..16383), BX = the sheet index it belongs to
 ; -----------------------------------------------------------------------------
+section .text
 sh_unpackrow:
     push cx
     mov bx, ax
@@ -14988,16 +15221,17 @@ sh_reidx_cellpart:
 ; =============================================================================
 
 ; sh_emit_num - AX as signed decimal, into sh_rwdst via sh_rw_emit
+section .modc                      ; 82.16.9
 sh_emit_num:
     push ax
     push bx
-    call sh_itoa
+    SHOUT sh_itoa
     mov bx, sh_numbuf
 .e:
     mov al, [bx]
     or al, al
     jz .o
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc bx
     jmp .e
 .o:
@@ -15011,17 +15245,17 @@ sh_emit_num:
 sh_emit_rc:
     push ax
     push bx
-    call sh_rw_emit                   ; the letter itself
+    SHOUT sh_rw_emit                   ; the letter itself
     or cl, cl
     jnz .abs
     or bx, bx
     jz .out                           ; a zero offset is written as nothing:
     mov al, '['                       ; "RC" means "this row, this column"
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     mov ax, bx
     call sh_emit_num
     mov al, ']'
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     jmp .out
 .abs:
     mov ax, bx
@@ -15050,28 +15284,28 @@ sh_formula_to_r1c1:
     jz .done
     cmp al, '"'
     jne .tryref
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
 .instr:
     mov al, [si]
     or al, al
     jz .done
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     cmp al, '"'
     jne .instr
     jmp .loop
 .tryref:
-    call sh_isletter_at
+    SHOUT sh_isletter_at
     jnc .literal
     mov [sh_rw_ostart], si
-    call sh_psheetpfx
+    SHOUT sh_psheetpfx
     jnc .noxsheet
     mov si, [sh_rw_ostart]            ; the prefix goes through verbatim
     mov bx, 7
 .pfx:
     mov al, [si]
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     dec bx
     jnz .pfx
@@ -15081,10 +15315,10 @@ sh_formula_to_r1c1:
     jc .isref
     mov si, [sh_rw_ostart]            ; no: a function name or a bare word
 .word:
-    call sh_isletter_at
+    SHOUT sh_isletter_at
     jnc .loop
     mov al, [si]
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     jmp .word
 .isref:
@@ -15107,7 +15341,7 @@ sh_formula_to_r1c1:
     jmp .loop
 .literal:
     mov al, [si]
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     jmp .loop
 .done:
@@ -15171,7 +15405,7 @@ sh_reidx_cellpart_probe:
     jb .no
     cmp al, '9'
     ja .no
-    call sh_identcol
+    SHOUT sh_identcol
     mov [sh_rw_refcol], ax
     push bx
     mov bx, si
@@ -15179,7 +15413,7 @@ sh_reidx_cellpart_probe:
     push es
     mov ax, ds
     mov es, ax
-    call sh_pint
+    SHOUT sh_pint
     pop es
     pop bx
     dec ax
@@ -15218,13 +15452,13 @@ sh_formula_from_r1c1:
     jz .done
     cmp al, '"'
     jne .tryref
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
 .instr:
     mov al, [si]
     or al, al
     jz .done
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     cmp al, '"'
     jne .instr
@@ -15253,7 +15487,7 @@ sh_formula_from_r1c1:
     cmp byte [sh_rw_absc], 0
     je .colrel
     mov al, '$'
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     jmp .colemit
 .colrel:
     mov ax, [sh_rw_refcol]
@@ -15261,20 +15495,20 @@ sh_formula_from_r1c1:
     mov [sh_rw_refcol], ax
 .colemit:
     mov ax, [sh_rw_refcol]
-    call sh_colname
+    SHOUT sh_colname
     mov bx, sh_colbuf
 .cl:
     mov al, [bx]
     or al, al
     jz .rowpart
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc bx
     jmp .cl
 .rowpart:
     cmp byte [sh_rw_absr], 0
     je .rowrel
     mov al, '$'
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     jmp .rowemit
 .rowrel:
     mov ax, [sh_rw_refrow]
@@ -15288,12 +15522,12 @@ sh_formula_from_r1c1:
 .notref:
     mov si, [sh_rw_ostart]            ; not a reference after all: the 'R' and
     mov al, [si]                      ; whatever follows go through as text
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     jmp .loop
 .literal:
     mov al, [si]
-    call sh_rw_emit
+    SHOUT sh_rw_emit
     inc si
     jmp .loop
 .done:
@@ -15394,6 +15628,7 @@ sh_read_int:
 ; [sh_rw_home] already set by the caller (sh_rowcol_reidx). Out:
 ; sh_rwdst holds the rewritten, NUL-terminated text, [sh_rw_di] = its
 ; length. See the section header comment above for the token rules.
+section .text
 sh_formula_reidx:
     push ax
     push bx
@@ -16054,6 +16289,7 @@ sh_setvald:
 ; do not need it, because those formats carry the FORMULA and the error is
 ; regenerated by evaluating it.
 ; -----------------------------------------------------------------------------
+section .modc                      ; 82.16.9
 sh_seterr:
     push ax
     push bx
@@ -16065,10 +16301,10 @@ sh_seterr:
     push cx
     push ax                           ; the column, across sh_acc_int
     xor ax, ax
-    call sh_acc_int
+    SHOUT sh_acc_int
     pop ax
-    call sh_setvald                   ; creates the record, tagged SH_T_NUM
-    call sh_findcell                  ; ...and now say what it really is
+    SHOUT sh_setvald                   ; creates the record, tagged SH_T_NUM
+    SHOUT sh_findcell                  ; ...and now say what it really is
     pop cx
     jnc .out
     push es
@@ -16088,6 +16324,7 @@ sh_seterr:
 ; -----------------------------------------------------------------------------
 ; sh_setval - in: AX=col, BX=row, DX=value. The integer wrapper (see above).
 ; -----------------------------------------------------------------------------
+section .text
 sh_setval:
     push ax
     push bx
@@ -16330,6 +16567,7 @@ sh_rpn_fvar_end:
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
 ; Looks ahead and RESTORES nothing because it consumes nothing: sh_rpn_p is
 ; untouched either way, so whichever path runs next reads the name itself.
+section .modc                      ; 82.16.9
 sh_rpn_isfunc:
     push ax
     push si
@@ -16414,7 +16652,7 @@ sh_rpn_func:
     jne .bad
     inc si
     mov [sh_rpn_p], si
-    call sh_funcid                    ; AL = this app's own id, 0xFF unknown
+    SHOUT sh_funcid                    ; AL = this app's own id, 0xFF unknown
     cmp al, 0xFF
     je .bad
     xor ah, ah
@@ -16824,22 +17062,22 @@ sh_rpn_number:
     push si
     push di
     mov si, [sh_rpn_p]
-    call fp_atof                      ; SI advances past what it consumed
+    SHOUT fp_atof                      ; SI advances past what it consumed
     jc .bad
     mov [sh_rpn_p], si
-    call sh_acc_store                 ; the packed double, in sh_acc
-    call sh_acc_load_a
-    call fp_a2i                       ; CF=1: no signed word holds it
+    SHOUT sh_acc_store                 ; the packed double, in sh_acc
+    SHOUT sh_acc_load_a
+    SHOUT fp_a2i                       ; CF=1: no signed word holds it
     jc .asnum
     or ax, ax
     js .asnum                         ; tInt is UNSIGNED; a negative literal
     mov bx, ax                        ; arrives as tUminus over a positive one
-    call fp_i2a                       ; and only an exact integer may use it
+    SHOUT fp_i2a                       ; and only an exact integer may use it
     push si
     mov si, sh_acc
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     pop si
-    call fp_cmpab
+    SHOUT fp_cmpab
     jne .asnum
     mov al, SH_PTG_INT
     call sh_rpn_put
@@ -17001,7 +17239,7 @@ sh_rpn_one:
     or bx, bx
     jz .bad                           ; row 0 does not exist; A0 is not a cell
     dec bx                            ; BIFF rows are zero-based
-    call sh_identcol                  ; AX = the 0-based column
+    SHOUT sh_identcol                  ; AX = the 0-based column
     cmp ax, SH_COLS
     jae .bad
     mov dl, al
@@ -17043,6 +17281,7 @@ sh_rpn_one:
 ; keeps what it had, and a caller mid-permutation must STOP (see
 ; sh_sort_permcol).
 ; -----------------------------------------------------------------------------
+section .text
 sh_settext:
     push ax
     push bx
@@ -18564,6 +18803,7 @@ sh_int_to_pacc:
 ; copied across first - up to a ';' or the record's end. Without this, a SYLK
 ; K field would still be read by the integer parser and "3.5" would come back
 ; as 3, which is what the round trip actually did before this existed.
+section .modc                      ; 82.16.9
 sh_esatof:
     push ax
     push cx
@@ -18590,9 +18830,9 @@ sh_esatof:
     mov byte [di], 0
     push si
     mov si, sh_numbuf
-    call fp_atof
+    SHOUT fp_atof
     pop si
-    call sh_acc_store
+    SHOUT sh_acc_store
     pop di
     pop cx
     pop ax
@@ -18600,6 +18840,7 @@ sh_esatof:
 
 ; The same three, for a record addressed through SI - the file writers, the
 ; chart scan and sort all walk the array with SI rather than DI.
+section .text
 sh_cellval_to_acc_si:
     push ax
     push cx
@@ -24985,6 +25226,7 @@ sh_errname:
 ; ERROR.TYPE number, or 0 if this is not a spelling we write. The inverse of
 ; sh_errname, and it reads the SAME table, so the two cannot drift apart.
 ; -----------------------------------------------------------------------------
+section .modc                      ; 82.16.9
 sh_errcode:
     push bx
     push cx
@@ -24997,7 +25239,7 @@ sh_errcode:
     mov bx, cx
     shl bx, 1
     mov di, [sh_errtab + bx]
-    call sh_streq
+    SHOUT sh_streq
     jc .found
     inc cx
     jmp .loop
@@ -25014,6 +25256,7 @@ sh_errcode:
     pop bx
     ret
 
+section .text
 sh_errtab:  dw sh_s_err_null, sh_s_err_div0, sh_s_err_value, sh_s_err_ref
             dw sh_s_err_name, sh_s_err_num, sh_s_err_na
 sh_s_err_null:  db '#NULL!', 0
@@ -25608,8 +25851,13 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; scratch, declared in the bss chain below.
 %include "os88fp.inc"
 
+%define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
+
+%if SHM_READ != CHM_MAX + 1
+  %error "SHEET's module verbs must start one past CHM_MAX - see 82.16.8"
+%endif
 
 %include "os88chart.inc"
 
@@ -25617,7 +25865,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4239
+    OS88_BSS 4371
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -26392,7 +26640,45 @@ sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
 sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
-sh_bss_end        equ sh_stbusy + 2
+sh_v_first    equ sh_stbusy + 2      ; 82.16.9's vector table: one dword
+                                      ; per routine the module calls back
+sh_v_sh_itoa                equ sh_v_first
+sh_v_sh_unpackrow           equ sh_v_sh_itoa + 4
+sh_v_sh_pint                equ sh_v_sh_unpackrow + 4
+sh_v_sh_setvald             equ sh_v_sh_pint + 4
+sh_v_sh_rw_emit             equ sh_v_sh_setvald + 4
+sh_v_sh_settext             equ sh_v_sh_rw_emit + 4
+sh_v_sh_findcell            equ sh_v_sh_settext + 4
+sh_v_sh_acc_store           equ sh_v_sh_findcell + 4
+sh_v_sh_cellval_to_acc_si   equ sh_v_sh_acc_store + 4
+sh_v_sh_nameends            equ sh_v_sh_cellval_to_acc_si + 4
+sh_v_sh_acc_load_a          equ sh_v_sh_nameends + 4
+sh_v_sh_name_def            equ sh_v_sh_acc_load_a + 4
+sh_v_sh_acc_int             equ sh_v_sh_name_def + 4
+sh_v_sh_identcol            equ sh_v_sh_acc_int + 4
+sh_v_sh_setformula          equ sh_v_sh_identcol + 4
+sh_v_sh_errname             equ sh_v_sh_setformula + 4
+sh_v_sh_streq               equ sh_v_sh_errname + 4
+sh_v_sh_isletter_at         equ sh_v_sh_streq + 4
+sh_v_sh_psheetpfx           equ sh_v_sh_isletter_at + 4
+sh_v_sh_getcell2            equ sh_v_sh_psheetpfx + 4
+sh_v_sh_funcid              equ sh_v_sh_getcell2 + 4
+sh_v_sh_colname             equ sh_v_sh_funcid + 4
+sh_v_sh_strcpy_to_di        equ sh_v_sh_colname + 4
+sh_v_fp_unpack_a            equ sh_v_sh_strcpy_to_di + 4
+sh_v_fp_cmpab               equ sh_v_fp_unpack_a + 4
+sh_v_fp_unpack_b            equ sh_v_fp_cmpab + 4
+sh_v_fp_atof                equ sh_v_fp_unpack_b + 4
+sh_v_fp_i2a                 equ sh_v_fp_atof + 4
+sh_v_fp_a2i                 equ sh_v_fp_i2a + 4
+sh_v_fp_ftoa                equ sh_v_fp_a2i + 4
+sh_v_fp_div                 equ sh_v_fp_ftoa + 4
+sh_v_fp_i2b                 equ sh_v_fp_div + 4
+sh_v_fp_norm                equ sh_v_fp_i2b + 4
+SH_NVEC       equ 33
+sh_v_end      equ sh_v_fp_norm + 4
+
+sh_bss_end        equ sh_v_end
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

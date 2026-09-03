@@ -32,7 +32,15 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 8                  ; the claim CHART.OVL is read into, KB
+CH_OVKB      equ 16                 ; the claim CHART.OVL is read into, KB.
+                                    ; 8 held the rasterizer alone; 82.16.9 put
+                                    ; SHEET's file formats in the same tail and
+                                    ; took it to 13,485 bytes. THE CLAIM IS NOT
+                                    ; CHECKED AGAINST THE FILE at build time -
+                                    ; ch_ovneed reads CH_OVKB*1024 bytes and a
+                                    ; short claim would simply truncate the
+                                    ; module, so this constant has to be raised
+                                    ; deliberately whenever the tail grows
 CHM_DRAW     equ 0                  ; the verbs - the module's dispatch indices
 CHM_SCALE    equ 1
 CHM_BMPWRITE equ 2

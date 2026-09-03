@@ -494,7 +494,14 @@ def main():
 # Each package is its own address space, so each gets its own label map: two
 # packages may legitimately define the same wd_* label and neither can call the
 # other's.
-PKGS = ['apps/word/word.asm', 'apps/scribe/scribe.asm']
+PKGS = ['apps/word/word.asm', 'apps/scribe/scribe.asm', 'apps/sheet/sheet.asm']
+
+# SHEET was added after 82.16.9 put its file formats in the module and the very
+# defect this walk exists to find got through: a `call sh_difbbox` inside the
+# module, where sh_difbbox had become the RESIDENT stub of the same name. A
+# near call from module CS lands at that offset in the MODULE, and the DIF
+# writer stopped producing a file with nothing to say about it. The rule was
+# already written and already checked - it was simply not pointed at SHEET.
 
 
 def expand(path, seen):
@@ -587,6 +594,37 @@ def check_pkgs():
         sys.exit("os88ovlchk: %d package call(s) cross a section boundary near "
                  "- SPEC.md 68.10 rule 1" % len(bad))
     print("os88ovlchk: %d package(s) keep every overlay call far" % len(PKGS))
+    check_claims()
+
+
+# A module is read into a claim of a size named in the SOURCE, and nothing
+# compares that against the FILE. ch_ovneed reads CH_OVKB*1024 bytes into it,
+# so a tail that outgrows its claim is not an error - it is a module truncated
+# at a byte boundary, which fails later and somewhere else (82.16.9).
+CLAIMS = [('build/CHART.OVL',  'apps/os88chartovl.inc', 'CH_OVKB'),
+          ('build/SCRIBE.OVL', 'apps/scribe/scribe.asm', 'WD_OVKB')]
+
+
+def check_claims():
+    bad = []
+    for ovl, src, const in CLAIMS:
+        if not os.path.exists(ovl):
+            continue
+        m = re.search(r'^%s\s+equ\s+(\d+)' % const, open(src).read(), re.M)
+        if not m:
+            sys.exit('os88ovlchk: no %s in %s' % (const, src))
+        kb, size = int(m.group(1)), os.path.getsize(ovl)
+        if size > kb * 1024:
+            bad.append('%s is %d bytes and %s claims only %d (%d KB)'
+                       % (ovl, size, const, kb * 1024, kb))
+        else:
+            print('os88ovlchk: %-18s %6d of %s = %d bytes (%d spare)'
+                  % (ovl, size, const, kb * 1024, kb * 1024 - size))
+    if bad:
+        for b in bad:
+            print('os88ovlchk: ' + b, file=sys.stderr)
+        sys.exit('os88ovlchk: an overlay does not fit the claim it is read '
+                 'into - raise the constant, and see 82.16.9')
 
 
 if __name__ == '__main__':

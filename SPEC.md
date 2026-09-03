@@ -77077,6 +77077,71 @@ exported through the trampoline produced a `CHART.BMP` **byte-identical** to
 the one from before it existed (sha256 `c78484ceb60c1397…`, 19,318 bytes).
 
 
+#### 82.16.9 The move, done — 133 bytes to 8,121
+
+SHEET's file formats are a second tenant of the module now.
+
+| | image | + bss | free |
+|---|---|---|---|
+| before | 57,068 | 4,239 | **133** |
+| after | 48,948 | 4,371 | **8,121** |
+
+`CHART.OVL` went 4,735 → 13,262 and `CH_OVKB` 8 → 16 to hold it.
+
+**Nothing was moved.** §82.16.8's two-byte trampoline made source position
+irrelevant, so the tenant is *bracketed where it stands* — 10 regions, 4,696
+lines, `section .modc` … `section .text`. No code motion, no shuffled local
+labels, no data blocks separated from the routines that own them.
+
+**The boundary is smaller than §82.16.7 predicted**, because the closure was
+computed rather than guessed: absorb every routine *all* of whose callers are
+already inside, repeatedly, and 12 tenant-only helpers — `sh_stgput` alone
+accounts for 44 crossings — come with it. **33 symbols and 96 call sites**,
+against the 36 and 144 estimated. Each is `SHOUT sym`, one macro that is a near
+call resident and `call far [sh_v_sym]` overlaid, so the two builds cannot
+drift. `sh_ovbind` fills the 33 vectors with the shim offsets and this
+package's segment, exactly as `ch_ovbind` does.
+
+Three routines are entered from outside — `sh_doread`, `sh_dowrite`,
+`sh_difbbox` — and each keeps a **resident stub of its own name** that sets a
+verb and calls `ch_ovcall`. Every existing call site is untouched and never
+learns the reader moved.
+
+##### The two defects the gate caught, both invisible to the assembler
+
+**Module data read through DS.** `sh_biff_errtab` went into the module with the
+code that uses it, and `#DIV/0!` exported as `#NULL!` — an index of 0 where 1
+was written. DS points at the *package* while the label now holds a
+*module-relative* offset, so the lookup read whatever sat at that offset in the
+package. §68.10 rule 2, and four data blocks had to be pushed back into `.text`
+(`sh_biff_errtab`, `sh_rpn_fid`, `sh_rpn_fvar`, `sh_biff_numfmt_tab`) along
+with the `_end` labels the `TIMES` assertions subtract from them — a difference
+across two sections is not a constant, which is the build telling you the same
+thing.
+
+`sh_mverb` stays in the module and is correct there, because it is read
+`[cs:bp+sh_mverb]`.
+
+**A near call to a resident stub from module CS.** The DIF writer said `call
+sh_difbbox`, and `sh_difbbox` had become the resident stub. A near call from
+the module lands at that offset *in the module*, so the writer ran into
+whatever code was there and **stopped producing a file**, silently. It wanted
+`shm_difbbox`, the module's own copy.
+
+**That rule was already written and already checked.** `tools/os88ovlchk.py`
+has enforced "no near call across the boundary" since WORD's split — it was
+simply never pointed at SHEET. It is now, and it also compares each `.OVL`
+against the claim constant it is read into, because `ch_ovneed` reads
+`CH_OVKB*1024` bytes and a tail that outgrows its claim is not an error: it is
+a module truncated at a byte boundary. Both checks were mutation-tested.
+
+**What made the move safe to attempt** was §81.38's round-trip gate, built two
+days earlier for exactly this. It failed twice, named both defects by their
+symptom — a wrong error code, a missing file — and passed on the third run: 6
+checks, all three formats written by the moved code and read back by a host
+library that has never seen it.
+
+
 #### 82.16.7 The move is designed, and it is blocked on a test that does not exist
 
 82.16.6 picked the tenant. This is the design, and the reason it has not been
