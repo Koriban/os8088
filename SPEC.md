@@ -76019,6 +76019,50 @@ were mutation-tested: removing the `;;` escape and moving SYLK's origin by one
 each fail it.
 
 
+#### 81.38.2 A formula whose result is TEXT did not survive a reload
+
+Found by driving the three applications end to end rather than by a file
+comparison, and it needed that: **the file on disk was never wrong.**
+
+SHEET writes a formula cell as `;E` then `;K` — the expression, then its
+cached result:
+
+```
+C;X2;Y11;ESTDEV(R[-7]C:R[-4]C[2]);K1216.105442     numeric ;K
+C;X2;Y14;EVLOOKUP("SU",...,2);K"Mulcahy"           quoted  ;K
+```
+
+Both records are correct SYLK. On the way back in, a numeric `;K` goes to
+`.knum` and lands in `SH_TDVAL`; a **quoted** `;K` went to `.kt`, which copied
+it into `SH_TEXPR` — *the buffer the `;E` had just been parsed into*. The
+formula was overwritten by its own cached answer, and the cell loaded as
+`=Mulcahy`, which is `#NAME?`.
+
+The comment above that loop said `SH_TEXPR` was "the same buffer `;E` uses,
+and never at the same time: **a label has no formula**". That is true of a
+label and false of a formula whose *result* is a label. §81.22 made formulas
+able to answer with text long after this loop was written, and nothing came
+back to re-read the premise.
+
+**The bug had already been found once, in the branch immediately below.**
+`.kerr` carries the identical correction for error values — *"a FORMULA cell
+writes both `;E` and `;K`, `;E` comes first, and parsing the `;K` into `;E`'s
+buffer overwrote the formula"* — and fixed only that case. `.apply` even
+states the right rule already: *"a `;E` field wins over `;K`"*. It simply never
+got the chance, because the buffer was gone before it ran.
+
+The quoted text now lands in `sh_rwsrc`, where the error name already goes, and
+`.noterr_c` reads it from there. **Zero bytes** — the same instructions with a
+different label. Every text-returning function was affected: `UPPER`, `LOWER`,
+`PROPER`, `TRIM`, `LEFT`, `RIGHT`, `MID`, `REPT`, `TEXT`, `DOLLAR`, `FIXED`,
+`T`, `SUBSTITUTE`, `REPLACE`, and the lookups whenever they find a label.
+
+**Why no gate caught it.** §81.38's round trip compares the *file*, and the file
+was right; `--selfcheck` compares the library with itself. What this needed was
+a workbook written by the program, closed, and opened again by the program —
+which is what an application test does and a format test does not.
+
+
 #### 81.38.1 What it found on its first run
 
 Two defects, and **both are the same shape**: SHEET's writer and SHEET's

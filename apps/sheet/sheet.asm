@@ -13153,8 +13153,28 @@ sh_parsecrec:
     jne .knum
     inc si                            ; past the opening quote
     push di
-    mov di, SH_TEXPR                  ; the same buffer ;E uses, and never at
-    mov cx, SH_EDITMAX                ; the same time: a label has no formula
+    mov di, sh_rwsrc                  ; sh_rwsrc, NOT SH_TEXPR - the same
+    mov cx, SH_EDITMAX                ; correction .kerr below already carries,
+                                      ; and for the same reason. This used to
+                                      ; say "the same buffer ;E uses, and never
+                                      ; at the same time: a label has no
+                                      ; formula", which is true of a LABEL and
+                                      ; false of A FORMULA WHOSE RESULT IS
+                                      ; TEXT. That cell writes both fields -
+                                      ; `;EVLOOKUP("SU",...);K"Mulcahy"` - with
+                                      ; ;E first, so the cached text landed on
+                                      ; top of the formula and the cell loaded
+                                      ; as `=Mulcahy`, which is #NAME?.
+                                      ;
+                                      ; Every text-returning function was
+                                      ; affected - UPPER, LEFT, TEXT, the
+                                      ; lookups when they find a label - and
+                                      ; only on the RELOAD, so the sheet that
+                                      ; wrote the file was still right on
+                                      ; screen. 81.22 made a formula able to
+                                      ; answer with text long after this loop
+                                      ; was written, and nothing came back to
+                                      ; re-read the premise.
 .kt:
     jcxz .ktend
     cmp si, bx
@@ -13317,7 +13337,7 @@ sh_parsecrec:
     cmp byte [SH_TISTXT], 0
     je .plainval_c
     push si
-    mov si, SH_TEXPR
+    mov si, sh_rwsrc                  ; where .isk's quoted ;K now lands
     call sh_settext
     pop si
     jmp .out
