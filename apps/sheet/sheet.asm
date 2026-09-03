@@ -270,7 +270,8 @@ SH_CLAIM_BORD_KB  equ 4             ; stage 2.x: the border table (below) -
                                      ; every cell record, since almost no
                                      ; cell ever has a border and this app
                                      ; already has 3 claims plus its own
-                                     ; region (MEM_OWNER_MAX=8, room to spare)
+                                     ; region. MEM_OWNER_MAX is 8 and SHEET
+                                     ; holds all eight now (81.2)
 SH_CHART_S2  equ 512                ; where a chart's SECOND series lands in
                                     ; sh_stgseg - the first sits at 0 and needs
                                     ; CH_MAXBARS words, so 512 is clear of it
@@ -286,7 +287,9 @@ SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; padding logic) = 19200 bytes -> 19KB.
                                      ; This is Sheet's 5th claim (own region +
                                      ; cellseg/txtseg/stgseg/bordseg), so 6/8
-                                     ; of MEM_OWNER_MAX - still room to spare.
+                                     ; of MEM_OWNER_MAX WHEN THIS WAS WRITTEN.
+                                     ; The note table and CHART.OVL took the
+                                     ; last two: it is 8/8 now (81.2).
                                      ; No pixel-readback API exists anywhere in
                                      ; this OS (checked every OSAPI_GFX_*), so
                                      ; this buffer - not the screen - is the
@@ -14316,7 +14319,10 @@ sh_bt_get:
 ; half-applied.
 ;
 ; This is Sheet's 7th claim of MEM_OWNER_MAX's 8 (own region + cellseg/txtseg/
-; stgseg/bordseg/chartseg/noteseg), so there is exactly one left.
+; stgseg/bordseg/chartseg/noteseg). "So there is exactly one left" stood here
+; and IS NO LONGER TRUE: 82.16 spent it on CHART.OVL's claim, taken at start-up
+; with the rest. SHEET holds 8 OF 8 and the kernel refuses a ninth
+; (kernel/memory.inc's MEM_OWNER_MAX). See 81.2.
 ; =============================================================================
 
 ; sh_nt_findcell - binary search for (col,row); in AX=col,BX=row;
