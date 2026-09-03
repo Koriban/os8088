@@ -77038,6 +77038,45 @@ only symptom is that nobody ever proposes it. The comment now says what is
 true, and says that it used to say otherwise.
 
 
+#### 82.16.8 Offset 0, claimed by three bytes
+
+`ch_ovcall` far-calls `(0, the claim)`, so **whatever NASM lays down first in
+`.modc` is the dispatcher**, whether it meant to be or not — and fragments are
+laid down in *source order*.
+
+That is the one structural obstacle to a second tenant. SHEET's file-format
+code sits nine thousand lines above the `os88chart.inc` include, so bracketing
+it where it stands would put a BIFF writer at offset 0 and send every chart
+verb into the middle of it. §82.16.7 concluded the tenant therefore had to be
+physically moved to the end of the file — 4,786 lines of code motion, with
+every local label and every interleaved data block along for the ride.
+
+**It does not.** Three bytes claim offset 0 before anything else can:
+
+```nasm
+%define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
+section .modc vstart=0 align=1
+sh_modc0:
+    jmp ch_modc
+section .text
+```
+
+Both ends are inside the module, so it is an ordinary near jump, and NASM
+picks `EB xx` — **two bytes**, not three. Everything else may now be bracketed
+wherever it already lives.
+
+`ch_modc` grew one hook to go with it: an unknown verb falls through to
+`CH_MODC_EXT` when a host defines one, so a host can continue the numbering
+past `CHM_MAX` without editing a file CHART shares. Undefined, it still just
+`retf`s, and CHART — which compiles the whole include into `.text` — never sees
+either change.
+
+**Verified before anything was moved**, which is the point of doing it first:
+resident image unchanged at 57,068, module 4,735 → 4,737, and a chart drawn and
+exported through the trampoline produced a `CHART.BMP` **byte-identical** to
+the one from before it existed (sha256 `c78484ceb60c1397…`, 19,318 bytes).
+
+
 #### 82.16.7 The move is designed, and it is blocked on a test that does not exist
 
 82.16.6 picked the tenant. This is the design, and the reason it has not been

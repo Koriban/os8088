@@ -601,6 +601,25 @@ SH_M_NONE    equ 0xFF
 ; than opening a sheet that cannot hold anything - the kernel tears down
 ; whatever we did claim either way (no teardown hook owed).
 ; =============================================================================
+
+; =============================================================================
+; THE MODULE'S OFFSET 0 (82.16.8). `ch_ovcall` far-calls (0, the claim), so
+; whatever NASM lays down first in `.modc` is the dispatcher whether it meant
+; to be or not - and fragments are laid down in SOURCE ORDER. SHEET's own
+; module code sits 9,000 lines above the os88chart.inc include, so without
+; this it would land at offset 0 and the chart verbs would jump into the
+; middle of a BIFF writer.
+;
+; Three bytes fix it without moving a line of code: claim offset 0 here,
+; before anything else can, and jump to the real dispatcher wherever it ends
+; up. Both are inside the module, so it is an ordinary near jump.
+; =============================================================================
+%define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
+section .modc vstart=0 align=1
+sh_modc0:
+    jmp ch_modc
+section .text
+
 sh_entry:
     push ax
     push dx

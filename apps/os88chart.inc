@@ -136,7 +136,11 @@
 ; over SPEC.md 68.10's 55,000-byte trigger and Chart has 46KB free, so exactly
 ; one of them asks (82.16).
 %ifdef CH_OVERLAY
+  %ifdef CH_MODC_OPENED
+section .modc                       ; the host already claimed offset 0
+  %else
 section .modc vstart=0 align=1
+  %endif
 %endif
 
 %ifdef CH_OVERLAY
@@ -155,7 +159,11 @@ ch_modc:                              ; +0: the dispatcher, and the only offset
                                       ; and no data at all. BP is the verb
                                       ; already and no verb wants it.
 .out:
-    retf
+%ifdef CH_MODC_EXT
+    jmp CH_MODC_EXT               ; a host may continue the numbering past
+%else                             ; CHM_MAX with verbs of its own (82.16.8);
+    retf                          ; without one, an unknown verb just returns
+%endif
 
 ch_mverb:
     dw ch_m_draw, ch_m_scale, ch_m_bmpwrite
