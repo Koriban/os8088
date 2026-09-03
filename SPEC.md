@@ -76239,6 +76239,48 @@ The cheap remainder, needing none of them: `NOW`, `RAND`, `CLEAN`,
 `Cell Protection`.
 
 
+### 81.40 CSV and tab-delimited text
+
+Excel 2.0's Reference Guide, page 273, "Supported file formats (open/save)":
+`.XLS/.XLC/.XLM/.XLW`, `.TXT`, `.CSV`, `.SLK`, `.WKS`, `.WK1`, `.DIF`,
+`.DBF` (dBase II) and `.DBF` (dBase III). **Nine.** SHEET had three, and
+§81.39 counted only functions and menus, so it missed the format gap
+entirely.
+
+These are two of the six missing, and **one writer and one reader** serve
+both: the only difference between CSV and tab-delimited text is the byte in
+`[sh_sepch]`. Lotus `.WKS`/`.WK1` are deliberately skipped.
+
+**Quoting is CSV's rule, not DIF's.** A field carrying the delimiter, a quote,
+a CR or an LF is wrapped in quotes with its own quotes doubled — the same
+convention SYLK uses for `;` (§81.38.1). `sh_dowrite_dif` *drops* an embedded
+quote instead, and that is right for DIF, which has no escape at all; CSV has
+one, so a label with a comma in it survives.
+
+**Neither format has a type field**, so three things follow and all three are
+the format's limit rather than the app's:
+
+- On the way out, an **error** goes as its own spelling (`#DIV/0!`) and a
+  **logical** as `TRUE`/`FALSE`; on the way back both are TEXT. The file is
+  still right — there is nowhere in CSV to say "this is an error".
+- On the way in, the **field's spelling decides**. `fp_atof` reports CF=1 when
+  there was no number at all and leaves SI where it stopped, so the position
+  is checked as well as the carry: `12abc` is text, not 12.
+- An **empty field stays blank** rather than becoming zero, which is why the
+  delimiters are still counted for it.
+
+`Save As` grew the two entries Excel has for them — the list is now *Normal,
+SYLK, DIF, CSV, Text*, in Excel's own words and order.
+
+**What it cost, and why the overlay was worth doing first:** 815 bytes of new
+format code, and **10 bytes of resident image** — the dispatch and the two
+extension strings. Everything else went into the module. Before §82.16.9 this
+feature would not have fitted at all: SHEET had 133 bytes.
+
+`tests/sheetfmt.py` covers five formats now: 10 checks, the host authoring the
+input and reading every output.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

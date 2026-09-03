@@ -67,6 +67,7 @@ from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
 from harness import check, done                              # noqa: E402
 
+KINDS = ('bif', 'slk', 'dif', 'csv', 'txt')
 MACHINE = "os8088_5150_cga_gla"
 SYS = "build/os8088-360.img"
 DISK = "build/sheetfmt.img"
@@ -94,14 +95,16 @@ CELLS = {
 FILE_MENU = (75, 45)
 SAVE_AS = (90, 92)                  # File's 4th item, pitch 11 from y=59
 FMT_RADIO_X = 246
-FMT_Y = {'bif': 59, 'slk': 73, 'dif': 87}   # Normal / SYLK / DIF
+FMT_Y = {'bif': 59, 'slk': 73, 'dif': 87,   # Normal / SYLK / DIF ...
+         'csv': 101, 'txt': 115}            # ...CSV / Text (81.40)
 FMT_OK = (267, 170)
 SAVE_BUTTON = (340, 65)
 APPS_FOLDER = (140, 67)
 SHIN_ROW = (165, 121)
 
 # SHEET's extensions against os88sheetfmt's names for the grammars.
-READER = {'bif': 'biff', 'slk': 'sylk', 'dif': 'dif'}
+READER = {'bif': 'biff', 'slk': 'sylk', 'dif': 'dif',
+          'csv': 'csv', 'txt': 'txt'}
 
 
 def build_disk():
@@ -116,6 +119,11 @@ def build_disk():
 def want(kind, key):
     """What this format is allowed to come back with for a cell."""
     v = CELLS[key]
+    if kind in ('csv', 'txt') and isinstance(v, tuple):
+        # NEITHER FORMAT HAS A TYPE FIELD. An error goes out as its own
+        # spelling and comes back as the TEXT of it; a logical likewise. That
+        # is the format's limit, not the app's, and the file is still right.
+        return v[1] if v[0] == 'err' else ('TRUE' if v[1] else 'FALSE')
     if kind == 'dif' and isinstance(v, tuple) and v[0] == 'err':
         return 'any-error'
     if isinstance(v, tuple) and v[0] == 'bool':
@@ -148,7 +156,7 @@ def main():
         mo.dblclick(*SHIN_ROW)          # the ASSOCIATION opens it
         M.settle(m, limit=180)
 
-        for kind in ('bif', 'slk', 'dif'):
+        for kind in KINDS:
             mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
             M.settle(m)
             mo.click(FMT_RADIO_X, FMT_Y[kind])
@@ -161,7 +169,7 @@ def main():
         vol = os88flush.Flush(marty=m).volume(1)
         names = vol.names()
         got = {}
-        for kind in ('bif', 'slk', 'dif'):
+        for kind in KINDS:
             name = 'SHIN.%s' % kind.upper()
             check(name in names, "%s written" % name,
                   "%s is not on the disk - the save for it did not happen "
@@ -170,7 +178,7 @@ def main():
                 got[kind] = F.read(name, data=vol.read(name),
                                    kind=READER[kind])
 
-    for kind in ('bif', 'slk', 'dif'):
+    for kind in KINDS:
         if kind not in got:
             continue
         cells = got[kind]

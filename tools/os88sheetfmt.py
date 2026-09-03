@@ -337,6 +337,66 @@ def _biff_value(rid, body, v):
     return None
 
 
+
+# -----------------------------------------------------------------------------
+# CSV and tab-delimited TEXT.  Two of the nine formats Excel 2.0's Reference
+# Guide lists under "Supported file formats (open/save)" (p.273).  Quoting is
+# the ordinary CSV rule and not DIF's: a field carrying the delimiter, a quote
+# or a line break is wrapped in quotes, and its own quotes are doubled.
+# -----------------------------------------------------------------------------
+def read_sep(data, sep):
+    if isinstance(data, bytes):
+        data = data.decode('latin-1')
+    cells, row, col, i, n = {}, 0, 0, 0, len(data)
+    field, quoted, seen = [], False, False
+    def flush():
+        nonlocal field, quoted, seen
+        txt = ''.join(field)
+        if txt != '' or quoted:
+            cells[(row, col)] = _sep_value(txt, quoted)
+        field, quoted, seen = [], False, False
+    while i < n:
+        c = data[i]
+        if not seen and c == '"':
+            quoted, seen, i = True, True, i + 1
+            while i < n:
+                if data[i] == '"':
+                    if i + 1 < n and data[i + 1] == '"':
+                        field.append('"'); i += 2; continue
+                    i += 1
+                    break
+                field.append(data[i]); i += 1
+            continue
+        seen = True
+        if c == sep:
+            flush(); col += 1; i += 1; continue
+        if c in '\r\n':
+            flush(); col = 0; row += 1
+            while i < n and data[i] in '\r\n':
+                i += 1
+            continue
+        field.append(c); i += 1
+    flush()
+    return cells
+
+
+def _sep_value(txt, quoted):
+    if quoted:
+        return txt                      # quotes mean TEXT, always
+    try:
+        return float(txt)
+    except ValueError:
+        return txt
+
+
+def read_csv(data):
+    return read_sep(data, ',')
+
+
+def read_txt(data):
+    return read_sep(data, '\t')
+
+
 # -----------------------------------------------------------------------------
 def sniff(path, data):
     if data[:2] in (b'\x09\x00', b'\x09\x02', b'\x09\x04'):
@@ -348,7 +408,7 @@ def sniff(path, data):
         return 'sylk'
     low = path.lower()
     for ext, kind in (('.bif', 'biff'), ('.xls', 'biff'), ('.dif', 'dif'),
-                      ('.slk', 'sylk')):
+                      ('.slk', 'sylk'), ('.csv', 'csv'), ('.txt', 'txt')):
         if low.endswith(ext):
             return kind
     raise FormatError('cannot tell what %s is' % path)
@@ -358,7 +418,8 @@ def read(path, data=None, kind=None):
     if data is None:
         data = open(path, 'rb').read()
     kind = kind or sniff(path, data)
-    return {'sylk': read_sylk, 'dif': read_dif, 'biff': read_biff}[kind](data)
+    return {'sylk': read_sylk, 'dif': read_dif, 'biff': read_biff,
+            'csv': read_csv, 'txt': read_txt}[kind](data)
 
 
 def scalar(v):

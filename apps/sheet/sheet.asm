@@ -7068,10 +7068,13 @@ sh_s_fd_rowh:   db 'Row Height', 0
 sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt
 ; Excel's own words: the app's OWN format is "Normal", and the interchange
 ; formats are named after themselves. The order is Excel's too.
-sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif
+sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif, sh_fd_sfcsv, sh_fd_sftxt
 sh_fd_sfnormal: db 'Normal', 0
 sh_fd_sfsylk:   db 'SYLK', 0
 sh_fd_sfdif:    db 'DIF', 0
+sh_fd_sfcsv:    db 'CSV', 0         ; 81.40: two of the nine formats Excel 2.0
+sh_fd_sftxt:    db 'Text', 0        ; listed and this app did not have. Excel's
+                                    ; own words for them in its Save As list
 ; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
 ; happens to be in - sh_gal_map translates, the same way chart.asm's own
 ; ct_gal_map does, rather than either side renumbering to suit the other.
@@ -7133,7 +7136,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 3
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 5
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -7865,6 +7868,12 @@ sh_fdlg_apply:
     cmp ax, 1
     je .fmtset
     mov si, sh_s_ext_dif
+    cmp ax, 2
+    je .fmtset
+    mov si, sh_s_ext_csv
+    cmp ax, 3
+    je .fmtset
+    mov si, sh_s_ext_txt
 .fmtset:
     call sh_setext
     mov byte [sh_savepend], 1         ; the file dialog cannot open until
@@ -10356,7 +10365,29 @@ shm_dowrite:
     pop di
     pop si
     jc .biff
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_csv
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .csv
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_txt
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .txt
     call sh_dowrite_sylk
+    jmp .warn
+.csv:
+    call sh_dowrite_csv
+    jmp .warn
+.txt:
+    call sh_dowrite_txt
     jmp .warn
 .dif:
     call sh_dowrite_dif
@@ -10848,11 +10879,31 @@ shm_doread:
     pop di
     pop si
     jc .biff
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_csv
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .csv
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_txt
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .txt
     jmp sh_doread_sylk
 .dif:
     jmp sh_doread_dif
 .biff:
     jmp sh_doread_biff
+.csv:
+    jmp sh_doread_csv
+.txt:
+    jmp sh_doread_txt
 
 ; -----------------------------------------------------------------------------
 ; sh_doread_sylk - read [sh_name] as SYLK, replacing the sheet
@@ -25795,9 +25846,385 @@ sh_functab_end:
     times ((sh_rpn_fvar_end - sh_rpn_fvar) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fvar_end - sh_rpn_fvar)) db 0
 sh_s_errpfx:   db 'Err ', 0
+section .modc                      ; 82.16.9's tenant: CSV and TXT (81.40)
+
+; =============================================================================
+; CSV and TAB-DELIMITED TEXT (81.40).
+;
+; Excel 2.0's own open/save list (Reference Guide p.273) is .XLS/.XLC/.XLM/.XLW,
+; .TXT, .CSV, .SLK, .WKS, .WK1, .DIF and .DBF - so these two are not an
+; extension of the era's Excel, they are two of the nine it had and this app
+; did not. They are ONE writer and ONE reader with a delimiter in [sh_sepch],
+; because the only difference between them is that byte.
+;
+; QUOTING IS CSV'S, NOT DIF'S. A field carrying the delimiter, a quote, a CR
+; or an LF is wrapped in quotes and its own quotes are doubled - the same rule
+; SYLK uses for ';' (81.38.1) and the one that makes a field with a comma in it
+; survive. DIF drops an embedded quote instead (see sh_dowrite_dif's .dt),
+; which is right for DIF because DIF has no escape at all; CSV does.
+; =============================================================================
+sh_dowrite_csv:
+    mov byte [sh_sepch], ','
+    jmp sh_dowrite_sep
+sh_dowrite_txt:
+    mov byte [sh_sepch], 9
+    jmp sh_dowrite_sep
+
+sh_dowrite_sep:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call shm_difbbox                  ; the module's own copy (82.16.9)
+    mov byte [sh_trunc], 0
+    mov es, [sh_stgseg]
+    xor di, di
+    mov word [sh_wrow], 0
+.rloop:
+    mov ax, [sh_wrow]
+    cmp ax, [sh_bbrow]
+    ja .footer
+    mov word [sh_wcol], 0
+.cloop:
+    mov ax, [sh_wcol]
+    cmp ax, [sh_bbcol]
+    ja .rnext
+    mov ax, di
+    add ax, SH_EDITMAX + 8            ; the widest a field can get: a label,
+    cmp ax, SH_STAGE_MAX              ; its quotes, and the delimiter
+    ja .truncf
+    cmp word [sh_wcol], 0
+    je .nosep
+    mov al, [sh_sepch]
+    call sh_stgputb
+.nosep:
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_getcell2
+    jnc .cnext                        ; an empty cell is an EMPTY FIELD, not a
+    cmp byte [sh_curtype], SH_T_TEXT  ; zero - the delimiters still count it
+    je .ctext
+    cmp byte [sh_curtype], SH_T_ERR
+    je .cerr
+    push si
+    push di
+    mov si, sh_acc                    ; a FULL DECIMAL, the lesson
+    SHOUT fp_unpack_a                 ; sh_dowrite_dif learned the hard way
+    mov di, sh_numbuf
+    mov ax, 10
+    SHOUT fp_ftoa
+    pop di
+    pop si
+    mov si, sh_numbuf
+    call sh_stgput
+    jmp .cnext
+.cerr:
+    SHOUT sh_errname                  ; -> sh_numbuf, the error's own spelling
+    mov si, sh_numbuf
+    call sh_stgput
+    jmp .cnext
+.ctext:
+    call sh_sep_needq
+    jnc .ctplain
+    mov al, 34
+    call sh_stgputb
+    mov si, [sh_curtoff]
+.ctq:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    or al, al
+    jz .ctqend
+    inc si
+    cmp al, 34
+    jne .ctq1
+    call sh_stgputb                   ; an embedded quote is DOUBLED
+.ctq1:
+    call sh_stgputb
+    jmp .ctq
+.ctqend:
+    mov al, 34
+    call sh_stgputb
+    jmp .cnext
+.ctplain:
+    mov si, [sh_curtoff]
+.ctp:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    or al, al
+    jz .cnext
+    inc si
+    call sh_stgputb
+    jmp .ctp
+.cnext:
+    inc word [sh_wcol]
+    jmp .cloop
+.rnext:
+    mov si, sh_s_crlf
+    call sh_stgput
+    inc word [sh_wrow]
+    jmp .rloop
+.truncf:
+    mov byte [sh_trunc], 1
+.footer:
+    mov [sh_stagelen], di
+    mov ax, [sh_stgseg]
+    mov es, ax
+    xor bx, bx
+    mov cx, [sh_stagelen]
+    xor dx, dx
+    mov si, sh_name
+    call OSAPI_FILE_WRITE
+    jc .werr
+    mov word [sh_msg], sh_m_saved
+    cmp byte [sh_trunc], 0
+    je .wdone
+    mov word [sh_msg], sh_m_trunc
+    jmp .wdone
+.werr:
+    call sh_setferr                   ; module-local: 82.16.9 absorbed it
+.wdone:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sep_needq - does the current cell's label need quoting? out: CF=1 if so.
+; Preserves everything else.
+; -----------------------------------------------------------------------------
+sh_sep_needq:
+    push ax
+    push si
+    push es
+    mov si, [sh_curtoff]
+    mov es, [sh_txtseg]
+.l:
+    mov al, [es:si]
+    or al, al
+    jz .no
+    inc si
+    cmp al, [sh_sepch]                ; [sh_sepch] is DS-relative and DS is
+    je .yes                           ; still the package - only ES moved
+    cmp al, 34
+    je .yes
+    cmp al, 13
+    je .yes
+    cmp al, 10
+    je .yes
+    jmp .l
+.yes:
+    pop es
+    pop si
+    pop ax
+    stc
+    ret
+.no:
+    pop es
+    pop si
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_doread_csv / _txt - read [sh_name], replacing the sheet.
+; -----------------------------------------------------------------------------
+sh_doread_csv:
+    mov byte [sh_sepch], ','
+    jmp sh_doread_sep
+sh_doread_txt:
+    mov byte [sh_sepch], 9
+    jmp sh_doread_sep
+
+sh_doread_sep:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [sh_stgseg]
+    xor bx, bx
+    mov cx, SH_STAGE_MAX
+    xor dx, dx
+    mov si, sh_name
+    call OSAPI_FILE_READ
+    jc .rerr
+    mov word [sh_ncells], 0
+    mov word [sh_txtlen], 0           ; "replacing the sheet", the same three
+    mov word [sh_nbord], 0            ; sh_doread_dif clears
+    mov word [sh_nnote], 0
+    mov word [sh_nnames], 0
+    mov es, [sh_stgseg]
+    mov [sh_sepend], ax               ; the end, for sh_sep_field
+    xor si, si
+    mov word [sh_wrow], 0
+.rowloop:
+    cmp si, [sh_sepend]
+    jae .done
+    cmp word [sh_wrow], SH_ROWS
+    jae .done
+    mov word [sh_wcol], 0
+.fieldloop:
+    call sh_sep_field                 ; -> sh_rwsrc; SI at the terminator
+    call sh_sep_store
+    inc word [sh_wcol]
+    cmp si, [sh_sepend]
+    jae .done
+    mov al, [es:si]
+    cmp al, [sh_sepch]
+    jne .eol
+    inc si                            ; past the delimiter
+    mov ax, [sh_wcol]
+    cmp ax, SH_COLS
+    jae .eol                          ; past the last column: drop the rest
+    jmp .fieldloop
+.eol:
+    cmp si, [sh_sepend]
+    jae .done
+    mov al, [es:si]
+    cmp al, 13
+    je .eat
+    cmp al, 10
+    je .eat
+    inc si                            ; anything else past the last column
+    jmp .eol
+.eat:
+    inc si
+    cmp si, [sh_sepend]
+    jae .done
+    mov al, [es:si]
+    cmp al, 13
+    je .eat
+    cmp al, 10
+    je .eat
+    inc word [sh_wrow]
+    jmp .rowloop
+.done:
+    mov word [sh_msg], sh_m_loaded
+    jmp .rdone
+.rerr:
+    call sh_setferr                   ; module-local: 82.16.9 absorbed it
+.rdone:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sep_field - one field at ES:SI into sh_rwsrc, NUL-terminated. SI is left
+; AT the terminator (the delimiter, a CR/LF or [sh_sepend]) and never past it,
+; so the caller decides what the terminator means.
+; -----------------------------------------------------------------------------
+sh_sep_field:
+    push ax
+    push cx
+    push di
+    mov di, sh_rwsrc
+    mov cx, SH_EDITMAX
+    cmp si, [sh_sepend]
+    jae .end
+    cmp byte [es:si], 34
+    jne .plain
+    inc si
+.q:
+    cmp si, [sh_sepend]
+    jae .end
+    mov al, [es:si]
+    inc si
+    cmp al, 34
+    jne .qkeep
+    cmp si, [sh_sepend]
+    jae .end
+    cmp byte [es:si], 34
+    jne .end                          ; a lone quote CLOSES the field
+    inc si                            ; a doubled one is a literal quote
+.qkeep:
+    jcxz .q
+    mov [di], al
+    inc di
+    dec cx
+    jmp .q
+.plain:
+    cmp si, [sh_sepend]
+    jae .end
+    mov al, [es:si]
+    cmp al, [sh_sepch]
+    je .end
+    cmp al, 13
+    je .end
+    cmp al, 10
+    je .end
+    inc si
+    jcxz .plain
+    mov [di], al
+    inc di
+    dec cx
+    jmp .plain
+.end:
+    mov byte [di], 0
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sep_store - sh_rwsrc into the cell at [sh_wcol],[sh_wrow].
+;
+; CSV HAS NO TYPE FIELD, so the field's own spelling decides. fp_atof reports
+; CF=1 when there was no number there at all, and SI is left where it stopped -
+; so "12abc" is TEXT rather than 12, which is the whole reason the position is
+; checked and not just the carry.
+; -----------------------------------------------------------------------------
+sh_sep_store:
+    push ax
+    push bx
+    push si
+    cmp byte [sh_rwsrc], 0
+    je .out                           ; an empty field leaves the cell blank
+    mov si, sh_rwsrc
+    SHOUT fp_atof
+    jc .text
+    cmp byte [si], 0
+    jne .text
+    SHOUT sh_acc_store
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_setvald
+    jmp .out
+.text:
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    mov si, sh_rwsrc
+    SHOUT sh_settext
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+section .text
+
 sh_s_ext_sylk: db '.SLK', 0
 sh_s_ext_dif:  db '.DIF', 0
 sh_s_ext_biff: db '.BIF', 0
+sh_s_ext_csv:  db '.CSV', 0
+sh_s_ext_txt:  db '.TXT', 0
 sh_s_biff_fontname: db 'Helv', 0     ; Excel's own historical default face
 ; our number-format code (General/Currency/Comma/Percent) -> the real BIFF
 ; built-in format id, per the OpenOffice BIFF reference: 0=General,
@@ -25880,7 +26307,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4371
+    OS88_BSS 4375
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -26655,7 +27082,9 @@ sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
 sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
-sh_v_first    equ sh_stbusy + 2      ; 82.16.9's vector table: one dword
+sh_sepch      equ sh_stbusy + 2      ; byte: CSV/TXT's delimiter (81.40)
+sh_sepend     equ sh_sepch + 2       ; word: the staging buffer's end
+sh_v_first    equ sh_sepend + 2      ; 82.16.9's vector table: one dword
                                       ; per routine the module calls back
 sh_v_sh_itoa                equ sh_v_first
 sh_v_sh_unpackrow           equ sh_v_sh_itoa + 4
