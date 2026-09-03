@@ -76087,18 +76087,32 @@ not enough to work in.
 46295 — all computed by `apps/os88fp.inc`'s software double and all equal to
 Python's to the last digit printed.
 
-**Two things a user would call defects, neither of them wrong answers.**
+**One thing worth knowing, and one retraction.**
 
 `Data ▸ Chart Column` puts the chart window in front, so **the next click on
-SHEET's own menu bar is spent raising SHEET** and the command silently does not
-run — the status bar still shows the previous message. From the user's side a
-menu item did nothing, with no error. It cost two runs here before it was
-recognised.
+SHEET's own menu bar is spent raising SHEET** and the command does not run —
+the status bar still shows the previous message. That is click-to-focus meeting
+§81.5's *in-window* menu bar rather than a defect: a background window's menu
+is not reachable until the window is, and the Macintosh this OS is shaped after
+never has the problem because its menu bar belongs to the screen. It is still a
+trap worth naming, because from the user's side a menu item did nothing and
+said nothing, and it cost two runs here before it was recognised.
 
-And CHART opened the workbook and **drew nothing, silently** — a white canvas
-where the black one had been, no message either way. §82.15 charts a range
-SHEET has *named* and this workbook defines none, so an empty plot may be
-correct; a program that cannot say *"nothing here to chart"* is not.
+**RETRACTED: "CHART opened the workbook and drew nothing, silently."** That
+sentence stood in this section and was wrong. CHART had opened `CHART.O88` —
+the application's own binary — because the click that was supposed to land on
+`XQ3.SLK` landed on the row above it. Given the real workbook it titles the
+window `XQ3.SLK` and draws the chart, with the axis at **1478900**: the `VAR`
+cell, 1,478,912, which is genuinely the largest number in column B and dwarfs
+the revenue figures beside it. `ct_ondlg` toasts `No numeric data found.` when
+`ct_valcnt` is zero and its header already documents the empty-canvas render,
+so the no-data path was never actually exercised — a transient toast several
+seconds before the screenshot would not have survived to be seen either way.
+
+The lesson is the session's own, turned around: **a claim that a program failed
+silently is exactly as much a claim as a claim that it worked**, and this one
+went into the specification on a single screenshot without being checked. It
+cost one run to disprove.
 
 **What only this could find.** §81.38's gate compares the file, and the file
 was right every time. §81.38.2 needed a workbook written by the program,
