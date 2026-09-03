@@ -1410,8 +1410,15 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
      $(MEDIAIMG360) $(BUILD)/wire.o88 $(BUILD)/fptest.o88 $(BUILD)/imgtest.o88 \
+     $(BUILD)/chart.o88 \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
+# chart.o88 is here for the same reason, and it is the sharper case: it stopped
+# SHIPPING (see APPS_TOOLS) but it is the ONLY thing that compiles
+# apps/os88chart.inc's RESIDENT half - SHEET builds the overlay half. Drop it
+# from `all` too and `%ifndef CH_OVERLAY` becomes a branch nothing assembles,
+# which rots in silence until somebody needs it again.
+#
 # fptest.o88 and imgtest.o88 are here for wire.o88's reason below, and fptest
 # was NOT here until imgtest joined it: its own rule says "built here so it
 # cannot rot" and nothing depended on it, so `make` never compiled it and a
@@ -6135,8 +6142,13 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # whoever wrote it and whatever order its entries are stored in - which is
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
+# CHART.O88 NO LONGER SHIPS. SHEET draws the same charts, through the same
+# rasterizer (apps/os88chart.inc), and exports the same BMP - so the standalone
+# viewer is a second window onto a capability the spreadsheet already has, at
+# 13,865 bytes on every geometry. CHART.OVL stays: it is SHEET's module and
+# carries its file formats (82.16.9). It is still BUILT, in `all` - see there.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
+              $(BUILD)/fractal.o88 \
               $(BUILD)/hello.o88 $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/CHART.OVL \
@@ -6281,15 +6293,10 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # 24.4), and 59% OF THAT 34KB WAS LITERAL ZEROS. The buffers are reserved past
 # the image now rather than written into the file, so it is 18KB and 36 of the
 # 354 clusters. Being on this disk is the whole reason a user has it to hand.
-# THE 360KB DISK DROPS THE STANDALONE CHART VIEWER (SPEC.md 24.4's rule, a
-# second time). 82.16.9 put SHEET's file formats in CHART.OVL and took it from
-# 4,735 bytes to 15,612, and upstream's TANK ATTACK arrived in the same merge:
-# together they put this geometry 10 clusters over 354. CHART.OVL cannot be the
-# one to go - the formats are in it now, so without it SHEET could not open or
-# save at all - and chart.o88 is the redundant one, because SHEET draws the
-# same charts natively through the same rasterizer. The capability stays on the
-# smallest disk; only the separate window for it goes.
-APPS_TOOLS_360 := $(filter-out $(BUILD)/chart.o88,$(APPS_TOOLS))
+# The 360KB geometry needed this first - 82.16.9 took CHART.OVL from 4,735
+# bytes to 15,612 and upstream's TANK ATTACK landed in the same merge, putting
+# it 10 clusters over 354 - and it is now simply what every geometry does.
+APPS_TOOLS_360 := $(APPS_TOOLS)
 
 APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
                $(addprefix GAMES:,$(APPS_GAMES)) \

@@ -83280,7 +83280,21 @@ number that agrees with reality at the cases you tested is not evidence about
 the case you did not. The table is measured now and says so.
 
 
-## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
+## 82. CHART — charting, and the buffer both halves draw into
+
+> **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts
+> through the same rasterizer and exports the same BMP, so the standalone
+> viewer was a second window onto a capability the spreadsheet already had, at
+> 13,865 bytes on every geometry. **`CHART.OVL` stays** — it is SHEET's module
+> and carries its file formats now (§82.16.9), and a disk without it leaves
+> SHEET unable to open or save anything.
+>
+> The package is still **built**, in `all`, because it is the only thing that
+> compiles this file's RESIDENT half: SHEET builds the overlay half, so without
+> chart.o88 the `%ifndef CH_OVERLAY` branch is a path nothing assembles. The
+> asymmetry below is therefore still real and still checked — it is just no
+> longer a shipping decision. Everything in this section describes code that
+> still runs; only its second host stopped being on the floppy. (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
 a SYLK, DIF or BIFF file and draws a bar chart of one column of it; **Sheet's
