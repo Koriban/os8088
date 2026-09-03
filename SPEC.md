@@ -81632,6 +81632,44 @@ rather than two renderings that agree by inspection.
 The 118-byte BMP header and palette are written into the buffer **once at
 startup** and never rebuilt; the writer stages whatever is already there.
 
+### 82.1.1 The interior the picture does not cover (#142)
+
+`sh_chart_paint` was the `OSAPI_GFX_BLIT4` and nothing else, and that is not
+enough to paint a window.
+
+The frame is `SH_CHARTWIN_W` × `SH_CHARTWIN_H` = 260 × 200, so its content is
+260 × 181; the image is `CH_W` × `CH_H` = 240 × 160. **A 20-pixel band down the
+right and 21 along the bottom belonged to the window and was never written by
+anything** — the "little margin around the CH_W x CH_H canvas" that
+`SH_CHARTWIN_W`'s own comment describes. The margin was deliberate; painting it
+was not considered.
+
+So on a move the frame redrew and the picture re-blitted, and whatever had been
+on the glass in between stayed there. The reporter's guess was close but not
+exact: the picture **is** re-blitted on a damage event; it is only the band the
+picture does not cover that never was.
+
+**One fill, not four strips round the edges.** A fill costs 756 µs whatever it
+covers (PERFORMANCE.md), so covering the content once is cheaper than computing
+and drawing the four the picture leaves, and the blit lands on top of it.
+
+**`OSAPI_WM_GEOM`, not `W_W`/`W_H`.** Those are the OUTER frame, and filling to
+them paints over the window's own two-pixel border. `WM_GEOM` answers the size
+of the box `WM_CONTENT` gives the origin of — the rectangle wanted — and
+`sh_geom` already uses it for the same reason. A screenshot diff against the
+unfixed build is what caught the difference; looking at the screenshot did not.
+
+**Verified both ways** on VGA (dragging the chart across the SHEET window:
+before, fragments of SHEET's *Format* menu and its cells sit inside the Chart
+frame; after, white — 1,530 pixels apart) and on **CGA**, where `CWHITE` is the
+adapter's white and the bars are black.
+
+**The raise symptom in #142 did not reproduce.** Driven through the reported
+sequence — chart on top, raise SHEET over it, click the Chart's title bar — the
+window comes forward and draws correctly, and the fixed and unfixed builds are
+identical to the pixel. The interior fill neither causes nor cures it, so it is
+not established as the same defect.
+
 ### 82.2 `ch_bars_draw` takes a segment in DX and never touches DS
 
 The array of values to plot lives in the caller's claimed segment, not in the
