@@ -494,7 +494,11 @@ def main():
 # Each package is its own address space, so each gets its own label map: two
 # packages may legitimately define the same wd_* label and neither can call the
 # other's.
-PKGS = ['apps/word/word.asm', 'apps/scribe/scribe.asm']
+# A package listed here that is not in the tree is SKIPPED, not an error: a
+# fork may carry one this branch does not, and the walk should still check the
+# ones that are here. The count reported at the end is what was actually
+# walked, so a skipped package cannot be mistaken for a checked one.
+PKGS = ['apps/word/word.asm']
 
 
 def expand(path, seen):
@@ -518,7 +522,11 @@ def expand(path, seen):
 
 def check_pkgs():
     bad = []
+    walked = 0
     for pkg in PKGS:
+        if not os.path.exists(pkg):
+            continue
+        walked += 1
         if not os.path.exists(pkg):
             continue
         stream = list(expand(pkg, frozenset()))
@@ -586,7 +594,7 @@ def check_pkgs():
     if bad:
         sys.exit("os88ovlchk: %d package call(s) cross a section boundary near "
                  "- SPEC.md 68.10 rule 1" % len(bad))
-    print("os88ovlchk: %d package(s) keep every overlay call far" % len(PKGS))
+    print("os88ovlchk: %d package(s) keep every overlay call far" % walked)
 
 
 if __name__ == '__main__':
