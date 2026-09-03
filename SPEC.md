@@ -73777,9 +73777,11 @@ count:
 | `sh_chartseg` | 19KB | the live chart window's offscreen canvas (§82) |
 | `ch_ovseg`    | 8KB  | `CHART.OVL`, claimed at start-up with the rest (§82.16.3) |
 
-**So SHEET is at the per-owner ceiling and cannot take another claim.** That is
-a second limit beside the 133 bytes of §82.16.6, it binds on a different
-resource, and it is reached the same way: one at a time, each defensible. A
+**So SHEET is at the per-owner ceiling and cannot take another claim.** This is
+still true after §82.16.9: that move bought image, not claims, and it is now
+the ONLY ceiling SHEET is against — 8,121 bytes spare, 0 of 8 claims spare. It
+binds on a different resource from the byte budget and is reached the same
+way: one at a time, each defensible. A
 feature that wants a buffer of its own — the matrix family's working array is
 the obvious one — has to take it out of an existing claim or displace one.
 `ch_ovneed`'s CF is deliberately not read, so a machine that cannot spare the
@@ -76796,13 +76798,21 @@ have not been true for a long time.** The 8KB the overlay bought was spent —
 on 106 functions, the macro language, the dialogs, the formula and status
 bars, and the soft-float. Today:
 
-| | resident image | + bss | of 61,440 |
-|---|---|---|---|
-| SHEET, module overlaid | 56,976 | 4,239 | **61,215 — 225 bytes spare** |
+| | resident image | + bss | of 61,440 | when |
+|---|---|---|---|---|
+| SHEET, chart module overlaid | 56,976 | 4,239 | 61,215 — 225 spare | 2026-09-02 |
+| SHEET, file formats too (§82.16.9) | 48,948 | 4,371 | **53,319 — 8,121 spare** | 2026-09-03 |
 
-A table like the one above is worth keeping only if it is re-measured when it
-is cited. Read as current, it says SHEET has 8KB of room; it has 225 bytes,
-which is not enough to absorb a bug fix, let alone a feature.
+**Every row here is dated, and the bottom one is the only one that describes
+the tree.** The rows above it are kept because they are the argument for the
+move, not because they are true.
+
+That column exists because this section already made the mistake once and then
+made it again: it was written to correct the stale 53,175 above, said "225
+bytes", and was itself stale within a day — while §81.2 cited it as "133
+bytes", a third number, and §82.16.9 recorded a fourth. Four figures for one
+quantity, in one document, inside two days. **A figure without a date is a
+claim about the present that nobody renewed.**
 
 #### 82.16.1 One overlay cannot serve two packages — the reason is addressing
 
@@ -76984,12 +76994,16 @@ spreadsheet whose numbers are all still there.
 
 #### 82.16.6 SHEET is full, and the tail is where the room is
 
-225 bytes. That is what is left of `APP_MAX_SIZE` after the financial
-functions landed, and it is the binding constraint on everything SHEET does
+**Superseded by §82.16.9, which did this — SHEET has 8,121 bytes spare as of
+2026-09-03. What follows is the measurement that justified the move, kept as
+the argument rather than as the state.**
+
+225 bytes. That was what remained of `APP_MAX_SIZE` after the financial
+functions landed, and it was the binding constraint on everything SHEET did
 next — including the matrix and array family, which is all that now separates
 it from Excel 2.1d's function set.
 
-**Where the 56,976 bytes are.** Measured from a NASM listing, mapping every
+**Where those 56,976 bytes were.** Measured from a NASM listing, mapping every
 top-level label to the address of the first line that emits a byte, and
 bucketing by subsystem (the shared `%include`s are excluded — they are the
 unmapped remainder):
