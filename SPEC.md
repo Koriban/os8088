@@ -83106,6 +83106,14 @@ reader that had not been written by the same hand as the writer.**
 
 ### 81.39 What SHEET still lacks, measured (2026-09-03)
 
+> **Two lines of this changed the same day it was written**, and are corrected
+> in place below rather than left to be read as current:
+> **file formats are no longer a gap** — §81.40 and §81.41 added CSV, tab
+> -delimited text and dBASE III, taking SHEET to 6 of Excel 2.0's 9 with the
+> other 3 (Lotus `.WKS`/`.WK1`, dBASE II) deliberately not done; and **`NOW` is
+> not cheap** — this OS exposes no date to a package at all, so it needs a
+> kernel slot, not an afternoon.
+
 Counted, not recalled — against `excel_man/Microsoft Excel Functions and
 Macros.pdf`'s worksheet-function directory and the real Excel 2.1 menu captures
 in `VM_screenshots/`. Every previous inventory in this tree was stale, most
@@ -83120,7 +83128,7 @@ text-input widget" — all four wrong by the time it was read.
 |---|---|---|---|
 | database | 11 | `DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP` | a **database + criteria area** |
 | array / matrix | 8 | `MDETERM MINVERSE MMULT TRANSPOSE LINEST LOGEST TREND GROWTH` | **array formulas** |
-| volatile | 2 | `NOW RAND` | a clock read; a PRNG |
+| volatile | 2 | `NOW RAND` | `RAND` a PRNG; **`NOW` needs a kernel date slot that does not exist** (§81.41) |
 | information | 2 | `CELL ISNONTEXT` | `CELL` wants an attribute table; the other is trivial |
 | reference | 1 | `INDIRECT` | text → reference at evaluation time |
 | text | 1 | `CLEAN` | trivial |
@@ -83172,9 +83180,9 @@ Almost everything above hangs off five pieces of work:
 5. **A macro recorder and a real macro language** → the Macro menu, and the
    language itself.
 
-The cheap remainder, needing none of them: `NOW`, `RAND`, `CLEAN`,
-`ISNONTEXT`, `MDETERM`, `INDIRECT`, `Repeat`, `Paste Special`, `Paste Link`,
-`Cell Protection`.
+The cheap remainder, needing none of them: `RAND`, `CLEAN`, `ISNONTEXT`,
+`MDETERM`, `INDIRECT`, `Repeat`, `Paste Special`, `Paste Link`, `Cell
+Protection`. **`NOW` is not among them** — see the note at the top.
 
 
 ### 81.40 CSV and tab-delimited text
