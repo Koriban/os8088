@@ -6429,6 +6429,42 @@ sh_chart_paint:
     mov [ch_bx1], ax                    ; borrow this scratch - safe here,
     mov [ch_by1], dx                    ; ch_bars_draw already finished by
                                          ; the time sh_chart_paint ever runs
+
+    ; THE INTERIOR THE PICTURE DOES NOT COVER (upstream issue #142). The window
+    ; is SH_CHARTWIN_W x SH_CHARTWIN_H and the image is CH_W x CH_H, so there
+    ; is a 20px band down the right and 21px along the bottom - the "little
+    ; margin" SH_CHARTWIN_W's own comment describes. This proc used to be the
+    ; BLIT4 and nothing else, so that band was never painted AT ALL: on a move
+    ; or a raise the frame was redrawn, the picture re-blitted, and whatever
+    ; had been on the glass stayed in between. Fragments of the SHEET window
+    ; underneath were left sitting inside the Chart window.
+    ;
+    ; ONE FILL, not four round the edges: a fill is 756us whatever it covers
+    ; (PERFORMANCE.md), so covering the whole content once is cheaper than
+    ; bounding the band, and the blit that follows lands on top of it.
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, [es:bx+W_W]                 ; ES is KERNEL_SEG in a callback
+    mov dx, [es:bx+W_H]
+    sub dx, TITLE_H + 1                 ; ...and the content is that less the
+    mov ax, [ch_bx1]                    ; title bar (the derivation 81.6's
+    mov bx, [ch_by1]                    ; dialogs got wrong once already)
+    add cx, ax
+    dec cx
+    add dx, bx
+    dec dx
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+
     mov es, [sh_chartseg]
     mov si, CH_PXOFF
     mov bp, CH_STRIDE

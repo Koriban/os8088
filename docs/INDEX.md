@@ -396,7 +396,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 79 | The animated screen saver (`SAVER.DRV`, `kernel/blank.inc`) |
 | 80 | Live media — one bootable hard-disk image, a USB stick and a CD |
 | 81 | SHEET — the spreadsheet (`apps/sheet/sheet.asm`) |
-| 82 | CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`) |
+| 82 | CHART — charting, and the buffer both halves draw into |
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |

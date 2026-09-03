@@ -83942,6 +83942,37 @@ bytes", a third number, and §82.16.9 recorded a fourth. Four figures for one
 quantity, in one document, inside two days. **A figure without a date is a
 claim about the present that nobody renewed.**
 
+#### 82.1.1 The interior the picture does not cover (upstream #142)
+
+`sh_chart_paint` was the `OSAPI_GFX_BLIT4` and nothing else, and that is not
+enough to paint a window.
+
+The frame is `SH_CHARTWIN_W` × `SH_CHARTWIN_H` = 260 × 200, so its content is
+260 × 181; the image is `CH_W` × `CH_H` = 240 × 160. **A 20-pixel band down the
+right and 21 along the bottom belonged to the window and was never written by
+anything** — the "little margin around the CH_W x CH_H canvas" that
+`SH_CHARTWIN_W`'s own comment describes. The margin was deliberate; painting it
+was not considered.
+
+So on a move or a raise the frame redrew and the picture re-blitted, and
+whatever had been on the glass in between stayed there. Photographed either
+side of the fix, dragging the same chart across the SHEET window: before,
+`rma` from SHEET's *Format* menu, and `40`, `90`, `15`, `84`, `9 TOTAL 12795
+14229` from its cells, all sitting inside the Chart window's frame; after,
+white.
+
+**One fill, not four round the edges.** A fill costs 756 µs whatever it covers
+(PERFORMANCE.md), so covering the whole content once is cheaper than computing
+and drawing the four strips the picture leaves, and the blit that follows lands
+on top of it. The content height is derived — `W_H - TITLE_H - 1` — rather than
+written as a literal, which §81.6's dialogs got wrong once already.
+
+**What this does not settle.** The issue also reports that a *raise* leaves the
+window drawn under SHEET. A missing interior fill explains the band, not a
+window that does not come forward at all; if that survives, it is a second
+defect and a different one. `CHART.O88` has the same paint proc and was not
+driven — it no longer ships (§82), but the code is still built.
+
 #### 82.16.1 One overlay cannot serve two packages — the reason is addressing
 
 The obvious ambition was one `CHART.OVL` on disk, loaded by either package,
