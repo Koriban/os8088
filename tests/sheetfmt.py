@@ -67,7 +67,7 @@ from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
 from harness import check, done                              # noqa: E402
 
-KINDS = ('bif', 'slk', 'dif', 'csv', 'txt')
+KINDS = ('bif', 'slk', 'dif', 'csv', 'txt', 'dbf')
 MACHINE = "os8088_5150_cga_gla"
 SYS = "build/os8088-360.img"
 DISK = "build/sheetfmt.img"
@@ -79,15 +79,20 @@ DISK = "build/sheetfmt.img"
 #   A5 carries an ERROR, whose code BIFF numbers differently from the
 #      ERROR.TYPE worksheet function.
 CELLS = {
-    (0, 0): 1.5,                    # A1  a fraction
-    (1, 0): -2.25,                  # A2  and a negative one
-    (2, 0): 'Hello',                # A3  text
-    (3, 0): ('bool', True),         # A4  a logical, quoted per the grammar
-    (4, 0): ('err', '#DIV/0!'),     # A5  an error, by name
-    (0, 1): 42.0,                   # B1  a whole number (SHEET writes RK)
-    (1, 1): 1234567.89,             # B2  one that does not fit an RK integer
-    (2, 1): 'a;b',                  # B3  the reserved character
+    # DATABASE-SHAPED ON PURPOSE: row 0 names the fields and rows 1..3 are
+    # records, which is Excel's own database-range convention and the only
+    # shape .DBF can carry. A ragged sheet would test a fixed-width typed
+    # format against something it is not for.
+    (0, 0): 'NAME',   (0, 1): 'QTY', (0, 2): 'PRICE',      (0, 3): 'FLAG',
+    (1, 0): 'Widget', (1, 1): 12.0,  (1, 2): 1.5,          (1, 3): ('bool', True),
+    (2, 0): 'a;b',    (2, 1): 7.0,   (2, 2): -2.25,        (2, 3): ('err', '#DIV/0!'),
+    (3, 0): 'Gadget', (3, 1): 3.0,   (3, 2): 1234567.89,   (3, 3): 'x',
 }
+
+# Which columns .DBF must make numeric: a dBASE field has ONE type for the
+# whole column, so a column is N only if every record in it is a number.
+DBF_NUM = {c for c in range(4)
+           if all(isinstance(CELLS.get((r, c)), float) for r in (1, 2, 3))}
 
 # Calibrated by holding each menu open and photographing it, per the standing
 # rule about pull-down offsets.  A missed click does not corrupt anything: the
@@ -95,8 +100,15 @@ CELLS = {
 FILE_MENU = (75, 45)
 SAVE_AS = (90, 92)                  # File's 4th item, pitch 11 from y=59
 FMT_RADIO_X = 246
-FMT_Y = {'bif': 59, 'slk': 73, 'dif': 87,   # Normal / SYLK / DIF ...
-         'csv': 101, 'txt': 115}            # ...CSV / Text (81.40)
+# MEASURED, not stepped: the radio glyphs sit at 55/71/87/103/119/135, a pitch
+# of SIXTEEN. This table was 59/73/87 with a pitch of 14 while the dialog had
+# three entries, which lands inside the right row for the first three and
+# drifts a whole row by the sixth - so adding DBF silently saved a .TXT
+# instead. The standing rule about not reusing a remembered dialog offset
+# applies to a pitch just as much (81.41).
+FMT_Y = {'bif': 55, 'slk': 71, 'dif': 87,   # Normal / SYLK / DIF ...
+         'csv': 103, 'txt': 119,            # ...CSV / Text (81.40)
+         'dbf': 135}                        # ...and DBF 3 (81.41)
 FMT_OK = (267, 170)
 SAVE_BUTTON = (340, 65)
 APPS_FOLDER = (140, 67)
@@ -104,7 +116,7 @@ SHIN_ROW = (165, 121)
 
 # SHEET's extensions against os88sheetfmt's names for the grammars.
 READER = {'bif': 'biff', 'slk': 'sylk', 'dif': 'dif',
-          'csv': 'csv', 'txt': 'txt'}
+          'csv': 'csv', 'txt': 'txt', 'dbf': 'dbf'}
 
 
 def build_disk():
@@ -119,6 +131,16 @@ def build_disk():
 def want(kind, key):
     """What this format is allowed to come back with for a cell."""
     v = CELLS[key]
+    if kind == 'dbf':
+        # Row 0 becomes the FIELD NAMES, so it returns as text either way.
+        # Below it, a column is numeric only if the whole column is.
+        if key[0] == 0:
+            return v
+        if key[1] in DBF_NUM:
+            return v
+        if isinstance(v, tuple):
+            return v[1] if v[0] == 'err' else ('TRUE' if v[1] else 'FALSE')
+        return v
     if kind in ('csv', 'txt') and isinstance(v, tuple):
         # NEITHER FORMAT HAS A TYPE FIELD. An error goes out as its own
         # spelling and comes back as the TEXT of it; a logical likewise. That

@@ -398,7 +398,51 @@ def read_txt(data):
 
 
 # -----------------------------------------------------------------------------
+# dBASE III .DBF.  Header 32 bytes, then one 32-byte descriptor per field, a
+# 0Dh terminator, then fixed-width records each opening with a deletion flag.
+# From the published layout, not from sheet.asm.
+# -----------------------------------------------------------------------------
+def read_dbf(data):
+    if data[0] != 0x03:
+        raise FormatError('version byte %02Xh is not dBASE III' % data[0])
+    nrec, hdrlen, reclen = struct.unpack_from('<IHH', data, 4)
+    nf = (hdrlen - 33) // 32
+    fields = []
+    for f in range(nf):
+        d = data[32 + f * 32: 64 + f * 32]
+        name = d[:11].split(b'\x00')[0].rstrip(b' ').decode('latin-1')
+        fields.append((name, chr(d[11]), d[16]))
+    cells = {}
+    for f, (name, _t, _w) in enumerate(fields):
+        cells[(0, f)] = name             # the field names are row 0
+    row = 1
+    for r in range(nrec):
+        base = hdrlen + r * reclen
+        if base + reclen > len(data):
+            break
+        if data[base:base + 1] == b'*':  # deleted
+            continue
+        off = base + 1
+        for f, (_n, t, w) in enumerate(fields):
+            raw = data[off:off + w].decode('latin-1').strip()
+            off += w
+            if raw == '':
+                continue
+            if t in 'NF':
+                try:
+                    cells[(row, f)] = float(raw)
+                except ValueError:
+                    cells[(row, f)] = raw
+            else:
+                cells[(row, f)] = raw
+        row += 1
+    return cells
+
+
+# -----------------------------------------------------------------------------
 def sniff(path, data):
+    if data[:1] == b'\x03' and len(data) > 32:
+        return 'dbf'
     if data[:2] in (b'\x09\x00', b'\x09\x02', b'\x09\x04'):
         return 'biff'
     head = data[:512].decode('latin-1', 'replace')
@@ -408,7 +452,8 @@ def sniff(path, data):
         return 'sylk'
     low = path.lower()
     for ext, kind in (('.bif', 'biff'), ('.xls', 'biff'), ('.dif', 'dif'),
-                      ('.slk', 'sylk'), ('.csv', 'csv'), ('.txt', 'txt')):
+                      ('.slk', 'sylk'), ('.csv', 'csv'), ('.txt', 'txt'),
+                      ('.dbf', 'dbf')):
         if low.endswith(ext):
             return kind
     raise FormatError('cannot tell what %s is' % path)
@@ -419,7 +464,7 @@ def read(path, data=None, kind=None):
         data = open(path, 'rb').read()
     kind = kind or sniff(path, data)
     return {'sylk': read_sylk, 'dif': read_dif, 'biff': read_biff,
-            'csv': read_csv, 'txt': read_txt}[kind](data)
+            'csv': read_csv, 'txt': read_txt, 'dbf': read_dbf}[kind](data)
 
 
 def scalar(v):

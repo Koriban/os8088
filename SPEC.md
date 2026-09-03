@@ -76281,6 +76281,67 @@ feature would not have fitted at all: SHEET had 133 bytes.
 input and reading every output.
 
 
+### 81.41 dBASE III `.DBF`
+
+Excel 2.0 listed `.DBF` twice in its open/save table, and its Save As help says
+what for: *"For transferring the database range to dBASE II"* / *"…to dBASE
+III"*. dBASE was the era's database and this was the wire between them, so a
+2.1d spreadsheet without it is missing the thing the format existed for.
+
+**dBASE III only** (version byte `03H`). dBASE II's header is a different shape
+and is neither written nor read; a II file is refused *by its version byte*
+rather than misread, because a wrong guess about a fixed-width format produces
+a sheet full of plausible rubbish instead of an error.
+
+**Row 0 is the field names** — Excel's own database-range convention, where the
+range's first row names the fields — and the records are rows 1..n. A blank
+header cell falls back to the column's letter, since dBASE has no nameless
+field.
+
+**Two passes are unavoidable.** The header states the record length and each
+field's width, and a dBASE field is one fixed width and one type *for the whole
+file*, so the widest row has to be known before a byte of header goes out.
+`sh_dbf_scan` decides each column: `N` only if every record in it is numeric,
+with the width and decimal count taken from the widest rendering; otherwise
+`C`, sized to the longest text. `N` is written right-justified and `C`
+left-justified, which is dBASE's own rule and what makes a numeric column line
+up in every reader.
+
+On the way back, **the declared type decides, not the spelling**: a `C` field
+holding `007` is text, because dBASE said it is character data and guessing
+would silently turn a part number into the number 7. A deleted record — flag
+byte `2Ah` — is skipped.
+
+**The header's date stamp is zero.** dBASE III keeps the last-update YY/MM/DD
+in bytes 1..3, and **this OS exposes no date to a package**: the kernel holds
+`clk_year`/`clk_mon`/`clk_day` and no `OSAPI_*` slot reaches them. Zero is what
+a tool that does not know writes. That same absence is why `NOW` is not
+implementable either, which corrects §81.39's listing of it as cheap — it needs
+a kernel slot, and §75.3's precedent is that a new kernel primitive for one
+app's convenience is a decision, not a build fix.
+
+**Cost:** 1,535 bytes in the module, **43 bytes of resident image**. `CH_OVKB`
+went 16 → 20 to keep the tail comfortable.
+
+`Save As` now offers *Normal, SYLK, DIF, CSV, Text, DBF 3* — Excel's own label
+for the last. `tests/sheetfmt.py` covers all six: **12 checks**.
+
+#### 81.41.1 The pitch that was right by luck
+
+Adding the sixth entry made the gate save a `.TXT` while believing it had
+chosen DBF, and report that the file was never written.
+
+The radio glyphs sit at **55, 71, 87, 103, 119, 135 — a pitch of 16.** The
+test's table said 59/73/87, a pitch of **14**, which lands inside the correct
+row for the first three entries and has drifted a full row by the sixth. It
+had been right for as long as the dialog had three items in it.
+
+The standing rule is about not reusing a remembered pull-down offset. It
+applies to a **pitch** exactly as much, and for the same reason: a stepped
+number that agrees with reality at the cases you tested is not evidence about
+the case you did not. The table is measured now and says so.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

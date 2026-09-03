@@ -7068,12 +7068,13 @@ sh_s_fd_rowh:   db 'Row Height', 0
 sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt
 ; Excel's own words: the app's OWN format is "Normal", and the interchange
 ; formats are named after themselves. The order is Excel's too.
-sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif, sh_fd_sfcsv, sh_fd_sftxt
+sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif, sh_fd_sfcsv, sh_fd_sftxt, sh_fd_sfdbf
 sh_fd_sfnormal: db 'Normal', 0
 sh_fd_sfsylk:   db 'SYLK', 0
 sh_fd_sfdif:    db 'DIF', 0
 sh_fd_sfcsv:    db 'CSV', 0         ; 81.40: two of the nine formats Excel 2.0
-sh_fd_sftxt:    db 'Text', 0        ; listed and this app did not have. Excel's
+sh_fd_sftxt:    db 'Text', 0
+sh_fd_sfdbf:    db 'DBF 3', 0     ; Excel's own label for it        ; listed and this app did not have. Excel's
                                     ; own words for them in its Save As list
 ; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
 ; happens to be in - sh_gal_map translates, the same way chart.asm's own
@@ -7136,7 +7137,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 5
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 6
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -7874,6 +7875,9 @@ sh_fdlg_apply:
     cmp ax, 3
     je .fmtset
     mov si, sh_s_ext_txt
+    cmp ax, 4
+    je .fmtset
+    mov si, sh_s_ext_dbf
 .fmtset:
     call sh_setext
     mov byte [sh_savepend], 1         ; the file dialog cannot open until
@@ -10381,6 +10385,14 @@ shm_dowrite:
     pop di
     pop si
     jc .txt
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_dbf
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .dbf
     call sh_dowrite_sylk
     jmp .warn
 .csv:
@@ -10388,6 +10400,9 @@ shm_dowrite:
     jmp .warn
 .txt:
     call sh_dowrite_txt
+    jmp .warn
+.dbf:
+    call sh_dowrite_dbf
     jmp .warn
 .dif:
     call sh_dowrite_dif
@@ -10895,6 +10910,14 @@ shm_doread:
     pop di
     pop si
     jc .txt
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_s_ext_dbf
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .dbf
     jmp sh_doread_sylk
 .dif:
     jmp sh_doread_dif
@@ -10904,6 +10927,8 @@ shm_doread:
     jmp sh_doread_csv
 .txt:
     jmp sh_doread_txt
+.dbf:
+    jmp sh_doread_dbf
 
 ; -----------------------------------------------------------------------------
 ; sh_doread_sylk - read [sh_name] as SYLK, replacing the sheet
@@ -25863,6 +25888,763 @@ section .modc                      ; 82.16.9's tenant: CSV and TXT (81.40)
 ; survive. DIF drops an embedded quote instead (see sh_dowrite_dif's .dt),
 ; which is right for DIF because DIF has no escape at all; CSV does.
 ; =============================================================================
+section .modc                      ; 82.16.9's tenant: dBASE III (81.41)
+
+; =============================================================================
+; dBASE III .DBF (81.41).
+;
+; Excel 2.0 listed .DBF twice in its open/save table and its Save As help says
+; what for: "For transferring the database range to dBASE II" / "...dBASE III".
+; dBASE was the era's database and this was the wire between them, so a 2.1d
+; spreadsheet without it is missing the thing the format existed for.
+;
+; DBASE III ONLY (version byte 03H). dBASE II's header is a different shape and
+; is not written or read here; a II file is refused by its version byte rather
+; than misread.
+;
+; ROW 0 IS THE FIELD NAMES, which is Excel's own database-range convention -
+; the range's first row names the fields. A blank header cell falls back to the
+; column's letter, because a nameless field is not representable.
+;
+; THE HEADER'S DATE STAMP IS ZERO. dBASE III keeps YY/MM/DD of the last update
+; in bytes 1..3, and THIS OS EXPOSES NO DATE TO A PACKAGE: the kernel has
+; clk_year/clk_mon/clk_day and no OSAPI slot reaches them. Zero is what a tool
+; that does not know writes, and it is honest; inventing a date would not be.
+; (It is the same absence that stops NOW being implementable - see 81.39.)
+; =============================================================================
+SH_DBF_MAXF  equ 128                ; dBASE III's own field ceiling
+SH_DBF_HDR   equ 32                 ; the file header, and each descriptor
+
+sh_dowrite_dbf:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call shm_difbbox
+    mov byte [sh_trunc], 0
+    call sh_dbf_scan                  ; -> nf, and per-field type/width/dec
+    mov es, [sh_stgseg]
+    ; --- the 32-byte file header -------------------------------------------
+    xor di, di
+    mov al, 0x03                      ; dBASE III, no memo file
+    call sh_stgputb
+    xor al, al
+    call sh_stgputb                   ; YY  - no date available (see above)
+    call sh_stgputb                   ; MM
+    call sh_stgputb                   ; DD
+    mov ax, [sh_dbf_nr]
+    call sh_dbf_putw                  ; record count, low word...
+    xor ax, ax
+    call sh_dbf_putw                  ; ...and high: 65535 records is plenty
+    mov ax, [sh_dbf_nf]
+    mov cl, 5
+    shl ax, cl                        ; nf * 32
+    add ax, SH_DBF_HDR + 1            ; + this header + the 0Dh terminator
+    call sh_dbf_putw
+    mov ax, [sh_dbf_rl]
+    call sh_dbf_putw
+    mov cx, 20                        ; 12..31 reserved
+.hz:
+    xor al, al
+    call sh_stgputb
+    loop .hz
+    ; --- one 32-byte descriptor per field ----------------------------------
+    mov word [sh_wcol], 0
+.dloop:
+    mov ax, [sh_wcol]
+    cmp ax, [sh_dbf_nf]
+    jae .dend
+    call sh_dbf_name                  ; -> sh_numbuf, <=10 chars, uppercased
+    mov cx, 11
+    mov si, sh_numbuf
+.dn:
+    mov al, [si]
+    or al, al
+    jz .dnpad
+    inc si
+    call sh_stgputb
+    dec cx
+    jnz .dn
+    jmp .dnend
+.dnpad:
+    xor al, al
+    call sh_stgputb
+    dec cx
+    jnz .dnpad
+.dnend:
+    mov bx, [sh_wcol]
+    mov al, [bx+sh_dbf_ty]
+    call sh_stgputb                   ; the type letter
+    mov cx, 4
+.dr1:
+    xor al, al
+    call sh_stgputb
+    loop .dr1
+    mov bx, [sh_wcol]
+    mov al, [bx+sh_dbf_w]
+    call sh_stgputb                   ; length
+    mov bx, [sh_wcol]
+    mov al, [bx+sh_dbf_d]
+    call sh_stgputb                   ; decimal count
+    mov cx, 14
+.dr2:
+    xor al, al
+    call sh_stgputb
+    loop .dr2
+    inc word [sh_wcol]
+    jmp .dloop
+.dend:
+    mov al, 0x0D                      ; the descriptor terminator
+    call sh_stgputb
+    ; --- the records --------------------------------------------------------
+    mov word [sh_wrow], 1             ; row 0 was the field names
+.rloop:
+    mov ax, [sh_wrow]
+    cmp ax, [sh_bbrow]
+    ja .footer
+    mov ax, di
+    add ax, [sh_dbf_rl]
+    add ax, 2
+    cmp ax, SH_STAGE_MAX
+    ja .truncf
+    mov al, ' '                       ; 20h = an ACTIVE record (2Ah = deleted)
+    call sh_stgputb
+    mov word [sh_wcol], 0
+.floop:
+    mov ax, [sh_wcol]
+    cmp ax, [sh_dbf_nf]
+    jae .rnext
+    call sh_dbf_cellstr               ; -> sh_numbuf, this cell as text
+    call sh_dbf_putfield              ; padded to its field's width
+    inc word [sh_wcol]
+    jmp .floop
+.rnext:
+    inc word [sh_wrow]
+    jmp .rloop
+.truncf:
+    mov byte [sh_trunc], 1
+.footer:
+    mov al, 0x1A                      ; the end-of-file marker
+    call sh_stgputb
+    mov [sh_stagelen], di
+    mov ax, [sh_stgseg]
+    mov es, ax
+    xor bx, bx
+    mov cx, [sh_stagelen]
+    xor dx, dx
+    mov si, sh_name
+    call OSAPI_FILE_WRITE
+    jc .werr
+    mov word [sh_msg], sh_m_saved
+    cmp byte [sh_trunc], 0
+    je .wdone
+    mov word [sh_msg], sh_m_trunc
+    jmp .wdone
+.werr:
+    call sh_setferr
+.wdone:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbf_putw - AX as a little-endian word into the staging buffer.
+sh_dbf_putw:
+    push ax
+    call sh_stgputb                   ; low byte (AL)
+    mov al, ah
+    call sh_stgputb
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_cellstr - the cell at [sh_wcol],[sh_wrow] as text in sh_numbuf.
+; A blank cell gives the empty string. Preserves everything.
+; -----------------------------------------------------------------------------
+sh_dbf_cellstr:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov byte [sh_numbuf], 0
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_getcell2
+    jnc .out
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .text
+    cmp byte [sh_curtype], SH_T_ERR
+    je .err
+    mov si, sh_acc
+    SHOUT fp_unpack_a
+    mov di, sh_numbuf
+    mov ax, 10
+    SHOUT fp_ftoa
+    jmp .out
+.err:
+    SHOUT sh_errname                  ; -> sh_numbuf
+    jmp .out
+.text:
+    mov si, [sh_curtoff]
+    mov di, sh_numbuf
+    mov cx, 254
+    mov es, [sh_txtseg]
+.tc:
+    mov al, [es:si]
+    or al, al
+    jz .tend
+    inc si
+    mov [di], al
+    inc di
+    dec cx
+    jnz .tc
+.tend:
+    mov byte [di], 0
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbf_slen - AL = strlen(sh_numbuf), capped at 254. Preserves the rest.
+sh_dbf_slen:
+    push si
+    xor al, al
+    mov si, sh_numbuf
+.l:
+    cmp byte [si], 0
+    je .out
+    cmp al, 254
+    jae .out
+    inc al
+    inc si
+    jmp .l
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_measure - sh_numbuf holds a rendered number; fold its shape into the
+; column's running maxima. A dBASE N field has ONE width and ONE decimal count
+; for the whole column, so they have to be the widest any row needs.
+; -----------------------------------------------------------------------------
+sh_dbf_measure:
+    push ax
+    push cx
+    push si
+    mov si, sh_numbuf
+    cmp byte [si], '-'
+    jne .nosign
+    mov byte [sh_dbf_neg], 1
+    inc si
+.nosign:
+    xor cl, cl                        ; integer digits
+.ic:
+    mov al, [si]
+    or al, al
+    jz .fin
+    cmp al, '.'
+    je .dot
+    inc si
+    inc cl
+    jmp .ic
+.dot:
+    inc si
+    xor ch, ch                        ; decimals
+.dc:
+    mov al, [si]
+    or al, al
+    jz .fin2
+    inc si
+    inc ch
+    jmp .dc
+.fin2:
+    cmp ch, [sh_dbf_md]
+    jbe .fin
+    mov [sh_dbf_md], ch
+.fin:
+    or cl, cl
+    jnz .icok
+    mov cl, 1                         ; ".5" still needs one integer place
+.icok:
+    cmp cl, [sh_dbf_mi]
+    jbe .out
+    mov [sh_dbf_mi], cl
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_putfield - sh_numbuf into the buffer, padded to the current field's
+; width. N is RIGHT-justified and C LEFT-justified, which is dBASE's own rule
+; and what makes a numeric column line up in every reader.
+; -----------------------------------------------------------------------------
+sh_dbf_putfield:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, [sh_wcol]
+    mov dl, [bx+sh_dbf_w]             ; DL = the field width
+    call sh_dbf_slen                  ; AL = the text's length
+    cmp al, dl
+    jbe .fits
+    mov al, dl                        ; too long: keep the left of it
+.fits:
+    mov dh, dl
+    sub dh, al                        ; DH = pad count
+    mov bx, [sh_wcol]
+    cmp byte [bx+sh_dbf_ty], 'N'
+    jne .left
+    mov cl, dh                        ; right-justify: pad first
+    or cl, cl
+    jz .body
+.rp:
+    push ax
+    mov al, ' '
+    call sh_stgputb
+    pop ax
+    dec cl
+    jnz .rp
+    jmp .body
+.left:
+    xor cl, cl
+.body:
+    mov cl, al
+    mov si, sh_numbuf
+    or cl, cl
+    jz .tail
+.bc:
+    mov al, [si]
+    inc si
+    call sh_stgputb
+    dec cl
+    jnz .bc
+.tail:
+    mov bx, [sh_wcol]
+    cmp byte [bx+sh_dbf_ty], 'N'
+    je .done                          ; the padding already went out in front
+    mov cl, dh
+    or cl, cl
+    jz .done
+.lp:
+    mov al, ' '
+    call sh_stgputb
+    dec cl
+    jnz .lp
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_name - row 0 of the current column as a field name in sh_numbuf:
+; uppercased and cut to 10, with the column's own letter when the header cell
+; is blank, because dBASE has no nameless field.
+; -----------------------------------------------------------------------------
+sh_dbf_name:
+    push ax
+    push si
+    push word [sh_wrow]
+    mov word [sh_wrow], 0
+    call sh_dbf_cellstr
+    pop word [sh_wrow]
+    cmp byte [sh_numbuf], 0
+    jne .up
+    mov ax, [sh_wcol]                 ; blank header: use the column letter
+    mov si, sh_numbuf
+    SHOUT sh_colname
+.up:
+    mov si, sh_numbuf
+    xor ax, ax
+.uc:
+    mov al, [si]
+    or al, al
+    jz .out
+    cmp al, 'a'
+    jb .keep
+    cmp al, 'z'
+    ja .keep
+    sub al, 32
+    mov [si], al
+.keep:
+    inc si
+    mov ax, si
+    sub ax, sh_numbuf
+    cmp ax, 10
+    jb .uc
+    mov byte [si], 0                  ; 10 characters is dBASE III's limit
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_scan - decide every field's type, width and decimal count, and the
+; record length, before a byte of header goes out. TWO PASSES ARE UNAVOIDABLE:
+; the header states the record length and each field's width, and a dBASE
+; field is fixed-width for the whole file, so the widest row has to be known
+; first.
+; -----------------------------------------------------------------------------
+sh_dbf_scan:
+    push ax
+    push bx
+    push cx
+    mov ax, [sh_bbcol]
+    inc ax
+    cmp ax, SH_DBF_MAXF
+    jbe .nfok
+    mov ax, SH_DBF_MAXF               ; dBASE III's ceiling: the rest of the
+    mov byte [sh_trunc], 1            ; sheet is dropped and SAID to be
+.nfok:
+    mov [sh_dbf_nf], ax
+    mov ax, [sh_bbrow]                ; rows 1..bbrow are the records
+    mov [sh_dbf_nr], ax
+    mov word [sh_dbf_rl], 1           ; the deletion-flag byte
+    mov word [sh_wcol], 0
+.cl:
+    mov ax, [sh_wcol]
+    cmp ax, [sh_dbf_nf]
+    jae .done
+    mov byte [sh_dbf_mi], 1
+    mov byte [sh_dbf_md], 0
+    mov byte [sh_dbf_neg], 0
+    mov byte [sh_dbf_clen], 1
+    mov byte [sh_dbf_isnum], 1
+    mov word [sh_wrow], 1
+.rl:
+    mov ax, [sh_wrow]
+    cmp ax, [sh_bbrow]
+    ja .colend
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_getcell2
+    jnc .rnx
+    cmp byte [sh_curtype], SH_T_NUM
+    je .isnum
+    mov byte [sh_dbf_isnum], 0
+    call sh_dbf_cellstr
+    call sh_dbf_slen
+    cmp al, [sh_dbf_clen]
+    jbe .rnx
+    mov [sh_dbf_clen], al
+    jmp .rnx
+.isnum:
+    call sh_dbf_cellstr
+    call sh_dbf_measure
+.rnx:
+    inc word [sh_wrow]
+    jmp .rl
+.colend:
+    mov bx, [sh_wcol]
+    cmp byte [sh_dbf_isnum], 0
+    je .asc
+    mov byte [bx+sh_dbf_ty], 'N'
+    mov al, [sh_dbf_mi]
+    mov ah, [sh_dbf_md]
+    or ah, ah
+    jz .nodot
+    inc al
+    add al, ah
+.nodot:
+    cmp byte [sh_dbf_neg], 0
+    je .noneg
+    inc al
+.noneg:
+    cmp al, 19
+    jbe .nw
+    mov al, 19
+.nw:
+    mov [bx+sh_dbf_w], al
+    mov al, [sh_dbf_md]
+    mov [bx+sh_dbf_d], al
+    jmp .acc
+.asc:
+    mov byte [bx+sh_dbf_ty], 'C'
+    mov al, [sh_dbf_clen]
+    mov [bx+sh_dbf_w], al
+    mov byte [bx+sh_dbf_d], 0
+.acc:
+    mov bx, [sh_wcol]
+    mov al, [bx+sh_dbf_w]
+    xor ah, ah
+    add [sh_dbf_rl], ax
+    inc word [sh_wcol]
+    jmp .cl
+.done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_doread_dbf - read [sh_name] as dBASE III, replacing the sheet.
+;
+; A dBASE II file is REFUSED by its version byte rather than misread: its
+; header is a different shape, and a wrong guess about a fixed-width format
+; produces a sheet full of plausible rubbish instead of an error.
+;
+; The field names become ROW 0 and the records rows 1..n, which is the inverse
+; of what the writer does and keeps a round trip through .DBF honest.
+; -----------------------------------------------------------------------------
+sh_doread_dbf:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [sh_stgseg]
+    xor bx, bx
+    mov cx, SH_STAGE_MAX
+    xor dx, dx
+    mov si, sh_name
+    call OSAPI_FILE_READ
+    jc .rerr
+    mov [sh_sepend], ax
+    cmp ax, SH_DBF_HDR + 1
+    jb .badver
+    mov es, [sh_stgseg]
+    mov al, [es:0]
+    cmp al, 0x03                      ; dBASE III without a memo file
+    jne .badver
+    mov ax, [es:4]
+    mov [sh_dbf_nr], ax
+    mov ax, [es:8]
+    mov [sh_dbf_hl], ax
+    mov ax, [es:10]
+    mov [sh_dbf_rl], ax
+    or ax, ax
+    jz .badver
+    mov ax, [sh_dbf_hl]
+    cmp ax, SH_DBF_HDR + 1
+    jb .badver
+    sub ax, SH_DBF_HDR + 1
+    mov cl, 5
+    shr ax, cl                        ; / 32 = the field count
+    or ax, ax
+    jz .badver
+    cmp ax, SH_DBF_MAXF
+    jbe .nfok
+    mov ax, SH_DBF_MAXF
+.nfok:
+    mov [sh_dbf_nf], ax
+    mov word [sh_ncells], 0
+    mov word [sh_txtlen], 0
+    mov word [sh_nbord], 0
+    mov word [sh_nnote], 0
+    mov word [sh_nnames], 0
+    ; --- the descriptors: names into row 0, widths and types banked ---------
+    mov word [sh_wcol], 0
+    mov word [sh_wrow], 0
+.dloop:
+    mov ax, [sh_wcol]
+    cmp ax, [sh_dbf_nf]
+    jae .recs
+    mov cl, 5
+    shl ax, cl
+    add ax, SH_DBF_HDR                ; -> this descriptor
+    mov si, ax
+    mov di, sh_rwsrc
+    mov cx, 11
+.dn:
+    mov al, [es:si]
+    or al, al
+    jz .dnend
+    cmp al, ' '
+    je .dnend
+    inc si
+    mov [di], al
+    inc di
+    dec cx
+    jnz .dn
+.dnend:
+    mov byte [di], 0
+    mov ax, [sh_wcol]
+    mov cl, 5
+    shl ax, cl
+    add ax, SH_DBF_HDR
+    mov si, ax
+    mov bx, [sh_wcol]
+    mov al, [es:si+11]
+    mov [bx+sh_dbf_ty], al            ; the type letter
+    mov al, [es:si+16]
+    mov [bx+sh_dbf_w], al             ; and the width
+    mov ax, [sh_wcol]
+    xor bx, bx                        ; row 0
+    mov si, sh_rwsrc
+    SHOUT sh_settext
+    inc word [sh_wcol]
+    jmp .dloop
+    ; --- the records ---------------------------------------------------------
+.recs:
+    mov word [sh_wrow], 1
+.rloop:
+    mov ax, [sh_wrow]
+    dec ax
+    cmp ax, [sh_dbf_nr]
+    jae .done
+    cmp ax, SH_ROWS - 1
+    jae .done
+    mov dx, [sh_dbf_rl]
+    mul dx                            ; DX:AX = (row-1) * reclen
+    add ax, [sh_dbf_hl]
+    mov si, ax                        ; SI -> this record
+    cmp si, [sh_sepend]
+    jae .done
+    cmp byte [es:si], 0x2A            ; a DELETED record is skipped, which is
+    je .rnext                         ; what the flag byte is for
+    inc si
+    mov word [sh_wcol], 0
+.floop:
+    mov ax, [sh_wcol]
+    cmp ax, [sh_dbf_nf]
+    jae .rnext
+    call sh_dbf_getfield              ; SI advances by the field's width
+    call sh_dbf_store
+    inc word [sh_wcol]
+    jmp .floop
+.rnext:
+    inc word [sh_wrow]
+    jmp .rloop
+.done:
+    mov word [sh_msg], sh_m_loaded
+    jmp .rdone
+.badver:
+    mov word [sh_msg], sh_s_dbf_bad
+    jmp .rdone
+.rerr:
+    call sh_setferr
+.rdone:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_getfield - the current field at ES:SI into sh_rwsrc, trimmed of the
+; padding on BOTH sides (N is right-justified and C left-justified, so a
+; reader that trimmed one end would be right for exactly half the fields).
+; SI advances by the field's width. Preserves everything else.
+; -----------------------------------------------------------------------------
+sh_dbf_getfield:
+    push ax
+    push bx
+    push cx
+    push di
+    mov bx, [sh_wcol]
+    mov cl, [bx+sh_dbf_w]
+    xor ch, ch
+    mov di, sh_rwsrc
+    jcxz .term
+    push si
+.lead:
+    cmp byte [es:si], ' '             ; skip the leading padding
+    jne .copy
+    inc si
+    dec cx
+    jnz .lead
+.copy:
+    jcxz .trail
+    mov al, [es:si]
+    inc si
+    mov [di], al
+    inc di
+    dec cx
+    jnz .copy
+.trail:
+    mov byte [di], 0
+.tr:
+    cmp di, sh_rwsrc                  ; and the trailing padding
+    jbe .term2
+    dec di
+    cmp byte [di], ' '
+    jne .term3
+    mov byte [di], 0
+    jmp .tr
+.term3:
+    inc di
+.term2:
+    mov byte [di], 0
+    pop si
+    mov bx, [sh_wcol]
+    mov cl, [bx+sh_dbf_w]
+    xor ch, ch
+    add si, cx                        ; SI -> the next field, always
+    jmp .out
+.term:
+    mov byte [di], 0
+.out:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbf_store - sh_rwsrc into the cell, HONOURING THE DECLARED TYPE. A C
+; field holding "007" is TEXT because dBASE said it is character data, and
+; guessing from the spelling instead would silently turn a part number into
+; the number 7.
+; -----------------------------------------------------------------------------
+sh_dbf_store:
+    push ax
+    push bx
+    push si
+    cmp byte [sh_rwsrc], 0
+    je .out
+    mov bx, [sh_wcol]
+    mov al, [bx+sh_dbf_ty]
+    cmp al, 'N'
+    je .num
+    cmp al, 'F'                       ; dBASE IV's float, same shape
+    je .num
+.text:
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    mov si, sh_rwsrc
+    SHOUT sh_settext
+    jmp .out
+.num:
+    mov si, sh_rwsrc
+    SHOUT fp_atof
+    jc .text                          ; a malformed N field is kept as text
+    SHOUT sh_acc_store
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_setvald
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+section .text
+
+section .modc
 sh_dowrite_csv:
     mov byte [sh_sepch], ','
     jmp sh_dowrite_sep
@@ -26225,6 +27007,8 @@ sh_s_ext_dif:  db '.DIF', 0
 sh_s_ext_biff: db '.BIF', 0
 sh_s_ext_csv:  db '.CSV', 0
 sh_s_ext_txt:  db '.TXT', 0
+sh_s_ext_dbf:  db '.DBF', 0
+sh_s_dbf_bad:  db 'Not a dBASE III file.', 0
 sh_s_biff_fontname: db 'Helv', 0     ; Excel's own historical default face
 ; our number-format code (General/Currency/Comma/Percent) -> the real BIFF
 ; built-in format id, per the OpenOffice BIFF reference: 0=General,
@@ -26307,7 +27091,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4375
+    OS88_BSS 4772
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -27082,7 +27866,19 @@ sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
 sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
-sh_sepch      equ sh_stbusy + 2      ; byte: CSV/TXT's delimiter (81.40)
+sh_dbf_nf     equ sh_stbusy + 2      ; 81.41's dBASE III scratch
+sh_dbf_nr     equ sh_dbf_nf + 2
+sh_dbf_hl     equ sh_dbf_nr + 2
+sh_dbf_rl     equ sh_dbf_hl + 2
+sh_dbf_mi     equ sh_dbf_rl + 2      ; the column being scanned: max integer
+sh_dbf_md     equ sh_dbf_mi + 1      ; digits, max decimals, any negative,
+sh_dbf_neg    equ sh_dbf_md + 1      ; longest text, and all-numeric so far
+sh_dbf_clen   equ sh_dbf_neg + 1
+sh_dbf_isnum  equ sh_dbf_clen + 1
+sh_dbf_ty     equ sh_dbf_isnum + 1   ; SH_DBF_MAXF bytes each: the decided
+sh_dbf_w      equ sh_dbf_ty + 128    ; type letter, width and decimal count
+sh_dbf_d      equ sh_dbf_w + 128
+sh_sepch      equ sh_dbf_d + 128      ; byte: CSV/TXT's delimiter (81.40)
 sh_sepend     equ sh_sepch + 2       ; word: the staging buffer's end
 sh_v_first    equ sh_sepend + 2      ; 82.16.9's vector table: one dword
                                       ; per routine the module calls back
