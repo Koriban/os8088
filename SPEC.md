@@ -75852,9 +75852,44 @@ The last row is there on purpose: **IPMT + PPMT = PMT** in every row above it,
 which is a consistency the three formulas cannot satisfy by accident. And the
 five values from §81.37.2 were re-checked after the refactor and are unchanged.
 
-**Three remain**: `RATE`, `IRR` and `MIRR` are **root-finders** — the first
-functions here that iterate toward an answer rather than computing one, and the
-first that can fail to converge.
+#### 81.37.5 RATE, and the first function here that iterates
+
+There is no closed form for `r` in §81.37's identity, so `RATE` is solved by
+the **secant** method: two points, a straight line through them, and its root
+as the next point.
+
+**Secant and not Newton**, and not for speed. Newton wants the derivative of
+that identity, which is a page of algebra that would then have to agree with
+`sh_fnfac` about every one of its own edge cases — the zero rate, the type
+factor, the power. The secant method needs only the function, so there is one
+definition of the annuity in this file and not two that can drift apart.
+
+This meant `sh_fnfac` stopping at last from reading the rate out of argument 0:
+it takes it from `sh_fnr` now, because **a root-finder's whole job is to vary
+it**. Every other caller fills that slot from its own argument first.
+
+**It can fail, which nothing before it could.** Forty iterations; either a
+small enough residual or a flat secant ends it, and running out answers
+`#NUM!` — Excel's own reply, and the reason `guess` is an argument at all: a
+caller who knows roughly where the root lies can put the search there.
+
+Verified (`screenshots/sheet-financial-rate.png`), against bisection on the
+same residual:
+
+| | Sheet | reference |
+|---|---|---|
+| `=RATE(60,-500,20000)` | 0.01439 | 0.01439478 |
+| `=RATE(10,-100,800)` | 0.04277 | 0.04277498 |
+| `=RATE(60,-444.888954,20000)` | 0.01000 | 0.01 — **it inverts `PMT`** |
+| `=RATE(10,100,800)` | `#NUM!` | no root: `pmt` and `pv` share a sign |
+
+The third row is the one that matters: `PMT(0.01,60,20000)` is −444.888954, so
+feeding that back to `RATE` must return the 0.01 it came from. The fourth is
+the failure path doing its job rather than returning a plausible number.
+
+**Two remain**: `IRR` and `MIRR`, which take their cash flows as a **range**
+rather than a list — the first financial functions needing `sh_pargref` and a
+walk, the way §81.32's lookups do.
 
 
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)

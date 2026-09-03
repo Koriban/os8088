@@ -16157,6 +16157,7 @@ sh_rpn_fid:
     db 11                             ; NPV
     db 58, 144                        ; NPER DDB
     db 167, 168                       ; IPMT PPMT
+    db 59                             ; RATE
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16193,6 +16194,7 @@ sh_rpn_fvar:
     db 1                              ; NPV(2..15)
     db 1, 1                           ; NPER(3..5) DDB(4..5)
     db 1, 1                           ; IPMT(4..6) PPMT(4..6)
+    db 1                              ; RATE(3..6)
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19361,6 +19363,8 @@ sh_pfin:
     je .nper
     cmp word [sh_fnid], 100
     je .ddb
+    cmp word [sh_fnid], 103
+    je .rate
     cmp word [sh_fnid], 101
     jae .ipmt
     jmp .annuity
@@ -19483,7 +19487,10 @@ sh_pfin:
 .annuity:
     cmp word [sh_fnn], 3
     jb .badargs
-    mov si, sh_fnarg + 8              ; n is argument 1 and the type argument 4
+    mov si, sh_fnarg                  ; the rate is argument 0 here...
+    mov bx, sh_fnr
+    call sh_trcopy
+    mov si, sh_fnarg + 8              ; ...n argument 1 and the type argument 4
     mov bx, sh_fnnp
     call sh_trcopy
     mov cx, 4
@@ -19577,6 +19584,122 @@ sh_pfin:
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
+; --- RATE(nper, pmt, pv, fv, type, guess) -----------------------------------
+; THE FIRST FUNCTION HERE THAT ITERATES TOWARD AN ANSWER. There is no closed
+; form for the rate in
+;
+;   pv*(1+r)^n + pmt*(1+t*r)*((1+r)^n - 1)/r + fv = 0
+;
+; so it is solved by the SECANT method: two points, a straight line through
+; them, and its root as the next point. Secant and not Newton because Newton
+; wants the derivative, and that derivative is a page of algebra which would
+; then have to agree with sh_fnfac about every one of its own edge cases.
+;
+; It can FAIL, which nothing before it could. Forty iterations, and either a
+; residual small enough or a step small enough ends it; running out answers
+; #NUM!, which is Excel's own reply and the reason `guess` is an argument at
+; all - a caller who knows roughly where the root is can put the search there.
+.rate:
+    cmp word [sh_fnn], 3
+    jb .badargs
+    mov si, sh_fnarg                  ; n is argument 0 here, not 1
+    mov bx, sh_fnnp
+    call sh_trcopy
+    mov cx, 4
+    call sh_fnsetty
+    cmp word [sh_fnn], 6              ; the guess, or Excel's own 0.1
+    jb .rdefg
+    mov si, sh_fnarg + 40
+    mov bx, sh_fnr0
+    call sh_trcopy
+    jmp short .rhaveg
+.rdefg:
+    mov si, sh_c_r10
+    call fp_unpack_a
+    mov di, sh_fnr0
+    call fp_pack_a
+.rhaveg:
+    mov si, sh_fnr0                   ; the second point, a little along
+    call fp_unpack_a
+    mov si, sh_c_r01
+    call fp_unpack_b
+    call fp_add
+    mov di, sh_fnr1
+    call fp_pack_a
+    mov si, sh_fnr0                   ; f at the first
+    mov bx, sh_fnr
+    call sh_trcopy
+    call sh_fnres
+    jc .badnum
+    mov di, sh_fnf0
+    call fp_pack_a
+    mov cx, 40
+.rloop:
+    push cx
+    mov si, sh_fnr1
+    mov bx, sh_fnr
+    call sh_trcopy
+    call sh_fnres
+    jc .rfail
+    mov di, sh_fnf1
+    call fp_pack_a
+    mov byte [fp_as], 0               ; |f1| small enough?
+    mov si, sh_c_eps
+    call fp_unpack_b
+    call fp_cmpab
+    jle .rdone
+    mov si, sh_fnf1                   ; the secant step needs f1 - f0
+    call fp_unpack_a
+    mov si, sh_fnf0
+    call fp_unpack_b
+    call fp_sub
+    mov di, sh_tr0
+    call fp_pack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jc .rfail                         ; a flat line has no root to aim at
+    mov si, sh_fnr1                   ; r1 - r0
+    call fp_unpack_a
+    mov si, sh_fnr0
+    call fp_unpack_b
+    call fp_sub
+    mov si, sh_fnf1
+    call fp_unpack_b
+    call fp_mul                       ; f1 * (r1 - r0)
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_div                       ; ...over (f1 - f0)
+    jc .rfail
+    call fp_a_to_b
+    mov si, sh_fnr1
+    call fp_unpack_a
+    call fp_sub                       ; the next point
+    mov di, sh_tr1
+    call fp_pack_a
+    mov si, sh_fnr1                   ; r1 -> r0, f1 -> f0
+    mov bx, sh_fnr0
+    call sh_trcopy
+    mov si, sh_fnf1
+    mov bx, sh_fnf0
+    call sh_trcopy
+    mov si, sh_tr1
+    mov bx, sh_fnr1
+    call sh_trcopy
+    pop cx
+    dec cx
+    jnz .rloop
+    mov byte [sh_evalerr], SH_ERR_NUM ; forty steps and still moving
+    jmp .zero
+.rfail:
+    pop cx
+    mov byte [sh_evalerr], SH_ERR_NUM
+    jmp .zero
+.rdone:
+    pop cx
+    mov si, sh_fnr1
+    call fp_unpack_a
+    jmp .store
+
 ; --- IPMT / PPMT(rate, per, nper, pv, fv, type) -----------------------------
 ; The interest in one period is the BALANCE STILL OWED BEFORE IT, times the
 ; rate - and that balance is the same annuity evaluated at a smaller period
@@ -19590,6 +19713,9 @@ sh_pfin:
 .ipmt:
     cmp word [sh_fnn], 4
     jb .badargs
+    mov si, sh_fnarg
+    mov bx, sh_fnr
+    call sh_trcopy
     mov cx, 5
     call sh_fnsetty
     mov si, sh_fnarg + 16             ; --- the payment, over nper ---
@@ -19702,7 +19828,10 @@ sh_pfin:
     call fp_unpack_a
     mov di, sh_fnt
     call fp_pack_a
-    mov cx, 4                         ; A = (1 + t*r)
+    mov si, sh_fnarg                  ; A = (1 + t*r)
+    mov bx, sh_fnr
+    call sh_trcopy
+    mov cx, 4
     call sh_fnsetty
     call sh_fntyv
     call fp_a_to_b
@@ -19858,6 +19987,50 @@ sh_pfin:
     pop bx
     ret
 
+; sh_fnres - A = the annuity residual at the rate in sh_fnr, for RATE's own
+; argument order (0 = nper, 1 = pmt, 2 = pv, 3 = fv). CF=1 = the power refused.
+; A root of this IS the rate, which is what makes the secant loop above short.
+sh_fnres:
+    push bx
+    push si
+    push di
+    call sh_fnfac
+    jc .no
+    mov si, sh_fnarg + 16             ; pv * (1+r)^n
+    call fp_unpack_a
+    mov si, sh_fnt
+    call fp_unpack_b
+    call fp_mul
+    mov di, sh_tr0
+    call fp_pack_a
+    mov si, sh_fnarg + 8              ; + pmt * factor
+    call fp_unpack_a
+    mov si, sh_fnu
+    call fp_unpack_b
+    call fp_mul
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_add
+    cmp word [sh_fnn], 4              ; + fv
+    jb .ok
+    mov si, sh_fnarg + 24
+    call fp_unpack_b
+    call fp_add
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
+    ret
+
+sh_c_r10: dq 0.1
+sh_c_r01: dq 0.01
+sh_c_eps: dq 0.0000000001
+
 ; sh_fntyv - A = (1 + type*rate) from sh_fnty, or 1 when that is zero.
 sh_fntyv:
     push bx
@@ -19871,7 +20044,7 @@ sh_fntyv:
     call fp_unpack_a
     jmp short .out
 .scaled:
-    mov si, sh_fnarg
+    mov si, sh_fnr
     call fp_unpack_a
     mov ax, 1
     call fp_i2b
@@ -19923,7 +20096,7 @@ sh_fnfac:
     push bx
     push si
     push di
-    mov si, sh_fnarg
+    mov si, sh_fnr
     call fp_unpack_a
     mov ax, 1
     call fp_i2b
@@ -19934,7 +20107,7 @@ sh_fnfac:
     jc .no
     mov di, sh_fnt
     call fp_pack_a
-    mov si, sh_fnarg
+    mov si, sh_fnr
     call fp_unpack_a
     mov bx, fp_am0
     call fp_iszero
@@ -19950,7 +20123,7 @@ sh_fnfac:
     mov ax, 1
     call fp_i2b
     call fp_sub
-    mov si, sh_fnarg
+    mov si, sh_fnr
     call fp_unpack_b
     call fp_div
     mov di, sh_fnu
@@ -19960,7 +20133,7 @@ sh_fnfac:
     mov bx, fp_am0
     call fp_iszero
     jc .ok
-    mov si, sh_fnarg
+    mov si, sh_fnr
     call fp_unpack_a
     mov ax, 1
     call fp_i2b
@@ -24839,6 +25012,7 @@ sh_f_nper:      db 'NPER', 0
 sh_f_ddb:       db 'DDB', 0
 sh_f_ipmt:      db 'IPMT', 0
 sh_f_ppmt:      db 'PPMT', 0
+sh_f_rate:      db 'RATE', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -24868,7 +25042,7 @@ sh_functab:
     dw sh_f_sin, sh_f_cos, sh_f_tan, sh_f_asin, sh_f_acos
     dw sh_f_atan, sh_f_atan2
     dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
-    dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt
+    dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt, sh_f_rate
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -24967,7 +25141,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4171
+    OS88_BSS 4211
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -25717,7 +25891,15 @@ sh_fnty       equ sh_fnnp + 8         ; 8: ...and the type it works on, which
                                        ; is argument 4 for PMT/PV/FV and
                                        ; argument 5 for IPMT/PPMT
 sh_fnp        equ sh_fnty + 8         ; 8: the payment, once computed
-sh_fnbusy     equ sh_fnp + 8          ; byte: one of them is parsing
+sh_fnr        equ sh_fnp + 8          ; 8: THE RATE sh_fnfac works on. Not
+                                       ; argument 0 any more: RATE varies it,
+                                       ; which is the whole of what a
+                                       ; root-finder does (81.37.5)
+sh_fnr0       equ sh_fnr + 8          ; 8 } the secant's two points and the
+sh_fnr1       equ sh_fnr0 + 8         ; 8 } residual at each
+sh_fnf0       equ sh_fnr1 + 8         ; 8 }
+sh_fnf1       equ sh_fnf0 + 8         ; 8 }
+sh_fnbusy     equ sh_fnf1 + 8          ; byte: one of them is parsing
 sh_fnt        equ sh_fnbusy + 2       ; 8: a packed temporary
 sh_fnu        equ sh_fnt + 8          ; 8: ...and a second
 sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
