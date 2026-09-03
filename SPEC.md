@@ -76166,6 +76166,79 @@ Neither defect is exotic and neither needed a clever test. They needed **one
 reader that had not been written by the same hand as the writer.**
 
 
+### 81.39 What SHEET still lacks, measured (2026-09-03)
+
+Counted, not recalled — against `excel_man/Microsoft Excel Functions and
+Macros.pdf`'s worksheet-function directory and the real Excel 2.1 menu captures
+in `VM_screenshots/`. Every previous inventory in this tree was stale, most
+recently one that said "10/131 functions, no Formula menu, 1/7 chart types, no
+text-input widget" — all four wrong by the time it was read.
+
+#### 81.39.1 Functions — 106 of ~130
+
+**25 missing, and they are six pieces of work, not twenty-five:**
+
+| group | n | functions | what it needs |
+|---|---|---|---|
+| database | 11 | `DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP` | a **database + criteria area** |
+| array / matrix | 8 | `MDETERM MINVERSE MMULT TRANSPOSE LINEST LOGEST TREND GROWTH` | **array formulas** |
+| volatile | 2 | `NOW RAND` | a clock read; a PRNG |
+| information | 2 | `CELL ISNONTEXT` | `CELL` wants an attribute table; the other is trivial |
+| reference | 1 | `INDIRECT` | text → reference at evaluation time |
+| text | 1 | `CLEAN` | trivial |
+
+`MDETERM` is the one array-category function that returns a **scalar**, so it
+alone needs no array formulas. `POWER` is in SHEET and not in the 2.1d
+directory — a later addition, harmless.
+
+#### 81.39.2 Menu commands, against the captures
+
+| menu | SHEET | Excel 2.1d | missing |
+|---|---|---|---|
+| Formula | 7 | 7 | **none** |
+| Edit | 9 | 12 | Repeat, Paste Special, Paste Link |
+| Format | 6 | 8 | Cell Protection, Justify |
+| File | 5 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup |
+| Options | 3 | 10 | Set Print Area/Titles/Page Break, Display, Freeze Panes, Protect Document, Calculate Now, Workspace, Short Menus |
+| Data | 1 shared | 10 | Form, Find, Extract, Delete, Set Database, Set Criteria, Series, Table, Parse |
+| Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
+
+`Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
+Data menu carries three items Excel does not have at all (Chart Column, Chart
+Gallery, Export Chart as BMP): in Excel charting is a separate document type,
+and §82 is this tree's answer to that.
+
+#### 81.39.3 Behaviour, not commands
+
+- **Column width and row height are whole-sheet.** The dialogs are Excel's
+  (typed, in characters, §81.39 corrects an older claim that they were
+  presets); what they set is one `sh_cellw`/`sh_cellh` for everything.
+  `sh_gridhit` divides by the width once, and a per-column grid has to walk.
+- **No printing at all** — and not SHEET's fault: there is no print backend
+  anywhere in this OS, which is why `Print...` is a stub that says so. Six of
+  the missing File/Options commands are downstream of that one absence.
+- **The macro language is 5 commands** of a language with ~90 macro functions
+  (§81.8). It is a demonstration of the machinery, not the feature.
+- **No Short/Full menus toggle**, so SHEET shows one fixed set — which is why
+  the Formula count matches Excel's *short* menu exactly.
+- **No cell protection, no freeze panes.**
+
+#### 81.39.4 The five enablers, in dependency order
+
+Almost everything above hangs off five pieces of work:
+
+1. **Array formulas** → 8 functions, and `Data ▸ Table`.
+2. **A database + criteria area** → 11 functions, and 6 of the Data menu.
+3. **Per-column/per-row geometry** → the width behaviour, and `Justify`.
+4. **A print backend** (OS-level, not SHEET's) → 6 File/Options commands.
+5. **A macro recorder and a real macro language** → the Macro menu, and the
+   language itself.
+
+The cheap remainder, needing none of them: `NOW`, `RAND`, `CLEAN`,
+`ISNONTEXT`, `MDETERM`, `INDIRECT`, `Repeat`, `Paste Special`, `Paste Link`,
+`Cell Protection`.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
