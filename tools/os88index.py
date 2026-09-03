@@ -72,7 +72,7 @@ GROUPS = [
 # not.
 #
 # The NAMES are checked against the tree by check_includes() below, because a
-# hand-written list is exactly what goes quietly stale: os88chartbss.inc was
+# hand-written list is exactly what goes quietly stale: a new shared include was
 # added and this list was not, so the index that exists to answer "does this
 # already exist?" answered no about a file that did.
 INCLUDES = [
@@ -91,10 +91,6 @@ INCLUDES = [
      "A 4bpp offscreen canvas and all seven chart types - area, bar, column, "
      "line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 "
      "and Sheet's chart window."),
-    ("os88chartbss.inc", "82",
-     "The ch_* working set os88chart.inc runs on, declared once instead of "
-     "hand-copied into both callers. Set `CH_BSS_BASE` to where the block "
-     "goes and carry on from `CH_BSS_END`."),
     ("os88fp.inc", "84",
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
