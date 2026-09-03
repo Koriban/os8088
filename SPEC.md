@@ -83967,11 +83967,24 @@ and drawing the four strips the picture leaves, and the blit that follows lands
 on top of it. The content height is derived — `W_H - TITLE_H - 1` — rather than
 written as a literal, which §81.6's dialogs got wrong once already.
 
-**What this does not settle.** The issue also reports that a *raise* leaves the
-window drawn under SHEET. A missing interior fill explains the band, not a
-window that does not come forward at all; if that survives, it is a second
-defect and a different one. `CHART.O88` has the same paint proc and was not
-driven — it no longer ships (§82), but the code is still built.
+**`OSAPI_WM_GEOM`, not `W_W`/`W_H`.** Those are the OUTER frame, and filling to
+them paints over the window's own right and bottom border — a two-pixel black
+line the first version of this fix erased. `WM_GEOM` answers the size of the
+box `WM_CONTENT` gives the origin of, which is exactly the rectangle wanted.
+**A screenshot diff against the unfixed build is what caught it**: on a raise,
+the only thing that had changed was that border going white. Comparing the two
+builds pixel for pixel says what "it looks right" cannot.
+
+**The raise half of #142 did not reproduce.** Driven through the reported
+sequence — chart on top, raise SHEET over it, click the Chart's title bar —
+the window comes forward and draws correctly, and the fixed and unfixed builds
+are **identical to the pixel** (0 differing). So the interior fill neither
+causes nor cures it, and it is not established as the same defect: something
+about the reporter's session differs from this repro. The drag half is
+confirmed both ways, 1,530 pixels apart.
+
+`CHART.O88` shares the paint proc and was not driven — it no longer ships
+(§82), but the code is still built.
 
 #### 82.16.1 One overlay cannot serve two packages — the reason is addressing
 

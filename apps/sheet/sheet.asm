@@ -6442,15 +6442,20 @@ sh_chart_paint:
     ; ONE FILL, not four round the edges: a fill is 756us whatever it covers
     ; (PERFORMANCE.md), so covering the whole content once is cheaper than
     ; bounding the band, and the blit that follows lands on top of it.
+    ;
+    ; OSAPI_WM_GEOM, not W_W/W_H. Those are the OUTER frame, and filling to
+    ; them paints over the window's own right and bottom BORDER - a two-pixel
+    ; black line that the first version of this fix erased. The screenshot
+    ; diff against the unfixed build is what caught it: the only thing that
+    ; had changed on a RAISE was that border going white.
     push ax
     push bx
     push cx
     push dx
-    mov cx, [es:bx+W_W]                 ; ES is KERNEL_SEG in a callback
-    mov dx, [es:bx+W_H]
-    sub dx, TITLE_H + 1                 ; ...and the content is that less the
-    mov ax, [ch_bx1]                    ; title bar (the derivation 81.6's
-    mov bx, [ch_by1]                    ; dialogs got wrong once already)
+    call OSAPI_WM_GEOM                  ; CX/DX = the CONTENT's size, which is
+    jc .nofill                          ; the box WM_CONTENT gave the origin of
+    mov ax, [ch_bx1]
+    mov bx, [ch_by1]
     add cx, ax
     dec cx
     add dx, bx
@@ -6460,6 +6465,7 @@ sh_chart_paint:
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL
+.nofill:
     pop dx
     pop cx
     pop bx
