@@ -139,6 +139,16 @@ FAST = [
         "that stopped saving a register to fit a 256-byte task slice (SPEC.md "
         "72.16.4) still get it back from every callee. Without this the trade "
         "is a landmine for whoever edits the TCP stack next"),
+    Row("sheetfmtlib", "fast",
+        py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
+        "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
+        "DIF and BIFF2 reader that gives SHEET's file formats a SECOND "
+        "OPINION (SPEC.md 81.38). It is written from the published grammars "
+        "and not from sheet.asm on purpose: a writer and a reader that share "
+        "a misunderstanding agree perfectly, and the file they agree about is "
+        "one no other program can open. This row only proves the library is "
+        "self-consistent; tests/sheetfmt.py is the one that points it at "
+        "SHEET"),
     Row("stkbalance", "fast",
         py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
            "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",

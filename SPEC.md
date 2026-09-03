@@ -75960,6 +75960,53 @@ return *means*.
 formulas — an evaluation-model change rather than a function.
 
 
+### 81.38 A second opinion about the file formats (`tools/os88sheetfmt.py`)
+
+SHEET writes three formats — BIFF2 (what Excel and this app both call
+"Normal"), SYLK and DIF — and until now **nothing outside SHEET had ever read
+one**. The suite's only SHEET row was `stkbalance`, a static check. A file was
+declared good because SHEET could open it again.
+
+That is the weakest possible evidence about a file format, and the reason is
+worth stating plainly: **a writer and a reader that share a misunderstanding
+agree with each other perfectly.** The round trip passes, the numbers come
+back, and the file is one that no other program on earth can open. `os88flush`
+makes exactly this argument about the FAT12 driver and gets the disk back out
+of the emulator to settle it; this is the same argument about the three
+formats a spreadsheet exists to interchange with.
+
+`tools/os88sheetfmt.py` is the outside opinion. **Nothing in it was written by
+reading `apps/sheet/sheet.asm`.** It comes from the published grammars:
+
+- **SYLK and DIF** from Jeff Walden's *File Formats for Popular PC Software: A
+  Programmer's Reference* — the same book that corrected SHEET's own DIF
+  value-indicator line when the writer was built, and which is more precise
+  than any web summary about it. Records, the `;X`/`;Y` sticky coordinates,
+  the doubled-semicolon escape, DIF's `BOT`/`EOD` and its five value
+  indicators.
+- **BIFF2** from the OpenOffice.org *Microsoft Excel File Format* document:
+  record ids `0001H` BLANK, `0002H` INTEGER, `0003H` NUMBER, `0004H` LABEL,
+  `0005H` BOOLERR, `0006H` FORMULA, `0009H` BOF, `000AH` EOF; the BIFF2 cell
+  header of row(2), column(2), cell attributes(3); and the §2.4 error codes.
+
+**It writes SYLK as well as reading it**, and that is the half that makes the
+gate non-vacuous. The test hands SHEET a file the HOST authored, so a defect
+in SHEET's reader cannot be cancelled out by the matching defect in its
+writer — which is precisely what a save-then-load round trip is least able to
+see.
+
+**Numbers compare with a tolerance and formulas compare by their result.** The
+three formats do not agree about how a double is spelled: BIFF stores the
+bits, SYLK and DIF store a decimal rendering. And DIF cannot carry an
+expression at all, so a cross-format comparison that demanded one would only
+ever have been testing SYLK.
+
+`--selfcheck` is a `fast` row. It proves only that the library parses what it
+writes — it says nothing about SHEET, and the docstring says so. Both halves
+were mutation-tested: removing the `;;` escape and moving SYLK's origin by one
+each fail it.
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
