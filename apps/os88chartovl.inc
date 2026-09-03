@@ -8,11 +8,24 @@
 ; package keeps resident to reach it: the loader, the shims the module calls
 ; back through, and the verb wrapper.
 ;
-; ONE FILE SERVES BOTH PACKAGES, which is the whole point: the module reads
-; the ch_* block through the caller's DS (SPEC.md 68.10), so both packages
-; must agree about it byte for byte, and the surest way to agree is not to
-; write it twice. The Makefile asserts the two independently-assembled .OVLs
-; are identical.
+; ONLY SHEET OVERLAYS IT, and CHART.OVL IS SHEET'S FILE ALONE. chart.o88
+; defines neither CH_ symbol, never includes this file, and carries the
+; rasterizer resident; the Makefile cuts CHART.OVL from build/sheet.bin and
+; from nothing else.
+;
+; An earlier version of this comment claimed "ONE FILE SERVES BOTH PACKAGES"
+; and that "the Makefile asserts the two independently-assembled .OVLs are
+; identical". BOTH HALVES ARE FALSE, and 82.16.1 - written later, and right -
+; says why the first one CANNOT be true: the module reaches the ch_* block at
+; absolute offsets past the package's own image end, and the two packages'
+; images are different lengths, so one binary could never address both. There
+; is no identity rule in the Makefile and no second assembly for it to compare
+; against.
+;
+; The cost of leaving that standing is not a wrong result, it is a wrong
+; BOUNDARY: a jointly-owned tail is one nothing else may be put in, so the
+; comment quietly retires Sheet's only room to grow. It is Sheet's tail, and
+; a second tenant belongs in it (82.16.6).
 ;
 ; Include it BEFORE os88chart.inc, and after os88fp.inc (the shims name it).
 ; The caller must have called OSAPI_FILE_HERE at entry and banked the answer

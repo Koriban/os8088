@@ -76587,6 +76587,19 @@ buy it nothing and cost it a **new way to fail** — a missing file, a heap
 refusal, a volume it cannot navigate back from. A package takes an overlay
 when it must, not because a sibling did.
 
+**Those SHEET numbers are a snapshot of the day the split was made, and they
+have not been true for a long time.** The 8KB the overlay bought was spent —
+on 106 functions, the macro language, the dialogs, the formula and status
+bars, and the soft-float. Today:
+
+| | resident image | + bss | of 61,440 |
+|---|---|---|---|
+| SHEET, module overlaid | 56,976 | 4,239 | **61,215 — 225 bytes spare** |
+
+A table like the one above is worth keeping only if it is re-measured when it
+is cited. Read as current, it says SHEET has 8KB of room; it has 225 bytes,
+which is not enough to absorb a bug fix, let alone a feature.
+
 #### 82.16.1 One overlay cannot serve two packages — the reason is addressing
 
 The obvious ambition was one `CHART.OVL` on disk, loaded by either package,
@@ -76764,6 +76777,62 @@ to tell the two failure modes apart.
 
 The chart simply does not appear. That is the right direction to fail in: a
 spreadsheet whose numbers are all still there.
+
+#### 82.16.6 SHEET is full, and the tail is where the room is
+
+225 bytes. That is what is left of `APP_MAX_SIZE` after the financial
+functions landed, and it is the binding constraint on everything SHEET does
+next — including the matrix and array family, which is all that now separates
+it from Excel 2.1d's function set.
+
+**Where the 56,976 bytes are.** Measured from a NASM listing, mapping every
+top-level label to the address of the first line that emits a byte, and
+bucketing by subsystem (the shared `%include`s are excluded — they are the
+unmapped remainder):
+
+| subsystem | bytes | |
+|---|---|---|
+| formula parser + 106 functions | 12,529 | 26.8% |
+| **file formats — SYLK/DIF/BIFF/CSV** | **6,913** | 14.8% |
+| dialogs | 4,841 | 10.4% |
+| grid paint + scroll | 4,538 | 9.7% |
+| macro language | 2,614 | 5.6% |
+| menu bar | 415 | 0.9% |
+
+**There is no fat.** The largest contiguous run of pure data in the whole file
+is 619 bytes (a dialog's control table), and the total of every such run is
+1,731. Nothing here can be shrunk into room for a feature; the only lever is
+moving code out of the resident image.
+
+**The tenant is the file-format code**, and it is the right one for reasons
+that have nothing to do with its size. It is reached from exactly two places
+— File▸Open and File▸Save — so the boundary crossing is a menu action and not
+an inner loop; a spreadsheet whose recalc is unaffected by an overlay is worth
+more than one that saves 200 more bytes. And it is already the most separable
+thing in the file.
+
+**What it costs, counted rather than guessed.** The BIFF reader/writer and the
+read/write drivers are 40 routines over ~3,440 source lines, and between them
+they make **~120 calls to symbols that would stay resident** — `sh_findcell`,
+`sh_setcell`, the `fp_*` machine, the R1C1 conversions. Every one becomes a
+far call, because §68.10 keeps `DS` on the package but moves `CS`. That is the
+same edit the Scribe split made 47 times (86.8.3), at two and a half times the
+scale, and the mechanism is the one that worked there: the module carries a
+table of `dw target, 0` and the bind step stamps the package segment into each
+high word, so a call site is `call far [cs:thk_findcell]` and the linker
+supplies the offset.
+
+**Why this was not obvious, and the part worth remembering.** It took most of
+an investigation to establish that the tail was even available, because
+`apps/os88chartovl.inc` said in its header that ONE FILE SERVES BOTH PACKAGES
+and that the Makefile asserted the two cuts identical. Neither is true —
+82.16.1, written afterwards, proves the first one *cannot* be — and no such
+Makefile rule has ever existed. A false claim of joint ownership is expensive
+in a way a wrong constant is not: it does not produce a wrong answer that
+someone eventually chases, it makes a correct action **unthinkable**, and the
+only symptom is that nobody ever proposes it. The comment now says what is
+true, and says that it used to say otherwise.
+
 
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
