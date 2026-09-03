@@ -7041,11 +7041,10 @@ sh_fdlg_tpl:
 ; radio, and a different [sh_fdlg_count] (see sh_fdlg_open) since these
 ; two kinds don't have 4 rows to show. sh_fdlg_apply branches to
 ; sh_rowcol_op for these two kinds instead of writing a format bit.
-; Kinds 5/6 (Column Width.../Row Height...) are a third borrowing: a
-; 3-item preset pick instead of a per-cell format bit, applied to the
-; whole sheet's runtime sh_cellw/sh_cellh (see the section comment above
-; sh_entry for why these are presets rather than real Excel's free-text
-; entry).
+; Kinds 5/6 are STILL DEFINED but no longer reached: stage 3.0c sent
+; Column Width.../Row Height... to sh_idlg_open's typed field instead, and
+; sh_docmd_format never passes AL 4 or 5 through to sh_fdlg_open. They are
+; the presets the app used before it had a text field.
 ; Kinds 7-10 (stage 3.0c) are the last four radio dialogs Excel 2.1d has and
 ; this app was doing as immediate menu commands: Clear, New, Calculation and
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
@@ -25497,14 +25496,24 @@ sh_s_noprint:  db 'Printing is not supported.', 0
 ; (VM_screenshots/menu_format.png) - Number.../Alignment.../Font... open
 ; dialogs (sh_docmd_format's AL 0/1/2 is sh_fdlg_open's own kind number, so
 ; this array's first 3 entries must stay in that order). Border... is real
-; (sh_bdlg_*). Row Height.../Column Width... are real too, as a 3-preset
-; radio pick (sh_fdlg_open kinds 6/5 - see sh_docmd_format's own remap
-; comment for why those two aren't 4/5 straight through) rather than real
-; Excel's free-text numeric entry, since this app has no text-input widget
-; at the app level - applies to the WHOLE sheet's runtime sh_cellw/
-; sh_cellh, not per-row/per-column (the real per-row/per-column version
-; would need every fixed-grid assumption in the renderer/hit-tester turned
-; into a lookup, which stayed out of scope here).
+; (sh_bdlg_*). Row Height.../Column Width... are real too and take A TYPED
+; NUMBER: SH_ID_ROWH/SH_ID_COLW through sh_idlg_open, in CHARACTERS for the
+; width because that is Excel's own unit, range-checked SH_CW_MINCH..MAXCH.
+;
+; This said "a 3-preset radio pick ... since this app has no text-input widget
+; at the app level" until 2026-09-03, and stage 3.0c had replaced both halves
+; of that long before: os88line.inc gave the app a text field and
+; sh_docmd_format says so in its own comment two screens up ("a typed number
+; now, not the 3-preset radio pick this had to be while no text field
+; existed"). Read as current it understates the app by a whole feature, and it
+; did - it is where the claim "Column Width is three presets" in an assessment
+; of what SHEET still lacks came from.
+;
+; WHAT IS STILL TRUE is the other half: it applies to the WHOLE sheet's
+; sh_cellw/sh_cellh, not per-row/per-column. The per-column version needs
+; every fixed-grid assumption in the renderer and hit-tester turned into a
+; lookup - sh_gridhit divides by [sh_cellw] once and would have to walk - and
+; that is the outstanding gap, not the dialog.
 sh_m_format:    db 'Format', 0
 sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_frowh, sh_it_fcolw
 sh_it_fnum:      db 'Number...', 0
