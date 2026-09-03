@@ -1243,7 +1243,7 @@ fp_pow:
     jnc .intpow
     or cx, cx                         ; 0^0 has no agreed answer and Excel
     jz .bad                           ; calls it an error; 0^n is 0
-    jmp short .out
+    jmp .out
 .intpow:
     mov si, fp_c_one                  ; the running product
     call fp_unpack_a
@@ -1276,16 +1276,29 @@ fp_pow:
     call fp_div
     jmp short .out
 .real:
-    mov si, fp_e0                     ; x^y = e^(y ln x), and only for x > 0
-    call fp_unpack_a
-    cmp byte [fp_as], 0
-    jne .bad
+    mov si, fp_e1                     ; THE EXPONENT GOES ON THE STACK. fp_ln
+    push word [si]                    ; owns fp_e0..fp_e3 as its own scratch,
+    push word [si+2]                  ; so leaving y in fp_e1 across the call
+    push word [si+4]                  ; to it read back wreckage - and every
+    push word [si+6]                  ; fractional power answered 1, while the
+    mov si, fp_e0                     ; whole-number path beside it was right
+    call fp_unpack_a                  ; and hid it
+    cmp byte [fp_as], 0               ; x^y = e^(y ln x), and only for x > 0
+    jne .badpop
     call fp_ln
-    jc .bad
+    jc .badpop
+    pop word [fp_e1+6]
+    pop word [fp_e1+4]
+    pop word [fp_e1+2]
+    pop word [fp_e1]
     mov si, fp_e1
     call fp_unpack_b
     call fp_mul
     call fp_exp
+    jmp .out
+.badpop:
+    add sp, 8
+    jmp .bad
 .out:
     clc
     jmp short .done

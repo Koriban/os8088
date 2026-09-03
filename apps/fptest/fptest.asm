@@ -430,6 +430,21 @@ fpt_runall:
     call fp_atan
     jmp .mgot
 .mnotatn:
+    cmp ax, 10
+    jne .mnotpow
+    mov di, fp_tv                     ; POW takes TWO operands where every row
+    call fp_pack_a                    ; here has one, so the record's spare
+    mov ax, cx                        ; `digits` word carries the exponent in
+    call fp_i2a                       ; TENTHS - enough for 0.5, 6 and -2
+    mov ax, 10                        ; without widening every other record
+    call fp_i2b
+    call fp_div
+    call fp_a_to_b
+    mov si, fp_tv
+    call fp_unpack_a
+    call fp_pow
+    jmp .mgot
+.mnotpow:
     call fp_round
 .mgot:
     mov di, fpt_got
@@ -699,7 +714,7 @@ fpt_atof:
     times (10 - 7) db 0
     dw 0x0000, 0x0000, 0x0000, 0x0000
 
-FPT_MN equ 46
+FPT_MN equ 53
 fpt_math:
     dw 0x0000, 0x0000, 0x0000, 0x4000
     dw 0, 0
@@ -885,6 +900,42 @@ fpt_math:
     dw 9, 0
     dw 0x58BD, 0xC0E6, 0x1DE2, 0x3FF9      ; ATN(1000) = 1.5697963271282298
     dw fpt_g18
+    dw 0x0000, 0x0000, 0x0000, 0x4000
+    dw 10, 5
+    dw 0x3BCD, 0x667F, 0xA09E, 0x3FF6      ; 2^0.5 = 1.4142135623730951
+    dw fpt_p0
+    dw 0x0000, 0x0000, 0x0000, 0x4000
+    dw 10, 100
+    dw 0x0000, 0x0000, 0x0000, 0x4090      ; 2^10 = 1024
+    dw fpt_p1
+    dw 0x51EC, 0x1EB8, 0xEB85, 0x3FF1
+    dw 10, 60
+    dw 0x7DB3, 0x188F, 0x94C7, 0x3FFF      ; 1.12^6 = 1.9738226851840011
+    dw fpt_p2
+    dw 0x0000, 0x0000, 0x0000, 0x4024
+    dw 10, -20
+    dw 0x147B, 0x47AE, 0x7AE1, 0x3F84      ; 10^-2 = 0.01
+    dw fpt_p3
+    dw 0x0000, 0x0000, 0x0000, 0x4000
+    dw 10, 1
+    dw 0x0664, 0xEE25, 0x25FB, 0x3FF1      ; 2^0.1 = 1.0717734625362931
+    dw fpt_p4
+    dw 0x0000, 0x0000, 0x0000, 0x4022
+    dw 10, 5
+    dw 0x0000, 0x0000, 0x0000, 0x4008      ; 9^0.5 = 3
+    dw fpt_p5
+    dw 0x0000, 0x0000, 0x0000, 0x3FE0
+    dw 10, 30
+    dw 0x0000, 0x0000, 0x0000, 0x3FC0      ; 0.5^3 = 0.125
+    dw fpt_p6
+fpt_p0: db 'POW2^0.5', 0
+fpt_p1: db 'POW2^10', 0
+fpt_p2: db 'POW1.12^6', 0
+fpt_p3: db 'POW10^-2', 0
+fpt_p4: db 'POW2^0.1', 0
+fpt_p5: db 'POW9^0.5', 0
+fpt_p6: db 'POW0.5^3', 0
+
 fpt_g0: db 'SIN0', 0
 fpt_g1: db 'SIN0.5236', 0
 fpt_g2: db 'SIN1.571', 0

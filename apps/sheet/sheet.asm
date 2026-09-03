@@ -16158,6 +16158,7 @@ sh_rpn_fid:
     db 58, 144                        ; NPER DDB
     db 167, 168                       ; IPMT PPMT
     db 59                             ; RATE
+    db 62, 60                         ; IRR MIRR
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16195,6 +16196,7 @@ sh_rpn_fvar:
     db 1, 1                           ; NPER(3..5) DDB(4..5)
     db 1, 1                           ; IPMT(4..6) PPMT(4..6)
     db 1                              ; RATE(3..6)
+    db 1, 0                           ; IRR(1..2) MIRR
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -17402,33 +17404,22 @@ sh_ppowcont:
     call sh_pnest_leave
     call sh_chktext
     mov byte [sh_curtype], SH_T_NUM
-    call sh_acc_toint                 ; the exponent is still a whole number -
-    mov cx, ax                        ; a fractional power needs logarithms,
-    pop word [sh_lhs]                 ; which this file does not have
-    pop word [sh_lhs+2]
-    pop word [sh_lhs+4]
-    pop word [sh_lhs+6]
-    mov ax, 1                         ; the running product starts at one
-    call sh_acc_int
-    or cx, cx
-    js .zero                          ; a negative exponent is a fraction
-    jz .out                           ; anything^0 = 1
-.loop:
-    push cx
-    push si
-    mov si, sh_lhs                    ; B = the base, reloaded each time -
-    call fp_unpack_b                  ; fp_mul consumes it
+    call sh_acc_load_a                ; THE EXPONENT MAY BE FRACTIONAL NOW.
+    call fp_a_to_b                    ; This banked it through sh_acc_toint
+    pop word [sh_lhs]                 ; and multiplied the base by itself that
+    pop word [sh_lhs+2]               ; many times, with a comment saying "a
+    pop word [sh_lhs+4]               ; fractional power needs logarithms,
+    pop word [sh_lhs+6]               ; which this file does not have" - which
+    push si                           ; stopped being true at 84.8. 2^0.5 is
+    mov si, sh_lhs                    ; 1.414 and not 1
+    call fp_unpack_a
     pop si
-    call sh_acc_load_a
-    call fp_mul
+    call fp_pow
+    jnc .powok
+    mov byte [sh_evalerr], SH_ERR_NUM ; a negative base to a fractional power
+    call fp_azero                     ; has no real value
+.powok:
     call sh_acc_store
-    pop cx
-    dec cx
-    jnz .loop
-    jmp .out
-.zero:
-    xor ax, ax
-    call sh_acc_int
 .out:
     ret
 .nestfull:
@@ -18913,11 +18904,46 @@ sh_pspecial:
     je .dsqrt
     cmp di, 19
     je .dround
+    cmp di, 18
+    je .dpower                        ; POWER is a REAL power now (81.37.7)
     cmp di, 20
     jb .arg1                          ; 12..18 take one or two arguments
     cmp di, 23
     jbe .noargs                       ; 20..23 take none
     jmp .choose                       ; 24 CHOOSE takes a list
+
+; ---- POWER(x, y), on doubles ------------------------------------------------
+; It parsed both arguments as 16-BIT INTEGERS and multiplied with `imul` - a
+; stage 3.0d routine that nothing upgraded when the value model became a
+; double, so POWER(1.12, 6) truncated its base to 1 and answered 1. It went
+; unnoticed because the only thing that exercised it was `^` on whole numbers,
+; which agreed; MIRR asking for (1.12)^6 is what finally showed it.
+.dpower:
+    call sh_pcmp
+    call sh_acc_load_a
+    cmp byte [si], ','
+    jne .powbad
+    inc si
+    push si
+    mov si, sh_acc
+    mov bx, sh_tr0
+    call sh_trcopy                    ; the base, across the second parse
+    pop si
+    call sh_pcmp
+    call sh_acc_load_b
+    push si
+    mov si, sh_tr0
+    call fp_unpack_a
+    pop si
+    call fp_pow
+    jnc .dstore
+    mov byte [sh_evalerr], SH_ERR_NUM
+    call fp_azero
+    jmp .dstore
+.powbad:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    call fp_azero
+    jmp .dstore
 
 ; ---- INT / TRUNC / SQRT / ROUND, on doubles ---------------------------------
 ; INT FLOORS and TRUNC cuts toward zero, which differ for negatives: Excel's
@@ -19350,9 +19376,12 @@ sh_pfin:
     jmp .zero                         ; financial function inside another's
 .free:                                ; arguments refuses instead (47)
     mov byte [sh_fnbusy], 1
+    cmp word [sh_fnid], 104           ; IRR and MIRR open with a RANGE, so
+    jae .fnrange                      ; they cannot use the scalar parser
     mov cx, 6
     call sh_pfargs
     mov [sh_trsi], si
+.dispatch:
     cmp word [sh_fnid], 93
     je .sln
     cmp word [sh_fnid], 94
@@ -19363,6 +19392,10 @@ sh_pfin:
     je .nper
     cmp word [sh_fnid], 100
     je .ddb
+    cmp word [sh_fnid], 104
+    je .irr
+    cmp word [sh_fnid], 105
+    je .mirr
     cmp word [sh_fnid], 103
     je .rate
     cmp word [sh_fnid], 101
@@ -19584,6 +19617,217 @@ sh_pfin:
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
+; --- IRR(values, guess) and MIRR(values, financerate, reinvestrate) ---------
+; THE CASH FLOWS ARE A RANGE, not an argument list, so these two parse a
+; reference first and then whatever scalars follow. The corners are banked in
+; sh_ir*, because sh_getcell2 runs a whole evaluation for any formula cell the
+; walk lands on - 81.32.1's reason, one category later.
+;
+; THE VALUES ARE NEVER COLLECTED. A range can be any size, so instead of
+; copying it into an array the walk simply re-reads the cells each time it is
+; needed. IRR's secant loop therefore reads the range up to forty times, which
+; on a 4.77MHz 8088 is worth knowing about before putting IRR over a long
+; column; the alternative is a fixed capacity, and a spreadsheet function with
+; a silent capacity is worse than a slow one.
+.fnrange:
+    call sh_pargref
+    jnc .badargs
+    mov ax, [sh_arg1col]
+    mov [sh_irc1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_irr1], ax
+    mov ax, [sh_arg2col]
+    mov [sh_irc2], ax
+    mov ax, [sh_arg2row]
+    mov [sh_irr2], ax
+    mov word [sh_fnn], 0              ; then the scalars, into sh_fnarg[0..]
+.fnrs:
+    cmp byte [si], ','
+    jne .fnrdone
+    inc si
+    cmp word [sh_fnn], 6
+    jae .fnrdone
+    call sh_pcmp
+    mov ax, [sh_fnn]
+    mov bx, 8
+    mul bx
+    add ax, sh_fnarg
+    mov bx, ax
+    push si
+    mov si, sh_acc
+    call sh_trcopy
+    pop si
+    inc word [sh_fnn]
+    jmp short .fnrs
+.fnrdone:
+    mov [sh_trsi], si
+    jmp .dispatch
+.irr:
+    mov word [sh_irmode], 0
+    cmp word [sh_fnn], 1              ; the guess, or Excel's own 0.1
+    jb .irdefg
+    mov si, sh_fnarg
+    mov bx, sh_fnr0
+    call sh_trcopy
+    jmp short .irhaveg
+.irdefg:
+    mov si, sh_c_r10
+    call fp_unpack_a
+    mov di, sh_fnr0
+    call fp_pack_a
+.irhaveg:
+    mov si, sh_fnr0
+    call fp_unpack_a
+    mov si, sh_c_r01
+    call fp_unpack_b
+    call fp_add
+    mov di, sh_fnr1
+    call fp_pack_a
+    mov si, sh_fnr0
+    mov bx, sh_fnr
+    call sh_trcopy
+    call sh_irwalk
+    mov di, sh_fnf0
+    call fp_pack_a
+    cmp word [sh_ircnt], 2            ; one cash flow has no rate of return
+    jb .badnum
+    mov cx, 40
+.irloop:
+    push cx
+    mov si, sh_fnr1
+    mov bx, sh_fnr
+    call sh_trcopy
+    call sh_irwalk
+    mov di, sh_fnf1
+    call fp_pack_a
+    mov byte [fp_as], 0
+    mov si, sh_c_eps
+    call fp_unpack_b
+    call fp_cmpab
+    jle .irdone
+    mov si, sh_fnf1
+    call fp_unpack_a
+    mov si, sh_fnf0
+    call fp_unpack_b
+    call fp_sub
+    mov di, sh_tr0
+    call fp_pack_a
+    mov bx, fp_am0
+    call fp_iszero
+    jc .irfail
+    mov si, sh_fnr1
+    call fp_unpack_a
+    mov si, sh_fnr0
+    call fp_unpack_b
+    call fp_sub
+    mov si, sh_fnf1
+    call fp_unpack_b
+    call fp_mul
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_div
+    jc .irfail
+    call fp_a_to_b
+    mov si, sh_fnr1
+    call fp_unpack_a
+    call fp_sub
+    mov di, sh_tr1
+    call fp_pack_a
+    mov si, sh_fnr1
+    mov bx, sh_fnr0
+    call sh_trcopy
+    mov si, sh_fnf1
+    mov bx, sh_fnf0
+    call sh_trcopy
+    mov si, sh_tr1
+    mov bx, sh_fnr1
+    call sh_trcopy
+    pop cx
+    dec cx
+    jnz .irloop
+    mov byte [sh_evalerr], SH_ERR_NUM
+    jmp .zero
+.irfail:
+    pop cx
+    mov byte [sh_evalerr], SH_ERR_NUM
+    jmp .zero
+.irdone:
+    pop cx
+    mov si, sh_fnr1
+    call fp_unpack_a
+    jmp .store
+; MIRR is CLOSED FORM despite its reputation - two discounted sums and a root:
+;   ( -npv_pos*(1+rrate)^n / (npv_neg*(1+frate)) ) ^ (1/(n-1)) - 1
+.mirr:
+    cmp word [sh_fnn], 2
+    jb .badargs
+    mov word [sh_irmode], 1           ; the negatives, at the finance rate
+    mov si, sh_fnarg
+    mov bx, sh_fnr
+    call sh_trcopy
+    call sh_irwalk
+    mov di, sh_tr0
+    call fp_pack_a
+    cmp word [sh_ircnt], 2
+    jb .badnum
+    mov word [sh_irmode], 2           ; the positives, at the reinvestment one
+    mov si, sh_fnarg + 8
+    mov bx, sh_fnr
+    call sh_trcopy
+    call sh_irwalk
+    mov di, sh_tr1
+    call fp_pack_a
+    mov si, sh_fnarg + 8              ; (1+rrate)^n
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    mov ax, [sh_ircnt]
+    call fp_i2b
+    call fp_pow
+    jc .badnum
+    mov si, sh_tr1
+    call fp_unpack_b
+    call fp_mul
+    xor byte [fp_as], 1               ; -npv_pos*(1+rrate)^n
+    mov di, sh_fnt
+    call fp_pack_a
+    mov si, sh_fnarg                  ; npv_neg*(1+frate)
+    call fp_unpack_a
+    mov ax, 1
+    call fp_i2b
+    call fp_add
+    mov si, sh_tr0
+    call fp_unpack_b
+    call fp_mul
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_div
+    jc .divzero
+    test byte [fp_as], 1              ; a negative has no real (n-1)th root
+    jnz .badnum
+    mov di, sh_fnt
+    call fp_pack_a
+    mov ax, [sh_ircnt]                ; ^ (1/(n-1))
+    dec ax
+    or ax, ax
+    jle .badnum
+    call fp_i2a
+    call fp_a_to_b
+    mov si, fp_c_one
+    call fp_unpack_a
+    call fp_div
+    call fp_a_to_b
+    mov si, sh_fnt
+    call fp_unpack_a
+    call fp_pow
+    jc .badnum
+    mov ax, 1                         ; ...less one
+    call fp_i2b
+    call fp_sub
+    jmp .store
+
 ; --- RATE(nper, pmt, pv, fv, type, guess) -----------------------------------
 ; THE FIRST FUNCTION HERE THAT ITERATES TOWARD AN ANSWER. There is no closed
 ; form for the rate in
@@ -19982,6 +20226,107 @@ sh_pfin:
     mov byte [sh_fnbusy], 0
     xor ax, ax
     pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_irwalk - walk the banked range in row-major order, summing each value
+; discounted at the rate in sh_fnr: A = sum of v_i / (1+r)^i, i from ZERO.
+; [sh_ircnt] comes back as how many numbers were seen.
+;
+; [sh_irmode] selects which contribute - 0 every one, 1 only the negatives,
+; 2 only the positives - and MIRR uses the last two. THE POSITION STILL
+; ADVANCES FOR EVERY NUMBER whichever mode is running: i is where a flow sits
+; in the series, not where it sits among the ones being added, and a walk that
+; skipped the exponent would discount the fourth year as if it were the second.
+;
+; Blank cells, labels and error values are ignored and do NOT advance i, which
+; is Excel's own rule for a cash-flow range.
+; -----------------------------------------------------------------------------
+sh_irwalk:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov word [sh_ircnt], 0
+    call fp_azero
+    mov di, sh_iracc
+    call fp_pack_a
+    mov si, fp_c_one
+    call fp_unpack_a
+    mov di, sh_irpow
+    call fp_pack_a
+    mov dx, [sh_irr1]                 ; DX = the row being read
+.row:
+    cmp dx, [sh_irr2]
+    ja .done
+    mov cx, [sh_irc1]                 ; CX = the column
+.col:
+    cmp cx, [sh_irc2]
+    ja .nextrow
+    mov ax, cx
+    mov bx, dx
+    push cx
+    push dx
+    call sh_getcell2                  ; recurses for a formula cell, which is
+    pop dx                            ; why every loop variable is banked
+    pop cx
+    jnc .nextcol                      ; empty
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .nextcol                      ; a label or an error sits it out
+    push cx
+    push dx
+    mov si, sh_acc                    ; v / (1+r)^i
+    call fp_unpack_a
+    mov cx, [sh_irmode]
+    jcxz .take
+    test byte [sh_acc+7], 0x80        ; mode 1 wants the negatives...
+    jz .ispos
+    cmp cx, 1
+    je .take
+    jmp short .skip
+.ispos:
+    cmp cx, 2                         ; ...and mode 2 the positives
+    jne .skip
+.take:
+    mov si, sh_irpow
+    call fp_unpack_b
+    call fp_div
+    jc .skip
+    mov si, sh_iracc
+    call fp_unpack_b
+    call fp_add
+    mov di, sh_iracc
+    call fp_pack_a
+.skip:
+    mov ax, 1                         ; i advances for EVERY number, taken or
+    call fp_i2a                       ; not - see the note above
+    mov si, sh_fnr
+    call fp_unpack_b
+    call fp_add
+    call fp_a_to_b
+    mov si, sh_irpow
+    call fp_unpack_a
+    call fp_mul
+    mov di, sh_irpow
+    call fp_pack_a
+    inc word [sh_ircnt]
+    pop dx
+    pop cx
+.nextcol:
+    inc cx
+    jmp .col
+.nextrow:
+    inc dx
+    jmp .row
+.done:
+    mov si, sh_iracc
+    call fp_unpack_a
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -25013,6 +25358,8 @@ sh_f_ddb:       db 'DDB', 0
 sh_f_ipmt:      db 'IPMT', 0
 sh_f_ppmt:      db 'PPMT', 0
 sh_f_rate:      db 'RATE', 0
+sh_f_irr:       db 'IRR', 0
+sh_f_mirr:      db 'MIRR', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -25043,6 +25390,7 @@ sh_functab:
     dw sh_f_atan, sh_f_atan2
     dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
     dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt, sh_f_rate
+    dw sh_f_irr, sh_f_mirr
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -25141,7 +25489,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4211
+    OS88_BSS 4239
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -25899,7 +26247,15 @@ sh_fnr0       equ sh_fnr + 8          ; 8 } the secant's two points and the
 sh_fnr1       equ sh_fnr0 + 8         ; 8 } residual at each
 sh_fnf0       equ sh_fnr1 + 8         ; 8 }
 sh_fnf1       equ sh_fnf0 + 8         ; 8 }
-sh_fnbusy     equ sh_fnf1 + 8          ; byte: one of them is parsing
+sh_irc1       equ sh_fnf1 + 8         ; IRR and MIRR take their cash flows as
+sh_irr1       equ sh_irc1 + 2         ; a RANGE, and the corners are banked
+sh_irc2       equ sh_irr1 + 2         ; here for sh_getcell2's sake, exactly
+sh_irr2       equ sh_irc2 + 2         ; as 81.32.1 banks the lookups' (81.37.6)
+sh_ircnt      equ sh_irr2 + 2         ; word: how many numbers the walk saw
+sh_irmode     equ sh_ircnt + 2        ; word: 0 all, 1 negatives, 2 positives
+sh_irpow      equ sh_irmode + 2       ; 8: the running (1+r)^i
+sh_iracc      equ sh_irpow + 8        ; 8: ...and the running sum
+sh_fnbusy     equ sh_iracc + 8          ; byte: one of them is parsing
 sh_fnt        equ sh_fnbusy + 2       ; 8: a packed temporary
 sh_fnu        equ sh_fnt + 8          ; 8: ...and a second
 sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked

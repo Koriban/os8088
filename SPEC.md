@@ -75887,9 +75887,77 @@ The third row is the one that matters: `PMT(0.01,60,20000)` is −444.888954, so
 feeding that back to `RATE` must return the 0.01 it came from. The fourth is
 the failure path doing its job rather than returning a plausible number.
 
-**Two remain**: `IRR` and `MIRR`, which take their cash flows as a **range**
-rather than a list — the first financial functions needing `sh_pargref` and a
-walk, the way §81.32's lookups do.
+#### 81.37.6 IRR, MIRR, and a range that is never collected
+
+These two take their cash flows as a **range**, so they parse a reference
+first and then whatever scalars follow. The corners are banked in `sh_ir*`
+because `sh_getcell2` runs a whole evaluation for any formula cell the walk
+lands on — §81.32.1's reason, one category later.
+
+**The values are never collected.** A range can be any size, so instead of
+copying it into an array the walk re-reads the cells each time it is needed.
+`IRR`'s secant loop therefore reads the range up to forty times, which on a
+4.77 MHz 8088 is worth knowing before putting `IRR` over a long column. The
+alternative is a fixed capacity, and a spreadsheet function with a silent
+capacity is worse than a slow one.
+
+**The position advances for every number, taken or not.** `sh_irwalk`'s modes
+select which values contribute — all, only negatives, only positives, the last
+two for `MIRR` — but `i` is where a flow sits in the *series*, not among the
+ones being summed. A walk that skipped the exponent would discount the fourth
+year as if it were the second.
+
+`MIRR` is **closed form** despite its reputation: two discounted sums and one
+root, `(−pos·(1+rrate)^n / (neg·(1+frate)))^(1/(n−1)) − 1`. Only `IRR`
+iterates.
+
+#### 81.37.7 POWER was integer-only, and only MIRR was ever going to notice
+
+`POWER` parsed both arguments as **16-bit integers** and multiplied with
+`imul` — a stage 3.0d routine that nothing upgraded when the value model became
+a double. `POWER(1.12, 6)` truncated its base to 1 and answered **1**. The `^`
+operator was the same, with a comment reading *"a fractional power needs
+logarithms, which this file does not have"* — true when written and false since
+§84.8.
+
+It went unnoticed because the only thing exercising either was whole-number
+powers, where truncating the base changes nothing. `MIRR` asking for
+`(1.12)^6` is what finally showed it. Both go through `fp_pow` now, and `2^0.5`
+is 1.41421 rather than 1.
+
+**And `fp_pow`'s own fractional path was broken the same way `LOG10` had been**:
+it parked the exponent in `fp_e1` across a call to `fp_ln`, which **owns**
+`fp_e0`–`fp_e3`. Every fractional power returned 1 while the whole-number path
+beside it was right and hid it. The exponent goes on the stack now.
+
+**The real failure was in the testing.** §84.8 built `fp_pow` and added twelve
+`fptest` cases — for `ln` and `exp`, and **none for `pow`**. A routine with no
+case is a routine with no evidence, which is §61.7's lesson arriving again in a
+different file. `fptest` has seven `pow` rows now, carried in the record's spare
+`digits` word as an exponent in tenths so that 0.5, 6 and −2 all fit without
+widening every other row. **53 cases, all passing, soft and 8087.**
+
+#### 81.37.8 Verified, and the category closes
+
+`screenshots/sheet-financial-irr-mirr.png`, over the flows
+−70000, 12000, 15000, 18000, 21000, 26000:
+
+| | Sheet | reference |
+|---|---|---|
+| `=IRR(A1:A6)` | 0.08663 | 0.08663095 |
+| `=MIRR(A1:A6,0.1,0.12)` | 0.10263 | 0.10263553 |
+| `=IRR(A1:A6,0.5)` | 0.08663 | converges from a distant guess |
+| `=IRR(A2:A6)` | `#NUM!` | all positive: no root exists |
+| `=NPV(0.08663095,12000,…,26000)` | 69999.9 | 70000 — **the outflow** |
+| `=POWER(2,0.5)` / `=2^0.5` | 1.41421 | 1.4142135 |
+
+The `NPV` row is the cross-check: discounting the inflows at the rate `IRR`
+returned must give back the initial outflow, which is what an internal rate of
+return *means*.
+
+**All thirteen financial functions are in.** Sheet knows **106** of Excel
+2.1d's ~120; what remains is the matrix and array family, which needs array
+formulas — an evaluation-model change rather than a function.
 
 
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
