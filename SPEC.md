@@ -73762,8 +73762,10 @@ default, and clearing the last bit removes the record again.
 
 ### 81.2 Seven claims, and what each is for
 
-`MEM_OWNER_MAX` is 8 (§29 and `kernel/memory.inc`) and Sheet holds **seven** —
-its own region plus six:
+`MEM_OWNER_MAX` is 8 (§29 and `kernel/memory.inc`) and Sheet holds **eight —
+all of them.** Its own region, the six below, and `CHART.OVL`'s claim, which
+§82.16 added after this section was written and which this table did not
+count:
 
 | claim | size | holds |
 |---|---|---|
@@ -73773,6 +73775,16 @@ its own region plus six:
 | `sh_bordseg`  | 4KB  | the border table (5-byte records) |
 | `sh_noteseg`  | 4KB  | the note table (6-byte records) |
 | `sh_chartseg` | 19KB | the live chart window's offscreen canvas (§82) |
+| `ch_ovseg`    | 8KB  | `CHART.OVL`, claimed at start-up with the rest (§82.16.3) |
+
+**So SHEET is at the per-owner ceiling and cannot take another claim.** That is
+a second limit beside the 133 bytes of §82.16.6, it binds on a different
+resource, and it is reached the same way: one at a time, each defensible. A
+feature that wants a buffer of its own — the matrix family's working array is
+the obvious one — has to take it out of an existing claim or displace one.
+`ch_ovneed`'s CF is deliberately not read, so a machine that cannot spare the
+8KB still runs the spreadsheet with seven; that is the only configuration in
+which a ninth is available, and it is the one with no charts.
 
 **The text arena is append-only and never compacted.** Re-editing a formula
 appends a new copy and orphans the old one; notes share the arena and behave
@@ -77645,9 +77657,14 @@ and the second is the one that matters.
 
 ### 86.3 Verified
 
-`'SCRIBE' image=49483 bss=9206 icon=yes assoc=0` — 58,689 of `APP_MAX_SIZE`'s
-61,440, so the fork has the same headroom Word does, and `assoc=0` is the
-packager confirming §86.2 rather than a comment claiming it.
+`'SCRIBE' image=43961 bss=9292 icon=yes assoc=0` — 53,253 of `APP_MAX_SIZE`'s
+61,440, and `assoc=0` is the packager confirming §86.2 rather than a comment
+claiming it.
+
+*(Those were 49,483 and 9,206 when this was first written, before §86.8 moved
+the file formats into `SCRIBE.OVL`. The 5.4KB the overlay bought is why SCRIBE
+now has 8,187 bytes spare against WORD's 5,270 — a number worth re-measuring
+when it is cited, which §82.16's own table is the standing lesson about.)*
 
 On one 1440KB floppy carrying `word.o88`, `WORD.OVL`, `scribe.o88`,
 `SCRIBE.OVL`, `WELCOME.DOC` and a 1bpp `.BMP`, under QEMU:
