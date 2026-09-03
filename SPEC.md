@@ -83111,8 +83111,9 @@ reader that had not been written by the same hand as the writer.**
 > **file formats are no longer a gap** — §81.40 and §81.41 added CSV, tab
 > -delimited text and dBASE III, taking SHEET to 6 of Excel 2.0's 9 with the
 > other 3 (Lotus `.WKS`/`.WK1`, dBASE II) deliberately not done; and **`NOW` is
-> not cheap** — this OS exposes no date to a package at all, so it needs a
-> kernel slot, not an afternoon.
+> cheap after all** — a claim that it needed a kernel slot was wrong, because
+> the clock is reachable by `int 0x1a` the way the kernel itself reads it
+> (§81.42).
 
 Counted, not recalled — against `excel_man/Microsoft Excel Functions and
 Macros.pdf`'s worksheet-function directory and the real Excel 2.1 menu captures
@@ -83128,7 +83129,7 @@ text-input widget" — all four wrong by the time it was read.
 |---|---|---|---|
 | database | 11 | `DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP` | a **database + criteria area** |
 | array / matrix | 8 | `MDETERM MINVERSE MMULT TRANSPOSE LINEST LOGEST TREND GROWTH` | **array formulas** |
-| volatile | 2 | `NOW RAND` | `RAND` a PRNG; **`NOW` needs a kernel date slot that does not exist** (§81.41) |
+| volatile | 2 | `NOW RAND` | `RAND` a PRNG; `NOW` a BIOS `int 0x1a` (§81.42) |
 | information | 2 | `CELL ISNONTEXT` | `CELL` wants an attribute table; the other is trivial |
 | reference | 1 | `INDIRECT` | text → reference at evaluation time |
 | text | 1 | `CLEAN` | trivial |
@@ -83182,7 +83183,7 @@ Almost everything above hangs off five pieces of work:
 
 The cheap remainder, needing none of them: `RAND`, `CLEAN`, `ISNONTEXT`,
 `MDETERM`, `INDIRECT`, `Repeat`, `Paste Special`, `Paste Link`, `Cell
-Protection`. **`NOW` is not among them** — see the note at the top.
+Protection`, and **`NOW` after all**.
 
 
 ### 81.40 CSV and tab-delimited text
@@ -83258,13 +83259,20 @@ holding `007` is text, because dBASE said it is character data and guessing
 would silently turn a part number into the number 7. A deleted record — flag
 byte `2Ah` — is skipped.
 
-**The header's date stamp is zero.** dBASE III keeps the last-update YY/MM/DD
-in bytes 1..3, and **this OS exposes no date to a package**: the kernel holds
-`clk_year`/`clk_mon`/`clk_day` and no `OSAPI_*` slot reaches them. Zero is what
-a tool that does not know writes. That same absence is why `NOW` is not
-implementable either, which corrects §81.39's listing of it as cheap — it needs
-a kernel slot, and §75.3's precedent is that a new kernel primitive for one
-app's convenience is a decision, not a build fix.
+**The header's date stamp is zero, and that is a bug rather than a
+limitation.** dBASE III keeps the last-update YY/MM/DD in bytes 1..3. This
+section claimed the OS "exposes no date to a package" and that `NOW` therefore
+needed a kernel slot. **Both were false**, and the evidence was in the kernel
+all along: `clk_rtc_read` gets the date and time from the **BIOS**, `int 0x1a`
+with `AH=04h` and `AH=02h`, and a package may make that call exactly as freely
+— MISSILE, CYCLONE and PAINT already use `int 0x16`, TASKMGR `int 0x12`. There
+is no rule against it and there is precedent for it.
+
+The claim came from grepping `os88api.inc` for an `OSAPI_*` date slot, finding
+none, and concluding the capability did not exist. **A missing API is not a
+missing capability**, and the distance between those two is a BIOS call this
+tree already makes in four places. §81.42 fixes both the stamp and the
+function.
 
 **Cost:** 1,535 bytes in the module, **43 bytes of resident image**. `CH_OVKB`
 went 16 → 20 to keep the tail comfortable.
@@ -83287,6 +83295,88 @@ applies to a **pitch** exactly as much, and for the same reason: a stepped
 number that agrees with reality at the cases you tested is not evidence about
 the case you did not. The table is measured now and says so.
 
+
+### 81.42 `NOW()`, and a missing API mistaken for a missing capability
+
+107 functions.
+
+**The claim that blocked this was in the tree for a week and was wrong.**
+`sh_pdate`'s own header said `NOW()` "cannot be written: no kernel call
+publishes the calendar date… the only clocks a package can read are
+`OSAPI_GET_TICKS` and `OSAPI_BOOT_TICKS`, both of which count since boot… It
+needs one new API slot, and that is a kernel change with its own review."
+
+Every sentence about the OSAPI table is true. **The conclusion does not
+follow**, because the OSAPI table is not the only way out of a package. The
+kernel does not read the clock through its own API either: `clk_rtc_read` calls
+the **BIOS** — `int 0x1a`, `AH=04h` for the date and `AH=02h` for the time —
+and a package may make the identical call. MISSILE, CYCLONE and PAINT already
+use `int 0x16`; TASKMGR uses `int 0x12`. There is no rule against it and there
+is precedent for it four files away.
+
+**A missing API is not a missing capability.** The claim came from grepping
+`os88api.inc`, finding no date slot, and stopping — and it then travelled into
+§81.39, §81.41 and a recommendation to spend a kernel ABI slot on it. The
+distance between "the SDK does not publish it" and "the machine cannot do it"
+was one `int`.
+
+**Reading it the way the kernel does, poison and all.** `CX`/`DX` are set to
+`0xFFFF` before each call and checked after, because a BIOS without the service
+can return with CF clear having touched nothing — the sentinel is the only
+thing that catches that, and `clk_rtc_read` makes the same check for the same
+reason. Every BCD field is validated before it is believed: a clock reporting
+hour `0x99` is not an hour.
+
+**No clock gives `#N/A`**, which a sheet can test with `ISNA`. It does **not**
+give the uptime dressed as a date — that much of the old comment was right, and
+is why it refused to fake one.
+
+`NOW()` is the serial date plus the fraction of the day: exactly `DATE()`'s
+number plus `TIME()`'s fraction, and it reuses both (`sh_ymd_to_ser`,
+`sh_hms_to_acc`).
+
+**The dBASE III header stamp is fixed by the same call.** §81.41 wrote zeros
+into the last-update YY/MM/DD and said the OS had no date to offer. It has;
+`sh_bios_ymd` is shared by both, reached from the module through the vector
+table since the writer lives there.
+
+`RAND` remains the other volatile function, and it needs a PRNG rather than a
+clock.
+
+
+#### 81.42.1 Two bugs a machine with a clock would have found, and this one could not
+
+MartyPC's 5150 has **no RTC** — the kernel says so itself, `clk_rtc = 0`, and
+the date in its menu bar is `CLK_DEF_*` rather than a reading. So `NOW()`
+correctly answered `#N/A` there, and that verified only the refusal path. The
+success path had never executed.
+
+Feeding known BCD in place of the BIOS reply — century `20`, year `26`, month
+`09`, day `03`, `14:37:09` — found **two defects in one run**:
+
+- **`mul` writes `DX`, and `DX` held the month and day.** Computing
+  `century * 100` destroyed them, so the month read back as zero and the
+  function bailed to `#N/A` *on a machine whose clock was fine*. The kernel's
+  own `clk_rtc_read` reads `DH`/`DL` before it does that arithmetic; this
+  restructured it and did not.
+- **`sh_acc_fromudw` goes through `fp_u64_to_a` and clobbers `A`.** The
+  fraction of the day was parked there and gone by the time the add ran, so
+  both operands were the day count and `NOW()` answered **exactly twice the
+  serial** — 92536 for a date whose serial is 46268. A doubling is the kind of
+  wrong answer that looks like a units error and is really a register lifetime.
+
+Both are invisible without a clock, and neither is visible from reading the
+code — the first because `mul`'s second output is easy to forget, the second
+because the accumulator's lifetime is a property of a helper three thousand
+lines away.
+
+Verified after the fixes: `NOW()` 46268.6 against `DATE(2026,9,3)`'s 46268 in
+the cell beside it, `YEAR` 2026, `MONTH` 9, `DAY` 3, `HOUR` 14.
+
+**The stub is not in the tree.** It was applied, run, and reverted, and the
+committed code makes the real `int 0x1a` calls. On the test machines available
+here `NOW()` returns `#N/A`, which is correct for a PC with no real-time clock
+— the AT introduced it, and this is a 5150.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

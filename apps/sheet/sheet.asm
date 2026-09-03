@@ -826,6 +826,9 @@ sh_x_fp_i2b:
 sh_x_fp_norm:
     call fp_norm
     retf
+sh_x_sh_bios_ymd:
+    call sh_bios_ymd
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -836,7 +839,7 @@ sh_ovshims:
     dw sh_x_sh_funcid, sh_x_sh_colname, sh_x_sh_strcpy_to_di, sh_x_fp_unpack_a
     dw sh_x_fp_cmpab, sh_x_fp_unpack_b, sh_x_fp_atof, sh_x_fp_i2a
     dw sh_x_fp_a2i, sh_x_fp_ftoa, sh_x_fp_div, sh_x_fp_i2b
-    dw sh_x_fp_norm
+    dw sh_x_fp_norm, sh_x_sh_bios_ymd
 
 sh_entry:
     push ax
@@ -16647,6 +16650,7 @@ sh_rpn_fid:
     db 167, 168                       ; IPMT PPMT
     db 59                             ; RATE
     db 62, 60                         ; IRR MIRR
+    db 74                             ; NOW - BIFF's own ftab index for it
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16685,6 +16689,7 @@ sh_rpn_fvar:
     db 1, 1                           ; IPMT(4..6) PPMT(4..6)
     db 1                              ; RATE(3..6)
     db 1, 0                           ; IRR(1..2) MIRR
+    db 0                              ; NOW()
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19211,6 +19216,8 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 106                        ; NOW() is nullary and reads the BIOS
+    je .donow                          ; clock - nothing else here does either
     cmp ax, 93                         ; 93+ are the FINANCIAL functions, on
     jae .dofin                         ; the same layer one level up
     cmp ax, 81                         ; 81+ are the LOGARITHMS and their
@@ -19303,6 +19310,10 @@ sh_pfunc:
     call sh_pinfo
     mov dx, ax
     jmp .typed
+.donow:
+    call sh_pnow                       ; NOW() consumed no arguments, so SI is
+    mov dx, ax                         ; still just past '(' - the ')' is
+    jmp .typed                         ; skipped by the common tail
 .dofin:
     call sh_pfin
     mov dx, ax
@@ -23747,16 +23758,213 @@ sh_ymd_to_ser:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_pnow - NOW(), id 106. The serial date plus the fraction of the day, which
+; is what Excel's NOW() is: the same number DATE() gives plus the same fraction
+; TIME() gives.
+;
+; THE BIOS IS READ THE WAY THE KERNEL READS IT, poison and all: CX/DX are set
+; to 0xFFFF before the call and checked after, because a BIOS that does not
+; implement the service can return with CF clear having touched nothing, and
+; the sentinel is the only thing that catches it. Every BCD field is validated
+; before it is believed - a clock reporting hour 0x99 is not an hour.
+;
+; A machine with no usable RTC gets #N/A, which is the honest answer and the
+; one a spreadsheet can test with ISNA. It does NOT get the uptime dressed up
+; as a date, which is what the old comment here rightly refused to fake.
+; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_bios_ymd - the calendar date from the BIOS into sh_dt_y/m/d.
+; out: CF=1 if there is no usable clock. Every other register preserved.
+;
+; AH=04h answers CH/CL = century and year and DH/DL = month and day, all packed
+; BCD. CX and DX are POISONED with 0xFFFF first and checked after, because a
+; BIOS without the service can return CF clear having touched nothing - the
+; sentinel is the only thing that catches that, and it is the check the kernel's
+; own clk_rtc_read makes for the same reason.
+; -----------------------------------------------------------------------------
+sh_bios_ymd:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, 0xFFFF
+    mov dx, 0xFFFF
+    mov ah, 0x04
+    stc
+    int 0x1a
+    jc .bad
+    cmp cx, 0xFFFF
+    je .bad
+    mov al, ch
+    call sh_bcd2bin
+    jc .bad
+    mov bl, al                        ; the century
+    mov al, cl
+    call sh_bcd2bin
+    jc .bad
+    mov bh, al                        ; ...and the year within it
+    push dx                           ; MUL WRITES DX, and DX is holding the
+    mov al, bl                        ; month and day. Reading dh afterwards
+    xor ah, ah                        ; got the high word of century*100 - a
+    mov cx, 100                       ; month of zero, and NOW() answered #N/A
+    mul cx                            ; on a machine whose clock was fine
+    xor ch, ch
+    mov cl, bh
+    add ax, cx
+    pop dx
+    cmp ax, 1900
+    jb .bad
+    cmp ax, 2080
+    ja .bad
+    mov [sh_dt_y], ax
+    mov al, dh
+    call sh_bcd2bin
+    jc .bad
+    xor ah, ah
+    or ax, ax
+    jz .bad
+    cmp ax, 12
+    ja .bad
+    mov [sh_dt_m], ax
+    mov al, dl
+    call sh_bcd2bin
+    jc .bad
+    xor ah, ah
+    or ax, ax
+    jz .bad
+    cmp ax, 31
+    ja .bad
+    mov [sh_dt_d], ax
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.bad:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+sh_pnow:
+    push bx
+    push cx
+    push dx
+    push si
+    call sh_bios_ymd                  ; -> sh_dt_y/m/d, CF=1 if no clock
+    jc .na
+    call sh_ymd_to_ser                ; -> AX = the whole days
+    jc .na
+    push ax
+    mov cx, 0xFFFF                    ; the time: AH=02h -> CH/CL/DH = hour,
+    mov dx, 0xFFFF                    ; minute and second, BCD
+    mov ah, 0x02
+    stc
+    int 0x1a
+    jc .napop
+    cmp cx, 0xFFFF
+    je .napop
+    mov al, ch
+    call sh_bcd2bin
+    jc .napop
+    cmp al, 23
+    ja .napop
+    xor bh, bh
+    mov bl, al                        ; BX = hours
+    mov al, cl
+    call sh_bcd2bin
+    jc .napop
+    cmp al, 59
+    ja .napop
+    push bx
+    xor ah, ah
+    mov cx, ax                        ; CX = minutes
+    mov al, dh
+    call sh_bcd2bin
+    pop bx
+    jc .napop
+    cmp al, 59
+    ja .napop
+    xor ah, ah
+    mov dx, ax                        ; DX = seconds
+    call sh_hms_to_acc                ; sh_acc = the fraction of the day
+    call sh_acc_load_b                ; ...into B, WHICH MUST COME FIRST:
+    pop ax                            ; sh_acc_fromudw goes through fp_u64_to_a
+    call sh_acc_fromudw               ; and CLOBBERS A, so a fraction parked
+    call sh_acc_load_a                ; there is gone by the add. It answered
+    call fp_add                       ; twice the serial, both operands being
+                                      ; the day count (81.42.1)
+    call sh_acc_store
+    clc
+    jmp .out
+.napop:
+    pop ax
+.na:
+    mov byte [sh_evalerr], SH_ERR_NA  ; no usable clock: #N/A, and ISNA can
+    stc                               ; see it
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_bcd2bin - AL packed BCD -> AL binary. CF=1 if either nibble is not a
+; decimal digit, which is how a clock that is not running is caught: it answers
+; 0xFF or 0x99 rather than failing the call.
+; -----------------------------------------------------------------------------
+sh_bcd2bin:
+    push cx
+    mov cl, al
+    and cl, 0x0F
+    cmp cl, 9
+    ja .bad
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    cmp al, 9
+    ja .bad
+    mov ch, al
+    add al, al
+    add al, al
+    add al, ch                        ; al = high*5
+    add al, al                        ; ...*2 = high*10
+    add al, cl
+    pop cx
+    clc
+    ret
+.bad:
+    pop cx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_pdate - the DATE and TIME functions, ids 58 and up.
 ;
-; NOW() IS DELIBERATELY ABSENT, and this is the one function in the category
-; that cannot be written: no kernel call publishes the calendar date. The
-; kernel HAS it - it draws "Aug 28 2026" in the menu bar every second - but
-; the only clocks a package can read are OSAPI_GET_TICKS and OSAPI_BOOT_TICKS,
-; both of which count since boot. A NOW() built on those would answer with the
-; uptime, which is not the time and would be believed. It needs one new API
-; slot publishing what the clock already reads, and that is a kernel change
-; with its own review, not something to fake here (81.28).
+; NOW() IS HERE NOW, and the paragraph that used to stand in this place was
+; wrong in a way worth keeping a record of. It said NOW() "cannot be written:
+; no kernel call publishes the calendar date... the only clocks a package can
+; read are OSAPI_GET_TICKS and OSAPI_BOOT_TICKS, both of which count since
+; boot... It needs one new API slot, and that is a kernel change with its own
+; review".
+;
+; EVERY SENTENCE ABOUT THE OSAPI TABLE IS TRUE. The conclusion does not follow,
+; because the OSAPI table is not the only way out of a package. The kernel does
+; not read the clock through its own API either - clk_rtc_read calls the BIOS,
+; `int 0x1a` with AH=04h for the date and AH=02h for the time - and a package
+; may make that identical call. MISSILE, CYCLONE and PAINT already use
+; `int 0x16`; TASKMGR uses `int 0x12`. There is no rule against it and there is
+; precedent for it four files away.
+;
+; A MISSING API IS NOT A MISSING CAPABILITY. The claim came from grepping the
+; SDK for a date slot, finding none, and stopping there - and it then travelled
+; into SPEC.md twice as a reason NOW() was blocked on a kernel decision. It was
+; blocked on nobody having looked past os88api.inc (81.42).
 ;
 ; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
 ; -----------------------------------------------------------------------------
@@ -25827,6 +26035,7 @@ sh_f_minute:   db 'MINUTE', 0
 sh_f_second:   db 'SECOND', 0
 sh_f_datevalue: db 'DATEVALUE', 0
 sh_f_timevalue: db 'TIMEVALUE', 0
+sh_f_now:      db 'NOW', 0
 sh_f_rows:      db 'ROWS', 0
 sh_f_columns:   db 'COLUMNS', 0
 sh_f_areas:     db 'AREAS', 0
@@ -25895,6 +26104,7 @@ sh_functab:
     dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
     dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt, sh_f_rate
     dw sh_f_irr, sh_f_mirr
+    dw sh_f_now                       ; 106 (81.42)
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -25973,10 +26183,22 @@ sh_dowrite_dbf:
     xor di, di
     mov al, 0x03                      ; dBASE III, no memo file
     call sh_stgputb
+    SHOUT sh_bios_ymd                 ; the last-update stamp, from the BIOS
+    jc .nodate                        ; clock (81.42) - zeros if there is none
+    mov ax, [sh_dt_y]
+    sub ax, 1900                      ; dBASE III keeps YY, not the century
+    call sh_stgputb
+    mov ax, [sh_dt_m]
+    call sh_stgputb
+    mov ax, [sh_dt_d]
+    call sh_stgputb
+    jmp .datedone
+.nodate:
     xor al, al
-    call sh_stgputb                   ; YY  - no date available (see above)
+    call sh_stgputb                   ; YY
     call sh_stgputb                   ; MM
     call sh_stgputb                   ; DD
+.datedone:
     mov ax, [sh_dbf_nr]
     call sh_dbf_putw                  ; record count, low word...
     xor ax, ax
@@ -27133,7 +27355,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4772
+    OS88_BSS 4776
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -27957,8 +28179,9 @@ sh_v_fp_ftoa                equ sh_v_fp_a2i + 4
 sh_v_fp_div                 equ sh_v_fp_ftoa + 4
 sh_v_fp_i2b                 equ sh_v_fp_div + 4
 sh_v_fp_norm                equ sh_v_fp_i2b + 4
-SH_NVEC       equ 33
-sh_v_end      equ sh_v_fp_norm + 4
+sh_v_sh_bios_ymd            equ sh_v_fp_norm + 4
+SH_NVEC       equ 34
+sh_v_end      equ sh_v_sh_bios_ymd + 4
 
 sh_bss_end        equ sh_v_end
 
