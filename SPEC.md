@@ -76007,6 +76007,50 @@ were mutation-tested: removing the `;;` escape and moving SYLK's origin by one
 each fail it.
 
 
+#### 81.38.1 What it found on its first run
+
+Two defects, and **both are the same shape**: SHEET's writer and SHEET's
+reader made the identical mistake, so they cancelled and the round trip
+passed. Neither could have been found from inside.
+
+**1. SYLK's semicolon escape did not exist here, in either direction.** SYLK
+reserves `;` as its field separator and escapes a literal one by doubling it
+— Walden: *"Any field containing the reserved semicolon character must have
+two of them."* SHEET's writer doubled an embedded **quote** and not a
+semicolon, and its reader un-doubled a quote and not a semicolon. So a label
+`a;b` was written as `K"a;b"`, which any conforming reader splits into a `K"a`
+field and a stray `b"` — **the text silently truncated at the semicolon, in a
+file that still parses**. Coming the other way, a conforming file's `a;;b`
+loaded as the four characters `a;;b`.
+
+The round trip was perfect throughout, because the file SHEET wrote was
+exactly the file SHEET expected to read.
+
+**2. The BIFF error code was the wrong numbering.** `SH_C_AUX` holds Excel's
+`ERROR.TYPE` numbers, 1..7. A BIFF `BOOLERR` record does not use those: it
+uses the format's own codes — `00H` `#NULL!`, `07H` `#DIV/0!`, `0FH`
+`#VALUE!`, `17H` `#REF!`, `1DH` `#NAME?`, `24H` `#NUM!`, `2AH` `#N/A`. **Two
+numberings for the same seven errors.** A `#DIV/0!` went out as `02H`, which
+the format does not define, and came back as `02H` and was read as
+`ERROR.TYPE` 2, which is `#DIV/0!` again.
+
+`sh_biff_e2b`/`sh_biff_b2e` convert now. The cost was 68 bytes, and SHEET has
+133 left.
+
+**The comment is the part worth keeping.** Three places in `sheet.asm` said,
+in different words, that the code "travels with no translation" because it is
+already "Excel's own ERROR.TYPE number". Every clause of that is true except
+the conclusion: both numberings really are Excel's, they really do describe
+the same seven errors, and `SH_C_AUX` really does hold one of them. A claim
+assembled entirely out of true statements is the kind that survives review —
+which makes it the same failure as §82.16's phantom Makefile rule, in a
+different file and with a wrong byte at the end of it instead of a wrong
+boundary.
+
+Neither defect is exotic and neither needed a clever test. They needed **one
+reader that had not been written by the same hand as the writer.**
+
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads

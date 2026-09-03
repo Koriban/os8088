@@ -782,6 +782,16 @@ SOAK = [
         "floppies read back off the guest and diffed byte for byte. Cross "
         "drive, same drive, the un-swapped-disk guard and Esc",
         needs=("marty",), serial=True),
+    Row("sheetfmt", "soak", py("tests/sheetfmt.py"), 180.0,
+        "SPEC.md 81.38: do SHEET's three file formats say what they mean? "
+        "The host authors a SYLK file from the published grammar, the guest "
+        "opens it by ASSOCIATION and saves it as BIFF3, SYLK and DIF, and "
+        "os88flush takes the floppy back so the host can read all three. "
+        "Nothing outside SHEET had ever read one of its files before this, "
+        "and it found two defects on its first run - neither visible from "
+        "inside, because in both cases the writer and the reader made the "
+        "SAME mistake and cancelled it",
+        needs=("marty",), serial=True),
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),

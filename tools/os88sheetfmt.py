@@ -44,6 +44,14 @@ import sys
 BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER = 0x01, 0x02, 0x03
 BIFF_LABEL, BIFF_BOOLERR, BIFF_FORMULA = 0x04, 0x05, 0x06
 BIFF_BOF, BIFF_EOF, BIFF_DIMENSIONS = 0x09, 0x0A, 0x00
+BIFF_RK = 0x7E                          # 027EH, BIFF3 on; replaces INTEGER
+
+# BIFF3 renumbers the cell records into the 02xxH block and widens the cell
+# header - row(2) col(2) then a 2-byte XF index where BIFF2 had 3 bytes of
+# packed attributes.  SHEET writes BIFF3 deliberately (SPEC.md 81.10), so a
+# reader that only knew the BIFF2 column of the tables would reject every file
+# it has ever produced.  Both are read here, decided by the BOF.
+BIFF3_BIT = 0x0200
 
 # excelfileformat.pdf §2.4.  #N/A is written "#N/A!" there and "#N/A"
 # everywhere a user sees it; the second is what SYLK and Excel's own UI use.
@@ -192,7 +200,13 @@ def read_dif(data):
         i += 1
     if i >= n:
         raise FormatError('no DATA section')
-    i += 2                                  # skip 'DATA' and its '0,0'
+    # A header entry is THREE lines - <topic>, <vector>,<number> and
+    # "<string>" - and DATA is a header entry like any other.  Skipping only
+    # two put every later pair half a line out, which does not fail: it reads
+    # as a file with no cells in it.
+    i += 2                                  # 'DATA' and its '0,0'
+    if i < n and lines[i].strip().startswith('"'):
+        i += 1                              # ...and its string, usually ""
     cells = {}
     row, col = -1, 0
     while i + 1 < n:
@@ -237,44 +251,70 @@ def read_dif(data):
 # -----------------------------------------------------------------------------
 def read_biff(data):
     cells, i, n = {}, 0, len(data)
-    saw_bof = False
+    vstart = None                       # where a cell record's value begins
     while i + 4 <= n:
         rid, ln = struct.unpack_from('<HH', data, i)
         i += 4
         if i + ln > n:
-            raise FormatError('record 0x%02X at %d runs past the end' % (rid, i))
+            raise FormatError('record 0x%04X at %d runs past the end'
+                              % (rid, i))
         body = data[i:i + ln]
         i += ln
-        if rid == BIFF_BOF:
-            saw_bof = True
+        if rid in (BIFF_BOF, BIFF_BOF | BIFF3_BIT):
+            vstart = 7 if rid == BIFF_BOF else 6
             continue
         if rid == BIFF_EOF:
             break
-        if rid in (BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER, BIFF_LABEL,
-                   BIFF_BOOLERR, BIFF_FORMULA):
-            if ln < 7:
-                raise FormatError('cell record 0x%02X is %d bytes' % (rid, ln))
+        if vstart is None:
+            continue
+        kind = rid & ~BIFF3_BIT if rid >= BIFF3_BIT else rid
+        if kind in (BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER, BIFF_LABEL,
+                    BIFF_BOOLERR, BIFF_FORMULA, BIFF_RK):
+            if ln < vstart:
+                raise FormatError('cell record 0x%04X is %d bytes' % (rid, ln))
             r, c = struct.unpack_from('<HH', body, 0)
-            v = _biff_value(rid, body)
+            v = _biff_value(kind, body, vstart)
             if v is not None:
                 cells[(r, c)] = v
-    if not saw_bof:
+    if vstart is None:
         raise FormatError('no BOF record — this is not a BIFF stream')
     return cells
 
 
-def _biff_value(rid, body):
+def _rk(v):
+    """An RK number.  Bit 1 says integer-or-double, bit 0 says the value was
+    multiplied by 100 to fit; a double keeps only its high four bytes."""
+    div100 = v & 1
+    if v & 2:
+        i = v - 0x100000000 if v & 0x80000000 else v
+        out = float(i >> 2)             # arithmetic, and Python's >> is
+    else:
+        out = struct.unpack('<d', struct.pack('<II', 0, v & 0xFFFFFFFC))[0]
+    return out / 100.0 if div100 else out
+
+
+def _biff_value(rid, body, v):
     if rid == BIFF_BLANK:
         return None
     if rid == BIFF_INTEGER:
-        return float(struct.unpack_from('<H', body, 7)[0])
+        return float(struct.unpack_from('<H', body, v)[0])
+    if rid == BIFF_RK:
+        return _rk(struct.unpack_from('<I', body, v)[0])
     if rid == BIFF_NUMBER:
-        return struct.unpack_from('<d', body, 7)[0]
+        return struct.unpack_from('<d', body, v)[0]
     if rid == BIFF_LABEL:
-        ln = body[7]
-        return body[8:8 + ln].decode('latin-1')
+        # BIFF2 counts a byte string's characters in ONE byte and BIFF3 in two
+        # (§2.1, "either as 8-bit-integer or as 16-bit-integer, depending on
+        # the current record").  Reading a BIFF3 label with the BIFF2 rule
+        # does not fail; it returns the string shifted by one, with the high
+        # half of the count on the front of it.
+        if v == 6:                              # BIFF3
+            ln = struct.unpack_from('<H', body, v)[0]
+            return body[v + 2:v + 2 + ln].decode('latin-1')
+        ln = body[v]
+        return body[v + 1:v + 1 + ln].decode('latin-1')
     if rid == BIFF_BOOLERR:
-        val, kind = body[7], body[8]
+        val, kind = body[v], body[v + 1]
         if kind == 0:
             return ('bool', val != 0)
         return ('err', BIFF_ERRORS.get(val, '#ERR%02X' % val))
@@ -283,7 +323,7 @@ def _biff_value(rid, body):
         # setting the last two bytes to FFFFH and typing it in the first — the
         # same trick a NaN payload is, and the reason a formula's result must
         # not simply be unpacked as a double.
-        raw = body[7:15]
+        raw = body[v:v + 8]
         if len(raw) == 8 and raw[6] == 0xFF and raw[7] == 0xFF:
             kind = raw[0]
             if kind == 1:
@@ -299,7 +339,7 @@ def _biff_value(rid, body):
 
 # -----------------------------------------------------------------------------
 def sniff(path, data):
-    if data[:2] == b'\x09\x00' or data[:2] == b'\x09\x02':
+    if data[:2] in (b'\x09\x00', b'\x09\x02', b'\x09\x04'):
         return 'biff'
     head = data[:512].decode('latin-1', 'replace')
     if head.startswith('TABLE'):

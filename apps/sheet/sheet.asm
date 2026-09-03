@@ -346,8 +346,12 @@ SH_T_BOOL    equ 3
 SH_T_ERR     equ 4
 
 ; Error codes, in SH_C_AUX. These are EXCEL'S OWN ERROR.TYPE numbers, so
-; ERROR.TYPE and ISERR become a table lookup if they are ever added, and the
-; BIFF BOOLERR record can carry them without a translation step.
+; ERROR.TYPE and ISERR become a table lookup if they are ever added.
+;
+; THE BIFF BOOLERR RECORD DOES NOT USE THIS NUMBERING. That claim stood here
+; for a long time and cost a wrong byte in every error cell SHEET ever
+; exported - the format has its own codes and sh_biff_e2b/sh_biff_b2e convert
+; between them.
 SH_ERR_NULL  equ 1                  ; #NULL!
 SH_ERR_DIV0  equ 2                  ; #DIV/0!   - the only one produced today
 SH_ERR_VALUE equ 3                  ; #VALUE!
@@ -10424,9 +10428,18 @@ sh_dowrite_sylk:
 .ktext:
     ; A LABEL'S K FIELD IS QUOTED, and that is the whole of how SYLK tells text
     ; from a number - there is no type field to consult, on either side.
-    ; An embedded quote is DOUBLED, because the charset gate admits one now and
-    ; a bare one would end the field early and leave the rest of the label
-    ; looking like malformed SYLK.
+    ; SYLK HAS TWO RESERVED CHARACTERS AND BOTH ARE ESCAPED BY DOUBLING.
+    ; The quote was always doubled here, because the charset gate admits one
+    ; and a bare one would end the field early. The SEMICOLON was not, and it
+    ; is the worse of the two: it is the FIELD SEPARATOR, so a label
+    ; containing one was written as `K"a;b"` and any conforming reader splits
+    ; that into a `K"a` field and a stray `b"` - the text silently truncated
+    ; at the semicolon, in a file that still parses. Walden: "Any field
+    ; containing the reserved semicolon character must have two of them."
+    ;
+    ; This was invisible for as long as SHEET was the only thing that ever
+    ; read the file, because 81.38's reader did not double it either and the
+    ; two errors cancelled exactly.
     mov al, 34
     call sh_stgputb
     mov si, [sh_wrec_toff]
@@ -10439,8 +10452,11 @@ sh_dowrite_sylk:
     jz .ktend
     inc si
     cmp al, 34
+    je .kdup
+    cmp al, ';'
     jne .kt1
-    call sh_stgputb                   ; doubled: a quote inside a label
+.kdup:
+    call sh_stgputb                   ; doubled: a quote or a semicolon
 .kt1:
     call sh_stgputb
     jmp .kt
@@ -12078,8 +12094,10 @@ sh_biff_cells:
 .aserr:
     ; BOOLERR, 0205H: the row/col/xf head every cell record shares, then the
     ; value byte and a flag saying whether it is a BOOLEAN or an ERROR. The
-    ; code stored is Excel's own ERROR.TYPE number, which is what SH_C_AUX
-    ; holds, so it travels with no translation.
+    ; code is TRANSLATED - see sh_biff_e2b. This comment used to say it
+    ; travelled with no translation because SH_C_AUX already held "Excel's own
+    ; ERROR.TYPE number", and that is true of the number and false of the
+    ; record: BIFF has a second numbering for the same seven errors.
     mov ax, 0x0205
     call sh_biffw
     mov ax, 8
@@ -12092,6 +12110,7 @@ sh_biff_cells:
     mov al, [sh_wrec_fmt]
     call sh_biffw
     mov al, [sh_wrec_aux]
+    call sh_biff_e2b
     call sh_stgputb
     mov al, 1                          ; fError
     call sh_stgputb
@@ -12659,6 +12678,9 @@ sh_doread_biff:
     push es
     or al, al
     jz .isbool
+    mov al, dl                         ; an ERROR: the file's code is the
+    call sh_biff_b2e                   ; FORMAT's numbering, not ERROR.TYPE's
+    mov dl, al
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     call sh_seterr
@@ -12752,6 +12774,64 @@ sh_doread_biff:
     ret
 
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_biff_e2b / sh_biff_b2e - THE ERROR CODE, TRANSLATED. AL in, AL out; every
+; other register preserved.
+;
+; SH_C_AUX holds Excel's ERROR.TYPE numbers, 1..7. A BIFF BOOLERR record does
+; NOT hold those - it holds the codes of the format's own table, 00H #NULL!,
+; 07H #DIV/0!, 0FH #VALUE!, 17H #REF!, 1DH #NAME?, 24H #NUM!, 2AH #N/A.
+;
+; TWO NUMBERINGS FOR THE SAME SEVEN ERRORS, and this file used to say - at the
+; SH_ERR_* definitions and again above the writer - that "the BIFF BOOLERR
+; record can carry them without a translation step". It cannot, and it never
+; could. A #DIV/0! went out as 02H, which is not a code the format defines,
+; and came back in as 02H and was read as ERROR.TYPE 2, which is #DIV/0!
+; again. Perfectly symmetric, perfectly wrong, and invisible until 81.38 read
+; one of the files from outside.
+;
+; The plausible-sounding claim is the whole of why it survived review: both
+; numberings really are "Excel's own", they really do describe the same seven
+; errors, and one of them really is what SH_C_AUX holds.
+; -----------------------------------------------------------------------------
+sh_biff_errtab: db 0x00, 0x07, 0x0F, 0x17, 0x1D, 0x24, 0x2A
+
+sh_biff_e2b:                          ; ERROR.TYPE 1..7 -> the BIFF code
+    push bx
+    xor bh, bh
+    mov bl, al
+    dec bl
+    cmp bl, 6
+    ja .bad
+    mov al, [bx+sh_biff_errtab]
+    pop bx
+    ret
+.bad:
+    mov al, 0x0F                      ; an out-of-range code travels as
+    pop bx                            ; #VALUE!, which is what a reader that
+    ret                               ; cannot place it will show anyway
+
+sh_biff_b2e:                          ; the BIFF code -> ERROR.TYPE 1..7
+    push bx
+    push cx
+    mov cl, al
+    xor bx, bx
+.l:
+    cmp cl, [bx+sh_biff_errtab]
+    je .hit
+    inc bx
+    cmp bx, 7
+    jb .l
+    mov al, SH_ERR_VALUE              ; an unknown code is still an error, and
+    jmp .out                          ; #VALUE! is the honest one to show
+.hit:
+    mov al, bl
+    inc al
+.out:
+    pop cx
+    pop bx
+    ret
+
 ; sh_biff_rcok - out: CF=0 if [sh_wrec_row] < SH_ROWS and [sh_wrec_col] <
 ; SH_COLS, CF=1 otherwise. A file's row with bit 14 set would OR into the
 ; SHEET bits of the packed key (see sh_findcell) and land the cell on a
@@ -13085,11 +13165,20 @@ sh_parsecrec:
     cmp al, 10
     je .ktend
     cmp al, 34
-    jne .ktkeep
+    jne .ktsemi
     inc si                            ; a quote: doubled means one literal
     cmp si, bx                        ; quote, single means end of field
     jae .ktend
     cmp byte [es:si], 34
+    jne .ktend
+    jmp .ktkeep
+.ktsemi:
+    cmp al, ';'                       ; ...and the SEMICOLON is the same rule,
+    jne .ktkeep                       ; which this loop did not know: it is
+    inc si                            ; the field separator, so a doubled one
+    cmp si, bx                        ; is one literal ';' and a single one
+    jae .ktend                        ; ends the field even inside the quotes
+    cmp byte [es:si], ';'
     jne .ktend
 .ktkeep:
     mov [di], al
