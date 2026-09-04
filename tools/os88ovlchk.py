@@ -549,21 +549,17 @@ def check_pkgs():
         # this fold, 70 correct calls were reported.
         fold = lambda x: x if x == '.modc' else '.text'
 
-        # A FILE %included TWICE IS ONE FILE. apps/os88img.inc is deliberately
-        # included once for its constants and once for its code, guarded by
-        # OS88IMG_CONSTS_ONLY (SPEC.md 85) - and this does not evaluate
-        # %ifdef, so it would see every label defined in both sections and
-        # report the module calling itself. The code-bearing include is the
-        # LAST one, so that is the copy that counts.
-        keep = []
-        seenfile = {}
-        for sect, f, n, line in rows:
-            seenfile.setdefault((f, n), []).append(sect)
-        for sect, f, n, line in rows:
-            if len(seenfile[(f, n)]) > 1 and sect != seenfile[(f, n)][-1]:
-                continue                # an earlier, guarded-out inclusion
-            keep.append((sect, f, n, line))
-        rows = keep
+        # A FILE %included TWICE was deduped here by keeping the LAST copy, on
+        # the reasoning that the code-bearing include comes last. It does not
+        # survive being tested: a file included into `.modc` FIRST and `.text`
+        # second had its `.modc` rows dropped, and a real `.modc -> .text` near
+        # call inside such a file was reported clean - a false negative, which
+        # is the exact failure this whole walk exists to prevent. Nothing in
+        # the tree needed it either: no file in a package's expansion is
+        # included twice at all. So there is no dedup, and both copies of a
+        # doubly-included file are judged in the section they actually land in.
+        # If one is ever wanted again it must keep the `.modc` copy, not the
+        # last one.
 
         where = {}
         for sect, f, n, line in rows:
@@ -584,6 +580,9 @@ def check_pkgs():
     if bad:
         sys.exit("os88ovlchk: %d package call(s) cross a section boundary near "
                  "- SPEC.md 68.10 rule 1" % len(bad))
+    if PKGS and not walked:
+        sys.exit("os88ovlchk: none of the %d package(s) in PKGS is in the tree "
+                 "- the package half of this gate checked nothing" % len(PKGS))
     print("os88ovlchk: %d package(s) keep every overlay call far" % walked)
 
 
