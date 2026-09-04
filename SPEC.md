@@ -83775,6 +83775,118 @@ is the same compression the Font dialog already applies to Bold and Underline,
 on the same engine, so the app is at least consistent with itself; the Border
 dialog is the one that draws check boxes and it is hard-wired to borders.
 
+### 81.47 Borders and protection reach the file, at last
+
+Until this section, **Format > Border did not survive a save.** Not to SYLK,
+DIF, CSV, TXT or DBF — those five have no notion of one and the loss is the
+format's — but not to **BIFF either**, which does. The border table simply
+never reached any writer. The same was about to be true of §81.46's cell
+protection, which shares its byte.
+
+That is the worst kind of gap: silent, in the app's *own* format, on work the
+user did deliberately.
+
+#### 81.47.1 One XF per pair, not one per cell
+
+A cell's format byte **is** its BIFF XF index — that pairing is why there are
+exactly 64 XF records (§81.10.2) and it is worth keeping. Borders cannot join
+it: 64 format values times 128 border-and-protection values is 8,192 XFs.
+
+So the 64 stay, and **extra XFs are written after them, one per distinct
+(format byte, border byte) pair the document actually uses**. `sh_xfp_scan`
+walks the cell array before the globals are emitted and collects the pairs;
+`sh_biff_ixfe` gives each cell its index — its format byte, or 64+k when it
+also has a border-table record. Almost no cell has one, so almost every file
+still carries exactly 64.
+
+The scan covers **all sheets**, not the one being written. A BIFF4 workbook
+has one globals section and several sheet substreams, so the pair table has to
+cover every cell that will be emitted; for a single-sheet BIFF3 stream that
+costs at worst a few XF records nothing points at, at 16 bytes each, which is
+cheaper than a second code path.
+
+`SH_XFP_CAP` is 64 pairs. Past it a bordered cell keeps its plain XF and loses
+its border — **never someone else's XF**, which is the failure mode worth
+ruling out explicitly.
+
+#### 81.47.2 The fields, and the one that could not be checked
+
+- **`XF_BORDER_34`** (offset 8, four bytes): line styles at bits 2-0 top, 10-8
+  left, 18-16 bottom, 26-24 right. Style 1 is "thin", which is the only line
+  this app draws; the five-bit colour field above each style stays 0, which is
+  black in the default palette. On the way back in, **any** non-zero style is
+  that edge — a file from a program that draws double or dashed borders reads
+  back as this app's one kind of line rather than as no line.
+- **`XF_TYPE_PROT`** (offset 2, low bits): bit 0 locked, bit 1 hidden. This
+  app stores the *exception* (§81.46.1), so the two are inverted on the way
+  through.
+- **`XF_AREA_34`** (offset 6): the Shade bit becomes a background pattern.
+  **The bit layout is documented and was followed; the choice of pattern 02H
+  was not checkable** — excelfileformat's table of pattern samples is a set of
+  images in the PDF, so "02H is 50% grey" is convention here, not something
+  verified. What the round trip depends on is only that the pattern is
+  non-zero. 01H was avoided deliberately: that one *is* documented, as
+  **solid**, and solid black is a black box where this app draws a dither.
+
+**Every XF this writer ever emitted said the cell was unlocked.** The
+`XF_TYPE_PROT` byte was written as zero, which means "not locked" — the
+opposite of what a new sheet means, in every BIFF file this app has produced.
+The base 64 now set bit 0.
+
+#### 81.47.3 A reader that would have invented borders
+
+`sh_biff_applyfmt` guarded its XF lookup against `SH_BIFF_XF_CAP` and not
+against how many XFs the file actually had. The three tracking tables are not
+cleared between loads — only the counts are — so a file with fewer XF records
+than the previously-loaded one read **the previous file's bytes**.
+
+For a format byte that is a wrong alignment nobody would chase. For a border
+it is worse in kind: cells that never had one would acquire it, from a file
+opened earlier in the same session. The lookup is bounded by `sh_biff_nxf` as
+well now. This was a pre-existing bug that only became dangerous because
+something sharper started riding in the same table.
+
+#### 81.47.4 Verified at both ends, and gated
+
+The **writer** was read back on the host, record by record: 66 XF records for
+a sheet with one bordered cell and one unlocked cell — 64 base plus exactly
+two — where XF 64 carries `TLBR` edges with locked set, XF 65 carries locked
+clear with no edges, and the three cells name 64, 65 and **0** respectively.
+The third is the control: a cell nobody formatted still names a base XF, so
+the pairing is not being applied blanket.
+
+The **reader** was the same file opened back into SHEET by association: the
+border is drawn, and on a protected document the cell that was saved locked
+refuses a typed value while the one saved unlocked accepts it — both states
+recovered from the file rather than from anything left in memory.
+
+`tests/sheetfmt.py` now carries it permanently. It marks **A1 unlocked**
+before the Save As loop — A1 is the selected cell on load, so it needs no cell
+click, and protection travels through the identical pair-table machinery a
+border does. Three checks: that a 65th XF exists, that A1 names an XF at 64 or
+above with the locked bit clear, and that an untouched cell names a base XF
+with the locked bit **set**. 18 checks pass.
+
+Mutation-tested by making `sh_biff_ixfe` always return the plain format byte:
+**exactly one fails**, and it is the middle one — "A1 names XF 0, whose
+XF_TYPE_PROT is 1". The other two survive, correctly: the extra XF is still
+written, only the cell's pointer to it is broken. A mutation that fails
+everything proves less than one that fails the right thing.
+
+Every `sh_fdlg` dialog is one fixed size centred on the screen whatever its row
+count, so the gate drove Cell Protection with the radio and OK coordinates it
+had already calibrated for the file-format dialog. That is the *opposite* of
+§81.44.3's trap and worth stating for the same reason: **coordinates are
+reusable exactly as far as the thing that determines them is shared** — here
+the dialog geometry, there the machine.
+
+#### 81.47.5 What still does not travel
+
+The border table is written to **BIFF only**. SYLK has formatting records this
+app does not emit, and DIF, CSV, TXT and DBF have nowhere to put one. A sheet
+saved as SYLK still loses its borders, and that is now a *format* limit rather
+than an app one — but it is a real one, and Save As does not say so.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

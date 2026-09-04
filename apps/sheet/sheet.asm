@@ -561,7 +561,13 @@ SH_PROT_MASK   equ 0x60             ; the two together, for preserving them
 ; than this app itself ever writes - beyond the cap, a cell just reads back
 ; as unformatted rather than growing these tables without bound)
 SH_BIFF_FONT_CAP equ 32
-SH_BIFF_XF_CAP   equ 64
+SH_BIFF_XF_CAP   equ 128            ; 64 was exactly the format-byte space,
+                                    ; and 81.47 writes XFs past it for the
+                                    ; cells that also carry a border
+SH_XFP_CAP       equ 64             ; distinct (format, border) pairs one file
+                                    ; may carry. Past this a bordered cell
+                                    ; keeps its format and loses its border -
+                                    ; never someone else's XF
 
 ; --- stage 2.0: multiple sheets in one instance ----------------------------
 ; No OS8088 mechanism lets one running instance find or address another's
@@ -852,6 +858,12 @@ sh_x_fp_norm:
 sh_x_sh_bios_ymd:
     call sh_bios_ymd
     retf
+sh_x_sh_bt_get:
+    call sh_bt_get
+    retf
+sh_x_sh_bt_addcell:
+    call sh_bt_addcell
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -862,7 +874,7 @@ sh_ovshims:
     dw sh_x_sh_funcid, sh_x_sh_colname, sh_x_sh_strcpy_to_di, sh_x_fp_unpack_a
     dw sh_x_fp_cmpab, sh_x_fp_unpack_b, sh_x_fp_atof, sh_x_fp_i2a
     dw sh_x_fp_a2i, sh_x_fp_ftoa, sh_x_fp_div, sh_x_fp_i2b
-    dw sh_x_fp_norm, sh_x_sh_bios_ymd
+    dw sh_x_fp_norm, sh_x_sh_bios_ymd, sh_x_sh_bt_get, sh_x_sh_bt_addcell
 
 sh_entry:
     push ax
@@ -12263,6 +12275,15 @@ sh_biff_applyfmt:
     mov bx, [sh_wrec_xf]
     cmp bx, SH_BIFF_XF_CAP
     jae .out
+    cmp bx, [sh_biff_nxf]              ; ...AND one this file actually carried.
+    jae .out                           ; These tables are not cleared between
+                                       ; loads, only the counts are, so a file
+                                       ; with fewer XFs than the last one would
+                                       ; otherwise read the previous file's
+                                       ; bytes - harmless-looking for a format
+                                       ; byte and not at all harmless for a
+                                       ; border, which would appear on cells
+                                       ; that never had one
     mov di, sh_xf_fmt
     add di, bx
     mov al, [di]                       ; al = align|numfmt packed byte
@@ -12277,13 +12298,25 @@ sh_biff_applyfmt:
     or al, [di]                        ; fold in bold/underline
 .noboldunder:
     mov cl, al                         ; stash the finished byte in cl
-                                        ; across the cell lookup below
+    mov di, sh_xf_bord                 ; ...and this XF's border/protection
+    add di, bx                         ; bits in CH, across the same lookup
+    mov ch, [di]
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
     mov [es:di+5], cl
+    or ch, ch                          ; a border table record only for the
+    jz .out                            ; cells that need one, which is the
+    mov ax, [sh_wrec_col]              ; table's whole convention (81.46.1)
+    mov bx, [sh_wrec_row]
+    SHOUT sh_bt_addcell
+    jc .out                            ; full: silent, as everywhere else that
+    push es                            ; writes this table
+    mov es, [sh_bordseg]
+    mov [es:di+4], ch
+    pop es
 .out:
     pop es
     pop di
@@ -12338,8 +12371,9 @@ sh_dowrite_biff:
                                       ; reader that trusts the length would
                                       ; desynchronise on the short form
 
-    call sh_biff_fontsxfs
-    call sh_biff_names                ; the link table sits before the cell
+    call sh_xfp_scan                  ; the pairs FIRST: the XF records are
+    call sh_biff_fontsxfs             ; part of the globals and every cell
+    call sh_biff_names                ; record after them names one by index
                                       ; records - excelfileformat's own 4.2.3
                                       ; and 4.10.1 are both "2do" for BIFF3/4,
                                       ; so this follows the BIFF5 worksheet
@@ -12537,6 +12571,126 @@ sh_biff_names:
 ; one copy: they differ in two version-dependent details and in nothing else,
 ; and two copies would have drifted on the first change to a font.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_xfp_scan - collect the distinct (format byte, border byte) pairs in the
+; whole document into sh_xfp_fmt/sh_xfp_bord. (81.47)
+;
+; Runs BEFORE sh_biff_fontsxfs, because the XF records are part of a BIFF
+; stream's globals and every cell record after them refers to one by index.
+;
+; ALL SHEETS, not just the one being written. A BIFF4 workbook writes one
+; globals section and several sheet substreams, so the pair table has to cover
+; every cell that will be emitted; for the single-sheet BIFF3 stream that
+; means at worst a few XF records nothing points at, which costs 16 bytes each
+; and is not worth a second code path to avoid.
+; -----------------------------------------------------------------------------
+sh_xfp_scan:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [sh_nxfp], 0
+    mov cx, [sh_ncells]
+    jcxz .done
+    xor si, si                       ; SI = the cell record's offset
+.each:
+    push cx
+    mov es, [sh_cellseg]
+    mov ax, [es:si]
+    SHOUT sh_unpackrow               ; -> AX = row, BX = sheet
+    push si
+    mov dl, [es:si+5]                ; DL = the cell's format byte
+    mov bx, ax                       ; BX = row, AX = col, which is the order
+    mov ax, [es:si+2]                ; sh_bt_get wants
+    SHOUT sh_bt_get                  ; AL = its border+protection byte, 0 when
+    or al, al                        ; the cell has no record in that table -
+    jz .next                         ; which is almost every cell
+    ; --- already registered? ---------------------------------------------
+    mov cx, [sh_nxfp]
+    xor di, di
+    jcxz .add
+.find:
+    cmp dl, [sh_xfp_fmt + di]
+    jne .fnext
+    cmp al, [sh_xfp_bord + di]
+    je .next                         ; this pair already has an XF
+.fnext:
+    inc di
+    dec cx
+    jnz .find
+.add:
+    mov di, [sh_nxfp]
+    cmp di, SH_XFP_CAP
+    jae .next                        ; full: this cell keeps its plain XF
+    mov [sh_xfp_fmt + di], dl
+    mov [sh_xfp_bord + di], al
+    inc word [sh_nxfp]
+.next:
+    pop si
+    pop cx
+    add si, SH_C_SZ
+    dec cx
+    jnz .each
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_biff_ixfe - which XF this cell's record should name.
+; in: sh_wrec_col/sh_wrec_row/sh_wrec_fmt. out: [sh_wrec_ixfe].
+;
+; The format byte IS the XF index for the 64 base records - that pairing is
+; the whole reason there are exactly 64 - and a cell with a border instead
+; names the extra XF sh_xfp_scan registered for its (format, border) pair.
+; -----------------------------------------------------------------------------
+sh_biff_ixfe:
+    push ax
+    push bx
+    push cx
+    push di
+    mov al, [sh_wrec_fmt]
+    xor ah, ah
+    mov [sh_wrec_ixfe], ax
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    SHOUT sh_bt_get
+    or al, al
+    jz .out
+    mov ah, [sh_wrec_fmt]
+    mov cx, [sh_nxfp]
+    jcxz .out
+    xor di, di
+.find:
+    cmp ah, [sh_xfp_fmt + di]
+    jne .fnext
+    cmp al, [sh_xfp_bord + di]
+    je .found
+.fnext:
+    inc di
+    dec cx
+    jnz .find
+    jmp .out                         ; the table was full when this pair came
+                                      ; up: keep the plain XF and lose the
+                                      ; border, rather than name a stranger's
+.found:
+    add di, 64
+    mov [sh_wrec_ixfe], di
+.out:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 sh_biff_fontsxfs:
     ; 4 FONT records (indices 0-3: normal, bold, underline, bold+underline)
     ; and 64 XF records (indices 0-63) - one per possible SH_FMT_* byte
@@ -12577,11 +12731,38 @@ sh_biff_fontsxfs:
     mov [sh_wrow], ax
     jmp .ffontloop
 .ffontsdone:
-    mov word [sh_wrow], 0            ; reused as the XF index, 0..63
+    mov word [sh_wrow], 0            ; reused as the XF index
 .fxfloop:
     mov si, [sh_wrow]
-    cmp si, 64
+    mov ax, 64
+    add ax, [sh_nxfp]                ; the 64 base records, then one per
+    cmp si, ax                       ; (format, border) pair sh_xfp_scan found
     jae .fxfsdone
+    ; --- which format byte and which border byte this XF stands for --------
+    mov byte [sh_xfw_bord], 0
+    mov ax, si
+    cmp si, 64
+    jb .xfbase                       ; 0..63 ARE the format byte, which is the
+    sub ax, 64                       ; whole reason there are exactly 64
+    push bx
+    mov bx, ax
+    mov al, [sh_xfp_bord + bx]
+    mov [sh_xfw_bord], al
+    mov al, [sh_xfp_fmt + bx]
+    xor ah, ah
+    pop bx
+.xfbase:
+    mov [sh_xfw_fmt], ax
+    mov al, 1                        ; XF_TYPE_PROT bit 0 = LOCKED, which is
+    test byte [sh_xfw_bord], SH_PROT_UNLOCK  ; Excel's default and now this
+    jz .xflocked                     ; app's. Every XF this writer emitted
+    xor al, al                       ; before 81.47 left these bits clear, so
+.xflocked:                           ; a file it wrote claimed every cell was
+    test byte [sh_xfw_bord], SH_PROT_HIDDEN  ; UNLOCKED - the opposite of what
+    jz .xfnothid                     ; a new sheet means
+    or al, 2
+.xfnothid:
+    mov [sh_xfw_prot], al            ; banked, because sh_biffw sits between
     mov ax, 0x0243                   ; XF - or BIFF4's own number and body
     cmp byte [sh_wb_xf4], 0          ; layout, which differ (docs/BIFF-NOTES.md
     je .xfop3                        ; tabulates the two side by side)
@@ -12597,10 +12778,10 @@ sh_biff_fontsxfs:
     call sh_biffw
     mov ax, 12
     call sh_biffw
-    mov ax, si
+    mov ax, [sh_xfw_fmt]
     and ax, 3                        ; al = font index (bits0-1 of the
                                       ; format byte: bold, underline)
-    mov bx, si
+    mov bx, [sh_xfw_fmt]
     mov cl, 4
     shr bx, cl
     and bx, 3                        ; bx = our number-format code
@@ -12618,7 +12799,7 @@ sh_biff_fontsxfs:
     ; align|FC00H. FCH means "override every inherited attribute", which is the
     ; honest value when no style XF is written, and FFFH is the documented
     ; "no parent" for the same reason.
-    mov ax, si                       ; the alignment code, bits 2-3 of the
+    mov ax, [sh_xfw_fmt]             ; the alignment code, bits 2-3 of the
     mov cl, 2                        ; format byte - it matches XF_HOR_ALIGN
     shr ax, cl                       ; 0-3 (General/Left/Center/Right)
     and ax, 3                        ; directly, with no translation
@@ -12626,6 +12807,7 @@ sh_biff_fontsxfs:
     cmp byte [sh_wb_xf4], 0
     jne .xf4body
     mov ax, 0xFC00                   ; BIFF3: type/prot, then used-attrib
+    or al, [sh_xfw_prot]             ; ...with XF_TYPE_PROT's low bits (81.47)
     call sh_biffw
     mov ax, [sh_wb_align]
     or ax, 0xFFF0
@@ -12633,17 +12815,51 @@ sh_biff_fontsxfs:
     jmp .xfmid
 .xf4body:
     mov ax, 0xFFF0                   ; BIFF4: type/prot + parent, then the
-    call sh_biffw                    ; align byte with used-attrib above it
-    mov ax, [sh_wb_align]
+    or al, [sh_xfw_prot]             ; align byte with used-attrib above it -
+    call sh_biffw                    ; XF_TYPE_PROT is the low 3 bits of this
+    mov ax, [sh_wb_align]            ; word too, and 0xFFF0 leaves them clear
     or ax, 0xFC00
     call sh_biffw
 .xfmid:
-    xor ax, ax                       ; XF_AREA_34: no fill
+    ; --- XF_AREA_34: the Shade bit, as a background pattern ---------------
+    ; Pattern 02H with pattern colour 0 (black) and background 1 (white).
+    ; 2.5.12's own table of pattern samples is a set of IMAGES in the PDF and
+    ; could not be read, so "02H is 50% grey" is convention rather than
+    ; something checked here - what IS checked is the bit layout (5-0 pattern,
+    ; 10-6 pattern colour, 15-11 background), and the round trip depends only
+    ; on the pattern being non-zero. 01H is avoided deliberately: that one IS
+    ; documented, as SOLID, and solid black is a black box where this app
+    ; draws a dither.
+    xor ax, ax
+    test byte [sh_xfw_bord], SH_BORD_SHADE
+    jz .noarea
+    mov ax, 0x0802 | 0x00            ; pattern 2, black on white
+.noarea:
     call sh_biffw
-    xor ax, ax                       ; XF_BORDER_34 low word: no borders
-    call sh_biffw
-    xor ax, ax                       ; XF_BORDER_34 high word
-    call sh_biffw
+    ; --- XF_BORDER_34, four line styles at bits 2-0 / 10-8 / 18-16 / 26-24 -
+    ; Style 1 is "thin" (2.5.11), which is what this app draws; the five-bit
+    ; colour fields above each style stay 0, and 0 in the default palette is
+    ; black.
+    xor ax, ax
+    test byte [sh_xfw_bord], SH_BORD_TOP
+    jz .nbtop
+    or ax, 0x0001
+.nbtop:
+    test byte [sh_xfw_bord], SH_BORD_LEFT
+    jz .nbleft
+    or ax, 0x0100
+.nbleft:
+    call sh_biffw                    ; low word: top, then left
+    xor ax, ax
+    test byte [sh_xfw_bord], SH_BORD_BOTTOM
+    jz .nbbot
+    or ax, 0x0001
+.nbbot:
+    test byte [sh_xfw_bord], SH_BORD_RIGHT
+    jz .nbright
+    or ax, 0x0100
+.nbright:
+    call sh_biffw                    ; high word: bottom, then right
     mov ax, si
     inc ax
     mov [sh_wrow], ax
@@ -12712,7 +12928,8 @@ sh_biff_workbook:
     call sh_biffw
 
     mov byte [sh_wb_xf4], 1           ; the globals' FONT/XF block, in BIFF4
-    call sh_biff_fontsxfs             ; opcodes and layout
+    call sh_xfp_scan                  ; opcodes and layout - and the pairs
+    call sh_biff_fontsxfs             ; first, as in the BIFF3 path (81.47)
     call sh_biff_names                ; ...and the names, which are instance-
                                       ; wide and so belong to the GLOBALS
                                       ; substream, not to any one sheet
@@ -12908,6 +13125,7 @@ sh_biff_cells:
     and al, 1                         ; FORMULA record, if its text is one this
     mov [sh_wrec_hasf], al            ; writer can tokenise
     pop es                            ; ES = stgseg again
+    call sh_biff_ixfe                 ; which XF this cell names (81.47)
 
     cmp byte [sh_wrec_type], SH_T_TEXT
     je .aslabel
@@ -12952,8 +13170,8 @@ sh_biff_cells:
     call sh_biffw
     mov ax, [sh_wrec_col]
     call sh_biffw
-    xor ah, ah
-    mov al, [sh_wrec_fmt]              ; xf = the format byte itself
+    mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
+                                      ; cell also has a border
     call sh_biffw
     mov ax, [sh_wrec_val]
     call sh_rkenc                     ; -> DX:AX = packed RK value
@@ -12970,8 +13188,8 @@ sh_biff_cells:
     call sh_biffw
     mov ax, [sh_wrec_col]
     call sh_biffw
-    xor ah, ah
-    mov al, [sh_wrec_fmt]
+    mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
+                                      ; cell also has a border
     call sh_biffw
     mov ax, [sh_wrec_dval]
     call sh_biffw
@@ -12997,8 +13215,8 @@ sh_biff_cells:
     call sh_biffw
     mov ax, [sh_wrec_col]
     call sh_biffw
-    xor ah, ah
-    mov al, [sh_wrec_fmt]
+    mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
+                                      ; cell also has a border
     call sh_biffw
     mov al, [sh_wrec_aux]
     call sh_biff_e2b
@@ -13047,8 +13265,8 @@ sh_biff_cells:
     call sh_biffw
     mov ax, [sh_wrec_col]
     call sh_biffw
-    xor ah, ah
-    mov al, [sh_wrec_fmt]
+    mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
+                                      ; cell also has a border
     call sh_biffw
     mov ax, [sh_wrec_len]
     call sh_biffw
@@ -13134,8 +13352,8 @@ sh_biff_formula:
     call sh_biffw
     mov ax, [sh_wrec_col]
     call sh_biffw
-    xor ah, ah
-    mov al, [sh_wrec_fmt]
+    mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
+                                      ; cell also has a border
     call sh_biffw
     cmp byte [sh_wrec_type], SH_T_ERR ; BIFF's own encoding for a cached result
     je .errresult                     ; that is not a number: the top word all
@@ -13415,6 +13633,47 @@ sh_doread_biff:
     mov di, sh_xf_fmt
     add di, bx
     mov [di], al
+    ; --- borders, shade and protection out of the SAME record (81.47) -----
+    ; AH is the accumulator, because DX is the record length the walk needs
+    ; and CX is the file's end - the two registers this loop cannot spare.
+    xor ah, ah
+    mov al, [es:si+8]                  ; XF_BORDER_34, bits 2-0: top line
+    and al, 7                          ; style. ANY non-zero style reads back
+    jz .nrtop                          ; as this app's one kind of line - it
+    or ah, SH_BORD_TOP                 ; draws thin and has no other
+.nrtop:
+    mov al, [es:si+9]                  ; bits 10-8: left
+    and al, 7
+    jz .nrleft
+    or ah, SH_BORD_LEFT
+.nrleft:
+    mov al, [es:si+10]                 ; bits 18-16: bottom
+    and al, 7
+    jz .nrbot
+    or ah, SH_BORD_BOTTOM
+.nrbot:
+    mov al, [es:si+11]                 ; bits 26-24: right
+    and al, 7
+    jz .nrright
+    or ah, SH_BORD_RIGHT
+.nrright:
+    mov al, [es:si+6]                  ; XF_AREA_34, bits 5-0: any pattern at
+    and al, 0x3F                       ; all is this app's Shade
+    jz .nrshade
+    or ah, SH_BORD_SHADE
+.nrshade:
+    mov al, [es:si+2]                  ; XF_TYPE_PROT: bit 0 locked, bit 1
+    test al, 1                         ; hidden. This app stores the EXCEPTION
+    jnz .nrlocked                      ; (81.46.1), so an absent locked bit is
+    or ah, SH_PROT_UNLOCK              ; what gets recorded
+.nrlocked:
+    test al, 2
+    jz .nrhid
+    or ah, SH_PROT_HIDDEN
+.nrhid:
+    mov di, sh_xf_bord
+    add di, bx
+    mov [di], ah
 .xfcounted:
     inc word [sh_biff_nxf]
     jmp .skip
@@ -28076,7 +28335,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4788
+    OS88_BSS 5188
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -28277,8 +28536,22 @@ sh_xf_fmt     equ sh_font_tab + SH_BIFF_FONT_CAP  ; SH_BIFF_XF_CAP bytes:
                                              ; numfmt packed byte
 sh_xf_font    equ sh_xf_fmt + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes:
                                              ; each tracked XF's font index
+sh_xf_bord    equ sh_xf_font + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes:
+                                             ; each tracked XF's border and
+                                             ; protection bits, in THIS app's
+                                             ; SH_BORD_*/SH_PROT_* spelling
+                                             ; rather than BIFF's (81.47)
+sh_xfp_fmt    equ sh_xf_bord + SH_BIFF_XF_CAP      ; SH_XFP_CAP bytes each: the
+sh_xfp_bord   equ sh_xfp_fmt + SH_XFP_CAP          ; (format, border) pairs the
+sh_nxfp       equ sh_xfp_bord + SH_XFP_CAP         ; writer found, and how many
+sh_xfw_fmt    equ sh_nxfp + 2                ; word: the format byte the XF
+sh_xfw_bord   equ sh_xfw_fmt + 2             ; byte: ...and the border byte
+sh_xfw_prot   equ sh_xfw_bord + 1            ; byte: ...and its XF_TYPE_PROT
+sh_wrec_ixfe  equ sh_xfw_prot + 1            ; word: this cell's XF index,
+                                             ; which is its format byte unless
+                                             ; it also has a border record
 
-sh_cursheet   equ sh_xf_font + SH_BIFF_XF_CAP      ; the sheet sh_findcell
+sh_cursheet   equ sh_wrec_ixfe + 2           ; the sheet sh_findcell
                                              ; packs into every search (see
                                              ; the stage 2.0 cell-record
                                              ; comment above sh_findcell)
@@ -28909,8 +29182,10 @@ sh_v_fp_div                 equ sh_v_fp_ftoa + 4
 sh_v_fp_i2b                 equ sh_v_fp_div + 4
 sh_v_fp_norm                equ sh_v_fp_i2b + 4
 sh_v_sh_bios_ymd            equ sh_v_fp_norm + 4
-SH_NVEC       equ 34
-sh_v_end      equ sh_v_sh_bios_ymd + 4
+sh_v_sh_bt_get              equ sh_v_sh_bios_ymd + 4
+sh_v_sh_bt_addcell          equ sh_v_sh_bt_get + 4
+SH_NVEC       equ 36
+sh_v_end      equ sh_v_sh_bt_addcell + 4
 
 sh_bss_end        equ sh_v_end
 

@@ -119,6 +119,12 @@ DBF_NUM = {c for c in range(5)
 # file simply is not written, and step 4 says which one.
 FILE_MENU = (75, 45)
 SAVE_AS = (90, 92)                  # File's 4th item, pitch 11 from y=59
+# Format > Cell Protection..., item 4 on the same bar.  Every sh_fdlg dialog
+# is one fixed size centred on the screen whatever its row count, so the
+# radio column and OK below are the SAME coordinates the format dialog uses
+# and did not need calibrating again (81.47).
+FORMAT_MENU = (259, 45)
+CELL_PROT = (259 + 34, 59 + 11 * 4)
 FMT_RADIO_X = 246
 # MEASURED, not stepped: the radio glyphs sit at 55/71/87/103/119/135, a pitch
 # of SIXTEEN. This table was 59/73/87 with a pitch of 14 while the dialog had
@@ -204,6 +210,30 @@ def agrees(kind, expect, got):
     return F.close(expect, got)
 
 
+def cell_xfs(data):
+    """{(row, col): ixfe} for every cell record, and [XF_TYPE_PROT] per XF.
+
+    81.47: a cell whose format byte is its whole formatting names one of the
+    64 base XFs, and one that also carries a border or a non-default
+    protection names an extra XF written after them.
+    """
+    cells, xfs = {}, []
+    i = 0
+    while i + 4 <= len(data):
+        op, ln = struct.unpack_from("<HH", data, i)
+        if ln == 0 and op == 0:
+            break
+        b = data[i + 4:i + 4 + ln]
+        if op in (0x0243, 0x0443) and ln >= 12:
+            xfs.append(b[2] & 3)                      # bit0 locked, bit1 hidden
+        elif op in (0x027E, 0x0203, 0x0204, 0x0205,
+                    0x0206, 0x0406) and ln >= 6:
+            r, c, xf = struct.unpack_from("<HHH", b, 0)
+            cells[(r, c)] = xf
+        i += 4 + ln
+    return cells, xfs
+
+
 def recalc_flags(data):
     """{(row, col): option flags} for every FORMULA record in a BIFF stream.
 
@@ -239,6 +269,17 @@ def main():
         M.settle(m)
         mo.dblclick(*SHIN_ROW)          # the ASSOCIATION opens it
         M.settle(m, limit=180)
+
+        # A1 is the selected cell on load, so this needs no cell click:
+        # mark it UNLOCKED, which travels in the same byte as a border and
+        # through the same (format, border) pair table, so it exercises the
+        # whole of 81.47's extra-XF mechanism without the Border dialog.
+        mo.menu(FORMAT_MENU[0], FORMAT_MENU[1], CELL_PROT[0], CELL_PROT[1])
+        M.settle(m)
+        mo.click(FMT_RADIO_X, FMT_Y['slk'])     # row 1 = Unlocked
+        M.settle(m)
+        mo.click(*FMT_OK)
+        M.settle(m, limit=120)
 
         for kind in KINDS:
             mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
@@ -283,6 +324,26 @@ def main():
               % (kind.upper(), len(bad), '; '.join(bad)))
 
     if biff_raw is not None:
+        cells, xfs = cell_xfs(biff_raw)
+        check(len(xfs) > 64,
+              "an unlocked cell gets an XF of its own",
+              "the file carries %d XF records; 81.47 writes 64 base ones and "
+              "then one per (format, border/protection) pair, so A1 being "
+              "unlocked should have produced a 65th" % len(xfs))
+        a1 = cells.get((0, 0))
+        check(a1 is not None and a1 >= 64 and not (xfs[a1] & 1),
+              "...and that XF says the cell is unlocked",
+              "A1 names XF %r, whose XF_TYPE_PROT is %r - wanted an index at "
+              "64 or above with the locked bit CLEAR"
+              % (a1, None if a1 is None or a1 >= len(xfs) else xfs[a1]))
+        ctl = cells.get((1, 1))
+        check(ctl is not None and ctl < 64 and (xfs[ctl] & 1),
+              "a cell nobody touched stays locked, on a base XF",
+              "B2 names XF %r, whose XF_TYPE_PROT is %r - wanted an index "
+              "below 64 with the locked bit SET, which is Excel's default and "
+              "what every XF this app wrote before 81.47 got wrong"
+              % (ctl, None if ctl is None or ctl >= len(xfs) else xfs[ctl]))
+
         flags = recalc_flags(biff_raw)
         check(len(flags) >= 3,
               "the formula column is written as FORMULA records",
