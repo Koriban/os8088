@@ -1385,7 +1385,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
-        stories zdisk ztest zh zhboot zcheck zgfx zpic zscreens xt-z 386-z \
+        stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         cc-note chello covl cword cworddisk 386-c-word runcpm runcpmdisk \
         runcpm-src cpmsw rcz80test rcmemtest rczex 386-runcpm \
@@ -3371,7 +3371,8 @@ $(BUILD)/mppmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/modplug.o88 \
 # drive than ModPlug.
 $(BUILD)/zt/ZOPS.Z5: tests/frotz/zopstest.inf
 	@mkdir -p $(BUILD)/zt
-	inform -v5 $< $@
+	@$(INFORMCHK)
+	$(INFORM) -v5 $< $@
 
 $(BUILD)/zmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/frotz.o88 \
                        $(BUILD)/zt/ZOPS.Z5 tools/os88disk.py
@@ -4781,7 +4782,8 @@ ztest: $(ZTESTDIR)/gold3.txt $(ZTESTDIR)/gold5.txt $(ZTESTDIR)/gold8.txt \
 
 $(ZTESTDIR)/zopstest.z%: tests/frotz/zopstest.inf
 	@mkdir -p $(ZTESTDIR)
-	inform -v$* $< $@
+	@$(INFORMCHK)
+	$(INFORM) -v$* $< $@
 
 $(ZTESTDIR)/gold%.txt: $(ZTESTDIR)/zopstest.z%
 	dfrotz -w 80 -h 200 -p $< | grep -E '^(PASS|FAIL|TEXT|RESULT)' > $@
@@ -4889,25 +4891,34 @@ zgfxpic: zh zpic
 # Needs an Inform 6 compiler, which is host-side only.
 ZPICDIR := $(BUILD)/zpic
 
-# WHICH IS NOT ALWAYS CALLED `inform`. Debian's inform6-compiler and Homebrew's
-# inform6 both install it as `inform6`; older and hand-built ones use `inform`.
-# This rule hard-coded the maintainer's name for it, so everywhere else it did
-# not degrade - it died as `make: inform: No such file or directory`, which
-# reads like a broken Makefile rather than a missing package. Look for both,
-# and let INFORM= name a third.
+# WHICH IS NOT ALWAYS CALLED `inform`. Debian's inform6-compiler installs it as
+# `inform6`; Homebrew's inform6 formula installs it as `inform` (and
+# `inform-6.44`), with no `inform6` at all - so BOTH names are in the field,
+# on the two platforms this repo is built on, and neither is safe to hard-code.
+# These rules hard-coded one of them, so on the other they did not degrade -
+# they died as `make: inform: No such file or directory`, which reads like a
+# broken Makefile rather than a missing package. Look for both, and let
+# INFORM= name a third.
 INFORM ?= $(shell command -v inform6 2>/dev/null || command -v inform 2>/dev/null)
+
+# ...and the SAME refusal for each of the three rules that compile Inform
+# source, because a message worth writing is worth not triplicating. `$(INFORM)`
+# on its own would expand to nothing and run `-v6 <file>`, whose error is worse
+# than the one this replaces. Named `$@` so the reader is told which target
+# wanted the compiler.
+INFORMCHK = if [ -z "$(INFORM)" ]; then \
+		echo "$@: no Inform 6 compiler found (tried inform6, inform)."; \
+		echo "  Debian/Ubuntu: sudo apt install inform6-compiler"; \
+		echo "  macOS:         brew install inform6"; \
+		echo "  or name one:   make INFORM=/path/to/inform6"; \
+		exit 1; \
+	fi
 
 zpic: $(ZPICDIR)/zpictest.z6 $(ZPICDIR)/zpictest.PIX
 
 $(ZPICDIR)/zpictest.z6: tests/frotz/zpictest.inf
 	@mkdir -p $(ZPICDIR)
-	@if [ -z "$(INFORM)" ]; then \
-		echo "zpic: no Inform 6 compiler found (tried inform6, inform)."; \
-		echo "  Debian/Ubuntu: sudo apt install inform6-compiler"; \
-		echo "  macOS:         brew install inform6"; \
-		echo "  or name one:   make zpic INFORM=/path/to/inform6"; \
-		exit 1; \
-	fi
+	@$(INFORMCHK)
 	$(INFORM) -v6 $< $@
 
 $(ZPICDIR)/zpictest.PIX: tools/zpicgen.py tools/os88pix.py
