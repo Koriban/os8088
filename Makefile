@@ -1410,7 +1410,7 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360) \
      $(MEDIAIMG360) $(BUILD)/wire.o88 $(BUILD)/fptest.o88 $(BUILD)/imgtest.o88 \
-     $(BUILD)/chart.o88 \
+     $(BUILD)/chart.o88 $(BUILD)/scribe.o88 \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
 # chart.o88 is here for the same reason, and it is the sharper case: it stopped
@@ -1418,6 +1418,14 @@ all: checkdocs $(IMG) $(IMG720) $(IMG360) $(APPSIMG) $(APPSIMG720) $(APPSIMG360)
 # apps/os88chart.inc's RESIDENT half - SHEET builds the overlay half. Drop it
 # from `all` too and `%ifndef CH_OVERLAY` becomes a branch nothing assembles,
 # which rots in silence until somebody needs it again.
+#
+# scribe.o88 joined them on 2026-09-04, having been caught by exactly the rot
+# those two are here to prevent. It is not in APPS_TOOLS either - it ships on
+# its own `make scribedisk` floppy - so `scribe` was a phony target and nothing
+# else, and plain `make` never assembled it. A source edit to scribe.asm
+# therefore did not reach build/scribe.o88 and did not reach test-fast; the
+# change LOOKED applied and the emulator ran the previous binary. `ovlchk`
+# reads SCRIBE.OVL, so it was checking a stale file for the same reason.
 #
 # fptest.o88 and imgtest.o88 are here for wire.o88's reason below, and fptest
 # was NOT here until imgtest joined it: its own rule says "built here so it
