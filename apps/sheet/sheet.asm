@@ -4995,16 +4995,10 @@ sh_mfire:
     call sh_repaint
     jmp .out
 .fsaveas:
-    cmp al, 3                          ; 3 is Save As...; 4 is Print..., which
-    jne .fprint                        ; used to be this label's fall-through
-    mov al, SH_FDK_SAVEFMT             ; ASK for the format, then name it. The
-    call sh_fdlg_open                  ; format used to be whatever extension
-    jmp .out                           ; the typed name happened to end in
-.fprint:
-    mov word [sh_msg], sh_s_noprint
-    mov si, [sh_ownwin]
-    call sh_repaint
-    jmp .out
+    mov al, SH_FDK_SAVEFMT             ; 3, and the last item. ASK for the
+    call sh_fdlg_open                  ; format, then name it - the format used
+    jmp .out                           ; to be whatever extension the typed
+                                       ; name happened to end in
 .edit:
     call sh_docmd_edit
     jmp .out
@@ -26728,7 +26722,7 @@ sh_mf_ret:
 ; menu index (the macro language names commands, not menu positions), which is
 ; what made the renumber safe to do at all.
 sh_mtab:
-    dw sh_m_file,    sh_i_file,    5
+    dw sh_m_file,    sh_i_file,    4
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
@@ -26759,17 +26753,14 @@ sh_it_find:      db 'Find...', 0
 sh_ttl:        db 'Sheet', 0
 sh_s_appname:  db 'Sheet', 0
 sh_m_file:     db 'File', 0
-sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas, sh_it_print
+sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas
 sh_it_new:     db 'New...', 0
 sh_it_open:    db 'Open...', 0
 sh_it_save:    db 'Save', 0
 sh_it_saveas:  db 'Save As...', 0
-; Print... is DELIBERATELY A STUB: there is no print backend anywhere in this
-; OS, so the item exists for menu fidelity and says so in the status bar
-; rather than opening a dialog that could not do anything. Exit is absent on
-; purpose too - the OS menu owns it.
-sh_it_print:   db 'Print...', 0
-sh_s_noprint:  db 'Printing is not supported.', 0
+; NO PRINT ITEM. OS8088 has no print backend, so the menu entry is absent
+; rather than present-and-refusing (decided 2026-09-04). Exit is absent for a
+; different reason - the OS menu owns it.
 sh_s_nocopyarea: db 'Copy a cell or range first.', 0
 sh_s_locked:   db 'Locked cell on a protected document.', 0
 sh_s_protdoc:  db 'The document is protected.', 0

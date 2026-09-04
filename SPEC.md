@@ -80863,9 +80863,11 @@ inserting a menu — as Formula was inserted at index 2 — a contained change
 rather than a search across the file.
 
 **Exit is not in Sheet's File menu**: the OS menu owns closing a package.
-**Print... is a stub** that says so in the status bar, because there is no
-print backend anywhere in this OS; an item that opened a dialog which could not
-print would be worse than one that is honest.
+**There is no Print... item** (decided 2026-09-04). It used to be one that
+said "Printing is not supported." in the status bar. There is no print backend
+anywhere in this OS, so the entry is absent rather than present-and-refusing;
+SCRIBE's four print items went the same way at the same time. WORD's are left
+as they are.
 
 ### 81.6 Dialogs — and the window slot they must free
 
@@ -83145,7 +83147,7 @@ directory — a later addition, harmless.
 | Formula | 7 | 7 | **none** |
 | Edit | 9 | 12 | Repeat, Paste Special, Paste Link |
 | Format | 6 | 8 | Cell Protection, Justify |
-| File | 5 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup |
+| File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 3 | 10 | Set Print Area/Titles/Page Break, Display, Freeze Panes, Protect Document, Calculate Now, Workspace, Short Menus |
 | Data | 1 shared | 10 | Form, Find, Extract, Delete, Set Database, Set Criteria, Series, Table, Parse |
 | Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
@@ -83162,8 +83164,9 @@ and §82 is this tree's answer to that.
   presets); what they set is one `sh_cellw`/`sh_cellh` for everything.
   `sh_gridhit` divides by the width once, and a per-column grid has to walk.
 - **No printing at all** — and not SHEET's fault: there is no print backend
-  anywhere in this OS, which is why `Print...` is a stub that says so. Six of
-  the missing File/Options commands are downstream of that one absence.
+  anywhere in this OS, which is why there is no `Print...` item at all
+  (2026-09-04). Seven of the missing File/Options commands are downstream of
+  that one absence.
 - **The macro language is 5 commands** of a language with ~90 macro functions
   (§81.8). It is a demonstration of the machinery, not the feature.
 - **No Short/Full menus toggle**, so SHEET shows one fixed set — which is why

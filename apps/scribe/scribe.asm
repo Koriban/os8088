@@ -19581,7 +19581,7 @@ wd_m_baddoc: db 'Bad .DOC file', 0
 %endmacro
 
 wd_mtab:
-    db 0,  4, 0, 14
+    db 0,  4, 0, 9
     dw wd_it_file, 208
     db 5,  4, 0, 15
     dw wd_it_edit, 144
@@ -19621,12 +19621,9 @@ wd_it_file:                         ; &File
     WDMI 0,        5, WDA_SAVEAS, 'A', wd_L_saveas, wd_C_f12
     WDMI WDMF_DIS, 3, WDA_NONE,   'E', wd_L_saveall, 0
     WDMI WDMF_DIS, 0, WDA_NONE,   'F', wd_L_find,   0
-    WDMS
-    WDMI WDMF_DIS, 0, WDA_NONE,   'P', wd_L_print,  wd_C_csf12
-    WDMI WDMF_DIS, 9, WDA_NONE,   'V', wd_L_prview, 0
-    WDMI WDMF_DIS, 6, WDA_NONE,   'M', wd_L_prmerge, 0
-    WDMI WDMF_DIS, 1, WDA_NONE,   'R', wd_L_prsetup, 0
-    WDMS
+    WDMS                            ; no Print/Preview/Merge/Setup: OS8088 has
+                                    ; no print backend, so they are absent
+                                    ; rather than greyed (decided 2026-09-04)
     WDMI 0,        1, WDA_EXIT,   'X', wd_L_exit,   wd_C_af4
 
 wd_it_edit:                         ; &Edit
@@ -19748,10 +19745,6 @@ wd_L_save:     db 'Save', 0
 wd_L_saveas:   db 'Save As...', 0
 wd_L_saveall:  db 'Save All', 0
 wd_L_find:     db 'Find...', 0
-wd_L_print:    db 'Print...', 0
-wd_L_prview:   db 'Print Preview', 0
-wd_L_prmerge:  db 'Print Merge...', 0
-wd_L_prsetup:  db 'Printer Setup...', 0
 wd_L_exit:     db 'Exit', 0
 wd_L_undo:     db 'Undo', 0
 wd_L_repeat:   db 'Repeat', 0
