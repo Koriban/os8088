@@ -54,6 +54,7 @@ Run it against a SHEET built before the two fixes and steps 5 and 6 fail:
 that is the A/B, and it is what says this test contains its own cases.
 """
 import os
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -87,12 +88,31 @@ CELLS = {
     (1, 0): 'Widget', (1, 1): 12.0,  (1, 2): 1.5,          (1, 3): ('bool', True),
     (2, 0): 'a;b',    (2, 1): 7.0,   (2, 2): -2.25,        (2, 3): ('err', '#DIV/0!'),
     (3, 0): 'Gadget', (3, 1): 3.0,   (3, 2): 1234567.89,   (3, 3): 'x',
+    # Column 4 is FORMULAS, authored as SYLK ;E expressions, and it is here
+    # for the FORMULA record rather than for its values: two ordinary ones
+    # and one VOLATILE one, so the option-flags check below has both cases.
+    (0, 4): 'CALC',
+    (1, 4): ('formula', 'B2+1', 13.0),
+    (2, 4): ('formula', 'B3+1', 8.0),
+    (3, 4): ('formula', 'RAND()', 0.5),
 }
+
+# The one cell whose value cannot be pinned, and the two that must not be
+# volatile.  RAND is the only function this app emits that is both volatile
+# and always numeric - NOW answers #N/A on a machine with no RTC, and every
+# machine here is one (SPEC.md 81.43.1).
+VOLATILE_CELL = (3, 4)
+PLAIN_FORMULA = (1, 4)
 
 # Which columns .DBF must make numeric: a dBASE field has ONE type for the
 # whole column, so a column is N only if every record in it is a number.
-DBF_NUM = {c for c in range(4)
-           if all(isinstance(CELLS.get((r, c)), float) for r in (1, 2, 3))}
+def _isnum(v):
+    return isinstance(v, float) or (isinstance(v, tuple) and v[0] == 'formula'
+                                    and isinstance(v[2], float))
+
+
+DBF_NUM = {c for c in range(5)
+           if all(_isnum(CELLS.get((r, c))) for r in (1, 2, 3))}
 
 # Calibrated by holding each menu open and photographing it, per the standing
 # rule about pull-down offsets.  A missed click does not corrupt anything: the
@@ -130,7 +150,14 @@ def build_disk():
 
 def want(kind, key):
     """What this format is allowed to come back with for a cell."""
+    if key == VOLATILE_CELL:
+        return 'volatile-any-number'      # RAND: a number in [0,1), no more
     v = CELLS[key]
+    if isinstance(v, tuple) and v[0] == 'formula':
+        v = v[2]                          # a formula compares as its VALUE:
+                                          # every format here writes the
+                                          # result, and only BIFF also carries
+                                          # the tokens
     if kind == 'dbf':
         # Row 0 becomes the FIELD NAMES, so it returns as text either way.
         # Below it, a column is numeric only if the whole column is.
@@ -159,11 +186,46 @@ def want(kind, key):
 
 
 def agrees(kind, expect, got):
+    if expect == 'volatile-any-number':
+        if isinstance(got, tuple) and got and got[0] == 'formula':
+            got = got[2]                  # BIFF and SYLK hand back the
+                                          # expression as well as the value,
+                                          # and it is the value that varies
+        if kind in ('csv', 'txt', 'dbf') and isinstance(got, str):
+            try:
+                got = float(got)          # these three have no type field
+            except ValueError:
+                return False
+        return isinstance(got, float) and 0.0 <= got < 1.0
     if expect == 'any-error':
         return isinstance(got, tuple) and got and got[0] == 'err'
     if expect == 'bool-or-text':
         return got == ('bool', True) or got == 'TRUE'
     return F.close(expect, got)
+
+
+def recalc_flags(data):
+    """{(row, col): option flags} for every FORMULA record in a BIFF stream.
+
+    5.50: BIFF3-4 FORMULA is 0206H/0406H, and the option flags sit at offset
+    14 of the body with bit 0 = "Recalculate always".  3.11's legend requires
+    that bit whenever the token array contains a VOLATILE function - of the
+    five (RAND, NOW, INDIRECT, OFFSET, CELL) this app can emit three.  Written
+    with the bit clear, as every record was until 81.44, a =RAND() saved by
+    SHEET opens in Excel frozen at the value SHEET cached.
+    """
+    out = {}
+    i = 0
+    while i + 4 <= len(data):
+        op, ln = struct.unpack_from("<HH", data, i)
+        if ln == 0 and op == 0:
+            break
+        if op in (0x0206, 0x0406) and i + 4 + ln <= len(data) and ln >= 18:
+            b = data[i + 4:i + 4 + ln]
+            row, col = struct.unpack_from("<HH", b, 0)
+            out[(row, col)] = struct.unpack_from("<H", b, 14)[0]
+        i += 4 + ln
+    return out
 
 
 def main():
@@ -191,14 +253,17 @@ def main():
         vol = os88flush.Flush(marty=m).volume(1)
         names = vol.names()
         got = {}
+        biff_raw = None
         for kind in KINDS:
             name = 'SHIN.%s' % kind.upper()
             check(name in names, "%s written" % name,
                   "%s is not on the disk - the save for it did not happen "
                   "(names: %s)" % (name, names))
             if name in names:
-                got[kind] = F.read(name, data=vol.read(name),
-                                   kind=READER[kind])
+                raw = vol.read(name)
+                if kind == 'bif':
+                    biff_raw = raw
+                got[kind] = F.read(name, data=raw, kind=READER[kind])
 
     for kind in KINDS:
         if kind not in got:
@@ -216,6 +281,27 @@ def main():
               "the host wrote a SYLK file, SHEET read it and wrote %s, and "
               "the host disagrees about %d cell(s): %s"
               % (kind.upper(), len(bad), '; '.join(bad)))
+
+    if biff_raw is not None:
+        flags = recalc_flags(biff_raw)
+        check(len(flags) >= 3,
+              "the formula column is written as FORMULA records",
+              "found %d FORMULA record(s), wanted the three in column 4 - a "
+              "token array SHEET declines to emit falls back to a plain "
+              "NUMBER record, and then there is nothing here to carry the "
+              "flag (%r)" % (len(flags), sorted(flags)))
+        v = flags.get(VOLATILE_CELL)
+        check(v is not None and (v & 1),
+              "a volatile formula sets Recalculate always",
+              "the =RAND() cell's FORMULA option flags are %r, wanted bit 0 "
+              "set (5.50) - Excel would show SHEET's cached value forever"
+              % (v,))
+        q = flags.get(PLAIN_FORMULA)
+        check(q is not None and not (q & 1),
+              "an ordinary formula does not",
+              "the =B2+1 cell's flags are %r, wanted bit 0 clear - a blanket "
+              "'always recalculate' is not the fix, it just moves the "
+              "question" % (q,))
 
     done("sheetfmt")
 

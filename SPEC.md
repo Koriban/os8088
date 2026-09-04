@@ -83480,6 +83480,97 @@ that goes stale silently. **If the two should agree, the fix is an API slot,
 not a second copy of the constant** — and that is an upstream change with its
 own review, not something to smuggle in beside a text function.
 
+### 81.44 `INDIRECT`, and the flag that says a formula is volatile
+
+111 functions.
+
+**`INDIRECT`** takes a reference *spelled as text* and reads what it names.
+It is a TEXT-group function whose answer is a value, so it reuses
+`sh_pstrarg` to get its argument and then hands `sh_sacc` to `sh_pcellref` —
+the same routine that reads a reference out of a formula. `SI` is banked
+across that call because the routine advances it and the formula's own cursor
+is live. A string that is not a single reference — `"A1:B2"`, `"ZZ"`, `"A1 "` —
+is refused with `#REF!` rather than half-read.
+
+It falls out that `INDIRECT` onto a label returns the label: `sh_getcell2`
+loads a text cell into `sh_sacc` and sets `sh_curtype`, and the handler leaves
+both alone.
+
+#### 81.44.1 The indices were checked, not remembered
+
+Four functions were added across §81.43 and this section, and each needs a
+**BIFF ftab index** to be writable at all. The copy of the OpenOffice.org
+*Documentation of the Microsoft Excel File Format* in `docs/` is the **2002
+revision, whose excelfileformat 3.11 reads "2do"** — §81.10.2 already records that, and it is
+why the indices in `sh_rpn_fid` were sourced from revision 1.42 instead.
+
+Revision 1.42 is still published at the address the document itself prints,
+`http://sc.openoffice.org/excelfileformat.pdf`, and one `curl` settled all
+four against **excelfileformat 3.11.1, Built-In Sheet Functions in BIFF2** — which is also
+the answer to "does Excel 2.1 have this at all", since that is the table's
+whole subject:
+
+| ftab | function | min | max | notes |
+|---|---|---|---|---|
+| 63 | `RAND` | 0 | 0 | volatile |
+| 148 | `INDIRECT` | 1 | 2 | volatile; `tFuncVar` |
+| 162 | `CLEAN` | 1 | 1 | |
+| 163 | `MDETERM` | 1 | 1 | parameter class **A** (array) |
+| 190 | `ISNONTEXT` | 1 | 1 | |
+
+*Absent is not unobtainable.* The right revision was one request away, and
+the alternative was four indices carried on recall into a binary file format
+where a wrong one is not an error any reader reports — it is a different
+function, silently.
+
+#### 81.44.2 A volatile function has to say so in the file
+
+That same table has a **Volatile** column, and its legend is a requirement,
+not a note: a volatile function "causes the *Recalculate always* flag to be
+set" in the `FORMULA` record. excelfileformat 5.50 puts that flag at offset 14, bit 0.
+
+`sh_biff_formula` wrote `xor ax, ax` there — **neither recalc bit, for every
+record ever written**. That was harmless while every function this app emitted
+was pure, and stopped being harmless the moment `NOW` landed and again when
+`RAND` did. A `=NOW()` saved by SHEET and opened in Excel shows the value
+SHEET cached at save time, forever: the tokens are right, the result is right
+for the instant it was written, and nothing ever asks for it again.
+
+`sh_rpn_func` now raises `sh_rpn_vol` when it emits ftab 63, 74 or 148 — the
+three volatile functions this app has, out of the five in the table (`OFFSET`
+and `CELL` are the others, and it has neither). Compared inline rather than
+through a fourth table parallel to `sh_rpn_fid`: three entries do not earn 110
+bytes, and a near call from there to a resident helper is what §82.16 rule 1
+forbids.
+
+**The check is in the round-trip gate, and it was mutation-tested.**
+`tests/sheetfmt.py` gained a formulas column — two ordinary formulas and one
+`RAND()` — and reads the option flags straight out of the BIFF stream it
+already saves. With the fix: 15 checks pass. With `xor ax, ax` put back and
+nothing else changed: **exactly one fails**, and it is the right one, naming
+the cell and the flag. The `=B2+1` control is what stops "set the bit
+always" from passing — a blanket *recalculate everything* would satisfy the
+volatile case and is not the fix.
+
+`RAND` rather than `NOW` for the volatile cell, because `NOW` answers `#N/A`
+on every machine in `tools/martypc/configs` (§81.43.1) and a test should not
+depend on that. Its value cannot be pinned, so the gate accepts *any* number
+in `[0,1)` there — the cell is present for its `FORMULA` record, not its
+result.
+
+#### 81.44.3 Dialog coordinates belong to a MACHINE, not to a dialog
+
+An ad-hoc script for this work copied the gate's `File > Save As` coordinates
+verbatim and saved nothing. The coordinates were right; the **machine** was
+not. `tests/sheetfmt.py` runs on `os8088_5150_cga_gla` and the script ran on
+`os8088_xt_vga`, where the window sits lower and the menu bar with it.
+
+The standing rule was "never reuse a remembered pull-down offset" (§81.41).
+It is narrower than the failure: **a calibrated coordinate is valid for one
+machine's geometry**, and copying it to another adapter is the same mistake as
+copying it across a dialog that gained a row. The gate keeps its own
+constants, which is why it kept working.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

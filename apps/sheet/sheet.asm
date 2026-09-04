@@ -12638,8 +12638,9 @@ sh_biff_formula:
     mov ax, 0xFFFF
     call sh_biffw
 .resdone:
-    xor ax, ax                        ; option flags: neither recalc bit
-    call sh_biffw
+    mov ax, [sh_rpn_vol]              ; option flags: bit 0 "Recalculate
+    call sh_biffw                     ; always", raised by sh_rpn_func for a
+                                      ; volatile function anywhere in the array
     mov ax, [sh_wrec_len]             ; cce, the token array's own length
     call sh_biffw
     mov si, sh_rpn_buf
@@ -16652,6 +16653,12 @@ sh_rpn_fid:
     db 62, 60                         ; IRR MIRR
     db 74                             ; NOW - BIFF's own ftab index for it
     db 190, 162, 63                   ; ISNONTEXT CLEAN RAND
+    db 148                            ; INDIRECT. All four of these were
+                                       ; CHECKED against 3.11.1's own table
+                                       ; (Built-In Sheet Functions in BIFF2)
+                                       ; in revision 1.42, not recalled -
+                                       ; the copy in docs/ is the 2002
+                                       ; revision whose 3.11 reads "2do"
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16692,6 +16699,11 @@ sh_rpn_fvar:
     db 1, 0                           ; IRR(1..2) MIRR
     db 0                              ; NOW()
     db 0, 0, 0                        ; ISNONTEXT(1) CLEAN(1) RAND()
+    db 1                              ; INDIRECT is 1..2 in that table -
+                                       ; tFuncVar, even though the second
+                                       ; argument (A1 vs R1C1) is one this
+                                       ; app never passes, exactly as the
+                                       ; TRUNC note above says
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -16790,6 +16802,20 @@ sh_rpn_func:
     mov al, [sh_rpn_fid + bx]
     cmp al, 0xFF
     je .bad                           ; no index at this BIFF version
+    cmp al, 63                        ; RAND, NOW and INDIRECT are the three
+    je .vol                           ; functions this app can emit that
+    cmp al, 74                        ; 3.11.1 marks VOLATILE, and the legend
+    je .vol                           ; there says a volatile function sets
+    cmp al, 148                       ; "Recalculate always" in the FORMULA
+    jne .notvol                       ; record (5.50 bit 0). Written with that
+.vol:                                 ; bit clear - as every record was - a
+    mov word [sh_rpn_vol], 1          ; =NOW() opened in Excel shows the value
+.notvol:                              ; SHEET cached and never refreshes it.
+                                      ; Compared inline rather than through a
+                                      ; fourth parallel table: three entries do
+                                      ; not earn 110 bytes, and a near call to
+                                      ; a resident helper is what 82.16 rule 1
+                                      ; forbids from in here
     xor cx, cx                        ; CX = how many arguments were seen
     call sh_rpn_skip
     mov si, [sh_rpn_p]
@@ -16860,6 +16886,7 @@ sh_rpn_emit:
     mov [sh_rpn_p], si
     mov word [sh_rpn_len], 0
     mov byte [sh_rpn_bad], 0
+    mov word [sh_rpn_vol], 0          ; per formula, not per file
     call sh_rpn_cmp
     cmp byte [sh_rpn_bad], 0
     jne .no
@@ -19220,6 +19247,9 @@ sh_pfunc:
     je .doabs
     cmp ax, 109                        ; RAND() is nullary like NOW()
     je .dorand
+    cmp ax, 110                        ; INDIRECT is a TEXT function that
+    je .dotext                         ; answers with a VALUE - it takes the
+                                       ; string apart and reads what it names
     cmp ax, 108                        ; CLEAN joins the TEXT functions, whose
     je .dotext                         ; result is a string
     cmp ax, 107                        ; ISNONTEXT joins the INFORMATION ones,
@@ -19387,22 +19417,22 @@ sh_pfunc:
 ; do not fold over a range the way SUM does; each parses exactly the arguments
 ; it takes and computes a value.
 ;
-; WHAT IS DELIBERATELY ABSENT, and why. This list used to say "all of these
-; need the value model Stage 4.0 brings", and that reason EXPIRED when Stage
-; 4.0 landed - values are IEEE-754 doubles now and cells carry an SH_T_* tag,
-; so SQRT really does return 1.41421 and the fraction-dependent families are
-; no longer blocked on arithmetic. What still blocks these three is a
-; different thing:
-;   ISBLANK  an argument is FOLDED TO A VALUE before the function sees it, so
-;   ISNUMBER by the time either of these is called there is no reference left
-;            to ask about - an empty cell and a cell holding 0 both arrive as
-;            0, and a label arrives as its numeric value. Answering them needs
-;            reference-typed arguments in the evaluator, not a wider number.
-;   ISNA/NA  SH_T_BOOL and SH_T_ERR are reserved, but nothing in the evaluator
-;            ever produces one, so there is still no error value to return or
-;            to test for.
-; A version of any of them that returned a plausible constant would be worse
-; than its absence.
+; THIS BLOCK USED TO LIST ISBLANK, ISNUMBER, ISNA AND NA AS "DELIBERATELY
+; ABSENT". ALL FOUR SHIP - ids 25, 26, 31 and 33, dispatched by sh_pinfo a
+; thousand lines down, which reads its argument through sh_pargclass and so
+; has the reference the comment said had already been folded away.
+;
+; The reasons given were true when they were written and expired twice over:
+; the first version said "all of these need the value model Stage 4.0 brings",
+; which 4.0 delivered; the rewrite said the argument is folded before the
+; function sees it, which sh_pargclass fixed. Neither edit removed the entry.
+; The cost is not a wrong result - it is that a reader looking for somewhere
+; to put a new INFORMATION function reads this and concludes the category is
+; blocked, which is exactly what happened on the way to 81.44.
+;
+; A COMMENT THAT NAMES WHAT IS MISSING HAS TO BE DELETED WHEN THE THING
+; ARRIVES, and nothing enforces that. What is genuinely absent now is listed
+; in SPEC.md 81, which is at least read as a whole often enough to notice.
 ;
 ; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
 ; =============================================================================
@@ -22675,6 +22705,8 @@ sh_ptext:
     je .trim
     cmp di, 108
     je .clean
+    cmp di, 110
+    je .indirect
     cmp di, 45
     je .rept
     cmp di, 47
@@ -22701,6 +22733,23 @@ sh_ptext:
 .valbad:
     mov byte [sh_evalerr], SH_ERR_VALUE
     xor ax, ax
+    jmp .num
+
+.indirect:                            ; the argument is a REFERENCE SPELLED AS
+    push si                           ; TEXT, so it is parsed out of sh_sacc by
+    mov si, sh_sacc                   ; the same routine that reads one out of
+    call sh_pcellref                  ; a formula. SI is banked because that
+    jnc .indbad                       ; routine advances it and the formula's
+    cmp byte [si], 0                  ; own cursor is live. "A1:B2" and "A1 "
+    jne .indbad                       ; are not single references and are
+    pop si                            ; refused rather than half-read
+    call sh_getcell2                  ; -> sh_acc, sh_curtype, and sh_sacc too
+    call sh_acc_toint                 ; if the target holds a LABEL, which is
+    jmp .close2                       ; why sh_curtype is left as it set it
+.indbad:
+    pop si
+    mov byte [sh_evalerr], SH_ERR_REF ; #REF!, which is what Excel gives for
+    xor ax, ax                        ; INDIRECT("not a reference")
     jmp .num
 
 .len:
@@ -26163,6 +26212,7 @@ sh_f_now:      db 'NOW', 0
 sh_f_isnontext: db 'ISNONTEXT', 0
 sh_f_clean:    db 'CLEAN', 0
 sh_f_rand:     db 'RAND', 0
+sh_f_indirect: db 'INDIRECT', 0
 sh_f_rows:      db 'ROWS', 0
 sh_f_columns:   db 'COLUMNS', 0
 sh_f_areas:     db 'AREAS', 0
@@ -26233,6 +26283,7 @@ sh_functab:
     dw sh_f_irr, sh_f_mirr
     dw sh_f_now                       ; 106 (81.42)
     dw sh_f_isnontext, sh_f_clean, sh_f_rand   ; 107 108 109 (81.43)
+    dw sh_f_indirect                  ; 110 (81.44)
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -27483,7 +27534,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4780
+    OS88_BSS 4782
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -28260,7 +28311,9 @@ sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; 81.34.1
 sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
 sh_rndhi      equ sh_rndlo + 2
-sh_dbf_nf     equ sh_rndhi + 2      ; 81.41's dBASE III scratch
+sh_rpn_vol    equ sh_rndhi + 2      ; word: this formula's token array contains
+                                       ; a volatile function (81.44)
+sh_dbf_nf     equ sh_rpn_vol + 2    ; 81.41's dBASE III scratch
 sh_dbf_nr     equ sh_dbf_nf + 2
 sh_dbf_hl     equ sh_dbf_nr + 2
 sh_dbf_rl     equ sh_dbf_hl + 2
