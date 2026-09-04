@@ -83680,6 +83680,101 @@ already failed.** Currency changes the *text*.
   dialog would set bits nothing reads. The menu item is not added until the
   feature is, which is the rule §81's Formula-menu note already states.
 
+### 81.46 Cell protection, in the spare bits of a byte that was already there
+
+Format > **Cell Protection...** and Options > **Protect Document**. Excel's
+model, and the reason the two are useless apart: a *Locked* cell on an
+unprotected document is an ordinary cell. Every cell starts locked and nobody
+notices until the document is protected, at which point the cells you
+deliberately *unlocked* are the ones that still take input.
+
+#### 81.46.1 Where the bits went, and why not the obvious place
+
+The obvious place is `SH_C_FLAGS`, which has bits 2-7 free. **It is the wrong
+place.** Several sites write that byte as a *word* together with the format,
+and `sh_setvalue`'s "not a formula any more" path clears it outright — so a
+Locked bit would survive some edits and vanish on others, which is worse than
+not having one. Finding that out cost one `grep` and is the only reason this
+section is not an audit of twenty-three write sites.
+
+It went into the **border table's** byte instead. That byte uses bits 0-4;
+every reader of it either tests a single bit or masks with `0x1F`, so bits 5-7
+were genuinely free, and the table is *already* a sparse "no record = the
+default" store keyed by cell — which is exactly the shape protection wants,
+because almost every cell has the default.
+
+**The sense is inverted on purpose.** `SH_PROT_UNLOCK` (bit 5) means *not*
+locked; `SH_PROT_HIDDEN` (bit 6) means hide the formula. Storing "Locked"
+would have made the absence of a record mean *unlocked* — the opposite of
+Excel, and the opposite of safe. Storing the exception means an untouched
+sheet is entirely locked, exactly as a new Excel sheet is, at a cost of zero
+bytes and no record widening.
+
+The two dialogs are now each other's mirror: `sh_bdlg_apply` masks with
+`SH_PROT_MASK` before OR-ing its border bits in, and Cell Protection masks
+with its complement. Clearing every border no longer removes the record if the
+cell is also unlocked or hidden, and vice versa — the record goes only when
+the whole byte is zero. **Verified by setting a border, then changing the
+protection, and checking the border is still drawn**; before the mask it was
+a plain store and the second write erased the first.
+
+#### 81.46.2 Two guards, because there are two funnels — and there were three
+
+`sh_commit` is the one place that decides what a cell becomes, so a guard in
+front of it covers typing, all six paste modes, Fill Right, Fill Down and a
+sort's write-back at once.
+
+It does not cover everything. **Cut clears through `sh_clearcell` directly**,
+and Paste Special's **Formats and Notes write the tables directly** — neither
+goes anywhere near `sh_commit`. Both got their own guard. Insert and Delete
+refuse for the *whole document* rather than per cell, because a row that moves
+carries locked cells it never named.
+
+`sh_prot_blocked` scans **the whole selection**, not the anchor. The first
+version asked about one corner, which would have let a Cut take every locked
+cell beside an unlocked one. `sh_commit`'s selection is 1x1 by the time it
+runs, so it costs one lookup there.
+
+**Hidden is entirely a formula-bar property.** The grid shows a cell's
+*result*; the bar is the only place a formula is ever shown as itself. So
+hiding one is four lines in `sh_drawbar` and nothing anywhere else.
+
+**A refusal has to repaint.** Cut's guard jumped straight to the exit, which
+skipped the redraw — so the command did nothing *and said nothing*, and the
+message `sh_prot_blocked` had just set was never painted. The Clear path had
+the same shape. Both now go through a `.refused` label that repaints.
+
+**Verified with the discriminating pair.** On one protected document: `D1`
+locked and hidden refuses both a typed value and a Cut, keeps its 43, and
+shows an empty formula bar with the status line reading *"Locked cell on a
+protected document."*; `D2`, explicitly unlocked, accepts `7` in the same
+breath. Either half alone proves nothing — a refusal that refuses everything
+is just a broken app, and an acceptance that accepts everything is no guard at
+all. Ordinary Cut on an unprotected document was re-checked afterwards,
+because the refusal path had been restructured around it.
+
+#### 81.46.3 No password, and no ellipsis promising one
+
+Excel's Protect Document dialog takes a password. This is a plain toggle whose
+label flips to **Unprotect Document**, the way Gridlines and Formulas above it
+already do, and it deliberately carries **no `...`** — an ellipsis is a promise
+of a dialog.
+
+Protection without a password still does the thing protection is mostly for:
+stopping an accidental edit to a cell that should not take one. A password
+would need a field, storage, and a comparison, and stored in a `.XLS` it is
+famously worth very little. When there is a password it belongs with a real
+Protect Document dialog and with saving the state to file — neither of which
+this does yet, so **protection is not persisted**: a saved and reopened
+document comes back unprotected, with its per-cell bits gone too, since the
+border table is not written to any of the six formats either.
+
+The dialog itself is **four radio buttons** — Locked / Unlocked / Locked,
+Hidden / Unlocked, Hidden — where Excel has two independent check boxes. That
+is the same compression the Font dialog already applies to Bold and Underline,
+on the same engine, so the app is at least consistent with itself; the Border
+dialog is the one that draws check boxes and it is hard-wired to borders.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

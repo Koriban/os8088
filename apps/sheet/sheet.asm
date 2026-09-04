@@ -539,6 +539,23 @@ SH_BORD_TOP    equ 0x04
 SH_BORD_BOTTOM equ 0x08
 SH_BORD_SHADE  equ 0x10
 SH_BORD_EDGES  equ 0x0F             ; Left|Right|Top|Bottom together
+; --- cell protection (81.46) lives in the SPARE BITS OF THE SAME BYTE ------
+; The border byte uses bits 0-4 and every reader of it tests single bits or
+; masks with 0x1F, so bits 5-7 were free. Protection goes there rather than
+; into SH_C_FLAGS - which also has spare bits - because several sites write
+; that byte as a WORD together with the format and one clears it outright
+; when a formula becomes a value, so a bit there would survive some edits and
+; not others.
+;
+; THE SENSE IS INVERTED ON PURPOSE. Excel's default is Locked and not Hidden,
+; and this table's whole convention is "no record = the default" - a cell gets
+; a record when it acquires a border and loses it again when the last bit
+; clears. Storing "Locked" would make the absence of a record mean UNlocked,
+; which is the opposite of Excel and the opposite of safe. Storing UNLOCKED
+; means an untouched sheet is entirely locked, exactly as a new Excel sheet is.
+SH_PROT_UNLOCK equ 0x20             ; bit 5: this cell is NOT locked
+SH_PROT_HIDDEN equ 0x40             ; bit 6: hide its formula when protected
+SH_PROT_MASK   equ 0x60             ; the two together, for preserving them
 
 ; sh_doread_biff's FONT/XF tracking tables (a real file might reference more
 ; than this app itself ever writes - beyond the cap, a cell just reads back
@@ -2252,6 +2269,11 @@ sh_commit:
     push es
     cmp byte [sh_editing], 0
     je .out
+    call sh_prot_blocked              ; ONE funnel, so one guard: typing, Paste
+    jnc .allowed                      ; in all six modes, Fill Right and Fill
+    mov byte [sh_editing], 0          ; Down and a sort's write-back all end up
+    jmp .out                          ; here, and none of them can change a
+.allowed:                             ; locked cell on a protected document
     mov byte [sh_editing], 0
     mov byte [sh_commitdirty], 1      ; cell data changes below (even an empty
                                       ; buffer clears the cell) - sh_selpaint
@@ -3522,6 +3544,14 @@ sh_drawbar:
     mov di, sh_tbuf + 16
     push di                            ; sh_findcell's own DI output would
                                         ; otherwise clobber our cursor
+    cmp byte [sh_protected], 0         ; HIDDEN is the half of cell protection
+    je .nothidden                      ; that is about LOOKING rather than
+    mov ax, [sh_selcol]                ; changing, and this bar is the only
+    mov bx, [sh_selrow]                ; place a formula is ever shown as
+    call sh_bt_get                     ; itself - the grid shows its RESULT.
+    test al, SH_PROT_HIDDEN            ; So the whole of hiding one is here
+    jnz .empty2                        ; (81.46.2)
+.nothidden:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_findcell
@@ -5018,8 +5048,10 @@ sh_mfire:
 ; -----------------------------------------------------------------------------
 sh_docmd_options:
     push si
-    cmp al, 2
+    cmp al, 3
     je .calc
+    cmp al, 2
+    je .protect
     or al, al
     jnz .formulas
     xor byte [sh_gridlines], 1
@@ -5038,6 +5070,16 @@ sh_docmd_options:
     jmp .repaint
 .foff:
     mov word [sh_i_options+2], sh_it_form_off
+    jmp .repaint
+.protect:                              ; NO PASSWORD, and no ellipsis on the
+    xor byte [sh_protected], 1         ; item to promise one - see 81.46.3.
+    cmp byte [sh_protected], 0         ; The label flips, the way Gridlines
+    je .poff                           ; and Formulas above already do
+    mov word [sh_i_options+4], sh_it_prot_on
+    jmp .repaint
+.poff:
+    mov word [sh_i_options+4], sh_it_prot_off
+    jmp .repaint
 .calc:
     mov al, SH_FDK_CALC
     call sh_fdlg_open
@@ -5105,12 +5147,18 @@ sh_docmd_format:
     ret
 .notborder:
     cmp al, 4
+    jne .notprot
+    mov al, SH_FDK_PROT
+    call sh_fdlg_open
+    ret
+.notprot:
+    cmp al, 5
     jne .notrowh
     mov al, SH_ID_ROWH                 ; stage 3.0c: a typed number now, not
     call sh_idlg_open                  ; the 3-preset radio pick this had to
     ret                                ; be while no text field existed
 .notrowh:
-    cmp al, 5
+    cmp al, 6
     jne .notcolw
     mov al, SH_ID_COLW
     call sh_idlg_open
@@ -5210,6 +5258,87 @@ sh_docmd_edit:
     ret
 .filldown:
     call sh_docmd_filldown
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_prot_blocked - may the selected cell be changed? (81.46)
+; out: CF=1 no, and the status line already says why; CF=0 go ahead.
+;
+; Two conditions, and BOTH are needed: the document has to be protected AND
+; the cell has to be locked. That is Excel's model and it is the reason the
+; per-cell bit alone does nothing visible - a Locked cell on an unprotected
+; document is an ordinary cell, which is why every cell starts locked and
+; nobody notices.
+;
+; Preserves every register. It sits in front of sh_commit, whose arguments
+; are in them.
+; -----------------------------------------------------------------------------
+sh_prot_blocked:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [sh_prot_hit], 0
+    cmp byte [sh_protected], 0
+    je .done
+    ; THE WHOLE SELECTION, not the anchor. Cut and Clear act on the block,
+    ; and a guard that asked about one corner would have let a Cut take
+    ; every locked cell beside it. sh_commit's selection is 1x1 by the time
+    ; it runs, so it costs one lookup there.
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .rr
+    xchg ax, bx
+.rr:
+    mov cx, [sh_selcol]
+    mov dx, [sh_selcol2]
+    cmp cx, dx
+    jbe .cc
+    xchg cx, dx
+.cc:
+    mov si, ax                        ; SI walks the rows, CX the columns
+.rowloop:
+    push cx
+.colloop:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, cx
+    mov bx, si
+    call sh_bt_get                    ; 0 when there is no record, and no
+    test al, SH_PROT_UNLOCK           ; record is the LOCKED default
+    pop dx                            ; (pop does not touch the flags)
+    pop cx
+    pop bx
+    pop ax
+    jnz .next
+    mov byte [sh_prot_hit], 1
+    pop cx
+    jmp .done
+.next:
+    inc cx
+    cmp cx, dx
+    jbe .colloop
+    pop cx
+    inc si
+    cmp si, bx
+    jbe .rowloop
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    cmp byte [sh_prot_hit], 0
+    je .ok
+    mov word [sh_msg], sh_s_locked
+    stc
+    ret
+.ok:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5593,6 +5722,8 @@ sh_docmd_cut:
     push cx
     push si
     push di
+    call sh_prot_blocked              ; Cut CLEARS through sh_clearcell, not
+    jc .refused                       ; sh_commit, so the funnel guard misses
     call sh_docmd_copy                 ; the whole block goes to the clipboard,
     mov ax, [sh_selrow]                ; so the whole block has to leave the
     mov bx, [sh_selrow2]               ; sheet - it cleared the anchor alone
@@ -5624,7 +5755,12 @@ sh_docmd_cut:
     jbe .cutcolloop
     mov si, [sh_ownwin]
     call sh_repaint
-    pop di
+    jmp .out
+.refused:                             ; A REFUSAL STILL HAS TO REPAINT. Jumping
+    mov si, [sh_ownwin]               ; straight to the exit skipped the redraw
+    call sh_repaint                   ; and the message sh_prot_blocked had just
+.out:                                 ; set was never painted - the command did
+    pop di                            ; nothing and said nothing
     pop si
     pop cx
     pop bx
@@ -5782,6 +5918,9 @@ sh_paste_cell:
     jae .out
     mov [sh_selrow], bx
     mov [sh_selrow2], bx
+    call sh_prot_blocked              ; Formats and Notes write the tables
+    jc .out                           ; DIRECTLY and never reach sh_commit, so
+                                      ; the funnel guard does not cover them
     ; --- WHICH PARTS OF THE SOURCE CELL THIS PASTE IS FOR (81.45) ----------
     mov al, [sh_ps_mode]
     cmp al, SH_PS_LINK
@@ -7354,8 +7493,9 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot
 sh_s_fd_pspec:  db 'Paste Special', 0
+sh_s_fd_prot:   db 'Cell Protection', 0
 sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
@@ -7370,7 +7510,17 @@ sh_s_fd_delete: db 'Delete', 0
 sh_s_fd_colw:   db 'Column Width', 0
 sh_s_fd_rowh:   db 'Row Height', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot
+; Excel's Cell Protection dialog is two INDEPENDENT CHECK BOXES, Locked and
+; Hidden. This is the four combinations as a radio, which is exactly what the
+; Font dialog above already does with Bold and Underline - the same engine and
+; the same compression, so it is at least consistent with itself. The order
+; mirrors Font's: the default first, then each one alone, then both.
+sh_fd_i_prot:   dw sh_fd_prlock, sh_fd_prunlock, sh_fd_prlockh, sh_fd_prunlockh
+sh_fd_prlock:   db 'Locked', 0
+sh_fd_prunlock: db 'Unlocked', 0
+sh_fd_prlockh:  db 'Locked, Hidden', 0
+sh_fd_prunlockh: db 'Unlocked, Hidden', 0
 ; Excel's own five, in Excel's own order (Reference Guide p.236). The dialog
 ; there ALSO carries an Operation group (None/Add/Subtract/Multiply/Divide)
 ; and two check boxes (Skip Blanks, Transpose); this engine paints ONE radio
@@ -7452,7 +7602,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 6, 5
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 6, 5, 4
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -7461,7 +7611,8 @@ SH_FDK_SORT  equ 10
 SH_FDK_GAL   equ 11
 SH_FDK_SAVEFMT equ 12                 ; stage 4.6: Save As asks for the format
 SH_FDK_PSPEC equ 13                   ; instead of deriving it silently
-SH_FDK_N     equ 14
+SH_FDK_PROT  equ 14
+SH_FDK_N     equ 15
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -7492,8 +7643,11 @@ sh_fdlg_open:
     je .prefillgal                    ; Gallery opens on the type in use, so
     cmp al, SH_FDK_CALC               ; OK alone cannot silently change it
     je .prefillcalc                   ; Calculation opens SHOWING the mode it
-    cmp al, SH_FDK_CLEAR              ; is in, so OK alone cannot change it
-    jae .noprefill                    ; Clear/New/Sort have nothing current
+    cmp al, SH_FDK_PROT               ; is in, so OK alone cannot change it
+    je .prefillprot                   ; ...and Cell Protection opens showing
+    cmp al, SH_FDK_CLEAR              ; what the cell already IS, for exactly
+    jae .noprefill                    ; that reason. Clear/New/Sort have
+                                       ; nothing current
     cmp al, 5
     jae .prefillsize                  ; Column Width/Row Height (kinds
                                        ; 5/6): preselect from the CURRENT
@@ -7503,6 +7657,21 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
+.prefillprot:
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call sh_bt_get                    ; AL = the byte, and 0 when the cell has
+    xor cx, cx                        ; no record at all - which IS the
+    test al, SH_PROT_UNLOCK           ; default, Locked and not Hidden
+    jz .pp1
+    inc cx
+.pp1:
+    test al, SH_PROT_HIDDEN
+    jz .pp2
+    add cx, 2
+.pp2:
+    mov [sh_fdlg_sel], cx             ; CX is banked at entry, so using it
+    jmp .noprefill                    ; here costs the caller nothing
 .prefillfmt:
     push si
     push di
@@ -7973,6 +8142,8 @@ sh_fdlg_apply:
     je .dosavefmt
     cmp byte [sh_fdlg_kind], SH_FDK_PSPEC
     je .dopspec
+    cmp byte [sh_fdlg_kind], SH_FDK_PROT
+    je .doprot
     cmp byte [sh_fdlg_kind], 5
     je .colwidth
     cmp byte [sh_fdlg_kind], 6
@@ -8057,6 +8228,9 @@ sh_fdlg_apply:
     call sh_repaint
     jmp .out
 .insertrc:
+    cmp byte [sh_protected], 0        ; a structure change is refused for the
+    jne .protdoc                      ; WHOLE document, not per cell: inserting
+
     cmp word [sh_fdlg_sel], 0
     jne .inscol
     mov al, 0                          ; op 0 = insert row
@@ -8067,6 +8241,9 @@ sh_fdlg_apply:
     mov bx, [sh_selcol]
     jmp .rcgo
 .deleterc:
+    cmp byte [sh_protected], 0        ; a row moves locked cells it does not
+    jne .protdoc                      ; name, so there is no cell to ask about
+
     cmp word [sh_fdlg_sel], 0
     jne .delcol
     mov al, 1                          ; op 1 = delete row
@@ -8083,6 +8260,9 @@ sh_fdlg_apply:
 
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
 .doclear:
+    call sh_prot_blocked
+    jc .refused                       ; ...and the same here: this engine's
+                                      ; .out does not repaint either
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
     ; has highlighted. It used to clear the anchor alone (81.17's third case,
     ; after Fill and the format dialogs).
@@ -8175,6 +8355,54 @@ sh_fdlg_apply:
     mov si, [sh_chartwin]
     call sh_chart_paint
 .galdone:
+    mov si, [sh_ownwin]
+    call sh_repaint
+    jmp .out
+.doprot:
+    xor dl, dl                         ; 0 Locked is the default and stores no
+    mov ax, [sh_fdlg_sel]              ; bits at all, so a sheet nobody has
+    test al, 1                         ; touched is entirely locked
+    jz .prot1
+    mov dl, SH_PROT_UNLOCK
+.prot1:
+    test al, 2
+    jz .prot2
+    or dl, SH_PROT_HIDDEN
+.prot2:
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    or dl, dl
+    jz .protclear
+    call sh_bt_addcell
+    jc .out                            ; table full: silent, as everywhere
+    push es                            ; else that writes this table
+    mov es, [sh_bordseg]
+    mov al, [es:di+4]
+    and al, ~SH_PROT_MASK & 0xFF       ; the BORDER bits are not this dialog's
+    or al, dl                          ; to write, the mirror of sh_bdlg_apply
+    mov [es:di+4], al
+    pop es
+    jmp .protdone
+.protclear:
+    call sh_bt_findcell
+    jnc .protdone
+    push es
+    mov es, [sh_bordseg]
+    and byte [es:di+4], ~SH_PROT_MASK & 0xFF
+    mov al, [es:di+4]
+    pop es
+    or al, al
+    jnz .protdone                      ; a border is still stored here
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call sh_bt_removecell
+.protdone:
+    mov si, [sh_ownwin]
+    call sh_repaint
+    jmp .out
+.protdoc:
+    mov word [sh_msg], sh_s_protdoc
+.refused:
     mov si, [sh_ownwin]
     call sh_repaint
     jmp .out
@@ -8545,29 +8773,44 @@ sh_bdlg_apply:
     push ax
     push bx
     push dx
+    push di                             ; DI is this table's record cursor and
+                                         ; two of the three paths below set it
     mov al, [sh_bdlg_sel]
     shr al, 1
     and al, 0x1F
     mov dl, al
-    or dl, dl
-    jz .clearit
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
+    or dl, dl
+    jz .clearit
     call sh_bt_addcell
     jc .out                             ; table full: silent no-op, same
                                          ; scope limit as the main array's
     push es
     mov es, [sh_bordseg]
-    mov [es:di+4], dl
-    pop es
+    mov al, [es:di+4]
+    and al, SH_PROT_MASK                ; THE PROTECTION BITS ARE NOT THIS
+    or al, dl                           ; DIALOG'S TO WRITE. This was a plain
+    mov [es:di+4], al                   ; store of the border bits, which was
+    pop es                              ; right while it owned the whole byte
     jmp .out
 .clearit:
+    call sh_bt_findcell                 ; ...and clearing every border must not
+    jnc .out                            ; take the record away with them if the
+    push es                             ; cell is also unlocked or hidden
+    mov es, [sh_bordseg]
+    and byte [es:di+4], SH_PROT_MASK
+    mov al, [es:di+4]
+    pop es
+    or al, al
+    jnz .out                            ; something is still stored here
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_bt_removecell
 .out:
     mov si, [sh_ownwin]
     call sh_repaint
+    pop di
     pop dx
     pop bx
     pop ax
@@ -26229,9 +26472,9 @@ sh_mtab:
     dw sh_m_file,    sh_i_file,    5
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
-    dw sh_m_format,  sh_i_format,  6
+    dw sh_m_format,  sh_i_format,  7
     dw sh_m_data,    sh_i_data,    4
-    dw sh_m_options, sh_i_options, 3
+    dw sh_m_options, sh_i_options, 4
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
@@ -26269,6 +26512,8 @@ sh_it_saveas:  db 'Save As...', 0
 sh_it_print:   db 'Print...', 0
 sh_s_noprint:  db 'Printing is not supported.', 0
 sh_s_nocopyarea: db 'Copy a cell or range first.', 0
+sh_s_locked:   db 'Locked cell on a protected document.', 0
+sh_s_protdoc:  db 'The document is protected.', 0
 
 ; Stage 1.8/2.x: matches real Excel 2.0/2.1's own Format menu shape
 ; (VM_screenshots/menu_format.png) - Number.../Alignment.../Font... open
@@ -26293,7 +26538,11 @@ sh_s_nocopyarea: db 'Copy a cell or range first.', 0
 ; lookup - sh_gridhit divides by [sh_cellw] once and would have to walk - and
 ; that is the outstanding gap, not the dialog.
 sh_m_format:    db 'Format', 0
-sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_frowh, sh_it_fcolw
+; VM_screenshots/menu_format_full.png: Number/Alignment/Font/Border/CELL
+; PROTECTION/Row Height/Column Width/Justify. Cell Protection sits between
+; Border and Row Height, which is not where it would have been guessed.
+sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_fprot, sh_it_frowh, sh_it_fcolw
+sh_it_fprot:     db 'Cell Protection...', 0
 sh_it_fnum:      db 'Number...', 0
 sh_it_falign:    db 'Alignment...', 0
 sh_it_ffont:     db 'Font...', 0
@@ -26373,7 +26622,13 @@ sh_it_chartexp: db 'Export Chart as BMP...', 0
 ; between an On/Off pair (same relabel-by-repointing idea MENU_DIS's own
 ; doc shows) rather than drawing a separate checkmark glyph.
 sh_m_options:  db 'Options', 0
-sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_calc
+; Real Excel's Options menu puts Protect Document... between Display... and
+; Calculation... (VM_screenshots/menu_options_full.png). Gridlines and
+; Formulas are items here where Excel keeps them inside Display... - that
+; divergence is 81.31's, not this one's.
+sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_prot_off, sh_it_calc
+sh_it_prot_off: db 'Protect Document', 0
+sh_it_prot_on:  db 'Unprotect Document', 0
 sh_it_grid_on:  db 'Gridlines: On', 0
 sh_it_grid_off: db 'Gridlines: Off', 0
 sh_it_form_on:  db 'Formulas: On', 0
@@ -27821,7 +28076,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4784
+    OS88_BSS 4788
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -28598,7 +28853,9 @@ sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; 81.34.1
 sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
 sh_rndhi      equ sh_rndlo + 2
-sh_ps_mode    equ sh_rndhi + 2      ; byte: which parts of a copied cell the
+sh_prot_hit   equ sh_rndhi + 2      ; byte: sh_prot_blocked's scan result
+sh_protected  equ sh_prot_hit + 2   ; byte: Options > Protect Document (81.46)
+sh_ps_mode    equ sh_protected + 2   ; byte: which parts of a copied cell the
                                        ; paste in progress is for (81.45)
 sh_rpn_vol    equ sh_ps_mode + 2    ; word: this formula's token array contains
                                        ; a volatile function (81.44)
