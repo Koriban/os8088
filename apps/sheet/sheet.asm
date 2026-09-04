@@ -16651,6 +16651,7 @@ sh_rpn_fid:
     db 59                             ; RATE
     db 62, 60                         ; IRR MIRR
     db 74                             ; NOW - BIFF's own ftab index for it
+    db 190, 162, 63                   ; ISNONTEXT CLEAN RAND
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -16690,6 +16691,7 @@ sh_rpn_fvar:
     db 1                              ; RATE(3..6)
     db 1, 0                           ; IRR(1..2) MIRR
     db 0                              ; NOW()
+    db 0, 0, 0                        ; ISNONTEXT(1) CLEAN(1) RAND()
 sh_rpn_fvar_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -19216,6 +19218,12 @@ sh_pfunc:
     je .donot
     cmp ax, 7
     je .doabs
+    cmp ax, 109                        ; RAND() is nullary like NOW()
+    je .dorand
+    cmp ax, 108                        ; CLEAN joins the TEXT functions, whose
+    je .dotext                         ; result is a string
+    cmp ax, 107                        ; ISNONTEXT joins the INFORMATION ones,
+    je .doinfo                         ; whose argument stays a reference
     cmp ax, 106                        ; NOW() is nullary and reads the BIOS
     je .donow                          ; clock - nothing else here does either
     cmp ax, 93                         ; 93+ are the FINANCIAL functions, on
@@ -19310,10 +19318,24 @@ sh_pfunc:
     call sh_pinfo
     mov dx, ax
     jmp .typed
+.dorand:
+    call sh_prand
+    jmp .nullary
 .donow:
-    call sh_pnow                       ; NOW() consumed no arguments, so SI is
-    mov dx, ax                         ; still just past '(' - the ')' is
-    jmp .typed                         ; skipped by the common tail
+    call sh_pnow
+.nullary:                              ; A NULLARY CALL PARSES NO ARGUMENTS, so
+    mov dx, ax                         ; nothing has stepped over its ')': .fold
+    cmp byte [si], ')'                 ; does that at .argsdone and these two
+    jne .badtail                       ; never reach it. This used to jump
+    inc si                             ; straight to .typed under a comment
+    jmp .typed                         ; saying "the ')' is skipped by the
+                                       ; common tail" - .typed touches SI at
+                                       ; all. SI was left ON the ')', the
+                                       ; expression parser read that as the end
+                                       ; of the formula, and =RAND()*1000
+                                       ; SILENTLY ANSWERED RAND(). No error,
+                                       ; a plausible number, and the same for
+                                       ; =NOW()+1 ever since NOW landed
 .dofin:
     call sh_pfin
     mov dx, ax
@@ -19338,7 +19360,7 @@ sh_pfunc:
 .noparen:                             ; value is that it cannot be mistaken for
     mov byte [sh_evalerr], SH_ERR_NAME  ; one. Only the CALL form has arguments
 .typed:                               ; to step over - `=FOO+1` has none, and
-                                       ; skipping there would eat the `+1`                               ; mistaken for one
+                                       ; skipping there would eat the `+1`
     mov byte [sh_curtype], SH_T_NUM   ; a call's RESULT is a number whatever it
                                        ; folded over: without this the TEXT tag
                                        ; left by the last cell a range touched
@@ -21988,6 +22010,8 @@ sh_pinfo:
     je .isnumber
     cmp di, 27
     je .istext
+    cmp di, 107
+    je .isnontext
     cmp di, 28
     je .islogical
     cmp di, 29
@@ -22011,6 +22035,11 @@ sh_pinfo:
     cmp bl, SH_T_TEXT
     je .yes
     jmp .close
+.isnontext:
+    cmp bl, SH_T_TEXT                 ; ISNONTEXT is TRUE for everything that
+    je .close                         ; is not text - a BLANK included, which
+    jmp .yes                          ; is where it differs from NOT(ISTEXT())
+                                      ; in Excel too
 .islogical:
     cmp bl, SH_T_BOOL                 ; nothing produces one YET, so this is
     je .yes                           ; FALSE for everything - which is the
@@ -22618,8 +22647,16 @@ sh_ptext:
     cmp di, 49
     je .t                             ; T asks the TYPE, so it must see the
     cmp di, 55                        ; argument before sh_str_want converts it
-    jae .numfmt3                      ; TEXT/DOLLAR/FIXED open with a NUMBER
-    call sh_pstrarg
+    jb .strarg                        ; TEXT/DOLLAR/FIXED open with a NUMBER
+    cmp di, 57                        ; ...AND THEY ARE 55..57 ALONE. This was
+    jbe .numfmt3                      ; a bare `jae .numfmt3`, which reads as
+.strarg:                              ; "every id from 55 up" - true while 54
+    call sh_pstrarg                   ; was the last text function, false the
+                                      ; moment CLEAN took 108. CLEAN went down
+                                      ; the number-formatting path and gave
+                                      ; "0.00" for every string it was handed.
+                                      ; A ONE-SIDED COMPARE IS A CLAIM ABOUT
+                                      ; IDS NOT YET ASSIGNED - bound it
     cmp di, 37
     je .len
     cmp di, 38
@@ -22636,6 +22673,8 @@ sh_ptext:
     je .proper
     cmp di, 44
     je .trim
+    cmp di, 108
+    je .clean
     cmp di, 45
     je .rept
     cmp di, 47
@@ -22903,6 +22942,26 @@ sh_ptext:
 ; TRIM removes the leading and trailing spaces AND collapses every internal
 ; run to one. That last part is the half people forget, and it is the half
 ; that makes TRIM worth having on data pasted out of a report.
+.clean:
+    push si                           ; every control character out, the rest
+    push di                           ; kept in place - what CLEAN is for is
+    mov si, sh_sacc                   ; text that arrived from another machine
+    mov di, sh_sacc                   ; with line breaks still in it
+.cl:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .cldone
+    cmp al, ' '
+    jb .cl                            ; below space: drop it
+    mov [di], al
+    inc di
+    jmp .cl
+.cldone:
+    mov byte [di], 0
+    pop di
+    pop si
+    jmp .text
 .trim:
     push si
     push di
@@ -23772,6 +23831,71 @@ sh_ymd_to_ser:
 ; one a spreadsheet can test with ISNA. It does NOT get the uptime dressed up
 ; as a date, which is what the old comment here rightly refused to fake.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_prand - RAND(), id 109. A number in [0,1).
+;
+; A 32-BIT LINEAR CONGRUENTIAL GENERATOR, seed = seed*25173 + 13849, which has
+; the full 2^32 period because the multiplier is 1 mod 4 and the increment is
+; odd. The multiplier fits a word, so the 32x16 product is two `mul`s and an
+; add rather than a long-multiply routine.
+;
+; SEEDED FROM THE BIOS TICK COUNT, int 1Ah AH=00h - CX:DX is ticks since
+; midnight, and unlike AH=02h/04h it works on a PC with no RTC at all, which
+; is exactly the machine 81.42 found here. A tick count is a poor source of
+; entropy and a fine source of a seed: it only has to differ between sessions.
+;
+; The value is the HIGH word over 65536. The low bits of an LCG are the weak
+; ones - taking the top half is the standard remedy and costs nothing.
+; -----------------------------------------------------------------------------
+sh_prand:
+    push bx
+    push cx
+    push dx
+    cmp word [sh_rndhi], 0            ; unseeded? the very first RAND() of a
+    jne .step                         ; session pays for the BIOS call
+    cmp word [sh_rndlo], 0
+    jne .step
+    xor ah, ah
+    int 0x1a                          ; CX:DX = ticks since midnight
+    mov [sh_rndhi], cx
+    mov [sh_rndlo], dx
+    or dx, cx
+    jnz .step
+    mov word [sh_rndlo], 1            ; a clock reading exactly zero would
+.step:                                ; leave the generator stuck at zero
+    mov ax, [sh_rndlo]
+    mov cx, 25173
+    mul cx                            ; DX:AX = lo * 25173
+    mov bx, dx                        ; BX = the carry into the high word
+    push ax
+    mov ax, [sh_rndhi]
+    mul cx                            ; only the low half of this matters
+    add ax, bx
+    mov bx, ax                        ; BX = the new high word, pre-increment
+    pop ax
+    add ax, 13849
+    adc bx, 0
+    mov [sh_rndlo], ax
+    mov [sh_rndhi], bx
+    mov ax, 256                       ; /256 TWICE = /65536, which is what a
+    call sh_acc_int                   ; 16-bit word cannot hold in one go.
+    call sh_acc_load_b                ; THE DIVISOR IS BUILT FIRST, because
+    mov ax, bx                        ; sh_acc_int goes through fp_i2a and
+    call sh_acc_fromudw               ; sh_acc_fromudw through fp_u64_to_a -
+    call sh_acc_load_a                ; BOTH WRITE A. Loading the value into A
+    call fp_div                       ; and then building 256 overwrote it, and
+    call fp_div                       ; RAND() answered a constant 256/256 = 1
+    call sh_acc_store                 ; (81.42.1 again, verbatim). B is loaded
+                                      ; once for both divides: fpx_div and
+                                      ; fps_div stage from memory and write
+                                      ; back A alone, so B survives one
+    xor ax, ax                        ; SH_T_NUM
+    inc ax
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_bios_ymd - the calendar date from the BIOS into sh_dt_y/m/d.
 ; out: CF=1 if there is no usable clock. Every other register preserved.
@@ -26036,6 +26160,9 @@ sh_f_second:   db 'SECOND', 0
 sh_f_datevalue: db 'DATEVALUE', 0
 sh_f_timevalue: db 'TIMEVALUE', 0
 sh_f_now:      db 'NOW', 0
+sh_f_isnontext: db 'ISNONTEXT', 0
+sh_f_clean:    db 'CLEAN', 0
+sh_f_rand:     db 'RAND', 0
 sh_f_rows:      db 'ROWS', 0
 sh_f_columns:   db 'COLUMNS', 0
 sh_f_areas:     db 'AREAS', 0
@@ -26105,6 +26232,7 @@ sh_functab:
     dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt, sh_f_rate
     dw sh_f_irr, sh_f_mirr
     dw sh_f_now                       ; 106 (81.42)
+    dw sh_f_isnontext, sh_f_clean, sh_f_rand   ; 107 108 109 (81.43)
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -27355,7 +27483,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4776
+    OS88_BSS 4780
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -28130,7 +28258,9 @@ sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
 sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
-sh_dbf_nf     equ sh_stbusy + 2      ; 81.41's dBASE III scratch
+sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
+sh_rndhi      equ sh_rndlo + 2
+sh_dbf_nf     equ sh_rndhi + 2      ; 81.41's dBASE III scratch
 sh_dbf_nr     equ sh_dbf_nf + 2
 sh_dbf_hl     equ sh_dbf_nr + 2
 sh_dbf_rl     equ sh_dbf_hl + 2

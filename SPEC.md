@@ -83378,6 +83378,108 @@ committed code makes the real `int 0x1a` calls. On the test machines available
 here `NOW()` returns `#N/A`, which is correct for a PC with no real-time clock
 — the AT introduced it, and this is a 5150.
 
+### 81.43 `ISNONTEXT`, `CLEAN`, `RAND` — and three bugs the assembler could not see
+
+110 functions.
+
+Three cheap ones, taken because each reuses a router that already exists rather
+than opening a new capability:
+
+- **`ISNONTEXT`** joins the INFORMATION group, whose argument stays a
+  *reference* instead of being folded to a value — which is the whole reason
+  `ISBLANK`/`ISNUMBER` are still absent (§81's list) and why this one is not.
+  It answers `TRUE` for a number and for a blank, `FALSE` for a label.
+- **`CLEAN`** joins the TEXT group: every byte below `0x20` dropped, the rest
+  kept in place. It is a loop over `sh_sacc` and nothing else.
+- **`RAND`** is nullary like `NOW`, and is the volatile function §81.42 left
+  open. A 32-bit LCG, `seed = seed * 25173 + 13849`, seeded on first use from
+  `int 0x1a` `AH=00h` — the tick counter, which every PC has, unlike the RTC
+  §81.42.1 could not find. The value is the **high** word over 65536: an LCG's
+  low bits have short periods and its high bits do not, so taking the bottom
+  half of the state would have produced a visibly cyclic "random". Not a
+  generator to hold a key with; a generator to fill a column with.
+
+**All three shipped assembling cleanly, and all three were wrong in the
+emulator.** None of the three faults is visible in the diff that introduced it.
+
+**`jae` is a claim about ids that do not exist yet.** `sh_ptext` opened with
+`cmp di, 55 / jae .numfmt3` — TEXT, DOLLAR and FIXED take a *number* first,
+and they were ids 55, 56, 57, the last three assigned. The compare says "55 and
+up", the comment says "TEXT/DOLLAR/FIXED", and while 57 was the highest id in
+the file those were the same sentence. `CLEAN` took **108**. It went down the
+number-formatting path, and every string handed to it came back **`"0.00"`** —
+a plausible-looking value, no error, no warning. It is now bounded at both
+ends. *A one-sided compare against an id space that is still being handed out
+is a statement about every id not yet allocated.*
+
+**`sh_acc_int` writes `A`, for the second time in two sections.** `RAND` loaded
+the state's high word into `A`, then built the divisor with `sh_acc_int` — and
+`sh_acc_int` calls `fp_i2a`, which writes **`A`**. Both operands were 256 and
+`RAND()` returned a constant `1`. This is §81.42.1's second bug *verbatim*, in
+code written the same day by someone who had just documented it: the
+accumulator's lifetime is not visible at the call site, and the habit of
+reading `sh_acc_*` as "scratch" survives knowing better. The divisor is now
+built **first**; `B` is then loaded once and divided by twice, because
+`fpx_div` and `fps_div` both stage from memory and write back `A` alone.
+
+**The nullary close-paren, and a comment that was never true.** `.fold` steps
+over its `')'` at `.argsdone`. `.donow` and `.dorand` never reach `.fold` — they
+jumped straight to `.typed`, under a comment reading *"the `')'` is skipped by
+the common tail"*. **`.typed` does not touch `SI` at all.** `SI` was left
+sitting on the `')'`, the expression parser read that as the end of the
+formula, and
+
+    =RAND()*1000
+
+silently answered `RAND()`. No error; a number in the right range; the multiply
+simply gone. **`=NOW()+1` had done the same thing since `NOW` landed**, and
+§81.42 did not catch it because every test written for `NOW` called it bare.
+The two now share a `.nullary` tail that requires the `')'` and errors without
+it.
+
+That is the third time in two sections (§81.39, §81.42, here) that **an
+assertion in a comment, never checked, was the thing that made a defect
+unthinkable**. The pattern is not carelessness about facts; it is that a
+comment describing what *ought* to happen is indistinguishable, on the page,
+from one describing what does.
+
+**Verified, with the negative case constructed on purpose.** `CLEAN` was tested
+against a string authored on the host with a `0x01` in the middle of it —
+`LEN(A3)` is 5 and `LEN(CLEAN(A3))` is 4, so a `CLEAN` that did nothing would
+read 5 and fail. `ISNONTEXT` answers 0 for `'plain text'` and 1 for `42`.
+`RAND()*1000` gives 710.128, 245.681, 775.299 — three distinct values, all in
+range, and the multiply applied.
+
+`NOW` was re-verified through the §81.42.1 stub, because the paren fix touches
+its parse: with the BIOS reply forced to 1990-03-15 06:00:00, `NOW()` is
+**32947.25** — the serial for that date plus a quarter day — `INT(NOW())` is
+32947, `NOW()*2` is 65894.5, and `NOW()-NOW()` is **0**, which before the fix
+answered 32947.25. The stub was reverted; the committed code makes the real
+call.
+
+#### 81.43.1 Why a cell says `#N/A` while the menu bar shows a date
+
+On every machine in `tools/martypc/configs` — all of them 5150- or XT-class,
+none with an RTC — the kernel falls back to `CLK_DEF_*`, **4 July 2026,
+00:00:00**, and the menu bar shows that plus the uptime. `NOW()` on the same
+screen answers `#N/A`. Two different answers to "what time is it", eighteen
+pixels apart.
+
+This is deliberate and it is the right way round. A spreadsheet's dates are
+*arithmetic*: `=TODAY()-B1` on a fabricated date silently produces a wrong age,
+carried into a total, printed, and believed. A menu bar's date is a *label* —
+wrong there, it is read and dismissed. `#N/A` is the answer a sheet can test
+for; a made-up serial is not.
+
+It also cannot be made to agree without a kernel change. §81.42 established
+there is no OSAPI slot that reads the wall clock, and there is likewise none
+that publishes `clk_tier` or `CLK_DEF_*` — `clk_dbg_tier` is a debug byte, not
+an interface. SHEET could only match the menu bar by hardcoding a copy of the
+kernel's fallback constant in an app, which is precisely the kind of duplicate
+that goes stale silently. **If the two should agree, the fix is an API slot,
+not a second copy of the constant** — and that is an upstream change with its
+own review, not something to smuggle in beside a text function.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts
