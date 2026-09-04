@@ -414,6 +414,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 90 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
 | 91 | PACCMAN — pacman.c, written in C (`apps/paccman/`) |
 | 92 | Picture decoders (`apps/os88img.inc`) |
+| 93 | SCRIBE (`apps/scribe/`) — the fork of WORD |
 
 ## docs/
 
