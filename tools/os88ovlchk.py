@@ -527,8 +527,6 @@ def check_pkgs():
         if not os.path.exists(pkg):
             continue
         walked += 1
-        if not os.path.exists(pkg):
-            continue
         stream = list(expand(pkg, frozenset()))
         # one linear pass for the section each line lands in: a `section`
         # directive inside an include stays in force after it, exactly as it
@@ -557,14 +555,6 @@ def check_pkgs():
         # %ifdef, so it would see every label defined in both sections and
         # report the module calling itself. The code-bearing include is the
         # LAST one, so that is the copy that counts.
-        last = {}
-        for i, (sect, f, n, line) in enumerate(rows):
-            last[f] = i
-        first_of = {}
-        for i, (sect, f, n, line) in enumerate(rows):
-            first_of.setdefault(f, i)
-        dup = {f for f in last if any(
-            r[1] == f for r in rows[:first_of[f]])}
         keep = []
         seenfile = {}
         for sect, f, n, line in rows:
