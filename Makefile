@@ -1651,7 +1651,7 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(IMG) $(IMG120) $(IMG720) $(IMG360) \
      $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
-     $(MEDIAIMG360) $(BUILD)/wire.o88 $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
+     $(MEDIAIMG360) $(BUILD)/wire.o88 $(BUILD)/imgtest.o88 $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
 # wire.o88 is named here and NOWHERE else in `all`, because WIREFRAME is built
 # but does not ship (SPEC.md 78.9, `make wiredisk`). Keeping it in the default
@@ -3672,6 +3672,31 @@ $(BUILD)/fptest.bin: apps/fptest/fptest.asm apps/fptest/fpcases.inc apps/os88fp.
 
 $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/fptest.bin -o $@
+
+# IMGTEST: the self-test for apps/os88img.inc, the .PIX/.BMP/.PCX decoders.
+# Same shape and same reasoning as FPTEST above - not on any disk, built here
+# so it cannot rot, and its expectations computed on the HOST from the format
+# documents rather than by running the decoder. Run it with
+#   python3 tools/os88imgcase.py
+#   python3 tools/os88disk.py -o build/imgtest.img --size 1440 \
+#       APPS:build/imgtest.o88 $(addprefix APPS:,$(wildcard build/imgcases/*))
+#   make test TESTAPPS=build/imgtest.img
+# and read the window: one row a case, ALL PASS or FAILURES.
+#
+# build/imgcases/ can carry five files this repository does not ship, off the
+# Dr. Dobb's File Formats disc - MAIN.PCX, HELP8.PCX (its HELPSCRN.PCX),
+# INSTALL.BMP, START.BMP and SAMPLPIC.BMP - so the corpus is seventeen
+# generated cases without them and twenty-two with. The generator says which
+# it built; a third-party file is the only one that cannot share a misreading
+# with the decoder, so run it with them if you have them.
+$(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
+                      apps/os88img.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/imgtest/ -o $@ apps/imgtest/imgtest.asm
+	@echo "imgtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/imgtest.o88: $(BUILD)/imgtest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/imgtest.bin -o $@
+
 
 # Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its
 # rasterizer/BMP-writer with Sheet's own live chart window (os88chart.inc).

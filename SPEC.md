@@ -96675,3 +96675,176 @@ way; the gameplay follows Jamey Pittman's Pac-Man Dossier. Shipping the ROM
 data follows the user-decided C64 precedent (docs/C64-SPEC.md). The About card
 carries the product, the reference and its commit, the author's copyright and
 licence, the ROM and Dossier credits, and nothing about how the build renders.
+
+## 92. Picture decoders (`apps/os88img.inc`)
+
+Three file formats into one in-memory form: **packed 4bpp, two pixels per
+byte, high nibble leftmost, indices 0..15 in os8088's own palette**. That is
+exactly what `OSAPI_GFX_BLIT4` takes and exactly what a `.PIX` block already
+holds, so however a picture arrived there is one drawing path for it.
+
+`BLIT4` and not `OSAPI_GFX_BLITP`, which would suit a planar PCX far better:
+BLITP refuses an armed clip region (§5.4.3), and a picture inside a document
+that scrolls is always clipped. The destination stride is `(width+1)/2` with
+no padding; callers hand it to BLIT4 in BP.
+
+### 92.1 What it accepts, and what goes to the host tool instead
+
+| | accepted | |
+|---|---|---|
+| `.PIX` | any picture in the archive | no decoding at all — a block is already this format (§61.7), so it is found and copied |
+| `.BMP` | `BI_RGB`, either way up, **4 or 1** bit per pixel | 4bpp is what SHEET, CHART and PAINT write; 1bpp is what every paint program of the era wrote |
+| `.PCX` | 1 bit in 1 plane, 1 bit in 4 **planes**, or 4 bits in 1 plane | ZSoft's Technical Reference Manual revision 5, all three of its sixteen-colour-or-fewer arrangements |
+
+Four 1-bit planes **are** a 4-bit index — that is EGA's own arrangement — so
+every accepted PCX arrangement is exact and nothing is approximated. The
+manual permits all three; a reader that assumes the popular one fails on a
+file it has no business failing on.
+
+**Five arrangements, two row routines.** `img_rowconv` chooses on `IMG_BPP`
+alone: `img_row_nib` for one plane of 4-bit pixels (a 4bpp BMP row *is* a 4bpp
+one-plane PCX row, byte for byte), `img_row_planes` for `IMG_NPL` 1-bit planes
+with bit 7 leftmost. The cross-use is the point. A 1bpp BMP row is a single
+1-bit plane, so `img_bmp` sets `IMG_NPL` = 1 and `IMG_BPL` = `IMG_SBPR` and
+goes through the routine written for PCX. Neither added depth needed a new
+pixel loop, so neither arrived as a loop that had only ever run against the
+test file written to exercise it — each came already proved by the other
+format's corpus, including a 1152x90 file this project did not write.
+
+**An odd width leaves the last low nibble unused, and it is zero** —
+`img_rowconv` masks it, once, for both routines. That was not free: the two
+disagreed. `img_row_planes` stops at `IMG_W` and left it 0; `img_row_nib`
+works in whole bytes, so it mapped the source's own padding nibble *through
+the palette* and left `PAL[0]` there. Which made a decoded picture depend on a
+colour it does not contain — the same 35-wide image came out with a different
+last byte per row under our palette and under a reversed one. Invisible, and
+exactly the kind of difference that makes two readers of one file disagree for
+a reason neither of them can see. It is a property of the output format, so it
+is decided in one place and not two.
+
+**The length floor is per format, not one number.** `img_load` requires 16
+bytes — enough to tell the three apart and to hold a whole `.PIX` header — and
+each decoder then checks what *its own* header needs: 54 for a BMP
+(`14 + BITMAPINFOHEADER`), 128 for a PCX, whose sixteen-colour palette is
+inside the header. One floor of 128, the longest of the three, covered every
+case and was simpler, and **1bpp made it wrong**: a monochrome file is a
+quarter the size of the 4bpp one it replaces, so a 16x16 icon is 126 bytes and
+a whole legal picture was refused for being *small*. Nothing is admitted that
+was not before — a file too short for the header it claims is still refused,
+by the test that knows which header that is.
+
+**Refused by name rather than approximated:** 8-bit `.PCX`, and 8- or 24-bit
+`.BMP`. Those need a 256-to-16 nearest-colour quantisation, which is a
+decision about how a picture should *look*; `docs/IMGCONV-PLAN.md`'s whole
+argument is that such a decision belongs on the host, where there is room to
+dither and to look at the answer. Refusal is an ordinary path (§47).
+
+**The palette the file carries is honoured**, which is not the same thing as
+quantising. A 4bpp `.BMP` and a `.PCX` each carry 16 RGB triples and a 1bpp
+`.BMP` carries **two**; `img_palmap` maps each one to the nearest os8088
+colour, and `IMG_NPAL` says how many there are. The count is not cosmetic:
+reading sixteen out of an eight-byte palette walks into the pixels, or off the
+end of a small file — `M1.BMP` in the corpus is 98 bytes and is *refused as
+truncated* if the count is wrong, which is how that gate is checked. The
+entries a file does not carry are left as the **identity** rather than as
+zero: a 1bpp picture can only produce index 0 or 1, so the tail is unreachable
+through the pixels but reachable through a corrupt file, and a defined answer
+there is a wrong colour instead of a whole picture in black. For a file this tree wrote that mapping is the
+identity and the bytes come out unchanged; for a foreign one it is the
+difference between the picture and a colour-scrambled copy of it. Manhattan
+distance and not Euclidean: `|dR|+|dG|+|dB|` tops out at 765 and fits a word,
+where squared differences need 32 bits and buy nothing over sixteen
+candidates.
+
+`.PIX` is an **archive and not a picture**, which is the one thing about it a
+caller has to know. `IMG_PICNO` chooses; 0 means "whichever is first", because
+picture numbers are not contiguous (Z-Machine Standard 8.8.6.1) and a caller
+that just wants the artwork should not have to know what they are.
+
+### 92.2 It owns no state, and returns no pointers into itself
+
+Every variable is in an `OS88IMG_SZ` block the **caller** allocates and passes
+in `SI`, the way `os88line.inc` takes its 20-byte block (§83.1). Both halves
+of that rule are load-bearing and the second is the subtler.
+
+The argument for the first is absolute addressing: a module that names its own
+bss names it at an **absolute** address, bss begins where the image ends, and
+two packages have different image sizes — so an include with private variables
+cannot serve a package that overlays it *and* a package that does not. WORD
+reaches this through `WORD.OVL`; PAINT would reach it resident.
+
+For the same reason **`IMG_ERR` is a number and not a string pointer**. A
+string in an overlaid module sits at a module-relative offset, and a resident
+caller reading it through `DS` gets whatever happens to be at that offset in
+the package — a bug this tree has already had once, against a header template
+in an overlaid rasterizer. The caller
+words the message, which it should anyway: two packages report differently.
+
+The one thing the include reads through **`CS`** is `img_pal8088`, its own
+sixteen-colour table, for the same reason: it is data in this file's image,
+and if the file is built into an overlay that image is not the one `DS` points
+at.
+
+### 92.3 The self-test, and the case that is not generated
+
+`apps/imgtest` reads a real file off a disk for each case — so the path under
+test is the one a package uses: claim, `OSAPI_FILE_READ`, `img_load` — and
+compares the width, the height, the stride, the error code **and** a
+rotate-xor checksum of every decoded byte. A plain sum would not notice two
+rows swapped; making position part of the answer is the whole point of
+checking a decoder.
+
+`apps/imgtest/imgcases.inc` is generated by `tools/os88imgcase.py`, which
+computes every expectation **from the format documents** and never by running
+the decoder and recording what it said. A decoder is the classic thing that
+passes its own test: write the encoder and the decoder from one understanding
+and they agree with each other about something neither has got right. Same
+argument `apps/fptest` makes for the soft-float core (§84).
+
+Seventeen cases need nothing but the repository. Five more appear when the
+Dr. Dobb's File Formats disc has been copied into `build/imgcases/`, and
+those are **the cases that cannot share a misreading with the decoder** —
+they were written by other people's programs in the 1990s. They are not
+vendored here, for the reason the format PDFs are not.
+
+| | from the disc | |
+|---|---|---|
+| `MAIN.PCX` | `FORMATS/MAIN.PCX` | 1152x90, 1bpp x4 planes, PC Paintbrush |
+| `HELP8.PCX` | `FORMATS/HELPSCRN.PCX` | 640x480 8bpp — refused |
+| `INSTALL.BMP` | `DISKS/INSIDE/` | 177x98 1bpp, **odd** width |
+| `START.BMP` | `.../PNG_WIN/WEBIMAGE/` | 334x132 1bpp, even width |
+| `SAMPLPIC.BMP` | `.../GT_HTML/` | 184x97 4bpp |
+
+`SAMPLPIC.BMP` earns its place on the **old** path and not a new one: until it
+arrived, every 4bpp BMP in the corpus had been written by the generator's own
+encoder, by the same hands as the decoder.
+
+**Two things the corpus caught, and one it was rebuilt to catch:**
+
+- A **bottom-up BMP** decoded as garbage while a top-down one was perfect.
+  `biHeight` is a signed 32-bit field and its sign is in the **high** word;
+  the test read the low word, which is nonzero for every real picture, so
+  every bottom-up file — which is to say every file this tree writes — took
+  the top-down path and was then refused as truncated. The comment beside it
+  stated the rule correctly the whole time.
+- The **mutation check**: forcing `img_palmap` to the identity fails exactly
+  `FOREIGN.BMP`, `FOREIGN.PCX` and `MAIN.PCX`, and leaves every file written
+  with our own palette passing — which is what proves the palette path is
+  exercised rather than passing by luck. Forcing `IMG_NPAL` back to a flat 16
+  fails exactly `M1.BMP`, `M1DOWN.BMP` and `MFOR.BMP` and **nothing else** —
+  the two real 1bpp files off the disc are large enough that reading 64
+  palette bytes still lands inside them, which is precisely why the small
+  generated ones earn their place beside the third-party specimens.
+- The two depths added later were each caught by a case the other format had
+  written. `PK4FOR.PCX` — 4 bits in one plane, in a reversed palette — failed
+  while `PK4.PCX` in our own palette passed, which is the signature of a map
+  that is not being applied; it was the odd-width padding nibble above, on a
+  path a 4bpp BMP had exercised for weeks without an odd width. And the three
+  small 1bpp cases failed as `IMG_E_SHORT` before the length floor was made
+  per format.
+- The pattern the generated cases carry was **wrong at first and passed
+  anyway**. `x*7 + y*5 + (x^y)` looks random and is not: `x+y` and `x^y` have
+  the same parity, so it is even everywhere, and the two-colour case expected
+  an **all-zero image** — which a decoder that wrote nothing would have
+  passed. It also reached only 8 of the 16 colours. The replacement is checked
+  for distinct values and even counts at both widths.

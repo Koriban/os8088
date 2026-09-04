@@ -267,6 +267,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
 | `apps/os88fp.inc` | §84 | IEEE-754 double arithmetic in software, with an 8087 path chosen at run time. Parse, format, add, subtract, multiply, divide, compare, sqrt, trunc, floor, round. |
+| `apps/os88img.inc` | §88 | Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block in SI. 8-bit files are refused by name, not approximated. |
 | `apps/os88sock.inc` | §62, 72 | The socket layer over NET.DRV or ETHER.DRV. |
 | `apps/os88pit.inc` | §37 | Sub-tick timing off the 8253. |
 | `apps/os88type.inc` | §54 | File-type recognition by name and by content. |
@@ -292,6 +293,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | FRACTAL | `apps/fractal/fractal.asm` | §40 |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 |
 | HELLO | `apps/hello/hello.asm` | §27 |
+| IMGTEST | `apps/imgtest/imgtest.asm` |  |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` |
 | MINES | `apps/mines/mines.asm` | §23 |
 | MISSILE | `apps/missile/missile.asm` | §48 |
@@ -411,6 +413,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 89 | Pac-Man (`apps/pacman/pacman.asm`) |
 | 90 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
 | 91 | PACCMAN — pacman.c, written in C (`apps/paccman/`) |
+| 92 | Picture decoders (`apps/os88img.inc`) |
 
 ## docs/
 

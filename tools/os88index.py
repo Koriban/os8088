@@ -95,6 +95,10 @@ INCLUDES = [
      "IEEE-754 double arithmetic in software, with an 8087 path chosen at run "
      "time. Parse, format, add, subtract, multiply, divide, compare, sqrt, "
      "trunc, floor, round."),
+    ("os88img.inc", "88",
+     "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
+     "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "
+     "in SI. 8-bit files are refused by name, not approximated."),
     ("os88sock.inc", "62, 72",
      "The socket layer over NET.DRV or ETHER.DRV."),
     ("os88pit.inc", "37",
