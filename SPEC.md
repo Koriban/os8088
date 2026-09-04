@@ -83571,6 +83571,115 @@ machine's geometry**, and copying it to another adapter is the same mistake as
 copying it across a dialog that gained a row. The gate keeps its own
 constants, which is why it kept working.
 
+### 81.45 Paste Special, Paste Link, and reading the menu instead of remembering it
+
+Excel 2.1d's Edit menu has twelve items. SHEET's had nine. The three missing
+ones are **Can't Repeat**, **Paste Special...** and **Paste Link**, and the
+first thing this change did was open `VM_screenshots/menu_edit_full.png` and
+the Reference Guide's own picture of the same menu (p.117) rather than write
+the order down from memory:
+
+    Can't Undo / Can't Repeat / Cut / Copy / Paste / Clear... /
+    Paste Special... / Paste Link / Delete... / Insert... /
+    Fill Right / Fill Down
+
+**Paste Special and Paste Link come after `Clear...`**, not after `Paste`,
+which is where they would have gone from recall. Format's own menu was read
+the same way and puts **Cell Protection...** between Border and Row Height —
+that one is not built (§81.45.3).
+
+#### 81.45.1 An orphaned dispatch index that renumbering would have armed
+
+`sh_docmd_edit` ended with `cmp al, 9 / je .sort`, left behind when Sort moved
+to the Data menu. With nine items the kernel never sends index 9, so it was
+unreachable, harmless, and invisible.
+
+Adding three items makes index 9 **`Insert...`**. The orphan would have turned
+Insert into Sort — silently, on a menu item nobody had touched, in a build
+whose diff is "three new menu entries". It was deleted with the renumber.
+
+*Dead code in a table indexed by position is not inert.* It is waiting for the
+table to grow.
+
+#### 81.45.2 What the five modes mean, and the one walker they share
+
+Paste already walks the clipboard's tab-separated block and calls
+`sh_paste_cell` per cell with `(sh_pb_x, sh_pb_y)` set. Every mode reuses that
+walker, so the *shape* of the paste always comes from the clipboard text and
+only what happens per cell changes:
+
+| mode | contents | properties |
+|---|---|---|
+| All | the source text, references shifted | format, border, note |
+| Formulas | the source text, references shifted | — |
+| Values | the source cell's **value** | — |
+| Formats | — | format, border |
+| Notes | — | note |
+| Paste Link | `=<the source cell>` | — |
+
+`sh_ps_src` is the whole trick: the source cell for a block position is
+`sh_clip_col + sh_pb_x, sh_clip_row + sh_pb_y` — the reference shift's own
+arithmetic, run the other way.
+
+**Values is not "paste and then strip the `=`".** It reads the source cell and
+takes `sh_cellnum`'s decimal or the label's characters — `sh_cell_totext`'s
+`.notformula` branch reached unconditionally. That is the entire difference
+between the two routines and the reason it is not a flag on the existing one:
+`sh_cell_totext` exists to reproduce what the user typed, and this exists to
+discard it.
+
+**Paste Link writes A1 text and hands it to `sh_commit`**, so the result is an
+ordinary formula naming one cell. Every later Insert, Delete, Sort and Copy
+rewrites it through §81.28's machinery, which already knows how. A1 style
+unconditionally, even with the reference box set to R1C1: that is a display
+setting (§81.31) and this text goes to a parser that reads A1 and nothing else.
+
+**Plain Paste is now `All`**, which is what Excel's Paste does — it used to
+carry contents alone. A source without a record contributes nothing rather
+than writing a default over what is already there: *paste formats from an empty
+cell is not "clear the formats"*.
+
+Paste Special and Paste Link both require this instance's own copy area
+(`sh_clip_valid`) — an external clipboard is text with no cells behind it.
+Excel greys both items when there is no copy area; this engine has no dynamic
+enable, so it says so in the status bar instead.
+
+**Verified in the emulator, each with its negative case:**
+
+- Paste Link: `D1` holds `=A2+1` (43), Paste Link into `F3` — the cell reads 43
+  and the **formula bar reads `=D1`**. A Formulas paste would have read
+  `=C3+1`.
+- Values: the same `D1` pasted into `F1` — the cell reads 43 and the formula
+  bar reads **`43`**, not a formula.
+- Formats: `D3` = 1234.5 formatted Currency, `G3` = 7 plain. After Paste
+  Special Formats, `G3` reads **`$7`** — its own value, the source's format.
+  The before-shot has it reading `7`, which is what makes the check mean
+  something.
+
+Bold was the first discriminator tried for Formats and was abandoned: at
+640x480 a bold glyph and a plain one are two pixels apart and I could not
+honestly call it either way. **A test whose result you have to squint at has
+already failed.** Currency changes the *text*.
+
+#### 81.45.3 What is deliberately not here
+
+- **The Operation group** (None/Add/Subtract/Multiply/Divide) and the
+  **Skip Blanks** and **Transpose** check boxes. The real dialog (Reference
+  Guide p.236) has all three. This engine paints one radio column and an
+  OK/Cancel; two groups plus check boxes is the Border dialog's engine, which
+  is not shared. Absent rather than faked.
+- **Repeat.** "Can't Repeat" is a `MENU_DIS` item beside "Can't Undo", which is
+  what Excel shows most of the time and is honest about what the app does.
+  Real Repeat needs a command-replay model — the macro language is the nearest
+  thing and it records commands, not their arguments.
+- **Cell Protection**, and with it Options > Protect Document. `SH_C_FLAGS`
+  has bits 2-7 free, but several sites write that byte as a *word* together
+  with the format, and one clears it outright when a formula becomes a value —
+  so a Locked bit would survive some edits and not others. It needs that audit
+  and an enforcement point in `sh_commit`, and without Protect Document the
+  dialog would set bits nothing reads. The menu item is not added until the
+  feature is, which is the rule §81's Formula-menu note already states.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

@@ -358,6 +358,12 @@ SH_T_ERR     equ 4
 SH_ERR_NULL  equ 1                  ; #NULL!
 SH_ERR_DIV0  equ 2                  ; #DIV/0!   - the only one produced today
 SH_ERR_VALUE equ 3                  ; #VALUE!
+SH_PS_ALL    equ 0                  ; Edit Paste Special's five, in the order
+SH_PS_FORM   equ 1                  ; the dialog lists them
+SH_PS_VAL    equ 2
+SH_PS_FMT    equ 3
+SH_PS_NOTE   equ 4
+SH_PS_LINK   equ 5                  ; ...and Paste Link, which has no dialog
 SH_ERR_REF   equ 4                  ; #REF!
 SH_ERR_NAME  equ 5                  ; #NAME?
 SH_ERR_NUM   equ 6                  ; #NUM!
@@ -5120,32 +5126,46 @@ sh_docmd_format:
 ; (OSAPI_CLIP_*). 4 Clear. 5 Delete... / 6 Insert... both open the
 ; Row/Column picker (sh_fdlg_* kinds 4 and 3 - see the dialog engine's own
 ; comment for why one engine now serves 5 kinds). 7 Fill Right / 8 Fill
-; Down and 9 Sort Column are deliberately scoped down from real Excel: no
-; range selection exists in this app (W_ONDRAG is missing on one of the
-; two kernel variants and W_ONCLICK carries no Shift state, so a real
-; rectangular selection was ruled out) - fill acts on just the one
-; adjacent cell, and sort acts on the whole of the selected column.
+; Down are deliberately scoped down from real Excel: fill acts on just the
+; one adjacent cell.
+;
+; THIS USED TO SAY "no range selection exists in this app (W_ONDRAG is
+; missing... so a real rectangular selection was ruled out)". Stage 3.0a
+; built one - drag, shift+click and shift+arrows - and the note stayed, in
+; three places (here, sh_rowcol_op and sh_docmd_sortcol) all pointing at
+; this one as the source. The BEHAVIOUR those two describe is still true;
+; the REASON is not, and a reason that has expired is worse than none,
+; because it says the thing cannot be done.
 ; -----------------------------------------------------------------------------
 sh_docmd_edit:
-    cmp al, 1
-    je .cut
-    cmp al, 2
-    je .copy
+    cmp al, 2                          ; 0 Can't Undo and 1 Can't Repeat are
+    je .cut                            ; MENU_DIS, so neither ever arrives
     cmp al, 3
-    je .paste
+    je .copy
     cmp al, 4
-    je .clear
+    je .paste
     cmp al, 5
-    je .delete
+    je .clear
     cmp al, 6
-    je .insert
+    je .pastesp
     cmp al, 7
-    je .fillright
+    je .pastelk
     cmp al, 8
-    je .filldown
+    je .delete
     cmp al, 9
-    je .sort
-    ret
+    je .insert
+    cmp al, 10
+    je .fillright
+    cmp al, 11
+    je .filldown
+    ret                                ; THERE WAS A `cmp al, 9 / je .sort`
+                                       ; HERE, left behind when Sort moved to
+                                       ; the Data menu - unreachable from a
+                                       ; nine-item menu and therefore invisible.
+                                       ; Adding three items made index 9 into
+                                       ; Insert..., so the orphan would have
+                                       ; turned Insert into Sort, silently, on
+                                       ; a menu nobody had changed
 .cut:
     call sh_docmd_cut
     ret
@@ -5153,7 +5173,25 @@ sh_docmd_edit:
     call sh_docmd_copy
     ret
 .paste:
+    mov byte [sh_ps_mode], SH_PS_ALL
     call sh_docmd_paste
+    ret
+.pastesp:
+    cmp byte [sh_clip_valid], 0        ; Excel greys Paste Special when there
+    je .noclip                         ; is no copy area; this app has no
+    mov al, SH_FDK_PSPEC               ; dynamic enable, so it says so instead
+    call sh_fdlg_open
+    ret
+.pastelk:
+    cmp byte [sh_clip_valid], 0
+    je .noclip
+    mov byte [sh_ps_mode], SH_PS_LINK
+    call sh_docmd_paste
+    ret
+.noclip:
+    mov word [sh_msg], sh_s_nocopyarea
+    mov si, [sh_ownwin]
+    call sh_repaint
     ret
 .clear:
     mov al, SH_FDK_CLEAR
@@ -5173,8 +5211,207 @@ sh_docmd_edit:
 .filldown:
     call sh_docmd_filldown
     ret
-.sort:
-    call sh_docmd_sortcol
+
+; -----------------------------------------------------------------------------
+; sh_ps_src - the SOURCE cell for the block position being pasted into.
+; out: AX = column, BX = row. The block walker keeps (sh_pb_x, sh_pb_y) as the
+; offset within the block, and sh_clip_col/sh_clip_row is where the block was
+; copied FROM, so the source is just the two added - the same arithmetic the
+; reference shift does in the other direction.
+;
+; Only meaningful when sh_clip_valid: an external clipboard has text and no
+; cells behind it. Every caller here is reached only after that test.
+; -----------------------------------------------------------------------------
+sh_ps_src:
+    mov ax, [sh_clip_col]
+    add ax, [sh_pb_x]
+    mov bx, [sh_clip_row]
+    add bx, [sh_pb_y]
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ps_props - copy the source cell's PROPERTIES onto the destination, which
+; parts depending on [sh_ps_mode]: the format byte and the border for All and
+; Formats, the note for All and Notes.
+;
+; The destination is wherever sh_selcol/sh_selrow point, which sh_paste_cell
+; has just set. A source cell with no record contributes nothing rather than
+; writing a default over what is already there - "paste formats" from an empty
+; cell is not "clear the formats".
+; -----------------------------------------------------------------------------
+sh_ps_props:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, [sh_ps_mode]
+    cmp al, SH_PS_NOTE
+    je .note
+    ; --- the format byte -----------------------------------------------------
+    call sh_ps_src
+    call sh_findcell
+    jnc .noborder                     ; no source record: nothing to copy
+    mov es, [sh_cellseg]
+    mov dl, [es:di+SH_C_FMT]
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call sh_findcell
+    jnc .noborder                     ; no DESTINATION record either - the
+    mov es, [sh_cellseg]              ; same scope limit sh_fdlg_apply
+    mov [es:di+SH_C_FMT], dl          ; documents for the Format dialogs
+.noborder:
+    ; --- and the border, which lives in its own table (81.13) ---------------
+    call sh_ps_src
+    call sh_bt_get                    ; AL = the source's border byte, 0 none
+    mov dl, al
+    or dl, dl
+    jz .clrborder
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call sh_bt_addcell
+    jc .fmtdone                       ; table full: silent, as sh_bdlg_apply is
+    mov es, [sh_bordseg]
+    mov [es:di+4], dl
+    jmp .fmtdone
+.clrborder:
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call sh_bt_removecell
+.fmtdone:
+    cmp byte [sh_ps_mode], SH_PS_ALL  ; All carries the note as well
+    jne .out
+.note:
+    call sh_ps_src
+    call sh_nt_get
+    jnc .out                          ; no note on the source: leave the
+    mov si, ax                        ; destination's own alone. Excel's All
+    call sh_note_load                 ; does not erase a note either
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    mov si, sh_notetext
+    call sh_nt_set                    ; CF=1 = arena or table full, silent
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ps_valtext - the SOURCE cell's value, as text, into sh_editbuf: what
+; "Values" means. A formula cell yields the number it produced, not the
+; formula; a label yields its characters.
+;
+; This is sh_cell_totext's .notformula branch, reached UNCONDITIONALLY - which
+; is the whole difference between the two routines and the reason this is not
+; a flag on that one. sh_cell_totext exists to reproduce what the user typed;
+; this exists to discard it.
+; -----------------------------------------------------------------------------
+sh_ps_valtext:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov byte [sh_editbuf], 0
+    call sh_ps_src
+    call sh_findcell
+    jnc .count                        ; an empty source pastes an empty cell
+    mov es, [sh_cellseg]
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    je .label
+    call sh_cellnum                   ; the eight value bytes, as decimal
+    mov si, sh_numbuf
+    mov di, sh_editbuf
+    call sh_strcpy
+    jmp .count
+.label:
+    mov ax, [es:di+SH_C_FOFF]         ; a label shares the formula arena
+    mov si, ax
+    mov di, sh_editbuf
+    mov es, [sh_txtseg]
+.acopy:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .acopy
+.count:
+    xor cx, cx
+    mov si, sh_editbuf
+.len:
+    cmp byte [si], 0
+    je .haslen
+    inc si
+    inc cx
+    jmp .len
+.haslen:
+    mov [sh_editlen], cl
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ps_linktext - "=<the source cell>" into sh_editbuf: what Paste Link
+; means. Written as A1-style text and handed to sh_commit like anything else,
+; so the result is an ordinary formula that happens to name one cell - which
+; is exactly what Excel produces, and means every later Insert/Delete/Sort
+; rewrites it through the machinery that already exists (81.28).
+;
+; RELATIVE, not absolute. Excel 2.1's Paste Link writes a relative reference,
+; so a linked block dragged elsewhere follows the same rule as any other
+; copied formula.
+; -----------------------------------------------------------------------------
+sh_ps_linktext:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov byte [sh_editbuf], '='
+    mov di, sh_editbuf + 1
+    call sh_ps_src
+    push bx                           ; sh_colname and sh_itoa both go through
+    call sh_colname                   ; scratch buffers, so the row is banked
+    mov si, sh_colbuf                 ; rather than recomputed
+    call sh_strcpy_to_di
+    pop ax
+    inc ax                            ; rows are 1-based on screen
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_strcpy_to_di
+    mov byte [di], 0                  ; A1 STYLE UNCONDITIONALLY, even with
+                                      ; the reference box set to R1C1: that is
+                                      ; a DISPLAY setting (81.31), and this
+                                      ; text goes to sh_commit, whose parser
+                                      ; reads A1 and nothing else
+    xor cx, cx
+    mov si, sh_editbuf
+.len:
+    cmp byte [si], 0
+    je .haslen
+    inc si
+    inc cx
+    jmp .len
+.haslen:
+    mov [sh_editlen], cl
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5545,6 +5782,25 @@ sh_paste_cell:
     jae .out
     mov [sh_selrow], bx
     mov [sh_selrow2], bx
+    ; --- WHICH PARTS OF THE SOURCE CELL THIS PASTE IS FOR (81.45) ----------
+    mov al, [sh_ps_mode]
+    cmp al, SH_PS_LINK
+    je .dolink
+    cmp al, SH_PS_FMT                 ; Formats and Notes leave the CONTENTS
+    jb .contents                      ; alone entirely - they are the two
+    call sh_ps_props                  ; modes with nothing to commit
+    jmp .out
+.dolink:
+    call sh_ps_linktext               ; "=<the source cell>" - no shifting,
+    jmp .commit                       ; the whole point is that it points back
+.contents:
+    cmp al, SH_PS_VAL
+    jne .astyped
+    call sh_ps_valtext                ; the source's VALUE, so a formula lands
+    jmp .commit                       ; as the number it produced. Never
+                                      ; reference-shifted: there is no
+                                      ; reference left in it to shift
+.astyped:
     cmp byte [sh_clip_valid], 0
     je .commit
     cmp byte [sh_editbuf], '='
@@ -5597,6 +5853,9 @@ sh_paste_cell:
 .commit:
     mov byte [sh_editing], 1
     call sh_commit
+    cmp byte [sh_ps_mode], SH_PS_ALL  ; All is contents AND properties, which
+    jne .out                          ; is what Excel's plain Paste does too
+    call sh_ps_props
 .out:
     pop di
     pop si
@@ -6111,8 +6370,8 @@ sh_s_sortfull: db 'Sort incomplete - text area full.', 0
 ; that specific cell's own (target row - its original row) delta - each
 ; moved formula can have a DIFFERENT delta, since a sort is an arbitrary
 ; reordering, not a uniform shift like Insert/Delete Row or Copy/Paste.
-; There is no range selection (see the W_ONDRAG scope note on
-; sh_docmd_edit), so this always acts on the whole column.
+; A sort key is a whole column by definition, so this acts on all of the
+; selected column rather than on the selected part of it.
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
 ; sh_chart_scan - (re)collect [sh_chart_sheet]/[sh_chart_col]'s plain-value
@@ -7095,7 +7354,8 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec
+sh_s_fd_pspec:  db 'Paste Special', 0
 sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
@@ -7110,7 +7370,17 @@ sh_s_fd_delete: db 'Delete', 0
 sh_s_fd_colw:   db 'Column Width', 0
 sh_s_fd_rowh:   db 'Row Height', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec
+; Excel's own five, in Excel's own order (Reference Guide p.236). The dialog
+; there ALSO carries an Operation group (None/Add/Subtract/Multiply/Divide)
+; and two check boxes (Skip Blanks, Transpose); this engine paints ONE radio
+; column and an OK/Cancel, so those are absent rather than faked - see 81.45.
+sh_fd_i_pspec:  dw sh_fd_psall, sh_fd_psform, sh_fd_psval, sh_fd_psfmt, sh_fd_psnote
+sh_fd_psall:    db 'All', 0
+sh_fd_psform:   db 'Formulas', 0
+sh_fd_psval:    db 'Values', 0
+sh_fd_psfmt:    db 'Formats', 0
+sh_fd_psnote:   db 'Notes', 0
 ; Excel's own words: the app's OWN format is "Normal", and the interchange
 ; formats are named after themselves. The order is Excel's too.
 sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif, sh_fd_sfcsv, sh_fd_sftxt, sh_fd_sfdbf
@@ -7182,7 +7452,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 6
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 6, 5
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -7190,7 +7460,8 @@ SH_FDK_CALC  equ 9
 SH_FDK_SORT  equ 10
 SH_FDK_GAL   equ 11
 SH_FDK_SAVEFMT equ 12                 ; stage 4.6: Save As asks for the format
-SH_FDK_N     equ 13                   ; instead of deriving it silently
+SH_FDK_PSPEC equ 13                   ; instead of deriving it silently
+SH_FDK_N     equ 14
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -7700,6 +7971,8 @@ sh_fdlg_apply:
     je .dogallery
     cmp byte [sh_fdlg_kind], SH_FDK_SAVEFMT
     je .dosavefmt
+    cmp byte [sh_fdlg_kind], SH_FDK_PSPEC
+    je .dopspec
     cmp byte [sh_fdlg_kind], 5
     je .colwidth
     cmp byte [sh_fdlg_kind], 6
@@ -7904,6 +8177,11 @@ sh_fdlg_apply:
 .galdone:
     mov si, [sh_ownwin]
     call sh_repaint
+    jmp .out
+.dopspec:
+    mov al, [sh_fdlg_sel]             ; the radio IS the mode: All/Formulas/
+    mov [sh_ps_mode], al              ; Values/Formats/Notes are SH_PS_ALL..
+    call sh_docmd_paste               ; SH_PS_NOTE in that order, on purpose
     jmp .out
 .dosavefmt:
     mov si, sh_s_ext_biff             ; 0 Normal is this app's OWN format,
@@ -14677,8 +14955,8 @@ sh_nt_set:
 ; sheet only. in: AL = 0 insert row / 1 delete row / 2 insert column /
 ; 3 delete column; BX = the row or column index the operation pivots on
 ; (the selected cell's own row/col - Edit menu Insert.../Delete... has no
-; other way to name one, since there is no range selection - see the
-; W_ONDRAG scope note above sh_docmd_edit).
+; other way to name one: a pivot is a single index, and a selection that
+; spans several rows does not name one).
 ;
 ; The cell array is sorted by (sheet, row) then col (see the stage 2.0
 ; comment above sh_findcell) - shifting a COLUMN can reorder cells WITHIN
@@ -25949,7 +26227,7 @@ sh_mf_ret:
 ; what made the renumber safe to do at all.
 sh_mtab:
     dw sh_m_file,    sh_i_file,    5
-    dw sh_m_edit,    sh_i_edit,    9
+    dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  6
     dw sh_m_data,    sh_i_data,    4
@@ -25990,6 +26268,7 @@ sh_it_saveas:  db 'Save As...', 0
 ; purpose too - the OS menu owns it.
 sh_it_print:   db 'Print...', 0
 sh_s_noprint:  db 'Printing is not supported.', 0
+sh_s_nocopyarea: db 'Copy a cell or range first.', 0
 
 ; Stage 1.8/2.x: matches real Excel 2.0/2.1's own Format menu shape
 ; (VM_screenshots/menu_format.png) - Number.../Alignment.../Font... open
@@ -26060,8 +26339,16 @@ sh_it_run:     db 'Run', 0
 ; MENU_DIS: the item is drawn with a check in the left margin. It is 2 rather
 ; than 1 so the two can never be confused, and sh_mdrop_draw handles both.
 sh_m_edit:     db 'Edit', 0
-sh_i_edit:     dw sh_it_undo, sh_it_cut, sh_it_copy, sh_it_paste, sh_it_clear, sh_it_delete, sh_it_insert, sh_it_fillright, sh_it_filldown
+; READ OFF THE REAL MENU (VM_screenshots/menu_edit_full.png, and the Reference
+; Guide's own picture of it on p.117): Can't Undo / Can't Repeat / Cut / Copy /
+; Paste / Clear... / Paste Special... / Paste Link / Delete... / Insert... /
+; Fill Right / Fill Down. PASTE SPECIAL AND PASTE LINK COME AFTER CLEAR, not
+; after Paste, which is where they would have gone from memory.
+sh_i_edit:     dw sh_it_undo, sh_it_repeat, sh_it_cut, sh_it_copy, sh_it_paste, sh_it_clear, sh_it_pastesp, sh_it_pastelk, sh_it_delete, sh_it_insert, sh_it_fillright, sh_it_filldown
 sh_it_undo:    db MENU_DIS, "Can't Undo", 0
+sh_it_repeat:  db MENU_DIS, "Can't Repeat", 0
+sh_it_pastesp: db 'Paste Special...', 0
+sh_it_pastelk: db 'Paste Link', 0
 sh_it_cut:     db 'Cut', 0
 sh_it_copy:    db 'Copy', 0
 sh_it_paste:   db 'Paste', 0
@@ -27534,7 +27821,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4782
+    OS88_BSS 4784
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -28311,7 +28598,9 @@ sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; 81.34.1
 sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
 sh_rndhi      equ sh_rndlo + 2
-sh_rpn_vol    equ sh_rndhi + 2      ; word: this formula's token array contains
+sh_ps_mode    equ sh_rndhi + 2      ; byte: which parts of a copied cell the
+                                       ; paste in progress is for (81.45)
+sh_rpn_vol    equ sh_ps_mode + 2    ; word: this formula's token array contains
                                        ; a volatile function (81.44)
 sh_dbf_nf     equ sh_rpn_vol + 2    ; 81.41's dBASE III scratch
 sh_dbf_nr     equ sh_dbf_nf + 2
