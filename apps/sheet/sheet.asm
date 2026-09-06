@@ -12586,6 +12586,12 @@ sh_xfp_scan:
     push si
     push di
     push es
+    mov ax, [sh_cursheet]            ; BANKED: the border table is keyed by
+    push ax                          ; sh_cursheet (sh_bt_findcell packs it
+                                     ; into the row word), and this walk
+                                     ; crosses every sheet - so each record
+                                     ; has to be looked up as ITS OWN sheet,
+                                     ; the way sh_rowcol_op already does
     mov word [sh_nxfp], 0
     mov cx, [sh_ncells]
     jcxz .done
@@ -12596,6 +12602,7 @@ sh_xfp_scan:
     mov ax, [es:si]
     SHOUT sh_unpackrow               ; -> AX = row, BX = sheet
     push si
+    mov [sh_cursheet], bx            ; ...impersonate it before the lookup
     mov dl, [es:si+5]                ; DL = the cell's format byte
     mov bx, ax                       ; BX = row, AX = col, which is the order
     mov ax, [es:si+2]                ; sh_bt_get wants
@@ -12629,6 +12636,8 @@ sh_xfp_scan:
     dec cx
     jnz .each
 .done:
+    pop ax
+    mov [sh_cursheet], ax            ; ...and put the user's sheet back
     pop es
     pop di
     pop si
@@ -12651,6 +12660,13 @@ sh_biff_ixfe:
     push bx
     push cx
     push di
+    mov ax, [sh_cursheet]             ; same reason as sh_xfp_scan: a WORKBOOK
+    push ax                           ; write walks every sheet but the border
+    mov ax, [sh_wsheet]               ; table answers for sh_cursheet alone,
+    mov [sh_cursheet], ax             ; so a bordered cell on any sheet but
+                                      ; the active one read back the WRONG
+                                      ; cell's border - usually none, so the
+                                      ; border was silently dropped (81.47.6)
     mov al, [sh_wrec_fmt]
     xor ah, ah
     mov [sh_wrec_ixfe], ax
@@ -12679,6 +12695,8 @@ sh_biff_ixfe:
     add di, 64
     mov [sh_wrec_ixfe], di
 .out:
+    pop ax
+    mov [sh_cursheet], ax
     pop di
     pop cx
     pop bx

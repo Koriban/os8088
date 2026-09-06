@@ -83886,6 +83886,43 @@ had already calibrated for the file-format dialog. That is the *opposite* of
 reusable exactly as far as the thing that determines them is shared** — here
 the dialog geometry, there the machine.
 
+#### 81.47.6 The border table answers for ONE sheet, and a workbook writes all of them
+
+`sh_bt_findcell` packs the row word with **`sh_cursheet`** — the border table
+has no other notion of which sheet a record belongs to. Both routines §81.47
+added called it while walking cells that were **not** on the current sheet:
+`sh_xfp_scan` crosses every sheet by design, and a BIFF4 workbook write emits
+one sheet substream after another with only `sh_wsheet` moving.
+
+So a bordered cell on any sheet but the active one was looked up against the
+active sheet instead. Usually that address has no record, and **the border was
+silently dropped**; where the active sheet did have one, the wrong border was
+written.
+
+The fix is the idiom `sh_rowcol_op` already uses and its comment already names
+— *impersonate this record's own sheet* — banked and restored around the walk
+in both places. The BIFF **reader** never had this bug: it moves `sh_cursheet`
+per `SHEETHDR` substream and puts the user's sheet back at the end. Writer and
+reader were asymmetric, and only the writer was new.
+
+**The first test of this was vacuous, and the A/B is what said so.** It set a
+border on sheet 2, saved, and found the extra XF present with the fix — and
+*still present* with the fix removed. The reason is the whole bug: the test
+left the user **on sheet 2**, so `sh_cursheet` already pointed at the sheet
+being asked about and the broken lookup was accidentally right. Switching back
+to sheet 1 before saving is the entire difference between a test that proves
+something and one that cannot fail:
+
+| border on sheet 2, saved from | XF records | edges |
+|---|---|---|
+| sheet 2 (active) — either build | 65 | `TLBR` |
+| sheet 1, **without** the fix | 64 | none — lost |
+| sheet 1, **with** the fix | 65 | `TLBR` |
+
+*A test that exercises the feature is not the same as a test that exercises the
+bug.* The single-sheet gate could never have caught this, and neither could a
+multi-sheet one that saves from the sheet it just formatted.
+
 #### 81.47.5 What still does not travel
 
 The border table is written to **BIFF only**. SYLK has formatting records this
