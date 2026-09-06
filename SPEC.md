@@ -82169,7 +82169,7 @@ same column:
   key. With the key at `B` the span became `B..C`, so sorting `A:C` by `B`
   left column `A` exactly where it was — every other column moved and one did
   not, which is worse than not sorting. The span is the selection's;
-  the key is `sh_sort_key`.
+  the key is `sh_sort_keycol`.
 - **The formula write-back** committed to `sh_selcol` while the value
   write-back committed to the key, so a sorted *formula* cell would have
   landed in the anchor's column. No test reached it, because the sheet under
@@ -83117,11 +83117,13 @@ reader that had not been written by the same hand as the writer.**
 > the clock is reachable by `int 0x1a` the way the kernel itself reads it
 > (§81.42).
 
-Counted, not recalled — against `excel_man/Microsoft Excel Functions and
-Macros.pdf`'s worksheet-function directory and the real Excel 2.1 menu captures
-in `VM_screenshots/`. Every previous inventory in this tree was stale, most
-recently one that said "10/131 functions, no Formula menu, 1/7 chart types, no
-text-input widget" — all four wrong by the time it was read.
+Counted, not recalled — against `Microsoft Excel Functions and Macros.pdf`'s
+worksheet-function directory and the real Excel 2.1 menu captures. **Neither is
+in this repository**: both are period reference material held outside the tree,
+so naming them is provenance rather than a path anyone can open here. Every
+previous inventory in this tree was stale, most recently one that said "10/131
+functions, no Formula menu, 1/7 chart types, no text-input widget" — all four
+wrong by the time it was read.
 
 #### 81.39.1 Functions — 106 of ~130
 
@@ -83578,9 +83580,10 @@ constants, which is why it kept working.
 
 Excel 2.1d's Edit menu has twelve items. SHEET's had nine. The three missing
 ones are **Can't Repeat**, **Paste Special...** and **Paste Link**, and the
-first thing this change did was open `VM_screenshots/menu_edit_full.png` and
-the Reference Guide's own picture of the same menu (p.117) rather than write
-the order down from memory:
+first thing this change did was open the real Excel 2.1d capture of that menu
+(`menu_edit_full.png`, in the out-of-tree reference material — see above) and
+the Reference Guide's own picture of it on p.117, rather than write the order
+down from memory:
 
     Can't Undo / Can't Repeat / Cut / Copy / Paste / Clear... /
     Paste Special... / Paste Link / Delete... / Insert... /
@@ -83695,7 +83698,7 @@ deliberately *unlocked* are the ones that still take input.
 
 The obvious place is `SH_C_FLAGS`, which has bits 2-7 free. **It is the wrong
 place.** Several sites write that byte as a *word* together with the format,
-and `sh_setvalue`'s "not a formula any more" path clears it outright — so a
+and both `sh_setvald` and `sh_settext` clear it outright — so a
 Locked bit would survive some edits and vanish on others, which is worse than
 not having one. Finding that out cost one `grep` and is the only reason this
 section is not an audit of twenty-three write sites.
@@ -83876,7 +83879,7 @@ XF_TYPE_PROT is 1". The other two survive, correctly: the extra XF is still
 written, only the cell's pointer to it is broken. A mutation that fails
 everything proves less than one that fails the right thing.
 
-Every `sh_fdlg` dialog is one fixed size centred on the screen whatever its row
+Every `sh_fdlg_*` dialog is one fixed size centred on the screen whatever its row
 count, so the gate drove Cell Protection with the radio and OK coordinates it
 had already calibrated for the file-format dialog. That is the *opposite* of
 §81.44.3's trap and worth stating for the same reason: **coordinates are
@@ -84814,7 +84817,7 @@ thing in the file.
 **What it costs, counted rather than guessed.** The BIFF reader/writer and the
 read/write drivers are 40 routines over ~3,440 source lines, and between them
 they make **~120 calls to symbols that would stay resident** — `sh_findcell`,
-`sh_setcell`, the `fp_*` machine, the R1C1 conversions. Every one becomes a
+`sh_setvald`, the `fp_*` machine, the R1C1 conversions. Every one becomes a
 far call, because §68.10 keeps `DS` on the package but moves `CS`. That is the
 same edit the Scribe split made 47 times (88.8.3), at two and a half times the
 scale, and the mechanism is the one that worked there: the module carries a
