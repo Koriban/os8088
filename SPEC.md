@@ -91103,6 +91103,21 @@ the second carries its own cells.
 No cell click is needed, for the reason the protection step needs none:
 switching sheets leaves a cell selected and typing goes to it.
 
+**A note on why this could not run at first, since the first answer was
+wrong.** After the upstream merge every launch died as *"martypc_headless
+never published a debug port"*. I concluded the harness required a capability
+the tree could not build, because no file in `tools/martypc/patches/` mentions
+`MARTYPC_DEBUG_PORTFILE`. It does not — but `tools/martypc/debug_server.rs`
+does, and **#147 updated that file and `os88marty.py` in the same commit**.
+They were consistent all along; the binary in `build/` was from before it and
+had simply never been rebuilt. `tools/martypc/build.sh` fixes it in one run.
+
+*"No patch mentions it" was a search, not a conclusion.* The accommodation I
+briefly added to `os88marty.py` — ask for a concrete port when the binary
+cannot publish one — was reverted: it papers over a stale build, and it would
+mask the case the file exists to catch, a debug server bound where nobody can
+find it.
+
 **Mutation-tested against §81.47.6 itself.** Reverting that fix — the workbook
 looking every cell up against the *active* sheet — fails the suite in exactly
 one place. It is not one of the three new checks that fires but the older
