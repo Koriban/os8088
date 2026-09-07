@@ -93,7 +93,7 @@ wd_rtfimg:
 ;      which is the same thing the screen does with it (wd_rowhc).
 ;
 ; THIS IS THE ONE PLACE SCRIBE WRITES SOMETHING WORD DOES NOT, and RTF is the
-; format where that is safe rather than reckless (SPEC.md 88.5). RTF is text
+; format where that is safe rather than reckless (SPEC.md 92.5). RTF is text
 ; and its own rule is that a reader skips a destination it does not know, so
 ; the worst a foreign reader can do with this group is drop it and keep the
 ; document. The same picture in a .DOC would be a binary field that a reader
@@ -138,7 +138,7 @@ wd_rpict:
     push es
     push ds
     PKG_LDS wd_cseg            ; the CHP byte IS the picture index
-    mov al, [bx]                    ; (SPEC.md 88.9)
+    mov al, [bx]                    ; (SPEC.md 92.9)
     pop ds
     xor ah, ah
     call far [wd_v_picrec]; -> BX = the table slot
@@ -400,7 +400,7 @@ wd_rpap:
     xor ah, ah
     mov bx, ax
     shl bx, 1
-    mov si, [cs:bx+wd_r_qtab]     ; (SPEC.md 88.8.2)
+    mov si, [cs:bx+wd_r_qtab]     ; (SPEC.md 92.8.2)
     call wd_res
 .nj:
     mov al, [wd_rpp+1]              ; left indent
@@ -529,6 +529,7 @@ wd_res:
 
 ; wd_rnum - emit signed AX in decimal, then one space. Preserves all but DI.
 wd_rnum:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -666,7 +667,7 @@ wd_rtfparse:
     call far [wd_v_pictfree]; the OLD document's pictures go back
                                     ; HERE and not at wd_load's commit point,
                                     ; which is past the ones this parse is
-                                    ; about to build (SPEC.md 88.6)
+                                    ; about to build (SPEC.md 92.6)
     xor si, si                      ; SI = where we are in the file
 .step:
     cmp si, [wd_dfsize]
@@ -1083,7 +1084,7 @@ wd_rword:
     ret
 
 ; =============================================================================
-; THE PICTURE READER (SPEC.md 88.6). \pict used to be a skipped destination
+; THE PICTURE READER (SPEC.md 92.6). \pict used to be a skipped destination
 ; and is now a collected one. The shape mirrors wd_rskip exactly: [wd_rpin]
 ; holds the depth the group opened at, .step routes text to the collector
 ; while it is set, and .close finalises when that group's brace arrives.
@@ -1561,7 +1562,7 @@ wd_r_tbl:
     db WDR_SKIP
     dw wd_rw_info
     db WDR_SKIP
-    dw wd_rw_pict                   ; NOT WDR_SKIP any more (SPEC.md 88.6):
+    dw wd_rw_pict                   ; NOT WDR_SKIP any more (SPEC.md 92.6):
     db WDR_PICT                     ; a \pict this reader understands is a
     dw wd_rw_wbmwb                  ; picture, and one it does not is
     db WDR_PICWB                    ; discarded at the closing brace, which

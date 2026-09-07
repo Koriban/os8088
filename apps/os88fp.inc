@@ -2118,6 +2118,7 @@ fp_i2b:
 ; would drift a little with each of them.
 ; -----------------------------------------------------------------------------
 fp_ftoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx

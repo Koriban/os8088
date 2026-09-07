@@ -99,7 +99,7 @@ INCLUDES = [
      "The resident half of the CHART.OVL split: loader, verb dispatch and the "
      "shims os88chart.inc calls back out through. Only a package that %defines "
      "CH_OVERLAY needs it - today that is SHEET alone."),
-    ("os88img.inc", "85",
+    ("os88img.inc", "91",
      "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
      "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "
      "in SI. 8-bit files are refused by name, not approximated."),
@@ -113,6 +113,10 @@ INCLUDES = [
      "Sub-tick timing off the 8253."),
     ("os88type.inc", "54",
      "File-type recognition by name and by content."),
+    ("os88parts.inc", "20.12",
+     "Package parts: named, sized parts inside one `.O88` - claimed, loaded on "
+     "demand, optionally into XMS, and refused with an arithmetic the package "
+     "states itself. A package over 64KB is still a package."),
 ]
 
 
@@ -425,7 +429,9 @@ def main():
             return 1
         print("os88index: docs/INDEX.md is current")
         return 0
-    with open(OUT, "w", encoding="utf-8") as f:
+    # newline="\n": the file is LF in the tree, and Windows would otherwise
+    # rewrite it CRLF and show every line as changed.
+    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write(text)
     print("os88index: wrote docs/INDEX.md (%d slots, %d packages)"
           % (len(api_slots()), len(packages())))

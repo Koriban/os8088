@@ -420,7 +420,7 @@ WDA_SORT     equ 23             ; Utilities > Sort... (SPEC.md 68.9)
 WDA_RENUM    equ 24             ; Utilities > Renumber...
 WDA_TOC      equ 25             ; Insert > Table of Contents...
 WDA_PAGE     equ 26             ; View > Page (SPEC.md 68.11)
-WDA_PICT     equ 27             ; Insert > Picture... (SPEC.md 88.9)
+WDA_PICT     equ 27             ; Insert > Picture... (SPEC.md 92.9)
 WDA_MAX      equ 27
 
 ; --- the CHP attribute byte (SPEC.md 68.3) -----------------------------------
@@ -633,7 +633,7 @@ WD_PICCH     equ 1              ; the character. Word's own (chPicture), and
                                 ; control below 32 except tab and CR - so a
                                 ; 0x01 in this buffer can only be ours
 WD_PICKB     equ 40             ; the decoded picture's TRANSIENT claim
-                                ; (SPEC.md 88.9). 40KB holds a 640x128 or a
+                                ; (SPEC.md 92.9). 40KB holds a 640x128 or a
                                 ; 320x256 in packed 4bpp, and os88img.inc
                                 ; refuses anything past what it is given
                                 ; rather than writing past the claim
@@ -4243,7 +4243,7 @@ wd_rflush:
                                     ; advanced, so every position below is true
     cmp word [wd_rowpic], 0xFFFF    ; a PICTURE row: one blit, and none of the
     je .notpic                      ; lettering below - the row buffer holds no
-    call wd_picdraw                 ; glyphs for it (SPEC.md 88.9)
+    call wd_picdraw                 ; glyphs for it (SPEC.md 92.9)
     jmp .caret
 .notpic:
     cmp word [wd_rcols], 0
@@ -7219,7 +7219,7 @@ wd_load:
     pop ax
     mov bp, WDM_RTFPARSE        ; frees the OLD pictures ITSELF and may then
     call wd_ovcall
-    jc .bad                     ; register new ones (SPEC.md 88.6), so it
+    jc .bad                     ; register new ones (SPEC.md 92.6), so it
     jmp short .loaded2          ; must not meet wd_pictfree on the way out
 .nortf:
     pop ax
@@ -13026,6 +13026,7 @@ wd_saymsg:
 ; wd_utoa - AX as decimal at DI, no leading zeros; DI advances past it.
 ; Preserves every other register.
 wd_utoa:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -16669,13 +16670,13 @@ wd_ftab:
     dw wd_a_renum                   ; Utilities > Renumber...
     dw wd_a_toc                     ; Insert > Table of Contents...
     dw wd_a_page                    ; View > Page (SPEC.md 68.11)
-    dw wd_a_pict                    ; Insert > Picture... (SPEC.md 88.9)
+    dw wd_a_pict                    ; Insert > Picture... (SPEC.md 92.9)
 
 wd_mf_ret:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_a_pict - Insert > Picture... (SPEC.md 88.9)
+; wd_a_pict - Insert > Picture... (SPEC.md 92.9)
 ;
 ; Ask for a file, read it, and decode it through SCRIBE.OVL. The picture is
 ; measured and reported and NOT yet put in the document: the model, the
@@ -17383,6 +17384,7 @@ wd_rad3:
 
 ; wd_unum - write unsigned AX into the NUL buffer at BX. Preserves all.
 wd_unum:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -19966,7 +19968,7 @@ wd_e_wprot:   db 'Write protected', 0
 wd_e_big:     db 'Too big', 0
 wd_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
-; Insert > Picture (SPEC.md 88.9). One string per IMG_E_* code, indexed by it
+; Insert > Picture (SPEC.md 92.9). One string per IMG_E_* code, indexed by it
 ; - the include hands back a NUMBER (87.2) and each package says what it means
 ; in its own voice.
 ; EVERY ONE OF THESE IS 24 CHARACTERS OR FEWER, because TOAST_MAX is 24 and
@@ -20019,7 +20021,7 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                                         ; not fund the clipboard (SPEC.md 55)
 
 ; =============================================================================
-; REACHING THE PACKAGE'S OWN VARIABLES FROM INSIDE THE MODULE (SPEC.md 88.8.3)
+; REACHING THE PACKAGE'S OWN VARIABLES FROM INSIDE THE MODULE (SPEC.md 92.8.3)
 ;
 ; The file-format engines read wd_dseg, wd_cseg, wd_len and the rest at moments
 ; when DS *and* ES are both pointed at the document, CHP or staging claims.
@@ -20081,7 +20083,7 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 %endmacro
 ; =============================================================================
 
-; --- the two file formats now live in SCRIBE.OVL (SPEC.md 88.8) --------------
+; --- the two file formats now live in SCRIBE.OVL (SPEC.md 92.8) --------------
 ; wddoc.inc and wdrtf.inc used to be %included here, in .text. They are
 ; %included from inside `section .modc` further down instead, which is the
 ; whole of what moving a subsystem out costs: the includes moved, and every
@@ -20133,7 +20135,7 @@ wd_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
 WD_OVKB      equ 12             ; the claim SCRIBE.OVL is read into, KB. It
                                 ; was 8 when the module held only the picture
                                 ; decoder; the two file formats took it past
-                                ; 9KB (SPEC.md 88.8). THE MAKEFILE CHECKS THIS
+                                ; 9KB (SPEC.md 92.8). THE MAKEFILE CHECKS THIS
                                 ; against the cut module and fails the build if
                                 ; the module outgrows it - the number is read
                                 ; out of this line, so there is one and not two
@@ -20187,7 +20189,7 @@ wd_ovneed:
     call OSAPI_FILE_READ
     jc .noread
     mov ax, cs                      ; THE PACKAGE'S SEGMENT, STAMPED INTO THE
-    mov [es:wd_pkgseg], ax          ; MODULE ITSELF (SPEC.md 88.8.3). ES is
+    mov [es:wd_pkgseg], ax          ; MODULE ITSELF (SPEC.md 92.8.3). ES is
                                     ; still the claim from the read above, and
                                     ; CS is the package because this routine
                                     ; is resident. It is the module's ONLY way
@@ -20270,7 +20272,7 @@ wd_ovcall:
                                     ; 0, so the far pointer is (0, the claim)
                                     ; and the verb's own CF comes back through
     push ax                         ; THE MODULE NEVER SPEAKS; IT LEAVES A
-    pushf                           ; REASON AND THIS SAYS IT (SPEC.md 88.8.1).
+    pushf                           ; REASON AND THIS SAYS IT (SPEC.md 92.8.1).
     mov ax, [wd_ovmsg]              ; The one shim whose resident routine
     or ax, ax                       ; touched the UI - wd_papfind's refusal
     jz .quiet                       ; toast - is the shape 82.16 records a
@@ -20358,7 +20360,7 @@ wd_modc:                            ; +0: the dispatcher, and the only offset
                                     ; cost an afternoon there (SPEC.md 82.16.4)
 
 ; The package's segment, stamped here by wd_ovneed the moment the module is
-; read (SPEC.md 88.8.3). It is IN THE MODULE and not in the package's bss,
+; read (SPEC.md 92.8.3). It is IN THE MODULE and not in the package's bss,
 ; because the whole point is that module code can reach it with CS alone.
 wd_pkgseg: dw 0
 
@@ -20406,7 +20408,7 @@ wd_m_imgload:
     call img_load
     retf
 
-; --- the file formats, and the six ways in (SPEC.md 88.8) --------------------
+; --- the file formats, and the six ways in (SPEC.md 92.8) --------------------
 ; Each is a near proc ending in `ret`, as every routine in this package is
 ; (SPEC.md 20.1), so the verb table cannot point at one directly - the
 ; dispatcher's `jmp` arrives with a far return address on the stack. Each gets
@@ -20967,7 +20969,7 @@ section .text
     WDVAR wd_ovseg, 2       ; word: SCRIBE.OVL's claim, 0 = not loaded yet
     WDVAR wd_ovmsg, 2       ; word: a message the MODULE wants said, 0 = none.
                             ; The module never touches the UI; wd_ovcall says
-                            ; this on the way back out (SPEC.md 88.8.1)
+                            ; this on the way back out (SPEC.md 92.8.1)
     WDVAR wd_ovfar, 4       ; the (offset, segment) wd_ovcall far-calls: an
                             ; 8086 has no `call far reg:reg`, so the pointer
                             ; lives in memory and DS reaches it
@@ -21015,7 +21017,7 @@ section .text
 
 %endif
 
-; --- Insert > Picture (SPEC.md 88.9) ----------------------------------------
+; --- Insert > Picture (SPEC.md 92.9) ----------------------------------------
 ; The block and the row buffer os88img.inc works through. They are HERE and
 ; not in a claim because that include reaches both through DS, which stays the
 ; package's segment even while the decoder itself is running out in SCRIBE.OVL
@@ -21049,7 +21051,7 @@ section .text
                             ; output wraps instead of being one enormous line
     WDVAR wd_dpicrun, 1     ; byte: the attribute run wd_dattr just found is
                             ; a picture, so its CHPX is the fixed structure
-                            ; and not a sprm grpprl (SPEC.md 88.7)
+                            ; and not a sprm grpprl (SPEC.md 92.7)
     WDVAR wd_dpicfc, WD_PICMAX * 2
                             ; word each: where each picture's PICF landed,
                             ; filled before the CHPX that names it is built
