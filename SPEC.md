@@ -91092,6 +91092,37 @@ had already calibrated for the file-format dialog. That is the *opposite* of
 reusable exactly as far as the thing that determines them is shared** — here
 the dialog geometry, there the machine.
 
+#### 81.47.7 The host reader could not open a workbook, which is why 81.47.6 lasted
+
+`tools/os88sheetfmt.py` accepted BIFF2 and BIFF3 and stopped at the first
+`EOF`. A BIFF4 workbook opens `0409H` and its first `EOF` ends the **globals**
+substream, so the reader saw a valid stream with no cells in it — and rejected
+`0409H` outright anyway, as *"not a BIFF stream"*.
+
+So every multi-sheet file SHEET has ever written was **unreadable by the only
+independent implementation this project has**, and `tests/sheetfmt.py` — whose
+whole design is that the host authors the input so a writer and reader cannot
+cancel out — could only ever reach the single-sheet path. §81.47.6's bug lived
+in exactly that blind spot, and was found by hand-writing a parser for one run
+rather than by any gate.
+
+The walk now handles substreams: `_biff_walk` returns one entry per sheet and a
+plain stream is the same thing with the directory left out, which is the honest
+way round — the workbook is the general case. `read_biff` still answers with
+the first sheet's cells, because every caller predates the workbook and asks
+about one grid; `read_biff_book` is the one that can see the rest.
+
+**`apps/sheet/KODAK.BIF` is the fixture, and it is a real artifact** — three
+sheets made in the emulator by hand (`docs/KODAK-EXAMPLE.md`), carrying both
+record kinds because sheet 3's `1.42` cannot be an `RK` and goes out as an
+IEEE-754 `NUMBER`. The self-check asserts three named sheets of 25, 6 and 6
+cells and those three fractions verbatim.
+
+Two things the fixture caught immediately: `SHEETHDR`'s name count is at offset
+**4**, not 5 — read one byte late, every sheet is named `heetN` and nothing
+fails — and a reader that cannot open the file must **say so** rather than let
+a `FormatError` escape as a traceback, which is what a gate owes.
+
 #### 81.47.6 The border table answers for ONE sheet, and a workbook writes all of them
 
 `sh_bt_findcell` packs the row word with **`sh_cursheet`** — the border table

@@ -35,6 +35,7 @@ A cell value is one of:
 
 Keys are ``(row, col)``, **0-based**, however the format on disk numbers them.
 """
+import os
 import struct
 import sys
 
@@ -52,6 +53,15 @@ BIFF_RK = 0x7E                          # 027EH, BIFF3 on; replaces INTEGER
 # reader that only knew the BIFF2 column of the tables would reject every file
 # it has ever produced.  Both are read here, decided by the BOF.
 BIFF3_BIT = 0x0200
+
+# BIFF4 renumbers again, into 04xxH, and adds the WORKBOOK: one globals
+# substream (BOF dt=0100H) carrying FONT/XF and the sheet directory, then one
+# BOF..EOF substream per sheet, each introduced by a SHEETHDR naming it.  SHEET
+# writes this whenever a document uses more than one of its grids (SPEC.md
+# 81.10.5), so a reader that stopped at the first EOF - as this one did - saw
+# the globals, no cells at all, and called it an empty file.
+BIFF4_BIT = 0x0400
+BIFF_SHEETHDR = 0x008F                  # <length:4><name length:1><name>
 
 # excelfileformat.pdf §2.4.  #N/A is written "#N/A!" there and "#N/A"
 # everywhere a user sees it; the second is what SYLK and Excel's own UI use.
@@ -249,9 +259,15 @@ def read_dif(data):
 # BIFF2.  <id:2><length:2><data>, and every cell record opens row(2) col(2)
 # attributes(3).
 # -----------------------------------------------------------------------------
-def read_biff(data):
-    cells, i, n = {}, 0, len(data)
-    vstart = None                       # where a cell record's value begins
+def _biff_walk(data):
+    """[(name, {(row, col): value})] - one entry per sheet, in file order.
+
+    A single-sheet BIFF2/3 stream is one unnamed entry, which is what makes
+    this the only walk: the workbook is the general case and the plain stream
+    is the workbook with the directory left out.
+    """
+    sheets, cells, names = [], {}, []
+    i, n, vstart, depth = 0, len(data), None, 0
     while i + 4 <= n:
         rid, ln = struct.unpack_from('<HH', data, i)
         i += 4
@@ -260,14 +276,33 @@ def read_biff(data):
                               % (rid, i))
         body = data[i:i + ln]
         i += ln
-        if rid in (BIFF_BOF, BIFF_BOF | BIFF3_BIT):
+        if rid in (BIFF_BOF, BIFF_BOF | BIFF3_BIT, BIFF_BOF | BIFF4_BIT):
+            # BIFF2's cell header is row(2) col(2) attributes(3); BIFF3 and
+            # BIFF4 replace those three bytes with a 2-byte XF index.
             vstart = 7 if rid == BIFF_BOF else 6
+            depth += 1
+            if depth > 1 or ln < 4 or struct.unpack_from('<H', body, 2)[0] != 0x0100:
+                cells = {}              # a SHEET substream, or a plain stream
             continue
         if rid == BIFF_EOF:
-            break
+            if vstart is not None and depth:
+                depth -= 1
+                if cells or len(sheets) < len(names):
+                    sheets.append((names[len(sheets)] if len(sheets) < len(names)
+                                   else None, cells))
+                    cells = {}
+            continue
+        if rid == BIFF_SHEETHDR and ln >= 5:
+            # <substream length:4><name length:1><name>.  Taken from the
+            # writer that produces it rather than from the table: 11 bytes is
+            # 4 + 1 + "SheetN", and reading the count one byte late turns
+            # every name into "heetN" without failing anything.
+            ln_name = body[4]
+            names.append(body[5:5 + ln_name].decode('latin-1'))
+            continue
         if vstart is None:
             continue
-        kind = rid & ~BIFF3_BIT if rid >= BIFF3_BIT else rid
+        kind = rid & ~(BIFF3_BIT | BIFF4_BIT)
         if kind in (BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER, BIFF_LABEL,
                     BIFF_BOOLERR, BIFF_FORMULA, BIFF_RK):
             if ln < vstart:
@@ -277,8 +312,25 @@ def read_biff(data):
             if v is not None:
                 cells[(r, c)] = v
     if vstart is None:
-        raise FormatError('no BOF record — this is not a BIFF stream')
-    return cells
+        raise FormatError('no BOF record - this is not a BIFF stream')
+    if cells or not sheets:
+        sheets.append((names[len(sheets)] if len(sheets) < len(names) else None,
+                       cells))
+    return sheets
+
+
+def read_biff_book(data):
+    """Every sheet, as [(name, cells)].  A single-sheet stream is one entry."""
+    return _biff_walk(data)
+
+
+def read_biff(data):
+    """The FIRST sheet's cells, which for a single-sheet stream is all of them.
+
+    Kept flat because every caller predates the workbook and asks about one
+    grid; read_biff_book is the one that can see the rest.
+    """
+    return _biff_walk(data)[0][1]
 
 
 def _rk(v):
@@ -507,11 +559,42 @@ def _selfcheck():
     tricky = {(0, 0): 'a;b'}
     if read_sylk(write_sylk(tricky)).get((0, 0)) != 'a;b':
         bad.append('the ;; escape does not round trip')
+    # --- the BIFF4 WORKBOOK, against a file this app actually wrote ---------
+    # apps/sheet/KODAK.BIF is three sheets in one stream, made in the emulator
+    # by hand (docs/KODAK-EXAMPLE.md).  It is here because the round trip above
+    # cannot reach the workbook at all: write_sylk has no notion of a second
+    # sheet, so until this reader learned BIFF4 the multi-sheet path had NO
+    # host-side check of any kind - which is exactly how a writer bug that put
+    # every sheet's borders on the active sheet survived (SPEC.md 81.47.6).
+    book_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             '..', 'apps', 'sheet', 'KODAK.BIF')
+    if os.path.exists(book_file):
+        try:
+            book = read_biff_book(open(book_file, 'rb').read())
+        except FormatError as e:
+            # A reader that cannot open it must SAY so.  This raised an
+            # uncaught FormatError first, which is a traceback where a gate
+            # owes a sentence.
+            book, got = [], 'unreadable: %s' % e
+        else:
+            got = [(n, len(c)) for n, c in book]
+        if got != [('Sheet1', 25), ('Sheet2', 6), ('Sheet3', 6)]:
+            bad.append('KODAK.BIF reads as %s' % (got,))
+        else:
+            # Sheet 3 is the one that cannot be RK: 1.42 does not fit, so it
+            # goes out as an IEEE-754 NUMBER and comes back verbatim or not
+            # at all.  Both record kinds in one file is the point of it.
+            want = [1.42, 1.86, 2.15]
+            third = [book[2][1].get((r, 1)) for r in range(3)]
+            if third != want:
+                bad.append('KODAK.BIF sheet 3 reads %r, wanted %r'
+                           % (third, want))
     if bad:
         for b in bad:
             print('os88sheetfmt: %s' % b)
         return 1
-    print('os88sheetfmt: selfcheck ok (%d cells, ;; escape)' % len(cells))
+    print('os88sheetfmt: selfcheck ok (%d cells, ;; escape, '
+          'and KODAK.BIF as 3 sheets)' % len(cells))
     return 0
 
 
