@@ -7467,7 +7467,9 @@ $(if $(filter-out $(APPS_GAMES),$(CORE_GAMES)), \
 # double-click on it opens the browser without going through APPS/.
 APPS_DATA := apps/tracker/beverly.mod apps/texpad/PAPER.TEX \
              apps/texpad/GUIDE.TEX tests/htm/demo.htm \
-             apps/sheet/XEROXQ3.SLK apps/scribe/XEROXQ3.RTF
+             apps/sheet/XEROXQ3.SLK apps/scribe/XEROXQ3.RTF \
+             apps/sheet/KODAK.BIF apps/scribe/KODAK.DOC \
+             apps/sheet/KODAKEX1.BMP apps/sheet/KODAKEX2.BMP
 
 # ...except at 360KB, where BEVERLY.MOD rides a MEDIA DISK of its own
 # (SPEC.md 24.4). 116KB is 114 of that geometry's 354 clusters - a third of
@@ -7486,12 +7488,17 @@ APPS_DATA := apps/tracker/beverly.mod apps/texpad/PAPER.TEX \
 # Open starts. MEDIAFOLDER is passed anyway (see APPSARGS360): the folder has
 # to exist because it is where a save DEFAULTS to (SPEC.md 38.10), and that
 # must not be a thing the last data file left on the disk happens to provide.
-# XEROXQ3.RTF goes the same way at 360KB and for a smaller version of the same
-# reason: 39KB is 39 of that geometry's 354 clusters, on a disk this fork
-# already had to take PAC-MAN off. The .SLK stays at every size - 1,765 bytes -
-# so the pair is still discoverable there: open the worksheet, and the report
-# it was written into is on the roomier disks beside it.
-MEDIA_DISK_DATA := apps/tracker/beverly.mod apps/scribe/XEROXQ3.RTF
+# THE WHOLE KODAK SET AND XEROXQ3.RTF GO THE SAME WAY AT 360KB, and the numbers
+# say why rather than a preference: that geometry was at 353 of its 354 clusters
+# before either arrived - ONE spare - and the Kodak pair alone is five. The two
+# exhibits are 19KB each on top of that. So at 360KB the examples are the 1,765
+# byte XEROXQ3.SLK and nothing else, which still leaves MEDIA a folder with a
+# file in it and still gives a File Open somewhere to start; everything else
+# rides the geometries that have room. Measured, not guessed: adding the pair
+# put os88disk at "packages need 358 clusters; disk holds 354".
+MEDIA_DISK_DATA := apps/tracker/beverly.mod apps/scribe/XEROXQ3.RTF \
+                   apps/sheet/KODAK.BIF apps/scribe/KODAK.DOC \
+                   apps/sheet/KODAKEX1.BMP apps/sheet/KODAKEX2.BMP
 APPS_DATA_360   := $(filter-out $(MEDIA_DISK_DATA),$(APPS_DATA))
 
 # The Task Manager, in SYSTEM/ and not in the root, because that is where
