@@ -5365,6 +5365,44 @@ sh_ps_src:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_ps_srcsheet / sh_ps_mysheet - step into the sheet the block was COPIED
+; from, and back out again. (81.45.4)
+;
+; An address is not a cell here: sh_findcell, sh_bt_get and sh_nt_get all pack
+; sh_cursheet into the row word, so reading the source cell's format, border or
+; note while standing on the DESTINATION sheet reads whatever happens to live
+; at that address on the wrong grid. Copy on Sheet1, switch to Sheet2, Paste
+; Special > Formats, and the formats came from Sheet2's own cell.
+;
+; The pair is symmetric and nests nowhere - one caller enters, does its reads
+; and leaves before writing anything, because the WRITES go to the current
+; sheet and only the READS belong to the other one.
+;
+; TWO RULES, AND BREAKING EITHER IS SILENT. The banked sheet lives in ONE bss
+; word, so (1) every path that enters must leave - a leave without a matching
+; enter restores whatever the slot held last and moves the USER's sheet under
+; them, which is how an experiment here left the grid showing Sheet1 after a
+; paste onto Sheet2; and (2) the two callers must never nest, or the inner
+; enter overwrites the outer's bank. They do not: sh_paste_cell reaches
+; sh_ps_valtext for SH_PS_VAL and sh_ps_props for ALL/FORMATS/NOTES, and no
+; mode reaches both.
+; -----------------------------------------------------------------------------
+sh_ps_srcsheet:
+    push ax
+    mov ax, [sh_cursheet]
+    mov [sh_ps_ownsheet], ax
+    mov ax, [sh_clip_sheet]
+    mov [sh_cursheet], ax
+    pop ax
+    ret
+sh_ps_mysheet:
+    push ax
+    mov ax, [sh_ps_ownsheet]
+    mov [sh_cursheet], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_ps_props - copy the source cell's PROPERTIES onto the destination, which
 ; parts depending on [sh_ps_mode]: the format byte and the border for All and
 ; Formats, the note for All and Notes.
@@ -5382,15 +5420,42 @@ sh_ps_props:
     push si
     push di
     push es
+    ; --- EVERY SOURCE READ FIRST, standing on the sheet the block came from.
+    ; CL says the source had a cell record, CH that it had a note; DL is its
+    ; format byte and DH its border/protection byte. The writes below all go
+    ; to the CURRENT sheet, so the two must not interleave (81.45.4).
+    xor cx, cx
+    xor dx, dx
+    call sh_ps_srcsheet
     mov al, [sh_ps_mode]
     cmp al, SH_PS_NOTE
-    je .note
-    ; --- the format byte -----------------------------------------------------
+    je .srcnote
     call sh_ps_src
     call sh_findcell
-    jnc .noborder                     ; no source record: nothing to copy
+    jnc .srcborder                    ; no source record: nothing to copy
     mov es, [sh_cellseg]
     mov dl, [es:di+SH_C_FMT]
+    mov cl, 1
+.srcborder:
+    call sh_ps_src
+    call sh_bt_get                    ; AL = the source's border byte, 0 none
+    mov dh, al
+    cmp byte [sh_ps_mode], SH_PS_ALL  ; All carries the note as well
+    jne .srcdone
+.srcnote:
+    call sh_ps_src
+    call sh_nt_get
+    jnc .srcdone                      ; no note on the source: leave the
+    mov si, ax                        ; destination's own alone. Excel's All
+    call sh_note_load                 ; does not erase a note either
+    mov ch, 1
+.srcdone:
+    call sh_ps_mysheet                ; ...and back, before anything is written
+    mov al, [sh_ps_mode]
+    cmp al, SH_PS_NOTE
+    je .putnote
+    or cl, cl
+    jz .noborder                      ; the source had no record at all
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_findcell
@@ -5398,32 +5463,25 @@ sh_ps_props:
     mov es, [sh_cellseg]              ; same scope limit sh_fdlg_apply
     mov [es:di+SH_C_FMT], dl          ; documents for the Format dialogs
 .noborder:
-    ; --- and the border, which lives in its own table (81.13) ---------------
-    call sh_ps_src
-    call sh_bt_get                    ; AL = the source's border byte, 0 none
-    mov dl, al
-    or dl, dl
+    or dh, dh
     jz .clrborder
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_bt_addcell
     jc .fmtdone                       ; table full: silent, as sh_bdlg_apply is
     mov es, [sh_bordseg]
-    mov [es:di+4], dl
+    mov [es:di+4], dh
     jmp .fmtdone
 .clrborder:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_bt_removecell
 .fmtdone:
-    cmp byte [sh_ps_mode], SH_PS_ALL  ; All carries the note as well
+    cmp byte [sh_ps_mode], SH_PS_ALL
     jne .out
-.note:
-    call sh_ps_src
-    call sh_nt_get
-    jnc .out                          ; no note on the source: leave the
-    mov si, ax                        ; destination's own alone. Excel's All
-    call sh_note_load                 ; does not erase a note either
+.putnote:
+    or ch, ch
+    jz .out
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     mov si, sh_notetext
@@ -5456,9 +5514,10 @@ sh_ps_valtext:
     push di
     push es
     mov byte [sh_editbuf], 0
-    call sh_ps_src
+    call sh_ps_srcsheet               ; the source cell is on the sheet the
+    call sh_ps_src                    ; block was COPIED from (81.45.4)
     call sh_findcell
-    jnc .count                        ; an empty source pastes an empty cell
+    jnc .valdone                      ; an empty source pastes an empty cell
     mov es, [sh_cellseg]
     cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
     je .label
@@ -5466,7 +5525,7 @@ sh_ps_valtext:
     mov si, sh_numbuf
     mov di, sh_editbuf
     call sh_strcpy
-    jmp .count
+    jmp .valdone
 .label:
     mov ax, [es:di+SH_C_FOFF]         ; a label shares the formula arena
     mov si, ax
@@ -5479,7 +5538,10 @@ sh_ps_valtext:
     inc di
     or al, al
     jnz .acopy
-.count:
+.valdone:
+    call sh_ps_mysheet                ; EVERY path leaves it, not just the
+.count:                               ; empty one - the caller commits to the
+                                      ; CURRENT sheet immediately after
     xor cx, cx
     mov si, sh_editbuf
 .len:
@@ -5517,6 +5579,20 @@ sh_ps_linktext:
     push di
     mov byte [sh_editbuf], '='
     mov di, sh_editbuf + 1
+    ; --- a link to ANOTHER sheet has to say which one (81.45.4) -----------
+    mov ax, [sh_clip_sheet]
+    cmp ax, [sh_cursheet]
+    je .samesheet                     ; the ordinary case writes no prefix, so
+    push ax                           ; a same-sheet link is byte-for-byte
+    mov si, sh_s_sheetpfx             ; what it always was
+    call sh_strcpy_to_di
+    pop ax
+    add al, '1'                       ; "Sheet1".."Sheet4" are the only names
+    mov [di], al                      ; there are (sh_psheetpfx), so the index
+    inc di                            ; IS the digit
+    mov byte [di], '!'
+    inc di
+.samesheet:
     call sh_ps_src
     push bx                           ; sh_colname and sh_itoa both go through
     call sh_colname                   ; scratch buffers, so the row is banked
@@ -5651,7 +5727,9 @@ sh_docmd_copy:
     xchg ax, bx
 .cpr:
     mov [sh_clip_row], ax
-    mov byte [sh_clip_valid], 1
+    mov ax, [sh_cursheet]              ; WHICH SHEET the block came from, which
+    mov [sh_clip_sheet], ax            ; matters the moment Paste Special reads
+    mov byte [sh_clip_valid], 1        ; the SOURCE CELLS again (81.45.4)
     ; --- build the block as TAB-SEPARATED TEXT in the staging segment ------
     ; Tabs between columns, CR/LF between rows, and nothing after the last
     ; one - which is exactly what Excel puts on the clipboard, makes a 1x1
@@ -26780,6 +26858,7 @@ sh_it_saveas:  db 'Save As...', 0
 ; rather than present-and-refusing (decided 2026-09-04). Exit is absent for a
 ; different reason - the OS menu owns it.
 sh_s_nocopyarea: db 'Copy a cell or range first.', 0
+sh_s_sheetpfx: db 'Sheet', 0
 sh_s_locked:   db 'Locked cell on a protected document.', 0
 sh_s_protdoc:  db 'The document is protected.', 0
 
@@ -28344,7 +28423,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5188
+    OS88_BSS 5192
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -28843,7 +28922,8 @@ sh_rw_recdi       equ sh_rw_refend + 2       ; word: sh_rowcol_reidx's own
 ; comment above sh_copy_shift for what each of these holds
 sh_clip_col       equ sh_rw_recdi + 2        ; word: sh_docmd_copy's own
 sh_clip_row       equ sh_clip_col + 2        ; source cell
-sh_clip_valid     equ sh_clip_row + 2        ; byte: 1 once any Copy has
+sh_clip_sheet     equ sh_clip_row + 2        ; word: and which sheet it was
+sh_clip_valid     equ sh_clip_sheet + 2      ; byte: 1 once any Copy has
                                               ; run this session
 sh_cp_coldelta    equ sh_clip_valid + 1      ; word: sh_docmd_paste's own
 sh_cp_rowdelta    equ sh_cp_coldelta + 2     ; (dest - source) delta
@@ -29137,7 +29217,8 @@ sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
 sh_rndhi      equ sh_rndlo + 2
 sh_prot_hit   equ sh_rndhi + 2      ; byte: sh_prot_blocked's scan result
 sh_protected  equ sh_prot_hit + 2   ; byte: Options > Protect Document (81.46)
-sh_ps_mode    equ sh_protected + 2   ; byte: which parts of a copied cell the
+sh_ps_ownsheet equ sh_protected + 2   ; word: 81.45.4's banked sheet
+sh_ps_mode    equ sh_ps_ownsheet + 2  ; byte: which parts of a copied cell the
                                        ; paste in progress is for (81.45)
 sh_rpn_vol    equ sh_ps_mode + 2    ; word: this formula's token array contains
                                        ; a volatile function (81.44)

@@ -83667,6 +83667,45 @@ Bold was the first discriminator tried for Formats and was abandoned: at
 honestly call it either way. **A test whose result you have to squint at has
 already failed.** Currency changes the *text*.
 
+#### 81.45.4 An address is not a cell: the clipboard had no sheet
+
+`sh_findcell`, `sh_bt_get` and `sh_nt_get` all pack **`sh_cursheet`** into the
+row word. `sh_ps_src` returns an *address* — `sh_clip_col + sh_pb_x`,
+`sh_clip_row + sh_pb_y` — and the clipboard recorded a column, a row and a
+valid flag, and **not which sheet the block came from**.
+
+So copy on Sheet1, switch to Sheet2, Paste Special ▸ Formats, and the formats
+were read from **Sheet2's own cell at that address**. Same for Notes, and for
+Values, whose source read goes through `sh_findcell` too. Plain Paste was never
+affected: its contents come from the system clipboard's text.
+
+`sh_clip_sheet` is banked at Copy time now, and `sh_ps_srcsheet` /
+`sh_ps_mysheet` step into it and back. The reads happen entirely inside that
+window and the writes entirely outside it, because the destination is the
+current sheet and only the source is elsewhere.
+
+**Paste Link had the matching bug and a different shape.** It emitted `=D1`,
+which on Sheet2 names Sheet2's D1 — a link to the wrong cell rather than a
+missing format. It writes `=Sheet1!D1` when the sheets differ, using the
+`SheetN!` prefix `sh_psheetpfx` already parses, and the same `=D1` as before
+when they do not.
+
+**Proved, and the first attempt at proving it failed usefully.** Sheet1 D1 = 11
+formatted Currency and copied; Sheet2 D1 = 99 plain as a decoy at the same
+address; Paste Special ▸ Formats onto Sheet2 D3 = 77:
+
+| | D3 shows |
+|---|---|
+| with the fix | `$77` — Currency, from Sheet1 |
+| without | `77` — plain, from Sheet2's decoy |
+
+The first mutation removed the *enter* and left the *leave*, which restored
+`sh_cursheet` from a slot nothing had filled and moved the user's own sheet
+under them mid-paste. That is not the bug under test, so the mutation was
+redone keeping the pair balanced and disabling only the impersonation — but it
+is a real hazard, and it is now written into the pair's header as two rules:
+every enter needs its leave, and the two callers must never nest.
+
 #### 81.45.3 What is deliberately not here
 
 - **The Operation group** (None/Add/Subtract/Multiply/Divide) and the
