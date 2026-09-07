@@ -970,6 +970,33 @@ def _is_marty(pid, start=None):
     return start is None or _proc_start(pid) == start
 
 
+def _marty_publishes_port(base, _cache={}):
+    """Does the built martypc honour MARTYPC_DEBUG_PORTFILE? Read once.
+
+    The harness gained the portfile protocol before the pinned build did, and
+    without this the failure is a 60-second wait and a message about a cold
+    ROM load - which is neither what happened nor where to look.
+    """
+    exe = os.path.join(base, "martypc_headless")
+    if exe not in _cache:
+        try:
+            with open(exe, "rb") as f:
+                _cache[exe] = b"MARTYPC_DEBUG_PORTFILE" in f.read()
+        except OSError:
+            _cache[exe] = True           # cannot tell: behave as before
+    return _cache[exe]
+
+
+def _pick_port(host):
+    """A free port, released at once - see the caller on the race it opens."""
+    s = socket.socket()
+    try:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
 def _port_free(host, port, tries=60, gap=0.5):
     """True once nothing answers on the port.
 
@@ -1980,7 +2007,19 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         # only allocation that cannot race. Probing for a quiet port from here
         # and then launching does race - the probe has let the port go by the
         # time the emulator asks for it.
-        want = "%s:0" % host
+        # `:0` lets the OS pick and MARTYPC_DEBUG_PORTFILE publishes what it
+        # picked - but only from a martypc built to write that file. The build
+        # pinned in tools/martypc/ does NOT: no patch beside build.sh mentions
+        # MARTYPC_DEBUG_PORTFILE, so on a tree whose binary predates this
+        # protocol every launch waited 60s for a file nothing writes and died
+        # as "never published a debug port".
+        #
+        # So ask for a CONCRETE port when the binary cannot say which it took.
+        # That reintroduces the race `:0` exists to avoid - the probe frees the
+        # port before the child binds it - which is why the wait below refuses
+        # to believe the number until something is actually listening on it.
+        want = ("%s:0" % host if _marty_publishes_port(base)
+                else "%s:%d" % (host, _pick_port(host)))
     else:
         host, _, port = addr.rpartition(":")      # NOT parse_addr, which is
         if not host:                              # for seg:off memory addresses
@@ -2050,7 +2089,8 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     # guessed could be answered by somebody else's emulator, and that is the
     # stale-machine failure in a new hat.
     port = None
-    for _ in range(240):
+    publishes = _marty_publishes_port(base)
+    for _ in range(240 if publishes else 0):
         if proc.poll() is not None:
             _die("martypc_headless exited at once (rc=%s). The last lines of "
                  "the log say why - a missing ROM set and a port already held "
@@ -2064,6 +2104,16 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
         except (OSError, ValueError):
             pass
         time.sleep(0.25)
+    if port is None and not publishes:
+        asked = int(want.rpartition(":")[2])
+        if asked:
+            for _ in range(240):
+                if proc.poll() is not None:
+                    break
+                if not _port_free(host, asked, tries=1, gap=0.0):
+                    port = asked            # it is up and holding the port
+                    break
+                time.sleep(0.25)
     if port is None:
         _die("martypc_headless never published a debug port (%s). It is "
              "either still starting - a cold ROM load on a loaded box - or it "

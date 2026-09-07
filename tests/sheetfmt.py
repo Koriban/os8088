@@ -125,6 +125,11 @@ SAVE_AS = (90, 92)                  # File's 4th item, pitch 11 from y=59
 # and did not need calibrating again (81.47).
 FORMAT_MENU = (259, 45)
 CELL_PROT = (259 + 34, 59 + 11 * 4)
+# Sheets is the eighth menu.  Its x is FILE_MENU's plus the same span the VGA
+# machine measures between them, which holds because the bar is one string in
+# one face; the item pitch is the File menu's own 11 from y=59.
+SHEETS_MENU = (75 + 424, 45)
+SHEET2 = (75 + 424 + 34, 59 + 11 * 1)
 FMT_RADIO_X = 246
 # MEASURED, not stepped: the radio glyphs sit at 55/71/87/103/119/135, a pitch
 # of SIXTEEN. This table was 59/73/87 with a pitch of 14 while the dialog had
@@ -218,7 +223,7 @@ def cell_xfs(data):
     protection names an extra XF written after them.
     """
     cells, xfs = {}, []
-    i = 0
+    i, sheet = 0, 0
     while i + 4 <= len(data):
         op, ln = struct.unpack_from("<HH", data, i)
         if ln == 0 and op == 0:
@@ -226,12 +231,32 @@ def cell_xfs(data):
         b = data[i + 4:i + 4 + ln]
         if op in (0x0243, 0x0443) and ln >= 12:
             xfs.append(b[2] & 3)                      # bit0 locked, bit1 hidden
+        elif op == 0x000A:                            # EOF ends a substream
+            sheet += 1
         elif op in (0x027E, 0x0203, 0x0204, 0x0205,
                     0x0206, 0x0406) and ln >= 6:
             r, c, xf = struct.unpack_from("<HHH", b, 0)
-            cells[(r, c)] = xf
+            # KEYED BY SHEET TOO. It was (row, col), which is fine for a
+            # single stream and silently wrong for a workbook: Sheet 2's A1 is
+            # also (0, 0), so it overwrote Sheet 1's and the protection check
+            # below read the wrong cell's XF. The workbook arm found this the
+            # first time it ran.
+            cells[(sheet, r, c)] = xf
         i += 4 + ln
     return cells, xfs
+
+
+def _first_sheet(cells):
+    """{(row, col): ixfe} for whichever substream actually holds cells.
+
+    A BIFF3 stream has one; a BIFF4 workbook opens with a GLOBALS substream
+    that has none, so the sheet index of the first real cell is not a constant
+    and must not be assumed.
+    """
+    if not cells:
+        return {}
+    first = min(s for s, _, _ in cells)
+    return {(r, c): x for (s, r, c), x in cells.items() if s == first}
 
 
 def recalc_flags(data):
@@ -245,17 +270,19 @@ def recalc_flags(data):
     SHEET opens in Excel frozen at the value SHEET cached.
     """
     out = {}
-    i = 0
+    i, sheet = 0, 0
     while i + 4 <= len(data):
         op, ln = struct.unpack_from("<HH", data, i)
         if ln == 0 and op == 0:
             break
-        if op in (0x0206, 0x0406) and i + 4 + ln <= len(data) and ln >= 18:
+        if op == 0x000A:                    # EOF ends a substream
+            sheet += 1
+        elif op in (0x0206, 0x0406) and i + 4 + ln <= len(data) and ln >= 18:
             b = data[i + 4:i + 4 + ln]
             row, col = struct.unpack_from("<HH", b, 0)
-            out[(row, col)] = struct.unpack_from("<H", b, 14)[0]
+            out[(sheet, row, col)] = struct.unpack_from("<H", b, 14)[0]
         i += 4 + ln
-    return out
+    return _first_sheet(out)
 
 
 def main():
@@ -291,10 +318,34 @@ def main():
             mo.click(*SAVE_BUTTON)
             M.settle(m, limit=180)
 
+        # --- THE WORKBOOK ARM, last so it disturbs nothing above ----------
+        # Everything so far is one sheet, which is the only shape a BIFF3
+        # stream has.  Put two cells on Sheet 2 and save Normal again: SHEET
+        # writes a BIFF4 WORKBOOK the moment a second grid is used (81.10.5),
+        # and until 81.47.7 the host could not read one at all - which is the
+        # blind spot 81.47.6's bug lived in.
+        #
+        # No cell click is needed for the same reason the protection step
+        # needs none: switching sheets leaves a cell selected, and typing goes
+        # to it.  SHIN.BIF is overwritten, and the checks above are unharmed
+        # because read_biff answers with the FIRST sheet either way.
+        mo.menu(SHEETS_MENU[0], SHEETS_MENU[1], SHEET2[0], SHEET2[1])
+        M.settle(m)
+        m.type_text("77"); m.key("Enter"); M.settle(m)
+        m.type_text("88"); m.key("Enter"); M.settle(m)
+        mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
+        M.settle(m)
+        mo.click(FMT_RADIO_X, FMT_Y['bif'])
+        M.settle(m)
+        mo.click(*FMT_OK)
+        M.settle(m, limit=120)
+        mo.click(*SAVE_BUTTON)
+        M.settle(m, limit=240)
+
         vol = os88flush.Flush(marty=m).volume(1)
         names = vol.names()
         got = {}
-        biff_raw = None
+        biff_raw = book_raw = None
         for kind in KINDS:
             name = 'SHIN.%s' % kind.upper()
             check(name in names, "%s written" % name,
@@ -304,6 +355,7 @@ def main():
                 raw = vol.read(name)
                 if kind == 'bif':
                     biff_raw = raw
+                    book_raw = raw
                 got[kind] = F.read(name, data=raw, kind=READER[kind])
 
     for kind in KINDS:
@@ -323,6 +375,37 @@ def main():
               "the host disagrees about %d cell(s): %s"
               % (kind.upper(), len(bad), '; '.join(bad)))
 
+    if book_raw is not None:
+        try:
+            book = F.read_biff_book(book_raw)
+        except Exception as e:                      # noqa: BLE001 - reported
+            book = []
+            check(False, "the workbook reads back",
+                  "read_biff_book refused SHIN.BIF: %s" % e)
+        if book:
+            check(len(book) == 2,
+                  "a second sheet makes it a WORKBOOK",
+                  "SHIN.BIF came back as %d sheet(s) - %r. Two grids in use "
+                  "must produce a BIFF4 workbook (81.10.5); one sheet means "
+                  "either the sheet switch did not happen or the writer did "
+                  "not notice" % (len(book), [n for n, _ in book]))
+        if len(book) == 2:
+            first = book[0][1]
+            check(first.get((1, 1)) == 12.0,
+                  "...whose first sheet is still the authored one",
+                  "sheet 1 B2 reads %r, wanted the 12.0 the host authored - "
+                  "the workbook must not disturb the sheet that was already "
+                  "there" % (first.get((1, 1)),))
+            second = book[1][1]
+            vals = sorted(v for v in second.values()
+                          if isinstance(v, float))
+            check(vals == [77.0, 88.0],
+                  "...and the second carries its own cells",
+                  "sheet 2 holds %r, wanted [77.0, 88.0]. This is the arm "
+                  "that 81.47.6 needed and did not have: a bug that writes "
+                  "sheet 2's cells against sheet 1 shows up here and nowhere "
+                  "else" % (vals,))
+
     if biff_raw is not None:
         cells, xfs = cell_xfs(biff_raw)
         check(len(xfs) > 64,
@@ -330,13 +413,13 @@ def main():
               "the file carries %d XF records; 81.47 writes 64 base ones and "
               "then one per (format, border/protection) pair, so A1 being "
               "unlocked should have produced a 65th" % len(xfs))
-        a1 = cells.get((0, 0))
+        a1 = _first_sheet(cells).get((0, 0))
         check(a1 is not None and a1 >= 64 and not (xfs[a1] & 1),
               "...and that XF says the cell is unlocked",
               "A1 names XF %r, whose XF_TYPE_PROT is %r - wanted an index at "
               "64 or above with the locked bit CLEAR"
               % (a1, None if a1 is None or a1 >= len(xfs) else xfs[a1]))
-        ctl = cells.get((1, 1))
+        ctl = _first_sheet(cells).get((1, 1))
         check(ctl is not None and ctl < 64 and (xfs[ctl] & 1),
               "a cell nobody touched stays locked, on a base XF",
               "B2 names XF %r, whose XF_TYPE_PROT is %r - wanted an index "

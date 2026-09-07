@@ -91092,6 +91092,36 @@ had already calibrated for the file-format dialog. That is the *opposite* of
 reusable exactly as far as the thing that determines them is shared** — here
 the dialog geometry, there the machine.
 
+#### 81.47.8 The gate grew the arm that would have caught it
+
+`tests/sheetfmt.py` puts two cells on **Sheet 2** and saves Normal once more,
+last, so nothing above it changes: SHEET writes a BIFF4 workbook the moment a
+second grid is in use, and `read_biff_book` can now read one. Three checks —
+that two sheets come back, that the first is still the authored one, and that
+the second carries its own cells.
+
+No cell click is needed, for the reason the protection step needs none:
+switching sheets leaves a cell selected and typing goes to it.
+
+**Mutation-tested against §81.47.6 itself.** Reverting that fix — the workbook
+looking every cell up against the *active* sheet — fails the suite in exactly
+one place. It is not one of the three new checks that fires but the older
+protection one: A1 was marked unlocked on Sheet 1, the save now happens while
+Sheet 2 is active, and the extra XF that carries the unlock is looked up on the
+wrong grid and lost. The arm and the existing check are one regression test
+between them, and neither half would do it alone.
+
+**The arm's first run found a defect in the checks rather than the app.**
+`cell_xfs` keyed cells by `(row, col)`, which is right for one stream and
+silently wrong for a workbook: Sheet 2's A1 is *also* `(0, 0)`, so it
+overwrote Sheet 1's and the protection check read the wrong cell's XF.
+`recalc_flags` had the identical latent flaw and was fixed with it. Both key by
+substream now, and `_first_sheet` finds the one holding cells rather than
+assuming an index — a workbook opens with a GLOBALS substream that has none.
+
+*Changing the shape of the artifact a test reads is a good way to find out
+what the test was really keyed on.*
+
 #### 81.47.7 The host reader could not open a workbook, which is why 81.47.6 lasted
 
 `tools/os88sheetfmt.py` accepted BIFF2 and BIFF3 and stopped at the first
