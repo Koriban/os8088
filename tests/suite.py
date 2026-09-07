@@ -401,8 +401,8 @@ FAST = [
         py("tools/stkbalance.py", "apps/sheet/sheet.asm", "apps/chart/chart.asm",
            "apps/os88chart.inc", "apps/os88fp.inc", "apps/os88text.inc",
            "apps/os88line.inc", "apps/os88img.inc",
-           "apps/scribe/scribe.asm", "apps/scribe/wddoc.inc",
-           "apps/scribe/wdrtf.inc", *_kernel_sources()), 1.5,
+           "apps/scribe/scribe.asm", "apps/scribe/scdoc.inc",
+           "apps/scribe/scrtf.inc", *_kernel_sources()), 1.5,
         "every `ret` in the KERNEL and in SHEET, CHART and the includes they "
         "share is reached at "
         "the depth it started at. WORD AND SCRIBE ARE IN SCOPE TOO: wd_pictload "

@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/word/wddoc.inc
+; os8088 - apps/word/scdoc.inc
 ;
 ; THE REAL WORD .DOC FORMAT (SPEC.md 68.4) - the Word for Windows 1.x/2.x
 ; binary file, written and read from the Opus structures rather than a
@@ -21,38 +21,38 @@
 ;
 ; Every FC in a file this app can touch fits in 16 bits - the whole file has
 ; to fit the staging claim to be read at all, and the writer refuses past
-; WD_DOCCAP - so the high word of every FC is CHECKED to be zero on the way
+; SC_DOCCAP - so the high word of every FC is CHECKED to be zero on the way
 ; in and written as zero on the way out, and the arithmetic below is 16-bit.
-; That is a bound, not an assumption: wd_dvfc is where it is enforced.
+; That is a bound, not an assumption: sc_dvfc is where it is enforced.
 ; =============================================================================
 
 ; --- the FIB's fields, by byte offset (wordtech/file.h) ----------------------
-WDF_IDENT    equ 0              ; wIdent  = WD_DOCMAGIC
-WDF_NFIB     equ 2              ; nFib    = WD_NFIBCUR
-WDF_FLAGS    equ 10             ; fDot:1 fGlsy:1 fComplex:1 fHasPic:1 ...
-WDF_NFIBBACK equ 12             ; nFibBack = WD_NFIBBACK
-WDF_FCMIN    equ 24             ; FC: where the text starts
-WDF_FCMAC    equ 28             ; FC: one past the last text byte
-WDF_CBMAC    equ 32             ; FC: one past the last byte written
-WDF_CCPTEXT  equ 52             ; CP: the main document's length
-WDF_FCSTSHO  equ 88             ; FC  } the ORIGINAL stsh allocation - the
-WDF_CBSTSHO  equ 92             ; uns } same pair as fcStshf on a full save
-WDF_FCSTSH   equ 94             ; FC  } style sheet
-WDF_CBSTSH   equ 98             ; uns }
-WDF_FCSED    equ 124            ; FC  } section table
-WDF_CBSED    equ 128            ; uns }
-WDF_FCBTECHP equ 160            ; FC  } the CHPX bin table
-WDF_CBBTECHP equ 164            ; uns }
-WDF_FCBTEPAP equ 166            ; FC  } the PAPX bin table
-WDF_CBBTEPAP equ 170            ; uns }
-WDF_FCDOP    equ 262            ; FC  } document properties
-WDF_CBDOP    equ 266            ; uns }
-WDF_FCCLX    equ 274            ; FC  } the complex part: the piece table
-WDF_CBCLX    equ 278            ; uns }
-WDF_PNCHP    equ 306            ; PN: the first CHPX FKP page
-WDF_PNPAP    equ 308            ; PN: ...and the first PAPX one
-WDF_CPNCHP   equ 310            ; PN: how many CHPX FKP pages
-WDF_CPNPAP   equ 312            ; PN: ...and how many PAPX. cbFIB is 314, so
+SCF_IDENT    equ 0              ; wIdent  = SC_DOCMAGIC
+SCF_NFIB     equ 2              ; nFib    = SC_NFIBCUR
+SCF_FLAGS    equ 10             ; fDot:1 fGlsy:1 fComplex:1 fHasPic:1 ...
+SCF_NFIBBACK equ 12             ; nFibBack = SC_NFIBBACK
+SCF_FCMIN    equ 24             ; FC: where the text starts
+SCF_FCMAC    equ 28             ; FC: one past the last text byte
+SCF_CBMAC    equ 32             ; FC: one past the last byte written
+SCF_CCPTEXT  equ 52             ; CP: the main document's length
+SCF_FCSTSHO  equ 88             ; FC  } the ORIGINAL stsh allocation - the
+SCF_CBSTSHO  equ 92             ; uns } same pair as fcStshf on a full save
+SCF_FCSTSH   equ 94             ; FC  } style sheet
+SCF_CBSTSH   equ 98             ; uns }
+SCF_FCSED    equ 124            ; FC  } section table
+SCF_CBSED    equ 128            ; uns }
+SCF_FCBTECHP equ 160            ; FC  } the CHPX bin table
+SCF_CBBTECHP equ 164            ; uns }
+SCF_FCBTEPAP equ 166            ; FC  } the PAPX bin table
+SCF_CBBTEPAP equ 170            ; uns }
+SCF_FCDOP    equ 262            ; FC  } document properties
+SCF_CBDOP    equ 266            ; uns }
+SCF_FCCLX    equ 274            ; FC  } the complex part: the piece table
+SCF_CBCLX    equ 278            ; uns }
+SCF_PNCHP    equ 306            ; PN: the first CHPX FKP page
+SCF_PNPAP    equ 308            ; PN: ...and the first PAPX one
+SCF_CPNCHP   equ 310            ; PN: how many CHPX FKP pages
+SCF_CPNPAP   equ 312            ; PN: ...and how many PAPX. cbFIB is 314, so
                                 ; these two are its last words and the header
                                 ; page is sized by the +127 rule below
                                 ;
@@ -63,46 +63,46 @@ WDF_CPNPAP   equ 312            ; PN: ...and how many PAPX. cbFIB is 314, so
                                 ; fcClx n = 30. 35 pairs end at 304, wSpare4
                                 ; is there, and the four PNs follow
 
-WD_NFIBCUR   equ 33             ; nFibCurrent     (file.h)
-WD_NFIBBACK  equ 25             ; nFibBackCurrent
-WD_NFIBMIN   equ 18             ; nFibMinDoc - 'identifies readable files'
-WD_HDRPAGE   equ 384            ; cbFileHeader = ((cbFIB + 127) >> 7) << 7
-WD_SECT      equ 512            ; cbSector
-WD_FCOMPLEX  equ 0x0004         ; the FIB flag word's fComplex bit
+SC_NFIBCUR   equ 33             ; nFibCurrent     (file.h)
+SC_NFIBBACK  equ 25             ; nFibBackCurrent
+SC_NFIBMIN   equ 18             ; nFibMinDoc - 'identifies readable files'
+SC_HDRPAGE   equ 384            ; cbFileHeader = ((cbFIB + 127) >> 7) << 7
+SC_SECT      equ 512            ; cbSector
+SC_FCOMPLEX  equ 0x0004         ; the FIB flag word's fComplex bit
 
 ; --- sprms (wordtech/prm.h), operand widths from dnsprm ----------------------
-WDS_PSTC     equ 2              ; byte: stc
-WDS_PJC      equ 5              ; byte: jc
-WDS_PDXAR    equ 16             ; word: dxaRight
-WDS_PDXAL    equ 17             ; word: dxaLeft
-WDS_PDXAL1   equ 19             ; word: dxaLeft1, SIGNED
-WDS_PDYALIN  equ 20             ; word: dyaLine
-WDS_PDYABEF  equ 21             ; word: dyaBefore
-WDS_CFBOLD   equ 60             ; byte
-WDS_CFITAL   equ 61             ; byte
-WDS_CFSCAP   equ 65             ; byte
-WDS_CFVAN    equ 67             ; byte: fVanish - hidden
-WDS_CKUL     equ 69             ; byte: kul
-WD_KULSING   equ 1              ; kulSingle  (props.h)
-WD_KULWORD   equ 2              ; kulWord
-WD_KULDBL    equ 3              ; kulDouble
+SCS_PSTC     equ 2              ; byte: stc
+SCS_PJC      equ 5              ; byte: jc
+SCS_PDXAR    equ 16             ; word: dxaRight
+SCS_PDXAL    equ 17             ; word: dxaLeft
+SCS_PDXAL1   equ 19             ; word: dxaLeft1, SIGNED
+SCS_PDYALIN  equ 20             ; word: dyaLine
+SCS_PDYABEF  equ 21             ; word: dyaBefore
+SCS_CFBOLD   equ 60             ; byte
+SCS_CFITAL   equ 61             ; byte
+SCS_CFSCAP   equ 65             ; byte
+SCS_CFVAN    equ 67             ; byte: fVanish - hidden
+SCS_CKUL     equ 69             ; byte: kul
+SC_KULSING   equ 1              ; kulSingle  (props.h)
+SC_KULWORD   equ 2              ; kulWord
+SC_KULDBL    equ 3              ; kulDouble
 
-WD_TWIPCELL  equ 144            ; one cell = 1/10" = 144 twips (SPEC.md 68.3)
-WD_CBPHE     equ 6              ; sizeof (struct PHE)  - word.h
-WD_CBPCD     equ 8              ; sizeof (struct PCD)  - doc.h
-WD_CBSED     equ 6              ; sizeof (struct SED)
-WD_CBDOP     equ 66             ; sizeof (struct DOP)  - wordwin.h
+SC_TWIPCELL  equ 144            ; one cell = 1/10" = 144 twips (SPEC.md 68.3)
+SC_CBPHE     equ 6              ; sizeof (struct PHE)  - word.h
+SC_CBPCD     equ 8              ; sizeof (struct PCD)  - doc.h
+SC_CBSED     equ 6              ; sizeof (struct SED)
+SC_CBDOP     equ 66             ; sizeof (struct DOP)  - wordwin.h
 
-WD_DOCCAP    equ 62             ; the save staging claim, KB (SPEC.md 68.4).
+SC_DOCCAP    equ 62             ; the save staging claim, KB (SPEC.md 68.4).
                                 ; 30KB of text plus its 384-byte header is
                                 ; 31,104, so this leaves ~30KB of FKP pages
                                 ; and tables. Past it the save REFUSES; it
                                 ; never truncates
-WD_MAXBTE    equ 64             ; FKP pages of each kind. 64 x 512 = 32KB,
-                                ; which is what WD_DOCCAP has room for once
+SC_MAXBTE    equ 64             ; FKP pages of each kind. 64 x 512 = 32KB,
+                                ; which is what SC_DOCCAP has room for once
                                 ; the text is in - so the two ceilings agree
                                 ; and neither can be hit without the other
-WD_MAXPCD    equ 1024           ; pieces a complex file may have. Read in
+SC_MAXPCD    equ 1024           ; pieces a complex file may have. Read in
                                 ; place out of the staging image - no copy,
                                 ; so this bounds the WALK and nothing else
 ; --- the picture record (SPEC.md 92.7) ---------------------------------------
@@ -111,10 +111,10 @@ WD_MAXPCD    equ 1024           ; pieces a complex file may have. Read in
 ; metafile picture, and SNAP.DOC, a Paint bitmap pasted into Word and saved.
 ; They agree field for field and differ in `mm`, which is what makes `mm` the
 ; discriminator rather than a guess.
-WD_PICF      equ 46             ; cbHeader, and the payload starts there
-WD_MM_BMP    equ 99             ; mm: a bitmap payload. A metafile is 7
-WD_PICTW     equ 15             ; twips a pixel, the 96dpi logical inch
-WD_PICWHITE  equ 0xFC80         ; WHICH OF THE SIXTEEN GO TO 1 when a 4bpp
+SC_PICF      equ 46             ; cbHeader, and the payload starts there
+SC_MM_BMP    equ 99             ; mm: a bitmap payload. A metafile is 7
+SC_PICTW     equ 15             ; twips a pixel, the 96dpi logical inch
+SC_PICWHITE  equ 0xFC80         ; WHICH OF THE SIXTEEN GO TO 1 when a 4bpp
                                 ; picture is reduced for a .DOC: bit N set
                                 ; means colour N is light. Computed once, from
                                 ; 0.299R + 0.587G + 0.114B over os8088's own
@@ -127,7 +127,7 @@ WD_PICWHITE  equ 0xFC80         ; WHICH OF THE SIXTEEN GO TO 1 when a 4bpp
                                 ; which is what a .DOC picture came from in
                                 ; the first place - round-trips EXACTLY,
                                 ; because 0 and 15 sit either side of it
-WD_GRPMAX    equ 24             ; the biggest grpprl either builder makes:
+SC_GRPMAX    equ 24             ; the biggest grpprl either builder makes:
                                 ; six paragraph sprms at 3 bytes is 18
 
 ; =============================================================================
@@ -135,9 +135,9 @@ WD_GRPMAX    equ 24             ; the biggest grpprl either builder makes:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wd_docimg - assemble the whole file image into the staging claim
-; in:  ES = the staging claim (WD_DOCCAP KB), DS = the package
-; out: CF=0 and [wd_dend] = the image's byte count; CF=1 = it does not fit.
+; sc_docimg - assemble the whole file image into the staging claim
+; in:  ES = the staging claim (SC_DOCCAP KB), DS = the package
+; out: CF=0 and [sc_dend] = the image's byte count; CF=1 = it does not fit.
 ;      Clobbers AX BX CX DX SI DI; preserves DS and ES.
 ;
 ; Opus's own file order, from the table at the head of wordtech/savefast.c:
@@ -145,63 +145,63 @@ WD_GRPMAX    equ 24             ; the biggest grpprl either builder makes:
 ; DOP. Each structure's fc/cb pair is patched into the FIB as it lands, so
 ; there is one pass and no fixup list.
 ; -----------------------------------------------------------------------------
-wd_docimg:
+sc_docimg:
     cld
     xor di, di                      ; --- the header page, zeroed whole ------
-    mov cx, WD_HDRPAGE / 2
+    mov cx, SC_HDRPAGE / 2
     xor ax, ax
     rep stosw
-    mov word [es:WDF_IDENT], WD_DOCMAGIC
-    mov word [es:WDF_NFIB], WD_NFIBCUR
-    mov word [es:WDF_NFIBBACK], WD_NFIBBACK
-    mov word [es:WDF_FCMIN], WD_HDRPAGE
-    mov ax, [wd_len]                ; --- the text --------------------------
+    mov word [es:SCF_IDENT], SC_DOCMAGIC
+    mov word [es:SCF_NFIB], SC_NFIBCUR
+    mov word [es:SCF_NFIBBACK], SC_NFIBBACK
+    mov word [es:SCF_FCMIN], SC_HDRPAGE
+    mov ax, [sc_len]                ; --- the text --------------------------
     inc ax                          ; ...plus the paragraph mark this port
-    mov [wd_dvlen], ax              ; keeps implicit. A Word file's text ends
-    mov [es:WDF_CCPTEXT], ax        ; with a ¶ and its N marks are N
-    add ax, WD_HDRPAGE              ; paragraphs; this port holds N-1 marks
-    mov [es:WDF_FCMAC], ax          ; and a TAIL paragraph with no mark
-    mov cx, [wd_len]                ; (SPEC.md 68.3), so the two
+    mov [sc_dvlen], ax              ; keeps implicit. A Word file's text ends
+    mov [es:SCF_CCPTEXT], ax        ; with a ¶ and its N marks are N
+    add ax, SC_HDRPAGE              ; paragraphs; this port holds N-1 marks
+    mov [es:SCF_FCMAC], ax          ; and a TAIL paragraph with no mark
+    mov cx, [sc_len]                ; (SPEC.md 68.3), so the two
     jcxz .notext                    ; representations differ by exactly this
     push ds                         ; one character - appended here, dropped
-    PKG_LDS wd_dseg            ; by wd_dtrim on the way back in
+    PKG_LDS sc_dseg            ; by sc_dtrim on the way back in
     xor si, si
-    rep movsb                       ; ES:DI is already at WD_HDRPAGE
+    rep movsb                       ; ES:DI is already at SC_HDRPAGE
     pop ds
 .notext:
     mov al, 13
     stosb
-    call wd_dpicw                     ; THE PICTURES, BEFORE THE FKPs: their
+    call sc_dpicw                     ; THE PICTURES, BEFORE THE FKPs: their
     jc .no                            ; offsets have to be known when the
                                       ; CHPX that names them is built, and
-                                      ; wd_dchps runs below this (88.7)
-    call wd_dalign                    ; the FKPs start on a page boundary
+                                      ; sc_dchps runs below this (88.7)
+    call sc_dalign                    ; the FKPs start on a page boundary
     mov ax, di                      ; --- the CHPX FKP pages ----------------
-    call wd_dpnof
-    mov [es:WDF_PNCHP], ax
-    mov [wd_dpn0], ax
-    call wd_dchps
+    call sc_dpnof
+    mov [es:SCF_PNCHP], ax
+    mov [sc_dpn0], ax
+    call sc_dchps
     jc .no
-    mov ax, [wd_dbn0]
-    mov [es:WDF_CPNCHP], ax
+    mov ax, [sc_dbn0]
+    mov [es:SCF_CPNCHP], ax
     mov ax, di                      ; --- the PAPX FKP pages ----------------
-    call wd_dpnof
-    mov [es:WDF_PNPAP], ax
-    mov [wd_dpn1], ax
-    call wd_dpaps
+    call sc_dpnof
+    mov [es:SCF_PNPAP], ax
+    mov [sc_dpn1], ax
+    call sc_dpaps
     jc .no
-    mov ax, [wd_dbn1]
-    mov [es:WDF_CPNPAP], ax
-    call wd_dstsh                   ; --- STSH, plcfsed, bin tables, DOP ----
+    mov ax, [sc_dbn1]
+    mov [es:SCF_CPNPAP], ax
+    call sc_dstsh                   ; --- STSH, plcfsed, bin tables, DOP ----
     jc .no
-    call wd_dsed
+    call sc_dsed
     jc .no
-    call wd_dbte
+    call sc_dbte
     jc .no
-    call wd_ddop
+    call sc_ddop
     jc .no
-    mov [es:WDF_CBMAC], di
-    mov [wd_dend], di
+    mov [es:SCF_CBMAC], di
+    mov [sc_dend], di
     clc
     ret
 .no:
@@ -209,11 +209,11 @@ wd_docimg:
     ret
 
 ; =============================================================================
-; wd_dpicw - write a PICF and its pixels for every picture in the document,
-; recording each one's fc in wd_dpicfc.
+; sc_dpicw - write a PICF and its pixels for every picture in the document,
+; recording each one's fc in sc_dpicfc.
 ; in/out: ES:DI, the staging cursor. CF=1 = it did not fit.
 ;
-; RIGHT AFTER THE TEXT AND BEFORE THE FKP PAGES, because wd_dchps builds the
+; RIGHT AFTER THE TEXT AND BEFORE THE FKP PAGES, because sc_dchps builds the
 ; CHPX that names a picture and needs its fc to already exist. It is also
 ; where Word puts them: TECHREF.DOC's two pictures sit between fcMac and the
 ; first FKP page.
@@ -222,7 +222,7 @@ wd_docimg:
 ; format asks for rather than a shortcut. Every embedded picture in a Word
 ; 1.1a file that has been measured is bmPlanes 1, bmBitsPixel 1 - both
 ; specimens, and there is no third to argue with - so a .DOC picture is
-; monochrome and 88.5's RTF is where the colour lives. WD_PICWHITE decides
+; monochrome and 88.5's RTF is where the colour lives. SC_PICWHITE decides
 ; which of the sixteen go to 1.
 ;
 ; A DDB row is padded to a WORD, not to a byte and not to a dword: SNAP.DOC's
@@ -230,52 +230,52 @@ wd_docimg:
 ; ceil to even and the arithmetic closes on lcb = 46 + 6*26 = 202, which is
 ; exactly the spacing to that file's next record.
 ; =============================================================================
-wd_dpicw:
+sc_dpicw:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov word [wd_dpicn], 0          ; the picture being written
+    mov word [sc_dpicn], 0          ; the picture being written
 .pic:
-    mov ax, [wd_dpicn]
-    cmp ax, [wd_npic]
+    mov ax, [sc_dpicn]
+    cmp ax, [sc_npic]
     jae .done
     mov bx, ax
     shl bx, 1
-    mov [bx+wd_dpicfc], di          ; where this one's PICF begins
+    mov [bx+sc_dpicfc], di          ; where this one's PICF begins
     mov cl, 3
-    shl ax, cl                      ; * WD_PICREC
-    add ax, wd_pictab
+    shl ax, cl                      ; * SC_PICREC
+    add ax, sc_pictab
     mov bx, ax
     mov ax, [bx]                    ; bank the slot: every routine below
-    mov [wd_dpicwd], ax             ; works from bss, so nothing has to keep
+    mov [sc_dpicwd], ax             ; works from bss, so nothing has to keep
     mov ax, [bx+2]                  ; a register pointed at the table while
-    mov [wd_dpicht], ax             ; DS is the picture's own segment
+    mov [sc_dpicht], ax             ; DS is the picture's own segment
     mov ax, [bx+4]
-    mov [wd_dpicst], ax
+    mov [sc_dpicst], ax
     mov ax, [bx+6]
-    mov [wd_dpicsg], ax
-    mov ax, [wd_dpicwd]             ; bmWidthBytes: ceil(w/8), rounded up to
+    mov [sc_dpicsg], ax
+    mov ax, [sc_dpicwd]             ; bmWidthBytes: ceil(w/8), rounded up to
     add ax, 7                       ; an EVEN number. A DDB row is
     mov cl, 3                       ; word-aligned - SNAP.DOC's 44-pixel
     shr ax, cl                      ; picture carries 6, and 44 bits is 5.5
     inc ax                          ; bytes, so 6 is ceil-to-even and the
     and ax, 0xFFFE                  ; arithmetic closes on lcb = 46 + 6*26
-    mov [wd_dpicbw], ax             ; = 202, which is exactly the spacing to
-    mul word [wd_dpicht]            ; that file's NEXT record
+    mov [sc_dpicbw], ax             ; = 202, which is exactly the spacing to
+    mul word [sc_dpicht]            ; that file's NEXT record
     or dx, dx
     jnz .no
-    add ax, WD_PICF
+    add ax, SC_PICF
     jc .no
-    mov [wd_dpiclcb], ax
+    mov [sc_dpiclcb], ax
     add ax, di                      ; ...and all of it has to fit what is left
     jc .no
-    cmp ax, WD_DOCCAP * 1024 - 2
+    cmp ax, SC_DOCCAP * 1024 - 2
     jae .no
-    call wd_dpichdr                 ; the 46 bytes...
-    call wd_dpicbits                ; ...and the reduced rows
-    inc word [wd_dpicn]
+    call sc_dpichdr                 ; the 46 bytes...
+    call sc_dpicbits                ; ...and the reduced rows
+    inc word [sc_dpicn]
     jmp short .pic
 .no:
     stc
@@ -290,43 +290,43 @@ wd_dpicw:
     pop ax
     ret
 
-; wd_dpichdr - the 46-byte PICF at ES:DI, from the banked wd_dpic* words.
+; sc_dpichdr - the 46-byte PICF at ES:DI, from the banked sc_dpic* words.
 ; Advances DI by 46 and preserves everything else.
-wd_dpichdr:
+sc_dpichdr:
     push ax
     push dx
-    mov ax, [wd_dpiclcb]            ; +0  lcb, a DWORD
+    mov ax, [sc_dpiclcb]            ; +0  lcb, a DWORD
     stosw
     xor ax, ax
     stosw
-    mov ax, WD_PICF                 ; +4  cbHeader
+    mov ax, SC_PICF                 ; +4  cbHeader
     stosw
-    mov ax, WD_MM_BMP               ; +6  mm = 99, the bitmap discriminator
+    mov ax, SC_MM_BMP               ; +6  mm = 99, the bitmap discriminator
     stosw
-    mov ax, [wd_dpicwd]             ; +8  xExt  } SNAP.DOC carries the PIXEL
+    mov ax, [sc_dpicwd]             ; +8  xExt  } SNAP.DOC carries the PIXEL
     stosw                           ;           } dimensions here, not the
-    mov ax, [wd_dpicht]             ; +10 yExt  } display size
+    mov ax, [sc_dpicht]             ; +10 yExt  } display size
     stosw
     xor ax, ax
     stosw                           ; +12 hMF, a live handle: 0 on disk
     stosw                           ; +14 bmType
-    mov ax, [wd_dpicwd]             ; +16 bmWidth, pixels
+    mov ax, [sc_dpicwd]             ; +16 bmWidth, pixels
     stosw
-    mov ax, [wd_dpicht]             ; +18 bmHeight
+    mov ax, [sc_dpicht]             ; +18 bmHeight
     stosw
-    mov ax, [wd_dpicbw]             ; +20 bmWidthBytes
+    mov ax, [sc_dpicbw]             ; +20 bmWidthBytes
     stosw
     mov ax, 0x0101                  ; +22 bmPlanes = 1, bmBitsPixel = 1
     stosw
     xor ax, ax                      ; +24 bmBits, a pointer: 0 on disk
     stosw
     stosw
-    mov ax, [wd_dpicwd]             ; +28 dxaGoal, twips
-    mov dx, WD_PICTW
+    mov ax, [sc_dpicwd]             ; +28 dxaGoal, twips
+    mov dx, SC_PICTW
     mul dx
     stosw
-    mov ax, [wd_dpicht]             ; +30 dyaGoal
-    mov dx, WD_PICTW
+    mov ax, [sc_dpicht]             ; +30 dyaGoal
+    mov dx, SC_PICTW
     mul dx
     stosw
     mov ax, 1000                    ; +32 mx } tenths of a percent, so 1000 is
@@ -344,47 +344,47 @@ wd_dpichdr:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpicbits - the picture's rows at ES:DI, reduced 4bpp -> 1bpp.
+; sc_dpicbits - the picture's rows at ES:DI, reduced 4bpp -> 1bpp.
 ; Advances DI by bmWidthBytes * height; preserves everything else.
 ;
 ; Bit 7 is the LEFTMOST pixel, which is the same end os88img.inc reads a 1bpp
 ; row from (SPEC.md 85) - so this and the decoder that will read it back agree
 ; by construction rather than by testing.
 ;
-; WD_PICWHITE is shifted right by the colour index and the low bit tested,
+; SC_PICWHITE is shifted right by the colour index and the low bit tested,
 ; which is a sixteen-way lookup written as one shift. DS is the picture's own
 ; segment for the fetch and the package for everything else, so it is swapped
 ; around each pixel: two segment loads a pixel is nothing beside the shift.
 ; -----------------------------------------------------------------------------
-wd_dpicbits:
+sc_dpicbits:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov word [wd_dpicy], 0
+    mov word [sc_dpicy], 0
 .row:
-    mov ax, [wd_dpicy]
-    cmp ax, [wd_dpicht]
+    mov ax, [sc_dpicy]
+    cmp ax, [sc_dpicht]
     jae .done
-    mul word [wd_dpicst]            ; DX:AX = the row's offset. wd_pictkeep
+    mul word [sc_dpicst]            ; DX:AX = the row's offset. sc_pictkeep
     mov si, ax                      ; already proved a picture fits a segment
-    mov word [wd_dpicx], 0
-    mov byte [wd_dpicac], 0
-    mov byte [wd_dpicnb], 0
-    mov word [wd_dpicbc], 0
+    mov word [sc_dpicx], 0
+    mov byte [sc_dpicac], 0
+    mov byte [sc_dpicnb], 0
+    mov word [sc_dpicbc], 0
 .px:
-    mov ax, [wd_dpicx]
-    cmp ax, [wd_dpicwd]
+    mov ax, [sc_dpicx]
+    cmp ax, [sc_dpicwd]
     jae .rowend
     mov bx, ax
     shr bx, 1
     add bx, si
     push ds
-    mov ds, [wd_dpicsg]
+    mov ds, [sc_dpicsg]
     mov dl, [bx]
     pop ds
-    test byte [wd_dpicx], 1         ; an even x is the HIGH nibble
+    test byte [sc_dpicx], 1         ; an even x is the HIGH nibble
     jnz .low
     mov cl, 4
     shr dl, cl
@@ -392,46 +392,46 @@ wd_dpicbits:
 .low:
     and dl, 0x0F
 .have:
-    mov ax, WD_PICWHITE
+    mov ax, SC_PICWHITE
     mov cl, dl
     shr ax, cl                      ; bit N of the mask says colour N is light
-    shl byte [wd_dpicac], 1
+    shl byte [sc_dpicac], 1
     test al, 1
     jz .black
-    or byte [wd_dpicac], 1
+    or byte [sc_dpicac], 1
 .black:
-    inc byte [wd_dpicnb]
-    cmp byte [wd_dpicnb], 8
+    inc byte [sc_dpicnb]
+    cmp byte [sc_dpicnb], 8
     jb .nextpx
-    mov al, [wd_dpicac]
+    mov al, [sc_dpicac]
     stosb
-    inc word [wd_dpicbc]
-    mov byte [wd_dpicac], 0
-    mov byte [wd_dpicnb], 0
+    inc word [sc_dpicbc]
+    mov byte [sc_dpicac], 0
+    mov byte [sc_dpicnb], 0
 .nextpx:
-    inc word [wd_dpicx]
+    inc word [sc_dpicx]
     jmp short .px
 .rowend:
-    cmp byte [wd_dpicnb], 0         ; a width that is not a multiple of eight
+    cmp byte [sc_dpicnb], 0         ; a width that is not a multiple of eight
     je .pad                         ; leaves a part byte, shifted UP so its
 .flush:                             ; pixels stay leftmost
-    shl byte [wd_dpicac], 1
-    inc byte [wd_dpicnb]
-    cmp byte [wd_dpicnb], 8
+    shl byte [sc_dpicac], 1
+    inc byte [sc_dpicnb]
+    cmp byte [sc_dpicnb], 8
     jb .flush
-    mov al, [wd_dpicac]
+    mov al, [sc_dpicac]
     stosb
-    inc word [wd_dpicbc]
+    inc word [sc_dpicbc]
 .pad:
-    mov cx, [wd_dpicbw]             ; ...and the row pads out to the stride
-    sub cx, [wd_dpicbc]
+    mov cx, [sc_dpicbw]             ; ...and the row pads out to the stride
+    sub cx, [sc_dpicbc]
     jbe .rowdone
     xor al, al
 .padb:
     stosb
     loop .padb
 .rowdone:
-    inc word [wd_dpicy]
+    inc word [sc_dpicy]
     jmp .row                        ; NOT short: a row is a long way back
 .done:
     pop si
@@ -441,15 +441,15 @@ wd_dpicbits:
     pop ax
     ret
 
-; wd_dalign - advance ES:DI to the next 512-byte boundary, zeroing what it
+; sc_dalign - advance ES:DI to the next 512-byte boundary, zeroing what it
 ; crosses. Preserves everything but DI.
-wd_dalign:
+sc_dalign:
     push ax
     push cx
     mov ax, di
-    and ax, WD_SECT - 1
+    and ax, SC_SECT - 1
     jz .out
-    mov cx, WD_SECT
+    mov cx, SC_SECT
     sub cx, ax
     xor al, al
     cld
@@ -459,21 +459,21 @@ wd_dalign:
     pop ax
     ret
 
-; wd_dpnof - AX = a byte offset -> its page number. Preserves all others.
-wd_dpnof:
+; sc_dpnof - AX = a byte offset -> its page number. Preserves all others.
+sc_dpnof:
     push cx
     mov cl, 9
     shr ax, cl
     pop cx
     ret
 
-; wd_droom - CF=1 if AX more bytes past DI would not fit the staging claim.
+; sc_droom - CF=1 if AX more bytes past DI would not fit the staging claim.
 ; Preserves everything.
-wd_droom:
+sc_droom:
     push ax
     add ax, di
     jc .no
-    cmp ax, WD_DOCCAP * 1024
+    cmp ax, SC_DOCCAP * 1024
     ja .no
     pop ax
     clc
@@ -484,79 +484,79 @@ wd_droom:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dgrpc - build the CHPX grpprl for an attribute byte
-; in:  AL = the WDAT_* byte
-; out: CX = the grpprl's length, built at [wd_dgrp]; preserves all but CX.
+; sc_dgrpc - build the CHPX grpprl for an attribute byte
+; in:  AL = the SCAT_* byte
+; out: CX = the grpprl's length, built at [sc_dgrp]; preserves all but CX.
 ;      An attribute of zero gives CX = 0, which the FKP writes as the nil
 ;      offset - Word's own 'this run is the default CHP'.
 ; -----------------------------------------------------------------------------
-wd_dgrpc:
+sc_dgrpc:
     push ax
     push bx
     push dx
-    cmp byte [wd_dpicrun], 0        ; A PICTURE'S CHPX IS NOT A grpprl AND
+    cmp byte [sc_dpicrun], 0        ; A PICTURE'S CHPX IS NOT A grpprl AND
     je .attrs                       ; NOT AN ATTRIBUTE SET (SPEC.md 92.7).
     xor ah, ah                      ; AL arrived as the picture INDEX; what
     mov bx, ax                      ; goes out is the twelve-byte structure
     shl bx, 1                       ; SNAP.DOC and TECHREF.DOC both carry,
-    mov ax, [bx+wd_dpicfc]          ; with fcPic little-endian at bytes 8..10
-    mov bx, wd_dgrp                 ; and the rest zero
+    mov ax, [bx+sc_dpicfc]          ; with fcPic little-endian at bytes 8..10
+    mov bx, sc_dgrp                 ; and the rest zero
     mov word [bx+0], 0x0200         ; the two constants both specimens share
     mov word [bx+2], 0
     mov word [bx+4], 0
     mov word [bx+6], 0
     mov [bx+8], ax                  ; fcPic, low word...
     mov byte [bx+10], 0             ; ...and its third byte. The staging claim
-                                    ; is WD_DOCCAP KB, so an fc here never
+                                    ; is SC_DOCCAP KB, so an fc here never
                                     ; reaches the high byte - and the file's
-                                    ; own 64KB ceiling is checked in wd_droom
+                                    ; own 64KB ceiling is checked in sc_droom
     mov byte [bx+11], 3
     mov cx, 12
     jmp .out
 .attrs:
     mov dl, al
     xor bx, bx
-    test dl, WDAT_BOLD
+    test dl, SCAT_BOLD
     jz .nb
-    mov byte [bx+wd_dgrp], WDS_CFBOLD
-    mov byte [bx+wd_dgrp+1], 1
+    mov byte [bx+sc_dgrp], SCS_CFBOLD
+    mov byte [bx+sc_dgrp+1], 1
     add bx, 2
 .nb:
-    test dl, WDAT_ITAL
+    test dl, SCAT_ITAL
     jz .ni
-    mov byte [bx+wd_dgrp], WDS_CFITAL
-    mov byte [bx+wd_dgrp+1], 1
+    mov byte [bx+sc_dgrp], SCS_CFITAL
+    mov byte [bx+sc_dgrp+1], 1
     add bx, 2
 .ni:
-    test dl, WDAT_SCAP
+    test dl, SCAT_SCAP
     jz .ns
-    mov byte [bx+wd_dgrp], WDS_CFSCAP
-    mov byte [bx+wd_dgrp+1], 1
+    mov byte [bx+sc_dgrp], SCS_CFSCAP
+    mov byte [bx+sc_dgrp+1], 1
     add bx, 2
 .ns:
-    test dl, WDAT_HID
+    test dl, SCAT_HID
     jz .nh
-    mov byte [bx+wd_dgrp], WDS_CFVAN
-    mov byte [bx+wd_dgrp+1], 1
+    mov byte [bx+sc_dgrp], SCS_CFVAN
+    mov byte [bx+sc_dgrp+1], 1
     add bx, 2
 .nh:
     xor al, al                      ; the three underlines are ONE sprm with
-    test dl, WDAT_UL                ; three values (sprmCKul), never three
+    test dl, SCAT_UL                ; three values (sprmCKul), never three
     jz .n1                          ; flags
-    mov al, WD_KULSING
+    mov al, SC_KULSING
 .n1:
-    test dl, WDAT_WUL
+    test dl, SCAT_WUL
     jz .n2
-    mov al, WD_KULWORD
+    mov al, SC_KULWORD
 .n2:
-    test dl, WDAT_DUL
+    test dl, SCAT_DUL
     jz .n3
-    mov al, WD_KULDBL
+    mov al, SC_KULDBL
 .n3:
     or al, al
     jz .nu
-    mov byte [bx+wd_dgrp], WDS_CKUL
-    mov [bx+wd_dgrp+1], al
+    mov byte [bx+sc_dgrp], SCS_CKUL
+    mov [bx+sc_dgrp+1], al
     add bx, 2
 .nu:
     mov cx, bx
@@ -567,13 +567,13 @@ wd_dgrpc:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dgrpp - build the PAPX grpprl for a PAP dictionary entry
+; sc_dgrpp - build the PAPX grpprl for a PAP dictionary entry
 ; in:  AL = the dictionary index
-; out: CX = the grpprl's length, built at [wd_dgrp]; preserves all but CX.
+; out: CX = the grpprl's length, built at [sc_dgrp]; preserves all but CX.
 ;      Only what DIFFERS from Normal is emitted - Normal is the style the
 ;      PAPX names, so an all-default paragraph writes an empty grpprl.
 ; -----------------------------------------------------------------------------
-wd_dgrpp:
+sc_dgrpp:
     push ax
     push bx
     push dx
@@ -583,34 +583,34 @@ wd_dgrpp:
     mov si, ax
     shl si, 1
     shl si, 1
-    PKG_LDS wd_pseg
+    PKG_LDS sc_pseg
     mov dx, [si]                    ; DL = packed, DH = left
     mov si, [si+2]                  ; SL = first (signed), SH = right
     pop ds
     xor bx, bx
     mov al, dl
-    and al, WDPA_ALIGN              ; jcLeft/Center/Right/Both are 0..3 in
+    and al, SCPA_ALIGN              ; jcLeft/Center/Right/Both are 0..3 in
     jz .nj                          ; exactly our order (props.h)
-    mov byte [bx+wd_dgrp], WDS_PJC
-    mov [bx+wd_dgrp+1], al
+    mov byte [bx+sc_dgrp], SCS_PJC
+    mov [bx+sc_dgrp+1], al
     add bx, 2
 .nj:
     mov al, dh                      ; left indent
     or al, al
     jz .nl
     xor ah, ah
-    call wd_dtwip
-    mov byte [bx+wd_dgrp], WDS_PDXAL
-    mov [bx+wd_dgrp+1], ax
+    call sc_dtwip
+    mov byte [bx+sc_dgrp], SCS_PDXAL
+    mov [bx+sc_dgrp+1], ax
     add bx, 3
 .nl:
     mov ax, si
     or al, al                       ; first-line indent, SIGNED
     jz .nf
     cbw
-    call wd_dtwip
-    mov byte [bx+wd_dgrp], WDS_PDXAL1
-    mov [bx+wd_dgrp+1], ax
+    call sc_dtwip
+    mov byte [bx+sc_dgrp], SCS_PDXAL1
+    mov [bx+sc_dgrp+1], ax
     add bx, 3
 .nf:
     mov ax, si
@@ -618,13 +618,13 @@ wd_dgrpp:
     or al, al
     jz .nr
     xor ah, ah
-    call wd_dtwip
-    mov byte [bx+wd_dgrp], WDS_PDXAR
-    mov [bx+wd_dgrp+1], ax
+    call sc_dtwip
+    mov byte [bx+sc_dgrp], SCS_PDXAR
+    mov [bx+sc_dgrp+1], ax
     add bx, 3
 .nr:
     mov al, dl                      ; line spacing: 0/1/2 -> 240/360/480
-    and al, WDPA_SPACE
+    and al, SCPA_SPACE
     jz .nsp
     shr al, 1
     shr al, 1
@@ -634,14 +634,14 @@ wd_dgrpp:
     mul si                          ; below is read out of DL
     pop dx
     add ax, 240
-    mov byte [bx+wd_dgrp], WDS_PDYALIN
-    mov [bx+wd_dgrp+1], ax
+    mov byte [bx+sc_dgrp], SCS_PDYALIN
+    mov [bx+sc_dgrp+1], ax
     add bx, 3
 .nsp:
-    test dl, WDPA_SB                ; space before: half a line, 120 twips
+    test dl, SCPA_SB                ; space before: half a line, 120 twips
     jz .nsb
-    mov byte [bx+wd_dgrp], WDS_PDYABEF
-    mov word [bx+wd_dgrp+1], 120
+    mov byte [bx+sc_dgrp], SCS_PDYABEF
+    mov word [bx+sc_dgrp+1], 120
     add bx, 3
 .nsb:
     mov cx, bx
@@ -651,11 +651,11 @@ wd_dgrpp:
     pop ax
     ret
 
-; wd_dtwip - AX = signed cells -> AX = twips. Preserves all others.
-wd_dtwip:
+; sc_dtwip - AX = signed cells -> AX = twips. Preserves all others.
+sc_dtwip:
     push dx
     push cx
-    mov cx, WD_TWIPCELL
+    mov cx, SC_TWIPCELL
     imul cx
     pop cx
     pop dx
@@ -670,17 +670,17 @@ wd_dtwip:
 ; 1`), so every property record starts on an even offset, and 0 means 'this
 ; run has none' - the default CHP, or the default PAP. crun is byte 511.
 ;
-; The page is built in [wd_dfkp], a 512-byte scratch in bss, and copied into
+; The page is built in [sc_dfkp], a 512-byte scratch in bss, and copied into
 ; the image whole. Building it in place would need two pointers into ES that
 ; grow towards each other, and the pointer arithmetic is the entire risk of
 ; this structure.
 ; =============================================================================
 
-; wd_fkinit - start a page whose first fc is AX. Preserves all registers.
+; sc_fkinit - start a page whose first fc is AX. Preserves all registers.
 ; rgfc[0] is written HERE and not by the first run, so a page that ends up
 ; with no runs at all still says which fc it starts at - which is what the
 ; bin table reads back out of it.
-wd_fkinit:
+sc_fkinit:
     push ax
     push cx
     push di
@@ -688,18 +688,18 @@ wd_fkinit:
     push ax
     push ds
     pop es
-    mov di, wd_dfkp
-    mov cx, WD_SECT / 2
+    mov di, sc_dfkp
+    mov cx, SC_SECT / 2
     xor ax, ax
     cld
     rep stosw
     pop ax
     pop es
     pop di
-    mov [wd_dfkp], ax
-    mov word [wd_dfkp+2], 0
-    mov word [wd_dfkn], 0           ; crun
-    mov word [wd_dfkhi], WD_SECT-1  ; where the properties have got down to.
+    mov [sc_dfkp], ax
+    mov word [sc_dfkp+2], 0
+    mov word [sc_dfkn], 0           ; crun
+    mov word [sc_dfkhi], SC_SECT-1  ; where the properties have got down to.
                                     ; 511 and not 512: byte 511 IS crun
                                     ; (fkp.h - cbFkp is 512 - sizeof(FC) - 1)
     pop cx
@@ -707,25 +707,25 @@ wd_fkinit:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_fkadd - add a run to the page being built
+; sc_fkadd - add a run to the page being built
 ; in:  AX = the run's FIRST fc (used only for run 0), DX = its LIM fc,
-;      CX = the property length at [wd_dprop] (0 = the nil offset)
+;      CX = the property length at [sc_dprop] (0 = the nil offset)
 ; out: CF=1 = the page is full and nothing was written; preserves all
 ; -----------------------------------------------------------------------------
-wd_fkadd:
+sc_fkadd:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    mov bx, [wd_dfkn]
+    mov bx, [sc_dfkn]
     mov si, bx                      ; the head AFTER this run: (crun+2) FCs
     shl si, 1                       ; and (crun+1) offset bytes
     shl si, 1
     add si, bx
     add si, 4 + 4 + 1               ; = 4*(crun+2) + (crun+1)
-    mov di, [wd_dfkhi]              ; where this run's property would land
+    mov di, [sc_dfkhi]              ; where this run's property would land
     jcxz .nop
     sub di, cx
     and di, 0xFFFE                  ; word-aligned: the offset byte is halved
@@ -736,18 +736,18 @@ wd_fkadd:
     inc si
     shl si, 1
     shl si, 1
-    add si, wd_dfkp
+    add si, sc_dfkp
     mov [si], dx
     mov word [si+2], 0
     jcxz .nilrun
-    mov [wd_dfkhi], di
+    mov [sc_dfkhi], di
     push di                         ; the property bytes go at the page's
     push cx                         ; high-water mark
     push es
     push ds
     pop es
-    add di, wd_dfkp
-    mov si, wd_dprop
+    add di, sc_dfkp
+    mov si, sc_dprop
     cld
     rep movsb
     pop es
@@ -760,9 +760,9 @@ wd_fkadd:
     xor si, si
 .off:
     mov di, bx                      ; the offset byte is BANKED, not stored:
-    add di, wd_dfkb                 ; rgb[i] sits at 4*(crun+1) + i and crun
+    add di, sc_dfkb                 ; rgb[i] sits at 4*(crun+1) + i and crun
     mov [di], si                    ; is not known until the page is sealed,
-    inc word [wd_dfkn]              ; so writing it now writes it in a place
+    inc word [sc_dfkn]              ; so writing it now writes it in a place
                                     ; the next run moves. rgfc[i] at 4*i does
                                     ; not move, which is why THAT one is
                                     ; stored where it belongs as it goes
@@ -779,9 +779,9 @@ wd_fkadd:
     pop ax
     ret
 
-; wd_fkflush - copy the built page into the image at ES:DI and advance DI.
+; sc_fkflush - copy the built page into the image at ES:DI and advance DI.
 ; Preserves all but DI.
-wd_fkflush:
+sc_fkflush:
     push ax
     push bx
     push cx
@@ -789,14 +789,14 @@ wd_fkflush:
     push di                         ; the IMAGE pointer - DI is this routine's
                                     ; OUTPUT, so it comes back before the copy
                                     ; and not after it
-    mov ax, [wd_dfkn]
-    mov [wd_dfkp + WD_SECT - 1], al ; crun, byte 511
+    mov ax, [sc_dfkn]
+    mov [sc_dfkp + SC_SECT - 1], al ; crun, byte 511
     mov di, ax                      ; the offset bytes land at 4*(crun+1),
     inc di                          ; now that crun is final
     shl di, 1
     shl di, 1
-    add di, wd_dfkp
-    mov si, wd_dfkb
+    add di, sc_dfkp
+    mov si, sc_dfkb
     mov cx, ax
     jcxz .noff
     push es
@@ -807,8 +807,8 @@ wd_fkflush:
     pop es
 .noff:
     pop di
-    mov si, wd_dfkp
-    mov cx, WD_SECT
+    mov si, sc_dfkp
+    mov cx, SC_SECT
     cld
     rep movsb
     pop si
@@ -817,17 +817,17 @@ wd_fkflush:
     pop ax
     ret
 
-; wd_btadd - bank a page's first fc in the bin table under construction
-; in:  AX = the fc; out: CF=1 = there are more pages than WD_MAXBTE allows.
+; sc_btadd - bank a page's first fc in the bin table under construction
+; in:  AX = the fc; out: CF=1 = there are more pages than SC_MAXBTE allows.
 ; Preserves all registers.
-wd_btadd:
+sc_btadd:
     push bx
-    mov bx, [wd_dbtn]
-    cmp bx, WD_MAXBTE
+    mov bx, [sc_dbtn]
+    cmp bx, SC_MAXBTE
     jae .full
     shl bx, 1
-    mov [bx+wd_dbtfc], ax
-    inc word [wd_dbtn]
+    mov [bx+sc_dbtfc], ax
+    inc word [sc_dbtn]
     clc
     jmp short .out
 .full:
@@ -837,55 +837,55 @@ wd_btadd:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dchps - write every CHPX FKP page
-; in/out: ES:DI in the image; out CF=1 = out of room. [wd_dbn0] = the page
-;         count, and the page-start fcs are banked in wd_dbtfc.
+; sc_dchps - write every CHPX FKP page
+; in/out: ES:DI in the image; out CF=1 = out of room. [sc_dbn0] = the page
+;         count, and the page-start fcs are banked in sc_dbtfc.
 ;
 ; A run is a maximal span of equal attribute byte. A paragraph mark's CHP
 ; byte is its PAP index, not attributes (SPEC.md 68.3), so a 13 reads as
 ; plain - which is also what it is in the file, where the paragraph's
 ; properties live in the PAPX.
 ; -----------------------------------------------------------------------------
-wd_dchps:
+sc_dchps:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov word [wd_dbtn], 0
-    mov bx, WD_HDRPAGE              ; BX = the fc the current run starts at
+    mov word [sc_dbtn], 0
+    mov bx, SC_HDRPAGE              ; BX = the fc the current run starts at
     xor si, si                      ; SI = the character index it starts at
 .page:
-    mov ax, WD_SECT
-    call wd_droom
+    mov ax, SC_SECT
+    call sc_droom
     jc .no
     mov ax, bx
-    call wd_btadd
+    call sc_btadd
     jc .no
-    call wd_fkinit
+    call sc_fkinit
 .run:
-    cmp si, [wd_dvlen]
+    cmp si, [sc_dvlen]
     jae .seal
-    call wd_dattr                   ; AL = the attribute, [wd_dend] = one
-    call wd_dgrpc                   ; past the run's last character
-    call wd_dchpx                   ; the CHPX -> [wd_dprop], CX its length
-    mov dx, [wd_dend]
-    add dx, WD_HDRPAGE
+    call sc_dattr                   ; AL = the attribute, [sc_dend] = one
+    call sc_dgrpc                   ; past the run's last character
+    call sc_dchpx                   ; the CHPX -> [sc_dprop], CX its length
+    mov dx, [sc_dend]
+    add dx, SC_HDRPAGE
     mov ax, bx
-    call wd_fkadd
+    call sc_fkadd
     jc .full
     mov bx, dx
-    mov si, [wd_dend]
+    mov si, [sc_dend]
     jmp short .run
 .full:
-    cmp word [wd_dfkn], 0           ; a page that could not hold even ONE run
+    cmp word [sc_dfkn], 0           ; a page that could not hold even ONE run
     je .no                          ; would loop forever; the biggest grpprl
-    call wd_fkflush                 ; either builder makes is WD_GRPMAX, so
+    call sc_fkflush                 ; either builder makes is SC_GRPMAX, so
     jmp short .page                 ; this is a guard and not a path
 .seal:
-    call wd_fkflush
-    mov ax, [wd_dbtn]
-    mov [wd_dbn0], ax
+    call sc_fkflush
+    mov ax, [sc_dbtn]
+    mov [sc_dbn0], ax
     clc
     jmp short .out
 .no:
@@ -899,14 +899,14 @@ wd_dchps:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dchpx - wrap the grpprl at [wd_dgrp] as a CHPX at [wd_dprop]
+; sc_dchpx - wrap the grpprl at [sc_dgrp] as a CHPX at [sc_dprop]
 ; in:  CX = the grpprl's length; out: CX = the CHPX's, 0 for an empty grpprl
 ;      (which the FKP writes as the nil offset). Preserves all but CX.
 ;
 ; A CHPX is a cb byte and THEN the grpprl (fetch.c: `cch = *hpchpx++`). A
 ; PAPX is not - its first byte is a count of words - so only this side wraps.
 ; -----------------------------------------------------------------------------
-wd_dchpx:
+sc_dchpx:
     push ax
     push si
     push di
@@ -915,12 +915,12 @@ wd_dchpx:
     push ds
     pop es
     mov al, cl
-    mov [wd_dprop], al
-    mov si, wd_dgrp
-    mov di, wd_dprop + 1
+    mov [sc_dprop], al
+    mov si, sc_dgrp
+    mov di, sc_dprop + 1
     cld
     rep movsb
-    mov cl, [wd_dprop]
+    mov cl, [sc_dprop]
     xor ch, ch
     inc cx
 .out:
@@ -931,40 +931,40 @@ wd_dchpx:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dattr - the attribute run beginning at SI
+; sc_dattr - the attribute run beginning at SI
 ; in:  SI = a character index
-; out: AL = the run's attribute byte, [wd_dend] = one past its last
+; out: AL = the run's attribute byte, [sc_dend] = one past its last
 ;      character; preserves every other register
 ; -----------------------------------------------------------------------------
-wd_dattr:
+sc_dattr:
     push bx
     push cx
     push dx
     push ds
     mov bx, si
-    PKG_STB wd_dpicrun, 0
-    call wd_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
+    PKG_STB sc_dpicrun, 0
+    call sc_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
     jne .notpic                     ; CHPX can carry its own fcPic and nothing
-    PKG_STB wd_dpicrun, 1     ; else shares it (SPEC.md 92.7)
-    call wd_dat1                    ; AL = the CHP byte, which for a picture
+    PKG_STB sc_dpicrun, 1     ; else shares it (SPEC.md 92.7)
+    call sc_dat1                    ; AL = the CHP byte, which for a picture
     mov dl, al                      ; character is its INDEX (88.9)
     inc bx
     jmp short .end
 .notpic:
-    call wd_dat1
+    call sc_dat1
     mov dl, al
-    PKG_LD cx, wd_dvlen
+    PKG_LD cx, sc_dvlen
 .scan:
     inc bx
     cmp bx, cx
     jae .end
-    call wd_dispic                  ; ...and the run before one ends AT it
+    call sc_dispic                  ; ...and the run before one ends AT it
     je .end
-    call wd_dat1
+    call sc_dat1
     cmp al, dl
     je .scan
 .end:
-    PKG_ST wd_dend, bx
+    PKG_ST sc_dend, bx
     mov al, dl
     pop ds
     pop dx
@@ -972,14 +972,14 @@ wd_dattr:
     pop bx
     ret
 
-; wd_dispic - ZF=1 if the character at index BX is a picture. Clobbers DS only.
-wd_dispic:
+; sc_dispic - ZF=1 if the character at index BX is a picture. Clobbers DS only.
+sc_dispic:
     push ax
-    PKG_CMP bx, wd_len
+    PKG_CMP bx, sc_len
     jae .no
-    PKG_LDS wd_dseg
+    PKG_LDS sc_dseg
     mov al, [bx]
-    cmp al, WD_PICCH
+    cmp al, SC_PICCH
     pop ax
     ret
 .no:
@@ -987,16 +987,16 @@ wd_dispic:
     pop ax
     ret
 
-; wd_dat1 - AL = the CHARACTER attribute at index BX (a ¶'s byte is its PAP
+; sc_dat1 - AL = the CHARACTER attribute at index BX (a ¶'s byte is its PAP
 ; index, so it reads as plain). Clobbers AL and DS only.
-wd_dat1:
-    PKG_CMP bx, wd_len
+sc_dat1:
+    PKG_CMP bx, sc_len
     jae .plain                      ; the appended trailing mark
-    PKG_LDS wd_dseg
+    PKG_LDS sc_dseg
     mov al, [bx]
     cmp al, 13
     je .plain
-    PKG_LDS wd_cseg
+    PKG_LDS sc_cseg
     mov al, [bx]
     ret
 .plain:
@@ -1004,8 +1004,8 @@ wd_dat1:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpaps - write every PAPX FKP page
-; in/out ES:DI; out CF=1 = out of room, [wd_dbn1] = the page count.
+; sc_dpaps - write every PAPX FKP page
+; in/out ES:DI; out CF=1 = out of room, [sc_dbn1] = the page count.
 ;
 ; One run per paragraph, its fc range covering the mark as well as the text,
 ; and its PAPX is (cw, stc, PHE, grpprl): cw is a count of WORDS (nFib >= 25,
@@ -1013,45 +1013,45 @@ wd_dat1:
 ; because this port does not paginate and will not claim a height it has not
 ; measured.
 ; -----------------------------------------------------------------------------
-wd_dpaps:
+sc_dpaps:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov word [wd_dbtn], 0
-    mov bx, WD_HDRPAGE
+    mov word [sc_dbtn], 0
+    mov bx, SC_HDRPAGE
     xor si, si
 .page:
-    mov ax, WD_SECT
-    call wd_droom
+    mov ax, SC_SECT
+    call sc_droom
     jc .no
     mov ax, bx
-    call wd_btadd
+    call sc_btadd
     jc .no
-    call wd_fkinit
+    call sc_fkinit
 .run:
-    cmp si, [wd_dvlen]
+    cmp si, [sc_dvlen]
     jae .seal
-    call wd_dpara                   ; AL = the PAP index, [wd_dend] = one
-    call wd_dpapx                   ; past the mark; CX = the PAPX's length
-    mov dx, [wd_dend]
-    add dx, WD_HDRPAGE
+    call sc_dpara                   ; AL = the PAP index, [sc_dend] = one
+    call sc_dpapx                   ; past the mark; CX = the PAPX's length
+    mov dx, [sc_dend]
+    add dx, SC_HDRPAGE
     mov ax, bx
-    call wd_fkadd
+    call sc_fkadd
     jc .full
     mov bx, dx
-    mov si, [wd_dend]
+    mov si, [sc_dend]
     jmp short .run
 .full:
-    cmp word [wd_dfkn], 0
+    cmp word [sc_dfkn], 0
     je .no
-    call wd_fkflush
+    call sc_fkflush
     jmp short .page
 .seal:
-    call wd_fkflush
-    mov ax, [wd_dbtn]
-    mov [wd_dbn1], ax
+    call sc_fkflush
+    mov ax, [sc_dbtn]
+    mov [sc_dbn1], ax
     clc
     jmp short .out
 .no:
@@ -1065,17 +1065,17 @@ wd_dpaps:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpara - the paragraph beginning at SI
-; out: AL = its PAP dictionary index, [wd_dend] = one past its mark (or the
+; sc_dpara - the paragraph beginning at SI
+; out: AL = its PAP dictionary index, [sc_dend] = one past its mark (or the
 ;      buffer's end for the tail paragraph); preserves all other registers
 ; -----------------------------------------------------------------------------
-wd_dpara:
+sc_dpara:
     push bx
     push cx
     push ds
     mov bx, si
-    PKG_LD cx, wd_len
-    PKG_LDS wd_dseg
+    PKG_LD cx, sc_len
+    PKG_LDS sc_dseg
 .scan:
     cmp bx, cx
     jae .tail
@@ -1084,32 +1084,32 @@ wd_dpara:
     inc bx
     jmp short .scan
 .mark:
-    PKG_LDS wd_cseg
+    PKG_LDS sc_cseg
     mov al, [bx]                    ; the mark's CHP byte IS the index
     inc bx
     jmp short .end
 .tail:
-    PKG_LD al, wd_pap_tail        ; the tail paragraph rides the mark this
-    inc bx                          ; writer appends, at index [wd_len]
+    PKG_LD al, sc_pap_tail        ; the tail paragraph rides the mark this
+    inc bx                          ; writer appends, at index [sc_len]
 .end:
-    PKG_ST wd_dend, bx
+    PKG_ST sc_dend, bx
     pop ds
     pop cx
     pop bx
     ret
 
-; wd_dpapx - build the PAPX for PAP index AL at [wd_dprop]; CX = its length.
+; sc_dpapx - build the PAPX for PAP index AL at [sc_dprop]; CX = its length.
 ; Preserves all but CX. It lands in the property buffer directly, because
-; wd_dgrpp builds the grpprl in the OTHER one and the two never overlap.
-wd_dpapx:
+; sc_dgrpp builds the grpprl in the OTHER one and the two never overlap.
+sc_dpapx:
     push ax
     push bx
     push si
     push di
     push es
-    call wd_dgrpp                   ; CX = the grpprl at [wd_dgrp]
+    call sc_dgrpp                   ; CX = the grpprl at [sc_dgrp]
     mov bx, cx
-    add cx, 1 + 1 + WD_CBPHE        ; cw counts the cw byte, stc, the PHE and
+    add cx, 1 + 1 + SC_CBPHE        ; cw counts the cw byte, stc, the PHE and
     inc cx                          ; the grpprl, rounded up to a whole word
     and cl, 0xFE
     mov al, cl
@@ -1117,15 +1117,15 @@ wd_dpapx:
     push cx
     push ds
     pop es
-    mov di, wd_dprop
+    mov di, sc_dprop
     cld
     mov [di], al                    ; cw, in WORDS
     mov byte [di+1], 0              ; stc = stcNormal
     mov word [di+2], 2              ; PHE: fUnk set - the height is unknown
     mov word [di+4], 0
     mov word [di+6], 0
-    add di, 2 + WD_CBPHE
-    mov si, wd_dgrp
+    add di, 2 + SC_CBPHE
+    mov si, sc_dgrp
     mov cx, bx
     rep movsb
     mov byte [di], 0                ; the pad byte a PAPX rounded up to a
@@ -1145,19 +1145,19 @@ wd_dpapx:
 ; THE SMALL STRUCTURES
 ; =============================================================================
 
-; wd_dstsh - the style sheet: cstcStd, the three style STTBs, the PLESTCP.
+; sc_dstsh - the style sheet: cstcStd, the three style STTBs, the PLESTCP.
 ; in/out ES:DI; CF=1 = no room. Preserves all but DI.
-wd_dstsh:
+sc_dstsh:
     push ax
     push cx
     push si
     mov ax, 64
-    call wd_droom
+    call sc_droom
     jc .no
-    mov [es:WDF_FCSTSH], di
-    mov [es:WDF_FCSTSHO], di
-    mov word [es:WDF_FCSTSH+2], 0
-    mov word [es:WDF_FCSTSHO+2], 0
+    mov [es:SCF_FCSTSH], di
+    mov [es:SCF_FCSTSHO], di
+    mov word [es:SCF_FCSTSH+2], 0
+    mov word [es:SCF_FCSTSHO+2], 0
     mov si, di
     cld
     xor ax, ax                      ; cstcStd = 0: Normal is the only style,
@@ -1167,7 +1167,7 @@ wd_dstsh:
     mov al, 6
     stosb
     push si
-    mov si, wd_d_normal
+    mov si, sc_d_normal
     mov cx, 6
     push ds
     push cs
@@ -1190,8 +1190,8 @@ wd_dstsh:
     stosb                           ; stcBase = Normal
     mov ax, di
     sub ax, si
-    mov [es:WDF_CBSTSH], ax
-    mov [es:WDF_CBSTSHO], ax
+    mov [es:SCF_CBSTSH], ax
+    mov [es:SCF_CBSTSHO], ax
     clc
     jmp short .out
 .no:
@@ -1202,20 +1202,20 @@ wd_dstsh:
     pop ax
     ret
 
-; wd_dsed - the section table: one section, its SEPX fcNil (= the default
+; sc_dsed - the section table: one section, its SEPX fcNil (= the default
 ; section properties, so no SEPX is written at all). in/out ES:DI.
-wd_dsed:
+sc_dsed:
     push ax
     mov ax, 32
-    call wd_droom
+    call sc_droom
     jc .no
-    mov [es:WDF_FCSED], di
-    mov word [es:WDF_FCSED+2], 0
+    mov [es:SCF_FCSED], di
+    mov word [es:SCF_FCSED+2], 0
     cld
     xor ax, ax                      ; rgcp[0] = 0
     stosw
     stosw
-    mov ax, [wd_dvlen]              ; rgcp[1] = ccpText
+    mov ax, [sc_dvlen]              ; rgcp[1] = ccpText
     stosw
     xor ax, ax
     stosw
@@ -1223,7 +1223,7 @@ wd_dsed:
     mov ax, 0xFFFF                  ; SED.fcSepx = fcNil
     stosw
     stosw
-    mov word [es:WDF_CBSED], 4 + 4 + WD_CBSED
+    mov word [es:SCF_CBSED], 4 + 4 + SC_CBSED
     clc
     jmp short .out
 .no:
@@ -1233,52 +1233,52 @@ wd_dsed:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dbte - the two bin tables
+; sc_dbte - the two bin tables
 ; in/out ES:DI; CF=1 = no room. Preserves all but DI.
 ;
 ; The FKP pages of one kind are laid down contiguously, so page k's PN is
 ; the FIB's pnChpFirst/pnPapFirst plus k and only the page-start FCs need
 ; banking. The PAP pass overwrote the CHP pass's array, so the CHP table is
 ; rebuilt from the ONE fact that survives - every CHP page but the first
-; starts where the previous one's last run ended, which is what wd_dbtfc
+; starts where the previous one's last run ended, which is what sc_dbtfc
 ; holds for the PAP pass and what the FKPs themselves hold for the CHP pass.
 ; So the CHP table is written FIRST, out of the pages already in the image.
 ; -----------------------------------------------------------------------------
-wd_dbte:
+sc_dbte:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov ax, [wd_dbn0]               ; CHP pages
-    add ax, [wd_dbn1]
+    mov ax, [sc_dbn0]               ; CHP pages
+    add ax, [sc_dbn1]
     shl ax, 1
     shl ax, 1
     add ax, 64
-    call wd_droom
+    call sc_droom
     jc .no
-    mov [es:WDF_FCBTECHP], di       ; --- the CHPX bin table ----------------
-    mov word [es:WDF_FCBTECHP+2], 0
-    mov bx, [wd_dbn0]
-    mov dx, [wd_dpn0]
-    call wd_dbtwr
+    mov [es:SCF_FCBTECHP], di       ; --- the CHPX bin table ----------------
+    mov word [es:SCF_FCBTECHP+2], 0
+    mov bx, [sc_dbn0]
+    mov dx, [sc_dpn0]
+    call sc_dbtwr
     mov ax, bx                      ; cb = 4*(n+1) + 2*n = 6n + 4
     shl ax, 1
     add ax, bx
     shl ax, 1
     add ax, 4
-    mov [es:WDF_CBBTECHP], ax
-    mov [es:WDF_FCBTEPAP], di       ; --- the PAPX bin table ----------------
-    mov word [es:WDF_FCBTEPAP+2], 0
-    mov bx, [wd_dbn1]
-    mov dx, [wd_dpn1]
-    call wd_dbtwr
+    mov [es:SCF_CBBTECHP], ax
+    mov [es:SCF_FCBTEPAP], di       ; --- the PAPX bin table ----------------
+    mov word [es:SCF_FCBTEPAP+2], 0
+    mov bx, [sc_dbn1]
+    mov dx, [sc_dpn1]
+    call sc_dbtwr
     mov ax, bx
     shl ax, 1
     add ax, bx
     shl ax, 1
     add ax, 4
-    mov [es:WDF_CBBTEPAP], ax
+    mov [es:SCF_CBBTEPAP], ax
     clc
     jmp short .out
 .no:
@@ -1291,10 +1291,10 @@ wd_dbte:
     pop ax
     ret
 
-; wd_dbtwr - write one bin table: BX pages starting at page DX. in/out ES:DI.
+; sc_dbtwr - write one bin table: BX pages starting at page DX. in/out ES:DI.
 ; Each page's first FC is read back out of the page itself (rgfc[0]), which
 ; is the copy that cannot go stale. Preserves all but DI.
-wd_dbtwr:
+sc_dbtwr:
     push ax
     push cx
     push si
@@ -1318,7 +1318,7 @@ wd_dbtwr:
     inc si
     jmp short .fc
 .lim:
-    mov ax, [es:WDF_FCMAC]          ; the last CP is the text's end
+    mov ax, [es:SCF_FCMAC]          ; the last CP is the text's end
     stosw
     xor ax, ax
     stosw
@@ -1337,19 +1337,19 @@ wd_dbtwr:
     pop ax
     ret
 
-; wd_ddop - the document properties. in/out ES:DI; CF=1 = no room.
-wd_ddop:
+; sc_ddop - the document properties. in/out ES:DI; CF=1 = no room.
+sc_ddop:
     push ax
     push cx
     push di
-    mov ax, WD_CBDOP + 2
-    call wd_droom
+    mov ax, SC_CBDOP + 2
+    call sc_droom
     jc .no
-    mov [es:WDF_FCDOP], di
-    mov word [es:WDF_FCDOP+2], 0
-    mov word [es:WDF_CBDOP], WD_CBDOP
+    mov [es:SCF_FCDOP], di
+    mov word [es:SCF_FCDOP+2], 0
+    mov word [es:SCF_CBDOP], SC_CBDOP
     push di
-    mov cx, WD_CBDOP
+    mov cx, SC_CBDOP
     xor al, al
     cld
     rep stosb
@@ -1362,7 +1362,7 @@ wd_ddop:
     mov word [es:di+20], 1800       ; dxaRight
     mov word [es:di+24], 720        ; dxaTab: the default stop, 0.5"
     pop cx                          ; the DI pushed on entry, discarded: DI
-    add di, WD_CBDOP                ; is an output
+    add di, SC_CBDOP                ; is an output
     clc
     jmp short .out
 .no:
@@ -1373,15 +1373,15 @@ wd_ddop:
     pop ax
     ret
 
-wd_d_normal: db 'Normal'
+sc_d_normal: db 'Normal'
 
 ; =============================================================================
 ; THE READER
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wd_docparse - load a Word file out of the staging claim into the document
-; in:  [wd_stgseg] = the staging claim holding the whole file, AX = its byte
+; sc_docparse - load a Word file out of the staging claim into the document
+; in:  [sc_stgseg] = the staging claim holding the whole file, AX = its byte
 ;      count
 ; out: CF=0 loaded, CF=1 refused (the caller toasts; the document is
 ;      untouched). Clobbers everything.
@@ -1392,58 +1392,58 @@ wd_d_normal: db 'Normal'
 ; is written into the document until validation has passed, so a refusal
 ; really does leave the document alone.
 ; -----------------------------------------------------------------------------
-wd_docparse:
-    mov [wd_dfsize], ax
-    mov byte [wd_dtrunc], 0
+sc_docparse:
+    mov [sc_dfsize], ax
+    mov byte [sc_dtrunc], 0
     push es
-    mov es, [wd_stgseg]
-    call wd_dvfib
+    mov es, [sc_stgseg]
+    call sc_dvfib
     pop es
     jc .no
-    call wd_dpieces
+    call sc_dpieces
     jc .no
-    mov ax, [wd_dccp]
-    cmp ax, WD_MAXKB * 1024
+    mov ax, [sc_dccp]
+    cmp ax, SC_MAXKB * 1024
     jbe .fits
-    mov ax, WD_MAXKB * 1024
-    mov [wd_dccp], ax
-    mov byte [wd_dtrunc], 1
+    mov ax, SC_MAXKB * 1024
+    mov [sc_dccp], ax
+    mov byte [sc_dtrunc], 1
 .fits:
-    mov ax, [wd_dccp]
+    mov ax, [sc_dccp]
     add ax, 1023
     push cx
     mov cl, 10
     shr ax, cl
     pop cx
     inc ax
-    call far [wd_v_resize]
+    call far [sc_v_resize]
     jc .no
-    mov word [wd_papn], 1           ; a fresh dictionary: entry 0 is Normal
-    push es                         ; and wd_papfind grows it from there
-    mov es, [wd_pseg]
+    mov word [sc_papn], 1           ; a fresh dictionary: entry 0 is Normal
+    push es                         ; and sc_papfind grows it from there
+    mov es, [sc_pseg]
     mov word [es:0], 0
     mov word [es:2], 0
     pop es
-    call wd_dtext                   ; the pieces' text -> [wd_dseg]
-    call wd_dchpin                  ; the CHPX runs    -> [wd_cseg]
-    call wd_dpapin                  ; the PAPX runs    -> the ¶ marks
-    call wd_dtrim                   ; the file's last ¶ is our TAIL paragraph
-    call wd_dcompact                ; drop what this port cannot render
-    call far [wd_v_pictfree]; THE OLD DOCUMENT'S PICTURES GO BACK
-                                    ; HERE, not at wd_load's commit point,
-                                    ; which is past the ones wd_dpicr is
+    call sc_dtext                   ; the pieces' text -> [sc_dseg]
+    call sc_dchpin                  ; the CHPX runs    -> [sc_cseg]
+    call sc_dpapin                  ; the PAPX runs    -> the ¶ marks
+    call sc_dtrim                   ; the file's last ¶ is our TAIL paragraph
+    call sc_dcompact                ; drop what this port cannot render
+    call far [sc_v_pictfree]; THE OLD DOCUMENT'S PICTURES GO BACK
+                                    ; HERE, not at sc_load's commit point,
+                                    ; which is past the ones sc_dpicr is
                                     ; about to build (SPEC.md 92.7). Safe
-                                    ; this late: every refusal wd_docparse
+                                    ; this late: every refusal sc_docparse
                                     ; can make is above this line, so by now
                                     ; the read has committed and the rule the
                                     ; commit point was protecting - that a
                                     ; refusal must not cost the pictures it
                                     ; was not replacing - still holds
-    call wd_dpicr                   ; ...then pair each surviving WD_PICCH
+    call sc_dpicr                   ; ...then pair each surviving SC_PICCH
                                     ; with its PICF. AFTER compaction, so the
                                     ; indices it writes are the final ones
-    mov al, [wd_pap_tail]           ; banked across wd_clamp, which clears it
-    mov [wd_dtail], al
+    mov al, [sc_pap_tail]           ; banked across sc_clamp, which clears it
+    mov [sc_dtail], al
     clc
     ret
 .no:
@@ -1451,47 +1451,47 @@ wd_docparse:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dvfib - validate the FIB against the file size
-; in:  ES = the staging claim, [wd_dfsize] = the byte count
+; sc_dvfib - validate the FIB against the file size
+; in:  ES = the staging claim, [sc_dfsize] = the byte count
 ; out: CF=1 = refuse. Preserves all registers.
 ;
 ; Every fc/cb pair must lie inside the file and every fc's high word must be
 ; zero - the 16-bit bound the head of this file states. A file that fails
 ; here is refused whole rather than half-read.
 ; -----------------------------------------------------------------------------
-wd_dvfib:
+sc_dvfib:
     push ax
     push bx
-    cmp word [wd_dfsize], WD_HDRPAGE
+    cmp word [sc_dfsize], SC_HDRPAGE
     jb .no
-    cmp word [es:WDF_IDENT], WD_DOCMAGIC
+    cmp word [es:SCF_IDENT], SC_DOCMAGIC
     jne .no
-    mov ax, [es:WDF_NFIB]
-    cmp ax, WD_NFIBMIN
+    mov ax, [es:SCF_NFIB]
+    cmp ax, SC_NFIBMIN
     jb .no
-    mov bx, WDF_FCMIN
-    call wd_dvfc
+    mov bx, SCF_FCMIN
+    call sc_dvfc
     jc .no
-    mov bx, WDF_FCMAC
-    call wd_dvfc
+    mov bx, SCF_FCMAC
+    call sc_dvfc
     jc .no
-    mov bx, WDF_FCSTSH
-    call wd_dvpair
+    mov bx, SCF_FCSTSH
+    call sc_dvpair
     jc .no
-    mov bx, WDF_FCSED
-    call wd_dvpair
+    mov bx, SCF_FCSED
+    call sc_dvpair
     jc .no
-    mov bx, WDF_FCBTECHP
-    call wd_dvpair
+    mov bx, SCF_FCBTECHP
+    call sc_dvpair
     jc .no
-    mov bx, WDF_FCBTEPAP
-    call wd_dvpair
+    mov bx, SCF_FCBTEPAP
+    call sc_dvpair
     jc .no
-    mov bx, WDF_FCCLX
-    call wd_dvpair
+    mov bx, SCF_FCCLX
+    call sc_dvpair
     jc .no
-    mov ax, [es:WDF_FCMIN]
-    cmp ax, [es:WDF_FCMAC]
+    mov ax, [es:SCF_FCMIN]
+    cmp ax, [es:SCF_FCMAC]
     ja .no
     clc
     jmp short .out
@@ -1502,14 +1502,14 @@ wd_dvfib:
     pop ax
     ret
 
-; wd_dvfc - the FC at ES:BX is 16-bit and inside the file. CF=1 = it is not.
+; sc_dvfc - the FC at ES:BX is 16-bit and inside the file. CF=1 = it is not.
 ; Preserves all registers.
-wd_dvfc:
+sc_dvfc:
     push ax
     cmp word [es:bx+2], 0
     jne .no
     mov ax, [es:bx]
-    cmp ax, [wd_dfsize]
+    cmp ax, [sc_dfsize]
     ja .no
     pop ax
     clc
@@ -1519,19 +1519,19 @@ wd_dvfc:
     stc
     ret
 
-; wd_dvpair - the (FC, uns) pair at ES:BX. A cb of 0 passes whatever the fc
+; sc_dvpair - the (FC, uns) pair at ES:BX. A cb of 0 passes whatever the fc
 ; says, which is how Opus's own reader treats an absent structure.
 ; Preserves all registers.
-wd_dvpair:
+sc_dvpair:
     push ax
     cmp word [es:bx+4], 0
     je .ok
-    call wd_dvfc
+    call sc_dvfc
     jc .no
     mov ax, [es:bx]
     add ax, [es:bx+4]
     jc .no
-    cmp ax, [wd_dfsize]
+    cmp ax, [sc_dfsize]
     ja .no
 .ok:
     pop ax
@@ -1543,40 +1543,40 @@ wd_dvpair:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpieces - find the text's pieces (SPEC.md 68.4.1)
-; in:  [wd_stgseg]
-; out: CF=1 = refuse; [wd_dpcn] = the piece count, [wd_dpcp]/[wd_dpcd] = the
-;      plcpcd's CP and PCD arrays, [wd_dccp] = the document's total length.
+; sc_dpieces - find the text's pieces (SPEC.md 68.4.1)
+; in:  [sc_stgseg]
+; out: CF=1 = refuse; [sc_dpcn] = the piece count, [sc_dpcp]/[sc_dpcd] = the
+;      plcpcd's CP and PCD arrays, [sc_dccp] = the document's total length.
 ;      Preserves all registers.
 ;
 ; A simple file is described as ONE piece so that everything downstream has a
 ; single shape to walk.
 ; -----------------------------------------------------------------------------
-wd_dpieces:
+sc_dpieces:
     push ax
     push bx
     push cx
     push dx
     push es
-    mov es, [wd_stgseg]
-    test word [es:WDF_FLAGS], WD_FCOMPLEX
+    mov es, [sc_stgseg]
+    test word [es:SCF_FLAGS], SC_FCOMPLEX
     jnz .complex
-    mov word [wd_dpcn], 1            ; --- simple: one piece ------------------
-    mov ax, [es:WDF_CCPTEXT]
-    mov [wd_dccp], ax
-    mov ax, [es:WDF_FCMIN]
-    mov [wd_dp1fc], ax
-    add ax, [wd_dccp]
+    mov word [sc_dpcn], 1            ; --- simple: one piece ------------------
+    mov ax, [es:SCF_CCPTEXT]
+    mov [sc_dccp], ax
+    mov ax, [es:SCF_FCMIN]
+    mov [sc_dp1fc], ax
+    add ax, [sc_dccp]
     jc .no
-    cmp ax, [wd_dfsize]
+    cmp ax, [sc_dfsize]
     ja .no
     clc
     jmp .out
 .complex:
-    cmp word [es:WDF_CBCLX], 0
+    cmp word [es:SCF_CBCLX], 0
     je .no
-    mov bx, [es:WDF_FCCLX]
-    mov cx, [es:WDF_CBCLX]
+    mov bx, [es:SCF_FCCLX]
+    mov cx, [es:SCF_CBCLX]
     add cx, bx                      ; CX = one past the CLX
 .skipprc:
     cmp bx, cx
@@ -1593,25 +1593,25 @@ wd_dpieces:
     jne .no
     mov ax, [es:bx+1]               ; its byte length
     add bx, 3
-    cmp ax, 4 + WD_CBPCD
+    cmp ax, 4 + SC_CBPCD
     jb .no
     sub ax, 4                       ; n = (cb - 4) / (4 + cbPCD)
     xor dx, dx
-    mov cx, 4 + WD_CBPCD
+    mov cx, 4 + SC_CBPCD
     div cx
     or ax, ax
     jz .no
-    cmp ax, WD_MAXPCD
+    cmp ax, SC_MAXPCD
     ja .no
-    mov [wd_dpcn], ax
-    mov [wd_dpcp], bx               ; the CP array...
+    mov [sc_dpcn], ax
+    mov [sc_dpcp], bx               ; the CP array...
     mov cx, ax
     shl ax, 1
     shl ax, 1
     add ax, 4
     add bx, ax
-    mov [wd_dpcd], bx               ; ...then the PCDs
-    mov bx, [wd_dpcp]               ; the last CP is the document's length
+    mov [sc_dpcd], bx               ; ...then the PCDs
+    mov bx, [sc_dpcp]               ; the last CP is the document's length
     mov ax, cx
     shl ax, 1
     shl ax, 1
@@ -1619,7 +1619,7 @@ wd_dpieces:
     cmp word [es:bx+2], 0
     jne .no
     mov ax, [es:bx]
-    mov [wd_dccp], ax
+    mov [sc_dccp], ax
     clc
     jmp short .out
 .no:
@@ -1633,28 +1633,28 @@ wd_dpieces:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpget - piece BX's file offset, length and first CP
+; sc_dpget - piece BX's file offset, length and first CP
 ; in:  BX = a piece index
 ; out: AX = its fc, CX = its length in characters, DX = its first CP;
 ;      CF=1 = it does not lie inside the file. Preserves BX, SI, DI, ES.
 ; -----------------------------------------------------------------------------
-wd_dpget:
+sc_dpget:
     push si
     push es
-    mov es, [wd_stgseg]
-    cmp word [wd_dpcn], 1
+    mov es, [sc_stgseg]
+    cmp word [sc_dpcn], 1
     jne .cx
     or bx, bx
     jnz .no
-    mov ax, [wd_dp1fc]
-    mov cx, [wd_dccp]
+    mov ax, [sc_dp1fc]
+    mov cx, [sc_dccp]
     xor dx, dx
     jmp short .chk
 .cx:
     mov si, bx
     shl si, 1
     shl si, 1
-    add si, [wd_dpcp]
+    add si, [sc_dpcp]
     cmp word [es:si+2], 0
     jne .no
     cmp word [es:si+6], 0
@@ -1667,7 +1667,7 @@ wd_dpget:
     shl si, 1
     shl si, 1
     shl si, 1                       ; x 8 = cbPCD
-    add si, [wd_dpcd]
+    add si, [sc_dpcd]
     cmp word [es:si+4], 0           ; the PCD's fc, high word
     jne .no
     mov ax, [es:si+2]
@@ -1675,7 +1675,7 @@ wd_dpget:
     push ax
     add ax, cx
     jc .no2
-    cmp ax, [wd_dfsize]
+    cmp ax, [sc_dfsize]
     ja .no2
     pop ax
     pop es
@@ -1691,11 +1691,11 @@ wd_dpget:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dfcof - the file offset a document CP maps to
+; sc_dfcof - the file offset a document CP maps to
 ; in:  AX = a CP
 ; out: CF=0 and AX = its fc; CF=1 = it is in no piece. Preserves all others.
 ; -----------------------------------------------------------------------------
-wd_dfcof:
+sc_dfcof:
     push bx
     push cx
     push dx
@@ -1703,9 +1703,9 @@ wd_dfcof:
     mov si, ax
     xor bx, bx
 .piece:
-    cmp bx, [wd_dpcn]
+    cmp bx, [sc_dpcn]
     jae .no
-    call wd_dpget
+    call sc_dpget
     jc .next
     cmp si, dx
     jb .next
@@ -1734,14 +1734,14 @@ wd_dfcof:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dtext - copy every piece's text into the document claim
+; sc_dtext - copy every piece's text into the document claim
 ; Preserves all registers.
 ;
 ; Characters are copied VERBATIM here, so a CP still indexes the same
-; character it does in the file; wd_dcompact drops what this port cannot hold
+; character it does in the file; sc_dcompact drops what this port cannot hold
 ; afterwards, once the properties have been painted.
 ; -----------------------------------------------------------------------------
-wd_dtext:
+sc_dtext:
     push ax
     push bx
     push cx
@@ -1752,23 +1752,23 @@ wd_dtext:
     push es
     xor bx, bx
 .piece:
-    PKG_CMP bx, wd_dpcn
+    PKG_CMP bx, sc_dpcn
     jae .done
-    call wd_dpget
+    call sc_dpget
     jc .next
-    PKG_CMP dx, wd_dccp
+    PKG_CMP dx, sc_dccp
     jae .next
     mov si, ax
     mov di, dx
-    PKG_LD ax, wd_dccp
+    PKG_LD ax, sc_dccp
     sub ax, di
     cmp cx, ax                      ; a piece that runs past the ceiling is
     jbe .fit                        ; clipped to it
     mov cx, ax
 .fit:
     jcxz .next
-    PKG_LDS wd_stgseg
-    PKG_LDE wd_dseg
+    PKG_LDS sc_stgseg
+    PKG_LDE sc_dseg
     cld
     rep movsb
 .next:
@@ -1777,8 +1777,8 @@ wd_dtext:
 .done:
     pop es
     pop ds
-    mov ax, [wd_dccp]
-    mov [wd_len], ax
+    mov ax, [sc_dccp]
+    mov [sc_len], ax
     pop di
     pop si
     pop dx
@@ -1788,14 +1788,14 @@ wd_dtext:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dchpin - paint the CHP array from the CHPX FKPs
+; sc_dchpin - paint the CHP array from the CHPX FKPs
 ; Preserves all registers.
 ;
 ; Piece by piece: ask for the run covering the current fc, paint the
 ; characters it covers, jump to its limit. A file that describes no run for
 ; some fc leaves the CHP byte at its cleared value, which is plain.
 ; -----------------------------------------------------------------------------
-wd_dchpin:
+sc_dchpin:
     push ax
     push bx
     push cx
@@ -1803,9 +1803,9 @@ wd_dchpin:
     push si
     push di
     push es
-    mov es, [wd_cseg]               ; the CHP claim starts blank
+    mov es, [sc_cseg]               ; the CHP claim starts blank
     xor di, di
-    mov cx, [wd_len]
+    mov cx, [sc_len]
     xor al, al
     cld
     jcxz .noclr
@@ -1813,38 +1813,38 @@ wd_dchpin:
 .noclr:
     xor bx, bx
 .piece:
-    cmp bx, [wd_dpcn]
+    cmp bx, [sc_dpcn]
     jae .done
-    call wd_dpget
+    call sc_dpget
     jc .next
     mov si, ax                      ; SI = the fc walking the piece
     mov di, dx                      ; DI = the document index it maps to
-    mov [wd_dprem], cx              ; how many characters are left in it
+    mov [sc_dprem], cx              ; how many characters are left in it
 .run:
-    cmp word [wd_dprem], 0
+    cmp word [sc_dprem], 0
     je .next
     mov ax, si
     xor cl, cl                      ; the CHP tables
-    call wd_dfkfind                 ; AL = the attribute, [wd_dfclim] = lim
-    mov cx, [wd_dfclim]
+    call sc_dfkfind                 ; AL = the attribute, [sc_dfclim] = lim
+    mov cx, [sc_dfclim]
     sub cx, si
     jbe .one
-    cmp cx, [wd_dprem]
+    cmp cx, [sc_dprem]
     jbe .paint
 .clip:
-    mov cx, [wd_dprem]
+    mov cx, [sc_dprem]
     jmp short .paint
 .one:
     mov cx, 1                       ; a run that does not advance still has
                                     ; to: one character, then ask again
-    cmp cx, [wd_dprem]
+    cmp cx, [sc_dprem]
     jbe .paint
     jmp short .clip
 .paint:
     push di
     push cx
     push es
-    PKG_LDE wd_cseg
+    PKG_LDE sc_cseg
     cld
     rep stosb                       ; AL is the attribute
     pop es
@@ -1852,7 +1852,7 @@ wd_dchpin:
     pop di
     add di, cx
     add si, cx
-    sub [wd_dprem], cx
+    sub [sc_dprem], cx
     jmp short .run
 .next:
     inc bx
@@ -1868,16 +1868,16 @@ wd_dchpin:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpapin - stamp the paragraph marks with their PAP dictionary indices
+; sc_dpapin - stamp the paragraph marks with their PAP dictionary indices
 ; Preserves all registers.
 ;
 ; Walks the document's own marks rather than the FKP runs: a mark's CP maps
-; back to an fc through the pieces (wd_dfcof), and the PAPX covering that fc
+; back to an fc through the pieces (sc_dfcof), and the PAPX covering that fc
 ; is the paragraph's format. Doing it in this direction means a run split
 ; across two pieces needs no special case at all, and the mark - the thing
 ; that actually carries the index (SPEC.md 68.3) - is what drives the loop.
 ; -----------------------------------------------------------------------------
-wd_dpapin:
+sc_dpapin:
     push ax
     push bx
     push cx
@@ -1886,22 +1886,22 @@ wd_dpapin:
     push di
     push ds
     push es
-    PKG_STB wd_pap_tail, 0
+    PKG_STB sc_pap_tail, 0
     xor si, si
-    PKG_LD cx, wd_len
+    PKG_LD cx, sc_len
 .scan:
     cmp si, cx
     jae .tail
-    PKG_LDS wd_dseg
+    PKG_LDS sc_dseg
     mov al, [si]
     push cs
     pop ds
     cmp al, 13
     jne .next
     mov ax, si
-    call wd_dpapat                  ; AL = the index for the fc of CP SI
+    call sc_dpapat                  ; AL = the index for the fc of CP SI
     jc .next
-    mov es, [wd_cseg]
+    mov es, [sc_cseg]
     mov [es:si], al
 .next:
     inc si
@@ -1911,9 +1911,9 @@ wd_dpapin:
     jz .done
     mov ax, cx                      ; the tail paragraph: the LAST character
     dec ax                          ; is inside it, and its PAPX is the one
-    call wd_dpapat                  ; that covers it
+    call sc_dpapat                  ; that covers it
     jc .done
-    PKG_ST wd_pap_tail, al
+    PKG_ST sc_pap_tail, al
 .done:
     pop es
     pop ds
@@ -1926,37 +1926,37 @@ wd_dpapin:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpapat - the dictionary index for the paragraph covering CP AX
+; sc_dpapat - the dictionary index for the paragraph covering CP AX
 ; out: CF=0 and AL = the index; CF=1 = there is no PAPX there, or the
 ;      dictionary is full. Preserves all other registers.
 ; -----------------------------------------------------------------------------
-wd_dpapat:
+sc_dpapat:
     push bx
     push cx
     push dx
     push si
     push es
-    call wd_dfcof
+    call sc_dfcof
     jc .no
     xor cl, cl
     mov cl, 1                       ; the PAP tables
-    call wd_dfkfind                 ; [wd_dprop2] = the PAPX, or 0
-    mov word [wd_pfb], 0            ; the candidate starts at Normal
-    mov word [wd_pfb+2], 0
-    mov si, [wd_dprop2]
+    call sc_dfkfind                 ; [sc_dprop2] = the PAPX, or 0
+    mov word [sc_pfb], 0            ; the candidate starts at Normal
+    mov word [sc_pfb+2], 0
+    mov si, [sc_dprop2]
     or si, si
     jz .find                        ; a nil PAPX IS Normal
-    mov es, [wd_stgseg]
+    mov es, [sc_stgseg]
     mov cl, [es:si]                 ; cw, a count of WORDS (nFib >= 25)
     xor ch, ch
     shl cx, 1
-    cmp cx, 1 + 1 + WD_CBPHE
+    cmp cx, 1 + 1 + SC_CBPHE
     jbe .find
-    sub cx, 1 + 1 + WD_CBPHE        ; what is left is the grpprl
-    add si, 2 + WD_CBPHE
-    call wd_dprl
+    sub cx, 1 + 1 + SC_CBPHE        ; what is left is the grpprl
+    add si, 2 + SC_CBPHE
+    call sc_dprl
 .find:
-    call far [wd_v_papfind]; CF=1 = the dictionary is full
+    call far [sc_v_papfind]; CF=1 = the dictionary is full
     jmp short .out
 .no:
     stc
@@ -1969,7 +1969,7 @@ wd_dpapat:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dprl - apply a paragraph grpprl to the candidate at [wd_pfb]
+; sc_dprl - apply a paragraph grpprl to the candidate at [sc_pfb]
 ; in:  ES:SI = the grpprl, CX = its length
 ; out: nothing; preserves all registers
 ;
@@ -1977,7 +1977,7 @@ wd_dpapat:
 ; field for is SKIPPED rather than guessed at - which is the whole reason the
 ; widths are transcribed at the head of this file.
 ; -----------------------------------------------------------------------------
-wd_dprl:
+sc_dprl:
     push ax
     push bx
     push cx
@@ -1989,21 +1989,21 @@ wd_dprl:
     mov al, [es:si]                 ; the sprm code
     inc si
     dec cx
-    call wd_dpwid                   ; BL = its operand width in bytes
+    call sc_dpwid                   ; BL = its operand width in bytes
     xor bh, bh
     cmp bx, cx
     ja .out                         ; a grpprl that runs off its own end
-    cmp al, WDS_PJC
+    cmp al, SCS_PJC
     je .jc
-    cmp al, WDS_PDXAL
+    cmp al, SCS_PDXAL
     je .left
-    cmp al, WDS_PDXAL1
+    cmp al, SCS_PDXAL1
     je .first
-    cmp al, WDS_PDXAR
+    cmp al, SCS_PDXAR
     je .right
-    cmp al, WDS_PDYALIN
+    cmp al, SCS_PDYALIN
     je .line
-    cmp al, WDS_PDYABEF
+    cmp al, SCS_PDYABEF
     je .before
 .skip:
     add si, bx
@@ -2011,21 +2011,21 @@ wd_dprl:
     jmp short .step
 .jc:
     mov al, [es:si]
-    and al, WDPA_ALIGN
-    and byte [wd_pfb], ~WDPA_ALIGN & 0xFF
-    or [wd_pfb], al
+    and al, SCPA_ALIGN
+    and byte [sc_pfb], ~SCPA_ALIGN & 0xFF
+    or [sc_pfb], al
     jmp short .skip
 .left:
-    call wd_dcell
-    mov [wd_pfb+1], al
+    call sc_dcell
+    mov [sc_pfb+1], al
     jmp short .skip
 .first:
-    call wd_dcell
-    mov [wd_pfb+2], al
+    call sc_dcell
+    mov [sc_pfb+2], al
     jmp short .skip
 .right:
-    call wd_dcell
-    mov [wd_pfb+3], al
+    call sc_dcell
+    mov [sc_pfb+3], al
     jmp short .skip
 .line:
     mov ax, [es:si]                 ; 240 -> 0, 360 -> 1, 480 or more -> 2;
@@ -2039,14 +2039,14 @@ wd_dprl:
 .lset:
     shl dl, 1
     shl dl, 1
-    and byte [wd_pfb], ~WDPA_SPACE & 0xFF
-    or [wd_pfb], dl
+    and byte [sc_pfb], ~SCPA_SPACE & 0xFF
+    or [sc_pfb], dl
     jmp short .skip
 .before:
     mov ax, [es:si]
     or ax, ax
     jz .skip
-    or byte [wd_pfb], WDPA_SB
+    or byte [sc_pfb], SCPA_SB
     jmp short .skip
 .out:
     pop si
@@ -2056,23 +2056,23 @@ wd_dprl:
     pop ax
     ret
 
-; wd_dcell - AL = the signed word operand at ES:SI in cells, clamped to the
+; sc_dcell - AL = the signed word operand at ES:SI in cells, clamped to the
 ; indent range. Preserves all but AX.
-wd_dcell:
+sc_dcell:
     push bx
     push cx
     push dx
     mov ax, [es:si]
     cwd
-    mov cx, WD_TWIPCELL
+    mov cx, SC_TWIPCELL
     idiv cx
-    cmp ax, WD_INDMAX
+    cmp ax, SC_INDMAX
     jle .lo
-    mov ax, WD_INDMAX
+    mov ax, SC_INDMAX
 .lo:
-    cmp ax, -WD_INDMAX
+    cmp ax, -SC_INDMAX
     jge .ok
-    mov ax, -WD_INDMAX
+    mov ax, -SC_INDMAX
 .ok:
     pop dx
     pop cx
@@ -2080,12 +2080,12 @@ wd_dcell:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpwid - BL = the operand width of paragraph sprm AL, from dnsprm's cch
+; sc_dpwid - BL = the operand width of paragraph sprm AL, from dnsprm's cch
 ; (1 = none, 2 = a byte, 3 = a word, 0 = a length byte follows the code).
 ; in: ES:SI = one past the sprm code, for the variable kind. Preserves all
 ; registers but BX.
 ; -----------------------------------------------------------------------------
-wd_dpwid:
+sc_dpwid:
     push ax
     cmp al, 15                      ; sprmPChgTabsPapx } cch 0: the byte at
     je .var                         ; sprmPChgTabs     } SI is the length
@@ -2117,32 +2117,32 @@ wd_dpwid:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dfkfind - the FKP run covering an fc
+; sc_dfkfind - the FKP run covering an fc
 ; in:  AX = the fc, CL = 0 for the CHP tables / 1 for the PAP tables
 ; out: AL = the attribute the run's grpprl means (0 for a PAP run - the PAP
-;      caller reads [wd_dprop2] itself), [wd_dfclim] = the run's limit fc,
-;      [wd_dprop2] = the property record's file offset (0 = nil).
+;      caller reads [sc_dprop2] itself), [sc_dfclim] = the run's limit fc,
+;      [sc_dprop2] = the property record's file offset (0 = nil).
 ;      Preserves every register but AX.
 ; -----------------------------------------------------------------------------
-wd_dfkfind:
+sc_dfkfind:
     push bx
     push cx
     push dx
     push si
     push di
     push es
-    mov es, [wd_stgseg]
-    mov word [wd_dprop2], 0
-    mov bx, [wd_dfsize]             ; a default limit that always terminates
-    mov [wd_dfclim], bx
+    mov es, [sc_stgseg]
+    mov word [sc_dprop2], 0
+    mov bx, [sc_dfsize]             ; a default limit that always terminates
+    mov [sc_dfclim], bx
     or cl, cl
     jnz .pap
-    mov bx, [es:WDF_FCBTECHP]
-    mov dx, [es:WDF_CBBTECHP]
+    mov bx, [es:SCF_FCBTECHP]
+    mov dx, [es:SCF_CBBTECHP]
     jmp short .have
 .pap:
-    mov bx, [es:WDF_FCBTEPAP]
-    mov dx, [es:WDF_CBBTEPAP]
+    mov bx, [es:SCF_FCBTEPAP]
+    mov dx, [es:SCF_CBBTEPAP]
 .have:
     or dx, dx
     jz .none
@@ -2188,7 +2188,7 @@ wd_dfkfind:
     add bx, ax
     mov dx, [es:bx]                 ; DX = the page number
     pop ax
-    call wd_dfkrun
+    call sc_dfkrun
     jmp short .out
 .none:
     xor al, al
@@ -2202,30 +2202,30 @@ wd_dfkfind:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dfkrun - decode the run covering fc AX inside FKP page DX
-; out: AL = the CHP attribute the run's grpprl means, [wd_dfclim] = the run's
-;      limit, [wd_dprop2] = the property record's file offset (0 = nil).
+; sc_dfkrun - decode the run covering fc AX inside FKP page DX
+; out: AL = the CHP attribute the run's grpprl means, [sc_dfclim] = the run's
+;      limit, [sc_dprop2] = the property record's file offset (0 = nil).
 ;      Preserves all but AX.
 ; -----------------------------------------------------------------------------
-wd_dfkrun:
+sc_dfkrun:
     push bx
     push cx
     push dx
     push si
     push di
     push es
-    mov es, [wd_stgseg]
+    mov es, [sc_stgseg]
     push ax
     mov ax, dx                      ; the page's byte offset
     mov cl, 9
     shl ax, cl
     mov di, ax
-    add ax, WD_SECT
+    add ax, SC_SECT
     jc .nopop
-    cmp ax, [wd_dfsize]
+    cmp ax, [sc_dfsize]
     ja .nopop
     pop ax
-    mov bl, [es:di + WD_SECT - 1]   ; crun
+    mov bl, [es:di + SC_SECT - 1]   ; crun
     xor bh, bh
     or bx, bx
     jz .nil
@@ -2248,7 +2248,7 @@ wd_dfkrun:
     inc si
     jmp short .scan
 .hit:
-    mov [wd_dfclim], dx
+    mov [sc_dfclim], dx
     mov cx, bx                      ; rgb[i] is at 4*(crun+1) + i
     inc cx
     shl cx, 1
@@ -2262,19 +2262,19 @@ wd_dfkrun:
     jz .nil
     shl cx, 1                       ; the offset is in WORDS (fetch.c)
     add cx, di
-    cmp cx, [wd_dfsize]
+    cmp cx, [sc_dfsize]
     jae .nil
-    mov [wd_dprop2], cx
+    mov [sc_dprop2], cx
     mov si, cx
     mov cl, [es:si]                 ; a CHPX is a cb byte then the grpprl
     xor ch, ch
     inc si
-    call wd_dchprl
+    call sc_dchprl
     jmp short .out
 .nopop:
     pop ax
 .nil:
-    mov word [wd_dprop2], 0
+    mov word [sc_dprop2], 0
     xor al, al
 .out:
     pop es
@@ -2286,11 +2286,11 @@ wd_dfkrun:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dchprl - the attribute byte a character grpprl means
+; sc_dchprl - the attribute byte a character grpprl means
 ; in:  ES:SI = the grpprl, CX = its length
-; out: AL = the WDAT_* byte; preserves all other registers
+; out: AL = the SCAT_* byte; preserves all other registers
 ; -----------------------------------------------------------------------------
-wd_dchprl:
+sc_dchprl:
     push bx
     push cx
     push dx
@@ -2302,17 +2302,17 @@ wd_dchprl:
     mov al, [es:si]
     inc si
     dec cx
-    cmp al, WDS_CFBOLD
+    cmp al, SCS_CFBOLD
     je .bold
-    cmp al, WDS_CFITAL
+    cmp al, SCS_CFITAL
     je .ital
-    cmp al, WDS_CFSCAP
+    cmp al, SCS_CFSCAP
     je .scap
-    cmp al, WDS_CFVAN
+    cmp al, SCS_CFVAN
     je .hid
-    cmp al, WDS_CKUL
+    cmp al, SCS_CKUL
     je .kul
-    call wd_dcwid                   ; anything else steps by its own width
+    call sc_dcwid                   ; anything else steps by its own width
     xor bh, bh
     cmp bx, cx
     ja .out
@@ -2320,16 +2320,16 @@ wd_dchprl:
     sub cx, bx
     jmp short .step
 .bold:
-    mov bl, WDAT_BOLD
+    mov bl, SCAT_BOLD
     jmp short .flag
 .ital:
-    mov bl, WDAT_ITAL
+    mov bl, SCAT_ITAL
     jmp short .flag
 .scap:
-    mov bl, WDAT_SCAP
+    mov bl, SCAT_SCAP
     jmp short .flag
 .hid:
-    mov bl, WDAT_HID
+    mov bl, SCAT_HID
 .flag:
     or cx, cx
     jz .out
@@ -2346,20 +2346,20 @@ wd_dchprl:
     mov al, [es:si]
     inc si
     dec cx
-    and dl, ~(WDAT_UL | WDAT_WUL | WDAT_DUL) & 0xFF
-    cmp al, WD_KULSING
+    and dl, ~(SCAT_UL | SCAT_WUL | SCAT_DUL) & 0xFF
+    cmp al, SC_KULSING
     jne .k2
-    or dl, WDAT_UL
+    or dl, SCAT_UL
     jmp short .step
 .k2:
-    cmp al, WD_KULWORD
+    cmp al, SC_KULWORD
     jne .k3
-    or dl, WDAT_WUL
+    or dl, SCAT_WUL
     jmp short .step
 .k3:
-    cmp al, WD_KULDBL
+    cmp al, SC_KULDBL
     jne .step
-    or dl, WDAT_DUL
+    or dl, SCAT_DUL
     jmp short .step
 .out:
     mov al, dl
@@ -2369,9 +2369,9 @@ wd_dchprl:
     pop bx
     ret
 
-; wd_dcwid - BL = the operand width of character sprm AL (dnsprm again).
+; sc_dcwid - BL = the operand width of character sprm AL (dnsprm again).
 ; Preserves all registers but BX.
-wd_dcwid:
+sc_dcwid:
     push ax
     mov bl, 1
     cmp al, 58                      ; sprmCPlain: no operand at all
@@ -2402,30 +2402,30 @@ wd_dcwid:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dtrim - turn the file's last paragraph mark into this port's tail
+; sc_dtrim - turn the file's last paragraph mark into this port's tail
 ; Preserves all registers.
 ;
-; The other half of wd_docimg's appended 13. A Word file's text ends with a ¶
+; The other half of sc_docimg's appended 13. A Word file's text ends with a ¶
 ; and its N marks are N paragraphs; this document model holds N-1 marks and a
-; TAIL paragraph whose format lives in [wd_pap_tail] (SPEC.md 68.3). So the
+; TAIL paragraph whose format lives in [sc_pap_tail] (SPEC.md 68.3). So the
 ; final mark is REMOVED and its dictionary index becomes the tail's - which
 ; makes save/load a fixed point instead of growing a paragraph a round.
 ; -----------------------------------------------------------------------------
-wd_dtrim:
+sc_dtrim:
     push ax
     push bx
     push ds
-    PKG_LD bx, wd_len
+    PKG_LD bx, sc_len
     or bx, bx
     jz .out
     dec bx
-    PKG_LDS wd_dseg
+    PKG_LDS sc_dseg
     cmp byte [bx], 13
     jne .out
-    PKG_LDS wd_cseg
+    PKG_LDS sc_cseg
     mov al, [bx]
-    PKG_ST wd_pap_tail, al
-    PKG_ST wd_len, bx
+    PKG_ST sc_pap_tail, al
+    PKG_ST sc_len, bx
 .out:
     pop ds
     pop bx
@@ -2433,7 +2433,7 @@ wd_dtrim:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dcompact - drop the characters this port cannot hold
+; sc_dcompact - drop the characters this port cannot hold
 ; Preserves all registers.
 ;
 ; Runs LAST, after the properties are painted, so that a CP still indexed the
@@ -2441,7 +2441,7 @@ wd_dtrim:
 ; index at a time - the two claims are parallel arrays and every operation in
 ; this app keeps them so (SPEC.md 68.3).
 ; -----------------------------------------------------------------------------
-wd_dcompact:
+sc_dcompact:
     push ax
     push bx
     push cx
@@ -2449,34 +2449,34 @@ wd_dcompact:
     push di
     push ds
     push es
-    PKG_LD cx, wd_len
+    PKG_LD cx, sc_len
     xor si, si
     xor di, di
 .step:
     cmp si, cx
     jae .done
-    PKG_LDS wd_dseg
+    PKG_LDS sc_dseg
     mov al, [si]
     cmp al, 13
     je .keep
     cmp al, 9
     je .keep
-    cmp al, WD_PICCH                ; a picture SURVIVES compaction now
+    cmp al, SC_PICCH                ; a picture SURVIVES compaction now
     je .keep                        ; (SPEC.md 92.7): it is the one control
     cmp al, 32                      ; character below 32 this port renders,
-    jb .drop                        ; and wd_dpicr pairs it with its record
+    jb .drop                        ; and sc_dpicr pairs it with its record
     cmp al, 126
     jbe .keep
 .drop:
     inc si
     jmp short .step
 .keep:
-    PKG_LDS wd_dseg
-    PKG_LDE wd_dseg
+    PKG_LDS sc_dseg
+    PKG_LDE sc_dseg
     mov al, [si]
     mov [es:di], al
-    PKG_LDS wd_cseg
-    PKG_LDE wd_cseg
+    PKG_LDS sc_cseg
+    PKG_LDE sc_cseg
     mov al, [si]
     mov [es:di], al
     inc si
@@ -2485,7 +2485,7 @@ wd_dcompact:
 .done:
     pop es
     pop ds
-    mov [wd_len], di
+    mov [sc_len], di
     pop di
     pop si
     pop cx
@@ -2495,15 +2495,15 @@ wd_dcompact:
 
 ; -----------------------------------------------------------------------------
 ; =============================================================================
-; wd_dpicr - pair every WD_PICCH in the loaded text with its PICF, expanding
+; sc_dpicr - pair every SC_PICCH in the loaded text with its PICF, expanding
 ; each one back to 4bpp. Preserves all registers; a picture that will not load
 ; simply is not registered, and its character keeps the 8-pixel cell an
 ; unknown index gets.
 ;
 ; IT WALKS THE RECORDS IN DOCUMENT ORDER AND DOES NOT READ fcPic. The writer
 ; puts the PICFs immediately after the text, in the order their characters
-; appear, and the first one therefore begins exactly at fcMac - wd_docimg
-; writes the text, the trailing CR, and then calls wd_dpicw. Each record's own
+; appear, and the first one therefore begins exactly at fcMac - sc_docimg
+; writes the text, the trailing CR, and then calls sc_dpicw. Each record's own
 ; lcb gives the next. So the Nth picture character takes the Nth record, and
 ; the CHPX never has to be parsed for this at all.
 ;
@@ -2513,7 +2513,7 @@ wd_dcompact:
 ; way will not load them here. os8088's .DOC is already its own dialect in the
 ; CHPX (SPEC.md 68.4.2), and this is inside that.
 ; =============================================================================
-wd_dpicr:
+sc_dpicr:
     push ax
     push bx
     push cx
@@ -2521,27 +2521,27 @@ wd_dpicr:
     push si
     push di
     push es
-    mov es, [wd_stgseg]             ; the first record sits at fcMac, which
-    mov ax, [es:WDF_FCMAC]          ; wd_dvfib has already checked is inside
-    mov [wd_dpicp], ax              ; the file (WDF_FCMAC, offset 28)
+    mov es, [sc_stgseg]             ; the first record sits at fcMac, which
+    mov ax, [es:SCF_FCMAC]          ; sc_dvfib has already checked is inside
+    mov [sc_dpicp], ax              ; the file (SCF_FCMAC, offset 28)
     xor bx, bx                      ; BX = the character index
 .scan:
-    cmp bx, [wd_len]
+    cmp bx, [sc_len]
     jae .out
     push ds
-    PKG_LDS wd_dseg
+    PKG_LDS sc_dseg
     mov al, [bx]
     pop ds
-    cmp al, WD_PICCH
+    cmp al, SC_PICCH
     jne .next
-    cmp word [wd_npic], WD_PICMAX
+    cmp word [sc_npic], SC_PICMAX
     jae .out                        ; past what a document may hold (88.9)
-    call wd_dpic1                   ; -> CF=0 and the picture registered
+    call sc_dpic1                   ; -> CF=0 and the picture registered
     jc .out                         ; a record that does not parse ends the
-    mov ax, [wd_npic]               ; walk: the ones after it are found by
+    mov ax, [sc_npic]               ; walk: the ones after it are found by
     dec ax                          ; stepping over this one, so there is
     push ds                         ; nothing left to trust
-    PKG_LDS wd_cseg
+    PKG_LDS sc_cseg
     mov [bx], al                    ; the CHP byte IS the index (88.9)
     pop ds
 .next:
@@ -2551,74 +2551,74 @@ wd_dpicr:
     pop es
     pop di
     pop si                          ; SEVEN pushed, and for one build six came
-    pop dx                          ; back: the missing pop left wd_docparse
+    pop dx                          ; back: the missing pop left sc_docparse
     pop cx                          ; returning through a shifted stack, and
     pop bx                          ; the document loaded EMPTY - text and all
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpic1 - read the PICF at [wd_dpicp] and register it, advancing [wd_dpicp]
+; sc_dpic1 - read the PICF at [sc_dpicp] and register it, advancing [sc_dpicp]
 ; past the record. out: CF=0 registered; CF=1 = it is not one we can use.
 ; -----------------------------------------------------------------------------
-wd_dpic1:
+sc_dpic1:
     push bx
     push cx
     push dx
     push si
     push di
     push es
-    mov es, [wd_stgseg]
-    mov si, [wd_dpicp]
+    mov es, [sc_stgseg]
+    mov si, [sc_dpicp]
     mov ax, si
-    add ax, WD_PICF
+    add ax, SC_PICF
     jc .no
-    cmp ax, [wd_dfsize]             ; the header has to be inside the file
+    cmp ax, [sc_dfsize]             ; the header has to be inside the file
     ja .no
-    cmp word [es:si+4], WD_PICF     ; cbHeader
+    cmp word [es:si+4], SC_PICF     ; cbHeader
     jne .no
-    cmp word [es:si+6], WD_MM_BMP   ; mm - a metafile is 7 and this port has
+    cmp word [es:si+6], SC_MM_BMP   ; mm - a metafile is 7 and this port has
     jne .no                         ; no renderer for one
     cmp byte [es:si+22], 1          ; bmPlanes
     jne .no
     cmp byte [es:si+23], 1          ; bmBitsPixel: the only depth a .DOC
     jne .no                         ; picture has ever been measured at
     mov ax, [es:si+16]              ; bmWidth
-    mov [wd_dpicwd], ax
+    mov [sc_dpicwd], ax
     or ax, ax
     jz .no
     cmp ax, OS88IMG_WMAX
     ja .no
     mov ax, [es:si+18]              ; bmHeight
-    mov [wd_dpicht], ax
+    mov [sc_dpicht], ax
     or ax, ax
     jz .no
     mov ax, [es:si+20]              ; bmWidthBytes
-    mov [wd_dpicbw], ax
+    mov [sc_dpicbw], ax
     or ax, ax
     jz .no
-    mov cx, [wd_dpicwd]             ; ...and it must cover the width it claims
+    mov cx, [sc_dpicwd]             ; ...and it must cover the width it claims
     add cx, 7                       ; at one bit a pixel: ceil(w/8)
     shr cx, 1
     shr cx, 1
     shr cx, 1
     cmp ax, cx
     jb .no
-    mul word [wd_dpicht]            ; DX:AX = the pixel bytes
+    mul word [sc_dpicht]            ; DX:AX = the pixel bytes
     or dx, dx
     jnz .no
     mov cx, ax
-    add ax, WD_PICF
+    add ax, SC_PICF
     jc .no
-    add ax, [wd_dpicp]
+    add ax, [sc_dpicp]
     jc .no
-    cmp ax, [wd_dfsize]             ; ...and all of it is inside the file
+    cmp ax, [sc_dfsize]             ; ...and all of it is inside the file
     ja .no
-    mov ax, [wd_dpicwd]             ; the 4bpp destination: (w+1)/2, no pad
+    mov ax, [sc_dpicwd]             ; the 4bpp destination: (w+1)/2, no pad
     inc ax
     shr ax, 1
-    mov [wd_dpicst], ax
-    mul word [wd_dpicht]
+    mov [sc_dpicst], ax
+    mul word [sc_dpicht]
     or dx, dx
     jnz .no
     mov cx, ax
@@ -2634,28 +2634,28 @@ wd_dpic1:
 .kb:
     call OSAPI_MEM_CLAIM            ; out DX = the base segment
     jc .no
-    mov [wd_dpicsg], dx
-    call wd_dpicexp                 ; 1bpp -> 4bpp, into that claim
-    mov ax, [wd_npic]               ; the slot: w, h, stride, segment
+    mov [sc_dpicsg], dx
+    call sc_dpicexp                 ; 1bpp -> 4bpp, into that claim
+    mov ax, [sc_npic]               ; the slot: w, h, stride, segment
     mov cl, 3
     shl ax, cl
-    add ax, wd_pictab
+    add ax, sc_pictab
     mov di, ax
-    mov ax, [wd_dpicwd]
+    mov ax, [sc_dpicwd]
     mov [di], ax
-    mov ax, [wd_dpicht]
+    mov ax, [sc_dpicht]
     mov [di+2], ax
-    mov ax, [wd_dpicst]
+    mov ax, [sc_dpicst]
     mov [di+4], ax
-    mov ax, [wd_dpicsg]
+    mov ax, [sc_dpicsg]
     mov [di+6], ax
-    inc word [wd_npic]
-    mov ax, [wd_dpicbw]             ; step past the record: lcb bytes, and a
-    mul word [wd_dpicht]            ; record is padded to an even boundary -
-    add ax, WD_PICF                 ; the spacing SNAP.DOC's two pictures
+    inc word [sc_npic]
+    mov ax, [sc_dpicbw]             ; step past the record: lcb bytes, and a
+    mul word [sc_dpicht]            ; record is padded to an even boundary -
+    add ax, SC_PICF                 ; the spacing SNAP.DOC's two pictures
     inc ax                          ; showed
     and ax, 0xFFFE
-    add [wd_dpicp], ax
+    add [sc_dpicp], ax
     clc
     jmp short .out
 .no:
@@ -2670,12 +2670,12 @@ wd_dpic1:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_dpicexp - expand the 1bpp rows at ES:[wd_dpicp]+46 into the 4bpp claim.
+; sc_dpicexp - expand the 1bpp rows at ES:[sc_dpicp]+46 into the 4bpp claim.
 ; Bit set -> CWHITE, clear -> CBLACK, which is the inverse of the reduction
-; WD_PICWHITE performs on the way out, so black-and-white art makes the round
+; SC_PICWHITE performs on the way out, so black-and-white art makes the round
 ; trip byte for byte. Preserves all registers.
 ; -----------------------------------------------------------------------------
-wd_dpicexp:
+sc_dpicexp:
     push ax
     push bx
     push cx
@@ -2683,23 +2683,23 @@ wd_dpicexp:
     push si
     push di
     push es
-    mov word [wd_dpicy], 0
+    mov word [sc_dpicy], 0
 .row:
-    mov ax, [wd_dpicy]
-    cmp ax, [wd_dpicht]
+    mov ax, [sc_dpicy]
+    cmp ax, [sc_dpicht]
     jae .done
-    mul word [wd_dpicbw]            ; the SOURCE row
-    add ax, [wd_dpicp]
-    add ax, WD_PICF
+    mul word [sc_dpicbw]            ; the SOURCE row
+    add ax, [sc_dpicp]
+    add ax, SC_PICF
     mov si, ax
-    mov ax, [wd_dpicy]
-    mul word [wd_dpicst]            ; ...and the destination one
+    mov ax, [sc_dpicy]
+    mul word [sc_dpicst]            ; ...and the destination one
     mov di, ax
-    mov word [wd_dpicx], 0
-    mov byte [wd_dpicac], 0
+    mov word [sc_dpicx], 0
+    mov byte [sc_dpicac], 0
 .px:
-    mov ax, [wd_dpicx]
-    cmp ax, [wd_dpicwd]
+    mov ax, [sc_dpicx]
+    cmp ax, [sc_dpicwd]
     jae .rowend
     mov bx, ax
     push cx
@@ -2707,9 +2707,9 @@ wd_dpicexp:
     shr bx, cl
     pop cx
     add bx, si
-    mov es, [wd_stgseg]
+    mov es, [sc_stgseg]
     mov dl, [es:bx]                 ; the byte holding this pixel
-    mov cx, [wd_dpicx]
+    mov cx, [sc_dpicx]
     and cx, 7
     mov ax, 0x0080
 .bit:
@@ -2724,30 +2724,30 @@ wd_dpicexp:
     jz .have
     mov al, 15                      ; CWHITE
 .have:
-    test byte [wd_dpicx], 1
+    test byte [sc_dpicx], 1
     jnz .odd
     push cx
     mov cl, 4
     shl al, cl
     pop cx
-    mov [wd_dpicac], al             ; an even x is the HIGH nibble and waits
+    mov [sc_dpicac], al             ; an even x is the HIGH nibble and waits
     jmp short .nextpx
 .odd:
-    or al, [wd_dpicac]
-    mov es, [wd_dpicsg]
+    or al, [sc_dpicac]
+    mov es, [sc_dpicsg]
     mov [es:di], al
     inc di
 .nextpx:
-    inc word [wd_dpicx]
+    inc word [sc_dpicx]
     jmp short .px
 .rowend:
-    test word [wd_dpicwd], 1        ; an odd width leaves one pixel in the
+    test word [sc_dpicwd], 1        ; an odd width leaves one pixel in the
     jz .rowdone                     ; high nibble with no partner, and the
-    mov al, [wd_dpicac]             ; stride (w+1)/2 has the room for it
-    mov es, [wd_dpicsg]
+    mov al, [sc_dpicac]             ; stride (w+1)/2 has the room for it
+    mov es, [sc_dpicsg]
     mov [es:di], al
 .rowdone:
-    inc word [wd_dpicy]
+    inc word [sc_dpicy]
     jmp .row
 .done:
     pop es
@@ -2759,27 +2759,27 @@ wd_dpicexp:
     pop ax
     ret
 
-; wd_ldpost - what every loader ends with, after wd_clamp
+; sc_ldpost - what every loader ends with, after sc_clamp
 ; Preserves all registers.
 ;
-; wd_clamp puts the caret at the top and clears the tail index, the has*
+; sc_clamp puts the caret at the top and clears the tail index, the has*
 ; flags and the typing attributes - which is right for a load and wrong for
 ; the three facts the FILE just supplied. This puts those three back, and it
 ; is shared by the Word reader, the RTF reader and the plain-text fold so
 ; they cannot drift apart.
 ; -----------------------------------------------------------------------------
-wd_ldpost:
+sc_ldpost:
     push ax
-    mov al, [wd_dtail]
-    mov [wd_pap_tail], al
-    cmp word [wd_papn], 1
+    mov al, [sc_dtail]
+    mov [sc_pap_tail], al
+    cmp word [sc_papn], 1
     jbe .n1
-    mov byte [wd_hasfmt], 1
+    mov byte [sc_hasfmt], 1
 .n1:
     or al, al
     jz .n2
-    mov byte [wd_hasfmt], 1
+    mov byte [sc_hasfmt], 1
 .n2:
-    call far [wd_v_ldscan]; tabs -> [wd_hastab], hidden -> [wd_hashid]
+    call far [sc_v_ldscan]; tabs -> [sc_hastab], hidden -> [sc_hashid]
     pop ax
     ret

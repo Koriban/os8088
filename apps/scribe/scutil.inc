@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/word/wdutil.inc
+; os8088 - apps/word/scutil.inc
 ;
 ; WORD'S SEARCH PATTERN (SPEC.md 68.7) and the three Utilities commands that
 ; are algorithms rather than screens (SPEC.md 68.9): Sort, Renumber and Table
@@ -11,11 +11,11 @@
 ; --- the compiled search pattern (Opus/search.c's SetSpecialMatch) -----------
 ; One word per element: a value 0..255 is that character, and the two special
 ; values below are the wildcards. The escape letters are Opus/inter.h's.
-WDP_ANY      equ 0x0100         ; '?'  - any one character
-WDP_WHITE    equ 0x0200         ; '^w' - one or more spaces or tabs
+SCP_ANY      equ 0x0100         ; '?'  - any one character
+SCP_WHITE    equ 0x0200         ; '^w' - one or more spaces or tabs
 
 ; -----------------------------------------------------------------------------
-; wd_pcomp - compile [wd_fpat] into [wd_fpw] / [wd_fpwn]
+; sc_pcomp - compile [sc_fpat] into [sc_fpw] / [sc_fpwn]
 ; out: nothing; preserves all registers
 ;
 ; search.c's rules, in its order:
@@ -31,21 +31,21 @@ WDP_WHITE    equ 0x0200         ; '^w' - one or more spaces or tabs
 ;              have no room for - SPEC.md 6/68.3) fail honestly rather than
 ;              compile to something that can never occur
 ; -----------------------------------------------------------------------------
-wd_pcomp:
+sc_pcomp:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    mov si, wd_fpat
+    mov si, sc_fpat
     xor di, di                      ; DI = compiled elements
     xor cx, cx                      ; CL = raw characters, CH = unescaped '?'
 .step:
     mov al, [si]
     or al, al
     jz .done
-    cmp di, WD_PATMAX
+    cmp di, SC_PATMAX
     jae .done
     inc si
     inc cl
@@ -57,7 +57,7 @@ wd_pcomp:
     jmp short .put
 .any:
     inc ch
-    mov ax, WDP_ANY
+    mov ax, SCP_ANY
     jmp short .put
 .caret:
     mov al, [si]
@@ -99,7 +99,7 @@ wd_pcomp:
 .named:
     cmp al, 'w'
     jne .n1
-    mov ax, WDP_WHITE
+    mov ax, SCP_WHITE
     jmp short .put
 .n1:
     cmp al, 't'
@@ -116,7 +116,7 @@ wd_pcomp:
 .put:
     mov bx, di
     shl bx, 1
-    mov [bx+wd_fpw], ax
+    mov [bx+sc_fpw], ax
     inc di
     jmp .step
 .done:
@@ -130,12 +130,12 @@ wd_pcomp:
     jae .fin
     push bx
     shl bx, 1
-    mov word [bx+wd_fpw], '?'
+    mov word [bx+sc_fpw], '?'
     pop bx
     inc bx
     jmp short .qq
 .fin:
-    mov [wd_fpwn], di
+    mov [sc_fpwn], di
     pop di
     pop si
     pop dx
@@ -145,15 +145,15 @@ wd_pcomp:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_rxpand - expand the replacement's specials into [wd_frx] / [wd_frxn]
-; in:  [wd_fmst] / [wd_fmen] = the match this replacement is for
+; sc_rxpand - expand the replacement's specials into [sc_frx] / [sc_frxn]
+; in:  [sc_fmst] / [sc_fmen] = the match this replacement is for
 ; out: CF=1 = it could not be built (the toast is already set); preserves all
 ;
 ; inter.h's two: ^m (chUseMatched) is the text that matched and ^c
 ; (chUseScrap) is the clipboard's contents. ^^ is a caret and every other ^x
 ; is x, the same rule the pattern uses.
 ; -----------------------------------------------------------------------------
-wd_rxpand:
+sc_rxpand:
     push ax
     push bx
     push cx
@@ -161,7 +161,7 @@ wd_rxpand:
     push si
     push di
     push es
-    mov si, wd_frep
+    mov si, sc_frep
     xor di, di
 .step:
     mov al, [si]
@@ -184,26 +184,26 @@ wd_rxpand:
 .caret:
     mov al, '^'
 .lit:
-    cmp di, WD_FRXMAX
+    cmp di, SC_FRXMAX
     jae .full
     mov bx, di
-    mov [bx+wd_frx], al
+    mov [bx+sc_frx], al
     inc di
     jmp short .step
 .matched:
-    mov bx, [wd_fmst]
+    mov bx, [sc_fmst]
 .mm:
-    cmp bx, [wd_fmen]
+    cmp bx, [sc_fmen]
     jae .step
-    cmp di, WD_FRXMAX
+    cmp di, SC_FRXMAX
     jae .full
     push bx
     mov ax, bx
-    call wd_docb2                   ; AL = the document byte at AX
+    call sc_docb2                   ; AL = the document byte at AX
     pop bx
     push bx
     mov bx, di
-    mov [bx+wd_frx], al
+    mov [bx+sc_frx], al
     pop bx
     inc di
     inc bx
@@ -211,9 +211,9 @@ wd_rxpand:
 .scrap:
     push si
     push di
-    mov cx, WD_FRXMAX               ; ES:DI = the buffer, CX = its room
+    mov cx, SC_FRXMAX               ; ES:DI = the buffer, CX = its room
     sub cx, di
-    add di, wd_frx
+    add di, sc_frx
     push ds
     pop es
     call OSAPI_CLIP_GET             ; CF=1 = empty; CX = the bytes copied
@@ -223,17 +223,17 @@ wd_rxpand:
     add di, cx
     jmp short .step
 .noclip:
-    mov ax, wd_m_noclip
-    call wd_saymsg
+    mov ax, sc_m_noclip
+    call sc_saymsg
     stc
     jmp short .out
 .full:
-    mov ax, wd_m_replong
-    call wd_saymsg
+    mov ax, sc_m_replong
+    call sc_saymsg
     stc
     jmp short .out
 .done:
-    mov [wd_frxn], di
+    mov [sc_frxn], di
     clc
 .out:
     pop es
@@ -253,30 +253,30 @@ wd_rxpand:
 ; Renumber and Table of Contents are all defined over.
 ; =============================================================================
 
-WD_UMAXP     equ 128            ; paragraphs one command may touch. Past this
+SC_UMAXP     equ 128            ; paragraphs one command may touch. Past this
                                 ; the command REFUSES and says so: the index
                                 ; array is what bounds it, and a sort that
                                 ; silently did half the selection would be
                                 ; worse than one that did none (SPEC.md 47)
-WD_SCHALF    equ WD_MAXKB*1024  ; the scratch claim's two halves: the rebuilt
+SC_SCHALF    equ SC_MAXKB*1024  ; the scratch claim's two halves: the rebuilt
                                 ; text, then its CHP twin at this offset
 
 ; -----------------------------------------------------------------------------
-; wd_uspan - the operating span, in [wd_us0] / [wd_us1]
+; sc_uspan - the operating span, in [sc_us0] / [sc_us1]
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
-wd_uspan:
+sc_uspan:
     push ax
     push bx
     push ds
-    mov ax, [wd_sel0]
-    mov bx, [wd_sel1]
-    cmp byte [wd_selon], 0
+    mov ax, [sc_sel0]
+    mov bx, [sc_sel1]
+    cmp byte [sc_selon], 0
     jne .have
     xor ax, ax
-    mov bx, [wd_len]
+    mov bx, [sc_len]
 .have:
-    mov ds, [cs:wd_dseg]
+    mov ds, [cs:sc_dseg]
 .back:
     or ax, ax                       ; back to the start of the paragraph the
     jz .fwd                         ; selection begins in
@@ -289,7 +289,7 @@ wd_uspan:
     dec ax
     jmp short .back
 .fwd:
-    cmp bx, [cs:wd_len]             ; forward past the mark the selection ends
+    cmp bx, [cs:sc_len]             ; forward past the mark the selection ends
     jae .done                       ; in - unless it is already on a boundary
     push ax
     mov ax, bx
@@ -304,7 +304,7 @@ wd_uspan:
 .scan:
     pop ax
 .scan2:
-    cmp bx, [cs:wd_len]
+    cmp bx, [cs:sc_len]
     jae .done
     push ax
     mov ax, bx
@@ -323,40 +323,40 @@ wd_uspan:
 .popdone:
     pop ax
 .done:
-    mov [cs:wd_us0], ax
-    mov [cs:wd_us1], bx
+    mov [cs:sc_us0], ax
+    mov [cs:sc_us1], bx
     pop ds
     pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_plist - the paragraph starts inside the span, into [wd_upst]
-; out: CF=0 and [wd_upn] = how many; CF=1 = more than WD_UMAXP (the toast is
+; sc_plist - the paragraph starts inside the span, into [sc_upst]
+; out: CF=0 and [sc_upn] = how many; CF=1 = more than SC_UMAXP (the toast is
 ;      already set). Preserves all registers.
 ;
-; Entry n's paragraph runs from [wd_upst + 2n] to [wd_upst + 2n+2], the last
-; one ending at [wd_us1] - so the array carries n+1 entries and no length
+; Entry n's paragraph runs from [sc_upst + 2n] to [sc_upst + 2n+2], the last
+; one ending at [sc_us1] - so the array carries n+1 entries and no length
 ; array exists to disagree with it.
 ; -----------------------------------------------------------------------------
-wd_plist:
+sc_plist:
     push ax
     push bx
     push cx
     push ds
-    mov word [cs:wd_upn], 0
-    mov ax, [cs:wd_us0]
-    mov cx, [cs:wd_us1]
+    mov word [cs:sc_upn], 0
+    mov ax, [cs:sc_us0]
+    mov cx, [cs:sc_us1]
     xor bx, bx
-    mov ds, [cs:wd_dseg]
+    mov ds, [cs:sc_dseg]
 .para:
     cmp ax, cx
     jae .done
-    cmp bx, WD_UMAXP
+    cmp bx, SC_UMAXP
     jae .full
     push bx
     shl bx, 1
-    mov [cs:bx+wd_upst], ax
+    mov [cs:bx+sc_upst], ax
     pop bx
     inc bx
 .scan:
@@ -374,11 +374,11 @@ wd_plist:
 .end:
     jmp short .para
 .done:
-    mov [cs:wd_upn], bx
+    mov [cs:sc_upn], bx
     push bx                         ; the sentinel: where the last paragraph
     shl bx, 1                       ; ends
-    mov ax, [cs:wd_us1]
-    mov [cs:bx+wd_upst], ax
+    mov ax, [cs:sc_us1]
+    mov [cs:bx+sc_upst], ax
     pop bx
     push cs
     pop ds
@@ -387,8 +387,8 @@ wd_plist:
 .full:
     push cs
     pop ds
-    mov ax, wd_m_toomanyp
-    call wd_saymsg
+    mov ax, sc_m_toomanyp
+    call sc_saymsg
     stc
 .out:
     pop ds
@@ -398,59 +398,59 @@ wd_plist:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_scget / wd_scdrop - the transient rebuild scratch
-; out: CF=0 with [wd_scseg] set; CF=1 = refused (the toast is set)
-; Preserves all registers. Two halves, WD_SCHALF apart: the rebuilt text and
+; sc_scget / sc_scdrop - the transient rebuild scratch
+; out: CF=0 with [sc_scseg] set; CF=1 = refused (the toast is set)
+; Preserves all registers. Two halves, SC_SCHALF apart: the rebuilt text and
 ; its CHP twin, so the splice moves both in step exactly as every other
 ; operation in this app does (SPEC.md 68.3).
 ; -----------------------------------------------------------------------------
-wd_scget:
+sc_scget:
     push ax
     push dx
-    mov word [wd_scn], 0
-    mov ax, (2 * WD_SCHALF) / 1024
+    mov word [sc_scn], 0
+    mov ax, (2 * SC_SCHALF) / 1024
     call OSAPI_MEM_CLAIM
     jc .no
-    mov [wd_scseg], dx
+    mov [sc_scseg], dx
     clc
     jmp short .out
 .no:
-    mov word [wd_scseg], 0
-    mov ax, wd_e_nomem
-    call wd_saymsg
+    mov word [sc_scseg], 0
+    mov ax, sc_e_nomem
+    call sc_saymsg
     stc
 .out:
     pop dx
     pop ax
     ret
 
-wd_scdrop:
+sc_scdrop:
     pushf
     push ax
     push dx
-    mov dx, [wd_scseg]
+    mov dx, [sc_scseg]
     or dx, dx
     jz .out
     call OSAPI_MEM_FREE
-    mov word [wd_scseg], 0
+    mov word [sc_scseg], 0
 .out:
     pop dx
     pop ax
     popf
     ret
 
-; wd_uput - append character AL wearing attribute AH to the scratch.
+; sc_uput - append character AL wearing attribute AH to the scratch.
 ; CF=1 = it is full. Preserves all registers.
-wd_uput:
+sc_uput:
     push bx
     push es
-    mov bx, [wd_scn]
-    cmp bx, WD_SCHALF
+    mov bx, [sc_scn]
+    cmp bx, SC_SCHALF
     jae .full
-    mov es, [wd_scseg]
+    mov es, [sc_scseg]
     mov [es:bx], al
-    mov [es:bx + WD_SCHALF], ah
-    inc word [wd_scn]
+    mov [es:bx + SC_SCHALF], ah
+    inc word [sc_scn]
     clc
     jmp short .out
 .full:
@@ -460,9 +460,9 @@ wd_uput:
     pop bx
     ret
 
-; wd_uputp - append the document's characters [BX, CX) to the scratch, each
+; sc_uputp - append the document's characters [BX, CX) to the scratch, each
 ; with its own attribute. CF=1 = full. Preserves all registers.
-wd_uputp:
+sc_uputp:
     push ax
     push bx
     push cx
@@ -471,12 +471,12 @@ wd_uputp:
     cmp bx, cx
     jae .ok
     mov ax, bx
-    call wd_dchb                    ; AL = the CHP byte - taken FIRST, and
+    call sc_dchb                    ; AL = the CHP byte - taken FIRST, and
     mov dl, al                      ; banked in DL: `pop ax` after a fetch
     mov ax, bx                      ; restores AH as well as AL, which is how
-    call wd_docb2                   ; the attribute used to get lost
+    call sc_docb2                   ; the attribute used to get lost
     mov ah, dl
-    call wd_uput
+    call sc_uput
     jc .no
     inc bx
     jmp short .l
@@ -492,22 +492,22 @@ wd_uputp:
     pop ax
     ret
 
-; wd_dchb - AL = the CHP byte at document index AX. Preserves all others.
-wd_dchb:
+; sc_dchb - AL = the CHP byte at document index AX. Preserves all others.
+sc_dchb:
     push bx
     push ds
     mov bx, ax
-    mov ds, [cs:wd_cseg]
+    mov ds, [cs:sc_cseg]
     mov al, [bx]
     pop ds
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_usplice - replace the span with the scratch's contents, as ONE undo group
+; sc_usplice - replace the span with the scratch's contents, as ONE undo group
 ; out: CF=1 = refused and nothing changed; preserves all registers
 ; -----------------------------------------------------------------------------
-wd_usplice:
+sc_usplice:
     push ax
     push bx
     push cx
@@ -515,43 +515,43 @@ wd_usplice:
     push si
     push di
     push es
-    call wd_uclose
-    mov ax, [wd_len]                ; will the document hold the result?
-    sub ax, [wd_us1]
-    add ax, [wd_us0]
-    add ax, [wd_scn]
+    call sc_uclose
+    mov ax, [sc_len]                ; will the document hold the result?
+    sub ax, [sc_us1]
+    add ax, [sc_us0]
+    add ax, [sc_scn]
     jc .no
-    call wd_capfor
+    call sc_capfor
     jc .no
-    mov ax, [wd_us0]
-    mov cx, [wd_us1]
+    mov ax, [sc_us0]
+    mov cx, [sc_us1]
     sub cx, ax
-    call wd_urec_bulk               ; the span as it stands, into the blob
-    jc .big                         ; ...which is WD_UMAXKB and can refuse
-    mov byte [wd_unolog], 1         ; every edit below is inside that record
-    mov bx, [wd_us0]
-    mov cx, [wd_us1]
+    call sc_urec_bulk               ; the span as it stands, into the blob
+    jc .big                         ; ...which is SC_UMAXKB and can refuse
+    mov byte [sc_unolog], 1         ; every edit below is inside that record
+    mov bx, [sc_us0]
+    mov cx, [sc_us1]
     sub cx, bx
     jcxz .noskip
-    call wd_delspan
+    call sc_delspan
 .noskip:
-    mov bx, [wd_us0]
-    mov cx, [wd_scn]
+    mov bx, [sc_us0]
+    mov cx, [sc_scn]
     jcxz .filled
-    call wd_gaproom
+    call sc_gaproom
     jc .undone
     mov di, bx
     xor si, si
 .f:
     push ds
-    mov ds, [cs:wd_scseg]           ; DS:SI walks the scratch's two halves
+    mov ds, [cs:sc_scseg]           ; DS:SI walks the scratch's two halves
     mov al, [si]
-    mov ah, [si + WD_SCHALF]
+    mov ah, [si + SC_SCHALF]
     pop ds
     push es
-    mov es, [wd_dseg]
+    mov es, [sc_dseg]
     mov [es:di], al
-    mov es, [wd_cseg]
+    mov es, [sc_cseg]
     mov [es:di], ah
     pop es
     inc si
@@ -559,22 +559,22 @@ wd_usplice:
     dec cx
     jnz .f
 .filled:
-    mov byte [wd_unolog], 0
-    call wd_urec_bulkend_at
-    mov ax, [wd_us0]
-    add ax, [wd_scn]
-    mov [wd_cur], ax
-    call wd_selclr
-    mov byte [wd_hdirty], 1
+    mov byte [sc_unolog], 0
+    call sc_urec_bulkend_at
+    mov ax, [sc_us0]
+    add ax, [sc_scn]
+    mov [sc_cur], ax
+    call sc_selclr
+    mov byte [sc_hdirty], 1
     clc
     jmp short .out
 .undone:
-    mov byte [wd_unolog], 0
-    call wd_urec_bulkend_at
+    mov byte [sc_unolog], 0
+    call sc_urec_bulkend_at
     jmp short .no
 .big:
-    mov ax, wd_m_noundo2            ; the span is bigger than the undo blob:
-    call wd_saymsg                  ; refuse rather than do it unundoably
+    mov ax, sc_m_noundo2            ; the span is bigger than the undo blob:
+    call sc_saymsg                  ; refuse rather than do it unundoably
 .no:
     stc
 .out:
@@ -597,38 +597,38 @@ wd_usplice:
 ; and therefore its own paragraph format with it.
 ; =============================================================================
 
-WDSO_DESC    equ 1              ; [wd_sopt] bits
-WDSO_NUM     equ 2
-WDSO_TAB     equ 4
-WDSO_CASE    equ 8
+SCSO_DESC    equ 1              ; [sc_sopt] bits
+SCSO_NUM     equ 2
+SCSO_TAB     equ 4
+SCSO_CASE    equ 8
 
 ; -----------------------------------------------------------------------------
-; wd_dosort - the Sort dialog's OK
+; sc_dosort - the Sort dialog's OK
 ; in:  SI = window ptr; out: nothing; clobbers as a callback
 ; -----------------------------------------------------------------------------
-wd_dosort:
-    call wd_uspan
-    call wd_plist
+sc_dosort:
+    call sc_uspan
+    call sc_plist
     jc .out
-    cmp word [wd_upn], 2
+    cmp word [sc_upn], 2
     jb .out                         ; nothing to reorder
     xor bx, bx                      ; the order array starts at identity
 .init:
-    cmp bx, [wd_upn]
+    cmp bx, [sc_upn]
     jae .isort
     mov si, bx
     shl si, 1
-    mov [si+wd_uord], bx
+    mov [si+sc_uord], bx
     inc bx
     jmp short .init
 .isort:
     mov bx, 1                       ; --- the insertion sort ---------------
 .outer:
-    cmp bx, [wd_upn]
+    cmp bx, [sc_upn]
     jae .sorted
     mov si, bx
     shl si, 1
-    mov dx, [si+wd_uord]            ; DX = the value being placed
+    mov dx, [si+sc_uord]            ; DX = the value being placed
     mov di, bx                      ; DI = where it is going
 .inner:
     or di, di
@@ -636,86 +636,86 @@ wd_dosort:
     mov si, di
     dec si
     shl si, 1
-    mov ax, [si+wd_uord]
-    call wd_socmp                   ; CF=1 = DX sorts before AX
+    mov ax, [si+sc_uord]
+    call sc_socmp                   ; CF=1 = DX sorts before AX
     jnc .place
     mov si, di
     shl si, 1
-    mov [si+wd_uord], ax
+    mov [si+sc_uord], ax
     dec di
     jmp short .inner
 .place:
     mov si, di
     shl si, 1
-    mov [si+wd_uord], dx
+    mov [si+sc_uord], dx
     inc bx
     jmp short .outer
 .sorted:
-    call wd_scget                   ; --- rebuild the span in the new order -
+    call sc_scget                   ; --- rebuild the span in the new order -
     jc .out
-    call wd_utail                   ; [wd_utl] = the span reaches the tail
+    call sc_utail                   ; [sc_utl] = the span reaches the tail
     xor bx, bx
 .emit:
-    cmp bx, [wd_upn]
+    cmp bx, [sc_upn]
     jae .done
     push bx
     shl bx, 1
-    mov ax, [bx+wd_uord]
+    mov ax, [bx+sc_uord]
     pop bx
-    call wd_uemitp                  ; paragraph AX, always ¶-terminated
+    call sc_uemitp                  ; paragraph AX, always ¶-terminated
     jc .drop
     inc bx
     jmp short .emit
 .done:
-    call wd_utrim                   ; the last mark comes off if the span had
-    call wd_usplice                 ; none
+    call sc_utrim                   ; the last mark comes off if the span had
+    call sc_usplice                 ; none
     jc .drop
-    call wd_scdrop
-    mov si, wd_m_sorted
-    call wd_setmsg
-    call wd_editinv
-    mov byte [wd_follow], 1
+    call sc_scdrop
+    mov si, sc_m_sorted
+    call sc_setmsg
+    call sc_editinv
+    mov byte [sc_follow], 1
     ret
 .drop:
-    call wd_scdrop
+    call sc_scdrop
 .out:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_uemitp - copy paragraph AX into the scratch, ¶-terminated
+; sc_uemitp - copy paragraph AX into the scratch, ¶-terminated
 ; out: CF=1 = the scratch is full; preserves all registers
 ;
 ; The tail paragraph has no mark of its own, so one is written for it out of
-; [wd_pap_tail]: inside a rebuild every paragraph needs a mark, and wd_utrim
+; [sc_pap_tail]: inside a rebuild every paragraph needs a mark, and sc_utrim
 ; takes the final one off again if the span it replaces had none.
 ; -----------------------------------------------------------------------------
-wd_uemitp:
+sc_uemitp:
     push ax
     push bx
     push cx
     push dx
     mov bx, ax
     shl bx, 1
-    mov cx, [bx+wd_upst+2]          ; where the paragraph ends
-    mov bx, [bx+wd_upst]
+    mov cx, [bx+sc_upst+2]          ; where the paragraph ends
+    mov bx, [bx+sc_upst]
     mov dx, cx
     or dx, dx
     jz .copy
     mov ax, dx                      ; AX (the paragraph index) is spent: BX
     dec ax                          ; and CX carry everything from here, and
-    call wd_docb2                   ; preserving it across the fetch is what
+    call sc_docb2                   ; preserving it across the fetch is what
                                     ; used to throw the fetched byte away
     cmp al, 13                      ; does it end with a mark of its own?
     je .copy
-    call wd_uputp                   ; no - it is the tail paragraph
+    call sc_uputp                   ; no - it is the tail paragraph
     jc .no
     mov al, 13
-    mov ah, [wd_pap_tail]
-    call wd_uput
+    mov ah, [sc_pap_tail]
+    call sc_uput
     jc .no
     jmp short .ok
 .copy:
-    call wd_uputp
+    call sc_uputp
     jc .no
 .ok:
     clc
@@ -729,44 +729,44 @@ wd_uemitp:
     pop ax
     ret
 
-; wd_utail - [wd_utl] = 1 when the span runs to the document's end without a
+; sc_utail - [sc_utl] = 1 when the span runs to the document's end without a
 ; closing ¶ (so the rebuilt span must not have one either). Preserves all.
-wd_utail:
+sc_utail:
     push ax
-    mov byte [wd_utl], 0
-    mov ax, [wd_us1]
-    cmp ax, [wd_len]
+    mov byte [sc_utl], 0
+    mov ax, [sc_us1]
+    cmp ax, [sc_len]
     jne .out
     or ax, ax
     jz .set
     dec ax
-    call wd_docb2
+    call sc_docb2
     cmp al, 13
     je .out
 .set:
-    mov byte [wd_utl], 1
+    mov byte [sc_utl], 1
 .out:
     pop ax
     ret
 
-; wd_utrim - take the rebuilt span's final ¶ off when [wd_utl] says the span
+; sc_utrim - take the rebuilt span's final ¶ off when [sc_utl] says the span
 ; it replaces had none, and make its format the tail's. Preserves all.
-wd_utrim:
+sc_utrim:
     push ax
     push bx
     push es
-    cmp byte [wd_utl], 0
+    cmp byte [sc_utl], 0
     je .out
-    mov bx, [wd_scn]
+    mov bx, [sc_scn]
     or bx, bx
     jz .out
     dec bx
-    mov es, [wd_scseg]
+    mov es, [sc_scseg]
     cmp byte [es:bx], 13
     jne .out
-    mov al, [es:bx + WD_SCHALF]
-    mov [wd_pap_tail], al
-    mov [wd_scn], bx
+    mov al, [es:bx + SC_SCHALF]
+    mov [sc_pap_tail], al
+    mov [sc_scn], bx
 .out:
     pop es
     pop bx
@@ -774,35 +774,35 @@ wd_utrim:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_socmp - does paragraph DX sort before paragraph AX?
+; sc_socmp - does paragraph DX sort before paragraph AX?
 ; out: CF=1 = yes; preserves all registers
 ; -----------------------------------------------------------------------------
-wd_socmp:
+sc_socmp:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    test byte [wd_sopt], WDSO_DESC  ; Descending is the same comparison with
+    test byte [sc_sopt], SCSO_DESC  ; Descending is the same comparison with
     jz .fwd                         ; its arguments the other way round
     xchg ax, dx
 .fwd:
     push ax
     mov ax, dx
-    call wd_sokey                   ; BX..CX = the first key
+    call sc_sokey                   ; BX..CX = the first key
     mov si, bx
     mov di, cx
     pop ax
-    call wd_sokey                   ; BX..CX = the second
-    mov [wd_sokb], bx
-    mov [wd_soke], cx
-    test byte [wd_sopt], WDSO_NUM
+    call sc_sokey                   ; BX..CX = the second
+    mov [sc_sokb], bx
+    mov [sc_soke], cx
+    test byte [sc_sopt], SCSO_NUM
     jnz .num
-    call wd_socmpa
+    call sc_socmpa
     jmp short .out
 .num:
-    call wd_socmpn
+    call sc_socmpn
 .out:
     pop di
     pop si
@@ -812,9 +812,9 @@ wd_socmp:
     pop ax
     ret
 
-; wd_socmpa - alphanumeric: is SI..DI before BX..CX? CF=1 = yes.
+; sc_socmpa - alphanumeric: is SI..DI before BX..CX? CF=1 = yes.
 ; Preserves all but the flags.
-wd_socmpa:
+sc_socmpa:
     push ax
     push bx
     push dx
@@ -824,18 +824,18 @@ wd_socmpa:
     cmp bx, cx
     jae .no                         ; the other ran out first: it is smaller
     mov ax, si
-    call wd_docb2
+    call sc_docb2
     mov dl, al
     mov ax, bx
-    call wd_docb2
-    test byte [wd_sopt], WDSO_CASE
+    call sc_docb2
+    test byte [sc_sopt], SCSO_CASE
     jnz .exact
     push ax
     mov al, dl
-    call wd_foldc
+    call sc_foldc
     mov dl, al
     pop ax
-    call wd_foldc
+    call sc_foldc
 .exact:
     cmp dl, al
     jb .yes
@@ -857,24 +857,24 @@ wd_socmpa:
     pop ax
     ret
 
-; wd_socmpn - numeric: is the value in SI..DI below the one in BX..CX?
+; sc_socmpn - numeric: is the value in SI..DI below the one in BX..CX?
 ; A field with no number sorts before every field that has one. CF=1 = yes.
-wd_socmpn:
+sc_socmpn:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    call wd_sonum                   ; DX = the first key's value, CF = it had
+    call sc_sonum                   ; DX = the first key's value, CF = it had
     mov bx, dx                      ; one
     mov al, 0
     jnc .a0
     mov al, 1
 .a0:
-    mov si, [wd_sokb]               ; the second key, banked by wd_socmp
-    mov di, [wd_soke]
-    call wd_sonum
+    mov si, [sc_sokb]               ; the second key, banked by sc_socmp
+    mov di, [sc_soke]
+    call sc_sonum
     mov ah, 0
     jnc .b0
     mov ah, 1
@@ -904,31 +904,31 @@ wd_socmpn:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_sokey - the key field of paragraph AX
+; sc_sokey - the key field of paragraph AX
 ; out: BX = its first index, CX = one past its last; preserves all others
 ;
-; Field [wd_sofld], 1-based, between separators inside the paragraph's own
+; Field [sc_sofld], 1-based, between separators inside the paragraph's own
 ; text (the ¶ mark is never part of a key). A paragraph with fewer fields
 ; than that keys on the empty string.
 ; -----------------------------------------------------------------------------
-wd_sokey:
+sc_sokey:
     push ax
     push dx
     push si
     mov si, ax
     shl si, 1
-    mov cx, [si+wd_upst+2]
-    mov bx, [si+wd_upst]
+    mov cx, [si+sc_upst+2]
+    mov bx, [si+sc_upst]
     or cx, cx                       ; the ¶ is not part of the key
     jz .have
     mov ax, cx
     dec ax
-    call wd_docb2
+    call sc_docb2
     cmp al, 13
     jne .have
     dec cx
 .have:
-    mov dx, [wd_sofld]
+    mov dx, [sc_sofld]
     or dx, dx
     jz .out
     dec dx                          ; DX = separators to step over
@@ -938,8 +938,8 @@ wd_sokey:
     jae .out                        ; ran out of fields: the empty string
     push ax
     mov ax, bx
-    call wd_docb2
-    call wd_issep
+    call sc_docb2
+    call sc_issep
     pop ax
     jc .nosep
     inc bx
@@ -956,8 +956,8 @@ wd_sokey:
     jae .setend
     push ax
     mov ax, si
-    call wd_docb2
-    call wd_issep
+    call sc_docb2
+    call sc_issep
     pop ax
     jnc .setend
     inc si
@@ -970,9 +970,9 @@ wd_sokey:
     pop ax
     ret
 
-; wd_issep - CF=0 if AL is the key separator. Preserves all registers.
-wd_issep:
-    test byte [wd_sopt], WDSO_TAB
+; sc_issep - CF=0 if AL is the key separator. Preserves all registers.
+sc_issep:
+    test byte [sc_sopt], SCSO_TAB
     jnz .tab
     cmp al, ','
     je .yes
@@ -987,9 +987,9 @@ wd_issep:
     clc
     ret
 
-; wd_sonum - DX = the signed integer at the head of SI..DI; CF=1 = there was
+; sc_sonum - DX = the signed integer at the head of SI..DI; CF=1 = there was
 ; one. Preserves all registers but DX.
-wd_sonum:
+sc_sonum:
     push ax
     push bx
     push cx
@@ -1000,7 +1000,7 @@ wd_sonum:
     cmp si, di
     jae .none
     mov ax, si
-    call wd_docb2
+    call sc_docb2
     cmp al, ' '
     jne .sign
     inc si
@@ -1014,7 +1014,7 @@ wd_sonum:
     cmp si, di
     jae .done
     mov ax, si
-    call wd_docb2
+    call sc_docb2
     cmp al, '0'
     jb .done
     cmp al, '9'
@@ -1061,39 +1061,39 @@ wd_sonum:
 ; Word's does.
 ; =============================================================================
 
-WDRN_ALL     equ 0              ; [wd_rnact]
-WDRN_NUMD    equ 1
-WDRN_REMOVE  equ 2
+SCRN_ALL     equ 0              ; [sc_rnact]
+SCRN_NUMD    equ 1
+SCRN_REMOVE  equ 2
 
 ; -----------------------------------------------------------------------------
-; wd_dorenum - the Renumber dialog's OK
+; sc_dorenum - the Renumber dialog's OK
 ; in:  SI = window ptr; out: nothing; clobbers as a callback
 ; -----------------------------------------------------------------------------
-wd_dorenum:
-    call wd_uspan
-    call wd_plist
+sc_dorenum:
+    call sc_uspan
+    call sc_plist
     jc .out
-    cmp word [wd_upn], 0
+    cmp word [sc_upn], 0
     je .out
-    call wd_scget
+    call sc_scget
     jc .out
-    call wd_utail
-    mov ax, [wd_rnfrom]             ; the running number
-    mov [wd_rnnow], ax
+    call sc_utail
+    mov ax, [sc_rnfrom]             ; the running number
+    mov [sc_rnnow], ax
     xor bx, bx
 .para:
-    cmp bx, [wd_upn]
+    cmp bx, [sc_upn]
     jae .done
     mov si, bx
     shl si, 1
-    mov cx, [si+wd_upst+2]
-    mov si, [si+wd_upst]            ; SI = the paragraph's first character
+    mov cx, [si+sc_upst+2]
+    mov si, [si+sc_upst]            ; SI = the paragraph's first character
     push si
-    call wd_rnskip                  ; SI past an existing number, CF=1 = it
+    call sc_rnskip                  ; SI past an existing number, CF=1 = it
     pushf                           ; had one
-    cmp byte [wd_rnact], WDRN_REMOVE
+    cmp byte [sc_rnact], SCRN_REMOVE
     je .strip
-    cmp byte [wd_rnact], WDRN_NUMD
+    cmp byte [sc_rnact], SCRN_NUMD
     jne .number
     popf
     pushf
@@ -1107,49 +1107,49 @@ wd_dorenum:
     jmp short .body                 ; Remove: the text without its number
 .number:
     popf
-    call wd_rnemit                  ; the new number and its tab
+    call sc_rnemit                  ; the new number and its tab
     jc .drop2
-    inc word [wd_rnnow]
+    inc word [sc_rnnow]
 .body:
     pop ax                          ; the paragraph's start, no longer needed
     push bx
     mov bx, si
-    call wd_uputp
+    call sc_uputp
     pop bx
     jc .drop
     cmp cx, 0
     je .next
     mov ax, cx
     dec ax
-    call wd_docb2
+    call sc_docb2
     cmp al, 13                      ; a tail paragraph gets the mark a
     je .next                        ; rebuild needs
     mov al, 13
-    mov ah, [wd_pap_tail]
-    call wd_uput
+    mov ah, [sc_pap_tail]
+    call sc_uput
     jc .drop
 .next:
     inc bx
     jmp .para
 .done:
-    call wd_utrim
-    call wd_usplice
+    call sc_utrim
+    call sc_usplice
     jc .drop
-    call wd_scdrop
-    mov si, wd_m_renumd
-    call wd_setmsg
-    call wd_editinv
-    mov byte [wd_follow], 1
+    call sc_scdrop
+    mov si, sc_m_renumd
+    call sc_setmsg
+    call sc_editinv
+    mov byte [sc_follow], 1
     ret
 .drop2:
     pop ax
 .drop:
-    call wd_scdrop
+    call sc_scdrop
 .out:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_rnskip - step SI past an existing number
+; sc_rnskip - step SI past an existing number
 ; in:  SI = a paragraph's first character, CX = one past its last
 ; out: SI advanced past 'number TAB' when there was one, CF=1 = there was;
 ;      preserves all other registers
@@ -1158,7 +1158,7 @@ wd_dorenum:
 ; string can carry, terminated by a TAB - which is exactly the shape this
 ; command writes, so what it renumbers is what it wrote.
 ; -----------------------------------------------------------------------------
-wd_rnskip:
+sc_rnskip:
     push ax
     push bx
     push dx
@@ -1170,12 +1170,12 @@ wd_rnskip:
     cmp dl, 12
     ja .no
     mov ax, bx
-    call wd_docb2
+    call sc_docb2
     cmp al, 9
     je .tab
-    call wd_isnumc
+    call sc_isnumc
     jc .no
-    call wd_isalnum
+    call sc_isalnum
     jc .notal
     mov dh, 1
 .notal:
@@ -1199,9 +1199,9 @@ wd_rnskip:
     clc
     ret
 
-; wd_isnumc - CF=0 if AL may appear in a number's rendering. Preserves all.
-wd_isnumc:
-    call wd_isalnum
+; sc_isnumc - CF=0 if AL may appear in a number's rendering. Preserves all.
+sc_isnumc:
+    call sc_isalnum
     jnc .yes
     cmp al, '('
     je .yes
@@ -1217,8 +1217,8 @@ wd_isnumc:
     clc
     ret
 
-; wd_isalnum - CF=0 if AL is a letter or a digit. Preserves all registers.
-wd_isalnum:
+; sc_isalnum - CF=0 if AL is a letter or a digit. Preserves all registers.
+sc_isalnum:
     cmp al, '0'
     jb .no
     cmp al, '9'
@@ -1239,50 +1239,50 @@ wd_isalnum:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_rnemit - write [wd_rnnow] into the scratch in the Format's shape
+; sc_rnemit - write [sc_rnnow] into the scratch in the Format's shape
 ; out: CF=1 = the scratch is full; preserves all registers
 ; -----------------------------------------------------------------------------
-wd_rnemit:
+sc_rnemit:
     push ax
     push bx
     push cx
     push dx
-    mov bx, wd_rnfmt
+    mov bx, sc_rnfmt
     xor dl, dl                      ; DL = the kind, 0 = none seen yet
 .pre:
     mov al, [bx]
     or al, al
     jz .noslot
-    call wd_isalnum
+    call sc_isalnum
     jc .lit
     mov dl, al
     inc bx
     jmp short .num
 .lit:
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .no
     inc bx
     jmp short .pre
 .noslot:
     mov dl, '1'                     ; a format with no slot numbers arabic
 .num:
-    mov ax, [wd_rnnow]
-    call wd_rnval
+    mov ax, [sc_rnnow]
+    call sc_rnval
     jc .no
 .post:
     mov al, [bx]
     or al, al
     jz .tab
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .no
     inc bx
     jmp short .post
 .tab:
     mov al, 9
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .no
     clc
     jmp short .out
@@ -1295,8 +1295,9 @@ wd_rnemit:
     pop ax
     ret
 
-; wd_rnval - write value AX in kind DL. CF=1 = full. Preserves all.
-wd_rnval:
+; sc_rnval - write value AX in kind DL. CF=1 = full. Preserves all.
+sc_rnval:
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
     push ax
     push bx
     push cx
@@ -1324,7 +1325,7 @@ wd_rnval:
     pop ax
     add al, '0'
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .no
     loop .de
     jmp short .ok
@@ -1349,7 +1350,7 @@ wd_rnval:
     add al, 32
 .aup:
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .no
     loop .ae
     jmp short .ok
@@ -1363,7 +1364,7 @@ wd_rnval:
     mov cx, bx
     shl cx, 1
     mov si, cx
-    mov cx, [si+wd_rnvals]
+    mov cx, [si+sc_rnvals]
     or cx, cx
     jz .ok
 .rsub:
@@ -1373,8 +1374,8 @@ wd_rnval:
     push ax
     mov si, bx
     shl si, 1
-    mov si, [si+wd_rnnums]
-    call wd_rnstr
+    mov si, [si+sc_rnnums]
+    call sc_rnstr
     pop ax
     jc .no
     jmp short .rsub
@@ -1394,8 +1395,8 @@ wd_rnval:
     pop ax
     ret
 
-; wd_rnstr - write the NUL string at CS:SI, cased by DL. CF=1 = full.
-wd_rnstr:
+; sc_rnstr - write the NUL string at CS:SI, cased by DL. CF=1 = full.
+sc_rnstr:
     push ax
     push si
 .l:
@@ -1407,7 +1408,7 @@ wd_rnstr:
     add al, 32
 .up:
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .no
     inc si
     jmp short .l
@@ -1421,23 +1422,23 @@ wd_rnstr:
     pop ax
     ret
 
-wd_rnvals: dw 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1, 0
-wd_rnnums: dw wd_rn_m, wd_rn_cm, wd_rn_d, wd_rn_cd, wd_rn_c, wd_rn_xc
-           dw wd_rn_l, wd_rn_xl, wd_rn_x, wd_rn_ix, wd_rn_v, wd_rn_iv
-           dw wd_rn_i, wd_rn_i
-wd_rn_m:  db 'M', 0
-wd_rn_cm: db 'CM', 0
-wd_rn_d:  db 'D', 0
-wd_rn_cd: db 'CD', 0
-wd_rn_c:  db 'C', 0
-wd_rn_xc: db 'XC', 0
-wd_rn_l:  db 'L', 0
-wd_rn_xl: db 'XL', 0
-wd_rn_x:  db 'X', 0
-wd_rn_ix: db 'IX', 0
-wd_rn_v:  db 'V', 0
-wd_rn_iv: db 'IV', 0
-wd_rn_i:  db 'I', 0
+sc_rnvals: dw 1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1, 0
+sc_rnnums: dw sc_rn_m, sc_rn_cm, sc_rn_d, sc_rn_cd, sc_rn_c, sc_rn_xc
+           dw sc_rn_l, sc_rn_xl, sc_rn_x, sc_rn_ix, sc_rn_v, sc_rn_iv
+           dw sc_rn_i, sc_rn_i
+sc_rn_m:  db 'M', 0
+sc_rn_cm: db 'CM', 0
+sc_rn_d:  db 'D', 0
+sc_rn_cd: db 'CD', 0
+sc_rn_c:  db 'C', 0
+sc_rn_xc: db 'XC', 0
+sc_rn_l:  db 'L', 0
+sc_rn_xl: db 'XL', 0
+sc_rn_x:  db 'X', 0
+sc_rn_ix: db 'IX', 0
+sc_rn_v:  db 'V', 0
+sc_rn_iv: db 'IV', 0
+sc_rn_i:  db 'I', 0
 
 ; =============================================================================
 ; INSERT > TABLE OF CONTENTS (SPEC.md 68.9, Opus/toc.c)
@@ -1449,7 +1450,7 @@ wd_rn_i:  db 'I', 0
 ;
 ;   Use Heading Paragraphs  a paragraph whose FIRST character is bold is a
 ;                           heading, and its level is 1 + left indent /
-;                           WD_TABSTOP. Bold-from-the-first-character is what
+;                           SC_TABSTOP. Bold-from-the-first-character is what
 ;                           a heading looks like in draft view with one font,
 ;                           and the indent is the only paragraph-level rank
 ;                           the PAP carries.
@@ -1461,98 +1462,98 @@ wd_rn_i:  db 'I', 0
 ;                           this port really has (SPEC.md 68.1).
 ;
 ; One forward walk does both jobs: it counts ROWS by the same greedy word
-; wrap the layout uses, so an entry's page is [line] / WD_PGLINES + 1 at the
+; wrap the layout uses, so an entry's page is [line] / SC_PGLINES + 1 at the
 ; moment its paragraph starts - and the whole document is walked once rather
 ; than once per entry.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; wd_dotoc - the Table of Contents dialog's OK
+; sc_dotoc - the Table of Contents dialog's OK
 ; in:  SI = window ptr; out: nothing; clobbers as a callback
 ; -----------------------------------------------------------------------------
-wd_dotoc:
-    call wd_scget
+sc_dotoc:
+    call sc_scget
     jc .out
-    mov word [wd_tcn], 0
-    mov word [wd_tcline], 0
-    mov word [wd_tccol], 0
+    mov word [sc_tcn], 0
+    mov word [sc_tcline], 0
+    mov word [sc_tccol], 0
     xor bx, bx                      ; BX = the walking index
-    mov byte [wd_tcpst], 1          ; a paragraph starts here
+    mov byte [sc_tcpst], 1          ; a paragraph starts here
 .walk:
-    cmp bx, [wd_len]
+    cmp bx, [sc_len]
     ja .done
-    cmp byte [wd_tcpst], 0
+    cmp byte [sc_tcpst], 0
     je .row
-    mov byte [wd_tcpst], 0
+    mov byte [sc_tcpst], 0
     push bx
-    call wd_tcentry                 ; is the paragraph at BX an entry?
+    call sc_tcentry                 ; is the paragraph at BX an entry?
     pop bx
 .row:
-    cmp bx, [wd_len]
+    cmp bx, [sc_len]
     jae .done
     push bx
     mov ax, bx
-    call wd_docb2
+    call sc_docb2
     pop bx
     cmp al, 13
     je .eop
     cmp al, 9
     je .tab
-    inc word [wd_tccol]
+    inc word [sc_tccol]
     jmp short .wrap
 .tab:
-    mov ax, [wd_tccol]              ; a tab runs to the next default stop
+    mov ax, [sc_tccol]              ; a tab runs to the next default stop
     xor dx, dx
-    mov cx, WD_TABSTOP
+    mov cx, SC_TABSTOP
     div cx
     inc ax
     mul cx
-    mov [wd_tccol], ax
+    mov [sc_tccol], ax
     jmp short .wrap
 .eop:
-    inc word [wd_tcline]
-    mov word [wd_tccol], 0
-    mov byte [wd_tcpst], 1
+    inc word [sc_tcline]
+    mov word [sc_tccol], 0
+    mov byte [sc_tcpst], 1
     inc bx
     jmp short .walk
 .wrap:
-    mov ax, [wd_tccol]
-    cmp ax, [wd_rcols]
+    mov ax, [sc_tccol]
+    cmp ax, [sc_rcols]
     jb .next
-    inc word [wd_tcline]
-    mov word [wd_tccol], 0
+    inc word [sc_tcline]
+    mov word [sc_tccol], 0
 .next:
     inc bx
     jmp short .walk
 .done:
-    cmp word [wd_tcn], 0
+    cmp word [sc_tcn], 0
     je .none
-    mov ax, [wd_cur]                ; the collection lands at the caret, as
-    mov [wd_us0], ax                ; one bulk record
-    mov [wd_us1], ax
-    mov byte [wd_utl], 0
-    call wd_usplice
+    mov ax, [sc_cur]                ; the collection lands at the caret, as
+    mov [sc_us0], ax                ; one bulk record
+    mov [sc_us1], ax
+    mov byte [sc_utl], 0
+    call sc_usplice
     jc .drop
-    call wd_scdrop
-    call wd_editinv
-    mov byte [wd_follow], 1
+    call sc_scdrop
+    call sc_editinv
+    mov byte [sc_follow], 1
     ret
 .none:
-    call wd_scdrop
-    mov ax, wd_m_notoc
-    call wd_saymsg
+    call sc_scdrop
+    mov ax, sc_m_notoc
+    call sc_saymsg
     ret
 .drop:
-    call wd_scdrop
+    call sc_scdrop
 .out:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_tcentry - is the paragraph starting at BX an entry, and if so collect it
-; in:  BX = a paragraph's first character, [wd_tcline] = the row it starts on
+; sc_tcentry - is the paragraph starting at BX an entry, and if so collect it
+; in:  BX = a paragraph's first character, [sc_tcline] = the row it starts on
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
-wd_tcentry:
+sc_tcentry:
     push ax
     push bx
     push cx
@@ -1561,10 +1562,10 @@ wd_tcentry:
     push di
     mov cx, bx                      ; CX = where the paragraph's text ends
 .end:
-    cmp cx, [wd_len]
+    cmp cx, [sc_len]
     jae .have
     mov ax, cx                      ; AX is scratch here - preserving it
-    call wd_docb2                   ; across the fetch is what throws the
+    call sc_docb2                   ; across the fetch is what throws the
     cmp al, 13                      ; fetched byte away
     je .have
     inc cx
@@ -1572,23 +1573,23 @@ wd_tcentry:
 .have:
     cmp bx, cx
     jae .out                        ; an empty paragraph is never an entry
-    cmp byte [wd_tcsrc], 0
+    cmp byte [sc_tcsrc], 0
     jne .field
     mov ax, bx                      ; --- Use Heading Paragraphs -----------
-    call wd_dchb
-    test al, WDAT_BOLD
+    call sc_dchb
+    test al, SCAT_BOLD
     jz .out
-    call wd_tclevel                 ; DX = 1 + left indent / WD_TABSTOP
+    call sc_tclevel                 ; DX = 1 + left indent / SC_TABSTOP
     mov si, bx
     mov di, cx
     jmp short .emit
 .field:
     mov ax, bx                      ; --- Use Table Entry Fields -----------
-    call wd_dchb
-    test al, WDAT_HID
+    call sc_dchb
+    test al, SCAT_HID
     jz .out
     mov ax, bx
-    call wd_docb2
+    call sc_docb2
     cmp al, '.'
     jne .out
     mov si, bx
@@ -1598,7 +1599,7 @@ wd_tcentry:
     cmp si, cx
     jae .out
     mov ax, si
-    call wd_docb2
+    call sc_docb2
     cmp al, '.'
     je .dotend
     inc dx
@@ -1615,21 +1616,21 @@ wd_tcentry:
     cmp di, cx
     jae .emit
     mov ax, di
-    call wd_dchb
-    test al, WDAT_HID
+    call sc_dchb
+    test al, SCAT_HID
     jz .emit
     inc di
     jmp short .hid
 .emit:
-    cmp dx, [wd_tcfrom]             ; From..To filters by the level either
+    cmp dx, [sc_tcfrom]             ; From..To filters by the level either
     jb .out                         ; rule produced
-    cmp dx, [wd_tcto]
+    cmp dx, [sc_tcto]
     ja .out
-    call wd_tctrim                  ; leading and trailing white off, as
+    call sc_tctrim                  ; leading and trailing white off, as
     cmp si, di                      ; toc.c's CchSkipSpace and its loop do
     jae .out
-    call wd_tcput
-    inc word [wd_tcn]
+    call sc_tcput
+    inc word [sc_tcn]
 .out:
     pop di
     pop si
@@ -1639,9 +1640,9 @@ wd_tcentry:
     pop ax
     ret
 
-; wd_tclevel - DX = 1 + the left indent of the paragraph at BX, in tab stops,
+; sc_tclevel - DX = 1 + the left indent of the paragraph at BX, in tab stops,
 ; clamped to 9. Preserves all registers but DX.
-wd_tclevel:
+sc_tclevel:
     push ax
     push bx
     push cx
@@ -1649,9 +1650,9 @@ wd_tclevel:
     push ds
     mov cx, bx
 .mark:
-    cmp cx, [cs:wd_len]
+    cmp cx, [cs:sc_len]
     jae .tail
-    mov ds, [cs:wd_dseg]
+    mov ds, [cs:sc_dseg]
     mov si, cx
     cmp byte [si], 13
     push cs
@@ -1660,10 +1661,10 @@ wd_tclevel:
     inc cx
     jmp short .mark
 .tail:
-    mov al, [cs:wd_pap_tail]
+    mov al, [cs:sc_pap_tail]
     jmp short .idx
 .found:
-    mov ds, [cs:wd_cseg]
+    mov ds, [cs:sc_cseg]
     mov si, cx
     mov al, [si]
     push cs
@@ -1673,13 +1674,13 @@ wd_tclevel:
     mov si, ax
     shl si, 1
     shl si, 1
-    mov ds, [cs:wd_pseg]
+    mov ds, [cs:sc_pseg]
     mov al, [si+1]                  ; the entry's left indent, in cells
     push cs
     pop ds
     xor ah, ah
     xor dx, dx
-    mov cx, WD_TABSTOP
+    mov cx, SC_TABSTOP
     div cx
     mov dx, ax
     inc dx
@@ -1694,16 +1695,16 @@ wd_tclevel:
     pop ax
     ret
 
-; wd_tctrim - move SI forward and DI back over white space. Preserves all
+; sc_tctrim - move SI forward and DI back over white space. Preserves all
 ; other registers.
-wd_tctrim:
+sc_tctrim:
     push ax
 .lead:
     cmp si, di
     jae .out
     mov ax, si
-    call wd_docb2
-    call wd_iswhite
+    call sc_docb2
+    call sc_iswhite
     jc .trail
     inc si
     jmp short .lead
@@ -1712,8 +1713,8 @@ wd_tctrim:
     jbe .out
     mov ax, di
     dec ax
-    call wd_docb2
-    call wd_iswhite
+    call sc_docb2
+    call sc_iswhite
     jc .out
     dec di
     jmp short .trail
@@ -1722,15 +1723,15 @@ wd_tctrim:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_tcput - write one entry into the scratch
-; in:  SI..DI = its text, DX = its level, [wd_tcline] = the row it starts on
+; sc_tcput - write one entry into the scratch
+; in:  SI..DI = its text, DX = its level, [sc_tcline] = the row it starts on
 ; out: nothing; preserves all registers
 ;
 ; text, a tab, the page number, and a ¶ whose PAP has the entry indented one
-; WD_TABSTOP per level below the first - so the levels show as indents the
+; SC_TABSTOP per level below the first - so the levels show as indents the
 ; ruler can see rather than as spaces in the text.
 ; -----------------------------------------------------------------------------
-wd_tcput:
+sc_tcput:
     push ax
     push bx
     push cx
@@ -1746,33 +1747,33 @@ wd_tcput:
     cmp si, di
     jae .tab
     mov ax, si
-    call wd_docb2
+    call sc_docb2
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .out
     inc si
     jmp short .text
 .tab:
     mov al, 9
     xor ah, ah
-    call wd_uput
+    call sc_uput
     jc .out
-    mov ax, [wd_tcline]             ; the page this row falls on
+    mov ax, [sc_tcline]             ; the page this row falls on
     xor dx, dx
-    mov cx, WD_PGLINES
+    mov cx, SC_PGLINES
     div cx
     inc ax
     mov dl, '1'
-    call wd_rnval
+    call sc_rnval
     jc .out
-    mov word [wd_pfb], 0            ; the entry's own paragraph format: one
-    mov word [wd_pfb+2], 0          ; WD_TABSTOP of left indent per level
+    mov word [sc_pfb], 0            ; the entry's own paragraph format: one
+    mov word [sc_pfb+2], 0          ; SC_TABSTOP of left indent per level
     mov ax, bx                      ; below the first
     dec ax
-    mov cl, WD_TABSTOP
+    mov cl, SC_TABSTOP
     mul cl
-    mov [wd_pfb+1], al
-    call wd_papfind
+    mov [sc_pfb+1], al
+    call sc_papfind
     jc .plain
     jmp short .mark
 .plain:
@@ -1780,7 +1781,7 @@ wd_tcput:
 .mark:
     mov ah, al
     mov al, 13
-    call wd_uput
+    call sc_uput
 .out:
     pop di
     pop si

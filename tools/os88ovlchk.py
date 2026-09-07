@@ -1340,7 +1340,7 @@ def check_pkgs():
 # so a tail that outgrows its claim is not an error - it is a module truncated
 # at a byte boundary, which fails later and somewhere else (82.16.9).
 CLAIMS = [('build/CHART.OVL',  'apps/os88chartovl.inc', 'CH_OVKB'),
-          ('build/SCRIBE.OVL', 'apps/scribe/scribe.asm', 'WD_OVKB')]
+          ('build/SCRIBE.OVL', 'apps/scribe/scribe.asm', 'SC_OVKB')]
 
 
 def check_claims():

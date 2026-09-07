@@ -95862,7 +95862,7 @@ the wrong thing to do. The assembler does not care — a package owns its
 segment (§20.2) and there is no global namespace to collide in — so the rename
 would buy nothing except tidiness, and it would cost the one thing a
 long-lived fork needs most, which is a readable diff against what it forked
-from. NASM resolves `wddoc.inc`, `wdrtf.inc` and `wdutil.inc` out of
+from. NASM resolves `scdoc.inc`, `scrtf.inc` and `scutil.inc` out of
 `apps/scribe/` because that is the `-I` on this package's own Makefile rule,
 which is also why the two cannot accidentally share a header.
 
@@ -95870,7 +95870,7 @@ which is also why the two cannot accidentally share a header.
 it: the `OS88_HEADER` name, the icon glyph, the overlay's filename, the About
 box, the title bar and its prefix, and the association — which SCRIBE does not
 declare. The title prefix is *shorter* than Word's (`'Scribe - '` against
-`'Microsoft Word - '`), which is the safe direction: `wd_compttl` composes into
+`'Microsoft Word - '`), which is the safe direction: `sc_compttl` composes into
 a fixed bss buffer sized for the longer one, so a shorter prefix cannot overrun
 it.
 
@@ -95928,8 +95928,8 @@ On one 1440KB floppy carrying `word.o88`, `WORD.OVL`, `scribe.o88`,
 
 ### 92.4 RTF is Scribe's default format
 
-`wd_s_default` is `DOCUMENT.RTF`, where Word's is `DOCUMENT.DOC`. That one
-string is the whole mechanism: `wd_isrtf` already decides the *format* from the
+`sc_s_default` is `DOCUMENT.RTF`, where Word's is `DOCUMENT.DOC`. That one
+string is the whole mechanism: `sc_isrtf` already decides the *format* from the
 extension (§68.8), so changing the default **name** changes the default
 **format** and nothing else has to know. Save As onto a `.DOC` name still
 writes a real Word file.
@@ -95943,7 +95943,7 @@ Word — everything else about the fork is identity (§92.1).
 
 ### 92.5 The picture extension: `\pict` at 4 bits per pixel
 
-`wd_rpict` emits the picture a `WD_PICCH` names as an RTF `\pict` group. **This
+`sc_rpict` emits the picture a `SC_PICCH` names as an RTF `\pict` group. **This
 is the one place Scribe writes something Word does not, and RTF is the format
 where that is safe rather than reckless.** RTF is text, and its own rule is
 that a reader skips a destination it does not understand — Scribe's own reader
@@ -95965,7 +95965,7 @@ conversion. `\wbmwidthbytes` carries the stride and it is never recomputed from
 the width, which is the lesson `.PCX`'s `BytesPerLine` taught (§85). The goal
 size is twips at **15 per pixel**, the 96dpi Windows logical inch; the widest
 picture `os88img.inc` will decode is 1280, and 1280 × 15 = 19,200, so it cannot
-overflow the word `wd_rnum` signs.
+overflow the word `sc_rnum` signs.
 
 **No palette, and that is correct rather than lazy.** A `\wbitmap` is a
 *device*-dependent bitmap: its indices mean whatever the device's colours are.
@@ -95978,18 +95978,18 @@ picture that is always displayed on the machine that wrote it.
 `\bin` and it keeps §68.8's "pure text transform" property, which is worth more
 than the bytes: a `\bin` run can contain `0x7D`, and any reader not counting
 exactly right sees a group end in the middle of a picture. The cost is a real
-ceiling — the staging claim is `WD_DOCCAP` KB addressed by a 16-bit `DI`, so
-about 30KB of picture across a document. `wd_re` already stops on a full claim
-and `wd_rtfimg` already turns that into "it did not fit", so the limit
+ceiling — the staging claim is `SC_DOCCAP` KB addressed by a 16-bit `DI`, so
+about 30KB of picture across a document. `sc_re` already stops on a full claim
+and `sc_rtfimg` already turns that into "it did not fit", so the limit
 **refuses rather than truncates**.
 
 #### 92.5.1 ES belongs to the staging claim, so the picture is a third segment
 
-`wd_rtfimg` writes through `ES:DI` for its whole run and the package is `DS`, so
-the picture's own segment has nowhere to live. `wd_rpict` banks the four
-`wd_pictab` fields into bss and then borrows `ES` **per byte** — `push es`,
-`mov es, [wd_rpg]`, read, `pop es`. Two segment loads a byte is nothing beside
-the two `wd_re` calls that follow it, and the alternative — keeping the picture
+`sc_rtfimg` writes through `ES:DI` for its whole run and the package is `DS`, so
+the picture's own segment has nowhere to live. `sc_rpict` banks the four
+`sc_pictab` fields into bss and then borrows `ES` **per byte** — `push es`,
+`mov es, [sc_rpg]`, read, `pop es`. Two segment loads a byte is nothing beside
+the two `sc_re` calls that follow it, and the alternative — keeping the picture
 in `ES` and the output somewhere else — would mean rewriting every emit
 primitive in the file.
 
@@ -96007,8 +96007,8 @@ Same rotate-xor checksum, `BCE9`, by two paths that share no code.
 
 #### 92.5.3 A data-loss bug this found, in Insert > Picture
 
-Insert ▸ Picture borrows the file dialog with `[wd_pictwant]` raised, and
-`wd_ondlg` copies the chosen name into `wd_name` **before** any dispatch. So
+Insert ▸ Picture borrows the file dialog with `[sc_pictwant]` raised, and
+`sc_ondlg` copies the chosen name into `sc_name` **before** any dispatch. So
 choosing a picture silently renamed the document to it — and nothing recomposed
 the title, so the bar went on showing the old name while Save wrote to the new
 one. Picking `INSTALL.BMP` and pressing Save therefore **overwrote
@@ -96017,9 +96017,9 @@ implied: a 2,414-byte BMP came back as a 1,657-byte Word binary.
 
 The dispatch's own comment said choosing a picture "must not rename it, retitle
 the window, or move which folder it belongs to" — the intent was right and the
-rename had already happened one screen earlier. `wd_ondlg` now banks `wd_name`
-into `wd_namebank` when `[wd_pictwant]` is set and puts it back after
-`wd_pictload` (after, because `wd_pictload` reads `[wd_name]` to find the file).
+rename had already happened one screen earlier. `sc_ondlg` now banks `sc_name`
+into `sc_namebank` when `[sc_pictwant]` is set and puts it back after
+`sc_pictload` (after, because `sc_pictload` reads `[sc_name]` to find the file).
 
 It is in **`apps/word` too** and is fixed in both. It was introduced with
 Insert ▸ Picture itself (§68.15) and had no way to show up until something
@@ -96027,11 +96027,11 @@ saved after inserting — which is exactly what testing the RTF writer did.
 
 ### 92.6 Reading it back: `\pict` becomes a collected destination
 
-`\pict` used to sit in `wd_r_tbl` with the action `WDR_SKIP`, beside
+`\pict` used to sit in `sc_r_tbl` with the action `WDR_SKIP`, beside
 `\fonttbl` and `\stylesheet` — swallowed whole to its matching brace (§68.8).
 It is `WDR_PICT` now, and the shape of the collector deliberately **mirrors
-`wd_rskip` exactly**: `[wd_rpin]` holds the depth the group opened at, the
-tokeniser's text case routes characters to `wd_rpbyte` while it is set, and the
+`sc_rskip` exactly**: `[sc_rpin]` holds the depth the group opened at, the
+tokeniser's text case routes characters to `sc_rpbyte` while it is set, and the
 `}` case finalises when that group's brace arrives. One state machine, already
 proved by the one beside it.
 
@@ -96039,7 +96039,7 @@ proved by the one beside it.
 the same outcome skipping always gave. That is the only refusal path, on
 purpose: deciding mid-stream that a `\wmetafile` is not for us would be a
 second state to get wrong, and the bytes are bounded by the claim anyway.
-`wd_rpfin` validates and frees; nothing reaches the document unless every
+`sc_rpfin` validates and frees; nothing reaches the document unless every
 parameter agrees. RTF's own defaults for a `\pict` are one plane of 1-bit
 pixels, so a group that declares nothing is **refused, not guessed**.
 
@@ -96050,32 +96050,32 @@ off the claim; data short of it refuses the picture **whole**, because half a
 picture drawn as if it were a picture is worse than the document arriving
 without one (§47).
 
-#### 92.6.1 `wd_pictfree` had to move, and only on this path
+#### 92.6.1 `sc_pictfree` had to move, and only on this path
 
-`wd_load` frees the old document's pictures at its commit point, *after* the
-parser has run — deliberately, because `wd_docparse` refuses whole and leaves
+`sc_load` frees the old document's pictures at its commit point, *after* the
+parser has run — deliberately, because `sc_docparse` refuses whole and leaves
 the document untouched, and a refusal must not cost the pictures it was not
 replacing (§68.15).
 
 The RTF reader **builds** pictures, so one free after it hands back the ones
 the file just supplied: the text arrives and the table comes back empty. So the
-RTF path frees at the top of `wd_rtfparse` instead and skips the commit point's
-free. That is safe on this path and only on this path, because `wd_rtfparse`
-zeroes `[wd_len]` on its first line — unlike `wd_docparse` it has never been
+RTF path frees at the top of `sc_rtfparse` instead and skips the commit point's
+free. That is safe on this path and only on this path, because `sc_rtfparse`
+zeroes `[sc_len]` on its first line — unlike `sc_docparse` it has never been
 able to refuse and leave the document untouched, so there is nothing left to
 protect by waiting.
 
 #### 92.6.2 The bug that made the round trip look like it worked
 
-`wd_rpfin` ended by loading the new picture's index into `AL` and then, one
-line later, overwriting `AL` with `WD_PICCH` before calling `wd_rputp` — which
+`sc_rpfin` ended by loading the new picture's index into `AL` and then, one
+line later, overwriting `AL` with `SC_PICCH` before calling `sc_rputp` — which
 takes the index in `AL` and writes the character itself. So every picture
-registered correctly and every `WD_PICCH` pointed at slot 1 when only slot 0
+registered correctly and every `SC_PICCH` pointed at slot 1 when only slot 0
 existed.
 
-**It failed silently and looked like nothing had loaded at all.** `wd_picrec`
-refuses an index at or past `[wd_npic]`, so `wd_rowhc` fell through to the text
-path, `[wd_rowpic]` stayed `0xFFFF`, and `wd_penadv` gave the character the
+**It failed silently and looked like nothing had loaded at all.** `sc_picrec`
+refuses an index at or past `[sc_npic]`, so `sc_rowhc` fell through to the text
+path, `[sc_rowpic]` stayed `0xFFFF`, and `sc_penadv` gave the character the
 8-pixel cell an unknown index gets. The document was a picture wide and
 invisible — and the status bar said `Col 1`, which is also what an empty
 document says, because the caret sits *before* the character either way. Two
@@ -96090,11 +96090,11 @@ measured is `bmPlanes = 1, bmBitsPixel = 1` — both specimens, and there is no
 third to argue with — so a `.DOC` picture is monochrome and that is a property
 of the format rather than a shortcut taken here.
 
-**What was there before was worse than a gap.** `WD_PICCH` appeared in none of
-the three format engines, and `wd_docimg` copies the text with `rep movsb` — so
+**What was there before was worse than a gap.** `SC_PICCH` appeared in none of
+the three format engines, and `sc_docimg` copies the text with `rep movsb` — so
 the `0x01` went into the file raw, with no PICF anywhere and its CHP byte (a
-picture *index*) handed to `wd_dchpx` as character formatting. The file held a
-`chPicture` pointing at nothing. On the way back in, `wd_dcompact` dropped
+picture *index*) handed to `sc_dchpx` as character formatting. The file held a
+`chPicture` pointing at nothing. On the way back in, `sc_dcompact` dropped
 every control under 32 and it vanished.
 
 #### 92.7.1 The record, and where it goes
@@ -96109,18 +96109,18 @@ that file's next record.
 
 The records go **immediately after the text and before the FKP pages**, which
 is both where Word puts them (`TECHREF.DOC`'s two sit between `fcMac` and the
-first FKP) and where they have to be here: `wd_dchps` builds the CHPX that
+first FKP) and where they have to be here: `sc_dchps` builds the CHPX that
 names a picture, so the fc has to exist first.
 
-A picture is always **a run of one**. `wd_dattr` breaks the attribute run at
-one and `wd_dgrpc` emits, instead of a sprm grpprl, the twelve-byte structure
-both specimens carry with `fcPic` little-endian at bytes 8..10. `wd_dat1`
+A picture is always **a run of one**. `sc_dattr` breaks the attribute run at
+one and `sc_dgrpc` emits, instead of a sprm grpprl, the twelve-byte structure
+both specimens carry with `fcPic` little-endian at bytes 8..10. `sc_dat1`
 already treated a `¶` specially because its CHP byte is a PAP index; a
 picture's is a picture index and needed the same.
 
 #### 92.7.2 The reduction, and why it round-trips
 
-`WD_PICWHITE` is a sixteen-bit mask: bit N set means colour N is light,
+`SC_PICWHITE` is a sixteen-bit mask: bit N set means colour N is light,
 computed once from `0.299R + 0.587G + 0.114B` over os8088's own palette against
 a midpoint, so 7 and 10..15 are white and 0..6, 8 and 9 are black. **A
 threshold and not a dither** — a dither is a decision about how a picture
@@ -96133,11 +96133,11 @@ first place.
 
 #### 92.7.3 The reader walks records, not `fcPic`
 
-`wd_dpicr` runs after `wd_dcompact` — which now **keeps** `WD_PICCH`, the one
+`sc_dpicr` runs after `sc_dcompact` — which now **keeps** `SC_PICCH`, the one
 control character below 32 this port renders — and pairs the Nth picture
 character with the Nth record. The records are in document order and the first
-begins exactly at `fcMac`, because `wd_docimg` writes the text, the trailing
-CR, and then calls `wd_dpicw`; each record's own `lcb` gives the next.
+begins exactly at `fcMac`, because `sc_docimg` writes the text, the trailing
+CR, and then calls `sc_dpicw`; each record's own `lcb` gives the next.
 
 So the CHPX is never parsed for this. It still **carries** `fcPic`, because
 that is what a real Word 1.1a reads and writing it costs nothing. The honest
@@ -96147,22 +96147,22 @@ this is inside that.
 
 #### 92.7.4 Two bugs, one of which the suite should have caught and now does
 
-**`wd_dpicr` pushed seven registers and popped six.** `SI` never came back, so
-`wd_docparse` returned through a shifted stack and **the document loaded
+**`sc_dpicr` pushed seven registers and popped six.** `SI` never came back, so
+`sc_docparse` returned through a shifted stack and **the document loaded
 completely empty — text and all**. It looked like a parser failure and was a
 missing `pop`. `tests/suite.py`'s `stkbalance` row is scoped to a file list and
 `apps/scribe/` was not on it; the three Scribe files are now, and re-breaking
-the routine makes the gate name it outright — `wd_dpicr: ret at depth +1`.
+the routine makes the gate name it outright — `sc_dpicr: ret at depth +1`.
 This is the third time in this tree a push/pop mismatch has presented as
 something else entirely (§61.7, §68.15).
 
-**`wd_pictfree` had to move for `.DOC` too, and for §92.6.1's reason.**
-`wd_load` freed the old document's pictures at its commit point, *after* the
+**`sc_pictfree` had to move for `.DOC` too, and for §92.6.1's reason.**
+`sc_load` freed the old document's pictures at its commit point, *after* the
 parser — right, while parsers only consumed pictures. Both build them now, so
 the free handed back what the file had just supplied and the table came back
 empty with the text intact. Each parser frees the old ones itself now, at the
-point past its own last refusal: `wd_rtfparse` on its first line,
-`wd_docparse` after `wd_dcompact`. The rule the commit point enforced — that a
+point past its own last refusal: `sc_rtfparse` on its first line,
+`sc_docparse` after `sc_dcompact`. The rule the commit point enforced — that a
 refusal must not cost the pictures it was not replacing — is unchanged; it is
 enforced one level down.
 
@@ -96170,51 +96170,51 @@ enforced one level down.
 
 Scribe was at **60,828 of `APP_MAX_SIZE`'s 61,440** — 612 bytes — and §68.10's
 split trigger is 55,000 resident, so the module had to take more than the
-picture decoder. `wddoc.inc` and `wdrtf.inc` are the right tenants: between
+picture decoder. `scdoc.inc` and `scrtf.inc` are the right tenants: between
 them the largest thing in the package, and they run on exactly two commands —
 Open and Save — so the kilobytes they cost were kilobytes the **redraw** path
 was paying for a file dialog it sees twice a session.
 
 **Resident 51,538 → 43,961**, a 7,577-byte reclaim; with bss that is 53,253 of
 61,440, so headroom went from 612 bytes to **8,187**. `SCRIBE.OVL` grew
-1,774 → 9,869 and `WD_OVKB` 8 → 12.
+1,774 → 9,869 and `SC_OVKB` 8 → 12.
 
-**The interface was measured, not guessed.** Six entry points in — `wd_docimg`,
-`wd_docparse`, `wd_rtfimg`, `wd_rtfparse`, `wd_isrtfimg`, `wd_ldpost`, each a
+**The interface was measured, not guessed.** Six entry points in — `sc_docimg`,
+`sc_docparse`, `sc_rtfimg`, `sc_rtfparse`, `sc_isrtfimg`, `sc_ldpost`, each a
 verb with the same `call … / retf` wrapper the shims use in the other
-direction — no `jmp`s in, and **five** calls out: `wd_resize`, `wd_pictfree`,
-`wd_papfind`, `wd_ldscan`, `wd_picrec`.
+direction — no `jmp`s in, and **five** calls out: `sc_resize`, `sc_pictfree`,
+`sc_papfind`, `sc_ldscan`, `sc_picrec`.
 
 #### 92.8.1 The module never speaks
 
-Only `wd_papfind` touched the UI, in one refusal toast, and that is the shape
+Only `sc_papfind` touched the UI, in one refusal toast, and that is the shape
 §82.16 records an unexplained freeze against. It split into a UI-free
-`wd_papfind0` plus a rule worth keeping regardless: **the module leaves a
-reason in `wd_ovmsg` and `wd_ovcall` says it on the way out.** That is
+`sc_papfind0` plus a rule worth keeping regardless: **the module leaves a
+reason in `sc_ovmsg` and `sc_ovcall` says it on the way out.** That is
 `os88img.inc`'s own rule — `IMG_ERR` is a number and the caller words the
 message (§85) — generalised and put in the one place every future verb passes
-through. `wd_papfind` survives as a thin resident wrapper so resident callers
+through. `sc_papfind` survives as a thin resident wrapper so resident callers
 still get their toast.
 
 #### 92.8.2 The module's own data is reached through CS
 
 The engines' strings and tables travelled into `.modc` with their code, so
-`wd_r_tbl`, the control-word names it points at, `wd_r_bits`, `wd_r_ulbits`
-and `wd_r_qtab` are read `[cs:…]`. `wd_res` and `wd_rstreq` already read
-`[cs:si]` and needed no change; `wd_d_normal` is copied with `push cs / pop ds`
+`sc_r_tbl`, the control-word names it points at, `sc_r_bits`, `sc_r_ulbits`
+and `sc_r_qtab` are read `[cs:…]`. `sc_res` and `sc_rstreq` already read
+`[cs:si]` and needed no change; `sc_d_normal` is copied with `push cs / pop ds`
 and needed none either. The rest were four edits.
 
 #### 92.8.3 The package's segment, stamped into the module
 
 **This is what the split turns on.** The engines reach the package's bss —
-`wd_dseg`, `wd_cseg`, `wd_len` and the rest — at moments when `DS` *and* `ES`
+`sc_dseg`, `sc_cseg`, `sc_len` and the rest — at moments when `DS` *and* `ES`
 are both pointed at the document, CHP or staging claims. Resident they wrote
-`[cs:wd_len]`, because `CS` was the package. In the module it is not, and
+`[cs:sc_len]`, because `CS` was the package. In the module it is not, and
 **there is no third segment register**: `SS` is `LOW_SEG` (§20.1), not the
 package.
 
-So `wd_ovneed` stamps the package's segment into a word in **the module's own
-image** the moment it is read — `mov ax, cs` / `mov [es:wd_pkgseg], ax`, with
+So `sc_ovneed` stamps the package's segment into a word in **the module's own
+image** the moment it is read — `mov ax, cs` / `mov [es:sc_pkgseg], ax`, with
 `ES` still the claim and `CS` still the package because that routine is
 resident — and six macros borrow `DS` around each access:
 
@@ -96230,7 +96230,7 @@ nothing at all — `AX` is banked and restored. **Macros and not a helper
 routine**, because a helper needs its arguments in registers and the whole
 problem at these sites is that there is no register to spare. The cost is four
 to seven instructions where the resident version cost one, at **47 sites**;
-`wd_dat1` is the hot one, reached per character by `wd_dattr`'s scan.
+`sc_dat1` is the hot one, reached per character by `sc_dattr`'s scan.
 
 **`[ss:]` was tried first and is wrong**, on the reasoning that a package's
 stack is its own segment. It is not, and the failure is worth recording because
@@ -96243,7 +96243,7 @@ completion over garbage.
 `tools/os88ovlchk.py` grew a package walk **before** the split, so the move was
 proved by the checker rather than by reading 170 call sites — it named all nine
 call-outs the moment they crossed and is clean now. And the Makefile compares
-the cut `SCRIBE.OVL` against `WD_OVKB`, reading the number out of the source so
+the cut `SCRIBE.OVL` against `SC_OVKB`, reading the number out of the source so
 there is one of it and not two: a module that outgrows its claim fails the
 build instead of being read back truncated.
 
@@ -96279,44 +96279,44 @@ field at all — so a picture that came out of the era Word is modelled on has
 no other form. It is also the depth a scanned page and a fax arrive in.
 
 **The document model is Word's own.** A picture is character `0x01`
-(`WD_PICCH`) in the text, and that needs no new bits anywhere: §68.4's readers
+(`SC_PICCH`) in the text, and that needs no new bits anywhere: §68.4's readers
 drop every control under 32 except tab and ¶, so a `0x01` in this buffer can
 only be ours, and the character *is* the marker. Its **CHP byte is the index**
-into `wd_pictab` — exactly the trick a ¶ mark already uses for its PAP index
+into `sc_pictab` — exactly the trick a ¶ mark already uses for its PAP index
 (§68.3), which matters because **CHP bit 7 is not available** for a flag and
 §68.3 says why. Real Word marks the same character with `sprmCFSpec`; the
 sprm is what a *file* needs, not what a document model needs.
 
 Each picture's pixels live in a claim **sized for them**. The decoder cannot
 size its own destination — it has to be given one before it knows the
-dimensions — so `wd_pictkeep` decodes into a fixed `WD_PICKB` scratch claim,
+dimensions — so `sc_pictkeep` decodes into a fixed `SC_PICKB` scratch claim,
 then claims exactly the bytes the picture turned out to occupy and copies.
 Eight 40KB scratch claims for eight small drawings would be 320KB of a 640KB
 machine.
 
-`wd_pictfree` gives them all back wherever a document is replaced — File > New
-and both of `wd_load`'s commit points. Not before the commit: `wd_docparse`
+`sc_pictfree` gives them all back wherever a document is replaced — File > New
+and both of `sc_load`'s commit points. Not before the commit: `sc_docparse`
 refuses whole and leaves the document untouched, and a refusal must not cost
 the pictures it was not replacing. Same rule §81.10.8 states for Sheet's
 defined names.
 
 **The layout needed far less than expected**, and the reason is worth writing
 down because the first estimate was wrong. Row heights here are *already*
-variable: `wd_rowhc` sets `[wd_rowhv]` — 8, 12 or 16 from the paragraph's line
-spacing, plus 8 for space-before — and `wd_advy` moves the pen by exactly
-that. So a picture row is a row with a large `[wd_rowhv]`, and the incremental
+variable: `sc_rowhc` sets `[sc_rowhv]` — 8, 12 or 16 from the paragraph's line
+spacing, plus 8 for space-before — and `sc_advy` moves the pen by exactly
+that. So a picture row is a row with a large `[sc_rowhv]`, and the incremental
 machinery, the row table and the caret net all keep working unchanged.
 
 Two hooks, both where every row already answers the same question:
 
-- `wd_rowhc` peeks the row's first character. `WD_PICCH` means the height is
-  the picture's and `[wd_rowpic]` is its index; anything else is the ordinary
-  text height and `[wd_rowpic]` is `0xFFFF`.
-- `wd_penadv` reports a picture's cell as the picture's **width**, so the
+- `sc_rowhc` peeks the row's first character. `SC_PICCH` means the height is
+  the picture's and `[sc_rowpic]` is its index; anything else is the ordinary
+  text height and `[sc_rowpic]` is `0xFFFF`.
+- `sc_penadv` reports a picture's cell as the picture's **width**, so the
   existing wrap rule ends the row after it with no special case at all.
 
-`[wd_rowpic]` is set at row entry and read at row exit by `wd_rflush`, which
-is the same lifetime `[wd_rby]` and `[wd_rowx0]` already have.
+`[sc_rowpic]` is set at row entry and read at row exit by `sc_rflush`, which
+is the same lifetime `[sc_rby]` and `[sc_rowx0]` already have.
 
 **Known defect: two picture rows overlap by about 8 pixels, cause unknown.**
 Insert two pictures and the second's top runs underneath the bottom of the one
@@ -96327,21 +96327,21 @@ format that build already accepted, so it belongs to the row model and not to
 the decoder.
 
 **A first explanation was recorded here and is wrong**, which is worth leaving
-written down. It said `wd_rowhc` gives the row the picture's height while
-`wd_picdraw` puts the picture's bottom at `[wd_rby] + [wd_gh]`, and that those
-are out by `[wd_gh]` for the second row. The arithmetic says otherwise:
-`wd_advy` sets row 0's pen to `[wd_ty] + [wd_rowhv] - [wd_gh]`, so
-`wd_picdraw`'s `rby + gh - h` lands at `[wd_ty]` exactly when `rowhv` is the
+written down. It said `sc_rowhc` gives the row the picture's height while
+`sc_picdraw` puts the picture's bottom at `[sc_rby] + [sc_gh]`, and that those
+are out by `[sc_gh]` for the second row. The arithmetic says otherwise:
+`sc_advy` sets row 0's pen to `[sc_ty] + [sc_rowhv] - [sc_gh]`, so
+`sc_picdraw`'s `rby + gh - h` lands at `[sc_ty]` exactly when `rowhv` is the
 picture's height; and each later row adds the *entered* row's height, which
 puts picture n+1's top at `rby(n) + gh` — precisely picture n's bottom. **They
 should touch, not overlap.** So one of the assumptions behind that reading does
 not hold in the case that was photographed — most likely that the second
-picture is the first character of its row, which is what `wd_rowhc` requires
+picture is the first character of its row, which is what `sc_rowhc` requires
 before it treats a row as a picture row at all.
 
 The observation is real and reproduced twice; the mechanism is not identified,
 and it was reasoned from screenshots rather than measured. Whoever fixes it
-should start by instrumenting `[wd_rowhv]` and `[wd_rby]` for the two rows
+should start by instrumenting `[sc_rowhv]` and `[sc_rby]` for the two rows
 rather than from this paragraph.
 
 **The file format is the part that waits.** A picture in a real Word file is a
@@ -96372,14 +96372,14 @@ have spent resident.
 
 #### 92.9.2 Three bugs, two of them in gates rather than in code
 
-**The dispatcher clobbered `SI`.** `wd_modc` staged the doubled verb index in
+**The dispatcher clobbered `SI`.** `sc_modc` staged the doubled verb index in
 `SI` before the indirect jump — the identical line that cost an afternoon in
 CHART the same week (§82.16.4). It was dormant here only because `WDM_PING`
 takes no arguments, and it would have fired on the very first real verb:
 `img_load`'s whole contract is `SI` = the caller's block. Index through `BP`,
 which is the verb already.
 
-**`wd_pictload` pushed seven registers and popped six**, and `SI` was the one
+**`sc_pictload` pushed seven registers and popped six**, and `SI` was the one
 missed, so `ret` took its saved value as the return address. Every segment
 register ended up at `0x000E` with `IP` at `0xDF` — executing inside the
 interrupt vector table, the whole machine gone, no message.
@@ -96388,7 +96388,7 @@ interrupt vector table, the whole machine gone, no message.
 same bug in `ch_legend`, **and the suite stayed green** — because the row was
 scoped to SHEET, CHART and their includes, and WORD was not in the list. It is
 now, along with `os88img.inc`. Two labels there carry `; STKBALANCE-OK`:
-`wd_sbd_out` and `wd_fastcm` are shared jump targets rather than routines, and
+`sc_sbd_out` and `sc_fastcm` are shared jump targets rather than routines, and
 their pushes are in callers the walk cannot follow back to. The marker has to
 sit on a line *after* the label — the label's own raw line is discarded before
 the body is scanned.
@@ -96404,24 +96404,24 @@ from a width and a height, so it is the longest that has to fit:
 
 #### 92.9.4 Drawing it
 
-`wd_rflush` takes one branch: a row whose `[wd_rowpic]` is set is **one
+`sc_rflush` takes one branch: a row whose `[sc_rowpic]` is set is **one
 `OSAPI_GFX_BLIT4`** and none of the lettering below it, because the row buffer
 holds no glyphs for it. BLIT4 and not `OSAPI_GFX_BLITP` for §85's reason —
 BLITP refuses an armed clip region, and a picture in a document that scrolls
 is always inside one.
 
-`wd_picdraw` is the one routine in this file's drawing path that pushes **BP**,
+`sc_picdraw` is the one routine in this file's drawing path that pushes **BP**,
 and that is not defensive: BP is the walk's pen y, and BLIT4 takes the source
 stride in it.
 
-The picture sits at `[wd_rowx0]`, the row's own start pen, so it obeys the
+The picture sits at `[sc_rowx0]`, the row's own start pen, so it obeys the
 paragraph's indent like any row; and its *bottom* is where the glyphs' bottom
 would have been, so it sits on the line rather than floating above it.
 
 #### 92.9.5 How the command runs
 
-It borrows the ordinary file dialog with `[wd_pictwant]` raised, so `wd_ondlg`
-routes the answer to `wd_pictload` instead of to open-or-save. One flag rather
+It borrows the ordinary file dialog with `[sc_pictwant]` raised, so `sc_ondlg`
+routes the answer to `sc_pictload` instead of to open-or-save. One flag rather
 than a third `FDLG` mode: the kernel's two modes are its contract, and a
 package's reason for opening the dialog is the package's own business.
 
@@ -96431,7 +96431,7 @@ window, or move which folder it belongs to. (Confirmed by the dialog opening
 at the volume root afterwards rather than where the picture was.)
 
 Two transient claims, both handed straight back: the file's bytes and the
-decoded picture (`WD_PICKB`, 40KB). Transient because §50.3 is about a package
+decoded picture (`SC_PICKB`, 40KB). Transient because §50.3 is about a package
 *sizing itself* at entry, and neither is part of how big WORD is — they are
 the shape of one command. The block and row buffer `os88img.inc` works through
 are in **bss**, because that include reaches both through `DS`, which stays

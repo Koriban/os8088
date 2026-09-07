@@ -5797,8 +5797,8 @@ $(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC t
 # 49KB to show two word processors that currently differ only in their name.
 # `make scribedisk` builds its floppy on demand, cword's arrangement (SPEC.md
 # 73.12) and for cword's reason.
-SCRIBESRC := apps/scribe/scribe.asm apps/scribe/wddoc.inc apps/scribe/wdrtf.inc \
-             apps/scribe/wdutil.inc
+SCRIBESRC := apps/scribe/scribe.asm apps/scribe/scdoc.inc apps/scribe/scrtf.inc \
+             apps/scribe/scutil.inc
 
 $(BUILD)/scribe.bin: $(SCRIBESRC) apps/os88api.inc apps/os88ui.inc $(SBSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(PKGSBDEF) -I apps/ -I apps/scribe/ -o $@ apps/scribe/scribe.asm
@@ -5810,12 +5810,12 @@ $(BUILD)/scribe.bin: $(SCRIBESRC) apps/os88api.inc apps/os88ui.inc $(SBSTAMP) | 
 $(BUILD)/scribe.o88: $(BUILD)/scribe.bin tools/os88ovl.py tools/os88pkg.py
 	python3 tools/os88ovl.py $(BUILD)/scribe.bin -o $(BUILD)/SCRIBE.OVL \
 		--trim $(BUILD)/scribe.trim.bin
-	@ovkb=$$(sed -n 's/^WD_OVKB *equ *\([0-9]*\).*/\1/p' apps/scribe/scribe.asm); \
+	@ovkb=$$(sed -n 's/^SC_OVKB *equ *\([0-9]*\).*/\1/p' apps/scribe/scribe.asm); \
 	 have=$$(wc -c < $(BUILD)/SCRIBE.OVL); cap=$$((ovkb * 1024)); \
 	 if [ $$have -gt $$cap ]; then \
-	   echo "SCRIBE.OVL is $$have bytes; WD_OVKB reserves $$cap - raise it" >&2; \
+	   echo "SCRIBE.OVL is $$have bytes; SC_OVKB reserves $$cap - raise it" >&2; \
 	   exit 1; fi; \
-	 echo "SCRIBE.OVL: $$have of $$cap bytes claimed (WD_OVKB=$$ovkb)"
+	 echo "SCRIBE.OVL: $$have of $$cap bytes claimed (SC_OVKB=$$ovkb)"
 	python3 tools/os88pkg.py $(BUILD)/scribe.trim.bin -o $@
 
 $(BUILD)/SCRIBE.OVL: $(BUILD)/scribe.o88 ;
