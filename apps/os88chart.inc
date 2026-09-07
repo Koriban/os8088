@@ -1083,7 +1083,7 @@ ch_deco:
     ; the canvas top and zero just above the axis, which is the opposite of what
     ; the first version computed - it put every label in the bottom eight rows.
     mov ax, [ch_max]
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_DECO_LX
     xor bx, bx                        ; the top
     mov si, ch_tnum
@@ -1091,7 +1091,7 @@ ch_deco:
     call ch_text
 
     xor ax, ax                        ; zero, just above the axis line
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_DECO_LX
     mov bx, [ch_base]
     sub bx, CH_GLYPH_H
@@ -1107,7 +1107,7 @@ ch_deco:
     je .nolow                         ; bottom, because the axis is mid-canvas
     mov ax, [ch_max]
     neg ax
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_DECO_LX
     mov bx, CH_H - CH_GLYPH_H
     mov si, ch_tnum
@@ -1214,7 +1214,7 @@ ch_legend:
     add si, ax
     mov ax, [es:si]
     pop es
-    call ch_num_t 
+    call ch_num_t
     mov ax, CH_W - 46 + CH_LEG_SW + 3
     mov bx, [ch_legy]
     dec bx
