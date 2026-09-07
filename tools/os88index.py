@@ -99,7 +99,7 @@ INCLUDES = [
      "The resident half of the CHART.OVL split: loader, verb dispatch and the "
      "shims os88chart.inc calls back out through. Only a package that %defines "
      "CH_OVERLAY needs it - today that is SHEET alone."),
-    ("os88img.inc", "91",
+    ("os88img.inc", "92",
      "Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that "
      "OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block "
      "in SI. 8-bit files are refused by name, not approximated."),

@@ -268,7 +268,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
 | `apps/os88chartbss.inc` | §82 | The ch_* working set os88chart.inc runs on, declared once instead of hand-copied into both callers. Set `CH_BSS_BASE` to where the block goes and carry on from `CH_BSS_END`. |
 | `apps/os88chartovl.inc` | §82.16 | The resident half of the CHART.OVL split: loader, verb dispatch and the shims os88chart.inc calls back out through. Only a package that %defines CH_OVERLAY needs it - today that is SHEET alone. |
-| `apps/os88img.inc` | §91 | Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block in SI. 8-bit files are refused by name, not approximated. |
+| `apps/os88img.inc` | §92 | Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block in SI. 8-bit files are refused by name, not approximated. |
 | `apps/os88fp.inc` | §84 | IEEE-754 double arithmetic in software, with an 8087 path chosen at run time. Parse, format, add, subtract, multiply, divide, compare, sqrt, trunc, floor, round. |
 | `apps/os88sock.inc` | §62, 72 | The socket layer over NET.DRV or ETHER.DRV. |
 | `apps/os88pit.inc` | §37 | Sub-tick timing off the 8253. |
@@ -301,6 +301,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | MISSILE | `apps/missile/missile.asm` | §48 |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 |
 | NOTEPAD | `apps/notepad/notepad.asm` | §27 |
+| PACCMAN | `apps/paccman/paccman.asm` | §91 |
 | PACMAN | `apps/pacman/pacman.asm` | §89 |
 | PAINT | `apps/paint/paint.asm` | §42 |
 | PIANO | `apps/piano/piano.asm` | §36 |
@@ -413,14 +414,15 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 88 | THE WIRE — the online software library (`apps/thewire/thewire.asm`) |
 | 89 | Pac-Man (`apps/pacman/pacman.asm`) |
 | 90 | FONT VIEWER — the system face browser (`apps/fontview/fontview.asm`) |
-| 91 | Picture decoders (`apps/os88img.inc`) |
-| 92 | SCRIBE (`apps/scribe/`) — the fork of WORD |
+| 91 | PACCMAN — pacman.c, written in C (`apps/paccman/`) |
+| 92 | Picture decoders (`apps/os88img.inc`) |
+| 93 | SCRIBE (`apps/scribe/`) — the fork of WORD |
 
 ## docs/
 
 **`*-PLAN.md` files are DESIGN RECORDS, not descriptions of what shipped.** They record what was considered, including options that were rejected. SPEC.md is the current state; these are how it got there.
 
-*Design records (55):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `IMGCONV-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SPLIT-PLAN.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-STROKE-PLAN.md`, `PRINT-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SOUND-PLAN.md`, `STACK-SLOTS-PLAN.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `TRACKER-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WIRE-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
+*Design records (57):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `IMGCONV-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SPLIT-PLAN.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PACCMAN-PORT-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-STROKE-PLAN.md`, `PRINT-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SOUND-PLAN.md`, `STACK-SLOTS-PLAN.md`, `TELNET-PLAN.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `TRACKER-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WIRE-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
-*Notes and reference (40):* `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DUAL-DISPLAY-BUG2.md`, `DUAL-DISPLAY-VGA.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `FTP-PERF.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOAK-FINDINGS.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `HANDOFF.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `KERN-SMALL-MODULE-SPLIT.md`, `KERNEL-MEMORY.md`, `KODAK-EXAMPLE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `NOTEPAD-NOTES.md`, `PAINT-NOTES.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `STKBALANCE-KERNEL.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WM-ARTIFACTS.md`
+*Notes and reference (41):* `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DUAL-DISPLAY-BUG2.md`, `DUAL-DISPLAY-VGA.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `FTP-PERF.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOAK-FINDINGS.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `HANDOFF.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `KERN-SMALL-MODULE-SPLIT.md`, `KERNEL-MEMORY.md`, `KODAK-EXAMPLE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `NOTEPAD-NOTES.md`, `PAINT-NOTES.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `STKBALANCE-KERNEL.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WM-ARTIFACTS.md`
 

@@ -93,7 +93,7 @@ sc_rtfimg:
 ;      which is the same thing the screen does with it (sc_rowhc).
 ;
 ; THIS IS THE ONE PLACE SCRIBE WRITES SOMETHING WORD DOES NOT, and RTF is the
-; format where that is safe rather than reckless (SPEC.md 92.5). RTF is text
+; format where that is safe rather than reckless (SPEC.md 93.5). RTF is text
 ; and its own rule is that a reader skips a destination it does not know, so
 ; the worst a foreign reader can do with this group is drop it and keep the
 ; document. The same picture in a .DOC would be a binary field that a reader
@@ -138,7 +138,7 @@ sc_rpict:
     push es
     push ds
     PKG_LDS sc_cseg            ; the CHP byte IS the picture index
-    mov al, [bx]                    ; (SPEC.md 92.9)
+    mov al, [bx]                    ; (SPEC.md 93.9)
     pop ds
     xor ah, ah
     call far [sc_v_picrec]; -> BX = the table slot
@@ -400,7 +400,7 @@ sc_rpap:
     xor ah, ah
     mov bx, ax
     shl bx, 1
-    mov si, [cs:bx+sc_r_qtab]     ; (SPEC.md 92.8.2)
+    mov si, [cs:bx+sc_r_qtab]     ; (SPEC.md 93.8.2)
     call sc_res
 .nj:
     mov al, [sc_rpp+1]              ; left indent
@@ -667,7 +667,7 @@ sc_rtfparse:
     call far [sc_v_pictfree]; the OLD document's pictures go back
                                     ; HERE and not at sc_load's commit point,
                                     ; which is past the ones this parse is
-                                    ; about to build (SPEC.md 92.6)
+                                    ; about to build (SPEC.md 93.6)
     xor si, si                      ; SI = where we are in the file
 .step:
     cmp si, [sc_dfsize]
@@ -1084,7 +1084,7 @@ sc_rword:
     ret
 
 ; =============================================================================
-; THE PICTURE READER (SPEC.md 92.6). \pict used to be a skipped destination
+; THE PICTURE READER (SPEC.md 93.6). \pict used to be a skipped destination
 ; and is now a collected one. The shape mirrors sc_rskip exactly: [sc_rpin]
 ; holds the depth the group opened at, .step routes text to the collector
 ; while it is set, and .close finalises when that group's brace arrives.
@@ -1562,7 +1562,7 @@ sc_r_tbl:
     db SCR_SKIP
     dw sc_rw_info
     db SCR_SKIP
-    dw sc_rw_pict                   ; NOT SCR_SKIP any more (SPEC.md 92.6):
+    dw sc_rw_pict                   ; NOT SCR_SKIP any more (SPEC.md 93.6):
     db SCR_PICT                     ; a \pict this reader understands is a
     dw sc_rw_wbmwb                  ; picture, and one it does not is
     db SCR_PICWB                    ; discarded at the closing brace, which
