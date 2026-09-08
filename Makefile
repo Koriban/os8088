@@ -4487,19 +4487,24 @@ $(BUILD)/fptest.o88: $(BUILD)/fptest.bin tools/os88pkg.py
 # IMGTEST: the self-test for apps/os88img.inc, the .PIX/.BMP/.PCX decoders.
 # Same shape and same reasoning as FPTEST above - not on any disk, built here
 # so it cannot rot, and its expectations computed on the HOST from the format
-# documents rather than by running the decoder. Run it with
-#   python3 tools/os88imgcase.py
-#   python3 tools/os88disk.py -o build/imgtest.img --size 1440 \
-#       APPS:build/imgtest.o88 $(addprefix APPS:,$(wildcard build/imgcases/*))
-#   make test TESTAPPS=build/imgtest.img
-# and read the window: one row a case, ALL PASS or FAILURES.
+# documents rather than by running the decoder.
+#
+#   make imgtestdisk && make test TESTAPPS=build/imgtest.img
+#
+# and read the window: one row a case, ALL PASS or FAILURES. BUILDING IT IS
+# NOT RUNNING IT - `all` names imgtest.o88 so it cannot stop assembling, and
+# the `imgcases` row of test-fast holds the generated expectations to the
+# format documents, but the decoder itself only runs on a machine.
 #
 # build/imgcases/ can carry five files this repository does not ship, off the
 # Dr. Dobb's File Formats disc - MAIN.PCX, HELP8.PCX (its HELPSCRN.PCX),
-# INSTALL.BMP, START.BMP and SAMPLPIC.BMP - so the corpus is seventeen
-# generated cases without them and twenty-two with. The generator says which
-# it built; a third-party file is the only one that cannot share a misreading
-# with the decoder, so run it with them if you have them.
+# INSTALL.BMP, START.BMP and SAMPLPIC.BMP - so the corpus is twenty-seven
+# generated cases and thirty-two with the disc. They are OPT-IN
+# (`python3 tools/os88imgcase.py --with-disc`) and not merely picked up when
+# present, because the committed .inc has to be the one this repository can
+# reproduce: a table naming files nobody else has is five permanent FAILs.
+# A third-party file is the only one that cannot share a misreading with the
+# decoder, so run it with them if you have them - and revert the .inc after.
 $(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
                       apps/os88img.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/imgtest/ -o $@ apps/imgtest/imgtest.asm
@@ -4507,6 +4512,13 @@ $(BUILD)/imgtest.bin: apps/imgtest/imgtest.asm apps/imgtest/imgcases.inc \
 
 $(BUILD)/imgtest.o88: $(BUILD)/imgtest.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/imgtest.bin -o $@
+
+.PHONY: imgtestdisk
+imgtestdisk: $(BUILD)/imgtest.o88
+	python3 tools/os88imgcase.py
+	python3 tools/os88disk.py -o $(BUILD)/imgtest.img --size 1440 \
+	    APPS:$(BUILD)/imgtest.o88 \
+	    $$(for f in $(BUILD)/imgcases/*; do echo "APPS:$$f"; done)
 
 
 # Chart: a standalone SYLK/DIF/BIFF bar-chart viewer, sharing its

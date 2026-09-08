@@ -107169,7 +107169,11 @@ colour it does not contain — the same 35-wide image came out with a different
 last byte per row under our palette and under a reversed one. Invisible, and
 exactly the kind of difference that makes two readers of one file disagree for
 a reason neither of them can see. It is a property of the output format, so it
-is decided in one place and not two.
+is decided in one place and not two — and that place is **`img_rowmask`**
+rather than `img_rowconv`'s tail, because `.PIX` converts nothing and so never
+reached `img_rowconv` at all. The one format this tree writes was, briefly,
+the one format whose padding nibble was whatever the file said; `img_pix`
+calls the routine before each `img_rowout` now.
 
 **The length floor is per format, not one number.** `img_load` requires 16
 bytes — enough to tell the three apart and to hold a whole `.PIX` header — and
@@ -107184,9 +107188,9 @@ by the test that knows which header that is.
 
 **Refused by name rather than approximated:** 8-bit `.PCX`, and 8- or 24-bit
 `.BMP`. Those need a 256-to-16 nearest-colour quantisation, which is a
-decision about how a picture should *look*; `docs/IMGCONV-PLAN.md`'s whole
-argument is that such a decision belongs on the host, where there is room to
-dither and to look at the answer. Refusal is an ordinary path (§47).
+decision about how a picture should *look*, and such a decision belongs on the
+host, where there is room to dither and to look at the answer. Refusal is an
+ordinary path (§47).
 
 **The palette the file carries is honoured**, which is not the same thing as
 quantising. A 4bpp `.BMP` and a `.PCX` each carry 16 RGB triples and a 1bpp
@@ -107204,6 +107208,16 @@ difference between the picture and a colour-scrambled copy of it. Manhattan
 distance and not Euclidean: `|dR|+|dG|+|dB|` tops out at 765 and fits a word,
 where squared differences need 32 bits and buy nothing over sixteen
 candidates.
+
+**A PCX at version 3 is the exception, and it is honoured by NOT mapping.**
+ZSoft's version byte is at offset 1, and 3 means "2.8 **without** palette
+information" — the sixteen triples at offset 16 are then not a palette. A
+writer that leaves them zero would have every index map to the nearest colour
+to black, which is `CBLACK`, and a whole picture would come back black and be
+returned as a success. What version 3 means is the fixed EGA palette, and that
+**is** os8088's own sixteen in order, so `img_pcx` calls `img_palident` there
+instead. `NOPAL.PCX` in the corpus is `P4.PCX` with that one byte changed and
+its palette zeroed, and it must decode to the same checksum.
 
 `.PIX` is an **archive and not a picture**, which is the one thing about it a
 caller has to know. `IMG_PICNO` chooses; 0 means "whichever is first", because
@@ -107239,9 +107253,32 @@ at.
 `apps/imgtest` reads a real file off a disk for each case — so the path under
 test is the one a package uses: claim, `OSAPI_FILE_READ`, `img_load` — and
 compares the width, the height, the stride, the error code **and** a
-rotate-xor checksum of every decoded byte. A plain sum would not notice two
-rows swapped; making position part of the answer is the whole point of
-checking a decoder.
+checksum of every decoded byte. The geometry is compared **on a refusal too**,
+against zero: `img_setgeom` stores `IMG_W`/`IMG_H`/`IMG_STRIDE` before any
+decoder has proved its pixel data is inside the file, so "a refusal leaves no
+geometry behind" is a property that has to be asserted rather than assumed —
+`img_load`'s `.fail` clears all three, and CUT.PCX, CUT.BMP, BADOFF.PIX and
+BIG.BMP are the four cases that fail without it.
+
+**A plain sum would not notice two rows swapped, and NEITHER DID THE ROTATE
+THIS STARTED WITH.** Rotating a 16-bit accumulator by one is a linear map of
+**order sixteen**, so any two rows whose byte distance is a multiple of 16
+land on the same rotation and exchanging them leaves the value unchanged —
+which on a stride-16 picture is *every* pair of rows in it, and a decoder that
+reversed the row order passed. Given that a bottom-up BMP decoding upside down
+is one of the two defects this corpus is credited with catching, that was the
+wrong mixer. Multiplying the accumulator by *x* modulo x^16 + x^12 + x^5 + 1
+instead has order **32767**, so a swap has to move `(j-i) * stride` a multiple
+of that before it can hide, which no picture this decoder accepts can reach.
+It is also four instructions where the rotate was seventeen. `it_cksum` and
+`tools/os88imgcase.py`'s `cksum()` are one algorithm written twice and must
+agree to the bit.
+
+**`IMG_DSTMAX` is per case, and that is not a detail.** Every case handed the
+same 0 ("the whole 64KB") takes `img_setgeom`'s own `jz .fits` and leaves the
+compare below it unreachable — a decoder that ignored the caller's capacity
+entirely would pass the whole corpus. `BIG.BMP` is a 30x9 picture given 134
+bytes for the 135 it needs, and it is the only case with a non-zero capacity.
 
 `apps/imgtest/imgcases.inc` is generated by `tools/os88imgcase.py`, which
 computes every expectation **from the format documents** and never by running
@@ -107250,11 +107287,28 @@ passes its own test: write the encoder and the decoder from one understanding
 and they agree with each other about something neither has got right. Same
 argument `apps/fptest` makes for the soft-float core (§84).
 
-Seventeen cases need nothing but the repository. Five more appear when the
-Dr. Dobb's File Formats disc has been copied into `build/imgcases/`, and
-those are **the cases that cannot share a misreading with the decoder** —
-they were written by other people's programs in the 1990s. They are not
-vendored here, for the reason the format PDFs are not.
+Twenty-seven cases need nothing but the repository, and **the committed
+`imgcases.inc` is that build**. Five more are added by
+`tools/os88imgcase.py --with-disc` when the Dr. Dobb's File Formats disc has
+been copied into `build/imgcases/`, and those are **the cases that cannot
+share a misreading with the decoder** — they were written by other people's
+programs in the 1990s. They are not vendored here, for the reason the format
+PDFs are not.
+
+**They are opt-in and not merely picked up when present**, which the first
+build had the other way round: the `.inc` in the tree was then the disc
+machine's, naming five files no other checkout can hold, and
+`OSAPI_FILE_READ` answering CF=1 for each of them is `FAIL` — so the gate read
+`FAILURES` for everybody but the author, and `--check` could never become a
+`make` row because it would have to fail on one machine or on all the others.
+The default output is what this repository can reproduce; `--with-disc` is the
+richer corpus, and the `.inc` it writes is not one to commit.
+
+`make imgtestdisk` builds the corpus and the floppy in one step, because
+**building imgtest is not running it**: `all` names `imgtest.o88`, which keeps
+it assembling, and the `imgcases` row of `make test-fast` holds the generated
+expectations to the format documents — but the decoder itself only ever runs
+on a machine.
 
 | | from the disc | |
 |---|---|---|
