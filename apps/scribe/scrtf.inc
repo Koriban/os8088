@@ -420,11 +420,16 @@ sc_rpap:
     mov bx, [si+2]
     mov ds, [cs:sc_pkgseg]          ; NOT `push cs / pop ds`: sc_rpap is in
                                     ; .modc, so CS is the MODULE (SPEC.md
-                                    ; 94.8.3). sc_rpp is a SCVAR and so is
-                                    ; sc_rfull, which sc_res and sc_rnum set
-                                    ; below - a full staging claim recorded in
-                                    ; the module is a truncated save with no
-                                    ; message
+                                    ; 94.8.3) and sc_rpp is a SCVAR - four
+                                    ; bytes of somebody else's heap written
+                                    ; once per paragraph. It wrote and read
+                                    ; back through the SAME wrong address,
+                                    ; which is why the file came out right.
+                                    ; The refusal is NOT lost with it:
+                                    ; sc_rtfimg's .tail emits with DS back on
+                                    ; the package, so sc_re sets the package's
+                                    ; sc_rfull there and "it did not fit"
+                                    ; still fires
     mov [sc_rpp], ax                ; the four PAP bytes are BANKED, not held
     mov [sc_rpp+2], bx              ; in registers: SI is the string pointer
                                     ; every emit below needs

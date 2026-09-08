@@ -107863,6 +107863,17 @@ one floppy — every one of these goes through the overlay:
   `BCE9`. Read and write both crossed the boundary and the bytes did not move
   (`screenshots/scribe-ovl-rtf-resaved.png`).
 
+**Those three were taken on a build where `sc_dpapin` still restored DS with
+`push cs / pop ds`** (§94.8.2), so the first bullet's `.DOC` load was far-calling
+`[sc_v_papfind]` through a dword read out of the overlay claim, and the third's
+round trip closed *because* the wrong address was wrong consistently. They are
+evidence about a build that no longer exists. Re-taken on the fixed tree, in
+both formats: a 200×105 4bpp BMP inserted, saved, the document emptied with
+File ▸ New and the file opened again — the picture returns **pixel-identical**
+from `.RTF` (21,541 bytes) and **reduced to one bit** from `.DOC` (4,729),
+which is what §94.7 says each should do. The checksum bullet's `rotate-xor` is
+also `main`'s **LFSR** now (§93.3); the `BCE9` figure is the pre-merge one.
+
 ### 94.9 Insert ▸ Picture — the document model
 
 Built in WORD first and reverted out of it (§68.15); this is where it
