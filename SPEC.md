@@ -107378,27 +107378,51 @@ diverge from it without either one having to care. It is **not** a second
 build of the same source and not a rename of the first: `SCRIBE.O88` and
 `WORD.O88` are two packages, and a disk may carry both, neither or either.
 
-`make scribe` builds the package, `make scribedisk` its floppy. Neither is in
-`all` and SCRIBE is on no shipped disk — WORD is the one that ships. Putting
-both on the apps floppy would spend 49KB to show two word processors that at
-the fork point differ only in their name. `apps/cword` is on demand for the
-same reason (§73.12).
+`make scribe` builds the package, `make scribedisk` its floppy in all four
+geometries. The **package** is in `all` and the **floppy** is not: `scribe.o88`
+is named there for `wire.o88`'s and `recorder.o88`'s reason — it ships on no
+disk, so building it is the only thing that keeps it assembling — while SCRIBE
+is on no shipped disk because WORD is the one that ships. Putting both on the
+apps floppy would spend 49KB to show two word processors that at the fork point
+differ only in their name. `apps/cword` is on demand for the same reason
+(§73.12).
 
-### 94.1 It keeps `wd_` and the `wd*.inc` filenames, deliberately
+### 94.1 It carries the `sc_` prefix and the `sc*.inc` filenames
 
-Every symbol, every include filename and every line number is the one
-`word.asm` has. `diff -r apps/word apps/scribe` is therefore **exactly what
-the fork changed**, and an upstream fix to Word can be read straight across
-instead of being translated first.
+**It did not always, and the argument for both sides is worth keeping.** The
+fork began as a line-for-line copy of `word.asm` that kept every `wd_` symbol,
+every `wd*.inc` filename and every line number, so that `diff -r apps/word
+apps/scribe` was **exactly what the fork changed** and an upstream fix to Word
+could be read straight across instead of being translated first. The assembler
+does not care either way — a package owns its segment (§20.2) and there is no
+global namespace to collide in.
 
-A mechanical `sc_` rename over 20,000 lines is the obvious thing to do and is
-the wrong thing to do. The assembler does not care — a package owns its
-segment (§20.2) and there is no global namespace to collide in — so the rename
-would buy nothing except tidiness, and it would cost the one thing a
-long-lived fork needs most, which is a readable diff against what it forked
-from. NASM resolves `scdoc.inc`, `scrtf.inc` and `scutil.inc` out of
-`apps/scribe/` because that is the `-I` on this package's own Makefile rule,
-which is also why the two cannot accidentally share a header.
+Two things outweighed it:
+
+- **The app is called SCRIBE.** A symbol that says `wd_` names the program it
+  was forked from, not the program you are reading.
+- **The two shared a symbol NAMESPACE, not just a shape**, and that reached a
+  gate. `tools/stkbalance.py` walking `apps/word/word.asm` and
+  `apps/scribe/scribe.asm` in one pass saw **645 names defined twice** and
+  merged the two apps' call paths, so the fork had to be walked alone to be
+  walked at all — and a gate that cannot see two files together has a hole in
+  it. One inherited defect was found the moment the collision stopped masking
+  it: `sc_rnval` in `scutil.inc` was missing the `; STKBALANCE-LOOP` marker its
+  Word twin carries.
+
+1,395 identifiers were renamed across four files and `wddoc.inc`/`wdrtf.inc`/
+`wdutil.inc` became `scdoc.inc`/`scrtf.inc`/`scutil.inc`; `WD_OVKB` became
+`SC_OVKB`, which is read by name in the Makefile and by `os88ovlchk`. **It was
+a pure rename and that is proved rather than assumed**: `build/scribe.bin` had
+the identical MD5 before and after.
+
+**The cost is real and was paid knowingly**: an upstream fix to WORD is no
+longer a patch that applies here. It has to be read across by hand, and §94.10
+is the standing note about what the fork does not have.
+
+NASM resolves `scdoc.inc`, `scrtf.inc` and `scutil.inc` out of `apps/scribe/`
+because that is the `-I` on this package's own Makefile rule, which is also why
+the two cannot accidentally share a header.
 
 **What differs is identity and nothing else**, and there is a short list of
 it: the `OS88_HEADER` name, the icon glyph, the overlay's filename, the About
@@ -107423,7 +107447,11 @@ a disk was rebuilt. An extension has one owner.
 
 SCRIBE still opens and saves `.DOC`: File ▸ Open and Save As are untouched and
 it reads and writes exactly the bytes WORD does. What it does not do is take
-the double-click away.
+the double-click away — so on the floppy `make scribedisk` builds, where SCRIBE
+is the only package, the `WELCOME.DOC` it carries has **no owner at all** and a
+double-click on it does nothing. That is this section working rather than
+failing; the document is opened from File ▸ Open, and `SCWELCOM.RTF` is on the
+same disk because RTF is what §94.4 makes Scribe's own format.
 
 `apps/cword` arrived at the same place from the other side and is the
 precedent — it claims `.RTF` (`cword.c`'s `os88_assoc_set`) rather than fight
@@ -107437,13 +107465,13 @@ and the second is the one that matters.
 
 ### 94.3 Verified
 
-`'SCRIBE' image=43961 bss=9292 icon=yes assoc=0` — 53,253 of `APP_MAX_SIZE`'s
+`'SCRIBE' image=43869 bss=9292 icon=yes assoc=0` — 53,161 of `APP_MAX_SIZE`'s
 61,440, and `assoc=0` is the packager confirming §94.2 rather than a comment
 claiming it.
 
 *(Those were 49,483 and 9,206 when this was first written, before §94.8 moved
 the file formats into `SCRIBE.OVL`. The 5.4KB the overlay bought is why SCRIBE
-now has 8,187 bytes spare against WORD's 5,270 — a number worth re-measuring
+now has 8,279 bytes spare against WORD's 5,270 — a number worth re-measuring
 when it is cited, which the chart module's own overlay table is the standing
 lesson about.)*
 
@@ -107501,6 +107529,18 @@ the width, which is the lesson `.PCX`'s `BytesPerLine` taught (§93). The goal
 size is twips at **15 per pixel**, the 96dpi Windows logical inch; the widest
 picture `os88img.inc` will decode is 1280, and 1280 × 15 = 19,200, so it cannot
 overflow the word `sc_rnum` signs.
+
+**That is an argument about WIDTH, and it was applied unchanged to HEIGHT,
+which nothing bounds.** `img_setgeom`, `sc_rpclaim`, `sc_dpic1` and
+`sc_pictkeep` all check `w <= OS88IMG_WMAX` and none of them checks `h` — only
+`stride * h` against a word and against `IMG_DSTMAX` — so a 2-pixel-wide `.PIX`
+of 40,959 rows is a 40,991-byte file that decodes, is claimed and goes in the
+document. `sc_rnum` emits **signed**, so its ceiling is `h <= 2184`
+(2184 × 15 = 32,760) and `sc_rpict` refuses the SAVE past it rather than
+dropping the picture out of the file silently, which is what it did. The `.DOC`
+writer's own ceiling is **4369**, because a PICF's `dyaGoal` is an unsigned
+`stosw` — the same arithmetic with twice the room, and the reason the two
+constants differ.
 
 **No palette, and that is correct rather than lazy.** A `\wbitmap` is a
 *device*-dependent bitmap: its indices mean whatever the device's colours are.
@@ -107685,9 +107725,12 @@ this is inside that.
 **`sc_dpicr` pushed seven registers and popped six.** `SI` never came back, so
 `sc_docparse` returned through a shifted stack and **the document loaded
 completely empty — text and all**. It looked like a parser failure and was a
-missing `pop`. `tests/suite.py`'s `stkbalance` row is scoped to a file list and
-`apps/scribe/` was not on it; the three Scribe files are now, and re-breaking
-the routine makes the gate name it outright — `sc_dpicr: ret at depth +1`.
+missing `pop`. `tests/suite.py`'s `stkbalance` row is scoped to a **file list**
+that names SHEET, CHART and the kernel, and `apps/scribe/` is not on it; what
+covers the fork is the **`stkapps`** row (`tests/unit/t_stkapps.py`), which
+globs `apps/*/*.asm` and `apps/*/*.inc` and therefore walks all four Scribe
+files. Re-breaking the routine makes that gate name it outright —
+`sc_dpicr: ret at depth +1`.
 This is the third time in this tree a push/pop mismatch has presented as
 something else entirely (§61.7, §68.15).
 
@@ -107738,6 +107781,29 @@ The engines' strings and tables travelled into `.modc` with their code, so
 and `sc_r_qtab` are read `[cs:…]`. `sc_res` and `sc_rstreq` already read
 `[cs:si]` and needed no change; `sc_d_normal` is copied with `push cs / pop ds`
 and needed none either. The rest were four edits.
+
+**`push cs / pop ds` IS THE ONE IDIOM THAT DOES NOT SURVIVE THE MOVE**, and it
+survived it twice. Resident, CS *is* the package (§20.1), so restoring DS that
+way after a `PKG_LDS` was correct; in the module CS is a `SC_OVKB`-kilobyte
+claim, and the `SCVAR` the next instruction names sits tens of kilobytes past
+the end of it. `sc_dpapin` did it on every `.DOC` load and `sc_rpap` on every
+`.RTF` save, so a byte per paragraph went into whatever else held that heap —
+and `sc_rpap`'s wrote and read back through the *same* wrong address, which is
+why the round trip looked right. Both are `mov ds, [cs:sc_pkgseg]` now, and the
+one remaining `push cs / pop ds` (`sc_d_normal`'s) is correct precisely because
+what it wants IS module data. The blast radius is the whole near-call cone
+below the restore, not the two instructions: `sc_dpapat`, `sc_dprl`,
+`sc_dfkfind`, `sc_dfkrun`, `sc_dfcof` and `sc_dpget` all read package `SCVAR`s
+bare.
+
+**And a call OUT is DS-relative too.** Rule 1's `call far [sc_v_x]` reads its
+dword from `sc_v_first`'s table, which is in `.text` — so the *vector itself*
+is fetched through DS, and every one of the nine call-outs carries the unstated
+precondition that **DS is the package at that instruction**. `sc_dpapat`'s
+`call far [sc_v_papfind]` is the one the bug above reached: with DS the module
+it would have far-called through a dword of somebody else's heap.
+`tools/os88ovlchk.py` cannot see this — it skips segment-overridden and
+indirect transfers by design — so it is written here instead.
 
 #### 94.8.3 The package's segment, stamped into the module
 
@@ -107920,9 +107986,11 @@ register ended up at `0x000E` with `IP` at `0xDF` — executing inside the
 interrupt vector table, the whole machine gone, no message.
 
 `tools/stkbalance.py` exists precisely to catch that, its own header cites the
-same bug in `ch_legend`, **and the suite stayed green** — because the row was
-scoped to SHEET, CHART and their includes, and WORD was not in the list. It is
-now, along with `os88img.inc`. Two labels there carry `; STKBALANCE-OK`:
+same bug in `ch_legend`, **and the `stkbalance` row stayed green** — because
+that row is scoped to a file list naming SHEET, CHART and their includes, and
+neither WORD nor SCRIBE is on it. The row that does walk them is **`stkapps`**,
+which globs `apps/` and `drivers/` and so covers the four Scribe files and
+`os88img.inc` without naming any of them. Two labels there carry `; STKBALANCE-OK`:
 `sc_sbd_out` and `sc_fastcm` are shared jump targets rather than routines, and
 their pushes are in callers the walk cannot follow back to. The marker has to
 sit on a line *after* the label — the label's own raw line is discarded before
@@ -107942,8 +108010,10 @@ from a width and a height, so it is the longest that has to fit:
 `sc_rflush` takes one branch: a row whose `[sc_rowpic]` is set is **one
 `OSAPI_GFX_BLIT4`** and none of the lettering below it, because the row buffer
 holds no glyphs for it. BLIT4 and not `OSAPI_GFX_BLITP` for §93's reason —
-BLITP refuses an armed clip region, and a picture in a document that scrolls
-is always inside one.
+BLITP refuses an armed clip region — though **SCRIBE arms none**: it clips by
+walking only the rows the pane holds, exactly as WORD does, so the choice is
+right for the reason §93 gives it and not for a clip region this package has.
+Nothing bounds the blit at the right margin either, which §94.11 records.
 
 `sc_picdraw` is the one routine in this file's drawing path that pushes **BP**,
 and that is not defensive: BP is the walk's pen y, and BLIT4 takes the source
@@ -107977,3 +108047,72 @@ live on five files: a 4bpp BMP (`30x9`), a four-plane PCX (`37x11`), an 8-bit
 PCX (`Convert to 4-bit first`), a text file (`Not a picture file`), and a
 1152x90 PCX that packs to 51,840 bytes against a 40KB claim
 (`Picture too big`).
+
+### 94.10 The fork point, and what WORD has that SCRIBE does not
+
+**`apps/scribe/` was copied from a `word.asm` older than the branch it arrived
+on**, and a `git merge` cannot repair that: a file that is *added* by a branch
+takes nothing from the other side, so every improvement `main` landed in WORD
+after the copy was taken is simply absent here and git reports no conflict for
+it. §94.1 already says an upstream fix is no longer a patch that applies; this
+is the same sentence written as a list, so the next reader diffing the two does
+not read the divergence as intentional.
+
+Everything below is present in `apps/word/word.asm` and absent from
+`apps/scribe/scribe.asm`, and `git log -S<symbol> -- apps/word/word.asm` puts
+all of it in **#172**:
+
+| what | WORD | SCRIBE |
+|---|---|---|
+| menu and dialog **save-unders** — `wd_suab`, `wd_sudlg`, `wd_surest` | banks the pixels under a menu and puts them back | repaints the document under every menu and every dialog |
+| the shared menu bar — `os88ui_mnbar`, `mntrack`, `mnbank` | one call | ~179 lines of hand-rolled menu drawing, superseded |
+| the document movers — `wd_mvup` / `wd_mvdn` | `rep movsw`, measured at 36.0 cycles a byte | inline `rep movsb`, ~36% slower on the tail move, twice per keystroke |
+| `OSAPI_WM_ONWAKE` — `wd_onwake` | present | absent |
+| `os88ui_drop` and the drag-and-drop bank | present | absent |
+| `OS88_REGION_MOVABLE`, `OS88_WORKER_RESTARTABLE` | declared | not declared |
+| `wd_eoutck`, `wd_nlpush`, `wd_upheight`, `wd_bandx` | present | absent |
+
+None of it is a defect in the picture work, and none of it reaches a shipped
+disk — SCRIBE is on none. It is a **maintenance** fact: the two files are no
+longer the same program with a different prefix, and the honest choices are to
+re-take the fork from `main`'s `word.asm` and re-apply §94.5–§94.9 on top, or
+to leave this table standing and grow it. Re-taking is cheapest while nothing
+downstream depends on SCRIBE.
+
+### 94.11 Known defects in the picture layout, and why they are recorded rather than fixed
+
+Every item here was **confirmed by reading the code**, and every one of them is
+a decision about the document model that belongs to whoever owns §94.9 — the
+fixes are not repairs, they are choices about how a picture behaves in a line
+of text. They are written down so that the next reader meets them here rather
+than on the glass.
+
+**A picture has two widths.** `sc_penadv` answers the picture's real width, and
+it is what the wrap test, `sc_wordfit`'s lookahead and `sc_rowmeasure` use;
+`sc_advof` — which moves the pen — knows nothing about pictures and answers
+**8**. Everything downstream of the pen therefore believes a picture is eight
+pixels wide: the cell map, the caret x, the click hit test, the centre/right
+offset, and the next character's own wrap test. Six of the seven items below
+fall out of that one sentence.
+
+| what happens | where |
+|---|---|
+| **Text after a picture on the same row is drawn nowhere.** `sc_rowhc` marks a row a picture row when its FIRST character is `SC_PICCH`, and nothing ends the row after the picture; `sc_rflush` then takes the one-blit branch and discards the glyphs the row buffer has collected. Type after inserting a small picture and the words are invisible until Enter. §94.9's "the existing wrap rule ends the row after it with no special case at all" is true only when the picture nearly fills the row | `sc_rowhc`, `sc_rflush` |
+| **Two adjacent pictures: only the first is drawn.** The pen advanced 8 for the first, so the second is not at `[sc_rowx0]`, so it is not the row's first character | `sc_advof`, `sc_rowhc` |
+| **A centred or right-aligned picture is blitted past the right margin**, over the scrollbar. The centre/right offset is computed from the pen, which counted the picture as 8 | `sc_rowsetup`, `sc_picdraw` |
+| **The caret and the click hit test place a picture at 8 pixels.** Clicking on a wide picture puts the caret at its left edge wherever inside it you clicked | `sc_cellat`, `sc_advof` |
+| **A picture row never updates the row cache**, so the band beside it can keep stale pixels | `sc_rflush`'s `jmp .caret` |
+| **A picture's claim and its table slot are not reclaimed when its character is deleted.** They come back at the next `sc_pictfree` — File ▸ New, or a load — so it is bounded rather than permanent | `sc_pictfree` |
+| **Records are written in TABLE order and read in DOCUMENT order.** Insert A, then insert B *above* it, and the `.DOC` pairs the wrong picture with the wrong character. RTF is unaffected: it carries the picture inline | `sc_dpicw` / `sc_dpicr` |
+| **A picture too big for the staging claim is refused as "Document too complex to save"** — the truthful refusal with the wrong reason, which §47 is against | `sc_dpicw`, `sc_save` |
+| **The reduction and the expansion are per-pixel loops with a variable shift.** A full-width picture is seconds on the target machine, on a path with no progress and no yield | `sc_dpicbits`, `sc_dpicexp` |
+| **`\wbmwidthbytes` is emitted ODD for an odd-width picture.** A Windows DDB scan line is word-aligned, so a reader that builds a `BITMAP` from what the group says is handed an illegal stride. The round trip inside os8088 closes either way — `sc_rpclaim` requires only `stride >= (w+1)/2` — but the interop claim §94.5 makes for hex-not-`\bin` does not hold for those pictures. `.DOC` pads (§94.7.1); RTF is the path that skipped it | `sc_rpict` |
+
+**Two picture rows also overlap by about 8 pixels**, which §94.9.5 already
+records as pre-existing and unexplained; it is the same row model.
+
+The cheapest place to start is the pen: making `sc_advof` answer what
+`sc_penadv` answers for `SC_PICCH` collapses the first five rows into one
+change. It is not made here because it moves every caret, hit-test and
+alignment decision in the package at once, and that is a change to look at
+rather than to infer.

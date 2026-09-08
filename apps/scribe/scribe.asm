@@ -2818,8 +2818,11 @@ sc_penadv:
     mov ax, 8
     ret
 .pictw:
-    call sc_picw
-    ret
+    push word [sc_i]                ; SC_PICCH IS AT SI, WHICH IS NOT ALWAYS
+    mov [sc_i], si                  ; [sc_i]: sc_wordfit and sc_rowmeasure walk
+    call sc_picw                    ; SI ahead with [sc_i] frozen at the word's
+    pop word [sc_i]                 ; or the row's first character, so sc_picidx
+    ret                             ; read THAT character's CHP byte - an
 .prop:
     or bx, bx
     jz .eight
@@ -2834,8 +2837,12 @@ sc_penadv:
     xor ah, ah
     ret
 .pict:
-    call sc_picw                    ; AX = its width, or 8 if the index is not
-    ret                             ; one this document has
+    push word [sc_i]                ; ...attribute set (SCAT_BOLD = 1, SCAT_UL
+    mov [sc_i], si                  ; = 4) taken as a picture index, so a bold
+    call sc_picw                    ; character measured picture 1 and an
+    pop word [sc_i]                 ; underlined one picture 4. AX = the width,
+    ret                             ; or 8 if the index is not one this
+                                    ; document has
 
 ; -----------------------------------------------------------------------------
 ; sc_cellat - the cell index the pen is standing on (SPEC.md 68.13)
@@ -7093,6 +7100,9 @@ sc_save:
     push si
     push di
     push es
+    push bp                         ; BP TOO: the overlay verb goes in it, and
+                                    ; sc_modc shifts it, so a caller banking a
+                                    ; pointer there got twice the verb back
     call sc_stghold             ; ES = the staging claim, or a toast and out
     jc .out
     call sc_goto                ; the folder this document belongs to, if the
@@ -7127,6 +7137,7 @@ sc_save:
 .done:
     call sc_stgdrop
 .out:
+    pop bp
     pop es
     pop di
     pop si
@@ -7210,6 +7221,9 @@ sc_load:
     push si
     push di
     push es
+    push bp                         ; BP TOO: the overlay verb goes in it, and
+                                    ; sc_modc shifts it, so a caller banking a
+                                    ; pointer there got twice the verb back
     mov ax, SC_LSTGKB           ; the staging claim, transient across the read
     call OSAPI_MEM_CLAIM
     jc .nomem
@@ -7362,6 +7376,7 @@ sc_load:
     mov ax, sc_e_nomem
     call sc_saymsg
 .out:
+    pop bp
     pop es
     pop di
     pop si

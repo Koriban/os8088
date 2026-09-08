@@ -89,8 +89,10 @@ sc_rtfimg:
 ; =============================================================================
 ; sc_rpict - emit the picture the SC_PICCH at BX names, as an RTF \pict group
 ; in:  BX = the character index; ES = the staging claim, DS = the package
-; out: preserves every register. A character naming no picture emits NOTHING,
-;      which is the same thing the screen does with it (sc_rowhc).
+; out: preserves all but DI and the flags - sc_re advancing DI IS the emission,
+;      which sc_res and sc_rnum already say of themselves. A character naming
+;      no picture emits NOTHING, which is the same thing the screen does with
+;      it (sc_rowhc).
 ;
 ; THIS IS THE ONE PLACE SCRIBE WRITES SOMETHING WORD DOES NOT, and RTF is the
 ; format where that is safe rather than reckless (SPEC.md 94.5). RTF is text
@@ -153,6 +155,19 @@ sc_rpict:
     mov [sc_rpg], ax
     or ax, ax                       ; a slot with no segment is a picture that
     jz .out                         ; was freed; it draws nothing either
+    cmp word [sc_rph], 2184         ; 2184 * 15 = 32,760 TWIPS, AND sc_rnum
+    jbe .hok                        ; EMITS SIGNED. Nothing bounds a picture's
+    mov byte [sc_rfull], 1          ; HEIGHT - OS88IMG_WMAX bounds the width -
+    jmp .out                        ; so a 2x40,959 .PIX decodes, is claimed,
+.hok:                               ; and comes out as \pich-24577, which this
+                                    ; reader then refuses on the way back in:
+                                    ; a save that reported success with the
+                                    ; picture gone. sc_dpicw's ceiling is 4369
+                                    ; for the same arithmetic and twice the
+                                    ; room, because a PICF's dyaGoal is an
+                                    ; unsigned stosw. Refusing the SAVE and not
+                                    ; the picture (47): sc_rtfimg turns
+                                    ; sc_rfull into "it did not fit"
     mov si, sc_r_pict               ; '{\pict\wbitmap0\wbmplanes1'
     call sc_res                     ; '\wbmbitspixel4\wbmwidthbytes'
     mov ax, [sc_rps]
@@ -176,6 +191,18 @@ sc_rpict:
     mov word [sc_rpcol], 0
     mov dx, [sc_rph]                ; DX = rows left
 .row:
+    cmp byte [sc_rfull], 0          ; THE CLAIM IS FULL AND THE SAVE IS ALREADY
+    jne .fin                        ; REFUSED. sc_re stops storing and sets
+                                    ; this; without the test the loop still
+                                    ; walks every remaining picture byte at
+                                    ; five near call/ret pairs each, which is
+                                    ; ~2.2 s a 30KB picture on a 4.77MHz 8088,
+                                    ; on the UI task, to produce nothing
+    cmp word [sc_rps], 0            ; a zero stride would make `loop` 65,536
+    je .fin                         ; passes off the end of the picture. Not
+                                    ; reachable through either producer today;
+                                    ; this is the one place that trusts a
+                                    ; pictab slot without re-checking it
     or dx, dx
     jz .fin
     mov cx, [sc_rps]                ; CX = bytes in this row
@@ -218,7 +245,7 @@ sc_rpict:
     ret
 
 ; sc_rtwip - emit AX pixels as twips (x15) followed by a space. Preserves all
-; but flags. 15 twips is one pixel at the 96dpi Windows logical inch.
+; but DI and flags. 15 twips is one pixel at the 96dpi Windows logical inch.
 sc_rtwip:
     push ax
     push dx
@@ -229,7 +256,8 @@ sc_rtwip:
     pop ax
     ret
 
-; sc_rwhex - emit AL as two lowercase hex digits. Preserves all but flags.
+; sc_rwhex - emit AL as two lowercase hex digits. Preserves all but DI and
+; flags: every emitter here advances it, which is what emitting IS.
 sc_rwhex:
     push ax
     push cx
@@ -256,7 +284,8 @@ sc_rwhex1:
     pop ax
     ret
 
-; sc_rch - emit one document character, escaped. Preserves all but flags.
+; sc_rch - emit one document character, escaped. Preserves all but DI and
+; flags.
 sc_rch:
     push ax
     push si
@@ -389,8 +418,13 @@ sc_rpap:
     PKG_LDS sc_pseg
     mov ax, [si]
     mov bx, [si+2]
-    push cs
-    pop ds
+    mov ds, [cs:sc_pkgseg]          ; NOT `push cs / pop ds`: sc_rpap is in
+                                    ; .modc, so CS is the MODULE (SPEC.md
+                                    ; 94.8.3). sc_rpp is a SCVAR and so is
+                                    ; sc_rfull, which sc_res and sc_rnum set
+                                    ; below - a full staging claim recorded in
+                                    ; the module is a truncated save with no
+                                    ; message
     mov [sc_rpp], ax                ; the four PAP bytes are BANKED, not held
     mov [sc_rpp+2], bx              ; in registers: SI is the string pointer
                                     ; every emit below needs
@@ -687,13 +721,13 @@ sc_rtfparse:
     je .step
     cmp al, 10
     je .step
-    cmp word [sc_rpin], 0           ; inside \pict every character is data,
-    je .text                        ; and the hex pairs into bytes (88.6)
-    call sc_rpbyte
-    jmp .step
+    cmp word [sc_rskip], 0          ; SKIP WINS. A {\*\...} destination inside
+    jne .step                       ; an open \pict is still skipped: its text
+    cmp word [sc_rpin], 0           ; is not pixels, and an ODD number of hex
+    je .text                        ; digits in it left a nibble in sc_rpnib
+    call sc_rpbyte                  ; that shifted every byte of the picture
+    jmp .step                       ; after it
 .text:
-    cmp word [sc_rskip], 0
-    jne .step
     call sc_rput
     jmp .step
 .open:
@@ -717,8 +751,12 @@ sc_rtfparse:
     mov ax, [sc_rpin]               ; a \pict ends at the depth it opened at,
     or ax, ax                       ; the same test sc_rskip makes below
     jz .nopic
-    cmp [sc_rdep], ax
-    ja .nopic
+    dec ax                          ; ...INCLUDING the dec: without it the
+    cmp [sc_rdep], ax               ; picture finalised on the closing brace of
+    ja .nopic                       ; any group NESTED inside the \pict, so a
+                                    ; {\*\picprop} - which Word writes - tore
+                                    ; the collector down and the hex that
+                                    ; followed went into the document as text
     call sc_rpfin
 .nopic:
     mov ax, [sc_rskip]
@@ -736,7 +774,14 @@ sc_rtfparse:
     mov byte [sc_dtrunc], 1         ; nested past what this reads: keep what
     jmp .done                 ; arrived and say so
 .done:
-    call sc_rtail                   ; the tail paragraph's format
+    mov dx, [sc_rpseg]              ; a \pict whose brace never arrived - the
+    or dx, dx                       ; file ran out, or .deep bailed. sc_rpfin
+    jz .nopen                       ; is reached only from .close, so without
+    call OSAPI_MEM_FREE             ; this the claim is orphaned: it is in no
+    mov word [sc_rpseg], 0          ; pictab slot, so sc_pictfree cannot see it
+    mov word [sc_rpin], 0           ; either, and the next parse's zeroing of
+.nopen:                             ; sc_rpseg drops the handle rather than
+    call sc_rtail                   ; freeing it
     clc
     ret
 .no:
@@ -1105,6 +1150,15 @@ sc_rword3:
     jne .param
     mov ax, [sc_rdep]               ; the depth the group opened at, exactly
     mov [sc_rpin], ax               ; as SCR_SKIP records it
+    push dx                         ; a \pict reaching here with one already
+    push es                         ; open re-arms the collector, and the claim
+    mov dx, [sc_rpseg]              ; the last one was filling then has no
+    or dx, dx                       ; holder at all. ES is banked because
+    jz .nofree                      ; MEM_FREE is an X stub and overwrites it
+    call OSAPI_MEM_FREE
+.nofree:
+    pop es
+    pop dx
     mov word [sc_rpseg], 0
     mov word [sc_rpoff], 0
     mov byte [sc_rpnib], 0
@@ -1263,6 +1317,21 @@ sc_rpfin:
     mov ax, [sc_rpoff]
     cmp ax, [sc_rpcap]
     jb .drop                        ; short of what the header promised
+    mov ax, [sc_rpwb]               ; ...AND THE HEADER MAY HAVE BEEN REWRITTEN
+    mul word [sc_rpih]              ; since sc_rpclaim sized the claim: \picw,
+    or dx, dx                       ; \pich and \wbmwidthbytes are accepted for
+    jnz .drop                       ; the rest of the group and only the CLAIM
+    cmp ax, [sc_rpcap]              ; is fixed. A record describing 1280x200
+    jne .drop                       ; over a 1KB claim is 127KB of somebody
+    mov cx, [sc_rpiw]               ; else's heap blitted into the document, so
+    or cx, cx                       ; the record must describe the bytes we
+    jz .drop                        ; actually hold - every test sc_rpclaim
+    cmp cx, OS88IMG_WMAX            ; made, made again on the final values
+    ja .drop
+    inc cx
+    shr cx, 1
+    cmp [sc_rpwb], cx
+    jb .drop
     mov ax, [sc_npic]
     cmp ax, SC_PICMAX               ; a document may hold SC_PICMAX (88.9);
     jae .drop                       ; the rest arrive as nothing
@@ -1281,9 +1350,14 @@ sc_rpfin:
     mov ax, [sc_npic]               ; the CHP byte IS the index (88.9), and
     inc word [sc_npic]              ; the character carries no other format.
     call sc_rputp                   ; AL is that index and sc_rputp wants it
-    jmp short .out                  ; there - the character it writes is
-                                    ; SC_PICCH, which is the routine's own
-                                    ; business and not an argument to it
+    jnc .out                        ; there - the character it writes is
+    dec word [sc_npic]              ; SC_PICCH, which is the routine's own
+    mov byte [sc_dtrunc], 1         ; business and not an argument to it.
+    jmp short .drop                 ; CF=1 is a FULL document: no character
+                                    ; names the picture, so the slot and the
+                                    ; claim go back and the load says it did
+                                    ; not all fit (47) rather than reporting
+                                    ; a picture nothing can draw
 .drop:
     mov dx, [sc_rpseg]
     call OSAPI_MEM_FREE
@@ -1298,20 +1372,26 @@ sc_rpfin:
 
 ; sc_rputp - put SC_PICCH in the document with AL as its CHP byte, which is
 ; the picture index rather than an attribute set. Preserves all registers.
+; out: CF=1 = the document was full and nothing was written.
 sc_rputp:
     push ax
     push bx
     push es
     mov bx, [sc_len]
     cmp bx, [sc_cap]
-    jae .out                        ; the same ceiling every other character
+    jae .full                       ; the same ceiling every other character
     mov ah, al                      ; meets; sc_rput's own refusal
     mov es, [sc_dseg]
     mov byte [es:bx], SC_PICCH
     mov es, [sc_cseg]
     mov [es:bx], ah
     inc word [sc_len]
-.out:
+    clc
+    jmp short .out
+.full:
+    stc                             ; the caller owns a claim and a pictab slot
+.out:                               ; on the strength of this character
+
     pop es
     pop bx
     pop ax

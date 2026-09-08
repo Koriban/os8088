@@ -7046,19 +7046,22 @@ $(BUILD)/word120.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC t
 $(BUILD)/word360.img: $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/word.o88 $(BUILD)/WORD.OVL $(BUILD)/WELCOME.DOC --folder DOCS
 
-# --- SCRIBE: the fork of WORD (SPEC.md 89) -----------------------------------
+# --- SCRIBE: the fork of WORD (SPEC.md 94) -----------------------------------
 # A SEPARATE PACKAGE and not a second build of the same source. apps/scribe/
-# is a copy of apps/word/, keeping every symbol name, every include filename
-# and every line number, so `diff -r apps/word apps/scribe` is exactly what
-# the fork changed and an upstream fix reads straight across. NASM finds the
-# wd*.inc out of apps/scribe/ because that is this rule's own -I, which is
-# also why the two cannot accidentally share a header.
+# began as a copy of apps/word/ that kept every wd_ symbol and every wd*.inc
+# filename, so `diff -r apps/word apps/scribe` was exactly what the fork
+# changed; it CARRIES THE sc_ PREFIX AND THE sc*.inc FILENAMES now, and
+# SPEC.md 94.1 records both sides of that trade. NASM finds the sc*.inc out of
+# apps/scribe/ because that is this rule's own -I, which is also why the two
+# cannot accidentally share a header.
 #
-# It is NOT in `all` and it is not on any shipped disk: WORD is the one that
-# ships, SCRIBE is the fork, and putting both on the apps floppy would spend
-# 49KB to show two word processors that currently differ only in their name.
-# `make scribedisk` builds its floppy on demand, cword's arrangement (SPEC.md
-# 73.12) and for cword's reason.
+# THE PACKAGE is in `all` and the FLOPPY is on demand. scribe.o88 is named in
+# `all` for wire.o88's and recorder.o88's reason - it ships on no disk, and
+# building it is the only thing that keeps it assembling. It is on no shipped
+# disk because WORD is the one that ships and putting both on the apps floppy
+# would spend 49KB to show two word processors; `make scribedisk` builds its
+# floppy, in all four geometries, which is cword's arrangement (SPEC.md 73.12)
+# and for cword's reason.
 SCRIBESRC := apps/scribe/scribe.asm apps/scribe/scdoc.inc apps/scribe/scrtf.inc \
              apps/scribe/scutil.inc
 
@@ -7085,10 +7088,32 @@ $(BUILD)/SCRIBE.OVL: $(BUILD)/scribe.o88 ;
 
 scribe: $(BUILD)/scribe.o88
 
-scribedisk: $(BUILD)/scribe.img
+scribedisk: $(BUILD)/scribe.img $(BUILD)/scribe720.img \
+            $(BUILD)/scribe120.img $(BUILD)/scribe360.img
 
-$(BUILD)/scribe.img: $(BUILD)/scribe.o88 $(BUILD)/SCRIBE.OVL $(BUILD)/WELCOME.DOC tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/scribe.o88 $(BUILD)/SCRIBE.OVL $(BUILD)/WELCOME.DOC --folder DOCS
+# SCWELCOM.RTF and not WELCOME.RTF: cword's rule already owns that name and
+# builds it from apps/cword/welcome.wtx, and two rules writing one file is a
+# race whichever way it is resolved. RTF is Scribe's own default format
+# (SPEC.md 94.4), so a disk carrying only a .DOC would never exercise it -
+# and apps/scribe/welcome.wtx was on no rule at all, which meant an edit to it
+# changed nothing and the disk still carried Word's text.
+$(BUILD)/SCWELCOM.RTF: tools/os88rtf.py tools/os88doc.py apps/scribe/welcome.wtx | $(BUILD)
+	python3 tools/os88rtf.py apps/scribe/welcome.wtx -o $@
+
+SCRIBEDISK := $(BUILD)/scribe.o88 $(BUILD)/SCRIBE.OVL $(BUILD)/WELCOME.DOC \
+              $(BUILD)/SCWELCOM.RTF
+
+$(BUILD)/scribe.img: $(SCRIBEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(SCRIBEDISK) --folder DOCS
+
+$(BUILD)/scribe720.img: $(SCRIBEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(SCRIBEDISK) --folder DOCS
+
+$(BUILD)/scribe120.img: $(SCRIBEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(SCRIBEDISK) --folder DOCS
+
+$(BUILD)/scribe360.img: $(SCRIBEDISK) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(SCRIBEDISK) --folder DOCS
 
 # --- the .DOC format gate (ON DEMAND: `make wordcheck`) ----------------------
 # There is no copy of Word here to open the output with, and "it round-trips
