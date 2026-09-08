@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os88img.inc - picture decoders: .PIX, .BMP and .PCX into packed 4bpp
-; SPEC.md 85. Include LAST, after os88ui.inc and before OS88_BSS, exactly as
+; SPEC.md 93. Include LAST, after os88ui.inc and before OS88_BSS, exactly as
 ; os88line.inc and os88text.inc are.
 ;
 ; WHY AN INCLUDE AND NOT A KERNEL SLOT: the same argument 75.3 and 83 make. A
@@ -23,7 +23,7 @@
 ; in a block the CALLER allocates and passes in SI, the way os88line.inc takes
 ; its 20-byte block.
 ;
-; Both halves of that matter and the second one is the subtler. 82.16.1: a
+; Both halves of that matter and the second one is the subtler. 93.2: a
 ; module that names its own bss names it at an ABSOLUTE address, bss begins
 ; where the image ends, and two packages have different image sizes - so an
 ; include with private variables cannot serve a package that OVERLAYS it and
@@ -31,8 +31,8 @@
 ; resident. For the same reason IMG_ERR is a NUMBER and not a string pointer:
 ; a string in an overlaid module is at a module-relative offset, and a
 ; resident caller reading it through DS gets whatever happens to sit there -
-; the exact bug 82.16.4 records against ch_hdrtpl. The caller words the
-; message, which it should anyway: two packages report differently.
+; the exact bug 93.2 records against an overlaid rasterizer. The caller words
+; the message, which it should anyway: two packages report differently.
 ;
 ; -----------------------------------------------------------------------------
 ; WHAT IS ACCEPTED, AND WHAT GOES TO THE HOST TOOL INSTEAD
@@ -60,9 +60,9 @@
 ;
 ; REFUSED BY NAME rather than approximated: 8-bit .PCX, and 8- or 24-bit .BMP.
 ; Those need a 256-to-16 nearest-colour quantisation, which is a decision
-; about how a picture should LOOK; docs/IMGCONV-PLAN.md's whole argument is
-; that such a decision belongs on the host, where there is room to dither and
-; to look at the answer. Refusal is an ordinary path (47).
+; about how a picture should LOOK, and such a decision belongs on the host,
+; where there is room to dither and to look at the answer. Refusal is an
+; ordinary path (47).
 ;
 ; A SIXTEEN-ENTRY PALETTE IS HONOURED, which is not the same thing. A .BMP and
 ; a 4-plane .PCX each carry 16 RGB triples, and img_palmap maps every one to
@@ -235,8 +235,14 @@ img_load:
 .short:
     mov word [si+IMG_ERR], IMG_E_SHORT
 .fail:
-    stc
-    jmp .out
+    mov word [si+IMG_W], 0             ; A REFUSAL LEAVES NO GEOMETRY BEHIND.
+    mov word [si+IMG_H], 0             ; img_setgeom stores all three before the
+    mov word [si+IMG_STRIDE], 0        ; pixel data has been proved to be inside
+    stc                                ; the file, so a truncated PCX refuses
+    jmp .out                           ; with a complete, plausible size in the
+                                       ; block - and a caller that reads IMG_W
+                                       ; as "there is a picture" draws half of
+                                       ; one and half of a stale claim
 .done:
     cmp word [si+IMG_ERR], 0
     jne .fail
@@ -371,31 +377,49 @@ img_rowconv:
 .planes:
     call img_row_planes
 .tail:
-    test word [si+IMG_W], 1            ; AN ODD WIDTH LEAVES THE LAST LOW
-    jz .out                            ; NIBBLE UNUSED, AND IT IS ZERO.
-    mov bx, [si+IMG_ROWBUF]            ;
-    add bx, OS88IMG_RAW                ; It is outside the picture, so nothing
-    add bx, [si+IMG_STRIDE]            ; draws it and nothing looks at it -
-    dec bx                             ; and it still has to be decided,
-    mov al, [bx]                       ; because the two routines above did
-    and al, 0xF0                       ; not agree about it. img_row_planes
-    mov [bx], al                       ; stops at IMG_W and leaves it 0;
-.out:                                  ; img_row_nib works in whole BYTES, so
-    pop bx                             ; it mapped the source's own padding
-    pop ax                             ; nibble THROUGH THE PALETTE and left
-    ret                                ; PAL[0] there instead.
-                                       ;
-                                       ; Which made a decoded picture depend
-                                       ; on a colour it does not contain: the
-                                       ; same 35-wide image came out with a
-                                       ; different last byte per row under our
-                                       ; palette and under a reversed one.
-                                       ; Invisible, and exactly the kind of
-                                       ; difference that makes two readers of
-                                       ; one file disagree for a reason
-                                       ; neither of them can see. It is a
-                                       ; property of the OUTPUT format, so it
-                                       ; is decided once, here, and not twice.
+    call img_rowmask
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; img_rowmask - AN ODD WIDTH LEAVES THE LAST LOW NIBBLE OF THE PACKED ROW
+; UNUSED, AND IT IS ZERO. Preserves all.
+;
+; It is outside the picture, so nothing draws it and nothing looks at it - and
+; it still has to be decided, because the routines above did not agree about
+; it. img_row_planes stops at IMG_W and leaves it 0; img_row_nib works in
+; whole BYTES, so it mapped the source's own padding nibble THROUGH THE
+; PALETTE and left PAL[0] there instead.
+;
+; Which made a decoded picture depend on a colour it does not contain: the
+; same 35-wide image came out with a different last byte per row under our
+; palette and under a reversed one. Invisible, and exactly the kind of
+; difference that makes two readers of one file disagree for a reason neither
+; of them can see.
+;
+; It is a property of the OUTPUT FORMAT and not of any one decoder, so it is
+; decided once and not twice - and that is why it is a routine rather than
+; img_rowconv's tail. .PIX does not convert anything and so never reached
+; img_rowconv at all, which left the one format written by this tree as the
+; one format whose padding nibble was whatever the file said.
+; -----------------------------------------------------------------------------
+img_rowmask:
+    push ax
+    push bx
+    test word [si+IMG_W], 1
+    jz .out
+    mov bx, [si+IMG_ROWBUF]
+    add bx, OS88IMG_RAW
+    add bx, [si+IMG_STRIDE]
+    dec bx
+    mov al, [bx]
+    and al, 0xF0
+    mov [bx], al
+.out:
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; img_palmap - fill [SI+IMG_PAL] with, for each of [SI+IMG_NPAL] source RGB
@@ -453,7 +477,7 @@ img_palmap:
     sub al, [cs:di+img_pal8088]        ; It is a table in this file's own
     jnc .r                             ; IMAGE, and if this include is built
     neg al                             ; into an overlay that image is not the
-.r:                                    ; one DS points at (82.16.1)
+.r:                                    ; one DS points at (93.2)
     mov ah, 0
     add cx, ax
     mov al, [si+IMG_SRGB+1]            ; + |dG|
@@ -616,7 +640,8 @@ img_pix:
     inc di
     dec cx
     jnz .copy
-    call img_rowout
+    call img_rowmask                   ; the one format that does not convert
+    call img_rowout                    ; still owes the output format its rule
     mov ax, [si+IMG_SBPR]              ; the SOURCE stride, so a padded row
     add [si+IMG_P], ax                 ; steps over its own padding
     inc word [si+IMG_Y]
@@ -663,10 +688,13 @@ img_bmp:
                                        ; inside that, and the palette and the
                                        ; pixels are bounds-checked where they
                                        ; are used
-    cmp word [es:16], 0                ; bfOffBits, high word: a picture past
+    cmp word [es:12], 0                ; bfOffBits, high word: a picture past
     jne .trunc                         ; the 64KB horizon has its pixels past
-    cmp word [es:20], 0                ; it too. biSize's high word likewise
-    jne .trunc
+    cmp word [es:16], 0                ; it too. biSize's high word likewise -
+    jne .trunc                         ; bfOffBits is the dword at 10 and biSize
+                                       ; the dword at 14, so the high words are
+                                       ; 12 and 16. biWidth's is checked at
+                                       ; .geom, where it is read
     mov ax, [es:14]                    ; biSize: BITMAPINFOHEADER or later
     cmp ax, 40
     jb .trunc
@@ -680,10 +708,10 @@ img_bmp:
     jne .depth
 .depthok:
     mov [si+IMG_BPP], ax
-    cmp word [es:30], 0                ; biCompression: BI_RGB. RLE4 is 2, and
-    jne .comp                          ; docs/IMGCONV-PLAN.md 3a gives it its
-    cmp word [es:32], 0                ; own extension rather than a branch here
-    jne .comp
+    cmp word [es:30], 0                ; biCompression: BI_RGB and nothing
+    jne .comp                          ; else. RLE4 is 2 and belongs to a
+    cmp word [es:32], 0                ; decoder somebody writes later, not to
+    jne .comp                          ; a branch here
     cmp word [es:20], 0
     jne .trunc
     mov ax, [es:18]                    ; biWidth, low word
@@ -730,7 +758,8 @@ img_bmp:
     shl cx, 1
     mov di, 14                         ; the palette follows the info header
     add di, [si+IMG_P]
-    mov ax, di
+    jc .trunc                          ; ...and a biSize that wraps the segment
+    mov ax, di                         ; is not an offset into this file
     add ax, cx
     jc .trunc
     cmp ax, [si+IMG_SRCLEN]
@@ -944,13 +973,24 @@ img_pcx:
     mov [si+IMG_TOT], ax
     cmp ax, OS88IMG_RAW
     ja .dim
-    mov di, 16                         ; ONE call for all three arrangements:
-    xor dl, dl                         ; R,G,B triples, and sixteen of them at
-    call img_palmap                    ; offset 16 whatever the pixels look
-                                       ; like. A monochrome file uses only the
-                                       ; first two, and it MUST - the identity
-                                       ; would make a scanned page black and
-                                       ; BLUE, and it is on the page to say so
+    cmp byte [es:1], 3                 ; VERSION 3 IS "2.8 WITHOUT PALETTE
+    je .nopal                          ; INFORMATION". The sixteen triples at
+    mov di, 16                         ; 16 are then not a palette, and a file
+    xor dl, dl                         ; that leaves them zero maps every index
+    call img_palmap                    ; to CBLACK - a whole picture in black,
+    jmp .havepal                       ; which is the outcome the palette pass
+.nopal:                                ; exists to avoid. The palette a version
+    call img_palident                  ; 3 file means is the fixed EGA one, and
+.havepal:                              ; that IS os8088's own sixteen in order.
+                                       ;
+                                       ; ONE call for all three arrangements
+                                       ; otherwise: R,G,B triples, and sixteen
+                                       ; of them at offset 16 whatever the
+                                       ; pixels look like. A monochrome file
+                                       ; uses only the first two, and it MUST -
+                                       ; the identity would make a scanned page
+                                       ; black and BLUE, and it is on the page
+                                       ; to say so
     mov word [si+IMG_P], 128           ; the pixel data begins after the header
     mov word [si+IMG_FLIP], 0          ; PCX is top-down
     mov word [si+IMG_Y], 0

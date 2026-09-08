@@ -15,8 +15,10 @@
 ;
 ; Each case reads a REAL FILE off the disk, so the path under test is the one
 ; a package actually uses: claim, OSAPI_FILE_READ, img_load. A case passes
-; only if the width, the height, the stride, the error code AND a rotate-xor
-; checksum of every decoded byte all match.
+; only if the width, the height, the stride, the error code AND a checksum of
+; every decoded byte all match - and the geometry is compared ON A REFUSAL
+; too, against zero, because img_setgeom stores it before any decoder has
+; proved its pixel data is inside the file.
 ;
 ; One case is not generated at all. MAIN.PCX is 1152x90 in four planes, off
 ; the Dr. Dobb's File Formats disc, written by PC Paintbrush by somebody who
@@ -29,10 +31,6 @@
     OS88_HEADER 'IMGTEST', it_entry
 
 IT_W        equ 300
-IT_H        equ 300                 ; twenty-three cases at IT_ROWH plus the
-                                    ; verdict under them. VGA-only, like the
-                                    ; rest of this tool: a CGA desktop band is
-                                    ; 155 rows (39.11.2) and never held it
 IT_ROWH     equ 9
 
 IT_SRCKB    equ 64                  ; the biggest file the corpus holds
@@ -70,6 +68,16 @@ it_s_all:   db 'ALL PASS', 0
 it_s_some:  db 'FAILURES', 0
 
 %include "imgcases.inc"
+
+IT_H        equ IMGC_N * IT_ROWH + 40   ; one row a case plus the verdict under
+                                    ; them, DERIVED - the corpus grows by five
+                                    ; when the Dr. Dobb's disc is present, and
+                                    ; a constant here loses the verdict off the
+                                    ; bottom without saying so. VGA-only, like
+                                    ; the rest of this tool: a CGA desktop band
+                                    ; is 155 rows (39.11.2) and never held it
+                                    ; (below the include, because IMGC_N
+                                    ; has to exist before an equ can use it)
 
 ; -----------------------------------------------------------------------------
 ; it_runall - every case, leaving a pass/fail byte per case in it_res.
@@ -134,28 +142,34 @@ it_one:
     mov [si+IMG_SRCSEG], ax
     mov ax, [it_dstseg]
     mov [si+IMG_DSTSEG], ax
-    mov word [si+IMG_DSTMAX], 0         ; the whole 64KB
+    mov ax, [di+4]                      ; the capacity this case is given, 0 =
+    mov [si+IMG_DSTMAX], ax             ; the whole 64KB. PER CASE, because a
+                                        ; constant 0 takes img_setgeom's own
+                                        ; `jz .fits` and leaves the compare
+                                        ; below it unreachable - a decoder that
+                                        ; ignored IMG_DSTMAX would pass every
+                                        ; case, which is not an uncovered path
+                                        ; but an untestable one
     mov word [si+IMG_ROWBUF], it_row
     mov ax, [di+2]                      ; the picture number asked for
     mov [si+IMG_PICNO], ax
     call img_load
-    mov ax, [di+4]                      ; the error code expected
+    mov ax, [di+6]                      ; the error code expected
     cmp ax, [si+IMG_ERR]
     jne .fail
-    or ax, ax
-    jnz .pass                           ; a refusal case ends here: there is no
-                                        ; picture to compare and IMG_W is 0
-    mov ax, [di+6]
-    cmp ax, [si+IMG_W]
+    mov ax, [di+8]                      ; ...and the geometry, WHICH IS ALSO
+    cmp ax, [si+IMG_W]                  ; CHECKED ON A REFUSAL: img_setgeom
+    jne .fail                           ; stores W/H/STRIDE before the pixel
+    mov ax, [di+10]                     ; data has been proved to be inside the
+    cmp ax, [si+IMG_H]                  ; file, so "the refusal left no
+    jne .fail                           ; geometry behind" is a claim with a
+    mov ax, [di+12]                     ; case rather than a comment. The
+    cmp ax, [si+IMG_STRIDE]             ; generator emits 0,0,0 for a refusal
     jne .fail
-    mov ax, [di+8]
-    cmp ax, [si+IMG_H]
-    jne .fail
-    mov ax, [di+10]
-    cmp ax, [si+IMG_STRIDE]
-    jne .fail
+    cmp word [si+IMG_ERR], 0
+    jne .pass                           ; a refusal has no picture to checksum
     call it_cksum                       ; -> AX
-    cmp ax, [di+12]
+    cmp ax, [di+14]
     jne .fail
 .pass:
     mov al, 1
@@ -172,9 +186,16 @@ it_one:
     ret
 
 ; -----------------------------------------------------------------------------
-; it_cksum - the rotate-xor of stride*height decoded bytes, in AX.
-; A plain sum would not notice two rows swapped; the rotate makes position
-; part of the answer, which is the whole point of checking a decoder.
+; it_cksum - the LFSR-xor of stride*height decoded bytes, in AX, and it must
+; agree to the bit with tools/os88imgcase.py's cksum().
+;
+; A plain sum would not notice two rows swapped, and NEITHER DID THE ROTATE
+; THIS USED TO BE: rotating by one is a linear map of order SIXTEEN, so two
+; rows whose byte distance is a multiple of 16 land on the same rotation and
+; exchanging them left the answer unchanged - which on the 16-byte-stride
+; cases is every pair of rows in the picture. Multiplying by x modulo
+; x^16 + x^12 + x^5 + 1 has order 32767 instead, which no picture this decoder
+; accepts can reach, and it is four instructions rather than seventeen.
 ; -----------------------------------------------------------------------------
 it_cksum:
     push bx
@@ -190,24 +211,10 @@ it_cksum:
     xor si, si
     xor bx, bx                          ; BX = the running value
 .b:
-    mov ax, bx
     shl bx, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    shr ax, 1
-    or bx, ax                           ; ...a 16-bit rotate left by one
+    jnc .nofb
+    xor bx, 0x1021                      ; ...x times the running value, modulo
+.nofb:                                  ; the polynomial
     mov al, [es:si]
     xor ah, ah
     xor bx, ax

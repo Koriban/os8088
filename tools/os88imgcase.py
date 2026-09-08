@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """os88imgcase: build apps/os88img.inc's test corpus and its expectations.
 
-    python3 tools/os88imgcase.py            write build/imgcases/ and the .inc
-    python3 tools/os88imgcase.py --check    exit 1 if the .inc would change
+    python3 tools/os88imgcase.py             write build/imgcases/ and the .inc
+    python3 tools/os88imgcase.py --with-disc ...including the five third-party
+                                             cases, if the disc is in place
+    python3 tools/os88imgcase.py --check     exit 1 if the .inc would change
 
 WHY THIS EXISTS AND WHY IT IS PYTHON. apps/os88img.inc decodes three file
 formats, and a decoder is the classic thing that passes its own test: write
@@ -22,8 +24,8 @@ Formats disc and were written by other people's programs in the 1990s -
 MAIN.PCX by PC Paintbrush, INSTALL.BMP and START.BMP at 1 bit per pixel,
 SAMPLPIC.BMP at 4. Everything generated here could share a misreading with
 the decoder; those cannot. They are not in this repository - the rule the
-format PDFs follow - so the corpus is seventeen cases without the disc and
-twenty-two with, and both numbers are correct.
+format PDFs follow - so the corpus is twenty-seven cases without the disc and
+thirty-two with, and both numbers are correct.
 """
 
 import os
@@ -33,6 +35,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTDIR = os.path.join(ROOT, "build", "imgcases")
 INC = os.path.join(ROOT, "apps", "imgtest", "imgcases.inc")
+
+# The Dr. Dobb's File Formats disc's five, which this repository does not ship.
+DISC_FILES = ("MAIN.PCX", "HELP8.PCX", "INSTALL.BMP", "START.BMP",
+              "SAMPLPIC.BMP")
 
 # os8088's sixteen, CBLACK..CWHITE, as (R,G,B) - apps/os88api.inc's palette.
 PAL = [
@@ -73,11 +79,27 @@ def pack4(rows):
 
 
 def cksum(b):
-    """A 16-bit rotate-xor. Order matters, which a plain sum would not catch."""
+    """A 16-bit LFSR-xor. Order matters, which a plain sum would not catch.
+
+    THE MULTIPLIER'S ORDER IS THE WHOLE POINT AND A ROTATE HAS THE WRONG ONE.
+    This was a rotate-by-one, which is a linear map of order SIXTEEN, so any
+    two rows whose byte distance is a multiple of 16 land on the same rotation
+    and exchanging them left the answer unchanged. On the 16-byte-stride cases
+    that is EVERY pair of rows; a decoder that reversed the row order passed,
+    and a bottom-up BMP decoding upside down is one of the two defects this
+    corpus is credited with catching.
+
+    Multiplying by x modulo x^16 + x^12 + x^5 + 1 instead has order 32767, so
+    a swap needs (j-i)*stride to be a multiple of that before it hides - which
+    no picture this decoder accepts can reach. It is also SHORTER in assembly
+    than the rotate was: one `shl` and a conditional `xor`.
+    """
     s = 0
     for x in b:
-        s = ((s << 1) | (s >> 15)) & 0xFFFF
-        s ^= x
+        s <<= 1
+        if s & 0x10000:
+            s ^= 0x1021
+        s = (s & 0xFFFF) ^ x
     return s
 
 
@@ -357,19 +379,24 @@ def ref_pix(data, picno):
 
 # --- the corpus --------------------------------------------------------------
 
-def build():
+def build(disc=False):
     os.makedirs(OUTDIR, exist_ok=True)
-    cases = []                            # (file, picno, err, w, h, stride, ck)
+    cases = []                     # (file, picno, dstmax, err, w, h, stride, ck)
 
-    def emit(name, blob, picno, err, decoded):
+    def emit(name, blob, picno, err, decoded, dstmax=0):
+        """dstmax is the capacity the harness gives IMG_DSTMAX, 0 = the whole
+        64KB. It is per case because a constant 0 makes img_setgeom's capacity
+        limb unreachable: a decoder that ignored IMG_DSTMAX entirely would
+        pass every case, which is not an uncovered path but an untestable one.
+        """
         with open(os.path.join(OUTDIR, name), "wb") as f:
             f.write(blob)
         if decoded is None:
-            cases.append((name, picno, err, 0, 0, 0, 0))
+            cases.append((name, picno, dstmax, err, 0, 0, 0, 0))
             return
         w, h, rows = decoded
         packed, stride = pack4(rows)
-        cases.append((name, picno, err, w, h, stride, cksum(packed)))
+        cases.append((name, picno, dstmax, err, w, h, stride, cksum(packed)))
 
     # 1-2. PCX in four planes and in one, both with OUR palette, so the
     #      palette map is the identity and a failure here is the decoder's.
@@ -473,8 +500,10 @@ def build():
 
     # 17-21. Real third-party files, when the Dr. Dobb's File Formats disc
     #    has been copied into build/imgcases/. They are NOT in this repository
-    #    (the same rule the format PDFs follow), so the corpus is seventeen
-    #    cases without them and twenty-two with. Everything above could share
+    #    (the same rule the format PDFs follow), and the .inc COMMITTED to
+    #    this tree is the one without them: a table naming files the
+    #    repository cannot hold is five permanent FAILs for everybody but the
+    #    person holding the disc. Everything above could share
     #    a misreading with the decoder; these cannot - they were written by
     #    other people's programs in the 1990s.
     #
@@ -487,15 +516,22 @@ def build():
     #    SAMPLPIC.BMP earns its place on the OLD path, not a new one: every
     #    4bpp BMP the corpus had until now was written by the encoder forty
     #    lines above this, by the same hands as the decoder.
-    for name, ref in (("MAIN.PCX", ref_pcx), ("INSTALL.BMP", ref_bmp),
-                      ("START.BMP", ref_bmp), ("SAMPLPIC.BMP", ref_bmp)):
-        real = os.path.join(OUTDIR, name)
+    #
+    #    THEY ARE OPT-IN AND THAT IS THE POINT. If their mere presence in
+    #    build/imgcases/ pulled them in, the .inc this tree commits would
+    #    depend on what happens to be on the machine that last ran this, and
+    #    --check could never be a `make` row: it would fail on the disc
+    #    machine or on every other one. --with-disc asks for them.
+    if disc:
+        for name, ref in (("MAIN.PCX", ref_pcx), ("INSTALL.BMP", ref_bmp),
+                          ("START.BMP", ref_bmp), ("SAMPLPIC.BMP", ref_bmp)):
+            real = os.path.join(OUTDIR, name)
+            if os.path.exists(real):
+                blob = open(real, "rb").read()
+                emit(name, blob, 0, E_OK, ref(blob))
+        real = os.path.join(OUTDIR, "HELP8.PCX")
         if os.path.exists(real):
-            blob = open(real, "rb").read()
-            emit(name, blob, 0, E_OK, ref(blob))
-    real = os.path.join(OUTDIR, "HELP8.PCX")
-    if os.path.exists(real):
-        emit("HELP8.PCX", open(real, "rb").read(), 0, E_DEPTH, None)
+            emit("HELP8.PCX", open(real, "rb").read(), 0, E_DEPTH, None)
 
     # 22. A PCX whose pixel data stops early. Every byte off a disk is hostile
     #     (19) and this is what that means in practice.
@@ -503,7 +539,74 @@ def build():
     blob = enc_pcx_planar(rows, PAL, 4)
     emit("CUT.PCX", blob[:len(blob) // 2], 0, E_TRUNC, None)
 
-    # 23. Not a picture at all.
+    # 23. ...and the BMP half of it, which the corpus did not have: a
+    #     truncated PCX refuses inside img_pcxbyte and a truncated BMP
+    #     refuses on arithmetic before a byte is copied, so one does not
+    #     stand for the other.
+    rows = pattern(30, 9, 16)
+    blob = enc_bmp(rows, PAL, 4, topdown=False)
+    emit("CUT.BMP", blob[:len(blob) // 2], 0, E_TRUNC, None)
+
+    # 24. A .PIX whose directory LIES: entry 0 says its block is at an offset
+    #     past the end of the file. The archive path takes an offset and a
+    #     stride straight out of a directory entry, and this is the input its
+    #     bounds test exists for - nothing else in the corpus made it fire.
+    a = pattern(12, 4, 16)
+    blob = bytearray(enc_pix([(1, a)]))
+    struct.pack_into("<I", blob, 16 + 8, 0xF000)
+    emit("BADOFF.PIX", bytes(blob), 0, E_TRUNC, None)
+
+    # 25-26. THE LENGTH FLOOR IS PER FORMAT, and until now that reasoning was
+    #     checked by a described mutation and not by a file. TINY.BMP is ten
+    #     bytes and does not reach img_load's own sixteen, which is the floor
+    #     that exists to tell the three formats apart: IMG_E_SHORT. SHORT.BMP
+    #     is forty - past that floor, so it is RECOGNISED as a BMP - and short
+    #     of img_bmp's own fifty-four, which is the per-format floor the
+    #     section argues for. Two floors, two codes, and one file each.
+    small = enc_bmp(pattern(8, 4, 16), PAL, 4, topdown=False)
+    emit("TINY.BMP", small[:10], 0, E_SHORT, None)
+    emit("SHORT.BMP", small[:40], 0, E_TRUNC, None)
+
+    # 26. An RLE4 BMP: BI_RGB is the only compression here, and RLE4 is a
+    #     file a real paint program of the era writes.
+    blob = bytearray(enc_bmp(pattern(8, 4, 16), PAL, 4, topdown=False))
+    struct.pack_into("<I", blob, 30, 2)
+    emit("RLE4.BMP", bytes(blob), 0, E_COMP, None)
+
+    # 27. A width of zero. img_setgeom refuses it, and the refusal had no case.
+    blob = bytearray(enc_bmp(pattern(8, 4, 16), PAL, 4, topdown=False))
+    struct.pack_into("<i", blob, 18, 0)
+    emit("W0.BMP", bytes(blob), 0, E_DIM, None)
+
+    # 28. A .PIX format version this build does not know. The version byte is
+    #     the whole of what stands between this decoder and a future tool's
+    #     archive, and IMG_E_VER had no case at all.
+    blob = bytearray(enc_pix([(1, a)]))
+    blob[5] = 2
+    emit("V2.PIX", bytes(blob), 0, E_VER, None)
+
+    # 29. A PCX at VERSION 3 - "2.8 WITHOUT palette information". The sixteen
+    #     triples at offset 16 are then not a palette, and mapping them (they
+    #     are zero here, as such a writer leaves them) sends every index to
+    #     CBLACK: a whole picture in black, returned as a success. Version 3
+    #     means the fixed EGA palette, which IS os8088's own sixteen in order,
+    #     so the expectation is the identity - the same answer P4.PCX gives.
+    rows = pattern(37, 11, 16)
+    blob = bytearray(enc_pcx_planar(rows, PAL, 4))
+    blob[1] = 3
+    blob[16:64] = b"\0" * 48
+    emit("NOPAL.PCX", bytes(blob), 0, E_OK, (37, 11, rows))
+
+    # 30. A PICTURE BIGGER THAN THE CAPACITY THE CALLER GAVE. This is the only
+    #     case with a non-zero dstmax, and it is the only thing that proves
+    #     img_setgeom reads IMG_DSTMAX at all: every other case hands it 0
+    #     ("the whole 64KB") and takes the limb that skips the compare.
+    #     30x9 packs to stride 15, 135 bytes; 134 is one short.
+    rows = pattern(30, 9, 16)
+    blob = enc_bmp(rows, PAL, 4, topdown=False)
+    emit("BIG.BMP", blob, 0, E_BIG, None, dstmax=134)
+
+    # 31. Not a picture at all.
     emit("NOPE.TXT", b"This is not a picture, it is a sentence." * 8,
          0, E_WHAT, None)
 
@@ -519,14 +622,15 @@ def render(cases):
     out.append("; values are computed on the HOST from the format documents,")
     out.append("; never by running the decoder and recording what it said.")
     out.append(";")
-    out.append("; IMGC_REC = name(2) picno(2) err(2) w(2) h(2) stride(2) ck(2)")
-    out.append("IMGC_REC equ 14")
+    out.append("; IMGC_REC = name(2) picno(2) dstmax(2) err(2) w(2) h(2)")
+    out.append(";            stride(2) ck(2)")
+    out.append("IMGC_REC equ 16")
     out.append("IMGC_N   equ %d" % len(cases))
     out.append("")
     out.append("imgc_tab:")
-    for i, (name, picno, err, w, h, stride, ck) in enumerate(cases):
-        out.append("    dw imgc_n%d, %d, %d, %d, %d, %d, 0x%04X"
-                   % (i, picno, err, w, h, stride, ck))
+    for i, (name, picno, dstmax, err, w, h, stride, ck) in enumerate(cases):
+        out.append("    dw imgc_n%d, %d, %d, %d, %d, %d, %d, 0x%04X"
+                   % (i, picno, dstmax, err, w, h, stride, ck))
     out.append("")
     for i, (name, *_rest) in enumerate(cases):
         out.append("imgc_n%d: db '%s', 0" % (i, name))
@@ -535,7 +639,7 @@ def render(cases):
 
 
 def main():
-    cases = build()
+    cases = build("--with-disc" in sys.argv)
     text = render(cases)
     if "--check" in sys.argv:
         have = open(INC).read() if os.path.exists(INC) else ""
@@ -548,8 +652,12 @@ def main():
     with open(INC, "w") as f:
         f.write(text)
     print("os88imgcase: wrote %d cases to %s" % (len(cases), INC))
+    if "--with-disc" not in sys.argv and any(
+            os.path.exists(os.path.join(OUTDIR, n)) for n in DISC_FILES):
+        print("os88imgcase: the Dr. Dobb's files are here - --with-disc adds "
+              "them (and leaves a .inc this tree cannot commit)")
     for c in cases:
-        print("   %-12s pic=%d err=%d  %dx%d stride=%d ck=%04X" % c)
+        print("   %-12s pic=%d cap=%d err=%d  %dx%d stride=%d ck=%04X" % c)
     return 0
 
 

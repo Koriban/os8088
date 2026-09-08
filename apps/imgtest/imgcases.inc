@@ -5,34 +5,39 @@
 ; values are computed on the HOST from the format documents,
 ; never by running the decoder and recording what it said.
 ;
-; IMGC_REC = name(2) picno(2) err(2) w(2) h(2) stride(2) ck(2)
-IMGC_REC equ 14
-IMGC_N   equ 23
+; IMGC_REC = name(2) picno(2) dstmax(2) err(2) w(2) h(2)
+;            stride(2) ck(2)
+IMGC_REC equ 16
+IMGC_N   equ 27
 
 imgc_tab:
-    dw imgc_n0, 0, 0, 37, 11, 19, 0x9B4C
-    dw imgc_n1, 0, 0, 23, 7, 12, 0xF319
-    dw imgc_n2, 0, 0, 30, 9, 15, 0x79A0
-    dw imgc_n3, 0, 0, 30, 9, 15, 0x79A0
-    dw imgc_n4, 0, 0, 16, 5, 8, 0xD12D
-    dw imgc_n5, 7, 0, 19, 6, 10, 0x8982
-    dw imgc_n6, 4, 8, 0, 0, 0, 0x0000
-    dw imgc_n7, 0, 0, 41, 8, 21, 0x553F
-    dw imgc_n8, 0, 0, 31, 9, 16, 0x0066
-    dw imgc_n9, 0, 0, 31, 9, 16, 0x0066
-    dw imgc_n10, 0, 0, 31, 9, 16, 0x006F
-    dw imgc_n11, 0, 0, 35, 10, 18, 0xF444
-    dw imgc_n12, 0, 0, 35, 10, 18, 0xF172
-    dw imgc_n13, 0, 6, 0, 0, 0, 0x0000
-    dw imgc_n14, 0, 6, 0, 0, 0, 0x0000
-    dw imgc_n15, 0, 6, 0, 0, 0, 0x0000
-    dw imgc_n16, 0, 0, 1152, 90, 576, 0x5D4C
-    dw imgc_n17, 0, 0, 177, 98, 89, 0xBCE9
-    dw imgc_n18, 0, 0, 334, 132, 167, 0xA6A9
-    dw imgc_n19, 0, 0, 184, 97, 92, 0x2E84
-    dw imgc_n20, 0, 6, 0, 0, 0, 0x0000
-    dw imgc_n21, 0, 5, 0, 0, 0, 0x0000
-    dw imgc_n22, 0, 1, 0, 0, 0, 0x0000
+    dw imgc_n0, 0, 0, 0, 37, 11, 19, 0xFA47
+    dw imgc_n1, 0, 0, 0, 23, 7, 12, 0x9B24
+    dw imgc_n2, 0, 0, 0, 30, 9, 15, 0xFAA1
+    dw imgc_n3, 0, 0, 0, 30, 9, 15, 0xFAA1
+    dw imgc_n4, 0, 0, 0, 16, 5, 8, 0xFFCC
+    dw imgc_n5, 7, 0, 0, 19, 6, 10, 0x1D02
+    dw imgc_n6, 4, 0, 8, 0, 0, 0, 0x0000
+    dw imgc_n7, 0, 0, 0, 41, 8, 21, 0x25D6
+    dw imgc_n8, 0, 0, 0, 31, 9, 16, 0x0F2B
+    dw imgc_n9, 0, 0, 0, 31, 9, 16, 0x0F2B
+    dw imgc_n10, 0, 0, 0, 31, 9, 16, 0xD46F
+    dw imgc_n11, 0, 0, 0, 35, 10, 18, 0x2A5F
+    dw imgc_n12, 0, 0, 0, 35, 10, 18, 0xC358
+    dw imgc_n13, 0, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n14, 0, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n15, 0, 0, 6, 0, 0, 0, 0x0000
+    dw imgc_n16, 0, 0, 5, 0, 0, 0, 0x0000
+    dw imgc_n17, 0, 0, 5, 0, 0, 0, 0x0000
+    dw imgc_n18, 0, 0, 5, 0, 0, 0, 0x0000
+    dw imgc_n19, 0, 0, 2, 0, 0, 0, 0x0000
+    dw imgc_n20, 0, 0, 5, 0, 0, 0, 0x0000
+    dw imgc_n21, 0, 0, 7, 0, 0, 0, 0x0000
+    dw imgc_n22, 0, 0, 3, 0, 0, 0, 0x0000
+    dw imgc_n23, 0, 0, 9, 0, 0, 0, 0x0000
+    dw imgc_n24, 0, 0, 0, 37, 11, 19, 0xFA47
+    dw imgc_n25, 0, 134, 4, 0, 0, 0, 0x0000
+    dw imgc_n26, 0, 0, 1, 0, 0, 0, 0x0000
 
 imgc_n0: db 'P4.PCX', 0
 imgc_n1: db 'P1.PCX', 0
@@ -50,11 +55,15 @@ imgc_n12: db 'PK4FOR.PCX', 0
 imgc_n13: db 'TWOBIT.BMP', 0
 imgc_n14: db 'P44.PCX', 0
 imgc_n15: db 'EIGHT.PCX', 0
-imgc_n16: db 'MAIN.PCX', 0
-imgc_n17: db 'INSTALL.BMP', 0
-imgc_n18: db 'START.BMP', 0
-imgc_n19: db 'SAMPLPIC.BMP', 0
-imgc_n20: db 'HELP8.PCX', 0
-imgc_n21: db 'CUT.PCX', 0
-imgc_n22: db 'NOPE.TXT', 0
+imgc_n16: db 'CUT.PCX', 0
+imgc_n17: db 'CUT.BMP', 0
+imgc_n18: db 'BADOFF.PIX', 0
+imgc_n19: db 'TINY.BMP', 0
+imgc_n20: db 'SHORT.BMP', 0
+imgc_n21: db 'RLE4.BMP', 0
+imgc_n22: db 'W0.BMP', 0
+imgc_n23: db 'V2.PIX', 0
+imgc_n24: db 'NOPAL.PCX', 0
+imgc_n25: db 'BIG.BMP', 0
+imgc_n26: db 'NOPE.TXT', 0
 
