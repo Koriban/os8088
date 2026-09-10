@@ -17697,6 +17697,15 @@ SH_RPN_MAX   equ 96                   ; a token array longer than this is
 ; which that section reads only "2do" - which is why every function used to
 ; fall back to a cached value.
 ;
+; SIX OF THESE WERE WRONG until 2026-09-10, and every one silently: UPPER and
+; LOWER were each other's (113/112), INDEX was DATE's 65 (it is 29), PMT was
+; DMIN's 43 (59), and RATE and MIRR had slid one place onto PMT's 59 and
+; RATE's 60 (60, 61). A wrong index is the failure this table's own header
+; warns about - a file Excel opens and computes SOMETHING ELSE from - and it
+; was invisible here, because SHEET never read a function back. Found by
+; checking the table against revision 1.42's 3.11 mechanically, which
+; tools/os88sheetfmt.py --selfcheck now does on every build (BIFF_FUNCS).
+;
 ; 0xFF = cannot be written at the BIFF version this app emits. POWER is the
 ; only one: it is index 337, new in BIFF5, and past the byte BIFF3 allows.
 sh_rpn_fid:
@@ -17713,15 +17722,15 @@ sh_rpn_fid:
                                        ; cannot lex the '.' either, so it
                                        ; declines twice over and the cell goes
                                        ; out as its cached value
-    db 32, 115, 116, 31, 112          ; LEN LEFT RIGHT MID UPPER
-    db 113, 114, 118, 30, 111         ; LOWER PROPER TRIM REPT CHAR
+    db 32, 115, 116, 31, 113          ; LEN LEFT RIGHT MID UPPER
+    db 112, 114, 118, 30, 111         ; LOWER PROPER TRIM REPT CHAR
     db 121, 117, 130, 33              ; CODE EXACT T VALUE
     db 124, 82, 120, 119, 48          ; FIND SEARCH SUBSTITUTE REPLACE TEXT
     db 13, 14                         ; DOLLAR FIXED
     db 65, 67, 68, 69, 70             ; DATE DAY MONTH YEAR WEEKDAY
     db 66, 71, 72, 73, 140            ; TIME HOUR MINUTE SECOND DATEVALUE
     db 141                            ; TIMEVALUE
-    db 76, 77, 75, 65                 ; ROWS COLUMNS AREAS INDEX - Excel's own
+    db 76, 77, 75, 29                 ; ROWS COLUMNS AREAS INDEX - Excel's own
                                        ; ftab, the same table CHOOSE(100),
                                        ; ROW(8) and COLUMN(9) above came from
     db 64, 102, 101, 28               ; MATCH VLOOKUP HLOOKUP LOOKUP - and
@@ -17737,12 +17746,12 @@ sh_rpn_fid:
                                        ; LOG takes a BASE where 1.x's did not
     db 15, 16, 17, 98, 99             ; SIN COS TAN ASIN ACOS
     db 18, 97                         ; ATAN ATAN2
-    db 142, 143, 43, 56, 57           ; SLN SYD PMT PV FV
+    db 142, 143, 59, 56, 57           ; SLN SYD PMT PV FV
     db 11                             ; NPV
     db 58, 144                        ; NPER DDB
     db 167, 168                       ; IPMT PPMT
-    db 59                             ; RATE
-    db 62, 60                         ; IRR MIRR
+    db 60                             ; RATE
+    db 62, 61                         ; IRR MIRR
     db 74                             ; NOW - BIFF's own ftab index for it
     db 190, 162, 63                   ; ISNONTEXT CLEAN RAND
     db 148                            ; INDIRECT. All four of these were

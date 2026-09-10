@@ -96276,6 +96276,40 @@ after loading each file back, and `#NAME?` after loading a file with no names
 — which is what proves the first two were reading the file rather than
 remembering.
 
+#### 81.10.9 Six function numbers were wrong, and nothing could see it
+
+`sh_rpn_fid` is copied by hand from section 3.11 of the file-format document, and six
+of its entries were not what that table says: **UPPER and LOWER were each other's**
+(113 and 112), **INDEX was 65** — DATE's number; it is 29 — **PMT was 43**, which
+is DMIN, and **RATE and MIRR had slid one place** onto PMT's 59 and RATE's 60
+(they are 60 and 61). Every one is the failure this section's opening warns
+about: not a broken file, a file Excel opens happily and computes *something
+else* from, silently. `=PMT(…)` from SHEET reached Excel as a database minimum.
+
+**Invisible from inside, by construction.** SHEET wrote function numbers and
+never read one back, so no round trip through SHEET could disagree with it; the
+host library read FORMULA records for their cached result and skipped the
+tokens exactly as SHEET did. The error surfaced only when the table was checked
+against the document mechanically, which was done because the formula decoder
+(the next section) needed the table to be right in the *other* direction — decoding
+Excel's PMT through it would have produced RATE.
+
+**The guard is the second reader.** `tools/os88sheetfmt.py` now carries
+`BIFF_FUNCS`, all 224 BIFF2–4 functions generated from revision 1.42's tables
+(footnote digits the PDF glues to names, `TRUNC11`, stripped by hand — `LOG10`
+and `ATAN2` really end in digits), and its `--selfcheck` — the fast-tier
+`sheetfmtlib` row, so every `make` — holds `sh_functab`/`sh_rpn_fid`/`sh_rpn_fvar`
+to it. Mutation-tested: UPPER put back to 112 fails the build naming LOWER.
+
+One entry it tolerates by name, not silence: `FIXED` is 2/2 in BIFF3 and 2–3
+from BIFF4, and SHEET's single table writes it as `tFuncVar` — right for a
+workbook, a variable-count token for a fixed function in a BIFF3 file.
+
+The same library now decodes a FORMULA record's tokens back to text
+(`decode_rpn`), which is the next section's reference implementation, and reads
+`KODAK.BIF`'s ten formulas — written by SHEET in the emulator — back as
+`=ROUND(D2/B2*100,1)`, `=SUM(B2:B4)` and the rest.
+
 ### 81.11 Text cells
 
 Until stage 4.5 `sh_commit` branched twice — `'='` made a formula, everything

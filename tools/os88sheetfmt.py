@@ -69,6 +69,355 @@ BIFF_ERRORS = {0x00: '#NULL!', 0x07: '#DIV/0!', 0x0F: '#VALUE!',
                0x17: '#REF!', 0x1D: '#NAME?', 0x24: '#NUM!', 0x2A: '#N/A'}
 ERR_CODES = dict((v, k) for k, v in BIFF_ERRORS.items())
 
+# Every built-in sheet function of BIFF2-BIFF4: index -> (name, (min, max) in
+# BIFF3 or None if it is not in BIFF3, (min, max) in BIFF4). GENERATED from
+# revision 1.42 of the OpenOffice.org "Microsoft Excel File Format" document,
+# section 3.11 - the revision that HAS the table; the copy in docs/ is the 2002
+# one, whose 3.11 reads "2do". Footnote numbers the PDF glues to a name
+# (TRUNC11, DAYS36010) were stripped by hand, not by pattern, because LOG10,
+# ATAN2 and SUMX2MY2 really end in digits. Two indices change name between
+# the versions (204 YEN -> USDOLLAR, 215 JIS -> DBCS); the BIFF4 name is kept.
+#
+# It is here, in the SECOND reader, for the reason this whole file exists: a
+# table SHEET copied by hand had six wrong entries (UPPER/LOWER swapped, INDEX
+# as DATE, PMT as DMIN, RATE and MIRR one place off) that nothing noticed,
+# because SHEET wrote function numbers and never read one back. _check_functab
+# below holds sheet.asm's tables to this one on every build.
+BIFF_FUNCS = {
+      0: ('COUNT'     , (0, 30) , (0, 30)),
+      1: ('IF'        , (2, 3)  , (2, 3)),
+      2: ('ISNA'      , (1, 1)  , (1, 1)),
+      3: ('ISERROR'   , (1, 1)  , (1, 1)),
+      4: ('SUM'       , (0, 30) , (0, 30)),
+      5: ('AVERAGE'   , (1, 30) , (1, 30)),
+      6: ('MIN'       , (1, 30) , (1, 30)),
+      7: ('MAX'       , (1, 30) , (1, 30)),
+      8: ('ROW'       , (0, 1)  , (0, 1)),
+      9: ('COLUMN'    , (0, 1)  , (0, 1)),
+     10: ('NA'        , (0, 0)  , (0, 0)),
+     11: ('NPV'       , (2, 30) , (2, 30)),
+     12: ('STDEV'     , (1, 30) , (1, 30)),
+     13: ('DOLLAR'    , (1, 2)  , (1, 2)),
+     14: ('FIXED'     , (2, 2)  , (2, 3)),
+     15: ('SIN'       , (1, 1)  , (1, 1)),
+     16: ('COS'       , (1, 1)  , (1, 1)),
+     17: ('TAN'       , (1, 1)  , (1, 1)),
+     18: ('ATAN'      , (1, 1)  , (1, 1)),
+     19: ('PI'        , (0, 0)  , (0, 0)),
+     20: ('SQRT'      , (1, 1)  , (1, 1)),
+     21: ('EXP'       , (1, 1)  , (1, 1)),
+     22: ('LN'        , (1, 1)  , (1, 1)),
+     23: ('LOG10'     , (1, 1)  , (1, 1)),
+     24: ('ABS'       , (1, 1)  , (1, 1)),
+     25: ('INT'       , (1, 1)  , (1, 1)),
+     26: ('SIGN'      , (1, 1)  , (1, 1)),
+     27: ('ROUND'     , (2, 2)  , (2, 2)),
+     28: ('LOOKUP'    , (2, 3)  , (2, 3)),
+     29: ('INDEX'     , (2, 4)  , (2, 4)),
+     30: ('REPT'      , (2, 2)  , (2, 2)),
+     31: ('MID'       , (3, 3)  , (3, 3)),
+     32: ('LEN'       , (1, 1)  , (1, 1)),
+     33: ('VALUE'     , (1, 1)  , (1, 1)),
+     34: ('TRUE'      , (0, 0)  , (0, 0)),
+     35: ('FALSE'     , (0, 0)  , (0, 0)),
+     36: ('AND'       , (1, 30) , (1, 30)),
+     37: ('OR'        , (1, 30) , (1, 30)),
+     38: ('NOT'       , (1, 1)  , (1, 1)),
+     39: ('MOD'       , (2, 2)  , (2, 2)),
+     40: ('DCOUNT'    , (3, 3)  , (3, 3)),
+     41: ('DSUM'      , (3, 3)  , (3, 3)),
+     42: ('DAVERAGE'  , (3, 3)  , (3, 3)),
+     43: ('DMIN'      , (3, 3)  , (3, 3)),
+     44: ('DMAX'      , (3, 3)  , (3, 3)),
+     45: ('DSTDEV'    , (3, 3)  , (3, 3)),
+     46: ('VAR'       , (1, 30) , (1, 30)),
+     47: ('DVAR'      , (3, 3)  , (3, 3)),
+     48: ('TEXT'      , (2, 2)  , (2, 2)),
+     49: ('LINEST'    , (1, 4)  , (1, 4)),
+     50: ('TREND'     , (1, 4)  , (1, 4)),
+     51: ('LOGEST'    , (1, 4)  , (1, 4)),
+     52: ('GROWTH'    , (1, 4)  , (1, 4)),
+     56: ('PV'        , (3, 5)  , (3, 5)),
+     57: ('FV'        , (3, 5)  , (3, 5)),
+     58: ('NPER'      , (3, 5)  , (3, 5)),
+     59: ('PMT'       , (3, 5)  , (3, 5)),
+     60: ('RATE'      , (3, 6)  , (3, 6)),
+     61: ('MIRR'      , (3, 3)  , (3, 3)),
+     62: ('IRR'       , (1, 2)  , (1, 2)),
+     63: ('RAND'      , (0, 0)  , (0, 0)),
+     64: ('MATCH'     , (2, 3)  , (2, 3)),
+     65: ('DATE'      , (3, 3)  , (3, 3)),
+     66: ('TIME'      , (3, 3)  , (3, 3)),
+     67: ('DAY'       , (1, 1)  , (1, 1)),
+     68: ('MONTH'     , (1, 1)  , (1, 1)),
+     69: ('YEAR'      , (1, 1)  , (1, 1)),
+     70: ('WEEKDAY'   , (1, 1)  , (1, 1)),
+     71: ('HOUR'      , (1, 1)  , (1, 1)),
+     72: ('MINUTE'    , (1, 1)  , (1, 1)),
+     73: ('SECOND'    , (1, 1)  , (1, 1)),
+     74: ('NOW'       , (0, 0)  , (0, 0)),
+     75: ('AREAS'     , (1, 1)  , (1, 1)),
+     76: ('ROWS'      , (1, 1)  , (1, 1)),
+     77: ('COLUMNS'   , (1, 1)  , (1, 1)),
+     78: ('OFFSET'    , (3, 5)  , (3, 5)),
+     82: ('SEARCH'    , (2, 3)  , (2, 3)),
+     83: ('TRANSPOSE' , (1, 1)  , (1, 1)),
+     86: ('TYPE'      , (1, 1)  , (1, 1)),
+     97: ('ATAN2'     , (2, 2)  , (2, 2)),
+     98: ('ASIN'      , (1, 1)  , (1, 1)),
+     99: ('ACOS'      , (1, 1)  , (1, 1)),
+    100: ('CHOOSE'    , (2, 30) , (2, 30)),
+    101: ('HLOOKUP'   , (3, 3)  , (3, 3)),
+    102: ('VLOOKUP'   , (3, 3)  , (3, 3)),
+    105: ('ISREF'     , (1, 1)  , (1, 1)),
+    109: ('LOG'       , (1, 2)  , (1, 2)),
+    111: ('CHAR'      , (1, 1)  , (1, 1)),
+    112: ('LOWER'     , (1, 1)  , (1, 1)),
+    113: ('UPPER'     , (1, 1)  , (1, 1)),
+    114: ('PROPER'    , (1, 1)  , (1, 1)),
+    115: ('LEFT'      , (1, 2)  , (1, 2)),
+    116: ('RIGHT'     , (1, 2)  , (1, 2)),
+    117: ('EXACT'     , (2, 2)  , (2, 2)),
+    118: ('TRIM'      , (1, 1)  , (1, 1)),
+    119: ('REPLACE'   , (4, 4)  , (4, 4)),
+    120: ('SUBSTITUTE', (3, 4)  , (3, 4)),
+    121: ('CODE'      , (1, 1)  , (1, 1)),
+    124: ('FIND'      , (2, 3)  , (2, 3)),
+    125: ('CELL'      , (1, 2)  , (1, 2)),
+    126: ('ISERR'     , (1, 1)  , (1, 1)),
+    127: ('ISTEXT'    , (1, 1)  , (1, 1)),
+    128: ('ISNUMBER'  , (1, 1)  , (1, 1)),
+    129: ('ISBLANK'   , (1, 1)  , (1, 1)),
+    130: ('T'         , (1, 1)  , (1, 1)),
+    131: ('N'         , (1, 1)  , (1, 1)),
+    140: ('DATEVALUE' , (1, 1)  , (1, 1)),
+    141: ('TIMEVALUE' , (1, 1)  , (1, 1)),
+    142: ('SLN'       , (3, 3)  , (3, 3)),
+    143: ('SYD'       , (4, 4)  , (4, 4)),
+    144: ('DDB'       , (4, 5)  , (4, 5)),
+    148: ('INDIRECT'  , (1, 2)  , (1, 2)),
+    162: ('CLEAN'     , (1, 1)  , (1, 1)),
+    163: ('MDETERM'   , (1, 1)  , (1, 1)),
+    164: ('MINVERSE'  , (1, 1)  , (1, 1)),
+    165: ('MMULT'     , (2, 2)  , (2, 2)),
+    167: ('IPMT'      , (4, 6)  , (4, 6)),
+    168: ('PPMT'      , (4, 6)  , (4, 6)),
+    169: ('COUNTA'    , (0, 30) , (0, 30)),
+    183: ('PRODUCT'   , (0, 30) , (0, 30)),
+    184: ('FACT'      , (1, 1)  , (1, 1)),
+    189: ('DPRODUCT'  , (3, 3)  , (3, 3)),
+    190: ('ISNONTEXT' , (1, 1)  , (1, 1)),
+    193: ('STDEVP'    , (1, 30) , (1, 30)),
+    194: ('VARP'      , (1, 30) , (1, 30)),
+    195: ('DSTDEVP'   , (3, 3)  , (3, 3)),
+    196: ('DVARP'     , (3, 3)  , (3, 3)),
+    197: ('TRUNC'     , (1, 2)  , (1, 2)),
+    198: ('ISLOGICAL' , (1, 1)  , (1, 1)),
+    199: ('DCOUNTA'   , (3, 3)  , (3, 3)),
+    204: ('USDOLLAR'  , (1, 2)  , (1, 2)),
+    205: ('FINDB'     , (2, 3)  , (2, 3)),
+    206: ('SEARCHB'   , (2, 3)  , (2, 3)),
+    207: ('REPLACEB'  , (4, 4)  , (4, 4)),
+    208: ('LEFTB'     , (1, 2)  , (1, 2)),
+    209: ('RIGHTB'    , (1, 2)  , (1, 2)),
+    210: ('MIDB'      , (3, 3)  , (3, 3)),
+    211: ('LENB'      , (1, 1)  , (1, 1)),
+    212: ('ROUNDUP'   , (2, 2)  , (2, 2)),
+    213: ('ROUNDDOWN' , (2, 2)  , (2, 2)),
+    214: ('ASC'       , (1, 1)  , (1, 1)),
+    215: ('DBCS'      , (1, 1)  , (1, 1)),
+    216: ('RANK'      , None    , (2, 3)),
+    219: ('ADDRESS'   , (2, 5)  , (2, 5)),
+    220: ('DAYS360'   , (2, 2)  , (2, 2)),
+    221: ('TODAY'     , (0, 0)  , (0, 0)),
+    222: ('VDB'       , (5, 7)  , (5, 7)),
+    227: ('MEDIAN'    , (1, 30) , (1, 30)),
+    228: ('SUMPRODUCT', (1, 30) , (1, 30)),
+    229: ('SINH'      , (1, 1)  , (1, 1)),
+    230: ('COSH'      , (1, 1)  , (1, 1)),
+    231: ('TANH'      , (1, 1)  , (1, 1)),
+    232: ('ASINH'     , (1, 1)  , (1, 1)),
+    233: ('ACOSH'     , (1, 1)  , (1, 1)),
+    234: ('ATANH'     , (1, 1)  , (1, 1)),
+    235: ('DGET'      , (3, 3)  , (3, 3)),
+    244: ('INFO'      , (1, 1)  , (1, 1)),
+    247: ('DB'        , None    , (4, 5)),
+    252: ('FREQUENCY' , None    , (2, 2)),
+    261: ('ERROR.TYPE', None    , (1, 1)),
+    269: ('AVEDEV'    , None    , (1, 30)),
+    270: ('BETADIST'  , None    , (3, 5)),
+    271: ('GAMMALN'   , None    , (1, 1)),
+    272: ('BETAINV'   , None    , (3, 5)),
+    273: ('BINOMDIST' , None    , (4, 4)),
+    274: ('CHIDIST'   , None    , (2, 2)),
+    275: ('CHIINV'    , None    , (2, 2)),
+    276: ('COMBIN'    , None    , (2, 2)),
+    277: ('CONFIDENCE', None    , (3, 3)),
+    278: ('CRITBINOM' , None    , (3, 3)),
+    279: ('EVEN'      , None    , (1, 1)),
+    280: ('EXPONDIST' , None    , (3, 3)),
+    281: ('FDIST'     , None    , (3, 3)),
+    282: ('FINV'      , None    , (3, 3)),
+    283: ('FISHER'    , None    , (1, 1)),
+    284: ('FISHERINV' , None    , (1, 1)),
+    285: ('FLOOR'     , None    , (2, 2)),
+    286: ('GAMMADIST' , None    , (4, 4)),
+    287: ('GAMMAINV'  , None    , (3, 3)),
+    288: ('CEILING'   , None    , (2, 2)),
+    289: ('HYPGEOMDIST', None    , (4, 4)),
+    290: ('LOGNORMDIST', None    , (3, 3)),
+    291: ('LOGINV'    , None    , (3, 3)),
+    292: ('NEGBINOMDIST', None    , (3, 3)),
+    293: ('NORMDIST'  , None    , (4, 4)),
+    294: ('NORMSDIST' , None    , (1, 1)),
+    295: ('NORMINV'   , None    , (3, 3)),
+    296: ('NORMSINV'  , None    , (1, 1)),
+    297: ('STANDARDIZE', None    , (3, 3)),
+    298: ('ODD'       , None    , (1, 1)),
+    299: ('PERMUT'    , None    , (2, 2)),
+    300: ('POISSON'   , None    , (3, 3)),
+    301: ('TDIST'     , None    , (3, 3)),
+    302: ('WEIBULL'   , None    , (4, 4)),
+    303: ('SUMXMY2'   , None    , (2, 2)),
+    304: ('SUMX2MY2'  , None    , (2, 2)),
+    305: ('SUMX2PY2'  , None    , (2, 2)),
+    306: ('CHITEST'   , None    , (2, 2)),
+    307: ('CORREL'    , None    , (2, 2)),
+    308: ('COVAR'     , None    , (2, 2)),
+    309: ('FORECAST'  , None    , (3, 3)),
+    310: ('FTEST'     , None    , (2, 2)),
+    311: ('INTERCEPT' , None    , (2, 2)),
+    312: ('PEARSON'   , None    , (2, 2)),
+    313: ('RSQ'       , None    , (2, 2)),
+    314: ('STEYX'     , None    , (2, 2)),
+    315: ('SLOPE'     , None    , (2, 2)),
+    316: ('TTEST'     , None    , (4, 4)),
+    317: ('PROB'      , None    , (3, 4)),
+    318: ('DEVSQ'     , None    , (1, 30)),
+    319: ('GEOMEAN'   , None    , (1, 30)),
+    320: ('HARMEAN'   , None    , (1, 30)),
+    321: ('SUMSQ'     , None    , (0, 30)),
+    322: ('KURT'      , None    , (1, 30)),
+    323: ('SKEW'      , None    , (1, 30)),
+    324: ('ZTEST'     , None    , (2, 3)),
+    325: ('LARGE'     , None    , (2, 2)),
+    326: ('SMALL'     , None    , (2, 2)),
+    327: ('QUARTILE'  , None    , (2, 2)),
+    328: ('PERCENTILE', None    , (2, 2)),
+    329: ('PERCENTRANK', None    , (2, 3)),
+    330: ('MODE'      , None    , (1, 30)),
+    331: ('TRIMMEAN'  , None    , (2, 2)),
+    332: ('TINV'      , None    , (2, 2)),
+}
+
+# The tokens decode_rpn turns back into text (excelfileformat 3.5-3.10), and
+# the text each operator is. Anything else answers None: THE CALLER KEEPS THE
+# CACHED VALUE, which is what SHEET's reader did for every formula before it
+# learned to decode, so an unknown token costs a formula its liveness and never
+# its number. That is the whole policy, and SHEET's own decoder
+# follows it token for token - this is its reference implementation.
+_RPN_BIN = {0x03: '+', 0x04: '-', 0x05: '*', 0x06: '/', 0x07: '^', 0x08: '&',
+            0x09: '<', 0x0A: '<=', 0x0B: '=', 0x0C: '>=', 0x0D: '>', 0x0E: '<>'}
+
+
+def colname(c):
+    """0 -> A, 25 -> Z, 26 -> AA: bijective base 26."""
+    out = ''
+    c += 1
+    while c:
+        c, r = divmod(c - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _cellref(roww, col):
+    """A BIFF2-5 encoded address (3.3.3): bit 15 of the row word is 'row is
+    RELATIVE' and bit 14 'column is relative' - set means no '$'."""
+    return ('%s%s%s%d' % ('' if roww & 0x4000 else '$', colname(col),
+                          '' if roww & 0x8000 else '$', (roww & 0x3FFF) + 1))
+
+
+def decode_rpn(tok, ver, known=None):
+    """A BIFF3/4 FORMULA token array -> formula text without the '=', or None.
+
+    `known` restricts function calls to a set of names - SHEET's own, so a
+    formula calling something SHEET cannot compute keeps its value rather
+    than becoming #NAME?. RPN with explicit tParen needs no precedence of its
+    own: a parenthesis the author wrote is a token, and one they did not
+    write was not needed by the grammar that produced the tokens."""
+    if ver not in (3, 4):
+        return None
+    st, i, n = [], 0, len(tok)
+    try:
+        while i < n:
+            t = tok[i]
+            if t >= 0x20:
+                t = (t & 0x1F) | 0x20           # R, V and A classes alike
+            if t in _RPN_BIN:
+                b, a = st.pop(), st.pop()
+                st.append(a + _RPN_BIN[t] + b); i += 1
+            elif t == 0x12:                     # unary plus: the identity
+                i += 1
+            elif t == 0x13:
+                st.append('-' + st.pop()); i += 1
+            elif t == 0x15:
+                st.append('(' + st.pop() + ')'); i += 1
+            elif t == 0x17:
+                ln = tok[i + 1]
+                txt = tok[i + 2:i + 2 + ln].decode('latin-1')
+                st.append('"' + txt.replace('"', '""') + '"'); i += 2 + ln
+            elif t == 0x19:
+                flags = tok[i + 1]
+                if flags & 0x04:                # CHOOSE's jump table: two
+                    return None                 # sources disagree on its length
+                if flags & 0x10:                # SUM with one argument
+                    st.append('SUM(' + st.pop() + ')')
+                i += 4
+            elif t == 0x1C:
+                st.append(BIFF_ERRORS[tok[i + 1]]); i += 2
+            elif t == 0x1D:
+                st.append('TRUE()' if tok[i + 1] else 'FALSE()'); i += 2
+            elif t == 0x1E:
+                st.append('%d' % struct.unpack_from('<H', tok, i + 1)[0]); i += 3
+            elif t == 0x1F:
+                st.append('%.15g' % struct.unpack_from('<d', tok, i + 1)[0])
+                i += 9
+            elif t in (0x21, 0x22):
+                if t == 0x22:
+                    argc = tok[i + 1] & 0x7F
+                    j = i + 2
+                else:
+                    j = i + 1
+                idx = tok[j] if ver == 3 else struct.unpack_from('<H', tok, j)[0]
+                if idx & 0x8000:
+                    return None                 # a macro command
+                ent = BIFF_FUNCS.get(idx)
+                if ent is None:
+                    return None
+                name = ent[0]
+                if known is not None and name not in known:
+                    return None
+                if t == 0x21:
+                    mm = ent[1] if ver == 3 else ent[2]
+                    if mm is None:
+                        return None
+                    argc = mm[0]
+                i = j + (1 if ver == 3 else 2)
+                args = st[len(st) - argc:] if argc else []
+                del st[len(st) - argc:]
+                st.append(name + '(' + ','.join(args) + ')')
+            elif t == 0x24:
+                roww, col = struct.unpack_from('<HB', tok, i + 1)
+                st.append(_cellref(roww, col)); i += 4
+            elif t == 0x25:
+                r1, r2, c1, c2 = struct.unpack_from('<HHBB', tok, i + 1)
+                st.append(_cellref(r1, c1) + ':' + _cellref(r2, c2)); i += 7
+            else:
+                return None
+    except (IndexError, KeyError, struct.error):
+        return None
+    return st[0] if len(st) == 1 else None
+
 
 class FormatError(Exception):
     pass
@@ -267,7 +616,7 @@ def _biff_walk(data):
     is the workbook with the directory left out.
     """
     sheets, cells, names = [], {}, []
-    i, n, vstart, depth = 0, len(data), None, 0
+    i, n, vstart, depth, ver = 0, len(data), None, 0, 3
     while i + 4 <= n:
         rid, ln = struct.unpack_from('<HH', data, i)
         i += 4
@@ -280,6 +629,7 @@ def _biff_walk(data):
             # BIFF2's cell header is row(2) col(2) attributes(3); BIFF3 and
             # BIFF4 replace those three bytes with a 2-byte XF index.
             vstart = 7 if rid == BIFF_BOF else 6
+            ver = 2 if rid == BIFF_BOF else (3 if rid & BIFF3_BIT else 4)
             depth += 1
             if depth > 1 or ln < 4 or struct.unpack_from('<H', body, 2)[0] != 0x0100:
                 cells = {}              # a SHEET substream, or a plain stream
@@ -308,7 +658,7 @@ def _biff_walk(data):
             if ln < vstart:
                 raise FormatError('cell record 0x%04X is %d bytes' % (rid, ln))
             r, c = struct.unpack_from('<HH', body, 0)
-            v = _biff_value(kind, body, vstart)
+            v = _biff_value(kind, body, vstart, ver)
             if v is not None:
                 cells[(r, c)] = v
     if vstart is None:
@@ -345,7 +695,7 @@ def _rk(v):
     return out / 100.0 if div100 else out
 
 
-def _biff_value(rid, body, v):
+def _biff_value(rid, body, v, ver=3):
     if rid == BIFF_BLANK:
         return None
     if rid == BIFF_INTEGER:
@@ -376,16 +726,23 @@ def _biff_value(rid, body, v):
         # same trick a NaN payload is, and the reason a formula's result must
         # not simply be unpacked as a double.
         raw = body[v:v + 8]
+        # BIFF3/4: result(8) flags(2) cce(2) then the tokens (4.7, 5.50) - the
+        # expression the value came from, which this reader used to skip
+        # exactly as SHEET's did.
+        expr = None
+        if ver in (3, 4) and len(body) >= v + 12:
+            cce = struct.unpack_from('<H', body, v + 10)[0]
+            expr = decode_rpn(body[v + 12:v + 12 + cce], ver)
         if len(raw) == 8 and raw[6] == 0xFF and raw[7] == 0xFF:
             kind = raw[0]
             if kind == 1:
-                return ('formula', None, ('bool', raw[2] != 0))
+                return ('formula', expr, ('bool', raw[2] != 0))
             if kind == 2:
-                return ('formula', None, ('err', BIFF_ERRORS.get(raw[2],
+                return ('formula', expr, ('err', BIFF_ERRORS.get(raw[2],
                                                                  '#ERR')))
             if kind == 3:
-                return ('formula', None, '')
-        return ('formula', None, struct.unpack_from('<d', raw, 0)[0])
+                return ('formula', expr, '')
+        return ('formula', expr, struct.unpack_from('<d', raw, 0)[0])
     return None
 
 
@@ -540,6 +897,97 @@ def close(a, b, tol=1e-9):
     return a == b
 
 
+def _sheet_tables(path='apps/sheet/sheet.asm'):
+    """SHEET's function tables, read out of its source: [(name, fid, fvar,
+    fargc)] in sh_functab's order. fargc is None until the decoder's own
+    table exists in the source."""
+    import re
+    src = open(path).read()
+    names = dict(re.findall(r"^(sh_f_[a-z0-9]+):\s+db\s+'([A-Z0-9.]+)'", src,
+                            re.M))
+    ft = re.search(r'^sh_functab:\n(.*?)\n\s+dw 0\n', src, re.M | re.S)
+    order = [names[x] for x in re.findall(r'(sh_f_[a-z0-9]+)', ft.group(1))]
+
+    def table(label):
+        m = re.search(r'^' + label + r':\n(.*?)^' + label + r'_end:', src,
+                      re.M | re.S)
+        if m is None:
+            return None
+        return [int(x, 0) for line in m.group(1).split('\n')
+                for x in re.findall(r'0x[0-9A-Fa-f]+|\b\d+\b',
+                                    line.split(';')[0].replace('db', ''))]
+    fid, fvar, fargc = (table('sh_rpn_fid'), table('sh_rpn_fvar'),
+                        table('sh_rpn_fargc'))
+    return [(nm, fid[i], fvar[i], fargc[i] if fargc else None)
+            for i, nm in enumerate(order)]
+
+
+# SHEET writes one table for BIFF3 and BIFF4 both, so a function whose arity
+# changed between them cannot be right for both. The only one it has: FIXED is
+# 2/2 in BIFF3 and 2-3 from BIFF4, and SHEET writes it as tFuncVar - right for
+# a workbook, and a variable-count token for a fixed function in a BIFF3 file.
+_FVAR_KNOWN = {'FIXED'}
+
+
+def _check_functab(bad):
+    rows = _sheet_tables()
+    for nm, fid, fvar, fargc in rows:
+        if fid == 0xFF:
+            continue
+        ent = BIFF_FUNCS.get(fid)
+        if ent is None or ent[0] != nm:
+            bad.append('sh_rpn_fid: %s is written as index %d, which is %s'
+                       % (nm, fid, ent[0] if ent else 'no function'))
+            continue
+        mn, mx = ent[2]
+        if bool(fvar) != (mn != mx) and nm not in _FVAR_KNOWN:
+            bad.append('sh_rpn_fvar: %s is %s, but it takes %d-%d arguments'
+                       % (nm, 'variable' if fvar else 'fixed', mn, mx))
+        fixed = [mm for mm in (ent[1], ent[2]) if mm and mm[0] == mm[1]]
+        if fargc is not None and fixed and fargc != fixed[0][0]:
+            bad.append('sh_rpn_fargc: %s says %d arguments, the table %d'
+                       % (nm, fargc, fixed[0][0]))
+    return len(rows)
+
+
+def _check_rpn(bad, book):
+    """decode_rpn against tokens SHEET really wrote (KODAK.BIF, a BIFF4
+    workbook made in the emulator) and against hand-built arrays for every
+    token that file does not carry - including the ones that must say None."""
+    sheet1 = book[0][1] if book else {}
+    for (r, c), want in (((1, 4), 'ROUND(D2/B2*100,1)'), ((4, 1), 'SUM(B2:B4)'),
+                         ((1, 3), 'C2-B2')):
+        got = sheet1.get((r, c))
+        if not (isinstance(got, tuple) and got[1] == want):
+            bad.append('KODAK.BIF %s%d decodes to %r, wanted %r'
+                       % (colname(c), r + 1, got and got[1], want))
+    ref = lambda roww, col: bytes([0x44]) + struct.pack('<HB', roww, col)
+    num = lambda x: bytes([0x1F]) + struct.pack('<d', x)
+    cases = [
+        (3, ref(0x0000, 0) + ref(0xC001, 1) + b'\x05', '$A$1*B2'),
+        (3, ref(0xC000, 0) + b'\x13' + b'\x15' + num(0.01) + b'\x03',
+         '(-A1)+0.01'),
+        (3, b'\x17\x03a"b' + b'\x1d\x01' + b'\x08', '"a""b"&TRUE()'),
+        (3, b'\x1c\x07' + b'\x1e\x05\x00' + b'\x0b', '#DIV/0!=5'),
+        (3, b'\x19\x01\x00\x00' + bytes([0x45]) + struct.pack('<HHBB', 0xC000,
+         0xC009, 0, 0) + b'\x19\x10\x00\x00', 'SUM(A1:A10)'),
+        (3, ref(0xC000, 0) + b'\x41\x18', 'ABS(A1)'),              # 1-byte
+        (4, ref(0xC000, 0) + b'\x41\x18\x00', 'ABS(A1)'),          # 2-byte
+        (4, b'\x1e\x01\x00\x1e\x02\x00\x42\x02\x04\x00', 'SUM(1,2)'),
+        (3, b'\x1e\x05\x00\x14', None),      # tPercent: SHEET has no %
+        (3, b'\x43\x01\x00' + bytes(8), None),  # tName
+        (3, b'\x19\x04\x01\x00\x02\x00', None),  # tAttrChoose
+        (3, ref(0xC000, 0) + b'\x41\xff', None),   # no function 255
+    ]
+    for ver, tok, want in cases:
+        got = decode_rpn(tok, ver)
+        if got != want:
+            bad.append('decode_rpn(BIFF%d %s) = %r, wanted %r'
+                       % (ver, tok.hex(), got, want))
+    if decode_rpn(ref(0xC000, 0) + b'\x41\x18', 3, known={'SUM'}) is not None:
+        bad.append('decode_rpn decoded a function outside `known`')
+
+
 def _selfcheck():
     """The grammars against themselves.  This proves the readers parse what
     this file writes; it CANNOT prove either matches SHEET, which is what
@@ -589,12 +1037,15 @@ def _selfcheck():
             if third != want:
                 bad.append('KODAK.BIF sheet 3 reads %r, wanted %r'
                            % (third, want))
+    _check_rpn(bad, book if not isinstance(book, list) or book else [])
+    nfun = _check_functab(bad)
     if bad:
         for b in bad:
             print('os88sheetfmt: %s' % b)
         return 1
-    print('os88sheetfmt: selfcheck ok (%d cells, ;; escape, '
-          'and KODAK.BIF as 3 sheets)' % len(cells))
+    print('os88sheetfmt: selfcheck ok (%d cells, ;; escape, KODAK.BIF as 3 '
+          'sheets and its formulas decoded, %d SHEET functions against 3.11)'
+          % (len(cells), nfun))
     return 0
 
 
