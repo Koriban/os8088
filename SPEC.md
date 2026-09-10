@@ -110976,6 +110976,42 @@ from `.RTF` (21,541 bytes) and **reduced to one bit** from `.DOC` (4,729),
 which is what §94.7 says each should do. The checksum bullet's `rotate-xor` is
 also `main`'s **LFSR** now (§93.3); the `BCE9` figure is the pre-merge one.
 
+#### 94.8.6 Loaded at entry, not at first use
+
+§68.10 reads a module "the first time one of its features is asked for", and
+for WORD that cost nothing: its module held a picture feature most sessions
+never touch. **§94.8 put Open and Save in this one**, so "first use" became the
+first file operation — and `sc_ovneed` reads the module from the folder
+Scribe was **launched** from (`sc_ovdir`/`sc_ovdrv`). By the time a user
+opens a document off a data disk, or saves a new one onto a blank one, the
+launch drive holds that disk and not `SCRIBE.OVL`. The refusal was the
+ordinary path §68.10 describes — "a disk swapped for one without" the module —
+but for a picture that is a missing feature, and for Open and Save it was a
+Scribe that could neither read a document from a second floppy nor write one
+to it. WORD never had the problem: its formats are resident.
+
+`sc_entry` now calls **`sc_ovload`** after its three claims and before the
+window, which is where SHEET has always loaded `CHART.OVL` (§82.16.3) and what
+§50.3's claims-at-entry asks for. `sc_ovload` is `sc_ovneed` without the
+voice: it returns CF and, on failure, the message in AX rather than posting
+it, and `sc_ovneed` is now the wrapper that posts. The entry call is silent
+and does not read CF — a machine without the heap or a disk without the file
+still runs the editor, and the first file operation retries and says why.
+
+Measured under MartyPC on a 5150, cold launch, no file touched:
+
+| | Scribe's claims | `SCRIBE.OVL` resident | launch floppy traffic |
+|---|---|---|---|
+| before | 3 of 8 | no | 6 reads, 87 sectors |
+| after | 4 of 8 | yes, 12K pinned | 16 reads, 141 sectors |
+
+The cost is those 54 sectors at every launch, **including sessions that never
+open or save**, where before they fell on the first file operation of the
+sessions that did. It is 54 for a 20-sector file because the load navigates
+to the launch folder and back and reads a cluster at a time — the §18.91
+shape, and a property of the module load path SHEET and WORD share, not of
+this change. 19 resident bytes.
+
 ### 94.9 Insert ▸ Picture — the document model
 
 Built in WORD first and reverted out of it (§68.15); this is where it

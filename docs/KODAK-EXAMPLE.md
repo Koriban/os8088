@@ -11,18 +11,13 @@ file on it is here.*
 drives (`make examplesdisk` builds just those). All six files are in `MEDIA/`,
 the folder the Open dialog starts in: this set, and the Xerox Q3 1982 set
 beside it (`XEROXQ3.SLK` for Sheet, `XEROXQ3.RTF` for Scribe). They are on no
-apps disk, so opening one is a disk swap, and the two applications take it
-differently:*
-
-- ***Sheet** (`KODAK.BIF`, `XEROXQ3.SLK`): launch it from the apps disk, swap
-  the examples disk into B:, File ▸ Open. Its file formats live in
-  `CHART.OVL`, which Sheet reads at start-up, so the swap costs nothing.*
-- ***Scribe** (`KODAK.DOC`, `XEROXQ3.RTF`): open any document from Scribe's own
-  disk FIRST, then swap. Scribe reads `SCRIBE.OVL` - where its file formats
-  live - at the first file operation, from the disk it was launched from
-  (SPEC.md 94.8); a cold Scribe asked to open a file off the examples disk
-  looks for the module there and says it is missing. Once loaded it stays for
-  the session. A hard-disk install has neither problem.*
+apps disk, so opening one is a disk swap: launch Sheet (for `KODAK.BIF` and
+`XEROXQ3.SLK`) or Scribe (for `KODAK.DOC` and `XEROXQ3.RTF`) from its own disk,
+swap the examples disk into that drive, and File ▸ Open. Both keep their file
+formats in an overlay and both read it at start-up, so neither goes back to
+its own disk for it — Sheet always did (SPEC.md 82.16.3), and Scribe does since SPEC.md 94.8.6.
+Before that, a cold Scribe looked for `SCRIBE.OVL` on the examples disk and
+refused.*
 
 Every byte here was produced **in the emulator, by hand**, driving SHEET.O88,
 CHART.O88 and WORD.O88 through the mouse and keyboard. Nothing was written on
