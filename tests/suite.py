@@ -3885,6 +3885,15 @@ SOAK = [
         "inside, because in both cases the writer and the reader made the "
         "SAME mistake and cancelled it",
         needs=("marty",), serial=True),
+    Row("sheetdec", "soak", py("tests/sheetdec.py"), 600.0,
+        "SPEC.md 81.10.10: a formula saved in Normal format comes back as a "
+        "FORMULA. SHEET's own round trip - SYLK in, Normal out (checked by "
+        "the host's decode_rpn against the document's function table), "
+        "reopened, SYLK out - and two BIFF files the host writes the way "
+        "Excel does, BIFF3 and a BIFF4 worksheet, with the tokens SHEET's "
+        "writer never emits and five it must refuse by keeping the value. "
+        "It found IF losing a text branch on its way to passing",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

@@ -13741,6 +13741,800 @@ sh_biff_formula:
     ret
 
 
+; =============================================================================
+; sh_biff_dcrpn - a FORMULA record's tokens back into formula TEXT
+; (SPEC.md 81.10.10).
+; in:  ES:SI = the record's body, DX = its length, [sh_dc_ver] = 2 for BIFF3
+;      and 4 for BIFF4 (the high byte of the record's own opcode)
+; out: CF=0 and sh_rwsrc = the text, NUL-terminated, without its '='.
+;      CF=1 when any token is outside what this reads - and the caller keeps
+;      the cached value, which is what this reader did with EVERY formula
+;      before: an unreadable token costs a formula its liveness, never its
+;      number. Preserves every register.
+;
+; tools/os88sheetfmt.py's decode_rpn is the reference and this follows it
+; token for token, down to what it refuses: tPercent (SHEET's parser has no
+; %), names, missing arguments, CHOOSE's jump table (two sources disagree on
+; its length), array and shared formulas. What it reads is everything
+; sh_rpn_emit writes, plus what Excel adds around the same expressions -
+; strings, TRUE/FALSE, error constants, and the tAttr family of IF/SUM
+; control tokens, which carry no text of their own.
+;
+; THE TEXT IS BUILT IN PLACE, not on a stack of strings. RPN pushes operands
+; in order, so the fragments on the stack are ADJACENT in the buffer and an
+; operator only has to INSERT its characters between or around them: a
+; binary op at its right operand's start, a unary minus or '(' at the top
+; fragment's start, a call's commas at each argument's start and its name at
+; the first. Every insert lands at or after the start of the lowest fragment
+; being merged, and all of those merge into one at once, so no start this
+; keeps is ever made stale by one. The stack holds starts and nothing else.
+;
+; RPN with explicit tParen needs no precedence of its own: a parenthesis the
+; author wrote is a token, and one they did not write the grammar that made
+; the tokens did not need.
+;
+; The buffer and the stack are the WRITER's scratch - sh_rwsrc and
+; sh_rpn_buf. Other readers borrow them too; none runs between this and the
+; sh_setformula that copies the text out, which is the one window that
+; matters.
+; =============================================================================
+SH_DC_DEPTH  equ 16
+sh_dc_stk    equ sh_rpn_buf                  ; SH_DC_DEPTH starts, a byte each
+sh_dc_dbl    equ sh_rpn_buf + SH_DC_DEPTH    ; a tNum's double, copied to DS
+
+sh_biff_dcrpn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp dx, 18                        ; row col xf result(8) flags cce
+    jb .bail
+    mov cx, [es:si+16]                ; cce: the token array's length
+    mov ax, cx
+    add ax, 18
+    jc .bail
+    cmp ax, dx
+    ja .bail
+    lea di, [si+18]
+    add cx, di
+    mov [sh_dc_tend], cx
+    xor ax, ax
+    mov [sh_dc_end], ax
+    mov [sh_dc_sp], ax
+.tok:
+    cmp di, [sh_dc_tend]
+    jae .done
+    mov al, [es:di]
+    cmp al, 0x20
+    jb .find0
+    and al, 0x1F                      ; R, V and A classes are one token to a
+    or al, 0x20                       ; reader that only wants the text
+.find0:
+    mov bx, sh_dc_tab
+.find:
+    cmp byte [cs:bx], 0               ; [cs:] - the table is the module's own
+    je .bail                          ; data, and DS is the package (68.10)
+    cmp al, [cs:bx]
+    je .hit
+    add bx, 3
+    jmp short .find
+.hit:
+    call word [cs:bx+1]
+    jnc .tok
+.bail:
+    stc
+    jmp short .out
+.done:
+    cmp word [sh_dc_sp], 1            ; exactly one expression, or the array
+    jne .bail                         ; was not one
+    mov bx, [sh_dc_end]
+    mov byte [bx+sh_rwsrc], 0
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; token -> handler. Each: in AL = the token (class folded), ES:DI = it;
+; out DI past it, CF=1 to refuse. 0 ends the table.
+sh_dc_tab:
+    db 0x03
+    dw sh_dc_bin
+    db 0x04
+    dw sh_dc_bin
+    db 0x05
+    dw sh_dc_bin
+    db 0x06
+    dw sh_dc_bin
+    db 0x07
+    dw sh_dc_bin
+    db 0x08
+    dw sh_dc_bin
+    db 0x09
+    dw sh_dc_bin
+    db 0x0A
+    dw sh_dc_bin
+    db 0x0B
+    dw sh_dc_bin
+    db 0x0C
+    dw sh_dc_bin
+    db 0x0D
+    dw sh_dc_bin
+    db 0x0E
+    dw sh_dc_bin
+    db 0x12
+    dw sh_dc_uplus
+    db 0x13
+    dw sh_dc_neg
+    db 0x15
+    dw sh_dc_par
+    db 0x17
+    dw sh_dc_str
+    db 0x19
+    dw sh_dc_attr
+    db 0x1C
+    dw sh_dc_err
+    db 0x1D
+    dw sh_dc_bool
+    db 0x1E
+    dw sh_dc_int
+    db 0x1F
+    dw sh_dc_num
+    db 0x21
+    dw sh_dc_fn
+    db 0x22
+    dw sh_dc_fnv
+    db 0x24
+    dw sh_dc_ref
+    db 0x25
+    dw sh_dc_area
+    db 0
+
+; tAdd..tNE (03H-0EH): each operator's one or two characters
+sh_dc_ops:
+    db '+', 0, '-', 0, '*', 0, '/', 0, '^', 0, '&', 0
+    db '<', 0, '<', '=', '=', 0, '>', '=', '>', 0, '<', '>'
+
+; --- the handlers ------------------------------------------------------------
+sh_dc_bin:
+    push ax
+    push bx
+    sub al, 3
+    xor ah, ah
+    shl ax, 1
+    mov bx, ax
+    mov ax, [cs:bx+sh_dc_ops]         ; AL the first character, AH any second
+    call sh_dc_pop                    ; BX = the right operand's start
+    jc .x
+    cmp word [sh_dc_sp], 1            ; ...and a left one under it
+    jb .bad
+    or ah, ah
+    jz .one
+    xchg al, ah                       ; the SECOND character goes in first, so
+    call sh_dc_insc                   ; the first lands in front of it
+    jc .x
+    xchg al, ah
+.one:
+    call sh_dc_insc
+    jc .x
+    inc di
+    clc
+    jmp short .x
+.bad:
+    stc
+.x:
+    pop bx
+    pop ax
+    ret
+
+sh_dc_uplus:                          ; the identity: nothing to write
+    inc di
+    clc
+    ret
+
+sh_dc_neg:
+    push ax
+    push bx
+    call sh_dc_top
+    jc .x
+    mov al, '-'
+    call sh_dc_insc
+    jc .x
+    inc di
+.x:
+    pop bx
+    pop ax
+    ret
+
+sh_dc_par:
+    push ax
+    push bx
+    call sh_dc_top
+    jc .x
+    mov al, '('
+    call sh_dc_insc
+    jc .x
+    mov al, ')'
+    call sh_dc_app
+    jc .x
+    inc di
+.x:
+    pop bx
+    pop ax
+    ret
+
+sh_dc_str:                            ; 17H len chars - quoted, '"' doubled
+    push ax
+    push cx
+    mov cx, 2
+    call sh_dc_need
+    jc .x
+    mov cl, [es:di+1]
+    xor ch, ch
+    add cx, 2
+    call sh_dc_need
+    jc .x
+    call sh_dc_push
+    jc .x
+    mov al, '"'
+    call sh_dc_app
+    jc .x
+    add di, 2
+    sub cx, 2
+    jz .close
+.ch:
+    mov al, [es:di]
+    call sh_dc_app
+    jc .x
+    cmp al, '"'
+    jne .next
+    call sh_dc_app                    ; a quote in the text is two in a formula
+    jc .x
+.next:
+    inc di
+    loop .ch
+.close:
+    mov al, '"'
+    call sh_dc_app
+.x:
+    pop cx
+    pop ax
+    ret
+
+sh_dc_attr:                           ; 19H flags word (BIFF3-8)
+    push ax
+    push cx
+    push si
+    mov cx, 4
+    call sh_dc_need
+    jc .x
+    mov al, [es:di+1]
+    test al, 0x04                     ; CHOOSE: a jump table whose length the
+    jnz .bad                          ; references do not agree on
+    test al, 0x10                     ; SUM with one argument: a call with no
+    jz .skip                          ; token of its own
+    mov si, sh_f_sum
+    mov cx, 1
+    call sh_dc_call
+    jc .x
+.skip:                                ; volatile, IF, skip, space: no text
+    add di, 4
+    clc
+    jmp short .x
+.bad:
+    stc
+.x:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+sh_dc_err:                            ; 1CH code - by its name
+    push ax
+    push cx
+    push si
+    mov cx, 2
+    call sh_dc_need
+    jc .x
+    mov al, [es:di+1]
+    call sh_biff_b2e                  ; the file's code -> ERROR.TYPE
+    mov [sh_curaux], al               ; ...which is what sh_errname reads
+    push es
+    push di
+    SHOUT sh_errname
+    pop di
+    pop es
+    call sh_dc_push
+    jc .x
+    mov si, sh_numbuf
+    call sh_dc_apps
+    jc .x
+    add di, 2
+.x:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+sh_dc_bool:                           ; 1DH 0/1 - SHEET's TRUE is a function
+    push ax
+    push cx
+    push si
+    mov cx, 2
+    call sh_dc_need
+    jc .x
+    mov si, sh_f_false
+    cmp byte [es:di+1], 0
+    je .f
+    mov si, sh_f_true
+.f:
+    xor cx, cx
+    call sh_dc_call
+    jc .x
+    add di, 2
+.x:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+sh_dc_int:                            ; 1EH word, UNSIGNED
+    push ax
+    push cx
+    push si
+    mov cx, 3
+    call sh_dc_need
+    jc .x
+    mov ax, [es:di+1]
+    test ax, 0x8000                   ; sh_itoa is signed; a tInt this large
+    jnz .bad                          ; is rarer than the code to print it
+    push es
+    push di
+    SHOUT sh_itoa
+    pop di
+    pop es
+    call sh_dc_push
+    jc .x
+    mov si, sh_numbuf
+    call sh_dc_apps
+    jc .x
+    add di, 3
+    jmp short .x
+.bad:
+    stc
+.x:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+sh_dc_num:                            ; 1FH double - fifteen digits, which
+    push ax                           ; is what Excel shows and enough to
+    push cx                           ; give back any constant a person typed
+    push si
+    mov cx, 9
+    call sh_dc_need
+    jc .x
+    push bx
+    xor bx, bx
+.cp:
+    mov al, [es:di+bx+1]              ; the eight bytes into DS, where the
+    mov [bx+sh_dc_dbl], al            ; float layer reads its operands
+    inc bx
+    cmp bx, 8
+    jb .cp
+    pop bx
+    push es
+    push di
+    mov si, sh_dc_dbl
+    SHOUT fp_unpack_a
+    mov di, sh_numbuf
+    mov ax, 15
+    SHOUT fp_ftoa
+    pop di
+    pop es
+    call sh_dc_push
+    jc .x
+    mov si, sh_numbuf
+    call sh_dc_apps
+    jc .x
+    add di, 9
+.x:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+sh_dc_fn:                             ; 21H index - a FIXED count, from the
+    push ax                           ; table, because the token has none
+    push bx
+    push cx
+    push si
+    mov cx, 2
+    cmp byte [sh_dc_ver], 4
+    jb .n
+    inc cx                            ; BIFF4's index is a word
+.n:
+    call sh_dc_need
+    jc .x
+    push cx
+    mov bx, 1
+    call sh_dc_index                  ; AL = the index, CF if not a function
+    pop cx
+    jc .x
+    call sh_dc_look                   ; BX = SHEET's id for it
+    jc .x
+    mov si, [bx+sh_functab]           ; (a WORD table: sh_dc_look answers
+    shr bx, 1                         ; the id doubled)
+    mov al, [bx+sh_rpn_fargc]
+    push cx
+    mov cl, al
+    xor ch, ch
+    call sh_dc_call
+    pop cx
+    jc .x
+    add di, cx
+.x:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_dc_fnv:                            ; 22H argc index
+    push ax
+    push bx
+    push cx
+    push si
+    mov cx, 3
+    cmp byte [sh_dc_ver], 4
+    jb .n
+    inc cx
+.n:
+    call sh_dc_need
+    jc .x
+    push cx
+    mov bx, 2
+    call sh_dc_index
+    pop cx
+    jc .x
+    call sh_dc_look
+    jc .x
+    mov si, [bx+sh_functab]
+    mov al, [es:di+1]
+    and al, 0x7F                      ; bit 7: a macro command's prompt
+    push cx
+    mov cl, al
+    xor ch, ch
+    call sh_dc_call
+    pop cx
+    jc .x
+    add di, cx
+.x:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_dc_ref:                            ; 24H roww col
+    push ax
+    push bx
+    push cx
+    mov cx, 4
+    call sh_dc_need
+    jc .x
+    call sh_dc_push
+    jc .x
+    mov ax, [es:di+1]
+    mov bl, [es:di+3]
+    call sh_dc_cref
+    jc .x
+    add di, 4
+.x:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_dc_area:                           ; 25H row1 row2 col1 col2
+    push ax
+    push bx
+    push cx
+    mov cx, 7
+    call sh_dc_need
+    jc .x
+    call sh_dc_push
+    jc .x
+    mov ax, [es:di+1]
+    mov bl, [es:di+5]
+    call sh_dc_cref
+    jc .x
+    mov al, ':'
+    call sh_dc_app
+    jc .x
+    mov ax, [es:di+3]
+    mov bl, [es:di+6]
+    call sh_dc_cref
+    jc .x
+    add di, 7
+.x:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- the primitives ----------------------------------------------------------
+; sh_dc_index - in BX = the index's offset in the token; out AL = it, CF=1
+; when it is a macro command, past one byte, or POWER's 0FFH "unwritable".
+sh_dc_index:
+    mov al, [es:di+bx]
+    cmp byte [sh_dc_ver], 4
+    jb .one
+    cmp byte [es:di+bx+1], 0          ; BIFF4's high byte: bit 15 is a macro
+    jne .bad                          ; command, and SHEET has no function
+.one:                                 ; past 255
+    cmp al, 0xFF
+    je .bad
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; sh_dc_look - AL = a BIFF function index -> BX = SHEET's id for it, DOUBLED
+; for sh_functab's words; CF=1 if SHEET has no such function. Through
+; sh_rpn_fid, the table the writer uses - so a mismatch between the two is
+; one table wrong, which os88sheetfmt.py --selfcheck checks against 3.11.
+sh_dc_look:
+    push cx
+    xor bx, bx
+    mov cx, sh_rpn_fid_end - sh_rpn_fid
+.l:
+    cmp [bx+sh_rpn_fid], al
+    je .hit
+    inc bx
+    loop .l
+    pop cx
+    stc
+    ret
+.hit:
+    shl bx, 1
+    pop cx
+    clc
+    ret
+
+; sh_dc_call - SI = a function's name (DS), CX = its argument count: the top
+; CX fragments become NAME(a,b,...), or a new NAME() when CX is 0.
+sh_dc_call:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    jcxz .none
+    cmp [sh_dc_sp], cx
+    jb .bad
+    mov dx, [sh_dc_sp]
+    sub dx, cx                        ; DX = the first argument's slot
+    mov bx, [sh_dc_sp]
+    dec bx                            ; commas from the LAST argument down,
+.comma:                               ; so each insert shifts only what has
+    cmp bx, dx                        ; already been placed
+    jbe .name
+    push bx
+    mov bl, [bx+sh_dc_stk]
+    xor bh, bh
+    mov al, ','
+    call sh_dc_insc
+    pop bx
+    jc .x
+    dec bx
+    jmp short .comma
+.name:
+    mov bx, dx
+    mov bl, [bx+sh_dc_stk]
+    xor bh, bh
+    call .insname
+    jc .x
+    mov al, ')'
+    call sh_dc_app
+    jc .x
+    dec cx
+    sub [sh_dc_sp], cx                ; the arguments are one fragment now
+    clc
+    jmp short .x
+.none:
+    call sh_dc_push
+    jc .x
+    mov bx, [sh_dc_end]
+    call .insname
+    jc .x
+    mov al, ')'
+    call sh_dc_app
+    jmp short .x
+.bad:
+    stc
+.x:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.insname:                             ; SI's letters and a '(' at BX
+    lodsb
+    or al, al
+    jz .open
+    call sh_dc_insc
+    jc .ret
+    inc bx
+    jmp short .insname
+.open:
+    mov al, '('
+    call sh_dc_insc
+.ret:
+    ret
+
+; sh_dc_cref - AX = an encoded row word, BL = the column (3.3.3): bit 15 SET
+; means the row is RELATIVE and bit 14 the column, so '$' goes where a bit is
+; CLEAR. Appends it.
+sh_dc_cref:
+    push ax
+    push si
+    test ah, 0x40
+    jnz .col
+    push ax
+    mov al, '$'
+    call sh_dc_app
+    pop ax
+    jc .x
+.col:
+    push ax
+    push es
+    push di
+    mov al, bl
+    xor ah, ah
+    SHOUT sh_colname
+    pop di
+    pop es
+    mov si, sh_colbuf
+    call sh_dc_apps
+    pop ax
+    jc .x
+    test ah, 0x80
+    jnz .row
+    push ax
+    mov al, '$'
+    call sh_dc_app
+    pop ax
+    jc .x
+.row:
+    and ax, 0x3FFF
+    inc ax
+    push es
+    push di
+    SHOUT sh_itoa
+    pop di
+    pop es
+    mov si, sh_numbuf
+    call sh_dc_apps
+.x:
+    pop si
+    pop ax
+    ret
+
+; sh_dc_insc - AL into the text at BX, the rest moved up one. CF=1 when the
+; text is already SH_EDITMAX long: SHEET cannot hold a longer formula, so the
+; cell keeps its value instead. Preserves everything.
+sh_dc_insc:
+    push cx
+    push si
+    mov si, [sh_dc_end]
+    cmp si, SH_EDITMAX
+    jae .full
+.mv:
+    cmp si, bx
+    jbe .put
+    mov cl, [si+sh_rwsrc-1]
+    mov [si+sh_rwsrc], cl
+    dec si
+    jmp short .mv
+.put:
+    mov [bx+sh_rwsrc], al
+    inc word [sh_dc_end]
+    clc
+    pop si
+    pop cx
+    ret
+.full:
+    stc
+    pop si
+    pop cx
+    ret
+
+sh_dc_app:                            ; AL at the end
+    push bx
+    mov bx, [sh_dc_end]
+    call sh_dc_insc
+    pop bx
+    ret
+
+sh_dc_apps:                           ; DS:SI's NUL-terminated string at the end
+    push ax
+    push si
+.l:
+    lodsb
+    or al, al
+    jz .ok
+    call sh_dc_app
+    jnc .l
+    jmp short .x
+.ok:
+    clc
+.x:
+    pop si
+    pop ax
+    ret
+
+sh_dc_push:                           ; a new fragment, starting at the end
+    push ax
+    push bx
+    mov bx, [sh_dc_sp]
+    cmp bx, SH_DC_DEPTH
+    jae .full
+    mov al, [sh_dc_end]
+    mov [bx+sh_dc_stk], al
+    inc word [sh_dc_sp]
+    clc
+    jmp short .x
+.full:
+    stc
+.x:
+    pop bx
+    pop ax
+    ret
+
+sh_dc_pop:                            ; BX = the top fragment's start, dropped
+    cmp word [sh_dc_sp], 0
+    je .empty
+    dec word [sh_dc_sp]
+    mov bx, [sh_dc_sp]
+    mov bl, [bx+sh_dc_stk]
+    xor bh, bh
+    clc
+    ret
+.empty:
+    stc
+    ret
+
+sh_dc_top:                            ; BX = the top fragment's start, kept
+    cmp word [sh_dc_sp], 0
+    je .empty
+    mov bx, [sh_dc_sp]
+    mov bl, [bx+sh_dc_stk-1]
+    xor bh, bh
+    clc
+    ret
+.empty:
+    stc
+    ret
+
+sh_dc_need:                           ; CF=1 if CX bytes from DI pass the end
+    push ax
+    mov ax, di
+    add ax, cx
+    cmp [sh_dc_tend], ax
+    pop ax
+    ret
+
+
 sh_doread_biff:
     push ax
     push bx
@@ -14090,13 +14884,14 @@ sh_doread_biff:
     mov [sh_cursheet], ax              ; last one rather than being dropped
     jmp .skip
 .isformula:
-    ; ONLY THE RESULT IS READ, and the token array is stepped over. Sheet keeps
-    ; formulas as TEXT (81.3) and re-parses them; turning RPN back into text is
-    ; a decompiler, and one built against a spec section (3.12) that is marked
-    ; *2do* would guess at exactly the function names it could not verify. The
-    ; value is right either way, which is the same trade this app's SYLK reader
-    ; makes when a file has no ;E field.
-    push dx
+    ; THE FORMULA IS READ BACK, and its cached result only when it cannot be
+    ; (81.10.10). Until then this said the tokens were stepped over because a
+    ; decompiler would have to guess at function numbers from a section marked
+    ; *2do* - true of the document it was written against, and not of revision
+    ; 1.42, which the writer has used since 81.10.2. Stepping over them made a
+    ; Save in Normal format and a reopen turn every formula into a number.
+    mov [sh_dc_ver], ah                ; 02H or 04H: BIFF3 or BIFF4, which is
+    push dx                            ; how wide a function index is
     mov ax, si
     add ax, dx
     cmp ax, cx
@@ -14109,6 +14904,23 @@ sh_doread_biff:
     mov [sh_wrec_xf], ax
     call sh_biff_rcok                  ; off-grid row/col: skip the record
     jc .rkdone
+    call sh_biff_dcrpn                 ; THE FORMULA ITSELF when its tokens
+    jc .fcached                        ; can be read back, and the cached
+    push es                            ; value below, as before, when they
+    push si                            ; cannot
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    mov si, sh_rwsrc
+    SHOUT sh_setformula                ; CF=1: the formula arena is full,
+    pop si                             ; which costs this cell its liveness
+    pop es                             ; and not its number
+    jc .fcached
+    push es
+    call sh_biff_applyfmt
+    pop es
+    pop dx
+    jmp .skip
+.fcached:
     mov ax, [es:si+6]                  ; the eight result bytes
     mov [sh_acc], ax
     mov ax, [es:si+8]
@@ -17806,6 +18618,39 @@ sh_rpn_fvar:
                                        ; app never passes, exactly as the
                                        ; TRUNC note above says
 sh_rpn_fvar_end:
+
+; How many arguments a FIXED-count function takes, in sh_functab's order -
+; the decoder's (81.10.10), because a tFunc token carries only an index and
+; the count is a property of the function. GENERATED from revision 1.42's
+; 3.11 through tools/os88sheetfmt.py's BIFF_FUNCS, not typed: the minimum of
+; whichever version has the function fixed, and 0 for one that is variable
+; everywhere, which only ever arrives as tFuncVar with its own count.
+; --selfcheck holds it to the document on every build.
+sh_rpn_fargc:
+    db 0, 0, 0, 0, 0               ; SUM AVERAGE MIN MAX COUNT
+    db 0, 1, 1, 0, 0               ; IF NOT ABS AND OR
+    db 0, 0, 2, 1, 0               ; PRODUCT COUNTA MOD INT TRUNC
+    db 1, 1, 1, 0, 2               ; SIGN FACT SQRT POWER ROUND
+    db 0, 0, 0, 0, 0               ; TRUE FALSE ROW COLUMN CHOOSE
+    db 1, 1, 1, 1, 1               ; ISBLANK ISNUMBER ISTEXT ISLOGICAL ISERROR
+    db 1, 1, 1, 0, 1               ; ISERR ISNA ISREF NA TYPE
+    db 1, 0, 1, 0, 0               ; N ERROR.TYPE LEN LEFT RIGHT
+    db 3, 1, 1, 1, 1               ; MID UPPER LOWER PROPER TRIM
+    db 2, 1, 1, 2, 1               ; REPT CHAR CODE EXACT T
+    db 1, 0, 0, 0, 4               ; VALUE FIND SEARCH SUBSTITUTE REPLACE
+    db 2, 0, 2, 3, 1               ; TEXT DOLLAR FIXED DATE DAY
+    db 1, 1, 1, 3, 1               ; MONTH YEAR WEEKDAY TIME HOUR
+    db 1, 1, 1, 1, 1               ; MINUTE SECOND DATEVALUE TIMEVALUE ROWS
+    db 1, 1, 0, 0, 3               ; COLUMNS AREAS INDEX MATCH VLOOKUP
+    db 3, 0, 0, 0, 0               ; HLOOKUP LOOKUP VAR VARP STDEV
+    db 0, 1, 1, 1, 0               ; STDEVP LN LOG10 EXP PI
+    db 0, 1, 1, 1, 1               ; LOG SIN COS TAN ASIN
+    db 1, 1, 2, 3, 4               ; ACOS ATAN ATAN2 SLN SYD
+    db 0, 0, 0, 0, 0               ; PMT PV FV NPV NPER
+    db 0, 0, 0, 0, 0               ; DDB IPMT PPMT RATE IRR
+    db 3, 0, 1, 1, 0               ; MIRR NOW ISNONTEXT CLEAN RAND
+    db 0                           ; INDIRECT
+sh_rpn_fargc_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
 ; Looks ahead and RESTORES nothing because it consumes nothing: sh_rpn_p is
@@ -27436,7 +28281,7 @@ sh_functab:
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
-; THREE TABLES INDEXED BY THE SAME NUMBER, and nothing used to check they were
+; FOUR TABLES INDEXED BY THE SAME NUMBER, and nothing used to check they were
 ; the same length. sh_rpn_func indexes sh_rpn_fid and sh_rpn_fvar by the id
 ; sh_funcid returns, which is a position in sh_functab - so appending a
 ; function here and forgetting one of the other two reads whatever byte
@@ -27450,6 +28295,8 @@ sh_functab_end:
     times (SH_NFUNCS - (sh_rpn_fid_end - sh_rpn_fid)) db 0
     times ((sh_rpn_fvar_end - sh_rpn_fvar) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fvar_end - sh_rpn_fvar)) db 0
+    times ((sh_rpn_fargc_end - sh_rpn_fargc) - SH_NFUNCS) db 0
+    times (SH_NFUNCS - (sh_rpn_fargc_end - sh_rpn_fargc)) db 0
 sh_s_errpfx:   db 'Err ', 0
 section .modc                      ; 82.16.9's tenant: CSV and TXT (81.40)
 
@@ -28683,7 +29530,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5245
+    OS88_BSS 5252
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -29555,7 +30402,11 @@ sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; sh_blitdel, where this fork had
                                        ; already grown a chain - so it is
                                        ; re-anchored on the end of it
-sh_bss_end        equ sh_abon + 1
+sh_dc_ver         equ sh_abon + 1        ; byte: 2 BIFF3, 4 BIFF4 (81.10.10)
+sh_dc_end         equ sh_dc_ver + 1      ; word: the decoded text's length
+sh_dc_sp          equ sh_dc_end + 2      ; word: fragments on the stack
+sh_dc_tend        equ sh_dc_sp + 2       ; word: where the token array ends
+sh_bss_end        equ sh_dc_tend + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

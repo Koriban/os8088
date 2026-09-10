@@ -490,7 +490,11 @@ def read_sylk(data):
 
 def _sylk_value(s):
     if s.startswith('"') and s.endswith('"') and len(s) >= 2:
-        body = s[1:-1]
+        # A quote INSIDE the value is doubled - the rule SHEET's writer and
+        # reader both keep (sh_dowrite_sylk .kdup, sh_parsecrec .ktkeep), the
+        # same one ';' already had. This read it raw, and so answered 'a""bc'
+        # for a cell holding a"bc.
+        body = s[1:-1].replace('""', '"')
         if body == 'TRUE':
             return ('bool', True)
         if body == 'FALSE':
@@ -528,7 +532,9 @@ def _sylk_scalar(v):
         if v[0] == 'err':
             return v[1]
     if isinstance(v, str):
-        return '"%s"' % v.replace(';', ';;')
+        # doubled, for the reader's reason above: SHEET ends the field at a
+        # SINGLE quote, so an undoubled one would cut the value short
+        return '"%s"' % v.replace('"', '""').replace(';', ';;')
     if v is None:
         return ''
     return _fmtnum(v)

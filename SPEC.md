@@ -96291,7 +96291,7 @@ never read one back, so no round trip through SHEET could disagree with it; the
 host library read FORMULA records for their cached result and skipped the
 tokens exactly as SHEET did. The error surfaced only when the table was checked
 against the document mechanically, which was done because the formula decoder
-(the next section) needed the table to be right in the *other* direction — decoding
+(§81.10.10) needed the table to be right in the *other* direction — decoding
 Excel's PMT through it would have produced RATE.
 
 **The guard is the second reader.** `tools/os88sheetfmt.py` now carries
@@ -96306,9 +96306,110 @@ from BIFF4, and SHEET's single table writes it as `tFuncVar` — right for a
 workbook, a variable-count token for a fixed function in a BIFF3 file.
 
 The same library now decodes a FORMULA record's tokens back to text
-(`decode_rpn`), which is the next section's reference implementation, and reads
+(`decode_rpn`), which is §81.10.10's reference implementation, and reads
 `KODAK.BIF`'s ten formulas — written by SHEET in the emulator — back as
 `=ROUND(D2/B2*100,1)`, `=SUM(B2:B4)` and the rest.
+
+#### 81.10.10 Formulas come back as formulas
+
+**Until this, a Save in Normal format and a reopen turned every formula into a
+number.** The writer has emitted real token arrays since §81.10.2; the reader
+took each FORMULA record's cached result and stepped over the tokens, on the
+stated grounds that decoding them meant guessing at function numbers from a
+section marked *2do*. That was true of the document it was written against and
+not of revision 1.42, which the writer had been using the whole time.
+
+`sh_biff_dcrpn` turns the token array back into formula text, and the reader
+hands it to `sh_setformula` exactly as the SYLK reader does with a `;E` field.
+It follows `tools/os88sheetfmt.py`'s `decode_rpn` token for token, and its
+policy is the whole design: **anything it cannot read, it refuses, and the cell
+keeps the cached value** — which is what the reader did with every formula
+before, so an unknown token costs a formula its liveness and never its number.
+
+| reads | as |
+|---|---|
+| `+ - * / ^ &`, the six comparisons, unary minus, `tParen` | themselves |
+| unary plus | nothing — it is the identity |
+| `tInt`, `tNum` | decimal; fifteen significant digits for a double, which is what Excel shows and enough to give back any constant a person typed |
+| `tRef`, `tArea` | `A1`, `$A$1`, `A1:B2` — bit 15 of the row word set means the row is relative, bit 14 the column (section 3.3.3 of the document), so `$` goes where a bit is *clear* |
+| `tStr` | quoted, a quote inside doubled |
+| `tBool` | `TRUE()` / `FALSE()` — they are functions in SHEET |
+| `tErr` | the error's name, through `sh_biff_b2e` and `sh_errname` |
+| `tFunc`, `tFuncVar` | `NAME(a,b)` — the index looked up in `sh_rpn_fid`, the writer's own table, so a disagreement is one table wrong, and §81.10.9's check holds it to the document |
+| `tAttr` volatile, IF, skip, space | nothing: control tokens with no text |
+| `tAttrSum` | `SUM(x)` |
+
+**Refused**: `tPercent` (SHEET's parser has no `%`), names, missing arguments,
+`tAttrChoose` (the document says its jump table has *nc* entries and
+Microsoft's BIFF8 specification *nc+1*, and a decoder that guessed wrong would
+read CHOOSE's arguments as tokens), a function SHEET does not have, an index past
+255 or with BIFF4's macro-command bit, array and shared formulas, and any text
+past `SH_EDITMAX` — SHEET cannot hold a longer formula.
+
+**A `tFunc` token carries no argument count**; the count is a property of the
+function. So `sh_rpn_fargc` joins `sh_rpn_fid` and `sh_rpn_fvar`, a fourth table
+in `sh_functab`'s order under the same length assertion — **generated** from the
+document through `BIFF_FUNCS`, not typed, and checked against it by `--selfcheck`.
+The function index is one byte in BIFF3 and two in BIFF4, so the reader records
+the record's own opcode (`0206H` or `0406H`) on the way in.
+
+**The text is built in place, not on a stack of strings.** RPN pushes operands
+in order, so the fragments on the stack are adjacent in the buffer and every
+operator only *inserts* characters: a binary operator at its right operand's
+start, a minus or `(` at the top fragment's, a call's commas at each argument's
+start and its name at the first's. Every insert lands at or after the start of
+the lowest fragment being merged, and all of those merge at once, so the stack
+holds starts and nothing else, and no start is ever made stale. RPN with
+explicit `tParen` needs no precedence of its own: a parenthesis the author wrote
+is a token, and one they did not was not needed by the grammar that made the
+tokens.
+
+It lives in `CHART.OVL` beside the reader, and pushed the module past its claim:
+`CH_OVKB` 20 → **22**, which is heap and not package image. Resident +111 bytes
+(the table) and +7 of bss. The buffer and fragment stack are the writer's
+scratch, `sh_rwsrc` and `sh_rpn_buf`: several readers borrow them, and none runs
+between the decode and the `sh_setformula` that copies the text out.
+
+**What it costs a large file** is the formula arena, 8 KB. A BIFF read used to
+store numbers only; now each formula's text goes there, and when it is full
+`sh_setformula` refuses — and that cell, like any refused decode, keeps its
+value.
+
+**Verified by `tests/sheetdec.py`, 74 checks.** Arm A is SHEET's own round
+trip: a SYLK file of formulas opened, saved as Normal, the file decoded *on the
+host* by `decode_rpn` — which is what checks the writer, and through
+`BIFF_FUNCS` every function number it wrote — then reopened by SHEET, saved as
+SYLK, and each formula's text and SHEET's own value read back. Every formula was
+authored with a wrong cached value, so a right one means the decoded text was
+parsed and evaluated. Arm B is two files the host writes the way Excel does —
+BIFF3, and a BIFF4 worksheet, where the function index is a word — carrying the
+tokens SHEET's writer never emits (strings, `&`, `TRUE`, an error constant,
+unary plus, IF with its `tAttrIf`/`tAttrSkip`, `tAttrSum`, `tAttrVolatile`) and
+five it must refuse, each of which comes back as its cached value. Mutated so
+the decoder refuses everything, 41 checks fail — every formula that should have
+come back.
+
+**It found three things on the way that were not the decoder:**
+
+- **`IF` lost a text branch.** `sh_pif` parses both branches and banks the
+  *then* value with `sh_vpush` — eight bytes — but a text value's type is in
+  `sh_curtype` and its characters in `sh_sacc`, and the else-parse overwrites
+  both. `=IF(A1>1,"big","small")` answered "small" for every `A1`. It banks the
+  type beside the value now, and a text value's characters on the string stack
+  the way `&` banks its left operand; the unused bank is dropped, or every
+  string after it would shift by one.
+- **The host library read SYLK quotes wrong.** SHEET's writer doubles a quote
+  inside a `K"…"` value and its reader treats a single one as the end of the
+  field; `os88sheetfmt.py` did neither, so it read `a"bc` as `a""bc` and its
+  writer could cut a value short. It follows the same rule as SHEET now.
+- **A formula whose result is TEXT is saved as its value** — pinned by the gate,
+  not fixed. A BIFF FORMULA record with a string result needs a STRING record
+  after it, which `sh_biff_formula` does not write, so `=UPPER(A5)` goes out as
+  a LABEL. It is the writer's gap and the next thing this section should lose.
+
+And one it confirms rather than finds: **SHEET's comparisons and `TRUE()` answer
+1**, where Excel answers a logical. The gate accepts it and says so; it is an
+evaluator parity gap, not a file-format one.
 
 ### 81.11 Text cells
 
