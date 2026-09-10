@@ -97934,11 +97934,28 @@ widening every other row. **53 cases, all passing, soft and 8087.**
 | | Sheet | reference |
 |---|---|---|
 | `=IRR(A1:A6)` | 0.08663 | 0.08663095 |
-| `=MIRR(A1:A6,0.1,0.12)` | 0.10263 | 0.10263553 |
+| `=MIRR(A1:A6,0.1,0.12)` | 0.09867 | 0.09866911 — **corrected**, see below |
 | `=IRR(A1:A6,0.5)` | 0.08663 | converges from a distant guess |
 | `=IRR(A2:A6)` | `#NUM!` | all positive: no root exists |
 | `=NPV(0.08663095,12000,…,26000)` | 69999.9 | 70000 — **the outflow** |
 | `=POWER(2,0.5)` / `=2^0.5` | 1.41421 | 1.4142135 |
+
+**The MIRR row above said 0.10263 for both columns until `tests/sheetfin.py`,
+and both were wrong.** `sh_irwalk` discounts from period **zero** — IRR's
+convention, and right for IRR — so each walk is `(1+r)·NPV`. MIRR was written
+from Excel's statement of it, which uses `NPV` and so discounts from period
+**one**: `(−NPV(rr, pos)·(1+rr)^n / (NPV(fr, neg)·(1+fr)))^(1/(n−1)) − 1`.
+Applied to the walks, that carries one factor of `(1+rr)/(1+fr)` too many —
+1.12/1.10 here, which is exactly 0.10264 against 0.09867. In the walk's own
+terms it is `(−walk_pos·(1+rr)^(n−1) / walk_neg)^(1/(n−1)) − 1`, which is also
+what MIRR *means*: positives carried forward to the last period over negatives
+brought back to the first. The Python that produced the reference column made
+the same substitution, so SHEET and its check agreed perfectly — §81.38's
+lesson about a writer and a reader sharing a misunderstanding, arriving from a
+direction that section did not cover. The gate now carries Microsoft's own
+documented example (`−120000, 39000, 30000, 21000, 37000, 46000` at 10%/12%,
+published as **12.61%**) as the one expectation in it that no arithmetic here
+produced.
 
 The `NPV` row is the cross-check: discounting the inflows at the rate `IRR`
 returned must give back the initial outflow, which is what an internal rate of

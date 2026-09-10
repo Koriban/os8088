@@ -21364,8 +21364,18 @@ sh_pfin:
     mov si, sh_fnr1
     call fp_unpack_a
     jmp .store
-; MIRR is CLOSED FORM despite its reputation - two discounted sums and a root:
+; MIRR is CLOSED FORM despite its reputation - two discounted sums and a root.
+; Excel states it with NPV, which discounts from period ONE:
 ;   ( -npv_pos*(1+rrate)^n / (npv_neg*(1+frate)) ) ^ (1/(n-1)) - 1
+; but sh_irwalk discounts from period ZERO - IRR's convention, and right for
+; IRR - so each walk is (1+r)*npv and that formula, applied to it, carries one
+; factor of (1+rrate)/(1+frate) too many. In the walk's own terms it is
+;   ( -walk_pos*(1+rrate)^(n-1) / walk_neg ) ^ (1/(n-1)) - 1
+; which is also what MIRR MEANS: the positives carried forward to the last
+; period, over the negatives brought back to the first. It answered 0.10264
+; for Excel's worked flows at 10%/12% where Excel says 0.09867, and SPEC.md
+; 81.37.8's own "reference" had been computed with the same mistake, so the two
+; agreed perfectly (tests/sheetfin.py; Excel's documented 12.61% is its anchor).
 .mirr:
     cmp word [sh_fnn], 2
     jb .badargs
@@ -21385,30 +21395,24 @@ sh_pfin:
     call sh_irwalk
     mov di, sh_tr1
     call fp_pack_a
-    mov si, sh_fnarg + 8              ; (1+rrate)^n
-    call fp_unpack_a
+    mov si, sh_fnarg + 8              ; (1+rrate)^(n-1): the positives
+    call fp_unpack_a                  ; carried forward to the LAST period
     mov ax, 1
     call fp_i2b
     call fp_add
     mov ax, [sh_ircnt]
+    dec ax                            ; n >= 2, checked after the first walk
     call fp_i2b
     call fp_pow
     jc .badnum
     mov si, sh_tr1
     call fp_unpack_b
     call fp_mul
-    xor byte [fp_as], 1               ; -npv_pos*(1+rrate)^n
+    xor byte [fp_as], 1               ; -walk_pos*(1+rrate)^(n-1)
     mov di, sh_fnt
     call fp_pack_a
-    mov si, sh_fnarg                  ; npv_neg*(1+frate)
-    call fp_unpack_a
-    mov ax, 1
-    call fp_i2b
-    call fp_add
-    mov si, sh_tr0
-    call fp_unpack_b
-    call fp_mul
-    call fp_a_to_b
+    mov si, sh_tr0                    ; ...over walk_neg, which is already the
+    call fp_unpack_b                  ; negatives at period zero - no (1+frate)
     mov si, sh_fnt
     call fp_unpack_a
     call fp_div
