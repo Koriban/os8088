@@ -35,12 +35,12 @@
 CH_OVKB      equ 20                 ; the claim CHART.OVL is read into, KB.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
-                                    ; took it to 13,485 bytes. THE CLAIM IS NOT
-                                    ; CHECKED AGAINST THE FILE at build time -
-                                    ; ch_ovneed reads CH_OVKB*1024 bytes and a
-                                    ; short claim would simply truncate the
-                                    ; module, so this constant has to be raised
-                                    ; deliberately whenever the tail grows
+                                    ; took it to 13,485 bytes. ch_ovneed reads
+                                    ; CH_OVKB*1024 bytes and a short claim
+                                    ; would silently truncate the module, so
+                                    ; it IS checked against the file, twice:
+                                    ; the sheet.o88 rule, and os88ovlchk.py's
+                                    ; CLAIMS row in the fast tier
 CHM_DRAW     equ 0                  ; the verbs - the module's dispatch indices
 CHM_SCALE    equ 1
 CHM_BMPWRITE equ 2

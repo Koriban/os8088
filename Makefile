@@ -4515,11 +4515,12 @@ $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
 # package does - ch_ovneed reads it with a plain OSAPI_FILE_READ and far-calls
 # its offset 0, so a packed module would be executed as compressed bytes.
 #
-# ...AND THE CLAIM IS CHECKED, which it was not until upstream's SCRIBE rule
-# showed the shape. ch_ovneed reads CH_OVKB*1024 bytes into a claim of that
-# size; a module that outgrew it would load TRUNCATED and fail only when a
-# verb past the cut was called, which is a chart or a file format that works
-# until the day it does not.
+# ...AND THE CLAIM IS CHECKED HERE TOO, in upstream's SCRIBE shape. ch_ovneed
+# reads CH_OVKB*1024 bytes into a claim of that size, and a module that
+# outgrew it would load TRUNCATED and fail only when a verb past the cut was
+# called. tools/os88ovlchk.py's CLAIMS table already holds CHART.OVL to
+# CH_OVKB and its row is in the fast tier, so a full `make` was never blind
+# to it; this is for `make build/sheet.o88` on its own, which runs no tier.
 $(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py
 	python3 tools/os88ovl.py $(BUILD)/sheet.bin -o $(BUILD)/CHART.OVL \
 		--trim $(BUILD)/sheet.trim.bin
