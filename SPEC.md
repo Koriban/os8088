@@ -96400,7 +96400,7 @@ One `sh_repaint` runs after the whole fill rather than per cell, because a
 repaint is priced in primitive calls (PERFORMANCE.md).
 
 A plain source copies by what it IS: a number as the full eight-byte double
-(`sh_setvald` — `sh_setval` is the integer wrapper and would fill 3.5 as 3),
+(`sh_setvald` — an integer store would fill 3.5 as 3),
 a label as its text through `sh_settext`. This is the same stage-4.0 defect
 class §81.18 records as found and fixed in Copy — a word read at `SH_C_VAL`,
 and no case for a label at all, which filled every heading as the number 0.
@@ -99668,7 +99668,7 @@ doubles, and `ct_dslot` is the one place the stride-8 multiply lives.
 **Sheet's live chart** stages doubles at `SH_CHART_D1`/`SH_CHART_D2` in
 `sh_stgseg` and scales them into the word arrays at 0 and `SH_CHART_S2` that
 `ch_draw` already read. Its scan takes the whole value with
-`sh_cellval_to_acc_si` rather than the truncation `sh_cellint_si` gave it.
+`sh_cellval_to_acc_si` rather than the truncation an integer read gave it.
 
 **One trap, twice.** Both scans keep their record index in **CX**, and both new
 eight-byte copies wanted CX as a counter. In `sh_chart_scan1` that would have

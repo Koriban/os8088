@@ -6425,7 +6425,7 @@ sh_fill_copy:
     je .text                           ; 81.18's Copy defect, closed here too)
     mov ax, [sh_fl_dcol]
     mov bx, [sh_fl_drow]
-    call sh_setvald                    ; sh_setval would truncate 3.5 to 3
+    call sh_setvald                    ; an integer store would truncate 3.5
     jmp .out
 .text:
     mov si, [sh_curtoff]               ; a LABEL: copy its text out of
@@ -6856,7 +6856,7 @@ sh_s_sortfull: db 'Sort incomplete - text area full.', 0
 ; sorting is really just "which ORIGINAL entry's data ends up at which
 ; ascending row", so values[] and origidx[] are insertion-sorted together
 ; (a parallel permutation, not just a value sort) and then written back:
-; a plain value straight via sh_setval as before; a formula, only if it
+; a plain value straight via sh_setvald as before; a formula, only if it
 ; actually changed row, via sh_formula_copyshift + sh_setformula using
 ; that specific cell's own (target row - its original row) delta - each
 ; moved formula can have a DIFFERENT delta, since a sort is an arbitrary
@@ -7745,7 +7745,7 @@ sh_docmd_sortcol:
     pop bx
     mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
-    call sh_setvald                   ; sh_setval would truncate it again
+    call sh_setvald                   ; an integer store would truncate it
     pop cx
 .wbnext:
     inc cx
@@ -12459,7 +12459,7 @@ sh_rkenc:
 ; -----------------------------------------------------------------------------
 ; sh_rkdec_d - in: DX:AX = a packed RK value; out: sh_acc = it, as a double.
 ;
-; ALL FOUR SUBTYPES, where sh_rkdec below handles only the one an integer
+; ALL FOUR SUBTYPES, where its integer-only predecessor handled only the one an integer
 ; could represent. The other three - divided by 100, and the float form that
 ; is the TOP 32 BITS of an IEEE-754 double with the low 32 zero - are exactly
 ; the ones a 16-bit integer had to refuse, and refusing them meant silently
@@ -12541,30 +12541,7 @@ fp_i32_to_a:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; sh_rkdec - in: DX:AX = a packed RK value (AX low word, DX high word); out:
-; CF=0 and AX=the signed 16-bit value if it's the "integer, not multiplied"
-; subtype this project writes, else CF=1 (out of this subset's scope - the
-; caller should skip the cell rather than guess at a float or *100 value)
-; -----------------------------------------------------------------------------
 section .text
-sh_rkdec:
-    test al, 0x01
-    jnz .unsupported        ; multiplied by 100
-    test al, 0x02
-    jz .unsupported         ; plain IEEE-754 float form, top 32 bits only
-    push cx
-    mov cx, 2
-.shr:
-    sar dx, 1
-    rcr ax, 1
-    loop .shr
-    pop cx
-    clc
-    ret
-.unsupported:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_biff_numfmt_from_id - in: AL = a real BIFF built-in number-format id;
@@ -12595,7 +12572,7 @@ sh_biff_numfmt_from_id:
 
 ; -----------------------------------------------------------------------------
 ; sh_biff_applyfmt - in: sh_wrec_col/sh_wrec_row (the cell just written by
-; sh_setval), sh_wrec_xf (its BIFF ixfe); combines sh_xf_fmt/sh_xf_font (if
+; sh_setvald), sh_wrec_xf (its BIFF ixfe); combines sh_xf_fmt/sh_xf_font (if
 ; the xf index is one this reader tracked) with sh_font_tab (if that xf's
 ; font index is one it tracked) into this app's own format byte, and
 ; writes it to the cell. A cell whose xf or font fell outside the tracked
@@ -14031,7 +14008,7 @@ sh_doread_biff:
     inc word [sh_biff_nxf]
     jmp .skip
 .isrk:
-    push dx                            ; length, saved across sh_setval
+    push dx                            ; length, saved across sh_setvald
                                         ; (which itself preserves DX, but
                                         ; only around the value it was
                                         ; passed - not a second use)
@@ -14057,7 +14034,7 @@ sh_doread_biff:
     SHOUT sh_setvald
     call sh_biff_applyfmt              ; uses sh_wrec_col/row/xf; looks up
                                         ; the format and writes it to the
-                                        ; cell record sh_setval just made
+                                        ; cell record sh_setvald just made
 .rkdone:
     pop dx
     jmp .skip
@@ -15153,7 +15130,7 @@ sh_setferr:
 ;   +6 value (word)  +8 formula_off (word, 0xFFFF=none)  +10 pass (word)
 ; Only three routines (sh_findcell/sh_addcell/sh_removecell) know this
 ; layout and the shifting; everything else goes through sh_getcell2/
-; sh_setval/sh_clearcell.
+; sh_setvald/sh_clearcell.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -17581,25 +17558,7 @@ sh_seterr:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; sh_setval - in: AX=col, BX=row, DX=value. The integer wrapper (see above).
-; -----------------------------------------------------------------------------
 section .text
-sh_setval:
-    push ax
-    push bx
-    push dx
-    push di
-    push ax                           ; the column, across the conversion -
-    mov ax, dx                        ; fp_i2a takes its integer in AX
-    call sh_acc_int
-    pop ax
-    call sh_setvald
-    pop di
-    pop dx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_setformula - in: AX=col, BX=row, SI=formula text (DS-resident,
@@ -20151,24 +20110,7 @@ sh_cellval_to_acc_si:
     pop ax
     ret
 
-; sh_cellnum_si - ...formatted into sh_numbuf
-sh_cellnum_si:
-    push ax
-    push di
-    call sh_cellval_to_acc_si
-    call sh_acc_load_a
-    mov di, sh_numbuf
-    mov ax, 10
-    call fp_ftoa
-    pop di
-    pop ax
-    ret
 
-; sh_cellint_si - ...truncated to a signed word in AX
-sh_cellint_si:
-    call sh_cellval_to_acc_si
-    call sh_acc_toint
-    ret
 
 ; sh_cellnum - the value of the record at ES:DI, formatted into sh_numbuf as
 ; a decimal. What "read the word and sh_itoa it" used to do, except that the
@@ -25998,7 +25940,7 @@ sh_macro_eval:
     inc si
     call sh_pcmp                       ; the result lives in sh_acc, NOT in AX
     mov ax, [sh_macro_tcol]            ; (stage 4.0) - sh_setvald reads it from
-    mov bx, [sh_macro_trow]            ; there, decimals intact, where sh_setval
+    mov bx, [sh_macro_trow]            ; there, decimals intact, where the int
     call sh_setvald                    ; with AX stored parser scratch
     xor ax, ax
     jmp .out
