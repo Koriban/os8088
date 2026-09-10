@@ -3885,6 +3885,16 @@ SOAK = [
         "inside, because in both cases the writer and the reader made the "
         "SAME mistake and cancelled it",
         needs=("marty",), serial=True),
+    Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
+        "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
+        "computed by SHEET and checked against the host's own arithmetic. "
+        "Every formula is authored with a WRONG cached value, so a pass means "
+        "SHEET recalculated rather than echoed. Written as the gate for moving "
+        "the family into CHART.OVL, and its first two runs found what the "
+        "move did not cause: a Save wrote the STALE value of every formula "
+        "off the glass (81.48), and MIRR discounted from the wrong period - "
+        "which SPEC's own reference table had done too",
+        needs=("marty",), serial=True),
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",
         needs=("marty",), serial=True),
