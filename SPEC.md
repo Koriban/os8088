@@ -99080,6 +99080,41 @@ app does not emit, and DIF, CSV, TXT and DBF have nowhere to put one. A sheet
 saved as SYLK still loses its borders, and that is now a *format* limit rather
 than an app one — but it is a real one, and Save As does not say so.
 
+### 81.48 A Save recalculates first
+
+**Evaluation is lazy.** `sh_eval_cell` runs when a cell is *read*, memoized
+against `sh_pass`, and a repaint reads only what is on the glass. That is the
+right shape for a display — nothing off-screen needs a value until something
+asks for one — and it was the wrong one for a file, because two of the six
+writers never ask. The SYLK and BIFF writers read a cell's value with
+`sh_cellval_to_acc_si`, the **stored** double; DIF and the two text formats read
+through `sh_getcell2`, which evaluates.
+
+So a formula that had been off-screen since it was loaded, or since a cell it
+names changed, was saved with whatever it last held. After a load that is the
+zero `sh_setformula` leaves behind — and since §81.10's reader keeps a BIFF
+FORMULA record's cached result and not its tokens, a Save in Normal format made
+that zero permanent. `tests/sheetfin.py` found it on its first run: the four
+formulas on the glass came back right, and the twenty-two below them came back
+0.
+
+**`sh_dowrite` calls `sh_recalc_all` before it hands over to the module**, which
+walks every record and calls `sh_eval_cell` on each formula. It decides nothing
+itself: the pass stamp already knows what is stale, and does the right thing in
+both modes. Automatic advances `sh_pass` on every repaint, so anything not
+recomputed since is stale and recomputes; manual does not, so only a cell never
+computed at all — `sh_setformula` stamps those `0xFFFF`, a value `sh_pass`
+cannot reach — runs, which keeps manual meaning what it says. **Every sheet is
+evaluated as itself**, `sh_rowcol_op`'s impersonation: `sh_findcell` packs
+`[sh_cursheet]` into every reference, so a Sheet 2 formula evaluated as Sheet 1
+reads Sheet 1's cells. 64 resident bytes.
+
+**What it costs is time, and nothing on the glass says so.** A sheet of
+iterating functions — `RATE`, `IRR` — is computed at Save if it was not at
+paint. The harness met it first: `os88marty.settle` waits for the *screen* to
+stop changing, a computation draws nothing, and the gate read the floppy
+before the file existed. It waits for the file now.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

@@ -768,10 +768,72 @@ sh_doread:
     pop bp
     ret
 sh_dowrite:
-    push bp
+    call sh_recalc_all                  ; every formula CURRENT before any
+    push bp                             ; writer reads one - see below
     mov bp, SHM_WRITE
     call ch_ovcall
     pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_recalc_all - evaluate every formula cell on every sheet, as its own sheet
+; (SPEC.md 81.48).
+; Preserves all registers.
+;
+; EVALUATION IS LAZY: sh_eval_cell runs when a cell is READ, and a repaint only
+; reads what is on the glass. The SYLK and BIFF writers read a cell's value
+; with sh_cellval_to_acc_si, the STORED double, and never ask for a fresh one -
+; so a formula scrolled out of sight since it was loaded, or since a cell it
+; names changed, was written with whatever it last held. After a load that is
+; the zero sh_setformula leaves, and BIFF's reader keeps the result and not the
+; tokens, so a Save in Normal format turned an off-screen formula into a
+; permanent 0. DIF and the text formats read through sh_getcell2, which
+; evaluates, which is why it looked like a SYLK/BIFF quirk rather than a hole.
+; Found by tests/sheetfin.py: the first four formulas - the ones on screen -
+; came back right and all twenty-two below them came back 0.
+;
+; NOTHING HERE DECIDES WHAT IS STALE. sh_eval_cell's pass stamp already does,
+; and does the right thing in both modes: automatic advances sh_pass on every
+; repaint, so anything not recomputed since is stale and recomputes; manual
+; does not, so only a cell never computed at all (stamped 0xFFFF) runs - which
+; keeps manual mode meaning what it says.
+;
+; THE SHEET IS IMPERSONATED per record, sh_rowcol_op's idiom: sh_findcell packs
+; [sh_cursheet] into every reference, so a Sheet 2 formula evaluated as Sheet 1
+; would read Sheet 1's cells.
+; -----------------------------------------------------------------------------
+sh_recalc_all:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    push word [sh_cursheet]
+    xor di, di
+    mov cx, [sh_ncells]
+    jcxz .done
+.l:
+    mov es, [sh_cellseg]                ; re-read each time: the claim is
+    test byte [es:di+SH_C_FLAGS], 1     ; movable (66.2) and a word is what
+    jz .next                            ; sh_reloc keeps right, not ES
+    mov ax, [es:di+SH_C_ROW]
+    rol ax, 1                           ; the sheet is the row word's top two
+    rol ax, 1                           ; bits
+    and ax, 3
+    mov [sh_cursheet], ax
+    push cx                             ; the parser under sh_eval_cell is
+    call sh_eval_cell                   ; free with CX and DX; DI and ES it
+    pop cx                              ; keeps
+.next:
+    add di, SH_C_SZ
+    loop .l
+.done:
+    pop word [sh_cursheet]
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
     ret
 sh_difbbox:
     push bp
