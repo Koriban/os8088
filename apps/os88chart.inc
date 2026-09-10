@@ -25,7 +25,8 @@
 ; the header records and where the section really starts, so the cut would
 ; take the pad with it and the dispatcher would not be at offset 0.
 ;
-; The bar-chart rasterizer and BMP writer shared between apps/sheet/sheet.asm
+; The chart rasterizer (all seven types) and BMP writer shared between
+; apps/sheet/sheet.asm
 ; (its own live "Data > Chart Column..." window) and apps/chart/chart.asm (a
 ; standalone SYLK/DIF/BIFF chart viewer). Same idea as apps/os88ui.inc: get
 ; the scaling math and the BMP header bytes right once, and both callers

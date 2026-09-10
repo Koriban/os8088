@@ -19,7 +19,7 @@
  * the worked example of both, and are built by `make cc-smoke`.
  *
  * ---------------------------------------------------------------------------
- * THE FOUR RULES A C AUTHOR CANNOT SEE (SPEC.md 73.5, 67.5.1, 67.7, 67.8)
+ * THE FOUR RULES A C AUTHOR CANNOT SEE (SPEC.md 73.5, 73.5.1, 73.7, 73.8)
  * ---------------------------------------------------------------------------
  *
  * 1. TAKING THE ADDRESS OF AN AUTOMATIC IS A BUILD FAILURE, and it has to be,
@@ -72,9 +72,9 @@
  *    you and are correct in any context, because they load KERNEL_SEG
  *    themselves rather than trusting the ES they were entered with.
  *
- * 3. THE STACK IS TINY AND IS NOT GROWABLE. The UI task has 1,024 bytes total
- *    with a measured 246 already spent under load, and a worker has 384 with
- *    a measured 150 (SPEC.md 2.1, 67.8). tools/cc8086.py prints every
+ * 3. THE STACK IS TINY AND IS NOT GROWABLE. The UI task has 512 bytes total
+ *    with a measured 246 already spent under load, and a worker has at most
+ *    384 with a measured 150 (SPEC.md 2.1, 73.8). tools/cc8086.py prints every
  *    function's frame size on every build and fails on any frame over 96
  *    bytes (CC_FRAME_MAX). Rule 1 is most of what keeps this true: a buffer
  *    that cannot be addressed on the stack was never going to be on it.
@@ -102,7 +102,7 @@
  * covers - so the C is free to be three to five times slower than assembly
  * INSIDE the loop and must not add a single call to it. Anything that
  * touches pixels or cells per iteration belongs in hand-written assembly
- * that C calls once (SPEC.md 6.3/6.5/65.13: a whole row of proportional
+ * that C calls once (SPEC.md 6.3/6.5: a whole row of proportional
  * glyphs is composed into a 1bpp band in your own RAM and emitted with ONE
  * os88_gfx_blit1, because lettering it a glyph at a time is 79 ms of pure
  * call floor).
@@ -117,11 +117,16 @@
  *   OSAPI_XMEM_*                          every argument and answer is a
  *     32-bit linear base, and there is no 32-bit type here (rule 4). The one
  *     part of the API that C genuinely cannot hold.
- *   OSAPI_FSX_*                           the exclusive bracket (SPEC.md 53)
- *     hands control to a near proc of yours and then forbids every drawing
- *     slot until it returns. The rules are the whole feature and none of them
- *     is checkable from C. (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md
- *     11.2, is a different thing and IS wrapped: os88_fullscreen() below.)
+ *   OSAPI_FSX_PAGE / FSX_SURF             the other two slots of the exclusive
+ *     bracket (SPEC.md 53.10, 53.7.1). PAGE spends FSI_PAGES, which only Mode
+ *     X and Hercules have; SURF answers the rect a SAME-MODE bracket owns on a
+ *     two-display desktop, and a bracket that sets a mode has collapsed the
+ *     desktop and is (0,0,w,h). The four below are the bracket itself and ARE
+ *     wrapped - os88_fsx_caps/run/mode/wait - because none of the bracket's
+ *     rules is checkable from C and all of them are stated where the one
+ *     function that obeys them lives (docs/APPLE2-SPEC.md section 13.3).
+ *     (OSAPI_FULLSCREEN, the WINDOW latch of SPEC.md 11.2, is a different
+ *     thing again and is os88_fullscreen() below.)
  *   OSAPI_GFX_LINIT / LSTEP / LSTEPV      a resumable Bresenham whose state
  *     block is explicitly not yours to read (SPEC.md 5.6.7).
  *   OSAPI_SYS_SNAPSHOT / CLAIM_SNAPSHOT / SYS_KB   buffer layouts that the
@@ -144,26 +149,35 @@
  *     to read a file's HEADER and decide from it before reading the rest,
  *     which os88_file_read() cannot express - it is os88_file_read_at().)
  *
- * The count: 99 of the 155 slots apps/os88api.inc publishes, plus six
+ * The count: 105 of the 160 slots apps/os88api.inc publishes, plus six
  * window-record accessors and six runtime helpers that are not slots at all -
- * 127 C entry points, and every one of them is in apps/cc/os88thunk.asm.
+ * 133 C entry points, and every one of them is in apps/cc/os88thunk.asm -
+ * FOUR OF THEM ONLY IF THE SHIM SAYS SO. The four fsx_* thunks are behind
+ * `%define CC_HAS_FSX` (the gate list below), so a package without it
+ * ASSEMBLES 101 slots and 129 entry points and the four names are prototypes
+ * with no bodies. The recipe below counts the FILE, which holds all of them.
  *
  * How those three are counted, so the next person does not have to guess:
- *   155  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
+ *   160  `%define OSAPI_<NAME> KERNEL_SEG:0x...` lines in apps/os88api.inc.
  *        OSAPI_FIND_SZ is an `equ`, not a slot, and is not one of them.
- *    99  those names that appear in apps/cc/os88thunk.asm, in code rather
+ *   105  those names that appear in apps/cc/os88thunk.asm, in code rather
  *        than in a comment - a macro invocation names its slot as an
- *        argument, so a plain grep finds them all.
- *   127  distinct `_os88_*` entry points defined in that same file, whether
+ *        argument, so a plain grep finds them all. Four of the 105 are
+ *        inside the `%ifdef CC_HAS_FSX` block: a grep sees them, and a
+ *        package that has not set the define does not assemble them, which
+ *        is why the paragraph above gives 101 as the other number.
+ *   133  distinct `_os88_*` entry points defined in that same file, whether
  *        written out or generated by one of the CC_T_* macros. It is not
- *        99 + 12: some slots have two entry points (the _seg forms), and
+ *        105 + 12: some slots have two entry points (the _seg forms), and
  *        the callbacks a package DEFINES - os88_main, os88_paint and the
  *        rest - are not entry points into the API and are not counted.
  *
  * THOSE THREE ARE RE-COUNTED, NOT INCREMENTED. They read 96/149/117 until
  * PACCMAN (SPEC.md 91) added os88_gfx_blitp() and os88_wm_display(), and the
- * recipe above then answered 99/155/127 - so six slots and eight entry points
- * had been added over some earlier cycle without anyone running it. Run the
+ * recipe above then answered 99/155/127; the merge that brought PACCMAN and
+ * THE WIRE onto the integration branch beside its own five new slots answers
+ * 101/160/129, and APPLE2's four gated fsx thunks (SPEC.md 53) take the file
+ * to 105/160/133. Run the
  * recipe when you touch this file; do not add one to what is written here.
  * ==========================================================================*/
 
@@ -373,6 +387,24 @@ static char os88__sz_find[sizeof(struct os88_find)    == 24 ? 1 : -1];
  *   CC_HAS_WORKER     void  os88_worker(void *win);
  *   CC_HAS_ONWAKE     void  os88_onwake(void *win);       (74.1 - see below)
  *   CC_HAS_ONCLOSE    int   os88_onclose(void *win);      (75.1 - see below)
+ *
+ * ...AND ONE OF THEM GATES THE OTHER DIRECTION, which is why it is listed
+ * apart from the twelve above rather than among them:
+ *
+ *   CC_HAS_FSX        no callback at all - it assembles the four
+ *                     os88_fsx_*() THUNKS (SPEC.md 53, the exclusive
+ *                     bracket). Every row above gates a callback the package
+ *                     EXPORTS; this one gates calls the package MAKES, and
+ *                     it exists because nasm has no dead-code elimination:
+ *                     four thunks nothing references still cost every C
+ *                     package that assembles os88thunk.asm 92 bytes of its
+ *                     61,440, and ungated they took LOOM - the tightest
+ *                     image in the tree - to 30 bytes of spare. The
+ *                     prototypes below stay unconditional, because an
+ *                     unreferenced prototype costs nothing; what a package
+ *                     that calls one without the %define gets is nasm's
+ *                     `binary output format does not support external
+ *                     references` naming the symbol.
  * ========================================================================*/
 
 /* os88_main - your entry point (SPEC.md 20.2, 21 step 8).
@@ -766,6 +798,90 @@ int os88_wm_wake(void *win);
  * keys states its own chord (74.2). NOT the exclusive bracket of SPEC.md 53. */
 int os88_fullscreen(void *win, int enter);
 
+/* --- the exclusive bracket (SPEC.md 53) ------------------------------------
+ * os88_fullscreen() above is a WINDOW the size of the screen. This is the
+ * other thing: your app BORROWS THE MACHINE. Multitasking is suspended, every
+ * kernel drawer is parked, and the video mode is yours to set.
+ *
+ * NEEDS `%define CC_HAS_FSX` IN YOUR .asm SHIM - one line covers all four,
+ * and without it these prototypes have no bodies and nasm answers `binary
+ * output format does not support external references` from a line in
+ * build/*.gen.asm you did not write.
+ *
+ * NOTHING IN THE TOOLCHAIN ENFORCES ANY OF THE RULES, which is why the whole
+ * bracket belongs in ONE function whose header comment is the rule list
+ * (docs/APPLE2-SPEC.md section 13.3 is the worked example):
+ *
+ *   - the entry passed to os88_fsx_run() is a plain RESIDENT function whose
+ *     address is taken, and must NEVER be an ovl_ - tools/cc8086.py refuses
+ *     that address by name, because the bracket has parked the machine that
+ *     would have to load the module;
+ *   - after your first os88_fsx_mode() every drawing slot renders DESKTOP
+ *     geometry into a foreign framebuffer and is off-limits until you return;
+ *   - keys come from a polled int 16h and the mouse from os88_mouse(), with
+ *     YOU edge-detecting the buttons: no events are dispatched in here;
+ *   - pace with os88_fsx_wait() and never os88_task_sleep(), which returns at
+ *     once because nothing else is eligible;
+ *   - never touch PIT channel 0, the sound ports or an int 10h mode set;
+ *   - the exit is your entry RETURNING, on SPEC.md 11.2.1's F with Esc as the
+ *     escape hatch - or on Ctrl+F where your app TAKES TYPED TEXT, which is
+ *     11.2.1's own exemption and is the case of every emulator and every
+ *     terminal: a bare letter is not yours to bind when every letter belongs
+ *     to the guest, and Esc usually belongs to it too
+ *     (docs/APPLE2-SPEC.md section 13.3 is the worked example, and it states
+ *     its departure rather than assuming it). The ~200 ms wm_paint_all the
+ *     exit costs is paid once.
+ *
+ * The file slots, os88_mouse(), os88_ticks(), the sound, memory and cpu slots
+ * and these four stay legal throughout. */
+int os88_fsx_caps(void *win, int *kind);         /* -> FSXM_* mask; *kind =
+                                                  * OS88_VID_* of the display
+                                                  * that window is on. Any
+                                                  * context - grey a mode row
+                                                  * with it before entering
+                                                  * (47). `kind` is an
+                                                  * out-parameter and must be
+                                                  * a static (rule 1) */
+int os88_fsx_run(void (*entry)(void), void *win, int flags);
+int os88_fsx_mode(int id, void *fsi);            /* fsi = a static block of
+                                                  * OS88_FSI_SIZE bytes */
+int os88_fsx_wait(int kind);                     /* ...and it is the PRESENT
+                                                  * as well as the clock */
+
+#define OS88_FSXM_TEXT80 0                       /* SPEC.md 53.4's ids - bit n
+                                                  * of the caps mask is id n */
+#define OS88_FSXM_TEXT40 1
+#define OS88_FSXM_CGA320 2
+#define OS88_FSXM_CGA640 3                       /* 640x200x2   CGA/VGA */
+#define OS88_FSXM_HERC   4                       /* 720x348     HERC */
+#define OS88_FSXM_VGA0D  5
+#define OS88_FSXM_VGA13  6                       /* 320x200x256 VGA */
+#define OS88_FSXM_VGA12  7
+#define OS88_FSXM_MODEX  8
+
+#define OS88_FSXF_KEEPWORKER 1                   /* os88_fsx_run() flags */
+#define OS88_FSXF_FASTTICK   2
+
+#define OS88_FSXW_TICK  0                        /* os88_fsx_wait() clocks */
+#define OS88_FSXW_VSYNC 1
+#define OS88_FSXW_FRAME 2
+
+/* The block os88_fsx_mode() fills - SPEC.md 53.4's FSI_*, as BYTE offsets
+ * into a static char array, because a C struct here would have to promise an
+ * alignment nasm does not. */
+#define OS88_FSI_SEG    0                        /* word: framebuffer segment */
+#define OS88_FSI_W      2                        /* word: width in pixels */
+#define OS88_FSI_H      4                        /* word: height in pixels */
+#define OS88_FSI_STRIDE 6                        /* word: bytes per row */
+#define OS88_FSI_FLAGS  8                        /* byte: bit0 text, bit1
+                                                  * planar, bit2 banked */
+#define OS88_FSI_BPP    9                        /* byte */
+#define OS88_FSI_BANKS  10                       /* byte: 1 = linear */
+#define OS88_FSI_PAGES  11                       /* byte */
+#define OS88_FSI_BSTEP  12                       /* word: bank step in bytes */
+#define OS88_FSI_MODE   14                       /* byte: the id, echoed */
+#define OS88_FSI_SIZE   16
+
 /* --- tasks and time (SPEC.md 8, 20.6) ------------------------------------- */
 void os88_task_yield(void);
 void os88_task_sleep(int ticks);                 /* 18 ticks ~ 1 second */
@@ -956,6 +1072,86 @@ unsigned os88_mem_regrow(unsigned seg, int kb);  /* 0 = refused and the old
                                                   * which may have MOVED */
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
+
+/* --- letting the compactor MOVE a claim (SPEC.md 66) ----------------------
+ * A claim is born PINNED, and a pinned claim sitting in the middle of the
+ * arena is a wall the heap cannot close over for as long as you hold it
+ * (SPEC.md 50.3). Declaring one movable is two lines and it is the whole of
+ * what a C package could not do until now:
+ *
+ *     %define CC_HAS_ONMOVE            (in your .asm shim)
+ *
+ *     static unsigned my_seg;
+ *     void os88_onmove(unsigned was, unsigned now)
+ *     {   if (my_seg == was) my_seg = now;   }
+ *
+ *     my_seg = os88_mem_claim(32);
+ *     os88_mem_movable(my_seg, 1);
+ *
+ * THREE RULES, and each of them has cost this project a defect:
+ *
+ *   1. FIX EVERY WORD THAT NAMES THE BLOCK, not the first one you think of.
+ *      A second copy of the segment kept anywhere - a cached base, a
+ *      "current" pointer, a scratch you handed a library - is stale the
+ *      instant this returns. SPEC.md 66.1 is the record of a design that
+ *      failed on exactly that.
+ *   2. THE HANDLER MAY NOT CLAIM, FREE, YIELD, DRAW OR TOUCH A FILE
+ *      (SPEC.md 66.3 rule 3). It runs INSIDE the compaction, and any of those
+ *      re-enters the walk that is calling it. Assignments and arithmetic only.
+ *   3. PIN IT AROUND A FILE CALL. If the block is the ES:BX of an
+ *      os88_file_read()/write(), pin it first and declare it again after
+ *      (SPEC.md 66.9 reason 4) - a file call claims, so a compaction inside
+ *      one moves the buffer out from under a transfer the kernel already has
+ *      the address of.
+ *
+ * The kernel will not move it while a WORKER of yours could be running in it
+ * (SPEC.md 66.5), so a package with no worker gets this for free and one with
+ * a worker gets it whenever that worker is parked. */
+int os88_mem_movable(unsigned seg, int on);   /* on: 1 = movable, 0 = pin.
+                                               * 0 = the kernel took it,
+                                               * -1 = refused. ALWAYS take
+                                               * the answer */
+void os88_onmove(unsigned was, unsigned now); /* YOU define this, under
+                                               * %define CC_HAS_ONMOVE */
+
+/* --- and your REGION, if you hired a worker (SPEC.md 66.6.2) ---------------
+ * Your region - the block your code, your literals and your statics live in -
+ * is a claim like any other, and os88_mem_movable(<your segment>, 1) declares
+ * it. But the moment you call os88_task_spawn() the kernel has written your
+ * segment into that worker's frame, and its own call chain has pushed it again
+ * since, at depths nothing can compute. So a region with a worker stays PINNED
+ * however you declare it - unless you say this:
+ *
+ *     os88_task_restartable(1);      // in os88_main(), for a poller
+ *
+ * WHAT YOU ARE ASSERTING is stronger than os88_mem_parksafe() and the
+ * difference is the whole of it: parksafe says "you may STOP my worker here",
+ * this says "you may DISCARD what it is standing on and start it again".
+ * os88_worker() begins AGAIN - it does not resume. Everything it needs must
+ * live in a static (which moves with your region) or in a claim of its own
+ * (which has os88_onmove), and never in an automatic across the declaration.
+ *
+ * WHEN IT IS TRUE. The kernel only ever restarts a PARKED worker, and a worker
+ * parks inside os88_task_alive(). So a loop of the ordinary shape -
+ *
+ *     for (;;) { os88_task_alive(win); os88_task_sleep(n); ...statics... }
+ *
+ * - is restartable at the one point it can be restarted at, and may declare
+ * once and leave it. What changes that is os88_mem_parksafe(): with BOTH
+ * declared your worker can also be stopped, and therefore restarted, while it
+ * is blocked in os88_gfx_lock() - which is anywhere in your loop, including
+ * halfway through a frame. If that costs you something, declare this as a
+ * WINDOW instead: turn it on immediately before os88_task_alive() and off
+ * immediately after.
+ *
+ * THE ASYMMETRY TO WEIGH: parksafe declared wrongly costs you a missed
+ * optimisation. This costs you a lost loop iteration - and if your worker was
+ * holding something the declaration was wrong about, it costs you
+ * correctness. Undeclared is the safe answer and it is the default. */
+int os88_task_restartable(int on);            /* on: 1 = you may restart my
+                                               * worker at its entry, 0 =
+                                               * withdraw. 0 = the kernel took
+                                               * it, -1 = refused */
 
 /* --- the PARTS standard (SPEC.md 20.12) ------------------------------------
  * A package that carries more than its own segment - a second segment of

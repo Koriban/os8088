@@ -69,6 +69,8 @@ SC_NFIBMIN   equ 18             ; nFibMinDoc - 'identifies readable files'
 SC_HDRPAGE   equ 384            ; cbFileHeader = ((cbFIB + 127) >> 7) << 7
 SC_SECT      equ 512            ; cbSector
 SC_FCOMPLEX  equ 0x0004         ; the FIB flag word's fComplex bit
+SC_FHASPIC   equ 0x0008         ; ...and fHasPic, the bit after it (the word
+                                ; is fDot:1 fGlsy:1 fComplex:1 fHasPic:1)
 
 ; --- sprms (wordtech/prm.h), operand widths from dnsprm ----------------------
 SCS_PSTC     equ 2              ; byte: stc
@@ -105,7 +107,7 @@ SC_MAXBTE    equ 64             ; FKP pages of each kind. 64 x 512 = 32KB,
 SC_MAXPCD    equ 1024           ; pieces a complex file may have. Read in
                                 ; place out of the staging image - no copy,
                                 ; so this bounds the WALK and nothing else
-; --- the picture record (SPEC.md 93.7) ---------------------------------------
+; --- the picture record (SPEC.md 94.7) ---------------------------------------
 ; Derived from two documents Microsoft itself wrote and cross-checked against
 ; each other: TECHREF.DOC, which ships with Word 1.1a and holds exactly one
 ; metafile picture, and SNAP.DOC, a Paint bitmap pasted into Word and saved.
@@ -159,6 +161,11 @@ sc_docimg:
     inc ax                          ; ...plus the paragraph mark this port
     mov [sc_dvlen], ax              ; keeps implicit. A Word file's text ends
     mov [es:SCF_CCPTEXT], ax        ; with a ¶ and its N marks are N
+    cmp word [sc_npic], 0           ; fHasPic, here rather than at the zeroing
+    je .nopic                       ; of the header page above it: the one FIB
+    or word [es:SCF_FLAGS], SC_FHASPIC ; field that describes what 94.7 adds,
+.nopic:                             ; and a header that says no pictures over a
+                                    ; body that has them contradicts itself
     add ax, SC_HDRPAGE              ; paragraphs; this port holds N-1 marks
     mov [es:SCF_FCMAC], ax          ; and a TAIL paragraph with no mark
     mov cx, [sc_len]                ; (SPEC.md 68.3), so the two
@@ -263,7 +270,18 @@ sc_dpicw:
     inc ax                          ; bytes, so 6 is ceil-to-even and the
     and ax, 0xFFFE                  ; arithmetic closes on lcb = 46 + 6*26
     mov [sc_dpicbw], ax             ; = 202, which is exactly the spacing to
-    mul word [sc_dpicht]            ; that file's NEXT record
+    mov ax, [sc_dpicht]             ; that file's NEXT record.
+    cmp ax, 4369                    ;
+    ja .no                          ; 4369 * 15 = 65,535 twips: past that the
+                                    ; dyaGoal sc_dpichdr writes is the low word
+                                    ; of the product and the picture is
+                                    ; described to every other reader as a
+                                    ; fraction of its height. Nothing else
+                                    ; bounds HEIGHT - OS88IMG_WMAX bounds only
+                                    ; the width - so refusing here is where the
+                                    ; ceiling lives (47)
+    mov ax, [sc_dpicbw]
+    mul word [sc_dpicht]
     or dx, dx
     jnz .no
     add ax, SC_PICF
@@ -348,7 +366,7 @@ sc_dpichdr:
 ; Advances DI by bmWidthBytes * height; preserves everything else.
 ;
 ; Bit 7 is the LEFTMOST pixel, which is the same end os88img.inc reads a 1bpp
-; row from (SPEC.md 85) - so this and the decoder that will read it back agree
+; row from (SPEC.md 93) - so this and the decoder that will read it back agree
 ; by construction rather than by testing.
 ;
 ; SC_PICWHITE is shifted right by the colour index and the low bit tested,
@@ -495,7 +513,16 @@ sc_dgrpc:
     push bx
     push dx
     cmp byte [sc_dpicrun], 0        ; A PICTURE'S CHPX IS NOT A grpprl AND
-    je .attrs                       ; NOT AN ATTRIBUTE SET (SPEC.md 93.7).
+    je .attrs                       ; NOT AN ATTRIBUTE SET (SPEC.md 94.7).
+    cmp al, [sc_npic]               ; ...AND THE INDEX CAME OFF THE DISK. A
+    jae .attrs                      ; 0x01 anywhere in a hostile file's text
+                                    ; is read as SC_PICCH, and sc_dpicr stops
+                                    ; at SC_PICMAX, so AL here can be any CHP
+                                    ; byte sc_dchprl built - 0..0x7F against a
+                                    ; 16-byte sc_dpicfc. Out of range is an
+                                    ; ordinary attribute set, which is what the
+                                    ; byte would have meant on any other
+                                    ; character
     xor ah, ah                      ; AL arrived as the picture INDEX; what
     mov bx, ax                      ; goes out is the twelve-byte structure
     shl bx, 1                       ; SNAP.DOC and TECHREF.DOC both carry,
@@ -945,7 +972,7 @@ sc_dattr:
     PKG_STB sc_dpicrun, 0
     call sc_dispic                  ; A PICTURE IS ALWAYS A RUN OF ONE, so its
     jne .notpic                     ; CHPX can carry its own fcPic and nothing
-    PKG_STB sc_dpicrun, 1     ; else shares it (SPEC.md 93.7)
+    PKG_STB sc_dpicrun, 1     ; else shares it (SPEC.md 94.7)
     call sc_dat1                    ; AL = the CHP byte, which for a picture
     mov dl, al                      ; character is its INDEX (88.9)
     inc bx
@@ -1432,7 +1459,7 @@ sc_docparse:
     call far [sc_v_pictfree]; THE OLD DOCUMENT'S PICTURES GO BACK
                                     ; HERE, not at sc_load's commit point,
                                     ; which is past the ones sc_dpicr is
-                                    ; about to build (SPEC.md 93.7). Safe
+                                    ; about to build (SPEC.md 94.7). Safe
                                     ; this late: every refusal sc_docparse
                                     ; can make is above this line, so by now
                                     ; the read has committed and the rule the
@@ -1894,8 +1921,13 @@ sc_dpapin:
     jae .tail
     PKG_LDS sc_dseg
     mov al, [si]
-    push cs
-    pop ds
+    mov ds, [cs:sc_pkgseg]          ; NOT `push cs / pop ds`: this routine is
+                                    ; in .modc, so CS is the MODULE and every
+                                    ; SCVAR below - and the far vector at
+                                    ; sc_v_papfind, which is itself a
+                                    ; DS-relative dword - would be read ~33KB
+                                    ; past the end of a 12,288-byte claim
+                                    ; (SPEC.md 94.8.3)
     cmp al, 13
     jne .next
     mov ax, si
@@ -2462,7 +2494,7 @@ sc_dcompact:
     cmp al, 9
     je .keep
     cmp al, SC_PICCH                ; a picture SURVIVES compaction now
-    je .keep                        ; (SPEC.md 93.7): it is the one control
+    je .keep                        ; (SPEC.md 94.7): it is the one control
     cmp al, 32                      ; character below 32 this port renders,
     jb .drop                        ; and sc_dpicr pairs it with its record
     cmp al, 126
@@ -2614,6 +2646,20 @@ sc_dpic1:
     jc .no
     cmp ax, [sc_dfsize]             ; ...and all of it is inside the file
     ja .no
+    mov ax, [es:si]                 ; lcb, THE RECORD'S OWN LENGTH. This reader
+    mov dx, [es:si+2]               ; ignored it and stepped by its own
+    or dx, dx                       ; recomputation instead, so a file whose
+    jnz .no                         ; lcb disagreed had the NEXT record read
+    mov dx, cx                      ; out of the middle of this one's pixels -
+    add dx, SC_PICF                 ; and bytes that happen to pass all seven
+    cmp ax, dx                      ; field checks are decoded and drawn as a
+    jb .no                          ; picture. The length the file states has
+    mov [sc_dpiclcb], ax            ; to agree with the length its fields
+    mov dx, si                      ; imply, and the whole of it has to be
+    add dx, ax                      ; inside the file too
+    jc .no
+    cmp dx, [sc_dfsize]
+    ja .no
     mov ax, [sc_dpicwd]             ; the 4bpp destination: (w+1)/2, no pad
     inc ax
     shr ax, 1
@@ -2650,12 +2696,13 @@ sc_dpic1:
     mov ax, [sc_dpicsg]
     mov [di+6], ax
     inc word [sc_npic]
-    mov ax, [sc_dpicbw]             ; step past the record: lcb bytes, and a
-    mul word [sc_dpicht]            ; record is padded to an even boundary -
-    add ax, SC_PICF                 ; the spacing SNAP.DOC's two pictures
-    inc ax                          ; showed
-    and ax, 0xFFFE
-    add [sc_dpicp], ax
+    mov ax, [sc_dpiclcb]            ; step past the record by the length the
+    inc ax                          ; FILE states, now that it has been proved
+    and ax, 0xFFFE                  ; to agree with the fields. A record is
+    add [sc_dpicp], ax              ; padded to an even boundary - the spacing
+                                    ; SNAP.DOC's two pictures showed - and this
+                                    ; port's own lcb is even already, because
+                                    ; bw is, so the round trip is unchanged
     clc
     jmp short .out
 .no:
