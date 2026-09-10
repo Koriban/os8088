@@ -100277,6 +100277,60 @@ verifying it by opening a spreadsheet and looking at it, which is how the
 at: text worked, numbers did not, and only one of the two was on screen.
 
 
+#### 82.16.10 The financial family, the module's third tenant
+
+**Resident 51,579 → 48,750: 2,829 bytes**, which is what SHEET had nearest to
+spare after the file formats went. `CHART.OVL` 16,236 → 19,544 of `CH_OVKB`'s
+20,480, bss +52 for thirteen vectors. The family was picked by §81.39's own
+measure — the largest code in the package that runs only when a cell using it
+recalculates — and by its closure, which is small: **seven routines**
+(`sh_pfin`, its argument parser `sh_pfargs`, the cash-flow walker `sh_irwalk`
+and four helpers), no one else calls any of them, and they touch no data of
+their own except three constants.
+
+**Bracketed where it stands, §82.16.8's shape.** One region from `sh_pfin` to
+`sh_ptrans`, with a `.text` hole around `sh_c_r10`, `sh_c_r01` and `sh_c_eps`:
+the resident `fp_*` routines read those through DS, and a module-relative
+address handed to them reads the package at that offset — §82.16.9's
+`sh_biff_errtab` defect, which is why it is a hole and not a move.
+
+**345 calls out, to 22 routines**, every one `SHOUT`. Nine targets already had
+vectors from the file formats; thirteen are new — the `fp_*` arithmetic the
+formats never needed (`add`, `sub`, `mul`, `pow`, `ln`, `pack_a`, `azero`,
+`iszero`, `a_to_b`) and four of SHEET's own: `sh_pargref`, `sh_pcmp`,
+`sh_skipargs`, `sh_trcopy`. `sh_pcmp` is the one worth noticing: a financial
+function's arguments are parsed by the RESIDENT evaluator, so the module calls
+back into the parser, the parser can evaluate a cell, and that cell's formula
+can call the family again — **the module is re-entered while it is still on the
+stack**. The dispatcher is stateless and indexes through `BP`, which the stub
+banks, so nothing in the path cares; `sh_fnbusy` still refuses a financial
+function inside another's arguments, exactly as it did resident.
+
+**The stub is the first one here that answers a refusal itself.** `sh_doread`,
+`sh_dowrite` and `sh_difbbox` hand `ch_ovcall`'s CF to callers that already
+test it. `sh_pfin`'s caller is the formula parser, which expects the arguments
+consumed and a value in `sh_acc`, and on CF=1 would carry on parsing from
+inside the argument list. So a machine without the module answers what the
+family's own refusals answer: zero, `#VALUE!` (§47), arguments stepped over.
+The verb's wrapper `clc`s before its `retf`, so "the module ran" does not
+depend on the last instruction of a 2,400-byte routine leaving CF clear.
+
+**936 bytes of the claim are left.** The next tenant raises `CH_OVKB`, which
+costs heap and not package image; the sheet.o88 rule and `os88ovlchk.py` both
+refuse a module that outgrows it.
+
+**Verified the way §82.16.9 says a move must be: against a gate that existed
+first.** `tests/sheetfin.py` was written against the resident family and
+passed there — after it had found two defects the move did not cause (§81.48,
+§81.37.8) — and it passes the moved one **30 of 30**, with the SYLK file SHEET
+wrote **byte-identical** to the resident build's (nothing in it is volatile,
+so any difference would have been the move). `os88ovlchk.py` was
+mutation-tested on the new region: one `SHOUT fp_add` put back to a near call
+fails the build at that line. And the refusal path was run, not assumed: with
+no `CHART.OVL` on the disk, `=PMT(0.01,60,-20000)` typed into A1 is stored as
+`SH_T_ERR`/`#VALUE!` and `=1+1` in A2 — typed next, parsed by the same routine
+the refusal had to hand the position back to — is stored as 2.
+
 ## 83. Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`)
 
 Two editable text controls, as **source** rather than as API slots. A slot

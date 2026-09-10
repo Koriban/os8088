@@ -726,7 +726,8 @@ SH_NSEGW equ 8
 SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
 SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
 SHM_DIFBB  equ 5                    ; os88chart.inc include below
-SHM_N      equ 3
+SHM_FIN    equ 6                    ; 82.16.10: the financial family
+SHM_N      equ 4
 
 section .modc vstart=0 align=1
 sh_modc0:
@@ -743,7 +744,7 @@ sh_modc_ext:
     retf
 
 sh_mverb:
-    dw sh_m_doread, sh_m_dowrite, sh_m_difbbox
+    dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
 
 sh_m_doread:
     call shm_doread
@@ -754,6 +755,10 @@ sh_m_dowrite:
 sh_m_difbbox:
     call shm_difbbox
     retf
+sh_m_pfin:
+    call shm_pfin
+    clc                             ; CF=0 is "the module ran" - the stub
+    retf                            ; reads CF=1 as "there is no module"
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -840,6 +845,39 @@ sh_difbbox:
     mov bp, SHM_DIFBB
     call ch_ovcall
     pop bp
+    ret
+
+; sh_pfin - the financial family's door (82.16.10). The body is shm_pfin in
+; CHART.OVL; its contract is unchanged - AX the id, SI just past '(', the answer
+; in sh_acc, SI past ')', AX 0, BX CX DX DI kept.
+;
+; THE ONE STUB HERE THAT HAS TO ANSWER A REFUSAL ITSELF. The other three hand
+; ch_ovcall's CF to callers that already test it; this one's caller is the
+; formula parser, which expects the arguments consumed and a value in sh_acc,
+; and would otherwise carry on parsing from inside the argument list. So no
+; module answers exactly what the family's own refusals do: zero, #VALUE!
+; (47), and the arguments stepped over.
+sh_pfin:
+    push bp
+    mov bp, SHM_FIN
+    call ch_ovcall
+    pop bp
+    jc .nomod
+    ret
+.nomod:
+    push bx
+    push cx
+    push dx
+    push di
+    call fp_azero
+    call sh_acc_store
+    call sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -984,6 +1022,45 @@ sh_x_sh_bt_get:
 sh_x_sh_bt_addcell:
     call sh_bt_addcell
     retf
+sh_x_fp_a_to_b:
+    call fp_a_to_b
+    retf
+sh_x_fp_add:
+    call fp_add
+    retf
+sh_x_fp_azero:
+    call fp_azero
+    retf
+sh_x_fp_iszero:
+    call fp_iszero
+    retf
+sh_x_fp_ln:
+    call fp_ln
+    retf
+sh_x_fp_mul:
+    call fp_mul
+    retf
+sh_x_fp_pack_a:
+    call fp_pack_a
+    retf
+sh_x_fp_pow:
+    call fp_pow
+    retf
+sh_x_fp_sub:
+    call fp_sub
+    retf
+sh_x_sh_pargref:
+    call sh_pargref
+    retf
+sh_x_sh_pcmp:
+    call sh_pcmp
+    retf
+sh_x_sh_skipargs:
+    call sh_skipargs
+    retf
+sh_x_sh_trcopy:
+    call sh_trcopy
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -995,6 +1072,9 @@ sh_ovshims:
     dw sh_x_fp_cmpab, sh_x_fp_unpack_b, sh_x_fp_atof, sh_x_fp_i2a
     dw sh_x_fp_a2i, sh_x_fp_ftoa, sh_x_fp_div, sh_x_fp_i2b
     dw sh_x_fp_norm, sh_x_sh_bios_ymd, sh_x_sh_bt_get, sh_x_sh_bt_addcell
+    dw sh_x_fp_a_to_b, sh_x_fp_add, sh_x_fp_azero, sh_x_fp_iszero, sh_x_fp_ln   ; 82.16.10's
+    dw sh_x_fp_mul, sh_x_fp_pack_a, sh_x_fp_pow, sh_x_fp_sub
+    dw sh_x_sh_pargref, sh_x_sh_pcmp, sh_x_sh_skipargs, sh_x_sh_trcopy
 
 sh_entry:
     push ax
@@ -20960,6 +21040,14 @@ sh_pargclass:
     ret
 
 ; =============================================================================
+; THE FINANCIAL FAMILY IS CHART.OVL'S THIRD TENANT (SPEC.md 82.16.10): from
+; here to sh_ptrans it is module code, bracketed where it stands the way the
+; file formats were (82.16.9). Every call out is SHOUT; the one way in is the
+; resident stub sh_pfin, beside the other three. The three constants below
+; stay in .text, because what reads them is resident fp_* code through DS.
+; =============================================================================
+section .modc
+; =============================================================================
 ; sh_pfin - the FINANCIAL functions, ids 93 and up (SPEC.md 81.37).
 ; in: AX = the id, SI just past '('. out: the answer in sh_acc, SI past ')'.
 ;
@@ -20968,7 +21056,7 @@ sh_pargclass:
 ; how many arrived, and each function then reads the slots it wants. A missing
 ; argument is ZERO, which is Excel's rule for every one of them.
 ; =============================================================================
-sh_pfin:
+shm_pfin:
     push bx
     push cx
     push dx
@@ -21014,13 +21102,13 @@ sh_pfin:
     cmp word [sh_fnn], 3
     jb .badargs
     mov si, sh_fnarg
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnarg + 8
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov si, sh_fnarg + 16
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     jmp .store
 ; --- SYD(cost, salvage, life, per) ------------------------------------------
@@ -21029,40 +21117,40 @@ sh_pfin:
     cmp word [sh_fnn], 4
     jb .badargs
     mov si, sh_fnarg
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnarg + 8
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov di, sh_fnt
-    call fp_pack_a                    ; t = cost - salvage
+    SHOUT fp_pack_a                    ; t = cost - salvage
     mov si, sh_fnarg + 16             ; u = life - per + 1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnarg + 24
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov ax, 1
-    call fp_i2b
-    call fp_add
-    call fp_a_to_b
+    SHOUT fp_i2b
+    SHOUT fp_add
+    SHOUT fp_a_to_b
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_mul
+    SHOUT fp_unpack_a
+    SHOUT fp_mul
     inc word [fp_ae]                  ; * 2, on the exponent
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnarg + 16             ; life * (life + 1)
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_add
-    call fp_a_to_b
+    SHOUT fp_i2b
+    SHOUT fp_add
+    SHOUT fp_a_to_b
     mov si, sh_fnarg + 16
-    call fp_unpack_a
-    call fp_mul
-    call fp_a_to_b
+    SHOUT fp_unpack_a
+    SHOUT fp_mul
+    SHOUT fp_a_to_b
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_div
+    SHOUT fp_unpack_a
+    SHOUT fp_div
     jc .divzero
     jmp .store
 ; --- NPV(rate, v1, v2, ...) = sum of vi / (1+rate)^i -------------------------
@@ -21070,19 +21158,19 @@ sh_pfin:
     cmp word [sh_fnn], 2
     jb .badargs
     mov si, sh_fnarg                  ; u = 1 + rate, the running divisor base
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_add
+    SHOUT fp_i2b
+    SHOUT fp_add
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnu                    ; t = the running (1+rate)^i, from i=1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnt
-    call fp_pack_a
-    call fp_azero                     ; the sum
+    SHOUT fp_pack_a
+    SHOUT fp_azero                     ; the sum
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov cx, 1
 .npvl:
     cmp cx, [sh_fnn]
@@ -21092,29 +21180,29 @@ sh_pfin:
     mul bx
     add ax, sh_fnarg
     mov si, ax
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
-    call fp_a_to_b
+    SHOUT fp_a_to_b
     mov si, sh_tr0
-    call fp_unpack_a
-    call fp_add
+    SHOUT fp_unpack_a
+    SHOUT fp_add
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnt                    ; t *= (1+rate)
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     inc cx
     jmp .npvl
 .npvdone:
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     jmp .store
 ; --- PMT / PV / FV, the annuity three ---------------------------------------
 ; With r the rate, n the periods and t the type (0 = paid at the end of a
@@ -21130,10 +21218,10 @@ sh_pfin:
     jb .badargs
     mov si, sh_fnarg                  ; the rate is argument 0 here...
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov si, sh_fnarg + 8              ; ...n argument 1 and the type argument 4
     mov bx, sh_fnnp
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov cx, 4
     call sh_fnsetty
     call sh_fnfac
@@ -21145,83 +21233,83 @@ sh_pfin:
     je .pvf
 ; --- FV(rate, nper, pmt, pv, type) = -(pv*(1+r)^n + pmt*factor) -------------
     mov si, sh_fnarg + 16             ; pmt * factor
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_tr0
-    call fp_pack_a
-    call fp_azero                     ; pv, if one came
+    SHOUT fp_pack_a
+    SHOUT fp_azero                     ; pv, if one came
     mov di, sh_tr1
-    call fp_pack_a
+    SHOUT fp_pack_a
     cmp word [sh_fnn], 4
     jb .fvsum
     mov si, sh_fnarg + 24
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_tr1
-    call fp_pack_a
+    SHOUT fp_pack_a
 .fvsum:
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_tr1
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
     xor byte [fp_as], 1
     jmp .store
 ; --- PV(rate, nper, pmt, fv, type) = -(fv + pmt*factor) / (1+r)^n -----------
 .pvf:
     mov si, sh_fnarg + 16
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     cmp word [sh_fnn], 4
     jb .pvnofv
     mov si, sh_fnarg + 24
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     mov si, sh_tr0
-    call fp_unpack_a
-    call fp_add
+    SHOUT fp_unpack_a
+    SHOUT fp_add
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
 .pvnofv:
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
 ; --- PMT(rate, nper, pv, fv, type) = -(pv*(1+r)^n + fv) / factor ------------
 .pmt:
     mov si, sh_fnarg + 16
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     cmp word [sh_fnn], 4
     jb .pmtnofv
     mov si, sh_fnarg + 24
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     mov si, sh_tr0
-    call fp_unpack_a
-    call fp_add
+    SHOUT fp_unpack_a
+    SHOUT fp_add
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
 .pmtnofv:
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
@@ -21238,7 +21326,7 @@ sh_pfin:
 ; column; the alternative is a fixed capacity, and a spreadsheet function with
 ; a silent capacity is worse than a slow one.
 .fnrange:
-    call sh_pargref
+    SHOUT sh_pargref
     jnc .badargs
     mov ax, [sh_arg1col]
     mov [sh_irc1], ax
@@ -21255,7 +21343,7 @@ sh_pfin:
     inc si
     cmp word [sh_fnn], 6
     jae .fnrdone
-    call sh_pcmp
+    SHOUT sh_pcmp
     mov ax, [sh_fnn]
     mov bx, 8
     mul bx
@@ -21263,7 +21351,7 @@ sh_pfin:
     mov bx, ax
     push si
     mov si, sh_acc
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop si
     inc word [sh_fnn]
     jmp short .fnrs
@@ -21276,27 +21364,27 @@ sh_pfin:
     jb .irdefg
     mov si, sh_fnarg
     mov bx, sh_fnr0
-    call sh_trcopy
+    SHOUT sh_trcopy
     jmp short .irhaveg
 .irdefg:
     mov si, sh_c_r10
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnr0
-    call fp_pack_a
+    SHOUT fp_pack_a
 .irhaveg:
     mov si, sh_fnr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_c_r01
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
     mov di, sh_fnr1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnr0
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_irwalk
     mov di, sh_fnf0
-    call fp_pack_a
+    SHOUT fp_pack_a
     cmp word [sh_ircnt], 2            ; one cash flow has no rate of return
     jb .badnum
     mov cx, 40
@@ -21304,52 +21392,52 @@ sh_pfin:
     push cx
     mov si, sh_fnr1
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_irwalk
     mov di, sh_fnf1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov byte [fp_as], 0
     mov si, sh_c_eps
-    call fp_unpack_b
-    call fp_cmpab
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab
     jle .irdone
     mov si, sh_fnf1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnf0
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jc .irfail
     mov si, sh_fnr1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnr0
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov si, sh_fnf1
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov si, sh_tr0
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .irfail
-    call fp_a_to_b
+    SHOUT fp_a_to_b
     mov si, sh_fnr1
-    call fp_unpack_a
-    call fp_sub
+    SHOUT fp_unpack_a
+    SHOUT fp_sub
     mov di, sh_tr1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnr1
     mov bx, sh_fnr0
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov si, sh_fnf1
     mov bx, sh_fnf0
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov si, sh_tr1
     mov bx, sh_fnr1
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop cx
     dec cx
     jnz .irloop
@@ -21362,7 +21450,7 @@ sh_pfin:
 .irdone:
     pop cx
     mov si, sh_fnr1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     jmp .store
 ; MIRR is CLOSED FORM despite its reputation - two discounted sums and a root.
 ; Excel states it with NPV, which discounts from period ONE:
@@ -21382,62 +21470,62 @@ sh_pfin:
     mov word [sh_irmode], 1           ; the negatives, at the finance rate
     mov si, sh_fnarg
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_irwalk
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     cmp word [sh_ircnt], 2
     jb .badnum
     mov word [sh_irmode], 2           ; the positives, at the reinvestment one
     mov si, sh_fnarg + 8
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_irwalk
     mov di, sh_tr1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnarg + 8              ; (1+rrate)^(n-1): the positives
-    call fp_unpack_a                  ; carried forward to the LAST period
+    SHOUT fp_unpack_a                  ; carried forward to the LAST period
     mov ax, 1
-    call fp_i2b
-    call fp_add
+    SHOUT fp_i2b
+    SHOUT fp_add
     mov ax, [sh_ircnt]
     dec ax                            ; n >= 2, checked after the first walk
-    call fp_i2b
-    call fp_pow
+    SHOUT fp_i2b
+    SHOUT fp_pow
     jc .badnum
     mov si, sh_tr1
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     xor byte [fp_as], 1               ; -walk_pos*(1+rrate)^(n-1)
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_tr0                    ; ...over walk_neg, which is already the
-    call fp_unpack_b                  ; negatives at period zero - no (1+frate)
+    SHOUT fp_unpack_b                  ; negatives at period zero - no (1+frate)
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_div
+    SHOUT fp_unpack_a
+    SHOUT fp_div
     jc .divzero
     test byte [fp_as], 1              ; a negative has no real (n-1)th root
     jnz .badnum
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov ax, [sh_ircnt]                ; ^ (1/(n-1))
     dec ax
     or ax, ax
     jle .badnum
-    call fp_i2a
-    call fp_a_to_b
+    SHOUT fp_i2a
+    SHOUT fp_a_to_b
     mov si, fp_c_one
-    call fp_unpack_a
-    call fp_div
-    call fp_a_to_b
+    SHOUT fp_unpack_a
+    SHOUT fp_div
+    SHOUT fp_a_to_b
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_pow
+    SHOUT fp_unpack_a
+    SHOUT fp_pow
     jc .badnum
     mov ax, 1                         ; ...less one
-    call fp_i2b
-    call fp_sub
+    SHOUT fp_i2b
+    SHOUT fp_sub
     jmp .store
 
 ; --- RATE(nper, pmt, pv, fv, type, guess) -----------------------------------
@@ -21460,87 +21548,87 @@ sh_pfin:
     jb .badargs
     mov si, sh_fnarg                  ; n is argument 0 here, not 1
     mov bx, sh_fnnp
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov cx, 4
     call sh_fnsetty
     cmp word [sh_fnn], 6              ; the guess, or Excel's own 0.1
     jb .rdefg
     mov si, sh_fnarg + 40
     mov bx, sh_fnr0
-    call sh_trcopy
+    SHOUT sh_trcopy
     jmp short .rhaveg
 .rdefg:
     mov si, sh_c_r10
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnr0
-    call fp_pack_a
+    SHOUT fp_pack_a
 .rhaveg:
     mov si, sh_fnr0                   ; the second point, a little along
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_c_r01
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
     mov di, sh_fnr1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnr0                   ; f at the first
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_fnres
     jc .badnum
     mov di, sh_fnf0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov cx, 40
 .rloop:
     push cx
     mov si, sh_fnr1
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_fnres
     jc .rfail
     mov di, sh_fnf1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov byte [fp_as], 0               ; |f1| small enough?
     mov si, sh_c_eps
-    call fp_unpack_b
-    call fp_cmpab
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab
     jle .rdone
     mov si, sh_fnf1                   ; the secant step needs f1 - f0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnf0
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jc .rfail                         ; a flat line has no root to aim at
     mov si, sh_fnr1                   ; r1 - r0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnr0
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov si, sh_fnf1
-    call fp_unpack_b
-    call fp_mul                       ; f1 * (r1 - r0)
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; f1 * (r1 - r0)
     mov si, sh_tr0
-    call fp_unpack_b
-    call fp_div                       ; ...over (f1 - f0)
+    SHOUT fp_unpack_b
+    SHOUT fp_div                       ; ...over (f1 - f0)
     jc .rfail
-    call fp_a_to_b
+    SHOUT fp_a_to_b
     mov si, sh_fnr1
-    call fp_unpack_a
-    call fp_sub                       ; the next point
+    SHOUT fp_unpack_a
+    SHOUT fp_sub                       ; the next point
     mov di, sh_tr1
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnr1                   ; r1 -> r0, f1 -> f0
     mov bx, sh_fnr0
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov si, sh_fnf1
     mov bx, sh_fnf0
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov si, sh_tr1
     mov bx, sh_fnr1
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop cx
     dec cx
     jnz .rloop
@@ -21553,7 +21641,7 @@ sh_pfin:
 .rdone:
     pop cx
     mov si, sh_fnr1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     jmp .store
 
 ; --- IPMT / PPMT(rate, per, nper, pv, fv, type) -----------------------------
@@ -21571,85 +21659,85 @@ sh_pfin:
     jb .badargs
     mov si, sh_fnarg
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov cx, 5
     call sh_fnsetty
     mov si, sh_fnarg + 16             ; --- the payment, over nper ---
     mov bx, sh_fnnp
-    call sh_trcopy
+    SHOUT sh_trcopy
     call sh_fnfac
     jc .badnum
     mov si, sh_fnarg + 24             ; pv * (1+r)^nper
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     cmp word [sh_fnn], 5              ; ...+ fv
     jb .ipnofv
     mov si, sh_fnarg + 32
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
 .ipnofv:
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     xor byte [fp_as], 1
     mov di, sh_fnp
-    call fp_pack_a                    ; sh_fnp = pmt
+    SHOUT fp_pack_a                    ; sh_fnp = pmt
     mov si, sh_fnty                   ; --- which period to value at ---
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     mov ax, 1                         ; type 0: k = per - 1
     jc .iphavek
     mov si, sh_fnarg + 8              ; type 1 and per = 1: no interest yet
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_cmpab
+    SHOUT fp_i2b
+    SHOUT fp_cmpab
     jle .ipzero
     mov ax, 2                         ; type 1 otherwise: k = per - 2
 .iphavek:
     push ax
     mov si, sh_fnarg + 8
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     pop ax
-    call fp_i2b
-    call fp_sub
+    SHOUT fp_i2b
+    SHOUT fp_sub
     mov di, sh_fnnp
-    call fp_pack_a
+    SHOUT fp_pack_a
     call sh_fnfac                     ; --- the balance before that period ---
     jc .badnum
     mov si, sh_fnarg + 24
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnp
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov si, sh_tr0
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
     xor byte [fp_as], 1               ; A = the balance
     mov si, sh_fnarg                  ; ...times the rate
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
 .ipdone:
     cmp word [sh_fnid], 102
     jne .store
-    call fp_a_to_b                    ; PPMT = PMT - IPMT
+    SHOUT fp_a_to_b                    ; PPMT = PMT - IPMT
     mov si, sh_fnp
-    call fp_unpack_a
-    call fp_sub
+    SHOUT fp_unpack_a
+    SHOUT fp_sub
     jmp .store
 .ipzero:
-    call fp_azero
+    SHOUT fp_azero
     jmp short .ipdone
 
 ; --- NPER(rate, pmt, pv, fv, type) -----------------------------------------
@@ -21661,89 +21749,89 @@ sh_pfin:
     cmp word [sh_fnn], 3
     jb .badargs
     mov si, sh_fnarg
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jnc .nperr
     mov si, sh_fnarg + 16             ; r = 0: -(pv + fv)/pmt
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     cmp word [sh_fnn], 4
     jb .npr0
     mov si, sh_fnarg + 24
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
 .npr0:
     mov si, sh_fnarg + 8
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     xor byte [fp_as], 1
     jmp .store
 .nperr:
     mov si, sh_fnarg + 8              ; A = pmt * (1 + t*r) / r
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnarg                  ; A = (1 + t*r)
     mov bx, sh_fnr
-    call sh_trcopy
+    SHOUT sh_trcopy
     mov cx, 4
     call sh_fnsetty
     call sh_fntyv
-    call fp_a_to_b
+    SHOUT fp_a_to_b
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_mul
+    SHOUT fp_unpack_a
+    SHOUT fp_mul
     mov si, sh_fnarg
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     mov di, sh_fnu
-    call fp_pack_a                    ; u = A
-    call fp_azero                     ; A - fv
+    SHOUT fp_pack_a                    ; u = A
+    SHOUT fp_azero                     ; A - fv
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     cmp word [sh_fnn], 4
     jb .nprnf
     mov si, sh_fnarg + 24
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
 .nprnf:
     mov si, sh_fnt
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     mov si, sh_fnu
-    call fp_unpack_a
-    call fp_sub
+    SHOUT fp_unpack_a
+    SHOUT fp_sub
     mov di, sh_fnt
-    call fp_pack_a                    ; t = A - fv
+    SHOUT fp_pack_a                    ; t = A - fv
     mov si, sh_fnarg + 16             ; u = A + pv
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     mov si, sh_fnu
-    call fp_unpack_a
-    call fp_add
-    call fp_a_to_b
+    SHOUT fp_unpack_a
+    SHOUT fp_add
+    SHOUT fp_a_to_b
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_div
+    SHOUT fp_unpack_a
+    SHOUT fp_div
     jc .divzero
     test byte [fp_as], 1              ; the ratio must be positive to have a
     jnz .badnum                       ; logarithm, and a negative one means the
-    call fp_ln                        ; balance never comes down
+    SHOUT fp_ln                        ; balance never comes down
     jc .badnum
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnarg                  ; / ln(1+r)
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_add
-    call fp_ln
+    SHOUT fp_i2b
+    SHOUT fp_add
+    SHOUT fp_ln
     jc .badnum
-    call fp_a_to_b
+    SHOUT fp_a_to_b
     mov si, sh_fnt
-    call fp_unpack_a
-    call fp_div
+    SHOUT fp_unpack_a
+    SHOUT fp_div
     jc .divzero
     jmp .store
 ; --- DDB(cost, salvage, life, period) ---------------------------------------
@@ -21758,64 +21846,64 @@ sh_pfin:
     cmp word [sh_fnn], 4
     jb .badargs
     mov si, sh_fnarg                  ; t = the running book value
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnt
-    call fp_pack_a
-    call fp_azero                     ; u = this period's depreciation
+    SHOUT fp_pack_a
+    SHOUT fp_azero                     ; u = this period's depreciation
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnarg + 24             ; how many periods to walk
-    call fp_unpack_a
-    call fp_a2i
+    SHOUT fp_unpack_a
+    SHOUT fp_a2i
     jc .badnum
     mov cx, ax
     or cx, cx
     jle .badnum
 .ddbl:
     mov si, sh_fnt                    ; book * 2 / life
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     inc word [fp_ae]
     mov si, sh_fnarg + 16
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .divzero
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnt                    ; ...but never below salvage
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnarg + 8
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov di, sh_tr0
-    call fp_pack_a                    ; tr0 = book - salvage
+    SHOUT fp_pack_a                    ; tr0 = book - salvage
     mov si, sh_fnu
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_tr0
-    call fp_unpack_b
-    call fp_cmpab
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab
     jle .ddbok
     mov si, sh_tr0                    ; clipped
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
 .ddbok:
     test byte [sh_fnu+7], 0x80        ; and never negative: once the book value
     jz .ddbpos                        ; is at salvage there is nothing left to
-    call fp_azero                     ; take
+    SHOUT fp_azero                     ; take
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
 .ddbpos:
     mov si, sh_fnt                    ; book -= this period's amount
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_sub
+    SHOUT fp_unpack_b
+    SHOUT fp_sub
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     dec cx
     jnz .ddbl
     mov si, sh_fnu
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     jmp .store
 .divzero:
     mov byte [sh_evalerr], SH_ERR_DIV0
@@ -21826,11 +21914,11 @@ sh_pfin:
 .badargs:
     mov byte [sh_evalerr], SH_ERR_VALUE
 .zero:
-    call fp_azero
+    SHOUT fp_azero
 .store:
     mov si, [sh_trsi]
-    call sh_acc_store
-    call sh_skipargs
+    SHOUT sh_acc_store
+    SHOUT sh_skipargs
     cmp byte [si], ')'
     jne .out
     inc si
@@ -21864,13 +21952,13 @@ sh_irwalk:
     push si
     push di
     mov word [sh_ircnt], 0
-    call fp_azero
+    SHOUT fp_azero
     mov di, sh_iracc
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, fp_c_one
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_irpow
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov dx, [sh_irr1]                 ; DX = the row being read
 .row:
     cmp dx, [sh_irr2]
@@ -21883,7 +21971,7 @@ sh_irwalk:
     mov bx, dx
     push cx
     push dx
-    call sh_getcell2                  ; recurses for a formula cell, which is
+    SHOUT sh_getcell2                  ; recurses for a formula cell, which is
     pop dx                            ; why every loop variable is banked
     pop cx
     jnc .nextcol                      ; empty
@@ -21892,7 +21980,7 @@ sh_irwalk:
     push cx
     push dx
     mov si, sh_acc                    ; v / (1+r)^i
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov cx, [sh_irmode]
     jcxz .take
     test byte [sh_acc+7], 0x80        ; mode 1 wants the negatives...
@@ -21905,26 +21993,26 @@ sh_irwalk:
     jne .skip
 .take:
     mov si, sh_irpow
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     jc .skip
     mov si, sh_iracc
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
     mov di, sh_iracc
-    call fp_pack_a
+    SHOUT fp_pack_a
 .skip:
     mov ax, 1                         ; i advances for EVERY number, taken or
-    call fp_i2a                       ; not - see the note above
+    SHOUT fp_i2a                       ; not - see the note above
     mov si, sh_fnr
-    call fp_unpack_b
-    call fp_add
-    call fp_a_to_b
+    SHOUT fp_unpack_b
+    SHOUT fp_add
+    SHOUT fp_a_to_b
     mov si, sh_irpow
-    call fp_unpack_a
-    call fp_mul
+    SHOUT fp_unpack_a
+    SHOUT fp_mul
     mov di, sh_irpow
-    call fp_pack_a
+    SHOUT fp_pack_a
     inc word [sh_ircnt]
     pop dx
     pop cx
@@ -21936,7 +22024,7 @@ sh_irwalk:
     jmp .row
 .done:
     mov si, sh_iracc
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     pop di
     pop si
     pop dx
@@ -21954,25 +22042,25 @@ sh_fnres:
     call sh_fnfac
     jc .no
     mov si, sh_fnarg + 16             ; pv * (1+r)^n
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnt
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnarg + 8              ; + pmt * factor
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_fnu
-    call fp_unpack_b
-    call fp_mul
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
     mov si, sh_tr0
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
     cmp word [sh_fnn], 4              ; + fv
     jb .ok
     mov si, sh_fnarg + 24
-    call fp_unpack_b
-    call fp_add
+    SHOUT fp_unpack_b
+    SHOUT fp_add
 .ok:
     clc
     jmp short .out
@@ -21984,28 +22072,31 @@ sh_fnres:
     pop bx
     ret
 
+section .text                       ; ...DATA, and the resident fp_* routines
+                                    ; read it through DS (68.10 rule 2)
 sh_c_r10: dq 0.1
 sh_c_r01: dq 0.01
 sh_c_eps: dq 0.0000000001
+section .modc
 
 ; sh_fntyv - A = (1 + type*rate) from sh_fnty, or 1 when that is zero.
 sh_fntyv:
     push bx
     push si
     mov si, sh_fnty
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jnc .scaled
     mov si, fp_c_one
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     jmp short .out
 .scaled:
     mov si, sh_fnr
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_add
+    SHOUT fp_i2b
+    SHOUT fp_add
 .out:
     pop si
     pop bx
@@ -22033,7 +22124,7 @@ sh_fnsetty:
     pop dx
     add ax, sh_fnarg
     mov si, ax
-    call sh_trcopy
+    SHOUT sh_trcopy
 .out:
     pop si
     pop bx
@@ -22054,53 +22145,53 @@ sh_fnfac:
     push si
     push di
     mov si, sh_fnr
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_add
+    SHOUT fp_i2b
+    SHOUT fp_add
     mov si, sh_fnnp
-    call fp_unpack_b
-    call fp_pow
+    SHOUT fp_unpack_b
+    SHOUT fp_pow
     jc .no
     mov di, sh_fnt
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnr
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jnc .nz
     mov si, sh_fnnp
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
     jmp short .ok
 .nz:
     mov si, sh_fnt
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_sub
+    SHOUT fp_i2b
+    SHOUT fp_sub
     mov si, sh_fnr
-    call fp_unpack_b
-    call fp_div
+    SHOUT fp_unpack_b
+    SHOUT fp_div
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
     mov si, sh_fnty                   ; (1 + t*r), when the type is non-zero
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jc .ok
     mov si, sh_fnr
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov ax, 1
-    call fp_i2b
-    call fp_add
-    call fp_a_to_b
+    SHOUT fp_i2b
+    SHOUT fp_add
+    SHOUT fp_a_to_b
     mov si, sh_fnu
-    call fp_unpack_a
-    call fp_mul
+    SHOUT fp_unpack_a
+    SHOUT fp_mul
     mov di, sh_fnu
-    call fp_pack_a
+    SHOUT fp_pack_a
 .ok:
     clc
     jmp short .out
@@ -22139,7 +22230,7 @@ sh_pfargs:
     cmp word [sh_fnn], 6
     jae .done
     push cx
-    call sh_pcmp
+    SHOUT sh_pcmp
     pop cx
     mov ax, [sh_fnn]
     mov bx, 8
@@ -22148,7 +22239,7 @@ sh_pfargs:
     mov bx, ax
     push si
     mov si, sh_acc
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop si
     inc word [sh_fnn]
     cmp byte [si], ','
@@ -22162,6 +22253,8 @@ sh_pfargs:
     pop bx
     pop ax
     ret
+
+section .text
 
 ; =============================================================================
 ; sh_ptrans - LN, LOG10, EXP, PI and LOG, ids 81 and up (SPEC.md 81.35).
@@ -28618,7 +28711,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5193
+    OS88_BSS 5245
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -29469,8 +29562,21 @@ sh_v_fp_norm                equ sh_v_fp_i2b + 4
 sh_v_sh_bios_ymd            equ sh_v_fp_norm + 4
 sh_v_sh_bt_get              equ sh_v_sh_bios_ymd + 4
 sh_v_sh_bt_addcell          equ sh_v_sh_bt_get + 4
-SH_NVEC       equ 36
-sh_v_end      equ sh_v_sh_bt_addcell + 4
+sh_v_fp_a_to_b              equ sh_v_sh_bt_addcell + 4
+sh_v_fp_add                 equ sh_v_fp_a_to_b + 4
+sh_v_fp_azero               equ sh_v_fp_add + 4
+sh_v_fp_iszero              equ sh_v_fp_azero + 4
+sh_v_fp_ln                  equ sh_v_fp_iszero + 4
+sh_v_fp_mul                 equ sh_v_fp_ln + 4
+sh_v_fp_pack_a              equ sh_v_fp_mul + 4
+sh_v_fp_pow                 equ sh_v_fp_pack_a + 4
+sh_v_fp_sub                 equ sh_v_fp_pow + 4
+sh_v_sh_pargref             equ sh_v_fp_sub + 4
+sh_v_sh_pcmp                equ sh_v_sh_pargref + 4
+sh_v_sh_skipargs            equ sh_v_sh_pcmp + 4
+sh_v_sh_trcopy              equ sh_v_sh_skipargs + 4
+SH_NVEC       equ 49
+sh_v_end      equ sh_v_sh_trcopy + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
