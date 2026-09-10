@@ -25615,10 +25615,17 @@ sh_pif:
     jnz .thenkept
     mov [sh_evalerr], al
 .thenkept:
-    call sh_vpush
-    cmp byte [si], ','
-    jne .badpop
-    inc si
+    call sh_vpush                     ; the then-VALUE...
+    mov al, [sh_curtype]              ; ...AND WHAT KIND OF VALUE IT IS, which
+    mov ah, [sh_curaux]               ; sh_vpush does not carry. Without this
+    push ax                           ; the else-parse left ITS type behind, and
+    cmp al, SH_T_TEXT                 ; a TEXT then-value's characters are not
+    jne .nottext                      ; in sh_acc at all but in sh_sacc, which
+    call sh_spush                     ; the else-parse overwrites: so
+.nottext:                             ; =IF(A1>1,"big","small") answered
+    cmp byte [si], ','                ; "small" for every A1 (81.10.10 found
+    jne .badpop                       ; it). Banked on the string stack, the
+    inc si                            ; way & banks its left operand
     mov al, [sh_evalerr]              ; ...and the same for the else-parse
     push ax
     call sh_pcmp                      ; the else-value, left in sh_acc
@@ -25627,16 +25634,30 @@ sh_pif:
     jz .elsekept
     mov [sh_evalerr], al
 .elsekept:
+    pop cx                            ; CL/CH: the then-value's type and aux
     or bx, bx
     jz .dropthen                      ; false: sh_acc already holds the else
-    call sh_binop_pre                 ; true: recover the then-value from the
-    call sh_acc_store                 ; stack (it lands in fp A) and keep it
+    mov [sh_curtype], cl              ; true: the then-value back WHOLE - its
+    mov [sh_curaux], ch               ; kind, and its eight bytes restored as
+    pop word [sh_acc]                 ; they were banked rather than through
+    pop word [sh_acc+2]               ; the float layer, which a TEXT result's
+    pop word [sh_acc+4]               ; slot reference (81.22.1) is not a
+    pop word [sh_acc+6]               ; double to survive
+    cmp cl, SH_T_TEXT
+    jne .out
+    call sh_srestore                  ; ...and its characters
     jmp .out
 .dropthen:
-    add sp, 8                         ; the banked then-value is not wanted
+    add sp, 8                         ; the banked then-value is not wanted,
+    cmp cl, SH_T_TEXT                 ; and nor are its characters: a bank
+    jne .out                          ; left on the string stack would shift
+    call sh_spop                      ; every string after it by one
     jmp .out
 .badpop:
-    add sp, 8
+    add sp, 10                        ; the banked value, and its type...
+    cmp al, SH_T_TEXT                 ; (AL still is: nothing since has
+    jne .bad                          ; touched it)
+    call sh_spop                      ; ...and any characters
 .bad:
     xor ax, ax
     call sh_acc_int
