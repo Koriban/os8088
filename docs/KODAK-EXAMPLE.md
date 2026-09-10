@@ -4,7 +4,25 @@
 describes are `apps/sheet/KODAK.BIF`, `apps/scribe/KODAK.DOC`,
 `apps/sheet/KODAKEX1.BMP` / `KODAKEX2.BMP` and the four `screenshots/kodak-*`
 images; the 1.44MB floppy it was produced on is not tracked, because every
-file on it is here and `make` builds the disks.*
+file on it is here.*
+
+*`make` puts them on the **examples disk** — `build/examples.img`, and
+`examples720.img`, `examples120.img` and `examples360.img` for the other
+drives (`make examplesdisk` builds just those). All six files are in `MEDIA/`,
+the folder the Open dialog starts in: this set, and the Xerox Q3 1982 set
+beside it (`XEROXQ3.SLK` for Sheet, `XEROXQ3.RTF` for Scribe). They are on no
+apps disk, so opening one is a disk swap, and the two applications take it
+differently:*
+
+- ***Sheet** (`KODAK.BIF`, `XEROXQ3.SLK`): launch it from the apps disk, swap
+  the examples disk into B:, File ▸ Open. Its file formats live in
+  `CHART.OVL`, which Sheet reads at start-up, so the swap costs nothing.*
+- ***Scribe** (`KODAK.DOC`, `XEROXQ3.RTF`): open any document from Scribe's own
+  disk FIRST, then swap. Scribe reads `SCRIBE.OVL` - where its file formats
+  live - at the first file operation, from the disk it was launched from
+  (SPEC.md 94.8); a cold Scribe asked to open a file off the examples disk
+  looks for the module there and says it is missing. Once loaded it stays for
+  the session. A hard-disk install has neither problem.*
 
 Every byte here was produced **in the emulator, by hand**, driving SHEET.O88,
 CHART.O88 and WORD.O88 through the mouse and keyboard. Nothing was written on
@@ -24,7 +42,7 @@ changed as a result — including the bug the rebuild found.
 
 | file | what it is |
 |---|---|
-| `kodak-disk.img` | the 1.44MB floppy it was produced on. not tracked here - every file on it is, and `make` builds the disks |
+| `kodak-disk.img` | the 1.44MB floppy it was produced on. Not tracked here - every file on it is, and `make` builds the examples disk from them |
 | `KODAK.DOC` | the report, written in Word. A real Word-format `.DOC` |
 | `KODAK.BIF` | the figures, saved from Sheet as a **BIFF4 workbook** — three sheets in one file |
 | `KODAKEX1.BMP` / `KODAKEX2.BMP` | the two exhibits, exported from Sheet's chart window. 240x160, 4bpp, as written by the app |

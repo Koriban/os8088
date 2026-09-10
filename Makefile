@@ -49,6 +49,13 @@ APPSIMG360 := $(BUILD)/apps360.img
 # is no media.img and no media720.img, because at those sizes the apps disk
 # still holds it and a disk with one file on it is a swap bought for nothing.
 MEDIAIMG360 := $(BUILD)/media360.img
+# The EXAMPLES DISK: this fork's Kodak and Xerox sets (docs/KODAK-EXAMPLE.md)
+# on a floppy of their own, in all four geometries. Named up here and not
+# beside its rule because `all` names it, and make expands a rule's
+# prerequisites when it READS the line: a variable defined below `all` would
+# be empty there and the disk would silently not be built.
+EXAMPLESIMGS := $(BUILD)/examples.img $(BUILD)/examples720.img \
+                $(BUILD)/examples120.img $(BUILD)/examples360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 
 # RESET= clears a machine's non-volatile state on the way in, and it reaches
@@ -1856,7 +1863,8 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(IMG) $(IMG120) $(IMG720) $(IMG360) \
      $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
-     $(MEDIAIMG360) $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
+     $(MEDIAIMG360) $(EXAMPLESIMGS) \
+     $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      cc-note test-fast
@@ -9210,14 +9218,6 @@ APPS_DATA := apps/tracker/beverly.mod apps/texpad/PAPER.TEX \
 # Open starts. MEDIAFOLDER is passed anyway (see APPSARGS360): the folder has
 # to exist because it is where a save DEFAULTS to (SPEC.md 38.10), and that
 # must not be a thing the last data file left on the disk happens to provide.
-# THE WHOLE KODAK SET AND XEROXQ3.RTF GO THE SAME WAY AT 360KB, and the numbers
-# say why rather than a preference: that geometry was at 353 of its 354 clusters
-# before either arrived - ONE spare - and the Kodak pair alone is five. The two
-# exhibits are 19KB each on top of that. So at 360KB the examples are the 1,765
-# byte XEROXQ3.SLK and nothing else, which still leaves MEDIA a folder with a
-# file in it and still gives a File Open somewhere to start; everything else
-# rides the geometries that have room. Measured, not guessed: adding the pair
-# put os88disk at "packages need 358 clusters; disk holds 354".
 MEDIA_DISK_DATA := apps/tracker/beverly.mod
 APPS_DATA_360   := $(filter-out $(MEDIA_DISK_DATA),$(APPS_DATA))
 
@@ -9259,30 +9259,44 @@ APPS_DATA     := $(ZDATA)/BEVERLY.MOD $(APPS_DATA_360)
 MEDIA_DISK_DATA := $(ZDATA)/BEVERLY.MOD
 endif
 
-# THE FORK'S EXAMPLES (docs/KODAK-EXAMPLE.md), appended AFTER the branch above
-# and not listed inside it. The PKGZ branch ASSIGNS APPS_DATA rather than
-# adding to it, so an example named only in the base list vanished from every
-# disk the moment compression became the default - a green build, a passing
-# suite, and disks without the files. That is the second time a make variable
-# has emptied part of a disk silently in this tree (see APPS_GAMES_360's
-# history), and the shape is the same: one list, two definitions, the later
-# one wins without saying so.
+# THE EXAMPLES DISK (docs/KODAK-EXAMPLE.md) - this fork's Kodak and Xerox
+# sets, which used to be spread across the apps disks: all six on the roomy
+# geometries, only XEROXQ3.SLK at 360KB, and the rest riding the media disk
+# there. Now they are one floppy that is the same at every size - 84 of a
+# 360KB disk's 354 clusters, so nothing is split by geometry any more - and
+# the apps and media disks carry exactly what upstream's do.
+#
+# MEDIA/ and not the root, for the media disk's reason: it is the folder the
+# Open dialog starts in (SPEC.md 38.10), so a user who swaps this disk in
+# finds the files without navigating.
 #
 # THEY SHIP RAW. SPEC.md 20.14.3 makes a transparent read conditional on the
-# application reading the file WHOLE, and that has been checked for SHEET's
-# own formats (every read stages through sh_stgseg in one OSAPI_FILE_READ) but
-# not for every program that might open the BMPs. Unwrapped costs clusters;
-# wrapped on an unchecked assumption costs a picture that opens as garbage.
+# application reading the file WHOLE; that has been checked for SHEET's own
+# formats (every read stages through sh_stgseg in one OSAPI_FILE_READ) but
+# not for every program that might open the BMPs, and this disk has room.
 #
-# XEROXQ3.SLK is the one that fits the 360KB apps disk; the rest ride the
-# media disk there, as they did before compression.
-FORK_EXAMPLES     := apps/sheet/XEROXQ3.SLK apps/scribe/XEROXQ3.RTF \
-                     apps/sheet/KODAK.BIF apps/scribe/KODAK.DOC \
-                     apps/sheet/KODAKEX1.BMP apps/sheet/KODAKEX2.BMP
-FORK_EXAMPLES_360 := apps/sheet/XEROXQ3.SLK
-APPS_DATA       += $(FORK_EXAMPLES)
-APPS_DATA_360   += $(FORK_EXAMPLES_360)
-MEDIA_DISK_DATA += $(filter-out $(FORK_EXAMPLES_360),$(FORK_EXAMPLES))
+# In `all` (see EXAMPLESIMGS at the top) rather than on demand: there is no
+# package here to rot, but there are six source files, and a rename that
+# nothing builds is a disk that quietly stops existing.
+EXAMPLES := apps/sheet/XEROXQ3.SLK apps/scribe/XEROXQ3.RTF \
+            apps/sheet/KODAK.BIF apps/scribe/KODAK.DOC \
+            apps/sheet/KODAKEX1.BMP apps/sheet/KODAKEX2.BMP
+EXAMPLESARGS := $(addprefix MEDIA:,$(EXAMPLES))
+
+.PHONY: examplesdisk
+examplesdisk: $(EXAMPLESIMGS)
+
+$(BUILD)/examples.img: $(EXAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(EXAMPLESARGS)
+
+$(BUILD)/examples720.img: $(EXAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(EXAMPLESARGS)
+
+$(BUILD)/examples120.img: $(EXAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(EXAMPLESARGS)
+
+$(BUILD)/examples360.img: $(EXAMPLES) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(EXAMPLESARGS)
 
 $(ZDATA)/BEVERLY.MOD: apps/tracker/beverly.mod tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)
@@ -9387,7 +9401,8 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 #    is a MOD player beside no module - upstream's own reason, above.
 #  - PAC-MAN, 6: this fork's standing choice at 360KB since Pac-Man arrived.
 #  - FONT VIEWER, 4: a browser for faces, on a disk nobody boots for fonts.
-# Measured afterwards at 344 and TEN free, which is this tree's margin: SHEET
+# Measured afterwards at 343 and eleven free, and 341 and THIRTEEN once the
+# examples moved to a disk of their own - this tree's margin is ten: SHEET
 # grows here continuously, and two free is not a margin, it is a date.
 #
 # BOTH LISTS READ THESE - APPS360 for what gets built and APPSARGS360 for what
