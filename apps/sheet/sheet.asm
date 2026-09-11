@@ -9987,6 +9987,62 @@ sh_sheets_used:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_recalc_all - evaluate every formula cell on every sheet, as its own sheet
+; (SPEC.md 81.22.1). Preserves all registers.
+;
+; EVALUATION IS LAZY: sh_eval_cell runs when a cell is READ, and a repaint only
+; reads what is on the glass. The SYLK and BIFF writers read a cell's value
+; with sh_cellval_to_acc_si, the STORED double, and never ask for a fresh one -
+; so a formula scrolled out of sight since it was loaded, or since a cell it
+; names changed, was written with whatever it last held: after a load, the zero
+; sh_setformula leaves. DIF reads through sh_getcell2, which evaluates, which is
+; why it looked like a SYLK/BIFF quirk rather than a hole.
+;
+; NOTHING HERE DECIDES WHAT IS STALE. sh_eval_cell's pass stamp already does,
+; and does the right thing in both modes: automatic advances sh_pass on every
+; repaint, so anything not recomputed since is stale and recomputes; manual
+; does not, so only a cell never computed at all (stamped 0xFFFF) runs - which
+; keeps manual mode meaning what it says.
+;
+; THE SHEET IS IMPERSONATED per record, sh_rowcol_op's idiom: sh_findcell packs
+; [sh_cursheet] into every reference, so a Sheet 2 formula evaluated as Sheet 1
+; would read Sheet 1's cells.
+; -----------------------------------------------------------------------------
+sh_recalc_all:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    push word [sh_cursheet]
+    xor di, di
+    mov cx, [sh_ncells]
+    jcxz .done
+.l:
+    mov es, [sh_cellseg]                ; re-read each time: the claim is
+    test byte [es:di+SH_C_FLAGS], 1     ; movable (66.2) and a word is what
+    jz .next                            ; sh_reloc keeps right, not ES
+    mov ax, [es:di+SH_C_ROW]
+    rol ax, 1                           ; the sheet is the row word's top two
+    rol ax, 1                           ; bits
+    and ax, 3
+    mov [sh_cursheet], ax
+    push cx                             ; the parser under sh_eval_cell is
+    call sh_eval_cell                   ; free with CX and DX; DI and ES it
+    pop cx                              ; keeps
+.next:
+    add di, SH_C_SZ
+    loop .l
+.done:
+    pop word [sh_cursheet]
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_dowrite - pick the writer from the file name's extension.
 ;
 ; AND SAY SO WHEN A SAVE CANNOT CARRY EVERYTHING. SYLK and DIF have no
@@ -9996,7 +10052,8 @@ sh_sheets_used:
 ; format here that CAN carry them, and does (81.10.5).
 ; -----------------------------------------------------------------------------
 sh_dowrite:
-    push si
+    call sh_recalc_all                  ; every formula CURRENT before any
+    push si                             ; writer reads one (81.22.1)
     push di
     mov si, sh_name
     mov di, sh_s_ext_dif

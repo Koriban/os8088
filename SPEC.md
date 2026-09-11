@@ -96661,6 +96661,36 @@ overrun corrupts a value; this one corrupts an *address*, and the next large
 it is worth knowing that bss adjacency can arrange it without anyone loading a
 segment register wrongly at all.
 
+### 81.22 A saved file said what the sheet did not
+
+Two ways a file SHEET wrote disagreed with the sheet it came from, each
+invisible from inside because SHEET read its own files back the same way.
+
+#### 81.22.1 A Save recalculates first
+
+**Evaluation is lazy.** `sh_eval_cell` runs when a cell is *read*, memoized
+against `sh_pass`, and a repaint reads only what is on the glass. That is the
+right shape for a display and the wrong one for a file, because two of the three
+writers never ask: the SYLK and BIFF writers read a cell's value with
+`sh_cellval_to_acc_si`, the **stored** double, while DIF reads through
+`sh_getcell2`, which evaluates. So a formula off-screen since it was loaded, or
+since a cell it names changed, was saved with whatever it last held — after a
+load, the zero `sh_setformula` leaves. Ten formulas `=A1*1` … `=A1*10` on a
+5150, opened and saved as SYLK: the four on the glass came back right and the
+six below them came back **0**.
+
+`sh_dowrite` now calls `sh_recalc_all`, which walks every record and calls
+`sh_eval_cell` on each formula. It decides nothing: the pass stamp already knows
+what is stale, in both modes — automatic advances `sh_pass` on every repaint, so
+anything not recomputed since recomputes; manual does not, so only a cell never
+computed (stamped `0xFFFF`) runs. **Every sheet is evaluated as itself**, the
+`sh_rowcol_op` impersonation, because `sh_findcell` packs `[sh_cursheet]` into
+every reference. 64 bytes.
+
+What it costs is time at Save for a sheet whose formulas were not computed at
+paint, and nothing on the glass says so — which is also why a harness that waits
+for the *screen* to settle reads the floppy before the file exists.
+
 ## 82. CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 Two consumers, one rasterizer. **CHART.O88** is a standalone viewer that reads
