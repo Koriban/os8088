@@ -23,11 +23,16 @@ WHAT IT HOLDS TODAY:
   sh_skipargs COUNTED THE PARENTHESES INSIDE A QUOTED STRING, so the ')' in
   =1+ISERROR(FOO("a)"))*10 closed FOO early and the formula lost its tail.
   It is the routine CHOOSE now steps over its tail with, and every refusal
-  path used it already. Only a case that CONTINUES after the skip can see
-  it: with the quote handling taken out, that one fails and
-  =CHOOSE(1,"a","b)") still answers "a", because the parser stops quietly
-  at the stray characters the bad skip leaves - so the second case would
-  never have caught it alone.
+  path used it already. Only a case that CONTINUES after the skip could see
+  it: with the quote handling taken out, that one failed and
+  =CHOOSE(1,"a","b)") still answered "a", because the parser stopped
+  quietly at the stray characters the bad skip left.
+
+  THAT QUIET STOP (81.50): =1+2 3 answered 3 and =A1 * ( A2 - 1 ) answered
+  2. What is left over after the parse is #VALUE! now, and spaces are
+  dropped where a formula is stored, as Excel 2.1 drops them - except one
+  between two operands, which is a mistake and is left for the parse to
+  refuse.
 
   IF with TEXT branches (81.10.10 found it) answered the else-branch's text
   for every condition. Kept here because this is the row it belongs to.
@@ -75,6 +80,23 @@ CASES = [
     # ISERROR alone answers 1 however the skip went, which is how the first
     # version of this case passed against the unfixed binary
     ('1+ISERROR(FOO("a)"))*10',           11.0),
+    # the WHOLE formula is parsed, or it is #VALUE! (81.50) - these three
+    # used to answer 3, 3 and 50, plausible numbers nobody would doubt
+    ('1+2 3',                             VAL),     # NOT closed up into 1+23
+    ('(1+2)3',                            VAL),
+    ('50%',                               VAL),     # no % operator: an error,
+                                                    # not half the answer
+    # ...and spacing is not a mistake: dropped where it is stored, as Excel
+    # 2.1 drops it. The first three answered 1, 2 and 0 before
+    (' 1 + 2 ',                           3.0),
+    ('A1 * ( A2 - 1 )',                   12.0),
+    ('SUM (A1 : A3)',                     12.25),
+    (' ( 1 + 2 ) * 3 ',                   9.0),
+    ('" a  + "&"b "',                     ' a  + b '),  # a string keeps its
+    # own - and only a double space, or one beside an operator, shows it:
+    # every space in " a "&"b " sits between two operands and is kept anyway,
+    # which is how that first version of this case passed with the quote
+    # handling taken out
     # IF keeps a text branch (81.10.10)
     ('IF(A1>1,"big","small")',            'big'),
     ('IF(A1>5,"big","small")',            'small'),
@@ -132,6 +154,16 @@ def main():
         check(agrees(want, g), "=%s" % expr,
               "SHEET answers %r, the host expects %r"
               % (g[2] if isinstance(g, tuple) else g, want))
+    # what was STORED, read back from the saved text: the spacing gone, the
+    # quoted spaces and the one mistaken space kept
+    for expr, text in (('1+2 3', '1+2 3'), (' 1 + 2 ', '1+2'),
+                       (' ( 1 + 2 ) * 3 ', '(1+2)*3'),   # SYLK saves a
+                       # reference as R1C1, so this one has none
+                       ('" a  + "&"b "', '" a  + "&"b "')):
+        g = got.get(([e for e, _ in CASES].index(expr), COL))
+        t = g[1] if isinstance(g, tuple) else None
+        check(t == text, "=%s is stored =%s" % (expr, text),
+              "saved as %r" % (t,))
     done("sheeteval")
 
 

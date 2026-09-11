@@ -99342,7 +99342,60 @@ the quote handling taken back out, `=1+ISERROR(FOO("a)"))*10` fails and
 `=CHOOSE(1,"a","b)")` does **not**: the bad skip leaves `")` behind and the
 parser stops quietly at stray characters, so only a formula that continues
 after the skip can tell a right one from a wrong one. That quiet stop is its
-own question, and is listed rather than chased here. Resident +50 bytes.
+own question, answered in §81.50. Resident +50 bytes.
+
+### 81.50 The whole formula, and the spaces in it
+
+**The parse stopped quietly at the first character it could not use.**
+`sh_eval_cell` called `sh_pcmp` and took whatever it had by then as the answer,
+so `=1+2 3` answered **3**, `=(1+2)3` answered **3**, and `=50%` answered
+**50** — plausible numbers, which is the worst kind of wrong. A typed NUMBER has
+never had this problem: `sh_commit` refuses any text `fp_atof` does not consume
+to the end (`3.5kg` is a label, not 3.5). A formula now answers to the same
+rule: after the top-level parse, anything left over is **`#VALUE!`**, unless an
+error was already raised, which stands.
+
+**That made spacing a question, because the evaluator does not step over a
+space between tokens and never did.** `=A1 * ( A2 - 1 )` answered **2** — `A1`,
+then a stop at the space — and `= 1 + 2` answered `#VALUE!`, `=SUM (A1:A3)`
+`#NAME?`. Teaching every level of the parser and every argument comma about
+spaces would be a dozen sites. Excel 2.1 answers it more simply: it saves BIFF2,
+and BIFF2 has no token that could keep a space (`tAttrSpace` is BIFF3 on,
+section 3.10 of the document), so **Excel 2.1 drops spaces when it stores a
+formula** and `=1 + 2` comes back `=1+2`. `sh_setformula`, which every formula
+passes through — typed, pasted, read from any of the file formats, rewritten by
+Insert or Copy — does the same on its copy into the arena:
+
+| The gap | What happens to it |
+| --- | --- |
+| inside a quoted string | kept, every space of it (`" a  + "`); a doubled quote closes and reopens, which comes out right |
+| after an operator, `(`, `,` or `:`, or at the start | dropped |
+| before one of those, or at the end | dropped |
+| between two operands — `1+2 3`, `A1 B1` | **one space kept** |
+
+The last row is deliberate. A space between two operands is not spacing but a
+mistake (Excel's intersection operator is a space, which this sheet does not
+have), and closing it up would turn `=1+2 3` into `=1+23` — **24**, a new
+plausible wrong answer in place of the old one. Kept, it is left over after the
+parse and the formula is `#VALUE!`. `sh_fsep` holds the byte set; the length
+check before the copy counts the raw text, which this can only shorten.
+
+**Where this still differs from Excel.** Excel refuses such an entry with *Error
+in formula* and leaves the cell as it was; SHEET stores it and shows
+`#VALUE!` the moment it recalculates. Refusing at entry needs a parse at commit
+time, and the only parse that does not evaluate is the RPN encoder, which lives
+in `CHART.OVL` — an overlay load on every formula typed, for a case whose answer
+is already visible. The cell is never silently wrong either way.
+
+`tests/sheeteval.py` holds nine checks for this and the previous binary fails
+all nine — the three quiet stops, the four spaced formulas (`=A1 * ( A2 - 1 )`
+the one that answered a number), and the two formulas it reads back to check
+what was **stored**. Each half fails its own checks when taken out: the
+left-over test three, the squeeze six, a squeeze that drops every space two
+(`=1+2 3` answers 24). A squeeze that ignores quotes passed the first version
+of the string case, `" a "&"b "`, because each of its spaces sits between two
+operands and is kept anyway; `" a  + "` has a double space and an operator,
+and fails it. Resident +95 bytes.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

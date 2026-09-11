@@ -18523,6 +18523,31 @@ sh_seterr:
 section .text
 
 ; -----------------------------------------------------------------------------
+; sh_fsep - CF=1 when AL is a byte a space beside it can never matter to: an
+; operator, a parenthesis, the argument comma, the range colon, or 0 (the
+; start or the end of the text). For sh_setformula's space squeeze.
+; -----------------------------------------------------------------------------
+sh_fsep:
+    push bx
+    mov bx, sh_fseps
+.lp:
+    cmp al, [bx]
+    je .yes
+    inc bx
+    cmp bx, sh_fseps_end
+    jb .lp
+    pop bx
+    clc
+    ret
+.yes:
+    pop bx
+    stc
+    ret
+
+sh_fseps:     db 0, '+-*/^&=<>(),:'
+sh_fseps_end:
+
+; -----------------------------------------------------------------------------
 ; sh_setformula - in: AX=col, BX=row, SI=formula text (DS-resident,
 ; NUL-terminated, NOT including the leading '='). Out: CF=1 when refused
 ; (arena or cell table full) - the cell keeps what it had (sh_settext's
@@ -18557,9 +18582,41 @@ sh_setformula:
     mov es, [sh_txtseg]
     mov di, [sh_txtlen]
     mov [sh_newoff], di               ; where THIS formula starts
-.copy:
+    ; SPACES ARE DROPPED ON THE WAY IN (81.50), as Excel 2.1 drops them: its
+    ; BIFF2 has no token to keep one in (tAttrSpace is BIFF3 on), so =1 + 2
+    ; comes back =1+2. The evaluator does not step over a space between
+    ; tokens, and never did - =1 + 2 used to answer 1. One space survives,
+    ; where it stands between two OPERANDS (=1+2 3), because that is not a
+    ; spacing but a mistake, and sh_eval_cell makes it #VALUE! rather than
+    ; this closing it up into =1+23. A quoted string keeps every space.
+    ; The count above is of the raw text, which this can only shorten.
+    xor dx, dx                        ; DL = inside "...", DH = the last byte
+.copy:                                ; stored (0 = none yet, a separator)
     lodsb
+    cmp al, '"'
+    jne .notq
+    xor dl, 1
+.notq:
+    test dl, dl
+    jnz .put
+    cmp al, ' '
+    jne .put
+.sp:
+    cmp byte [si], ' '                ; the whole run of spaces is one gap
+    jne .spend
+    inc si
+    jmp short .sp
+.spend:
+    mov al, dh
+    call sh_fsep
+    jc .copy                          ; after an operator or '(': dropped
+    mov al, [si]
+    call sh_fsep
+    jc .copy                          ; before one, or at the end: dropped
+    mov al, ' '                       ; between two operands: ONE kept
+.put:
     stosb
+    mov dh, al
     or al, al
     jnz .copy
     mov [sh_txtlen], di
@@ -19674,7 +19731,14 @@ sh_eval_cell:
     jnz .copyin
     mov si, bx
     call sh_pcmp                      ; the result lands in sh_acc, and may
-    pop bx                            ; have recursed to get there
+                                       ; have recursed to get there
+    cmp byte [si], 0                  ; THE WHOLE FORMULA, OR IT IS NOT ONE
+    je .whole                         ; (81.50). The parse used to stop quietly
+    cmp byte [sh_evalerr], 0          ; at the first character it could not
+    jne .whole                        ; use, so =1+2 3 answered 3 and =(1+2)3
+    mov byte [sh_evalerr], SH_ERR_VALUE ; answered 3 - the "3.5kg" rule sh_commit
+.whole:                               ; keeps for a number, and =1+'s rule
+    pop bx                            ; for a formula that stops too soon
     dec word [sh_evaldepth]
     jmp .writeback
 .toodeep:
