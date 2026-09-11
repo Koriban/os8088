@@ -98399,7 +98399,8 @@ and §82 is this tree's answer to that.
 - **The macro language is 5 commands** of a language with ~90 macro functions
   (§81.8). It is a demonstration of the machinery, not the feature.
 - **No Short/Full menus toggle**, and **no freeze panes**.
-- **Smaller, each listed where it was found:** a centred or right-aligned label
+- **Smaller, each listed where it was found:** Fill Right/Down turns an
+  error constant into 0; SYLK cannot carry a `;` inside a formula; a centred or right-aligned label
   does not run on into its neighbours (§81.54); Sort leaves a logical constant
   out rather than ordering it after text (§81.51); a formatted empty cell
   (BIFF's BLANK) loses its format (§81.52).
@@ -99897,6 +99898,35 @@ lists Undo's claim among the movable ones, so a heap compaction must carry
 its contents too.
 
 Resident +869 bytes, bss +5 — 2,536 bytes of headroom are left.
+
+### 81.58 Insert and Delete move a cell's borders and notes
+
+**The border and note tables stayed where they were.** Insert and Delete
+Row/Column moved the cells, rewrote the formulas that referred to them (the
+reidx pass) and, since §81.56, the column widths — but never walked the two
+tables beside the cell array, which are keyed by position exactly as the
+cells are. A bordered cell moved down a row and its border stayed on the row
+above, around whatever was there now; a deleted row left its borders on the
+row that took its place; a note stayed on the old address.
+
+`sh_rc_sides` walks both, beside `sh_colw_shift`, through one routine
+(`sh_rc_table`) given each table's record size: every record on the sheet
+past the pivot moves one row or column, a delete takes the pivot's own
+records, and one pushed off the grid goes too. It works **in place**, closing
+gaps as it goes: the tables are in (row, column) order, and a shift that
+moves every record past the pivot by the same one cannot reorder them, so
+nothing is re-sorted.
+
+`tests/sheetside.py`, 5 checks: the host's BIFF3 file borders A1 top and
+bottom; with gridlines off the border is the only ink on a cell's edge, and
+it must move down with an Insert Row, come back with a Delete Row, and go
+with a Delete of its own row — while the saved file keeps it on its cell.
+The previous binary fails the insert and the own-row delete; taking out the
+delete's shift fails three, keeping the deleted row's records one. The notes
+go through the same routine with their own record size; nothing SHEET writes
+carries a note, so it is the borders that are observed. (The test's first
+version sampled a bottom border on the next cell's gridline; `sh_drawborders`
+draws it on the cell's own last pixel row.) Resident +217 bytes.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

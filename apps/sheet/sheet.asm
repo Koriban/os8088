@@ -1515,6 +1515,131 @@ sh_colw_shift:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; sh_rc_sides - Insert and Delete Row/Column move the BORDER and NOTE tables'
+; records with their cells (81.58). They moved the cells alone, so a border or
+; a note stayed on the row or column it had been drawn on while its cell went
+; somewhere else - and a deleted row left its borders on the row that took
+; its place. In: [sh_rc_op], [sh_rc_idx], the user's sheet in sh_cursheet.
+; -----------------------------------------------------------------------------
+sh_rc_sides:
+    push bx
+    push cx
+    push dx
+    mov dx, [sh_bordseg]
+    mov cx, [sh_nbord]
+    mov bx, SH_BT_SZ
+    call sh_rc_table
+    mov [sh_nbord], cx
+    mov dx, [sh_noteseg]
+    mov cx, [sh_nnote]
+    mov bx, SH_NOTE_REC
+    call sh_rc_table
+    mov [sh_nnote], cx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_rc_table - DX = a sparse table's segment, CX = its records, BX = its
+; record size (packed row/sheet word, then the column word): every record on
+; this sheet past the pivot moves one row or column, the pivot's own go on a
+; delete, and one pushed off the grid goes too. out: CX = the records left.
+; IN PLACE, and still sorted: the table is in (row, col) order, and a shift
+; that moves every record past the pivot by the same one cannot reorder it.
+sh_rc_table:
+    push ax
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov es, dx
+    mov bp, cx                        ; BP = the records still to read
+    xor cx, cx                        ; CX = the records kept
+    xor si, si                        ; SI reads, DI writes
+    xor di, di
+.l:
+    or bp, bp
+    jz .done
+    dec bp
+    mov ax, [es:si]                   ; the packed row: its sheet...
+    mov dx, ax
+    push cx
+    mov cl, SH_ROW_BITS
+    shr dx, cl
+    pop cx
+    cmp dx, [sh_cursheet]
+    jne .keep                         ; another sheet's: untouched
+    and ax, SH_ROW_MASK               ; ...and its row
+    mov dl, [sh_rc_op]
+    cmp dl, 2
+    jae .col
+    cmp ax, [sh_rc_idx]
+    jb .keep
+    cmp dl, 1
+    je .delrow
+    inc ax                            ; insert: one row down
+    cmp ax, SH_ROWS
+    jae .drop
+    jmp short .newrow
+.delrow:
+    cmp ax, [sh_rc_idx]               ; delete: the pivot's own go, the rest
+    je .drop                          ; one row up
+    dec ax
+.newrow:
+    mov dx, [es:si]
+    and dx, ~SH_ROW_MASK & 0xFFFF     ; the sheet bits, as they were
+    or ax, dx
+    mov [es:si], ax
+    jmp short .keep
+.col:
+    mov ax, [es:si+2]
+    cmp ax, [sh_rc_idx]
+    jb .keep
+    cmp dl, 3
+    je .delcol
+    inc ax
+    cmp ax, SH_COLS
+    jae .drop
+    mov [es:si+2], ax
+    jmp short .keep
+.delcol:
+    cmp ax, [sh_rc_idx]
+    je .drop
+    dec ax
+    mov [es:si+2], ax
+.keep:
+    cmp si, di
+    je .same
+    push cx                           ; a drop behind it: close the gap
+    mov cx, bx
+.cp:
+    mov al, [es:si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .cp
+    pop cx
+    jmp short .kept
+.same:
+    add si, bx
+    add di, bx
+.kept:
+    inc cx
+    jmp .l
+.drop:
+    add si, bx
+    jmp .l
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop ax
+    ret
+
 ; sh_vcx - in: AX = a visible column (0..sh_vcols); out: AX = its left edge,
 ; in pixels from the grid's
 sh_vcx:
@@ -18057,6 +18182,7 @@ sh_rowcol_op:
     mov [sh_rc_op], al
     mov [sh_rc_idx], bx
     call sh_colw_shift                ; a column's WIDTH goes with it (81.56)
+    call sh_rc_sides                  ; ...and its borders and notes (81.58)
     mov word [sh_rc_stgcnt], 0
     mov ax, [sh_cursheet]
     mov [sh_rc_savedsheet], ax

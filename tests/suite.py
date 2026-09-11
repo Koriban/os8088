@@ -3956,6 +3956,13 @@ SOAK = [
         "rather than letting it put the paste back - read off the glass, "
         "then the saved document checked whole",
         needs=("marty",), serial=True),
+    Row("sheetside", "soak", py("tests/sheetside.py"), 300.0,
+        "SPEC.md 81.58: Insert and Delete Row move a cell's BORDERS with it "
+        "(and its notes, by the same routine). They moved the cells alone. "
+        "With gridlines off a border is the only ink on an edge: an insert "
+        "must carry it down, a delete bring it back, deleting its own row "
+        "take it away, and the saved file keep it on its cell",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "
