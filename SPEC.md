@@ -98390,10 +98390,8 @@ and §82 is this tree's answer to that.
   what was the largest gap here. Custom codes are drawn (TEXT() takes any)
   but the Format Number dialog offers only the list, and SYLK carries only
   four.
-- **Column width and row height are whole-sheet.** The dialogs are Excel's;
-  what they set is one `sh_cellw`/`sh_cellh` for everything. `sh_gridhit`
-  divides by the width once, and a per-column grid has to walk. An Excel file's
-  COLWIDTH records are skipped (§81.52).
+- **Row height is whole-sheet.** Column widths are per column since §81.56;
+  a row is still the one `sh_cellh`.
 - **No undo.** Every edit is final.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
@@ -98414,7 +98412,8 @@ Almost everything above hangs off six pieces of work:
    byte, Excel's 21 codes and one engine for the grid and TEXT().
 2. **Array formulas** → 8 functions, and `Data ▸ Table`.
 3. **A database + criteria area** → 11 functions, and 6 of the Data menu.
-4. **Per-column/per-row geometry** → the width behaviour, and `Justify`.
+4. **Per-row geometry** → row heights, and `Justify` (per-column widths are
+   §81.56's).
 5. **An undo record** → Undo and Repeat.
 6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
@@ -99746,6 +99745,87 @@ midnight defect above on their first run.
 Resident +2,322 bytes (the engine, less TEXT()'s old parser), bss +320,
 `CHART.OVL` +189; 3,873 bytes of resident headroom are left, and 467 of the
 overlay's.
+
+### 81.56 Each column its own width
+
+**The whole sheet had one column width.** Format > Column Width set
+`sh_cellw` and `sh_cellch` for every column at once, and an Excel file's
+COLWIDTH records were skipped — so a worksheet laid out for its data opened at
+seven characters a column, and §81.55's formats filled with `#` wherever its
+author had widened a column for them. §81.39 put it down as the geometry
+enabler: "`sh_gridhit` divides by the width once, and a per-column grid has to
+walk".
+
+#### 81.56.1 Where a width lives
+
+**256 bytes a sheet, in the top kilobyte of the note claim** (`SH_COLW_OFF`):
+each column's width in characters, Excel's own unit, **0 for the standard
+width** (`sh_defch`, the seven characters every column had). A new claim would
+have been SHEET's eighth and last, and the same kilobyte of bss a third of the
+headroom §81.55 left; notes are the least-used table there is, and
+`SH_NOTE_CAP` is **512 now, not 682**. `sh_colwidth`, `sh_colw_set` and
+`sh_colw_clear` are the only doors — the readers and writers reach them
+through vectors (`SH_NVEC` 56) — and every document that replaces the sheet
+clears it, beside the note table it shares a claim with.
+
+#### 81.56.2 Drawing and hitting a column
+
+`sh_geom` **walks** the columns from the scroll position, each its own width,
+until the next would not fit whole, and keeps the visible ones' widths in
+`sh_vcw`. **`sh_vcx` is the only arithmetic that turns a visible column into
+pixels** — the painter, the column letters, the gridlines, the borders, the
+selection, the damage and blit rectangles all ask it, where each multiplied by
+the one width — and `sh_gridhit` walks the same widths to turn a click into a
+column.
+
+**`sh_cellw` and `sh_cellch` mean "the column being drawn" now**, and the
+painter sets them at each cell. That is what let every justifier, §81.55's
+number fit, the blank string and `sh_spill`'s slice width keep working without
+knowing widths had become per-column. `sh_spill` itself sums the real widths
+of the columns between a label and the empty cell it reaches, scrolled out of
+view or not. A horizontal scroll erases the strip past the last whole column,
+which one width had kept the same and narrower than a column.
+
+#### 81.56.3 Setting one
+
+- **Format > Column Width** applies to the **selected columns**, as Excel's
+  does, and opens on the selected column's own width. A width equal to the
+  standard is stored as 0.
+- **Insert and Delete Column** move the widths with their columns
+  (`sh_colw_shift`); an inserted column is the standard width.
+- **Files.** BIFF reads COLWIDTH (`0024H`, BIFF2-4) and COLINFO (`007DH`),
+  rounding 1/256ths of a character to whole ones, and writes a COLWIDTH per
+  column that is not the standard width, before each sheet's cells. SYLK reads
+  and writes Walden's `F;W<first> <last> <width>` field. Widths are clamped to
+  what the dialog allows (`sh_cwbyte`).
+- **Not done**: row heights are still whole-sheet, and the standard width
+  itself is not a setting a file or the dialog can change.
+
+#### 81.56.4 Evidence
+
+`tests/sheetcolw.py`, **12 checks**, read off the glass: the host's SYLK sets
+A to twenty characters and C to three, and the grid's own lines must be
+160, 56, 24 and 56 pixels apart; A1's label must show twenty characters and
+run on into B1, C1's number fill its three with `#`. A click in the middle of
+C2 must type into C2 — **at twenty, one width of 56 would have landed in E**,
+where at twelve it would have landed in C by accident, so the test was
+widened until dividing could not pass it. Column Width 10 on B must move B's
+lines and no others; SYLK and Normal must carry all three widths; and Insert
+Column at A must move each one right. **9 of the 12 fail against the
+previous binary.** Mutations, each built and caught: the hit-test by one
+width fails five (its later clicks land in the wrong column too), `sh_spill`
+by the standard width one, no `sh_colw_shift` one, no COLWIDTH written one,
+SYLK's `F;W` not read seven.
+
+`tests/glass.py` needed two changes for it: column A is the line after the
+row-header column, not "the first gap of the commonest width", and a
+gridline is found by 380 of 400 pixels from x=100, because the lines stop
+short of the old window once the columns are not one width. And the Format
+menu's items are **twelve** pixels apart, measured off a menu held open: the
+eleven the older gates assume for File put this one's click on Row Height.
+
+Resident +369 bytes, bss +94, `CHART.OVL` +345 — which leaves the overlay 122
+bytes short of its claim, so the next file-format work raises `CH_OVKB`.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

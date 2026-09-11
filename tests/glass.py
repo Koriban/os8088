@@ -25,9 +25,12 @@ def grid(w, h, rows):
     """(row boundaries, column boundaries) of the grid, or None. The rows are
     the longest evenly spaced run of horizontal lines; the columns are the
     vertical lines unbroken through all of those rows, which no glyph can be,
-    starting at the first gap of the commonest width (column A)."""
+    starting after the row-header column (column A's left line)."""
+    # 380 of the 400 pixels from 100 to 500: every grid line crosses them,
+    # and nothing else does. It asked for 440 of 460 out to x=580, which the
+    # lines stop short of once the columns are not all one width (81.56)
     lines = [y for y in range(h)
-             if sum(1 for x in range(120, 580) if not rows[y][x]) > 440]
+             if sum(1 for x in range(100, 500) if not rows[y][x]) > 380]
     best = []
     for i in range(len(lines)):
         for j in range(i + 1, len(lines)):
@@ -46,6 +49,12 @@ def grid(w, h, rows):
             if all(not rows[y][x] for y in range(y1, y2 + 1))]
     cols = [x for k, x in enumerate(cols) if k == 0 or x != cols[k - 1] + 1]
     gaps = [b - a for a, b in zip(cols, cols[1:])]
+    # Column A is the line after the ROW-HEADER column (SH_RH_W, 40 pixels
+    # and its border). It was "the first gap of the commonest width", which
+    # every column had until each could have its own (81.56)
+    for k, g in enumerate(gaps):
+        if 36 <= g <= 46:
+            return best, cols[k + 1:]
     width = max(set(gaps), key=gaps.count)
     first = next(k for k, g in enumerate(gaps) if g == width)
     return best, cols[first:]

@@ -3941,6 +3941,14 @@ SOAK = [
         "every format and writes Excel's 21 FORMAT records. 24 of its 27 "
         "checks fail against the binary before",
         needs=("marty",), serial=True),
+    Row("sheetcolw", "soak", py("tests/sheetcolw.py"), 360.0,
+        "SPEC.md 81.56: each column its own width. SHEET had one for the "
+        "whole sheet and skipped a file's COLWIDTH records. The host's SYLK "
+        "sets A to 20 and C to 3; the grid's lines are measured off the "
+        "glass and each cell's text read, a click in the narrow column must "
+        "land there, Column Width widens only its column, SYLK and Normal "
+        "carry the widths, and Insert Column moves them with their columns",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

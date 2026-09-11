@@ -413,7 +413,14 @@ SH_NOTE_REC  equ 6                  ; stage 3.0b: the note table's record -
                                     ; packed row/sheet, col, and the note
                                     ; text's offset in the SHARED formula
                                     ; arena (see sh_nt_findcell's header)
-SH_NOTE_CAP  equ 682                ; floor(4096 / SH_NOTE_REC)
+SH_NOTE_CAP  equ 512                ; 682 - floor(4096 / SH_NOTE_REC) - until
+                                    ; 81.56 took the claim's top kilobyte:
+SH_COLW_OFF  equ SH_NOTE_CAP * SH_NOTE_REC ; 3072: the COLUMN WIDTHS, 256
+                                    ; bytes a sheet (sh_colwidth). A new claim
+                                    ; would have been SHEET's eighth and last,
+                                    ; and bss the headroom's third; notes are
+                                    ; the least-used table there is
+SH_MAXVC     equ 80                 ; visible columns at most: 640px / 8
 SH_NOTEMAX   equ 240                ; the longest note the dialog will take,
                                     ; INCLUDING its NUL - 6 lines of 39 in the
                                     ; box below, which is what fits
@@ -1079,6 +1086,15 @@ sh_x_sh_boolname:
 sh_x_sh_bt_getw:                        ; 81.55: the writer's number formats
     call sh_bt_getw
     retf
+sh_x_sh_colwidth:                       ; 81.56: column widths, for the
+    call sh_colwidth                    ; readers and writers
+    retf
+sh_x_sh_colw_set:
+    call sh_colw_set
+    retf
+sh_x_sh_colw_clear:
+    call sh_colw_clear
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1095,6 +1111,7 @@ sh_ovshims:
     dw sh_x_sh_pargref, sh_x_sh_pcmp, sh_x_sh_skipargs, sh_x_sh_trcopy
     dw sh_x_sh_setbool, sh_x_sh_setlabel, sh_x_sh_boolname      ; 81.51
     dw sh_x_sh_bt_getw                                            ; 81.55
+    dw sh_x_sh_colwidth, sh_x_sh_colw_set, sh_x_sh_colw_clear     ; 81.56
 
 sh_entry:
     push ax
@@ -1146,6 +1163,7 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_noteseg], dx
+    call sh_colw_clear                 ; every column the standard width (81.56)
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
     mov word [sh_nnote], 0
@@ -1225,6 +1243,10 @@ sh_entry:
     mov word [sh_cellw], SH_CW_NORMAL        ; stage 2.x: runtime cell size
     mov word [sh_cellh], SH_RH_NORMAL        ; defaults - see the SH_CW_*/
     mov word [sh_cellch], SH_CW_NORMAL / 8   ; SH_RH_* section comment
+    mov word [sh_defch], SH_CW_NORMAL / 8    ; 81.56: the STANDARD width - a
+                                             ; column's own is in the table,
+                                             ; and sh_cellch/sh_cellw are the
+                                             ; column being drawn
     call sh_mkblank
     call sh_mtab_calc
     call sh_sheetmark
@@ -1317,16 +1339,34 @@ sh_geom:
     jns .cw_ok                          ; right, so the grid is that much
     xor ax, ax                          ; narrower
 .cw_ok:
-    xor dx, dx
-    mov cx, [sh_cellw]
-    div cx
-    mov cx, SH_COLS
-    sub cx, [sh_scrollcol]
-    cmp ax, cx
-    jbe .cset
-    mov ax, cx
+    ; EACH COLUMN ITS OWN WIDTH (81.56): walked from the scroll position until
+    ; the next would not fit whole, and kept in sh_vcw for everything that
+    ; places a column - sh_vcx is the only arithmetic that turns a visible
+    ; column into pixels. It was one division by the one width.
+    push bx
+    push di
+    mov dx, ax                          ; DX = the pixels left
+    xor di, di                          ; DI = the columns so far
+.cwalk:
+    cmp di, SH_MAXVC
+    jae .cset
+    mov ax, [sh_scrollcol]
+    add ax, di
+    cmp ax, SH_COLS
+    jae .cset
+    call sh_colwidth                    ; AX = its width, in characters
+    mov [sh_vcw + di], al
+    mov cl, 3
+    shl ax, cl
+    cmp ax, dx
+    ja .cset
+    sub dx, ax
+    inc di
+    jmp short .cwalk
 .cset:
-    mov [sh_vcols], ax
+    mov [sh_vcols], di
+    pop di
+    pop bx
 
     mov ax, [sh_ch]
     sub ax, SH_MBAR_H + SH_FB_H + SH_CH_H + SH_SB_H + SH_HSB_H
@@ -1347,6 +1387,154 @@ sh_geom:
     pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; COLUMN WIDTHS (81.56). 256 bytes a sheet in the note claim's top kilobyte
+; (SH_COLW_OFF), each a column's width in CHARACTERS, Excel's own unit - 0 for
+; the standard width, sh_defch. sh_vcw is the visible columns' widths, which
+; sh_geom walks out of here; sh_vcx and sh_vwidth turn one into pixels.
+; -----------------------------------------------------------------------------
+; sh_colwidth - in: AX = a column; out: AX = its width in characters
+sh_colwidth:
+    push bx
+    push es
+    mov bh, [sh_cursheet]
+    xor bl, bl
+    add bx, ax
+    mov es, [sh_noteseg]
+    mov al, [es:bx + SH_COLW_OFF]
+    xor ah, ah
+    or al, al
+    jnz .out
+    mov ax, [sh_defch]
+.out:
+    pop es
+    pop bx
+    ret
+
+; sh_colw_set - in: AX = a column, CL = its width in characters (0 standard)
+sh_colw_set:
+    push bx
+    push es
+    mov bh, [sh_cursheet]
+    xor bl, bl
+    add bx, ax
+    mov es, [sh_noteseg]
+    mov [es:bx + SH_COLW_OFF], cl
+    pop es
+    pop bx
+    ret
+
+; sh_colw_clear - every column of every sheet the standard width
+sh_colw_clear:
+    push ax
+    push cx
+    push di
+    push es
+    mov es, [sh_noteseg]
+    mov di, SH_COLW_OFF
+    mov cx, 4 * 256
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; sh_colw_shift - AL = 2 inserts a column at BX, 3 deletes the one at BX: the
+; widths after it move with their columns, as the cells do. An inserted
+; column is the standard width. Anything else in AL: nothing.
+sh_colw_shift:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov cx, 255
+    sub cx, bx                        ; CX = the columns past the pivot
+    jbe .out
+    mov si, [sh_cursheet]             ; THE BASE FIRST, from our own bss:
+    mov di, si                        ; DS is the note claim below
+    mov cl, 8
+    shl di, cl
+    add di, SH_COLW_OFF               ; DI = this sheet's width table
+    mov cx, 255
+    sub cx, bx
+    mov es, [sh_noteseg]
+    push es
+    pop ds
+    cmp al, 3
+    je .del
+    cmp al, 2
+    jne .out
+    add di, bx                        ; insert: [c..254] -> [c+1..255]
+    push di
+    add di, cx
+    mov si, di
+    dec si
+    std
+    rep movsb
+    cld
+    pop di
+    mov byte [es:di], 0
+    jmp short .out
+.del:
+    add di, bx                        ; delete: [c+1..255] -> [c..254]
+    mov si, di
+    inc si
+    push cx
+    cld
+    rep movsb
+    pop cx
+    mov byte [es:di], 0               ; DI is at 255 now
+.out:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_vcx - in: AX = a visible column (0..sh_vcols); out: AX = its left edge,
+; in pixels from the grid's
+sh_vcx:
+    push bx
+    push cx
+    mov cx, ax
+    xor ax, ax
+    xor bx, bx
+.l:
+    jcxz .d
+    add al, [sh_vcw + bx]
+    adc ah, 0
+    inc bx
+    dec cx
+    jmp short .l
+.d:
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    pop bx
+    ret
+
+; sh_vwidth - in: AX = a visible column; out: AX = its width in pixels
+sh_vwidth:
+    push bx
+    mov bx, ax
+    mov al, [sh_vcw + bx]
+    xor ah, ah
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    pop bx
     ret
 
 ; =============================================================================
@@ -1794,11 +1982,20 @@ sh_gridhit:
     sub bx, [sh_goy]                   ; grid origin, NOT raw content origin -
     sub bx, SH_FB_H + SH_CH_H          ; the menu bar strip sits above it
     js .no
-    xor dx, dx
-    mov cx, [sh_cellw]
-    div cx
-    cmp ax, [sh_vcols]
+    mov dx, ax                         ; DX = pixels into the grid: walked
+    xor cx, cx                         ; across the columns' own widths (81.56)
+.hwalk:
+    cmp cx, [sh_vcols]
     jae .no
+    mov ax, cx
+    call sh_vwidth
+    cmp dx, ax
+    jb .hcol
+    sub dx, ax
+    inc cx
+    jmp short .hwalk
+.hcol:
+    mov ax, cx
     add ax, [sh_scrollcol]
     mov [sh_wcol], ax
     mov ax, bx
@@ -2698,15 +2895,13 @@ sh_dmgdraw:
     cmp word [sh_cellh], 8
     jbe .nobands                       ; 8px cells: the runs cover everything
     mov ax, [sh_dmgc1]                 ; the damaged columns' pixel span
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; each column its own width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     mov [sh_blitx1], ax
     mov ax, [sh_dmgc2]
     inc ax
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; each column its own width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     dec ax
@@ -3543,8 +3738,7 @@ sh_scrollrow_blit:
     and ax, 0xFFF8
     mov [sh_blitx1], ax
     mov ax, [sh_vcols]
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; each column its own width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W                    ; ax = one past the grid's right edge
     add ax, 7
@@ -3639,6 +3833,27 @@ sh_scrollcol_part:
     push dx
     mov bx, si
     call sh_geom                       ; sh_scrollrow_blit's reason
+    ; THE STRIP PAST THE LAST WHOLE COLUMN (81.56): with one width it was
+    ; always narrower than a column and the same each time; with each column
+    ; its own, scrolling changes it, and the cells alone never cover it
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [sh_vcols]
+    call sh_vcx
+    add ax, [sh_ox]
+    add ax, SH_RH_W
+    mov cx, [sh_ox]
+    add cx, [sh_cw]
+    sub cx, SH_VSB_W + 1
+    cmp ax, cx
+    ja .nostrip
+    mov bx, [sh_goy]
+    add bx, SH_FB_H
+    mov dx, [sh_oy]
+    add dx, [sh_ch]
+    sub dx, SH_SB_H + SH_HSB_H + 1
+    call OSAPI_GFX_FILL
+.nostrip:
     call sh_dmgfull
     call sh_dmgdraw
     call sh_drawsel
@@ -3652,8 +3867,7 @@ sh_scrollcol_part:
     add bx, SH_FB_H
     push ax
     mov ax, [sh_vcols]
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; each column its own width (81.56)
     mov cx, ax
     pop ax
     add cx, ax
@@ -4002,14 +4216,17 @@ sh_drawcolhdrs:
     add ax, [sh_scrollcol]
     call sh_colname
     mov ax, bx
-    mov dx, [sh_cellw]
-    mul dx
-    add ax, [sh_ox]
+    call sh_vcx                        ; each letter over its own column
+    add ax, [sh_ox]                    ; (81.56)
     add ax, SH_RH_W
     mov cx, ax
     mov si, sh_colbuf
     call OSAPI_FONT_WIDTH
-    mov dx, [sh_cellw]
+    push ax
+    mov ax, [sh_wcol]
+    call sh_vwidth
+    mov dx, ax
+    pop ax
     sub dx, ax
     shr dx, 1
     add cx, dx
@@ -4102,6 +4319,12 @@ sh_drawgrid:
     mov ax, [sh_wcol]
     cmp ax, [sh_dmgc2]
     ja .rownext
+    call sh_vwidth                     ; THIS COLUMN'S OWN WIDTH (81.56): the
+    mov [sh_cellw], ax                 ; justifiers, the number fit, the blank
+    mov cl, 3                          ; and the spill all read these two, so
+    shr ax, cl                         ; setting them per cell is all they
+    mov [sh_cellch], ax                ; need to know about it
+    call sh_mkblank
     mov ax, [sh_wcol]
     add ax, [sh_scrollcol]
     mov bx, [sh_wrow]
@@ -4202,8 +4425,7 @@ sh_drawgrid:
     mov si, sh_tbuf
 .got:
     mov ax, [sh_wcol]
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; its own left edge (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     mov cx, ax
@@ -4320,16 +4542,14 @@ sh_drawlines:
     dec ax
     mov [sh_ly2], ax
 
-    mov ax, [sh_dmgc1]                 ; ...and the damaged columns'
-    mov dx, [sh_cellw]
-    mul dx
+    mov ax, [sh_dmgc1]                 ; ...and the damaged columns', each
+    call sh_vcx                        ; its own width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     mov [sh_lx1], ax
     mov ax, [sh_dmgc2]
     inc ax
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx
     add ax, [sh_ox]
     add ax, SH_RH_W
     dec ax
@@ -4343,8 +4563,7 @@ sh_drawlines:
     inc dx
     cmp ax, dx
     ja .vdone
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx
     add ax, [sh_ox]
     add ax, SH_RH_W
     mov cx, ax
@@ -4452,12 +4671,13 @@ sh_drawborders:
     mov al, [es:si+4]
     mov [sh_bdrawflags], al
     mov ax, [sh_wcol]
-    mov bx, [sh_cellw]
-    mul bx
+    call sh_vcx                       ; its own left edge and width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     mov [sh_bx1], ax
-    add ax, [sh_cellw]
+    mov ax, [sh_wcol]
+    call sh_vwidth
+    add ax, [sh_bx1]
     dec ax
     mov [sh_bx2], ax
     mov ax, [sh_wrow]
@@ -4578,16 +4798,14 @@ sh_drawsel:
 
     ; --- cell coords -> pixels
     mov ax, [sh_wcol]
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; each column its own width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     mov [sh_selx1], ax
 
     mov ax, [sh_selvc2]
     inc ax                             ; one past the last column...
-    mov dx, [sh_cellw]
-    mul dx
+    call sh_vcx                        ; each column its own width (81.56)
     add ax, [sh_ox]
     add ax, SH_RH_W
     dec ax                             ; ...minus a pixel = its right edge
@@ -9340,7 +9558,8 @@ sh_idlg_open:
     je .pregoto                        ; prefilling one would be a wrong guess
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .prerowh
-    mov ax, [sh_cellch]                ; characters, matching what OK reads
+    mov ax, [sh_selcol]                ; the SELECTED column's own width, in
+    call sh_colwidth                   ; characters, matching what OK reads
     jmp .prenum
 .prerowh:
     mov ax, [sh_cellh]
@@ -9581,12 +9800,25 @@ sh_idlg_apply:
     jb .out                            ; is Excel's own unit for it - the
     cmp ax, SH_CW_MAXCH                ; pixel width is a consequence, not the
     ja .out                            ; thing the user types
-    mov [sh_cellch], ax
-    mov cl, 3
-    shl ax, cl
-    mov [sh_cellw], ax
-    call sh_mkblank                    ; the blank-cell fill string is sized
-    jmp .redraw                        ; from the width, so it must follow it
+    ; THE SELECTED COLUMNS, each - Excel's Column Width (81.56). It set the
+    ; one width the whole sheet had. The standard width is stored as 0, so a
+    ; column set back to it costs a file nothing.
+    mov cl, al
+    cmp ax, [sh_defch]
+    jne .cwset
+    xor cl, cl
+.cwset:
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .cwl
+    xchg ax, bx
+.cwl:
+    call sh_colw_set
+    inc ax
+    cmp ax, bx
+    jbe .cwl
+    jmp .redraw
 .rowh:
     cmp ax, SH_RH_MIN
     jb .out
@@ -11187,6 +11419,7 @@ sh_new:
     mov word [sh_txtlen], 0
     mov word [sh_nbord], 0           ; the discarded document's borders and
     mov word [sh_nnote], 0           ; notes go with it - a note record holds
+    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0          ; ...and its NAMES, which used to survive
                                      ; into the next document and go on
                                      ; pointing at cells no longer there
@@ -11429,6 +11662,49 @@ shm_dowrite:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_wr_colw - SYLK's F;W<first> <last> <width> for every column of the
+; current sheet that is not the standard width, at ES:DI (81.56)
+; -----------------------------------------------------------------------------
+sh_wr_colw:
+    push ax
+    push bx
+    push si
+    xor bx, bx
+.l:
+    mov ax, bx
+    SHOUT sh_colwidth
+    cmp ax, [sh_defch]
+    je .n
+    push ax
+    mov si, sh_s_sylk_fw
+    call sh_stgput
+    mov ax, bx
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    mov al, ' '
+    call sh_stgputb
+    mov si, sh_numbuf
+    call sh_stgput
+    mov al, ' '
+    call sh_stgputb
+    pop ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    mov si, sh_s_crlf
+    call sh_stgput
+.n:
+    inc bx
+    cmp bx, 256
+    jb .l
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_wr_names - one NN record per defined name, straight after the ID line.
 ;
 ; NN;N<name>;E<ref> is SYLK's own defined-name record, and the reference goes
@@ -11549,6 +11825,7 @@ sh_dowrite_sylk:
     xor di, di
     mov si, sh_s_id
     call sh_stgput
+    call sh_wr_colw                   ; 81.56: F;W for each column's width
     call sh_wr_names                  ; stage 4.6: the defined names, so a
                                        ; reader that is not this app can find
                                        ; the ranges too (81.29.1)
@@ -11978,6 +12255,7 @@ sh_doread_sylk:
     mov word [sh_txtlen], 0           ; "replacing the sheet" means the old
     mov word [sh_nbord], 0            ; document's arena text, borders and
     mov word [sh_nnote], 0            ; notes too, not just its cells
+    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0           ; ...and its defined names (81.10.8)
     mov cx, ax                        ; a file this small never exceeds 64KB
     xor si, si
@@ -12386,6 +12664,7 @@ sh_doread_dif:
     mov word [sh_txtlen], 0            ; "replacing the sheet" - see
     mov word [sh_nbord], 0             ; sh_doread_sylk's same three
     mov word [sh_nnote], 0
+    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0            ; DIF carries no names, so a DIF load
                                        ; leaves none - still a REPLACEMENT,
                                        ; not an inheritance
@@ -12691,6 +12970,25 @@ section .text
 ; for, both just degrade to General rather than guessed at)
 ; -----------------------------------------------------------------------------
 section .modc                      ; 82.16.9
+; sh_cwbyte - AX = a width in characters from a file -> CL = what the width
+; table keeps: clamped to what the Column Width dialog allows, and 0 for the
+; standard width, so a file that states it costs the table nothing (81.56)
+sh_cwbyte:
+    cmp ax, SH_CW_MINCH
+    jae .a
+    mov ax, SH_CW_MINCH
+.a:
+    cmp ax, SH_CW_MAXCH
+    jbe .b
+    mov ax, SH_CW_MAXCH
+.b:
+    mov cl, al
+    cmp ax, [sh_defch]
+    jne .c
+    xor cl, cl
+.c:
+    ret
+
 ; sh_biff_nfside - AL = a file's built-in format id -> AL = what the border
 ; table keeps for it: 0 for the four the format byte holds (and for any id
 ; past Excel's 21, a custom FORMAT this app draws as General), else id + 1
@@ -13683,6 +13981,36 @@ sh_biff_workbook:
 ; sh_cursheet, and emits the same bytes it always did.
 ; -----------------------------------------------------------------------------
 sh_biff_cells:
+    ; COLWIDTH FOR EVERY COLUMN NOT THE STANDARD WIDTH (81.56), before the
+    ; cells, in 1/256ths of a character. The sheet is sh_wsheet's, which
+    ; sh_colwidth reads through sh_cursheet - impersonated, as sh_biff_ixfe
+    ; does for the border table
+    push word [sh_cursheet]
+    mov ax, [sh_wsheet]
+    mov [sh_cursheet], ax
+    xor bx, bx
+.cw:
+    mov ax, bx
+    SHOUT sh_colwidth
+    cmp ax, [sh_defch]
+    je .cwn
+    push ax
+    mov ax, 0x0024                   ; COLWIDTH: first, last, width
+    call sh_biffw
+    mov ax, 4
+    call sh_biffw
+    mov al, bl
+    mov ah, bl
+    call sh_biffw
+    pop ax
+    mov ah, al
+    xor al, al
+    call sh_biffw
+.cwn:
+    inc bx
+    cmp bx, 256
+    jb .cw
+    pop word [sh_cursheet]
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
 .rec:
@@ -14963,6 +15291,7 @@ sh_doread_biff:
     mov word [sh_txtlen], 0            ; "replacing the sheet" - see
     mov word [sh_nbord], 0             ; sh_doread_sylk's same three
     mov word [sh_nnote], 0
+    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0            ; the DEFINEDNAME records below refill
                                        ; this; they precede the cell records
     mov word [sh_biff_nfont], 0
@@ -15043,10 +15372,52 @@ sh_doread_biff:
     je .isformula                      ; (81.10.10). 0406H is BIFF4's number
     cmp ax, 0x008F                     ; SHEETHDR: the substream that follows
     je .issheethdr                     ; belongs to the NEXT sheet
+    cmp ax, 0x0024                     ; COLWIDTH (BIFF2-4) and COLINFO (BIFF3
+    je .iscolw                         ; on): a run of columns and their width
+    cmp ax, 0x007D                     ; (81.56)
+    je .iscolw
     cmp ax, 0x0218                     ; DEFINEDNAME (BIFF3/4) - 0018H is the
     je .isname                         ; BIFF2/5/8 number and is NOT accepted
     jmp .skip                          ; here, because its body is a different
                                        ; shape (81.10.8)
+.iscolw:
+    ; first and last column - BYTES in COLWIDTH, WORDS in COLINFO - then the
+    ; width in 1/256ths of a character, rounded to a whole one here
+    push dx
+    cmp dx, 4
+    jb .cwskip
+    push ax
+    mov al, [es:si]
+    xor ah, ah
+    mov dx, [es:si+1]
+    xor dh, dh
+    mov cx, [es:si+2]                  ; COLWIDTH's width
+    pop bx
+    cmp bx, 0x0024
+    je .cwhave
+    mov ax, [es:si]                    ; COLINFO's three words
+    mov dx, [es:si+2]
+    mov cx, [es:si+4]
+.cwhave:
+    push ax
+    mov ax, cx
+    add ax, 128
+    mov al, ah
+    xor ah, ah                         ; AX = whole characters
+    call sh_cwbyte                     ; CL = what the table keeps
+    pop ax
+.cwl:
+    cmp ax, dx
+    ja .cwskip
+    cmp ax, 256
+    jae .cwskip
+    SHOUT sh_colw_set
+    inc ax
+    jmp short .cwl
+.cwskip:
+    mov cx, [sh_biff_end]              ; the file's end, which CX carries here
+    pop dx
+    jmp .skip
 .isbof2:
     mov byte [sh_b2], 1
     mov word [sh_biff_nxf], SH_BIFF_XF_CAP  ; so .applyfmt takes SH_B2_XF
@@ -16280,6 +16651,8 @@ sh_parsefrec:
     je .isf
     cmp al, 'K'
     je .isk
+    cmp al, 'W'
+    je .isw
 .scan:
     cmp si, bx
     jae .apply
@@ -16305,6 +16678,31 @@ sh_parsefrec:
     inc si
     mov byte [SH_TCOMMA], 1
     jmp .tok
+.isw:                                  ; ;W<first> <last> <width>: column
+    inc si                             ; widths, Walden's F-record field (7)
+    SHOUT sh_pint                      ; (81.56). 1-based, spaces between
+    push ax
+    inc si
+    SHOUT sh_pint
+    push ax
+    inc si
+    SHOUT sh_pint
+    call sh_cwbyte                     ; CL = what the table keeps
+    pop di                             ; DI = the last
+    pop ax                             ; AX = the first
+.wl:
+    cmp ax, di
+    ja .tok
+    or ax, ax
+    jz .wn
+    cmp ax, 256
+    ja .tok
+    dec ax
+    SHOUT sh_colw_set
+    inc ax
+.wn:
+    inc ax
+    jmp short .wl
 .isf:                                  ; ;F<c1>[space]<digits>[space]<c2> -
                                         ; one field, not semicolon-delimited
                                         ; internally, so it's parsed as its
@@ -17224,6 +17622,7 @@ sh_rowcol_op:
     push es
     mov [sh_rc_op], al
     mov [sh_rc_idx], bx
+    call sh_colw_shift                ; a column's WIDTH goes with it (81.56)
     mov word [sh_rc_stgcnt], 0
     mov ax, [sh_cursheet]
     mov [sh_rc_savedsheet], ax
@@ -28634,10 +29033,19 @@ sh_spill:
     jz .haveoff
     mov si, [es:di+SH_C_VAL]          ; ...or a formula's RESULT (81.22.1)
 .haveoff:
-    mov ax, dx
-    sub ax, [es:di+2]                 ; the columns from it to this one
-    mul word [sh_cellch]              ; = its characters before this cell
-    mov cx, ax
+    push si
+    mov si, [es:di+2]                 ; its characters before this cell: the
+    xor cx, cx                        ; widths of the columns between, each
+.wsum:                                ; its own (81.56) - scrolled out of
+    cmp si, dx                        ; view or not
+    jae .wdone
+    mov ax, si
+    call sh_colwidth
+    add cx, ax
+    inc si
+    jmp short .wsum
+.wdone:
+    pop si
     mov es, [sh_txtseg]
 .skip:
     jcxz .skipped
@@ -30336,6 +30744,7 @@ sh_s_y:        db ';Y', 0
 sh_s_e:        db ';E', 0                  ; the expression field (stage 4.x)
 sh_s_k:        db ';K', 0                  ; also the "commas are set" flag
                                             ; on an F record (stage 1.6)
+sh_s_sylk_fw:  db 'F;W', 0                 ; F;W<first> <last> <width> (81.56)
 sh_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 sh_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
 sh_s_crlf:     db 13, 10, 0
@@ -31123,6 +31532,7 @@ sh_doread_dbf:
     mov word [sh_txtlen], 0
     mov word [sh_nbord], 0
     mov word [sh_nnote], 0
+    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0
     ; --- the descriptors: names into row 0, widths and types banked ---------
     mov word [sh_wcol], 0
@@ -31548,6 +31958,7 @@ sh_doread_sep:
     mov word [sh_txtlen], 0           ; "replacing the sheet", the same three
     mov word [sh_nbord], 0            ; sh_doread_dif clears
     mov word [sh_nnote], 0
+    SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0
     mov es, [sh_stgseg]
     mov [sh_sepend], ax               ; the end, for sh_sep_field
@@ -31793,7 +32204,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5530
+    OS88_BSS 5624
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -32663,8 +33074,11 @@ sh_v_sh_setbool             equ sh_v_sh_trcopy + 4
 sh_v_sh_setlabel            equ sh_v_sh_setbool + 4
 sh_v_sh_boolname            equ sh_v_sh_setlabel + 4
 sh_v_sh_bt_getw             equ sh_v_sh_boolname + 4
-SH_NVEC       equ 53
-sh_v_end      equ sh_v_sh_bt_getw + 4
+sh_v_sh_colwidth            equ sh_v_sh_bt_getw + 4
+sh_v_sh_colw_set            equ sh_v_sh_colwidth + 4
+sh_v_sh_colw_clear          equ sh_v_sh_colw_set + 4
+SH_NVEC       equ 56
+sh_v_end      equ sh_v_sh_colw_clear + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -32698,7 +33112,10 @@ sh_nf_rl          equ sh_nf_lasth + 1    ; byte: an m run's length
 sh_nf_id          equ sh_nf_rl + 1       ; byte: the id sh_numfmt drew by
 sh_nf_r1          equ sh_nf_id + 1       ; word: Format Number's top row
 sh_nf_r2          equ sh_nf_r1 + 2       ; word: ...and bottom
-sh_bss_end        equ sh_nf_r2 + 2
+sh_defch          equ sh_nf_r2 + 2       ; word: the standard column width
+sh_vcw            equ sh_defch + 2       ; SH_MAXVC: the visible columns'
+                                         ; widths, in characters (81.56)
+sh_bss_end        equ sh_vcw + SH_MAXVC
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
