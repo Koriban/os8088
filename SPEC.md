@@ -98372,7 +98372,7 @@ directory — a later addition, harmless.
 | menu | SHEET | Excel 2.1d | missing |
 |---|---|---|---|
 | Formula | 7 | 7 | **none** |
-| Edit | 12 | 12 | none by name — but **Undo** and **Repeat** are there disabled (`Can't Undo`, `Can't Repeat`): there is no undo record |
+| Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
 | Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 4 | 10 | Set Print Area/Titles/Page Break, Freeze Panes, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles) |
@@ -98392,7 +98392,7 @@ and §82 is this tree's answer to that.
   four.
 - **Row height is whole-sheet.** Column widths are per column since §81.56;
   a row is still the one `sh_cellh`.
-- **No undo.** Every edit is final.
+- **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is not done.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
   downstream of that one absence.
@@ -98414,7 +98414,7 @@ Almost everything above hangs off six pieces of work:
 3. **A database + criteria area** → 11 functions, and 6 of the Data menu.
 4. **Per-row geometry** → row heights, and `Justify` (per-column widths are
    §81.56's).
-5. **An undo record** → Undo and Repeat.
+5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
 6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
 Beside them: **a macro recorder and a real macro language** → the Macro menu.
@@ -99826,6 +99826,77 @@ eleven the older gates assume for File put this one's click on Row Height.
 
 Resident +369 bytes, bss +94, `CHART.OVL` +345 — which leaves the overlay 122
 bytes short of its claim, so the next file-format work raises `CH_OVKB`.
+
+### 81.57 Edit > Undo, and Redo
+
+**Every entry and every command was final.** The Edit menu opened on
+"Can't Undo", greyed, and meant it — §81.39 listed "an undo record" among the
+enablers still to build. Excel 2.1's own, from its Reference Guide (Edit Undo
+command): **one level** — "the last command you chose or the last cell entry
+you typed" — covering a typed entry, every command on the Edit menu and Data
+Sort; the menu names the action ("Undo Paste"), and once undone offers
+**Redo**. Formats, names and notes it cannot reverse.
+
+#### 81.57.1 A snapshot, in a claim of its own
+
+Undo is a **snapshot**, not a log of changes: before an undoable command runs,
+the cell array, the border table, the note table and the column widths are
+copied into Undo's own claim (`SH_CLAIM_UNDO_KB`, 16 KB), with the text
+arena's **length** — the arena is append-only (only a new or loaded document
+resets it), so cutting it back is all it takes to take back what a command
+added. Formula text results that `sh_str_store` rewrote in place are
+recomputed after the restore, as every formula is.
+
+**Undo swaps** the live document and the snapshot, through the staging
+claim, so Redo is the same operation again and the label toggles.
+
+The claim is SHEET's **eighth and last** (`MEM_OWNER_MAX`), and **optional**:
+if the heap cannot spare it, Undo stays "Can't Undo" and nothing else
+changes. The staging claim could not have held it — Insert, Delete and Sort
+stage every record there themselves — and a document too large for 16 KB
+cannot be undone rather than half-undone.
+
+#### 81.57.2 When a snapshot is taken, and when Undo ends
+
+- **Edit's commands that act at once** — Cut, Paste, Paste Link, Fill Right,
+  Fill Down — take it in `sh_docmd_edit`. **The dialogs' commands** — Clear,
+  Delete, Insert, Paste Special, Sort — take it at **OK**, in
+  `sh_fdlg_apply` (a table, `sh_ud_kind`, says per dialog kind: its label,
+  "ends Undo", or "changes nothing Undo holds"); a cancelled dialog changes
+  nothing. **Del**, Edit Clear's key, takes its own.
+- **A typed entry** takes it in `sh_commit` — unless an undoable command is
+  already running (`sh_ud_busy`): Paste, Fill and Sort make their changes
+  through `sh_commit` too, and each would otherwise have replaced the
+  command's snapshot with one cell's.
+- **What Undo cannot reverse ends it**: the Format menu, Define Name, Note, a
+  macro, a new or loaded document. A snapshot older than any of those would
+  put them back too, silently, beside the command it was taken for.
+- Undo **abandons an edit in progress**, as Excel's does; committing it would
+  have snapshot over the snapshot.
+
+**Not done**: Repeat is still "Can't Repeat", and cancelling a Format dialog
+ends Undo where Excel's would keep it (the drop is taken when the menu
+fires).
+
+#### 81.57.3 Evidence
+
+`tests/sheetundo.py`, driven through the real menus and read off the glass,
+then the saved document checked whole: an entry undone and redone; a paste of
+**two** cells undone — both, where per-cell snapshots would have taken back
+only the last, which a one-cell paste can never show; a Clear through its
+dialog undone; an inserted column undone; and a paste followed by a format,
+after which Undo must change nothing. **11 checks; 5 fail against the
+previous binary** (the six that pass are the typing, pasting and clearing
+themselves). Mutations, each built: a snapshot per `sh_commit` even inside a
+command fails the two-cell paste; the dialogs snapshotting nothing at OK
+fails four. The format case first used Format > Alignment and passed with
+the MENU's drop taken out — Alignment's dialog ends Undo at its own OK — so
+it uses Column Width now, which only the menu's drop covers, and taking
+that drop out fails two. `tests/sheetmove.py`
+lists Undo's claim among the movable ones, so a heap compaction must carry
+its contents too.
+
+Resident +869 bytes, bss +5 — 2,536 bytes of headroom are left.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

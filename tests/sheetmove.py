@@ -58,9 +58,10 @@ MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG, PKG_SHEET = "HEAPFRAG.O88", "SHEET.O88"
 DISK = "build/sheetmove360.img"
 
-# the five that are declared, and the one that is deliberately not
+# the six that are declared - Undo's joined them in SPEC.md 81.57 - and the
+# one that is deliberately not
 MOVABLE = ["sh_cellseg", "sh_txtseg", "sh_bordseg", "sh_noteseg",
-           "sh_chartseg"]
+           "sh_chartseg", "sh_undoseg"]
 PINNED = "sh_stgseg"
 
 

@@ -280,6 +280,12 @@ SH_CHART_D1  equ 1024               ; stage 4.6: and where the DOUBLES the scan
 SH_CHART_D2  equ 1536               ; collects sit, before ch_scale turns them
                                     ; into the two word arrays above. Same 512
                                     ; spacing; CH_MAXBARS doubles is 320
+SH_CLAIM_UNDO_KB  equ 16            ; 81.57: Edit > Undo's snapshot - the cells,
+                                     ; borders, notes and widths as they were
+                                     ; before the last undoable command. SHEET's
+                                     ; EIGHTH claim, and OPTIONAL: without it
+                                     ; Undo stays "Can't Undo" and nothing else
+                                     ; changes
 SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; offscreen 4bpp canvas - 240x160px, 120
                                      ; bytes/row (already a multiple of 4, so
@@ -694,8 +700,8 @@ sh_reloc:
 ; segment across the OSAPI_FILE_WRITE in the middle of it.
 sh_segw:
     dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg, sh_chartseg
-    dw ch_srcseg, ch_stgseg, ch_srcseg2
-SH_NSEGW equ 8
+    dw ch_srcseg, ch_stgseg, ch_srcseg2, sh_undoseg
+SH_NSEGW equ 9
 
 ; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
@@ -784,7 +790,7 @@ sh_doread:
     mov bp, SHM_READ
     call ch_ovcall
     pop bp
-    ret
+    jmp sh_undo_drop                   ; another document now (81.57)
 sh_dowrite:
     call sh_recalc_all                  ; every formula CURRENT before any
     push bp                             ; writer reads one - see below
@@ -1173,6 +1179,13 @@ sh_entry:
     mov [sh_chartseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
+    mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
+    call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
+    jc .noundo                         ; not the app
+    mov [sh_undoseg], dx
+    mov ax, sh_reloc
+    call OSAPI_MEM_MOVABLE
+.noundo:
 %ifdef CH_OVERLAY
     call ch_ovneed                      ; CHART.OVL's CH_OVKB claim is taken
                                         ; HERE, with every other claim, because
@@ -1535,6 +1548,344 @@ sh_vwidth:
     shl ax, cl
     pop cx
     pop bx
+    ret
+
+; =============================================================================
+; EDIT > UNDO (81.57). Excel 2.1's: ONE level, the last cell entry or the last
+; command of the Edit menu or Data Sort, and Undo then offers Redo. What it
+; cannot reverse - formats, names, notes, macros, a new document - ends it.
+;
+; A SNAPSHOT, not a log of changes: the cell array, the border table, the note
+; table, the column widths, and the text arena's LENGTH - the arena is
+; append-only, so cutting it back is all it takes to undo what was added to
+; it. Taken into Undo's own claim (SH_CLAIM_UNDO_KB) before the command runs;
+; a document too big for it cannot be undone ("Can't Undo"), the honest
+; answer. Undo SWAPS the two, through the staging claim, so Redo is the same
+; operation again.
+;
+; Layout in sh_undoseg, and in staging during a swap: SH_UD_HDR bytes of
+; header - ncells, nbord, nnote, txtlen - then the three arrays and the 1024
+; bytes of widths.
+; =============================================================================
+SH_UD_HDR    equ 8
+SH_UL_ENTRY  equ 0                     ; the labels, sh_ud_names' order
+SH_UL_CUT    equ 1
+SH_UL_PASTE  equ 2
+SH_UL_CLEAR  equ 3
+SH_UL_PSPEC  equ 4
+SH_UL_PLINK  equ 5
+SH_UL_DEL    equ 6
+SH_UL_INS    equ 7
+SH_UL_FILLR  equ 8
+SH_UL_FILLD  equ 9
+SH_UL_SORT   equ 10
+SH_UL_KEEP   equ 0xFE                  ; sh_ud_kind: changes nothing Undo holds
+SH_UL_DROP   equ 0xFF                  ; ...or changes what it cannot reverse
+sh_ud_names:  dw sh_ud_n0, sh_ud_n1, sh_ud_n2, sh_ud_n3, sh_ud_n4, sh_ud_n5
+              dw sh_ud_n6, sh_ud_n7, sh_ud_n8, sh_ud_n9, sh_ud_n10
+sh_ud_n0:     db 'Entry', 0
+sh_ud_n1:     db 'Cut', 0
+sh_ud_n2:     db 'Paste', 0
+sh_ud_n3:     db 'Clear', 0
+sh_ud_n4:     db 'Paste Special', 0
+sh_ud_n5:     db 'Paste Link', 0
+sh_ud_n6:     db 'Delete', 0
+sh_ud_n7:     db 'Insert', 0
+sh_ud_n8:     db 'Fill Right', 0
+sh_ud_n9:     db 'Fill Down', 0
+sh_ud_n10:    db 'Sort', 0
+sh_ud_sundo:  db 'Undo ', 0
+sh_ud_sredo:  db 'Redo ', 0
+sh_ud_cant:   db MENU_DIS, "Can't Undo", 0
+; sh_fdlg_apply's kinds: Number Align Font Insert Delete ColW RowH Clear New
+; Calc Sort Gallery SaveFmt PasteSpecial Protection
+sh_ud_kind:   db SH_UL_DROP, SH_UL_DROP, SH_UL_DROP, SH_UL_INS, SH_UL_DEL
+              db SH_UL_DROP, SH_UL_DROP, SH_UL_CLEAR, SH_UL_DROP, SH_UL_KEEP
+              db SH_UL_SORT, SH_UL_KEEP, SH_UL_KEEP, SH_UL_PSPEC, SH_UL_DROP
+sh_ud_kind_end:                        ; one entry per sh_fdlg kind: asserted
+                                       ; beside SH_FDK_N, which is defined later
+
+; sh_undo_begin - AL = the label. Snapshot the document into Undo's claim and
+; mark the command in progress, so sh_commit does not take one of its own
+sh_undo_begin:
+    push ax
+    push dx
+    mov byte [sh_ud_busy], 1
+    mov [sh_ud_lab], al
+    mov dx, [sh_undoseg]
+    or dx, dx
+    jz .no
+    call sh_undo_save                  ; CF=1: too big for it
+    jc .no
+    mov byte [sh_ud_redo], 0
+    call sh_undo_label
+    jmp short .out
+.no:
+    call sh_undo_drop
+.out:
+    pop dx
+    pop ax
+    ret
+
+sh_undo_end:
+    mov byte [sh_ud_busy], 0
+    ret
+
+; sh_undo_drop - nothing to undo: "Can't Undo", greyed
+sh_undo_drop:
+    push si
+    push di
+    mov si, sh_ud_cant
+    mov di, sh_it_undo
+    call sh_strcpy
+    pop di
+    pop si
+    ret
+
+; sh_undo_label - "Undo <action>" or "Redo <action>", enabled
+sh_undo_label:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, sh_ud_sundo
+    cmp byte [sh_ud_redo], 0
+    je .u
+    mov si, sh_ud_sredo
+.u:
+    mov di, sh_it_undo
+    call sh_strcpy
+    mov di, sh_it_undo
+.end:
+    cmp byte [di], 0
+    je .cat
+    inc di
+    jmp short .end
+.cat:
+    mov bl, [sh_ud_lab]
+    xor bh, bh
+    shl bx, 1
+    mov si, [sh_ud_names + bx]
+    call sh_strcpy
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sh_undo_size - out: AX = the bytes a snapshot of the document takes, CF=1
+; when that is more than Undo's claim holds
+sh_undo_size:
+    push dx
+    mov ax, [sh_ncells]
+    mov dx, SH_C_SZ
+    mul dx
+    jc .big
+    push ax
+    mov ax, [sh_nbord]
+    mov dx, SH_BT_SZ
+    mul dx
+    pop dx
+    add ax, dx
+    jc .big
+    push ax
+    mov ax, [sh_nnote]
+    mov dx, SH_NOTE_REC
+    mul dx
+    pop dx
+    add ax, dx
+    jc .big
+    add ax, SH_UD_HDR + 1024
+    jc .big
+    cmp ax, SH_CLAIM_UNDO_KB * 1024
+    ja .big
+    clc
+    pop dx
+    ret
+.big:
+    stc
+    pop dx
+    ret
+
+; sh_fcopy - CX bytes from AX:SI to DX:DI, forward. SI and DI advance.
+sh_fcopy:
+    push ds
+    push es
+    mov es, dx
+    mov ds, ax
+    cld
+    rep movsb
+    pop es
+    pop ds
+    ret
+
+; sh_undo_save - the live document into segment DX at offset 0.
+; CF=1 when it does not fit Undo's claim, and nothing is written
+sh_undo_save:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    call sh_undo_size
+    jc .out
+    mov es, dx
+    mov ax, [sh_ncells]
+    mov [es:0], ax
+    mov ax, [sh_nbord]
+    mov [es:2], ax
+    mov ax, [sh_nnote]
+    mov [es:4], ax
+    mov ax, [sh_txtlen]
+    mov [es:6], ax
+    mov di, SH_UD_HDR
+    mov ax, [sh_ncells]                ; every length from OUR bss before any
+    mov bx, SH_C_SZ                    ; segment register moves (the lesson of
+    push dx                            ; the DS-switch hang)
+    mul bx
+    pop dx
+    mov cx, ax
+    mov ax, [sh_cellseg]
+    xor si, si
+    call sh_fcopy
+    mov ax, [sh_nbord]
+    mov bx, SH_BT_SZ
+    push dx
+    mul bx
+    pop dx
+    mov cx, ax
+    mov ax, [sh_bordseg]
+    xor si, si
+    call sh_fcopy
+    mov ax, [sh_nnote]
+    mov bx, SH_NOTE_REC
+    push dx
+    mul bx
+    pop dx
+    mov cx, ax
+    mov ax, [sh_noteseg]
+    xor si, si
+    call sh_fcopy
+    mov cx, 1024                       ; the widths, from the same claim's top
+    mov ax, [sh_noteseg]
+    mov si, SH_COLW_OFF
+    call sh_fcopy
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_undo_load - segment AX at offset 0 back into the live document
+sh_undo_load:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, ax
+    mov bx, [es:0]
+    mov [sh_ncells], bx
+    mov bx, [es:2]
+    mov [sh_nbord], bx
+    mov bx, [es:4]
+    mov [sh_nnote], bx
+    mov bx, [es:6]
+    mov [sh_txtlen], bx
+    mov si, SH_UD_HDR
+    push ax
+    mov ax, [sh_ncells]
+    mov bx, SH_C_SZ
+    mul bx
+    mov cx, ax
+    pop ax
+    mov dx, [sh_cellseg]
+    xor di, di
+    call sh_fcopy
+    push ax
+    mov ax, [sh_nbord]
+    mov bx, SH_BT_SZ
+    mul bx
+    mov cx, ax
+    pop ax
+    mov dx, [sh_bordseg]
+    xor di, di
+    call sh_fcopy
+    push ax
+    mov ax, [sh_nnote]
+    mov bx, SH_NOTE_REC
+    mul bx
+    mov cx, ax
+    pop ax
+    mov dx, [sh_noteseg]
+    xor di, di
+    call sh_fcopy
+    mov cx, 1024
+    mov dx, [sh_noteseg]
+    mov di, SH_COLW_OFF
+    call sh_fcopy
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_undo_do - Edit > Undo (or Redo): the live document and the snapshot
+; change places, through the staging claim, so doing it again redoes it
+sh_undo_do:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, [sh_undoseg]
+    or dx, dx
+    jz .out
+    mov byte [sh_editing], 0           ; an edit in progress is abandoned, as
+                                       ; Excel's Undo abandons one - committing
+                                       ; it would snapshot over the snapshot
+    mov dx, [sh_stgseg]                ; now -> staging
+    call sh_undo_save
+    jc .out                            ; it has outgrown Undo: leave both
+    call sh_undo_size                  ; ...measured NOW, before the load
+    push ax                            ; changes the counts it is made of
+    mov ax, [sh_undoseg]               ; the snapshot -> live
+    call sh_undo_load
+    pop cx                             ; staging -> the snapshot: what live was
+    push ds
+    push es
+    mov es, [sh_undoseg]
+    mov ds, [sh_stgseg]
+    xor si, si
+    xor di, di
+    cld
+    rep movsb
+    pop es
+    pop ds
+    xor byte [sh_ud_redo], 1
+    call sh_undo_label
+    inc word [sh_pass]                 ; every formula recomputes against what
+    mov byte [sh_commitdirty], 1       ; is there now
+    mov byte [sh_chartdirty], 1
+    call sh_geom
+    mov si, [sh_ownwin]
+    call sh_repaint
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
     ret
 
 ; =============================================================================
@@ -2580,9 +2931,12 @@ sh_onkey:
     jmp .out
 .delcell:
     mov byte [sh_editing], 0
+    mov al, SH_UL_CLEAR                ; Del is Edit Clear's key, and undoable
+    call sh_undo_begin                 ; as it is (81.57)
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_clearcell
+    call sh_undo_end
     call sh_repaint
 .out:
     pop dx
@@ -2748,6 +3102,12 @@ sh_commit:
     mov byte [sh_editing], 0          ; Down and a sort's write-back all end up
     jmp .out                          ; here, and none of them can change a
 .allowed:                             ; locked cell on a protected document
+    cmp byte [sh_ud_busy], 0          ; a TYPED entry is undoable on its own
+    jne .inside                       ; (81.57); one made by Paste, Fill or
+    mov al, SH_UL_ENTRY               ; Sort is part of theirs, which took
+    call sh_undo_begin                ; the snapshot already
+    call sh_undo_end
+.inside:
     mov byte [sh_editing], 0
     mov byte [sh_commitdirty], 1      ; cell data changes below (even an empty
                                       ; buffer clears the cell) - sh_selpaint
@@ -5408,6 +5768,22 @@ sh_mfire:
     push ax
     push si
     mov si, [sh_ownwin]
+    ; WHAT UNDO CANNOT REVERSE ENDS IT (81.57): a snapshot older than a
+    ; format, a name, a note or a macro would put them back too, silently.
+    ; Excel 2.1 cannot undo any of these either
+    cmp ah, 3                          ; Format, all of it
+    je .udrop
+    cmp ah, 6                          ; Macro
+    je .udrop
+    cmp ah, 2                          ; Formula: Define Name and Note
+    jne .ukept
+    cmp al, 3
+    je .udrop
+    cmp al, 4
+    jne .ukept
+.udrop:
+    call sh_undo_drop
+.ukept:
     cmp ah, 0
     je .file
     cmp ah, 1
@@ -5718,8 +6094,39 @@ sh_docmd_format:
 ; because it says the thing cannot be done.
 ; -----------------------------------------------------------------------------
 sh_docmd_edit:
-    cmp al, 2                          ; 0 Can't Undo and 1 Can't Repeat are
-    je .cut                            ; MENU_DIS, so neither ever arrives
+    or al, al                          ; 0 is Undo or Redo when there is a
+    jnz .notundo                       ; snapshot, and MENU_DIS - so it never
+    call sh_undo_do                    ; arrives - when there is not (81.57)
+    ret
+.notundo:
+    push ax                            ; the commands that act at once take
+    mov ah, al                         ; their snapshot here; the dialogs'
+    mov al, SH_UL_CUT                  ; take it at OK, in sh_fdlg_apply
+    cmp ah, 2
+    je .snap
+    mov al, SH_UL_PASTE
+    cmp ah, 4
+    je .snap
+    mov al, SH_UL_PLINK
+    cmp ah, 7
+    je .snap
+    mov al, SH_UL_FILLR
+    cmp ah, 10
+    je .snap
+    mov al, SH_UL_FILLD
+    cmp ah, 11
+    jne .nosnap
+.snap:
+    call sh_undo_begin
+    pop ax
+    call .cmd
+    call sh_undo_end
+    ret
+.nosnap:
+    pop ax
+.cmd:
+    cmp al, 2                          ; 1 Can't Repeat is MENU_DIS, so it
+    je .cut                            ; never arrives
     cmp al, 3
     je .copy
     cmp al, 4
@@ -8235,6 +8642,8 @@ SH_FDK_SAVEFMT equ 12                 ; stage 4.6: Save As asks for the format
 SH_FDK_PSPEC equ 13                   ; instead of deriving it silently
 SH_FDK_PROT  equ 14
 SH_FDK_N     equ 15
+    times (sh_ud_kind_end - sh_ud_kind - SH_FDK_N) db 0  ; sh_ud_kind (81.57)
+    times (SH_FDK_N - (sh_ud_kind_end - sh_ud_kind)) db 0 ; has a kind each
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -8744,6 +9153,31 @@ sh_fmt_one:
 ; limit, since they act on the grid's structure, not a cell's content.
 ; -----------------------------------------------------------------------------
 sh_fdlg_apply:
+    ; UNDO AT OK, NOT AT THE MENU (81.57): a dialog the user cancels changes
+    ; nothing, so nothing is snapshot for it. sh_ud_kind says, per kind, the
+    ; action's label, or that it ends Undo (a format, New), or neither
+    push ax
+    push bx
+    mov bl, [sh_fdlg_kind]
+    xor bh, bh
+    cmp bx, SH_FDK_N
+    jae .ukeep
+    mov al, [sh_ud_kind + bx]
+    cmp al, SH_UL_KEEP
+    je .ukeep
+    cmp al, SH_UL_DROP
+    jne .usnap
+    call sh_undo_drop
+    jmp short .ukeep
+.usnap:
+    call sh_undo_begin
+.ukeep:
+    pop bx
+    pop ax
+    call sh_fdlg_apply0
+    jmp sh_undo_end
+
+sh_fdlg_apply0:
     push ax
     push bx
     push cx
@@ -30674,7 +31108,9 @@ sh_m_edit:     db 'Edit', 0
 ; Fill Right / Fill Down. PASTE SPECIAL AND PASTE LINK COME AFTER CLEAR, not
 ; after Paste, which is where they would have gone from memory.
 sh_i_edit:     dw sh_it_undo, sh_it_repeat, sh_it_cut, sh_it_copy, sh_it_paste, sh_it_clear, sh_it_pastesp, sh_it_pastelk, sh_it_delete, sh_it_insert, sh_it_fillright, sh_it_filldown
-sh_it_undo:    db MENU_DIS, "Can't Undo", 0
+sh_it_undo:    db MENU_DIS, "Can't Undo", 0     ; REWRITTEN by sh_undo_label
+               times 10 db 0                      ; (81.57): "Undo Paste Special"
+                                                  ; and its NUL fit the slack
 sh_it_repeat:  db MENU_DIS, "Can't Repeat", 0
 sh_it_pastesp: db 'Paste Special...', 0
 sh_it_pastelk: db 'Paste Link', 0
@@ -32204,7 +32640,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5624
+    OS88_BSS 5629
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -33115,7 +33551,11 @@ sh_nf_r2          equ sh_nf_r1 + 2       ; word: ...and bottom
 sh_defch          equ sh_nf_r2 + 2       ; word: the standard column width
 sh_vcw            equ sh_defch + 2       ; SH_MAXVC: the visible columns'
                                          ; widths, in characters (81.56)
-sh_bss_end        equ sh_vcw + SH_MAXVC
+sh_undoseg        equ sh_vcw + SH_MAXVC  ; word: Undo's claim, 0 when none (81.57)
+sh_ud_busy        equ sh_undoseg + 2     ; byte: an undoable command is running
+sh_ud_lab         equ sh_ud_busy + 1     ; byte: its label (SH_UL_*)
+sh_ud_redo        equ sh_ud_lab + 1      ; byte: the snapshot is the REDO
+sh_bss_end        equ sh_ud_redo + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

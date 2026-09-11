@@ -3949,6 +3949,13 @@ SOAK = [
         "land there, Column Width widens only its column, SYLK and Normal "
         "carry the widths, and Insert Column moves them with their columns",
         needs=("marty",), serial=True),
+    Row("sheetundo", "soak", py("tests/sheetundo.py"), 360.0,
+        "SPEC.md 81.57: Edit > Undo and Redo, Excel 2.1's one level. An "
+        "entry undone and redone, a paste, a clear through its dialog and an "
+        "inserted column each undone, and a format after a paste ending Undo "
+        "rather than letting it put the paste back - read off the glass, "
+        "then the saved document checked whole",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "
