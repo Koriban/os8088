@@ -380,7 +380,8 @@ def decode_rpn(tok, ver, known=None):
             elif t == 0x1C:
                 st.append(BIFF_ERRORS[tok[i + 1]]); i += 2
             elif t == 0x1D:
-                st.append('TRUE()' if tok[i + 1] else 'FALSE()'); i += 2
+                st.append('TRUE' if tok[i + 1] else 'FALSE'); i += 2  # bare,
+                # as Excel shows the constant; TRUE() is tFunc 34
             elif t == 0x1E:
                 st.append('%d' % struct.unpack_from('<H', tok, i + 1)[0]); i += 3
             elif t == 0x1F:
@@ -991,7 +992,7 @@ def _check_rpn(bad, book):
         (3, ref(0x0000, 0) + ref(0xC001, 1) + b'\x05', '$A$1*B2'),
         (3, ref(0xC000, 0) + b'\x13' + b'\x15' + num(0.01) + b'\x03',
          '(-A1)+0.01'),
-        (3, b'\x17\x03a"b' + b'\x1d\x01' + b'\x08', '"a""b"&TRUE()'),
+        (3, b'\x17\x03a"b' + b'\x1d\x01' + b'\x08', '"a""b"&TRUE'),
         (3, b'\x1c\x07' + b'\x1e\x05\x00' + b'\x0b', '#DIV/0!=5'),
         (3, b'\x19\x01\x00\x00' + bytes([0x45]) + struct.pack('<HHBB', 0xC000,
          0xC009, 0, 0) + b'\x19\x10\x00\x00', 'SUM(A1:A10)'),

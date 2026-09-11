@@ -46,7 +46,9 @@ is testing the wrong thing:
     than read as errors.
   * **A quoted TRUE in SYLK is ambiguous** and the format cannot fix it:
     Walden requires logical values to be quoted, which makes them
-    indistinguishable from the text "TRUE".  Either reading is accepted here.
+    indistinguishable from the text "TRUE".  SHEET reads it as the logical
+    (81.51), so BIFF and DIF must carry a logical; SYLK's own output, which
+    cannot say either way, accepts either reading.
   * **Numbers compare with a tolerance.**  BIFF keeps the bits of a double;
     SYLK and DIF keep a decimal rendering of it.
 
@@ -187,11 +189,15 @@ def want(kind, key):
     if kind == 'dif' and isinstance(v, tuple) and v[0] == 'err':
         return 'any-error'
     if isinstance(v, tuple) and v[0] == 'bool':
-        # DIF has real TRUE and FALSE indicators, but that does not help
-        # here: the ambiguity is introduced when the INPUT is read, and SYLK
-        # cannot tell a logical from the text "TRUE".  Whatever SHEET decided
-        # at that moment is what every output inherits, so all three formats
-        # are held to the same loose expectation.
+        # The ambiguity is introduced when the INPUT is read: SYLK cannot tell
+        # a logical from the text "TRUE", so SHEET decides, and every output
+        # inherits the decision.  Since 81.51 it decides the LOGICAL - the
+        # spelling rule, as when one is typed - so BIFF (a BOOLERR) and DIF
+        # (its TRUE indicator), which can both say so, are held to it.  They
+        # took either while SHEET had no logical type to decide with.  SYLK's
+        # own output quotes both alike and stays loose.
+        if kind in ('bif', 'dif'):
+            return v
         return 'bool-or-text'
     return v
 

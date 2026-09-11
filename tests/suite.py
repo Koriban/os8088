@@ -3904,6 +3904,14 @@ SOAK = [
         "(=A1 * ( A2 - 1 ) answered 2), and IF keeping a text branch. Each "
         "fix fails its own cases against the binary before it",
         needs=("marty",), serial=True),
+    Row("sheetbool", "soak", py("tests/sheetbool.py"), 300.0,
+        "SPEC.md 81.51: what SHEET's readers make of a LOGICAL value. The "
+        "host authors a DIF, a CSV, a dBASE and a BIFF3 file holding TRUE "
+        "and FALSE, SHEET opens each and saves Normal, and the BOOLERR "
+        "records say it kept a logical. Before, a BOOLERR read as 1, DIF's "
+        "TRUE indicator left the cell blank, and CSV and dBASE made labels "
+        "of them - ten of its checks fail against that binary",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

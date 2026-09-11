@@ -1061,6 +1061,15 @@ sh_x_sh_skipargs:
 sh_x_sh_trcopy:
     call sh_trcopy
     retf
+sh_x_sh_setbool:                        ; 81.51's logical value, for the
+    call sh_setbool                     ; readers and writers in the module
+    retf
+sh_x_sh_setlabel:
+    call sh_setlabel
+    retf
+sh_x_sh_boolname:
+    call sh_boolname
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1075,6 +1084,7 @@ sh_ovshims:
     dw sh_x_fp_a_to_b, sh_x_fp_add, sh_x_fp_azero, sh_x_fp_iszero, sh_x_fp_ln   ; 82.16.10's
     dw sh_x_fp_mul, sh_x_fp_pack_a, sh_x_fp_pow, sh_x_fp_sub
     dw sh_x_sh_pargref, sh_x_sh_pcmp, sh_x_sh_skipargs, sh_x_sh_trcopy
+    dw sh_x_sh_setbool, sh_x_sh_setlabel, sh_x_sh_boolname      ; 81.51
 
 sh_entry:
     push ax
@@ -2587,8 +2597,8 @@ sh_commit:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     mov si, sh_editbuf
-    call sh_settext
-.out:
+    call sh_setlabel                  ; ...except TRUE and FALSE, which are
+.out:                                 ; the logical constant (81.51)
     pop es
     pop si
     pop dx
@@ -4149,18 +4159,27 @@ sh_drawgrid:
     je .errpath                        ; underneath it is meaningless
     cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: a label draws its own
     je .textpath                       ; characters, not its value
+    cmp byte [sh_curtype], SH_T_BOOL   ; ...and a LOGICAL its name (81.51),
+    je .boolpath                       ; which no number format touches
     mov ax, dx
     mov bl, [sh_curfmt]
     call sh_numfmt
     call sh_justify
     mov si, sh_tbuf
     jmp .got
+.boolpath:
+    mov ax, dx
+    call sh_boolname                   ; -> sh_numbuf
+    jmp short .centred
 .errpath:
     call sh_errname                    ; -> sh_numbuf
+.centred:
     mov bl, [sh_curfmt]
-    call sh_justify                    ; right, like the number it replaces
-    mov si, sh_tbuf
-    jmp .got
+    call sh_justify_c                  ; General CENTRES a logical and an
+    mov si, sh_tbuf                    ; error, Excel's third General rule
+    jmp .got                           ; beside numbers right and labels left.
+                                       ; An error sat right, "like the number
+                                       ; it replaces", until 81.51
 .textpath:
     call sh_text_to_numbuf             ; the arena string, clipped to the cell
     mov bl, [sh_curfmt]
@@ -6425,6 +6444,11 @@ sh_fill_copy:
     je .text                           ; 81.18's Copy defect, closed here too)
     mov ax, [sh_fl_dcol]
     mov bx, [sh_fl_drow]
+    cmp byte [sh_curtype], SH_T_BOOL   ; ...or LOGICAL, which a number store
+    jne .fnum                          ; would flatten to 1 (81.51)
+    call sh_setbool                    ; DL: sh_getcell2's truncated value
+    jmp .out
+.fnum:
     call sh_setvald                    ; an integer store would truncate 3.5
     jmp .out
 .text:
@@ -7508,6 +7532,8 @@ sh_docmd_sortcol:
     je .next                          ; through the value path wrote 0.0 back
     cmp al, SH_T_ERR                  ; over its text: it sits the sort out
     je .next                          ; instead - its row never enters rows[],
+    cmp al, SH_T_BOOL                 ; ...and so does a LOGICAL, which the
+    je .next                          ; write-back would store as 1 (81.51)
                                        ; the same clip-don't-crash policy
                                        ; SH_SORT_FCAP uses, which is what a
                                        ; header row over a table wants anyway
@@ -9780,6 +9806,15 @@ sh_find_text:
     jnc .out
     cmp byte [sh_curtype], SH_T_TEXT
     je .istext
+    cmp byte [sh_curtype], SH_T_BOOL  ; a LOGICAL is found by the name it
+    jne .fnum                         ; shows (81.51)
+    mov ax, dx
+    call sh_boolname
+    mov si, sh_numbuf
+    mov di, sh_find_buf
+    call sh_strcpy
+    jmp .up
+.fnum:
     call sh_acc_load_a                ; a number: the same ten significant
     mov di, sh_find_buf               ; digits the cell itself shows
     mov ax, 10
@@ -11598,6 +11633,9 @@ sh_dowrite_sylk:
     call sh_stgput
     cmp byte [sh_wrec_type], SH_T_TEXT
     je .ktext
+    cmp byte [sh_wrec_type], SH_T_BOOL ; a LOGICAL is QUOTED, Walden's rule:
+    je .kbool                          ; "Logical values TRUE and FALSE must
+                                       ; also be quoted" (81.51)
     cmp byte [sh_wrec_type], SH_T_ERR ; ...and an ERROR is its NAME, bare. The
     je .kerr                          ; leading '#' is what tells it from a
     push si                           ; SYLK's K field IS a decimal literal,
@@ -11628,6 +11666,16 @@ sh_dowrite_sylk:
     pop ax
     mov si, sh_numbuf
     call sh_stgput
+    jmp .kdone
+.kbool:
+    mov al, 34
+    call sh_stgputb
+    mov ax, [sh_wrec_dval+6]
+    SHOUT sh_boolname
+    mov si, sh_numbuf
+    call sh_stgput
+    mov al, 34
+    call sh_stgputb
     jmp .kdone
 .ktext:
     ; A LABEL'S K FIELD IS QUOTED, and that is the whole of how SYLK tells text
@@ -11914,9 +11962,9 @@ sh_doread_sylk:
 ; (STRING) with the bare word NA where a quoted string was required; both
 ; are fixed now - a gap is type 0 with the NA indicator instead, per the
 ; real spec's own "0 - numeric type ... indicator: V/NA/ERROR/TRUE/FALSE"
-; rule. On read, an indicator other than V (a foreign file's NA, ERROR,
-; TRUE, or FALSE) just means "leave this cell blank", the same as this
-; app's own concept of empty. Like SYLK, only the cached VALUE is carried -
+; rule. On read, TRUE and FALSE are the logical (81.51) and ERROR is #N/A;
+; any other indicator (a foreign file's NA) means "leave this cell blank",
+; the same as this app's own concept of empty. Like SYLK, only the cached VALUE is carried -
 ; a formula's source text is not, and per the user's explicit direction
 ; this stage does NOT extend DIF with any per-cell formatting: real DIF
 ; has no such concept (unlike real SYLK, which has actual P/font records -
@@ -12102,6 +12150,8 @@ sh_dowrite_dif:
     jnc .na
     cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: DIF's type 1 is STRING -
     je .dtext                          ; "1,0" then the quoted text on the
+    cmp byte [sh_curtype], SH_T_BOOL   ; a LOGICAL takes DIF's own TRUE or
+    je .dbool                          ; FALSE indicator (81.51)
     cmp byte [sh_curtype], SH_T_ERR    ; ...and an ERROR takes DIF's own ERROR
     je .derr                           ; indicator. DIF cannot say WHICH error,
     mov si, sh_s_dif_zc                ; following line, which is the real
@@ -12120,6 +12170,25 @@ sh_dowrite_dif:
     mov si, sh_s_crlf
     call sh_stgput
     mov si, sh_s_dif_v
+    call sh_stgput
+    jmp .cnext
+.dbool:
+    mov si, sh_s_dif_zc                ; "0,1" CRLF "TRUE", or 0 and FALSE -
+    call sh_stgput                     ; the value and the indicator agree
+    mov ax, [sh_acc+6]
+    and ax, 0x7FFF
+    mov al, '0'
+    jz .db0
+    inc ax
+.db0:
+    call sh_stgputb
+    mov si, sh_s_crlf
+    call sh_stgput
+    mov ax, [sh_acc+6]
+    SHOUT sh_boolname
+    mov si, sh_numbuf
+    call sh_stgput
+    mov si, sh_s_crlf
     call sh_stgput
     jmp .cnext
 .dtext:
@@ -12309,10 +12378,14 @@ sh_doread_dif:
                                        ; but still consume its indicator line
     cmp byte [es:si], 'V'              ; the real DIF value-indicator: V
     je .isvalid                        ; (valid) is the ordinary one; ERROR is
+    cmp byte [es:si], 'T'              ; TRUE and FALSE are the LOGICAL, and
+    je .istrue                         ; this app writes those now too (81.51)
+    cmp byte [es:si], 'F'
+    je .isfalse
     cmp byte [es:si], 'E'              ; the other one this app writes, and
-    jne .notvalid                      ; NA/TRUE/FALSE from a foreign file
-    mov dl, SH_ERR_NA                  ; still just mean "leave this cell
-    mov ax, [sh_wcol]                  ; blank" here.
+    jne .notvalid                      ; NA from a foreign file still just
+    mov dl, SH_ERR_NA                  ; means "leave this cell blank"
+    mov ax, [sh_wcol]                  ; here.
     mov bx, [sh_wrow]                  ; #N/A is what an ERROR comes back as:
     call sh_seterr                     ; the file said a value was not
     jmp .notvalid                      ; available and could not say more, and
@@ -12320,6 +12393,16 @@ sh_doread_dif:
     mov ax, [sh_wcol]                  ; exactly that. Guessing a specific one
     mov bx, [sh_wrow]                  ; would be inventing what the file does
     SHOUT sh_setvald                    ; not contain
+    jmp short .notvalid
+.istrue:
+    mov dl, 1
+    jmp short .dlog
+.isfalse:
+    mov dl, 0
+.dlog:
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_setbool
 .notvalid:
     call sh_difskipline                ; the indicator line
     jmp .cellnext
@@ -13482,6 +13565,8 @@ sh_biff_cells:
     jne .notlabel
     jmp .aslabel
 .notlabel:
+    cmp byte [sh_wrec_type], SH_T_BOOL ; a LOGICAL is a BOOLERR too, with the
+    je .aserr                          ; flag clear (81.51)
     cmp byte [sh_wrec_type], SH_T_ERR  ; an error whose formula this writer
     je .aserr                          ; could not tokenise still has to go out
                                         ; AS AN ERROR: the number underneath one
@@ -13566,11 +13651,19 @@ sh_biff_cells:
     mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
                                       ; cell also has a border
     call sh_biffw
+    cmp byte [sh_wrec_type], SH_T_BOOL
+    je .bebool
     mov al, [sh_wrec_aux]
     call sh_biff_e2b
-    call sh_stgputb
-    mov al, 1                          ; fError
-    call sh_stgputb
+    mov ah, 1                          ; fError
+    jmp short .beput
+.bebool:
+    xor ax, ax                         ; the value 0 or 1, fError clear
+    test word [sh_wrec_dval+6], 0x7FFF
+    jz .beput
+    inc ax
+.beput:
+    call sh_biffw                      ; AL then AH: the two bytes in order
     jmp .recnext
 .aslabel:
     ; LABEL, 0204H in BIFF3 - and NOT 0004H, which is BIFF2's. The body is the
@@ -13742,6 +13835,8 @@ sh_biff_formula:
     call sh_biffw
     cmp byte [sh_wrec_type], SH_T_TEXT ; a string: byte 0 = 0, top word all
     je .strresult                      ; ones, the text in a STRING record next
+    cmp byte [sh_wrec_type], SH_T_BOOL ; a LOGICAL: byte 0 = 1, byte 2 the
+    je .boolresult                     ; value (81.51)
     cmp byte [sh_wrec_type], SH_T_ERR ; BIFF's own encoding for a cached result
     je .errresult                     ; that is not a number: the top word all
     mov ax, [sh_wrec_dval]            ; ones, byte 0 naming the kind and byte 2
@@ -13761,6 +13856,16 @@ sh_biff_formula:
     mov ax, 0xFFFF
     call sh_biffw
     jmp .resdone
+.boolresult:
+    mov ax, 1                         ; byte 0 = 1: a boolean
+    call sh_biffw
+    xor ax, ax
+    test word [sh_wrec_dval+6], 0x7FFF
+    jz .brv
+    inc ax
+.brv:
+    call sh_biffw
+    jmp short .restail
 .errresult:
     mov ax, 2                         ; byte 0 = 2: an error code
     call sh_biffw
@@ -13769,6 +13874,7 @@ sh_biff_formula:
     xor ah, ah                        ; #DIV/0! as 02H, not 07H - and the reader
     call sh_biffw                     ; read it back the same way, so SHEET's
                                       ; own files never showed it (81.10.11)
+.restail:
     xor ax, ax
     call sh_biffw
     mov ax, 0xFFFF
@@ -14129,20 +14235,21 @@ sh_dc_err:                            ; 1CH code - by its name
     pop ax
     ret
 
-sh_dc_bool:                           ; 1DH 0/1 - SHEET's TRUE is a function
-    push ax
-    push cx
+sh_dc_bool:                           ; 1DH 0/1 - the bare constant, the way
+    push ax                           ; Excel shows it. It was TRUE() while
+    push cx                           ; the evaluator knew no other (81.51)
     push si
     mov cx, 2
     call sh_dc_need
+    jc .x
+    call sh_dc_push
     jc .x
     mov si, sh_f_false
     cmp byte [es:di+1], 0
     je .f
     mov si, sh_f_true
 .f:
-    xor cx, cx
-    call sh_dc_call
+    call sh_dc_apps
     jc .x
     add di, 2
 .x:
@@ -15021,13 +15128,11 @@ sh_doread_biff:
     pop dx
     jmp .skip
 .fcbool:
-    push es                            ; 1/0, as a BOOLERR reads (.isbool)
-    mov al, [sh_acc+2]
-    xor ah, ah
-    SHOUT sh_acc_int
+    push es                            ; the logical, as a BOOLERR reads
+    mov dl, [sh_acc+2]                 ; (.isbool)
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    SHOUT sh_setvald
+    SHOUT sh_setbool
     call sh_biff_applyfmt
     pop es
     pop dx
@@ -15081,12 +15186,9 @@ sh_doread_biff:
     call sh_seterr
     jmp .bedone
 .isbool:
-    mov al, dl                         ; TRUE/FALSE reads back as 1/0: this app
-    xor ah, ah                         ; has no BOOL type of its own yet, and a
-    SHOUT sh_acc_int                    ; number is what its formulas expect
-    mov ax, [sh_wrec_col]
-    mov bx, [sh_wrec_row]
-    SHOUT sh_setvald
+    mov ax, [sh_wrec_col]              ; TRUE/FALSE is the LOGICAL now, and no
+    mov bx, [sh_wrec_row]              ; longer reads back as 1/0 (81.51). DL
+    SHOUT sh_setbool                    ; is the value byte
 .bedone:
     call sh_biff_applyfmt
     pop es
@@ -15783,9 +15885,9 @@ sh_parsecrec:
     je .plainval_c
     push si
     mov si, sh_rwsrc                  ; where .isk's quoted ;K now lands
-    SHOUT sh_settext
-    pop si
-    jmp .out
+    SHOUT sh_setlabel                 ; "TRUE" quoted is the LOGICAL: Walden
+    pop si                            ; quotes both, so the spelling decides,
+    jmp .out                          ; as it does when one is typed (81.51)
 .plainval_c:
     push si
     push di
@@ -18548,6 +18650,151 @@ sh_fseps:     db 0, '+-*/^&=<>(),:'
 sh_fseps_end:
 
 ; -----------------------------------------------------------------------------
+; THE LOGICAL VALUE (81.51). A logical is the double 1.0 or 0.0 tagged
+; SH_T_BOOL, so everything that only wants a number - arithmetic, IF's test,
+; a chart - reads it unchanged, and only what SHOWS a value, STORES one or
+; FOLDS a reference has to know it is there.
+;
+; sh_boolname - AX nonzero -> "TRUE", else "FALSE", into sh_numbuf. Bit 15 is
+; ignored, so the top word of either double does as well as an integer.
+; -----------------------------------------------------------------------------
+sh_boolname:
+    push ax
+    push si
+    push di
+    mov si, sh_f_true
+    and ax, 0x7FFF
+    jnz .t
+    mov si, sh_f_false
+.t:
+    mov di, sh_numbuf
+    call sh_strcpy
+    pop di
+    pop si
+    pop ax
+    ret
+
+; sh_boolword - CF=1 when the text at DS:SI is TRUE or FALSE, in any case and
+; with nothing either side of it, and AX = 1 or 0 then.
+sh_boolword:
+    push di
+    mov di, sh_f_true
+    call sh_wordeq
+    mov ax, 1                         ; MOV leaves CF as sh_wordeq set it
+    jc .out
+    mov di, sh_f_false
+    call sh_wordeq
+    mov ax, 0
+.out:
+    pop di
+    ret
+
+sh_wordeq:                            ; DS:SI in any case against DS:DI, upper
+    push ax
+    push si
+    push di
+.l:
+    mov al, [si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 32
+.u:
+    cmp al, [di]
+    jne .ne
+    or al, al
+    jz .eq
+    inc si
+    inc di
+    jmp short .l
+.eq:
+    stc
+    jmp short .out
+.ne:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; sh_setbool - in: AX=col, BX=row, DL = the value (nonzero is TRUE). A logical
+; CONSTANT: sh_setvald's record, retagged - sh_seterr's shape. Out: CF=1 when
+; refused (the cell table is full) and the cell keeps what it had.
+sh_setbool:
+    push ax
+    push di
+    push es
+    push ax
+    xor ax, ax
+    or dl, dl
+    jz .v
+    inc ax
+.v:
+    call sh_acc_int
+    pop ax
+    call sh_setvald
+    jc .out
+    call sh_findcell
+    mov es, [sh_cellseg]
+    mov byte [es:di+SH_C_TYPE], SH_T_BOOL
+    clc
+.out:
+    pop es
+    pop di
+    pop ax
+    ret
+
+; sh_setlabel - sh_settext for text as a PERSON would have typed it: TRUE and
+; FALSE are the logical, the way Excel reads that entry, and anything else is
+; a label. Typing, SYLK's quoted K and a CSV field come through here; BIFF
+; and DIF have a type of their own to say which it is, and do not.
+sh_setlabel:
+    push dx
+    push ax
+    call sh_boolword
+    mov dx, ax
+    pop ax
+    jnc .text
+    call sh_setbool
+    pop dx
+    ret
+.text:
+    call sh_settext
+    pop dx
+    ret
+
+; sh_fnlogical - CF=1 when the function [sh_pfid] answers TRUE or FALSE:
+; NOT, AND, OR, TRUE, FALSE, the IS family and EXACT
+sh_fnlogical:
+    push ax
+    push bx
+    mov ax, [sh_pfid]
+    or ah, ah
+    jnz .no
+    mov bx, sh_fnlog
+.l:
+    cmp al, [bx]
+    je .yes
+    inc bx
+    cmp bx, sh_fnlog_end
+    jb .l
+.no:
+    pop bx
+    pop ax
+    clc
+    ret
+.yes:
+    pop bx
+    pop ax
+    stc
+    ret
+
+sh_fnlog:     db 6, 8, 9, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 48, 107
+sh_fnlog_end:
+
+; -----------------------------------------------------------------------------
 ; sh_setformula - in: AX=col, BX=row, SI=formula text (DS-resident,
 ; NUL-terminated, NOT including the leading '='). Out: CF=1 when refused
 ; (arena or cell table full) - the cell keeps what it had (sh_settext's
@@ -19326,9 +19573,13 @@ sh_rpn_factor:
     jmp .bad
 .word:
     call sh_rpn_isfunc                ; LOOKS AHEAD without consuming, because
-    jc .ref                           ; sh_rpn_ref must re-read from the name
+    jc .notcall                       ; sh_rpn_ref must re-read from the name
     call sh_rpn_func
     jmp .out
+.notcall:
+    call sh_rpn_bool                  ; a bare TRUE or FALSE is tBool (81.51)
+    jc .out
+    jmp .ref
 .paren:
     inc si
     mov [sh_rpn_p], si
@@ -19357,6 +19608,69 @@ sh_rpn_factor:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rpn_bool - CF=1 when sh_rpn_p is at a bare TRUE or FALSE, which it steps
+; over, having emitted tBool (1DH, then the value byte) - Excel's own token for
+; the constant. CF=0 leaves sh_rpn_p where it was, for sh_rpn_ref.
+; -----------------------------------------------------------------------------
+sh_rpn_bool:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, [sh_rpn_p]
+    mov di, sh_ident
+    xor cx, cx
+.g:
+    mov al, [si]
+    cmp al, 'a'
+    jb .nl
+    cmp al, 'z'
+    ja .nl
+    sub al, 32
+.nl:
+    cmp al, 'A'
+    jb .gd
+    cmp al, 'Z'
+    ja .gd
+    cmp cx, 5
+    jae .no
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp short .g
+.gd:
+    cmp al, '0'                       ; TRUE1 would be a column, not this
+    jb .end
+    cmp al, '9'
+    jbe .no
+.end:
+    mov byte [di], 0
+    SHOUT sh_funcid                    ; AL = this app's id: TRUE 20, FALSE 21
+    cmp al, 20
+    je .yes
+    cmp al, 21
+    jne .no
+.yes:
+    mov ah, 21
+    sub ah, al                        ; AH = 1 for TRUE, 0 for FALSE
+    mov [sh_rpn_p], si
+    mov al, 0x1D
+    call sh_rpn_put
+    mov al, ah
+    call sh_rpn_put
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -19786,9 +20100,14 @@ sh_eval_cell:
     mov ax, [es:di+SH_C_FOFF]         ; and a NUMERIC result publishes the
     mov [sh_curtoff], ax              ; formula's own text, which is what every
                                        ; reader of it has always expected
-    mov byte [es:di+SH_C_TYPE], SH_T_NUM  ; divisor has since been fixed, and
+    mov al, SH_T_NUM                  ; ...or a LOGICAL one, the same double
+    cmp byte [sh_curtype], SH_T_BOOL  ; with its own tag (81.51)
+    jne .tagnum
+    mov al, SH_T_BOOL
+.tagnum:
+    mov byte [es:di+SH_C_TYPE], al    ; divisor has since been fixed, and
     mov byte [es:di+SH_C_AUX], 0      ; #ERR on the one that is still broken
-    mov byte [sh_curtype], SH_T_NUM   ; (its code having been overwritten by
+    mov [sh_curtype], al              ; (its code having been overwritten by
     mov byte [sh_curaux], 0           ; the last cell the formula referenced)
 .errdone:
     mov ax, [sh_pass]
@@ -19817,7 +20136,10 @@ sh_eval_cell:
 ;   factor := '-' factor | '(' expr ')' | NUMBER | CELLREF | NAME '(' args ')'
 ;   args   := arg (',' arg)*
 ;   arg    := CELLREF ':' CELLREF | expr
-; No spaces (the editor never lets one through), so no whitespace skipping.
+; No whitespace skipping: sh_setformula drops every space on the way in
+; except one between two operands, which is a mistake, and sh_eval_cell makes
+; whatever the parse leaves over #VALUE! (81.50). This used to say the editor
+; never let a space through, which no file reader ever promised.
 ; Every value is a 16-bit signed integer; division truncates toward zero
 ; (IDIV) and division by zero yields 0 rather than faulting - a stated
 ; simplification, not an oversight, matching this project's "no formulas,
@@ -19903,12 +20225,12 @@ sh_pcmpcont:
 .true:
     mov ax, 1
     call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM   ; a COMPARISON is a number here (this
-    ret                               ; evaluator has no BOOL value yet), and
-.false:                               ; it is certainly not whatever its
-    xor ax, ax                        ; operands were
+    mov byte [sh_curtype], SH_T_BOOL  ; a COMPARISON answers a LOGICAL (81.51)
+    ret                               ; - it used to be the number 1 or 0, for
+.false:                               ; want of the type - and certainly not
+    xor ax, ax                        ; whatever its operands were
     call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
+    mov byte [sh_curtype], SH_T_BOOL
     ret
 
 ; sh_pexpr / sh_pexprcont - additive level. sh_pexprcont is a real entry
@@ -20006,10 +20328,17 @@ sh_str_want:
     push ax
     push si
     push di
+    cmp byte [sh_curtype], SH_T_BOOL  ; a LOGICAL is its name: ="x"&TRUE is
+    jne .num                          ; "xTRUE", LEN(TRUE) is 4 (81.51)
+    mov ax, [sh_acc+6]
+    call sh_boolname
+    jmp short .copy
+.num:
     call sh_acc_load_a
     mov di, sh_numbuf
     mov ax, 10
     call fp_ftoa
+.copy:
     mov si, sh_numbuf
     mov di, sh_sacc
     call sh_strcpy
@@ -20159,7 +20488,9 @@ sh_pfactor:
     call sh_pnest_leave
     call sh_chktext                   ; -"text" is arithmetic too
     xor byte [sh_acc+7], 0x80         ; negate by flipping the sign BIT of the
-    ret                               ; packed double - cheaper than unpacking
+    mov byte [sh_curtype], SH_T_NUM   ; packed double - cheaper than unpacking.
+    ret                               ; A NUMBER, as every operator's result
+                                      ; is: -TRUE is -1, not a logical (81.51)
                                       ; and, unlike `neg`, exact for every
                                       ; value including zero
 .notneg:
@@ -20679,6 +21010,10 @@ sh_prange:
     jmp .out
 .plainexpr:
     call sh_pcmp
+    cmp byte [sh_curtype], SH_T_BOOL  ; SUM(TRUE,1) is 2: a logical TYPED as
+    jne .pefold                       ; an argument is its number, and only
+    mov byte [sh_curtype], SH_T_NUM   ; one read from a cell is stepped over
+.pefold:                              ; (81.51)
     call sh_foldvalue
 .out:
     pop bx
@@ -20961,8 +21296,17 @@ sh_foldrange:
 sh_foldvalue:
     push ax
     push bx
+    cmp byte [sh_curtype], SH_T_BOOL   ; A LOGICAL IN A REFERENCE is stepped
+    jne .notbool                       ; over like a label - Excel's rule for
+    cmp word [sh_pfid], 8              ; SUM and every numeric fold - except
+    je .counted                        ; by AND and OR, which are about
+    cmp word [sh_pfid], 9              ; nothing else. One typed as an argument
+    je .counted                        ; counts: sh_prange makes it a number
+    jmp short .astext                  ; before it gets here (81.51)
+.notbool:
     cmp byte [sh_curtype], SH_T_TEXT   ; stage 4.5: a LABEL is not a number and
     jne .counted                       ; every numeric fold steps over it -
+.astext:
     cmp word [sh_pfid], 11             ; SUM, MIN, MAX and PRODUCT because a
     jne .out                           ; label has no value, and AVERAGE for a
     inc word [sh_pcnt]                 ; second reason on top of that: it
@@ -21184,6 +21528,14 @@ sh_cellval_to_acc_si:
 ; a decimal. What "read the word and sh_itoa it" used to do, except that the
 ; value is eight bytes now and its low word on its own is meaningless.
 sh_cellnum:
+    cmp byte [es:di+SH_C_TYPE], SH_T_BOOL  ; a LOGICAL is its name here too -
+    jne .num                              ; the formula bar, Copy and Paste
+    push ax                               ; all read it through this (81.51)
+    mov ax, [es:di+SH_C_VAL+6]
+    call sh_boolname
+    pop ax
+    ret
+.num:
     push ax
     push di
     call sh_cellval_to_acc
@@ -21373,13 +21725,31 @@ sh_pfunc:
                                        ; rest of the session, and every VAR
                                        ; after it would refuse (81.34.1)
     xor dx, dx                        ; DX = result; 0 covers every bad exit
+    mov word [sh_pfid], 0xFFFF        ; THIS call's id, for .done's logical
+                                      ; test (81.51); banked above, so a nested
+                                      ; call's cannot outlive it
     call sh_pnest_enter               ; a nested call is a recursion point too
     jc .popout                        ; (81.3); too deep answers 0 + #VALUE!
     cmp byte [si], '('
-    jne .noparen                      ; a bare word that resolved to no defined
+    je .paren
+    call sh_funcid                    ; =TRUE WITHOUT BRACKETS is Excel's
+    cmp al, 20                        ; logical constant, and was #NAME? here
+    je .bare                          ; (81.51). sh_ident still holds the word
+    cmp al, 21
+    jne .noparen
+.bare:
+    xor ah, ah
+    mov [sh_pfid], ax
+    neg al
+    add al, 21                        ; TRUE (20) is 1, FALSE (21) is 0
+    mov dx, ax
+    call sh_acc_int
+    jmp .typed
+.paren:                               ; a bare word that resolved to no defined
     inc si                            ; name is #NAME?, exactly as in Excel -
     call sh_funcid                    ; sh_pident only routes one here once
     xor ah, ah                        ; sh_name_lookup has already declined it
+    mov [sh_pfid], ax
     cmp ax, 0xFF                      ; ...and so is a CALL to a function this
     je .noname                        ; app does not have. Reading either as a
     cmp ax, 5
@@ -21462,7 +21832,11 @@ sh_pfunc:
     inc si
     call sh_funcfinish
     mov dx, ax
-    jmp .done
+    jmp .typed                        ; a fold's answer is a NUMBER: this went
+                                      ; to .done, which left the type of the
+                                      ; LAST CELL FOLDED standing, so a SUM
+                                      ; whose range ended on a label stored
+                                      ; the label's text as its result (81.51)
 .badtail:
     mov byte [sh_evalerr], SH_ERR_VALUE ; an argument tail this grammar cannot
     jmp .done                          ; parse (=SUM(A1:A9^2)) must ERR, not
@@ -21545,6 +21919,12 @@ sh_pfunc:
                                        ; left by the last cell a range touched
                                        ; would make `=SUM(A1:A9)*2` a #VALUE!
 .done:
+    cmp byte [sh_curtype], SH_T_ERR   ; A FUNCTION THAT ANSWERS TRUE OR FALSE
+    je .notlog                        ; says so in the type (81.51), whatever
+    call sh_fnlogical                 ; its own routine left there - NOT
+    jnc .notlog                       ; sets none at all
+    mov byte [sh_curtype], SH_T_BOOL
+.notlog:
     call sh_pnest_leave
 .popout:
     pop word [sh_stbusy]
@@ -24069,6 +24449,15 @@ sh_lkcmp:
     je .text
     cmp al, SH_T_TEXT                 ; a number key against a text cell
     je .no
+    cmp bl, SH_T_BOOL                 ; ...and a LOGICAL matches only a
+    je .kbool                         ; logical, a number never one (81.51)
+    cmp al, SH_T_BOOL
+    je .no
+    jmp short .knum
+.kbool:
+    cmp al, SH_T_BOOL
+    jne .no
+.knum:
     push si                           ; both numbers: the key into A, the
     mov si, sh_lk_kv                  ; cell's value into B
     call fp_unpack_a
@@ -24205,9 +24594,10 @@ sh_pinfo:
     jmp .yes                          ; is where it differs from NOT(ISTEXT())
                                       ; in Excel too
 .islogical:
-    cmp bl, SH_T_BOOL                 ; nothing produces one YET, so this is
-    je .yes                           ; FALSE for everything - which is the
-    jmp .close                        ; honest answer, not a placeholder one
+    cmp bl, SH_T_BOOL                 ; a comparison, a logical function or
+    je .yes                           ; a logical constant (81.51). Nothing
+    jmp .close                        ; produced one before, and this was
+                                      ; FALSE for everything
 .iserror:
     cmp bl, SH_T_ERR
     je .yes
@@ -27777,6 +28167,29 @@ sh_justify:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_justify_c - sh_justify for a LOGICAL or an ERROR value: General centres
+; both (81.51). An explicit alignment means what it means for anything else.
+; in: BL = the format byte
+; -----------------------------------------------------------------------------
+sh_justify_c:
+    push ax
+    push cx
+    mov al, bl
+    and al, SH_FMT_ALIGN_MASK
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shr al, cl
+    cmp al, SH_FMT_ALIGN_GENERAL
+    jne .explicit
+    call sh_cjust
+    jmp short .out
+.explicit:
+    call sh_justify
+.out:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_justify_t - sh_justify for a LABEL rather than a number.
 ;
 ; The one difference, and it is Excel's: General aligns a number RIGHT and a
@@ -28779,11 +29192,17 @@ sh_dbf_cellstr:
     je .text
     cmp byte [sh_curtype], SH_T_ERR
     je .err
-    mov si, sh_acc
+    cmp byte [sh_curtype], SH_T_BOOL  ; a LOGICAL goes out as its name, in
+    je .bool                          ; the character column its type made
+    mov si, sh_acc                    ; (81.51)
     SHOUT fp_unpack_a
     mov di, sh_numbuf
     mov ax, 10
     SHOUT fp_ftoa
+    jmp .out
+.bool:
+    mov ax, [sh_acc+6]
+    SHOUT sh_boolname
     jmp .out
 .err:
     SHOUT sh_errname                  ; -> sh_numbuf
@@ -29308,6 +29727,7 @@ sh_dbf_getfield:
 sh_dbf_store:
     push ax
     push bx
+    push dx
     push si
     cmp byte [sh_rwsrc], 0
     je .out
@@ -29317,6 +29737,9 @@ sh_dbf_store:
     je .num
     cmp al, 'F'                       ; dBASE IV's float, same shape
     je .num
+    cmp al, 'L'                       ; LOGICAL: T or Y, F or N, in either
+    je .logical                       ; case, and '?' for not yet known,
+                                      ; which is a blank (81.51)
 .text:
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
@@ -29331,8 +29754,27 @@ sh_dbf_store:
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
     SHOUT sh_setvald
+    jmp short .out
+.logical:
+    mov al, [sh_rwsrc]
+    and al, 0xDF
+    mov dl, 1
+    cmp al, 'T'
+    je .lset
+    cmp al, 'Y'
+    je .lset
+    dec dl
+    cmp al, 'F'
+    je .lset
+    cmp al, 'N'
+    jne .out
+.lset:
+    mov ax, [sh_wcol]
+    mov bx, [sh_wrow]
+    SHOUT sh_setbool
 .out:
     pop si
+    pop dx
     pop bx
     pop ax
     ret
@@ -29386,6 +29828,8 @@ sh_dowrite_sep:
     je .ctext
     cmp byte [sh_curtype], SH_T_ERR
     je .cerr
+    cmp byte [sh_curtype], SH_T_BOOL  ; a LOGICAL goes out as its name, which
+    je .cbool                         ; is how it reads back in, too (81.51)
     push si
     push di
     mov si, sh_acc                    ; a FULL DECIMAL, the lesson
@@ -29398,8 +29842,13 @@ sh_dowrite_sep:
     mov si, sh_numbuf
     call sh_stgput
     jmp .cnext
+.cbool:
+    mov ax, [sh_acc+6]
+    SHOUT sh_boolname
+    jmp short .cname
 .cerr:
     SHOUT sh_errname                  ; -> sh_numbuf, the error's own spelling
+.cname:
     mov si, sh_numbuf
     call sh_stgput
     jmp .cnext
@@ -29688,8 +30137,8 @@ sh_sep_store:
     mov ax, [sh_wcol]
     mov bx, [sh_wrow]
     mov si, sh_rwsrc
-    SHOUT sh_settext
-.out:
+    SHOUT sh_setlabel                 ; a TRUE field is the logical, as Excel
+.out:                                 ; reads one (81.51)
     pop si
     pop bx
     pop ax
@@ -29786,7 +30235,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5261
+    OS88_BSS 5273
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -30650,8 +31099,11 @@ sh_v_sh_pargref             equ sh_v_fp_sub + 4
 sh_v_sh_pcmp                equ sh_v_sh_pargref + 4
 sh_v_sh_skipargs            equ sh_v_sh_pcmp + 4
 sh_v_sh_trcopy              equ sh_v_sh_skipargs + 4
-SH_NVEC       equ 49
-sh_v_end      equ sh_v_sh_trcopy + 4
+sh_v_sh_setbool             equ sh_v_sh_trcopy + 4
+sh_v_sh_setlabel            equ sh_v_sh_setbool + 4
+sh_v_sh_boolname            equ sh_v_sh_setlabel + 4
+SH_NVEC       equ 52
+sh_v_end      equ sh_v_sh_boolname + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against

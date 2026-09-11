@@ -178,10 +178,11 @@ a file where Excel expects 07H, and Excel's 07H reads back here as code 7,
   `SH_BIFF_XF_CAP` = 64; a cell pointing past either reads back General.
 - A row >= `SH_ROWS` or column >= `SH_COLS` skips the record: a row with
   bit 14 set would land on another sheet through the packed key.
-- `FORMULA`: the cached result is used and the tokens are skipped; Sheet
-  keeps formulas as text and has no RPN decompiler. A BIFF `FORMULA` cell
-  therefore reads back as a value.
-- `BOOLERR` with the flag clear reads as 0 or 1 - there is no BOOL type.
+- `FORMULA`: the tokens are decoded back to the formula's text
+  (`sh_biff_dcrpn`, SPEC.md 81.10.10); only a token array the decoder
+  refuses falls back to the cached result, as a value.
+- `BOOLERR` with the flag clear reads as the logical (SPEC.md 81.51); it was
+  0 or 1 while Sheet had no logical type, and is what Sheet writes for one.
 - A read clears all four grids first. A plain stream loads onto the sheet
   the user was on, which stays current. In a workbook, `EOF` ends the read
   only before the first `SHEETHDR`; each `SHEETHDR` advances the target

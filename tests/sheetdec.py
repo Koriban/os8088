@@ -79,6 +79,10 @@ ARM_A = [
     ('MIRR(B1:B6,0.1,0.12)',  FN.mirr(MFLOWS, 0.1, 0.12)),
     ('A1>=A2',                T),
     ('A1<>A2',                T),
+    # 81.51: a bare TRUE is tBool, Excel's token for the constant, and a
+    # comparison's cached result is the file's own logical (byte 0 = 1)
+    ('TRUE',                  T),
+    ('AND(A1>A2,TRUE)',       T),
     # 81.10.11: a TEXT result is a FORMULA record and a STRING record now...
     ('UPPER(A5)',             'ABC'),
     ('LOWER(A6)',             'xyz'),
@@ -116,7 +120,8 @@ def arm_b(ver):
         (tstr('a"b') + tstr('c') + b'\x08', '"a""b"&"c"', 'a"bc', WRONG),
         (area + attr(0x10), 'SUM(A1:A3)', 10.0, WRONG),
         (ref(R, 0) + b'\x12', 'A1', 5.0, WRONG),
-        (b'\x1d\x01', 'TRUE()', ('bool', True), WRONG),
+        (b'\x1d\x01', 'TRUE', ('bool', True), WRONG),     # bare, as Excel
+                                                          # shows it (81.51)
         (b'\x1c\x07', '#DIV/0!', ('err', '#DIV/0!'), WRONG),
         (ref(0x0000, 0) + ref(0x4001, 0) + b'\x03', '$A$1+A$2', 8.0, WRONG),
         (num(2.567) + tint(1) + f(27), 'ROUND(2.567,1)', 2.6, WRONG),
@@ -137,11 +142,11 @@ def arm_b(ver):
          99.0),                                              # > SH_EDITMAX
         # --- REFUSED, with a cached result that is NOT a number (81.10.11):
         # text comes in the STRING record after it, an error in the file's
-        # own numbering (07H is #DIV/0!), a logical as 1/0
+        # own numbering (07H is #DIV/0!), a logical as the logical (81.51)
         (tint(2) + attr(0x04, 2) + b'\x04\x00\x0a\x00' + tstr('one') +
          tstr('two') + fv(3, 100), None, 'two', ('str', 'two')),
         (tint(50) + b'\x14', None, ('err', '#DIV/0!'), ('err', 0x07)),
-        (tint(1) + b'\x14', None, 1.0, ('bool', 1)),
+        (tint(1) + b'\x14', None, ('bool', True), ('bool', 1)),
     ]
 
 
@@ -219,10 +224,8 @@ def formula_is(g, expr, row):
 def value_ok(want, got, tol=1e-6):
     if isinstance(got, tuple) and got and got[0] == 'formula':
         got = got[2]
-    if want == ('bool', True) and got == 1.0:
-        return True                   # SHEET's comparisons and TRUE() answer
-                                      # 1, where Excel answers a LOGICAL - a
-                                      # parity gap of the evaluator's (81.10.10)
+    # (SHEET's comparisons and TRUE() answered 1 where Excel answers a
+    # LOGICAL, and this accepted 1.0 for TRUE until 81.51 closed the gap)
     if want == 'rand':
         return isinstance(got, float) and 0.0 <= got < 1.0
     if isinstance(want, float):

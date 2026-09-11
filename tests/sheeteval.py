@@ -31,8 +31,16 @@ WHAT IT HOLDS TODAY:
   THAT QUIET STOP (81.50): =1+2 3 answered 3 and =A1 * ( A2 - 1 ) answered
   2. What is left over after the parse is #VALUE! now, and spaces are
   dropped where a formula is stored, as Excel 2.1 drops them - except one
-  between two operands, which is a mistake and is left for the parse to
-  refuse.
+  between two operands, which is either Excel's intersection operator or a
+  mistake the parse then refuses.
+
+  THE LOGICAL VALUE (81.51): comparisons, the logical functions and a
+  typed TRUE are TRUE and FALSE rather than 1 and 0, and fold over a
+  reference the way Excel's do. SYLK quotes a logical exactly as it quotes
+  the text "TRUE", so TYPE() is what tells them apart in this row, and D100
+  sits below every case so that one of them evaluates it FRESH - the only
+  order in which what the writeback PUBLISHES can differ from what it
+  stores. The readers are tests/sheetbool.py's.
 
   IF with TEXT branches (81.10.10 found it) answered the else-branch's text
   for every condition. Kept here because this is the row it belongs to.
@@ -56,8 +64,19 @@ import sheetfin as FN                                        # noqa: E402
 WORK = "build/sheeteval"                # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheeteval.img"
 WRONG = -999.0
-VALUES = {(0, 0): 2.0, (1, 0): 7.0, (2, 0): 3.25}
+# A4 is a LOGICAL constant - SYLK's quoted K, which SHEET reads as the logical
+# since 81.51 - and A5 a label, for the fold rules below
+VALUES = {(0, 0): 2.0, (1, 0): 7.0, (2, 0): 3.25, (3, 0): ('bool', True),
+          (4, 0): 'lbl'}
+# D100 is a COMPARISON below every case, so a case reaching down to it is
+# what evaluates it first - the one order that shows what a fresh evaluation
+# PUBLISHES to its caller, as against what it stores in the record. The
+# writeback stored the logical and published a number, and only the screen
+# (and a reference like this one) ever read the published one
+LATE = (99, 3)
 DIV0, VAL, NAME = ('err', '#DIV/0!'), ('err', '#VALUE!'), ('err', '#NAME?')
+NA = ('err', '#N/A')
+TR, FA = ('bool', True), ('bool', False)   # not T, F: F is the library
 
 CASES = [
     # CHOOSE returns the VALUE it picked (81.49)
@@ -92,11 +111,53 @@ CASES = [
     ('A1 * ( A2 - 1 )',                   12.0),
     ('SUM (A1 : A3)',                     12.25),
     (' ( 1 + 2 ) * 3 ',                   9.0),
+    ('SUM(A1:A3 A2:A3)',                  10.25),   # ...and a space that IS
+    ('SUM(A1:A3  A2:A3)',                 10.25),   # an operator, Excel's
+                                                    # intersection, survives
     ('" a  + "&"b "',                     ' a  + b '),  # a string keeps its
     # own - and only a double space, or one beside an operator, shows it:
     # every space in " a "&"b " sits between two operands and is kept anyway,
     # which is how that first version of this case passed with the quote
     # handling taken out
+    # A LOGICAL VALUE (81.51): comparisons and the logical functions answer
+    # TRUE and FALSE, not 1 and 0. SYLK quotes a logical exactly as it quotes
+    # the text "TRUE" (Walden), so TYPE() - 4 for a logical, 1 for a number -
+    # is what tells the three apart in this row
+    ('1<2',                               TR),
+    ('A1>5',                              FA),
+    ('TYPE(1<2)',                         4.0),     # 1 before: a number
+    ('TRUE',                              TR),       # bare: #NAME? before
+    ('TYPE(FALSE)',                       4.0),
+    ('NOT(A1>1)',                         FA),
+    ('AND(A1>1,A2>1)',                    TR),
+    ('OR(A1>5,A2>5)',                     TR),
+    ('ISNUMBER(A1)',                      TR),
+    ('ISNUMBER(1<2)',                     FA),       # a logical is no number
+    ('ISLOGICAL(A1>1)',                   TR),       # FALSE for all, before
+    ('EXACT("a","a")',                    TR),
+    ('(1<2)+1',                           2.0),     # arithmetic on one is a
+    ('-(1<2)',                            -1.0),    # number, as in Excel
+    ('"x"&(1<2)',                         'xTRUE'),
+    ('LEN(FALSE)',                        5.0),
+    ('IF(A1>1,A1>5,0)',                   FA),       # IF's branch, whole
+    # ...a logical CONSTANT (A4), and how the folds treat one
+    ('A4',                                TR),
+    ('TYPE(A4)',                          4.0),
+    ('A4+1',                              2.0),
+    ('SUM(A1:A4)',                        12.25),   # in a reference: skipped
+    ('SUM(TRUE,1)',                       2.0),     # typed in: counted
+    ('COUNT(A1:A4)',                      3.0),
+    ('COUNTA(A1:A5)',                     5.0),
+    ('AND(A1:A4)',                        TR),
+    ('MATCH(TRUE,A1:A5,0)',               4.0),     # a logical key finds the
+    ('MATCH(1,A4:A5,0)',                  NA),      # logical, and 1 does not
+    ('TYPE(D100)',                        4.0),     # evaluates it fresh:
+                                                    # see LATE. 1 before
+    ('ISLOGICAL(D100)',                   TR),      # ...and this reads what
+                                                    # that STORED - it passed
+                                                    # with the bug in
+    # a fold whose range ENDS ON A LABEL: the label's type was left standing
+    ('SUM(A1:A5)',                        12.25),
     # IF keeps a text branch (81.10.10)
     ('IF(A1>1,"big","small")',            'big'),
     ('IF(A1>5,"big","small")',            'small'),
@@ -109,6 +170,7 @@ def build_disk():
     cells = dict(VALUES)
     for i, (expr, _) in enumerate(CASES):
         cells[(i, COL)] = ('formula', expr, WRONG)
+    cells[LATE] = ('formula', '1<2', WRONG)
     src = os.path.join(WORK, "SHIN.SLK")
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,

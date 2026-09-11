@@ -96439,8 +96439,8 @@ which is `#N/A`. Both go through `sh_biff_e2b`/`sh_biff_b2e` now.
 **Reader.** When a formula cannot be decoded its cached result is used, and
 that result was stored as a double whatever it was — so a cached string, whose
 eight bytes are the marker above, became a NaN, and a cached logical the same.
-Byte 0 decides now: an error through `sh_biff_b2e`; a logical as 1/0, which is
-what a BOOLERR reads as (SHEET has no logical type); and **text waits** — the
+Byte 0 decides now: an error through `sh_biff_b2e`; a logical as the logical,
+as a BOOLERR reads (§81.51 — it was 1/0 until SHEET had the type); and **text waits** — the
 row, column and XF are banked (`sh_dc_prow`/`pcol`/`pxf`) and the STRING record
 that follows completes the cell the way a LABEL is stored. Any other record
 ends the wait, so a STRING can only ever land on the formula directly before it.
@@ -96856,8 +96856,8 @@ without the encoding every error came back as the perfectly ordinary zero
 underneath it. An error whose formula could not be tokenised takes a
 **BOOLERR** record (0205H) instead, whose value byte is the same code and whose
 flag byte says error rather than boolean. The reader accepts both, and reads a
-BOOLERR with the flag clear as the number 0 or 1, since there is no BOOL type
-here yet.
+BOOLERR with the flag clear as the logical (§81.51; it was the number 0 or 1
+while there was no logical type).
 
 **SYLK** writes the name into the `K` field, bare: `;K#DIV/0!`. No number
 begins with `#` and SYLK has no type field, so the leading character is the
@@ -98442,7 +98442,8 @@ one, so a label with a comma in it survives.
 the format's limit rather than the app's:
 
 - On the way out, an **error** goes as its own spelling (`#DIV/0!`) and a
-  **logical** as `TRUE`/`FALSE`; on the way back both are TEXT. The file is
+  **logical** as `TRUE`/`FALSE`; on the way back an error is TEXT and a
+  logical is the logical again, by its spelling (§81.51). The file is
   still right — there is nowhere in CSV to say "this is an error".
 - On the way in, the **field's spelling decides**. `fp_atof` reports CF=1 when
   there was no number at all and leaves SI where it stopped, so the position
@@ -99373,11 +99374,12 @@ Insert or Copy — does the same on its copy into the arena:
 | before one of those, or at the end | dropped |
 | between two operands — `1+2 3`, `A1 B1` | **one space kept** |
 
-The last row is deliberate. A space between two operands is not spacing but a
-mistake (Excel's intersection operator is a space, which this sheet does not
-have), and closing it up would turn `=1+2 3` into `=1+23` — **24**, a new
-plausible wrong answer in place of the old one. Kept, it is left over after the
-parse and the formula is `#VALUE!`. `sh_fsep` holds the byte set; the length
+The last row is deliberate, and for two reasons. Inside a function's range
+argument that space is Excel's **intersection operator** — `=SUM(A1:C3 B2:B5)`,
+which `sh_prange` implements (§81.26.3) — and closing it up would destroy it.
+Anywhere else it is not spacing but a mistake, and closing it up would turn
+`=1+2 3` into `=1+23` — **24**, a new plausible wrong answer in place of the
+old one. Kept, it is left over after the parse and the formula is `#VALUE!`. `sh_fsep` holds the byte set; the length
 check before the copy counts the raw text, which this can only shorten.
 
 **Where this still differs from Excel.** Excel refuses such an entry with *Error
@@ -99390,12 +99392,100 @@ is already visible. The cell is never silently wrong either way.
 `tests/sheeteval.py` holds nine checks for this and the previous binary fails
 all nine — the three quiet stops, the four spaced formulas (`=A1 * ( A2 - 1 )`
 the one that answered a number), and the two formulas it reads back to check
-what was **stored**. Each half fails its own checks when taken out: the
-left-over test three, the squeeze six, a squeeze that drops every space two
-(`=1+2 3` answers 24). A squeeze that ignores quotes passed the first version
+what was **stored**; two more hold the intersection space the squeeze keeps,
+which the previous binary passes as well. Each half fails its own checks when
+taken out: the left-over test three, the squeeze six, a squeeze that drops
+every space four (`=1+2 3` answers 24, and both intersections are lost). A squeeze that ignores quotes passed the first version
 of the string case, `" a "&"b "`, because each of its spaces sits between two
 operands and is kept anyway; `" a  + "` has a double space and an operator,
 and fails it. Resident +95 bytes.
+
+### 81.51 The logical value
+
+**SHEET had a tag for a logical, `SH_T_BOOL`, and nothing ever produced one.**
+`=1<2` answered the number **1**, and so did AND, OR, NOT, TRUE(), the IS
+family and EXACT; ISLOGICAL was FALSE for everything, which its own comment
+called "the honest answer, not a placeholder one". Excel answers **TRUE**, and
+says so everywhere a value shows — the cell, the formula bar, a concatenation,
+the file.
+
+**A logical is the double 1.0 or 0.0, tagged `SH_T_BOOL`.** Everything that
+only wants a number — arithmetic, IF's test, a chart — reads it unchanged, so
+`=(1<2)+1` is 2 and `=-(1<2)` is −1 with no change to either operator (both
+already stamp their result a number). What had to learn it:
+
+| Where | Now |
+| --- | --- |
+| comparisons | answer `SH_T_BOOL` |
+| NOT, AND, OR, TRUE, FALSE, ISBLANK…ISREF, ISNONTEXT, EXACT | `sh_pfunc`'s `.done` tags the result by the function's id (`sh_fnlogical`), whatever its own routine left — NOT set no type at all |
+| `=TRUE`, `=FALSE` | the bare constant, as in Excel; it was `#NAME?`. `TRUE()` still works |
+| the writeback | stores the tag, and **publishes** it to the caller |
+| the grid | draws `TRUE` / `FALSE`, which no number format touches |
+| `&`, LEN and the text family | `sh_str_want` gives the name: `="x"&TRUE` is `xTRUE` |
+| typed entry | `TRUE` or `FALSE`, in any case, is the logical, not a label (`sh_setlabel`) |
+| the formula bar, Copy, Paste, Find | through `sh_cellnum`, the name |
+| Fill Right/Down | a logical constant stays one (`sh_setbool`); Sort leaves it out, as it does a label |
+| folds over a **reference** | step over it like a label, Excel's rule: `SUM(A1:A4)` ignores a TRUE in A4, COUNT does not count it, COUNTA does, AND and OR use it |
+| folds over a **typed** argument | count it as its number: `SUM(TRUE,1)` is 2 |
+| MATCH and the lookups | a logical key finds only a logical, a number key never one |
+
+**General alignment centres a logical — and an error**, Excel's third General
+rule beside numbers right and labels left (`sh_justify_c`). An error sat right,
+"like the number it replaces"; it is centred now for the same reason.
+
+**The files.** Every format keeps its own word for it, and nothing looser:
+
+| Format | Writes | Reads |
+| --- | --- | --- |
+| BIFF | a BOOLERR with the flag clear; a formula's cached result as byte 0 = 1 | both, as the logical — they were the number 1 |
+| DIF | `0,1` and the `TRUE` indicator, `0,0` and `FALSE` | the TRUE and FALSE indicators — they left the cell **blank** |
+| SYLK | `K"TRUE"`, quoted, as Walden requires | a quoted TRUE or FALSE as the logical |
+| CSV / text | `TRUE` / `FALSE` | a field so spelled, any case, as the logical — Excel's reading |
+| dBASE | `TRUE` / `FALSE` in a character column | an **L** field: T or Y, F or N, either case; `?` (not yet known) as a blank |
+
+SYLK is the one that cannot be exact. Walden: *"Logical values "TRUE" and
+"FALSE" must also be quoted"* — exactly as the text `"TRUE"` is — so a quoted
+TRUE is read by its spelling, the rule typing already keeps, and a label that
+said TRUE comes back a logical. The format has no way to say otherwise.
+`tBool` decodes to the bare `TRUE` Excel shows, and the encoder writes a bare
+`TRUE` as `tBool`, `TRUE()` as the function.
+
+**Two defects the new cases found on the way:**
+
+- **A fold left the type of the last cell it read standing.** `.fold` went to
+  `.done`, not `.typed`, so the result kept whatever `sh_getcell2` had loaded
+  last — and a SUM whose range **ended on a label** stored that label's text
+  as its answer: `=SUM(A1:A5)` showed `lbl`. It goes through `.typed` now,
+  which is what every other numeric exit already did.
+- **The writeback stored the tag and published a number.** After caching
+  a numeric result it set `sh_curtype` to `SH_T_NUM` for its caller, so the
+  cell's own record said logical and the caller heard number. A file (written
+  from the record) was right and the grid (painted from the published type)
+  said `1`. Nothing in the file gates could see it; a screenshot did, and
+  `TYPE(D100)` — a comparison below every case, so that a case is what
+  evaluates it first — now holds it.
+
+**Where this still differs from Excel.** Comparisons do not look at types, so
+`=TRUE=1` is TRUE here and FALSE in Excel, which ranks every logical above
+every number; the same is true of text against a number. Sort leaves a
+logical constant out rather than placing it after text, and a chart plots one as 1
+or 0.
+
+**Evidence.** `tests/sheeteval.py` holds 30 checks for this; 23 of the first
+28 fail against the previous binary (the five that pass were right by
+accident, or read back the same through SYLK's quoted TRUE). Mutations: the
+fold exit taken back out fails four, reference-stepping three, the typed-
+argument rule one, the lookup rule one, SYLK's reader three, and the
+published number `TYPE(D100)`. `tests/sheetbool.py` is new: the host authors
+a DIF, CSV, dBASE and BIFF3 file holding logicals, SHEET opens each and saves
+Normal, and the BOOLERRs say what it kept — **23 checks, 10 failing** against
+the previous binary, one group per reader. `tests/sheetfmt.py` now holds BIFF
+and DIF to a logical where it took either; the previous binary fails both
+and taking out the DIF writer's branch fails DIF. `tests/sheetdec.py` has
+`=TRUE` and `=AND(A1>A2,TRUE)` in SHEET's own round trip, and a refused
+formula's cached logical kept as one: 88 checks. Resident +433 bytes,
+`CHART.OVL` +344, three vectors (`sh_setbool`, `sh_setlabel`,
+`sh_boolname`; `SH_NVEC` 52) and 12 bytes of bss.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 
