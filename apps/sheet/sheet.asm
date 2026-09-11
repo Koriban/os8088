@@ -20336,87 +20336,152 @@ sh_eval_cell:
 ; =============================================================================
 
 ; sh_pcmp / sh_pcmpcont - comparison level, the actual top of the grammar
-; (sh_eval_cell enters here, not at sh_pexpr): one optional
-; '=' '<' '>' '<=' '>=' '<>' against an additive expression, producing 1
-; (true) or 0 (false). Not chained - "A1<B1<C1" parses the same as most
-; spreadsheets treat it, as one comparison ("A1<B1") followed by a second
-; expression ("<C1") that the caller's own grammar level decides what to
-; do with, which in practice just stops parsing there - matching this
-; project's general rule of degrading a malformed tail rather than
-; raising an error nothing here has a channel to report through.
+; (sh_eval_cell enters here, not at sh_pexpr): '=' '<' '>' '<=' '>=' '<>'
+; between two '&'-level operands, answering a LOGICAL (81.51) by Excel's
+; ordering of types (81.53). LEFT-ASSOCIATIVE, as Excel's are: =1<2<3 is
+; (1<2)<3, TRUE against 3, and a logical is above every number - FALSE. It
+; stopped after one comparison, which since 81.50 left "<3" over, #VALUE!.
 sh_pcmp:
     call sh_pconcat
 sh_pcmpcont:
-    cmp byte [si], '='
+    mov al, [si]
+    cmp al, '='
     je .eq
-    cmp byte [si], '<'
-    je .lt_le_ne
-    cmp byte [si], '>'
-    je .gt_ge
+    cmp al, '<'
+    je .lt
+    cmp al, '>'
+    je .gt
     ret
-.eq:
+.eq:                                  ; AH = the outcomes that answer TRUE:
+    inc si                            ; 1 left below, 2 equal, 4 left above
+    mov ah, 2
+    jmp short .have
+.lt:
     inc si
-    call sh_vpush
-    call sh_pexpr
-    call sh_binop_pre
-    call fp_cmpab                     ; AX = -1/0/1 with the flags to match,
-    je .true                          ; so the six tests below read exactly as
-    jmp .false                        ; the integer CMPs they replace
-.lt_le_ne:
-    inc si
+    mov ah, 1
     cmp byte [si], '='
-    je .le
+    jne .lt2
+    inc si
+    mov ah, 3
+    jmp short .have
+.lt2:
     cmp byte [si], '>'
-    je .ne
-    call sh_vpush
-    call sh_pexpr
-    call sh_binop_pre
-    call fp_cmpab
-    jl .true
-    jmp .false
-.le:
+    jne .have
     inc si
-    call sh_vpush
-    call sh_pexpr
-    call sh_binop_pre
-    call fp_cmpab
-    jle .true
-    jmp .false
-.ne:
+    mov ah, 5
+    jmp short .have
+.gt:
     inc si
-    call sh_vpush
-    call sh_pexpr
-    call sh_binop_pre
-    call fp_cmpab
-    jne .true
-    jmp .false
-.gt_ge:
-    inc si
+    mov ah, 4
     cmp byte [si], '='
-    je .ge
-    call sh_vpush
-    call sh_pexpr
-    call sh_binop_pre
-    call fp_cmpab
-    jg .true
-    jmp .false
-.ge:
+    jne .have
     inc si
+    mov ah, 6
+    ; COMPARED BY TYPE (81.53). This compared the two NUMBERS and nothing
+    ; else, so two texts compared as the zeros underneath them: ="a"="b" was
+    ; TRUE and every IF(A1="yes",...) took its first branch. Excel's rule:
+    ; text against text, case-insensitively (sh_lkstrcmp, the lookups' own);
+    ; across types every number is below every text, below FALSE, below TRUE;
+    ; a blank is 0 to a number, "" to a text and FALSE to a logical. BX, CX
+    ; and DX are kept - CHOOSE counts in two of them across a whole argument.
+.have:
+    push bx
+    push cx
+    push dx
+    mov al, [sh_curtype]              ; the LEFT operand's type, and its text
+    cmp al, SH_T_TEXT                 ; banked where the right one's parse
+    jne .nobank                       ; cannot reach it
+    call sh_spush
+    jnc .nobank
+    mov al, SH_T_ERR                  ; the bank is full: #VALUE! is raised,
+.nobank:                              ; and there is nothing to drop later
+    push ax
     call sh_vpush
-    call sh_pexpr
-    call sh_binop_pre
-    call fp_cmpab
-    jge .true
-    jmp .false
-.true:
+    call sh_pconcat                   ; the RIGHT at the '&' level: this was
+    call sh_binop_pre                 ; sh_pexpr, so ="ab"="a"&"b" left the
+    pop dx                            ; &"b" over. DH = outcomes, DL = left
+    mov cl, [sh_curtype]              ; CL = the right's type
+    mov bl, dl                        ; BL, CH: the types as COMPARED - a blank
+    mov ch, cl                        ; takes the other side's
+    cmp bl, SH_T_BLANK
+    jne .lset
+    mov bl, ch
+.lset:
+    cmp ch, SH_T_BLANK
+    jne .rset
+    mov ch, bl
+.rset:
+    mov al, bl
+    call sh_cmprank
+    mov ah, al
+    mov al, ch
+    call sh_cmprank                   ; AH = the left's rank, AL = the right's
+    cmp ah, al
+    je .same
+    mov ax, -1                        ; MOV keeps CMP's flags
+    jb .outcome
     mov ax, 1
+    jmp short .outcome
+.same:
+    cmp al, 1
+    je .text
+    call fp_cmpab                     ; numbers and logicals: AX = -1/0/1
+    jmp short .outcome
+.text:
+    push si
+    push di
+    mov si, sh_snull                  ; a blank side is ""
+    cmp dl, SH_T_TEXT
+    jne .ltext
+    xor ax, ax
+    call sh_sslot                     ; SI = the banked left text
+.ltext:
+    mov di, sh_snull
+    cmp cl, SH_T_TEXT
+    jne .rtext
+    mov di, sh_sacc
+.rtext:
+    call sh_lkstrcmp
+    pop di
+    pop si
+.outcome:
+    cmp dl, SH_T_TEXT
+    jne .nodrop
+    call sh_spop                      ; the left text's bank
+.nodrop:
+    mov cl, 2
+    or ax, ax
+    jz .bit
+    mov cl, 1
+    js .bit
+    mov cl, 4
+.bit:
+    xor ax, ax
+    test dh, cl
+    jz .res
+    inc ax
+.res:
     call sh_acc_int
     mov byte [sh_curtype], SH_T_BOOL  ; a COMPARISON answers a LOGICAL (81.51)
-    ret                               ; - it used to be the number 1 or 0, for
-.false:                               ; want of the type - and certainly not
-    xor ax, ax                        ; whatever its operands were
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_BOOL
+    pop dx
+    pop cx
+    pop bx
+    jmp sh_pcmpcont                   ; ...and may be the left of another
+
+; sh_cmprank - AL = a type -> AL = its rank for a comparison: 0 a number (or
+; a blank that met one), 1 text, 2 a logical
+sh_cmprank:
+    cmp al, SH_T_TEXT
+    je .t
+    cmp al, SH_T_BOOL
+    je .b
+    xor al, al
+    ret
+.t:
+    mov al, 1
+    ret
+.b:
+    mov al, 2
     ret
 
 ; sh_pexpr / sh_pexprcont - additive level. sh_pexprcont is a real entry
@@ -20476,25 +20541,27 @@ sh_pconcatcont:
     ret
 .cat:
     inc si
-    call sh_str_want                  ; the LEFT operand, as text...
-    push si
-    push di
-    mov si, sh_sacc                   ; ...banked, because the right one's
-    mov di, sh_sacc2                  ; parse can reach this routine again
+    call sh_str_want                  ; the LEFT operand, as text, BANKED ON
+    call sh_spush                     ; THE STRING STACK: the right one's parse
+    sbb ax, ax                        ; can reach this routine again, and the
+    push ax                           ; one global it was banked in was
+    call sh_pexpr                     ; overwritten - ="a"&("b"&"c") was "bbc"
+    call sh_str_want                  ; (81.53). AX = -1: the bank was full
+    push si                           ; the RIGHT operand, as text, out of
+    push di                           ; the way...
+    mov si, sh_sacc
+    mov di, sh_sacc2
     call sh_strcpy
     pop di
     pop si
-    call sh_pexpr
-    call sh_str_want                  ; the RIGHT operand, as text
+    pop ax
+    or ax, ax
+    jnz .nobank                       ; #VALUE! is raised already
+    call sh_srestore                  ; ...the left back into sh_sacc...
+.nobank:
     push si
     push di
-    mov si, sh_sacc                   ; right operand out of the way first,
-    mov di, sh_sacc2 + SH_STR_MAX + 1 ; then left, then append right
-    call sh_strcpy
-    mov si, sh_sacc2
-    mov di, sh_sacc
-    call sh_strcpy
-    mov si, sh_sacc2 + SH_STR_MAX + 1
+    mov si, sh_sacc2                  ; ...and the right appended
     call sh_str_cat
     pop di
     pop si
@@ -30431,7 +30498,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5275
+    OS88_BSS 5210
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -30522,17 +30589,13 @@ sh_sacc       equ sh_newoff + 2             ; SH_STR_MAX+1: THE STRING HALF of
                                              ; the evaluator's result, the way
                                              ; sh_acc is the numeric half -
                                              ; sh_curtype says which is live
-sh_sacc2      equ sh_sacc + SH_STR_MAX + 1  ; 2 x (SH_STR_MAX+1): the left
-                                             ; operand of '&', banked while the
-                                             ; right one is parsed, AND the
-                                             ; scratch that holds the right one
-                                             ; while the left is moved back.
-                                             ; TWO buffers, sized as two - one
-                                             ; buffer's worth would have put the
-                                             ; second copy straight through
-                                             ; sh_curaux below, which is 81.21
-                                             ; over again
-sh_curaux     equ sh_sacc2 + 2 * (SH_STR_MAX + 1)  ; sh_getcell2's error code
+sh_sacc2      equ sh_sacc + SH_STR_MAX + 1  ; SH_STR_MAX+1: '&'s right operand,
+                                             ; held while the left comes back off
+                                             ; the string stack. It was TWO
+                                             ; buffers, the left banked in the
+                                             ; first - where a nested '&' in the
+                                             ; right overwrote it (81.53)
+sh_curaux     equ sh_sacc2 + SH_STR_MAX + 1  ; sh_getcell2's error code
 sh_evalerr    equ sh_curaux + 2             ; byte: the error this evaluation
                                              ; ran into, 0 = none. STICKY for
                                              ; the whole of one top-level

@@ -170,6 +170,31 @@ CASES = [
     ('SUM(D101:E101)',                    21.25),
     # a fold whose range ENDS ON A LABEL: the label's type was left standing
     ('SUM(A1:A5)',                        12.25),
+    # COMPARISONS BY TYPE (81.53): text against text, case-insensitively, and
+    # across types by Excel's ranking - every number below every text below
+    # FALSE below TRUE; a blank is 0 to a number and "" to a text
+    ('"a"="a"',                           TR),
+    ('"a"="b"',                           FA),
+    ('"a"="A"',                           TR),
+    ('"b">"a"',                           TR),
+    ('"ab"="a"&"b"',                      TR),      # & binds tighter, both
+    ('"a"&"b"="ab"',                      TR),      # sides
+    ('1<"a"',                             TR),
+    ('"a"<1',                             FA),
+    ('"10"=10',                           FA),
+    ('TRUE>1',                            TR),
+    ('TRUE=1',                            FA),
+    ('FALSE<TRUE',                        TR),
+    ('"z"<TRUE',                          TR),
+    ('A5="lbl"',                          TR),
+    ('A5="LBL"',                          TR),
+    ('IF(A5="lbl",1,0)',                  1.0),
+    ('A6=0',                              TR),      # blank, as a number
+    ('A6=""',                             TR),      # ...and as a text
+    ('A1=2',                              TR),
+    ('"a"&("b"&"c")',                     'abc'),   # & inside &'s right side
+    ('1<2<3',                             FA),      # left-associative:
+    ('3>2>1',                             TR),      # TRUE against a number
     # IF keeps a text branch (81.10.10)
     ('IF(A1>1,"big","small")',            'big'),
     ('IF(A1>5,"big","small")',            'small'),

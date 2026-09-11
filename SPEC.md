@@ -99466,9 +99466,8 @@ said TRUE comes back a logical. The format has no way to say otherwise.
   `TYPE(D100)` — a comparison below every case, so that a case is what
   evaluates it first — now holds it.
 
-**Where this still differs from Excel.** Comparisons do not look at types, so
-`=TRUE=1` is TRUE here and FALSE in Excel, which ranks every logical above
-every number; the same is true of text against a number. Sort leaves a
+**Where this still differs from Excel.** Comparisons did not look at types,
+so `=TRUE=1` was TRUE here and FALSE in Excel — §81.53 closed that. Sort leaves a
 logical constant out rather than placing it after text, and a chart plots one as 1
 or 0.
 
@@ -99568,6 +99567,46 @@ four. Arm B is skipped, with a notice, where the archive is absent.
 `tests/sheeteval.py`'s `=SUM(D101:E101)` over two SUMs below every case
 answers 12.25 without the banking and 21.25 with it. `CHART.OVL` +380 bytes,
 resident +21, two bytes of bss.
+
+### 81.53 Comparisons compare by type
+
+**Two texts compared as the zeros underneath them.** `sh_pcmpcont` banked the
+left operand's *number*, parsed the right, and called `fp_cmpab` — nothing
+else. A text's number is 0, so `="a"="b"` was **TRUE**, `="b">"a"` FALSE, and
+every `=IF(A1="yes",…)` took its first branch whatever A1 said; `="a"="A"`
+and `=A5="lbl"` were right only because 0 equals 0. It is the commonest
+test a spreadsheet makes of text, and it could not fail.
+
+Excel's rule, which the operator now keeps (the left's type, and its text on
+the string stack, banked across the right's parse):
+
+- **text against text** is compared case-insensitively — `sh_lkstrcmp`, the
+  lookups' own, which is the same rule MATCH keeps;
+- **across types** every number is below every text, which is below FALSE,
+  which is below TRUE (`sh_cmprank`): `=1<"a"` and `=TRUE>1` are TRUE,
+  `="10"=10` and `=TRUE=1` FALSE;
+- **a blank** is 0 to a number, `""` to a text and FALSE to a logical — it
+  takes the other side's type;
+- an error on either side stands, as for any operator.
+
+**The right operand is parsed at the `&` level**, as the left always was: it
+was `sh_pexpr`, so `="ab"="a"&"b"` compared `"ab"` with `"a"` and left `&"b"`
+over — #VALUE! since §81.50, a wrong answer before it. **And the operator is
+left-associative**, as Excel's is: `=1<2<3` is `(1<2)<3`, a TRUE against 3,
+which is FALSE. It stopped after one comparison.
+
+**`&` had the same flaw as §81.51's writeback, one level down.** It banked its
+left operand in `sh_sacc2`, a single buffer, and a `&` inside its right
+operand banked there too: `="a"&("b"&"c")` was `bbc`. The left goes on the
+string stack now, as IF's and every text function's second argument already
+did, and `sh_sacc2` holds only the right while the left comes back — one
+buffer instead of two, 65 bytes of bss returned.
+
+`tests/sheeteval.py` holds 22 cases for this; the previous binary fails
+eight of the first twenty (the others were right by accident, as above).
+Mutations: text compared as numbers fails two, the ranking three, the right
+operand back at `sh_pexpr` one, a blank not taking the other side's type
+one. Resident +68 bytes, bss −65.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 
