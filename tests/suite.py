@@ -3932,6 +3932,15 @@ SOAK = [
         "inside each cell. Five of its checks fail against the binary that "
         "clipped every label to its own cell",
         needs=("marty",), serial=True),
+    Row("sheetnumfmt", "soak", py("tests/sheetnumfmt.py"), 300.0,
+        "SPEC.md 81.55: Excel 2.1d's twenty-one number formats. SHEET had "
+        "four, and a date showed as its serial. The host writes a BIFF3 file "
+        "of twenty cells in different formats; each cell's TEXT is read off "
+        "the glass by the kernel's own glyphs, a cell formatted while EMPTY "
+        "shows its typed value by that format, and Save As Normal keeps "
+        "every format and writes Excel's 21 FORMAT records. 24 of its 27 "
+        "checks fail against the binary before",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

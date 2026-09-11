@@ -98386,13 +98386,10 @@ and §82 is this tree's answer to that.
 
 #### 81.39.3 Behaviour, not commands
 
-- **Four number formats of Excel 2.1d's twenty-one.** General, `$#,##0`,
-  `#,##0` and `0%` — two bits of the format byte, which §81.4 explains has no
-  more to give. No decimal places, no scientific, and **no date or time
-  format**: DATE, NOW and the rest compute correctly and show a serial
-  number, and an Excel file's dates open as `32874`. The largest visible gap
-  left, and a storage question first (a side table, as §81.46's borders
-  were), not a formatting one.
+- **Number formats: all twenty-one built-ins since §81.55**, which closed
+  what was the largest gap here. Custom codes are drawn (TEXT() takes any)
+  but the Format Number dialog offers only the list, and SYLK carries only
+  four.
 - **Column width and row height are whole-sheet.** The dialogs are Excel's;
   what they set is one `sh_cellw`/`sh_cellh` for everything. `sh_gridhit`
   divides by the width once, and a per-column grid has to walk. An Excel file's
@@ -98413,9 +98410,8 @@ and §82 is this tree's answer to that.
 
 Almost everything above hangs off six pieces of work:
 
-1. **A number-format table** beside the cell record → dates and times, decimal
-   places, the rest of Excel's twenty-one, and an Excel file's formats read
-   rather than dropped.
+1. ~~A number-format table~~ — **done in §81.55**: the border table's sixth
+   byte, Excel's 21 codes and one engine for the grid and TEXT().
 2. **Array formulas** → 8 functions, and `Data ▸ Table`.
 3. **A database + criteria area** → 11 functions, and 6 of the Data menu.
 4. **Per-column/per-row geometry** → the width behaviour, and `Justify`.
@@ -99653,6 +99649,103 @@ five that should carry text, and spilling the formula text instead of the
 result fails E4. (The first version of the test found ink in B3 and B4 on the
 unchanged binary: the pointer, left where the file was double-clicked. It is
 moved off the window now.) Resident +199 bytes.
+
+### 81.55 Excel 2.1d's twenty-one number formats
+
+**SHEET drew four.** General, `$#,##0`, `#,##0` and `0%` — the two bits §81.4
+left the format byte for a number format. No decimal places, no scientific,
+and **no date or time**: DATE and NOW computed correctly and showed `32888`, an
+Excel file's other formats read back as General, and TEXT() understood `$`,
+`,`, `0`, `#`, `.` and `%` and fell back to General on anything else. §81.39
+named it the largest visible gap left.
+
+#### 81.55.1 One engine, Excel's own codes
+
+`sh_fmtcode` draws a value by a format **code** — Excel's, as a string — and
+it is the only thing that does: the grid draws a cell through the code for its
+format id (`sh_nf_codes`, Excel 2.1d's 21 built-ins in Excel's order, which is
+the BIFF built-in id), and **TEXT() hands it the code it was given**. Its old
+parser and renderer are gone, and with them `sh_curr_ins` and `sh_pct_app`.
+
+- **Sections.** `;` separates positive, negative and zero; a negative value
+  takes the second section **as its magnitude** — the section's own `(` `)`
+  are its sign — and with one section keeps its `-`, in front of any `$`.
+- **Numbers.** The digit placeholders and the `,` and `.` among them are one
+  run, drawn as one number where the first of them stands, out of the pieces
+  TEXT() already had (`sh_numdp`, `sh_padzero`, `sh_group3`). Everything else
+  is a literal in place: `$`, `(`, a space, a quoted run, `\x`; `[Red]` is
+  skipped — there is no colour — and `_x` is a space. `%` scales by a hundred.
+  `E+`/`E-` is scientific, scaled by ten a step at a time rather than through
+  a logarithm, and a mantissa that rounds to `10.00` takes one more step. A
+  section with no placeholder at all is only its text.
+- **Dates and times** — any `d`, `y`, `h` or `s`, or an `m` with no digit
+  placeholder: `yy`/`yyyy`, `m`/`mm`/`mmm`/`mmmm`, `d`/`dd`/`ddd`/`dddd`, `h`,
+  `mm` as **minutes** straight after an `h` or before an `s` (Excel's rule),
+  `ss`, and `AM/PM` or `A/P`, which make `h` twelve-hour. Out of the pieces
+  DATE and HOUR already had (`sh_ser_to_ymd`, `sh_dt_hms`). **The time is
+  split first**: `sh_acc_toudw` truncates `sh_acc` in place, and with the days
+  taken first every time drew as midnight.
+
+**A number never shows part of itself.** It was drawn whole and the next cell
+painted over the rest, so 123456789 in a seven-character cell read `1234567` —
+a plausible number, and a wrong one. Now a formatted result too wide for its
+cell fills it with `#`, as Excel's does; General first takes fewer significant
+digits, then Excel's own last resort, the mantissa with as many places as the
+cell has room for: `1.2E+08`. Every format drew the same way before, so the
+old currency changed too — `$3.5` is `$4 ` now, which is what the code the BIFF
+writer already declared for it (`$#,##0 ;($#,##0)`) says.
+
+#### 81.55.2 Where a format is kept
+
+The format byte keeps its four, so an existing cell with one of them costs
+nothing new, and **its value is still the BIFF XF index** (§81.4). Any other
+format goes in **the border table**, whose record is **six bytes now, not
+five** (`SH_BT_SZ`): the byte after the border-and-protection byte is Excel's
+format id plus one, 0 for none. That table was chosen for the reason §81.4
+chose it for borders — almost no cell has one — and because it already keeps a
+record for an **empty** cell. Format > Number now applies to the whole
+selection, empty cells included, as Excel's does: the format waits in the
+table and the value typed later is drawn by it. The old dialog skipped a cell
+with no record. `SH_BORD_CAP` is 682 records, not 819.
+
+The record stays while either byte holds anything; Border, Cell Protection,
+Clear and Paste were each taught the second byte (`sh_bt_getw`).
+
+**Format > Number is Excel's list** — the scrolling list's third kind (the
+dialog's own header said a third would be free), the 21 codes, the selected
+cell's own format chosen and in view. It is 332 pixels wide now, not 222, for
+Excel's longest code; Paste Function and Paste Name widen with it.
+
+#### 81.55.3 The files
+
+- **BIFF write**: Excel's 21 `FORMAT` records, in order, before the XFs — none
+  were written, and a reader had to assume the built-in list. An XF past the
+  base 64 is now one per **(format byte, border byte, number format)** triple,
+  and names its format id.
+- **BIFF read**: an XF's format id, and a BIFF2 cell's attribute byte, go to
+  the border table when they are not one of the four (`sh_biff_nfside`).
+- **Not yet**: SYLK carries only the four (its `P` records would carry the
+  rest), and CSV/DIF/dBASE write the value, not the formatted text. The
+  formula bar still shows a date's serial, where Excel shows the date.
+
+#### 81.55.4 Evidence
+
+`tests/sheetnumfmt.py`, **27 checks**. The host writes a BIFF3 file of twenty
+cells in different formats; each cell's **text is read off the glass** by the
+kernel's own glyphs (`tests/glass.py`, which learned to mask the gridline rows
+as well as the columns: a glyph's top row lies on its cell's upper line). A
+cell formatted `0.00` while empty is typed into, and Save As Normal must keep
+every cell's format and write the 21 FORMAT records. **24 of the 27 fail
+against the previous binary.** Mutations, each built and each caught: no
+FORMAT records fails one, an empty cell's format not kept two, the `#` fill
+taken out six, General's scientific last step one. `tests/sheeteval.py` holds 18 TEXT() cases on
+the same engine — dates, times, twelve-hour, minutes after an hour,
+scientific up and down, `0.00%`, a code with no placeholder — which found the
+midnight defect above on their first run.
+
+Resident +2,322 bytes (the engine, less TEXT()'s old parser), bss +320,
+`CHART.OVL` +189; 3,873 bytes of resident headroom are left, and 467 of the
+overlay's.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

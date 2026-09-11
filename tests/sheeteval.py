@@ -195,6 +195,26 @@ CASES = [
     ('"a"&("b"&"c")',                     'abc'),   # & inside &'s right side
     ('1<2<3',                             FA),      # left-associative:
     ('3>2>1',                             TR),      # TRUE against a number
+    # TEXT() BY EXCEL'S CODES (81.55), through the engine the grid draws with:
+    # it knew $ , 0 # . % and nothing else, so a date code answered the serial
+    ('TEXT(DATE(1990,1,15),"m/d/yy")',    '1/15/90'),
+    ('TEXT(DATE(1990,1,15),"d-mmm-yy")',  '15-Jan-90'),
+    ('TEXT(DATE(1990,1,15),"mmm-yy")',    'Jan-90'),
+    ('TEXT(DATE(1990,1,15),"dddd, mmmm d, yyyy")', 'Monday, January 15, 1990'),
+    ('TEXT(TIME(18,0,5),"h:mm:ss")',      '18:00:05'),
+    ('TEXT(TIME(9,5,0),"hh:mm")',         '09:05'),
+    ('TEXT(TIME(10,7,0),"h:m")',          '10:7'),      # m after h: minutes
+    ('TEXT(TIME(13,30,0),"h:mm AM/PM")',  '1:30 PM'),
+    ('TEXT(TIME(0,15,0),"h:mm AM/PM")',   '12:15 AM'),
+    ('TEXT(1234.567,"#,##0.00")',         '1,234.57'),
+    ('TEXT(0.5,"#,##0.00")',              '0.50'),
+    ('TEXT(1.5,"0")',                     '2'),
+    ('TEXT(0.256,"0.00%")',               '25.60%'),
+    ('TEXT(12345.678,"0.00E+00")',        '1.23E+04'),
+    ('TEXT(0.000123,"0.00E+00")',         '1.23E-04'),
+    ('TEXT(-9.996,"0.00E+00")',           '-1.00E+01'), # rounds up a place
+    ('TEXT(5,"General")',                 '5'),
+    ('TEXT(5,"abc")',                     'abc'),       # no placeholder: text
     # IF keeps a text branch (81.10.10)
     ('IF(A1>1,"big","small")',            'big'),
     ('IF(A1>5,"big","small")',            'small'),

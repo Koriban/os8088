@@ -60,11 +60,14 @@ def ink(rows, box, part=1.0):
                for x in range(x1 + 2, x2 - 1) if not rows[y][x])
 
 
-def _slot(rows, x, y, skip):
-    """The 8x8 at (x, y) as glyph bytes, with the columns in `skip` (the
-    gridlines) cleared rather than read."""
+def _slot(rows, x, y, skip, hskip):
+    """The 8x8 at (x, y) as glyph bytes, with the gridline columns (`skip`)
+    and rows (`hskip`) cleared rather than read - SHEET draws the lines after
+    the text, and a glyph's top row lies on its cell's upper line."""
     out = bytearray(8)
     for r in range(8):
+        if y + r in hskip:
+            continue
         b = 0
         for c in range(8):
             if x + c not in skip and not rows[y + r][x + c]:
@@ -73,39 +76,41 @@ def _slot(rows, x, y, skip):
     return bytes(out)
 
 
-def _match(g, table, skip_cols):
-    if g in table:
+def _match(g, table, cols, lrows):
+    """The character whose glyph agrees with `g` everywhere but the masked
+    columns and rows, or None."""
+    if not cols and not lrows and g in table:
         return table[g]
-    if not skip_cols:
-        return None
-    mask = 0xFF
-    for c in skip_cols:
-        mask &= ~(0x80 >> c) & 0xFF
+    cmask = 0xFF
+    for c in cols:
+        cmask &= ~(0x80 >> c) & 0xFF
     for k, ch in table.items():
-        if all((a & mask) == (b & mask) for a, b in zip(g, k)):
+        if all((a & cmask) == (b & cmask) for r, (a, b) in enumerate(zip(g, k))
+               if r not in lrows):
             return ch
     return None
 
 
-def cell_text(rows, box, table, lines=()):
+def cell_text(rows, box, table, lines=(), hlines=()):
     """The text a cell shows, spaces stripped, or None if nothing in it reads
-    as glyphs. The run is found, not assumed: every x within a glyph's width
-    of the cell's left line and every y inside it is tried, and the placing
-    whose slots ALL match a glyph, with the most ink, wins. `lines` are the
-    column lines, masked out of any slot they cross - SHEET draws them after
-    the text."""
+    as glyphs. The run is found, not assumed: every placing within a glyph of
+    the cell's corner is tried, and the one whose slots ALL match a glyph,
+    with the most ink, wins. `lines` and `hlines` are the grid's columns and
+    rows, masked out of any slot they cross. Read an UNSELECTED cell: the
+    selection's heavier border is a line this does not know about."""
     x1, y1, x2, y2 = box
-    skip = set(lines)
+    skip, hskip = set(lines), set(hlines)
     best = None
-    for y in range(y1 + 1, y2 - 7):
+    for y in range(y1 - 1, y2 - 6):
+        lrows = [r for r in range(8) if y + r in hskip]
         for x in range(x1 - 2, x1 + 6):
             n = (x2 + 1 - x) // 8
             out, weight = [], 0
             for k in range(n):
                 sx = x + 8 * k
                 cols = [c for c in range(8) if sx + c in skip]
-                g = _slot(rows, sx, y, skip)
-                ch = _match(g, table, cols)
+                g = _slot(rows, sx, y, skip, hskip)
+                ch = _match(g, table, cols, lrows)
                 if ch is None:
                     break
                 out.append(ch)

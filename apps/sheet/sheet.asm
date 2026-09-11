@@ -404,7 +404,11 @@ SH_S_SZ      equ 20                 ; ...and the code says SH_S_SZ where it
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
 SH_STAGE_MAX equ 32768
-SH_BORD_CAP  equ 819                ; floor(4096 / 5)
+SH_BT_SZ     equ 6                  ; the border table's record (81.55): row,
+                                    ; col, the border+protection byte, and
+                                    ; the number format beyond the four the
+                                    ; format byte can name. It was 5
+SH_BORD_CAP  equ 682                ; floor(4096 / SH_BT_SZ) - 819 at 5
 SH_NOTE_REC  equ 6                  ; stage 3.0b: the note table's record -
                                     ; packed row/sheet, col, and the note
                                     ; text's offset in the SHARED formula
@@ -1072,6 +1076,9 @@ sh_x_sh_setlabel:
 sh_x_sh_boolname:
     call sh_boolname
     retf
+sh_x_sh_bt_getw:                        ; 81.55: the writer's number formats
+    call sh_bt_getw
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1087,6 +1094,7 @@ sh_ovshims:
     dw sh_x_fp_mul, sh_x_fp_pack_a, sh_x_fp_pow, sh_x_fp_sub
     dw sh_x_sh_pargref, sh_x_sh_pcmp, sh_x_sh_skipargs, sh_x_sh_trcopy
     dw sh_x_sh_setbool, sh_x_sh_setlabel, sh_x_sh_boolname      ; 81.51
+    dw sh_x_sh_bt_getw                                            ; 81.55
 
 sh_entry:
     push ax
@@ -4166,8 +4174,10 @@ sh_drawgrid:
     je .textpath                       ; characters, not its value
     cmp byte [sh_curtype], SH_T_BOOL   ; ...and a LOGICAL its name (81.51),
     je .boolpath                       ; which no number format touches
-    mov ax, dx
+    call sh_bt_getw                    ; AH = its number format, beside its
+    mov bh, ah                         ; border (81.55)
     mov bl, [sh_curfmt]
+    mov ax, dx
     call sh_numfmt
     call sh_justify
     mov si, sh_tbuf
@@ -4410,7 +4420,7 @@ sh_drawborders:
     cmp cx, [sh_nbord]
     jae .done
     mov ax, cx
-    mov bx, 5
+    mov bx, SH_BT_SZ
     mul bx
     mov si, ax
     mov es, [sh_bordseg]
@@ -5439,6 +5449,12 @@ sh_abdismiss:
 ; Delete (borrowed by the Edit menu), so they're remapped here to kinds
 ; 6/5 respectively.
 sh_docmd_format:
+    or al, al                          ; Number: Excel's list of codes (81.55),
+    jnz .notnum                        ; not the four-way radio it was
+    mov al, SH_LD_NUMFMT
+    call sh_ldlg_open
+    ret
+.notnum:
     cmp al, 3
     jne .notborder
     call sh_bdlg_open
@@ -5730,8 +5746,9 @@ sh_ps_props:
     mov cl, 1
 .srcborder:
     call sh_ps_src
-    call sh_bt_get                    ; AL = the source's border byte, 0 none
-    mov dh, al
+    call sh_bt_getw                   ; AL = the source's border byte, 0 none,
+    mov dh, al                        ; AH its number format (81.55)
+    mov [sh_ps_nf], ah
     cmp byte [sh_ps_mode], SH_PS_ALL  ; All carries the note as well
     jne .srcdone
 .srcnote:
@@ -5755,7 +5772,8 @@ sh_ps_props:
     mov es, [sh_cellseg]              ; same scope limit sh_fdlg_apply
     mov [es:di+SH_C_FMT], dl          ; documents for the Format dialogs
 .noborder:
-    or dh, dh
+    mov al, [sh_ps_nf]
+    or al, dh
     jz .clrborder
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
@@ -5763,6 +5781,8 @@ sh_ps_props:
     jc .fmtdone                       ; table full: silent, as sh_bdlg_apply is
     mov es, [sh_bordseg]
     mov [es:di+4], dh
+    mov al, [sh_ps_nf]
+    mov [es:di+5], al
     jmp .fmtdone
 .clrborder:
     mov ax, [sh_selcol]
@@ -8773,9 +8793,9 @@ sh_fdlg_apply:
     push es
     mov es, [sh_bordseg]
     and byte [es:di+4], ~SH_PROT_MASK & 0xFF
-    mov al, [es:di+4]
-    pop es
-    or al, al
+    mov ax, [es:di+4]                  ; ...and the number format beside it
+    pop es                             ; (81.55): the record stays while
+    or ax, ax                          ; either byte holds anything
     jnz .protdone                      ; a border is still stored here
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
@@ -9184,9 +9204,9 @@ sh_bdlg_apply:
     push es                             ; cell is also unlocked or hidden
     mov es, [sh_bordseg]
     and byte [es:di+4], SH_PROT_MASK
-    mov al, [es:di+4]
+    mov ax, [es:di+4]                   ; the number format too (81.55)
     pop es
-    or al, al
+    or ax, ax
     jnz .out                            ; something is still stored here
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
@@ -10135,18 +10155,19 @@ sh_name_list:
 ; =============================================================================
 SH_LD_FUNC   equ 0                   ; Formula > Paste Function...
 SH_LD_NAME   equ 1                   ; Formula > Paste Name...
-SH_LD_NKIND  equ 2
+SH_LD_NUMFMT equ 2                   ; Format > Number... (81.55)
+SH_LD_NKIND  equ 3
 
-SH_LDLG_W    equ 222
-SH_LDLG_LX1  equ 8                   ; the list box, content-relative
-SH_LDLG_LY1  equ 22
-SH_LDLG_LX2  equ 130
+SH_LDLG_W    equ 332                 ; wide enough for Excel's longest built-in
+SH_LDLG_LX1  equ 8                   ; code, $#,##0.00 ;[Red]($#,##0.00) - the
+SH_LDLG_LY1  equ 22                  ; rows are not clipped. It was 222
+SH_LDLG_LX2  equ 240
 SH_LDLG_ROWH equ 12
 SH_LDLG_ROWS equ 8                   ; visible at once
 SH_LDLG_LY2  equ SH_LDLG_LY1 + SH_LDLG_ROWS * SH_LDLG_ROWH + 2
 SH_LDLG_SBW  equ 14                  ; the bar sits just right of the list
-SH_LDLG_BTX1 equ 152                 ; clear of the bar, which ends at
-SH_LDLG_BTX2 equ 212                 ; SH_LDLG_LX2 + 2 + SH_LDLG_SBW
+SH_LDLG_BTX1 equ 262                 ; clear of the bar, which ends at
+SH_LDLG_BTX2 equ 322                 ; SH_LDLG_LX2 + 2 + SH_LDLG_SBW
 SH_LDLG_OKY1 equ 22
 SH_LDLG_OKY2 equ 42
 SH_LDLG_CAY1 equ 50
@@ -10156,8 +10177,10 @@ SH_LDLG_H    equ SH_LDLG_LY2 + SH_DLG_BMARG + TITLE_H + 1
 sh_ldlg_tpl:
     dw 0, 0, SH_LDLG_W, SH_LDLG_H
     dw sh_s_ld_tfunc, sh_ldlg_paint, 0, sh_ldlg_onclick
-sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname
-sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname
+sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname, sh_s_ld_tnum
+sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname, sh_s_ld_pnum
+sh_s_ld_tnum:  db 'Format Number', 0
+sh_s_ld_pnum:  db 'Format:', 0
 sh_s_ld_tfunc: db 'Paste Function', 0
 sh_s_ld_tname: db 'Paste Name', 0
 sh_s_ld_pfunc: db 'Paste function:', 0
@@ -10188,9 +10211,24 @@ sh_ldlg_open:
     mov word [sh_ldlg_top], 0
     cmp byte [sh_ldlg_kind], SH_LD_NAME
     je .names
-    mov word [sh_ldlg_items], sh_functab   ; the function table IS the list -
+    mov si, sh_functab
+    cmp byte [sh_ldlg_kind], SH_LD_NUMFMT
+    jne .isfunc
+    mov ax, [sh_selcol]                    ; Excel's 21 codes, the selected
+    mov bx, [sh_selrow]                    ; cell's own already chosen and in
+    call sh_cell_nfid                      ; view (81.55)
+    xor ah, ah
+    mov [sh_ldlg_sel], ax
+    sub ax, SH_LDLG_ROWS - 1
+    jnc .nftop
+    xor ax, ax
+.nftop:
+    mov [sh_ldlg_top], ax
+    mov si, sh_nf_codes
+.isfunc:
+    mov [sh_ldlg_items], si                ; the function table IS the list -
     xor cx, cx                             ; it is already a NUL-terminated
-    mov si, sh_functab                     ; pointer array, which is what this
+                                           ; pointer array, which is what this
 .fcount:                                   ; dialog wants
     cmp word [si], 0
     je .fdone
@@ -10560,6 +10598,12 @@ sh_ldlg_apply:
     push si
     cmp word [sh_ldlg_count], 0
     je .out
+    cmp byte [sh_ldlg_kind], SH_LD_NUMFMT
+    jne .paste
+    mov al, [sh_ldlg_sel]              ; a FORMAT, to the whole selection -
+    call sh_nf_apply                   ; empty cells too, as Excel's is
+    jmp .done
+.paste:
     mov bx, [sh_ldlg_items]
     mov ax, [sh_ldlg_sel]
     shl ax, 1
@@ -12647,6 +12691,27 @@ section .text
 ; for, both just degrade to General rather than guessed at)
 ; -----------------------------------------------------------------------------
 section .modc                      ; 82.16.9
+; sh_biff_nfside - AL = a file's built-in format id -> AL = what the border
+; table keeps for it: 0 for the four the format byte holds (and for any id
+; past Excel's 21, a custom FORMAT this app draws as General), else id + 1
+sh_biff_nfside:
+    cmp al, SH_NF_N
+    jae .zero
+    or al, al
+    jz .out
+    cmp al, 3
+    je .zero
+    cmp al, 5
+    je .zero
+    cmp al, 9
+    je .zero
+    inc al
+    ret
+.zero:
+    xor al, al
+.out:
+    ret
+
 sh_biff_numfmt_from_id:
     cmp al, 0x05
     je .cur
@@ -12684,6 +12749,10 @@ sh_b2_attr:
     shr ah, cl
     mov [bx+sh_xf_font], ah
     and al, 0x3F
+    push ax
+    call sh_biff_nfside                ; any but the format byte's four waits
+    mov [bx+sh_xf_nf], al              ; beside the border (81.55)
+    pop ax
     mov ah, [es:si+6]                  ; bits 2-0 XF_HOR_ALIGN
     and ah, 7
     cmp ah, 3
@@ -12777,13 +12846,16 @@ sh_biff_applyfmt:
     mov di, sh_xf_bord                 ; ...and this XF's border/protection
     add di, bx                         ; bits in CH, across the same lookup
     mov ch, [di]
+    mov al, [bx+sh_xf_nf]              ; ...and its number format (81.55)
+    mov [sh_xfw_nf], al
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
     mov [es:di+5], cl
-    or ch, ch                          ; a border table record only for the
+    mov al, ch
+    or al, [sh_xfw_nf]                 ; a border table record only for the
     jz .out                            ; cells that need one, which is the
     mov ax, [sh_wrec_col]              ; table's whole convention (81.46.1)
     mov bx, [sh_wrec_row]
@@ -12792,6 +12864,8 @@ sh_biff_applyfmt:
     push es                            ; writes this table
     mov es, [sh_bordseg]
     mov [es:di+4], ch
+    mov al, [sh_xfw_nf]
+    mov [es:di+5], al
     pop es
 .out:
     pop es
@@ -13087,10 +13161,10 @@ sh_xfp_scan:
     mov [sh_cursheet], bx            ; ...impersonate it before the lookup
     mov dl, [es:si+5]                ; DL = the cell's format byte
     mov bx, ax                       ; BX = row, AX = col, which is the order
-    mov ax, [es:si+2]                ; sh_bt_get wants
-    SHOUT sh_bt_get                  ; AL = its border+protection byte, 0 when
-    or al, al                        ; the cell has no record in that table -
-    jz .next                         ; which is almost every cell
+    mov ax, [es:si+2]                ; sh_bt_getw wants
+    SHOUT sh_bt_getw                 ; AL = its border+protection byte, AH its
+    or ax, ax                        ; number format (81.55), 0 when the cell
+    jz .next                         ; has no record - almost every cell
     ; --- already registered? ---------------------------------------------
     mov cx, [sh_nxfp]
     xor di, di
@@ -13099,7 +13173,9 @@ sh_xfp_scan:
     cmp dl, [sh_xfp_fmt + di]
     jne .fnext
     cmp al, [sh_xfp_bord + di]
-    je .next                         ; this pair already has an XF
+    jne .fnext
+    cmp ah, [sh_xfp_nf + di]
+    je .next                         ; this triple already has an XF
 .fnext:
     inc di
     dec cx
@@ -13110,6 +13186,7 @@ sh_xfp_scan:
     jae .next                        ; full: this cell keeps its plain XF
     mov [sh_xfp_fmt + di], dl
     mov [sh_xfp_bord + di], al
+    mov [sh_xfp_nf + di], ah
     inc word [sh_nxfp]
 .next:
     pop si
@@ -13154,17 +13231,19 @@ sh_biff_ixfe:
     mov [sh_wrec_ixfe], ax
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    SHOUT sh_bt_get
-    or al, al
+    SHOUT sh_bt_getw                 ; AL border, AH number format (81.55)
+    or ax, ax
     jz .out
-    mov ah, [sh_wrec_fmt]
+    mov bl, [sh_wrec_fmt]
     mov cx, [sh_nxfp]
     jcxz .out
     xor di, di
 .find:
-    cmp ah, [sh_xfp_fmt + di]
+    cmp bl, [sh_xfp_fmt + di]
     jne .fnext
     cmp al, [sh_xfp_bord + di]
+    jne .fnext
+    cmp ah, [sh_xfp_nf + di]
     je .found
 .fnext:
     inc di
@@ -13225,6 +13304,52 @@ sh_biff_fontsxfs:
     mov [sh_wrow], ax
     jmp .ffontloop
 .ffontsdone:
+    ; THE 21 FORMAT RECORDS, in Excel's own order (81.55). An XF names its
+    ; number format by POSITION in this list, and none was written: a reader
+    ; had to assume Excel's built-in list, which is what Excel's own files
+    ; carry in full, so they are written in full now.
+    xor bx, bx
+.ffmt:
+    cmp bx, SH_NF_N
+    jae .ffmtdone
+    push bx
+    shl bx, 1
+    mov si, [sh_nf_codes + bx]       ; the package's data: DS reads it
+    pop bx
+    xor cx, cx
+.fflen:
+    push si
+    add si, cx
+    cmp byte [si], 0
+    pop si
+    je .ffhave
+    inc cx
+    jmp short .fflen
+.ffhave:
+    mov ax, 0x001E                   ; FORMAT, BIFF3: a length byte and the
+    cmp byte [sh_wb_xf4], 0          ; code - BIFF4's 041EH puts its own
+    je .ffop3                        ; index word first
+    mov ax, 0x041E
+.ffop3:
+    call sh_biffw
+    mov ax, cx
+    inc ax
+    cmp byte [sh_wb_xf4], 0
+    je .ffl3
+    add ax, 2
+.ffl3:
+    call sh_biffw
+    cmp byte [sh_wb_xf4], 0
+    je .ffbody
+    mov ax, bx
+    call sh_biffw
+.ffbody:
+    mov al, cl
+    call sh_stgputb
+    call sh_stgput                   ; the code, without its NUL
+    inc bx
+    jmp .ffmt
+.ffmtdone:
     mov word [sh_wrow], 0            ; reused as the XF index
 .fxfloop:
     mov si, [sh_wrow]
@@ -13234,12 +13359,15 @@ sh_biff_fontsxfs:
     jae .fxfsdone
     ; --- which format byte and which border byte this XF stands for --------
     mov byte [sh_xfw_bord], 0
+    mov byte [sh_xfw_nf], 0
     mov ax, si
     cmp si, 64
     jb .xfbase                       ; 0..63 ARE the format byte, which is the
     sub ax, 64                       ; whole reason there are exactly 64
     push bx
     mov bx, ax
+    mov al, [sh_xfp_nf + bx]
+    mov [sh_xfw_nf], al
     mov al, [sh_xfp_bord + bx]
     mov [sh_xfw_bord], al
     mov al, [sh_xfp_fmt + bx]
@@ -13280,6 +13408,11 @@ sh_biff_fontsxfs:
     shr bx, cl
     and bx, 3                        ; bx = our number-format code
     mov ah, [sh_biff_numfmt_tab + bx] ; ah = real BIFF built-in format id
+    cmp byte [sh_xfw_nf], 0          ; ...or the border table's (81.55)
+    je .xfnf
+    mov ah, [sh_xfw_nf]
+    dec ah
+.xfnf:
     call sh_biffw                    ; offset0-1: font idx, format idx
     ; THE TWO MIDDLE WORDS ARE SWAPPED BETWEEN THE VERSIONS, and that is the
     ; whole of the layout difference this record's used fields feel:
@@ -15092,6 +15225,9 @@ sh_doread_biff:
     mov di, sh_xf_font                 ; the font/format word)
     add di, bx
     mov [di], al
+    mov al, [es:si+1]                  ; the XF's number format: any but the
+    call sh_biff_nfside                ; format byte's four waits beside the
+    mov [bx+sh_xf_nf], al              ; border (81.55)
     mov al, [es:si+4]                  ; align/wrap/vertalign/orient byte
     and al, 0x07                       ; the full 3-bit XF_HOR_ALIGN field
     cmp al, 3
@@ -16599,8 +16735,9 @@ sh_removecell:
 ; Border table (stage 2.x, sh_bordseg claim) - a SEPARATE sparse sorted
 ; array, same shape and packing convention as the main cell array above
 ; (sh_findcell's own stage 2.0 comment on the packed row/sheet word applies
-; here unchanged) but only 5 bytes/record: +0 packed row/sheet (word)
-; +2 col (word) +4 border byte (SH_BORD_* bits). Almost no cell ever has a
+; here unchanged) but only SH_BT_SZ bytes/record: +0 packed row/sheet (word)
+; +2 col (word) +4 border byte (SH_BORD_* bits) +5 number format (81.55: 0,
+; or one of Excel's built-in format ids PLUS ONE). Almost no cell ever has a
 ; border, so a cell simply has NO record here at all until Format >
 ; Border... sets one of its bits, and loses its record again the moment
 ; every bit clears (sh_bt_removecell) - the same "no record = default"
@@ -16631,7 +16768,7 @@ sh_bt_findcell:
     shr si, 1
     add si, cx
     mov ax, si
-    mov bx, 5
+    mov bx, SH_BT_SZ
     push dx
     mul bx
     pop dx
@@ -16658,7 +16795,7 @@ sh_bt_findcell:
     jmp .loop
 .notfound:
     mov ax, cx
-    mov bx, 5
+    mov bx, SH_BT_SZ
     mul bx
     mov di, ax
     clc
@@ -16684,7 +16821,7 @@ sh_bt_addcell:
     jae .full
     push di
     mov ax, [sh_nbord]
-    mov bx, 5
+    mov bx, SH_BT_SZ
     mul bx
     mov cx, ax
     sub cx, di
@@ -16697,7 +16834,7 @@ sh_bt_addcell:
     mov si, ax
     dec si
     mov di, si
-    add di, 5
+    add di, SH_BT_SZ
     std
     rep movsb
     cld
@@ -16712,7 +16849,7 @@ sh_bt_addcell:
     mov [es:di], ax
     mov ax, [sh_fcol]
     mov [es:di+2], ax
-    mov byte [es:di+4], 0
+    mov word [es:di+4], 0              ; no border, no number format
     pop es
     clc
     jmp .out
@@ -16740,11 +16877,11 @@ sh_bt_removecell:
     call sh_bt_findcell
     jnc .out
     mov ax, [sh_nbord]
-    mov bx, 5
+    mov bx, SH_BT_SZ
     mul bx
     mov cx, ax
     sub cx, di
-    sub cx, 5
+    sub cx, SH_BT_SZ
     push ds
     push es
     mov dx, [sh_bordseg]
@@ -16752,7 +16889,7 @@ sh_bt_removecell:
     mov es, dx
     jcxz .noshift
     mov si, di
-    add si, 5
+    add si, SH_BT_SZ
     cld
     rep movsb
 .noshift:
@@ -16766,6 +16903,23 @@ sh_bt_removecell:
     pop cx
     pop bx
     pop ax
+    ret
+
+; sh_bt_getw - in: AX=col, BX=row; out: AX = the record's word at +4: AL the
+; border+protection byte, AH the number format (81.55); 0 when no record
+sh_bt_getw:
+    push bx
+    push di
+    push es
+    call sh_bt_findcell
+    mov ax, 0
+    jnc .out
+    mov es, [sh_bordseg]
+    mov ax, [es:di+4]
+.out:
+    pop es
+    pop di
+    pop bx
     ret
 
 ; sh_bt_get - in: AX=col, BX=row; out: AL = border byte (0 if no record)
@@ -26192,122 +26346,22 @@ sh_ptext:
     pop si
     jmp .numtext
 
-; TEXT(value, format). The format is read for the four things a 2.1-era code
-; can say that this app can honour: a '$', a ',' for grouping, the '0'/'#'
-; placeholders either side of the '.', and a trailing '%'. A code with NO
-; placeholder at all - "General", or anything this does not understand - falls
-; back to General, which is the one answer that is never misleading.
+; TEXT(value, format) - by sh_fmtcode, the engine the grid draws with (81.55):
+; Excel's whole code, sections, dates and times included. This read '$', ',',
+; the placeholders around '.' and a trailing '%', and fell back to General on
+; anything else - so TEXT(DATE(1990,1,15),"m/d/yy") answered 32888.
 .dotext55:
-    call sh_vpush
+    call sh_vpush                     ; the value, banked across the code's parse
     cmp byte [si], ','
     jne .t55none
     inc si
-    call sh_pstrarg                   ; the format string
-    call sh_spush
-    jc .t55none
+    call sh_pstrarg                   ; the code, in sh_sacc - which sh_fmtcode
+    call sh_binop_pre                 ; never touches, so it needs no bank
+    call sh_acc_store
     push si
-    push di
-    xor bx, bx                        ; BL: 1 = '$', 2 = grouping, 4 = '%'
-    xor cx, cx                        ; CH = decimals, CL = minimum integers
-    xor dh, dh                        ; DH = past the '.' yet
-    xor dl, dl                        ; DL = any placeholder seen at all
-    xor ax, ax
-    call sh_sslot                     ; SI = the format
-.fmtl:
-    mov al, [si]
-    or al, al
-    jz .fmtdone
-    cmp al, '$'
-    jne .fmt1
-    or bl, 1
-    jmp .fmtn
-.fmt1:
-    cmp al, '%'
-    jne .fmt2
-    or bl, 4
-    jmp .fmtn
-.fmt2:
-    cmp al, ','
-    jne .fmt3
-    or bl, 2
-    jmp .fmtn
-.fmt3:
-    cmp al, '.'
-    jne .fmt4
-    mov dh, 1
-    jmp .fmtn
-.fmt4:
-    cmp al, '0'
-    je .fmtph
-    cmp al, '#'
-    jne .fmtn
-    mov dl, 1                         ; '#' is a placeholder but never forces a
-    or dh, dh                         ; digit, so it counts toward the decimals
-    jz .fmtn                          ; and not toward the minimum integers
-    inc ch
-    jmp .fmtn
-.fmtph:
-    mov dl, 1
-    or dh, dh
-    jz .fmtint
-    inc ch
-    jmp .fmtn
-.fmtint:
-    inc cl
-.fmtn:
-    inc si
-    jmp .fmtl
-.fmtdone:
-    pop di
+    mov si, sh_sacc
+    call sh_fmtcode                   ; -> sh_numbuf
     pop si
-    call sh_spop
-    mov [sh_fmt_fl], bl               ; bss, not the stack - see the note at
-    mov [sh_fmt_cx], cx               ; .nf1 above
-    mov [sh_fmt_ph], dl
-    call sh_binop_pre                 ; A = the value again
-    call sh_acc_store
-    mov bl, [sh_fmt_fl]
-    mov cx, [sh_fmt_cx]
-    mov dl, [sh_fmt_ph]
-    or dl, dl
-    jz .t55gen                        ; no placeholder anywhere: General
-    test bl, 4
-    jz .t55nopct
-    call sh_vpush                     ; a percent format scales by a hundred
-    mov ax, 100
-    call sh_acc_int
-    call sh_binop_pre
-    call fp_mul
-    call sh_acc_store
-.t55nopct:
-    push bx
-    push cx
-    call sh_acc_load_a
-    mov cl, ch
-    xor ch, ch
-    call sh_numdp
-    pop cx
-    pop bx
-    push bx
-    call sh_padzero                   ; CL = the minimum integer digits
-    pop bx
-    test bl, 2
-    jz .t55nogrp
-    call sh_group3
-.t55nogrp:
-    test bl, 1
-    jz .t55nodol
-    call sh_dollar_ins
-.t55nodol:
-    test bl, 4
-    jz .numtext
-    call sh_pct_app
-    jmp .numtext
-.t55gen:
-    call sh_acc_load_a
-    mov di, sh_numbuf
-    mov ax, 10
-    call fp_ftoa
     jmp .numtext
 .t55none:
     call sh_binop_pre                 ; unwind the bank, whatever went wrong
@@ -28643,60 +28697,6 @@ sh_strlen:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_curr_ins - insert '$' at the front of sh_numbuf, shifting the existing
-; text (and its NUL) right by one byte
-; -----------------------------------------------------------------------------
-sh_curr_ins:
-    push ax
-    push si
-    push di
-    mov si, sh_numbuf
-    xor ax, ax
-.len:
-    cmp byte [si], 0
-    je .havelen
-    inc si
-    inc ax
-    jmp .len
-.havelen:                             ; si -> the NUL, ax = strlen (unused)
-    mov di, si
-    inc di
-.shift:
-    mov al, [si]
-    mov [di], al
-    cmp si, sh_numbuf
-    je .done
-    dec si
-    dec di
-    jmp .shift
-.done:
-    mov byte [sh_numbuf], '$'
-    pop di
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_pct_app - append '%' to sh_numbuf
-; -----------------------------------------------------------------------------
-sh_pct_app:
-    push ax
-    push si
-    mov si, sh_numbuf
-.f:
-    cmp byte [si], 0
-    je .got
-    inc si
-    jmp .f
-.got:
-    mov byte [si], '%'
-    inc si
-    mov byte [si], 0
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; sh_errname - the current cell's error, by name, into sh_numbuf. Excel's own
 ; spellings, because they are what a person recognises and what every book
 ; about spreadsheets prints. An unknown code cannot arise from this app's own
@@ -28777,12 +28777,1145 @@ sh_s_err_num:   db '#NUM!', 0
 sh_s_err_na:    db '#N/A', 0
 sh_s_err_unk:   db '#ERR', 0
 
+; =============================================================================
+; NUMBER FORMAT CODES (81.55) - Excel 2.1d's twenty-one built-ins, in its own
+; order (which is the BIFF built-in id, and the position a BIFF2 cell names),
+; and ONE engine that draws a value by any code: the grid through a cell's
+; format, TEXT() through the code it is handed. It was two: sh_numfmt knew four
+; formats and TEXT() knew '$', ',', '0', '#', '.' and '%', and neither knew a
+; date - DATE() and NOW() answered correctly and showed a serial number.
+; =============================================================================
+SH_NF_N       equ 21
+sh_nf_c0:     db 'General', 0
+sh_nf_c1:     db '0', 0
+sh_nf_c2:     db '0.00', 0
+sh_nf_c3:     db '#,##0', 0
+sh_nf_c4:     db '#,##0.00', 0
+sh_nf_c5:     db '$#,##0 ;($#,##0)', 0
+sh_nf_c6:     db '$#,##0 ;[Red]($#,##0)', 0
+sh_nf_c7:     db '$#,##0.00 ;($#,##0.00)', 0
+sh_nf_c8:     db '$#,##0.00 ;[Red]($#,##0.00)', 0
+sh_nf_c9:     db '0%', 0
+sh_nf_c10:    db '0.00%', 0
+sh_nf_c11:    db '0.00E+00', 0
+sh_nf_c12:    db 'm/d/yy', 0
+sh_nf_c13:    db 'd-mmm-yy', 0
+sh_nf_c14:    db 'd-mmm', 0
+sh_nf_c15:    db 'mmm-yy', 0
+sh_nf_c16:    db 'h:mm AM/PM', 0
+sh_nf_c17:    db 'h:mm:ss AM/PM', 0
+sh_nf_c18:    db 'h:mm', 0
+sh_nf_c19:    db 'h:mm:ss', 0
+sh_nf_c20:    db 'm/d/yy h:mm', 0
+sh_nf_codes:  dw sh_nf_c0, sh_nf_c1, sh_nf_c2, sh_nf_c3, sh_nf_c4, sh_nf_c5
+              dw sh_nf_c6, sh_nf_c7, sh_nf_c8, sh_nf_c9, sh_nf_c10, sh_nf_c11
+              dw sh_nf_c12, sh_nf_c13, sh_nf_c14, sh_nf_c15, sh_nf_c16
+              dw sh_nf_c17, sh_nf_c18, sh_nf_c19, sh_nf_c20, 0
+sh_nf_general: db 'GENERAL', 0
+sh_nf_mon:    db 'January', 0, 'February', 0, 'March', 0, 'April', 0, 'May', 0
+              db 'June', 0, 'July', 0, 'August', 0, 'September', 0
+              db 'October', 0, 'November', 0, 'December', 0
+sh_nf_day:    db 'Sunday', 0, 'Monday', 0, 'Tuesday', 0, 'Wednesday', 0
+              db 'Thursday', 0, 'Friday', 0, 'Saturday', 0
+sh_nf_c10d:   dq 10.0
+
 ; -----------------------------------------------------------------------------
-; sh_numfmt - in: AX=value, BL=format byte; writes the decorated display
-; text into sh_numbuf (General is exactly sh_itoa's plain decimal; Currency/
-; Comma/Percent decorate it further). BL survives sh_itoa (which preserves
-; the whole of BX across its own body) so the format nibble is still there
-; to dispatch on afterward.
+; sh_fmtcode - sh_acc drawn by the format code at DS:SI, into sh_numbuf.
+; sh_acc is left as it came.
+;
+; A code has up to three sections, ';'-separated: positive, negative, zero. A
+; negative value takes the second section AS ITS MAGNITUDE - the section's own
+; '(' and ')' are the sign - and with one section keeps its '-'. The section is
+; copied to sh_nf_sec first, so everything after reads one NUL-ended string.
+; -----------------------------------------------------------------------------
+sh_fmtcode:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push word [sh_acc+6]              ; the value, put back on the way out
+    push word [sh_acc+4]
+    push word [sh_acc+2]
+    push word [sh_acc]
+    mov di, sh_nf_general
+    call sh_wordeq
+    jc .general
+    cmp byte [si], 0
+    je .general
+    ; --- which section ------------------------------------------------------
+    mov dl, 0                         ; DL = the section wanted
+    call sh_acc_iszero
+    jc .zero
+    test byte [sh_acc+7], 0x80
+    jz .pick
+    mov dl, 1
+    jmp short .pick
+.zero:
+    mov dl, 2
+.pick:
+    call sh_nf_section                ; -> sh_nf_sec; CF=1 no such section
+    jnc .have
+    call sh_nf_section0               ; ...then the first one, sign and all
+    xor dl, dl
+.have:
+    cmp dl, 1
+    jne .signok
+    and byte [sh_acc+7], 0x7F         ; the negative section shows magnitude
+.signok:
+    mov si, sh_nf_sec
+    call sh_nf_isdate
+    jc .date
+    call sh_nf_number
+    jmp short .out
+.date:
+    call sh_nf_date
+    jmp short .out
+.general:
+    call sh_acc_load_a
+    mov di, sh_numbuf
+    mov ax, 10
+    call fp_ftoa
+.out:
+    pop word [sh_acc]
+    pop word [sh_acc+2]
+    pop word [sh_acc+4]
+    pop word [sh_acc+6]
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_cell_nfid - in: AX = col, BX = row; out: AL = the cell's format id -
+; the border table's, else the one its format byte names, else General
+sh_cell_nfid:
+    push bx
+    push di
+    push es
+    push ax
+    call sh_bt_getw
+    mov al, ah
+    pop di                             ; DI = the column, off the stack
+    or al, al
+    jz .byte
+    dec al
+    jmp short .out
+.byte:
+    mov ax, di
+    call sh_findcell
+    mov al, 0
+    jnc .out
+    mov es, [sh_cellseg]
+    mov al, [es:di+SH_C_FMT]
+    and al, SH_FMT_NUM_MASK
+    push cx
+    mov cl, SH_FMT_NUM_SHIFT
+    shr al, cl
+    pop cx
+    mov bx, sh_biff_numfmt_tab
+    xlat
+.out:
+    pop es
+    pop di
+    pop bx
+    ret
+
+; sh_nf_simple - AL = an id; out: CF=1 and AL = the format byte's own code
+; when it is one of the four the format byte can hold
+sh_nf_simple:
+    push bx
+    push cx
+    mov bx, sh_biff_numfmt_tab
+    xor cx, cx
+.l:
+    cmp al, [bx]
+    je .yes
+    inc bx
+    inc cx
+    cmp cx, 4
+    jb .l
+    clc
+    jmp short .out
+.yes:
+    mov al, cl
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_nf_apply - format id AL to every cell of the selection. A cell that
+; exists and wants one of the four simple formats keeps it in its format byte,
+; as ever, and drops any border-table format; anything else - another format,
+; or ANY format on an empty cell - goes in the border table, where it waits for
+; a value (81.55). The format byte's number field is General then, so the two
+; can never disagree.
+; -----------------------------------------------------------------------------
+sh_nf_apply:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov dl, al                         ; DL = the id
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .r
+    xchg ax, bx
+.r:
+    mov [sh_nf_r1], ax
+    mov [sh_nf_r2], bx
+    mov cx, [sh_selcol]
+    mov si, [sh_selcol2]
+    cmp cx, si
+    jbe .col
+    xchg cx, si
+.col:
+    mov bx, [sh_nf_r1]
+.row:
+    mov ax, cx
+    call sh_nf_one                     ; AX col, BX row, DL id
+    inc bx
+    cmp bx, [sh_nf_r2]
+    jbe .row
+    inc cx
+    cmp cx, si
+    jbe .col
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_nf_one:
+    push ax
+    push bx
+    push cx
+    push di
+    push es
+    call sh_findcell                   ; AX, BX kept
+    jnc .side                          ; no cell: the table, whatever it is
+    mov cx, ax                         ; CX = the column
+    mov al, dl
+    call sh_nf_simple
+    xchg ax, cx                        ; AX = the column, CL = its simple code
+    jnc .sidefmt
+    mov es, [sh_cellseg]               ; simple: the format byte...
+    and byte [es:di+SH_C_FMT], SH_FMT_NUM_CLR
+    push cx
+    mov ch, cl
+    mov cl, SH_FMT_NUM_SHIFT
+    shl ch, cl
+    or [es:di+SH_C_FMT], ch
+    pop cx
+    jmp short .drop                    ; ...and no table format beside it
+.sidefmt:
+    mov es, [sh_cellseg]
+    and byte [es:di+SH_C_FMT], SH_FMT_NUM_CLR
+.side:
+    or dl, dl                          ; General on an empty cell: nothing to
+    jz .drop                           ; hold - drop a table format if any
+    call sh_bt_addcell
+    jc .out                            ; the table is full: silent, as Border is
+    mov es, [sh_bordseg]
+    mov cl, dl
+    inc cl
+    mov [es:di+5], cl
+    jmp short .out
+.drop:
+    call sh_bt_findcell
+    jnc .out
+    mov es, [sh_bordseg]
+    mov byte [es:di+5], 0
+    cmp byte [es:di+4], 0
+    jne .out
+    call sh_bt_removecell              ; nothing left in the record
+.out:
+    pop es
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_nf_skipq - SI at a quote, bracket or backslash: step over what it opens.
+; out: SI past it. Anything else: SI+1.
+sh_nf_skipq:
+    mov al, [si]
+    inc si
+    cmp al, '"'
+    je .q
+    cmp al, '['
+    je .b
+    cmp al, '\'
+    jne .x
+    cmp byte [si], 0
+    je .x
+    inc si
+.x:
+    ret
+.q:
+    cmp byte [si], 0
+    je .x
+    cmp byte [si], '"'
+    je .qe
+    inc si
+    jmp short .q
+.qe:
+    inc si
+    ret
+.b:
+    cmp byte [si], 0
+    je .x
+    cmp byte [si], ']'
+    je .qe
+    inc si
+    jmp short .b
+
+; sh_nf_section - copy section DL (0-2) of the code at SI to sh_nf_sec.
+; CF=1 when the code has no such section. sh_nf_section0: section 0, always.
+sh_nf_section0:
+    xor dl, dl
+sh_nf_section:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov cl, dl
+.find:
+    or cl, cl
+    jz .copy
+.f1:
+    mov al, [si]
+    or al, al
+    jz .none
+    cmp al, ';'
+    je .fsep
+    call sh_nf_skipq
+    jmp short .f1
+.fsep:
+    inc si
+    dec cl
+    jmp short .find
+.copy:
+    mov di, sh_nf_sec
+    mov cx, SH_STR_MAX
+.c1:
+    mov al, [si]
+    or al, al
+    jz .cend
+    cmp al, ';'
+    je .cend
+    push si
+    call sh_nf_skipq                  ; a quoted ';' is text, not a separator
+    mov ax, si
+    pop si
+.c2:
+    cmp si, ax
+    jae .c1
+    jcxz .cend
+    mov bl, [si]
+    mov [di], bl
+    inc si
+    inc di
+    dec cx
+    jmp short .c2
+.cend:
+    mov byte [di], 0
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_nf_isdate - CF=1 when the section at SI is a DATE or TIME code: a d, y,
+; h or s outside quotes, or an m with no digit placeholder anywhere
+sh_nf_isdate:
+    push ax
+    push bx
+    push si
+    xor bx, bx                        ; BL = an m seen, BH = a 0 or # seen
+.l:
+    mov al, [si]
+    or al, al
+    jz .end
+    cmp al, '"'
+    je .sk
+    cmp al, '['
+    je .sk
+    cmp al, '\'
+    je .sk
+    or al, 0x20                       ; letters to lower case
+    cmp al, 'd'
+    je .yes
+    cmp al, 'y'
+    je .yes
+    cmp al, 'h'
+    je .yes
+    cmp al, 's'
+    je .yes
+    cmp al, 'm'
+    jne .n1
+    mov bl, 1
+.n1:
+    mov al, [si]
+    cmp al, '0'
+    je .ph
+    cmp al, '#'
+    jne .n2
+.ph:
+    mov bh, 1
+.n2:
+    inc si
+    jmp short .l
+.sk:
+    call sh_nf_skipq
+    jmp short .l
+.end:
+    or bl, bl
+    jz .no
+    or bh, bh
+    jnz .no
+.yes:
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sh_nf_lit - one literal of the section at SI onto DS:DI: a quoted run's
+; inside, a backslash's next character, a bracket's nothing ([Red] - there is
+; no colour), '_x' a space, '*x' nothing; anything else itself. SI past it.
+sh_nf_lit:
+    push ax
+    mov al, [si]
+    cmp al, '"'
+    je .q
+    cmp al, '['
+    je .skip
+    cmp al, '\'
+    je .esc
+    cmp al, '_'
+    je .under
+    cmp al, '*'
+    je .fill
+    call sh_nf_putc
+    inc si
+    jmp short .out
+.q:
+    inc si
+.q1:
+    mov al, [si]
+    or al, al
+    jz .out
+    inc si
+    cmp al, '"'
+    je .out
+    call sh_nf_putc
+    jmp short .q1
+.skip:
+    call sh_nf_skipq
+    jmp short .out
+.esc:
+    inc si
+    mov al, [si]
+    or al, al
+    jz .out
+    call sh_nf_putc
+    inc si
+    jmp short .out
+.under:
+    mov al, ' '
+    call sh_nf_putc
+    inc si
+    cmp byte [si], 0
+    je .out
+    inc si
+    jmp short .out
+.fill:
+    inc si
+    cmp byte [si], 0
+    je .out
+    inc si
+.out:
+    pop ax
+    ret
+
+; sh_nf_putc - AL onto DS:DI, kept inside sh_numbuf
+sh_nf_putc:
+    cmp di, sh_numbuf + SH_NUMBUF_MAX
+    jae .full
+    mov [di], al
+    inc di
+.full:
+    mov byte [di], 0
+    ret
+
+; sh_nf_puts - the NUL string at DS:BX onto DS:DI
+sh_nf_puts:
+    push ax
+    push bx
+.l:
+    mov al, [bx]
+    or al, al
+    jz .out
+    call sh_nf_putc
+    inc bx
+    jmp short .l
+.out:
+    pop bx
+    pop ax
+    ret
+
+; sh_nf_putn - AX, unsigned, as few digits as it takes; with CL=2, at least 2
+sh_nf_putn:
+    ; STKBALANCE-LOOP: one digit pushed a turn (and one pad zero), and the second loop pops them; the count is in CH
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    xor ch, ch
+.d:
+    xor dx, dx
+    div bx
+    push dx
+    inc ch
+    or ax, ax
+    jnz .d
+    cmp ch, cl
+    jae .p
+    xor dx, dx
+    push dx
+    inc ch
+    jmp short .p
+.p:
+    pop ax
+    add al, '0'
+    call sh_nf_putc
+    dec ch
+    jnz .p
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_nf_run - the run of one letter (either case) at SI. out: CX = its length,
+; SI past it. AL = the letter, lower case.
+sh_nf_run:
+    mov al, [si]
+    or al, 0x20
+    xor cx, cx
+.l:
+    mov ah, [si]
+    or ah, 0x20
+    cmp ah, al
+    jne .out
+    inc si
+    inc cx
+    jmp short .l
+.out:
+    ret
+
+; sh_nf_name - in: AX = an index, BX = a run of NUL-ended strings; out: BX =
+; the AXth of them
+sh_nf_name:
+    push ax
+.l:
+    or ax, ax
+    jz .out
+.s:
+    cmp byte [bx], 0
+    je .n
+    inc bx
+    jmp short .s
+.n:
+    inc bx
+    dec ax
+    jmp short .l
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_nf_date - sh_acc as a date and/or time by the section at SI -> sh_numbuf.
+; m is the MONTH, except straight after an h or straight before an s, where it
+; is the minute - Excel's own rule. AM/PM or A/P anywhere makes h 12-hour.
+; -----------------------------------------------------------------------------
+sh_nf_date:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push word [sh_acc+6]              ; THE TIME FIRST: sh_acc_toudw truncates
+    push word [sh_acc+4]              ; sh_acc IN PLACE, and every time came
+    push word [sh_acc+2]              ; out as midnight when it went second
+    push word [sh_acc]
+    call sh_dt_hms                    ; sh_dt_min, AX = the seconds
+    mov [sh_nf_s], al
+    mov ax, [sh_dt_min]
+    xor dx, dx
+    mov bx, 60
+    div bx
+    mov [sh_nf_h], al
+    mov [sh_nf_mi], dl
+    pop word [sh_acc]
+    pop word [sh_acc+2]
+    pop word [sh_acc+4]
+    pop word [sh_acc+6]
+    call sh_acc_toudw                 ; the whole days
+    jnc .days
+    mov di, sh_numbuf                 ; a negative date or one past 2079: the
+    mov byte [di], 0                  ; one answer Excel has for it is to fill
+    mov al, '#'                       ; the cell - and the grid does that for
+    call sh_nf_putc                   ; anything too wide, so one is enough
+    jmp .done
+.days:
+    push ax
+    call sh_ser_to_ymd                ; -> sh_dt_y/m/d
+    pop ax
+    add ax, 6                         ; serial 1 is a Sunday, as in WEEKDAY
+    xor dx, dx
+    mov bx, 7
+    div bx
+    mov [sh_nf_wd], dl                ; 0 Sunday .. 6 Saturday
+    mov byte [sh_nf_12], 0            ; AM/PM or A/P anywhere?
+    push si
+.ampm:
+    mov al, [si]
+    or al, al
+    jz .ampmd
+    or al, 0x20
+    cmp al, 'a'
+    jne .ampmn
+    mov al, [si+1]
+    cmp al, '/'
+    je .ampmy
+    or al, 0x20
+    cmp al, 'm'
+    jne .ampmn
+    cmp byte [si+2], '/'
+    jne .ampmn
+.ampmy:
+    mov byte [sh_nf_12], 1
+.ampmn:
+    inc si
+    jmp short .ampm
+.ampmd:
+    pop si
+    mov di, sh_numbuf
+    mov byte [di], 0
+    mov byte [sh_nf_lasth], 0
+.tok:
+    mov al, [si]
+    or al, al
+    jz .done
+    or al, 0x20
+    cmp al, 'y'
+    je .yr
+    cmp al, 'm'
+    je .mo
+    cmp al, 'd'
+    je .dy
+    cmp al, 'h'
+    je .hr
+    cmp al, 's'
+    je .sc
+    cmp al, 'a'
+    je .ap
+    call sh_nf_lit
+    jmp short .tok
+.yr:
+    call sh_nf_run                    ; CL = the run: yy or yyyy
+    jmp .yrgo
+.mo:
+    call sh_nf_run
+    mov [sh_nf_rl], cl
+    cmp byte [sh_nf_lasth], 0         ; straight after an h: the minute
+    jne .mins
+    push si                           ; ...or straight before an s
+.mo1:
+    mov al, [si]
+    or al, al
+    jz .mo2
+    or al, 0x20
+    cmp al, 's'
+    je .mo3
+    cmp al, 'a'
+    jb .mo4
+    cmp al, 'z'
+    jbe .mo2                          ; any other letter first: the month
+.mo4:
+    inc si
+    jmp short .mo1
+.mo3:
+    pop si
+    jmp short .mins
+.mo2:
+    pop si
+    mov al, [sh_nf_rl]
+    cmp al, 3
+    jb .monum
+    mov ax, [sh_dt_m]
+    dec ax
+    mov bx, sh_nf_mon
+    call sh_nf_name
+    cmp byte [sh_nf_rl], 3
+    jne .mofull
+    mov cx, 3                         ; mmm: the first three letters
+.mo5:
+    mov al, [bx]
+    call sh_nf_putc
+    inc bx
+    loop .mo5
+    jmp .tokd
+.mofull:
+    call sh_nf_puts
+    jmp .tokd
+.monum:
+    mov ax, [sh_dt_m]
+    jmp .num12
+.mins:
+    xor ah, ah
+    mov al, [sh_nf_mi]
+    mov cl, [sh_nf_rl]
+    call sh_nf_putn
+    jmp .tokd
+.dy:
+    call sh_nf_run
+    cmp cl, 3
+    jb .dnum
+    xor ah, ah
+    mov al, [sh_nf_wd]
+    mov bx, sh_nf_day
+    call sh_nf_name
+    cmp cl, 3
+    jne .dfull
+    mov cx, 3
+.d5:
+    mov al, [bx]
+    call sh_nf_putc
+    inc bx
+    loop .d5
+    jmp .tokd
+.dfull:
+    call sh_nf_puts
+    jmp .tokd
+.dnum:
+    mov ax, [sh_dt_d]
+    call sh_nf_putn
+    jmp .tokd
+.yrgo:
+    mov ax, [sh_dt_y]
+    cmp cl, 3
+    jae .y4
+    xor dx, dx
+    mov bx, 100
+    div bx
+    mov ax, dx
+    mov cl, 2
+.y4:
+    call sh_nf_putn
+    jmp .tokd
+.hr:
+    call sh_nf_run
+    xor ah, ah
+    mov al, [sh_nf_h]
+    cmp byte [sh_nf_12], 0
+    je .h24
+    xor dx, dx
+    mov bx, 12
+    div bx
+    mov ax, dx
+    or ax, ax
+    jnz .h24
+    mov ax, 12
+.h24:
+    call sh_nf_putn
+    mov byte [sh_nf_lasth], 1
+    jmp .tok
+.sc:
+    call sh_nf_run
+    xor ah, ah
+    mov al, [sh_nf_s]
+    call sh_nf_putn
+    jmp .tokd
+.ap:
+    mov bx, sh_nf_am
+    cmp byte [sh_nf_h], 12
+    jb .ap1
+    mov bx, sh_nf_pm
+.ap1:
+    mov al, [si+1]
+    cmp al, '/'
+    je .apshort
+    or al, 0x20
+    cmp al, 'm'
+    jne .aplit
+    cmp byte [si+2], '/'
+    jne .aplit
+    call sh_nf_puts                   ; "AM" or "PM"
+    add si, 5
+    jmp .tokd
+.apshort:
+    mov al, [bx]                      ; "A" or "P"
+    call sh_nf_putc
+    add si, 3
+    jmp .tokd
+.aplit:
+    call sh_nf_lit
+    jmp .tok
+.num12:
+    call sh_nf_putn                   ; m or mm: CL is the run length, and
+.tokd:                                ; sh_nf_putn pads to two for mm
+    mov byte [sh_nf_lasth], 0
+    jmp .tok
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_nf_am:     db 'AM', 0
+sh_nf_pm:     db 'PM', 0
+
+; -----------------------------------------------------------------------------
+; sh_nf_number - sh_acc by the NUMBER section at SI -> sh_numbuf.
+; The digit placeholders ('0' '#' '?' and the ',' '.' among them) are one run,
+; drawn as one number where the first of them stands; everything else is a
+; literal kept in place. A section with no placeholder at all is only its
+; literals - Excel's own reading, which is what a zero section like "nil" is.
+; -----------------------------------------------------------------------------
+sh_nf_number:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    ; --- pass 1: what the placeholders say ----------------------------------
+    xor bx, bx                        ; BL: 2 grouping, 4 percent, 8 exponent
+    xor cx, cx                        ; CH decimals, CL integer zeros
+    xor dx, dx                        ; DH past the '.', DL a placeholder seen
+    push si
+.p1:
+    mov al, [si]
+    or al, al
+    jz .p1end
+    cmp al, '"'
+    je .p1sk
+    cmp al, '['
+    je .p1sk
+    cmp al, '\'
+    je .p1sk
+    cmp al, '%'
+    jne .p1a
+    or bl, 4
+.p1a:
+    cmp al, '.'
+    jne .p1b
+    or dl, dl
+    jz .p1n                           ; a '.' before any digit is a literal
+    mov dh, 1
+.p1b:
+    cmp al, ','
+    jne .p1c
+    or dl, dl
+    jz .p1n
+    or dh, dh
+    jnz .p1n
+    or bl, 2
+.p1c:
+    cmp al, 'E'
+    je .p1e
+    cmp al, 'e'
+    jne .p1d
+.p1e:
+    or dl, dl
+    jz .p1n
+    mov ah, [si+1]
+    cmp ah, '+'
+    je .p1e2
+    cmp ah, '-'
+    jne .p1n
+.p1e2:
+    or bl, 8
+    jmp short .p1end                  ; what follows is the exponent's digits
+.p1d:
+    cmp al, '0'
+    je .p1z
+    cmp al, '#'
+    je .p1h
+    cmp al, '?'
+    jne .p1n
+.p1h:
+    mov dl, 1
+    or dh, dh
+    jz .p1n
+    inc ch
+    jmp short .p1n
+.p1z:
+    mov dl, 1
+    or dh, dh
+    jz .p1zi
+    inc ch
+    jmp short .p1n
+.p1zi:
+    inc cl
+.p1n:
+    inc si
+    jmp short .p1
+.p1sk:
+    call sh_nf_skipq
+    jmp short .p1
+.p1end:
+    pop si
+    or dl, dl
+    jnz .digits
+    ; --- no placeholder: the literals are the whole answer -------------------
+    mov di, sh_numbuf
+    mov byte [di], 0
+.lits:
+    cmp byte [si], 0
+    je .done
+    call sh_nf_lit
+    jmp short .lits
+.digits:
+    mov [sh_nf_fl], bl
+    mov [sh_nf_cx], cx
+    test bl, 4
+    jz .nopct
+    call sh_vpush                     ; a percent scales by a hundred
+    mov ax, 100
+    call sh_acc_int
+    call sh_binop_pre
+    call fp_mul
+    call sh_acc_store
+.nopct:
+    test byte [sh_nf_fl], 8
+    jz .fixed
+    call sh_nf_sci                    ; -> sh_numbuf: mantissa E+xx
+    jmp short .built
+.fixed:
+    call sh_acc_load_a
+    mov cx, [sh_nf_cx]
+    push cx
+    mov cl, ch
+    xor ch, ch
+    call sh_numdp
+    pop cx
+    call sh_padzero                   ; CL = the minimum integer digits
+    test byte [sh_nf_fl], 2
+    jz .built
+    call sh_group3
+.built:
+    push si                           ; the number, out of sh_numbuf's way
+    mov si, sh_numbuf
+    mov di, sh_nf_num
+    call sh_strcpy
+    pop si
+    ; --- pass 2: the literals around it -------------------------------------
+    mov di, sh_numbuf
+    mov byte [di], 0
+    mov bx, sh_nf_num
+    cmp byte [bx], '-'                ; one section, negative: the sign goes
+    jne .p2                           ; FIRST, before a '$' or a '('
+    mov al, '-'
+    call sh_nf_putc
+    inc bx
+.p2:
+    mov al, [si]
+    or al, al
+    jz .done
+    cmp al, '0'
+    je .run
+    cmp al, '#'
+    je .run
+    cmp al, '?'
+    je .run
+    cmp al, '.'
+    jne .p2l
+    cmp byte [si+1], '0'              ; a '.' that opens the decimals
+    je .run
+    cmp byte [si+1], '#'
+    je .run
+.p2l:
+    call sh_nf_lit
+    jmp short .p2
+.run:
+    or bx, bx                         ; the number where the first stands...
+    jz .skiprun
+    call sh_nf_puts
+    xor bx, bx
+.skiprun:                             ; ...and the rest of the run consumed
+    mov al, [si]
+    cmp al, '0'
+    je .sr
+    cmp al, '#'
+    je .sr
+    cmp al, '?'
+    je .sr
+    cmp al, '.'
+    je .sr
+    cmp al, ','
+    je .sr
+    test byte [sh_nf_fl], 8
+    jz .p2
+    cmp al, 'E'
+    je .sre
+    cmp al, 'e'
+    jne .p2
+.sre:
+    inc si                            ; E, its sign, and the exponent's own
+    cmp byte [si], 0                  ; digits: sh_nf_sci drew all of it
+    je .p2
+    inc si
+    jmp short .skiprun
+.sr:
+    inc si
+    jmp short .skiprun
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_nf_sci - sh_acc as MANTISSA E +/- EXPONENT, [sh_nf_cx]'s CH decimals in
+; the mantissa and two digits of exponent at least -> sh_numbuf. Scaled by ten
+; a step at a time rather than through a logarithm: exact for every power a
+; spreadsheet holds, and never more than 330 steps for any double.
+sh_nf_sci:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    xor bx, bx                        ; BX = the exponent
+    mov byte [sh_nf_neg], 0
+    test byte [sh_acc+7], 0x80
+    jz .pos
+    mov byte [sh_nf_neg], 1
+    and byte [sh_acc+7], 0x7F
+.pos:
+    call sh_acc_iszero
+    jc .scaled
+    mov cx, 330
+.up:
+    call sh_acc_load_a                ; >= 10: divide
+    mov si, sh_nf_c10d
+    call fp_unpack_b
+    call fp_cmpab
+    jl .down
+    push cx
+    call fp_div
+    call sh_acc_store
+    pop cx
+    inc bx
+    loop .up
+    jmp short .scaled
+.down:
+    push cx
+    mov ax, 1                         ; < 1: multiply
+    call fp_i2a
+    call fp_a_to_b
+    call sh_acc_load_a
+    call fp_cmpab
+    pop cx
+    jge .scaled
+    push cx
+    mov si, sh_nf_c10d
+    call fp_unpack_b
+    call fp_mul
+    call sh_acc_store
+    pop cx
+    dec bx
+    loop .down
+.scaled:
+    call sh_acc_load_a
+    mov cx, [sh_nf_cx]
+    mov cl, ch
+    xor ch, ch
+    call sh_numdp                     ; the mantissa, rounded...
+    cmp byte [sh_numbuf], '1'         ; ...and 9.996 rounded to two places is
+    jne .mant                         ; "10.00": one more step
+    cmp byte [sh_numbuf+1], '0'
+    jne .mant
+    push bx
+    call sh_acc_load_a
+    mov si, sh_nf_c10d
+    call fp_unpack_b
+    call fp_div
+    mov cx, [sh_nf_cx]
+    mov cl, ch
+    xor ch, ch
+    call sh_numdp
+    pop bx
+    inc bx
+.mant:
+    mov di, sh_numbuf                 ; the sign in front, then E and the
+    cmp byte [sh_nf_neg], 0           ; exponent at the end
+    je .ms
+    mov al, '-'
+    call sh_ins_at
+.ms:
+    mov di, sh_numbuf
+.end:
+    cmp byte [di], 0
+    je .e
+    inc di
+    jmp short .end
+.e:
+    mov al, 'E'
+    call sh_nf_putc
+    mov al, '+'
+    or bx, bx
+    jns .es
+    mov al, '-'
+    neg bx
+.es:
+    call sh_nf_putc
+    mov ax, bx
+    mov cl, 2
+    call sh_nf_putn
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_numfmt - in: sh_acc = the value, BL = the format byte, BH = the cell's
+; number format from the border table (Excel's id PLUS ONE, 0 for none: then
+; the format byte's four); writes the display text into sh_numbuf, by
+; sh_fmtcode and Excel's own code for that id (81.55).
 ; -----------------------------------------------------------------------------
 ; stage 4.0: the value being formatted is the DOUBLE in sh_acc, not the
 ; integer in AX. Its one caller is sh_drawgrid, immediately after
@@ -28797,34 +29930,91 @@ sh_numfmt:
     push ax
     push bx
     push cx
+    push si
     push di
-    mov bh, bl
+    mov al, bh                        ; the cell's own format id, plus one...
+    or al, al
+    jz .byte
+    dec al
+    jmp short .have
+.byte:
+    mov al, bl                        ; ...or the four the format byte names,
+    and al, SH_FMT_NUM_MASK           ; which are Excel's ids 0, 5, 3 and 9 -
+    mov cl, SH_FMT_NUM_SHIFT          ; the table the BIFF writer declares
+    shr al, cl                        ; them by
+    mov bx, sh_biff_numfmt_tab
+    xlat
+.have:
+    cmp al, SH_NF_N
+    jb .code
+    xor al, al
+.code:
+    mov [sh_nf_id], al
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    mov si, [sh_nf_codes + si]
+    call sh_fmtcode                   ; -> sh_numbuf
+    ; A NUMBER NEVER SHOWS PART OF ITSELF (81.55). It was drawn whole and the
+    ; next cell painted over the rest, so 123456789 in a seven-character cell
+    ; read 1234567 - a plausible number, and a wrong one. General takes fewer
+    ; significant digits until it fits, which is %g's own way into scientific
+    ; notation; any other format fills the cell with '#', as Excel does.
+    mov si, sh_numbuf
+    call sh_strlen
+    cmp ax, [sh_cellch]
+    jbe .out
+    cmp byte [sh_nf_id], 0
+    jne .hash
+    mov cx, 9
+.fit:
+    call sh_acc_load_a
     mov di, sh_numbuf
-    call sh_acc_load_a                ; fp_ftoa formats the A accumulator, so
-    mov ax, 10                        ; sh_acc has to be put there first
+    mov ax, cx
     call fp_ftoa
-    pop di
-    mov bl, bh
-    and bl, SH_FMT_NUM_MASK
-    mov cl, SH_FMT_NUM_SHIFT
-    shr bl, cl
-    cmp bl, SH_FMT_NUM_CURRENCY
-    je .currency
-    cmp bl, SH_FMT_NUM_COMMA
-    je .comma
-    cmp bl, SH_FMT_NUM_PERCENT
-    je .percent
-    jmp .out
-.currency:
-    call sh_curr_ins
-    jmp .out
-.comma:
-    call sh_group3                    ; NOT sh_comma_ins, which counted the
-    jmp .out                          ; fraction digits as part of the integer
-                                       ; run and placed exactly one separator
-.percent:
-    call sh_pct_app
+    mov si, sh_numbuf
+    call sh_strlen
+    cmp ax, [sh_cellch]
+    jbe .out
+    loop .fit
+    ; fp_ftoa turns scientific only past a wide exponent, so 123456789 stays
+    ; nine digits at any precision: General's last step is Excel's own, the
+    ; mantissa with as many places as the cell leaves room for - 1.2E+08
+    mov cx, [sh_cellch]
+    sub cx, 6                         ; "d.E+08" is six without any places
+    jc .hash
+.sci:
+    push word [sh_acc+6]              ; sh_nf_sci scales sh_acc in place
+    push word [sh_acc+4]
+    push word [sh_acc+2]
+    push word [sh_acc]
+    mov byte [sh_nf_cx], 0
+    mov [sh_nf_cx+1], cl
+    call sh_nf_sci
+    pop word [sh_acc]
+    pop word [sh_acc+2]
+    pop word [sh_acc+4]
+    pop word [sh_acc+6]
+    mov si, sh_numbuf
+    call sh_strlen
+    cmp ax, [sh_cellch]
+    jbe .out
+    dec cx
+    jns .sci
+.hash:
+    mov di, sh_numbuf
+    mov cx, [sh_cellch]
+    cmp cx, SH_NUMBUF_MAX
+    jbe .h1
+    mov cx, SH_NUMBUF_MAX
+.h1:
+    mov byte [di], '#'
+    inc di
+    loop .h1
+    mov byte [di], 0
 .out:
+    pop di
+    pop si
     pop cx
     pop bx
     pop ax
@@ -30603,7 +31793,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5210
+    OS88_BSS 5530
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -30805,13 +31995,19 @@ sh_xf_bord    equ sh_xf_font + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes:
                                              ; protection bits, in THIS app's
                                              ; SH_BORD_*/SH_PROT_* spelling
                                              ; rather than BIFF's (81.47)
-sh_xfp_fmt    equ sh_xf_bord + SH_BIFF_XF_CAP      ; SH_XFP_CAP bytes each: the
-sh_xfp_bord   equ sh_xfp_fmt + SH_XFP_CAP          ; (format, border) pairs the
-sh_nxfp       equ sh_xfp_bord + SH_XFP_CAP         ; writer found, and how many
+sh_xf_nf      equ sh_xf_bord + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes: each
+                                             ; tracked XF's number format when
+                                             ; the format byte cannot hold it -
+                                             ; Excel's id plus one, or 0 (81.55)
+sh_xfp_fmt    equ sh_xf_nf + SH_BIFF_XF_CAP        ; SH_XFP_CAP bytes each: the
+sh_xfp_bord   equ sh_xfp_fmt + SH_XFP_CAP          ; (format, border, number
+sh_xfp_nf     equ sh_xfp_bord + SH_XFP_CAP         ; format) triples the writer
+sh_nxfp       equ sh_xfp_nf + SH_XFP_CAP           ; found, and how many
 sh_xfw_fmt    equ sh_nxfp + 2                ; word: the format byte the XF
 sh_xfw_bord   equ sh_xfw_fmt + 2             ; byte: ...and the border byte
 sh_xfw_prot   equ sh_xfw_bord + 1            ; byte: ...and its XF_TYPE_PROT
-sh_wrec_ixfe  equ sh_xfw_prot + 1            ; word: this cell's XF index,
+sh_xfw_nf     equ sh_xfw_prot + 1            ; byte: ...and its number format
+sh_wrec_ixfe  equ sh_xfw_nf + 1              ; word: this cell's XF index,
                                              ; which is its format byte unless
                                              ; it also has a border record
 
@@ -31466,8 +32662,9 @@ sh_v_sh_trcopy              equ sh_v_sh_skipargs + 4
 sh_v_sh_setbool             equ sh_v_sh_trcopy + 4
 sh_v_sh_setlabel            equ sh_v_sh_setbool + 4
 sh_v_sh_boolname            equ sh_v_sh_setlabel + 4
-SH_NVEC       equ 52
-sh_v_end      equ sh_v_sh_boolname + 4
+sh_v_sh_bt_getw             equ sh_v_sh_boolname + 4
+SH_NVEC       equ 53
+sh_v_end      equ sh_v_sh_bt_getw + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -31485,7 +32682,23 @@ sh_dc_pxf         equ sh_dc_pcol + 2
 sh_dc_pend        equ sh_dc_pxf + 2      ; byte: one is waiting
 sh_b2             equ sh_dc_pend + 1     ; byte: this stream is BIFF2 (81.52)
 sh_b2_int         equ sh_b2 + 1          ; byte: .isrk is reading an INTEGER
-sh_bss_end        equ sh_b2_int + 1
+sh_ps_nf          equ sh_b2_int + 1      ; byte: Paste's number format (81.55)
+sh_nf_sec         equ sh_ps_nf + 1       ; SH_STR_MAX+1: the format section
+sh_nf_num         equ sh_nf_sec + SH_STR_MAX + 1 ; SH_NUMBUF_MAX+1: its number
+sh_nf_cx          equ sh_nf_num + SH_NUMBUF_MAX + 1 ; word: decimals, zeros
+sh_nf_fl          equ sh_nf_cx + 2       ; byte: grouping, percent, exponent
+sh_nf_neg         equ sh_nf_fl + 1       ; byte: the mantissa was negative
+sh_nf_wd          equ sh_nf_neg + 1      ; byte: weekday 0-6
+sh_nf_h           equ sh_nf_wd + 1       ; byte: hour 0-23
+sh_nf_mi          equ sh_nf_h + 1        ; byte: minute
+sh_nf_s           equ sh_nf_mi + 1       ; byte: second
+sh_nf_12          equ sh_nf_s + 1        ; byte: AM/PM in the code
+sh_nf_lasth       equ sh_nf_12 + 1       ; byte: the last token was an h
+sh_nf_rl          equ sh_nf_lasth + 1    ; byte: an m run's length
+sh_nf_id          equ sh_nf_rl + 1       ; byte: the id sh_numfmt drew by
+sh_nf_r1          equ sh_nf_id + 1       ; word: Format Number's top row
+sh_nf_r2          equ sh_nf_r1 + 2       ; word: ...and bottom
+sh_bss_end        equ sh_nf_r2 + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
