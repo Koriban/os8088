@@ -99309,6 +99309,41 @@ paint. The harness met it first: `os88marty.settle` waits for the *screen* to
 stop changing, a computation draws nothing, and the gate read the floppy
 before the file existed. It waits for the file now.
 
+### 81.49 CHOOSE returns the value it picked
+
+**CHOOSE was an integer function.** It sat in `sh_pspecial` beside MOD and FACT,
+took every value through `sh_parg` as a word and handed its answer back through
+`sh_acc_int` — so `=CHOOSE(2,1.5,2.5)` answered **2**, any fractional cell it
+picked lost its fraction, a text value came back as **0**, and an index past the
+list answered 0 where Excel answers `#VALUE!`. Excel's CHOOSE returns the value
+it picked, whatever it is.
+
+`sh_pchoose` is its own routine now, reached from `sh_pfunc` the way IF is and
+returning through `.done` rather than `.typed`, so a chosen text stays text. The
+values before the chosen one are parsed and dropped, and their raise of the
+sticky error does not stand (§81.20); the chosen one is parsed and **left where
+the parser put it** — value, type and, for text, `sh_sacc`; the ones after it
+are **stepped over** by `sh_skipargs`, not evaluated. That needs no banking at
+all, so a CHOOSE nested in another's arguments is safe, and it is Excel's own
+behaviour: an error in an argument CHOOSE did not pick is never raised. An
+index outside `1..n` is `#VALUE!`.
+
+**`sh_skipargs` counted the parentheses inside a quoted string.** It is what
+CHOOSE steps over its tail with, and what every refusal path already used — an
+unknown function, a financial function refused inside another's arguments — so
+the `)` in `=1+ISERROR(FOO("a)"))*10` closed `FOO` early and the formula lost the
+rest. It skips a quoted string whole now, the rule `sh_paren_ok` already kept at
+entry; a doubled quote closes and reopens, which comes out right.
+
+Against the unfixed binary `tests/sheeteval.py` fails **ten of sixteen** —
+`2` for 2.5, `3` for 3.25, `0` for every text choice and for both
+out-of-range indices — and passes all seventeen of its checks with this. With
+the quote handling taken back out, `=1+ISERROR(FOO("a)"))*10` fails and
+`=CHOOSE(1,"a","b)")` does **not**: the bad skip leaves `")` behind and the
+parser stops quietly at stray characters, so only a formula that continues
+after the skip can tell a right one from a wrong one. That quiet stop is its
+own question, and is listed rather than chased here. Resident +50 bytes.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

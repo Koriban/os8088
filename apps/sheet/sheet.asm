@@ -21320,6 +21320,8 @@ sh_pfunc:
     je .noname                        ; app does not have. Reading either as a
     cmp ax, 5
     je .doif
+    cmp ax, 24                        ; CHOOSE answers a VALUE, not an integer
+    je .dochoose                      ; (81.49) - IF's route, not sh_pspecial's
     cmp ax, 6
     je .donot
     cmp ax, 7
@@ -21405,6 +21407,10 @@ sh_pfunc:
     call sh_pif
     mov dx, ax
     jmp .done
+.dochoose:
+    call sh_pchoose
+    mov dx, ax
+    jmp .done                         ; NOT .typed: a chosen TEXT stays text
 .donot:
     call sh_pnot
     mov dx, ax
@@ -21544,7 +21550,8 @@ sh_pspecial:
     jb .arg1                          ; 12..18 take one or two arguments
     cmp di, 23
     jbe .noargs                       ; 20..23 take none
-    jmp .choose                       ; 24 CHOOSE takes a list
+    jmp .zeroout                      ; 24 CHOOSE is sh_pchoose's (81.49) and
+                                      ; the dispatcher never sends it here
 
 ; ---- POWER(x, y), on doubles ------------------------------------------------
 ; It parsed both arguments as 16-BIT INTEGERS and multiplied with `imul` - a
@@ -21770,39 +21777,6 @@ sh_pspecial:
     imul bx
     dec cx
     jnz .powloop
-    jmp .close
-
-; ---- CHOOSE(index, v1, v2, ...) ---------------------------------------------
-; Every argument is parsed whether or not it is the chosen one - stopping
-; early would leave SI mid-expression with no way to find the closing paren -
-; but only the CHOSEN one's raise of the sticky sh_evalerr may stand (81.20).
-; Same reasoning as sh_pif's, and the bank rides in DI because sh_pcmp
-; preserves it (see the comment at sh_pspecial's entry) where it clobbers
-; AX/BX/CX/DX; the id DI held is not needed once .choose is reached.
-.choose:
-    call sh_parg                      ; the 1-based index
-    mov bx, ax
-    xor cx, cx                        ; CX = how many values seen
-    xor dx, dx                        ; DX = the one that matched
-.chloop:
-    cmp byte [si], ','
-    jne .chdone
-    inc si
-    mov al, [sh_evalerr]              ; banked across this value's parse...
-    xor ah, ah
-    mov di, ax
-    call sh_parg
-    inc cx
-    cmp cx, bx
-    jne .chskip
-    mov dx, ax                        ; the chosen one - its raise stands
-    jmp .chloop
-.chskip:
-    mov ax, di                        ; ...and restored: not the chosen one
-    mov [sh_evalerr], al
-    jmp .chloop
-.chdone:
-    mov ax, dx
     jmp .close
 
 .zeroout:
@@ -26665,6 +26639,64 @@ sh_pif:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_pchoose - CHOOSE(index, v1, v2, ...) (SPEC.md 81.49)
+; in: SI right after "CHOOSE("; out: the chosen value WHOLE - sh_acc,
+; sh_curtype, and sh_sacc when it is text - and SI past ')'. AX is its
+; truncation, for the callers that still want a word.
+;
+; IT WAS AN INTEGER FUNCTION: parsed in sh_pspecial beside MOD and FACT, every
+; value taken through sh_parg as a word and the answer handed back through
+; sh_acc_int. So =CHOOSE(2,1.5,2.5) answered 2, any fractional cell it picked
+; lost its fraction, and a text value came back 0. Excel's CHOOSE returns the
+; value it picked, whatever it is.
+;
+; THE CHOSEN VALUE IS NOT BANKED, because nothing is parsed after it: the
+; values before it are parsed and dropped (their raise of the sticky error
+; does not stand - 81.20), the chosen one is parsed and left where the parser
+; put it, and the rest are STEPPED OVER by sh_skipargs, never evaluated -
+; which is also Excel's behaviour, and why a #DIV/0! in an unchosen argument
+; after the chosen one never mattered. An index outside 1..n is #VALUE!.
+; -----------------------------------------------------------------------------
+sh_pchoose:
+    push bx
+    push cx
+    call sh_parg                      ; the 1-based index, truncated as Excel
+    mov bx, ax                        ; truncates it
+    xor cx, cx
+.next:
+    cmp byte [si], ','
+    jne .short                        ; the list ran out first
+    inc si
+    inc cx
+    cmp cx, bx
+    je .chosen
+    mov al, [sh_evalerr]              ; banked across an unchosen value, and
+    push ax                           ; put back after it
+    call sh_pcmp
+    pop ax
+    mov [sh_evalerr], al
+    jmp .next
+.chosen:
+    call sh_pcmp                      ; its value, its type, its text - and its
+    call sh_skipargs                  ; raise stands. The rest are stepped over
+    xor ax, ax                        ; to the matching ')', and SI past it
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .out
+    call sh_acc_toint
+    jmp .out
+.short:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    call sh_acc_int
+    cmp byte [si], ')'
+    jne .out
+    inc si
+.out:
+    pop cx
+    pop bx
+    ret
+
 ; sh_pnot - NOT(x): logical negation
 ; in: SI right after "NOT("; out: AX=1 or 0, SI advanced past ')' if found
 sh_pnot:
@@ -27170,7 +27202,9 @@ sh_skipargs:
     or al, al
     jz .out                           ; end of the formula: unbalanced, and
     inc si                            ; sh_paren_ok already refuses those at
-    cmp al, '('                       ; entry - this is belt and braces
+    cmp al, '"'                       ; entry - this is belt and braces
+    je .instr
+    cmp al, '('
     jne .notopen
     inc cx
     jmp .loop
@@ -27182,6 +27216,14 @@ sh_skipargs:
 .out:
     pop cx
     ret
+.instr:                               ; A QUOTED STRING IS SKIPPED WHOLE, the
+    mov al, [si]                      ; rule sh_paren_ok already kept: counted,
+    or al, al                         ; the ')' in =FOO("a)")+1 closed FOO
+    jz .out                           ; early and left "+1 as the tail. A
+    inc si                            ; doubled quote closes and reopens, which
+    cmp al, '"'                       ; comes out right (81.49)
+    jne .instr
+    jmp .loop
 
 ; -----------------------------------------------------------------------------
 ; sh_str_load - in: AX = an offset in sh_txtseg; copies that NUL string into

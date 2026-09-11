@@ -3894,6 +3894,14 @@ SOAK = [
         "writer never emits and five it must refuse by keeping the value. "
         "It found IF losing a text branch on its way to passing",
         needs=("marty",), serial=True),
+    Row("sheeteval", "soak", py("tests/sheeteval.py"), 240.0,
+        "SPEC.md 81.49: what SHEET's evaluator answers, checked by the host "
+        "- the row an evaluator parity gap goes into when it closes. CHOOSE "
+        "returning the value it picked (it was an integer function: 2.5 "
+        "answered 2, text answered 0), a quoted ')' not counting as a "
+        "parenthesis when arguments are stepped over, and IF keeping a text "
+        "branch. Against the unfixed binary it fails ten of sixteen",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "
