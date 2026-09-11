@@ -111274,8 +111274,7 @@ Scribe that could neither read a document from a second floppy nor write one
 to it. WORD never had the problem: its formats are resident.
 
 `sc_entry` now calls **`sc_ovload`** after its three claims and before the
-window, which is where SHEET has always loaded `CHART.OVL` (§82.16.3) and what
-§50.3's claims-at-entry asks for. `sc_ovload` is `sc_ovneed` without the
+window, which is what §50.3's claims-at-entry asks for. `sc_ovload` is `sc_ovneed` without the
 voice: it returns CF and, on failure, the message in AX rather than posting
 it, and `sc_ovneed` is now the wrapper that posts. The entry call is silent
 and does not read CF — a machine without the heap or a disk without the file
@@ -111292,8 +111291,8 @@ The cost is those 54 sectors at every launch, **including sessions that never
 open or save**, where before they fell on the first file operation of the
 sessions that did. It is 54 for a 20-sector file because the load navigates
 to the launch folder and back and reads a cluster at a time — the §18.91
-shape, and a property of the module load path SHEET and WORD share, not of
-this change. 19 resident bytes.
+shape, and a property of the module load path every overlaid package shares,
+not of this change. 19 resident bytes.
 
 ### 94.9 Insert ▸ Picture — the document model
 

@@ -829,8 +829,7 @@ sc_entry:
                                     ; folder, so it was not there, and a cold
                                     ; Scribe could neither open a document off
                                     ; a data disk nor save a new one onto it.
-                                    ; SHEET has always done this (82.16.3), and
-                                    ; it is SPEC.md 50.3's claims-at-entry.
+                                    ; This is SPEC.md 50.3's claims-at-entry.
                                     ; CF IS NOT READ: a machine without the
                                     ; heap or a disk without the file still
                                     ; runs the editor, and sc_ovneed retries at
@@ -20421,7 +20420,7 @@ sc_modc:                            ; +0: the dispatcher, and the only offset
                                     ; handed a 0 or a 2. It lay dormant only
                                     ; because SCM_PING takes nothing. The same
                                     ; line was live in CHART's dispatcher and
-                                    ; cost an afternoon there (SPEC.md 82.16.4)
+                                    ; cost an afternoon there
 
 ; The package's segment, stamped here by sc_ovneed the moment the module is
 ; read (SPEC.md 94.8.3). It is IN THE MODULE and not in the package's bss,
