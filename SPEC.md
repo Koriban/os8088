@@ -98336,37 +98336,32 @@ Neither defect is exotic and neither needed a clever test. They needed **one
 reader that had not been written by the same hand as the writer.**
 
 
-### 81.39 What SHEET still lacks, measured (2026-09-03)
+### 81.39 What SHEET still lacks, measured (2026-09-11)
 
-> **Two lines of this changed the same day it was written**, and are corrected
-> in place below rather than left to be read as current:
-> **file formats are no longer a gap** — §81.40 and §81.41 added CSV, tab
-> -delimited text and dBASE III, taking SHEET to 6 of Excel 2.0's 9 with the
-> other 3 (Lotus `.WKS`/`.WK1`, dBASE II) deliberately not done; and **`NOW` is
-> cheap after all** — a claim that it needed a kernel slot was wrong, because
-> the clock is reachable by `int 0x1a` the way the kernel itself reads it
-> (§81.42).
+> **Re-measured 2026-09-11**, over the 2026-09-03 count this section first
+> held. Closed since: `NOW RAND CLEAN ISNONTEXT INDIRECT` (§81.42 on), Paste
+> Special and Paste Link (§81.45), cell protection (§81.46), the logical value
+> (§81.51), comparisons by type (§81.53), Excel 2.1's own BIFF2 files (§81.52)
+> and a label running on into empty cells (§81.54). Every inventory in this
+> tree has gone stale within days of being written - quote a count only after
+> re-making it.
 
-Counted, not recalled — against `Microsoft Excel Functions and Macros.pdf`'s
-worksheet-function directory and the real Excel 2.1 menu captures. **Neither is
-in this repository**: both are period reference material held outside the tree,
-so naming them is provenance rather than a path anyone can open here. Every
-previous inventory in this tree was stale, most recently one that said "10/131
-functions, no Formula menu, 1/7 chart types, no text-input widget" — all four
-wrong by the time it was read.
+Counted, not recalled — the functions against `Microsoft Excel Functions and
+Macros.pdf`'s worksheet-function directory and SHEET's own table
+(`tools/os88sheetfmt.py --selfcheck` reports the count); the menus against
+the real Excel 2.1 captures in `VM_screenshots/` and SHEET's `sh_i_*` tables.
+Neither reference is in this repository: naming them is provenance, not a
+path anyone can open here.
 
-#### 81.39.1 Functions — 106 of ~130
+#### 81.39.1 Functions — 111 of ~131
 
-**25 missing, and they are six pieces of work, not twenty-five:**
+**20 missing, in three pieces of work:**
 
 | group | n | functions | what it needs |
 |---|---|---|---|
 | database | 11 | `DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP` | a **database + criteria area** |
 | array / matrix | 8 | `MDETERM MINVERSE MMULT TRANSPOSE LINEST LOGEST TREND GROWTH` | **array formulas** |
-| volatile | 2 | `NOW RAND` | `RAND` a PRNG; `NOW` a BIOS `int 0x1a` (§81.42) |
-| information | 2 | `CELL ISNONTEXT` | `CELL` wants an attribute table; the other is trivial |
-| reference | 1 | `INDIRECT` | text → reference at evaluation time |
-| text | 1 | `CLEAN` | trivial |
+| information | 1 | `CELL` | an attribute table to answer from |
 
 `MDETERM` is the one array-category function that returns a **scalar**, so it
 alone needs no array formulas. `POWER` is in SHEET and not in the 2.1d
@@ -98377,10 +98372,10 @@ directory — a later addition, harmless.
 | menu | SHEET | Excel 2.1d | missing |
 |---|---|---|---|
 | Formula | 7 | 7 | **none** |
-| Edit | 9 | 12 | Repeat, Paste Special, Paste Link |
-| Format | 6 | 8 | Cell Protection, Justify |
+| Edit | 12 | 12 | none by name — but **Undo** and **Repeat** are there disabled (`Can't Undo`, `Can't Repeat`): there is no undo record |
+| Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
-| Options | 3 | 10 | Set Print Area/Titles/Page Break, Display, Freeze Panes, Protect Document, Calculate Now, Workspace, Short Menus |
+| Options | 4 | 10 | Set Print Area/Titles/Page Break, Freeze Panes, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles) |
 | Data | 1 shared | 10 | Form, Find, Extract, Delete, Set Database, Set Criteria, Series, Table, Parse |
 | Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
 
@@ -98391,34 +98386,45 @@ and §82 is this tree's answer to that.
 
 #### 81.39.3 Behaviour, not commands
 
-- **Column width and row height are whole-sheet.** The dialogs are Excel's
-  (typed, in characters, §81.39 corrects an older claim that they were
-  presets); what they set is one `sh_cellw`/`sh_cellh` for everything.
-  `sh_gridhit` divides by the width once, and a per-column grid has to walk.
+- **Four number formats of Excel 2.1d's twenty-one.** General, `$#,##0`,
+  `#,##0` and `0%` — two bits of the format byte, which §81.4 explains has no
+  more to give. No decimal places, no scientific, and **no date or time
+  format**: DATE, NOW and the rest compute correctly and show a serial
+  number, and an Excel file's dates open as `32874`. The largest visible gap
+  left, and a storage question first (a side table, as §81.46's borders
+  were), not a formatting one.
+- **Column width and row height are whole-sheet.** The dialogs are Excel's;
+  what they set is one `sh_cellw`/`sh_cellh` for everything. `sh_gridhit`
+  divides by the width once, and a per-column grid has to walk. An Excel file's
+  COLWIDTH records are skipped (§81.52).
+- **No undo.** Every edit is final.
 - **No printing at all** — and not SHEET's fault: there is no print backend
-  anywhere in this OS, which is why there is no `Print...` item at all
-  (2026-09-04). Seven of the missing File/Options commands are downstream of
-  that one absence.
+  anywhere in this OS. Seven of the missing File/Options commands are
+  downstream of that one absence.
 - **The macro language is 5 commands** of a language with ~90 macro functions
   (§81.8). It is a demonstration of the machinery, not the feature.
-- **No Short/Full menus toggle**, so SHEET shows one fixed set — which is why
-  the Formula count matches Excel's *short* menu exactly.
-- **No cell protection, no freeze panes.**
+- **No Short/Full menus toggle**, and **no freeze panes**.
+- **Smaller, each listed where it was found:** a centred or right-aligned label
+  does not run on into its neighbours (§81.54); Sort leaves a logical constant
+  out rather than ordering it after text (§81.51); a formatted empty cell
+  (BIFF's BLANK) loses its format (§81.52).
 
-#### 81.39.4 The five enablers, in dependency order
+#### 81.39.4 The enablers, in dependency order
 
-Almost everything above hangs off five pieces of work:
+Almost everything above hangs off six pieces of work:
 
-1. **Array formulas** → 8 functions, and `Data ▸ Table`.
-2. **A database + criteria area** → 11 functions, and 6 of the Data menu.
-3. **Per-column/per-row geometry** → the width behaviour, and `Justify`.
-4. **A print backend** (OS-level, not SHEET's) → 6 File/Options commands.
-5. **A macro recorder and a real macro language** → the Macro menu, and the
-   language itself.
+1. **A number-format table** beside the cell record → dates and times, decimal
+   places, the rest of Excel's twenty-one, and an Excel file's formats read
+   rather than dropped.
+2. **Array formulas** → 8 functions, and `Data ▸ Table`.
+3. **A database + criteria area** → 11 functions, and 6 of the Data menu.
+4. **Per-column/per-row geometry** → the width behaviour, and `Justify`.
+5. **An undo record** → Undo and Repeat.
+6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
-The cheap remainder, needing none of them: `RAND`, `CLEAN`, `ISNONTEXT`,
-`MDETERM`, `INDIRECT`, `Repeat`, `Paste Special`, `Paste Link`, `Cell
-Protection`, and **`NOW` after all**.
+Beside them: **a macro recorder and a real macro language** → the Macro menu.
+The cheap remainder, needing none of them: `CELL`, `MDETERM`, Calculate Now,
+and a right-aligned label running on to its left.
 
 
 ### 81.40 CSV and tab-delimited text
@@ -99607,6 +99613,46 @@ eight of the first twenty (the others were right by accident, as above).
 Mutations: text compared as numbers fails two, the ranking three, the right
 operand back at `sh_pexpr` one, a blank not taking the other side's type
 one. Resident +68 bytes, bss −65.
+
+### 81.54 A long label runs on into the empty cells beside it
+
+**Every label was clipped to its own cell.** Excel draws a label wider than its
+column across the *empty* cells to its right, and stops at the first one that
+holds anything; SHEET cut it at seven letters. It was the most visible
+difference left once §81.52 opened Excel 2.1d's own worksheets — `1st Qua`,
+`Ladies'`, headings nobody could read.
+
+`sh_text_to_numbuf`'s comment put it off as a draw-order change: the
+neighbours' occupancy would have to be known before a cell was drawn. It is
+not one. **Each empty cell draws its own slice of whatever runs into it**
+(`sh_spill`), and the only label that can is the **nearest cell to its left in
+the row** — any further one is stopped by it — which is the record just before
+the empty cell's insertion point, the table being sorted by row and column.
+So it costs one `sh_findcell` per empty cell and depends on no order: a ranged
+repaint of one empty cell draws the same slice a full one does, and a label
+that is edited is followed by the full repaint every commit already pays.
+
+- A formula's **text result** runs on, from its result slot, not its formula
+  text (§81.22.1).
+- Only a **General or left-aligned** label runs on. A centred or right-aligned
+  one runs the other way in Excel and is still clipped here.
+- The label's bold and underline go with it; the empty cell's own shading
+  stays its own.
+- With **formulas on show** nothing runs on — every cell shows its formula.
+- The vertical gridline between the cells is still drawn through the text.
+  None of the Excel 2.1 screenshots on hand has a label long enough to say
+  whether Excel draws it there.
+
+`tests/sheetspill.py` reads it off the glass: SHEET opens a SYLK the host
+wrote, the host finds the grid by its own lines in the 1bpp framebuffer, and
+counts ink inside each cell. Twelve checks — a 24-character label reaching D1
+and not E1, one stopped by a number in B2, a two-letter one reaching nothing,
+and `=REPT("ab",10)` reaching E4, which only its 20-character *result* can:
+the formula's 13 characters would stop in D4. The previous binary fails the
+five that should carry text, and spilling the formula text instead of the
+result fails E4. (The first version of the test found ink in B3 and B4 on the
+unchanged binary: the pointer, left where the file was double-clicked. It is
+moved off the window now.) Resident +199 bytes.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

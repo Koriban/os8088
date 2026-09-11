@@ -4100,6 +4100,9 @@ sh_drawgrid:
     add bx, [sh_scrollrow]
     call sh_getcell2
     jc .have
+    call sh_spill                      ; ...unless a label to its left runs
+    mov si, sh_tbuf                    ; on into it (81.54) - MOV keeps CF
+    jc .got
     mov si, sh_blank
     jmp .got
 .have:
@@ -28482,11 +28485,10 @@ sh_justify_t:
 ; sh_numbuf, clipped to what the cell can show, so that the justifiers - which
 ; all read sh_numbuf and write sh_tbuf - need to know nothing about text.
 ;
-; Clipped rather than scrolled or spilled: real Excel lets a label OVERFLOW
-; into the empty cells to its right, which needs the neighbours' occupancy
-; before this cell is drawn and a draw order that respects it. That is a
-; drawing-order change, not a storage one, and it is deliberately not in this
-; step - a clipped label is honest about being clipped.
+; The label's OWN cell is clipped here; what runs on into the empty cells to
+; its right, as Excel draws it, is theirs to draw (sh_spill, 81.54). That was
+; thought to need a draw order - the neighbours' occupancy before this cell
+; is drawn - and it does not: each cell draws only its own slice.
 ; -----------------------------------------------------------------------------
 sh_text_to_numbuf:
     push ax
@@ -28518,6 +28520,109 @@ sh_text_to_numbuf:
     pop di
     pop si
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_spill - does a LABEL to the left run on into this empty cell? (81.54)
+; in: AX = col, BX = row, the cell known empty. out: CF=1 with sh_tbuf holding
+; this cell's slice of it and [sh_curfmt] the label's format; CF=0 otherwise.
+;
+; Excel draws a label wider than its column across the EMPTY cells to its
+; right and stops at the first that holds anything. So the one label that can
+; reach this cell is the NEAREST cell to its left in the row - any further one
+; is stopped by it - and that is the record just before this cell's insertion
+; point, the table being sorted by (row, col): one search, the one
+; sh_getcell2 has just made. Each cell draws its own slice and nothing else,
+; so no draw order and no ranged repaint can undo another cell's. Only a
+; label that is General or left-aligned: centred and right-aligned ones run
+; the other way in Excel, and are still clipped here.
+; -----------------------------------------------------------------------------
+sh_spill:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp byte [sh_showformulas], 0     ; formulas on show: a cell shows its
+    jne .no                           ; formula, and nothing runs on
+    or ax, ax
+    jz .no                            ; column A has nothing to its left
+    mov dx, ax                        ; DX = this column
+    call sh_findcell                  ; not there: DI = where it would go
+    jc .no
+    or di, di
+    jz .no
+    sub di, SH_C_SZ                   ; the record before it...
+    mov es, [sh_cellseg]
+    mov ax, [sh_cursheet]
+    mov cl, SH_ROW_BITS
+    shl ax, cl
+    or ax, bx
+    cmp [es:di], ax                   ; ...in this row of this sheet
+    jne .no
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    jne .no                           ; a label, or a formula's text result
+    mov bl, [es:di+5]                 ; its format
+    mov al, bl
+    and al, SH_FMT_ALIGN_MASK
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shr al, cl
+    cmp al, SH_FMT_ALIGN_GENERAL
+    je .left
+    cmp al, SH_FMT_ALIGN_LEFT
+    jne .no
+.left:
+    mov si, [es:di+SH_C_FOFF]         ; a label's own text...
+    test byte [es:di+4], 1
+    jz .haveoff
+    mov si, [es:di+SH_C_VAL]          ; ...or a formula's RESULT (81.22.1)
+.haveoff:
+    mov ax, dx
+    sub ax, [es:di+2]                 ; the columns from it to this one
+    mul word [sh_cellch]              ; = its characters before this cell
+    mov cx, ax
+    mov es, [sh_txtseg]
+.skip:
+    jcxz .skipped
+    cmp byte [es:si], 0
+    je .no                            ; it ends before this cell...
+    inc si
+    dec cx
+    jmp short .skip
+.skipped:
+    cmp byte [es:si], 0
+    je .no                            ; ...or exactly at its edge
+    mov di, sh_numbuf
+    mov cx, [sh_cellch]
+    cmp cx, SH_NUMBUF_MAX
+    jbe .copy
+    mov cx, SH_NUMBUF_MAX
+.copy:
+    mov al, [es:si]
+    or al, al
+    jz .end
+    mov [di], al
+    inc si
+    inc di
+    loop .copy
+.end:
+    mov byte [di], 0
+    call sh_ljust                     ; -> sh_tbuf, padded to the cell
+    mov [sh_curfmt], bl               ; bold and underline are the label's
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 

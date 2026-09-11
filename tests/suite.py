@@ -3924,6 +3924,14 @@ SOAK = [
         "the host reads in Excel's file. Arm B found a fold defect: a SUM "
         "over formula cells that fold ranges of their own lost its range",
         needs=("marty",), serial=True),
+    Row("sheetspill", "soak", py("tests/sheetspill.py"), 180.0,
+        "SPEC.md 81.54: a label wider than its column runs on into the "
+        "EMPTY cells to its right, as Excel draws it, and stops at the first "
+        "that holds anything; a formula's text RESULT runs on too. Read off "
+        "the glass: the host finds the grid by its own lines and counts ink "
+        "inside each cell. Five of its checks fail against the binary that "
+        "clipped every label to its own cell",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "
