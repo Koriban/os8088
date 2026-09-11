@@ -96402,14 +96402,56 @@ come back.
   inside a `K"…"` value and its reader treats a single one as the end of the
   field; `os88sheetfmt.py` did neither, so it read `a"bc` as `a""bc` and its
   writer could cut a value short. It follows the same rule as SHEET now.
-- **A formula whose result is TEXT is saved as its value** — pinned by the gate,
-  not fixed. A BIFF FORMULA record with a string result needs a STRING record
-  after it, which `sh_biff_formula` does not write, so `=UPPER(A5)` goes out as
-  a LABEL. It is the writer's gap and the next thing this section should lose.
+- **A formula whose result was TEXT was saved as its value**, because
+  `sh_biff_formula` wrote no STRING record. Pinned by the gate at first; §81.10.11
+  closes it.
 
 And one it confirms rather than finds: **SHEET's comparisons and `TRUE()` answer
 1**, where Excel answers a logical. The gate accepts it and says so; it is an
 evaluator parity gap, not a file-format one.
+
+#### 81.10.11 Text and error results, both ways
+
+With §81.10.10 a formula came back from Normal format as a formula — unless its
+result was **text**. `sh_biff_cells` tested "the result is text" before "the
+cell has a formula", so `=UPPER(A5)` went out as a LABEL holding `ABC`, and
+since the reader now brings back whatever FORMULA records it finds, that was
+the one kind of formula a round trip still turned into a value.
+
+**Writer.** A text result is a FORMULA record now: result bytes `00H`, four
+unused, `FFFFH` (5.50 of the document), then the **STRING** record that must
+follow it — `0207H`, a 16-bit length and the bytes (5.102). One detail decided
+the shape: for a text-result cell `sh_wrec_toff` used to be *replaced* by the
+result's offset (§81.22.1 keeps a text result in `SH_C_VAL` because `SH_C_FOFF`
+holds the formula), which was harmless while such a cell could only become a
+label — and would have tokenised `ABC` instead of `UPPER(A5)`. The result text
+has its own word, `sh_wrec_roff`, and `toff` always names the formula. Room is
+checked for both records before the first is written, or the cell goes out as
+its value alone.
+
+**The same code had the error-number bug §81.38 had, in both directions.**
+`.errresult` wrote a cached error's code as `sh_wrec_aux` — ERROR.TYPE's
+numbering, `#DIV/0!` as 02H — into a field whose values are the file's (07H).
+The reader's fallback read the byte back the same raw way, so SHEET's own files
+agreed perfectly and Excel's did not: an Excel `#DIV/0!` arrived as ERROR.TYPE 7,
+which is `#N/A`. Both go through `sh_biff_e2b`/`sh_biff_b2e` now.
+
+**Reader.** When a formula cannot be decoded its cached result is used, and
+that result was stored as a double whatever it was — so a cached string, whose
+eight bytes are the marker above, became a NaN, and a cached logical the same.
+Byte 0 decides now: an error through `sh_biff_b2e`; a logical as 1/0, which is
+what a BOOLERR reads as (SHEET has no logical type); and **text waits** — the
+row, column and XF are banked (`sh_dc_prow`/`pcol`/`pxf`) and the STRING record
+that follows completes the cell the way a LABEL is stored. Any other record
+ends the wait, so a STRING can only ever land on the formula directly before it.
+
+The host library reads STRING records too, so the gate can check the cached
+result a file carries as well as its text: `tests/sheetdec.py`, **84 checks**
+(`=UPPER(A5)`, `=LOWER(A6)` and `=1/0` back in SHEET's own round trip; a refused
+formula cached as text, as an Excel error and as a logical in each of the two
+Excel-style files). Three mutations — no STRING record, the writer's error code
+raw, the reader's raw — each fail exactly their own checks. Module +314 bytes
+(`CHART.OVL` 21,148 of 22,528), resident unchanged, bss +9.
 
 ### 81.11 Text cells
 

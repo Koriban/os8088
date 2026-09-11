@@ -13443,27 +13443,45 @@ sh_biff_cells:
     mov al, [es:si+SH_C_AUX]          ; NUMBER, and an ERROR takes neither
     mov [sh_wrec_aux], al             ; either - see .aserr
     mov ax, [es:si+SH_C_FOFF]
-    mov [sh_wrec_toff], ax
-    test byte [es:si+4], 1            ; A FORMULA THAT RETURNED TEXT keeps its
-    jz .toffok2                          ; result in SH_C_VAL, because FOFF is
-    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT  ; already holding the formula's own
-    jne .toffok2                         ; text (81.22.1) - so the label this
-    mov ax, [es:si+SH_C_VAL]          ; writer emits is the RESULT, not the
-    mov [sh_wrec_toff], ax            ; expression that produced it
-.toffok2:
+    mov [sh_wrec_toff], ax            ; what sh_biff_formula tokenises...
+    mov [sh_wrec_roff], ax            ; ...and the TEXT a LABEL or a STRING
+    test byte [es:si+4], 1            ; record carries. A FORMULA THAT RETURNED
+    jz .toffok2                          ; TEXT keeps its result in SH_C_VAL,
+    cmp byte [es:si+SH_C_TYPE], SH_T_TEXT  ; because FOFF is already holding
+    jne .toffok2                         ; the formula's own text (81.22.1).
+    mov ax, [es:si+SH_C_VAL]          ; This used to REPLACE toff, which was
+    mov [sh_wrec_roff], ax            ; right while such a cell could only
+.toffok2:                             ; become a LABEL (81.10.11)
     mov al, [es:si+4]                 ; ...and a FORMULA cell may take a real
     and al, 1                         ; FORMULA record, if its text is one this
     mov [sh_wrec_hasf], al            ; writer can tokenise
     pop es                            ; ES = stgseg again
     call sh_biff_ixfe                 ; which XF this cell names (81.47)
 
-    cmp byte [sh_wrec_type], SH_T_TEXT
-    je .aslabel
     cmp byte [sh_wrec_hasf], 0
     je .notformula
+    cmp byte [sh_wrec_type], SH_T_TEXT ; A TEXT RESULT IS A FORMULA TOO now
+    jne .fnottext                      ; (81.10.11): the FORMULA record says
+    call sh_biff_rlen                  ; "string" and a STRING record carries
+    mov ax, di                         ; it - so there must be room for both,
+    add ax, cx                         ; or it goes out as the value alone
+    add ax, 6 + 22 + SH_RPN_MAX
+    cmp ax, SH_STAGE_MAX
+    jbe .fnottext
+    jmp .aslabel
+.fnottext:
     call sh_biff_formula              ; CF=0 = it wrote the record
-    jnc .recnext
+    jc .notformula
+    cmp byte [sh_wrec_type], SH_T_TEXT
+    jne .fdone
+    call sh_biff_wstring              ; ...and the string it promised
+.fdone:
+    jmp .recnext
 .notformula:
+    cmp byte [sh_wrec_type], SH_T_TEXT
+    jne .notlabel
+    jmp .aslabel
+.notlabel:
     cmp byte [sh_wrec_type], SH_T_ERR  ; an error whose formula this writer
     je .aserr                          ; could not tokenise still has to go out
                                         ; AS AN ERROR: the number underneath one
@@ -13560,24 +13578,8 @@ sh_biff_cells:
     ; bytes. BIFF2's LABEL has a one-byte length and a three-byte cell
     ; attribute where the xf index goes, so a file mixing the two conventions
     ; desynchronises the moment a reader trusts the length field.
-    push si                            ; measure it first: the length goes in
-    push es                            ; the record BEFORE the bytes do
-    mov es, [sh_txtseg]
-    mov si, [sh_wrec_toff]
-    xor cx, cx
-.llen:
-    cmp byte [es:si], 0
-    je .lhavelen
-    inc si
-    inc cx
-    cmp cx, 255                        ; BIFF3 allows 255; the arena string
-    jb .llen                           ; cannot be longer than SH_EDITMAX
-                                       ; anyway, and this is the format's own
-                                       ; ceiling rather than ours
-.lhavelen:
-    pop es
-    pop si
-    mov [sh_wrec_len], cx
+    call sh_biff_rlen                  ; measure it first: the length goes in
+    mov [sh_wrec_len], cx              ; the record BEFORE the bytes do
     mov ax, di                         ; and only now check for room, because
     add ax, cx                         ; the length is what decides how much
     add ax, 12
@@ -13600,7 +13602,7 @@ sh_biff_cells:
     call sh_biffw
     mov ax, [sh_wrec_len]
     call sh_biffw
-    mov si, [sh_wrec_toff]
+    mov si, [sh_wrec_roff]
     mov cx, [sh_wrec_len]
     jcxz .recnext
 .lput:
@@ -13621,6 +13623,59 @@ sh_biff_cells:
     mov [sh_wrow], ax
     jmp .rec
 .cdone:
+    ret
+
+; sh_biff_rlen - CX = the length of the text at [sh_wrec_roff] in the arena,
+; at most 255: BIFF3's own ceiling, and the arena cannot hold longer anyway.
+; Preserves everything else.
+sh_biff_rlen:
+    push si
+    push es
+    mov es, [sh_txtseg]
+    mov si, [sh_wrec_roff]
+    xor cx, cx
+.l:
+    cmp byte [es:si], 0
+    je .out
+    inc si
+    inc cx
+    cmp cx, 255
+    jb .l
+.out:
+    pop es
+    pop si
+    ret
+
+; sh_biff_wstring - the STRING record (0207H, BIFF3-5: a 16-bit length and
+; the bytes) that follows a FORMULA whose result is text (81.10.11).
+; sh_biff_cells has already checked there is room for it.
+sh_biff_wstring:
+    push ax
+    push cx
+    push si
+    call sh_biff_rlen
+    mov ax, 0x0207
+    call sh_biffw
+    mov ax, cx
+    add ax, 2
+    call sh_biffw
+    mov ax, cx
+    call sh_biffw
+    mov si, [sh_wrec_roff]
+    jcxz .out
+.put:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    inc si
+    call sh_stgputb
+    dec cx
+    jnz .put
+.out:
+    pop si
+    pop cx
+    pop ax
     ret
 
 sh_biff_formula:
@@ -13685,6 +13740,8 @@ sh_biff_formula:
     mov ax, [sh_wrec_ixfe]            ; 81.47: the format byte UNLESS this
                                       ; cell also has a border
     call sh_biffw
+    cmp byte [sh_wrec_type], SH_T_TEXT ; a string: byte 0 = 0, top word all
+    je .strresult                      ; ones, the text in a STRING record next
     cmp byte [sh_wrec_type], SH_T_ERR ; BIFF's own encoding for a cached result
     je .errresult                     ; that is not a number: the top word all
     mov ax, [sh_wrec_dval]            ; ones, byte 0 naming the kind and byte 2
@@ -13696,12 +13753,22 @@ sh_biff_formula:
     mov ax, [sh_wrec_dval+6]          ; perfectly ordinary zero
     call sh_biffw
     jmp .resdone
+.strresult:
+    xor ax, ax
+    call sh_biffw
+    call sh_biffw
+    call sh_biffw
+    mov ax, 0xFFFF
+    call sh_biffw
+    jmp .resdone
 .errresult:
     mov ax, 2                         ; byte 0 = 2: an error code
     call sh_biffw
-    mov al, [sh_wrec_aux]             ; byte 2 = which one
-    xor ah, ah
-    call sh_biffw
+    mov al, [sh_wrec_aux]             ; byte 2 = which one, IN THE FILE'S
+    call sh_biff_e2b                  ; NUMBERING. This wrote ERROR.TYPE's -
+    xor ah, ah                        ; #DIV/0! as 02H, not 07H - and the reader
+    call sh_biffw                     ; read it back the same way, so SHEET's
+                                      ; own files never showed it (81.10.11)
     xor ax, ax
     call sh_biffw
     mov ax, 0xFFFF
@@ -14611,10 +14678,15 @@ sh_doread_biff:
     je .islabel                        ; with a one-byte length, and is NOT
     cmp ax, 0x0205                     ; BOOLERR: a boolean or an ERROR VALUE
     je .isboolerr
+    cmp ax, 0x0207                     ; STRING: the text a string formula
+    jne .notstr                        ; answered, directly after it
+    jmp .isstring
+.notstr:
+    mov byte [sh_dc_pend], 0           ; anything else ends a wait for one
     cmp ax, 0x0206                     ; accepted here for that reason
-    je .isformula                      ; FORMULA: its CACHED RESULT is read,
-    cmp ax, 0x0406                     ; the token array skipped - see below.
-    je .isformula                      ; 0406H is BIFF4's own number for it
+    je .isformula                      ; FORMULA: decoded back to its text when
+    cmp ax, 0x0406                     ; it can be, its cached result when not
+    je .isformula                      ; (81.10.10). 0406H is BIFF4's number
     cmp ax, 0x008F                     ; SHEETHDR: the substream that follows
     je .issheethdr                     ; belongs to the NEXT sheet
     cmp ax, 0x0218                     ; DEFINEDNAME (BIFF3/4) - 0018H is the
@@ -14931,10 +15003,40 @@ sh_doread_biff:
     mov [sh_acc+6], ax
     cmp word [sh_acc+6], 0xFFFF        ; not a number at all: see .errresult in
     jne .fresnum                       ; the writer for the encoding
-    cmp byte [sh_acc], 2
-    jne .fresnum
+    mov al, [sh_acc]                   ; byte 0 says which kind (5.50)
+    cmp al, 2
+    je .fcerr
+    cmp al, 1
+    je .fcbool
+    or al, al
+    jnz .fcnone                        ; 3 is BIFF8's "empty": no value
+    mov ax, [sh_wrec_row]              ; 0: TEXT, and it is not here - it is
+    mov [sh_dc_prow], ax               ; in the STRING record that follows, so
+    mov ax, [sh_wrec_col]              ; the cell waits for it (.isstring).
+    mov [sh_dc_pcol], ax               ; These eight bytes used to be stored
+    mov ax, [sh_wrec_xf]               ; as a double, which is a NaN
+    mov [sh_dc_pxf], ax
+    mov byte [sh_dc_pend], 1
+.fcnone:
+    pop dx
+    jmp .skip
+.fcbool:
+    push es                            ; 1/0, as a BOOLERR reads (.isbool)
+    mov al, [sh_acc+2]
+    xor ah, ah
+    SHOUT sh_acc_int
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    SHOUT sh_setvald
+    call sh_biff_applyfmt
+    pop es
+    pop dx
+    jmp .skip
+.fcerr:
     push es
-    mov dl, [sh_acc+2]
+    mov al, [sh_acc+2]                 ; the FILE's code, into ERROR.TYPE's:
+    call sh_biff_b2e                   ; raw, an Excel #DIV/0! (07H) arrived
+    mov dl, al                         ; as #N/A (81.10.11)
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     call sh_seterr
@@ -15039,6 +15141,54 @@ sh_doread_biff:
     mov cx, [sh_biff_end]              ; CX restored: the loop bound, banked at
     pop dx                             ; the top of this routine, because the
     jmp .skip                          ; copy above used CX as its counter
+.isstring:                             ; (81.10.11)
+    cmp byte [sh_dc_pend], 0           ; a STRING with no formula waiting is
+    je .skip                           ; the result of one this app decoded,
+    mov byte [sh_dc_pend], 0           ; which recomputes its own
+    cmp dx, 2
+    jb .skip
+    push dx
+    mov ax, [sh_dc_prow]
+    mov [sh_wrec_row], ax
+    mov ax, [sh_dc_pcol]
+    mov [sh_wrec_col], ax
+    mov ax, [sh_dc_pxf]
+    mov [sh_wrec_xf], ax
+    mov ax, [es:si]                    ; a 16-bit length in BIFF3-5 (5.102)
+    cmp ax, SH_EDITMAX                 ; truncated, as .islabel truncates
+    jbe .scap
+    mov ax, SH_EDITMAX
+.scap:
+    mov [sh_wrec_len], ax
+    push si
+    push di
+    add si, 2
+    mov di, SH_TEXPR
+    mov cx, [sh_wrec_len]
+    jcxz .srdend
+.srd:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .srd
+.srdend:
+    mov byte [di], 0
+    pop di
+    pop si
+    push es
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    push si
+    mov si, SH_TEXPR
+    SHOUT sh_settext
+    pop si
+    call sh_biff_applyfmt
+    pop es
+    mov cx, [sh_biff_end]              ; the loop bound again, as .islabel
+    pop dx
+    jmp .skip
 .toolong:
     pop dx
     jmp .done
@@ -29530,7 +29680,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5252
+    OS88_BSS 5261
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -30406,7 +30556,12 @@ sh_dc_ver         equ sh_abon + 1        ; byte: 2 BIFF3, 4 BIFF4 (81.10.10)
 sh_dc_end         equ sh_dc_ver + 1      ; word: the decoded text's length
 sh_dc_sp          equ sh_dc_end + 2      ; word: fragments on the stack
 sh_dc_tend        equ sh_dc_sp + 2       ; word: where the token array ends
-sh_bss_end        equ sh_dc_tend + 2
+sh_wrec_roff      equ sh_dc_tend + 2     ; word: a LABEL's / STRING's text
+sh_dc_prow        equ sh_wrec_roff + 2   ; word: the formula waiting for its
+sh_dc_pcol        equ sh_dc_prow + 2     ;       STRING record (81.10.11)
+sh_dc_pxf         equ sh_dc_pcol + 2
+sh_dc_pend        equ sh_dc_pxf + 2      ; byte: one is waiting
+sh_bss_end        equ sh_dc_pend + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

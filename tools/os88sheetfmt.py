@@ -62,6 +62,10 @@ BIFF3_BIT = 0x0200
 # the globals, no cells at all, and called it an empty file.
 BIFF4_BIT = 0x0400
 BIFF_SHEETHDR = 0x008F                  # <length:4><name length:1><name>
+# The text a string formula answered, directly after its FORMULA record
+# (5.102): 0007H in BIFF2 with an 8-bit length, 0207H from BIFF3 with 16.
+BIFF_STRING = 0x07
+_PENDING = object()                     # a FORMULA's text is in the next record
 
 # excelfileformat.pdf §2.4.  #N/A is written "#N/A!" there and "#N/A"
 # everywhere a user sees it; the second is what SYLK and Excel's own UI use.
@@ -622,7 +626,7 @@ def _biff_walk(data):
     is the workbook with the directory left out.
     """
     sheets, cells, names = [], {}, []
-    i, n, vstart, depth, ver = 0, len(data), None, 0, 3
+    i, n, vstart, depth, ver, pending = 0, len(data), None, 0, 3, None
     while i + 4 <= n:
         rid, ln = struct.unpack_from('<HH', data, i)
         i += 4
@@ -659,6 +663,15 @@ def _biff_walk(data):
         if vstart is None:
             continue
         kind = rid & ~(BIFF3_BIT | BIFF4_BIT)
+        if kind == BIFF_STRING:
+            if pending is not None and pending in cells:
+                ln_s = body[0] if ver == 2 else struct.unpack_from('<H', body, 0)[0]
+                at = 1 if ver == 2 else 2
+                f = cells[pending]
+                cells[pending] = (f[0], f[1], body[at:at + ln_s].decode('latin-1'))
+            pending = None
+            continue
+        pending = None
         if kind in (BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER, BIFF_LABEL,
                     BIFF_BOOLERR, BIFF_FORMULA, BIFF_RK):
             if ln < vstart:
@@ -666,6 +679,9 @@ def _biff_walk(data):
             r, c = struct.unpack_from('<HH', body, 0)
             v = _biff_value(kind, body, vstart, ver)
             if v is not None:
+                if isinstance(v, tuple) and len(v) == 3 and v[2] is _PENDING:
+                    v = (v[0], v[1], '')    # until its STRING record says
+                    pending = (r, c)
                 cells[(r, c)] = v
     if vstart is None:
         raise FormatError('no BOF record - this is not a BIFF stream')
@@ -748,6 +764,8 @@ def _biff_value(rid, body, v, ver=3):
                                                                  '#ERR')))
             if kind == 3:
                 return ('formula', expr, '')
+            if kind == 0:
+                return ('formula', expr, _PENDING)
         return ('formula', expr, struct.unpack_from('<d', raw, 0)[0])
     return None
 

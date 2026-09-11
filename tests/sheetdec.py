@@ -79,14 +79,13 @@ ARM_A = [
     ('MIRR(B1:B6,0.1,0.12)',  FN.mirr(MFLOWS, 0.1, 0.12)),
     ('A1>=A2',                T),
     ('A1<>A2',                T),
+    # 81.10.11: a TEXT result is a FORMULA record and a STRING record now...
+    ('UPPER(A5)',             'ABC'),
+    ('LOWER(A6)',             'xyz'),
+    # ...and an ERROR result carries the FILE's code, 07H, not ERROR.TYPE's 2
+    ('1/0',                   ('err', '#DIV/0!')),
 ]
 COL = 2
-
-# A FORMULA WHOSE RESULT IS TEXT IS SAVED AS ITS VALUE - a known gap in the
-# WRITER, not the decoder: a BIFF FORMULA record carrying a string result needs
-# a STRING record after it, and sh_biff_formula does not write one, so it
-# falls back to a LABEL. Pinned here so the day it is fixed this row says so.
-ARM_A_TEXT = [('UPPER(A5)', 'ABC'), ('LOWER(A6)', 'xyz')]
 
 
 # --- arm B: Excel's token arrays, built by hand (excelfileformat 3.4-3.10) --
@@ -136,6 +135,13 @@ def arm_b(ver):
         (b''.join(ref(R | r, 0) for r in range(3)) + b'\x03\x03' +
          b''.join(ref(R | r, 0) + b'\x03' for r in range(20)), None, 99.0,
          99.0),                                              # > SH_EDITMAX
+        # --- REFUSED, with a cached result that is NOT a number (81.10.11):
+        # text comes in the STRING record after it, an error in the file's
+        # own numbering (07H is #DIV/0!), a logical as 1/0
+        (tint(2) + attr(0x04, 2) + b'\x04\x00\x0a\x00' + tstr('one') +
+         tstr('two') + fv(3, 100), None, 'two', ('str', 'two')),
+        (tint(50) + b'\x14', None, ('err', '#DIV/0!'), ('err', 0x07)),
+        (tint(1) + b'\x14', None, 1.0, ('bool', 1)),
     ]
 
 
@@ -154,15 +160,25 @@ def write_biff(ver, cases):
             out += rec(0x0203, struct.pack('<HHHd', r, c, 0, v))
     fop = 0x0206 if ver == 3 else 0x0406
     for i, (tok, _, _, cached) in enumerate(cases):
-        out += rec(fop, struct.pack('<HHH', i, COL, 0) + struct.pack('<d', cached)
-                   + struct.pack('<HH', 0, len(tok)) + tok)
+        after = b''
+        if isinstance(cached, tuple):           # 5.50: not a number at all
+            kind, v = cached
+            if kind == 'str':
+                res = bytes([0, 0, 0, 0, 0, 0, 0xFF, 0xFF])
+                after = rec(0x0207, struct.pack('<H', len(v)) + v.encode())
+            else:
+                res = bytes([2 if kind == 'err' else 1, 0, v, 0, 0, 0, 0xFF, 0xFF])
+        else:
+            res = struct.pack('<d', cached)
+        out += rec(fop, struct.pack('<HHH', i, COL, 0) + res
+                   + struct.pack('<HH', 0, len(tok)) + tok) + after
     return out + rec(0x000A, b'')
 
 
 def build_disk():
     os.makedirs(WORK, exist_ok=True)
     cells = dict(VALUES)
-    for i, (expr, _) in enumerate(ARM_A + ARM_A_TEXT):
+    for i, (expr, _) in enumerate(ARM_A):
         cells[(i, COL)] = ('formula', expr, WRONG)
     files = {"SHIN.SLK": F.write_sylk(cells),
              "XL3.BIF": write_biff(3, arm_b(3)), "XL4.BIF": write_biff(4, arm_b(4))}
@@ -280,12 +296,13 @@ def main():
     # the text it was typed as - and so to the function it was typed as
     if bif:
         written = F.read_biff(bif)
-        for i, (expr, _) in enumerate(ARM_A):
+        for i, (expr, want) in enumerate(ARM_A):
             g = written.get((i, COL))
-            check(isinstance(g, tuple) and g[1] == expr,
+            check(isinstance(g, tuple) and g[1] == expr and value_ok(want, g),
                   "written as a formula: =%s" % expr,
-                  "the host decodes SHEET's FORMULA record as %r"
-                  % (g[1] if isinstance(g, tuple) else g,))
+                  "the host reads SHEET's FORMULA record as %r - the text "
+                  "decoded from its tokens, and the cached result (a STRING "
+                  "record for text, the file's own code for an error)" % (g,))
     # ARM A, the decoder: SHEET's own file, reopened and saved as SYLK
     check(slk_a is not None, "SHEET saved the reopened .BIF as SYLK",
           "SHIN.SLK never changed after the reopen")
@@ -295,13 +312,6 @@ def main():
         check(formula_is(g, expr, i) and value_ok(want, g),
               "reopened as a formula: =%s" % expr,
               "SHEET holds %r - wanted the formula back, computing %r" % (g, want))
-    for j, (expr, want) in enumerate(ARM_A_TEXT):
-        i = len(ARM_A) + j
-        wb = F.read_biff(bif).get((i, COL)) if bif else None
-        check(wb == want, "KNOWN GAP pinned - a text result is saved as its "
-              "value: =%s" % expr,
-              "the .BIF holds %r for it. If that is a FORMULA now, the writer "
-              "learned STRING records: move this case into ARM_A" % (wb,))
     # ARM B: Excel's tokens, and the ones that must be refused
     for ver in (3, 4):
         got = F.read_sylk(slk_b[ver]) if slk_b.get(ver) else {}
