@@ -71,6 +71,10 @@ UNREGISTERED = {
     "trklog.inc": "tracker's logging build, %included by apps/tracker",
     "trkscrl.inc": "tracker's scroll-gate build, %included by apps/tracker",
     "npbench.inc": "a benchmark body, %included",
+    "glass.py": "reading SHEET's grid off the 1bpp screen - its lines, and "
+                "a cell's text by the kernel's own glyphs - for the gates "
+                "whose subject is what is drawn (SPEC.md 81.54, 81.55); "
+                "library, imported by them, not a test",
     "harness.py": "tests/unit/'s check library - check(), eq(), done() - "
                   "imported by every t_*.py there, not a test",
     "mkclick.py": "a GENERATOR, not a test: it writes build/click.mod - a "
