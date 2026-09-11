@@ -3895,13 +3895,14 @@ SOAK = [
         "It found IF losing a text branch on its way to passing",
         needs=("marty",), serial=True),
     Row("sheeteval", "soak", py("tests/sheeteval.py"), 240.0,
-        "SPEC.md 81.49-81.50: what SHEET's evaluator answers, checked by the "
+        "SPEC.md 81.49-81.52: what SHEET's evaluator answers, checked by the "
         "host - the row an evaluator parity gap goes into when it closes. "
         "CHOOSE returning the value it picked (it was an integer function: "
         "2.5 answered 2, text answered 0), a quoted ')' not counting as a "
         "parenthesis when arguments are stepped over, the WHOLE formula "
         "parsed (=1+2 3 answered 3) with spaces dropped where it is stored "
-        "(=A1 * ( A2 - 1 ) answered 2), and IF keeping a text branch. Each "
+        "(=A1 * ( A2 - 1 ) answered 2), the logical value, a total of "
+        "totals, and IF keeping a text branch. Each "
         "fix fails its own cases against the binary before it",
         needs=("marty",), serial=True),
     Row("sheetbool", "soak", py("tests/sheetbool.py"), 300.0,
@@ -3911,6 +3912,17 @@ SOAK = [
         "records say it kept a logical. Before, a BOOLERR read as 1, DIF's "
         "TRUE indicator left the cell blank, and CSV and dBASE made labels "
         "of them - ten of its checks fail against that binary",
+        needs=("marty",), serial=True),
+    Row("sheetxl2", "soak", py("tests/sheetxl2.py"), 420.0,
+        "SPEC.md 81.52: SHEET opens EXCEL 2.1's OWN FILES. Excel 2.1 saves "
+        "BIFF2 and the reader took BIFF3/4 only, so one opened empty. Arm A "
+        "is a BIFF2 file the host authors - every cell record, tAttr's one-"
+        "byte data, a BIFF2 STRING, the attribute bytes' formats; arm B is "
+        "three of Excel 2.1d's own sample worksheets, extracted at run time "
+        "from the user's release archive beside the repo (skipped, with a "
+        "notice, where it is absent) and compared cell by cell with what "
+        "the host reads in Excel's file. Arm B found a fold defect: a SUM "
+        "over formula cells that fold ranges of their own lost its range",
         needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "

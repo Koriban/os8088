@@ -98145,8 +98145,9 @@ formulas — an evaluation-model change rather than a function.
 
 ### 81.38 A second opinion about the file formats (`tools/os88sheetfmt.py`)
 
-SHEET writes three formats — BIFF2 (what Excel and this app both call
-"Normal"), SYLK and DIF — and until now **nothing outside SHEET had ever read
+SHEET writes three formats — BIFF (what Excel and this app both call
+"Normal"; BIFF3 records, which is what the writer emits — this said BIFF2
+until §81.52 found the reader could not even read that), SYLK and DIF — and until now **nothing outside SHEET had ever read
 one**. The suite's only SHEET row was `stkbalance`, a static check. A file was
 declared good because SHEET could open it again.
 
@@ -99486,6 +99487,87 @@ and taking out the DIF writer's branch fails DIF. `tests/sheetdec.py` has
 formula's cached logical kept as one: 88 checks. Resident +433 bytes,
 `CHART.OVL` +344, three vectors (`sh_setbool`, `sh_setlabel`,
 `sh_boolname`; `SH_NVEC` 52) and 12 bytes of bss.
+
+### 81.52 Excel 2.1's own files: BIFF2
+
+**A worksheet saved by Excel 2.1 opened empty.** Excel 2.1 saves BIFF2, and
+SHEET's reader took BIFF3 and BIFF4: every BIFF2 cell record — `0002H`
+INTEGER, `0003H` NUMBER, `0004H` LABEL, `0005H` BOOLERR, `0006H` FORMULA,
+`0007H` STRING — fell through to the generic skip, and the status bar said
+*Loaded* over a blank grid. An `.XLS` name, Excel's own, was not even sent to
+the BIFF reader: anything not `.DIF`/`.BIF`/`.CSV`/`.TXT`/`.DBF` was read as
+SYLK. For an app whose standard is Excel 2.1d, that is the one file it most
+needs to open.
+
+**A BIFF2 cell is a BIFF3 one with three attribute bytes where the XF index
+goes** (section 2.5.13 of the document). So `.b2cell` rewrites each record in
+place into BIFF3's shape and hands it to the handler that already exists:
+
+| Record | The rewrite |
+| --- | --- |
+| NUMBER, BOOLERR, FORMULA | row, column and a synthetic XF index move up one byte, which puts the value where BIFF3 keeps it; SI+1 and DX−1 leave `.skip`'s SI+DX where it was |
+| INTEGER | the same, and `.isrk` turns its **unsigned** word into the RK integer it would have been, `(v << 2) | 2` — 40000 is not −25536 |
+| LABEL | no move: its one-byte length becomes BIFF3's word in the two bytes the attributes vacate |
+| STRING | no cell header at all: one byte *back*, onto the already-read record length, for the length's second byte |
+
+The attribute bytes go to XF slot `SH_B2_XF` (`sh_b2_attr`) — number format
+and font from byte 1, alignment, the four borders and shading from byte 2,
+locked and hidden from byte 0 — which is the three bytes `.isxf` decodes a
+BIFF3 XF into, so `sh_biff_applyfmt` formats the cell unchanged. BIFF2's
+`0031H` FONT has BIFF3's options word at the same offset and goes to
+`.isfont`. The FORMULA record carries **one** byte of flags and one of
+`cce` where BIFF3 has words, and a `tAttr` token's data is a byte, not a word
+(section 3.10), so `sh_biff_dcrpn` and `sh_dc_attr` take `sh_dc_ver` 0 —
+the high byte of `0006H` — to mean BIFF2. The cell ids are BIFF2's only after
+a BIFF2 BOF (`0009H`) has set `sh_b2`, because BIFF5 reuses `0006H` and
+`0007H` for other shapes.
+
+**The format index is the built-in id.** A BIFF2 cell names a FORMAT record
+by position, and Excel 2.1 writes the 21 built-ins first in the built-in order
+(`General`, `0`, `0.00`, `#,##0`, …), so the position *is* the id
+`sh_biff_numfmt_from_id` already maps — the same four it maps for BIFF3, with
+anything else General.
+
+**Not read, and why:** BLANK (a formatted empty cell — a format here lives on
+a cell that holds something), COLWIDTH (one width for the whole sheet),
+`0018H` NAME (BIFF2's shape; BIFF3's `0218H` is read), and a custom FORMAT
+string. A formula the decoder refuses keeps its cached value, as in BIFF3:
+the corpus's are `tSheet` (a reference into another file) and `tExp` (an
+array formula).
+
+**The fold defect Excel's own file found.** `sh_foldrange` keeps a range's
+columns in `sh_r1col`/`sh_r2col`, and a formula cell *inside* the range may
+fold a range of its own through the same two words. EXPENSES.XLS's C55 is
+`=SUM(D55:I55)` over six column totals; evaluated before them, it ran D55's
+`SUM(D6:D54)`, came back scanning column D alone, and answered **82,113.70**
+where Excel's file says **475,304.15**. A total of totals to the left of, or
+above, what it totals is ordinary, and this was silently wrong for every one.
+The two words are banked around each cell's evaluation now (4 bytes of stack
+per nesting level); the lookups meet the same shape by refusing a nested
+search (§47), which was already written down beside them.
+
+**The corpus.** Excel 2.1d's release disks, which the user keeps beside the
+repository, carry 33 sample worksheets on the LIBRARY disk, compressed by
+COMPRESS.EXE's early `SZ` LZSS format. They are Microsoft's and are never
+copied into the tree: `tests/sheetxl2.py` extracts and decodes three of them
+into `build/` at run time. The host library reads BIFF2 formulas now too
+(`decode_rpn`), and across all 33 files decodes 314 of 323; the other nine are
+the `tSheet` and `tExp` above.
+
+**Evidence.** `tests/sheetxl2.py`, 29 checks. Arm A is a BIFF2 file the host
+authors — every cell record, an INTEGER past 32767, SUM through the three-byte
+`tAttrSum`, IF through `tAttrIf`/`tAttrSkip` with a BIFF2 STRING, a refused
+formula keeping its cached error and its cached text, and each attribute —
+saved as SYLK for the values and formulas and as Normal for the XF each cell
+names. Arm B is EXPENSES (351 cells), SAMPLES1 (232) and PAYROLL (47), every
+cell compared with what the host reads in Excel's file: text, number, and for
+a formula the same expression and Excel's own cached value, recomputed.
+Against the previous binary 21 of the 29 fail (the eight that pass are the
+files being opened and saved at all); `tAttr` taken back to four bytes fails
+four. Arm B is skipped, with a notice, where the archive is absent.
+`tests/sheeteval.py`'s `=SUM(D101:E101)` over two SUMs below every case
+answers 12.25 without the banking and 21.25 with it. `CHART.OVL` +380 bytes,
+resident +21, two bytes of bss.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

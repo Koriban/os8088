@@ -561,7 +561,9 @@ SH_PROT_MASK   equ 0x60             ; the two together, for preserving them
 ; than this app itself ever writes - beyond the cap, a cell just reads back
 ; as unformatted rather than growing these tables without bound)
 SH_BIFF_FONT_CAP equ 32
-SH_BIFF_XF_CAP   equ 128            ; 64 was exactly the format-byte space,
+SH_BIFF_XF_CAP   equ 128
+SH_B2_XF         equ SH_BIFF_XF_CAP - 1 ; the slot a BIFF2 cell's own
+                                        ; attributes are decoded into (81.52)            ; 64 was exactly the format-byte space,
                                     ; and 81.47 writes XFs past it for the
                                     ; cells that also carry a border
 SH_XFP_CAP       equ 64             ; distinct (format, border) pairs one file
@@ -11861,6 +11863,14 @@ shm_doread:
     pop di
     pop si
     jc .biff
+    push si                            ; .XLS is Excel's own name for the same
+    push di                            ; thing, and Excel 2.1's are BIFF2,
+    mov si, sh_name                    ; which the BIFF reader takes (81.52)
+    mov di, sh_s_ext_xls
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .biff
     push si
     push di
     mov si, sh_name
@@ -12651,6 +12661,74 @@ sh_biff_numfmt_from_id:
     ret
 .pct:
     mov al, SH_FMT_NUM_PERCENT
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_b2_attr - a BIFF2 cell's three attribute bytes (ES:SI+4..6, 2.5.13) into
+; XF slot SH_B2_XF, the three bytes .isxf decodes a BIFF3 XF into: font and
+; number format from byte 1, alignment, borders and shade from byte 2,
+; protection from byte 0. Excel 2.1 writes the built-in FORMAT list in the
+; built-in order, so the format index IS the built-in id. (81.52)
+; -----------------------------------------------------------------------------
+sh_b2_attr:
+    push ax
+    push bx
+    push cx
+    mov bx, SH_B2_XF
+    mov al, [es:si+5]                  ; bits 7-6 FONT, 5-0 FORMAT
+    mov ah, al
+    mov cl, 6
+    shr ah, cl
+    mov [bx+sh_xf_font], ah
+    and al, 0x3F
+    mov ah, [es:si+6]                  ; bits 2-0 XF_HOR_ALIGN
+    and ah, 7
+    cmp ah, 3
+    jbe .al
+    xor ah, ah                         ; Fill: General, as .isxf does
+.al:
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shl ah, cl
+    call sh_biff_numfmt_from_id        ; AL -> this app's code, AH kept
+    mov cl, SH_FMT_NUM_SHIFT
+    shl al, cl
+    or al, ah
+    mov [bx+sh_xf_fmt], al
+    xor ah, ah
+    mov al, [es:si+6]                  ; bit 3 left, 4 right, 5 top, 6 bottom,
+    test al, 0x08                      ; 7 shaded
+    jz .nl
+    or ah, SH_BORD_LEFT
+.nl:
+    test al, 0x10
+    jz .nr
+    or ah, SH_BORD_RIGHT
+.nr:
+    test al, 0x20
+    jz .nt
+    or ah, SH_BORD_TOP
+.nt:
+    test al, 0x40
+    jz .nb
+    or ah, SH_BORD_BOTTOM
+.nb:
+    test al, 0x80
+    jz .ns
+    or ah, SH_BORD_SHADE
+.ns:
+    mov al, [es:si+4]                  ; bit 6 locked, bit 7 hidden - and this
+    test al, 0x40                      ; app stores the EXCEPTION (81.46.1)
+    jnz .lk
+    or ah, SH_PROT_UNLOCK
+.lk:
+    test al, 0x80
+    jz .nh
+    or ah, SH_PROT_HIDDEN
+.nh:
+    mov [bx+sh_xf_bord], ah
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -13962,15 +14040,26 @@ sh_biff_dcrpn:
     push dx
     push si
     push di
-    cmp dx, 18                        ; row col xf result(8) flags cce
+    mov bx, 18                        ; row col xf result(8) flags cce
+    cmp byte [sh_dc_ver], 0           ; ...BIFF2's, once .b2cell has moved it
+    jne .b34                          ; up a byte, with ONE byte of flags and
+    mov bx, 16                        ; one of cce (5.50) - 81.52
+    cmp dx, bx
+    jb .bail
+    mov cl, [es:si+15]
+    xor ch, ch
+    jmp short .havecce
+.b34:
+    cmp dx, bx
     jb .bail
     mov cx, [es:si+16]                ; cce: the token array's length
+.havecce:
     mov ax, cx
-    add ax, 18
+    add ax, bx
     jc .bail
     cmp ax, dx
     ja .bail
-    lea di, [si+18]
+    lea di, [si+bx]
     add cx, di
     mov [sh_dc_tend], cx
     xor ax, ax
@@ -14180,11 +14269,15 @@ sh_dc_str:                            ; 17H len chars - quoted, '"' doubled
     pop ax
     ret
 
-sh_dc_attr:                           ; 19H flags word (BIFF3-8)
-    push ax
+sh_dc_attr:                           ; 19H flags data - a WORD of data from
+    push ax                           ; BIFF3, a BYTE in BIFF2 (3.10, 81.52)
     push cx
     push si
     mov cx, 4
+    cmp byte [sh_dc_ver], 0
+    jne .sz
+    dec cx
+.sz:
     call sh_dc_need
     jc .x
     mov al, [es:di+1]
@@ -14198,6 +14291,10 @@ sh_dc_attr:                           ; 19H flags word (BIFF3-8)
     jc .x
 .skip:                                ; volatile, IF, skip, space: no text
     add di, 4
+    cmp byte [sh_dc_ver], 0
+    jne .s4
+    dec di
+.s4:
     clc
     jmp short .x
 .bad:
@@ -14734,6 +14831,8 @@ sh_doread_biff:
                                        ; this; they precede the cell records
     mov word [sh_biff_nfont], 0
     mov word [sh_biff_nxf], 0
+    mov word [sh_b2], 0                ; sh_b2 and sh_b2_int: BIFF3 until a
+                                       ; BIFF2 BOF says otherwise (81.52)
     mov cx, ax                         ; CX = end offset (bytes read)
     mov [sh_biff_end], ax              ; ...and banked, because .islabel needs
     xor si, si                         ; a counter and CX is the only one free
@@ -14765,6 +14864,18 @@ sh_doread_biff:
     cmp ax, 0x000A                     ; EOF - but a WORKBOOK has one per sheet
     je .iseof                          ; substream plus its own, so the first
                                        ; is not the end of anything (81.10.5)
+    cmp ax, 0x0009                     ; BIFF2's BOF: EXCEL 2.1's OWN FILES
+    je .isbof2                         ; (81.52). Its cell ids are 0002H-0007H,
+    cmp byte [sh_b2], 0                ; which BIFF5 reuses for other shapes,
+    je .notb2                          ; so they are BIFF2's only after one
+    cmp ax, 0x0031                     ; BIFF2's FONT: the options word at the
+    je .isfont                         ; same offset as 0231H's
+    cmp ax, 0x0002
+    jb .notb2
+    cmp ax, 0x0007
+    ja .notb2
+    jmp .b2cell
+.notb2:
     cmp ax, 0x0231                     ; FONT
     je .isfont
     cmp ax, 0x0243                     ; XF (BIFF3) - what this app writes
@@ -14800,6 +14911,70 @@ sh_doread_biff:
     je .isname                         ; BIFF2/5/8 number and is NOT accepted
     jmp .skip                          ; here, because its body is a different
                                        ; shape (81.10.8)
+.isbof2:
+    mov byte [sh_b2], 1
+    mov word [sh_biff_nxf], SH_BIFF_XF_CAP  ; so .applyfmt takes SH_B2_XF
+    jmp .skip
+.b2cell:
+    ; ------------------------------------------------------------------
+    ; A BIFF2 CELL is a BIFF3 one with three attribute bytes where the XF
+    ; index goes (2.5.13), and it is REWRITTEN IN PLACE into BIFF3's shape so
+    ; the handlers below read it unchanged: the attributes go to XF slot
+    ; SH_B2_XF, and row/col/xf move up one byte, which puts the value where
+    ; BIFF3 keeps it. SI+1 and DX-1 leave .skip's SI+DX where it was. LABEL
+    ; is the exception - its one-byte length becomes BIFF3's word without the
+    ; move - and so is STRING, which has no cell header at all.
+    ; ------------------------------------------------------------------
+    cmp ax, 0x0007
+    je .b2str
+    cmp dx, 8
+    jb .skip
+    call sh_b2_attr
+    cmp al, 4
+    je .b2label
+    push ax
+    push bx
+    mov bx, [es:si]                    ; row
+    mov ax, [es:si+2]                  ; col
+    mov [es:si+3], ax
+    mov [es:si+1], bx
+    mov word [es:si+5], SH_B2_XF
+    pop bx
+    inc si
+    dec dx
+    pop ax
+    mov byte [sh_b2_int], 0
+    cmp al, 3
+    jne .b2n3
+    jmp .isnum
+.b2n3:
+    cmp al, 5
+    jne .b2n5
+    jmp .isboolerr
+.b2n5:
+    cmp al, 6
+    jne .b2int
+    jmp .isformula                     ; AH = 0: sh_dc_ver 0 is BIFF2
+.b2int:
+    mov byte [sh_b2_int], 1            ; 2, INTEGER: an unsigned word
+    jmp .isrk
+.b2label:
+    mov al, [es:si+7]
+    mov [es:si+6], al
+    mov byte [es:si+7], 0
+    mov word [es:si+4], SH_B2_XF
+    jmp .islabel
+.b2str:
+    or dx, dx
+    jz .b2sskip
+    dec si                             ; one byte BACK onto the record header's
+    inc dx                             ; length, already consumed, for the
+    mov al, [es:si+1]                  ; second byte of the word
+    mov [es:si], al
+    mov byte [es:si+1], 0
+    jmp .isstring
+.b2sskip:
+    jmp .skip
 .isname:
     ; ------------------------------------------------------------------
     ; DEFINEDNAME. Every field is bounds-checked against CX, the file's
@@ -14998,7 +15173,18 @@ sh_doread_biff:
     call sh_biff_rcok                  ; off-grid row/col: skip the record
     jc .rkdone                         ; rather than cross onto another sheet
     mov ax, [es:si+6]                  ; rk value low word
+    cmp byte [sh_b2_int], 0            ; ...or BIFF2's INTEGER, an unsigned
+    je .rkhi                           ; word, made the RK integer it would
+    xor dx, dx                         ; have been: (v << 2) | 2 (81.52)
+    shl ax, 1
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+    or al, 2
+    jmp short .rkgo
+.rkhi:
     mov dx, [es:si+8]                  ; rk value high word
+.rkgo:
     push es                            ; sh_rkdec_d works in sh_acc, which is
     call sh_rkdec_d                    ; ours, not the staging segment's
     pop es
@@ -21267,8 +21453,17 @@ sh_foldrange:
     ja .next
     and ax, SH_ROW_MASK                ; a hit: unpack the row and fold it
     xchg ax, bx                        ; AX = col, BX = row
-    call sh_getcell2                   ; tag, format and sh_acc, exactly as
-    jnc .next                          ; an operand's read loads them
+    push word [sh_r1col]               ; A FORMULA CELL IN THE RANGE MAY FOLD A
+    push word [sh_r2col]               ; RANGE OF ITS OWN, through these same
+    call sh_getcell2                   ; two words: =SUM(D55:I55) over six
+    pop word [sh_r2col]                ; column SUMs scanned D alone after the
+    pop word [sh_r1col]                ; first one ran, and answered its total.
+                                       ; Excel 2.1d's own EXPENSES.XLS found it
+                                       ; (81.52). The row bound is in SI and
+                                       ; sh_rrow cannot change; the lookups
+                                       ; refuse the same shape instead (47)
+    jnc .next                          ; tag, format and sh_acc, exactly as
+                                       ; an operand's read loads them
     call sh_foldvalue                  ; sh_acc is the value; see sh_foldvalue
 .next:
     add di, SH_C_SZ
@@ -30152,6 +30347,7 @@ sh_s_ext_biff: db '.BIF', 0
 sh_s_ext_csv:  db '.CSV', 0
 sh_s_ext_txt:  db '.TXT', 0
 sh_s_ext_dbf:  db '.DBF', 0
+sh_s_ext_xls:  db '.XLS', 0          ; Excel's own name for a worksheet (81.52)
 sh_s_dbf_bad:  db 'Not a dBASE III file.', 0
 sh_s_biff_fontname: db 'Helv', 0     ; Excel's own historical default face
 ; our number-format code (General/Currency/Comma/Percent) -> the real BIFF
@@ -30235,7 +30431,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5273
+    OS88_BSS 5275
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -31119,7 +31315,9 @@ sh_dc_prow        equ sh_wrec_roff + 2   ; word: the formula waiting for its
 sh_dc_pcol        equ sh_dc_prow + 2     ;       STRING record (81.10.11)
 sh_dc_pxf         equ sh_dc_pcol + 2
 sh_dc_pend        equ sh_dc_pxf + 2      ; byte: one is waiting
-sh_bss_end        equ sh_dc_pend + 1
+sh_b2             equ sh_dc_pend + 1     ; byte: this stream is BIFF2 (81.52)
+sh_b2_int         equ sh_b2 + 1          ; byte: .isrk is reading an INTEGER
+sh_bss_end        equ sh_b2_int + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

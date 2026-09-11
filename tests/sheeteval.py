@@ -42,6 +42,11 @@ WHAT IT HOLDS TODAY:
   order in which what the writeback PUBLISHES can differ from what it
   stores. The readers are tests/sheetbool.py's.
 
+  A TOTAL OF TOTALS (81.52): a fold over formula cells that fold ranges of
+  their own lost its own range to theirs - Excel 2.1d's EXPENSES.XLS found
+  it. D101 and E101 are two SUMs below every case, so the case that totals
+  them is what evaluates them first.
+
   IF with TEXT branches (81.10.10 found it) answered the else-branch's text
   for every condition. Kept here because this is the row it belongs to.
 """
@@ -74,6 +79,10 @@ VALUES = {(0, 0): 2.0, (1, 0): 7.0, (2, 0): 3.25, (3, 0): ('bool', True),
 # writeback stored the logical and published a number, and only the screen
 # (and a reference like this one) ever read the published one
 LATE = (99, 3)
+# ...and two SUMs below every case, which a case totals: a fold over formula
+# cells that fold ranges of their own (81.52)
+SUMS = {(100, 3): ('formula', 'SUM(A1:A3)', WRONG),
+        (100, 4): ('formula', 'SUM(A1:A2)', WRONG)}
 DIV0, VAL, NAME = ('err', '#DIV/0!'), ('err', '#VALUE!'), ('err', '#NAME?')
 NA = ('err', '#N/A')
 TR, FA = ('bool', True), ('bool', False)   # not T, F: F is the library
@@ -156,6 +165,9 @@ CASES = [
     ('ISLOGICAL(D100)',                   TR),      # ...and this reads what
                                                     # that STORED - it passed
                                                     # with the bug in
+    # A TOTAL OF TOTALS, evaluated before them: the nested SUM's range words
+    # replaced this one's, and it answered D101 alone - 12.25 (81.52)
+    ('SUM(D101:E101)',                    21.25),
     # a fold whose range ENDS ON A LABEL: the label's type was left standing
     ('SUM(A1:A5)',                        12.25),
     # IF keeps a text branch (81.10.10)
@@ -171,6 +183,7 @@ def build_disk():
     for i, (expr, _) in enumerate(CASES):
         cells[(i, COL)] = ('formula', expr, WRONG)
     cells[LATE] = ('formula', '1<2', WRONG)
+    cells.update(SUMS)
     src = os.path.join(WORK, "SHIN.SLK")
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,

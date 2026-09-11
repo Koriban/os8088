@@ -342,14 +342,19 @@ def _cellref(roww, col):
 
 
 def decode_rpn(tok, ver, known=None):
-    """A BIFF3/4 FORMULA token array -> formula text without the '=', or None.
+    """A BIFF2/3/4 FORMULA token array -> formula text without the '=', or None.
+
+    BIFF2 is BIFF3 but for tAttr, whose data is ONE byte there and two from
+    BIFF3 on (excelfileformat 3.10): three bytes long, not four. Excel 2.1's
+    own files are BIFF2, so that byte is the whole difference between reading
+    the program this app is modelled on and not.
 
     `known` restricts function calls to a set of names - SHEET's own, so a
     formula calling something SHEET cannot compute keeps its value rather
     than becoming #NAME?. RPN with explicit tParen needs no precedence of its
     own: a parenthesis the author wrote is a token, and one they did not
     write was not needed by the grammar that produced the tokens."""
-    if ver not in (3, 4):
+    if ver not in (2, 3, 4):
         return None
     st, i, n = [], 0, len(tok)
     try:
@@ -376,7 +381,7 @@ def decode_rpn(tok, ver, known=None):
                     return None                 # sources disagree on its length
                 if flags & 0x10:                # SUM with one argument
                     st.append('SUM(' + st.pop() + ')')
-                i += 4
+                i += 3 if ver == 2 else 4
             elif t == 0x1C:
                 st.append(BIFF_ERRORS[tok[i + 1]]); i += 2
             elif t == 0x1D:
@@ -393,7 +398,8 @@ def decode_rpn(tok, ver, known=None):
                     j = i + 2
                 else:
                     j = i + 1
-                idx = tok[j] if ver == 3 else struct.unpack_from('<H', tok, j)[0]
+                idx = (tok[j] if ver in (2, 3)
+                       else struct.unpack_from('<H', tok, j)[0])
                 if idx & 0x8000:
                     return None                 # a macro command
                 ent = BIFF_FUNCS.get(idx)
@@ -403,11 +409,11 @@ def decode_rpn(tok, ver, known=None):
                 if known is not None and name not in known:
                     return None
                 if t == 0x21:
-                    mm = ent[1] if ver == 3 else ent[2]
+                    mm = ent[1] if ver in (2, 3) else ent[2]
                     if mm is None:
                         return None
                     argc = mm[0]
-                i = j + (1 if ver == 3 else 2)
+                i = j + (1 if ver in (2, 3) else 2)
                 args = st[len(st) - argc:] if argc else []
                 del st[len(st) - argc:]
                 st.append(name + '(' + ','.join(args) + ')')
@@ -756,6 +762,10 @@ def _biff_value(rid, body, v, ver=3):
         if ver in (3, 4) and len(body) >= v + 12:
             cce = struct.unpack_from('<H', body, v + 10)[0]
             expr = decode_rpn(body[v + 12:v + 12 + cce], ver)
+        elif ver == 2 and len(body) >= v + 10:
+            # BIFF2 (5.50): result(8), then ONE byte of flags and ONE of cce
+            cce = body[v + 9]
+            expr = decode_rpn(body[v + 10:v + 10 + cce], ver)
         if len(raw) == 8 and raw[6] == 0xFF and raw[7] == 0xFF:
             kind = raw[0]
             if kind == 1:
