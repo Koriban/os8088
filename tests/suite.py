@@ -3972,6 +3972,13 @@ SOAK = [
         "twips back, Insert and Undo carry them, and scrolling onto a tall "
         "row shows it whole with no blit by the standard height",
         needs=("marty",), serial=True),
+    Row("sheetsort", "soak", py("tests/sheetsort.py"), 400.0,
+        "SPEC.md 81.61: Data > Sort orders every constant as Excel does - "
+        "numbers, labels in any case, logicals, errors, formulas by their "
+        "results - where labels, logicals and errors sat the sort out; and "
+        "an error constant survives Fill Right, Copy/Paste and typing, "
+        "which stored 0, pasted 0 and made a label",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

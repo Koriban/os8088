@@ -532,7 +532,9 @@ def write_sylk(cells, producer='OS88TEST'):
 def _sylk_out(v):
     if isinstance(v, tuple) and v and v[0] == 'formula':
         _, expr, val = v
-        return 'K%s;E%s' % (_sylk_scalar(val), expr)
+        # ';' doubled in the expression too: a string constant can hold one,
+        # and a single one ends the field (Walden; SPEC.md 81.61)
+        return 'K%s;E%s' % (_sylk_scalar(val), expr.replace(';', ';;'))
     return 'K%s' % _sylk_scalar(v)
 
 

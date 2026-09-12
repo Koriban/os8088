@@ -129,7 +129,10 @@ write (the format's ceiling; `SH_EDITMAX` = 63 binds first) and truncated to
 Written only for an error cell whose formula could not be tokenised.
 
 **`FORMULA`** (18 + cce): head, result(8), flags 0000H, cce(2), the RPN
-tokens from `sh_rpn_emit`. A numeric result is the double; an error result
+tokens from `sh_rpn_emit` - numbers, references, the operators, `tBool`,
+and since SPEC.md 81.61 `tStr` (17H, a count byte then the characters),
+`tConcat` (08H) and `tErr` (1CH, then the file's error code). A formula it
+cannot express is written as its cached value alone. A numeric result is the double; an error result
 is byte 0 = 2, byte 2 = the error code, bytes 6-7 = FFFFH. The token
 array's function indexes are one byte under 0206H and a word under 0406H,
 which is the one place the workbook changes a body beyond `XF` (§81.10.2).

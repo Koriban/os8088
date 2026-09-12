@@ -18,8 +18,9 @@ reads back each formula's TEXT and the VALUE SHEET computed from it. Every
 formula was authored with a WRONG cached value, so a right value means the
 decoded text was parsed and evaluated, not echoed.
 
-ARM B - EXCEL'S TOKENS. SHEET's writer emits no strings, no &, no TRUE and
-no error constants, so its own files cannot reach half of the decoder. The
+ARM B - EXCEL'S TOKENS. SHEET's writer emitted no strings, no & and no
+error constants until 81.61, and still emits no IF control tokens, so its
+own files cannot reach half of the decoder. The
 host writes two files the way Excel does - XL3.BIF in BIFF3, XL4.BIF as a
 BIFF4 worksheet, where a function index is a word - with strings, &, TRUE,
 an error, unary plus, IF with its tAttrIf/tAttrSkip control tokens, the
@@ -88,6 +89,17 @@ ARM_A = [
     ('LOWER(A6)',             'xyz'),
     # ...and an ERROR result carries the FILE's code, 07H, not ERROR.TYPE's 2
     ('1/0',                   ('err', '#DIV/0!')),
+    # 81.61: a STRING CONSTANT (tStr), '&' (tConcat) and an ERROR CONSTANT
+    # (tErr) are tokens too. The writer refused all three and saved the
+    # formula as its value. The first also carries a ';', which SYLK must
+    # double in the ;E field both ways - read as the field's end, the
+    # formula came in as `"a` and went out cut at the same place
+    ('"a;b"&A5',              'a;babc'),
+    ('A5&"-"&A1',             'abc-5'),
+    ('IF(A1>A2,"big","small")', 'big'),
+    ('"q""t"',                'q"t'),
+    ('#N/A',                  ('err', '#N/A')),
+    ('ISERROR(#REF!)',        T),
 ]
 COL = 2
 
@@ -301,7 +313,11 @@ def main():
         written = F.read_biff(bif)
         for i, (expr, want) in enumerate(ARM_A):
             g = written.get((i, COL))
-            check(isinstance(g, tuple) and g[1] == expr and value_ok(want, g),
+            # g[0] too: an error VALUE reads as ('err', '#N/A'), whose second
+            # field IS the text of =#N/A - a writer that saved the value alone
+            # passed this without it
+            check(isinstance(g, tuple) and g[0] == 'formula'
+                  and g[1] == expr and value_ok(want, g),
                   "written as a formula: =%s" % expr,
                   "the host reads SHEET's FORMULA record as %r - the text "
                   "decoded from its tokens, and the cached result (a STRING "

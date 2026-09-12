@@ -96756,7 +96756,9 @@ representation — `sh_cell_totext` out, `sh_commit` back, the same pair the
 block clipboard uses (§81.18). A formula is shifted by its own row delta, so a
 row that moves three down takes its `=B1*2` with it as `=B4*2`.
 
-**A label or an error value in the key column sits the sort out.** The scan
+**A label or an error value in the key column sits the sort out.** (No
+longer: §81.61 sorts every constant in Excel's order. What follows is why it
+had sat out.) The scan
 stages a key cell's eight value bytes, and a label keeps a numeric zero under
 its text (§81.11) — staging it through the value path wrote the number 0 over
 the word it held. It is skipped instead: its row never enters `rows[]`, so the
@@ -98400,11 +98402,11 @@ and §82 is this tree's answer to that.
 - **The macro language is 5 commands** of a language with ~90 macro functions
   (§81.8). It is a demonstration of the machinery, not the feature.
 - **No Short/Full menus toggle**, and **no freeze panes**.
-- **Smaller, each listed where it was found:** Fill Right/Down turns an
-  error constant into 0; SYLK cannot carry a `;` inside a formula; a centred or right-aligned label
-  does not run on into its neighbours (§81.54); Sort leaves a logical constant
-  out rather than ordering it after text (§81.51); a formatted empty cell
-  (BIFF's BLANK) loses its format (§81.52).
+- **Smaller, each listed where it was found:** a centred or right-aligned
+  label does not run on into its neighbours (§81.54); a formatted empty cell
+  (BIFF's BLANK) loses its format (§81.52); Sort leaves empty cells where they
+  are rather than last (§81.61). Fill's error constant, SYLK's `;` inside a
+  formula and Sort's labels, logicals and errors were closed by §81.61.
 
 #### 81.39.4 The enablers, in dependency order
 
@@ -99428,7 +99430,7 @@ already stamp their result a number). What had to learn it:
 | `&`, LEN and the text family | `sh_str_want` gives the name: `="x"&TRUE` is `xTRUE` |
 | typed entry | `TRUE` or `FALSE`, in any case, is the logical, not a label (`sh_setlabel`) |
 | the formula bar, Copy, Paste, Find | through `sh_cellnum`, the name |
-| Fill Right/Down | a logical constant stays one (`sh_setbool`); Sort leaves it out, as it does a label |
+| Fill Right/Down | a logical constant stays one (`sh_setbool`); Sort orders it after text since §81.61 (it sat the sort out, as a label did) |
 | folds over a **reference** | step over it like a label, Excel's rule: `SUM(A1:A4)` ignores a TRUE in A4, COUNT does not count it, COUNTA does, AND and OR use it |
 | folds over a **typed** argument | count it as its number: `SUM(TRUE,1)` is 2 |
 | MATCH and the lookups | a logical key finds only a logical, a number key never one |
@@ -100071,6 +100073,112 @@ twelve thousand compares a paint on the target.
 
 Resident +871 bytes (53,206 → 54,077, 1,660 left), bss +74, `CHART.OVL` +180
 (22,586 of 23,552), and one kilobyte of heap in the note claim.
+
+### 81.61 Formulas and constants that did not survive the trip
+
+Five defects from §81.39.3's list and around it, each of which lost what a
+cell held without saying so.
+
+#### 81.61.1 A `;` inside a formula, in SYLK
+
+SYLK escapes its field separator by doubling it (Walden: *"Any field
+containing the reserved semicolon character must have two of them"*), and
+§81.38.1 taught the K field that, both ways. The **E field** was never taught:
+the writer copied the formula verbatim and the reader ended the field at the
+first `;`. A `;` can only be in a formula inside a string constant, so
+`="a;b"&A5` went out as `E"a;b"&A5` — which any reader, SHEET's included,
+reads as the formula `"a` — and a conforming file's `E"a;;b"` came in cut at
+the same place. Both are fixed, and `tools/os88sheetfmt.py` doubles it when it
+authors a file too.
+
+#### 81.61.2 Strings, `&` and error constants in a saved formula
+
+`sh_rpn_emit` refused a string constant, the `&` operator and an error
+constant, so Save As Normal wrote any formula using one as its **cached value
+alone** — the formula was gone the next time the file was opened, with no
+message. It emits `tStr` (17H: a count byte, then the characters, a doubled
+quote being one), `tConcat` (08H) at the level the evaluator gives `&` —
+between the comparisons and `+`/`-`, left-associative — and `tErr` (1CH, then
+BIFF's own code through `sh_biff_e2b`), the name matched exactly against
+`sh_errtab` as `sh_perrlit` matches it. An unterminated string constant is
+still refused; Excel has no such thing. §81.10.10's decoder already read all
+three.
+
+#### 81.61.3 An error constant, stored
+
+An error **constant** — `#DIV/0!` held as a value, as a file or a typed entry
+leaves it — was lost three ways:
+
+- **Fill Right/Down** read it and stored the number underneath: 0. It is
+  stored as the error now (`sh_seterr`, which moved into resident code for
+  it; the readers reach it through a vector, `SH_NVEC` 58).
+- **Copy/Paste** carried `sh_cellnum`'s text of it, which was that same 0.
+  `sh_cellnum` names an error as it names a logical, so the formula bar shows
+  it too.
+- **Typing `#N/A`** made a label. `sh_commit` takes the seven error names, in
+  any case, as the error constant (`sh_errword`), as Excel does — and Paste
+  and Sort's carry commit through it, so an error in a carried column
+  survives a sort. The file readers are untouched: a quoted `"#N/A"` in SYLK
+  is still a label, as Walden's grammar says.
+
+`sh_seterr` also answers CF=1 when the cell table refuses it, because
+`sh_commit`'s callers stop on that.
+
+#### 81.61.4 Sort orders every constant
+
+**Sort ordered numbers alone**: a label, a logical and an error value in the
+key column sat the sort out, their rows never entering `rows[]` (§81.19), so
+sorting a column of names moved nothing. Excel's ascending order is numbers,
+then text, then logicals, then errors, and descending reverses all of it.
+
+Each entry carries a **class** now — 0 number, 1 text, 2 logical, 3 error —
+in a byte array at `SH_SORT_CLS_OFF` (30720, the staging segment's free tail),
+indexed by the entry's original index so the insertion sort never moves it.
+`sh_sort_cmp` compares classes first; two numbers or two logicals by value,
+two errors as equal, and **two labels in any case**, character by character.
+A label's text is staged in a `SH_SORT_SNAP_OFF` slot — idle until the carry,
+which runs after the write-back — and its value bytes name the slot, so text
+entries are capped at the snapshot's 180, the cap the carry already had; one
+past it sits out as before. A formula sorts by its **result**, a text result
+staged the same way (`sh_sort_class`). The write-back restores each class
+through its own setter: `sh_setvald`, `sh_settext` (skipped when the label is
+already in its row, which spends no arena), `sh_setbool`, `sh_seterr`.
+
+A column heading in the key column is sorted with its data now, which is what
+Excel 2.1 does with a selection that includes it; §81.19's "what the header
+row wants" was the side effect of labels sitting out. Empty cells in the key
+column still stay where they are, where Excel puts them last.
+
+#### 81.61.5 Evidence
+
+`tests/sheetdec.py` gains **12 checks**, six formulas each checked as written
+(decoded on the host) and as reopened: `"a;b"&A5`, `A5&"-"&A1`,
+`IF(A1>A2,"big","small")`, `"q""t"`, `#N/A` and `ISERROR(#REF!)`. The
+previous binary fails 11 of them. The twelfth passed only by coincidence:
+it saved `=#N/A` as an error *value*, which the host reads as
+`('err', '#N/A')` — whose second field is the formula's text. The check
+requires a FORMULA record now. Mutations, each caught: the E field read without
+its escape (2 checks), written without it (1), no `tStr` (8), no `tConcat`
+(4), no `tErr` (4).
+
+`tests/sheetsort.py`, **7 checks**, through the menus and a SYLK save:
+Fill Right, Copy/Paste and typing each keep an error constant; Sort on a
+single cell sorts column A's eleven mixed entries — three numbers, three
+labels (`apple` and `Banana`, which ASCII would order the other way), two
+logicals, an error, and two formulas, one with a text result — into Excel's
+order with both formulas still formulas; and a two-column block sorts on its
+key's classes ascending and descending with its second column carried.
+The previous binary fails 6 of the 7. Mutations, each caught: Fill without
+its error case (1), `sh_cellnum` without its (1), `sh_commit` without
+`sh_errword` (2 - Paste commits through it), labels sitting the sort out
+again (3), the class compare dropped (3), a formula's text result not staged
+(1), and the comparison without its case fold (1). A first version of that
+last mutation took the fold off one side only and passed, because in this
+fixture every text comparison has the folded label on the key side - the
+mutation was wrong, not the gate.
+
+Resident +654 bytes (54,077 → 54,731, **995 left**), bss +11, `CHART.OVL`
++178 (22,764 of 23,552, `sh_seterr` having left it).
 
 ## 82. CHART — charting, and the buffer both halves draw into
 

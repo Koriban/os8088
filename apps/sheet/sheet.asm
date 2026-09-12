@@ -256,6 +256,13 @@ SH_SORT_SNAP_OFF  equ 19200          ; SH_SORT_SNAPCAP slots of 64 bytes: ONE
                                      ; permutation is applied to it. It starts
                                      ; where the formula slots end (7680 +
                                      ; 180*64) and fits inside SH_STAGE_MAX
+SH_SORT_CLS_OFF   equ 30720          ; byte/entry, by ORIGINAL index (81.61):
+                                     ; 0 number, 1 text, 2 logical, 3 error -
+                                     ; Excel's ascending order of the four.
+                                     ; A text entry's eight value bytes hold
+                                     ; the offset of its text, staged in a
+                                     ; SNAP slot, which nothing else uses
+                                     ; until the carry, after the write-back
 SH_SORT_SNAPCAP   equ 180            ; rows a multi-column sort can carry
                                      ; through - far more than any real
                                      ; column needs; a cell beyond this cap
@@ -1116,6 +1123,9 @@ sh_x_sh_colw_clear:
 sh_x_sh_rowh_set:                       ; 81.60: row heights, for the reader
     call sh_rowh_set
     retf
+sh_x_sh_seterr:                         ; 81.61: resident, for Fill
+    call sh_seterr
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1134,6 +1144,7 @@ sh_ovshims:
     dw sh_x_sh_bt_getw                                            ; 81.55
     dw sh_x_sh_colwidth, sh_x_sh_colw_set, sh_x_sh_colw_clear     ; 81.56
     dw sh_x_sh_rowh_set                                           ; 81.60
+    dw sh_x_sh_seterr                                             ; 81.61
 
 sh_entry:
     push ax
@@ -3651,7 +3662,15 @@ sh_commit:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     mov si, sh_editbuf
-    call sh_setlabel                  ; ...except TRUE and FALSE, which are
+    push ax                           ; ...except an ERROR VALUE's name, which
+    call sh_errword                   ; is the error constant, as a typed #N/A
+    mov dx, ax                        ; is in Excel - and so what Paste and
+    pop ax                            ; Sort's carry commit for one, both of
+    jnc .label                        ; which go through here as text (81.61)
+    call sh_seterr
+    jmp short .out
+.label:
+    call sh_setlabel                  ; ...and TRUE and FALSE, which are
 .out:                                 ; the logical constant (81.51)
     pop es
     pop si
@@ -7619,6 +7638,12 @@ sh_fill_copy:
     je .text                           ; 81.18's Copy defect, closed here too)
     mov ax, [sh_fl_dcol]
     mov bx, [sh_fl_drow]
+    cmp byte [sh_curtype], SH_T_ERR    ; ...or an ERROR CONSTANT, which the
+    jne .fbool                         ; number store turned into 0 (81.61)
+    mov dl, [sh_curaux]
+    call sh_seterr
+    jmp .out
+.fbool:
     cmp byte [sh_curtype], SH_T_BOOL   ; ...or LOGICAL, which a number store
     jne .fnum                          ; would flatten to 1 (81.51)
     call sh_setbool                    ; DL: sh_getcell2's truncated value
@@ -8574,12 +8599,152 @@ sh_sort_ldds:
 sh_sort_cmp:
     push ax
     push si
+    mov al, [sh_sort_cmpc]            ; the CLASS first (81.61): number, text,
+    cmp al, [sh_sort_keyc]            ; logical, error. Small and unsigned, so
+    jne .out                          ; the signed flags read the same
+    cmp al, 1
+    je .text
+    cmp al, 3
+    je .out                           ; two errors: equal (ZF from the cmp)
     mov si, sh_sort_cmpv
     call fp_unpack_a
     mov si, sh_sort_keyval
     call fp_unpack_b
     call fp_cmpab                     ; AX = -1/0/1 and the flags to match
+.out:
     pop si
+    pop ax
+    ret
+.text:
+    push bx                           ; two labels, in any case: ES is the
+    push di                           ; staging segment, where the slots are
+    mov si, [sh_sort_cmpv]
+    mov di, [sh_sort_keyval]
+.tl:
+    mov al, [es:si]
+    mov bl, [es:di]
+    cmp al, 'a'
+    jb .t1
+    cmp al, 'z'
+    ja .t1
+    sub al, 32
+.t1:
+    cmp bl, 'a'
+    jb .t2
+    cmp bl, 'z'
+    ja .t2
+    sub bl, 32
+.t2:
+    xor ah, ah                        ; as words, so a byte past 7FH still
+    xor bh, bh                        ; orders by the signed flags
+    cmp ax, bx
+    jne .td
+    or al, al
+    jz .td                            ; both ended: equal, ZF set
+    inc si
+    inc di
+    jmp short .tl
+.td:
+    pop di
+    pop bx
+    jmp short .out
+
+; sh_sort_tslot - SI = a string in the text arena -> copied into the next SNAP
+; slot, [sh_sort_ctoff] = where. CF=1 when the slots are all used (81.61)
+sh_sort_tslot:
+    push ax
+    push cx
+    push di
+    push es
+    mov ax, [sh_sort_tcnt]
+    cmp ax, SH_SORT_SNAPCAP
+    jae .full
+    mov cx, 64
+    mul cx
+    add ax, SH_SORT_SNAP_OFF
+    mov [sh_sort_ctoff], ax
+    mov di, ax
+    mov cx, 63
+.c:
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    mov es, [sh_stgseg]
+    mov [es:di], al
+    or al, al
+    jz .done
+    inc si
+    inc di
+    loop .c
+    mov byte [es:di], 0
+.done:
+    inc word [sh_sort_tcnt]
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; sh_sort_class - after sh_getcell2 on a FORMULA key cell: [sh_sort_ccls] =
+; its result's class, a text result's characters (sh_sacc) staged in a slot.
+; CF=1 when a text result finds no slot
+sh_sort_class:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov byte [sh_sort_ccls], 0
+    mov al, [sh_curtype]
+    cmp al, SH_T_BOOL
+    jne .nb
+    mov byte [sh_sort_ccls], 2
+.nb:
+    cmp al, SH_T_ERR
+    jne .ne
+    mov byte [sh_sort_ccls], 3
+.ne:
+    cmp al, SH_T_TEXT
+    je .txt
+    clc                               ; AFTER the compare, which sets CF
+    jmp short .out
+.txt:
+    mov ax, [sh_sort_tcnt]
+    cmp ax, SH_SORT_SNAPCAP
+    jae .full
+    mov cx, 64
+    mul cx
+    add ax, SH_SORT_SNAP_OFF
+    mov [sh_sort_ctoff], ax
+    mov di, ax
+    mov es, [sh_stgseg]
+    mov si, sh_sacc
+    mov cx, 63
+.c:
+    mov al, [si]
+    mov [es:di], al
+    or al, al
+    jz .done
+    inc si
+    inc di
+    loop .c
+    mov byte [es:di], 0
+.done:
+    inc word [sh_sort_tcnt]
+    mov byte [sh_sort_ccls], 1
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -8609,6 +8774,7 @@ sh_docmd_sortcol:
     mov [sh_sort_r2], bx
     mov word [sh_sort_cnt], 0
     mov word [sh_sort_fcnt], 0
+    mov word [sh_sort_tcnt], 0
     xor cx, cx
 .scan:
     cmp cx, [sh_ncells]
@@ -8654,6 +8820,10 @@ sh_docmd_sortcol:
     pop si                            ; stale - see this proc's own header)
     pop cx
     mov [sh_sort_val], dx
+    call sh_sort_class                ; ...and its RESULT's class (81.61): a
+    jc .next                          ; text result needs a slot, and if none
+                                      ; is left the cell sits the sort out,
+                                      ; before its formula text takes one
     mov es, [sh_cellseg]
     mov ax, [es:si+SH_C_FOFF]         ; formula_off
     mov si, ax
@@ -8699,19 +8869,29 @@ sh_docmd_sortcol:
     pop di
     pop si
     pop ax
+    cmp byte [sh_sort_ccls], 1        ; a text result sorts on its TEXT: the
+    jne .fkey                         ; value bytes name its slot instead
+    mov ax, [sh_sort_ctoff]
+    mov [sh_sort_val], ax
+.fkey:
     mov al, 1                         ; isformula flag
     jmp .stage
 .isplainval:
-    mov al, [es:si+SH_C_TYPE]         ; a LABEL or an ERROR VALUE has no
-    cmp al, SH_T_TEXT                 ; number to sort on, and staging one
-    je .next                          ; through the value path wrote 0.0 back
-    cmp al, SH_T_ERR                  ; over its text: it sits the sort out
-    je .next                          ; instead - its row never enters rows[],
-    cmp al, SH_T_BOOL                 ; ...and so does a LOGICAL, which the
-    je .next                          ; write-back would store as 1 (81.51)
-                                       ; the same clip-don't-crash policy
-                                       ; SH_SORT_FCAP uses, which is what a
-                                       ; header row over a table wants anyway
+    ; EVERY CONSTANT SORTS, as in Excel (81.61): numbers, then labels (in
+    ; any case), then logicals, then errors. A label, an error and a logical
+    ; used to sit the sort out, their rows never entering rows[] - so sorting
+    ; a column of names moved nothing. The class says how each compares and
+    ; how the write-back restores it
+    mov al, [es:si+SH_C_TYPE]
+    mov byte [sh_sort_ccls], 0
+    cmp al, SH_T_TEXT
+    je .stext
+    cmp al, SH_T_ERR
+    je .serr
+    cmp al, SH_T_BOOL
+    jne .snum
+    mov byte [sh_sort_ccls], 2        ; a logical: its 0 or 1 below
+.snum:
     call sh_cellval_to_acc_si         ; the WHOLE value into sh_acc, not the
     push si                           ; word at SH_S_VAL - sorting on the
     push di                           ; truncated integer made every decimal
@@ -8727,6 +8907,23 @@ sh_docmd_sortcol:
     mov [di+6], ax
     pop di
     pop si
+    jmp short .splain
+.serr:
+    mov byte [sh_sort_ccls], 3        ; an error: all compare equal, and the
+    mov al, [es:si+SH_C_AUX]          ; code rides in the value bytes for the
+    xor ah, ah                        ; write-back
+    mov [sh_sort_val], ax
+    jmp short .splain
+.stext:
+    push si                           ; a label: its characters into a slot
+    mov si, [es:si+SH_C_FOFF]
+    call sh_sort_tslot                ; CF=1 no slot left: it sits out
+    pop si
+    jc .next
+    mov byte [sh_sort_ccls], 1
+    mov ax, [sh_sort_ctoff]
+    mov [sh_sort_val], ax
+.splain:
     xor al, al                        ; isformula flag
 .stage:
     mov bx, [sh_sort_cnt]
@@ -8760,6 +8957,10 @@ sh_docmd_sortcol:
     mov di, bx
     add di, SH_SORT_ISF_OFF
     mov [es:di], al                   ; isformula[cnt]
+    mov di, bx
+    add di, SH_SORT_CLS_OFF
+    mov ah, [sh_sort_ccls]
+    mov [es:di], ah                   ; class[cnt], by original index
     or al, al
     jz .noformidx
     mov di, bx
@@ -8791,6 +8992,9 @@ sh_docmd_sortcol:
     add si, SH_SORT_ORIG_OFF
     mov ax, [es:si]                   ; ax = key's own origidx
     mov [sh_sort_keyorig], ax
+    mov si, ax
+    mov al, [es:si+SH_SORT_CLS_OFF]
+    mov [sh_sort_keyc], al            ; ...and its class, which stays put
     mov di, bx
 .inner:
     or di, di
@@ -8803,6 +9007,12 @@ sh_docmd_sortcol:
     mov si, sh_sort_cmpv
     call sh_sort_ldds
     pop di
+    mov si, di                        ; values[j-1]'s class, through its
+    dec si                            ; origidx
+    shl si, 1
+    mov si, [es:si+SH_SORT_ORIG_OFF]
+    mov al, [es:si+SH_SORT_CLS_OFF]
+    mov [sh_sort_cmpc], al
     pop bx
     call sh_sort_cmp                  ; CF/ZF as a signed compare of
     je .insert                        ; values[j-1] against the key
@@ -8930,6 +9140,14 @@ sh_docmd_sortcol:
     jc .wbfull                        ; the arena refused: stop the write-back
     jmp .wbnext
 .wbplain:
+    mov si, [sh_sort_src]             ; its class decides the store (81.61)
+    mov al, [es:si+SH_SORT_CLS_OFF]
+    cmp al, 1
+    je .wbtext
+    cmp al, 3
+    je .wberr
+    cmp al, 2
+    je .wbbool
     push cx
     push bx
     mov bx, cx
@@ -8948,6 +9166,56 @@ sh_docmd_sortcol:
     mov bx, [sh_sort_trow]
     call sh_setvald                   ; an integer store would truncate it
     pop cx
+    jmp .wbnext
+.wbbool:
+    push cx
+    mov bx, cx
+    call sh_sort_vof
+    xor dl, dl
+    cmp word [es:di+6], 0             ; 1.0 has a top word, 0.0 none
+    je .wbb
+    inc dl
+.wbb:
+    mov ax, [sh_sort_keycol]
+    mov bx, [sh_sort_trow]
+    call sh_setbool
+    pop cx
+    jmp .wbnext
+.wberr:
+    push cx
+    mov bx, cx
+    call sh_sort_vof
+    mov dl, [es:di]                   ; the code it was staged with
+    mov ax, [sh_sort_keycol]
+    mov bx, [sh_sort_trow]
+    call sh_seterr
+    pop cx
+    jmp .wbnext
+.wbtext:
+    mov si, [sh_sort_src]             ; its own row already: nothing to do,
+    shl si, 1                         ; and no arena spent saying so
+    mov ax, [es:si]
+    cmp ax, [sh_sort_trow]
+    je .wbnext
+    push cx
+    mov bx, cx
+    call sh_sort_vof
+    mov si, [es:di]                   ; the slot, out of staging into DS
+    mov di, sh_rwsrc                  ; where sh_settext reads
+.wbtc:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .wbtc
+    mov ax, [sh_sort_keycol]
+    mov bx, [sh_sort_trow]
+    mov si, sh_rwsrc
+    call sh_settext
+    pop cx
+    jc .wbfull
+    mov es, [sh_stgseg]               ; the loop reads staging through ES
 .wbnext:
     inc cx
     jmp .wb
@@ -12979,8 +13247,18 @@ sh_dowrite_sylk:
     pop si
     mov si, sh_s_e
     call sh_stgput
-    mov si, sh_rwdst
-    call sh_stgput
+    mov si, sh_rwdst                  ; ...with every ';' DOUBLED, as the K
+.edbl:                                ; field's are: a string constant can
+    mov al, [si]                      ; hold one, and a single one ends the
+    or al, al                         ; field there, in a file that parses
+    jz .noexpr
+    inc si
+    cmp al, ';'
+    jne .edbl1
+    call sh_stgputb
+.edbl1:
+    call sh_stgputb
+    jmp short .edbl
 .noexpr:
     mov si, sh_s_k
     call sh_stgput
@@ -13750,7 +14028,7 @@ sh_doread_dif:
     mov dl, SH_ERR_NA                  ; means "leave this cell blank"
     mov ax, [sh_wcol]                  ; here.
     mov bx, [sh_wrow]                  ; #N/A is what an ERROR comes back as:
-    call sh_seterr                     ; the file said a value was not
+    SHOUT sh_seterr                    ; the file said a value was not
     jmp .notvalid                      ; available and could not say more, and
 .isvalid:                              ; #N/A is the one error that means
     mov ax, [sh_wcol]                  ; exactly that. Guessing a specific one
@@ -16951,7 +17229,7 @@ sh_doread_biff:
     mov dl, al                         ; as #N/A (81.10.11)
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_seterr
+    SHOUT sh_seterr
     call sh_biff_applyfmt
     pop es
     pop dx
@@ -16990,7 +17268,7 @@ sh_doread_biff:
     mov dl, al
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
-    call sh_seterr
+    SHOUT sh_seterr
     jmp .bedone
 .isbool:
     mov ax, [sh_wrec_col]              ; TRUE/FALSE is the LOGICAL now, and no
@@ -17630,12 +17908,20 @@ sh_parsecrec:
     cmp si, bx
     jae .ecpyd
     mov al, [es:si]
-    cmp al, ';'
-    je .ecpyd
+    cmp al, ';'                       ; the field separator ends it - unless
+    jne .ecnl                         ; DOUBLED, Walden's escape, which is one
+    inc si                            ; literal ';' - in a string constant, the
+    cmp si, bx                        ; one place a formula can hold one. This
+    jae .ecpyd                        ; loop took the first of the pair as the
+    cmp byte [es:si], ';'             ; field's end, as .kt did for labels
+    jne .ecpyd                        ; until 81.38.1
+    jmp short .eckeep
+.ecnl:
     cmp al, 13
     je .ecpyd
     cmp al, 10
     je .ecpyd
+.eckeep:
     mov [di], al
     inc di
     inc si
@@ -17685,7 +17971,7 @@ sh_parsecrec:
     cmp byte [SH_TISERR], 0
     je .noterr_c
     mov dl, [SH_TISERR]
-    call sh_seterr
+    SHOUT sh_seterr
     jmp .out
 .noterr_c:
     cmp byte [SH_TISTXT], 0
@@ -20440,11 +20726,11 @@ sh_setvald:
 ; -----------------------------------------------------------------------------
 ; sh_seterr - in: AX=col, BX=row, DL=an SH_ERR_* code (1..7). The cell
 ; becomes an ERROR VALUE with a zero underneath it, which is exactly what a
-; file carrying one means. Used by the BIFF reader; the SYLK and DIF readers
-; do not need it, because those formats carry the FORMULA and the error is
-; regenerated by evaluating it.
+; file carrying one means. Used by the file readers, and (81.61) by Fill
+; Right/Down, which is why it is RESIDENT: Fill turned an error constant into
+; 0, and the readers reach it through a vector now.
 ; -----------------------------------------------------------------------------
-section .modc                      ; 82.16.9
+section .text
 sh_seterr:
     push ax
     push bx
@@ -20456,17 +20742,19 @@ sh_seterr:
     push cx
     push ax                           ; the column, across sh_acc_int
     xor ax, ax
-    SHOUT sh_acc_int
+    call sh_acc_int
     pop ax
-    SHOUT sh_setvald                   ; creates the record, tagged SH_T_NUM
-    SHOUT sh_findcell                  ; ...and now say what it really is
+    call sh_setvald                    ; creates the record, tagged SH_T_NUM
     pop cx
+    jc .out                            ; refused: CF=1 says so (81.61)
+    call sh_findcell                   ; ...and now say what it really is
     jnc .out
     push es
     mov es, [sh_cellseg]
     mov byte [es:di+SH_C_TYPE], SH_T_ERR
     mov [es:di+SH_C_AUX], cl
     pop es
+    clc
 .out:
     pop si
     pop di
@@ -20541,6 +20829,33 @@ sh_boolword:
     mov ax, 0
 .out:
     pop di
+    ret
+
+; sh_errword - CF=1 when the text at DS:SI is one of the seven error values,
+; in any case and with nothing either side, and AX = its ERROR.TYPE then
+sh_errword:
+    push bx
+    push di
+    xor bx, bx
+.l:
+    cmp bx, 14
+    jae .no
+    mov di, [sh_errtab + bx]
+    call sh_wordeq
+    jc .yes
+    add bx, 2
+    jmp short .l
+.yes:
+    mov ax, bx
+    shr ax, 1
+    inc ax
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop di
+    pop bx
     ret
 
 sh_wordeq:                            ; DS:SI in any case against DS:DI, upper
@@ -20793,6 +21108,9 @@ SH_PTG_GT      equ 0x0D
 SH_PTG_NE      equ 0x0E
 SH_PTG_UMINUS  equ 0x13
 SH_PTG_PAREN   equ 0x15
+SH_PTG_CONCAT  equ 0x08               ; 81.61: '&', a string constant and an
+SH_PTG_STR     equ 0x17               ; error constant - cch byte, then bytes
+SH_PTG_ERR     equ 0x1C               ; one byte, BIFF's own error code
 SH_PTG_INT     equ 0x1E                 ; + a 16-bit unsigned
 SH_PTG_NUM     equ 0x1F                 ; + an IEEE double
 SH_PTG_FUNCV   equ 0x41                 ; tFuncV / tFuncVarV (3.7.1, 3.7.2).
@@ -21210,7 +21528,7 @@ sh_rpn_skip:                          ; past spaces
 sh_rpn_cmp:
     push ax
     push si
-    call sh_rpn_add
+    call sh_rpn_concat
     cmp byte [sh_rpn_bad], 0
     jne .out
     call sh_rpn_skip
@@ -21255,12 +21573,38 @@ sh_rpn_cmp:
     mov [sh_rpn_p], si
 .rhs:
     push ax
-    call sh_rpn_add                   ; ONE comparison only, which is what the
+    call sh_rpn_concat                ; ONE comparison only, which is what the
     pop ax                            ; evaluator does too - a<b<c is not a
     cmp byte [sh_rpn_bad], 0          ; thing either of them accepts
     jne .out
     mov al, ah
     call sh_rpn_put
+.out:
+    pop si
+    pop ax
+    ret
+
+; sh_rpn_concat - '&' (81.61), between the comparison and the additive level
+; exactly as sh_pconcat is: looser than '+', tighter than '='. Left-associative
+sh_rpn_concat:
+    push ax
+    push si
+    call sh_rpn_add
+.more:
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    call sh_rpn_skip
+    mov si, [sh_rpn_p]
+    cmp byte [si], '&'
+    jne .out
+    inc si
+    mov [sh_rpn_p], si
+    call sh_rpn_add
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov al, SH_PTG_CONCAT
+    call sh_rpn_put
+    jmp short .more
 .out:
     pop si
     pop ax
@@ -21402,6 +21746,7 @@ sh_rpn_factor:
     push cx
     push dx
     push si
+    push di                           ; the error constant's table walk
     call sh_rpn_skip
     mov si, [sh_rpn_p]
     mov al, [si]
@@ -21409,6 +21754,10 @@ sh_rpn_factor:
     je .paren
     cmp al, '$'
     je .ref
+    cmp al, 34                        ; a STRING CONSTANT and an ERROR
+    je .str                           ; CONSTANT are tokens too (81.61): they
+    cmp al, '#'                       ; refused, and the formula went out as
+    je .err                           ; its value alone
     cmp al, '0'
     jb .notdigit
     cmp al, '9'
@@ -21455,9 +21804,77 @@ sh_rpn_factor:
 .ref:
     call sh_rpn_ref
     jmp .out
+.str:
+    ; tStr, then a count byte and the characters: a doubled quote is one
+    ; literal quote, as the evaluator reads it. An unterminated constant is
+    ; refused - Excel has no such thing, so no token says it
+    inc si
+    mov al, SH_PTG_STR
+    call sh_rpn_put
+    mov bx, [sh_rpn_len]              ; BX = where the count goes
+    xor al, al
+    call sh_rpn_put
+    xor cx, cx
+.sl:
+    mov al, [si]
+    or al, al
+    jz .bad
+    cmp al, 34
+    jne .slkeep
+    cmp byte [si+1], 34
+    jne .slclose
+    inc si
+.slkeep:
+    call sh_rpn_put
+    inc si
+    inc cx
+    jmp short .sl
+.slclose:
+    inc si
+    mov [sh_rpn_p], si
+    cmp byte [sh_rpn_bad], 0
+    jne .out
+    mov [sh_rpn_buf + bx], cl
+    jmp .out
+.err:
+    ; tErr and BIFF's code for it, the name matched against sh_errtab - the
+    ; table the evaluator matches and sh_errname prints - exactly, as
+    ; sh_perrlit does. Not a name there: refused, as the evaluator's #NAME? is
+    xor cx, cx
+.et:
+    cmp cx, 7
+    jae .bad
+    mov bx, cx
+    shl bx, 1
+    mov di, [sh_errtab + bx]
+    push si
+.em:
+    mov al, [di]
+    or al, al
+    jz .ehit
+    cmp al, [si]
+    jne .emiss
+    inc si
+    inc di
+    jmp short .em
+.emiss:
+    pop si
+    inc cx
+    jmp short .et
+.ehit:
+    pop dx                            ; the name's start, no longer needed
+    mov [sh_rpn_p], si
+    mov al, SH_PTG_ERR
+    call sh_rpn_put
+    mov al, cl
+    inc al                            ; ERROR.TYPE, 1-based
+    call sh_biff_e2b                  ; -> the file's code
+    call sh_rpn_put
+    jmp .out
 .bad:
     mov byte [sh_rpn_bad], 1
 .out:
+    pop di
     pop si
     pop dx
     pop cx
@@ -23458,6 +23875,19 @@ sh_cellval_to_acc_si:
 ; a decimal. What "read the word and sh_itoa it" used to do, except that the
 ; value is eight bytes now and its low word on its own is meaningless.
 sh_cellnum:
+    cmp byte [es:di+SH_C_TYPE], SH_T_ERR   ; ...and an ERROR its name (81.61):
+    jne .noterr                           ; this wrote the zero underneath, so
+    push ax                               ; a copied #N/A pasted as 0
+    mov al, [sh_curaux]
+    push ax
+    mov al, [es:di+SH_C_AUX]
+    mov [sh_curaux], al
+    call sh_errname
+    pop ax
+    mov [sh_curaux], al
+    pop ax
+    ret
+.noterr:
     cmp byte [es:di+SH_C_TYPE], SH_T_BOOL  ; a LOGICAL is its name here too -
     jne .num                              ; the formula bar, Copy and Paste
     push ax                               ; all read it through this (81.51)
@@ -33316,7 +33746,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5703
+    OS88_BSS 5714
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -34190,8 +34620,9 @@ sh_v_sh_colwidth            equ sh_v_sh_bt_getw + 4
 sh_v_sh_colw_set            equ sh_v_sh_colwidth + 4
 sh_v_sh_colw_clear          equ sh_v_sh_colw_set + 4
 sh_v_sh_rowh_set            equ sh_v_sh_colw_clear + 4
-SH_NVEC       equ 57
-sh_v_end      equ sh_v_sh_rowh_set + 4
+sh_v_sh_seterr              equ sh_v_sh_rowh_set + 4
+SH_NVEC       equ 58
+sh_v_end      equ sh_v_sh_seterr + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -34237,7 +34668,12 @@ sh_vrh            equ sh_ud_redo + 1     ; SH_MAXVR: the visible rows' heights,
 sh_gridw          equ sh_vrh + SH_MAXVR  ; word: the grid's width in pixels...
 sh_gridh          equ sh_gridw + 2       ; word: ...and its height (sh_geom)
 sh_rtoff          equ sh_gridh + 2       ; word: the drawn row's text offset
-sh_bss_end        equ sh_rtoff + 2
+sh_sort_ccls      equ sh_rtoff + 2       ; byte: the staged entry's class
+sh_sort_cmpc      equ sh_sort_ccls + 1   ; byte: ...values[j-1]'s, and
+sh_sort_keyc      equ sh_sort_cmpc + 1   ; byte: ...the key's (81.61)
+sh_sort_ctoff     equ sh_sort_keyc + 1   ; word: the staged text's slot
+sh_sort_tcnt      equ sh_sort_ctoff + 2  ; word: text slots used
+sh_bss_end        equ sh_sort_tcnt + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
