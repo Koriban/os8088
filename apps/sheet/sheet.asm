@@ -148,12 +148,8 @@ SH_ROWS      equ 16384
 ; must stay multiples of 8 - sh_blank and every OSAPI_FONT_RUN cell text
 ; is built one glyph (8px) at a time, so a non-multiple would leave a
 ; fractional glyph column with nothing sensible to draw there.
-SH_CW_NARROW equ 40                 ; 5 chars
 SH_CW_NORMAL equ 56                 ; 7 chars - the original fixed default
-SH_CW_WIDE   equ 80                 ; 10 chars
-SH_RH_SHORT  equ 11
 SH_RH_NORMAL equ 14                 ; the original fixed default
-SH_RH_TALL   equ 18
 ; stage 3.0c: the bounds real numeric entry has to enforce, now that Row
 ; Height.../Column Width... take a typed number instead of a 3-way radio.
 ; Width is in CHARACTERS (Excel's own unit); height is in pixels.
@@ -6163,10 +6159,10 @@ sh_abdismiss:
 ; -----------------------------------------------------------------------------
 ; sh_docmd_format - Format menu item AL: 0 Number/1 Alignment/2 Font map
 ; straight onto sh_fdlg_open's own kind numbers. 3 Border opens the
-; separate sh_bdlg_* checkbox dialog. 4 Row Height/5 Column Width do NOT
-; map straight through - sh_fdlg_open's kinds 3/4 are already Insert/
-; Delete (borrowed by the Edit menu), so they're remapped here to kinds
-; 6/5 respectively.
+; separate sh_bdlg_* checkbox dialog, 4 Cell Protection is kind
+; SH_FDK_PROT, and 5 Row Height/6 Column Width are sh_idlg_open's typed
+; fields - sh_fdlg_open's own kinds 5/6, the presets they replaced, are
+; retired (81.59).
 sh_docmd_format:
     or al, al                          ; Number: Excel's list of codes (81.55),
     jnz .notnum                        ; not the four-way radio it was
@@ -8638,16 +8634,17 @@ sh_fdlg_tpl:
 ; radio, and a different [sh_fdlg_count] (see sh_fdlg_open) since these
 ; two kinds don't have 4 rows to show. sh_fdlg_apply branches to
 ; sh_rowcol_op for these two kinds instead of writing a format bit.
-; Kinds 5/6 are STILL DEFINED but no longer reached: stage 3.0c sent
-; Column Width.../Row Height... to sh_idlg_open's typed field instead, and
-; sh_docmd_format never passes AL 4 or 5 through to sh_fdlg_open. They are
-; the presets the app used before it had a text field.
+; Kinds 5/6 are RETIRED: they were the Narrow/Normal/Wide and Short/Normal/
+; Tall presets Column Width.../Row Height... used before stage 3.0c gave
+; them sh_idlg_open's typed field, and nothing has opened them since. Their
+; code went in 81.59; the two slots stay, as zeros, so every later kind keeps
+; its number - sh_ud_kind and the SH_FDK_* equates are indexed by it.
 ; Kinds 7-10 (stage 3.0c) are the last four radio dialogs Excel 2.1d has and
 ; this app was doing as immediate menu commands: Clear, New, Calculation and
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, sh_s_fd_colw, sh_s_fd_rowh, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot
 sh_s_fd_pspec:  db 'Paste Special', 0
 sh_s_fd_prot:   db 'Cell Protection', 0
 sh_s_fd_savefmt: db 'File Format', 0
@@ -8661,10 +8658,8 @@ sh_s_fd_align:  db 'Alignment', 0
 sh_s_fd_font:   db 'Font', 0
 sh_s_fd_insert: db 'Insert', 0
 sh_s_fd_delete: db 'Delete', 0
-sh_s_fd_colw:   db 'Column Width', 0
-sh_s_fd_rowh:   db 'Row Height', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, sh_fd_i_colw, sh_fd_i_rowh, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot
 ; Excel's Cell Protection dialog is two INDEPENDENT CHECK BOXES, Locked and
 ; Hidden. This is the four combinations as a radio, which is exactly what the
 ; Font dialog above already does with Bold and Underline - the same engine and
@@ -8740,23 +8735,15 @@ sh_fd_fboth:    db 'Bold, Underline', 0
 sh_fd_i_rowcol: dw sh_fd_rcrow, sh_fd_rccol
 sh_fd_rcrow:    db 'Row', 0
 sh_fd_rccol:    db 'Column', 0
-sh_fd_i_colw:   dw sh_fd_cwnarrow, sh_fd_cwnormal, sh_fd_cwwide
-sh_fd_cwnarrow: db 'Narrow', 0
-sh_fd_cwnormal: db 'Normal', 0
-sh_fd_cwwide:   db 'Wide', 0
-sh_fd_i_rowh:   dw sh_fd_rhshort, sh_fd_rhnormal, sh_fd_rhtall
-sh_fd_rhshort:  db 'Short', 0
-sh_fd_rhnormal: db 'Normal', 0
-sh_fd_rhtall:   db 'Tall', 0
 
 sh_s_fd_ok:     db 'OK', 0
 sh_s_fd_cancel: db 'Cancel', 0
 
 ; per-kind row count (0 Number/1 Align/2 Font = 4 rows, 3 Insert/4 Delete
-; = 2 rows, 5 Column Width/6 Row Height = 3 rows) - sh_fdlg_open copies the
+; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 3, 3, 3, 3, 3, 2, 7, 6, 5, 4
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -8804,10 +8791,6 @@ sh_fdlg_open:
     cmp al, SH_FDK_CLEAR              ; what the cell already IS, for exactly
     jae .noprefill                    ; that reason. Clear/New/Sort have
                                        ; nothing current
-    cmp al, 5
-    jae .prefillsize                  ; Column Width/Row Height (kinds
-                                       ; 5/6): preselect from the CURRENT
-                                       ; sh_cellw/sh_cellh, not a cell
     cmp al, 3
     jae .noprefill                    ; Insert/Delete (kinds 3/4): no
                                        ; "current" selection to preselect,
@@ -8900,35 +8883,6 @@ sh_fdlg_open:
 .havesel:
     mov [sh_fdlg_sel], ax
     jmp .noprefill
-.prefillsize:
-    cmp al, 5
-    jne .prefillrowh
-    mov ax, [sh_cellw]
-    cmp ax, SH_CW_NARROW
-    jne .cwn2
-    mov word [sh_fdlg_sel], 0
-    jmp .noprefill
-.cwn2:
-    cmp ax, SH_CW_WIDE
-    jne .cwn3
-    mov word [sh_fdlg_sel], 2
-    jmp .noprefill
-.cwn3:
-    mov word [sh_fdlg_sel], 1          ; Normal, or any non-preset value
-    jmp .noprefill
-.prefillrowh:
-    mov ax, [sh_cellh]
-    cmp ax, SH_RH_SHORT
-    jne .rhn2
-    mov word [sh_fdlg_sel], 0
-    jmp .noprefill
-.rhn2:
-    cmp ax, SH_RH_TALL
-    jne .rhn3
-    mov word [sh_fdlg_sel], 2
-    jmp .noprefill
-.rhn3:
-    mov word [sh_fdlg_sel], 1
 .noprefill:
     mov bl, [sh_fdlg_kind]
     xor bh, bh
@@ -9325,10 +9279,6 @@ sh_fdlg_apply0:
     je .dopspec
     cmp byte [sh_fdlg_kind], SH_FDK_PROT
     je .doprot
-    cmp byte [sh_fdlg_kind], 5
-    je .colwidth
-    cmp byte [sh_fdlg_kind], 6
-    je .rowheight
     cmp byte [sh_fdlg_kind], 3
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
@@ -9368,45 +9318,6 @@ sh_fdlg_apply0:
     cmp cx, si
     jbe .fmtcolloop
     call sh_repaint                    ; ONE repaint for the whole block
-    jmp .out
-.colwidth:
-    mov ax, [sh_fdlg_sel]
-    or ax, ax
-    jnz .cwnotnarrow
-    mov word [sh_cellw], SH_CW_NARROW
-    jmp .cwdone
-.cwnotnarrow:
-    cmp ax, 2
-    jne .cwnormal
-    mov word [sh_cellw], SH_CW_WIDE
-    jmp .cwdone
-.cwnormal:
-    mov word [sh_cellw], SH_CW_NORMAL
-.cwdone:
-    mov ax, [sh_cellw]
-    mov cl, 3
-    shr ax, cl
-    mov [sh_cellch], ax
-    call sh_mkblank
-    mov si, [sh_ownwin]
-    call sh_repaint
-    jmp .out
-.rowheight:
-    mov ax, [sh_fdlg_sel]
-    or ax, ax
-    jnz .rhnotshort
-    mov word [sh_cellh], SH_RH_SHORT
-    jmp .rhdone
-.rhnotshort:
-    cmp ax, 2
-    jne .rhnormal
-    mov word [sh_cellh], SH_RH_TALL
-    jmp .rhdone
-.rhnormal:
-    mov word [sh_cellh], SH_RH_NORMAL
-.rhdone:
-    mov si, [sh_ownwin]
-    call sh_repaint
     jmp .out
 .insertrc:
     cmp byte [sh_protected], 0        ; a structure change is refused for the

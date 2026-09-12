@@ -99928,6 +99928,32 @@ carries a note, so it is the borders that are observed. (The test's first
 version sampled a bottom border on the next cell's gridline; `sh_drawborders`
 draws it on the cell's own last pixel row.) Resident +217 bytes.
 
+### 81.59 The preset width dialogs retired, and CHART.OVL's claim raised
+
+**Column Width... and Row Height... had two dialogs, and one of them was
+dead.** Before stage 3.0c gave SHEET a text field, the two were radio
+dialogs of `sh_fdlg_*` — Narrow/Normal/Wide and Short/Normal/Tall, kinds 5
+and 6 — and 3.0c sent both menu items to `sh_idlg_open`'s typed number
+instead. `sh_docmd_format` has not passed either kind to `sh_fdlg_open`
+since, but the prefill that preselected a preset from `sh_cellw`/`sh_cellh`,
+the two apply handlers that wrote one back, their four constants and ten
+strings all stayed assembled. They are gone. The kind-indexed tables
+(`sh_fdlg_titles`, `sh_fdlg_items`, `sh_fdlg_counts`) keep slots 5 and 6 as
+zeros so every later kind keeps its number — `SH_FDK_*` and §81.57's
+`sh_ud_kind` are indexed by it. Resident **−286 bytes** (53,492 → 53,206),
+bss unchanged.
+
+**`CH_OVKB` 22 → 23.** `CHART.OVL` stood at 22,406 of 22,528 bytes, 122
+short of its claim, so any further file-format or function work in the
+module would have hit the sheet.o88 rule's refusal first. It is 22,406 of
+23,552 now. That is heap taken when the module is first needed, not package
+image, and the claim count is unchanged.
+
+Checked by the Sheet gates as they stand (the widths through
+`tests/sheetcolw.py`, which drives the typed Column Width dialog, and
+`tests/sheetmove.py` over the larger claim); nothing new is observable, so
+there is no new test.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

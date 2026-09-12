@@ -32,13 +32,14 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 22                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 23                 ; the claim CHART.OVL is read into, KB.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
                                     ; took it to 13,485 bytes; 82.16.10's
                                     ; financial family to 19,544; 81.10.10's
-                                    ; formula decoder past 20,480, so 22 - and
-                                    ; that is heap, not image. ch_ovneed reads
+                                    ; formula decoder past 20,480, so 22; and
+                                    ; 81.59 23, with 122 bytes left at 22 and
+                                    ; no tenant yet - that is heap, not image. ch_ovneed reads
                                     ; CH_OVKB*1024 bytes and a short claim
                                     ; would silently truncate the module, so
                                     ; it IS checked against the file, twice:
