@@ -950,9 +950,16 @@ def _sheet_tables(path='apps/sheet/sheet.asm'):
                       re.M | re.S)
         if m is None:
             return None
-        return [int(x, 0) for line in m.group(1).split('\n')
-                for x in re.findall(r'0x[0-9A-Fa-f]+|\b\d+\b',
-                                    line.split(';')[0].replace('db', ''))]
+        out = []
+        for line in m.group(1).split('\n'):
+            code = line.split(';')[0]
+            t = re.match(r'\s*times\s+(\d+)\s+db\s+(0x[0-9A-Fa-f]+|\d+)', code)
+            if t:                       # `times 20 db 0xFF` (81.63's twenty)
+                out += [int(t.group(2), 0)] * int(t.group(1))
+                continue
+            out += [int(x, 0) for x in re.findall(r'0x[0-9A-Fa-f]+|\b\d+\b',
+                                                   code.replace('db', ''))]
+        return out
     fid, fvar, fargc = (table('sh_rpn_fid'), table('sh_rpn_fvar'),
                         table('sh_rpn_fargc'))
     return [(nm, fid[i], fvar[i], fargc[i] if fargc else None)

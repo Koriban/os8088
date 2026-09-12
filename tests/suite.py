@@ -3985,6 +3985,14 @@ SOAK = [
         "and read back from SHEET's SYLK save - the gate the move of the "
         "three families into CHART.OVL was checked against, on both builds",
         needs=("marty",), serial=True),
+    Row("sheetmacro", "soak", py("tests/sheetmacro.py"), 400.0,
+        "SPEC.md 81.63: the macro language - FOR/NEXT nested and stepping "
+        "down, WHILE with ACTIVE.CELL and SELECT(\"R[1]C\"), IF with GOTO "
+        "and BREAK (the branch not taken runs no command), FORMULA, "
+        "SET.VALUE through a name, COPY/PASTE, CLEAR, MESSAGE, RETURN, and "
+        "ALERT then INPUT pausing a run - started from Macro > Run by name "
+        "and by reference; and a macro command in a worksheet formula inert",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

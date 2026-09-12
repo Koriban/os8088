@@ -768,7 +768,9 @@ SHM_FIN    equ 6                    ; 82.16.10: the financial family
 SHM_TEXT   equ 7                    ; 81.62: the text functions,
 SHM_TRANS  equ 8                    ; the logarithms and trigonometry,
 SHM_INFO   equ 9                    ; and ISBLANK...ERROR.TYPE
-SHM_N      equ 7
+SHM_MACRO  equ 10                   ; 81.63: the macro functions,
+SHM_MRESUME equ 11                  ; and a run starting or carrying on
+SHM_N      equ 9
 
 section .modc vstart=0 align=1
 sh_modc0:
@@ -787,6 +789,7 @@ sh_modc_ext:
 sh_mverb:
     dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
     dw sh_m_ptext, sh_m_ptrans, sh_m_pinfo          ; 81.62
+    dw sh_m_pmacro, sh_m_mresume                    ; 81.63
 
 sh_m_doread:
     call shm_doread
@@ -811,6 +814,14 @@ sh_m_ptrans:
     retf
 sh_m_pinfo:
     call shm_pinfo
+    clc
+    retf
+sh_m_pmacro:                        ; 81.63
+    call shm_pmacro
+    clc
+    retf
+sh_m_mresume:
+    call shm_mresume
     clc
     retf
 section .text
@@ -930,6 +941,10 @@ sh_ptrans:
 sh_pinfo:
     push bp
     mov bp, SHM_INFO
+    jmp short sh_pdoor
+sh_pmacro:                          ; 81.63: the macro functions
+    push bp
+    mov bp, SHM_MACRO
 sh_pdoor:
     call ch_ovcall
     pop bp
@@ -1159,6 +1174,46 @@ sh_x_sh_rowh_set:                       ; 81.60: row heights, for the reader
 sh_x_sh_seterr:                         ; 81.61: resident, for Fill
     call sh_seterr
     retf
+; 81.63: the macro engine's hands on the package
+sh_x_sh_commit:
+    call sh_commit
+    retf
+sh_x_sh_drawstatus:
+    call sh_drawstatus
+    retf
+sh_x_sh_macro_alertup:
+    call sh_macro_alertup
+    retf
+sh_x_sh_macro_beep:
+    call sh_macro_beep
+    retf
+sh_x_sh_macro_clear:
+    call sh_macro_clear
+    retf
+sh_x_sh_macro_cmd:
+    call sh_macro_cmd
+    retf
+sh_x_sh_macro_inputup:
+    call sh_macro_inputup
+    retf
+sh_x_sh_name_lookup:
+    call sh_name_lookup
+    retf
+sh_x_sh_recalc_all:
+    call sh_recalc_all
+    retf
+sh_x_sh_repaint:
+    call sh_repaint
+    retf
+sh_x_sh_scrollto:
+    call sh_scrollto
+    retf
+sh_x_sh_str_want:
+    call sh_str_want
+    retf
+sh_x_sh_undo_drop:
+    call sh_undo_drop
+    retf
 ; 81.62: the text, transcendental and information families went to the
 ; module, and these are the resident routines they call
 sh_x_fp_atan:
@@ -1256,6 +1311,10 @@ sh_ovshims:
     dw sh_x_sh_spop, sh_x_sh_spush, sh_x_sh_srestore, sh_x_sh_sslot
     dw sh_x_sh_str_cat, sh_x_sh_strcpy, sh_x_sh_strlen
 
+    dw sh_x_sh_commit, sh_x_sh_drawstatus, sh_x_sh_macro_alertup, sh_x_sh_macro_beep   ; 81.63
+    dw sh_x_sh_macro_clear, sh_x_sh_macro_cmd, sh_x_sh_macro_inputup, sh_x_sh_name_lookup
+    dw sh_x_sh_recalc_all, sh_x_sh_repaint, sh_x_sh_scrollto, sh_x_sh_str_want
+    dw sh_x_sh_undo_drop
 sh_entry:
     push ax
     push dx
@@ -1378,7 +1437,7 @@ sh_entry:
     jc .fail
     mov [sh_ownwin], bx               ; stage 2.0: os88ui_ask needs our own
                                        ; window ptr, and it's asked for from
-                                       ; sh_macro_eval, which has no window
+                                       ; the macro engine, which has no window
                                        ; ptr of its own to hand it - Sheet
                                        ; only ever has the one window, so
                                        ; capturing it once here is safe
@@ -9921,7 +9980,8 @@ sh_setext:
 ; sh_clear_one - Clear's work for ONE cell, by [sh_fdlg_sel]: 0 All /
 ; 1 Formulas / 2 Formats. "Formulas" is Excel's word for the CONTENTS - a cell
 ; cleared that way keeps its border, its number format and its font, which is
-; the whole reason the dialog exists. in: AX = col, BX = row. Preserves all.
+; the whole reason the dialog exists - and a cell with nothing of that kind
+; to keep goes altogether. in: AX = col, BX = row. Preserves all.
 ; -----------------------------------------------------------------------------
 sh_clear_one:
     push ax
@@ -9936,9 +9996,23 @@ sh_clear_one:
     call sh_bt_removecell             ; (sh_clearcell preserves AX/BX)
     jmp .out
 .contents:
+    push ax                           ; NOTHING TO KEEP - no border, no number
+    call sh_bt_getw                   ; format beyond the four, no format byte:
+    or ax, ax                         ; then the contents going leave no cell
+    pop ax                            ; at all, as All's do, rather than a
+    jnz .keep                         ; zero where Excel shows nothing (81.63)
     call sh_findcell
     jnc .out
     mov es, [sh_cellseg]
+    cmp byte [es:di+5], 0
+    jne .keep2
+    call sh_clearcell
+    jmp .out
+.keep:
+    call sh_findcell
+    jnc .out
+    mov es, [sh_cellseg]
+.keep2:
     mov byte [es:di+4], 0             ; not a formula any more...
     mov byte [es:di+SH_C_TYPE], SH_T_NUM
     mov word [es:di+SH_C_VAL], 0      ; ...and zero, but the format byte at
@@ -10731,7 +10805,9 @@ SH_ID_SORT   equ 5                   ; Data > Sort... (stage 4.5): the KEY.
                                      ; that is not an edge of the selection
                                      ; (81.19 recorded that as a known limit;
                                      ; 81.27 is this)
-SH_ID_NKIND  equ 6
+SH_ID_RUN    equ 6                   ; Macro > Run... (81.63): where to start
+SH_ID_INPUT  equ 7                   ; ...and INPUT(), a macro's own question
+SH_ID_NKIND  equ 8
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -10756,15 +10832,17 @@ sh_idlg_tpl:
 ; that cell makes the kernel letter the pointer's own two bytes and then run on
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
-               dw sh_s_id_tsort
+               dw sh_s_id_tsort, sh_s_id_trun, sh_s_id_tinput
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
-               dw sh_s_id_psort
+               dw sh_s_id_psort, sh_s_id_pgoto, sh_macro_msg  ; INPUT's is the macro's
 sh_s_id_tgoto: db 'Goto', 0
 sh_s_id_trowh: db 'Row Height', 0
 sh_s_id_tcolw: db 'Column Width', 0
 sh_s_id_tdefn: db 'Define Name', 0
 sh_s_id_tfind: db 'Find', 0
 sh_s_id_tsort: db 'Sort', 0
+sh_s_id_trun:  db 'Run', 0
+sh_s_id_tinput: db 'Input', 0
 sh_s_id_badkey: db 'Sort key must be inside the selection', 0
 sh_s_id_pgoto: db 'Reference:', 0
 sh_s_id_prowh: db 'Row height:', 0
@@ -10802,6 +10880,8 @@ sh_idlg_open:
     mov ax, [sh_id_titles + bx]
     mov [sh_idlg_tpl + WT_TITLE], ax
     mov byte [sh_idlg_buf], 0
+    cmp byte [sh_idlg_kind], SH_ID_RUN  ; ...and Run with the selection, where
+    je .pregoto                        ; a macro used to start (81.63)
     cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
     je .pregoto                        ; same reference Goto shows - it is the
     cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
@@ -10970,9 +11050,11 @@ sh_idlg_onkey:
 .accept:
     call sh_idlg_apply
     call sh_idlg_close
+    call sh_idlg_after                 ; a Run or an INPUT goes on (81.63)
     jmp .out
 .cancel:
     call sh_idlg_close
+    call sh_idlg_after
 .out:
     pop si
     pop ax
@@ -11019,9 +11101,11 @@ sh_idlg_onclick:
 .doOK:
     call sh_idlg_apply
     call sh_idlg_close
+    call sh_idlg_after
     jmp .out
 .doCancel:
     call sh_idlg_close
+    call sh_idlg_after
 .out:
     pop di
     pop si
@@ -11051,6 +11135,10 @@ sh_idlg_apply:
     je .goto
     cmp byte [sh_idlg_kind], SH_ID_SORT
     je .sortkey
+    cmp byte [sh_idlg_kind], SH_ID_RUN
+    je .run
+    cmp byte [sh_idlg_kind], SH_ID_INPUT
+    je .input
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
@@ -11103,6 +11191,32 @@ sh_idlg_apply:
     cmp ax, bx
     jbe .rhl
     jmp .redraw
+.run:
+    mov si, sh_idlg_buf                ; a macro is run by NAME, Excel's way -
+    call sh_upcase_at                  ; or by the cell it starts in
+    mov si, sh_idlg_buf
+    call sh_name_lookup
+    jc .runat
+    mov si, sh_idlg_buf
+    call sh_pcellref
+    jnc .out
+    cmp ax, SH_COLS
+    jae .out
+    cmp bx, SH_ROWS
+    jae .out
+.runat:
+    mov [sh_macro_col], ax
+    mov [sh_macro_row], bx
+    mov byte [sh_macro_wait], SH_MW_START ; sh_idlg_after starts it
+    jmp .out
+.input:
+    push di                            ; the answer, as typed; the run takes
+    mov si, sh_idlg_buf                ; it up again once this has closed
+    mov di, sh_macro_ans
+    call sh_strcpy
+    pop di
+    mov byte [sh_macro_ansok], 1
+    jmp .out
 .goto:
     mov si, sh_idlg_buf
     call sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
@@ -16495,8 +16609,10 @@ sh_dc_index:
 ; sh_rpn_fid, the table the writer uses - so a mismatch between the two is
 ; one table wrong, which os88sheetfmt.py --selfcheck checks against 3.11.
 sh_dc_look:
-    push cx
-    xor bx, bx
+    cmp al, 0xFF                      ; 255 is no function of Excel's - the
+    je .none                          ; add-in call - and every one of SHEET's
+    push cx                           ; that BIFF cannot carry says 0xFF, so
+    xor bx, bx                        ; it would decode as the first of those
     mov cx, sh_rpn_fid_end - sh_rpn_fid
 .l:
     cmp [bx+sh_rpn_fid], al
@@ -16504,6 +16620,7 @@ sh_dc_look:
     inc bx
     loop .l
     pop cx
+.none:
     stc
     ret
 .hit:
@@ -21355,6 +21472,10 @@ sh_rpn_fid:
                                        ; in revision 1.42, not recalled -
                                        ; the copy in docs/ is the 2002
                                        ; revision whose 3.11 reads "2do"
+    times 20 db 0xFF                  ; the MACRO functions (81.63): no source
+                                       ; here gives their numbers, and a guess
+                                       ; is a file Excel runs differently -
+                                       ; SYLK carries a macro, BIFF its value
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -21400,6 +21521,7 @@ sh_rpn_fvar:
                                        ; argument (A1 vs R1C1) is one this
                                        ; app never passes, exactly as the
                                        ; TRUNC note above says
+    times 20 db 0                     ; the macro functions, never written
 sh_rpn_fvar_end:
 
 ; How many arguments a FIXED-count function takes, in sh_functab's order -
@@ -21433,6 +21555,7 @@ sh_rpn_fargc:
     db 0, 0, 0, 0, 0               ; DDB IPMT PPMT RATE IRR
     db 3, 0, 1, 1, 0               ; MIRR NOW ISNONTEXT CLEAN RAND
     db 0                           ; INDIRECT
+    times 20 db 0                  ; the macro functions (81.63)
 sh_rpn_fargc_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -24288,6 +24411,8 @@ sh_pfunc:
     je .doinfo                         ; whose argument stays a reference
     cmp ax, 106                        ; NOW() is nullary and reads the BIOS
     je .donow                          ; clock - nothing else here does either
+    cmp ax, SH_FID_MACRO               ; 111+ are the MACRO functions (81.63),
+    jae .domacro                       ; which act only for the step engine
     cmp ax, 93                         ; 93+ are the FINANCIAL functions, on
     jae .dofin                         ; the same layer one level up
     cmp ax, 81                         ; 81+ are the LOGARITHMS and their
@@ -24410,6 +24535,10 @@ sh_pfunc:
     call sh_pfin
     mov dx, ax
     jmp .typed
+.domacro:
+    call sh_pmacro
+    mov dx, ax
+    jmp .done                          ; NOT .typed: ACTIVE.CELL may be text
 .dotrans:
     call sh_ptrans
     mov dx, ax
@@ -29488,9 +29617,15 @@ sh_pif:
     jne .bad
     inc si
     mov al, [sh_evalerr]              ; banked across the then-parse, and
-    push ax                           ; restored if then was NOT chosen
+    mov ah, [sh_macro_exec]           ; restored if then was NOT chosen - and
+    push ax                           ; the branch the condition did NOT pick
+    or bx, bx                         ; runs no MACRO command (81.63): parsed,
+    jnz .thenrun                      ; as it has to be, but inert - or
+    mov byte [sh_macro_exec], 0       ; IF(H7=3,BREAK()) broke at 1
+.thenrun:
     call sh_pcmp                      ; the then-value, banked whole
     pop ax
+    mov [sh_macro_exec], ah
     or bx, bx
     jnz .thenkept
     mov [sh_evalerr], al
@@ -29507,9 +29642,15 @@ sh_pif:
     jne .badpop                       ; it). Banked on the string stack, the
     inc si                            ; way & banks its left operand
     mov al, [sh_evalerr]              ; ...and the same for the else-parse
+    mov ah, [sh_macro_exec]
     push ax
+    or bx, bx
+    jz .elserun
+    mov byte [sh_macro_exec], 0
+.elserun:
     call sh_pcmp                      ; the else-value, left in sh_acc
     pop ax
+    mov [sh_macro_exec], ah
     or bx, bx
     jz .elsekept
     mov [sh_evalerr], al
@@ -29583,10 +29724,13 @@ sh_pchoose:
     cmp cx, bx
     je .chosen
     mov al, [sh_evalerr]              ; banked across an unchosen value, and
-    push ax                           ; put back after it
+    mov ah, [sh_macro_exec]           ; put back after it - which runs no
+    push ax                           ; macro command, as IF's does not (81.63)
+    mov byte [sh_macro_exec], 0
     call sh_pcmp
     pop ax
     mov [sh_evalerr], al
+    mov [sh_macro_exec], ah
     jmp .next
 .chosen:
     call sh_pcmp                      ; its value, its type, its text - and its
@@ -29640,333 +29784,1046 @@ sh_pabs:
     ret
 
 ; =============================================================================
-; Macro engine (stage 2.0). A macro is an ordinary column of formula cells,
-; on whatever sheet is active when Macro > Run is chosen, starting at the
-; currently selected cell - real Excel lets you type or pick a starting
-; reference in a Run dialog, but this OS has no generic text-prompt
-; primitive (only a FILE picker, OSAPI_FILE_DLG) and building one is its
-; own project, so "select the cell, then Run" is this stage's honest
-; substitute. Execution proceeds down the column exactly like real Excel's
-; own macro sheets, one cell at a time, until RETURN(), an empty cell, or
-; the step cap below.
-;
-; Five function names are recognized as ACTIONS, not value-returning
-; formulas, when they appear as the WHOLE of a macro cell's formula (never
-; nested inside a larger expression - each cell is one instruction, again
-; matching real Excel's macro-sheet model):
-;   RETURN()              stop the macro
-;   GOTO(ref)             jump execution to another cell on the SAME sheet
-;   SET.VALUE(ref, expr)  write expr's value into another cell
-;   SELECT(ref)           move the selection (and repaint, so it's visible)
-;   ALERT("text")         show a real message box (SPEC.md 75.3's
-;                         os88ui_ask, %included at the end of this file) and
-;                         PAUSE until it's dismissed - os88ui_ask answers
-;                         through a callback, not a return value, so the
-;                         macro's "next step" is recorded before raising it
-;                         and execution resumes from sh_macro_onalert
-; A cell whose formula is anything else is evaluated normally (the full
-; expression grammar, unchanged) and its value is discarded - a true no-op
-; step, exactly as it would be on a real Excel macro sheet.
-;
-; A macro command's cell-reference arguments (GOTO/SET.VALUE/SELECT) are a
-; bare "A1"-style reference only - no cross-sheet "SheetN!" prefix, unlike
-; ordinary formulas (see sh_psheetpfx above). Keeping macro execution
-; entirely on one sheet avoids the added complexity of switching sh_cursheet
-; (and everything that implies for mid-macro repaints) partway through a
-; run.
-;
-; SH_MACRO_MAXSTEPS exists because this is a COOPERATIVE system (SPEC.md's
-; own repeated point) - sh_macro_step's GOTO loop below runs flat out with
-; nothing to yield to, so a macro that GOTOs in a cycle would otherwise
-; freeze the whole UI task forever, not just this window. Hitting the cap
-; stops the macro and reports it, the same honest-failure posture as every
-; other bound in this file, rather than let the machine hang.
+; MACROS, the package's half (SPEC.md 81.63): the Run dialog, the door, and
+; the two ways a paused run comes back. The engine and every macro function
+; are CHART.OVL's - the module's own header, at shm_pmacro, is the design.
 ; =============================================================================
-SH_MACRO_MAXSTEPS equ 5000
-
-sh_macro_kw_goto:     db 'GOTO', 0
-sh_macro_kw_return:   db 'RETURN', 0
-sh_macro_kw_setvalue: db 'SET.VALUE', 0
-sh_macro_kw_select:   db 'SELECT', 0
-sh_macro_kw_alert:    db 'ALERT', 0
+SH_MACRO_MAXSTEPS equ 10000          ; a runaway loop ENDS rather than hangs:
+                                     ; the system is cooperative and the step
+                                     ; loop yields to nothing (81.8). It was
+                                     ; 5000, before a macro could loop
+SH_FID_MACRO   equ 111               ; the first macro function's id...
+SH_MF_ACTCELL  equ 14                ; ...and ACTIVE.CELL's, counted from it
+SH_MC_NONE     equ 0                 ; what a step asked for (sh_macro_ctl):
+SH_MC_GOTO     equ 1                 ; the next cell is [sh_macro_ncol/nrow]
+SH_MC_STOP     equ 2                 ; RETURN, HALT, or a macro error
+SH_MC_PAUSEN   equ 3                 ; ALERT: wait, then the next cell
+SH_MC_PAUSEH   equ 4                 ; INPUT: wait, then THIS cell again
+SH_MC_SKIP     equ 5                 ; on past the NEXT of the loop at ncol/nrow
+SH_MW_START    equ 1                 ; what a resume means (sh_macro_wait)
+SH_MW_ALERT    equ 2
+SH_MW_INPUT    equ 3
+SH_MLOOPS      equ 4                 ; FOR/WHILE frames, nested
+SH_LF_KIND     equ 0                 ; a frame: 1 FOR / 2 WHILE,
+SH_LF_COL      equ 1                 ; its own cell,
+SH_LF_ROW      equ 3
+SH_LF_CCOL     equ 5                 ; FOR's counter cell,
+SH_LF_CROW     equ 7
+SH_LF_END      equ 9                 ; its end and step, doubles
+SH_LF_STEP     equ 17
+SH_LF_SZ       equ 25
+SH_MPROMPT     equ 30                ; INPUT's prompt, as the dialog shows it
+SH_MSTMSG      equ 40                ; MESSAGE's text on the status bar
 sh_s_macrolimit: db 'Err: macro step limit', 0
 sh_s_macrodone:  db 'Macro done', 0
+sh_s_macroerr:   db 'Err: macro', 0
+sh_s_macronext:  db 'Err: FOR or WHILE with no NEXT', 0
+sh_s_macrobusy:  db 'A macro is running', 0
 
-; -----------------------------------------------------------------------------
-; sh_pmacroref - a bare "A1"-style cell reference (no function names, no
-; sheet prefix - see the section header above)
-; in: SI; out: CF=1, AX=col, BX=row, SI advanced past it; CF=0 malformed
-; -----------------------------------------------------------------------------
-sh_pmacroref:
-    push cx
-    push dx
-    push di
-    mov di, sh_ident
-    xor cx, cx
-.collect:
-    mov al, [si]
-    cmp al, 'A'
-    jb .doneletters
-    cmp al, 'Z'
-    jbe .isletter
-    cmp al, 'a'
-    jb .doneletters
-    cmp al, 'z'
-    ja .doneletters
-.isletter:
-    cmp cx, 2                          ; SH_COLS=256 never needs a 3rd letter
-    jae .doneletters
-    and al, 0xDF
-    mov [di], al
-    inc di
-    inc cx
-    inc si
-    jmp .collect
-.doneletters:
-    mov byte [di], 0
-    or cx, cx
-    jz .bad
-    mov al, [si]
-    cmp al, '0'
-    jb .bad
-    cmp al, '9'
-    ja .bad
-    call sh_identcol
-    push ax                            ; col
-    mov bx, si
-    add bx, SH_EDITMAX + 1
-    push es
-    mov ax, ds
-    mov es, ax
-    call sh_pint
-    pop es
-    dec ax                             ; row
-    mov bx, ax
-    pop ax                             ; col
-    cmp ax, SH_COLS
-    jae .bad
-    cmp bx, SH_ROWS
-    jae .bad
-    stc
-    jmp .out
-.bad:
-    clc
-.out:
-    pop di
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_macro_kwtest - in: SI=text, CX=ptr to a NUL-terminated uppercase
-; keyword; out: CF=1 and SI advanced past the keyword AND a following '(' -
-; the '(' is required, so "GOTOX(" or "GOTO" alone don't match; CF=0
-; otherwise (SI may be left partway advanced - callers always reset it)
-; -----------------------------------------------------------------------------
-sh_macro_kwtest:
+; sh_macro_run - Macro > Run...: WHERE to start, a reference or a defined
+; name, as Excel's Run dialog asks. It started at the selected cell because
+; there was no text field to ask with (81.8); stage 3.0c made one
+sh_macro_run:
+    cmp byte [sh_macro_running], 0
+    jne .busy
     push ax
-    push bx
-    push di
-    mov di, cx
-.cmp:
-    mov al, [di]
-    or al, al
-    jz .kwend
-    mov bl, [si]
-    cmp bl, 'a'
-    jb .noupper
-    cmp bl, 'z'
-    ja .noupper
-    and bl, 0xDF                       ; only a-z gets case-folded - a
-                                        ; keyword like SET.VALUE has a '.'
-                                        ; that this mask would corrupt
-.noupper:
-    cmp al, bl
-    jne .no
-    inc si
-    inc di
-    jmp .cmp
-.kwend:
-    cmp byte [si], '('
-    jne .no
-    inc si
-    stc
-    jmp .out
-.no:
-    clc
-.out:
-    pop di
-    pop bx
+    mov al, SH_ID_RUN
+    call sh_idlg_open
     pop ax
     ret
+.busy:
+    mov word [sh_msg], sh_s_macrobusy
+    jmp sh_drawstatus
 
-; -----------------------------------------------------------------------------
-; sh_macro_ident - in: SI; out: AX = 0 GOTO / 1 RETURN / 2 SET.VALUE /
-; 3 SELECT / 4 ALERT / 0xFF none of these (SI restored); on a match SI is
-; advanced past the keyword and its opening '('
-; -----------------------------------------------------------------------------
-sh_macro_ident:
-    push bx
-    push cx
-    mov bx, si
-    mov cx, sh_macro_kw_goto
-    call sh_macro_kwtest
-    jc .m0
-    mov si, bx
-    mov cx, sh_macro_kw_return
-    call sh_macro_kwtest
-    jc .m1
-    mov si, bx
-    mov cx, sh_macro_kw_setvalue
-    call sh_macro_kwtest
-    jc .m2
-    mov si, bx
-    mov cx, sh_macro_kw_select
-    call sh_macro_kwtest
-    jc .m3
-    mov si, bx
-    mov cx, sh_macro_kw_alert
-    call sh_macro_kwtest
-    jc .m4
-    mov si, bx
-    mov ax, 0xFF
-    jmp .out
-.m0:
-    mov ax, 0
-    jmp .out
-.m1:
-    mov ax, 1
-    jmp .out
-.m2:
-    mov ax, 2
-    jmp .out
-.m3:
-    mov ax, 3
-    jmp .out
-.m4:
-    mov ax, 4
+; sh_macro_onalert - os88ui_ask's completion proc (SPEC.md 75.3), and the
+; way every paused run carries on: the module, verb SHM_MRESUME
+sh_macro_onalert:
+    push bp
+    mov bp, SHM_MRESUME
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov byte [sh_macro_running], 0    ; no module: no macro
+    mov word [sh_msg], sh_s_noovl
+    call sh_drawstatus
 .out:
-    pop cx
-    pop bx
     ret
 
-; -----------------------------------------------------------------------------
-; sh_macro_eval - execute ONE macro cell's formula as an instruction
-; in: DI = the cell's record offset (caller has already checked HASFORMULA)
-; out: AX = 0 advance / 1 goto (BX=col, CX=row) / 2 return / 3 alert raised
-;      (the caller must stop stepping - sh_macro_onalert resumes it later)
-; -----------------------------------------------------------------------------
-sh_macro_eval:
+; sh_idlg_after - the one-line dialog has CLOSED: a Run's OK starts the run,
+; an INPUT - answered or cancelled - lets it carry on. After and not inside
+; the apply, because the run may open this same dialog again
+sh_idlg_after:
+    cmp byte [sh_idlg_kind], SH_ID_RUN
+    jb .out
+    cmp byte [sh_macro_wait], 0
+    je .out
+    jmp sh_macro_onalert
+.out:
+    ret
+
+; The module's hands on the package (each through a vector)
+sh_macro_alertup:
+    push ax
+    push bx
     push si
-    push dx
-    push es
-    mov es, [sh_cellseg]
-    mov si, [es:di+SH_C_FOFF]                  ; formula text offset, in sh_txtseg
-    mov es, [sh_txtseg]
-    mov di, sh_macrobuf
-.copyin:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .copyin
-    pop es
-    mov si, sh_macrobuf
-    call sh_macro_ident
-    cmp ax, 0
-    je .doGOTO
-    cmp ax, 1
-    je .doRETURN
-    cmp ax, 2
-    je .doSETVALUE
-    cmp ax, 3
-    je .doSELECT
-    cmp ax, 4
-    je .doALERT
-    mov si, sh_macrobuf                ; not a macro keyword: a plain
-    call sh_pcmp                       ; formula step, evaluated for its
-    xor ax, ax                         ; (nonexistent) side effect only
-    jmp .out
-.doGOTO:
-    call sh_pmacroref
-    jnc .noop
-    mov cx, bx                         ; cx = row
-    mov bx, ax                         ; bx = col
-    mov ax, 1
-    jmp .out
-.doRETURN:
-    mov ax, 2
-    jmp .out
-.doSETVALUE:
-    call sh_pmacroref
-    jnc .noop
-    mov [sh_macro_tcol], ax
-    mov [sh_macro_trow], bx
-    cmp byte [si], ','
-    jne .noop
-    inc si
-    call sh_pcmp                       ; the result lives in sh_acc, NOT in AX
-    mov ax, [sh_macro_tcol]            ; (stage 4.0) - sh_setvald reads it from
-    mov bx, [sh_macro_trow]            ; there, decimals intact, where the int
-    call sh_setvald                    ; with AX stored parser scratch
-    xor ax, ax
-    jmp .out
-.doSELECT:
-    call sh_pmacroref
-    jnc .noop
-    mov si, [sh_ownwin]                ; SI was the parse cursor, and
-    call sh_select                     ; sh_select's contract needs the WINDOW:
-    xor ax, ax                         ; it collapses the range, scrolls the
-    jmp .out                           ; cell into view and repaints, exactly
-                                       ; as a click does (.out restores SI)
-.doALERT:
-    cmp byte [si], '"'
-    jne .noop
-    inc si
-    mov di, sh_macro_msg
-.alertcopy:
-    mov al, [si]
-    or al, al
-    jz .alertdone                      ; unterminated string: stop at NUL
-    cmp al, '"'
-    je .alertdone
-    mov dx, di
-    sub dx, sh_macro_msg
-    cmp dx, OS88UI_AMAX
-    jae .alertdone                     ; clip, matching os88ui_ask's own
-    mov [di], al                       ; clip-not-refuse policy
-    inc di
-    inc si
-    jmp .alertcopy
-.alertdone:
-    mov byte [di], 0
-    mov ax, [sh_macro_row]             ; advance to the next step BEFORE
-    inc ax                             ; raising the alert, so its callback
-    mov [sh_macro_row], ax             ; can just re-enter sh_macro_step
+    push di
     mov al, OS88UI_AOK
     mov bx, [sh_ownwin]
     mov si, sh_macro_msg
     mov di, sh_macro_onalert
     call os88ui_ask
-    mov ax, 3
-    jmp .out
-.noop:
-    xor ax, ax
-.out:
-    pop dx
+    pop di
     pop si
+    pop bx
+    pop ax
+    ret
+sh_macro_inputup:
+    push ax
+    mov al, SH_ID_INPUT
+    call sh_idlg_open
+    pop ax
+    ret
+sh_macro_beep:                       ; BEEP: 880 Hz for three ticks
+    push ax
+    push cx
+    push dx
+    mov ax, 880
+    mov cx, 3
+    mov dl, 0x40
+    call OSAPI_SND_TONE
+    pop dx
+    pop cx
+    pop ax
+    ret
+sh_macro_cmd:                        ; AX = sh_docmd_copy/cut/paste, SI =
+    mov byte [sh_ps_mode], SH_PS_ALL ; the window: PASTE is the plain one
+    call ax
+    ret
+sh_macro_clear:                      ; AX = Edit > Clear's row, SI = the
+    mov byte [sh_fdlg_kind], SH_FDK_CLEAR ; window
+    mov [sh_fdlg_sel], ax
+    jmp sh_fdlg_apply
+
+; =============================================================================
+; THE MACRO LANGUAGE (SPEC.md 81.63). A macro is a column of formulas on the
+; sheet, run from a start cell - a reference or a defined name - that Macro >
+; Run... asks for, as Excel's Run dialog does. Each cell is evaluated with the
+; whole formula grammar, top to bottom, until RETURN or HALT, an empty cell,
+; or SH_MACRO_MAXSTEPS.
+;
+; EXCEL'S MODEL, AND THE ONE THING IT NEEDS HERE: macro functions are
+; FUNCTIONS, and they act when evaluated - so =IF(A5>10,GOTO(B20)) branches
+; and =SET.VALUE(B1,B1+1) counts - but ONLY when the step engine is evaluating
+; the current macro cell, at its own evaluation depth (sh_macro_exec,
+; sh_macro_exdep). A repaint evaluates every visible formula, macro cells
+; included, and must not run them; neither may a worksheet formula that names
+; one. There a command does nothing and answers FALSE. ACTIVE.CELL, the one
+; value function, answers anywhere.
+;
+; It was five keywords, each recognised only as the WHOLE of a cell (81.8),
+; so no macro could decide anything, loop, or ask the user a question.
+;
+;   GOTO(ref)  RETURN()  HALT()           control
+;   FOR(counter,start,end[,step])  WHILE(test)  NEXT()  BREAK()
+;   SELECT(ref)  FORMULA(x[,ref])  SET.VALUE(ref,x)   the sheet
+;   ALERT(text)  INPUT(prompt)  MESSAGE(show[,text])  BEEP()   the user
+;   COPY()  CUT()  PASTE()  CLEAR([1..4])  CALCULATE.NOW()   the commands
+;   ACTIVE.CELL()                         the selected cell's value
+;
+; A REFERENCE argument is a reference, a defined name, or TEXT: "B5", or
+; "R[1]C" relative to the active cell - the form Excel's recorder writes, and
+; the way a macro walks down a column without OFFSET. A FOR counter is a cell
+; (or a name for one), where Excel's is a name that holds a value: this sheet's
+; names are places, so the counter lives in the cell the name points at.
+;
+; SELECT repaints; SET.VALUE and FORMULA do not, and the grid catches up at
+; the next SELECT, ALERT, INPUT or the end - every change repainted at once is
+; seconds a step on the target. ALERT and INPUT PAUSE the run: the engine
+; raises the dialog after the step and returns, and the dialog's completion
+; resumes it (sh_macro_onalert, sh_idlg_after) - the next cell for ALERT, the
+; SAME cell for INPUT, whose second evaluation answers what was typed.
+;
+; The engine and every macro function are CHART.OVL's (82.16): the package
+; keeps the names, the door (sh_pmacro), the Run dialog and the resumptions.
+; =============================================================================
+section .modc                      ; 81.63
+
+; shm_pmacro - the macro functions, ids SH_FID_MACRO and up. in: AX = the id,
+; SI just past '('. out: SI past ')', the answer in sh_acc/sh_curtype, AX 0
+shm_pmacro:
+    push bx
+    push cx
+    push dx
+    push di
+    sub ax, SH_FID_MACRO
+    mov di, ax
+    cmp di, SH_MF_ACTCELL             ; the value function answers anywhere
+    je .act
+    cmp byte [sh_macro_exec], 0       ; ...a command only for the step engine,
+    je .inert                         ; at its own depth: not for a repaint,
+    mov ax, [sh_evaldepth]            ; not for a worksheet formula
+    cmp ax, [sh_macro_exdep]
+    jne .inert
+.act:
+    shl di, 1
+    call word [cs:di + shm_mtab]      ; CS: the table is the module's own
+    jmp short .out
+.inert:
+    SHOUT sh_skipargs
+    call shm_mfalse
+.out:
+    xor ax, ax
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 
-; -----------------------------------------------------------------------------
-; sh_macro_step - run macro steps starting at [sh_macro_col]/[sh_macro_row]
-; until RETURN, an empty cell, an ALERT (which returns here having already
-; arranged its own resumption), or the step cap
-; -----------------------------------------------------------------------------
-sh_macro_step:
+shm_mtab:
+    dw shm_mgoto, shm_mreturn, shm_mreturn, shm_msetval, shm_mselect
+    dw shm_mformula, shm_malert, shm_mmessage, shm_mbeep, shm_minput
+    dw shm_mfor, shm_mwhile, shm_mnext, shm_mbreak, shm_mactcell
+    dw shm_mcopy, shm_mcut, shm_mpaste, shm_mclear, shm_mcalc
+shm_mtab_end:
+
+; shm_mtrue / shm_mfalse - the answer, a logical
+shm_mtrue:
+    push ax
+    mov ax, 1
+    jmp short shm_mbool
+shm_mfalse:
+    push ax
+    xor ax, ax
+shm_mbool:
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_BOOL
+    pop ax
+    ret
+
+; shm_merr - a macro that cannot go on: stop it and say so
+shm_merr:
+    mov byte [sh_macro_ctl], SH_MC_STOP
+    mov word [sh_msg], sh_s_macroerr
+    SHOUT sh_skipargs
+    jmp short shm_mfalse
+
+; shm_mref - a REFERENCE argument at SI: a reference, a name, or text - "B5",
+; or "R[1]C" relative to the active cell. out: CF=1 AX = col, BX = row, SI
+; past it; CF=0 when it is none of those
+shm_mref:
+    SHOUT sh_pargref                  ; a reference, as written
+    jnc .name
+    mov ax, [sh_arg1col]
+    mov bx, [sh_arg1row]
+    stc
+    ret
+.name:
+    call shm_mname                    ; ...a defined name standing alone
+    jc .out
+    SHOUT sh_pcmp                     ; ...or anything that ANSWERS with one
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .no
+    push si
+    mov si, sh_sacc
+    SHOUT sh_pcellref                 ; "B5", all of it
+    jnc .r1c1
+    cmp byte [si], 0
+    je .a1
+.r1c1:
+    mov si, sh_sacc                   ; "R[1]C": relative to the ACTIVE cell,
+    call shm_r1c1                     ; which is what the recorder means - and
+    pop si                            ; "R1C1", which A1 reads as R1 and more
+    ret
+.a1:
+    pop si
+    stc
+    ret
+.no:
+    clc
+.out:
+    ret
+
+; shm_mname - SI at a word that is a DEFINED NAME and nothing else, before a
+; ',' or ')': CF=1, AX/BX its cell (the near corner), SI past it. CF=0 with SI
+; where it was otherwise
+shm_mname:
+    push cx
+    push dx
+    push di
+    mov [sh_macro_mnsi], si           ; where to put SI back on a miss
+    mov di, sh_ident
+    xor cx, cx
+.g:
+    mov al, [si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 32
+.u:
+    cmp al, '.'
+    je .k
+    cmp al, '_'
+    je .k
+    cmp al, '0'
+    jb .e
+    cmp al, '9'
+    jbe .k
+    cmp al, 'A'
+    jb .e
+    cmp al, 'Z'
+    ja .e
+.k:
+    cmp cx, SH_NAMEMAX
+    jae .no
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp short .g
+.e:
+    jcxz .no
+    cmp al, ','
+    je .end
+    cmp al, ')'
+    jne .no
+.end:
+    mov byte [di], 0
+    push si
+    mov si, sh_ident
+    SHOUT sh_name_lookup              ; AX/BX the near corner, CX/DX the far
+    pop si
+    jnc .no
+    pop di
+    pop dx
+    pop cx
+    stc
+    ret
+.no:
+    mov si, [sh_macro_mnsi]
+    pop di
+    pop dx
+    pop cx
+    clc
+    ret
+
+; shm_r1c1 - SI = an R1C1 reference, all of the text -> CF=1, AX col, BX row
+shm_r1c1:
+    push cx
+    push dx
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'R'
+    jne .no
+    inc si
+    call sh_read_rc                   ; BX = the value, CL = 1 absolute
+    jc .no
+    mov dx, bx
+    or cl, cl
+    jnz .rabs
+    add dx, [sh_selrow]
+.rabs:
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'C'
+    jne .no
+    inc si
+    call sh_read_rc
+    jc .no
+    or cl, cl
+    jnz .cabs
+    add bx, [sh_selcol]
+.cabs:
+    cmp byte [si], 0
+    jne .no
+    cmp bx, SH_COLS                   ; unsigned: a negative offset past the
+    jae .no                           ; edge wraps high and is refused too
+    cmp dx, SH_ROWS
+    jae .no
+    mov ax, bx
+    mov bx, dx
+    pop dx
+    pop cx
+    stc
+    ret
+.no:
+    pop dx
+    pop cx
+    clc
+    ret
+
+; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
+; - a label, a logical, an error or a number. CF=1 when the cell refused it
+shm_mstore:
+    push dx
+    push si
+    push di
+    mov dl, [sh_evalerr]
+    or dl, dl
+    jz .noerr
+    mov byte [sh_evalerr], 0          ; the ERROR is the value stored, not
+    SHOUT sh_seterr                   ; the macro's own failure
+    jmp short .out
+.noerr:
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .nottext
+    mov si, sh_sacc                   ; the text, out of the string register
+    mov di, sh_rwsrc                  ; before anything can reuse it
+    push ax
+.c:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    pop ax
+    mov si, sh_rwsrc
+    SHOUT sh_settext
+    jmp short .out
+.nottext:
+    cmp byte [sh_curtype], SH_T_BOOL
+    jne .num
+    xor dl, dl
+    test word [sh_acc+6], 0x7FFF
+    jz .b
+    inc dl
+.b:
+    SHOUT sh_setbool
+    jmp short .out
+.num:
+    SHOUT sh_setvald
+.out:
+    pop di
+    pop si
+    pop dx
+    ret
+
+; shm_mtruth - the answer just evaluated, as a condition: CF=1 true. An error
+; is false, and so is text, which Excel refuses as a test
+shm_mtruth:
+    cmp byte [sh_evalerr], 0
+    jne .f
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .f
+    test word [sh_acc+6], 0x7FFF      ; zero is +0.0 or -0.0, nothing else
+    jnz .t
+    cmp word [sh_acc+4], 0
+    jnz .t
+    cmp word [sh_acc+2], 0
+    jnz .t
+    cmp word [sh_acc], 0
+    jnz .t
+.f:
+    mov byte [sh_evalerr], 0
+    clc
+    ret
+.t:
+    stc
+    ret
+
+; shm_mtext - the answer just evaluated, as text, into DI (CX bytes at most)
+shm_mtext:
+    push ax
+    push si
+    push di
+    SHOUT sh_str_want
+    mov si, sh_sacc
+.c:
+    jcxz .e
+    mov al, [si]
+    or al, al
+    jz .e
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp short .c
+.e:
+    mov byte [di], 0
+    pop di
+    pop si
+    pop ax
+    ret
+
+; --- control ---------------------------------------------------------------
+shm_mgoto:
+    call shm_mref
+    jc .ok
+    jmp shm_merr
+.ok:
+    mov [sh_macro_ncol], ax
+    mov [sh_macro_nrow], bx
+    mov byte [sh_macro_ctl], SH_MC_GOTO
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+shm_mreturn:                          ; RETURN and HALT: no subroutines yet,
+    SHOUT sh_skipargs                 ; so both end the run
+    mov byte [sh_macro_ctl], SH_MC_STOP
+    jmp shm_mtrue
+
+; FOR(counter, start, end[, step]) - the counter is a CELL (see the header).
+; Everything is parsed into bss FIRST and the frame written last: the
+; evaluator keeps nothing in a register across a call, DI included
+shm_mfor:
+    call shm_mpopself                 ; GOTO back onto a FOR restarts it
+    cmp byte [sh_macro_lsp], SH_MLOOPS
+    jae .bad                          ; nested deeper than the frames: stop
+    call shm_mref
+    jnc .bad
+    mov [sh_macro_tcol], ax
+    mov [sh_macro_trow], bx
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    SHOUT sh_pcmp                     ; the start, into the counter
+    mov ax, [sh_macro_tcol]
+    mov bx, [sh_macro_trow]
+    call shm_mstore
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    SHOUT sh_pcmp                     ; the end
+    push si
+    mov si, sh_acc
+    mov bx, sh_macro_tend
+    SHOUT sh_trcopy
+    mov ax, 1                         ; the step: 1 unless given
+    SHOUT sh_acc_int
+    pop si
+    cmp byte [si], ','
+    jne .step
+    inc si
+    SHOUT sh_pcmp
+.step:
+    push si
+    mov si, sh_acc
+    mov bx, sh_macro_tstep
+    SHOUT sh_trcopy
+    call shm_mframe                   ; DI = the frame, only now
+    mov byte [di + SH_LF_KIND], 1
+    mov ax, [sh_macro_tcol]
+    mov [di + SH_LF_CCOL], ax
+    mov ax, [sh_macro_trow]
+    mov [di + SH_LF_CROW], ax
+    mov si, sh_macro_tend
+    lea bx, [di + SH_LF_END]
+    SHOUT sh_trcopy
+    mov si, sh_macro_tstep
+    lea bx, [di + SH_LF_STEP]
+    SHOUT sh_trcopy
+    pop si
+    SHOUT sh_skipargs
+    inc byte [sh_macro_lsp]           ; pushed
+    call shm_mtop
+    call shm_mover                    ; already past the end: not even once
+    jnc .in
+    dec byte [sh_macro_lsp]
+    call shm_mskipfrom
+.in:
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; WHILE(test) - NEXT comes back to this cell, which tests again
+shm_mwhile:
+    SHOUT sh_pcmp
+    call shm_mtruth
+    pushf
+    SHOUT sh_skipargs
+    call shm_mtopself                 ; ZF: the top frame is this WHILE's
+    je .have
+    cmp byte [sh_macro_lsp], SH_MLOOPS
+    jb .push
+    popf
+    jmp shm_merr                      ; nested deeper than the frames
+.push:
+    call shm_mframe
+    mov byte [di + SH_LF_KIND], 2
+    inc byte [sh_macro_lsp]
+.have:
+    popf
+    jc .in
+    dec byte [sh_macro_lsp]           ; false: out, past its NEXT
+    call shm_mskipfrom
+.in:
+    jmp shm_mtrue
+
+; NEXT() - the counter steps, or the WHILE tests again
+shm_mnext:
+    SHOUT sh_skipargs
+    cmp byte [sh_macro_lsp], 0
+    je .out                           ; no loop open: nothing to do
+    call shm_mtop                     ; DI = the top frame
+    cmp byte [di + SH_LF_KIND], 2
+    je .while
+    mov ax, [di + SH_LF_CCOL]         ; the counter, as the loop body left it,
+    mov bx, [di + SH_LF_CROW]         ; plus the step
+    SHOUT sh_getcell2
+    SHOUT sh_acc_load_a
+    call shm_mtop                     ; DI again: nothing keeps it across a call
+    push si
+    lea si, [di + SH_LF_STEP]
+    SHOUT fp_unpack_b
+    pop si
+    SHOUT fp_add
+    SHOUT sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
+    mov byte [sh_evalerr], 0
+    call shm_mtop
+    mov ax, [di + SH_LF_CCOL]
+    mov bx, [di + SH_LF_CROW]
+    call shm_mstore
+    call shm_mtop
+    call shm_mover
+    jc .done                          ; past the end: out, below the NEXT
+    mov ax, [di + SH_LF_COL]          ; round again, from the cell after FOR
+    mov bx, [di + SH_LF_ROW]
+    inc bx
+    jmp short .go
+.while:
+    mov ax, [di + SH_LF_COL]
+    mov bx, [di + SH_LF_ROW]
+.go:
+    mov [sh_macro_ncol], ax
+    mov [sh_macro_nrow], bx
+    mov byte [sh_macro_ctl], SH_MC_GOTO
+    jmp short .out
+.done:
+    dec byte [sh_macro_lsp]
+.out:
+    jmp shm_mtrue
+
+; BREAK() - out of the innermost loop, past its NEXT
+shm_mbreak:
+    SHOUT sh_skipargs
+    cmp byte [sh_macro_lsp], 0
+    je .out
+    call shm_mtop
+    mov ax, [di + SH_LF_COL]
+    mov [sh_macro_ncol], ax
+    mov ax, [di + SH_LF_ROW]
+    mov [sh_macro_nrow], ax
+    dec byte [sh_macro_lsp]
+    mov byte [sh_macro_ctl], SH_MC_SKIP
+.out:
+    jmp shm_mtrue
+
+; the loop stack - SH_MLOOPS frames of SH_LF_SZ in sh_macro_loops
+shm_mtop:                             ; DI = the top frame
+    push ax
+    mov al, [sh_macro_lsp]
+    dec al
+    call shm_mfr0
+    pop ax
+    ret
+shm_mframe:                           ; DI = the frame above the top, filled
+    push ax                           ; with this cell as its home
+    mov al, [sh_macro_lsp]
+    call shm_mfr0
+    mov ax, [sh_macro_col]
+    mov [di + SH_LF_COL], ax
+    mov ax, [sh_macro_row]
+    mov [di + SH_LF_ROW], ax
+    pop ax
+    ret
+shm_mfr0:                             ; AL = a frame index -> DI
+    mov ah, SH_LF_SZ
+    mul ah
+    add ax, sh_macro_loops
+    mov di, ax
+    ret
+
+; shm_mtopself - ZF=1 when there is a top frame and it belongs to THIS cell
+shm_mtopself:
+    push ax
+    push di
+    cmp byte [sh_macro_lsp], 0
+    je .no
+    call shm_mtop
+    mov ax, [di + SH_LF_COL]
+    cmp ax, [sh_macro_col]
+    jne .out
+    mov ax, [di + SH_LF_ROW]
+    cmp ax, [sh_macro_row]
+    jmp short .out
+.no:
+    or sp, sp                         ; ZF=0: SP is never zero
+.out:
+    pop di
+    pop ax
+    ret
+
+; shm_mpopself - a GOTO back onto an open FOR: drop its frame, and restart
+shm_mpopself:
+    call shm_mtopself
+    jne .out
+    dec byte [sh_macro_lsp]
+.out:
+    ret
+
+; shm_mover - CF=1 when the FOR at DI has run past its end: the counter's
+; cell against the end, the comparison turned round for a negative step
+shm_mover:
+    push ax
+    push bx
+    push si
+    mov ax, [di + SH_LF_CCOL]
+    mov bx, [di + SH_LF_CROW]
+    push di
+    SHOUT sh_getcell2
+    SHOUT sh_acc_load_a
+    pop di
+    lea si, [di + SH_LF_END]
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab                    ; AX = -1/0/1, counter against end
+    test byte [di + SH_LF_STEP + 7], 0x80
+    jz .up
+    neg ax
+.up:
+    cmp ax, 1                         ; past it when counter > end (or < for
+    je .over                          ; a step down)
+    clc
+    jmp short .out
+.over:
+    stc
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; shm_mskipfrom - out of the loop whose home cell is this one: on past its
+; matching NEXT (shm_mnext's GOTO target is set the same way, by the engine)
+shm_mskipfrom:
+    push ax
+    mov ax, [sh_macro_col]
+    mov [sh_macro_ncol], ax
+    mov ax, [sh_macro_row]
+    mov [sh_macro_nrow], ax
+    mov byte [sh_macro_ctl], SH_MC_SKIP
+    pop ax
+    ret
+
+; --- the sheet -----------------------------------------------------------------
+shm_mselect:
+    call shm_mref
+    jc .ok
+    jmp shm_merr
+.ok:
+    mov [sh_selcol], ax               ; the selection moves now; the grid is
+    mov [sh_selcol2], ax              ; repainted once the step is over, never
+    mov [sh_selrow], bx               ; from inside the evaluation of it
+    mov [sh_selrow2], bx
+    SHOUT sh_scrollto
+    mov byte [sh_macro_dirty], 1
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+shm_msetval:
+    call shm_mref
+    jnc .bad
+    mov [sh_macro_tcol], ax
+    mov [sh_macro_trow], bx
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    SHOUT sh_pcmp
+    mov ax, [sh_macro_tcol]
+    mov bx, [sh_macro_trow]
+    call shm_mstore
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; FORMULA(x[, ref]) - x into the active cell (or ref) AS IF TYPED: "=A1*2" is
+; a formula, "12" a number, "#N/A" the error, "TRUE" the logical. The value is
+; banked - its tag, its error, its eight bytes and its text - before the
+; reference is parsed, which can evaluate and so overwrite all four
+shm_mformula:
+    SHOUT sh_pcmp
+    mov al, [sh_curtype]
+    mov [sh_macro_ftype], al
+    mov al, [sh_evalerr]
+    mov [sh_macro_ferr], al
+    mov byte [sh_evalerr], 0
+    push si
+    mov si, sh_acc
+    mov bx, sh_macro_tend
+    SHOUT sh_trcopy
+    cmp byte [sh_macro_ftype], SH_T_TEXT
+    jne .nt
+    mov si, sh_sacc                   ; typed text goes through the edit
+    mov di, sh_editbuf                ; buffer, as a keystroke's would
+    xor cx, cx
+.c:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .cd
+    inc si
+    inc di
+    inc cx
+    cmp cx, SH_EDITMAX
+    jb .c
+    mov byte [di], 0
+.cd:
+    mov [sh_editlen], cl
+.nt:
+    pop si
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    cmp byte [si], ','
+    jne .have
+    inc si
+    call shm_mref
+    jc .have
+    jmp shm_merr
+.have:
+    mov [sh_macro_tcol], ax
+    mov [sh_macro_trow], bx
+    push si
+    mov si, sh_macro_tend
+    mov bx, sh_acc
+    SHOUT sh_trcopy
+    pop si
+    mov al, [sh_macro_ftype]
+    mov [sh_curtype], al
+    mov al, [sh_macro_ferr]
+    mov [sh_evalerr], al
+    mov ax, [sh_macro_tcol]
+    mov bx, [sh_macro_trow]
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .typed
+    call shm_mstore
+    jmp short .done
+.typed:
+    push word [sh_selcol]             ; sh_commit enters the edit buffer into
+    push word [sh_selrow]             ; the SELECTED cell, so the target is
+    mov [sh_selcol], ax               ; selected for it and put back
+    mov [sh_selrow], bx
+    mov byte [sh_editing], 1
+    SHOUT sh_commit
+    mov byte [sh_editing], 0
+    pop word [sh_selrow]
+    pop word [sh_selcol]
+.done:
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+; --- the user --------------------------------------------------------------
+shm_malert:
+    SHOUT sh_pcmp
+    push di
+    push cx
+    mov di, sh_macro_msg
+    mov cx, OS88UI_AMAX
+    call shm_mtext
+    pop cx
+    pop di
+    SHOUT sh_skipargs
+    mov byte [sh_macro_ctl], SH_MC_PAUSEN
+    mov byte [sh_macro_wait], SH_MW_ALERT
+    jmp shm_mtrue
+
+; INPUT(prompt) - the second evaluation of this cell answers what was typed
+shm_minput:
+    mov al, [sh_macro_ansok]
+    or al, al
+    jz .ask
+    mov byte [sh_macro_ansok], 0
+    push ax                           ; sh_skipargs walks the text in AL
+    SHOUT sh_skipargs
+    pop ax
+    cmp al, 1
+    jne .cancel
+    push si
+    mov si, sh_macro_ans              ; a number if all of it is one
+    SHOUT fp_atof
+    jc .text
+    cmp byte [si], 0
+    jne .text
+    pop si
+    SHOUT sh_acc_store
+    mov byte [sh_curtype], SH_T_NUM
+    ret
+.text:
+    mov si, sh_macro_ans
+    push di
+    mov di, sh_sacc
+.tc:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .tc
+    pop di
+    pop si
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_TEXT
+    ret
+.cancel:
+    jmp shm_mfalse                    ; Cancel answers FALSE, as Excel's does
+.ask:
+    SHOUT sh_pcmp
+    push di
+    push cx
+    mov di, sh_macro_msg
+    mov cx, SH_MPROMPT
+    call shm_mtext
+    pop cx
+    pop di
+    SHOUT sh_skipargs
+    mov byte [sh_macro_ctl], SH_MC_PAUSEH
+    mov byte [sh_macro_wait], SH_MW_INPUT
+    jmp shm_mfalse
+
+shm_mmessage:
+    SHOUT sh_pcmp
+    call shm_mtruth
+    mov word [sh_msg], 0
+    jnc .off
+    cmp byte [si], ','
+    jne .off
+    inc si
+    SHOUT sh_pcmp
+    push di
+    push cx
+    mov di, sh_macro_stmsg
+    mov cx, SH_MSTMSG
+    call shm_mtext
+    pop cx
+    pop di
+    mov word [sh_msg], sh_macro_stmsg
+.off:
+    SHOUT sh_skipargs
+    SHOUT sh_drawstatus
+    jmp shm_mtrue
+
+shm_mbeep:
+    SHOUT sh_skipargs
+    SHOUT sh_macro_beep
+    jmp shm_mtrue
+
+; ACTIVE.CELL() - the selected cell's value (Excel converts the reference to
+; its contents wherever a value is wanted, which is everywhere here)
+shm_mactcell:
+    SHOUT sh_skipargs
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    SHOUT sh_getcell2
+    jc .out
+    xor ax, ax                        ; an empty cell is zero
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+.out:
+    ret
+
+; --- the commands: the menu's own routines, on the selection ---------------
+shm_mcopy:
+    mov ax, sh_docmd_copy
+    jmp short shm_mcmd
+shm_mcut:
+    mov ax, sh_docmd_cut
+    jmp short shm_mcmd
+shm_mpaste:
+    mov ax, sh_docmd_paste
+shm_mcmd:
+    push ax
+    SHOUT sh_skipargs
+    pop ax
+    push si
+    mov si, [sh_ownwin]
+    SHOUT sh_macro_cmd                ; AX = which, SI = the window
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; CLEAR([n]) - Excel's numbering (Functions and Macros, CLEAR): 1 all, 2
+; formats, 3 or none the formulas - the contents - and 4 the notes, onto Edit >
+; Clear's rows, which run All, Formulas, Formats. It has no notes row, so 4
+; clears nothing and answers FALSE
+shm_mclear:
+    mov ax, 3
+    cmp byte [si], ')'
+    je .have
+    SHOUT sh_pcmp
+    SHOUT sh_acc_toint
+    jnc .have
+    mov ax, 3
+.have:
+    push ax                           ; sh_skipargs walks the text in AL
+    SHOUT sh_skipargs
+    pop ax
+    cmp ax, 1
+    je .all
+    cmp ax, 2
+    je .fmt
+    cmp ax, 3
+    jne .none
+    mov ax, 1                         ; the formulas' row
+    jmp short .go
+.all:
+    xor ax, ax
+    jmp short .go
+.fmt:
+    mov ax, 2
+.go:
+    push si
+    mov si, [sh_ownwin]
+    SHOUT sh_macro_clear              ; AX = the row, SI = the window
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.none:
+    jmp shm_mfalse
+
+shm_mcalc:
+    SHOUT sh_skipargs
+    SHOUT sh_recalc_all
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; =============================================================================
+; shm_mresume - verb SHM_MRESUME: start a run ([sh_macro_wait] SH_MW_START,
+; at [sh_macro_col]/[sh_macro_row]) or carry one on after its ALERT or INPUT
+; =============================================================================
+shm_mresume:
+    push ax
+    mov al, [sh_macro_wait]
+    mov byte [sh_macro_wait], 0
+    cmp al, SH_MW_START
+    jne .notstart
+    mov byte [sh_macro_running], 1
+    mov word [sh_macro_steps], 0
+    mov byte [sh_macro_lsp], 0
+    mov byte [sh_macro_ansok], 0
+    mov word [sh_msg], 0
+    jmp short .go
+.notstart:
+    cmp al, SH_MW_INPUT
+    jne .go
+    cmp byte [sh_macro_ansok], 0      ; closed without OK: Cancel
+    jne .go
+    mov byte [sh_macro_ansok], 2
+.go:
+    cmp byte [sh_macro_running], 0
+    je .out
+    call shm_mstep
+.out:
+    pop ax
+    ret
+
+; shm_mstep - run cells until the macro ends or pauses
+shm_mstep:
     push ax
     push bx
     push cx
+    push si
     push di
     push es
 .next:
@@ -29977,78 +30834,197 @@ sh_macro_step:
     mov [sh_macro_steps], ax
     mov ax, [sh_macro_col]
     mov bx, [sh_macro_row]
-    call sh_findcell
-    jnc .stop                          ; an empty cell: implicit RETURN
+    SHOUT sh_findcell
+    jnc .stop                         ; an empty cell: the end
     mov es, [sh_cellseg]
-    test byte [es:di+4], 1             ; HASFORMULA - a plain value cell is
-    jz .advance                        ; a no-op step, just like a bare
-                                        ; formula with no side effect
-    call sh_macro_eval
-    cmp ax, 0
+    test byte [es:di+4], 1            ; a constant is a step that does nothing
+    jz .advance
+    mov si, [es:di+SH_C_FOFF]         ; the formula, out of the arena
+    mov es, [sh_txtseg]
+    mov di, sh_macrobuf
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .cp
+    mov byte [sh_macro_ctl], SH_MC_NONE
+    mov byte [sh_ud_busy], 1          ; no Undo snapshot per entry: a macro is
+    mov byte [sh_evalerr], 0          ; not undone, and a loop would copy the
+    mov ax, [sh_evaldepth]            ; document every time round
+    mov [sh_macro_exdep], ax
+    mov byte [sh_macro_exec], 1
+    mov si, sh_macrobuf
+    SHOUT sh_pcmp
+    mov byte [sh_macro_exec], 0
+    cmp byte [sh_macro_dirty], 0      ; a SELECT or a command: show it now
+    je .ctl
+    call shm_mpaint
+.ctl:
+    mov al, [sh_macro_ctl]
+    cmp al, SH_MC_NONE
     je .advance
-    cmp ax, 1
+    cmp al, SH_MC_GOTO
     je .goto
-    cmp ax, 2
-    je .stop
-    jmp .out                           ; 3: alert raised, stop stepping -
-                                        ; sh_macro_onalert resumes us later
+    cmp al, SH_MC_STOP
+    je .end
+    cmp al, SH_MC_SKIP
+    je .skip
+    cmp al, SH_MC_PAUSEH              ; INPUT: this cell again, afterwards
+    je .pause
+    inc word [sh_macro_row]           ; ALERT: the next one
+.pause:
+    call shm_mpaint
+    cmp byte [sh_macro_wait], SH_MW_ALERT
+    jne .ask
+    SHOUT sh_macro_alertup
+    jmp short .out
+.ask:
+    mov byte [sh_macro_ansok], 0
+    SHOUT sh_macro_inputup
+    jmp short .out
 .goto:
-    mov [sh_macro_col], bx
-    mov [sh_macro_row], cx
+    mov ax, [sh_macro_ncol]
+    mov [sh_macro_col], ax
+    mov ax, [sh_macro_nrow]
+    mov [sh_macro_row], ax
+    jmp .next
+.skip:
+    call shm_mskip
+    jc .unmatched
     jmp .next
 .advance:
     mov ax, [sh_macro_row]
     inc ax
+    cmp ax, SH_ROWS
+    jae .stop
     mov [sh_macro_row], ax
     jmp .next
+.unmatched:
+    mov word [sh_msg], sh_s_macronext
+    jmp short .fin
 .limit:
     mov word [sh_msg], sh_s_macrolimit
-    jmp .stopdraw
+    jmp short .fin
 .stop:
     mov word [sh_msg], sh_s_macrodone
-.stopdraw:
+    jmp short .fin
+.end:
+    cmp word [sh_msg], 0              ; RETURN/HALT: "done" - unless the
+    jne .fin                          ; macro left a message, or failed
+    mov word [sh_msg], sh_s_macrodone
+.fin:
     mov byte [sh_macro_running], 0
-    call sh_repaint
+    mov byte [sh_ud_busy], 0
+    SHOUT sh_undo_drop                ; Excel cannot undo a macro either
+    call shm_mpaint
 .out:
     pop es
     pop di
+    pop si
     pop cx
     pop bx
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; sh_macro_onalert - os88ui_ask's completion proc (SPEC.md 75.3): AL=button
-; or OS88UI_ACANCEL, SI=our window, gfx lock held, the alert already
-; destroyed. Either way, resume - an OK and a Cancel mean the same thing
-; here, since ALERT only ever offers the one OS88UI_AOK button.
-; -----------------------------------------------------------------------------
-sh_macro_onalert:
-    call sh_macro_step
+shm_mpaint:
+    push si
+    mov byte [sh_macro_dirty], 0
+    mov si, [sh_ownwin]
+    SHOUT sh_repaint
+    pop si
     ret
 
-; -----------------------------------------------------------------------------
-; sh_macro_run - Macro > Run: start executing at the currently selected
-; cell, on the currently active sheet
-; -----------------------------------------------------------------------------
-sh_macro_run:
-    cmp byte [sh_macro_running], 0
-    jne .out                           ; already running (shouldn't happen -
-                                        ; the menu command can't fire while
-                                        ; an alert has this window's own
-                                        ; event handling otherwise occupied,
-                                        ; but a stray re-entry is a silent
-                                        ; no-op rather than two interleaved
-                                        ; macros stepping on each other)
-    mov byte [sh_macro_running], 1
-    mov word [sh_macro_steps], 0
-    mov ax, [sh_selcol]
+; shm_mskip - on past the NEXT that closes the loop at [sh_macro_ncol]/
+; [sh_macro_nrow]: down its column, FOR and WHILE opening a level and NEXT
+; closing one. CF=1 when the column ends first
+shm_mskip:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    xor cx, cx                        ; CX = the levels opened on the way
+    mov bx, [sh_macro_nrow]
+.l:
+    inc bx
+    cmp bx, SH_ROWS
+    jae .none
+    mov ax, [sh_macro_ncol]
+    push cx
+    SHOUT sh_findcell
+    pop cx
+    jnc .none
+    mov es, [sh_cellseg]
+    test byte [es:di+4], 1
+    jz .l
+    mov si, [es:di+SH_C_FOFF]
+    mov es, [sh_txtseg]
+    mov di, sh_f_for
+    call shm_mword
+    je .open
+    mov di, sh_f_while
+    call shm_mword
+    je .open
+    mov di, sh_f_next
+    call shm_mword
+    jne .l
+    jcxz .found
+    dec cx
+    jmp short .l
+.open:
+    inc cx
+    jmp short .l
+.found:
+    mov ax, [sh_macro_ncol]
     mov [sh_macro_col], ax
-    mov ax, [sh_selrow]
-    mov [sh_macro_row], ax
-    call sh_macro_step
+    inc bx
+    mov [sh_macro_row], bx
+    clc
+    jmp short .out
+.none:
+    stc
 .out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
+
+; shm_mword - ZF=1 when ES:SI, a formula, opens with the word at DS:DI then
+; '(' - in any case
+shm_mword:
+    push ax
+    push si
+    push di
+.l:
+    mov al, [es:si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 32
+.u:
+    cmp byte [di], 0
+    je .end
+    cmp al, [di]
+    jne .out
+    inc si
+    inc di
+    jmp short .l
+.end:
+    cmp al, '('
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+section .text
 
 ; sh_funcid - in: sh_ident; out: AL = the function's id, or 0xFF unknown.
 ; TABLE-DRIVEN as of stage 3.0d: the id IS the entry's index in sh_functab, so
@@ -32581,6 +33557,26 @@ sh_f_isnontext: db 'ISNONTEXT', 0
 sh_f_clean:    db 'CLEAN', 0
 sh_f_rand:     db 'RAND', 0
 sh_f_indirect: db 'INDIRECT', 0
+sh_f_goto:      db 'GOTO', 0
+sh_f_return:    db 'RETURN', 0
+sh_f_halt:      db 'HALT', 0
+sh_f_setvalue:  db 'SET.VALUE', 0
+sh_f_select:    db 'SELECT', 0
+sh_f_formula:   db 'FORMULA', 0
+sh_f_alert:     db 'ALERT', 0
+sh_f_message:   db 'MESSAGE', 0
+sh_f_beep:      db 'BEEP', 0
+sh_f_input:     db 'INPUT', 0
+sh_f_for:       db 'FOR', 0
+sh_f_while:     db 'WHILE', 0
+sh_f_next:      db 'NEXT', 0
+sh_f_break:     db 'BREAK', 0
+sh_f_actcell:   db 'ACTIVE.CELL', 0
+sh_f_copy:      db 'COPY', 0
+sh_f_cut:       db 'CUT', 0
+sh_f_paste:     db 'PASTE', 0
+sh_f_clear:     db 'CLEAR', 0
+sh_f_calcnow:   db 'CALCULATE.NOW', 0
 sh_f_rows:      db 'ROWS', 0
 sh_f_columns:   db 'COLUMNS', 0
 sh_f_areas:     db 'AREAS', 0
@@ -32652,6 +33648,10 @@ sh_functab:
     dw sh_f_now                       ; 106 (81.42)
     dw sh_f_isnontext, sh_f_clean, sh_f_rand   ; 107 108 109 (81.43)
     dw sh_f_indirect                  ; 110 (81.44)
+    dw sh_f_goto, sh_f_return, sh_f_halt, sh_f_setvalue, sh_f_select ; 111- :
+    dw sh_f_formula, sh_f_alert, sh_f_message, sh_f_beep, sh_f_input  ; the
+    dw sh_f_for, sh_f_while, sh_f_next, sh_f_break, sh_f_actcell     ; MACRO
+    dw sh_f_copy, sh_f_cut, sh_f_paste, sh_f_clear, sh_f_calcnow     ; (81.63)
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -33892,8 +34892,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 
 ; Stage 2.0's ALERT() needs a real message box; SPEC.md 75.3's os88ui_ask is
 ; the project's own answer to that (a kernel-resident version was tried and
-; measured too costly for every app to pay for - see the section comment
-; above sh_macro_kw_goto). Included here, above OS88_BSS, because the
+; measured too costly for every app to pay for - see SPEC.md 75.3).
+; Included here, above OS88_BSS, because the
 ; sh_macro_msg bss field below sizes itself from OS88UI_AMAX, which this
 ; needs to have already defined.
 %define OS88UI_ALERT
@@ -33943,7 +34943,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5806
+    OS88_BSS 6095
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -34841,8 +35841,21 @@ sh_v_sh_sslot               equ sh_v_sh_srestore + 4
 sh_v_sh_str_cat             equ sh_v_sh_sslot + 4
 sh_v_sh_strcpy              equ sh_v_sh_str_cat + 4
 sh_v_sh_strlen              equ sh_v_sh_strcpy + 4
-SH_NVEC       equ 81
-sh_v_end      equ sh_v_sh_strlen + 4
+sh_v_sh_commit              equ sh_v_sh_strlen + 4
+sh_v_sh_drawstatus          equ sh_v_sh_commit + 4
+sh_v_sh_macro_alertup       equ sh_v_sh_drawstatus + 4
+sh_v_sh_macro_beep          equ sh_v_sh_macro_alertup + 4
+sh_v_sh_macro_clear         equ sh_v_sh_macro_beep + 4
+sh_v_sh_macro_cmd           equ sh_v_sh_macro_clear + 4
+sh_v_sh_macro_inputup       equ sh_v_sh_macro_cmd + 4
+sh_v_sh_name_lookup         equ sh_v_sh_macro_inputup + 4
+sh_v_sh_recalc_all          equ sh_v_sh_name_lookup + 4
+sh_v_sh_repaint             equ sh_v_sh_recalc_all + 4
+sh_v_sh_scrollto            equ sh_v_sh_repaint + 4
+sh_v_sh_str_want            equ sh_v_sh_scrollto + 4
+sh_v_sh_undo_drop           equ sh_v_sh_str_want + 4
+SH_NVEC       equ 94
+sh_v_end      equ sh_v_sh_undo_drop + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -34893,7 +35906,24 @@ sh_sort_cmpc      equ sh_sort_ccls + 1   ; byte: ...values[j-1]'s, and
 sh_sort_keyc      equ sh_sort_cmpc + 1   ; byte: ...the key's (81.61)
 sh_sort_ctoff     equ sh_sort_keyc + 1   ; word: the staged text's slot
 sh_sort_tcnt      equ sh_sort_ctoff + 2  ; word: text slots used
-sh_bss_end        equ sh_sort_tcnt + 2
+sh_macro_ctl      equ sh_sort_tcnt + 2   ; byte: what the step asked (SH_MC_*)
+sh_macro_ncol     equ sh_macro_ctl + 1   ; word: ...where to, for GOTO, NEXT,
+sh_macro_nrow     equ sh_macro_ncol + 2  ; and the loop a SKIP leaves (81.63)
+sh_macro_exec     equ sh_macro_nrow + 2  ; byte: the step engine is evaluating
+sh_macro_exdep    equ sh_macro_exec + 1  ; word: ...at this evaluation depth
+sh_macro_wait     equ sh_macro_exdep + 2 ; byte: what a resume means (SH_MW_*)
+sh_macro_ansok    equ sh_macro_wait + 1  ; byte: INPUT 1 answered, 2 cancelled
+sh_macro_dirty    equ sh_macro_ansok + 1 ; byte: repaint after this step
+sh_macro_lsp      equ sh_macro_dirty + 1 ; byte: loop frames open
+sh_macro_ftype    equ sh_macro_lsp + 1   ; byte: FORMULA's value, banked:
+sh_macro_ferr     equ sh_macro_ftype + 1 ; byte: its tag and its error
+sh_macro_mnsi     equ sh_macro_ferr + 1  ; word: shm_mname's way back
+sh_macro_tend     equ sh_macro_mnsi + 2  ; 8: FOR's end, FORMULA's value
+sh_macro_tstep    equ sh_macro_tend + 8  ; 8: FOR's step
+sh_macro_loops    equ sh_macro_tstep + 8 ; SH_MLOOPS * SH_LF_SZ: the frames
+sh_macro_ans      equ sh_macro_loops + SH_MLOOPS * SH_LF_SZ ; SH_EDITMAX+1
+sh_macro_stmsg    equ sh_macro_ans + SH_EDITMAX + 1 ; SH_MSTMSG+1: MESSAGE
+sh_bss_end        equ sh_macro_stmsg + SH_MSTMSG + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

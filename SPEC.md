@@ -95991,7 +95991,9 @@ dropping cells.
 
 Five commands — `GOTO`, `RETURN`, `SET.VALUE`, `SELECT`, `ALERT` — read from a
 macro sheet and executed with a step ceiling (`SH_MACRO_MAXSTEPS` = 5000) so a
-runaway macro ends rather than hangs the machine. `ALERT` uses `os88ui_ask`
+runaway macro ends rather than hangs the machine. **§81.63 replaced this**:
+twenty macro functions that act when evaluated, loops, INPUT, and a Run
+dialog. `ALERT` uses `os88ui_ask`
 from `apps/os88ui.inc`, a per-package include: there is deliberately **no
 kernel alert primitive**, and §75.3 states why a windowed dialog with buttons
 does not belong in a budget the whole machine pays for.
@@ -98399,8 +98401,10 @@ and §82 is this tree's answer to that.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
   downstream of that one absence.
-- **The macro language is 5 commands** of a language with ~90 macro functions
-  (§81.8). It is a demonstration of the machinery, not the feature.
+- **The macro language is 20 functions** of a language with ~90 (§81.63):
+  control and loops, the sheet, the user, five menu commands. No subroutines,
+  no references as values (OFFSET), no recorder, no custom dialogs, and a
+  Normal save keeps a macro cell's value, not its formula - SYLK carries it.
 - **No Short/Full menus toggle**, and **no freeze panes**.
 - **Smaller, each listed where it was found:** a centred or right-aligned
   label does not run on into its neighbours (§81.54); a formatted empty cell
@@ -100257,6 +100261,102 @@ check alone refuses it. BARC, which ends in RC, is the case that needs the
 start.
 
 Resident −2,583 bytes (**3,486 free**), bss +92, `CHART.OVL` +3,033.
+
+### 81.63 A macro language you can use
+
+§81.8's engine knew five keywords, each only as the **whole** of a cell, so a
+macro could not decide anything, loop, or ask the user a question, and it
+started wherever the selection happened to be. This is Excel 2.1's model,
+as much of it as is useful here:
+
+**Macro functions are functions, and act when evaluated** (*Functions and
+Macros*, chapter 7), so `=IF(A5>10,GOTO(B20))` branches and
+`=SET.VALUE(B1,B1+1)` counts. **But only when the step engine is evaluating
+the current macro cell**, at its own evaluation depth (`sh_macro_exec`,
+`sh_macro_exdep`). A repaint evaluates every visible formula, macro cells
+included, and a SELECT mid-run repaints — without the depth test the painter
+would run every macro cell on the screen. A macro command in a worksheet
+formula, or evaluated by the painter, does nothing and answers FALSE.
+
+**IF and CHOOSE parse the branch they do not take**, as they always have —
+the parse is what moves the text pointer — and that branch now runs no macro
+command: `sh_macro_exec` is held off across it. The first run of the gate had
+`=IF(H7=3,BREAK())` break out of its loop at 1.
+
+| | |
+|---|---|
+| control | `GOTO(ref)`, `RETURN()`, `HALT()`, `FOR(counter,start,end[,step])`, `WHILE(test)`, `NEXT()`, `BREAK()` |
+| the sheet | `SELECT(ref)`, `FORMULA(x[,ref])` — entered as if typed, so `"=A1*2"` is a formula and `"#N/A"` the error — `SET.VALUE(ref,x)`, `ACTIVE.CELL()` |
+| the user | `ALERT(text)`, `INPUT(prompt)`, `MESSAGE(show[,text])`, `BEEP()` |
+| commands | `COPY()`, `CUT()`, `PASTE()`, `CLEAR([n])` (Excel's numbering: 1 all, 2 formats, 3 formulas, 4 notes, which this Clear has no row for), `CALCULATE.NOW()` |
+
+**A reference argument** is a reference, a defined name, or **text**: `"B5"`,
+or `"R[1]C"` relative to the active cell — the form Excel's recorder writes,
+and how a macro walks a column without OFFSET. **A FOR counter is a cell** (or
+a name for one) where Excel's is a name holding a value: names here are
+places, so the counter lives where the name points. Loops nest four deep
+(`SH_MLOOPS`); a FOR or WHILE that does not run, or a BREAK, goes on past its
+own NEXT, found by counting FOR/WHILE/NEXT down the column.
+
+**Macro > Run...** asks for the start — a defined name, Excel's way, or a
+reference — through stage 3.0c's one-line dialog, prefilled with the
+selection, which is where a macro used to start.
+
+**ALERT and INPUT pause the run.** The engine raises the dialog after the
+step and returns; the dialog's completion carries on — `sh_macro_onalert` for
+the alert, `sh_idlg_after` once the input dialog has **closed** (a run may
+open it again). ALERT resumes at the next cell; INPUT at **the same cell**,
+whose second evaluation answers what was typed — a number if all of it is
+one — or FALSE for Cancel, as Excel's does. One INPUT to a cell.
+
+**SELECT repaints; SET.VALUE and FORMULA do not**: the grid catches up at the
+next SELECT or command, a pause, or the end — every change repainted as it
+happens is seconds a step on the target. A run takes no Undo snapshot per
+entry (`sh_ud_busy`) and ends with "Can't Undo", as Excel cannot undo a macro
+either. `SH_MACRO_MAXSTEPS` is 10,000 now that a macro can loop.
+
+**Where it lives.** The engine and every macro function are `CHART.OVL`'s
+(verbs `SHM_MACRO`, `SHM_MRESUME`; `CH_OVKB` 26 → 28); the package keeps the
+twenty names in `sh_functab`, the door, the Run dialog and the resumptions,
+and the old resident engine went — resident +118 bytes net for all of it.
+**BIFF cannot carry a macro function**: no reference on hand gives Excel's
+numbers for them, and a guess is a file Excel runs differently, so they are
+`0xFF` in `sh_rpn_fid` and a Normal save keeps the value. SYLK carries the
+formulas as text. `sh_dc_look` refuses index 255, which it would otherwise
+have decoded as the first `0xFF` entry, POWER.
+
+**Clear's "Formulas" row removes a cell with nothing to keep** — no format
+byte, no border, no number format — instead of leaving a zero on the grid:
+CLEAR()'s default is that row, and Excel shows nothing there.
+
+#### 81.63.1 Evidence
+
+`tests/sheetmacro.py`, **16 checks**, through the menus and a SYLK save. A
+macro run by NAME: FOR/NEXT summing 1..5; WHILE(ACTIVE.CELL()<>0) walking C1:C3
+by SELECT("R[1]C"); FORMULA entering a formula and a label into the active
+cell; IF with GOTO jumping a SET.VALUE; IF with BREAK leaving a FOR at 3; a
+FOR stepping −3 inside another (3 × 4 turns); COPY and PASTE; CLEAR();
+MESSAGE on the status bar, read off the glass; SET.VALUE through a defined
+name; a FOR that runs no turn, skipped past its own NEXT over the loop inside
+it; RETURN ending the run. A macro run by reference: ALERT, dismissed, then
+INPUT answered 42. And `=GOTO(A12)` on the worksheet, inert and FALSE.
+
+The first run found two defects the design review had not: IF's untaken
+branch running BREAK, above, and INPUT reading its "answered" flag out of AL
+after `sh_skipargs` had walked the text in it — every answer was a Cancel.
+CLEAR had the same AL fault, and Excel's CLEAR numbering is not Clear's row
+order. The previous binary fails 14 of the 16 (the two it passes hold trivially
+when no macro runs at all). Mutations, each built and caught: the untaken IF
+branch left live (1), the depth test dropped - the painter running macro
+cells mid-run (5), INPUT's flag left in AL (1), R1C1 text refused (9), names
+refused as references (2), the loop skip counting no nesting (1), and Clear
+keeping the zero (1). The skip mutation passed at first: the no-turn FOR's
+inner loop had nothing between its NEXT and the outer one, so stopping at the
+wrong NEXT ran nothing observable; a SET.VALUE placed between the two is what
+tells them apart.
+
+Resident +118 bytes (52,148 → 52,266, **3,079 free**), bss +289, `CHART.OVL`
++2,266 (28,063 of 28,672).
 
 ## 82. CHART — charting, and the buffer both halves draw into
 
