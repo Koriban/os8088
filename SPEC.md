@@ -100180,6 +100180,84 @@ mutation was wrong, not the gate.
 Resident +654 bytes (54,077 → 54,731, **995 left**), bss +11, `CHART.OVL`
 +178 (22,764 of 23,552, `sh_seterr` having left it).
 
+### 81.62 The less-used functions go to `CHART.OVL`
+
+**Resident 54,731 → 52,148: 2,583 bytes**, with 995 left before it — which is
+the whole of why: the next resident feature had nowhere to go. The rule is
+§82.16.10's: the code that runs only when a cell using it recalculates, and
+of that, what a sheet uses least. **Stays resident**: the folds (SUM,
+AVERAGE, MIN, MAX, COUNT, COUNTA, PRODUCT, AND, OR, and the variance family,
+which shares SUM's path), IF, CHOOSE, NOT, ABS, the special forms (MOD, INT,
+TRUNC, ROUND, SQRT, POWER, SIGN, FACT, ROW, COLUMN), the lookups (VLOOKUP,
+HLOOKUP, INDEX, MATCH, LOOKUP), the dates, NOW and RAND. **Moves**: the
+**text** family (23 functions, `sh_ptext` and five helpers only it calls),
+the **logarithms and trigonometry** (`sh_ptrans`, 12) and the **information**
+functions (`sh_pinfo` and `sh_pargclass`, 13) — 48 functions.
+
+The evidence for "least" is thin and says so: Microsoft's own 33 Excel 2.1
+sample worksheets carry 323 formulas, and every function in them is SUM (187),
+AVERAGE (3) or NOW (1). The split beyond that is judgement about what business
+sheets use, and it is cheap to be wrong about: once `CHART.OVL` is loaded —
+at start-up, and kept — a moved function costs a far call through its door
+and its calls back, not a disk read. What a wrong guess costs is a machine
+without the file, where the functions answer `#VALUE!`, as the financial
+family's do and as a machine without the file cannot open a document anyway.
+RAND stays because it is nullary: the door's refusal steps over arguments, and
+RAND has a `)` its caller consumes itself.
+
+**One door, four verbs.** `sh_pfin`'s stub became `sh_pdoor`, entered by
+`sh_pfin`, `sh_ptext`, `sh_ptrans` and `sh_pinfo` with `SHM_FIN`, `SHM_TEXT`,
+`SHM_TRANS` and `SHM_INFO` in BP; the refusal is the one §82.16.10 wrote. The
+bodies are bracketed where they stand — `sh_pargclass` joins the financial
+block at its top and `sh_ptrans` at its bottom, making one region from
+`sh_pargclass` to `sh_trcopy`, and the text family is five brackets — with
+169 calls turned to `SHOUT` and **23 new vectors** (`SH_NVEC` 81), found by a
+call-graph walk over the source: a routine moves when every caller it has
+moves with it.
+
+**Two routines could not be called through a vector, and the stack checker
+said so.** `sh_vpush` and `sh_binop_pre` move `sh_acc` on and off their
+CALLER's stack past their own return address; behind a far call and a shim
+they would bank it on the shim's frame and `retf` into the value.
+`stkbalance` refused the shims (`ret at depth -4`, `+4`) before anything ran.
+The module has its own two (`shm_vpush`, `shm_binop_pre`), and the part of
+`sh_binop_pre` that touches no stack became `sh_binop_ld`, resident and
+shared.
+
+**`CH_OVKB` 23 → 26**: `CHART.OVL` 22,764 → 25,797 of 26,624. Heap, not image.
+
+#### 81.62.1 A defect the gate found on both builds
+
+`SEARCH` came in from SYLK as `SEAC16H` — **#NAME? on every load, SHEET's own
+files included**. `sh_formula_from_r1c1` starts a reference at any `R`
+followed by a bracket, a digit, `-` or `C`, and never asked whether the `R`
+began a word: the `RC` inside SEARCH is "this row, this column", and became
+the A1 of the cell holding it. A defined name containing RC — SOURCE, BARC,
+RCOST — the same. A reference now has to start where a word does (the `R`
+does not follow a letter, digit, `.` or `_`, `sh_rcident`) and end where one
+does (not followed by one of those, or `(`). SHEET's writer was never
+affected: it spelled `LOG10` and `ATAN2` whole.
+
+#### 81.62.2 Evidence
+
+**The move is checked against a gate that passes both builds**, as §82.16.10
+requires: `tests/sheetfunc.py` evaluates all 48 moved functions from formulas
+cached with a wrong value, read back from SHEET's SYLK save. Run against the
+resident build (the commit before) and the moved one, **the two SYLK files
+SHEET wrote are byte-identical**, and both fail exactly one check — SEARCH,
+above, which is how it was found. The fourteen existing gates pass the moved
+build unchanged; `sheeteval`'s 102 and `sheetfin`'s 30 go through the
+reshaped door.
+
+With the R1C1 fix `sheetfunc` is **51 checks**: the 48 functions, plus RCOST
+and BARC, two names beginning and ending in RC. Each half of the word check,
+taken out, fails its own name — and the start check was not visible at first:
+taken out, SEARCH still passed, because its `RC` runs into an `H` and the end
+check alone refuses it. BARC, which ends in RC, is the case that needs the
+start.
+
+Resident −2,583 bytes (**3,486 free**), bss +92, `CHART.OVL` +3,033.
+
 ## 82. CHART — charting, and the buffer both halves draw into
 
 > **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts

@@ -3979,6 +3979,12 @@ SOAK = [
         "an error constant survives Fill Right, Copy/Paste and typing, "
         "which stored 0, pasted 0 and made a label",
         needs=("marty",), serial=True),
+    Row("sheetfunc", "soak", py("tests/sheetfunc.py"), 400.0,
+        "SPEC.md 81.62: all 48 text, information and transcendental "
+        "functions, each evaluated from a formula cached with a wrong value "
+        "and read back from SHEET's SYLK save - the gate the move of the "
+        "three families into CHART.OVL was checked against, on both builds",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

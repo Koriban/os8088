@@ -765,7 +765,10 @@ SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
 SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
 SHM_DIFBB  equ 5                    ; os88chart.inc include below
 SHM_FIN    equ 6                    ; 82.16.10: the financial family
-SHM_N      equ 4
+SHM_TEXT   equ 7                    ; 81.62: the text functions,
+SHM_TRANS  equ 8                    ; the logarithms and trigonometry,
+SHM_INFO   equ 9                    ; and ISBLANK...ERROR.TYPE
+SHM_N      equ 7
 
 section .modc vstart=0 align=1
 sh_modc0:
@@ -783,6 +786,7 @@ sh_modc_ext:
 
 sh_mverb:
     dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
+    dw sh_m_ptext, sh_m_ptrans, sh_m_pinfo          ; 81.62
 
 sh_m_doread:
     call shm_doread
@@ -797,6 +801,18 @@ sh_m_pfin:
     call shm_pfin
     clc                             ; CF=0 is "the module ran" - the stub
     retf                            ; reads CF=1 as "there is no module"
+sh_m_ptext:                         ; 81.62, the same contract
+    call shm_ptext
+    clc
+    retf
+sh_m_ptrans:
+    call shm_ptrans
+    clc
+    retf
+sh_m_pinfo:
+    call shm_pinfo
+    clc
+    retf
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -895,9 +911,26 @@ sh_difbbox:
 ; and would otherwise carry on parsing from inside the argument list. So no
 ; module answers exactly what the family's own refusals do: zero, #VALUE!
 ; (47), and the arguments stepped over.
+; 81.62: THE TEXT, TRANSCENDENTAL AND INFORMATION FAMILIES came through the
+; same door, each with its own verb: the functions a sheet uses least, 2.8 KB
+; the package needed more than the module did. SUM and its folds, IF, the
+; special forms, the lookups, the dates and NOW stay resident.
 sh_pfin:
     push bp
     mov bp, SHM_FIN
+    jmp short sh_pdoor
+sh_ptext:
+    push bp
+    mov bp, SHM_TEXT
+    jmp short sh_pdoor
+sh_ptrans:
+    push bp
+    mov bp, SHM_TRANS
+    jmp short sh_pdoor
+sh_pinfo:
+    push bp
+    mov bp, SHM_INFO
+sh_pdoor:
     call ch_ovcall
     pop bp
     jc .nomod
@@ -1126,6 +1159,77 @@ sh_x_sh_rowh_set:                       ; 81.60: row heights, for the reader
 sh_x_sh_seterr:                         ; 81.61: resident, for Fill
     call sh_seterr
     retf
+; 81.62: the text, transcendental and information families went to the
+; module, and these are the resident routines they call
+sh_x_fp_atan:
+    call fp_atan
+    retf
+sh_x_fp_cos:
+    call fp_cos
+    retf
+sh_x_fp_exp:
+    call fp_exp
+    retf
+sh_x_fp_sin:
+    call fp_sin
+    retf
+sh_x_fp_sqrt:
+    call fp_sqrt
+    retf
+sh_x_fp_tan:
+    call fp_tan
+    retf
+sh_x_sh_acc_toint:
+    call sh_acc_toint
+    retf
+sh_x_sh_binop_ld:
+    call sh_binop_ld
+    retf
+sh_x_sh_fmtcode:
+    call sh_fmtcode
+    retf
+sh_x_sh_group3:
+    call sh_group3
+    retf
+sh_x_sh_ins_at:
+    call sh_ins_at
+    retf
+sh_x_sh_matchat:
+    call sh_matchat
+    retf
+sh_x_sh_numdp:
+    call sh_numdp
+    retf
+sh_x_sh_parg:
+    call sh_parg
+    retf
+sh_x_sh_pcellref:
+    call sh_pcellref
+    retf
+sh_x_sh_pstrarg:
+    call sh_pstrarg
+    retf
+sh_x_sh_spop:
+    call sh_spop
+    retf
+sh_x_sh_spush:
+    call sh_spush
+    retf
+sh_x_sh_srestore:
+    call sh_srestore
+    retf
+sh_x_sh_sslot:
+    call sh_sslot
+    retf
+sh_x_sh_str_cat:
+    call sh_str_cat
+    retf
+sh_x_sh_strcpy:
+    call sh_strcpy
+    retf
+sh_x_sh_strlen:
+    call sh_strlen
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1145,6 +1249,12 @@ sh_ovshims:
     dw sh_x_sh_colwidth, sh_x_sh_colw_set, sh_x_sh_colw_clear     ; 81.56
     dw sh_x_sh_rowh_set                                           ; 81.60
     dw sh_x_sh_seterr                                             ; 81.61
+    dw sh_x_fp_atan, sh_x_fp_cos, sh_x_fp_exp, sh_x_fp_sin   ; 81.62
+    dw sh_x_fp_sqrt, sh_x_fp_tan, sh_x_sh_acc_toint, sh_x_sh_binop_ld
+    dw sh_x_sh_fmtcode, sh_x_sh_group3, sh_x_sh_ins_at, sh_x_sh_matchat
+    dw sh_x_sh_numdp, sh_x_sh_parg, sh_x_sh_pcellref, sh_x_sh_pstrarg
+    dw sh_x_sh_spop, sh_x_sh_spush, sh_x_sh_srestore, sh_x_sh_sslot
+    dw sh_x_sh_str_cat, sh_x_sh_strcpy, sh_x_sh_strlen
 
 sh_entry:
     push ax
@@ -19879,6 +19989,12 @@ sh_reidx_cellpart_probe:
 ; '[', a digit, '-' or 'C' - which is what tells "R[-1]C" apart from a function
 ; name beginning with R, and the reason this looks one character further ahead
 ; than the A1 scanner needs to.
+;
+; AND IT IS A WHOLE WORD (81.62): the 'R' must not follow a letter, digit, '.'
+; or '_', and what the reference ends at must not be one either, or '('. The
+; RC inside SEARCH was read as "this cell" and the function came in as
+; SEAC16H - #NAME? on every SYLK load, SHEET's own files included, and a
+; defined name like SOURCE the same way.
 ; -----------------------------------------------------------------------------
 sh_formula_from_r1c1:
     push ax
@@ -19886,6 +20002,7 @@ sh_formula_from_r1c1:
     push cx
     push dx
     push si
+    mov dx, si                        ; DX = the text's start, for the check
     mov word [sh_rw_di], 0
 .loop:
     mov al, [si]
@@ -19909,6 +20026,12 @@ sh_formula_from_r1c1:
     and al, 0xDF
     cmp al, 'R'
     jne .literal
+    cmp si, dx                        ; ...at the start of a WORD
+    je .rstart
+    mov al, [si-1]
+    call sh_rcident
+    jc .literal
+.rstart:
     mov [sh_rw_ostart], si
     inc si
     call sh_read_rc                   ; -> BX = value, CL = 1 if absolute
@@ -19921,6 +20044,11 @@ sh_formula_from_r1c1:
     jne .notref
     inc si
     call sh_read_rc
+    jc .notref
+    mov al, [si]                      ; ...and ending one: RCOST is a name,
+    cmp al, '('                       ; RC( a function
+    je .notref
+    call sh_rcident
     jc .notref
     mov [sh_rw_refcol], bx
     mov [sh_rw_absc], cl
@@ -19979,6 +20107,32 @@ sh_formula_from_r1c1:
     pop cx
     pop bx
     pop ax
+    ret
+
+; sh_rcident - CF=1 when AL can be part of a word: a letter, a digit, '.' or
+; '_' (81.62)
+sh_rcident:
+    push ax
+    cmp al, '.'
+    je .yes
+    cmp al, '_'
+    je .yes
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    jbe .yes
+    and al, 0xDF
+    cmp al, 'A'
+    jb .no
+    cmp al, 'Z'
+    jbe .yes
+.no:
+    pop ax
+    clc
+    ret
+.yes:
+    pop ax
+    stc
     ret
 
 ; sh_read_rc - SI just past an 'R' or 'C'. out: BX = the value (a signed offset
@@ -20676,6 +20830,9 @@ sh_binop_pre:
     pop word [sh_lhs+4]
     pop word [sh_lhs+6]
     push ax
+; sh_binop_ld - fp A = the banked left operand, fp B = sh_acc: sh_binop_pre's
+; half that touches no stack, which CHART.OVL's copy calls back to (81.62)
+sh_binop_ld:
     push si
     mov si, sh_lhs
     call fp_unpack_a
@@ -24699,6 +24856,7 @@ sh_pargref:
     clc
     ret
 
+section .modc                      ; 81.62: sh_pargclass, ISxxx's classifier
 ; =============================================================================
 ; sh_pargclass - one argument, CLASSIFIED rather than folded.
 ;
@@ -24727,16 +24885,16 @@ sh_pargclass:
     mov byte [sh_evalerr], 0
     mov byte [sh_argisref], 0
     mov byte [sh_argaux], 0
-    call sh_pargref
+    SHOUT sh_pargref
     jnc .expr
     mov byte [sh_argisref], 1
     mov ax, [sh_arg1col]              ; an AREA is classified by its top-left
     mov bx, [sh_arg1row]              ; corner - what a 1x1 use of one would
-    call sh_getcell2                  ; intersect to anyway
+    SHOUT sh_getcell2                 ; intersect to anyway
     jc .occupied
     mov byte [sh_argtype], SH_T_BLANK ; the cell does not exist. Not zero: the
     xor ax, ax                        ; whole point
-    call sh_acc_int                   ; ...though its value is still a defined
+    SHOUT sh_acc_int                  ; ...though its value is still a defined
     jmp .fin                          ; zero for anyone who asks for one
 .occupied:
     mov al, [sh_curtype]
@@ -24745,7 +24903,7 @@ sh_pargclass:
     mov [sh_argaux], al
     jmp .fin
 .expr:
-    call sh_pcmp
+    SHOUT sh_pcmp
     mov al, [sh_curtype]
     mov [sh_argtype], al
 .fin:
@@ -24765,8 +24923,9 @@ sh_pargclass:
 
 ; =============================================================================
 ; THE FINANCIAL FAMILY IS CHART.OVL'S THIRD TENANT (SPEC.md 82.16.10): from
-; here to sh_ptrans it is module code, bracketed where it stands the way the
-; file formats were (82.16.9). Every call out is SHOUT; the one way in is the
+; here to sh_trcopy it is module code, bracketed where it stands the way the
+; file formats were (82.16.9) - and since 81.62 sh_pargclass above and
+; sh_ptrans below are in the same block. Every call out is SHOUT; the one way in is the
 ; resident stub sh_pfin, beside the other three. The three constants below
 ; stay in .text, because what reads them is resident fp_* code through DS.
 ; =============================================================================
@@ -25978,7 +26137,7 @@ sh_pfargs:
     pop ax
     ret
 
-section .text
+                                    ; (sh_ptrans follows in the module too, 81.62)
 
 ; =============================================================================
 ; sh_ptrans - LN, LOG10, EXP, PI and LOG, ids 81 and up (SPEC.md 81.35).
@@ -25987,7 +26146,7 @@ section .text
 ; Every one of these was blocked on apps/os88fp.inc having no logarithm, and
 ; on nothing else - the value model has been IEEE-754 double since stage 4.0.
 ; =============================================================================
-sh_ptrans:
+shm_ptrans:
     push bx
     push cx
     push dx
@@ -25998,9 +26157,9 @@ sh_ptrans:
     je .atan2                         ; ATAN2 is the only one taking two
     cmp di, 84
     je .pi                            ; PI() takes no argument at all
-    call sh_pcmp                      ; ...every other one takes a number
+    SHOUT sh_pcmp                     ; ...every other one takes a number
     mov [sh_trsi], si                 ; parsing over - bank it
-    call sh_acc_load_a
+    SHOUT sh_acc_load_a
     cmp di, 86
     jae .trig                         ; SIN COS TAN ASIN ACOS ATAN
     cmp di, 83
@@ -26009,7 +26168,7 @@ sh_ptrans:
     jnz .domain                       ; is #NUM! - the same answer SQRT gives
     cmp di, 81
     jne .ratio                        ; LOG10 and LOG bank the RAW number and
-    call fp_ln                        ; take BOTH logarithms at the end; only
+    SHOUT fp_ln                       ; take BOTH logarithms at the end; only
     jc .domain                        ; LN takes one here
     jmp .store
 .ratio:
@@ -26020,116 +26179,116 @@ sh_ptrans:
 ; dividing by a ln(10) computed over the wreckage of ln(1000). sh_tr0/sh_tr1
 ; are Sheet's own and outlive it; parking the raw arguments there also means
 ; nothing of value crosses the sh_pcmp that parses the base.
-    call sh_acc_store
+    SHOUT sh_acc_store
     push si
     mov si, sh_acc
     mov bx, sh_tr0
-    call sh_trcopy                    ; sh_tr0 = the number
+    SHOUT sh_trcopy                   ; sh_tr0 = the number
     pop si
     mov ax, 10                        ; the base, defaulting to ten
-    call sh_acc_int
+    SHOUT sh_acc_int
     push si
     mov si, sh_acc
     mov bx, sh_tr1
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop si
     cmp di, 85
     jne .lognum                       ; LOG10 keeps the ten
     cmp byte [si], ','
     jne .lognum
     inc si
-    call sh_pcmp
+    SHOUT sh_pcmp
     mov [sh_trsi], si                 ; parsing over - bank it
     test byte [sh_acc+7], 0x80
     jnz .domain
     push si
     mov si, sh_acc
     mov bx, sh_tr1
-    call sh_trcopy                    ; sh_tr1 = the base the user named
+    SHOUT sh_trcopy                   ; sh_tr1 = the base the user named
     pop si
 .lognum:
     push si
     mov si, sh_tr0                    ; ln(number)
-    call fp_unpack_a
-    call fp_ln
+    SHOUT fp_unpack_a
+    SHOUT fp_ln
     push di
     mov di, sh_tr0
-    call fp_pack_a
+    SHOUT fp_pack_a
     pop di
     mov si, sh_tr1                    ; ln(base) - fp_ln may do what it likes
-    call fp_unpack_a                  ; to fp_e0..3 between the two, and does
-    call fp_ln
+    SHOUT fp_unpack_a                 ; to fp_e0..3 between the two, and does
+    SHOUT fp_ln
     pop si
     jc .domain
-    call fp_a_to_b
+    SHOUT fp_a_to_b
     push si
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     pop si
-    call fp_div
+    SHOUT fp_div
     jmp .store
 .exp:
-    call fp_exp
+    SHOUT fp_exp
     jmp .store
 ; --- the trigonometric seven (SPEC.md 81.36) --------------------------------
 .trig:
     cmp di, 86
     jne .t1
-    call fp_sin
+    SHOUT fp_sin
     jmp .store
 .t1:
     cmp di, 87
     jne .t2
-    call fp_cos
+    SHOUT fp_cos
     jmp .store
 .t2:
     cmp di, 88
     jne .t3
-    call fp_tan                       ; the cosine reaching zero is #DIV/0!,
+    SHOUT fp_tan                      ; the cosine reaching zero is #DIV/0!,
     jc .divzero                       ; which is what a tangent's pole IS
     jmp .store
 .t3:
     cmp di, 91
     jne .asin
-    call fp_atan
+    SHOUT fp_atan
     jmp .store
 ; ASIN(x) = atan(x / sqrt(1 - x*x)), and ACOS(x) = pi/2 - ASIN(x). The domain
 ; is [-1, 1]; at either end the square root is zero and the quotient has no
 ; value, so +-pi/2 is written directly rather than divided for.
 .asin:
-    call sh_acc_store
+    SHOUT sh_acc_store
     push si
     mov si, sh_acc
     mov bx, sh_tr0
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop si
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov byte [fp_as], 0               ; |x|
     mov si, fp_c_one
-    call fp_unpack_b
-    call fp_cmpab
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab
     jg .domain
     je .atend
     mov si, sh_tr0                    ; 1 - x*x
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_tr0
-    call fp_unpack_b
-    call fp_mul
-    call fp_a_to_b
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
+    SHOUT fp_a_to_b
     mov si, fp_c_one
-    call fp_unpack_a
-    call fp_sub
-    call fp_sqrt
-    call fp_a_to_b
+    SHOUT fp_unpack_a
+    SHOUT fp_sub
+    SHOUT fp_sqrt
+    SHOUT fp_a_to_b
     mov si, sh_tr0
-    call fp_unpack_a
-    call fp_div
-    call fp_atan
+    SHOUT fp_unpack_a
+    SHOUT fp_div
+    SHOUT fp_atan
     jmp .acostoo
 .atend:
     mov si, sh_c_pi2                  ; asin(+-1) = +-pi/2
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov al, [sh_acc+7]
     and al, 0x80
     mov [fp_as], al
@@ -26139,86 +26298,86 @@ sh_ptrans:
 .acostoo:
     cmp di, 90
     jne .store
-    call fp_a_to_b                    ; ACOS = pi/2 - ASIN
+    SHOUT fp_a_to_b                   ; ACOS = pi/2 - ASIN
     mov si, sh_c_pi2
-    call fp_unpack_a
-    call fp_sub
+    SHOUT fp_unpack_a
+    SHOUT fp_sub
     jmp .store
 ; ATAN2(x_number, y_number) - Excel's argument order, which is the REVERSE of
 ; C's atan2(y, x) and the one thing about this function everybody gets wrong.
 .atan2:
-    call sh_pcmp
+    SHOUT sh_pcmp
     mov [sh_trsi], si                 ; parsing over - bank it
     push si                           ; NO sh_acc_store HERE: sh_pcmp leaves
     mov si, sh_acc                    ; its answer in sh_acc, and storing A
     mov bx, sh_tr0                    ; over it wrote whatever the last
-    call sh_trcopy                    ; arithmetic had left in the accumulator
+    SHOUT sh_trcopy                   ; arithmetic had left in the accumulator
     pop si                            ; - which is why ATAN2(-1,1) came back
                                        ; 0.78539 instead of 2.35619
     cmp byte [si], ','
     jne .badargs2
     inc si
-    call sh_pcmp
+    SHOUT sh_pcmp
     mov [sh_trsi], si                 ; parsing over - bank it
     push si                           ; ...and the same for y
     mov si, sh_acc
     mov bx, sh_tr1
-    call sh_trcopy
+    SHOUT sh_trcopy
     pop si
     mov si, sh_tr0
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jnc .a2div
     mov si, sh_tr1                    ; x is zero: straight up, straight down,
-    call fp_unpack_a                  ; or nowhere at all
+    SHOUT fp_unpack_a                 ; or nowhere at all
     mov bx, fp_am0
-    call fp_iszero
+    SHOUT fp_iszero
     jc .divzero
     mov cl, [fp_as]
     mov si, sh_c_pi2
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov [fp_as], cl
     jmp .store
 .a2div:
     mov cl, [sh_tr1+7]                ; THE SIGN OF y, TAKEN NOW. The quadrant
     and cl, 0x80                      ; rule below turns on it, and the atan
     mov si, sh_tr0                    ; result is parked in sh_tr1 a moment
-    call fp_unpack_b                  ; from now - testing it there gave the
+    SHOUT fp_unpack_b                 ; from now - testing it there gave the
     mov si, sh_tr1                    ; sign of the ANSWER instead, and
-    call fp_unpack_a                  ; ATAN2(-1,1) came back -3.9269 where
-    call fp_div                       ; 2.35619 was wanted
-    call fp_atan                      ; atan(y/x)
+    SHOUT fp_unpack_a                 ; ATAN2(-1,1) came back -3.9269 where
+    SHOUT fp_div                      ; 2.35619 was wanted
+    SHOUT fp_atan                     ; atan(y/x)
     cmp byte [sh_tr0+7], 0            ; ...and the half-plane x < 0 needs pi
     jns .store                        ; added or subtracted to place it
     mov di, sh_tr1
-    call fp_pack_a                    ; y is finished with; park the atan
+    SHOUT fp_pack_a                   ; y is finished with; park the atan
     mov si, sh_c_pi
-    call fp_unpack_b
+    SHOUT fp_unpack_b
     mov si, sh_tr1
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     or cl, cl
     jnz .a2sub                        ; y < 0 takes pi away, y >= 0 adds it
-    call fp_add
+    SHOUT fp_add
     jmp .store
 .a2sub:
-    call fp_sub
+    SHOUT fp_sub
     jmp .store
 .divzero:
     mov byte [sh_evalerr], SH_ERR_DIV0
-    call fp_azero
+    SHOUT fp_azero
     jmp .store
 .badargs2:
     mov byte [sh_evalerr], SH_ERR_VALUE
-    call fp_azero
+    SHOUT fp_azero
     jmp .store
 .pi:
     mov si, sh_c_pi
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     jmp .store
 .domain:
     mov byte [sh_evalerr], SH_ERR_NUM
-    call fp_azero
+    SHOUT fp_azero
 .store:
     mov si, [sh_trsi]                 ; THE FORMULA AGAIN. Every constant here
                                       ; is loaded with `mov si, <addr>` for
@@ -26227,8 +26386,8 @@ sh_ptrans:
                                       ; PI()/6 answered 3.14159 because this
                                       ; hunted the closing paren inside the
                                       ; CONSTANT TABLE and never saw the '/'
-    call sh_acc_store
-    call sh_skipargs
+    SHOUT sh_acc_store
+    SHOUT sh_skipargs
     cmp byte [si], ')'
     jne .out
     inc si
@@ -26240,6 +26399,8 @@ sh_ptrans:
     pop bx
     ret
 
+section .text                       ; sh_trcopy and the two constants stay:
+                                    ; resident code reads them (81.62)
 ; sh_trcopy - eight bytes from DS:SI to DS:BX. BX and not DI, because DI holds
 ; the FUNCTION ID all the way through sh_ptrans and using it here quietly
 ; destroyed it. NOT `rep movsw` either: ES in this app is a claim far more
@@ -26892,6 +27053,7 @@ sh_lkup:
 .out:
     ret
 
+section .modc                      ; 81.62: a less-used function, CHART.OVL
 ; =============================================================================
 ; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
 ; question about what an argument IS rather than what it is worth, so each is
@@ -26899,7 +27061,7 @@ sh_lkup:
 ;
 ; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
 ; =============================================================================
-sh_pinfo:
+shm_pinfo:
     push bx
     push cx
     push dx
@@ -27014,12 +27176,12 @@ sh_pinfo:
     mov [sh_evalerr], bh              ; N of an error IS that error
 .nzero:
     xor ax, ax
-    call sh_acc_int
+    SHOUT sh_acc_int
 .nnum:
-    call sh_acc_toint
+    SHOUT sh_acc_toint
     jmp .step
 .close:
-    call sh_acc_int
+    SHOUT sh_acc_int
 .step:
     cmp byte [si], ')'
     jne .out
@@ -27031,6 +27193,7 @@ sh_pinfo:
     pop bx
     ret
 
+section .text
 ; -----------------------------------------------------------------------------
 ; sh_ins_at - in: DI = where in sh_numbuf to insert, AL = the byte. Everything
 ; from DI to the NUL moves right one, the NUL included. The building block
@@ -27207,6 +27370,7 @@ sh_numdp:
     pop ax
     ret
 
+section .modc                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
 ; sh_dollar_ins - '$' in front of sh_numbuf's digits but AFTER a leading '-',
 ; so -123 in a currency format is "-$123" and not "$-123".
@@ -27220,11 +27384,12 @@ sh_dollar_ins:
     inc di
 .here:
     mov al, '$'
-    call sh_ins_at
+    SHOUT sh_ins_at
     pop di
     pop ax
     ret
 
+section .text
 ; -----------------------------------------------------------------------------
 ; sh_padzero - pad sh_numbuf's integer part with leading zeros to CL digits,
 ; which is what the '0' placeholders in a TEXT format ask for ("00000").
@@ -27271,6 +27436,7 @@ sh_padzero:
     pop ax
     ret
 
+section .modc                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
 ; sh_upcase - AL and AH both to upper case, for SEARCH's folded compare
 ; -----------------------------------------------------------------------------
@@ -27289,6 +27455,7 @@ sh_upcase:
 .a2:
     ret
 
+section .text
 ; -----------------------------------------------------------------------------
 ; sh_matchat - in: SI, DI; out: CF=1 if the string at DI is a prefix of the
 ; one at SI. Both preserved.
@@ -27324,6 +27491,7 @@ sh_matchat:
     pop ax
     ret
 
+section .modc                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
 ; sh_strfind - in: SI = haystack, DI = needle, AX = 0-based start,
 ;              DL = 0 exact / 1 case-folded (which is FIND vs SEARCH, and the
@@ -27418,6 +27586,7 @@ sh_sacc_putc:
     pop ax
     ret
 
+section .text
 ; =============================================================================
 ; THE STRING STACK (stage 4.5)
 ;
@@ -27534,6 +27703,33 @@ sh_pstrarg:
     call sh_str_want
     ret
 
+section .modc                      ; 81.62: a less-used function, CHART.OVL
+
+; shm_vpush / shm_binop_pre - sh_vpush and sh_binop_pre for the module (81.62).
+; Those two move sh_acc on and off their CALLER's stack past their own return
+; address, so behind a far call and a shim they would bank it on the shim's
+; frame and retf into the value. The stack work has to happen here; the fp
+; loading, which touches no stack, calls back as sh_binop_ld
+shm_vpush:
+    ; STKBALANCE-NET: +4 - banks sh_acc on the CALLER's stack for a binary operator; shm_binop_pre takes it off
+    pop ax
+    push word [sh_acc+6]
+    push word [sh_acc+4]
+    push word [sh_acc+2]
+    push word [sh_acc]
+    push ax
+    ret
+shm_binop_pre:
+    ; STKBALANCE-NET: -4 - the other half of shm_vpush - one call each, always paired
+    pop ax
+    pop word [sh_lhs]
+    pop word [sh_lhs+2]
+    pop word [sh_lhs+4]
+    pop word [sh_lhs+6]
+    push ax
+    SHOUT sh_binop_ld
+    ret
+
 ; =============================================================================
 ; sh_ptext (stage 4.5) - the TEXT functions, ids 37 and up. The whole category
 ; was blocked on two things and both have now landed: a formula could not
@@ -27550,7 +27746,7 @@ sh_pstrarg:
 ; sh_sacc; `=LEFT(A1, LEN("abc"))` destroyed A1's text between reading it and
 ; cutting it.
 ; =============================================================================
-sh_ptext:
+shm_ptext:
     push bx
     push cx
     push dx
@@ -27565,7 +27761,7 @@ sh_ptext:
     cmp di, 57                        ; ...AND THEY ARE 55..57 ALONE. This was
     jbe .numfmt3                      ; a bare `jae .numfmt3`, which reads as
 .strarg:                              ; "every id from 55 up" - true while 54
-    call sh_pstrarg                   ; was the last text function, false the
+    SHOUT sh_pstrarg                  ; was the last text function, false the
                                       ; moment CLEAN took 108. CLEAN went down
                                       ; the number-formatting path and gave
                                       ; "0.00" for every string it was handed.
@@ -27607,11 +27803,11 @@ sh_ptext:
     je .replace
     push si                           ; 50 VALUE
     mov si, sh_sacc
-    call fp_atof                      ; CF=1 = nothing parseable in there
+    SHOUT fp_atof                     ; CF=1 = nothing parseable in there
     pop si
     jc .valbad
-    call sh_acc_store
-    call sh_acc_toint
+    SHOUT sh_acc_store
+    SHOUT sh_acc_toint
     mov byte [sh_curtype], SH_T_NUM
     jmp .close2
 .valbad:
@@ -27622,13 +27818,13 @@ sh_ptext:
 .indirect:                            ; the argument is a REFERENCE SPELLED AS
     push si                           ; TEXT, so it is parsed out of sh_sacc by
     mov si, sh_sacc                   ; the same routine that reads one out of
-    call sh_pcellref                  ; a formula. SI is banked because that
+    SHOUT sh_pcellref                 ; a formula. SI is banked because that
     jnc .indbad                       ; routine advances it and the formula's
     cmp byte [si], 0                  ; own cursor is live. "A1:B2" and "A1 "
     jne .indbad                       ; are not single references and are
     pop si                            ; refused rather than half-read
-    call sh_getcell2                  ; -> sh_acc, sh_curtype, and sh_sacc too
-    call sh_acc_toint                 ; if the target holds a LABEL, which is
+    SHOUT sh_getcell2                 ; -> sh_acc, sh_curtype, and sh_sacc too
+    SHOUT sh_acc_toint                ; if the target holds a LABEL, which is
     jmp .close2                       ; why sh_curtype is left as it set it
 .indbad:
     pop si
@@ -27639,7 +27835,7 @@ sh_ptext:
 .len:
     push si
     mov si, sh_sacc
-    call sh_strlen                    ; LEN of a NUMBER is the length of the
+    SHOUT sh_strlen                   ; LEN of a NUMBER is the length of the
     pop si                            ; text it displays as, which is what
     jmp .num                          ; sh_str_want already produced
 
@@ -27653,7 +27849,7 @@ sh_ptext:
     jmp .num
 
 .char:
-    call sh_parg
+    SHOUT sh_parg
     cmp ax, 1
     jl .charbad
     cmp ax, 255
@@ -27668,23 +27864,23 @@ sh_ptext:
     jmp .text
 
 .t:
-    call sh_pcmp
+    SHOUT sh_pcmp
     cmp byte [sh_curtype], SH_T_TEXT  ; T passes TEXT through and answers the
     je .text                          ; empty string for everything else -
     mov byte [sh_sacc], 0             ; which is the whole of what it is for
     jmp .text
 
 .left:
-    call sh_spush
+    SHOUT sh_spush
     jc .text
     mov cx, 1                         ; LEFT(t) with no count means one
     cmp byte [si], ','
     jne .left1
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov cx, ax
 .left1:
-    call sh_srestore
+    SHOUT sh_srestore
     or cx, cx
     jns .left2
     mov byte [sh_evalerr], SH_ERR_VALUE  ; a negative count is Excel's #VALUE!
@@ -27706,16 +27902,16 @@ sh_ptext:
     jmp .text
 
 .right:
-    call sh_spush
+    SHOUT sh_spush
     jc .text
     mov cx, 1
     cmp byte [si], ','
     jne .right1
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov cx, ax
 .right1:
-    call sh_srestore
+    SHOUT sh_srestore
     or cx, cx
     jns .right2
     mov byte [sh_evalerr], SH_ERR_VALUE
@@ -27723,7 +27919,7 @@ sh_ptext:
 .right2:
     push si
     mov si, sh_sacc
-    call sh_strlen
+    SHOUT sh_strlen
     sub ax, cx                        ; AX = where the tail starts
     jns .right3
     xor ax, ax                        ; asking for more than there is gives
@@ -27732,28 +27928,28 @@ sh_ptext:
     add si, ax
     push di
     mov di, sh_sacc
-    call sh_strcpy                    ; destination BELOW source, so a forward
+    SHOUT sh_strcpy                   ; destination BELOW source, so a forward
     pop di                            ; copy of an overlap is safe
     pop si
     jmp .text
 
 .mid:
-    call sh_spush
+    SHOUT sh_spush
     jc .text
     xor bx, bx
     xor cx, cx
     cmp byte [si], ','
     jne .midrest
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov bx, ax                        ; BX = the 1-based start
     cmp byte [si], ','
     jne .midrest
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov cx, ax
 .midrest:
-    call sh_srestore
+    SHOUT sh_srestore
     or bx, bx
     jg .mid1
     mov byte [sh_evalerr], SH_ERR_VALUE  ; MID's start is 1-based and a start
@@ -27768,7 +27964,7 @@ sh_ptext:
     dec bx
     push si
     mov si, sh_sacc
-    call sh_strlen
+    SHOUT sh_strlen
     cmp bx, ax
     jb .mid3
     mov byte [sh_sacc], 0             ; a start past the end is the empty
@@ -27931,13 +28127,13 @@ sh_ptext:
     jmp .text
 
 .rept:
-    call sh_spush                     ; the pattern stays banked for the whole
+    SHOUT sh_spush                    ; the pattern stays banked for the whole
     jc .text                          ; build, because sh_sacc becomes the
     xor cx, cx                        ; RESULT
     cmp byte [si], ','
     jne .rept0
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov cx, ax
 .rept0:
     or cx, cx
@@ -27955,39 +28151,39 @@ sh_ptext:
     push cx
     push si
     xor ax, ax
-    call sh_sslot
-    call sh_str_cat
+    SHOUT sh_sslot
+    SHOUT sh_str_cat
     pop si
     pop cx
     dec cx
     jmp .reptl
 .reptd:
-    call sh_spop
+    SHOUT sh_spop
     jmp .text
 
 .exact:
-    call sh_spush
+    SHOUT sh_spush
     jc .exzero
     cmp byte [si], ','
     jne .exdrop
     inc si
-    call sh_pstrarg
+    SHOUT sh_pstrarg
     push si
     push di
     xor ax, ax
-    call sh_sslot
+    SHOUT sh_sslot
     mov di, sh_sacc
-    call sh_streq                     ; CASE-SENSITIVE, which is the whole
+    SHOUT sh_streq                    ; CASE-SENSITIVE, which is the whole
     pop di                            ; difference between EXACT and '='
     pop si
     mov ax, 0
     jnc .ex1
     mov ax, 1
 .ex1:
-    call sh_spop
+    SHOUT sh_spop
     jmp .num
 .exdrop:
-    call sh_spop
+    SHOUT sh_spop
 .exzero:
     xor ax, ax
     jmp .num
@@ -27996,19 +28192,19 @@ sh_ptext:
 ; The same scan; SEARCH folds case. Neither takes wildcards - Excel's SEARCH
 ; does, and saying so is better than a '?' that silently matches itself.
 .find:
-    call sh_spush                     ; the needle
+    SHOUT sh_spush                    ; the needle
     jc .textzero
     cmp byte [si], ','
     jne .find1drop
     inc si
-    call sh_pstrarg                   ; the haystack
-    call sh_spush
+    SHOUT sh_pstrarg                  ; the haystack
+    SHOUT sh_spush
     jc .find1drop
     mov bx, 1                         ; the start defaults to the first
     cmp byte [si], ','                ; character
     jne .findgo
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov bx, ax
 .findgo:
     dec bx                            ; 0-based
@@ -28020,18 +28216,18 @@ sh_ptext:
     mov dl, 1
 .findcs:
     xor ax, ax
-    call sh_sslot                     ; SI = the haystack
+    SHOUT sh_sslot                    ; SI = the haystack
     push si
     mov ax, 1
-    call sh_sslot                     ; SI = the needle
+    SHOUT sh_sslot                    ; SI = the needle
     mov di, si
     pop si
     mov ax, bx
     call sh_strfind
     pop di
     pop si
-    call sh_spop
-    call sh_spop
+    SHOUT sh_spop
+    SHOUT sh_spop
     cmp ax, 0xFFFF
     je .findnone
     inc ax                            ; FIND answers 1-based, as Excel does
@@ -28041,31 +28237,31 @@ sh_ptext:
     xor ax, ax                        ; makes ISERROR the standard way to ask
     jmp .num                          ; whether it was there at all
 .find1drop:
-    call sh_spop
+    SHOUT sh_spop
     xor ax, ax
     jmp .num
 
 ; ---- SUBSTITUTE(text, old, new, [instance]) (53) -----------------------------
 .subst:
-    call sh_spush                     ; the text
+    SHOUT sh_spush                    ; the text
     jc .textzero
     cmp byte [si], ','
     jne .sub1drop
     inc si
-    call sh_pstrarg
-    call sh_spush                     ; old
+    SHOUT sh_pstrarg
+    SHOUT sh_spush                    ; old
     jc .sub1drop
     cmp byte [si], ','
     jne .sub2drop
     inc si
-    call sh_pstrarg
-    call sh_spush                     ; new
+    SHOUT sh_pstrarg
+    SHOUT sh_spush                    ; new
     jc .sub2drop
     xor bx, bx                        ; 0 = every occurrence, which is what no
     cmp byte [si], ','                ; fourth argument means
     jne .subgo
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov bx, ax
     or bx, bx
     jg .subgo
@@ -28076,16 +28272,16 @@ sh_ptext:
     push di
     xor cx, cx                        ; CX = occurrences seen so far
     mov ax, 2
-    call sh_sslot
+    SHOUT sh_sslot
     mov di, si                        ; DI = the cursor through the text
     mov byte [sh_sacc], 0
 .subl:
     cmp byte [di], 0
     je .subend
     mov ax, 1
-    call sh_sslot                     ; SI = old
+    SHOUT sh_sslot                    ; SI = old
     xchg si, di
-    call sh_matchat                   ; does old start here?
+    SHOUT sh_matchat                  ; does old start here?
     xchg si, di
     jnc .subcopy
     inc cx
@@ -28095,10 +28291,10 @@ sh_ptext:
     jne .subkeep                      ; a numbered instance, and not this one
 .subrepl:
     xor ax, ax
-    call sh_sslot                     ; SI = new
-    call sh_str_cat
+    SHOUT sh_sslot                    ; SI = new
+    SHOUT sh_str_cat
     mov ax, 1
-    call sh_sslot                     ; SI = old, to measure the skip
+    SHOUT sh_sslot                    ; SI = old, to measure the skip
 .subskip:
     cmp byte [si], 0
     je .subl
@@ -28107,7 +28303,7 @@ sh_ptext:
     jmp .subskip
 .subkeep:
     mov ax, 1
-    call sh_sslot
+    SHOUT sh_sslot
 .subkeepl:
     cmp byte [si], 0
     je .subl
@@ -28124,37 +28320,37 @@ sh_ptext:
 .subend:
     pop di
     pop si
-    call sh_spop
-    call sh_spop
-    call sh_spop
+    SHOUT sh_spop
+    SHOUT sh_spop
+    SHOUT sh_spop
     jmp .text
 .sub2drop:
-    call sh_spop
+    SHOUT sh_spop
 .sub1drop:
-    call sh_spop
+    SHOUT sh_spop
     jmp .textzero
 
 ; ---- REPLACE(old_text, start, num_chars, new_text) (54) ----------------------
 .replace:
-    call sh_spush                     ; old_text
+    SHOUT sh_spush                    ; old_text
     jc .textzero
     xor bx, bx
     xor cx, cx
     cmp byte [si], ','
     jne .rep1drop
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov bx, ax                        ; BX = the 1-based start
     cmp byte [si], ','
     jne .rep1drop
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov cx, ax                        ; CX = how many characters go
     cmp byte [si], ','
     jne .rep1drop
     inc si
-    call sh_pstrarg                   ; new_text
-    call sh_spush
+    SHOUT sh_pstrarg                  ; new_text
+    SHOUT sh_spush
     jc .rep1drop
     or bx, bx
     jg .repgo
@@ -28169,7 +28365,7 @@ sh_ptext:
     push si
     push di
     mov ax, 1
-    call sh_sslot                     ; SI = old_text
+    SHOUT sh_sslot                    ; SI = old_text
     mov di, sh_sacc
     mov dx, bx                        ; DX = how many head characters to keep
 .rephead:
@@ -28195,32 +28391,32 @@ sh_ptext:
 .reptail:
     push si                           ; where the tail starts
     xor ax, ax
-    call sh_sslot                     ; SI = new_text
-    call sh_str_cat
+    SHOUT sh_sslot                    ; SI = new_text
+    SHOUT sh_str_cat
     pop si
-    call sh_str_cat
+    SHOUT sh_str_cat
     pop di
     pop si
-    call sh_spop
-    call sh_spop
+    SHOUT sh_spop
+    SHOUT sh_spop
     jmp .text
 .rep1drop:
-    call sh_spop
+    SHOUT sh_spop
     jmp .textzero
 
 ; ---- TEXT / DOLLAR / FIXED (55, 56, 57) --------------------------------------
 ; The three that turn a number into text. All open with a VALUE rather than a
 ; string, so they are dispatched before the shared sh_pstrarg above.
 .numfmt3:
-    call sh_pcmp                      ; the value
+    SHOUT sh_pcmp                     ; the value
     cmp di, 55
     je .dotext55
-    call sh_vpush                     ; banked across the count's own parse
+    call shm_vpush                    ; banked across the count's own parse
     mov cx, 2                         ; DOLLAR and FIXED both default to two
     cmp byte [si], ','
     jne .nfnone
     inc si
-    call sh_parg
+    SHOUT sh_parg
     mov cx, ax
     xor bl, bl                        ; BL = FIXED's "no commas" flag, zeroed
     cmp di, 57                        ; AFTER sh_parg rather than before it -
@@ -28229,7 +28425,7 @@ sh_ptext:
     jne .nf1                          ; separators
     inc si
     push cx
-    call sh_parg
+    SHOUT sh_parg
     or ax, ax
     jz .nf0
     mov bl, 1
@@ -28245,15 +28441,15 @@ sh_ptext:
     ; go to bss for the one instruction it takes.
     mov [sh_fmt_fl], bl
     mov [sh_fmt_cx], cx
-    call sh_binop_pre                 ; A = the value again
+    call shm_binop_pre                ; A = the value again
     mov bl, [sh_fmt_fl]
     mov cx, [sh_fmt_cx]
     cmp di, 56
     je .dollar
-    call sh_numdp
+    SHOUT sh_numdp
     or bl, bl
     jnz .nfdone
-    call sh_group3
+    SHOUT sh_group3
 .nfdone:
     jmp .numtext
 
@@ -28261,25 +28457,25 @@ sh_ptext:
 ; own rendering and not the same as a minus sign.
 .dollar:
     push cx
-    call sh_acc_store
+    SHOUT sh_acc_store
     mov cl, [sh_acc+7]
     mov [sh_dol_neg], cl              ; the packed double's sign bit
     and byte [sh_acc+7], 0x7F         ; format the magnitude
-    call sh_acc_load_a
+    SHOUT sh_acc_load_a
     pop cx
-    call sh_numdp
-    call sh_group3
+    SHOUT sh_numdp
+    SHOUT sh_group3
     call sh_dollar_ins
     test byte [sh_dol_neg], 0x80
     jz .numtext
     push di
     mov di, sh_numbuf
     mov al, '('
-    call sh_ins_at
+    SHOUT sh_ins_at
     pop di
     push si
     mov si, sh_numbuf
-    call sh_strlen
+    SHOUT sh_strlen
     mov si, sh_numbuf
     add si, ax
     mov byte [si], ')'
@@ -28292,20 +28488,20 @@ sh_ptext:
 ; the placeholders around '.' and a trailing '%', and fell back to General on
 ; anything else - so TEXT(DATE(1990,1,15),"m/d/yy") answered 32888.
 .dotext55:
-    call sh_vpush                     ; the value, banked across the code's parse
+    call shm_vpush                    ; the value, banked across the code's parse
     cmp byte [si], ','
     jne .t55none
     inc si
-    call sh_pstrarg                   ; the code, in sh_sacc - which sh_fmtcode
-    call sh_binop_pre                 ; never touches, so it needs no bank
-    call sh_acc_store
+    SHOUT sh_pstrarg                  ; the code, in sh_sacc - which sh_fmtcode
+    call shm_binop_pre                ; never touches, so it needs no bank
+    SHOUT sh_acc_store
     push si
     mov si, sh_sacc
-    call sh_fmtcode                   ; -> sh_numbuf
+    SHOUT sh_fmtcode                  ; -> sh_numbuf
     pop si
     jmp .numtext
 .t55none:
-    call sh_binop_pre                 ; unwind the bank, whatever went wrong
+    call shm_binop_pre                ; unwind the bank, whatever went wrong
 .textzero:
     mov byte [sh_sacc], 0
     jmp .text
@@ -28316,19 +28512,19 @@ sh_ptext:
     push di
     mov si, sh_numbuf
     mov di, sh_sacc
-    call sh_strcpy
+    SHOUT sh_strcpy
     pop di
     pop si
     jmp .text
 
 .num:
     mov byte [sh_curtype], SH_T_NUM
-    call sh_acc_int
+    SHOUT sh_acc_int
     jmp .close2
 .text:
     mov byte [sh_curtype], SH_T_TEXT
     xor ax, ax
-    call sh_acc_int                   ; the number underneath a string is zero
+    SHOUT sh_acc_int                  ; the number underneath a string is zero
     xor ax, ax                        ; ...and so is the integer form sh_pfunc
                                        ; hands its own caller
 .close2:
@@ -28359,6 +28555,7 @@ sh_isalpha:
     clc
     ret
 
+section .text
 ; =============================================================================
 ; DATE SERIALS (stage 4.5)
 ;
@@ -33746,7 +33943,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5714
+    OS88_BSS 5806
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -34621,8 +34818,31 @@ sh_v_sh_colw_set            equ sh_v_sh_colwidth + 4
 sh_v_sh_colw_clear          equ sh_v_sh_colw_set + 4
 sh_v_sh_rowh_set            equ sh_v_sh_colw_clear + 4
 sh_v_sh_seterr              equ sh_v_sh_rowh_set + 4
-SH_NVEC       equ 58
-sh_v_end      equ sh_v_sh_seterr + 4
+sh_v_fp_atan                equ sh_v_sh_seterr + 4
+sh_v_fp_cos                 equ sh_v_fp_atan + 4
+sh_v_fp_exp                 equ sh_v_fp_cos + 4
+sh_v_fp_sin                 equ sh_v_fp_exp + 4
+sh_v_fp_sqrt                equ sh_v_fp_sin + 4
+sh_v_fp_tan                 equ sh_v_fp_sqrt + 4
+sh_v_sh_acc_toint           equ sh_v_fp_tan + 4
+sh_v_sh_binop_ld            equ sh_v_sh_acc_toint + 4
+sh_v_sh_fmtcode             equ sh_v_sh_binop_ld  + 4
+sh_v_sh_group3              equ sh_v_sh_fmtcode + 4
+sh_v_sh_ins_at              equ sh_v_sh_group3 + 4
+sh_v_sh_matchat             equ sh_v_sh_ins_at + 4
+sh_v_sh_numdp               equ sh_v_sh_matchat + 4
+sh_v_sh_parg                equ sh_v_sh_numdp + 4
+sh_v_sh_pcellref            equ sh_v_sh_parg + 4
+sh_v_sh_pstrarg             equ sh_v_sh_pcellref + 4
+sh_v_sh_spop                equ sh_v_sh_pstrarg + 4
+sh_v_sh_spush               equ sh_v_sh_spop + 4
+sh_v_sh_srestore            equ sh_v_sh_spush + 4
+sh_v_sh_sslot               equ sh_v_sh_srestore + 4
+sh_v_sh_str_cat             equ sh_v_sh_sslot + 4
+sh_v_sh_strcpy              equ sh_v_sh_str_cat + 4
+sh_v_sh_strlen              equ sh_v_sh_strcpy + 4
+SH_NVEC       equ 81
+sh_v_end      equ sh_v_sh_strlen + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
