@@ -16,15 +16,20 @@ Sheet and Chart both dispatch on it.
 A save of **one** sheet is a **BIFF3** worksheet stream:
 
 ```
-BOF 0209H   FONT 0231H x4   XF 0243H x64   cell records   EOF 000AH
+BOF 0209H   FONT 0231H x4   XF 0243H x64   COLWIDTH 0024H*   ROW 0208H*
+  cell records   EOF 000AH
 ```
+
+`*` one per column not the standard width (§81.56), one per row not the
+standard height (§81.60) - none at all for a sheet that changes neither.
 
 More than one sheet with data (`sh_sheets_used` >= 2) is a **BIFF4 workbook**,
 because BIFF3 has no multi-sheet form at all (§81.10.5):
 
 ```
 BOF 0409H (dt 0100H)   FONT x4   XF 0443H x64   SHEETSOFFSET 008EH
-  SHEETHDR 008FH   BOF 0409H (dt 0010H)   cells   EOF        one per used sheet
+  SHEETHDR 008FH   BOF 0409H (dt 0010H)   COLWIDTH*   ROW*   cells   EOF
+                                                             one per used sheet
 EOF
 ```
 
@@ -48,6 +53,8 @@ writer's version switch, set only inside `sh_biff_workbook`.
 | `SHEETSOFFSET` | -     | -     | 008EH | -     | writes in the workbook; reader ignores it |
 | `SHEETHDR`     | -     | -     | 008FH | -     | writes in the workbook; reads 008FH |
 | `DEFINEDNAME`  | 0018H | **0218H** | 0218H | 0018H | writes and reads 0218H |
+| `COLWIDTH`     | 0024H | **0024H** | 0024H | -     | writes and reads 0024H; reads BIFF3+'s `COLINFO` 007DH too (§81.56) |
+| `ROW`          | 0008H | **0208H** | 0208H | 0208H | writes 0208H; reads both - 0008H only after a BIFF2 `BOF` (§81.60) |
 | `EOF`          | 000AH | 000AH | 000AH | 000AH | writes and reads 000AH |
 
 Three traps in that table:
@@ -127,6 +134,18 @@ is byte 0 = 2, byte 2 = the error code, bytes 6-7 = FFFFH. The token
 array's function indexes are one byte under 0206H and a word under 0406H,
 which is the one place the workbook changes a body beyond `XF` (§81.10.2).
 
+**`COLWIDTH`** (4): first column, last column (a byte each), the width in
+1/256ths of a character. One record per column, however many share a width.
+
+**`ROW`** (16): the row, first and one-past-last cell column (0, 0 - no
+cells are claimed), the height in twips with bit 15 clear (a custom height),
+0000H, BIFF3/4's offset to the row's first cell (0000H), option flags
+0140H (bit 8 is always set; bit 6 says the height was set by hand) and XF
+index 000FH, unused while bit 7 is clear. Nothing depends on the two zeroed
+offsets: the reader here walks the stream, and LibreOffice (checked on
+tests/sheetrowh.py's save, converted to .fods) reads all four heights to the
+point - 18, 8, 9.75 and 30.
+
 **`SHEETSOFFSET`** (4): stream offset of the first `SHEETHDR`, dword.
 **`SHEETHDR`** (11): byte length of the substream that follows, dword,
 backpatched after the substream is built, then a length byte 6 and
@@ -181,6 +200,11 @@ a file where Excel expects 07H, and Excel's 07H reads back here as code 7,
 - `FORMULA`: the tokens are decoded back to the formula's text
   (`sh_biff_dcrpn`, SPEC.md 81.10.10); only a token array the decoder
   refuses falls back to the cached result, as a value.
+- `COLWIDTH` and `COLINFO` round to whole characters and are clamped to
+  what the Column Width dialog allows (SPEC.md 81.56).
+- `ROW`: bit 15 set means the default height and is skipped; a height of
+  0 (hidden, which this grid cannot draw) is skipped too; the rest are
+  clamped to the Row Height dialog's range, 146-874 twips (SPEC.md 81.60).
 - `BOOLERR` with the flag clear reads as the logical (SPEC.md 81.51); it was
   0 or 1 while Sheet had no logical type, and is what Sheet writes for one.
 - A read clears all four grids first. A plain stream loads onto the sheet

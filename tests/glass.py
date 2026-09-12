@@ -129,3 +129,36 @@ def cell_text(rows, box, table, lines=(), hlines=()):
                 if text and (best is None or weight > best[0]):
                     best = (weight, text)
     return best[1] if best else None
+
+
+
+def rgrid(w, h, rows):
+    """(row boundaries, column boundaries) of a grid whose rows are NOT one
+    height (81.60), or None. grid() takes the rows as the longest evenly
+    spaced run of lines and needs three of them to find the columns; here the
+    columns come first: every column line runs unbroken from row 1's top to
+    the last whole row's bottom, so the vertical extent most lines share is
+    the grid's, and the rows are the full lines across it."""
+    spans = {}
+    for x in range(60, 600):
+        best, y = (0, -1), 0
+        while y < h:
+            if rows[y][x]:
+                y += 1
+                continue
+            y0 = y
+            while y < h and not rows[y][x]:
+                y += 1
+            if y - y0 > best[1] - best[0]:
+                best = (y0, y - 1)
+        if best[1] - best[0] >= 16:
+            spans.setdefault(best, []).append(x)
+    if not spans:
+        return None
+    (y1, y2), xs = max(spans.items(), key=lambda kv: len(kv[1]))
+    if len(xs) < 3:
+        return None
+    xs = [x for k, x in enumerate(xs) if k == 0 or x != xs[k - 1] + 1]
+    ys = [y for y in range(y1, min(y2 + 2, h))
+          if sum(1 for xx in range(100, 500) if not rows[y][xx]) > 380]
+    return ys, xs

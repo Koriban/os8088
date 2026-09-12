@@ -138,13 +138,11 @@
 SH_COLS      equ 256                ; the roadmap's stage 1.2 ceiling
 SH_ROWS      equ 16384
 ; stage 2.x: Format > Column Width.../Row Height... make these RUNTIME
-; values (sh_cellw/sh_cellh/sh_cellch bss words, set from one of these
-; presets) rather than compile-time constants - every site below that used
-; to read the equ now reads the bss word instead. The three presets below
-; are what Column Width.../Row Height... offered while this app had no
-; text-input widget of its own; stage 3.0c gave it one (sh_idlg_*, over
-; os88line.inc), so both dialogs are REAL NUMERIC ENTRY now and these are
-; only the startup defaults. Widths
+; values (sh_cellw/sh_cellh/sh_cellch bss words) rather than compile-time
+; constants. Stage 3.0c made both dialogs real numeric entry (sh_idlg_*, over
+; os88line.inc); 81.56 gave each column its own width and 81.60 each row its
+; own height, so the two words now mean THE CELL BEING DRAWN, and these are
+; the standard width and height. Widths
 ; must stay multiples of 8 - sh_blank and every OSAPI_FONT_RUN cell text
 ; is built one glyph (8px) at a time, so a non-multiple would leave a
 ; fractional glyph column with nothing sensible to draw there.
@@ -162,6 +160,14 @@ SH_CW_MAXCH  equ 40                 ; 320px - wider than the window, but the
                                     ; renderer clips and the user asked
 SH_RH_MIN    equ 8                  ; one glyph cell: below this no text fits
 SH_RH_MAX    equ 48
+; 81.60: EACH ROW ITS OWN HEIGHT, kept - as Excel keeps it and BIFF writes it -
+; in TWIPS, a twentieth of a point, and drawn at SH_RH_NORMAL pixels for the
+; standard 12.75 points: px = (tw * 14 + 127) / 255. The dialog takes points.
+; The bounds are the twips that round to SH_RH_MIN and SH_RH_MAX pixels
+SH_RH_STDTW  equ 255                ; the standard height, 12.75 points
+SH_RH_TWMIN  equ 146                ; 7.3 points -> 8 px
+SH_RH_TWMAX  equ 874                ; 43.7 points -> 48 px
+SH_MAXVR     equ 64                 ; visible rows at most: 480px / SH_RH_MIN
 SH_RH_W      equ 40                 ; row-header column, 5 digits at 8px
 SH_CH_H      equ 14
 SH_FB_H      equ 16
@@ -256,8 +262,10 @@ SH_SORT_SNAPCAP   equ 180            ; rows a multi-column sort can carry
                                      ; is simply excluded from the sort
                                      ; entirely (same "clip, don't crash"
                                      ; policy used throughout this file)
-SH_CLAIM_NOTE_KB  equ 4             ; stage 3.0b: the note table - SH_NOTE_CAP
-                                    ; records of SH_NOTE_REC. The note TEXT is
+SH_CLAIM_NOTE_KB  equ 5             ; stage 3.0b: the note table - SH_NOTE_CAP
+                                    ; records of SH_NOTE_REC, then 81.56's
+                                    ; column widths and 81.60's row heights
+                                    ; (the fifth KB). The note TEXT is
                                     ; not in here; it goes in the formula
                                     ; arena, for the reason sh_nt_findcell's
                                     ; header gives.
@@ -422,6 +430,14 @@ SH_COLW_OFF  equ SH_NOTE_CAP * SH_NOTE_REC ; 3072: the COLUMN WIDTHS, 256
                                     ; would have been SHEET's eighth and last,
                                     ; and bss the headroom's third; notes are
                                     ; the least-used table there is
+SH_ROWH_OFF  equ SH_COLW_OFF + 1024 ; 4096: the ROW HEIGHTS (81.60), a sorted
+                                    ; sparse table - packed row/sheet word,
+                                    ; twips word - of the rows that are not
+                                    ; the standard height. Paragraph-aligned,
+                                    ; so sh_rc_table can walk it at offset 0
+SH_ROWH_CAP  equ 255                ; records; the count is the KB's last word
+SH_ROWH_N    equ SH_ROWH_OFF + 1022
+SH_ROWH_REC  equ 4
 SH_MAXVC     equ 80                 ; visible columns at most: 640px / 8
 SH_NOTEMAX   equ 240                ; the longest note the dialog will take,
                                     ; INCLUDING its NUL - 6 lines of 39 in the
@@ -1097,6 +1113,9 @@ sh_x_sh_colw_set:
 sh_x_sh_colw_clear:
     call sh_colw_clear
     retf
+sh_x_sh_rowh_set:                       ; 81.60: row heights, for the reader
+    call sh_rowh_set
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1114,6 +1133,7 @@ sh_ovshims:
     dw sh_x_sh_setbool, sh_x_sh_setlabel, sh_x_sh_boolname      ; 81.51
     dw sh_x_sh_bt_getw                                            ; 81.55
     dw sh_x_sh_colwidth, sh_x_sh_colw_set, sh_x_sh_colw_clear     ; 81.56
+    dw sh_x_sh_rowh_set                                           ; 81.60
 
 sh_entry:
     push ax
@@ -1348,6 +1368,7 @@ sh_geom:
     jns .cw_ok                          ; right, so the grid is that much
     xor ax, ax                          ; narrower
 .cw_ok:
+    mov [sh_gridw], ax                  ; what sh_scrollto_t fits a column in
     ; EACH COLUMN ITS OWN WIDTH (81.56): walked from the scroll position until
     ; the next would not fit whole, and kept in sh_vcw for everything that
     ; places a column - sh_vcx is the only arithmetic that turns a visible
@@ -1382,16 +1403,55 @@ sh_geom:
     jns .chh_ok                         ; ...and the horizontal bar a strip
     xor ax, ax                          ; above the status bar
 .chh_ok:
-    xor dx, dx
-    mov cx, [sh_cellh]
-    div cx
-    mov cx, SH_ROWS
-    sub cx, [sh_scrollrow]
-    cmp ax, cx
-    jbe .rset
-    mov ax, cx
+    mov [sh_gridh], ax
+    ; EACH ROW ITS OWN HEIGHT (81.60), walked the way the columns are: from
+    ; the scroll position until the next would not fit whole, kept in sh_vrh
+    ; for sh_vry, the only arithmetic that turns a visible row into pixels
+    ; The table is walked ONCE beside the rows, not searched for each: it is
+    ; sorted, so from the first record at or past the scroll row the next
+    ; record is either this row's or a later one's. sh_geom runs on every
+    ; repaint, and a search per row is a table-full of compares per row
+    push bx
+    push si
+    push di
+    push es
+    mov dx, ax                          ; DX = the pixels left
+    mov ax, [sh_scrollrow]
+    call sh_rh_find                     ; BX = its key, SI/CX = the record
+    xor di, di                          ; DI = the rows so far
+.rwalk:
+    cmp di, SH_MAXVR
+    jae .rset
+    mov ax, [sh_scrollrow]
+    add ax, di
+    cmp ax, SH_ROWS
+    jae .rset
+    mov ax, bx
+    add ax, di                          ; AX = this row's key
+    cmp cx, [es:SH_ROWH_N]
+    jae .rstd
+    cmp [es:si], ax
+    jne .rstd
+    mov ax, [es:si+2]                   ; its own height...
+    add si, SH_ROWH_REC
+    inc cx
+    call sh_twpx
+    jmp short .rhave
+.rstd:
+    mov ax, SH_RH_NORMAL                ; ...or the standard
+.rhave:
+    mov [sh_vrh + di], al
+    cmp ax, dx
+    ja .rset
+    sub dx, ax
+    inc di
+    jmp short .rwalk
 .rset:
-    mov [sh_vrows], ax
+    mov [sh_vrows], di
+    pop es
+    pop di
+    pop si
+    pop bx
 
     pop dx
     pop cx
@@ -1435,7 +1495,8 @@ sh_colw_set:
     pop bx
     ret
 
-; sh_colw_clear - every column of every sheet the standard width
+; sh_colw_clear - every column of every sheet the standard width, and (81.60)
+; every row the standard height: the two tables are the claim's last 2 KB
 sh_colw_clear:
     push ax
     push cx
@@ -1443,7 +1504,7 @@ sh_colw_clear:
     push es
     mov es, [sh_noteseg]
     mov di, SH_COLW_OFF
-    mov cx, 4 * 256
+    mov cx, 4 * 256 + 1024
     xor al, al
     cld
     rep stosb
@@ -1511,6 +1572,233 @@ sh_colw_shift:
     pop ax
     ret
 
+;-----------------------------------------------------------------------------
+; ROW HEIGHTS (81.60). A sorted sparse table in the note claim's fifth KB
+; (SH_ROWH_OFF): a packed row/sheet word - the cell array's own key - and the
+; height in TWIPS, for each row that is not the standard height; the count is
+; the KB's last word. Excel's rows are 16,384 to a sheet, so a flat table like
+; the widths' would be 32 KB a sheet. sh_vrh is the visible rows' heights in
+; pixels, which sh_geom walks out of here; sh_vry turns one into pixels.
+; -----------------------------------------------------------------------------
+; sh_rh_find - AX = a row of the current sheet -> BX = its key, SI = the offset
+; of the first record whose key is not below it, CX = that record's index, ES =
+; the note claim; ZF=1 when that record IS this row's
+sh_rh_find:
+    push dx
+    push ax
+    mov bx, [sh_cursheet]
+    mov cl, SH_ROW_BITS
+    shl bx, cl
+    or bx, ax
+    mov es, [sh_noteseg]
+    mov si, SH_ROWH_OFF
+    xor cx, cx
+.l:
+    cmp cx, [es:SH_ROWH_N]
+    jae .end
+    cmp [es:si], bx
+    jae .ge
+    add si, SH_ROWH_REC
+    inc cx
+    jmp short .l
+.ge:
+    pop ax
+    pop dx
+    cmp [es:si], bx
+    ret
+.end:
+    pop ax
+    mov dx, 1
+    or dx, dx                          ; ZF=0: past the last record
+    pop dx
+    ret
+
+; sh_rowtw - AX = a row -> AX = its height in twips, 0 for the standard
+sh_rowtw:
+    push bx
+    push cx
+    push si
+    push es
+    call sh_rh_find
+    mov ax, 0
+    jne .out
+    mov ax, [es:si+2]
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; sh_rowheight - AX = a row -> AX = its height in pixels
+sh_rowheight:
+    call sh_rowtw
+    or ax, ax
+    jnz sh_twpx
+    mov ax, SH_RH_NORMAL
+    ret
+; sh_twpx - AX = twips -> AX = pixels, the standard 255 being SH_RH_NORMAL
+sh_twpx:
+    push cx
+    push dx
+    mov cx, SH_RH_NORMAL
+    mul cx
+    add ax, SH_RH_STDTW / 2
+    adc dx, 0
+    mov cx, SH_RH_STDTW
+    div cx
+    pop dx
+    pop cx
+    ret
+
+; sh_rowh_set - AX = a row of the current sheet, CX = its height in twips (0
+; or SH_RH_STDTW for the standard, which removes its record). CF=1 when the
+; table is full, and nothing changed
+sh_rowh_set:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov dx, cx                         ; DX = the twips
+    cmp dx, SH_RH_STDTW
+    jne .have
+    xor dx, dx
+.have:
+    call sh_rh_find
+    jne .new
+    or dx, dx
+    jz .del
+    mov [es:si+2], dx                  ; already there: a new height
+    jmp short .ok
+.del:
+    mov ax, [es:SH_ROWH_N]             ; the standard again: close it up
+    dec ax
+    mov [es:SH_ROWH_N], ax
+    sub ax, cx                         ; AX = the records after it
+.dl:
+    or ax, ax
+    jz .ok
+    mov bx, [es:si+SH_ROWH_REC]
+    mov [es:si], bx
+    mov bx, [es:si+SH_ROWH_REC+2]
+    mov [es:si+2], bx
+    add si, SH_ROWH_REC
+    dec ax
+    jmp short .dl
+.new:
+    or dx, dx
+    jz .ok                             ; the standard, and none: nothing to do
+    mov di, [es:SH_ROWH_N]
+    cmp di, SH_ROWH_CAP
+    jae .full
+    shl di, 1
+    shl di, 1
+    add di, SH_ROWH_OFF                ; DI = one past the last record
+.ul:
+    cmp di, si                         ; open a slot at SI, from the end
+    jbe .ins
+    mov ax, [es:di-SH_ROWH_REC]
+    mov [es:di], ax
+    mov ax, [es:di-SH_ROWH_REC+2]
+    mov [es:di+2], ax
+    sub di, SH_ROWH_REC
+    jmp short .ul
+.ins:
+    mov [es:si], bx
+    mov [es:si+2], dx
+    inc word [es:SH_ROWH_N]
+.ok:
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_rh_anyin - AX..DX = rows of the current sheet -> CF=1 when any of them is
+; not the standard height. What sh_scrollrow_blit asks before it moves rows by
+; one height
+sh_rh_anyin:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    cmp dx, SH_ROWS
+    jb .dok
+    mov dx, SH_ROWS - 1
+.dok:
+    call sh_rh_find                    ; the first record at or past AX...
+    cmp cx, [es:SH_ROWH_N]
+    jae .none
+    mov bx, [sh_cursheet]              ; ...is it still at or before DX's
+    mov cl, SH_ROW_BITS                ; key, built as sh_rh_find builds it?
+    shl bx, cl
+    or bx, dx
+    cmp [es:si], bx
+    ja .none
+    stc
+    jmp short .out
+.none:
+    clc
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_vry - in: AX = a visible row (0..sh_vrows); out: AX = its top edge, in
+; pixels from the grid's
+sh_vry:
+    push bx
+    push cx
+    mov cx, ax
+    xor ax, ax
+    xor bx, bx
+.l:
+    jcxz .d
+    add al, [sh_vrh + bx]
+    adc ah, 0
+    inc bx
+    dec cx
+    jmp short .l
+.d:
+    pop cx
+    pop bx
+    ret
+
+; sh_vheight - in: AX = a visible row; out: AX = its height in pixels
+sh_vheight:
+    push bx
+    mov bx, ax
+    mov al, [sh_vrh + bx]
+    xor ah, ah
+    pop bx
+    ret
+
+; sh_vtoff - in: AX = a visible row; out: AX = where its text starts below its
+; top: a row taller than the standard keeps its text as far from its BOTTOM as
+; a standard one does, so text sits low in a tall row as Excel's does
+sh_vtoff:
+    call sh_vheight
+    sub ax, SH_RH_NORMAL
+    jns .out
+    xor ax, ax
+.out:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_rc_sides - Insert and Delete Row/Column move the BORDER and NOTE tables'
 ; records with their cells (81.58). They moved the cells alone, so a border or
@@ -1532,6 +1820,18 @@ sh_rc_sides:
     mov bx, SH_NOTE_REC
     call sh_rc_table
     mov [sh_nnote], cx
+    cmp byte [sh_rc_op], 2            ; ...and a ROW's height goes with it
+    jae .out                          ; (81.60) - the table has no column
+    push es                           ; word for a column op to read
+    mov es, [sh_noteseg]
+    mov cx, [es:SH_ROWH_N]
+    mov dx, es
+    add dx, SH_ROWH_OFF / 16
+    mov bx, SH_ROWH_REC
+    call sh_rc_table
+    mov [es:SH_ROWH_N], cx
+    pop es
+.out:
     pop dx
     pop cx
     pop bx
@@ -1677,7 +1977,7 @@ sh_vwidth:
 ; cannot reverse - formats, names, notes, macros, a new document - ends it.
 ;
 ; A SNAPSHOT, not a log of changes: the cell array, the border table, the note
-; table, the column widths, and the text arena's LENGTH - the arena is
+; table, the column widths and row heights, and the text arena's LENGTH - it is
 ; append-only, so cutting it back is all it takes to undo what was added to
 ; it. Taken into Undo's own claim (SH_CLAIM_UNDO_KB) before the command runs;
 ; a document too big for it cannot be undone ("Can't Undo"), the honest
@@ -1685,8 +1985,8 @@ sh_vwidth:
 ; operation again.
 ;
 ; Layout in sh_undoseg, and in staging during a swap: SH_UD_HDR bytes of
-; header - ncells, nbord, nnote, txtlen - then the three arrays and the 1024
-; bytes of widths.
+; header - ncells, nbord, nnote, txtlen - then the three arrays and the 2048
+; bytes of widths and row heights (the height table carries its own count).
 ; =============================================================================
 SH_UD_HDR    equ 8
 SH_UL_ENTRY  equ 0                     ; the labels, sh_ud_names' order
@@ -1816,7 +2116,7 @@ sh_undo_size:
     pop dx
     add ax, dx
     jc .big
-    add ax, SH_UD_HDR + 1024
+    add ax, SH_UD_HDR + 2048
     jc .big
     cmp ax, SH_CLAIM_UNDO_KB * 1024
     ja .big
@@ -1888,8 +2188,8 @@ sh_undo_save:
     mov ax, [sh_noteseg]
     xor si, si
     call sh_fcopy
-    mov cx, 1024                       ; the widths, from the same claim's top
-    mov ax, [sh_noteseg]
+    mov cx, 2048                       ; the widths and the row heights, from
+    mov ax, [sh_noteseg]               ; the same claim's top (81.60)
     mov si, SH_COLW_OFF
     call sh_fcopy
     clc
@@ -1948,7 +2248,7 @@ sh_undo_load:
     mov dx, [sh_noteseg]
     xor di, di
     call sh_fcopy
-    mov cx, 1024
+    mov cx, 2048
     mov dx, [sh_noteseg]
     mov di, SH_COLW_OFF
     call sh_fcopy
@@ -2470,12 +2770,19 @@ sh_gridhit:
     mov ax, cx
     add ax, [sh_scrollcol]
     mov [sh_wcol], ax
-    mov ax, bx
-    xor dx, dx
-    mov cx, [sh_cellh]
-    div cx
-    cmp ax, [sh_vrows]
+    xor cx, cx                         ; ...and down the rows' own heights
+.vwalk:                                ; (81.60), BX = pixels into the grid
+    cmp cx, [sh_vrows]
     jae .no
+    mov ax, cx
+    call sh_vheight
+    cmp bx, ax
+    jb .vrow
+    sub bx, ax
+    inc cx
+    jmp short .vwalk
+.vrow:
+    mov ax, cx
     add ax, [sh_scrollrow]
     mov bx, ax
     mov ax, [sh_wcol]
@@ -2793,9 +3100,8 @@ sh_scrollto_t:
     dec bx
     cmp ax, bx
     jbe .rows
-    sub ax, [sh_vcols]
-    inc ax
-    mov [sh_scrollcol], ax
+    call sh_backcols                   ; the columns are not one width
+    mov [sh_scrollcol], ax             ; (81.56): walked, not subtracted
 .rows:
     mov ax, [sh_sc_trow]
     mov bx, [sh_scrollrow]
@@ -2810,12 +3116,72 @@ sh_scrollto_t:
     dec bx
     cmp ax, bx
     jbe .out
-    sub ax, [sh_vrows]
-    inc ax
+    call sh_backrows                   ; nor the rows one height (81.60)
     mov [sh_scrollrow], ax
 .out:
     pop bx
     pop ax
+    ret
+
+; sh_backcols - AX = a column past the view's right edge -> AX = the scroll
+; column that shows it WHOLE at the right: the columns before it, each its own
+; width, as many as still fit [sh_gridw]. It subtracted the column count the
+; OLD view held, which put a column wider than the ones it scrolled past
+; partly or wholly off the glass
+sh_backcols:
+    push bx
+    push cx
+    push dx
+    mov bx, ax                         ; BX = the first column shown
+    call sh_colwidth
+    mov cl, 3
+    shl ax, cl
+    mov dx, ax                         ; DX = the pixels they take
+.l:
+    or bx, bx
+    jz .out
+    mov ax, bx
+    dec ax
+    call sh_colwidth
+    mov cl, 3
+    shl ax, cl
+    add ax, dx
+    cmp ax, [sh_gridw]
+    ja .out
+    mov dx, ax
+    dec bx
+    jmp short .l
+.out:
+    mov ax, bx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_backrows - AX = a row below the view -> AX = the scroll row that shows it
+; whole at the bottom, the rows before it each their own height (81.60)
+sh_backrows:
+    push bx
+    push dx
+    mov bx, ax                         ; BX = the first row shown
+    call sh_rowheight
+    mov dx, ax                         ; DX = the pixels they take
+.l:
+    or bx, bx
+    jz .out
+    mov ax, bx
+    dec ax
+    call sh_rowheight
+    add ax, dx
+    cmp ax, [sh_gridh]
+    ja .out
+    mov dx, ax
+    dec bx
+    jmp short .l
+.out:
+    mov ax, bx
+    pop dx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3373,8 +3739,6 @@ sh_dmgdraw:
     je .out
     cmp word [sh_vrows], 0
     je .out
-    cmp word [sh_cellh], 8
-    jbe .nobands                       ; 8px cells: the runs cover everything
     mov ax, [sh_dmgc1]                 ; the damaged columns' pixel span
     call sh_vcx                        ; each column its own width (81.56)
     add ax, [sh_ox]
@@ -3391,23 +3755,45 @@ sh_dmgdraw:
     call OSAPI_SET_COLOR
     mov cx, [sh_dmgr1]
 .band:
+    ; EACH ROW ITS OWN HEIGHT (81.60): the band ABOVE the glyphs, where a
+    ; tall row's text sits low (sh_vtoff), and the band below them
     cmp cx, [sh_dmgr2]
     ja .nobands
     mov ax, cx
-    mov dx, [sh_cellh]
-    mul dx
+    call sh_vry
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
-    mov bx, ax
-    add bx, 8                          ; below the glyphs...
-    mov dx, ax
-    add dx, [sh_cellh]
-    dec dx                             ; ...down to the row's last pixel line
+    mov bx, ax                         ; BX = the row's top
+    mov ax, cx
+    call sh_vtoff
+    or ax, ax
+    jz .below
+    mov dx, bx
+    add dx, ax
+    dec dx                             ; down to the line above the glyphs
     mov ax, [sh_blitx1]
     push cx
     mov cx, [sh_blitx2]
     call OSAPI_GFX_FILL
     pop cx
+.below:
+    mov ax, cx
+    call sh_vheight
+    mov dx, bx
+    add dx, ax
+    dec dx                             ; DX = the row's last pixel line
+    mov ax, cx
+    call sh_vtoff
+    add bx, ax
+    add bx, 8                          ; below the glyphs
+    cmp bx, dx
+    ja .bandn                          ; an 8px row: the run covers it all
+    mov ax, [sh_blitx1]
+    push cx
+    mov cx, [sh_blitx2]
+    call OSAPI_GFX_FILL
+    pop cx
+.bandn:
     inc cx
     jmp .band
 .nobands:
@@ -4208,6 +4594,18 @@ sh_scrollrow_blit:
 .abs:
     cmp di, [sh_vrows]
     jae .no                            ; nothing survives: repaint instead
+    ; ONE HEIGHT, OR NO BLIT (81.60): the band moves by delta rows of one
+    ; height, which is only the picture when every row either view shows -
+    ; and the one past each, which decides how many fit - is the standard
+    mov ax, cx
+    mov dx, [sh_scrollrow]
+    cmp ax, dx
+    jbe .span
+    xchg ax, dx
+.span:
+    add dx, [sh_vrows]
+    call sh_rh_anyin
+    jc .no
 
     ; The rect. x1 and x2+1 must be multiples of 8 (the blit is byte-column
     ; granular, SPEC.md 5.5): x1 rounds DOWN into the row-header strip,
@@ -4236,14 +4634,14 @@ sh_scrollrow_blit:
     mov [sh_blity1], ax
     mov bx, ax
     mov ax, [sh_vrows]
-    mov dx, [sh_cellh]
+    mov dx, SH_RH_NORMAL               ; every row the standard, checked above
     mul dx
     add ax, bx
     dec ax
     mov [sh_blity2], ax
 
     mov ax, [sh_blitdel]
-    mov dx, [sh_cellh]
+    mov dx, SH_RH_NORMAL
     imul dx                            ; the delta is under vrows, so AX is
     mov si, ax                         ; the whole of it: SI = signed dy
     mov ax, [sh_blitx1]
@@ -4753,11 +5151,13 @@ sh_drawrowhdrs:
     sub cx, ax
     add cx, [sh_ox]
     mov ax, bx
-    mov dx, [sh_cellh]
-    mul dx
-    add ax, [sh_goy]
-    add ax, SH_FB_H + SH_CH_H
+    call sh_vry                        ; its own top (81.60)...
     mov dx, ax
+    mov ax, bx
+    call sh_vtoff                      ; ...and as low as its cells' text
+    add dx, ax
+    add dx, [sh_goy]
+    add dx, SH_FB_H + SH_CH_H
     mov si, sh_numbuf
     call OSAPI_FONT_STR_XPARENT
     mov bx, [sh_wrow]
@@ -4794,6 +5194,11 @@ sh_drawgrid:
     mov ax, [sh_wrow]
     cmp ax, [sh_dmgr2]
     ja .out
+    call sh_vheight                    ; THIS ROW'S OWN HEIGHT (81.60), and
+    mov [sh_cellh], ax                 ; how far down it the text sits
+    mov ax, [sh_wrow]
+    call sh_vtoff
+    mov [sh_rtoff], ax
     mov ax, [sh_dmgc1]
     mov [sh_wcol], ax
 .col:
@@ -4911,11 +5316,11 @@ sh_drawgrid:
     add ax, SH_RH_W
     mov cx, ax
     mov ax, [sh_wrow]
-    mov dx, [sh_cellh]
-    mul dx
+    call sh_vry                        ; its own top (81.60)
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
-    mov dx, ax
+    mov dx, ax                         ; DX = the cell's top, for the shade;
+                                       ; the text goes sh_rtoff below it
     ; stage 2.x: a Shaded cell (Format > Border..., real Excel's own Shade
     ; checkbox) needs the grey dither drawn FIRST and the text drawn
     ; TRANSPARENT over it - OSAPI_FONT_RUN's opaque erase-then-letter would
@@ -4942,11 +5347,13 @@ sh_drawgrid:
     call OSAPI_GFX_FILL_GRAY
     pop dx
     pop cx
+    add dx, [sh_rtoff]
     mov al, CBLACK
     call OSAPI_SET_COLOR
     call OSAPI_FONT_STR_XPARENT
     jmp .aftertext
 .noshade:
+    add dx, [sh_rtoff]
     mov al, CBLACK
     mov ah, CWHITE
     call OSAPI_FONT_RUN
@@ -5008,16 +5415,14 @@ sh_drawlines:
     mov al, CBLACK
     call OSAPI_SET_COLOR
 
-    mov ax, [sh_dmgr1]                 ; the damaged rows' pixel span...
-    mov dx, [sh_cellh]
-    mul dx
+    mov ax, [sh_dmgr1]                 ; the damaged rows' pixel span, each
+    call sh_vry                        ; its own height (81.60)...
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     mov [sh_ly1], ax
     mov ax, [sh_dmgr2]
     inc ax
-    mov dx, [sh_cellh]
-    mul dx
+    call sh_vry
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     dec ax
@@ -5064,8 +5469,7 @@ sh_drawlines:
     inc dx
     cmp ax, dx
     ja .hdone
-    mov dx, [sh_cellh]
-    mul dx
+    call sh_vry
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     mov bx, ax
@@ -5162,12 +5566,14 @@ sh_drawborders:
     dec ax
     mov [sh_bx2], ax
     mov ax, [sh_wrow]
-    mov bx, [sh_cellh]
-    mul bx
+    call sh_vheight                    ; its own top and height (81.60)
+    mov bx, ax
+    mov ax, [sh_wrow]
+    call sh_vry
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     mov [sh_by1], ax
-    add ax, [sh_cellh]
+    add ax, bx
     dec ax
     mov [sh_by2], ax
     test byte [sh_bdrawflags], SH_BORD_LEFT
@@ -5293,16 +5699,14 @@ sh_drawsel:
     mov [sh_selx2], ax
 
     mov ax, [sh_wrow]
-    mov dx, [sh_cellh]
-    mul dx
+    call sh_vry                        ; each row its own height (81.60)
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     mov [sh_sely1], ax
 
     mov ax, [sh_selvr2]
     inc ax
-    mov dx, [sh_cellh]
-    mul dx
+    call sh_vry
     add ax, [sh_goy]
     add ax, SH_FB_H + SH_CH_H
     dec ax
@@ -10032,9 +10436,17 @@ sh_idlg_open:
     call sh_colwidth                   ; characters, matching what OK reads
     jmp .prenum
 .prerowh:
-    mov ax, [sh_cellh]
+    mov ax, [sh_selrow]                ; the SELECTED row's own height, in
+    call sh_rowtw                      ; POINTS as Excel's dialog shows it -
+    or ax, ax                          ; 12.75 for the standard (81.60)
+    jnz .prerh
+    mov ax, SH_RH_STDTW
+.prerh:
+    call sh_twpts
+    jmp short .precopy
 .prenum:
     call sh_itoa
+.precopy:
     mov di, sh_idlg_buf
     mov si, sh_numbuf
     call sh_strcpy_to_di
@@ -10261,11 +10673,11 @@ sh_idlg_apply:
     je .goto
     cmp byte [sh_idlg_kind], SH_ID_SORT
     je .sortkey
-    mov si, sh_idlg_buf                ; the two numeric kinds
-    call sh_pnum_at
-    jc .out                            ; not a number at all
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
+    mov si, sh_idlg_buf                ; the column width
+    call sh_pnum_at
+    jc .out                            ; not a number at all
     cmp ax, SH_CW_MINCH                ; COLUMN WIDTH IS IN CHARACTERS, which
     jb .out                            ; is Excel's own unit for it - the
     cmp ax, SH_CW_MAXCH                ; pixel width is a consequence, not the
@@ -10290,11 +10702,28 @@ sh_idlg_apply:
     jbe .cwl
     jmp .redraw
 .rowh:
-    cmp ax, SH_RH_MIN
-    jb .out
-    cmp ax, SH_RH_MAX
+    ; ROW HEIGHT IS IN POINTS, Excel's unit, fractions allowed, and applies
+    ; to THE SELECTED ROWS, each (81.60). It set the one height the whole
+    ; sheet had, in pixels. The standard 12.75 is stored as no record at all
+    mov si, sh_idlg_buf
+    call sh_ptwips
+    jc .out
+    cmp ax, SH_RH_TWMIN                ; a glyph must fit, and a row must fit
+    jb .out                            ; the grid - Excel's 0 (hidden) and its
+    cmp ax, SH_RH_TWMAX                ; 409 points are both refused
     ja .out
-    mov [sh_cellh], ax
+    mov cx, ax
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .rhl
+    xchg ax, bx
+.rhl:
+    call sh_rowh_set
+    jc .redraw                         ; the table is full: what fitted stays
+    inc ax
+    cmp ax, bx
+    jbe .rhl
     jmp .redraw
 .goto:
     mov si, sh_idlg_buf
@@ -11463,6 +11892,134 @@ sh_pnum_at:
     pop dx
     pop cx
     pop bx
+    ret
+
+; sh_ptwips - SI = a height typed in points, "15" or "12.75" -> AX = twips,
+; CF=1 when it is not one. Digits past the hundredths are read and dropped
+; (81.60)
+sh_ptwips:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor ax, ax                         ; AX = whole points
+    xor cx, cx                         ; CX = the digits seen
+.sp:
+    cmp byte [si], ' '
+    jne .int
+    inc si
+    jmp short .sp
+.int:
+    mov bl, [si]
+    sub bl, '0'
+    cmp bl, 9
+    ja .frac
+    cmp ax, 100                        ; 999 points at most, so the twips
+    jae .bad                           ; below cannot overflow
+    mov dx, 10
+    mul dx
+    xor bh, bh
+    add ax, bx
+    inc cx
+    inc si
+    jmp short .int
+.frac:
+    mov dx, 20
+    mul dx
+    mov di, ax                         ; DI = the whole points, in twips
+    xor dx, dx                         ; DX = hundredths
+    cmp byte [si], '.'
+    jne .tail
+    inc si
+    mov bl, [si]
+    sub bl, '0'
+    cmp bl, 9
+    ja .tail
+    mov al, 10
+    mul bl
+    mov dx, ax                         ; the tenths
+    inc cx
+    inc si
+    mov bl, [si]
+    sub bl, '0'
+    cmp bl, 9
+    ja .tail
+    xor bh, bh
+    add dx, bx                         ; ...and the hundredths
+    inc si
+.more:
+    mov bl, [si]
+    sub bl, '0'
+    cmp bl, 9
+    ja .tail
+    inc si
+    jmp short .more
+.tail:
+    cmp byte [si], ' '
+    jne .end
+    inc si
+    jmp short .tail
+.end:
+    cmp byte [si], 0
+    jne .bad
+    jcxz .bad
+    mov ax, dx                         ; a hundredth of a point is a fifth of
+    add ax, 2                          ; a twip: rounded
+    mov bl, 5
+    div bl
+    xor ah, ah
+    add ax, di
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_twpts - AX = twips -> sh_numbuf = points, "15" or "12.75" (81.60)
+sh_twpts:
+    push ax
+    push bx
+    push dx
+    push si
+    xor dx, dx
+    mov bx, 20
+    div bx                             ; AX = whole points, DX = twips over
+    call sh_itoa
+    mov ax, dx
+    or ax, ax
+    jz .out
+    mov si, sh_numbuf
+.end:
+    cmp byte [si], 0
+    je .at
+    inc si
+    jmp short .end
+.at:
+    mov byte [si], '.'
+    mov bl, 5
+    mul bl                             ; AX = hundredths, 5..95
+    mov bl, 10
+    div bl                             ; AL = tenths, AH = hundredths
+    add al, '0'
+    mov [si+1], al
+    mov byte [si+2], 0
+    or ah, ah
+    jz .out
+    add ah, '0'
+    mov [si+2], ah
+    mov byte [si+3], 0
+.out:
+    pop si
+    pop dx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -14481,6 +15038,58 @@ sh_biff_cells:
     cmp bx, 256
     jb .cw
     pop word [sh_cursheet]
+    ; ...and a ROW for every row of it not the standard height (81.60): the
+    ; row, its first and one-past-last cell column (none are claimed), the
+    ; height in twips with bit 15 clear, and the flags word Excel 3 sets for
+    ; a height given by hand - bit 8 always, bit 6 "not the font's height"
+    push es
+    mov es, [sh_noteseg]
+    mov cx, [es:SH_ROWH_N]
+    pop es
+    mov si, SH_ROWH_OFF
+.rh:
+    jcxz .rhd
+    mov ax, di
+    add ax, 20
+    cmp ax, SH_STAGE_MAX
+    ja .rhd
+    push es
+    mov es, [sh_noteseg]
+    mov ax, [es:si]
+    mov bx, [es:si+2]
+    pop es
+    mov dx, ax
+    push cx
+    mov cl, SH_ROW_BITS
+    shr dx, cl
+    pop cx
+    cmp dx, [sh_wsheet]
+    jne .rhn
+    and ax, SH_ROW_MASK
+    push ax
+    mov ax, 0x0208                   ; ROW (BIFF3/4)
+    call sh_biffw
+    mov ax, 16
+    call sh_biffw
+    pop ax
+    call sh_biffw                    ; the row
+    xor ax, ax
+    call sh_biffw                    ; no cell columns claimed
+    call sh_biffw
+    mov ax, bx
+    call sh_biffw                    ; the height, custom
+    xor ax, ax
+    call sh_biffw                    ; not used
+    call sh_biffw                    ; BIFF3/4's offset to its first cell
+    mov ax, 0x0140
+    call sh_biffw
+    mov ax, 0x000F                   ; the XF, unused with bit 7 clear
+    call sh_biffw
+.rhn:
+    add si, SH_ROWH_REC
+    dec cx
+    jmp short .rh
+.rhd:
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
 .rec:
@@ -15805,6 +16414,8 @@ sh_doread_biff:
     je .notb2                          ; so they are BIFF2's only after one
     cmp ax, 0x0031                     ; BIFF2's FONT: the options word at the
     je .isfont                         ; same offset as 0231H's
+    cmp ax, 0x0008                     ; BIFF2's ROW (81.60), 0208H's first
+    je .isrow                          ; four words exactly
     cmp ax, 0x0002
     jb .notb2
     cmp ax, 0x0007
@@ -15846,6 +16457,8 @@ sh_doread_biff:
     je .iscolw                         ; on): a run of columns and their width
     cmp ax, 0x007D                     ; (81.56)
     je .iscolw
+    cmp ax, 0x0208                     ; ROW (BIFF3 on): a row's height, in
+    je .isrow                          ; twips (81.60)
     cmp ax, 0x0218                     ; DEFINEDNAME (BIFF3/4) - 0018H is the
     je .isname                         ; BIFF2/5/8 number and is NOT accepted
     jmp .skip                          ; here, because its body is a different
@@ -15886,6 +16499,34 @@ sh_doread_biff:
     jmp short .cwl
 .cwskip:
     mov cx, [sh_biff_end]              ; the file's end, which CX carries here
+    pop dx
+    jmp .skip
+.isrow:
+    ; the row, then at +6 its height in twips with bit 15 set for "the
+    ; default height", which costs the table nothing. Excel's 0 hides a row,
+    ; which this grid cannot, so it stays the standard; the rest are clamped
+    ; to what the Row Height dialog allows
+    push dx
+    cmp dx, 8
+    jb .rowskip
+    mov ax, [es:si]
+    cmp ax, SH_ROWS
+    jae .rowskip
+    mov cx, [es:si+6]
+    test ch, 0x80
+    jnz .rowskip
+    jcxz .rowskip
+    cmp cx, SH_RH_TWMIN
+    jae .rowlo
+    mov cx, SH_RH_TWMIN
+.rowlo:
+    cmp cx, SH_RH_TWMAX
+    jbe .rowhi
+    mov cx, SH_RH_TWMAX
+.rowhi:
+    SHOUT sh_rowh_set
+.rowskip:
+    mov cx, [sh_biff_end]
     pop dx
     jmp .skip
 .isbof2:
@@ -31083,11 +31724,9 @@ sh_s_protdoc:  db 'The document is protected.', 0
 ; did - it is where the claim "Column Width is three presets" in an assessment
 ; of what SHEET still lacks came from.
 ;
-; WHAT IS STILL TRUE is the other half: it applies to the WHOLE sheet's
-; sh_cellw/sh_cellh, not per-row/per-column. The per-column version needs
-; every fixed-grid assumption in the renderer and hit-tester turned into a
-; lookup - sh_gridhit divides by [sh_cellw] once and would have to walk - and
-; that is the outstanding gap, not the dialog.
+; The other half - that it applied to the WHOLE sheet - went too: 81.56 made
+; the widths per column and 81.60 the heights per row, the height in POINTS
+; because that is Excel's unit for it. sh_gridhit walks both now.
 sh_m_format:    db 'Format', 0
 ; VM_screenshots/menu_format_full.png: Number/Alignment/Font/Border/CELL
 ; PROTECTION/Row Height/Column Width/Justify. Cell Protection sits between
@@ -32677,7 +33316,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 5629
+    OS88_BSS 5703
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -33099,8 +33738,8 @@ sh_bti         equ sh_by2 + 2              ; word: the scan loop's own index
 
 ; stage 2.x: runtime cell dimensions (Format > Column Width.../Row
 ; Height...) - see the SH_CW_*/SH_RH_* section comment above sh_entry
-sh_cellw       equ sh_bti + 2              ; word: current column width, px
-sh_cellh       equ sh_cellw + 2            ; word: current row height, px
+sh_cellw       equ sh_bti + 2              ; word: the drawn column's width, px
+sh_cellh       equ sh_cellw + 2            ; word: the drawn row's height, px
 sh_cellch      equ sh_cellh + 2            ; word: sh_cellw / 8, in chars
 sh_blank       equ sh_cellch + 2           ; SH_CW_MAXCH+1: as many spaces as
                                              ; the WIDEST column the Column
@@ -33550,8 +34189,9 @@ sh_v_sh_bt_getw             equ sh_v_sh_boolname + 4
 sh_v_sh_colwidth            equ sh_v_sh_bt_getw + 4
 sh_v_sh_colw_set            equ sh_v_sh_colwidth + 4
 sh_v_sh_colw_clear          equ sh_v_sh_colw_set + 4
-SH_NVEC       equ 56
-sh_v_end      equ sh_v_sh_colw_clear + 4
+sh_v_sh_rowh_set            equ sh_v_sh_colw_clear + 4
+SH_NVEC       equ 57
+sh_v_end      equ sh_v_sh_rowh_set + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -33592,7 +34232,12 @@ sh_undoseg        equ sh_vcw + SH_MAXVC  ; word: Undo's claim, 0 when none (81.5
 sh_ud_busy        equ sh_undoseg + 2     ; byte: an undoable command is running
 sh_ud_lab         equ sh_ud_busy + 1     ; byte: its label (SH_UL_*)
 sh_ud_redo        equ sh_ud_lab + 1      ; byte: the snapshot is the REDO
-sh_bss_end        equ sh_ud_redo + 1
+sh_vrh            equ sh_ud_redo + 1     ; SH_MAXVR: the visible rows' heights,
+                                         ; in pixels (81.60)
+sh_gridw          equ sh_vrh + SH_MAXVR  ; word: the grid's width in pixels...
+sh_gridh          equ sh_gridw + 2       ; word: ...and its height (sh_geom)
+sh_rtoff          equ sh_gridh + 2       ; word: the drawn row's text offset
+sh_bss_end        equ sh_rtoff + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

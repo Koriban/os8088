@@ -3963,6 +3963,15 @@ SOAK = [
         "must carry it down, a delete bring it back, deleting its own row "
         "take it away, and the saved file keep it on its cell",
         needs=("marty",), serial=True),
+    Row("sheetrowh", "soak", py("tests/sheetrowh.py"), 400.0,
+        "SPEC.md 81.60: each row its own height, in points as Excel keeps "
+        "it. A BIFF3 file's ROW records set the rows the glass then measures "
+        "(a default-flagged one ignored), the tall row's text sits low, a "
+        "click below the odd rows lands in its own row, Row Height takes "
+        "9.75 points and opens on the row's own height, BIFF writes the "
+        "twips back, Insert and Undo carry them, and scrolling onto a tall "
+        "row shows it whole with no blit by the standard height",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

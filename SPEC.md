@@ -98390,8 +98390,9 @@ and §82 is this tree's answer to that.
   what was the largest gap here. Custom codes are drawn (TEXT() takes any)
   but the Format Number dialog offers only the list, and SYLK carries only
   four.
-- **Row height is whole-sheet.** Column widths are per column since §81.56;
-  a row is still the one `sh_cellh`.
+- **Row heights are per row since §81.60**, and column widths per column
+  since §81.56. What is left of the pair is Excel's hidden row and column
+  (a height or width of 0) and resizing either by dragging its heading.
 - **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is not done.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
@@ -99799,8 +99800,9 @@ which one width had kept the same and narrower than a column.
   column that is not the standard width, before each sheet's cells. SYLK reads
   and writes Walden's `F;W<first> <last> <width>` field. Widths are clamped to
   what the dialog allows (`sh_cwbyte`).
-- **Not done**: row heights are still whole-sheet, and the standard width
-  itself is not a setting a file or the dialog can change.
+- **Not done**: the standard width itself is not a setting a file or the
+  dialog can change. (Row heights were whole-sheet here; §81.60 made them
+  per row.)
 
 #### 81.56.4 Evidence
 
@@ -99953,6 +99955,122 @@ Checked by the Sheet gates as they stand (the widths through
 `tests/sheetcolw.py`, which drives the typed Column Width dialog, and
 `tests/sheetmove.py` over the larger claim); nothing new is observable, so
 there is no new test.
+
+### 81.60 Each row its own height
+
+**The whole sheet had one row height.** Format > Row Height set `sh_cellh`,
+in pixels, for every row at once, and an Excel file's ROW records were
+skipped, so a worksheet's tall title row or squeezed spacer row opened at the
+standard height. Excel's Row Height is per row and in points: *"Sets the
+height of the selected rows. Row height is measured in points, as are fonts"*
+(Excel 2.0 Reference Guide, Format Row Height command).
+
+#### 81.60.1 Where a height lives, and in what unit
+
+**In twips**, a twentieth of a point, which is what Excel keeps and BIFF
+writes, so a file's height comes back to the twip. It is drawn at
+`(tw × 14 + 127) / 255` pixels: the standard 12.75 points (`SH_RH_STDTW`,
+255) is the 14 pixels (`SH_RH_NORMAL`) every row already had.
+
+**A sorted sparse table in the note claim's fifth kilobyte** (`SH_ROWH_OFF`,
+4096): a packed row/sheet word, the cell array's own key, and the twips, for
+each row that is not the standard height — 255 records, the count in the
+kilobyte's last word. A flat table like the widths' would be 32 KB a sheet at
+16,384 rows. `SH_CLAIM_NOTE_KB` goes 4 → 5, which is heap and not image, and
+SHEET holds no more claims than it did (all eight, §81.57). `sh_rowtw`,
+`sh_rowheight` and `sh_rowh_set` are the doors (the reader reaches the last
+through a vector, `SH_NVEC` 57), and `sh_colw_clear` now clears both tables
+for every document that replaces the sheet.
+
+#### 81.60.2 Drawing, hitting and scrolling a row
+
+`sh_geom` **walks** the rows from the scroll position as it walks the
+columns, each its own height, until the next would not fit whole, and keeps
+the visible ones' heights in `sh_vrh`. **`sh_vry` is the only arithmetic that
+turns a visible row into pixels** — the cells, the row numbers, the
+gridlines, the borders, the selection and the damage bands all ask it — and
+`sh_gridhit` walks the same heights to turn a click into a row. `sh_cellh`
+means "the row being drawn", as `sh_cellw` means the column (§81.56.2).
+
+**Text sits low in a tall row**, as Excel's does: `sh_vtoff` puts it as far
+above the row's bottom as a standard row's is, so a standard row draws
+exactly as before and a shorter one keeps its text at the top. The row
+number follows its row's text. `sh_dmgdraw` fills the band above the glyphs
+as well as the one below.
+
+**The row blit stands aside** unless every row either view shows, and the
+one past each, is the standard height (`sh_rh_anyin`): `sh_scrollrow_blit`
+moves the picture by whole rows of one height, which is only the picture
+when they are. Refused, the scroll is the full repaint it always fell back
+to.
+
+**Bringing a cell into view walks too.** `sh_scrollto_t` took the new scroll
+position as the target less the number of rows the OLD view held, less one —
+right while every row was one height, and for columns wrong since §81.56: a
+column wider than the ones scrolled past landed partly or wholly off the
+glass. `sh_backrows` and `sh_backcols` walk back from the target, each row or
+column its own size, while the grid (`sh_gridh`, `sh_gridw`) still holds it.
+
+#### 81.60.3 Setting one
+
+- **Format > Row Height** applies to the **selected rows** and takes
+  **points**, fractions allowed — `9.75` is 195 twips — and opens on the
+  selected row's own height, `12.75` for the standard (`sh_ptwips`,
+  `sh_twpts`). The range is 7.3 to 43.7 points (`SH_RH_TWMIN`..`TWMAX`), the
+  8 to 48 pixels the dialog allowed before: a glyph must fit a row, and a
+  row the grid. Excel's 0, which hides a row, is refused, and so is anything
+  past 43.7; there is no Standard Height box, and typing 12.75 is the same.
+- **Insert and Delete Row** move the heights with their rows through
+  §81.58's `sh_rc_table` (row operations only — the table has no column
+  word). **Undo** snapshots them with the widths (§81.57), 2048 bytes.
+- **BIFF** reads ROW, `0208H` and BIFF2's `0008H` (after a BIFF2 BOF only),
+  skipping bit 15 ("the default height") and a height of 0, and clamping the
+  rest to the dialog's range; it writes a `0208H` ROW for each row that is
+  not the standard, before each sheet's cells (docs/BIFF-NOTES.md).
+- **SYLK carries no heights.** Walden's SYLK 1.2 F record has widths (`;W`)
+  and no row height; neither the Excel 2.0 manuals nor LibreOffice — which
+  writes neither widths nor heights to SYLK, and ignored an `F;M` field when
+  given one — offered a field to follow, and a guessed one is a file no other
+  program reads. A SYLK save keeps the widths and loses the heights.
+- **Not done**: hidden rows, the Standard Height box, dragging a row heading
+  to resize it, and BIFF's DEFAULTROWHEIGHT.
+
+#### 81.60.4 Evidence
+
+`tests/sheetrowh.py`, **10 checks**, read off the glass with `glass.rgrid` —
+new, because `glass.grid` finds the rows as the longest evenly spaced run of
+lines and needs three of them to find the columns; `rgrid` takes the columns
+first, as the lines that share one vertical extent. The host's BIFF3 file
+makes row 2 eighteen points, row 3 eight and row 5 thirty, and gives row 4
+twenty with bit 15 set: the lines must be 14, 20, 9 and 14 pixels apart, the
+tall row's text must sit in its lower fourteen, and a click in the lower part
+of B2 must type into B2 — a point one height would call B3. Row Height 9.75
+on B4 must make it 11 pixels, and OK alone on rows 2 and 1 must change
+neither (the dialog opened on 18 and on 12.75); Save As Normal must carry
+rows 2-5 in twips, Insert Row move them down and Undo put them back. Last,
+Down from B4 onto the thirty-point row must scroll until it shows whole —
+two rows here, where the old arithmetic scrolled one and left it below the
+glass — and come out 9, 11, 33. CGA leaves the grid about sixty pixels, which
+is why the heights are small: a thirty-point row does not fit under three
+standard ones, and SHEET rightly draws three.
+
+**9 of the 10 fail against the previous binary** (the one that passes reads
+the two labels, which uniform rows show too). Ten mutations, each built and
+caught: the hit-test by one height (one check), the blit without its refusal
+(the scroll), no text offset (the tall row's text), the prefill in pixels
+(four - OK alone then writes 22 points), bit 15 not honoured (the grid: row
+4 at 22 pixels leaves three rows), the ROW record not written (the three
+saves), no height shift on Insert (one), Undo copying the widths alone (two),
+the old scroll arithmetic (the scroll) and the hundredths dropped (six).
+LibreOffice, given the test's save converted to `.fods`, reads rows 2-5 at
+18, 8, 9.75 and 30 points.
+
+`sh_geom` walks the table once beside the rows rather than searching it for
+each: it runs on every repaint, and a full table searched per row is some
+twelve thousand compares a paint on the target.
+
+Resident +871 bytes (53,206 → 54,077, 1,660 left), bss +74, `CHART.OVL` +180
+(22,586 of 23,552), and one kilobyte of heap in the note claim.
 
 ## 82. CHART — charting, and the buffer both halves draw into
 
