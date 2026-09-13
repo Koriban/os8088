@@ -11628,15 +11628,6 @@ sh_biff_workbook:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_biff_cells - every cell record for ONE sheet, appended at ES:DI.
-; in: [sh_wsheet] = which of the SH_SHEETS grids; ES = staging, DI = cursor
-; out: DI advanced past what was written; [sh_trunc] set if the buffer filled
-;
-; Extracted from sh_dowrite_biff so a BIFF4 WORKBOOK can call it once per
-; sheet (81.10.5). The BIFF3 path calls it exactly once, with sh_wsheet set to
-; sh_cursheet, and emits the same bytes it always did.
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
 ; sh_biff_e2b / sh_biff_b2e - an error code between SH_C_AUX's numbering
 ; (ERROR.TYPE, 1..7) and the file's (SPEC.md 81.22.2). AL in, AL out,
 ; everything else preserved.
@@ -11686,6 +11677,15 @@ sh_biff_b2e:                          ; the BIFF code -> ERROR.TYPE 1..7
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_biff_cells - every cell record for ONE sheet, appended at ES:DI.
+; in: [sh_wsheet] = which of the SH_SHEETS grids; ES = staging, DI = cursor
+; out: DI advanced past what was written; [sh_trunc] set if the buffer filled
+;
+; Extracted from sh_dowrite_biff so a BIFF4 WORKBOOK can call it once per
+; sheet (81.10.5). The BIFF3 path calls it exactly once, with sh_wsheet set to
+; sh_cursheet, and emits the same bytes it always did.
+; -----------------------------------------------------------------------------
 sh_biff_cells:
     mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
