@@ -32287,6 +32287,12 @@ sh_ci_namecmp:
 ; =============================================================================
 SH_MX_N equ 8
 SH_MX_W equ (SH_MX_N * 2)
+SH_MX_REGN equ 200                    ; the regression family's own point
+                                       ; cap - LINEST/LOGEST/TREND/GROWTH are
+                                       ; O(n) per point, not MDETERM's O(n^3),
+                                       ; so this is a guard against a whole
+                                       ; column reference rather than SH_MX_N's
+                                       ; kind of limit
 
 ; sh_mx_addr - in: AX=row (0-based), BX=col (0-based). out: DI = the
 ; address of sh_mx_buf[row][col]. Clobbers AX, BX.
@@ -32508,6 +32514,332 @@ sh_mx_identity:
     pop ax
     ret
 
+; sh_mx_veckth - the k-th element of a VECTOR argument (a single row or a
+; single column - LINEST/TREND's shape, not MDETERM's square). in: AX = k
+; (0-based), SI -> a rect's four words r1,c1,r2,c2 (sh_mx_r1.. or
+; sh_mx_r1b.. are laid out exactly that way in the equ chain, so either can
+; be passed as-is). out: AX = col, BX = row - sh_getcell2's own inputs.
+; Whichever of the rect's two dimensions is NOT 1 is the one k walks; the
+; caller has already rejected a rect where neither is (sh_mx_regsums).
+sh_mx_veckth:
+    push dx
+    mov dx, ax                         ; dx = k
+    mov ax, [si]                       ; r1
+    mov bx, [si+4]                     ; r2
+    cmp ax, bx
+    jne .col
+    mov bx, ax                         ; single row: row stays r1...
+    mov ax, [si+2]                     ; ...col = c1 + k
+    add ax, dx
+    jmp .out
+.col:
+    mov bx, ax                         ; single column: col stays c1...
+    add bx, dx                         ; ...row = r1 + k
+    mov ax, [si+2]
+.out:
+    pop dx
+    ret
+
+; sh_mx_regsums - the least-squares sums LINEST/LOGEST/TREND/GROWTH are all
+; built from, one pass over the known points (81.34's variance folds are the
+; precedent for "one pass, running sums" over sh_stbusy's own kind of
+; reentrancy guard).
+;
+; in: sh_mx_r1/c1/r2/c2 = known_y's, already checked by the caller to be a
+;     cell reference (sh_mx_getvec's caller does that via sh_pargref);
+;     sh_mx_haveknownx = 1 and sh_mx_r1b/c1b/r2b/c2b = known_x's, or 0 to use
+;     the default sequence 1,2,3,...; sh_mx_logy = 1 to fit ln(y) rather than
+;     y (LOGEST/GROWTH)
+; out: CF=1 with sh_mx_n/sumx/sumy/sumxy/sumx2 filled; CF=0 - known_y's or
+;     known_x's is not a single row/column, their lengths disagree, a cell in
+;     either is not numeric, or (sh_mx_logy) a y is not strictly positive.
+sh_mx_regsums:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [sh_mx_r2]
+    sub ax, [sh_mx_r1]
+    inc ax                             ; ax = known_y's row count
+    mov bx, [sh_mx_c2]
+    sub bx, [sh_mx_c1]
+    inc bx                             ; bx = known_y's column count
+    cmp ax, 1
+    jne .yrows
+    mov cx, bx                         ; a single row: n = the column count
+    jmp .ygot
+.yrows:
+    cmp bx, 1
+    jne .bad                           ; neither dimension is 1 - not a
+                                       ; vector; multiple regression is out
+                                       ; of scope (SPEC.md 81.67)
+    mov cx, ax                         ; a single column: n = the row count
+.ygot:
+    mov [sh_mx_n], cx
+    cmp byte [sh_mx_haveknownx], 0
+    je .havelen
+    mov ax, [sh_mx_r2b]
+    sub ax, [sh_mx_r1b]
+    inc ax
+    mov bx, [sh_mx_c2b]
+    sub bx, [sh_mx_c1b]
+    inc bx
+    cmp ax, 1
+    jne .xrows
+    mov dx, bx
+    jmp .xgot
+.xrows:
+    cmp bx, 1
+    jne .bad
+    mov dx, ax
+.xgot:
+    cmp dx, [sh_mx_n]
+    jne .bad                          ; known_x's must be the same length
+.havelen:
+    cmp word [sh_mx_n], 1
+    jb .bad
+    cmp word [sh_mx_n], SH_MX_REGN
+    ja .bad
+    xor ax, ax
+    mov [sh_mx_sumx], ax
+    mov [sh_mx_sumx+2], ax
+    mov [sh_mx_sumx+4], ax
+    mov [sh_mx_sumx+6], ax
+    mov [sh_mx_sumy], ax
+    mov [sh_mx_sumy+2], ax
+    mov [sh_mx_sumy+4], ax
+    mov [sh_mx_sumy+6], ax
+    mov [sh_mx_sumxy], ax
+    mov [sh_mx_sumxy+2], ax
+    mov [sh_mx_sumxy+4], ax
+    mov [sh_mx_sumxy+6], ax
+    mov [sh_mx_sumx2], ax
+    mov [sh_mx_sumx2+2], ax
+    mov [sh_mx_sumx2+4], ax
+    mov [sh_mx_sumx2+6], ax
+    mov word [sh_mx_i], 0
+.sumloop:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .sumdone
+    mov ax, [sh_mx_i]
+    mov si, sh_mx_r1
+    call sh_mx_veckth                  ; ax=col, bx=row of y[k]
+    SHOUT sh_getcell2
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .bad
+    mov si, sh_acc
+    SHOUT fp_unpack_a                  ; A = y[k]
+    cmp byte [sh_mx_logy], 0
+    je .havey
+    SHOUT fp_ln                        ; A = ln(y[k]); CF=1 if y[k] <= 0 -
+    jc .bad                            ; LOGEST/GROWTH need every y positive
+.havey:
+    push di
+    mov di, sh_mx_t2
+    SHOUT fp_pack_a                    ; t2 = the (possibly transformed) y[k]
+    pop di
+    cmp byte [sh_mx_haveknownx], 0
+    je .defaultx
+    mov ax, [sh_mx_i]
+    mov si, sh_mx_r1b
+    call sh_mx_veckth                  ; ax=col, bx=row of x[k]
+    SHOUT sh_getcell2
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .bad
+    mov si, sh_acc
+    SHOUT fp_unpack_a                  ; A = x[k]
+    jmp .havex
+.defaultx:
+    mov ax, [sh_mx_i]
+    inc ax                             ; 1-based: 1,2,3,...
+    SHOUT fp_i2a
+.havex:
+    push di
+    mov di, sh_mx_t1
+    SHOUT fp_pack_a                    ; t1 = x[k]
+    pop di
+    mov si, sh_mx_t1
+    SHOUT fp_unpack_b                  ; Sx += x[k]
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_a
+    SHOUT fp_add
+    push di
+    mov di, sh_mx_sumx
+    SHOUT fp_pack_a
+    pop di
+    mov si, sh_mx_t2
+    SHOUT fp_unpack_b                  ; Sy += y[k]
+    mov si, sh_mx_sumy
+    SHOUT fp_unpack_a
+    SHOUT fp_add
+    push di
+    mov di, sh_mx_sumy
+    SHOUT fp_pack_a
+    pop di
+    mov si, sh_mx_t1
+    SHOUT fp_unpack_a                  ; Sxy += x[k]*y[k]
+    mov si, sh_mx_t2
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
+    SHOUT fp_a_to_b
+    mov si, sh_mx_sumxy
+    SHOUT fp_unpack_a
+    SHOUT fp_add
+    push di
+    mov di, sh_mx_sumxy
+    SHOUT fp_pack_a
+    pop di
+    mov si, sh_mx_t1
+    SHOUT fp_unpack_a                  ; Sxx += x[k]*x[k]
+    mov si, sh_mx_t1
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
+    SHOUT fp_a_to_b
+    mov si, sh_mx_sumx2
+    SHOUT fp_unpack_a
+    SHOUT fp_add
+    push di
+    mov di, sh_mx_sumx2
+    SHOUT fp_pack_a
+    pop di
+    inc word [sh_mx_i]
+    jmp .sumloop
+.sumdone:
+    stc
+    jmp .out
+.bad:
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_mx_fitline - solves the least-squares line from sh_mx_regsums's sums.
+; in: sh_mx_n/sumx/sumy/sumxy/sumx2; sh_mx_const = 0 to force the line
+;     through the origin (intercept 0), nonzero for the ordinary fit.
+; out: CF=1 with sh_mx_slope/sh_mx_intercept filled; CF=0 the fit is
+;     degenerate (a zero denominator - every known_x equal, or, forced
+;     through the origin, every known_x zero) and the caller answers #NUM!,
+;     MINVERSE's own singular-matrix precedent (81.67).
+sh_mx_fitline:
+    push ax
+    push bx
+    push si
+    push di
+    cmp byte [sh_mx_const], 0
+    je .origin
+    mov ax, [sh_mx_n]
+    SHOUT fp_i2a                       ; A = n
+    push di
+    mov di, sh_mx_t1
+    SHOUT fp_pack_a                    ; t1 = n, needed again below
+    pop di
+    mov si, sh_mx_t1
+    SHOUT fp_unpack_a
+    mov si, sh_mx_sumx2
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; A = n*Sxx
+    push di
+    mov di, sh_mx_t2
+    SHOUT fp_pack_a                    ; t2 = n*Sxx
+    pop di
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_a
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; A = Sx*Sx
+    SHOUT fp_a_to_b
+    mov si, sh_mx_t2
+    SHOUT fp_unpack_a                  ; A = n*Sxx - Sx*Sx = denom
+    SHOUT fp_sub
+    push di
+    mov di, sh_mx_denom
+    SHOUT fp_pack_a
+    pop di
+    mov bx, sh_mx_denom
+    SHOUT fp_iszero
+    jnc .havedenom
+    jmp .bad
+.havedenom:
+    mov si, sh_mx_t1                   ; t1 still holds n
+    SHOUT fp_unpack_a
+    mov si, sh_mx_sumxy
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; A = n*Sxy
+    push di
+    mov di, sh_mx_t2
+    SHOUT fp_pack_a                    ; t2 = n*Sxy
+    pop di
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_a
+    mov si, sh_mx_sumy
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; A = Sx*Sy
+    SHOUT fp_a_to_b
+    mov si, sh_mx_t2
+    SHOUT fp_unpack_a                  ; A = n*Sxy - Sx*Sy
+    SHOUT fp_sub
+    mov si, sh_mx_denom
+    SHOUT fp_unpack_b
+    SHOUT fp_div                       ; A = slope
+    push di
+    mov di, sh_mx_slope
+    SHOUT fp_pack_a
+    pop di
+    mov si, sh_mx_slope
+    SHOUT fp_unpack_a
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; A = slope*Sx
+    SHOUT fp_a_to_b
+    mov si, sh_mx_sumy
+    SHOUT fp_unpack_a                  ; A = Sy - slope*Sx
+    SHOUT fp_sub
+    mov si, sh_mx_t1                   ; t1 still holds n
+    SHOUT fp_unpack_b
+    SHOUT fp_div                       ; A = intercept
+    push di
+    mov di, sh_mx_intercept
+    SHOUT fp_pack_a
+    pop di
+    stc
+    jmp .out
+.origin:
+    mov bx, sh_mx_sumx2
+    SHOUT fp_iszero
+    jc .bad
+    mov si, sh_mx_sumxy
+    SHOUT fp_unpack_a
+    mov si, sh_mx_sumx2
+    SHOUT fp_unpack_b
+    SHOUT fp_div                       ; A = slope = Sxy / Sxx
+    push di
+    mov di, sh_mx_slope
+    SHOUT fp_pack_a
+    pop di
+    SHOUT fp_azero
+    push di
+    mov di, sh_mx_intercept
+    SHOUT fp_pack_a                    ; intercept = 0
+    pop di
+    stc
+    jmp .out
+.bad:
+    clc
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
 ; in: AX = the id, SI just past '('. out: AX = the value in sh_acc, SI past
 ; ')'. BX CX DX DI kept, matching every other door's contract.
 shm_pmatrix:
@@ -32528,9 +32860,16 @@ shm_pmatrix:
     je .domdeterm
     cmp cx, SH_FID_MINVERSE
     je .dominverse
-    jmp .notyet                        ; LINEST LOGEST TREND GROWTH: 81.67
-                                       ; names them but does not implement
-                                       ; them yet
+    cmp cx, SH_FID_LINEST
+    je .dolinest
+    cmp cx, SH_FID_LOGEST
+    je .dologest
+    cmp cx, SH_FID_TREND
+    je .dotrend
+    cmp cx, SH_FID_GROWTH
+    je .dogrowth
+    jmp .badargs                       ; unreachable - every id sh_pfunc
+                                       ; routes here is one of the eight above
 ; --- TRANSPOSE(array) -------------------------------------------------------
 .dotranspose:
     SHOUT sh_pargref
@@ -32900,13 +33239,258 @@ shm_pmatrix:
     pop si
     mov byte [sh_curtype], SH_T_NUM
     jmp .done_clean
-.notyet:
-    SHOUT sh_skipargs
-    mov byte [sh_evalerr], SH_ERR_VALUE
+; --- LINEST(known_y's, [known_x's], [const], [stats]) -----------------------
+; Simple (single-predictor) linear regression only - real LINEST's element
+; (1,1) is always the slope of the LAST x-variable, and with one x-variable
+; that is the whole answer a non-CSE entry could ever show anyway (81.67).
+.dolinest:
+    mov byte [sh_mx_logy], 0
+    call .parse_yx
+    jnc .badargs
+    call .parse_const_stats
+    jnc .badargs
+    push si                            ; the FORMULA position, banked - see
+                                       ; the header comment; sh_mx_regsums and
+                                       ; sh_mx_fitline both reuse SI as their
+                                       ; own fp-unpack pointer throughout
+    call sh_mx_regsums
+    jnc .mxbad
+    call sh_mx_fitline
+    jnc .degenerate2
+    mov si, sh_mx_slope
+    SHOUT fp_unpack_a
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+; --- LOGEST(known_y's, [known_x's], [const], [stats]) -----------------------
+; Fits ln(y) = ln(b) + x*ln(m) by the same sums on ln(y); element (1,1) is m,
+; not ln(m) - LOGEST publishes the growth factor itself.
+.dologest:
+    mov byte [sh_mx_logy], 1
+    call .parse_yx
+    jnc .badargs
+    call .parse_const_stats
+    jnc .badargs
+    push si
+    call sh_mx_regsums
+    jnc .mxbad
+    call sh_mx_fitline
+    jnc .degenerate2
+    mov si, sh_mx_slope
+    SHOUT fp_unpack_a                  ; A = ln(m)
+    SHOUT fp_exp                       ; A = m
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+; --- TREND(known_y's, [known_x's], [new_x's], [const]) ----------------------
+; Fits the line, then evaluates it at new_x's[0][0] - or, if new_x's is
+; omitted, at known_x's[0] (Excel's own default: the fitted value at the
+; first known point).
+.dotrend:
+    mov byte [sh_mx_logy], 0
+    call .parse_yx
+    jnc .badargs
+    call .parse_newx_const
+    jnc .badargs
+    push si
+    call sh_mx_regsums
+    jnc .mxbad
+    call sh_mx_fitline
+    jnc .degenerate2
+    call .evaltarget
+    mov si, sh_mx_xtarget
+    SHOUT fp_unpack_a
+    mov si, sh_mx_slope
+    SHOUT fp_unpack_b
+    SHOUT fp_mul                       ; A = slope*x
+    SHOUT fp_a_to_b
+    mov si, sh_mx_intercept
+    SHOUT fp_unpack_a
+    SHOUT fp_add                       ; A = slope*x + intercept
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+; --- GROWTH(known_y's, [known_x's], [new_x's], [const]) ---------------------
+; TREND's exponential counterpart, off the SAME ln(y) fit LOGEST uses.
+.dogrowth:
+    mov byte [sh_mx_logy], 1
+    call .parse_yx
+    jnc .badargs
+    call .parse_newx_const
+    jnc .badargs
+    push si
+    call sh_mx_regsums
+    jnc .mxbad
+    call sh_mx_fitline
+    jnc .degenerate2
+    call .evaltarget
+    mov si, sh_mx_xtarget
+    SHOUT fp_unpack_a
+    mov si, sh_mx_slope
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
+    SHOUT fp_a_to_b
+    mov si, sh_mx_intercept
+    SHOUT fp_unpack_a
+    SHOUT fp_add                       ; A = ln(y_pred)
+    SHOUT fp_exp                       ; A = y_pred
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+; --- shared argument-parsing pieces, called from all four above -------------
+; .parse_yx - known_y's (required) and known_x's (optional), the identical
+; prefix every one of the four takes. out: CF=1 parsed, sh_mx_r1/c1/r2/c2 =
+; known_y's, sh_mx_haveknownx/const/havenewx defaulted (1's own trailing args
+; override const/havenewx further); CF=0 a parse error, SI wherever
+; sh_pargref left it (this call's own .badargs handles that the same way
+; sh_pargref's failures always are here).
+.parse_yx:
+    SHOUT sh_pargref
+    jnc .py_fail
+    mov ax, [sh_arg1col]
+    mov [sh_mx_c1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_mx_r1], ax
+    mov ax, [sh_arg2col]
+    mov [sh_mx_c2], ax
+    mov ax, [sh_arg2row]
+    mov [sh_mx_r2], ax
+    mov byte [sh_mx_haveknownx], 0
+    mov byte [sh_mx_havenewx], 0
+    mov byte [sh_mx_const], 1
+    cmp byte [si], ','
+    jne .py_ok
+    inc si
+    SHOUT sh_pargref
+    jnc .py_fail
+    mov ax, [sh_arg1col]
+    mov [sh_mx_c1b], ax
+    mov ax, [sh_arg1row]
+    mov [sh_mx_r1b], ax
+    mov ax, [sh_arg2col]
+    mov [sh_mx_c2b], ax
+    mov ax, [sh_arg2row]
+    mov [sh_mx_r2b], ax
+    mov byte [sh_mx_haveknownx], 1
+.py_ok:
+    stc
+    ret
+.py_fail:
+    clc
+    ret
+; .parse_const_stats - LINEST/LOGEST's trailing [const], [stats]. `stats` is
+; parsed and discarded - it never changes element (1,1), the only element a
+; non-CSE entry can ever answer (81.67's own top-left-element design).
+.parse_const_stats:
+    cmp byte [si], ','
+    jne .pcs_close
+    inc si
+    call sh_pargclass
+    mov bx, sh_acc
+    SHOUT fp_iszero
+    jc .pcs_false
+    mov byte [sh_mx_const], 1
+    jmp .pcs_stats
+.pcs_false:
+    mov byte [sh_mx_const], 0
+.pcs_stats:
+    cmp byte [si], ','
+    jne .pcs_close
+    inc si
+    call sh_pargclass                  ; `stats` - discarded
+.pcs_close:
+    cmp byte [si], ')'
+    jne .pcs_fail
+    inc si
+    stc
+    ret
+.pcs_fail:
+    clc
+    ret
+; .parse_newx_const - TREND/GROWTH's trailing [new_x's], [const]. new_x's is
+; parsed via sh_pargclass rather than sh_pargref - it can be a bare number as
+; freely as a reference, and sh_pargclass already answers a reference with
+; its top-left value, exactly the element this whole engine ever needs.
+.parse_newx_const:
+    cmp byte [si], ','
+    jne .pnc_close
+    inc si
+    call sh_pargclass
+    push si                           ; the FORMULA position, banked before
+                                       ; the unpack below reuses SI
+    mov si, sh_acc
+    SHOUT fp_unpack_a
+    pop si
+    push di
+    mov di, sh_mx_xtarget
+    SHOUT fp_pack_a
+    pop di
+    mov byte [sh_mx_havenewx], 1
+    cmp byte [si], ','
+    jne .pnc_close
+    inc si
+    call sh_pargclass
+    mov bx, sh_acc
+    SHOUT fp_iszero
+    jc .pnc_false
+    mov byte [sh_mx_const], 1
+    jmp .pnc_close
+.pnc_false:
+    mov byte [sh_mx_const], 0
+.pnc_close:
+    cmp byte [si], ')'
+    jne .pnc_fail
+    inc si
+    stc
+    ret
+.pnc_fail:
+    clc
+    ret
+; .evaltarget - TREND/GROWTH's x to evaluate at, when new_x's was omitted:
+; known_x's[0] if that was given, else the default sequence's own first
+; value, 1 - never disturbs SI, so the caller's own banked formula position
+; needs no extra care around this call.
+.evaltarget:
+    cmp byte [sh_mx_havenewx], 0
+    jne .evaldone
+    cmp byte [sh_mx_haveknownx], 0
+    je .evaldefault
+    push si
+    xor ax, ax
+    mov si, sh_mx_r1b
+    call sh_mx_veckth                  ; ax=col, bx=row of known_x's[0]
+    SHOUT sh_getcell2
+    mov si, sh_acc
+    SHOUT fp_unpack_a
+    pop si
+    push di
+    mov di, sh_mx_xtarget
+    SHOUT fp_pack_a
+    pop di
+    jmp .evaldone
+.evaldefault:
+    mov ax, 1
+    SHOUT fp_i2a
+    push di
+    mov di, sh_mx_xtarget
+    SHOUT fp_pack_a
+    pop di
+.evaldone:
+    ret
+.degenerate2:                         ; sh_mx_fitline's own denominator-zero
+                                       ; case - MINVERSE's #NUM! precedent
+                                       ; (.singular2), not #VALUE!: the shape
+                                       ; was fine, the arithmetic is not
+    mov byte [sh_evalerr], SH_ERR_NUM
     xor ax, ax
     SHOUT sh_acc_int
+    pop si
     mov byte [sh_curtype], SH_T_NUM
-    jmp .out
+    jmp .done_clean
 .mxbad:
     pop si                             ; the banked formula position, back -
                                        ; NOT sh_skipargs: parsing is already
@@ -36930,13 +37514,17 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7242                     ; +1094 for 81.67's array/matrix
+    OS88_BSS 7296                     ; +1094 for 81.67's array/matrix
                                        ; functions (mostly sh_mx_buf's 1024-
-                                       ; byte elimination workspace); +47 for
-                                       ; 81.65's database functions
-                                       ; (39 of scratch, 8 of two new
-                                       ; vectors), +6 for 81.66's CELL (three
-                                       ; more scratch words, no new vectors)
+                                       ; byte elimination workspace) +54 for
+                                       ; its own regression family
+                                       ; (LINEST/LOGEST/TREND/GROWTH - t1/t2,
+                                       ; denom, slope, intercept, xtarget and
+                                       ; three flag bytes); +47 for 81.65's
+                                       ; database functions (39 of scratch, 8
+                                       ; of two new vectors), +6 for 81.66's
+                                       ; CELL (three more scratch words, no
+                                       ; new vectors)
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -37988,7 +38576,28 @@ sh_mx_sumx2   equ sh_mx_sumxy + 8    ; variance folds are the precedent)
 sh_mx_n       equ sh_mx_sumx2 + 8    ; word: how many points folded
 sh_mx_const   equ sh_mx_n + 2        ; byte: the `const` argument, 1 unless
                                      ; explicitly FALSE
-sh_mx_tr      equ sh_mx_const + 2    ; word: sh_mx_rowsub's target/source
+
+; the regression family's own scratch (LINEST/LOGEST/TREND/GROWTH). t1/t2 are
+; a generic pair of packed-double temps - the CURRENT point's x and y while
+; sh_mx_regsums is summing, then a subexpression each while sh_mx_fitline is
+; solving for the line - never live at once, so one pair covers both, the
+; way sh_mx_buf covers MDETERM's triangulation and MINVERSE's Gauss-Jordan
+; without needing to be two buffers.
+sh_mx_t1         equ sh_mx_const + 2   ; 8
+sh_mx_t2         equ sh_mx_t1 + 8      ; 8
+sh_mx_denom      equ sh_mx_t2 + 8      ; 8: the fit's shared denominator
+sh_mx_slope      equ sh_mx_denom + 8   ; 8: the fitted line's slope (m)
+sh_mx_intercept  equ sh_mx_slope + 8   ; 8: ...and intercept (b), 0 if the
+                                       ; `const` argument was FALSE
+sh_mx_xtarget    equ sh_mx_intercept + 8 ; 8: TREND/GROWTH's evaluation point
+sh_mx_haveknownx equ sh_mx_xtarget + 8   ; byte: known_x's given explicitly,
+                                         ; rather than the default 1,2,3,...
+sh_mx_havenewx   equ sh_mx_haveknownx + 2 ; byte: TREND/GROWTH's new_x's
+                                          ; given explicitly
+sh_mx_logy       equ sh_mx_havenewx + 2  ; byte: ln-transform y before
+                                         ; summing (LOGEST/GROWTH fit
+                                         ; ln(y) = ln(b) + x*ln(m))
+sh_mx_tr      equ sh_mx_logy + 2     ; word: sh_mx_rowsub's target/source
 sh_mx_sr      equ sh_mx_tr + 2       ; rows - named rather than juggled
                                      ; through AX/BX, since sh_mx_addr wants
                                      ; both at once and only has two input

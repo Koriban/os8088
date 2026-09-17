@@ -103010,15 +103010,12 @@ the real Excel 2.1 captures in `VM_screenshots/` and SHEET's `sh_i_*` tables.
 Neither reference is in this repository: naming them is provenance, not a
 path anyone can open here.
 
-#### 81.39.1 Functions — 127 of ~131
+#### 81.39.1 Functions — 131 of ~131
 
-**4 missing, and all four are the regression half of one piece of work —
-the database family (§81.65's 11), `CELL` (§81.66), and MDETERM/MINVERSE/
-MMULT/TRANSPOSE (§81.67's non-regression half) all closed 2026-09-17:**
-
-| group | n | functions | what it needs |
-|---|---|---|---|
-| regression | 4 | `LINEST LOGEST TREND GROWTH` | least-squares arithmetic - no array formulas, matching §81.67's finding that publishing one element does not need one |
+**None missing.** The database family (§81.65's 11), `CELL` (§81.66), and
+all eight array/matrix functions including the regression family (§81.67's
+`LINEST LOGEST TREND GROWTH`, closed the same day as the rest of §81.67)
+closed 2026-09-17.
 
 `POWER` is in SHEET and not in the 2.1d directory — a later addition,
 harmless.
@@ -105237,12 +105234,9 @@ found the least evidence for as a period-standard expectation: neither
 Lotus 1-2-3 nor SuperCalc 5 exposes matrix inversion, multiplication or
 regression as a *formula* at all - both shipped the identical
 *capability* as a one-shot `/Data` menu command instead, and Multiplan has
-neither at either end of its life. TRANSPOSE, MMULT, MDETERM, MINVERSE are
-implemented **now**; LINEST, LOGEST, TREND and GROWTH are named in every
-table below (`sh_functab`, the BIFF id tables, `sh_pfunc`'s dispatch) so a
-file naming them opens as the real function rather than `#NAME?`, but
-`shm_pmatrix` answers `#VALUE!` for the four of them (`.notyet`) until
-they are done.
+neither at either end of its life. **All eight are implemented**, the
+regression family (`LINEST LOGEST TREND GROWTH`) closing the same day as
+the rest.
 
 **Sheet has no array-formula (Ctrl+Shift+Enter, multi-cell) entry at all** -
 building one is its own feature, §81.39.4's "array formulas" enabler, and
@@ -105280,6 +105274,39 @@ matrix buffer at all - the same reasoning that lets TRANSPOSE skip one
 entirely: only one element of the answer is ever published, so only one
 element's worth of arithmetic is ever done.
 
+**LINEST, LOGEST, TREND and GROWTH need no matrix at all** - simple
+(single-predictor) linear regression is four running sums over the known
+points (`sh_mx_sumx/sumy/sumxy/sumx2`, one pass, §81.34's variance folds are
+the precedent), which `sh_mx_regsums` accumulates and `sh_mx_fitline` turns
+into a slope and an intercept. This is real LINEST's own element `(1,1)`
+too, not a simplification for lack of CSE: it is always the slope of the
+*last* x-variable, and with only one x-variable that is the entire answer a
+non-CSE entry could ever show. `known_y's` and `known_x's` must each be a
+single row or a single column - `sh_mx_regsums` rejects a genuine
+two-dimensional range, since multiple regression is out of scope here -
+capped at `SH_MX_REGN` = 200 points, an O(n) guard against a whole-column
+reference rather than `SH_MX_N`'s O(n³) kind of limit. `known_x's` defaults
+to `1,2,3,...,n` when omitted, and the `const` argument (LINEST/LOGEST's
+3rd, TREND/GROWTH's 4th) forces the intercept to 0 when FALSE - a fit
+through the origin, `slope = Sxy/Sxx` directly rather than through the
+general two-sum formula. LOGEST/GROWTH fit `ln(y) = ln(b) + x·ln(m)` by
+running the identical sums over `ln(y)` (`sh_mx_logy`, `fp_ln` - already
+vectored for the logarithm functions, §81.62) and undo the transform with
+`fp_exp` at the end: LOGEST publishes `m = exp(slope)`, not `ln(m)`.
+`fp_ln`'s own `CF=1` on a non-positive input is what answers `#VALUE!` for a
+`known_y's` that cannot be logged - no separate sign check needed. TREND and
+GROWTH evaluate the fitted line at `new_x's[0][0]`, parsed through
+`sh_pargclass` rather than `sh_pargref` because `new_x's` is as often a bare
+number as a reference and `sh_pargclass` already answers a reference with
+its own top-left value; when `new_x's` is omitted the evaluation point is
+`known_x's[0]` (or the default sequence's own first value, `1`, when
+`known_x's` was omitted too) - Excel's own default. A zero fit denominator
+(every `known_x` equal, or, forced through the origin, every `known_x`
+zero) answers `#NUM!`, MINVERSE's own singular-matrix precedent: the shape
+was a valid argument, the arithmetic simply has no answer. The `stats`
+argument (LINEST/LOGEST's 4th) is parsed and discarded - it never reaches
+element `(1,1)`.
+
 **Every row/column index in the elimination code is NAMED SCRATCH
 (`sh_mx_i`/`j`/`tr`/`sr`), never a register** - `sh_mx_addr` takes its row
 and column through AX/BX and returns with them clobbered, so a loop counter
@@ -105294,12 +105321,15 @@ SI pointing at instead of the real text. Both lessons were applied from the
 start writing this rather than rediscovered by testing it - §81.66's own
 header is why.
 
-`tests/sheetmatrix.py` is the gate for the four that are done: TRANSPOSE on
-both a label and a number, MMULT and MDETERM on 2x2 matrices, MDETERM on a
-3x3 that needs a real row swap and a post-pivot elimination pass, MINVERSE
-against MDETERM's own determinant, a singular 2x2 answering `0` and
-`#NUM!` from the two respectively, and a trivial 1x1 case at each end of
-the size range.
+`tests/sheetmatrix.py` is the gate for all eight: TRANSPOSE on both a label
+and a number, MMULT and MDETERM on 2x2 matrices, MDETERM on a 3x3 that needs
+a real row swap and a post-pivot elimination pass, MINVERSE against
+MDETERM's own determinant, a singular 2x2 answering `0` and `#NUM!` from the
+two respectively, a trivial 1x1 case at each end of the size range, and the
+regression family against one exact line (`y=2x+1`) and one exact curve
+(`y=2^x`) - LINEST/TREND with the default `known_x's` sequence, an explicit
+one, `const=FALSE`'s through-the-origin fit, and `new_x's` given against
+omitted, LOGEST/GROWTH the same shape one level exponentiated.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

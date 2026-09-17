@@ -3,15 +3,19 @@
 
     make && python3 tests/sheetmatrix.py
 
-TRANSPOSE MMULT MDETERM MINVERSE - Sheet has no array-formula (Ctrl+Shift+
-Enter) entry, so every one of these publishes only the TOP-LEFT element of
-its real result, exactly what Excel itself answers for a plain (non-CSE)
-entry. MDETERM/MINVERSE still compute the WHOLE determinant/inverse either
-way - there is no way to answer one element of an inverse without doing the
-whole elimination - so this is the real gate for that engine, not a stub of
-it: a 3x3 case that needs at least one row swap and one elimination pass
-below the pivot, a singular 2x2 that must answer 0/#NUM! rather than divide
-by zero, and a trivial 1x1 case at each end of the size range.
+TRANSPOSE MMULT MDETERM MINVERSE LINEST LOGEST TREND GROWTH - Sheet has no
+array-formula (Ctrl+Shift+Enter) entry, so every one of these publishes only
+the TOP-LEFT element of its real result, exactly what Excel itself answers
+for a plain (non-CSE) entry. MDETERM/MINVERSE still compute the WHOLE
+determinant/inverse either way - there is no way to answer one element of an
+inverse without doing the whole elimination - so this is the real gate for
+that engine, not a stub of it: a 3x3 case that needs at least one row swap
+and one elimination pass below the pivot, a singular 2x2 that must answer
+0/#NUM! rather than divide by zero, and a trivial 1x1 case at each end of
+the size range. The regression family shares one exact line (y=2x+1) and one
+exact curve (y=2^x) across LINEST/TREND and LOGEST/GROWTH, checking the
+default known_x's sequence, an explicit one, const=FALSE's through-the-origin
+fit, and new_x's given against omitted.
 
 The HOST writes a SYLK file with one formula per case, cached with a wrong
 value; SHEET opens it and saves it as SYLK - every formula recomputed first
@@ -50,6 +54,19 @@ DATA = {
     (1, 8): 2.0, (1, 9): 4.0,
     (0, 7): 7.0,                          # H1, a 1x1
     (0, 10): 'Hello', (1, 10): 42.0,      # K1:K2
+    # the regression family's own data (SPEC.md 81.67): a plain y=2x+1 line
+    # at A21:B25 (known_x's A, known_y's B - MDETERM/MINVERSE's columns never
+    # reach this far down, so there is no collision with the data above)...
+    (20, 0): 1.0, (20, 1): 3.0,
+    (21, 0): 2.0, (21, 1): 5.0,
+    (22, 0): 3.0, (22, 1): 7.0,
+    (23, 0): 4.0, (23, 1): 9.0,
+    (24, 0): 5.0, (24, 1): 11.0,
+    # ...and an exact y=2^x curve at A31:B34, for LOGEST/GROWTH
+    (30, 0): 1.0, (30, 1): 2.0,
+    (31, 0): 2.0, (31, 1): 4.0,
+    (32, 0): 3.0, (32, 1): 8.0,
+    (33, 0): 4.0, (33, 1): 16.0,
 }
 WRONG = -999.0
 CASES = [
@@ -63,6 +80,20 @@ CASES = [
     ('MINVERSE(I1:J2)', ('err', '#NUM!')),
     ('MDETERM(H1)', 7.0),
     ('MINVERSE(H1)', 1.0 / 7.0),
+    # the regression family (81.67): y=2x+1 fits a slope of 2, an intercept
+    # of 1 - simple enough that const=TRUE/FALSE and the default known_x's
+    # sequence are all distinguishable checks rather than one lucky number
+    ('LINEST(B21:B25,A21:A25)', 2.0),
+    ('LINEST(B21:B25)', 2.0),               # known_x's omitted -> 1,2,3,4,5,
+                                             # identical to A21:A25 here, so
+                                             # this exercises the DEFAULT path
+    ('LINEST(B21:B25,A21:A25,FALSE)', 2.272727272727273),  # through the
+                                             # origin: a different slope
+    ('TREND(B21:B25,A21:A25,6)', 13.0),
+    ('TREND(B21:B25,A21:A25)', 3.0),        # new_x's omitted -> known_x's[0]
+    ('LOGEST(B31:B34,A31:A34)', 2.0),       # y=2^x fits m=2 exactly
+    ('GROWTH(B31:B34,A31:A34,5)', 32.0),
+    ('GROWTH(B31:B34,A31:A34)', 2.0),       # new_x's omitted -> known_x's[0]=1
 ]
 COL = 12
 
