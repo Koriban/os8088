@@ -102394,8 +102394,9 @@ The manual's own list settles what was left: the statistical category is
 `STDEV`, `STDEVP`, `SUM`, `TREND`, `VAR`, `VARP`. Six were already here and
 four of the rest are **array** functions — a gap in the evaluation model
 rather than in the function library — which leaves exactly these four. *Excel 2.1d does have the population forms* —
-checked in `excel_man/Microsoft Excel Functions and Macros.pdf` rather than
-assumed, because `STDEVP` and `VARP` read like later additions and are not.
+checked in `LIBRARY/documentation/excel_man/Microsoft Excel Functions and
+Macros.pdf` rather than assumed, because `STDEVP` and `VARP` read like later
+additions and are not.
 
 **They are folds, so they rejoin the fold path rather than getting one of
 their own.** `sh_pfunc` sends ids 77 and up straight to `.fold`; `sh_prange`
@@ -103006,7 +103007,7 @@ reader that had not been written by the same hand as the writer.**
 Counted, not recalled — the functions against `Microsoft Excel Functions and
 Macros.pdf`'s worksheet-function directory and SHEET's own table
 (`tools/os88sheetfmt.py --selfcheck` reports the count); the menus against
-the real Excel 2.1 captures in `VM_screenshots/` and SHEET's `sh_i_*` tables.
+the real Excel 2.1 captures in `LIBRARY/documentation/screenshots/excel/` and SHEET's `sh_i_*` tables.
 Neither reference is in this repository: naming them is provenance, not a
 path anyone can open here.
 

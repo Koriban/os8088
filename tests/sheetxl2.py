@@ -19,8 +19,9 @@ alignment, borders, shade and protection. SHEET opens it and saves Normal
 (BIFF3), and the host reads the values back and the XF each cell names.
 
 ARM B, when the archive is on this machine: Excel 2.1d's OWN sample
-worksheets, from the release disks the user keeps beside the repository
-(../doswinexcel, or $EXCEL21D_7Z). They are Microsoft's and are never
+worksheets, from the release disks kept in the shared reference library
+(../LIBRARY/platforms/msdos/install-media/, or $EXCEL21D_7Z). They are
+Microsoft's and are never
 copied into the tree - they are extracted into build/ at run time, from the
 LIBRARY disk's COMPRESS.EXE archives (the old "SZ" LZSS variant, decoded
 below), and the arm is skipped with a notice when the archive is absent.
@@ -51,7 +52,7 @@ import sheetdec as SD                                        # noqa: E402
 WORK = "build/sheetxl2"                 # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetxl2.img"
 ARCHIVE = os.environ.get("EXCEL21D_7Z", os.path.join(
-    HERE, "..", "..", "doswinexcel",
+    HERE, "..", "..", "LIBRARY", "platforms", "msdos", "install-media",
     "Microsoft Excel 2.1d for Windows (1990-07) (3.5-720k).7z"))
 # Arm B's three: the most formulas, AVERAGE beside SUM, and arithmetic with
 # no function at all. Named A1-A3 so each is inside the Open list's six rows

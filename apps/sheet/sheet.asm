@@ -6062,7 +6062,8 @@ sh_mboxof:
 ; sh_mbar_draw - the whole menu bar strip: white ground, black rule under
 ; it, every title (inverted if it is [sh_mopen]). Monochrome-safe black/
 ; white/invert, matching every other Sheet dialog in this app, rather than
-; real Excel 2.1's cyan bar (VM_screenshots/excel_main.png) - this OS
+; real Excel 2.1's cyan bar
+; (LIBRARY/documentation/screenshots/excel/excel_main.png) - this OS
 ; supports 1bpp Hercules/CGA-mono adapters Sheet's own chrome has stayed
 ; safe for since stage 1.8, and introducing a new color here would be the
 ; first thing in this app to depend on one existing at all.
@@ -6772,9 +6773,10 @@ sh_abdismiss:
 ; sh_docmd_format - Format menu item AL opens the matching dialog (stage
 ; 1.8: real Excel's own Format menu is dialog-per-verb - Number.../
 ; Alignment.../Font... - not a flat immediate-apply list, per the reference
-; screenshots at VM_screenshots/dialog_{number,alignment,font}.png; Sheet's
-; menu now matches that shape, see the item table below). AL is 0 Number,
-; 1 Alignment, 2 Font - the same order sh_fdlg_open expects.
+; screenshots at
+; LIBRARY/documentation/screenshots/excel/dialog_{number,alignment,font}.png;
+; Sheet's menu now matches that shape, see the item table below). AL is 0
+; Number, 1 Alignment, 2 Font - the same order sh_fdlg_open expects.
 ; -----------------------------------------------------------------------------
 ; sh_docmd_format - Format menu item AL: 0 Number/1 Alignment/2 Font map
 ; straight onto sh_fdlg_open's own kind numbers. 3 Border opens the
@@ -9437,8 +9439,9 @@ sh_docmd_sortcol:
 ; Format dialogs (stage 1.8). Real Excel's Number/Alignment/Font dialogs
 ; each boil down to "pick one of a short list, then OK/Cancel" for what
 ; this app actually supports (Number's real dialog is a much longer
-; scrollable list of format-code strings, VM_screenshots/dialog_number.png -
-; Sheet only ever has 4 number formats, so a plain 4-item radio list stands
+; scrollable list of format-code strings,
+; LIBRARY/documentation/screenshots/excel/dialog_number.png - Sheet only ever
+; has 4 number formats, so a plain 4-item radio list stands
 ; in for it, same shape as the real Alignment and Font dialogs). All three
 ; are really the SAME dialog (a title, 4 radio rows, OK/Cancel) with
 ; different labels and a different 2-bit field of the format byte to read
@@ -10453,7 +10456,8 @@ sh_fdlg_close:
 ; Border dialog (stage 2.x). Real Excel 2.1's Format > Border... is a
 ; "Border" GROUP BOX holding six independent CHECKBOXES (Outline/Left/
 ; Right/Top/Bottom/Shade) with OK/Cancel standing beside it, not below it
-; (VM_screenshots/dialog_border.png) - a materially different shape from
+; (LIBRARY/documentation/screenshots/excel/dialog_border.png) - a
+; materially different shape from
 ; Number/Alignment/Font's single-choice radio lists, so it gets its own
 ; small engine rather than being forced into sh_fdlg_*'s. "Outline" is
 ; UI-only: checking it sets all four edges at once and unchecking it clears
@@ -36017,7 +36021,8 @@ sh_s_locked:   db 'Locked cell on a protected document.', 0
 sh_s_protdoc:  db 'The document is protected.', 0
 
 ; Stage 1.8/2.x: matches real Excel 2.0/2.1's own Format menu shape
-; (VM_screenshots/menu_format.png) - Number.../Alignment.../Font... open
+; (LIBRARY/documentation/screenshots/excel/menu_format.png) -
+; Number.../Alignment.../Font... open
 ; dialogs (sh_docmd_format's AL 0/1/2 is sh_fdlg_open's own kind number, so
 ; this array's first 3 entries must stay in that order). Border... is real
 ; (sh_bdlg_*). Row Height.../Column Width... are real too and take A TYPED
@@ -36037,8 +36042,9 @@ sh_s_protdoc:  db 'The document is protected.', 0
 ; the widths per column and 81.60 the heights per row, the height in POINTS
 ; because that is Excel's unit for it. sh_gridhit walks both now.
 sh_m_format:    db 'Format', 0
-; VM_screenshots/menu_format_full.png: Number/Alignment/Font/Border/CELL
-; PROTECTION/Row Height/Column Width/Justify. Cell Protection sits between
+; LIBRARY/documentation/screenshots/excel/menu_format_full.png:
+; Number/Alignment/Font/Border/CELL PROTECTION/Row Height/Column
+; Width/Justify. Cell Protection sits between
 ; Border and Row Height, which is not where it would have been guessed.
 sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_fprot, sh_it_frowh, sh_it_fcolw
 sh_it_fprot:     db 'Cell Protection...', 0
@@ -36087,11 +36093,13 @@ sh_it_run:     db 'Run', 0
 ; MENU_DIS: the item is drawn with a check in the left margin. It is 2 rather
 ; than 1 so the two can never be confused, and sh_mdrop_draw handles both.
 sh_m_edit:     db 'Edit', 0
-; READ OFF THE REAL MENU (VM_screenshots/menu_edit_full.png, and the Reference
-; Guide's own picture of it on p.117): Can't Undo / Can't Repeat / Cut / Copy /
-; Paste / Clear... / Paste Special... / Paste Link / Delete... / Insert... /
-; Fill Right / Fill Down. PASTE SPECIAL AND PASTE LINK COME AFTER CLEAR, not
-; after Paste, which is where they would have gone from memory.
+; READ OFF THE REAL MENU
+; (LIBRARY/documentation/screenshots/excel/menu_edit_full.png, and the
+; Reference Guide's own picture of it on p.117): Can't Undo / Can't Repeat /
+; Cut / Copy / Paste / Clear... / Paste Special... / Paste Link / Delete... /
+; Insert... / Fill Right / Fill Down. PASTE SPECIAL AND PASTE LINK COME
+; AFTER CLEAR, not after Paste, which is where they would have gone from
+; memory.
 sh_i_edit:     dw sh_it_undo, sh_it_repeat, sh_it_cut, sh_it_copy, sh_it_paste, sh_it_clear, sh_it_pastesp, sh_it_pastelk, sh_it_delete, sh_it_insert, sh_it_fillright, sh_it_filldown
 sh_it_undo:    db MENU_DIS, "Can't Undo", 0     ; REWRITTEN by sh_undo_label
                times 10 db 0                      ; (81.57): "Undo Paste Special"
@@ -36124,8 +36132,9 @@ sh_it_chartexp: db 'Export Chart as BMP...', 0
 ; doc shows) rather than drawing a separate checkmark glyph.
 sh_m_options:  db 'Options', 0
 ; Real Excel's Options menu puts Protect Document... between Display... and
-; Calculation... (VM_screenshots/menu_options_full.png). Gridlines and
-; Formulas are items here where Excel keeps them inside Display... - that
+; Calculation...
+; (LIBRARY/documentation/screenshots/excel/menu_options_full.png). Gridlines
+; and Formulas are items here where Excel keeps them inside Display... - that
 ; divergence is 81.31's, not this one's.
 sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_prot_off, sh_it_calc
 sh_it_prot_off: db 'Protect Document', 0

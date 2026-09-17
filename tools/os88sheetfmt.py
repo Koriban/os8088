@@ -13,8 +13,9 @@ file they agree about is one no other program can open.  So these come from the
 published grammars instead —
 
   * SYLK and DIF from Jeff Walden, *File Formats for Popular PC Software: A
-    Programmer's Reference* (the copy under `File_Formats/`), which is also
-    what corrected SHEET's own DIF value-indicator line when it was written.
+    Programmer's Reference* (the copy under
+    `LIBRARY/documentation/File_Formats/`), which is also what corrected
+    SHEET's own DIF value-indicator line when it was written.
   * BIFF2 from the OpenOffice.org *Microsoft Excel File Format* document —
     record ids 0001H BLANK / 0002H INTEGER / 0003H NUMBER / 0004H LABEL /
     0005H BOOLERR / 0006H FORMULA / 0009H BOF / 000AH EOF, the BIFF2 cell
