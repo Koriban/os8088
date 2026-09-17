@@ -103010,18 +103010,18 @@ the real Excel 2.1 captures in `VM_screenshots/` and SHEET's `sh_i_*` tables.
 Neither reference is in this repository: naming them is provenance, not a
 path anyone can open here.
 
-#### 81.39.1 Functions — 123 of ~131
+#### 81.39.1 Functions — 127 of ~131
 
-**8 missing, all one piece of work — the database family (§81.65's 11) and
-`CELL` (§81.66) both closed 2026-09-17:**
+**4 missing, and all four are the regression half of one piece of work —
+the database family (§81.65's 11), `CELL` (§81.66), and MDETERM/MINVERSE/
+MMULT/TRANSPOSE (§81.67's non-regression half) all closed 2026-09-17:**
 
 | group | n | functions | what it needs |
 |---|---|---|---|
-| array / matrix | 8 | `MDETERM MINVERSE MMULT TRANSPOSE LINEST LOGEST TREND GROWTH` | **array formulas** |
+| regression | 4 | `LINEST LOGEST TREND GROWTH` | least-squares arithmetic - no array formulas, matching §81.67's finding that publishing one element does not need one |
 
-`MDETERM` is the one array-category function that returns a **scalar**, so it
-alone needs no array formulas. `POWER` is in SHEET and not in the 2.1d
-directory — a later addition, harmless.
+`POWER` is in SHEET and not in the 2.1d directory — a later addition,
+harmless.
 
 #### 81.39.2 Menu commands, against the captures
 
@@ -103070,7 +103070,11 @@ Almost everything above hangs off six pieces of work:
 
 1. ~~A number-format table~~ — **done in §81.55**: the border table's sixth
    byte, Excel's 21 codes and one engine for the grid and TEXT().
-2. **Array formulas** → 8 functions, and `Data ▸ Table`.
+2. ~~Array formulas~~ — **turned out not to gate anything**: §81.67 found
+   every one of the 8 functions can answer its own top-left element without
+   multi-cell entry, matching Excel's own non-CSE behaviour, so all 8 are
+   done or in progress without it. `Data ▸ Table` remains undone - it is
+   genuinely a multi-cell feature, not just an array-returning function.
 3. ~~A database + criteria area~~ — **done in §81.65**: the 11 functions.
    `Data ▸ Set Database`/`Set Criteria` remain undone - they name a range so
    a call need not repeat it, and the functions work without them.
@@ -105225,6 +105229,77 @@ case-insensitivity, `reference` explicit and omitted (the current
 selection, after a real click), and the defaults every attribute answers
 against an untouched cell (`"format"` is `"G"`, `"prefix"` is `""`,
 `"protect"` is `1`).
+
+### 81.67 The ARRAY/MATRIX functions, one element at a time
+
+§81.39.1's last gap, and the one the cross-era survey (§81.65's own header)
+found the least evidence for as a period-standard expectation: neither
+Lotus 1-2-3 nor SuperCalc 5 exposes matrix inversion, multiplication or
+regression as a *formula* at all - both shipped the identical
+*capability* as a one-shot `/Data` menu command instead, and Multiplan has
+neither at either end of its life. TRANSPOSE, MMULT, MDETERM, MINVERSE are
+implemented **now**; LINEST, LOGEST, TREND and GROWTH are named in every
+table below (`sh_functab`, the BIFF id tables, `sh_pfunc`'s dispatch) so a
+file naming them opens as the real function rather than `#NAME?`, but
+`shm_pmatrix` answers `#VALUE!` for the four of them (`.notyet`) until
+they are done.
+
+**Sheet has no array-formula (Ctrl+Shift+Enter, multi-cell) entry at all** -
+building one is its own feature, §81.39.4's "array formulas" enabler, and
+not a prerequisite these functions were waiting on. Instead each one
+computes its REAL, WHOLE result and publishes only the array's own
+TOP-LEFT element as an ordinary value - which is exactly what Excel itself
+answers when one of these is entered as a plain cell formula without CSE:
+TRANSPOSE becomes a same-cell echo (its own (1,1) element is always the
+source's own (1,1) cell, moved nowhere), MMULT one dot product, MDETERM and
+MINVERSE still the WHOLE determinant or inverse - there is no way to answer
+element (1,1) of an inverse without doing the whole elimination, so those
+two are exactly as much engine as a real array-formula MINVERSE would need,
+just addressed at the end instead of spilled across a selected range.
+
+**MDETERM and MINVERSE share one elimination workspace**, `sh_mx_buf` - 8
+rows by 16 (`SH_MX_N` by `2*SH_MX_N`) packed-double columns, wide enough for
+MINVERSE's augmented `[A|I]` and MDETERM's plain triangulation alike, never
+both at once (`sh_mx_busy` - refused, not guarded, the same shape §81.65's
+`sh_db_busy` already uses and for the same reason: the workspace stays live
+across a whole elimination's worth of recursable `sh_getcell2` calls, not
+just one). `SH_MX_N` = 8 caps every array argument at 8 rows/columns each
+way. MDETERM triangulates with partial pivoting (the first nonzero entry at
+or below the pivot row, not the largest-magnitude one - correct, if less
+numerically robust than full partial pivoting, which nothing here has
+needed to upgrade to yet) and takes the signed product of the diagonal;
+MINVERSE runs full Gauss-Jordan to reduced row-echelon form and reads the
+inverse's own (1,1) back out of the identity half. A singular matrix
+answers `0` from MDETERM (correct - that is the determinant) and `#NUM!`
+from MINVERSE (Excel's own answer, not `#VALUE!` - a singular matrix is a
+real, well-formed argument that simply has no inverse).
+
+MMULT validates the shared dimension (`array1`'s columns against `array2`'s
+rows) and computes the one dot product `(1,1)` needs directly, with no
+matrix buffer at all - the same reasoning that lets TRANSPOSE skip one
+entirely: only one element of the answer is ever published, so only one
+element's worth of arithmetic is ever done.
+
+**Every row/column index in the elimination code is NAMED SCRATCH
+(`sh_mx_i`/`j`/`tr`/`sr`), never a register** - `sh_mx_addr` takes its row
+and column through AX/BX and returns with them clobbered, so a loop counter
+kept in a register does not survive a call to it. And **every function
+banks the FORMULA'S OWN parse position (`push si`) the instant argument
+parsing finishes**, restoring it just before answering - `fp_unpack_a`/`_b`
+take their operand through SI, so the elimination code below uses SI
+constantly as scratch, and without banking it first this is CELL's
+`"format"`/`"prefix"` bug (§81.66) again: every call would answer
+`#VALUE!`, the formula parser finding whatever the last `fp_unpack_a` left
+SI pointing at instead of the real text. Both lessons were applied from the
+start writing this rather than rediscovered by testing it - §81.66's own
+header is why.
+
+`tests/sheetmatrix.py` is the gate for the four that are done: TRANSPOSE on
+both a label and a number, MMULT and MDETERM on 2x2 matrices, MDETERM on a
+3x3 that needs a real row swap and a post-pivot elimination pass, MINVERSE
+against MDETERM's own determinant, a singular 2x2 answering `0` and
+`#NUM!` from the two respectively, and a trivial 1x1 case at each end of
+the size range.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

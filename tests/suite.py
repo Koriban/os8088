@@ -4766,6 +4766,17 @@ SOAK = [
         "cell answers (\"format\" is \"G\", \"prefix\" is \"\", \"protect\" "
         "is 1)",
         needs=("marty",), serial=True),
+    Row("sheetmatrix", "soak", py("tests/sheetmatrix.py"), 300.0,
+        "SPEC.md 81.67: TRANSPOSE MMULT MDETERM MINVERSE, each publishing "
+        "only its array's top-left element (Sheet has no array-formula "
+        "entry) - TRANSPOSE on a label and a number, MMULT and MDETERM on "
+        "2x2 matrices, MDETERM on a 3x3 needing a real row swap and a "
+        "post-pivot elimination pass, MINVERSE against MDETERM's own "
+        "determinant, a singular 2x2 answering 0 and #NUM! from the two "
+        "respectively, and a trivial 1x1 case at each end of the size "
+        "range. LINEST LOGEST TREND GROWTH are named but not yet "
+        "implemented (shm_pmatrix's own .notyet)",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

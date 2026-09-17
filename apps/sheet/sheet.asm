@@ -775,7 +775,8 @@ SHM_MACRO  equ 10                   ; 81.63: the macro functions,
 SHM_MRESUME equ 11                  ; and a run starting or carrying on
 SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
 SHM_CELL   equ 13                   ; 81.66: CELL
-SHM_N      equ 11
+SHM_MATRIX equ 14                   ; 81.67: MDETERM...GROWTH
+SHM_N      equ 12
 
 section .modc vstart=0 align=1
 sh_modc0:
@@ -797,6 +798,7 @@ sh_mverb:
     dw sh_m_pmacro, sh_m_mresume                    ; 81.63
     dw sh_m_pdatabase                                ; 81.65
     dw sh_m_pcell                                     ; 81.66
+    dw sh_m_pmatrix                                    ; 81.67
 
 sh_m_doread:
     call shm_doread
@@ -837,6 +839,10 @@ sh_m_pdatabase:                     ; 81.65
     retf
 sh_m_pcell:                         ; 81.66
     call shm_pcell
+    clc
+    retf
+sh_m_pmatrix:                       ; 81.67
+    call shm_pmatrix
     clc
     retf
 section .text
@@ -968,6 +974,10 @@ sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
 sh_pcell:                           ; 81.66: CELL
     push bp
     mov bp, SHM_CELL
+    jmp short sh_pdoor
+sh_pmatrix:                         ; 81.67: MDETERM...GROWTH
+    push bp
+    mov bp, SHM_MATRIX
 sh_pdoor:
     call ch_ovcall
     pop bp
@@ -21499,6 +21509,9 @@ sh_rpn_fid:
                                        ; again, checked the same way the four
                                        ; rows above it were
     db 125                             ; CELL (81.66), 3.11.1's own index
+    db 163, 164, 165, 83               ; MDETERM MINVERSE MMULT TRANSPOSE -
+    db 49, 51, 50, 52                  ; LINEST LOGEST TREND GROWTH (81.67),
+                                       ; revision 1.42's 3.11 once more
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -21548,6 +21561,10 @@ sh_rpn_fvar:
     times 11 db 0                     ; the DATABASE functions (81.65) - all
                                        ; eleven fixed at exactly 3 arguments
     db 1                               ; CELL is 1..2 in that table (81.66)
+    db 0, 0, 0, 0                      ; MDETERM MINVERSE MMULT TRANSPOSE -
+                                       ; every one fixed-arity
+    db 1, 1, 1, 1                      ; LINEST LOGEST TREND GROWTH are all
+                                       ; 1..4 in that table (81.67)
 sh_rpn_fvar_end:
 
 ; How many arguments a FIXED-count function takes, in sh_functab's order -
@@ -21586,6 +21603,9 @@ sh_rpn_fargc:
     db 3, 3, 3, 3, 3               ; DATABASE functions (81.65), every one
     db 3                           ; DFUNC(database, field, criteria)
     db 0                           ; CELL - variable everywhere (81.66)
+    db 1, 1, 2, 1                  ; MDETERM MINVERSE MMULT(2) TRANSPOSE
+    db 0, 0, 0, 0                  ; LINEST LOGEST TREND GROWTH - variable
+                                   ; everywhere (81.67)
 sh_rpn_fargc_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -24441,8 +24461,11 @@ sh_pfunc:
     je .doinfo                         ; whose argument stays a reference
     cmp ax, 106                        ; NOW() is nullary and reads the BIOS
     je .donow                          ; clock - nothing else here does either
-    cmp ax, SH_FID_CELL                ; 142 is CELL (81.66) - the single
-    je .docell                         ; highest id, so it is tested first
+    cmp ax, SH_FID_MDETERM              ; 143+ are the ARRAY/MATRIX functions
+    jae .domatrix                      ; (81.67) - ABOVE SH_FID_CELL's own id,
+                                        ; so this test runs first
+    cmp ax, SH_FID_CELL                ; 142 is CELL (81.66)
+    je .docell
     cmp ax, SH_FID_DATABASE            ; 131+ are the DATABASE functions
     jae .dodatabase                    ; (81.65) - ABOVE SH_FID_MACRO's own
                                         ; range, so this test runs FIRST or
@@ -24581,6 +24604,12 @@ sh_pfunc:
     mov dx, ax
     jmp .done                          ; NOT .typed, for sh_ptext's reason:
                                        ; CELL("type",...) answers with TEXT
+.domatrix:
+    call sh_pmatrix
+    mov dx, ax
+    jmp .done                          ; NOT .typed: TRANSPOSE's published
+                                       ; element may be text, whatever its
+                                       ; source cell held (81.67)
 .domacro:
     call sh_pmacro
     mov dx, ax
@@ -29844,6 +29873,15 @@ SH_FID_DATABASE equ 131              ; the first DATABASE function's id
                                      ; command (111 + 20)
 SH_FID_CELL     equ 142              ; CELL's id (81.66) - one past the last
                                      ; DATABASE function (131 + 11)
+SH_FID_MDETERM  equ 143              ; the first ARRAY/MATRIX function's id
+                                     ; (81.67) - one past CELL
+SH_FID_MINVERSE equ 144
+SH_FID_MMULT    equ 145
+SH_FID_TRANSPOSE equ 146
+SH_FID_LINEST   equ 147
+SH_FID_LOGEST   equ 148
+SH_FID_TREND    equ 149
+SH_FID_GROWTH   equ 150
 SH_MF_ACTCELL  equ 14                ; ...and ACTIVE.CELL's, counted from it
 SH_MC_NONE     equ 0                 ; what a step asked for (sh_macro_ctl):
 SH_MC_GOTO     equ 1                 ; the next cell is [sh_macro_ncol/nrow]
@@ -32217,6 +32255,730 @@ sh_ci_namecmp:
     pop di
     pop si
     pop bx
+    ret
+
+; =============================================================================
+; THE ARRAY/MATRIX FUNCTIONS (81.67): MDETERM MINVERSE MMULT TRANSPOSE
+; LINEST LOGEST TREND GROWTH. Sheet has no array-formula (Ctrl+Shift+Enter,
+; multi-cell) entry at all - building one is §81.39.4's own "array formulas"
+; enabler, a feature in its own right and not a prerequisite these eight
+; functions have to wait on. Instead every one of them computes its REAL,
+; FULL result and publishes only the array's own TOP-LEFT element as an
+; ordinary value - which is exactly what Excel itself answers for any of
+; these when the formula is entered as a plain cell (no CSE): TRANSPOSE
+; becomes a same-cell echo, MMULT one dot product, MDETERM/MINVERSE still
+; the whole determinant/inverse (there is no way to answer element (1,1) of
+; an inverse without doing the whole elimination). Documented Excel
+; behaviour, not an approximation of it.
+;
+; SH_MX_N caps every array argument at 8 rows/columns each way. sh_mx_buf
+; is ONE shared elimination workspace, 8 rows by 16 (2*SH_MX_N) packed-
+; double columns - wide enough for MINVERSE's augmented [A|I] and
+; MDETERM's plain triangulation alike, never both at once (sh_mx_busy -
+; refused, not guarded, sh_db_busy's own reason, §81.65).
+;
+; EVERY ROW/COLUMN LOOP INDEX BELOW IS NAMED SCRATCH (sh_mx_i/j/tr/sr), not
+; a register - sh_mx_addr takes its row and column in AX/BX and returns
+; through them being clobbered, so a register holding "which row am I on"
+; across a call to it does not survive the call. This is not a style
+; choice: an earlier draft kept i/j in registers and got the wrong element
+; back once past the first row, silently, because sh_mx_addr's own output
+; landed on top of the loop's own counter.
+; =============================================================================
+SH_MX_N equ 8
+SH_MX_W equ (SH_MX_N * 2)
+
+; sh_mx_addr - in: AX=row (0-based), BX=col (0-based). out: DI = the
+; address of sh_mx_buf[row][col]. Clobbers AX, BX.
+sh_mx_addr:
+    push dx
+    mov dx, ax
+    mov ax, SH_MX_W
+    mul dx
+    add ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                          ; * 8, a packed double's width
+    add ax, sh_mx_buf
+    mov di, ax
+    pop dx
+    ret
+
+; sh_mx_swaprows - in: AX=row1, BX=row2, CX=width (columns). Byte-swaps two
+; whole rows of sh_mx_buf - no floating point involved, so no fp register
+; is disturbed by a pivot swap mid-elimination.
+sh_mx_swaprows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, cx                         ; width, banked
+    push bx                            ; row2, banked - ax(row1) stays live
+    xor bx, bx
+    call sh_mx_addr                    ; di = &buf[row1][0]
+    mov si, di
+    pop ax                             ; ax = row2
+    xor bx, bx
+    call sh_mx_addr                    ; di = &buf[row2][0]
+    mov cx, dx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1                          ; cx = width * 8 bytes
+.loop:
+    jcxz .done
+    mov al, [si]
+    mov ah, [di]
+    mov [si], ah
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp .loop
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_mx_rowsub - in: sh_mx_tr = target row, sh_mx_sr = source row, CX =
+; width (columns), sh_mx_sumy = the factor (a packed double, stashed there
+; by the caller - not simultaneously used by anything else while an
+; elimination is in progress). buf[tr][k] -= factor * buf[sr][k].
+sh_mx_rowsub:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, cx
+    xor cx, cx
+.loop:
+    cmp cx, dx
+    jae .done
+    mov ax, [sh_mx_sr]
+    mov bx, cx
+    call sh_mx_addr                    ; di = &source[cx]
+    mov si, di
+    SHOUT fp_unpack_a                  ; A = source[cx]
+    push si
+    mov si, sh_mx_sumy
+    SHOUT fp_unpack_b                  ; B = the factor
+    pop si
+    SHOUT fp_mul                       ; A = factor * source[cx]
+    SHOUT fp_a_to_b                    ; B = that product
+    mov ax, [sh_mx_tr]
+    mov bx, cx
+    call sh_mx_addr                    ; di = &target[cx]
+    mov si, di
+    SHOUT fp_unpack_a                  ; A = target[cx]
+    SHOUT fp_sub                       ; A = target[cx] - factor*source[cx]
+    push di
+    SHOUT fp_pack_a
+    pop di
+    inc cx
+    jmp .loop
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_mx_loadbuf - in: AX=N (square size), DX=destination column offset;
+; sh_mx_r1/c1 = the source array's near corner. Loads
+; buf[i][offset+j] = array[r1+i][c1+j] for i,j in 0..N-1, requiring every
+; cell numeric. out: CF=1 all N*N cells loaded; CF=0 the first non-numeric
+; one stopped it (the caller raises #VALUE! and abandons the call either
+; way, so what is left loaded past that point does not matter).
+sh_mx_loadbuf:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [sh_mx_n], ax
+    mov [sh_mx_tr], dx                 ; the column offset (sh_mx_tr/sr are
+                                       ; not yet in use as row indices -
+                                       ; elimination has not started)
+    mov word [sh_mx_i], 0
+.rloop:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .ok
+    mov word [sh_mx_j], 0
+.cloop:
+    mov ax, [sh_mx_j]
+    cmp ax, [sh_mx_n]
+    jae .rnext
+    mov ax, [sh_mx_c1]
+    add ax, [sh_mx_j]
+    mov bx, [sh_mx_r1]
+    add bx, [sh_mx_i]
+    SHOUT sh_getcell2
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .bad
+    mov ax, [sh_mx_i]
+    mov bx, [sh_mx_tr]
+    add bx, [sh_mx_j]
+    call sh_mx_addr
+    push si
+    mov si, sh_acc
+    SHOUT fp_unpack_a
+    pop si
+    push di
+    SHOUT fp_pack_a
+    pop di
+    inc word [sh_mx_j]
+    jmp .cloop
+.rnext:
+    inc word [sh_mx_i]
+    jmp .rloop
+.ok:
+    stc
+    jmp .out
+.bad:
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_mx_identity - in: AX=N, DX=column offset. Writes buf[i][offset+j] = 1
+; if i==j else 0, for i,j in 0..N-1 - MINVERSE's own right half of [A|I].
+sh_mx_identity:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [sh_mx_n], ax
+    mov [sh_mx_tr], dx
+    mov word [sh_mx_i], 0
+.iloop:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .idone
+    mov word [sh_mx_j], 0
+.jloop:
+    mov ax, [sh_mx_j]
+    cmp ax, [sh_mx_n]
+    jae .inext
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_j]
+    jne .izero
+    mov ax, 1
+    SHOUT fp_i2a
+    jmp .ihave
+.izero:
+    xor ax, ax
+    SHOUT fp_i2a
+.ihave:
+    mov ax, [sh_mx_i]
+    mov bx, [sh_mx_tr]
+    add bx, [sh_mx_j]
+    call sh_mx_addr
+    push di
+    SHOUT fp_pack_a
+    pop di
+    inc word [sh_mx_j]
+    jmp .jloop
+.inext:
+    inc word [sh_mx_i]
+    jmp .iloop
+.idone:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; in: AX = the id, SI just past '('. out: AX = the value in sh_acc, SI past
+; ')'. BX CX DX DI kept, matching every other door's contract.
+shm_pmatrix:
+    push bx
+    push cx
+    push dx
+    push di
+    mov cx, ax                         ; CX = the id - DI stays free for
+                                       ; sh_mx_addr's own output throughout
+    cmp byte [sh_mx_busy], 0
+    jne .refused
+    mov byte [sh_mx_busy], 1
+    cmp cx, SH_FID_TRANSPOSE
+    je .dotranspose
+    cmp cx, SH_FID_MMULT
+    je .dommult
+    cmp cx, SH_FID_MDETERM
+    je .domdeterm
+    cmp cx, SH_FID_MINVERSE
+    je .dominverse
+    jmp .notyet                        ; LINEST LOGEST TREND GROWTH: 81.67
+                                       ; names them but does not implement
+                                       ; them yet
+; --- TRANSPOSE(array) -------------------------------------------------------
+.dotranspose:
+    SHOUT sh_pargref
+    jnc .badargs
+    cmp byte [si], ')'
+    jne .badargs
+    inc si
+    push si                            ; the FORMULA position, banked - see
+                                       ; the header comment; sh_getcell2
+                                       ; itself does not disturb SI, but
+                                       ; every OTHER exit below does, and
+                                       ; this is the one habit that is safe
+                                       ; whichever branch is reached
+    mov ax, [sh_arg1col]
+    mov bx, [sh_arg1row]
+    SHOUT sh_getcell2                  ; a transpose never moves the (1,1)
+    pop si                             ; cell - whatever it holds, plain
+    jmp .done_clean                    ; number or label, is the answer
+; --- MMULT(array1, array2) ---------------------------------------------------
+.dommult:
+    SHOUT sh_pargref
+    jnc .badargs
+    mov ax, [sh_arg1col]
+    mov [sh_mx_c1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_mx_r1], ax
+    mov ax, [sh_arg2col]
+    sub ax, [sh_mx_c1]
+    inc ax
+    mov [sh_mx_cols], ax
+    cmp byte [si], ','
+    jne .badargs
+    inc si
+    SHOUT sh_pargref
+    jnc .badargs
+    mov ax, [sh_arg1col]
+    mov [sh_mx_c1b], ax
+    mov ax, [sh_arg1row]
+    mov [sh_mx_r1b], ax
+    mov ax, [sh_arg2row]
+    sub ax, [sh_mx_r1b]
+    inc ax
+    mov [sh_mx_rows2], ax
+    cmp byte [si], ')'
+    jne .badargs
+    inc si
+    push si                            ; the FORMULA position, banked
+    mov ax, [sh_mx_cols]
+    cmp ax, [sh_mx_rows2]              ; the shared dimension must agree
+    jne .mxbad
+    cmp ax, SH_MX_N
+    ja .mxbad
+    mov word [sh_mx_sumx], 0           ; the running dot product
+    mov word [sh_mx_sumx+2], 0
+    mov word [sh_mx_sumx+4], 0
+    mov word [sh_mx_sumx+6], 0
+    mov word [sh_mx_i], 0
+.mmloop:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_cols]
+    jae .mmdone
+    mov ax, [sh_mx_c1]                 ; A[r1][c1+i]
+    add ax, [sh_mx_i]
+    mov bx, [sh_mx_r1]
+    SHOUT sh_getcell2
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .mxbad
+    mov ax, [sh_acc]
+    mov [sh_mx_sumy], ax
+    mov ax, [sh_acc+2]
+    mov [sh_mx_sumy+2], ax
+    mov ax, [sh_acc+4]
+    mov [sh_mx_sumy+4], ax
+    mov ax, [sh_acc+6]
+    mov [sh_mx_sumy+6], ax
+    mov ax, [sh_mx_c1b]                ; B[r1b+i][c1b]
+    mov bx, [sh_mx_r1b]
+    add bx, [sh_mx_i]
+    SHOUT sh_getcell2
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .mxbad
+    push si
+    mov si, sh_acc                     ; B = the just-read cell -
+    SHOUT fp_unpack_b                  ; sh_acc_load_b is not among this
+                                       ; module's vectors (81.66 hit the
+                                       ; same gap); fp_unpack_b is
+    mov si, sh_mx_sumy
+    SHOUT fp_unpack_a
+    pop si
+    SHOUT fp_mul                       ; A = a*b
+    SHOUT fp_a_to_b                    ; B = a*b
+    push si
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_a                  ; A = running sum
+    pop si
+    SHOUT fp_add                       ; A = sum + a*b
+    push di
+    mov di, sh_mx_sumx
+    SHOUT fp_pack_a
+    pop di
+    inc word [sh_mx_i]
+    jmp .mmloop
+.mmdone:
+    push si
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_a
+    pop si
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+; --- MDETERM(array) -----------------------------------------------------------
+.domdeterm:
+    call sh_mx_getsquare
+    jnc .badargs
+    push si                            ; the FORMULA position, banked
+    mov ax, [sh_mx_rows]
+    cmp ax, [sh_mx_cols]
+    jne .mxbad
+    cmp ax, SH_MX_N
+    ja .mxbad
+    mov [sh_mx_n], ax
+    xor dx, dx
+    call sh_mx_loadbuf
+    jnc .mxbad
+    mov byte [sh_mx_const], 0          ; the sign, 0=+, 1=- (not
+                                       ; simultaneously the `const`
+                                       ; argument here - that is only the
+                                       ; regression family's)
+    mov word [sh_mx_j], 0
+.detloop:
+    mov ax, [sh_mx_j]
+    cmp ax, [sh_mx_n]
+    jae .detdone
+    mov ax, [sh_mx_j]
+    mov [sh_mx_i], ax
+.findpivot:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .havepivot
+    mov bx, [sh_mx_j]
+    call sh_mx_addr
+    mov bx, di
+    SHOUT fp_iszero                    ; CF=1 the block at BX is all zero
+    jnc .havepivot                     ; CF=0: nonzero, use this row
+    inc word [sh_mx_i]
+    jmp .findpivot
+.havepivot:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .singular
+    cmp ax, [sh_mx_j]
+    je .noswap
+    mov ax, [sh_mx_j]
+    mov bx, [sh_mx_i]
+    mov cx, [sh_mx_n]
+    call sh_mx_swaprows
+    xor byte [sh_mx_const], 1          ; a row swap flips the sign
+.noswap:
+    mov ax, [sh_mx_j]
+    inc ax
+    mov [sh_mx_i], ax
+.elimloop:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .elimdone
+    mov ax, [sh_mx_i]                  ; factor = buf[i][j] / buf[j][j]
+    mov bx, [sh_mx_j]
+    call sh_mx_addr
+    mov si, di
+    SHOUT fp_unpack_a
+    mov ax, [sh_mx_j]
+    mov bx, [sh_mx_j]
+    call sh_mx_addr
+    mov si, di
+    SHOUT fp_unpack_b
+    SHOUT fp_div
+    push di
+    mov di, sh_mx_sumy
+    SHOUT fp_pack_a
+    pop di
+    mov ax, [sh_mx_i]
+    mov [sh_mx_tr], ax
+    mov ax, [sh_mx_j]
+    mov [sh_mx_sr], ax
+    mov cx, [sh_mx_n]
+    call sh_mx_rowsub
+    inc word [sh_mx_i]
+    jmp .elimloop
+.elimdone:
+    inc word [sh_mx_j]
+    jmp .detloop
+.singular:
+    xor ax, ax
+    SHOUT sh_acc_int
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+.detdone:
+    mov ax, 1
+    SHOUT fp_i2a
+    push di
+    mov di, sh_mx_sumx                 ; the running product
+    SHOUT fp_pack_a
+    pop di
+    mov word [sh_mx_j], 0
+.prodloop:
+    mov ax, [sh_mx_j]
+    cmp ax, [sh_mx_n]
+    jae .proddone
+    mov bx, ax
+    call sh_mx_addr
+    mov si, di
+    SHOUT fp_unpack_a
+    push si
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_b
+    pop si
+    SHOUT fp_mul
+    push di
+    mov di, sh_mx_sumx
+    SHOUT fp_pack_a
+    pop di
+    inc word [sh_mx_j]
+    jmp .prodloop
+.proddone:
+    cmp byte [sh_mx_const], 0
+    je .possign
+    push si
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_b
+    pop si
+    SHOUT fp_azero                     ; A = 0
+    SHOUT fp_sub                       ; A = 0 - product
+    jmp .havesign
+.possign:
+    push si
+    mov si, sh_mx_sumx
+    SHOUT fp_unpack_a
+    pop si
+.havesign:
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+; --- MINVERSE(array) -----------------------------------------------------------
+.dominverse:
+    call sh_mx_getsquare
+    jnc .badargs
+    push si                            ; the FORMULA position, banked
+    mov ax, [sh_mx_rows]
+    cmp ax, [sh_mx_cols]
+    jne .mxbad
+    cmp ax, SH_MX_N
+    ja .mxbad
+    mov [sh_mx_n], ax
+    xor dx, dx
+    call sh_mx_loadbuf                 ; A into buf[.][0..n-1]
+    jnc .mxbad
+    mov ax, [sh_mx_n]
+    mov dx, [sh_mx_n]                  ; the identity into buf[.][n..2n-1]
+    call sh_mx_identity
+    mov word [sh_mx_j], 0
+.gjloop:
+    mov ax, [sh_mx_j]
+    cmp ax, [sh_mx_n]
+    jae .gjdone
+    mov ax, [sh_mx_j]
+    mov [sh_mx_i], ax
+.gjfind:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .gjcheck
+    mov bx, [sh_mx_j]
+    call sh_mx_addr
+    mov bx, di
+    SHOUT fp_iszero
+    jnc .gjcheck
+    inc word [sh_mx_i]
+    jmp .gjfind
+.gjcheck:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .singular2
+    cmp ax, [sh_mx_j]
+    je .gjnoswap
+    mov ax, [sh_mx_j]
+    mov bx, [sh_mx_i]
+    mov cx, [sh_mx_n]
+    shl cx, 1                          ; the WHOLE augmented row
+    call sh_mx_swaprows
+.gjnoswap:
+    mov ax, [sh_mx_j]                  ; normalize row j by its own pivot
+    mov bx, [sh_mx_j]
+    call sh_mx_addr
+    mov si, di
+    SHOUT fp_unpack_a
+    push di
+    mov di, sh_mx_sumy                 ; the divisor, stashed for the whole
+    SHOUT fp_pack_a                    ; row
+    pop di
+    mov word [sh_mx_i], 0
+.gjnormloop:
+    mov ax, [sh_mx_n]
+    shl ax, 1
+    cmp word [sh_mx_i], ax
+    jae .gjnormdone
+    mov ax, [sh_mx_j]
+    mov bx, [sh_mx_i]
+    call sh_mx_addr
+    mov si, di
+    SHOUT fp_unpack_a
+    push si
+    mov si, sh_mx_sumy
+    SHOUT fp_unpack_b
+    pop si
+    SHOUT fp_div
+    push di
+    SHOUT fp_pack_a
+    pop di
+    inc word [sh_mx_i]
+    jmp .gjnormloop
+.gjnormdone:
+    mov word [sh_mx_i], 0              ; eliminate every OTHER row
+.gjelimloop:
+    mov ax, [sh_mx_i]
+    cmp ax, [sh_mx_n]
+    jae .gjelimdone
+    cmp ax, [sh_mx_j]
+    je .gjelimskip
+    mov ax, [sh_mx_i]                  ; the factor is buf[i][j] itself -
+    mov bx, [sh_mx_j]                  ; row j is already normalized to 1
+    call sh_mx_addr                    ; there
+    mov si, di
+    SHOUT fp_unpack_a
+    push di
+    mov di, sh_mx_sumy
+    SHOUT fp_pack_a
+    pop di
+    mov ax, [sh_mx_i]
+    mov [sh_mx_tr], ax
+    mov ax, [sh_mx_j]
+    mov [sh_mx_sr], ax
+    mov cx, [sh_mx_n]
+    shl cx, 1
+    call sh_mx_rowsub
+.gjelimskip:
+    inc word [sh_mx_i]
+    jmp .gjelimloop
+.gjelimdone:
+    inc word [sh_mx_j]
+    jmp .gjloop
+.singular2:
+    mov byte [sh_evalerr], SH_ERR_NUM  ; #NUM!, Excel's own answer for
+    xor ax, ax                         ; MINVERSE on a singular matrix
+    SHOUT sh_acc_int
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+.gjdone:
+    xor ax, ax                         ; the inverse's (1,1) element is
+    mov bx, [sh_mx_n]                  ; buf[0][n] - row 0 of the right
+    call sh_mx_addr                    ; (identity-turned-inverse) half
+    mov si, di
+    SHOUT fp_unpack_a
+    SHOUT sh_acc_store
+    pop si
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+.notyet:
+    SHOUT sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .out
+.mxbad:
+    pop si                             ; the banked formula position, back -
+                                       ; NOT sh_skipargs: parsing is already
+                                       ; COMPLETE at every .mxbad site (a
+                                       ; dimension mismatch or a non-numeric
+                                       ; cell, found after the closing ')'
+                                       ; was already consumed), so SI is
+                                       ; already exactly where the caller
+                                       ; needs it - skipping "ahead" from
+                                       ; there would scan into whatever
+                                       ; follows this call in the formula
+                                       ; and answer #VALUE! for the wrong
+                                       ; reason, or worse
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .done_clean
+.badargs:
+    SHOUT sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .out
+.refused:
+    SHOUT sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .out
+.done_clean:
+    mov byte [sh_mx_busy], 0
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_mx_getsquare - parses ONE array argument (MDETERM/MINVERSE's shape)
+; via sh_pargref, checks the closing ')', and fills sh_mx_c1/r1/cols/rows -
+; the common prefix both share, factored out because their own bodies are
+; already long. out: CF=1 parsed cleanly (SI past ')'); CF=0 a parse error
+; (SI wherever sh_pargref left it - the caller's own .badargs handles this
+; the same way sh_pargref's own failures always are here).
+sh_mx_getsquare:
+    push ax
+    SHOUT sh_pargref
+    jnc .out
+    mov ax, [sh_arg1col]
+    mov [sh_mx_c1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_mx_r1], ax
+    mov ax, [sh_arg2col]
+    sub ax, [sh_mx_c1]
+    inc ax
+    mov [sh_mx_cols], ax
+    mov ax, [sh_arg2row]
+    sub ax, [sh_mx_r1]
+    inc ax
+    mov [sh_mx_rows], ax
+    cmp byte [si], ')'
+    jne .fail
+    inc si
+    stc
+    jmp .out
+.fail:
+    clc
+.out:
+    pop ax
     ret
 
 section .text
@@ -34822,6 +35584,15 @@ sh_f_dsum:      db 'DSUM', 0
 sh_f_dvar:      db 'DVAR', 0
 sh_f_dvarp:     db 'DVARP', 0
 sh_f_cell:      db 'CELL', 0          ; 81.66
+; 81.67: the ARRAY/MATRIX functions
+sh_f_mdeterm:   db 'MDETERM', 0
+sh_f_minverse:  db 'MINVERSE', 0
+sh_f_mmult:     db 'MMULT', 0
+sh_f_transpose: db 'TRANSPOSE', 0
+sh_f_linest:    db 'LINEST', 0
+sh_f_logest:    db 'LOGEST', 0
+sh_f_trend:     db 'TREND', 0
+sh_f_growth:    db 'GROWTH', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -34865,6 +35636,9 @@ sh_functab:
     dw sh_f_dvarp                                                    ; DATABASE
                                                                       ; functions (81.65)
     dw sh_f_cell                      ; 142 (81.66)
+    dw sh_f_mdeterm, sh_f_minverse, sh_f_mmult, sh_f_transpose        ; 143- :
+    dw sh_f_linest, sh_f_logest, sh_f_trend, sh_f_growth              ; ARRAY/
+                                                                      ; MATRIX (81.67)
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -36156,7 +36930,10 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 6148                     ; +47 for 81.65's database functions
+    OS88_BSS 7242                     ; +1094 for 81.67's array/matrix
+                                       ; functions (mostly sh_mx_buf's 1024-
+                                       ; byte elimination workspace); +47 for
+                                       ; 81.65's database functions
                                        ; (39 of scratch, 8 of two new
                                        ; vectors), +6 for 81.66's CELL (three
                                        ; more scratch words, no new vectors)
@@ -37179,7 +37956,48 @@ sh_db_varguard equ sh_db_busy + 1     ; byte: did THIS call set sh_stbusy, so
 sh_ci_which   equ sh_db_varguard + 2
 sh_ci_col     equ sh_ci_which + 2
 sh_ci_row     equ sh_ci_col + 2
-sh_bss_end        equ sh_ci_row + 2
+
+; 81.67's own scratch: the array/matrix functions. sh_mx_r1/c1/r2/c2 is the
+; first (or only) array argument's rectangle, sh_mx_r1b/c1b/r2b/c2b MMULT's
+; second; sh_mx_rows/cols and sh_mx_rows2/cols2 their sizes, capped at
+; SH_MX_N each way. sh_mx_buf is the shared elimination workspace -
+; SH_MX_N rows by SH_MX_W (twice that) columns of packed doubles, wide
+; enough to hold [A|I] for MINVERSE's Gauss-Jordan and MDETERM's plain
+; triangulation alike, never both at once (sh_mx_busy). The regression
+; family (LINEST/LOGEST/TREND/GROWTH) needs no matrix at all - just the
+; four running sums a least-squares line is built from.
+sh_mx_busy    equ sh_ci_row + 2      ; byte: an array function is running -
+                                     ; refused, not guarded, sh_db_busy's
+                                     ; own reason (81.65)
+sh_mx_r1      equ sh_mx_busy + 2
+sh_mx_c1      equ sh_mx_r1 + 2
+sh_mx_r2      equ sh_mx_c1 + 2
+sh_mx_c2      equ sh_mx_r2 + 2
+sh_mx_r1b     equ sh_mx_c2 + 2
+sh_mx_c1b     equ sh_mx_r1b + 2
+sh_mx_r2b     equ sh_mx_c1b + 2
+sh_mx_c2b     equ sh_mx_r2b + 2
+sh_mx_rows    equ sh_mx_c2b + 2
+sh_mx_cols    equ sh_mx_rows + 2
+sh_mx_rows2   equ sh_mx_cols + 2
+sh_mx_cols2   equ sh_mx_rows2 + 2
+sh_mx_sumx    equ sh_mx_cols2 + 2    ; 8: the regression family's running
+sh_mx_sumy    equ sh_mx_sumx + 8     ; sums - x, y, xy and x^2 across the
+sh_mx_sumxy   equ sh_mx_sumy + 8     ; known points, one pass (81.34's own
+sh_mx_sumx2   equ sh_mx_sumxy + 8    ; variance folds are the precedent)
+sh_mx_n       equ sh_mx_sumx2 + 8    ; word: how many points folded
+sh_mx_const   equ sh_mx_n + 2        ; byte: the `const` argument, 1 unless
+                                     ; explicitly FALSE
+sh_mx_tr      equ sh_mx_const + 2    ; word: sh_mx_rowsub's target/source
+sh_mx_sr      equ sh_mx_tr + 2       ; rows - named rather than juggled
+                                     ; through AX/BX, since sh_mx_addr wants
+                                     ; both at once and only has two input
+                                     ; registers
+sh_mx_i       equ sh_mx_sr + 2       ; word: a nested load/elimination
+sh_mx_j       equ sh_mx_i + 2        ; loop's two counters, the same reason
+sh_mx_buf     equ sh_mx_j + 2        ; SH_MX_N * SH_MX_W * 8: the shared
+                                     ; elimination workspace
+sh_bss_end        equ sh_mx_buf + (8 * 16 * 8)
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
