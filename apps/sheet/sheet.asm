@@ -773,7 +773,9 @@ SHM_TRANS  equ 8                    ; the logarithms and trigonometry,
 SHM_INFO   equ 9                    ; and ISBLANK...ERROR.TYPE
 SHM_MACRO  equ 10                   ; 81.63: the macro functions,
 SHM_MRESUME equ 11                  ; and a run starting or carrying on
-SHM_N      equ 9
+SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
+SHM_CELL   equ 13                   ; 81.66: CELL
+SHM_N      equ 11
 
 section .modc vstart=0 align=1
 sh_modc0:
@@ -793,6 +795,8 @@ sh_mverb:
     dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
     dw sh_m_ptext, sh_m_ptrans, sh_m_pinfo          ; 81.62
     dw sh_m_pmacro, sh_m_mresume                    ; 81.63
+    dw sh_m_pdatabase                                ; 81.65
+    dw sh_m_pcell                                     ; 81.66
 
 sh_m_doread:
     call shm_doread
@@ -825,6 +829,14 @@ sh_m_pmacro:                        ; 81.63
     retf
 sh_m_mresume:
     call shm_mresume
+    clc
+    retf
+sh_m_pdatabase:                     ; 81.65
+    call shm_pdatabase
+    clc
+    retf
+sh_m_pcell:                         ; 81.66
+    call shm_pcell
     clc
     retf
 section .text
@@ -948,6 +960,14 @@ sh_pinfo:
 sh_pmacro:                          ; 81.63: the macro functions
     push bp
     mov bp, SHM_MACRO
+    jmp short sh_pdoor
+sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
+    push bp
+    mov bp, SHM_DATABASE
+    jmp short sh_pdoor
+sh_pcell:                           ; 81.66: CELL
+    push bp
+    mov bp, SHM_CELL
 sh_pdoor:
     call ch_ovcall
     pop bp
@@ -1288,6 +1308,12 @@ sh_x_sh_strcpy:
 sh_x_sh_strlen:
     call sh_strlen
     retf
+sh_x_sh_foldvalue:                     ; 81.65
+    call sh_foldvalue
+    retf
+sh_x_sh_funcfinish:
+    call sh_funcfinish
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1318,6 +1344,7 @@ sh_ovshims:
     dw sh_x_sh_macro_clear, sh_x_sh_macro_cmd, sh_x_sh_macro_inputup, sh_x_sh_name_lookup
     dw sh_x_sh_recalc_all, sh_x_sh_repaint, sh_x_sh_scrollto, sh_x_sh_str_want
     dw sh_x_sh_undo_drop
+    dw sh_x_sh_foldvalue, sh_x_sh_funcfinish                          ; 81.65
 sh_entry:
     push ax
     push dx
@@ -21466,6 +21493,12 @@ sh_rpn_fid:
                                        ; here gives their numbers, and a guess
                                        ; is a file Excel runs differently -
                                        ; SYLK carries a macro, BIFF its value
+    db 42, 40, 199, 44, 43             ; DAVERAGE DCOUNT DCOUNTA DMAX DMIN -
+    db 189, 45, 195, 41, 47            ; DPRODUCT DSTDEV DSTDEVP DSUM DVAR -
+    db 196                             ; DVARP (81.65). Revision 1.42's 3.11
+                                       ; again, checked the same way the four
+                                       ; rows above it were
+    db 125                             ; CELL (81.66), 3.11.1's own index
 sh_rpn_fid_end:
 
 ; 1 = the function takes a variable number of arguments and so is written as
@@ -21512,6 +21545,9 @@ sh_rpn_fvar:
                                        ; app never passes, exactly as the
                                        ; TRUNC note above says
     times 20 db 0                     ; the macro functions, never written
+    times 11 db 0                     ; the DATABASE functions (81.65) - all
+                                       ; eleven fixed at exactly 3 arguments
+    db 1                               ; CELL is 1..2 in that table (81.66)
 sh_rpn_fvar_end:
 
 ; How many arguments a FIXED-count function takes, in sh_functab's order -
@@ -21546,6 +21582,10 @@ sh_rpn_fargc:
     db 3, 0, 1, 1, 0               ; MIRR NOW ISNONTEXT CLEAN RAND
     db 0                           ; INDIRECT
     times 20 db 0                  ; the macro functions (81.63)
+    db 3, 3, 3, 3, 3               ; DAVERAGE DCOUNT DCOUNTA DMAX DMIN - the
+    db 3, 3, 3, 3, 3               ; DATABASE functions (81.65), every one
+    db 3                           ; DFUNC(database, field, criteria)
+    db 0                           ; CELL - variable everywhere (81.66)
 sh_rpn_fargc_end:
 
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
@@ -24401,6 +24441,13 @@ sh_pfunc:
     je .doinfo                         ; whose argument stays a reference
     cmp ax, 106                        ; NOW() is nullary and reads the BIOS
     je .donow                          ; clock - nothing else here does either
+    cmp ax, SH_FID_CELL                ; 142 is CELL (81.66) - the single
+    je .docell                         ; highest id, so it is tested first
+    cmp ax, SH_FID_DATABASE            ; 131+ are the DATABASE functions
+    jae .dodatabase                    ; (81.65) - ABOVE SH_FID_MACRO's own
+                                        ; range, so this test runs FIRST or
+                                        ; the macro check below would catch
+                                        ; them too
     cmp ax, SH_FID_MACRO               ; 111+ are the MACRO functions (81.63),
     jae .domacro                       ; which act only for the step engine
     cmp ax, 93                         ; 93+ are the FINANCIAL functions, on
@@ -24525,6 +24572,15 @@ sh_pfunc:
     call sh_pfin
     mov dx, ax
     jmp .typed
+.dodatabase:
+    call sh_pdatabase
+    mov dx, ax
+    jmp .typed
+.docell:
+    call sh_pcell
+    mov dx, ax
+    jmp .done                          ; NOT .typed, for sh_ptext's reason:
+                                       ; CELL("type",...) answers with TEXT
 .domacro:
     call sh_pmacro
     mov dx, ax
@@ -29783,6 +29839,11 @@ SH_MACRO_MAXSTEPS equ 10000          ; a runaway loop ENDS rather than hangs:
                                      ; loop yields to nothing (81.8). It was
                                      ; 5000, before a macro could loop
 SH_FID_MACRO   equ 111               ; the first macro function's id...
+SH_FID_DATABASE equ 131              ; the first DATABASE function's id
+                                     ; (81.65) - one past the last macro
+                                     ; command (111 + 20)
+SH_FID_CELL     equ 142              ; CELL's id (81.66) - one past the last
+                                     ; DATABASE function (131 + 11)
 SH_MF_ACTCELL  equ 14                ; ...and ACTIVE.CELL's, counted from it
 SH_MC_NONE     equ 0                 ; what a step asked for (sh_macro_ctl):
 SH_MC_GOTO     equ 1                 ; the next cell is [sh_macro_ncol/nrow]
@@ -31012,6 +31073,1150 @@ shm_mword:
     pop di
     pop si
     pop ax
+    ret
+
+section .modc                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
+; =============================================================================
+; THE DATABASE FUNCTIONS (81.65): DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT
+; DSTDEV DSTDEVP DSUM DVAR DVARP, ids SH_FID_DATABASE and up. Every one takes
+; exactly three arguments - DFUNC(database, field, criteria) - and differs
+; from its neighbours only in WHICH of sh_foldvalue's existing accumulators it
+; reuses (sh_db_foldkind): the accumulator math is not reimplemented here, the
+; family's own job is entirely about which ROWS get folded.
+;
+; RE-ENTRANCY IS REFUSED, not guarded. sh_db_c1..sh_cr_r2 stay live across the
+; whole row-by-row, column-by-column scan - unlike sh_r1col/sh_r2col, which a
+; single sh_getcell2 call banks around itself (81.52), these would need
+; banking around EVERY recursable call inside a scan that makes many. A
+; database or criteria cell whose own formula calls another database function
+; answers #VALUE! instead (sh_db_busy), the same shape sh_stbusy already
+; refuses a nested variance fold with (81.34.1) - a database argument is a
+; fixed reference, not a value a formula is likely to compute cell by cell,
+; so the cost of refusing this is small next to a scan that has to be careful
+; everywhere instead of careful once.
+;
+; sh_db_foldkind - one byte per id, offset from SH_FID_DATABASE: which
+; existing sh_pfid this database function folds like. DAVERAGE folds like
+; AVERAGE(1), DCOUNT like COUNT(4) (numbers only), DCOUNTA like COUNTA(11)
+; (anything non-blank), DSTDEV/DSTDEVP/DVAR/DVARP like their plain namesakes
+; (77-80) - sh_foldvalue and sh_funcfinish read [sh_pfid] and cannot tell a
+; database function called them from an ordinary fold over a range.
+; =============================================================================
+sh_db_foldkind: db 1, 4, 11, 3, 2, 10, 79, 80, 0, 77, 78
+                ; DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP
+                ; DSUM DVAR DVARP
+
+; in: AX = the id, SI just past '('. out: AX = the value in sh_acc, SI past
+; ')'. BX CX DX DI kept, matching every other door's contract (82.16.10).
+shm_pdatabase:
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ax                        ; DI = the id
+    cmp byte [sh_db_busy], 0
+    jne .refused
+    mov byte [sh_db_busy], 1
+    SHOUT sh_pargref                   ; --- argument 1: the database range --
+    jnc .badargs
+    mov ax, [sh_arg1col]
+    mov [sh_db_c1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_db_r1], ax
+    mov ax, [sh_arg2col]
+    mov [sh_db_c2], ax
+    mov ax, [sh_arg2row]
+    mov [sh_db_r2], ax
+    cmp byte [si], ','
+    jne .badargs
+    inc si
+    SHOUT sh_pcmp                      ; --- argument 2: the field ----------
+    call sh_dbresolve
+    jnc .badargs
+    mov [sh_db_fcol], ax
+    cmp byte [si], ','
+    jne .badargs
+    inc si
+    SHOUT sh_pargref                   ; --- argument 3: the criteria range -
+    jnc .badargs
+    mov ax, [sh_arg1col]
+    mov [sh_cr_c1], ax
+    mov ax, [sh_arg1row]
+    mov [sh_cr_r1], ax
+    mov ax, [sh_arg2col]
+    mov [sh_cr_c2], ax
+    mov ax, [sh_arg2row]
+    mov [sh_cr_r2], ax
+    cmp byte [si], ')'
+    jne .badargs
+    inc si
+    ; --- pick the fold-kind and reset the accumulator, exactly as sh_pfunc's
+    ; own .fold branch does for SUM/AVERAGE/... (24436) ---
+    mov bx, di
+    sub bx, SH_FID_DATABASE
+    mov al, [cs:bx+sh_db_foldkind]
+    xor ah, ah
+    cmp ax, 77
+    jb .novar
+    cmp byte [sh_stbusy], 0
+    jne .statbusy
+    mov byte [sh_stbusy], 1
+    mov byte [sh_db_varguard], 1
+    jmp .havekind
+.statbusy:
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    mov byte [sh_db_busy], 0
+    xor ax, ax
+    jmp .typedonly
+.novar:
+    mov byte [sh_db_varguard], 0
+.havekind:
+    mov [sh_pfid], ax
+    mov word [sh_pcnt], 0
+    mov word [sh_phave], 0
+    cmp ax, 10                         ; DPRODUCT folds like PRODUCT, which
+    jne .zeroacc                       ; sh_pfunc's own .fold seeds at 1 - a
+    mov ax, 1                          ; running product seeded with 0 can
+    SHOUT fp_i2a                       ; only ever be 0
+    push di
+    mov di, sh_pacc
+    SHOUT fp_pack_a
+    pop di
+    jmp .haveacc
+.zeroacc:
+    mov word [sh_pacc], 0
+    mov word [sh_pacc+2], 0
+    mov word [sh_pacc+4], 0
+    mov word [sh_pacc+6], 0
+.haveacc:
+    mov word [sh_pacc2], 0
+    mov word [sh_pacc2+2], 0
+    mov word [sh_pacc2+4], 0
+    mov word [sh_pacc2+6], 0
+    ; --- walk the database's DATA rows, below the header ---
+    mov bx, [sh_db_r1]
+    inc bx
+.rowloop:
+    cmp bx, [sh_db_r2]
+    ja .rowsdone
+    push bx
+    call sh_dbrowmatch                 ; CF=1 if this row matches
+    pop bx
+    jnc .rownext
+    push bx
+    mov ax, [sh_db_fcol]
+    SHOUT sh_getcell2
+    jnc .rowempty                      ; no such cell: sh_foldrange skips
+    SHOUT sh_foldvalue                 ; these too (81.52)
+.rowempty:
+    pop bx
+.rownext:
+    inc bx
+    jmp .rowloop
+.rowsdone:
+    SHOUT sh_funcfinish
+    mov dx, ax
+    cmp byte [sh_db_varguard], 0
+    je .clean
+    mov byte [sh_stbusy], 0
+.clean:
+    mov byte [sh_db_busy], 0
+    mov ax, dx
+    jmp .typedonly
+.badargs:
+    SHOUT sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    mov byte [sh_db_busy], 0
+    xor ax, ax
+    jmp .typedonly
+.refused:
+    SHOUT sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+.typedonly:
+    mov byte [sh_curtype], SH_T_NUM
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbresolve - in: sh_curtype/sh_acc/sh_sacc hold an evaluated FIELD SPEC (a
+; database's column, by name or by 1-based number); sh_db_c1/r1/c2/r2 = the
+; database rectangle. out: CF=1, AX = the absolute column it names; CF=0 if
+; it names nothing - a bare number outside 1..width, or a text matching no
+; header cell in the database's own top row.
+;
+; Sets no error itself and raises none: the CALLER decides what a miss means
+; - a hard #VALUE! for the function's own field argument, or (from
+; sh_dbrowok) a criteria column with nothing to say, which Excel treats as no
+; constraint at all rather than a broken call (81.65.2).
+; -----------------------------------------------------------------------------
+sh_dbresolve:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .byname
+    SHOUT sh_acc_toint
+    jc .fail
+    or ax, ax
+    jle .fail
+    mov cx, [sh_db_c2]
+    sub cx, [sh_db_c1]
+    inc cx                             ; CX = the database's width
+    cmp ax, cx
+    jg .fail
+    dec ax
+    add ax, [sh_db_c1]
+    stc
+    jmp .out
+.byname:
+    SHOUT sh_spush
+    jnc .scanstart
+    clc                                ; the string bank is full: sh_spush
+    jmp .out                          ; already raised #VALUE!
+.scanstart:
+    mov cx, [sh_db_c1]
+.scan:
+    cmp cx, [sh_db_c2]
+    jg .notfound
+    mov ax, cx
+    mov bx, [sh_db_r1]
+    push cx
+    SHOUT sh_getcell2
+    pop cx
+    jnc .nextcol
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .nextcol
+    xor ax, ax
+    SHOUT sh_sslot                     ; SI = the banked field name
+    mov di, sh_sacc                    ; DI = this header cell's text
+    call sh_dblkstrcmp
+    or ax, ax
+    jne .nextcol
+    SHOUT sh_spop
+    mov ax, cx
+    stc
+    jmp .out
+.nextcol:
+    inc cx
+    jmp .scan
+.notfound:
+    SHOUT sh_spop
+.fail:
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbrowmatch - in: BX = a database DATA row; sh_db_c1/r1/c2/r2 and
+; sh_cr_c1/r1/c2/r2 already set (shm_pdatabase). out: CF=1 if this row
+; matches the criteria range as a whole - ANY ONE criteria row's conditions
+; ALL holding (Excel's OR-of-AND-rows shape, 81.65.2). A criteria range that
+; is only its own header, with no condition row beneath it at all, matches
+; every database row - DSUM(db,f,A1:A1) with A1 the header alone sums the
+; whole column, which is Excel's own rule too.
+; -----------------------------------------------------------------------------
+sh_dbrowmatch:
+    push bx
+    push dx
+    mov [sh_db_dbrow], bx
+    mov bx, [sh_cr_r1]
+    cmp bx, [sh_cr_r2]
+    jae .found                         ; header only: matches unconditionally
+.rowloop:
+    inc bx
+    cmp bx, [sh_cr_r2]
+    ja .nomatch                        ; every OR-arm tried, none held
+    mov [sh_db_critrow], bx
+    call sh_dbrowok
+    jc .found
+    jmp .rowloop
+.found:
+    stc
+    jmp .out
+.nomatch:
+    clc
+.out:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbrowok - in: sh_db_dbrow/sh_db_critrow set (sh_dbrowmatch); the criteria
+; and database rectangles as above. out: CF=1 if EVERY non-blank condition in
+; THIS ONE criteria row holds (AND across its columns). A blank criteria
+; header, or one naming no real database field, is skipped rather than
+; refused - an unrelated extra column in the criteria range must not break
+; every call (81.65.2).
+; -----------------------------------------------------------------------------
+sh_dbrowok:
+    push ax
+    push bx
+    push cx
+    mov ax, [sh_cr_c1]
+    mov [sh_db_critcol], ax
+.colloop:
+    mov ax, [sh_db_critcol]
+    cmp ax, [sh_cr_c2]
+    jg .allok
+    mov bx, [sh_cr_r1]
+    SHOUT sh_getcell2
+    jnc .skipcol                       ; a blank header: no constraint
+    call sh_dbresolve
+    jnc .skipcol                       ; names no real field: ignored
+    mov [sh_db_fcol2], ax
+    mov ax, [sh_db_critcol]
+    mov bx, [sh_db_critrow]
+    SHOUT sh_getcell2
+    jnc .skipcol                       ; a blank condition: no constraint
+    call sh_dbtest
+    jnc .failed
+.skipcol:
+    inc word [sh_db_critcol]
+    jmp .colloop
+.allok:
+    stc
+    jmp .out
+.failed:
+    clc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbtest - in: sh_curtype/sh_curaux/sh_acc/sh_sacc hold a just-read,
+; non-blank CONDITION cell; sh_db_fcol2/sh_db_dbrow name the database cell to
+; test it against. out: CF=1 the database cell satisfies the condition.
+;
+; Banks the condition into sh_db_cond* (type, error code, the eight-byte
+; value, and - through sh_spush's own stack - the text) BEFORE reading the
+; database cell, which may recurse into an arbitrary evaluation the same way
+; a formula cell folding a range of its own does (81.52): sh_curtype/sh_acc/
+; sh_sacc are the WHOLE machine's scratch for "the value just read", shared
+; by every evaluation whether it goes through a database function or not, so
+; this banking is the ordinary rule here and not specific to re-entrancy.
+; -----------------------------------------------------------------------------
+sh_dbtest:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, [sh_curtype]
+    mov [sh_db_condtype], al
+    mov al, [sh_curaux]
+    mov [sh_db_condaux], al
+    mov ax, [sh_acc]
+    mov [sh_db_condval], ax
+    mov ax, [sh_acc+2]
+    mov [sh_db_condval+2], ax
+    mov ax, [sh_acc+4]
+    mov [sh_db_condval+4], ax
+    mov ax, [sh_acc+6]
+    mov [sh_db_condval+6], ax
+    cmp byte [sh_db_condtype], SH_T_TEXT
+    jne .havecond
+    SHOUT sh_spush
+    jnc .havecond
+    clc                                ; the bank is full: #VALUE! already
+    jmp .out                          ; raised; this condition cannot be read
+.havecond:
+    mov ax, [sh_db_fcol2]
+    mov bx, [sh_db_dbrow]
+    SHOUT sh_getcell2                  ; sh_db_cond* is NAMED scratch, not
+                                        ; live on a call frame - nothing this
+                                        ; recurses into can reach it by name
+    call sh_dbcmp                      ; CF=1 = the database cell satisfies it
+    jc .popmatch
+    cmp byte [sh_db_condtype], SH_T_TEXT
+    jne .out
+    SHOUT sh_spop
+    clc
+    jmp .out
+.popmatch:
+    cmp byte [sh_db_condtype], SH_T_TEXT
+    jne .matched
+    SHOUT sh_spop
+.matched:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbcmp - in: sh_db_condtype/condaux/condval (+ sh_sslot depth 0 when it is
+; text) = the CONDITION; sh_curtype/sh_curaux/sh_acc/sh_sacc = the DATABASE
+; cell just read. out: CF=1 the database cell satisfies the condition.
+;
+; A NUMBER or LOGICAL condition is exact equality against a cell of the SAME
+; type - Sheet's own `=` draws the identical line (81.53), so 5 never equals
+; TRUE here either. A TEXT condition with no relational prefix is a PREFIX
+; match against the cell's text, case-insensitively, with `*`/`?` wildcards
+; if it has any (81.65.3) - Excel's own rule for a bare label criterion. A
+; TEXT condition that opens with =, <>, <=, >=, < or > compares NUMERICALLY
+; when what follows the operator parses as a clean number, or as EXACT text
+; otherwise; an operator followed by text that turns out not to be exactly
+; the operator's own three shapes (=, <>, or a bare compare) is treated as a
+; LITERAL text match including the operator characters, which will simply
+; never match real data - a documented shortfall rather than a silent wrong
+; answer, same as `~`-escaping a literal wildcard being absent from
+; sh_dbwildmatch below.
+; -----------------------------------------------------------------------------
+sh_dbcmp:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, [sh_db_condtype]
+    cmp al, SH_T_TEXT
+    je .condtext
+    cmp al, SH_T_NUM
+    je .condnumbool
+    cmp al, SH_T_BOOL
+    je .condnumbool
+    clc                                ; an ERROR condition holds for nothing
+    jmp .out
+.condnumbool:
+    cmp byte [sh_curtype], al
+    jne .no
+    SHOUT sh_acc_load_a                ; A = the database cell (sh_acc_load_b
+    push si                            ; is not among the vectors this module
+    mov si, sh_db_condval               ; has, sh_acc_load_a and fp_unpack_b
+    SHOUT fp_unpack_b                  ; both are - so the condition goes into
+    pop si                             ; B instead)
+    SHOUT fp_cmpab
+    or ax, ax
+    jne .no
+    jmp .yes
+.condtext:
+    xor ax, ax
+    SHOUT sh_sslot                     ; SI = the banked condition text
+    call sh_dbcrit_parse                ; SI past any operator; BX = the
+                                        ; outcome mask sh_pcmp itself uses
+                                        ; (1 lt, 2 eq, 4 gt), 0 = none
+    or bx, bx
+    jnz .withop
+    cmp byte [sh_curtype], SH_T_TEXT   ; no operator: a PREFIX/wildcard match
+    jne .no                           ; against the cell's OWN text, so the
+                                       ; cell has to have one
+    mov di, sh_sacc                    ; the database cell's own text
+    call sh_dbwildmatch
+    jmp .out
+.withop:
+    push si
+    SHOUT fp_atof
+    jc .textop
+    cmp byte [si], 0
+    jne .textop2
+    add sp, 2                          ; the saved SI is not needed - the
+                                        ; whole remainder parsed cleanly
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .no
+    SHOUT fp_a_to_b                    ; B = the criterion's number
+    SHOUT sh_acc_load_a                ; A = the database cell's number
+    SHOUT fp_cmpab                     ; the mask build below reads its flags
+                                       ; DIRECTLY - nothing may come between
+                                       ; this call and the first jz/jl, or it
+                                       ; is testing THAT instruction's flags
+                                       ; instead (this cost an `xor cx,cx`
+                                       ; here once: every criterion "held" as
+                                       ; equal, because xor's own ZF=1 is what
+                                       ; jz then saw)
+    mov cx, 2                          ; equal, until a flag says otherwise
+    jz .chave
+    mov cx, 1
+    jl .chave
+    mov cx, 4
+.chave:
+    test bx, cx
+    jz .no
+    jmp .yes
+.textop2:
+    add sp, 2
+    jmp .textop_di
+.textop:
+    pop si                             ; back to just past the operator
+.textop_di:
+    cmp byte [sh_curtype], SH_T_TEXT   ; a literal text compare needs a TEXT
+    jne .no                           ; cell - sh_sacc is stale for a number
+    mov di, sh_sacc
+    call sh_dblkstrcmp                 ; -1/0/1 in AX ONLY - sh_dblkstrcmp's
+                                       ; own -1/1 exits are a plain MOV, which
+                                       ; sets no flags at all, so testing
+                                       ; jl/jz right after it (as the numeric
+                                       ; branch above may, right after
+                                       ; fp_cmpab, which DOES document doing
+                                       ; this) would read whatever flags its
+                                       ; last internal compare happened to
+                                       ; leave - build the mask from AX
+                                       ; instead, with or ax,ax immediately
+                                       ; first
+    or ax, ax
+    mov cx, 2
+    jz .thave
+    mov cx, 1
+    js .thave
+    mov cx, 4
+.thave:
+    test bx, cx
+    jz .no
+.yes:
+    stc
+    jmp .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_dbcrit_parse - in: SI = a condition's text. out: SI past any leading
+; relational operator (=, <, >, <=, >=, <>); BX = sh_pcmp's own outcome mask
+; (1 lt, 2 eq, 4 gt, ORed) - 0 if the text opens with none of these six
+; spellings, and SI is UNCHANGED.
+sh_dbcrit_parse:
+    mov al, [si]
+    cmp al, '='
+    jne .notEq
+    inc si
+    mov bx, 2
+    ret
+.notEq:
+    cmp al, '<'
+    jne .notLt
+    inc si
+    cmp byte [si], '='
+    jne .notLtEq
+    inc si
+    mov bx, 3
+    ret
+.notLtEq:
+    cmp byte [si], '>'
+    jne .justLt
+    inc si
+    mov bx, 5
+    ret
+.justLt:
+    mov bx, 1
+    ret
+.notLt:
+    cmp al, '>'
+    jne .none
+    inc si
+    cmp byte [si], '='
+    jne .justGt
+    inc si
+    mov bx, 6
+    ret
+.justGt:
+    mov bx, 4
+    ret
+.none:
+    xor bx, bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbwildmatch - SI = a pattern (may hold `*` any-sequence and `?` any-one-
+; character), DI = a subject; both compared case-insensitively. A pattern
+; with NEITHER wildcard matches as a PREFIX of the subject (Excel's own rule
+; for a bare label criterion); a pattern that uses one matches the WHOLE
+; subject, standard glob semantics anchored at both ends. No escape for a
+; literal `*` or `?` - Excel's own `~` escape is not implemented (81.65.3's
+; own header names this, deliberately, rather than silently).
+;
+; The wildcard arm is the classic iterative backtrack: DX remembers the last
+; `*` seen in the pattern (0 = none yet) and CX the subject position it may
+; re-expand from, so a mismatch after a star retries one character further in
+; rather than needing real recursion this assembler has no stack frames for.
+; -----------------------------------------------------------------------------
+sh_dbwildmatch:
+    push ax
+    push bx
+    push cx
+    push dx
+    push bp
+    push si
+    push di
+    mov bx, si
+.scanwild:
+    mov al, [bx]
+    or al, al
+    jz .nowild
+    cmp al, '*'
+    je .haswild
+    cmp al, '?'
+    je .haswild
+    inc bx
+    jmp .scanwild
+.nowild:
+.prefix:
+    mov al, [si]
+    or al, al
+    jz .yes                            ; the whole pattern matched a prefix
+    mov ah, [di]
+    call sh_dblkup
+    xchg al, ah
+    call sh_dblkup
+    xchg al, ah
+    cmp al, ah
+    jne .no
+    inc si
+    inc di
+    jmp .prefix
+.haswild:
+    xor dx, dx
+.glob:
+    mov al, [si]
+    or al, al
+    jz .patend
+    cmp al, '*'
+    jne .notstar
+    mov dx, si
+    inc dx
+    mov bp, di                         ; BP, not CX - the 8086 cannot address
+                                        ; memory through CX ([cx] below is
+                                        ; illegal), and BP is otherwise free
+                                        ; here
+    inc si
+    jmp .glob
+.notstar:
+    mov ah, [di]
+    or ah, ah
+    jz .retry                          ; the subject ran out; only a star can
+                                        ; still save this
+    cmp al, '?'
+    je .onechar
+    push ax
+    call sh_dblkup                     ; AL still holds the PATTERN char
+    mov bl, al
+    pop ax
+    mov al, ah                         ; AL = the subject char now
+    call sh_dblkup
+    cmp al, bl
+    jne .retry
+.onechar:
+    inc si
+    inc di
+    jmp .glob
+.patend:
+    cmp byte [di], 0
+    je .yes
+.retry:
+    ; the classic iterative backtrack: resume the pattern right after the
+    ; last star and advance the subject position it last resumed from by
+    ; one. BP holds that resume position (not CX - the 8086 cannot address
+    ; memory through CX at all, and [bp] without a segment override
+    ; addresses SS, not DS, so every read of it below goes through DI
+    ; instead). If it is already the terminator, there is no subject left
+    ; to retry over, and advancing anyway would walk past the buffer into
+    ; whatever memory follows it, which is what let this match "Apple"
+    ; against "*an*" the first time this was tried (the subject exhausted
+    ; at the wildcard's own trailing star, then kept retrying past the NUL
+    ; and comparing the pattern's 'a' against stale bytes beyond sh_sacc)
+    or dx, dx
+    jz .no
+    mov di, bp
+    cmp byte [di], 0
+    je .no
+    mov si, dx
+    inc bp
+    mov di, bp
+    jmp .glob
+.yes:
+    stc
+    jmp .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop bp
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dblkup - AL to upper case. Preserves everything else. sh_lkup's own body
+; (27166): kept local rather than vectored, one instruction not worth a door.
+sh_dblkup:
+    cmp al, 'a'
+    jb .out
+    cmp al, 'z'
+    ja .out
+    sub al, 32
+.out:
+    ret
+
+; sh_dblkstrcmp - case-insensitive string compare, sh_lkstrcmp's own body
+; (27130): AX = -1/0/1, everything else preserved. Kept local for the same
+; reason sh_dblkup is - it is SHOUT's cost (a far call) on every character
+; that would be paid instead, not the routine's size.
+sh_dblkstrcmp:
+    push bx
+    push cx
+    push si
+    push di
+.c:
+    mov al, [si]
+    mov bl, [di]
+    call sh_dblkup
+    xchg al, bl
+    call sh_dblkup
+    xchg al, bl
+    cmp al, bl
+    jb .lo
+    ja .hi
+    or al, al
+    jz .eq
+    inc si
+    inc di
+    jmp short .c
+.eq:
+    xor ax, ax
+    jmp short .out
+.lo:
+    mov ax, -1
+    jmp short .out
+.hi:
+    mov ax, 1
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; CELL (81.66): `CELL(type_of_info [, reference])`, Excel's own compatibility
+; subset - nine attributes, from `Microsoft Excel Functions and Macros`
+; (`LIBRARY/documentation/excel_man/` p.31-33), checked against the real text
+; rather than recalled: "width" "row" "col" "protect" "address" "contents"
+; "format" "prefix" "type". GET.CELL's broader set (Excel's own note: "if you
+; need to use cell information in a macro") is not this app's macro language
+; either, so nine is the whole of it, not a chosen subset of a longer list.
+;
+; reference is a single cell OR a range, using its UPPER-LEFT corner either
+; way (sh_pargref's near corner, unreconciled the same way every other range
+; argument in this file is - "B9:A1" is not sorted into "A1:B9" anywhere
+; else here either). Omitted, it is the CURRENT SELECTION's own upper-left,
+; normalized by hand rather than through sh_selrect (not among this module's
+; vectors, and two comparisons are cheaper than adding one).
+; =============================================================================
+SH_CI_WIDTH    equ 0
+SH_CI_ROW      equ 1
+SH_CI_COL      equ 2
+SH_CI_PROTECT  equ 3
+SH_CI_ADDRESS  equ 4
+SH_CI_CONTENTS equ 5
+SH_CI_FORMAT   equ 6
+SH_CI_PREFIX   equ 7
+SH_CI_TYPE     equ 8
+SH_CI_N        equ 9
+
+sh_ci_n0: db 'width', 0
+sh_ci_n1: db 'row', 0
+sh_ci_n2: db 'col', 0
+sh_ci_n3: db 'protect', 0
+sh_ci_n4: db 'address', 0
+sh_ci_n5: db 'contents', 0
+sh_ci_n6: db 'format', 0
+sh_ci_n7: db 'prefix', 0
+sh_ci_n8: db 'type', 0
+sh_ci_names: dw sh_ci_n0, sh_ci_n1, sh_ci_n2, sh_ci_n3, sh_ci_n4, sh_ci_n5
+             dw sh_ci_n6, sh_ci_n7, sh_ci_n8
+
+; the 21 short format codes CELL("format") answers, indexed exactly as
+; sh_nf_codes (81.55) is - `Microsoft Excel Functions and Macros` p.32's own
+; table, minus the general/currency/percent/scientific/date rows the OCR
+; garbled beyond trusting: those nine (G, P0, P2, S2, D1-D4, D6-D9) survived
+; the extraction intact and are the ones the codes below were checked
+; against; the rest (F0, F2, ,0, ,2, C0, C0-, C2, C2-) follow the same
+; documented convention every other Excel-compatible reader of this table
+; agrees on
+sh_ci_f0: db 'G', 0
+sh_ci_f1: db 'F0', 0
+sh_ci_f2: db 'F2', 0
+sh_ci_f3: db ',0', 0
+sh_ci_f4: db ',2', 0
+sh_ci_f5: db 'C0', 0
+sh_ci_f6: db 'C0-', 0
+sh_ci_f7: db 'C2', 0
+sh_ci_f8: db 'C2-', 0
+sh_ci_f9: db 'P0', 0
+sh_ci_f10: db 'P2', 0
+sh_ci_f11: db 'S2', 0
+sh_ci_f12: db 'D4', 0
+sh_ci_f13: db 'D1', 0
+sh_ci_f14: db 'D2', 0
+sh_ci_f15: db 'D3', 0
+sh_ci_f16: db 'D7', 0
+sh_ci_f17: db 'D6', 0
+sh_ci_f18: db 'D9', 0
+sh_ci_f19: db 'D8', 0
+sh_ci_f20: db 'D4', 0
+sh_ci_fmtcodes: dw sh_ci_f0, sh_ci_f1, sh_ci_f2, sh_ci_f3, sh_ci_f4, sh_ci_f5
+                dw sh_ci_f6, sh_ci_f7, sh_ci_f8, sh_ci_f9, sh_ci_f10
+                dw sh_ci_f11, sh_ci_f12, sh_ci_f13, sh_ci_f14, sh_ci_f15
+                dw sh_ci_f16, sh_ci_f17, sh_ci_f18, sh_ci_f19, sh_ci_f20
+
+sh_ci_pfx_left:   db 39, 0            ; "'" - `39` because an apostrophe
+                                      ; inside a NASM `db '...'` string ends
+                                      ; it early, the same reason a quote
+                                      ; character needs one below
+sh_ci_pfx_right:  db 34, 0            ; '"'
+sh_ci_pfx_center: db 94, 0            ; '^'
+sh_ci_empty:      db 0                ; General's own "": sh_snull (27168)
+                                      ; is the PACKAGE's, reached through
+                                      ; plain DS - a local copy keeps
+                                      ; .prefix's four candidate strings all
+                                      ; in the SAME segment (CS)
+
+; in: AX = the id (142, unused - CELL is the only id this door answers for),
+; SI just past '('. out: AX = the value in sh_acc or its address in sh_sacc,
+; SI past ')'. BX CX DX DI kept, matching every other door's contract.
+shm_pcell:
+    push bx
+    push cx
+    push dx
+    push di
+    SHOUT sh_pcmp                      ; --- argument 1: type_of_info -------
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .badargs
+    push si                            ; SI is the FORMULA position -
+                                       ; sh_dblkstrcmp needs it for its own
+                                       ; string compare below, and every path
+                                       ; out of the loop must give it back
+                                       ; before touching the formula text
+                                       ; again (this cost the same class of
+                                       ; bug sh_pargref's own header warns
+                                       ; about, once: every case answered
+                                       ; #VALUE! because the comma/')' check
+                                       ; right after the loop was reading
+                                       ; sh_sacc instead of the formula)
+    mov cx, 0
+.matchloop:
+    cmp cx, SH_CI_N
+    jae .matchfail
+    mov bx, cx
+    shl bx, 1
+    mov di, [cs:bx+sh_ci_names]        ; a CS-relative offset - this MODULE's
+                                       ; own data, not the package's - so
+                                       ; sh_ci_namecmp reads it through [cs:]
+                                       ; and not sh_dblkstrcmp's plain [di]
+    push cx
+    mov si, sh_sacc
+    call sh_ci_namecmp
+    pop cx
+    or ax, ax
+    je .havetype
+    inc cx
+    jmp .matchloop
+.matchfail:
+    pop si                              ; balance the stack before failing
+    jmp .badargs                        ; - an unrecognized type_of_info:
+                                        ; #VALUE!
+.havetype:
+    mov [sh_ci_which], cx
+    pop si                              ; the formula position, back
+    cmp byte [si], ','                 ; --- argument 2: reference, optional -
+    jne .noref
+    inc si
+    SHOUT sh_pargref
+    jnc .badargs
+    mov ax, [sh_arg1col]
+    mov [sh_ci_col], ax
+    mov ax, [sh_arg1row]
+    mov [sh_ci_row], ax
+    jmp .haveref
+.noref:
+    mov ax, [sh_selcol]                ; the current selection's own upper-
+    cmp ax, [sh_selcol2]               ; left, normalized by hand (sh_selrect
+    jbe .colok                         ; itself is not among this module's
+    mov ax, [sh_selcol2]               ; vectors)
+.colok:
+    mov [sh_ci_col], ax
+    mov ax, [sh_selrow]
+    cmp ax, [sh_selrow2]
+    jbe .rowok
+    mov ax, [sh_selrow2]
+.rowok:
+    mov [sh_ci_row], ax
+.haveref:
+    cmp byte [si], ')'
+    jne .badargs
+    inc si
+    mov cx, [sh_ci_which]
+    cmp cx, SH_CI_WIDTH
+    je .width
+    cmp cx, SH_CI_ROW
+    je .row
+    cmp cx, SH_CI_COL
+    je .col
+    cmp cx, SH_CI_PROTECT
+    je .protect
+    cmp cx, SH_CI_ADDRESS
+    je .address
+    cmp cx, SH_CI_CONTENTS
+    je .contents
+    cmp cx, SH_CI_FORMAT
+    je .format
+    cmp cx, SH_CI_PREFIX
+    je .prefix
+    jmp .type                          ; SH_CI_TYPE, the last of the nine
+.width:
+    mov ax, [sh_ci_col]
+    SHOUT sh_colwidth
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .out
+.row:
+    mov ax, [sh_ci_row]
+    inc ax                             ; 1-based, matching ROW() (81.31) -
+    SHOUT sh_acc_int                   ; sh_identcol/sh_pcellref's row is
+    mov byte [sh_curtype], SH_T_NUM    ; 0-based internally
+    jmp .out
+.col:
+    mov ax, [sh_ci_col]
+    inc ax                             ; 1-based, matching COLUMN()
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .out
+.protect:
+    mov ax, [sh_ci_col]
+    mov bx, [sh_ci_row]
+    SHOUT sh_bt_get                    ; AL = the border+protection byte, 0
+    test al, SH_PROT_UNLOCK            ; when no record - which is LOCKED,
+    jnz .unlocked                      ; the inverted sense §81.46's own
+    mov ax, 1                          ; header explains
+    jmp .protectdone
+.unlocked:
+    xor ax, ax
+.protectdone:
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    jmp .out
+.address:
+    mov di, sh_sacc
+    mov byte [di], '$'
+    inc di
+    mov ax, [sh_ci_col]
+    SHOUT sh_colname                   ; -> sh_colbuf, NUL-terminated
+    push si
+    mov si, sh_colbuf
+    call sh_ci_appendstr
+    pop si
+    mov byte [di], '$'
+    inc di
+    mov ax, [sh_ci_row]
+    inc ax
+    SHOUT sh_itoa                      ; -> sh_numbuf, NUL-terminated
+    push si
+    mov si, sh_numbuf
+    call sh_ci_appendstr
+    pop si
+    mov byte [di], 0                   ; sh_ci_appendstr's own contract is
+                                       ; "not including the NUL" - the LAST
+                                       ; piece has to add its own, or
+                                       ; whatever sh_sacc held before (the
+                                       ; type_of_info argument text itself,
+                                       ; still sitting past what this
+                                       ; overwrote) trails the real answer
+    mov byte [sh_curtype], SH_T_TEXT
+    jmp .out
+.contents:
+    mov ax, [sh_ci_col]
+    mov bx, [sh_ci_row]
+    SHOUT sh_getcell2                  ; leaves sh_curtype/sh_acc/sh_sacc as
+    jmp .out                          ; the target cell's own - CELL answers
+                                       ; with THAT, whatever type it is
+.format:
+    mov ax, [sh_ci_col]
+    mov bx, [sh_ci_row]
+    SHOUT sh_bt_getw                   ; AH = the number-format index, 0
+    mov bl, ah                         ; (General) when no record
+    xor bh, bh
+    shl bx, 1
+    push si                            ; SI is the FORMULA position (past the
+                                       ; closing ')' since .haveref) for the
+                                       ; WHOLE REST of this call, not scratch
+                                       ; - sh_ci_copy_cs needs it as ITS OWN
+                                       ; source pointer, and every path out
+                                       ; has to give the real one back before
+                                       ; touching the formula again (the same
+                                       ; class of bug the type-match loop
+                                       ; had, and .address already gets right
+                                       ; by banking it the same way)
+    mov si, [cs:bx+sh_ci_fmtcodes]
+    mov di, sh_sacc
+    call sh_ci_copy_cs
+    pop si
+    mov byte [sh_curtype], SH_T_TEXT
+    jmp .out
+.prefix:
+    mov ax, [sh_ci_col]
+    mov bx, [sh_ci_row]
+    SHOUT sh_getcell2
+    mov al, [sh_curfmt]
+    and al, SH_FMT_ALIGN_MASK
+    push si                            ; the FORMULA position - banked before
+                                       ; SI becomes scratch for the candidate
+                                       ; string and sh_ci_copy_cs's own source
+                                       ; pointer below (the same bug .format
+                                       ; just above had)
+    mov si, sh_ci_empty                ; General: the empty text - LOCAL, so
+                                       ; every candidate SI below is CS-
+                                       ; relative and sh_ci_copy_cs (not
+                                       ; sh_snull, resident/DS-relative) is
+                                       ; right for all four
+    cmp al, SH_FMT_ALIGN_LEFT << SH_FMT_ALIGN_SHIFT
+    jne .notleft
+    mov si, sh_ci_pfx_left
+    jmp .havepfx
+.notleft:
+    cmp al, SH_FMT_ALIGN_CENTER << SH_FMT_ALIGN_SHIFT
+    jne .notcenter
+    mov si, sh_ci_pfx_center
+    jmp .havepfx
+.notcenter:
+    cmp al, SH_FMT_ALIGN_RIGHT << SH_FMT_ALIGN_SHIFT
+    jne .havepfx
+    mov si, sh_ci_pfx_right
+.havepfx:
+    mov di, sh_sacc
+    call sh_ci_copy_cs
+    pop si                              ; the formula position, back
+    mov byte [sh_curtype], SH_T_TEXT
+    jmp .out
+.type:
+    mov ax, [sh_ci_col]
+    mov bx, [sh_ci_row]
+    SHOUT sh_getcell2
+    mov al, [sh_curtype]
+    mov di, sh_sacc
+    cmp al, SH_T_BLANK
+    jne .typenotblank
+    mov byte [di], 'b'
+    jmp .typedone
+.typenotblank:
+    cmp al, SH_T_TEXT
+    jne .typeisvalue
+    mov byte [di], 'l'
+    jmp .typedone
+.typeisvalue:
+    mov byte [di], 'v'
+.typedone:
+    mov byte [di+1], 0
+    mov byte [sh_curtype], SH_T_TEXT
+    jmp .out
+.badargs:
+    SHOUT sh_skipargs
+    mov byte [sh_evalerr], SH_ERR_VALUE
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_ci_appendstr - copy the NUL-terminated string at SI to DI (not
+; including the NUL), leaving DI just past what it wrote - "append", not
+; "copy", for CELL("address")'s three-piece build above.
+sh_ci_appendstr:
+    push ax
+.l:
+    mov al, [si]
+    or al, al
+    jz .done
+    mov [di], al
+    inc si
+    inc di
+    jmp .l
+.done:
+    pop ax
+    ret
+
+; sh_ci_copy_cs - CS:SI -> DS:DI, including the NUL. SI is a CS-RELATIVE
+; offset into this MODULE's own data (a sh_ci_fmtcodes/sh_ci_pfx_* string) -
+; plain [si] defaults to DS, the PACKAGE's segment, which is a different one
+; (82.16's whole point: the module moves CS, the package keeps DS). This and
+; sh_ci_namecmp below share the bug this fixed, the first time either was
+; tried: every CELL(...) call answered #VALUE! - the comma/close-paren
+; checks downstream of the match were reading whatever DS:[the module's own
+; CS-relative offset] happened to hold, essentially random bytes relative to
+; what was meant. Verified against the built file directly (`python3 -c
+; "open('build/CHART.OVL','rb').read()[...]"`) before this fix, which is how
+; the guess was ruled OUT rather than in - the table itself, and every
+; string in it, was byte-perfect; only the READ of it was wrong
+sh_ci_copy_cs:
+    push ax
+.l:
+    mov al, [cs:si]
+    mov [di], al
+    or al, al
+    jz .done
+    inc si
+    inc di
+    jmp .l
+.done:
+    pop ax
+    ret
+
+; sh_ci_namecmp - in: DI = a CS-RELATIVE offset (a sh_ci_names entry), SI =
+; DS-relative (sh_sacc, the argument text). out: AX = 0 if they match
+; case-insensitively, matching sh_dblkstrcmp's own contract - which this
+; cannot just call, for sh_ci_copy_cs's own reason: DI needs [cs:], SI does
+; not, and sh_dblkstrcmp reads both the same way.
+sh_ci_namecmp:
+    push bx
+    push si
+    push di
+.c:
+    mov al, [si]
+    mov bl, [cs:di]
+    call sh_dblkup
+    xchg al, bl
+    call sh_dblkup
+    xchg al, bl
+    cmp al, bl
+    jne .diff
+    or al, al
+    jz .eq
+    inc si
+    inc di
+    jmp short .c
+.eq:
+    xor ax, ax
+    jmp short .out
+.diff:
+    mov ax, 1
+.out:
+    pop di
+    pop si
+    pop bx
     ret
 
 section .text
@@ -33604,6 +34809,19 @@ sh_f_ppmt:      db 'PPMT', 0
 sh_f_rate:      db 'RATE', 0
 sh_f_irr:       db 'IRR', 0
 sh_f_mirr:      db 'MIRR', 0
+; 81.65: the DATABASE functions, in the same order sh_db_foldkind reads them
+sh_f_daverage:  db 'DAVERAGE', 0
+sh_f_dcount:    db 'DCOUNT', 0
+sh_f_dcounta:   db 'DCOUNTA', 0
+sh_f_dmax:      db 'DMAX', 0
+sh_f_dmin:      db 'DMIN', 0
+sh_f_dproduct:  db 'DPRODUCT', 0
+sh_f_dstdev:    db 'DSTDEV', 0
+sh_f_dstdevp:   db 'DSTDEVP', 0
+sh_f_dsum:      db 'DSUM', 0
+sh_f_dvar:      db 'DVAR', 0
+sh_f_dvarp:     db 'DVARP', 0
+sh_f_cell:      db 'CELL', 0          ; 81.66
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
@@ -33642,6 +34860,11 @@ sh_functab:
     dw sh_f_formula, sh_f_alert, sh_f_message, sh_f_beep, sh_f_input  ; the
     dw sh_f_for, sh_f_while, sh_f_next, sh_f_break, sh_f_actcell     ; MACRO
     dw sh_f_copy, sh_f_cut, sh_f_paste, sh_f_clear, sh_f_calcnow     ; (81.63)
+    dw sh_f_daverage, sh_f_dcount, sh_f_dcounta, sh_f_dmax, sh_f_dmin ; 131- :
+    dw sh_f_dproduct, sh_f_dstdev, sh_f_dstdevp, sh_f_dsum, sh_f_dvar ; the
+    dw sh_f_dvarp                                                    ; DATABASE
+                                                                      ; functions (81.65)
+    dw sh_f_cell                      ; 142 (81.66)
     dw 0
 sh_functab_end:
 ; -----------------------------------------------------------------------------
@@ -34933,7 +36156,10 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 6095
+    OS88_BSS 6148                     ; +47 for 81.65's database functions
+                                       ; (39 of scratch, 8 of two new
+                                       ; vectors), +6 for 81.66's CELL (three
+                                       ; more scratch words, no new vectors)
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -35844,8 +37070,10 @@ sh_v_sh_repaint             equ sh_v_sh_recalc_all + 4
 sh_v_sh_scrollto            equ sh_v_sh_repaint + 4
 sh_v_sh_str_want            equ sh_v_sh_scrollto + 4
 sh_v_sh_undo_drop           equ sh_v_sh_str_want + 4
-SH_NVEC       equ 94
-sh_v_end      equ sh_v_sh_undo_drop + 4
+sh_v_sh_foldvalue            equ sh_v_sh_undo_drop + 4    ; 81.65
+sh_v_sh_funcfinish           equ sh_v_sh_foldvalue + 4
+SH_NVEC       equ 96
+sh_v_end      equ sh_v_sh_funcfinish + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -35913,7 +37141,45 @@ sh_macro_tstep    equ sh_macro_tend + 8  ; 8: FOR's step
 sh_macro_loops    equ sh_macro_tstep + 8 ; SH_MLOOPS * SH_LF_SZ: the frames
 sh_macro_ans      equ sh_macro_loops + SH_MLOOPS * SH_LF_SZ ; SH_EDITMAX+1
 sh_macro_stmsg    equ sh_macro_ans + SH_EDITMAX + 1 ; SH_MSTMSG+1: MESSAGE
-sh_bss_end        equ sh_macro_stmsg + SH_MSTMSG + 1
+
+; 81.65's own scratch: the database and criteria rectangles, kept apart from
+; sh_arg1col/sh_arg2col (which a nested reference argument overwrites the
+; instant the NEXT argument is parsed, sh_pargref's own header) and from
+; sh_r1col/sh_r2col (sh_foldrange's own loop bounds) for the same reason -
+; these stay live across the WHOLE scan, not just across one sh_pargref call.
+sh_db_c1      equ sh_macro_stmsg + SH_MSTMSG + 1
+sh_db_r1      equ sh_db_c1 + 2
+sh_db_c2      equ sh_db_r1 + 2
+sh_db_r2      equ sh_db_c2 + 2
+sh_cr_c1      equ sh_db_r2 + 2
+sh_cr_r1      equ sh_cr_c1 + 2
+sh_cr_c2      equ sh_cr_r1 + 2
+sh_cr_r2      equ sh_cr_c2 + 2
+sh_db_fcol    equ sh_cr_r2 + 2        ; the function's OWN field argument,
+                                       ; resolved once
+sh_db_fcol2   equ sh_db_fcol + 2      ; a criteria COLUMN's own field,
+                                       ; re-resolved per column per row
+sh_db_dbrow   equ sh_db_fcol2 + 2     ; the database row sh_dbrowok is
+                                       ; testing (sh_dbrowmatch)
+sh_db_critrow equ sh_db_dbrow + 2     ; the criteria row under test
+sh_db_critcol equ sh_db_critrow + 2   ; the criteria column under test
+sh_db_condtype equ sh_db_critcol + 2  ; byte: a banked condition cell's...
+sh_db_condaux  equ sh_db_condtype + 1 ; ...type and error code...
+sh_db_condval  equ sh_db_condaux + 1  ; 8: ...and its packed double, banked
+                                       ; across the database cell's own read
+                                       ; (sh_dbtest)
+sh_db_busy    equ sh_db_condval + 8   ; byte: a database function is running
+                                       ; - re-entrancy is REFUSED, not guarded
+                                       ; (see shm_pdatabase's own header)
+sh_db_varguard equ sh_db_busy + 1     ; byte: did THIS call set sh_stbusy, so
+                                       ; it knows to clear it again
+
+; 81.66's own scratch: CELL's parsed type_of_info and the (col,row) it is
+; answering about, from an explicit reference or the current selection
+sh_ci_which   equ sh_db_varguard + 2
+sh_ci_col     equ sh_ci_which + 2
+sh_ci_row     equ sh_ci_col + 2
+sh_bss_end        equ sh_ci_row + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

@@ -4746,6 +4746,26 @@ SOAK = [
         "ALERT then INPUT pausing a run - started from Macro > Run by name "
         "and by reference; and a macro command in a worksheet formula inert",
         needs=("marty",), serial=True),
+    Row("sheetdb", "soak", py("tests/sheetdb.py"), 400.0,
+        "SPEC.md 81.65: the eleven DATABASE functions - DAVERAGE DCOUNT "
+        "DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP - each "
+        "evaluated from a formula cached with a wrong value and read back "
+        "from SHEET's SYLK save. The field argument by name and by number; "
+        "criteria by exact equality, prefix, wildcard (`*`/`?`) and a "
+        "relational operator (`>15`); AND across one criteria row's columns "
+        "and OR across its rows; and DCOUNT counting numbers only against "
+        "DCOUNTA counting anything non-blank, over a Fruit row whose own "
+        "Amount is deliberately the text \"N/A\"",
+        needs=("marty",), serial=True),
+    Row("sheetcell", "soak", py("tests/sheetcell.py"), 300.0,
+        "SPEC.md 81.66: CELL's nine attributes - width row col protect "
+        "address contents format prefix type - checked against the real "
+        "text of Microsoft Excel Functions and Macros. type_of_info matched "
+        "case-insensitively; reference explicit and omitted (the current "
+        "selection, after a real click); and the defaults an untouched "
+        "cell answers (\"format\" is \"G\", \"prefix\" is \"\", \"protect\" "
+        "is 1)",
+        needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
         "computed by SHEET and checked against the host's own arithmetic. "

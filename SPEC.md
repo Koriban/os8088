@@ -102991,6 +102991,17 @@ reader that had not been written by the same hand as the writer.**
 > and a label running on into empty cells (§81.54). Every inventory in this
 > tree has gone stale within days of being written - quote a count only after
 > re-making it.
+>
+> **Function count updated 2026-09-17**: the eleven database functions closed
+> (§81.65), following a cross-era survey of VisiCalc, Lotus 1-2-3, SuperCalc
+> 5, Quattro Pro and Multiplan that found database functions were the one
+> family every DOS-era competitor but Multiplan shipped the identical way,
+> where array formulas turned out to be more of an Excel design bet (§81.65's
+> own header has the finding). §81.39.2's Data menu is UNCHANGED - Set
+> Database and Set Criteria are a convenience that lets a user omit re-typing
+> the ranges each call, not a requirement for the functions to work, and
+> remain undone. CELL closed the same day (§81.66) - the cheapest of the
+> three original gaps, needing no enabler.
 
 Counted, not recalled — the functions against `Microsoft Excel Functions and
 Macros.pdf`'s worksheet-function directory and SHEET's own table
@@ -102999,15 +103010,14 @@ the real Excel 2.1 captures in `VM_screenshots/` and SHEET's `sh_i_*` tables.
 Neither reference is in this repository: naming them is provenance, not a
 path anyone can open here.
 
-#### 81.39.1 Functions — 111 of ~131
+#### 81.39.1 Functions — 123 of ~131
 
-**20 missing, in three pieces of work:**
+**8 missing, all one piece of work — the database family (§81.65's 11) and
+`CELL` (§81.66) both closed 2026-09-17:**
 
 | group | n | functions | what it needs |
 |---|---|---|---|
-| database | 11 | `DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM DVAR DVARP` | a **database + criteria area** |
 | array / matrix | 8 | `MDETERM MINVERSE MMULT TRANSPOSE LINEST LOGEST TREND GROWTH` | **array formulas** |
-| information | 1 | `CELL` | an attribute table to answer from |
 
 `MDETERM` is the one array-category function that returns a **scalar**, so it
 alone needs no array formulas. `POWER` is in SHEET and not in the 2.1d
@@ -103061,15 +103071,17 @@ Almost everything above hangs off six pieces of work:
 1. ~~A number-format table~~ — **done in §81.55**: the border table's sixth
    byte, Excel's 21 codes and one engine for the grid and TEXT().
 2. **Array formulas** → 8 functions, and `Data ▸ Table`.
-3. **A database + criteria area** → 11 functions, and 6 of the Data menu.
+3. ~~A database + criteria area~~ — **done in §81.65**: the 11 functions.
+   `Data ▸ Set Database`/`Set Criteria` remain undone - they name a range so
+   a call need not repeat it, and the functions work without them.
 4. **Per-row geometry** → row heights, and `Justify` (per-column widths are
    §81.56's).
 5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
 6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
 Beside them: **a macro recorder and a real macro language** → the Macro menu.
-The cheap remainder, needing none of them: `CELL`, `MDETERM`, Calculate Now,
-and a right-aligned label running on to its left.
+The cheap remainder, needing none of them: ~~`CELL`~~ — **done in §81.66**,
+`MDETERM`, Calculate Now, and a right-aligned label running on to its left.
 
 
 ### 81.40 CSV and tab-delimited text
@@ -105039,6 +105051,180 @@ a SYLK, DIF or BIFF file and draws a bar chart of one column of it; **Sheet's
 Data > Chart Column...** opens a live chart window onto the column the user has
 selected. `apps/os88chart.inc` is the half they share, so the two cannot drift
 into drawing the same data differently.
+
+### 81.65 The DATABASE functions, and the criteria engine underneath them
+
+§81.39.4's own dependency ordering named "a database + criteria area" as the
+first of six enablers, and a cross-era survey of what other spreadsheets of
+this machine's period actually shipped is what decided it should go first:
+Lotus 1-2-3, SuperCalc 5 and Quattro Pro's own lineage all implement a
+labeled database range plus a separate criteria range plus a family of `D*`
+aggregate functions the same way, independently - the one place every DOS
+competitor checked agreed, where array formulas (§81.39.1's other big piece)
+turned out to be more of an Excel/GUI-era design bet, shipped by its DOS
+rivals as one-shot menu commands rather than live formulas. Multiplan -
+Excel's own direct ancestor - has neither at either end of its 1982-1985
+life, which if anything argues the other five vendors converging on the
+same shape is a real signal and not survivorship.
+
+**All eleven, DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT DSTDEV DSTDEVP DSUM
+DVAR DVARP**, take exactly three arguments - `DFUNC(database, field,
+criteria)` - and this section is really about the criteria engine
+underneath them: which rows get folded. Once a row is chosen, the actual
+accumulation is not reimplemented at all - `shm_pdatabase` sets `[sh_pfid]`
+to whichever EXISTING fold id (SUM 0, AVERAGE 1, MIN 2, MAX 3, COUNT 4,
+PRODUCT 10, COUNTA 11, VAR 77, VARP 78, STDEV 79, STDEVP 80) the function
+folds like and hands each matching row's field cell to `sh_foldvalue`, the
+same routine an ordinary `=SUM(A1:A9)` already walks through, then reads
+the answer back off `sh_funcfinish` - the same two routines §81.34's
+variance folds and every plain fold before them already use. DAVERAGE folds
+like AVERAGE, DCOUNT like COUNT (numbers only), DCOUNTA like COUNTA
+(anything non-blank) - the same split that let COUNT and COUNTA first
+disagree (§81.43) now lets DCOUNT and DCOUNTA disagree over one field: a
+Fruit row whose own Amount is the text `N/A` counts toward DCOUNTA (a name
+is there) and not DCOUNT (a number is not), `tests/sheetdb.py`'s own worked
+example.
+
+**The field argument** is either a 1-based column NUMBER within the
+database rectangle, or TEXT matched case-insensitively against the
+database's own header row (the rectangle's first row) - `sh_dbresolve`,
+shared verbatim by the function's own field argument and by every criteria
+column's header, so `DSUM(A1:D7,"Amount",...)` and
+`DSUM(A1:D7,3,F1:F2)` name the same column.
+
+**The criteria range** is itself a small table: its own first row is
+headers, matched against the database's headers the identical way the
+field argument is; every row beneath it is one set of conditions.  A
+database row is included when **ANY ONE** criteria row's conditions **ALL**
+hold - OR across the criteria rows, AND across one row's own columns,
+Excel's own shape and the one every DOS-era competitor checked shares. A
+criteria header that is blank, or that names no real database field, is
+skipped rather than refused: an unrelated extra column in the criteria
+range must not break every call. A criteria range that is only its own
+header row, with no condition row beneath it at all, matches every database
+row - `DSUM(db,f,A1:A1)` with `A1` the header alone sums the whole column,
+which is Excel's rule too.
+
+**One condition cell, tested against one database cell** (`sh_dbcmp`):
+
+- **blank** - no constraint (already filtered out one level up, in
+  `sh_dbrowok`)
+- **a NUMBER or a LOGICAL** - exact equality against a database cell of the
+  SAME type; Sheet's own `=` operator draws the identical line (§81.53), so
+  `5` never equals `TRUE` here either
+- **TEXT with no relational prefix** - a case-insensitive PREFIX match
+  against the database cell's own text if the criterion has neither `*` nor
+  `?` in it (Excel's own rule for a bare label criterion - `"B"` matches
+  `"Banana"`), or a full `*`/`?` WILDCARD match, anchored at both ends, if
+  it does (`"*an*"` matches `"Banana"` and `"Eggplant"`, not `"Apple"` or
+  `"Carrot"`). Either way the database cell has to be text; a number is
+  never coerced to its printed digits for this
+- **TEXT opening with `=`, `<>`, `<=`, `>=`, `<` or `>`** - what follows the
+  operator is tried as a NUMBER first (`fp_atof`, the same reader CSV's
+  import uses, §81.40); if it parses cleanly, the two are compared
+  NUMERICALLY against a NUMBER database cell (`">15"` matches `20` and not
+  `10`). If it does not parse as a clean number, the remainder is compared
+  as EXACT TEXT instead, against a text database cell. An operator followed
+  by something that is neither - a fraction of a number, say - is
+  therefore a literal text match including the operator characters, which
+  will simply never match real data: a documented shortfall rather than a
+  silent wrong answer, the same shape as `~`-escaping a literal `*` or `?`
+  being absent from the wildcard match
+
+**Re-entrancy is REFUSED, not guarded** (`sh_db_busy`), the identical shape
+§81.34.1 already uses for a variance fold caught inside another one
+(`sh_stbusy`, which a database function folding like VAR/VARP/STDEV/STDEVP
+shares and must not corrupt either - `sh_db_varguard` remembers whether THIS
+call is the one that set it, so it clears it again and only then). The
+database and criteria rectangles stay live across the WHOLE row-by-row,
+column-by-column scan - unlike `sh_r1col`/`sh_r2col`, which one
+`sh_getcell2` call banks around itself when a formula cell folds a range of
+its own (§81.52), these would need banking around EVERY recursable call a
+scan like this makes many of. A database or criteria cell whose own formula
+calls another database function answers `#VALUE!` instead. A database
+argument is a fixed reference, not a value a formula is likely to compute
+cell by cell, so the cost of refusing this is small next to a scan that has
+to be careful everywhere instead of careful once.
+
+**Where it lives.** All eleven join §81.62's tenants in `CHART.OVL` -
+`shm_pdatabase` and the criteria engine beneath it, reached through a new
+door (`sh_pdatabase`, `SHM_DATABASE`) exactly like the financial, text,
+transcendental and information families before them. Two more resident
+shims joined the vector table for it (`sh_foldvalue`, `sh_funcfinish` -
+everything else the engine calls back into was already vectored for an
+earlier family), and `CH_OVKB` rose from 28 to 29.
+
+`tests/sheetdb.py` is the gate: all eleven functions, the field argument by
+name and by number, all four criteria shapes above, AND across one
+criteria row and OR across its rows, and the DCOUNT/DCOUNTA split.
+
+### 81.66 CELL, Excel's own compatibility subset
+
+`CELL(type_of_info [, reference])` closes §81.39.1's last function, and the
+cheapest of the three gaps that section found - no enabler needed, unlike
+the database and array-formula pieces beside it. Checked against the real
+text of `Microsoft Excel Functions and Macros` (`LIBRARY/documentation/
+excel_man/`, p.31-33) rather than recalled: this era's CELL answers exactly
+**nine** attributes - `"width" "row" "col" "protect" "address" "contents"
+"format" "prefix" "type"` - Excel's own note in that manual is that CELL is
+"provided for compatibility with other worksheet programs" and a macro
+wanting more used `GET.CELL` instead, which this app's macro language
+(§81.63) does not have either, so nine is the whole of it and not a chosen
+subset of a longer one.
+
+`type_of_info` is matched case-insensitively; `reference` is a single cell
+or a range, using its UPPER-LEFT corner either way - the reference argument
+is parsed with the same `sh_pargref` every other range-taking function
+here uses, so "B9:A1" is not sorted into "A1:B9" any more than it is for
+DSUM (§81.65) or a lookup. Omitted, `reference` is the CURRENT SELECTION's
+own upper-left, normalized by hand (`sh_selcol`/`sh_selcol2`/`sh_selrow`/
+`sh_selrow2`, two comparisons) rather than through `sh_selrect` - not among
+this module's vectors, and adding one for a single caller was not worth it.
+
+Each attribute:
+
+| value | answers |
+|---|---|
+| `"width"` | the column's width in characters (§81.56's own unit - `sh_colwidth` already returns it that way) |
+| `"row"` / `"col"` | the 1-based row/column number, matching `ROW()`/`COLUMN()` (§81.31) - `sh_pcellref`'s own numbering is 0-based internally |
+| `"protect"` | 1 if locked, 0 if not - reading the border table's inverted-sense bits exactly as Options ▸ Protect Document does (§81.46): no record there means LOCKED, an untouched sheet's real default |
+| `"address"` | the cell as text, `$A$1`-style, built from `sh_colname` and `sh_itoa` |
+| `"contents"` | the cell's own value, published exactly as `sh_getcell2` leaves it - a number stays a number, a label a label, matching INDEX's own "the caller reads whatever type is there" rule |
+| `"format"` | a short code for the cell's number format (`"G"`, `"F2"`, `"C2"`, `"P0"`, `"D1"`...) - one new table, `sh_ci_fmtcodes`, indexed exactly as §81.55's own `sh_nf_codes` is, so the two stay in step by construction |
+| `"prefix"` | `'` left-aligned, `"` right-aligned, `^` centred, or `""` for General - reading the alignment bits `sh_getcell2` already publishes in `sh_curfmt` |
+| `"type"` | `"b"` blank, `"l"` label, `"v"` value - Excel's own three-letter answer |
+
+**Where it lives.** CELL joins the DATABASE family in `CHART.OVL`, through
+its own door (`sh_pcell`, `SHM_CELL`) - a single id (`SH_FID_CELL`, 142, one
+past DVARP) rather than a range, since it is the only function this door
+answers for. No new vectors: every resident routine it calls back into
+(`sh_pcmp`, `sh_pargref`, `sh_getcell2`, `sh_colwidth`, `sh_bt_get`,
+`sh_bt_getw`, `sh_colname`, `sh_itoa`, `sh_acc_int`, `sh_skipargs`) was
+already reachable from an earlier family. `CH_OVKB` rose from 29 to 30.
+
+**Two bugs, one shape, found by comparing the SAME diagnostic value against
+what it should have been rather than trusting that "it built" meant "it
+runs":** `sh_ci_names` and `sh_ci_fmtcodes` are tables of pointers INTO THIS
+MODULE'S OWN DATA - CS-relative, not the package's DS - and the first
+version dereferenced them with a plain `[si]`/`[di]`, which defaults to DS
+and so read essentially random bytes at the package's own version of that
+offset; every `CELL(...)` call answered `#VALUE!`, and the table itself
+turned out to be byte-perfect on inspection (`python3 -c
+"open('build/CHART.OVL','rb').read()[...]"` against the file directly,
+which is how the guess was ruled OUT rather than in) - only the READ of it
+was wrong. `sh_ci_namecmp` and `sh_ci_copy_cs` fixed the dereference; then
+"format" and "prefix" alone kept failing, because both reused SI - the
+FORMULA'S OWN parse position, live from `.haveref`'s own `inc si` all the
+way to `.out` - as `sh_ci_copy_cs`'s source pointer, the identical class of
+bug the type-match loop already had earlier in the same routine (and which
+`.address`'s own calls to `sh_ci_appendstr` had already, correctly, banked
+around with `push si`/`pop si` - the fix both handlers needed too).
+
+`tests/sheetcell.py` is the gate: all nine attributes, `type_of_info`
+case-insensitivity, `reference` explicit and omitted (the current
+selection, after a real click), and the defaults every attribute answers
+against an untouched cell (`"format"` is `"G"`, `"prefix"` is `""`,
+`"protect"` is `1`).
 
 ### 82.1 The offscreen canvas, and why it is not optional
 
