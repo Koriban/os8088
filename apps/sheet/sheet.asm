@@ -30120,8 +30120,16 @@ shm_mref:
     je .a1
 .r1c1:
     mov si, sh_sacc                   ; "R[1]C": relative to the ACTIVE cell,
-    call shm_r1c1                     ; which is what the recorder means - and
-    pop si                            ; "R1C1", which A1 reads as R1 and more
+    call shm_r1c1one                  ; which is what the recorder means - and
+    jnc .r1c1fail                     ; "R1C1", which A1 reads as R1 and more
+    cmp byte [si], 0                  ; than one cell (a range) is SELECT's own
+    jne .r1c1fail                     ; job (shm_mrangeref), not this one's
+    pop si
+    stc
+    ret
+.r1c1fail:
+    pop si
+    clc
     ret
 .a1:
     pop si
@@ -30133,11 +30141,11 @@ shm_mref:
     ret
 
 ; shm_mname - SI at a word that is a DEFINED NAME and nothing else, before a
-; ',' or ')': CF=1, AX/BX its cell (the near corner), SI past it. CF=0 with SI
-; where it was otherwise
+; ',' or ')': CF=1, AX/BX its near corner, CX/DX its far corner (equal to
+; AX/BX for a single cell), SI past it. CF=0 with SI where it was otherwise.
+; CX/DX are OUTPUTS now, not preserved - shm_rangeref is why (this routine
+; had exactly one caller before it, shm_mref, which never read them back)
 shm_mname:
-    push cx
-    push dx
     push di
     mov [sh_macro_mnsi], si           ; where to put SI back on a miss
     mov di, sh_ident
@@ -30184,22 +30192,22 @@ shm_mname:
     pop si
     jnc .no
     pop di
-    pop dx
-    pop cx
     stc
     ret
 .no:
     mov si, [sh_macro_mnsi]
     pop di
-    pop dx
-    pop cx
     clc
     ret
 
-; shm_r1c1 - SI = an R1C1 reference, all of the text -> CF=1, AX col, BX row
-shm_r1c1:
+; shm_r1c1one - SI = an R1C1 reference; unlike the old shm_r1c1 this does NOT
+; require the string to end there - shm_rangetext checks for ':' itself, so
+; a lone reference and the first half of a range share one parser. out: CF=1
+; AX col, BX row, SI past it; CF=0 otherwise, SI unchanged
+shm_r1c1one:
     push cx
     push dx
+    push si
     mov al, [si]
     and al, 0xDF
     cmp al, 'R'
@@ -30223,22 +30231,142 @@ shm_r1c1:
     jnz .cabs
     add bx, [sh_selcol]
 .cabs:
-    cmp byte [si], 0
-    jne .no
     cmp bx, SH_COLS                   ; unsigned: a negative offset past the
     jae .no                           ; edge wraps high and is refused too
     cmp dx, SH_ROWS
     jae .no
     mov ax, bx
     mov bx, dx
+    add sp, 2                         ; discard the banked SI - keep advancing
     pop dx
     pop cx
     stc
     ret
 .no:
+    pop si
     pop dx
     pop cx
     clc
+    ret
+
+; shm_rangetext - SI = a NUL-terminated string value: an A1 or R1C1
+; reference, ONE cell or a colon-separated RANGE of them ("H1:I2",
+; "R23C8:R24C9") - SELECT's own need, the one macro command that can select
+; more than the active cell. out: CF=1 AX/BX near corner, CX/DX far corner
+; (equal to near for one cell); CF=0 otherwise
+;
+; WHICH ONE FIRST IS NOT A COIN FLIP: "R23C8" is also a legal (if unintended)
+; A1 reference - column R, row 23 - and sh_pcellref matches it and stops,
+; leaving "C8:R24C9" behind, unconsumed but never rejected outright since
+; nothing here required the whole string yet. Trying A1 unconditionally
+; first would take that read every time. So this peeks the way
+; sh_formula_from_r1c1's own header already does: a word-start 'R' followed
+; by '[', a digit, '-' or 'C' is R1C1, anything else is A1 - the same
+; disambiguation, not a second one
+shm_rangetext:
+    mov al, [si]
+    and al, 0xDF
+    cmp al, 'R'
+    jne .doa1
+    mov al, [si+1]
+    cmp al, '['
+    je .dorc
+    cmp al, '-'
+    je .dorc
+    cmp al, '0'
+    jb .doa1
+    cmp al, '9'
+    jbe .dorc
+    and al, 0xDF
+    cmp al, 'C'
+    je .dorc
+.doa1:
+    SHOUT sh_pcellref
+    jnc .fail
+    push ax
+    push bx
+    cmp byte [si], ':'
+    jne .a1one
+    inc si
+    SHOUT sh_pcellref
+    jnc .failpop
+    mov cx, ax
+    mov dx, bx
+    cmp byte [si], 0
+    jne .failpop
+    pop bx
+    pop ax
+    jmp .have
+.a1one:
+    cmp byte [si], 0
+    jne .failpop
+    pop bx
+    pop ax
+    mov cx, ax
+    mov dx, bx
+    jmp .have
+.dorc:
+    call shm_r1c1one
+    jnc .fail
+    push ax
+    push bx
+    cmp byte [si], ':'
+    jne .rc1one
+    inc si
+    call shm_r1c1one
+    jnc .failpop
+    mov cx, ax
+    mov dx, bx
+    cmp byte [si], 0
+    jne .failpop
+    pop bx
+    pop ax
+    jmp .have
+.rc1one:
+    cmp byte [si], 0
+    jne .failpop
+    pop bx
+    pop ax
+    mov cx, ax
+    mov dx, bx
+.have:
+    stc
+    ret
+.failpop:
+    pop bx
+    pop ax
+.fail:
+    clc
+    ret
+
+; shm_mrangeref - like shm_mref, but keeps the far corner too: SELECT's own
+; need (GOTO/FOR/SET.VALUE/FORMULA's ref argument only ever wants one cell,
+; so shm_mref is untouched for them). out: CF=1 AX/BX near corner, CX/DX far
+; corner (equal to near for one cell), SI past it; CF=0 when the argument is
+; none of a reference, a name, or a reference/range as text
+shm_mrangeref:
+    SHOUT sh_pargref                  ; a literal reference, as written -
+    jnc .name                         ; sh_pargref already keeps both corners
+    mov ax, [sh_arg1col]
+    mov bx, [sh_arg1row]
+    mov cx, [sh_arg2col]
+    mov dx, [sh_arg2row]
+    stc
+    ret
+.name:
+    call shm_mname                    ; a defined name, near/far corner both
+    jc .out
+    SHOUT sh_pcmp                     ; ...or anything that ANSWERS with text
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .no
+    push si
+    mov si, sh_sacc
+    call shm_rangetext
+    pop si
+    ret
+.no:
+    clc
+.out:
     ret
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
@@ -30597,14 +30725,18 @@ shm_mskipfrom:
 
 ; --- the sheet -----------------------------------------------------------------
 shm_mselect:
-    call shm_mref
-    jc .ok
-    jmp shm_merr
-.ok:
+    call shm_mrangeref                ; AX/BX near, CX/DX far - a RANGE, not
+    jc .ok                            ; shm_mref's single cell: SELECT is the
+    jmp shm_merr                      ; one macro command that can select more
+.ok:                                  ; than the active cell
     mov [sh_selcol], ax               ; the selection moves now; the grid is
-    mov [sh_selcol2], ax              ; repainted once the step is over, never
-    mov [sh_selrow], bx               ; from inside the evaluation of it
-    mov [sh_selrow2], bx
+    mov [sh_selcol2], cx              ; repainted once the step is over, never
+    mov [sh_selrow], bx               ; from inside the evaluation of it. A
+    mov [sh_selrow2], dx              ; ref with no far corner sets col2/row2
+                                       ; to the same cell (shm_mrangeref's own
+                                       ; contract), so FORMULA's own default -
+                                       ; the active cell, sh_selcol/row - is
+                                       ; always the range's TOP-LEFT
     SHOUT sh_scrollto
     mov byte [sh_macro_dirty], 1
     SHOUT sh_skipargs
@@ -30689,6 +30821,39 @@ shm_mformula:
     call shm_mstore
     jmp short .done
 .typed:
+    cmp byte [sh_editbuf], '='        ; only a real formula can carry an R1C1
+    jne .rcskip                       ; reference - a bare label goes through
+                                       ; unconverted, so a label that happens
+                                       ; to read "R5C3" stays exactly that
+    mov [sh_rc_ccol], ax              ; the R1C1 origin is the cell the text
+    mov [sh_rc_crow], bx              ; is being entered INTO (the recorder's
+    push ax                           ; own convention), not the cell running
+    push bx                           ; the macro - ax/bx are both already it
+    mov si, sh_editbuf
+    inc si                            ; sh_formula_from_r1c1 wants no leading
+    call sh_formula_from_r1c1         ; '=' - SYLK's ;E field has none either,
+    mov byte [sh_editbuf], '='        ; and A1 text passes through unchanged
+    mov si, sh_rwdst                  ; (81.7.1's own header), so this is safe
+    mov di, sh_editbuf + 1            ; to run over EVERY typed formula, R1C1
+    xor cx, cx                        ; or not
+.rccopy:
+    mov al, [si]
+    or al, al
+    jz .rcdone
+    mov [di], al
+    inc si
+    inc di
+    inc cx
+    cmp cx, SH_EDITMAX - 1            ; sh_rw_emit already capped sh_rwdst at
+    jae .rcdone                       ; SH_EDITMAX, but the leading '=' this
+    jmp .rccopy                       ; loop restores needs its own byte back
+.rcdone:
+    mov byte [di], 0
+    inc cx                            ; the leading '=' itself
+    mov [sh_editlen], cl
+    pop bx
+    pop ax
+.rcskip:
     push word [sh_selcol]             ; sh_commit enters the edit buffer into
     push word [sh_selrow]             ; the SELECTED cell, so the target is
     mov [sh_selcol], ax               ; selected for it and put back

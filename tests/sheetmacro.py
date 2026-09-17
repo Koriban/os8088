@@ -22,7 +22,16 @@ COUNT (column A, run BY NAME from Macro > Run...):
 ASK (column B, run by REFERENCE): ALERT("Hi") - dismissed with Enter - then
     SET.VALUE(H10,INPUT("Number?")), answered 42.
 And D1, an ordinary worksheet formula =GOTO(A12): outside a run a macro
-    command does nothing and answers FALSE.
+    command does nothing and answers FALSE. Then SET.VALUE(H20,5) and
+    FORMULA("=R[-1]C*2",H21) - R1C1, the way Excel's macro recorder writes a
+    formula argument - and SELECT("R23C8:R24C9"), an R1C1 RANGE as text,
+    followed by FORMULA("top") with no ref argument at all, landing on the
+    selection's own top-left cell (SPEC.md 81.68).
+
+Writing a macro sheet's own formulas into a real Excel BIFF file - Ftab and
+Cetab function numbers, the BOF flag that says MACRO SHEET - is its own,
+separate, still-open piece (81.68's own header says why) and is not this
+gate's job.
 """
 import os
 import subprocess
@@ -41,6 +50,7 @@ import os88sym                                              # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
+import sheetdec as SD                                        # noqa: E402
 
 WORK = "build/sheetmacro"               # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetmacro.img"
@@ -82,6 +92,10 @@ COUNT = [
     'NEXT()',
     'SET.VALUE(H17,1)',                 # between the two NEXTs: runs only if
     'NEXT()',                           # the skip stops at the inner one
+    'SET.VALUE(H20,5)',
+    'FORMULA("=R[-1]C*2",H21)',         # R1C1, as Excel's recorder writes it
+    'SELECT("R23C8:R24C9")',            # a range, as text
+    'FORMULA("top")',                   # ...into its top-left, the active cell
     'RETURN()',
     'SET.VALUE(H9,1)',
 ]
@@ -102,6 +116,14 @@ def build_disk():
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
                     "360", "build/sheet.o88", "build/CHART.OVL", src],
                    check=True, stdout=subprocess.DEVNULL)
+
+
+def a1(t, r, c):
+    """SHEET's SYLK formula in A1 - outside the string constants, whose R[1]C
+    SHEET leaves alone and sheetdec's converter would not"""
+    parts = t.split('"')
+    return '"'.join(SD.r1c1_to_a1(p, r, c) if k % 2 == 0 else p
+                    for k, p in enumerate(parts))
 
 
 def plain(v):
@@ -199,6 +221,13 @@ def main():
     check((16, 7) not in got and (15, 7) not in got,
           "a FOR that runs no turn is skipped past its own NEXT, over the "
           "loop inside it", "H16 holds %r, H17 %r" % (g(15, 7), g(16, 7)))
+    h21 = got.get((20, 7))
+    check(isinstance(h21, tuple) and h21[0] == 'formula' and h21[2] == 10.0
+          and a1(h21[1], 20, 7) == 'H20*2',
+          "FORMULA(\"=R[-1]C*2\",H21) takes R1C1, the recorder's form, as =H20*2",
+          "H21 holds %r" % (h21,))
+    check(g(22, 7) == 'top', "SELECT(\"R23C8:R24C9\") selects a range, and "
+          "FORMULA goes to its top-left", "H23 holds %r" % (g(22, 7),))
     check(status == 'Hello', "MESSAGE(TRUE,\"Hello\") is on the status bar when "
           "the macro RETURNs", "the status bar reads %r" % (status,))
     done("sheetmacro")

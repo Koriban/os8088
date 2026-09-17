@@ -105331,6 +105331,89 @@ regression family against one exact line (`y=2x+1`) and one exact curve
 one, `const=FALSE`'s through-the-origin fit, and `new_x's` given against
 omitted, LOGEST/GROWTH the same shape one level exponentiated.
 
+### 81.68 Macro arguments in R1C1, the way the recorder writes them
+
+§81.63 already let a reference ARGUMENT be R1C1 text - `SELECT("R[1]C")` -
+but two narrower gaps sat underneath that: a macro's own FORMULA text could
+not carry an R1C1 reference (`FORMULA("=R[-1]C*2",H21)` answered `#NAME?`,
+because "as if typed" went straight to the ordinary A1-only entry parser),
+and SELECT's reference argument could only ever be ONE cell, never a range
+(`SELECT("R23C8:R24C9")` did nothing at all). Both close here; a macro
+sheet's own **BIFF encoding** - Excel's Command Equivalents numbering for
+`FOR`/`SET.VALUE`/`NEXT`/`SELECT` and the rest, and the BOF `dt` flag that
+says a sheet IS one - does not, for the reason its own paragraph below gives.
+
+**FORMULA's text goes through `sh_formula_from_r1c1` before `sh_commit`
+sees it**, using the RESOLVED TARGET CELL (`sh_macro_tcol`/`trow`, not the
+cell running the macro) as the R1C1 origin - the recorder's own convention,
+and the reason the conversion has to wait until after the optional `ref`
+argument is parsed rather than running on the raw text up front. It only
+runs on text starting `=`: a bare label FORMULA enters unconverted, so a
+label that happens to read `"R5C3"` stays exactly that text rather than
+being read as a reference. A1 text passes through the same converter
+UNCHANGED (its own header, §81.7.1) - so this is not a second parser guessing
+which style the text is in, it is the one SYLK's `;E` field already trusted,
+run one call earlier.
+
+**SELECT gained its own reference resolver, `shm_mrangeref`**, alongside
+`shm_mref` rather than replacing it - GOTO/FOR/SET.VALUE/FORMULA's `ref`
+argument only ever wants one cell, and changing what `shm_mref` returns
+under them for SELECT's sake would be the tail moving the dog. Every
+reference SHAPE `shm_mref` accepts (a literal reference, a defined name, A1
+text, R1C1 text) `shm_mrangeref` accepts too, keeping the FAR corner
+alongside the near one (`sh_pargref`'s `sh_arg2col/row` and
+`sh_name_lookup`'s own CX/DX were already computing it - `shm_mref` just
+never kept it). A defined name pointing at a whole range now selects the
+whole range, not its first cell, for the same reason. The new
+`shm_rangetext` is what walks A1 or R1C1 text with or without a `:` -
+**and which one it tries first is not a coin flip**: `"R23C8"` is ALSO a
+legal, if unintended, A1 reference (column R, row 23), and trying A1
+unconditionally first would read `"R23C8:R24C9"` as `"R23"` followed by
+unconsumed garbage rather than as a range. `sh_formula_from_r1c1`'s own
+header already carries the fix - a word-start `R` followed by `[`, a digit,
+`-` or `C` is R1C1, anything else is A1 - and `shm_rangetext` peeks the same
+way rather than inventing a second rule.
+
+**Two more of `shm_pmacro`'s local routines changed contract for this**:
+`shm_mname` used to preserve the caller's CX/DX across its own scratch use
+and discard `sh_name_lookup`'s far-corner output in the same pop; it now
+outputs the far corner instead, safe because it had exactly one caller
+(`shm_mref`) before `shm_mrangeref` became the second. `shm_r1c1` (the
+single-reference-only R1C1 parser, requiring the string to end at the
+reference) split into `shm_r1c1one`, which does not require that - both
+`shm_mref` (checking for the end itself, unchanged behaviour) and
+`shm_rangetext` (checking for `:` first) need to keep going past one
+reference now.
+
+**Why BIFF encoding is still out of scope, not merely unfinished.** A macro
+sheet's `dt` flag (`0040H`, confirmed in `docs/excelfileformat.pdf`) is easy
+and sourced; the functions themselves are not. Excel numbers worksheet
+functions through one table (`tools/os88sheetfmt.py`'s `BIFF_FUNCS`, sourced
+from that same document) and macro COMMANDS through an entirely different
+one - the Command Equivalents Table - that document does not carry at all
+(checked directly, not assumed: no `Cetab`, `tFuncCE` or "Command
+Equivalent" text anywhere in it). §81.63's own header already refused this
+for exactly this reason: "no reference on hand gives Excel's numbers for
+them, and a guess is a file Excel runs differently." That has not changed -
+this session found no new source for the table either - so macro functions
+stay `0xFF` in `sh_rpn_fid`, a Normal save keeps a macro cell's VALUE and not
+its formula, and a macro sheet reopens as data, never as a script. Closing
+this for real needs either a primary source for the table or an empirical
+one built by decoding real Excel-written macro sheets byte for byte and
+correlating against what each cell is known to do - which is a research
+project of its own, not a coding continuation, and is recorded here rather
+than attempted on a guess.
+
+`tests/sheetmacro.py` is the gate for what closed here: `FORMULA` entering
+an R1C1 formula and reading back the value it should compute, `SELECT`
+resolving an R1C1 range and `FORMULA`'s own default landing on its top-left
+cell, and `MESSAGE` reaching the status bar at all - it could not before,
+because the macro run stopped on the SELECT failure two cells earlier and
+never got there. The BIFF round-trip assertions remain in the file, still
+failing, for the reason directly above; they are not a regression to chase
+before closing this section, they are the placeholder for the piece that is
+genuinely still open.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment
