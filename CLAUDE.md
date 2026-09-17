@@ -54,11 +54,22 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 
 ## Commands
 
-Needs `nasm`, `qemu-system-i386`, `python3`; `tools/setup-macos.sh` installs
-them on a Mac. No linker — everything is `nasm -f bin` flat binaries,
-deliberately, to keep Apple's Mach-O-only toolchain out of it.
+Needs `nasm`, `qemu-system-i386`, `python3` — plus `pkg-config` and
+`libudev-dev` on Linux. **`make deps` installs the set** and is the one
+command to type on a box you have not built on; it is ~0.2 s when they are
+already there, so it is cheap to type rather than wonder. It PROBES rather
+than transcribing a recipe: every distro-specific cure is a fallback behind a
+plain attempt, because those cures go stale and a script that hard-coded one
+would install an older package for no reason. `tools/setup-macos.sh` installs
+the Mac set, and neither script installs Rust — rustup is its own decision. No
+linker — everything is `nasm -f bin` flat binaries, deliberately, to keep
+Apple's Mach-O-only toolchain out of it.
 
 ```
+make deps     # install the host dependencies (nasm, qemu, pkg-config +
+              # libudev-dev), whichever platform this is. IDEMPOTENT and
+              # ~0.2s when satisfied. `make deps-check` reports and installs
+              # nothing
 make          # build every floppy image into build/ (also runs tools/checkdocs.py),
               # and packs the three Weave demo bundles (build/FORM/SHEET/PONG
               # .WAB) with tools/weavesim.py — docs/WEAVE-SPEC.md's reference
@@ -148,9 +159,11 @@ make pmcbandbench #   the COMMITTED pmc_rom.c, the four ghosts, the attract
                   #   BLIT4 10% high)
 make cpmsw      # the CP/M games and applications the RUNCPM floppies carry
                 #   beside RunCPM's master disk (§74.6) - LADDER, CATCHUM,
-                #   Nemesis, GAINA, WordStar, Turbo Pascal - fetched by
-                #   tools/getcpmsw.py from the public RunCPM software
-                #   collection, every file pinned, nothing committed;
+                #   Nemesis, GAINA, WordStar, Turbo Pascal - extracted by
+                #   tools/getcpmsw.py from apps/runcpm/cache/cpmcache.zip, a
+                #   COMMITTED copy of the public RunCPM software collection
+                #   (§74.6.1: Drive a file at a time was minutes), every
+                #   file pinned;
                 #   CPMSW='A/5:FILE' adds your own. The 1.44MB disk carries
                 #   the lot, the 720KB one the arcade area, the 360KB one
                 #   none (GAMES.TXT on each says which and why)
@@ -158,7 +171,7 @@ make runcpm     # RUNCPM (§74), the second C application: RunCPM 6.9 as a
 make runcpmdisk #   windowed CP/M 2.2 emulator — the host checks, then the
                 #   package; then the three floppies, from RunCPM's CCP and
                 #   master disk that `tools/getruncpm.py` fetches at a pinned
-                #   commit (`make runcpm-src`; never committed). `make rczex`
+                #   commit (`make runcpm-src`; out of the committed cache zip). `make rczex`
                 #   / `make rcz80test` are the Z80 core's ZEXDOC gates (in the
                 #   OS / in raw QEMU), `make rcmemtest` the movers',
                 #   `make rcbandbench` the row composer's bench
@@ -248,6 +261,15 @@ make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   `make vmmousetest && python3 tests/vmmouse.py`. QEMU by
                 #   name: its `pc` machine carries the backdoor and MartyPC
                 #   has none, and `make run VMPORT=on` is the interactive form
+make usbmousetest # THE CH375 USB MOUSE'S GATE DISKS (§9.12.6): no emulator
+                #   carries a CH375, so USBMOUSE.DRV is built a second time
+                #   with -DCH375SIM - a model of the chip under its four port
+                #   primitives - onto two 360KB disks with SYSTEM.CFG bit 6
+                #   set: usbmsim.img (nothing plugged; tests/usbmouse.py
+                #   plugs, moves, clicks and unplugs through the model's
+                #   mailbox on MartyPC) and usbmbusy.img (a flash drive the
+                #   BIOS configured, which attach must refuse). The shipped
+                #   driver never contains the model
 make thewiretest # THE WIRE'S GATE DISKS (§92.12): ethertest's shape plus one
                 #   file - a SYSTEM/APPDATA/WIRE.CFG naming 10.0.2.2:8092
                 #   instead of os8088.com, so the machine fetches a fixture
@@ -294,12 +316,52 @@ make smallapps#   128KB floor machine, docs/history/KERN-SPLIT-PLAN.md). `smalla
               #   **§24.5 is what they LEAVE OFF**, and it is a REQUIREMENT
               #   test rather than a size one: eight packages that cannot
               #   reach a driver kern_small does not ship (Browser, FTPD,
-              #   Telnet on ETHER.DRV; ModPlug, Recorder, Tracker, Audio on
-              #   SOUND.DRV) or a surface it has (Tank on fsx) are not on the
-              #   disk at all, because a package that merely wants heap can
-              #   REFUSE ITSELF in its own words and one that cannot reach its
-              #   driver can say nothing. The small SYSTEM disk carries
-              #   §24.3's core packages too, filtered the same way (§24.5.1)
+              #   Telnet, The Wire on ETHER.DRV; ModPlug, Tracker, Audio on
+              #   SOUND.DRV), or that claim more than the machine HAS and
+              #   cannot say so (Sheet, ~100KB on open - §24.5.2), are not on
+              #   the disk at all, because a package that merely wants heap
+              #   can REFUSE ITSELF in its own words and one that cannot reach
+              #   its driver can say nothing. The small SYSTEM disk carries
+              #   §24.3's core packages too, filtered the same way (§24.5.1).
+              #   **AN OMISSION'S GROUND IS A CLAIM ABOUT THE KERNEL**, so a
+              #   kernel change that withdraws that ground is a change to the
+              #   disk list - and TWO names have left it that way. TANK is a
+              #   SUBSTITUTION now (§85.3.5.1's small arm) rather than an
+              #   omission: kern_small has the whole of §53, and what actually
+              #   refused was a 32KB claim against the arena. DOT DELIRIUM is
+              #   back for the same reason (§24.5.5), its `gfx_blit1` ground
+              #   withdrawn by §5.4.2.5.1 a cycle after it was written.
+              #   Substitution is the shape to reach for first; an omission is
+              #   what is left when it cannot work. What let a stale list sit
+              #   there is that **a `filter-out` matching NOTHING is silent**,
+              #   so the list is DERIVED now and `soak -k 'smallreq'` reads the
+              #   built floppy rather than the variable
+make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
+              #   build/emu.img. It is kern_big PLUS §9.11's VMware absolute
+              #   pointer and nothing else - the backdoor on port 0x5658 that
+              #   v86 in a browser and every desktop hypervisor answer, so the
+              #   pointer tracks 1:1 with no grab. **ADDITIVE, not a third
+              #   tier**: KERN_EMU implies KERN_BIG, so every `%ifdef KERN_BIG`
+              #   still applies and the build keeps the whole big feature set;
+              #   KERN_EMU with KERN_SMALL is refused in kernel.asm.
+              #   WHY IT IS ITS OWN BUILD is who was paying: the protocol is
+              #   32-bit (`in eax, dx`, dword magic), so the 4.77 MHz 8088 this
+              #   project is calibrated against can neither speak it nor be
+              #   spoken to, and it was carrying 385 bytes of image, ONE
+              #   CROSSED 512-BYTE FOOTPRINT RUNG and 521 bytes of a 360KB
+              #   system disk that had 17 of 354 clusters left. §41.12 made
+              #   this argument for XMEM.DRV and stopped one machine short,
+              #   keeping a resident sniff because an 8086 CAN ask whether
+              #   there is RAM above 1MB; here the PROBE is 386 code, so there
+              #   is no resident question an XT could ask and the honest cost
+              #   on it is zero. kern_big now measures BYTE-IDENTICAL to its
+              #   blessed baseline and kern_emu measures exactly what kern_big
+              #   used to. Its disk is the only one in the tree that ships a
+              #   SYSTEM.CFG (bit 5 set) - every row is not-wanted by default
+              #   (§51.3), and a kern_emu machine that must be TOLD to turn on
+              #   the one feature it was built for has been given nothing.
+              #   Pair it with the SHIPPED build/apps.img: same API table, same
+              #   offsets, so there is no emu apps disk and must not be
 make allapps  # build/apps-all.img (§19.10): ONE 1.44MB floppy with every app
               #   on it, Frotz, both Words, RunCPM (with its drive A), the
               #   C64 and the Weave family's two — one folder each, so
@@ -316,11 +378,40 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   kernel adopts as C:. Written raw to a stick it boots a
               #   legacy-BIOS machine; `iso` wraps the SAME image in an El
               #   Torito hard-disk-emulation CD, `live` builds both. On
-              #   demand for allapps' reason and needing the same fetch
-              #   (`make runcpm-src` once, first). A CD cannot write, and
-              #   §80.3 says what that costs; QEMU boots them with
+              #   demand for allapps' reason. It acquires its THREE fetches
+              #   itself now (RunCPM's master disk, the CP/M software
+              #   collection and the Frotz stories - `make runcpm-src cpmsw
+              #   stories` is the same thing by hand). A CD cannot
+              #   write, and §80.3 says what that costs; QEMU boots them with
               #   `-drive file=build/os8088-usb.img,format=raw -boot c` /
               #   `-cdrom build/os8088.iso -boot d`
+              #
+              #   **IT IS THE ONE IMAGE WHOSE PREMISE IS COMPLETENESS**
+              #   (§80.6), and it carries MORE than the everything-floppy:
+              #   THEWIRE.O88 in SYSTEM/ (a SYSAPPS package the desktop zone
+              #   launches out of the BOOT volume, and this IS that volume -
+              #   its absence made the Wire zone open nothing on every live
+              #   image ever cut), the four packages that ride no floppy
+              #   (RECORDER, HELLO, PACMAN, SCRIBE), the WHOLE Frotz story
+              #   library beside a FROTZ.O88 that had nothing to play, the
+              #   WHOLE RunCPM master disk and all nine areas of the CP/M
+              #   software collection - both fills were priced in 1.44MB
+              #   clusters on a 32MB partition, so the volume carried 62 of
+              #   77 master-disk files and no CP/M software at all - and the
+              #   category disks' documents in MEDIA/. 420 files, 3,216 of
+              #   16,324 clusters, 26MB still free.
+              #
+              #   `tests/unit/t_livefull.py` ENFORCES it and is in the FAST
+              #   tier. PART A reads build/livepayload.txt (which `all`
+              #   emits from $(LIVEARGS) itself) and sweeps apps/: **a new
+              #   package directory FAILS `make` until it is on the live
+              #   media or written into that file's EXEMPT_DIRS with a
+              #   reason.** PART B walks the built image when there is one.
+              #   The four packages are LIVE-ONLY and deliberately not on
+              #   build/apps-all.img: §19.10.1 is the arithmetic - that
+              #   disk's 1.2MB geometry pays for a package out of RunCPM's
+              #   drive A, and thirteen kilobytes took A\0 from 21 files to
+              #   one
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,
@@ -328,6 +419,29 @@ make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   a burner. Interactive; --scan just lists and exits
 make clean
 ```
+
+**Two knobs bind the BUILD rather than a test run**, and both change what
+lands on a floppy:
+
+- **`PKGZ`** — `PKGZ ?= lz4`, so a plain `make` COMPRESSES every package,
+  every driver, `README.TXT` and every data file, and `make PKGZ=` is the A/B
+  (§20.13.5). The rule that catches everyone is that **the file is no longer
+  the image**: `image` at +8 keeps meaning the UNPACKED size on both
+  containers, so a host-side check wants `os88pkg.image_unwrap` /
+  `os88drv.image_unwrap` whenever it is about a size, the bss arithmetic or an
+  assembly rather than about what lands on a floppy. Three gates were reading
+  the file and calling it the image. The KERNEL is packed too and that ships
+  as well (§2.9.13; `NOKZIP=1` is the A/B) — 40 sectors off the system disk
+  and **599 ms off the boot**, because 47 fewer sectors is 1,278 ms of BIOS
+  against 799 ms of decode.
+- **`BUILD=<dir>`** — build into a tree of its own instead of `build/`, which
+  gives a BYTE-IDENTICAL image and is how a knob kernel is built without
+  overwriting the one under test (`tools/os88build.py` wraps it). **`make -n`
+  is not a dry run of the PARSE**: `$(VIDSTAMP)`'s rule deletes
+  `$(BUILD)/kernel.bin` and every boot sector when the knob set differs, so a
+  `make -n` with a knob in it pointed at `build/` is a DESTRUCTIVE command.
+  And a knob's make VARIABLE is not its nasm DEFINE (`VGADIRTY=1` compiles
+  `-DVGA_DIRTY`), so derive the defines rather than restating them.
 
 `make test` knobs, each documented at its definition in the Makefile:
 
@@ -436,14 +550,15 @@ worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 adapted to what cword's RTF can actually say (§73.12.3) — and `make
 runcpmdisk` the RUNCPM disks (`tools/getruncpm.py` fetches RunCPM's CCP and
 master disk at a pinned commit and `tools/getcpmsw.py` the CP/M games and
-applications that ride beside it, §74.6 — never committed, either of them;
+applications that ride beside it, §74.6 — both out of the COMMITTED
+`apps/runcpm/cache/cpmcache.zip` (§74.6.1), the network only for a moved pin;
 `make rczex` and `make rcz80test` are the Z80 core's ZEXDOC gates, in the OS
 and in raw QEMU), `make c64disk` the C64 disks, `make paccmandisk` the PaccMan
 disks, `make apple2disk` the Apple II+ disks (`make apple2rom` fetches their
 ROM first, once), and `make weavedisk` / `make loomdisk` the Weave family's two. **`make wiredisk`** is the same shape for a package that
 DOES NOT SHIP: WIREFRAME is an instrument rather than an application (§78.9),
-so `all` builds `wire.o88` and no shipped floppy carries it, and the three
-tests that drive it — `wireflick`, `wirefps`, `uilat` — default to that disk.
+so `all` builds `wire.o88` and no shipped floppy carries it, and the two
+tests that drive it — `wireflick` and `uilat` — default to that disk.
 `make allapps` collapses all of them onto one 1.44MB floppy (§19.10), and
 `make live` puts that same payload plus the system on the bootable live
 USB image and live CD (§80).
@@ -502,7 +617,7 @@ learned.
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 61 sites in 21 files, every one
+  finished** (§6.6.5): the registry stands at 62 sites in 21 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
@@ -768,13 +883,27 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**Nine images, not seven.** The system and apps disks in four geometries each,
-plus `build/media360.img` — `BEVERLY.MOD` is data rather than software and
-was 114 of a 360KB disk's 354 clusters before packages were compressed, so at
-that geometry it rides a disk of its own (§24.4). **It is not on `apps360.img`
-as well any more, and cannot be**: lz4-packed it is 42 clusters and that disk
-is at 346 of 354, so no trimming reaches it — taking AUDIO, MODPLUG and
-FONTVIEW off buys 27. At 360KB the module is a disk SWAP, which is what §24.4
+**Twelve images, not nine.** The system and apps disks in four geometries
+each, plus FOUR more that exist at 360KB alone. `build/media360.img` —
+`BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
+clusters before packages were compressed, so at that geometry it rides a disk
+of its own (§24.4). **It is not on `apps360.img` as well any more, and cannot
+be**: lz4-packed it is 42 clusters and that disk had no room for it.
+**And `office360.img`, `network360.img` and `games360.img` (§24.6)**, which
+are the same pressure met with a shape that SCALES: 354 clusters is the
+geometry that runs out first and this project keeps making applications, so
+the answer is a disk per SUBJECT — one category of program at the ROOT of the
+volume (no `APPS/` to click into when choosing the disk already said what you
+came for), the documents those programs open in `MEDIA/`, a pre-made
+`SYSTEM/APPDATA/`, and a warm `ASSOC.DAT` that costs nothing because
+`os88disk.py` writes one for any packages it is handed. It is worth the three
+disks for one measured line: `apps360.img` sat at **346 of 354 clusters,
+eight spare**, and is at **313 of 354, forty-one spare** — *while* the 360KB
+machine gained three more floppies of software. `apps360.img` is unchanged in
+kind and is now **a curated selection** out of those three plus the packages
+that live nowhere else — and §24.6.1 is the rule that matters about it:
+**being curated onto it is a decision with a date on it**, remade every time
+this geometry runs out, never a property of the package. At 360KB the module is a disk SWAP, which is what §24.4
 was always for; `tests/lzship.py` carries both halves on one scratch image
 because the harness cannot change a floppy under a running guest. Every other
 apps disk carries it in `MEDIA/`, which is why

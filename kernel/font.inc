@@ -326,7 +326,7 @@ font_char:
     cmp dx, [vid_chm8]
     ja .done
 %endif
-    cmp word [wm_clip_n], 0     ; ...and against the clip region, which
+    CLIPQ                        ; ...and against the clip region, which
     je .noclip                  ; answers in ROWS (SPEC.md 11.3.2): a cell an
     push ax                     ; edge crosses horizontally draws the rows on
     mov ax, cx                  ; our side of it rather than nothing at all,
@@ -958,14 +958,27 @@ font_str_x:
 ; pair can disagree and leave a cell blank; here they are one decision about
 ; one cell, taken once. A caller using this cannot produce that failure.
 ;
-; Two paths, and the fast one is deliberately narrow:
-;   - `[vid_mono]` (both mono adapters) with x
-;     byte-aligned: the per-plane loop below. This is the case the slow
-;     machines are in - on mono `[vid_mono]` is permanently 1 (SPEC.md 39.5).
-;   - anything else: one gfx_fill of the run's rect in the background colour
-;     and font_str over it, which is exactly what every caller wrote by hand
-;     before. No regression, no new planar VRAM code, and the answer is
-;     identical either way.
+; THREE prologues reach one row pass, and `.slow` is the narrow case now
+; rather than the wide one. THIS BLOCK USED TO SAY "anything else: one gfx_fill
+; of the run's rect and font_str over it" - it was written before SPEC.md
+; 6.1.10 and 6.1.11 and was stale for both of them, and SPEC.md 5.4.2 carried
+; the same sentence until DOT DELIRIUM (apps/dotdel) read it, believed VGA
+; had no fast path, and hand-rolled a text renderer on the strength of it.
+;   - `[vid_mono]` (both mono adapters), x byte-aligned: the per-plane loop
+;     below - an 8x8 cell row IS one framebuffer byte, so it is one store.
+;     On mono `[vid_mono]` is permanently 1 (SPEC.md 39.5).
+;   - VGA (KERN_BIG): `.planar`, SPEC.md 6.1.10. The planes are grouped ONCE a
+;     run - Set/Reset answers for the planes both colours agree on - so what
+;     is left per cell row is the same `stosb`. It needs one colour's plane
+;     bits to be a SUBSET of the other's, which 6.1.10.1 is the caller's rule
+;     for: if either colour is CBLACK or CWHITE it always holds.
+;   - unaligned (KERN_BIG): SPEC.md 6.1.11, on either prologue. A run of n
+;     cells off the grid is n-1 whole stores plus TWO merges, not 4n accesses.
+;   - `.slow`, and only then: one gfx_fill of the run's rect in the background
+;     colour and font_str over it - the pair every caller wrote by hand before
+;     6.1. On kern_big that is a colour pair sharing no plane in either
+;     direction (SPEC.md 6.1.10's `.plno`); kern_small takes it for any planar
+;     or unaligned run by budget decision.
 ; =============================================================================
 ; fnt_unlazy - a glyph under an ARMED clip region is confined to it by
 ; wm_clip_test (it draws a cell whole or not at all), so a cursor outside that
@@ -1302,7 +1315,7 @@ font_run_x:
     pop si
     or bp, bp
     jz .out                     ; nothing on screen: no rows to write
-    cmp word [wm_clip_n], 0
+    CLIPQ                   
     je .rm
     ; A region is armed. stosb walks CONSECUTIVE bytes, so it is only correct
     ; if every cell is drawn - one rejected in the middle breaks the run into
@@ -1655,7 +1668,7 @@ font_run_x:
                                 ; of it. wm_clip_test's contract is "clobbers:
                                 ; flags", so the rect survives the call and
                                 ; the fill below can have it as it stands
-    cmp word [wm_clip_n], 0
+    CLIPQ                   
     je .whole                   ; disarmed: the pair cannot disagree
     call wm_clip_test
     jnc .whole                  ; ...or the whole run is inside one fragment
@@ -1814,7 +1827,7 @@ font_run_cell:
 
     cmp cx, [vid_cwm8]          ; x only: the run's y was tested once, by the
     ja .out                     ; caller (SPEC.md 6.1.6)
-    cmp word [wm_clip_n], 0     ; the cell against the region in ROWS, exactly
+    CLIPQ                        ; the cell against the region in ROWS, exactly
     je .noclip                  ; as its glyphs are, background with them
     push ax                     ; (SPEC.md 11.3.2)
     mov ax, cx                  ; ...and x2/y2 in place: CX and DX already

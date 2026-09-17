@@ -15,7 +15,7 @@ apps disk, so opening one is a disk swap: launch Sheet (for `KODAK.BIF` and
 `XEROXQ3.SLK`) or Scribe (for `KODAK.DOC` and `XEROXQ3.RTF`) from its own disk,
 swap the examples disk into that drive, and File ▸ Open. Both keep their file
 formats in an overlay and both read it at start-up, so neither goes back to
-its own disk for it — Sheet always did (SPEC.md 82.16.3), and Scribe does since SPEC.md 94.8.6.
+its own disk for it — Sheet always did (SPEC.md 82.16.3), and Scribe does since SPEC.md 95.8.6.
 Before that, a cold Scribe looked for `SCRIBE.OVL` on the examples disk and
 refused.*
 
