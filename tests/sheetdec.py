@@ -148,7 +148,20 @@ def arm_b(ver):
         (bytes([0x43]) + struct.pack('<H', 1) + bytes(8), None, 777.0, 777.0),
         (tint(1) + attr(0x04, 2) + b'\x04\x00\x08\x00' + tint(2) + tint(3)
          + fv(3, 100), None, 2.0, 2.0),                      # tAttrChoose
-        (area + fv(1, 41), None, 55.0, 55.0),                # DSUM: not SHEET's
+        (area + fv(1, 78), None, 55.0, 55.0),                # OFFSET: a real
+                                                              # Excel function
+                                                              # with no entry
+                                                              # in sh_rpn_fid,
+                                                              # and one INSIDE
+                                                              # the otherwise
+                                                              # dense 0..77
+                                                              # run - so the
+                                                              # miss is found
+                                                              # mid-table, not
+                                                              # off the end.
+                                                              # This was DSUM
+                                                              # until 81.65
+                                                              # implemented it
         (b''.join(ref(R | r, 0) for r in range(3)) + b'\x03\x03' +
          b''.join(ref(R | r, 0) + b'\x03' for r in range(20)), None, 99.0,
          99.0),                                              # > SH_EDITMAX

@@ -4644,7 +4644,8 @@ SOAK = [
         "the host's decode_rpn against the document's function table), "
         "reopened, SYLK out - and two BIFF files the host writes the way "
         "Excel does, BIFF3 and a BIFF4 worksheet, with the tokens SHEET's "
-        "writer never emits and five it must refuse by keeping the value. "
+        "writer never emits and eight it must refuse by keeping the value - "
+        "three of them cached with a result that is not a number at all. "
         "It found IF losing a text branch on its way to passing",
         needs=("marty",), serial=True),
     Row("sheeteval", "soak", py("tests/sheeteval.py"), 240.0,
