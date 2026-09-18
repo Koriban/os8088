@@ -29,6 +29,12 @@ skips a label rather than crashing on one.
 The HOST writes a SYLK file holding the database, seven criteria blocks and
 one formula per case; SHEET opens it and saves it as SYLK - every formula
 recomputed first (sh_dowrite) - and the host reads the values back.
+
+Then Data > Set Database and Data > Set Criteria, through the real menu on
+a real mouse-dragged selection (SPEC.md 81.69): A1:D7 becomes the name
+DATABASE, F1:F2 becomes CRITERIA, and a formula typed live -
+DSUM(Database,"Amount",Criteria) - answers the identical 30.0 the first
+CASE already proved for the same range typed out in full.
 """
 import os
 import subprocess
@@ -46,10 +52,14 @@ import dispcp                                                # noqa: E402
 import os88sym                                              # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
+import glass                                                 # noqa: E402
 
 WORK = "build/sheetdb"                  # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetdb.img"
 NAME = "DBASE.SLK"
+DATA = (311, 45)                        # the Data menu's own screen position
+ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)  # and a dropdown item's, both
+SET_DB, SET_CRIT = 4, 5                        # matching tests/sheetsort.py
 
 # --- the database, A1:D7 ------------------------------------------------------
 DB = {
@@ -95,6 +105,19 @@ CASES = [
     ('DSTDEVP(A1:D7,"Amount",Q1:Q1)', 7.0710678118654755),
 ]
 COL = 21
+NAMED_ROW, NAMED_COL = 0, 4             # E1: the gap between the database
+                                         # (cols 0-3) and the first criteria
+                                         # block (col 5+), and row 0 is
+                                         # always on-screen - unlike COL 21
+                                         # above, this one is CLICKED, not
+                                         # pre-seeded through SYLK (the CGA
+                                         # window shows only 4 rows at once,
+                                         # SPEC.md 81.69's own gate found),
+                                         # so it has to be somewhere the grid
+                                         # actually shows without scrolling
+NAMED_EXPR = 'DSUM(Database,"Amount",Criteria)'  # typed live, after Set
+NAMED_WANT = 30.0                       # Database/Set Criteria (SPEC.md
+                                         # 81.69) == CASES[0]'s own DSUM
 
 
 def build_disk():
@@ -134,6 +157,44 @@ def main():
         wx, wy, _, _ = dispcp.win_rect(m, S, ds)
         dispcp.open_named(m, mo, S, M.settle, wx, wy, name=NAME)
         M.settle(m, limit=240)
+
+        mo.to(634, 180)
+        M.settle(m)
+        w, h, rows = m.vram("cga")
+        g = glass.grid(w, h, rows)
+        if not g:
+            check(False, "the grid is on the glass", "no grid")
+            done("sheetdb")
+            return
+        ys, xs = g
+        at = lambda r, c: ((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
+
+        def select(r1, c1, r2, c2):
+            mo.click(*at(r1, c1))
+            M.settle(m)
+            if (r1, c1) != (r2, c2):
+                m.key("ShiftLeft", down=True, up=False)
+                mo.click(*at(r2, c2))
+                m.key("ShiftLeft", down=False, up=True)
+                M.settle(m)
+
+        def menu(title, i):
+            mo.menu(title[0], title[1], *ITEM(title[0], i))
+            M.settle(m)
+
+        select(0, 0, 3, 3)                  # A1:D4 -> DATABASE (81.69). Only
+                                             # 4 rows: the CGA window shows 4
+                                             # rows at once, and Apple+Banana
+                                             # (the two Fruit rows in A1:D4)
+                                             # sum to the identical 30.0 the
+                                             # full A1:D7 does in CASES[0]
+        menu(DATA, SET_DB)
+        select(0, 5, 1, 5)                  # F1:F2 -> CRITERIA
+        menu(DATA, SET_CRIT)
+        select(NAMED_ROW, NAMED_COL, NAMED_ROW, NAMED_COL)
+        m.type_text('=%s\n' % NAMED_EXPR)
+        M.settle(m)
+
         before = open(os.path.join(WORK, NAME), "rb").read()
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
@@ -153,6 +214,10 @@ def main():
     for i, (expr, want) in enumerate(CASES):
         g = got.get((i, COL))
         check(same(want, g), "=%s is %r" % (expr, want), "SHEET holds %r" % (g,))
+    named = got.get((NAMED_ROW, NAMED_COL))
+    check(same(NAMED_WANT, named),
+          "Data > Set Database/Set Criteria: =%s is %r" % (NAMED_EXPR, NAMED_WANT),
+          "SHEET holds %r" % (named,))
     done("sheetdb")
 
 

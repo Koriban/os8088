@@ -103030,7 +103030,7 @@ harmless.
 | Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 4 | 10 | Set Print Area/Titles/Page Break, Freeze Panes, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles) |
-| Data | 1 shared | 10 | Form, Find, Extract, Delete, Set Database, Set Criteria, Series, Table, Parse |
+| Data | 3, 1 shared | 10 | Form, Find, Extract, Delete, Series, Table, Parse |
 | Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
@@ -105414,6 +105414,55 @@ never got there. The BIFF round-trip assertions remain in the file, still
 failing, for the reason directly above; they are not a regression to chase
 before closing this section, they are the placeholder for the piece that is
 genuinely still open.
+
+### 81.69 Data ▸ Set Database.../Set Criteria...
+
+The cheapest-LOOKING of §81.39.2's Data menu gaps, and the reason for the
+qualifier: the eleven database functions (§81.65) already take a `database`
+and `criteria` argument as ordinary cell references, and a **defined name**
+(Formula ▸ Define Name..., §81.29/81.30) is resolvable as a reference in
+most places one is expected - so naming the current selection `DATABASE` or
+`CRITERIA` looked like the whole feature. `sh_docmd_setname` calls the
+identical `sh_name_def` `sh_idlg_apply`'s own `.defname` case already uses,
+with a fixed name (`sh_s_dbname`/`sh_s_critname`, pre-uppercased so
+`sh_name_def`'s own `sh_upcase_at` pass is a no-op rather than a mutation)
+in place of whatever text `Define Name...`'s dialog field held - that part
+was exactly as small as expected.
+
+**What was not expected: `shm_pdatabase`'s own `database`/`criteria`
+arguments could not see a name at all.** `sh_pargref` alone has no name
+fallback of its own - that logic lives in `shm_mref`'s wrapper, §81.68's
+own family, which every macro reference argument goes through but no
+database function ever called. `shm_pdatabase` calls `SHOUT sh_pargref`
+directly for both its range arguments, so `DSUM(Database,"Amount",
+Criteria)` answered `#VALUE!` the first time this was actually run through
+the emulator - caught by `tests/sheetdb.py` itself, not found by reading the
+code first. Fixed the same way `shm_mrangeref` was built for SELECT
+(§81.68): on `sh_pargref`'s failure, try `shm_mname` (a plain `call` -
+`shm_pdatabase` and `shm_mname` are both `.modc`, the same CHART.OVL
+segment, whichever family's source they were written under) before falling
+to `.badargs`. Argument 2 (the field) needed no change - it was always text
+or a number, never a range.
+
+**No dialog**, unlike every other `SH_ID_*` command in this family: real
+Excel's own Set Database/Set Criteria apply to the selection the instant the
+menu item is chosen, so this is a one-shot command (`sh_docmd_setname`,
+dispatched from the Data menu's items 4/5) rather than another
+`sh_idlg_open` kind. `sh_name_def`'s existing `CF=1` (name table full)
+answer reuses `sh_idlg_apply`'s own two status messages
+(`sh_s_id_named`/`sh_s_id_nofit`) rather than inventing a third pair that
+would say the identical thing. Redefining either REBINDS it, matching
+Define Name's own behaviour, so choosing the command twice on two different
+selections is how a user changes which range each name means.
+
+`tests/sheetdb.py` gates it through the real menu on a real mouse-dragged
+selection: A1:D4 (the CGA window shows only 4 rows at once, which is why
+this is not the same A1:D7 the file's other seventeen cases use) becomes
+`DATABASE`, F1:F2 becomes `CRITERIA`, and a live-typed
+`DSUM(Database,"Amount",Criteria)` answers the identical 30.0 the
+first case already proved for the full range typed out in full - a
+different-sized database summing to the same total by construction (two
+Fruit rows either way), not a coincidence to be suspicious of.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

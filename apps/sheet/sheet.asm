@@ -6641,7 +6641,19 @@ sh_mfire:
     call sh_fdlg_open
     jmp .out
 .data3:
+    cmp al, 3
+    jne .data4
     call sh_docmd_chartexport
+    jmp .out
+.data4:
+    cmp al, 4
+    jne .data5
+    mov si, sh_s_dbname
+    call sh_docmd_setname
+    jmp .out
+.data5:
+    mov si, sh_s_critname
+    call sh_docmd_setname
     jmp .out
 .sheets:
     xor ah, ah                        ; al = item index = target sheet 0..3
@@ -8702,6 +8714,41 @@ sh_docmd_chartexport:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_setname - Data > Set Database.../Set Criteria... (SPEC.md 81.69).
+; in: SI = the reserved name ('DATABASE' or 'CRITERIA'). Binds it to the
+; CURRENT SELECTION through the identical sh_name_def every defined name
+; already goes through (Formula > Define Name..., sh_idlg_apply's own
+; .defname). NO DIALOG: real Excel's own Set Database/Set Criteria take
+; effect on the selection immediately, and §81.65's database functions
+; already resolve a bare NAME as a reference wherever one is expected, so
+; DSUM(Database,"Amount",Criteria) works the moment both are bound - this
+; command's entire job is sparing a user from retyping the same range on
+; every call, not a second engine.
+; -----------------------------------------------------------------------------
+sh_docmd_setname:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    mov cx, [sh_selcol2]
+    mov dx, [sh_selrow2]
+    call sh_name_def
+    mov word [sh_msg], sh_s_id_nofit
+    jc .out
+    mov word [sh_msg], sh_s_id_named
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_s_dbname:   db 'DATABASE', 0
+sh_s_critname: db 'CRITERIA', 0
 
 ; -----------------------------------------------------------------------------
 ; sh_chartexp_ondlg - the Export Chart dialog's completion proc (SPEC.md
@@ -31325,7 +31372,15 @@ shm_pdatabase:
     jne .refused
     mov byte [sh_db_busy], 1
     SHOUT sh_pargref                   ; --- argument 1: the database range --
-    jnc .badargs
+    jc .havedb1
+    call shm_mname                     ; ...or a DEFINED NAME - Set Database
+    jnc .badargs                       ; (81.69) is the whole reason this
+    mov [sh_db_c1], ax                 ; needs to work: sh_pargref alone has
+    mov [sh_db_r1], bx                 ; no name fallback of its own (that
+    mov [sh_db_c2], cx                 ; lives in shm_mref's own wrapper,
+    mov [sh_db_r2], dx                 ; the macro family's, not here)
+    jmp .db1ok
+.havedb1:
     mov ax, [sh_arg1col]
     mov [sh_db_c1], ax
     mov ax, [sh_arg1row]
@@ -31334,6 +31389,7 @@ shm_pdatabase:
     mov [sh_db_c2], ax
     mov ax, [sh_arg2row]
     mov [sh_db_r2], ax
+.db1ok:
     cmp byte [si], ','
     jne .badargs
     inc si
@@ -31345,7 +31401,15 @@ shm_pdatabase:
     jne .badargs
     inc si
     SHOUT sh_pargref                   ; --- argument 3: the criteria range -
+    jc .havecr1
+    call shm_mname                     ; ...or a DEFINED NAME - Set Criteria
     jnc .badargs
+    mov [sh_cr_c1], ax
+    mov [sh_cr_r1], bx
+    mov [sh_cr_c2], cx
+    mov [sh_cr_r2], dx
+    jmp .cr1ok
+.havecr1:
     mov ax, [sh_arg1col]
     mov [sh_cr_c1], ax
     mov ax, [sh_arg1row]
@@ -31354,6 +31418,7 @@ shm_pdatabase:
     mov [sh_cr_c2], ax
     mov ax, [sh_arg2row]
     mov [sh_cr_r2], ax
+.cr1ok:
     cmp byte [si], ')'
     jne .badargs
     inc si
@@ -35980,7 +36045,7 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
-    dw sh_m_data,    sh_i_data,    4
+    dw sh_m_data,    sh_i_data,    6
     dw sh_m_options, sh_i_options, 4
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -36122,10 +36187,13 @@ sh_it_filldown:  db 'Fill Down', 0
 ; see sh_docmd_chart's header comment for the design.
 sh_m_data:     db 'Data', 0
 sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_gallery, sh_it_chartexp
+               dw sh_it_setdb, sh_it_setcrit
 sh_it_sort:    db 'Sort...', 0
 sh_it_chart:   db 'Chart Column...', 0
 sh_it_gallery: db 'Chart Gallery...', 0
 sh_it_chartexp: db 'Export Chart as BMP...', 0
+sh_it_setdb:   db 'Set Database', 0
+sh_it_setcrit: db 'Set Criteria', 0
 
 ; Options - Display toggles (stage 2.x). Each item's own string SWAPS
 ; between an On/Off pair (same relabel-by-repointing idea MENU_DIS's own
