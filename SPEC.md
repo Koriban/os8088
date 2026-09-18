@@ -102998,11 +102998,13 @@ reader that had not been written by the same hand as the writer.**
 > 5, Quattro Pro and Multiplan that found database functions were the one
 > family every DOS-era competitor but Multiplan shipped the identical way,
 > where array formulas turned out to be more of an Excel design bet (§81.65's
-> own header has the finding). §81.39.2's Data menu is UNCHANGED - Set
-> Database and Set Criteria are a convenience that lets a user omit re-typing
-> the ranges each call, not a requirement for the functions to work, and
-> remain undone. CELL closed the same day (§81.66) - the cheapest of the
-> three original gaps, needing no enabler.
+> own header has the finding). CELL closed the same day (§81.66) - the
+> cheapest of the three original gaps, needing no enabler.
+>
+> **Data menu re-measured 2026-09-18**: `Set Database` and `Set Criteria`
+> closed in §81.69. They were left out of §81.65 as a convenience rather than
+> a requirement - the functions work without them - which is still true, and
+> is why they were a day's work rather than a family's.
 
 Counted, not recalled — the functions against `Microsoft Excel Functions and
 Macros.pdf`'s worksheet-function directory and SHEET's own table
@@ -103030,7 +103032,7 @@ harmless.
 | Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
-| Data | 3, 1 shared | 10 | Form, Find, Extract, Delete, Series, Table, Parse |
+| Data | 6, 3 shared | 10 | Form, Find, Extract, Delete, Series, Table, Parse (Set Database/Set Criteria closed 2026-09-18, §81.69) |
 | Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
@@ -103073,9 +103075,12 @@ Almost everything above hangs off six pieces of work:
    multi-cell entry, matching Excel's own non-CSE behaviour, so all 8 are
    done or in progress without it. `Data ▸ Table` remains undone - it is
    genuinely a multi-cell feature, not just an array-returning function.
-3. ~~A database + criteria area~~ — **done in §81.65**: the 11 functions.
-   `Data ▸ Set Database`/`Set Criteria` remain undone - they name a range so
-   a call need not repeat it, and the functions work without them.
+3. ~~A database + criteria area~~ — **done in §81.65** (the 11 functions) and
+   §81.69 (`Data ▸ Set Database`/`Set Criteria`, which name a range so a call
+   need not repeat it). **This is now an unspent enabler**: the criteria
+   engine and the two named ranges are exactly what `Data ▸ Find`, `Extract`,
+   `Delete` and `Form` are built on, so four of the seven missing Data
+   commands need no new machinery, only their own UI.
 4. **Per-row geometry** → row heights, and `Justify` (per-column widths are
    §81.56's).
 5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
