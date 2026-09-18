@@ -4774,8 +4774,10 @@ SOAK = [
         "post-pivot elimination pass, MINVERSE against MDETERM's own "
         "determinant, a singular 2x2 answering 0 and #NUM! from the two "
         "respectively, and a trivial 1x1 case at each end of the size "
-        "range. LINEST LOGEST TREND GROWTH are named but not yet "
-        "implemented (shm_pmatrix's own .notyet)",
+        "range. LINEST LOGEST TREND GROWTH round it out, each fitted "
+        "against the host's own least squares - a straight line, an "
+        "exponential curve, the const=FALSE arm through the origin, and a "
+        "non-positive y answering #VALUE! out of fp_ln",
         needs=("marty",), serial=True),
     Row("sheetfin", "soak", py("tests/sheetfin.py"), 300.0,
         "SPEC.md 81.37 / 82.16.10: SHEET's thirteen financial functions, "
@@ -4786,6 +4788,15 @@ SOAK = [
         "move did not cause: a Save wrote the STALE value of every formula "
         "off the glass (81.48), and MIRR discounted from the wrong period - "
         "which SPEC's own reference table had done too",
+        needs=("marty",), serial=True),
+    Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 400.0,
+        "SPEC.md 81.70: Options > Freeze Panes. Nothing a file holds can "
+        "show a freeze, so every assertion is a cell's text read off the "
+        "glass with the kernel's own glyphs: the split refused on A1 in its "
+        "own words, then frozen at B2 and the selection driven well down "
+        "and well right - A1 still in the corner while the cell beside it "
+        "is past B1 and the cell under it past A2 - and Unfreeze letting "
+        "the corner scroll away again",
         needs=("marty",), serial=True),
     Row("rdup", "soak", py("tests/rdup.py"), 60.0,
         "SPEC.md 62.9.11.3: the Ram Disk page acts on the RELEASE.",

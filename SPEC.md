@@ -103029,7 +103029,7 @@ harmless.
 | Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
 | Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
-| Options | 4 | 10 | Set Print Area/Titles/Page Break, Freeze Panes, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles) |
+| Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 3, 1 shared | 10 | Form, Find, Extract, Delete, Series, Table, Parse |
 | Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
 
@@ -103055,7 +103055,7 @@ and §82 is this tree's answer to that.
   control and loops, the sheet, the user, five menu commands. No subroutines,
   no references as values (OFFSET), no recorder, no custom dialogs, and a
   Normal save keeps a macro cell's value, not its formula - SYLK carries it.
-- **No Short/Full menus toggle**, and **no freeze panes**.
+- **No Short/Full menus toggle**. Freeze Panes is done (§81.70).
 - **Smaller, each listed where it was found:** a centred or right-aligned
   label does not run on into its neighbours (§81.54); a formatted empty cell
   (BIFF's BLANK) loses its format (§81.52); Sort leaves empty cells where they
@@ -105463,6 +105463,75 @@ this is not the same A1:D7 the file's other seventeen cases use) becomes
 first case already proved for the full range typed out in full - a
 different-sized database summing to the same total by construction (two
 Fruit rows either way), not a coincidence to be suspicious of.
+
+### 81.70 Options ▸ Freeze Panes
+
+Excel's own: the split is **at the active cell**, so every row above it and
+every column left of it stops scrolling, and choosing the item again
+unfreezes (the label flips `Freeze Panes`/`Unfreeze Panes`, the
+relabel-by-repointing the three Options toggles beside it already use).
+Freezing on A1 is REFUSED in its own words - there is nothing above or left
+of it to freeze - rather than silently doing nothing. State is
+`sh_freezecol`/`sh_freezerow` (0 = that axis is not frozen), saved and
+restored **per sheet** alongside the selection and scroll position that
+`sh_switchsheet` already banks, because Excel's freeze is per sheet too.
+
+**The whole feature is one broken assumption, repaired in eleven places.**
+Before this, a visible column index and a real column differed by exactly
+`[sh_scrollcol]`, and ~62 sites across the geometry, the hit test, both
+scroll bars, both header painters, the cell painter, the border painter,
+the selection frame and the damage-rect fast path each open-coded that one
+addition or its inverse. Frozen panes break it: `sh_geom` now lays
+`sh_vcw`/`sh_vrh` out as the **frozen prefix** (real columns/rows
+`0..freeze-1`, walked first, always shown) followed by the **scrolling
+suffix** (from `sh_scrollcol`/`sh_scrollrow`), so a visible index names a
+real cell through a mapping rather than an addition. Four routines are that
+mapping and everything else calls them:
+
+| | |
+|---|---|
+| `sh_vreal_col` / `sh_vreal_row` | visible index → real column/row. The hit test, both header painters and the cell painter |
+| `sh_vidx_col` / `sh_vidx_row` | real → visible index, `CF=0` when it is off-screen. The border table's sparse walk, which holds real keys already |
+| `sh_vclip_col` / `sh_vclip_row` | a real RANGE → a visible-index range, each edge clamped into view rather than the range rejected. The selection frame and the damage rect, which both open-coded this clamp before |
+| `sh_frozencw` / `sh_frozenrh` | the frozen prefix's own pixel width/height, summed fresh from `sh_colwidth`/`sh_rowheight` rather than read from `sh_vcw` - that cache can be one repaint stale for exactly the column whose width just changed |
+
+`sh_scrollto_t` skips an axis entirely when its target is inside the frozen
+prefix (always visible, and `sh_scrollcol` may never go there), and bounds
+the other with `sh_vcols - sh_freezecol`, the scrolling window's own width.
+`sh_backcols`/`sh_backrows` stop at the freeze boundary rather than at 0,
+and start their pixel budget with the frozen prefix already spent. The bars
+report `total`/`fit`/`pos` shifted into the scrolling region's own space,
+so the thumb represents what can actually scroll; `sh_ondrag` adds the
+freeze back when it turns the bar's answer into an absolute scroll row, and
+`sh_setscrollrow`/`sh_setscrollcol` clamp to `[freeze, freeze+total-fit]`.
+
+**One deliberate cost: `sh_scrollrow_blit` refuses while rows are frozen.**
+`OSAPI_GFX_SCROLL` shifts a whole rectangle's pixels and the frozen strip's
+must not move with the rest; cutting the rect below it is real work in the
+one routine whose rectangle arithmetic is hardest to get right, for a
+saving only a frozen sheet being scrolled would ever see. The caller
+already owns a refusal path - it repaints - so this takes it. Unfrozen
+scrolling keeps the blit and is byte-for-byte the code it always was. The
+horizontal side needed no such guard: `sh_scrollcol_part` never blitted
+(`OSAPI_GFX_SCROLL` is vertical-only, §5.5), it damages the viewport and
+redraws, which the new mapping already makes correct.
+
+**Known edge, cosmetic only:** a damage range that starts in the frozen
+prefix and ends inside the *gap* - columns past the freeze but scrolled off
+the left - clamps to the prefix's last column rather than resolving two
+disjoint visible spans, which `sh_dmgc1..c2` cannot express. It can leave a
+stale pixel in a partial redraw; the next full repaint (any cell edit takes
+that path) clears it.
+
+**The gate is `tests/sheetfreeze.py`, and it can only be a glass one.** No
+file SHEET writes holds a freeze, so there is nothing to save and read back:
+every assertion is a cell's text read off the framebuffer with the kernel's
+own glyphs (`tests/glass.py`). A1 is labelled `ZZ`, the rest of row 1
+`C1, C2, …` and the rest of column A `R1, R2, …`, so every visible cell says
+where it is. The refusal on A1 is read out of the status bar; then the split
+is taken at B2 and the selection driven six rows down and twelve columns
+right, which puts real columns G..N and real rows 6..8 in a window still
+showing `ZZ` in its corner, `C6` beside it and `R5` under it.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

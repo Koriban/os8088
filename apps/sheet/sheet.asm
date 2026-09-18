@@ -1593,15 +1593,37 @@ sh_geom:
     ; the next would not fit whole, and kept in sh_vcw for everything that
     ; places a column - sh_vcx is the only arithmetic that turns a visible
     ; column into pixels. It was one division by the one width.
+    ;
+    ; FROZEN PANES (81.70) walk FIRST, real columns 0..sh_freezecol-1 - DI
+    ; keeps counting up through them rather than resetting, so the second
+    ; loop's "real column = sh_scrollcol + (DI - sh_freezecol)" is exactly
+    ; the old "sh_scrollcol + DI" once sh_freezecol is 0, and every visible
+    ; index still names its own sh_vcw slot directly either way
     push bx
     push di
     mov dx, ax                          ; DX = the pixels left
     xor di, di                          ; DI = the columns so far
+.fcwalk:
+    cmp di, [sh_freezecol]
+    jae .cwalk
+    cmp di, SH_MAXVC
+    jae .cset
+    mov ax, di                          ; the frozen prefix: real col = DI
+    call sh_colwidth
+    mov [sh_vcw + di], al
+    mov cl, 3
+    shl ax, cl
+    cmp ax, dx
+    ja .cset
+    sub dx, ax
+    inc di
+    jmp short .fcwalk
 .cwalk:
     cmp di, SH_MAXVC
     jae .cset
-    mov ax, [sh_scrollcol]
-    add ax, di
+    mov ax, di
+    sub ax, [sh_freezecol]
+    add ax, [sh_scrollcol]              ; the scrolling suffix's real column
     cmp ax, SH_COLS
     jae .cset
     call sh_colwidth                    ; AX = its width, in characters
@@ -1631,23 +1653,65 @@ sh_geom:
     ; sorted, so from the first record at or past the scroll row the next
     ; record is either this row's or a later one's. sh_geom runs on every
     ; repaint, and a search per row is a table-full of compares per row
+    ; FROZEN PANES (81.70): the frozen prefix, real rows 0..sh_freezerow-1,
+    ; walked FIRST with its own sh_rh_find (the sparse table's position for
+    ; row 0 and for sh_scrollrow are generally not the same place, so the
+    ; walk restarts rather than continuing) - DI keeps counting up through
+    ; it exactly as the column walk's does, so it still names its own
+    ; sh_vrh slot directly in both phases
     push bx
     push si
     push di
     push es
     mov dx, ax                          ; DX = the pixels left
-    mov ax, [sh_scrollrow]
-    call sh_rh_find                     ; BX = its key, SI/CX = the record
     xor di, di                          ; DI = the rows so far
+    cmp di, [sh_freezerow]
+    jae .rowsdone
+    xor ax, ax
+    call sh_rh_find                     ; BX = key, SI/CX = record, from 0
+.frwalk:
+    cmp di, [sh_freezerow]
+    jae .rowsdone
+    cmp di, SH_MAXVR
+    jae .rset
+    mov ax, bx
+    add ax, di                          ; AX = this row's key (DI is still
+                                        ; 0-based here: the frozen phase
+                                        ; started at row 0)
+    cmp cx, [es:SH_ROWH_N]
+    jae .frstd
+    cmp [es:si], ax
+    jne .frstd
+    mov ax, [es:si+2]
+    add si, SH_ROWH_REC
+    inc cx
+    call sh_twpx
+    jmp short .frhave
+.frstd:
+    mov ax, SH_RH_NORMAL
+.frhave:
+    mov [sh_vrh + di], al
+    cmp ax, dx
+    ja .rset
+    sub dx, ax
+    inc di
+    jmp short .frwalk
+.rowsdone:
+    mov ax, [sh_scrollrow]
+    call sh_rh_find                     ; a fresh walk, from the scroll row
 .rwalk:
     cmp di, SH_MAXVR
     jae .rset
-    mov ax, [sh_scrollrow]
-    add ax, di
+    mov ax, di
+    sub ax, [sh_freezerow]
+    mov [sh_geom_roff], ax              ; named scratch (not a register):
+                                        ; the scrolling phase's own 0-based
+                                        ; offset, needed twice below
+    add ax, [sh_scrollrow]
     cmp ax, SH_ROWS
     jae .rset
-    mov ax, bx
-    add ax, di                          ; AX = this row's key
+    mov ax, [sh_geom_roff]
+    add ax, bx                          ; AX = this row's key
     cmp cx, [es:SH_ROWH_N]
     jae .rstd
     cmp [es:si], ax
@@ -2189,6 +2253,181 @@ sh_vwidth:
     shl ax, cl
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; FREEZE PANES (81.70). A visible column/row index (0..sh_vcols/vrows-1) no
+; longer means [sh_scrollcol/row + index] once sh_freezecol/row is nonzero:
+; sh_geom lays sh_vcw/sh_vrh out as the frozen prefix (real columns/rows
+; 0..freeze-1, always shown) followed by the scrolling suffix (real
+; sh_scrollcol/row and up). sh_vreal_col/row is that mapping; sh_vclip_col/
+; row is its inverse for clamping a REAL range (a selection, a damage rect)
+; into visible-index space the way sh_updsel/sh_drawsel already needed to
+; before freeze existed, just freeze-aware now.
+; -----------------------------------------------------------------------------
+
+; sh_vreal_col - in: AX = a visible column (0..sh_vcols-1); out: AX = the
+; real column it shows
+sh_vreal_col:
+    cmp ax, [sh_freezecol]
+    jb .out                            ; the frozen prefix: index IS the
+    sub ax, [sh_freezecol]             ; real column; past it, the scrolling
+    add ax, [sh_scrollcol]             ; suffix picks up at sh_scrollcol
+.out:
+    ret
+
+; sh_vreal_row - the same, for rows
+sh_vreal_row:
+    cmp ax, [sh_freezerow]
+    jb .out
+    sub ax, [sh_freezerow]
+    add ax, [sh_scrollrow]
+.out:
+    ret
+
+; sh_vclip_col - in: AX = real c1, BX = real c2 (c1 <= c2). out: CF=1, AX =
+; visible c1 (rounded UP into view), BX = visible c2 (rounded DOWN into
+; view); CF=0 if the whole [c1,c2] is off-screen. A column short of
+; sh_freezecol is always visible, at its own index; sh_updsel/sh_drawsel
+; used to do this inline with a bare [sh_scrollcol] subtraction - this is
+; that clamp, freeze-aware, factored out because now two axes' worth of
+; caller need the identical shape
+sh_vclip_col:
+    push dx
+    cmp ax, [sh_freezecol]             ; --- c1 -> visible
+    jb .loready
+    cmp ax, [sh_scrollcol]
+    jae .loscroll
+    mov ax, [sh_freezecol]             ; scrolled off left of the scrolling
+    jmp .loready                       ; region: round up to its first column
+.loscroll:
+    sub ax, [sh_scrollcol]
+    add ax, [sh_freezecol]
+.loready:
+    cmp bx, [sh_freezecol]             ; --- c2 -> visible
+    jb .hiready
+    cmp bx, [sh_scrollcol]
+    jae .hiscroll
+    mov dx, [sh_freezecol]             ; c2 sits in the gap between the
+    or dx, dx                          ; frozen prefix and the scroll
+    jz .no                             ; window - never freed, never shown:
+    dec dx                             ; clamp down to the frozen prefix's
+    mov bx, dx                         ; own last column, unless there is
+    jmp .hiready                       ; none (freezecol=0, so no gap exists)
+.hiscroll:
+    sub bx, [sh_scrollcol]
+    add bx, [sh_freezecol]
+    cmp bx, [sh_vcols]
+    jb .hiready
+    mov bx, [sh_vcols]
+    dec bx
+.hiready:
+    cmp ax, [sh_vcols]
+    jae .no
+    cmp ax, bx
+    ja .no
+    pop dx
+    stc
+    ret
+.no:
+    pop dx
+    clc
+    ret
+
+; sh_vclip_row - the same, for rows
+sh_vclip_row:
+    push dx
+    cmp ax, [sh_freezerow]
+    jb .loready
+    cmp ax, [sh_scrollrow]
+    jae .loscroll
+    mov ax, [sh_freezerow]
+    jmp .loready
+.loscroll:
+    sub ax, [sh_scrollrow]
+    add ax, [sh_freezerow]
+.loready:
+    cmp bx, [sh_freezerow]
+    jb .hiready
+    cmp bx, [sh_scrollrow]
+    jae .hiscroll
+    mov dx, [sh_freezerow]
+    or dx, dx
+    jz .no
+    dec dx
+    mov bx, dx
+    jmp .hiready
+.hiscroll:
+    sub bx, [sh_scrollrow]
+    add bx, [sh_freezerow]
+    cmp bx, [sh_vrows]
+    jb .hiready
+    mov bx, [sh_vrows]
+    dec bx
+.hiready:
+    cmp ax, [sh_vrows]
+    jae .no
+    cmp ax, bx
+    ja .no
+    pop dx
+    stc
+    ret
+.no:
+    pop dx
+    clc
+    ret
+
+; sh_vidx_col - in: AX = a real column. out: CF=1, AX = its visible index
+; (valid for sh_vwidth/sh_vcx); CF=0 if it is currently off-screen (scrolled
+; away, and not part of the frozen prefix). The single-value inverse of
+; sh_vreal_col - sh_vclip_col clamps a RANGE into view, this answers whether
+; one already-real column (the border table's own stored key, in
+; sh_drawborders' sparse walk) is showing at all
+sh_vidx_col:
+    push bx
+    cmp ax, [sh_freezecol]
+    jae .scroll
+    mov bx, ax                         ; frozen: visible index = itself
+    jmp .yes
+.scroll:
+    mov bx, ax
+    sub bx, [sh_scrollcol]
+    js .no
+    add bx, [sh_freezecol]
+    cmp bx, [sh_vcols]
+    jae .no
+.yes:
+    mov ax, bx
+    pop bx
+    stc
+    ret
+.no:
+    pop bx
+    clc
+    ret
+
+; sh_vidx_row - the same, for rows
+sh_vidx_row:
+    push bx
+    cmp ax, [sh_freezerow]
+    jae .scroll
+    mov bx, ax
+    jmp .yes
+.scroll:
+    mov bx, ax
+    sub bx, [sh_scrollrow]
+    js .no
+    add bx, [sh_freezerow]
+    cmp bx, [sh_vrows]
+    jae .no
+.yes:
+    mov ax, bx
+    pop bx
+    stc
+    ret
+.no:
+    pop bx
+    clc
     ret
 
 ; =============================================================================
@@ -2893,55 +3132,29 @@ sh_updsel:
     jbe .c1
     mov ax, [sh_oldc1]
 .c1:
-    mov cx, [sh_selc2]
-    cmp cx, [sh_oldc2]
+    mov bx, [sh_selc2]
+    cmp bx, [sh_oldc2]
     jae .c2
-    mov cx, [sh_oldc2]
+    mov bx, [sh_oldc2]
 .c2:
-    mov dx, [sh_scrollcol]             ; ...clamped to the viewport, in
-    cmp cx, dx                         ; window cells
-    jb .chrome                         ; wholly left of the view
-    sub cx, dx
-    cmp cx, [sh_vcols]
-    jb .c2ok
-    mov cx, [sh_vcols]
-    dec cx
-.c2ok:
-    sub ax, dx
-    jns .c1ok
-    xor ax, ax
-.c1ok:
-    cmp ax, [sh_vcols]
-    jae .chrome                        ; wholly right of it
-    mov [sh_dmgc1], ax
-    mov [sh_dmgc2], cx
+    call sh_vclip_col                  ; 81.70: real range -> visible-index
+    jnc .chrome                        ; range, frozen-aware; CF=0 = wholly
+    mov [sh_dmgc1], ax                 ; off-screen (what the old inline
+    mov [sh_dmgc2], bx                 ; [sh_scrollcol] clamp used to do)
     mov ax, [sh_selr1]                 ; the union's rows, the same
     cmp ax, [sh_oldr1]
     jbe .r1
     mov ax, [sh_oldr1]
 .r1:
-    mov cx, [sh_selr2]
-    cmp cx, [sh_oldr2]
+    mov bx, [sh_selr2]
+    cmp bx, [sh_oldr2]
     jae .r2
-    mov cx, [sh_oldr2]
+    mov bx, [sh_oldr2]
 .r2:
-    mov dx, [sh_scrollrow]
-    cmp cx, dx
-    jb .chrome
-    sub cx, dx
-    cmp cx, [sh_vrows]
-    jb .r2ok
-    mov cx, [sh_vrows]
-    dec cx
-.r2ok:
-    sub ax, dx
-    jns .r1ok
-    xor ax, ax
-.r1ok:
-    cmp ax, [sh_vrows]
-    jae .chrome
+    call sh_vclip_row
+    jnc .chrome
     mov [sh_dmgr1], ax
-    mov [sh_dmgr2], cx
+    mov [sh_dmgr2], bx
     call sh_dmgdraw
     call sh_drawsel
 .chrome:
@@ -2988,8 +3201,8 @@ sh_gridhit:
     jmp short .hwalk
 .hcol:
     mov ax, cx
-    add ax, [sh_scrollcol]
-    mov [sh_wcol], ax
+    call sh_vreal_col                  ; 81.70: frozen or scrolling, the
+    mov [sh_wcol], ax                  ; visible->real mapping is the same
     xor cx, cx                         ; ...and down the rows' own heights
 .vwalk:                                ; (81.60), BX = pixels into the grid
     cmp cx, [sh_vrows]
@@ -3003,7 +3216,7 @@ sh_gridhit:
     jmp short .vwalk
 .vrow:
     mov ax, cx
-    add ax, [sh_scrollrow]
+    call sh_vreal_row
     mov bx, ax
     mov ax, [sh_wcol]
     pop dx
@@ -3195,14 +3408,17 @@ sh_ondrag:
     mov bx, sh_vsb
     call os88ui_sbtrack                ; DX = the pointer's y
     jc .out                            ; nothing owed (no move, or the rate)
-    call sh_setscrollrow
-    jmp .out
+    add ax, [sh_freezerow]             ; 81.70: the bar answers in its own
+    call sh_setscrollrow               ; scrolling-region space (sh_sbsync
+    jmp .out                           ; shifted pos/total/fit there); every
+                                        ; sh_setscrollrow caller is absolute
 .novthumb:
     cmp byte [sh_hsb_dragon], 0
     je .nohthumb
     mov bx, sh_hsb
     call sh_hsb_track                  ; CX = the pointer's x
     jc .out
+    add ax, [sh_freezecol]             ; 81.70, the vertical bar's reason
     call sh_setscrollcol
     jmp .out
 .nohthumb:
@@ -3308,6 +3524,9 @@ sh_scrollto_t:
     push ax
     push bx
     mov ax, [sh_sc_tcol]
+    cmp ax, [sh_freezecol]             ; 81.70: the frozen prefix is always
+    jb .rows                           ; visible - nothing to scroll for it,
+                                        ; and sh_scrollcol may never go there
     mov bx, [sh_scrollcol]
     cmp ax, bx
     jae .cfwd
@@ -3315,8 +3534,9 @@ sh_scrollto_t:
     jmp short .rows
 .cfwd:
     add bx, [sh_vcols]
-    cmp bx, 0
-    je .rows
+    sub bx, [sh_freezecol]             ; the SCROLLING window's own width -
+    cmp bx, 0                          ; sh_vcols also counts the frozen
+    je .rows                           ; prefix, which this is not walking
     dec bx
     cmp ax, bx
     jbe .rows
@@ -3324,6 +3544,8 @@ sh_scrollto_t:
     mov [sh_scrollcol], ax             ; (81.56): walked, not subtracted
 .rows:
     mov ax, [sh_sc_trow]
+    cmp ax, [sh_freezerow]
+    jb .out
     mov bx, [sh_scrollrow]
     cmp ax, bx
     jae .rfwd
@@ -3331,6 +3553,7 @@ sh_scrollto_t:
     jmp short .out
 .rfwd:
     add bx, [sh_vrows]
+    sub bx, [sh_freezerow]
     cmp bx, 0
     je .out
     dec bx
@@ -3341,6 +3564,55 @@ sh_scrollto_t:
 .out:
     pop bx
     pop ax
+    ret
+
+; sh_frozencw - out: AX = the frozen columns' (0..sh_freezecol-1) total
+; pixel width, summed fresh via sh_colwidth rather than read from sh_vcw -
+; that cache can be one repaint stale for the very columns whose width just
+; changed (Format > Column Width), and this runs off a selection move,
+; which does not itself imply sh_geom has run since
+sh_frozencw:
+    push bx
+    push cx
+    push dx
+    xor dx, dx
+    xor bx, bx
+.l:
+    cmp bx, [sh_freezecol]
+    jae .out
+    mov ax, bx
+    call sh_colwidth
+    mov cl, 3
+    shl ax, cl
+    add dx, ax
+    inc bx
+    jmp short .l
+.out:
+    mov ax, dx
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; sh_frozenrh - the same, for the frozen rows, via sh_rowheight (already in
+; pixels, unlike sh_colwidth's characters)
+sh_frozenrh:
+    push bx
+    push dx
+    xor dx, dx
+    xor bx, bx
+.l:
+    cmp bx, [sh_freezerow]
+    jae .out
+    mov ax, bx
+    call sh_rowheight
+    add dx, ax
+    inc bx
+    jmp short .l
+.out:
+    mov ax, dx
+    pop dx
+    pop bx
     ret
 
 ; sh_backcols - AX = a column past the view's right edge -> AX = the scroll
@@ -3357,9 +3629,11 @@ sh_backcols:
     mov cl, 3
     shl ax, cl
     mov dx, ax                         ; DX = the pixels they take
+    call sh_frozencw                   ; 81.70: the frozen prefix's own
+    add dx, ax                         ; pixels are already spent, permanently
 .l:
-    or bx, bx
-    jz .out
+    cmp bx, [sh_freezecol]             ; 81.70: never walk INTO the frozen
+    jbe .out                           ; prefix - it is not a scroll position
     mov ax, bx
     dec ax
     call sh_colwidth
@@ -3386,9 +3660,11 @@ sh_backrows:
     mov bx, ax                         ; BX = the first row shown
     call sh_rowheight
     mov dx, ax                         ; DX = the pixels they take
+    call sh_frozenrh                   ; 81.70
+    add dx, ax
 .l:
-    or bx, bx
-    jz .out
+    cmp bx, [sh_freezerow]
+    jbe .out
     mov ax, bx
     dec ax
     call sh_rowheight
@@ -4100,10 +4376,13 @@ sh_sbsync:
     jae .vtot                          ; that says nothing. Floored at `fit`,
     mov ax, [sh_vrows]                 ; so an empty sheet has total == fit and
 .vtot:                                 ; correctly shows no thumb at all.
-    mov [sh_vsb + 8], ax               ; total
-    mov ax, [sh_vrows]
+    sub ax, [sh_freezerow]             ; 81.70: total/fit/pos all shift into
+    mov [sh_vsb + 8], ax               ; the SCROLLING region's own space -
+    mov ax, [sh_vrows]                 ; the frozen prefix is never part of
+    sub ax, [sh_freezerow]             ; what the thumb represents at all
     mov [sh_vsb + 10], ax              ; fit
     mov ax, [sh_scrollrow]
+    sub ax, [sh_freezerow]
     mov dx, [sh_vsb + 8]               ; pos, CLAMPED to total - fit: keyboard
     sub dx, [sh_vsb + 10]              ; navigation and Goto move the origin
     cmp ax, dx                         ; without consulting the bars, and both
@@ -4136,10 +4415,13 @@ sh_sbsync:
     jae .htot
     mov ax, [sh_vcols]
 .htot:
-    mov [sh_hsb + 8], ax               ; total
+    sub ax, [sh_freezecol]             ; 81.70: see the vertical bar's own
+    mov [sh_hsb + 8], ax               ; comment above
     mov ax, [sh_vcols]
+    sub ax, [sh_freezecol]
     mov [sh_hsb + 10], ax              ; fit
     mov ax, [sh_scrollcol]
+    sub ax, [sh_freezecol]
     mov dx, [sh_hsb + 8]               ; pos, clamped to total - fit, for the
     sub dx, [sh_hsb + 10]              ; vertical bar's reason above
     cmp ax, dx
@@ -4742,14 +5024,19 @@ sh_setscrollrow:
     push bx
     push cx
     mov cx, [sh_vsb + 8]               ; total
-    sub cx, [sh_vsb + 10]              ; ...minus fit = the last legal pos
-    jns .rok
+    sub cx, [sh_vsb + 10]              ; ...minus fit = the last legal pos,
+    jns .rok                           ; relative to the scrolling region
     xor cx, cx
 .rok:
-    cmp ax, cx
+    add cx, [sh_freezerow]             ; 81.70: back to an ABSOLUTE row -
+    cmp ax, cx                         ; every caller passes AX absolute
     jbe .rset
     mov ax, cx
 .rset:
+    cmp ax, [sh_freezerow]             ; 81.70: the frozen prefix is the
+    jae .rset2                         ; floor - scrolling can never uncover
+    mov ax, [sh_freezerow]             ; less of it than that
+.rset2:
     cmp ax, [sh_scrollrow]
     je .rout                           ; no movement: draw nothing
     mov cx, [sh_scrollrow]             ; the row the view is leaving
@@ -4772,10 +5059,15 @@ sh_setscrollcol:
     jns .cok
     xor cx, cx
 .cok:
-    cmp ax, cx
+    add cx, [sh_freezecol]             ; 81.70: the vertical bar's own
+    cmp ax, cx                         ; comment applies here too
     jbe .cset
     mov ax, cx
 .cset:
+    cmp ax, [sh_freezecol]
+    jae .cset2
+    mov ax, [sh_freezecol]
+.cset2:
     cmp ax, [sh_scrollcol]
     je .cout
     mov [sh_scrollcol], ax
@@ -4812,6 +5104,14 @@ sh_scrollrow_blit:
     je .no
     cmp word [sh_vrows], 0
     je .no
+    ; FROZEN ROWS REFUSE THE BLIT (81.70). OSAPI_GFX_SCROLL shifts a whole
+    ; rect's pixels, and the frozen strip's must not move with the rest -
+    ; cutting the rect below it is real work in the one routine whose
+    ; rectangle arithmetic is hardest to get right, for a saving only a
+    ; frozen sheet being scrolled would ever see. The caller already owns a
+    ; refusal path (it repaints), so this takes it
+    cmp word [sh_freezerow], 0
+    jne .no
     mov ax, [sh_scrollrow]
     sub ax, cx                         ; ax = the delta, in rows (signed)
     mov [sh_blitdel], ax
@@ -5320,7 +5620,7 @@ sh_drawcolhdrs:
     cmp bx, [sh_vcols]
     jae .out
     mov ax, bx
-    add ax, [sh_scrollcol]
+    call sh_vreal_col                  ; 81.70
     call sh_colname
     mov ax, bx
     call sh_vcx                        ; each letter over its own column
@@ -5370,7 +5670,7 @@ sh_drawrowhdrs:
     cmp bx, [sh_vrows]
     jae .out
     mov ax, bx
-    add ax, [sh_scrollrow]
+    call sh_vreal_row                  ; 81.70
     inc ax
     call sh_itoa
     mov si, sh_numbuf
@@ -5440,9 +5740,12 @@ sh_drawgrid:
     mov [sh_cellch], ax                ; need to know about it
     call sh_mkblank
     mov ax, [sh_wcol]
-    add ax, [sh_scrollcol]
-    mov bx, [sh_wrow]
-    add bx, [sh_scrollrow]
+    call sh_vreal_col                  ; 81.70
+    push ax                            ; the real column, banked - sh_vreal_
+    mov ax, [sh_wrow]                  ; row only touches AX and flags, but
+    call sh_vreal_row                  ; the bank costs nothing to be sure
+    mov bx, ax
+    pop ax
     call sh_getcell2
     jc .have
     call sh_spill                      ; ...unless a label to its left runs
@@ -5556,9 +5859,12 @@ sh_drawgrid:
     push cx
     push dx
     mov ax, [sh_wcol]
-    add ax, [sh_scrollcol]
-    mov bx, [sh_wrow]
-    add bx, [sh_scrollrow]
+    call sh_vreal_col                  ; 81.70
+    push ax
+    mov ax, [sh_wrow]
+    call sh_vreal_row
+    mov bx, ax
+    pop ax
     call sh_bt_get                     ; al = this cell's border byte
     pop dx
     pop cx
@@ -5760,22 +6066,23 @@ sh_drawborders:
     call sh_unpackrow                 ; ax=row, bx=sheet
     cmp bx, [sh_cursheet]
     jne .next
-    mov dx, [es:si+2]                 ; col
-    mov bx, dx
-    sub bx, [sh_scrollcol]
-    js .next
-    cmp bx, [sh_vcols]
-    jae .next
-    cmp bx, [sh_dmgc1]                ; ...and inside the damage range, so a
-    jb .next                          ; partial redraw (sh_dmgdraw) does not
-    cmp bx, [sh_dmgc2]                ; re-edge cells it never repainted
-    ja .next
-    mov [sh_wcol], bx
+    push ax                           ; the real row, banked across the
+                                       ; column's own lookup below (81.70) -
+                                       ; sh_vidx_col/row are the real->
+                                       ; visible inverse sh_vreal_col/row
+    mov ax, [es:si+2]                 ; col
+    call sh_vidx_col
+    jnc .skiprow
     mov bx, ax
-    sub bx, [sh_scrollrow]
-    js .next
-    cmp bx, [sh_vrows]
-    jae .next
+    cmp bx, [sh_dmgc1]                ; ...and inside the damage range, so a
+    jb .skiprow                       ; partial redraw (sh_dmgdraw) does not
+    cmp bx, [sh_dmgc2]                ; re-edge cells it never repainted
+    ja .skiprow
+    mov [sh_wcol], bx
+    pop ax                            ; the real row, back
+    call sh_vidx_row
+    jnc .next
+    mov bx, ax
     cmp bx, [sh_dmgr1]
     jb .next
     cmp bx, [sh_dmgr2]
@@ -5836,6 +6143,10 @@ sh_drawborders:
     mov dx, [sh_by2]
     call OSAPI_GFX_FILL
 .nobottom:
+    jmp .next
+.skiprow:
+    pop ax                            ; the real row, banked above and never
+                                       ; needed now the column already missed
 .next:
     mov ax, [sh_bti]
     inc ax
@@ -5865,51 +6176,21 @@ sh_drawsel:
     ; --- clip the block's own cell rect to the visible viewport. Each edge is
     ; clamped rather than the whole block rejected, so a selection that runs
     ; off the screen still draws the part that shows (Excel's own behaviour,
-    ; and what a drag past the edge needs).
-    mov ax, [sh_selc2]                 ; wholly left of the viewport?
-    cmp ax, [sh_scrollcol]
-    jb .out
-    mov ax, [sh_selr2]                 ; wholly above it?
-    cmp ax, [sh_scrollrow]
-    jb .out
-
-    mov ax, [sh_selc1]                 ; left edge, clamped to the origin
-    cmp ax, [sh_scrollcol]
-    jae .c1ok
-    mov ax, [sh_scrollcol]
-.c1ok:
-    sub ax, [sh_scrollcol]
-    cmp ax, [sh_vcols]
-    jae .out                           ; starts past the right edge
+    ; and what a drag past the edge needs). 81.70: sh_vclip_col/row do both
+    ; edges at once, frozen-aware, the same clamp sh_updsel needs too
+    mov ax, [sh_selc1]
+    mov bx, [sh_selc2]
+    call sh_vclip_col
+    jnc .out
     mov [sh_wcol], ax
+    mov [sh_selvc2], bx
 
-    mov ax, [sh_selr1]                 ; top edge, clamped
-    cmp ax, [sh_scrollrow]
-    jae .r1ok
-    mov ax, [sh_scrollrow]
-.r1ok:
-    sub ax, [sh_scrollrow]
-    cmp ax, [sh_vrows]
-    jae .out
+    mov ax, [sh_selr1]
+    mov bx, [sh_selr2]
+    call sh_vclip_row
+    jnc .out
     mov [sh_wrow], ax
-
-    mov ax, [sh_selc2]                 ; right edge, clamped to the last
-    sub ax, [sh_scrollcol]             ; visible column
-    cmp ax, [sh_vcols]
-    jb .c2ok
-    mov ax, [sh_vcols]
-    dec ax
-.c2ok:
-    mov [sh_selvc2], ax
-
-    mov ax, [sh_selr2]                 ; bottom edge, clamped
-    sub ax, [sh_scrollrow]
-    cmp ax, [sh_vrows]
-    jb .r2ok
-    mov ax, [sh_vrows]
-    dec ax
-.r2ok:
-    mov [sh_selvr2], ax
+    mov [sh_selvr2], bx
 
     ; --- cell coords -> pixels
     mov ax, [sh_wcol]
@@ -6680,6 +6961,8 @@ sh_mfire:
 ; -----------------------------------------------------------------------------
 sh_docmd_options:
     push si
+    cmp al, 4
+    je .freeze
     cmp al, 3
     je .calc
     cmp al, 2
@@ -6717,6 +7000,44 @@ sh_docmd_options:
     call sh_fdlg_open
     pop si
     ret
+; FREEZE PANES (81.70). Excel's own: the split is AT the active cell, so
+; everything ABOVE and LEFT of it stops scrolling, and choosing the item
+; again unfreezes. The ANCHOR is the active cell, not the extent - a
+; dragged range freezes at the corner it was dragged FROM.
+.freeze:
+    mov ax, [sh_freezecol]
+    or ax, [sh_freezerow]
+    jnz .unfreeze
+    mov ax, [sh_selcol]
+    or ax, [sh_selrow]
+    jnz .dofreeze
+    mov word [sh_msg], sh_s_frz_at_a1  ; A1 has nothing above or left of it
+    jmp .repaint                       ; to freeze: REFUSED in its own words
+                                        ; (47), not silently done as nothing
+.dofreeze:
+    mov ax, [sh_selcol]
+    mov [sh_freezecol], ax
+    mov ax, [sh_selrow]
+    mov [sh_freezerow], ax
+    mov ax, [sh_scrollcol]             ; the scrolling region can never start
+    cmp ax, [sh_freezecol]             ; inside the frozen prefix - every
+    jae .fcok                          ; other reader takes that invariant
+    mov ax, [sh_freezecol]             ; for granted
+    mov [sh_scrollcol], ax
+.fcok:
+    mov ax, [sh_scrollrow]
+    cmp ax, [sh_freezerow]
+    jae .frok
+    mov ax, [sh_freezerow]
+    mov [sh_scrollrow], ax
+.frok:
+    call sh_frzmark
+    jmp .repaint
+.unfreeze:
+    mov word [sh_freezecol], 0
+    mov word [sh_freezerow], 0
+    call sh_frzmark
+    jmp .repaint
 .repaint:
     mov si, [sh_ownwin]
     call sh_repaint
@@ -13023,7 +13344,8 @@ sh_new:
                                      ; an OFFSET into the arena reset above,
                                      ; and would read new text through it
     mov word [sh_cursheet], 0
-    mov cx, SH_SHEETS * 4            ; 4 words per sheet: sel/row/scl/scr
+    mov cx, SH_SHEETS * 6            ; 6 words per sheet: sel/row/scl/scr,
+                                      ; and 81.70's own fcl/frw
     mov di, sh_selsave
     xor ax, ax
 .clrsave:
@@ -13034,6 +13356,9 @@ sh_new:
     mov word [sh_selrow], 0
     mov word [sh_scrollcol], 0
     mov word [sh_scrollrow], 0
+    mov word [sh_freezecol], 0         ; 81.70: a new document is unfrozen,
+    mov word [sh_freezerow], 0         ; like every other view setting here
+    call sh_frzmark                    ; ...and the item says so again
     mov byte [sh_editing], 0
     mov word [sh_msg], 0
     call sh_repaint
@@ -13054,6 +13379,26 @@ sh_new:
 ; one at its marked twin. Called at startup and after every switch, so the mark
 ; is derived from sh_cursheet rather than tracked alongside it.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; sh_frzmark - point Options' Freeze Panes item at whichever of its two
+; labels the CURRENT state wants (81.70), derived rather than tracked - the
+; same shape sh_sheetmark below uses for the Sheets menu's own tick, and the
+; reason a sheet switch or a new document cannot leave "Unfreeze Panes"
+; standing over a sheet that is not frozen.
+; -----------------------------------------------------------------------------
+sh_frzmark:
+    push ax
+    mov ax, [sh_freezecol]
+    or ax, [sh_freezerow]
+    jnz .on
+    mov word [sh_i_options+8], sh_it_frz_off
+    pop ax
+    ret
+.on:
+    mov word [sh_i_options+8], sh_it_frz_on
+    pop ax
+    ret
+
 sh_sheetmark:
     push ax
     push bx
@@ -13092,6 +13437,10 @@ sh_switchsheet:
     mov [sh_sclsave+bx], ax
     mov ax, [sh_scrollrow]
     mov [sh_scrsave+bx], ax
+    mov ax, [sh_freezecol]             ; 81.70
+    mov [sh_fclsave+bx], ax
+    mov ax, [sh_freezerow]
+    mov [sh_frwsave+bx], ax
     mov [sh_cursheet], cx
     call sh_sheetmark
     mov bx, cx
@@ -13104,6 +13453,11 @@ sh_switchsheet:
     mov [sh_scrollcol], ax
     mov ax, [sh_scrsave+bx]
     mov [sh_scrollrow], ax
+    mov ax, [sh_fclsave+bx]            ; 81.70
+    mov [sh_freezecol], ax
+    mov ax, [sh_frwsave+bx]
+    mov [sh_freezerow], ax
+    call sh_frzmark                    ; the item follows the incoming sheet
     call sh_repaint
 .out:
     pop cx
@@ -36046,7 +36400,7 @@ sh_mtab:
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
     dw sh_m_data,    sh_i_data,    6
-    dw sh_m_options, sh_i_options, 4
+    dw sh_m_options, sh_i_options, 5
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
@@ -36205,6 +36559,7 @@ sh_m_options:  db 'Options', 0
 ; and Formulas are items here where Excel keeps them inside Display... - that
 ; divergence is 81.31's, not this one's.
 sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_prot_off, sh_it_calc
+               dw sh_it_frz_off
 sh_it_prot_off: db 'Protect Document', 0
 sh_it_prot_on:  db 'Unprotect Document', 0
 sh_it_grid_on:  db 'Gridlines: On', 0
@@ -36212,6 +36567,9 @@ sh_it_grid_off: db 'Gridlines: Off', 0
 sh_it_form_on:  db 'Formulas: On', 0
 sh_it_form_off: db 'Formulas: Off', 0
 sh_it_calc:     db 'Calculation...', 0
+sh_it_frz_off:  db 'Freeze Panes', 0     ; 81.70, relabelled like the three
+sh_it_frz_on:   db 'Unfreeze Panes', 0   ; toggles above rather than ticked
+sh_s_frz_at_a1: db 'Select below or right of the split first.', 0
 
 ; Help
 sh_m_help:     db 'Help', 0
@@ -37756,7 +38114,10 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7296                     ; +1094 for 81.67's array/matrix
+    OS88_BSS 7318                     ; +22 for 81.70's sh_freezecol/row,
+                                       ; sh_geom_roff and the two per-sheet
+                                       ; save arrays (SH_SHEETS words each);
+                                       ; +1094 for 81.67's array/matrix
                                        ; functions (mostly sh_mx_buf's 1024-
                                        ; byte elimination workspace) +54 for
                                        ; its own regression family
@@ -37795,7 +38156,17 @@ sh_cw         equ sh_oy + 2
 sh_ch         equ sh_cw + 2
 sh_vcols      equ sh_ch + 2
 sh_vrows      equ sh_vcols + 2
-sh_wcol       equ sh_vrows + 2
+sh_freezecol  equ sh_vrows + 2       ; word: Options > Freeze Panes (81.70) -
+                                     ; columns 0..sh_freezecol-1 never scroll
+sh_freezerow  equ sh_freezecol + 2   ; ...and rows 0..sh_freezerow-1. 0 means
+                                     ; no freeze on that axis; sh_scrollcol/
+                                     ; row can never fall below these once set
+sh_geom_roff  equ sh_freezerow + 2   ; word: sh_geom's own scratch - the
+                                     ; scrolling phase's row offset (visible
+                                     ; index minus sh_freezerow), named
+                                     ; because every other register is
+                                     ; already spoken for in that loop
+sh_wcol       equ sh_geom_roff + 2
 sh_wrow       equ sh_wcol + 2
 sh_selx1      equ sh_wrow + 2
 sh_selx2      equ sh_selx1 + 2
@@ -37992,8 +38363,11 @@ sh_selsave    equ sh_cursheet + 2           ; SH_SHEETS words each: the
 sh_rowsave    equ sh_selsave + (SH_SHEETS*2) ; other 3 sheets' own
 sh_sclsave    equ sh_rowsave + (SH_SHEETS*2) ; selection/scroll, saved and
 sh_scrsave    equ sh_sclsave + (SH_SHEETS*2) ; restored by sh_switchsheet
+sh_fclsave    equ sh_scrsave + (SH_SHEETS*2) ; ...and its FROZEN PANES
+sh_frwsave    equ sh_fclsave + (SH_SHEETS*2) ; (81.70), which are per sheet
+                                             ; in Excel as the scroll is here
 
-sh_ownwin     equ sh_scrsave + (SH_SHEETS*2) ; our own window ptr, stashed
+sh_ownwin     equ sh_frwsave + (SH_SHEETS*2) ; our own window ptr, stashed
                                              ; once in sh_entry for
                                              ; os88ui_ask's sake
 sh_macro_col  equ sh_ownwin + 2             ; the macro engine's current
