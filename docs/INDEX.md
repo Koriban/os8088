@@ -322,10 +322,10 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | PACMAN | `apps/pacman/pacman.asm` | §89 | no |
 | PAINT | `apps/paint/paint.asm` | §42 | yes |
 | PIANO | `apps/piano/piano.asm` | §36 | yes |
-| PLAN | `apps/sheet/sheet.asm` | §66.4 | yes |
 | RECORDER | `apps/recorder/recorder.asm` | §35 | no |
 | RUNCPM | `apps/runcpm/runcpm.asm` | §74 | yes |
 | SCRIBE | `apps/scribe/scribe.asm` | §95 | no |
+| SHEET | `apps/sheet/sheet.asm` | §81 | yes |
 | SKIES | `apps/skies/csload.asm` | §88 | no |
 | SKIES | `apps/skies/skies.asm` | §88 | yes |
 | SOLITAIRE | `apps/solitaire/solitaire.asm` | §43 | yes |

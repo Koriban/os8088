@@ -78,6 +78,12 @@ EXEMPT_DIRS = {
               "one predates that folder)",
     "imgtest": "a capability gate, as fptest - `all` names build/imgtest.o88 "
                "only to keep it assembling",
+    "plan": "PLAN (SPEC.md 81.75) does not ship YET. It builds and it runs, "
+            "but its whole premise is the 128KB machine (24.5.2) and its "
+            "region is still well over that arena - so putting it on a "
+            "volume now would ship a spreadsheet that cannot start on the "
+            "one class of machine it exists for. THIS ENTRY COMES OUT when "
+            "`make plan` reports it fits; it is a deadline, not a category",
     "wire": "WIREFRAME (SPEC.md 78.9) is an INSTRUMENT and not an "
             "application: it is the bench for 78.5's draw orders, `make "
             "wiredisk` builds its disk, and `all` names it only so that it "

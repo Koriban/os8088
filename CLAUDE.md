@@ -617,9 +617,11 @@ learned.
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 62 sites in 21 files, every one
+  finished** (§6.6.5): the registry stands at 79 sites in 22 files, every one
   with a reason, so a new transparent call is now an argument to win rather
-  than a queue to join.
+  than a queue to join. It went 62→79 when `apps/plan/plan.asm` was split out
+  of `sheet.asm` (§81.75) — the same seventeen sites, in a second file — and
+  that line is expected to come back down as PLAN's cuts land.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors

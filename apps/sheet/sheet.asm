@@ -73,72 +73,28 @@
 ; tell an overlay-wiring bug from a drawing bug; it is worth keeping working.
 ; -----------------------------------------------------------------------------
 ; =============================================================================
-; PLAN - THE SECOND PRODUCT OF THIS SOURCE (SPEC.md 81.75)
+; PLAN IS ITS OWN SOURCE TREE NOW (SPEC.md 81.75, apps/plan/plan.asm).
 ;
-; `-DPLAN` builds a spreadsheet sized for a 360KB floppy and the 128KB floor
-; machine: one file, no overlay, every heap claim under the 17.5KB largest run
-; that machine can hand out (§50.6.2). SHEET cannot go there and never could -
-; its cells claim alone is 32KB - which is what §24.5.2 argues at length and
-; why `$(SMALLOMIT)` carries its name.
+; This file carried a second product for a while - `-DPLAN` and a block of
+; SHF_* feature flags - and it does not any more. The reason is the 128KB
+; machine's arithmetic rather than a dislike of the mechanism: PLAN has to
+; reach a region of about 35KB against this file's 48KB resident half, and
+; the cuts that get it there remove things SHEET is built around. Gating them
+; would have meant a `%ifdef` around most of the file, which is not sharing
+; source, it is two programs in one file pretending to be one.
 ;
-; ONE SOURCE, TWO PRODUCTS, TWO NAMES. The mechanism is `make smallapps`'s
-; (`-DAPP_SMALL`, six packages) with the package name changed as well, which is
-; what keeps §73.12 satisfied - two things may not answer to one name - while
-; still sharing as SOURCE rather than as a copy (WEAVE-SPEC §1.2).
-;
-; THIS BLOCK IS AT THE TOP AND MUST STAY THERE. NASM's preprocessor is one
-; pass, so a `%ifdef` is answered WHERE IT SITS, and the bodies these flags
-; gate are thousands of lines below. Defined any lower, every test above reads
-; false and the package assembles calls to routines that were cut out of the
-; image - which froze the whole VM the one time this file got it wrong (the
-; `CH_OVERLAY` note above is that story). Every gated body below tests the
-; FEATURE flag, never `PLAN` itself.
+; What that costs is the thing to watch: the two now share a CONTRACT - the
+; SYLK and CSV formats, and what a formula means - without sharing the code
+; that implements it, which is exactly the shape that drifts. plan.asm keeps
+; this file's `sh_` prefixes so a plain diff stays a usable instrument, and
+; its own header says so.
 ; =============================================================================
-%ifndef PLAN
-  %define SHF_CHART                  ; the live chart window and its 19KB canvas
-  %define SHF_MACRO                  ; the macro language, and 81.74's recorder
-  %define SHF_DB                     ; the DATABASE functions and the Data menu
-  %define SHF_BORD                   ; borders, and their 4KB table
-  %define SHF_NOTE                   ; cell notes, and their 5KB table
-  %define SHF_PROT                   ; cell protection
-  %define SHF_SHEETS                 ; the four sheets in one instance
-  %define SHF_BIFF                   ; BIFF, DIF and dBASE (SYLK and CSV stay)
-  %define SHF_MATRIX                 ; the array/matrix family, and CELL
-  %define SHF_FIN                    ; the financial family
-  %define SHF_TRIG                   ; SIN..LOG (SQRT stays either way)
-  %define SHF_TEXT                   ; the text family beyond & and TEXT()
-  %define SHF_SORT                   ; Data > Sort and its 30KB staging layout
-  %define SHF_DRAG                   ; every gesture kern_small's WM_ONDRAG
-                                      ; refuses: drag-select, thumb drag, and
-                                      ; 81.73.2's resize by the heading
-%endif
 
-; The overlay is SHEET's alone: PLAN is one file, so SHOUT becomes a near call
-; (see the macro below) and the chart module never exists.
-%ifdef SHF_CHART
-  %define CH_OVERLAY                ; the chart module goes to CHART.OVL
-%else
-  %define PLAN_ONEFILE              ; ...and with no chart module there is no
-%endif                              ; module at all: one PLAN.O88 and nothing
-                                    ; beside it (81.75)
-
-; PLAN_ONEFILE FOLLOWS SHF_CHART AND IS NOT A SEPARATE DECISION. The module's
-; own dispatcher (ch_modc) and its verb table live in os88chart.inc, so a
-; build with no chart module has nothing to put at .modc offset 0 - the two
-; go together or neither does. Nor could it have been thrown earlier:
-; assembling this source with every .modc tenant resident overflows the 64KB
-; SEGMENT before it overflows anything else, `dw OS88_IMAGE_SIZE` failing
-; first and a bss offset past 65535 second. That is the overlay's whole
-; reason, and it is why `make plan` measured resident + module + bss as one
-; number through every cut above rather than packaging anything.
+%define CH_OVERLAY                  ; the chart module goes to CHART.OVL
 
 %include "os88api.inc"
 
-%ifdef PLAN
-    OS88_HEADER 'PLAN', sh_entry, 3    ; 81.75. A package NAME is a literal
-%else                                   ; here, not a %define: OS88_HEADER
     OS88_HEADER 'SHEET', sh_entry, 3   ; packs it, and an indirected one comes
-%endif                                  ; through as a number
                                         ; bit 0 = icon, bit 1 = the
                                         ; association block below
 
@@ -193,33 +149,17 @@
 ; every other program on this machine can also write. Declaring .DIF or .BIF
 ; there would be a package offering to open a file it has no reader for.
     OS88_ASSOC16
-%ifdef SHF_BIFF
     db 3
     OS88_ASSOC_EXT 'SLK'
     OS88_ASSOC_EXT 'DIF'
     OS88_ASSOC_EXT 'BIF'
-%else
-    db 2
-    OS88_ASSOC_EXT 'SLK'
-    OS88_ASSOC_EXT 'CSV'
-%endif
     OS88_ASSOC16_END
 
 ; =============================================================================
 ; Geometry / grid / storage constants
 ; =============================================================================
 SH_COLS      equ 256                ; the roadmap's stage 1.2 ceiling
-%ifdef PLAN
-; 81.75: 256 x 2048. The grid size does not drive the cells claim - the array
-; is SPARSE, so what it costs is the OCCUPIED cells - but a budget that needs
-; row 2049 is not a budget, and a smaller ceiling is what lets the row header
-; stay four digits wide. SH_ROW_BITS is unchanged at 14: the packed key has
-; room for 16384 either way, and narrowing it would be a second change with
-; no second benefit.
-SH_ROWS      equ 2048
-%else
 SH_ROWS      equ 16384
-%endif
 ; stage 2.x: Format > Column Width.../Row Height... make these RUNTIME
 ; values (sh_cellw/sh_cellh/sh_cellch bss words) rather than compile-time
 ; constants. Stage 3.0c made both dialogs real numeric entry (sh_idlg_*, over
@@ -301,20 +241,6 @@ SH_RW_CAP    equ 80                  ; stage 2.x: sh_formula_reidx's own
 ; hand out (§50.6.2), and a package that merely wants heap can refuse itself
 ; in its own words - which is a refusal, not a spreadsheet. Every figure below
 ; is sized from what a BUDGET holds rather than from what a sheet could.
-%ifdef PLAN
-SH_CLAIM_CELLS_KB equ 8             ; 409 records of 20 bytes. A twelve-month
-                                    ; budget of thirty rows is about 400
-SH_CLAIM_TXT_KB   equ 2             ; formula text only: no notes here
-SH_CLAIM_STG_KB   equ 16            ; file I/O staging. NOT the 2KB the plan
-                                    ; first wrote: the readers take a whole
-                                    ; file into this buffer in one
-                                    ; OSAPI_FILE_READ, so it is the DOCUMENT
-                                    ; size and not a streaming window, and a
-                                    ; 409-cell SYLK is about 15KB. What Sort's
-                                    ; going buys is the 32KB its own layout
-                                    ; forced (offsets to 30,720), not the
-                                    ; buffer itself
-%else
 SH_CLAIM_CELLS_KB equ 32            ; -> SH_CELL_CAP records of SH_C_SZ.
                                     ; Doubled with the widening: 20 bytes in
                                     ; 16KB would have DROPPED capacity to 819,
@@ -323,7 +249,6 @@ SH_CLAIM_TXT_KB   equ 8             ; formula text arena (used from the next
                                      ; pass on; claimed now so entry needs no
                                      ; second edit)
 SH_CLAIM_STG_KB   equ 32            ; file I/O staging
-%endif
 ; sh_docmd_sortcol's own layout within sh_stgseg (stage 2.x: formula cells
 ; now participate in the sort too, so alongside the original rows[]/
 ; values[] arrays it also needs a source-index permutation, an
@@ -394,16 +319,12 @@ SH_CHART_D1  equ 1024               ; stage 4.6: and where the DOUBLES the scan
 SH_CHART_D2  equ 1536               ; collects sit, before ch_scale turns them
                                     ; into the two word arrays above. Same 512
                                     ; spacing; CH_MAXBARS doubles is 320
-%ifdef PLAN
-SH_CLAIM_UNDO_KB  equ 8             ; 81.75: half of SHEET's, for a quarter of
-%else                               ; the cells - and STILL optional
 SH_CLAIM_UNDO_KB  equ 16            ; 81.57: Edit > Undo's snapshot - the cells,
                                      ; borders, notes and widths as they were
                                      ; before the last undoable command. SHEET's
                                      ; EIGHTH claim, and OPTIONAL: without it
                                      ; Undo stays "Can't Undo" and nothing else
                                      ; changes
-%endif
 SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; offscreen 4bpp canvas - 240x160px, 120
                                      ; bytes/row (already a multiple of 4, so
@@ -525,15 +446,9 @@ SH_S_SZ      equ 20                 ; ...and the code says SH_S_SZ where it
                                     ; means this, so changing it is a change
                                     ; to ONE layout and not silently to both
 
-%ifdef PLAN
-SH_CELL_CAP  equ 409                ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
-SH_TXT_CAP   equ 2048               ; SH_CLAIM_TXT_KB in bytes
-SH_STAGE_MAX equ 16384
-%else
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
 SH_STAGE_MAX equ 32768
-%endif
 SH_BT_SZ     equ 6                  ; the border table's record (81.55): row,
                                     ; col, the border+protection byte, and
                                     ; the number format beyond the four the
@@ -593,22 +508,10 @@ SH_NOTEMAX   equ 240                ; the longest note the dialog will take,
 %define CHM_scale     1
 %define CHM_bmp_write 2
 
-%ifndef CH_OVERLAY
-  %ifndef CH_RESIDENT
-    %ifndef PLAN_ONEFILE
-    %error "neither CH_OVERLAY nor CH_RESIDENT is defined HERE - see the note at the top of this file. A %ifdef tested before the %define is not an error to NASM, it is just false."
-    %endif
-  %endif
-%endif
 
 %macro CHMOD 1
-  %ifdef CH_OVERLAY
     mov bp, CHM_%1
     call ch_ovcall
-  %else
-    call ch_%1
-    clc
-  %endif
 %endmacro
 
 CH_W       equ 240
@@ -792,39 +695,16 @@ SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
 ; is no menu left to open, so SHF_DATAMENU is the OR of what is left and
 ; SH_DATA_N is how many - one number, used by sh_mtab, by sh_i_data's own
 ; list and by nothing else.
-%ifdef SHF_DB
-  %define SHF_DATAMENU
   %define SH_DATA_N 11
-%elifdef SHF_SORT
-  %define SHF_DATAMENU
-  %ifdef SHF_CHART
-    %define SH_DATA_N 4
-  %else
-    %define SH_DATA_N 1
-  %endif
-%elifdef SHF_CHART
-  %define SHF_DATAMENU
-  %define SH_DATA_N 3
-%endif
 
 SH_MI_FILE    equ 0
 SH_MI_EDIT    equ 1
 SH_MI_FORMULA equ 2
 SH_MI_FORMAT  equ 3
-%ifdef SHF_DATAMENU
 SH_MI_DATA    equ 4
 SH_MI_OPTIONS equ SH_MI_DATA + 1
-%else
-SH_MI_DATA    equ 0xFD                ; never matched, SH_MI_MACRO's reason
-SH_MI_OPTIONS equ 4
-%endif
-%ifdef SHF_MACRO
 SH_MI_MACRO   equ SH_MI_OPTIONS + 1
 SH_MI_SHEET   equ SH_MI_MACRO + 1
-%else
-SH_MI_MACRO   equ 0xFE                ; never matched: nothing sets AH to it
-SH_MI_SHEET   equ SH_MI_OPTIONS + 1
-%endif
 SH_MI_HELP    equ SH_MI_SHEET + 1
 SH_MENU_N     equ SH_MI_HELP + 1
 SH_M_NONE    equ 0xFF
@@ -884,16 +764,10 @@ sh_reloc:
 ; segment across the OSAPI_FILE_WRITE in the middle of it.
 sh_segw:
     dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg
-%ifdef SHF_CHART
     dw sh_chartseg
     dw ch_srcseg, ch_stgseg, ch_srcseg2
-%endif
     dw sh_undoseg
-%ifdef SHF_CHART
 SH_NSEGW equ 9
-%else
-SH_NSEGW equ 5                       ; 81.75: no chart claim and no borrowed
-%endif                               ; copies of it to keep in step
 
 ; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
@@ -925,21 +799,10 @@ SH_NSEGW equ 5                       ; 81.75: no chart claim and no borrowed
 ; builds cannot drift - the same argument CHFP makes for the chart module.
 ; -----------------------------------------------------------------------------
 %macro SHOUT 1
-  %ifdef SH_FMT_OVL
     call far [sh_v_%1]
-  %else
-    call %1
-  %endif
 %endmacro
 
-%ifndef PLAN_ONEFILE
-  %define SH_FMT_OVL                 ; ...so SHOUT is `call far [vector]`
-%endif
-%ifdef PLAN_ONEFILE
-  %define SH_MODSEC .text            ; every `section SH_MODSEC` below is this
-%else                                ; file's own half of CHART.OVL
   %define SH_MODSEC .modc
-%endif
 %define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
 SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
 SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
@@ -990,38 +853,6 @@ SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
 SHM_N      equ 37                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
-%ifdef PLAN_ONEFILE
-; PLAN HAS NO MODULE, so there is nothing to dispatch INTO - but every door
-; below still says `mov bp, <verb>` / `call ch_ovcall`, and every verb body
-; still ends in `retf` because that is what it is for in the other build.
-; Rather than rewrite twenty doors, ch_ovcall becomes a local dispatcher that
-; SYNTHESISES the far frame those bodies expect: `push cs` puts CS where a far
-; CALL would have, and the near call that follows puts IP on top of it, so the
-; body's own `retf` pops both correctly. The doors, the verb numbers and the
-; thunk table are all untouched between the two builds.
-section .text
-ch_ovcall:
-    ; STKBALANCE-OK: the `push cs` below is NOT this routine's to pop - it is
-    ; half of a far frame, and the verb body's own `retf` takes both words.
-    ; That is the whole trick, and it reads as +1 from here on purpose.
-    push si
-    mov si, bp
-    sub si, SHM_READ
-    cmp si, SHM_N
-    jae .bad
-    shl si, 1
-    mov si, [si + sh_mverb]
-    mov [sh_planvec], si
-    pop si
-    push cs                         ; the far frame the verb body's retf wants
-    call near [sh_planvec]
-    clc                             ; there is always a module here
-    ret
-.bad:
-    pop si
-    stc
-    ret
-%else
 section .modc vstart=0 align=1
 sh_modc0:
     jmp ch_modc
@@ -1035,7 +866,6 @@ sh_modc_ext:
     jmp word [cs:bp+sh_mverb]       ; [cs:], because sh_mverb is the module's
 .bad:                               ; OWN data and DS is the package (68.10)
     retf
-%endif
 
 sh_mverb:
     dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
@@ -1064,59 +894,34 @@ sh_m_dowrite:
 sh_m_difbbox:
     call shm_difbbox
     retf
-%ifdef SHF_FIN
 sh_m_pfin:
     call shm_pfin
     clc                             ; CF=0 is "the module ran" - the stub
     retf                            ; reads CF=1 as "there is no module"
-%else
-sh_m_pfin:                          ; 81.75: positional, and never reached
-    clc
-    retf
-%endif
-%ifdef SHF_TEXT
 sh_m_ptext:                         ; 81.62, the same contract
     call shm_ptext
     clc
     retf
-%else
-sh_m_ptext:                         ; 81.75: positional, never reached
-    clc
-    retf
-%endif
-%ifdef SHF_TRIG
 sh_m_ptrans:
     call shm_ptrans
     clc
     retf
-%else
-sh_m_ptrans:                        ; 81.75: positional, never reached
-    clc
-    retf
-%endif
 sh_m_pinfo:
     call shm_pinfo
     clc
     retf
 sh_m_pmacro:                        ; 81.63
-%ifdef SHF_MACRO
     call shm_pmacro
-%endif
     clc
     retf
 sh_m_mresume:
-%ifdef SHF_MACRO
     call shm_mresume
-%endif
     clc
     retf
 sh_m_pdatabase:                     ; 81.65
-%ifdef SHF_DB
     call shm_pdatabase
-%endif
     clc
     retf
-%ifdef SHF_MATRIX
 sh_m_pcell:                         ; 81.66
     call shm_pcell
     clc
@@ -1125,13 +930,6 @@ sh_m_pmatrix:                       ; 81.67
     call shm_pmatrix
     clc
     retf
-%else
-sh_m_pcell:                         ; 81.75: a verb NUMBER is positional, so
-sh_m_pmatrix:                       ; the two slots stay and are never reached
-    clc                             ; - the dispatcher answers #NAME? above
-    retf
-%endif
-%ifdef SHF_DB
 sh_m_dbcmd:                         ; 81.71: a Data menu command, NOT a
     call shm_dbcmd                  ; formula. CF stays the MODULE-PRESENCE
     clc                             ; answer here like every verb above it;
@@ -1155,15 +953,6 @@ sh_m_fclick:
     call sh_df_onclick
     clc
     retf
-%else
-sh_m_dbcmd:                         ; 81.75: positional again - nothing calls
-sh_m_form:                          ; these four, because the Data menu that
-sh_m_fpaint:                        ; did is not in this build's menu bar
-sh_m_fkey:
-sh_m_fclick:
-    clc
-    retf
-%endif
 sh_m_bopen:                         ; 81.71.5.1
     call sh_bdlg_open
     clc
@@ -1180,21 +969,13 @@ sh_m_bclose:
     call sh_bdlg_close
     clc
     retf
-%ifdef SHF_DB
 sh_m_fclose:
     call sh_df_savefld                 ; a background click is not a cancel
     call sh_df_close                   ; here: the field being edited is
     clc                                ; committed, the way Close itself does
     retf
-%else
-sh_m_fclose:
-    clc
-    retf
-%endif
 sh_m_sortcol:                       ; 81.71.6
-%ifdef SHF_SORT
     call sh_docmd_sortcol
-%endif
     clc
     retf
 sh_m_lopen:
@@ -1209,16 +990,10 @@ sh_m_lclick:
     call sh_ldlg_onclick
     clc
     retf
-%ifdef SHF_DB
 sh_m_series:                        ; 81.72
     call shm_series
     clc
     retf
-%else
-sh_m_series:                        ; 81.75: Data ▸ Series went with the menu
-    clc
-    retf
-%endif
 sh_m_fdopen:                        ; 81.74.2
     call sh_fdlg_open
     clc
@@ -1361,41 +1136,30 @@ sh_difbbox:
 ; same door, each with its own verb: the functions a sheet uses least, 2.8 KB
 ; the package needed more than the module did. SUM and its folds, IF, the
 ; special forms, the lookups, the dates and NOW stay resident.
-%ifdef SHF_FIN
 sh_pfin:
     push bp
     mov bp, SHM_FIN
     jmp short sh_pdoor
-%endif
-%ifdef SHF_TEXT
 sh_ptext:
     push bp
     mov bp, SHM_TEXT
     jmp short sh_pdoor
-%endif
-%ifdef SHF_TRIG
 sh_ptrans:
     push bp
     mov bp, SHM_TRANS
     jmp short sh_pdoor
-%endif
 sh_pinfo:
     push bp
     mov bp, SHM_INFO
     jmp short sh_pdoor
-%ifdef SHF_MACRO
 sh_pmacro:                          ; 81.63: the macro functions
     push bp
     mov bp, SHM_MACRO
     jmp short sh_pdoor
-%endif
-%ifdef SHF_DB
 sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
     push bp
     mov bp, SHM_DATABASE
     jmp short sh_pdoor
-%endif
-%ifdef SHF_MATRIX
 sh_pcell:                           ; 81.66: CELL
     push bp
     mov bp, SHM_CELL
@@ -1403,7 +1167,6 @@ sh_pcell:                           ; 81.66: CELL
 sh_pmatrix:                         ; 81.67: MDETERM...GROWTH
     push bp
     mov bp, SHM_MATRIX
-%endif
 sh_pdoor:
     call ch_ovcall
     pop bp
@@ -1425,7 +1188,6 @@ sh_pdoor:
     pop bx
     ret
 
-%ifndef PLAN_ONEFILE
 ; -----------------------------------------------------------------------------
 ; sh_ovbind - fill the vector table: this package's shim offsets and its own
 ; segment. The offsets are assembled in; only the segment is a runtime fact,
@@ -1642,29 +1404,19 @@ sh_x_sh_drawstatus:
     call sh_drawstatus
     retf
 sh_x_sh_macro_alertup:
-%ifdef SHF_MACRO
     call sh_macro_alertup
-%endif
     retf
 sh_x_sh_macro_beep:
-%ifdef SHF_MACRO
     call sh_macro_beep
-%endif
     retf
 sh_x_sh_macro_clear:
-%ifdef SHF_MACRO
     call sh_macro_clear
-%endif
     retf
 sh_x_sh_macro_cmd:
-%ifdef SHF_MACRO
     call sh_macro_cmd
-%endif
     retf
 sh_x_sh_macro_inputup:
-%ifdef SHF_MACRO
     call sh_macro_inputup
-%endif
     retf
 sh_x_sh_name_lookup:
     call sh_name_lookup
@@ -1825,14 +1577,10 @@ sh_x_sh_ymd_to_ser:
 ; 81.74.2: everything the two remaining dialog engines reach back for, now
 ; that they are in the module too
 sh_x_sh_chart_paint:
-%ifdef SHF_CHART
     call sh_chart_paint
-%endif
     retf
 sh_x_sh_chart_render:
-%ifdef SHF_CHART
     call sh_chart_render
-%endif
     retf
 sh_x_sh_dlg:
     call sh_dlg
@@ -1859,14 +1607,10 @@ sh_x_sh_ptwips:
     call sh_ptwips
     retf
 sh_x_sh_rec_cmd:
-%ifdef SHF_MACRO
     call sh_rec_cmd
-%endif
     retf
 sh_x_sh_rec_start:
-%ifdef SHF_MACRO
     call sh_rec_start
-%endif
     retf
 sh_x_sh_rowcol_op:
     call sh_rowcol_op
@@ -1878,9 +1622,7 @@ sh_x_sh_select:
     call sh_select
     retf
 sh_x_sh_ser_setstep:
-%ifdef SHF_DB
     call sh_ser_setstep
-%endif
     retf
 sh_x_sh_twpts:
     call sh_twpts
@@ -1892,17 +1634,13 @@ sh_x_sh_upcase_at:
     call sh_upcase_at
     retf
 sh_x_sh_docmd_dbrun:
-%ifdef SHF_DB
     call sh_docmd_dbrun
-%endif
     retf
 sh_x_sh_undo_end:
     call sh_undo_end
     retf
 sh_x_sh_idlg_after:
-%ifdef SHF_MACRO
     call sh_idlg_after
-%endif
     retf
 sh_x_sh_acc_fromudw:                ; ...and back: fp_i2a is signed, so a
     call sh_acc_fromudw             ; serial past 32767 came out NEGATIVE
@@ -1965,26 +1703,21 @@ sh_ovshims:
     dw sh_x_sh_upcase_at, sh_x_sh_docmd_dbrun, sh_x_sh_undo_end, sh_x_sh_idlg_after  ; 81.74.2
     dw sh_x_sh_acc_fromudw, sh_x_sh_monlen
     dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
-%endif                                 ; PLAN_ONEFILE
 sh_entry:
     push ax
     push dx
     push si
     push di
-%ifdef CH_OVERLAY
     call OSAPI_FILE_HERE                ; where this package was LAUNCHED from,
     mov [ch_ovdir], dx                  ; banked before anything can navigate
     mov [ch_ovdrv], bl                  ; away - it is where CHART.OVL lives
                                         ; (82.16, the shape SPEC.md 68.10 sets)
-%endif
     call fp_init                      ; before the first claim, because every
-%ifdef CH_OVERLAY
     call sh_ovbind                      ; ...and the file-format module's
                                         ; (82.16.9), the same shape
     call ch_ovbind                      ; the chart module's vectors out (82.16):
                                         ; our shims, our segment, before anything
                                         ; can draw
-%endif
                                       ; other thing here can fail and be
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
@@ -2022,14 +1755,12 @@ sh_entry:
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
     mov word [sh_nnote], 0
-%ifdef SHF_CHART
     mov ax, SH_CLAIM_CHART_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_chartseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
-%endif
     mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
     call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
@@ -2037,7 +1768,6 @@ sh_entry:
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
 .noundo:
-%ifdef CH_OVERLAY
     call ch_ovneed                      ; CHART.OVL's CH_OVKB claim is taken
                                         ; HERE, with every other claim, because
                                         ; SPEC.md 50.3 is not advice. CF is not
@@ -2050,7 +1780,6 @@ sh_entry:
                                         ; now: sh_reloc patches the WORD, never
                                         ; this register, and the BMP header copy
                                         ; below writes through DX as ES
-%endif
     ; THE REGION ITSELF IS NOT DECLARED MOVABLE IN THIS TREE, and that is the
     ; one place this proc departs from upstream's (SPEC.md 66.6.1). Upstream's
     ; case for it is that SHEET "stores its own segment nowhere", which is
@@ -2068,7 +1797,6 @@ sh_entry:
     ; sh_stgseg, which is pinned, and every copy of a movable segment is
     ; either in sh_segw or dead across no compaction point. The image and
     ; CHART.OVL are what stay put.
-%ifdef SHF_CHART
     mov word [sh_chartwin], 0
     mov word [sh_chart_cnt], 0
     mov word [ch_type], CH_T_COLUMN
@@ -2086,7 +1814,6 @@ sh_entry:
     pop cx
     pop di
     pop si
-%endif
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
     mov si, sh_tpl
@@ -2116,9 +1843,7 @@ sh_entry:
     call sh_mkblank
     call sh_mtab_calc
     call sh_sheetmark
-%ifdef SHF_MACRO
     call sh_recmark                    ; 81.74: both Macro items say what they
-%endif                                  ; would do, from the state they start in
 
     ; stage 3.0a: drag-to-select. BX is still the window OSAPI_WM_CREATE just
     ; answered. CF=1 means kern_small, which carries the slot and not the body
@@ -3615,7 +3340,6 @@ sh_repaint:
     dec dx
     call OSAPI_GFX_FILL
     call sh_drawall
-%ifdef SHF_CHART
     cmp word [sh_chartwin], 0           ; stage 2.x: keep the live Chart Column
     je .nochart                         ; window in sync with every data-
     cmp byte [sh_chartdirty], 0         ; changing command that already routes
@@ -3637,7 +3361,6 @@ sh_repaint:
 .chartobscured:
     pop bx
 .nochart:
-%endif                                  ; SHF_CHART
     pop dx
     pop cx
     pop bx
@@ -3672,12 +3395,10 @@ sh_onclick:
     je .nobdlg                         ; recovery, for the Border dialog
     call sh_bdlg_close_r
 .nobdlg:
-%ifdef SHF_DB
     cmp word [sh_df_win], 0            ; 81.71.5: and for Data ▸ Form, which
     je .nodf                           ; would otherwise gate that item shut
     call sh_df_close_r                 ; for the rest of the session
 .nodf:
-%endif
     mov word [sh_msg], 0
     mov byte [sh_rz_on], 0             ; 81.73.2: a press on a heading's own
     call sh_hdrhit                     ; trailing edge is a RESIZE and not a
@@ -3744,9 +3465,7 @@ sh_select:
     call sh_selpaint                   ; only what the move dirtied - the full
                                         ; repaint costs ~1s on a 4.77MHz 8088
                                         ; and this path runs per arrow key
-%ifdef SHF_MACRO
     call sh_rec_sel                    ; 81.74: ...and the recorder's SELECT,
-%endif                                 ; which is a no-op unless one is live
     pop bx
     pop ax
     ret
@@ -4661,12 +4380,10 @@ sh_onkey:
     je .nobdlg
     call sh_bdlg_close_r
 .nobdlg:
-%ifdef SHF_DB
     cmp word [sh_df_win], 0            ; 81.71.5, sh_onclick's own reason
     je .nodf
     call sh_df_close_r
 .nodf:
-%endif
     mov word [sh_msg], 0
     mov bx, si
     call sh_geom
@@ -5059,13 +4776,11 @@ sh_commit:
     call sh_undo_begin                ; the snapshot already
     call sh_undo_end
 .inside:
-%ifdef SHF_MACRO
     call sh_rec_stage                 ; 81.74: a TYPED entry is the recorder's
                                       ; FORMULA. Staged HERE, before the store
                                       ; reads sh_editbuf, and emitted at .out
                                       ; - the emit writes through sh_commit
                                       ; itself, so it has to happen once this
-%endif                                ; one is finished with the buffer
     mov byte [sh_editing], 0
     mov byte [sh_commitdirty], 1      ; cell data changes below (even an empty
                                       ; buffer clears the cell) - sh_selpaint
@@ -5132,11 +4847,9 @@ sh_commit:
 .label:
     call sh_setlabel                  ; ...and TRUE and FALSE, which are
 .out:                                 ; the logical constant (81.51)
-%ifdef SHF_MACRO
     pushf                             ; 81.74: every caller reads this CF
     call sh_rec_flush
     popf
-%endif
     pop es
     pop si
     pop dx
@@ -7881,39 +7594,6 @@ sh_mfire:
 .format:
     call sh_docmd_format
     jmp .out
-%ifndef SHF_DB
-; 81.75: without the database, Data is whatever is left of it - Sort, then
-; the three chart items - and the items RENUMBER rather than being greyed.
-; A menu showing six commands that cannot happen is worse than a short one,
-; and SPEC.md 47 wants a fact to grey on; "not in this build" is not one the
-; user can act on. With nothing left the menu itself is gone and SH_MI_DATA
-; is 0xFD, so this arm is unreachable rather than absent.
-.data:
-  %ifdef SHF_SORT
-    or al, al
-    jnz .pdatac
-    mov al, SH_ID_SORT                 ; 0: Sort...
-    call sh_idlg_open_r
-    jmp .out
-.pdatac:
-    dec al                             ; ...and the chart items follow it
-  %endif
-  %ifdef SHF_CHART
-    or al, al
-    jnz .pdata2
-    call sh_docmd_chart
-    jmp .out
-.pdata2:
-    cmp al, 1
-    jne .pdata3
-    mov al, SH_FDK_GAL
-    call sh_fdlg_open_r
-    jmp .out
-.pdata3:
-    call sh_docmd_chartexport
-  %endif
-    jmp .out
-%else
 .data:
     or al, al                          ; AL was ignored here before Chart
     jnz .data1                         ; Column.../Export were added - Data
@@ -7977,7 +7657,6 @@ sh_mfire:
 .data10:
     call sh_docmd_chartexport
     jmp .out
-%endif                                 ; SHF_DB
 .sheets:
     xor ah, ah                        ; al = item index = target sheet 0..3
     call sh_switchsheet
@@ -7985,7 +7664,6 @@ sh_mfire:
 .options:
     call sh_docmd_options
     jmp .out
-%ifdef SHF_MACRO
 .macro:
     or al, al
     jnz .macro1
@@ -8005,10 +7683,6 @@ sh_mfire:
     xor byte [sh_rec_rel], 1           ; 3: Relative / Absolute Record - the
     call sh_recmark                    ; item names what choosing it WOULD do
     jmp .out
-%else
-.macro:                                ; 81.75: SH_MI_MACRO is 0xFE in this
-    jmp .out                           ; arm, so nothing can reach it
-%endif
 .help:
     call sh_docmd_help
 .out:
@@ -8778,12 +8452,10 @@ sh_cell_totext:
 ; error).
 ; -----------------------------------------------------------------------------
 sh_docmd_copy:
-%ifdef SHF_MACRO
     push si
     mov si, sh_s_rec_copy              ; 81.74
     call sh_rec_cmd
     pop si
-%endif
     push ax
     push bx
     push cx
@@ -8882,12 +8554,10 @@ sh_docmd_copy:
 
 ; sh_docmd_cut - Copy, then Clear
 sh_docmd_cut:
-%ifdef SHF_MACRO
     push si
     mov si, sh_s_rec_cut               ; 81.74
     call sh_rec_cmd
     pop si
-%endif
     push ax
     push bx
     push cx
@@ -8950,12 +8620,10 @@ sh_docmd_cut:
 ; text had been typed. An empty clipboard is a no-op.
 ; -----------------------------------------------------------------------------
 sh_docmd_paste:
-%ifdef SHF_MACRO
     push si
     mov si, sh_s_rec_paste             ; 81.74
     call sh_rec_cmd
     pop si
-%endif
     push ax
     push bx
     push cx
@@ -9392,7 +9060,6 @@ sh_docmd_filldown:
     pop ax
     ret
 section SH_MODSEC                      ; 81.71.6: ...and the carry half of it
-%ifdef SHF_SORT
 
 ; -----------------------------------------------------------------------------
 ; sh_sort_carry - apply the key column's permutation to every OTHER column in
@@ -9665,10 +9332,8 @@ sh_sort_permcol:
     pop ax
     ret
 
-%endif                                 ; SHF_SORT
 section .text
 
-%ifdef SHF_SORT
 sh_s_sortfull: db 'Sort incomplete - text area full.', 0
 
 ; sh_docmd_sortcol_r - the resident door (81.71.6). Data > Sort's worker is
@@ -9684,7 +9349,6 @@ sh_docmd_sortcol_r:
     mov word [sh_msg], sh_s_noovl
 .out:
     ret
-%endif                                 ; SHF_SORT
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
@@ -9721,7 +9385,6 @@ sh_docmd_sortcol_r:
 ; A sort key is a whole column by definition, so this acts on all of the
 ; selected column rather than on the selected part of it.
 ; -----------------------------------------------------------------------------
-%ifdef SHF_CHART
 ; -----------------------------------------------------------------------------
 ; sh_chart_scan - (re)collect [sh_chart_sheet]/[sh_chart_col]'s plain-value
 ; cells into sh_stgseg/sh_chart_cnt, capped at CH_MAXBARS (same shape as
@@ -10107,11 +9770,9 @@ sh_chart_tpl:
 sh_s_chart_title: db 'Chart', 0
 sh_s_charted:      db 'Charted.', 0
 sh_s_coltitle:     db 'Column ', 0
-%endif                                 ; SHF_CHART
 sh_s_onesheet:     db 'Saved - THIS SHEET ONLY; use .BIF to keep them all.', 0
 sh_s_sheetnm:      db 'Sheet', 0
 
-%ifdef SHF_CHART
 ; sh_docmd_chartexport - Data > Export Chart as BMP...: a no-op
 ; informational message if there's nothing charted yet (same "still runs,
 ; OK is just a no-op" idiom used throughout this file), else the standard
@@ -10140,8 +9801,6 @@ sh_docmd_chartexport:
     pop bx
     pop ax
     ret
-%endif                                 ; SHF_CHART
-%ifdef SHF_MACRO
 ; =============================================================================
 ; THE MACRO RECORDER (SPEC.md 81.74)
 ;
@@ -10567,11 +10226,9 @@ sh_s_rec_set:     db 'Recorder set.', 0
 sh_s_rec_on:      db 'Recording.', 0
 sh_s_rec_off:     db 'Recording stopped.', 0
 sh_s_rec_norange: db 'Set Recorder first.', 0
-%endif                                 ; SHF_MACRO
 
 
 
-%ifdef SHF_DB
 ; -----------------------------------------------------------------------------
 ; sh_docmd_setname - Data > Set Database.../Set Criteria... (SPEC.md 81.69).
 ; in: SI = the reserved name ('DATABASE' or 'CRITERIA'). Binds it to the
@@ -10816,9 +10473,7 @@ sh_ondbdelete:
     call sh_drawstatus
     pop ax
     ret
-%endif                                 ; SHF_DB
 
-%ifdef SHF_CHART
 ; -----------------------------------------------------------------------------
 ; sh_chartexp_ondlg - the Export Chart dialog's completion proc (SPEC.md
 ; 38.6, same shape as sh_ondlg but writing the chart buffer, not the sheet,
@@ -10869,11 +10524,8 @@ sh_chartexp_ondlg:
 sh_s_chartbmp: db 'CHART.BMP', 0
 sh_s_nochart:  db 'No chart to export.', 0
 sh_s_experr:   db 'Chart export failed.', 0
-%endif                                 ; SHF_CHART
 sh_s_noovl:    db 'CHART.OVL not found.', 0
-%ifdef SHF_CHART
 sh_s_exported: db 'Chart exported.', 0
-%endif
 
 ; -----------------------------------------------------------------------------
 ; sh_sort_vof / sh_sort_ldds / sh_sort_cmp - the three places the sort's value
@@ -10885,7 +10537,6 @@ sh_s_exported: db 'Chart exported.', 0
 ; sh_sort_vof - in: BX = entry index, out: DI = its offset in sh_stgseg
 ; -----------------------------------------------------------------------------
 section SH_MODSEC                      ; 81.71.6: Data > Sort's worker, CHART.OVL
-%ifdef SHF_SORT
 sh_sort_vof:
     push ax
     push cx
@@ -11556,7 +11207,6 @@ sh_docmd_sortcol:
     pop ax
     ret
 
-%endif                                 ; SHF_SORT
 section .text
 
 
@@ -11644,17 +11294,11 @@ sh_fdlg_tpl:
 ; when they were retired - the SLOT stays, because a kind is an index into
 ; these three tables and into sh_ud_kind, and the entry becomes 0.
 sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot
-%ifdef SHF_DB
                 dw sh_s_fd_extract, sh_s_fd_series
-%else
-                dw 0, 0
-%endif
 sh_s_fd_pspec:  db 'Paste Special', 0
 sh_s_fd_prot:   db 'Cell Protection', 0
-%ifdef SHF_DB
 sh_s_fd_extract: db 'Extract', 0
 sh_s_fd_series: db 'Series', 0
-%endif
 sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
@@ -11668,11 +11312,7 @@ sh_s_fd_insert: db 'Insert', 0
 sh_s_fd_delete: db 'Delete', 0
 
 sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot
-%ifdef SHF_DB
                 dw sh_fd_i_extract, sh_fd_i_series
-%else
-                dw 0, 0
-%endif
 ; Excel's Cell Protection dialog is two INDEPENDENT CHECK BOXES, Locked and
 ; Hidden. This is the four combinations as a radio, which is exactly what the
 ; Font dialog above already does with Bold and Underline - the same engine and
@@ -11688,17 +11328,14 @@ sh_fd_prunlockh: db 'Unlocked, Hidden', 0
 ; is asked as a two-way pick instead - identical meaning, no sixth dialog
 ; engine, and the divergence is the one §81.31 already took for Gridlines and
 ; Formulas. Index 1 IS the flag, so sh_fdlg_apply0 stores it with no mapping.
-%ifdef SHF_DB
 sh_fd_i_extract: dw sh_fd_exall, sh_fd_exuniq
 sh_fd_exall:    db 'All Matching Records', 0
 sh_fd_exuniq:   db 'Unique Records Only', 0
-%endif
 ; 81.72: Excel's Series dialog carries FIVE controls - Series In, Type, Date
 ; Unit, Step Value and Stop Value. Type and Date Unit fold into one radio
 ; column here (a date unit is only ever read when the type IS Date, so the
 ; two questions are really one), Step Value is the second dialog, and the
 ; other two are 81.72's own documented shortfalls
-%ifdef SHF_DB
 sh_fd_i_series: dw sh_fd_serlin, sh_fd_sergro, sh_fd_serday, sh_fd_serwd
                 dw sh_fd_sermon, sh_fd_seryr
 sh_fd_serlin:   db 'Linear', 0
@@ -11707,7 +11344,6 @@ sh_fd_serday:   db 'Date: Day', 0
 sh_fd_serwd:    db 'Date: Weekday', 0
 sh_fd_sermon:   db 'Date: Month', 0
 sh_fd_seryr:    db 'Date: Year', 0
-%endif
 ; Excel's own five, in Excel's own order (Reference Guide p.236). The dialog
 ; there ALSO carries an Operation group (None/Add/Subtract/Multiply/Divide)
 ; and two check boxes (Skip Blanks, Transpose); this engine paints ONE radio
@@ -11720,23 +11356,13 @@ sh_fd_psfmt:    db 'Formats', 0
 sh_fd_psnote:   db 'Notes', 0
 ; Excel's own words: the app's OWN format is "Normal", and the interchange
 ; formats are named after themselves. The order is Excel's too.
-%ifdef SHF_BIFF
 sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif, sh_fd_sfcsv, sh_fd_sftxt, sh_fd_sfdbf
 sh_fd_sfnormal: db 'Normal', 0
-%else
-; PLAN has no BIFF, so there is no "Normal" to be distinct FROM: SYLK is this
-; package's own format and heads its own list (81.75).
-sh_fd_i_savefmt: dw sh_fd_sfsylk, sh_fd_sfcsv, sh_fd_sftxt
-%endif
 sh_fd_sfsylk:   db 'SYLK', 0
-%ifdef SHF_BIFF
 sh_fd_sfdif:    db 'DIF', 0
-%endif
 sh_fd_sfcsv:    db 'CSV', 0         ; 81.40: two of the nine formats Excel 2.0
 sh_fd_sftxt:    db 'Text', 0
-%ifdef SHF_BIFF
 sh_fd_sfdbf:    db 'DBF 3', 0     ; Excel's own label for it        ; listed and this app did not have. Excel's
-%endif
                                     ; own words for them in its Save As list
 ; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
 ; happens to be in - sh_gal_map translates, the same way chart.asm's own
@@ -11749,9 +11375,7 @@ sh_fd_gline:    db 'Line', 0
 sh_fd_gpie:     db 'Pie', 0
 sh_fd_gsca:     db 'Scatter', 0
 sh_fd_gcmb:     db 'Combination', 0
-%ifdef SHF_CHART
 sh_gal_map:     dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE, CH_T_SCATTER, CH_T_COMBO
-%endif
 sh_fd_i_clear:  dw sh_fd_clall, sh_fd_clform, sh_fd_clfmt
 sh_fd_clall:    db 'All', 0
 sh_fd_clform:   db 'Formulas', 0       ; Excel's own order and its own words:
@@ -11793,11 +11417,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-%ifdef SHF_BIFF
 sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4, 2, 6
-%else
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 3, 5, 4, 2, 6
-%endif                                 ; 12 = File Format: SYLK/CSV/Text
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -11837,7 +11457,6 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
-%ifdef SHF_DB
     cmp al, SH_FDK_SERIES             ; 81.72: Series pins its range for the
     je .prefillseries                 ; same reason, and needs it across TWO
                                        ; dialogs rather than one
@@ -11848,13 +11467,10 @@ sh_fdlg_open:
                                        ; range is the whole point of the
                                        ; command. sh_ndlg's pattern, not
                                        ; sh_fdlg's own live read
-%endif
     cmp al, SH_FDK_SAVEFMT
     je .prefillfmt                    ; File Format opens on the format the
-%ifdef SHF_CHART
     cmp al, SH_FDK_GAL                ; current NAME already implies
     je .prefillgal                    ; Gallery opens on the type in use, so
-%endif
     cmp al, SH_FDK_CALC               ; OK alone cannot silently change it
     je .prefillcalc                   ; Calculation opens SHOWING the mode it
     cmp al, SH_FDK_PROT               ; is in, so OK alone cannot change it
@@ -11867,7 +11483,6 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
-%ifdef SHF_DB
 .prefillseries:                       ; 81.72: the range to fill, and the
     mov cx, [sh_selcol]               ; DIRECTION derived from its shape -
     mov [sh_ser_c1], cx               ; see sh_docmd_series on why that is
@@ -11888,7 +11503,6 @@ sh_fdlg_open:
     mov cx, [sh_selrow2]
     mov [sh_ex_r2], cx
     jmp .noprefill
-%endif
 .prefillprot:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
@@ -11905,7 +11519,6 @@ sh_fdlg_open:
     mov [sh_fdlg_sel], cx             ; CX is banked at entry, so using it
     jmp .noprefill                    ; here costs the caller nothing
 .prefillfmt:
-%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -11930,11 +11543,6 @@ sh_fdlg_open:
 .fmtbiff:
     mov word [sh_fdlg_sel], 0
     jmp .noprefill
-%else
-    mov word [sh_fdlg_sel], 0         ; PLAN's list starts at SYLK, which is
-    jmp .noprefill                    ; also what sh_dowrite falls through to
-%endif
-%ifdef SHF_CHART
 .prefillgal:
     xor bx, bx                        ; find [ch_type] in the map rather than
     mov cx, 7                         ; inverting it - seven entries, and an
@@ -11949,7 +11557,6 @@ sh_fdlg_open:
     shr bx, 1
     mov [sh_fdlg_sel], bx
     jmp .noprefill
-%endif
 .prefillcalc:
     xor ah, ah
     mov al, [sh_calcmanual]
@@ -12385,26 +11992,20 @@ sh_fdlg_apply0:
     je .donew
     cmp byte [sh_fdlg_kind], SH_FDK_CALC
     je .docalc
-%ifdef SHF_SORT
     cmp byte [sh_fdlg_kind], SH_FDK_SORT
     je .dosort
-%endif
-%ifdef SHF_CHART
     cmp byte [sh_fdlg_kind], SH_FDK_GAL
     je .dogallery
-%endif
     cmp byte [sh_fdlg_kind], SH_FDK_SAVEFMT
     je .dosavefmt
     cmp byte [sh_fdlg_kind], SH_FDK_PSPEC
     je .dopspec
     cmp byte [sh_fdlg_kind], SH_FDK_PROT
     je .doprot
-%ifdef SHF_DB
     cmp byte [sh_fdlg_kind], SH_FDK_EXTRACT
     je .doextract
     cmp byte [sh_fdlg_kind], SH_FDK_SERIES
     je .doseries
-%endif
     cmp byte [sh_fdlg_kind], 3
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
@@ -12480,12 +12081,10 @@ sh_fdlg_apply0:
 .doclear:
     SHOUT sh_prot_blocked
     jc .refused                       ; ...and the same here: this engine's
-%ifdef SHF_MACRO
     push si                           ; 81.74: CLEAR() takes no argument here,
     mov si, sh_s_rec_clear            ; so the three radio modes all record as
     SHOUT sh_rec_cmd                   ; the one the language has
     pop si
-%endif
                                       ; .out does not repaint either
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
     ; has highlighted. It used to clear the anchor alone (81.17's third case,
@@ -12558,25 +12157,20 @@ sh_fdlg_apply0:
 .calcnow:
     inc word [sh_pass]                ; a pass stamp nothing has cached, which
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
-%ifdef SHF_MACRO
     push si                           ; 81.74
     mov si, sh_s_rec_calc
     SHOUT sh_rec_cmd
     pop si
-%endif
 .calcrepaint:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
 
-%ifdef SHF_SORT
 .dosort:
     mov ax, [sh_fdlg_sel]
     mov [sh_sort_desc], al
     call sh_docmd_sortcol
     jmp .out
-%endif
-%ifdef SHF_CHART
 .dogallery:
     mov bx, [sh_fdlg_sel]
     shl bx, 1
@@ -12591,7 +12185,6 @@ sh_fdlg_apply0:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
-%endif
 .doprot:
     xor dl, dl                         ; 0 Locked is the default and stores no
     mov ax, [sh_fdlg_sel]              ; bits at all, so a sheet nobody has
@@ -12640,7 +12233,6 @@ sh_fdlg_apply0:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
-%ifdef SHF_DB
 .doseries:                            ; 81.72: the radio IS the type, and
     mov al, [sh_fdlg_sel]             ; part TWO of the question follows it -
     mov [sh_ser_type], al             ; Sort's own two-dialog shape (81.15),
@@ -12655,14 +12247,12 @@ sh_fdlg_apply0:
     jnc .out                          ; refused: the status line says why
     SHOUT sh_recalc_all                ; the extract range holds new values
     jmp .out
-%endif
 .dopspec:
     mov al, [sh_fdlg_sel]             ; the radio IS the mode: All/Formulas/
     mov [sh_ps_mode], al              ; Values/Formats/Notes are SH_PS_ALL..
     SHOUT sh_docmd_paste               ; SH_PS_NOTE in that order, on purpose
     jmp .out
 .dosavefmt:
-%ifdef SHF_BIFF
     mov si, sh_s_ext_biff             ; 0 Normal is this app's OWN format,
     mov ax, [sh_fdlg_sel]             ; which is BIFF - the same thing
     or ax, ax                         ; Excel means by "Normal"
@@ -12680,16 +12270,6 @@ sh_fdlg_apply0:
     cmp ax, 4
     je .fmtset
     mov si, sh_s_ext_dbf
-%else
-    mov si, sh_s_ext_sylk             ; 0 SYLK / 1 CSV / 2 Text (81.75)
-    mov ax, [sh_fdlg_sel]
-    or ax, ax
-    jz .fmtset
-    mov si, sh_s_ext_csv
-    cmp ax, 1
-    je .fmtset
-    mov si, sh_s_ext_txt
-%endif
 .fmtset:
     call sh_setext
     mov byte [sh_savepend], 1         ; the file dialog cannot open until
@@ -13248,18 +12828,12 @@ sh_idlg_open:
     mov ax, [sh_id_titles + bx]
     mov [sh_idlg_tpl + WT_TITLE], ax
     mov byte [sh_idlg_buf], 0
-%ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RUN  ; ...and Run with the selection, where
     je .pregoto                        ; a macro used to start (81.63)
-%endif
-%ifdef SHF_SORT
     cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
     je .pregoto                        ; same reference Goto shows - it is the
-%endif
-%ifdef SHF_DB
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP  ; 81.72: a step of 1 is what
     je .preone                              ; almost every series wants, so
-%endif
     cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
@@ -13285,11 +12859,9 @@ sh_idlg_open:
     mov si, sh_numbuf
     SHOUT sh_strcpy_to_di
     jmp .haveinit
-%ifdef SHF_DB
 .preone:
     mov ax, 1                          ; Enter alone gives 1, 2, 3...
     jmp short .prenum
-%endif
 .pregoto:
     mov di, sh_idlg_buf                ; the selection, as 'A1'
     mov ax, [sh_selcol]
@@ -13431,15 +13003,11 @@ sh_idlg_onkey:
 .accept:
     call sh_idlg_apply
     call sh_idlg_close
-%ifdef SHF_MACRO
     SHOUT sh_idlg_after                 ; a Run or an INPUT goes on (81.63)
-%endif
     jmp .out
 .cancel:
     call sh_idlg_close
-%ifdef SHF_MACRO
     SHOUT sh_idlg_after
-%endif
 .out:
     pop si
     pop ax
@@ -13486,15 +13054,11 @@ sh_idlg_onclick:
 .doOK:
     call sh_idlg_apply
     call sh_idlg_close
-%ifdef SHF_MACRO
     SHOUT sh_idlg_after
-%endif
     jmp .out
 .doCancel:
     call sh_idlg_close
-%ifdef SHF_MACRO
     SHOUT sh_idlg_after
-%endif
 .out:
     pop di
     pop si
@@ -13522,24 +13086,16 @@ sh_idlg_apply:
     je .find
     cmp byte [sh_idlg_kind], SH_ID_GOTO
     je .goto
-%ifdef SHF_SORT
     cmp byte [sh_idlg_kind], SH_ID_SORT
     je .sortkey
-%endif
-%ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RUN
     je .run
     cmp byte [sh_idlg_kind], SH_ID_INPUT
     je .input
-%endif
-%ifdef SHF_DB
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP
     je .serstep
-%endif
-%ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RECNAME
     je .recname
-%endif
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
@@ -13606,7 +13162,6 @@ sh_idlg_apply:
     cmp ax, bx
     jbe .rhl
     jmp .redraw
-%ifdef SHF_MACRO
 .run:
     mov si, sh_idlg_buf                ; a macro is run by NAME, Excel's way -
     SHOUT sh_upcase_at                  ; or by the cell it starts in
@@ -13633,7 +13188,6 @@ sh_idlg_apply:
     pop di
     mov byte [sh_macro_ansok], 1
     jmp .out
-%endif                                 ; SHF_MACRO
 .goto:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
@@ -13685,7 +13239,6 @@ sh_idlg_apply:
 ; 81.74: the recording's own name, bound to the cell it is about to start in
 ; so Macro ▸ Run can list it. An EMPTY name is not a refusal - the Run dialog
 ; takes a reference too, and Excel's own Name field may be left alone.
-%ifdef SHF_MACRO
 .recname:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at
@@ -13702,21 +13255,17 @@ sh_idlg_apply:
 .recgo:
     SHOUT sh_rec_start
     jmp .redraw
-%endif                                 ; SHF_MACRO
 
 ; 81.72: the step value, and the whole of Data ▸ Series' second question.
 ; The TEXT is read rather than an integer parsed: Growth by 1.5 and a linear
 ; step of 0.25 are both ordinary, and sh_pnum_at answers integers only -
 ; which is what the three numeric kinds above it want and this one does not.
-%ifdef SHF_DB
 .serstep:
     mov si, sh_idlg_buf
     SHOUT sh_ser_setstep                ; CF=0 = not a number at all: refused
     jnc .out                           ; in silence, the same way a bad row
     call shm_series             ; height is (this engine's own header)
     jmp .redraw
-%endif
-%ifdef SHF_SORT
 .sortkey:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at                  ; 'b3' names the same column as 'B3'
@@ -13745,7 +13294,6 @@ sh_idlg_apply:
 .badkey:
     mov word [sh_msg], sh_s_id_badkey
     jmp .redraw
-%endif                                 ; SHF_SORT
 .redraw:
     SHOUT sh_geom                       ; the cell size may have changed, so the
     mov si, [sh_ownwin]                ; visible row/column counts must be
@@ -15419,7 +14967,6 @@ sh_ndlg_close:
     pop ax
     ret
 
-%ifdef SHF_DB
 ; =============================================================================
 ; DATA ▸ FORM (SPEC.md 81.71.5) - one record at a time, in a dialog.
 ;
@@ -16517,7 +16064,6 @@ sh_df_close:
     pop bx
     pop ax
     ret
-%endif                                 ; SHF_DB
 
 section .text
 
@@ -16800,7 +16346,6 @@ sh_sheets_used:
 ; format here that CAN carry them, and does (81.10.5).
 ; -----------------------------------------------------------------------------
 shm_dowrite:
-%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -16817,7 +16362,6 @@ shm_dowrite:
     pop di
     pop si
     jc .biff
-%endif
     push si
     push di
     mov si, sh_name
@@ -16834,7 +16378,6 @@ shm_dowrite:
     pop di
     pop si
     jc .txt
-%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -16843,7 +16386,6 @@ shm_dowrite:
     pop di
     pop si
     jc .dbf
-%endif
     call sh_dowrite_sylk
     jmp .warn
 .csv:
@@ -16852,7 +16394,6 @@ shm_dowrite:
 .txt:
     call sh_dowrite_txt
     jmp .warn
-%ifdef SHF_BIFF
 .dbf:
     call sh_dowrite_dbf
     jmp .warn
@@ -16861,7 +16402,6 @@ shm_dowrite:
     jmp .warn
 .biff:
     jmp sh_dowrite_biff
-%endif
 .warn:
     push ax
     push bx
@@ -17398,7 +16938,6 @@ sh_stgput:
 ; sh_doread - read [sh_name], format chosen by its extension (see sh_dowrite)
 ; -----------------------------------------------------------------------------
 shm_doread:
-%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -17423,7 +16962,6 @@ shm_doread:
     pop di
     pop si
     jc .biff
-%endif
     push si
     push di
     mov si, sh_name
@@ -17440,7 +16978,6 @@ shm_doread:
     pop di
     pop si
     jc .txt
-%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -17449,22 +16986,17 @@ shm_doread:
     pop di
     pop si
     jc .dbf
-%endif
     jmp sh_doread_sylk
-%ifdef SHF_BIFF
 .dif:
     jmp sh_doread_dif
 .biff:
     jmp sh_doread_biff
-%endif
 .csv:
     jmp sh_doread_csv
 .txt:
     jmp sh_doread_txt
-%ifdef SHF_BIFF
 .dbf:
     jmp sh_doread_dbf
-%endif
 
 ; -----------------------------------------------------------------------------
 ; sh_doread_sylk - read [sh_name] as SYLK, replacing the sheet
@@ -17654,7 +17186,6 @@ shm_difbbox:
     pop ax
     ret
 
-%ifdef SHF_BIFF
 ; -----------------------------------------------------------------------------
 ; sh_dowrite_dif - write the sheet to [sh_name] as DIF
 ; -----------------------------------------------------------------------------
@@ -18081,7 +17612,6 @@ sh_biffw:
     mov [es:di], ax
     add di, 2
     ret
-%endif                                 ; SHF_BIFF
 
 ; -----------------------------------------------------------------------------
 ; sh_stgputb - append raw byte AL to ES:DI, advancing DI by 1. ES must
@@ -18094,7 +17624,6 @@ sh_stgputb:
     inc di
     ret
 
-%ifdef SHF_BIFF
 ; -----------------------------------------------------------------------------
 ; sh_rkenc - in: AX = signed 16-bit cell value; out: DX:AX = that value
 ; packed as an RK "signed 30-bit integer, not multiplied by 100" (bit1=1,
@@ -18197,7 +17726,6 @@ fp_i32_to_a:
     pop bx
     pop ax
     ret
-%endif                                 ; SHF_BIFF
 
 section .text
 
@@ -18228,7 +17756,6 @@ sh_cwbyte:
 .c:
     ret
 
-%ifdef SHF_BIFF
 ; sh_biff_nfside - AL = a file's built-in format id -> AL = what the border
 ; table keeps for it: 0 for the four the format byte holds (and for any id
 ; past Excel's 21, a custom FORMAT this app draws as General), else id + 1
@@ -21418,7 +20945,6 @@ sh_biff_rcok:
 .bad:
     stc
     ret
-%endif                                 ; SHF_BIFF
 
 ; -----------------------------------------------------------------------------
 ; sh_parseslk - walk every line of a buffer, applying each 'C' record found
@@ -25117,7 +24643,6 @@ SH_RPN_MAX   equ 96                   ; a token array longer than this is
 ; "non-constant argument supplied to TIMES", which names neither the flag nor
 ; the symbol. PLAN's own bss ladder is 81.75's later stage; until it lands,
 ; PLAN reserves this buffer and never fills it.
-%ifdef SHF_BIFF
 
 ; The BIFF function index for each of Sheet's own functions, INDEXED BY
 ; sh_functab's order - so the id sh_funcid already returns indexes straight
@@ -26176,7 +25701,6 @@ sh_rpn_one:
     pop cx
     pop ax
     ret
-%endif                                 ; SHF_BIFF
 
 ; -----------------------------------------------------------------------------
 ; sh_settext - stage 4.5: store TEXT in a cell.
@@ -28258,17 +27782,12 @@ sh_pfunc:
     call sh_pdate
     mov dx, ax
     jmp .typed
-%ifdef SHF_TEXT
 .dotext:
     call sh_ptext
     mov dx, ax
     jmp .done                          ; NOT .typed: a text function's answer
                                        ; is TEXT, and .typed exists to stamp
                                        ; SH_T_NUM on a fold's result
-%else
-.dotext:
-    jmp .noname                        ; 81.75
-%endif
 .doinfo:
     call sh_pinfo
     mov dx, ax
@@ -28291,25 +27810,14 @@ sh_pfunc:
                                        ; SILENTLY ANSWERED RAND(). No error,
                                        ; a plausible number, and the same for
                                        ; =NOW()+1 ever since NOW landed
-%ifdef SHF_FIN
 .dofin:
     call sh_pfin
     mov dx, ax
     jmp .typed
-%else
-.dofin:                                ; 81.75: #NAME?, and the arguments
-    jmp .noname                        ; stepped over
-%endif
-%ifdef SHF_DB
 .dodatabase:
     call sh_pdatabase
     mov dx, ax
     jmp .typed
-%else
-.dodatabase:                           ; 81.75, .docell's reason below
-    jmp .noname
-%endif
-%ifdef SHF_MATRIX
 .docell:
     call sh_pcell
     mov dx, ax
@@ -28321,35 +27829,14 @@ sh_pfunc:
     jmp .done                          ; NOT .typed: TRANSPOSE's published
                                        ; element may be text, whatever its
                                        ; source cell held (81.67)
-%else
-.docell:                               ; 81.75: THE NAMES STAY IN THE TABLE and
-.domatrix:                             ; the ids stay where they are - dropping
-    jmp .noname                        ; table entries would renumber every
-                                       ; family after them. `=MDETERM(A1:B2)`
-                                       ; answers #NAME? here, which is the
-                                       ; same thing `.noname` already says
-                                       ; about a function that was never
-                                       ; spelled right, and it steps over the
-                                       ; arguments rather than parsing on
-%endif
-%ifdef SHF_MACRO
 .domacro:
     call sh_pmacro
     mov dx, ax
     jmp .done                          ; NOT .typed: ACTIVE.CELL may be text
-%else
-.domacro:                              ; 81.75, .docell's reason below
-    jmp .noname
-%endif
-%ifdef SHF_TRIG
 .dotrans:
     call sh_ptrans
     mov dx, ax
     jmp .typed
-%else
-.dotrans:
-    jmp .noname                        ; 81.75
-%endif
 .dolookup2:
     call sh_plookup
     mov dx, ax
@@ -28866,7 +28353,6 @@ sh_pargclass:
 ; stay in .text, because what reads them is resident fp_* code through DS.
 ; =============================================================================
 section SH_MODSEC
-%ifdef SHF_FIN           ; 81.75: the financial family. PMT/PV/FV/NPER are
                           ; closed-form in `^`, and fp_pow does whole-number
                           ; exponents by repeated squaring - including
                           ; NEGATIVE ones, as one-over-it - so (1+i)^-n is
@@ -29895,7 +29381,6 @@ sh_fnres:
     pop si
     pop bx
     ret
-%endif   ; SHF_FIN
 
 section .text                       ; ...DATA, and the resident fp_* routines
                                     ; read it through DS (68.10 rule 2)
@@ -30081,7 +29566,6 @@ sh_pfargs:
 
                                     ; (sh_ptrans follows in the module too, 81.62)
 
-%ifdef SHF_TRIG          ; 81.75: LN/LOG/EXP and the trig seven. SQRT is NOT
                           ; here - fp_sqrt is its own Newton-Raphson in the
                           ; float library, which is assembled whole either
                           ; way, so exposing it costs a table entry and
@@ -30345,7 +29829,6 @@ shm_ptrans:
     pop cx
     pop bx
     ret
-%endif   ; SHF_TRIG
 
 section .text                       ; sh_trcopy and the two constants stay:
                                     ; resident code reads them (81.62)
@@ -31678,7 +31161,6 @@ shm_binop_pre:
     SHOUT sh_binop_ld
     ret
 
-%ifdef SHF_TEXT          ; 81.75: the text family
 ; =============================================================================
 ; sh_ptext (stage 4.5) - the TEXT functions, ids 37 and up. The whole category
 ; was blocked on two things and both have now landed: a formula could not
@@ -32503,7 +31985,6 @@ sh_isalpha:
 .no:
     clc
     ret
-%endif   ; SHF_TEXT
 
 section .text
 ; =============================================================================
@@ -33649,7 +33130,6 @@ SH_LF_STEP     equ 17
 SH_LF_SZ       equ 25
 SH_MPROMPT     equ 30                ; INPUT's prompt, as the dialog shows it
 SH_MSTMSG      equ 40                ; MESSAGE's text on the status bar
-%ifdef SHF_MACRO
 sh_s_macrolimit: db 'Err: macro step limit', 0
 sh_s_macrodone:  db 'Macro done', 0
 sh_s_macroerr:   db 'Err: macro', 0
@@ -35026,9 +34506,7 @@ shm_mword:
     pop ax
     ret
 
-%endif                                 ; SHF_MACRO
 section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
-%ifdef SHF_DB
 ; =============================================================================
 ; THE DATABASE FUNCTIONS (81.65): DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT
 ; DSTDEV DSTDEVP DSUM DVAR DVARP, ids SH_FID_DATABASE and up. Every one takes
@@ -36792,9 +36270,7 @@ sh_ser_stepint:
     pop di
     pop si
     ret
-%endif                                 ; SHF_DB
 
-%ifdef SHF_MATRIX        ; 81.75: CELL and the array/matrix family
 ; =============================================================================
 ; CELL (81.66): `CELL(type_of_info [, reference])`, Excel's own compatibility
 ; subset - nine attributes, from `Microsoft Excel Functions and Macros`
@@ -38514,7 +37990,6 @@ sh_mx_getsquare:
 .out:
     pop ax
     ret
-%endif   ; SHF_MATRIX
 
 section .text
 
@@ -40762,13 +40237,9 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
-%ifdef SHF_DATAMENU
     dw sh_m_data,    sh_i_data,    SH_DATA_N
-%endif
     dw sh_m_options, sh_i_options, 5
-%ifdef SHF_MACRO
     dw sh_m_macro,   sh_i_macro,   4
-%endif
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
 
@@ -40795,13 +40266,8 @@ sh_it_find:      db 'Find...', 0
 ; agree with it - a window captioned "Sheet" launched from PLAN.O88 is two
 ; things answering to one name, which is the rule (73.12) this build exists
 ; to keep on the right side of.
-%ifdef PLAN
-sh_ttl:        db 'Plan', 0
-sh_s_appname:  db 'Plan', 0
-%else
 sh_ttl:        db 'Sheet', 0
 sh_s_appname:  db 'Sheet', 0
-%endif
 sh_m_file:     db 'File', 0
 sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas
 sh_it_new:     db 'New...', 0
@@ -40878,7 +40344,6 @@ sh_sheet_chk:   dw sh_it_sheet1c, sh_it_sheet2c, sh_it_sheet3c, sh_it_sheet4c
 ; Excel's own Macro menu is Record.../Run.../Start Recorder/Set Recorder/
 ; Relative Record. 81.74 adds three of the four it was missing; Start
 ; Recorder and Resume are that section's own documented shortfalls.
-%ifdef SHF_MACRO
 sh_m_macro:    db 'Macro', 0
 sh_i_macro:    dw sh_it_recon, sh_it_run, sh_it_setrec, sh_it_relrec
 sh_it_run:     db 'Run', 0
@@ -40887,7 +40352,6 @@ sh_it_recoff:  db 'Stop Recorder', 0 ; live - Excel's own pair
 sh_it_setrec:  db 'Set Recorder', 0
 sh_it_relrec:  db 'Relative Record', 0   ; ...and this one names what choosing
 sh_it_absrec:  db 'Absolute Record', 0   ; it WOULD do, as Excel's does
-%endif                                    ; SHF_MACRO
 
 ; Edit - "Can't Undo" is a real Excel item with no real implementation
 ; behind it (no undo system exists) - shown disabled (MENU_DIS) rather than
@@ -40932,10 +40396,7 @@ sh_it_filldown:  db 'Fill Down', 0
 ; from index 0 to 6 and the three chart items after it, which is a real cost
 ; paid once - the whole reason this package has a menu bar of its own is to
 ; look like the captures.
-%ifdef SHF_DATAMENU
 sh_m_data:     db 'Data', 0
-%endif
-%ifdef SHF_DB
 sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
                dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
                dw sh_it_chart, sh_it_gallery, sh_it_chartexp
@@ -40946,29 +40407,13 @@ sh_it_extract: db 'Extract...', 0
 sh_it_del:     db 'Delete', 0            ; NOT sh_it_delete: that is Edit's
                                           ; own 'Delete...', which shifts
                                           ; cells rather than records
-%elifdef SHF_DATAMENU
-; 81.75: what is left of Excel's Data menu, in its own order still
-sh_i_data:
-  %ifdef SHF_SORT
-               dw sh_it_sort
-  %endif
-  %ifdef SHF_CHART
-               dw sh_it_chart, sh_it_gallery, sh_it_chartexp
-  %endif
-%endif
-%ifdef SHF_SORT
 sh_it_sort:    db 'Sort...', 0
-%endif
-%ifdef SHF_DB
 sh_it_series:  db 'Series...', 0
-%endif
 sh_it_chart:   db 'Chart Column...', 0
 sh_it_gallery: db 'Chart Gallery...', 0
 sh_it_chartexp: db 'Export Chart as BMP...', 0
-%ifdef SHF_DB
 sh_it_setdb:   db 'Set Database', 0
 sh_it_setcrit: db 'Set Criteria', 0
-%endif
 
 ; Options - Display toggles (stage 2.x). Each item's own string SWAPS
 ; between an On/Off pair (same relabel-by-repointing idea MENU_DIS's own
@@ -41257,7 +40702,6 @@ sh_functab_end:
 ; to see which table is short.
 ; -----------------------------------------------------------------------------
 %define SH_NFUNCS ((sh_functab_end - sh_functab) / 2 - 1)
-%ifdef SHF_BIFF                        ; the other three tables are BIFF's, so
                                        ; a build without it has only the one
     times ((sh_rpn_fid_end - sh_rpn_fid) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fid_end - sh_rpn_fid)) db 0
@@ -41265,7 +40709,6 @@ sh_functab_end:
     times (SH_NFUNCS - (sh_rpn_fvar_end - sh_rpn_fvar)) db 0
     times ((sh_rpn_fargc_end - sh_rpn_fargc) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fargc_end - sh_rpn_fargc)) db 0
-%endif
 sh_s_errpfx:   db 'Err ', 0
 section SH_MODSEC                      ; 82.16.9's tenant: CSV and TXT (81.40)
 
@@ -41284,7 +40727,6 @@ section SH_MODSEC                      ; 82.16.9's tenant: CSV and TXT (81.40)
 ; survive. DIF drops an embedded quote instead (see sh_dowrite_dif's .dt),
 ; which is right for DIF because DIF has no escape at all; CSV does.
 ; =============================================================================
-%ifdef SHF_BIFF
 section SH_MODSEC                      ; 82.16.9's tenant: dBASE III (81.41)
 
 ; =============================================================================
@@ -42080,7 +41522,6 @@ sh_dbf_store:
     pop bx
     pop ax
     ret
-%endif                                 ; SHF_BIFF
 
 section .text
 
@@ -42526,7 +41967,6 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; scratch, declared in the bss chain below.
 %include "os88fp.inc"
 
-%ifdef SHF_CHART
 %define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
@@ -42536,23 +41976,11 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 %endif
 
 %include "os88chart.inc"
-%endif                              ; SHF_CHART
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-%ifdef PLAN
-    OS88_BSS 7301                     ; 81.75, PLAN's own and already far from
-                                       ; SHEET's: -191 for the ch_* working
-                                       ; set, -568 for the vector table that a
-                                       ; one-file build has no use for, -4
-                                       ; because SH_MENU_N is 7 rather than 9
-                                       ; (sh_mw is a word per menu, and both
-                                       ; Macro and Data are gone), +2 for
-                                       ; sh_planvec. The claim ladder will
-                                       ; move it again
-%else
     OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
@@ -42573,7 +42001,6 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
                                        ; of two new vectors), +6 for 81.66's
                                        ; CELL (three more scratch words, no
                                        ; new vectors)
-%endif
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -42583,16 +42010,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; One binary can serve both only if both put the block at the same offset, and
 ; offset zero is the only one neither package has to negotiate for.
 %define CH_BSS_BASE (os88_image_end + 0)
-%ifdef SHF_CHART
 %include "os88chartbss.inc"
 %if CH_BSS_BASE != os88_image_end
   %error "the ch_* block must start at bss offset 0 - see 82.16"
-%endif
-%else
-; 81.75: no chart, no rasterizer, so none of its 191 bytes of working set
-; either - and nothing to keep at a fixed offset, because the reason offset
-; zero was a REQUIREMENT is that one CHART.OVL served two hosts.
-%define CH_BSS_END CH_BSS_BASE
 %endif
 
 sh_selcol     equ CH_BSS_END
@@ -43446,7 +42866,6 @@ sh_dbf_w      equ sh_dbf_ty + 128    ; type letter, width and decimal count
 sh_dbf_d      equ sh_dbf_w + 128
 sh_sepch      equ sh_dbf_d + 128      ; byte: CSV/TXT's delimiter (81.40)
 sh_sepend     equ sh_sepch + 2       ; word: the staging buffer's end
-%ifndef PLAN_ONEFILE
 sh_v_first    equ sh_sepend + 2      ; 82.16.9's vector table: one dword
                                       ; per routine the module calls back
 sh_v_sh_itoa                equ sh_v_first
@@ -43593,13 +43012,6 @@ sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
 SH_NVEC       equ 142
 sh_v_end      equ sh_v_sh_bt_removecell + 4
-%else
-; 81.75: with the module resident, SHOUT is a near call and nothing reaches
-; back through a vector - so the table is not merely unused, it is 568 bytes
-; of bss that would be zeroed at every launch. The chain carries on from
-; where it would have started.
-sh_v_end      equ sh_sepend + 2
-%endif
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -43772,19 +43184,7 @@ sh_mx_buf     equ sh_mx_j + 2        ; SH_MX_N * SH_MX_W * 8: the shared
 ; OK (81.6 - these dialogs are not modal, and the selection can move under
 ; one). sh_dfindmode is the Find/Exit Find relabel, and sh_dbc_res is how the
 ; module answers, since CF on that door already means "is there a module".
-%ifdef PLAN
-sh_planvec    equ sh_mx_buf + (8 * 16 * 8)   ; 81.75: PLAN's ch_ovcall stages
-                                              ; the verb body's offset here -
-                                              ; a near `call [mem]` needs one
-                                              ; and every register is the
-                                              ; caller's argument. IN PLAN'S
-                                              ; ARM ONLY: SHEET's bss chain
-                                              ; has to come out byte for byte
-                                              ; as it was (t_appsmall.py)
-sh_dbc_kind   equ sh_planvec + 2             ; byte: which SH_DBC_* is running
-%else
 sh_dbc_kind   equ sh_mx_buf + (8 * 16 * 8)   ; byte: which SH_DBC_* is running
-%endif
 sh_dbc_res    equ sh_dbc_kind + 1            ; byte: its SH_DBR_* answer
 sh_dbc_uniq   equ sh_dbc_res + 1             ; byte: Extract's Unique flag
 sh_dfindmode  equ sh_dbc_uniq + 1            ; byte: a Data Find is live

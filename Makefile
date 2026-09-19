@@ -10251,45 +10251,44 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # the 128KB floor machine. Built into its own directory the way $(SMALLAPPDIR)
 # is, and NOT in `all` until the cut list lands.
 PLANDIR := $(BUILD)/planapp
-$(PLANDIR)/plan.bin: apps/sheet/sheet.asm apps/os88api.inc apps/os88fp.inc \
-                     apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
-                     apps/os88chart.inc apps/os88chartovl.inc \
-                     apps/os88chartbss.inc
+$(PLANDIR)/plan.bin: apps/plan/plan.asm apps/os88api.inc apps/os88fp.inc \
+                     apps/os88ui.inc apps/os88line.inc apps/os88text.inc
 	@mkdir -p $(PLANDIR)
-	$(NASM) -f bin -w+error -I apps/ -DPLAN -o $@ apps/sheet/sheet.asm
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/plan/plan.asm
 
-# PLAN IS ONE FILE NOW. PLAN_ONEFILE follows SHF_CHART (sheet.asm's own note
-# says why they cannot be separated), so the source emits no .modc section at
-# all and this is an ordinary package: assemble, validate, done. What the
-# target still does is PRINT the two numbers the cut list was steered by -
-# image and bss against APP_MAX_SIZE, which is 0xF000 and not 65536; the
-# segment is 64KB but the budget a package is held to is 60.
-# EVERY SHF_ FLAG TESTED MUST BE ONE THAT IS DEFINED. A `%ifdef SHF_TYPO` is
-# not an error to NASM, it is just false - in BOTH arms - so a mistyped or
-# never-declared flag silently cuts the feature out of SHEET as well. That
-# happened once (SHF_TEXT), and the byte-identity check caught it; this turns
-# the same mistake into a build error instead, which is 81.10's own idiom.
+# PLAN IS ONE FILE AND ITS OWN SOURCE (81.75, apps/plan/plan.asm), so this is
+# an ordinary package rule: assemble, validate, done. What the target adds is
+# the METER the cut list is steered by. Two ceilings matter and they are not
+# the same number: APP_MAX_SIZE = 0xF000 = 61,440 is what any package is held
+# to, and the 128KB machine's whole free arena is 53,760 (11.102) - which the
+# region has to fit inside ALONGSIDE the claims (24.5.2).
+# THE FLAG AUDIT IS RETIRED WITH THE FLAGS. While one source built both, a
+# `%ifdef SHF_TYPO` was not an error to NASM - just false, in BOTH arms - so a
+# mistyped flag silently cut the feature out of SHEET as well, which happened
+# once and only the byte-identity check caught it. plan.asm has no flags to
+# mistype; what replaces that gate is t_plansplit.py, which checks the two
+# files have not drifted on the things they must still agree about.
 .PHONY: planflags
 planflags:
-	@python3 -c "import re,sys; \
-	 s=open('apps/sheet/sheet.asm').read(); \
-	 u=set(re.findall(r'%ifdef (SHF_\w+)', s)); \
-	 d=set(re.findall(r'%define (SHF_\w+)', s)); \
-	 bad=sorted(u-d); \
-	 sys.exit('planflags: tested but never defined: '+' '.join(bad)) if bad \
-	 else print('planflags: %d flag(s) tested, all declared' % len(u))"
+	@echo "planflags: retired - PLAN is apps/plan/plan.asm (SPEC.md 81.75)"
 
 .PHONY: plan
-plan: planflags $(PLANDIR)/PLAN.O88
+plan: $(PLANDIR)/PLAN.O88
 
 $(PLANDIR)/PLAN.O88: $(PLANDIR)/plan.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(PLANDIR)/plan.bin -o $@
 	@i=$$(wc -c < $(PLANDIR)/plan.bin); \
-	 b=$$(python3 -c "import re,sys; s=open('apps/sheet/sheet.asm').read(); \
-	   m=re.search(r'%ifdef PLAN\s*\n\s*OS88_BSS (\d+)', s); \
-	   print(m.group(1) if m else sys.exit('plan: no PLAN OS88_BSS literal'))"); \
+	 b=$$(python3 -c "import re,sys; s=open('apps/plan/plan.asm').read(); \
+	   m=re.search(r'OS88_BSS (\d+)', s); \
+	   print(m.group(1) if m else sys.exit('plan: no OS88_BSS literal'))"); \
+	 c=$$(python3 -c "import re; s=open('apps/plan/plan.asm').read(); \
+	   g=lambda n: int(re.search(r'^SH_CLAIM_'+n+r'_KB\s+equ\s+(\d+)', s, re.M).group(1)); \
+	   print((g('CELLS')+g('TXT')+g('STG'))*1024)"); \
 	 echo "plan: image $$i + bss $$b = $$((i+b)) of 61440 (APP_MAX_SIZE)"; \
-	 echo "plan: $$((61440-i-b)) bytes spare"
+	 echo "plan: region $$((i+b)) + claims $$c = $$((i+b+c)) of 51712 usable arena"; \
+	 if [ $$((i+b+c)) -gt 51712 ]; then \
+	   echo "plan: 128KB machine: $$((i+b+c-51712)) bytes TO GO"; \
+	 else echo "plan: 128KB machine: FITS, $$((51712-i-b-c)) bytes spare"; fi
 
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                                $(BUILD)/CHART.OVL,$(APPS_TOOLS))
