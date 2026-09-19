@@ -103033,7 +103033,7 @@ harmless.
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 10, 7 shared | 10 | **Series, Table, Parse** — Form, Find, Extract and Delete closed 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69) |
-| Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
+| Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
 Data menu carries three items Excel does not have at all (Chart Column, Chart
@@ -103055,8 +103055,9 @@ and §82 is this tree's answer to that.
   anywhere in this OS. Seven of the missing File/Options commands are
   downstream of that one absence.
 - **The macro language is 20 functions** of a language with ~90 (§81.63):
-  control and loops, the sheet, the user, five menu commands. No subroutines,
-  no references as values (OFFSET), no recorder, no custom dialogs, and a
+  control and loops, the sheet, the user, five menu commands, and **a
+  recorder since §81.74** that emits exactly those 20. No subroutines,
+  no references as values (OFFSET), no custom dialogs, and a
   Normal save keeps a macro cell's value, not its formula - SYLK carries it.
 - **No Short/Full menus toggle**. Freeze Panes is done (§81.70).
 - **Smaller, each listed where it was found:** a centred or right-aligned
@@ -105953,6 +105954,72 @@ position, and no click lands wrong because of it.
 feature: the headers, the cell contents and the hit test each reach the table
 through a different one of those four routines, so a slot showing `C1` while a
 click on it selects `B1` is what a break would look like.
+
+### 81.74 The macro recorder
+
+§81.68 was built for this and says so in its own title — a macro's references
+are written in R1C1 *"the way the recorder writes them"*. This is the
+recorder, and **it emits exactly the language §81.63 already runs**: a
+recording is an ordinary macro sheet afterwards, readable and editable and
+runnable by `Macro ▸ Run`, not a second representation that happens to play
+back.
+
+**What is recordable is what those 20 functions can say**: the selection
+moving (`SELECT`), a cell entered (`FORMULA`), and the five menu commands the
+language already has (`COPY`, `CUT`, `PASTE`, `CLEAR`, `CALCULATE.NOW`).
+Anything else is **not recorded and not refused** — the recording stays valid
+and simply does not contain it, which is the same bargain Excel's own recorder
+makes with the commands its language cannot express. Recording is stopped with
+a `RETURN()` of the recorder's own, so the macro ends rather than running on
+into whatever was below it.
+
+**Enter's own step down is recorded**, because it happened: committing an
+entry moves the selection, and a replay that did not move would end up
+somewhere else. A selection change that did *not* move anything records
+nothing at all, so clicking the cell Enter already went to is silent.
+
+**`Macro ▸ Set Recorder` keeps the SHEET as well as the corner.** Excel opens
+a macro sheet when there is no recorder range; this instance has four sheets
+and no way to guess which one was meant, so it asks for one instead of
+choosing. That sheet is then banked and restored around every write, so the
+recording lands on the macro sheet while the user goes on working on theirs.
+
+**Absolute by default, relative on request**, which is Excel's own initial
+state and its own toggle — and the item names *what choosing it would do*, not
+the state it is in, again Excel's wording. A relative `SELECT` is written
+against the cell the last recorded `SELECT` left the macro standing on; with
+nothing recorded yet there is no origin to be relative to, so the first one is
+absolute whatever the setting.
+
+#### 81.74.1 Why the entry recorder is two halves
+
+`sh_rec_emit` writes its macro formula **through `sh_commit`** — the same
+routine a typed entry goes through — and the typed entry is itself a recording
+site. So `FORMULA(...)` is **staged** inside `sh_commit` (copying `sh_editbuf`
+out before the store reads it) and **flushed** at that same routine's exit,
+once the outer call has finished with the buffer. `sh_rec_busy` then stops the
+inner commit staging anything of its own: a recorded write is not itself news.
+
+The flush sits inside a `pushf`/`popf` because every caller of `sh_commit`
+reads its `CF`.
+
+`sh_ud_busy` is what separates a *typed* entry from one made by Paste, Fill or
+Sort — those are part of a command that took its own Undo snapshot, and
+recording each cell they write would produce a macro that reproduced the
+result rather than the action.
+
+A double quote inside a typed label is **doubled** in the recorded text, which
+is how this app's own parser reads a quote inside a string (§81.18's
+`"a""b"`), so a label containing one records as a macro that re-enters that
+same label.
+
+**Not implemented, with reasons:** `Start Recorder` (this has no separate
+"recording is armed but paused" state — `Record...` both arms and starts), and
+`Resume`. Excel's `Resume` continues a macro halted by `PAUSE()`; §81.63's only
+pause is `ALERT`/`INPUT`, which resumes on its own dialog's OK through
+`sh_idlg_after`, so there is nothing for a menu item to resume.
+
+`tests/sheetrecord.py` is the gate.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

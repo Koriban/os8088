@@ -4799,6 +4799,15 @@ SOAK = [
         "fields, and Delete compacting the database while the cell one row "
         "below it stays put - which is what separates it from Edit > Delete",
         needs=("marty",), serial=True),
+    Row("sheetrecord", "soak", py("tests/sheetrecord.py"), 450.0,
+        "SPEC.md 81.74: the macro recorder. 81.68 is titled \"the way the "
+        "recorder writes them\" and this is that recorder - it emits the SAME "
+        "language 81.63 runs, so the test does not just read the cells it "
+        "wrote, it RUNS them after clearing the originals. Set Recorder, "
+        "Record with a name, a session of selects and entries recorded in "
+        "absolute R1C1, Stop writing its own RETURN(), and a redundant click "
+        "recording nothing at all",
+        needs=("marty",), serial=True),
     Row("sheethide", "soak", py("tests/sheethide.py"), 400.0,
         "SPEC.md 81.73: a hidden row and a hidden column - Format > Column "
         "Width 0, Excel's own way, on the line that used to refuse it. What "

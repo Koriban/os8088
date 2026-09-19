@@ -56,7 +56,8 @@ WORK = "build/sheetmacro"               # this row's own paths (WRITING-TESTS 5.
 DISK = "build/sheetmacro.img"
 NAME = "MAC.SLK"
 MACRO = (435, 45)
-RUN = (MACRO[0] + 17, 57 + 2)           # Macro's first item
+RUN = (MACRO[0] + 17, 57 + 12 + 2)      # Macro's SECOND item: 81.74's
+                                         # recorder put Record... above it
 COUNT = [
     'FOR(H1,1,5)',
     'SET.VALUE(H2,H2+H1)',

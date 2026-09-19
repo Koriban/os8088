@@ -1676,6 +1676,8 @@ sh_entry:
     call sh_mkblank
     call sh_mtab_calc
     call sh_sheetmark
+    call sh_recmark                    ; 81.74: both Macro items say what they
+                                        ; would do, from the state they start in
 
     ; stage 3.0a: drag-to-select. BX is still the window OSAPI_WM_CREATE just
     ; answered. CF=1 means kern_small, which carries the slot and not the body
@@ -3297,7 +3299,8 @@ sh_select:
     call sh_selpaint                   ; only what the move dirtied - the full
                                         ; repaint costs ~1s on a 4.77MHz 8088
                                         ; and this path runs per arrow key
-    pop bx
+    call sh_rec_sel                    ; 81.74: ...and the recorder's SELECT,
+    pop bx                             ; which is a no-op unless one is live
     pop ax
     ret
 
@@ -4607,6 +4610,12 @@ sh_commit:
     call sh_undo_begin                ; the snapshot already
     call sh_undo_end
 .inside:
+    call sh_rec_stage                 ; 81.74: a TYPED entry is the recorder's
+                                      ; FORMULA. Staged HERE, before the store
+                                      ; reads sh_editbuf, and emitted at .out
+                                      ; - the emit writes through sh_commit
+                                      ; itself, so it has to happen once this
+                                      ; one is finished with the buffer
     mov byte [sh_editing], 0
     mov byte [sh_commitdirty], 1      ; cell data changes below (even an empty
                                       ; buffer clears the cell) - sh_selpaint
@@ -4673,6 +4682,9 @@ sh_commit:
 .label:
     call sh_setlabel                  ; ...and TRUE and FALSE, which are
 .out:                                 ; the logical constant (81.51)
+    pushf                             ; 81.74: every caller reads this CF
+    call sh_rec_flush
+    popf
     pop es
     pop si
     pop dx
@@ -7488,7 +7500,23 @@ sh_mfire:
     call sh_docmd_options
     jmp .out
 .macro:
-    call sh_macro_run
+    or al, al
+    jnz .macro1
+    call sh_docmd_record               ; 0: Record... / Stop Recorder (81.74)
+    jmp .out
+.macro1:
+    cmp al, 1
+    jne .macro2
+    call sh_macro_run                  ; 1: Run...
+    jmp .out
+.macro2:
+    cmp al, 2
+    jne .macro3
+    call sh_docmd_setrec               ; 2: Set Recorder
+    jmp .out
+.macro3:
+    xor byte [sh_rec_rel], 1           ; 3: Relative / Absolute Record - the
+    call sh_recmark                    ; item names what choosing it WOULD do
     jmp .out
 .help:
     call sh_docmd_help
@@ -8259,6 +8287,10 @@ sh_cell_totext:
 ; error).
 ; -----------------------------------------------------------------------------
 sh_docmd_copy:
+    push si
+    mov si, sh_s_rec_copy              ; 81.74
+    call sh_rec_cmd
+    pop si
     push ax
     push bx
     push cx
@@ -8357,6 +8389,10 @@ sh_docmd_copy:
 
 ; sh_docmd_cut - Copy, then Clear
 sh_docmd_cut:
+    push si
+    mov si, sh_s_rec_cut               ; 81.74
+    call sh_rec_cmd
+    pop si
     push ax
     push bx
     push cx
@@ -8419,6 +8455,10 @@ sh_docmd_cut:
 ; text had been typed. An empty clipboard is a no-op.
 ; -----------------------------------------------------------------------------
 sh_docmd_paste:
+    push si
+    mov si, sh_s_rec_paste             ; 81.74
+    call sh_rec_cmd
+    pop si
     push ax
     push bx
     push cx
@@ -9596,6 +9636,433 @@ sh_docmd_chartexport:
     pop bx
     pop ax
     ret
+; =============================================================================
+; THE MACRO RECORDER (SPEC.md 81.74)
+;
+; 81.68 was built for this and says so in its own title: a macro's references
+; are written in R1C1 "the way the recorder writes them". This is the
+; recorder, and it emits exactly the language 81.63 already runs - a recording
+; is an ordinary macro sheet afterwards, readable and editable, not a second
+; representation.
+;
+; WHAT IS RECORDABLE is what those 20 functions can say: the selection moving
+; (SELECT), a cell entered (FORMULA), and the five menu commands the language
+; already has (COPY, CUT, PASTE, CLEAR, CALCULATE.NOW). Anything else is
+; simply not recorded - it is not refused, and the recording stays valid,
+; which is the same bargain Excel's own recorder makes with the commands its
+; language cannot express.
+;
+; THE EMITTER GOES THROUGH sh_commit, which is itself a recording site, so
+; sh_rec_busy is the guard that stops a recorded FORMULA recording itself.
+; It is a refusal and not a queue: nothing a recorded write does is worth
+; recording.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sh_recmark - derive both relabelled Macro items from the state, the
+; relabel-by-repointing 81.70's Freeze Panes and the Options toggles use
+; -----------------------------------------------------------------------------
+sh_recmark:
+    push ax
+    mov ax, sh_it_recon
+    cmp byte [sh_rec_on], 0
+    je .set0
+    mov ax, sh_it_recoff
+.set0:
+    mov [sh_i_macro], ax
+    mov ax, sh_it_relrec               ; the item names what choosing it WOULD
+    cmp byte [sh_rec_rel], 0           ; do, which is Excel's own wording and
+    je .set1                           ; the opposite of the state it is in
+    mov ax, sh_it_absrec
+.set1:
+    mov [sh_i_macro + 6], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_setrec - Macro ▸ Set Recorder. "Defines the selection on your macro
+; sheet as the recorder range... Recording starts in the upper-left corner of
+; the range and proceeds down the left column."
+;
+; So only the corner is kept, and the SHEET with it: a recording made while
+; the user works on sheet 1 has to land on the macro sheet they pointed at.
+; -----------------------------------------------------------------------------
+sh_docmd_setrec:
+    push ax
+    mov ax, [sh_selcol]
+    mov [sh_rec_col], ax
+    mov ax, [sh_selrow]
+    mov [sh_rec_row], ax
+    mov al, [sh_cursheet]
+    mov [sh_rec_sheet], al
+    mov byte [sh_rec_set], 1
+    mov word [sh_msg], sh_s_rec_set
+    call sh_recrepaint
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_record - Macro ▸ Record... / Stop Recorder.
+;
+; Stopping writes a RETURN() of its own, so the recording is a macro that ends
+; rather than one that runs on into whatever was below it - which is what
+; 81.63's engine would otherwise do.
+; -----------------------------------------------------------------------------
+sh_docmd_record:
+    push ax
+    push si
+    cmp byte [sh_rec_on], 0
+    jne .stop
+    cmp byte [sh_rec_set], 0           ; Excel opens a macro sheet here; this
+    jne .start                         ; has four sheets and no idea which one
+    mov word [sh_msg], sh_s_rec_norange ; the user meant, so it asks rather
+    call sh_recrepaint                  ; than guessing
+    jmp .out
+.start:
+    mov al, SH_ID_RECNAME              ; ask what to call it first; the start
+    call sh_idlg_open                  ; is that dialog's own OK
+    jmp .out
+.stop:
+    mov si, sh_s_rec_return
+    call sh_rec_emit
+    mov byte [sh_rec_on], 0
+    mov word [sh_msg], sh_s_rec_off
+    call sh_recmark
+    call sh_recrepaint
+.out:
+    pop si
+    pop ax
+    ret
+
+; sh_rec_start - what SH_ID_RECNAME's OK does
+sh_rec_start:
+    mov byte [sh_rec_on], 1
+    mov word [sh_rec_lastc], 0xFFFF    ; no selection recorded yet, so the
+    mov word [sh_rec_lastr], 0xFFFF    ; first SELECT is always written
+    mov word [sh_msg], sh_s_rec_on
+    call sh_recmark
+    ret
+
+sh_recrepaint:
+    push si
+    mov si, [sh_ownwin]
+    call sh_repaint
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rec_emit - SI = a macro formula's text, WITHOUT the leading '='. Puts it
+; in the recorder cell and steps down a row.
+;
+; The write is driven the way sh_sort_permcol drives sh_commit - the SELECTION
+; is its argument - so the real selection AND the current sheet are banked
+; across it and put back. The sheet matters: the recording lands on whichever
+; sheet Set Recorder was pointed at, while the user goes on working on theirs.
+; -----------------------------------------------------------------------------
+sh_rec_emit:
+    cmp byte [sh_rec_on], 0
+    je .ret
+    cmp byte [sh_rec_busy], 0
+    jne .ret                           ; a recorded write is not itself news
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov byte [sh_rec_busy], 1
+    mov byte [sh_editbuf], '='
+    mov di, sh_editbuf + 1
+    mov cx, SH_EDITMAX - 1
+.copy:
+    mov al, [si]
+    or al, al
+    jz .copied
+    jcxz .copied
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp short .copy
+.copied:
+    mov byte [di], 0
+    mov si, sh_editbuf
+    xor cx, cx
+.len:
+    cmp byte [si], 0
+    je .have
+    inc si
+    inc cx
+    jmp short .len
+.have:
+    mov [sh_editlen], cl
+    mov ax, [sh_selcol]                ; bank the user's own place...
+    mov [sh_rec_svc], ax
+    mov ax, [sh_selrow]
+    mov [sh_rec_svr], ax
+    mov ax, [sh_selcol2]
+    mov [sh_rec_svc2], ax
+    mov ax, [sh_selrow2]
+    mov [sh_rec_svr2], ax
+    mov al, [sh_cursheet]
+    mov [sh_rec_svsh], al
+    mov al, [sh_rec_sheet]             ; ...go to the recorder's...
+    mov [sh_cursheet], al
+    mov ax, [sh_rec_col]
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov ax, [sh_rec_row]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+    mov byte [sh_editing], 1
+    call sh_commit
+    mov al, [sh_rec_svsh]              ; ...and back
+    mov [sh_cursheet], al
+    mov ax, [sh_rec_svc]
+    mov [sh_selcol], ax
+    mov ax, [sh_rec_svr]
+    mov [sh_selrow], ax
+    mov ax, [sh_rec_svc2]
+    mov [sh_selcol2], ax
+    mov ax, [sh_rec_svr2]
+    mov [sh_selrow2], ax
+    inc word [sh_rec_row]
+    mov byte [sh_rec_busy], 0
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rec_sel - the selection moved: record it. ABSOLUTE by default, which is
+; Excel's own initial state ("Initially, cell references in macros are
+; recorded as absolute references"), RELATIVE to the cell the last recorded
+; SELECT left the macro standing on when Relative Record is chosen.
+; -----------------------------------------------------------------------------
+sh_rec_sel:
+    cmp byte [sh_rec_on], 0
+    je .ret
+    cmp byte [sh_rec_busy], 0
+    jne .ret
+    push ax
+    push bx
+    push si                            ; sh_select's own contract is that SI
+    push di                            ; is the window, and this is called
+    mov ax, [sh_selcol]                ; from inside it
+    cmp ax, [sh_rec_lastc]
+    jne .go
+    mov ax, [sh_selrow]
+    cmp ax, [sh_rec_lastr]
+    je .done                           ; it did not actually move
+.go:
+    mov di, sh_recbuf
+    mov si, sh_s_rec_select
+    call sh_reccpy
+    cmp byte [sh_rec_rel], 0
+    je .abs
+    mov ax, [sh_selrow]                ; R[dr]C[dc], the offsets 81.68's own
+    sub ax, [sh_rec_lastr]             ; converter already speaks
+    mov bx, [sh_selcol]
+    sub bx, [sh_rec_lastc]
+    cmp word [sh_rec_lastr], 0xFFFF    ; ...unless nothing is recorded yet, in
+    je .abs                            ; which case there is no origin to be
+    call sh_rec_rc                     ; relative TO
+    jmp short .emit
+.abs:
+    mov ax, [sh_selrow]
+    inc ax
+    mov bx, [sh_selcol]
+    inc bx
+    call sh_rec_rcabs
+.emit:
+    mov si, sh_s_rec_qp
+    call sh_reccpy
+    mov byte [di], 0
+    mov si, sh_recbuf
+    call sh_rec_emit
+    mov ax, [sh_selcol]
+    mov [sh_rec_lastc], ax
+    mov ax, [sh_selrow]
+    mov [sh_rec_lastr], ax
+.done:
+    pop di
+    pop si
+    pop bx
+    pop ax
+.ret:
+    ret
+
+; sh_reccpy - SI -> DI, NUL not copied, DI left past the last byte
+sh_reccpy:
+    push ax
+.l:
+    mov al, [si]
+    or al, al
+    jz .d
+    mov [di], al
+    inc si
+    inc di
+    jmp short .l
+.d:
+    pop ax
+    ret
+
+; sh_rec_rcabs - AX = a 1-based row, BX = a 1-based column -> "R<n>C<n>" at DI
+sh_rec_rcabs:
+    push ax
+    mov byte [di], 'R'
+    inc di
+    call sh_itoa
+    push si
+    mov si, sh_numbuf
+    call sh_reccpy
+    pop si
+    mov byte [di], 'C'
+    inc di
+    mov ax, bx
+    call sh_itoa
+    push si
+    mov si, sh_numbuf
+    call sh_reccpy
+    pop si
+    pop ax
+    ret
+
+; sh_rec_rc - AX = a row DELTA, BX = a column delta -> "R[d]C[d]" at DI, with
+; a zero offset written as the bare letter, which is what 81.68's converter
+; and Excel both mean by "this row"
+sh_rec_rc:
+    push ax
+    mov byte [di], 'R'
+    inc di
+    call sh_rec_off
+    mov byte [di], 'C'
+    inc di
+    mov ax, bx
+    call sh_rec_off
+    pop ax
+    ret
+
+; sh_rec_off - AX = an offset -> "[n]" at DI, or nothing at all when it is 0
+sh_rec_off:
+    or ax, ax
+    jz .out
+    push si
+    mov byte [di], '['
+    inc di
+    or ax, ax
+    jns .pos
+    mov byte [di], '-'
+    inc di
+    neg ax
+.pos:
+    call sh_itoa
+    mov si, sh_numbuf
+    call sh_reccpy
+    mov byte [di], ']'
+    inc di
+    pop si
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rec_stage / sh_rec_flush - a TYPED entry, recorded as FORMULA("...").
+;
+; TWO HALVES because the emit writes THROUGH sh_commit, and this is called
+; from inside one: staging copies sh_editbuf out before the store reads it,
+; and the flush at sh_commit's own exit does the writing once the outer call
+; has finished with the buffer. sh_rec_busy then stops the inner commit
+; staging anything of its own.
+;
+; A double quote in the typed text is DOUBLED, which is how this app's own
+; parser reads a quote inside a string (81.18's `"a""b"`), so a label with one
+; in it records as a macro that re-enters the same label.
+; -----------------------------------------------------------------------------
+sh_rec_stage:
+    cmp byte [sh_rec_on], 0
+    je .ret
+    cmp byte [sh_rec_busy], 0
+    jne .ret
+    cmp byte [sh_ud_busy], 0           ; a Paste, Fill or Sort write is part of
+    jne .ret                           ; a command, not an entry someone typed
+    push ax
+    push cx
+    push si
+    push di
+    mov si, sh_editbuf
+    mov di, sh_recbuf
+    mov cx, SH_EDITMAX - 14            ; room for FORMULA("") and the NUL
+    push si
+    mov si, sh_s_rec_formula
+    call sh_reccpy
+    pop si
+.c:
+    mov al, [si]
+    or al, al
+    jz .done
+    jcxz .done
+    cmp al, '"'
+    jne .one
+    mov [di], al
+    inc di
+    dec cx
+    jcxz .done
+.one:
+    mov [di], al
+    inc di
+    inc si
+    dec cx
+    jmp short .c
+.done:
+    push si
+    mov si, sh_s_rec_qp
+    call sh_reccpy
+    pop si
+    mov byte [di], 0
+    mov byte [sh_rec_pend], 1
+    pop di
+    pop si
+    pop cx
+    pop ax
+.ret:
+    ret
+
+sh_rec_flush:
+    cmp byte [sh_rec_pend], 0
+    je .ret
+    push si
+    mov byte [sh_rec_pend], 0
+    mov si, sh_recbuf
+    call sh_rec_emit
+    pop si
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rec_cmd - SI = a bare command's text (COPY(), PASTE()...). One call site
+; per Edit menu command the language has a function for.
+; -----------------------------------------------------------------------------
+sh_rec_cmd:
+    call sh_rec_emit
+    ret
+
+sh_s_rec_formula: db 'FORMULA("', 0
+sh_s_rec_select:  db 'SELECT("', 0
+sh_s_rec_qp:      db '")', 0
+sh_s_rec_return:  db 'RETURN()', 0
+sh_s_rec_copy:    db 'COPY()', 0
+sh_s_rec_cut:     db 'CUT()', 0
+sh_s_rec_paste:   db 'PASTE()', 0
+sh_s_rec_clear:   db 'CLEAR()', 0
+sh_s_rec_calc:    db 'CALCULATE.NOW()', 0
+sh_s_rec_set:     db 'Recorder set.', 0
+sh_s_rec_on:      db 'Recording.', 0
+sh_s_rec_off:     db 'Recording stopped.', 0
+sh_s_rec_norange: db 'Set Recorder first.', 0
+
+
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_setname - Data > Set Database.../Set Criteria... (SPEC.md 81.69).
@@ -11442,6 +11909,10 @@ sh_fdlg_apply0:
 .doclear:
     call sh_prot_blocked
     jc .refused                       ; ...and the same here: this engine's
+    push si                           ; 81.74: CLEAR() takes no argument here,
+    mov si, sh_s_rec_clear            ; so the three radio modes all record as
+    call sh_rec_cmd                   ; the one the language has
+    pop si
                                       ; .out does not repaint either
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
     ; has highlighted. It used to clear the anchor alone (81.17's third case,
@@ -11514,6 +11985,10 @@ sh_fdlg_apply0:
 .calcnow:
     inc word [sh_pass]                ; a pass stamp nothing has cached, which
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
+    push si                           ; 81.74
+    mov si, sh_s_rec_calc
+    call sh_rec_cmd
+    pop si
 .calcrepaint:
     mov si, [sh_ownwin]
     call sh_repaint
@@ -12097,7 +12572,8 @@ SH_ID_SORT   equ 5                   ; Data > Sort... (stage 4.5): the KEY.
 SH_ID_RUN    equ 6                   ; Macro > Run... (81.63): where to start
 SH_ID_INPUT  equ 7                   ; ...and INPUT(), a macro's own question
 SH_ID_SERSTEP equ 8                  ; 81.72: Data ▸ Series...' step value,
-SH_ID_NKIND  equ 9                   ; part two of two
+SH_ID_RECNAME equ 9                  ; part two of two; 81.74: what to call
+SH_ID_NKIND  equ 10                  ; the recording about to be made
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -12123,8 +12599,12 @@ sh_idlg_tpl:
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
                dw sh_s_id_tsort, sh_s_id_trun, sh_s_id_tinput, sh_s_id_tser
+               dw sh_s_id_trec
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
                dw sh_s_id_psort, sh_s_id_pgoto, sh_macro_msg, sh_s_id_pser
+               dw sh_s_id_prec
+sh_s_id_trec:  db 'Record Macro', 0
+sh_s_id_prec:  db 'Name:', 0
 sh_s_id_tser:  db 'Series', 0
 sh_s_id_pser:  db 'Step value:', 0
 sh_s_id_tgoto: db 'Goto', 0
@@ -12438,6 +12918,8 @@ sh_idlg_apply:
     je .input
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP
     je .serstep
+    cmp byte [sh_idlg_kind], SH_ID_RECNAME
+    je .recname
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
@@ -12578,6 +13060,26 @@ sh_idlg_apply:
 ; has both. Asking in sequence is what File > Save As... already does - the
 ; format radio first, then the file dialog - so this follows the app's own
 ; idiom rather than growing a third engine.
+; 81.74: the recording's own name, bound to the cell it is about to start in
+; so Macro ▸ Run can list it. An EMPTY name is not a refusal - the Run dialog
+; takes a reference too, and Excel's own Name field may be left alone.
+.recname:
+    mov si, sh_idlg_buf
+    call sh_upcase_at
+    cmp byte [sh_idlg_buf], 0
+    je .recgo
+    mov ax, [sh_rec_col]
+    mov bx, [sh_rec_row]
+    mov cx, ax
+    mov dx, bx
+    mov si, sh_idlg_buf
+    call sh_name_def                   ; CF=1 = the table is full, which
+    jnc .recgo                         ; 81.69's own pair of messages already
+    mov word [sh_msg], sh_s_id_nofit   ; says
+.recgo:
+    call sh_rec_start
+    jmp .redraw
+
 ; 81.72: the step value, and the whole of Data ▸ Series' second question.
 ; The TEXT is read rather than an integer parsed: Growth by 1.5 and a linear
 ; step of 0.25 are both ordinary, and sh_pnum_at answers integers only -
@@ -39470,7 +39972,7 @@ sh_mtab:
     dw sh_m_format,  sh_i_format,  7
     dw sh_m_data,    sh_i_data,    11
     dw sh_m_options, sh_i_options, 5
-    dw sh_m_macro,   sh_i_macro,   1
+    dw sh_m_macro,   sh_i_macro,   4
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
 
@@ -39567,9 +40069,17 @@ sh_sheet_chk:   dw sh_it_sheet1c, sh_it_sheet2c, sh_it_sheet3c, sh_it_sheet4c
 ; picker), so "Run" starts a macro at whatever cell is CURRENTLY SELECTED,
 ; rather than asking for a typed/picked starting reference - see the
 ; Macro engine section comment for the full reasoning.
+; Excel's own Macro menu is Record.../Run.../Start Recorder/Set Recorder/
+; Relative Record. 81.74 adds three of the four it was missing; Start
+; Recorder and Resume are that section's own documented shortfalls.
 sh_m_macro:    db 'Macro', 0
-sh_i_macro:    dw sh_it_run
+sh_i_macro:    dw sh_it_recon, sh_it_run, sh_it_setrec, sh_it_relrec
 sh_it_run:     db 'Run', 0
+sh_it_recon:   db 'Record...', 0     ; 81.74, relabelled while a recording is
+sh_it_recoff:  db 'Stop Recorder', 0 ; live - Excel's own pair
+sh_it_setrec:  db 'Set Recorder', 0
+sh_it_relrec:  db 'Relative Record', 0   ; ...and this one names what choosing
+sh_it_absrec:  db 'Absolute Record', 0   ; it WOULD do, as Excel's does
 
 ; Edit - "Can't Undo" is a real Excel item with no real implementation
 ; behind it (no undo system exists) - shown disabled (MENU_DIS) rather than
@@ -41198,7 +41708,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7926                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8014                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -41275,7 +41785,26 @@ sh_rz_axis    equ sh_rz_on + 1       ; byte: 0 = a column, 1 = a row
 sh_rz_idx     equ sh_rz_axis + 1     ; the REAL row or column being resized
 sh_rz_x0      equ sh_rz_idx + 2      ; the edge's own pixel when it was
 sh_rz_px      equ sh_rz_x0 + 2       ; grabbed, and sh_hdrhit's own scratch
-sh_wcol       equ sh_rz_px + 2
+; 81.74's own: the macro recorder. sh_rec_col/row/sheet is where the next
+; macro formula goes - Set Recorder's corner, and the SHEET with it, because
+; the recording lands on the macro sheet while the user works on theirs.
+sh_rec_on     equ sh_rz_px + 2       ; byte: a recording is live
+sh_rec_set    equ sh_rec_on + 1      ; byte: Set Recorder has been used
+sh_rec_rel    equ sh_rec_set + 1     ; byte: relative rather than absolute
+sh_rec_busy   equ sh_rec_rel + 1     ; byte: inside sh_rec_emit's own write
+sh_rec_pend   equ sh_rec_busy + 1    ; byte: a staged FORMULA awaits its flush
+sh_rec_sheet  equ sh_rec_pend + 1    ; byte: which sheet it records onto
+sh_rec_col    equ sh_rec_sheet + 1   ; ...and where in it
+sh_rec_row    equ sh_rec_col + 2
+sh_rec_lastc  equ sh_rec_row + 2     ; the last SELECT recorded, which is what
+sh_rec_lastr  equ sh_rec_lastc + 2   ; a relative one is relative TO
+sh_rec_svc    equ sh_rec_lastr + 2   ; the user's own place, banked across
+sh_rec_svr    equ sh_rec_svc + 2     ; the sh_commit that does the writing
+sh_rec_svc2   equ sh_rec_svr + 2
+sh_rec_svr2   equ sh_rec_svc2 + 2
+sh_rec_svsh   equ sh_rec_svr2 + 2    ; byte: ...and the sheet they were on
+sh_recbuf     equ sh_rec_svsh + 2    ; SH_EDITMAX+1: one formula being built
+sh_wcol       equ sh_recbuf + SH_EDITMAX + 1
 sh_wrow       equ sh_wcol + 2
 sh_selx1      equ sh_wrow + 2
 sh_selx2      equ sh_selx1 + 2
