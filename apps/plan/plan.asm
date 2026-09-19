@@ -22146,7 +22146,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7557                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 4028                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -22188,7 +22188,6 @@ sh_freezecol  equ sh_vrows + 2       ; word: Options > Freeze Panes (81.70) -
 sh_freezerow  equ sh_freezecol + 2   ; ...and rows 0..sh_freezerow-1. 0 means
                                      ; no freeze on that axis; sh_scrollcol/
                                      ; row can never fall below these once set
-sh_geom_roff  equ sh_freezerow + 2   ; word: sh_geom's own scratch - the
                                      ; scrolling phase's row offset (visible
                                      ; index minus sh_freezerow), named
                                      ; because every other register is
@@ -22196,42 +22195,20 @@ sh_geom_roff  equ sh_freezerow + 2   ; word: sh_geom's own scratch - the
 ; 81.73: a HIDDEN row or column takes no slot, so the visible slots stopped
 ; marching in step with the real indices and sh_geom records the mapping it
 ; actually built. Everything that used to compute it now reads these.
-sh_vrc        equ sh_geom_roff + 2   ; SH_MAXVC words: slot -> real column
+sh_vrc            equ sh_freezerow + 2   ; SH_MAXVC words: slot -> real column
 sh_vrr        equ sh_vrc + SH_MAXVC * 2   ; SH_MAXVR words: slot -> real row
 sh_geom_rc    equ sh_vrr + SH_MAXVR * 2   ; the walks' own real cursors...
 sh_geom_rr    equ sh_geom_rc + 2
-sh_geom_rbase equ sh_geom_rr + 2     ; ...and where this phase's sh_rh_find
                                      ; began, which is what turns a real row
                                      ; into the key the table is streaming
-sh_vcl_lo     equ sh_geom_rbase + 2  ; sh_vclip's own four
+sh_vcl_lo         equ sh_geom_rr + 2  ; sh_vclip's own four
 sh_vcl_hi     equ sh_vcl_lo + 2
 sh_vcl_a      equ sh_vcl_hi + 2
 sh_vcl_b      equ sh_vcl_a + 2
-sh_rz_on      equ sh_vcl_b + 2       ; 81.73.2: a heading drag is live
-sh_rz_axis    equ sh_rz_on + 1       ; byte: 0 = a column, 1 = a row
-sh_rz_idx     equ sh_rz_axis + 1     ; the REAL row or column being resized
-sh_rz_x0      equ sh_rz_idx + 2      ; the edge's own pixel when it was
-sh_rz_px      equ sh_rz_x0 + 2       ; grabbed, and sh_hdrhit's own scratch
 ; 81.74's own: the macro recorder. sh_rec_col/row/sheet is where the next
 ; macro formula goes - Set Recorder's corner, and the SHEET with it, because
 ; the recording lands on the macro sheet while the user works on theirs.
-sh_rec_on     equ sh_rz_px + 2       ; byte: a recording is live
-sh_rec_set    equ sh_rec_on + 1      ; byte: Set Recorder has been used
-sh_rec_rel    equ sh_rec_set + 1     ; byte: relative rather than absolute
-sh_rec_busy   equ sh_rec_rel + 1     ; byte: inside sh_rec_emit's own write
-sh_rec_pend   equ sh_rec_busy + 1    ; byte: a staged FORMULA awaits its flush
-sh_rec_sheet  equ sh_rec_pend + 1    ; byte: which sheet it records onto
-sh_rec_col    equ sh_rec_sheet + 1   ; ...and where in it
-sh_rec_row    equ sh_rec_col + 2
-sh_rec_lastc  equ sh_rec_row + 2     ; the last SELECT recorded, which is what
-sh_rec_lastr  equ sh_rec_lastc + 2   ; a relative one is relative TO
-sh_rec_svc    equ sh_rec_lastr + 2   ; the user's own place, banked across
-sh_rec_svr    equ sh_rec_svc + 2     ; the sh_commit that does the writing
-sh_rec_svc2   equ sh_rec_svr + 2
-sh_rec_svr2   equ sh_rec_svc2 + 2
-sh_rec_svsh   equ sh_rec_svr2 + 2    ; byte: ...and the sheet they were on
-sh_recbuf     equ sh_rec_svsh + 2    ; SH_EDITMAX+1: one formula being built
-sh_wcol       equ sh_recbuf + SH_EDITMAX + 1
+sh_wcol           equ sh_vcl_b + 2
 sh_wrow       equ sh_wcol + 2
 sh_selx1      equ sh_wrow + 2
 sh_selx2      equ sh_selx1 + 2
@@ -22339,9 +22316,8 @@ sh_ix1row     equ sh_ix1col + 2             ; - it cannot borrow sh_r1col,
 sh_ix2col     equ sh_ix1row + 2             ; which is the running result it
 sh_ix2row     equ sh_ix2col + 2             ; is reducing
 sh_rrow       equ sh_ix2row + 2             ; ...and sh_foldrange's end-of-
-sh_rcol       equ sh_rrow + 2               ; array bound (sh_rcol is spare
                                              ; since the record-array walk)
-sh_pass       equ sh_rcol + 2               ; recalculation pass counter
+sh_pass           equ sh_rrow + 2               ; recalculation pass counter
 sh_bbrow      equ sh_pass + 2               ; sh_difbbox's used bounding box
 sh_bbcol      equ sh_bbrow + 2
 sh_curfmt     equ sh_bbcol + 2              ; sh_getcell2's format-byte output
@@ -22365,13 +22341,10 @@ sh_fnd_nd     equ sh_fnd_hb + 2             ; bases: the inner compare needs
                                              ; third pointer, and the 8086
                                              ; addresses memory through four
                                              ; registers of which one is BP
-sh_fmt_fl     equ sh_fnd_nd + 2             ; TEXT's parsed format: the flag
-sh_fmt_cx     equ sh_fmt_fl + 2             ; byte, the two digit counts and
-sh_fmt_ph     equ sh_fmt_cx + 2             ; whether any placeholder appeared.
                                              ; In bss because nothing may sit
                                              ; on the stack between sh_vpush
                                              ; and sh_binop_pre
-sh_dt_y       equ sh_fmt_ph + 2             ; stage 4.5: a broken-down date,
+sh_dt_y           equ sh_fnd_nd + 2             ; stage 4.5: a broken-down date,
 sh_dt_m       equ sh_dt_y + 2               ; shared by both directions of the
 sh_dt_d       equ sh_dt_m + 2               ; serial conversion
 sh_dt_ly      equ sh_dt_d + 2               ; sh_isleap's year
@@ -22380,47 +22353,29 @@ sh_dt_ms      equ sh_dt_ys + 2
 sh_dt_acc     equ sh_dt_ms + 2              ; sh_dt_parse3's running total
 sh_dt_min     equ sh_dt_acc + 2             ; sh_dt_hms's minutes since midnight
 sh_dt_tmp     equ sh_dt_min + 2             ; 8: one parked double
-sh_dol_neg    equ sh_dt_tmp + 8             ; DOLLAR formats the MAGNITUDE and
                                              ; parenthesises it afterwards, so
                                              ; the sign is banked here
-sh_jlen       equ sh_dol_neg + 2             ; sh_cjust's stashed text length
+sh_jlen           equ sh_dt_tmp + 8             ; sh_cjust's stashed text length
 sh_ulx        equ sh_jlen + 2               ; sh_drawunderline's stashed
 sh_uly        equ sh_ulx + 2                ; cell text origin (x, y)
-sh_wrec_xf    equ sh_uly + 2                ; sh_doread_biff's per-record
                                              ; xf index stash
-sh_biff_nfont equ sh_wrec_xf + 2            ; sh_doread_biff's FONT/XF
-sh_biff_nxf   equ sh_biff_nfont + 2         ; record counters (also each
                                              ; new record's own index)
-sh_font_tab   equ sh_biff_nxf + 2           ; SH_BIFF_FONT_CAP bytes: each
                                              ; tracked font's bold/underline
                                              ; bits
-sh_xf_fmt     equ sh_font_tab + SH_BIFF_FONT_CAP  ; SH_BIFF_XF_CAP bytes:
                                              ; each tracked XF's align|
                                              ; numfmt packed byte
-sh_xf_font    equ sh_xf_fmt + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes:
                                              ; each tracked XF's font index
-sh_xf_bord    equ sh_xf_font + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes:
                                              ; each tracked XF's border and
                                              ; protection bits, in THIS app's
                                              ; SH_BORD_*/SH_PROT_* spelling
                                              ; rather than BIFF's (81.47)
-sh_xf_nf      equ sh_xf_bord + SH_BIFF_XF_CAP      ; SH_BIFF_XF_CAP bytes: each
                                              ; tracked XF's number format when
                                              ; the format byte cannot hold it -
                                              ; Excel's id plus one, or 0 (81.55)
-sh_xfp_fmt    equ sh_xf_nf + SH_BIFF_XF_CAP        ; SH_XFP_CAP bytes each: the
-sh_xfp_bord   equ sh_xfp_fmt + SH_XFP_CAP          ; (format, border, number
-sh_xfp_nf     equ sh_xfp_bord + SH_XFP_CAP         ; format) triples the writer
-sh_nxfp       equ sh_xfp_nf + SH_XFP_CAP           ; found, and how many
-sh_xfw_fmt    equ sh_nxfp + 2                ; word: the format byte the XF
-sh_xfw_bord   equ sh_xfw_fmt + 2             ; byte: ...and the border byte
-sh_xfw_prot   equ sh_xfw_bord + 1            ; byte: ...and its XF_TYPE_PROT
-sh_xfw_nf     equ sh_xfw_prot + 1            ; byte: ...and its number format
-sh_wrec_ixfe  equ sh_xfw_nf + 1              ; word: this cell's XF index,
                                              ; which is its format byte unless
                                              ; it also has a border record
 
-sh_cursheet   equ sh_wrec_ixfe + 2           ; the sheet sh_findcell
+sh_cursheet       equ sh_uly + 2           ; the sheet sh_findcell
                                              ; packs into every search (see
                                              ; the stage 2.0 cell-record
                                              ; comment above sh_findcell)
@@ -22435,18 +22390,11 @@ sh_frwsave    equ sh_fclsave + (SH_SHEETS*2) ; (81.70), which are per sheet
 sh_ownwin     equ sh_frwsave + (SH_SHEETS*2) ; our own window ptr, stashed
                                              ; once in sh_entry for
                                              ; os88ui_ask's sake
-sh_macro_col  equ sh_ownwin + 2             ; the macro engine's current
-sh_macro_row  equ sh_macro_col + 2          ; execution position
-sh_macro_running equ sh_macro_row + 2       ; byte: a run is in progress
-sh_macro_steps equ sh_macro_running + 1     ; word: this run's step count,
                                              ; against SH_MACRO_MAXSTEPS
-sh_macro_tcol equ sh_macro_steps + 2        ; SET.VALUE's target cell,
-sh_macro_trow equ sh_macro_tcol + 2         ; stashed across its sh_pcmp
-sh_macrobuf   equ sh_macro_trow + 2         ; SH_EDITMAX+1: a macro step's
                                              ; formula text, copied out of
                                              ; sh_txtseg the same way
                                              ; sh_eval_cell's sh_fbuf is
-sh_macro_msg  equ sh_macrobuf + SH_EDITMAX + 1 ; OS88UI_AMAX+1: ALERT's
+sh_macro_msg      equ sh_ownwin + 2 ; OS88UI_AMAX+1: ALERT's
                                              ; string-literal argument
 
 sh_fdlg_win    equ sh_macro_msg + OS88UI_AMAX + 1 ; stage 1.8's Format
@@ -22487,48 +22435,25 @@ sh_wrec_foff  equ sh_rc_tfmt + 1            ; word: the formula text offset of
 sh_wrec_dval  equ sh_wrec_foff + 2          ; 8: the SYLK writer's banked value
 sh_wrec_type  equ sh_wrec_dval + 8          ; byte: SH_T_* of the cell being
 sh_wrec_toff  equ sh_wrec_type + 1          ; written, where its label is, and
-sh_wrec_len   equ sh_wrec_toff + 2          ; how long that label is
-sh_wrec_hasf  equ sh_wrec_len + 2      ; byte: this cell is a formula
-sh_wrec_aux   equ sh_wrec_hasf + 1      ; byte: and, if it is an ERROR, which
-sh_wsheet     equ sh_wrec_aux + 1        ; which sheet a BIFF write is on
-sh_wb_map     equ sh_wsheet + 2         ; --- the BIFF4 workbook writer ---
-sh_wb_i       equ sh_wb_map + 2
-sh_wb_lenat   equ sh_wb_i + 2           ; where a SHEETHDR's length goes...
-sh_wb_subat   equ sh_wb_lenat + 2       ; ...and where its substream began
-sh_wb_xf4     equ sh_wb_subat + 2       ; byte: emit BIFF4 XFs, not BIFF3
-sh_wb_align   equ sh_wb_xf4 + 1         ; this XF's alignment code
-sh_rd_sheet   equ sh_wb_align + 2       ; the BIFF reader's substream counter
-sh_rd_home    equ sh_rd_sheet + 2       ; ...and the sheet the user was on
-sh_rd_wb      equ sh_rd_home + 2        ; byte: this file is a BIFF4 workbook
-sh_biff_end   equ sh_rd_wb + 1           ; the BIFF reader's banked file end
-sh_rc_tval    equ sh_biff_end + 2           ; 8: a whole double, not a word
+sh_wrec_aux       equ sh_wrec_toff + 2      ; byte: and, if it is an ERROR, which
+sh_rc_tval        equ sh_wrec_aux + 1           ; 8: a whole double, not a word
 sh_rc_tfml    equ sh_rc_tval + 8
 sh_rc_ttype   equ sh_rc_tfml + 2            ; byte: SH_C_TYPE in transit
 sh_rc_taux    equ sh_rc_ttype + 1           ; byte: ...and SH_C_AUX
 
-sh_sort_cnt   equ sh_rc_taux + 1            ; word: sh_docmd_sortcol's own
                                              ; staged-pair count
-sh_sort_fcnt  equ sh_sort_cnt + 2           ; word: how many formula text
                                              ; slots are staged so far
-sh_sort_row   equ sh_sort_fcnt + 2          ; word: the scan's own current
                                              ; row, stashed across the
                                              ; sh_getcell2 call below it
-sh_sort_val   equ sh_sort_row + 2           ; 8: that same cell's value, a
                                              ; whole double since stage 4.5
-sh_sort_fslot equ sh_sort_val + 8           ; word: which text slot a
                                              ; formula cell just staged into
-sh_sort_keyval  equ sh_sort_fslot + 2       ; 8: the insertion sort's key...
-sh_sort_cmpv    equ sh_sort_keyval + 8      ; 8: ...and what it is compared
                                              ; against, both in DS because
                                              ; fp_unpack_* read DS:SI and the
                                              ; array lives in sh_stgseg
-sh_sort_keyorig equ sh_sort_cmpv + 8        ; word: the key's own origidx
-sh_sort_keycol     equ sh_sort_keyorig + 2     ; word: the column the sort is
                                             ; keyed on, which since stage 4.5
                                             ; the dialog picks and which need
                                             ; not be the selection's anchor
-sh_sort_desc    equ sh_sort_keycol + 2         ; byte: 0 ascending, 1 descending
-sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
+sh_calcmanual     equ sh_rc_taux + 1        ; byte: Options > Calculation
 sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
                                              ; checked one
 sh_a1style      equ sh_mchk + 1             ; byte: 0 = A1, 1 = R1C1 - what
@@ -22570,14 +22495,12 @@ sh_nm_in        equ sh_nm_tmp + 2            ; SH_NAME_MAX+1: a name arriving
 sh_find_col     equ sh_nm_in + SH_NAME_MAX + 1  ; the walk's current cell...
 sh_find_row     equ sh_find_col + 2
 sh_find_buf     equ sh_find_row + 2          ; SH_EDITMAX+1: ...as displayed
-sh_sort_trow  equ sh_find_buf + SH_EDITMAX + 1   ; word: the write-back loop's
-sh_sort_src   equ sh_sort_trow + 2          ; own (target row, source idx)
 
 ; Sheet's own in-window menu bar (stage 2.x, see the SH_MBAR_H section
 ; comment) - sh_goy is the grid's own origin (raw [sh_oy] + SH_MBAR_H);
 ; everything from sh_mopen down is sh_mtrack/sh_mbar_*/sh_mdrop_*/
 ; sh_mitem_hit's shared working state.
-sh_goy        equ sh_sort_src + 2
+sh_goy            equ sh_find_buf + SH_EDITMAX + 1
 sh_mopen      equ sh_goy + 2               ; byte: open menu index, SH_M_NONE
 sh_mhi        equ sh_mopen + 1             ; byte: hot item in the open
                                              ; dropdown, SH_M_NONE
@@ -22605,29 +22528,16 @@ sh_showformulas  equ sh_gridlines + 1      ; byte: Options > Formulas, 1=on
 
 ; Border dialog (stage 2.x, sh_bdlg_*) - same "own scratch, not stack
 ; juggling" shape as sh_fdlg_*'s own bss block above
-sh_bdlg_win    equ sh_showformulas + 1     ; word: 0 = none, the gate
-sh_bdlg_sel    equ sh_bdlg_win + 2         ; byte: the 6 checkboxes' state,
                                              ; SH_BDLG_B_* bits
-sh_bdlg_ox     equ sh_bdlg_sel + 1
-sh_bdlg_oy     equ sh_bdlg_ox + 2
-sh_bdlg_ri     equ sh_bdlg_oy + 2          ; the row loop's own index
-sh_bdlg_ry     equ sh_bdlg_ri + 2          ; ...and that row's y
-sh_bdlg_rect   equ sh_bdlg_ry + 2          ; 4 words: one button rect,
                                              ; reused for OK then Cancel
 
 ; sh_drawborders' own scratch (stage 2.x) - the four edges' screen rect for
 ; whichever bordered cell it is currently drawing
-sh_bdrawflags  equ sh_bdlg_rect + 8        ; byte: that cell's border byte
-sh_bx1         equ sh_bdrawflags + 1
-sh_by1         equ sh_bx1 + 2
-sh_bx2         equ sh_by1 + 2
-sh_by2         equ sh_bx2 + 2
-sh_bti         equ sh_by2 + 2              ; word: the scan loop's own index
                                              ; (not CX - see sh_drawborders)
 
 ; stage 2.x: runtime cell dimensions (Format > Column Width.../Row
 ; Height...) - see the SH_CW_*/SH_RH_* section comment above sh_entry
-sh_cellw       equ sh_bti + 2              ; word: the drawn column's width, px
+sh_cellw          equ sh_showformulas + 1              ; word: the drawn column's width, px
 sh_cellh       equ sh_cellw + 2            ; word: the drawn row's height, px
 sh_cellch      equ sh_cellh + 2            ; word: sh_cellw / 8, in chars
 sh_blank       equ sh_cellch + 2           ; SH_CW_MAXCH+1: as many spaces as
@@ -22647,37 +22557,19 @@ sh_blank       equ sh_cellch + 2           ; SH_CW_MAXCH+1: as many spaces as
 ; SH_CLAIM_CHART_KB comment above sh_entry for why it exists and the
 ; window-lifecycle note above sh_docmd_chart for why sh_chartwin, once
 ; set, is never zeroed again this session (only shown/hidden)
-sh_chartseg    equ sh_blank + SH_CW_MAXCH + 1  ; word: the offscreen canvas claim
-sh_chartwin    equ sh_chartseg + 2         ; word: 0 = never created; else its
                                              ; window ptr, permanently valid
-sh_chart_sheet equ sh_chartwin + 2         ; word: which sheet the open chart
                                              ; is pinned to (frozen at open)
-sh_chart_r1    equ sh_chart_sheet + 2      ; the ROW SPAN the chart is of -
-sh_chart_r2    equ sh_chart_r1 + 2         ; the selection's, frozen with the
                                            ; column below (81.30)
-sh_chart_col   equ sh_chart_r2 + 2         ; word: which column is pinned
                                              ; (frozen at open - re-run the
                                              ; menu item to retarget)
-sh_chart_cnt   equ sh_chart_col + 2        ; word: values currently plotted,
                                              ; 0 = nothing yet (Export checks
                                              ; this)
-sh_chart_name  equ sh_chart_cnt + 2        ; 13: the exported .BMP's own 8.3
                                              ; name buffer (separate from
                                              ; sh_name, which is Sheet's own
                                              ; load/save filename)
 
 ; apps/os88chart.inc's own required scratch (see that file's header comment)
-sh_chart_title equ sh_chart_name + 13       ; 16: "Column A"
-sh_scan_col    equ sh_chart_title + 16  ; which column a scan pass reads...
-sh_scan_off    equ sh_scan_col + 2      ; ...and where in sh_stgseg it lands
-sh_chart_cnt2  equ sh_scan_off + 2      ; the second series' own count
-sh_rpn_p       equ sh_chart_cnt2 + 2  ; --- stage 4.5: the RPN emitter ---
-sh_rpn_len     equ sh_rpn_p + 2
-sh_rpn_bad     equ sh_rpn_len + 2    ; byte: this formula cannot be expressed
-sh_rpn_rel     equ sh_rpn_bad + 1    ; the two relative-reference flags
-sh_rpn_r1      equ sh_rpn_rel + 2    ; a range's first cell, held across the
-sh_rpn_c1      equ sh_rpn_r1 + 2     ; second one's parse
-sh_rpn_buf     equ sh_rpn_c1 + 2     ; SH_RPN_MAX: the token array
+sh_rpn_buf        equ sh_blank + SH_CW_MAXCH + 1     ; SH_RPN_MAX: the token array
 sh_rwsrc          equ sh_rpn_buf + SH_RPN_MAX             ; SH_EDITMAX+1: the formula
                                               ; text copied out for rewriting
 sh_rwdst          equ sh_rwsrc + SH_EDITMAX + 1  ; SH_RW_CAP: the rewritten
@@ -22782,25 +22674,15 @@ sh_hsb_tw         equ sh_hsb_tl + 2    ; ...and its width
 ; EDIT BUFFER IS REAL BSS rather than a pointer into the arena, because the
 ; arena is append-only: the dialog edits a copy and only commits it on OK, so
 ; Cancel costs nothing and a refused commit leaves the old note intact.
-sh_noteseg        equ sh_hsb_tw + 2    ; word: the note table's segment
-sh_nnote          equ sh_noteseg + 2   ; word: records in it
-sh_notetext       equ sh_nnote + 2     ; SH_NOTEMAX bytes: the edit buffer
-sh_notebox        equ sh_notetext + SH_NOTEMAX  ; OS88TEXT_SZ bytes: the field
-sh_noteopen       equ sh_notebox + 20  ; byte: 1 = the dialog is up
-sh_notecol        equ sh_noteopen + 1  ; word: the cell it was opened on -
-sh_noterow        equ sh_notecol + 2   ; NOT the live selection, which the
+sh_nnote          equ sh_hsb_tw + 2   ; word: records in it
                                        ; user can still move behind a
                                        ; non-modal dialog
-sh_ndlg_win       equ sh_noterow + 2   ; word: 0 = none, the same gate shape
-sh_ndlg_ox        equ sh_ndlg_win + 2  ; as sh_bdlg_win
-sh_ndlg_oy        equ sh_ndlg_ox + 2
-sh_ndlg_rect      equ sh_ndlg_oy + 2   ; 4 words: one button rect, refilled
                                        ; per button (os88ui_btn takes a
                                        ; POINTER to it)
 
 ; stage 3.0c: the generic one-line input dialog, shared by Goto..., Row
 ; Height... and Column Width... (see SH_ID_* for why one dialog serves three).
-sh_idlg_win       equ sh_ndlg_rect + 8 ; word: 0 = none, the single-instance
+sh_idlg_win       equ sh_nnote + 2 ; word: 0 = none, the single-instance
 sh_idlg_kind      equ sh_idlg_win + 2  ; byte: SH_ID_*                   gate
 sh_idlg_buf       equ sh_idlg_kind + 1 ; SH_EDITMAX bytes: what is typed
 sh_idlg_line      equ sh_idlg_buf + SH_EDITMAX   ; OS88LINE_SZ bytes
@@ -22866,18 +22748,7 @@ fp_e1             equ fp_e0 + 8        ; four packed temporaries and a
 fp_e2             equ fp_e1 + 8        ; counter, which fp_ln, fp_exp and
 fp_e3             equ fp_e2 + 8        ; fp_pow share
 fp_ek             equ fp_e3 + 8
-sh_cry_key         equ fp_ek + 2        ; the key column and cell, banked
-sh_cry_keyrow      equ sh_cry_key + 2   ; before any carry moves them
-sh_cry_i           equ sh_cry_keyrow + 2 ; the carry loops' index
-sh_cry_c1          equ sh_cry_i + 2        ; sh_sort_carry's column span...
-sh_cry_c2          equ sh_cry_c1 + 2
-sh_cry_col         equ sh_cry_c2 + 2     ; ...the one being carried...
-sh_cry_src         equ sh_cry_col + 2    ; ...and the entry it is taking from
-sh_cry_trow       equ sh_cry_src + 2
-sh_cry_srow       equ sh_cry_trow + 2
-sh_sort_r1        equ sh_cry_srow + 2   ; the rows Sort was asked for
-sh_sort_r2        equ sh_sort_r1 + 2
-sh_pb_c0          equ sh_sort_r2 + 2        ; the paste block's landing
+sh_pb_c0          equ fp_ek + 2        ; the paste block's landing
 sh_pb_r0          equ sh_pb_c0 + 2     ; corner...
 sh_pb_x           equ sh_pb_r0 + 2     ; ...the cell being written
 sh_pb_y           equ sh_pb_x + 2
@@ -22954,8 +22825,7 @@ sh_lk_2r2     equ sh_lk_2c2 + 2
 sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
                                        ; sum, for the variance folds (81.34)
 sh_tr0        equ sh_pacc2 + 8        ; 8 } two packed doubles that survive a
-sh_tr1        equ sh_tr0 + 8          ; 8 } call to fp_ln, which OWNS fp_e0..3
-sh_fnarg      equ sh_tr1 + 8          ; 6 x 8: the financial functions' parsed
+sh_fnarg          equ sh_tr0 + 8          ; 6 x 8: the financial functions' parsed
                                        ; arguments (81.37). Not banked per
                                        ; nesting level - forty bytes against a
                                        ; 384-byte stack - so a financial
@@ -22964,61 +22834,31 @@ sh_fnarg      equ sh_tr1 + 8          ; 6 x 8: the financial functions' parsed
                                        ; already take
 sh_fnn        equ sh_fnarg + 48       ; word: how many arrived. SIX slots:
                                        ; IPMT, PPMT and RATE take that many
-sh_fnid       equ sh_fnn + 2          ; word: which function is running
-sh_fnnp       equ sh_fnid + 2         ; 8: the period count sh_fnfac works on,
+sh_fnnp           equ sh_fnn + 2         ; 8: the period count sh_fnfac works on,
                                        ; which is NOT always argument 1 - IPMT
                                        ; evaluates the same annuity at per-1
 sh_fnty       equ sh_fnnp + 8         ; 8: ...and the type it works on, which
                                        ; is argument 4 for PMT/PV/FV and
                                        ; argument 5 for IPMT/PPMT
-sh_fnp        equ sh_fnty + 8         ; 8: the payment, once computed
-sh_fnr        equ sh_fnp + 8          ; 8: THE RATE sh_fnfac works on. Not
+sh_fnr            equ sh_fnty + 8          ; 8: THE RATE sh_fnfac works on. Not
                                        ; argument 0 any more: RATE varies it,
                                        ; which is the whole of what a
                                        ; root-finder does (81.37.5)
-sh_fnr0       equ sh_fnr + 8          ; 8 } the secant's two points and the
-sh_fnr1       equ sh_fnr0 + 8         ; 8 } residual at each
-sh_fnf0       equ sh_fnr1 + 8         ; 8 }
-sh_fnf1       equ sh_fnf0 + 8         ; 8 }
-sh_irc1       equ sh_fnf1 + 8         ; IRR and MIRR take their cash flows as
-sh_irr1       equ sh_irc1 + 2         ; a RANGE, and the corners are banked
-sh_irc2       equ sh_irr1 + 2         ; here for sh_getcell2's sake, exactly
-sh_irr2       equ sh_irc2 + 2         ; as 81.32.1 banks the lookups' (81.37.6)
-sh_ircnt      equ sh_irr2 + 2         ; word: how many numbers the walk saw
-sh_irmode     equ sh_ircnt + 2        ; word: 0 all, 1 negatives, 2 positives
-sh_irpow      equ sh_irmode + 2       ; 8: the running (1+r)^i
-sh_iracc      equ sh_irpow + 8        ; 8: ...and the running sum
-sh_fnbusy     equ sh_iracc + 8          ; byte: one of them is parsing
-sh_fnt        equ sh_fnbusy + 2       ; 8: a packed temporary
+sh_fnt            equ sh_fnr + 8       ; 8: a packed temporary
 sh_fnu        equ sh_fnt + 8          ; 8: ...and a second
-sh_trsi       equ sh_fnu + 8          ; word: the formula pointer, banked
                                        ; across the arithmetic (81.36)
                                        ; as its own temporaries (81.35)
-sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
+sh_stbusy         equ sh_fnu + 8        ; byte: a variance fold is running. Only
                                        ; ONE can be, for sh_pacc2's sake - see
                                        ; 81.34.1
 sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
 sh_rndhi      equ sh_rndlo + 2
-sh_prot_hit   equ sh_rndhi + 2      ; byte: sh_prot_blocked's scan result
-sh_protected  equ sh_prot_hit + 2   ; byte: Options > Protect Document (81.46)
+sh_protected      equ sh_rndhi + 2   ; byte: Options > Protect Document (81.46)
 sh_ps_ownsheet equ sh_protected + 2   ; word: 81.45.4's banked sheet
 sh_ps_mode    equ sh_ps_ownsheet + 2  ; byte: which parts of a copied cell the
                                        ; paste in progress is for (81.45)
-sh_rpn_vol    equ sh_ps_mode + 2    ; word: this formula's token array contains
                                        ; a volatile function (81.44)
-sh_dbf_nf     equ sh_rpn_vol + 2    ; 81.41's dBASE III scratch
-sh_dbf_nr     equ sh_dbf_nf + 2
-sh_dbf_hl     equ sh_dbf_nr + 2
-sh_dbf_rl     equ sh_dbf_hl + 2
-sh_dbf_mi     equ sh_dbf_rl + 2      ; the column being scanned: max integer
-sh_dbf_md     equ sh_dbf_mi + 1      ; digits, max decimals, any negative,
-sh_dbf_neg    equ sh_dbf_md + 1      ; longest text, and all-numeric so far
-sh_dbf_clen   equ sh_dbf_neg + 1
-sh_dbf_isnum  equ sh_dbf_clen + 1
-sh_dbf_ty     equ sh_dbf_isnum + 1   ; SH_DBF_MAXF bytes each: the decided
-sh_dbf_w      equ sh_dbf_ty + 128    ; type letter, width and decimal count
-sh_dbf_d      equ sh_dbf_w + 128
-sh_sepch      equ sh_dbf_d + 128      ; byte: CSV/TXT's delimiter (81.40)
+sh_sepch          equ sh_ps_mode + 2      ; byte: CSV/TXT's delimiter (81.40)
 sh_sepend     equ sh_sepch + 2       ; word: the staging buffer's end
 ; 81.75: with the module resident, SHOUT is a near call and nothing reaches
 ; back through a vector - so the table is not merely unused, it is 568 bytes
@@ -23032,19 +22872,7 @@ sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; sh_blitdel, where this fork had
                                        ; already grown a chain - so it is
                                        ; re-anchored on the end of it
-sh_dc_ver         equ sh_abon + 1        ; byte: 2 BIFF3, 4 BIFF4 (81.10.10)
-sh_dc_end         equ sh_dc_ver + 1      ; word: the decoded text's length
-sh_dc_sp          equ sh_dc_end + 2      ; word: fragments on the stack
-sh_dc_tend        equ sh_dc_sp + 2       ; word: where the token array ends
-sh_wrec_roff      equ sh_dc_tend + 2     ; word: a LABEL's / STRING's text
-sh_dc_prow        equ sh_wrec_roff + 2   ; word: the formula waiting for its
-sh_dc_pcol        equ sh_dc_prow + 2     ;       STRING record (81.10.11)
-sh_dc_pxf         equ sh_dc_pcol + 2
-sh_dc_pend        equ sh_dc_pxf + 2      ; byte: one is waiting
-sh_b2             equ sh_dc_pend + 1     ; byte: this stream is BIFF2 (81.52)
-sh_b2_int         equ sh_b2 + 1          ; byte: .isrk is reading an INTEGER
-sh_ps_nf          equ sh_b2_int + 1      ; byte: Paste's number format (81.55)
-sh_nf_sec         equ sh_ps_nf + 1       ; SH_STR_MAX+1: the format section
+sh_nf_sec         equ sh_abon + 1       ; SH_STR_MAX+1: the format section
 sh_nf_num         equ sh_nf_sec + SH_STR_MAX + 1 ; SH_NUMBUF_MAX+1: its number
 sh_nf_cx          equ sh_nf_num + SH_NUMBUF_MAX + 1 ; word: decimals, zeros
 sh_nf_fl          equ sh_nf_cx + 2       ; byte: grouping, percent, exponent
@@ -23071,66 +22899,27 @@ sh_vrh            equ sh_ud_redo + 1     ; SH_MAXVR: the visible rows' heights,
 sh_gridw          equ sh_vrh + SH_MAXVR  ; word: the grid's width in pixels...
 sh_gridh          equ sh_gridw + 2       ; word: ...and its height (sh_geom)
 sh_rtoff          equ sh_gridh + 2       ; word: the drawn row's text offset
-sh_sort_ccls      equ sh_rtoff + 2       ; byte: the staged entry's class
-sh_sort_cmpc      equ sh_sort_ccls + 1   ; byte: ...values[j-1]'s, and
-sh_sort_keyc      equ sh_sort_cmpc + 1   ; byte: ...the key's (81.61)
-sh_sort_ctoff     equ sh_sort_keyc + 1   ; word: the staged text's slot
-sh_sort_tcnt      equ sh_sort_ctoff + 2  ; word: text slots used
-sh_macro_ctl      equ sh_sort_tcnt + 2   ; byte: what the step asked (SH_MC_*)
+sh_macro_ctl      equ sh_rtoff + 2   ; byte: what the step asked (SH_MC_*)
 sh_macro_ncol     equ sh_macro_ctl + 1   ; word: ...where to, for GOTO, NEXT,
-sh_macro_nrow     equ sh_macro_ncol + 2  ; and the loop a SKIP leaves (81.63)
-sh_macro_exec     equ sh_macro_nrow + 2  ; byte: the step engine is evaluating
-sh_macro_exdep    equ sh_macro_exec + 1  ; word: ...at this evaluation depth
-sh_macro_wait     equ sh_macro_exdep + 2 ; byte: what a resume means (SH_MW_*)
-sh_macro_ansok    equ sh_macro_wait + 1  ; byte: INPUT 1 answered, 2 cancelled
-sh_macro_dirty    equ sh_macro_ansok + 1 ; byte: repaint after this step
-sh_macro_lsp      equ sh_macro_dirty + 1 ; byte: loop frames open
-sh_macro_ftype    equ sh_macro_lsp + 1   ; byte: FORMULA's value, banked:
-sh_macro_ferr     equ sh_macro_ftype + 1 ; byte: its tag and its error
-sh_macro_mnsi     equ sh_macro_ferr + 1  ; word: shm_mname's way back
-sh_macro_tend     equ sh_macro_mnsi + 2  ; 8: FOR's end, FORMULA's value
-sh_macro_tstep    equ sh_macro_tend + 8  ; 8: FOR's step
-sh_macro_loops    equ sh_macro_tstep + 8 ; SH_MLOOPS * SH_LF_SZ: the frames
-sh_macro_ans      equ sh_macro_loops + SH_MLOOPS * SH_LF_SZ ; SH_EDITMAX+1
-sh_macro_stmsg    equ sh_macro_ans + SH_EDITMAX + 1 ; SH_MSTMSG+1: MESSAGE
+sh_macro_exec     equ sh_macro_ncol + 2  ; byte: the step engine is evaluating
+sh_macro_wait     equ sh_macro_exec + 1 ; byte: what a resume means (SH_MW_*)
 
 ; 81.65's own scratch: the database and criteria rectangles, kept apart from
 ; sh_arg1col/sh_arg2col (which a nested reference argument overwrites the
 ; instant the NEXT argument is parsed, sh_pargref's own header) and from
 ; sh_r1col/sh_r2col (sh_foldrange's own loop bounds) for the same reason -
 ; these stay live across the WHOLE scan, not just across one sh_pargref call.
-sh_db_c1      equ sh_macro_stmsg + SH_MSTMSG + 1
-sh_db_r1      equ sh_db_c1 + 2
-sh_db_c2      equ sh_db_r1 + 2
-sh_db_r2      equ sh_db_c2 + 2
-sh_cr_c1      equ sh_db_r2 + 2
-sh_cr_r1      equ sh_cr_c1 + 2
-sh_cr_c2      equ sh_cr_r1 + 2
-sh_cr_r2      equ sh_cr_c2 + 2
-sh_db_fcol    equ sh_cr_r2 + 2        ; the function's OWN field argument,
                                        ; resolved once
-sh_db_fcol2   equ sh_db_fcol + 2      ; a criteria COLUMN's own field,
                                        ; re-resolved per column per row
-sh_db_dbrow   equ sh_db_fcol2 + 2     ; the database row sh_dbrowok is
                                        ; testing (sh_dbrowmatch)
-sh_db_critrow equ sh_db_dbrow + 2     ; the criteria row under test
-sh_db_critcol equ sh_db_critrow + 2   ; the criteria column under test
-sh_db_condtype equ sh_db_critcol + 2  ; byte: a banked condition cell's...
-sh_db_condaux  equ sh_db_condtype + 1 ; ...type and error code...
-sh_db_condval  equ sh_db_condaux + 1  ; 8: ...and its packed double, banked
                                        ; across the database cell's own read
                                        ; (sh_dbtest)
-sh_db_busy    equ sh_db_condval + 8   ; byte: a database function is running
                                        ; - re-entrancy is REFUSED, not guarded
                                        ; (see shm_pdatabase's own header)
-sh_db_varguard equ sh_db_busy + 1     ; byte: did THIS call set sh_stbusy, so
                                        ; it knows to clear it again
 
 ; 81.66's own scratch: CELL's parsed type_of_info and the (col,row) it is
 ; answering about, from an explicit reference or the current selection
-sh_ci_which   equ sh_db_varguard + 2
-sh_ci_col     equ sh_ci_which + 2
-sh_ci_row     equ sh_ci_col + 2
 
 ; 81.67's own scratch: the array/matrix functions. sh_mx_r1/c1/r2/c2 is the
 ; first (or only) array argument's rectangle, sh_mx_r1b/c1b/r2b/c2b MMULT's
@@ -23141,27 +22930,8 @@ sh_ci_row     equ sh_ci_col + 2
 ; triangulation alike, never both at once (sh_mx_busy). The regression
 ; family (LINEST/LOGEST/TREND/GROWTH) needs no matrix at all - just the
 ; four running sums a least-squares line is built from.
-sh_mx_busy    equ sh_ci_row + 2      ; byte: an array function is running -
                                      ; refused, not guarded, sh_db_busy's
                                      ; own reason (81.65)
-sh_mx_r1      equ sh_mx_busy + 2
-sh_mx_c1      equ sh_mx_r1 + 2
-sh_mx_r2      equ sh_mx_c1 + 2
-sh_mx_c2      equ sh_mx_r2 + 2
-sh_mx_r1b     equ sh_mx_c2 + 2
-sh_mx_c1b     equ sh_mx_r1b + 2
-sh_mx_r2b     equ sh_mx_c1b + 2
-sh_mx_c2b     equ sh_mx_r2b + 2
-sh_mx_rows    equ sh_mx_c2b + 2
-sh_mx_cols    equ sh_mx_rows + 2
-sh_mx_rows2   equ sh_mx_cols + 2
-sh_mx_cols2   equ sh_mx_rows2 + 2
-sh_mx_sumx    equ sh_mx_cols2 + 2    ; 8: the regression family's running
-sh_mx_sumy    equ sh_mx_sumx + 8     ; sums - x, y, xy and x^2 across the
-sh_mx_sumxy   equ sh_mx_sumy + 8     ; known points, one pass (81.34's own
-sh_mx_sumx2   equ sh_mx_sumxy + 8    ; variance folds are the precedent)
-sh_mx_n       equ sh_mx_sumx2 + 8    ; word: how many points folded
-sh_mx_const   equ sh_mx_n + 2        ; byte: the `const` argument, 1 unless
                                      ; explicitly FALSE
 
 ; the regression family's own scratch (LINEST/LOGEST/TREND/GROWTH). t1/t2 are
@@ -23170,35 +22940,21 @@ sh_mx_const   equ sh_mx_n + 2        ; byte: the `const` argument, 1 unless
 ; solving for the line - never live at once, so one pair covers both, the
 ; way sh_mx_buf covers MDETERM's triangulation and MINVERSE's Gauss-Jordan
 ; without needing to be two buffers.
-sh_mx_t1         equ sh_mx_const + 2   ; 8
-sh_mx_t2         equ sh_mx_t1 + 8      ; 8
-sh_mx_denom      equ sh_mx_t2 + 8      ; 8: the fit's shared denominator
-sh_mx_slope      equ sh_mx_denom + 8   ; 8: the fitted line's slope (m)
-sh_mx_intercept  equ sh_mx_slope + 8   ; 8: ...and intercept (b), 0 if the
                                        ; `const` argument was FALSE
-sh_mx_xtarget    equ sh_mx_intercept + 8 ; 8: TREND/GROWTH's evaluation point
-sh_mx_haveknownx equ sh_mx_xtarget + 8   ; byte: known_x's given explicitly,
                                          ; rather than the default 1,2,3,...
-sh_mx_havenewx   equ sh_mx_haveknownx + 2 ; byte: TREND/GROWTH's new_x's
                                           ; given explicitly
-sh_mx_logy       equ sh_mx_havenewx + 2  ; byte: ln-transform y before
                                          ; summing (LOGEST/GROWTH fit
                                          ; ln(y) = ln(b) + x*ln(m))
-sh_mx_tr      equ sh_mx_logy + 2     ; word: sh_mx_rowsub's target/source
-sh_mx_sr      equ sh_mx_tr + 2       ; rows - named rather than juggled
                                      ; through AX/BX, since sh_mx_addr wants
                                      ; both at once and only has two input
                                      ; registers
-sh_mx_i       equ sh_mx_sr + 2       ; word: a nested load/elimination
-sh_mx_j       equ sh_mx_i + 2        ; loop's two counters, the same reason
-sh_mx_buf     equ sh_mx_j + 2        ; SH_MX_N * SH_MX_W * 8: the shared
                                      ; elimination workspace
 ; 81.71's own state: the Data menu's four database COMMANDS. sh_ex_* is the
 ; extract range, PINNED when Extract's dialog opens rather than read live at
 ; OK (81.6 - these dialogs are not modal, and the selection can move under
 ; one). sh_dfindmode is the Find/Exit Find relabel, and sh_dbc_res is how the
 ; module answers, since CF on that door already means "is there a module".
-sh_planvec    equ sh_mx_buf + (8 * 16 * 8)   ; 81.75: PLAN's ch_ovcall stages
+sh_planvec        equ sh_macro_wait + 1   ; 81.75: PLAN's ch_ovcall stages
                                               ; the verb body's offset here -
                                               ; a near `call [mem]` needs one
                                               ; and every register is the
@@ -23206,41 +22962,10 @@ sh_planvec    equ sh_mx_buf + (8 * 16 * 8)   ; 81.75: PLAN's ch_ovcall stages
                                               ; ARM ONLY: SHEET's bss chain
                                               ; has to come out byte for byte
                                               ; as it was (t_appsmall.py)
-sh_dbc_kind   equ sh_planvec + 2             ; byte: which SH_DBC_* is running
-sh_dbc_res    equ sh_dbc_kind + 1            ; byte: its SH_DBR_* answer
-sh_dbc_uniq   equ sh_dbc_res + 1             ; byte: Extract's Unique flag
-sh_dfindmode  equ sh_dbc_uniq + 1            ; byte: a Data Find is live
-sh_ex_c1      equ sh_dfindmode + 1           ; the extract range, as selected
-sh_ex_r1      equ sh_ex_c1 + 2
-sh_ex_c2      equ sh_ex_r1 + 2
-sh_ex_r2      equ sh_ex_c2 + 2
-sh_ex_row     equ sh_ex_r2 + 2               ; the next extract row to write
-sh_ex_ec      equ sh_ex_row + 2              ; ...the extract column under it
-sh_ex_dc      equ sh_ex_ec + 2               ; ...and the database column that
                                               ; one's header resolves to
-sh_dbc_src    equ sh_ex_dc + 2               ; Delete's compaction: the row it
-sh_dbc_dst    equ sh_dbc_src + 2             ; is reading and the row it is
-sh_dbc_col    equ sh_dbc_dst + 2             ; writing, and the column between
-sh_dbc_hits   equ sh_dbc_col + 2             ; them; how many records matched
 
 ; 81.72's own: Data ▸ Series. The range is PINNED when the TYPE dialog opens,
 ; because the step is a SECOND dialog and the selection can move between them.
-sh_ser_c1     equ sh_dbc_hits + 2
-sh_ser_r1     equ sh_ser_c1 + 2
-sh_ser_c2     equ sh_ser_r1 + 2
-sh_ser_r2     equ sh_ser_c2 + 2
-sh_ser_type   equ sh_ser_r2 + 2              ; byte: the radio index
-sh_ser_step   equ sh_ser_type + 2            ; 8: the typed step, packed
-sh_ser_cur    equ sh_ser_step + 8            ; 8: the running value
-sh_ser_col    equ sh_ser_cur + 8             ; where the fill is standing...
-sh_ser_row    equ sh_ser_col + 2
-sh_ser_dc     equ sh_ser_row + 2             ; ...which way it is walking...
-sh_ser_dr     equ sh_ser_dc + 2
-sh_ser_n      equ sh_ser_dr + 2              ; ...how many cells are left...
-sh_ser_i      equ sh_ser_n + 2               ; ...and which line it is on
-sh_ser_ser    equ sh_ser_i + 2               ; the weekday walk's own serial
-sh_ser_base   equ sh_ser_ser + 2             ; the line's START serial, and
-sh_ser_k      equ sh_ser_base + 2            ; which term this is: the calendar
                                               ; arms compute from those two
                                               ; rather than from the cell
                                               ; before them (sh_ser_next)
@@ -23249,30 +22974,7 @@ sh_ser_k      equ sh_ser_base + 2            ; which term this is: the calendar
 ; is PINNED at open, like Extract's; sh_df_rec/fld/top are where the form is
 ; standing in it, and sh_df_sv* bank the real selection across the sh_commit
 ; that writes a field back (sh_commit's argument IS the selection).
-sh_df_win     equ sh_ser_k + 2                ; word: 0 = closed, and the gate
-sh_df_ox      equ sh_df_win + 2
-sh_df_oy      equ sh_df_ox + 2
-sh_df_rect    equ sh_df_oy + 2               ; 8: one button rect, refilled
-sh_df_c1      equ sh_df_rect + 8             ; the database, pinned at open
-sh_df_r1      equ sh_df_c1 + 2
-sh_df_c2      equ sh_df_r1 + 2
-sh_df_r2      equ sh_df_c2 + 2
-sh_df_rec     equ sh_df_r2 + 2               ; the record on show, as a ROW
-sh_df_fld     equ sh_df_rec + 2              ; the focused field
-sh_df_top     equ sh_df_fld + 2              ; the first field on screen
-sh_df_nf      equ sh_df_top + 2              ; how many the record has
-sh_df_i       equ sh_df_nf + 2               ; a paint loop's own index
-sh_df_f       equ sh_df_i + 2                ; ...and the field it is drawing
-sh_df_rowy    equ sh_df_f + 2                ; ...and that row's y
-sh_df_src     equ sh_df_rowy + 2             ; Delete's compaction cursors
-sh_df_dst     equ sh_df_src + 2
-sh_df_svc1    equ sh_df_dst + 2              ; the banked selection
-sh_df_svr1    equ sh_df_svc1 + 2
-sh_df_svc2    equ sh_df_svr1 + 2
-sh_df_svr2    equ sh_df_svc2 + 2
-sh_df_line    equ sh_df_svr2 + 2             ; OS88LINE_SZ: the one live field
-sh_df_buf     equ sh_df_line + OS88LINE_SZ   ; SH_EDITMAX+1: what it edits
-sh_bss_end        equ sh_df_buf + SH_EDITMAX + 1
+sh_bss_end        equ sh_planvec + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
