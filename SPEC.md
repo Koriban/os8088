@@ -40366,6 +40366,29 @@ the office one. Ten clusters is what it happens to cost; it is not why.
 Every other geometry carries the full list, and `make smallapps` is
 untouched.
 
+#### 24.6.3.1 …and its overlay had to follow it there
+
+`office360.img` carried `SHEET.O88` and `CHART.O88` and **not `CHART.OVL`**,
+from the day the disk was created until 2026-09-19. The Makefile's own comment
+elsewhere calls a SHEET without its module *"chartless"*, which was true when
+§82.16.3 first split it and had not been true for a long time: the module has
+since absorbed every file format (§82.16.9), five function families (§81.62),
+the macro engine (§81.63), the database commands (§81.71) and **every dialog
+engine** (§81.71.5.1, §81.71.6, §81.74.2).
+
+So on the one 360KB disk built to carry the spreadsheet, the spreadsheet could
+**not open or save a file and could not open a single dialog** — and the
+sample `SALES.SLK` §24.6.2 puts beside it was unopenable by either program
+that reads it.
+
+It fits and always did: 184 of 354 clusters before, 43 needed, 227 after.
+
+**The lesson is the one §24.5's omission list keeps teaching.** The word
+"chartless" recorded a *judgement* whose ground moved underneath it, and
+nothing re-read it when it did. A second file that a package cannot run
+without is part of that package, not an accessory to it — which is exactly
+what the `WORD.OVL` comment two lines above says, and it was right there.
+
 #### 24.6.4 Delivery
 
 The 360KB set is **six disks** now — system, apps, media, office, network and

@@ -10389,8 +10389,18 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) tools/os88disk.py
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
                $(BUILD)/texpad.o88 $(BUILD)/word.o88
-OFFICE360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL $(OFFICE_DATA)
-OFFICEARGS360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL \
+# CHART.OVL RIDES THE ROOT BESIDE SHEET.O88 for WORD.OVL's own reason, and
+# this disk had it missing. The Makefile's other comment on the subject says a
+# SHEET without its module "runs chartless", which was true when the overlay
+# held only the rasterizer (82.16.3) and has not been true for a long time: it
+# has since absorbed every file format (82.16.9), five function families
+# (81.62), the macro engine (81.63), the database commands (81.71) and every
+# dialog engine (81.71.5.1, 81.71.6, 81.74.2). On this floppy SHEET could not
+# open or save a file, and could not open a single dialog.
+#
+# It fits and always did - 184 of 354 clusters used before it, 43 needed.
+OFFICE360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL $(BUILD)/CHART.OVL $(OFFICE_DATA)
+OFFICEARGS360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL $(BUILD)/CHART.OVL \
                  $(addprefix MEDIA:,$(OFFICE_DATA)) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
