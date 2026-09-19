@@ -103046,9 +103046,10 @@ and §82 is this tree's answer to that.
   what was the largest gap here. Custom codes are drawn (TEXT() takes any)
   but the Format Number dialog offers only the list, and SYLK carries only
   four.
-- **Row heights are per row since §81.60**, and column widths per column
-  since §81.56. What is left of the pair is Excel's hidden row and column
-  (a height or width of 0) and resizing either by dragging its heading.
+- **Row heights are per row since §81.60**, column widths per column since
+  §81.56, and **hiding either is §81.73** (a height or width of 0, which also
+  turned the viewport's visible-to-real mapping from arithmetic into a table).
+  What is left of the pair is resizing by dragging the heading.
 - **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is not done.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
@@ -105868,6 +105869,65 @@ vectors (`sh_acc_toudw`, `sh_acc_fromudw`, `sh_ser_to_ymd`, `sh_ymd_to_ser`,
 `sh_monlen`; `SH_NVEC` 115 → 120).
 
 `tests/sheetseries.py` is the gate.
+
+### 81.73 Hidden rows and columns, and the mapping they broke
+
+§81.39.3's remaining half of the per-row/per-column pair: Excel hides a row or
+a column by giving it **a height or width of zero**, and `Format ▸ Row
+Height...` / `Column Width...` is where you type it. That line previously
+refused, and said so in a comment — *"Excel's 0 (hidden) and its 409 points
+are both refused"* — which is exactly the line this section opens.
+
+**Zero was already spent, so hiding is a sentinel.** A column's stored width
+byte uses 0 for "the standard width" and tops out at `SH_CW_MAXCH` = 40, so
+`SH_CW_HIDDEN` = 255; a row's height is twips and 0 is the standard there too,
+so `SH_RH_HIDDEN` = 0xFFFF. `sh_colwidth` and `sh_rowheight` then answer **zero
+pixels**, and `sh_geom` skips anything with no extent. That is the whole of
+what hiding is: every other reader sees a viewport that does not contain it.
+
+**Unhiding needs no second command.** The apply loops walk *real* indices from
+`sh_selcol` to `sh_selcol2`, so selecting across the gap and typing a real
+width brings the column back — Excel's own way, and it fell out rather than
+being built.
+
+#### 81.73.1 The mapping stopped being arithmetic
+
+Before this, a visible slot's real column was the scroll origin plus the
+slot's own index — plus §81.70's frozen prefix, which shifted where the
+addition started but kept it an addition. **A hidden column anywhere between
+them ends that**: the slots no longer march in step with the columns. So
+`sh_geom` now records the mapping it actually built — `sh_vrc` and `sh_vrr`,
+`SH_MAXVC` + `SH_MAXVR` words — and the four routine pairs §81.70 factored out
+read it back:
+
+| | before | now |
+|---|---|---|
+| `sh_vreal_col/row` | add the scroll origin | a two-instruction table read — **smaller than the arithmetic it replaced** |
+| `sh_vidx_col/row` | subtract it, bounds-check | a scan of ≤ 80 entries |
+| `sh_vclip_col/row` | each edge clamped separately, per axis | **one** shared scan, `sh_vclip`, for both axes |
+| `sh_scrollto_t` | `scrollcol + the window's width` as the last visible column | asks `sh_vidx_*` whether the target already shows |
+
+**§81.70 is what made this containable.** That section moved every consumer —
+the hit test, both header painters, the cell painter, the border walk, the
+selection frame, the damage rect, both scroll bars — onto those four pairs, so
+there was no open-coded arithmetic left to hunt down; a sweep for one confirms
+none remains. The walks gained a second cursor each (`sh_geom_rc`/`_rr`), because
+the slot index and the real index are now different numbers, and the row walk
+needed `sh_geom_rbase` to keep the streaming height table's key in step.
+
+**A range that is entirely hidden answers `CF=0`** from `sh_vclip`, which is
+the same answer an off-screen range gives and the right one: there is nothing
+to draw either way.
+
+**Known shortfall:** the scroll bars still size their thumb from the *real*
+row and column counts, so a sheet with many hidden rows has a thumb slightly
+smaller than the scrollable range warrants. It is a proportion, not a
+position, and no click lands wrong because of it.
+
+`tests/sheethide.py` is the gate, and it gates the *mapping* rather than the
+feature: the headers, the cell contents and the hit test each reach the table
+through a different one of those four routines, so a slot showing `C1` while a
+click on it selects `B1` is what a break would look like.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

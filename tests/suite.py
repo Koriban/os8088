@@ -4799,6 +4799,16 @@ SOAK = [
         "fields, and Delete compacting the database while the cell one row "
         "below it stays put - which is what separates it from Edit > Delete",
         needs=("marty",), serial=True),
+    Row("sheethide", "soak", py("tests/sheethide.py"), 400.0,
+        "SPEC.md 81.73: a hidden row and a hidden column - Format > Column "
+        "Width 0, Excel's own way, on the line that used to refuse it. What "
+        "this really gates is the MAPPING hiding broke: a visible slot's "
+        "real column was the scroll origin plus the slot index, and a hidden "
+        "column ends that, so sh_geom records the mapping and four routine "
+        "pairs read it back. The headers, the cell contents and the hit test "
+        "each reach it through a different one of them - a slot showing C1 "
+        "while a click on it selects B1 is what a break looks like",
+        needs=("marty",), serial=True),
     Row("sheetseries", "soak", py("tests/sheetseries.py"), 450.0,
         "SPEC.md 81.72: Data > Series - two dialogs in sequence (the type as "
         "a radio column, the step as a text field) over a direction derived "

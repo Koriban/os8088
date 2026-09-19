@@ -1779,39 +1779,33 @@ sh_geom:
     push bx
     push di
     mov dx, ax                          ; DX = the pixels left
-    xor di, di                          ; DI = the columns so far
+    xor di, di                          ; DI = the SLOTS filled so far, which
+    mov word [sh_geom_rc], 0            ; is no longer the same thing as the
+                                         ; real columns walked (81.73): a
+                                         ; HIDDEN column is walked and takes
+                                         ; no slot, so the two cursors part
+                                         ; company and sh_vrc records which
+                                         ; real column each slot ended up with
 .fcwalk:
-    cmp di, [sh_freezecol]
-    jae .cwalk
+    mov ax, [sh_geom_rc]
+    cmp ax, [sh_freezecol]
+    jae .cwinit
     cmp di, SH_MAXVC
     jae .cset
-    mov ax, di                          ; the frozen prefix: real col = DI
-    call sh_colwidth
-    mov [sh_vcw + di], al
-    mov cl, 3
-    shl ax, cl
-    cmp ax, dx
-    ja .cset
-    sub dx, ax
-    inc di
-    jmp short .fcwalk
+    call sh_geom_col
+    jc .fcwalk
+    jmp short .cset
+.cwinit:
+    mov ax, [sh_scrollcol]
+    mov [sh_geom_rc], ax
 .cwalk:
     cmp di, SH_MAXVC
     jae .cset
-    mov ax, di
-    sub ax, [sh_freezecol]
-    add ax, [sh_scrollcol]              ; the scrolling suffix's real column
+    mov ax, [sh_geom_rc]
     cmp ax, SH_COLS
     jae .cset
-    call sh_colwidth                    ; AX = its width, in characters
-    mov [sh_vcw + di], al
-    mov cl, 3
-    shl ax, cl
-    cmp ax, dx
-    ja .cset
-    sub dx, ax
-    inc di
-    jmp short .cwalk
+    call sh_geom_col
+    jc .cwalk
 .cset:
     mov [sh_vcols], di
     pop di
@@ -1846,67 +1840,30 @@ sh_geom:
     jae .rowsdone
     xor ax, ax
     call sh_rh_find                     ; BX = key, SI/CX = record, from 0
+    mov word [sh_geom_rr], 0            ; 81.73: the real ROW cursor, beside DI
+    mov word [sh_geom_rbase], 0         ; ...and where this phase's sh_rh_find
 .frwalk:
-    cmp di, [sh_freezerow]
+    mov ax, [sh_geom_rr]
+    cmp ax, [sh_freezerow]
     jae .rowsdone
     cmp di, SH_MAXVR
     jae .rset
-    mov ax, bx
-    add ax, di                          ; AX = this row's key (DI is still
-                                        ; 0-based here: the frozen phase
-                                        ; started at row 0)
-    cmp cx, [es:SH_ROWH_N]
-    jae .frstd
-    cmp [es:si], ax
-    jne .frstd
-    mov ax, [es:si+2]
-    add si, SH_ROWH_REC
-    inc cx
-    call sh_twpx
-    jmp short .frhave
-.frstd:
-    mov ax, SH_RH_NORMAL
-.frhave:
-    mov [sh_vrh + di], al
-    cmp ax, dx
-    ja .rset
-    sub dx, ax
-    inc di
-    jmp short .frwalk
+    call sh_geom_row
+    jc .frwalk
+    jmp short .rset
 .rowsdone:
     mov ax, [sh_scrollrow]
+    mov [sh_geom_rr], ax
+    mov [sh_geom_rbase], ax
     call sh_rh_find                     ; a fresh walk, from the scroll row
 .rwalk:
     cmp di, SH_MAXVR
     jae .rset
-    mov ax, di
-    sub ax, [sh_freezerow]
-    mov [sh_geom_roff], ax              ; named scratch (not a register):
-                                        ; the scrolling phase's own 0-based
-                                        ; offset, needed twice below
-    add ax, [sh_scrollrow]
+    mov ax, [sh_geom_rr]
     cmp ax, SH_ROWS
     jae .rset
-    mov ax, [sh_geom_roff]
-    add ax, bx                          ; AX = this row's key
-    cmp cx, [es:SH_ROWH_N]
-    jae .rstd
-    cmp [es:si], ax
-    jne .rstd
-    mov ax, [es:si+2]                   ; its own height...
-    add si, SH_ROWH_REC
-    inc cx
-    call sh_twpx
-    jmp short .rhave
-.rstd:
-    mov ax, SH_RH_NORMAL                ; ...or the standard
-.rhave:
-    mov [sh_vrh + di], al
-    cmp ax, dx
-    ja .rset
-    sub dx, ax
-    inc di
-    jmp short .rwalk
+    call sh_geom_row
+    jc .rwalk
 .rset:
     mov [sh_vrows], di
     pop es
@@ -1920,12 +1877,121 @@ sh_geom:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_geom_col / sh_geom_row - ONE column (or row) of sh_geom's walk (81.73).
+;
+; in:  [sh_geom_rc]/[sh_geom_rr] = the real index to consider, DI = the next
+;      free slot, DX = the pixels left; for rows, ES:SI/CX/BX are the row
+;      height table's streaming cursor exactly as the walk left them.
+; out: the cursor advanced, and CF=1 to carry on / CF=0 when this one did not
+;      fit and the walk is finished. DI and DX updated in place.
+;
+; A HIDDEN index takes no slot and no pixels and does not end the walk, which
+; is the whole of what hiding is here - every other reader sees a viewport
+; that simply does not contain it.
+; -----------------------------------------------------------------------------
+sh_geom_col:
+    push bx
+    mov ax, [sh_geom_rc]
+    inc word [sh_geom_rc]
+    call sh_colwidth                   ; 0 = hidden
+    or ax, ax
+    jz .skip
+    mov [sh_vcw + di], al
+    mov cl, 3
+    shl ax, cl
+    cmp ax, dx
+    ja .full
+    sub dx, ax
+    mov bx, di
+    shl bx, 1
+    mov ax, [sh_geom_rc]
+    dec ax
+    mov [sh_vrc + bx], ax              ; slot DI shows THIS real column
+    inc di
+.skip:
+    pop bx
+    stc
+    ret
+.full:
+    pop bx
+    clc
+    ret
+
+sh_geom_row:
+    mov ax, [sh_geom_rr]
+    mov [sh_geom_roff], ax             ; the real row this slot would show
+    inc word [sh_geom_rr]
+    sub ax, [sh_geom_rbase]            ; ...as an offset into the phase that
+    add ax, bx                         ; sh_rh_find was last called for, which
+    cmp cx, [es:SH_ROWH_N]             ; is the key the table is streaming in
+    jae .std
+    cmp [es:si], ax
+    jne .std
+    mov ax, [es:si+2]                  ; its own height, in twips...
+    add si, SH_ROWH_REC
+    inc cx
+    cmp ax, SH_RH_HIDDEN
+    je .skip                           ; ...or no height at all
+    call sh_twpx
+    jmp short .have
+.std:
+    mov ax, SH_RH_NORMAL               ; ...or the standard
+.have:
+    cmp ax, dx
+    ja .full
+    sub dx, ax
+    mov [sh_vrh + di], al
+    push bx
+    mov bx, di
+    shl bx, 1
+    mov ax, [sh_geom_roff]
+    mov [sh_vrr + bx], ax              ; slot DI shows THIS real row
+    pop bx
+    inc di
+.skip:
+    stc
+    ret
+.full:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; COLUMN WIDTHS (81.56). 256 bytes a sheet in the note claim's top kilobyte
 ; (SH_COLW_OFF), each a column's width in CHARACTERS, Excel's own unit - 0 for
 ; the standard width, sh_defch. sh_vcw is the visible columns' widths, which
 ; sh_geom walks out of here; sh_vcx and sh_vwidth turn one into pixels.
 ; -----------------------------------------------------------------------------
-; sh_colwidth - in: AX = a column; out: AX = its width in characters
+; 81.73: a HIDDEN column or row. The stored width byte already spends 0 on
+; "the standard width" and a row's twips do too, so hiding needs a sentinel of
+; its own rather than the zero Excel's dialog shows - SH_CW_MAXCH is 40, so
+; 255 is free, and a row's height is a word.
+SH_CW_HIDDEN equ 255
+SH_RH_HIDDEN equ 0xFFFF
+
+; sh_col_hidden - in: AX = a column; out: CF=1 if it is hidden. Every register
+; preserved
+sh_col_hidden:
+    push ax
+    push bx
+    push es
+    mov bh, [sh_cursheet]
+    xor bl, bl
+    add bx, ax
+    mov es, [sh_noteseg]
+    cmp byte [es:bx + SH_COLW_OFF], SH_CW_HIDDEN
+    pop es
+    pop bx
+    pop ax
+    je .yes
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+; sh_colwidth - in: AX = a column; out: AX = its width in characters, and ZERO
+; when it is hidden - which is what makes sh_geom skip it without a second
+; question (81.73)
 sh_colwidth:
     push bx
     push es
@@ -1935,9 +2001,14 @@ sh_colwidth:
     mov es, [sh_noteseg]
     mov al, [es:bx + SH_COLW_OFF]
     xor ah, ah
+    cmp al, SH_CW_HIDDEN               ; 81.73: hidden is no width at all
+    je .hidden
     or al, al
     jnz .out
     mov ax, [sh_defch]
+    jmp short .out
+.hidden:
+    xor ax, ax
 .out:
     pop es
     pop bx
@@ -2091,12 +2162,31 @@ sh_rowtw:
     pop bx
     ret
 
-; sh_rowheight - AX = a row -> AX = its height in pixels
+; sh_row_hidden - AX = a row; out: CF=1 if it is hidden (81.73). Preserves all
+sh_row_hidden:
+    push ax
+    call sh_rowtw
+    cmp ax, SH_RH_HIDDEN
+    pop ax
+    je .yes
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+; sh_rowheight - AX = a row -> AX = its height in pixels, and ZERO when it is
+; hidden, sh_colwidth's own rule (81.73)
 sh_rowheight:
     call sh_rowtw
+    cmp ax, SH_RH_HIDDEN
+    je .hidden
     or ax, ax
     jnz sh_twpx
     mov ax, SH_RH_NORMAL
+    ret
+.hidden:
+    xor ax, ax
     ret
 ; sh_twpx - AX = twips -> AX = pixels, the standard 255 being SH_RH_NORMAL
 sh_twpx:
@@ -2444,22 +2534,28 @@ sh_vwidth:
 ; -----------------------------------------------------------------------------
 
 ; sh_vreal_col - in: AX = a visible column (0..sh_vcols-1); out: AX = the
-; real column it shows
+; real column it shows.
+;
+; 81.73 made this a TABLE READ. It was arithmetic - the frozen prefix's index
+; is its own real column, and past it the scrolling suffix picks up at
+; sh_scrollcol - and a HIDDEN column ends that: the slots no longer march in
+; step with the columns, so sh_geom records which real one each slot got and
+; everything reads it back from here. It is the smaller routine of the two.
 sh_vreal_col:
-    cmp ax, [sh_freezecol]
-    jb .out                            ; the frozen prefix: index IS the
-    sub ax, [sh_freezecol]             ; real column; past it, the scrolling
-    add ax, [sh_scrollcol]             ; suffix picks up at sh_scrollcol
-.out:
+    push bx
+    mov bx, ax
+    shl bx, 1
+    mov ax, [sh_vrc + bx]
+    pop bx
     ret
 
 ; sh_vreal_row - the same, for rows
 sh_vreal_row:
-    cmp ax, [sh_freezerow]
-    jb .out
-    sub ax, [sh_freezerow]
-    add ax, [sh_scrollrow]
-.out:
+    push bx
+    mov bx, ax
+    shl bx, 1
+    mov ax, [sh_vrr + bx]
+    pop bx
     ret
 
 ; sh_vclip_col - in: AX = real c1, BX = real c2 (c1 <= c2). out: CF=1, AX =
@@ -2469,116 +2565,105 @@ sh_vreal_row:
 ; used to do this inline with a bare [sh_scrollcol] subtraction - this is
 ; that clamp, freeze-aware, factored out because now two axes' worth of
 ; caller need the identical shape
+; -----------------------------------------------------------------------------
+; sh_vclip - in: AX = lo, BX = hi (REAL indices, lo <= hi), SI = the slot
+; table, CX = how many slots it holds. out: AX = the first slot whose real
+; index lies in [lo,hi], BX = the last; CF=0 when no slot does.
+;
+; 81.73 made this a SCAN. Before hidden rows and columns it was arithmetic
+; with each edge clamped, and it cannot be any more - the visible slots no
+; longer march in step with the real indices. The scan is over at most
+; SH_MAXVC = 80 entries and runs on a selection move, not per cell.
+;
+; A range that is ENTIRELY hidden answers CF=0, which is the right answer and
+; the same one an off-screen range gives: there is nothing to draw either way.
+; -----------------------------------------------------------------------------
+sh_vclip:
+    push dx
+    push di
+    mov [sh_vcl_lo], ax
+    mov [sh_vcl_hi], bx
+    mov word [sh_vcl_a], 0xFFFF
+    xor di, di
+.l:
+    cmp di, cx
+    jae .done
+    mov bx, di
+    shl bx, 1
+    mov dx, [si + bx]
+    cmp dx, [sh_vcl_lo]
+    jb .next
+    cmp dx, [sh_vcl_hi]
+    ja .next
+    cmp word [sh_vcl_a], 0xFFFF
+    jne .setb
+    mov [sh_vcl_a], di
+.setb:
+    mov [sh_vcl_b], di
+.next:
+    inc di
+    jmp short .l
+.done:
+    cmp word [sh_vcl_a], 0xFFFF
+    je .no
+    mov ax, [sh_vcl_a]
+    mov bx, [sh_vcl_b]
+    pop di
+    pop dx
+    stc
+    ret
+.no:
+    pop di
+    pop dx
+    clc
+    ret
+
+; sh_vclip_col / sh_vclip_row - in: AX = real c1/r1, BX = real c2/r2. out: the
+; visible range, CF=0 when none of it shows
 sh_vclip_col:
-    push dx
-    cmp ax, [sh_freezecol]             ; --- c1 -> visible
-    jb .loready
-    cmp ax, [sh_scrollcol]
-    jae .loscroll
-    mov ax, [sh_freezecol]             ; scrolled off left of the scrolling
-    jmp .loready                       ; region: round up to its first column
-.loscroll:
-    sub ax, [sh_scrollcol]
-    add ax, [sh_freezecol]
-.loready:
-    cmp bx, [sh_freezecol]             ; --- c2 -> visible
-    jb .hiready
-    cmp bx, [sh_scrollcol]
-    jae .hiscroll
-    mov dx, [sh_freezecol]             ; c2 sits in the gap between the
-    or dx, dx                          ; frozen prefix and the scroll
-    jz .no                             ; window - never freed, never shown:
-    dec dx                             ; clamp down to the frozen prefix's
-    mov bx, dx                         ; own last column, unless there is
-    jmp .hiready                       ; none (freezecol=0, so no gap exists)
-.hiscroll:
-    sub bx, [sh_scrollcol]
-    add bx, [sh_freezecol]
-    cmp bx, [sh_vcols]
-    jb .hiready
-    mov bx, [sh_vcols]
-    dec bx
-.hiready:
-    cmp ax, [sh_vcols]
-    jae .no
-    cmp ax, bx
-    ja .no
-    pop dx
-    stc
-    ret
-.no:
-    pop dx
-    clc
+    push cx
+    push si
+    mov si, sh_vrc
+    mov cx, [sh_vcols]
+    call sh_vclip
+    pop si
+    pop cx
     ret
 
-; sh_vclip_row - the same, for rows
 sh_vclip_row:
-    push dx
-    cmp ax, [sh_freezerow]
-    jb .loready
-    cmp ax, [sh_scrollrow]
-    jae .loscroll
-    mov ax, [sh_freezerow]
-    jmp .loready
-.loscroll:
-    sub ax, [sh_scrollrow]
-    add ax, [sh_freezerow]
-.loready:
-    cmp bx, [sh_freezerow]
-    jb .hiready
-    cmp bx, [sh_scrollrow]
-    jae .hiscroll
-    mov dx, [sh_freezerow]
-    or dx, dx
-    jz .no
-    dec dx
-    mov bx, dx
-    jmp .hiready
-.hiscroll:
-    sub bx, [sh_scrollrow]
-    add bx, [sh_freezerow]
-    cmp bx, [sh_vrows]
-    jb .hiready
-    mov bx, [sh_vrows]
-    dec bx
-.hiready:
-    cmp ax, [sh_vrows]
-    jae .no
-    cmp ax, bx
-    ja .no
-    pop dx
-    stc
-    ret
-.no:
-    pop dx
-    clc
+    push cx
+    push si
+    mov si, sh_vrr
+    mov cx, [sh_vrows]
+    call sh_vclip
+    pop si
+    pop cx
     ret
 
-; sh_vidx_col - in: AX = a real column. out: CF=1, AX = its visible index
-; (valid for sh_vwidth/sh_vcx); CF=0 if it is currently off-screen (scrolled
-; away, and not part of the frozen prefix). The single-value inverse of
 ; sh_vreal_col - sh_vclip_col clamps a RANGE into view, this answers whether
 ; one already-real column (the border table's own stored key, in
 ; sh_drawborders' sparse walk) is showing at all
 sh_vidx_col:
     push bx
-    cmp ax, [sh_freezecol]
-    jae .scroll
-    mov bx, ax                         ; frozen: visible index = itself
-    jmp .yes
-.scroll:
-    mov bx, ax
-    sub bx, [sh_scrollcol]
-    js .no
-    add bx, [sh_freezecol]
-    cmp bx, [sh_vcols]
-    jae .no
+    push cx
+    xor bx, bx
+    mov cx, [sh_vcols]
+.l:
+    jcxz .no
+    cmp [sh_vrc + bx], ax
+    je .yes
+    add bx, 2
+    dec cx
+    jmp short .l
 .yes:
+    shr bx, 1
     mov ax, bx
+    pop cx
     pop bx
     stc
     ret
 .no:
+    pop cx
     pop bx
     clc
     ret
@@ -2586,23 +2671,25 @@ sh_vidx_col:
 ; sh_vidx_row - the same, for rows
 sh_vidx_row:
     push bx
-    cmp ax, [sh_freezerow]
-    jae .scroll
-    mov bx, ax
-    jmp .yes
-.scroll:
-    mov bx, ax
-    sub bx, [sh_scrollrow]
-    js .no
-    add bx, [sh_freezerow]
-    cmp bx, [sh_vrows]
-    jae .no
+    push cx
+    xor bx, bx
+    mov cx, [sh_vrows]
+.l:
+    jcxz .no
+    cmp [sh_vrr + bx], ax
+    je .yes
+    add bx, 2
+    dec cx
+    jmp short .l
 .yes:
+    shr bx, 1
     mov ax, bx
+    pop cx
     pop bx
     stc
     ret
 .no:
+    pop cx
     pop bx
     clc
     ret
@@ -3709,42 +3796,39 @@ sh_scrollto2:
 sh_scrollto_t:
     push ax
     push bx
+    ; 81.73 made the "is it already on screen?" test ASK THE VIEWPORT rather
+    ; than compute it. It used to be sh_scrollcol + the scrolling window's
+    ; width, which is only the last visible column while the slots march in
+    ; step with the columns - a hidden one anywhere between them breaks that,
+    ; and sh_vidx_col is the routine that already knows.
     mov ax, [sh_sc_tcol]
     cmp ax, [sh_freezecol]             ; 81.70: the frozen prefix is always
     jb .rows                           ; visible - nothing to scroll for it,
                                         ; and sh_scrollcol may never go there
-    mov bx, [sh_scrollcol]
-    cmp ax, bx
+    call sh_vidx_col
+    jc .rows                           ; already showing: leave the view alone
+    mov ax, [sh_sc_tcol]
+    cmp ax, [sh_scrollcol]
     jae .cfwd
-    mov [sh_scrollcol], ax
+    mov [sh_scrollcol], ax             ; it is to the LEFT: scroll onto it
     jmp short .rows
 .cfwd:
-    add bx, [sh_vcols]
-    sub bx, [sh_freezecol]             ; the SCROLLING window's own width -
-    cmp bx, 0                          ; sh_vcols also counts the frozen
-    je .rows                           ; prefix, which this is not walking
-    dec bx
-    cmp ax, bx
-    jbe .rows
-    call sh_backcols                   ; the columns are not one width
-    mov [sh_scrollcol], ax             ; (81.56): walked, not subtracted
+    call sh_backcols                   ; to the RIGHT: walk back from it until
+    mov [sh_scrollcol], ax             ; the window is full (81.56 - the
+                                        ; columns are not one width, so this
+                                        ; is walked and not subtracted)
 .rows:
     mov ax, [sh_sc_trow]
     cmp ax, [sh_freezerow]
     jb .out
-    mov bx, [sh_scrollrow]
-    cmp ax, bx
+    call sh_vidx_row
+    jc .out
+    mov ax, [sh_sc_trow]
+    cmp ax, [sh_scrollrow]
     jae .rfwd
     mov [sh_scrollrow], ax
     jmp short .out
 .rfwd:
-    add bx, [sh_vrows]
-    sub bx, [sh_freezerow]
-    cmp bx, 0
-    je .out
-    dec bx
-    cmp ax, bx
-    jbe .out
     call sh_backrows                   ; nor the rows one height (81.60)
     mov [sh_scrollrow], ax
 .out:
@@ -12116,6 +12200,8 @@ sh_idlg_apply:
     mov si, sh_idlg_buf                ; the column width
     call sh_pnum_at
     jc .out                            ; not a number at all
+    or ax, ax                          ; 81.73: ZERO HIDES IT, which is how
+    jz .cwhide                         ; Excel hides a column and why this
     cmp ax, SH_CW_MINCH                ; COLUMN WIDTH IS IN CHARACTERS, which
     jb .out                            ; is Excel's own unit for it - the
     cmp ax, SH_CW_MAXCH                ; pixel width is a consequence, not the
@@ -12127,7 +12213,13 @@ sh_idlg_apply:
     cmp ax, [sh_defch]
     jne .cwset
     xor cl, cl
-.cwset:
+    jmp short .cwset
+.cwhide:
+    mov cl, SH_CW_HIDDEN               ; ...and a nonzero width typed over a
+.cwset:                                ; selection that SPANS a hidden column
+                                        ; unhides it, which is Excel's own way
+                                        ; back and needs no second command:
+                                        ; the loop below walks real columns
     mov ax, [sh_selcol]
     mov bx, [sh_selcol2]
     cmp ax, bx
@@ -12146,11 +12238,17 @@ sh_idlg_apply:
     mov si, sh_idlg_buf
     call sh_ptwips
     jc .out
-    cmp ax, SH_RH_TWMIN                ; a glyph must fit, and a row must fit
-    jb .out                            ; the grid - Excel's 0 (hidden) and its
-    cmp ax, SH_RH_TWMAX                ; 409 points are both refused
-    ja .out
+    or ax, ax                          ; 81.73: ZERO HIDES IT. This used to
+    jz .rhhide                         ; refuse, and said so - "Excel's 0
+    cmp ax, SH_RH_TWMIN                ; (hidden) and its 409 points are both
+    jb .out                            ; refused" - which is the line 81.73
+    cmp ax, SH_RH_TWMAX                ; opens; a glyph still has to fit any
+    ja .out                            ; height that is not zero
     mov cx, ax
+    jmp short .rhhave
+.rhhide:
+    mov cx, SH_RH_HIDDEN
+.rhhave:
     mov ax, [sh_selrow]
     mov bx, [sh_selrow2]
     cmp ax, bx
@@ -40857,7 +40955,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7616                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 7918                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -40915,7 +41013,21 @@ sh_geom_roff  equ sh_freezerow + 2   ; word: sh_geom's own scratch - the
                                      ; index minus sh_freezerow), named
                                      ; because every other register is
                                      ; already spoken for in that loop
-sh_wcol       equ sh_geom_roff + 2
+; 81.73: a HIDDEN row or column takes no slot, so the visible slots stopped
+; marching in step with the real indices and sh_geom records the mapping it
+; actually built. Everything that used to compute it now reads these.
+sh_vrc        equ sh_geom_roff + 2   ; SH_MAXVC words: slot -> real column
+sh_vrr        equ sh_vrc + SH_MAXVC * 2   ; SH_MAXVR words: slot -> real row
+sh_geom_rc    equ sh_vrr + SH_MAXVR * 2   ; the walks' own real cursors...
+sh_geom_rr    equ sh_geom_rc + 2
+sh_geom_rbase equ sh_geom_rr + 2     ; ...and where this phase's sh_rh_find
+                                     ; began, which is what turns a real row
+                                     ; into the key the table is streaming
+sh_vcl_lo     equ sh_geom_rbase + 2  ; sh_vclip's own four
+sh_vcl_hi     equ sh_vcl_lo + 2
+sh_vcl_a      equ sh_vcl_hi + 2
+sh_vcl_b      equ sh_vcl_a + 2
+sh_wcol       equ sh_vcl_b + 2
 sh_wrow       equ sh_wcol + 2
 sh_selx1      equ sh_wrow + 2
 sh_selx2      equ sh_selx1 + 2
