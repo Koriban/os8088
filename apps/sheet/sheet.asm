@@ -949,10 +949,16 @@ sh_m_dowrite:
 sh_m_difbbox:
     call shm_difbbox
     retf
+%ifdef SHF_FIN
 sh_m_pfin:
     call shm_pfin
     clc                             ; CF=0 is "the module ran" - the stub
     retf                            ; reads CF=1 as "there is no module"
+%else
+sh_m_pfin:                          ; 81.75: positional, and never reached
+    clc
+    retf
+%endif
 sh_m_ptext:                         ; 81.62, the same contract
     call shm_ptext
     clc
@@ -977,6 +983,7 @@ sh_m_pdatabase:                     ; 81.65
     call shm_pdatabase
     clc
     retf
+%ifdef SHF_MATRIX
 sh_m_pcell:                         ; 81.66
     call shm_pcell
     clc
@@ -985,6 +992,12 @@ sh_m_pmatrix:                       ; 81.67
     call shm_pmatrix
     clc
     retf
+%else
+sh_m_pcell:                         ; 81.75: a verb NUMBER is positional, so
+sh_m_pmatrix:                       ; the two slots stay and are never reached
+    clc                             ; - the dispatcher answers #NAME? above
+    retf
+%endif
 sh_m_dbcmd:                         ; 81.71: a Data menu command, NOT a
     call shm_dbcmd                  ; formula. CF stays the MODULE-PRESENCE
     clc                             ; answer here like every verb above it;
@@ -1191,10 +1204,12 @@ sh_difbbox:
 ; same door, each with its own verb: the functions a sheet uses least, 2.8 KB
 ; the package needed more than the module did. SUM and its folds, IF, the
 ; special forms, the lookups, the dates and NOW stay resident.
+%ifdef SHF_FIN
 sh_pfin:
     push bp
     mov bp, SHM_FIN
     jmp short sh_pdoor
+%endif
 sh_ptext:
     push bp
     mov bp, SHM_TEXT
@@ -1215,6 +1230,7 @@ sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
     push bp
     mov bp, SHM_DATABASE
     jmp short sh_pdoor
+%ifdef SHF_MATRIX
 sh_pcell:                           ; 81.66: CELL
     push bp
     mov bp, SHM_CELL
@@ -1222,6 +1238,7 @@ sh_pcell:                           ; 81.66: CELL
 sh_pmatrix:                         ; 81.67: MDETERM...GROWTH
     push bp
     mov bp, SHM_MATRIX
+%endif
 sh_pdoor:
     call ch_ovcall
     pop bp
@@ -27858,14 +27875,20 @@ sh_pfunc:
                                        ; SILENTLY ANSWERED RAND(). No error,
                                        ; a plausible number, and the same for
                                        ; =NOW()+1 ever since NOW landed
+%ifdef SHF_FIN
 .dofin:
     call sh_pfin
     mov dx, ax
     jmp .typed
+%else
+.dofin:                                ; 81.75: #NAME?, and the arguments
+    jmp .noname                        ; stepped over
+%endif
 .dodatabase:
     call sh_pdatabase
     mov dx, ax
     jmp .typed
+%ifdef SHF_MATRIX
 .docell:
     call sh_pcell
     mov dx, ax
@@ -27877,6 +27900,17 @@ sh_pfunc:
     jmp .done                          ; NOT .typed: TRANSPOSE's published
                                        ; element may be text, whatever its
                                        ; source cell held (81.67)
+%else
+.docell:                               ; 81.75: THE NAMES STAY IN THE TABLE and
+.domatrix:                             ; the ids stay where they are - dropping
+    jmp .noname                        ; table entries would renumber every
+                                       ; family after them. `=MDETERM(A1:B2)`
+                                       ; answers #NAME? here, which is the
+                                       ; same thing `.noname` already says
+                                       ; about a function that was never
+                                       ; spelled right, and it steps over the
+                                       ; arguments rather than parsing on
+%endif
 .domacro:
     call sh_pmacro
     mov dx, ax
@@ -28401,6 +28435,11 @@ sh_pargclass:
 ; stay in .text, because what reads them is resident fp_* code through DS.
 ; =============================================================================
 section SH_MODSEC
+%ifdef SHF_FIN           ; 81.75: the financial family. PMT/PV/FV/NPER are
+                          ; closed-form in `^`, and fp_pow does whole-number
+                          ; exponents by repeated squaring - including
+                          ; NEGATIVE ones, as one-over-it - so (1+i)^-n is
+                          ; exact. A sample budget carries the formulas.
 ; =============================================================================
 ; sh_pfin - the FINANCIAL functions, ids 93 and up (SPEC.md 81.37).
 ; in: AX = the id, SI just past '('. out: the answer in sh_acc, SI past ')'.
@@ -29425,6 +29464,7 @@ sh_fnres:
     pop si
     pop bx
     ret
+%endif   ; SHF_FIN
 
 section .text                       ; ...DATA, and the resident fp_* routines
                                     ; read it through DS (68.10 rule 2)
@@ -36311,6 +36351,7 @@ sh_ser_stepint:
     pop si
     ret
 
+%ifdef SHF_MATRIX        ; 81.75: CELL and the array/matrix family
 ; =============================================================================
 ; CELL (81.66): `CELL(type_of_info [, reference])`, Excel's own compatibility
 ; subset - nine attributes, from `Microsoft Excel Functions and Macros`
@@ -38030,6 +38071,7 @@ sh_mx_getsquare:
 .out:
     pop ax
     ret
+%endif   ; SHF_MATRIX
 
 section .text
 
