@@ -106,6 +106,13 @@ INCLUDES = [
     ("os88text.inc", "83",
      "The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, "
      "no selection, no undo."),
+    ("os88fix.inc", "81.75",
+     "Fixed-point decimal arithmetic, two places - a signed 32-bit count of "
+     "hundredths. The entry points mirror os88fp.inc's name for name (fx_ for "
+     "fp_) with the same register contracts, so a caller swaps one for the "
+     "other by renaming. PLAN's, because a double costs it ~2,800 bytes of "
+     "code AND four bytes in every cell record; for money the fixed point is "
+     "also the more correct representation, since pennies add exactly."),
     ("os88chart.inc", "82",
      "A 4bpp offscreen canvas and all seven chart types - area, bar, column, "
      "line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 "

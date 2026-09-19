@@ -219,7 +219,7 @@ PL_RW_CAP    equ 80                  ; stage 2.x: pl_formula_reidx's own
 ; hand out (§50.6.2), and a package that merely wants heap can refuse itself
 ; in its own words - which is a refusal, not a spreadsheet. Every figure below
 ; is sized from what a BUDGET holds rather than from what a sheet could.
-PL_CLAIM_CELLS_KB equ 5             ; 256 records of 20 bytes
+PL_CLAIM_CELLS_KB equ 5             ; 320 records of 16 bytes (81.75)
 PL_CLAIM_TXT_KB   equ 1             ; formula text only: no notes here
 PL_CLAIM_STG_KB   equ 8             ; file I/O staging. NOT the 2KB the plan
                                     ; first wrote: the readers take a whole
@@ -329,14 +329,16 @@ PL_C_AUX     equ 7                  ; byte: ...error code, likewise reserved.
                                     ; emits, so borrowing bits 6-7 would
                                     ; silently change every XF in every file
                                     ; this app has ever written.
-PL_C_VAL     equ 8                  ; 8 bytes: an IEEE-754 double. Still
-                                    ; written and read as a WORD in the low
-                                    ; half for now - the widening and the
-                                    ; switch to real doubles are separate
-                                    ; steps on purpose, so that a fault in
-                                    ; either one is unambiguous.
-PL_C_FOFF    equ 16                 ; word: formula text offset in pl_txtseg
-PL_C_PASS    equ 18                 ; word: the repaint pass that cached VAL
+PL_C_VAL     equ 8                  ; 4 bytes: a signed count of HUNDREDTHS
+                                    ; (81.75, apps/os88fix.inc). It was an
+                                    ; IEEE-754 double and those four bytes are
+                                    ; the expensive half of the switch: the
+                                    ; record times the cells claim is how many
+                                    ; cells the sheet can hold at all, so 20
+                                    ; bytes becoming 16 is a quarter more
+                                    ; cells for the same kilobyte.
+PL_C_FOFF    equ 12                 ; word: formula text offset in pl_txtseg
+PL_C_PASS    equ 14                 ; word: the repaint pass that cached VAL
 ; The value tags stage 4.0 reserves. Numbered so that BLANK is 0 and a
 ; zeroed record is therefore a blank one.
 PL_SSTK_N    equ 6                   ; string-stack levels. The text
@@ -376,7 +378,7 @@ PL_ERR_NAME  equ 5                  ; #NAME?
 PL_ERR_NUM   equ 6                  ; #NUM!
 PL_ERR_NA    equ 7                  ; #N/A
 
-PL_C_SZ      equ 20                 ; ...and an EVEN stride, so the array
+PL_C_SZ      equ 16                 ; ...and an EVEN stride, so the array
                                     ; shuffle can move words rather than bytes
 
 ; pl_rowcol_op stages every record through pl_stgseg while it shifts a row or
@@ -408,7 +410,7 @@ PL_S_SZ      equ 20                 ; ...and the code says PL_S_SZ where it
                                     ; means this, so changing it is a change
                                     ; to ONE layout and not silently to both
 
-PL_CELL_CAP  equ 256                ; floor(PL_CLAIM_CELLS_KB*1024 / PL_C_SZ)
+PL_CELL_CAP  equ 320                ; floor(PL_CLAIM_CELLS_KB*1024 / PL_C_SZ)
 PL_TXT_CAP   equ 1024               ; PL_CLAIM_TXT_KB in bytes
 PL_STAGE_MAX equ 8192
 PL_BT_SZ     equ 6                  ; the border table's record (81.55): row,
@@ -869,7 +871,7 @@ pl_entry:
     push dx
     push si
     push di
-    call fp_init                      ; before the first claim, because every
+    call fx_init                      ; before the first claim, because every
                                       ; other thing here can fail and be
                                       ; recovered from and this one decides
                                       ; which arithmetic the session gets
@@ -2982,8 +2984,8 @@ pl_commit:
     jmp .astext
 .numeric:
     mov si, pl_editbuf                ; stage 4.0: a full decimal, not a signed
-    call fp_atof                      ; integer. "3.5", "-0.25" and "1e3" are
-    jc .astext                        ; all values now; anything fp_atof does
+    call fx_atof                      ; integer. "3.5", "-0.25" and "1e3" are
+    jc .astext                        ; all values now; anything fx_atof does
     mov al, [si]                      ; not consume ENTIRELY is not a number,
     or al, al                         ; which is what keeps "3.5kg" from
     jnz .astext                       ; silently becoming 3.5
@@ -7360,8 +7362,6 @@ pl_clear_one:
     mov byte [es:di+PL_C_TYPE], PL_T_NUM
     mov word [es:di+PL_C_VAL], 0      ; ...and zero, but the format byte at
     mov word [es:di+PL_C_VAL+2], 0    ; +5 is deliberately untouched
-    mov word [es:di+PL_C_VAL+4], 0
-    mov word [es:di+PL_C_VAL+6], 0
     mov word [es:di+PL_C_PASS], 0
     jmp .out
 .fmt:
@@ -8300,7 +8300,7 @@ pl_find_text:
     call pl_acc_load_a                ; a number: the same ten significant
     mov di, pl_find_buf               ; digits the cell itself shows
     mov ax, 10
-    call fp_ftoa
+    call fx_ftoa
     jmp .up
 .istext:
     push es
@@ -9397,10 +9397,10 @@ pl_dowrite_sylk:
     push si                           ; SYLK's K field IS a decimal literal,
     push di                           ; so the full value goes out, not a
     mov si, pl_wrec_dval              ; truncation of it
-    SHOUT fp_unpack_a
+    SHOUT fx_unpack_a
     mov di, pl_numbuf
     mov ax, 10
-    SHOUT fp_ftoa
+    SHOUT fx_ftoa
     pop di
     pop si
     mov si, pl_numbuf
@@ -9426,7 +9426,7 @@ pl_dowrite_sylk:
 .kbool:
     mov al, 34
     call pl_stgputb
-    mov ax, [pl_wrec_dval+6]
+    mov ax, [pl_wrec_dval]
     SHOUT pl_boolname
     mov si, pl_numbuf
     call pl_stgput
@@ -10833,8 +10833,6 @@ pl_addcell:
     mov byte [es:di+PL_C_AUX], 0
     mov word [es:di+PL_C_VAL], 0      ; ALL EIGHT value bytes, not just the low
     mov word [es:di+PL_C_VAL+2], 0    ; word the integer model uses today. The
-    mov word [es:di+PL_C_VAL+4], 0    ; array is shuffled with a byte move, so
-    mov word [es:di+PL_C_VAL+6], 0    ; a "new" record inherits whatever the
                                       ; record above it left here - harmless
                                       ; while only the low word is read, and a
                                       ; genuinely nasty surprise the moment the
@@ -12595,7 +12593,7 @@ pl_getcell2:
 pl_acc_store:
     push di
     mov di, pl_acc
-    call fp_pack_a
+    call fx_pack_a
     pop di
     ret
 
@@ -12603,7 +12601,7 @@ pl_acc_store:
 pl_acc_load_a:
     push si
     mov si, pl_acc
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
     ret
 
@@ -12611,30 +12609,28 @@ pl_acc_load_a:
 pl_acc_load_b:
     push si
     mov si, pl_acc
-    call fp_unpack_b
+    call fx_unpack_b
     pop si
     ret
 
 ; pl_acc_int - AX (signed) -> pl_acc
 pl_acc_int:
-    call fp_i2a
+    call fx_i2a
     call pl_acc_store
     ret
 
 ; pl_acc_toint - pl_acc -> AX (signed, truncated); CF=1 if it did not fit
 pl_acc_toint:
     call pl_acc_load_a
-    call fp_a2i
+    call fx_a2i
     ret
 
 ; pl_vpush - bank pl_acc on the machine stack. CLOBBERS AX (the return address
 ; goes through it), which is safe because the evaluator's value now lives in
 ; pl_acc rather than in a register.
 pl_vpush:
-    ; STKBALANCE-NET: +4 - banks pl_acc on the CALLER's stack for a binary operator; pl_binop_pre takes it off
+    ; STKBALANCE-NET: +2 - 81.75: TWO WORDS now, not four; banks pl_acc on the CALLER's stack for a binary operator; pl_binop_pre takes it off
     pop ax
-    push word [pl_acc+6]
-    push word [pl_acc+4]
     push word [pl_acc+2]
     push word [pl_acc]
     push ax
@@ -12643,19 +12639,17 @@ pl_vpush:
 ; pl_binop_pre - recover a banked left operand into fp A and load pl_acc, the
 ; right operand, into fp B. Pairs with exactly one pl_vpush.
 pl_binop_pre:
-    ; STKBALANCE-NET: -4 - the other half of pl_vpush - one call each, always paired
+    ; STKBALANCE-NET: -2 - the other half of pl_vpush - one call each, always paired
     pop ax
     pop word [pl_lhs]
     pop word [pl_lhs+2]
-    pop word [pl_lhs+4]
-    pop word [pl_lhs+6]
     push ax
 ; pl_binop_ld - fp A = the banked left operand, fp B = pl_acc: pl_binop_pre's
 ; half that touches no stack, which CHART.OVL's copy calls back to (81.62)
 pl_binop_ld:
     push si
     mov si, pl_lhs
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
     call pl_acc_load_b
     ret
@@ -13182,8 +13176,6 @@ pl_settext:
     xor ax, ax                        ; and a numeric value of zero, so every
     mov [es:di+PL_C_VAL], ax          ; reader that has never heard of text
     mov [es:di+PL_C_VAL+2], ax        ; still gets a defined number out of it
-    mov [es:di+PL_C_VAL+4], ax
-    mov [es:di+PL_C_VAL+6], ax
     pop es
     clc                               ; stored
     jmp .done
@@ -13466,7 +13458,7 @@ pl_pcmpcont:
 .same:
     cmp al, 1
     je .text
-    call fp_cmpab                     ; numbers and logicals: AX = -1/0/1
+    call fx_cmpab                     ; numbers and logicals: AX = -1/0/1
     jmp short .outcome
 .text:
     push si
@@ -13543,7 +13535,7 @@ pl_pexprcont:
     call pl_pterm                     ; stack: a double does not fit a register
     call pl_chktext                   ; ...and now the right
     call pl_binop_pre                 ; and the parse of the right may recurse
-    call fp_add
+    call fx_add
     call pl_acc_store
     mov byte [pl_curtype], PL_T_NUM   ; stage 4.5: the RESULT of arithmetic is
     jmp pl_pexprcont                  ; a NUMBER whatever its operands were
@@ -13559,7 +13551,7 @@ pl_pexprcont:
     call pl_pterm
     call pl_chktext
     call pl_binop_pre
-    call fp_sub
+    call fx_sub
     call pl_acc_store
     mov byte [pl_curtype], PL_T_NUM
     jmp pl_pexprcont
@@ -13624,14 +13616,14 @@ pl_str_want:
     push di
     cmp byte [pl_curtype], PL_T_BOOL  ; a LOGICAL is its name: ="x"&TRUE is
     jne .num                          ; "xTRUE", LEN(TRUE) is 4 (81.51)
-    mov ax, [pl_acc+6]
+    mov ax, [pl_acc]
     call pl_boolname
     jmp short .copy
 .num:
     call pl_acc_load_a
     mov di, pl_numbuf
     mov ax, 10
-    call fp_ftoa
+    call fx_ftoa
 .copy:
     mov si, pl_numbuf
     mov di, pl_sacc
@@ -13658,7 +13650,7 @@ pl_ptermcont:
     call pl_ppow
     call pl_chktext
     call pl_binop_pre
-    call fp_mul
+    call fx_mul
     call pl_acc_store
     mov byte [pl_curtype], PL_T_NUM
     jmp pl_ptermcont
@@ -13669,7 +13661,7 @@ pl_ptermcont:
     call pl_ppow
     call pl_chktext
     call pl_binop_pre
-    call fp_div                       ; CF=1 means the divisor was zero
+    call fx_div                       ; CF=1 means the divisor was zero
     jnc .divok
     mov byte [pl_evalerr], PL_ERR_DIV0
     xor ax, ax                        ; the value is still zero underneath -
@@ -13712,19 +13704,17 @@ pl_ppowcont:
     call pl_chktext
     mov byte [pl_curtype], PL_T_NUM
     call pl_acc_load_a                ; THE EXPONENT MAY BE FRACTIONAL NOW.
-    call fp_a_to_b                    ; This banked it through pl_acc_toint
+    call fx_a_to_b                    ; This banked it through pl_acc_toint
     pop word [pl_lhs]                 ; and multiplied the base by itself that
     pop word [pl_lhs+2]               ; many times, with a comment saying "a
-    pop word [pl_lhs+4]               ; fractional power needs logarithms,
-    pop word [pl_lhs+6]               ; which this file does not have" - which
     push si                           ; stopped being true at 84.8. 2^0.5 is
     mov si, pl_lhs                    ; 1.414 and not 1
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
-    call fp_pow
+    call fx_pow
     jnc .powok
     mov byte [pl_evalerr], PL_ERR_NUM ; a negative base to a fractional power
-    call fp_azero                     ; has no real value
+    call fx_azero                     ; has no real value
 .powok:
     call pl_acc_store
 .out:
@@ -13781,12 +13771,10 @@ pl_pfactor:
     call pl_pfactor
     call pl_pnest_leave
     call pl_chktext                   ; -"text" is arithmetic too
-    xor byte [pl_acc+7], 0x80         ; negate by flipping the sign BIT of the
-    mov byte [pl_curtype], PL_T_NUM   ; packed double - cheaper than unpacking.
-    ret                               ; A NUMBER, as every operator's result
-                                      ; is: -TRUE is -1, not a logical (81.51)
-                                      ; and, unlike `neg`, exact for every
-                                      ; value including zero
+    call pl_acc_neg                   ; 81.75: two's complement, not a sign
+    mov byte [pl_curtype], PL_T_NUM   ; bit. A NUMBER, as every operator's
+    ret                               ; result is: -TRUE is -1, not a logical
+                                      ; (81.51)
 .notneg:
     cmp byte [si], '('
     jne .notparen
@@ -13865,7 +13853,7 @@ pl_pfactor:
     ret
 .maybenum2:
     mov byte [pl_curtype], PL_T_NUM   ; a LITERAL is a number - say so, or the
-    call fp_atof                      ; tag left by the last cell referenced
+    call fx_atof                      ; tag left by the last cell referenced
     jnc .numok                        ; still stands and `=B4+1` is judged by
     mov byte [pl_evalerr], PL_ERR_VALUE ; B4's type twice over
     xor ax, ax                        ; nothing parseable at all: `=1+` used to
@@ -14645,32 +14633,32 @@ pl_foldvalue:
 .stat:
     call pl_pacc_to_a                 ; the running sum, as SUM does...
     call pl_acc_load_b
-    call fp_add
+    call fx_add
     call pl_pacc_from_a
     call pl_acc_load_a                ; ...and the sum of SQUARES beside it
     call pl_acc_load_b
-    call fp_mul                       ; A = x * x
-    call fp_a_to_b                    ; ...to B, so the running total can
+    call fx_mul                       ; A = x * x
+    call fx_a_to_b                    ; ...to B, so the running total can
     push si                           ; come into A
     mov si, pl_pacc2
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
-    call fp_add
+    call fx_add
     push di
     mov di, pl_pacc2
-    call fp_pack_a
+    call fx_pack_a
     pop di
     jmp .out
 .sum:
     call pl_pacc_to_a
     call pl_acc_load_b
-    call fp_add
+    call fx_add
     call pl_pacc_from_a
     jmp .out
 .product:
     call pl_pacc_to_a
     call pl_acc_load_b
-    call fp_mul
+    call fx_mul
     call pl_pacc_from_a
     jmp .out
 .min:
@@ -14682,7 +14670,7 @@ pl_foldvalue:
 .mincmp:
     call pl_acc_load_a                ; is the new value below the running one?
     call pl_pacc_to_b
-    call fp_cmpab
+    call fx_cmpab
     jge .out
     call pl_acc_to_pacc
     jmp .out
@@ -14695,7 +14683,7 @@ pl_foldvalue:
 .maxcmp:
     call pl_acc_load_a
     call pl_pacc_to_b
-    call fp_cmpab
+    call fx_cmpab
     jle .out
     call pl_acc_to_pacc
     jmp .out
@@ -14719,21 +14707,21 @@ pl_foldvalue:
 pl_pacc_to_a:
     push si
     mov si, pl_pacc
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
     ret
 
 pl_pacc_to_b:
     push si
     mov si, pl_pacc
-    call fp_unpack_b
+    call fx_unpack_b
     pop si
     ret
 
 pl_pacc_from_a:
     push di
     mov di, pl_pacc
-    call fp_pack_a
+    call fx_pack_a
     pop di
     ret
 
@@ -14758,12 +14746,12 @@ pl_acc_to_pacc:
 
 ; pl_int_to_pacc - AX (signed) -> pl_pacc
 pl_int_to_pacc:
-    call fp_i2a
+    call fx_i2a
     call pl_pacc_from_a
     ret
 
 ; pl_esatof - parse a decimal number from ES:SI into pl_acc, advancing SI past
-; it. fp_atof reads DS:SI and the file staging buffer is in ES, so the token is
+; it. fx_atof reads DS:SI and the file staging buffer is in ES, so the token is
 ; copied across first - up to a ';' or the record's end. Without this, a SYLK
 ; K field would still be read by the integer parser and "3.5" would come back
 ; as 3, which is what the round trip actually did before this existed.
@@ -14794,7 +14782,7 @@ pl_esatof:
     mov byte [di], 0
     push si
     mov si, pl_numbuf
-    SHOUT fp_atof
+    SHOUT fx_atof
     pop si
     SHOUT pl_acc_store
     pop di
@@ -14811,7 +14799,7 @@ pl_cellval_to_acc_si:
     push si
     push di
     mov di, pl_acc
-    mov cx, 4
+    mov cx, 2                          ; 81.75: TWO words, not four
 .s2a:
     mov ax, [es:si+PL_C_VAL]
     mov [di], ax
@@ -14847,7 +14835,7 @@ pl_cellnum:
     cmp byte [es:di+PL_C_TYPE], PL_T_BOOL  ; a LOGICAL is its name here too -
     jne .num                              ; the formula bar, Copy and Paste
     push ax                               ; all read it through this (81.51)
-    mov ax, [es:di+PL_C_VAL+6]
+    mov ax, [es:di+PL_C_VAL]
     call pl_boolname
     pop ax
     ret
@@ -14858,7 +14846,7 @@ pl_cellnum:
     call pl_acc_load_a
     mov di, pl_numbuf
     mov ax, 10
-    call fp_ftoa
+    call fx_ftoa
     pop di
     pop ax
     ret
@@ -14892,7 +14880,7 @@ pl_acc_to_cellval:
     push si
     push di
     mov si, pl_acc
-    mov cx, 4
+    mov cx, 2                          ; 81.75: TWO words, not four
 .a2c:
     mov ax, [si]
     mov [es:di+PL_C_VAL], ax
@@ -14906,17 +14894,45 @@ pl_acc_to_cellval:
     pop ax
     ret
 
-; pl_acc_iszero - CF=1 if pl_acc is zero. The exponent and mantissa are all
-; that matter; a negative zero is still zero, so the sign byte is masked off.
+; pl_acc_neg - pl_acc = -pl_acc.  pl_acc_abs - pl_acc = |pl_acc|.
+;
+; 81.75: BOTH OF THESE USED TO BE ONE INSTRUCTION on the IEEE sign BIT -
+; `xor byte [pl_acc+7], 0x80` and `and byte [pl_acc+7], 0x7F`. A packed
+; double carries its sign in a bit, so negate and absolute-value were free
+; and exact. Two's complement does not: clearing the top bit of a negative
+; count gives a different number, not its magnitude. These are the two
+; places that has to be spelled out, and the +7 is why a sweep that looked
+; for +4 and +6 did not find them - `=-5` came out as 5.
+; Every register preserved.
+pl_acc_neg:
+    push ax
+    push dx
+    mov ax, [pl_acc]
+    mov dx, [pl_acc+2]
+    not ax
+    not dx
+    add ax, 1
+    adc dx, 0
+    mov [pl_acc], ax
+    mov [pl_acc+2], dx
+    pop dx
+    pop ax
+    ret
+
+pl_acc_abs:
+    test byte [pl_acc+3], 0x80
+    jz .out
+    call pl_acc_neg
+.out:
+    ret
+
+; pl_acc_iszero - CF=1 if pl_acc is zero. 81.75: a fixed-point zero is four
+; zero bytes and there is no negative zero to mask off.
 pl_acc_iszero:
     push ax
     push bx
     mov ax, [pl_acc]
     or ax, [pl_acc+2]
-    or ax, [pl_acc+4]
-    mov bx, [pl_acc+6]
-    and bx, 0x7FFF
-    or ax, bx
     pop bx
     pop ax
     jnz .no
@@ -14975,23 +14991,23 @@ pl_funcfinish:
     push cx                           ; CX = the divisor, banked across the
     call pl_pacc_to_a                 ; arithmetic below
     call pl_pacc_to_b                 ; A = B = the sum
-    call fp_mul                       ; A = sum * sum
+    call fx_mul                       ; A = sum * sum
     mov ax, [pl_pcnt]
-    call fp_i2b
-    call fp_div                       ; A = sum*sum/n
-    call fp_a_to_b                    ; ...to B
+    call fx_i2b
+    call fx_div                       ; A = sum*sum/n
+    call fx_a_to_b                    ; ...to B
     push si
     mov si, pl_pacc2                  ; A = the sum of squares
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
-    call fp_sub                       ; A = sumsq - sum*sum/n
+    call fx_sub                       ; A = sumsq - sum*sum/n
     pop cx
     mov ax, cx
-    call fp_i2b
-    call fp_div                       ; A = that / d
+    call fx_i2b
+    call fx_div                       ; A = that / d
     cmp bx, 79                        ; STDEV and STDEVP are its square root
     jb .statdone
-    call fp_sqrt
+    call fx_sqrt
 .statdone:
     call pl_acc_store                 ; pl_stbusy is not cleared here: pl_pfunc
     jmp .fout                         ; banks and restores it, so every exit
@@ -15005,8 +15021,8 @@ pl_funcfinish:
 .avgok:
     call pl_pacc_to_a                 ; A REAL MEAN NOW, not a truncated one:
     mov ax, [pl_pcnt]                 ; AVERAGE(1,2) is 1.5 where the integer
-    call fp_i2b                       ; evaluator gave 1
-    call fp_div
+    call fx_i2b                       ; evaluator gave 1
+    call fx_div
     call pl_acc_store
     jmp .fout
 .count:
@@ -15028,8 +15044,6 @@ pl_pfunc:
     push cx
     push dx
     push word [pl_pfid]
-    push word [pl_pacc+6]             ; ALL EIGHT bytes: pl_pacc is a packed
-    push word [pl_pacc+4]             ; double (stage 4.0), and banking only
     push word [pl_pacc+2]             ; its low word handed the outer fold the
     push word [pl_pacc]               ; inner call's accumulator back
     push word [pl_pcnt]
@@ -15119,8 +15133,6 @@ pl_pfunc:
     mov word [pl_phave], 0
     mov word [pl_pacc2], 0             ; the sum of squares starts at zero for
     mov word [pl_pacc2+2], 0           ; every fold; only the variance ones
-    mov word [pl_pacc2+4], 0           ; ever add to it
-    mov word [pl_pacc2+6], 0
 .args:
     call pl_prange
     cmp byte [si], ','
@@ -15221,8 +15233,6 @@ pl_pfunc:
     pop word [pl_pcnt]
     pop word [pl_pacc]
     pop word [pl_pacc+2]
-    pop word [pl_pacc+4]
-    pop word [pl_pacc+6]
     pop word [pl_pfid]
     mov ax, dx
     pop dx
@@ -15307,16 +15317,16 @@ pl_pspecial:
     call pl_acc_load_b
     push si
     mov si, pl_tr0
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
-    call fp_pow
+    call fx_pow
     jnc .dstore
     mov byte [pl_evalerr], PL_ERR_NUM
-    call fp_azero
+    call fx_azero
     jmp .dstore
 .powbad:
     mov byte [pl_evalerr], PL_ERR_VALUE
-    call fp_azero
+    call fx_azero
     jmp .dstore
 
 ; ---- INT / TRUNC / SQRT / ROUND, on doubles ---------------------------------
@@ -15326,21 +15336,21 @@ pl_pspecial:
 .dfloor:
     call pl_pcmp
     call pl_acc_load_a
-    call fp_floor
+    call fx_floor
     jmp .dstore
 .dtrunc:
     call pl_pcmp
     call pl_acc_load_a
-    call fp_trunc
+    call fx_trunc
     jmp .dstore
 .dsqrt:
     call pl_pcmp
-    test byte [pl_acc+7], 0x80        ; the sign bit of the packed double: a
+    test byte [pl_acc+3], 0x80        ; the sign bit of the packed double: a
     jz .sqrtok                        ; negative has no real square root, and
     mov byte [pl_evalerr], PL_ERR_NUM ; Excel says #NUM! rather than 0
 .sqrtok:
     call pl_acc_load_a
-    call fp_sqrt                      ; a REAL root: SQRT(2) is 1.414213562,
+    call fx_sqrt                      ; a REAL root: SQRT(2) is 1.414213562,
     jmp .dstore                       ; where the integer version gave 1
 .dround:
     call pl_pcmp                      ; the value, banked across the second
@@ -15353,7 +15363,7 @@ pl_pspecial:
     mov cx, ax
 .dround1:
     call pl_binop_pre                 ; A = the value again
-    call fp_round
+    call fx_round
 .dstore:
     call pl_acc_store
     cmp byte [si], ')'
@@ -15699,11 +15709,11 @@ pl_pargclass:
 ; file formats were (82.16.9) - and since 81.62 pl_pargclass above and
 ; pl_ptrans below are in the same block. Every call out is SHOUT; the one way in is the
 ; resident stub pl_pfin, beside the other three. The three constants below
-; stay in .text, because what reads them is resident fp_* code through DS.
+; stay in .text, because what reads them is resident fx_* code through DS.
 ; =============================================================================
 section PL_MODSEC
 
-section .text                       ; ...DATA, and the resident fp_* routines
+section .text                       ; ...DATA, and the resident fx_* routines
                                     ; read it through DS (68.10 rule 2)
 ; 81.75: pl_c_r10 / pl_c_r01 / pl_c_eps and the five routines that stood here
 ; - pl_fntyv, pl_fnsetty, pl_fnfac, pl_pfargs - were the FINANCIAL family's
@@ -15883,12 +15893,12 @@ pl_group3:
 ; -----------------------------------------------------------------------------
 ; pl_numdp - fp A -> pl_numbuf with EXACTLY CX decimal places, rounded.
 ;
-; fp_ftoa counts SIGNIFICANT digits and trims trailing zeros, which is right
+; fx_ftoa counts SIGNIFICANT digits and trims trailing zeros, which is right
 ; for General and wrong for money: 1.5 to two places has to be "1.50". So the
-; value is rounded first (fp_round, the same one ROUND() uses) and the places
+; value is rounded first (fx_round, the same one ROUND() uses) and the places
 ; are then padded back on.
 ;
-; A value big or small enough that fp_ftoa reaches for scientific notation is
+; A value big or small enough that fx_ftoa reaches for scientific notation is
 ; left exactly as it came - padding a mantissa and grouping an exponent would
 ; both be nonsense, and passing it through is the one honest answer.
 ; -----------------------------------------------------------------------------
@@ -15906,12 +15916,12 @@ pl_numdp:
     mov cx, 9
 .round:
     push cx
-    call fp_round
+    call fx_round
     call pl_acc_store
     call pl_acc_load_a
     mov di, pl_numbuf
     mov ax, 15
-    call fp_ftoa
+    call fx_ftoa
     pop cx
     mov si, pl_numbuf
 .scan:
@@ -16298,10 +16308,8 @@ section PL_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; frame and retf into the value. The stack work has to happen here; the fp
 ; loading, which touches no stack, calls back as pl_binop_ld
 plm_vpush:
-    ; STKBALANCE-NET: +4 - banks pl_acc on the CALLER's stack for a binary operator; plm_binop_pre takes it off
+    ; STKBALANCE-NET: +2 - 81.75: TWO WORDS now, not four; banks pl_acc on the CALLER's stack for a binary operator; plm_binop_pre takes it off
     pop ax
-    push word [pl_acc+6]
-    push word [pl_acc+4]
     push word [pl_acc+2]
     push word [pl_acc]
     push ax
@@ -16311,8 +16319,6 @@ plm_binop_pre:
     pop ax
     pop word [pl_lhs]
     pop word [pl_lhs+2]
-    pop word [pl_lhs+4]
-    pop word [pl_lhs+6]
     push ax
     SHOUT pl_binop_ld
     ret
@@ -16339,23 +16345,23 @@ section .text
 ; 2.1's own: serial 65535 is 5 June 2079, and 2.1 stops at 31 December 2078.
 ; -----------------------------------------------------------------------------
 ; pl_fp_32768_b - B = 32768.0. Clobbers A, so build it BEFORE loading the
-; value. fp_i2b cannot: 32768 is not a signed 16-bit integer.
+; value. fx_i2b cannot: 32768 is not a signed 16-bit integer.
 ; -----------------------------------------------------------------------------
 pl_fp_32768_b:
     push ax
-    mov word [fp_t0], 0x8000
-    mov word [fp_t1], 0
-    mov word [fp_t2], 0
-    mov word [fp_t3], 0
-    call fp_u64_to_a
-    call fp_a_to_b
+    mov word [fx_q+0], 0x8000
+    mov word [fx_q+2], 0
+    mov word [fx_q+4], 0
+    mov word [fx_q+6], 0
+    call fx_u32_to_a
+    call fx_a_to_b
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
 ; pl_acc_toudw - pl_acc, truncated toward zero, as an UNSIGNED word in AX.
 ;
-; fp_a2i is signed and clamps at 32767 - as a date serial that is 24 September
+; fx_a2i is signed and clamps at 32767 - as a date serial that is 24 September
 ; 1989, so every date this app will ever be asked about is past it and the
 ; signed conversion is not usable for serials at all. The top bit is taken off
 ; by hand and put back with an unsigned add.
@@ -16366,27 +16372,27 @@ pl_fp_32768_b:
 pl_acc_toudw:
     push bx
     call pl_acc_load_a
-    call fp_trunc
+    call fx_trunc
     call pl_acc_store
-    test byte [pl_acc+7], 0x80        ; a negative serial has no unsigned form
+    test byte [pl_acc+3], 0x80        ; a negative serial has no unsigned form
     jnz .bad
     call pl_fp_32768_b
     call pl_acc_load_a
-    call fp_cmpab                     ; SIGNED flags: fp_cmpab answers -1/0/1
+    call fx_cmpab                     ; SIGNED flags: fx_cmpab answers -1/0/1
     jl .small                         ; in AX and sets them from that, so `jb`
                                        ; is never taken and every serial past
                                        ; 32767 fell down the clamping path
     call pl_fp_32768_b
     call pl_acc_load_a
-    call fp_sub                       ; A = value - 32768, now 0..32767
-    call fp_a2i
+    call fx_sub                       ; A = value - 32768, now 0..32767
+    call fx_a2i
     jc .bad
     add ax, 32768                     ; ...and back on, unsigned
     clc
     jmp .out
 .small:
     call pl_acc_load_a
-    call fp_a2i
+    call fx_a2i
     jc .bad
 .out:
     pop bx
@@ -16398,16 +16404,16 @@ pl_acc_toudw:
     ret
 
 ; -----------------------------------------------------------------------------
-; pl_acc_fromudw - AX, an unsigned word, becomes pl_acc. fp_i2a is signed and
+; pl_acc_fromudw - AX, an unsigned word, becomes pl_acc. fx_i2a is signed and
 ; would make 46265 negative.
 ; -----------------------------------------------------------------------------
 pl_acc_fromudw:
     push ax
-    mov [fp_t0], ax
-    mov word [fp_t1], 0
-    mov word [fp_t2], 0
-    mov word [fp_t3], 0
-    call fp_u64_to_a
+    mov [fx_q+0], ax
+    mov word [fx_q+2], 0
+    mov word [fx_q+4], 0
+    mov word [fx_q+6], 0
+    call fx_u32_to_a
     call pl_acc_store
     pop ax
     ret
@@ -16673,11 +16679,11 @@ pl_prand:
     mov ax, 256                       ; /256 TWICE = /65536, which is what a
     call pl_acc_int                   ; 16-bit word cannot hold in one go.
     call pl_acc_load_b                ; THE DIVISOR IS BUILT FIRST, because
-    mov ax, bx                        ; pl_acc_int goes through fp_i2a and
-    call pl_acc_fromudw               ; pl_acc_fromudw through fp_u64_to_a -
+    mov ax, bx                        ; pl_acc_int goes through fx_i2a and
+    call pl_acc_fromudw               ; pl_acc_fromudw through fx_u32_to_a -
     call pl_acc_load_a                ; BOTH WRITE A. Loading the value into A
-    call fp_div                       ; and then building 256 overwrote it, and
-    call fp_div                       ; RAND() answered a constant 256/256 = 1
+    call fx_div                       ; and then building 256 overwrote it, and
+    call fx_div                       ; RAND() answered a constant 256/256 = 1
     call pl_acc_store                 ; (81.42.1 again, verbatim). B is loaded
                                       ; once for both divides: fpx_div and
                                       ; fps_div stage from memory and write
@@ -16809,10 +16815,10 @@ pl_pnow:
     mov dx, ax                        ; DX = seconds
     call pl_hms_to_acc                ; pl_acc = the fraction of the day
     call pl_acc_load_b                ; ...into B, WHICH MUST COME FIRST:
-    pop ax                            ; pl_acc_fromudw goes through fp_u64_to_a
+    pop ax                            ; pl_acc_fromudw goes through fx_u32_to_a
     call pl_acc_fromudw               ; and CLOBBERS A, so a fraction parked
     call pl_acc_load_a                ; there is gone by the add. It answered
-    call fp_add                       ; twice the serial, both operands being
+    call fx_add                       ; twice the serial, both operands being
                                       ; the day count (81.42.1)
     call pl_acc_store
     clc
@@ -16906,15 +16912,15 @@ pl_hms_to_acc:
     push cx
     add ax, cx
     adc dx, 0
-    mov [fp_t0], ax                   ; the whole thing as an unsigned 32-bit
-    mov [fp_t1], dx
-    mov word [fp_t2], 0
-    mov word [fp_t3], 0
-    call fp_u64_to_a
+    mov [fx_q+0], ax                   ; the whole thing as an unsigned 32-bit
+    mov [fx_q+2], dx
+    mov word [fx_q+4], 0
+    mov word [fx_q+6], 0
+    call fx_u32_to_a
     call pl_acc_store
     call pl_dt_86400_b
     call pl_acc_load_a
-    call fp_div                       ; a fraction of one day
+    call fx_div                       ; a fraction of one day
     call pl_acc_store
     pop dx
     pop cx
@@ -16925,12 +16931,12 @@ pl_hms_to_acc:
 ; pl_dt_86400_b - B = 86400.0, the seconds in a day. Clobbers A.
 pl_dt_86400_b:
     push ax
-    mov word [fp_t0], 86400 & 0xFFFF
-    mov word [fp_t1], 86400 >> 16
-    mov word [fp_t2], 0
-    mov word [fp_t3], 0
-    call fp_u64_to_a
-    call fp_a_to_b
+    mov word [fx_q+0], 86400 & 0xFFFF
+    mov word [fx_q+2], 86400 >> 16
+    mov word [fx_q+4], 0
+    mov word [fx_q+6], 0
+    call fx_u32_to_a
+    call fx_a_to_b
     pop ax
     ret
 
@@ -16947,35 +16953,35 @@ pl_dt_86400_b:
 ; -----------------------------------------------------------------------------
 pl_dt_hms:
     call pl_acc_load_a
-    call fp_floor
+    call fx_floor
     call pl_dt_tmp_store              ; the whole days
     call pl_acc_load_a
     call pl_dt_tmp_load_b
-    call fp_sub                       ; A = the fraction
+    call fx_sub                       ; A = the fraction
     call pl_acc_store
     call pl_dt_86400_b                ; clobbers A, so it goes first
     call pl_acc_load_a
-    call fp_mul                       ; A = seconds, as a real
+    call fx_mul                       ; A = seconds, as a real
     xor cx, cx
-    call fp_round                     ; ...to the nearest whole one
+    call fx_round                     ; ...to the nearest whole one
     call pl_acc_store                 ; pl_acc = s, a whole 0..86400
     mov ax, 60
-    call fp_i2b
+    call fx_i2b
     call pl_acc_load_a
-    call fp_div
-    call fp_floor                     ; A = whole minutes, at most 1439
+    call fx_div
+    call fx_floor                     ; A = whole minutes, at most 1439
     call pl_dt_tmp_store
-    call fp_a2i
+    call fx_a2i
     mov [pl_dt_min], ax
     mov ax, 60
-    call fp_i2b
+    call fx_i2b
     call pl_dt_tmp_load_a             ; A = the minutes again
-    call fp_mul                       ; A = 60 * minutes
+    call fx_mul                       ; A = 60 * minutes
     call pl_dt_tmp_store
     call pl_acc_load_a                ; A = s
     call pl_dt_tmp_load_b
-    call fp_sub                       ; A = the leftover seconds
-    call fp_a2i
+    call fx_sub                       ; A = the leftover seconds
+    call fx_a2i
     ret
 
 ; pl_dt_tmp_store / pl_dt_tmp_load_b - park fp A in bss and bring it back as
@@ -16983,20 +16989,20 @@ pl_dt_hms:
 ; with exactly one pl_binop_pre (81.25.3).
 pl_dt_tmp_store:
     push di
-    mov di, pl_dt_tmp                 ; fp_pack_a writes at DI; fp_unpack_b
-    call fp_pack_a                    ; reads at SI, and leaves A alone
+    mov di, pl_dt_tmp                 ; fx_pack_a writes at DI; fx_unpack_b
+    call fx_pack_a                    ; reads at SI, and leaves A alone
     pop di
     ret
 pl_dt_tmp_load_b:
     push si
     mov si, pl_dt_tmp
-    call fp_unpack_b
+    call fx_unpack_b
     pop si
     ret
 pl_dt_tmp_load_a:
     push si
     mov si, pl_dt_tmp
-    call fp_unpack_a
+    call fx_unpack_a
     pop si
     ret
 
@@ -17146,23 +17152,24 @@ pl_pif:
     or bx, bx
     jz .dropthen                      ; false: pl_acc already holds the else
     mov [pl_curtype], cl              ; true: the then-value back WHOLE - its
-    mov [pl_curaux], ch               ; kind, and its eight bytes restored as
+    mov [pl_curaux], ch               ; kind, and its four bytes restored as
     pop word [pl_acc]                 ; they were banked rather than through
-    pop word [pl_acc+2]               ; the float layer, which a TEXT result's
-    pop word [pl_acc+4]               ; slot reference (81.22.1) is not a
-    pop word [pl_acc+6]               ; double to survive
+    pop word [pl_acc+2]               ; the arithmetic layer, which a TEXT
     cmp cl, PL_T_TEXT
     jne .out
     call pl_srestore                  ; ...and its characters
     jmp .out
 .dropthen:
-    add sp, 8                         ; the banked then-value is not wanted,
+    add sp, 4                         ; 81.75: FOUR, not eight - pl_vpush banks
+                                      ; a fixed-point value now. The banked
+                                      ; then-value is not wanted,
     cmp cl, PL_T_TEXT                 ; and nor are its characters: a bank
     jne .out                          ; left on the string stack would shift
     call pl_spop                      ; every string after it by one
     jmp .out
 .badpop:
-    add sp, 10                        ; the banked value, and its type...
+    add sp, 6                         ; 81.75: six - four of value and two of
+                                      ; type. The banked value, and its type...
     cmp al, PL_T_TEXT                 ; (AL still is: nothing since has
     jne .bad                          ; touched it)
     call pl_spop                      ; ...and any characters
@@ -17262,8 +17269,8 @@ pl_pnot:
 ; in: SI right after "ABS("; out: AX=|x|, SI advanced past ')' if found
 pl_pabs:
     call pl_pcmp
-    and byte [pl_acc+7], 0x7F         ; clear the sign bit: |x| for a packed
-.close:                               ; double is one AND, and it is exact
+    call pl_acc_abs                   ; 81.75: two's complement (see there)
+.close:
     cmp byte [si], ')'
     jne .out
     inc si
@@ -17487,8 +17494,6 @@ pl_str_store:
     mov [pl_txtlen], bx
     mov [es:di+PL_C_VAL], ax          ; the union's first word IS the offset
     mov word [es:di+PL_C_VAL+2], 0
-    mov word [es:di+PL_C_VAL+4], 0
-    mov word [es:di+PL_C_VAL+6], 0
 .haveslot:
     mov di, ax                        ; DI = the slot, ES = the arena
     mov es, [pl_txtseg]
@@ -18252,8 +18257,6 @@ pl_fmtcode:
     push dx
     push si
     push di
-    push word [pl_acc+6]              ; the value, put back on the way out
-    push word [pl_acc+4]
     push word [pl_acc+2]
     push word [pl_acc]
     mov di, pl_nf_general
@@ -18265,7 +18268,7 @@ pl_fmtcode:
     mov dl, 0                         ; DL = the section wanted
     call pl_acc_iszero
     jc .zero
-    test byte [pl_acc+7], 0x80
+    test byte [pl_acc+3], 0x80
     jz .pick
     mov dl, 1
     jmp short .pick
@@ -18279,7 +18282,7 @@ pl_fmtcode:
 .have:
     cmp dl, 1
     jne .signok
-    and byte [pl_acc+7], 0x7F         ; the negative section shows magnitude
+    call pl_acc_abs                   ; the negative section shows magnitude
 .signok:
     mov si, pl_nf_sec
     call pl_nf_isdate
@@ -18293,12 +18296,10 @@ pl_fmtcode:
     call pl_acc_load_a
     mov di, pl_numbuf
     mov ax, 10
-    call fp_ftoa
+    call fx_ftoa
 .out:
     pop word [pl_acc]
     pop word [pl_acc+2]
-    pop word [pl_acc+4]
-    pop word [pl_acc+6]
     pop di
     pop si
     pop dx
@@ -18748,8 +18749,6 @@ pl_nf_date:
     push dx
     push si
     push di
-    push word [pl_acc+6]              ; THE TIME FIRST: pl_acc_toudw truncates
-    push word [pl_acc+4]              ; pl_acc IN PLACE, and every time came
     push word [pl_acc+2]              ; out as midnight when it went second
     push word [pl_acc]
     call pl_dt_hms                    ; pl_dt_min, AX = the seconds
@@ -18762,8 +18761,6 @@ pl_nf_date:
     mov [pl_nf_mi], dl
     pop word [pl_acc]
     pop word [pl_acc+2]
-    pop word [pl_acc+4]
-    pop word [pl_acc+6]
     call pl_acc_toudw                 ; the whole days
     jnc .days
     mov di, pl_numbuf                 ; a negative date or one past 2079: the
@@ -19093,7 +19090,7 @@ pl_nf_number:
     mov ax, 100
     call pl_acc_int
     call pl_binop_pre
-    call fp_mul
+    call fx_mul
     call pl_acc_store
 .nopct:
     test byte [pl_nf_fl], 8
@@ -19199,10 +19196,10 @@ pl_nf_sci:
     push di
     xor bx, bx                        ; BX = the exponent
     mov byte [pl_nf_neg], 0
-    test byte [pl_acc+7], 0x80
+    test byte [pl_acc+3], 0x80
     jz .pos
     mov byte [pl_nf_neg], 1
-    and byte [pl_acc+7], 0x7F
+    call pl_acc_abs
 .pos:
     call pl_acc_iszero
     jc .scaled
@@ -19210,11 +19207,11 @@ pl_nf_sci:
 .up:
     call pl_acc_load_a                ; >= 10: divide
     mov si, pl_nf_c10d
-    call fp_unpack_b
-    call fp_cmpab
+    call fx_unpack_b
+    call fx_cmpab
     jl .down
     push cx
-    call fp_div
+    call fx_div
     call pl_acc_store
     pop cx
     inc bx
@@ -19223,16 +19220,16 @@ pl_nf_sci:
 .down:
     push cx
     mov ax, 1                         ; < 1: multiply
-    call fp_i2a
-    call fp_a_to_b
+    call fx_i2a
+    call fx_a_to_b
     call pl_acc_load_a
-    call fp_cmpab
+    call fx_cmpab
     pop cx
     jge .scaled
     push cx
     mov si, pl_nf_c10d
-    call fp_unpack_b
-    call fp_mul
+    call fx_unpack_b
+    call fx_mul
     call pl_acc_store
     pop cx
     dec bx
@@ -19250,8 +19247,8 @@ pl_nf_sci:
     push bx
     call pl_acc_load_a
     mov si, pl_nf_c10d
-    call fp_unpack_b
-    call fp_div
+    call fx_unpack_b
+    call fx_div
     mov cx, [pl_nf_cx]
     mov cl, ch
     xor ch, ch
@@ -19351,21 +19348,19 @@ pl_numfmt:
     call pl_acc_load_a
     mov di, pl_numbuf
     mov ax, cx
-    call fp_ftoa
+    call fx_ftoa
     mov si, pl_numbuf
     call pl_strlen
     cmp ax, [pl_cellch]
     jbe .out
     loop .fit
-    ; fp_ftoa turns scientific only past a wide exponent, so 123456789 stays
+    ; fx_ftoa turns scientific only past a wide exponent, so 123456789 stays
     ; nine digits at any precision: General's last step is Excel's own, the
     ; mantissa with as many places as the cell leaves room for - 1.2E+08
     mov cx, [pl_cellch]
     sub cx, 6                         ; "d.E+08" is six without any places
     jc .hash
 .sci:
-    push word [pl_acc+6]              ; pl_nf_sci scales pl_acc in place
-    push word [pl_acc+4]
     push word [pl_acc+2]
     push word [pl_acc]
     mov byte [pl_nf_cx], 0
@@ -19373,8 +19368,6 @@ pl_numfmt:
     call pl_nf_sci
     pop word [pl_acc]
     pop word [pl_acc+2]
-    pop word [pl_acc+4]
-    pop word [pl_acc+6]
     mov si, pl_numbuf
     call pl_strlen
     cmp ax, [pl_cellch]
@@ -19941,17 +19934,17 @@ pl_dowrite_sep:
     push si
     push di
     mov si, pl_acc                    ; a FULL DECIMAL, the lesson
-    SHOUT fp_unpack_a                 ; pl_dowrite_dif learned the hard way
+    SHOUT fx_unpack_a                 ; pl_dowrite_dif learned the hard way
     mov di, pl_numbuf
     mov ax, 10
-    SHOUT fp_ftoa
+    SHOUT fx_ftoa
     pop di
     pop si
     mov si, pl_numbuf
     call pl_stgput
     jmp .cnext
 .cbool:
-    mov ax, [pl_acc+6]
+    mov ax, [pl_acc]
     SHOUT pl_boolname
     jmp short .cname
 .cerr:
@@ -20221,7 +20214,7 @@ pl_sep_field:
 ; -----------------------------------------------------------------------------
 ; pl_sep_store - pl_rwsrc into the cell at [pl_wcol],[pl_wrow].
 ;
-; CSV HAS NO TYPE FIELD, so the field's own spelling decides. fp_atof reports
+; CSV HAS NO TYPE FIELD, so the field's own spelling decides. fx_atof reports
 ; CF=1 when there was no number there at all, and SI is left where it stopped -
 ; so "12abc" is TEXT rather than 12, which is the whole reason the position is
 ; checked and not just the carry.
@@ -20233,7 +20226,7 @@ pl_sep_store:
     cmp byte [pl_rwsrc], 0
     je .out                           ; an empty field leaves the cell blank
     mov si, pl_rwsrc
-    SHOUT fp_atof
+    SHOUT fx_atof
     jc .text
     cmp byte [si], 0
     jne .text
@@ -20329,15 +20322,14 @@ pl_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; stage 4.0: the software IEEE-754 double. Included before os88chart.inc for
 ; no reason other than tidiness - it depends on nothing but the caller's own
 ; scratch, declared in the bss chain below.
-%define OS88FP_NOTRANS             ; 81.75: no SIN..LOG, so no logarithm and
-%include "os88fp.inc"       ; no trigonometry - see that file's own guard
+%include "os88fix.inc"      ; 81.75: fixed-point decimal, not a double
 
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3840                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3626                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -20639,7 +20631,7 @@ pl_rc_taux    equ pl_rc_ttype + 1           ; byte: ...and PL_C_AUX
                                              ; whole double since stage 4.5
                                              ; formula cell just staged into
                                              ; against, both in DS because
-                                             ; fp_unpack_* read DS:SI and the
+                                             ; fx_unpack_* read DS:SI and the
                                              ; array lives in pl_stgseg
                                             ; keyed on, which since stage 4.5
                                             ; the dialog picks and which need
@@ -20885,47 +20877,25 @@ pl_rc_crow        equ pl_rc_ccol + 2   ; converted to or from R1C1 - every
                                        ; relative offset is measured from it
 pl_evrow          equ pl_rc_crow + 2   ; word: 0-based
 pl_evcol          equ pl_evrow + 2     ; word: 0-based
-; stage 4.0: the value accumulator the evaluator now carries, and every
-; scratch word apps/os88fp.inc's header says the caller owes it.
-pl_acc            equ pl_evcol + 2     ; 8: the expression's current value
-pl_lhs            equ pl_acc + 8       ; 8: a binary operator's left operand,
+; 81.75: the value accumulator the evaluator carries, and every scratch word
+; apps/os88fix.inc's header says the caller owes it. FOUR BYTES, not eight -
+; a hundredth-count, not a double - and the block that fed the IEEE mantissa,
+; its sticky bit, the 128-bit product, the 80-bit coprocessor forms and the
+; transcendental layer's four temporaries is gone with it: 170 bytes to 42.
+pl_acc            equ pl_evcol + 2     ; 4: the expression's current value
+pl_lhs            equ pl_acc + 4       ; 4: a binary operator's left operand,
                                        ; recovered from the stack
-fp_as             equ pl_lhs + 8
-fp_bs             equ fp_as + 1
-fp_ae             equ fp_bs + 1
-fp_be             equ fp_ae + 2
-fp_am0            equ fp_be + 2
-fp_am1            equ fp_am0 + 2
-fp_am2            equ fp_am1 + 2
-fp_am3            equ fp_am2 + 2
-fp_bm0            equ fp_am3 + 2
-fp_bm1            equ fp_bm0 + 2
-fp_bm2            equ fp_bm1 + 2
-fp_bm3            equ fp_bm2 + 2
-fp_t0             equ fp_bm3 + 2
-fp_t1             equ fp_t0 + 2
-fp_t2             equ fp_t1 + 2
-fp_t3             equ fp_t2 + 2
-fp_p0             equ fp_t3 + 2        ; 8 words: the 128-bit product
-fp_sticky         equ fp_p0 + 16
-fp_tmp            equ fp_sticky + 2
-fp_dig            equ fp_tmp + 2       ; 24: fp_ftoa's digit string
-fp_d10            equ fp_dig + 24
-fp_nd             equ fp_d10 + 2
-fp_sgn            equ fp_nd + 2
-fp_sq             equ fp_sgn + 2       ; 8: fp_sqrt's input, across iterations
-fp_g              equ fp_sq + 8        ; 8: its running guess
-fp_tv             equ fp_g + 8         ; 8: fp_floor's general temporary
-fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
-fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
-fp_x2             equ fp_x1 + 10       ; 10: B
-fp_sw             equ fp_x2 + 10       ; where the status word lands
-fp_e0             equ fp_sw + 2        ; --- the transcendental layer (84.8)
-fp_e1             equ fp_e0 + 8        ; four packed temporaries and a
-fp_e2             equ fp_e1 + 8        ; counter, which fp_ln, fp_exp and
-fp_e3             equ fp_e2 + 8        ; fp_pow share
-fp_ek             equ fp_e3 + 8
-pl_pb_c0          equ fp_ek + 2        ; the paste block's landing
+fx_a              equ pl_lhs + 4       ; 4: accumulator A
+fx_b              equ fx_a + 4         ; 4: ...and B
+fx_q              equ fx_b + 4         ; 8: the 64-bit intermediate
+fx_m0             equ fx_q + 8         ; the multiplier's operand copies
+fx_m1             equ fx_m0 + 2
+fx_n0             equ fx_m1 + 2
+fx_n1             equ fx_n0 + 2
+fx_sgn            equ fx_n1 + 2        ; byte: the sign a magnitude owes back
+fx_tmp            equ fx_sgn + 1       ; 4: general scratch
+fx_dig            equ fx_tmp + 4       ; 16: fx_ftoa's digit string
+pl_pb_c0          equ fx_dig + 16        ; the paste block's landing
 pl_pb_r0          equ pl_pb_c0 + 2     ; corner...
 pl_pb_x           equ pl_pb_r0 + 2     ; ...the cell being written
 pl_pb_y           equ pl_pb_x + 2
@@ -20984,30 +20954,23 @@ pl_blitdel        equ pl_blity2 + 2    ; ...and its signed row delta
 pl_pacc2          equ pl_blitdel + 2       ; 8: the SUM OF SQUARES, beside pl_pacc's
                                        ; sum, for the variance folds (81.34)
 pl_tr0        equ pl_pacc2 + 8        ; 8 } two packed doubles that survive a
-pl_fnarg          equ pl_tr0 + 8          ; 6 x 8: the financial functions' parsed
                                        ; arguments (81.37). Not banked per
                                        ; nesting level - forty bytes against a
                                        ; 384-byte stack - so a financial
                                        ; function inside another's arguments
                                        ; REFUSES, the shape 81.32.1 and 81.34.1
                                        ; already take
-pl_fnn        equ pl_fnarg + 48       ; word: how many arrived. SIX slots:
                                        ; IPMT, PPMT and RATE take that many
-pl_fnnp           equ pl_fnn + 2         ; 8: the period count pl_fnfac works on,
                                        ; which is NOT always argument 1 - IPMT
                                        ; evaluates the same annuity at per-1
-pl_fnty       equ pl_fnnp + 8         ; 8: ...and the type it works on, which
                                        ; is argument 4 for PMT/PV/FV and
                                        ; argument 5 for IPMT/PPMT
-pl_fnr            equ pl_fnty + 8          ; 8: THE RATE pl_fnfac works on. Not
                                        ; argument 0 any more: RATE varies it,
                                        ; which is the whole of what a
                                        ; root-finder does (81.37.5)
-pl_fnt            equ pl_fnr + 8       ; 8: a packed temporary
-pl_fnu        equ pl_fnt + 8          ; 8: ...and a second
                                        ; across the arithmetic (81.36)
                                        ; as its own temporaries (81.35)
-pl_stbusy         equ pl_fnu + 8        ; byte: a variance fold is running. Only
+pl_stbusy         equ pl_tr0 + 8        ; byte: a variance fold is running. Only
                                        ; ONE can be, for pl_pacc2's sake - see
                                        ; 81.34.1
 pl_rndlo      equ pl_stbusy + 2      ; RAND's 32-bit LCG state

@@ -10251,7 +10251,7 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # the 128KB floor machine. Built into its own directory the way $(SMALLAPPDIR)
 # is, and NOT in `all` until the cut list lands.
 PLANDIR := $(BUILD)/planapp
-$(PLANDIR)/plan.bin: apps/plan/plan.asm apps/os88api.inc apps/os88fp.inc \
+$(PLANDIR)/plan.bin: apps/plan/plan.asm apps/os88api.inc apps/os88fix.inc \
                      apps/os88ui.inc apps/os88line.inc apps/os88text.inc
 	@mkdir -p $(PLANDIR)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/plan/plan.asm

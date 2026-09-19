@@ -50,6 +50,13 @@
 FX_SCALE     equ 100                 ; hundredths, and the ONE place this
                                      ; number is written down
 FX_PLACES    equ 2
+FX_POW_MAX   equ 50                  ; fx_pow's exponent ceiling, as the HIGH
+                                     ; word of the scaled magnitude: 50*65536
+                                     ; is 3,276,800, which unscaled is 32,768.
+                                     ; The guard is not taste - the DIV that
+                                     ; unscales it faults on a quotient past a
+                                     ; word, and a spreadsheet must not take
+                                     ; the machine down over `=2^99999`
 
 ; -----------------------------------------------------------------------------
 ; fx_init - os88fp.inc's had a coprocessor to look for. This has nothing to
@@ -384,6 +391,30 @@ fx_setsgn:
     ret
 
 ; -----------------------------------------------------------------------------
+; fx_qmulcx - fx_q's low 32 bits times CX -> DX:AX.
+;
+; Three routines below scale a quotient back up and all three first did it by
+; multiplying each word by CX and keeping only the low half of each - which
+; drops the carry out of the low word and is wrong for any value past 655.
+; One routine, written once.
+;
+; Clobbers BX. SI is preserved.
+; -----------------------------------------------------------------------------
+fx_qmulcx:
+    push si
+    mov ax, [fx_q]
+    mul cx                             ; DX:AX = q0 * CX
+    mov bx, ax
+    mov si, dx                         ; ...and its carry into the high word
+    mov ax, [fx_q+2]
+    mul cx
+    add ax, si
+    mov dx, ax
+    mov ax, bx
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
 ; fx_mul - A = A * B.
 ;
 ; (a*b)/FX_SCALE, in 64 bits, ROUNDED half away from zero at the last place -
@@ -439,45 +470,21 @@ fx_div:
     mov ax, [fx_b]
     or ax, [fx_b+2]
     jz .zero
-    call fx_amag
-    call fx_bmag
-    mov word [fx_n0], 0                ; |a| * FX_SCALE -> fx_q, keeping |b|
-    mov word [fx_n1], 0                ; out of the multiplier's operands
-    mov ax, [fx_b]
-    mov dx, [fx_b+2]
-    push ax                            ; |b| is needed AFTER the multiply
-    push dx
+    call fx_amag                       ; |a| -> fx_m, sign -> fx_sgn
+    call fx_bmag                       ; |b| -> fx_n, sign XORed in
+    mov ax, [fx_n0]                    ; BANK |b| - fx_umul is about to want
+    mov [fx_tmp], ax                   ; fx_n for the scale factor instead
+    mov ax, [fx_n1]
+    mov [fx_tmp+2], ax
     mov word [fx_n0], FX_SCALE
-    call fx_umul
-    pop dx
-    pop ax
-    mov bx, [fx_n0]                    ; the divisor's magnitude, which
-    mov cx, [fx_n1]                    ; fx_bmag left there before fx_umul
-    mov bx, ax
-    mov cx, dx
-    cmp byte [fx_sgn], 0               ; fx_bmag already folded B's sign into
-    push bx                            ; fx_sgn; the divisor itself has to be
-    push cx                            ; a magnitude
-    or cx, cx
-    jns .bpos
-    not bx
-    not cx
-    add bx, 1
-    adc cx, 0
-.bpos:
-    call fx_udiv32
-    pop cx
-    pop bx
-    or cx, cx                          ; the rounding compare wants |b| too
-    jns .bpos2
-    not bx
-    not cx
-    add bx, 1
-    adc cx, 0
-.bpos2:
-    shl ax, 1                          ; 2*remainder >= |b| rounds up
-    rcl dx, 1
-    cmp dx, cx
+    mov word [fx_n1], 0
+    call fx_umul                       ; fx_q = |a| * FX_SCALE
+    mov bx, [fx_tmp]                   ; CX:BX = |b|
+    mov cx, [fx_tmp+2]
+    call fx_udiv32                     ; fx_q = quotient, DX:AX = remainder
+    shl ax, 1                          ; 2*remainder >= |b| rounds up, which
+    rcl dx, 1                          ; is half away from zero: 2.00/3 is
+    cmp dx, cx                         ; 0.67 and not 0.66
     jb .noround
     ja .up
     cmp ax, bx
@@ -508,11 +515,10 @@ fx_div:
 ; -----------------------------------------------------------------------------
 fx_trunc:
     push ax
+    push bx
     push cx
     push dx
     call fx_amag
-    mov word [fx_q], 0                 ; |a| / scale * scale
-    mov word [fx_q+2], 0
     mov word [fx_q+4], 0
     mov word [fx_q+6], 0
     mov ax, [fx_m0]
@@ -520,20 +526,13 @@ fx_trunc:
     mov ax, [fx_m1]
     mov [fx_q+2], ax
     mov cx, FX_SCALE
-    call fx_udiv16
+    call fx_udiv16                     ; |a| / scale...
     mov cx, FX_SCALE
-    mov ax, [fx_q]
-    mul cx
-    mov bx, ax
-    mov ax, [fx_q+2]
-    push bx
-    mul cx
-    mov dx, ax
-    pop ax
-    add dx, 0                          ; the high word's own carry is already
-    call fx_setsgn                     ; in DX from the second multiply
+    call fx_qmulcx                     ; ...and back up, carry kept
+    call fx_setsgn
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -581,12 +580,12 @@ fx_round:
     push dx
     mov bx, FX_PLACES
     sub bx, cx                         ; BX = how many places to drop
-    jle .out                           ; already at or below that precision
+    jle .out                           ; already at or inside that precision
     cmp bx, 9
     jle .have
-    mov bx, 9                          ; 10^9 overflows the word the scale
-.have:                                 ; factor is built in; past that the
-    mov cx, 1                          ; answer is zero either way
+    mov bx, 9                          ; past this the answer is zero either
+.have:                                 ; way, and 10^9 leaves the word
+    mov cx, 1
 .pow:
     mov ax, cx
     mov dx, 10
@@ -594,7 +593,7 @@ fx_round:
     mov cx, ax
     dec bx
     jnz .pow
-    push cx                            ; CX = the scale factor
+    mov [fx_tmp+2], cx                 ; the scale factor, banked
     call fx_amag
     mov word [fx_q+4], 0
     mov word [fx_q+6], 0
@@ -602,28 +601,17 @@ fx_round:
     mov [fx_q], ax
     mov ax, [fx_m1]
     mov [fx_q+2], ax
-    pop cx
-    push cx
+    mov cx, [fx_tmp+2]
     call fx_udiv16                     ; DX = the remainder
-    pop cx
-    push cx
-    mov ax, cx
+    mov ax, [fx_tmp+2]
     shr ax, 1
     cmp dx, ax                         ; half away from zero
     jb .nor
     add word [fx_q], 1
     adc word [fx_q+2], 0
 .nor:
-    pop cx
-    mov ax, [fx_q]                     ; ...and back up
-    mul cx
-    mov bx, ax
-    push dx
-    mov ax, [fx_q+2]
-    mul cx
-    pop dx
-    add dx, ax
-    mov ax, bx
+    mov cx, [fx_tmp+2]
+    call fx_qmulcx
     call fx_setsgn
 .out:
     pop dx
@@ -734,55 +722,58 @@ fx_pow:
     push bx
     push cx
     push dx
-    mov ax, [fx_b]                     ; the exponent has to be whole
-    mov dx, [fx_b+2]
-    mov [fx_tmp], ax
-    mov [fx_tmp+2], dx
-    call fx_b_to_a
-    push word [fx_a]
-    push word [fx_a+2]
+    mov ax, [fx_a]                     ; the BASE, banked on the stack
+    mov dx, [fx_a+2]
+    push ax
+    push dx
+    call fx_b_to_a                     ; the exponent, to look at
+    mov ax, [fx_a]
+    mov dx, [fx_a+2]
+    push ax
+    push dx
     call fx_trunc
     pop dx
     pop ax
-    cmp ax, [fx_a]
-    jne .badpop
+    cmp ax, [fx_a]                     ; is it whole?
+    jne .bad
     cmp dx, [fx_a+2]
-    jne .badpop
-    mov ax, [fx_a]                     ; ...and fit a word once unscaled
-    mov dx, [fx_a+2]
+    jne .bad
+    call fx_amag                       ; ...and small enough to count with?
+    cmp word [fx_m1], FX_POW_MAX
+    jae .bad
+    mov ax, [fx_m0]
+    mov dx, [fx_m1]
     mov cx, FX_SCALE
-    idiv cx                            ; AX = the whole exponent, signed
-    mov cx, ax
-    pop dx                             ; the base, back off the stack below
+    div cx                             ; AX = |n|, and DIV cannot overflow
+    mov bx, ax                         ; because of the compare above
+    mov cl, [fx_sgn]
+    pop dx                             ; the base, back
     pop ax
-    mov [fx_a], ax
-    mov [fx_a+2], dx
-    mov bx, cx                         ; BX = |n|, CX keeps the sign
-    or bx, bx
-    jge .havebx
-    neg bx
-.havebx:
-    push cx
-    mov ax, [fx_a]                     ; the base, banked
-    mov dx, [fx_a+2]
     mov [fx_tmp], ax
     mov [fx_tmp+2], dx
+    or bx, bx                          ; n = 0: anything to the nothing is 1,
+    jnz .run                           ; including zero, which Excel calls an
+    mov ax, [fx_tmp]                   ; error - but 0^0 is the only case that
+    or ax, [fx_tmp+2]                  ; disagrees and it is refused
+    jz .bad2
+.run:
+    push cx
     mov word [fx_a], FX_SCALE          ; the running product starts at 1.00
     mov word [fx_a+2], 0
 .sq:
     or bx, bx
     jz .done
     mov ax, [fx_tmp]
-    mov dx, [fx_tmp+2]
     mov [fx_b], ax
-    mov [fx_b+2], dx
+    mov ax, [fx_tmp+2]
+    mov [fx_b+2], ax
     call fx_mul
     dec bx
     jmp short .sq
 .done:
     pop cx
-    or cx, cx
-    jge .out
+    or cl, cl
+    jz .out
     call fx_a_to_b                     ; a negative power is one over it
     mov word [fx_a], FX_SCALE
     mov word [fx_a+2], 0
@@ -790,8 +781,9 @@ fx_pow:
 .out:
     clc
     jmp short .fin
-.badpop:
-    add sp, 4
+.bad:
+    add sp, 4                          ; the banked base
+.bad2:
     call fx_azero
     stc
 .fin:
@@ -877,18 +869,19 @@ fx_a2i:
 ; -----------------------------------------------------------------------------
 fx_u32_to_a:
     push ax
+    push bx
     push cx
     push dx
+    mov word [fx_q+4], 0
+    mov word [fx_q+6], 0
     mov cx, FX_SCALE
     mov ax, [fx_q+2]
     mul cx
-    or dx, dx
+    or dx, dx                          ; the high word's own product must fit
     jnz .big
-    mov bx, ax
-    mov ax, [fx_q]
-    mul cx
-    add dx, bx
-    js .big
+    call fx_qmulcx
+    or dx, dx                          ; ...and the whole thing must stay
+    js .big                            ; positive in 31 bits
     mov [fx_a], ax
     mov [fx_a+2], dx
     clc
@@ -900,6 +893,7 @@ fx_u32_to_a:
 .out:
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
