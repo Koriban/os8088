@@ -10281,9 +10281,7 @@ $(PLANDIR)/PLAN.O88: $(PLANDIR)/plan.bin tools/os88pkg.py $(PKGZSTAMP)
 	 b=$$(python3 -c "import re,sys; s=open('apps/plan/plan.asm').read(); \
 	   m=re.search(r'OS88_BSS (\d+)', s); \
 	   print(m.group(1) if m else sys.exit('plan: no OS88_BSS literal'))"); \
-	 c=$$(python3 -c "import re; s=open('apps/plan/plan.asm').read(); \
-	   g=lambda n: int(re.search(r'^SH_CLAIM_'+n+r'_KB\s+equ\s+(\d+)', s, re.M).group(1)); \
-	   print((g('CELLS')+g('TXT')+g('STG'))*1024)"); \
+	 c=$$(python3 tools/planclaims.py); \
 	 echo "plan: image $$i + bss $$b = $$((i+b)) of 61440 (APP_MAX_SIZE)"; \
 	 echo "plan: region $$((i+b)) + claims $$c = $$((i+b+c)) of 51712 usable arena"; \
 	 if [ $$((i+b+c)) -gt 51712 ]; then \

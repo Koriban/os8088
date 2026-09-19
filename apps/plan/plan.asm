@@ -6839,49 +6839,20 @@ sh_mfire:
     je .help
     jmp .out
 .formula:
-    or al, al
-    jnz .fm1
-    mov al, SH_LD_NAME
-    call sh_ldlg_open_r
-    jmp .out
-.fm1:
-    cmp al, 1
-    jne .fm2
-    mov al, SH_LD_FUNC
-    call sh_ldlg_open_r
-    jmp .out
-.fm2:
-    cmp al, 2
-    jne .fm3
+    or al, al                          ; 81.75: two items. Paste Name and
+    jnz .fm1                           ; Paste Function wanted the list
+    mov al, SH_ID_GOTO                 ; dialog, Define Name the name table,
+    call sh_idlg_open_r                ; Note the text widget and Find its own
+    jmp .out                           ; scan - all four are cut, and Goto is
+.fm1:                                  ; what a 2048-row grid actually needs
     xor byte [sh_a1style], 1          ; Reference: the item relabels itself,
-    mov word [sh_i_formula+4], sh_it_ref_a1
+    mov word [sh_i_formula+2], sh_it_ref_a1
     cmp byte [sh_a1style], 0
     je .fmref
-    mov word [sh_i_formula+4], sh_it_ref_rc
+    mov word [sh_i_formula+2], sh_it_ref_rc
 .fmref:
     mov si, [sh_ownwin]
     call sh_repaint
-    jmp .out
-.fm3:
-    cmp al, 3
-    jne .fm4
-    mov al, SH_ID_DEFN
-    call sh_idlg_open_r
-    jmp .out
-.fm4:
-    cmp al, 4
-    jne .fm5
-    call sh_ndlg_open
-    jmp .out
-.fm5:
-    cmp al, 5
-    jne .fm6
-    mov al, SH_ID_GOTO
-    call sh_idlg_open_r
-    jmp .out
-.fm6:
-    mov al, SH_ID_FIND
-    call sh_idlg_open_r
     jmp .out
 .file:
     or al, al
@@ -7409,79 +7380,33 @@ sh_ps_props:
     push bx
     push cx
     push dx
-    push si
-    push di
-    push es
-    ; --- EVERY SOURCE READ FIRST, standing on the sheet the block came from.
-    ; CL says the source had a cell record, CH that it had a note; DL is its
-    ; format byte and DH its border/protection byte. The writes below all go
-    ; to the CURRENT sheet, so the two must not interleave (81.45.4).
+    push si                           ; SI is kept because the version this
+    push di                           ; replaced kept it, and a caller may
+    push es                           ; have come to rely on that
+    ; 81.75: what a paste carries besides the CONTENTS is the format byte, and
+    ; that is now all of it - there are no borders, no protection bits and no
+    ; notes left for the five Paste Special modes to choose between, so there
+    ; is no mode either. The source is read standing on the sheet the block
+    ; came from and the write goes to the current one, which is 81.45.4's
+    ; ordering rule and the reason the two halves do not interleave.
     xor cx, cx
-    xor dx, dx
     call sh_ps_srcsheet
-    mov al, [sh_ps_mode]
-    cmp al, SH_PS_NOTE
-    je .srcnote
     call sh_ps_src
     call sh_findcell
-    jnc .srcborder                    ; no source record: nothing to copy
+    jnc .done                         ; no source record: nothing to copy
     mov es, [sh_cellseg]
     mov dl, [es:di+SH_C_FMT]
     mov cl, 1
-.srcborder:
-    call sh_ps_src
-    call sh_bt_getw                   ; AL = the source's border byte, 0 none,
-    mov dh, al                        ; AH its number format (81.55)
-    mov [sh_ps_nf], ah
-    cmp byte [sh_ps_mode], SH_PS_ALL  ; All carries the note as well
-    jne .srcdone
-.srcnote:
-    call sh_ps_src
-    call sh_nt_get
-    jnc .srcdone                      ; no note on the source: leave the
-    mov si, ax                        ; destination's own alone. Excel's All
-    call sh_note_load                 ; does not erase a note either
-    mov ch, 1
-.srcdone:
+.done:
     call sh_ps_mysheet                ; ...and back, before anything is written
-    mov al, [sh_ps_mode]
-    cmp al, SH_PS_NOTE
-    je .putnote
     or cl, cl
-    jz .noborder                      ; the source had no record at all
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_findcell
-    jnc .noborder                     ; no DESTINATION record either - the
-    mov es, [sh_cellseg]              ; same scope limit sh_fdlg_apply
-    mov [es:di+SH_C_FMT], dl          ; documents for the Format dialogs
-.noborder:
-    mov al, [sh_ps_nf]
-    or al, dh
-    jz .clrborder
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_bt_addcell
-    jc .fmtdone                       ; table full: silent, as sh_bdlg_apply is
-    mov es, [sh_bordseg]
-    mov [es:di+4], dh
-    mov al, [sh_ps_nf]
-    mov [es:di+5], al
-    jmp .fmtdone
-.clrborder:
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    call sh_bt_removecell
-.fmtdone:
-    cmp byte [sh_ps_mode], SH_PS_ALL
-    jne .out
-.putnote:
-    or ch, ch
     jz .out
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    mov si, sh_notetext
-    call sh_nt_set                    ; CF=1 = arena or table full, silent
+    call sh_findcell
+    jnc .out                          ; no DESTINATION record either - the
+    mov es, [sh_cellseg]              ; same scope limit sh_fdlg_apply
+    mov [es:di+SH_C_FMT], dl          ; documents for the Format dialogs
 .out:
     pop es
     pop di
@@ -11525,352 +11450,6 @@ sh_twpts:
     ret
 
 ; =============================================================================
-; Formula > Note... (stage 3.0b) - Excel 2.1's cell notes, and the FIRST
-; consumer of apps/os88text.inc. Everything above this point that takes typed
-; input takes it one character at a time into a fixed field; this is the first
-; place in Sheet where a user can type a paragraph.
-;
-; It edits sh_notetext, a bss COPY, and only writes through to the note table
-; on OK - so Cancel is free and a commit refused for want of arena space leaves
-; the old note exactly as it was, rather than half-replacing it.
-;
-; It also remembers the cell it was opened on (sh_notecol/sh_noterow) instead
-; of reading the live selection at OK time. This dialog is NON-MODAL like every
-; other one here, so the user can move the selection while it is open; writing
-; to whatever happens to be selected on OK would attach the note to the wrong
-; cell, which is exactly the kind of quiet wrongness that is hard to notice.
-; =============================================================================
-SH_NDLG_W    equ 300
-SH_NDLG_BX1  equ 8                   ; the text box, content-relative
-SH_NDLG_BY1  equ 24
-SH_NDLG_BX2  equ 214
-SH_NDLG_BY2  equ 112                 ; -> 24 columns x 10 rows = 240 cells,
-                                     ; which is what SH_NOTEMAX is sized from
-SH_NDLG_BTX1 equ 222                 ; OK / Cancel, both 64 wide -
-                                     ; 'Cancel' is 6 glyphs at the fixed 8px
-                                     ; cell, so a narrower button clips its
-                                     ; own label (it did, at 34)
-SH_NDLG_BTX2 equ 286
-SH_NDLG_OKY1 equ 24
-SH_NDLG_OKY2 equ 44
-SH_NDLG_CAY1 equ 52
-SH_NDLG_CAY2 equ 72
-SH_NDLG_H    equ SH_NDLG_BY2 + SH_DLG_BMARG + TITLE_H + 1   ; the text box is
-                                     ; the lowest element, not the buttons
-
-sh_ndlg_tpl:
-    dw 0, 0, SH_NDLG_W, SH_NDLG_H
-    dw sh_s_ndlg_title, sh_ndlg_paint, sh_ndlg_onkey, sh_ndlg_onclick
-
-sh_s_ndlg_title: db 'Note', 0
-sh_s_ndlg_cell:  db 'Cell:', 0
-sh_s_ndlg_ok:    db 'OK', 0
-sh_s_ndlg_can:   db 'Cancel', 0
-
-; -----------------------------------------------------------------------------
-; sh_ndlg_open - load the selected cell's note into the edit buffer and put
-; the dialog up. Same single-instance gate as sh_bdlg_open.
-; -----------------------------------------------------------------------------
-sh_ndlg_open:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    cmp byte [sh_noteopen], 0
-    jne .out
-    mov ax, [sh_selcol]                ; pin the cell NOW - see this section's
-    mov [sh_notecol], ax               ; header on why not at OK time
-    mov bx, [sh_selrow]
-    mov [sh_noterow], bx
-    mov byte [sh_notetext], 0          ; no note = an empty box, not stale text
-    call sh_nt_get
-    jnc .nonote
-    mov si, ax                         ; ax = the text's offset in the arena
-    call sh_note_load
-.nonote:
-    mov si, sh_notebox                 ; the field, over the buffer
-    mov word [si + TX_BUF], sh_notetext
-    mov word [si + TX_MAX], SH_NOTEMAX
-    mov word [si + TX_TOP], 0
-    mov byte [si + TX_FOCUS], 1
-    mov di, sh_notetext
-    call os88text_set                  ; sets LEN/CAR from the buffer's content
-    call OSAPI_VIDEO
-    sub ax, SH_NDLG_W
-    sar ax, 1
-    mov [sh_ndlg_tpl + WT_X], ax
-    sub bx, SH_NDLG_H
-    sar bx, 1
-    cmp bx, MBAR_H + 8
-    jge .placed
-    mov bx, MBAR_H + 8
-.placed:
-    mov [sh_ndlg_tpl + WT_Y], bx
-    mov si, sh_ndlg_tpl
-    call OSAPI_WM_CREATE
-    jc .out
-    mov [sh_ndlg_win], bx
-    mov byte [sh_noteopen], 1
-    call OSAPI_WM_SHOW
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_note_load - copy the NUL string at [sh_txtseg]:SI into sh_notetext,
-; clipped to SH_NOTEMAX-1. in: SI = the arena offset. Preserves everything.
-;
-; A byte-at-a-time copy through ES rather than a rep movsb, so DS is never
-; changed at all - the alternative wants DS pointing at the claim, and every
-; sh_* symbol in this file is DS-relative.
-; -----------------------------------------------------------------------------
-sh_note_load:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    mov es, [sh_txtseg]
-    mov di, sh_notetext
-    mov cx, SH_NOTEMAX - 1
-.copy:
-    jcxz .done
-    mov al, [es:si]
-    or al, al
-    jz .done
-    mov [di], al
-    inc si
-    inc di
-    dec cx
-    jmp .copy
-.done:
-    mov byte [di], 0
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_ndlg_paint - SI = the dialog window
-; -----------------------------------------------------------------------------
-sh_ndlg_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, si
-    call OSAPI_WM_CONTENT               ; ax,dx = the content origin
-    mov [sh_ndlg_ox], ax
-    mov [sh_ndlg_oy], dx
-
-    mov cx, ax                          ; the 'Cell:' label and the reference
-    add cx, SH_NDLG_BX1
-    mov dx, [sh_ndlg_oy]
-    add dx, 6
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, sh_s_ndlg_cell
-    call OSAPI_FONT_STR_XPARENT
-    mov di, sh_tbuf                     ; the reference, built the same way the
-    mov ax, [sh_notecol]                ; formula bar's own name box builds it
-    call sh_colname
-    mov si, sh_colbuf
-    call sh_strcpy_to_di
-    mov ax, [sh_noterow]
-    inc ax
-    call sh_itoa
-    mov si, sh_numbuf
-    call sh_strcpy_to_di
-    mov cx, [sh_ndlg_ox]
-    add cx, SH_NDLG_BX1 + 48
-    mov dx, [sh_ndlg_oy]
-    add dx, 6
-    mov si, sh_tbuf
-    call OSAPI_FONT_STR_XPARENT
-
-    mov si, sh_notebox                  ; the field's rect is refreshed from
-    mov ax, [sh_ndlg_ox]                ; the LIVE content origin every paint,
-    add ax, SH_NDLG_BX1                 ; because the window moves - the same
-    mov [si + TX_X1], ax                ; painter/hit-tester drift the scroll
-    mov ax, [sh_ndlg_ox]                ; bars already had to solve
-    add ax, SH_NDLG_BX2
-    mov [si + TX_X2], ax
-    mov ax, [sh_ndlg_oy]
-    add ax, SH_NDLG_BY1
-    mov [si + TX_Y1], ax
-    mov ax, [sh_ndlg_oy]
-    add ax, SH_NDLG_BY2
-    mov [si + TX_Y2], ax
-    call os88text_draw
-
-    mov ax, [sh_ndlg_ox]                ; OK - os88ui_btn takes BX = a POINTER
-    add ax, SH_NDLG_BTX1                ; to the rect, not the rect in
-    mov [sh_ndlg_rect], ax              ; AX/BX/CX/DX
-    mov ax, [sh_ndlg_oy]
-    add ax, SH_NDLG_OKY1
-    mov [sh_ndlg_rect+2], ax
-    mov ax, [sh_ndlg_ox]
-    add ax, SH_NDLG_BTX2
-    mov [sh_ndlg_rect+4], ax
-    mov ax, [sh_ndlg_oy]
-    add ax, SH_NDLG_OKY2
-    mov [sh_ndlg_rect+6], ax
-    mov bx, sh_ndlg_rect
-    mov si, sh_s_ndlg_ok
-    mov di, OS88UI_DEF
-    call os88ui_btn
-    mov ax, [sh_ndlg_oy]                ; Cancel - same x, two new y's
-    add ax, SH_NDLG_CAY1
-    mov [sh_ndlg_rect+2], ax
-    mov ax, [sh_ndlg_oy]
-    add ax, SH_NDLG_CAY2
-    mov [sh_ndlg_rect+6], ax
-    mov bx, sh_ndlg_rect
-    mov si, sh_s_ndlg_can
-    xor di, di
-    call os88ui_btn
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_ndlg_onkey - AL = ascii, AH = scan code. The field gets first refusal;
-; Escape is the only key this dialog claims for itself.
-; -----------------------------------------------------------------------------
-sh_ndlg_onkey:
-    push ax
-    push si
-    cmp al, 27
-    je .cancel
-    mov si, sh_notebox
-    call os88text_key
-    jc .out                             ; the field did not want it
-    call os88text_draw                  ; the BOX, not the whole dialog: the
-    jmp .out                            ; labels and both buttons did not
-                                        ; change, and os88ui_btn's own erase
-                                        ; would flash them on every keystroke.
-                                        ; The block's rect is refreshed by
-                                        ; every real paint and the window
-                                        ; cannot move mid-callback (the gfx
-                                        ; lock is held) - the same trust the
-                                        ; onclick hit-test below already
-                                        ; places in it
-.cancel:
-    call sh_ndlg_close
-.out:
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_ndlg_onclick - CX,DX = the click, screen-absolute
-; -----------------------------------------------------------------------------
-sh_ndlg_onclick:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov si, sh_notebox                  ; the field first: its own rect is
-    call os88text_click                 ; already screen-absolute from the
-    jnc .redraw                         ; last paint, so no conversion here
-    mov bx, [sh_ndlg_win]
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT
-    pop dx
-    pop cx
-    sub cx, ax                          ; cx,dx = content-relative
-    sub dx, [sh_ndlg_oy]
-    cmp cx, SH_NDLG_BTX1
-    jb .out
-    cmp cx, SH_NDLG_BTX2
-    ja .out
-    cmp dx, SH_NDLG_OKY1
-    jb .out
-    cmp dx, SH_NDLG_OKY2
-    jle .doOK
-    cmp dx, SH_NDLG_CAY1
-    jb .out
-    cmp dx, SH_NDLG_CAY2
-    jle .doCancel
-    jmp .out
-.redraw:
-    mov si, sh_notebox                  ; only the caret moved: redraw the
-    call os88text_draw                  ; box, not the dialog's chrome
-    jmp .out
-.doOK:
-    call sh_ndlg_apply
-    call sh_ndlg_close
-    jmp .out
-.doCancel:
-    call sh_ndlg_close
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_ndlg_apply - commit the edit buffer to the cell the dialog was opened on.
-; An empty buffer removes the note (sh_nt_set's own rule), which is how this
-; dialog clears one - Excel 2.1's Note dialog has no separate Delete either.
-; -----------------------------------------------------------------------------
-sh_ndlg_apply:
-    push ax
-    push bx
-    push si
-    mov ax, [sh_notecol]
-    mov bx, [sh_noterow]
-    mov si, sh_notetext
-    call sh_nt_set                      ; CF=1 = table or arena full. Silent,
-                                        ; the same scope limit sh_bdlg_apply
-                                        ; documents for a full border table.
-    mov si, [sh_ownwin]
-    call sh_repaint
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_ndlg_close
-; -----------------------------------------------------------------------------
-sh_ndlg_close:
-    push ax
-    push bx
-    mov bx, [sh_ndlg_win]
-    or bx, bx
-    jz .out
-    mov word [sh_ndlg_win], 0
-    mov byte [sh_noteopen], 0
-    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
-.out:
-    pop bx
-    pop ax
-    ret
 
 
 section .text
@@ -24211,7 +23790,7 @@ sh_mf_ret:
 sh_mtab:
     dw sh_m_file,    sh_i_file,    4
     dw sh_m_edit,    sh_i_edit,    12
-    dw sh_m_formula, sh_i_formula, 7
+    dw sh_m_formula, sh_i_formula, 2
     dw sh_m_format,  sh_i_format,  7
     dw sh_m_options, sh_i_options, 5
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -24225,7 +23804,7 @@ sh_mtab:
 ; Define Name needed, and Reference had nowhere to show its answer until the
 ; reference box existed.
 sh_m_formula:    db 'Formula', 0
-sh_i_formula:    dw sh_it_pname, sh_it_pfunc, sh_it_ref_a1, sh_it_defname, sh_it_note, sh_it_goto, sh_it_find
+sh_i_formula:    dw sh_it_goto, sh_it_ref_a1
 sh_it_pname:     db 'Paste Name...', 0
 sh_it_pfunc:     db 'Paste Function...', 0
 sh_it_ref_a1:    db 'Reference: A1', 0     ; the same relabel-by-repointing
