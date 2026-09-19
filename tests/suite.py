@@ -4790,6 +4790,15 @@ SOAK = [
         "off the glass (81.48), and MIRR discounted from the wrong period - "
         "which SPEC's own reference table had done too",
         needs=("marty",), serial=True),
+    Row("sheetdbcmd", "soak", py("tests/sheetdbcmd.py"), 450.0,
+        "SPEC.md 81.71: Data > Find, Extract and Delete - 81.65's criteria "
+        "engine driven from the MENU, over 81.69's two defined names. Find "
+        "selecting the first matching record whole and then stepping to the "
+        "next, the item renaming itself to Exit Find, Extract copying both "
+        "matches into a range whose header names a REORDERED SUBSET of the "
+        "fields, and Delete compacting the database while the cell one row "
+        "below it stays put - which is what separates it from Edit > Delete",
+        needs=("marty",), serial=True),
     Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 400.0,
         "SPEC.md 81.70: Options > Freeze Panes. Nothing a file holds can "
         "show a freeze, so every assertion is a cell's text read off the "

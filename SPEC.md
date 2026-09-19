@@ -105538,6 +105538,152 @@ is taken at B2 and the selection driven six rows down and twelve columns
 right, which puts real columns G..N and real rows 6..8 in a window still
 showing `ZZ` in its corner, `C6` beside it and `R5` under it.
 
+### 81.71 Data ▸ Find, Extract and Delete
+
+§81.39.4 called the criteria engine an **unspent enabler**, and this is
+spending it: three of Excel's seven missing Data commands, adding no matching
+logic at all. Every one of them is `sh_dbrowmatch` (§81.65) in a loop, and the
+rectangles it walks come from §81.69's two defined names rather than from a
+formula's argument list — `sh_dbcmd_ranges` reads `DATABASE` and `CRITERIA`
+through `sh_name_lookup` and fills the identical `sh_db_c1..sh_cr_r2` that
+`shm_pdatabase` fills by parsing. Past that point the two callers are the same
+code.
+
+**The whole family runs in `CHART.OVL`**, behind one new verb (`SHM_DBCMD`,
+`SHM_N` 12 → 13). That is forced rather than chosen: `sh_dbrowmatch`,
+`sh_dbrowok`, `sh_dbtest` and `sh_dbcmp` are all `.modc` and none is exported,
+so a resident command would have had to duplicate the matcher. What stays
+resident is what a *menu* needs — the dispatch, the alert, the item's relabel
+and the door. `sh_dbc_kind` picks the command; **the answer comes back in
+`sh_dbc_res`, not in CF**, because CF on that door already means "is there a
+module at all" and a second meaning on it could not be told from the first.
+
+**`sh_db_busy` has a writer outside `shm_pdatabase` for the first time.** It
+is set around each command's whole walk for §81.65's own reason: the eight
+rectangle words stay live across the scan, so a criteria cell holding its own
+`=DSUM(...)` would trample them mid-walk. A command that arrives while a
+database *function* is evaluating refuses and says so.
+
+**Both rectangles are normalised here and nowhere else** (`sh_dbcmd_norm`).
+`shm_pdatabase` never had to: a formula's range argument reaches it from
+`sh_pargref` already ordered. A NAME does not — `sh_name_def` stores both
+corners as the selection gave them — so `Set Database` on a selection dragged
+*upwards* binds `r1 > r2`, and every `ja`/`jg` below would walk zero rows and
+report "no records match", which reads as a broken criteria rather than a
+backwards drag.
+
+#### 81.71.1 Find, and the item that renames itself
+
+The Reference Guide's rule, followed exactly: *"If the active cell is outside
+the database when you choose Data Find, Microsoft Excel selects the first
+record in the database that matches the criteria. If the active cell is inside
+the database ... the first record BELOW the active cell."* The whole record is
+selected, not one cell of it.
+
+The item relabels to `Exit Find` — Excel's own (*"Exit Find appears on the Data
+menu only when you are in Data Find"*) — through the relabel-by-repointing the
+Options toggles and §81.70's Freeze Panes already use. **Which means stepping
+is a two-item loop, and that is Excel's, not a shortfall**: leaving find mode
+touches nothing but the mode and the label, so the record stays selected, and
+the *next* `Find` starts below it. The Guide spells the loop out — *"When you
+exit Data Find, the matching record you last found stays selected. If you
+choose Data Find again, Microsoft Excel selects the next matching record. This
+means that you can find and replace matching database records by choosing Data
+Find to find the next matching record after each edit."* What Excel has and
+this does not is the other way through the same state: in find mode its scroll
+bars go striped and **scrolling** moves between matching records only. That
+needs a second meaning for both bars and is not here, so the menu is the only
+way round the loop.
+
+The test's own sequence is therefore `Find` → `Exit Find` → `Find`, and it was
+written the other way first — two `Find`s in a row, which the relabel turns
+into find-then-exit and which read as "the second Find did nothing".
+
+Walking off the last match says `Last matching record.`; finding nothing at
+all from a search that started at the top says `No records match the
+criteria.` They are different sentences because they are different facts, and
+a search that began part-way down cannot honestly claim the second.
+
+#### 81.71.2 Extract, and the one control Excel's dialog has
+
+The extract range is the **selection**, and `SH_FDK_EXTRACT` is the first kind
+in that engine to **pin** it at open. §81.6 says a dialog pins the cell it was
+opened on; in practice only `sh_ndlg` did, and `sh_fdlg_apply0` reads the live
+`sh_selcol`/`sh_selrow` at OK. These windows are not modal, the selection can
+move while one is up, and here the selection *is* the argument — so
+`.prefillextract` banks all four corners and the module reads those.
+
+The range's first row names the fields to take, resolved by `sh_dbresolve` —
+the identical resolver the criteria headers use, so a field is named the same
+way everywhere. A subset is allowed and order need not match, which is Excel's
+rule. **A range whose header names no real field at all refuses** rather than
+extracting nothing, because an empty extract and a mistyped header look
+identical on the glass.
+
+Two shapes, both Excel's. A range that is **only** its header row extracts
+downward unbounded; a range with rows beneath it takes as many records as fit
+and says `The extract range is too small.` when they did not all fit.
+Afterwards the rows below what this run wrote are cleared — Excel clears *"all
+cells below the field names to the bottom of the worksheet"*, and without it
+the previous extract's tail reads as part of this one. This clears what it
+wrote plus `SH_DBC_EXTAIL` = 64 rows past it, which is the same thing for any
+sheet this machine holds and is bounded work rather than a walk to the last
+row.
+
+**Values, never formulas**, per the Guide: *"If a record contains a formula,
+the extract range will contain only the value produced by that formula and not
+the formula itself."* `sh_dbcmd_put` therefore reads through `sh_getcell2`,
+which hands back the evaluated cell, and never touches the formula text.
+
+Excel's dialog carries one control, a `Unique Records Only` **check box**;
+this engine paints a radio column, so the same single bit is asked as a
+two-way pick (`All Matching Records` / `Unique Records Only`). Identical
+meaning, no sixth dialog engine, and the same divergence §81.31 already took
+for Gridlines and Formulas.
+
+#### 81.71.3 Delete, which is not `sh_rowcol_op`
+
+*"When you delete records from the database, the other records in the database
+shift up to fill any gaps, but the rest of the worksheet is not affected ...
+the cells below the database do not shift up ten rows, as they would if you
+used the Edit Delete command."* So only the database's own rectangle moves,
+cell by cell, and a cell one column to its right stays exactly where it is —
+which rules out the row operation the Edit menu uses.
+
+Records are carried as **text**: `sh_cell_totext` out, `sh_commit` back. That
+is the pair Sort's own carry (§81.61) and the block clipboard (§81.18) already
+move a record with, so values, labels and formulas need no three cases here,
+and a moved formula's references follow it through `sh_formula_copyshift` the
+same way Sort's do. Compaction runs **top down and only ever writes above
+where it reads**, so no snapshot is needed — the destination row has already
+been read past.
+
+Afterwards `DATABASE` names one row fewer per deleted record, so the next
+command does not walk the blanks this one left; deleting every record leaves
+the name its header row and nothing else.
+
+**The alert is the feature, not a courtesy.** The Guide is explicit that
+`Data Delete` cannot be reversed with `Edit ▸ Undo` and that *"a message warns
+that records will be permanently deleted"*, so `os88ui_ask` with
+`OS88UI_AYESNO` is on the path and a dismissed alert deletes nothing. Extract's
+`sh_ud_kind` byte is `SH_UL_DROP` for the same reason — Undo saying so rather
+than appearing to offer something it cannot do.
+
+#### 81.71.4 What it cost, and the menu's order
+
+Three new vectors (`sh_cell_totext`, `sh_clearcell`, `sh_formula_copyshift`;
+`SH_NVEC` 96 → 99) and 38 bytes of bss, 12 of which are the vector table's own
+growth.
+
+The Data menu is now in **Excel's own order**
+(`LIBRARY/documentation/screenshots/excel/menu_data_full.png`): Find, Extract,
+Delete, Set Database, Set Criteria, Sort, then this app's three chart items.
+`Sort` moved from index 0 to 5 and the chart items after it — a real cost paid
+once, and the reason this package has a menu bar of its own (§81.24) is to
+look like the captures.
+
+`tests/sheetdbcmd.py` is the gate.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment

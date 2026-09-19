@@ -776,7 +776,11 @@ SHM_MRESUME equ 11                  ; and a run starting or carrying on
 SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
 SHM_CELL   equ 13                   ; 81.66: CELL
 SHM_MATRIX equ 14                   ; 81.67: MDETERM...GROWTH
-SHM_N      equ 12
+SHM_DBCMD  equ 15                   ; 81.71: Data > Find/Extract/Delete/Form,
+                                     ; which are the criteria engine driven
+                                     ; from a MENU rather than from a formula
+SHM_N      equ 13                   ; a COUNT, not a max: sh_modc_ext does
+                                     ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
 sh_modc0:
@@ -799,6 +803,7 @@ sh_mverb:
     dw sh_m_pdatabase                                ; 81.65
     dw sh_m_pcell                                     ; 81.66
     dw sh_m_pmatrix                                    ; 81.67
+    dw sh_m_dbcmd                                       ; 81.71
 
 sh_m_doread:
     call shm_doread
@@ -845,6 +850,13 @@ sh_m_pmatrix:                       ; 81.67
     call shm_pmatrix
     clc
     retf
+sh_m_dbcmd:                         ; 81.71: a Data menu command, NOT a
+    call shm_dbcmd                  ; formula. CF stays the MODULE-PRESENCE
+    clc                             ; answer here like every verb above it;
+    retf                            ; what the command itself decided comes
+                                    ; back in [sh_dbc_res], because a second
+                                    ; meaning on CF could not be told from
+                                    ; ch_ovcall's own CF=1
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -1324,6 +1336,15 @@ sh_x_sh_foldvalue:                     ; 81.65
 sh_x_sh_funcfinish:
     call sh_funcfinish
     retf
+sh_x_sh_cell_totext:                ; 81.71: Data ▸ Delete/Extract move whole
+    call sh_cell_totext             ; RECORDS, and totext+commit is how this
+    retf                            ; app already moves one (Sort's own carry,
+sh_x_sh_clearcell:                  ; and the block clipboard, 81.18)
+    call sh_clearcell
+    retf
+sh_x_sh_formula_copyshift:          ; ...and a moved formula's own references
+    call sh_formula_copyshift       ; follow it, Sort's own rule (81.61)
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1355,6 +1376,7 @@ sh_ovshims:
     dw sh_x_sh_recalc_all, sh_x_sh_repaint, sh_x_sh_scrollto, sh_x_sh_str_want
     dw sh_x_sh_undo_drop
     dw sh_x_sh_foldvalue, sh_x_sh_funcfinish                          ; 81.65
+    dw sh_x_sh_cell_totext, sh_x_sh_clearcell, sh_x_sh_formula_copyshift ; 81.71
 sh_entry:
     push ax
     push dx
@@ -2482,6 +2504,10 @@ sh_ud_cant:   db MENU_DIS, "Can't Undo", 0
 sh_ud_kind:   db SH_UL_DROP, SH_UL_DROP, SH_UL_DROP, SH_UL_INS, SH_UL_DEL
               db SH_UL_DROP, SH_UL_DROP, SH_UL_CLEAR, SH_UL_DROP, SH_UL_KEEP
               db SH_UL_SORT, SH_UL_KEEP, SH_UL_KEEP, SH_UL_PSPEC, SH_UL_DROP
+              db SH_UL_DROP                 ; 81.71: Extract WRITES cells, and
+                                             ; the Reference Guide says Undo
+                                             ; cannot reverse it - so DROP,
+                                             ; which is Undo saying so
 sh_ud_kind_end:                        ; one entry per sh_fdlg kind: asserted
                                        ; beside SH_FDK_N, which is defined later
 
@@ -6907,34 +6933,50 @@ sh_mfire:
                                         ; so every click ran it regardless.
                                         ; Now a real dispatch, matching the
                                         ; or al,al chains above.
-    mov al, SH_ID_SORT                 ; stage 4.5: the KEY first, then the
-    call sh_idlg_open                  ; order - see sh_idlg_apply's .sortkey
-    jmp .out
+    call sh_docmd_dfind                ; 0: Find / Exit Find (81.71). NOT
+    jmp .out                           ; sh_docmd_find, which is Formula's own
 .data1:
     cmp al, 1
     jne .data2
-    call sh_docmd_chart
+    mov al, SH_FDK_EXTRACT             ; 1: Extract... (81.71)
+    call sh_fdlg_open
     jmp .out
 .data2:
     cmp al, 2
     jne .data3
-    mov al, SH_FDK_GAL
-    call sh_fdlg_open
+    call sh_docmd_dbdelete             ; 2: Delete (81.71)
     jmp .out
 .data3:
     cmp al, 3
     jne .data4
-    call sh_docmd_chartexport
+    mov si, sh_s_dbname                ; 3: Set Database
+    call sh_docmd_setname
     jmp .out
 .data4:
     cmp al, 4
     jne .data5
-    mov si, sh_s_dbname
+    mov si, sh_s_critname              ; 4: Set Criteria
     call sh_docmd_setname
     jmp .out
 .data5:
-    mov si, sh_s_critname
-    call sh_docmd_setname
+    cmp al, 5
+    jne .data6
+    mov al, SH_ID_SORT                 ; 5: stage 4.5's Sort - the KEY first,
+    call sh_idlg_open                  ; then the order (sh_idlg_apply's own
+    jmp .out                           ; .sortkey)
+.data6:
+    cmp al, 6
+    jne .data7
+    call sh_docmd_chart                ; 6..8: this app's own charting, which
+    jmp .out                           ; real Excel has no Data item for
+.data7:
+    cmp al, 7
+    jne .data8
+    mov al, SH_FDK_GAL
+    call sh_fdlg_open
+    jmp .out
+.data8:
+    call sh_docmd_chartexport
     jmp .out
 .sheets:
     xor ah, ah                        ; al = item index = target sheet 0..3
@@ -9071,6 +9113,180 @@ sh_docmd_setname:
 sh_s_dbname:   db 'DATABASE', 0
 sh_s_critname: db 'CRITERIA', 0
 
+; =============================================================================
+; DATA ▸ FIND / EXTRACT / DELETE / FORM (SPEC.md 81.71)
+;
+; §81.65 built the criteria engine and §81.69 the two names it reads its
+; rectangles from; these four commands are that engine driven from the MENU
+; instead of from a formula, and they add no matching logic of their own -
+; every one of them is `sh_dbrowmatch` in a loop.
+;
+; THE WHOLE FAMILY RUNS IN CHART.OVL, behind one new verb (SHM_DBCMD), for
+; the reason §81.65 put the engine there: sh_dbrowmatch, sh_dbrowok,
+; sh_dbtest and sh_dbcmp are all .modc and none of them is exported, so a
+; resident command would have to duplicate the matcher rather than call it.
+; What stays resident is what a menu needs: the dispatch, the alert, the
+; item's own relabel, and this door.
+;
+; sh_dbc_kind picks the command and sh_dbc_res carries its answer back,
+; because CF on that door already means "is there a module at all".
+; =============================================================================
+SH_DBC_FIND    equ 0                 ; the next matching record, forwards
+SH_DBC_EXTRACT equ 1                 ; ...copied into the extract range
+SH_DBC_DELETE  equ 2                 ; ...or removed from the database
+SH_DBC_FORM    equ 3                 ; ...or shown one record at a time
+
+SH_DBR_OK      equ 0                 ; sh_dbc_res: what the command decided
+SH_DBR_NODB    equ 1                 ; no DATABASE name is bound
+SH_DBR_NOCRIT  equ 2                 ; ...or no CRITERIA name
+SH_DBR_NOMATCH equ 3                 ; nothing in the database matches
+SH_DBR_LAST    equ 4                 ; Find: already on the last match
+SH_DBR_NOROOM  equ 5                 ; Extract: the range could not hold them
+SH_DBR_NOFIELD equ 6                 ; Extract: the range names no real field
+SH_DBR_BUSY    equ 7                 ; a database function is already running
+
+; Excel clears "all cells below the field names to the bottom of the
+; worksheet" when the extract range is its header row alone. This clears the
+; rows it wrote plus this many past them, which is the same thing for any
+; sheet this machine holds and is bounded work rather than a walk to row 16383
+SH_DBC_EXTAIL  equ 64
+
+; -----------------------------------------------------------------------------
+; sh_docmd_dbrun - in: AL = one of SH_DBC_*. Runs it in the module and turns
+; [sh_dbc_res] into a status line. out: CF=1 if the command actually did
+; something (the caller repaints); every register preserved.
+; -----------------------------------------------------------------------------
+sh_docmd_dbrun:
+    push ax
+    push bx
+    push bp
+    mov [sh_dbc_kind], al
+    mov byte [sh_dbc_res], SH_DBR_OK
+    mov bp, SHM_DBCMD
+    call ch_ovcall
+    jc .nomod
+    mov bl, [sh_dbc_res]
+    xor bh, bh
+    shl bx, 1
+    mov ax, [sh_dbc_msg + bx]
+    mov [sh_msg], ax
+    cmp byte [sh_dbc_res], SH_DBR_OK   ; only a clean run changed anything
+    je .did
+    clc
+    jmp .out
+.did:
+    stc
+    jmp .out
+.nomod:
+    mov word [sh_msg], sh_s_noovl
+    clc
+.out:
+    pop bp
+    pop bx
+    pop ax
+    ret
+
+sh_dbc_msg:
+    dw sh_s_db_done, sh_s_db_nodb, sh_s_db_nocrit, sh_s_db_nomatch
+    dw sh_s_db_last, sh_s_db_noroom, sh_s_db_nofield, sh_s_db_busy
+sh_s_db_done:   db 'Ready', 0
+sh_s_db_nodb:   db 'Set Database first.', 0
+sh_s_db_nocrit: db 'Set Criteria first.', 0
+sh_s_db_nomatch: db 'No records match the criteria.', 0
+sh_s_db_last:   db 'Last matching record.', 0
+sh_s_db_noroom: db 'The extract range is too small.', 0
+sh_s_db_nofield: db 'The extract range names no field.', 0
+sh_s_db_busy:   db 'A database function is running.', 0
+sh_s_db_delq:   db 'Delete every matching record?', 0
+
+; -----------------------------------------------------------------------------
+; sh_docmd_dfind - Data ▸ Find, and Data ▸ Exit Find, which are the SAME item
+; relabelled (Excel's own: "Exit Find appears on the Data menu only when you
+; are in Data Find"). Choosing Find again selects the NEXT matching record,
+; which is how Excel's find-and-replace-one-at-a-time works.
+; -----------------------------------------------------------------------------
+sh_docmd_dfind:
+    push ax
+    cmp byte [sh_dfindmode], 0
+    je .start
+    call sh_dfind_exit                   ; Exit Find
+    jmp .repaint
+.start:
+    mov al, SH_DBC_FIND
+    call sh_docmd_dbrun
+    jnc .out                           ; refused: the message is already up
+    mov byte [sh_dfindmode], 1          ; ...and the item becomes Exit Find
+    call sh_dfind_mark
+.repaint:
+    push si
+    mov si, [sh_ownwin]
+    call sh_repaint
+    pop si
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dfind_exit - leave find mode. Excel leaves the record it last found
+; SELECTED, which is what makes find-then-edit-then-find-again work, so this
+; touches nothing but the mode and the item's label.
+; -----------------------------------------------------------------------------
+sh_dfind_exit:
+    mov byte [sh_dfindmode], 0
+    ; fall through
+
+; sh_dfind_mark - derive the Data menu's FIRST item from [sh_dfindmode], the
+; relabel-by-repointing the Options toggles and Freeze Panes (81.70) use
+sh_dfind_mark:
+    push ax
+    mov ax, sh_it_dfind
+    cmp byte [sh_dfindmode], 0
+    je .set
+    mov ax, sh_it_exitfnd
+.set:
+    mov [sh_i_data], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_dbdelete - Data ▸ Delete. The Reference Guide is explicit that
+; this one WARNS first ("A message warns that records will be permanently
+; deleted from the database") and that Edit ▸ Undo cannot reverse it, so the
+; alert is the feature and not a courtesy.
+; -----------------------------------------------------------------------------
+sh_docmd_dbdelete:
+    push ax
+    push bx
+    push si
+    push di
+    mov al, OS88UI_AYESNO
+    mov bx, [sh_ownwin]
+    mov si, sh_s_db_delq
+    mov di, sh_ondbdelete
+    call os88ui_ask
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; os88ui_ask's completion (SPEC.md 75.3): AL = the button index, or
+; OS88UI_ACANCEL when it was dismissed. SI is OUR window, the gfx lock is
+; held and the alert is already gone.
+sh_ondbdelete:
+    push ax
+    cmp al, 0                          ; Yes, and nothing else - a dismissed
+    jne .out                           ; alert must not delete records
+    mov al, SH_DBC_DELETE
+    call sh_docmd_dbrun
+    jnc .out
+    call sh_recalc_all                 ; records moved: every formula that
+    call sh_repaint                    ; named one has to be re-folded
+.out:
+    call sh_drawstatus
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_chartexp_ondlg - the Export Chart dialog's completion proc (SPEC.md
 ; 38.6, same shape as sh_ondlg but writing the chart buffer, not the sheet,
@@ -9883,9 +10099,10 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot, sh_s_fd_extract
 sh_s_fd_pspec:  db 'Paste Special', 0
 sh_s_fd_prot:   db 'Cell Protection', 0
+sh_s_fd_extract: db 'Extract', 0
 sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
@@ -9898,7 +10115,7 @@ sh_s_fd_font:   db 'Font', 0
 sh_s_fd_insert: db 'Insert', 0
 sh_s_fd_delete: db 'Delete', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot, sh_fd_i_extract
 ; Excel's Cell Protection dialog is two INDEPENDENT CHECK BOXES, Locked and
 ; Hidden. This is the four combinations as a radio, which is exactly what the
 ; Font dialog above already does with Bold and Underline - the same engine and
@@ -9909,6 +10126,14 @@ sh_fd_prlock:   db 'Locked', 0
 sh_fd_prunlock: db 'Unlocked', 0
 sh_fd_prlockh:  db 'Locked, Hidden', 0
 sh_fd_prunlockh: db 'Unlocked, Hidden', 0
+; 81.71: Excel's own Extract dialog carries ONE control, a `Unique Records
+; Only` CHECK BOX. This engine paints a radio column, so the same single bit
+; is asked as a two-way pick instead - identical meaning, no sixth dialog
+; engine, and the divergence is the one §81.31 already took for Gridlines and
+; Formulas. Index 1 IS the flag, so sh_fdlg_apply0 stores it with no mapping.
+sh_fd_i_extract: dw sh_fd_exall, sh_fd_exuniq
+sh_fd_exall:    db 'All Matching Records', 0
+sh_fd_exuniq:   db 'Unique Records Only', 0
 ; Excel's own five, in Excel's own order (Reference Guide p.236). The dialog
 ; there ALSO carries an Operation group (None/Add/Subtract/Multiply/Divide)
 ; and two check boxes (Skip Blanks, Transpose); this engine paints ONE radio
@@ -9982,7 +10207,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4, 2
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -9992,7 +10217,8 @@ SH_FDK_GAL   equ 11
 SH_FDK_SAVEFMT equ 12                 ; stage 4.6: Save As asks for the format
 SH_FDK_PSPEC equ 13                   ; instead of deriving it silently
 SH_FDK_PROT  equ 14
-SH_FDK_N     equ 15
+SH_FDK_EXTRACT equ 15                 ; 81.71: Data ▸ Extract...
+SH_FDK_N     equ 16
     times (sh_ud_kind_end - sh_ud_kind - SH_FDK_N) db 0  ; sh_ud_kind (81.57)
     times (SH_FDK_N - (sh_ud_kind_end - sh_ud_kind)) db 0 ; has a kind each
 
@@ -10019,6 +10245,13 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
+    cmp al, SH_FDK_EXTRACT            ; 81.71: Extract PINS the selection it
+    je .prefillextract                ; was opened on - these windows are not
+                                       ; modal (81.6), so the selection can
+                                       ; move while one is up, and the extract
+                                       ; range is the whole point of the
+                                       ; command. sh_ndlg's pattern, not
+                                       ; sh_fdlg's own live read
     cmp al, SH_FDK_SAVEFMT
     je .prefillfmt                    ; File Format opens on the format the
     cmp al, SH_FDK_GAL                ; current NAME already implies
@@ -10035,6 +10268,16 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
+.prefillextract:                      ; 81.71: bank the extract range, both
+    mov cx, [sh_selcol]               ; corners as selected - normalising is
+    mov [sh_ex_c1], cx                ; the module's job, the same way
+    mov cx, [sh_selrow]               ; sh_name_def leaves it to sh_foldrange
+    mov [sh_ex_r1], cx
+    mov cx, [sh_selcol2]
+    mov [sh_ex_c2], cx
+    mov cx, [sh_selrow2]
+    mov [sh_ex_r2], cx
+    jmp .noprefill
 .prefillprot:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
@@ -10533,6 +10776,8 @@ sh_fdlg_apply0:
     je .dopspec
     cmp byte [sh_fdlg_kind], SH_FDK_PROT
     je .doprot
+    cmp byte [sh_fdlg_kind], SH_FDK_EXTRACT
+    je .doextract
     cmp byte [sh_fdlg_kind], 3
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
@@ -10751,6 +10996,14 @@ sh_fdlg_apply0:
 .refused:
     mov si, [sh_ownwin]
     call sh_repaint
+    jmp .out
+.doextract:                           ; 81.71: the radio IS the flag
+    mov al, [sh_fdlg_sel]
+    mov [sh_dbc_uniq], al
+    mov al, SH_DBC_EXTRACT
+    call sh_docmd_dbrun
+    jnc .out                          ; refused: the status line says why
+    call sh_recalc_all                ; the extract range holds new values
     jmp .out
 .dopspec:
     mov al, [sh_fdlg_sel]             ; the radio IS the mode: All/Formulas/
@@ -32434,6 +32687,651 @@ sh_dblkstrcmp:
     ret
 
 ; =============================================================================
+; DATA ▸ FIND / EXTRACT / DELETE (81.71), the criteria engine above driven
+; from a MENU. Verb SHM_DBCMD; [sh_dbc_kind] picks the command and
+; [sh_dbc_res] carries the answer back.
+;
+; THE RECTANGLES COME FROM THE TWO NAMES, not from an argument list: 81.69's
+; DATABASE and CRITERIA, read through sh_name_lookup (already vectored). That
+; is the whole difference from shm_pdatabase, which parses them out of the
+; formula text - everything past sh_dbcmd_ranges is the identical
+; sh_dbrowmatch loop.
+;
+; sh_db_busy IS SET HERE TOO, for the reason 81.65 sets it: sh_db_c1..sh_cr_r2
+; stay live across the entire walk, and a criteria cell holding its own
+; =DSUM(...) would otherwise trample them mid-scan. This is that flag's first
+; writer outside shm_pdatabase.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sh_dbcmd_ranges - fill sh_db_* and sh_cr_* from the two defined names.
+; out: CF=1 both were bound; CF=0 with [sh_dbc_res] already set to say which
+; one was not. Every register preserved.
+; -----------------------------------------------------------------------------
+sh_dbcmd_ranges:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, sh_s_dbname
+    SHOUT sh_name_lookup
+    jnc .nodb
+    mov [sh_db_c1], ax
+    mov [sh_db_r1], bx
+    mov [sh_db_c2], cx
+    mov [sh_db_r2], dx
+    mov si, sh_s_critname
+    SHOUT sh_name_lookup
+    jnc .nocrit
+    mov [sh_cr_c1], ax
+    mov [sh_cr_r1], bx
+    mov [sh_cr_c2], cx
+    mov [sh_cr_r2], dx
+    call sh_dbcmd_norm                 ; a name keeps both corners as the
+    stc                                ; selection gave them (sh_name_def), so
+    jmp .out                           ; the walks below have to be given a
+.nodb:                                 ; rectangle that reads low-to-high
+    mov byte [sh_dbc_res], SH_DBR_NODB
+    clc
+    jmp .out
+.nocrit:
+    mov byte [sh_dbc_res], SH_DBR_NOCRIT
+    clc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbcmd_norm - put both rectangles the right way round. shm_pdatabase never
+; had to: a formula's range argument arrives from sh_pargref already ordered.
+; A NAME does not - Set Database on a selection dragged upwards binds r1 > r2,
+; and every `ja`/`jg` below would then walk zero rows and report no matches,
+; which reads as a broken criteria rather than a backwards drag
+sh_dbcmd_norm:
+    push ax
+    mov ax, [sh_db_c1]
+    cmp ax, [sh_db_c2]
+    jle .r1
+    xchg ax, [sh_db_c2]
+    mov [sh_db_c1], ax
+.r1:
+    mov ax, [sh_db_r1]
+    cmp ax, [sh_db_r2]
+    jle .c2
+    xchg ax, [sh_db_r2]
+    mov [sh_db_r1], ax
+.c2:
+    mov ax, [sh_cr_c1]
+    cmp ax, [sh_cr_c2]
+    jle .r2
+    xchg ax, [sh_cr_c2]
+    mov [sh_cr_c1], ax
+.r2:
+    mov ax, [sh_cr_r1]
+    cmp ax, [sh_cr_r2]
+    jle .out
+    xchg ax, [sh_cr_r2]
+    mov [sh_cr_r1], ax
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; shm_dbcmd - the verb. in: [sh_dbc_kind]. out: [sh_dbc_res]; AX BX CX DX SI
+; DI all clobbered, which is what a `retf` verb is allowed to do.
+; -----------------------------------------------------------------------------
+shm_dbcmd:
+    cmp byte [sh_db_busy], 0
+    je .free
+    mov byte [sh_dbc_res], SH_DBR_BUSY
+    ret
+.free:
+    call sh_dbcmd_ranges
+    jnc .out                           ; sh_dbc_res already says which name
+    mov byte [sh_db_busy], 1
+    cmp byte [sh_dbc_kind], SH_DBC_FIND
+    je .dofind
+    cmp byte [sh_dbc_kind], SH_DBC_DELETE
+    je .dodelete
+    call sh_dbcmd_extract
+    jmp .done
+.dofind:
+    call sh_dbcmd_find
+    jmp .done
+.dodelete:
+    call sh_dbcmd_delete
+.done:
+    mov byte [sh_db_busy], 0
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbcmd_find - Data ▸ Find. The Reference Guide: "If the active cell is
+; outside the database when you choose Data Find, Microsoft Excel selects the
+; first record in the database that matches the criteria. If the active cell
+; is inside the database ... the first record BELOW the active cell". So the
+; starting row is derived from the selection, which is also what makes
+; choosing Find again step to the next match.
+; -----------------------------------------------------------------------------
+sh_dbcmd_find:
+    mov bx, [sh_db_r1]                 ; the header row; data starts below it
+    mov ax, [sh_selrow]
+    cmp ax, [sh_db_r1]                 ; the selection inside the database?
+    jb .fromtop
+    cmp ax, [sh_db_r2]
+    ja .fromtop
+    mov bx, ax                         ; yes: start on the row AFTER it
+.fromtop:
+    inc bx
+.loop:
+    cmp bx, [sh_db_r2]
+    ja .nomore
+    push bx
+    call sh_dbrowmatch
+    pop bx
+    jc .hit
+    inc bx
+    jmp .loop
+.hit:
+    mov ax, [sh_db_c1]                 ; select the whole record, which is
+    mov [sh_selcol], ax                ; what Excel's Find does - the record
+    mov [sh_selrow], bx                ; and not one cell of it
+    mov ax, [sh_db_c2]
+    mov [sh_selcol2], ax
+    mov [sh_selrow2], bx
+    mov ax, [sh_db_c1]
+    SHOUT sh_scrollto
+    mov byte [sh_dbc_res], SH_DBR_OK
+    ret
+.nomore:                               ; a search that BEGAN part-way down the
+    mov byte [sh_dbc_res], SH_DBR_LAST ; database found nothing FURTHER, which
+    mov ax, [sh_selrow]                ; is a different sentence from "nothing
+    cmp ax, [sh_db_r1]                 ; in it matches at all" - and the one
+    jbe .whole                         ; Excel shows when Find walks off the
+    cmp ax, [sh_db_r2]                 ; last matching record
+    jbe .out
+.whole:
+    mov byte [sh_dbc_res], SH_DBR_NOMATCH
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbcmd_put - copy ONE field: read (AX,BX) and write it at (CX,DX) as a
+; VALUE. The Reference Guide is explicit that this is what Extract does -
+; "If a record contains a formula, the extract range will contain only the
+; value produced by that formula and not the formula itself" - so this reads
+; through sh_getcell2, which hands back the evaluated cell, and never touches
+; the formula text. Preserves nothing but the rectangles in bss.
+; -----------------------------------------------------------------------------
+sh_dbcmd_put:
+    push cx
+    push dx
+    SHOUT sh_getcell2
+    pop dx
+    pop cx
+    mov ax, cx
+    mov bx, dx
+    jnc .blank
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .text
+    cmp byte [sh_curtype], SH_T_BOOL
+    je .bool
+    cmp byte [sh_curtype], SH_T_ERR
+    je .err
+    SHOUT sh_setvald                   ; the number is already in sh_acc
+    ret
+.text:
+    mov si, sh_sacc
+    SHOUT sh_settext
+    ret
+.bool:
+    mov dl, [sh_curaux]
+    SHOUT sh_setbool
+    ret
+.err:
+    mov dl, [sh_curaux]
+    SHOUT sh_seterr
+    ret
+.blank:
+    SHOUT sh_clearcell
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbcmd_extract - Data ▸ Extract. The extract range is the SELECTION the
+; dialog was opened on (sh_ex_*), and its FIRST ROW names the fields to take:
+; "The field names you use for the extract range must be the same as the
+; field names you used in the database. However, you don't have to use all
+; of the database field names."
+;
+; Two shapes, both Excel's. A range that is ONLY its header row extracts
+; downward with no limit (Excel clears "all cells below the field names to
+; the bottom of the worksheet"; this clears what it wrote plus the rows it
+; would have written, which is the same thing for any sheet this machine can
+; hold). A range with rows beneath it takes as many records as fit and says
+; so when they did not all fit.
+; -----------------------------------------------------------------------------
+sh_dbcmd_extract:
+    call sh_dbcmd_exnorm               ; both corners the right way round
+    mov ax, [sh_ex_r1]
+    inc ax
+    mov [sh_ex_row], ax                ; the first row of output
+    call sh_dbcmd_exfields             ; does its header name ANY real field?
+    jnc .nofield
+    mov bx, [sh_db_r1]
+    inc bx
+.loop:
+    cmp bx, [sh_db_r2]
+    ja .done
+    push bx
+    call sh_dbrowmatch
+    pop bx
+    jnc .next
+    call sh_dbcmd_exrow                ; CF=0 = the range is full
+    jnc .full
+.next:
+    inc bx
+    jmp .loop
+.done:
+    call sh_dbcmd_exclear              ; blank whatever the last extract left
+    mov byte [sh_dbc_res], SH_DBR_OK
+    ret
+.full:
+    mov byte [sh_dbc_res], SH_DBR_NOROOM
+    ret
+.nofield:
+    mov byte [sh_dbc_res], SH_DBR_NOFIELD
+    ret
+
+; sh_dbcmd_exnorm - the extract range, both corners the right way round
+sh_dbcmd_exnorm:
+    push ax
+    mov ax, [sh_ex_c1]
+    cmp ax, [sh_ex_c2]
+    jle .r
+    xchg ax, [sh_ex_c2]
+    mov [sh_ex_c1], ax
+.r:
+    mov ax, [sh_ex_r1]
+    cmp ax, [sh_ex_r2]
+    jle .out
+    xchg ax, [sh_ex_r2]
+    mov [sh_ex_r1], ax
+.out:
+    pop ax
+    ret
+
+; sh_dbcmd_exfields - out: CF=1 if at least ONE column of the extract range's
+; header row names a real database field. A range naming none at all is a
+; user error worth a sentence, not an empty extract that looks like "nothing
+; matched"
+sh_dbcmd_exfields:
+    push ax
+    push bx
+    push cx
+    mov cx, [sh_ex_c1]
+.each:
+    cmp cx, [sh_ex_c2]
+    jg .none
+    mov ax, cx
+    mov bx, [sh_ex_r1]
+    push cx
+    SHOUT sh_getcell2
+    jnc .nextcol
+    call sh_dbresolve                  ; the same resolver the criteria
+    jc .found                          ; headers use (81.65)
+.nextcol:
+    pop cx
+    inc cx
+    jmp .each
+.found:
+    pop cx
+    stc
+    jmp .out
+.none:
+    clc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbcmd_exrow - copy the matching database row (sh_dbrowmatch left it in
+; sh_db_dbrow) into row [sh_ex_row] of the extract range, field by field.
+; out: CF=1 written, CF=0 the range had no room left. BX preserved.
+;
+; The columns are held in NAMED SCRATCH rather than registers: this walks two
+; column spaces at once - the extract range's own (sh_ex_ec) and the database
+; column each of its headers resolves to (sh_ex_dc) - across a sh_getcell2
+; and a sh_dbcmd_put that both clobber freely.
+sh_dbcmd_exrow:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [sh_ex_r2]                 ; is there a row left to write into?
+    cmp ax, [sh_ex_r1]
+    je .room                           ; a header-ONLY range has no bottom
+    mov ax, [sh_ex_row]
+    cmp ax, [sh_ex_r2]
+    ja .full
+.room:
+    mov ax, [sh_ex_c1]
+    mov [sh_ex_ec], ax
+.col:
+    mov ax, [sh_ex_ec]
+    cmp ax, [sh_ex_c2]
+    jg .rowdone
+    mov bx, [sh_ex_r1]                 ; this extract column's own header...
+    SHOUT sh_getcell2
+    jnc .nextcol
+    call sh_dbresolve                  ; ...named as a database field, by the
+    jnc .nextcol                       ; identical resolver the criteria
+    mov [sh_ex_dc], ax                 ; headers go through (81.65)
+    mov ax, [sh_ex_dc]
+    mov bx, [sh_db_dbrow]
+    mov cx, [sh_ex_ec]
+    mov dx, [sh_ex_row]
+    call sh_dbcmd_put
+.nextcol:
+    inc word [sh_ex_ec]
+    jmp .col
+.rowdone:
+    inc word [sh_ex_row]
+    stc
+    jmp .out
+.full:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbcmd_exclear - blank the rows of the extract range below what this run
+; wrote. Excel: "all cells below the field names ... are cleared whether or
+; not information is extracted into them", which is what stops the previous
+; extract's tail being read as part of this one
+sh_dbcmd_exclear:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, [sh_ex_row]
+    mov cx, [sh_ex_r2]
+    cmp cx, [sh_ex_r1]
+    jne .bounded
+    mov cx, dx                          ; header-only: clear the rows this run
+    add cx, SH_DBC_EXTAIL               ; would have used and a tail past them
+.bounded:
+.row:
+    cmp dx, cx
+    ja .out
+    mov bx, [sh_ex_c1]
+.col:
+    cmp bx, [sh_ex_c2]
+    jg .nextrow
+    mov ax, bx
+    push bx
+    push cx
+    push dx
+    mov bx, dx
+    SHOUT sh_clearcell
+    pop dx
+    pop cx
+    pop bx
+    inc bx
+    jmp .col
+.nextrow:
+    inc dx
+    jmp .row
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_dbcmd_delete - Data ▸ Delete. "When you delete records from the database,
+; the other records in the database shift up to fill any gaps, but the rest of
+; the worksheet is not affected ... the cells below the database do not shift
+; up ten rows, as they would if you used the Edit Delete command."
+;
+; So this is NOT sh_rowcol_op: only the database's own rectangle moves, cell
+; by cell, and a cell one column to the right of it stays exactly where it is.
+; Records are carried as TEXT - sh_cell_totext out, sh_commit back - which is
+; the pair Sort's own carry (81.61) and the block clipboard (81.18) already
+; move a record with, so values, labels and formulas need no three cases here.
+;
+; Compaction runs TOP DOWN and only ever writes ABOVE where it reads, so no
+; snapshot is needed: the destination row has already been read past.
+; -----------------------------------------------------------------------------
+sh_dbcmd_delete:
+    mov ax, [sh_db_r1]
+    inc ax
+    mov [sh_dbc_dst], ax               ; the next surviving row's new home
+    mov ax, [sh_db_r1]
+    inc ax
+    mov [sh_dbc_src], ax
+    mov word [sh_dbc_hits], 0
+.loop:
+    mov bx, [sh_dbc_src]
+    cmp bx, [sh_db_r2]
+    ja .done
+    call sh_dbrowmatch
+    jc .drop
+    call sh_dbcmd_moverow              ; a keeper: slide it up if it moved
+    inc word [sh_dbc_dst]
+    jmp .next
+.drop:
+    inc word [sh_dbc_hits]
+.next:
+    inc word [sh_dbc_src]
+    jmp .loop
+.done:
+    cmp word [sh_dbc_hits], 0
+    je .nomatch
+    call sh_dbcmd_deltail              ; blank the rows nothing moved into
+    call sh_dbcmd_shrink               ; ...and DATABASE now names fewer rows
+    mov byte [sh_dbc_res], SH_DBR_OK
+    ret
+.nomatch:
+    mov byte [sh_dbc_res], SH_DBR_NOMATCH
+    ret
+
+; sh_dbcmd_moverow - carry the record at [sh_dbc_src] up to [sh_dbc_dst],
+; across the database's columns only. A row already in place is left alone
+sh_dbcmd_moverow:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [sh_dbc_src]
+    cmp ax, [sh_dbc_dst]
+    je .out
+    mov ax, [sh_db_c1]
+    mov [sh_dbc_col], ax
+.col:
+    mov ax, [sh_dbc_col]
+    cmp ax, [sh_db_c2]
+    jg .out
+    mov bx, [sh_dbc_src]
+    SHOUT sh_cell_totext               ; -> sh_clipbuf, CX = its length
+    call sh_dbcmd_totarget
+    inc word [sh_dbc_col]
+    jmp .col
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbcmd_totarget - sh_clipbuf holds the record's text; put it in
+; ([sh_dbc_col], [sh_dbc_dst]). sh_commit is driven exactly the way
+; sh_sort_permcol drives it: the selection IS the argument
+sh_dbcmd_totarget:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, sh_clipbuf
+    mov di, sh_editbuf
+    xor cx, cx
+.copy:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .copied
+    inc si
+    inc di
+    inc cx
+    jmp .copy
+.copied:
+    mov [sh_editlen], cl
+    mov ax, [sh_dbc_col]
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov ax, [sh_dbc_dst]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+    cmp byte [sh_editbuf], '='
+    jne .commit
+    mov ax, [sh_dbc_dst]               ; a formula follows its own row, the
+    sub ax, [sh_dbc_src]               ; way Sort's carry makes one follow
+    mov [sh_cp_rowdelta], ax
+    mov word [sh_cp_coldelta], 0
+    call sh_dbcmd_shiftbuf
+.commit:
+    mov byte [sh_editing], 1
+    SHOUT sh_commit
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbcmd_shiftbuf - run sh_editbuf's formula body through the copy shift and
+; put the answer back, '=' and length included. sh_sort_permcol's own tail
+sh_dbcmd_shiftbuf:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, sh_editbuf
+    inc si
+    mov di, sh_rwsrc
+.in:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .in
+    mov si, sh_rwsrc
+    SHOUT sh_formula_copyshift
+    mov byte [sh_editbuf], '='
+    mov si, sh_rwdst
+    mov di, sh_editbuf + 1
+    mov cx, SH_EDITMAX - 1
+.out1:
+    mov al, [si]
+    or al, al
+    jz .done
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .out1
+.done:
+    mov byte [di], 0
+    xor cx, cx
+    mov si, sh_editbuf
+.len:
+    cmp byte [si], 0
+    je .have
+    inc si
+    inc cx
+    jmp .len
+.have:
+    mov [sh_editlen], cl
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; sh_dbcmd_deltail - the rows between the last survivor and the database's old
+; bottom edge hold copies of records that moved up; blank them, across the
+; database's columns only
+sh_dbcmd_deltail:
+    push ax
+    push bx
+    push cx
+    mov cx, [sh_dbc_dst]
+.row:
+    cmp cx, [sh_db_r2]
+    ja .out
+    mov ax, [sh_db_c1]
+.col:
+    cmp ax, [sh_db_c2]
+    jg .nextrow
+    mov bx, cx
+    push ax
+    push cx
+    SHOUT sh_clearcell
+    pop cx
+    pop ax
+    inc ax
+    jmp .col
+.nextrow:
+    inc cx
+    jmp .row
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_dbcmd_shrink - DATABASE names one row fewer per deleted record, so the
+; next command does not walk the blanks this one left. Excel's own database
+; range shrinks the same way
+sh_dbcmd_shrink:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ax, [sh_dbc_dst]
+    dec ax
+    mov [sh_db_r2], ax
+    cmp ax, [sh_db_r1]                 ; every record gone: the name keeps its
+    jae .bind                          ; header row and nothing else
+    mov ax, [sh_db_r1]
+    mov [sh_db_r2], ax
+.bind:
+    mov si, sh_s_dbname
+    mov ax, [sh_db_c1]
+    mov bx, [sh_db_r1]
+    mov cx, [sh_db_c2]
+    mov dx, [sh_db_r2]
+    SHOUT sh_name_def
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
 ; CELL (81.66): `CELL(type_of_info [, reference])`, Excel's own compatibility
 ; subset - nine attributes, from `Microsoft Excel Functions and Macros`
 ; (`LIBRARY/documentation/excel_man/` p.31-33), checked against the real text
@@ -36399,7 +37297,7 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
-    dw sh_m_data,    sh_i_data,    6
+    dw sh_m_data,    sh_i_data,    9
     dw sh_m_options, sh_i_options, 5
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -36539,9 +37437,22 @@ sh_it_filldown:  db 'Fill Down', 0
 ; Chart as BMP... are stage 2.x's own addition (no real-Excel Data menu
 ; equivalent - Excel's own charting is a whole separate document type) -
 ; see sh_docmd_chart's header comment for the design.
+;
+; 81.71 put the first six in EXCEL'S OWN ORDER (menu_data_full.png): Form,
+; Find, Extract, Delete, Set Database, Set Criteria, then Sort. Sort moved
+; from index 0 to 6 and the three chart items after it, which is a real cost
+; paid once - the whole reason this package has a menu bar of its own is to
+; look like the captures.
 sh_m_data:     db 'Data', 0
-sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_gallery, sh_it_chartexp
-               dw sh_it_setdb, sh_it_setcrit
+sh_i_data:     dw sh_it_dfind, sh_it_extract, sh_it_del
+               dw sh_it_setdb, sh_it_setcrit, sh_it_sort
+               dw sh_it_chart, sh_it_gallery, sh_it_chartexp
+sh_it_dfind:   db 'Find', 0              ; 81.71, relabelled in place while a
+sh_it_exitfnd: db 'Exit Find', 0         ; find is live - Excel's own item
+sh_it_extract: db 'Extract...', 0
+sh_it_del:     db 'Delete', 0            ; NOT sh_it_delete: that is Edit's
+                                          ; own 'Delete...', which shifts
+                                          ; cells rather than records
 sh_it_sort:    db 'Sort...', 0
 sh_it_chart:   db 'Chart Column...', 0
 sh_it_gallery: db 'Chart Gallery...', 0
@@ -38114,7 +39025,13 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7318                     ; +22 for 81.70's sh_freezecol/row,
+    OS88_BSS 7356                     ; +38 for 81.71's Data commands: 26 of
+                                       ; state (the extract range, Delete's
+                                       ; three cursors, the Find mode byte)
+                                       ; and 12 because SH_NVEC went 96 -> 99
+                                       ; and sh_v_end anchors the chain below
+                                       ; it;
+                                       ; +22 for 81.70's sh_freezecol/row,
                                        ; sh_geom_roff and the two per-sheet
                                        ; save arrays (SH_SHEETS words each);
                                        ; +1094 for 81.67's array/matrix
@@ -39053,8 +39970,11 @@ sh_v_sh_str_want            equ sh_v_sh_scrollto + 4
 sh_v_sh_undo_drop           equ sh_v_sh_str_want + 4
 sh_v_sh_foldvalue            equ sh_v_sh_undo_drop + 4    ; 81.65
 sh_v_sh_funcfinish           equ sh_v_sh_foldvalue + 4
-SH_NVEC       equ 96
-sh_v_end      equ sh_v_sh_funcfinish + 4
+sh_v_sh_cell_totext          equ sh_v_sh_funcfinish + 4   ; 81.71
+sh_v_sh_clearcell            equ sh_v_sh_cell_totext + 4
+sh_v_sh_formula_copyshift    equ sh_v_sh_clearcell + 4
+SH_NVEC       equ 99
+sh_v_end      equ sh_v_sh_formula_copyshift + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -39222,7 +40142,28 @@ sh_mx_i       equ sh_mx_sr + 2       ; word: a nested load/elimination
 sh_mx_j       equ sh_mx_i + 2        ; loop's two counters, the same reason
 sh_mx_buf     equ sh_mx_j + 2        ; SH_MX_N * SH_MX_W * 8: the shared
                                      ; elimination workspace
-sh_bss_end        equ sh_mx_buf + (8 * 16 * 8)
+; 81.71's own state: the Data menu's four database COMMANDS. sh_ex_* is the
+; extract range, PINNED when Extract's dialog opens rather than read live at
+; OK (81.6 - these dialogs are not modal, and the selection can move under
+; one). sh_dfindmode is the Find/Exit Find relabel, and sh_dbc_res is how the
+; module answers, since CF on that door already means "is there a module".
+sh_dbc_kind   equ sh_mx_buf + (8 * 16 * 8)   ; byte: which SH_DBC_* is running
+sh_dbc_res    equ sh_dbc_kind + 1            ; byte: its SH_DBR_* answer
+sh_dbc_uniq   equ sh_dbc_res + 1             ; byte: Extract's Unique flag
+sh_dfindmode  equ sh_dbc_uniq + 1            ; byte: a Data Find is live
+sh_ex_c1      equ sh_dfindmode + 1           ; the extract range, as selected
+sh_ex_r1      equ sh_ex_c1 + 2
+sh_ex_c2      equ sh_ex_r1 + 2
+sh_ex_r2      equ sh_ex_c2 + 2
+sh_ex_row     equ sh_ex_r2 + 2               ; the next extract row to write
+sh_ex_ec      equ sh_ex_row + 2              ; ...the extract column under it
+sh_ex_dc      equ sh_ex_ec + 2               ; ...and the database column that
+                                              ; one's header resolves to
+sh_dbc_src    equ sh_ex_dc + 2               ; Delete's compaction: the row it
+sh_dbc_dst    equ sh_dbc_src + 2             ; is reading and the row it is
+sh_dbc_col    equ sh_dbc_dst + 2             ; writing, and the column between
+sh_dbc_hits   equ sh_dbc_col + 2             ; them; how many records matched
+sh_bss_end        equ sh_dbc_hits + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
