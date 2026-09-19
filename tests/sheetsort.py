@@ -49,7 +49,7 @@ EDIT = (123, 45)
 DATA = (311, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 COPY, PASTE, FILLR = 3, 4, 10
-SORT = 5                                # 81.71 put the Data menu in Excel's
+SORT = 6                                # 81.71 put the Data menu in Excel's
                                          # own order, which moved Sort down
 RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)
 OK = (267, 172)

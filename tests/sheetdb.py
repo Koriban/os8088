@@ -59,7 +59,7 @@ DISK = "build/sheetdb.img"
 NAME = "DBASE.SLK"
 DATA = (311, 45)                        # the Data menu's own screen position
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)  # and a dropdown item's, both
-SET_DB, SET_CRIT = 3, 4                        # 81.71's Excel-order Data menu
+SET_DB, SET_CRIT = 4, 5                        # 81.71's Excel-order Data menu
 
 # --- the database, A1:D7 ------------------------------------------------------
 DB = {

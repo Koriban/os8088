@@ -776,10 +776,22 @@ SHM_MRESUME equ 11                  ; and a run starting or carrying on
 SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
 SHM_CELL   equ 13                   ; 81.66: CELL
 SHM_MATRIX equ 14                   ; 81.67: MDETERM...GROWTH
-SHM_DBCMD  equ 15                   ; 81.71: Data > Find/Extract/Delete/Form,
+SHM_DBCMD  equ 15                   ; 81.71: Data > Find/Extract/Delete,
                                      ; which are the criteria engine driven
                                      ; from a MENU rather than from a formula
-SHM_N      equ 13                   ; a COUNT, not a max: sh_modc_ext does
+SHM_FORM   equ 16                   ; 81.71.5: Data > Form... - the dialog
+SHM_FPAINT equ 17                   ; engine itself, and the three window
+SHM_FKEY   equ 18                   ; callbacks the kernel makes into it.
+SHM_BOPEN  equ 20                   ; 81.71.5.1: the Border dialog, moved for
+SHM_BPAINT equ 21                   ; the same reason and by the same recipe
+SHM_BCLICK equ 22                   ; (it has no onkey)
+SHM_BCLOSE equ 23                   ; ...and both closes, which the gate-lock
+SHM_FCLOSE equ 24                   ; recovery in sh_onclick/sh_onkey calls
+SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
+                                     ; sub-op byte, because sh_modc_ext
+                                     ; already dispatches on a number and a
+                                     ; callback must not spend a register
+SHM_N      equ 22                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -804,6 +816,9 @@ sh_mverb:
     dw sh_m_pcell                                     ; 81.66
     dw sh_m_pmatrix                                    ; 81.67
     dw sh_m_dbcmd                                       ; 81.71
+    dw sh_m_form, sh_m_fpaint, sh_m_fkey, sh_m_fclick    ; 81.71.5
+    dw sh_m_bopen, sh_m_bpaint, sh_m_bclick               ; 81.71.5.1
+    dw sh_m_bclose, sh_m_fclose
 
 sh_m_doread:
     call shm_doread
@@ -857,6 +872,43 @@ sh_m_dbcmd:                         ; 81.71: a Data menu command, NOT a
                                     ; back in [sh_dbc_res], because a second
                                     ; meaning on CF could not be told from
                                     ; ch_ovcall's own CF=1
+sh_m_form:                          ; 81.71.5: Data ▸ Form... and its three
+    call sh_docmd_form              ; window callbacks. Each keeps the
+    clc                             ; registers the kernel called the thunk
+    retf                            ; with - SI the window, AX a keystroke,
+sh_m_fpaint:                        ; CX/DX a click - because ch_ovcall
+    call sh_df_paint                ; passes them straight through
+    clc
+    retf
+sh_m_fkey:
+    call sh_df_onkey
+    clc
+    retf
+sh_m_fclick:
+    call sh_df_onclick
+    clc
+    retf
+sh_m_bopen:                         ; 81.71.5.1
+    call sh_bdlg_open
+    clc
+    retf
+sh_m_bpaint:
+    call sh_bdlg_paint
+    clc
+    retf
+sh_m_bclick:
+    call sh_bdlg_onclick
+    clc
+    retf
+sh_m_bclose:
+    call sh_bdlg_close
+    clc
+    retf
+sh_m_fclose:
+    call sh_df_savefld                 ; a background click is not a cancel
+    call sh_df_close                   ; here: the field being edited is
+    clc                                ; committed, the way Close itself does
+    retf
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -1345,6 +1397,34 @@ sh_x_sh_clearcell:                  ; and the block clipboard, 81.18)
 sh_x_sh_formula_copyshift:          ; ...and a moved formula's own references
     call sh_formula_copyshift       ; follow it, Sort's own rule (81.61)
     retf
+sh_x_os88line_set:                  ; 81.71.5: the widgets Data ▸ Form draws
+
+    call os88line_set
+    retf
+sh_x_os88line_draw:
+    call os88line_draw
+    retf
+sh_x_os88line_key:
+    call os88line_key
+    retf
+sh_x_os88line_click:
+    call os88line_click
+    retf
+sh_x_os88ui_btn:
+    call os88ui_btn
+    retf
+sh_x_os88ui_ask:
+    call os88ui_ask
+    retf
+sh_x_os88ui_glyph:                  ; 81.71.5.1: the Border dialog's radios
+    call os88ui_glyph               ; and check boxes, and the sparse border
+    retf                            ; table it is the only writer of
+sh_x_sh_bt_findcell:
+    call sh_bt_findcell
+    retf
+sh_x_sh_bt_removecell:
+    call sh_bt_removecell
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1377,6 +1457,10 @@ sh_ovshims:
     dw sh_x_sh_undo_drop
     dw sh_x_sh_foldvalue, sh_x_sh_funcfinish                          ; 81.65
     dw sh_x_sh_cell_totext, sh_x_sh_clearcell, sh_x_sh_formula_copyshift ; 81.71
+    dw sh_x_os88line_set, sh_x_os88line_draw, sh_x_os88line_key      ; 81.71.5
+    dw sh_x_os88line_click, sh_x_os88ui_btn, sh_x_os88ui_ask
+    dw sh_x_os88ui_glyph                                           ; 81.71.5.1
+    dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
 sh_entry:
     push ax
     push dx
@@ -2968,8 +3052,12 @@ sh_onclick:
 .nofdlg:
     cmp word [sh_bdlg_win], 0          ; same non-modal gate-lock risk, same
     je .nobdlg                         ; recovery, for the Border dialog
-    call sh_bdlg_close
+    call sh_bdlg_close_r
 .nobdlg:
+    cmp word [sh_df_win], 0            ; 81.71.5: and for Data ▸ Form, which
+    je .nodf                           ; would otherwise gate that item shut
+    call sh_df_close_r                 ; for the rest of the session
+.nodf:
     mov word [sh_msg], 0
     mov byte [sh_dragging], 0          ; stage 3.0a: a gesture is only a grid
                                         ; drag if it STARTS on the grid - the
@@ -3723,8 +3811,12 @@ sh_onkey:
 .nofdlg:
     cmp word [sh_bdlg_win], 0
     je .nobdlg
-    call sh_bdlg_close
+    call sh_bdlg_close_r
 .nobdlg:
+    cmp word [sh_df_win], 0            ; 81.71.5, sh_onclick's own reason
+    je .nodf
+    call sh_df_close_r
+.nodf:
     mov word [sh_msg], 0
     mov bx, si
     call sh_geom
@@ -6933,49 +7025,54 @@ sh_mfire:
                                         ; so every click ran it regardless.
                                         ; Now a real dispatch, matching the
                                         ; or al,al chains above.
-    call sh_docmd_dfind                ; 0: Find / Exit Find (81.71). NOT
-    jmp .out                           ; sh_docmd_find, which is Formula's own
+    call sh_docmd_form_r               ; 0: Form... (81.71.5)
+    jmp .out
 .data1:
     cmp al, 1
     jne .data2
-    mov al, SH_FDK_EXTRACT             ; 1: Extract... (81.71)
-    call sh_fdlg_open
-    jmp .out
+    call sh_docmd_dfind                ; 1: Find / Exit Find (81.71). NOT
+    jmp .out                           ; sh_docmd_find, which is Formula's own
 .data2:
     cmp al, 2
     jne .data3
-    call sh_docmd_dbdelete             ; 2: Delete (81.71)
+    mov al, SH_FDK_EXTRACT             ; 2: Extract... (81.71)
+    call sh_fdlg_open
     jmp .out
 .data3:
     cmp al, 3
     jne .data4
-    mov si, sh_s_dbname                ; 3: Set Database
-    call sh_docmd_setname
+    call sh_docmd_dbdelete             ; 3: Delete (81.71)
     jmp .out
 .data4:
     cmp al, 4
     jne .data5
-    mov si, sh_s_critname              ; 4: Set Criteria
+    mov si, sh_s_dbname                ; 4: Set Database
     call sh_docmd_setname
     jmp .out
 .data5:
     cmp al, 5
     jne .data6
-    mov al, SH_ID_SORT                 ; 5: stage 4.5's Sort - the KEY first,
-    call sh_idlg_open                  ; then the order (sh_idlg_apply's own
-    jmp .out                           ; .sortkey)
+    mov si, sh_s_critname              ; 5: Set Criteria
+    call sh_docmd_setname
+    jmp .out
 .data6:
     cmp al, 6
     jne .data7
-    call sh_docmd_chart                ; 6..8: this app's own charting, which
-    jmp .out                           ; real Excel has no Data item for
+    mov al, SH_ID_SORT                 ; 6: stage 4.5's Sort - the KEY first,
+    call sh_idlg_open                  ; then the order (sh_idlg_apply's own
+    jmp .out                           ; .sortkey)
 .data7:
     cmp al, 7
     jne .data8
+    call sh_docmd_chart                ; 7..9: this app's own charting, which
+    jmp .out                           ; real Excel has no Data item for
+.data8:
+    cmp al, 8
+    jne .data9
     mov al, SH_FDK_GAL
     call sh_fdlg_open
     jmp .out
-.data8:
+.data9:
     call sh_docmd_chartexport
     jmp .out
 .sheets:
@@ -7168,7 +7265,7 @@ sh_docmd_format:
 .notnum:
     cmp al, 3
     jne .notborder
-    call sh_bdlg_open
+    call sh_bdlg_open_r
     ret
 .notborder:
     cmp al, 4
@@ -9235,7 +9332,7 @@ sh_dfind_exit:
     mov byte [sh_dfindmode], 0
     ; fall through
 
-; sh_dfind_mark - derive the Data menu's FIRST item from [sh_dfindmode], the
+; sh_dfind_mark - derive the Data menu's SECOND item from [sh_dfindmode], the
 ; relabel-by-repointing the Options toggles and Freeze Panes (81.70) use
 sh_dfind_mark:
     push ax
@@ -9244,7 +9341,7 @@ sh_dfind_mark:
     je .set
     mov ax, sh_it_exitfnd
 .set:
-    mov [sh_i_data], ax
+    mov [sh_i_data + 2], ax            ; item 1: Form... is index 0 now
     pop ax
     ret
 
@@ -11110,7 +11207,7 @@ SH_BDLG_B_SHADE   equ 0x20           ; same way - see sh_bdlg_open/_apply
 
 sh_bdlg_tpl:
     dw 0, 0, SH_BDLG_W, SH_BDLG_H
-    dw sh_s_bdlg_title, sh_bdlg_paint, 0, sh_bdlg_onclick
+    dw sh_s_bdlg_title, sh_bdlg_paint_r, 0, sh_bdlg_click_r
 
 sh_s_bdlg_title: db 'Border', 0
 sh_bdlg_items: dw sh_bdlg_i0, sh_bdlg_i1, sh_bdlg_i2, sh_bdlg_i3, sh_bdlg_i4, sh_bdlg_i5
@@ -11120,6 +11217,46 @@ sh_bdlg_i2:    db 'Right', 0
 sh_bdlg_i3:    db 'Top', 0
 sh_bdlg_i4:    db 'Bottom', 0
 sh_bdlg_i5:    db 'Shade', 0
+
+; the resident thunks (81.71.5.1) - sh_bdlg_open_r is the menu's, and it is
+; what forces CHART.OVL in before any window exists, so neither callback can
+; be the call that has to read a disk
+sh_bdlg_open_r:
+    push bp
+    mov bp, SHM_BOPEN
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+    push si
+    mov si, [sh_ownwin]
+    call sh_repaint
+    pop si
+.out:
+    ret
+sh_bdlg_paint_r:
+    push bp
+    mov bp, SHM_BPAINT
+    call ch_ovcall
+    pop bp
+    ret
+sh_bdlg_click_r:
+    push bp
+    mov bp, SHM_BCLICK
+    call ch_ovcall
+    pop bp
+    ret
+sh_bdlg_close_r:                       ; the gate-lock recovery's own door
+    push bp
+    mov bp, SHM_BCLOSE
+    call ch_ovcall
+    pop bp
+    ret
+; --- in CHART.OVL (81.71.5.1), Data ▸ Form's own reason: a dialog nobody
+; opens twice a session was 900 bytes of a package with 46 to spare. Its
+; data stays resident because the kernel and os88ui both read it through
+; DS, and sh_bdlg_open_r forces the module in before the window exists.
+section .modc                      ; 81.71.5.1: the Border dialog
 
 ; -----------------------------------------------------------------------------
 ; sh_bdlg_open - preselect from the selected cell's stored border byte
@@ -11134,7 +11271,7 @@ sh_bdlg_open:
     jne .out
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_bt_get                     ; al = stored border byte
+    SHOUT sh_bt_get                     ; al = stored border byte
     mov ah, al
     and ah, 0x1F
     mov bl, ah
@@ -11235,7 +11372,7 @@ sh_bdlg_paint:
     mov cx, [sh_bdlg_ox]
     add cx, SH_BDLG_GX1 + 8
     mov dx, [sh_bdlg_ry]
-    call os88ui_glyph
+    SHOUT os88ui_glyph
     mov bx, [sh_bdlg_ri]
     shl bx, 1
     mov si, [sh_bdlg_items + bx]
@@ -11266,7 +11403,7 @@ sh_bdlg_paint:
     mov bx, sh_bdlg_rect
     mov si, sh_s_fd_ok
     mov di, OS88UI_DEF
-    call os88ui_btn
+    SHOUT os88ui_btn
     mov ax, [sh_bdlg_oy]
     add ax, 50
     mov [sh_bdlg_rect+2], ax
@@ -11276,7 +11413,7 @@ sh_bdlg_paint:
     mov bx, sh_bdlg_rect
     mov si, sh_s_fd_cancel
     xor di, di
-    call os88ui_btn
+    SHOUT os88ui_btn
     pop di
     pop si
     pop dx
@@ -11383,7 +11520,7 @@ sh_bdlg_apply:
     mov bx, [sh_selrow]
     or dl, dl
     jz .clearit
-    call sh_bt_addcell
+    SHOUT sh_bt_addcell
     jc .out                             ; table full: silent no-op, same
                                          ; scope limit as the main array's
     push es
@@ -11395,7 +11532,7 @@ sh_bdlg_apply:
     pop es                              ; right while it owned the whole byte
     jmp .out
 .clearit:
-    call sh_bt_findcell                 ; ...and clearing every border must not
+    SHOUT sh_bt_findcell                 ; ...and clearing every border must not
     jnc .out                            ; take the record away with them if the
     push es                             ; cell is also unlocked or hidden
     mov es, [sh_bordseg]
@@ -11406,10 +11543,10 @@ sh_bdlg_apply:
     jnz .out                            ; something is still stored here
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_bt_removecell
+    SHOUT sh_bt_removecell
 .out:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     pop di
     pop dx
     pop bx
@@ -11431,6 +11568,8 @@ sh_bdlg_close:
     pop bx
     pop ax
     ret
+
+section .text
 
 ; =============================================================================
 ; The ONE-LINE INPUT DIALOG (stage 3.0c) - a prompt, an os88line field, OK and
@@ -13513,6 +13652,1106 @@ sh_ndlg_close:
     pop bx
     pop ax
     ret
+
+; =============================================================================
+; DATA ▸ FORM (SPEC.md 81.71.5) - one record at a time, in a dialog.
+;
+; THE SIXTH DIALOG ENGINE, and the first that needed to be: sh_fdlg is a radio
+; column, sh_idlg one text field, sh_bdlg check boxes, sh_ldlg a list and
+; sh_ndlg one multi-line box. A form is N labelled fields over a record, with
+; a button row and a position counter, and none of the five could be bent to
+; it without becoming a sixth anyway.
+;
+; IT NEEDS NO OVERLAY. Unlike Find/Extract/Delete this never touches the
+; criteria engine - the Reference Guide is explicit that "Data Form works
+; independently of the other database commands ... and if you use criteria
+; within the form to find specific database records, those criteria do not
+; affect the criteria specified in the criteria range". So the whole of it is
+; the DATABASE name, sh_cell_totext and sh_commit, all three resident.
+;
+; ONE LINE EDITOR, NOT N. Every field is drawn in a box, but only the focused
+; one is live; Tab and Shift+Tab move the focus, and the field is written back
+; to its cell as the focus LEAVES it. Excel saves a record's changes when you
+; move off the record, which is observably the same thing here because
+; `Restore` - the one command that can tell the two apart - is not implemented
+; (see 81.71.5's own list of what is missing and why).
+; =============================================================================
+SH_DF_W      equ 360
+SH_DF_MAXF   equ 5                   ; field rows on screen at once. A wider
+                                     ; database scrolls this window of them
+                                     ; with the focus rather than refusing:
+                                     ; sh_df_top is the first one shown
+SH_DF_ROWTOP equ 20                  ; ...below the `n of m` counter
+SH_DF_ROWH   equ 16
+SH_DF_LBLX   equ 8
+SH_DF_BOXX1  equ 104
+SH_DF_BOXX2  equ SH_DF_W - 12
+SH_DF_BTW    equ 64
+SH_DF_BTGAP  equ 8
+SH_DF_BTY1   equ SH_DF_ROWTOP + SH_DF_MAXF * SH_DF_ROWH + 8
+SH_DF_BTY2   equ SH_DF_BTY1 + 18
+SH_DF_H      equ SH_DF_BTY2 + SH_DLG_BMARG + TITLE_H + 1
+SH_DF_NBT    equ 5
+SH_DF_LW     equ 11                  ; the label and value columns, in CELLS.
+SH_DF_VW     equ 29                  ; OSAPI_FONT_RUN erases exactly its own
+                                     ; cells (6.1), so a SHORTER string drawn
+                                     ; over a longer one leaves the tail of it
+                                     ; behind - `Veg` over `Fruit` read `Vegit`
+                                     ; on the first run of tests/sheetform.py.
+                                     ; Padding to a fixed width is the fix that
+                                     ; stays ONE PASS; filling the box first
+                                     ; and then lettering it would be the
+                                     ; double-draw 6.1 exists to refuse
+
+sh_df_tpl:                             ; the RESIDENT thunks, not the module's
+    dw 0, 0, SH_DF_W, SH_DF_H          ; own labels: a template holds near
+    dw sh_s_df_title, sh_df_paint_r, sh_df_onkey_r, sh_df_onclick_r
+
+sh_s_df_title: db 'Form', 0
+sh_s_df_of:    db ' of ', 0
+sh_df_btns:    dw sh_s_df_prev, sh_s_df_next, sh_s_df_new, sh_s_df_del
+               dw sh_s_df_close
+sh_s_df_prev:  db 'Prev', 0
+sh_s_df_next:  db 'Next', 0
+sh_s_df_new:   db 'New', 0
+sh_s_df_del:   db 'Delete', 0
+sh_s_df_close: db 'Close', 0
+sh_s_df_nodb:  db 'Set Database first.', 0
+sh_s_df_noroom: db 'The row below the database is not empty.', 0
+sh_s_df_delq:  db 'Delete the displayed record?', 0
+sh_s_df_noovl: db 'CHART.OVL is not beside SHEET.O88.', 0
+
+; -----------------------------------------------------------------------------
+; The four resident entry points. sh_docmd_form_r is the menu's, and it is
+; also what FORCES THE MODULE IN: if ch_ovcall cannot read CHART.OVL it says
+; so and no window is ever created, so the three callbacks below can never be
+; the call that has to touch a disk - which, holding the gfx lock inside a
+; paint, is the one thing this arrangement must not do. Once read, ch_ovneed
+; returns on its first compare and every later callback is a plain far call.
+; -----------------------------------------------------------------------------
+sh_docmd_form_r:
+    push bp
+    mov bp, SHM_FORM
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_df_noovl
+    push si
+    mov si, [sh_ownwin]
+    call sh_repaint
+    pop si
+.out:
+    ret
+
+sh_df_paint_r:                         ; SI = the window, the gfx lock held
+    push bp
+    mov bp, SHM_FPAINT
+    call ch_ovcall
+    pop bp
+    ret
+
+sh_df_onkey_r:                         ; AL = ascii, AH = scan
+    push bp
+    mov bp, SHM_FKEY
+    call ch_ovcall
+    pop bp
+    ret
+
+sh_df_onclick_r:                       ; CX,DX = the click
+    push bp
+    mov bp, SHM_FCLICK
+    call ch_ovcall
+    pop bp
+    ret
+sh_df_close_r:                         ; ...and the recovery's
+    push bp
+    mov bp, SHM_FCLOSE
+    call ch_ovcall
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_form - Data ▸ Form.... Pins the database rectangle the way
+; Extract pins its own selection, and for the same reason (81.6).
+; -----------------------------------------------------------------------------
+; --- the engine itself lives in CHART.OVL (81.71.5.1): it is ~2.2KB of
+; code that runs only while the form is open, and SHEET had 1,806 bytes
+; less resident room than it needed. What stays behind is the DATA the
+; kernel reads (the template and its title) and four thunks - the module
+; is forced in by sh_docmd_form_r BEFORE the window exists, so no paint
+; can ever be the call that has to read the file.
+section .modc                      ; 81.71.5: Data ▸ Form, CHART.OVL
+sh_docmd_form:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp word [sh_df_win], 0
+    jne .out
+    mov si, sh_s_dbname
+    SHOUT sh_name_lookup
+    jnc .nodb
+    mov [sh_df_c1], ax
+    mov [sh_df_r1], bx
+    mov [sh_df_c2], cx
+    mov [sh_df_r2], dx
+    call sh_df_norm
+    mov ax, [sh_df_c2]                 ; how many fields the record has
+    sub ax, [sh_df_c1]
+    inc ax
+    mov [sh_df_nf], ax
+    mov ax, [sh_df_r1]                 ; ...and which record is shown. A
+    inc ax                             ; database that is only its header row
+    mov [sh_df_rec], ax                ; opens on `0 of 0` with nothing to
+    mov word [sh_df_fld], 0            ; edit, which is what New is for
+    mov word [sh_df_top], 0
+    mov si, sh_df_line
+    mov word [si + LN_BUF], sh_df_buf
+    mov word [si + LN_MAX], SH_EDITMAX
+    mov byte [si + LN_FOCUS], 1
+    call sh_df_loadfld
+    call OSAPI_VIDEO
+    sub ax, SH_DF_W
+    sar ax, 1
+    mov [sh_df_tpl + WT_X], ax
+    sub bx, SH_DF_H
+    sar bx, 1
+    cmp bx, MBAR_H + 8
+    jge .placed
+    mov bx, MBAR_H + 8
+.placed:
+    mov [sh_df_tpl + WT_Y], bx
+    mov si, sh_df_tpl
+    call OSAPI_WM_CREATE
+    jc .out
+    mov [sh_df_win], bx
+    call OSAPI_WM_SHOW
+    jmp .out
+.nodb:
+    mov word [sh_msg], sh_s_df_nodb
+    mov si, [sh_ownwin]
+    SHOUT sh_repaint
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_norm - the pinned rectangle the right way round, sh_dbcmd_norm's own
+; reason: a name keeps the corners the selection gave it
+sh_df_norm:
+    push ax
+    mov ax, [sh_df_c1]
+    cmp ax, [sh_df_c2]
+    jle .r
+    xchg ax, [sh_df_c2]
+    mov [sh_df_c1], ax
+.r:
+    mov ax, [sh_df_r1]
+    cmp ax, [sh_df_r2]
+    jle .out
+    xchg ax, [sh_df_r2]
+    mov [sh_df_r1], ax
+.out:
+    pop ax
+    ret
+
+; sh_df_nrec - out: AX = how many records the database holds (its rows past
+; the header). Zero is legal and means a header row on its own
+sh_df_nrec:
+    mov ax, [sh_df_r2]
+    sub ax, [sh_df_r1]
+    jns .out
+    xor ax, ax
+.out:
+    ret
+
+; sh_df_fcol - in: AX = a field index. out: AX = the sheet column it names
+sh_df_fcol:
+    add ax, [sh_df_c1]
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_editable - in: AX = a field index. out: CF=1 the field may be typed
+; into. The Reference Guide: "Fields that are computed or protected cannot be
+; edited, and so do not appear in a text box. A protected field is a field in
+; a cell that is locked while the worksheet is protected."
+; -----------------------------------------------------------------------------
+sh_df_editable:
+    push ax
+    push bx
+    push di
+    push es
+    call sh_df_nrec
+    or ax, ax
+    pop es
+    pop di
+    pop bx
+    pop ax
+    jz .no                             ; no records: nothing to type into
+    push ax
+    push bx
+    push di
+    push es
+    call sh_df_fcol
+    mov bx, [sh_df_rec]
+    SHOUT sh_findcell
+    jnc .free                          ; an empty cell takes anything
+    mov es, [sh_cellseg]
+    test byte [es:di+SH_C_FLAGS], 1    ; HASFORMULA: a computed field
+    jnz .locked
+.free:
+    cmp byte [sh_protected], 0
+    je .yes
+    call sh_df_fcol
+    mov bx, [sh_df_rec]
+    SHOUT sh_bt_get                     ; 0 when the cell has no record, which
+    test al, SH_PROT_UNLOCK            ; IS the default - locked
+    jnz .yes
+.locked:
+    pop es
+    pop di
+    pop bx
+    pop ax
+.no:
+    clc
+    ret
+.yes:
+    pop es
+    pop di
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_loadfld - the focused field's own text into the editor, and the
+; visible window of fields moved to show it
+; -----------------------------------------------------------------------------
+sh_df_loadfld:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov ax, [sh_df_fld]                ; keep the focus on screen
+    cmp ax, [sh_df_top]
+    jae .notabove
+    mov [sh_df_top], ax
+.notabove:
+    mov ax, [sh_df_top]
+    add ax, SH_DF_MAXF
+    cmp [sh_df_fld], ax
+    jb .onscreen
+    mov ax, [sh_df_fld]
+    sub ax, SH_DF_MAXF - 1
+    mov [sh_df_top], ax
+.onscreen:
+    mov byte [sh_df_buf], 0
+    call sh_df_nrec
+    or ax, ax
+    jz .set
+    mov ax, [sh_df_fld]
+    call sh_df_fcol
+    mov bx, [sh_df_rec]
+    SHOUT sh_cell_totext                ; -> sh_clipbuf
+    mov si, sh_clipbuf
+    mov di, sh_df_buf
+    mov cx, SH_EDITMAX
+.copy:
+    jcxz .term
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .set
+    inc si
+    inc di
+    dec cx
+    jmp .copy
+.term:
+    mov byte [di], 0
+.set:
+    mov si, sh_df_line
+    mov di, sh_df_buf
+    SHOUT os88line_set
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_savefld - write the editor back to the focused field's cell, if that
+; field is one that may be typed into at all.
+;
+; sh_commit is driven the way sh_sort_permcol drives it - the SELECTION is its
+; argument - so the real selection is banked across the call and put back.
+; Without that, closing the form would leave the user's cursor on whichever
+; field was last edited.
+; -----------------------------------------------------------------------------
+sh_df_savefld:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov ax, [sh_df_fld]
+    call sh_df_editable
+    jnc .out
+    mov ax, [sh_selcol]                ; bank the real selection
+    mov [sh_df_svc1], ax
+    mov ax, [sh_selrow]
+    mov [sh_df_svr1], ax
+    mov ax, [sh_selcol2]
+    mov [sh_df_svc2], ax
+    mov ax, [sh_selrow2]
+    mov [sh_df_svr2], ax
+    mov si, sh_df_buf                  ; the editor's text is what gets typed
+    mov di, sh_editbuf
+    xor cx, cx
+.copy:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .copied
+    inc si
+    inc di
+    inc cx
+    jmp .copy
+.copied:
+    mov [sh_editlen], cl
+    mov ax, [sh_df_fld]
+    call sh_df_fcol
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov ax, [sh_df_rec]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+    mov byte [sh_editing], 1
+    SHOUT sh_commit
+    mov ax, [sh_df_svc1]               ; ...and put it back
+    mov [sh_selcol], ax
+    mov ax, [sh_df_svr1]
+    mov [sh_selrow], ax
+    mov ax, [sh_df_svc2]
+    mov [sh_selcol2], ax
+    mov ax, [sh_df_svr2]
+    mov [sh_selrow2], ax
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_movefld - in: AX = the field to move the focus to. Saves the one being
+; left, clamps, loads the new one
+sh_df_movefld:
+    push ax
+    push cx
+    mov cx, ax
+    or cx, cx
+    jl .out
+    cmp cx, [sh_df_nf]
+    jae .out
+    call sh_df_savefld
+    mov [sh_df_fld], cx
+    call sh_df_loadfld
+.out:
+    pop cx
+    pop ax
+    ret
+
+; sh_df_moverec - in: AX = the record row to show. Saves the field being left
+sh_df_moverec:
+    push ax
+    push bx
+    push cx
+    mov cx, ax
+    mov ax, [sh_df_r1]
+    inc ax
+    cmp cx, ax
+    jl .out
+    cmp cx, [sh_df_r2]
+    jg .out
+    call sh_df_savefld
+    mov [sh_df_rec], cx
+    call sh_df_loadfld
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_paint - SI = the dialog window
+; -----------------------------------------------------------------------------
+sh_df_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call OSAPI_WM_CONTENT
+    mov [sh_df_ox], ax
+    mov [sh_df_oy], dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+
+    ; --- `n of m`, the position counter Excel's own form carries -----------
+    mov di, sh_tbuf
+    call sh_df_nrec
+    push ax
+    or ax, ax
+    jz .zero
+    mov ax, [sh_df_rec]
+    sub ax, [sh_df_r1]
+.zero:
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    SHOUT sh_strcpy_to_di
+    mov si, sh_s_df_of
+    SHOUT sh_strcpy_to_di
+    pop ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    SHOUT sh_strcpy_to_di
+    mov di, sh_tbuf
+    mov cx, SH_DF_LW
+    call sh_df_pad
+    mov cx, [sh_df_ox]
+    add cx, SH_DF_LBLX
+    mov dx, [sh_df_oy]
+    add dx, 4
+    mov si, sh_tbuf
+    mov al, CBLACK                     ; OPAQUE (6.1): the counter changes on
+    mov ah, CWHITE                     ; every record, and one pass is what
+    call OSAPI_FONT_RUN                ; stops it flashing as it does
+
+    ; --- one row per visible field -----------------------------------------
+    mov word [sh_df_i], 0
+.row:
+    mov ax, [sh_df_i]
+    cmp ax, SH_DF_MAXF
+    jae .buttons
+    add ax, [sh_df_top]
+    cmp ax, [sh_df_nf]
+    jae .buttons
+    call sh_df_rowpaint
+    inc word [sh_df_i]
+    jmp .row
+
+.buttons:
+    mov word [sh_df_i], 0
+.btn:
+    mov ax, [sh_df_i]
+    cmp ax, SH_DF_NBT
+    jae .done
+    call sh_df_btnpaint
+    inc word [sh_df_i]
+    jmp .btn
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_rowpaint - draw visible row [sh_df_i]: the field's NAME from the
+; database's header row, then its value - in a live editor if this is the
+; focused field, in a plain frame if it is another editable one, and as bare
+; text with no frame at all if it is computed or protected, which is exactly
+; how Excel's own form says a field cannot be typed into
+sh_df_rowpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, [sh_df_i]
+    mov bx, SH_DF_ROWH
+    mul bx
+    add ax, SH_DF_ROWTOP
+    add ax, [sh_df_oy]
+    mov [sh_df_rowy], ax
+    mov ax, [sh_df_i]
+    add ax, [sh_df_top]
+    mov [sh_df_f], ax
+    call sh_df_fcol                    ; the header cell above this field
+    mov bx, [sh_df_r1]
+    SHOUT sh_cell_totext
+    mov di, sh_clipbuf                 ; a scrolled field window changes the
+    mov cx, SH_DF_LW                   ; labels too, so this column pads as
+    call sh_df_pad                     ; well as the value one
+    mov cx, [sh_df_ox]
+    add cx, SH_DF_LBLX
+    mov dx, [sh_df_rowy]
+    add dx, 4
+    mov si, sh_clipbuf
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+
+    mov ax, [sh_df_f]                  ; ...and the value beside it
+    mov bx, [sh_df_fld]
+    cmp ax, bx
+    jne .other
+    mov si, sh_df_line                 ; THE focused field: the live editor,
+    mov ax, [sh_df_ox]                 ; its rect refreshed from the live
+    add ax, SH_DF_BOXX1                ; content origin every paint
+    mov [si + LN_X1], ax
+    mov ax, [sh_df_ox]
+    add ax, SH_DF_BOXX2
+    mov [si + LN_X2], ax
+    mov ax, [sh_df_rowy]
+    mov [si + LN_Y1], ax
+    add ax, SH_DF_ROWH - 3
+    mov [si + LN_Y2], ax
+    SHOUT os88line_draw
+    jmp .out
+.other:
+    mov ax, [sh_df_f]
+    push ax
+    mov ax, [sh_df_fld]                ; sh_df_editable asks about the FOCUSED
+    push ax                            ; field, so borrow the focus to ask
+    mov ax, [sh_df_f]                  ; about this one
+    mov [sh_df_fld], ax
+    call sh_df_editable
+    pop ax
+    mov [sh_df_fld], ax
+    pop ax
+    pushf
+    call sh_df_valtext                 ; -> sh_clipbuf
+    mov di, sh_clipbuf
+    mov cx, SH_DF_VW
+    call sh_df_pad
+    popf
+    jnc .bare
+    mov ax, [sh_df_ox]                 ; an editable field keeps its frame
+    add ax, SH_DF_BOXX1
+    mov bx, [sh_df_rowy]
+    mov cx, [sh_df_ox]
+    add cx, SH_DF_BOXX2
+    mov dx, [sh_df_rowy]
+    add dx, SH_DF_ROWH - 3
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    call OSAPI_GFX_FRAME
+.bare:
+    mov cx, [sh_df_ox]
+    add cx, SH_DF_BOXX1 + 4
+    mov dx, [sh_df_rowy]
+    add dx, 3
+    mov si, sh_clipbuf
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_pad - in: DI = a NUL string, CX = the width in cells. Pads it with
+; spaces to exactly that, or cuts it to it. See SH_DF_VW for why.
+sh_df_pad:
+    push ax
+    push cx
+    push di
+.find:
+    cmp byte [di], 0
+    je .fill
+    inc di
+    dec cx
+    jns .find
+    jmp .cut
+.fill:
+    or cx, cx
+    jle .term
+    mov byte [di], ' '
+    inc di
+    dec cx
+    jmp .fill
+.cut:
+.term:
+    mov byte [di], 0
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; sh_df_valtext - field [sh_df_f]'s own text into sh_clipbuf, empty when the
+; database holds no records at all
+sh_df_valtext:
+    push ax
+    push bx
+    mov byte [sh_clipbuf], 0
+    call sh_df_nrec
+    or ax, ax
+    jz .out
+    mov ax, [sh_df_f]
+    call sh_df_fcol
+    mov bx, [sh_df_rec]
+    SHOUT sh_cell_totext
+.out:
+    pop bx
+    pop ax
+    ret
+
+; sh_df_btnrect - in: AX = a button index; fills sh_df_rect from the live
+; content origin. One place, so the painter and the hit test cannot drift
+sh_df_btnrect:
+    push ax
+    push bx
+    push dx
+    mov bx, SH_DF_BTW + SH_DF_BTGAP
+    mul bx
+    add ax, 4
+    add ax, [sh_df_ox]
+    mov [sh_df_rect], ax
+    add ax, SH_DF_BTW
+    mov [sh_df_rect+4], ax
+    mov ax, [sh_df_oy]
+    add ax, SH_DF_BTY1
+    mov [sh_df_rect+2], ax
+    mov ax, [sh_df_oy]
+    add ax, SH_DF_BTY2
+    mov [sh_df_rect+6], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+sh_df_btnpaint:
+    push ax
+    push bx
+    push si
+    push di
+    mov ax, [sh_df_i]
+    call sh_df_btnrect
+    mov bx, [sh_df_i]
+    shl bx, 1
+    mov si, [sh_df_btns + bx]
+    xor di, di
+    cmp word [sh_df_i], SH_DF_NBT - 1  ; Close carries the ring: it is the
+    jne .draw                          ; one button Enter should never fire
+    mov di, OS88UI_DEF                 ; by accident, and the one a user
+.draw:                                 ; always wants within reach
+    mov bx, sh_df_rect
+    SHOUT os88ui_btn
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_onkey - AL = ascii, AH = scan code. The Reference Guide's own table:
+; TAB the next field, SHIFT+TAB the previous, ENTER the next record. Escape
+; closes, which is this OS's rule for every dialog.
+; -----------------------------------------------------------------------------
+sh_df_onkey:
+    push ax
+    push si
+    cmp al, 27
+    je .close
+    cmp al, 9
+    je .tab
+    cmp al, 13
+    je .nextrec
+    mov si, sh_df_line
+    SHOUT os88line_key
+    jc .out                            ; the field did not want it
+    call sh_df_repaint
+    jmp .out
+.tab:
+    mov ax, [sh_df_fld]
+    inc ax
+    cmp ax, [sh_df_nf]
+    jb .setfld
+    xor ax, ax                         ; past the last field: round to the
+.setfld:                               ; first, which is what a form does
+    call sh_df_movefld
+    call sh_df_repaint
+    jmp .out
+.nextrec:
+    mov ax, [sh_df_rec]
+    inc ax
+    call sh_df_moverec
+    mov ax, 0
+    call sh_df_movefld                 ; ENTER = the FIRST field of the next
+    call sh_df_repaint                 ; record, the Guide's own wording
+    jmp .out
+.close:
+    call sh_df_savefld
+    call sh_df_close
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_onclick - CX,DX = the click, screen-absolute
+; -----------------------------------------------------------------------------
+sh_df_onclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, sh_df_line                 ; the live field first: its rect is
+    SHOUT os88line_click                ; already screen-absolute
+    jnc .redraw
+    mov bx, [sh_df_win]
+    push cx
+    push dx
+    call OSAPI_WM_CONTENT
+    pop dx
+    pop cx
+    sub cx, ax
+    sub dx, [sh_df_oy]
+    cmp dx, SH_DF_BTY1                 ; the button row?
+    jb .fields
+    cmp dx, SH_DF_BTY2
+    ja .out
+    mov ax, cx
+    sub ax, 4
+    jl .out
+    mov bx, SH_DF_BTW + SH_DF_BTGAP
+    xor dx, dx
+    div bx
+    cmp dx, SH_DF_BTW                  ; in the GAP between two buttons
+    ja .out
+    cmp ax, SH_DF_NBT
+    jae .out
+    call sh_df_dobtn
+    jmp .out
+.fields:                               ; a click on another field focuses it
+    sub dx, SH_DF_ROWTOP
+    jl .out
+    mov ax, dx
+    xor dx, dx
+    mov bx, SH_DF_ROWH
+    div bx
+    cmp ax, SH_DF_MAXF
+    jae .out
+    add ax, [sh_df_top]
+    cmp ax, [sh_df_nf]
+    jae .out
+    call sh_df_movefld
+    call sh_df_repaint
+    jmp .out
+.redraw:
+    mov si, sh_df_line
+    SHOUT os88line_draw
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_dobtn - in: AX = the button index
+sh_df_dobtn:
+    push ax
+    push bx
+    or ax, ax
+    jnz .b1
+    mov ax, [sh_df_rec]                ; Prev
+    dec ax
+    call sh_df_moverec
+    jmp .repaint
+.b1:
+    cmp ax, 1
+    jne .b2
+    mov ax, [sh_df_rec]                ; Next
+    inc ax
+    call sh_df_moverec
+    jmp .repaint
+.b2:
+    cmp ax, 2
+    jne .b3
+    call sh_df_new                     ; New
+    jmp .repaint
+.b3:
+    cmp ax, 3
+    jne .b4
+    call sh_df_askdel                  ; Delete, behind its own alert
+    jmp .out
+.b4:
+    call sh_df_savefld                 ; Close
+    call sh_df_close
+    jmp .out
+.repaint:
+    call sh_df_repaint
+.out:
+    pop bx
+    pop ax
+    ret
+
+; sh_df_repaint - the dialog only, by calling its own painter with SI = the
+; window, which is what sh_fdlg_onclick does after a radio moves. The grid
+; behind it repaints when the form CLOSES, not on every keystroke
+sh_df_repaint:
+    push si
+    mov si, [sh_df_win]
+    or si, si
+    jz .out
+    call sh_df_paint
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_new - a blank record at the end of the database, which the DATABASE
+; name then covers. REFUSED when the row below the database already holds
+; something in any of its columns: extending over a user's own data is not a
+; thing to do quietly, and Excel's own form refuses the same case.
+; -----------------------------------------------------------------------------
+sh_df_new:
+    push ax
+    push bx
+    push cx
+    call sh_df_savefld
+    mov cx, [sh_df_c1]
+.scan:
+    cmp cx, [sh_df_c2]
+    jg .room
+    mov ax, cx
+    mov bx, [sh_df_r2]
+    inc bx
+    SHOUT sh_findcell
+    jc .noroom
+    inc cx
+    jmp .scan
+.room:
+    inc word [sh_df_r2]
+    call sh_df_bind
+    mov ax, [sh_df_r2]
+    mov [sh_df_rec], ax
+    mov word [sh_df_fld], 0
+    mov word [sh_df_top], 0
+    call sh_df_loadfld
+    jmp .out
+.noroom:
+    mov word [sh_msg], sh_s_df_noroom
+    mov bx, [sh_ownwin]
+    push si
+    mov si, bx
+    SHOUT sh_repaint
+    pop si
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_bind - DATABASE covers what sh_df_r1/r2 now say it does
+sh_df_bind:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, sh_s_dbname
+    mov ax, [sh_df_c1]
+    mov bx, [sh_df_r1]
+    mov cx, [sh_df_c2]
+    mov dx, [sh_df_r2]
+    SHOUT sh_name_def
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_askdel - Delete warns first, Data ▸ Delete's own reason: Edit ▸ Undo
+; cannot reverse it
+sh_df_askdel:
+    push ax
+    push bx
+    push si
+    push di
+    call sh_df_nrec
+    or ax, ax
+    jz .out
+    mov al, OS88UI_AYESNO
+    mov bx, [sh_ownwin]
+    mov si, sh_s_df_delq
+    mov di, sh_df_ondel
+    SHOUT os88ui_ask
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sh_df_ondel - the alert's completion. AL = the button, or OS88UI_ACANCEL
+sh_df_ondel:
+    push ax
+    cmp al, 0
+    jne .out
+    call sh_df_delrec
+    call sh_df_repaint
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_delrec - drop the displayed record and close the gap, across the
+; database's own columns only. Data ▸ Delete's rule (81.71.3) for one record,
+; through the same sh_cell_totext/sh_commit pair
+; -----------------------------------------------------------------------------
+sh_df_delrec:
+    push ax
+    push bx
+    push cx
+    mov ax, [sh_df_rec]
+    mov [sh_df_dst], ax
+.row:
+    mov ax, [sh_df_dst]
+    inc ax
+    cmp ax, [sh_df_r2]
+    ja .tail
+    mov [sh_df_src], ax
+    call sh_df_carry
+    inc word [sh_df_dst]
+    jmp .row
+.tail:
+    mov cx, [sh_df_c1]                 ; the last row is a duplicate now
+.clr:
+    cmp cx, [sh_df_c2]
+    jg .shrink
+    mov ax, cx
+    mov bx, [sh_df_r2]
+    SHOUT sh_clearcell
+    inc cx
+    jmp .clr
+.shrink:
+    dec word [sh_df_r2]
+    call sh_df_bind
+    mov ax, [sh_df_rec]                ; ...and the form lands on whatever is
+    cmp ax, [sh_df_r2]                 ; in the deleted record's place, or on
+    jbe .loaded                        ; the new last record
+    mov ax, [sh_df_r2]
+    mov [sh_df_rec], ax
+.loaded:
+    call sh_df_loadfld
+    push si
+    mov si, [sh_ownwin]
+    SHOUT sh_repaint
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_df_carry - move the record at [sh_df_src] to [sh_df_dst], field by field
+sh_df_carry:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov cx, [sh_df_c1]
+.col:
+    cmp cx, [sh_df_c2]
+    jg .out
+    mov ax, cx
+    mov bx, [sh_df_src]
+    SHOUT sh_cell_totext                ; -> sh_clipbuf
+    mov si, sh_clipbuf
+    mov di, sh_editbuf
+    push cx
+    xor cx, cx
+.copy:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .copied
+    inc si
+    inc di
+    inc cx
+    jmp .copy
+.copied:
+    mov [sh_editlen], cl
+    pop cx
+    mov ax, [sh_selcol]                ; bank the real selection, sh_df_savefld's
+    mov [sh_df_svc1], ax               ; own reason
+    mov ax, [sh_selrow]
+    mov [sh_df_svr1], ax
+    mov ax, [sh_selcol2]
+    mov [sh_df_svc2], ax
+    mov ax, [sh_selrow2]
+    mov [sh_df_svr2], ax
+    mov [sh_selcol], cx
+    mov [sh_selcol2], cx
+    mov ax, [sh_df_dst]
+    mov [sh_selrow], ax
+    mov [sh_selrow2], ax
+    mov byte [sh_editing], 1
+    SHOUT sh_commit
+    mov ax, [sh_df_svc1]
+    mov [sh_selcol], ax
+    mov ax, [sh_df_svr1]
+    mov [sh_selrow], ax
+    mov ax, [sh_df_svc2]
+    mov [sh_selcol2], ax
+    mov ax, [sh_df_svr2]
+    mov [sh_selrow2], ax
+    inc cx
+    jmp .col
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_df_close - the gate cleared BEFORE the destroy, every other engine's
+; shape, and OSAPI_WM_DESTROY and not CLOSE (81.6: CLOSE leaks the slot)
+; -----------------------------------------------------------------------------
+sh_df_close:
+    push ax
+    push bx
+    push si
+    mov bx, [sh_df_win]
+    or bx, bx
+    jz .out
+    mov word [sh_df_win], 0
+    call OSAPI_WM_DESTROY
+    SHOUT sh_recalc_all                 ; a form can have rewritten any cell
+    mov si, [sh_ownwin]
+    SHOUT sh_repaint
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+section .text
 
 sh_dlg:
     push bx
@@ -37297,7 +38536,7 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
-    dw sh_m_data,    sh_i_data,    9
+    dw sh_m_data,    sh_i_data,    10
     dw sh_m_options, sh_i_options, 5
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -37444,9 +38683,10 @@ sh_it_filldown:  db 'Fill Down', 0
 ; paid once - the whole reason this package has a menu bar of its own is to
 ; look like the captures.
 sh_m_data:     db 'Data', 0
-sh_i_data:     dw sh_it_dfind, sh_it_extract, sh_it_del
+sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
                dw sh_it_setdb, sh_it_setcrit, sh_it_sort
                dw sh_it_chart, sh_it_gallery, sh_it_chartexp
+sh_it_form:    db 'Form...', 0
 sh_it_dfind:   db 'Find', 0              ; 81.71, relabelled in place while a
 sh_it_exitfnd: db 'Exit Find', 0         ; find is live - Excel's own item
 sh_it_extract: db 'Extract...', 0
@@ -39025,7 +40265,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7356                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 7524                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -39973,8 +41213,17 @@ sh_v_sh_funcfinish           equ sh_v_sh_foldvalue + 4
 sh_v_sh_cell_totext          equ sh_v_sh_funcfinish + 4   ; 81.71
 sh_v_sh_clearcell            equ sh_v_sh_cell_totext + 4
 sh_v_sh_formula_copyshift    equ sh_v_sh_clearcell + 4
-SH_NVEC       equ 99
-sh_v_end      equ sh_v_sh_formula_copyshift + 4
+sh_v_os88line_set            equ sh_v_sh_formula_copyshift + 4   ; 81.71.5
+sh_v_os88line_draw           equ sh_v_os88line_set + 4
+sh_v_os88line_key            equ sh_v_os88line_draw + 4
+sh_v_os88line_click          equ sh_v_os88line_key + 4
+sh_v_os88ui_btn              equ sh_v_os88line_click + 4
+sh_v_os88ui_ask              equ sh_v_os88ui_btn + 4
+sh_v_os88ui_glyph            equ sh_v_os88ui_ask + 4      ; 81.71.5.1
+sh_v_sh_bt_findcell          equ sh_v_os88ui_glyph + 4
+sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
+SH_NVEC       equ 108
+sh_v_end      equ sh_v_sh_bt_removecell + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -40163,7 +41412,35 @@ sh_dbc_src    equ sh_ex_dc + 2               ; Delete's compaction: the row it
 sh_dbc_dst    equ sh_dbc_src + 2             ; is reading and the row it is
 sh_dbc_col    equ sh_dbc_dst + 2             ; writing, and the column between
 sh_dbc_hits   equ sh_dbc_col + 2             ; them; how many records matched
-sh_bss_end        equ sh_dbc_hits + 2
+
+; Data ▸ Form (81.71.5) - the sixth dialog engine's own state. The rectangle
+; is PINNED at open, like Extract's; sh_df_rec/fld/top are where the form is
+; standing in it, and sh_df_sv* bank the real selection across the sh_commit
+; that writes a field back (sh_commit's argument IS the selection).
+sh_df_win     equ sh_dbc_hits + 2            ; word: 0 = closed, and the gate
+sh_df_ox      equ sh_df_win + 2
+sh_df_oy      equ sh_df_ox + 2
+sh_df_rect    equ sh_df_oy + 2               ; 8: one button rect, refilled
+sh_df_c1      equ sh_df_rect + 8             ; the database, pinned at open
+sh_df_r1      equ sh_df_c1 + 2
+sh_df_c2      equ sh_df_r1 + 2
+sh_df_r2      equ sh_df_c2 + 2
+sh_df_rec     equ sh_df_r2 + 2               ; the record on show, as a ROW
+sh_df_fld     equ sh_df_rec + 2              ; the focused field
+sh_df_top     equ sh_df_fld + 2              ; the first field on screen
+sh_df_nf      equ sh_df_top + 2              ; how many the record has
+sh_df_i       equ sh_df_nf + 2               ; a paint loop's own index
+sh_df_f       equ sh_df_i + 2                ; ...and the field it is drawing
+sh_df_rowy    equ sh_df_f + 2                ; ...and that row's y
+sh_df_src     equ sh_df_rowy + 2             ; Delete's compaction cursors
+sh_df_dst     equ sh_df_src + 2
+sh_df_svc1    equ sh_df_dst + 2              ; the banked selection
+sh_df_svr1    equ sh_df_svc1 + 2
+sh_df_svc2    equ sh_df_svr1 + 2
+sh_df_svr2    equ sh_df_svc2 + 2
+sh_df_line    equ sh_df_svr2 + 2             ; OS88LINE_SZ: the one live field
+sh_df_buf     equ sh_df_line + OS88LINE_SZ   ; SH_EDITMAX+1: what it edits
+sh_bss_end        equ sh_df_buf + SH_EDITMAX + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

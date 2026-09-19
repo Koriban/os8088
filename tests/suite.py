@@ -4799,6 +4799,15 @@ SOAK = [
         "fields, and Delete compacting the database while the cell one row "
         "below it stays put - which is what separates it from Edit > Delete",
         needs=("marty",), serial=True),
+    Row("sheetform", "soak", py("tests/sheetform.py"), 450.0,
+        "SPEC.md 81.71.5: Data > Form - one record at a time, the sixth "
+        "dialog engine and the first one that lives in CHART.OVL behind "
+        "resident thunks, so this gates that arrangement as much as the "
+        "feature. The counter and the fields moving together, a field typed "
+        "over reaching the CELL, New growing DATABASE, and Close putting the "
+        "user's own selection back rather than leaving it on the last field "
+        "edited. It found `Veg` drawn over `Fruit` reading `Vegit`",
+        needs=("marty",), serial=True),
     Row("sheetfreeze", "soak", py("tests/sheetfreeze.py"), 400.0,
         "SPEC.md 81.70: Options > Freeze Panes. Nothing a file holds can "
         "show a freeze, so every assertion is a cell's text read off the "

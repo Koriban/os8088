@@ -64,8 +64,9 @@ DISK = "build/sheetdbcmd.img"
 NAME = "DBCMD.SLK"
 DATA = (311, 45)                        # the Data menu, tests/sheetdb.py's
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
-FIND, EXTRACT, DELETE = 0, 1, 2         # 81.71's Excel-order Data menu...
-SET_DB, SET_CRIT = 3, 4                 # ...matching tests/sheetdb.py
+FORM = 0                                # 81.71's Excel-order Data menu:
+FIND, EXTRACT, DELETE = 1, 2, 3         # Form, Find, Extract, Delete,
+SET_DB, SET_CRIT = 4, 5                 # Set Database, Set Criteria, Sort
 FMT_OK = SF.FMT_OK                      # the radio dialog's own OK
 ALERT_OK = (0, 0)                       # filled in from the alert's geometry
 
@@ -188,12 +189,12 @@ def main():
             release, so the pull-down only exists between the two edges"""
             mo.to(DATA[0], DATA[1])
             mo._edge(True)
-            mo.to(*ITEM(DATA[0], 5), l=True)  # hover SORT, not the item being
+            mo.to(*ITEM(DATA[0], 6), l=True)  # hover SORT, not the item being
             M.settle(m)                      # read: the one under the pointer
             _, _, rw = m.vram("cga")         # is INVERTED, and glass reads
             M.write_png(os.path.join(WORK, tag + ".png"), 640, 200, rw)
             seen[tag] = glass.cell_text(
-                rw, (DATA[0] - 9, 55, DATA[0] + 101, 68), table)
+                rw, (DATA[0] - 9, 67, DATA[0] + 101, 80), table)
             mo.to(DATA[0] - 240, 190, l=True)   # off the menu entirely, so
             mo._edge(False)                     # the release fires nothing
             M.settle(m)

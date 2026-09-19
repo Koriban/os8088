@@ -103032,7 +103032,7 @@ harmless.
 | Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
-| Data | 6, 3 shared | 10 | Form, Find, Extract, Delete, Series, Table, Parse (Set Database/Set Criteria closed 2026-09-18, §81.69) |
+| Data | 10, 7 shared | 10 | **Series, Table, Parse** — Form, Find, Extract and Delete closed 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69) |
 | Macro | 1 | ~6 | Record, Start/Set Recorder, Relative Record, Resume |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
@@ -103075,12 +103075,13 @@ Almost everything above hangs off six pieces of work:
    multi-cell entry, matching Excel's own non-CSE behaviour, so all 8 are
    done or in progress without it. `Data ▸ Table` remains undone - it is
    genuinely a multi-cell feature, not just an array-returning function.
-3. ~~A database + criteria area~~ — **done in §81.65** (the 11 functions) and
-   §81.69 (`Data ▸ Set Database`/`Set Criteria`, which name a range so a call
-   need not repeat it). **This is now an unspent enabler**: the criteria
-   engine and the two named ranges are exactly what `Data ▸ Find`, `Extract`,
-   `Delete` and `Form` are built on, so four of the seven missing Data
-   commands need no new machinery, only their own UI.
+3. ~~A database + criteria area~~ — **done in §81.65** (the 11 functions),
+   §81.69 (`Data ▸ Set Database`/`Set Criteria`) and **§81.71, which spent
+   it**: `Data ▸ Find`, `Extract`, `Delete` and `Form` added no matching
+   logic at all, and what they cost instead was ROOM — the package had ~46
+   bytes of headroom, so two dialogs moved into `CHART.OVL` to pay for the
+   sixth (§81.71.5.1). Three Data commands are left, and none of them is
+   downstream of this one.
 4. **Per-row geometry** → row heights, and `Justify` (per-column widths are
    §81.56's).
 5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
@@ -105668,6 +105669,87 @@ that records will be permanently deleted"*, so `os88ui_ask` with
 `OS88UI_AYESNO` is on the path and a dismissed alert deletes nothing. Extract's
 `sh_ud_kind` byte is `SH_UL_DROP` for the same reason — Undo saying so rather
 than appearing to offer something it cannot do.
+
+#### 81.71.5 Form, and the sixth dialog engine
+
+`Data ▸ Form...` shows one record at a time: the field names down the left,
+their values beside them, a `n of m` counter, and `Prev` / `Next` / `New` /
+`Delete` / `Close`. It is the one command here that **needs no criteria engine
+at all** — the Guide is explicit that *"Data Form works independently of the
+other database commands (Data Find, Data Delete, and Data Extract). Data Form
+also operates independently of the criteria range"* — so all it reads is the
+`DATABASE` name.
+
+**It is a sixth dialog engine, and it had to be.** `sh_fdlg` is a radio
+column, `sh_idlg` one text field, `sh_bdlg` check boxes, `sh_ldlg` a list and
+`sh_ndlg` one multi-line box; a form is N labelled fields over a record with a
+button row, and none of the five bends to that without becoming a sixth
+anyway.
+
+**One live editor, not N.** Every field is drawn in a box but only the focused
+one is a real `os88line`; `Tab`/`Shift+Tab` move the focus and `Enter` moves
+to the next record, which is the Guide's own keyboard table. A field is
+written back to its cell as the focus **leaves** it, where Excel saves a
+record's changes when you leave the *record*. Those are observably the same
+here because `Restore` — the one command that can tell them apart — is not
+implemented.
+
+Computed and protected fields are shown without a box and cannot be typed
+into, which is Excel's own rule (*"Fields that are computed or protected
+cannot be edited, and so do not appear in a text box"*); `sh_df_editable` is
+the test, and it asks the same two questions §81.46 does. A field wider than
+`SH_DF_MAXF` = 5 rows scrolls its window of fields with the focus rather than
+being refused.
+
+`New` appends a record and grows `DATABASE` by a row, **refusing when the row
+below the database is not empty** — extending over a user's own data is not
+something to do quietly. `Delete` drops the displayed record and closes the
+gap across the database's columns only, §81.71.3's rule for one record and
+through the same `sh_cell_totext`/`sh_commit` pair, behind the same alert.
+
+`sh_commit`'s argument *is* the selection, so every write banks the real
+selection and puts it back; without that, closing the form would leave the
+user's cursor on whichever field was last edited.
+
+**Not implemented, with reasons:** `Restore` (needs a per-record snapshot that
+nothing else here keeps), and `Criteria` (a second mode inside the form whose
+conditions are deliberately *not* the criteria range, so it shares no state
+with §81.71 and is a feature of its own size).
+
+##### 81.71.5.1 Two dialogs moved into CHART.OVL
+
+Form is ~2.2 KB of code that runs only while it is open, and **SHEET did not
+have it**: the package was 1,806 bytes over `APP_MAX_SIZE` with Form resident,
+having had about 46 bytes of headroom before it. So the engine went into the
+overlay, and the Border dialog (§81.34's, ~900 bytes, opened perhaps once a
+session) followed it for the same reason — the measurement that §81.62 acted
+on, taken again.
+
+**What stays resident is the data, because of who reads it**: the window
+template, its title, the button labels and the status-line strings are all
+read by the kernel or by `os88ui_*` through **DS**, so a copy in the module's
+segment would be read as garbage. That is ~230 bytes against the 3.1 KB of
+code moved.
+
+**A window callback cannot be a module label**, so `WT_PAINT`/`WT_ONKEY`/
+`WT_ONCLICK` point at resident thunks that `ch_ovcall` one verb each
+(`SHM_FORM`, `SHM_FPAINT`, `SHM_FKEY`, `SHM_FCLICK`, and `SHM_BOPEN`/
+`SHM_BPAINT`/`SHM_BCLICK`) — four and three rather than one verb with a
+sub-op, because `sh_modc_ext` already dispatches on a number and a callback
+should not have to spend a register saying which one it is. `ch_ovcall`
+passes the registers straight through, so each thunk is a `push bp`, a `mov`
+and a call.
+
+**The invariant that makes this safe**: `ch_ovneed` returns on its first
+compare once `ch_ovseg` is set, so only the *first* call reads the file. The
+menu's own entry point (`sh_docmd_form_r`, `sh_bdlg_open_r`) makes that call
+**before** `OSAPI_WM_CREATE`, and refuses to open the window at all if the
+module cannot be read — so no paint, holding the gfx lock, is ever the call
+that has to touch a disk.
+
+Eight more vectors went with them (`os88line_set`/`_draw`/`_key`/`_click`,
+`os88ui_btn`, `os88ui_ask`, `os88ui_glyph`, `sh_bt_findcell`,
+`sh_bt_removecell`; `SH_NVEC` 99 → 108) and `CH_OVKB` rose again.
 
 #### 81.71.4 What it cost, and the menu's order
 
