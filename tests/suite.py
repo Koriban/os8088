@@ -4807,7 +4807,9 @@ SOAK = [
         "column ends that, so sh_geom records the mapping and four routine "
         "pairs read it back. The headers, the cell contents and the hit test "
         "each reach it through a different one of them - a slot showing C1 "
-        "while a click on it selects B1 is what a break looks like",
+        "while a click on it selects B1 is what a break looks like. 81.73.2's "
+        "heading drag rides with it: the edge moves 24px and widens ONE "
+        "column by exactly that",
         needs=("marty",), serial=True),
     Row("sheetseries", "soak", py("tests/sheetseries.py"), 450.0,
         "SPEC.md 81.72: Data > Series - two dialogs in sequence (the type as "

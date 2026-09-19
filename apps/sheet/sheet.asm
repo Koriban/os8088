@@ -2188,6 +2188,20 @@ sh_rowheight:
 .hidden:
     xor ax, ax
     ret
+; sh_pxtw - AX = pixels -> AX = twips, sh_twpx's own inverse (81.73.2)
+sh_pxtw:
+    push cx
+    push dx
+    mov cx, SH_RH_STDTW
+    mul cx
+    add ax, SH_RH_NORMAL / 2
+    adc dx, 0
+    mov cx, SH_RH_NORMAL
+    div cx
+    pop dx
+    pop cx
+    ret
+
 ; sh_twpx - AX = twips -> AX = pixels, the standard 255 being SH_RH_NORMAL
 sh_twpx:
     push cx
@@ -3218,6 +3232,12 @@ sh_onclick:
     call sh_df_close_r                 ; for the rest of the session
 .nodf:
     mov word [sh_msg], 0
+    mov byte [sh_rz_on], 0             ; 81.73.2: a press on a heading's own
+    call sh_hdrhit                     ; trailing edge is a RESIZE and not a
+    jnc .norz                          ; selection, so it is asked first and
+    mov byte [sh_rz_on], 1             ; owns the whole gesture
+    jmp .out
+.norz:
     mov byte [sh_dragging], 0          ; stage 3.0a: a gesture is only a grid
                                         ; drag if it STARTS on the grid - the
                                         ; menu-bar path below never arms it
@@ -3673,6 +3693,13 @@ sh_ondrag:
     push cx
     push dx
     push si
+    ; 81.73.2: ...and a heading drag owns it before either of them, because
+    ; it started on a press the selection never saw
+    cmp byte [sh_rz_on], 0
+    je .norz
+    call sh_rz_track
+    jmp .out
+.norz:
     ; stage 3.0a+: a live scroll-thumb drag owns the gesture before the grid
     ; selection does.
     call sh_sbsync
@@ -3790,6 +3817,221 @@ sh_scrollto2:
     mov [sh_sc_trow], ax
     pop ax
     jmp sh_scrollto_t
+; =============================================================================
+; RESIZING A ROW OR COLUMN BY DRAGGING ITS HEADING (SPEC.md 81.73.2)
+;
+; A press within SH_RZ_GRAB pixels of a heading's trailing edge grabs it; the
+; drag then sets the width or height LIVE and the release just lets go.
+;
+; LIVE, BUT ONLY IN WHOLE UNITS. A width is stored in CHARACTERS, so the grid
+; is repainted once per 8 pixels of travel rather than once per mouse event -
+; a full grid repaint is priced in primitive calls (PERFORMANCE.md), and one
+; per pixel across a 56-pixel column is 56 of them where 7 is the same
+; gesture. Excel 2.1 drew a guide line instead for exactly this reason; that
+; needs an XOR line this app does not have, and stepping in whole units gets
+; the feedback without one.
+;
+; DRAGGING IT SHUT HIDES IT, which is Excel's own behaviour and falls out of
+; 81.73 rather than being built: no width IS the hidden sentinel's meaning.
+; =============================================================================
+SH_RZ_GRAB   equ 3                   ; pixels either side of the edge
+
+; -----------------------------------------------------------------------------
+; sh_hdrhit - in: CX,DX = a click. out: CF=1 when it grabbed a heading's
+; trailing edge, with [sh_rz_axis] 0 = column / 1 = row, [sh_rz_idx] = the
+; REAL row or column being resized, and [sh_rz_x0] the edge's own pixel.
+; -----------------------------------------------------------------------------
+sh_hdrhit:
+    push ax
+    push bx
+    push dx
+    mov ax, dx                         ; --- the COLUMN heading strip?
+    sub ax, [sh_goy]
+    sub ax, SH_FB_H
+    js .rowstrip
+    cmp ax, SH_CH_H
+    jae .rowstrip
+    mov ax, cx
+    sub ax, [sh_ox]
+    sub ax, SH_RH_W
+    js .no
+    mov [sh_rz_px], ax
+    mov byte [sh_rz_axis], 0
+    xor bx, bx
+    xor dx, dx
+.cw:
+    cmp bx, [sh_vcols]
+    jae .no
+    mov ax, bx
+    call sh_vwidth
+    add dx, ax                         ; DX = this slot's TRAILING edge
+    mov ax, [sh_rz_px]
+    sub ax, dx
+    jns .cpos
+    neg ax
+.cpos:
+    cmp ax, SH_RZ_GRAB
+    jbe .gotcol
+    inc bx
+    jmp short .cw
+.gotcol:
+    mov ax, bx
+    call sh_vreal_col
+    mov [sh_rz_idx], ax
+    jmp short .yes
+.rowstrip:
+    mov ax, cx                         ; --- or the ROW heading strip?
+    sub ax, [sh_ox]
+    js .no
+    cmp ax, SH_RH_W
+    jae .no
+    mov ax, dx
+    sub ax, [sh_goy]
+    sub ax, SH_FB_H + SH_CH_H
+    js .no
+    mov [sh_rz_px], ax
+    mov byte [sh_rz_axis], 1
+    xor bx, bx
+    xor dx, dx
+.rw:
+    cmp bx, [sh_vrows]
+    jae .no
+    mov ax, bx
+    call sh_vheight
+    add dx, ax
+    mov ax, [sh_rz_px]
+    sub ax, dx
+    jns .rpos
+    neg ax
+.rpos:
+    cmp ax, SH_RZ_GRAB
+    jbe .gotrow
+    inc bx
+    jmp short .rw
+.gotrow:
+    mov ax, bx
+    call sh_vreal_row
+    mov [sh_rz_idx], ax
+.yes:
+    mov [sh_rz_x0], dx                 ; the edge's own pixel, so the drag
+    pop dx                             ; measures from where the EDGE was and
+    pop bx                             ; not from where the pointer landed
+    pop ax
+    stc
+    ret
+.no:
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_rz_track - CX,DX = the pointer. Sets the grabbed row or column to what
+; the drag now says, in whole units, repainting only when it changed.
+; -----------------------------------------------------------------------------
+sh_rz_track:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp byte [sh_rz_axis], 0
+    jne .row
+    mov ax, cx                         ; the pointer, in grid pixels...
+    sub ax, [sh_ox]
+    sub ax, SH_RH_W
+    sub ax, [sh_rz_x0]                 ; ...as a delta from the edge
+    push ax
+    mov ax, [sh_rz_idx]
+    call sh_colwidth
+    mov cl, 3
+    shl ax, cl                         ; its width now, in pixels
+    pop bx
+    add ax, bx                         ; what the pointer is asking for
+    jle .cwzero
+    mov cl, 3
+    shr ax, cl                         ; ...in whole characters
+    or ax, ax
+    jz .cwzero
+    cmp ax, SH_CW_MAXCH
+    jbe .cwhave
+    mov ax, SH_CW_MAXCH
+.cwhave:
+    mov bx, ax
+    mov ax, [sh_rz_idx]
+    call sh_colwidth
+    cmp ax, bx                         ; no WHOLE character changed: no paint
+    je .out
+    mov cl, bl
+    cmp bx, [sh_defch]
+    jne .cwstore
+    xor cl, cl
+.cwstore:
+    mov ax, [sh_rz_idx]
+    call sh_colw_set
+    jmp short .redraw
+.cwzero:
+    mov ax, [sh_rz_idx]
+    call sh_colwidth
+    or ax, ax
+    jz .out                            ; already shut
+    mov cl, SH_CW_HIDDEN
+    mov ax, [sh_rz_idx]
+    call sh_colw_set
+    jmp short .redraw
+.row:
+    mov ax, dx
+    sub ax, [sh_goy]
+    sub ax, SH_FB_H + SH_CH_H
+    sub ax, [sh_rz_x0]
+    push ax
+    mov ax, [sh_rz_idx]
+    call sh_rowheight                  ; its height now, in pixels
+    pop bx
+    add ax, bx
+    jle .rzero
+    cmp ax, SH_RH_MAX
+    jbe .rhmin
+    mov ax, SH_RH_MAX
+.rhmin:
+    cmp ax, SH_RH_MIN
+    jae .rhhave
+    mov ax, SH_RH_MIN                  ; a glyph still has to fit anything
+.rhhave:                               ; that is not shut
+    mov bx, ax
+    mov ax, [sh_rz_idx]
+    call sh_rowheight
+    cmp ax, bx                         ; no whole PIXEL changed: no paint
+    je .out
+    mov ax, bx
+    call sh_pxtw
+    mov cx, ax
+    mov ax, [sh_rz_idx]
+    call sh_rowh_set
+    jmp short .redraw
+.rzero:
+    mov ax, [sh_rz_idx]
+    call sh_rowheight
+    or ax, ax
+    jz .out
+    mov cx, SH_RH_HIDDEN
+    mov ax, [sh_rz_idx]
+    call sh_rowh_set
+.redraw:
+    push si
+    mov si, [sh_ownwin]
+    mov bx, si
+    call sh_geom
+    call sh_repaint
+    pop si
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+
 
 ; the core: bring [sh_sc_tcol]/[sh_sc_trow] into the viewport, moving the
 ; scroll origin the least amount that does it
@@ -5151,6 +5393,7 @@ sh_onmouseup:
     push ax
     push bx
     push si
+    mov byte [sh_rz_on], 0             ; 81.73.2: the drag already applied
     call os88ui_sbdragging
     jc .noV
     call os88ui_sbdrop                 ; the view already followed during the
@@ -40955,7 +41198,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7918                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 7926                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -41027,7 +41270,12 @@ sh_vcl_lo     equ sh_geom_rbase + 2  ; sh_vclip's own four
 sh_vcl_hi     equ sh_vcl_lo + 2
 sh_vcl_a      equ sh_vcl_hi + 2
 sh_vcl_b      equ sh_vcl_a + 2
-sh_wcol       equ sh_vcl_b + 2
+sh_rz_on      equ sh_vcl_b + 2       ; 81.73.2: a heading drag is live
+sh_rz_axis    equ sh_rz_on + 1       ; byte: 0 = a column, 1 = a row
+sh_rz_idx     equ sh_rz_axis + 1     ; the REAL row or column being resized
+sh_rz_x0      equ sh_rz_idx + 2      ; the edge's own pixel when it was
+sh_rz_px      equ sh_rz_x0 + 2       ; grabbed, and sh_hdrhit's own scratch
+sh_wcol       equ sh_rz_px + 2
 sh_wrow       equ sh_wcol + 2
 sh_selx1      equ sh_wrow + 2
 sh_selx2      equ sh_selx1 + 2

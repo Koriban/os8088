@@ -24,6 +24,8 @@ and so on across four columns and four rows.
      C1, which is sh_gridhit reading the same table the painter did
   4. Unhiding needs no second command: selecting ACROSS the gap and typing a
      real width brings B back, because the apply loop walks REAL columns
+  5. ...and 81.73.2's own half: dragging a heading's trailing edge resizes
+     that row or column and only that one
 """
 import os
 import subprocess
@@ -132,6 +134,28 @@ def main():
                 M.settle(m)
 
         look("1-open")
+
+        # --- 81.73.2: drag column A's own trailing edge 24px right ---------
+        # The heading strip sits between the grid's top line and the line
+        # above it; the boundary being grabbed is the gridline at xs[1].
+        def colwidths(tag):
+            mo.to(634, 190)
+            M.settle(m)
+            _, _, rw = m.vram("cga")
+            M.write_png(os.path.join(WORK, tag + ".png"), 640, 200, rw)
+            g2 = glass.grid(w, h, rw)
+            if not g2:
+                return None
+            gx = g2[1]
+            return [gx[i + 1] - gx[i] for i in range(3)]
+
+        seen['w-before'] = colwidths("1a-beforedrag")
+        mo.drag(xs[1], ys[0] - 7, xs[1] + 24, ys[0] - 7)
+        M.settle(m, limit=180)
+        seen['w-after'] = colwidths("1b-afterdrag")
+        mo.drag(xs[1] + 24, ys[0] - 7, xs[1], ys[0] - 7)   # ...and back
+        M.settle(m, limit=180)
+
         select(0, 1, 0, 1)              # B1, then hide its column
         fmt(COLW, "0")
         look("2-colhidden")
@@ -170,6 +194,11 @@ def main():
           "a click on the second slot selects C1 - sh_gridhit reads the same "
           "table, so the hit test and the paint cannot disagree",
           "the reference box reads %r" % (seen.get('ref'),))
+    wb, wa = seen.get('w-before'), seen.get('w-after')
+    check(wb and wa and wa[0] == wb[0] + 24 and wa[1] == wb[1],
+          "81.73.2: dragging column A's heading edge 24px right widens A by "
+          "exactly that and leaves B alone",
+          "the first three columns were %r and are %r" % (wb, wa))
     check(s("5-unhidden", 'cols') == ['A', 'B', 'C'],
           "selecting ACROSS the gap and typing a real width unhides B, which "
           "is Excel's own way back and needs no second command",

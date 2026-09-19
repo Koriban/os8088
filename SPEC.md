@@ -103047,9 +103047,9 @@ and §82 is this tree's answer to that.
   but the Format Number dialog offers only the list, and SYLK carries only
   four.
 - **Row heights are per row since §81.60**, column widths per column since
-  §81.56, and **hiding either is §81.73** (a height or width of 0, which also
-  turned the viewport's visible-to-real mapping from arithmetic into a table).
-  What is left of the pair is resizing by dragging the heading.
+  §81.56, **hiding either is §81.73** — a height or width of 0, which also
+  turned the viewport's visible-to-real mapping from arithmetic into a table —
+  and **dragging a heading to resize is §81.73.2**. The pair is closed.
 - **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is not done.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
@@ -105918,6 +105918,31 @@ needed `sh_geom_rbase` to keep the streaming height table's key in step.
 **A range that is entirely hidden answers `CF=0`** from `sh_vclip`, which is
 the same answer an off-screen range gives and the right one: there is nothing
 to draw either way.
+
+#### 81.73.2 Resizing by dragging the heading
+
+The other half of §81.39.3's bullet. A press within `SH_RZ_GRAB` = 3 pixels of
+a heading's **trailing edge** grabs it — asked before the selection hit test,
+because the gesture starts on a press the selection never sees — the drag sets
+the width or height live, and the release only lets go.
+
+**Live, but stepped in whole units.** A width is stored in characters, so the
+grid repaints once per 8 pixels of travel rather than once per mouse event: a
+full repaint is priced in primitive calls (PERFORMANCE.md), and one per pixel
+across a 56-pixel column is 56 of them where 7 is the same gesture. Excel 2.1
+drew a guide line instead for exactly this reason — that wants an XOR line
+this app does not have, and stepping in whole units buys the feedback without
+one. Rows step per pixel, since a height is stored in twips and 8 pixels of
+granularity would be visible.
+
+The drag measures from **where the edge was**, not from where the pointer
+landed inside the grab band, so the column does not jump by up to three pixels
+on the first movement.
+
+**Dragging it shut hides it**, which is Excel's behaviour and falls out of
+§81.73 rather than being built: no width *is* what the hidden sentinel means.
+Anything that is not shut still has to fit a glyph, so `SH_RH_MIN` applies as
+it always did.
 
 **Known shortfall:** the scroll bars still size their thumb from the *real*
 row and column counts, so a sheet with many hidden rows has a thumb slightly
