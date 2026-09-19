@@ -726,11 +726,31 @@ SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
                                      ; that one also sets the spacing of the
                                      ; BAR's own titles, which have no marks
                                      ; and would just drift apart
-SH_MENU_N    equ 9                   ; File,Edit,Formula,Format,Data,Options,
-                                      ; Macro,Sheets,Help - Excel 2.1d's own
-                                      ; bar order (see sh_mtab). NOTE this
-                                      ; also sizes sh_mw in the bss chain, so
-                                      ; changing it moves OS88_BSS too.
+; File,Edit,Formula,Format,Data,Options,Macro,Sheets,Help - Excel 2.1d's own
+; bar order (see sh_mtab). NOTE SH_MENU_N also sizes sh_mw in the bss chain,
+; so changing it moves OS88_BSS too.
+;
+; 81.75: A MENU'S INDEX IS NAMED rather than written as a number, because
+; PLAN's bar is shorter - no Macro, no Sheets - and every index above a
+; missing menu moves down one. sh_mfire's dispatch chain is the only thing
+; that reads these, and it used bare 0..8; the names assemble to the identical
+; bytes in SHEET's arm, which is what makes this restructure free. THE ORDER
+; HERE IS THE BAR'S ORDER and sh_mtab below must agree line for line.
+SH_MI_FILE    equ 0
+SH_MI_EDIT    equ 1
+SH_MI_FORMULA equ 2
+SH_MI_FORMAT  equ 3
+SH_MI_DATA    equ 4
+SH_MI_OPTIONS equ SH_MI_DATA + 1
+%ifdef SHF_MACRO
+SH_MI_MACRO   equ SH_MI_OPTIONS + 1
+SH_MI_SHEET   equ SH_MI_MACRO + 1
+%else
+SH_MI_MACRO   equ 0xFE                ; never matched: nothing sets AH to it
+SH_MI_SHEET   equ SH_MI_OPTIONS + 1
+%endif
+SH_MI_HELP    equ SH_MI_SHEET + 1
+SH_MENU_N     equ SH_MI_HELP + 1
 SH_M_NONE    equ 0xFF
 
 ; =============================================================================
@@ -995,11 +1015,15 @@ sh_m_pinfo:
     clc
     retf
 sh_m_pmacro:                        ; 81.63
+%ifdef SHF_MACRO
     call shm_pmacro
+%endif
     clc
     retf
 sh_m_mresume:
+%ifdef SHF_MACRO
     call shm_mresume
+%endif
     clc
     retf
 sh_m_pdatabase:                     ; 81.65
@@ -1273,10 +1297,12 @@ sh_pinfo:
     push bp
     mov bp, SHM_INFO
     jmp short sh_pdoor
+%ifdef SHF_MACRO
 sh_pmacro:                          ; 81.63: the macro functions
     push bp
     mov bp, SHM_MACRO
     jmp short sh_pdoor
+%endif
 %ifdef SHF_DB
 sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
     push bp
@@ -1529,19 +1555,29 @@ sh_x_sh_drawstatus:
     call sh_drawstatus
     retf
 sh_x_sh_macro_alertup:
+%ifdef SHF_MACRO
     call sh_macro_alertup
+%endif
     retf
 sh_x_sh_macro_beep:
+%ifdef SHF_MACRO
     call sh_macro_beep
+%endif
     retf
 sh_x_sh_macro_clear:
+%ifdef SHF_MACRO
     call sh_macro_clear
+%endif
     retf
 sh_x_sh_macro_cmd:
+%ifdef SHF_MACRO
     call sh_macro_cmd
+%endif
     retf
 sh_x_sh_macro_inputup:
+%ifdef SHF_MACRO
     call sh_macro_inputup
+%endif
     retf
 sh_x_sh_name_lookup:
     call sh_name_lookup
@@ -1732,10 +1768,14 @@ sh_x_sh_ptwips:
     call sh_ptwips
     retf
 sh_x_sh_rec_cmd:
+%ifdef SHF_MACRO
     call sh_rec_cmd
+%endif
     retf
 sh_x_sh_rec_start:
+%ifdef SHF_MACRO
     call sh_rec_start
+%endif
     retf
 sh_x_sh_rowcol_op:
     call sh_rowcol_op
@@ -1769,7 +1809,9 @@ sh_x_sh_undo_end:
     call sh_undo_end
     retf
 sh_x_sh_idlg_after:
+%ifdef SHF_MACRO
     call sh_idlg_after
+%endif
     retf
 sh_x_sh_acc_fromudw:                ; ...and back: fp_i2a is signed, so a
     call sh_acc_fromudw             ; serial past 32767 came out NEGATIVE
@@ -1976,8 +2018,9 @@ sh_entry:
     call sh_mkblank
     call sh_mtab_calc
     call sh_sheetmark
+%ifdef SHF_MACRO
     call sh_recmark                    ; 81.74: both Macro items say what they
-                                        ; would do, from the state they start in
+%endif                                  ; would do, from the state they start in
 
     ; stage 3.0a: drag-to-select. BX is still the window OSAPI_WM_CREATE just
     ; answered. CF=1 means kern_small, which carries the slot and not the body
@@ -3601,8 +3644,10 @@ sh_select:
     call sh_selpaint                   ; only what the move dirtied - the full
                                         ; repaint costs ~1s on a 4.77MHz 8088
                                         ; and this path runs per arrow key
+%ifdef SHF_MACRO
     call sh_rec_sel                    ; 81.74: ...and the recorder's SELECT,
-    pop bx                             ; which is a no-op unless one is live
+%endif                                 ; which is a no-op unless one is live
+    pop bx
     pop ax
     ret
 
@@ -4914,12 +4959,13 @@ sh_commit:
     call sh_undo_begin                ; the snapshot already
     call sh_undo_end
 .inside:
+%ifdef SHF_MACRO
     call sh_rec_stage                 ; 81.74: a TYPED entry is the recorder's
                                       ; FORMULA. Staged HERE, before the store
                                       ; reads sh_editbuf, and emitted at .out
                                       ; - the emit writes through sh_commit
                                       ; itself, so it has to happen once this
-                                      ; one is finished with the buffer
+%endif                                ; one is finished with the buffer
     mov byte [sh_editing], 0
     mov byte [sh_commitdirty], 1      ; cell data changes below (even an empty
                                       ; buffer clears the cell) - sh_selpaint
@@ -4986,9 +5032,11 @@ sh_commit:
 .label:
     call sh_setlabel                  ; ...and TRUE and FALSE, which are
 .out:                                 ; the logical constant (81.51)
+%ifdef SHF_MACRO
     pushf                             ; 81.74: every caller reads this CF
     call sh_rec_flush
     popf
+%endif
     pop es
     pop si
     pop dx
@@ -7626,11 +7674,11 @@ sh_mfire:
     ; WHAT UNDO CANNOT REVERSE ENDS IT (81.57): a snapshot older than a
     ; format, a name, a note or a macro would put them back too, silently.
     ; Excel 2.1 cannot undo any of these either
-    cmp ah, 3                          ; Format, all of it
+    cmp ah, SH_MI_FORMAT               ; Format, all of it
     je .udrop
-    cmp ah, 6                          ; Macro
+    cmp ah, SH_MI_MACRO                ; Macro
     je .udrop
-    cmp ah, 2                          ; Formula: Define Name and Note
+    cmp ah, SH_MI_FORMULA              ; Formula: Define Name and Note
     jne .ukept
     cmp al, 3
     je .udrop
@@ -7639,23 +7687,23 @@ sh_mfire:
 .udrop:
     call sh_undo_drop
 .ukept:
-    cmp ah, 0
+    cmp ah, SH_MI_FILE
     je .file
-    cmp ah, 1
+    cmp ah, SH_MI_EDIT
     je .edit
-    cmp ah, 2
+    cmp ah, SH_MI_FORMULA
     je .formula
-    cmp ah, 3
+    cmp ah, SH_MI_FORMAT
     je .format
-    cmp ah, 4
+    cmp ah, SH_MI_DATA
     je .data
-    cmp ah, 5
+    cmp ah, SH_MI_OPTIONS
     je .options
-    cmp ah, 6
+    cmp ah, SH_MI_MACRO
     je .macro
-    cmp ah, 7
+    cmp ah, SH_MI_SHEET
     je .sheets
-    cmp ah, 8
+    cmp ah, SH_MI_HELP
     je .help
     jmp .out
 .formula:
@@ -7830,6 +7878,7 @@ sh_mfire:
 .options:
     call sh_docmd_options
     jmp .out
+%ifdef SHF_MACRO
 .macro:
     or al, al
     jnz .macro1
@@ -7849,6 +7898,10 @@ sh_mfire:
     xor byte [sh_rec_rel], 1           ; 3: Relative / Absolute Record - the
     call sh_recmark                    ; item names what choosing it WOULD do
     jmp .out
+%else
+.macro:                                ; 81.75: SH_MI_MACRO is 0xFE in this
+    jmp .out                           ; arm, so nothing can reach it
+%endif
 .help:
     call sh_docmd_help
 .out:
@@ -8618,10 +8671,12 @@ sh_cell_totext:
 ; error).
 ; -----------------------------------------------------------------------------
 sh_docmd_copy:
+%ifdef SHF_MACRO
     push si
     mov si, sh_s_rec_copy              ; 81.74
     call sh_rec_cmd
     pop si
+%endif
     push ax
     push bx
     push cx
@@ -8720,10 +8775,12 @@ sh_docmd_copy:
 
 ; sh_docmd_cut - Copy, then Clear
 sh_docmd_cut:
+%ifdef SHF_MACRO
     push si
     mov si, sh_s_rec_cut               ; 81.74
     call sh_rec_cmd
     pop si
+%endif
     push ax
     push bx
     push cx
@@ -8786,10 +8843,12 @@ sh_docmd_cut:
 ; text had been typed. An empty clipboard is a no-op.
 ; -----------------------------------------------------------------------------
 sh_docmd_paste:
+%ifdef SHF_MACRO
     push si
     mov si, sh_s_rec_paste             ; 81.74
     call sh_rec_cmd
     pop si
+%endif
     push ax
     push bx
     push cx
@@ -9967,6 +10026,7 @@ sh_docmd_chartexport:
     pop bx
     pop ax
     ret
+%ifdef SHF_MACRO
 ; =============================================================================
 ; THE MACRO RECORDER (SPEC.md 81.74)
 ;
@@ -10392,6 +10452,7 @@ sh_s_rec_set:     db 'Recorder set.', 0
 sh_s_rec_on:      db 'Recording.', 0
 sh_s_rec_off:     db 'Recording stopped.', 0
 sh_s_rec_norange: db 'Set Recorder first.', 0
+%endif                                 ; SHF_MACRO
 
 
 
@@ -12269,10 +12330,12 @@ sh_fdlg_apply0:
 .doclear:
     SHOUT sh_prot_blocked
     jc .refused                       ; ...and the same here: this engine's
+%ifdef SHF_MACRO
     push si                           ; 81.74: CLEAR() takes no argument here,
     mov si, sh_s_rec_clear            ; so the three radio modes all record as
     SHOUT sh_rec_cmd                   ; the one the language has
     pop si
+%endif
                                       ; .out does not repaint either
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
     ; has highlighted. It used to clear the anchor alone (81.17's third case,
@@ -12345,10 +12408,12 @@ sh_fdlg_apply0:
 .calcnow:
     inc word [sh_pass]                ; a pass stamp nothing has cached, which
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
+%ifdef SHF_MACRO
     push si                           ; 81.74
     mov si, sh_s_rec_calc
     SHOUT sh_rec_cmd
     pop si
+%endif
 .calcrepaint:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
@@ -13029,8 +13094,10 @@ sh_idlg_open:
     mov ax, [sh_id_titles + bx]
     mov [sh_idlg_tpl + WT_TITLE], ax
     mov byte [sh_idlg_buf], 0
+%ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RUN  ; ...and Run with the selection, where
     je .pregoto                        ; a macro used to start (81.63)
+%endif
     cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
     je .pregoto                        ; same reference Goto shows - it is the
 %ifdef SHF_DB
@@ -13208,11 +13275,15 @@ sh_idlg_onkey:
 .accept:
     call sh_idlg_apply
     call sh_idlg_close
+%ifdef SHF_MACRO
     SHOUT sh_idlg_after                 ; a Run or an INPUT goes on (81.63)
+%endif
     jmp .out
 .cancel:
     call sh_idlg_close
+%ifdef SHF_MACRO
     SHOUT sh_idlg_after
+%endif
 .out:
     pop si
     pop ax
@@ -13259,11 +13330,15 @@ sh_idlg_onclick:
 .doOK:
     call sh_idlg_apply
     call sh_idlg_close
+%ifdef SHF_MACRO
     SHOUT sh_idlg_after
+%endif
     jmp .out
 .doCancel:
     call sh_idlg_close
+%ifdef SHF_MACRO
     SHOUT sh_idlg_after
+%endif
 .out:
     pop di
     pop si
@@ -13293,16 +13368,20 @@ sh_idlg_apply:
     je .goto
     cmp byte [sh_idlg_kind], SH_ID_SORT
     je .sortkey
+%ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RUN
     je .run
     cmp byte [sh_idlg_kind], SH_ID_INPUT
     je .input
+%endif
 %ifdef SHF_DB
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP
     je .serstep
 %endif
+%ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RECNAME
     je .recname
+%endif
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
@@ -13369,6 +13448,7 @@ sh_idlg_apply:
     cmp ax, bx
     jbe .rhl
     jmp .redraw
+%ifdef SHF_MACRO
 .run:
     mov si, sh_idlg_buf                ; a macro is run by NAME, Excel's way -
     SHOUT sh_upcase_at                  ; or by the cell it starts in
@@ -13395,6 +13475,7 @@ sh_idlg_apply:
     pop di
     mov byte [sh_macro_ansok], 1
     jmp .out
+%endif                                 ; SHF_MACRO
 .goto:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
@@ -13446,6 +13527,7 @@ sh_idlg_apply:
 ; 81.74: the recording's own name, bound to the cell it is about to start in
 ; so Macro ▸ Run can list it. An EMPTY name is not a refusal - the Run dialog
 ; takes a reference too, and Excel's own Name field may be left alone.
+%ifdef SHF_MACRO
 .recname:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at
@@ -13462,6 +13544,7 @@ sh_idlg_apply:
 .recgo:
     SHOUT sh_rec_start
     jmp .redraw
+%endif                                 ; SHF_MACRO
 
 ; 81.72: the step value, and the whole of Data ▸ Series' second question.
 ; The TEXT is read rather than an integer parsed: Growth by 1.5 and a linear
@@ -28089,10 +28172,15 @@ sh_pfunc:
                                        ; spelled right, and it steps over the
                                        ; arguments rather than parsing on
 %endif
+%ifdef SHF_MACRO
 .domacro:
     call sh_pmacro
     mov dx, ax
     jmp .done                          ; NOT .typed: ACTIVE.CELL may be text
+%else
+.domacro:                              ; 81.75, .docell's reason below
+    jmp .noname
+%endif
 %ifdef SHF_TRIG
 .dotrans:
     call sh_ptrans
@@ -33401,6 +33489,7 @@ SH_LF_STEP     equ 17
 SH_LF_SZ       equ 25
 SH_MPROMPT     equ 30                ; INPUT's prompt, as the dialog shows it
 SH_MSTMSG      equ 40                ; MESSAGE's text on the status bar
+%ifdef SHF_MACRO
 sh_s_macrolimit: db 'Err: macro step limit', 0
 sh_s_macrodone:  db 'Macro done', 0
 sh_s_macroerr:   db 'Err: macro', 0
@@ -34777,6 +34866,7 @@ shm_mword:
     pop ax
     ret
 
+%endif                                 ; SHF_MACRO
 section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
 %ifdef SHF_DB
 ; =============================================================================
@@ -40518,7 +40608,9 @@ sh_mtab:
     dw sh_m_data,    sh_i_data,    4   ; Sort + the three chart items (81.75)
 %endif
     dw sh_m_options, sh_i_options, 5
+%ifdef SHF_MACRO
     dw sh_m_macro,   sh_i_macro,   4
+%endif
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
 
@@ -40618,6 +40710,7 @@ sh_sheet_chk:   dw sh_it_sheet1c, sh_it_sheet2c, sh_it_sheet3c, sh_it_sheet4c
 ; Excel's own Macro menu is Record.../Run.../Start Recorder/Set Recorder/
 ; Relative Record. 81.74 adds three of the four it was missing; Start
 ; Recorder and Resume are that section's own documented shortfalls.
+%ifdef SHF_MACRO
 sh_m_macro:    db 'Macro', 0
 sh_i_macro:    dw sh_it_recon, sh_it_run, sh_it_setrec, sh_it_relrec
 sh_it_run:     db 'Run', 0
@@ -40626,6 +40719,7 @@ sh_it_recoff:  db 'Stop Recorder', 0 ; live - Excel's own pair
 sh_it_setrec:  db 'Set Recorder', 0
 sh_it_relrec:  db 'Relative Record', 0   ; ...and this one names what choosing
 sh_it_absrec:  db 'Absolute Record', 0   ; it WOULD do, as Excel's does
+%endif                                    ; SHF_MACRO
 
 ; Edit - "Can't Undo" is a real Excel item with no real implementation
 ; behind it (no undo system exists) - shown disabled (MENU_DIS) rather than
@@ -42270,8 +42364,12 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; in claimed heap segments, not here.
 ; =============================================================================
 %ifdef PLAN
-    OS88_BSS 8104                     ; PLANs own: +2 for sh_planvec. It will
-%else                                 ; diverge much further once the cuts land
+    OS88_BSS 8102                     ; PLANs own: +2 for sh_planvec, and -2
+                                       ; because SH_MENU_N is 8 rather than 9
+                                       ; with the Macro menu gone and sh_mw is
+                                       ; a word per menu. It will diverge much
+                                       ; further once the claim ladder lands
+%else
     OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
