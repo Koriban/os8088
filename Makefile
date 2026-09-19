@@ -10285,9 +10285,12 @@ plan: planflags $(PLANDIR)/plan.bin
 	@python3 tools/os88ovl.py $(PLANDIR)/plan.bin -o $(PLANDIR)/PLAN.OVL \
 		--trim $(PLANDIR)/plan.trim.bin
 	@r=$$(wc -c < $(PLANDIR)/plan.trim.bin); m=$$(wc -c < $(PLANDIR)/PLAN.OVL); \
-	 echo "plan: resident $$r + module $$m = $$((r+m)) bytes"; \
+	 b=$$(python3 -c "import re,sys; s=open('apps/sheet/sheet.asm').read(); \
+	   m=re.search(r'%ifdef PLAN\s*\n\s*OS88_BSS (\d+)', s); \
+	   print(m.group(1) if m else sys.exit('plan: no PLAN OS88_BSS literal'))"); \
+	 echo "plan: resident $$r + module $$m + bss $$b = $$((r+m+b)) bytes"; \
 	 echo "plan: one file needs resident+module+bss under 65536"; \
-	 echo "plan: to go: $$((r+m+8104-65536)) bytes"
+	 echo "plan: to go: $$((r+m+b-65536)) bytes"
 
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                                $(BUILD)/CHART.OVL,$(APPS_TOOLS))

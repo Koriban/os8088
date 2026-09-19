@@ -736,12 +736,39 @@ SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
 ; that reads these, and it used bare 0..8; the names assemble to the identical
 ; bytes in SHEET's arm, which is what makes this restructure free. THE ORDER
 ; HERE IS THE BAR'S ORDER and sh_mtab below must agree line for line.
+;
+; THE DATA MENU IS DERIVED, not declared, because it is the only one whose
+; CONTENTS decide whether it exists: Excel's six database items, Sort and
+; Series, and this app's own three chart items. Take all of them and there
+; is no menu left to open, so SHF_DATAMENU is the OR of what is left and
+; SH_DATA_N is how many - one number, used by sh_mtab, by sh_i_data's own
+; list and by nothing else.
+%ifdef SHF_DB
+  %define SHF_DATAMENU
+  %define SH_DATA_N 11
+%elifdef SHF_SORT
+  %define SHF_DATAMENU
+  %ifdef SHF_CHART
+    %define SH_DATA_N 4
+  %else
+    %define SH_DATA_N 1
+  %endif
+%elifdef SHF_CHART
+  %define SHF_DATAMENU
+  %define SH_DATA_N 3
+%endif
+
 SH_MI_FILE    equ 0
 SH_MI_EDIT    equ 1
 SH_MI_FORMULA equ 2
 SH_MI_FORMAT  equ 3
+%ifdef SHF_DATAMENU
 SH_MI_DATA    equ 4
 SH_MI_OPTIONS equ SH_MI_DATA + 1
+%else
+SH_MI_DATA    equ 0xFD                ; never matched, SH_MI_MACRO's reason
+SH_MI_OPTIONS equ 4
+%endif
 %ifdef SHF_MACRO
 SH_MI_MACRO   equ SH_MI_OPTIONS + 1
 SH_MI_SHEET   equ SH_MI_MACRO + 1
@@ -1108,7 +1135,9 @@ sh_m_fclose:
     retf
 %endif
 sh_m_sortcol:                       ; 81.71.6
+%ifdef SHF_SORT
     call sh_docmd_sortcol
+%endif
     clc
     retf
 sh_m_lopen:
@@ -7782,29 +7811,36 @@ sh_mfire:
     call sh_docmd_format
     jmp .out
 %ifndef SHF_DB
-; PLAN's Data menu is Sort and the three chart items (81.75): every item
-; Excel puts ABOVE Sort is the database, and PLAN has no database. The items
-; renumber rather than being greyed - a menu that shows six things that
-; cannot happen is worse than a shorter menu.
+; 81.75: without the database, Data is whatever is left of it - Sort, then
+; the three chart items - and the items RENUMBER rather than being greyed.
+; A menu showing six commands that cannot happen is worse than a short one,
+; and SPEC.md 47 wants a fact to grey on; "not in this build" is not one the
+; user can act on. With nothing left the menu itself is gone and SH_MI_DATA
+; is 0xFD, so this arm is unreachable rather than absent.
 .data:
+  %ifdef SHF_SORT
     or al, al
-    jnz .pdata1
+    jnz .pdatac
     mov al, SH_ID_SORT                 ; 0: Sort...
     call sh_idlg_open_r
     jmp .out
-.pdata1:
-    cmp al, 1
-    jne .pdata2
-    call sh_docmd_chart                ; 1..3: this app's own charting
+.pdatac:
+    dec al                             ; ...and the chart items follow it
+  %endif
+  %ifdef SHF_CHART
+    or al, al
+    jnz .pdata2
+    call sh_docmd_chart
     jmp .out
 .pdata2:
-    cmp al, 2
+    cmp al, 1
     jne .pdata3
     mov al, SH_FDK_GAL
     call sh_fdlg_open_r
     jmp .out
 .pdata3:
     call sh_docmd_chartexport
+  %endif
     jmp .out
 %else
 .data:
@@ -9285,6 +9321,7 @@ sh_docmd_filldown:
     pop ax
     ret
 section SH_MODSEC                      ; 81.71.6: ...and the carry half of it
+%ifdef SHF_SORT
 
 ; -----------------------------------------------------------------------------
 ; sh_sort_carry - apply the key column's permutation to every OTHER column in
@@ -9557,8 +9594,10 @@ sh_sort_permcol:
     pop ax
     ret
 
+%endif                                 ; SHF_SORT
 section .text
 
+%ifdef SHF_SORT
 sh_s_sortfull: db 'Sort incomplete - text area full.', 0
 
 ; sh_docmd_sortcol_r - the resident door (81.71.6). Data > Sort's worker is
@@ -9574,6 +9613,7 @@ sh_docmd_sortcol_r:
     mov word [sh_msg], sh_s_noovl
 .out:
     ret
+%endif                                 ; SHF_SORT
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
@@ -10766,6 +10806,7 @@ sh_s_exported: db 'Chart exported.', 0
 ; sh_sort_vof - in: BX = entry index, out: DI = its offset in sh_stgseg
 ; -----------------------------------------------------------------------------
 section SH_MODSEC                      ; 81.71.6: Data > Sort's worker, CHART.OVL
+%ifdef SHF_SORT
 sh_sort_vof:
     push ax
     push cx
@@ -11436,6 +11477,7 @@ sh_docmd_sortcol:
     pop ax
     ret
 
+%endif                                 ; SHF_SORT
 section .text
 
 
@@ -12239,8 +12281,10 @@ sh_fdlg_apply0:
     je .donew
     cmp byte [sh_fdlg_kind], SH_FDK_CALC
     je .docalc
+%ifdef SHF_SORT
     cmp byte [sh_fdlg_kind], SH_FDK_SORT
     je .dosort
+%endif
     cmp byte [sh_fdlg_kind], SH_FDK_GAL
     je .dogallery
     cmp byte [sh_fdlg_kind], SH_FDK_SAVEFMT
@@ -12419,11 +12463,13 @@ sh_fdlg_apply0:
     SHOUT sh_repaint
     jmp .out
 
+%ifdef SHF_SORT
 .dosort:
     mov ax, [sh_fdlg_sel]
     mov [sh_sort_desc], al
     call sh_docmd_sortcol
     jmp .out
+%endif
 .dogallery:
     mov bx, [sh_fdlg_sel]
     shl bx, 1
@@ -13098,8 +13144,10 @@ sh_idlg_open:
     cmp byte [sh_idlg_kind], SH_ID_RUN  ; ...and Run with the selection, where
     je .pregoto                        ; a macro used to start (81.63)
 %endif
+%ifdef SHF_SORT
     cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
     je .pregoto                        ; same reference Goto shows - it is the
+%endif
 %ifdef SHF_DB
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP  ; 81.72: a step of 1 is what
     je .preone                              ; almost every series wants, so
@@ -13366,8 +13414,10 @@ sh_idlg_apply:
     je .find
     cmp byte [sh_idlg_kind], SH_ID_GOTO
     je .goto
+%ifdef SHF_SORT
     cmp byte [sh_idlg_kind], SH_ID_SORT
     je .sortkey
+%endif
 %ifdef SHF_MACRO
     cmp byte [sh_idlg_kind], SH_ID_RUN
     je .run
@@ -13558,6 +13608,7 @@ sh_idlg_apply:
     call shm_series             ; height is (this engine's own header)
     jmp .redraw
 %endif
+%ifdef SHF_SORT
 .sortkey:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at                  ; 'b3' names the same column as 'B3'
@@ -13586,6 +13637,7 @@ sh_idlg_apply:
 .badkey:
     mov word [sh_msg], sh_s_id_badkey
     jmp .redraw
+%endif                                 ; SHF_SORT
 .redraw:
     SHOUT sh_geom                       ; the cell size may have changed, so the
     mov si, [sh_ownwin]                ; visible row/column counts must be
@@ -40602,10 +40654,8 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
-%ifdef SHF_DB
-    dw sh_m_data,    sh_i_data,    11
-%else
-    dw sh_m_data,    sh_i_data,    4   ; Sort + the three chart items (81.75)
+%ifdef SHF_DATAMENU
+    dw sh_m_data,    sh_i_data,    SH_DATA_N
 %endif
     dw sh_m_options, sh_i_options, 5
 %ifdef SHF_MACRO
@@ -40764,7 +40814,9 @@ sh_it_filldown:  db 'Fill Down', 0
 ; from index 0 to 6 and the three chart items after it, which is a real cost
 ; paid once - the whole reason this package has a menu bar of its own is to
 ; look like the captures.
+%ifdef SHF_DATAMENU
 sh_m_data:     db 'Data', 0
+%endif
 %ifdef SHF_DB
 sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
                dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
@@ -40776,10 +40828,19 @@ sh_it_extract: db 'Extract...', 0
 sh_it_del:     db 'Delete', 0            ; NOT sh_it_delete: that is Edit's
                                           ; own 'Delete...', which shifts
                                           ; cells rather than records
-%else
-sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_gallery, sh_it_chartexp
+%elifdef SHF_DATAMENU
+; 81.75: what is left of Excel's Data menu, in its own order still
+sh_i_data:
+  %ifdef SHF_SORT
+               dw sh_it_sort
+  %endif
+  %ifdef SHF_CHART
+               dw sh_it_chart, sh_it_gallery, sh_it_chartexp
+  %endif
 %endif
+%ifdef SHF_SORT
 sh_it_sort:    db 'Sort...', 0
+%endif
 %ifdef SHF_DB
 sh_it_series:  db 'Series...', 0
 %endif
@@ -42364,11 +42425,12 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; in claimed heap segments, not here.
 ; =============================================================================
 %ifdef PLAN
-    OS88_BSS 8102                     ; PLANs own: +2 for sh_planvec, and -2
-                                       ; because SH_MENU_N is 8 rather than 9
-                                       ; with the Macro menu gone and sh_mw is
-                                       ; a word per menu. It will diverge much
-                                       ; further once the claim ladder lands
+    OS88_BSS 8100                     ; PLANs own: +2 for sh_planvec, and -4
+                                       ; because SH_MENU_N is 7 rather than 9
+                                       ; - no Macro menu, no Data menu - and
+                                       ; sh_mw is a word per menu. It will
+                                       ; diverge much further once the claim
+                                       ; ladder lands
 %else
     OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
