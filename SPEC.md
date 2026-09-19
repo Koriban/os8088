@@ -106079,6 +106079,58 @@ module tipped it over and `os88disk.py` refused the image. A `filter-out` that
 matches only half of what it should is exactly the failure §24.5's own list
 keeps producing.
 
+### 81.75 PLAN — the same source, sized for the small disks
+
+SHEET cannot go on a 360KB apps disk or a 128KB machine, and neither is
+recoverable by trimming menus. Measured 2026-09-19: the region is **57,823
+bytes** (49,721 + 8,102) and `CHART.OVL` another **43,818** — ~92 of a 360KB
+floppy's 354 clusters — while its heap claims on open total **159KB**, of
+which the cells claim *alone* (32KB) is nearly twice the **17.5KB largest run**
+the floor machine can hand a claimant (§50.6.2). That is the same test that
+omitted `SKIES`, and it is why §24.5.2 argues SHEET's absence is a
+*requirement* and not a size.
+
+**PLAN is a second product of this source**: one file, no overlay, every claim
+under the run limit. `-DPLAN` builds it, the way `-DAPP_SMALL` already builds
+six reduced packages (§27.16 and the five beside it) — with the package **name**
+changed as well, which is what keeps §73.12 satisfied (two things may not
+answer to one name) while still sharing as SOURCE rather than as a copy
+(WEAVE-SPEC §1.2).
+
+**The flag block is at the top of the file and must stay there.** NASM's
+preprocessor is one pass, so a `%ifdef` is answered where it sits and the
+bodies these flags gate are thousands of lines below; defined any lower, every
+test above reads false and the package calls routines cut out of its own image
+— which froze the whole VM the one time this file got it wrong (§82.16's own
+`CH_OVERLAY` story). Every gated body tests the **feature** flag, never `PLAN`.
+
+#### 81.75.1 The cuts are a precondition, not an optimisation
+
+The scaffolding stage was meant to produce "a PLAN that is simply SHEET" and
+measure a baseline from it. **There is no such build.** Assembling this source
+with every `.modc` tenant resident overflows the **64KB segment**: `dw
+OS88_IMAGE_SIZE` in the package header fails first, a bss offset past 65,535
+second, and one layer up `os88pkg` refuses the file because the header
+describes the resident half while the `.modc` section is still in it.
+
+That is the overlay's own justification restated, and it reorders the work:
+the feature cuts have to land *before* the overlay can be dissolved, not after.
+So `make plan` reports the **split** rather than packaging —
+
+```
+plan: resident 49,716 + module 43,818 = 93,534 bytes
+plan: one file needs resident+module+bss under 65,536
+plan: to go: 36,102 bytes
+```
+
+— and that last line is the cut list's meter until `PLAN_ONEFILE` can be set.
+
+**SHEET must come out byte-identical at every stage**, which `t_appsmall.py`
+already enforces for the six gated packages by comparing the *unwrapped* image
+md5. It took two goes here: `sh_planvec` and the `OS88_BSS` literal both have
+to sit inside `%ifdef PLAN`, or PLAN's two extra bytes move the shared bss
+chain under SHEET's feet.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment

@@ -886,6 +886,9 @@ SHM_N      equ 37                   ; a COUNT, not a max: sh_modc_ext does
 ; thunk table are all untouched between the two builds.
 section .text
 ch_ovcall:
+    ; STKBALANCE-OK: the `push cs` below is NOT this routine's to pop - it is
+    ; half of a far frame, and the verb body's own `retf` takes both words.
+    ; That is the whole trick, and it reads as +1 from here on purpose.
     push si
     mov si, bp
     sub si, SHM_READ

@@ -10253,7 +10253,8 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 PLANDIR := $(BUILD)/planapp
 $(PLANDIR)/plan.bin: apps/sheet/sheet.asm apps/os88api.inc apps/os88fp.inc \
                      apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
-                     apps/os88chart.inc apps/os88chartovl.inc
+                     apps/os88chart.inc apps/os88chartovl.inc \
+                     apps/os88chartbss.inc
 	@mkdir -p $(PLANDIR)
 	$(NASM) -f bin -w+error -I apps/ -DPLAN -o $@ apps/sheet/sheet.asm
 

@@ -116,7 +116,12 @@ EXTRA = {'apps/os88ui.inc': '.cold',
 # `section` as a SUBSTRING before the regex is the second half of it: a line
 # matching SECT must contain the word, and almost none of them do, so the
 # test that costs a byte scan replaces one that costs a regex.
-SECT = re.compile(r'^\s*section\s+(\.\w+)')
+# SPEC.md 81.75: sheet.asm names its module section through a %define so one
+# source can build SHEET (.modc, a real overlay) and PLAN (.text, one file).
+# The alias is a section name to NASM and has to be one here too, or every
+# thunk in the module reads as a .modc -> .text crossing.
+SECT_ALIAS = {'SH_MODSEC': '.modc'}
+SECT = re.compile(r'^\s*section\s+(\.\w+|SH_MODSEC)')
 _WALK = {}
 
 # ...and the rest of the per-line patterns, compiled once for the same reason.
@@ -1210,9 +1215,9 @@ def check_pkgs():
         rows, cur = [], '.text'
         for f, n, raw in stream:
             line = raw.split(';')[0]
-            m = re.match(r'\s*section\s+(\.\w+)', line)
+            m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC)', line)
             if m:
-                cur = m.group(1)
+                cur = SECT_ALIAS.get(m.group(1), m.group(1))
                 continue
             rows.append((cur, f, n, line))
 
@@ -1323,9 +1328,9 @@ def check_pkgs():
         rows, cur = [], '.text'
         for f, n, raw in stream:
             line = raw.split(';')[0]
-            m = re.match(r'\s*section\s+(\.\w+)', line)
+            m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC)', line)
             if m:
-                cur = m.group(1)
+                cur = SECT_ALIAS.get(m.group(1), m.group(1))
                 continue
             rows.append((cur, f, n, line))
 
