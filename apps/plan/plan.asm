@@ -262,20 +262,6 @@ SH_SORT_SNAPCAP   equ 180            ; rows a multi-column sort can carry
                                      ; is simply excluded from the sort
                                      ; entirely (same "clip, don't crash"
                                      ; policy used throughout this file)
-SH_CLAIM_NOTE_KB  equ 5             ; stage 3.0b: the note table - SH_NOTE_CAP
-                                    ; records of SH_NOTE_REC, then 81.56's
-                                    ; column widths and 81.60's row heights
-                                    ; (the fifth KB). The note TEXT is
-                                    ; not in here; it goes in the formula
-                                    ; arena, for the reason sh_nt_findcell's
-                                    ; header gives.
-SH_CLAIM_BORD_KB  equ 4             ; stage 2.x: the border table (below) -
-                                     ; a separate claim rather than growing
-                                     ; every cell record, since almost no
-                                     ; cell ever has a border and this app
-                                     ; already has 3 claims plus its own
-                                     ; region. MEM_OWNER_MAX is 8 and SHEET
-                                     ; holds all eight now (81.2)
 SH_CHART_S2  equ 512                ; where a chart's SECOND series lands in
                                     ; sh_stgseg - the first sits at 0 and needs
                                     ; CH_MAXBARS words, so 512 is clear of it
@@ -722,9 +708,9 @@ sh_reloc:
 ; and they close the one window where a chart export could be holding a stale
 ; segment across the OSAPI_FILE_WRITE in the middle of it.
 sh_segw:
-    dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg
+    dw sh_cellseg, sh_txtseg
     dw sh_undoseg
-SH_NSEGW equ 5                       ; 81.75: no chart claim and no borrowed
+SH_NSEGW equ 3                       ; 81.75: cells, text and undo. No chart
 
 ; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
@@ -760,224 +746,14 @@ SH_NSEGW equ 5                       ; 81.75: no chart claim and no borrowed
 %endmacro
 
   %define SH_MODSEC .text            ; every `section SH_MODSEC` below is this
-%define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
-SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
-SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
-SHM_DIFBB  equ 5                    ; os88chart.inc include below
-SHM_FIN    equ 6                    ; 82.16.10: the financial family
-SHM_TEXT   equ 7                    ; 81.62: the text functions,
-SHM_TRANS  equ 8                    ; the logarithms and trigonometry,
-SHM_INFO   equ 9                    ; and ISBLANK...ERROR.TYPE
-SHM_MACRO  equ 10                   ; 81.63: the macro functions,
-SHM_MRESUME equ 11                  ; and a run starting or carrying on
-SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
-SHM_CELL   equ 13                   ; 81.66: CELL
-SHM_MATRIX equ 14                   ; 81.67: MDETERM...GROWTH
-SHM_DBCMD  equ 15                   ; 81.71: Data > Find/Extract/Delete,
-                                     ; which are the criteria engine driven
-                                     ; from a MENU rather than from a formula
-SHM_FORM   equ 16                   ; 81.71.5: Data > Form... - the dialog
-SHM_FPAINT equ 17                   ; engine itself, and the three window
-SHM_FKEY   equ 18                   ; callbacks the kernel makes into it.
-SHM_BOPEN  equ 20                   ; 81.71.5.1: the Border dialog, moved for
-SHM_BPAINT equ 21                   ; the same reason and by the same recipe
-SHM_BCLICK equ 22                   ; (it has no onkey)
-SHM_BCLOSE equ 23                   ; ...and both closes, which the gate-lock
-SHM_FCLOSE equ 24                   ; recovery in sh_onclick/sh_onkey calls
-SHM_SORT   equ 25                   ; 81.71.6: Data > Sort's whole worker -
-                                     ; no callback at all, so one verb and
-                                     ; one door is the whole of it
-SHM_LOPEN  equ 26                   ; ...and the scrolling LIST dialog, which
-SHM_LPAINT equ 27                   ; has two callbacks; its
-SHM_LCLICK equ 28                   ; own close is an internal near call
-SHM_SERIES equ 29                   ; 81.72: Data ▸ Series' fill
-SHM_FDOPEN equ 30                   ; 81.74.2: the last two dialog engines -
-SHM_FDPAINT equ 31                  ; the radio column and the one-line
-SHM_FDCLICK equ 32                  ; field. Both were resident because they
-SHM_FDCLOSE equ 33                  ; were the FIRST two; nothing else made
-SHM_IDOPEN equ 34                   ; them so
-SHM_IDPAINT equ 35
-SHM_IDKEY  equ 36
-SHM_IDCLICK equ 37
-SHM_IDCLOSE equ 38
-SHM_FDAPPLY equ 39                  ; ...and CLEAR()'s own way in, which is
-                                     ; the macro engine reusing that dialog's
-                                     ; apply rather than a second clear
-SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
-                                     ; sub-op byte, because sh_modc_ext
-                                     ; already dispatches on a number and a
-                                     ; callback must not spend a register
-SHM_N      equ 37                   ; a COUNT, not a max: sh_modc_ext does
-                                     ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
-
-; PLAN HAS NO MODULE, so there is nothing to dispatch INTO - but every door
-; below still says `mov bp, <verb>` / `call ch_ovcall`, and every verb body
-; still ends in `retf` because that is what it is for in the other build.
-; Rather than rewrite twenty doors, ch_ovcall becomes a local dispatcher that
-; SYNTHESISES the far frame those bodies expect: `push cs` puts CS where a far
-; CALL would have, and the near call that follows puts IP on top of it, so the
-; body's own `retf` pops both correctly. The doors, the verb numbers and the
-; thunk table are all untouched between the two builds.
-section .text
-ch_ovcall:
-    ; STKBALANCE-OK: the `push cs` below is NOT this routine's to pop - it is
-    ; half of a far frame, and the verb body's own `retf` takes both words.
-    ; That is the whole trick, and it reads as +1 from here on purpose.
-    push si
-    mov si, bp
-    sub si, SHM_READ
-    cmp si, SHM_N
-    jae .bad
-    shl si, 1
-    mov si, [si + sh_mverb]
-    mov [sh_planvec], si
-    pop si
-    push cs                         ; the far frame the verb body's retf wants
-    call near [sh_planvec]
-    clc                             ; there is always a module here
-    ret
-.bad:
-    pop si
-    stc
-    ret
-
-sh_mverb:
-    dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
-    dw sh_m_ptext, sh_m_ptrans, sh_m_pinfo          ; 81.62
-    dw sh_m_pmacro, sh_m_mresume                    ; 81.63
-    dw sh_m_pdatabase                                ; 81.65
-    dw sh_m_pcell                                     ; 81.66
-    dw sh_m_pmatrix                                    ; 81.67
-    dw sh_m_dbcmd                                       ; 81.71
-    dw sh_m_form, sh_m_fpaint, sh_m_fkey, sh_m_fclick    ; 81.71.5
-    dw sh_m_bopen, sh_m_bpaint, sh_m_bclick               ; 81.71.5.1
-    dw sh_m_bclose, sh_m_fclose
-    dw sh_m_sortcol                                       ; 81.71.6
-    dw sh_m_lopen, sh_m_lpaint, sh_m_lclick
-    dw sh_m_series                                        ; 81.72
-    dw sh_m_fdopen, sh_m_fdpaint, sh_m_fdclick, sh_m_fdclose  ; 81.74.2
-    dw sh_m_idopen, sh_m_idpaint, sh_m_idkey, sh_m_idclick, sh_m_idclose
-    dw sh_m_fdapply
-
-sh_m_doread:
-    call shm_doread
-    retf
-sh_m_dowrite:
-    call shm_dowrite
-    retf
-sh_m_difbbox:
-    call shm_difbbox
-    retf
-sh_m_pfin:                          ; 81.75: positional, and never reached
-    clc
-    retf
-sh_m_ptext:                         ; 81.75: positional, never reached
-    clc
-    retf
-sh_m_ptrans:                        ; 81.75: positional, never reached
-    clc
-    retf
-sh_m_pinfo:
-    call shm_pinfo
-    clc
-    retf
-sh_m_pmacro:                        ; 81.63
-    clc
-    retf
-sh_m_mresume:
-    clc
-    retf
-sh_m_pdatabase:                     ; 81.65
-    clc
-    retf
-sh_m_pcell:                         ; 81.75: a verb NUMBER is positional, so
-sh_m_pmatrix:                       ; the two slots stay and are never reached
-    clc                             ; - the dispatcher answers #NAME? above
-    retf
-sh_m_dbcmd:                         ; 81.75: positional again - nothing calls
-sh_m_form:                          ; these four, because the Data menu that
-sh_m_fpaint:                        ; did is not in this build's menu bar
-sh_m_fkey:
-sh_m_fclick:
-    clc
-    retf
-sh_m_bopen:                         ; 81.71.5.1
-    call sh_bdlg_open
-    clc
-    retf
-sh_m_bpaint:
-    call sh_bdlg_paint
-    clc
-    retf
-sh_m_bclick:
-    call sh_bdlg_onclick
-    clc
-    retf
-sh_m_bclose:
-    call sh_bdlg_close
-    clc
-    retf
-sh_m_fclose:
-    clc
-    retf
-sh_m_sortcol:                       ; 81.71.6
-    clc
-    retf
-sh_m_lopen:
-    call sh_ldlg_open
-    clc
-    retf
-sh_m_lpaint:
-    call sh_ldlg_paint
-    clc
-    retf
-sh_m_lclick:
-    call sh_ldlg_onclick
-    clc
-    retf
-sh_m_series:                        ; 81.75: Data ▸ Series went with the menu
-    clc
-    retf
-sh_m_fdopen:                        ; 81.74.2
-    call sh_fdlg_open
-    clc
-    retf
-sh_m_fdpaint:
-    call sh_fdlg_paint
-    clc
-    retf
-sh_m_fdclick:
-    call sh_fdlg_onclick
-    clc
-    retf
-sh_m_fdclose:
-    call sh_fdlg_close
-    clc
-    retf
-sh_m_idopen:
-    call sh_idlg_open
-    clc
-    retf
-sh_m_idpaint:
-    call sh_idlg_paint
-    clc
-    retf
-sh_m_idkey:
-    call sh_idlg_onkey
-    clc
-    retf
-sh_m_idclick:
-    call sh_idlg_onclick
-    clc
-    retf
-sh_m_idclose:
-    call sh_idlg_close
-    clc
-    retf
-sh_m_fdapply:
-    call sh_fdlg_apply
-    clc
-    retf
+; =============================================================================
+; 81.75: NO MODULE, SO NO DISPATCH. sheet.asm reaches its overlay through
+; forty `mov bp, <verb>` doors, a verb table and a far-call dispatcher; PLAN
+; has nothing on the other side of any of it, so the doors are plain jumps
+; and the table, the verb numbers, ch_ovcall and the sh_m_* wrappers that
+; turned each near body into a far return are all gone. The CALL SITES are
+; untouched - every one of them still says `call sh_fdlg_open_r`.
+; =============================================================================
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -986,18 +762,11 @@ section .text
 ; round rather than editing the call sites (82.16.9).
 ; -----------------------------------------------------------------------------
 sh_doread:
-    push bp
-    mov bp, SHM_READ
-    call ch_ovcall
-    pop bp
+    call shm_doread
     jmp sh_undo_drop                   ; another document now (81.57)
 sh_dowrite:
     call sh_recalc_all                  ; every formula CURRENT before any
-    push bp                             ; writer reads one - see below
-    mov bp, SHM_WRITE
-    call ch_ovcall
-    pop bp
-    ret
+    jmp shm_dowrite                     ; writer reads one
 
 ; -----------------------------------------------------------------------------
 ; sh_recalc_all - evaluate every formula cell on every sheet, as its own sheet
@@ -1060,11 +829,7 @@ sh_recalc_all:
     pop ax
     ret
 sh_difbbox:
-    push bp
-    mov bp, SHM_DIFBB
-    call ch_ovcall
-    pop bp
-    ret
+    jmp shm_difbbox
 
 ; sh_pfin - the financial family's door (82.16.10). The body is shm_pfin in
 ; CHART.OVL; its contract is unchanged - AX the id, SI just past '(', the answer
@@ -1081,29 +846,11 @@ sh_difbbox:
 ; the package needed more than the module did. SUM and its folds, IF, the
 ; special forms, the lookups, the dates and NOW stay resident.
 sh_pinfo:
-    push bp
-    mov bp, SHM_INFO
-    jmp short sh_pdoor
-sh_pdoor:
-    call ch_ovcall
-    pop bp
-    jc .nomod
-    ret
-.nomod:
-    push bx
-    push cx
-    push dx
-    push di
-    call fp_azero
-    call sh_acc_store
-    call sh_skipargs
-    mov byte [sh_evalerr], SH_ERR_VALUE
-    xor ax, ax
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp shm_pinfo                      ; 81.75: sh_pdoor's whole other half was
+                                       ; the REFUSAL a missing module needed -
+                                       ; zero, #VALUE! and the arguments
+                                       ; stepped over. There is no module to
+                                       ; be missing.
 
 sh_entry:
     push ax
@@ -1133,21 +880,6 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_stgseg], dx
-    mov ax, SH_CLAIM_BORD_KB
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [sh_bordseg], dx
-    mov ax, sh_reloc
-    call OSAPI_MEM_MOVABLE
-    mov word [sh_nbord], 0
-    mov ax, SH_CLAIM_NOTE_KB
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [sh_noteseg], dx
-    call sh_colw_clear                 ; every column the standard width (81.56)
-    mov ax, sh_reloc
-    call OSAPI_MEM_MOVABLE
-    mov word [sh_nnote], 0
     mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
     call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
@@ -1202,19 +934,14 @@ sh_entry:
     call sh_mtab_calc
     call sh_sheetmark
 
-    ; stage 3.0a: drag-to-select. BX is still the window OSAPI_WM_CREATE just
-    ; answered. CF=1 means kern_small, which carries the slot and not the body
-    ; (os88api.inc: "TEST CF AND HAVE A SECOND PATH") - there is simply no
-    ; tracking on that machine, and shift+click and shift+arrows, which need
-    ; no kernel support at all, remain the way to build a range there.
-    mov ax, sh_ondrag
-    call OSAPI_WM_ONDRAG
-
-    ; The RELEASE edge, which a thumb drag needs to let go on (13.10.5). Same
-    ; kern_small caveat as the drag edge above: refused there, and a bar that
-    ; cannot be dragged never needs dropping.
-    mov ax, sh_onmouseup
-    call OSAPI_WM_ONMOUSEUP
+    ; 81.75: NO DRAG AT ALL. W_ONDRAG and W_ONMOUSEUP are exactly what
+    ; kern_small refuses (kernel.asm's own OSAPI_WM_ONDRAG arm answers CF=1
+    ; and carries the slot without the body), so on the machine this package
+    ; exists for every byte of drag-to-select, thumb dragging and
+    ; heading-resize was code that could never execute. Shift+click and
+    ; shift+arrows build a range and need no kernel support at all; a scroll
+    ; bar's arrows and its page areas still work, and only the thumb has
+    ; stopped being draggable.
 
     ; stage 3.0b: the formula bar's content box. Only the buffer binding is
     ; set once - the rect is refreshed per draw by sh_flrect, since the window
@@ -1296,33 +1023,17 @@ sh_geom:
     ; places a column - sh_vcx is the only arithmetic that turns a visible
     ; column into pixels. It was one division by the one width.
     ;
-    ; FROZEN PANES (81.70) walk FIRST, real columns 0..sh_freezecol-1 - DI
-    ; keeps counting up through them rather than resetting, so the second
-    ; loop's "real column = sh_scrollcol + (DI - sh_freezecol)" is exactly
-    ; the old "sh_scrollcol + DI" once sh_freezecol is 0, and every visible
-    ; index still names its own sh_vcw slot directly either way
+    ; 81.75: no frozen panes, so there is one phase and not two - but the
+    ; slot cursor is still not the real-column cursor, because a HIDDEN
+    ; column is walked and takes no slot.
     push bx
     push di
     mov dx, ax                          ; DX = the pixels left
-    xor di, di                          ; DI = the SLOTS filled so far, which
-    mov word [sh_geom_rc], 0            ; is no longer the same thing as the
-                                         ; real columns walked (81.73): a
-                                         ; HIDDEN column is walked and takes
-                                         ; no slot, so the two cursors part
-                                         ; company and sh_vrc records which
-                                         ; real column each slot ended up with
-.fcwalk:
-    mov ax, [sh_geom_rc]
-    cmp ax, [sh_freezecol]
-    jae .cwinit
-    cmp di, SH_MAXVC
-    jae .cset
-    call sh_geom_col
-    jc .fcwalk
-    jmp short .cset
-.cwinit:
+    xor di, di                          ; DI = the SLOTS filled so far
     mov ax, [sh_scrollcol]
     mov [sh_geom_rc], ax
+.fcwalk:
+    mov ax, [sh_geom_rc]
 .cwalk:
     cmp di, SH_MAXVC
     jae .cset
@@ -1342,45 +1053,17 @@ sh_geom:
     xor ax, ax                          ; above the status bar
 .chh_ok:
     mov [sh_gridh], ax
-    ; EACH ROW ITS OWN HEIGHT (81.60), walked the way the columns are: from
-    ; the scroll position until the next would not fit whole, kept in sh_vrh
-    ; for sh_vry, the only arithmetic that turns a visible row into pixels
-    ; The table is walked ONCE beside the rows, not searched for each: it is
-    ; sorted, so from the first record at or past the scroll row the next
-    ; record is either this row's or a later one's. sh_geom runs on every
-    ; repaint, and a search per row is a table-full of compares per row
-    ; FROZEN PANES (81.70): the frozen prefix, real rows 0..sh_freezerow-1,
-    ; walked FIRST with its own sh_rh_find (the sparse table's position for
-    ; row 0 and for sh_scrollrow are generally not the same place, so the
-    ; walk restarts rather than continuing) - DI keeps counting up through
-    ; it exactly as the column walk's does, so it still names its own
-    ; sh_vrh slot directly in both phases
+    ; 81.75: every row is SH_RH_NORMAL and none can be hidden, so what 81.60
+    ; and 81.73 needed a streaming walk over a sparse table for is arithmetic
+    ; again. sh_vrr is still FILLED rather than dropped: sh_vclip_row and
+    ; sh_vreal_row read it, and the COLUMNS still need their own table beside
+    ; it, so one shape for both is cheaper than two.
     push bx
-    push si
     push di
-    push es
     mov dx, ax                          ; DX = the pixels left
     xor di, di                          ; DI = the rows so far
-    cmp di, [sh_freezerow]
-    jae .rowsdone
-    xor ax, ax
-    call sh_rh_find                     ; BX = key, SI/CX = record, from 0
-    mov word [sh_geom_rr], 0            ; 81.73: the real ROW cursor, beside DI
-    mov word [sh_geom_rbase], 0         ; ...and where this phase's sh_rh_find
-.frwalk:
-    mov ax, [sh_geom_rr]
-    cmp ax, [sh_freezerow]
-    jae .rowsdone
-    cmp di, SH_MAXVR
-    jae .rset
-    call sh_geom_row
-    jc .frwalk
-    jmp short .rset
-.rowsdone:
     mov ax, [sh_scrollrow]
     mov [sh_geom_rr], ax
-    mov [sh_geom_rbase], ax
-    call sh_rh_find                     ; a fresh walk, from the scroll row
 .rwalk:
     cmp di, SH_MAXVR
     jae .rset
@@ -1391,9 +1074,7 @@ sh_geom:
     jc .rwalk
 .rset:
     mov [sh_vrows], di
-    pop es
     pop di
-    pop si
     pop bx
 
     pop dx
@@ -1443,25 +1124,7 @@ sh_geom_col:
     ret
 
 sh_geom_row:
-    mov ax, [sh_geom_rr]
-    mov [sh_geom_roff], ax             ; the real row this slot would show
-    inc word [sh_geom_rr]
-    sub ax, [sh_geom_rbase]            ; ...as an offset into the phase that
-    add ax, bx                         ; sh_rh_find was last called for, which
-    cmp cx, [es:SH_ROWH_N]             ; is the key the table is streaming in
-    jae .std
-    cmp [es:si], ax
-    jne .std
-    mov ax, [es:si+2]                  ; its own height, in twips...
-    add si, SH_ROWH_REC
-    inc cx
-    cmp ax, SH_RH_HIDDEN
-    je .skip                           ; ...or no height at all
-    call sh_twpx
-    jmp short .have
-.std:
-    mov ax, SH_RH_NORMAL               ; ...or the standard
-.have:
+    mov ax, SH_RH_NORMAL
     cmp ax, dx
     ja .full
     sub dx, ax
@@ -1469,11 +1132,11 @@ sh_geom_row:
     push bx
     mov bx, di
     shl bx, 1
-    mov ax, [sh_geom_roff]
+    mov ax, [sh_geom_rr]
     mov [sh_vrr + bx], ax              ; slot DI shows THIS real row
     pop bx
+    inc word [sh_geom_rr]
     inc di
-.skip:
     stc
     ret
 .full:
@@ -1481,50 +1144,22 @@ sh_geom_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; COLUMN WIDTHS (81.56). 256 bytes a sheet in the note claim's top kilobyte
-; (SH_COLW_OFF), each a column's width in CHARACTERS, Excel's own unit - 0 for
-; the standard width, sh_defch. sh_vcw is the visible columns' widths, which
-; sh_geom walks out of here; sh_vcx and sh_vwidth turn one into pixels.
+; COLUMN WIDTHS (81.56, and 81.75 moved them). 256 bytes, each a column's
+; width in CHARACTERS - Excel's own unit - with 0 meaning the standard width
+; sh_defch and 255 meaning HIDDEN. They used to live in the top kilobyte of
+; the note claim, four sheets' worth; with notes gone and one sheet left it is
+; 256 bytes of this package's OWN bss, which costs the region a quarter of a
+; kilobyte and gives the heap five back.
 ; -----------------------------------------------------------------------------
-; 81.73: a HIDDEN column or row. The stored width byte already spends 0 on
-; "the standard width" and a row's twips do too, so hiding needs a sentinel of
-; its own rather than the zero Excel's dialog shows - SH_CW_MAXCH is 40, so
-; 255 is free, and a row's height is a word.
 SH_CW_HIDDEN equ 255
-SH_RH_HIDDEN equ 0xFFFF
-
-; sh_col_hidden - in: AX = a column; out: CF=1 if it is hidden. Every register
-; preserved
-sh_col_hidden:
-    push ax
-    push bx
-    push es
-    mov bh, [sh_cursheet]
-    xor bl, bl
-    add bx, ax
-    mov es, [sh_noteseg]
-    cmp byte [es:bx + SH_COLW_OFF], SH_CW_HIDDEN
-    pop es
-    pop bx
-    pop ax
-    je .yes
-    clc
-    ret
-.yes:
-    stc
-    ret
 
 ; sh_colwidth - in: AX = a column; out: AX = its width in characters, and ZERO
 ; when it is hidden - which is what makes sh_geom skip it without a second
 ; question (81.73)
 sh_colwidth:
     push bx
-    push es
-    mov bh, [sh_cursheet]
-    xor bl, bl
-    add bx, ax
-    mov es, [sh_noteseg]
-    mov al, [es:bx + SH_COLW_OFF]
+    mov bx, ax
+    mov al, [sh_colwtab + bx]
     xor ah, ah
     cmp al, SH_CW_HIDDEN               ; 81.73: hidden is no width at all
     je .hidden
@@ -1535,33 +1170,27 @@ sh_colwidth:
 .hidden:
     xor ax, ax
 .out:
-    pop es
     pop bx
     ret
 
 ; sh_colw_set - in: AX = a column, CL = its width in characters (0 standard)
 sh_colw_set:
     push bx
-    push es
-    mov bh, [sh_cursheet]
-    xor bl, bl
-    add bx, ax
-    mov es, [sh_noteseg]
-    mov [es:bx + SH_COLW_OFF], cl
-    pop es
+    mov bx, ax
+    mov [sh_colwtab + bx], cl
     pop bx
     ret
 
-; sh_colw_clear - every column of every sheet the standard width, and (81.60)
-; every row the standard height: the two tables are the claim's last 2 KB
+; sh_colw_clear - every column the standard width
 sh_colw_clear:
     push ax
     push cx
     push di
     push es
-    mov es, [sh_noteseg]
-    mov di, SH_COLW_OFF
-    mov cx, 4 * 256 + 1024
+    push ds
+    pop es
+    mov di, sh_colwtab
+    mov cx, 256
     xor al, al
     cld
     rep stosb
@@ -1573,34 +1202,26 @@ sh_colw_clear:
 
 ; sh_colw_shift - AL = 2 inserts a column at BX, 3 deletes the one at BX: the
 ; widths after it move with their columns, as the cells do. An inserted
-; column is the standard width. Anything else in AL: nothing.
+; column is the standard width.
 sh_colw_shift:
     push ax
     push bx
     push cx
     push si
     push di
-    push ds
     push es
-    mov cx, 255
-    sub cx, bx                        ; CX = the columns past the pivot
-    jbe .out
-    mov si, [sh_cursheet]             ; THE BASE FIRST, from our own bss:
-    mov di, si                        ; DS is the note claim below
-    mov cl, 8
-    shl di, cl
-    add di, SH_COLW_OFF               ; DI = this sheet's width table
+    push ds
+    pop es
     mov cx, 255
     sub cx, bx
-    mov es, [sh_noteseg]
-    push es
-    pop ds
+    jbe .out
+    mov di, sh_colwtab
+    add di, bx
     cmp al, 3
     je .del
     cmp al, 2
     jne .out
-    add di, bx                        ; insert: [c..254] -> [c+1..255]
-    push di
+    push di                           ; insert: [c..254] -> [c+1..255]
     add di, cx
     mov si, di
     dec si
@@ -1608,20 +1229,16 @@ sh_colw_shift:
     rep movsb
     cld
     pop di
-    mov byte [es:di], 0
+    mov byte [di], 0
     jmp short .out
 .del:
-    add di, bx                        ; delete: [c+1..255] -> [c..254]
-    mov si, di
+    mov si, di                        ; delete: [c+1..255] -> [c..254]
     inc si
-    push cx
     cld
     rep movsb
-    pop cx
-    mov byte [es:di], 0               ; DI is at 255 now
+    mov byte [es:di], 0               ; the last column comes back standard
 .out:
     pop es
-    pop ds
     pop di
     pop si
     pop cx
@@ -1629,405 +1246,38 @@ sh_colw_shift:
     pop ax
     ret
 
-;-----------------------------------------------------------------------------
-; ROW HEIGHTS (81.60). A sorted sparse table in the note claim's fifth KB
-; (SH_ROWH_OFF): a packed row/sheet word - the cell array's own key - and the
-; height in TWIPS, for each row that is not the standard height; the count is
-; the KB's last word. Excel's rows are 16,384 to a sheet, so a flat table like
-; the widths' would be 32 KB a sheet. sh_vrh is the visible rows' heights in
-; pixels, which sh_geom walks out of here; sh_vry turns one into pixels.
 ; -----------------------------------------------------------------------------
-; sh_rh_find - AX = a row of the current sheet -> BX = its key, SI = the offset
-; of the first record whose key is not below it, CX = that record's index, ES =
-; the note claim; ZF=1 when that record IS this row's
-sh_rh_find:
-    push dx
-    push ax
-    mov bx, [sh_cursheet]
-    mov cl, SH_ROW_BITS
-    shl bx, cl
-    or bx, ax
-    mov es, [sh_noteseg]
-    mov si, SH_ROWH_OFF
-    xor cx, cx
-.l:
-    cmp cx, [es:SH_ROWH_N]
-    jae .end
-    cmp [es:si], bx
-    jae .ge
-    add si, SH_ROWH_REC
-    inc cx
-    jmp short .l
-.ge:
-    pop ax
-    pop dx
-    cmp [es:si], bx
-    ret
-.end:
-    pop ax
-    mov dx, 1
-    or dx, dx                          ; ZF=0: past the last record
-    pop dx
-    ret
-
-; sh_rowtw - AX = a row -> AX = its height in twips, 0 for the standard
-sh_rowtw:
-    push bx
-    push cx
-    push si
-    push es
-    call sh_rh_find
-    mov ax, 0
-    jne .out
-    mov ax, [es:si+2]
-.out:
-    pop es
-    pop si
-    pop cx
-    pop bx
-    ret
-
-; sh_row_hidden - AX = a row; out: CF=1 if it is hidden (81.73). Preserves all
-sh_row_hidden:
-    push ax
-    call sh_rowtw
-    cmp ax, SH_RH_HIDDEN
-    pop ax
-    je .yes
-    clc
-    ret
-.yes:
-    stc
-    ret
-
-; sh_rowheight - AX = a row -> AX = its height in pixels, and ZERO when it is
-; hidden, sh_colwidth's own rule (81.73)
-sh_rowheight:
-    call sh_rowtw
-    cmp ax, SH_RH_HIDDEN
-    je .hidden
-    or ax, ax
-    jnz sh_twpx
-    mov ax, SH_RH_NORMAL
-    ret
-.hidden:
-    xor ax, ax
-    ret
-; sh_pxtw - AX = pixels -> AX = twips, sh_twpx's own inverse (81.73.2)
-sh_pxtw:
-    push cx
-    push dx
-    mov cx, SH_RH_STDTW
-    mul cx
-    add ax, SH_RH_NORMAL / 2
-    adc dx, 0
-    mov cx, SH_RH_NORMAL
-    div cx
-    pop dx
-    pop cx
-    ret
-
-; sh_twpx - AX = twips -> AX = pixels, the standard 255 being SH_RH_NORMAL
-sh_twpx:
-    push cx
-    push dx
-    mov cx, SH_RH_NORMAL
-    mul cx
-    add ax, SH_RH_STDTW / 2
-    adc dx, 0
-    mov cx, SH_RH_STDTW
-    div cx
-    pop dx
-    pop cx
-    ret
-
-; sh_rowh_set - AX = a row of the current sheet, CX = its height in twips (0
-; or SH_RH_STDTW for the standard, which removes its record). CF=1 when the
-; table is full, and nothing changed
-sh_rowh_set:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov dx, cx                         ; DX = the twips
-    cmp dx, SH_RH_STDTW
-    jne .have
-    xor dx, dx
-.have:
-    call sh_rh_find
-    jne .new
-    or dx, dx
-    jz .del
-    mov [es:si+2], dx                  ; already there: a new height
-    jmp short .ok
-.del:
-    mov ax, [es:SH_ROWH_N]             ; the standard again: close it up
-    dec ax
-    mov [es:SH_ROWH_N], ax
-    sub ax, cx                         ; AX = the records after it
-.dl:
-    or ax, ax
-    jz .ok
-    mov bx, [es:si+SH_ROWH_REC]
-    mov [es:si], bx
-    mov bx, [es:si+SH_ROWH_REC+2]
-    mov [es:si+2], bx
-    add si, SH_ROWH_REC
-    dec ax
-    jmp short .dl
-.new:
-    or dx, dx
-    jz .ok                             ; the standard, and none: nothing to do
-    mov di, [es:SH_ROWH_N]
-    cmp di, SH_ROWH_CAP
-    jae .full
-    shl di, 1
-    shl di, 1
-    add di, SH_ROWH_OFF                ; DI = one past the last record
-.ul:
-    cmp di, si                         ; open a slot at SI, from the end
-    jbe .ins
-    mov ax, [es:di-SH_ROWH_REC]
-    mov [es:di], ax
-    mov ax, [es:di-SH_ROWH_REC+2]
-    mov [es:di+2], ax
-    sub di, SH_ROWH_REC
-    jmp short .ul
-.ins:
-    mov [es:si], bx
-    mov [es:si+2], dx
-    inc word [es:SH_ROWH_N]
-.ok:
-    clc
-    jmp short .out
-.full:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_rh_anyin - AX..DX = rows of the current sheet -> CF=1 when any of them is
-; not the standard height. What sh_scrollrow_blit asks before it moves rows by
-; one height
-sh_rh_anyin:
-    push ax
-    push bx
-    push cx
-    push si
-    push es
-    cmp dx, SH_ROWS
-    jb .dok
-    mov dx, SH_ROWS - 1
-.dok:
-    call sh_rh_find                    ; the first record at or past AX...
-    cmp cx, [es:SH_ROWH_N]
-    jae .none
-    mov bx, [sh_cursheet]              ; ...is it still at or before DX's
-    mov cl, SH_ROW_BITS                ; key, built as sh_rh_find builds it?
-    shl bx, cl
-    or bx, dx
-    cmp [es:si], bx
-    ja .none
-    stc
-    jmp short .out
-.none:
-    clc
-.out:
-    pop es
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+; ROW GEOMETRY (81.75). Every row is SH_RH_NORMAL pixels.
+;
+; 81.60 made a row's height a per-row TWIPS figure kept in a sorted sparse
+; table, and 81.73 let a row be hidden; between them the visible-row mapping
+; stopped being arithmetic and became a walk over sh_vrh. Neither survives
+; here - a budget's rows are all the same height - so the three routines below
+; are arithmetic again, and the table, its dialog, the twips conversions and
+; the whole of sh_rc_sides/sh_rc_table (which existed to move the border, note
+; and height records with their cells) go with them.
+; -----------------------------------------------------------------------------
 
 ; sh_vry - in: AX = a visible row (0..sh_vrows); out: AX = its top edge, in
 ; pixels from the grid's
 sh_vry:
-    push bx
-    push cx
-    mov cx, ax
-    xor ax, ax
-    xor bx, bx
-.l:
-    jcxz .d
-    add al, [sh_vrh + bx]
-    adc ah, 0
-    inc bx
-    dec cx
-    jmp short .l
-.d:
-    pop cx
-    pop bx
+    push dx
+    mov dx, SH_RH_NORMAL
+    mul dx
+    pop dx
     ret
 
 ; sh_vheight - in: AX = a visible row; out: AX = its height in pixels
 sh_vheight:
-    push bx
-    mov bx, ax
-    mov al, [sh_vrh + bx]
-    xor ah, ah
-    pop bx
+    mov ax, SH_RH_NORMAL
     ret
 
-; sh_vtoff - in: AX = a visible row; out: AX = where its text starts below its
-; top: a row taller than the standard keeps its text as far from its BOTTOM as
-; a standard one does, so text sits low in a tall row as Excel's does
+; sh_vtoff - in: AX = a visible row; out: how far below its top the text
+; starts, which with one height for every row is nothing
 sh_vtoff:
-    call sh_vheight
-    sub ax, SH_RH_NORMAL
-    jns .out
     xor ax, ax
-.out:
     ret
 
-; -----------------------------------------------------------------------------
-; sh_rc_sides - Insert and Delete Row/Column move the BORDER and NOTE tables'
-; records with their cells (81.58). They moved the cells alone, so a border or
-; a note stayed on the row or column it had been drawn on while its cell went
-; somewhere else - and a deleted row left its borders on the row that took
-; its place. In: [sh_rc_op], [sh_rc_idx], the user's sheet in sh_cursheet.
-; -----------------------------------------------------------------------------
-sh_rc_sides:
-    push bx
-    push cx
-    push dx
-    mov dx, [sh_bordseg]
-    mov cx, [sh_nbord]
-    mov bx, SH_BT_SZ
-    call sh_rc_table
-    mov [sh_nbord], cx
-    mov dx, [sh_noteseg]
-    mov cx, [sh_nnote]
-    mov bx, SH_NOTE_REC
-    call sh_rc_table
-    mov [sh_nnote], cx
-    cmp byte [sh_rc_op], 2            ; ...and a ROW's height goes with it
-    jae .out                          ; (81.60) - the table has no column
-    push es                           ; word for a column op to read
-    mov es, [sh_noteseg]
-    mov cx, [es:SH_ROWH_N]
-    mov dx, es
-    add dx, SH_ROWH_OFF / 16
-    mov bx, SH_ROWH_REC
-    call sh_rc_table
-    mov [es:SH_ROWH_N], cx
-    pop es
-.out:
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; sh_rc_table - DX = a sparse table's segment, CX = its records, BX = its
-; record size (packed row/sheet word, then the column word): every record on
-; this sheet past the pivot moves one row or column, the pivot's own go on a
-; delete, and one pushed off the grid goes too. out: CX = the records left.
-; IN PLACE, and still sorted: the table is in (row, col) order, and a shift
-; that moves every record past the pivot by the same one cannot reorder it.
-sh_rc_table:
-    push ax
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    mov es, dx
-    mov bp, cx                        ; BP = the records still to read
-    xor cx, cx                        ; CX = the records kept
-    xor si, si                        ; SI reads, DI writes
-    xor di, di
-.l:
-    or bp, bp
-    jz .done
-    dec bp
-    mov ax, [es:si]                   ; the packed row: its sheet...
-    mov dx, ax
-    push cx
-    mov cl, SH_ROW_BITS
-    shr dx, cl
-    pop cx
-    cmp dx, [sh_cursheet]
-    jne .keep                         ; another sheet's: untouched
-    and ax, SH_ROW_MASK               ; ...and its row
-    mov dl, [sh_rc_op]
-    cmp dl, 2
-    jae .col
-    cmp ax, [sh_rc_idx]
-    jb .keep
-    cmp dl, 1
-    je .delrow
-    inc ax                            ; insert: one row down
-    cmp ax, SH_ROWS
-    jae .drop
-    jmp short .newrow
-.delrow:
-    cmp ax, [sh_rc_idx]               ; delete: the pivot's own go, the rest
-    je .drop                          ; one row up
-    dec ax
-.newrow:
-    mov dx, [es:si]
-    and dx, ~SH_ROW_MASK & 0xFFFF     ; the sheet bits, as they were
-    or ax, dx
-    mov [es:si], ax
-    jmp short .keep
-.col:
-    mov ax, [es:si+2]
-    cmp ax, [sh_rc_idx]
-    jb .keep
-    cmp dl, 3
-    je .delcol
-    inc ax
-    cmp ax, SH_COLS
-    jae .drop
-    mov [es:si+2], ax
-    jmp short .keep
-.delcol:
-    cmp ax, [sh_rc_idx]
-    je .drop
-    dec ax
-    mov [es:si+2], ax
-.keep:
-    cmp si, di
-    je .same
-    push cx                           ; a drop behind it: close the gap
-    mov cx, bx
-.cp:
-    mov al, [es:si]
-    mov [es:di], al
-    inc si
-    inc di
-    loop .cp
-    pop cx
-    jmp short .kept
-.same:
-    add si, bx
-    add di, bx
-.kept:
-    inc cx
-    jmp .l
-.drop:
-    add si, bx
-    jmp .l
-.done:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop ax
-    ret
-
-; sh_vcx - in: AX = a visible column (0..sh_vcols); out: AX = its left edge,
-; in pixels from the grid's
 sh_vcx:
     push bx
     push cx
@@ -2369,24 +1619,10 @@ sh_undo_size:
     mov dx, SH_C_SZ
     mul dx
     jc .big
-    push ax
-    mov ax, [sh_nbord]
-    mov dx, SH_BT_SZ
-    mul dx
-    pop dx
-    add ax, dx
-    jc .big
-    push ax
-    mov ax, [sh_nnote]
-    mov dx, SH_NOTE_REC
-    mul dx
-    pop dx
-    add ax, dx
-    jc .big
-    add ax, SH_UD_HDR + 2048
-    jc .big
-    cmp ax, SH_CLAIM_UNDO_KB * 1024
-    ja .big
+    add ax, SH_UD_HDR + 256            ; 81.75: the cells, and the 256 column
+    jc .big                            ; widths. The border and note tables
+    cmp ax, SH_CLAIM_UNDO_KB * 1024    ; have gone and the row heights with
+    ja .big                            ; them
     clc
     pop dx
     ret
@@ -2421,10 +1657,6 @@ sh_undo_save:
     mov es, dx
     mov ax, [sh_ncells]
     mov [es:0], ax
-    mov ax, [sh_nbord]
-    mov [es:2], ax
-    mov ax, [sh_nnote]
-    mov [es:4], ax
     mov ax, [sh_txtlen]
     mov [es:6], ax
     mov di, SH_UD_HDR
@@ -2437,27 +1669,9 @@ sh_undo_save:
     mov ax, [sh_cellseg]
     xor si, si
     call sh_fcopy
-    mov ax, [sh_nbord]
-    mov bx, SH_BT_SZ
-    push dx
-    mul bx
-    pop dx
-    mov cx, ax
-    mov ax, [sh_bordseg]
-    xor si, si
-    call sh_fcopy
-    mov ax, [sh_nnote]
-    mov bx, SH_NOTE_REC
-    push dx
-    mul bx
-    pop dx
-    mov cx, ax
-    mov ax, [sh_noteseg]
-    xor si, si
-    call sh_fcopy
-    mov cx, 2048                       ; the widths and the row heights, from
-    mov ax, [sh_noteseg]               ; the same claim's top (81.60)
-    mov si, SH_COLW_OFF
+    mov cx, 256                        ; ...and the column widths, which are
+    mov ax, ds                         ; this package's OWN bss now (81.75)
+    mov si, sh_colwtab
     call sh_fcopy
     clc
 .out:
@@ -2481,10 +1695,6 @@ sh_undo_load:
     mov es, ax
     mov bx, [es:0]
     mov [sh_ncells], bx
-    mov bx, [es:2]
-    mov [sh_nbord], bx
-    mov bx, [es:4]
-    mov [sh_nnote], bx
     mov bx, [es:6]
     mov [sh_txtlen], bx
     mov si, SH_UD_HDR
@@ -2497,27 +1707,9 @@ sh_undo_load:
     mov dx, [sh_cellseg]
     xor di, di
     call sh_fcopy
-    push ax
-    mov ax, [sh_nbord]
-    mov bx, SH_BT_SZ
-    mul bx
-    mov cx, ax
-    pop ax
-    mov dx, [sh_bordseg]
-    xor di, di
-    call sh_fcopy
-    push ax
-    mov ax, [sh_nnote]
-    mov bx, SH_NOTE_REC
-    mul bx
-    mov cx, ax
-    pop ax
-    mov dx, [sh_noteseg]
-    xor di, di
-    call sh_fcopy
-    mov cx, 2048
-    mov dx, [sh_noteseg]
-    mov di, SH_COLW_OFF
+    mov cx, 256
+    mov dx, ds
+    mov di, sh_colwtab
     call sh_fcopy
     pop es
     pop di
@@ -2727,20 +1919,7 @@ sh_onclick:
                                         ; which would gate every future
                                         ; Format menu command shut for good
 .nofdlg:
-    cmp word [sh_bdlg_win], 0          ; same non-modal gate-lock risk, same
-    je .nobdlg                         ; recovery, for the Border dialog
-    call sh_bdlg_close_r
-.nobdlg:
     mov word [sh_msg], 0
-    mov byte [sh_rz_on], 0             ; 81.73.2: a press on a heading's own
-    call sh_hdrhit                     ; trailing edge is a RESIZE and not a
-    jnc .norz                          ; selection, so it is asked first and
-    mov byte [sh_rz_on], 1             ; owns the whole gesture
-    jmp .out
-.norz:
-    mov byte [sh_dragging], 0          ; stage 3.0a: a gesture is only a grid
-                                        ; drag if it STARTS on the grid - the
-                                        ; menu-bar path below never arms it
     mov bx, si
     call sh_geom
     call sh_mbar_hit                   ; stage 2.x: Sheet's own in-window
@@ -3179,72 +2358,6 @@ sh_shiftdown:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_ondrag - W_ONDRAG (SPEC.md 13.8.2): the pointer moved while our press was
-; armed. CX = x, DX = y, SI = window; UI task, gfx lock held.
-;
-; REDRAWS ONLY ON A CHANGE, which the slot's own doc insists on: it fires per
-; mouse packet, and a repaint per packet is tens of milliseconds each on a
-; 4.77MHz machine. [sh_drag_col]/[sh_drag_row] hold the cell we last extended
-; to, so sliding within one cell costs a hit-test and nothing else.
-; -----------------------------------------------------------------------------
-sh_ondrag:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    ; 81.73.2: ...and a heading drag owns it before either of them, because
-    ; it started on a press the selection never saw
-    cmp byte [sh_rz_on], 0
-    je .norz
-    call sh_rz_track
-    jmp .out
-.norz:
-    ; stage 3.0a+: a live scroll-thumb drag owns the gesture before the grid
-    ; selection does.
-    call sh_sbsync
-    call os88ui_sbdragging
-    jc .novthumb
-    mov bx, sh_vsb
-    call os88ui_sbtrack                ; DX = the pointer's y
-    jc .out                            ; nothing owed (no move, or the rate)
-    add ax, [sh_freezerow]             ; 81.70: the bar answers in its own
-    call sh_setscrollrow               ; scrolling-region space (sh_sbsync
-    jmp .out                           ; shifted pos/total/fit there); every
-                                        ; sh_setscrollrow caller is absolute
-.novthumb:
-    cmp byte [sh_hsb_dragon], 0
-    je .nohthumb
-    mov bx, sh_hsb
-    call sh_hsb_track                  ; CX = the pointer's x
-    jc .out
-    add ax, [sh_freezecol]             ; 81.70, the vertical bar's reason
-    call sh_setscrollcol
-    jmp .out
-.nohthumb:
-    cmp byte [sh_dragging], 0
-    je .out                            ; this gesture did not start on the grid
-    call sh_gridhit
-    jnc .out                           ; slid off the grid: leave the range as
-                                        ; it was rather than clamping wildly
-    cmp ax, [sh_drag_col]
-    jne .moved
-    cmp bx, [sh_drag_row]
-    je .out                            ; same cell as last packet - nothing
-.moved:
-    mov [sh_drag_col], ax
-    mov [sh_drag_row], bx
-    mov si, [sh_ownwin]                ; sh_repaint's SI contract
-    call sh_select_to
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; sh_selrect - stage 3.0a: normalize the anchor/extent pair into an ordered
 ; rect. Out: [sh_selc1] <= [sh_selc2], [sh_selr1] <= [sh_selr2]. Every range
 ; consumer reads these rather than comparing the raw pair itself, so "which
@@ -3318,221 +2431,6 @@ sh_scrollto2:
     pop ax
     jmp sh_scrollto_t
 ; =============================================================================
-; RESIZING A ROW OR COLUMN BY DRAGGING ITS HEADING (SPEC.md 81.73.2)
-;
-; A press within SH_RZ_GRAB pixels of a heading's trailing edge grabs it; the
-; drag then sets the width or height LIVE and the release just lets go.
-;
-; LIVE, BUT ONLY IN WHOLE UNITS. A width is stored in CHARACTERS, so the grid
-; is repainted once per 8 pixels of travel rather than once per mouse event -
-; a full grid repaint is priced in primitive calls (PERFORMANCE.md), and one
-; per pixel across a 56-pixel column is 56 of them where 7 is the same
-; gesture. Excel 2.1 drew a guide line instead for exactly this reason; that
-; needs an XOR line this app does not have, and stepping in whole units gets
-; the feedback without one.
-;
-; DRAGGING IT SHUT HIDES IT, which is Excel's own behaviour and falls out of
-; 81.73 rather than being built: no width IS the hidden sentinel's meaning.
-; =============================================================================
-SH_RZ_GRAB   equ 3                   ; pixels either side of the edge
-
-; -----------------------------------------------------------------------------
-; sh_hdrhit - in: CX,DX = a click. out: CF=1 when it grabbed a heading's
-; trailing edge, with [sh_rz_axis] 0 = column / 1 = row, [sh_rz_idx] = the
-; REAL row or column being resized, and [sh_rz_x0] the edge's own pixel.
-; -----------------------------------------------------------------------------
-sh_hdrhit:
-    push ax
-    push bx
-    push dx
-    mov ax, dx                         ; --- the COLUMN heading strip?
-    sub ax, [sh_goy]
-    sub ax, SH_FB_H
-    js .rowstrip
-    cmp ax, SH_CH_H
-    jae .rowstrip
-    mov ax, cx
-    sub ax, [sh_ox]
-    sub ax, SH_RH_W
-    js .no
-    mov [sh_rz_px], ax
-    mov byte [sh_rz_axis], 0
-    xor bx, bx
-    xor dx, dx
-.cw:
-    cmp bx, [sh_vcols]
-    jae .no
-    mov ax, bx
-    call sh_vwidth
-    add dx, ax                         ; DX = this slot's TRAILING edge
-    mov ax, [sh_rz_px]
-    sub ax, dx
-    jns .cpos
-    neg ax
-.cpos:
-    cmp ax, SH_RZ_GRAB
-    jbe .gotcol
-    inc bx
-    jmp short .cw
-.gotcol:
-    mov ax, bx
-    call sh_vreal_col
-    mov [sh_rz_idx], ax
-    jmp short .yes
-.rowstrip:
-    mov ax, cx                         ; --- or the ROW heading strip?
-    sub ax, [sh_ox]
-    js .no
-    cmp ax, SH_RH_W
-    jae .no
-    mov ax, dx
-    sub ax, [sh_goy]
-    sub ax, SH_FB_H + SH_CH_H
-    js .no
-    mov [sh_rz_px], ax
-    mov byte [sh_rz_axis], 1
-    xor bx, bx
-    xor dx, dx
-.rw:
-    cmp bx, [sh_vrows]
-    jae .no
-    mov ax, bx
-    call sh_vheight
-    add dx, ax
-    mov ax, [sh_rz_px]
-    sub ax, dx
-    jns .rpos
-    neg ax
-.rpos:
-    cmp ax, SH_RZ_GRAB
-    jbe .gotrow
-    inc bx
-    jmp short .rw
-.gotrow:
-    mov ax, bx
-    call sh_vreal_row
-    mov [sh_rz_idx], ax
-.yes:
-    mov [sh_rz_x0], dx                 ; the edge's own pixel, so the drag
-    pop dx                             ; measures from where the EDGE was and
-    pop bx                             ; not from where the pointer landed
-    pop ax
-    stc
-    ret
-.no:
-    pop dx
-    pop bx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_rz_track - CX,DX = the pointer. Sets the grabbed row or column to what
-; the drag now says, in whole units, repainting only when it changed.
-; -----------------------------------------------------------------------------
-sh_rz_track:
-    push ax
-    push bx
-    push cx
-    push dx
-    cmp byte [sh_rz_axis], 0
-    jne .row
-    mov ax, cx                         ; the pointer, in grid pixels...
-    sub ax, [sh_ox]
-    sub ax, SH_RH_W
-    sub ax, [sh_rz_x0]                 ; ...as a delta from the edge
-    push ax
-    mov ax, [sh_rz_idx]
-    call sh_colwidth
-    mov cl, 3
-    shl ax, cl                         ; its width now, in pixels
-    pop bx
-    add ax, bx                         ; what the pointer is asking for
-    jle .cwzero
-    mov cl, 3
-    shr ax, cl                         ; ...in whole characters
-    or ax, ax
-    jz .cwzero
-    cmp ax, SH_CW_MAXCH
-    jbe .cwhave
-    mov ax, SH_CW_MAXCH
-.cwhave:
-    mov bx, ax
-    mov ax, [sh_rz_idx]
-    call sh_colwidth
-    cmp ax, bx                         ; no WHOLE character changed: no paint
-    je .out
-    mov cl, bl
-    cmp bx, [sh_defch]
-    jne .cwstore
-    xor cl, cl
-.cwstore:
-    mov ax, [sh_rz_idx]
-    call sh_colw_set
-    jmp short .redraw
-.cwzero:
-    mov ax, [sh_rz_idx]
-    call sh_colwidth
-    or ax, ax
-    jz .out                            ; already shut
-    mov cl, SH_CW_HIDDEN
-    mov ax, [sh_rz_idx]
-    call sh_colw_set
-    jmp short .redraw
-.row:
-    mov ax, dx
-    sub ax, [sh_goy]
-    sub ax, SH_FB_H + SH_CH_H
-    sub ax, [sh_rz_x0]
-    push ax
-    mov ax, [sh_rz_idx]
-    call sh_rowheight                  ; its height now, in pixels
-    pop bx
-    add ax, bx
-    jle .rzero
-    cmp ax, SH_RH_MAX
-    jbe .rhmin
-    mov ax, SH_RH_MAX
-.rhmin:
-    cmp ax, SH_RH_MIN
-    jae .rhhave
-    mov ax, SH_RH_MIN                  ; a glyph still has to fit anything
-.rhhave:                               ; that is not shut
-    mov bx, ax
-    mov ax, [sh_rz_idx]
-    call sh_rowheight
-    cmp ax, bx                         ; no whole PIXEL changed: no paint
-    je .out
-    mov ax, bx
-    call sh_pxtw
-    mov cx, ax
-    mov ax, [sh_rz_idx]
-    call sh_rowh_set
-    jmp short .redraw
-.rzero:
-    mov ax, [sh_rz_idx]
-    call sh_rowheight
-    or ax, ax
-    jz .out
-    mov cx, SH_RH_HIDDEN
-    mov ax, [sh_rz_idx]
-    call sh_rowh_set
-.redraw:
-    push si
-    mov si, [sh_ownwin]
-    mov bx, si
-    call sh_geom
-    call sh_repaint
-    pop si
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-
-
 ; the core: bring [sh_sc_tcol]/[sh_sc_trow] into the viewport, moving the
 ; scroll origin the least amount that does it
 sh_scrollto_t:
@@ -3578,55 +2476,6 @@ sh_scrollto_t:
     pop ax
     ret
 
-; sh_frozencw - out: AX = the frozen columns' (0..sh_freezecol-1) total
-; pixel width, summed fresh via sh_colwidth rather than read from sh_vcw -
-; that cache can be one repaint stale for the very columns whose width just
-; changed (Format > Column Width), and this runs off a selection move,
-; which does not itself imply sh_geom has run since
-sh_frozencw:
-    push bx
-    push cx
-    push dx
-    xor dx, dx
-    xor bx, bx
-.l:
-    cmp bx, [sh_freezecol]
-    jae .out
-    mov ax, bx
-    call sh_colwidth
-    mov cl, 3
-    shl ax, cl
-    add dx, ax
-    inc bx
-    jmp short .l
-.out:
-    mov ax, dx
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; sh_frozenrh - the same, for the frozen rows, via sh_rowheight (already in
-; pixels, unlike sh_colwidth's characters)
-sh_frozenrh:
-    push bx
-    push dx
-    xor dx, dx
-    xor bx, bx
-.l:
-    cmp bx, [sh_freezerow]
-    jae .out
-    mov ax, bx
-    call sh_rowheight
-    add dx, ax
-    inc bx
-    jmp short .l
-.out:
-    mov ax, dx
-    pop dx
-    pop bx
-    ret
-
 ; sh_backcols - AX = a column past the view's right edge -> AX = the scroll
 ; column that shows it WHOLE at the right: the columns before it, each its own
 ; width, as many as still fit [sh_gridw]. It subtracted the column count the
@@ -3641,11 +2490,9 @@ sh_backcols:
     mov cl, 3
     shl ax, cl
     mov dx, ax                         ; DX = the pixels they take
-    call sh_frozencw                   ; 81.70: the frozen prefix's own
-    add dx, ax                         ; pixels are already spent, permanently
 .l:
-    cmp bx, [sh_freezecol]             ; 81.70: never walk INTO the frozen
-    jbe .out                           ; prefix - it is not a scroll position
+    or bx, bx
+    jz .out
     mov ax, bx
     dec ax
     call sh_colwidth
@@ -3665,22 +2512,17 @@ sh_backcols:
     ret
 
 ; sh_backrows - AX = a row below the view -> AX = the scroll row that shows it
-; whole at the bottom, the rows before it each their own height (81.60)
+; whole at the bottom. 81.75: one height for every row, so it is a count.
 sh_backrows:
     push bx
     push dx
     mov bx, ax                         ; BX = the first row shown
-    call sh_rowheight
-    mov dx, ax                         ; DX = the pixels they take
-    call sh_frozenrh                   ; 81.70
-    add dx, ax
+    mov dx, SH_RH_NORMAL               ; DX = the pixels they take
 .l:
-    cmp bx, [sh_freezerow]
-    jbe .out
-    mov ax, bx
-    dec ax
-    call sh_rowheight
-    add ax, dx
+    or bx, bx
+    jz .out
+    mov ax, dx
+    add ax, SH_RH_NORMAL
     cmp ax, [sh_gridh]
     ja .out
     mov dx, ax
@@ -3707,10 +2549,6 @@ sh_onkey:
     call sh_fdlg_close_r                 ; see sh_onclick's own copy of this
                                         ; guard for why
 .nofdlg:
-    cmp word [sh_bdlg_win], 0
-    je .nobdlg
-    call sh_bdlg_close_r
-.nobdlg:
     mov word [sh_msg], 0
     mov bx, si
     call sh_geom
@@ -4092,11 +2930,6 @@ sh_commit:
     push es
     cmp byte [sh_editing], 0
     je .out
-    call sh_prot_blocked              ; ONE funnel, so one guard: typing, Paste
-    jnc .allowed                      ; in all six modes, Fill Right and Fill
-    mov byte [sh_editing], 0          ; Down and a sort's write-back all end up
-    jmp .out                          ; here, and none of them can change a
-.allowed:                             ; locked cell on a protected document
     cmp byte [sh_ud_busy], 0          ; a TYPED entry is undoable on its own
     jne .inside                       ; (81.57); one made by Paste, Fill or
     mov al, SH_UL_ENTRY               ; Sort is part of theirs, which took
@@ -4208,7 +3041,6 @@ sh_drawall:
     call sh_dmgfull                   ; the three grid painters below are
     call sh_drawgrid                  ; RANGED now (sh_dmgc1..sh_dmgr2); a
     call sh_drawlines                 ; full draw is the whole viewport
-    call sh_drawborders
     call sh_drawsel
     pop di
     pop si
@@ -4315,7 +3147,6 @@ sh_dmgdraw:
 .nobands:
     call sh_drawgrid
     call sh_drawlines
-    call sh_drawborders
 .out:
     pop dx
     pop cx
@@ -4885,26 +3716,6 @@ sh_hsb_drop:
 ; for the vertical bar's rate-0 grab, commits the pos the hand ended on -
 ; which is what "the view follows only on release" means (13.10.5.4).
 ; -----------------------------------------------------------------------------
-sh_onmouseup:
-    push ax
-    push bx
-    push si
-    mov byte [sh_rz_on], 0             ; 81.73.2: the drag already applied
-    call os88ui_sbdragging
-    jc .noV
-    call os88ui_sbdrop                 ; the view already followed during the
-    jmp .out                           ; drag (the rate above), so releasing
-.noV:                                  ; only has to let go
-    cmp byte [sh_hsb_dragon], 0
-    je .out
-    call sh_hsb_drop
-.out:
-    mov byte [sh_dragging], 0
-    pop si
-    pop bx
-    pop ax
-    ret
-
 ; -----------------------------------------------------------------------------
 ; sh_sbclick - stage 3.0a+: a press landed somewhere. If it was on either
 ; scroll bar, act on it and answer CF=1 ("mine"); otherwise CF=0 and the grid
@@ -5135,18 +3946,9 @@ sh_scrollrow_blit:
 .abs:
     cmp di, [sh_vrows]
     jae .no                            ; nothing survives: repaint instead
-    ; ONE HEIGHT, OR NO BLIT (81.60): the band moves by delta rows of one
-    ; height, which is only the picture when every row either view shows -
-    ; and the one past each, which decides how many fit - is the standard
-    mov ax, cx
-    mov dx, [sh_scrollrow]
-    cmp ax, dx
-    jbe .span
-    xchg ax, dx
-.span:
-    add dx, [sh_vrows]
-    call sh_rh_anyin
-    jc .no
+    ; 81.60 asked here whether every row in the band was the standard height,
+    ; because a band of mixed heights does not move by delta*one-height.
+    ; 81.75 gave every row one height, so the question has one answer.
 
     ; The rect. x1 and x2+1 must be multiples of 8 (the blit is byte-column
     ; granular, SPEC.md 5.5): x1 rounds DOWN into the row-header strip,
@@ -5455,14 +4257,6 @@ sh_drawbar:
     mov di, sh_tbuf + 16
     push di                            ; sh_findcell's own DI output would
                                         ; otherwise clobber our cursor
-    cmp byte [sh_protected], 0         ; HIDDEN is the half of cell protection
-    je .nothidden                      ; that is about LOOKING rather than
-    mov ax, [sh_selcol]                ; changing, and this bar is the only
-    mov bx, [sh_selrow]                ; place a formula is ever shown as
-    call sh_bt_get                     ; itself - the grid shows its RESULT.
-    test al, SH_PROT_HIDDEN            ; So the whole of hiding one is here
-    jnz .empty2                        ; (81.46.2)
-.nothidden:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     call sh_findcell
@@ -5827,8 +4621,8 @@ sh_drawgrid:
     je .textpath                       ; characters, not its value
     cmp byte [sh_curtype], SH_T_BOOL   ; ...and a LOGICAL its name (81.51),
     je .boolpath                       ; which no number format touches
-    call sh_bt_getw                    ; AH = its number format, beside its
-    mov bh, ah                         ; border (81.55)
+    xor bh, bh                         ; 81.75: the format byte names every
+                                       ; number format there is now
     mov bl, [sh_curfmt]
     mov ax, dx
     call sh_numfmt
@@ -5865,41 +4659,9 @@ sh_drawgrid:
     add ax, SH_FB_H + SH_CH_H
     mov dx, ax                         ; DX = the cell's top, for the shade;
                                        ; the text goes sh_rtoff below it
-    ; stage 2.x: a Shaded cell (Format > Border..., real Excel's own Shade
-    ; checkbox) needs the grey dither drawn FIRST and the text drawn
-    ; TRANSPARENT over it - OSAPI_FONT_RUN's opaque erase-then-letter would
-    ; otherwise wipe the dither right back out on every single repaint
-    push cx
-    push dx
-    mov ax, [sh_wcol]
-    call sh_vreal_col                  ; 81.70
-    push ax
-    mov ax, [sh_wrow]
-    call sh_vreal_row
-    mov bx, ax
-    pop ax
-    call sh_bt_get                     ; al = this cell's border byte
-    pop dx
-    pop cx
-    test al, SH_BORD_SHADE
-    jz .noshade
-    push cx
-    push dx
-    mov ax, cx
-    mov bx, dx
-    add cx, [sh_cellw]
-    dec cx
-    add dx, [sh_cellh]
-    dec dx
-    call OSAPI_GFX_FILL_GRAY
-    pop dx
-    pop cx
-    add dx, [sh_rtoff]
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    call OSAPI_FONT_STR_XPARENT
-    jmp .aftertext
-.noshade:
+    ; 81.75: no Shade, so no dither to draw the text transparently over -
+    ; which means every cell takes FONT_RUN's one pass (6.1), and the one
+    ; place in this file that had to letter transparently is gone.
     add dx, [sh_rtoff]
     mov al, CBLACK
     mov ah, CWHITE
@@ -6036,147 +4798,6 @@ sh_drawlines:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; sh_drawborders - the four directional edges (Left/Right/Top/Bottom) of
-; every bordered cell (sh_bordseg) on the current sheet, within the visible
-; scroll window AND the damage range (sh_dmgc1..sh_dmgr2; sh_dmgfull for the
-; whole viewport). Shade is drawn from INSIDE sh_drawgrid instead, since it
-; has to happen BEFORE that cell's own opaque text run, not after (see the
-; comment there) - this routine only ever draws the four edge lines.
-; Sparse walk of sh_bordseg (typically tiny - almost no cell has a border)
-; rather than a per-cell probe, the same style sh_docmd_sortcol/
-; sh_rowcol_op already walk-and-filter the main cell array with. Drawn
-; AFTER sh_drawgrid for the same reason sh_drawlines already is:
-; OSAPI_FONT_RUN's opaque erase is exactly one cell wide and would
-; otherwise paint back over an edge drawn first.
-; -----------------------------------------------------------------------------
-sh_drawborders:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov word [sh_bti], 0               ; the scan index lives in bss, not
-                                        ; CX - OSAPI_GFX_FILL below takes CX
-                                        ; as one of its own four params, so
-                                        ; a register loop counter would get
-                                        ; clobbered by the very first edge
-                                        ; it draws (caught in review)
-.scan:
-    mov cx, [sh_bti]
-    cmp cx, [sh_nbord]
-    jae .done
-    mov ax, cx
-    mov bx, SH_BT_SZ
-    mul bx
-    mov si, ax
-    mov es, [sh_bordseg]
-    mov ax, [es:si]                   ; packed row/sheet
-    call sh_unpackrow                 ; ax=row, bx=sheet
-    cmp bx, [sh_cursheet]
-    jne .next
-    push ax                           ; the real row, banked across the
-                                       ; column's own lookup below (81.70) -
-                                       ; sh_vidx_col/row are the real->
-                                       ; visible inverse sh_vreal_col/row
-    mov ax, [es:si+2]                 ; col
-    call sh_vidx_col
-    jnc .skiprow
-    mov bx, ax
-    cmp bx, [sh_dmgc1]                ; ...and inside the damage range, so a
-    jb .skiprow                       ; partial redraw (sh_dmgdraw) does not
-    cmp bx, [sh_dmgc2]                ; re-edge cells it never repainted
-    ja .skiprow
-    mov [sh_wcol], bx
-    pop ax                            ; the real row, back
-    call sh_vidx_row
-    jnc .next
-    mov bx, ax
-    cmp bx, [sh_dmgr1]
-    jb .next
-    cmp bx, [sh_dmgr2]
-    ja .next
-    mov [sh_wrow], bx
-    mov al, [es:si+4]
-    mov [sh_bdrawflags], al
-    mov ax, [sh_wcol]
-    call sh_vcx                       ; its own left edge and width (81.56)
-    add ax, [sh_ox]
-    add ax, SH_RH_W
-    mov [sh_bx1], ax
-    mov ax, [sh_wcol]
-    call sh_vwidth
-    add ax, [sh_bx1]
-    dec ax
-    mov [sh_bx2], ax
-    mov ax, [sh_wrow]
-    call sh_vheight                    ; its own top and height (81.60)
-    mov bx, ax
-    mov ax, [sh_wrow]
-    call sh_vry
-    add ax, [sh_goy]
-    add ax, SH_FB_H + SH_CH_H
-    mov [sh_by1], ax
-    add ax, bx
-    dec ax
-    mov [sh_by2], ax
-    test byte [sh_bdrawflags], SH_BORD_LEFT
-    jz .noleft
-    mov ax, [sh_bx1]
-    mov bx, [sh_by1]
-    mov cx, [sh_bx1]
-    mov dx, [sh_by2]
-    call OSAPI_GFX_FILL
-.noleft:
-    test byte [sh_bdrawflags], SH_BORD_RIGHT
-    jz .noright
-    mov ax, [sh_bx2]
-    mov bx, [sh_by1]
-    mov cx, [sh_bx2]
-    mov dx, [sh_by2]
-    call OSAPI_GFX_FILL
-.noright:
-    test byte [sh_bdrawflags], SH_BORD_TOP
-    jz .notop
-    mov ax, [sh_bx1]
-    mov bx, [sh_by1]
-    mov cx, [sh_bx2]
-    mov dx, [sh_by1]
-    call OSAPI_GFX_FILL
-.notop:
-    test byte [sh_bdrawflags], SH_BORD_BOTTOM
-    jz .nobottom
-    mov ax, [sh_bx1]
-    mov bx, [sh_by2]
-    mov cx, [sh_bx2]
-    mov dx, [sh_by2]
-    call OSAPI_GFX_FILL
-.nobottom:
-    jmp .next
-.skiprow:
-    pop ax                            ; the real row, banked above and never
-                                       ; needed now the column already missed
-.next:
-    mov ax, [sh_bti]
-    inc ax
-    mov [sh_bti], ax
-    jmp .scan
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_drawsel - a black frame around the selected cell, if it is on screen
 ; -----------------------------------------------------------------------------
 sh_drawsel:
     push ax
@@ -6916,13 +5537,10 @@ sh_mfire:
 ; -----------------------------------------------------------------------------
 sh_docmd_options:
     push si
-    cmp al, 4
-    je .freeze
-    cmp al, 3
-    je .calc
-    cmp al, 2
-    je .protect
-    or al, al
+    cmp al, 2                          ; 81.75: three items. Protect Document
+    je .calc                           ; went with cell protection, Freeze
+    or al, al                          ; Panes with the row-height walk it
+
     jnz .formulas
     xor byte [sh_gridlines], 1
     cmp byte [sh_gridlines], 0
@@ -6940,15 +5558,6 @@ sh_docmd_options:
     jmp .repaint
 .foff:
     mov word [sh_i_options+2], sh_it_form_off
-    jmp .repaint
-.protect:                              ; NO PASSWORD, and no ellipsis on the
-    xor byte [sh_protected], 1         ; item to promise one - see 81.46.3.
-    cmp byte [sh_protected], 0         ; The label flips, the way Gridlines
-    je .poff                           ; and Formulas above already do
-    mov word [sh_i_options+4], sh_it_prot_on
-    jmp .repaint
-.poff:
-    mov word [sh_i_options+4], sh_it_prot_off
     jmp .repaint
 .calc:
     mov al, SH_FDK_CALC
@@ -7073,36 +5682,18 @@ sh_abdismiss:
 ; fields - sh_fdlg_open's own kinds 5/6, the presets they replaced, are
 ; retired (81.59).
 sh_docmd_format:
-    or al, al                          ; Number: Excel's list of codes (81.55),
-    jnz .notnum                        ; not the four-way radio it was
-    mov al, SH_LD_NUMFMT
-    call sh_ldlg_open_r
-    ret
-.notnum:
+    ; 81.75: four items - Number, Alignment, Font, Column Width. Number is the
+    ; four-way radio again, because the scrolling list 81.55 gave it was there
+    ; to offer the seventeen formats the side table held, and the side table
+    ; has gone. Border, Cell Protection and Row Height went with their
+    ; features.
     cmp al, 3
-    jne .notborder
-    call sh_bdlg_open_r
-    ret
-.notborder:
-    cmp al, 4
-    jne .notprot
-    mov al, SH_FDK_PROT
-    call sh_fdlg_open_r
-    ret
-.notprot:
-    cmp al, 5
-    jne .notrowh
-    mov al, SH_ID_ROWH                 ; stage 3.0c: a typed number now, not
-    call sh_idlg_open_r                  ; the 3-preset radio pick this had to
-    ret                                ; be while no text field existed
-.notrowh:
-    cmp al, 6
-    jne .notcolw
+    jne .fdlg
     mov al, SH_ID_COLW
     call sh_idlg_open_r
     ret
-.notcolw:
-    call sh_fdlg_open_r
+.fdlg:                                 ; 0 Number / 1 Alignment / 2 Font are
+    call sh_fdlg_open_r                ; sh_fdlg's own kinds 0..2, in order
     ret
 
 ; -----------------------------------------------------------------------------
@@ -7230,86 +5821,6 @@ sh_docmd_edit:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_prot_blocked - may the selected cell be changed? (81.46)
-; out: CF=1 no, and the status line already says why; CF=0 go ahead.
-;
-; Two conditions, and BOTH are needed: the document has to be protected AND
-; the cell has to be locked. That is Excel's model and it is the reason the
-; per-cell bit alone does nothing visible - a Locked cell on an unprotected
-; document is an ordinary cell, which is why every cell starts locked and
-; nobody notices.
-;
-; Preserves every register. It sits in front of sh_commit, whose arguments
-; are in them.
-; -----------------------------------------------------------------------------
-sh_prot_blocked:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov byte [sh_prot_hit], 0
-    cmp byte [sh_protected], 0
-    je .done
-    ; THE WHOLE SELECTION, not the anchor. Cut and Clear act on the block,
-    ; and a guard that asked about one corner would have let a Cut take
-    ; every locked cell beside it. sh_commit's selection is 1x1 by the time
-    ; it runs, so it costs one lookup there.
-    mov ax, [sh_selrow]
-    mov bx, [sh_selrow2]
-    cmp ax, bx
-    jbe .rr
-    xchg ax, bx
-.rr:
-    mov cx, [sh_selcol]
-    mov dx, [sh_selcol2]
-    cmp cx, dx
-    jbe .cc
-    xchg cx, dx
-.cc:
-    mov si, ax                        ; SI walks the rows, CX the columns
-.rowloop:
-    push cx
-.colloop:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov ax, cx
-    mov bx, si
-    call sh_bt_get                    ; 0 when there is no record, and no
-    test al, SH_PROT_UNLOCK           ; record is the LOCKED default
-    pop dx                            ; (pop does not touch the flags)
-    pop cx
-    pop bx
-    pop ax
-    jnz .next
-    mov byte [sh_prot_hit], 1
-    pop cx
-    jmp .done
-.next:
-    inc cx
-    cmp cx, dx
-    jbe .colloop
-    pop cx
-    inc si
-    cmp si, bx
-    jbe .rowloop
-.done:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    cmp byte [sh_prot_hit], 0
-    je .ok
-    mov word [sh_msg], sh_s_locked
-    stc
-    ret
-.ok:
-    clc
-    ret
-
 ; -----------------------------------------------------------------------------
 ; sh_ps_src - the SOURCE cell for the block position being pasted into.
 ; out: AX = column, BX = row. The block walker keeps (sh_pb_x, sh_pb_y) as the
@@ -7727,7 +6238,6 @@ sh_docmd_cut:
     push cx
     push si
     push di
-    call sh_prot_blocked              ; Cut CLEARS through sh_clearcell, not
     jc .refused                       ; sh_commit, so the funnel guard misses
     call sh_docmd_copy                 ; the whole block goes to the clipboard,
     mov ax, [sh_selrow]                ; so the whole block has to leave the
@@ -7923,7 +6433,6 @@ sh_paste_cell:
     jae .out
     mov [sh_selrow], bx
     mov [sh_selrow2], bx
-    call sh_prot_blocked              ; Formats and Notes write the tables
     jc .out                           ; DIRECTLY and never reach sh_commit, so
                                       ; the funnel guard does not cover them
     ; --- WHICH PARTS OF THE SOURCE CELL THIS PASTE IS FOR (81.45) ----------
@@ -8516,8 +7025,6 @@ sh_fdlg_open:
     je .prefillfmt                    ; File Format opens on the format the
     cmp al, SH_FDK_CALC               ; OK alone cannot silently change it
     je .prefillcalc                   ; Calculation opens SHOWING the mode it
-    cmp al, SH_FDK_PROT               ; is in, so OK alone cannot change it
-    je .prefillprot                   ; ...and Cell Protection opens showing
     cmp al, SH_FDK_CLEAR              ; what the cell already IS, for exactly
     jae .noprefill                    ; that reason. Clear/New/Sort have
                                        ; nothing current
@@ -8526,21 +7033,6 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
-.prefillprot:
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_get                    ; AL = the byte, and 0 when the cell has
-    xor cx, cx                        ; no record at all - which IS the
-    test al, SH_PROT_UNLOCK           ; default, Locked and not Hidden
-    jz .pp1
-    inc cx
-.pp1:
-    test al, SH_PROT_HIDDEN
-    jz .pp2
-    add cx, 2
-.pp2:
-    mov [sh_fdlg_sel], cx             ; CX is banked at entry, so using it
-    jmp .noprefill                    ; here costs the caller nothing
 .prefillfmt:
     mov word [sh_fdlg_sel], 0         ; PLAN's list starts at SYLK, which is
     jmp .noprefill                    ; also what sh_dowrite falls through to
@@ -8845,23 +7337,16 @@ sh_clear_one:
     je .fmt
     cmp word [sh_fdlg_sel], 1
     je .contents
-    SHOUT sh_clearcell                 ; All: the record goes, border and all
-    SHOUT sh_bt_removecell             ; (sh_clearcell preserves AX/BX)
+    SHOUT sh_clearcell                 ; All: the record and all of it
     jmp .out
 .contents:
-    push ax                           ; NOTHING TO KEEP - no border, no number
-    SHOUT sh_bt_getw                   ; format beyond the four, no format byte:
-    or ax, ax                         ; then the contents going leave no cell
-    pop ax                            ; at all, as All's do, rather than a
-    jnz .keep                         ; zero where Excel shows nothing (81.63)
-    SHOUT sh_findcell
-    jnc .out
-    mov es, [sh_cellseg]
-    cmp byte [es:di+5], 0
-    jne .keep2
+    SHOUT sh_findcell                  ; NOTHING TO KEEP - no format byte
+    jnc .out                          ; either - then the contents going
+    mov es, [sh_cellseg]              ; leave no cell at all, as All's do,
+    cmp byte [es:di+5], 0             ; rather than a zero where Excel shows
+    jne .keep2                        ; nothing (81.63)
     SHOUT sh_clearcell
     jmp .out
-.keep:
     SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
@@ -8878,8 +7363,8 @@ sh_clear_one:
     SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
-    mov byte [es:di+5], 0             ; Formats: only the format byte, and the
-    SHOUT sh_bt_removecell             ; border table entry beside it
+    mov byte [es:di+5], 0             ; Formats: the format byte, which is now
+                                      ; the whole of what a format is
 .out:
     pop es
     pop di
@@ -8983,8 +7468,6 @@ sh_fdlg_apply0:
     je .dosavefmt
     cmp byte [sh_fdlg_kind], SH_FDK_PSPEC
     je .dopspec
-    cmp byte [sh_fdlg_kind], SH_FDK_PROT
-    je .doprot
     cmp byte [sh_fdlg_kind], 3
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
@@ -9058,7 +7541,6 @@ sh_fdlg_apply0:
 
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
 .doclear:
-    SHOUT sh_prot_blocked
     jc .refused                       ; ...and the same here: this engine's
                                       ; .out does not repaint either
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
@@ -9137,48 +7619,6 @@ sh_fdlg_apply0:
     SHOUT sh_repaint
     jmp .out
 
-.doprot:
-    xor dl, dl                         ; 0 Locked is the default and stores no
-    mov ax, [sh_fdlg_sel]              ; bits at all, so a sheet nobody has
-    test al, 1                         ; touched is entirely locked
-    jz .prot1
-    mov dl, SH_PROT_UNLOCK
-.prot1:
-    test al, 2
-    jz .prot2
-    or dl, SH_PROT_HIDDEN
-.prot2:
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    or dl, dl
-    jz .protclear
-    SHOUT sh_bt_addcell
-    jc .out                            ; table full: silent, as everywhere
-    push es                            ; else that writes this table
-    mov es, [sh_bordseg]
-    mov al, [es:di+4]
-    and al, ~SH_PROT_MASK & 0xFF       ; the BORDER bits are not this dialog's
-    or al, dl                          ; to write, the mirror of sh_bdlg_apply
-    mov [es:di+4], al
-    pop es
-    jmp .protdone
-.protclear:
-    SHOUT sh_bt_findcell
-    jnc .protdone
-    push es
-    mov es, [sh_bordseg]
-    and byte [es:di+4], ~SH_PROT_MASK & 0xFF
-    mov ax, [es:di+4]                  ; ...and the number format beside it
-    pop es                             ; (81.55): the record stays while
-    or ax, ax                          ; either byte holds anything
-    jnz .protdone                      ; a border is still stored here
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_removecell
-.protdone:
-    mov si, [sh_ownwin]
-    SHOUT sh_repaint
-    jmp .out
 .protdoc:
     mov word [sh_msg], sh_s_protdoc
 .refused:
@@ -9243,410 +7683,6 @@ sh_fdlg_close:
     pop bx
     pop ax
     ret
-
-; =============================================================================
-; Border dialog (stage 2.x). Real Excel 2.1's Format > Border... is a
-; "Border" GROUP BOX holding six independent CHECKBOXES (Outline/Left/
-; Right/Top/Bottom/Shade) with OK/Cancel standing beside it, not below it
-; (LIBRARY/documentation/screenshots/excel/dialog_border.png) - a
-; materially different shape from
-; Number/Alignment/Font's single-choice radio lists, so it gets its own
-; small engine rather than being forced into sh_fdlg_*'s. "Outline" is
-; UI-only: checking it sets all four edges at once and unchecking it clears
-; all four, matching real Excel's own behavior - there is no stored
-; "outline" bit separate from the four edges themselves, so re-opening the
-; dialog on a cell that has all four set shows Outline checked too, purely
-; because sh_bdlg_open recomputes it from them.
-; =============================================================================
-SH_BDLG_W      equ 190
-SH_BDLG_GX1    equ 10                ; the "Border" group box, inset from
-SH_BDLG_GY1    equ 12                ; the dialog's own content origin
-SH_BDLG_GX2    equ 104
-SH_BDLG_GY2    equ 132                ; the LOWEST element here, so the height
-SH_BDLG_H      equ SH_BDLG_GY2 + SH_DLG_BMARG + TITLE_H + 1
-                                     ; comes from it. At a flat 150 the content
-                                     ; was 131 tall and this line sat at 132 -
-                                     ; the group box's bottom edge was one
-                                     ; pixel outside the window
-SH_BDLG_ROWTOP equ 26                ; first checkbox row, and OK/Cancel
-SH_BDLG_ROWH   equ 18                ; both measured from the SAME origin
-SH_BDLG_NITEMS equ 6
-
-SH_BDLG_B_OUTLINE equ 0x01           ; the dialog's own 6-bit UI state -
-SH_BDLG_B_LEFT    equ 0x02           ; bits 1-4 line up with SH_BORD_LEFT..
-SH_BDLG_B_RIGHT   equ 0x04           ; SH_BORD_BOTTOM shifted up by one (to
-SH_BDLG_B_TOP     equ 0x08           ; make room for Outline at bit 0) and
-SH_BDLG_B_BOTTOM  equ 0x10           ; bit 5 lines up with SH_BORD_SHADE the
-SH_BDLG_B_SHADE   equ 0x20           ; same way - see sh_bdlg_open/_apply
-
-section .text
-
-
-sh_bdlg_tpl:
-    dw 0, 0, SH_BDLG_W, SH_BDLG_H
-    dw sh_s_bdlg_title, sh_bdlg_paint_r, 0, sh_bdlg_click_r
-
-sh_s_bdlg_title: db 'Border', 0
-sh_bdlg_items: dw sh_bdlg_i0, sh_bdlg_i1, sh_bdlg_i2, sh_bdlg_i3, sh_bdlg_i4, sh_bdlg_i5
-sh_bdlg_i0:    db 'Outline', 0
-sh_bdlg_i1:    db 'Left', 0
-sh_bdlg_i2:    db 'Right', 0
-sh_bdlg_i3:    db 'Top', 0
-sh_bdlg_i4:    db 'Bottom', 0
-sh_bdlg_i5:    db 'Shade', 0
-
-; the resident thunks (81.71.5.1) - sh_bdlg_open_r is the menu's, and it is
-; what forces CHART.OVL in before any window exists, so neither callback can
-; be the call that has to read a disk
-sh_bdlg_open_r:
-    push bp
-    mov bp, SHM_BOPEN
-    call ch_ovcall
-    pop bp
-    jnc .out
-    mov word [sh_msg], sh_s_noovl
-    push si
-    mov si, [sh_ownwin]
-    call sh_repaint
-    pop si
-.out:
-    ret
-sh_bdlg_paint_r:
-    push bp
-    mov bp, SHM_BPAINT
-    call ch_ovcall
-    pop bp
-    ret
-sh_bdlg_click_r:
-    push bp
-    mov bp, SHM_BCLICK
-    call ch_ovcall
-    pop bp
-    ret
-sh_bdlg_close_r:                       ; the gate-lock recovery's own door
-    push bp
-    mov bp, SHM_BCLOSE
-    call ch_ovcall
-    pop bp
-    ret
-; --- in CHART.OVL (81.71.5.1), Data ▸ Form's own reason: a dialog nobody
-; opens twice a session was 900 bytes of a package with 46 to spare. Its
-; data stays resident because the kernel and os88ui both read it through
-; DS, and sh_bdlg_open_r forces the module in before the window exists.
-section SH_MODSEC                      ; 81.71.5.1: the Border dialog
-
-; -----------------------------------------------------------------------------
-; sh_bdlg_open - preselect from the selected cell's stored border byte
-; (sh_bt_get); a cell with no border record at all reads back as 0, same
-; "dialog still opens, OK on it is just a no-op" scope as sh_fdlg_open's.
-; -----------------------------------------------------------------------------
-sh_bdlg_open:
-    push ax
-    push bx
-    push si
-    cmp word [sh_bdlg_win], 0
-    jne .out
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_get                     ; al = stored border byte
-    mov ah, al
-    and ah, 0x1F
-    mov bl, ah
-    shl bl, 1                          ; bl = sel bits 1-5 (L,R,T,Bot,Shade)
-    and ah, SH_BORD_EDGES
-    cmp ah, SH_BORD_EDGES
-    jne .noout
-    or bl, SH_BDLG_B_OUTLINE
-.noout:
-    mov [sh_bdlg_sel], bl
-    call OSAPI_VIDEO
-    sub ax, SH_BDLG_W
-    sar ax, 1
-    mov [sh_bdlg_tpl + WT_X], ax
-    sub bx, SH_BDLG_H
-    sar bx, 1
-    cmp bx, MBAR_H + 8
-    jge .placed
-    mov bx, MBAR_H + 8
-.placed:
-    mov [sh_bdlg_tpl + WT_Y], bx
-    mov si, sh_bdlg_tpl
-    call OSAPI_WM_CREATE
-    jc .out
-    mov [sh_bdlg_win], bx
-    call OSAPI_WM_SHOW
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_bdlg_paint - SI = the dialog window
-; -----------------------------------------------------------------------------
-sh_bdlg_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov [sh_bdlg_ox], ax
-    mov [sh_bdlg_oy], dx
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [sh_bdlg_ox]
-    add ax, SH_BDLG_GX1
-    mov bx, [sh_bdlg_oy]
-    add bx, SH_BDLG_GY1
-    mov cx, [sh_bdlg_ox]
-    add cx, SH_BDLG_GX2
-    mov dx, [sh_bdlg_oy]
-    add dx, SH_BDLG_GY2
-    call OSAPI_GFX_FRAME                ; the group box itself
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [sh_bdlg_ox]
-    add ax, SH_BDLG_GX1 + 6
-    mov bx, [sh_bdlg_oy]
-    add bx, SH_BDLG_GY1 - 3
-    mov cx, ax
-    add cx, 40
-    mov dx, bx
-    add dx, 7
-    call OSAPI_GFX_FILL                 ; erase the frame line behind the
-                                         ; label, so it "breaks" the box top
-                                         ; the way a real GUI group box does
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov cx, [sh_bdlg_ox]
-    add cx, SH_BDLG_GX1 + 8
-    mov dx, [sh_bdlg_oy]
-    add dx, SH_BDLG_GY1 - 4
-    mov si, sh_s_bdlg_title
-    call OSAPI_FONT_STR_XPARENT
-    mov word [sh_bdlg_ri], 0
-.rowloop:
-    mov ax, [sh_bdlg_ri]
-    cmp ax, SH_BDLG_NITEMS
-    jae .rowsdone
-    mov bx, SH_BDLG_ROWH
-    mul bx
-    add ax, SH_BDLG_ROWTOP
-    add ax, [sh_bdlg_oy]
-    mov [sh_bdlg_ry], ax
-    mov al, OS88UI_GCHECK
-    mov bh, 1
-    mov cl, byte [sh_bdlg_ri]
-    shl bh, cl
-    test bh, [sh_bdlg_sel]
-    jz .off
-    or al, OS88UI_GON
-.off:
-    mov ah, 0
-    mov cx, [sh_bdlg_ox]
-    add cx, SH_BDLG_GX1 + 8
-    mov dx, [sh_bdlg_ry]
-    SHOUT os88ui_glyph
-    mov bx, [sh_bdlg_ri]
-    shl bx, 1
-    mov si, [sh_bdlg_items + bx]
-    mov cx, [sh_bdlg_ox]
-    add cx, SH_BDLG_GX1 + 24
-    mov dx, [sh_bdlg_ry]
-    add dx, 2
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    mov ax, [sh_bdlg_ri]
-    inc ax
-    mov [sh_bdlg_ri], ax
-    jmp .rowloop
-.rowsdone:
-    mov ax, [sh_bdlg_ox]
-    add ax, SH_BDLG_GX2 + 10
-    mov [sh_bdlg_rect], ax
-    mov ax, [sh_bdlg_oy]
-    add ax, 20
-    mov [sh_bdlg_rect+2], ax
-    mov ax, [sh_bdlg_ox]
-    add ax, SH_BDLG_W - 10
-    mov [sh_bdlg_rect+4], ax
-    mov ax, [sh_bdlg_oy]
-    add ax, 40
-    mov [sh_bdlg_rect+6], ax
-    mov bx, sh_bdlg_rect
-    mov si, sh_s_fd_ok
-    mov di, OS88UI_DEF
-    SHOUT os88ui_btn
-    mov ax, [sh_bdlg_oy]
-    add ax, 50
-    mov [sh_bdlg_rect+2], ax
-    mov ax, [sh_bdlg_oy]
-    add ax, 70
-    mov [sh_bdlg_rect+6], ax
-    mov bx, sh_bdlg_rect
-    mov si, sh_s_fd_cancel
-    xor di, di
-    SHOUT os88ui_btn
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_bdlg_onclick - in: CX=x, DX=y (screen-absolute), SI=the dialog window
-; -----------------------------------------------------------------------------
-sh_bdlg_onclick:
-    push ax
-    push bx
-    push si
-    push di
-    push cx
-    push dx
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    pop bx
-    sub bx, dx                          ; bx = click y, content-relative
-    pop cx
-    sub cx, ax                          ; cx = click x, content-relative
-    cmp cx, SH_BDLG_GX2 + 10
-    jb .checkrows
-    cmp cx, SH_BDLG_W - 10
-    ja .checkrows
-    cmp bx, 20
-    jb .checkrows
-    cmp bx, 40
-    jle .doOK
-    cmp bx, 50
-    jb .checkrows
-    cmp bx, 70
-    jle .doCancel
-.checkrows:
-    cmp cx, SH_BDLG_GX1 + 8
-    jb .out
-    cmp bx, SH_BDLG_ROWTOP
-    jb .out
-    mov ax, bx
-    sub ax, SH_BDLG_ROWTOP
-    xor dx, dx
-    mov si, SH_BDLG_ROWH
-    div si
-    cmp ax, SH_BDLG_NITEMS
-    jae .out
-    mov cl, al
-    mov bh, 1
-    shl bh, cl
-    xor [sh_bdlg_sel], bh
-    cmp al, 0
-    je .wasoutline
-    mov al, [sh_bdlg_sel]
-    and al, 0x1E
-    cmp al, 0x1E
-    jne .clroutline
-    or byte [sh_bdlg_sel], SH_BDLG_B_OUTLINE
-    jmp .redraw
-.clroutline:
-    and byte [sh_bdlg_sel], ~SH_BDLG_B_OUTLINE & 0xFF
-    jmp .redraw
-.wasoutline:
-    test byte [sh_bdlg_sel], SH_BDLG_B_OUTLINE
-    jz .outoff
-    or byte [sh_bdlg_sel], 0x1E
-    jmp .redraw
-.outoff:
-    and byte [sh_bdlg_sel], ~0x1E & 0xFF
-.redraw:
-    mov si, [sh_bdlg_win]
-    call sh_bdlg_paint
-    jmp .out
-.doOK:
-    call sh_bdlg_apply
-    call sh_bdlg_close
-    jmp .out
-.doCancel:
-    call sh_bdlg_close
-.out:
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_bdlg_apply - write sh_bdlg_sel's edges/shade (bits 1-5) into the
-; border table: a record if any bit is set, no record (removed if one
-; existed) if the cell ends up with no border at all.
-; -----------------------------------------------------------------------------
-sh_bdlg_apply:
-    push ax
-    push bx
-    push dx
-    push di                             ; DI is this table's record cursor and
-                                         ; two of the three paths below set it
-    mov al, [sh_bdlg_sel]
-    shr al, 1
-    and al, 0x1F
-    mov dl, al
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    or dl, dl
-    jz .clearit
-    SHOUT sh_bt_addcell
-    jc .out                             ; table full: silent no-op, same
-                                         ; scope limit as the main array's
-    push es
-    mov es, [sh_bordseg]
-    mov al, [es:di+4]
-    and al, SH_PROT_MASK                ; THE PROTECTION BITS ARE NOT THIS
-    or al, dl                           ; DIALOG'S TO WRITE. This was a plain
-    mov [es:di+4], al                   ; store of the border bits, which was
-    pop es                              ; right while it owned the whole byte
-    jmp .out
-.clearit:
-    SHOUT sh_bt_findcell                 ; ...and clearing every border must not
-    jnc .out                            ; take the record away with them if the
-    push es                             ; cell is also unlocked or hidden
-    mov es, [sh_bordseg]
-    and byte [es:di+4], SH_PROT_MASK
-    mov ax, [es:di+4]                   ; the number format too (81.55)
-    pop es
-    or ax, ax
-    jnz .out                            ; something is still stored here
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_removecell
-.out:
-    mov si, [sh_ownwin]
-    SHOUT sh_repaint
-    pop di
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_bdlg_close
-; -----------------------------------------------------------------------------
-sh_bdlg_close:
-    push ax
-    push bx
-    mov bx, [sh_bdlg_win]
-    or bx, bx
-    jz .out
-    mov word [sh_bdlg_win], 0
-    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
-.out:
-    pop bx
-    pop ax
-    ret
-
-section .text
 
 ; =============================================================================
 ; The ONE-LINE INPUT DIALOG (stage 3.0c) - a prompt, an os88line field, OK and
@@ -9761,21 +7797,8 @@ sh_idlg_open:
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
     je .pregoto                        ; prefilling one would be a wrong guess
-    cmp byte [sh_idlg_kind], SH_ID_ROWH
-    je .prerowh
     mov ax, [sh_selcol]                ; the SELECTED column's own width, in
     SHOUT sh_colwidth                   ; characters, matching what OK reads
-    jmp .prenum
-.prerowh:
-    mov ax, [sh_selrow]                ; the SELECTED row's own height, in
-    SHOUT sh_rowtw                      ; POINTS as Excel's dialog shows it -
-    or ax, ax                          ; 12.75 for the standard (81.60)
-    jnz .prerh
-    mov ax, SH_RH_STDTW
-.prerh:
-    SHOUT sh_twpts
-    jmp short .precopy
-.prenum:
     SHOUT sh_itoa
 .precopy:
     mov di, sh_idlg_buf
@@ -10040,34 +8063,6 @@ sh_idlg_apply:
     jmp .redraw
 .rowh:
     ; ROW HEIGHT IS IN POINTS, Excel's unit, fractions allowed, and applies
-    ; to THE SELECTED ROWS, each (81.60). It set the one height the whole
-    ; sheet had, in pixels. The standard 12.75 is stored as no record at all
-    mov si, sh_idlg_buf
-    SHOUT sh_ptwips
-    jc .out
-    or ax, ax                          ; 81.73: ZERO HIDES IT. This used to
-    jz .rhhide                         ; refuse, and said so - "Excel's 0
-    cmp ax, SH_RH_TWMIN                ; (hidden) and its 409 points are both
-    jb .out                            ; refused" - which is the line 81.73
-    cmp ax, SH_RH_TWMAX                ; opens; a glyph still has to fit any
-    ja .out                            ; height that is not zero
-    mov cx, ax
-    jmp short .rhhave
-.rhhide:
-    mov cx, SH_RH_HIDDEN
-.rhhave:
-    mov ax, [sh_selrow]
-    mov bx, [sh_selrow2]
-    cmp ax, bx
-    jbe .rhl
-    xchg ax, bx
-.rhl:
-    SHOUT sh_rowh_set
-    jc .redraw                         ; the table is full: what fitted stays
-    inc ax
-    cmp ax, bx
-    jbe .rhl
-    jmp .redraw
 .goto:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
@@ -10641,93 +8636,32 @@ sh_ldlg_tpl:
 ; create a window at all if it cannot, so no paint holding the gfx lock is
 ; ever the call that has to read a disk.
 sh_fdlg_open_r:
-    push bp
-    mov bp, SHM_FDOPEN
-    call ch_ovcall
-    pop bp
-    jnc .out
-    mov word [sh_msg], sh_s_noovl
-.out:
-    ret
+    jmp sh_fdlg_open
 sh_fdlg_paint_r:
-    push bp
-    mov bp, SHM_FDPAINT
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_fdlg_paint
 sh_fdlg_click_r:
-    push bp
-    mov bp, SHM_FDCLICK
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_fdlg_onclick
 sh_fdlg_close_r:
-    push bp
-    mov bp, SHM_FDCLOSE
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_fdlg_close
 sh_fdlg_apply_r:
-    push bp
-    mov bp, SHM_FDAPPLY
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_fdlg_apply
 sh_idlg_open_r:
-    push bp
-    mov bp, SHM_IDOPEN
-    call ch_ovcall
-    pop bp
-    jnc .out
-    mov word [sh_msg], sh_s_noovl
-.out:
-    ret
+    jmp sh_idlg_open
 sh_idlg_paint_r:
-    push bp
-    mov bp, SHM_IDPAINT
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_idlg_paint
 sh_idlg_key_r:
-    push bp
-    mov bp, SHM_IDKEY
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_idlg_onkey
 sh_idlg_click_r:
-    push bp
-    mov bp, SHM_IDCLICK
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_idlg_onclick
 sh_idlg_close_r:
-    push bp
-    mov bp, SHM_IDCLOSE
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_idlg_close
 
 sh_ldlg_open_r:
-    push bp
-    mov bp, SHM_LOPEN
-    call ch_ovcall
-    pop bp
-    jnc .out
-    mov word [sh_msg], sh_s_noovl
-.out:
-    ret
+    jmp sh_ldlg_open
 sh_ldlg_paint_r:
-    push bp
-    mov bp, SHM_LPAINT
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_ldlg_paint
 sh_ldlg_click_r:
-    push bp
-    mov bp, SHM_LCLICK
-    call ch_ovcall
-    pop bp
-    ret
+    jmp sh_ldlg_onclick
 sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname, sh_s_ld_tnum
 sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname, sh_s_ld_pnum
 sh_s_ld_tnum:  db 'Format Number', 0
@@ -11528,8 +9462,6 @@ sh_new:
     mov si, dx                       ; SI = window ptr, restored
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
-    mov word [sh_nbord], 0           ; the discarded document's borders and
-    mov word [sh_nnote], 0           ; notes go with it - a note record holds
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0          ; ...and its NAMES, which used to survive
                                      ; into the next document and go on
@@ -13592,462 +11524,20 @@ sh_removecell:
     ret
 
 ; =============================================================================
-; Border table (stage 2.x, sh_bordseg claim) - a SEPARATE sparse sorted
-; array, same shape and packing convention as the main cell array above
-; (sh_findcell's own stage 2.0 comment on the packed row/sheet word applies
-; here unchanged) but only SH_BT_SZ bytes/record: +0 packed row/sheet (word)
-; +2 col (word) +4 border byte (SH_BORD_* bits) +5 number format (81.55: 0,
-; or one of Excel's built-in format ids PLUS ONE). Almost no cell ever has a
-; border, so a cell simply has NO record here at all until Format >
-; Border... sets one of its bits, and loses its record again the moment
-; every bit clears (sh_bt_removecell) - the same "no record = default"
-; philosophy the main array already uses for value 0 vs formatted-and-0.
-; =============================================================================
-
-; sh_bt_findcell - binary search for (col,row); in AX=col,BX=row;
-; out CF=1 found DI=offset, CF=0 not found DI=insertion offset
-sh_bt_findcell:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov [sh_fcol], ax
-    mov ax, [sh_cursheet]
-    mov cl, SH_ROW_BITS
-    shl ax, cl
-    or ax, bx
-    mov [sh_frow], ax
-    xor cx, cx
-    mov dx, [sh_nbord]
-.loop:
-    cmp cx, dx
-    jae .notfound
-    mov si, dx
-    sub si, cx
-    shr si, 1
-    add si, cx
-    mov ax, si
-    mov bx, SH_BT_SZ
-    push dx
-    mul bx
-    pop dx
-    mov di, ax
-    push es
-    mov es, [sh_bordseg]
-    mov ax, [es:di]
-    mov bx, [es:di+2]
-    pop es
-    cmp ax, [sh_frow]
-    jl .lower
-    jg .higher
-    cmp bx, [sh_fcol]
-    jl .lower
-    jg .higher
-    stc
-    jmp .out
-.lower:
-    mov cx, si
-    inc cx
-    jmp .loop
-.higher:
-    mov dx, si
-    jmp .loop
-.notfound:
-    mov ax, cx
-    mov bx, SH_BT_SZ
-    mul bx
-    mov di, ax
-    clc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_bt_addcell - find or create (col,row); in AX=col,BX=row;
-; out CF=0 DI=offset (zeroed border byte if new), CF=1 table full
-sh_bt_addcell:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call sh_bt_findcell
-    jc .found
-    cmp word [sh_nbord], SH_BORD_CAP
-    jae .full
-    push di
-    mov ax, [sh_nbord]
-    mov bx, SH_BT_SZ
-    mul bx
-    mov cx, ax
-    sub cx, di
-    push ds
-    push es
-    mov dx, [sh_bordseg]
-    mov ds, dx
-    mov es, dx
-    jcxz .noshift
-    mov si, ax
-    dec si
-    mov di, si
-    add di, SH_BT_SZ
-    std
-    rep movsb
-    cld
-.noshift:
-    pop es
-    pop ds
-    pop di
-    inc word [sh_nbord]
-    push es
-    mov es, [sh_bordseg]
-    mov ax, [sh_frow]
-    mov [es:di], ax
-    mov ax, [sh_fcol]
-    mov [es:di+2], ax
-    mov word [es:di+4], 0              ; no border, no number format
-    pop es
-    clc
-    jmp .out
-.found:
-    clc
-    jmp .out
-.full:
-    stc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_bt_removecell - in: AX=col, BX=row
-sh_bt_removecell:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call sh_bt_findcell
-    jnc .out
-    mov ax, [sh_nbord]
-    mov bx, SH_BT_SZ
-    mul bx
-    mov cx, ax
-    sub cx, di
-    sub cx, SH_BT_SZ
-    push ds
-    push es
-    mov dx, [sh_bordseg]
-    mov ds, dx
-    mov es, dx
-    jcxz .noshift
-    mov si, di
-    add si, SH_BT_SZ
-    cld
-    rep movsb
-.noshift:
-    pop es
-    pop ds
-    dec word [sh_nbord]
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_bt_getw - in: AX=col, BX=row; out: AX = the record's word at +4: AL the
-; border+protection byte, AH the number format (81.55); 0 when no record
-sh_bt_getw:
-    push bx
-    push di
-    push es
-    call sh_bt_findcell
-    mov ax, 0
-    jnc .out
-    mov es, [sh_bordseg]
-    mov ax, [es:di+4]
-.out:
-    pop es
-    pop di
-    pop bx
-    ret
-
-; sh_bt_get - in: AX=col, BX=row; out: AL = border byte (0 if no record)
-sh_bt_get:
-    push bx
-    push di
-    push es
-    call sh_bt_findcell
-    jnc .none
-    mov es, [sh_bordseg]
-    mov al, [es:di+4]
-    jmp .out
-.none:
-    xor al, al
-.out:
-    pop es
-    pop di
-    pop bx
-    ret
-
-; =============================================================================
-; Note table (stage 3.0b, sh_noteseg claim) - Excel 2.1's cell notes, reached
-; from Formula > Note... A THIRD sparse sorted array, the same shape as the
-; border table above and searched the same way, but 6 bytes/record: +0 packed
-; row/sheet (word) +2 col (word) +4 the note text's offset in sh_txtseg
-; (word).
+; 81.75: THE TWO SIDE TABLES ARE GONE, and with them two of the eight claims.
 ;
-; THE TEXT LIVES IN THE EXISTING FORMULA ARENA, not in this claim. A note is
-; text of unknown length and sh_txt_append already appends exactly that, so this
-; table stores an offset into it just as a cell record stores formula_off.
-; That arena is APPEND-ONLY and never compacted, so re-editing a note leaks
-; its old copy - which is precisely what re-editing a formula has always done,
-; so the behaviour is at least consistent, and 8KB is a lot of notes. When the
-; arena fills, sh_txt_append returns CF=1 and the edit is refused rather than
-; half-applied.
+; 81.55's border table kept a sparse record per bordered cell - the border
+; bits, the protection bits, and the number format beyond the four the format
+; byte can name - in a 4KB claim. 81.71.5.1's note table kept another, in 5KB.
+; Both are features a budget does not have, and between them they were 9,216
+; bytes of a 53,760-byte arena: a ninth of the machine, for borders nobody
+; draws and notes nobody writes.
 ;
-; This is Sheet's 7th claim of MEM_OWNER_MAX's 8 (own region + cellseg/txtseg/
-; stgseg/bordseg/chartseg/noteseg). "So there is exactly one left" stood here
-; and IS NO LONGER TRUE: 82.16 spent it on CHART.OVL's claim, taken at start-up
-; with the rest. SHEET holds 8 OF 8 and the kernel refuses a ninth
-; (kernel/memory.inc's MEM_OWNER_MAX). See 81.2.
+; WHAT WENT WITH THEM, because it was only reachable through them: Format >
+; Border... and its check-box dialog engine (the only sh_bdlg_* caller),
+; Format > Cell Protection..., Options > Protect Document, and every number
+; format past the four the format byte itself can name.
 ; =============================================================================
-
-; sh_nt_findcell - binary search for (col,row); in AX=col,BX=row;
-; out CF=1 found DI=offset, CF=0 not found DI=insertion offset
-sh_nt_findcell:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov [sh_fcol], ax
-    mov ax, [sh_cursheet]
-    mov cl, SH_ROW_BITS
-    shl ax, cl
-    or ax, bx
-    mov [sh_frow], ax
-    xor cx, cx
-    mov dx, [sh_nnote]
-.loop:
-    cmp cx, dx
-    jae .notfound
-    mov si, dx
-    sub si, cx
-    shr si, 1
-    add si, cx
-    mov ax, si
-    mov bx, SH_NOTE_REC
-    push dx
-    mul bx
-    pop dx
-    mov di, ax
-    push es
-    mov es, [sh_noteseg]
-    mov ax, [es:di]
-    mov bx, [es:di+2]
-    pop es
-    cmp ax, [sh_frow]
-    jl .lower
-    jg .higher
-    cmp bx, [sh_fcol]
-    jl .lower
-    jg .higher
-    stc
-    jmp .out
-.lower:
-    mov cx, si
-    inc cx
-    jmp .loop
-.higher:
-    mov dx, si
-    jmp .loop
-.notfound:
-    mov ax, cx
-    mov bx, SH_NOTE_REC
-    mul bx
-    mov di, ax
-    clc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_nt_addcell - find or create (col,row); in AX=col,BX=row;
-; out CF=0 DI=offset (zeroed text offset if new), CF=1 table full
-sh_nt_addcell:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    call sh_nt_findcell
-    jc .found
-    cmp word [sh_nnote], SH_NOTE_CAP
-    jae .full
-    push di
-    mov ax, [sh_nnote]
-    mov bx, SH_NOTE_REC
-    mul bx
-    mov cx, ax
-    sub cx, di
-    push ds
-    push es
-    mov dx, [sh_noteseg]
-    mov ds, dx
-    mov es, dx
-    jcxz .noshift
-    mov si, ax
-    dec si
-    mov di, si
-    add di, SH_NOTE_REC
-    std
-    rep movsb
-    cld
-.noshift:
-    pop es
-    pop ds
-    pop di
-    inc word [sh_nnote]
-    push es
-    mov es, [sh_noteseg]
-    mov ax, [sh_frow]
-    mov [es:di], ax
-    mov ax, [sh_fcol]
-    mov [es:di+2], ax
-    mov word [es:di+4], 0
-    pop es
-    clc
-    jmp .out
-.found:
-    clc
-    jmp .out
-.full:
-    stc
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_nt_removecell - in: AX=col, BX=row. Deleting a note orphans its text in
-; the arena; see this table's header on why that is the existing behaviour.
-sh_nt_removecell:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call sh_nt_findcell
-    jnc .out
-    mov ax, [sh_nnote]
-    mov bx, SH_NOTE_REC
-    mul bx
-    mov cx, ax
-    sub cx, di
-    sub cx, SH_NOTE_REC
-    push ds
-    push es
-    mov dx, [sh_noteseg]
-    mov ds, dx
-    mov es, dx
-    jcxz .noshift
-    mov si, di
-    add si, SH_NOTE_REC
-    cld
-    rep movsb
-.noshift:
-    pop es
-    pop ds
-    dec word [sh_nnote]
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_nt_get - in: AX=col, BX=row; out: CF=1 and AX = the note text's offset
-; in sh_txtseg; CF=0 and AX undefined if this cell has no note.
-sh_nt_get:
-    push bx
-    push di
-    push es
-    call sh_nt_findcell
-    jnc .none
-    mov es, [sh_noteseg]
-    mov ax, [es:di+4]
-    pop es
-    pop di
-    pop bx
-    stc
-    ret
-.none:
-    pop es
-    pop di
-    pop bx
-    clc
-    ret
-
-; sh_nt_set - attach the NUL string at DS:SI to (col,row).
-; in: AX=col, BX=row, SI=the text. out: CF=1 = refused (table or arena full).
-; An EMPTY string removes the note instead, which is how the dialog's OK
-; button clears one - Excel's own Note dialog has no separate Delete.
-sh_nt_set:
-    push ax
-    push bx
-    push dx
-    push di
-    cmp byte [si], 0
-    je .clear
-    push ax
-    push bx
-    call sh_txt_append                  ; arena first: if IT has no room the
-    jc .fail2                           ; table must not gain a record
-    mov dx, ax                          ; dx = the text's arena offset
-    pop bx
-    pop ax
-    call sh_nt_addcell
-    jc .fail
-    push es
-    mov es, [sh_noteseg]
-    mov [es:di+4], dx
-    pop es
-    clc
-    jmp .out
-.clear:
-    call sh_nt_removecell
-    clc
-    jmp .out
-.fail2:
-    pop bx
-    pop ax
-.fail:
-    stc
-.out:
-    pop di
-    pop dx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_rowcol_op - Insert or delete a whole row or column on the CURRENT
@@ -14085,7 +11575,6 @@ sh_rowcol_op:
     mov [sh_rc_op], al
     mov [sh_rc_idx], bx
     call sh_colw_shift                ; a column's WIDTH goes with it (81.56)
-    call sh_rc_sides                  ; ...and its borders and notes (81.58)
     mov word [sh_rc_stgcnt], 0
     mov ax, [sh_cursheet]
     mov [sh_rc_savedsheet], ax
@@ -22535,22 +20024,13 @@ sh_fmtcode:
     pop ax
     ret
 
-; sh_cell_nfid - in: AX = col, BX = row; out: AL = the cell's format id -
-; the border table's, else the one its format byte names, else General
+; sh_cell_nfid - in: AX = col, BX = row; out: AL = the cell's format id, which
+; 81.75 makes the one its format byte names, else General: the side table that
+; held the other seventeen has gone.
 sh_cell_nfid:
     push bx
     push di
     push es
-    push ax
-    call sh_bt_getw
-    mov al, ah
-    pop di                             ; DI = the column, off the stack
-    or al, al
-    jz .byte
-    dec al
-    jmp short .out
-.byte:
-    mov ax, di
     call sh_findcell
     mov al, 0
     jnc .out
@@ -22641,52 +20121,24 @@ sh_nf_apply:
 
 sh_nf_one:
     push ax
-    push bx
     push cx
     push di
     push es
     call sh_findcell                   ; AX, BX kept
-    jnc .side                          ; no cell: the table, whatever it is
-    mov cx, ax                         ; CX = the column
+    jnc .out                           ; no cell record: nothing to format
     mov al, dl
-    call sh_nf_simple
-    xchg ax, cx                        ; AX = the column, CL = its simple code
-    jnc .sidefmt
-    mov es, [sh_cellseg]               ; simple: the format byte...
+    call sh_nf_simple                  ; 81.75: the format byte names every
+    jnc .out                           ; format there is, so one that it
+    mov es, [sh_cellseg]               ; cannot name is not offered
     and byte [es:di+SH_C_FMT], SH_FMT_NUM_CLR
-    push cx
-    mov ch, cl
+    mov ch, al
     mov cl, SH_FMT_NUM_SHIFT
     shl ch, cl
     or [es:di+SH_C_FMT], ch
-    pop cx
-    jmp short .drop                    ; ...and no table format beside it
-.sidefmt:
-    mov es, [sh_cellseg]
-    and byte [es:di+SH_C_FMT], SH_FMT_NUM_CLR
-.side:
-    or dl, dl                          ; General on an empty cell: nothing to
-    jz .drop                           ; hold - drop a table format if any
-    call sh_bt_addcell
-    jc .out                            ; the table is full: silent, as Border is
-    mov es, [sh_bordseg]
-    mov cl, dl
-    inc cl
-    mov [es:di+5], cl
-    jmp short .out
-.drop:
-    call sh_bt_findcell
-    jnc .out
-    mov es, [sh_bordseg]
-    mov byte [es:di+5], 0
-    cmp byte [es:di+4], 0
-    jne .out
-    call sh_bt_removecell              ; nothing left in the record
 .out:
     pop es
     pop di
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -23791,8 +21243,8 @@ sh_mtab:
     dw sh_m_file,    sh_i_file,    4
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 2
-    dw sh_m_format,  sh_i_format,  7
-    dw sh_m_options, sh_i_options, 5
+    dw sh_m_format,  sh_i_format,  4
+    dw sh_m_options, sh_i_options, 3
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
 
@@ -23861,13 +21313,10 @@ sh_m_format:    db 'Format', 0
 ; Number/Alignment/Font/Border/CELL PROTECTION/Row Height/Column
 ; Width/Justify. Cell Protection sits between
 ; Border and Row Height, which is not where it would have been guessed.
-sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_fprot, sh_it_frowh, sh_it_fcolw
-sh_it_fprot:     db 'Cell Protection...', 0
+sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fcolw
 sh_it_fnum:      db 'Number...', 0
 sh_it_falign:    db 'Alignment...', 0
 sh_it_ffont:     db 'Font...', 0
-sh_it_fborder:   db 'Border...', 0
-sh_it_frowh:     db 'Row Height...', 0
 sh_it_fcolw:     db 'Column Width...', 0
 
 ; Stage 2.0: the Sheet menu switches which of this instance's SH_SHEETS
@@ -23954,10 +21403,7 @@ sh_m_options:  db 'Options', 0
 ; (LIBRARY/documentation/screenshots/excel/menu_options_full.png). Gridlines
 ; and Formulas are items here where Excel keeps them inside Display... - that
 ; divergence is 81.31's, not this one's.
-sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_prot_off, sh_it_calc
-               dw sh_it_frz_off
-sh_it_prot_off: db 'Protect Document', 0
-sh_it_prot_on:  db 'Unprotect Document', 0
+sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_calc
 sh_it_grid_on:  db 'Gridlines: On', 0
 sh_it_grid_off: db 'Gridlines: Off', 0
 sh_it_form_on:  db 'Formulas: On', 0
@@ -24700,7 +22146,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7301                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 7557                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -25578,7 +23024,8 @@ sh_sepend     equ sh_sepch + 2       ; word: the staging buffer's end
 ; back through a vector - so the table is not merely unused, it is 568 bytes
 ; of bss that would be zeroed at every launch. The chain carries on from
 ; where it would have started.
-sh_v_end      equ sh_sepend + 2
+sh_colwtab    equ sh_sepend + 2      ; 256: 81.56's column widths (81.75)
+sh_v_end      equ sh_colwtab + 256
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
