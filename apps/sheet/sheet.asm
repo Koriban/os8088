@@ -114,16 +114,23 @@
 %endif
 
 ; The overlay is SHEET's alone: PLAN is one file, so SHOUT becomes a near call
-; (see the macro above) and the chart module never exists.
-%define CH_OVERLAY                  ; the chart module goes to CHART.OVL
+; (see the macro below) and the chart module never exists.
+%ifdef SHF_CHART
+  %define CH_OVERLAY                ; the chart module goes to CHART.OVL
+%else
+  %define PLAN_ONEFILE              ; ...and with no chart module there is no
+%endif                              ; module at all: one PLAN.O88 and nothing
+                                    ; beside it (81.75)
 
-; PLAN_ONEFILE IS NOT SET YET AND MUST NOT BE UNTIL THE CUTS LAND. Assembling
-; this source with every .modc tenant resident overflows the 64KB SEGMENT
-; before it overflows anything else - `dw OS88_IMAGE_SIZE` in the package
-; header is the first thing to fail, and a bss offset past 65535 the second.
-; That is not a detail: it is the overlay's whole reason, and it means PLAN
-; cannot be measured as "SHEET, resident" even once. The Tier-1 gates below
-; come first; the switch is thrown when the total fits.
+; PLAN_ONEFILE FOLLOWS SHF_CHART AND IS NOT A SEPARATE DECISION. The module's
+; own dispatcher (ch_modc) and its verb table live in os88chart.inc, so a
+; build with no chart module has nothing to put at .modc offset 0 - the two
+; go together or neither does. Nor could it have been thrown earlier:
+; assembling this source with every .modc tenant resident overflows the 64KB
+; SEGMENT before it overflows anything else, `dw OS88_IMAGE_SIZE` failing
+; first and a bss offset past 65535 second. That is the overlay's whole
+; reason, and it is why `make plan` measured resident + module + bss as one
+; number through every cut above rather than packaging anything.
 
 %include "os88api.inc"
 
@@ -548,7 +555,9 @@ SH_NOTEMAX   equ 240                ; the longest note the dialog will take,
 
 %ifndef CH_OVERLAY
   %ifndef CH_RESIDENT
+    %ifndef PLAN_ONEFILE
     %error "neither CH_OVERLAY nor CH_RESIDENT is defined HERE - see the note at the top of this file. A %ifdef tested before the %define is not an error to NASM, it is just false."
+    %endif
   %endif
 %endif
 
@@ -834,9 +843,17 @@ sh_reloc:
 ; and they close the one window where a chart export could be holding a stale
 ; segment across the OSAPI_FILE_WRITE in the middle of it.
 sh_segw:
-    dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg, sh_chartseg
-    dw ch_srcseg, ch_stgseg, ch_srcseg2, sh_undoseg
+    dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg
+%ifdef SHF_CHART
+    dw sh_chartseg
+    dw ch_srcseg, ch_stgseg, ch_srcseg2
+%endif
+    dw sh_undoseg
+%ifdef SHF_CHART
 SH_NSEGW equ 9
+%else
+SH_NSEGW equ 5                       ; 81.75: no chart claim and no borrowed
+%endif                               ; copies of it to keep in step
 
 ; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
@@ -1368,6 +1385,7 @@ sh_pdoor:
     pop bx
     ret
 
+%ifndef PLAN_ONEFILE
 ; -----------------------------------------------------------------------------
 ; sh_ovbind - fill the vector table: this package's shim offsets and its own
 ; segment. The offsets are assembled in; only the segment is a runtime fact,
@@ -1767,10 +1785,14 @@ sh_x_sh_ymd_to_ser:
 ; 81.74.2: everything the two remaining dialog engines reach back for, now
 ; that they are in the module too
 sh_x_sh_chart_paint:
+%ifdef SHF_CHART
     call sh_chart_paint
+%endif
     retf
 sh_x_sh_chart_render:
+%ifdef SHF_CHART
     call sh_chart_render
+%endif
     retf
 sh_x_sh_dlg:
     call sh_dlg
@@ -1903,15 +1925,18 @@ sh_ovshims:
     dw sh_x_sh_upcase_at, sh_x_sh_docmd_dbrun, sh_x_sh_undo_end, sh_x_sh_idlg_after  ; 81.74.2
     dw sh_x_sh_acc_fromudw, sh_x_sh_monlen
     dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
+%endif                                 ; PLAN_ONEFILE
 sh_entry:
     push ax
     push dx
     push si
     push di
+%ifdef CH_OVERLAY
     call OSAPI_FILE_HERE                ; where this package was LAUNCHED from,
     mov [ch_ovdir], dx                  ; banked before anything can navigate
     mov [ch_ovdrv], bl                  ; away - it is where CHART.OVL lives
                                         ; (82.16, the shape SPEC.md 68.10 sets)
+%endif
     call fp_init                      ; before the first claim, because every
 %ifdef CH_OVERLAY
     call sh_ovbind                      ; ...and the file-format module's
@@ -1957,12 +1982,14 @@ sh_entry:
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
     mov word [sh_nnote], 0
+%ifdef SHF_CHART
     mov ax, SH_CLAIM_CHART_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_chartseg], dx
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
+%endif
     mov ax, SH_CLAIM_UNDO_KB           ; Undo's, last and optional (81.57): a
     call OSAPI_MEM_CLAIM               ; heap that cannot spare it costs Undo,
     jc .noundo                         ; not the app
@@ -2001,6 +2028,7 @@ sh_entry:
     ; sh_stgseg, which is pinned, and every copy of a movable segment is
     ; either in sh_segw or dead across no compaction point. The image and
     ; CHART.OVL are what stay put.
+%ifdef SHF_CHART
     mov word [sh_chartwin], 0
     mov word [sh_chart_cnt], 0
     mov word [ch_type], CH_T_COLUMN
@@ -2018,6 +2046,7 @@ sh_entry:
     pop cx
     pop di
     pop si
+%endif
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
     mov si, sh_tpl
@@ -3546,6 +3575,7 @@ sh_repaint:
     dec dx
     call OSAPI_GFX_FILL
     call sh_drawall
+%ifdef SHF_CHART
     cmp word [sh_chartwin], 0           ; stage 2.x: keep the live Chart Column
     je .nochart                         ; window in sync with every data-
     cmp byte [sh_chartdirty], 0         ; changing command that already routes
@@ -3567,6 +3597,7 @@ sh_repaint:
 .chartobscured:
     pop bx
 .nochart:
+%endif                                  ; SHF_CHART
     pop dx
     pop cx
     pop bx
@@ -9650,6 +9681,7 @@ sh_docmd_sortcol_r:
 ; A sort key is a whole column by definition, so this acts on all of the
 ; selected column rather than on the selected part of it.
 ; -----------------------------------------------------------------------------
+%ifdef SHF_CHART
 ; -----------------------------------------------------------------------------
 ; sh_chart_scan - (re)collect [sh_chart_sheet]/[sh_chart_col]'s plain-value
 ; cells into sh_stgseg/sh_chart_cnt, capped at CH_MAXBARS (same shape as
@@ -10035,9 +10067,11 @@ sh_chart_tpl:
 sh_s_chart_title: db 'Chart', 0
 sh_s_charted:      db 'Charted.', 0
 sh_s_coltitle:     db 'Column ', 0
+%endif                                 ; SHF_CHART
 sh_s_onesheet:     db 'Saved - THIS SHEET ONLY; use .BIF to keep them all.', 0
 sh_s_sheetnm:      db 'Sheet', 0
 
+%ifdef SHF_CHART
 ; sh_docmd_chartexport - Data > Export Chart as BMP...: a no-op
 ; informational message if there's nothing charted yet (same "still runs,
 ; OK is just a no-op" idiom used throughout this file), else the standard
@@ -10066,6 +10100,7 @@ sh_docmd_chartexport:
     pop bx
     pop ax
     ret
+%endif                                 ; SHF_CHART
 %ifdef SHF_MACRO
 ; =============================================================================
 ; THE MACRO RECORDER (SPEC.md 81.74)
@@ -10743,6 +10778,7 @@ sh_ondbdelete:
     ret
 %endif                                 ; SHF_DB
 
+%ifdef SHF_CHART
 ; -----------------------------------------------------------------------------
 ; sh_chartexp_ondlg - the Export Chart dialog's completion proc (SPEC.md
 ; 38.6, same shape as sh_ondlg but writing the chart buffer, not the sheet,
@@ -10793,8 +10829,11 @@ sh_chartexp_ondlg:
 sh_s_chartbmp: db 'CHART.BMP', 0
 sh_s_nochart:  db 'No chart to export.', 0
 sh_s_experr:   db 'Chart export failed.', 0
+%endif                                 ; SHF_CHART
 sh_s_noovl:    db 'CHART.OVL not found.', 0
+%ifdef SHF_CHART
 sh_s_exported: db 'Chart exported.', 0
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sh_sort_vof / sh_sort_ldds / sh_sort_cmp - the three places the sort's value
@@ -11561,11 +11600,21 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot, sh_s_fd_extract, sh_s_fd_series
+; 81.75: kinds 15 and 16 are Extract and Series. They go the way 5 and 6 did
+; when they were retired - the SLOT stays, because a kind is an index into
+; these three tables and into sh_ud_kind, and the entry becomes 0.
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot
+%ifdef SHF_DB
+                dw sh_s_fd_extract, sh_s_fd_series
+%else
+                dw 0, 0
+%endif
 sh_s_fd_pspec:  db 'Paste Special', 0
 sh_s_fd_prot:   db 'Cell Protection', 0
+%ifdef SHF_DB
 sh_s_fd_extract: db 'Extract', 0
 sh_s_fd_series: db 'Series', 0
+%endif
 sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
@@ -11578,7 +11627,12 @@ sh_s_fd_font:   db 'Font', 0
 sh_s_fd_insert: db 'Insert', 0
 sh_s_fd_delete: db 'Delete', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot, sh_fd_i_extract, sh_fd_i_series
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot
+%ifdef SHF_DB
+                dw sh_fd_i_extract, sh_fd_i_series
+%else
+                dw 0, 0
+%endif
 ; Excel's Cell Protection dialog is two INDEPENDENT CHECK BOXES, Locked and
 ; Hidden. This is the four combinations as a radio, which is exactly what the
 ; Font dialog above already does with Bold and Underline - the same engine and
@@ -11594,14 +11648,17 @@ sh_fd_prunlockh: db 'Unlocked, Hidden', 0
 ; is asked as a two-way pick instead - identical meaning, no sixth dialog
 ; engine, and the divergence is the one §81.31 already took for Gridlines and
 ; Formulas. Index 1 IS the flag, so sh_fdlg_apply0 stores it with no mapping.
+%ifdef SHF_DB
 sh_fd_i_extract: dw sh_fd_exall, sh_fd_exuniq
 sh_fd_exall:    db 'All Matching Records', 0
 sh_fd_exuniq:   db 'Unique Records Only', 0
+%endif
 ; 81.72: Excel's Series dialog carries FIVE controls - Series In, Type, Date
 ; Unit, Step Value and Stop Value. Type and Date Unit fold into one radio
 ; column here (a date unit is only ever read when the type IS Date, so the
 ; two questions are really one), Step Value is the second dialog, and the
 ; other two are 81.72's own documented shortfalls
+%ifdef SHF_DB
 sh_fd_i_series: dw sh_fd_serlin, sh_fd_sergro, sh_fd_serday, sh_fd_serwd
                 dw sh_fd_sermon, sh_fd_seryr
 sh_fd_serlin:   db 'Linear', 0
@@ -11610,6 +11667,7 @@ sh_fd_serday:   db 'Date: Day', 0
 sh_fd_serwd:    db 'Date: Weekday', 0
 sh_fd_sermon:   db 'Date: Month', 0
 sh_fd_seryr:    db 'Date: Year', 0
+%endif
 ; Excel's own five, in Excel's own order (Reference Guide p.236). The dialog
 ; there ALSO carries an Operation group (None/Add/Subtract/Multiply/Divide)
 ; and two check boxes (Skip Blanks, Transpose); this engine paints ONE radio
@@ -11651,7 +11709,9 @@ sh_fd_gline:    db 'Line', 0
 sh_fd_gpie:     db 'Pie', 0
 sh_fd_gsca:     db 'Scatter', 0
 sh_fd_gcmb:     db 'Combination', 0
+%ifdef SHF_CHART
 sh_gal_map:     dw CH_T_AREA, CH_T_BAR, CH_T_COLUMN, CH_T_LINE, CH_T_PIE, CH_T_SCATTER, CH_T_COMBO
+%endif
 sh_fd_i_clear:  dw sh_fd_clall, sh_fd_clform, sh_fd_clfmt
 sh_fd_clall:    db 'All', 0
 sh_fd_clform:   db 'Formulas', 0       ; Excel's own order and its own words:
@@ -11751,8 +11811,10 @@ sh_fdlg_open:
 %endif
     cmp al, SH_FDK_SAVEFMT
     je .prefillfmt                    ; File Format opens on the format the
+%ifdef SHF_CHART
     cmp al, SH_FDK_GAL                ; current NAME already implies
     je .prefillgal                    ; Gallery opens on the type in use, so
+%endif
     cmp al, SH_FDK_CALC               ; OK alone cannot silently change it
     je .prefillcalc                   ; Calculation opens SHOWING the mode it
     cmp al, SH_FDK_PROT               ; is in, so OK alone cannot change it
@@ -11832,6 +11894,7 @@ sh_fdlg_open:
     mov word [sh_fdlg_sel], 0         ; PLAN's list starts at SYLK, which is
     jmp .noprefill                    ; also what sh_dowrite falls through to
 %endif
+%ifdef SHF_CHART
 .prefillgal:
     xor bx, bx                        ; find [ch_type] in the map rather than
     mov cx, 7                         ; inverting it - seven entries, and an
@@ -11846,6 +11909,7 @@ sh_fdlg_open:
     shr bx, 1
     mov [sh_fdlg_sel], bx
     jmp .noprefill
+%endif
 .prefillcalc:
     xor ah, ah
     mov al, [sh_calcmanual]
@@ -12285,8 +12349,10 @@ sh_fdlg_apply0:
     cmp byte [sh_fdlg_kind], SH_FDK_SORT
     je .dosort
 %endif
+%ifdef SHF_CHART
     cmp byte [sh_fdlg_kind], SH_FDK_GAL
     je .dogallery
+%endif
     cmp byte [sh_fdlg_kind], SH_FDK_SAVEFMT
     je .dosavefmt
     cmp byte [sh_fdlg_kind], SH_FDK_PSPEC
@@ -12470,6 +12536,7 @@ sh_fdlg_apply0:
     call sh_docmd_sortcol
     jmp .out
 %endif
+%ifdef SHF_CHART
 .dogallery:
     mov bx, [sh_fdlg_sel]
     shl bx, 1
@@ -12484,6 +12551,7 @@ sh_fdlg_apply0:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
+%endif
 .doprot:
     xor dl, dl                         ; 0 Locked is the default and stores no
     mov ax, [sh_fdlg_sel]              ; bits at all, so a sheet nobody has
@@ -42408,29 +42476,32 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; scratch, declared in the bss chain below.
 %include "os88fp.inc"
 
+%ifdef SHF_CHART
 %define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
 
-%ifndef PLAN_ONEFILE
 %if SHM_READ != CHM_MAX + 1
   %error "SHEET's module verbs must start one past CHM_MAX - see 82.16.8"
 %endif
-%endif
 
 %include "os88chart.inc"
+%endif                              ; SHF_CHART
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
 %ifdef PLAN
-    OS88_BSS 8100                     ; PLANs own: +2 for sh_planvec, and -4
+    OS88_BSS 7301                     ; 81.75, PLAN's own and already far from
+                                       ; SHEET's: -191 for the ch_* working
+                                       ; set, -568 for the vector table that a
+                                       ; one-file build has no use for, -4
                                        ; because SH_MENU_N is 7 rather than 9
-                                       ; - no Macro menu, no Data menu - and
-                                       ; sh_mw is a word per menu. It will
-                                       ; diverge much further once the claim
-                                       ; ladder lands
+                                       ; (sh_mw is a word per menu, and both
+                                       ; Macro and Data are gone), +2 for
+                                       ; sh_planvec. The claim ladder will
+                                       ; move it again
 %else
     OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
@@ -42462,9 +42533,16 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; One binary can serve both only if both put the block at the same offset, and
 ; offset zero is the only one neither package has to negotiate for.
 %define CH_BSS_BASE (os88_image_end + 0)
+%ifdef SHF_CHART
 %include "os88chartbss.inc"
 %if CH_BSS_BASE != os88_image_end
   %error "the ch_* block must start at bss offset 0 - see 82.16"
+%endif
+%else
+; 81.75: no chart, no rasterizer, so none of its 191 bytes of working set
+; either - and nothing to keep at a fixed offset, because the reason offset
+; zero was a REQUIREMENT is that one CHART.OVL served two hosts.
+%define CH_BSS_END CH_BSS_BASE
 %endif
 
 sh_selcol     equ CH_BSS_END
@@ -43318,6 +43396,7 @@ sh_dbf_w      equ sh_dbf_ty + 128    ; type letter, width and decimal count
 sh_dbf_d      equ sh_dbf_w + 128
 sh_sepch      equ sh_dbf_d + 128      ; byte: CSV/TXT's delimiter (81.40)
 sh_sepend     equ sh_sepch + 2       ; word: the staging buffer's end
+%ifndef PLAN_ONEFILE
 sh_v_first    equ sh_sepend + 2      ; 82.16.9's vector table: one dword
                                       ; per routine the module calls back
 sh_v_sh_itoa                equ sh_v_first
@@ -43464,6 +43543,13 @@ sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
 SH_NVEC       equ 142
 sh_v_end      equ sh_v_sh_bt_removecell + 4
+%else
+; 81.75: with the module resident, SHOUT is a near call and nothing reaches
+; back through a vector - so the table is not merely unused, it is 568 bytes
+; of bss that would be zeroed at every launch. The chain carries on from
+; where it would have started.
+sh_v_end      equ sh_sepend + 2
+%endif
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against

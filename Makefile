@@ -10258,13 +10258,12 @@ $(PLANDIR)/plan.bin: apps/sheet/sheet.asm apps/os88api.inc apps/os88fp.inc \
 	@mkdir -p $(PLANDIR)
 	$(NASM) -f bin -w+error -I apps/ -DPLAN -o $@ apps/sheet/sheet.asm
 
-# PLAN CANNOT BE PACKAGED YET AND THE REASON IS THE WHOLE PROBLEM. While
-# PLAN_ONEFILE is unset this source still emits a .modc section, so the
-# header's image-size field describes the resident half and os88pkg refuses
-# the file - the same fact, one layer up, as the 64KB segment overflow that
-# stops the tenants simply being made resident. So the target REPORTS THE
-# SPLIT instead: resident + module is what has to fall under 64KB before the
-# switch can be thrown, and that number is the cut list's meter until then.
+# PLAN IS ONE FILE NOW. PLAN_ONEFILE follows SHF_CHART (sheet.asm's own note
+# says why they cannot be separated), so the source emits no .modc section at
+# all and this is an ordinary package: assemble, validate, done. What the
+# target still does is PRINT the two numbers the cut list was steered by -
+# image and bss against APP_MAX_SIZE, which is 0xF000 and not 65536; the
+# segment is 64KB but the budget a package is held to is 60.
 # EVERY SHF_ FLAG TESTED MUST BE ONE THAT IS DEFINED. A `%ifdef SHF_TYPO` is
 # not an error to NASM, it is just false - in BOTH arms - so a mistyped or
 # never-declared flag silently cuts the feature out of SHEET as well. That
@@ -10281,16 +10280,16 @@ planflags:
 	 else print('planflags: %d flag(s) tested, all declared' % len(u))"
 
 .PHONY: plan
-plan: planflags $(PLANDIR)/plan.bin
-	@python3 tools/os88ovl.py $(PLANDIR)/plan.bin -o $(PLANDIR)/PLAN.OVL \
-		--trim $(PLANDIR)/plan.trim.bin
-	@r=$$(wc -c < $(PLANDIR)/plan.trim.bin); m=$$(wc -c < $(PLANDIR)/PLAN.OVL); \
+plan: planflags $(PLANDIR)/PLAN.O88
+
+$(PLANDIR)/PLAN.O88: $(PLANDIR)/plan.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(PLANDIR)/plan.bin -o $@
+	@i=$$(wc -c < $(PLANDIR)/plan.bin); \
 	 b=$$(python3 -c "import re,sys; s=open('apps/sheet/sheet.asm').read(); \
 	   m=re.search(r'%ifdef PLAN\s*\n\s*OS88_BSS (\d+)', s); \
 	   print(m.group(1) if m else sys.exit('plan: no PLAN OS88_BSS literal'))"); \
-	 echo "plan: resident $$r + module $$m + bss $$b = $$((r+m+b)) bytes"; \
-	 echo "plan: one file needs resident+module+bss under 65536"; \
-	 echo "plan: to go: $$((r+m+b-65536)) bytes"
+	 echo "plan: image $$i + bss $$b = $$((i+b)) of 61440 (APP_MAX_SIZE)"; \
+	 echo "plan: $$((61440-i-b)) bytes spare"
 
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                                $(BUILD)/CHART.OVL,$(APPS_TOOLS))
