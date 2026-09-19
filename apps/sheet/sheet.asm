@@ -787,11 +787,17 @@ SHM_BPAINT equ 21                   ; the same reason and by the same recipe
 SHM_BCLICK equ 22                   ; (it has no onkey)
 SHM_BCLOSE equ 23                   ; ...and both closes, which the gate-lock
 SHM_FCLOSE equ 24                   ; recovery in sh_onclick/sh_onkey calls
+SHM_SORT   equ 25                   ; 81.71.6: Data > Sort's whole worker -
+                                     ; no callback at all, so one verb and
+                                     ; one door is the whole of it
+SHM_LOPEN  equ 26                   ; ...and the scrolling LIST dialog, which
+SHM_LPAINT equ 27                   ; has two callbacks; its
+SHM_LCLICK equ 28                   ; own close is an internal near call
 SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
                                      ; sub-op byte, because sh_modc_ext
                                      ; already dispatches on a number and a
                                      ; callback must not spend a register
-SHM_N      equ 22                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 26                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -819,6 +825,8 @@ sh_mverb:
     dw sh_m_form, sh_m_fpaint, sh_m_fkey, sh_m_fclick    ; 81.71.5
     dw sh_m_bopen, sh_m_bpaint, sh_m_bclick               ; 81.71.5.1
     dw sh_m_bclose, sh_m_fclose
+    dw sh_m_sortcol                                       ; 81.71.6
+    dw sh_m_lopen, sh_m_lpaint, sh_m_lclick
 
 sh_m_doread:
     call shm_doread
@@ -908,6 +916,22 @@ sh_m_fclose:
     call sh_df_savefld                 ; a background click is not a cancel
     call sh_df_close                   ; here: the field being edited is
     clc                                ; committed, the way Close itself does
+    retf
+sh_m_sortcol:                       ; 81.71.6
+    call sh_docmd_sortcol
+    clc
+    retf
+sh_m_lopen:
+    call sh_ldlg_open
+    clc
+    retf
+sh_m_lpaint:
+    call sh_ldlg_paint
+    clc
+    retf
+sh_m_lclick:
+    call sh_ldlg_onclick
+    clc
     retf
 section .text
 
@@ -1419,6 +1443,27 @@ sh_x_os88ui_ask:
 sh_x_os88ui_glyph:                  ; 81.71.5.1: the Border dialog's radios
     call os88ui_glyph               ; and check boxes, and the sparse border
     retf                            ; table it is the only writer of
+sh_x_os88ui_sbar:                   ; 81.71.6: the list dialog's scroll bar,
+    call os88ui_sbar                ; the number-format table it shows and
+    retf                            ; the two edit-mode entry points it uses
+sh_x_os88ui_sbhit:
+    call os88ui_sbhit
+    retf
+sh_x_sh_cell_nfid:
+    call sh_cell_nfid
+    retf
+sh_x_sh_editstart:
+    call sh_editstart
+    retf
+sh_x_sh_flkey:
+    call sh_flkey
+    retf
+sh_x_sh_name_list:
+    call sh_name_list
+    retf
+sh_x_sh_nf_apply:
+    call sh_nf_apply
+    retf
 sh_x_sh_bt_findcell:
     call sh_bt_findcell
     retf
@@ -1460,6 +1505,9 @@ sh_ovshims:
     dw sh_x_os88line_set, sh_x_os88line_draw, sh_x_os88line_key      ; 81.71.5
     dw sh_x_os88line_click, sh_x_os88ui_btn, sh_x_os88ui_ask
     dw sh_x_os88ui_glyph                                           ; 81.71.5.1
+    dw sh_x_os88ui_sbar, sh_x_os88ui_sbhit, sh_x_sh_cell_nfid        ; 81.71.6
+    dw sh_x_sh_editstart, sh_x_sh_flkey, sh_x_sh_name_list
+    dw sh_x_sh_nf_apply
     dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
 sh_entry:
     push ax
@@ -6947,13 +6995,13 @@ sh_mfire:
     or al, al
     jnz .fm1
     mov al, SH_LD_NAME
-    call sh_ldlg_open
+    call sh_ldlg_open_r
     jmp .out
 .fm1:
     cmp al, 1
     jne .fm2
     mov al, SH_LD_FUNC
-    call sh_ldlg_open
+    call sh_ldlg_open_r
     jmp .out
 .fm2:
     cmp al, 2
@@ -7260,7 +7308,7 @@ sh_docmd_format:
     or al, al                          ; Number: Excel's list of codes (81.55),
     jnz .notnum                        ; not the four-way radio it was
     mov al, SH_LD_NUMFMT
-    call sh_ldlg_open
+    call sh_ldlg_open_r
     ret
 .notnum:
     cmp al, 3
@@ -8449,6 +8497,7 @@ sh_docmd_filldown:
     pop bx
     pop ax
     ret
+section .modc                      ; 81.71.6: ...and the carry half of it
 
 ; -----------------------------------------------------------------------------
 ; sh_sort_carry - apply the key column's permutation to every OTHER column in
@@ -8560,7 +8609,7 @@ sh_sort_snapcol:
     shl si, 1
     mov bx, [es:si]                   ; rows[i]
     mov ax, [sh_cry_col]
-    call sh_cell_totext               ; -> sh_clipbuf, CX = length
+    SHOUT sh_cell_totext               ; -> sh_clipbuf, CX = length
     cmp cx, 63
     jbe .fits
     mov cx, 63
@@ -8672,7 +8721,7 @@ sh_sort_permcol:
     or al, al
     jnz .fcopy
     mov si, sh_rwsrc
-    call sh_formula_copyshift
+    SHOUT sh_formula_copyshift
     mov byte [sh_editbuf], '='
     mov si, sh_rwdst
     mov di, sh_editbuf + 1
@@ -8700,7 +8749,7 @@ sh_sort_permcol:
     mov [sh_editlen], cl
 .commit:
     mov byte [sh_editing], 1
-    call sh_commit
+    SHOUT sh_commit
     jc .arenafull                     ; the text arena refused: entries already
 .nextperm:                            ; written hold the new order, the rest
     inc word [sh_cry_i]               ; the old - stop and SAY SO rather than
@@ -8721,7 +8770,23 @@ sh_sort_permcol:
     pop ax
     ret
 
+section .text
+
 sh_s_sortfull: db 'Sort incomplete - text area full.', 0
+
+; sh_docmd_sortcol_r - the resident door (81.71.6). Data > Sort's worker is
+; ~2.5KB that runs once per Sort, so it lives in the module; it has no window
+; callback of its own, which is what makes this one verb and one call rather
+; than Form's four
+sh_docmd_sortcol_r:
+    push bp
+    mov bp, SHM_SORT
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
@@ -9446,6 +9511,7 @@ sh_s_exported: db 'Chart exported.', 0
 ;
 ; sh_sort_vof - in: BX = entry index, out: DI = its offset in sh_stgseg
 ; -----------------------------------------------------------------------------
+section .modc                      ; 81.71.6: Data > Sort's worker, CHART.OVL
 sh_sort_vof:
     push ax
     push cx
@@ -9486,10 +9552,10 @@ sh_sort_cmp:
     cmp al, 3
     je .out                           ; two errors: equal (ZF from the cmp)
     mov si, sh_sort_cmpv
-    call fp_unpack_a
+    SHOUT fp_unpack_a
     mov si, sh_sort_keyval
-    call fp_unpack_b
-    call fp_cmpab                     ; AX = -1/0/1 and the flags to match
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab                     ; AX = -1/0/1 and the flags to match
 .out:
     pop si
     pop ax
@@ -9664,7 +9730,7 @@ sh_docmd_sortcol:
     mov si, ax
     mov es, [sh_cellseg]
     mov ax, [es:si]
-    call sh_unpackrow                 ; ax=row, bx=sheet
+    SHOUT sh_unpackrow                 ; ax=row, bx=sheet
     cmp bx, [sh_cursheet]
     jne .next
     mov dx, [es:si+2]                 ; col
@@ -9695,7 +9761,7 @@ sh_docmd_sortcol:
                                        ; from an arbitrary index, silently
                                        ; duplicating or dropping cells.
     push si
-    call sh_getcell2                  ; -> dx = its CURRENT value (never
+    SHOUT sh_getcell2                  ; -> dx = its CURRENT value (never
     pop si                            ; stale - see this proc's own header)
     pop cx
     mov [sh_sort_val], dx
@@ -9771,7 +9837,7 @@ sh_docmd_sortcol:
     jne .snum
     mov byte [sh_sort_ccls], 2        ; a logical: its 0 or 1 below
 .snum:
-    call sh_cellval_to_acc_si         ; the WHOLE value into sh_acc, not the
+    SHOUT sh_cellval_to_acc_si         ; the WHOLE value into sh_acc, not the
     push si                           ; word at SH_S_VAL - sorting on the
     push di                           ; truncated integer made every decimal
     mov si, sh_acc                    ; in a column compare equal
@@ -10010,11 +10076,11 @@ sh_docmd_sortcol:
     jnz .wbcopyin
     push cx
     mov si, sh_rwsrc
-    call sh_formula_copyshift
+    SHOUT sh_formula_copyshift
     mov ax, [sh_sort_keycol]             ; the KEY column, the same one .wbplain
     mov bx, [sh_sort_trow]            ; writes to - this said sh_selcol, which
     mov si, sh_rwdst                  ; was the anchor and is no longer the key
-    call sh_setformula
+    SHOUT sh_setformula
     pop cx
     jc .wbfull                        ; the arena refused: stop the write-back
     jmp .wbnext
@@ -10043,7 +10109,7 @@ sh_docmd_sortcol:
     pop bx
     mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
-    call sh_setvald                   ; an integer store would truncate it
+    SHOUT sh_setvald                   ; an integer store would truncate it
     pop cx
     jmp .wbnext
 .wbbool:
@@ -10057,7 +10123,7 @@ sh_docmd_sortcol:
 .wbb:
     mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
-    call sh_setbool
+    SHOUT sh_setbool
     pop cx
     jmp .wbnext
 .wberr:
@@ -10067,7 +10133,7 @@ sh_docmd_sortcol:
     mov dl, [es:di]                   ; the code it was staged with
     mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
-    call sh_seterr
+    SHOUT sh_seterr
     pop cx
     jmp .wbnext
 .wbtext:
@@ -10091,7 +10157,7 @@ sh_docmd_sortcol:
     mov ax, [sh_sort_keycol]
     mov bx, [sh_sort_trow]
     mov si, sh_rwsrc
-    call sh_settext
+    SHOUT sh_settext
     pop cx
     jc .wbfull
     mov es, [sh_stgseg]               ; the loop reads staging through ES
@@ -10106,7 +10172,7 @@ sh_docmd_sortcol:
     call sh_sort_carry                ; ...and bring the other columns with it
 .wbpaint:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     pop es
     pop di
     pop si
@@ -10115,6 +10181,9 @@ sh_docmd_sortcol:
     pop bx
     pop ax
     ret
+
+section .text
+
 
 ; =============================================================================
 ; Format dialogs (stage 1.8). Real Excel's Number/Alignment/Font dialogs
@@ -11030,7 +11099,7 @@ sh_fdlg_apply0:
 .dosort:
     mov ax, [sh_fdlg_sel]
     mov [sh_sort_desc], al
-    call sh_docmd_sortcol
+    call sh_docmd_sortcol_r
     jmp .out
 .dogallery:
     mov bx, [sh_fdlg_sel]
@@ -12590,7 +12659,30 @@ SH_LDLG_H    equ SH_LDLG_LY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_ldlg_tpl:
     dw 0, 0, SH_LDLG_W, SH_LDLG_H
-    dw sh_s_ld_tfunc, sh_ldlg_paint, 0, sh_ldlg_onclick
+    dw sh_s_ld_tfunc, sh_ldlg_paint_r, 0, sh_ldlg_click_r
+; the resident doors (81.71.6) - sh_ldlg_open_r forces the module in before
+; the window exists, 81.71.5.1's invariant
+sh_ldlg_open_r:
+    push bp
+    mov bp, SHM_LOPEN
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    ret
+sh_ldlg_paint_r:
+    push bp
+    mov bp, SHM_LPAINT
+    call ch_ovcall
+    pop bp
+    ret
+sh_ldlg_click_r:
+    push bp
+    mov bp, SHM_LCLICK
+    call ch_ovcall
+    pop bp
+    ret
 sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname, sh_s_ld_tnum
 sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname, sh_s_ld_pnum
 sh_s_ld_tnum:  db 'Format Number', 0
@@ -12600,6 +12692,10 @@ sh_s_ld_tname: db 'Paste Name', 0
 sh_s_ld_pfunc: db 'Paste function:', 0
 sh_s_ld_pname: db 'Paste name:', 0
 sh_s_ld_none:  db '(none defined)', 0
+; --- in CHART.OVL (81.71.6): the scrolling LIST dialog - Paste Function,
+; Paste Name and Format Number's code list. Its data stays resident for
+; 81.71.5.1's reason, and sh_ldlg_open_r forces the module in first.
+section .modc                      ; 81.71.6: the list dialog
 
 ; -----------------------------------------------------------------------------
 ; sh_ldlg_open - in: AL = SH_LD_*
@@ -12630,7 +12726,7 @@ sh_ldlg_open:
     jne .isfunc
     mov ax, [sh_selcol]                    ; Excel's 21 codes, the selected
     mov bx, [sh_selrow]                    ; cell's own already chosen and in
-    call sh_cell_nfid                      ; view (81.55)
+    SHOUT sh_cell_nfid                      ; view (81.55)
     xor ah, ah
     mov [sh_ldlg_sel], ax
     sub ax, SH_LDLG_ROWS - 1
@@ -12653,7 +12749,7 @@ sh_ldlg_open:
     mov [sh_ldlg_count], cx
     jmp .have
 .names:
-    call sh_name_list                      ; -> sh_nameptr[] and CX
+    SHOUT sh_name_list                      ; -> sh_nameptr[] and CX
     mov word [sh_ldlg_items], sh_nameptr
     mov [sh_ldlg_count], cx
 .have:
@@ -12825,7 +12921,7 @@ sh_ldlg_paint:
 .rdone:
     call sh_ldlg_sbset
     mov bx, sh_ldsb
-    call os88ui_sbar
+    SHOUT os88ui_sbar
 .buttons:
     mov ax, [sh_ldlg_ox]
     add ax, SH_LDLG_BTX1
@@ -12842,7 +12938,7 @@ sh_ldlg_paint:
     mov bx, sh_ldlg_rect
     mov si, sh_s_fd_ok
     mov di, OS88UI_DEF
-    call os88ui_btn
+    SHOUT os88ui_btn
     mov ax, [sh_ldlg_oy]
     add ax, SH_LDLG_CAY1
     mov [sh_ldlg_rect+2], ax
@@ -12852,7 +12948,7 @@ sh_ldlg_paint:
     mov bx, sh_ldlg_rect
     mov si, sh_s_fd_cancel
     xor di, di
-    call os88ui_btn
+    SHOUT os88ui_btn
     pop di
     pop si
     pop dx
@@ -12886,7 +12982,7 @@ sh_ldlg_onclick:
     mov cx, ax
     mov dx, bx
     mov bx, sh_ldsb
-    call os88ui_sbhit
+    SHOUT os88ui_sbhit
     or al, al
     jz .notbar
     cmp al, OS88UI_SBUP
@@ -13015,7 +13111,7 @@ sh_ldlg_apply:
     cmp byte [sh_ldlg_kind], SH_LD_NUMFMT
     jne .paste
     mov al, [sh_ldlg_sel]              ; a FORMAT, to the whole selection -
-    call sh_nf_apply                   ; empty cells too, as Excel's is
+    SHOUT sh_nf_apply                   ; empty cells too, as Excel's is
     jmp .done
 .paste:
     mov bx, [sh_ldlg_items]
@@ -13027,7 +13123,7 @@ sh_ldlg_apply:
                                        ; in SI - see sh_ldlg_putc
     cmp byte [sh_editing], 0
     jne .append
-    call sh_editstart                 ; nothing being edited: start a formula,
+    SHOUT sh_editstart                 ; nothing being edited: start a formula,
     mov al, '='                       ; since a bare function name is not one
     call sh_ldlg_putc
 .append:
@@ -13038,7 +13134,7 @@ sh_ldlg_apply:
     call sh_ldlg_putc                 ; parenthesis, as Excel's own does
 .done:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
 .out:
     pop si
     pop bx
@@ -13060,7 +13156,7 @@ sh_ldlg_putc:
     push si
     xor ah, ah
     mov si, [sh_ownwin]
-    call sh_flkey
+    SHOUT sh_flkey
     pop si
     pop ax
     ret
@@ -13099,6 +13195,9 @@ sh_ldlg_close:
     pop bx
     pop ax
     ret
+
+section .text
+
 
 ; -----------------------------------------------------------------------------
 ; sh_upcase_at - uppercase the NUL string at SI in place. Preserves all.
@@ -40265,7 +40364,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7524                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 7552                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -41220,9 +41319,16 @@ sh_v_os88line_click          equ sh_v_os88line_key + 4
 sh_v_os88ui_btn              equ sh_v_os88line_click + 4
 sh_v_os88ui_ask              equ sh_v_os88ui_btn + 4
 sh_v_os88ui_glyph            equ sh_v_os88ui_ask + 4      ; 81.71.5.1
-sh_v_sh_bt_findcell          equ sh_v_os88ui_glyph + 4
+sh_v_os88ui_sbar             equ sh_v_os88ui_glyph + 4    ; 81.71.6
+sh_v_os88ui_sbhit            equ sh_v_os88ui_sbar + 4
+sh_v_sh_cell_nfid            equ sh_v_os88ui_sbhit + 4
+sh_v_sh_editstart            equ sh_v_sh_cell_nfid + 4
+sh_v_sh_flkey                equ sh_v_sh_editstart + 4
+sh_v_sh_name_list            equ sh_v_sh_flkey + 4
+sh_v_sh_nf_apply             equ sh_v_sh_name_list + 4
+sh_v_sh_bt_findcell          equ sh_v_sh_nf_apply + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 108
+SH_NVEC       equ 115
 sh_v_end      equ sh_v_sh_bt_removecell + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)

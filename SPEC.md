@@ -105751,6 +105751,42 @@ Eight more vectors went with them (`os88line_set`/`_draw`/`_key`/`_click`,
 `os88ui_btn`, `os88ui_ask`, `os88ui_glyph`, `sh_bt_findcell`,
 `sh_bt_removecell`; `SH_NVEC` 99 → 108) and `CH_OVKB` rose again.
 
+#### 81.71.6 The headroom pass, and what a package can still spend
+
+Form landed with **390 bytes** of resident room left, which is not enough to
+implement anything else in, so two more rarely-run blocks followed it out
+before the next stage started.
+
+**What the two ceilings actually are**, measured rather than recalled:
+
+| | limit | why |
+|---|---|---|
+| resident image + bss | **`APP_MAX_SIZE` = 60 KB** | the SEGMENT, not a pool: a package links at `org 0` and addresses itself with 16-bit offsets |
+| `CHART.OVL` | **63 KB** | `ch_ovneed` does `mov cx, CH_OVKB * 1024`, so 64 would wrap CX to 0. The module is `vstart=0` and dispatches through a 16-bit `jmp`, which caps it at the same segment anyway |
+
+The floppy is **not** a third ceiling: SHEET is already off `apps360.img`
+(§24.6, the geometry that runs out first) and ships on `office360.img`, which
+is under 200 of its 354 clusters.
+
+**Moved**: `Data ▸ Sort`'s whole worker — `sh_docmd_sortcol` and the
+`sh_sort_*` family, ~1,900 bytes, and the cheapest of all of these because it
+has **no window callback at all**, so it is one verb and one door; and the
+scrolling **list dialog** (`sh_ldlg_*`, Paste Function, Paste Name and Format
+Number's code list), ~1,000 bytes, on §81.71.5.1's recipe. Seven more vectors
+(`SH_NVEC` 108 → 115); `CH_OVKB` 37 → 40.
+
+Resident headroom: **390 → 3,255 bytes**, with ~23 KB still free in the
+module.
+
+**What may still go, if a later stage needs it**: the other two dialog
+engines (`sh_fdlg_*`, `sh_idlg_*`, ~2 KB together), `sh_rowcol_op`, and the
+copy/paste workers — all menu-driven, none on a paint or keystroke path.
+**What may not**, and the rule behind it: anything the main window repaints or
+types through (`sh_drawgrid`, `sh_drawbar`, `sh_geom`, `sh_onkey`,
+`sh_mfire`), the number-format engine (it runs per cell painted), the
+evaluator's core — and, by construction, **anything already vectored *from*
+the module**, which has to stay resident to be reached at all.
+
 #### 81.71.4 What it cost, and the menu's order
 
 Three new vectors (`sh_cell_totext`, `sh_clearcell`, `sh_formula_copyshift`;
