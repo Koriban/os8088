@@ -114,13 +114,21 @@
 ; Geometry / grid / storage constants
 ; =============================================================================
 SH_COLS      equ 256                ; the roadmap's stage 1.2 ceiling
-; 81.75: 256 x 2048. The grid size does not drive the cells claim - the array
-; is SPARSE, so what it costs is the OCCUPIED cells - but a budget that needs
-; row 2049 is not a budget, and a smaller ceiling is what lets the row header
-; stay four digits wide. SH_ROW_BITS is unchanged at 14: the packed key has
-; room for 16384 either way, and narrowing it would be a second change with
-; no second benefit.
-SH_ROWS      equ 2048
+; 81.75: 256 x 1024, AND THE TWO NUMBERS THIS FILE KEEPS APART.
+;
+; SH_COLS x SH_ROWS is THE ADDRESSABLE RANGE - which cell references exist and
+; how far the view can scroll. It costs NOTHING, because storage is sparse:
+; the cell array is records of (row, col, value), so what a grid costs is the
+; cells that are OCCUPIED, never the ones that could be. 2048 rows and 1024
+; rows assemble to BYTE-IDENTICAL images; that was measured, not assumed.
+;
+; HOW MANY CELLS MAY BE OCCUPIED AT ONCE is a different number entirely, and
+; it is the one that is tight: SH_CELL_CAP, which is the cells CLAIM divided
+; by SH_C_SZ. Do not read one as the other.
+;
+; SH_ROW_BITS stays 14. The packed key has room for 16384 either way and
+; narrowing it would be a second change with no second benefit.
+SH_ROWS      equ 1024
 ; stage 2.x: Format > Column Width.../Row Height... make these RUNTIME
 ; values (sh_cellw/sh_cellh/sh_cellch bss words) rather than compile-time
 ; constants. Stage 3.0c made both dialogs real numeric entry (sh_idlg_*, over
@@ -152,7 +160,9 @@ SH_RH_STDTW  equ 255                ; the standard height, 12.75 points
 SH_RH_TWMIN  equ 146                ; 7.3 points -> 8 px
 SH_RH_TWMAX  equ 874                ; 43.7 points -> 48 px
 SH_MAXVR     equ 64                 ; visible rows at most: 480px / SH_RH_MIN
-SH_RH_W      equ 40                 ; row-header column, 5 digits at 8px
+SH_RH_W      equ 32                 ; row-header column: 81.75's 1024 rows are
+                                    ; four digits, not five, so the grid gets
+                                    ; the eighth column of it back
 SH_CH_H      equ 14
 SH_FB_H      equ 16
 SH_REF_W     equ 64                 ; stage 2.x: the formula bar's own
