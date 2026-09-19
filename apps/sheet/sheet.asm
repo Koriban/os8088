@@ -106,6 +106,7 @@
   %define SHF_MATRIX                 ; the array/matrix family, and CELL
   %define SHF_FIN                    ; the financial family
   %define SHF_TRIG                   ; SIN..LOG (SQRT stays either way)
+  %define SHF_TEXT                   ; the text family beyond & and TEXT()
   %define SHF_SORT                   ; Data > Sort and its 30KB staging layout
   %define SHF_DRAG                   ; every gesture kern_small's WM_ONDRAG
                                       ; refuses: drag-select, thumb drag, and
@@ -959,14 +960,26 @@ sh_m_pfin:                          ; 81.75: positional, and never reached
     clc
     retf
 %endif
+%ifdef SHF_TEXT
 sh_m_ptext:                         ; 81.62, the same contract
     call shm_ptext
     clc
     retf
+%else
+sh_m_ptext:                         ; 81.75: positional, never reached
+    clc
+    retf
+%endif
+%ifdef SHF_TRIG
 sh_m_ptrans:
     call shm_ptrans
     clc
     retf
+%else
+sh_m_ptrans:                        ; 81.75: positional, never reached
+    clc
+    retf
+%endif
 sh_m_pinfo:
     call shm_pinfo
     clc
@@ -1210,14 +1223,18 @@ sh_pfin:
     mov bp, SHM_FIN
     jmp short sh_pdoor
 %endif
+%ifdef SHF_TEXT
 sh_ptext:
     push bp
     mov bp, SHM_TEXT
     jmp short sh_pdoor
+%endif
+%ifdef SHF_TRIG
 sh_ptrans:
     push bp
     mov bp, SHM_TRANS
     jmp short sh_pdoor
+%endif
 sh_pinfo:
     push bp
     mov bp, SHM_INFO
@@ -27847,12 +27864,17 @@ sh_pfunc:
     call sh_pdate
     mov dx, ax
     jmp .typed
+%ifdef SHF_TEXT
 .dotext:
     call sh_ptext
     mov dx, ax
     jmp .done                          ; NOT .typed: a text function's answer
                                        ; is TEXT, and .typed exists to stamp
                                        ; SH_T_NUM on a fold's result
+%else
+.dotext:
+    jmp .noname                        ; 81.75
+%endif
 .doinfo:
     call sh_pinfo
     mov dx, ax
@@ -27915,10 +27937,15 @@ sh_pfunc:
     call sh_pmacro
     mov dx, ax
     jmp .done                          ; NOT .typed: ACTIVE.CELL may be text
+%ifdef SHF_TRIG
 .dotrans:
     call sh_ptrans
     mov dx, ax
     jmp .typed
+%else
+.dotrans:
+    jmp .noname                        ; 81.75
+%endif
 .dolookup2:
     call sh_plookup
     mov dx, ax
@@ -29650,6 +29677,11 @@ sh_pfargs:
 
                                     ; (sh_ptrans follows in the module too, 81.62)
 
+%ifdef SHF_TRIG          ; 81.75: LN/LOG/EXP and the trig seven. SQRT is NOT
+                          ; here - fp_sqrt is its own Newton-Raphson in the
+                          ; float library, which is assembled whole either
+                          ; way, so exposing it costs a table entry and
+                          ; saves the user a six-cell iteration chain
 ; =============================================================================
 ; sh_ptrans - LN, LOG10, EXP, PI and LOG, ids 81 and up (SPEC.md 81.35).
 ; in: AX = the id, SI just past '('. out: the answer in sh_acc, SI past ')'.
@@ -29909,6 +29941,7 @@ shm_ptrans:
     pop cx
     pop bx
     ret
+%endif   ; SHF_TRIG
 
 section .text                       ; sh_trcopy and the two constants stay:
                                     ; resident code reads them (81.62)
@@ -31241,6 +31274,7 @@ shm_binop_pre:
     SHOUT sh_binop_ld
     ret
 
+%ifdef SHF_TEXT          ; 81.75: the text family
 ; =============================================================================
 ; sh_ptext (stage 4.5) - the TEXT functions, ids 37 and up. The whole category
 ; was blocked on two things and both have now landed: a formula could not
@@ -32065,6 +32099,7 @@ sh_isalpha:
 .no:
     clc
     ret
+%endif   ; SHF_TEXT
 
 section .text
 ; =============================================================================

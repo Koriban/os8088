@@ -10265,8 +10265,23 @@ $(PLANDIR)/plan.bin: apps/sheet/sheet.asm apps/os88api.inc apps/os88fp.inc \
 # stops the tenants simply being made resident. So the target REPORTS THE
 # SPLIT instead: resident + module is what has to fall under 64KB before the
 # switch can be thrown, and that number is the cut list's meter until then.
+# EVERY SHF_ FLAG TESTED MUST BE ONE THAT IS DEFINED. A `%ifdef SHF_TYPO` is
+# not an error to NASM, it is just false - in BOTH arms - so a mistyped or
+# never-declared flag silently cuts the feature out of SHEET as well. That
+# happened once (SHF_TEXT), and the byte-identity check caught it; this turns
+# the same mistake into a build error instead, which is 81.10's own idiom.
+.PHONY: planflags
+planflags:
+	@python3 -c "import re,sys; \
+	 s=open('apps/sheet/sheet.asm').read(); \
+	 u=set(re.findall(r'%ifdef (SHF_\w+)', s)); \
+	 d=set(re.findall(r'%define (SHF_\w+)', s)); \
+	 bad=sorted(u-d); \
+	 sys.exit('planflags: tested but never defined: '+' '.join(bad)) if bad \
+	 else print('planflags: %d flag(s) tested, all declared' % len(u))"
+
 .PHONY: plan
-plan: $(PLANDIR)/plan.bin
+plan: planflags $(PLANDIR)/plan.bin
 	@python3 tools/os88ovl.py $(PLANDIR)/plan.bin -o $(PLANDIR)/PLAN.OVL \
 		--trim $(PLANDIR)/plan.trim.bin
 	@r=$$(wc -c < $(PLANDIR)/plan.trim.bin); m=$$(wc -c < $(PLANDIR)/PLAN.OVL); \
