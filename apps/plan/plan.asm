@@ -584,7 +584,8 @@ SH_XFP_CAP       equ 64             ; distinct (format, border) pairs one file
 ; would run out fast). SH_ROWS needs exactly 14 bits (0..16383), leaving
 ; exactly 2 spare bits in that word for a sheet index - hence exactly
 ; SH_SHEETS=4, not a rounder number chosen for its own sake.
-SH_SHEETS    equ 4
+SH_SHEETS    equ 1                   ; 81.75: one grid, so the packed key's
+                                     ; two sheet bits are always zero
 SH_ROW_BITS  equ 14                  ; row occupies bits 0-13
 SH_ROW_MASK  equ 0x3FFF
 
@@ -648,8 +649,9 @@ SH_MI_FORMAT  equ 3
 SH_MI_DATA    equ 0xFD                ; never matched, SH_MI_MACRO's reason
 SH_MI_OPTIONS equ 4
 SH_MI_MACRO   equ 0xFE                ; never matched: nothing sets AH to it
-SH_MI_SHEET   equ SH_MI_OPTIONS + 1
-SH_MI_HELP    equ SH_MI_SHEET + 1
+SH_MI_SHEET   equ 0xFC                ; 81.75: no Sheets menu - SH_MI_MACRO's
+SH_MI_SHEET_N equ SH_MI_OPTIONS + 1  ; trick, one menu along
+SH_MI_HELP    equ SH_MI_SHEET_N
 SH_MENU_N     equ SH_MI_HELP + 1
 SH_M_NONE    equ 0xFF
 
@@ -931,7 +933,6 @@ sh_entry:
                                              ; column being drawn
     call sh_mkblank
     call sh_mtab_calc
-    call sh_sheetmark
 
     ; 81.75: NO DRAG AT ALL. W_ONDRAG and W_ONMOUSEUP are exactly what
     ; kern_small refuses (kernel.asm's own OSAPI_WM_ONDRAG arm answers CF=1
@@ -5453,8 +5454,6 @@ sh_mfire:
     je .options
     cmp ah, SH_MI_MACRO
     je .macro
-    cmp ah, SH_MI_SHEET
-    je .sheets
     cmp ah, SH_MI_HELP
     je .help
     jmp .out
@@ -5511,10 +5510,6 @@ sh_mfire:
 ; user can act on. With nothing left the menu itself is gone and SH_MI_DATA
 ; is 0xFD, so this arm is unreachable rather than absent.
 .data:
-    jmp .out
-.sheets:
-    xor ah, ah                        ; al = item index = target sheet 0..3
-    call sh_switchsheet
     jmp .out
 .options:
     call sh_docmd_options
@@ -8968,25 +8963,6 @@ sh_frzmark:
     pop ax
     ret
 
-sh_sheetmark:
-    push ax
-    push bx
-    push cx
-    xor bx, bx
-    mov cx, SH_SHEETS
-.lp:
-    mov ax, [sh_sheet_plain + bx]
-    mov [sh_i_sheet + bx], ax
-    add bx, 2
-    loop .lp
-    mov bx, [sh_cursheet]
-    shl bx, 1
-    mov ax, [sh_sheet_chk + bx]
-    mov [sh_i_sheet + bx], ax
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 sh_switchsheet:
     push ax
@@ -9011,7 +8987,6 @@ sh_switchsheet:
     mov ax, [sh_freezerow]
     mov [sh_frwsave+bx], ax
     mov [sh_cursheet], cx
-    call sh_sheetmark
     mov bx, cx
     shl bx, 1
     mov ax, [sh_selsave+bx]
@@ -9048,56 +9023,6 @@ sh_switchsheet:
 ; cell, and BX = a bitmap of which. One walk of the array, not four.
 ; -----------------------------------------------------------------------------
 section SH_MODSEC                      ; 82.16.9
-sh_sheets_used:
-    push cx
-    push dx
-    push si
-    push es
-    xor bx, bx
-    xor cx, cx
-    mov es, [sh_cellseg]
-.each:
-    cmp cx, [sh_ncells]
-    jae .counted
-    mov ax, cx
-    push bx
-    mov bx, SH_C_SZ
-    mul bx
-    pop bx
-    mov si, ax
-    mov ax, [es:si]
-    push bx
-    SHOUT sh_unpackrow                 ; BX = this record's sheet
-    mov dx, bx
-    pop bx
-    mov ax, 1
-    push cx
-    mov cx, dx
-    jcxz .noshift
-.shift:
-    shl ax, 1
-    loop .shift
-.noshift:
-    pop cx
-    or bx, ax
-    inc cx
-    jmp .each
-.counted:
-    mov ax, bx                        ; popcount of the bitmap
-    xor dx, dx
-    mov cx, SH_SHEETS
-.pop1:
-    shr ax, 1
-    jnc .pop2
-    inc dx
-.pop2:
-    loop .pop1
-    mov ax, dx
-    pop es
-    pop si
-    pop dx
-    pop cx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_dowrite - pick the writer from the file name's extension.
@@ -9140,10 +9065,6 @@ shm_dowrite:
     jne .warned                       ; write's "Err N" (or a truncated save's
                                       ; message) must not be replaced by a
                                       ; string that begins with "Saved"
-    call sh_sheets_used
-    cmp ax, 2
-    jb .warned
-    mov word [sh_msg], sh_s_onesheet
 .warned:
     pop bx
     pop ax
@@ -20689,7 +20610,6 @@ sh_mtab:
     dw sh_m_formula, sh_i_formula, 2
     dw sh_m_format,  sh_i_format,  4
     dw sh_m_options, sh_i_options, 3
-    dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
 
 ; Excel 2.1d's Formula menu, in its own order: Paste Name.../Paste Function.../
@@ -20769,19 +20689,7 @@ sh_it_fcolw:     db 'Column Width...', 0
 ; Sheet names are the fixed strings below, not user-renameable in this
 ; stage - simpler, and a macro's "SheetN!" reference (see sh_pident) needs
 ; a name it can recognize regardless of what the user might have typed.
-sh_m_sheet:    db 'Sheets', 0
-sh_i_sheet:    dw sh_it_sheet1, sh_it_sheet2, sh_it_sheet3, sh_it_sheet4
-sh_it_sheet1:  db 'Sheet1', 0
-sh_it_sheet2:  db 'Sheet2', 0
-sh_it_sheet3:  db 'Sheet3', 0
-sh_it_sheet4:  db 'Sheet4', 0
 ; ...and the same four with the mark, which sh_sheetmark repoints between.
-sh_it_sheet1c: db SH_MENU_CHK, 'Sheet1', 0
-sh_it_sheet2c: db SH_MENU_CHK, 'Sheet2', 0
-sh_it_sheet3c: db SH_MENU_CHK, 'Sheet3', 0
-sh_it_sheet4c: db SH_MENU_CHK, 'Sheet4', 0
-sh_sheet_plain: dw sh_it_sheet1, sh_it_sheet2, sh_it_sheet3, sh_it_sheet4
-sh_sheet_chk:   dw sh_it_sheet1c, sh_it_sheet2c, sh_it_sheet3c, sh_it_sheet4c
 
 ; Stage 2.0: no generic text-prompt dialog exists in this OS (only a FILE
 ; picker), so "Run" starts a macro at whatever cell is CURRENTLY SELECTED,
@@ -21590,7 +21498,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 4028                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3990                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
