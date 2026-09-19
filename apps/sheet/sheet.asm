@@ -181,11 +181,21 @@
 ; there is no ownership model (54.5), so a second declaration would simply
 ; take the extension, and a spreadsheet file belongs to the spreadsheet. Chart
 ; opens one through its own File > Open.
+;
+; PLAN claims the two it can actually open (81.75): SYLK, and the CSV that
+; every other program on this machine can also write. Declaring .DIF or .BIF
+; there would be a package offering to open a file it has no reader for.
     OS88_ASSOC16
+%ifdef SHF_BIFF
     db 3
     OS88_ASSOC_EXT 'SLK'
     OS88_ASSOC_EXT 'DIF'
     OS88_ASSOC_EXT 'BIF'
+%else
+    db 2
+    OS88_ASSOC_EXT 'SLK'
+    OS88_ASSOC_EXT 'CSV'
+%endif
     OS88_ASSOC16_END
 
 ; =============================================================================
@@ -11446,13 +11456,23 @@ sh_fd_psfmt:    db 'Formats', 0
 sh_fd_psnote:   db 'Notes', 0
 ; Excel's own words: the app's OWN format is "Normal", and the interchange
 ; formats are named after themselves. The order is Excel's too.
+%ifdef SHF_BIFF
 sh_fd_i_savefmt: dw sh_fd_sfnormal, sh_fd_sfsylk, sh_fd_sfdif, sh_fd_sfcsv, sh_fd_sftxt, sh_fd_sfdbf
 sh_fd_sfnormal: db 'Normal', 0
+%else
+; PLAN has no BIFF, so there is no "Normal" to be distinct FROM: SYLK is this
+; package's own format and heads its own list (81.75).
+sh_fd_i_savefmt: dw sh_fd_sfsylk, sh_fd_sfcsv, sh_fd_sftxt
+%endif
 sh_fd_sfsylk:   db 'SYLK', 0
+%ifdef SHF_BIFF
 sh_fd_sfdif:    db 'DIF', 0
+%endif
 sh_fd_sfcsv:    db 'CSV', 0         ; 81.40: two of the nine formats Excel 2.0
 sh_fd_sftxt:    db 'Text', 0
+%ifdef SHF_BIFF
 sh_fd_sfdbf:    db 'DBF 3', 0     ; Excel's own label for it        ; listed and this app did not have. Excel's
+%endif
                                     ; own words for them in its Save As list
 ; Excel's own Gallery order, which is alphabetical and is NOT the order CH_T_*
 ; happens to be in - sh_gal_map translates, the same way chart.asm's own
@@ -11507,7 +11527,11 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
+%ifdef SHF_BIFF
 sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4, 2, 6
+%else
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 3, 5, 4, 2, 6
+%endif                                 ; 12 = File Format: SYLK/CSV/Text
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -11609,6 +11633,7 @@ sh_fdlg_open:
     mov [sh_fdlg_sel], cx             ; CX is banked at entry, so using it
     jmp .noprefill                    ; here costs the caller nothing
 .prefillfmt:
+%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -11633,6 +11658,10 @@ sh_fdlg_open:
 .fmtbiff:
     mov word [sh_fdlg_sel], 0
     jmp .noprefill
+%else
+    mov word [sh_fdlg_sel], 0         ; PLAN's list starts at SYLK, which is
+    jmp .noprefill                    ; also what sh_dowrite falls through to
+%endif
 .prefillgal:
     xor bx, bx                        ; find [ch_type] in the map rather than
     mov cx, 7                         ; inverting it - seven entries, and an
@@ -12343,6 +12372,7 @@ sh_fdlg_apply0:
     SHOUT sh_docmd_paste               ; SH_PS_NOTE in that order, on purpose
     jmp .out
 .dosavefmt:
+%ifdef SHF_BIFF
     mov si, sh_s_ext_biff             ; 0 Normal is this app's OWN format,
     mov ax, [sh_fdlg_sel]             ; which is BIFF - the same thing
     or ax, ax                         ; Excel means by "Normal"
@@ -12360,6 +12390,16 @@ sh_fdlg_apply0:
     cmp ax, 4
     je .fmtset
     mov si, sh_s_ext_dbf
+%else
+    mov si, sh_s_ext_sylk             ; 0 SYLK / 1 CSV / 2 Text (81.75)
+    mov ax, [sh_fdlg_sel]
+    or ax, ax
+    jz .fmtset
+    mov si, sh_s_ext_csv
+    cmp ax, 1
+    je .fmtset
+    mov si, sh_s_ext_txt
+%endif
 .fmtset:
     call sh_setext
     mov byte [sh_savepend], 1         ; the file dialog cannot open until
@@ -16436,6 +16476,7 @@ sh_sheets_used:
 ; format here that CAN carry them, and does (81.10.5).
 ; -----------------------------------------------------------------------------
 shm_dowrite:
+%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -16452,6 +16493,7 @@ shm_dowrite:
     pop di
     pop si
     jc .biff
+%endif
     push si
     push di
     mov si, sh_name
@@ -16468,6 +16510,7 @@ shm_dowrite:
     pop di
     pop si
     jc .txt
+%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -16476,6 +16519,7 @@ shm_dowrite:
     pop di
     pop si
     jc .dbf
+%endif
     call sh_dowrite_sylk
     jmp .warn
 .csv:
@@ -16484,6 +16528,7 @@ shm_dowrite:
 .txt:
     call sh_dowrite_txt
     jmp .warn
+%ifdef SHF_BIFF
 .dbf:
     call sh_dowrite_dbf
     jmp .warn
@@ -16492,6 +16537,7 @@ shm_dowrite:
     jmp .warn
 .biff:
     jmp sh_dowrite_biff
+%endif
 .warn:
     push ax
     push bx
@@ -17028,6 +17074,7 @@ sh_stgput:
 ; sh_doread - read [sh_name], format chosen by its extension (see sh_dowrite)
 ; -----------------------------------------------------------------------------
 shm_doread:
+%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -17052,6 +17099,7 @@ shm_doread:
     pop di
     pop si
     jc .biff
+%endif
     push si
     push di
     mov si, sh_name
@@ -17068,6 +17116,7 @@ shm_doread:
     pop di
     pop si
     jc .txt
+%ifdef SHF_BIFF
     push si
     push di
     mov si, sh_name
@@ -17076,17 +17125,22 @@ shm_doread:
     pop di
     pop si
     jc .dbf
+%endif
     jmp sh_doread_sylk
+%ifdef SHF_BIFF
 .dif:
     jmp sh_doread_dif
 .biff:
     jmp sh_doread_biff
+%endif
 .csv:
     jmp sh_doread_csv
 .txt:
     jmp sh_doread_txt
+%ifdef SHF_BIFF
 .dbf:
     jmp sh_doread_dbf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; sh_doread_sylk - read [sh_name] as SYLK, replacing the sheet
@@ -17276,6 +17330,7 @@ shm_difbbox:
     pop ax
     ret
 
+%ifdef SHF_BIFF
 ; -----------------------------------------------------------------------------
 ; sh_dowrite_dif - write the sheet to [sh_name] as DIF
 ; -----------------------------------------------------------------------------
@@ -17702,6 +17757,7 @@ sh_biffw:
     mov [es:di], ax
     add di, 2
     ret
+%endif                                 ; SHF_BIFF
 
 ; -----------------------------------------------------------------------------
 ; sh_stgputb - append raw byte AL to ES:DI, advancing DI by 1. ES must
@@ -17714,6 +17770,7 @@ sh_stgputb:
     inc di
     ret
 
+%ifdef SHF_BIFF
 ; -----------------------------------------------------------------------------
 ; sh_rkenc - in: AX = signed 16-bit cell value; out: DX:AX = that value
 ; packed as an RK "signed 30-bit integer, not multiplied by 100" (bit1=1,
@@ -17816,6 +17873,7 @@ fp_i32_to_a:
     pop bx
     pop ax
     ret
+%endif                                 ; SHF_BIFF
 
 section .text
 
@@ -17846,6 +17904,7 @@ sh_cwbyte:
 .c:
     ret
 
+%ifdef SHF_BIFF
 ; sh_biff_nfside - AL = a file's built-in format id -> AL = what the border
 ; table keeps for it: 0 for the four the format byte holds (and for any id
 ; past Excel's 21, a custom FORMAT this app draws as General), else id + 1
@@ -21035,6 +21094,7 @@ sh_biff_rcok:
 .bad:
     stc
     ret
+%endif                                 ; SHF_BIFF
 
 ; -----------------------------------------------------------------------------
 ; sh_parseslk - walk every line of a buffer, applying each 'C' record found
@@ -24726,6 +24786,15 @@ SH_PTG_AREAV   equ 0x45                 ; turns the default R class into V insid
 SH_RPN_MAX   equ 96                   ; a token array longer than this is
                                       ; refused rather than truncated
 
+; THE CONSTANTS ABOVE STAY IN BOTH ARMS and the code below does not. They are
+; `equ`s and emit nothing, and SH_RPN_MAX still SIZES a bss slot further down
+; (sh_rpn_buf, which sh_rwsrc is chained off) - so gating it out makes the
+; whole bss chain non-constant and the two OS88_BSS assertions fail with
+; "non-constant argument supplied to TIMES", which names neither the flag nor
+; the symbol. PLAN's own bss ladder is 81.75's later stage; until it lands,
+; PLAN reserves this buffer and never fills it.
+%ifdef SHF_BIFF
+
 ; The BIFF function index for each of Sheet's own functions, INDEXED BY
 ; sh_functab's order - so the id sh_funcid already returns indexes straight
 ; into these, and adding a function to one table without the other is a
@@ -25783,6 +25852,7 @@ sh_rpn_one:
     pop cx
     pop ax
     ret
+%endif                                 ; SHF_BIFF
 
 ; -----------------------------------------------------------------------------
 ; sh_settext - stage 4.5: store TEXT in a cell.
@@ -40814,12 +40884,15 @@ sh_functab_end:
 ; to see which table is short.
 ; -----------------------------------------------------------------------------
 %define SH_NFUNCS ((sh_functab_end - sh_functab) / 2 - 1)
+%ifdef SHF_BIFF                        ; the other three tables are BIFF's, so
+                                       ; a build without it has only the one
     times ((sh_rpn_fid_end - sh_rpn_fid) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fid_end - sh_rpn_fid)) db 0
     times ((sh_rpn_fvar_end - sh_rpn_fvar) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fvar_end - sh_rpn_fvar)) db 0
     times ((sh_rpn_fargc_end - sh_rpn_fargc) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fargc_end - sh_rpn_fargc)) db 0
+%endif
 sh_s_errpfx:   db 'Err ', 0
 section SH_MODSEC                      ; 82.16.9's tenant: CSV and TXT (81.40)
 
@@ -40838,6 +40911,7 @@ section SH_MODSEC                      ; 82.16.9's tenant: CSV and TXT (81.40)
 ; survive. DIF drops an embedded quote instead (see sh_dowrite_dif's .dt),
 ; which is right for DIF because DIF has no escape at all; CSV does.
 ; =============================================================================
+%ifdef SHF_BIFF
 section SH_MODSEC                      ; 82.16.9's tenant: dBASE III (81.41)
 
 ; =============================================================================
@@ -41633,6 +41707,7 @@ sh_dbf_store:
     pop bx
     pop ax
     ret
+%endif                                 ; SHF_BIFF
 
 section .text
 
