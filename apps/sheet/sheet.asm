@@ -40750,8 +40750,18 @@ sh_it_note:      db 'Note...', 0
 sh_it_goto:      db 'Goto...', 0
 sh_it_find:      db 'Find...', 0
 
+; 81.75: the window title and the kernel menu bar's AM_NAME. The PACKAGE name
+; in OS88_HEADER is PLAN; these two are what the user reads, so they have to
+; agree with it - a window captioned "Sheet" launched from PLAN.O88 is two
+; things answering to one name, which is the rule (73.12) this build exists
+; to keep on the right side of.
+%ifdef PLAN
+sh_ttl:        db 'Plan', 0
+sh_s_appname:  db 'Plan', 0
+%else
 sh_ttl:        db 'Sheet', 0
 sh_s_appname:  db 'Sheet', 0
+%endif
 sh_m_file:     db 'File', 0
 sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas
 sh_it_new:     db 'New...', 0
