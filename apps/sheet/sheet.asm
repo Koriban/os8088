@@ -1003,7 +1003,9 @@ sh_m_mresume:
     clc
     retf
 sh_m_pdatabase:                     ; 81.65
+%ifdef SHF_DB
     call shm_pdatabase
+%endif
     clc
     retf
 %ifdef SHF_MATRIX
@@ -1021,6 +1023,7 @@ sh_m_pmatrix:                       ; the two slots stay and are never reached
     clc                             ; - the dispatcher answers #NAME? above
     retf
 %endif
+%ifdef SHF_DB
 sh_m_dbcmd:                         ; 81.71: a Data menu command, NOT a
     call shm_dbcmd                  ; formula. CF stays the MODULE-PRESENCE
     clc                             ; answer here like every verb above it;
@@ -1044,6 +1047,15 @@ sh_m_fclick:
     call sh_df_onclick
     clc
     retf
+%else
+sh_m_dbcmd:                         ; 81.75: positional again - nothing calls
+sh_m_form:                          ; these four, because the Data menu that
+sh_m_fpaint:                        ; did is not in this build's menu bar
+sh_m_fkey:
+sh_m_fclick:
+    clc
+    retf
+%endif
 sh_m_bopen:                         ; 81.71.5.1
     call sh_bdlg_open
     clc
@@ -1060,11 +1072,17 @@ sh_m_bclose:
     call sh_bdlg_close
     clc
     retf
+%ifdef SHF_DB
 sh_m_fclose:
     call sh_df_savefld                 ; a background click is not a cancel
     call sh_df_close                   ; here: the field being edited is
     clc                                ; committed, the way Close itself does
     retf
+%else
+sh_m_fclose:
+    clc
+    retf
+%endif
 sh_m_sortcol:                       ; 81.71.6
     call sh_docmd_sortcol
     clc
@@ -1081,10 +1099,16 @@ sh_m_lclick:
     call sh_ldlg_onclick
     clc
     retf
+%ifdef SHF_DB
 sh_m_series:                        ; 81.72
     call shm_series
     clc
     retf
+%else
+sh_m_series:                        ; 81.75: Data ▸ Series went with the menu
+    clc
+    retf
+%endif
 sh_m_fdopen:                        ; 81.74.2
     call sh_fdlg_open
     clc
@@ -1253,10 +1277,12 @@ sh_pmacro:                          ; 81.63: the macro functions
     push bp
     mov bp, SHM_MACRO
     jmp short sh_pdoor
+%ifdef SHF_DB
 sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
     push bp
     mov bp, SHM_DATABASE
     jmp short sh_pdoor
+%endif
 %ifdef SHF_MATRIX
 sh_pcell:                           ; 81.66: CELL
     push bp
@@ -1721,7 +1747,9 @@ sh_x_sh_select:
     call sh_select
     retf
 sh_x_sh_ser_setstep:
+%ifdef SHF_DB
     call sh_ser_setstep
+%endif
     retf
 sh_x_sh_twpts:
     call sh_twpts
@@ -1733,7 +1761,9 @@ sh_x_sh_upcase_at:
     call sh_upcase_at
     retf
 sh_x_sh_docmd_dbrun:
+%ifdef SHF_DB
     call sh_docmd_dbrun
+%endif
     retf
 sh_x_sh_undo_end:
     call sh_undo_end
@@ -3499,10 +3529,12 @@ sh_onclick:
     je .nobdlg                         ; recovery, for the Border dialog
     call sh_bdlg_close_r
 .nobdlg:
+%ifdef SHF_DB
     cmp word [sh_df_win], 0            ; 81.71.5: and for Data ▸ Form, which
     je .nodf                           ; would otherwise gate that item shut
     call sh_df_close_r                 ; for the rest of the session
 .nodf:
+%endif
     mov word [sh_msg], 0
     mov byte [sh_rz_on], 0             ; 81.73.2: a press on a heading's own
     call sh_hdrhit                     ; trailing edge is a RESIZE and not a
@@ -4484,10 +4516,12 @@ sh_onkey:
     je .nobdlg
     call sh_bdlg_close_r
 .nobdlg:
+%ifdef SHF_DB
     cmp word [sh_df_win], 0            ; 81.71.5, sh_onclick's own reason
     je .nodf
     call sh_df_close_r
 .nodf:
+%endif
     mov word [sh_msg], 0
     mov bx, si
     call sh_geom
@@ -7699,6 +7733,32 @@ sh_mfire:
 .format:
     call sh_docmd_format
     jmp .out
+%ifndef SHF_DB
+; PLAN's Data menu is Sort and the three chart items (81.75): every item
+; Excel puts ABOVE Sort is the database, and PLAN has no database. The items
+; renumber rather than being greyed - a menu that shows six things that
+; cannot happen is worse than a shorter menu.
+.data:
+    or al, al
+    jnz .pdata1
+    mov al, SH_ID_SORT                 ; 0: Sort...
+    call sh_idlg_open_r
+    jmp .out
+.pdata1:
+    cmp al, 1
+    jne .pdata2
+    call sh_docmd_chart                ; 1..3: this app's own charting
+    jmp .out
+.pdata2:
+    cmp al, 2
+    jne .pdata3
+    mov al, SH_FDK_GAL
+    call sh_fdlg_open_r
+    jmp .out
+.pdata3:
+    call sh_docmd_chartexport
+    jmp .out
+%else
 .data:
     or al, al                          ; AL was ignored here before Chart
     jnz .data1                         ; Column.../Export were added - Data
@@ -7762,6 +7822,7 @@ sh_mfire:
 .data10:
     call sh_docmd_chartexport
     jmp .out
+%endif                                 ; SHF_DB
 .sheets:
     xor ah, ah                        ; al = item index = target sheet 0..3
     call sh_switchsheet
@@ -10334,6 +10395,7 @@ sh_s_rec_norange: db 'Set Recorder first.', 0
 
 
 
+%ifdef SHF_DB
 ; -----------------------------------------------------------------------------
 ; sh_docmd_setname - Data > Set Database.../Set Criteria... (SPEC.md 81.69).
 ; in: SI = the reserved name ('DATABASE' or 'CRITERIA'). Binds it to the
@@ -10578,6 +10640,7 @@ sh_ondbdelete:
     call sh_drawstatus
     pop ax
     ret
+%endif                                 ; SHF_DB
 
 ; -----------------------------------------------------------------------------
 ; sh_chartexp_ondlg - the Export Chart dialog's completion proc (SPEC.md
@@ -11571,6 +11634,7 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
+%ifdef SHF_DB
     cmp al, SH_FDK_SERIES             ; 81.72: Series pins its range for the
     je .prefillseries                 ; same reason, and needs it across TWO
                                        ; dialogs rather than one
@@ -11581,6 +11645,7 @@ sh_fdlg_open:
                                        ; range is the whole point of the
                                        ; command. sh_ndlg's pattern, not
                                        ; sh_fdlg's own live read
+%endif
     cmp al, SH_FDK_SAVEFMT
     je .prefillfmt                    ; File Format opens on the format the
     cmp al, SH_FDK_GAL                ; current NAME already implies
@@ -11597,6 +11662,7 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
+%ifdef SHF_DB
 .prefillseries:                       ; 81.72: the range to fill, and the
     mov cx, [sh_selcol]               ; DIRECTION derived from its shape -
     mov [sh_ser_c1], cx               ; see sh_docmd_series on why that is
@@ -11617,6 +11683,7 @@ sh_fdlg_open:
     mov cx, [sh_selrow2]
     mov [sh_ex_r2], cx
     jmp .noprefill
+%endif
 .prefillprot:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
@@ -12121,10 +12188,12 @@ sh_fdlg_apply0:
     je .dopspec
     cmp byte [sh_fdlg_kind], SH_FDK_PROT
     je .doprot
+%ifdef SHF_DB
     cmp byte [sh_fdlg_kind], SH_FDK_EXTRACT
     je .doextract
     cmp byte [sh_fdlg_kind], SH_FDK_SERIES
     je .doseries
+%endif
     cmp byte [sh_fdlg_kind], 3
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
@@ -12352,6 +12421,7 @@ sh_fdlg_apply0:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
+%ifdef SHF_DB
 .doseries:                            ; 81.72: the radio IS the type, and
     mov al, [sh_fdlg_sel]             ; part TWO of the question follows it -
     mov [sh_ser_type], al             ; Sort's own two-dialog shape (81.15),
@@ -12366,6 +12436,7 @@ sh_fdlg_apply0:
     jnc .out                          ; refused: the status line says why
     SHOUT sh_recalc_all                ; the extract range holds new values
     jmp .out
+%endif
 .dopspec:
     mov al, [sh_fdlg_sel]             ; the radio IS the mode: All/Formulas/
     mov [sh_ps_mode], al              ; Values/Formats/Notes are SH_PS_ALL..
@@ -12962,8 +13033,10 @@ sh_idlg_open:
     je .pregoto                        ; a macro used to start (81.63)
     cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
     je .pregoto                        ; same reference Goto shows - it is the
+%ifdef SHF_DB
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP  ; 81.72: a step of 1 is what
     je .preone                              ; almost every series wants, so
+%endif
     cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
@@ -12989,9 +13062,11 @@ sh_idlg_open:
     mov si, sh_numbuf
     SHOUT sh_strcpy_to_di
     jmp .haveinit
+%ifdef SHF_DB
 .preone:
     mov ax, 1                          ; Enter alone gives 1, 2, 3...
     jmp short .prenum
+%endif
 .pregoto:
     mov di, sh_idlg_buf                ; the selection, as 'A1'
     mov ax, [sh_selcol]
@@ -13222,8 +13297,10 @@ sh_idlg_apply:
     je .run
     cmp byte [sh_idlg_kind], SH_ID_INPUT
     je .input
+%ifdef SHF_DB
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP
     je .serstep
+%endif
     cmp byte [sh_idlg_kind], SH_ID_RECNAME
     je .recname
     cmp byte [sh_idlg_kind], SH_ID_ROWH
@@ -13390,12 +13467,14 @@ sh_idlg_apply:
 ; The TEXT is read rather than an integer parsed: Growth by 1.5 and a linear
 ; step of 0.25 are both ordinary, and sh_pnum_at answers integers only -
 ; which is what the three numeric kinds above it want and this one does not.
+%ifdef SHF_DB
 .serstep:
     mov si, sh_idlg_buf
     SHOUT sh_ser_setstep                ; CF=0 = not a number at all: refused
     jnc .out                           ; in silence, the same way a bad row
     call shm_series             ; height is (this engine's own header)
     jmp .redraw
+%endif
 .sortkey:
     mov si, sh_idlg_buf
     SHOUT sh_upcase_at                  ; 'b3' names the same column as 'B3'
@@ -15097,6 +15176,7 @@ sh_ndlg_close:
     pop ax
     ret
 
+%ifdef SHF_DB
 ; =============================================================================
 ; DATA ▸ FORM (SPEC.md 81.71.5) - one record at a time, in a dialog.
 ;
@@ -16194,6 +16274,7 @@ sh_df_close:
     pop bx
     pop ax
     ret
+%endif                                 ; SHF_DB
 
 section .text
 
@@ -27976,10 +28057,15 @@ sh_pfunc:
 .dofin:                                ; 81.75: #NAME?, and the arguments
     jmp .noname                        ; stepped over
 %endif
+%ifdef SHF_DB
 .dodatabase:
     call sh_pdatabase
     mov dx, ax
     jmp .typed
+%else
+.dodatabase:                           ; 81.75, .docell's reason below
+    jmp .noname
+%endif
 %ifdef SHF_MATRIX
 .docell:
     call sh_pcell
@@ -34692,6 +34778,7 @@ shm_mword:
     ret
 
 section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
+%ifdef SHF_DB
 ; =============================================================================
 ; THE DATABASE FUNCTIONS (81.65): DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT
 ; DSTDEV DSTDEVP DSUM DVAR DVARP, ids SH_FID_DATABASE and up. Every one takes
@@ -36455,6 +36542,7 @@ sh_ser_stepint:
     pop di
     pop si
     ret
+%endif                                 ; SHF_DB
 
 %ifdef SHF_MATRIX        ; 81.75: CELL and the array/matrix family
 ; =============================================================================
@@ -40424,7 +40512,11 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
+%ifdef SHF_DB
     dw sh_m_data,    sh_i_data,    11
+%else
+    dw sh_m_data,    sh_i_data,    4   ; Sort + the three chart items (81.75)
+%endif
     dw sh_m_options, sh_i_options, 5
     dw sh_m_macro,   sh_i_macro,   4
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -40579,6 +40671,7 @@ sh_it_filldown:  db 'Fill Down', 0
 ; paid once - the whole reason this package has a menu bar of its own is to
 ; look like the captures.
 sh_m_data:     db 'Data', 0
+%ifdef SHF_DB
 sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
                dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
                dw sh_it_chart, sh_it_gallery, sh_it_chartexp
@@ -40589,13 +40682,20 @@ sh_it_extract: db 'Extract...', 0
 sh_it_del:     db 'Delete', 0            ; NOT sh_it_delete: that is Edit's
                                           ; own 'Delete...', which shifts
                                           ; cells rather than records
+%else
+sh_i_data:     dw sh_it_sort, sh_it_chart, sh_it_gallery, sh_it_chartexp
+%endif
 sh_it_sort:    db 'Sort...', 0
+%ifdef SHF_DB
 sh_it_series:  db 'Series...', 0
+%endif
 sh_it_chart:   db 'Chart Column...', 0
 sh_it_gallery: db 'Chart Gallery...', 0
 sh_it_chartexp: db 'Export Chart as BMP...', 0
+%ifdef SHF_DB
 sh_it_setdb:   db 'Set Database', 0
 sh_it_setcrit: db 'Set Criteria', 0
+%endif
 
 ; Options - Display toggles (stage 2.x). Each item's own string SWAPS
 ; between an On/Off pair (same relabel-by-repointing idea MENU_DIS's own
