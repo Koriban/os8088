@@ -794,11 +794,23 @@ SHM_LOPEN  equ 26                   ; ...and the scrolling LIST dialog, which
 SHM_LPAINT equ 27                   ; has two callbacks; its
 SHM_LCLICK equ 28                   ; own close is an internal near call
 SHM_SERIES equ 29                   ; 81.72: Data ▸ Series' fill
+SHM_FDOPEN equ 30                   ; 81.74.2: the last two dialog engines -
+SHM_FDPAINT equ 31                  ; the radio column and the one-line
+SHM_FDCLICK equ 32                  ; field. Both were resident because they
+SHM_FDCLOSE equ 33                  ; were the FIRST two; nothing else made
+SHM_IDOPEN equ 34                   ; them so
+SHM_IDPAINT equ 35
+SHM_IDKEY  equ 36
+SHM_IDCLICK equ 37
+SHM_IDCLOSE equ 38
+SHM_FDAPPLY equ 39                  ; ...and CLEAR()'s own way in, which is
+                                     ; the macro engine reusing that dialog's
+                                     ; apply rather than a second clear
 SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
                                      ; sub-op byte, because sh_modc_ext
                                      ; already dispatches on a number and a
                                      ; callback must not spend a register
-SHM_N      equ 27                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 37                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -829,6 +841,9 @@ sh_mverb:
     dw sh_m_sortcol                                       ; 81.71.6
     dw sh_m_lopen, sh_m_lpaint, sh_m_lclick
     dw sh_m_series                                        ; 81.72
+    dw sh_m_fdopen, sh_m_fdpaint, sh_m_fdclick, sh_m_fdclose  ; 81.74.2
+    dw sh_m_idopen, sh_m_idpaint, sh_m_idkey, sh_m_idclick, sh_m_idclose
+    dw sh_m_fdapply
 
 sh_m_doread:
     call shm_doread
@@ -937,6 +952,46 @@ sh_m_lclick:
     retf
 sh_m_series:                        ; 81.72
     call shm_series
+    clc
+    retf
+sh_m_fdopen:                        ; 81.74.2
+    call sh_fdlg_open
+    clc
+    retf
+sh_m_fdpaint:
+    call sh_fdlg_paint
+    clc
+    retf
+sh_m_fdclick:
+    call sh_fdlg_onclick
+    clc
+    retf
+sh_m_fdclose:
+    call sh_fdlg_close
+    clc
+    retf
+sh_m_idopen:
+    call sh_idlg_open
+    clc
+    retf
+sh_m_idpaint:
+    call sh_idlg_paint
+    clc
+    retf
+sh_m_idkey:
+    call sh_idlg_onkey
+    clc
+    retf
+sh_m_idclick:
+    call sh_idlg_onclick
+    clc
+    retf
+sh_m_idclose:
+    call sh_idlg_close
+    clc
+    retf
+sh_m_fdapply:
+    call sh_fdlg_apply
     clc
     retf
 section .text
@@ -1479,6 +1534,74 @@ sh_x_sh_ser_to_ymd:
 sh_x_sh_ymd_to_ser:
     call sh_ymd_to_ser
     retf
+; 81.74.2: everything the two remaining dialog engines reach back for, now
+; that they are in the module too
+sh_x_sh_chart_paint:
+    call sh_chart_paint
+    retf
+sh_x_sh_chart_render:
+    call sh_chart_render
+    retf
+sh_x_sh_dlg:
+    call sh_dlg
+    retf
+sh_x_sh_docmd_find:
+    call sh_docmd_find
+    retf
+sh_x_sh_docmd_paste:
+    call sh_docmd_paste
+    retf
+sh_x_sh_geom:
+    call sh_geom
+    retf
+sh_x_sh_new:
+    call sh_new
+    retf
+sh_x_sh_pnum_at:
+    call sh_pnum_at
+    retf
+sh_x_sh_prot_blocked:
+    call sh_prot_blocked
+    retf
+sh_x_sh_ptwips:
+    call sh_ptwips
+    retf
+sh_x_sh_rec_cmd:
+    call sh_rec_cmd
+    retf
+sh_x_sh_rec_start:
+    call sh_rec_start
+    retf
+sh_x_sh_rowcol_op:
+    call sh_rowcol_op
+    retf
+sh_x_sh_rowtw:
+    call sh_rowtw
+    retf
+sh_x_sh_select:
+    call sh_select
+    retf
+sh_x_sh_ser_setstep:
+    call sh_ser_setstep
+    retf
+sh_x_sh_twpts:
+    call sh_twpts
+    retf
+sh_x_sh_undo_begin:
+    call sh_undo_begin
+    retf
+sh_x_sh_upcase_at:
+    call sh_upcase_at
+    retf
+sh_x_sh_docmd_dbrun:
+    call sh_docmd_dbrun
+    retf
+sh_x_sh_undo_end:
+    call sh_undo_end
+    retf
+sh_x_sh_idlg_after:
+    call sh_idlg_after
+    retf
 sh_x_sh_acc_fromudw:                ; ...and back: fp_i2a is signed, so a
     call sh_acc_fromudw             ; serial past 32767 came out NEGATIVE
     retf
@@ -1530,6 +1653,14 @@ sh_ovshims:
     dw sh_x_sh_editstart, sh_x_sh_flkey, sh_x_sh_name_list
     dw sh_x_sh_nf_apply
     dw sh_x_sh_acc_toudw, sh_x_sh_ser_to_ymd, sh_x_sh_ymd_to_ser     ; 81.72
+    dw sh_x_sh_chart_paint, sh_x_sh_chart_render
+    dw sh_x_sh_dlg, sh_x_sh_docmd_find, sh_x_sh_docmd_paste
+    dw sh_x_sh_geom, sh_x_sh_new
+    dw sh_x_sh_pnum_at, sh_x_sh_prot_blocked, sh_x_sh_ptwips
+    dw sh_x_sh_rec_cmd, sh_x_sh_rec_start, sh_x_sh_rowcol_op
+    dw sh_x_sh_rowtw, sh_x_sh_select, sh_x_sh_ser_setstep
+    dw sh_x_sh_twpts, sh_x_sh_undo_begin
+    dw sh_x_sh_upcase_at, sh_x_sh_docmd_dbrun, sh_x_sh_undo_end, sh_x_sh_idlg_after  ; 81.74.2
     dw sh_x_sh_acc_fromudw, sh_x_sh_monlen
     dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
 sh_entry:
@@ -3213,7 +3344,7 @@ sh_onclick:
     jc .out                            ; spent taking them down
     cmp word [sh_fdlg_win], 0
     je .nofdlg
-    call sh_fdlg_close                 ; stage 1.8: a Format dialog isn't
+    call sh_fdlg_close_r                 ; stage 1.8: a Format dialog isn't
                                         ; kernel-modal (no fdlg_grab/fdlg_top
                                         ; machinery outside the kernel - see
                                         ; the section comment above
@@ -4207,7 +4338,7 @@ sh_onkey:
     jc .out                            ; is spent doing it
     cmp word [sh_fdlg_win], 0
     je .nofdlg
-    call sh_fdlg_close                 ; see sh_onclick's own copy of this
+    call sh_fdlg_close_r                 ; see sh_onclick's own copy of this
                                         ; guard for why
 .nofdlg:
     cmp word [sh_bdlg_win], 0
@@ -7382,7 +7513,7 @@ sh_mfire:
     cmp al, 3
     jne .fm4
     mov al, SH_ID_DEFN
-    call sh_idlg_open
+    call sh_idlg_open_r
     jmp .out
 .fm4:
     cmp al, 4
@@ -7393,17 +7524,17 @@ sh_mfire:
     cmp al, 5
     jne .fm6
     mov al, SH_ID_GOTO
-    call sh_idlg_open
+    call sh_idlg_open_r
     jmp .out
 .fm6:
     mov al, SH_ID_FIND
-    call sh_idlg_open
+    call sh_idlg_open_r
     jmp .out
 .file:
     or al, al
     jnz .fopen
     mov al, SH_FDK_NEW
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     jmp .out
 .fopen:
     cmp al, 1
@@ -7420,7 +7551,7 @@ sh_mfire:
     jmp .out
 .fsaveas:
     mov al, SH_FDK_SAVEFMT             ; 3, and the last item. ASK for the
-    call sh_fdlg_open                  ; format, then name it - the format used
+    call sh_fdlg_open_r                  ; format, then name it - the format used
     jmp .out                           ; to be whatever extension the typed
                                        ; name happened to end in
 .edit:
@@ -7447,7 +7578,7 @@ sh_mfire:
     cmp al, 2
     jne .data3
     mov al, SH_FDK_EXTRACT             ; 2: Extract... (81.71)
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     jmp .out
 .data3:
     cmp al, 3
@@ -7470,13 +7601,13 @@ sh_mfire:
     cmp al, 6
     jne .data7
     mov al, SH_ID_SORT                 ; 6: stage 4.5's Sort - the KEY first,
-    call sh_idlg_open                  ; then the order (sh_idlg_apply's own
+    call sh_idlg_open_r                  ; then the order (sh_idlg_apply's own
     jmp .out                           ; .sortkey)
 .data7:
     cmp al, 7
     jne .data8
     mov al, SH_FDK_SERIES              ; 7: Series... (81.72), the TYPE first
-    call sh_fdlg_open                  ; and then the step
+    call sh_fdlg_open_r                  ; and then the step
     jmp .out
 .data8:
     cmp al, 8
@@ -7487,7 +7618,7 @@ sh_mfire:
     cmp al, 9
     jne .data10
     mov al, SH_FDK_GAL
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     jmp .out
 .data10:
     call sh_docmd_chartexport
@@ -7569,7 +7700,7 @@ sh_docmd_options:
     jmp .repaint
 .calc:
     mov al, SH_FDK_CALC
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     pop si
     ret
 ; FREEZE PANES (81.70). Excel's own: the split is AT the active cell, so
@@ -7704,22 +7835,22 @@ sh_docmd_format:
     cmp al, 4
     jne .notprot
     mov al, SH_FDK_PROT
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     ret
 .notprot:
     cmp al, 5
     jne .notrowh
     mov al, SH_ID_ROWH                 ; stage 3.0c: a typed number now, not
-    call sh_idlg_open                  ; the 3-preset radio pick this had to
+    call sh_idlg_open_r                  ; the 3-preset radio pick this had to
     ret                                ; be while no text field existed
 .notrowh:
     cmp al, 6
     jne .notcolw
     mov al, SH_ID_COLW
-    call sh_idlg_open
+    call sh_idlg_open_r
     ret
 .notcolw:
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     ret
 
 ; -----------------------------------------------------------------------------
@@ -7814,7 +7945,7 @@ sh_docmd_edit:
     cmp byte [sh_clip_valid], 0        ; Excel greys Paste Special when there
     je .noclip                         ; is no copy area; this app has no
     mov al, SH_FDK_PSPEC               ; dynamic enable, so it says so instead
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     ret
 .pastelk:
     cmp byte [sh_clip_valid], 0
@@ -7829,15 +7960,15 @@ sh_docmd_edit:
     ret
 .clear:
     mov al, SH_FDK_CLEAR
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     ret
 .delete:
     mov al, 4
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     ret
 .insert:
     mov al, 3
-    call sh_fdlg_open
+    call sh_fdlg_open_r
     ret
 .fillright:
     call sh_docmd_fillright
@@ -9720,7 +9851,7 @@ sh_docmd_record:
     jmp .out
 .start:
     mov al, SH_ID_RECNAME              ; ask what to call it first; the start
-    call sh_idlg_open                  ; is that dialog's own OK
+    call sh_idlg_open_r                  ; is that dialog's own OK
     jmp .out
 .stop:
     mov si, sh_s_rec_return
@@ -11108,7 +11239,7 @@ SH_FDLG_H      equ SH_FDLG_BTY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_fdlg_tpl:
     dw 0, 0, SH_FDLG_W, SH_FDLG_H
-    dw 0, sh_fdlg_paint, 0, sh_fdlg_onclick
+    dw 0, sh_fdlg_paint_r, 0, sh_fdlg_click_r
 
 ; Stage 2.x's Edit menu Insert.../Delete... reuse this same engine as kinds
 ; 3 and 4 - just a 2-item Row/Column pick instead of a 4-item format
@@ -11262,6 +11393,7 @@ SH_FDK_SERIES equ 16                  ; 81.72: Data ▸ Series..., part one of
 SH_FDK_N     equ 17                   ; two (the step value follows)
     times (sh_ud_kind_end - sh_ud_kind - SH_FDK_N) db 0  ; sh_ud_kind (81.57)
     times (SH_FDK_N - (sh_ud_kind_end - sh_ud_kind)) db 0 ; has a kind each
+section .modc                      ; 81.74.2: the radio dialog engine, CHART.OVL
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -11335,7 +11467,7 @@ sh_fdlg_open:
 .prefillprot:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_bt_get                    ; AL = the byte, and 0 when the cell has
+    SHOUT sh_bt_get                    ; AL = the byte, and 0 when the cell has
     xor cx, cx                        ; no record at all - which IS the
     test al, SH_PROT_UNLOCK           ; default, Locked and not Hidden
     jz .pp1
@@ -11352,7 +11484,7 @@ sh_fdlg_open:
     push di
     mov si, sh_name
     mov di, sh_s_ext_dif
-    call sh_nameends
+    SHOUT sh_nameends
     pop di
     pop si
     jc .fmtdif
@@ -11360,7 +11492,7 @@ sh_fdlg_open:
     push di
     mov si, sh_name
     mov di, sh_s_ext_biff
-    call sh_nameends
+    SHOUT sh_nameends
     pop di
     pop si
     jc .fmtbiff
@@ -11394,7 +11526,7 @@ sh_fdlg_open:
 .cellpre:
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .noprefill
     push es
     mov es, [sh_cellseg]
@@ -11495,7 +11627,7 @@ sh_fdlg_paint:
     mov cx, [sh_fdlg_ox]
     add cx, 8
     mov dx, [sh_fdlg_rowy]
-    call os88ui_glyph                  ; preserves all registers (its own doc)
+    SHOUT os88ui_glyph                  ; preserves all registers (its own doc)
     mov si, [sh_fdlg_itemsptr]
     mov bx, [sh_fdlg_rowidx]
     shl bx, 1
@@ -11528,7 +11660,7 @@ sh_fdlg_paint:
     mov bx, sh_fdlg_rect
     mov si, sh_s_fd_ok
     mov di, OS88UI_DEF
-    call os88ui_btn
+    SHOUT os88ui_btn
     mov ax, [sh_fdlg_ox]
     add ax, 96
     mov [sh_fdlg_rect], ax
@@ -11544,7 +11676,7 @@ sh_fdlg_paint:
     mov bx, sh_fdlg_rect
     mov si, sh_s_fd_cancel
     xor di, di
-    call os88ui_btn
+    SHOUT os88ui_btn
     pop di
     pop si
     pop dx
@@ -11613,7 +11745,7 @@ sh_fdlg_onclick:
     mov byte [sh_savepend], 0         ; window is DESTROYED. Opening the file
     mov si, [sh_ownwin]               ; dialog from inside apply would stack a
     mov al, FDLG_SAVE                 ; second dialog on a window slot that is
-    call sh_dlg                       ; still in use, which is how one gets
+    SHOUT sh_dlg                       ; still in use, which is how one gets
     jmp .out                          ; orphaned behind the other
 .doCancel:
     call sh_fdlg_close
@@ -11687,24 +11819,24 @@ sh_clear_one:
     je .fmt
     cmp word [sh_fdlg_sel], 1
     je .contents
-    call sh_clearcell                 ; All: the record goes, border and all
-    call sh_bt_removecell             ; (sh_clearcell preserves AX/BX)
+    SHOUT sh_clearcell                 ; All: the record goes, border and all
+    SHOUT sh_bt_removecell             ; (sh_clearcell preserves AX/BX)
     jmp .out
 .contents:
     push ax                           ; NOTHING TO KEEP - no border, no number
-    call sh_bt_getw                   ; format beyond the four, no format byte:
+    SHOUT sh_bt_getw                   ; format beyond the four, no format byte:
     or ax, ax                         ; then the contents going leave no cell
     pop ax                            ; at all, as All's do, rather than a
     jnz .keep                         ; zero where Excel shows nothing (81.63)
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
     cmp byte [es:di+5], 0
     jne .keep2
-    call sh_clearcell
+    SHOUT sh_clearcell
     jmp .out
 .keep:
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
 .keep2:
@@ -11717,11 +11849,11 @@ sh_clear_one:
     mov word [es:di+SH_C_PASS], 0
     jmp .out
 .fmt:
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
     mov byte [es:di+5], 0             ; Formats: only the format byte, and the
-    call sh_bt_removecell             ; border table entry beside it
+    SHOUT sh_bt_removecell             ; border table entry beside it
 .out:
     pop es
     pop di
@@ -11740,7 +11872,7 @@ sh_fmt_one:
     push cx
     push di
     push es
-    call sh_findcell
+    SHOUT sh_findcell
     jnc .out
     mov es, [sh_cellseg]
     mov bl, [es:di+5]
@@ -11797,15 +11929,16 @@ sh_fdlg_apply:
     je .ukeep
     cmp al, SH_UL_DROP
     jne .usnap
-    call sh_undo_drop
+    SHOUT sh_undo_drop
     jmp short .ukeep
 .usnap:
-    call sh_undo_begin
+    SHOUT sh_undo_begin
 .ukeep:
     pop bx
     pop ax
     call sh_fdlg_apply0
-    jmp sh_undo_end
+    SHOUT sh_undo_end                  ; 81.74.2: a tail JUMP would enter a
+    ret                                ; resident body with no far frame
 
 sh_fdlg_apply0:
     push ax
@@ -11872,7 +12005,7 @@ sh_fdlg_apply0:
     inc cx
     cmp cx, si
     jbe .fmtcolloop
-    call sh_repaint                    ; ONE repaint for the whole block
+    SHOUT sh_repaint                    ; ONE repaint for the whole block
     jmp .out
 .insertrc:
     cmp byte [sh_protected], 0        ; a structure change is refused for the
@@ -11900,18 +12033,18 @@ sh_fdlg_apply0:
     mov al, 3                          ; op 3 = delete column
     mov bx, [sh_selcol]
 .rcgo:
-    call sh_rowcol_op
+    SHOUT sh_rowcol_op
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
 .doclear:
-    call sh_prot_blocked
+    SHOUT sh_prot_blocked
     jc .refused                       ; ...and the same here: this engine's
     push si                           ; 81.74: CLEAR() takes no argument here,
     mov si, sh_s_rec_clear            ; so the three radio modes all record as
-    call sh_rec_cmd                   ; the one the language has
+    SHOUT sh_rec_cmd                   ; the one the language has
     pop si
                                       ; .out does not repaint either
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
@@ -11947,14 +12080,14 @@ sh_fdlg_apply0:
     jbe .clcolloop
 .cldone:
     mov si, [sh_ownwin]               ; ONE repaint for the block
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 
 .donew:
     ; Excel asks which KIND of new document. This app has one grid type, so
     ; Chart and Macro Sheet do the honest thing rather than the flattering
     ; one: a new sheet, and a status line saying what was actually made.
-    call sh_new
+    SHOUT sh_new
     mov word [sh_msg], sh_s_nw_sheet
     cmp word [sh_fdlg_sel], 1
     jne .nwnotchart
@@ -11965,7 +12098,7 @@ sh_fdlg_apply0:
     mov word [sh_msg], sh_s_nw_macro
 .nwdone:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 
 .docalc:
@@ -11987,17 +12120,17 @@ sh_fdlg_apply0:
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
     push si                           ; 81.74
     mov si, sh_s_rec_calc
-    call sh_rec_cmd
+    SHOUT sh_rec_cmd
     pop si
 .calcrepaint:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 
 .dosort:
     mov ax, [sh_fdlg_sel]
     mov [sh_sort_desc], al
-    call sh_docmd_sortcol_r
+    call sh_docmd_sortcol
     jmp .out
 .dogallery:
     mov bx, [sh_fdlg_sel]
@@ -12006,12 +12139,12 @@ sh_fdlg_apply0:
     mov [ch_type], ax
     cmp word [sh_chartwin], 0         ; no chart window yet: the type is still
     je .galdone                       ; remembered, and the next Chart Column
-    call sh_chart_render              ; uses it
+    SHOUT sh_chart_render              ; uses it
     mov si, [sh_chartwin]
-    call sh_chart_paint
+    SHOUT sh_chart_paint
 .galdone:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 .doprot:
     xor dl, dl                         ; 0 Locked is the default and stores no
@@ -12028,7 +12161,7 @@ sh_fdlg_apply0:
     mov bx, [sh_selrow]
     or dl, dl
     jz .protclear
-    call sh_bt_addcell
+    SHOUT sh_bt_addcell
     jc .out                            ; table full: silent, as everywhere
     push es                            ; else that writes this table
     mov es, [sh_bordseg]
@@ -12039,7 +12172,7 @@ sh_fdlg_apply0:
     pop es
     jmp .protdone
 .protclear:
-    call sh_bt_findcell
+    SHOUT sh_bt_findcell
     jnc .protdone
     push es
     mov es, [sh_bordseg]
@@ -12050,16 +12183,16 @@ sh_fdlg_apply0:
     jnz .protdone                      ; a border is still stored here
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
-    call sh_bt_removecell
+    SHOUT sh_bt_removecell
 .protdone:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 .protdoc:
     mov word [sh_msg], sh_s_protdoc
 .refused:
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     jmp .out
 .doseries:                            ; 81.72: the radio IS the type, and
     mov al, [sh_fdlg_sel]             ; part TWO of the question follows it -
@@ -12071,14 +12204,14 @@ sh_fdlg_apply0:
     mov al, [sh_fdlg_sel]
     mov [sh_dbc_uniq], al
     mov al, SH_DBC_EXTRACT
-    call sh_docmd_dbrun
+    SHOUT sh_docmd_dbrun
     jnc .out                          ; refused: the status line says why
-    call sh_recalc_all                ; the extract range holds new values
+    SHOUT sh_recalc_all                ; the extract range holds new values
     jmp .out
 .dopspec:
     mov al, [sh_fdlg_sel]             ; the radio IS the mode: All/Formulas/
     mov [sh_ps_mode], al              ; Values/Formats/Notes are SH_PS_ALL..
-    call sh_docmd_paste               ; SH_PS_NOTE in that order, on purpose
+    SHOUT sh_docmd_paste               ; SH_PS_NOTE in that order, on purpose
     jmp .out
 .dosavefmt:
     mov si, sh_s_ext_biff             ; 0 Normal is this app's OWN format,
@@ -12177,6 +12310,9 @@ SH_BDLG_B_RIGHT   equ 0x04           ; SH_BORD_BOTTOM shifted up by one (to
 SH_BDLG_B_TOP     equ 0x08           ; make room for Outline at bit 0) and
 SH_BDLG_B_BOTTOM  equ 0x10           ; bit 5 lines up with SH_BORD_SHADE the
 SH_BDLG_B_SHADE   equ 0x20           ; same way - see sh_bdlg_open/_apply
+
+section .text
+
 
 sh_bdlg_tpl:
     dw 0, 0, SH_BDLG_W, SH_BDLG_H
@@ -12590,7 +12726,7 @@ SH_IDLG_H    equ SH_IDLG_CAY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_idlg_tpl:
     dw 0, 0, SH_IDLG_W, SH_IDLG_H
-    dw sh_s_id_tgoto, sh_idlg_paint, sh_idlg_onkey, sh_idlg_onclick
+    dw sh_s_id_tgoto, sh_idlg_paint_r, sh_idlg_key_r, sh_idlg_click_r
 ; The title above is only a PLACEHOLDER: sh_idlg_open overwrites
 ; [sh_idlg_tpl + WT_TITLE] with whichever of sh_s_id_t* the kind names, before
 ; OSAPI_WM_CREATE. WT_TITLE is a pointer TO the text, so the pointer has to go
@@ -12627,6 +12763,7 @@ sh_s_id_named: db 'Name defined.', 0
 sh_s_id_nofnd: db 'Not found.', 0
 sh_s_idlg_ok:  db 'OK', 0
 sh_s_idlg_can: db 'Cancel', 0
+section .modc                      ; 81.74.2: the one-line input dialog, CHART.OVL
 
 ; -----------------------------------------------------------------------------
 ; sh_idlg_open - in: AL = SH_ID_*. Preloads the field with the CURRENT value
@@ -12665,23 +12802,23 @@ sh_idlg_open:
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .prerowh
     mov ax, [sh_selcol]                ; the SELECTED column's own width, in
-    call sh_colwidth                   ; characters, matching what OK reads
+    SHOUT sh_colwidth                   ; characters, matching what OK reads
     jmp .prenum
 .prerowh:
     mov ax, [sh_selrow]                ; the SELECTED row's own height, in
-    call sh_rowtw                      ; POINTS as Excel's dialog shows it -
+    SHOUT sh_rowtw                      ; POINTS as Excel's dialog shows it -
     or ax, ax                          ; 12.75 for the standard (81.60)
     jnz .prerh
     mov ax, SH_RH_STDTW
 .prerh:
-    call sh_twpts
+    SHOUT sh_twpts
     jmp short .precopy
 .prenum:
-    call sh_itoa
+    SHOUT sh_itoa
 .precopy:
     mov di, sh_idlg_buf
     mov si, sh_numbuf
-    call sh_strcpy_to_di
+    SHOUT sh_strcpy_to_di
     jmp .haveinit
 .preone:
     mov ax, 1                          ; Enter alone gives 1, 2, 3...
@@ -12689,14 +12826,14 @@ sh_idlg_open:
 .pregoto:
     mov di, sh_idlg_buf                ; the selection, as 'A1'
     mov ax, [sh_selcol]
-    call sh_colname
+    SHOUT sh_colname
     mov si, sh_colbuf
-    call sh_strcpy_to_di
+    SHOUT sh_strcpy_to_di
     mov ax, [sh_selrow]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
-    call sh_strcpy_to_di
+    SHOUT sh_strcpy_to_di
 .prenone:
 .haveinit:
     mov si, sh_idlg_line
@@ -12704,7 +12841,7 @@ sh_idlg_open:
     mov word [si + LN_MAX], SH_EDITMAX
     mov byte [si + LN_FOCUS], 1
     mov di, sh_idlg_buf
-    call os88line_set                  ; sets LEN/CAR/VIEW from the content
+    SHOUT os88line_set                  ; sets LEN/CAR/VIEW from the content
     call OSAPI_VIDEO
     sub ax, SH_IDLG_W
     sar ax, 1
@@ -12769,7 +12906,7 @@ sh_idlg_paint:
     mov ax, [sh_idlg_oy]
     add ax, SH_IDLG_FY2
     mov [si + LN_Y2], ax
-    call os88line_draw
+    SHOUT os88line_draw
 
     mov ax, [sh_idlg_ox]               ; OK
     add ax, SH_IDLG_BTX1
@@ -12786,7 +12923,7 @@ sh_idlg_paint:
     mov bx, sh_idlg_rect
     mov si, sh_s_idlg_ok
     mov di, OS88UI_DEF
-    call os88ui_btn
+    SHOUT os88ui_btn
     mov ax, [sh_idlg_oy]               ; Cancel - same x, two new y's
     add ax, SH_IDLG_CAY1
     mov [sh_idlg_rect+2], ax
@@ -12796,7 +12933,7 @@ sh_idlg_paint:
     mov bx, sh_idlg_rect
     mov si, sh_s_idlg_can
     xor di, di
-    call os88ui_btn
+    SHOUT os88ui_btn
 
     pop di
     pop si
@@ -12819,7 +12956,7 @@ sh_idlg_onkey:
     cmp al, 0x0D
     je .accept
     mov si, sh_idlg_line
-    call os88line_key
+    SHOUT os88line_key
     jc .out
     mov si, [sh_idlg_win]
     call sh_idlg_paint
@@ -12827,11 +12964,11 @@ sh_idlg_onkey:
 .accept:
     call sh_idlg_apply
     call sh_idlg_close
-    call sh_idlg_after                 ; a Run or an INPUT goes on (81.63)
+    SHOUT sh_idlg_after                 ; a Run or an INPUT goes on (81.63)
     jmp .out
 .cancel:
     call sh_idlg_close
-    call sh_idlg_after
+    SHOUT sh_idlg_after
 .out:
     pop si
     pop ax
@@ -12848,7 +12985,7 @@ sh_idlg_onclick:
     push si
     push di
     mov si, sh_idlg_line               ; the field's rect is already
-    call os88line_click                ; screen-absolute from the last paint
+    SHOUT os88line_click                ; screen-absolute from the last paint
     jnc .redraw
     mov bx, [sh_idlg_win]
     push cx
@@ -12878,11 +13015,11 @@ sh_idlg_onclick:
 .doOK:
     call sh_idlg_apply
     call sh_idlg_close
-    call sh_idlg_after
+    SHOUT sh_idlg_after
     jmp .out
 .doCancel:
     call sh_idlg_close
-    call sh_idlg_after
+    SHOUT sh_idlg_after
 .out:
     pop di
     pop si
@@ -12923,7 +13060,7 @@ sh_idlg_apply:
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
-    call sh_pnum_at
+    SHOUT sh_pnum_at
     jc .out                            ; not a number at all
     or ax, ax                          ; 81.73: ZERO HIDES IT, which is how
     jz .cwhide                         ; Excel hides a column and why this
@@ -12951,7 +13088,7 @@ sh_idlg_apply:
     jbe .cwl
     xchg ax, bx
 .cwl:
-    call sh_colw_set
+    SHOUT sh_colw_set
     inc ax
     cmp ax, bx
     jbe .cwl
@@ -12961,7 +13098,7 @@ sh_idlg_apply:
     ; to THE SELECTED ROWS, each (81.60). It set the one height the whole
     ; sheet had, in pixels. The standard 12.75 is stored as no record at all
     mov si, sh_idlg_buf
-    call sh_ptwips
+    SHOUT sh_ptwips
     jc .out
     or ax, ax                          ; 81.73: ZERO HIDES IT. This used to
     jz .rhhide                         ; refuse, and said so - "Excel's 0
@@ -12980,7 +13117,7 @@ sh_idlg_apply:
     jbe .rhl
     xchg ax, bx
 .rhl:
-    call sh_rowh_set
+    SHOUT sh_rowh_set
     jc .redraw                         ; the table is full: what fitted stays
     inc ax
     cmp ax, bx
@@ -12988,12 +13125,12 @@ sh_idlg_apply:
     jmp .redraw
 .run:
     mov si, sh_idlg_buf                ; a macro is run by NAME, Excel's way -
-    call sh_upcase_at                  ; or by the cell it starts in
+    SHOUT sh_upcase_at                  ; or by the cell it starts in
     mov si, sh_idlg_buf
-    call sh_name_lookup
+    SHOUT sh_name_lookup
     jc .runat
     mov si, sh_idlg_buf
-    call sh_pcellref
+    SHOUT sh_pcellref
     jnc .out
     cmp ax, SH_COLS
     jae .out
@@ -13008,37 +13145,37 @@ sh_idlg_apply:
     push di                            ; the answer, as typed; the run takes
     mov si, sh_idlg_buf                ; it up again once this has closed
     mov di, sh_macro_ans
-    call sh_strcpy
+    SHOUT sh_strcpy
     pop di
     mov byte [sh_macro_ansok], 1
     jmp .out
 .goto:
     mov si, sh_idlg_buf
-    call sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
+    SHOUT sh_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
     mov si, sh_idlg_buf
-    call sh_name_lookup                ; A NAME GOES TO ITS WHOLE RECTANGLE
+    SHOUT sh_name_lookup                ; A NAME GOES TO ITS WHOLE RECTANGLE
     jnc .gotoref                       ; (81.30): sh_select collapses the
     push cx                            ; selection to one cell, so the far
     push dx                            ; corner is put back afterwards - and
     mov si, [sh_ownwin]                ; that is what makes Goto SALES then
-    call sh_select                     ; Chart Column... chart SALES
+    SHOUT sh_select                     ; Chart Column... chart SALES
     pop dx
     pop cx
     mov [sh_selcol2], cx
     mov [sh_selrow2], dx
     mov si, [sh_ownwin]
-    call sh_repaint                    ; the band is wider than sh_select drew
+    SHOUT sh_repaint                    ; the band is wider than sh_select drew
     jmp .out
 .gotoref:
     mov si, sh_idlg_buf
-    call sh_pcellref                   ; CF=1 = AX col, BX row
+    SHOUT sh_pcellref                   ; CF=1 = AX col, BX row
     jnc .out
     cmp ax, SH_COLS
     jae .out
     cmp bx, SH_ROWS
     jae .out
     mov si, [sh_ownwin]                ; sh_select's own contract: SI must be
-    call sh_select                     ; the window; it scrolls and repaints
+    SHOUT sh_select                     ; the window; it scrolls and repaints
     jmp .out                           ; itself - and a Goto DEFINES NO NAME,
                                        ; so it must not fall into .defname
 .defname:
@@ -13047,13 +13184,13 @@ sh_idlg_apply:
     mov bx, [sh_selrow]                ; nothing can move it while a modal
     mov cx, [sh_selcol2]               ; dialog owns the input. BOTH corners
     mov dx, [sh_selrow2]               ; since 81.29: a dragged block names a
-    call sh_name_def                   ; range, a single cell names itself
+    SHOUT sh_name_def                   ; range, a single cell names itself
     mov word [sh_msg], sh_s_id_named
     jnc .redraw
     mov word [sh_msg], sh_s_id_nofit
     jmp .redraw
 .find:
-    call sh_docmd_find
+    SHOUT sh_docmd_find
     jmp .redraw
 ; Data > Sort..., part one of two. The KEY is a reference, so it needs a field;
 ; the ORDER is a two-way pick, so it needs radios; and no dialog engine here
@@ -13065,7 +13202,7 @@ sh_idlg_apply:
 ; takes a reference too, and Excel's own Name field may be left alone.
 .recname:
     mov si, sh_idlg_buf
-    call sh_upcase_at
+    SHOUT sh_upcase_at
     cmp byte [sh_idlg_buf], 0
     je .recgo
     mov ax, [sh_rec_col]
@@ -13073,11 +13210,11 @@ sh_idlg_apply:
     mov cx, ax
     mov dx, bx
     mov si, sh_idlg_buf
-    call sh_name_def                   ; CF=1 = the table is full, which
+    SHOUT sh_name_def                   ; CF=1 = the table is full, which
     jnc .recgo                         ; 81.69's own pair of messages already
     mov word [sh_msg], sh_s_id_nofit   ; says
 .recgo:
-    call sh_rec_start
+    SHOUT sh_rec_start
     jmp .redraw
 
 ; 81.72: the step value, and the whole of Data ▸ Series' second question.
@@ -13086,15 +13223,15 @@ sh_idlg_apply:
 ; which is what the three numeric kinds above it want and this one does not.
 .serstep:
     mov si, sh_idlg_buf
-    call sh_ser_setstep                ; CF=0 = not a number at all: refused
+    SHOUT sh_ser_setstep                ; CF=0 = not a number at all: refused
     jnc .out                           ; in silence, the same way a bad row
-    call sh_docmd_series_r             ; height is (this engine's own header)
+    call shm_series             ; height is (this engine's own header)
     jmp .redraw
 .sortkey:
     mov si, sh_idlg_buf
-    call sh_upcase_at                  ; 'b3' names the same column as 'B3'
+    SHOUT sh_upcase_at                  ; 'b3' names the same column as 'B3'
     mov si, sh_idlg_buf
-    call sh_pcellref                   ; AX = col, and only the COLUMN matters:
+    SHOUT sh_pcellref                   ; AX = col, and only the COLUMN matters:
     jnc .badkey                        ; a key is a column, and the row the
     cmp ax, SH_COLS                    ; user happened to point at is not part
     jae .badkey                        ; of the question
@@ -13119,9 +13256,9 @@ sh_idlg_apply:
     mov word [sh_msg], sh_s_id_badkey
     jmp .redraw
 .redraw:
-    call sh_geom                       ; the cell size may have changed, so the
+    SHOUT sh_geom                       ; the cell size may have changed, so the
     mov si, [sh_ownwin]                ; visible row/column counts must be
-    call sh_repaint                    ; recomputed before anything is drawn
+    SHOUT sh_repaint                    ; recomputed before anything is drawn
 .out:
     pop si
     pop dx
@@ -13145,6 +13282,9 @@ sh_idlg_close:
     pop bx
     pop ax
     ret
+
+section .text
+
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_find - Formula > Find...: move the selection to the next cell whose
@@ -13627,6 +13767,77 @@ sh_ldlg_tpl:
     dw sh_s_ld_tfunc, sh_ldlg_paint_r, 0, sh_ldlg_click_r
 ; the resident doors (81.71.6) - sh_ldlg_open_r forces the module in before
 ; the window exists, 81.71.5.1's invariant
+; 81.74.2: the resident doors for the last two engines. Same shape and same
+; invariant as 81.71.5.1's: the OPEN forces the module in, and refuses to
+; create a window at all if it cannot, so no paint holding the gfx lock is
+; ever the call that has to read a disk.
+sh_fdlg_open_r:
+    push bp
+    mov bp, SHM_FDOPEN
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    ret
+sh_fdlg_paint_r:
+    push bp
+    mov bp, SHM_FDPAINT
+    call ch_ovcall
+    pop bp
+    ret
+sh_fdlg_click_r:
+    push bp
+    mov bp, SHM_FDCLICK
+    call ch_ovcall
+    pop bp
+    ret
+sh_fdlg_close_r:
+    push bp
+    mov bp, SHM_FDCLOSE
+    call ch_ovcall
+    pop bp
+    ret
+sh_fdlg_apply_r:
+    push bp
+    mov bp, SHM_FDAPPLY
+    call ch_ovcall
+    pop bp
+    ret
+sh_idlg_open_r:
+    push bp
+    mov bp, SHM_IDOPEN
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    ret
+sh_idlg_paint_r:
+    push bp
+    mov bp, SHM_IDPAINT
+    call ch_ovcall
+    pop bp
+    ret
+sh_idlg_key_r:
+    push bp
+    mov bp, SHM_IDKEY
+    call ch_ovcall
+    pop bp
+    ret
+sh_idlg_click_r:
+    push bp
+    mov bp, SHM_IDCLICK
+    call ch_ovcall
+    pop bp
+    ret
+sh_idlg_close_r:
+    push bp
+    mov bp, SHM_IDCLOSE
+    call ch_ovcall
+    pop bp
+    ret
+
 sh_ldlg_open_r:
     push bp
     mov bp, SHM_LOPEN
@@ -32878,7 +33089,7 @@ sh_macro_run:
     jne .busy
     push ax
     mov al, SH_ID_RUN
-    call sh_idlg_open
+    call sh_idlg_open_r
     pop ax
     ret
 .busy:
@@ -32930,7 +33141,7 @@ sh_macro_alertup:
 sh_macro_inputup:
     push ax
     mov al, SH_ID_INPUT
-    call sh_idlg_open
+    call sh_idlg_open_r
     pop ax
     ret
 sh_macro_beep:                       ; BEEP: 880 Hz for three ticks
@@ -32952,7 +33163,8 @@ sh_macro_cmd:                        ; AX = sh_docmd_copy/cut/paste, SI =
 sh_macro_clear:                      ; AX = Edit > Clear's row, SI = the
     mov byte [sh_fdlg_kind], SH_FDK_CLEAR ; window
     mov [sh_fdlg_sel], ax
-    jmp sh_fdlg_apply
+    call sh_fdlg_apply_r               ; 81.74.2: that engine is the module's
+    ret                                ; now, so this is a door and not a jump
 
 ; =============================================================================
 ; THE MACRO LANGUAGE (SPEC.md 81.63). A macro is a column of formulas on the
@@ -41708,7 +41920,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8014                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -42711,11 +42923,33 @@ sh_v_sh_nf_apply             equ sh_v_sh_name_list + 4
 sh_v_sh_acc_toudw            equ sh_v_sh_nf_apply + 4     ; 81.72
 sh_v_sh_ser_to_ymd           equ sh_v_sh_acc_toudw + 4
 sh_v_sh_ymd_to_ser           equ sh_v_sh_ser_to_ymd + 4
-sh_v_sh_acc_fromudw          equ sh_v_sh_ymd_to_ser + 4
+sh_v_sh_chart_paint           equ sh_v_sh_ymd_to_ser + 4
+sh_v_sh_chart_render          equ sh_v_sh_chart_paint + 4
+sh_v_sh_dlg                   equ sh_v_sh_chart_render + 4
+sh_v_sh_docmd_find            equ sh_v_sh_dlg + 4
+sh_v_sh_docmd_paste           equ sh_v_sh_docmd_find + 4
+sh_v_sh_geom                  equ sh_v_sh_docmd_paste + 4
+sh_v_sh_new                   equ sh_v_sh_geom + 4
+sh_v_sh_pnum_at               equ sh_v_sh_new + 4
+sh_v_sh_prot_blocked          equ sh_v_sh_pnum_at + 4
+sh_v_sh_ptwips                equ sh_v_sh_prot_blocked + 4
+sh_v_sh_rec_cmd               equ sh_v_sh_ptwips + 4
+sh_v_sh_rec_start             equ sh_v_sh_rec_cmd + 4
+sh_v_sh_rowcol_op             equ sh_v_sh_rec_start + 4
+sh_v_sh_rowtw                 equ sh_v_sh_rowcol_op + 4
+sh_v_sh_select                equ sh_v_sh_rowtw + 4
+sh_v_sh_ser_setstep           equ sh_v_sh_select + 4
+sh_v_sh_twpts                 equ sh_v_sh_ser_setstep + 4
+sh_v_sh_undo_begin            equ sh_v_sh_twpts + 4
+sh_v_sh_upcase_at             equ sh_v_sh_undo_begin + 4
+sh_v_sh_docmd_dbrun           equ sh_v_sh_upcase_at + 4
+sh_v_sh_undo_end              equ sh_v_sh_docmd_dbrun + 4
+sh_v_sh_idlg_after            equ sh_v_sh_undo_end + 4
+sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 120
+SH_NVEC       equ 142
 sh_v_end      equ sh_v_sh_bt_removecell + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)

@@ -10241,7 +10241,13 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 #     ARTFUL and TEXPAD stay for now, on the general disk as well as the
 #     office one. Every other geometry carries the full list, and
 #     `make smallapps` is untouched.
-APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88,$(APPS_TOOLS))
+# ...and CHART.OVL goes with THEM. It is the overlay those two packages read
+# on demand (82.16.9), and this geometry carries neither - so the 360KB disk
+# has been shipping a module for two absent applications, which the filter
+# above only ever removed half of. It cost 37 clusters of 354 silently until
+# 81.74.2 grew the module past what was left.
+APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
+                               $(BUILD)/CHART.OVL,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py

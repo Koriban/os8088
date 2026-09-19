@@ -106021,6 +106021,41 @@ pause is `ALERT`/`INPUT`, which resumes on its own dialog's OK through
 
 `tests/sheetrecord.py` is the gate.
 
+#### 81.74.2 The last two dialog engines follow
+
+§81.71.5.1 moved Data ▸ Form and the Border dialog into `CHART.OVL` and
+§81.71.6 the list dialog; **the radio engine (`sh_fdlg_*`) and the one-line
+input engine (`sh_idlg_*`) are the last two**, and they were resident only
+because they were the *first* two — nothing else ever made them so.
+
+They cost **2,652 bytes** of resident room, which is what §81.74's recorder
+and everything after it had been spending. What they cost back is 22 more
+vectors and ten doors (`SH_NVEC` 120 → 142, `CH_OVKB` 40 → 43).
+
+Three things this one taught that the earlier moves did not:
+
+- **`ch_ovcall` is re-entrant, so a module routine may call a resident door.**
+  Its fast path is `ch_ovneed`'s single compare and the far call holds no
+  static state. That matters because `sh_fdlg_apply0` reaches `Data ▸ Extract`
+  and `Series` through their resident doors, which call straight back into the
+  module — an extra far call per menu OK, and nothing else.
+- **A tail `jmp` into a resident body is not a call.** `sh_macro_clear` ended
+  `jmp sh_fdlg_apply`, and with that engine in the module the jump would have
+  entered a `retf` body with no far frame — which `os88ovlchk` catches by
+  name. It is a door and a `ret` now, and `sh_fdlg_apply` gained a verb for it.
+- **Three of the vectors were wrong to add at all**: `sh_clear_one`,
+  `sh_fmt_one` and `sh_setext` are the radio engine's *own* helpers and moved
+  with it, so vectoring them pointed the shims at the module they had just
+  left.
+
+**And it exposed a disk bug that had been silent for a long time.**
+`APPS_TOOLS_360` filters `sheet.o88` and `chart.o88` off the 360KB apps disk
+but never filtered **their overlay**, so that disk was carrying `CHART.OVL`
+for two applications it does not have — 37 of 354 clusters, until the grown
+module tipped it over and `os88disk.py` refused the image. A `filter-out` that
+matches only half of what it should is exactly the failure §24.5's own list
+keeps producing.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment
