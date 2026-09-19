@@ -21491,7 +21491,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; stage 4.0: the software IEEE-754 double. Included before os88chart.inc for
 ; no reason other than tidiness - it depends on nothing but the caller's own
 ; scratch, declared in the bss chain below.
-%include "os88fp.inc"
+%define OS88FP_NOTRANS             ; 81.75: no SIN..LOG, so no logarithm and
+%include "os88fp.inc"       ; no trigonometry - see that file's own guard
 
 
 ; =============================================================================

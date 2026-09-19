@@ -985,12 +985,30 @@ fps_div:
 ; fp_c_* - constants, as exact doubles. NASM's `dq` with a decimal literal
 ; rounds to nearest, which for these five is the same bit pattern the host's
 ; own libm carries - checked rather than assumed.
+; 81.75: OS88FP_NOTRANS drops the LOGARITHMS and the TRIGONOMETRY - fp_ln,
+; fp_exp, fp_sin, fp_cos, fp_tan, fp_atan, their series helpers and their
+; constant tables. It exists for apps/plan/plan.asm, which exposes none of
+; them: SIN..LOG are not in its function table, and the one thing that still
+; reached fp_ln was fp_pow's FRACTIONAL path (x^y = e^(y ln x)), which a
+; build without them answers as an error instead. Whole-number exponents,
+; positive and negative, are repeated squaring and are untouched - that is
+; what makes this affordable - and fp_sqrt is its own Newton-Raphson and
+; goes nowhere near a logarithm.
+;
+; A GUARDED SHARED INCLUDE OWES A BYTE-IDENTITY PROOF, which is os88ui.inc's
+; own precedent (OS88UI_SBDRAG): SHEET, CHART and fptest must assemble to the
+; bytes they did before this line existed - so the guards below are placed to
+; keep every surviving item AT THE OFFSET IT HAD, which is why fp_c_one and
+; fp_c_half are not simply hoisted above the three the logarithm uses.
+%ifndef OS88FP_NOTRANS
 fp_c_ln2:    dq 0.69314718055994530942
 fp_c_invln2: dq 1.44269504088896340736
 fp_c_rhalf:  dq 0.70710678118654752440
+%endif
 fp_c_one:    dq 1.0
 fp_c_half:   dq 0.5
 
+%ifndef OS88FP_NOTRANS
 ; -----------------------------------------------------------------------------
 ; fp_ln - A = ln(A). CF=1 if A <= 0, and A is left zero.
 ;
@@ -1212,6 +1230,8 @@ fp_exp:
 ; cases everyone expects to be exact - 10^2 must be 100, not 99.999999999998 -
 ; and it cannot do a NEGATIVE base at all, where (-2)^3 is perfectly ordinary.
 ; -----------------------------------------------------------------------------
+%endif                               ; OS88FP_NOTRANS
+
 fp_pow:
     push bx
     push cx
@@ -1276,6 +1296,12 @@ fp_pow:
     call fp_div
     jmp short .out
 .real:
+%ifdef OS88FP_NOTRANS
+    jmp .bad                          ; 81.75: a FRACTIONAL exponent is the one
+                                      ; thing here that needs the logarithm,
+                                      ; and a build without one answers an
+                                      ; error rather than a wrong number
+%else
     mov si, fp_e1                     ; THE EXPONENT GOES ON THE STACK. fp_ln
     push word [si]                    ; owns fp_e0..fp_e3 as its own scratch,
     push word [si+2]                  ; so leaving y in fp_e1 across the call
@@ -1299,6 +1325,7 @@ fp_pow:
 .badpop:
     add sp, 8
     jmp .bad
+%endif
 .out:
     clc
     jmp short .done
@@ -1318,6 +1345,7 @@ fp_pow:
 ; fp_cos IS fp_sin(x + pi/2) and not a second series, which costs one add and
 ; removes a whole routine that could disagree with the first one.
 ; -----------------------------------------------------------------------------
+%ifndef OS88FP_NOTRANS
 fp_c_pi:     dq 3.14159265358979323846
 fp_c_pi2:    dq 1.57079632679489661923
 fp_c_2opi:   dq 0.63661977236758134308
@@ -1663,6 +1691,8 @@ fp_atser:
     call fp_unpack_a
     pop cx
     ret
+
+%endif                               ; OS88FP_NOTRANS
 
 ; fp_cmpab - compare A against B.
 ; out: AX = -1 (A < B), 0 (equal) or 1 (A > B), and the flags set from it, so
