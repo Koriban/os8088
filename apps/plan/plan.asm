@@ -846,12 +846,6 @@ sh_difbbox:
 ; same door, each with its own verb: the functions a sheet uses least, 2.8 KB
 ; the package needed more than the module did. SUM and its folds, IF, the
 ; special forms, the lookups, the dates and NOW stay resident.
-sh_pinfo:
-    jmp shm_pinfo                      ; 81.75: sh_pdoor's whole other half was
-                                       ; the REFUSAL a missing module needed -
-                                       ; zero, #VALUE! and the arguments
-                                       ; stepped over. There is no module to
-                                       ; be missing.
 
 sh_entry:
     push ax
@@ -15067,13 +15061,6 @@ sh_pfunc:
     je .doabs
     cmp ax, 109                        ; RAND() is nullary like NOW()
     je .dorand
-    cmp ax, 110                        ; INDIRECT is a TEXT function that
-    je .dotext                         ; answers with a VALUE - it takes the
-                                       ; string apart and reads what it names
-    cmp ax, 108                        ; CLEAN joins the TEXT functions, whose
-    je .dotext                         ; result is a string
-    cmp ax, 107                        ; ISNONTEXT joins the INFORMATION ones,
-    je .doinfo                         ; whose argument stays a reference
     cmp ax, 106                        ; NOW() is nullary and reads the BIOS
     je .donow                          ; clock - nothing else here does either
     cmp ax, SH_FID_MDETERM              ; 143+ are the ARRAY/MATRIX functions
@@ -15092,29 +15079,9 @@ sh_pfunc:
     jae .dofin                         ; the same layer one level up
     cmp ax, 81                         ; 81+ are the LOGARITHMS and their
     jae .dotrans                       ; friends, on the transcendental layer
-    cmp ax, 77                         ; 77+ are the VARIANCE folds. They walk
-    jb .notstat                        ; their arguments exactly as SUM does,
-    cmp byte [sh_stbusy], 0            ; so they rejoin the fold path below
-    jne .statbusy                      ; rather than getting one of their own
-    mov byte [sh_stbusy], 1
-    jmp .fold
-.statbusy:
-    call sh_skipargs                   ; one variance fold inside another's
-    mov byte [sh_evalerr], SH_ERR_VALUE  ; arguments would share sh_pacc2 -
-    jmp .typed                         ; refused rather than answered (81.34.1)
-.notstat:
-    cmp ax, 69                         ; 69+ are the LOOKUP functions, whose
-    jae .dolookup2                     ; answer may be a REFERENCE's contents
-                                       ; and so may be TEXT (81.31). This test
-                                       ; comes FIRST because the chain below
-                                       ; is descending and 69 is also >= 58
-    cmp ax, 58                         ; stage 4.5: 58+ are the DATE functions,
-    jae .dodate                        ; which are numbers all the way down
-    cmp ax, 37                         ; stage 4.5: 37+ are the TEXT functions,
-    jae .dotext                        ; whose RESULT may be a string
-    cmp ax, 25                         ; stage 4.5: 25+ are the INFORMATION
-    jae .doinfo                        ; functions, whose argument stays a
-                                       ; REFERENCE instead of folding (81.23)
+    cmp ax, 25                         ; 81.75: 25..80 are INFORMATION, TEXT,
+    jae .noname                        ; DATE, LOOKUP and the VARIANCE folds,
+                                       ; every one of them cut
     cmp ax, 12                         ; 12+ are stage 3.0d's special forms:
     jae .dospecial                     ; fixed arity, parsed by sh_pspecial,
                                        ; not folded over ranges
@@ -15174,16 +15141,6 @@ sh_pfunc:
     call sh_pabs
     mov dx, ax
     jmp .done
-.dodate:
-    call sh_pdate
-    mov dx, ax
-    jmp .typed
-.dotext:
-    jmp .noname                        ; 81.75
-.doinfo:
-    call sh_pinfo
-    mov dx, ax
-    jmp .typed
 .dorand:
     call sh_prand
     jmp .nullary
@@ -15219,13 +15176,6 @@ sh_pfunc:
     jmp .noname
 .dotrans:
     jmp .noname                        ; 81.75
-.dolookup2:
-    call sh_plookup
-    mov dx, ax
-    jmp .done                          ; NOT .typed, for sh_ptext's reason: an
-                                       ; INDEX onto a label answers with the
-                                       ; label, and .typed would stamp
-                                       ; SH_T_NUM over it
 .dospecial:
     call sh_pspecial
     mov dx, ax
@@ -15949,587 +15899,16 @@ sh_c_pi:  dq 3.14159265358979323846
 sh_c_pi2: dq 1.57079632679489661923
 
 ; =============================================================================
-; sh_plookup - the LOOKUP functions, ids 69 and up (SPEC.md 81.31).
+; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
+; question about what an argument IS rather than what it is worth, so each is
+; one sh_pargclass call and a comparison.
 ;
-; in:  AX = the id, SI just past '('
-; out: SI past ')', the answer in sh_acc and [sh_curtype] set. AX is 0 and
-;      means nothing - the value has lived in sh_acc since stage 4.0.
-;
-; EVERY ONE OF THESE OPENS WITH A REFERENCE, and sh_pargref is strict about
-; that on purpose (81.23): `ROWS(A1:B9)` is a question about the rectangle, and
-; `ROWS(A1+1)` is not a question at all. An argument that is anything else is
-; #VALUE!, not a fold of it.
-;
-; THE ANSWER MAY BE TEXT, which is why the router sends these to `.done` and
-; not `.typed`. INDEX onto a label has to come back as the label; a number
-; stamped over it would be the zero underneath, which is exactly the bug 81.23
-; was written to end.
+; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
 ; =============================================================================
-sh_plookup:
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, ax                        ; DI = the id; everything else is scratch
-    cmp di, 73
-    jae sh_plksearch                  ; MATCH/VLOOKUP/HLOOKUP open with a VALUE
-    call sh_pargref                   ; the other four open with a reference
-    jnc .notref
-    cmp di, 72
-    je .index
-    cmp di, 71
-    je .areas
-    mov ax, [sh_arg2row]              ; ROWS - the rectangle's height...
-    sub ax, [sh_arg1row]
-    inc ax
-    cmp di, 69
-    je .num
-    mov ax, [sh_arg2col]              ; ...and COLUMNS its width. sh_pargref
-    sub ax, [sh_arg1col]              ; puts a single cell in BOTH corners, so
-    inc ax                            ; ROWS(A1) is 1 with no special case
-    jmp short .num
-.areas:
-    mov ax, 1                         ; AREAS is 1 for every reference this
-                                       ; grammar can express. Excel answers >1
-                                       ; only for a UNION - `(A1:A9,C1:C9)` -
-                                       ; and there is no union operator here,
-                                       ; so 1 is the truth rather than a stub
-.num:
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-    jmp .close
-; --- INDEX(ref, n) / INDEX(ref, row, col) ------------------------------------
-; The two-argument form indexes along whichever way the reference runs, which
-; is what makes INDEX(A1:A9, 3) and INDEX(A1:I1, 3) both mean "the third one".
-; A rectangle given one subscript takes it as the ROW, as Excel does.
-.index:
-    cmp byte [si], ','
-    jne .badargs
-    inc si
-    call sh_pcmp                      ; the first subscript
-    call sh_acc_toint
-    jc .badnum
-    mov cx, ax                        ; CX = it
-    mov dx, 1                         ; DX = the second, defaulting to 1
-    cmp byte [si], ','
-    jne .oneidx
-    inc si
-    call sh_pcmp
-    call sh_acc_toint
-    jc .badnum
-    mov dx, ax
-    jmp short .haveidx
-.oneidx:
-    mov ax, [sh_arg2row]              ; one subscript: if the reference is a
-    cmp ax, [sh_arg1row]              ; single ROW then it counts columns
-    jne .haveidx
-    mov ax, [sh_arg2col]
-    cmp ax, [sh_arg1col]
-    je .haveidx                       ; ...a 1x1 reference is row 1, column 1
-    mov dx, cx
-    mov cx, 1
-.haveidx:
-    or cx, cx                         ; 0 or negative is #VALUE!, as it is for
-    jle .badnum                       ; every subscript in this app
-    or dx, dx
-    jle .badnum
-    mov ax, [sh_arg1row]              ; the cell: the corner plus (n-1)
-    add ax, cx
-    dec ax
-    mov bx, ax
-    cmp ax, [sh_arg2row]
-    ja .outofref
-    mov ax, [sh_arg1col]
-    add ax, dx
-    dec ax
-    cmp ax, [sh_arg2col]
-    ja .outofref
-    mov byte [sh_curtype], SH_T_NUM   ; an EMPTY cell answers 0, as Excel does,
-    push si                           ; and sh_getcell2 leaves sh_acc alone for
-    xor ax, ax                        ; one - so the zero is written first and
-    call sh_acc_int                   ; the read overwrites it when there is
-    pop si                            ; something to read
-    mov ax, [sh_arg1col]
-    add ax, dx
-    dec ax
-    call sh_getcell2                  ; BX is already the row; the value, the
-    jmp .close                        ; tag and any error land where the
-                                       ; caller reads them
-.outofref:
-    mov byte [sh_evalerr], SH_ERR_REF ; a subscript past the rectangle names no
-    jmp short .zero                   ; cell, and #REF! is what that is
-.badnum:
-    mov byte [sh_evalerr], SH_ERR_VALUE
-    jmp short .zero
-.notref:
-    call sh_skipargs                  ; step over whatever it was, so the
-    mov byte [sh_evalerr], SH_ERR_VALUE  ; caller still finds the ')'
-    jmp short .zero
-.badargs:
-    mov byte [sh_evalerr], SH_ERR_VALUE
-.zero:
-    xor ax, ax
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-.close:
-    call sh_skipargs                  ; anything left before the ')' - a fourth
-    cmp byte [si], ')'                ; subscript, a stray comma - is stepped
-    jne .done                         ; over rather than re-parsed
-    inc si
-.done:
-    xor ax, ax
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; =============================================================================
-; sh_plksearch - MATCH, VLOOKUP and HLOOKUP: the lookup functions that SEARCH
-; (SPEC.md 81.32). Entered from sh_plookup with DI = the id and the caller's
-; four registers already banked, so it shares that routine's exits.
-;
-; The shape is one comparison engine and three ways of asking it: every one of
-; these walks a single row or column comparing a key against each cell, and
-; they differ only in what they do with the position they find.
-; =============================================================================
-sh_plksearch:
-    cmp byte [sh_lk_busy], 0          ; SEE THE NOTE ON sh_lk_busy: a search
-    je .free                          ; reached from inside a searched range
-    mov byte [sh_evalerr], SH_ERR_VALUE  ; would overwrite the outer one's key
-    jmp sh_plookup.zero               ; and answer both wrongly
-.free:
-    mov byte [sh_lk_busy], 1
-    call sh_pcmp                      ; --- the key -------------------------
-    mov al, [sh_curtype]
-    mov [sh_lk_kt], al
-    cmp al, SH_T_TEXT
-    je .keytext
-    push si                           ; a number: bank all eight bytes. NOT
-    push di                           ; `rep movsw` - that writes ES:DI, and
-    mov si, sh_acc                    ; ES in this app is a cell or text claim
-    mov di, sh_lk_kv                  ; far more often than it is the package.
-    mov cx, 4                         ; The key landed in another segment and
-.kv:                                  ; every numeric compare then missed,
-    mov ax, [si]                      ; while the TEXT path - a plain DS byte
-    mov [di], ax                      ; loop - worked: MATCH("CCC",..) found
-    add si, 2                         ; its row and MATCH(30,..) said #N/A
-    add di, 2
-    loop .kv
-    pop di
-    pop si
-    jmp short .keyed
-.keytext:
-    push si                           ; a label: bank the string
-    push di
-    mov si, sh_sacc
-    mov di, sh_lk_ks
-    mov cx, SH_STR_MAX + 1
-.kc:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    loopnz .kc
-    mov byte [di-1], 0
-    pop di
-    pop si
-.keyed:
-    cmp byte [si], ','
-    jne .bad
-    inc si
-    call sh_pargref                   ; --- the range -----------------------
-    jnc .bad
-    mov ax, [sh_arg1col]              ; banked at once: sh_getcell2 recurses
-    mov [sh_lk_c1], ax                ; and the scan cannot trust sh_arg* to
-    mov ax, [sh_arg1row]              ; survive it (81.23)
-    mov [sh_lk_r1], ax
-    mov ax, [sh_arg2col]
-    mov [sh_lk_c2], ax
-    mov ax, [sh_arg2row]
-    mov [sh_lk_r2], ax
-    mov word [sh_lk_idx], 1           ; a VLOOKUP with no third argument would
-    mov word [sh_lk_mt], 1            ; want column 1; MATCH with none wants
-    mov word [sh_lk_has2], 0          ; type 1. TWO fields - see sh_lkone
-    cmp byte [si], ','
-    jne .noidx
-    inc si
-    cmp di, 76                        ; LOOKUP's third argument is a RESULT
-    je .arg2ref                       ; VECTOR, not a number at all
-    call sh_pcmp
-    call sh_acc_toint
-    jc .bad
-    cmp di, 73                        ; MATCH's third argument is the TYPE,
-    jne .isidx                        ; the other two's is a column or row
-    mov [sh_lk_mt], ax
-    jmp short .noidx
-.isidx:
-    mov [sh_lk_idx], ax
-    jmp short .noidx
-.arg2ref:
-    call sh_pargref
-    jnc .bad
-    mov word [sh_lk_has2], 1
-    mov ax, [sh_arg1col]
-    mov [sh_lk_2c1], ax
-    mov ax, [sh_arg1row]
-    mov [sh_lk_2r1], ax
-    mov ax, [sh_arg2col]
-    mov [sh_lk_2c2], ax
-    mov ax, [sh_arg2row]
-    mov [sh_lk_2r2], ax
-.noidx:
-    cmp di, 73                        ; --- the walk ------------------------
-    je .match
-    cmp di, 74
-    je .vlook
-    cmp di, 75
-    je .hlook
-    jmp sh_plklookup
-.match:
-    mov ax, [sh_lk_r2]                ; MATCH takes a vector: a single column
-    cmp ax, [sh_lk_r1]                ; walks down, anything else walks across
-    je .macross                       ; - which makes a 1x1 reference a row of
-    call sh_lkdown                    ; one, and both spellings work
-    jmp short .mpos
-.macross:
-    call sh_lkacross
-.mpos:
-    cmp word [sh_lk_got], 0
-    je .nomatch
-    mov ax, [sh_lk_pos]               ; the POSITION, 1-based, is the answer
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-    jmp .fin
-.vlook:
-    call sh_lkdown                    ; down the first column...
-    cmp word [sh_lk_got], 0
-    je .nomatch
-    mov ax, [sh_lk_idx]               ; ...then across to the wanted column
-    or ax, ax
-    jle .badidx
-    dec ax
-    add ax, [sh_lk_c1]
-    cmp ax, [sh_lk_c2]
-    ja .badidx
-    mov bx, [sh_lk_hit]
-    jmp short .fetch
-.hlook:
-    call sh_lkacross                  ; across the first row, then down
-    cmp word [sh_lk_got], 0
-    je .nomatch
-    mov ax, [sh_lk_idx]
-    or ax, ax
-    jle .badidx
-    dec ax
-    add ax, [sh_lk_r1]
-    cmp ax, [sh_lk_r2]
-    ja .badidx
-    mov bx, ax
-    mov ax, [sh_lk_hit]
-.fetch:
-    push ax                           ; an empty cell in the answer column is
-    push bx                           ; 0, the same rule INDEX follows
-    xor ax, ax
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-    pop bx
-    pop ax
-    call sh_getcell2
-    jmp short .fin
-.nomatch:
-    mov byte [sh_evalerr], SH_ERR_NA  ; #N/A is what "no match" IS - #VALUE!
-    jmp short .zero                   ; would say the arguments were wrong
-.badidx:
-    mov byte [sh_evalerr], SH_ERR_REF ; a column outside the range names no
-    jmp short .zero                   ; cell, exactly as INDEX's does
-.bad:
-    mov byte [sh_evalerr], SH_ERR_VALUE
-.zero:
-    xor ax, ax
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-.fin:
-    mov byte [sh_lk_busy], 0
-    jmp sh_plookup.close
-
-; -----------------------------------------------------------------------------
-; sh_lkdown / sh_lkacross - walk the reference's first column (row) comparing
-; each cell against the banked key. Preserves all registers.
-;
-; out: [sh_lk_got] = something matched, [sh_lk_hit] = the row (column) it is
-;      in, [sh_lk_pos] = its 1-based position along the vector.
-;
-; MATCH TYPE 0 IS EXACT AND ANYTHING ELSE IS APPROXIMATE: type 1 (the default,
-; and what VLOOKUP and HLOOKUP always do) keeps the LAST cell that is still
-; <= the key, which is the largest one not over it when the vector ascends;
-; type -1 keeps the last that is still >=. Excel says the vector must be
-; sorted, and an unsorted one gives an answer this makes no promise about
-; rather than an error - which is Excel's behaviour too.
-; -----------------------------------------------------------------------------
-; =============================================================================
-; sh_plklookup - LOOKUP, in both of the forms Excel gives it (SPEC.md 81.33).
-; Entered from sh_plksearch with the key and the first reference already
-; banked, so it shares that routine's exits.
-;
-;   LOOKUP(key, vector, result)  the VECTOR form: match along `vector`, answer
-;                                with the element of `result` at the same
-;                                POSITION - the two need not be the same shape
-;                                or even the same length
-;   LOOKUP(key, array)           the ARRAY form: search the array's first row
-;                                or column, whichever is longer, and answer
-;                                from its LAST one
-;
-; It is always approximate - there is no match-type argument - so the key
-; finds the largest entry not over it, and a key below every entry is #N/A.
-; =============================================================================
-sh_plklookup:
-    mov word [sh_lk_mt], 1            ; LOOKUP has no exact form
-    mov ax, [sh_lk_c2]                ; which way does the first reference
-    sub ax, [sh_lk_c1]                ; run? WIDER THAN TALL searches its row,
-    mov bx, [sh_lk_r2]                ; anything else its column - which makes
-    sub bx, [sh_lk_r1]                ; a single cell a column of one, and a
-    cmp ax, bx                        ; square array a set of columns, both as
-    ja .across                        ; Excel has them
-    call sh_lkdown
-    mov cx, 0                         ; CX = 0, the walk went DOWN
-    jmp short .found
-.across:
-    call sh_lkacross
-    mov cx, 1
-.found:
-    cmp word [sh_lk_got], 0
-    jne .fetch
-    jmp sh_plksearch.nomatch
-.fetch:
-    mov dx, [sh_lk_pos]               ; DX = the 1-based position
-    cmp word [sh_lk_has2], 0
-    jne .vector
-; --- the ARRAY form: the same array's last row or column ---------------------
-    or cx, cx
-    jz .arrdown
-    mov ax, [sh_lk_c1]                ; searched across: answer from the LAST
-    add ax, dx                        ; ROW, in the column that matched
-    dec ax
-    mov bx, [sh_lk_r2]
-    jmp short .read
-.arrdown:
-    mov ax, [sh_lk_c2]                ; searched down: the LAST COLUMN, in the
-    mov bx, [sh_lk_r1]                ; row that matched
-    add bx, dx
-    dec bx
-    jmp short .read
-; --- the VECTOR form: the result vector's Nth element ------------------------
-.vector:
-    mov ax, [sh_lk_2r2]
-    cmp ax, [sh_lk_2r1]
-    jne .vcol
-    mov ax, [sh_lk_2c1]               ; a result vector that is one ROW
-    add ax, dx
-    dec ax
-    cmp ax, [sh_lk_2c2]
-    ja .short
-    mov bx, [sh_lk_2r1]
-    jmp short .read
-.vcol:
-    mov bx, [sh_lk_2r1]               ; ...or one COLUMN
-    add bx, dx
-    dec bx
-    cmp bx, [sh_lk_2r2]
-    ja .short
-    mov ax, [sh_lk_2c1]
-.read:
-    push ax                           ; an empty cell answers 0, the rule
-    push bx                           ; INDEX and VLOOKUP both follow
-    xor ax, ax
-    call sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-    pop bx
-    pop ax
-    call sh_getcell2
-    jmp sh_plksearch.fin
-.short:
-    jmp sh_plksearch.nomatch          ; a result vector shorter than the
-                                       ; position found is #N/A: there is no
-                                       ; element to answer with, and a
-                                       ; silently clamped one would be a
-                                       ; different row's value
-
-sh_lkdown:
-    push ax
-    push bx
-    push cx
-    mov word [sh_lk_got], 0
-    mov word [sh_lk_pos], 0
-    xor cx, cx                        ; CX = the position, counted up
-    mov bx, [sh_lk_r1]
-.row:
-    cmp bx, [sh_lk_r2]
-    ja .out
-    inc cx
-    mov ax, [sh_lk_c1]
-    push ax
-    push bx
-    push cx
-    call sh_lkone
-    pop cx
-    pop bx
-    pop ax
-    jc .next
-    mov word [sh_lk_got], 1           ; THE WALKER RECORDS THE HIT, because it
-    mov [sh_lk_pos], cx               ; is the one that knows which axis it is
-    mov [sh_lk_hit], bx               ; on. A down-walk's hit is its ROW
-.next:
-    inc bx
-    jmp short .row
-.out:
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-sh_lkacross:
-    push ax
-    push bx
-    push cx
-    mov word [sh_lk_got], 0
-    mov word [sh_lk_pos], 0
-    xor cx, cx
-    mov ax, [sh_lk_c1]
-.col:
-    cmp ax, [sh_lk_c2]
-    ja .out
-    inc cx
-    mov bx, [sh_lk_r1]
-    push ax
-    push bx
-    push cx
-    call sh_lkone
-    pop cx
-    pop bx
-    pop ax
-    jc .next
-    mov word [sh_lk_got], 1
-    mov [sh_lk_pos], cx
-    mov [sh_lk_hit], ax               ; ...and an across-walk's is its COLUMN
-.next:
-    inc ax
-    jmp short .col
-.out:
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_lkone - should the cell at AX,BX be kept? out: CF=0 keep, CF=1 pass over.
-; Preserves every register: the walkers bank theirs anyway, because
-; sh_getcell2 recurses into a whole evaluation for a formula cell.
-;
-; [sh_lk_mt] IS THE MATCH TYPE AND [sh_lk_idx] IS NOT. They were one field for
-; one build, and VLOOKUP - whose third argument is a COLUMN NUMBER - then read
-; that column number as a match type: VLOOKUP(x, r, 2) did an exact match and
-; VLOOKUP(x, r, 0) an approximate one, both silently.
-; -----------------------------------------------------------------------------
-sh_lkone:
-    push ax
-    push bx
-    push cx
-    push dx
-    call sh_getcell2                  ; the value lands in sh_acc/sh_sacc and
-    call sh_lkcmp                     ; the tag in sh_curtype
-    jc .no                            ; blank, an error, or the other type
-    cmp word [sh_lk_mt], 0
-    je .exact
-    jg .asc
-    or ax, ax                         ; type -1: keep while the key is still
-    jle .yes                          ; at or above this cell
-    jmp short .no
-.asc:
-    or ax, ax                         ; type 1: keep while the key is still at
-    jge .yes                          ; or above this cell, so the LAST one
-    jmp short .no                     ; kept is the largest not over it
-.exact:
-    or ax, ax
-    jnz .no
-.yes:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_lkcmp - compare the banked key against the value sh_getcell2 just left.
-; out: AX = -1 key below the cell, 0 equal, 1 key above it; CF=1 = the two are
-;      not comparable and the cell sits the search out.
-;
-; A BLANK OR AN ERROR IS NEVER A CANDIDATE, and neither is a cell of the other
-; type: Excel ignores text while looking for a number and the reverse, which
-; is what lets a lookup table carry a header row without the search finding it.
-; -----------------------------------------------------------------------------
-sh_lkcmp:
-    push bx
-    push cx
-    push si
-    push di
-    mov al, [sh_curtype]
-    cmp al, SH_T_BLANK
-    je .no
-    cmp al, SH_T_ERR
-    je .no
-    mov bl, [sh_lk_kt]
-    cmp bl, SH_T_TEXT
-    je .text
-    cmp al, SH_T_TEXT                 ; a number key against a text cell
-    je .no
-    cmp bl, SH_T_BOOL                 ; ...and a LOGICAL matches only a
-    je .kbool                         ; logical, a number never one (81.51)
-    cmp al, SH_T_BOOL
-    je .no
-    jmp short .knum
-.kbool:
-    cmp al, SH_T_BOOL
-    jne .no
-.knum:
-    push si                           ; both numbers: the key into A, the
-    mov si, sh_lk_kv                  ; cell's value into B
-    call fp_unpack_a
-    mov si, sh_acc
-    call fp_unpack_b
-    pop si
-    call fp_cmpab
-    clc
-    jmp short .out
-.text:
-    cmp al, SH_T_TEXT                 ; a text key against a number cell
-    jne .no
-    mov si, sh_lk_ks
-    mov di, sh_sacc
-    call sh_lkstrcmp
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    ret
-
-; sh_lkstrcmp - SI against DI, case-insensitive; AX = -1/0/1. Preserves the
-; rest. Case-insensitive because Excel's lookups are: MATCH("abc",...) finds
-; "ABC", and EXACT is the function that does not.
+; sh_lkstrcmp / sh_lkup - case-insensitive string compare, AX = -1/0/1.
+; 81.75: these came out of the LOOKUP family with the rest of it and had to go
+; straight back: the general comparison operator uses them whenever both sides
+; of a `<` or `=` are text, which has nothing to do with lookups.
 sh_lkstrcmp:
     push bx
     push cx
@@ -16565,7 +15944,6 @@ sh_lkstrcmp:
     pop bx
     ret
 
-; sh_lkup - AL to upper case. Preserves everything else.
 sh_lkup:
     cmp al, 'a'
     jb .out
@@ -16575,152 +15953,6 @@ sh_lkup:
 .out:
     ret
 
-section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
-; =============================================================================
-; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
-; question about what an argument IS rather than what it is worth, so each is
-; one sh_pargclass call and a comparison.
-;
-; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
-; =============================================================================
-shm_pinfo:
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, ax                        ; DI = the id; sh_pargclass clobbers
-    cmp di, 33                        ; everything else. NA() is the one that
-    je .na                            ; takes no argument at all
-    call sh_pargclass
-    mov bl, [sh_argtype]
-    mov bh, [sh_argaux]
-    cmp di, 34
-    je .type
-    cmp di, 35
-    je .n
-    cmp di, 36
-    je .errtype
-    xor ax, ax                        ; every remaining id answers TRUE or
-    cmp di, 25                        ; FALSE, and FALSE is the default
-    je .isblank
-    cmp di, 26
-    je .isnumber
-    cmp di, 27
-    je .istext
-    cmp di, 107
-    je .isnontext
-    cmp di, 28
-    je .islogical
-    cmp di, 29
-    je .iserror
-    cmp di, 30
-    je .iserr
-    cmp di, 31
-    je .isna
-    cmp byte [sh_argisref], 0         ; 32 ISREF - the one question only
-    je .close                         ; sh_pargref can answer
-    jmp .yes
-.isblank:
-    cmp bl, SH_T_BLANK
-    je .yes
-    jmp .close
-.isnumber:
-    cmp bl, SH_T_NUM
-    je .yes
-    jmp .close
-.istext:
-    cmp bl, SH_T_TEXT
-    je .yes
-    jmp .close
-.isnontext:
-    cmp bl, SH_T_TEXT                 ; ISNONTEXT is TRUE for everything that
-    je .close                         ; is not text - a BLANK included, which
-    jmp .yes                          ; is where it differs from NOT(ISTEXT())
-                                      ; in Excel too
-.islogical:
-    cmp bl, SH_T_BOOL                 ; a comparison, a logical function or
-    je .yes                           ; a logical constant (81.51). Nothing
-    jmp .close                        ; produced one before, and this was
-                                      ; FALSE for everything
-.iserror:
-    cmp bl, SH_T_ERR
-    je .yes
-    jmp .close
-.iserr:
-    cmp bl, SH_T_ERR                  ; ISERR is ISERROR MINUS #N/A, and that
-    jne .close                        ; distinction is the only reason both
-    cmp bh, SH_ERR_NA                 ; exist
-    je .close
-    jmp .yes
-.isna:
-    cmp bl, SH_T_ERR
-    jne .close
-    cmp bh, SH_ERR_NA
-    jne .close
-.yes:
-    mov ax, 1
-    jmp .close
-.type:
-    mov ax, 1                         ; Excel's own numbering: 1 number,
-    cmp bl, SH_T_TEXT                 ; 2 text, 4 logical, 16 error. A BLANK
-    jne .ty1                          ; cell is a 1 there too
-    mov ax, 2
-    jmp .close
-.ty1:
-    cmp bl, SH_T_BOOL
-    jne .ty2
-    mov ax, 4
-    jmp .close
-.ty2:
-    cmp bl, SH_T_ERR
-    jne .close
-    mov ax, 16
-    jmp .close
-.errtype:
-    cmp bl, SH_T_ERR                  ; THE SH_ERR_* CODES ARE Excel's OWN
-    jne .errna                        ; ERROR.TYPE NUMBERS - they were numbered
-    xor ah, ah                        ; that way when error values landed,
-    mov al, bh                        ; precisely so this could be a copy
-    jmp .close
-.errna:
-    mov byte [sh_evalerr], SH_ERR_NA  ; ERROR.TYPE of something that is not an
-    xor ax, ax                        ; error is #N/A, not zero
-    jmp .close
-.na:
-    mov byte [sh_evalerr], SH_ERR_NA
-    xor ax, ax
-    jmp .close
-.n:
-    cmp bl, SH_T_NUM                  ; N() passes a NUMBER through unchanged,
-    je .nnum                          ; fraction and all, so it cannot leave by
-    cmp bl, SH_T_ERR                  ; the integer path the rest of these use
-    jne .nzero
-    mov [sh_evalerr], bh              ; N of an error IS that error
-.nzero:
-    xor ax, ax
-    SHOUT sh_acc_int
-.nnum:
-    SHOUT sh_acc_toint
-    jmp .step
-.close:
-    SHOUT sh_acc_int
-.step:
-    cmp byte [si], ')'
-    jne .out
-    inc si
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-section .text
-; -----------------------------------------------------------------------------
-; sh_ins_at - in: DI = where in sh_numbuf to insert, AL = the byte. Everything
-; from DI to the NUL moves right one, the NUL included. The building block
-; both the thousands grouping and TEXT's leading zeros are made of.
-; -----------------------------------------------------------------------------
 sh_ins_at:
     push ax
     push bx
@@ -17819,153 +17051,6 @@ sh_bcd2bin:
 ; blocked on nobody having looked past os88api.inc (81.42).
 ;
 ; in: AX = the id, SI just past '('. out: AX = the value, SI past ')'.
-; -----------------------------------------------------------------------------
-sh_pdate:
-    push bx
-    push cx
-    push dx
-    push di
-    mov di, ax
-    cmp di, 58
-    je .fdate
-    cmp di, 63
-    je .ftime
-    cmp di, 67
-    je .fdatevalue
-    cmp di, 68
-    je .ftimevalue
-    ; 59..62, 64..66 all take one serial
-    call sh_pcmp
-    cmp di, 64
-    jae .timepart
-    call sh_acc_toudw                 ; the whole days
-    jc .zeroout
-    mov bx, ax
-    cmp di, 62
-    je .fweekday
-    call sh_ser_to_ymd
-    mov ax, [sh_dt_d]
-    cmp di, 59
-    je .close
-    mov ax, [sh_dt_m]
-    cmp di, 60
-    je .close
-    mov ax, [sh_dt_y]                 ; 61 YEAR
-    jmp .close
-.fweekday:
-    mov ax, bx                        ; 1 = Sunday, which is Excel's numbering
-    add ax, 6                         ; and its own serial 1 (a Sunday there)
-    xor dx, dx
-    mov bx, 7
-    div bx
-    mov ax, dx
-    inc ax
-    jmp .close
-
-; ---- HOUR / MINUTE / SECOND, off the same split ----------------------------
-.timepart:
-    call sh_dt_hms                    ; sh_dt_min = minutes, AX = seconds
-    cmp di, 66
-    je .close                         ; 66 SECOND is already in AX
-    mov ax, [sh_dt_min]
-    xor dx, dx
-    mov bx, 60
-    div bx                            ; AX = hours, DX = minutes within it
-    cmp di, 64
-    je .close                         ; 64 HOUR
-    mov ax, dx                        ; 65 MINUTE
-    jmp .close
-
-; ---- DATE(year, month, day) ------------------------------------------------
-.fdate:
-    call sh_parg
-    mov [sh_dt_y], ax
-    cmp ax, 1900                      ; a two-digit year is 19xx, as it is in
-    jae .dy4                          ; Excel 2.1 - the app predates the
-    cmp ax, 0                         ; question of what 00 means
-    jl .zeroout
-    add word [sh_dt_y], 1900
-.dy4:
-    cmp byte [si], ','
-    jne .zeroout
-    inc si
-    call sh_parg
-    mov [sh_dt_m], ax
-    cmp byte [si], ','
-    jne .zeroout
-    inc si
-    call sh_parg
-    mov [sh_dt_d], ax
-    call sh_ymd_to_ser
-    jc .numerr
-    call sh_acc_fromudw
-    jmp .closed
-
-; ---- TIME(hour, minute, second) --------------------------------------------
-.ftime:
-    call sh_parg
-    mov bx, ax                        ; hours
-    cmp byte [si], ','
-    jne .zeroout
-    inc si
-    call sh_parg
-    mov cx, ax                        ; minutes
-    cmp byte [si], ','
-    jne .zeroout
-    inc si
-    call sh_parg
-    mov dx, ax                        ; seconds
-    call sh_hms_to_acc
-    jmp .closed
-
-; ---- DATEVALUE / TIMEVALUE -------------------------------------------------
-.fdatevalue:
-    call sh_pstrarg
-    call sh_dt_parse3                 ; BX/CX/DX = the three fields
-    jc .numerr
-    mov [sh_dt_y], dx
-    mov ax, dx
-    cmp ax, 1900
-    jae .dv4
-    add word [sh_dt_y], 1900
-.dv4:
-    mov [sh_dt_m], bx
-    mov [sh_dt_d], cx
-    call sh_ymd_to_ser
-    jc .numerr
-    call sh_acc_fromudw
-    jmp .closed
-.ftimevalue:
-    call sh_pstrarg
-    call sh_dt_parse3
-    jc .numerr
-    call sh_hms_to_acc                ; BX/CX/DX are already h/m/s
-    jmp .closed
-
-.numerr:
-    mov byte [sh_evalerr], SH_ERR_VALUE  ; Excel's own answer for a date it
-.zeroout:                                ; cannot make sense of
-    xor ax, ax
-.close:
-    call sh_acc_int
-.closed:
-    mov byte [sh_curtype], SH_T_NUM
-    call sh_acc_toint
-    cmp byte [si], ')'
-    jne .out
-    inc si
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_hms_to_acc - BX/CX/DX = hours/minutes/seconds -> sh_acc as a fraction of
-; a day. The three are summed as SECONDS first, in 32 bits, because
-; 24 hours is 86,400 and a word stops at 65,535 - and Excel allows more than
-; 24 hours in, rolling it into the day count.
 ; -----------------------------------------------------------------------------
 sh_hms_to_acc:
     push ax
@@ -20853,27 +19938,6 @@ sh_f_errtype:  db 'ERROR.TYPE', 0     ; the only name here with a '.' in it,
                                        ; for
 ; stage 4.5: the TEXT functions - Excel 2.1's own category, less the seven
 ; that search and format
-sh_f_len:      db 'LEN', 0
-sh_f_left:     db 'LEFT', 0
-sh_f_right:    db 'RIGHT', 0
-sh_f_mid:      db 'MID', 0
-sh_f_upper:    db 'UPPER', 0
-sh_f_lower:    db 'LOWER', 0
-sh_f_proper:   db 'PROPER', 0
-sh_f_trim:     db 'TRIM', 0
-sh_f_rept:     db 'REPT', 0
-sh_f_char:     db 'CHAR', 0
-sh_f_code:     db 'CODE', 0
-sh_f_exact:    db 'EXACT', 0
-sh_f_t:        db 'T', 0
-sh_f_value:    db 'VALUE', 0
-sh_f_find:     db 'FIND', 0
-sh_f_search:   db 'SEARCH', 0
-sh_f_subst:    db 'SUBSTITUTE', 0
-sh_f_replace:  db 'REPLACE', 0
-sh_f_text:     db 'TEXT', 0
-sh_f_dollar:   db 'DOLLAR', 0
-sh_f_fixed:    db 'FIXED', 0
 ; stage 4.5: the DATE and TIME functions. NOW() is absent and sh_pdate's
 ; header says why - no kernel call publishes the calendar date.
 sh_f_date:     db 'DATE', 0
@@ -20889,29 +19953,8 @@ sh_f_datevalue: db 'DATEVALUE', 0
 sh_f_timevalue: db 'TIMEVALUE', 0
 sh_f_now:      db 'NOW', 0
 sh_f_isnontext: db 'ISNONTEXT', 0
-sh_f_clean:    db 'CLEAN', 0
 sh_f_rand:     db 'RAND', 0
 sh_f_indirect: db 'INDIRECT', 0
-sh_f_goto:      db 'GOTO', 0
-sh_f_return:    db 'RETURN', 0
-sh_f_halt:      db 'HALT', 0
-sh_f_setvalue:  db 'SET.VALUE', 0
-sh_f_select:    db 'SELECT', 0
-sh_f_formula:   db 'FORMULA', 0
-sh_f_alert:     db 'ALERT', 0
-sh_f_message:   db 'MESSAGE', 0
-sh_f_beep:      db 'BEEP', 0
-sh_f_input:     db 'INPUT', 0
-sh_f_for:       db 'FOR', 0
-sh_f_while:     db 'WHILE', 0
-sh_f_next:      db 'NEXT', 0
-sh_f_break:     db 'BREAK', 0
-sh_f_actcell:   db 'ACTIVE.CELL', 0
-sh_f_copy:      db 'COPY', 0
-sh_f_cut:       db 'CUT', 0
-sh_f_paste:     db 'PASTE', 0
-sh_f_clear:     db 'CLEAR', 0
-sh_f_calcnow:   db 'CALCULATE.NOW', 0
 sh_f_rows:      db 'ROWS', 0
 sh_f_columns:   db 'COLUMNS', 0
 sh_f_areas:     db 'AREAS', 0
@@ -20924,58 +19967,20 @@ sh_f_var:       db 'VAR', 0
 sh_f_varp:      db 'VARP', 0
 sh_f_stdev:     db 'STDEV', 0
 sh_f_stdevp:    db 'STDEVP', 0
-sh_f_ln:        db 'LN', 0
-sh_f_log10:     db 'LOG10', 0
-sh_f_exp:       db 'EXP', 0
-sh_f_pi:        db 'PI', 0
-sh_f_log:       db 'LOG', 0
-sh_f_sin:       db 'SIN', 0
-sh_f_cos:       db 'COS', 0
-sh_f_tan:       db 'TAN', 0
-sh_f_asin:      db 'ASIN', 0
-sh_f_acos:      db 'ACOS', 0
-sh_f_atan:      db 'ATAN', 0
-sh_f_atan2:     db 'ATAN2', 0
-sh_f_sln:       db 'SLN', 0
-sh_f_syd:       db 'SYD', 0
-sh_f_pmt:       db 'PMT', 0
-sh_f_pv:        db 'PV', 0
-sh_f_fv:        db 'FV', 0
-sh_f_npv:       db 'NPV', 0
-sh_f_nper:      db 'NPER', 0
-sh_f_ddb:       db 'DDB', 0
-sh_f_ipmt:      db 'IPMT', 0
-sh_f_ppmt:      db 'PPMT', 0
-sh_f_rate:      db 'RATE', 0
-sh_f_irr:       db 'IRR', 0
-sh_f_mirr:      db 'MIRR', 0
 ; 81.65: the DATABASE functions, in the same order sh_db_foldkind reads them
-sh_f_daverage:  db 'DAVERAGE', 0
-sh_f_dcount:    db 'DCOUNT', 0
-sh_f_dcounta:   db 'DCOUNTA', 0
-sh_f_dmax:      db 'DMAX', 0
-sh_f_dmin:      db 'DMIN', 0
-sh_f_dproduct:  db 'DPRODUCT', 0
-sh_f_dstdev:    db 'DSTDEV', 0
-sh_f_dstdevp:   db 'DSTDEVP', 0
-sh_f_dsum:      db 'DSUM', 0
-sh_f_dvar:      db 'DVAR', 0
-sh_f_dvarp:     db 'DVARP', 0
-sh_f_cell:      db 'CELL', 0          ; 81.66
 ; 81.67: the ARRAY/MATRIX functions
-sh_f_mdeterm:   db 'MDETERM', 0
-sh_f_minverse:  db 'MINVERSE', 0
-sh_f_mmult:     db 'MMULT', 0
-sh_f_transpose: db 'TRANSPOSE', 0
-sh_f_linest:    db 'LINEST', 0
-sh_f_logest:    db 'LOGEST', 0
-sh_f_trend:     db 'TREND', 0
-sh_f_growth:    db 'GROWTH', 0
 sh_dt_mlen:    db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 sh_snull:      db 0                   ; sh_sslot's answer for a read below the
                                        ; bottom of the string stack
 
 ; sh_functab - the id is the INDEX. 0 terminates.
+; 81.75: A NAME NOTHING CAN ANSWER POINTS AT AN EMPTY STRING. An id is this
+; table's own index, so an entry cannot be removed without renumbering every
+; family after it - but the NAME can go, and sh_funcid compares typed
+; identifiers, which are never empty, so sh_fgone can never match. That is
+; every name of the seven families whose bodies are cut, at the cost of one
+; byte shared between them.
+sh_fgone:     db 0
 sh_functab:
     dw sh_f_sum, sh_f_average, sh_f_min, sh_f_max, sh_f_count
     dw sh_f_if, sh_f_not, sh_f_abs, sh_f_and, sh_f_or
@@ -20985,37 +19990,37 @@ sh_functab:
     dw sh_f_isblank, sh_f_isnumber, sh_f_istext, sh_f_islogicl, sh_f_iserror
     dw sh_f_iserr, sh_f_isna, sh_f_isref, sh_f_na, sh_f_type
     dw sh_f_n, sh_f_errtype
-    dw sh_f_len, sh_f_left, sh_f_right, sh_f_mid, sh_f_upper
-    dw sh_f_lower, sh_f_proper, sh_f_trim, sh_f_rept, sh_f_char
-    dw sh_f_code, sh_f_exact, sh_f_t, sh_f_value
-    dw sh_f_find, sh_f_search, sh_f_subst, sh_f_replace, sh_f_text
-    dw sh_f_dollar, sh_f_fixed
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone
     dw sh_f_date, sh_f_day, sh_f_month, sh_f_year, sh_f_weekday
     dw sh_f_time, sh_f_hour, sh_f_minute, sh_f_second, sh_f_datevalue
     dw sh_f_timevalue
     dw sh_f_rows, sh_f_columns, sh_f_areas, sh_f_index
     dw sh_f_match, sh_f_vlookup, sh_f_hlookup, sh_f_lookup
     dw sh_f_var, sh_f_varp, sh_f_stdev, sh_f_stdevp
-    dw sh_f_ln, sh_f_log10, sh_f_exp, sh_f_pi, sh_f_log
-    dw sh_f_sin, sh_f_cos, sh_f_tan, sh_f_asin, sh_f_acos
-    dw sh_f_atan, sh_f_atan2
-    dw sh_f_sln, sh_f_syd, sh_f_pmt, sh_f_pv, sh_f_fv, sh_f_npv
-    dw sh_f_nper, sh_f_ddb, sh_f_ipmt, sh_f_ppmt, sh_f_rate
-    dw sh_f_irr, sh_f_mirr
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone
+    dw sh_fgone, sh_fgone
     dw sh_f_now                       ; 106 (81.42)
-    dw sh_f_isnontext, sh_f_clean, sh_f_rand   ; 107 108 109 (81.43)
+    dw sh_f_isnontext, sh_fgone, sh_f_rand   ; 107 108 109 (81.43)
     dw sh_f_indirect                  ; 110 (81.44)
-    dw sh_f_goto, sh_f_return, sh_f_halt, sh_f_setvalue, sh_f_select ; 111- :
-    dw sh_f_formula, sh_f_alert, sh_f_message, sh_f_beep, sh_f_input  ; the
-    dw sh_f_for, sh_f_while, sh_f_next, sh_f_break, sh_f_actcell     ; MACRO
-    dw sh_f_copy, sh_f_cut, sh_f_paste, sh_f_clear, sh_f_calcnow     ; (81.63)
-    dw sh_f_daverage, sh_f_dcount, sh_f_dcounta, sh_f_dmax, sh_f_dmin ; 131- :
-    dw sh_f_dproduct, sh_f_dstdev, sh_f_dstdevp, sh_f_dsum, sh_f_dvar ; the
-    dw sh_f_dvarp                                                    ; DATABASE
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone ; 111- :
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone  ; the
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone     ; MACRO
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone     ; (81.63)
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone ; 131- :
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone, sh_fgone ; the
+    dw sh_fgone                                                    ; DATABASE
                                                                       ; functions (81.65)
-    dw sh_f_cell                      ; 142 (81.66)
-    dw sh_f_mdeterm, sh_f_minverse, sh_f_mmult, sh_f_transpose        ; 143- :
-    dw sh_f_linest, sh_f_logest, sh_f_trend, sh_f_growth              ; ARRAY/
+    dw sh_fgone                      ; 142 (81.66)
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone        ; 143- :
+    dw sh_fgone, sh_fgone, sh_fgone, sh_fgone              ; ARRAY/
                                                                       ; MATRIX (81.67)
     dw 0
 sh_functab_end:
@@ -21499,7 +20504,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3990                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3840                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -21812,22 +20817,8 @@ sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
 sh_a1style      equ sh_mchk + 1             ; byte: 0 = A1, 1 = R1C1 - what
                                              ; the reference box and Goto show
 ; --- stage 3.0c: the list dialog ---
-sh_ldlg_win     equ sh_a1style + 1
-sh_ldlg_kind    equ sh_ldlg_win + 2
-sh_ldlg_sel     equ sh_ldlg_kind + 1
-sh_ldlg_top     equ sh_ldlg_sel + 2          ; first visible row
-sh_ldlg_count   equ sh_ldlg_top + 2
-sh_ldlg_items   equ sh_ldlg_count + 2        ; -> the pointer array in use
-sh_ldlg_ox      equ sh_ldlg_items + 2
-sh_ldlg_oy      equ sh_ldlg_ox + 2
-sh_ldlg_i       equ sh_ldlg_oy + 2           ; the paint loop's row counter
-sh_ldlg_idx     equ sh_ldlg_i + 2            ; ...and the item it maps to
-sh_ldlg_rowy    equ sh_ldlg_idx + 2
-sh_ldlg_rect    equ sh_ldlg_rowy + 2         ; 8: os88ui_btn takes a POINTER
-sh_ldsb         equ sh_ldlg_rect + 8         ; 14: os88ui_sbar's seven words
-sh_ldlg_src     equ sh_ldsb + 14             ; -> the string being pasted
 ; --- stage 3.0c: defined names ---
-sh_nnames       equ sh_ldlg_src + 2
+sh_nnames         equ sh_a1style + 1
 sh_names        equ sh_nnames + 2            ; SH_NAME_CAP * SH_NAME_REC
 sh_nameptr      equ sh_names + SH_NAME_CAP * SH_NAME_REC   ; SH_NAME_CAP words
 sh_nm_buf       equ sh_nameptr + SH_NAME_CAP * 2           ; SH_NAME_MAX+1
@@ -22148,7 +21139,6 @@ sh_blitdel        equ sh_blity2 + 2    ; ...and its signed row delta
 ; evaluation for any formula cell it lands on - which is exactly why 81.23's
 ; sh_arg1col/sh_arg1row are not sh_r1col/sh_r1row. Everything the scan needs
 ; across that call is banked here, out of the parser's reach.
-sh_lk_busy    equ sh_blitdel + 2      ; byte: a search is running. The key is
                                        ; 65 bytes and the task stack is 384
                                        ; (20.6 rule 6), so banking it per
                                        ; nesting level is not available -
@@ -22156,26 +21146,9 @@ sh_lk_busy    equ sh_blitdel + 2      ; byte: a search is running. The key is
                                        ; searched range REFUSES instead (47),
                                        ; which is a stated limit rather than
                                        ; a silently wrong answer
-sh_lk_kt      equ sh_lk_busy + 2      ; byte: the key's SH_T_*
-sh_lk_kv      equ sh_lk_kt + 2        ; 8: ...its value, if a number
-sh_lk_ks      equ sh_lk_kv + 8        ; SH_STR_MAX+1: ...or its text
-sh_lk_c1      equ sh_lk_ks + SH_STR_MAX + 1
-sh_lk_r1      equ sh_lk_c1 + 2        ; the reference's corners, banked out of
-sh_lk_c2      equ sh_lk_r1 + 2        ; sh_arg*col/row for the reason above
-sh_lk_r2      equ sh_lk_c2 + 2
-sh_lk_idx     equ sh_lk_r2 + 2        ; VLOOKUP/HLOOKUP's column or row, or
                                        ; MATCH's match type
-sh_lk_hit     equ sh_lk_idx + 2       ; the best row (or column) so far...
-sh_lk_pos     equ sh_lk_hit + 2       ; ...and its 1-based position
-sh_lk_got     equ sh_lk_pos + 2       ; word: anything matched at all
-sh_lk_mt      equ sh_lk_got + 2       ; word: MATCH's match type, which is NOT
                                        ; sh_lk_idx - see sh_lkone
-sh_lk_has2    equ sh_lk_mt + 2        ; word: LOOKUP was given a RESULT vector
-sh_lk_2c1     equ sh_lk_has2 + 2      ; ...and its corners, banked for the
-sh_lk_2r1     equ sh_lk_2c1 + 2       ; same reason the first reference's are
-sh_lk_2c2     equ sh_lk_2r1 + 2
-sh_lk_2r2     equ sh_lk_2c2 + 2
-sh_pacc2      equ sh_lk_2r2 + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
+sh_pacc2          equ sh_blitdel + 2       ; 8: the SUM OF SQUARES, beside sh_pacc's
                                        ; sum, for the variance folds (81.34)
 sh_tr0        equ sh_pacc2 + 8        ; 8 } two packed doubles that survive a
 sh_fnarg          equ sh_tr0 + 8          ; 6 x 8: the financial functions' parsed
