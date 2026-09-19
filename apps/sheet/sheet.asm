@@ -209,7 +209,17 @@
 ; Geometry / grid / storage constants
 ; =============================================================================
 SH_COLS      equ 256                ; the roadmap's stage 1.2 ceiling
+%ifdef PLAN
+; 81.75: 256 x 2048. The grid size does not drive the cells claim - the array
+; is SPARSE, so what it costs is the OCCUPIED cells - but a budget that needs
+; row 2049 is not a budget, and a smaller ceiling is what lets the row header
+; stay four digits wide. SH_ROW_BITS is unchanged at 14: the packed key has
+; room for 16384 either way, and narrowing it would be a second change with
+; no second benefit.
+SH_ROWS      equ 2048
+%else
 SH_ROWS      equ 16384
+%endif
 ; stage 2.x: Format > Column Width.../Row Height... make these RUNTIME
 ; values (sh_cellw/sh_cellh/sh_cellch bss words) rather than compile-time
 ; constants. Stage 3.0c made both dialogs real numeric entry (sh_idlg_*, over
@@ -286,6 +296,25 @@ SH_RW_CAP    equ 80                  ; stage 2.x: sh_formula_reidx's own
                                      ; col Z->AA), so a little more than
                                      ; SH_EDITMAX+1
 
+; 81.75's CLAIM LADDER. §24.5.2 is why SHEET is not on the 128KB machine:
+; 32KB of cells alone is nearly twice the largest single run that machine can
+; hand out (§50.6.2), and a package that merely wants heap can refuse itself
+; in its own words - which is a refusal, not a spreadsheet. Every figure below
+; is sized from what a BUDGET holds rather than from what a sheet could.
+%ifdef PLAN
+SH_CLAIM_CELLS_KB equ 8             ; 409 records of 20 bytes. A twelve-month
+                                    ; budget of thirty rows is about 400
+SH_CLAIM_TXT_KB   equ 2             ; formula text only: no notes here
+SH_CLAIM_STG_KB   equ 16            ; file I/O staging. NOT the 2KB the plan
+                                    ; first wrote: the readers take a whole
+                                    ; file into this buffer in one
+                                    ; OSAPI_FILE_READ, so it is the DOCUMENT
+                                    ; size and not a streaming window, and a
+                                    ; 409-cell SYLK is about 15KB. What Sort's
+                                    ; going buys is the 32KB its own layout
+                                    ; forced (offsets to 30,720), not the
+                                    ; buffer itself
+%else
 SH_CLAIM_CELLS_KB equ 32            ; -> SH_CELL_CAP records of SH_C_SZ.
                                     ; Doubled with the widening: 20 bytes in
                                     ; 16KB would have DROPPED capacity to 819,
@@ -294,6 +323,7 @@ SH_CLAIM_TXT_KB   equ 8             ; formula text arena (used from the next
                                      ; pass on; claimed now so entry needs no
                                      ; second edit)
 SH_CLAIM_STG_KB   equ 32            ; file I/O staging
+%endif
 ; sh_docmd_sortcol's own layout within sh_stgseg (stage 2.x: formula cells
 ; now participate in the sort too, so alongside the original rows[]/
 ; values[] arrays it also needs a source-index permutation, an
@@ -364,12 +394,16 @@ SH_CHART_D1  equ 1024               ; stage 4.6: and where the DOUBLES the scan
 SH_CHART_D2  equ 1536               ; collects sit, before ch_scale turns them
                                     ; into the two word arrays above. Same 512
                                     ; spacing; CH_MAXBARS doubles is 320
+%ifdef PLAN
+SH_CLAIM_UNDO_KB  equ 8             ; 81.75: half of SHEET's, for a quarter of
+%else                               ; the cells - and STILL optional
 SH_CLAIM_UNDO_KB  equ 16            ; 81.57: Edit > Undo's snapshot - the cells,
                                      ; borders, notes and widths as they were
                                      ; before the last undoable command. SHEET's
                                      ; EIGHTH claim, and OPTIONAL: without it
                                      ; Undo stays "Can't Undo" and nothing else
                                      ; changes
+%endif
 SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; offscreen 4bpp canvas - 240x160px, 120
                                      ; bytes/row (already a multiple of 4, so
@@ -491,9 +525,15 @@ SH_S_SZ      equ 20                 ; ...and the code says SH_S_SZ where it
                                     ; means this, so changing it is a change
                                     ; to ONE layout and not silently to both
 
+%ifdef PLAN
+SH_CELL_CAP  equ 409                ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
+SH_TXT_CAP   equ 2048               ; SH_CLAIM_TXT_KB in bytes
+SH_STAGE_MAX equ 16384
+%else
 SH_CELL_CAP  equ 1638               ; floor(SH_CLAIM_CELLS_KB*1024 / SH_C_SZ)
 SH_TXT_CAP   equ 8192               ; SH_CLAIM_TXT_KB in bytes
 SH_STAGE_MAX equ 32768
+%endif
 SH_BT_SZ     equ 6                  ; the border table's record (81.55): row,
                                     ; col, the border+protection byte, and
                                     ; the number format beyond the four the
