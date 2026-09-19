@@ -10246,6 +10246,33 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # has been shipping a module for two absent applications, which the filter
 # above only ever removed half of. It cost 37 clusters of 354 silently until
 # 81.74.2 grew the module past what was left.
+# --- PLAN (SPEC.md 81.75) ----------------------------------------------------
+# The same source as SHEET with -DPLAN: one file, no overlay, claims sized for
+# the 128KB floor machine. Built into its own directory the way $(SMALLAPPDIR)
+# is, and NOT in `all` until the cut list lands.
+PLANDIR := $(BUILD)/planapp
+$(PLANDIR)/plan.bin: apps/sheet/sheet.asm apps/os88api.inc apps/os88fp.inc \
+                     apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+                     apps/os88chart.inc apps/os88chartovl.inc
+	@mkdir -p $(PLANDIR)
+	$(NASM) -f bin -w+error -I apps/ -DPLAN -o $@ apps/sheet/sheet.asm
+
+# PLAN CANNOT BE PACKAGED YET AND THE REASON IS THE WHOLE PROBLEM. While
+# PLAN_ONEFILE is unset this source still emits a .modc section, so the
+# header's image-size field describes the resident half and os88pkg refuses
+# the file - the same fact, one layer up, as the 64KB segment overflow that
+# stops the tenants simply being made resident. So the target REPORTS THE
+# SPLIT instead: resident + module is what has to fall under 64KB before the
+# switch can be thrown, and that number is the cut list's meter until then.
+.PHONY: plan
+plan: $(PLANDIR)/plan.bin
+	@python3 tools/os88ovl.py $(PLANDIR)/plan.bin -o $(PLANDIR)/PLAN.OVL \
+		--trim $(PLANDIR)/plan.trim.bin
+	@r=$$(wc -c < $(PLANDIR)/plan.trim.bin); m=$$(wc -c < $(PLANDIR)/PLAN.OVL); \
+	 echo "plan: resident $$r + module $$m = $$((r+m)) bytes"; \
+	 echo "plan: one file needs resident+module+bss under 65536"; \
+	 echo "plan: to go: $$((r+m+8104-65536)) bytes"
+
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
                                $(BUILD)/CHART.OVL,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)

@@ -72,11 +72,66 @@
 ; 53,713 bytes rather than 49,264 plus a file. That switch is the only way to
 ; tell an overlay-wiring bug from a drawing bug; it is worth keeping working.
 ; -----------------------------------------------------------------------------
-%define CH_OVERLAY
+; =============================================================================
+; PLAN - THE SECOND PRODUCT OF THIS SOURCE (SPEC.md 81.75)
+;
+; `-DPLAN` builds a spreadsheet sized for a 360KB floppy and the 128KB floor
+; machine: one file, no overlay, every heap claim under the 17.5KB largest run
+; that machine can hand out (§50.6.2). SHEET cannot go there and never could -
+; its cells claim alone is 32KB - which is what §24.5.2 argues at length and
+; why `$(SMALLOMIT)` carries its name.
+;
+; ONE SOURCE, TWO PRODUCTS, TWO NAMES. The mechanism is `make smallapps`'s
+; (`-DAPP_SMALL`, six packages) with the package name changed as well, which is
+; what keeps §73.12 satisfied - two things may not answer to one name - while
+; still sharing as SOURCE rather than as a copy (WEAVE-SPEC §1.2).
+;
+; THIS BLOCK IS AT THE TOP AND MUST STAY THERE. NASM's preprocessor is one
+; pass, so a `%ifdef` is answered WHERE IT SITS, and the bodies these flags
+; gate are thousands of lines below. Defined any lower, every test above reads
+; false and the package assembles calls to routines that were cut out of the
+; image - which froze the whole VM the one time this file got it wrong (the
+; `CH_OVERLAY` note above is that story). Every gated body below tests the
+; FEATURE flag, never `PLAN` itself.
+; =============================================================================
+%ifndef PLAN
+  %define SHF_CHART                  ; the live chart window and its 19KB canvas
+  %define SHF_MACRO                  ; the macro language, and 81.74's recorder
+  %define SHF_DB                     ; the DATABASE functions and the Data menu
+  %define SHF_BORD                   ; borders, and their 4KB table
+  %define SHF_NOTE                   ; cell notes, and their 5KB table
+  %define SHF_PROT                   ; cell protection
+  %define SHF_SHEETS                 ; the four sheets in one instance
+  %define SHF_BIFF                   ; BIFF, DIF and dBASE (SYLK and CSV stay)
+  %define SHF_MATRIX                 ; the array/matrix family, and CELL
+  %define SHF_FIN                    ; the financial family
+  %define SHF_TRIG                   ; SIN..LOG (SQRT stays either way)
+  %define SHF_SORT                   ; Data > Sort and its 30KB staging layout
+  %define SHF_DRAG                   ; every gesture kern_small's WM_ONDRAG
+                                      ; refuses: drag-select, thumb drag, and
+                                      ; 81.73.2's resize by the heading
+%endif
+
+; The overlay is SHEET's alone: PLAN is one file, so SHOUT becomes a near call
+; (see the macro above) and the chart module never exists.
+%define CH_OVERLAY                  ; the chart module goes to CHART.OVL
+
+; PLAN_ONEFILE IS NOT SET YET AND MUST NOT BE UNTIL THE CUTS LAND. Assembling
+; this source with every .modc tenant resident overflows the 64KB SEGMENT
+; before it overflows anything else - `dw OS88_IMAGE_SIZE` in the package
+; header is the first thing to fail, and a bss offset past 65535 the second.
+; That is not a detail: it is the overlay's whole reason, and it means PLAN
+; cannot be measured as "SHEET, resident" even once. The Tier-1 gates below
+; come first; the switch is thrown when the total fits.
 
 %include "os88api.inc"
 
-    OS88_HEADER 'SHEET', sh_entry, 3   ; bit 0 = icon, bit 1 = the
+%ifdef PLAN
+    OS88_HEADER 'PLAN', sh_entry, 3    ; 81.75. A package NAME is a literal
+%else                                   ; here, not a %define: OS88_HEADER
+    OS88_HEADER 'SHEET', sh_entry, 3   ; packs it, and an indirected one comes
+%endif                                  ; through as a number
+                                        ; bit 0 = icon, bit 1 = the
                                         ; association block below
 
 ; --- embedded 16x16 icon: a blank page with a 3x3 grid on it -------------------
@@ -762,7 +817,14 @@ SH_NSEGW equ 9
   %endif
 %endmacro
 
-%define SH_FMT_OVL
+%ifndef PLAN_ONEFILE
+  %define SH_FMT_OVL                 ; ...so SHOUT is `call far [vector]`
+%endif
+%ifdef PLAN_ONEFILE
+  %define SH_MODSEC .text            ; every `section SH_MODSEC` below is this
+%else                                ; file's own half of CHART.OVL
+  %define SH_MODSEC .modc
+%endif
 %define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
 SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
 SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
@@ -813,6 +875,35 @@ SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
 SHM_N      equ 37                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
+%ifdef PLAN_ONEFILE
+; PLAN HAS NO MODULE, so there is nothing to dispatch INTO - but every door
+; below still says `mov bp, <verb>` / `call ch_ovcall`, and every verb body
+; still ends in `retf` because that is what it is for in the other build.
+; Rather than rewrite twenty doors, ch_ovcall becomes a local dispatcher that
+; SYNTHESISES the far frame those bodies expect: `push cs` puts CS where a far
+; CALL would have, and the near call that follows puts IP on top of it, so the
+; body's own `retf` pops both correctly. The doors, the verb numbers and the
+; thunk table are all untouched between the two builds.
+section .text
+ch_ovcall:
+    push si
+    mov si, bp
+    sub si, SHM_READ
+    cmp si, SHM_N
+    jae .bad
+    shl si, 1
+    mov si, [si + sh_mverb]
+    mov [sh_planvec], si
+    pop si
+    push cs                         ; the far frame the verb body's retf wants
+    call near [sh_planvec]
+    clc                             ; there is always a module here
+    ret
+.bad:
+    pop si
+    stc
+    ret
+%else
 section .modc vstart=0 align=1
 sh_modc0:
     jmp ch_modc
@@ -826,6 +917,7 @@ sh_modc_ext:
     jmp word [cs:bp+sh_mverb]       ; [cs:], because sh_mverb is the module's
 .bad:                               ; OWN data and DS is the package (68.10)
     retf
+%endif
 
 sh_mverb:
     dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
@@ -9025,7 +9117,7 @@ sh_docmd_filldown:
     pop bx
     pop ax
     ret
-section .modc                      ; 81.71.6: ...and the carry half of it
+section SH_MODSEC                      ; 81.71.6: ...and the carry half of it
 
 ; -----------------------------------------------------------------------------
 ; sh_sort_carry - apply the key column's permutation to every OTHER column in
@@ -10502,7 +10594,7 @@ sh_s_exported: db 'Chart exported.', 0
 ;
 ; sh_sort_vof - in: BX = entry index, out: DI = its offset in sh_stgseg
 ; -----------------------------------------------------------------------------
-section .modc                      ; 81.71.6: Data > Sort's worker, CHART.OVL
+section SH_MODSEC                      ; 81.71.6: Data > Sort's worker, CHART.OVL
 sh_sort_vof:
     push ax
     push cx
@@ -11393,7 +11485,7 @@ SH_FDK_SERIES equ 16                  ; 81.72: Data ▸ Series..., part one of
 SH_FDK_N     equ 17                   ; two (the step value follows)
     times (sh_ud_kind_end - sh_ud_kind - SH_FDK_N) db 0  ; sh_ud_kind (81.57)
     times (SH_FDK_N - (sh_ud_kind_end - sh_ud_kind)) db 0 ; has a kind each
-section .modc                      ; 81.74.2: the radio dialog engine, CHART.OVL
+section SH_MODSEC                      ; 81.74.2: the radio dialog engine, CHART.OVL
 
 ; -----------------------------------------------------------------------------
 ; sh_fdlg_open - in: AL = 0 Number / 1 Alignment / 2 Font. Preselects the
@@ -12365,7 +12457,7 @@ sh_bdlg_close_r:                       ; the gate-lock recovery's own door
 ; opens twice a session was 900 bytes of a package with 46 to spare. Its
 ; data stays resident because the kernel and os88ui both read it through
 ; DS, and sh_bdlg_open_r forces the module in before the window exists.
-section .modc                      ; 81.71.5.1: the Border dialog
+section SH_MODSEC                      ; 81.71.5.1: the Border dialog
 
 ; -----------------------------------------------------------------------------
 ; sh_bdlg_open - preselect from the selected cell's stored border byte
@@ -12763,7 +12855,7 @@ sh_s_id_named: db 'Name defined.', 0
 sh_s_id_nofnd: db 'Not found.', 0
 sh_s_idlg_ok:  db 'OK', 0
 sh_s_idlg_can: db 'Cancel', 0
-section .modc                      ; 81.74.2: the one-line input dialog, CHART.OVL
+section SH_MODSEC                      ; 81.74.2: the one-line input dialog, CHART.OVL
 
 ; -----------------------------------------------------------------------------
 ; sh_idlg_open - in: AL = SH_ID_*. Preloads the field with the CURRENT value
@@ -13871,7 +13963,7 @@ sh_s_ld_none:  db '(none defined)', 0
 ; --- in CHART.OVL (81.71.6): the scrolling LIST dialog - Paste Function,
 ; Paste Name and Format Number's code list. Its data stays resident for
 ; 81.71.5.1's reason, and sh_ldlg_open_r forces the module in first.
-section .modc                      ; 81.71.6: the list dialog
+section SH_MODSEC                      ; 81.71.6: the list dialog
 
 ; -----------------------------------------------------------------------------
 ; sh_ldlg_open - in: AL = SH_LD_*
@@ -15055,7 +15147,7 @@ sh_df_close_r:                         ; ...and the recovery's
 ; kernel reads (the template and its title) and four thunks - the module
 ; is forced in by sh_docmd_form_r BEFORE the window exists, so no paint
 ; can ever be the call that has to read the file.
-section .modc                      ; 81.71.5: Data ▸ Form, CHART.OVL
+section SH_MODSEC                      ; 81.71.5: Data ▸ Form, CHART.OVL
 sh_docmd_form:
     push ax
     push bx
@@ -16245,7 +16337,7 @@ sh_switchsheet:
 ; sh_sheets_used - out: AX = how many of the SH_SHEETS grids hold at least one
 ; cell, and BX = a bitmap of which. One walk of the array, not four.
 ; -----------------------------------------------------------------------------
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_sheets_used:
     push cx
     push dx
@@ -17101,7 +17193,7 @@ sh_nameends:
 ; both 0 for an empty sheet. sh_bbrow is free (the array is row-sorted, so
 ; it is just the last record's row); sh_bbcol needs a scan.
 ; -----------------------------------------------------------------------------
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 shm_difbbox:
     push ax
     push bx
@@ -17697,7 +17789,7 @@ section .text
 ; FORMAT record's id, or a built-in this app doesn't have an equivalent
 ; for, both just degrade to General rather than guessed at)
 ; -----------------------------------------------------------------------------
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 ; sh_cwbyte - AX = a width in characters from a file -> CL = what the width
 ; table keeps: clamped to what the Column Width dialog allows, and 0 for the
 ; standard width, so a file that states it costs the table nothing (81.56)
@@ -20853,7 +20945,7 @@ sh_doread_biff:
 section .text
 sh_biff_errtab: db 0x00, 0x07, 0x0F, 0x17, 0x1D, 0x24, 0x2A
 
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_biff_e2b:                          ; ERROR.TYPE 1..7 -> the BIFF code
     push bx
     xor bh, bh
@@ -21706,7 +21798,7 @@ sh_pint:
 ; sh_setferr - build "Err N" from a FERR_* code and point sh_msg at it
 ; in: AX = FERR_* (CF was set on the API call that produced it)
 ; -----------------------------------------------------------------------------
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_setferr:
     push di
     push si
@@ -23088,7 +23180,7 @@ sh_reidx_cellpart:
 ; =============================================================================
 
 ; sh_emit_num - AX as signed decimal, into sh_rwdst via sh_rw_emit
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_emit_num:
     push ax
     push bx
@@ -24783,7 +24875,7 @@ sh_rpn_fargc_end:
 ; sh_rpn_isfunc - is the name at sh_rpn_p followed by a '('? out: CF=0 yes.
 ; Looks ahead and RESTORES nothing because it consumes nothing: sh_rpn_p is
 ; untouched either way, so whichever path runs next reads the name itself.
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_rpn_isfunc:
     push ax
     push si
@@ -27313,7 +27405,7 @@ sh_int_to_pacc:
 ; copied across first - up to a ';' or the record's end. Without this, a SYLK
 ; K field would still be read by the integer parser and "3.5" would come back
 ; as 3, which is what the round trip actually did before this existed.
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_esatof:
     push ax
     push cx
@@ -28232,7 +28324,7 @@ sh_pargref:
     clc
     ret
 
-section .modc                      ; 81.62: sh_pargclass, ISxxx's classifier
+section SH_MODSEC                      ; 81.62: sh_pargclass, ISxxx's classifier
 ; =============================================================================
 ; sh_pargclass - one argument, CLASSIFIED rather than folded.
 ;
@@ -28305,7 +28397,7 @@ sh_pargclass:
 ; resident stub sh_pfin, beside the other three. The three constants below
 ; stay in .text, because what reads them is resident fp_* code through DS.
 ; =============================================================================
-section .modc
+section SH_MODSEC
 ; =============================================================================
 ; sh_pfin - the FINANCIAL functions, ids 93 and up (SPEC.md 81.37).
 ; in: AX = the id, SI just past '('. out: the answer in sh_acc, SI past ')'.
@@ -29336,7 +29428,7 @@ section .text                       ; ...DATA, and the resident fp_* routines
 sh_c_r10: dq 0.1
 sh_c_r01: dq 0.01
 sh_c_eps: dq 0.0000000001
-section .modc
+section SH_MODSEC
 
 ; sh_fntyv - A = (1 + type*rate) from sh_fnty, or 1 when that is zero.
 sh_fntyv:
@@ -30429,7 +30521,7 @@ sh_lkup:
 .out:
     ret
 
-section .modc                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; =============================================================================
 ; sh_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
 ; question about what an argument IS rather than what it is worth, so each is
@@ -30746,7 +30838,7 @@ sh_numdp:
     pop ax
     ret
 
-section .modc                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
 ; sh_dollar_ins - '$' in front of sh_numbuf's digits but AFTER a leading '-',
 ; so -123 in a currency format is "-$123" and not "$-123".
@@ -30812,7 +30904,7 @@ sh_padzero:
     pop ax
     ret
 
-section .modc                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
 ; sh_upcase - AL and AH both to upper case, for SEARCH's folded compare
 ; -----------------------------------------------------------------------------
@@ -30867,7 +30959,7 @@ sh_matchat:
     pop ax
     ret
 
-section .modc                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
 ; sh_strfind - in: SI = haystack, DI = needle, AX = 0-based start,
 ;              DL = 0 exact / 1 case-folded (which is FIND vs SEARCH, and the
@@ -31079,7 +31171,7 @@ sh_pstrarg:
     call sh_str_want
     ret
 
-section .modc                      ; 81.62: a less-used function, CHART.OVL
+section SH_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 
 ; shm_vpush / shm_binop_pre - sh_vpush and sh_binop_pre for the module (81.62).
 ; Those two move sh_acc on and off their CALLER's stack past their own return
@@ -33208,7 +33300,7 @@ sh_macro_clear:                      ; AX = Edit > Clear's row, SI = the
 ; The engine and every macro function are CHART.OVL's (82.16): the package
 ; keeps the names, the door (sh_pmacro), the Run dialog and the resumptions.
 ; =============================================================================
-section .modc                      ; 81.63
+section SH_MODSEC                      ; 81.63
 
 ; shm_pmacro - the macro functions, ids SH_FID_MACRO and up. in: AX = the id,
 ; SI just past '('. out: SI past ')', the answer in sh_acc/sh_curtype, AX 0
@@ -34451,7 +34543,7 @@ shm_mword:
     pop ax
     ret
 
-section .modc                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
+section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
 ; =============================================================================
 ; THE DATABASE FUNCTIONS (81.65): DAVERAGE DCOUNT DCOUNTA DMAX DMIN DPRODUCT
 ; DSTDEV DSTDEVP DSUM DVAR DVARP, ids SH_FID_DATABASE and up. Every one takes
@@ -38770,7 +38862,7 @@ sh_errname:
 ; ERROR.TYPE number, or 0 if this is not a spelling we write. The inverse of
 ; sh_errname, and it reads the SAME table, so the two cannot drift apart.
 ; -----------------------------------------------------------------------------
-section .modc                      ; 82.16.9
+section SH_MODSEC                      ; 82.16.9
 sh_errcode:
     push bx
     push cx
@@ -40649,7 +40741,7 @@ sh_functab_end:
     times ((sh_rpn_fargc_end - sh_rpn_fargc) - SH_NFUNCS) db 0
     times (SH_NFUNCS - (sh_rpn_fargc_end - sh_rpn_fargc)) db 0
 sh_s_errpfx:   db 'Err ', 0
-section .modc                      ; 82.16.9's tenant: CSV and TXT (81.40)
+section SH_MODSEC                      ; 82.16.9's tenant: CSV and TXT (81.40)
 
 ; =============================================================================
 ; CSV and TAB-DELIMITED TEXT (81.40).
@@ -40666,7 +40758,7 @@ section .modc                      ; 82.16.9's tenant: CSV and TXT (81.40)
 ; survive. DIF drops an embedded quote instead (see sh_dowrite_dif's .dt),
 ; which is right for DIF because DIF has no escape at all; CSV does.
 ; =============================================================================
-section .modc                      ; 82.16.9's tenant: dBASE III (81.41)
+section SH_MODSEC                      ; 82.16.9's tenant: dBASE III (81.41)
 
 ; =============================================================================
 ; dBASE III .DBF (81.41).
@@ -41464,7 +41556,7 @@ sh_dbf_store:
 
 section .text
 
-section .modc
+section SH_MODSEC
 sh_dowrite_csv:
     mov byte [sh_sepch], ','
     jmp sh_dowrite_sep
@@ -41910,8 +42002,10 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
 
+%ifndef PLAN_ONEFILE
 %if SHM_READ != CHM_MAX + 1
   %error "SHEET's module verbs must start one past CHM_MAX - see 82.16.8"
+%endif
 %endif
 
 %include "os88chart.inc"
@@ -41920,6 +42014,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
+%ifdef PLAN
+    OS88_BSS 8104                     ; PLANs own: +2 for sh_planvec. It will
+%else                                 ; diverge much further once the cuts land
     OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
@@ -41940,6 +42037,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
                                        ; of two new vectors), +6 for 81.66's
                                        ; CELL (three more scratch words, no
                                        ; new vectors)
+%endif
     OS88_IMAGE_END
 
 ; THE ch_* BLOCK GOES FIRST, at bss offset 0, and that is a requirement and
@@ -43123,7 +43221,19 @@ sh_mx_buf     equ sh_mx_j + 2        ; SH_MX_N * SH_MX_W * 8: the shared
 ; OK (81.6 - these dialogs are not modal, and the selection can move under
 ; one). sh_dfindmode is the Find/Exit Find relabel, and sh_dbc_res is how the
 ; module answers, since CF on that door already means "is there a module".
+%ifdef PLAN
+sh_planvec    equ sh_mx_buf + (8 * 16 * 8)   ; 81.75: PLAN's ch_ovcall stages
+                                              ; the verb body's offset here -
+                                              ; a near `call [mem]` needs one
+                                              ; and every register is the
+                                              ; caller's argument. IN PLAN'S
+                                              ; ARM ONLY: SHEET's bss chain
+                                              ; has to come out byte for byte
+                                              ; as it was (t_appsmall.py)
+sh_dbc_kind   equ sh_planvec + 2             ; byte: which SH_DBC_* is running
+%else
 sh_dbc_kind   equ sh_mx_buf + (8 * 16 * 8)   ; byte: which SH_DBC_* is running
+%endif
 sh_dbc_res    equ sh_dbc_kind + 1            ; byte: its SH_DBR_* answer
 sh_dbc_uniq   equ sh_dbc_res + 1             ; byte: Extract's Unique flag
 sh_dfindmode  equ sh_dbc_uniq + 1            ; byte: a Data Find is live
