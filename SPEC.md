@@ -105802,6 +105802,73 @@ look like the captures.
 
 `tests/sheetdbcmd.py` is the gate.
 
+### 81.72 Data ▸ Series
+
+*"Fills the selected range of cells with a series of numbers or dates. The
+command fills by rows or columns. The first cell in each row or column to be
+filled must have the starting value in it."*
+
+**Excel's dialog carries five controls and this asks two questions**, which is
+this app's own ask-in-sequence idiom (§81.15's Sort, File ▸ Save As) rather
+than a seventh dialog engine — `sh_fdlg` is a radio column and `sh_idlg` is
+one text field, and nothing here has both:
+
+| Excel | here |
+|---|---|
+| **Type** (Linear/Growth/Date) and **Date Unit** (Day/Weekday/Month/Year) | **one radio column of six**: Linear, Growth, Date: Day, Date: Weekday, Date: Month, Date: Year. A date unit is only ever read when the type *is* Date, so the two controls are really one question |
+| **Step Value** | the second dialog, `SH_ID_SERSTEP`, defaulting to `1` so Enter alone gives 1, 2, 3… |
+| **Series In** (Rows/Columns) | **derived**: a selection taller than it is wide fills down each column, otherwise along each row — which is what Excel's own dialog preselects from the same shape |
+| **Stop Value** | **not implemented.** The selection already bounds the fill; an early stop would be a third dialog for the rarer half of one control |
+
+**The step is parsed with `fp_atof`, not `sh_pnum_at`.** A growth factor of
+1.5 and a linear step of 0.25 are both ordinary, and `sh_pnum_at` — what the
+three numeric `sh_idlg` kinds beside it use — answers integers only. Text that
+is not a number at all is refused in silence, which is that engine's
+documented behaviour for every numeric kind.
+
+**The range is PINNED when the first dialog opens**, §81.71.2's reason twice
+over: these windows are not modal, and here there are *two* of them in
+sequence, so the selection has two chances to move out from under the command.
+
+**Linear and Date: Day are the same arithmetic**, and are separate items only
+because the menu asks the question Excel's does — a serial is a count of days,
+so adding the step to it *is* adding days. `Date: Weekday` walks one day at a
+time and steps over Saturday and Sunday, taking `(serial + 6) mod 7`, `0` =
+Sunday — the convention `WEEKDAY` already answers in.
+
+**`Date: Month` and `Date: Year` are computed from the START of the line every
+time, not from the cell before them, and they CLAMP.** Both halves were wrong
+first and the gate caught both:
+
+- `sh_ymd_to_ser` deliberately *rolls* — its own header says `DATE(1990,13,1)`
+  is January 1991 and `DATE(1990,1,32)` is 1 February — which is right for
+  `DATE()` and wrong here. Excel takes 31 January + 1 month to **28
+  February**, not to 3 March, so `sh_ser_clampday` rolls the month back into
+  1..12 and cuts the day to that month's own length first.
+- The clamp then **loses information**, so an iterative series drifts: 31 Jan
+  → 28 Feb → *28* Mar, where Excel gives 31 Mar. Each term is therefore
+  `start + k months` with the clamp applied fresh, which is why the line banks
+  its starting serial and counts terms.
+
+**A serial is not an `fp_a2i`, in either direction.** That conversion is
+signed and clamps at 32,767, which as a date is 24 September 1989 — so the
+arms read through `sh_acc_toudw` and write back through `sh_acc_fromudw`.
+Writing one back with `fp_i2a` made every date past 1989 **negative**, which
+the gate saw as one wrong date repeating down the column, because the next
+term then failed to read its own predecessor as a serial at all. A value that
+is not a serial leaves the cell alone rather than writing a wrong date.
+
+**A line whose first cell is not a number is skipped whole**, not refused:
+filling a table's body one column at a time is exactly the case where one of
+them is a label, and Excel leaves that column alone too.
+
+The worker lives in `CHART.OVL` behind one verb — it has no window callback,
+so it is §81.71.6's cheap shape rather than Form's four thunks. Five more
+vectors (`sh_acc_toudw`, `sh_acc_fromudw`, `sh_ser_to_ymd`, `sh_ymd_to_ser`,
+`sh_monlen`; `SH_NVEC` 115 → 120).
+
+`tests/sheetseries.py` is the gate.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment

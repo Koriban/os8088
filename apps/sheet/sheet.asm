@@ -793,11 +793,12 @@ SHM_SORT   equ 25                   ; 81.71.6: Data > Sort's whole worker -
 SHM_LOPEN  equ 26                   ; ...and the scrolling LIST dialog, which
 SHM_LPAINT equ 27                   ; has two callbacks; its
 SHM_LCLICK equ 28                   ; own close is an internal near call
+SHM_SERIES equ 29                   ; 81.72: Data ▸ Series' fill
 SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
                                      ; sub-op byte, because sh_modc_ext
                                      ; already dispatches on a number and a
                                      ; callback must not spend a register
-SHM_N      equ 26                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 27                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -827,6 +828,7 @@ sh_mverb:
     dw sh_m_bclose, sh_m_fclose
     dw sh_m_sortcol                                       ; 81.71.6
     dw sh_m_lopen, sh_m_lpaint, sh_m_lclick
+    dw sh_m_series                                        ; 81.72
 
 sh_m_doread:
     call shm_doread
@@ -931,6 +933,10 @@ sh_m_lpaint:
     retf
 sh_m_lclick:
     call sh_ldlg_onclick
+    clc
+    retf
+sh_m_series:                        ; 81.72
+    call shm_series
     clc
     retf
 section .text
@@ -1464,6 +1470,21 @@ sh_x_sh_name_list:
 sh_x_sh_nf_apply:
     call sh_nf_apply
     retf
+sh_x_sh_acc_toudw:                  ; 81.72: Data ▸ Series' calendar arms -
+    call sh_acc_toudw               ; fp_a2i is signed and a date serial is
+    retf                            ; not, which sh_acc_toudw's header is about
+sh_x_sh_ser_to_ymd:
+    call sh_ser_to_ymd
+    retf
+sh_x_sh_ymd_to_ser:
+    call sh_ymd_to_ser
+    retf
+sh_x_sh_acc_fromudw:                ; ...and back: fp_i2a is signed, so a
+    call sh_acc_fromudw             ; serial past 32767 came out NEGATIVE
+    retf
+sh_x_sh_monlen:                     ; ...and the day clamp needs the target
+    call sh_monlen                  ; month's own length
+    retf
 sh_x_sh_bt_findcell:
     call sh_bt_findcell
     retf
@@ -1508,6 +1529,8 @@ sh_ovshims:
     dw sh_x_os88ui_sbar, sh_x_os88ui_sbhit, sh_x_sh_cell_nfid        ; 81.71.6
     dw sh_x_sh_editstart, sh_x_sh_flkey, sh_x_sh_name_list
     dw sh_x_sh_nf_apply
+    dw sh_x_sh_acc_toudw, sh_x_sh_ser_to_ymd, sh_x_sh_ymd_to_ser     ; 81.72
+    dw sh_x_sh_acc_fromudw, sh_x_sh_monlen
     dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
 sh_entry:
     push ax
@@ -2636,7 +2659,8 @@ sh_ud_cant:   db MENU_DIS, "Can't Undo", 0
 sh_ud_kind:   db SH_UL_DROP, SH_UL_DROP, SH_UL_DROP, SH_UL_INS, SH_UL_DEL
               db SH_UL_DROP, SH_UL_DROP, SH_UL_CLEAR, SH_UL_DROP, SH_UL_KEEP
               db SH_UL_SORT, SH_UL_KEEP, SH_UL_KEEP, SH_UL_PSPEC, SH_UL_DROP
-              db SH_UL_DROP                 ; 81.71: Extract WRITES cells, and
+              db SH_UL_DROP, SH_UL_DROP    ; 81.71: Extract WRITES cells, and
+                                             ; 81.72's Series does too
                                              ; the Reference Guide says Undo
                                              ; cannot reverse it - so DROP,
                                              ; which is Undo saying so
@@ -7112,15 +7136,21 @@ sh_mfire:
 .data7:
     cmp al, 7
     jne .data8
-    call sh_docmd_chart                ; 7..9: this app's own charting, which
-    jmp .out                           ; real Excel has no Data item for
+    mov al, SH_FDK_SERIES              ; 7: Series... (81.72), the TYPE first
+    call sh_fdlg_open                  ; and then the step
+    jmp .out
 .data8:
     cmp al, 8
     jne .data9
+    call sh_docmd_chart                ; 8..10: this app's own charting, which
+    jmp .out                           ; real Excel has no Data item for
+.data9:
+    cmp al, 9
+    jne .data10
     mov al, SH_FDK_GAL
     call sh_fdlg_open
     jmp .out
-.data9:
+.data10:
     call sh_docmd_chartexport
     jmp .out
 .sheets:
@@ -9272,6 +9302,42 @@ sh_docmd_setname:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; sh_ser_setstep - in: SI = the typed step. out: CF=1 and [sh_ser_step] set;
+; CF=0 the text is not a number at all. RESIDENT because sh_idlg_apply is.
+;
+; fp_atof, not sh_pnum_at: a growth factor of 1.5 and a linear step of 0.25
+; are both ordinary, and sh_pnum_at answers integers only.
+; -----------------------------------------------------------------------------
+sh_ser_setstep:
+    push ax
+    push si
+    push di
+    call fp_atof                       ; CF=1 from fp_atof means NO number
+    jc .bad
+    mov di, sh_ser_step
+    call fp_pack_a
+    stc
+    jmp .out
+.bad:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; sh_docmd_series_r - the resident door (81.72)
+sh_docmd_series_r:
+    push bp
+    mov bp, SHM_SERIES
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    ret
+
 sh_s_dbname:   db 'DATABASE', 0
 sh_s_critname: db 'CRITERIA', 0
 
@@ -10265,10 +10331,11 @@ sh_fdlg_tpl:
 ; Sort. Each was a one-line "just do it" item, which is wrong twice - Excel
 ; asks, and asking is what lets Clear mean something other than "everything"
 ; and Sort mean something other than "ascending".
-sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot, sh_s_fd_extract
+sh_fdlg_titles: dw sh_s_fd_num, sh_s_fd_align, sh_s_fd_font, sh_s_fd_insert, sh_s_fd_delete, 0, 0, sh_s_fd_clear, sh_s_fd_new, sh_s_fd_calc, sh_s_fd_sort, sh_s_fd_gal, sh_s_fd_savefmt, sh_s_fd_pspec, sh_s_fd_prot, sh_s_fd_extract, sh_s_fd_series
 sh_s_fd_pspec:  db 'Paste Special', 0
 sh_s_fd_prot:   db 'Cell Protection', 0
 sh_s_fd_extract: db 'Extract', 0
+sh_s_fd_series: db 'Series', 0
 sh_s_fd_savefmt: db 'File Format', 0
 sh_s_fd_gal:    db 'Gallery', 0
 sh_s_fd_clear:  db 'Clear', 0
@@ -10281,7 +10348,7 @@ sh_s_fd_font:   db 'Font', 0
 sh_s_fd_insert: db 'Insert', 0
 sh_s_fd_delete: db 'Delete', 0
 
-sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot, sh_fd_i_extract
+sh_fdlg_items:  dw sh_fd_i_num, sh_fd_i_align, sh_fd_i_font, sh_fd_i_rowcol, sh_fd_i_rowcol, 0, 0, sh_fd_i_clear, sh_fd_i_new, sh_fd_i_calc, sh_fd_i_sort, sh_fd_i_gal, sh_fd_i_savefmt, sh_fd_i_pspec, sh_fd_i_prot, sh_fd_i_extract, sh_fd_i_series
 ; Excel's Cell Protection dialog is two INDEPENDENT CHECK BOXES, Locked and
 ; Hidden. This is the four combinations as a radio, which is exactly what the
 ; Font dialog above already does with Bold and Underline - the same engine and
@@ -10300,6 +10367,19 @@ sh_fd_prunlockh: db 'Unlocked, Hidden', 0
 sh_fd_i_extract: dw sh_fd_exall, sh_fd_exuniq
 sh_fd_exall:    db 'All Matching Records', 0
 sh_fd_exuniq:   db 'Unique Records Only', 0
+; 81.72: Excel's Series dialog carries FIVE controls - Series In, Type, Date
+; Unit, Step Value and Stop Value. Type and Date Unit fold into one radio
+; column here (a date unit is only ever read when the type IS Date, so the
+; two questions are really one), Step Value is the second dialog, and the
+; other two are 81.72's own documented shortfalls
+sh_fd_i_series: dw sh_fd_serlin, sh_fd_sergro, sh_fd_serday, sh_fd_serwd
+                dw sh_fd_sermon, sh_fd_seryr
+sh_fd_serlin:   db 'Linear', 0
+sh_fd_sergro:   db 'Growth', 0
+sh_fd_serday:   db 'Date: Day', 0
+sh_fd_serwd:    db 'Date: Weekday', 0
+sh_fd_sermon:   db 'Date: Month', 0
+sh_fd_seryr:    db 'Date: Year', 0
 ; Excel's own five, in Excel's own order (Reference Guide p.236). The dialog
 ; there ALSO carries an Operation group (None/Add/Subtract/Multiply/Divide)
 ; and two check boxes (Skip Blanks, Transpose); this engine paints ONE radio
@@ -10373,7 +10453,7 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4, 2
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4, 2, 6
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -10384,7 +10464,8 @@ SH_FDK_SAVEFMT equ 12                 ; stage 4.6: Save As asks for the format
 SH_FDK_PSPEC equ 13                   ; instead of deriving it silently
 SH_FDK_PROT  equ 14
 SH_FDK_EXTRACT equ 15                 ; 81.71: Data ▸ Extract...
-SH_FDK_N     equ 16
+SH_FDK_SERIES equ 16                  ; 81.72: Data ▸ Series..., part one of
+SH_FDK_N     equ 17                   ; two (the step value follows)
     times (sh_ud_kind_end - sh_ud_kind - SH_FDK_N) db 0  ; sh_ud_kind (81.57)
     times (SH_FDK_N - (sh_ud_kind_end - sh_ud_kind)) db 0 ; has a kind each
 
@@ -10411,6 +10492,9 @@ sh_fdlg_open:
     shl bx, 1
     mov cx, [sh_fdlg_counts + bx]
     mov [sh_fdlg_count], cx
+    cmp al, SH_FDK_SERIES             ; 81.72: Series pins its range for the
+    je .prefillseries                 ; same reason, and needs it across TWO
+                                       ; dialogs rather than one
     cmp al, SH_FDK_EXTRACT            ; 81.71: Extract PINS the selection it
     je .prefillextract                ; was opened on - these windows are not
                                        ; modal (81.6), so the selection can
@@ -10434,6 +10518,16 @@ sh_fdlg_open:
                                        ; "current" selection to preselect,
                                        ; just default to row 0 ("Row")
     jmp .cellpre
+.prefillseries:                       ; 81.72: the range to fill, and the
+    mov cx, [sh_selcol]               ; DIRECTION derived from its shape -
+    mov [sh_ser_c1], cx               ; see sh_docmd_series on why that is
+    mov cx, [sh_selrow]               ; not a third question
+    mov [sh_ser_r1], cx
+    mov cx, [sh_selcol2]
+    mov [sh_ser_c2], cx
+    mov cx, [sh_selrow2]
+    mov [sh_ser_r2], cx
+    jmp .noprefill
 .prefillextract:                      ; 81.71: bank the extract range, both
     mov cx, [sh_selcol]               ; corners as selected - normalising is
     mov [sh_ex_c1], cx                ; the module's job, the same way
@@ -10944,6 +11038,8 @@ sh_fdlg_apply0:
     je .doprot
     cmp byte [sh_fdlg_kind], SH_FDK_EXTRACT
     je .doextract
+    cmp byte [sh_fdlg_kind], SH_FDK_SERIES
+    je .doseries
     cmp byte [sh_fdlg_kind], 3
     je .insertrc
     cmp byte [sh_fdlg_kind], 4
@@ -11162,6 +11258,12 @@ sh_fdlg_apply0:
 .refused:
     mov si, [sh_ownwin]
     call sh_repaint
+    jmp .out
+.doseries:                            ; 81.72: the radio IS the type, and
+    mov al, [sh_fdlg_sel]             ; part TWO of the question follows it -
+    mov [sh_ser_type], al             ; Sort's own two-dialog shape (81.15),
+    mov al, SH_ID_SERSTEP             ; because no engine here has a radio
+    call sh_idlg_open                 ; column AND a text field
     jmp .out
 .doextract:                           ; 81.71: the radio IS the flag
     mov al, [sh_fdlg_sel]
@@ -11667,7 +11769,8 @@ SH_ID_SORT   equ 5                   ; Data > Sort... (stage 4.5): the KEY.
                                      ; 81.27 is this)
 SH_ID_RUN    equ 6                   ; Macro > Run... (81.63): where to start
 SH_ID_INPUT  equ 7                   ; ...and INPUT(), a macro's own question
-SH_ID_NKIND  equ 8
+SH_ID_SERSTEP equ 8                  ; 81.72: Data ▸ Series...' step value,
+SH_ID_NKIND  equ 9                   ; part two of two
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -11692,9 +11795,11 @@ sh_idlg_tpl:
 ; that cell makes the kernel letter the pointer's own two bytes and then run on
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
-               dw sh_s_id_tsort, sh_s_id_trun, sh_s_id_tinput
+               dw sh_s_id_tsort, sh_s_id_trun, sh_s_id_tinput, sh_s_id_tser
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
-               dw sh_s_id_psort, sh_s_id_pgoto, sh_macro_msg  ; INPUT's is the macro's
+               dw sh_s_id_psort, sh_s_id_pgoto, sh_macro_msg, sh_s_id_pser
+sh_s_id_tser:  db 'Series', 0
+sh_s_id_pser:  db 'Step value:', 0
 sh_s_id_tgoto: db 'Goto', 0
 sh_s_id_trowh: db 'Row Height', 0
 sh_s_id_tcolw: db 'Column Width', 0
@@ -11744,6 +11849,8 @@ sh_idlg_open:
     je .pregoto                        ; a macro used to start (81.63)
     cmp byte [sh_idlg_kind], SH_ID_SORT ; Sort prefills with the anchor, the
     je .pregoto                        ; same reference Goto shows - it is the
+    cmp byte [sh_idlg_kind], SH_ID_SERSTEP  ; 81.72: a step of 1 is what
+    je .preone                              ; almost every series wants, so
     cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
@@ -11769,6 +11876,9 @@ sh_idlg_open:
     mov si, sh_numbuf
     call sh_strcpy_to_di
     jmp .haveinit
+.preone:
+    mov ax, 1                          ; Enter alone gives 1, 2, 3...
+    jmp short .prenum
 .pregoto:
     mov di, sh_idlg_buf                ; the selection, as 'A1'
     mov ax, [sh_selcol]
@@ -11999,6 +12109,8 @@ sh_idlg_apply:
     je .run
     cmp byte [sh_idlg_kind], SH_ID_INPUT
     je .input
+    cmp byte [sh_idlg_kind], SH_ID_SERSTEP
+    je .serstep
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
@@ -12125,6 +12237,16 @@ sh_idlg_apply:
 ; has both. Asking in sequence is what File > Save As... already does - the
 ; format radio first, then the file dialog - so this follows the app's own
 ; idiom rather than growing a third engine.
+; 81.72: the step value, and the whole of Data ▸ Series' second question.
+; The TEXT is read rather than an integer parsed: Growth by 1.5 and a linear
+; step of 0.25 are both ordinary, and sh_pnum_at answers integers only -
+; which is what the three numeric kinds above it want and this one does not.
+.serstep:
+    mov si, sh_idlg_buf
+    call sh_ser_setstep                ; CF=0 = not a number at all: refused
+    jnc .out                           ; in silence, the same way a bad row
+    call sh_docmd_series_r             ; height is (this engine's own header)
+    jmp .redraw
 .sortkey:
     mov si, sh_idlg_buf
     call sh_upcase_at                  ; 'b3' names the same column as 'B3'
@@ -34669,6 +34791,376 @@ sh_dbcmd_shrink:
     pop ax
     ret
 
+
+; =============================================================================
+; DATA ▸ SERIES (SPEC.md 81.72) - fill the selection from its first cell.
+;
+; "The command fills by rows or columns. The first cell in each row or column
+; to be filled must have the starting value in it." Excel's dialog carries
+; FIVE controls; this asks TWO questions, which is the app's own
+; ask-in-sequence idiom (81.15's Sort, File ▸ Save As) rather than a seventh
+; dialog engine:
+;
+;   Type + Date Unit  ->  one radio column (a date unit is only ever read when
+;                         the type IS Date, so the two are really one question)
+;   Step Value        ->  one text field, defaulting to 1
+;
+; SERIES IN is DERIVED rather than asked: a selection taller than it is wide
+; fills down each column, otherwise along each row, which is the answer
+; Excel's own dialog preselects from the same shape. STOP VALUE is 81.72's
+; documented shortfall - the selection already bounds the fill, and an early
+; stop would be a third dialog for the rarer half of one control.
+; =============================================================================
+SH_SER_LIN   equ 0                   ; the radio index IS the type
+SH_SER_GRO   equ 1
+SH_SER_DAY   equ 2
+SH_SER_WD    equ 3
+SH_SER_MON   equ 4
+SH_SER_YR    equ 5
+
+; -----------------------------------------------------------------------------
+; shm_series - verb SHM_SERIES. The range is already pinned in sh_ser_c1..r2
+; and the type and step already set. Clobbers freely.
+; -----------------------------------------------------------------------------
+shm_series:
+    call sh_ser_norm
+    mov ax, [sh_ser_r2]                ; taller than wide -> down the columns
+    sub ax, [sh_ser_r1]
+    mov bx, [sh_ser_c2]
+    sub bx, [sh_ser_c1]
+    cmp ax, bx
+    jb .byrow
+    mov [sh_ser_n], ax                 ; --- one series per COLUMN
+    mov word [sh_ser_dc], 0
+    mov word [sh_ser_dr], 1
+    mov ax, [sh_ser_c1]
+    mov [sh_ser_i], ax
+.colloop:
+    mov ax, [sh_ser_i]
+    cmp ax, [sh_ser_c2]
+    jg .out
+    mov [sh_ser_col], ax
+    mov ax, [sh_ser_r1]
+    mov [sh_ser_row], ax
+    call sh_ser_line
+    inc word [sh_ser_i]
+    jmp .colloop
+.byrow:
+    mov [sh_ser_n], bx                 ; --- one series per ROW
+    mov word [sh_ser_dc], 1
+    mov word [sh_ser_dr], 0
+    mov ax, [sh_ser_r1]
+    mov [sh_ser_i], ax
+.rowloop:
+    mov ax, [sh_ser_i]
+    cmp ax, [sh_ser_r2]
+    jg .out
+    mov [sh_ser_row], ax
+    mov ax, [sh_ser_c1]
+    mov [sh_ser_col], ax
+    call sh_ser_line
+    inc word [sh_ser_i]
+    jmp .rowloop
+.out:
+    ret
+
+; sh_ser_norm - the pinned range the right way round (sh_dbcmd_norm's reason:
+; a selection dragged upwards or leftwards keeps the corners it was given)
+sh_ser_norm:
+    push ax
+    mov ax, [sh_ser_c1]
+    cmp ax, [sh_ser_c2]
+    jle .r
+    xchg ax, [sh_ser_c2]
+    mov [sh_ser_c1], ax
+.r:
+    mov ax, [sh_ser_r1]
+    cmp ax, [sh_ser_r2]
+    jle .out
+    xchg ax, [sh_ser_r2]
+    mov [sh_ser_r1], ax
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ser_line - one series, from ([sh_ser_col],[sh_ser_row]) along
+; ([sh_ser_dc],[sh_ser_dr]) for [sh_ser_n] more cells. A line whose first cell
+; is not a NUMBER is skipped whole rather than refused: filling a table's
+; body one column at a time is exactly the case where one of them is a label,
+; and Excel leaves that column alone too.
+; -----------------------------------------------------------------------------
+sh_ser_line:
+    push ax
+    push bx
+    push cx
+    mov ax, [sh_ser_col]
+    mov bx, [sh_ser_row]
+    SHOUT sh_getcell2
+    jnc .out
+    cmp byte [sh_curtype], SH_T_NUM
+    jne .out
+    mov si, sh_acc                     ; the start value, banked out of sh_acc
+    mov di, sh_ser_cur                 ; before the first sh_setvald touches it
+    call sh_ser_copy8
+    mov word [sh_ser_k], 0             ; ...and which term of the series this
+    call sh_ser_curser                 ; is, for the calendar arms, which
+    jnc .nobase                        ; cannot iterate (see sh_ser_next)
+    mov [sh_ser_base], ax
+.nobase:
+    mov cx, [sh_ser_n]
+.each:
+    jcxz .out
+    push cx
+    mov ax, [sh_ser_dc]
+    add [sh_ser_col], ax
+    mov ax, [sh_ser_dr]
+    add [sh_ser_row], ax
+    call sh_ser_next
+    mov si, sh_ser_cur
+    mov di, sh_acc
+    call sh_ser_copy8
+    mov ax, [sh_ser_col]
+    mov bx, [sh_ser_row]
+    SHOUT sh_setvald
+    pop cx
+    dec cx
+    jmp .each
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_ser_copy8 - SI -> DI, one packed double. Preserves everything
+sh_ser_copy8:
+    push cx
+    push si
+    push di
+    mov cx, 8
+.b:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .b
+    pop di
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ser_next - advance [sh_ser_cur] by one term of the series.
+; Linear and Date: Day are the SAME arithmetic - a serial is a number of days,
+; so adding the step to it is adding days - and they are separate items only
+; because the menu asks the question Excel's does.
+; -----------------------------------------------------------------------------
+sh_ser_next:
+    push ax
+    push bx
+    push si
+    push di
+    inc word [sh_ser_k]
+    cmp byte [sh_ser_type], SH_SER_GRO
+    je .grow
+    cmp byte [sh_ser_type], SH_SER_WD
+    je .weekday
+    cmp byte [sh_ser_type], SH_SER_MON
+    je .cal
+    cmp byte [sh_ser_type], SH_SER_YR
+    je .cal
+    mov si, sh_ser_cur                 ; Linear, and Date: Day
+    SHOUT fp_unpack_a
+    mov si, sh_ser_step
+    SHOUT fp_unpack_b
+    SHOUT fp_add
+    jmp .store
+.grow:
+    mov si, sh_ser_cur
+    SHOUT fp_unpack_a
+    mov si, sh_ser_step
+    SHOUT fp_unpack_b
+    SHOUT fp_mul
+.store:
+    mov di, sh_ser_cur
+    SHOUT fp_pack_a
+    jmp .out
+
+; --- CALENDAR arithmetic, and it is computed from the START every time -----
+; NOT iteratively from the cell before it. The clamp LOSES information: 31
+; January + 1 month is 28 February, and stepping again from THAT gives 28
+; March where Excel gives 31. So each term is `start + k months` with the
+; clamp applied fresh, which is what the gate caught as a widening drift.
+.cal:
+    call sh_ser_stepint                ; BX = the step, as a whole number
+    mov ax, [sh_ser_k]
+    imul bx                            ; DX:AX = k * step; the range bounds k,
+    mov bx, ax                         ; so the high half is never wanted
+    mov ax, [sh_ser_base]
+    SHOUT sh_ser_to_ymd
+    cmp byte [sh_ser_type], SH_SER_YR
+    je .yr
+    add [sh_dt_m], bx
+    jmp .rebuild
+.yr:
+    add [sh_dt_y], bx
+.rebuild:
+    call sh_ser_clampday               ; 31 Jan + 1 month is 28 FEBRUARY
+    SHOUT sh_ymd_to_ser
+    call sh_ser_setcur
+    jmp .out
+
+.weekday:
+    call sh_ser_curser
+    jnc .out
+    mov [sh_ser_ser], ax
+    push ax
+    call sh_ser_stepint
+    pop ax
+    or bx, bx
+    jz .wdone
+    jl .wback
+.wfwd:
+    call sh_ser_nextwd
+    dec bx
+    jnz .wfwd
+    jmp .wdone
+.wback:
+    call sh_ser_prevwd
+    inc bx
+    jnz .wback
+.wdone:
+    mov ax, [sh_ser_ser]
+    call sh_ser_setcur
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sh_ser_nextwd / sh_ser_prevwd - [sh_ser_ser] one WEEKDAY on or back. The
+; day of the week is (serial + 6) mod 7 with 0 = Sunday, which is the
+; convention WEEKDAY already answers in (sh_pdate's own)
+sh_ser_nextwd:
+    inc word [sh_ser_ser]
+    call sh_ser_dow
+    cmp al, 0
+    je sh_ser_nextwd
+    cmp al, 6
+    je sh_ser_nextwd
+    ret
+sh_ser_prevwd:
+    dec word [sh_ser_ser]
+    call sh_ser_dow
+    cmp al, 0
+    je sh_ser_prevwd
+    cmp al, 6
+    je sh_ser_prevwd
+    ret
+sh_ser_dow:
+    push bx
+    push dx
+    mov ax, [sh_ser_ser]
+    add ax, 6
+    xor dx, dx
+    mov bx, 7
+    div bx
+    mov ax, dx
+    pop dx
+    pop bx
+    ret
+
+; sh_ser_curser - [sh_ser_cur] as an unsigned date serial in AX; CF=0 when it
+; is not one at all, which leaves the cell alone rather than writing a wrong
+; date
+sh_ser_curser:
+    push si
+    push di
+    mov si, sh_ser_cur
+    mov di, sh_acc
+    call sh_ser_copy8
+    SHOUT sh_acc_toudw
+    jc .bad
+    stc
+    jmp .out
+.bad:
+    clc
+.out:
+    pop di
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ser_clampday - sh_dt_y/m/d, with the month rolled back into 1..12 and the
+; day cut to that month's own length.
+;
+; BOTH HALVES ARE THE FEATURE. sh_ymd_to_ser accepts a month outside 1..12 and
+; a day past a month's end and ROLLS them - DATE(1990,13,1) is January 1991
+; and DATE(1990,1,32) is 1 February, its own header says so - which is right
+; for DATE() and wrong here: Excel's Date: Month series takes 31 January to 28
+; FEBRUARY, not to 3 March. The rolling is what the first version of this did,
+; and the test read it as a three-day drift.
+; -----------------------------------------------------------------------------
+sh_ser_clampday:
+    push ax
+    push bx
+.high:
+    cmp word [sh_dt_m], 12
+    jle .low
+    sub word [sh_dt_m], 12
+    inc word [sh_dt_y]
+    jmp .high
+.low:
+    cmp word [sh_dt_m], 1
+    jge .clamp
+    add word [sh_dt_m], 12
+    dec word [sh_dt_y]
+    jmp .low
+.clamp:
+    mov ax, [sh_dt_m]
+    mov bx, [sh_dt_y]
+    SHOUT sh_monlen
+    cmp [sh_dt_d], ax
+    jle .out
+    mov [sh_dt_d], ax
+.out:
+    pop bx
+    pop ax
+    ret
+
+; sh_ser_setcur - AX = a serial -> [sh_ser_cur]. sh_acc_fromudw, NOT fp_i2a:
+; that one is signed and a serial past 32767 came back negative, which the
+; gate read as every later cell repeating one wrong date
+sh_ser_setcur:
+    push si
+    push di
+    SHOUT sh_acc_fromudw
+    mov si, sh_acc
+    mov di, sh_ser_cur
+    call sh_ser_copy8
+    pop di
+    pop si
+    ret
+
+; sh_ser_stepint - the step as a whole number in BX. A calendar step of 1.5
+; months is not a thing, so it truncates rather than refusing
+sh_ser_stepint:
+    push si
+    push di
+    mov si, sh_ser_step
+    mov di, sh_acc
+    call sh_ser_copy8
+    SHOUT sh_acc_toint
+    jnc .ok
+    xor ax, ax
+.ok:
+    mov bx, ax
+    pop di
+    pop si
+    ret
+
 ; =============================================================================
 ; CELL (81.66): `CELL(type_of_info [, reference])`, Excel's own compatibility
 ; subset - nine attributes, from `Microsoft Excel Functions and Macros`
@@ -38635,7 +39127,7 @@ sh_mtab:
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
-    dw sh_m_data,    sh_i_data,    10
+    dw sh_m_data,    sh_i_data,    11
     dw sh_m_options, sh_i_options, 5
     dw sh_m_macro,   sh_i_macro,   1
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
@@ -38783,7 +39275,7 @@ sh_it_filldown:  db 'Fill Down', 0
 ; look like the captures.
 sh_m_data:     db 'Data', 0
 sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
-               dw sh_it_setdb, sh_it_setcrit, sh_it_sort
+               dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
                dw sh_it_chart, sh_it_gallery, sh_it_chartexp
 sh_it_form:    db 'Form...', 0
 sh_it_dfind:   db 'Find', 0              ; 81.71, relabelled in place while a
@@ -38793,6 +39285,7 @@ sh_it_del:     db 'Delete', 0            ; NOT sh_it_delete: that is Edit's
                                           ; own 'Delete...', which shifts
                                           ; cells rather than records
 sh_it_sort:    db 'Sort...', 0
+sh_it_series:  db 'Series...', 0
 sh_it_chart:   db 'Chart Column...', 0
 sh_it_gallery: db 'Chart Gallery...', 0
 sh_it_chartexp: db 'Export Chart as BMP...', 0
@@ -40364,7 +40857,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 7552                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 7616                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -41326,9 +41819,14 @@ sh_v_sh_editstart            equ sh_v_sh_cell_nfid + 4
 sh_v_sh_flkey                equ sh_v_sh_editstart + 4
 sh_v_sh_name_list            equ sh_v_sh_flkey + 4
 sh_v_sh_nf_apply             equ sh_v_sh_name_list + 4
-sh_v_sh_bt_findcell          equ sh_v_sh_nf_apply + 4
+sh_v_sh_acc_toudw            equ sh_v_sh_nf_apply + 4     ; 81.72
+sh_v_sh_ser_to_ymd           equ sh_v_sh_acc_toudw + 4
+sh_v_sh_ymd_to_ser           equ sh_v_sh_ser_to_ymd + 4
+sh_v_sh_acc_fromudw          equ sh_v_sh_ymd_to_ser + 4
+sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
+sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 115
+SH_NVEC       equ 120
 sh_v_end      equ sh_v_sh_bt_removecell + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
@@ -41519,11 +42017,33 @@ sh_dbc_dst    equ sh_dbc_src + 2             ; is reading and the row it is
 sh_dbc_col    equ sh_dbc_dst + 2             ; writing, and the column between
 sh_dbc_hits   equ sh_dbc_col + 2             ; them; how many records matched
 
+; 81.72's own: Data ▸ Series. The range is PINNED when the TYPE dialog opens,
+; because the step is a SECOND dialog and the selection can move between them.
+sh_ser_c1     equ sh_dbc_hits + 2
+sh_ser_r1     equ sh_ser_c1 + 2
+sh_ser_c2     equ sh_ser_r1 + 2
+sh_ser_r2     equ sh_ser_c2 + 2
+sh_ser_type   equ sh_ser_r2 + 2              ; byte: the radio index
+sh_ser_step   equ sh_ser_type + 2            ; 8: the typed step, packed
+sh_ser_cur    equ sh_ser_step + 8            ; 8: the running value
+sh_ser_col    equ sh_ser_cur + 8             ; where the fill is standing...
+sh_ser_row    equ sh_ser_col + 2
+sh_ser_dc     equ sh_ser_row + 2             ; ...which way it is walking...
+sh_ser_dr     equ sh_ser_dc + 2
+sh_ser_n      equ sh_ser_dr + 2              ; ...how many cells are left...
+sh_ser_i      equ sh_ser_n + 2               ; ...and which line it is on
+sh_ser_ser    equ sh_ser_i + 2               ; the weekday walk's own serial
+sh_ser_base   equ sh_ser_ser + 2             ; the line's START serial, and
+sh_ser_k      equ sh_ser_base + 2            ; which term this is: the calendar
+                                              ; arms compute from those two
+                                              ; rather than from the cell
+                                              ; before them (sh_ser_next)
+
 ; Data ▸ Form (81.71.5) - the sixth dialog engine's own state. The rectangle
 ; is PINNED at open, like Extract's; sh_df_rec/fld/top are where the form is
 ; standing in it, and sh_df_sv* bank the real selection across the sh_commit
 ; that writes a field back (sh_commit's argument IS the selection).
-sh_df_win     equ sh_dbc_hits + 2            ; word: 0 = closed, and the gate
+sh_df_win     equ sh_ser_k + 2                ; word: 0 = closed, and the gate
 sh_df_ox      equ sh_df_win + 2
 sh_df_oy      equ sh_df_ox + 2
 sh_df_rect    equ sh_df_oy + 2               ; 8: one button rect, refilled

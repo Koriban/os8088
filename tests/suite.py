@@ -4799,6 +4799,15 @@ SOAK = [
         "fields, and Delete compacting the database while the cell one row "
         "below it stays put - which is what separates it from Edit > Delete",
         needs=("marty",), serial=True),
+    Row("sheetseries", "soak", py("tests/sheetseries.py"), 450.0,
+        "SPEC.md 81.72: Data > Series - two dialogs in sequence (the type as "
+        "a radio column, the step as a text field) over a direction derived "
+        "from the selection's shape. Linear with a FRACTIONAL step of 2.5, "
+        "which sh_pnum_at would have refused; Growth multiplying; Date: "
+        "Month rolling the month and clamping the day; Date: Year; and a "
+        "column whose first cell is a label skipped whole while the one "
+        "beside it in the same selection still fills",
+        needs=("marty",), serial=True),
     Row("sheetform", "soak", py("tests/sheetform.py"), 450.0,
         "SPEC.md 81.71.5: Data > Form - one record at a time, the sixth "
         "dialog engine and the first one that lives in CHART.OVL behind "
