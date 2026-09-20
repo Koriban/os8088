@@ -130,7 +130,14 @@ FORBIDDEN = {
 READERS = {
     "HTM": ("BROWSER.O88",),
     "MOD": ("MODPLUG.O88", "TRACKER.O88"),
-    "SLK": ("SHEET.O88", "CHART.O88"),
+    # SLK has three readers and the third is the only one the floor machine
+    # gets: SHEET is in $(SMALLOMIT) and CHART goes with it, so before PLAN
+    # (SPEC.md 81.75) a .SLK on a small volume had nothing to open it. PLAN
+    # is on both `make smallapps` disks and on apps360.img.
+    "SLK": ("SHEET.O88", "CHART.O88", "PLAN.O88"),
+    "CSV": ("SHEET.O88", "PLAN.O88"),
+    # ...and DIF is NOT given PLAN: it reads SYLK and CSV and nothing else,
+    # the two formats its own cut list kept (81.75).
     "DIF": ("SHEET.O88", "CHART.O88"),
     "F88": ("FONTVIEW.O88",),
     "TEX": ("TEXPAD.O88",),

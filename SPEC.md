@@ -106131,6 +106131,161 @@ md5. It took two goes here: `sh_planvec` and the `OS88_BSS` literal both have
 to sit inside `%ifdef PLAN`, or PLAN's two extra bytes move the shared bss
 chain under SHEET's feet.
 
+#### 81.75.2 The flags did not survive, and the source split
+
+The one-source arrangement above is **not what shipped**, and the section is
+left standing because the reason it failed is the interesting part.
+
+The cut list is not a handful of features. It is most of the program: charts,
+macros, the database family, BIFF/DIF/dBASE, array and matrix, multi-sheet,
+borders, notes, protection, the transcendentals, defined names, Goto and Find,
+Insert and Delete Row/Column, Fill, the About card, and — once the arithmetic
+changed — every routine in the evaluator that touched an eight-byte value. A
+`%ifdef` per family is a flag block that is longer than some of the families,
+and every gated body is a place where one arm can be edited and the other
+silently not. `sheet.asm` is 18,000 lines; the two arms had stopped being the
+same program.
+
+So **PLAN is its own source**, `apps/plan/plan.asm`, produced by resolving
+every `-DPLAN` conditional in `sheet.asm` and proved **byte-identical to the
+gated build** before a single further cut. Then the prefix went with it:
+8,038 identifiers, `sh_` → `pl_`, `SH_` → `PL_`, `shm_` → `plm_`, again
+byte-identical. Two mechanical transformations, each proved by the image it
+produced, is the only way to move 18,000 lines and still know what you have.
+
+**What that costs is the drift defence**, and it is a real cost. `sheet.asm`
+and `plan.asm` must still agree about the SYLK and CSV formats they both read
+and write, and nothing checks it now that the compiler cannot. `make
+planflags` is retired and says so; what is owed in its place is a FORMAT GATE
+— `tools/os88sheetfmt.py` authors a fixture, each package opens it and saves
+it back, and the two files are compared. That is the shape §81.63's own
+round-trip gate already uses, and the reason it is the right shape is written
+there: a host-authored input is the only kind where the writer's defect and
+the reader's defect cannot cancel.
+
+#### 81.75.3 Fixed-point decimal, and what four places cost
+
+`apps/os88fp.inc` is software IEEE-754 double (§81.64): eight bytes a value,
+and the routines to match. PLAN replaced it with **`apps/os88fix.inc`**,
+fixed-point decimal on a 32-bit signed integer, `FX_SCALE` = 10,000 —
+**four decimal places**, range **±214,748.3647**.
+
+The entry points mirror os88fp.inc name for name (`fx_` for `fp_`) so that the
+evaluator's call sites did not have to be re-reasoned, only re-pointed. What
+did have to change is every place that knew a value was eight bytes: the cell
+record (20 → **16 bytes**, `PL_C_SZ`), `pl_vpush`'s bank (four words → two,
+and its `STKBALANCE-NET` declaration with it — that tool counts WORDS), and
+the two idioms that reached for the IEEE **sign bit**. `xor byte [pl_acc+7],
+0x80` is unary minus on a double and lands outside a four-byte value
+entirely; `=-5` came back 5 and `=3*-2` came back 6, with no gate anywhere
+catching either. `pl_acc_neg` and `pl_acc_abs` replaced them.
+
+**What four places are honestly worth**, stated rather than implied:
+
+* a budget in pounds and pence has two places and three spare, and a
+  percentage rate written `0.0625` is exact rather than nearly;
+* the range is **±214,748.3647**, which is a household budget and not a
+  balance sheet. Six places would have been ±2,147.48;
+* `fx_pow` rounds at **every one of n multiplies**, so `(1.005)^12` drifts to
+  1.0612 against a true 1.0617. Long amortisation is NOT solved by this
+  library, and a mortgage schedule written in PLAN will diverge from one
+  written in SHEET. That is the trade the 128KB machine buys.
+
+The library shipped one defect that took the application down rather than the
+value: `fx_round` counted its scale-back loop in **BX**, which `fx_qmulcx`
+clobbers — `fx_qmulcx`'s own header block says so. `=ROUND(1000)` multiplied
+by ten some thousands of times and what came back took the display with it.
+os88fp.inc has `apps/fptest`, an on-target harness; **os88fix.inc has no
+equivalent and one is owed.**
+
+#### 81.75.4 The grid, the cell capacity, and the two numbers that got confused
+
+PLAN's grid is **256 columns × 1,024 rows**. That number is the *addressable
+range* and it costs **zero bytes** — measured byte-identical at 2,048 rows and
+at 1,024, because the cell array is sparse and what it costs is the cells that
+exist. The number that is actually tight is `PL_CELL_CAP`, the cells claim
+divided by `PL_C_SZ`: **5KB at 16 bytes a record = 320 cells**.
+
+The two were being quoted as one thing for most of a day, and "reduce the grid
+to fit" is a sentence that buys nothing. A record that got 4 bytes smaller is
+what raised the capacity; the grid dimensions are a user-facing limit and a
+parser limit, and nothing else.
+
+#### 81.75.5 Cutting the entries leaves the bodies
+
+Seventy labels and 1,659 lines came out of `plan.asm` **after** the feature
+cuts were complete, and every one of them was already unreachable. NASM keeps
+an unreferenced label's body, so cutting a family's menu item and dialog
+leaves its engine assembled with no arm routing to it: `pl_rowcol_op`, the 222
+lines Insert and Delete Row/Column shared, sat in the image for a week after
+both items went. So did the points↔twips pair the Row Height dialog used, the
+scroll bar's drag follow, the BIFF number-format table and the seventeen DIF
+literals.
+
+The sweep is mechanical — collect every `pl_*:` at column zero, strip the
+comments, and report each label the rest of the file names exactly once, which
+is its own definition — and it **cascades**: deleting an orphan orphans
+everything only it called. Six passes to a fixpoint. `pl_formula_reidx` and
+its four helpers went on the second, which is worth naming because
+"reference adjustment" is exactly what Copy and Paste needs and losing it
+silently would make `=A1` pasted a column left read the wrong cell. It was
+checked rather than argued: paste has its own `pl_copy_shift` and
+`pl_copy_cellpart`, and those are referenced.
+
+**The tool's first version was wrong in the way worth recording.** A dead
+label's body runs to the next label — correct until the LAST label in the
+file, where there is no next one and the body ran to EOF. It took 800 live
+lines with it, including the `%define` block that sizes `OS88UI_AMAX`, and the
+cascade then reported SYLK and CSV as dead because their callers had just been
+deleted. **A wrong bound does not look like a wrong bound; it looks like a
+much better result** — 5,031 lines instead of 1,095. It now stops at the first
+column-0 line that cannot be a body, checks a list of anchors survived, and
+refuses to cut a third of the file.
+
+#### 81.75.6 The claim ladder, the measurement, and the five volumes
+
+| claim | SHEET | PLAN |
+|---|---:|---:|
+| cells | 32,768 | **5,120** |
+| text arena | 8,192 | **1,024** |
+| staging | 32,768 | **8,192** |
+| undo | 16,384 | **6,144**, and optional |
+| borders / notes / chart / overlay | 4K + 5K + 19K + 43K | — |
+| **required on open** | **159KB** | **14,336** |
+
+Undo keeps its code and its claim stays **optional**, which is what makes
+"keep undo" and "fit the floor machine" both true: the entry proc takes it
+last and carries on without it (`jc .noundo`), so a machine with room gets
+Undo and one without simply does not. Staging is 8KB and not SHEET's 32KB
+because that 32KB was forced by the *sort* layout; PLAN's SYLK and CSV stream
+through a small buffer. Every claim is under §50.6.2's **17.5KB run limit**,
+which is the test a total cannot answer — SHEET's cells claim fits the arena
+and does not fit a run, and that is what omitted `SKIES`.
+
+Measured 2026-09-19, and it is a two percent margin rather than a comfortable
+one:
+
+```
+plan: image 33,162 + bss 3,152 = 36,314 of 61,440 (APP_MAX_SIZE)
+plan: region 36,314 + claims 14,336 = 50,650 of 51,712 usable arena
+plan: 128KB machine: FITS, 1,062 bytes spare
+```
+
+**Five volumes carry it**: `apps360.img`, where SHEET has never fitted
+(§24.6.3) and where PLAN leaves 15 of 354 clusters; `small360.img` and
+`small.img`, the small SYSTEM disks — §24.5.6 requires that pairing, because a
+128KB machine with one drive never swaps floppies; and both `make smallapps`
+floppies. The live media carries SHEET and not PLAN, which is
+`t_livefull.py`'s `EXEMPT_DIRS` stating a category rather than the DEADLINE it
+used to carry.
+
+**`tests/unit/t_planfit.py` is the gate**, and it checks both halves: the
+region plus the claims against 51,712, each single claim against the run
+limit, and PLAN.O88's presence on three of the five volumes. Over the line
+there is no build error and nothing refuses to assemble — a claim fails on the
+machine and the spreadsheet opens with no cells, which is a symptom nobody
+would trace back to a feature added without measuring.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment

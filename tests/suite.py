@@ -614,6 +614,23 @@ FAST = [
         "at all",
         wants=("build/small360.img", "build/small.img",
                "build/smallapps360.img", "build/smallapps.img")),
+    Row("planfit", "soak", py("tests/unit/t_planfit.py"), 0.1,
+        "PLAN (SPEC.md 81.75) still fits the 128KB machine and still reaches "
+        "the three disks it exists for. SPEC.md 24.5.2's footprint is the "
+        "REGION PLUS THE CLAIMS, against SPEC.md 11.102's arena, and it was "
+        "reached with 1,062 bytes of 51,712 to spare - two percent, which one "
+        "unmeasured feature spends. Over the line there is no build error and "
+        "no refusal to assemble: a claim fails on the machine and the "
+        "spreadsheet opens with no cells. It checks the single-claim RUN "
+        "limit separately (SPEC.md 50.6.2), because a total that fits an "
+        "arena the heap hands out in pieces is the test that omitted SKIES. "
+        "The volumes are the other half - a package that fits and ships "
+        "nowhere has solved nothing, and this replaced the DEADLINE "
+        "t_livefull.py's EXEMPT_DIRS was carrying for it. "
+        "SOAK and not fast: two of the three floppies come from `make "
+        "smallapps`, which is what wants= below builds",
+        wants=("build/apps360.img", "build/smallapps360.img",
+               "build/smallapps.img")),
     Row("ktags", "soak", py("tests/unit/t_ktags.py"), 0.1,
         "every owner tag the kernel ships has a TYPE name on the Task "
         "Manager's heap page - SPEC.md 28.4's hex fallback is for a tag this "

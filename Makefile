@@ -72,6 +72,13 @@ APPSIMG := $(BUILD)/apps.img
 APPSIMG120 := $(BUILD)/apps120.img
 APPSIMG720 := $(BUILD)/apps720.img
 APPSIMG360 := $(BUILD)/apps360.img
+# PLAN's package path, declared UP HERE and not beside its build rule (81.75,
+# far below): the three disks that carry it are read before that point, and a
+# prerequisite list is expanded when the rule is READ, so a name defined later
+# expands to nothing there and the disk is built without it - silently, since
+# an absent prerequisite is not an error.
+PLANDIR := $(BUILD)/planapp
+PLANPKG := $(PLANDIR)/PLAN.O88
 # ...and the MEDIA disk, which exists at 360KB ALONE (SPEC.md 24.4): the third
 # shipped disk of that geometry, carrying BEVERLY.MOD, which is 114 of that
 # disk's 354 clusters and which the apps disk has run out of room for. There
@@ -1934,7 +1941,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
 # paragraph, only when the compiler is absent, never an error.
 WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
-all: checkdocs $(SHIPIMGS) \
+all: checkdocs $(SHIPIMGS) $(PLANPKG) \
      $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
      $(BUILD)/hello.o88 $(BUILD)/pacman.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 \
@@ -9119,12 +9126,12 @@ $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 # LOUD rather than silent - os88disk.py is handed the name and refuses.
 $(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
                        $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA_360) \
-                       $(SYSDOC) tools/os88disk.py
+                       $(PLANPKG) $(SYSDOC) tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/$(KERNNAME) \
 		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) \
-		$(SMALLAPPSARGS) $(addprefix GAMES:,$(SMALLGAMES)) \
+		$(SMALLAPPSARGS) APPS:$(PLANPKG) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA_360)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
 	@echo "small: $@ - kern_small on 360KB. Pair it with"
@@ -9135,12 +9142,12 @@ $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
 $(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
                     $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA) \
-                    $(SYSDOC) tools/os88disk.py
+                    $(PLANPKG) $(SYSDOC) tools/os88disk.py
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot.bin
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/$(KERNNAME) \
 		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) \
-		$(SMALLAPPSARGS) $(addprefix GAMES:,$(SMALLGAMES)) \
+		$(SMALLAPPSARGS) APPS:$(PLANPKG) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -9339,9 +9346,9 @@ smallapps: $(BUILD)/smallapps360.img $(BUILD)/smallapps.img
 # so the two geometries say the same thing.
 
 $(BUILD)/smallapps360.img: $(SMALLPKGS) $$(SMALLTOOLS) $$(SMALLGAMES) $(SMALLSYSAPPS) \
-                           $$(SMALLDATA_360) tools/os88disk.py
+                           $$(SMALLDATA_360) $(PLANPKG) tools/os88disk.py
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 360 \
-	    $(SMALLAPPSARGS) \
+	    $(SMALLAPPSARGS) APPS:$(PLANPKG) \
 	    $(addprefix GAMES:,$(SMALLGAMES)) \
 	    $(addprefix MEDIA:,$(SMALLDATA_360)) \
 	    $(SMALLSYSAPPSARGS) \
@@ -9349,9 +9356,9 @@ $(BUILD)/smallapps360.img: $(SMALLPKGS) $$(SMALLTOOLS) $$(SMALLGAMES) $(SMALLSYS
 	@echo "smallapps: $@ - pair it with build/small360.img (\`make small\`)"
 
 $(BUILD)/smallapps.img: $(SMALLPKGS) $$(SMALLTOOLS) $$(SMALLGAMES) $(SMALLSYSAPPS) \
-                        $$(SMALLDATA) tools/os88disk.py
+                        $$(SMALLDATA) $(PLANPKG) tools/os88disk.py
 	python3 tools/os88disk.py --fatcap 2 -o $@ --size 1440 \
-	    $(SMALLAPPSARGS) \
+	    $(SMALLAPPSARGS) APPS:$(PLANPKG) \
 	    $(addprefix GAMES:,$(SMALLGAMES)) \
 	    $(addprefix MEDIA:,$(SMALLDATA)) \
 	    $(SMALLSYSAPPSARGS) \
@@ -10247,10 +10254,15 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS)
 # above only ever removed half of. It cost 37 clusters of 354 silently until
 # 81.74.2 grew the module past what was left.
 # --- PLAN (SPEC.md 81.75) ----------------------------------------------------
-# The same source as SHEET with -DPLAN: one file, no overlay, claims sized for
-# the 128KB floor machine. Built into its own directory the way $(SMALLAPPDIR)
-# is, and NOT in `all` until the cut list lands.
-PLANDIR := $(BUILD)/planapp
+# PLAN's own source (apps/plan/plan.asm, split from SHEET at 81.75.2): one
+# file, no overlay, claims sized for the 128KB floor machine. Built into its
+# own directory the way $(SMALLAPPDIR) is.
+#
+# IT IS IN `all` AND ON THREE DISKS as of the cut list landing - apps360.img,
+# where SHEET has never fitted, and both `make smallapps` volumes, which are
+# the app floppies for the machine SHEET is omitted from entirely
+# ($(SMALLOMIT) above). $(PLANPKG) is declared at the top of this file and
+# not here; the reason is written there.
 $(PLANDIR)/plan.bin: apps/plan/plan.asm apps/os88api.inc apps/os88fix.inc \
                      apps/os88ui.inc apps/os88line.inc apps/os88text.inc
 	@mkdir -p $(PLANDIR)
@@ -10331,7 +10343,7 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # AND IT IS PACKED NOW (SPEC.md 62.12): 11,653 bytes and 12 clusters, which is
 # what took this disk off THREE free clusters and put it on ten.
 # Being on this disk is the whole reason a user has it to hand.
-APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) \
+APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) APPS:$(PLANPKG) \
                $(addprefix GAMES:,$(APPS_GAMES)) \
                $(addprefix MEDIA:,$(APPS_DATA_360)) \
                $(APPSYSARGS) \
@@ -10353,7 +10365,7 @@ $(APPSIMG120): $(APPS) tools/os88disk.py
 $(APPSIMG720): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS)
 
-$(APPSIMG360): $(APPS360) tools/os88disk.py
+$(APPSIMG360): $(APPS360) $(PLANPKG) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS360)
 
 # The MEDIA DISK (SPEC.md 24.4), 360KB only. It carries no package at all, so

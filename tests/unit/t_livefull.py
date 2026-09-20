@@ -78,12 +78,17 @@ EXEMPT_DIRS = {
               "one predates that folder)",
     "imgtest": "a capability gate, as fptest - `all` names build/imgtest.o88 "
                "only to keep it assembling",
-    "plan": "PLAN (SPEC.md 81.75) does not ship YET. It builds and it runs, "
-            "but its whole premise is the 128KB machine (24.5.2) and its "
-            "region is still well over that arena - so putting it on a "
-            "volume now would ship a spreadsheet that cannot start on the "
-            "one class of machine it exists for. THIS ENTRY COMES OUT when "
-            "`make plan` reports it fits; it is a deadline, not a category",
+    "plan": "PLAN (SPEC.md 81.75) SHIPS, and not here: apps360.img, where "
+            "SHEET has never fitted (24.6.3), and both `make smallapps` "
+            "floppies, which are the app disks for the 128KB machine SHEET "
+            "is omitted from ($(SMALLOMIT)). The live media carries SHEET, "
+            "and PLAN is that same spreadsheet cut down until it fits a "
+            "floor machine - putting both on one volume would ship two "
+            "answers to one question on the machine that wants the bigger "
+            "one. This entry USED TO BE A DEADLINE (\"comes out when `make "
+            "plan` reports it fits\"); it fits now, so what replaced the "
+            "deadline is tests/unit/t_planfit.py, which checks the fit AND "
+            "the three volumes - the half an exemption here cannot state",
     "wire": "WIREFRAME (SPEC.md 78.9) is an INSTRUMENT and not an "
             "application: it is the bench for 78.5's draw orders, `make "
             "wiredisk` builds its disk, and `all` names it only so that it "
