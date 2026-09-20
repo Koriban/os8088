@@ -32,7 +32,7 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 43                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 44                 ; the claim CHART.OVL is read into, KB.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
                                     ; took it to 13,485 bytes; 82.16.10's
@@ -47,7 +47,14 @@ CH_OVKB      equ 43                 ; the claim CHART.OVL is read into, KB.
                                     ; matrix functions 31,638, so 31, and its
                                     ; own regression family (LINEST/LOGEST/
                                     ; TREND/GROWTH) 33,034, so 33 - that
-                                    ; is heap, not image. ch_ovneed reads
+                                    ; is heap, not image; and 81.77's BLANK
+                                    ; records 44,031 of 44,032, so 44. THAT
+                                    ; LAST STEP WAS TAKEN FOR ONE BYTE, and
+                                    ; deliberately: 43 still built, with a
+                                    ; single byte spare, and a margin of one
+                                    ; is not a margin - it is the next change
+                                    ; failing a build for a reason that has
+                                    ; nothing to do with it. ch_ovneed reads
                                     ; CH_OVKB*1024 bytes and a short claim
                                     ; would silently truncate the module, so
                                     ; it IS checked against the file, twice:

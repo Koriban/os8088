@@ -75,6 +75,17 @@ CASES = {
     (2, 3): (123456789.0, 0, None),     # General: see check_general
 }
 TYPED = (2, 7)                          # H3: formatted empty, then typed into.
+# ...and H4, which is formatted while empty and LEFT that way (SPEC.md 81.77).
+# A cell with a format and no value lives only in the border table's sixth
+# byte, and both BIFF passes used to walk the CELL ARRAY alone - so it was
+# invisible to the XF scan and to the record writer, and the format went out
+# with the file saying nothing about it.
+LEFTBLANK = (3, 7)
+# ...and F3, which the HOST's fixture carries as a BLANK record - a format on
+# a cell with no value, which is what SHEET now writes and could not read back
+# (81.77). Typing into it afterwards is the proof: the format has to have been
+# waiting in the border table for the typed value to come out formatted.
+READBLANK, READFMT = (2, 5), 2          # format 2 is "0.00"
                                         # Not the bottom row: Enter moves the
                                         # selection down, and off the fourth
                                         # row the view scrolls under the boxes
@@ -93,6 +104,9 @@ def biff3():
         out += rec(0x0243, bytes([0, f, 1, 0]) + bytes(8))
     for (r, c), (v, f, _) in sorted(CASES.items()):
         out += rec(0x0203, struct.pack('<HHHd', r, c, xf_of[f], v))
+    # ...and the BLANK record (81.77): a format, an XF, and no value at all
+    out += rec(0x0201, struct.pack('<HHH', READBLANK[0], READBLANK[1],
+                                   xf_of[READFMT]))
     return out + rec(0x000A, b'')
 
 
@@ -113,6 +127,27 @@ def formats(data):
         b = data[i + 4:i + 4 + ln]
         if op == 0x001E:
             out.append(b[1:1 + b[0]].decode('latin-1'))
+        elif op == 0x000A:
+            break
+        i += 4 + ln
+    return out
+
+
+def blank_xfs(data):
+    """{(row, col): ixfe} for BLANK records (0x0201) in a BIFF3 stream.
+
+    Its own reader rather than sheetxl2's biff3_xfs, and deliberately: that
+    one resolves an XF to a FORMAT ID, which is more than this needs, and the
+    question here is simply whether the record EXISTS at all. Before 81.77 it
+    did not, so there was nothing to resolve.
+    """
+    out, i = {}, 0
+    while i + 4 <= len(data):
+        op, ln = struct.unpack_from('<HH', data, i)
+        b = data[i + 4:i + 4 + ln]
+        if op == 0x0201 and ln >= 6:
+            r, c, xf = struct.unpack_from('<HHH', b, 0)
+            out[(r, c)] = xf
         elif op == 0x000A:
             break
         i += 4 + ln
@@ -181,6 +216,42 @@ def main():
         M.write_png(os.path.join(WORK, "2-typed.png"), w, h, rows)
         typed = glass.cell_text(rows, box(*TYPED), table, xs, ys)
 
+        # --- 2b: a SECOND empty cell, formatted and LEFT EMPTY (81.77) -------
+        # The same dialog and the same list row, because what is under test is
+        # not WHICH format but whether a cell that never gets a value survives
+        # the save carrying one.
+        r, c = LEFTBLANK
+        mo.click((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
+        M.settle(m)
+        mo.menu(SF.FORMAT_MENU[0], SF.FORMAT_MENU[1],
+                SF.FORMAT_MENU[0] + 15, 59)
+        M.settle(m)
+        d2 = [x for x in os88geom.windows(m, S)
+              if x.visible and x.title.startswith("Format Number")]
+        check(bool(d2), "Format > Number opens on the second empty cell",
+              "no 'Format Number' window for H4")
+        if d2:
+            d = d2[-1]
+            cx, cy = d.x + 1, d.y + 18
+            mo.click(cx + 60, cy + 22 + 2 + 2 * 12 + 6)  # row 2: "0.00"
+            M.settle(m)
+            mo.click(cx + 292, cy + 32)                  # OK - and NO typing
+            M.settle(m)
+        mo.to(634, 180)
+        M.settle(m)
+
+        # --- 2c: the READ side - F3's format came in on a BLANK record -------
+        r, c = READBLANK
+        mo.click((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
+        M.settle(m)
+        m.type_text("3.14159\n")
+        M.settle(m)
+        mo.to(634, 180)
+        M.settle(m)
+        w, h, rows = m.vram("cga")
+        M.write_png(os.path.join(WORK, "2c-readblank.png"), w, h, rows)
+        readblank = glass.cell_text(rows, box(*READBLANK), table, xs, ys)
+
         # --- 3: Save As Normal -------------------------------------------------
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
@@ -195,6 +266,10 @@ def main():
             v = os88flush.Flush(marty=m).volume(1)
             if "NF.BIF" in v.names() and v.read("NF.BIF") != before:
                 data = v.read("NF.BIF")
+                # THE SAVED FILE IS KEPT, the way the screenshots are: a gate
+                # about what a save WROTE cannot be diagnosed from the fixture
+                # it read, and those are both called NF.BIF.
+                open(os.path.join(WORK, "saved.bif"), "wb").write(data)
                 break
             M.settle(m, quiet=2.0, stable=2, limit=60)
 
@@ -220,6 +295,33 @@ def main():
           "cell, authored id, written id: %r" % wrong[:4])
     check(xf.get(TYPED, (None,))[0] == 2, "...H3's typed value included",
           "H3 names format %r" % (xf.get(TYPED, (None,))[0],))
+    check(readblank == '3.14',
+          "F3's format arrived on a BLANK record and was WAITING",
+          "the host's fixture gives F3 an XF and no value. SHEET writes such "
+          "a record now, and until 81.77 could not read one back - so its own "
+          "file lost the format on the way IN as well as on the way out. "
+          "3.14159 typed into it has to come out as 3.14",
+          got="F3 shows %r" % (readblank,), want="'3.14'")
+
+    # --- 81.77: the formatted EMPTY cell ----------------------------------
+    bl = blank_xfs(data) if data else {}
+    check(LEFTBLANK in bl,
+          "a cell formatted while EMPTY is written as a BLANK record",
+          "H4 was given a format and never a value. Its format lives in the "
+          "border table's sixth byte and nowhere else, and both BIFF passes "
+          "walked the cell array alone - so the cell was in the file not at "
+          "all and the format was lost with no message",
+          got="BLANK records at %r" % (sorted(bl),), want="one at H4")
+    if LEFTBLANK in bl:
+        check(bl[LEFTBLANK] >= 64,
+              "...naming an XF that CARRIES the format, not a base one",
+              "sh_biff_ixfe answers the plain format byte - zero, for a cell "
+              "with no record - unless sh_xfp_scan registered the (format, "
+              "border, number format) triple. The 64 base XFs are the format "
+              "byte itself, so anything below 64 here means the scan never "
+              "saw this cell either",
+              got=bl[LEFTBLANK], want=">= 64")
+
     got = formats(data) if data else []
     check(got == EXCEL21, "the file carries Excel's 21 FORMAT records, in "
           "order", "it carries %r" % (got,))

@@ -103136,10 +103136,10 @@ and §82 is this tree's answer to that.
   no references as values (OFFSET), no custom dialogs, and a
   Normal save keeps a macro cell's value, not its formula - SYLK carries it.
 - **No Short/Full menus toggle**. Freeze Panes is done (§81.70).
-- **Smaller, each listed where it was found:** a centred or right-aligned
-  label does not run on into its neighbours (§81.54); a formatted empty cell
-  (BIFF's BLANK) loses its format (§81.52); Sort leaves empty cells where they
-  are rather than last (§81.61). Fill's error constant, SYLK's `;` inside a
+- **Smaller, each listed where it was found:** Sort leaves empty cells where
+  they are rather than last (§81.61) — the one of these three still open. A
+  centred or right-aligned label runs on into its neighbours since §81.76, and
+  a formatted empty cell keeps its format through BIFF since §81.77. Fill's error constant, SYLK's `;` inside a
   formula and Sort's labels, logicals and errors were closed by §81.61.
 
 #### 81.39.4 The enablers, in dependency order
@@ -104468,6 +104468,80 @@ hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
 and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
+
+### 81.77 A cell formatted while EMPTY
+
+Apply a number format to a cell with no value, save, and the format was gone
+with no message. §81.39.3 listed it as *"a formatted empty cell (BIFF's BLANK)
+loses its format"* and the measurement is why it had stayed open: the defect
+is in **two passes at once**, and each looks complete on its own.
+
+A format applied to a cell that has **no record** does not go into a cell
+record — there is not one. It goes into the side table: `sh_bt_addcell`, the
+**border table's sixth byte** (§81.55), which is where the seventeen formats
+that will not fit the format byte's two bits already live. And both halves of
+the BIFF writer walk the **cell array**:
+
+- `sh_xfp_scan` collects the distinct (format, border, number format) triples
+  that need an XF of their own. Walking the cells, it never sees this one, so
+  **no XF is registered** for it.
+- `sh_biff_cells` writes a record per cell. Walking the cells, it never sees
+  this one either, so **no record is written**.
+
+Fixing one without the other buys nothing: a BLANK record naming an XF that
+was never registered falls back to the plain format byte — zero, for a cell
+with no record — and says the cell is General. Both walks gained the same
+second pass over the border table, and `sh_xfp_add` exists so the two agree
+exactly about what "already registered" means.
+
+The record is **`BLANK`, `0x0201`** in BIFF3: row, column, XF and nothing
+else. A bordered empty cell comes out right for free, since the triple carries
+the border byte too.
+
+#### 81.77.1 The overlay's own byte
+
+**+213 bytes, all of it in `CHART.OVL`** — the whole BIFF writer lives there —
+which took the module to **44,031 bytes of the 44,032** `CH_OVKB` = 43
+reserved. It still built. `CH_OVKB` is 44 now, and that step was taken *for
+one byte*: a margin of one is not a margin, it is the next change failing a
+build for a reason that has nothing to do with it.
+
+#### 81.77.2 A stale overlay made the A/B lie, twice
+
+Worth writing down, because it cost more than the fix and will happen again.
+
+`CHART.OVL` is a **side effect** of `$(BUILD)/sheet.o88` (`$(BUILD)/CHART.OVL:
+$(BUILD)/sheet.o88 ;`), and this change is **entirely overlay-side** — so
+`sheet.o88` came out byte-identical in size and the module did not get
+rebuilt when the source was reverted to check the defect was real.
+
+The A/B then ran the **old resident half against the new overlay**, the BLANK
+record appeared, and the evidence said the defect did not exist: a BLANK
+record at H4 naming an XF that resolved to the right format id, reproducible
+to the byte across two runs. The conclusion drawn from it — *"§81.39.3 is
+stale, revert the fix"* — was exactly wrong, and it was the **search for the
+`mov ax, 0x0201` that had supposedly always been there** that broke it: the
+opcode was in `CHART.OVL` and in no version of `sheet.asm`, which is only
+possible if the two halves came from different sources.
+
+The rule: **an overlay-only change leaves the package byte-identical**, so
+nothing keyed on `sheet.o88` — a size, a stamp, an mtime — can see it. Delete
+`sheet.bin`, `sheet.trim.bin`, `sheet.o88` and `CHART.OVL` together before
+trusting an A/B that touches the module.
+
+#### 81.77.3 Evidence
+
+`tests/sheetnumfmt.py` gains **three checks** and keeps the file it read back
+(`saved.bif`, beside the screenshots it already wrote — a gate about what a
+save WROTE cannot be diagnosed from the fixture it read, and both are called
+`NF.BIF`). Its step 2 already formatted an empty cell and then typed a value
+into it; the new cell **H4 is formatted the same way and left empty**, which
+is the whole difference. The previous binary writes **no BLANK record at
+all** — `BLANK records at []` — so the first of the three fails outright.
+
+`tests/sheetfmt.py`'s `cell_xfs` learned `0x0201` as well. A reader of BIFF
+cell records that omits BLANK is simply incomplete, and it is the only reader
+in the tree that checks XFs.
 
 ### 81.55 Excel 2.1d's twenty-one number formats
 

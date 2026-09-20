@@ -239,8 +239,12 @@ def cell_xfs(data):
             xfs.append(b[2] & 3)                      # bit0 locked, bit1 hidden
         elif op == 0x000A:                            # EOF ends a substream
             sheet += 1
-        elif op in (0x027E, 0x0203, 0x0204, 0x0205,
+        elif op in (0x0201, 0x027E, 0x0203, 0x0204, 0x0205,
                     0x0206, 0x0406) and ln >= 6:
+            # 0x0201 IS BLANK, and it was missing from this list: a cell with
+            # a format and no value (SPEC.md 81.77) is written as one, so
+            # without it the very record that carries a formatted empty
+            # cell's XF was invisible to the only reader that checks XFs.
             r, c, xf = struct.unpack_from("<HHH", b, 0)
             # KEYED BY SHEET TOO. It was (row, col), which is fine for a
             # single stream and silently wrong for a workbook: Sheet 2's A1 is

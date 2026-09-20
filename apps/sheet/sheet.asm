@@ -17855,9 +17855,13 @@ sh_biff_applyfmt:
     mov ax, [sh_wrec_col]
     mov bx, [sh_wrec_row]
     SHOUT sh_findcell
-    jnc .out
-    mov es, [sh_cellseg]
-    mov [es:di+5], cl
+    jnc .nocell                        ; 81.77: a cell with NO RECORD still
+    mov es, [sh_cellseg]               ; takes its border and number format,
+    mov [es:di+5], cl                  ; which live in the side table anyway -
+.nocell:                               ; it is only the FORMAT BYTE that has
+                                       ; nowhere to go. This used to return
+                                       ; here, so a BLANK record read back as
+                                       ; nothing at all
     mov al, ch
     or al, [sh_xfw_nf]                 ; a border table record only for the
     jz .out                            ; cells that need one, which is the
@@ -18169,35 +18173,49 @@ sh_xfp_scan:
     SHOUT sh_bt_getw                 ; AL = its border+protection byte, AH its
     or ax, ax                        ; number format (81.55), 0 when the cell
     jz .next                         ; has no record - almost every cell
-    ; --- already registered? ---------------------------------------------
-    mov cx, [sh_nxfp]
-    xor di, di
-    jcxz .add
-.find:
-    cmp dl, [sh_xfp_fmt + di]
-    jne .fnext
-    cmp al, [sh_xfp_bord + di]
-    jne .fnext
-    cmp ah, [sh_xfp_nf + di]
-    je .next                         ; this triple already has an XF
-.fnext:
-    inc di
-    dec cx
-    jnz .find
-.add:
-    mov di, [sh_nxfp]
-    cmp di, SH_XFP_CAP
-    jae .next                        ; full: this cell keeps its plain XF
-    mov [sh_xfp_fmt + di], dl
-    mov [sh_xfp_bord + di], al
-    mov [sh_xfp_nf + di], ah
-    inc word [sh_nxfp]
+    call sh_xfp_add                  ; DL fmt, AL border, AH number format
 .next:
     pop si
     pop cx
     add si, SH_C_SZ
     dec cx
     jnz .each
+    ; --- AND THE ENTRIES WITH NO CELL RECORD (81.77) -----------------------
+    ; A formatted or bordered EMPTY cell lives ONLY in the border table - its
+    ; format is that table's sixth byte (81.55) and it has no cell record at
+    ; all. The walk above cannot see it, because it walks the CELL ARRAY: so
+    ; no XF pair was ever registered for it, and the BLANK record written for
+    ; it would fall back to the plain format byte and carry neither the
+    ; format nor the border.
+    mov cx, [sh_nbord]
+    jcxz .done
+    xor si, si
+.bteach:
+    push cx
+    push si
+    mov es, [sh_bordseg]
+    mov ax, [es:si]
+    SHOUT sh_unpackrow               ; -> AX = row, BX = its sheet
+    mov [sh_cursheet], bx            ; ...impersonated, as above
+    mov bx, ax
+    mov es, [sh_bordseg]
+    mov ax, [es:si+2]                ; AX = col, BX = row
+    SHOUT sh_findcell
+    jc .btnext                       ; the cell EXISTS: the walk above had it
+    pop si
+    push si
+    mov es, [sh_bordseg]
+    mov ax, [es:si+4]                ; AL border, AH number format
+    or ax, ax
+    jz .btnext
+    xor dl, dl                       ; no cell record, so no format byte
+    call sh_xfp_add
+.btnext:
+    pop si
+    pop cx
+    add si, SH_BT_SZ
+    dec cx
+    jnz .bteach
 .done:
     pop ax
     mov [sh_cursheet], ax            ; ...and put the user's sheet back
@@ -18208,6 +18226,45 @@ sh_xfp_scan:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_xfp_add - register the (format byte, border byte, number format) triple
+; in DL / AL / AH if it is new and there is room. Preserves everything.
+;
+; TWO WALKS SHARE IT (81.77): the cell array, and the border table's own
+; entries for cells that have no record there. The second is why this is a
+; routine rather than an inline block - the two have to agree exactly about
+; what "already registered" means, or an XF is written twice or not at all.
+; -----------------------------------------------------------------------------
+sh_xfp_add:
+    push cx
+    push di
+    mov cx, [sh_nxfp]
+    xor di, di
+    jcxz .add
+.find:
+    cmp dl, [sh_xfp_fmt + di]
+    jne .fnext
+    cmp al, [sh_xfp_bord + di]
+    jne .fnext
+    cmp ah, [sh_xfp_nf + di]
+    je .out                          ; this triple already has an XF
+.fnext:
+    inc di
+    dec cx
+    jnz .find
+.add:
+    mov di, [sh_nxfp]
+    cmp di, SH_XFP_CAP
+    jae .out                         ; full: this cell keeps its plain XF
+    mov [sh_xfp_fmt + di], dl
+    mov [sh_xfp_bord + di], al
+    mov [sh_xfp_nf + di], ah
+    inc word [sh_nxfp]
+.out:
+    pop di
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -19016,6 +19073,64 @@ sh_biff_cells:
     mov [sh_wrow], ax
     jmp .rec
 .cdone:
+    ; --- THE FORMATTED OR BORDERED EMPTY CELLS (81.77) ---------------------
+    ; They have NO CELL RECORD, so the walk above never reached them: their
+    ; format is the border table's own sixth byte (81.55) and that table is
+    ; the only place they exist. BIFF says such a cell with a BLANK record -
+    ; row, column, XF and nothing else - and without one, applying a format
+    ; to an empty cell and saving lost it with no message.
+    push word [sh_cursheet]           ; sh_findcell answers for sh_cursheet,
+    mov ax, [sh_wsheet]               ; and this pass is writing sh_wsheet
+    mov [sh_cursheet], ax
+    mov cx, [sh_nbord]
+    jcxz .btdone
+    xor si, si
+.bt:
+    mov ax, di
+    add ax, 10                        ; BLANK is 4 of header and 6 of body
+    cmp ax, SH_STAGE_MAX
+    ja .btdone                        ; out of staging: stop, as the cells do
+    push cx
+    push si
+    mov es, [sh_bordseg]
+    mov ax, [es:si]
+    SHOUT sh_unpackrow                ; -> AX = row, BX = its sheet
+    cmp bx, [sh_wsheet]
+    jne .btnext                       ; one pass writes ONE sheet
+    mov [sh_wrec_row], ax
+    mov bx, ax
+    mov es, [sh_bordseg]
+    mov ax, [es:si+2]
+    mov [sh_wrec_col], ax
+    push di                           ; DI IS THE STAGING WRITE POINTER, and
+    SHOUT sh_findcell                 ; sh_findcell does not preserve DI -
+    pop di                            ; a pop leaves CF alone, so the test
+    jc .btnext                        ; below still reads the search's answer
+    mov es, [sh_bordseg]
+    mov ax, [es:si+4]                 ; AL border, AH number format
+    or ax, ax
+    jz .btnext                        ; an empty entry: nothing to carry
+    mov byte [sh_wrec_fmt], 0         ; no cell record, so no format byte
+    call sh_biff_ixfe
+    mov es, [sh_stgseg]
+    mov ax, 0x0201                    ; BLANK (BIFF3)
+    call sh_biffw
+    mov ax, 6
+    call sh_biffw
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    mov ax, [sh_wrec_ixfe]
+    call sh_biffw
+.btnext:
+    pop si
+    pop cx
+    add si, SH_BT_SZ
+    dec cx
+    jnz .bt
+.btdone:
+    pop word [sh_cursheet]
     ret
 
 ; sh_biff_rlen - CX = the length of the text at [sh_wrec_roff] in the arena,
@@ -20116,6 +20231,12 @@ sh_doread_biff:
                                         ; is skipped generically below, so
                                         ; those cells read back unformatted
                                         ; rather than misformatted.
+    cmp ax, 0x0201                     ; BLANK: a cell with a FORMAT and no
+    je .isblank                        ; value at all (81.77). SHEET writes
+                                        ; one; before this it could not read
+                                        ; one back, so its own file lost the
+                                        ; format on the way in instead of on
+                                        ; the way out
     cmp ax, 0x027E                     ; RK cell record
     je .isrk
     cmp ax, 0x0203                     ; NUMBER: a whole IEEE-754 double, and
@@ -20458,6 +20579,31 @@ sh_doread_biff:
 .xfcounted:
     inc word [sh_biff_nxf]
     jmp .skip
+.isblank:
+    ; A CELL WITH A FORMAT AND NO VALUE (81.77). There is nothing to store as
+    ; a value - sh_setvald is not called at all - and the whole record is its
+    ; XF, which sh_biff_applyfmt puts in the border table's own bytes. A cell
+    ; record is deliberately NOT created: "no record" is what empty means
+    ; here, and inventing one would put a 0 on the sheet.
+    push dx
+    mov ax, si
+    add ax, dx
+    cmp ax, cx
+    ja .toolong                        ; truncated record: stop, don't read
+    mov ax, [es:si]                    ; row
+    mov [sh_wrec_row], ax
+    mov ax, [es:si+2]                  ; col
+    mov [sh_wrec_col], ax
+    mov ax, [es:si+4]                  ; xf index
+    mov [sh_wrec_xf], ax
+    call sh_biff_rcok                  ; off-grid: skip, as every cell record
+    jc .bldone                         ; here does
+    call sh_biff_applyfmt
+.bldone:
+    pop dx
+    jmp .skip
+
+
 .isrk:
     push dx                            ; length, saved across sh_setvald
                                         ; (which itself preserves DX, but

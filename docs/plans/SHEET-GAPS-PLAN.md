@@ -17,11 +17,17 @@ it.* Re-measure before acting on any line here.
 ```
 sheet.o88   image 49,975 + bss 8,119 = 58,094 of 61,440 (APP_MAX_SIZE)
             -> 3,346 bytes free
-CHART.OVL   43,818 bytes
+CHART.OVL   44,083 of the 45,056 CH_OVKB reserves -> 973 bytes free
 ```
 
-**SHEET has 3,346 bytes of resident headroom and an overlay with room in it.**
-That is not a footnote, it is the design rule for everything below: §81.71.6
+**That second line was wrong when this plan was written** — it said "an
+overlay with room in it" off the module's *size*, which is not the budget.
+The budget is `CH_OVKB`, and §81.77 found the module at **44,031 of 44,032**:
+one byte. `CH_OVKB` went to 44 for that reason. Raising it is routine and
+documented (8 → 22 → 23 → 26 → 28 → 29 → 30 → 31 → 33 → 43 → 44 as tenants
+arrived) but it is a **heap claim**, so it is not free either.
+
+**Both numbers are the design rule for everything below**, not a footnote: §81.71.6
 and §81.74.2 both had to *move something into `CHART.OVL` to pay for what they
 added*. Any item here that is more than a few hundred bytes lands in the
 module, and the question to ask of each is not "how big" but **"how often does
@@ -64,23 +70,28 @@ So this needs three changes, and the third is the one that makes it real work:
 casually**: §81.61 hardened this routine two cycles ago and it is the single
 most delicate thing in the package.
 
-### 1.2 A formatted empty cell loses its format through BIFF — *bounded*
+### 1.2 ~~A formatted empty cell loses its format through BIFF~~ — **done, §81.77**
 
 Measured: when a format is applied to a cell with **no record**, it goes into
 the side table — `sh_bt_addcell`, the **border table's sixth byte** (§81.55) —
 and not into a cell record. `sh_biff_cells` walks the **cell array**, so it
 never sees that cell, and there is no `BLANK` record writer in the file at all.
 
-The fix is bounded and needs no new storage: after the cell records, walk the
-border table, and for each entry that `sh_findcell` says has no cell record,
-emit a **`BLANK`** record (BIFF3 `0x0201`, row/col/xf) with the XF that entry
-names. The reader already has to tolerate it.
+**It was in two passes at once, and each looked complete alone**: `sh_xfp_scan`
+registers no XF for the cell and `sh_biff_cells` writes no record for it, and
+fixing either without the other buys nothing. The READER had the same hole —
+SHEET wrote a `BLANK` it could not read back — so the loop needed three
+changes, not one. §81.77 has the account, including the stale overlay that
+made the A/B say the defect did not exist.
 
-Worth pairing with **a format round-trip gate**, which SHEET does not have and
-PLAN now does (`tests/planfmt.py`). That matters specifically because the 2-bit
-`SH_FMT_NUM_*` field is the same one PLAN's Currency/Text bug lived in: SHEET
-is self-consistent today — checked — but nothing holds it that way, and SHEET
-has 21 formats riding a side table on top of those 4.
+**The gate it wanted now exists**: `tests/sheetnumfmt.py` holds both
+directions — a cell formatted while empty is written as a `BLANK` record
+naming an XF that carries the format, and a `BLANK` record in the file arrives
+as a format that is waiting when a value is typed. That still leaves the
+narrower thing PLAN's `tests/planfmt.py` does and SHEET has no equivalent of:
+nothing pins the 2-bit `SH_FMT_NUM_*` encoding itself, which is the field
+PLAN's Currency/Text bug lived in. SHEET is self-consistent today — checked —
+but nothing holds it that way while §2.3 is built on top of it.
 
 ## 2. The gaps, by what they cost
 
@@ -145,9 +156,7 @@ fix, not a language one, and it can be done first and alone.
 
 ## 3. The order, and why
 
-1. **§1.2 BIFF `BLANK`, with a format round-trip gate.** Bounded, and the gate
-   is worth more than the fix — it is the only thing that will hold the format
-   encoding still while §2.3 is built on top of it.
+1. ~~**§1.2 BIFF `BLANK`**~~ — done in §81.77, both directions and the reader.
 2. **§2.1's cheap four**, measuring `File ▸ Close` before planning it. They are
    a day between them and they close two menu rows.
 3. **§1.1 Sort and blanks.** Ahead of the big features because it is *wrong*
