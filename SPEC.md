@@ -106339,6 +106339,67 @@ there is no build error and nothing refuses to assemble — a claim fails on the
 machine and the spreadsheet opens with no cells, which is a symptom nobody
 would trace back to a feature added without measuring.
 
+#### 81.75.7 The audit, and what four rigs found
+
+PLAN was gone over for defects once it fitted, and the four things that came
+out were all the same shape: **a cut that removed one half of a pair and left
+the other standing, assembling, and silent.**
+
+| | |
+|---|---|
+| **Paste never pasted** | `pl_paste_cell` kept the `jc .refused` whose `call sh_prot_blocked` protection had been cut from. The flag it read was `cmp bx, PL_ROWS` two lines up, and an IN-RANGE row is exactly the case that leaves CF set — so it was taken for **every valid cell**, on every machine, with the menu item enabled and nothing said. Cut and Clear had the same orphan and read the *caller's* carry, so they ran or refused by accident of the previous command |
+| **AVERAGE was n/n** | `fx_i2b` is `fx_i2a` + `fx_a_to_b`, so it goes THROUGH register A. `.avgok` loaded A with the sum and then called it. Every AVERAGE was 1, while `SUM/COUNT` over the same range was right — the third occurrence of the ordering rule *build the constant first, load the value last* |
+| **Two names, one field** | the number-format field had `PL_FMT_NUM_*` (Currency = 1) from the interpreter and `PL_NF_*` (Currency = 2) from the three that replaced it. The file code was on one set and the display code on the other, so a Currency cell was written as comma-with-no-dollar and Excel's own `$` came back as Text |
+| **Silent overflow** | `fx_mul` keeps the low 32 bits of its 64-bit intermediate and returns no carry at all, so a product past ±214,748.3647 wraps to a plausible number where Excel says `#NUM!`. **NOT FIXED** — every caller would have to test the flag, so it is a decision rather than a patch |
+
+**The generalisation is worth more than the four fixes: CUTTING A CALL LEAVES
+ITS CONSUMERS.** §81.75.5 is the same lesson about code that is no longer
+*reached*; this is about code that still runs and now reads something nobody
+sets. A flag is the worst case, because it has no name to grep for.
+
+Both were found by asking the file a question rather than reading it. For the
+flags: *for every `call sh_X` whose carry `sheet.asm` tests, is there a site in
+`plan.asm` with the same preceding instruction and the same jump and no call?*
+— 127 candidates, one hit, and a **second pass** for the jump preceded by a
+LABEL (control arrives there by a jump) found the third. A generic "conditional
+jump after an instruction that cannot set flags" sweep is ~20 sites and mostly
+false positives, because `pop`/`mov` deliberately banking a flag across
+register restores is a real idiom in this tree.
+
+#### 81.75.8 The four rigs
+
+| row | machine | what it answers |
+|---|---|---|
+| `t_planfit` | host | the region plus the claims fit 51,712, each claim clears §50.6.2's run limit, and PLAN.O88 is on the volumes |
+| `plansmall` | 128KB | it OPENS, its three required claims are granted, and one formula evaluates |
+| `planrig` | 128KB | **71 asserted cases and 8 reported** — arithmetic and precedence, unary minus, references and absolute references, the folds, the logicals and comparisons, the surviving maths, and every cut family answering `#NAME?` rather than a wrong number |
+| `planui` | 128KB | the menus, Copy, Paste **with its reference shift**, Cut, and Undo greyed when its claim is refused |
+| `planfmt` | 640KB | the SYLK reader and the three number formats, against a host-authored fixture |
+
+Three rules they follow, each paid for:
+
+* **What is compared is the CELL RECORD, never the glass** (§81.66). The grid
+  shows what the evaluator *published* through the number format, so a format
+  defect and an arithmetic defect are the same picture — and a column one
+  character too narrow already looked like a wrong answer once.
+* **Every asserted case is exact in four places**, so the rigs do not have to
+  model PLAN's rounding in order to test its arithmetic. The cases that cannot
+  be — `1/3`, `10/3*3`, `SQRT(2)`, `RAND()` — are REPORTED and read by a
+  person. `NOW()` answers `#N/A` on a 5150 and that is correct: there is no
+  RTC, and `pl_bios_ymd` says so.
+* **`planrig` TYPES its battery rather than loading one**, because §54.0 takes
+  file associations out of `kern_small` entirely: a `.SLK` cannot be
+  double-clicked on the floor machine at all, so a rig that loaded its cases
+  would be testing a path that machine has not got. `planfmt` is on 640KB for
+  the same reason, from the other side.
+
+`planui` drives PLAN's own menu bar (§81.54), which `os88ui`'s `menu_pick`
+cannot see. It does not remember coordinates: `pl_mboxof` lays each title out
+at `[pl_ox]` plus the running sum of `pl_mw[i] + 2*PL_MPAD`, and `pl_mw` is an
+array in PLAN's own bss — so the rig reads the layout the guest actually drew,
+and proves each step against `[pl_mopen]` and `[pl_mhi]` before releasing the
+button.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment
