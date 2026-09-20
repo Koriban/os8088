@@ -40655,6 +40655,15 @@ sh_it_saveas:  db 'Save As...', 0
 ; NO PRINT ITEM. OS8088 has no print backend, so the menu entry is absent
 ; rather than present-and-refusing (decided 2026-09-04). Exit is absent for a
 ; different reason - the OS menu owns it.
+;
+; NO CLOSE ITEM EITHER, and it is Exit's reason with one more step (81.39.2,
+; measured 2026-09-20). Excel's Close shuts one DOCUMENT window because Excel
+; is MDI - Close ends a document, Exit ends the application. This app has one
+; document per instance and the window's own close box already ends both, so
+; a Close item would be a second name for the close box and would express no
+; distinction this app HAS. It is a deliberate absence, not an outstanding
+; gap: what would make it meaningful is MDI, which 81.75 records as the one
+; thing the 1.8 look leaves out on purpose.
 sh_s_nocopyarea: db 'Copy a cell or range first.', 0
 sh_s_sheetpfx: db 'Sheet', 0
 sh_s_locked:   db 'Locked cell on a protected document.', 0

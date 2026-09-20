@@ -103106,12 +103106,18 @@ harmless.
 | Formula | 7 | 7 | **none** |
 | Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
 | Format | 7 | 8 | Justify |
-| File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
+| File | 4 | 11 | Links, Save Workspace, Delete, Page Setup, Printer Setup, Print — **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 11, 8 shared | 10 | **Table, Parse** — Series closed 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
 
-`Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
+`Exit` is absent from File deliberately — the OS menu owns it (§12.2) — and
+**`Close` is absent for the same reason one step on**: Excel's Close ends a
+DOCUMENT because Excel is MDI, while this app has one document per instance
+and the window's own close box already ends both, so the item would be a
+second name for the close box and would express no distinction this app has.
+What would make it meaningful is MDI, which §81.75 records as the one thing
+the 1.8 look leaves out on purpose. SHEET's
 Data menu carries three items Excel does not have at all (Chart Column, Chart
 Gallery, Export Chart as BMP): in Excel charting is a separate document type,
 and §82 is this tree's answer to that.

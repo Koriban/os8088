@@ -102,7 +102,7 @@ but nothing holds it that way while §2.3 is built on top of it.
 | **`Options ▸ Calculate Now`** | force a full recalc | the recalc path and the pass counter already exist; `Calculation...` (auto/manual) is already there and this is its missing other half. The smallest real item on the list |
 | **`Options ▸ Short Menus`** | hide the advanced items | pure menu-table work, and a *visible* Excel 2.x trait — the menus are already SHEET's own tables, so this is a second table and a toggle |
 | **`File ▸ Delete`** | delete a file from disk | the file dialog and a kernel delete already exist; this is a dialog kind and a confirm |
-| **`File ▸ Close`** | close the document | **measure before planning**: the OS owns window close (§12.2), so this may be near-meaningless here, exactly as `Exit` is |
+| ~~**`File ▸ Close`**~~ | — | **measured, and it is NOT a gap.** Excel's Close ends a DOCUMENT because Excel is MDI; this app has one document per instance and the window's close box already ends both, so the item would be a second name for the close box and express no distinction this app has. Recorded as a deliberate absence beside `Exit` |
 
 ### 2.2 Medium, and each self-contained
 
@@ -157,8 +157,8 @@ fix, not a language one, and it can be done first and alone.
 ## 3. The order, and why
 
 1. ~~**§1.2 BIFF `BLANK`**~~ — done in §81.77, both directions and the reader.
-2. **§2.1's cheap four**, measuring `File ▸ Close` before planning it. They are
-   a day between them and they close two menu rows.
+2. **§2.1's cheap four** — now three: `Calculate Now` is done (§81.78) and
+   `File ▸ Close` was measured away. `Short Menus` and `File ▸ Delete` remain.
 3. **§1.1 Sort and blanks.** Ahead of the big features because it is *wrong*
    rather than *missing*, and behind the cheap ones because it is the one item
    here that can break something that works today.
