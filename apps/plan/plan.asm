@@ -549,10 +549,18 @@ PL_FMT_ALIGN_RIGHT   equ 3
 PL_FMT_NUM_MASK      equ 0x30
 PL_FMT_NUM_CLR       equ 0xCF        ; ~PL_FMT_NUM_MASK & 0xFF
 PL_FMT_NUM_SHIFT     equ 4
-PL_FMT_NUM_GENERAL   equ 0
-PL_FMT_NUM_CURRENCY  equ 1
-PL_FMT_NUM_COMMA     equ 2
-PL_FMT_NUM_PERCENT   equ 3
+; THE THREE FORMATS (81.75), and they live HERE, beside the field they are
+; values of, rather than beside pl_numfmt which reads them. There used to be
+; two sets of names for this one 2-bit field - PL_FMT_NUM_GENERAL/CURRENCY/
+; COMMA/PERCENT from the twenty-one-format interpreter, and PL_NF_* from the
+; three that replaced it - and they DISAGREED: Currency was 1 in one set and
+; 2 in the other, so the SYLK writer wrote a Text cell as currency and a
+; Currency cell as comma, and the reader turned Excel's own '$' into Text.
+; Nothing said a word, because both names existed and both assembled.
+PL_NF_NUMBER         equ 0            ; what the value is, up to four places
+PL_NF_TEXT           equ 1            ; ...the same characters, LEFT-aligned
+PL_NF_CURRENCY       equ 2            ; '$', separators, two places, negative
+                                      ; in parentheses
 
 ; --- stage 2.x: cell borders (Format > Border..., its own pl_bordseg claim
 ; and pl_bt_* table - see the PL_CLAIM_BORD_KB comment above for why this
@@ -6388,7 +6396,8 @@ section .text
 ; command that opens it can't fire again while it's up).
 ;
 ; Radio index 0-3 in each dialog is deliberately identical to that
-; category's own PL_FMT_* encoding (PL_FMT_ALIGN_LEFT=1, PL_FMT_NUM_COMMA=2,
+; category's own PL_FMT_*/PL_NF_* encoding (PL_FMT_ALIGN_LEFT=1,
+; PL_NF_CURRENCY=2,
 ; etc, and Font's 0=Normal/1=Bold/2=Underline/3=Bold+Underline is just
 ; PL_FMT_BOLD|PL_FMT_UNDER's own bit pattern) - so applying a choice is a
 ; plain mask-and-OR, no translation table needed anywhere.
@@ -8238,14 +8247,20 @@ pl_dowrite_sylk:
     mov cl, PL_FMT_NUM_SHIFT
     shr bl, cl
     mov al, '$'
-    cmp bl, PL_FMT_NUM_CURRENCY
-    je .c1ok
-    mov al, 'G'
-.c1ok:
+    cmp bl, PL_NF_CURRENCY               ; the only one of the three SYLK can
+    je .c1cur                            ; say: c1 is 0/C/E/F/G/$/* and has no
+    mov al, 'G'                          ; code for "text", so a TEXT cell
+    mov ah, '0'                          ; writes as General and its LEFT
+    jmp short .c1ok                      ; alignment in c2 carries what it can
+.c1cur:
+    mov ah, '2'                          ; ...and Currency says TWO places,
+.c1ok:                                   ; which is what it actually shows
     call pl_stgputb                      ; c1
-    mov al, '0'
-    call pl_stgputb                      ; n (digit count - always 0, this
-                                         ; app's values are whole numbers)
+    mov al, ah
+    call pl_stgputb                      ; n, the decimal count. It was always
+                                         ; '0' under a comment saying "this
+                                         ; app's values are whole numbers",
+                                         ; true before 81.75's fixed point
     mov al, [pl_wrec_fmt]
     and al, PL_FMT_ALIGN_MASK
     mov cl, PL_FMT_ALIGN_SHIFT
@@ -8268,11 +8283,6 @@ pl_dowrite_sylk:
     mov al, 'R'
 .c2ok:
     call pl_stgputb                      ; c2
-    cmp bl, PL_FMT_NUM_COMMA
-    jne .nok
-    mov si, pl_s_k
-    call pl_stgput                      ; ";K"
-.nok:
     mov si, pl_s_crlf
     call pl_stgput
 .noformat:
@@ -8990,7 +9000,6 @@ pl_parsefrec:
     mov word [PL_TROW], 0
     mov byte [PL_TALIGN], 0
     mov byte [PL_TNUMFMT], 0
-    mov byte [PL_TCOMMA], 0
 .tok:
     cmp si, bx
     jae .apply
@@ -9028,10 +9037,10 @@ pl_parsefrec:
     SHOUT pl_pint
     mov [PL_TROW], ax
     jmp .tok
-.isk:
-    inc si
-    mov byte [PL_TCOMMA], 1
-    jmp .tok
+.isk:                                  ; ';K' is consumed and DROPPED - there is
+    inc si                             ; no Comma format among 81.75's three,
+    jmp .tok                           ; and Currency separates its own
+                                       ; thousands anyway
 .isw:                                  ; ;W<first> <last> <width>: column
     inc si                             ; widths, Walden's F-record field (7)
     SHOUT pl_pint                      ; (81.56). 1-based, spaces between
@@ -9115,15 +9124,15 @@ pl_parsefrec:
     SHOUT pl_findcell
     jnc .out                          ; no prior C record for this cell:
                                        ; nothing to attach the format to
-    mov al, [PL_TNUMFMT]
-    cmp byte [PL_TCOMMA], 0
-    je .noupgrade
-    or al, al
-    jnz .noupgrade                    ; ;K only promotes a still-General
-                                       ; code to Comma - an explicit c1 of
-                                       ; '$' (Currency) wins if both appear
-    mov al, PL_FMT_NUM_COMMA
-.noupgrade:
+    mov al, [PL_TNUMFMT]              ; ';K' (thousands separators) is READ and
+                                       ; DROPPED: it used to promote a General
+                                       ; cell to this app's Comma format, and
+                                       ; there is no Comma format any more
+                                       ; (81.75's three). Currency already
+                                       ; separates its thousands, and turning
+                                       ; a ';K' into one would put a '$' on a
+                                       ; cell whose author never asked for a
+                                       ; currency
     mov cl, PL_FMT_NUM_SHIFT
     shl al, cl
     mov ah, [PL_TALIGN]
@@ -9157,7 +9166,7 @@ pl_sylk_numfmt_from_c1:
     xor al, al
     ret
 .cur:
-    mov al, PL_FMT_NUM_CURRENCY
+    mov al, PL_NF_CURRENCY
     ret
 
 ; -----------------------------------------------------------------------------
@@ -15520,9 +15529,6 @@ pl_s_err_unk:   db '#ERR', 0
 ; up beside pl_ftoa's other helpers rather than in here, which is why they
 ; survived the interpreter going.
 ; =============================================================================
-PL_NF_NUMBER   equ 0                 ; the 2-bit field in the format byte
-PL_NF_TEXT     equ 1
-PL_NF_CURRENCY equ 2
 
 ; -----------------------------------------------------------------------------
 ; pl_numfmt - in: pl_acc = the value, BL = the cell's format byte; writes the
@@ -16475,7 +16481,7 @@ pl_s_ext_txt:  db '.TXT', 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3152                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3151                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -16561,8 +16567,7 @@ PL_TISERR     equ PL_TISTXT + 1             ; byte: ...or was an ERROR NAME,
 PL_THAVE      equ PL_TISERR + 1             ; and which one
 PL_TALIGN     equ PL_THAVE + 1             ; pl_parsefrec's own scratch -
 PL_TNUMFMT    equ PL_TALIGN + 1            ; an "F" record's parsed
-PL_TCOMMA     equ PL_TNUMFMT + 1           ; alignment/number-format/;K
-pl_stagelen   equ PL_TCOMMA + 1
+pl_stagelen   equ PL_TNUMFMT + 1
 pl_tbuf       equ pl_stagelen + 2           ; 96: formula bar text (a formula
                                              ; can run to PL_EDITMAX chars)
 pl_colbuf     equ pl_tbuf + 96              ; 4: up to 2 letters + NUL

@@ -2722,6 +2722,24 @@ SOAK = [
         "twice the largest run the machine can hand out",
         needs=("marty",), wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
+    Row("planfmt", "soak", py("tests/planfmt.py"), 40.0,
+        "PLAN's SYLK reader and its three number formats (SPEC.md 81.75), "
+        "against a fixture AUTHORED ON THE HOST - SPEC.md 81.63's rule, "
+        "because a fixture the package wrote itself lets a writer defect and "
+        "a reader defect cancel, and that pair has been caught doing it. The "
+        "defect it was written for: the 2-bit number-format field had TWO "
+        "sets of names, the interpreter's PL_FMT_NUM_* (Currency = 1) and "
+        "the three formats' PL_NF_* (Currency = 2), so the file code and the "
+        "display code disagreed about which value meant what - a Currency "
+        "cell was written as comma-with-no-dollar and Excel's own '$' came "
+        "back as Text, with both names assembling and nothing said. It also "
+        "pins ';K', which must be CONSUMED AND DROPPED now that there is no "
+        "Comma format to promote it to. "
+        "640KB and not the floor machine, because it opens its fixture by "
+        "DOUBLE-CLICKING it and SPEC.md 54.0 takes associations out of "
+        "kern_small entirely; the same reader is what tests/planrig.py's "
+        "machine runs",
+        needs=("marty",), serial=True),
     Row("planrig", "soak", py("tests/planrig.py"), 200.0,
         "PLAN's FEATURE BATTERY on the 128KB machine (SPEC.md 81.75): 71 "
         "asserted cases and 8 reported, typed down column A and read back "
