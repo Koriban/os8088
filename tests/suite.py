@@ -2722,6 +2722,25 @@ SOAK = [
         "twice the largest run the machine can hand out",
         needs=("marty",), wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
+    Row("planrig", "soak", py("tests/planrig.py"), 200.0,
+        "PLAN's FEATURE BATTERY on the 128KB machine (SPEC.md 81.75): 71 "
+        "asserted cases and 8 reported, typed down column A and read back "
+        "out of the CELL RECORDS at FX_SCALE. plansmall asks whether PLAN "
+        "evaluates at all; this asks what it computes - arithmetic and "
+        "precedence, unary minus, references and absolute references, the "
+        "folds, the logicals and the comparisons, the surviving maths, and "
+        "every cut family answering #NAME? rather than a wrong number. It "
+        "found AVERAGE returning n/n = 1. "
+        "TYPED and not loaded, because SPEC.md 54.0 takes file associations "
+        "out of kern_small entirely - a .SLK cannot be double-clicked on "
+        "this machine, so a rig that loaded its battery would be testing a "
+        "path the floor machine has not got. Every asserted case has an "
+        "answer that is EXACT in four places, so this row does not have to "
+        "model PLAN's rounding to test its arithmetic. "
+        "SOAK: it wants `make small` and `make plan`, and it types for two "
+        "minutes of guest time",
+        needs=("marty",), wants=("build/small360.img",),
+        serial=True),
     Row("tanksmall", "soak", py("tests/tanksmall.py"), 30.0,
         "SPEC.md 85.3.5.1: TANK's APP_SMALL arm plays on the 128KB floor"
         "machine - the claim is GRANTED off its ladder, and the HUD template's"

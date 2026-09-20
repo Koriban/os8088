@@ -12880,10 +12880,18 @@ pl_funcfinish:
     call pl_acc_int
     jmp .fout
 .avgok:
-    call pl_pacc_to_a                 ; A REAL MEAN NOW, not a truncated one:
-    mov ax, [pl_pcnt]                 ; AVERAGE(1,2) is 1.5 where the integer
-    call fx_i2b                       ; evaluator gave 1
-    call fx_div
+    mov ax, [pl_pcnt]                 ; THE COUNT FIRST, THE SUM LAST, and the
+    call fx_i2b                       ; order is the whole of this: fx_i2b is
+    call pl_pacc_to_a                 ; `fx_i2a` + `fx_a_to_b`, so it goes
+                                       ; THROUGH register A and overwrites it.
+                                       ; Loaded the other way round, A held the
+                                       ; count rather than the sum and every
+                                       ; AVERAGE was n/n = 1 - AVERAGE(1..5)
+                                       ; came back 1 while SUM/COUNT of the
+                                       ; same range came back 3.
+    call fx_div                       ; A REAL MEAN, not a truncated one:
+                                       ; AVERAGE(1,2) is 1.5 where the integer
+                                       ; evaluator gave 1
     call pl_acc_store
     jmp .fout
 .count:
