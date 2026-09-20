@@ -103106,7 +103106,7 @@ harmless.
 | Formula | 7 | 7 | **none** |
 | Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
 | Format | 7 | 8 | Justify |
-| File | 4 | 11 | Links, Save Workspace, Delete, Page Setup, Printer Setup, Print — **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
+| File | 5 | 11 | Links, Save Workspace, Page Setup, Printer Setup, Print — `Delete` closed in §81.79, and **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 11, 8 shared | 10 | **Table, Parse** — Series closed 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
@@ -104474,6 +104474,53 @@ hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
 and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
+
+### 81.79 File ▸ Delete
+
+Excel's File menu carries **Delete** after Save As, and §81.39.2 listed it
+among the six that menu was missing. **152 bytes and 14 of bss.**
+
+`OSAPI_FILE_DELETE` already existed, and so did the confirm — this follows
+`sh_docmd_dbdelete`'s shape exactly, Yes/No through `os88ui_ask` with a
+completion that acts on `AL == 0` and on nothing else, because a *dismissed*
+alert must not delete anything.
+
+**Unlike §81.78 nothing moved.** Excel's place for Delete is after Save As,
+which here is the END of the File menu, so no item index shifted and no
+dispatch had to be renumbered. Worth saying only because the command before
+this one had the opposite property and it cost a test.
+
+#### 81.79.1 The picker is an Open, and it says so
+
+The kernel's file dialog has two modes, `FDLG_OPEN` and `FDLG_SAVE` (§38),
+and no way to set a title or a verb. So Delete's picker **is** an Open: the
+window is titled *Open* and its button says *Open*, and a byte
+(`[sh_dlg_del]`) is what tells `sh_ondlg` what was meant by it.
+
+That is a wart and it is recorded rather than hidden. It is not a hazard
+only because the step that destroys something is separately labelled — the
+alert says **"Delete this file?"** — so nothing is lost by pressing a button
+marked Open. Making the picker say Delete is a kernel change (a third mode,
+or a caption), not a SHEET one.
+
+#### 81.79.2 The name the picker chose is NOT the document's
+
+`sh_ondlg` copies the chosen name into **`sh_name`** — which is the open
+document's own name, the one Save writes to. A Delete that let it do that
+would have left the sheet pointing at the file it had just deleted, and the
+next Save would have re-created it under the document's contents. So a
+delete's name lands in `sh_delname`, a buffer of its own, and `sh_name` is
+never touched.
+
+**The flag is cleared before the alert goes up**, not after the delete. Every
+path out of the alert — Yes, No, dismissed, or `os88ui_ask` refusing because
+one was already up — therefore leaves it down, and cannot leave the *next*
+File ▸ Open behaving like a Delete.
+
+`tests/sheetdel.py` is the gate, three checks, and the first is the one with
+teeth: **No must not delete.** A build that ignored the answer would still
+pass the Yes check. The third pins §81.79.2 — the open document is still on
+the volume afterwards.
 
 ### 81.78 Options ▸ Calculate Now
 

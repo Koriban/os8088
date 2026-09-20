@@ -7555,10 +7555,17 @@ sh_mfire:
     call sh_repaint
     jmp .out
 .fsaveas:
-    mov al, SH_FDK_SAVEFMT             ; 3, and the last item. ASK for the
+    cmp al, 3
+    jne .fdelete
+    mov al, SH_FDK_SAVEFMT             ; 3. ASK for the
     call sh_fdlg_open_r                  ; format, then name it - the format used
     jmp .out                           ; to be whatever extension the typed
                                        ; name happened to end in
+.fdelete:                              ; 4: File > Delete (81.79). The kernel
+    mov byte [sh_dlg_del], 1           ; dialog has only OPEN and SAVE, so the
+    mov al, FDLG_OPEN                  ; PICKER is an Open and this flag is what
+    call sh_dlg                        ; tells sh_ondlg what was meant by it
+    jmp .out
 .edit:
     call sh_docmd_edit
     jmp .out
@@ -16083,6 +16090,12 @@ sh_ondlg:
     mov cx, si                       ; CX = our window ptr (SI about to move)
     mov si, di
     mov di, sh_name
+    cmp byte [sh_dlg_del], 0         ; 81.79: a DELETE picks a file that is
+    je .dest                         ; not this document, so its name must
+    mov di, sh_delname               ; not land in sh_name - that is the open
+.dest:                               ; document's own name, and Save would
+                                     ; then have written over the file the
+                                     ; user had just chosen to delete
     mov dx, SH_NAMEMAX               ; the count lives in DX - the loop body
 .copy:                               ; writes AL, so AX cannot hold it, and
     mov al, [es:si]                  ; CX holds the window
@@ -16096,6 +16109,16 @@ sh_ondlg:
     mov byte [di], 0
 .copied:
     mov si, cx                       ; SI = our window again
+    cmp byte [sh_dlg_del], 0
+    je .notdel
+    mov byte [sh_dlg_del], 0         ; cleared FIRST: every path below leaves
+    mov al, OS88UI_AYESNO            ; the flag down, so a dismissed alert or
+    mov bx, [sh_ownwin]              ; a refused one cannot leave the NEXT
+    mov si, sh_s_delq                ; Open behaving like a Delete
+    mov di, sh_ondelete
+    call os88ui_ask                  ; the gfx lock is held here, which is
+    jmp short .drawn                 ; what os88ui_ask's contract wants
+.notdel:
     or bl, bl
     jz .load
     call sh_dowrite
@@ -16104,11 +16127,36 @@ sh_ondlg:
     call sh_doread
 .draw:
     call sh_repaint
+.drawn:
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ondelete - os88ui_ask's completion for File > Delete (81.79). AL = the
+; button index, or OS88UI_ACANCEL when it was dismissed; SI is OUR window and
+; the gfx lock is held. sh_docmd_dbdelete's own shape, for its reason: a
+; DISMISSED alert must not delete anything.
+; -----------------------------------------------------------------------------
+sh_ondelete:
+    push ax
+    push si
+    cmp al, 0                          ; Yes, and nothing else
+    jne .out
+    push si
+    mov si, sh_delname
+    call OSAPI_FILE_DELETE
+    pop si
+    mov word [sh_msg], sh_s_deleted
+    jnc .out
+    mov word [sh_msg], sh_s_delfail    ; FERR_* in AX: the sheet says it could
+.out:                                  ; not rather than saying nothing
+    call sh_repaint
+    pop si
     pop ax
     ret
 
@@ -40611,7 +40659,7 @@ sh_mf_ret:
 ; menu index (the macro language names commands, not menu positions), which is
 ; what made the renumber safe to do at all.
 sh_mtab:
-    dw sh_m_file,    sh_i_file,    4
+    dw sh_m_file,    sh_i_file,    5
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
@@ -40648,10 +40696,18 @@ sh_ttl:        db 'Sheet', 0
 sh_s_appname:  db 'Sheet', 0
 sh_m_file:     db 'File', 0
 sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas
+               dw sh_it_fdelete
 sh_it_new:     db 'New...', 0
 sh_it_open:    db 'Open...', 0
 sh_it_save:    db 'Save', 0
 sh_it_saveas:  db 'Save As...', 0
+sh_it_fdelete: db 'Delete...', 0         ; 81.79. Excel puts it after Save As,
+                                          ; which here is the END of the menu -
+                                          ; so unlike 81.78's Calculate Now no
+                                          ; index moves and no dispatch shifts
+sh_s_delq:     db 'Delete this file?', 0  ; os88ui_ask clips at 34 characters
+sh_s_deleted:  db 'Deleted.', 0
+sh_s_delfail:  db 'Could not delete it.', 0
 ; NO PRINT ITEM. OS8088 has no print backend, so the menu entry is absent
 ; rather than present-and-refusing (decided 2026-09-04). Exit is absent for a
 ; different reason - the OS menu owns it.
@@ -42373,7 +42429,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8119                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8133                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -42414,7 +42470,11 @@ sh_scrollrow  equ sh_scrollcol + 2
 sh_editing    equ sh_scrollrow + 2
 sh_editlen    equ sh_editing + 1
 sh_editbuf    equ sh_editlen + 1            ; 64: SH_EDITMAX + NUL
-sh_name       equ sh_editbuf + 64           ; 13: 8.3 name + NUL
+sh_dlg_del    equ sh_editbuf + 64           ; byte: 81.79, the file dialog was
+                                             ; opened by File > Delete
+sh_delname    equ sh_dlg_del + 1            ; 13: ...and the name it chose,
+                                             ; kept apart from sh_name
+sh_name       equ sh_delname + 13           ; 13: 8.3 name + NUL
 sh_ox         equ sh_name + 13
 sh_oy         equ sh_ox + 2
 sh_cw         equ sh_oy + 2

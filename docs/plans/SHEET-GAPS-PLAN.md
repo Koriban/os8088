@@ -100,9 +100,42 @@ but nothing holds it that way while §2.3 is built on top of it.
 | | what it is | note |
 |---|---|---|
 | **`Options ▸ Calculate Now`** | force a full recalc | the recalc path and the pass counter already exist; `Calculation...` (auto/manual) is already there and this is its missing other half. The smallest real item on the list |
-| **`Options ▸ Short Menus`** | hide the advanced items | pure menu-table work, and a *visible* Excel 2.x trait — the menus are already SHEET's own tables, so this is a second table and a toggle |
-| **`File ▸ Delete`** | delete a file from disk | the file dialog and a kernel delete already exist; this is a dialog kind and a confirm |
+| ~~**`File ▸ Delete`**~~ | — | **done, §81.79.** 152 bytes. It was cheap as predicted, and the two things worth knowing were not in the prediction: the picker is an `FDLG_OPEN` and says so, and the chosen name had to be kept out of `sh_name` — which is the OPEN DOCUMENT's name |
 | ~~**`File ▸ Close`**~~ | — | **measured, and it is NOT a gap.** Excel's Close ends a DOCUMENT because Excel is MDI; this app has one document per instance and the window's close box already ends both, so the item would be a second name for the close box and express no distinction this app has. Recorded as a deliberate absence beside `Exit` |
+
+### 2.1.1 `Options ▸ Short Menus` — measured, and NOT cheap
+
+It was listed above as *"pure menu-table work"*. That is the easy half.
+
+**What it hides is now known rather than guessed.** The reference captures
+carry SHORT and FULL pairs for five menus (`menu_file`, `menu_edit`,
+`menu_format`, `menu_data2`, `menu_options` against their `_full` twins), and
+against SHEET's own tables they come to **nine items**:
+
+| menu | hidden in short | SHEET has |
+|---|---|---|
+| File | Links, Delete, Save Workspace | **none of them** — SHEET's File already IS Excel's short File |
+| Edit | Repeat, Paste Special, Paste Link | all three |
+| Format | Cell Protection | it |
+| Data | Extract, Delete, Series, Table, Parse | Extract, Delete, Series |
+| Options | Set Print Titles, Set Page Break, Freeze Panes, Protect Document, Workspace | Freeze Panes, Protect Document |
+
+So the feature is real here — it hides the advanced flavour wholesale — and
+`Short Menus` ↔ `Full Menus` is the same relabel-by-repointing this app
+already does four times over.
+
+**The hard half is that item indices are POSITIONS.** The hidden items are
+*interleaved*, not trailing — `Repeat` is Edit's index 1 and `Paste Special`
+its 6 — so a short menu is not a smaller count, it is a different table, and
+every command dispatch reads `AL` as an index into the FULL one. That needs a
+per-menu remap, and its failure mode is **the wrong command runs**: exactly
+what §81.78 had to be careful about for one inserted item, multiplied by five
+menus. Reordering the items so the hidden ones trail would avoid it and would
+also stop the full menus matching Excel's order, which is the point of having
+them.
+
+Budget it at **~300 bytes and a remap layer with a self-checking length
+assertion**, not at a table and a toggle.
 
 ### 2.2 Medium, and each self-contained
 
@@ -157,8 +190,12 @@ fix, not a language one, and it can be done first and alone.
 ## 3. The order, and why
 
 1. ~~**§1.2 BIFF `BLANK`**~~ — done in §81.77, both directions and the reader.
-2. **§2.1's cheap four** — now three: `Calculate Now` is done (§81.78) and
-   `File ▸ Close` was measured away. `Short Menus` and `File ▸ Delete` remain.
+2. ~~**§2.1's cheap four**~~ — **the group is closed.** `Calculate Now`
+   (§81.78) and `File ▸ Delete` (§81.79) are done, `File ▸ Close` was
+   measured away as a non-gap, and `Short Menus` was measured OUT of the
+   cheap group into §2.1.1. Of four items, two were built, one was refused
+   with a reason and one was re-sized — which is roughly what "cheap" is
+   worth as an estimate before the measuring.
 3. **§1.1 Sort and blanks.** Ahead of the big features because it is *wrong*
    rather than *missing*, and behind the cheap ones because it is the one item
    here that can break something that works today.

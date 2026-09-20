@@ -2740,6 +2740,20 @@ SOAK = [
         "kern_small entirely; the same reader is what tests/planrig.py's "
         "machine runs",
         needs=("marty",), serial=True),
+    Row("sheetdel", "soak", py("tests/sheetdel.py"), 120.0,
+        "SPEC.md 81.79: File > Delete, and the No that must not delete. The "
+        "kernel file dialog has only OPEN and SAVE modes, so the picker is an "
+        "Open and a flag tells sh_ondlg what was meant by it - which makes "
+        "two things worth gating. NO MUST NOT DELETE is the check with the "
+        "teeth: a build that ignored the answer would still pass the Yes "
+        "check. And the flag is cleared BEFORE the alert goes up, so a "
+        "dismissed alert cannot leave the next Open behaving like a Delete. "
+        "The third check is the trap that was avoided: sh_ondlg copies the "
+        "chosen name into sh_name, the OPEN DOCUMENT's own name, so a Delete "
+        "needed a buffer of its own or Save afterwards would have written "
+        "over the file just deleted. Read off the VOLUME, because 'is the "
+        "file gone' is a question about the disk",
+        needs=("marty",), serial=True),
     Row("sheetcalc", "soak", py("tests/sheetcalc.py"), 120.0,
         "SPEC.md 81.78: Calculation: Manual really leaves a formula STALE, "
         "and Options > Calculate Now catches it up. sh_drawgrid re-evaluates "
