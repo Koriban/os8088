@@ -2135,27 +2135,11 @@ sh_geom_row:
 ; 255 is free, and a row's height is a word.
 SH_CW_HIDDEN equ 255
 SH_RH_HIDDEN equ 0xFFFF
-
-; sh_col_hidden - in: AX = a column; out: CF=1 if it is hidden. Every register
-; preserved
-sh_col_hidden:
-    push ax
-    push bx
-    push es
-    mov bh, [sh_cursheet]
-    xor bl, bl
-    add bx, ax
-    mov es, [sh_noteseg]
-    cmp byte [es:bx + SH_COLW_OFF], SH_CW_HIDDEN
-    pop es
-    pop bx
-    pop ax
-    je .yes
-    clc
-    ret
-.yes:
-    stc
-    ret
+; NOTHING ASKS "is this hidden?" as a question of its own, and nothing should:
+; sh_colwidth and sh_rowheight answer ZERO for a hidden one, which is what lets
+; sh_geom skip it without a second lookup. Two predicates - sh_col_hidden and
+; sh_row_hidden - were written beside these sentinels and never called by
+; anything, which is worse than absent: they read like the mechanism.
 
 ; sh_colwidth - in: AX = a column; out: AX = its width in characters, and ZERO
 ; when it is hidden - which is what makes sh_geom skip it without a second
@@ -2328,19 +2312,6 @@ sh_rowtw:
     pop si
     pop cx
     pop bx
-    ret
-
-; sh_row_hidden - AX = a row; out: CF=1 if it is hidden (81.73). Preserves all
-sh_row_hidden:
-    push ax
-    call sh_rowtw
-    cmp ax, SH_RH_HIDDEN
-    pop ax
-    je .yes
-    clc
-    ret
-.yes:
-    stc
     ret
 
 ; sh_rowheight - AX = a row -> AX = its height in pixels, and ZERO when it is
@@ -9336,20 +9307,6 @@ section .text
 
 sh_s_sortfull: db 'Sort incomplete - text area full.', 0
 
-; sh_docmd_sortcol_r - the resident door (81.71.6). Data > Sort's worker is
-; ~2.5KB that runs once per Sort, so it lives in the module; it has no window
-; callback of its own, which is what makes this one verb and one call rather
-; than Form's four
-sh_docmd_sortcol_r:
-    push bp
-    mov bp, SHM_SORT
-    call ch_ovcall
-    pop bp
-    jnc .out
-    mov word [sh_msg], sh_s_noovl
-.out:
-    ret
-
 ; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
 ; current sheet) ascending by value; empty rows are left exactly where
@@ -10284,17 +10241,6 @@ sh_ser_setstep:
     pop di
     pop si
     pop ax
-    ret
-
-; sh_docmd_series_r - the resident door (81.72)
-sh_docmd_series_r:
-    push bp
-    mov bp, SHM_SERIES
-    call ch_ovcall
-    pop bp
-    jnc .out
-    mov word [sh_msg], sh_s_noovl
-.out:
     ret
 
 sh_s_dbname:   db 'DATABASE', 0
@@ -13870,13 +13816,6 @@ sh_idlg_click_r:
     call ch_ovcall
     pop bp
     ret
-sh_idlg_close_r:
-    push bp
-    mov bp, SHM_IDCLOSE
-    call ch_ovcall
-    pop bp
-    ret
-
 sh_ldlg_open_r:
     push bp
     mov bp, SHM_LOPEN
