@@ -2740,6 +2740,27 @@ SOAK = [
         "kern_small entirely; the same reader is what tests/planrig.py's "
         "machine runs",
         needs=("marty",), serial=True),
+    Row("planui", "soak", py("tests/planui.py"), 120.0,
+        "PLAN's MENUS, Copy/Paste, Cut and Undo on the 128KB machine "
+        "(SPEC.md 81.75) - the parts a formula never reaches, none of which "
+        "has a keyboard shortcut, so planrig cannot touch them. It found "
+        "THREE orphaned flag tests left by the protection cut: a `jc` whose "
+        "`call sh_prot_blocked` had gone, still reading the carry of "
+        "whatever came before it. In pl_paste_cell the flag it read was the "
+        "row bound's own, always set for an in-range row, so PASTE NEVER "
+        "PASTED on any machine; Cut and Clear ran or refused by accident of "
+        "the previous command. "
+        "The menu bar is PLAN's own (81.54), so os88ui's menu_pick cannot "
+        "see it: the rig READS pl_ox and the pl_mw widths out of the guest "
+        "and proves every step against [pl_mopen] and [pl_mhi] before "
+        "releasing the button, rather than remembering a pulldown offset. "
+        "It also pins the relative-reference adjustment the dead-code sweep "
+        "argued for on paper - =A1*10 copied a row down must read 20 - and "
+        "that Undo is GREYED rather than dead when its optional claim is "
+        "refused (81.57, and SPEC.md 47's grey-a-fact). "
+        "SOAK: `make small` and `make plan`, and it drives menus",
+        needs=("marty",), wants=("build/small360.img",),
+        serial=True),
     Row("planrig", "soak", py("tests/planrig.py"), 200.0,
         "PLAN's FEATURE BATTERY on the 128KB machine (SPEC.md 81.75): 71 "
         "asserted cases and 8 reported, typed down column A and read back "

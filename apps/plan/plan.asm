@@ -6051,7 +6051,10 @@ pl_docmd_cut:
     push cx
     push si
     push di
-    jc .refused                       ; pl_commit, so the funnel guard misses
+    ; ...and the SAME orphan as pl_paste_cell's, from the same cut: SHEET has
+    ; `call sh_prot_blocked` here and tests ITS carry. Protection went with
+    ; 81.75 and the test stayed, reading whatever CF the CALLER happened to
+    ; leave - so Cut refused or ran depending on the command before it.
     call pl_docmd_copy                 ; the whole block goes to the clipboard,
     mov ax, [pl_selrow]                ; so the whole block has to leave the
     mov bx, [pl_selrow2]               ; sheet - it cleared the anchor alone
@@ -6084,11 +6087,12 @@ pl_docmd_cut:
     mov si, [pl_ownwin]
     call pl_repaint
     jmp .out
-.refused:                             ; A REFUSAL STILL HAS TO REPAINT. Jumping
-    mov si, [pl_ownwin]               ; straight to the exit skipped the redraw
-    call pl_repaint                   ; and the message pl_prot_blocked had just
-.out:                                 ; set was never painted - the command did
-    pop di                            ; nothing and said nothing
+                                      ; (Cut's `.refused` arm went with the
+                                      ; orphan above: it repainted after a
+                                      ; protection refusal, and nothing can
+                                      ; reach it now that there is no refusal)
+.out:
+    pop di
     pop si
     pop cx
     pop bx
@@ -6246,8 +6250,14 @@ pl_paste_cell:
     jae .out
     mov [pl_selrow], bx
     mov [pl_selrow2], bx
-    jc .out                           ; DIRECTLY and never reach pl_commit, so
-                                      ; the funnel guard does not cover them
+    ; NOTHING TESTS THE CARRY HERE, and there used to be a `jc .out` that did.
+    ; It belonged to the `call pl_prot_blocked` above it - document protection,
+    ; which 81.75 cut - and when the call went the test stayed. `mov` does not
+    ; touch the flags, so what it read was the `cmp bx, PL_ROWS` two lines up,
+    ; and an IN-RANGE row is exactly the case that leaves CF set (which is why
+    ; the `jae` above it is not taken). So it was taken for every valid cell:
+    ; pl_paste_cell returned before committing anything and PASTE NEVER PASTED,
+    ; on any machine, with the menu item enabled and no message.
     ; --- WHICH PARTS OF THE SOURCE CELL THIS PASTE IS FOR (81.45) ----------
     mov al, [pl_ps_mode]
     cmp al, PL_PS_LINK
@@ -7088,9 +7098,13 @@ pl_fdlg_apply0:
     SHOUT pl_repaint                    ; ONE repaint for the whole block
     jmp .out
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
-.doclear:
-    jc .refused                       ; ...and the same here: this engine's
-                                      ; .out does not repaint either
+.doclear:                             ; ...and the THIRD orphan of the same cut.
+                                      ; SHEET has `SHOUT sh_prot_blocked` here
+                                      ; and tests its carry; 81.75 cut
+                                      ; protection and left the `jc .refused`
+                                      ; behind. Control REACHES this label by a
+                                      ; jump, so the flag it read belonged to
+                                      ; whatever the dispatcher did last
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
     ; has highlighted. It used to clear the anchor alone (81.17's third case,
     ; after Fill and the format dialogs).
