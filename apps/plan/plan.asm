@@ -207,7 +207,13 @@ PL_SB_H      equ 16                 ; stage 2.x: the status bar strip at
                                      ; same height as the formula bar for
                                      ; visual symmetry
 PL_EDITMAX   equ 63                 ; room for a formula, not just a number
-PL_NAMEMAX   equ 12
+PL_NAME_MAX  equ 12                  ; characters an IDENTIFIER may run to in a
+                                     ; formula - a function name, and once a
+                                     ; defined name. The names went; the
+                                     ; parser's cap on what it will collect
+                                     ; stayed, since it sizes pl_ident
+PL_NAMEMAX   equ 12                  ; characters in an 8.3 FILE name - the
+                                     ; same number, a different thing
 PL_RW_CAP    equ 80                  ; stage 2.x: pl_formula_reidx's own
                                      ; output cap - a shifted reference can
                                      ; grow by a digit or two (row 9->10,
@@ -7732,161 +7738,6 @@ pl_idlg_close:
 section .text
 
 
-; -----------------------------------------------------------------------------
-; pl_docmd_find - Formula > Find...: move the selection to the next cell whose
-; DISPLAYED TEXT contains what was typed.
-;
-; Displayed text, not stored value, and that is the useful definition rather
-; than the easy one: it finds 3.5 in a cell holding 3.5, "Total" in a label,
-; and - because a formula cell displays its result - 1003.5 in a cell holding
-; =A2+A3. A search over stored bytes would have matched none of those the way
-; a user expects, since a double's eight bytes look nothing like what is on
-; screen.
-;
-; Case-insensitive, and it wraps: the walk starts at the cell AFTER the
-; selection and comes back round to it, so Find repeated from the same box
-; steps through every match rather than sticking on the first.
-; -----------------------------------------------------------------------------
-pl_find_text:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov byte [pl_find_buf], 0
-    mov ax, [pl_find_col]
-    mov bx, [pl_find_row]
-    call pl_getcell2
-    jnc .out
-    cmp byte [pl_curtype], PL_T_TEXT
-    je .istext
-    cmp byte [pl_curtype], PL_T_BOOL  ; a LOGICAL is found by the name it
-    jne .fnum                         ; shows (81.51)
-    mov ax, dx
-    call pl_boolname
-    mov si, pl_numbuf
-    mov di, pl_find_buf
-    call pl_strcpy
-    jmp .up
-.fnum:
-    call pl_acc_load_a                ; a number: the same ten significant
-    mov di, pl_find_buf               ; digits the cell itself shows
-    mov ax, 10
-    call fx_ftoa
-    jmp .up
-.istext:
-    push es
-    mov es, [pl_txtseg]
-    mov si, [pl_curtoff]
-    mov di, pl_find_buf
-    mov cx, PL_EDITMAX
-.tc:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .tcd
-    inc si
-    inc di
-    dec cx
-    jnz .tc
-    mov byte [di], 0
-.tcd:
-    pop es
-.up:
-    mov si, pl_find_buf
-    call pl_upcase_at
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_find_match - CF=1 if pl_idlg_buf occurs anywhere in pl_find_buf
-pl_find_match:
-    push ax
-    push bx
-    push si
-    push di
-    mov si, pl_find_buf
-.at:
-    cmp byte [si], 0
-    je .no
-    mov bx, si
-    mov di, pl_idlg_buf
-.cmp:
-    mov al, [di]
-    or al, al
-    jz .yes
-    cmp al, [bx]
-    jne .adv
-    inc bx
-    inc di
-    jmp .cmp
-.adv:
-    inc si
-    jmp .at
-.no:
-    ; an empty needle would have matched at the first character above, so
-    ; reaching here means it really is absent
-    pop di
-    pop si
-    pop bx
-    pop ax
-    clc
-    ret
-.yes:
-    pop di
-    pop si
-    pop bx
-    pop ax
-    stc
-    ret
-
-; =============================================================================
-; DEFINED NAMES (stage 3.0c) - Formula > Define Name... binds a name to the
-; cell the selection is on, and a formula may then use that name anywhere a
-; reference would go.
-;
-; A FIXED TABLE IN BSS rather than a claim: PL_NAME_CAP names at PL_NAME_REC
-; bytes is under 400, which is small enough that a whole segment claim for it
-; would be the wrong shape - and unlike the cell array it never grows during
-; a repaint, so nothing here needs the shuffling that made the cells' claim
-; worth having.
-;
-; Each record is a name, uppercased on entry, then its column and row. Names
-; are compared uppercase because pl_pident already uppercases what it reads,
-; and a spreadsheet where Total and TOTAL are different cells would be a trap
-; rather than a feature.
-;
-; A NAME BINDS A RECTANGLE (stage 4.6). It used to bind one cell, and the
-; reason written here was that "a range needs the reference-typed argument the
-; value model still does not have (the same thing blocking VLOOKUP and the
-; array functions)". That argument landed in 81.23, so the reason expired and
-; the record grew the second corner it had been waiting for.
-;
-; A one-cell name is the same thing with both corners equal, so nothing that
-; worked before behaves differently - `=Total` still reads one cell, and the
-; dialog still binds whatever the selection is, which for a single cell is a
-; 1x1 rectangle.
-;
-; STILL INSTANCE-WIDE, not per sheet: that needs a sheet field here plus a
-; rule for what an unqualified name means from another sheet, and it would be
-; worse guessed at.
-; =============================================================================
-PL_NAME_CAP  equ 16
-PL_NAME_MAX  equ 12                  ; characters, not counting the NUL
-PL_NAME_REC  equ PL_NAME_MAX + 1 + 8 ; text + NUL + col + row + col2 + row2
-
-; -----------------------------------------------------------------------------
-; pl_name_find - in: SI = an uppercase NUL name
-; out: CF=1 and BX = its record offset in pl_names; CF=0 = no such name
-; -----------------------------------------------------------------------------
 pl_fdlg_open_r:
     jmp pl_fdlg_open
 pl_fdlg_paint_r:
@@ -18275,7 +18126,7 @@ pl_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3556                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3152                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -18587,27 +18438,17 @@ pl_mchk         equ pl_calcmanual + 1       ; byte: this dropdown row is the
                                              ; checked one
 pl_a1style      equ pl_mchk + 1             ; byte: 0 = A1, 1 = R1C1 - what
                                              ; the reference box and Goto show
-; --- stage 3.0c: the list dialog ---
-; --- stage 3.0c: defined names ---
-pl_names          equ pl_a1style + 1            ; PL_NAME_CAP * PL_NAME_REC
-pl_nm_tmp         equ pl_names + PL_NAME_CAP * PL_NAME_REC           ; pl_wr_r1c1's banked column
-                                             ; from a FILE, which cannot be
-                                             ; pl_nm_buf - that is where
-                                             ; pl_name_def puts what it is
-                                             ; GIVEN, and handing a routine
-                                             ; its own destination as the
-                                             ; source is the kind of aliasing
-                                             ; that works until the copy grows
-                                             ; a step
-pl_find_col       equ pl_nm_tmp + 2  ; the walk's current cell...
-pl_find_row     equ pl_find_col + 2
-pl_find_buf     equ pl_find_row + 2          ; PL_EDITMAX+1: ...as displayed
+pl_nm_tmp         equ pl_a1style + 1     ; word: pl_wr_r1c1 banks the column
+                                             ; it is writing here, because the
+                                             ; one it is GIVEN can come from a
+                                             ; file buffer that the next read
+                                             ; overwrites
 
 ; Sheet's own in-window menu bar (stage 2.x, see the PL_MBAR_H section
 ; comment) - pl_goy is the grid's own origin (raw [pl_oy] + PL_MBAR_H);
 ; everything from pl_mopen down is pl_mtrack/pl_mbar_*/pl_mdrop_*/
 ; pl_mitem_hit's shared working state.
-pl_goy            equ pl_find_buf + PL_EDITMAX + 1
+pl_goy            equ pl_nm_tmp + 2
 pl_mopen      equ pl_goy + 2               ; byte: open menu index, PL_M_NONE
 pl_mhi        equ pl_mopen + 1             ; byte: hot item in the open
                                              ; dropdown, PL_M_NONE
