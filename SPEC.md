@@ -104482,7 +104482,12 @@ Excel's Options menu carries **Calculate Now** directly after
 SHEET had the *capability* — the Calculation dialog's third choice — and not
 the command.
 
-It is 26 bytes and the interesting part is what the first attempt got wrong.
+It is **45 bytes** — 26 for the item and its arm, 19 for the resident
+`sh_calc_now` the arm calls — and the interesting part is what the first
+attempt got wrong. (The commit that landed it says 26 and 50,001: that figure
+was measured BEFORE `sh_calc_now` was split out and never re-taken. The image
+is 50,020. Measure last, not first.)
+
 Writing the menu's arm from scratch, it called `sh_recalc_all`, set no status
 message, and **recorded nothing** — so a macro recorded over it would have
 played back with the command missing. The dialog's own version does none of
