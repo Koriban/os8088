@@ -61,6 +61,12 @@ COL_A = [3.0, 'pear', T, NA, 1.0, 'Banana', FA, 'apple', 2.0,
          ('formula', '"cherry"', 'cherry'), ('formula', '1.5', 1.5)]
 WANT_A = [1.0, 1.5, 2.0, 3.0, 'apple', 'Banana', 'cherry', 'pear', FA, T, NA]
 COL_G = ['b', 2.0, T, 'A']
+# 81.80: a two-column block whose KEY cell is empty on one row. B3 has no
+# value and C3 does, so row 3 is in play and must sort LAST - in BOTH
+# directions, which is Excel's rule and the thing a "blanks compare greater"
+# implementation gets wrong the moment the sort runs descending.
+COL_B = {1: 2.0, 3: 1.0}                # B2 and B4; B3 deliberately absent
+COL_C = {1: 'b2', 2: 'b3', 3: 'b4'}     # ...and C carries the whole row
 WANT_GH_UP = [(2.0, 2.0), ('A', 4.0), ('b', 1.0), (T, 3.0)]
 WANT_GH_DOWN = list(reversed(WANT_GH_UP))
 
@@ -69,6 +75,10 @@ def build_disk():
     os.makedirs(WORK, exist_ok=True)
     cells = {(r, 0): v for r, v in enumerate(COL_A)}
     cells[(0, 2)] = DIV                                     # C1
+    for r, v in COL_B.items():
+        cells[(r, 1)] = v                                   # B2, B4
+    for r, v in COL_C.items():
+        cells[(r, 2)] = v                                   # C2:C4
     for r, v in enumerate(COL_G):
         cells[(r, 6)] = v                                   # G1:G4
         cells[(r, 7)] = float(r + 1)                        # H1:H4
@@ -168,6 +178,12 @@ def main():
         select(0, 6, 3, 7)
         sort(descending=True)
         save("down")
+        select(1, 1, 3, 2)                  # 6: B2:C4, the blank-key row
+        sort()
+        save("bup")
+        select(1, 1, 3, 2)
+        sort(descending=True)
+        save("bdown")
 
     up = F.read_sylk(saved["up"]) if "up" in saved else {}
     down = F.read_sylk(saved["down"]) if "down" in saved else {}
@@ -193,6 +209,32 @@ def main():
     gh = [(plain(down.get((r, 6))), plain(down.get((r, 7)))) for r in range(4)]
     check(gh == WANT_GH_DOWN, "...and descending reverses the whole order",
           "G:H came out %r" % (gh,))
+
+    # --- 81.80: the row whose KEY cell is empty --------------------------------
+    bup = F.read_sylk(saved["bup"]) if "bup" in saved else {}
+    bdown = F.read_sylk(saved["bdown"]) if "bdown" in saved else {}
+    bc = [(plain(bup.get((r, 1))), plain(bup.get((r, 2)))) for r in range(1, 4)]
+    check(bc == [(1.0, 'b4'), (2.0, 'b2'), (None, 'b3')],
+          "a row whose key cell is EMPTY sorts last ascending, and its own "
+          "row travels with it",
+          "before 81.80 a row with no cell in the key column never entered "
+          "rows[] at all, so it was not moved and not moved OVER - it simply "
+          "stayed where it was while the values around it were permuted. "
+          "B2:C4 came out %r" % (bc,))
+    bc = [(plain(bdown.get((r, 1))), plain(bdown.get((r, 2)))) for r in range(1, 4)]
+    check(bc == [(2.0, 'b2'), (1.0, 'b4'), (None, 'b3')],
+          "...and LAST DESCENDING TOO, not first",
+          "this is the check with the teeth. Blank is class 4, above every "
+          "value, so an implementation that merely classified it and let the "
+          "direction test run would put it at the TOP of a descending sort. "
+          "Excel keeps blanks last both ways, so the blank cases are decided "
+          "BEFORE [sh_sort_desc] is read. B2:C4 came out %r" % (bc,))
+    check((3, 1) not in bup and (3, 1) not in bdown,
+          "the emptiness itself is written back - B4 is a cell that is NOT there",
+          "the permutation moves emptiness like any other value, so the "
+          "destination is CLEARED rather than left holding what the source row "
+          "had. A SYLK with a C record for B4 would mean the old value survived "
+          "underneath")
     done("sheetsort")
 
 

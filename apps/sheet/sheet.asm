@@ -10652,6 +10652,62 @@ sh_sort_tslot:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; sh_sort_flushblank - the row in [sh_sort_currow] is finished. If it never
+; showed a cell in the KEY column it takes part as a BLANK (81.80), class 4,
+; which sorts last whichever way the sort runs. Preserves everything.
+;
+; A row is only in play at all if it has a cell somewhere in the block, so
+; this stages nothing for the empty rows between two entries - and for a
+; ONE-COLUMN sort it stages nothing ever, every cell in the block being a key
+; cell. That is what keeps "sort a single cell" - which means the whole
+; column, rows 0..SH_ROWS-1 - from trying to collect sixteen thousand blanks.
+; -----------------------------------------------------------------------------
+sh_sort_flushblank:
+    push ax
+    push bx
+    push dx
+    push di
+    push es
+    cmp word [sh_sort_currow], 0xFFFF  ; nothing being grouped yet
+    je .out
+    cmp byte [sh_sort_haskey], 0
+    jne .out                           ; it had a key cell and staged already
+    mov bx, [sh_sort_cnt]
+    cmp bx, SH_SORT_CAP
+    jae .out                           ; full: it sits the sort out, the same
+    mov es, [sh_stgseg]                ; "clip, don't crash" policy as above
+    mov ax, [sh_sort_currow]
+    mov di, bx
+    shl di, 1
+    mov [es:di], ax                    ; rows[cnt] = the row
+    push bx
+    call sh_sort_vof                   ; DI = &values[cnt] - zeroed, because
+    xor ax, ax                         ; a blank compares by CLASS alone and
+    mov [es:di], ax                    ; never by these bytes
+    mov [es:di+2], ax
+    mov [es:di+4], ax
+    mov [es:di+6], ax
+    pop bx
+    mov di, bx
+    shl di, 1
+    add di, SH_SORT_ORIG_OFF
+    mov [es:di], bx                    ; origidx[cnt] = cnt
+    mov di, bx
+    add di, SH_SORT_ISF_OFF
+    mov byte [es:di], 0                ; not a formula
+    mov di, bx
+    add di, SH_SORT_CLS_OFF
+    mov byte [es:di], 4                ; ...and the class that sorts LAST
+    inc word [sh_sort_cnt]
+.out:
+    pop es
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ; sh_sort_class - after sh_getcell2 on a FORMULA key cell: [sh_sort_ccls] =
 ; its result's class, a text result's characters (sh_sacc) staged in a slot.
 ; CF=1 when a text result finds no slot
@@ -10735,6 +10791,20 @@ sh_docmd_sortcol:
 .haverows:
     mov [sh_sort_r1], ax
     mov [sh_sort_r2], bx
+    ; THE BLOCK'S COLUMNS, and they are needed HERE now rather than only in
+    ; the carry below (81.80). A row whose KEY cell is empty still takes part
+    ; if it has a cell anywhere else in the block - that is the row Excel
+    ; sorts last - so the scan has to see the whole block, not the key column.
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .scols
+    xchg ax, bx
+.scols:
+    mov [sh_sort_c1], ax
+    mov [sh_sort_c2], bx
+    mov word [sh_sort_currow], 0xFFFF ; no row is being grouped yet
+    mov byte [sh_sort_haskey], 0
     mov word [sh_sort_cnt], 0
     mov word [sh_sort_fcnt], 0
     mov word [sh_sort_tcnt], 0
@@ -10752,12 +10822,26 @@ sh_docmd_sortcol:
     cmp bx, [sh_cursheet]
     jne .next
     mov dx, [es:si+2]                 ; col
-    cmp dx, [sh_sort_keycol]             ; stage 4.5: the KEY, which the dialog
-    jne .next                         ; picks and which need not be the anchor
     cmp ax, [sh_sort_r1]              ; outside the rows asked for
     jb .next
     cmp ax, [sh_sort_r2]
     ja .next
+    cmp dx, [sh_sort_c1]              ; ...or outside the block's columns, in
+    jb .next                          ; which case this row is not in play at
+    cmp dx, [sh_sort_c2]              ; all on account of THIS cell
+    ja .next
+    ; --- a new row? then the one before it is finished (81.80) --------------
+    cmp ax, [sh_sort_currow]
+    je .samerow
+    push ax
+    call sh_sort_flushblank           ; ...and if it never showed a key cell,
+    pop ax                            ; it stages as a BLANK
+    mov [sh_sort_currow], ax
+    mov byte [sh_sort_haskey], 0
+.samerow:
+    cmp dx, [sh_sort_keycol]             ; stage 4.5: the KEY, which the dialog
+    jne .next                         ; picks and which need not be the anchor
+    mov byte [sh_sort_haskey], 1
     mov [sh_sort_row], ax             ; ax = row, stashed (0-based)
     test byte [es:si+4], 1            ; HASFORMULA
     jz .isplainval
@@ -10937,6 +11021,8 @@ sh_docmd_sortcol:
     inc cx
     jmp .scan
 .scandone:
+    call sh_sort_flushblank           ; the LAST row has no cell after it to
+                                       ; notice that it ended (81.80)
     mov cx, [sh_sort_cnt]
     cmp cx, 2
     jb .sortdone
@@ -10977,6 +11063,14 @@ sh_docmd_sortcol:
     mov al, [es:si+SH_SORT_CLS_OFF]
     mov [sh_sort_cmpc], al
     pop bx
+    ; A BLANK GOES LAST WHICHEVER WAY THE SORT RUNS (81.80), which is Excel's
+    ; rule and the reason this cannot live in sh_sort_cmp: the direction is
+    ; applied BELOW, to the comparison's answer, so a blank that merely
+    ; compared "greater" would come FIRST when sorting descending.
+    cmp byte [sh_sort_cmpc], 4
+    je .vblank
+    cmp byte [sh_sort_keyc], 4        ; a blank KEY settles where it is: every
+    je .insert                        ; real value is already ahead of it
     call sh_sort_cmp                  ; CF/ZF as a signed compare of
     je .insert                        ; values[j-1] against the key
     jl .isless
@@ -10986,6 +11080,10 @@ sh_docmd_sortcol:
 .isless:
     cmp byte [sh_sort_desc], 0        ; values[j-1] < key: the other way round
     je .insert
+    jmp short .shift
+.vblank:
+    cmp byte [sh_sort_keyc], 4
+    je .insert                        ; both blank: equal, and stable
 .shift:
     ; DI IS THE LOOP INDEX j and sh_sort_vof RETURNS IN DI, so every use of it
     ; as a pointer here is bracketed - the origidx block below needs j back,
@@ -11105,6 +11203,8 @@ sh_docmd_sortcol:
 .wbplain:
     mov si, [sh_sort_src]             ; its class decides the store (81.61)
     mov al, [es:si+SH_SORT_CLS_OFF]
+    cmp al, 4
+    je .wbblank                       ; 81.80: it takes its EMPTINESS with it
     cmp al, 1
     je .wbtext
     cmp al, 3
@@ -11129,6 +11229,13 @@ sh_docmd_sortcol:
     mov bx, [sh_sort_trow]
     SHOUT sh_setvald                   ; an integer store would truncate it
     pop cx
+    jmp .wbnext
+.wbblank:                              ; 81.80: the row that had no key cell
+    push cx                            ; carries its blank to wherever it
+    mov ax, [sh_sort_keycol]           ; landed - which is the end - so the
+    mov bx, [sh_sort_trow]             ; cell that used to hold a value and
+    SHOUT sh_clearcell                 ; now holds a sorted-away one is
+    pop cx                             ; EMPTIED rather than left behind
     jmp .wbnext
 .wbbool:
     push cx
@@ -13282,11 +13389,23 @@ sh_idlg_apply:
     xchg bx, cx                        ; 81.19 exists to keep. REFUSED rather
 .keyspan:                              ; than clamped - a clamp answers a
     cmp bx, cx                         ; different question, silently
-    je .keyok                          ; a single-column selection sorts by
-    cmp ax, bx                         ; itself whatever was typed
+    je .keyself                        ; a single-column selection sorts by
+    cmp ax, bx                         ; ITSELF whatever was typed
     jb .badkey
     cmp ax, cx
     ja .badkey
+    jmp short .keyok
+.keyself:
+    mov ax, bx                         ; 81.80 MAKES THAT LITERAL. The comment
+                                       ; above was true of the intent and not
+                                       ; of the code, which stored the TYPED
+                                       ; column - so column A selected and C
+                                       ; typed sorted A by C's order, the very
+                                       ; thing the multi-column arm refuses.
+                                       ; And it cannot survive 81.80 either
+                                       ; way: the scan sees the BLOCK now, so
+                                       ; a key outside it matches no cell and
+                                       ; every row would stage blank
 .keyok:
     mov [sh_sort_keycol], ax
     mov al, SH_FDK_SORT                ; ...and now ask for the order
@@ -42429,7 +42548,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8133                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8140                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -42840,7 +42959,12 @@ sh_sort_keycol     equ sh_sort_keyorig + 2     ; word: the column the sort is
                                             ; keyed on, which since stage 4.5
                                             ; the dialog picks and which need
                                             ; not be the selection's anchor
-sh_sort_desc    equ sh_sort_keycol + 2         ; byte: 0 ascending, 1 descending
+sh_sort_c1      equ sh_sort_keycol + 2         ; 81.80: the block's own column
+sh_sort_c2      equ sh_sort_c1 + 2             ; span, which is what decides
+sh_sort_currow  equ sh_sort_c2 + 2             ; whether a row is in play; the
+sh_sort_haskey  equ sh_sort_currow + 2         ; row being grouped; and whether
+                                               ; it has yet shown a KEY cell
+sh_sort_desc    equ sh_sort_haskey + 1         ; byte: 0 ascending, 1 descending
 sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
 sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
                                              ; checked one

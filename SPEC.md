@@ -104475,6 +104475,94 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.80 Sort puts a BLANK key cell last, in both directions
+
+Excel sorts rows whose key cell is empty to the **bottom**, ascending and
+descending alike. SHEET left them exactly where they were. **227 bytes of
+`CHART.OVL` and 7 of bss; the resident image is unchanged at 50,172** — the
+whole of it is in the module, which is where §81.39's headroom note says
+rarely-run code belongs.
+
+#### 81.80.1 Why they did not move: they were never in the list
+
+§81.43's sort permutes **values among occupied rows** rather than moving rows,
+and `rows[]` was built by scanning for cells **in the key column**. A row with
+no cell there produced no entry, so it was neither moved nor moved over: the
+values around it were permuted and it sat still in the middle of them, with
+its own carried columns still attached to a row that no longer belonged
+there. The larger half of the defect is that second part — the carried
+columns of a blank-key row silently stopped travelling with their row.
+
+So the fix is not a comparison change. It is that **a row must enter `rows[]`
+because the BLOCK has something on it, not because the key column does.**
+
+#### 81.80.2 The scan groups by row now
+
+The scan walks the cell store, which is in no useful order, so "has this row
+anything in the block?" cannot be answered by looking at one cell. It is
+answered by **grouping**: the block's column span is computed once
+(`sh_sort_c1`/`c2`, from `sh_selcol`/`sh_selcol2` with the two put in order —
+a right-to-left drag gives them the other way round), a cell outside that span
+is skipped entirely, and a cell whose row differs from `[sh_sort_currow]`
+**flushes** the row before it.
+
+`sh_sort_flushblank` is that flush: if `[sh_sort_haskey]` was never set for
+the row being closed, it stages the row with a zeroed value and **class 4**,
+which is one above §81.43's four classes and therefore above every value there
+is. `.scandone` calls it once more, for the last row — the group that has no
+successor to close it.
+
+`[sh_sort_haskey]` is a byte rather than a test against the staged value,
+because a key cell legitimately holding an empty string is a *value*, not a
+blank, and the two must not collapse.
+
+#### 81.80.3 Blanks are decided BEFORE the direction is read
+
+This is the part that a plausible implementation gets wrong. Class 4 sorts
+above everything, so an insertion that merely classified blanks and then let
+`[sh_sort_desc]` reverse the comparison would put them **first** descending —
+which is not Excel's rule and is arguably worse than leaving them alone,
+because it is wrong in a way that looks deliberate.
+
+So the two blank cases are answered ahead of the direction test. A blank
+being placed never shifts past anything; anything being placed shifts past a
+blank; two blanks compare equal, which keeps them in their original order and
+so keeps the sort stable among them. `[sh_sort_desc]` is read only on the
+path where both are real values.
+
+#### 81.80.4 The emptiness is written back
+
+A permutation that can move emptiness has to be able to **write** it. The
+write-back's blank case calls `sh_clearcell` on the destination rather than
+storing a value, because the destination row already holds whatever was there
+before — and leaving it would mean the blank had been sorted into place while
+the old value stayed underneath it.
+
+#### 81.80.5 A found premise: the single-column key
+
+The Sort dialog already refuses a key column **outside the selection** — the
+carry moves only the block's columns, so an outside key would reorder a column
+the carry does not move and break §81.19's correspondence. Its single-column
+arm carried a comment saying *"a single-column selection sorts by itself
+whatever was typed"*, and it did not: it stored the **typed** column. Column A
+selected and `C1` typed sorted A's values by C's order — exactly what the
+multi-column arm refuses, in the one case that skipped the test.
+
+§81.80 cannot leave it either way. The scan now selects on the **block**, so a
+key column outside it matches no cell, every row stages blank, and the sort
+becomes a silent no-op. So the single-column arm sets the key to the selected
+column, which is what its comment always claimed.
+
+Found by reading the diff rather than by a test, which is the fourth defect
+running to be found by something other than the check written for it.
+
+`tests/sheetsort.py` grew three checks on a B2:C4 block whose B3 is missing.
+The one with teeth is the second: **the blank row is last descending too.**
+The third reads the saved SYLK for the absence of a `C` record at B4, which is
+what says §81.80.4 ran rather than the destination merely looking right
+because the value that used to be there happened to match.
+
+
 ### 81.79 File ▸ Delete
 
 Excel's File menu carries **Delete** after Save As, and §81.39.2 listed it

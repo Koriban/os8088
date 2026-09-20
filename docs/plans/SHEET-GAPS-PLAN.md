@@ -41,11 +41,13 @@ Two consequences:
 - **`Data ▸ Table` and the macro language cannot both be resident.** Neither
   should be.
 
-## 1. Two defects still open
+## 1. Two defects — ~~still open~~ **both closed**
 
-These are not gaps. They are wrong behaviour, and they come first.
+These are not gaps. They are wrong behaviour, and they came first. Both are
+built now (§81.77 and §81.80); the sections are kept because what each one
+turned out to be is the part worth having written down.
 
-### 1.1 Sort leaves empty cells where they are — *structural*
+### 1.1 ~~Sort leaves empty cells where they are~~ — **done, §81.80**
 
 Excel puts blank cells **last, in both directions**. SHEET leaves them where
 they were, and the reason is not the comparator: `sh_sort_cmp` orders by class
@@ -69,6 +71,25 @@ So this needs three changes, and the third is the one that makes it real work:
 `tests/sheetsort.py` (7 checks) has to grow with it. **Do not start this one
 casually**: §81.61 hardened this routine two cycles ago and it is the single
 most delicate thing in the package.
+
+**Built. 227 bytes of `CHART.OVL`, 7 of bss, and the resident image is
+byte-for-byte the same size — 50,172** — so the item this plan flagged as the
+one that could break something that works did not spend a resident byte.
+`tests/sheetsort.py` is at **10 checks** and the seven that were there are
+unchanged.
+
+**Step 1 above was wrong, and cheaper than it looked.** "Collect by ROW, not
+by record — that is a `sh_findcell` per row" was the plan's estimate; it is
+not what was needed. The single pass over the cell array was **kept** and
+made to *group*: the block's column span is computed once, a cell outside it
+is skipped, and a cell whose row differs from the one being grouped flushes
+that row first — staging it blank if no key cell was seen on it. A row over
+2,048 rows of grid costs one `sh_findcell` each in the plan's version and
+nothing at all in this one. §81.80.2 is the record.
+
+Steps 2 and 3 were both right, and §81.80.3 is the trap step 2 named: the
+blank tests sit ahead of the direction test, so descending does not reverse
+them.
 
 ### 1.2 ~~A formatted empty cell loses its format through BIFF~~ — **done, §81.77**
 
@@ -196,9 +217,10 @@ fix, not a language one, and it can be done first and alone.
    cheap group into §2.1.1. Of four items, two were built, one was refused
    with a reason and one was re-sized — which is roughly what "cheap" is
    worth as an estimate before the measuring.
-3. **§1.1 Sort and blanks.** Ahead of the big features because it is *wrong*
-   rather than *missing*, and behind the cheap ones because it is the one item
-   here that can break something that works today.
+3. ~~**§1.1 Sort and blanks.**~~ — **done, §81.80.** It was ahead of the big
+   features because it is *wrong* rather than *missing*, and behind the cheap
+   ones because it is the one item here that could break something that works
+   today. Nothing broke: the full `sheet*` soak is unchanged.
 4. **`Format ▸ Justify`**, then **`Data ▸ Parse`** — self-contained, and they
    finish the Format and Data rows apart from `Table`.
 5. **The macro language**, starting with the Normal-save fix, then
