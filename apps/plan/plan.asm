@@ -1217,51 +1217,6 @@ pl_colw_clear:
     pop ax
     ret
 
-; pl_colw_shift - AL = 2 inserts a column at BX, 3 deletes the one at BX: the
-; widths after it move with their columns, as the cells do. An inserted
-; column is the standard width.
-pl_colw_shift:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    mov cx, 255
-    sub cx, bx
-    jbe .out
-    mov di, pl_colwtab
-    add di, bx
-    cmp al, 3
-    je .del
-    cmp al, 2
-    jne .out
-    push di                           ; insert: [c..254] -> [c+1..255]
-    add di, cx
-    mov si, di
-    dec si
-    std
-    rep movsb
-    cld
-    pop di
-    mov byte [di], 0
-    jmp short .out
-.del:
-    mov si, di                        ; delete: [c+1..255] -> [c..254]
-    inc si
-    cld
-    rep movsb
-    mov byte [es:di], 0               ; the last column comes back standard
-.out:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; ROW GEOMETRY (81.75). Every row is PL_RH_NORMAL pixels.
@@ -9668,179 +9623,8 @@ pl_rw_emit:
     pop bx
     ret
 
-; pl_txt_append - in: DS:SI = NUL-terminated text (no leading '=');
-; out: CF=0 and AX = its new offset in the text pool, or CF=1 if there is
-; no room (the pool is left unchanged either way)
-pl_txt_append:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov bx, si
-    xor cx, cx
-.len:
-    cmp byte [bx], 0
-    je .havelen
-    inc bx
-    inc cx
-    jmp .len
-.havelen:
-    mov ax, [pl_txtlen]
-    add ax, cx
-    inc ax
-    cmp ax, PL_TXT_CAP
-    ja .noroom
-    mov es, [pl_txtseg]
-    mov di, [pl_txtlen]
-    mov ax, di
-    push ax
-.copy:
-    mov al, [si]
-    mov [es:di], al
-    inc si
-    inc di
-    or al, al
-    jnz .copy
-    mov [pl_txtlen], di
-    pop ax
-    clc
-    jmp .out
-.noroom:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
 
-; pl_reidx_shift - in: AX = a reference's original 0-based row or col,
-; BX = the pivot, [pl_rw_op] = pl_rowcol_op's own AL (0 ins-row/1 del-row/
-; 2 ins-col/3 del-col); out: AX = the adjusted index
-pl_reidx_shift:
-    push cx
-    push dx
-    mov dl, [pl_rw_op]
-    test dl, 1
-    jnz .delete
-    cmp ax, bx
-    jb .out
-    inc ax
-    mov cx, PL_ROWS                    ; an insert that pushes a reference
-    cmp dl, 2                          ; PAST the last row or column has moved
-    jb .havecap                        ; the cell it names off the sheet, so
-    mov cx, PL_COLS                    ; the reference is dead. It used to
-.havecap:                              ; clamp to the last real index, which
-    cmp ax, cx                         ; silently named different data
-    jb .out
-    jmp .dead
-.delete:
-    cmp ax, bx
-    jb .out                            ; before the pivot: untouched
-    je .dead                           ; ON THE PIVOT: THE CELL IS GONE. This
-    dec ax                             ; used to leave the index alone, so the
-.out:                                  ; reference quietly started naming
-    clc                                ; whatever slid into the vacated slot -
-    jmp .ret                           ; a wrong number with nothing to show
-.dead:                                 ; for it. #REF! is Excel's answer and
-    stc                                ; the whole point of it is that it
-.ret:                                  ; cannot be mistaken for a live one
-    pop dx
-    pop cx
-    ret
 
-; pl_reidx_apply - in: [pl_rw_refcol]/[pl_rw_refrow] = the reference as
-; parsed, [pl_rw_ostart]/[pl_rw_lettersend]/[pl_rw_refend] = its own text
-; spans, [pl_rw_op]/[pl_rw_pivot] = the shift; emits the adjusted
-; reference (only the axis [pl_rw_op] actually operates on is
-; recomputed - the other axis's ORIGINAL text is copied verbatim, so a
-; row-only shift never touches a column's own case/spelling)
-pl_reidx_apply:
-    push ax
-    push bx
-    mov al, [pl_rw_op]
-    cmp al, 2
-    jae .colop
-    mov ax, [pl_rw_refrow]             ; INSERT/DELETE SHIFTS AN ABSOLUTE
-    mov bx, [pl_rw_pivot]              ; REFERENCE TOO, and that is not an
-    call pl_reidx_shift                ; oversight. '$' means "do not adjust
-    jc .dead
-    mov [pl_rw_refrow], ax             ; when this formula is COPIED"; it does
-.rowletcopy:                           ; not mean "keep pointing at row 1 no
-                                       ; matter what". Inserting a row above
-                                       ; physically moves the referenced cell
-                                       ; down, so every reference to it must
-                                       ; follow or it silently starts naming
-                                       ; different data - '$A$1' becomes
-                                       ; '$A$2', exactly as Excel does. The
-                                       ; markers are preserved below; only the
-                                       ; index moves.
-    mov bx, [pl_rw_ostart]             ; ostart is before any '$', so this
-.rowletloop:                           ; copy carries the column's marker
-    cmp bx, [pl_rw_lettersend]
-    jae .rowdigits
-    mov al, [bx]
-    call pl_rw_emit
-    inc bx
-    jmp .rowletloop
-.rowdigits:
-    cmp byte [pl_rw_absr], 0           ; put the row's own '$' back
-    je .rownodollar
-    mov al, '$'
-    call pl_rw_emit
-.rownodollar:
-    mov ax, [pl_rw_refrow]
-    inc ax                             ; back to 1-based display text
-    call pl_itoa
-    mov bx, pl_numbuf
-.rowdigemit:
-    mov al, [bx]
-    or al, al
-    jz .out
-    call pl_rw_emit
-    inc bx
-    jmp .rowdigemit
-.colop:
-    mov ax, [pl_rw_refcol]             ; same rule for a column insert/delete
-    mov bx, [pl_rw_pivot]              ; as for a row - see .rowletcopy above
-    call pl_reidx_shift
-    jc .dead
-    mov [pl_rw_refcol], ax
-.colemitstart:
-    cmp byte [pl_rw_absc], 0           ; the letters are REGENERATED here, so
-    je .colnodollar                    ; the marker has to be re-emitted
-    mov al, '$'
-    call pl_rw_emit
-.colnodollar:
-    mov ax, [pl_rw_refcol]
-    call pl_colname
-    mov bx, pl_colbuf
-.colemit:
-    mov al, [bx]
-    or al, al
-    jz .coldigits
-    call pl_rw_emit
-    inc bx
-    jmp .colemit
-.coldigits:
-    mov bx, [pl_rw_lettersend]
-.coldigcopy:
-    cmp bx, [pl_rw_refend]
-    jae .out
-    mov al, [bx]
-    call pl_rw_emit
-    inc bx
-    jmp .coldigcopy
-.dead:
-    call pl_rw_emitref                 ; the cell this named no longer exists
-.out:
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_rw_emitref - put the literal "#REF!" in a rewritten formula, in place of
@@ -9871,97 +9655,6 @@ pl_rw_emitref:
 ; the bare word, if a letter run here turns out NOT to be followed by a
 ; digit - a function name, not a cell reference) emitted to pl_rwdst
 ; either verbatim or adjusted
-pl_reidx_cellpart:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
-    mov [pl_rw_adj], dl
-    mov [pl_rw_ostart], si
-    mov byte [pl_rw_absc], 0           ; stage 3.0e: '$' before the letters
-    mov byte [pl_rw_absr], 0           ; pins the COLUMN, '$' before the
-    cmp byte [si], '$'                 ; digits pins the ROW
-    jne .nocoldollar
-    mov byte [pl_rw_absc], 1
-    inc si
-.nocoldollar:
-    mov di, pl_ident
-    xor cx, cx
-.letters:
-    mov al, [si]
-    cmp al, 'A'
-    jb .doneletters
-    cmp al, 'Z'
-    jbe .isletter
-    cmp al, 'a'
-    jb .doneletters
-    cmp al, 'z'
-    ja .doneletters
-.isletter:
-    cmp cx, 7
-    jae .doneletters
-    mov ah, al
-    and ah, 0xDF
-    mov [di], ah
-    inc di
-    inc cx
-    inc si
-    jmp .letters
-.doneletters:
-    mov byte [di], 0
-    mov [pl_rw_lettersend], si
-    cmp byte [si], '$'
-    jne .norowdollar
-    mov byte [pl_rw_absr], 1
-    inc si
-.norowdollar:
-    mov al, [si]
-    cmp al, '0'
-    jb .notref
-    cmp al, '9'
-    ja .notref
-    call pl_identcol                   ; ax = 0-based col (from pl_ident)
-    mov [pl_rw_refcol], ax
-    mov bx, si
-    add bx, PL_EDITMAX + 1
-    push es
-    mov ax, ds
-    mov es, ax
-    call pl_pint                       ; ax = 1-based row text; si advances
-    pop es
-    dec ax                             ; ax = 0-based row
-    mov [pl_rw_refrow], ax
-    mov [pl_rw_refend], si
-    cmp byte [pl_rw_adj], 0
-    je .verbatim
-    call pl_reidx_apply
-    jmp .out
-.verbatim:
-    mov bx, [pl_rw_ostart]
-.vcopy:
-    cmp bx, si
-    jae .out
-    mov al, [bx]
-    call pl_rw_emit
-    inc bx
-    jmp .vcopy
-.notref:
-    mov bx, [pl_rw_ostart]
-.wcopy:
-    cmp bx, si
-    jae .out
-    mov al, [bx]
-    call pl_rw_emit
-    inc bx
-    jmp .wcopy
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; =============================================================================
 ; A1 <-> R1C1, for SYLK's ;E field (stage 4.x)
@@ -10440,84 +10133,6 @@ pl_read_int:
 ; pl_rwdst holds the rewritten, NUL-terminated text, [pl_rw_di] = its
 ; length. See the section header comment above for the token rules.
 section .text
-pl_formula_reidx:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov word [pl_rw_di], 0
-.loop:
-    mov al, [si]
-    or al, al
-    jz .done
-    cmp al, '"'
-    jne .tryref
-    call pl_rw_emit
-    inc si
-.instr:
-    mov al, [si]
-    or al, al
-    jz .done
-    call pl_rw_emit
-    inc si
-    cmp al, '"'
-    jne .instr
-    jmp .loop
-.tryref:
-    call pl_isletter_at
-    jnc .literal
-    mov [pl_rw_ostart], si
-    call pl_psheetpfx
-    jnc .noxsheet
-    mov cx, ax                         ; cx = the sheet the prefix names
-    call pl_isletter_at
-    jc .pfxisref
-    mov si, [pl_rw_ostart]             ; "SheetN!" not actually followed by
-    mov bx, 7                          ; a reference: emit the 7 prefix
-.pfxverb:                              ; bytes VERBATIM and carry on.
-    mov al, [si]                       ; pl_psheetpfx has already advanced
-    call pl_rw_emit                    ; SI past them, so just jumping back
-    inc si                             ; to .loop (as this did before) threw
-    dec bx                             ; them away - silently deleting the
-    jnz .pfxverb                       ; "SHEET2!" from the rewritten text
-    jmp .loop
-.pfxisref:
-    mov si, [pl_rw_ostart]
-    mov bx, 7                          ; "SHEET" + one digit + "!" always
-.copypfx:
-    mov al, [si]
-    call pl_rw_emit
-    inc si
-    dec bx
-    jnz .copypfx
-    cmp cx, [pl_rw_tsheet]
-    jne .pfxnoadj
-    mov dl, 1
-    jmp .pfxgo
-.pfxnoadj:
-    mov dl, 0
-.pfxgo:
-    call pl_reidx_cellpart
-    jmp .loop
-.noxsheet:
-    mov dl, [pl_rw_home]
-    call pl_reidx_cellpart
-    jmp .loop
-.literal:
-    mov al, [si]
-    call pl_rw_emit
-    inc si
-    jmp .loop
-.done:
-    mov bx, [pl_rw_di]
-    mov byte [pl_rwdst + bx], 0
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; pl_rowcol_reidx - the driver: walk every cell, and for each formula
 ; cell, run its text through pl_formula_reidx and repoint its
@@ -10525,79 +10140,6 @@ pl_formula_reidx:
 ; still exactly what pl_rowcol_op's caller passed (untouched since
 ; entry); [pl_cursheet] has just been restored to the sheet this whole
 ; operation acted on.
-pl_rowcol_reidx:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov ax, [pl_cursheet]
-    mov [pl_rw_tsheet], ax
-    mov al, [pl_rc_op]
-    mov [pl_rw_op], al
-    mov ax, [pl_rc_idx]
-    mov [pl_rw_pivot], ax
-    xor cx, cx
-.scan:
-    cmp cx, [pl_ncells]
-    jae .done
-    mov ax, cx
-    mov bx, PL_C_SZ
-    mul bx
-    mov [pl_rw_recdi], ax
-    mov si, ax
-    mov es, [pl_cellseg]
-    test byte [es:si+4], 1             ; HASFORMULA
-    jz .next
-    mov ax, [es:si]
-    call pl_unpackrow                  ; bx = this record's own sheet
-    mov byte [pl_rw_home], 0
-    cmp bx, [pl_rw_tsheet]
-    jne .gothome
-    mov byte [pl_rw_home], 1
-.gothome:
-    mov si, [pl_rw_recdi]
-    mov ax, [es:si+PL_C_FOFF]          ; formula_off
-    mov si, ax
-    mov es, [pl_txtseg]
-    mov di, pl_rwsrc
-.copyin:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .copyin
-    mov si, pl_rwsrc
-    call pl_formula_reidx
-    mov si, pl_rwsrc
-    mov di, pl_rwdst
-    call pl_streq                      ; CF=1 if identical
-    jc .next                           ; unchanged: nothing to do
-    mov si, pl_rwdst
-    call pl_txt_append
-    jc .next                           ; no room left: leave the stale
-                                        ; (still valid, just unshifted)
-                                        ; text in place rather than losing
-                                        ; the formula entirely
-    mov es, [pl_cellseg]
-    mov di, [pl_rw_recdi]
-    mov [es:di+PL_C_FOFF], ax
-    mov word [es:di+PL_C_PASS], 0xFFFF        ; force re-evaluation
-.next:
-    inc cx
-    jmp .scan
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; =============================================================================
 ; Copy/Paste relative-reference adjustment (stage 2.x, per direct user
@@ -13919,43 +13461,6 @@ pl_isqrt:
 ;      CF=0 - not a reference; SI is UNCHANGED, exactly as pl_pcellref leaves
 ;             it, and the caller parses an ordinary expression instead
 ; =============================================================================
-pl_pargref:
-    push ax
-    push bx
-    push si                           ; the only way back out on failure
-    mov byte [pl_refarea], 0
-    call pl_pcellref
-    jnc .fail
-    mov [pl_arg1col], ax
-    mov [pl_arg1row], bx
-    mov [pl_arg2col], ax
-    mov [pl_arg2row], bx
-    cmp byte [si], ':'
-    jne .whole
-    inc si
-    call pl_pcellref
-    jnc .fail
-    mov [pl_arg2col], ax
-    mov [pl_arg2row], bx
-    mov byte [pl_refarea], 1
-.whole:
-    mov al, [si]
-    cmp al, ','
-    je .ok
-    cmp al, ')'
-    jne .fail
-.ok:
-    add sp, 2                         ; discard the saved SI - keep advancing
-    pop bx
-    pop ax
-    stc
-    ret
-.fail:
-    pop si
-    pop bx
-    pop ax
-    clc
-    ret
 
 section PL_MODSEC                      ; 81.62: pl_pargclass, ISxxx's classifier
 ; =============================================================================
@@ -14185,23 +13690,6 @@ pl_dollar_ins:
 section .text
 
 section PL_MODSEC                      ; 81.62: a less-used function, CHART.OVL
-; -----------------------------------------------------------------------------
-; pl_upcase - AL and AH both to upper case, for SEARCH's folded compare
-; -----------------------------------------------------------------------------
-pl_upcase:
-    cmp al, 'a'
-    jb .a1
-    cmp al, 'z'
-    ja .a1
-    sub al, 32
-.a1:
-    cmp ah, 'a'
-    jb .a2
-    cmp ah, 'z'
-    ja .a2
-    sub ah, 32
-.a2:
-    ret
 
 section .text
 ; -----------------------------------------------------------------------------
@@ -14379,38 +13867,6 @@ plm_binop_pre:
 
 
 section .text
-; =============================================================================
-; DATE SERIALS (stage 4.5)
-;
-; A date is a NUMBER: the count of days since the epoch, with the time of day
-; in the fraction. That is Excel's model and it is why dates arithmetic at all
-; - tomorrow is +1, an interval is a subtraction, and a date sorts because it
-; is a number that happens to be shown as a date.
-;
-; THE EPOCH IS SERIAL 1 = 1 JANUARY 1900, AND SERIAL 60 IS 29 FEBRUARY 1900 -
-; A DAY THAT NEVER EXISTED. 1900 was not a leap year; Lotus 1-2-3 thought it
-; was, Excel copied the mistake so the two could exchange files, and every
-; version since has kept it for the same reason. Getting it "right" here would
-; put every date in a shared file one day out from what Excel shows, which is
-; a worse bug than the one being reproduced. So serial 60 is the phantom day,
-; and 61 is 1 March 1900.
-;
-; The range is what an UNSIGNED word holds, which is almost exactly Excel
-; 2.1's own: serial 65535 is 5 June 2079, and 2.1 stops at 31 December 2078.
-; -----------------------------------------------------------------------------
-; pl_fp_32768_b - B = 32768.0. Clobbers A, so build it BEFORE loading the
-; value. fx_i2b cannot: 32768 is not a signed 16-bit integer.
-; -----------------------------------------------------------------------------
-pl_fp_32768_b:
-    push ax
-    mov word [fx_q+0], 0x8000
-    mov word [fx_q+2], 0
-    mov word [fx_q+4], 0
-    mov word [fx_q+6], 0
-    call fx_u32_to_a
-    call fx_a_to_b
-    pop ax
-    ret
 
 
 ; -----------------------------------------------------------------------------
@@ -14902,24 +14358,6 @@ pl_dt_86400_b:
 ; pl_dt_tmp_store / pl_dt_tmp_load_b - park fp A in bss and bring it back as
 ; B. pl_vpush cannot be used here: it banks on the CALLER's stack and pairs
 ; with exactly one pl_binop_pre (81.25.3).
-pl_dt_tmp_store:
-    push di
-    mov di, pl_dt_tmp                 ; fx_pack_a writes at DI; fx_unpack_b
-    call fx_pack_a                    ; reads at SI, and leaves A alone
-    pop di
-    ret
-pl_dt_tmp_load_b:
-    push si
-    mov si, pl_dt_tmp
-    call fx_unpack_b
-    pop si
-    ret
-pl_dt_tmp_load_a:
-    push si
-    mov si, pl_dt_tmp
-    call fx_unpack_a
-    pop si
-    ret
 
 
 ; pl_pif - IF(cond,then,else): the one function that does not fold - its
@@ -16448,8 +15886,6 @@ pl_s_sylk_fw:  db 'F;W', 0                 ; F;W<first> <last> <width> (81.56)
 pl_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 pl_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
 pl_s_crlf:     db 13, 10, 0
-pl_s_r:        db 'R', 0
-pl_s_cu:       db 'C', 0
 pl_s_end:      db 'E', 13, 10, 0
 pl_m_saved:    db 'Saved', 0
 pl_m_trunc:    db 'Saved - TRUNCATED; sheet too large for this format.', 0
