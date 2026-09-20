@@ -3674,59 +3674,7 @@ pl_hsb_grab:
     stc
     ret
 
-; in: BX = the block, CX = the pointer's x (ABSOLUTE). y is never read, which
-; is 13.10.5.2's rule with the axes swapped.
-; out: CF=0 and AX = the pos the view is owed; CF=1 = nothing is owed.
-pl_hsb_track:
-    cmp byte [pl_hsb_dragon], 0
-    je .no
-    push cx
-    push dx
-    push si
-    mov ax, cx
-    sub ax, [pl_hsb_dragoff]           ; ax = where the thumb's left wants to be
-    mov si, [bx + 0]
-    add si, PL_SB_CELL + 1          ; si = the track's left
-    sub ax, si
-    jns .pos
-    xor ax, ax                         ; clamped at the near end
-.pos:
-    mov cx, [bx + 4]
-    sub cx, [bx + 0]
-    sub cx, (PL_SB_CELL + 1) * 2    ; cx = the track's width
-    or cx, cx
-    jz .nopop
-    xor dx, dx
-    mul word [bx + 8]                  ; offset * total
-    div cx                             ; / track -> the pos it maps to
-    mov cx, [bx + 8]
-    sub cx, [bx + 10]                  ; the last legal pos = total - fit
-    jbe .zero
-    cmp ax, cx
-    jbe .done
-    mov ax, cx
-    jmp .done
-.zero:
-    xor ax, ax
-.done:
-    cmp ax, [bx + 12]                  ; 13.10.5.3's quantisation: a move too
-    je .nopop                          ; small to change a row owes nothing
-    pop si
-    pop dx
-    pop cx
-    clc
-    ret
-.nopop:
-    pop si
-    pop dx
-    pop cx
-.no:
-    stc
-    ret
 
-pl_hsb_drop:
-    mov byte [pl_hsb_dragon], 0
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_onmouseup - W_ONMOUSEUP: the press was released. Ends a thumb drag and,
@@ -6442,14 +6390,11 @@ pl_paste_cell:
 ; pl_fl_dcol/drow = destination. An empty source copies nothing. Preserves
 ; every register, so the loops below can keep their bounds in theirs.
 ; -----------------------------------------------------------------------------
-pl_s_onesheet:     db 'Saved - THIS SHEET ONLY; use .BIF to keep them all.', 0
-pl_s_sheetnm:      db 'Sheet', 0
 
 
 
 
 
-pl_s_noovl:    db 'CHART.OVL not found.', 0
 
 ; -----------------------------------------------------------------------------
 ; pl_sort_vof / pl_sort_ldds / pl_sort_cmp - the three places the sort's value
@@ -7394,16 +7339,12 @@ pl_s_id_tfind: db 'Find', 0
 pl_s_id_tsort: db 'Sort', 0
 pl_s_id_trun:  db 'Run', 0
 pl_s_id_tinput: db 'Input', 0
-pl_s_id_badkey: db 'Sort key must be inside the selection', 0
 pl_s_id_pgoto: db 'Reference:', 0
 pl_s_id_prowh: db 'Row height:', 0
 pl_s_id_pcolw: db 'Column width:', 0
 pl_s_id_pdefn: db 'Name:', 0
 pl_s_id_pfind: db 'Find what:', 0
 pl_s_id_psort: db '1st Key:', 0     ; Excel 2.1's own label for the field
-pl_s_id_nofit: db 'Name table full.', 0
-pl_s_id_named: db 'Name defined.', 0
-pl_s_id_nofnd: db 'Not found.', 0
 pl_s_idlg_ok:  db 'OK', 0
 pl_s_idlg_can: db 'Cancel', 0
 section PL_MODSEC                      ; 81.74.2: the one-line input dialog, CHART.OVL
@@ -7746,8 +7687,6 @@ pl_fdlg_click_r:
     jmp pl_fdlg_onclick
 pl_fdlg_close_r:
     jmp pl_fdlg_close
-pl_fdlg_apply_r:
-    jmp pl_fdlg_apply
 pl_idlg_open_r:
     jmp pl_idlg_open
 pl_idlg_paint_r:
@@ -7756,29 +7695,7 @@ pl_idlg_key_r:
     jmp pl_idlg_onkey
 pl_idlg_click_r:
     jmp pl_idlg_onclick
-pl_idlg_close_r:
-    jmp pl_idlg_close
 
-pl_upcase_at:
-    push ax
-    push si
-.loop:
-    mov al, [si]
-    or al, al
-    jz .done
-    cmp al, 'a'
-    jb .next
-    cmp al, 'z'
-    ja .next
-    sub al, 32
-    mov [si], al
-.next:
-    inc si
-    jmp .loop
-.done:
-    pop si
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_pnum_at - read an unsigned decimal from the NUL string at SI.
@@ -7833,133 +7750,7 @@ pl_pnum_at:
     pop bx
     ret
 
-; pl_ptwips - SI = a height typed in points, "15" or "12.75" -> AX = twips,
-; CF=1 when it is not one. Digits past the hundredths are read and dropped
-; (81.60)
-pl_ptwips:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    xor ax, ax                         ; AX = whole points
-    xor cx, cx                         ; CX = the digits seen
-.sp:
-    cmp byte [si], ' '
-    jne .int
-    inc si
-    jmp short .sp
-.int:
-    mov bl, [si]
-    sub bl, '0'
-    cmp bl, 9
-    ja .frac
-    cmp ax, 100                        ; 999 points at most, so the twips
-    jae .bad                           ; below cannot overflow
-    mov dx, 10
-    mul dx
-    xor bh, bh
-    add ax, bx
-    inc cx
-    inc si
-    jmp short .int
-.frac:
-    mov dx, 20
-    mul dx
-    mov di, ax                         ; DI = the whole points, in twips
-    xor dx, dx                         ; DX = hundredths
-    cmp byte [si], '.'
-    jne .tail
-    inc si
-    mov bl, [si]
-    sub bl, '0'
-    cmp bl, 9
-    ja .tail
-    mov al, 10
-    mul bl
-    mov dx, ax                         ; the tenths
-    inc cx
-    inc si
-    mov bl, [si]
-    sub bl, '0'
-    cmp bl, 9
-    ja .tail
-    xor bh, bh
-    add dx, bx                         ; ...and the hundredths
-    inc si
-.more:
-    mov bl, [si]
-    sub bl, '0'
-    cmp bl, 9
-    ja .tail
-    inc si
-    jmp short .more
-.tail:
-    cmp byte [si], ' '
-    jne .end
-    inc si
-    jmp short .tail
-.end:
-    cmp byte [si], 0
-    jne .bad
-    jcxz .bad
-    mov ax, dx                         ; a hundredth of a point is a fifth of
-    add ax, 2                          ; a twip: rounded
-    mov bl, 5
-    div bl
-    xor ah, ah
-    add ax, di
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
 
-; pl_twpts - AX = twips -> pl_numbuf = points, "15" or "12.75" (81.60)
-pl_twpts:
-    push ax
-    push bx
-    push dx
-    push si
-    xor dx, dx
-    mov bx, 20
-    div bx                             ; AX = whole points, DX = twips over
-    call pl_itoa
-    mov ax, dx
-    or ax, ax
-    jz .out
-    mov si, pl_numbuf
-.end:
-    cmp byte [si], 0
-    je .at
-    inc si
-    jmp short .end
-.at:
-    mov byte [si], '.'
-    mov bl, 5
-    mul bl                             ; AX = hundredths, 5..95
-    mov bl, 10
-    div bl                             ; AL = tenths, AH = hundredths
-    add al, '0'
-    mov [si+1], al
-    mov byte [si+2], 0
-    or ah, ah
-    jz .out
-    add ah, '0'
-    mov [si+2], ah
-    mov byte [si+3], 0
-.out:
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    ret
 
 ; =============================================================================
 
@@ -8102,50 +7893,6 @@ pl_frzmark:
     ret
 
 
-pl_switchsheet:
-    push ax
-    push bx
-    push cx
-    mov cx, ax                       ; cx = target sheet, preserved across
-                                      ; the save step below
-    cmp cx, [pl_cursheet]
-    je .out
-    mov bx, [pl_cursheet]
-    shl bx, 1
-    mov ax, [pl_selcol]
-    mov [pl_selsave+bx], ax
-    mov ax, [pl_selrow]
-    mov [pl_rowsave+bx], ax
-    mov ax, [pl_scrollcol]
-    mov [pl_sclsave+bx], ax
-    mov ax, [pl_scrollrow]
-    mov [pl_scrsave+bx], ax
-    mov ax, [pl_freezecol]             ; 81.70
-    mov [pl_fclsave+bx], ax
-    mov ax, [pl_freezerow]
-    mov [pl_frwsave+bx], ax
-    mov [pl_cursheet], cx
-    mov bx, cx
-    shl bx, 1
-    mov ax, [pl_selsave+bx]
-    mov [pl_selcol], ax
-    mov ax, [pl_rowsave+bx]
-    mov [pl_selrow], ax
-    mov ax, [pl_sclsave+bx]
-    mov [pl_scrollcol], ax
-    mov ax, [pl_scrsave+bx]
-    mov [pl_scrollrow], ax
-    mov ax, [pl_fclsave+bx]            ; 81.70
-    mov [pl_freezecol], ax
-    mov ax, [pl_frwsave+bx]
-    mov [pl_freezerow], ax
-    call pl_frzmark                    ; the item follows the incoming sheet
-    call pl_repaint
-.out:
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; =============================================================================
 ; File I/O: SYLK write and read, over the sparse array directly
@@ -8251,40 +7998,6 @@ pl_wr_colw:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; pl_wr_names - one NN record per defined name, straight after the ID line.
-;
-; NN;N<name>;E<ref> is SYLK's own defined-name record, and the reference goes
-; out in R1C1 because that is the notation every ;E field in this file already
-; uses - one convention, not two. Absolute R1C1 (no brackets): a name is a
-; fixed place, not an offset from wherever it is read.
-;
-; THIS IS WHAT LETS ANOTHER PROGRAM FIND THE RANGE. Chart charts a named range
-; by reading these (82.15); without them a name is a fact only this app knows,
-; and a saved sheet would carry the data but not what any of it was called.
-; -----------------------------------------------------------------------------
-pl_wr_r1c1:
-    push ax
-    push bx
-    push si
-    mov [pl_nm_tmp], bx
-    mov si, pl_s_r
-    call pl_stgput
-    inc ax
-    SHOUT pl_itoa
-    mov si, pl_numbuf
-    call pl_stgput
-    mov si, pl_s_cu
-    call pl_stgput
-    mov ax, [pl_nm_tmp]
-    inc ax
-    SHOUT pl_itoa
-    mov si, pl_numbuf
-    call pl_stgput
-    pop si
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_dowrite_sylk - write the sheet to [pl_name] as SYLK. Walks the sorted
@@ -9008,44 +8721,6 @@ pl_parseslk:
 ; was right and the app forgot. Fields are taken in any order, like the 'C'
 ; record's, because a SYLK writer is not obliged to emit them in ours.
 ; -----------------------------------------------------------------------------
-pl_slk_r1c1:
-    push cx
-    push di
-    cmp si, bx
-    jae .bad
-    cmp byte [es:si], 'R'
-    jne .bad
-    inc si
-    mov di, si
-    SHOUT pl_pint                      ; no CF of its own: SI not moving is
-    cmp si, di                        ; what "no digits" looks like
-    je .bad
-    or ax, ax
-    jle .bad
-    dec ax
-    mov cx, ax                        ; bank the row - pl_pint returns in AX
-    cmp si, bx
-    jae .bad
-    cmp byte [es:si], 'C'
-    jne .bad
-    inc si
-    mov di, si
-    SHOUT pl_pint
-    cmp si, di
-    je .bad
-    or ax, ax
-    jle .bad
-    dec ax
-    mov dx, ax
-    mov ax, cx
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop di
-    pop cx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_parsecrec - the fields of one 'C' record, order-independent
@@ -9892,237 +9567,6 @@ pl_removecell:
 ; simply left to go stale, since pl_addcell's own default pass=0 on the
 ; fresh record forces a re-evaluation on the next paint regardless.
 ; -----------------------------------------------------------------------------
-pl_rowcol_op:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov [pl_rc_op], al
-    mov [pl_rc_idx], bx
-    call pl_colw_shift                ; a column's WIDTH goes with it (81.56)
-    mov word [pl_rc_stgcnt], 0
-    mov ax, [pl_cursheet]
-    mov [pl_rc_savedsheet], ax
-    xor cx, cx
-.scan:
-    cmp cx, [pl_ncells]
-    jae .scandone
-    mov ax, cx
-    mov bx, PL_C_SZ
-    mul bx
-    mov si, ax
-    mov es, [pl_cellseg]
-    mov ax, [es:si]
-    call pl_unpackrow                 ; ax=row, bx=sheet
-    mov [pl_rc_trow], ax
-    mov [pl_rc_tsheet], bx
-    mov ax, [es:si+2]
-    mov [pl_rc_tcol], ax
-    mov al, [es:si+4]
-    mov [pl_rc_tflags], al
-    mov al, [es:si+5]
-    mov [pl_rc_tfmt], al
-    mov al, [es:si+PL_C_TYPE]
-    mov [pl_rc_ttype], al
-    mov al, [es:si+PL_C_AUX]
-    mov [pl_rc_taux], al
-    push di
-    push cx
-    mov di, pl_rc_tval
-    mov cx, 4
-.rcget:
-    mov ax, [es:si+PL_C_VAL]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    dec cx
-    jnz .rcget
-    sub si, 8
-    pop cx
-    pop di
-    mov ax, [es:si+PL_C_FOFF]
-    mov [pl_rc_tfml], ax
-    mov ax, [pl_rc_tsheet]
-    cmp ax, [pl_rc_savedsheet]
-    jne .stage                        ; a different sheet: carried unchanged
-    mov al, [pl_rc_op]
-    cmp al, 0
-    je .insrow
-    cmp al, 1
-    je .delrow
-    cmp al, 2
-    je .inscol
-    jmp .delcol
-.insrow:
-    mov ax, [pl_rc_trow]
-    cmp ax, [pl_rc_idx]
-    jb .stage
-    inc ax
-    cmp ax, PL_ROWS
-    jae .next                         ; pushed off the bottom: dropped
-    mov [pl_rc_trow], ax
-    jmp .stage
-.delrow:
-    mov ax, [pl_rc_trow]
-    cmp ax, [pl_rc_idx]
-    jb .stage
-    je .next                          ; exactly the deleted row: dropped
-    dec ax
-    mov [pl_rc_trow], ax
-    jmp .stage
-.inscol:
-    mov ax, [pl_rc_tcol]
-    cmp ax, [pl_rc_idx]
-    jb .stage
-    inc ax
-    cmp ax, PL_COLS
-    jae .next
-    mov [pl_rc_tcol], ax
-    jmp .stage
-.delcol:
-    mov ax, [pl_rc_tcol]
-    cmp ax, [pl_rc_idx]
-    jb .stage
-    je .next
-    dec ax
-    mov [pl_rc_tcol], ax
-.stage:
-    mov ax, [pl_rc_stgcnt]
-    mov bx, PL_S_SZ                   ; the STAGING record's own size. It is
-    mul bx                            ; 20 like PL_C_SZ and this changes no
-    mov di, ax                        ; byte - but saying PL_C_SZ here made
-    mov es, [pl_stgseg]               ; the two layouts one constant apart
-                                       ; from being independent, which is the
-                                       ; whole reason they have two names
-    mov ax, [pl_rc_tsheet]
-    mov [es:di], ax
-    mov ax, [pl_rc_trow]
-    mov [es:di+2], ax
-    mov ax, [pl_rc_tcol]
-    mov [es:di+4], ax
-    mov al, [pl_rc_tflags]
-    mov [es:di+PL_S_FLAGS], al        ; THE STAGING RECORD IS NOT THE CELL
-    mov al, [pl_rc_tfmt]              ; RECORD. It is its own PL_S_* layout in
-    mov [es:di+PL_S_FMT], al          ; pl_stgseg - which is precisely why
-    push si                           ; both are named now: converting this
-    push cx                           ; block to the cell offsets by mistake
-    mov si, pl_rc_tval                ; was silent, and staged garbage
-    mov cx, 4
-.stval:
-    mov ax, [si]                      ; ALL FOUR value words: .rstval reads
-    mov [es:di+PL_S_VAL], ax          ; four back, so staging only one left
-    add si, 2                         ; six bytes of whatever pl_stgseg last
-    add di, 2                         ; held (file text, a sort) inside every
-    dec cx                            ; plain number, on every Insert/Delete
-    jnz .stval
-    sub di, 8
-    pop cx
-    pop si
-    mov ax, [pl_rc_tfml]
-    mov [es:di+PL_S_FML], ax
-    mov al, [pl_rc_ttype]             ; the tag and the error code ride too -
-    mov [es:di+PL_S_TYPE], al         ; see the PL_S_TYPE comment in the
-    mov al, [pl_rc_taux]              ; layout block above
-    mov [es:di+PL_S_AUX], al
-    inc word [pl_rc_stgcnt]
-.next:
-    inc cx
-    jmp .scan
-.scandone:
-    mov word [pl_ncells], 0
-    xor cx, cx
-.reins:
-    cmp cx, [pl_rc_stgcnt]
-    jae .reinsdone
-    mov ax, cx
-    mov bx, PL_S_SZ                   ; ...and its other half, for the same
-    mul bx                            ; reason
-    mov si, ax
-    mov es, [pl_stgseg]
-    mov ax, [es:si]
-    mov [pl_cursheet], ax             ; impersonate this record's own sheet
-                                       ; so pl_addcell's pl_findcell packs
-                                       ; it correctly (stage 2.0 comment
-                                       ; above pl_findcell)
-    mov ax, [es:si+2]
-    mov [pl_rc_trow], ax
-    mov ax, [es:si+4]
-    mov [pl_rc_tcol], ax
-    mov al, [es:si+PL_S_FLAGS]
-    mov [pl_rc_tflags], al
-    mov al, [es:si+PL_S_FMT]
-    mov [pl_rc_tfmt], al
-    push di
-    push cx
-    mov di, pl_rc_tval
-    mov cx, 4
-.rstval:
-    mov ax, [es:si+PL_S_VAL]
-    mov [di], ax
-    add si, 2
-    add di, 2
-    dec cx
-    jnz .rstval
-    sub si, 8
-    pop cx
-    pop di
-    mov ax, [es:si+PL_S_FML]
-    mov [pl_rc_tfml], ax
-    mov al, [es:si+PL_S_TYPE]
-    mov [pl_rc_ttype], al
-    mov al, [es:si+PL_S_AUX]
-    mov [pl_rc_taux], al
-    mov ax, [pl_rc_tcol]
-    mov bx, [pl_rc_trow]
-    call pl_addcell
-    jc .reinsnext                     ; array full - can't happen (we only
-                                       ; ever re-insert as many records as
-                                       ; we removed minus drops), stay safe
-    mov es, [pl_cellseg]
-    mov al, [pl_rc_tflags]
-    mov [es:di+4], al
-    mov al, [pl_rc_tfmt]
-    mov [es:di+5], al
-    mov al, [pl_rc_ttype]             ; over pl_addcell's PL_T_NUM default -
-    mov [es:di+PL_C_TYPE], al         ; a label keeps being a label, an error
-    mov al, [pl_rc_taux]              ; keeps its code
-    mov [es:di+PL_C_AUX], al
-    push si
-    push cx
-    mov si, pl_rc_tval
-    mov cx, 4
-.rcput:
-    mov ax, [si]
-    mov [es:di+PL_C_VAL], ax
-    add si, 2
-    add di, 2
-    dec cx
-    jnz .rcput
-    sub di, 8
-    pop cx
-    pop si
-    mov ax, [pl_rc_tfml]
-    mov [es:di+PL_C_FOFF], ax
-.reinsnext:
-    inc cx
-    jmp .reins
-.reinsdone:
-    mov ax, [pl_rc_savedsheet]
-    mov [pl_cursheet], ax
-    call pl_rowcol_reidx               ; stage 2.x: fix up every formula's
-                                        ; own cell references for this same
-                                        ; shift - see its own header comment
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; =============================================================================
 ; pl_rowcol_reidx and its helpers - stage 2.x: after pl_rowcol_op has
@@ -14532,51 +13976,6 @@ section PL_MODSEC                      ; 81.62: pl_pargclass, ISxxx's classifier
 ; to spread (that is what puts one #DIV/0! at the bottom of a column), which
 ; is why the banking lives here and not in pl_getcell2.
 ; =============================================================================
-pl_pargclass:
-    push bx
-    push cx
-    push dx
-    push di
-    mov al, [pl_evalerr]
-    push ax
-    mov byte [pl_evalerr], 0
-    mov byte [pl_argisref], 0
-    mov byte [pl_argaux], 0
-    SHOUT pl_pargref
-    jnc .expr
-    mov byte [pl_argisref], 1
-    mov ax, [pl_arg1col]              ; an AREA is classified by its top-left
-    mov bx, [pl_arg1row]              ; corner - what a 1x1 use of one would
-    SHOUT pl_getcell2                 ; intersect to anyway
-    jc .occupied
-    mov byte [pl_argtype], PL_T_BLANK ; the cell does not exist. Not zero: the
-    xor ax, ax                        ; whole point
-    SHOUT pl_acc_int                  ; ...though its value is still a defined
-    jmp .fin                          ; zero for anyone who asks for one
-.occupied:
-    mov al, [pl_curtype]
-    mov [pl_argtype], al
-    mov al, [pl_curaux]
-    mov [pl_argaux], al
-    jmp .fin
-.expr:
-    SHOUT pl_pcmp
-    mov al, [pl_curtype]
-    mov [pl_argtype], al
-.fin:
-    mov al, [pl_evalerr]              ; an error RAISED by the argument outranks
-    or al, al                         ; whatever tag it left behind: 1/0 is an
-    jz .noerr                         ; error value, not the zero underneath it
-    mov byte [pl_argtype], PL_T_ERR
-    mov [pl_argaux], al
-.noerr:
-    pop ax
-    mov [pl_evalerr], al
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    ret
 
 ; =============================================================================
 ; THE FINANCIAL FAMILY IS CHART.OVL'S THIRD TENANT (SPEC.md 82.16.10): from
@@ -14613,8 +14012,6 @@ pl_trcopy:
     pop ax
     ret
 
-pl_c_pi:  dq 3.14159265358979323846
-pl_c_pi2: dq 1.57079632679489661923
 
 ; =============================================================================
 ; pl_pinfo - the INFORMATION functions, ids 25 and up. Every one of these is a
@@ -14765,82 +14162,6 @@ pl_group3:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; pl_numdp - fp A -> pl_numbuf with EXACTLY CX decimal places, rounded.
-;
-; fx_ftoa counts SIGNIFICANT digits and trims trailing zeros, which is right
-; for General and wrong for money: 1.5 to two places has to be "1.50". So the
-; value is rounded first (fx_round, the same one ROUND() uses) and the places
-; are then padded back on.
-;
-; A value big or small enough that fx_ftoa reaches for scientific notation is
-; left exactly as it came - padding a mantissa and grouping an exponent would
-; both be nonsense, and passing it through is the one honest answer.
-; -----------------------------------------------------------------------------
-pl_numdp:
-    push ax
-    push cx
-    push si
-    push di
-    or cx, cx
-    jns .cap
-    xor cx, cx                        ; a negative place count rounds left of
-.cap:                                 ; the point, and shows none to the right
-    cmp cx, 9
-    jbe .round
-    mov cx, 9
-.round:
-    push cx
-    call fx_round
-    call pl_acc_store
-    call pl_acc_load_a
-    mov di, pl_numbuf
-    mov ax, 15
-    call fx_ftoa
-    pop cx
-    mov si, pl_numbuf
-.scan:
-    mov al, [si]
-    or al, al
-    jz .nopoint
-    cmp al, 'e'
-    je .asis                          ; scientific: leave it exactly as it came
-    cmp al, 'E'
-    je .asis
-    cmp al, '.'
-    je .haspoint
-    inc si
-    jmp .scan
-.nopoint:
-    jcxz .out                         ; SI is at the NUL
-    mov byte [si], '.'
-    inc si
-    jmp .pad
-.haspoint:
-    inc si
-.count:
-    cmp byte [si], 0
-    je .padded
-    inc si
-    or cx, cx
-    jz .count                         ; more digits than asked for: leave them
-    dec cx                            ; rather than cut a rounded value short
-    jmp .count
-.padded:
-.pad:
-    jcxz .out
-    mov byte [si], '0'
-    inc si
-    dec cx
-    jmp .pad
-.out:
-    mov byte [si], 0
-.asis:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
 
 section PL_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
@@ -14862,51 +14183,6 @@ pl_dollar_ins:
     ret
 
 section .text
-; -----------------------------------------------------------------------------
-; pl_padzero - pad pl_numbuf's integer part with leading zeros to CL digits,
-; which is what the '0' placeholders in a TEXT format ask for ("00000").
-; -----------------------------------------------------------------------------
-pl_padzero:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    xor ch, ch
-    mov si, pl_numbuf
-    cmp byte [si], '-'
-    jne .ns
-    inc si
-.ns:
-    mov bx, si
-.ilen:
-    mov al, [si]
-    cmp al, '0'
-    jb .iend
-    cmp al, '9'
-    ja .iend
-    inc si
-    jmp .ilen
-.iend:
-    mov ax, si
-    sub ax, bx                        ; AX = integer digits present
-.pad:
-    cmp ax, cx
-    jae .out
-    mov di, bx
-    push ax
-    mov al, '0'
-    call pl_ins_at
-    pop ax
-    inc ax
-    jmp .pad
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 section PL_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 ; -----------------------------------------------------------------------------
@@ -14964,99 +14240,7 @@ pl_matchat:
     ret
 
 section PL_MODSEC                      ; 81.62: a less-used function, CHART.OVL
-; -----------------------------------------------------------------------------
-; pl_strfind - in: SI = haystack, DI = needle, AX = 0-based start,
-;              DL = 0 exact / 1 case-folded (which is FIND vs SEARCH, and the
-;              only difference between them)
-; out: AX = the 0-based position, or 0xFFFF for no match.
-;
-; The two bases live in bss rather than on the stack because the inner compare
-; needs SI and DI, the outer scan needs a third pointer, and the 8086 will
-; only address memory through BX, BP, SI and DI - with BP belonging to SS.
-; -----------------------------------------------------------------------------
-pl_strfind:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov [pl_fnd_hb], si
-    mov [pl_fnd_nd], di
-    mov bx, si
-    or ax, ax
-    js .none                          ; a start before the string has no answer
-.adv:
-    or ax, ax
-    jz .outer
-    cmp byte [bx], 0
-    je .none                          ; a start past the end likewise
-    inc bx
-    dec ax
-    jmp .adv
-.outer:
-    mov si, bx
-    mov di, [pl_fnd_nd]
-.inner:
-    mov al, [di]
-    or al, al
-    jz .hit                           ; the needle ran out: a match
-    mov ah, [si]
-    or ah, ah
-    jz .nohit                         ; the haystack ran out first
-    or dl, dl
-    jz .same
-    call pl_upcase
-.same:
-    cmp al, ah
-    jne .nohit
-    inc si
-    inc di
-    jmp .inner
-.nohit:
-    cmp byte [bx], 0
-    je .none
-    inc bx
-    jmp .outer
-.hit:
-    mov ax, bx
-    sub ax, [pl_fnd_hb]
-    jmp .out
-.none:
-    mov ax, 0xFFFF
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
 
-; -----------------------------------------------------------------------------
-; pl_sacc_putc - append AL to pl_sacc, dropping it once PL_STR_MAX is reached.
-; It finds the end each time, which is O(n^2) over 64 bytes and costs less
-; than the cursor a caller would otherwise have to thread through two loops.
-; -----------------------------------------------------------------------------
-pl_sacc_putc:
-    push ax
-    push cx
-    push si
-    mov si, pl_sacc
-    mov cx, PL_STR_MAX
-.f:
-    cmp byte [si], 0
-    je .at
-    inc si
-    dec cx
-    jnz .f
-    jmp .out
-.at:
-    mov [si], al
-    mov byte [si+1], 0
-.out:
-    pop si
-    pop cx
-    pop ax
-    ret
 
 section .text
 ; =============================================================================
@@ -15169,11 +14353,6 @@ pl_srestore:
     pop ax
     ret
 
-; pl_pstrarg - one argument, AS TEXT in pl_sacc, whatever it was worth
-pl_pstrarg:
-    call pl_pcmp
-    call pl_str_want
-    ret
 
 section PL_MODSEC                      ; 81.62: a less-used function, CHART.OVL
 
@@ -15233,50 +14412,6 @@ pl_fp_32768_b:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; pl_acc_toudw - pl_acc, truncated toward zero, as an UNSIGNED word in AX.
-;
-; fx_a2i is signed and clamps at 32767 - as a date serial that is 24 September
-; 1989, so every date this app will ever be asked about is past it and the
-; signed conversion is not usable for serials at all. The top bit is taken off
-; by hand and put back with an unsigned add.
-;
-; out: AX = the word; CF=1 if the value was negative or 65536 or more, with
-; AX = 0. Every other register preserved.
-; -----------------------------------------------------------------------------
-pl_acc_toudw:
-    push bx
-    call pl_acc_load_a
-    call fx_trunc
-    call pl_acc_store
-    test byte [pl_acc+3], 0x80        ; a negative serial has no unsigned form
-    jnz .bad
-    call pl_fp_32768_b
-    call pl_acc_load_a
-    call fx_cmpab                     ; SIGNED flags: fx_cmpab answers -1/0/1
-    jl .small                         ; in AX and sets them from that, so `jb`
-                                       ; is never taken and every serial past
-                                       ; 32767 fell down the clamping path
-    call pl_fp_32768_b
-    call pl_acc_load_a
-    call fx_sub                       ; A = value - 32768, now 0..32767
-    call fx_a2i
-    jc .bad
-    add ax, 32768                     ; ...and back on, unsigned
-    clc
-    jmp .out
-.small:
-    call pl_acc_load_a
-    call fx_a2i
-    jc .bad
-.out:
-    pop bx
-    ret
-.bad:
-    xor ax, ax
-    stc
-    pop bx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_acc_fromudw - AX, an unsigned word, becomes pl_acc. fx_i2a is signed and
@@ -15366,58 +14501,6 @@ pl_monlen:
     pop bx
     ret
 
-; -----------------------------------------------------------------------------
-; pl_ser_to_ymd - in: AX = an unsigned date serial; out: pl_dt_y/m/d.
-; A serial of 0 or one past the range answers 1900/1/0, which is what Excel
-; shows for serial 0 and is not an error.
-; -----------------------------------------------------------------------------
-pl_ser_to_ymd:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov word [pl_dt_y], 1900
-    mov word [pl_dt_m], 1
-    mov word [pl_dt_d], 0
-    or ax, ax
-    jz .out                           ; serial 0 is Excel's own 0-January-1900
-    cmp ax, 60
-    jne .notphantom
-    mov word [pl_dt_m], 2             ; THE PHANTOM DAY. It is not reachable by
-    mov word [pl_dt_d], 29            ; walking a real calendar, because it is
-    jmp .out                          ; not in one
-.notphantom:
-    cmp ax, 61
-    jb .haven
-    dec ax                            ; past it: the real calendar is one day
-.haven:                               ; behind the serial
-    mov cx, ax                        ; CX = days, 1 = 1900-01-01
-.yloop:
-    mov ax, [pl_dt_y]
-    call pl_yearlen
-    cmp cx, ax
-    jbe .haveyear
-    sub cx, ax
-    inc word [pl_dt_y]
-    jmp .yloop
-.haveyear:
-.mloop:
-    mov ax, [pl_dt_m]
-    mov bx, [pl_dt_y]
-    call pl_monlen
-    cmp cx, ax
-    jbe .havemonth
-    sub cx, ax
-    inc word [pl_dt_m]
-    jmp .mloop
-.havemonth:
-    mov [pl_dt_d], cx
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; pl_ymd_to_ser - in: pl_dt_y/m/d; out: AX = the serial, CF=1 if the date is
@@ -15815,49 +14898,6 @@ pl_dt_86400_b:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; pl_dt_hms - pl_acc holds a serial; out: pl_dt_min = whole minutes since
-; midnight (0..1439) and AX = the seconds within that minute (0..59).
-;
-; NOT SECONDS-OF-DAY: 86,399 does not fit an unsigned word, so there is no
-; single number to hand back. The rounding still happens in the seconds
-; domain, in floating point where it fits - a time built as h/m/s is not exact
-; in binary, and truncating a 10:30:00 that came back as 10:29:59.9999 would
-; show 10:29:59. Minutes and seconds are then split off the rounded value, so
-; the two can never disagree about which second it is.
-; -----------------------------------------------------------------------------
-pl_dt_hms:
-    call pl_acc_load_a
-    call fx_floor
-    call pl_dt_tmp_store              ; the whole days
-    call pl_acc_load_a
-    call pl_dt_tmp_load_b
-    call fx_sub                       ; A = the fraction
-    call pl_acc_store
-    call pl_dt_86400_b                ; clobbers A, so it goes first
-    call pl_acc_load_a
-    call fx_mul                       ; A = seconds, as a real
-    xor cx, cx
-    call fx_round                     ; ...to the nearest whole one
-    call pl_acc_store                 ; pl_acc = s, a whole 0..86400
-    mov ax, 60
-    call fx_i2b
-    call pl_acc_load_a
-    call fx_div
-    call fx_floor                     ; A = whole minutes, at most 1439
-    call pl_dt_tmp_store
-    call fx_a2i
-    mov [pl_dt_min], ax
-    mov ax, 60
-    call fx_i2b
-    call pl_dt_tmp_load_a             ; A = the minutes again
-    call fx_mul                       ; A = 60 * minutes
-    call pl_dt_tmp_store
-    call pl_acc_load_a                ; A = s
-    call pl_dt_tmp_load_b
-    call fx_sub                       ; A = the leftover seconds
-    call fx_a2i
-    ret
 
 ; pl_dt_tmp_store / pl_dt_tmp_load_b - park fp A in bss and bring it back as
 ; B. pl_vpush cannot be used here: it banks on the CALLER's stack and pairs
@@ -15881,87 +14921,6 @@ pl_dt_tmp_load_a:
     pop si
     ret
 
-; -----------------------------------------------------------------------------
-; pl_dt_parse3 - three unsigned numbers out of pl_sacc, separated by anything
-; that is not a digit. out: BX, CX, DX in the order they appear; CF=1 if
-; fewer than two were found.
-;
-; "8/28/2026" and "10:30:00" go through the same routine because the shape is
-; the same and the separator carries no meaning this needs - which is also why
-; DATEVALUE here takes only the numeric forms, and not "28-Aug-2026": a month
-; NAME is a different parse, and a half-supported one that quietly returned
-; #VALUE! for the spelled form would be worse than a documented limit.
-; -----------------------------------------------------------------------------
-pl_dt_parse3:
-    push si
-    push di
-    mov si, pl_sacc
-    xor bx, bx
-    xor cx, cx
-    xor dx, dx
-    xor di, di                        ; DI = how many fields have been read
-.field:
-    mov al, [si]
-    or al, al
-    je .done
-    cmp al, '0'
-    jb .skip
-    cmp al, '9'
-    ja .skip
-    mov word [pl_dt_acc], 0           ; THE ACCUMULATOR IS IN BSS, not AX: the
-.digits:                              ; digit under test needs a register half
-    mov al, [si]                      ; of its own, and AH is where the running
-    cmp al, '0'                       ; total's high byte lives
-    jb .store
-    cmp al, '9'
-    ja .store
-    sub al, '0'
-    xor ah, ah
-    push ax
-    push dx
-    mov ax, [pl_dt_acc]
-    mov dx, 10
-    mul dx                            ; unsigned: a year is four digits
-    mov [pl_dt_acc], ax
-    pop dx
-    pop ax
-    add [pl_dt_acc], ax
-    inc si
-    jmp .digits
-.store:
-    mov ax, [pl_dt_acc]
-    or di, di
-    jnz .st1
-    mov bx, ax
-    jmp .stnext
-.st1:
-    cmp di, 1
-    jne .st2
-    mov cx, ax
-    jmp .stnext
-.st2:
-    cmp di, 2
-    jne .stnext
-    mov dx, ax
-.stnext:
-    inc di
-    cmp di, 3
-    jae .done
-    jmp .field
-.skip:
-    inc si
-    jmp .field
-.done:
-    cmp di, 2
-    jb .bad
-    clc
-    jmp .out
-.bad:
-    stc
-.out:
-    pop di
-    pop si
-    ret
 
 ; pl_pif - IF(cond,then,else): the one function that does not fold - its
 ; branches are not even both evaluated the way a real spreadsheet expects
@@ -17358,12 +16317,7 @@ pl_it_new:     db 'New...', 0
 pl_it_open:    db 'Open...', 0
 pl_it_save:    db 'Save', 0
 pl_it_saveas:  db 'Save As...', 0
-; NO PRINT ITEM. OS8088 has no print backend, so the menu entry is absent
-; rather than present-and-refusing (decided 2026-09-04). Exit is absent for a
-; different reason - the OS menu owns it.
-pl_s_nocopyarea: db 'Copy a cell or range first.', 0
 pl_s_sheetpfx: db 'Sheet', 0
-pl_s_locked:   db 'Locked cell on a protected document.', 0
 pl_s_protdoc:  db 'The document is protected.', 0
 
 ; Stage 1.8/2.x: matches real Excel 2.0/2.1's own Format menu shape
@@ -17444,19 +16398,6 @@ pl_it_copy:    db 'Copy', 0
 pl_it_paste:   db 'Paste', 0
 pl_it_clear:   db 'Clear...', 0
 
-; Data - real Excel 2.1 keeps Sort here, not in Edit. Chart Column.../Export
-; Chart as BMP... are stage 2.x's own addition (no real-Excel Data menu
-; equivalent - Excel's own charting is a whole separate document type) -
-; see pl_docmd_chart's header comment for the design.
-;
-; 81.71 put the first six in EXCEL'S OWN ORDER (menu_data_full.png): Form,
-; Find, Extract, Delete, Set Database, Set Criteria, then Sort. Sort moved
-; from index 0 to 6 and the three chart items after it, which is a real cost
-; paid once - the whole reason this package has a menu bar of its own is to
-; look like the captures.
-pl_it_chart:   db 'Chart Column...', 0
-pl_it_gallery: db 'Chart Gallery...', 0
-pl_it_chartexp: db 'Export Chart as BMP...', 0
 
 ; Options - Display toggles (stage 2.x). Each item's own string SWAPS
 ; between an On/Off pair (same relabel-by-repointing idea MENU_DIS's own
@@ -17507,9 +16448,6 @@ pl_s_sylk_fw:  db 'F;W', 0                 ; F;W<first> <last> <width> (81.56)
 pl_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 pl_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
 pl_s_crlf:     db 13, 10, 0
-pl_s_nn:       db 'NN;N', 0           ; SYLK's defined-name record (81.29.1)
-pl_s_nne:      db ';E', 0
-pl_s_colon:    db ':', 0
 pl_s_r:        db 'R', 0
 pl_s_cu:       db 'C', 0
 pl_s_end:      db 'E', 13, 10, 0
@@ -18046,41 +16984,8 @@ pl_sep_store:
 section .text
 
 pl_s_ext_sylk: db '.SLK', 0
-pl_s_ext_dif:  db '.DIF', 0
-pl_s_ext_biff: db '.BIF', 0
 pl_s_ext_csv:  db '.CSV', 0
 pl_s_ext_txt:  db '.TXT', 0
-pl_s_ext_dbf:  db '.DBF', 0
-pl_s_ext_xls:  db '.XLS', 0          ; Excel's own name for a worksheet (81.52)
-pl_s_dbf_bad:  db 'Not a dBASE III file.', 0
-pl_s_biff_fontname: db 'Helv', 0     ; Excel's own historical default face
-; our number-format code (General/Currency/Comma/Percent) -> the real BIFF
-; built-in format id, per the OpenOffice BIFF reference: 0=General,
-; 5="$"#,##0 (currency, 0dp), 3=#,##0 (comma, 0dp), 9=0% (percent, 0dp) -
-; the 0-decimal-place forms, which is what this app's own formatter draws
-pl_biff_numfmt_tab: db 0x00, 0x05, 0x03, 0x09
-pl_s_dif_hdr1: db 'TABLE', 13, 10, '0,1', 13, 10, '""', 13, 10, 'VECTORS', 13, 10, '0,', 0
-pl_s_dif_hdr2: db 13, 10, '""', 13, 10, 'TUPLES', 13, 10, '0,', 0
-pl_s_dif_hdr3: db 13, 10, '""', 13, 10, 'DATA', 13, 10, '0,0', 13, 10, '""', 13, 10, 0
-pl_s_dif_bot:  db '-1,0', 13, 10, 'BOT', 13, 10, 0
-pl_s_dif_zc:   db '0,', 0
-pl_s_dif_1c:   db '1,0', 13, 10, 0        ; stage 4.5: a STRING data item
-pl_s_dif_v:    db 'V', 13, 10, 0           ; the real DIF value-indicator
-                                            ; for "this numeric data is
-                                            ; valid" - NOT a comment string;
-                                            ; a type-0 (numeric) data item
-                                            ; has no third line at all
-pl_s_dif_err0: db '0,0', 13, 10, 'ERROR', 13, 10, 0 ; the ERROR indicator, on
-                                                    ; a numeric item, which is
-                                                    ; DIF's whole vocabulary
-                                                    ; for one
-pl_s_dif_na0:  db '0,0', 13, 10, 'NA', 13, 10, 0  ; a numeric item (type 0)
-                                            ; whose indicator is NA - NOT
-                                            ; type 1 (that's DIF's STRING
-                                            ; type, whose second line must
-                                            ; be a quoted string, not a
-                                            ; bare keyword)
-pl_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 
 ; Stage 2.0's ALERT() needs a real message box; SPEC.md 75.3's os88ui_ask is
 ; the project's own answer to that (a kernel-resident version was tried and
