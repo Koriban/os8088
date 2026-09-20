@@ -44,7 +44,16 @@ DISK = "build/sheetfreeze.img"
 NAME = "FRZ.SLK"
 OPTIONS = (371, 45)                     # the Options menu, tests/sheetside.py's
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
-FREEZE = 4                              # ...and Freeze Panes in it
+FREEZE = 5                              # ...and Freeze Panes in it, which is
+                                        # 5 and not 4 since 81.78 put Calculate
+                                        # Now in Excel's own place, directly
+                                        # after Calculation... . An item index
+                                        # is a POSITION, so inserting anywhere
+                                        # but the end moves every item below -
+                                        # and a click one row off opens a
+                                        # neighbouring command rather than
+                                        # failing, which is why this is a
+                                        # named constant and not a literal
 STATUS = (58, 158, 430, 172)            # the status bar's own strip
 N = 24                                  # labelled rows and columns
 

@@ -2740,6 +2740,21 @@ SOAK = [
         "kern_small entirely; the same reader is what tests/planrig.py's "
         "machine runs",
         needs=("marty",), serial=True),
+    Row("sheetcalc", "soak", py("tests/sheetcalc.py"), 120.0,
+        "SPEC.md 81.78: Calculation: Manual really leaves a formula STALE, "
+        "and Options > Calculate Now catches it up. sh_drawgrid re-evaluates "
+        "every formula cell on EVERY repaint, so Manual is not a label on a "
+        "no-op - it is what a big sheet on a 4.77MHz 8088 needs, and "
+        "Calculate Now is then the only way back. Until 81.78 that command "
+        "was only the third choice inside the Calculation dialog; Excel has "
+        "it on the Options menu too. "
+        "THE MIDDLE CHECK IS THE ONE WITH TEETH: B1 must still read 2 after "
+        "A1 becomes 5, because a build where Manual did nothing would show 6 "
+        "there and still pass the last check. Read off the GLASS by the "
+        "kernel's own glyphs, because the record's cached value is precisely "
+        "what Manual leaves stale - reading the record would be reading the "
+        "thing under test",
+        needs=("marty",), serial=True),
     Row("planui", "soak", py("tests/planui.py"), 120.0,
         "PLAN's MENUS, Copy/Paste, Cut and Undo on the 128KB machine "
         "(SPEC.md 81.75) - the parts a formula never reaches, none of which "

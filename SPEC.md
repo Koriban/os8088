@@ -104469,6 +104469,43 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.78 Options ▸ Calculate Now
+
+Excel's Options menu carries **Calculate Now** directly after
+`Calculation...`; §81.39.2 listed it among the five that menu was missing.
+SHEET had the *capability* — the Calculation dialog's third choice — and not
+the command.
+
+It is 26 bytes and the interesting part is what the first attempt got wrong.
+Writing the menu's arm from scratch, it called `sh_recalc_all`, set no status
+message, and **recorded nothing** — so a macro recorded over it would have
+played back with the command missing. The dialog's own version does none of
+those things: it bumps `[sh_pass]`, a stamp nothing has cached, which is what
+actually forces the recompute, then sets the message and tells the recorder.
+**The existing implementation was the specification**, and not reading it
+first produced a second, divergent answer to one command.
+
+**Two copies, knowingly.** The dialog's arm is in `CHART.OVL`, and a module
+reaches resident code only through the `sh_v_*` vector table — which is filled
+**positionally** from a parallel `dw sh_x_*` list, with nothing gating that
+the two agree. A slot appended to one and not the other is a silent far call
+to the wrong routine. Four duplicated lines with `CHANGE ONE AND CHANGE THE
+OTHER` in both comments is the cheaper risk.
+
+**The item is index 4, which moves Freeze Panes to 5**, because Excel's place
+for it is after `Calculation...` rather than at the end. An item index is a
+POSITION: `sh_i_options+8` became `+10` for the two sites that relabel Freeze
+Panes, and `tests/sheetfreeze.py`'s `FREEZE` went 4 → 5. A click one row off
+opens a neighbouring command rather than failing, which is why both are named
+constants and the patch asserted it found exactly two relabel sites.
+
+`tests/sheetcalc.py` is the gate, and its middle check is the one with teeth:
+with Calculation on Manual, `B1` must **still read 2** after `A1` becomes 5.
+A build where Manual did nothing would show 6 there and still pass the last
+check. It reads the GLASS rather than the record, because the record's cached
+value is exactly what Manual leaves stale — reading it would be reading the
+thing under test.
+
 ### 81.77 A cell formatted while EMPTY
 
 Apply a number format to a cell with no value, save, and the format was gone

@@ -7662,6 +7662,37 @@ sh_mfire:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_calc_now - Calculate Now: force every formula to be worked out again.
+;
+; NOT sh_recalc_all. The stamp is what does it: sh_drawgrid re-evaluates a
+; formula cell whose cached [sh_pass] is not the current one, so bumping the
+; stamp invalidates every cache at once and the next repaint does the work -
+; which is the same machinery Calculation: Manual suspends, rather than a
+; second way of arriving at the same answer.
+;
+; THE RESIDENT COPY of what sh_fdlg_apply's own .calcnow does for the
+; Calculation dialog's third choice. Two copies, knowingly: that arm is in the
+; MODULE, and a module reaches resident code only through the sh_v_* vector
+; table, which is filled POSITIONALLY from a parallel `dw sh_x_*` list with
+; nothing gating that the two agree - so a slot appended to one and not the
+; other is a silent far call to the wrong routine. Four lines twice is the
+; cheaper risk than that. CHANGE ONE AND CHANGE THE OTHER.
+;
+; Writing the menu's own version from scratch was the first attempt and it was
+; wrong three ways - it called sh_recalc_all, it set no message, and it
+; recorded NOTHING, so a macro recorded over it played back missing the
+; command entirely.
+; -----------------------------------------------------------------------------
+sh_calc_now:
+    push si
+    inc word [sh_pass]                ; a pass stamp nothing has cached, which
+    mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
+    mov si, sh_s_rec_calc             ; 81.74: and the recorder sees it
+    call sh_rec_cmd
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_docmd_options - AL = 0 Gridlines / 1 Formulas: flip the flag, re-point
 ; the item's own string to the matching On/Off label (the same relabel-by-
 ; repointing idea documented above MENU_DIS in apps/os88api.inc, applied to
@@ -7669,8 +7700,10 @@ sh_mfire:
 ; -----------------------------------------------------------------------------
 sh_docmd_options:
     push si
-    cmp al, 4
+    cmp al, 5
     je .freeze
+    cmp al, 4
+    je .calcnow
     cmp al, 3
     je .calc
     cmp al, 2
@@ -7694,6 +7727,13 @@ sh_docmd_options:
 .foff:
     mov word [sh_i_options+2], sh_it_form_off
     jmp .repaint
+.calcnow:                              ; 81.78: Excel's own menu item, doing
+    call sh_calc_now                   ; exactly what the Calculation dialog's
+    jmp .repaint                       ; third choice does - one body, so the
+                                       ; two cannot drift. Never greyed: with
+                                       ; Calculation on Automatic it is a
+                                       ; refresh that changes nothing, which
+                                       ; is Excel's behaviour too
 .protect:                              ; NO PASSWORD, and no ellipsis on the
     xor byte [sh_protected], 1         ; item to promise one - see 81.46.3.
     cmp byte [sh_protected], 0         ; The label flips, the way Gridlines
@@ -12101,6 +12141,14 @@ sh_fdlg_apply0:
     mov word [sh_msg], sh_s_calc_man
     jmp .calcrepaint
 .calcnow:
+    ; THE SAME COMMAND AS Options > Calculate Now (81.78), and deliberately
+    ; NOT sh_calc_now, which is where the resident copy of these four lines
+    ; lives. This arm is in the MODULE, and a module reaches resident code
+    ; only through the sh_v_* vector table - which is filled POSITIONALLY
+    ; from a parallel `dw sh_x_*` list with nothing gating that the two agree.
+    ; A slot appended to one and not the other is a far call to the wrong
+    ; routine, silently; four duplicated lines are the cheaper risk. Change
+    ; one and change the other.
     inc word [sh_pass]                ; a pass stamp nothing has cached, which
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
     push si                           ; 81.74
@@ -16136,11 +16184,11 @@ sh_frzmark:
     mov ax, [sh_freezecol]
     or ax, [sh_freezerow]
     jnz .on
-    mov word [sh_i_options+8], sh_it_frz_off
+    mov word [sh_i_options+10], sh_it_frz_off
     pop ax
     ret
 .on:
-    mov word [sh_i_options+8], sh_it_frz_on
+    mov word [sh_i_options+10], sh_it_frz_on
     pop ax
     ret
 
@@ -40568,7 +40616,7 @@ sh_mtab:
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  7
     dw sh_m_data,    sh_i_data,    SH_DATA_N
-    dw sh_m_options, sh_i_options, 5
+    dw sh_m_options, sh_i_options, 6
     dw sh_m_macro,   sh_i_macro,   4
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
@@ -40755,7 +40803,7 @@ sh_m_options:  db 'Options', 0
 ; and Formulas are items here where Excel keeps them inside Display... - that
 ; divergence is 81.31's, not this one's.
 sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_prot_off, sh_it_calc
-               dw sh_it_frz_off
+               dw sh_it_calcnow, sh_it_frz_off
 sh_it_prot_off: db 'Protect Document', 0
 sh_it_prot_on:  db 'Unprotect Document', 0
 sh_it_grid_on:  db 'Gridlines: On', 0
@@ -40763,6 +40811,11 @@ sh_it_grid_off: db 'Gridlines: Off', 0
 sh_it_form_on:  db 'Formulas: On', 0
 sh_it_form_off: db 'Formulas: Off', 0
 sh_it_calc:     db 'Calculation...', 0
+sh_it_calcnow:  db 'Calculate Now', 0    ; 81.78: Excel puts it immediately
+                                          ; after Calculation..., which is why
+                                          ; it is index 4 and Freeze Panes -
+                                          ; this app's own item, and not one
+                                          ; of Excel's - moved along to 5
 sh_it_frz_off:  db 'Freeze Panes', 0     ; 81.70, relabelled like the three
 sh_it_frz_on:   db 'Unfreeze Panes', 0   ; toggles above rather than ticked
 sh_s_frz_at_a1: db 'Select below or right of the split first.', 0
