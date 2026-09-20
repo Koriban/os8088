@@ -517,8 +517,17 @@ def _sylk_value(s):
     return _num(s)
 
 
-def write_sylk(cells, producer='OS88TEST'):
-    """A SYLK file the HOST wrote, for handing to SHEET's reader."""
+def write_sylk(cells, producer='OS88TEST', align=None):
+    """A SYLK file the HOST wrote, for handing to SHEET's reader.
+
+    `align` is an optional {(row, col): c2} of F-record ALIGNMENT codes -
+    SYLK's own 'G' general, 'L' left, 'C' centre, 'R' right. It exists
+    because alignment is the thing a spill test has to state and a format
+    test has to round-trip, and neither can reach the Alignment dialog from
+    the host. The F record is written AFTER the cell's C record, which is the
+    order SHEET's reader documents needing (it attaches a format to a cell
+    that already exists).
+    """
     rows = [r for r, _ in cells] or [0]
     cols = [c for _, c in cells] or [0]
     out = ['ID;P%s' % producer,
@@ -526,6 +535,9 @@ def write_sylk(cells, producer='OS88TEST'):
     for (r, c) in sorted(cells):
         v = cells[(r, c)]
         out.append('C;Y%d;X%d;%s' % (r + 1, c + 1, _sylk_out(v)))
+        a = (align or {}).get((r, c))
+        if a:
+            out.append('F;Y%d;X%d;FG0%s' % (r + 1, c + 1, a))
     out.append('E')
     return ('\r\n'.join(out) + '\r\n').encode('latin-1')
 

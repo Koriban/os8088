@@ -38555,6 +38555,51 @@ sh_justify_t:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_strlen_es - in: ES:SI = a NUL string; out: AX = its length. SI preserved.
+; sh_strlen's twin for the TEXT ARENA, which is never DS.
+; -----------------------------------------------------------------------------
+sh_strlen_es:
+    push si
+    xor ax, ax
+.lp:
+    cmp byte [es:si], 0
+    je .done
+    inc si
+    inc ax
+    jmp short .lp
+.done:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_lpad - HOW FAR A LABEL HANGS OFF THE LEFT of its own cell, in characters.
+; in: AX = its length, CX = the column's width, BL = its alignment field.
+; out: AX. Zero when it fits, and zero for General or left-aligned however
+; long it is - those hang off to the RIGHT instead.
+;
+; ONE RULE, TWO CALLERS, which is the whole reason it is a routine: the
+; label's OWN cell (sh_text_to_numbuf) and every empty cell beside it
+; (sh_spill) must agree about where the string starts, or the two draw
+; different windows of it and the row reads as gibberish. They did, for one
+; build - a centred "Centred label!!" drew "Centred" in its own cell and the
+; slice from character 11 in the next, and the glass read "CentCentredel!!".
+; -----------------------------------------------------------------------------
+sh_lpad:
+    sub ax, cx
+    jbe .none                         ; it fits: nothing hangs off either side
+    cmp bl, SH_FMT_ALIGN_RIGHT
+    je .out                           ; right-aligned: the whole excess
+    cmp bl, SH_FMT_ALIGN_CENTER
+    jne .none                         ; General or left: none of it
+    shr ax, 1                         ; centred: half, the odd one to the right
+.out:
+    ret
+.none:
+    xor ax, ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_text_to_numbuf - copy the label at sh_curtoff-----------------------------
 ; sh_text_to_numbuf - copy the label at sh_curtoff (in sh_txtseg) into
 ; sh_numbuf, clipped to what the cell can show, so that the justifiers - which
 ; all read sh_numbuf and write sh_tbuf - need to know nothing about text.
@@ -38566,12 +38611,25 @@ sh_justify_t:
 ; -----------------------------------------------------------------------------
 sh_text_to_numbuf:
     push ax
+    push bx
     push cx
     push si
     push di
     push es
     mov es, [sh_txtseg]
     mov si, [sh_curtoff]
+    ; AN OVERFLOWING LABEL SHOWS THE WINDOW ITS ALIGNMENT PUTS OVER IT, and
+    ; not simply its first n characters (81.76). For General and left-aligned
+    ; - which was every label before 81.76 - those are the same thing, which
+    ; is why this was not needed until one could hang off to the LEFT.
+    mov bl, [sh_curfmt]
+    and bl, SH_FMT_ALIGN_MASK
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shr bl, cl
+    mov cx, [sh_cellch]
+    call sh_strlen_es
+    call sh_lpad
+    add si, ax
     mov di, sh_numbuf
     mov cx, [sh_cellch]
     cmp cx, SH_NUMBUF_MAX             ; sh_numbuf is a fixed buffer and the
@@ -38594,23 +38652,41 @@ sh_text_to_numbuf:
     pop di
     pop si
     pop cx
+    pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_spill - does a LABEL to the left run on into this empty cell? (81.54)
+; sh_spill - does a LABEL beside this empty cell run on into it? (81.54, and
+; 81.76 for the two directions)
 ; in: AX = col, BX = row, the cell known empty. out: CF=1 with sh_tbuf holding
-; this cell's slice of it and [sh_curfmt] the label's format; CF=0 otherwise.
+; this cell's slice of it and [sh_curfmt] the format to draw it in; CF=0
+; otherwise.
 ;
-; Excel draws a label wider than its column across the EMPTY cells to its
-; right and stops at the first that holds anything. So the one label that can
-; reach this cell is the NEAREST cell to its left in the row - any further one
-; is stopped by it - and that is the record just before this cell's insertion
-; point, the table being sorted by (row, col): one search, the one
-; sh_getcell2 has just made. Each cell draws its own slice and nothing else,
-; so no draw order and no ranged repaint can undo another cell's. Only a
-; label that is General or left-aligned: centred and right-aligned ones run
-; the other way in Excel, and are still clipped here.
+; Excel draws a label wider than its column across the EMPTY cells beside it
+; and stops at the first that holds anything. WHICH WAY IT RUNS IS ITS
+; ALIGNMENT: a General or left-aligned label hangs off to the RIGHT, a
+; right-aligned one to the LEFT, and a CENTRED one both ways at once - that
+; last is geometry rather than a guess, since centring a string wider than its
+; box leaves half of the excess on each side.
+;
+; So there are two candidates and only two, whichever way it runs: the NEAREST
+; record to the left in this row and the NEAREST to the right - anything
+; further is stopped by one of them. Both are one step from the insertion
+; point this cell's own sh_getcell2 has already found, the table being sorted
+; by (row, col): the record BEFORE it and the record AT it. The left one is
+; tried first, so a cell reached from both sides takes the left label, which
+; is the order Excel's own left-to-right drawing settles it in.
+;
+; Each cell draws its own slice and nothing else, so no draw order and no
+; ranged repaint can undo another cell's.
+;
+; THE SLICE IS JUSTIFIED TOWARD THE LABEL, and that one rule covers every
+; case: a fully covered cell holds exactly its own width either way, so it
+; fills edge to edge, and a partly covered one - the last cell the text
+; reaches - hugs the side the text is coming from, which is where the
+; characters actually are. It is why this needs no padding arithmetic of its
+; own and why a centred label's two ends come out right without a third case.
 ; -----------------------------------------------------------------------------
 sh_spill:
     push ax
@@ -38622,64 +38698,112 @@ sh_spill:
     push es
     cmp byte [sh_showformulas], 0     ; formulas on show: a cell shows its
     jne .no                           ; formula, and nothing runs on
-    or ax, ax
-    jz .no                            ; column A has nothing to its left
-    mov dx, ax                        ; DX = this column
-    call sh_findcell                  ; not there: DI = where it would go
-    jc .no
-    or di, di
-    jz .no
-    sub di, SH_C_SZ                   ; the record before it...
-    mov es, [sh_cellseg]
-    mov ax, [sh_cursheet]
-    mov cl, SH_ROW_BITS
+    mov dx, ax                        ; DX = this column, kept throughout
+    mov ax, [sh_cursheet]             ; the packed (sheet, row) every candidate
+    mov cl, SH_ROW_BITS               ; record must match
     shl ax, cl
     or ax, bx
-    cmp [es:di], ax                   ; ...in this row of this sheet
-    jne .no
-    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
-    jne .no                           ; a label, or a formula's text result
-    mov bl, [es:di+5]                 ; its format
-    mov al, bl
-    and al, SH_FMT_ALIGN_MASK
-    mov cl, SH_FMT_ALIGN_SHIFT
-    shr al, cl
+    mov [sh_sp_key], ax
+    mov ax, dx
+    call sh_findcell                  ; empty by the caller's contract, so DI
+    jc .no                            ; is where the record WOULD go
+    mov [sh_sp_ins], di
+    ; --- the record BEFORE it: a label to our left, running RIGHT ----------
+    or dx, dx
+    jz .tryright                      ; column A has nothing to its left
+    or di, di
+    jz .tryright
+    sub di, SH_C_SZ
+    call sh_sp_islabel
+    jc .tryright
+    mov al, [sh_sp_align]
     cmp al, SH_FMT_ALIGN_GENERAL
-    je .left
+    je .haveleft
     cmp al, SH_FMT_ALIGN_LEFT
+    je .haveleft
+    cmp al, SH_FMT_ALIGN_CENTER
+    jne .tryright
+.haveleft:
+    mov byte [sh_sp_dir], 0           ; the text comes from the left
+    jmp short .measure
+    ; --- the record AT it: a label to our right, running LEFT --------------
+.tryright:
+    mov di, [sh_sp_ins]
+    push dx
+    mov dx, [sh_ncells]
+    mov ax, SH_C_SZ
+    mul dx
+    cmp di, ax
+    pop dx
+    jae .no                           ; past the last record
+    call sh_sp_islabel
+    jc .no
+    mov al, [sh_sp_align]
+    cmp al, SH_FMT_ALIGN_RIGHT
+    je .haveright
+    cmp al, SH_FMT_ALIGN_CENTER
     jne .no
-.left:
-    mov si, [es:di+SH_C_FOFF]         ; a label's own text...
-    test byte [es:di+4], 1
-    jz .haveoff
-    mov si, [es:di+SH_C_VAL]          ; ...or a formula's RESULT (81.22.1)
-.haveoff:
-    push si
-    mov si, [es:di+2]                 ; its characters before this cell: the
-    xor cx, cx                        ; widths of the columns between, each
-.wsum:                                ; its own (81.56) - scrolled out of
-    cmp si, dx                        ; view or not
-    jae .wdone
-    mov ax, si
+.haveright:
+    mov byte [sh_sp_dir], 1           ; ...and from the right
+.measure:
+    ; --- how far the text hangs off its own cell, on the LEFT side --------
+    ; leftpad: 0 left/General, the whole excess right-aligned, half centred.
+    mov ax, [sh_sp_lcol]
     call sh_colwidth
-    add cx, ax
-    inc si
-    jmp short .wsum
-.wdone:
-    pop si
+    mov cx, ax                        ; CX = the label column's own width
+    mov si, [sh_sp_toff]
+    push es
     mov es, [sh_txtseg]
-.skip:
-    jcxz .skipped
-    cmp byte [es:si], 0
-    je .no                            ; it ends before this cell...
-    inc si
-    dec cx
-    jmp short .skip
-.skipped:
-    cmp byte [es:si], 0
-    je .no                            ; ...or exactly at its edge
+    call sh_strlen_es
+    pop es
+    mov [sh_sp_tlen], ax
+    mov bl, [sh_sp_align]
+    call sh_lpad                      ; THE SAME RULE the label's own cell uses
+    or ax, ax
+    jnz .havepad
+    cmp bl, SH_FMT_ALIGN_RIGHT        ; a leftpad of zero is either "it fits",
+    je .fail                          ; so nothing runs on at all, or a label
+    cmp bl, SH_FMT_ALIGN_CENTER       ; hanging off to the RIGHT - and for
+    je .fail                          ; those two it can only be the first
+    mov ax, [sh_sp_tlen]
+    cmp ax, cx
+    jbe .fail                         ; General or left, and it fits
+    xor ax, ax                        ; ...or it hangs right, with no leftpad
+.havepad:
+    mov [sh_sp_lpad], ax
+    ; --- the character index this cell's LEFT edge falls on ----------------
+    ; index = leftpad + (the character distance from the label's left edge),
+    ; which is +sum(widths) going right and -sum(widths) going left.
+    call sh_sp_dist                   ; -> AX = the distance, signed
+    add ax, [sh_sp_lpad]
+    mov [sh_sp_idx], ax
+    ; --- intersect [idx, idx+width) with [0, tlen) -------------------------
+    mov ax, dx
+    call sh_colwidth
+    mov cx, ax                        ; CX = this cell's width
+    mov ax, [sh_sp_idx]
+    add ax, cx                        ; AX = one past this cell's last index
+    cmp ax, 0
+    jle .fail                         ; the whole cell is left of the text
+    mov bx, [sh_sp_tlen]
+    cmp ax, bx
+    jle .havehi
+    mov ax, bx                        ; hi = min(idx+width, tlen)
+.havehi:
+    mov bx, [sh_sp_idx]
+    or bx, bx
+    jns .havelo
+    xor bx, bx                        ; lo = max(idx, 0)
+.havelo:
+    cmp bx, ax
+    jge .fail                         ; nothing of the text lands here
+    sub ax, bx                        ; AX = how many characters
+    mov cx, ax
+    ; --- copy them out of the text arena -----------------------------------
+    mov si, [sh_sp_toff]
+    add si, bx
+    mov es, [sh_txtseg]
     mov di, sh_numbuf
-    mov cx, [sh_cellch]
     cmp cx, SH_NUMBUF_MAX
     jbe .copy
     mov cx, SH_NUMBUF_MAX
@@ -38693,10 +38817,36 @@ sh_spill:
     loop .copy
 .end:
     mov byte [di], 0
-    call sh_ljust                     ; -> sh_tbuf, padded to the cell
-    mov [sh_curfmt], bl               ; bold and underline are the label's
+    cmp byte [sh_sp_dir], 0           ; JUSTIFIED TOWARD THE LABEL - the whole
+    jne .rj                           ; of the rule, and the reason a partly
+    call sh_ljust                     ; covered cell needs no special case
+    jmp short .fmt
+.rj:
+    call sh_rjust
+.fmt:
+    mov bl, [sh_sp_fmt]               ; bold and underline are the label's...
+    and bl, SH_FMT_ALIGN_CLR          ; ...but the ALIGNMENT is this slice's,
+    mov al, SH_FMT_ALIGN_LEFT         ; already applied by the justify above
+    cmp byte [sh_sp_dir], 0
+    je .fmtal
+    mov al, SH_FMT_ALIGN_RIGHT
+.fmtal:
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shl al, cl
+    or bl, al
+    mov [sh_curfmt], bl
     stc
     jmp short .out
+.fail:
+    ; A CANDIDATE THAT IS A LABEL BUT DOES NOT REACH US IS NOT AN ANSWER, and
+    ; treating it as one is what the first version of this did: in a row
+    ; holding a short label on the left and a centred one on the right, the
+    ; short one was accepted as the left candidate, measured, found too narrow
+    ; to reach - and the search stopped there, so the centred label's left half
+    ; was never drawn. The left candidate is a first GUESS, not a commitment.
+    cmp byte [sh_sp_dir], 0
+    jne .no                           ; the right one has been tried too
+    jmp .tryright
 .no:
     clc
 .out:
@@ -38707,6 +38857,91 @@ sh_spill:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sp_islabel - is the record at DI a LABEL in the row sh_spill is asking
+; about? out: CF=0 and [sh_sp_lcol]/[sh_sp_toff]/[sh_sp_fmt]/[sh_sp_align]
+; filled; CF=1 if it is not one. Clobbers nothing else.
+; -----------------------------------------------------------------------------
+sh_sp_islabel:
+    push ax
+    push es
+    mov es, [sh_cellseg]
+    mov ax, [sh_sp_key]
+    cmp [es:di], ax                   ; this row of this sheet
+    jne .no
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    jne .no                           ; a label, or a formula's text result
+    mov ax, [es:di+2]
+    mov [sh_sp_lcol], ax
+    mov ax, [es:di+SH_C_FOFF]         ; a label's own text...
+    test byte [es:di+4], 1
+    jz .haveoff
+    mov ax, [es:di+SH_C_VAL]          ; ...or a formula's RESULT (81.22.1)
+.haveoff:
+    mov [sh_sp_toff], ax
+    mov al, [es:di+SH_C_FMT]
+    mov [sh_sp_fmt], al
+    and al, SH_FMT_ALIGN_MASK
+    push cx
+    mov cl, SH_FMT_ALIGN_SHIFT
+    shr al, cl
+    pop cx
+    mov [sh_sp_align], al
+    pop es
+    pop ax
+    clc
+    ret
+.no:
+    pop es
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sp_dist - the character distance from the label's own left edge to this
+; cell's, signed: positive when this cell is to the RIGHT of the label.
+; in: DX = this column, [sh_sp_lcol] = the label's. out: AX. Every column's
+; own width (81.56), scrolled out of view or not.
+; -----------------------------------------------------------------------------
+sh_sp_dist:
+    push bx
+    push cx
+    push si
+    xor cx, cx
+    mov si, [sh_sp_lcol]
+    cmp si, dx
+    jb .rightof
+.leftof:                              ; the label is at or right of us: walk
+    mov si, dx                        ; OUR column up to it and negate
+.lsum:
+    cmp si, [sh_sp_lcol]
+    jae .ldone
+    mov ax, si
+    call sh_colwidth
+    add cx, ax
+    inc si
+    jmp short .lsum
+.ldone:
+    xor ax, ax
+    sub ax, cx
+    jmp short .out
+.rightof:                             ; the label is left of us: walk from it
+.rsum:
+    cmp si, dx
+    jae .rdone
+    mov ax, si
+    call sh_colwidth
+    add cx, ax
+    inc si
+    jmp short .rsum
+.rdone:
+    mov ax, cx
+.out:
+    pop si
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -41920,7 +42155,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8102                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8119                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -42129,7 +42364,22 @@ sh_rcol       equ sh_rrow + 2               ; array bound (sh_rcol is spare
 sh_pass       equ sh_rcol + 2               ; recalculation pass counter
 sh_bbrow      equ sh_pass + 2               ; sh_difbbox's used bounding box
 sh_bbcol      equ sh_bbrow + 2
-sh_curfmt     equ sh_bbcol + 2              ; sh_getcell2's format-byte output
+; sh_spill's own working state (81.76). Seventeen bytes rather than registers
+; because the routine has to hold the candidate label's column, text offset,
+; format and alignment ACROSS two colwidth walks and a strlen, and an 8086 has
+; not got that many to spare.
+sh_sp_key     equ sh_bbcol + 2              ; the packed (sheet,row) a
+sh_sp_ins     equ sh_sp_key + 2             ; candidate must match; the
+sh_sp_lcol    equ sh_sp_ins + 2             ; insertion point; the label's
+sh_sp_toff    equ sh_sp_lcol + 2            ; column and its characters;
+sh_sp_lpad    equ sh_sp_toff + 2            ; how far it hangs off to the
+sh_sp_tlen    equ sh_sp_lpad + 2            ; left; its length; and the
+sh_sp_idx     equ sh_sp_tlen + 2            ; index this cell's left edge is on
+sh_sp_fmt     equ sh_sp_idx + 2             ; byte: the label's format byte
+sh_sp_align   equ sh_sp_fmt + 1             ; byte: ...and its alignment field
+sh_sp_dir     equ sh_sp_align + 1           ; byte: 0 = the text comes from the
+                                            ; left, 1 = from the right
+sh_curfmt     equ sh_sp_dir + 1             ; sh_getcell2's format-byte output
 sh_curtype    equ sh_curfmt + 1             ; ...and its SH_T_* tag, and where
 sh_curtoff    equ sh_curtype + 1            ; a TEXT cell's characters live
 sh_argtype    equ sh_curtoff + 2            ; stage 4.5: sh_pargclass's answer

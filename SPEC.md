@@ -104377,8 +104377,8 @@ that is edited is followed by the full repaint every commit already pays.
 
 - A formula's **text result** runs on, from its result slot, not its formula
   text (§81.22.1).
-- Only a **General or left-aligned** label runs on. A centred or right-aligned
-  one runs the other way in Excel and is still clipped here.
+- Only a **General or left-aligned** label ran on, and §81.76 is the other two
+  directions.
 - The label's bold and underline go with it; the empty cell's own shading
   stays its own.
 - With **formulas on show** nothing runs on — every cell shows its formula.
@@ -104396,6 +104396,78 @@ five that should carry text, and spilling the formula text instead of the
 result fails E4. (The first version of the test found ink in B3 and B4 on the
 unchanged binary: the pointer, left where the file was double-clicked. It is
 moved off the window now.) Resident +199 bytes.
+
+### 81.76 A label runs on the way its ALIGNMENT points
+
+§81.54 drew a long label across the empty cells to its **right** and said so
+about the rest: *"a centred or right-aligned one runs the other way in Excel
+and is still clipped here."* This is the other way.
+
+**Which direction is not a preference, it is where the characters are.** A
+label wider than its column has to hang off somewhere, and its alignment says
+where: a General or left-aligned one hangs off to the **right**, a
+right-aligned one to the **left**, and a **centred** one **both ways at once**
+— that last is geometry rather than a guess, since centring a string wider
+than its box leaves half the excess on each side.
+
+#### 81.76.1 One rule, and the two halves that have to share it
+
+`sh_lpad` answers *how far does this label hang off the LEFT of its own cell*
+— zero when it fits, the whole excess right-aligned, half of it centred — and
+**two callers have to agree on it**: `sh_text_to_numbuf`, which draws the
+label's own cell, and `sh_spill`, which draws every empty cell beside it.
+
+That sharing is the whole design, and it is what the first build got wrong.
+`sh_text_to_numbuf` had always copied a label's **first n characters**, which
+is correct for a left-aligned one and for nothing else; the neighbours drew
+slices from the new model. So a centred `Centred label!!` drew `Centred` in
+its own cell and the slice from character 11 in the next, and the glass read
+**`CentCentredel!!`** — two windows of one string, each right on its own
+terms. The ink checks passed, because there was ink in every cell they named.
+
+#### 81.76.2 Two candidates, and why the first is only a guess
+
+An empty cell has exactly two labels that can reach it — the **nearest record
+to its left** and the **nearest to its right**; anything further is stopped by
+one of them. Both are one step from the insertion point the cell's own
+`sh_getcell2` has already found: the record *before* it and the record *at*
+it. The left one is tried first, so a cell reached from both sides takes the
+left label.
+
+**A candidate that is a label but does not REACH is not an answer**, and
+taking it as one was the second defect: in a row holding a short label on the
+left and a centred one on the right, the short one was accepted as the left
+candidate, measured, found too narrow to reach — and the search stopped there,
+so the centred label's left half was never drawn. `.fail` falls through to the
+right candidate instead of returning.
+
+#### 81.76.3 The slice is justified TOWARD the label
+
+One rule covers every case and is why none of this needs padding arithmetic: a
+**fully covered** cell holds exactly its own width either way, so it fills edge
+to edge; a **partly covered** one — the last cell the text reaches — hugs the
+side the text is coming from, which is where the characters actually are. So
+`sh_spill` calls `sh_ljust` for a label on the left and `sh_rjust` for one on
+the right, and a centred label's two ends come out right with no third case.
+
+#### 81.76.4 Cost and evidence
+
+**+346 bytes resident and 17 of bss**, the bss because the routine has to hold
+the candidate's column, text offset, format and alignment across two width
+walks and a `strlen`, and an 8086 has not the registers. The work per empty
+cell is one extra record compare — the right-hand candidate — and a `strlen`
+only once a candidate is found, which is why an empty row costs nothing.
+
+`tests/sheetspill.py` goes from 12 checks to **19**. `write_sylk` grew an
+`align` argument to author them, since alignment is the thing this test has to
+state and the Alignment dialog cannot be reached from the host. Both new
+labels are **fifteen characters in a column seven wide**, so the excess is
+eight and every expectation is computed rather than eyeballed: `G2`
+right-aligned reaches `F2` fully and `E2` by one character, and does **not**
+hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
+and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
+window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
+row would have been off the glass, where the failure reads as "no grid".
 
 ### 81.55 Excel 2.1d's twenty-one number formats
 

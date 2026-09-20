@@ -46,13 +46,26 @@ CELLS = {
     (1, 1): 5.0,
     (2, 0): 'Hi',
     (3, 2): ('formula', 'REPT("ab",10)', 'x'),
+    # 81.76's two directions. Both labels are FIFTEEN characters in a column
+    # seven wide (SH_CW_NORMAL), so the excess is eight - which is what makes
+    # every cell below computable rather than eyeballed.
+    #
+    # THEY GO IN ROWS 2 AND 3, not in rows of their own, because the window is
+    # FOUR ROWS TALL on this machine: CGA is 640x200 and the grid gets what is
+    # left under the menu bar, the formula bar and the headings. A fifth row
+    # would have been off the glass, and the failure reads as "no grid".
+    (1, 6): 'Right aligned!!',      # G2, hanging LEFT over F2 and into E2
+    (2, 3): 'Centred label!!',      # D3, hanging BOTH ways over C3 and E3
 }
+# The alignment is the whole point of those two, and it cannot be reached from
+# the host any other way - write_sylk grew an `align` for exactly this.
+ALIGN = {(1, 6): 'R', (2, 3): 'C'}
 
 
 def build_disk():
     os.makedirs(WORK, exist_ok=True)
     src = os.path.join(WORK, "SHIN.SLK")
-    open(src, "wb").write(F.write_sylk(CELLS))
+    open(src, "wb").write(F.write_sylk(CELLS, align=ALIGN))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
                     "APPS:build/CHART.OVL", "APPS:" + src],
@@ -80,9 +93,10 @@ def main():
         w, h, rows = m.vram("cga")
         M.write_png(os.path.join(WORK, "glass.png"), w, h, rows)
     g = grid(w, h, rows)
-    g = g if g and len(g[0]) >= 5 and len(g[1]) >= 7 else None
+    g = g if g and len(g[0]) >= 5 and len(g[1]) >= 9 else None
     check(g is not None, "the grid is on the glass",
-          "no evenly spaced run of five horizontal lines - see glass.png")
+          "no evenly spaced run of five horizontal lines, or fewer than\n"
+          "          eight columns across - see glass.png")
     if not g:
         done("sheetspill")
         return
@@ -93,10 +107,23 @@ def main():
         n = ink(rows, box(r, c))
         check(n > 0, "%s carries the label on its left" % cell(r, c),
               "no ink in it")
+    # ...and the other direction (81.76). A right-aligned label hangs LEFT and
+    # a centred one both ways, which is geometry rather than a preference:
+    # centring a string wider than its box leaves half the excess each side.
+    for r, c, why in ((1, 5, "G2 is right-aligned, so it hangs left"),
+                      (1, 4, "...and reaches E2 by one character"),
+                      (2, 2, "D3 is centred, so it hangs BOTH ways - left"),
+                      (2, 4, "...and right")):
+        n = ink(rows, box(r, c))
+        check(n > 0, "%s carries the label beside it - %s" % (cell(r, c), why),
+              "no ink in it")
     for r, c, why in ((0, 4, "past the label's end"),
                       (2, 1, "A3 is two letters"),
                       (3, 1, "left of C4"),
-                      (3, 5, "past the RESULT's end")):
+                      (3, 5, "past the RESULT's end"),
+                      (1, 3, "the excess is 8 and F2+E2 take it all"),
+                      (1, 7, "a right-aligned label does NOT hang right"),
+                      (2, 5, "the centred label's right half stops in E3")):
         n = ink(rows, box(r, c))
         check(n == 0, "%s is empty - %s" % (cell(r, c), why),
               "%d pixels of ink in it" % n)
