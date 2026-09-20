@@ -619,10 +619,12 @@ fx_round:
     mov bx, [fx_tmp+2]
 .up:
     mov cx, 10
-    call fx_qmulcx
-    mov [fx_q], ax
-    mov [fx_q+2], dx
-    dec bx
+    push bx                            ; fx_qmulcx CLOBBERS BX - its own header
+    call fx_qmulcx                     ; says so, and BX is this loop's counter,
+    pop bx                             ; so without this the count becomes the
+    mov [fx_q], ax                     ; low word of the product and the value
+    mov [fx_q+2], dx                   ; is multiplied by ten some thousands of
+    dec bx                             ; times
     jnz .up
     call fx_setsgn
 .out:
