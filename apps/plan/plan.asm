@@ -20329,7 +20329,7 @@ pl_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3626                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3634                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -20895,7 +20895,9 @@ fx_n1             equ fx_n0 + 2
 fx_sgn            equ fx_n1 + 2        ; byte: the sign a magnitude owes back
 fx_tmp            equ fx_sgn + 1       ; 4: general scratch
 fx_dig            equ fx_tmp + 4       ; 16: fx_ftoa's digit string
-pl_pb_c0          equ fx_dig + 16        ; the paste block's landing
+fx_nn             equ fx_dig + 16      ; 8: fx_sqrt's radicand, kept across a
+                                       ; divide that consumes fx_q
+pl_pb_c0          equ fx_nn + 8        ; the paste block's landing
 pl_pb_r0          equ pl_pb_c0 + 2     ; corner...
 pl_pb_x           equ pl_pb_r0 + 2     ; ...the cell being written
 pl_pb_y           equ pl_pb_x + 2

@@ -1,11 +1,23 @@
 ; =============================================================================
 ; os8088 - apps/os88fix.inc
 ;
-; FIXED-POINT DECIMAL ARITHMETIC, two places, for apps/plan/plan.asm (81.75).
+; FIXED-POINT DECIMAL ARITHMETIC, four places, for apps/plan/plan.asm (81.75).
 ;
-; A signed 32-bit count of HUNDREDTHS. 1.00 is 100, -0.25 is -25, and the
-; range is +/-21,474,836.47 - which is the whole of what a budget needs and
-; rather more than a 128KB machine can hold cells for.
+; A signed 32-bit count of TEN-THOUSANDTHS. 1.0000 is 10000, -0.25 is -2500,
+; and the range is +/-214,748.3647.
+;
+; FOUR PLACES AND NOT TWO, and the reason is RATES rather than money. Money
+; needs two: pennies. But a monthly interest rate is 0.005, and at two places
+; 1.005 rounds to 1.00 - so `=(1+B1)^-360`, the closed-form annuity factor
+; this package expects a user to write instead of a PMT() it does not have,
+; answered 1 for every rate. Four places hold 0.0042 (five percent over
+; twelve) and 1.0050 exactly.
+;
+; WHAT IT COSTS IS RANGE, and it is the trade to argue with: two places
+; reached +/-21,474,836.47 and four reach +/-214,748.3647. A household or
+; small-business budget fits; a company's may not, and the answer if it does
+; not is three places (+/-2,147,483.647), which still holds 0.005 exactly.
+; FX_SCALE and FX_PLACES are the two lines to change.
 ;
 ; WHY THIS EXISTS, and it is not that doubles are wrong. apps/os88fp.inc is a
 ; correct software IEEE-754 double and SHEET keeps it. PLAN has to fit a
@@ -20,12 +32,11 @@
 ; Two decimal places of pennies add and subtract EXACTLY, which is what a
 ; budget is made of.
 ;
-; WHAT IT COSTS, stated rather than buried:
-;   - three decimal places do not exist. 1/3 is 0.33, and 0.33*3 is 0.99
-;   - a multiply or a divide ROUNDS half away from zero at the second place,
-;     so a chain of them drifts by a penny at a time where a double would not
-;   - SQRT is exact to the penny and no further; its argument is capped at
-;     429,496.72, where the intermediate would leave 32 bits
+; WHAT ELSE IT COSTS, stated rather than buried:
+;   - a fifth decimal place does not exist. 1/3 is 0.3333, and 0.3333*3 is
+;     0.9999
+;   - a multiply or a divide ROUNDS half away from zero at the last place, so
+;     a chain of them drifts where a double would not
 ;   - there is no exponent, so no 1e300 and no gradual underflow
 ;
 ; THE ENTRY POINTS MIRROR os88fp.inc's, name for name with fx_ for fp_, and
@@ -45,14 +56,16 @@
 ;   fx_sgn   1    the sign a magnitude operation owes back
 ;   fx_dig   16   fx_ftoa's digit string
 ;   fx_tmp   4    general scratch
+;   fx_nn    8    fx_sqrt's radicand, which it needs ACROSS a division that
+;                 consumes fx_q
 ; =============================================================================
 
-FX_SCALE     equ 100                 ; hundredths, and the ONE place this
-                                     ; number is written down
-FX_PLACES    equ 2
-FX_POW_MAX   equ 50                  ; fx_pow's exponent ceiling, as the HIGH
-                                     ; word of the scaled magnitude: 50*65536
-                                     ; is 3,276,800, which unscaled is 32,768.
+FX_SCALE     equ 10000               ; ten-thousandths, and the ONE place
+                                     ; this number is written down
+FX_PLACES    equ 4
+FX_POW_MAX   equ 5000                ; fx_pow's exponent ceiling, as the HIGH
+                                     ; word of the scaled magnitude: 5000*65536
+                                     ; is 327,680,000, which unscaled is 32,768.
                                      ; The guard is not taste - the DIV that
                                      ; unscales it faults on a quotient past a
                                      ; word, and a spreadsheet must not take
@@ -579,21 +592,12 @@ fx_round:
     push cx
     push dx
     mov bx, FX_PLACES
-    sub bx, cx                         ; BX = how many places to drop
+    sub bx, cx                         ; BX = how many digits to drop
     jle .out                           ; already at or inside that precision
-    cmp bx, 9
+    cmp bx, 12
     jle .have
-    mov bx, 9                          ; past this the answer is zero either
-.have:                                 ; way, and 10^9 leaves the word
-    mov cx, 1
-.pow:
-    mov ax, cx
-    mov dx, 10
-    mul dx
-    mov cx, ax
-    dec bx
-    jnz .pow
-    mov [fx_tmp+2], cx                 ; the scale factor, banked
+    mov bx, 12                         ; past this the answer is zero anyway
+.have:
     call fx_amag
     mov word [fx_q+4], 0
     mov word [fx_q+6], 0
@@ -601,17 +605,25 @@ fx_round:
     mov [fx_q], ax
     mov ax, [fx_m1]
     mov [fx_q+2], ax
-    mov cx, [fx_tmp+2]
-    call fx_udiv16                     ; DX = the remainder
-    mov ax, [fx_tmp+2]
-    shr ax, 1
-    cmp dx, ax                         ; half away from zero
-    jb .nor
-    add word [fx_q], 1
-    adc word [fx_q+2], 0
+    mov [fx_tmp+2], bx                 ; the count, for the way back up
+.down:                                 ; ONE DIGIT AT A TIME, rather than
+    mov cx, 10                         ; building 10^bx - which leaves a word
+    call fx_udiv16                     ; at 10^5, and ROUND(x,-1) asks for it
+    dec bx
+    jnz .down
+    cmp dx, 5                          ; the LAST remainder is the most
+    jb .nor                            ; significant digit dropped, which is
+    add word [fx_q], 1                 ; the one that decides - half away
+    adc word [fx_q+2], 0               ; from zero
 .nor:
-    mov cx, [fx_tmp+2]
+    mov bx, [fx_tmp+2]
+.up:
+    mov cx, 10
     call fx_qmulcx
+    mov [fx_q], ax
+    mov [fx_q+2], dx
+    dec bx
+    jnz .up
     call fx_setsgn
 .out:
     pop dx
@@ -632,65 +644,93 @@ fx_sqrt:
     push bx
     push cx
     push dx
+    push si
     mov ax, [fx_a]
     mov dx, [fx_a+2]
     or dx, dx
-    js .bad
-    or ax, ax                          ; sqrt(0) is 0, and Newton cannot start
-    jnz .nz                            ; from it
-    or dx, dx
+    js .bad                            ; a negative has no real root
+    mov bx, ax
+    or bx, dx
     jz .zero
-.nz:
-    mov cx, FX_SCALE                   ; v * 100, and it must stay in 32 bits
+    call fx_amag                       ; |a| -> fx_m, and the sign is spent
+    mov word [fx_n0], FX_SCALE         ; n = v * FX_SCALE, in SIXTY-FOUR bits:
+    mov word [fx_n1], 0                ; the root of v/S scaled back up is the
+    call fx_umul                       ; root of v*S, and at four places that
+    mov si, 6                          ; product needs 46 of them
+.bank:                                 ; BANK IT - fx_udiv32 consumes fx_q and
+    mov bx, si                         ; Newton needs the radicand every pass
+    mov ax, [fx_q+bx]
+    mov [fx_nn+bx], ax
+    dec si
+    dec si
+    jns .bank
+    ; --- THE SEED MUST BE AN OVERESTIMATE, and the first one was not.
+    ; Newton for a square root only decreases monotonically when it starts AT
+    ; OR ABOVE the answer; from below it overshoots upward on the first pass,
+    ; and the "stop when it stops decreasing" test below then fires on that
+    ; pass and returns the seed. SQRT(16) came back as 0.4096, which is the
+    ; seed 4096 with the scale put back on it.
+    ;
+    ; So: the highest SET WORD of n decides, and 2^(8*(w+1)) is always at or
+    ; above sqrt(n) because n < 2^(16*(w+1)).
+    mov word [fx_tmp], 0x0100          ; n < 2^16 -> 2^8
+    mov word [fx_tmp+2], 0
+    cmp word [fx_nn+2], 0
+    jne .s1
+    cmp word [fx_nn+4], 0
+    jne .s2
+    cmp word [fx_nn+6], 0
+    jne .s3
+    jmp short .seeded
+.s1:
+    mov word [fx_tmp], 0               ; n < 2^32 -> 2^16
+    mov word [fx_tmp+2], 0x0001
+    cmp word [fx_nn+4], 0
+    jne .s2
+    cmp word [fx_nn+6], 0
+    jne .s3
+    jmp short .seeded
+.s2:
+    mov word [fx_tmp], 0               ; n < 2^48 -> 2^24
+    mov word [fx_tmp+2], 0x0100
+    cmp word [fx_nn+6], 0
+    jne .s3
+    jmp short .seeded
+.s3:
+    mov word [fx_tmp], 0xFFFF          ; 2^32 would not fit, so the largest
+    mov word [fx_tmp+2], 0xFFFF        ; 32-bit value stands in for it
+.seeded:
+    mov si, 12                         ; a dozen passes, with an early exit
+.nl:
+    mov bx, 6                          ; the radicand back into fx_q
+.copy:
+    mov ax, [fx_nn+bx]
+    mov [fx_q+bx], ax
+    dec bx
+    dec bx
+    jns .copy
+    mov bx, [fx_tmp]                   ; CX:BX = x, the current guess
+    mov cx, [fx_tmp+2]
+    call fx_udiv32                     ; fx_q = n / x
+    mov ax, [fx_q]                     ; (x + n/x) / 2, in 32 bits
+    mov dx, [fx_q+2]
+    add ax, [fx_tmp]
+    adc dx, [fx_tmp+2]
+    rcr dx, 1                          ; the carry out of the add is bit 32
+    rcr ax, 1
+    cmp dx, [fx_tmp+2]                 ; settled, or gone up? then stop - an
+    ja .done                           ; integer Newton oscillates by one at
+    jb .step                           ; the bottom and never converges
+    cmp ax, [fx_tmp]
+    jae .done
+.step:
     mov [fx_tmp], ax
     mov [fx_tmp+2], dx
-    mov ax, [fx_tmp+2]
-    mul cx
-    or dx, dx
-    jnz .bad                           ; past the cap in the header
-    mov bx, ax                         ; BX = the high half so far
-    mov ax, [fx_tmp]
-    mul cx
-    add dx, bx
-    jc .bad
-    mov [fx_tmp], ax                   ; fx_tmp = n, the value to root
-    mov [fx_tmp+2], dx
-    mov ax, dx                         ; the seed: half the bit length, which
-    or ax, ax                          ; Newton doubles the right bits from
-    jnz .seedhi
-    mov ax, [fx_tmp]
-    mov cx, 1
-.seedlo:
-    cmp ax, 4
-    jb .seeded
-    shr ax, 1
-    shr ax, 1
-    shl cx, 1
-    jmp short .seedlo
-.seedhi:
-    mov cx, 256                        ; a high word at all means at least 2^16
-.seeded:
-    or cx, cx
-    jnz .iter
-    mov cx, 1
-.iter:
-    mov bx, 12                         ; Newton, a fixed dozen: each pass
-.nl:                                   ; doubles the correct bits, so twelve
-    mov ax, [fx_tmp]                   ; is far past the sixteen it needs
-    mov dx, [fx_tmp+2]
-    div cx                             ; n / x  (CX is never zero here)
-    add ax, cx                         ; (x + n/x) / 2
-    rcr ax, 1
-    mov cx, ax
-    dec bx
+    dec si
     jnz .nl
-    mov ax, cx                         ; one guard step down: Newton on
-    mul ax                             ; integers can settle one high
-    mov bx, ax
+.done:
     mov ax, [fx_tmp]
-    sub ax, bx
-    mov ax, cx
-    xor dx, dx
+    mov dx, [fx_tmp+2]
     mov [fx_a], ax
     mov [fx_a+2], dx
     clc
@@ -703,6 +743,7 @@ fx_sqrt:
     call fx_azero
     stc
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -969,14 +1010,13 @@ fx_atof:
     inc si
     cmp dx, FX_PLACES
     jb .keep
-    cmp dx, FX_PLACES                  ; the THIRD digit rounds, the rest go
-    jne .drop
+    cmp dx, FX_PLACES                  ; the FIRST digit past the scale rounds
+    jne .drop                          ; and the rest are consumed and dropped
     inc dx
     cmp al, '5'
     jb .drop
     add bx, 1
     adc cx, 0
-    jmp short .drop
 .drop:
     jmp short .fd
 .keep:
@@ -1079,8 +1119,8 @@ fx_atof:
     jcxz .signit
 .escale:
     push cx
-    mov word [fx_b], 10 * FX_SCALE
-    mov word [fx_b+2], 0
+    mov word [fx_b], (10 * FX_SCALE) & 0xFFFF   ; 10.0 needs BOTH words once
+    mov word [fx_b+2], (10 * FX_SCALE) >> 16    ; the scale is 10,000
     cmp byte [fx_tmp+2], 0
     je .eup
     call fx_div
@@ -1174,48 +1214,58 @@ fx_ftoa:
     inc di
     dec bx
     jns .we
-    mov ax, [fx_tmp]                   ; --- the fraction
-    mov bx, [fx_tmp+2]
-    cmp bx, 0
-    je .end                            ; zero places asked for: whole only
-    cmp bx, 1
-    je .one
-    cmp bx, 2
-    je .two
-    or ax, ax                          ; GENERAL: nothing to show when the
-    jz .end                            ; hundredths are zero
-    mov bx, 2
-    push ax
-    mov cx, 10
-    xor dx, dx
-    div cx
-    pop ax
-    or dx, dx                          ; ...and one place when the second
-    jnz .two                           ; digit is a zero
-.one:
+    mov ax, [fx_tmp]                   ; --- the fraction, AX = the remainder
+    mov bx, [fx_tmp+2]                 ; BX = the places asked for
+    or bx, bx
+    jz .end                            ; none asked for: the whole part alone
+    cmp bx, FX_PLACES
+    jbe .fixed
+    mov bx, FX_PLACES                  ; more than the scale holds, or the
+    or ax, ax                          ; GENERAL that every os88fp caller
+    jz .end                            ; passes: show what there is and trim
+    mov byte [fx_sgn], 1               ; ...and TRIM, which a fixed count
+    jmp short .frac                    ; does not
+.fixed:
+    mov byte [fx_sgn], 0
+.frac:
     mov byte [di], '.'
     inc di
+    mov cx, FX_PLACES                  ; the fraction digits, LEAST significant
+    mov si, fx_dig + FX_PLACES - 1     ; first out of the divide and written
+.fl:                                   ; backwards into the buffer, so they
+    push cx                            ; come out of it in reading order
     xor dx, dx
     mov cx, 10
     div cx
-    add al, '0'
-    mov [di], al
-    inc di
-    jmp short .end
-.two:
-    mov byte [di], '.'
-    inc di
-    xor dx, dx
-    mov cx, 10
-    div cx
-    push dx
-    add al, '0'
-    mov [di], al
-    inc di
-    pop dx
+    pop cx
     add dl, '0'
-    mov [di], dl
+    mov [si], dl
+    dec si
+    dec cx
+    jnz .fl
+    cmp byte [fx_sgn], 0               ; trimming? drop trailing zeros - but
+    je .emit                           ; never the last one, because the '.'
+    mov si, fx_dig                     ; is already written
+    add si, bx
+    dec si
+.trim:
+    cmp bx, 1
+    jbe .emit
+    cmp byte [si], '0'
+    jne .emit
+    dec si
+    dec bx
+    jmp short .trim
+.emit:
+    mov si, fx_dig
+    mov cx, bx
+.el:
+    mov al, [si]
+    mov [di], al
     inc di
+    inc si
+    dec cx
+    jnz .el
 .end:
     mov byte [di], 0
     pop di
