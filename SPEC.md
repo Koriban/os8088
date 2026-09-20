@@ -103108,7 +103108,7 @@ harmless.
 | Format | 7 | 8 | Justify |
 | File | 4 | 11 | Close, Links, Save Workspace, Delete, Page Setup, Printer Setup, Print |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
-| Data | 10, 7 shared | 10 | **Series, Table, Parse** — Form, Find, Extract and Delete closed 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69) |
+| Data | 11, 8 shared | 10 | **Table, Parse** — Series closed 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2). SHEET's
