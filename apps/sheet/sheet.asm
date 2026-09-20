@@ -19131,6 +19131,16 @@ sh_biff_cells:
     jnz .bt
 .btdone:
     pop word [sh_cursheet]
+    mov es, [sh_stgseg]               ; ES BACK TO THE STAGING SEGMENT. This
+                                      ; routine's contract is "appended at
+                                      ; ES:DI", and the walk above leaves ES
+                                      ; on the BORDER TABLE on every path that
+                                      ; writes nothing. Without this the
+                                      ; caller's next records - the sheet's
+                                      ; own EOF among them - went into
+                                      ; sh_bordseg: a two-sheet save came back
+                                      ; as one sheet, and the border table was
+                                      ; being overwritten as well
     ret
 
 ; sh_biff_rlen - CX = the length of the text at [sh_wrec_roff] in the arena,

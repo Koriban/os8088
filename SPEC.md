@@ -104529,7 +104529,27 @@ nothing keyed on `sheet.o88` — a size, a stamp, an mtime — can see it. Delet
 `sheet.bin`, `sheet.trim.bin`, `sheet.o88` and `CHART.OVL` together before
 trusting an A/B that touches the module.
 
-#### 81.77.3 Evidence
+#### 81.77.3 And the walk left ES on the border table
+
+The first build of the writer's walk passed its own gate and broke a
+different one: `sheetfmt`'s *"a second sheet makes it a WORKBOOK"*, which came
+back reporting one sheet.
+
+`sh_biff_cells`'s contract is **"every cell record for ONE sheet, appended at
+ES:DI"** — ES is the caller's staging segment and stays that way. The border
+walk reads its entries with `ES = sh_bordseg`, and on every path that writes
+*nothing* (the cell exists, the entry is empty, the sheet is not this one) it
+returned with ES still there. The caller's next records — the sheet's own
+`EOF` among them — were then written **into the border table**: a two-sheet
+save came back as one sheet, and the table was being overwritten as it went.
+
+The lesson is the ordinary one about this machine and worth the line anyway:
+**a routine that borrows a segment register owes it back**, and the one
+documented in its header is the one it owes. The gate that caught it was not
+the gate for this feature — running the whole `sheet*` set is what found it,
+and the row that failed had nothing to do with formats.
+
+#### 81.77.4 Evidence
 
 `tests/sheetnumfmt.py` gains **three checks** and keeps the file it read back
 (`saved.bif`, beside the screenshots it already wrote — a gate about what a
