@@ -6624,11 +6624,10 @@ pl_fd_cnow:     db 'Calculate Now', 0
 pl_fd_i_sort:   dw pl_fd_sasc, pl_fd_sdesc
 pl_fd_sasc:     db 'Ascending', 0
 pl_fd_sdesc:    db 'Descending', 0
-pl_fd_i_num:    dw pl_fd_numgen, pl_fd_numcur, pl_fd_numcomma, pl_fd_numpct
-pl_fd_numgen:   db 'General', 0
+pl_fd_i_num:    dw pl_fd_numnum, pl_fd_numtext, pl_fd_numcur
+pl_fd_numnum:   db 'Number', 0
+pl_fd_numtext:  db 'Text', 0
 pl_fd_numcur:   db 'Currency', 0
-pl_fd_numcomma: db 'Comma', 0
-pl_fd_numpct:   db 'Percent', 0
 pl_fd_i_align:  dw pl_fd_agen, pl_fd_aleft, pl_fd_acenter, pl_fd_aright
 pl_fd_agen:     db 'General', 0
 pl_fd_aleft:    db 'Left', 0
@@ -6650,7 +6649,9 @@ pl_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - pl_fdlg_open copies the
 ; matching entry into [pl_fdlg_count], which pl_fdlg_paint/pl_fdlg_onclick
 ; loop and hit-test against instead of the fixed PL_FDLG_NITEMS.
-pl_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 3, 5, 4, 2, 6
+pl_fdlg_counts: dw 3, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 3, 5, 4, 2, 6
+                                      ; 0 Number is three now: Number, Text,
+                                      ; Currency (81.75)
 
 PL_FDK_CLEAR equ 7
 PL_FDK_NEW   equ 8
@@ -16899,6 +16900,16 @@ pl_cjust:
 pl_justify:
     push ax
     push cx
+    mov al, bl                         ; 81.75: the TEXT number format is a
+    and al, PL_FMT_NUM_MASK            ; left alignment and nothing else -
+    mov cl, PL_FMT_NUM_SHIFT           ; which is what Excel's @ does to a
+    shr al, cl                         ; cell that holds a number. An explicit
+    cmp al, PL_NF_TEXT                 ; Alignment still wins, because it is
+    jne .align                         ; tested after
+    mov al, bl
+    and al, PL_FMT_ALIGN_MASK
+    jz .left                           ; General alignment: Text decides
+.align:
     mov al, bl
     and al, PL_FMT_ALIGN_MASK
     mov cl, PL_FMT_ALIGN_SHIFT
@@ -17230,1189 +17241,115 @@ pl_s_err_unk:   db '#ERR', 0
 ; formats and TEXT() knew '$', ',', '0', '#', '.' and '%', and neither knew a
 ; date - DATE() and NOW() answered correctly and showed a serial number.
 ; =============================================================================
-PL_NF_N       equ 21
-pl_nf_c0:     db 'General', 0
-pl_nf_c1:     db '0', 0
-pl_nf_c2:     db '0.00', 0
-pl_nf_c3:     db '#,##0', 0
-pl_nf_c4:     db '#,##0.00', 0
-pl_nf_c5:     db '$#,##0 ;($#,##0)', 0
-pl_nf_c6:     db '$#,##0 ;[Red]($#,##0)', 0
-pl_nf_c7:     db '$#,##0.00 ;($#,##0.00)', 0
-pl_nf_c8:     db '$#,##0.00 ;[Red]($#,##0.00)', 0
-pl_nf_c9:     db '0%', 0
-pl_nf_c10:    db '0.00%', 0
-pl_nf_c11:    db '0.00E+00', 0
-pl_nf_c12:    db 'm/d/yy', 0
-pl_nf_c13:    db 'd-mmm-yy', 0
-pl_nf_c14:    db 'd-mmm', 0
-pl_nf_c15:    db 'mmm-yy', 0
-pl_nf_c16:    db 'h:mm AM/PM', 0
-pl_nf_c17:    db 'h:mm:ss AM/PM', 0
-pl_nf_c18:    db 'h:mm', 0
-pl_nf_c19:    db 'h:mm:ss', 0
-pl_nf_c20:    db 'm/d/yy h:mm', 0
-pl_nf_codes:  dw pl_nf_c0, pl_nf_c1, pl_nf_c2, pl_nf_c3, pl_nf_c4, pl_nf_c5
-              dw pl_nf_c6, pl_nf_c7, pl_nf_c8, pl_nf_c9, pl_nf_c10, pl_nf_c11
-              dw pl_nf_c12, pl_nf_c13, pl_nf_c14, pl_nf_c15, pl_nf_c16
-              dw pl_nf_c17, pl_nf_c18, pl_nf_c19, pl_nf_c20, 0
-pl_nf_general: db 'GENERAL', 0
-pl_nf_mon:    db 'January', 0, 'February', 0, 'March', 0, 'April', 0, 'May', 0
-              db 'June', 0, 'July', 0, 'August', 0, 'September', 0
-              db 'October', 0, 'November', 0, 'December', 0
-pl_nf_day:    db 'Sunday', 0, 'Monday', 0, 'Tuesday', 0, 'Wednesday', 0
-              db 'Thursday', 0, 'Friday', 0, 'Saturday', 0
-pl_nf_c10d:   dq 10.0
-
-; -----------------------------------------------------------------------------
-; pl_fmtcode - pl_acc drawn by the format code at DS:SI, into pl_numbuf.
-; pl_acc is left as it came.
+; =============================================================================
+; NUMBER FORMATS (81.75): THREE, and no interpreter.
 ;
-; A code has up to three sections, ';'-separated: positive, negative, zero. A
-; negative value takes the second section AS ITS MAGNITUDE - the section's own
-; '(' and ')' are the sign - and with one section keeps its '-'. The section is
-; copied to pl_nf_sec first, so everything after reads one NUL-ended string.
-; -----------------------------------------------------------------------------
-pl_fmtcode:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push word [pl_acc+2]
-    push word [pl_acc]
-    mov di, pl_nf_general
-    call pl_wordeq
-    jc .general
-    cmp byte [si], 0
-    je .general
-    ; --- which section ------------------------------------------------------
-    mov dl, 0                         ; DL = the section wanted
-    call pl_acc_iszero
-    jc .zero
-    test byte [pl_acc+3], 0x80
-    jz .pick
-    mov dl, 1
-    jmp short .pick
-.zero:
-    mov dl, 2
-.pick:
-    call pl_nf_section                ; -> pl_nf_sec; CF=1 no such section
-    jnc .have
-    call pl_nf_section0               ; ...then the first one, sign and all
-    xor dl, dl
-.have:
-    cmp dl, 1
-    jne .signok
-    call pl_acc_abs                   ; the negative section shows magnitude
-.signok:
-    mov si, pl_nf_sec
-    call pl_nf_isdate
-    jc .date
-    call pl_nf_number
-    jmp short .out
-.date:
-    call pl_nf_date
-    jmp short .out
-.general:
-    call pl_acc_load_a
-    mov di, pl_numbuf
-    mov ax, 10
-    call fx_ftoa
-.out:
-    pop word [pl_acc]
-    pop word [pl_acc+2]
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_cell_nfid - in: AX = col, BX = row; out: AL = the cell's format id, which
-; 81.75 makes the one its format byte names, else General: the side table that
-; held the other seventeen has gone.
-pl_cell_nfid:
-    push bx
-    push di
-    push es
-    call pl_findcell
-    mov al, 0
-    jnc .out
-    mov es, [pl_cellseg]
-    mov al, [es:di+PL_C_FMT]
-    and al, PL_FMT_NUM_MASK
-    push cx
-    mov cl, PL_FMT_NUM_SHIFT
-    shr al, cl
-    pop cx
-    mov bx, pl_biff_numfmt_tab
-    xlat
-.out:
-    pop es
-    pop di
-    pop bx
-    ret
-
-; pl_nf_simple - AL = an id; out: CF=1 and AL = the format byte's own code
-; when it is one of the four the format byte can hold
-pl_nf_simple:
-    push bx
-    push cx
-    mov bx, pl_biff_numfmt_tab
-    xor cx, cx
-.l:
-    cmp al, [bx]
-    je .yes
-    inc bx
-    inc cx
-    cmp cx, 4
-    jb .l
-    clc
-    jmp short .out
-.yes:
-    mov al, cl
-    stc
-.out:
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_nf_apply - format id AL to every cell of the selection. A cell that
-; exists and wants one of the four simple formats keeps it in its format byte,
-; as ever, and drops any border-table format; anything else - another format,
-; or ANY format on an empty cell - goes in the border table, where it waits for
-; a value (81.55). The format byte's number field is General then, so the two
-; can never disagree.
-; -----------------------------------------------------------------------------
-pl_nf_apply:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov dl, al                         ; DL = the id
-    mov ax, [pl_selrow]
-    mov bx, [pl_selrow2]
-    cmp ax, bx
-    jbe .r
-    xchg ax, bx
-.r:
-    mov [pl_nf_r1], ax
-    mov [pl_nf_r2], bx
-    mov cx, [pl_selcol]
-    mov si, [pl_selcol2]
-    cmp cx, si
-    jbe .col
-    xchg cx, si
-.col:
-    mov bx, [pl_nf_r1]
-.row:
-    mov ax, cx
-    call pl_nf_one                     ; AX col, BX row, DL id
-    inc bx
-    cmp bx, [pl_nf_r2]
-    jbe .row
-    inc cx
-    cmp cx, si
-    jbe .col
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-pl_nf_one:
-    push ax
-    push cx
-    push di
-    push es
-    call pl_findcell                   ; AX, BX kept
-    jnc .out                           ; no cell record: nothing to format
-    mov al, dl
-    call pl_nf_simple                  ; 81.75: the format byte names every
-    jnc .out                           ; format there is, so one that it
-    mov es, [pl_cellseg]               ; cannot name is not offered
-    and byte [es:di+PL_C_FMT], PL_FMT_NUM_CLR
-    mov ch, al
-    mov cl, PL_FMT_NUM_SHIFT
-    shl ch, cl
-    or [es:di+PL_C_FMT], ch
-.out:
-    pop es
-    pop di
-    pop cx
-    pop ax
-    ret
-
-; pl_nf_skipq - SI at a quote, bracket or backslash: step over what it opens.
-; out: SI past it. Anything else: SI+1.
-pl_nf_skipq:
-    mov al, [si]
-    inc si
-    cmp al, '"'
-    je .q
-    cmp al, '['
-    je .b
-    cmp al, '\'
-    jne .x
-    cmp byte [si], 0
-    je .x
-    inc si
-.x:
-    ret
-.q:
-    cmp byte [si], 0
-    je .x
-    cmp byte [si], '"'
-    je .qe
-    inc si
-    jmp short .q
-.qe:
-    inc si
-    ret
-.b:
-    cmp byte [si], 0
-    je .x
-    cmp byte [si], ']'
-    je .qe
-    inc si
-    jmp short .b
-
-; pl_nf_section - copy section DL (0-2) of the code at SI to pl_nf_sec.
-; CF=1 when the code has no such section. pl_nf_section0: section 0, always.
-pl_nf_section0:
-    xor dl, dl
-pl_nf_section:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    mov cl, dl
-.find:
-    or cl, cl
-    jz .copy
-.f1:
-    mov al, [si]
-    or al, al
-    jz .none
-    cmp al, ';'
-    je .fsep
-    call pl_nf_skipq
-    jmp short .f1
-.fsep:
-    inc si
-    dec cl
-    jmp short .find
-.copy:
-    mov di, pl_nf_sec
-    mov cx, PL_STR_MAX
-.c1:
-    mov al, [si]
-    or al, al
-    jz .cend
-    cmp al, ';'
-    je .cend
-    push si
-    call pl_nf_skipq                  ; a quoted ';' is text, not a separator
-    mov ax, si
-    pop si
-.c2:
-    cmp si, ax
-    jae .c1
-    jcxz .cend
-    mov bl, [si]
-    mov [di], bl
-    inc si
-    inc di
-    dec cx
-    jmp short .c2
-.cend:
-    mov byte [di], 0
-    clc
-    jmp short .out
-.none:
-    stc
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_nf_isdate - CF=1 when the section at SI is a DATE or TIME code: a d, y,
-; h or s outside quotes, or an m with no digit placeholder anywhere
-pl_nf_isdate:
-    push ax
-    push bx
-    push si
-    xor bx, bx                        ; BL = an m seen, BH = a 0 or # seen
-.l:
-    mov al, [si]
-    or al, al
-    jz .end
-    cmp al, '"'
-    je .sk
-    cmp al, '['
-    je .sk
-    cmp al, '\'
-    je .sk
-    or al, 0x20                       ; letters to lower case
-    cmp al, 'd'
-    je .yes
-    cmp al, 'y'
-    je .yes
-    cmp al, 'h'
-    je .yes
-    cmp al, 's'
-    je .yes
-    cmp al, 'm'
-    jne .n1
-    mov bl, 1
-.n1:
-    mov al, [si]
-    cmp al, '0'
-    je .ph
-    cmp al, '#'
-    jne .n2
-.ph:
-    mov bh, 1
-.n2:
-    inc si
-    jmp short .l
-.sk:
-    call pl_nf_skipq
-    jmp short .l
-.end:
-    or bl, bl
-    jz .no
-    or bh, bh
-    jnz .no
-.yes:
-    stc
-    jmp short .out
-.no:
-    clc
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; pl_nf_lit - one literal of the section at SI onto DS:DI: a quoted run's
-; inside, a backslash's next character, a bracket's nothing ([Red] - there is
-; no colour), '_x' a space, '*x' nothing; anything else itself. SI past it.
-pl_nf_lit:
-    push ax
-    mov al, [si]
-    cmp al, '"'
-    je .q
-    cmp al, '['
-    je .skip
-    cmp al, '\'
-    je .esc
-    cmp al, '_'
-    je .under
-    cmp al, '*'
-    je .fill
-    call pl_nf_putc
-    inc si
-    jmp short .out
-.q:
-    inc si
-.q1:
-    mov al, [si]
-    or al, al
-    jz .out
-    inc si
-    cmp al, '"'
-    je .out
-    call pl_nf_putc
-    jmp short .q1
-.skip:
-    call pl_nf_skipq
-    jmp short .out
-.esc:
-    inc si
-    mov al, [si]
-    or al, al
-    jz .out
-    call pl_nf_putc
-    inc si
-    jmp short .out
-.under:
-    mov al, ' '
-    call pl_nf_putc
-    inc si
-    cmp byte [si], 0
-    je .out
-    inc si
-    jmp short .out
-.fill:
-    inc si
-    cmp byte [si], 0
-    je .out
-    inc si
-.out:
-    pop ax
-    ret
-
-; pl_nf_putc - AL onto DS:DI, kept inside pl_numbuf
-pl_nf_putc:
-    cmp di, pl_numbuf + PL_NUMBUF_MAX
-    jae .full
-    mov [di], al
-    inc di
-.full:
-    mov byte [di], 0
-    ret
-
-; pl_nf_puts - the NUL string at DS:BX onto DS:DI
-pl_nf_puts:
-    push ax
-    push bx
-.l:
-    mov al, [bx]
-    or al, al
-    jz .out
-    call pl_nf_putc
-    inc bx
-    jmp short .l
-.out:
-    pop bx
-    pop ax
-    ret
-
-; pl_nf_putn - AX, unsigned, as few digits as it takes; with CL=2, at least 2
-pl_nf_putn:
-    ; STKBALANCE-LOOP: one digit pushed a turn (and one pad zero), and the second loop pops them; the count is in CH
-    push ax
-    push bx
-    push cx
-    push dx
-    mov bx, 10
-    xor ch, ch
-.d:
-    xor dx, dx
-    div bx
-    push dx
-    inc ch
-    or ax, ax
-    jnz .d
-    cmp ch, cl
-    jae .p
-    xor dx, dx
-    push dx
-    inc ch
-    jmp short .p
-.p:
-    pop ax
-    add al, '0'
-    call pl_nf_putc
-    dec ch
-    jnz .p
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_nf_run - the run of one letter (either case) at SI. out: CX = its length,
-; SI past it. AL = the letter, lower case.
-pl_nf_run:
-    mov al, [si]
-    or al, 0x20
-    xor cx, cx
-.l:
-    mov ah, [si]
-    or ah, 0x20
-    cmp ah, al
-    jne .out
-    inc si
-    inc cx
-    jmp short .l
-.out:
-    ret
-
-; pl_nf_name - in: AX = an index, BX = a run of NUL-ended strings; out: BX =
-; the AXth of them
-pl_nf_name:
-    push ax
-.l:
-    or ax, ax
-    jz .out
-.s:
-    cmp byte [bx], 0
-    je .n
-    inc bx
-    jmp short .s
-.n:
-    inc bx
-    dec ax
-    jmp short .l
-.out:
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_nf_date - pl_acc as a date and/or time by the section at SI -> pl_numbuf.
-; m is the MONTH, except straight after an h or straight before an s, where it
-; is the minute - Excel's own rule. AM/PM or A/P anywhere makes h 12-hour.
-; -----------------------------------------------------------------------------
-pl_nf_date:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push word [pl_acc+2]              ; out as midnight when it went second
-    push word [pl_acc]
-    call pl_dt_hms                    ; pl_dt_min, AX = the seconds
-    mov [pl_nf_s], al
-    mov ax, [pl_dt_min]
-    xor dx, dx
-    mov bx, 60
-    div bx
-    mov [pl_nf_h], al
-    mov [pl_nf_mi], dl
-    pop word [pl_acc]
-    pop word [pl_acc+2]
-    call pl_acc_toudw                 ; the whole days
-    jnc .days
-    mov di, pl_numbuf                 ; a negative date or one past 2079: the
-    mov byte [di], 0                  ; one answer Excel has for it is to fill
-    mov al, '#'                       ; the cell - and the grid does that for
-    call pl_nf_putc                   ; anything too wide, so one is enough
-    jmp .done
-.days:
-    push ax
-    call pl_ser_to_ymd                ; -> pl_dt_y/m/d
-    pop ax
-    add ax, 6                         ; serial 1 is a Sunday, as in WEEKDAY
-    xor dx, dx
-    mov bx, 7
-    div bx
-    mov [pl_nf_wd], dl                ; 0 Sunday .. 6 Saturday
-    mov byte [pl_nf_12], 0            ; AM/PM or A/P anywhere?
-    push si
-.ampm:
-    mov al, [si]
-    or al, al
-    jz .ampmd
-    or al, 0x20
-    cmp al, 'a'
-    jne .ampmn
-    mov al, [si+1]
-    cmp al, '/'
-    je .ampmy
-    or al, 0x20
-    cmp al, 'm'
-    jne .ampmn
-    cmp byte [si+2], '/'
-    jne .ampmn
-.ampmy:
-    mov byte [pl_nf_12], 1
-.ampmn:
-    inc si
-    jmp short .ampm
-.ampmd:
-    pop si
-    mov di, pl_numbuf
-    mov byte [di], 0
-    mov byte [pl_nf_lasth], 0
-.tok:
-    mov al, [si]
-    or al, al
-    jz .done
-    or al, 0x20
-    cmp al, 'y'
-    je .yr
-    cmp al, 'm'
-    je .mo
-    cmp al, 'd'
-    je .dy
-    cmp al, 'h'
-    je .hr
-    cmp al, 's'
-    je .sc
-    cmp al, 'a'
-    je .ap
-    call pl_nf_lit
-    jmp short .tok
-.yr:
-    call pl_nf_run                    ; CL = the run: yy or yyyy
-    jmp .yrgo
-.mo:
-    call pl_nf_run
-    mov [pl_nf_rl], cl
-    cmp byte [pl_nf_lasth], 0         ; straight after an h: the minute
-    jne .mins
-    push si                           ; ...or straight before an s
-.mo1:
-    mov al, [si]
-    or al, al
-    jz .mo2
-    or al, 0x20
-    cmp al, 's'
-    je .mo3
-    cmp al, 'a'
-    jb .mo4
-    cmp al, 'z'
-    jbe .mo2                          ; any other letter first: the month
-.mo4:
-    inc si
-    jmp short .mo1
-.mo3:
-    pop si
-    jmp short .mins
-.mo2:
-    pop si
-    mov al, [pl_nf_rl]
-    cmp al, 3
-    jb .monum
-    mov ax, [pl_dt_m]
-    dec ax
-    mov bx, pl_nf_mon
-    call pl_nf_name
-    cmp byte [pl_nf_rl], 3
-    jne .mofull
-    mov cx, 3                         ; mmm: the first three letters
-.mo5:
-    mov al, [bx]
-    call pl_nf_putc
-    inc bx
-    loop .mo5
-    jmp .tokd
-.mofull:
-    call pl_nf_puts
-    jmp .tokd
-.monum:
-    mov ax, [pl_dt_m]
-    jmp .num12
-.mins:
-    xor ah, ah
-    mov al, [pl_nf_mi]
-    mov cl, [pl_nf_rl]
-    call pl_nf_putn
-    jmp .tokd
-.dy:
-    call pl_nf_run
-    cmp cl, 3
-    jb .dnum
-    xor ah, ah
-    mov al, [pl_nf_wd]
-    mov bx, pl_nf_day
-    call pl_nf_name
-    cmp cl, 3
-    jne .dfull
-    mov cx, 3
-.d5:
-    mov al, [bx]
-    call pl_nf_putc
-    inc bx
-    loop .d5
-    jmp .tokd
-.dfull:
-    call pl_nf_puts
-    jmp .tokd
-.dnum:
-    mov ax, [pl_dt_d]
-    call pl_nf_putn
-    jmp .tokd
-.yrgo:
-    mov ax, [pl_dt_y]
-    cmp cl, 3
-    jae .y4
-    xor dx, dx
-    mov bx, 100
-    div bx
-    mov ax, dx
-    mov cl, 2
-.y4:
-    call pl_nf_putn
-    jmp .tokd
-.hr:
-    call pl_nf_run
-    xor ah, ah
-    mov al, [pl_nf_h]
-    cmp byte [pl_nf_12], 0
-    je .h24
-    xor dx, dx
-    mov bx, 12
-    div bx
-    mov ax, dx
-    or ax, ax
-    jnz .h24
-    mov ax, 12
-.h24:
-    call pl_nf_putn
-    mov byte [pl_nf_lasth], 1
-    jmp .tok
-.sc:
-    call pl_nf_run
-    xor ah, ah
-    mov al, [pl_nf_s]
-    call pl_nf_putn
-    jmp .tokd
-.ap:
-    mov bx, pl_nf_am
-    cmp byte [pl_nf_h], 12
-    jb .ap1
-    mov bx, pl_nf_pm
-.ap1:
-    mov al, [si+1]
-    cmp al, '/'
-    je .apshort
-    or al, 0x20
-    cmp al, 'm'
-    jne .aplit
-    cmp byte [si+2], '/'
-    jne .aplit
-    call pl_nf_puts                   ; "AM" or "PM"
-    add si, 5
-    jmp .tokd
-.apshort:
-    mov al, [bx]                      ; "A" or "P"
-    call pl_nf_putc
-    add si, 3
-    jmp .tokd
-.aplit:
-    call pl_nf_lit
-    jmp .tok
-.num12:
-    call pl_nf_putn                   ; m or mm: CL is the run length, and
-.tokd:                                ; pl_nf_putn pads to two for mm
-    mov byte [pl_nf_lasth], 0
-    jmp .tok
-.done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-pl_nf_am:     db 'AM', 0
-pl_nf_pm:     db 'PM', 0
-
-; -----------------------------------------------------------------------------
-; pl_nf_number - pl_acc by the NUMBER section at SI -> pl_numbuf.
-; The digit placeholders ('0' '#' '?' and the ',' '.' among them) are one run,
-; drawn as one number where the first of them stands; everything else is a
-; literal kept in place. A section with no placeholder at all is only its
-; literals - Excel's own reading, which is what a zero section like "nil" is.
-; -----------------------------------------------------------------------------
-pl_nf_number:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    ; --- pass 1: what the placeholders say ----------------------------------
-    xor bx, bx                        ; BL: 2 grouping, 4 percent, 8 exponent
-    xor cx, cx                        ; CH decimals, CL integer zeros
-    xor dx, dx                        ; DH past the '.', DL a placeholder seen
-    push si
-.p1:
-    mov al, [si]
-    or al, al
-    jz .p1end
-    cmp al, '"'
-    je .p1sk
-    cmp al, '['
-    je .p1sk
-    cmp al, '\'
-    je .p1sk
-    cmp al, '%'
-    jne .p1a
-    or bl, 4
-.p1a:
-    cmp al, '.'
-    jne .p1b
-    or dl, dl
-    jz .p1n                           ; a '.' before any digit is a literal
-    mov dh, 1
-.p1b:
-    cmp al, ','
-    jne .p1c
-    or dl, dl
-    jz .p1n
-    or dh, dh
-    jnz .p1n
-    or bl, 2
-.p1c:
-    cmp al, 'E'
-    je .p1e
-    cmp al, 'e'
-    jne .p1d
-.p1e:
-    or dl, dl
-    jz .p1n
-    mov ah, [si+1]
-    cmp ah, '+'
-    je .p1e2
-    cmp ah, '-'
-    jne .p1n
-.p1e2:
-    or bl, 8
-    jmp short .p1end                  ; what follows is the exponent's digits
-.p1d:
-    cmp al, '0'
-    je .p1z
-    cmp al, '#'
-    je .p1h
-    cmp al, '?'
-    jne .p1n
-.p1h:
-    mov dl, 1
-    or dh, dh
-    jz .p1n
-    inc ch
-    jmp short .p1n
-.p1z:
-    mov dl, 1
-    or dh, dh
-    jz .p1zi
-    inc ch
-    jmp short .p1n
-.p1zi:
-    inc cl
-.p1n:
-    inc si
-    jmp short .p1
-.p1sk:
-    call pl_nf_skipq
-    jmp short .p1
-.p1end:
-    pop si
-    or dl, dl
-    jnz .digits
-    ; --- no placeholder: the literals are the whole answer -------------------
-    mov di, pl_numbuf
-    mov byte [di], 0
-.lits:
-    cmp byte [si], 0
-    je .done
-    call pl_nf_lit
-    jmp short .lits
-.digits:
-    mov [pl_nf_fl], bl
-    mov [pl_nf_cx], cx
-    test bl, 4
-    jz .nopct
-    call pl_vpush                     ; a percent scales by a hundred
-    mov ax, 100
-    call pl_acc_int
-    call pl_binop_pre
-    call fx_mul
-    call pl_acc_store
-.nopct:
-    test byte [pl_nf_fl], 8
-    jz .fixed
-    call pl_nf_sci                    ; -> pl_numbuf: mantissa E+xx
-    jmp short .built
-.fixed:
-    call pl_acc_load_a
-    mov cx, [pl_nf_cx]
-    push cx
-    mov cl, ch
-    xor ch, ch
-    call pl_numdp
-    pop cx
-    call pl_padzero                   ; CL = the minimum integer digits
-    test byte [pl_nf_fl], 2
-    jz .built
-    call pl_group3
-.built:
-    push si                           ; the number, out of pl_numbuf's way
-    mov si, pl_numbuf
-    mov di, pl_nf_num
-    call pl_strcpy
-    pop si
-    ; --- pass 2: the literals around it -------------------------------------
-    mov di, pl_numbuf
-    mov byte [di], 0
-    mov bx, pl_nf_num
-    cmp byte [bx], '-'                ; one section, negative: the sign goes
-    jne .p2                           ; FIRST, before a '$' or a '('
-    mov al, '-'
-    call pl_nf_putc
-    inc bx
-.p2:
-    mov al, [si]
-    or al, al
-    jz .done
-    cmp al, '0'
-    je .run
-    cmp al, '#'
-    je .run
-    cmp al, '?'
-    je .run
-    cmp al, '.'
-    jne .p2l
-    cmp byte [si+1], '0'              ; a '.' that opens the decimals
-    je .run
-    cmp byte [si+1], '#'
-    je .run
-.p2l:
-    call pl_nf_lit
-    jmp short .p2
-.run:
-    or bx, bx                         ; the number where the first stands...
-    jz .skiprun
-    call pl_nf_puts
-    xor bx, bx
-.skiprun:                             ; ...and the rest of the run consumed
-    mov al, [si]
-    cmp al, '0'
-    je .sr
-    cmp al, '#'
-    je .sr
-    cmp al, '?'
-    je .sr
-    cmp al, '.'
-    je .sr
-    cmp al, ','
-    je .sr
-    test byte [pl_nf_fl], 8
-    jz .p2
-    cmp al, 'E'
-    je .sre
-    cmp al, 'e'
-    jne .p2
-.sre:
-    inc si                            ; E, its sign, and the exponent's own
-    cmp byte [si], 0                  ; digits: pl_nf_sci drew all of it
-    je .p2
-    inc si
-    jmp short .skiprun
-.sr:
-    inc si
-    jmp short .skiprun
-.done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_nf_sci - pl_acc as MANTISSA E +/- EXPONENT, [pl_nf_cx]'s CH decimals in
-; the mantissa and two digits of exponent at least -> pl_numbuf. Scaled by ten
-; a step at a time rather than through a logarithm: exact for every power a
-; spreadsheet holds, and never more than 330 steps for any double.
-pl_nf_sci:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    xor bx, bx                        ; BX = the exponent
-    mov byte [pl_nf_neg], 0
-    test byte [pl_acc+3], 0x80
-    jz .pos
-    mov byte [pl_nf_neg], 1
-    call pl_acc_abs
-.pos:
-    call pl_acc_iszero
-    jc .scaled
-    mov cx, 330
-.up:
-    call pl_acc_load_a                ; >= 10: divide
-    mov si, pl_nf_c10d
-    call fx_unpack_b
-    call fx_cmpab
-    jl .down
-    push cx
-    call fx_div
-    call pl_acc_store
-    pop cx
-    inc bx
-    loop .up
-    jmp short .scaled
-.down:
-    push cx
-    mov ax, 1                         ; < 1: multiply
-    call fx_i2a
-    call fx_a_to_b
-    call pl_acc_load_a
-    call fx_cmpab
-    pop cx
-    jge .scaled
-    push cx
-    mov si, pl_nf_c10d
-    call fx_unpack_b
-    call fx_mul
-    call pl_acc_store
-    pop cx
-    dec bx
-    loop .down
-.scaled:
-    call pl_acc_load_a
-    mov cx, [pl_nf_cx]
-    mov cl, ch
-    xor ch, ch
-    call pl_numdp                     ; the mantissa, rounded...
-    cmp byte [pl_numbuf], '1'         ; ...and 9.996 rounded to two places is
-    jne .mant                         ; "10.00": one more step
-    cmp byte [pl_numbuf+1], '0'
-    jne .mant
-    push bx
-    call pl_acc_load_a
-    mov si, pl_nf_c10d
-    call fx_unpack_b
-    call fx_div
-    mov cx, [pl_nf_cx]
-    mov cl, ch
-    xor ch, ch
-    call pl_numdp
-    pop bx
-    inc bx
-.mant:
-    mov di, pl_numbuf                 ; the sign in front, then E and the
-    cmp byte [pl_nf_neg], 0           ; exponent at the end
-    je .ms
-    mov al, '-'
-    call pl_ins_at
-.ms:
-    mov di, pl_numbuf
-.end:
-    cmp byte [di], 0
-    je .e
-    inc di
-    jmp short .end
-.e:
-    mov al, 'E'
-    call pl_nf_putc
-    mov al, '+'
-    or bx, bx
-    jns .es
-    mov al, '-'
-    neg bx
-.es:
-    call pl_nf_putc
-    mov ax, bx
-    mov cl, 2
-    call pl_nf_putn
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_numfmt - in: pl_acc = the value, BL = the format byte, BH = the cell's
-; number format from the border table (Excel's id PLUS ONE, 0 for none: then
-; the format byte's four); writes the display text into pl_numbuf, by
-; pl_fmtcode and Excel's own code for that id (81.55).
-; -----------------------------------------------------------------------------
-; stage 4.0: the value being formatted is the DOUBLE in pl_acc, not the
-; integer in AX. Its one caller is pl_drawgrid, immediately after
-; pl_getcell2, which leaves pl_acc set - so the grid shows 3.5 as "3.5"
-; rather than as the 3 an integer cell could hold. The currency, comma and
-; percent decorations below are unchanged: they work on the digit string,
-; whatever produced it.
+; What stood here was an Excel FORMAT-CODE interpreter - `$#,##0.00 ;($#,##0)`,
+; `m/d/yy`, `h:mm AM/PM` - walking a code string section by section, with the
+; twenty-one built-in codes, the month and weekday name tables, a date
+; serial-to-calendar conversion and a scientific-notation path. It was there
+; because 81.55 offered Excel's twenty-one formats out of a scrolling list and
+; a side table to hold the ones the format byte could not name.
 ;
-; Ten significant digits, which is what fits a cell and what Excel shows in a
-; General column before it starts rounding to fit.
+; PLAN offers three, so there is nothing to interpret:
+;
+;   NUMBER    what the value is, up to four places, trailing zeros trimmed.
+;             fx_ftoa's own General, and no decoration at all
+;   TEXT      the same characters, but LEFT-aligned - which is the whole of
+;             what Excel's @ means for a cell that holds a number
+;   CURRENCY  a '$', thousands separators and exactly two places, with a
+;             negative in parentheses as Excel's own built-in id 5 has it
+;
+; pl_group3 and pl_dollar_ins already existed and do the decorating; they live
+; up beside pl_ftoa's other helpers rather than in here, which is why they
+; survived the interpreter going.
+; =============================================================================
+PL_NF_NUMBER   equ 0                 ; the 2-bit field in the format byte
+PL_NF_TEXT     equ 1
+PL_NF_CURRENCY equ 2
+
+; -----------------------------------------------------------------------------
+; pl_numfmt - in: pl_acc = the value, BL = the cell's format byte; writes the
+; display text into pl_numbuf. BH is ignored and kept only so that the one
+; caller needs no edit.
+; -----------------------------------------------------------------------------
 pl_numfmt:
     push ax
     push bx
     push cx
     push si
     push di
-    mov al, bh                        ; the cell's own format id, plus one...
-    or al, al
-    jz .byte
-    dec al
-    jmp short .have
-.byte:
-    mov al, bl                        ; ...or the four the format byte names,
-    and al, PL_FMT_NUM_MASK           ; which are Excel's ids 0, 5, 3 and 9 -
-    mov cl, PL_FMT_NUM_SHIFT          ; the table the BIFF writer declares
-    shr al, cl                        ; them by
-    mov bx, pl_biff_numfmt_tab
-    xlat
-.have:
-    cmp al, PL_NF_N
-    jb .code
-    xor al, al
-.code:
-    mov [pl_nf_id], al
-    xor ah, ah
-    mov si, ax
-    shl si, 1
-    mov si, [pl_nf_codes + si]
-    call pl_fmtcode                   ; -> pl_numbuf
-    ; A NUMBER NEVER SHOWS PART OF ITSELF (81.55). It was drawn whole and the
-    ; next cell painted over the rest, so 123456789 in a seven-character cell
-    ; read 1234567 - a plausible number, and a wrong one. General takes fewer
-    ; significant digits until it fits, which is %g's own way into scientific
-    ; notation; any other format fills the cell with '#', as Excel does.
-    mov si, pl_numbuf
-    call pl_strlen
-    cmp ax, [pl_cellch]
-    jbe .out
-    cmp byte [pl_nf_id], 0
-    jne .hash
-    mov cx, 9
-.fit:
+    mov al, bl
+    and al, PL_FMT_NUM_MASK
+    mov cl, PL_FMT_NUM_SHIFT
+    shr al, cl
+    mov di, pl_numbuf
+    cmp al, PL_NF_CURRENCY
+    je .currency
+    call pl_acc_load_a                 ; NUMBER and TEXT are the same string:
+    mov ax, 10                         ; General. They differ in ALIGNMENT,
+    SHOUT fx_ftoa                      ; which pl_justify reads from the same
+    jmp short .out                     ; byte
+.currency:
     call pl_acc_load_a
-    mov di, pl_numbuf
-    mov ax, cx
-    call fx_ftoa
-    mov si, pl_numbuf
-    call pl_strlen
-    cmp ax, [pl_cellch]
-    jbe .out
-    loop .fit
-    ; fx_ftoa turns scientific only past a wide exponent, so 123456789 stays
-    ; nine digits at any precision: General's last step is Excel's own, the
-    ; mantissa with as many places as the cell leaves room for - 1.2E+08
-    mov cx, [pl_cellch]
-    sub cx, 6                         ; "d.E+08" is six without any places
-    jc .hash
-.sci:
-    push word [pl_acc+2]
-    push word [pl_acc]
-    mov byte [pl_nf_cx], 0
-    mov [pl_nf_cx+1], cl
-    call pl_nf_sci
-    pop word [pl_acc]
-    pop word [pl_acc+2]
-    mov si, pl_numbuf
-    call pl_strlen
-    cmp ax, [pl_cellch]
-    jbe .out
-    dec cx
-    jns .sci
-.hash:
-    mov di, pl_numbuf
-    mov cx, [pl_cellch]
-    cmp cx, PL_NUMBUF_MAX
-    jbe .h1
-    mov cx, PL_NUMBUF_MAX
-.h1:
-    mov byte [di], '#'
-    inc di
-    loop .h1
-    mov byte [di], 0
+    test byte [pl_acc+3], 0x80         ; the magnitude is what gets decorated;
+    pushf                              ; the sign becomes parentheses
+    call pl_acc_abs
+    call pl_acc_load_a
+    mov ax, 2                          ; exactly two places, as money is
+    SHOUT fx_ftoa
+    call pl_group3
+    call pl_dollar_ins
+    popf
+    jz .out
+    call pl_parens
 .out:
     pop di
     pop si
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pl_parens - wrap pl_numbuf in '(' and ')', which is how Excel's Currency
+; shows a negative. Every register preserved.
+; -----------------------------------------------------------------------------
+pl_parens:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, pl_numbuf
+    xor cx, cx
+.len:
+    cmp byte [si], 0
+    je .have
+    inc si
+    inc cx
+    jmp short .len
+.have:
+    cmp cx, PL_NUMBUF_MAX - 3          ; no room for both: leave it plain
+    jae .out
+    mov di, si
+    inc di
+    mov byte [di+1], 0                 ; shift the whole string one right,
+    mov byte [di], ')'                 ; from the far end back
+.shift:
+    dec si
+    dec di
+    mov al, [si]
+    mov [di], al
+    or cx, cx
+    jz .opened
+    dec cx
+    jmp short .shift
+.opened:
+    mov byte [pl_numbuf], '('
+.out:
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
