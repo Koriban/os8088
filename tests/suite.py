@@ -2687,6 +2687,22 @@ SOAK = [
         needs=("marty",),
         wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
+    Row("plansmall", "soak", py("tests/plansmall.py"), 30.0,
+        "SPEC.md 81.75, and the only row that can answer the question PLAN "
+        "exists for: it OPENS on a 128KB machine, its three required claims "
+        "are GRANTED there, and =2+3 comes back as 5 out of the cell record "
+        "itself. t_planfit does the arithmetic and arithmetic is a different "
+        "question - tests/small128.py makes exactly this distinction about "
+        "the kernel. The failure it catches is silent: pl_entry's first "
+        "three claims are `jc .fail`, so a heap that cannot fund the cells "
+        "claim is a double-click that does nothing, with the host-side size "
+        "meter still saying FITS. The value is read from the cells segment "
+        "at FX_SCALE and not off the glass, where a number-format defect and "
+        "an arithmetic defect look the same (81.66). SHEET cannot run here "
+        "at all - it is in $(SMALLOMIT), and its cells claim alone is nearly "
+        "twice the largest run the machine can hand out",
+        needs=("marty",), wants=("build/smallapps360.img", "build/small360.img"),
+        serial=True),
     Row("tanksmall", "soak", py("tests/tanksmall.py"), 30.0,
         "SPEC.md 85.3.5.1: TANK's APP_SMALL arm plays on the 128KB floor"
         "machine - the claim is GRANTED off its ladder, and the HUD template's"

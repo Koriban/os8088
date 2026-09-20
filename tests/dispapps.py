@@ -165,9 +165,18 @@ def _map(app, defines=()):
     # ...and through `os88build.at`, because under a frozen run the shipped
     # packages are in the run's own tree (docs/plans/SOAK-PARALLEL.md 14.2) and
     # `build/` may hold another build's.
+    #
+    # ...and PLAN is in neither place. It is its own source (SPEC.md 81.75.2),
+    # not an -DAPP_SMALL arm of one, so `make plan` puts it in build/planapp/
+    # and under the 8.3 name it ships as. Spelt as a table of one rather than
+    # a rule, because the rule is "build/<app>.o88" and this is the exception
+    # to it, not a second rule.
     sub = os.path.join("build", "smallapp") if defines else "build"
-    o88 = os88build.at("%s/%s.o88"
-                       % (sub, {"solitaire": "solitair"}.get(app, app)))
+    if app == "plan" and not defines:
+        o88 = os88build.at(os.path.join("build", "planapp", "PLAN.O88"))
+    else:
+        o88 = os88build.at("%s/%s.o88"
+                           % (sub, {"solitaire": "solitair"}.get(app, app)))
     if not os.path.isabs(o88):
         o88 = os.path.join(ROOT, o88)
     #

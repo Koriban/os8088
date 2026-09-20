@@ -621,7 +621,8 @@ learned.
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. It went 62→79 when `apps/plan/plan.asm` was split out
   of `sheet.asm` (§81.75) — the same seventeen sites, in a second file — and
-  that line is expected to come back down as PLAN's cuts land.
+  it came back down to 72 as PLAN's cuts landed, since seven of those
+  seventeen were in families PLAN no longer has.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors
