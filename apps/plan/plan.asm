@@ -663,15 +663,16 @@ PL_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
 
 PL_MI_FILE    equ 0
 PL_MI_EDIT    equ 1
-PL_MI_FORMULA equ 2
-PL_MI_FORMAT  equ 3
-PL_MI_DATA    equ 0xFD                ; never matched, PL_MI_MACRO's reason
-PL_MI_OPTIONS equ 4
-PL_MI_MACRO   equ 0xFE                ; never matched: nothing sets AH to it
-PL_MI_SHEET   equ 0xFC                ; 81.75: no Sheets menu - PL_MI_MACRO's
-PL_MI_SHEET_N equ PL_MI_OPTIONS + 1  ; trick, one menu along
-PL_MI_HELP    equ PL_MI_SHEET_N
-PL_MENU_N     equ PL_MI_HELP + 1
+PL_MI_FORMAT  equ 2
+PL_MI_OPTIONS equ 3
+PL_MENU_N     equ PL_MI_OPTIONS + 1
+; The five that are not on this bar, each a value AH can never hold so that
+; its own arm in pl_mfire is unreachable rather than absent (81.75).
+PL_MI_FORMULA equ 0xFB                ; Goto went; Reference moved to Options
+PL_MI_SHEET   equ 0xFC
+PL_MI_DATA    equ 0xFD
+PL_MI_MACRO   equ 0xFE
+PL_MI_HELP    equ 0xFA                ; the About card went with it
 PL_M_NONE    equ 0xFF
 
 ; =============================================================================
@@ -972,14 +973,11 @@ pl_entry:
 
     mov si, pl_menus
     call OSAPI_MENU_SET
-    mov bx, [pl_ownwin]               ; ...and 'About Sheet' above its Close,
-    mov si, pl_about                  ; which is the OS's own convention and
-    call OSAPI_ABOUT_SET              ; not a Help menu of one's own devising
-                                       ; (SPEC.md 12.2). Seventeen packages
-                                       ; already did this; Sheet had a Help >
-                                       ; About... item instead, which put the
-                                       ; same text somewhere nobody looks for
-                                       ; it on this system.
+    ; 81.75: NO ABOUT CARD. OSAPI_ABOUT_SET takes 0 for "none" and is simply
+    ; not called, which is the slot's own sanctioned state rather than the
+    ; 12.2 defect of putting the same text in a Help menu of one's own - that
+    ; menu is gone too. What it costs is that PLAN carries no attribution
+    ; anywhere a user can reach.
     mov si, pl_defname
     mov di, pl_name
     call pl_strcpy
@@ -5457,8 +5455,6 @@ pl_mfire:
     je .file
     cmp ah, PL_MI_EDIT
     je .edit
-    cmp ah, PL_MI_FORMULA
-    je .formula
     cmp ah, PL_MI_FORMAT
     je .format
     cmp ah, PL_MI_DATA
@@ -5467,24 +5463,6 @@ pl_mfire:
     je .options
     cmp ah, PL_MI_MACRO
     je .macro
-    cmp ah, PL_MI_HELP
-    je .help
-    jmp .out
-.formula:
-    or al, al                          ; 81.75: two items. Paste Name and
-    jnz .fm1                           ; Paste Function wanted the list
-    mov al, PL_ID_GOTO                 ; dialog, Define Name the name table,
-    call pl_idlg_open_r                ; Note the text widget and Find its own
-    jmp .out                           ; scan - all four are cut, and Goto is
-.fm1:                                  ; what a 2048-row grid actually needs
-    xor byte [pl_a1style], 1          ; Reference: the item relabels itself,
-    mov word [pl_i_formula+2], pl_it_ref_a1
-    cmp byte [pl_a1style], 0
-    je .fmref
-    mov word [pl_i_formula+2], pl_it_ref_rc
-.fmref:
-    mov si, [pl_ownwin]
-    call pl_repaint
     jmp .out
 .file:
     or al, al
@@ -5529,8 +5507,6 @@ pl_mfire:
     jmp .out
 .macro:                                ; 81.75: PL_MI_MACRO is 0xFE in this
     jmp .out                           ; arm, so nothing can reach it
-.help:
-    call pl_docmd_help
 .out:
     pop si
     pop ax
@@ -5544,19 +5520,11 @@ pl_mfire:
 ; -----------------------------------------------------------------------------
 pl_docmd_options:
     push si
-    cmp al, 2                          ; 81.75: three items. Protect Document
-    je .calc                           ; went with cell protection, Freeze
-    or al, al                          ; Panes with the row-height walk it
-
-    jnz .formulas
-    xor byte [pl_gridlines], 1
-    cmp byte [pl_gridlines], 0
-    je .goff
-    mov word [pl_i_options], pl_it_grid_on
-    jmp .repaint
-.goff:
-    mov word [pl_i_options], pl_it_grid_off
-    jmp .repaint
+    cmp al, 3                          ; 81.75: four items. Protect Document
+    je .ref                            ; went with cell protection, Freeze
+    cmp al, 2                          ; Panes with the row-height walk, and
+    je .calc                           ; Reference came the other way when the
+    or al, al                          ; Formula menu emptied
 .formulas:
     xor byte [pl_showformulas], 1
     cmp byte [pl_showformulas], 0
@@ -5565,6 +5533,13 @@ pl_docmd_options:
     jmp .repaint
 .foff:
     mov word [pl_i_options+2], pl_it_form_off
+    jmp .repaint
+    .ref:
+    xor byte [pl_a1style], 1          ; the item relabels itself, which is the
+    mov word [pl_i_options+6], pl_it_ref_a1
+    cmp byte [pl_a1style], 0
+    je .repaint
+    mov word [pl_i_options+6], pl_it_ref_rc
     jmp .repaint
 .calc:
     mov al, PL_FDK_CALC
@@ -5617,41 +5592,6 @@ pl_docmd_options:
 
 ; -----------------------------------------------------------------------------
 ; pl_docmd_help - the only Help item, About Sheet...
-; -----------------------------------------------------------------------------
-pl_docmd_help:
-    call pl_about
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2).
-; in: SI = our window ptr; the UI task, gfx lock HELD, far-called at our own
-; segment - a window callback in every respect that matters.
-;
-; Help > About Sheet... calls the SAME routine, so the two cannot say different
-; things. Keeping the menu item as well as the name pull-down is deliberate:
-; Excel 2.1d has a Help menu and this app follows Excel, while the pull-down is
-; what os8088 users reach for.
-;
-; IT WAS A ONE-LINE ALERT and is the standard card now (SPEC.md 20.5.1).
-; os88ui_ask's line is OS88UI_AMAX = 34 characters and CLIPPED rather than
-; refused, which is a box with no room for a credit in it - and that is how
-; this package shipped with no attribution while seventeen others had one.
-; -----------------------------------------------------------------------------
-pl_about:
-    push bx
-    push si
-    mov byte [pl_abon], 1
-    mov bx, [pl_ownwin]
-    mov si, pl_ablines
-    call os88ui_about               ; arms the clip itself: both doors into
-    pop si                          ; here are menu dispatches, and neither
-    pop bx                          ; arrives with a region (SPEC.md 11.3)
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_abdismiss - take the card down if it is up
-; in:  gfx lock held ([pl_ownwin] names the window)
-; out: CF = 1 the click or key was spent doing it; preserves every register
 ; -----------------------------------------------------------------------------
 pl_abdismiss:
     cmp byte [pl_abon], 0
@@ -5735,15 +5675,7 @@ pl_docmd_edit:
     mov al, PL_UL_PASTE
     cmp ah, 4
     je .snap
-    mov al, PL_UL_PLINK
-    cmp ah, 7
-    je .snap
-    mov al, PL_UL_FILLR
-    cmp ah, 10
-    je .snap
-    mov al, PL_UL_FILLD
-    cmp ah, 11
-    jne .nosnap
+    jmp short .nosnap
 .snap:
     call pl_undo_begin
     pop ax
@@ -5761,18 +5693,6 @@ pl_docmd_edit:
     je .paste
     cmp al, 5
     je .clear
-    cmp al, 6
-    je .pastesp
-    cmp al, 7
-    je .pastelk
-    cmp al, 8
-    je .delete
-    cmp al, 9
-    je .insert
-    cmp al, 10
-    je .fillright
-    cmp al, 11
-    je .filldown
     ret                                ; THERE WAS A `cmp al, 9 / je .sort`
                                        ; HERE, left behind when Sort moved to
                                        ; the Data menu - unreachable from a
@@ -5791,40 +5711,9 @@ pl_docmd_edit:
     mov byte [pl_ps_mode], PL_PS_ALL
     call pl_docmd_paste
     ret
-.pastesp:
-    cmp byte [pl_clip_valid], 0        ; Excel greys Paste Special when there
-    je .noclip                         ; is no copy area; this app has no
-    mov al, PL_FDK_PSPEC               ; dynamic enable, so it says so instead
-    call pl_fdlg_open_r
-    ret
-.pastelk:
-    cmp byte [pl_clip_valid], 0
-    je .noclip
-    mov byte [pl_ps_mode], PL_PS_LINK
-    call pl_docmd_paste
-    ret
-.noclip:
-    mov word [pl_msg], pl_s_nocopyarea
-    mov si, [pl_ownwin]
-    call pl_repaint
-    ret
 .clear:
     mov al, PL_FDK_CLEAR
     call pl_fdlg_open_r
-    ret
-.delete:
-    mov al, 4
-    call pl_fdlg_open_r
-    ret
-.insert:
-    mov al, 3
-    call pl_fdlg_open_r
-    ret
-.fillright:
-    call pl_docmd_fillright
-    ret
-.filldown:
-    call pl_docmd_filldown
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6547,233 +6436,6 @@ pl_paste_cell:
 ; pl_fl_dcol/drow = destination. An empty source copies nothing. Preserves
 ; every register, so the loops below can keep their bounds in theirs.
 ; -----------------------------------------------------------------------------
-pl_fill_copy:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov ax, [pl_fl_scol]
-    mov bx, [pl_fl_srow]
-    call pl_findcell
-    jnc .out                           ; empty source: nothing to fill
-    mov es, [pl_cellseg]
-    test byte [es:di+4], 1             ; HASFORMULA
-    jz .plain
-    mov ax, [es:di+PL_C_FOFF]
-    mov si, ax
-    mov es, [pl_txtseg]
-    mov di, pl_rwsrc
-.copyin:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .copyin
-    mov ax, [pl_fl_dcol]
-    sub ax, [pl_fl_scol]
-    mov [pl_cp_coldelta], ax
-    mov ax, [pl_fl_drow]
-    sub ax, [pl_fl_srow]
-    mov [pl_cp_rowdelta], ax
-    mov si, pl_rwsrc
-    call pl_formula_copyshift
-    mov ax, [pl_fl_dcol]
-    mov bx, [pl_fl_drow]
-    mov si, pl_rwdst
-    call pl_setformula
-    jmp .out
-.plain:
-    mov ax, [pl_fl_scol]
-    mov bx, [pl_fl_srow]
-    call pl_getcell2                   ; the full double lands in pl_acc, and
-    cmp byte [pl_curtype], PL_T_TEXT   ; the tag says label or number (81.13 -
-    je .text                           ; 81.18's Copy defect, closed here too)
-    mov ax, [pl_fl_dcol]
-    mov bx, [pl_fl_drow]
-    cmp byte [pl_curtype], PL_T_ERR    ; ...or an ERROR CONSTANT, which the
-    jne .fbool                         ; number store turned into 0 (81.61)
-    mov dl, [pl_curaux]
-    call pl_seterr
-    jmp .out
-.fbool:
-    cmp byte [pl_curtype], PL_T_BOOL   ; ...or LOGICAL, which a number store
-    jne .fnum                          ; would flatten to 1 (81.51)
-    call pl_setbool                    ; DL: pl_getcell2's truncated value
-    jmp .out
-.fnum:
-    call pl_setvald                    ; an integer store would truncate 3.5
-    jmp .out
-.text:
-    mov si, [pl_curtoff]               ; a LABEL: copy its text out of
-    mov es, [pl_txtseg]                ; pl_txtseg into DS scratch, because
-    mov di, pl_rwsrc                   ; pl_settext reads DS:SI
-.tcopy:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .tcopy
-    mov ax, [pl_fl_dcol]
-    mov bx, [pl_fl_drow]
-    mov si, pl_rwsrc
-    call pl_settext
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-; -----------------------------------------------------------------------------
-pl_docmd_fillright:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov ax, [pl_selcol]                ; normalise: a drag can run either way
-    mov bx, [pl_selcol2]
-    cmp ax, bx
-    jbe .colsok
-    xchg ax, bx
-.colsok:
-    mov [pl_fl_scol], ax               ; the source is the LEFTMOST column
-    cmp ax, bx
-    jne .haverange
-    inc bx                             ; a one-column selection fills the one
-    cmp bx, PL_COLS                    ; column over, as this always did
-    jae .out
-.haverange:
-    mov cx, [pl_selrow]                ; ...for every row of the selection
-    mov si, [pl_selrow2]
-    cmp cx, si
-    jbe .rowsok
-    xchg cx, si
-.rowsok:
-.rowloop:
-    mov [pl_fl_srow], cx
-    mov [pl_fl_drow], cx
-    mov dx, [pl_fl_scol]
-.colloop:
-    inc dx
-    cmp dx, bx
-    ja .nextrow
-    mov [pl_fl_dcol], dx
-    call pl_fill_copy
-    jmp .colloop
-.nextrow:
-    inc cx
-    cmp cx, si
-    jbe .rowloop
-    mov si, [pl_ownwin]                ; ONE repaint for the whole fill, not
-    call pl_repaint                    ; one per cell
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-pl_docmd_filldown:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov ax, [pl_selrow]
-    mov bx, [pl_selrow2]
-    cmp ax, bx
-    jbe .rowsok
-    xchg ax, bx
-.rowsok:
-    mov [pl_fl_srow], ax               ; the source is the TOP row
-    cmp ax, bx
-    jne .haverange
-    inc bx                             ; a one-row selection fills the one
-    cmp bx, PL_ROWS                    ; row below, as this always did
-    jae .out
-.haverange:
-    mov cx, [pl_selcol]                ; ...for every column of the selection
-    mov si, [pl_selcol2]
-    cmp cx, si
-    jbe .colsok
-    xchg cx, si
-.colsok:
-.colloop:
-    mov [pl_fl_scol], cx
-    mov [pl_fl_dcol], cx
-    mov dx, [pl_fl_srow]
-.rowloop:
-    inc dx
-    cmp dx, bx
-    ja .nextcol
-    mov [pl_fl_drow], dx
-    call pl_fill_copy
-    jmp .rowloop
-.nextcol:
-    inc cx
-    cmp cx, si
-    jbe .colloop
-    mov si, [pl_ownwin]
-    call pl_repaint
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-section PL_MODSEC                      ; 81.71.6: ...and the carry half of it
-section .text
-
-
-; -----------------------------------------------------------------------------
-; pl_docmd_sortcol - sorts the selected column's occupied cells (on the
-; current sheet) ascending by value; empty rows are left exactly where
-; they are, so occupied cells are compacted toward the top the same way
-; the original plain-values-only sort already did. Stage 2.x: a formula
-; cell now sorts right alongside plain values (by its CURRENT evaluated
-; value, via pl_getcell2, so staleness is never an issue) and, if the
-; sort actually moves it to a different row, its own text is rewritten
-; with pl_formula_copyshift (a (0, row-delta) shift, the same machinery
-; Copy/Paste and Fill Down use) so its references still mean what they
-; looked like they meant - matching real Excel's own behavior, where
-; sorting a range that contains formulas carries their relative
-; references along with them. Previously formula cells were excluded
-; from the sort entirely (skipped, left in their original row) purely
-; because this reference-adjustment capability did not exist yet.
-;
-; Method: one linear pass over the cell array collects this column's
-; occupied cells into pl_stgseg - rows[] at offset 0, values[] at
-; PL_SORT_VALS_OFF (both well under its 32KB claim: PL_CELL_CAP=1365
-; entries needs at most 2730 bytes each), plus origidx[]/isformula[]/
-; fidx[]/staged-formula-text (PL_SORT_ORIG_OFF/PL_SORT_ISF_OFF/
-; PL_SORT_FIDX_OFF/PL_SORT_FTXT_OFF - see their own equ comments). Because
-; the cell array is sorted by row within a sheet (the stage 2.0 comment
-; above pl_findcell), rows[] comes out already ascending for free -
-; sorting is really just "which ORIGINAL entry's data ends up at which
-; ascending row", so values[] and origidx[] are insertion-sorted together
-; (a parallel permutation, not just a value sort) and then written back:
-; a plain value straight via pl_setvald as before; a formula, only if it
-; actually changed row, via pl_formula_copyshift + pl_setformula using
-; that specific cell's own (target row - its original row) delta - each
-; moved formula can have a DIFFERENT delta, since a sort is an arbitrary
-; reordering, not a uniform shift like Insert/Delete Row or Copy/Paste.
-; A sort key is a whole column by definition, so this acts on all of the
-; selected column rather than on the selected part of it.
-; -----------------------------------------------------------------------------
 pl_s_onesheet:     db 'Saved - THIS SHEET ONLY; use .BIF to keep them all.', 0
 pl_s_sheetnm:      db 'Sheet', 0
 
@@ -7473,10 +7135,6 @@ pl_fdlg_apply0:
     je .dosavefmt
     cmp byte [pl_fdlg_kind], PL_FDK_PSPEC
     je .dopspec
-    cmp byte [pl_fdlg_kind], 3
-    je .insertrc
-    cmp byte [pl_fdlg_kind], 4
-    je .deleterc
     ; Number/Alignment/Font apply to the WHOLE SELECTION. They used to read
     ; pl_selcol/pl_selrow and format the anchor alone, so selecting a column
     ; of figures and choosing Currency changed exactly one cell - the same
@@ -7513,37 +7171,6 @@ pl_fdlg_apply0:
     jbe .fmtcolloop
     SHOUT pl_repaint                    ; ONE repaint for the whole block
     jmp .out
-.insertrc:
-    cmp byte [pl_protected], 0        ; a structure change is refused for the
-    jne .protdoc                      ; WHOLE document, not per cell: inserting
-
-    cmp word [pl_fdlg_sel], 0
-    jne .inscol
-    mov al, 0                          ; op 0 = insert row
-    mov bx, [pl_selrow]
-    jmp .rcgo
-.inscol:
-    mov al, 2                          ; op 2 = insert column
-    mov bx, [pl_selcol]
-    jmp .rcgo
-.deleterc:
-    cmp byte [pl_protected], 0        ; a row moves locked cells it does not
-    jne .protdoc                      ; name, so there is no cell to ask about
-
-    cmp word [pl_fdlg_sel], 0
-    jne .delcol
-    mov al, 1                          ; op 1 = delete row
-    mov bx, [pl_selrow]
-    jmp .rcgo
-.delcol:
-    mov al, 3                          ; op 3 = delete column
-    mov bx, [pl_selcol]
-.rcgo:
-    SHOUT pl_rowcol_op
-    mov si, [pl_ownwin]
-    SHOUT pl_repaint
-    jmp .out
-
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
 .doclear:
     jc .refused                       ; ...and the same here: this engine's
@@ -7800,8 +7427,6 @@ pl_idlg_open:
     mov byte [pl_idlg_buf], 0
     cmp byte [pl_idlg_kind], PL_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
-    cmp byte [pl_idlg_kind], PL_ID_GOTO ; is no current value for either, and
-    je .pregoto                        ; prefilling one would be a wrong guess
     mov ax, [pl_selcol]                ; the SELECTED column's own width, in
     SHOUT pl_colwidth                   ; characters, matching what OK reads
     SHOUT pl_itoa
@@ -8024,12 +7649,6 @@ pl_idlg_apply:
     push cx
     push dx
     push si
-    cmp byte [pl_idlg_kind], PL_ID_DEFN
-    je .defname
-    cmp byte [pl_idlg_kind], PL_ID_FIND
-    je .find
-    cmp byte [pl_idlg_kind], PL_ID_GOTO
-    je .goto
     cmp byte [pl_idlg_kind], PL_ID_ROWH
     je .rowh
     mov si, pl_idlg_buf                ; the column width
@@ -8068,49 +7687,6 @@ pl_idlg_apply:
     jmp .redraw
 .rowh:
     ; ROW HEIGHT IS IN POINTS, Excel's unit, fractions allowed, and applies
-.goto:
-    mov si, pl_idlg_buf
-    SHOUT pl_upcase_at                  ; 'a1' and 'A1' both work, as in Excel
-    mov si, pl_idlg_buf
-    SHOUT pl_name_lookup                ; A NAME GOES TO ITS WHOLE RECTANGLE
-    jnc .gotoref                       ; (81.30): pl_select collapses the
-    push cx                            ; selection to one cell, so the far
-    push dx                            ; corner is put back afterwards - and
-    mov si, [pl_ownwin]                ; that is what makes Goto SALES then
-    SHOUT pl_select                     ; Chart Column... chart SALES
-    pop dx
-    pop cx
-    mov [pl_selcol2], cx
-    mov [pl_selrow2], dx
-    mov si, [pl_ownwin]
-    SHOUT pl_repaint                    ; the band is wider than pl_select drew
-    jmp .out
-.gotoref:
-    mov si, pl_idlg_buf
-    SHOUT pl_pcellref                   ; CF=1 = AX col, BX row
-    jnc .out
-    cmp ax, PL_COLS
-    jae .out
-    cmp bx, PL_ROWS
-    jae .out
-    mov si, [pl_ownwin]                ; pl_select's own contract: SI must be
-    SHOUT pl_select                     ; the window; it scrolls and repaints
-    jmp .out                           ; itself - and a Goto DEFINES NO NAME,
-                                       ; so it must not fall into .defname
-.defname:
-    mov si, pl_idlg_buf                ; the name binds THE SELECTION, which is
-    mov ax, [pl_selcol]                ; where it was when the dialog opened -
-    mov bx, [pl_selrow]                ; nothing can move it while a modal
-    mov cx, [pl_selcol2]               ; dialog owns the input. BOTH corners
-    mov dx, [pl_selrow2]               ; since 81.29: a dragged block names a
-    SHOUT pl_name_def                   ; range, a single cell names itself
-    mov word [pl_msg], pl_s_id_named
-    jnc .redraw
-    mov word [pl_msg], pl_s_id_nofit
-    jmp .redraw
-.find:
-    SHOUT pl_docmd_find
-    jmp .redraw
 ; Data > Sort..., part one of two. The KEY is a reference, so it needs a field;
 ; the ORDER is a two-way pick, so it needs radios; and no dialog engine here
 ; has both. Asking in sequence is what File > Save As... already does - the
@@ -8170,109 +7746,6 @@ section .text
 ; selection and comes back round to it, so Find repeated from the same box
 ; steps through every match rather than sticking on the first.
 ; -----------------------------------------------------------------------------
-pl_docmd_find:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov si, pl_idlg_buf
-    call pl_upcase_at
-    cmp byte [pl_idlg_buf], 0
-    je .none
-    ; the scan order is the CELL ARRAY's, which is sorted by row then column -
-    ; so "next" here means next in reading order, which is what it looks like
-    mov cx, [pl_ncells]
-    or cx, cx                         ; not jcxz: it is short-only and .none
-    jz .none                          ; is past its reach from here
-    xor bx, bx                        ; bx = index into the array
-.each:
-    push cx
-    mov ax, bx
-    mov cx, PL_C_SZ
-    mul cx
-    mov si, ax
-    pop cx
-    mov es, [pl_cellseg]
-    mov ax, [es:si]
-    push bx
-    call pl_unpackrow                 ; ax = row, bx = sheet
-    mov dx, bx
-    pop bx
-    cmp dx, [pl_cursheet]
-    jne .next
-    mov [pl_find_row], ax
-    mov ax, [es:si+2]
-    mov [pl_find_col], ax
-    ; skip everything at or before the current selection on this pass
-    mov ax, [pl_find_row]
-    cmp ax, [pl_selrow]
-    jb .next
-    ja .test
-    mov ax, [pl_find_col]
-    cmp ax, [pl_selcol]
-    jbe .next
-.test:
-    call pl_find_text                 ; builds the cell's displayed text
-    call pl_find_match
-    jc .found
-.next:
-    inc bx
-    cmp bx, cx
-    jb .each
-    ; nothing after the selection: go round again from the top, so a repeated
-    ; Find wraps rather than stopping
-    xor bx, bx
-.each2:
-    push cx
-    mov ax, bx
-    mov cx, PL_C_SZ
-    mul cx
-    mov si, ax
-    pop cx
-    mov es, [pl_cellseg]
-    mov ax, [es:si]
-    push bx
-    call pl_unpackrow
-    mov dx, bx
-    pop bx
-    cmp dx, [pl_cursheet]
-    jne .next2
-    mov [pl_find_row], ax
-    mov ax, [es:si+2]
-    mov [pl_find_col], ax
-    call pl_find_text
-    call pl_find_match
-    jc .found
-.next2:
-    inc bx
-    cmp bx, cx
-    jb .each2
-.none:
-    mov word [pl_msg], pl_s_id_nofnd
-    jmp .out
-.found:
-    mov ax, [pl_find_col]
-    mov bx, [pl_find_row]
-    mov si, [pl_ownwin]
-    call pl_select
-    call pl_scrollto
-    mov word [pl_msg], 0
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_find_text - the cell at (pl_find_col, pl_find_row) as UPPERCASE text in
-; pl_find_buf. Goes through pl_getcell2 so a formula cell yields its RESULT,
-; which is what the grid shows and therefore what a search should match.
 pl_find_text:
     push ax
     push bx
@@ -8413,203 +7886,6 @@ PL_NAME_REC  equ PL_NAME_MAX + 1 + 8 ; text + NUL + col + row + col2 + row2
 ; pl_name_find - in: SI = an uppercase NUL name
 ; out: CF=1 and BX = its record offset in pl_names; CF=0 = no such name
 ; -----------------------------------------------------------------------------
-pl_name_find:
-    push ax
-    push cx
-    push si
-    push di
-    xor bx, bx
-    mov cx, [pl_nnames]
-    jcxz .no
-.each:
-    push cx
-    push si
-    mov di, pl_names
-    add di, bx
-.cmp:
-    mov al, [si]
-    cmp al, [di]
-    jne .next
-    or al, al
-    jz .hit
-    inc si
-    inc di
-    jmp .cmp
-.next:
-    pop si
-    pop cx
-    add bx, PL_NAME_REC
-    loop .each
-.no:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.hit:
-    pop si
-    pop cx
-    pop di
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_name_def - in: SI = a NUL name (uppercased here), AX/BX = the near
-; corner, CX/DX = the far one. Both corners are stored as given; pl_foldrange
-; normalises when it walks, so the dialog does not have to.
-; out: CF=1 the table is full. Redefining an existing name REBINDS it, which
-; is what Excel does and what makes the dialog usable twice.
-; -----------------------------------------------------------------------------
-pl_name_def:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov [pl_nm_col], ax
-    mov [pl_nm_row], bx
-    mov [pl_nm_col2], cx
-    mov [pl_nm_row2], dx
-    push si
-    call pl_upcase_at
-    mov di, pl_nm_buf                 ; clipped to PL_NAME_MAX, so a long name
-    mov cx, PL_NAME_MAX               ; cannot run past its record
-.copy:
-    mov al, [si]
-    or al, al
-    jz .copied
-    mov [di], al
-    inc si
-    inc di
-    dec cx
-    jnz .copy
-.copied:
-    mov byte [di], 0
-    pop si
-    cmp byte [pl_nm_buf], 0
-    je .full                          ; an empty name is not a name
-    mov si, pl_nm_buf
-    call pl_name_find
-    jc .bind
-    mov ax, [pl_nnames]
-    cmp ax, PL_NAME_CAP
-    jae .full
-    mov cx, PL_NAME_REC
-    mul cx
-    mov bx, ax
-    inc word [pl_nnames]
-.bind:
-    mov di, pl_names
-    add di, bx
-    mov si, pl_nm_buf
-.wr:
-    mov al, [si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jnz .wr
-    mov di, pl_names
-    add di, bx
-    add di, PL_NAME_MAX + 1
-    mov ax, [pl_nm_col]
-    mov [di], ax
-    mov ax, [pl_nm_row]
-    mov [di+2], ax
-    mov ax, [pl_nm_col2]
-    mov [di+4], ax
-    mov ax, [pl_nm_row2]
-    mov [di+6], ax
-    clc
-    jmp .out
-.full:
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_name_lookup - in: SI = an uppercase NUL name
-; out: CF=1 and AX = col, BX = row (the NEAR corner, which is what a caller
-; wanting one cell reads), with the far corner in CX/DX; CF=0 = not a name.
-;
-; The near corner stays in AX/BX because that is the shape pl_pcellref hands
-; on and pl_pident's name path already speaks it - a one-cell name goes on
-; behaving exactly as it did.
-; -----------------------------------------------------------------------------
-pl_name_lookup:
-    push di
-    call pl_name_find
-    jnc .no
-    mov di, pl_names
-    add di, bx
-    add di, PL_NAME_MAX + 1
-    mov ax, [di]
-    mov cx, [di+4]
-    mov dx, [di+6]
-    mov bx, [di+2]
-    stc
-    pop di
-    ret
-.no:
-    pop di
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_name_list - build the pointer array pl_ldlg wants. out: CX = count.
-; The pointers are into pl_names itself, which is fine because the list dialog
-; only ever READS them and nothing can redefine a name while it is open.
-; -----------------------------------------------------------------------------
-pl_name_list:
-    push ax
-    push bx
-    push di
-    xor bx, bx
-    xor di, di
-    mov cx, [pl_nnames]
-    jcxz .done
-    push cx
-.each:
-    mov ax, pl_names
-    add ax, bx
-    mov [pl_nameptr + di], ax
-    add di, 2
-    add bx, PL_NAME_REC
-    loop .each
-    pop cx
-.done:
-    pop di
-    pop bx
-    pop ax
-    ret
-
-; =============================================================================
-; The SCROLLING LIST dialog (stage 3.0c) - a framed list with a real scroll
-; bar, OK and Cancel. Formula > Paste Function... and Formula > Paste Name...
-; are both "pick one of a list too long to show at once", which is the one
-; shape pl_fdlg_* cannot take: its radio rows are a fixed short array chosen
-; by kind, and 25 function names is neither fixed nor short.
-;
-; The item source is a POINTER ARRAY plus a count, filled at open time, so the
-; two kinds differ only in where that array comes from - pl_functab as it
-; stands for the functions, and the name table built at run time for the names.
-; That is also what makes a third kind free later.
-;
-; The bar is os88ui.inc's (SPEC.md 13.10), already opted into by this file for
-; the grid's own two, so the dialog gets arrow cells, page regions and a
-; proportional thumb without a line of its own.
-; =============================================================================
 pl_fdlg_open_r:
     jmp pl_fdlg_open
 pl_fdlg_paint_r:
@@ -8913,7 +8189,6 @@ pl_new:
     mov word [pl_ncells], 0
     mov word [pl_txtlen], 0
     SHOUT pl_colw_clear                ; ...and every column's width (81.56)
-    mov word [pl_nnames], 0          ; ...and its NAMES, which used to survive
                                      ; into the next document and go on
                                      ; pointing at cells no longer there
                                      ; an OFFSET into the arena reset above,
@@ -9136,63 +8411,6 @@ pl_wr_colw:
 ; by reading these (82.15); without them a name is a fact only this app knows,
 ; and a saved sheet would carry the data but not what any of it was called.
 ; -----------------------------------------------------------------------------
-pl_wr_names:
-    push ax
-    push bx
-    push cx
-    push si
-    mov cx, [pl_nnames]
-    jcxz .out
-    xor bx, bx
-.each:
-    mov ax, di
-    add ax, 64                        ; the longest NN line: name, two R1C1
-    cmp ax, PL_STAGE_MAX              ; refs and the punctuation
-    ja .out
-    push cx
-    push bx
-    mov si, pl_names
-    add si, bx
-    add si, PL_NAME_MAX + 1
-    mov ax, [si]
-    mov [pl_nm_col], ax
-    mov ax, [si+2]
-    mov [pl_nm_row], ax
-    mov ax, [si+4]
-    mov [pl_nm_col2], ax
-    mov ax, [si+6]
-    mov [pl_nm_row2], ax
-    mov si, pl_s_nn
-    call pl_stgput
-    mov si, pl_names
-    add si, bx
-    call pl_stgput                    ; the name itself
-    mov si, pl_s_nne
-    call pl_stgput
-    mov ax, [pl_nm_row]
-    mov bx, [pl_nm_col]
-    call pl_wr_r1c1
-    mov si, pl_s_colon
-    call pl_stgput
-    mov ax, [pl_nm_row2]
-    mov bx, [pl_nm_col2]
-    call pl_wr_r1c1
-    mov si, pl_s_crlf
-    call pl_stgput
-    pop bx
-    pop cx
-    add bx, PL_NAME_REC
-    loop .each
-.out:
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; pl_wr_r1c1 - in: AX = 0-based row, BX = 0-based col; emits "R<n>C<n>" at DI,
-; 1-based as the notation is. pl_itoa lands in pl_numbuf, so each half is
-; converted immediately before it is put and never both at once.
 pl_wr_r1c1:
     push ax
     push bx
@@ -9246,7 +8464,6 @@ pl_dowrite_sylk:
     mov si, pl_s_id
     call pl_stgput
     call pl_wr_colw                   ; 81.56: F;W for each column's width
-    call pl_wr_names                  ; stage 4.6: the defined names, so a
                                        ; reader that is not this app can find
                                        ; the ranges too (81.29.1)
 
@@ -9648,7 +8865,6 @@ pl_doread_sylk:
     mov word [pl_nbord], 0            ; document's arena text, borders and
     mov word [pl_nnote], 0            ; notes too, not just its cells
     SHOUT pl_colw_clear                ; ...and every column's width (81.56)
-    mov word [pl_nnames], 0           ; ...and its defined names (81.10.8)
     mov cx, ax                        ; a file this small never exceeds 64KB
     xor si, si
     call pl_parseslk
@@ -9884,19 +9100,10 @@ pl_parseslk:
 .goteol:
     mov ax, bx
     sub ax, si
-    cmp ax, 3                        ; NN is the one record here whose type is
-    jb .not2                         ; TWO letters, so its ';' is at +2 and it
-    cmp byte [es:si], 'N'            ; has to be tested before the one-letter
-    jne .not2                        ; shape below - which is why pl_wr_names
-    cmp byte [es:si+1], 'N'          ; wrote these for a release and nothing
-    jne .not2                        ; ever read one back (81.10.8)
-    cmp byte [es:si+2], ';'
-    jne .not2
-    push si
-    add si, 3
-    call pl_parsenrec                ; in: SI=tokens start, BX=line end
-    pop si
-    jmp .advance
+    ; 81.75: the NN record - a DEFINED NAME - is not read or written any
+    ; more. Nothing in this build can make one, so a file that carries them
+    ; simply loses them, which is what SYLK's own "unknown record" rule
+    ; already says happens to everything else it does not know.
 .not2:
     cmp ax, 2
     jb .advance
@@ -9948,111 +9155,6 @@ pl_parseslk:
 ; so a name survived being saved and did not survive being loaded - the file
 ; was right and the app forgot. Fields are taken in any order, like the 'C'
 ; record's, because a SYLK writer is not obliged to emit them in ours.
-; -----------------------------------------------------------------------------
-pl_parsenrec:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov byte [pl_nm_in], 0
-    mov word [pl_nm_row], 0xFFFF      ; "no ;E field seen yet"
-.tok:
-    cmp si, bx
-    jae .done
-    mov al, [es:si]
-    inc si
-    cmp al, 'N'
-    je .isn
-    cmp al, 'E'
-    je .ise
-.scan:                                ; a field this reader has no use for
-    cmp si, bx
-    jae .done
-    cmp byte [es:si], ';'
-    je .fieldend
-    inc si
-    jmp .scan
-.isn:
-    mov di, pl_nm_in
-    mov cx, PL_NAME_MAX
-.ncp:
-    cmp si, bx
-    jae .nend
-    mov al, [es:si]
-    cmp al, ';'
-    je .nend
-    cmp al, 13
-    je .nend
-    cmp al, 10
-    je .nend
-    jcxz .nskip                       ; past what the table holds: keep the
-    mov [di], al                      ; first PL_NAME_MAX and go on reading
-    inc di                            ; the field, so the ';' after it is
-    dec cx                            ; still found
-.nskip:
-    inc si
-    jmp .ncp
-.nend:
-    mov byte [di], 0
-    jmp .fieldend
-.ise:
-    call pl_slk_r1c1
-    jc .done
-    mov [pl_nm_row], ax
-    mov [pl_nm_col], dx
-    mov [pl_nm_row2], ax              ; a one-cell name is the same rectangle
-    mov [pl_nm_col2], dx              ; with both corners equal
-    cmp si, bx
-    jae .fieldend
-    cmp byte [es:si], ':'
-    jne .fieldend
-    inc si
-    call pl_slk_r1c1
-    jc .fieldend                      ; a broken far corner still leaves a
-    mov [pl_nm_row2], ax              ; usable one-cell name rather than
-    mov [pl_nm_col2], dx              ; discarding the record
-.fieldend:
-    cmp si, bx
-    jae .done
-    cmp byte [es:si], ';'
-    jne .done
-    inc si
-    jmp .tok
-.done:
-    cmp byte [pl_nm_in], 0            ; a record with no ;N or no ;E defines
-    je .out                           ; nothing
-    cmp word [pl_nm_row], 0xFFFF
-    je .out
-    mov ax, [pl_nm_row2]
-    cmp ax, PL_ROWS
-    jae .out
-    mov ax, [pl_nm_col2]
-    cmp ax, PL_COLS
-    jae .out
-    mov si, pl_nm_in
-    mov ax, [pl_nm_col]
-    mov bx, [pl_nm_row]
-    mov cx, [pl_nm_col2]
-    mov dx, [pl_nm_row2]
-    SHOUT pl_name_def                  ; CF=1 = the table is full; the rest of
-.out:                                 ; the file still loads
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_slk_r1c1 - one absolute R1C1 reference at ES:SI, the notation pl_wr_r1c1
-; emits. in: BX = limit. out: AX = 0-based row, DX = 0-based column, SI past
-; it; CF=1 = not one, and SI is wherever it gave up.
-;
-; R1C1 is ONE-BASED, so R0 or C0 is refused rather than wrapped to 65535 by
-; the decrement.
 ; -----------------------------------------------------------------------------
 pl_slk_r1c1:
     push cx
@@ -14117,21 +13219,11 @@ pl_pident:
                                       ; which is what both branches here used
                                       ; to arrange by hand
 .isfunc:
-    cmp byte [si], '('                ; stage 3.0c: a DEFINED NAME is an
-    je .reallyfunc                    ; identifier that is not a call. Excel
-    push si                           ; resolves it the same way, and the
-    mov si, pl_ident                  ; parenthesis is the only thing that
-    call pl_name_lookup               ; separates SUM from a cell called SUM
-    pop si
-    jnc .reallyfunc
-    ; AX = col, BX = row: the same shape pl_pcellref hands on, so the name
-    ; reaches the evaluator as an ordinary reference and everything that
-    ; already works for one - the cycle check, the memoization - works for it
-    call pl_getcell2                  ; which leaves the value in pl_acc, and
-    jmp .out                          ; a zero there for a cell that does not
-                                       ; exist yet - exactly as a reference to
-                                       ; an empty cell already behaves
-.reallyfunc:
+    ; 81.75: an identifier that is not a call used to be looked up as a
+    ; DEFINED NAME and resolved to its rectangle. There are none - the only
+    ; thing that could make one was Formula > Define Name - so every
+    ; identifier here is a function call or a misspelling, and pl_pfunc's
+    ; own .noname already says which.
     call pl_pfunc
 .out:
     pop di
@@ -14254,8 +13346,9 @@ pl_pcellref:
 pl_prange:
     push ax
     push bx
-    call pl_pnamerange                ; stage 4.6: `=SUM(Sales)` where Sales
-    jc .fold                          ; names a block folds the block (81.29)
+    ; 81.75: `=SUM(Sales)` folded a DEFINED NAME's block here. There are no
+    ; defined names in this build, so a range argument is a reference or a
+    ; plain expression and nothing else.
     call pl_pcellref
     jnc .plainexpr
     cmp byte [si], ':'
@@ -14319,76 +13412,6 @@ pl_prange:
 ; value the expression path already gave it, so nothing that worked before
 ; takes a different route to a different answer.
 ; -----------------------------------------------------------------------------
-pl_pnamerange:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov di, pl_ident
-    xor cx, cx
-.collect:
-    mov al, [si]
-    cmp al, 'A'
-    jb .done
-    cmp al, 'Z'
-    jbe .keep
-    cmp al, 'a'
-    jb .done
-    cmp al, 'z'
-    ja .done
-.keep:
-    cmp cx, PL_NAME_MAX
-    jae .fail
-    and al, 0xDF
-    mov [di], al
-    inc di
-    inc cx
-    inc si
-    jmp .collect
-.done:
-    mov byte [di], 0
-    or cx, cx
-    jz .fail                          ; nothing here at all
-    mov al, [si]
-    cmp al, ','
-    je .look
-    cmp al, ')'
-    jne .fail                         ; '(' lands here too: a call, not a name
-.look:
-    push si
-    mov si, pl_ident
-    call pl_name_lookup
-    pop si
-    jnc .fail
-    mov [pl_r1col], ax
-    mov [pl_r1row], bx
-    mov [pl_r2col], cx
-    mov [pl_r2row], dx
-    call pl_normrange
-    pop di                            ; DI was pushed LAST, so it comes off
-    add sp, 2                         ; first - then discard the saved SI and
-    pop dx                            ; keep advancing
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-.fail:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; pl_normrange - put pl_r1col/row..pl_r2col/row in top-left/bottom-right
-; order. Split out of pl_foldrange so pl_pintersect can rely on both
-; rectangles being normalised before it compares their edges.
 pl_normrange:
     push ax
     push bx
@@ -19517,11 +18540,9 @@ pl_mf_ret:
 ; what made the renumber safe to do at all.
 pl_mtab:
     dw pl_m_file,    pl_i_file,    4
-    dw pl_m_edit,    pl_i_edit,    12
-    dw pl_m_formula, pl_i_formula, 2
+    dw pl_m_edit,    pl_i_edit,    6
     dw pl_m_format,  pl_i_format,  4
-    dw pl_m_options, pl_i_options, 3
-    dw pl_m_help,    pl_i_help,    1
+    dw pl_m_options, pl_i_options, 4
 
 ; Excel 2.1d's Formula menu, in its own order: Paste Name.../Paste Function.../
 ; Reference/Define Name.../Note.../Goto.../Find... - all seven now. The note
@@ -19530,16 +18551,11 @@ pl_mtab:
 ; is what Paste Name and Paste Function were waiting on, the name table is what
 ; Define Name needed, and Reference had nowhere to show its answer until the
 ; reference box existed.
-pl_m_formula:    db 'Formula', 0
-pl_i_formula:    dw pl_it_goto, pl_it_ref_a1
-pl_it_pname:     db 'Paste Name...', 0
-pl_it_pfunc:     db 'Paste Function...', 0
+; 81.75: Reference is an OPTIONS item now. The Formula menu held Paste Name,
+; Paste Function, Define Name, Note, Goto and Find, and every one of them has
+; gone - a menu with one toggle left in it is not a menu.
 pl_it_ref_a1:    db 'Reference: A1', 0     ; the same relabel-by-repointing
 pl_it_ref_rc:    db 'Reference: R1C1', 0   ; the Options toggles use
-pl_it_defname:   db 'Define Name...', 0
-pl_it_note:      db 'Note...', 0
-pl_it_goto:      db 'Goto...', 0
-pl_it_find:      db 'Find...', 0
 
 ; 81.75: the window title and the kernel menu bar's AM_NAME. The PACKAGE name
 ; in OS88_HEADER is PLAN; these two are what the user reads, so they have to
@@ -19627,21 +18643,18 @@ pl_m_edit:     db 'Edit', 0
 ; Insert... / Fill Right / Fill Down. PASTE SPECIAL AND PASTE LINK COME
 ; AFTER CLEAR, not after Paste, which is where they would have gone from
 ; memory.
-pl_i_edit:     dw pl_it_undo, pl_it_repeat, pl_it_cut, pl_it_copy, pl_it_paste, pl_it_clear, pl_it_pastesp, pl_it_pastelk, pl_it_delete, pl_it_insert, pl_it_fillright, pl_it_filldown
+; 81.75: six items, and the indices of those six are UNCHANGED - Paste
+; Special, Paste Link, Delete..., Insert..., Fill Right and Fill Down all sat
+; above them, so cutting the tail renumbers nothing.
+pl_i_edit:     dw pl_it_undo, pl_it_repeat, pl_it_cut, pl_it_copy, pl_it_paste, pl_it_clear
 pl_it_undo:    db MENU_DIS, "Can't Undo", 0     ; REWRITTEN by pl_undo_label
                times 10 db 0                      ; (81.57): "Undo Paste Special"
                                                   ; and its NUL fit the slack
 pl_it_repeat:  db MENU_DIS, "Can't Repeat", 0
-pl_it_pastesp: db 'Paste Special...', 0
-pl_it_pastelk: db 'Paste Link', 0
 pl_it_cut:     db 'Cut', 0
 pl_it_copy:    db 'Copy', 0
 pl_it_paste:   db 'Paste', 0
 pl_it_clear:   db 'Clear...', 0
-pl_it_delete:  db 'Delete...', 0
-pl_it_insert:  db 'Insert...', 0
-pl_it_fillright: db 'Fill Right', 0
-pl_it_filldown:  db 'Fill Down', 0
 
 ; Data - real Excel 2.1 keeps Sort here, not in Edit. Chart Column.../Export
 ; Chart as BMP... are stage 2.x's own addition (no real-Excel Data menu
@@ -19666,7 +18679,7 @@ pl_m_options:  db 'Options', 0
 ; (LIBRARY/documentation/screenshots/excel/menu_options_full.png). Gridlines
 ; and Formulas are items here where Excel keeps them inside Display... - that
 ; divergence is 81.31's, not this one's.
-pl_i_options:  dw pl_it_grid_off, pl_it_form_off, pl_it_calc
+pl_i_options:  dw pl_it_grid_off, pl_it_form_off, pl_it_calc, pl_it_ref_a1
 pl_it_grid_on:  db 'Gridlines: On', 0
 pl_it_grid_off: db 'Gridlines: Off', 0
 pl_it_form_on:  db 'Formulas: On', 0
@@ -19677,9 +18690,6 @@ pl_it_frz_on:   db 'Unfreeze Panes', 0   ; toggles above rather than ticked
 pl_s_frz_at_a1: db 'Select below or right of the split first.', 0
 
 ; Help
-pl_m_help:     db 'Help', 0
-pl_i_help:     dw pl_it_about
-pl_it_about:   db 'About Sheet...', 0
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
 pl_ablines:
     dw pl_ab1, pl_ab2, pl_ab3, pl_ab4, 0
@@ -20093,7 +19103,6 @@ pl_doread_sep:
     mov word [pl_nbord], 0            ; pl_doread_dif clears
     mov word [pl_nnote], 0
     SHOUT pl_colw_clear                ; ...and every column's width (81.56)
-    mov word [pl_nnames], 0
     mov es, [pl_stgseg]
     mov [pl_sepend], ax               ; the end, for pl_sep_field
     xor si, si
@@ -20329,7 +19338,7 @@ pl_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3634                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3556                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -20643,16 +19652,8 @@ pl_a1style      equ pl_mchk + 1             ; byte: 0 = A1, 1 = R1C1 - what
                                              ; the reference box and Goto show
 ; --- stage 3.0c: the list dialog ---
 ; --- stage 3.0c: defined names ---
-pl_nnames         equ pl_a1style + 1
-pl_names        equ pl_nnames + 2            ; PL_NAME_CAP * PL_NAME_REC
-pl_nameptr      equ pl_names + PL_NAME_CAP * PL_NAME_REC   ; PL_NAME_CAP words
-pl_nm_buf       equ pl_nameptr + PL_NAME_CAP * 2           ; PL_NAME_MAX+1
-pl_nm_col       equ pl_nm_buf + PL_NAME_MAX + 1
-pl_nm_row       equ pl_nm_col + 2
-pl_nm_col2      equ pl_nm_row + 2            ; stage 4.6: the far corner a
-pl_nm_row2      equ pl_nm_col2 + 2           ; named RANGE binds
-pl_nm_tmp       equ pl_nm_row2 + 2           ; pl_wr_r1c1's banked column
-pl_nm_in        equ pl_nm_tmp + 2            ; PL_NAME_MAX+1: a name arriving
+pl_names          equ pl_a1style + 1            ; PL_NAME_CAP * PL_NAME_REC
+pl_nm_tmp         equ pl_names + PL_NAME_CAP * PL_NAME_REC           ; pl_wr_r1c1's banked column
                                              ; from a FILE, which cannot be
                                              ; pl_nm_buf - that is where
                                              ; pl_name_def puts what it is
@@ -20661,7 +19662,7 @@ pl_nm_in        equ pl_nm_tmp + 2            ; PL_NAME_MAX+1: a name arriving
                                              ; source is the kind of aliasing
                                              ; that works until the copy grows
                                              ; a step
-pl_find_col     equ pl_nm_in + PL_NAME_MAX + 1  ; the walk's current cell...
+pl_find_col       equ pl_nm_tmp + 2  ; the walk's current cell...
 pl_find_row     equ pl_find_col + 2
 pl_find_buf     equ pl_find_row + 2          ; PL_EDITMAX+1: ...as displayed
 
@@ -20906,10 +19907,8 @@ pl_pb_len         equ pl_pb_cur + 2
 pl_tabanchor      equ pl_pb_len + 2        ; word: 0 = no Tab run in progress,
                                        ; else the run's start column PLUS ONE
 pl_fl_scol        equ pl_tabanchor + 2 ; pl_fill_copy's source cell...
-pl_fl_srow        equ pl_fl_scol + 2
-pl_fl_dcol        equ pl_fl_srow + 2   ; ...and its destination
-pl_fl_drow        equ pl_fl_dcol + 2
-pl_needld         equ pl_fl_drow + 2   ; byte: an ARG_FILE document is
+pl_fl_dcol        equ pl_fl_scol + 2   ; ...and its destination
+pl_needld         equ pl_fl_dcol + 2   ; byte: an ARG_FILE document is
                                        ; noted and not yet read
 pl_argdir         equ pl_needld + 1    ; word: the directory it is in
 pl_argdrv         equ pl_argdir + 2    ; byte: ...and that volume
@@ -20977,8 +19976,7 @@ pl_stbusy         equ pl_tr0 + 8        ; byte: a variance fold is running. Only
                                        ; 81.34.1
 pl_rndlo      equ pl_stbusy + 2      ; RAND's 32-bit LCG state
 pl_rndhi      equ pl_rndlo + 2
-pl_protected      equ pl_rndhi + 2   ; byte: Options > Protect Document (81.46)
-pl_ps_ownsheet equ pl_protected + 2   ; word: 81.45.4's banked sheet
+pl_ps_ownsheet    equ pl_rndhi + 2   ; word: 81.45.4's banked sheet
 pl_ps_mode    equ pl_ps_ownsheet + 2  ; byte: which parts of a copied cell the
                                        ; paste in progress is for (81.45)
                                        ; a volatile function (81.44)
