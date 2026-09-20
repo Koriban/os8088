@@ -429,6 +429,8 @@ fx_qmulcx:
 
 ; -----------------------------------------------------------------------------
 ; fx_mul - A = A * B.
+; out: CF = 0 normally; CF = 1 and A CLAMPED to +-214,748.3647 when the
+;      product leaves the range.
 ;
 ; (a*b)/FX_SCALE, in 64 bits, ROUNDED half away from zero at the last place -
 ; not truncated. 2.00 * 0.15 is 0.30 either way; 0.07 * 0.07 is 0.0049, and
@@ -459,10 +461,35 @@ fx_mul:
     adc word [fx_q+4], 0
     adc word [fx_q+6], 0
 .noround:
+    ; THE HIGH HALF IS THE OVERFLOW, and it was simply dropped. fx_q is 64
+    ; bits and the answer is its low 32, so a product past the range used to
+    ; be taken modulo 2^32 and handed back as a PLAUSIBLE NUMBER:
+    ; 100000*100000 read 27,644.7232. An error value exists precisely so that
+    ; a wrong answer cannot be mistaken for a right one, and this was the one
+    ; arithmetic path with no way to say so.
+    mov ax, [fx_q+4]
+    or ax, [fx_q+6]
+    jnz .over
     mov ax, [fx_q]
     mov dx, [fx_q+2]
+    or dx, dx                          ; ...and bit 31, because the value is
+    js .over                           ; SIGNED: 0x7FFFFFFF is the last one
+    call fx_setsgn                     ; that can be negated and still fit
+    clc
+    jmp short .mout
+.over:
+    ; CLAMPED, not zeroed, and that is the choice worth stating. A caller
+    ; that tests CF turns this into #NUM! and never reads A. A caller that
+    ; does NOT test it gets the largest representable value instead of a
+    ; wrapped one - visibly too big rather than quietly wrong - which is
+    ; strictly better than what it got before. fx_i2a's own "CF=1 and A
+    ; clamped" is the same decision one routine along.
+    mov ax, 0xFFFF
+    mov dx, 0x7FFF
     call fx_setsgn
-    pop dx
+    stc
+.mout:
+    pop dx                             ; ...and none of these touches CF
     pop cx
     pop bx
     pop ax
@@ -754,7 +781,10 @@ fx_sqrt:
 ; -----------------------------------------------------------------------------
 ; fx_pow - A = A^B.
 ; out: CF=1 and A zero when there is no answer here: a fractional exponent
-;      (this library has no logarithm and no way to mean one), or 0^0.
+;      (this library has no logarithm and no way to mean one), or 0^0;
+;      CF=1 and A CLAMPED when the result leaves the range, fx_mul's own
+;      answer carried out of the squaring loop. Both are #NUM! to the two
+;      callers, which is why one flag serves for both.
 ;
 ; Repeated squaring, and a negative exponent is one over the result - which is
 ; the same shape os88fp.inc's own fp_pow uses and for the same reason: it is
@@ -811,8 +841,13 @@ fx_pow:
     mov ax, [fx_tmp+2]
     mov [fx_b+2], ax
     call fx_mul
-    dec bx
-    jmp short .sq
+    jc .powover                        ; one multiply past the range makes the
+    dec bx                             ; whole power past it: keep going and
+    jmp short .sq                      ; the clamp would be multiplied again
+.powover:
+    pop cx                             ; the sign banked at .run
+    stc
+    jmp short .fin
 .done:
     pop cx
     or cl, cl

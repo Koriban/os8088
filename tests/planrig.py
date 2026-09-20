@@ -179,6 +179,21 @@ CASES = [
     ("SIN(1)",              ERR(5)),
     ("LN(1)",               ERR(5)),
     ("MDETERM(A1:A2)",      ERR(5)),
+    # --- overflow: past +-214,748.3647 it is #NUM!, not a wrapped number ------
+    # fx_mul kept the low 32 bits of its 64-bit intermediate and returned no
+    # carry at all, so 100000*100000 read 27,644.7232 - a plausible number,
+    # which is the one thing an error value exists to prevent.
+    ("100000*100000",       ERR(6)),
+    ("-100000*100000",      ERR(6)),       # ...and on the negative side
+    ("2^20",                ERR(6)),       # fx_pow carries it out of the
+                                           # squaring loop
+    ("PRODUCT(100000,100000)", ERR(6)),    # ...and the fold that multiplies
+    # ...and the boundary, which must NOT error. A clamp that fires one value
+    # early is the same defect facing the other way, and nothing else here
+    # would catch it.
+    ("214748*1",            fx(214748)),
+    ("100000*2",            fx(200000)),
+    ("2^10",                fx(1024)),     # still in range, still exact
     # --- text ----------------------------------------------------------------
     ('"ab"&"cd"',           TEXT),
     # --- not asserted, reported ----------------------------------------------
@@ -186,7 +201,6 @@ CASES = [
     ("10/3*3",              NOTE),
     ("NOW()",               NOTE),
     ("RAND()",              NOTE),
-    ("100000*100000",       NOTE),         # past the +-214,748.3647 range
 ]
 
 COL_A = 0                       # 0-based column index of A: PLAN

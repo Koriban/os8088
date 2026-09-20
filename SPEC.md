@@ -106350,7 +106350,7 @@ the other standing, assembling, and silent.**
 | **Paste never pasted** | `pl_paste_cell` kept the `jc .refused` whose `call sh_prot_blocked` protection had been cut from. The flag it read was `cmp bx, PL_ROWS` two lines up, and an IN-RANGE row is exactly the case that leaves CF set — so it was taken for **every valid cell**, on every machine, with the menu item enabled and nothing said. Cut and Clear had the same orphan and read the *caller's* carry, so they ran or refused by accident of the previous command |
 | **AVERAGE was n/n** | `fx_i2b` is `fx_i2a` + `fx_a_to_b`, so it goes THROUGH register A. `.avgok` loaded A with the sum and then called it. Every AVERAGE was 1, while `SUM/COUNT` over the same range was right — the third occurrence of the ordering rule *build the constant first, load the value last* |
 | **Two names, one field** | the number-format field had `PL_FMT_NUM_*` (Currency = 1) from the interpreter and `PL_NF_*` (Currency = 2) from the three that replaced it. The file code was on one set and the display code on the other, so a Currency cell was written as comma-with-no-dollar and Excel's own `$` came back as Text |
-| **Silent overflow** | `fx_mul` keeps the low 32 bits of its 64-bit intermediate and returns no carry at all, so a product past ±214,748.3647 wraps to a plausible number where Excel says `#NUM!`. **NOT FIXED** — every caller would have to test the flag, so it is a decision rather than a patch |
+| **Silent overflow** | `fx_mul` kept the low 32 bits of its 64-bit intermediate and returned no carry at all, so a product past ±214,748.3647 wrapped to a plausible number where Excel says `#NUM!` — `100000*100000` read 27,644.7232. It signals now, and §81.75.9 is what that cost |
 
 **The generalisation is worth more than the four fixes: CUTTING A CALL LEAVES
 ITS CONSUMERS.** §81.75.5 is the same lesson about code that is no longer
@@ -106399,6 +106399,39 @@ at `[pl_ox]` plus the running sum of `pl_mw[i] + 2*PL_MPAD`, and `pl_mw` is an
 array in PLAN's own bss — so the rig reads the layout the guest actually drew,
 and proves each step against `[pl_mopen]` and `[pl_mhi]` before releasing the
 button.
+
+#### 81.75.9 Overflow is an answer, not a wrap
+
+`fx_mul` runs in 64 bits and the result is the low 32 of them. The other 32
+were simply dropped, so every product past ±214,748.3647 came back taken
+modulo 2^32: `100000*100000` read **27,644.7232**. That is the one thing an
+error value exists to prevent — a wrong answer that cannot be told from a
+right one — and it was the only arithmetic path in the package with no way to
+say so, while `^` and `POWER()` had tested `fx_pow`'s carry all along.
+
+It **clamps and signals**: CF=1, and A set to the largest representable value
+rather than zeroed. The clamp is the part worth arguing. A caller that tests
+the flag turns it into `#NUM!` and never reads A, so for those it makes no
+difference; a caller that does *not* test it gets a saturated value instead of
+a wrapped one — visibly too big rather than quietly wrong. `fx_i2a`'s own
+"CF=1 and A clamped" is the same decision one routine along.
+
+Three consumers had to be told, and only two were new: the `*` operator, and
+`PRODUCT`, the one fold that multiplies. `fx_pow` carries an overflow straight
+out of its squaring loop, so `^` and `POWER()` inherited it without an edit —
+and `=2^20` answers `#NUM!` for that reason.
+
+**What is NOT covered, stated rather than left to be discovered:** `fx_add`
+and `fx_sub` still wrap, so `SUM` over a column that passes the range does not
+say so. That is a separate and much rarer case — it needs two operands already
+near the ceiling — and the same treatment would touch the summing folds as
+well as the operators.
+
+The cost is **46 bytes** of a package with 1,110 spare, and `planrig` carries
+six cases for it: the two signs, the fold, the power, and — the ones that
+matter as much — `214748*1` and `100000*2`, which must still evaluate. A clamp
+that fires one value early is the same defect facing the other way, and
+nothing else in the battery would catch it.
 
 ### 82.1 The offscreen canvas, and why it is not optional
 

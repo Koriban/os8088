@@ -11614,6 +11614,14 @@ pl_ptermcont:
     call pl_chktext
     call pl_binop_pre
     call fx_mul
+    jnc .mulok                        ; past +-214,748.3647: #NUM!, which is
+    mov byte [pl_evalerr], PL_ERR_NUM ; what Excel answers and what `^` and
+.mulok:                               ; POWER() already answered - they test
+                                       ; fx_pow's carry and this was the one
+                                       ; arithmetic operator that tested
+                                       ; nothing. The CLAMPED value is stored
+                                       ; rather than zeroed: pl_evalerr makes
+                                       ; the cell an error whatever is in it
     call pl_acc_store
     mov byte [pl_curtype], PL_T_NUM
     jmp pl_ptermcont
@@ -12543,6 +12551,9 @@ pl_foldvalue:
     call pl_pacc_to_a
     call pl_acc_load_b
     call fx_mul
+    jnc .prodok                       ; ...and the fold that multiplies says
+    mov byte [pl_evalerr], PL_ERR_NUM ; it too, so =PRODUCT(A1:A9) cannot
+.prodok:                              ; answer a wrapped number either
     call pl_pacc_from_a
     jmp .out
 .min:
