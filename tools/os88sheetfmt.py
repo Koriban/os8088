@@ -131,6 +131,15 @@ BIFF_MACRO_FUNCS = {
     # slice 3b (81.89): the two that are Ftab functions, not Cetab commands
     0x58: ('SET.NAME'   , (1, 2)  , (1, 2)),
     0xC0: ('NOTE'       , (0, 4)  , (0, 4)),
+    # wave 4a (81.91): text files
+    0x84: ('FOPEN'      , (1, 2), (1, 2)),
+    0x85: ('FCLOSE'     , (1, 1), (1, 1)),
+    0x88: ('FREAD'      , (2, 2), (2, 2)),
+    0x87: ('FREADLN'    , (1, 1), (1, 1)),
+    0x8A: ('FWRITE'     , (2, 2), (2, 2)),
+    0x89: ('FWRITELN'   , (2, 2), (2, 2)),
+    0x8B: ('FPOS'       , (1, 2), (1, 2)),
+    0x86: ('FSIZE'      , (1, 1), (1, 1)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its

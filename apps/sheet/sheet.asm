@@ -35169,6 +35169,15 @@ shm_mtab:
     dw shm_mfsaveas
     dw shm_mffill
     dw shm_mseries
+; wave 4a (81.91): text files
+    dw shm_mfopen
+    dw shm_mfclose
+    dw shm_mfread
+    dw shm_mfreadln
+    dw shm_mfwrite
+    dw shm_mfwriteln
+    dw shm_mfpos
+    dw shm_mfsize
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35189,6 +35198,9 @@ shm_mkind:
     times 26 db 0                     ; wave 3a: commands, every one
     times 33 db 0                     ; slice 3b: commands, every one
     times 6 db 0                      ; slice 3c: commands, every one
+    times 8 db 0                      ; wave 4a: text files, COMMANDS - a
+                                       ; repaint re-evaluating FWRITE would
+                                       ; write again; FREAD moves the position
 shm_mkind_end:
 
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
@@ -35287,6 +35299,14 @@ shm_mxnames:
     db 'SAVE.AS', 0
     db 'FORMULA.FILL', 0
     db 'DATA.SERIES', 0
+    db 'FOPEN', 0
+    db 'FCLOSE', 0
+    db 'FREAD', 0
+    db 'FREADLN', 0
+    db 'FWRITE', 0
+    db 'FWRITELN', 0
+    db 'FPOS', 0
+    db 'FSIZE', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35385,6 +35405,14 @@ shm_mxrpn:
     db 0x05, 1, 1                     ; SAVE.AS
     db 0x61, 1, 1                     ; FORMULA.FILL
     db 0x28, 1, 1                     ; DATA.SERIES
+    db 0x84, 1, 0                     ; FOPEN
+    db 0x85, 0, 0                     ; FCLOSE
+    db 0x88, 0, 0                     ; FREAD
+    db 0x87, 0, 0                     ; FREADLN
+    db 0x8A, 0, 0                     ; FWRITE
+    db 0x89, 0, 0                     ; FWRITELN
+    db 0x8B, 1, 0                     ; FPOS
+    db 0x86, 0, 0                     ; FSIZE
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -39943,6 +39971,435 @@ shm_mseries:
     jmp shm_mtrue
 .bad:
     jmp shm_merr
+
+; =============================================================================
+; TEXT FILES (macro plan wave 4, 81.91): FOPEN, FCLOSE, FREAD, FREADLN,
+; FWRITE, FWRITELN, FPOS, FSIZE.
+;
+; A CHANNEL IS THE WHOLE FILE, IN MEMORY. The file API is cluster-grained -
+; OSAPI_FILE_READ_AT's offset and OSAPI_FILE_APPEND's file size must each be
+; a cluster multiple - so reading line 3 or writing one byte cannot go to the
+; disk as it is asked for. FOPEN reads the file (OSAPI_FILE_READ, which also
+; expands a compressed one), every read and write works on the bytes in
+; memory, and FCLOSE writes the file back whole (OSAPI_FILE_WRITE) if it
+; changed.
+;
+; THE MEMORY IS THE TAIL OF THIS MODULE'S OWN CLAIM - between the end of
+; CHART.OVL's image and CH_OVKB KB - and not a claim of its own, for two
+; reasons that are both rules: SPEC.md 50.3 takes a package's claims in its
+; entry proc and nowhere else, and MEM_OWNER_MAX is eight claims an owner,
+; which SHEET already holds. So a file a macro opens is as big as its share of
+; that tail, and a larger one is #N/A.
+; =============================================================================
+SHM_FCH    equ 2                      ; channels open at once
+SHM_FREC   equ 24                     ; +0 name (13) +13 mode +14 dirty
+                                       ; +15 open +16 base (in THIS segment)
+                                       ; +18 size +20 position +22 capacity
+SHM_FTAIL  equ (shm_modend - sh_modc0) ; where the image ends, and the tail
+SHM_FEACH  equ ((CH_OVKB * 1024 - SHM_FTAIL) / SHM_FCH) & 0xFFF0
+shm_fch:   times SHM_FCH * SHM_FREC db 0
+
+; shm_fchan - the channel number argument at SI -> DI = its record. CF=1 not
+; a channel that is open (the caller answers #VALUE!)
+shm_fchan:
+    xor ax, ax
+    call shm_intarg1
+    jc .no
+    dec ax
+    cmp ax, SHM_FCH
+    jae .no
+    mov bx, SHM_FREC
+    mul bx
+    add ax, shm_fch
+    mov di, ax
+    cmp byte [cs:di+15], 0            ; not open
+    je .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; FOPEN(file_text[, access_num]) - 1 read and write, 2 read only, 3 a new
+; file (an existing one emptied). out: the channel number, 1..SHM_FCH, or
+; #N/A when the file is not there, is too big, or no channel is free
+shm_mfopen:
+    push si                           ; the name, for the second pass
+    SHOUT sh_pcmp
+    mov ax, 1
+    call shm_intarg
+    jc .badpop
+    dec ax
+    cmp ax, 3
+    jae .badpop
+    mov [cs:shm_acc8], al             ; 0 rw, 1 read, 2 create
+    mov di, si
+    pop si
+    push di
+    call shm_fname                    ; -> sh_delname, uppercased
+    jc .badpop
+    pop si
+    SHOUT sh_skipargs
+    push si
+    mov di, shm_fch                   ; a free channel
+    xor cx, cx
+.free:
+    cmp byte [cs:di+15], 0
+    je .got
+    add di, SHM_FREC
+    inc cx
+    cmp cx, SHM_FCH
+    jb .free
+    jmp .na
+.got:
+    mov [cs:shm_gcnt], cx             ; its index
+    push di
+    mov si, sh_delname                ; the name into the record
+.nm:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    or al, al
+    jnz .nm
+    pop di
+    mov al, [cs:shm_acc8]
+    mov [cs:di+13], al
+    mov byte [cs:di+14], 0
+    mov word [cs:di+20], 0
+    xor ax, ax                        ; its size: 0 new, else the directory's
+    cmp byte [cs:shm_acc8], 2
+    je .sized
+    call shm_fsize0                   ; AX = the size, CF=1 not there/too big
+    jc .na
+.sized:
+    mov [cs:di+18], ax
+    mov word [cs:di+22], SHM_FEACH    ; its share of the tail
+    cmp ax, SHM_FEACH
+    ja .na                            ; the file is bigger than that
+    mov ax, [cs:shm_gcnt]
+    mov bx, SHM_FEACH
+    mul bx
+    add ax, SHM_FTAIL
+    mov [cs:di+16], ax                ; its base
+    cmp byte [cs:shm_acc8], 2
+    je .opened
+    cmp word [cs:di+18], 0            ; an empty file has nothing to read
+    je .opened
+    push es                           ; the whole file, expanded if packed
+    push di
+    push cs
+    pop es
+    mov bx, [cs:di+16]
+    mov si, sh_delname
+    mov cx, SHM_FEACH
+    xor dx, dx
+    call OSAPI_FILE_READ
+    pop di
+    pop es
+    jc .na
+.opened:
+    mov byte [cs:di+15], 1            ; open
+    cmp byte [cs:shm_acc8], 2         ; a NEW file is marked changed, so
+    jne .num                          ; FCLOSE writes it even while empty
+    mov byte [cs:di+14], 1
+.num:
+    pop si
+    mov ax, [cs:shm_gcnt]
+    inc ax
+    jmp shm_anum
+.na:
+    pop si
+    jmp shm_ana
+.badpop:
+    pop si
+    jmp shm_refbad
+
+; shm_fsize0 - the size of the file named at [cs:DI] in this folder, from its
+; directory entry (the EXPANDED size, which is what OSAPI_FILE_READ delivers).
+; out: AX, CF=1 not there or 64 KB or more
+shm_fsize0:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov bx, di
+    xor cx, cx
+.l:
+    mov di, sh_clipbuf
+    call OSAPI_FILE_FIND
+    jc .no
+    cmp word [sh_clipbuf + 14], OSAPI_FT_DIR
+    jae .l                            ; a folder is not a file
+    mov si, sh_clipbuf
+    mov di, bx
+.c:
+    mov al, [si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 32
+.u:
+    cmp al, [cs:di]
+    jne .l
+    or al, al
+    jz .hit
+    inc si
+    inc di
+    jmp short .c
+.hit:
+    cmp word [sh_clipbuf + 20], 0     ; the size's high word: 64 KB or more
+    jne .no
+    mov ax, [sh_clipbuf + 18]
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; FCLOSE(channel) - written back if it changed, and the memory given back
+shm_mfclose:
+    call shm_fchan
+    jc .bad
+    SHOUT sh_skipargs
+    push si
+    cmp byte [cs:di+14], 0
+    je .free
+    call shm_fflush
+.free:
+    mov byte [cs:di+15], 0
+    pop si
+    jmp shm_mtrue
+.bad:
+    jmp shm_refbad
+
+; shm_fflush - the channel at DI written to its file, whole
+shm_fflush:
+    push es
+    push di
+    push cs
+    pop es
+    mov bx, [cs:di+16]
+    mov cx, [cs:di+18]
+    xor dx, dx
+    mov si, sh_delname                ; the name, into DS, for the call
+.nm:
+    mov al, [cs:di]
+    mov [si], al
+    inc si
+    inc di
+    or al, al
+    jnz .nm
+    mov si, sh_delname
+    call OSAPI_FILE_WRITE
+    pop di
+    pop es
+    mov byte [cs:di+14], 0
+    ret
+
+; FSIZE(channel) and FPOS(channel[, position]) - positions are 1-based, as
+; Excel's are: a new channel stands at 1
+shm_mfsize:
+    call shm_fchan
+    jc .bad
+    SHOUT sh_skipargs
+    mov ax, [cs:di+18]
+    jmp shm_anum
+.bad:
+    jmp shm_refbad
+shm_mfpos:
+    call shm_fchan
+    jc .bad
+    push di
+    mov ax, 0xFFFF                    ; omitted: only ask
+    call shm_intarg
+    pop di
+    jc .bad
+    cmp ax, 0xFFFF
+    je .ask
+    dec ax
+    cmp ax, [cs:di+18]                ; not past the end
+    ja .bad
+    mov [cs:di+20], ax
+.ask:
+    SHOUT sh_skipargs
+    mov ax, [cs:di+20]
+    inc ax
+    jmp shm_anum
+.bad:
+    jmp shm_refbad
+
+; FREAD(channel, num_chars) / FREADLN(channel) - text from the position on;
+; FREADLN to the end of the line, its CR LF (or LF) read and not answered.
+; At the end of the file, #N/A. A text value holds SH_STR_MAX
+shm_mfreadln:
+    mov byte [cs:shm_acc8], 1
+    call shm_fchan
+    jc .bad
+    mov ax, SH_STR_MAX
+    jmp short shm_fread
+.bad:
+    jmp shm_refbad
+shm_mfread:
+    mov byte [cs:shm_acc8], 0
+    call shm_fchan
+    jc .bad
+    push di
+    xor ax, ax
+    call shm_intarg
+    pop di
+    jc .bad
+    or ax, ax
+    jz .bad
+    jmp short shm_fread
+.bad:
+    jmp shm_refbad
+shm_fread:                            ; AX = the most to read, DI = channel
+    cmp ax, SH_STR_MAX
+    jbe .n
+    mov ax, SH_STR_MAX
+.n:
+    mov cx, ax
+    SHOUT sh_skipargs
+    mov bx, [cs:di+20]
+    cmp bx, [cs:di+18]
+    jae .eof
+    push si
+    push es
+    push cs
+    pop es
+    add bx, [cs:di+16]                ; the byte, in this segment
+    mov si, sh_sacc
+.c:
+    mov ax, bx
+    sub ax, [cs:di+16]
+    cmp ax, [cs:di+18]
+    jae .e
+    mov al, [es:bx]
+    cmp byte [cs:shm_acc8], 0
+    je .keep
+    cmp al, 13
+    je .eol
+    cmp al, 10
+    je .eol
+.keep:
+    mov [si], al
+    inc si
+    inc bx
+    loop .c
+    jmp short .e
+.eol:
+    inc bx                            ; the CR or LF itself...
+    cmp al, 13
+    jne .e
+    mov ax, bx
+    sub ax, [cs:di+16]
+    cmp ax, [cs:di+18]
+    jae .e
+    cmp byte [es:bx], 10              ; ...and the LF of a CR LF
+    jne .e
+    inc bx
+.e:
+    mov byte [si], 0
+    sub bx, [cs:di+16]                ; back to a position
+    mov [cs:di+20], bx
+    pop es
+    pop si
+    jmp shm_atext
+.eof:
+    jmp shm_ana
+
+; FWRITE(channel, text) / FWRITELN(channel, text) - the text at the position,
+; over what is there and on past the end; FWRITELN adds CR LF. out: the
+; characters written. A read-only channel, or one its claim cannot hold, is
+; refused
+shm_mfwriteln:
+    mov byte [cs:shm_acc8], 1
+    jmp short shm_fwrite
+shm_mfwrite:
+    mov byte [cs:shm_acc8], 0
+shm_fwrite:
+    call shm_fchan
+    jc .bad
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    push di
+    call shm_textfirst
+    pop di
+    jc .bad
+    cmp byte [cs:di+13], 1            ; read-only
+    je .bad
+    SHOUT sh_skipargs
+    push si
+    push es
+    push cs
+    pop es
+    mov bx, [cs:di+20]                ; a POSITION: shm_fput adds the base
+    mov si, sh_sacc
+    xor cx, cx
+.c:
+    mov al, [si]
+    or al, al
+    jz .text
+    call shm_fput
+    jc .full
+    inc si
+    inc cx
+    jmp short .c
+.text:
+    cmp byte [cs:shm_acc8], 0
+    je .done
+    mov al, 13
+    call shm_fput
+    jc .full
+    mov al, 10
+    call shm_fput
+    jc .full
+    add cx, 2
+.done:
+    mov [cs:di+20], bx
+    mov byte [cs:di+14], 1
+    pop es
+    pop si
+    mov ax, cx
+    jmp shm_anum
+.full:
+    pop es
+    pop si
+    jmp shm_ana
+.bad:
+    jmp shm_refbad
+
+; shm_fput - AL at ES:BX of the channel at DI, BX on, the size following it;
+; CF=1 past what the claim holds
+shm_fput:
+    cmp bx, [cs:di+22]                ; the channel's share of the tail
+    jae .full
+    push bx
+    add bx, [cs:di+16]
+    mov [es:bx], al
+    pop bx
+    inc bx
+    cmp bx, [cs:di+18]
+    jbe .ok
+    mov [cs:di+18], bx
+.ok:
+    clc
+    ret
+.full:
+    stc
+    ret
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
@@ -48728,6 +49185,12 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 %endif
 
 %include "os88chart.inc"
+; the module image's END (81.91): the LAST .modc fragment in source order,
+; so this is the byte after CHART.OVL's image - and the macro text files'
+; buffers are the claim's tail from here to CH_OVKB KB
+section .modc
+shm_modend:
+section .text
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives

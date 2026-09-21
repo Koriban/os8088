@@ -4926,6 +4926,13 @@ SOAK = [
         "writing the very file the answers are read from, and OPEN ending "
         "the run with the other document in the window",
         needs=("marty",), serial=True),
+    Row("sheetmfile", "soak", py("tests/sheetmfile.py"), 400.0,
+        "SPEC.md 81.91: macro text files - FOPEN/FREADLN/FREAD/FPOS/FSIZE over "
+        "a file the host wrote, a read-only channel refusing FWRITE, "
+        "FWRITELN/FWRITE and an FPOS overwrite checked as BYTES off the "
+        "volume, and #N/A for a missing file and for one bigger than a "
+        "channel's share of the module claim's tail",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

@@ -104478,6 +104478,60 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.91 Macro text files: FOPEN, FCLOSE, FREAD, FREADLN, FWRITE, FWRITELN, FPOS, FSIZE
+
+The first part of wave 4 of `docs/plans/SHEET-MACRO-PLAN.md`.
+
+- **FOPEN(file_text[, access])** answers a channel number. Access 1 is read
+  and write, 2 read only, 3 a new file (an existing one is emptied). A file
+  that is missing, or too big (§81.91.1), answers `#N/A`.
+- **FREADLN** reads to the end of the line and does not answer its CR LF (or
+  LF). **FREAD(ch, n)** reads exactly n characters. Past the end, both answer
+  `#N/A`. A text value holds `SH_STR_MAX`.
+- **FWRITE / FWRITELN** write at the position, over what is there and on
+  past the end, and answer the number of characters written; FWRITELN
+  counts its CR LF. A read-only channel refuses them.
+- **FPOS** is 1-based, as Excel's is, and can set the position anywhere up
+  to the end. **FSIZE** answers the file's bytes.
+- **All eight are commands, not values.** A repaint that re-evaluated FWRITE
+  would write again, and FREAD moves the position. So they act only when the
+  step engine runs them.
+
+#### 81.91.1 A channel is the whole file, in the tail of the module's claim
+
+**The file API is cluster-grained.** `OSAPI_FILE_READ_AT`'s offset and
+`OSAPI_FILE_APPEND`'s file size must each be a cluster multiple, so "line
+3" and "one byte" cannot go to the disk as they are asked for. Instead:
+
+1. FOPEN reads the whole file with `OSAPI_FILE_READ`, which also expands a
+   compressed one.
+2. Every read and write works on those bytes in memory.
+3. FCLOSE writes the file back whole with `OSAPI_FILE_WRITE`, if it
+   changed. A new file is always written, empty or not.
+
+**The memory is the tail of CHART.OVL's own claim,** the bytes between the
+module image's end (`shm_modend`, the last `.modc` fragment in source order)
+and `CH_OVKB` KB. It is not a claim of its own, and the gate found why
+twice:
+
+- **`MEM_OWNER_MAX` is 8 claims an owner, and SHEET already holds 8**
+  (cells, text, staging, border, note, chart, undo, CHART.OVL). The first
+  build's FOPEN claimed memory and was refused every time.
+- **§50.3 takes a package's claims in its entry proc and nowhere else.** A
+  claim at FOPEN broke that rule even when it succeeded.
+
+`CH_OVKB` is **63**, the most that `mov cx, CH_OVKB * 1024` can express.
+The tail is 6,299 bytes today, split between **two channels of 3,136
+bytes each**. **That is the size limit on a file a macro can open, and it
+shrinks by every byte the module grows**, so it is measured here and must
+be re-measured, never quoted. A channel left open when SHEET closes is not
+written. That is Excel's behaviour with an unsaved file too.
+
+**Resident +0, bss +0, `CHART.OVL` +950** (58,213 of 64,512).
+`tests/sheetmfile.py` has 16 checks. OUT.TXT's bytes are read off the
+volume, so what was written is checked, not what the macro was told. The
+limit is checked with a 5,000-byte file.
+
 ### 81.90 Command equivalents, slice 3c: File, FORMULA.FILL, DATA.SERIES; wave 3 closed
 
 Six more commands, which close wave 3: 65 of the plan's 68 are built.
