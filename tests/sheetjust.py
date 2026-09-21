@@ -3,8 +3,9 @@
 
     make && python3 tests/sheetjust.py
 
-Excel 2.1d's Reference Guide is specific about this command in ways "wrap a
-long label" is not, and each of those specifics is a check here:
+Excel 2.0's Reference Guide - the manual this tree holds; the 2.1d MENU comes
+from the reference captures instead (SPEC.md 81.81.1) - is specific about this
+command in ways "wrap a long label" is not, and each specific is a check:
 
   1. **The wrap itself**, to the width of the WHOLE selection and not of the
      left column. A1:C4 is three standard 7-character columns, so the line is

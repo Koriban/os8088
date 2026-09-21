@@ -104492,9 +104492,22 @@ below it shifted. It is worth saying because the command after this one —
 `Short Menus` — is the opposite case, and its whole cost is that the hidden
 items are interleaved.
 
+**The menu ORDER is from the 2.1d capture and the BEHAVIOUR from the manual**,
+and they are two sources on purpose. `menu_format_full.png` in the reference
+captures shows Number/Alignment/Font/Border/Cell Protection/Row Height/Column
+Width/Justify with Justify last, and `dialog_about.png` from that same session
+reads *Version 2.1d*. The Reference Guide this tree holds is **Version 2.0**
+(© 1987, "For IBM Personal System/2, IBM PC AT, and Compatibles").
+
+This section first cited that manual as "the 2.1d Reference Guide", and §81.57
+had the same wrong label four sections on. It changes no conclusion here — the
+capture independently confirms both the command and its position — but a
+citation nobody re-reads is exactly how a premise stops being checked, and the
+next reader would have gone looking for a 2.1d manual that is not held.
+
 #### 81.81.1 The contract is more specific than "wrap a long label"
 
-Read out of the 2.1d Reference Guide's *Format Justify command* entry rather
+Read out of **Excel 2.0's Reference Guide**, *Format Justify command*, rather
 than guessed, because four of its five clauses are things a reasonable
 implementation gets wrong:
 
@@ -105027,8 +105040,9 @@ bytes short of its claim, so the next file-format work raises `CH_OVKB`.
 
 **Every entry and every command was final.** The Edit menu opened on
 "Can't Undo", greyed, and meant it — §81.39 listed "an undo record" among the
-enablers still to build. Excel 2.1's own, from its Reference Guide (Edit Undo
-command): **one level** — "the last command you chose or the last cell entry
+enablers still to build. Excel's own, from the **2.0** Reference Guide (Edit
+Undo command) — the manual this tree actually holds; §81.81.1 is why that
+label is worth getting right: **one level** — "the last command you chose or the last cell entry
 you typed" — covering a typed entry, every command on the Edit menu and Data
 Sort; the menu names the action ("Undo Paste"), and once undone offers
 **Redo**. Formats, names and notes it cannot reverse.
