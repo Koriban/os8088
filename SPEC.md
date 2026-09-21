@@ -104478,6 +104478,101 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.84 Subroutines, ARGUMENT and RETURN(value)
+
+The first wave of `docs/plans/SHEET-MACRO-PLAN.md` that adds functions, and
+the one the gap plan called "the one that makes the rest worth having".
+Excel's form, from *Functions and Macros* ("Subroutines:"): **`ref(arg1, …)`**
+— a reference or a defined name followed by parentheses, inside a running
+macro, branches to that cell; **`ARGUMENT`** names the passed values in the
+order it executes; **`RETURN(value)`** comes back with the call's answer.
+
+**Resident +165 bytes** (four messages and the call path); **`CHART.OVL`
++2,443**, about 1 KB of it the frame state below; `CH_OVKB` 46 → **50**, two
+ahead of need on purpose — the plan has ~8 KB still to come and the module is
+one segment, so 64 KB is a wall rather than a setting.
+
+#### 81.84.1 The answer comes back by evaluating the caller again
+
+This is **INPUT's mechanism** (§81.63) and it is here for INPUT's reason. The
+engine runs a step, returns to the kernel and resumes; a subroutine that asks
+the user something pauses *in the middle of the calling formula*, and there
+is no way to suspend an 8086 call stack halfway through an evaluation.
+
+So the call site answers `FALSE` on the first pass and asks for a frame; the
+engine pushes one and runs the subroutine as ordinary steps — loops, `ALERT`
+and `INPUT` included; `RETURN` pops it and sends the engine back to the
+**calling cell**, whose call site now answers `RETURN`'s value. The cost is
+INPUT's too, and stated rather than hidden: **whatever the calling formula
+does before the call happens twice, and so there is ONE call to a cell.**
+`=IF(c, A(), B())` is one call — IF parses the branch it does not take
+without running anything in it.
+
+`HALT` ends the run whatever the depth; `RETURN` with no frame ends it as it
+always did. `RETURN()` with no value answers `TRUE`, as a macro command that
+did its job does — the manual leaves it unspecified.
+
+#### 81.84.2 A pending call outranks every other control — found by review
+
+`RETURN(SQ(v)+1)` sets **two** controls in one step: `SQ`'s call, and then
+`RETURN`'s own over it — and with a single control byte the call was simply
+lost and `RETURN` handed back `FALSE+1`. It was found designing the gate,
+before any code ran.
+
+The call is a **flag** now (`shm_cpend`), and in the engine it outranks
+everything but `STOP`. That is safe for a reason worth stating: every other
+control in the step belongs to the calling cell, which is evaluated again
+after the subroutine returns, and that is when `RETURN`, `GOTO` or a loop's
+control happens — with the call answered. The gate's H5 is this case, and
+letting `RETURN` outrank the call fails exactly it and nothing else.
+
+#### 81.84.3 A name here is a place, so ARGUMENT binds a CELL
+
+§81.29's names bind rectangles, not values, which is the design problem
+`ARGUMENT` poses. With a `ref`, the value is written there and the name bound
+to it — exactly Excel. **Without one, the name is bound to the ARGUMENT cell
+itself**, and `ARGUMENT` is a *value* function (`shm_mkind`): reading `x`
+anywhere evaluates that cell, which answers what `x` is bound to in the
+running subroutine. Only the step engine *binds*; any other evaluation — a
+repaint, a reference to `x` — answers the binding and consumes nothing.
+
+**And the binding moves `sh_pass`**, which the gate found. `sh_eval_cell`
+answers a cell computed in the current pass from its cache, and the ARGUMENT
+cell had been computed — by a repaint, with nothing bound — so every read of
+`x` got the fixture's cached 0. A binding changes what a cell *means*; so
+does a frame's bindings going on `RETURN`; both bump the pass, which is
+Calculate Now's own invalidation (§81.78).
+
+`ARGUMENT`'s `type` is **accepted and not enforced**. `RESULT(type)` is
+enforced, against Excel's bits (1 number, 2 text, 4 logical, 16 error); the
+reference and array bits always pass, since by the time this app returns one
+it is a value.
+
+#### 81.84.4 Where it lives
+
+A defined name followed by `(` reaches `sh_pfunc`'s call path, where it used
+to be `#NAME?`; there it becomes `SH_FID_MCALL`, extension function 0, whose
+name is the byte 1 so no formula can spell it. Outside the step engine it is
+inert and `FALSE`, like every macro command (§81.63).
+
+The state is **the module's own**, addressed through `CS`: four frames
+(`SH_MSUBS`), fourteen arguments to a call (Excel's own limit), 24 banked
+values and 384 bytes of their text across every frame at once, sixteen
+bindings. `CHART.OVL` is loaded once and kept (`ch_ovneed`), so it lives as
+long as a run; the run start clears it, since a `HALT` or an error mid-call
+leaves it dirty. Overflowing any of it stops the run with a message rather
+than corrupting a frame.
+
+**BIFF cannot carry the call yet** — Excel writes one as a name reference and
+the user-function index 255, which is wave 5's reader and writer. SYLK keeps
+it as text, as it always kept macros. `ARGUMENT` and `RESULT` themselves are
+Ftab `0x51` and `0x60`, and `tools/os88sheetfmt.py --selfcheck` now holds the
+module's extension table to the document the way it holds the resident one —
+index, table and arity, each proven to fail when broken.
+
+`tests/sheetmsub.py` is the gate, six checks.
+
+
 ### 81.83 A macro cell's FORMULA survives a Normal save
 
 Every one of §81.63's twenty macro functions was `0xFF` in `sh_rpn_fid`, so a

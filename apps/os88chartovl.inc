@@ -32,7 +32,7 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 46                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 50                 ; the claim CHART.OVL is read into, KB.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
                                     ; took it to 13,485 bytes; 82.16.10's
@@ -53,7 +53,12 @@ CH_OVKB      equ 46                 ; the claim CHART.OVL is read into, KB.
                                     ; - taken for the SAME reason as the step
                                     ; below, 59 bytes being no more a margin
                                     ; than one was; and 81.82's Data > Parse
-                                    ; 45,896, so 46. THAT
+                                    ; 45,896, so 46; and the macro plan's
+                                    ; wave 1 (SHEET-MACRO-PLAN, subroutines
+                                    ; and their ~1 KB of frame state) 48,553,
+                                    ; so 50 - two ahead ON PURPOSE, the plan
+                                    ; having ~8 KB still to come, and 64 the
+                                    ; wall: the module is ONE segment. THAT
                                     ; LAST STEP WAS TAKEN FOR ONE BYTE, and
                                     ; deliberately: 43 still built, with a
                                     ; single byte spare, and a margin of one

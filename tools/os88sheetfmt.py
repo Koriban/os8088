@@ -98,6 +98,11 @@ BIFF_MACRO_FUNCS = {
     0xAC: ('WHILE'      , (1, 1)  , (1, 1)),
     0xAD: ('BREAK'      , (0, 0)  , (0, 0)),
     0xAE: ('NEXT'       , (0, 0)  , (0, 0)),
+    # SHEET-MACRO-PLAN wave 1: the EXTENSION functions, whose names live in
+    # CHART.OVL (shm_mxnames). Arities from the Excel 2.0 manual's own
+    # signatures - ARGUMENT(name_text,data_type_num,ref), RESULT(type_number)
+    0x51: ('ARGUMENT'   , (1, 3)  , (1, 3)),
+    0x60: ('RESULT'     , (0, 1)  , (0, 1)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its
@@ -1022,6 +1027,55 @@ def _sheet_tables(path='apps/sheet/sheet.asm'):
             for i, nm in enumerate(order)]
 
 
+def _ext_tables(path='apps/sheet/sheet.asm'):
+    """SHEET-MACRO-PLAN wave 0's EXTENSION macro functions, out of the module
+    source: [(name, fid, fvar, isce)] in shm_mxnames' order. The first entry is
+    the subroutine CALL, whose name is the byte 1 so no formula can spell it."""
+    import re
+    src = open(path).read()
+    nm = re.search(r'^shm_mxnames:\n(.*?)\n\s+db 0\n', src, re.M | re.S)
+    names = []
+    for line in nm.group(1).split('\n'):
+        code = line.split(';')[0]
+        q = re.search(r"'([A-Z0-9.]+)'", code)
+        if q:
+            names.append(q.group(1))
+        elif re.match(r'\s*db\s+1\s*,\s*0', code):
+            names.append('\x01')
+    rp = re.search(r'^shm_mxrpn:\n(.*?)^shm_mxrpn_end:', src, re.M | re.S)
+    nums = []
+    for line in rp.group(1).split('\n'):
+        code = line.split(';')[0].replace('db', '')
+        nums += [int(x, 0) for x in re.findall(r'0x[0-9A-Fa-f]+|\b\d+\b', code)]
+    rows = [tuple(nums[i:i + 3]) for i in range(0, len(nums), 3)]
+    if len(rows) != len(names):
+        raise ValueError('shm_mxnames has %d names and shm_mxrpn %d rows'
+                         % (len(names), len(rows)))
+    return [(n,) + r for n, r in zip(names, rows)]
+
+
+def _check_ext(bad):
+    """Every EXTENSION function against the document: its index in the table
+    its ptg says, and variable-arity where that table's arity is a range."""
+    for nm, fid, fvar, isce in _ext_tables():
+        if fid == 0xFF:                 # the CALL, and anything not writable yet
+            continue
+        if isce:
+            if BIFF_CETAB.get(fid) != nm:
+                bad.append('shm_mxrpn: %s is Cetab index %d, which is %s'
+                           % (nm, fid, BIFF_CETAB.get(fid) or 'no command'))
+            continue
+        ent = BIFF_MACRO_FUNCS.get(fid) or BIFF_FUNCS.get(fid)
+        if ent is None or ent[0] != nm:
+            bad.append('shm_mxrpn: %s is Ftab index %d, which is %s'
+                       % (nm, fid, ent[0] if ent else 'no function'))
+            continue
+        mn, mx = ent[2]
+        if bool(fvar) != (mn != mx):
+            bad.append('shm_mxrpn: %s is %s, but it takes %d-%d arguments'
+                       % (nm, 'variable' if fvar else 'fixed', mn, mx))
+
+
 # SHEET writes one table for BIFF3 and BIFF4 both, so a function whose arity
 # changed between them cannot be right for both. The only one it has: FIXED is
 # 2/2 in BIFF3 and 2-3 from BIFF4, and SHEET writes it as tFuncVar - right for
@@ -1148,6 +1202,7 @@ def _selfcheck():
                            % (third, want))
     _check_rpn(bad, book if not isinstance(book, list) or book else [])
     nfun = _check_functab(bad)
+    _check_ext(bad)                     # SHEET-MACRO-PLAN: the module's own
     if bad:
         for b in bad:
             print('os88sheetfmt: %s' % b)

@@ -4872,6 +4872,16 @@ SOAK = [
         "an error constant survives Fill Right, Copy/Paste and typing, "
         "which stored 0, pasted 0 and made a label",
         needs=("marty",), serial=True),
+    Row("sheetmsub", "soak", py("tests/sheetmsub.py"), 400.0,
+        "SPEC.md 81.84: subroutines - a defined name called like a function "
+        "runs from that cell, ARGUMENT binds in the order it EXECUTES, and "
+        "RETURN's value comes back by evaluating the calling cell a second "
+        "time (INPUT's mechanism). Five shapes: a call inside an expression, "
+        "two arguments whose order is visible, a whole-statement call, a TEXT "
+        "answer, and a call inside another subroutine's RETURN - which the "
+        "design review caught losing the call until a pending call outranked "
+        "every other control in the step",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

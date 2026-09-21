@@ -29265,7 +29265,22 @@ sh_pfunc:
     cmp ax, 0xFF                      ; macro plan wave 0: not resident - then
     jne .knownfn                      ; ask CHART.OVL, where every macro
     call sh_mfind_r                   ; function after the first twenty lives
-.knownfn:
+    cmp ax, 0xFF
+    jne .knownfn
+    push bx                           ; ...and a DEFINED NAME called like a
+    push cx                           ; function is a SUBROUTINE (Excel's
+    push dx                           ; `ref(arg1, ...)`, macro plan wave 1).
+    push si                           ; DX is this routine's result and must
+    mov si, sh_ident                  ; still be 0 on the #NAME? path, which
+    call sh_name_lookup               ; is why all three are banked
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    mov ax, 0xFF
+    jnc .knownfn
+    mov ax, SH_FID_MCALL              ; a macro COMMAND like any other: inert,
+.knownfn:                             ; and FALSE, outside the step engine
     mov [sh_pfid], ax
     cmp ax, 0xFF                      ; ...and so is a CALL to a function this
     je .noname                        ; app does not have. Reading either as a
@@ -34731,12 +34746,24 @@ SH_MF_ACTCELL  equ 14                ; ...and ACTIVE.CELL's, counted from it
 ; 117 names at the twenty's price would have spent all of them.
 SH_FID_MX      equ 0x100              ; the first extension id
 SH_MF_N        equ 20                 ; the resident twenty, counted in shm_mtab
+SH_FID_MCALL   equ SH_FID_MX + 0      ; the subroutine CALL - extension 0, with
+                                     ; a name no formula can spell (below)
+SH_MSUBS       equ 4                  ; subroutine frames, nested
+SH_MARGS       equ 14                 ; arguments to one call - Excel's limit
+SH_MSLOTS      equ 24                 ; argument values, all frames at once
+SH_MPOOL       equ 384                ; ...and their text
+SH_MBINDS      equ 16                 ; ARGUMENT's names, all frames at once
+SH_MVAL        equ 12                 ; a banked value: type, err, aux, acc
+SH_MFRAME      equ 12                 ; a frame (shm_cpush has the layout)
+SH_MBREC       equ 14                 ; a binding: the name (13), its slot
 SH_MC_NONE     equ 0                 ; what a step asked for (sh_macro_ctl):
 SH_MC_GOTO     equ 1                 ; the next cell is [sh_macro_ncol/nrow]
 SH_MC_STOP     equ 2                 ; RETURN, HALT, or a macro error
 SH_MC_PAUSEN   equ 3                 ; ALERT: wait, then the next cell
 SH_MC_PAUSEH   equ 4                 ; INPUT: wait, then THIS cell again
 SH_MC_SKIP     equ 5                 ; on past the NEXT of the loop at ncol/nrow
+SH_MC_RET      equ 7                 ; ...RETURN from one: pop it, and evaluate
+                                     ; the CALLING cell again for its answer
 SH_MW_START    equ 1                 ; what a resume means (sh_macro_wait)
 SH_MW_ALERT    equ 2
 SH_MW_INPUT    equ 3
@@ -34756,6 +34783,10 @@ sh_s_macrodone:  db 'Macro done', 0
 sh_s_macroerr:   db 'Err: macro', 0
 sh_s_macronext:  db 'Err: FOR or WHILE with no NEXT', 0
 sh_s_macrobusy:  db 'A macro is running', 0
+sh_s_mdeep:      db 'Err: subroutines nested too deep', 0
+sh_s_mtwice:     db 'Err: one subroutine call to a cell', 0
+sh_s_mfull:      db 'Err: too many subroutine arguments', 0
+sh_s_marg:       db 'Err: ARGUMENT outside a subroutine', 0
 
 ; sh_macro_run - Macro > Run...: WHERE to start, a reference or a defined
 ; name, as Excel's Run dialog asks. It started at the selected cell because
@@ -34927,10 +34958,11 @@ shm_pmacro:
     ret
 
 shm_mtab:
-    dw shm_mgoto, shm_mreturn, shm_mreturn, shm_msetval, shm_mselect
+    dw shm_mgoto, shm_mreturn, shm_mhalt, shm_msetval, shm_mselect
     dw shm_mformula, shm_malert, shm_mmessage, shm_mbeep, shm_minput
     dw shm_mfor, shm_mwhile, shm_mnext, shm_mbreak, shm_mactcell
     dw shm_mcopy, shm_mcut, shm_mpaste, shm_mclear, shm_mcalc
+    dw shm_mcall, shm_margument, shm_mresult          ; wave 1a
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -34942,15 +34974,24 @@ SHM_MX_N equ (shm_mtab_end - shm_mtab) / 2 - SH_MF_N
 shm_mkind:
     db 0, 0, 0, 0, 0,  0, 0, 0, 0, 0  ; GOTO .. INPUT
     db 0, 0, 0, 0, 1,  0, 0, 0, 0, 0  ; FOR .. ACTIVE.CELL .. CALCULATE.NOW
+    db 0, 1, 0                        ; CALL, ARGUMENT (a VALUE: it answers
+                                       ; wherever x is read), RESULT
 shm_mkind_end:
 
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
 shm_mxnames:
+    db 1, 0                           ; the CALL: a name sh_ident can never
+                                       ; hold, so shm_mfind cannot return it
+    db 'ARGUMENT', 0
+    db 'RESULT', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
 ; Cetab COMMAND (ptg 0x58) rather than an Ftab function (81.83.2).
 shm_mxrpn:
+    db 0xFF, 1, 0                     ; the CALL: no BIFF form yet (wave 5)
+    db 0x51, 1, 0                     ; ARGUMENT(name[,type[,ref]]) - Ftab
+    db 0x60, 1, 0                     ; RESULT([type]) - Ftab
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -34958,6 +34999,621 @@ shm_mxrpn_end:
     times ((SH_MF_N + SHM_MX_N) - (shm_mkind_end - shm_mkind)) db 0
     times ((shm_mxrpn_end - shm_mxrpn) - 3 * SHM_MX_N) db 0
     times (3 * SHM_MX_N - (shm_mxrpn_end - shm_mxrpn)) db 0
+
+; =============================================================================
+; SUBROUTINES (macro plan wave 1). Excel's `ref(arg1, ...)`: a defined name
+; called like a function branches to that cell and runs from there, and its
+; RETURN(value) is the call's answer.
+;
+; THE ANSWER COMES BACK BY EVALUATING THE CALLING CELL AGAIN - which is INPUT's
+; mechanism, and for INPUT's reason. The engine runs a step, returns to the
+; kernel, and resumes; a subroutine that asks the user something PAUSES in the
+; middle of the caller's formula, and there is no way to suspend an 8086 call
+; stack halfway through an evaluation. So the call site answers FALSE, the
+; engine pushes a frame and runs the subroutine as ordinary steps - loops,
+; ALERT and INPUT included - and RETURN pops it and sends the engine back to
+; the caller, whose call site now answers RETURN's value. The cost is INPUT's
+; too: what the calling formula does BEFORE the call happens twice, and so ONE
+; call to a cell. `=IF(c, A(), B())` is one: IF parses the branch it does not
+; take without running what is in it (81.63).
+;
+; ALL OF THIS STATE IS THE MODULE'S OWN, addressed through CS. APP_MAX_SIZE
+; left 2,475 resident bytes and this is ~1 KB; CHART.OVL is loaded once and
+; kept (ch_ovneed), so it lives as long as a run does. Every access names CS
+; (os88ovlchk's rule for module data).
+; =============================================================================
+shm_csp:    db 0                      ; frames in use
+shm_ccount: db 0                      ; calls started by THIS step (one)
+shm_cpend:  db 0                      ; ...and one is waiting for a frame.
+                                       ; A FLAG, not a value of sh_macro_ctl:
+                                       ; `RETURN(SQ(v)+1)` sets the call and
+                                       ; then RETURN's own control over it, and
+                                       ; the call was lost
+shm_cans:   db 0                      ; the caller's second pass has an answer
+shm_cnargs: db 0                      ; the pending call's argument count
+shm_sused:  db 0                      ; argument slots committed to frames
+shm_bused:  db 0                      ; bindings committed to frames
+shm_ctcol:  dw 0                      ; the pending call's target
+shm_ctrow:  dw 0
+shm_pused:  dw 0                      ; pool bytes committed to frames
+shm_ptent:  dw 0                      ; ...and the pending call's end of them
+shm_arcol:  dw 0                      ; ARGUMENT's ref, when it has one
+shm_arrow:  dw 0
+shm_ahref:  db 0
+shm_amask:  db 0                      ; ARGUMENT's type, 0 = any
+shm_aname:  times SH_NAME_MAX + 1 db 0
+; A FRAME: +0 the caller's col, +2 row, +4 its loop depth, +5 its first
+; argument slot, +6 how many, +7 how many ARGUMENTs have bound, +8 its first
+; pool byte, +10 its first binding, +11 RESULT's type (0 = any)
+shm_cstk:   times SH_MSUBS * SH_MFRAME db 0
+; A VALUE: +0 SH_T_*, +1 its evaluation error, +2 sh_curaux, +4 sh_acc's eight
+; bytes - or, for TEXT, the CS offset of its characters in the pool
+shm_slots:  times SH_MSLOTS * SH_MVAL db 0
+shm_pool:   times SH_MPOOL db 0
+shm_binds:  times SH_MBINDS * SH_MBREC db 0
+shm_ans:    times SH_MVAL db 0        ; RETURN's value, for the second pass
+shm_anstxt: times SH_STR_MAX + 1 db 0
+
+; shm_x12 / shm_x14 - AX = AX * 12 / * 14
+shm_x12:
+    push bx
+    mov bx, ax
+    shl ax, 1
+    add ax, bx
+    shl ax, 1
+    shl ax, 1
+    pop bx
+    ret
+shm_x14:
+    push bx
+    mov bx, ax
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    sub ax, bx
+    sub ax, bx
+    pop bx
+    ret
+
+; shm_ctop - DI = the top frame. Only when [shm_csp] is not 0.
+shm_ctop:
+    push ax
+    mov al, [cs:shm_csp]
+    dec al
+    xor ah, ah
+    call shm_x12
+    add ax, shm_cstk
+    mov di, ax
+    pop ax
+    ret
+
+; shm_vput - bank the value the evaluator just produced into the slot at
+; [cs:di]; a TEXT value's characters go to [cs:bx]. out: CX = text bytes used
+; (with the NUL), 0 for any other value. Preserves the rest.
+shm_vput:
+    push ax
+    push si
+    push di
+    mov al, [sh_curtype]
+    mov [cs:di], al
+    mov al, [sh_evalerr]
+    mov [cs:di+1], al
+    mov ax, [sh_curaux]
+    mov [cs:di+2], ax
+    mov si, sh_acc
+    add di, 4
+    mov cx, 8
+.acc:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .acc
+    sub di, 12
+    cmp byte [cs:di], SH_T_TEXT
+    jne .out
+    mov [cs:di+4], bx
+    mov si, sh_sacc
+.text:
+    mov al, [si]
+    mov [cs:bx], al
+    inc si
+    inc bx
+    inc cx
+    or al, al
+    jnz .text
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; shm_vget - the value in the slot at [cs:di] back into the evaluator, as the
+; answer of whatever is being evaluated. An error is RAISED, never cleared:
+; sh_evalerr is sticky for the whole evaluation and a clean argument must not
+; wipe out an error something else in the formula already hit.
+shm_vget:
+    push ax
+    push cx
+    push si
+    push di
+    cmp byte [cs:di], SH_T_TEXT
+    je .text
+    mov si, di
+    add si, 4
+    push di
+    mov di, sh_acc
+    mov cx, 8
+.acc:
+    mov al, [cs:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .acc
+    pop di
+    jmp short .tag
+.text:
+    mov si, [cs:di+4]
+    push di
+    mov di, sh_sacc
+.tc:
+    mov al, [cs:si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .tc
+    xor ax, ax                        ; a text value's number is 0, as INPUT's
+    SHOUT sh_acc_int
+    pop di
+.tag:                                 ; the tag LAST: sh_acc_int sets its own
+    mov al, [cs:di]
+    mov [sh_curtype], al
+    mov ax, [cs:di+2]
+    mov [sh_curaux], ax
+    mov al, [cs:di+1]
+    or al, al
+    jz .out
+    mov [sh_evalerr], al
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; shm_mcall - the call site: a defined name followed by '(' (sh_pfunc routes
+; it here as SH_FID_MCALL). The FIRST pass banks the arguments and asks the
+; engine for a frame; the SECOND, after RETURN, answers what came back.
+shm_mcall:
+    cmp byte [cs:shm_cans], 0
+    je .call
+    mov byte [cs:shm_cans], 0
+    SHOUT sh_skipargs                 ; they were evaluated on the first pass
+    mov di, shm_ans
+    jmp shm_vget
+.call:
+    inc byte [cs:shm_ccount]
+    cmp byte [cs:shm_ccount], 1
+    jne .twice
+    push si                           ; the TARGET before any argument: an
+    mov si, sh_ident                  ; argument's own evaluation overwrites
+    SHOUT sh_name_lookup              ; sh_ident
+    pop si
+    jnc .bad
+    mov [cs:shm_ctcol], ax
+    mov [cs:shm_ctrow], bx
+    mov byte [cs:shm_cnargs], 0
+    mov ax, [cs:shm_pused]
+    mov [cs:shm_ptent], ax
+    cmp byte [si], ')'
+    je .args
+.arg:
+    mov al, [cs:shm_cnargs]
+    cmp al, SH_MARGS
+    jae .full
+    add al, [cs:shm_sused]
+    cmp al, SH_MSLOTS
+    jae .full
+    mov bx, [cs:shm_ptent]
+    add bx, SH_STR_MAX + 1            ; room for the longest text there is
+    cmp bx, SH_MPOOL
+    ja .full
+    SHOUT sh_pcmp
+    mov al, [cs:shm_sused]
+    add al, [cs:shm_cnargs]
+    xor ah, ah
+    call shm_x12
+    add ax, shm_slots
+    mov di, ax
+    mov bx, [cs:shm_ptent]
+    add bx, shm_pool
+    call shm_vput
+    add [cs:shm_ptent], cx
+    mov byte [sh_evalerr], 0          ; an argument's error is ITS value, and
+    inc byte [cs:shm_cnargs]          ; does not make the calling cell one
+    cmp byte [si], ','
+    jne .args
+    inc si
+    jmp .arg
+.args:
+    SHOUT sh_skipargs
+    mov byte [cs:shm_cpend], 1
+    jmp shm_mfalse
+.twice:
+    mov word [sh_msg], sh_s_mtwice
+    jmp short .stop
+.full:
+    mov word [sh_msg], sh_s_mfull
+.stop:
+    mov byte [sh_macro_ctl], SH_MC_STOP
+    SHOUT sh_skipargs
+    jmp shm_mfalse
+.bad:
+    jmp shm_merr
+
+; shm_cpush - the engine, after a step asked for SH_MC_CALL: a frame for the
+; caller, and the pending call's arguments committed to it. CF=1 too deep.
+shm_cpush:
+    push ax
+    push di
+    cmp byte [cs:shm_csp], SH_MSUBS
+    jae .deep
+    inc byte [cs:shm_csp]
+    call shm_ctop
+    mov ax, [sh_macro_col]
+    mov [cs:di], ax
+    mov ax, [sh_macro_row]
+    mov [cs:di+2], ax
+    mov al, [sh_macro_lsp]
+    mov [cs:di+4], al
+    mov al, [cs:shm_sused]
+    mov [cs:di+5], al
+    mov al, [cs:shm_cnargs]
+    mov [cs:di+6], al
+    add [cs:shm_sused], al
+    mov byte [cs:di+7], 0
+    mov ax, [cs:shm_pused]
+    mov [cs:di+8], ax
+    mov ax, [cs:shm_ptent]
+    mov [cs:shm_pused], ax
+    mov al, [cs:shm_bused]
+    mov [cs:di+10], al
+    mov byte [cs:di+11], 0
+    clc
+    jmp short .out
+.deep:
+    stc
+.out:
+    pop di
+    pop ax
+    ret
+
+; shm_cpop - RETURN: back to the calling cell, with the subroutine's loops,
+; arguments, text and bindings all given back
+shm_cpop:
+    push ax
+    push di
+    call shm_ctop
+    mov ax, [cs:di]
+    mov [sh_macro_col], ax
+    mov ax, [cs:di+2]
+    mov [sh_macro_row], ax
+    mov al, [cs:di+4]
+    mov [sh_macro_lsp], al
+    mov al, [cs:di+5]
+    mov [cs:shm_sused], al
+    mov ax, [cs:di+8]
+    mov [cs:shm_pused], ax
+    mov al, [cs:di+10]
+    mov [cs:shm_bused], al
+    dec byte [cs:shm_csp]
+    inc word [sh_pass]                ; ...and so does its bindings going
+    pop di
+    pop ax
+    ret
+
+; shm_tbit - AL = the SH_T_* just evaluated (an evaluation error counts as
+; the error it is) -> AL = Excel's type bit: 1 number, 2 text, 4 logical,
+; 16 error. A blank is the number 0 it evaluates as.
+shm_tbit:
+    cmp byte [sh_evalerr], 0
+    jne .e
+    cmp al, SH_T_TEXT
+    je .t
+    cmp al, SH_T_BOOL
+    je .b
+    cmp al, SH_T_ERR
+    je .e
+    mov al, 1
+    ret
+.t:
+    mov al, 2
+    ret
+.b:
+    mov al, 4
+    ret
+.e:
+    mov al, 16
+    ret
+
+; shm_rtype - the value RETURN is about to hand back, against the type the
+; subroutine declared with RESULT: #VALUE! if it is not one of them
+shm_rtype:
+    push ax
+    push di
+    call shm_ctop
+    mov ah, [cs:di+11]
+    or ah, ah
+    jz .ok
+    mov al, [sh_curtype]
+    call shm_tbit
+    test al, ah
+    jnz .ok
+    mov byte [sh_evalerr], SH_ERR_VALUE
+.ok:
+    pop di
+    pop ax
+    ret
+
+; RESULT([type]) - the types this subroutine may RETURN, Excel's sum of 1
+; number, 2 text, 4 logical, 8 reference, 16 error, 64 array. Omitted, 7.
+shm_mresult:
+    mov ax, 7
+    cmp byte [si], ')'
+    je .have
+    SHOUT sh_pcmp
+    SHOUT sh_acc_toint
+    jnc .have
+    mov ax, 7
+.have:
+    push ax                           ; sh_skipargs walks the text in AL
+    SHOUT sh_skipargs
+    pop ax
+    cmp byte [cs:shm_csp], 0
+    je .out                           ; not in a subroutine: nothing to type
+    call shm_ctop
+    or al, 8 + 64                     ; a reference or an array is a VALUE by
+    mov [cs:di+11], al                ; the time this app returns one
+.out:
+    jmp shm_mtrue
+
+; shm_bfind - is shm_aname bound in the TOP frame? CF=1 AL = its slot (0xFF:
+; declared, but the caller passed fewer). in DI = the frame.
+shm_bfind:
+    push bx
+    push si
+    push di
+    mov bl, [cs:di+10]
+.rec:
+    cmp bl, [cs:shm_bused]
+    jae .no
+    mov al, bl
+    xor ah, ah
+    call shm_x14
+    add ax, shm_binds
+    mov si, ax
+    mov di, shm_aname
+.cmp:
+    mov al, [cs:si]
+    cmp al, [cs:di]
+    jne .next
+    or al, al
+    jz .yes
+    inc si
+    inc di
+    jmp short .cmp
+.next:
+    inc bl
+    jmp short .rec
+.yes:
+    mov al, bl
+    xor ah, ah
+    call shm_x14
+    add ax, shm_binds
+    mov si, ax
+    mov al, [cs:si + SH_NAME_MAX + 1]
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop bx
+    ret
+
+; shm_aslot - AL = a slot index, 0xFF for #N/A -> that value as the answer
+shm_aslot:
+    cmp al, 0xFF
+    je .na
+    xor ah, ah
+    call shm_x12
+    add ax, shm_slots
+    mov di, ax
+    jmp shm_vget
+.na:
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_ERR
+    mov word [sh_curaux], SH_ERR_NA
+    mov byte [sh_evalerr], SH_ERR_NA
+    ret
+
+; ARGUMENT(name_text[, type[, ref]]) - names the NEXT argument the caller
+; passed, in the order ARGUMENTs execute, as Excel binds them.
+;
+; A NAME HERE IS A PLACE, NOT A VALUE (81.29), which is the whole design
+; problem. With a `ref`, the value is written there and the name bound to it,
+; exactly as Excel does. Without one, the name is bound to THIS CELL, and this
+; function is a VALUE function (shm_mkind): reading `x` anywhere evaluates
+; this cell, which answers what `x` was bound to in the running subroutine.
+; Only the STEP ENGINE binds - an evaluation at any other depth, a repaint or
+; a reference to `x`, answers the binding and consumes nothing.
+shm_margument:
+    SHOUT sh_pcmp
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .bad
+    push si                           ; the name, uppercased into the module
+    mov si, sh_sacc
+    mov di, shm_aname
+    xor cx, cx
+.nc:
+    mov al, [si]
+    or al, al
+    jz .nd
+    cmp al, 'a'
+    jb .up
+    cmp al, 'z'
+    ja .up
+    sub al, 32
+.up:
+    mov [cs:di], al
+    inc si
+    inc di
+    inc cx
+    cmp cx, SH_NAME_MAX
+    jb .nc
+.nd:
+    mov byte [cs:di], 0
+    pop si
+    mov byte [sh_evalerr], 0
+    mov byte [cs:shm_ahref], 0
+    mov byte [cs:shm_amask], 0
+    cmp byte [si], ','
+    jne .parsed
+    inc si
+    cmp byte [si], ','                ; ARGUMENT("x",,C5): no type given
+    je .ref
+    cmp byte [si], ')'
+    je .parsed
+    SHOUT sh_pcmp
+    SHOUT sh_acc_toint
+    jc .ref
+    mov [cs:shm_amask], al
+.ref:
+    cmp byte [si], ','
+    jne .parsed
+    inc si
+    call shm_mref
+    jnc .bad
+    mov [cs:shm_arcol], ax
+    mov [cs:shm_arrow], bx
+    mov byte [cs:shm_ahref], 1
+.parsed:
+    SHOUT sh_skipargs
+    cmp byte [cs:shm_csp], 0
+    je .outside
+    call shm_ctop
+    call shm_bfind                    ; bound already: answer it, consume none
+    jc .answer
+    cmp byte [sh_macro_exec], 0       ; not bound, and not the step engine
+    je .unbound                       ; running THIS cell: nothing to answer
+    mov ax, [sh_evaldepth]
+    cmp ax, [sh_macro_exdep]
+    jne .unbound
+    mov al, [cs:di+7]                 ; the next argument, in order
+    inc byte [cs:di+7]
+    cmp al, [cs:di+6]
+    jb .passed
+    mov al, 0xFF                      ; declared, not passed: #N/A, as Excel
+    jmp short .bind
+.passed:
+    add al, [cs:di+5]
+.bind:
+    mov ah, [cs:shm_bused]            ; record it: name, slot
+    cmp ah, SH_MBINDS
+    jae .full
+    push ax
+    mov al, ah
+    xor ah, ah
+    call shm_x14
+    add ax, shm_binds
+    mov di, ax
+    push si                           ; SI IS THE EVALUATOR'S TEXT POINTER, past
+    mov si, shm_aname                 ; ')' - borrowed for the copy and given
+    mov cx, SH_NAME_MAX + 1           ; back, or the formula resumes parsing
+.bn:                                  ; from inside the module
+    mov al, [cs:si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .bn
+    pop si
+    pop ax
+    mov [cs:di], al
+    inc byte [cs:shm_bused]
+    inc word [sh_pass]                ; A BINDING CHANGES WHAT A CELL MEANS.
+                                       ; sh_eval_cell answers a cell computed
+                                       ; in this pass from its cache, and this
+                                       ; one was computed - by a repaint, with
+                                       ; nothing bound - so reading `num` got
+                                       ; the fixture's 0 until the pass moved.
+                                       ; Calculate Now's own invalidation
+    push ax
+    call shm_aslot                    ; the value, into the evaluator
+    pop ax
+    mov bx, [sh_macro_row]            ; the name: onto the ref, or this cell
+    mov ax, [sh_macro_col]
+    cmp byte [cs:shm_ahref], 0
+    je .define
+    mov ax, [cs:shm_arcol]
+    mov bx, [cs:shm_arrow]
+    push ax
+    push bx
+    call shm_mstore                   ; ...and with a ref, the value goes there
+    pop bx
+    pop ax
+.define:
+    call shm_mdefname
+    ret                               ; answering the value shm_aslot loaded
+.answer:
+    call shm_aslot
+    ret
+.unbound:
+    jmp shm_mfalse
+.outside:
+    mov word [sh_msg], sh_s_marg
+    mov byte [sh_macro_ctl], SH_MC_STOP
+    jmp shm_mfalse
+.full:
+    mov word [sh_msg], sh_s_mfull
+    mov byte [sh_macro_ctl], SH_MC_STOP
+    jmp shm_mfalse
+.bad:
+    jmp shm_merr
+
+; shm_mdefname - bind shm_aname to the one cell AX,BX. sh_name_def takes a
+; DS name, so it goes through sh_ident, which nothing evaluates in between.
+; Preserves everything but the flags.
+shm_mdefname:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, shm_aname
+    mov di, sh_ident
+.cp:
+    mov cl, [cs:si]
+    mov [di], cl
+    inc si
+    inc di
+    or cl, cl
+    jnz .cp
+    mov cx, ax
+    mov dx, bx
+    mov si, sh_ident
+    SHOUT sh_name_def
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; shm_mfind - is the name in sh_ident (DS, uppercase) an EXTENSION macro
 ; function? out: AX = its id, SH_FID_MX.., or 0xFF. Preserves the rest.
@@ -35406,8 +36062,32 @@ shm_mgoto:
     SHOUT sh_skipargs
     jmp shm_mtrue
 
-shm_mreturn:                          ; RETURN and HALT: no subroutines yet,
-    SHOUT sh_skipargs                 ; so both end the run
+; RETURN([value]) - macro plan wave 1. Inside a SUBROUTINE it goes back to the
+; caller with the value, which the caller's cell reads by being evaluated a
+; second time (shm_mcall's answer pass, INPUT's mechanism). With no caller it
+; ends the run, as it always did. HALT always ends it, every frame included.
+shm_mreturn:
+    cmp byte [cs:shm_csp], 0
+    je shm_mhalt
+    cmp byte [si], ')'
+    je .noval
+    SHOUT sh_pcmp
+    call shm_rtype                    ; RESULT's type, or #VALUE!
+    jmp short .bank
+.noval:                               ; RETURN() answers TRUE, as a macro
+    mov ax, 1                         ; command that did its job does
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_BOOL
+.bank:
+    mov di, shm_ans
+    mov bx, shm_anstxt
+    call shm_vput
+    mov byte [sh_evalerr], 0
+    SHOUT sh_skipargs
+    mov byte [sh_macro_ctl], SH_MC_RET
+    jmp shm_mtrue
+shm_mhalt:
+    SHOUT sh_skipargs
     mov byte [sh_macro_ctl], SH_MC_STOP
     jmp shm_mtrue
 
@@ -35987,6 +36667,11 @@ shm_mresume:
     mov word [sh_macro_steps], 0
     mov byte [sh_macro_lsp], 0
     mov byte [sh_macro_ansok], 0
+    mov byte [cs:shm_csp], 0          ; macro plan wave 1: no frames, and
+    mov byte [cs:shm_cans], 0         ; nothing left over from a run a HALT
+    mov byte [cs:shm_sused], 0        ; or an error ended mid-call - this
+    mov byte [cs:shm_bused], 0        ; state is the module's and outlives
+    mov word [cs:shm_pused], 0        ; the run that wrote it
     mov word [sh_msg], 0
     jmp short .go
 .notstart:
@@ -36040,6 +36725,8 @@ shm_mstep:
     mov ax, [sh_evaldepth]            ; document every time round
     mov [sh_macro_exdep], ax
     mov byte [sh_macro_exec], 1
+    mov byte [cs:shm_ccount], 0       ; one subroutine call to a cell
+    mov byte [cs:shm_cpend], 0
     mov si, sh_macrobuf
     SHOUT sh_pcmp
     mov byte [sh_macro_exec], 0
@@ -36048,6 +36735,13 @@ shm_mstep:
     call shm_mpaint
 .ctl:
     mov al, [sh_macro_ctl]
+    cmp al, SH_MC_STOP                ; an error or HALT ends it, call or none
+    je .end
+    cmp byte [cs:shm_cpend], 0        ; A PENDING CALL OUTRANKS every other
+    jne .call                         ; control in the step: the calling cell
+                                       ; is evaluated again after RETURN, and
+                                       ; RETURN, GOTO or a loop's own control
+                                       ; happens THEN, with the call answered
     cmp al, SH_MC_NONE
     je .advance
     cmp al, SH_MC_GOTO
@@ -36056,6 +36750,8 @@ shm_mstep:
     je .end
     cmp al, SH_MC_SKIP
     je .skip
+    cmp al, SH_MC_RET
+    je .ret
     cmp al, SH_MC_PAUSEH              ; INPUT: this cell again, afterwards
     je .pause
     inc word [sh_macro_row]           ; ALERT: the next one
@@ -36064,17 +36760,33 @@ shm_mstep:
     cmp byte [sh_macro_wait], SH_MW_ALERT
     jne .ask
     SHOUT sh_macro_alertup
-    jmp short .out
+    jmp .out
 .ask:
     mov byte [sh_macro_ansok], 0
     SHOUT sh_macro_inputup
-    jmp short .out
+    jmp .out
 .goto:
     mov ax, [sh_macro_ncol]
     mov [sh_macro_col], ax
     mov ax, [sh_macro_nrow]
     mov [sh_macro_row], ax
     jmp .next
+.call:                                ; macro plan wave 1: a subroutine
+    mov byte [cs:shm_cpend], 0
+    call shm_cpush
+    jc .deep
+    mov ax, [cs:shm_ctcol]
+    mov [sh_macro_col], ax
+    mov ax, [cs:shm_ctrow]
+    mov [sh_macro_row], ax
+    jmp .next
+.ret:                                 ; ...and back: the CALLING cell again,
+    call shm_cpop                     ; whose call site now answers RETURN's
+    mov byte [cs:shm_cans], 1         ; value (shm_mcall)
+    jmp .next
+.deep:
+    mov word [sh_msg], sh_s_mdeep
+    jmp .fin
 .skip:
     call shm_mskip
     jc .unmatched
