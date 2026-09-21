@@ -106101,13 +106101,42 @@ All twenty of §81.63's macro functions are sourced by those two tables —
 | `ALERT` | `0x0076` | `WHILE` | `0x00AC` |
 | `MESSAGE` | `0x007A` | `NEXT` | `0x00AE` |
 
-**What still needs checking before any of it is written to a file**:
-`[MS-XLS]` documents BIFF8, and these numbers are asserted to be stable back
-to BIFF2 rather than shown to be. The numbers SHEET needs are all below
-`0x00AE` — the original Excel 2.x range — which is consistent but is not
-evidence. The evidence is already in the tree: `tests/sheetxl2.py`'s fixture
-is a **macro sheet written by real Excel 2.1**, so the tables can be checked
-against bytes Excel itself produced rather than trusted.
+**And they are CHECKED, not trusted.** `[MS-XLS]` documents BIFF8, so those
+numbers holding back to BIFF2 was an assertion. The evidence was already in
+the tree: `build/sheetxl2/excel21d/KWWHAT.CPM` is a macro sheet off an
+original Excel 2.1d distribution disk (SZDD-compressed; `A0.XLS` is the
+expansion), and its 71 `FORMULA` records decode against these tables and
+against nothing else.
+
+**BIFF2 selects the table by the PTG ITSELF, not by a bit in the index.**
+`fCeFunc` is BIFF8's mechanism and there is no room for it in BIFF2's
+one-byte function field. What Excel 2.1 actually writes is:
+
+| ptg | then | table |
+|---|---|---|
+| **`0x58`** | `cargs`, `iftab` | **`Cetab`** — a command |
+| **`0x42`** | `cargs`, `iftab` | **`Ftab`** — a function |
+
+Read the other way round, every token in that file is nonsense, which is
+what makes this a verification rather than a plausible reading:
+
+| ptg | idx | × | Cetab says | Ftab says |
+|---|---|---|---|---|
+| `0x58` | `0x6D` | 22 | **`SELECT`** | `LOG` |
+| `0x58` | `0x60` | 11 | **`FORMULA`** | `RESULT` |
+| `0x58` | `0x3D` | 5 | **`DEFINE.NAME`** | `MIRR` |
+| `0x58` | `0x6E` | 5 | **`DELETE.NAME`** | `EXEC` |
+| `0x58` | `0x39` | 2 | **`FILL.DOWN`** | `FV` |
+| `0x42` | `0x37` | 8 | `INSERT` | **`RETURN`** |
+| `0x42` | `0x57` | 1 | `SCALE` | **`ECHO`** |
+
+Twenty-two `SELECT`s, eleven `FORMULA`s whose one argument is a formula
+string (`"=Price-Down_Pmt"`), five `DEFINE.NAME`s whose argument is a name
+(`"Principal"`), and eight `RETURN`s against the file's fourteen `NAME`
+records. That is a recorded formatting session, and it reads as one under
+exactly one assignment of the two tables.
+
+`dt = 0x0040` is confirmed from the same file's `BOF`.
 
 The lesson is the one §81.81.1 records one section along: **a check is only
 as wide as the documents it was made against**, and "no reference on hand"
