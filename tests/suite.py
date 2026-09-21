@@ -4891,6 +4891,20 @@ SOAK = [
         "subroutine, the manual's own #REF! for TEXTREF, and an expression "
         "refused as a target",
         needs=("marty",), serial=True),
+    Row("sheetmctl", "soak", py("tests/sheetmctl.py"), 900.0,
+        "SPEC.md 81.86: macro control - ERROR(FALSE) and ERROR(TRUE,ref), "
+        "RESTART(1) two subroutines deep, ALERT's type 1 answering OK and "
+        "Cancel, the Single Step dialog (Step, then Continue), Esc raising it "
+        "mid-loop and Halt ending the run, CANCEL.KEY(FALSE) ignoring Esc, "
+        "WAIT on the timer, and a run's dialog being modal to the sheet",
+        needs=("marty",), serial=True),
+    Row("sheetminfo", "soak", py("tests/sheetminfo.py"), 400.0,
+        "SPEC.md 81.87: macro information - thirty rows of GET.CELL, "
+        "GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, "
+        "GET.WINDOW, GET.WORKSPACE and DIRECTORY against a fixture that fixes "
+        "each answer, including a DIRECTORY walk into a folder and a refused "
+        "one that must leave the instance where it stood",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

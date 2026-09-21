@@ -112,6 +112,22 @@ BIFF_MACRO_FUNCS = {
     0x5A: ('DEREF'      , (1, 1)  , (1, 1)),
     0x5F: ('SELECTION'  , (0, 0)  , (0, 0)),
     0x59: ('CALLER'     , (0, 0)  , (0, 0)),
+    # wave 2 (81.86, 81.87): control and information
+    0x57: ('ECHO'       , (0, 1)  , (0, 1)),
+    0x54: ('ERROR'      , (0, 2)  , (0, 2)),
+    0xB4: ('RESTART'    , (0, 1)  , (0, 1)),
+    0x55: ('STEP'       , (0, 0)  , (0, 0)),
+    0xAA: ('CANCEL.KEY' , (0, 2)  , (0, 2)),
+    0xB9: ('GET.CELL'   , (1, 2)  , (1, 2)),
+    0x6A: ('GET.FORMULA', (1, 1)  , (1, 1)),
+    0x6B: ('GET.NAME'   , (1, 2)  , (1, 2)),
+    0x91: ('GET.DEF'    , (1, 3)  , (1, 3)),
+    0xBF: ('GET.NOTE'   , (0, 3)  , (0, 3)),
+    0x7A: ('NAMES'      , (0, 3)  , (0, 3)),
+    0xBC: ('GET.DOCUMENT', (1, 2) , (1, 2)),
+    0xBB: ('GET.WINDOW' , (1, 2)  , (1, 2)),
+    0xBA: ('GET.WORKSPACE', (1, 1), (1, 1)),
+    0x7B: ('DIRECTORY'  , (0, 1)  , (0, 1)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its
@@ -129,6 +145,8 @@ BIFF_CETAB = {
     0x6D: 'SELECT',
     0x76: 'ALERT',
     0x7A: 'MESSAGE',
+    0x8C: 'DISABLE.INPUT',              # wave 2 (81.86)
+    0x95: 'WAIT',
 }
 
 # It is here, in the SECOND reader, for the reason this whole file exists: a

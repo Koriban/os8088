@@ -1,6 +1,6 @@
 # SHEET's macro language — finishing it
 
-**Status: planned 2026-09-21. Waves 0 and 1 done; wave 2 next.** Every count here was
+**Status: planned 2026-09-21. Waves 0, 1 and 2 done; wave 3 next.** Every count here was
 measured from Microsoft Excel **Version 2.0**'s *Functions and Macros* manual
 (`_LIBRARY/documentation/excel_man/`), OCR-repaired by hand where the scan
 split a name, and cross-checked against SHEET's own `sh_functab` through
@@ -118,7 +118,11 @@ the plan's "the one that makes the rest worth having" (§81.84, `sheetmsub`). Th
 leaves the reference for a macro argument that is exactly one call to it.
 Resident +0, module +1,055; `CHART.OVL` 49,641 of `CH_OVKB`'s 51,200.
 
-**Wave 2 — control and information (17).**
+**Wave 2 — control and information (17). DONE** (§81.86 `sheetmctl`,
+§81.87 `sheetminfo`). Resident +199, bss +15 (2,066 of APP_MAX_SIZE left);
+`CHART.OVL` 53,216, `CH_OVKB` 54 - **12,320 bytes to the 64 KB wall**, which
+is what waves 3 and 4 have. WAIT's timer path is unverified: the gate's 5150
+has no BIOS clock.
 `CANCEL.KEY`, `DISABLE.INPUT`, `ECHO`, `ERROR`, `RESTART`, `STEP`, `WAIT`; `DIRECTORY`, `GET.CELL`, `GET.DEF`, `GET.DOCUMENT`, `GET.FORMULA`, `GET.NAME`, `GET.NOTE`, `GET.WINDOW`, `GET.WORKSPACE`, `NAMES`.
 
 **Wave 3 — command equivalents (68),

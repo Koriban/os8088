@@ -104478,6 +104478,203 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.87 Macro information: GET.CELL, GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, GET.WINDOW, GET.WORKSPACE, DIRECTORY
+
+The information half of wave 2 of `docs/plans/SHEET-MACRO-PLAN.md`. All ten
+are **value** functions, so each one answers wherever it is evaluated,
+including in a worksheet cell. Their numbered tables are the ones in
+*Functions and Macros*: 23 rows for GET.CELL, 26 for GET.DOCUMENT, 16 for
+GET.WINDOW and 19 for GET.WORKSPACE. A number past the end of a table
+answers `#VALUE!`.
+
+#### 81.87.1 The tables are data
+
+Most rows are constant for SHEET: a document is always a worksheet, it has
+one window and no password, and scroll bars are always shown. So each table
+is data, three bytes per row: a kind and a word. One interpreter,
+`shm_ginfo`, reads them. The kinds are:
+
+- `GI_NUM`: a number;
+- `GI_BOOL`: a logical;
+- `GI_BVAR`: a byte of SHEET's own state, such as gridlines or protection;
+- `GI_NA`: `#N/A`, for something SHEET does not keep;
+- `GI_STR`: a string constant;
+- `GI_FN`: a routine that looks the answer up.
+
+Only the rows that look something up are code.
+
+#### 81.87.2 What each row answers, where it is not Excel's
+
+- **GET.CELL 18 and 19**: `"Helv"` and 10, the font SHEET's BIFF writer
+  records. **21 and 23** (italic, strikeout) are FALSE because SHEET has
+  neither. **17** is the row height in points: twips / 20, with the standard
+  row being 255 twips.
+- **GET.FORMULA** gives R1C1 references, as Excel does (`=R[-2]C[-2]*2`).
+  It uses the same converter the SYLK writer uses. **GET.CELL 6** gives the
+  formula as the formula bar shows it.
+- **GET.NAME / GET.DEF**: a name in SHEET is always a place, so a definition
+  is always `=R1C1` or `=R1C1:R2C2`. GET.DEF answers the first name, in the
+  order the names were defined, whose rectangle matches.
+- **NAMES** and GET.DOCUMENT **21–26** are arrays in Excel. SHEET has no
+  array values, so they answer the first element, which is also what Excel
+  shows in a single cell (§81.67's rule).
+- **GET.NOTE** is cut to `SH_STR_MAX` (64) characters, because that is what a
+  text value holds; a note holds `SH_NOTEMAX`.
+- **GET.DOCUMENT 2** (the directory, as a path) and **4** (changed since the
+  last save) answer `#N/A`. The file system names a folder by cluster, not
+  by path, and SHEET keeps no changed-since-save flag.
+- GET.DOCUMENT **15–17** report iteration as off, with the Iteration
+  dialog's defaults of 100 and 0.001, because SHEET has no iteration.
+- **GET.WINDOW 3–6** are in **pixels**; the screen has no points.
+  **13–16** describe the first pane.
+- **GET.WORKSPACE 1** is `"OS/8088"`. **2** is `"2.1"`, the Excel that SHEET
+  is modelled on, which is what a macro that tests the version means to
+  test. **13–14** are the usable desktop (`OSAPI_VIDEO`), **16** is the free
+  KB (`OSAPI_MEM_AVAIL`), **17** is `#N/A` (the OS has no such sum), and
+  **18** is the 8087 that os88fp actually uses.
+
+#### 81.87.3 SI is the parse pointer, and the first build pointed it at its answer
+
+The string-answer helpers used to take their string in SI. Every caller
+pointed SI at the answer and jumped to the helper, so when the function
+returned, **the evaluator resumed parsing inside the answer**.
+
+For `"General"` this passed by luck, because a letter ends an expression.
+For GET.CELL(6) of a formula cell it did not: `=C3*2` was read as the
+comparison operator, and the answer came back as the logical FALSE. The gate
+found it as `TYPE(GET.CELL(6,E5)) = 4`. DIRECTORY's success path failed the
+same way, as `#VALUE!`.
+
+The helpers now take the string in **BX**. Each table interpreter call keeps
+SI across the table walk.
+
+#### 81.87.4 DIRECTORY keeps its own path text
+
+`DIRECTORY(path)` walks the path one folder at a time with
+`OSAPI_FILE_FIND` (type `OSAPI_FT_DIR`) and `OSAPI_FILE_GOTO_QM`, so the
+instance moves as Excel's current directory does. A walk that fails puts the
+instance back where it started.
+
+The OS does not know a folder's path, only its cluster, so the text is
+SHEET's own. `DIRECTORY()` answers the path the last walk arrived at, but
+only while the instance still stands in that folder; a file dialog may have
+moved it. Otherwise it answers `"B:\"` at a drive's root, and `#N/A`
+anywhere else. `..` is not walked, because a folder does not know its
+parent here either.
+
+`tests/sheetminfo.py` has 31 checks, one per table row it reads. Each row
+says which row it is, because an off-by-one reads a neighbour that is also a
+plausible answer. The walk is checked into a folder, refused on a missing
+one (the instance must not move), and walked back to the root.
+**Resident +6 bytes and bss +4** (the GET.NOTE vector) and **`CHART.OVL` +2,535** (53,216 of 55,296).
+
+### 81.86 Macro control: ECHO, ERROR, RESTART, STEP, CANCEL.KEY, DISABLE.INPUT, WAIT, and ALERT's type 1
+
+The control half of wave 2. Every setting made here lasts only as long as
+the run that made it: `shm_mresume` clears all of them when a run starts.
+That is Excel's rule for ECHO and CANCEL.KEY, and it is the only safe rule
+for the others.
+
+| function | here |
+|---|---|
+| `ECHO(FALSE)` | no repaint after a step that changed something; the end of the run always paints, and pauses still paint |
+| `ERROR(FALSE)` | a macro error is ignored and the run goes on |
+| `ERROR(TRUE, ref)` | the run goes on **from ref**; see §81.86.2 |
+| `RESTART([n])` | forgets the return addresses above level n, so the next RETURN past them ends the run |
+| `STEP()` | the Single Step dialog, *Step / Halt / Continue*, comes up before each cell |
+| `CANCEL.KEY` | FALSE or omitted: Esc cannot interrupt. TRUE: Esc raises the Single Step dialog, as Excel's does, or goes to ref |
+| `DISABLE.INPUT` | accepted; already true of every run (§81.86.4) |
+| `WAIT(serial)` | pauses on a timer until that time (§81.86.3) |
+| `ALERT(msg, 1)` | OK and Cancel, answering TRUE or FALSE |
+
+**Resident +193 bytes, bss +11, `CHART.OVL` +1,040.** `CH_OVKB` 50 → **54**, ahead of the information half.
+
+#### 81.86.1 Esc is read from the keyboard, not from the event queue
+
+A run is **one callback**, so no key event reaches SHEET until the run
+pauses. The engine therefore reads the key's state directly
+(`OSAPI_KEY_DOWN`) at the top of every step. It acts on the **press edge**,
+not the level, because a held key would otherwise re-trigger on every step
+after Continue.
+
+During a WAIT, the run has returned to the kernel. The keystroke then
+arrives as an event, and `sh_macro_gatek` turns it into `sh_macro_esc`.
+
+#### 81.86.2 ERROR(TRUE, ref) is a GOTO, not a call
+
+The manual says macro_ref is run "whenever an error is encountered". Here
+that is a jump. A subroutine call would return to the failing cell and fail
+again. The step limit still ends a handler that fails forever.
+
+RESTART forgets only the addresses. The dropped frames' argument slots and
+bindings stay committed until the run ends, because the running cell may
+still read its arguments.
+
+#### 81.86.3 WAIT is a pause, because a callback cannot sleep
+
+A callback holds the gfx lock, and with it the whole desktop, so WAIT cannot
+simply sleep. It is a pause instead:
+
+1. The engine returns.
+2. A half-second `OSAPI_WM_TIMER` brings the run back to the same cell, which
+   looks at the clock again.
+
+The target time is banked on the first evaluation, because `WAIT(NOW()+x)`
+evaluated a second time would move its own target. A look at the clock does
+not count as a step.
+
+**The timer must be armed from resident code** (`sh_macro_arm`).
+`OSAPI_WM_ONTIMER` takes a near proc *in the caller's segment*. Called from
+CHART.OVL, it named the module's segment, the timer fired into the module at
+a package offset, and the first build's WAIT never came back.
+
+On `kern_small` there is no timer, so WAIT does not wait.
+
+**The timer path has not been run by the gate.** `tests/sheetmctl.py` runs
+on an IBM 5150. Its BIOS has no clock service, so `NOW()` is `#N/A` there
+(§81.42), and WAIT of an error is a macro error. The gate records whether
+there is a clock and skips WAIT when there is none. It prints that the path
+was not exercised, rather than passing a WAIT that never paused.
+
+#### 81.86.4 A run's dialogs are modal to the sheet, one click late
+
+The gate test found that a click on the sheet while ALERT waited **buried the
+alert**. The run was then waiting on a dialog nobody could see. A key or
+click on the sheet during a pause now brings the run's dialog (the alert or
+INPUT's) back to the front, and the sheet ignores it (`sh_macro_gate`).
+
+**The fix works one click late, and that is not by choice.** A click on a
+background window only raises it: the kernel calls no `W_ONCLICK` for it
+(`ui.inc`'s content path). So the first click raises the sheet over the
+dialog, and the second click, now on the front window, is the one the gate
+sees. The run can always be finished, which it could not be before. A
+one-click fix would need a raise notification that the kernel does not have.
+
+With every pause modal, **DISABLE.INPUT has nothing left to disable**. While
+the engine steps, no event can arrive; while it pauses, its dialog is modal
+and WAIT swallows everything but Esc. Its reason in Excel, DDE, does not
+exist here, so it answers TRUE and does nothing.
+
+#### 81.86.5 The alert's two new sets
+
+`os88ui.inc` gained `OS88UI_ASTEP` (Step / Halt / Continue) and
+`OS88UI_AOKCAN` (OK / Cancel), behind `%ifdef OS88UI_AEXTRA`, so no other
+package pays for them.
+
+ALERT's type 1 answers the same way INPUT does (§81.63): the cell is
+evaluated again and answers the button. So what the formula does before
+the ALERT happens twice.
+
+A **dismissed** Step dialog (Esc, or the close box) means Step, not Halt.
+The Esc that raised the dialog can arrive at it as a key and dismiss it,
+and "keep stepping" is the answer that cannot lose anything.
+
+`tests/sheetmctl.py` covers each row of the table except two:
+
+- **ECHO**, which changes only how often the screen is painted, and this
+  harness has no counter for that;
+- **WAIT's pause**, for the clock reason in §81.86.3.
+
 ### 81.85 The reference family: OFFSET, ABSREF, RELREF, REFTEXT, TEXTREF, DEREF, SELECTION, CALLER
 
 The second half of wave 1 of `docs/plans/SHEET-MACRO-PLAN.md`. These are the

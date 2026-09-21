@@ -1737,6 +1737,10 @@ os88ui_sbd_id:   dw 0, 0
 OS88UI_AOK     equ 0            ; the button sets. Index 0 is the DEFAULT - it
 OS88UI_AYESNO  equ 1            ; carries the ring and it is what Enter fires
 OS88UI_ASAVE   equ 2            ; Save / Discard / Cancel
+%ifdef OS88UI_AEXTRA             ; two more, for a package that asks - SHEET's
+OS88UI_ASTEP   equ 3            ; macro Single Step: Step / Halt / Continue
+OS88UI_AOKCAN  equ 4            ; ALERT(message, 1): OK / Cancel
+%endif
 OS88UI_ACANCEL equ 0FFh         ; ...and the answer for a DISMISSED alert
 OS88UI_AMAX    equ 34           ; the message, in characters (it is CLIPPED by
                                 ; the window, not refused - keep it short)
@@ -1774,12 +1778,21 @@ os88ui_asets:
     dw 1, os88ui_as_ok,   0,             0
     dw 2, os88ui_as_yes,  os88ui_as_no,  0
     dw 3, os88ui_as_save, os88ui_as_disc, os88ui_as_can
+%ifdef OS88UI_AEXTRA
+    dw 3, os88ui_as_step, os88ui_as_halt, os88ui_as_cont
+    dw 2, os88ui_as_ok,   os88ui_as_can,  0
+%endif
 os88ui_as_ok:   db 'OK', 0
 os88ui_as_yes:  db 'Yes', 0
 os88ui_as_no:   db 'No', 0
 os88ui_as_save: db 'Save', 0
 os88ui_as_disc: db 'Discard', 0
 os88ui_as_can:  db 'Cancel', 0
+%ifdef OS88UI_AEXTRA
+os88ui_as_step: db 'Step', 0
+os88ui_as_halt: db 'Halt', 0
+os88ui_as_cont: db 'Continue', 0
+%endif
 
 ; -----------------------------------------------------------------------------
 ; os88ui_ask - raise the alert (see the header)
