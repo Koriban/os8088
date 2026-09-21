@@ -159,6 +159,8 @@ BIFF_CETAB = {
     0x7A: 'MESSAGE',
     0x8C: 'DISABLE.INPUT',              # wave 2 (81.86)
     0x95: 'WAIT',
+    0x94: 'ON.TIME',                    # wave 4b (81.92)
+    0xA8: 'ON.KEY',
     # wave 3a (81.88): Format, Edit, Options - from docs/ms-xls.pdf's Cetab
     0x04: 'SAVE',
     0x1B: 'DISPLAY',

@@ -4399,6 +4399,8 @@ sh_onkey:
     push dx
     call sh_macro_gatek                ; 81.86: WAIT, Esc, DISABLE.INPUT
     jc .out
+    call sh_macro_keyck                ; 81.92: ON.KEY
+    jc .out
     call sh_abdismiss                  ; any key takes the credits down, and
     jc .out                            ; is spent doing it
     cmp word [sh_fdlg_win], 0
@@ -34799,6 +34801,10 @@ SH_MW_ALERT    equ 2
 SH_MW_INPUT    equ 3
 SH_MW_WAIT     equ 4                 ; 81.86: WAIT's timer
 SH_MW_STEP     equ 5                 ; ...and the Single Step dialog
+SH_MW_ONTIME   equ 6                 ; 81.92: ON.TIME's look at the clock
+SH_MKEYS       equ 4                 ; ON.KEY's bindings (81.92)...
+SH_MKREC       equ 6                 ; ...each the key word, then the col and
+                                      ; row to run (col 0xFFFF: swallow it)
 SH_MC_WAITT    equ 8                 ; WAIT: arm nothing more, return, and let
                                       ; the timer bring the run back
 SH_MLOOPS      equ 4                 ; FOR/WHILE frames, nested
@@ -34910,9 +34916,64 @@ sh_macro_arm:
 ; again. W_ONCLICK's environment, so it resumes exactly as an alert does
 sh_macro_ontimer:
     cmp byte [sh_macro_wait], SH_MW_WAIT
-    jne .out
+    je .go
+    cmp byte [sh_macro_ontp], 0       ; 81.92: ON.TIME has a request - and a
+    je .out                           ; run that is going, paused on a
+    cmp byte [sh_macro_running], 0    ; dialog, makes it wait its turn
+    jne .later
+    mov byte [sh_macro_wait], SH_MW_ONTIME
+.go:
     jmp sh_macro_onalert
+.later:
+    push ax
+    mov ax, 18
+    call sh_macro_arm
+    pop ax
 .out:
+    ret
+
+; sh_macro_keyck - ON.KEY (81.92): AX (AL the character, AH the scan) bound?
+; CF=1 it was - a run started, or the key swallowed - and nothing else of
+; the sheet's sees it. Only while no run is going: sh_macro_gatek has taken
+; every key before this during one
+sh_macro_keyck:
+    push bx
+    push cx
+    mov bx, sh_macro_keys
+    mov cx, SH_MKEYS
+.l:
+    cmp word [bx], 0
+    je .next
+    cmp byte [bx+1], 0                ; a character: AL
+    jne .scan
+    cmp al, [bx]
+    je .hit
+    jmp short .next
+.scan:                                ; a function key: AH, and no character
+    or al, al
+    jnz .next
+    cmp ah, [bx+1]
+    je .hit
+.next:
+    add bx, SH_MKREC
+    loop .l
+    pop cx
+    pop bx
+    clc
+    ret
+.hit:
+    mov cx, [bx+2]
+    cmp cx, 0xFFFF                    ; "": the key does nothing
+    je .eat
+    mov [sh_macro_col], cx
+    mov cx, [bx+4]
+    mov [sh_macro_row], cx
+    mov byte [sh_macro_wait], SH_MW_START
+    call sh_macro_onalert
+.eat:
+    pop cx
+    pop bx
+    stc
     ret
 
 ; sh_macro_gatek / sh_macro_gate - CF=1: a paused macro swallows this key
@@ -35178,6 +35239,8 @@ shm_mtab:
     dw shm_mfwriteln
     dw shm_mfpos
     dw shm_mfsize
+; wave 4b (81.92): events
+    dw shm_monkey, shm_montime
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35199,6 +35262,7 @@ shm_mkind:
     times 33 db 0                     ; slice 3b: commands, every one
     times 6 db 0                      ; slice 3c: commands, every one
     times 8 db 0                      ; wave 4a: text files, COMMANDS - a
+    db 0, 0                           ; wave 4b: ON.KEY, ON.TIME, commands
                                        ; repaint re-evaluating FWRITE would
                                        ; write again; FREAD moves the position
 shm_mkind_end:
@@ -35307,6 +35371,8 @@ shm_mxnames:
     db 'FWRITELN', 0
     db 'FPOS', 0
     db 'FSIZE', 0
+    db 'ON.KEY', 0
+    db 'ON.TIME', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35413,6 +35479,8 @@ shm_mxrpn:
     db 0x89, 0, 0                     ; FWRITELN
     db 0x8B, 1, 0                     ; FPOS
     db 0x86, 0, 0                     ; FSIZE
+    db 0xA8, 1, 1                     ; ON.KEY - Cetab
+    db 0x94, 1, 1                     ; ON.TIME - Cetab
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -40401,6 +40469,277 @@ shm_fput:
     stc
     ret
 
+; =============================================================================
+; EVENTS (macro plan wave 4, 81.92): ON.KEY and ON.TIME. Each starts a run
+; the way Macro > Run does - [sh_macro_col/row] and SH_MW_START through
+; sh_macro_onalert - from a keystroke or from the window's timer.
+; =============================================================================
+shm_oncol:  dw 0                      ; ON.TIME's macro
+shm_onrow:  dw 0
+shm_ontt:   times 8 db 0              ; ...and when
+
+; shm_macref - the TEXT in sh_sacc as a macro's place: a reference ("B5",
+; "R2C3") or a defined name. CF=1 AX/BX its cell
+shm_macref:
+    push cx
+    push dx
+    push si
+    mov si, sh_sacc
+    call shm_rangetext
+    jc .out
+    call shm_tident                   ; ...or a name
+    jc .no
+    mov si, sh_ident
+    SHOUT sh_name_lookup              ; AX/BX the near corner
+    jmp short .out
+.no:
+    clc
+.out:
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; shm_keycode - the key_text in sh_sacc as sh_onkey sees the key: out AX,
+; AL the character (AH 0) or AH the scan code of a function key (AL 0).
+; "c", "^c" (Ctrl) and "{F1}".."{F12}"; CF=1 anything else - Shift and Alt
+; forms, and the named keys, are refused rather than guessed
+shm_keycode:
+    push bx
+    push si
+    mov si, sh_sacc
+    xor bl, bl
+    cmp byte [si], '^'
+    jne .n
+    inc si
+    inc bl
+.n:
+    cmp byte [si], '{'
+    je .brace
+    mov al, [si]
+    or al, al
+    jz .bad
+    cmp byte [si+1], 0
+    jne .bad
+    or bl, bl
+    jz .plain
+    and al, 0x1F                      ; Ctrl: the control code sh_onkey gets
+.plain:
+    xor ah, ah
+    jmp short .ok
+.brace:
+    or bl, bl
+    jnz .bad
+    mov al, [si+1]
+    and al, 0xDF
+    cmp al, 'F'
+    jne .bad
+    mov al, [si+2]
+    sub al, '0'
+    cmp al, 9
+    ja .bad
+    add si, 3
+    cmp byte [si], '}'
+    je .one
+    mov ah, 10                        ; F10..F12
+    mul ah
+    mov ah, [si]
+    sub ah, '0'
+    cmp ah, 9
+    ja .bad
+    add al, ah
+    inc si
+    cmp byte [si], '}'
+    jne .bad
+.one:
+    cmp byte [si+1], 0
+    jne .bad
+    or al, al
+    jz .bad
+    cmp al, 12
+    ja .bad
+    mov ah, 0x3A
+    add ah, al                        ; F1..F10: 3Bh..44h
+    cmp al, 11
+    jb .sc
+    add ah, 0x57 - 0x3A - 11          ; F11 57h, F12 58h
+.sc:
+    xor al, al
+.ok:
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop si
+    pop bx
+    ret
+
+; ON.KEY(key_text[, macro_text]) - the key runs the macro, when the sheet
+; has the keyboard and no run is going; "" makes it do nothing; omitted puts
+; it back. SH_MKEYS bindings; one more is refused
+shm_monkey:
+    push si                           ; the key, for the second pass
+    SHOUT sh_pcmp
+    mov word [cs:shm_gcol], 0xFFFE    ; omitted: unbind
+    cmp byte [si], ','
+    jne .have
+    inc si
+    call shm_textfirst
+    jc .badpop
+    mov word [cs:shm_gcol], 0xFFFF    ; "": swallow the key
+    cmp byte [sh_sacc], 0
+    je .have
+    call shm_macref
+    jnc .badpop
+    mov [cs:shm_gcol], ax
+    mov [cs:shm_grow], bx
+.have:
+    mov di, si
+    pop si
+    push di
+    call shm_textfirst
+    jc .badpop
+    call shm_keycode
+    jc .badpop
+    pop si
+    push ax                           ; sh_skipargs writes AL, and AL is the
+    SHOUT sh_skipargs                 ; key - F7, matched on AH, survived it
+    pop ax                            ; and hid this from every Fn test
+    push si
+    mov si, sh_macro_keys             ; its own entry, or a free one
+    mov cx, SH_MKEYS
+    xor di, di
+.find:
+    cmp [si], ax
+    je .got
+    or di, di
+    jnz .next
+    cmp word [si], 0
+    jne .next
+    mov di, si                        ; the first free
+.next:
+    add si, SH_MKREC
+    loop .find
+    mov si, di
+    or si, si
+    jz .full
+.got:
+    cmp word [cs:shm_gcol], 0xFFFE
+    jne .bind
+    mov word [si], 0                  ; unbound
+    jmp short .done
+.bind:
+    mov [si], ax
+    mov ax, [cs:shm_gcol]
+    mov [si+2], ax
+    mov ax, [cs:shm_grow]
+    mov [si+4], ax
+.done:
+    pop si
+    jmp shm_mtrue
+.full:
+    pop si
+    jmp shm_merr0
+.badpop:
+    pop si
+    jmp shm_merr
+
+; ON.TIME(time, macro_text[, tolerance[, insert_logical]]) - the macro runs at
+; that date and time; insert FALSE cancels. ONE request: a second replaces
+; the first. A time alone (under 1, "every day at"), the tolerance, and a
+; machine with no clock or no timer are refused
+shm_montime:
+    SHOUT sh_pcmp
+    cmp byte [sh_evalerr], 0
+    jne .bad
+    push si
+    push di
+    mov si, sh_acc
+    mov di, shm_ontt
+    mov cx, 8
+.bank:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    loop .bank
+    pop di
+    pop si
+    SHOUT sh_acc_toint                ; under 1: a time of day - refused
+    jc .ok1
+    or ax, ax
+    jz .bad
+.ok1:
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    call shm_textfirst
+    jc .bad
+    call shm_macref
+    jnc .bad
+    mov [cs:shm_oncol], ax
+    mov [cs:shm_onrow], bx
+    call shm_intarg                   ; tolerance: read, not used
+    call shm_boolnext                 ; insert
+    jnc .ins
+    or al, al
+    jnz .ins
+    mov byte [sh_macro_ontp], 0       ; FALSE: cancelled
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+.ins:
+    SHOUT sh_skipargs
+    mov byte [sh_macro_ontp], 1
+    mov ax, 18                        ; a look at the clock a second
+    SHOUT sh_macro_arm
+    jc .notimer
+    jmp shm_mtrue
+.notimer:
+    mov byte [sh_macro_ontp], 0
+    jmp shm_ana
+.bad:
+    jmp shm_merr
+
+; shm_ontime - SHM_MRESUME's SH_MW_ONTIME: the timer looked, no run going.
+; CF=1: due now, and [sh_macro_col/row] is where to start
+shm_ontime:
+    SHOUT sh_pnow                     ; no clock: never due - dropped
+    jc .drop
+    push si
+    SHOUT sh_acc_load_a
+    mov si, shm_ontt
+    mov di, sh_macro_tend
+    mov cx, 8
+.cp:
+    mov al, [cs:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cp
+    mov si, sh_macro_tend
+    SHOUT fp_unpack_b
+    SHOUT fp_cmpab
+    pop si
+    cmp ax, 0
+    jl .later
+    mov byte [sh_macro_ontp], 0
+    mov ax, [cs:shm_oncol]
+    mov [sh_macro_col], ax
+    mov ax, [cs:shm_onrow]
+    mov [sh_macro_row], ax
+    stc
+    ret
+.later:
+    mov ax, 18
+    SHOUT sh_macro_arm
+    clc
+    ret
+.drop:
+    mov byte [sh_macro_ontp], 0
+    clc
+    ret
+
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
 shm_mstore:
@@ -41126,6 +41465,7 @@ shm_mresume:
     mov byte [sh_macro_wait], 0
     cmp al, SH_MW_START
     jne .notstart
+.start:
     mov byte [sh_macro_running], 1
     mov word [sh_macro_steps], 0
     mov byte [sh_macro_lsp], 0
@@ -41147,6 +41487,12 @@ shm_mresume:
     mov word [sh_msg], 0
     jmp short .go
 .notstart:
+    cmp al, SH_MW_ONTIME              ; 81.92: ON.TIME's look at the clock
+    jne .notontime
+    call shm_ontime
+    jc .start                         ; due: a run, as Macro > Run starts one
+    jmp .out
+.notontime:
     cmp al, SH_MW_STEP                ; 81.86: the Single Step dialog
     jne .notstep
     mov al, [sh_macro_btn]
@@ -41330,6 +41676,13 @@ shm_mstep:
     mov word [sh_msg], sh_s_macrodone
 .fin:
     mov byte [sh_macro_running], 0
+    cmp byte [sh_macro_ontp], 0       ; 81.92: WAIT's timer took ON.TIME's
+    je .fin2                          ; place - give it back
+    push ax
+    mov ax, 18
+    SHOUT sh_macro_arm
+    pop ax
+.fin2:
     mov byte [sh_ud_busy], 0
     SHOUT sh_undo_drop                ; Excel cannot undo a macro either
     call shm_mpaint
@@ -49196,7 +49549,9 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8552                     ; +4 for 81.89's SH_IDENT_MAX 20;
+    OS88_BSS 8577                     ; +25 for 81.92's ON.KEY table and
+                                       ; ON.TIME's flag;
+                                       ; +4 for 81.89's SH_IDENT_MAX 20;
                                        ; +4 for 81.89's NOTE vector (147);
                                        ; +4 for 81.88's menu vector (146);
                                        ; +4 for 81.87's GET.NOTE vector (145);
@@ -50541,7 +50896,9 @@ sh_macro_aset equ sh_pa_tmp + SH_EDITMAX * 2 + 2 ; 81.86: byte, the alert's
                                              ; OS88UI_A* set
 sh_macro_btn  equ sh_macro_aset + 1          ; byte: ...the button it answered
 sh_macro_esc  equ sh_macro_btn + 1           ; byte: Esc cut a WAIT short
-sh_bss_end        equ sh_macro_esc + 1
+sh_macro_ontp equ sh_macro_esc + 1           ; byte: ON.TIME has a request
+sh_macro_keys equ sh_macro_ontp + 1          ; SH_MKEYS * SH_MKREC: ON.KEY
+sh_bss_end        equ sh_macro_keys + SH_MKEYS * SH_MKREC
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

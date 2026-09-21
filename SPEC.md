@@ -104478,6 +104478,54 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.92 ON.KEY and ON.TIME
+
+Each starts a run the way Macro ▸ Run does: it sets `sh_macro_col/row`,
+then `SH_MW_START` goes through `sh_macro_onalert`.
+
+- **ON.KEY(key_text[, macro_text])**:
+  - **Keys:** a character (`"x"`), Ctrl plus one (`"^q"`), or `"{F1}"` to
+    `"{F12}"`. Shift and Alt combinations and the named keys are refused
+    rather than guessed.
+  - **Macro:** a reference as text, or a defined name. `""` makes the key do
+    nothing, and omitting it puts the key back.
+  - **Where the bindings live:** the four live in a **resident** table
+    (`sh_macro_keys`), because the key arrives at `sh_onkey`.
+    `sh_macro_keyck` looks there after the run gate, so a binding is heard
+    only while no run is going, which is when a key can reach the sheet at
+    all.
+- **ON.TIME(time, macro_text[, tolerance[, insert]])**:
+  - **The schedule:** it keeps **one** request; a second replaces the
+    first. `insert` FALSE cancels it.
+  - **Refused:** a time alone (under 1, Excel's "every day at"), and a
+    machine with no timer. Tolerance is read and not used.
+  - **The timer:** it is the window's one timer, shared with WAIT
+    (§81.86.3). `sh_macro_ontimer` resumes WAIT when WAIT is waiting.
+    Otherwise it lets the module look at the clock (`SH_MW_ONTIME`), and
+    waits its turn while a run is paused on a dialog. When a run ends with
+    a request pending, the run's end re-arms the timer, since WAIT may have
+    taken it.
+  - **Unverified:** like WAIT's pause, ON.TIME cannot be reached by the
+    gate. The 5150 has no BIOS clock, so `NOW()` is `#N/A` there.
+
+**Resident +110 bytes** (the key check, the timer's second duty and the
+resume case), **bss +25** (the key table and ON.TIME's flag), **`CHART.OVL`
++580** (58,793 of 64,512). Each text-file channel (§81.91.1) is now **2,848
+bytes**.
+
+#### 81.92.1 `sh_skipargs` writes AL, and AL was the key
+
+The first build stored every binding's character after `sh_skipargs` had
+overwritten it. F7 still worked, because a function key is matched on AH.
+So "does F7 work" would have passed on a build where no character binding
+could ever fire. The gate binds a character, Ctrl plus a character, and a
+function key, for that reason. It is the third time in this series that
+`sh_skipargs`'s AL has cost a build (§81.89.2).
+
+`tests/sheetmevt.py` has 4 checks. Every key is really pressed, with no run
+going. The swallowed `x` is checked the way a failure would show: typed
+over a cell and Entered, it would be the cell's text.
+
 ### 81.91 Macro text files: FOPEN, FCLOSE, FREAD, FREADLN, FWRITE, FWRITELN, FPOS, FSIZE
 
 The first part of wave 4 of `docs/plans/SHEET-MACRO-PLAN.md`.
@@ -104521,8 +104569,8 @@ twice:
   claim at FOPEN broke that rule even when it succeeded.
 
 `CH_OVKB` is **63**, the most that `mov cx, CH_OVKB * 1024` can express.
-The tail is 6,299 bytes today, split between **two channels of 3,136
-bytes each**. **That is the size limit on a file a macro can open, and it
+The tail was 6,299 bytes when this was built, two channels of 3,136
+bytes each; §81.92 took it to 2,848. **That is the size limit on a file a macro can open, and it
 shrinks by every byte the module grows**, so it is measured here and must
 be re-measured, never quoted. A channel left open when SHEET closes is not
 written. That is Excel's behaviour with an unsaved file too.
