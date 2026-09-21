@@ -104550,6 +104550,23 @@ remains what a defined-name RECORD holds. Raising the latter would have
 widened all `SH_NAME_CAP` name records for a reason that has nothing to do
 with them.
 
+#### 81.83.3.3 `%if` cannot assert on labels — the check was vacuous
+
+Both positional tables were guarded with `%if (end - start) != 20` /
+`%error`. **One of them never fired.** `%if` is a PREPROCESSOR test and label
+arithmetic is not reliably available to it — NASM evaluates against pass-1
+values — so a mutation that made `sh_rpn_fce` twenty-one entries long built
+cleanly and silently.
+
+They are `times` pairs now, the idiom `OS88_BSS` already uses: assembled
+rather than preprocessed, emitting nothing when the count is zero and driving
+**negative** when it is not, which `-w+error` turns into a build failure
+naming the line. Proven by mutating the table in **both** directions and
+seeing each line fire, rather than by reading.
+
+The general form: an assertion nobody has seen fail is an assertion nobody
+has seen.
+
 #### 81.83.4 Arity from the document, not from one file
 
 The first draft marked all twenty variable-arity, on the strength of "Excel
@@ -104786,6 +104803,20 @@ It is capped at `SH_EDITMAX`, and that is a decision rather than a buffer
 size. **A justified line is a LABEL**, and `SH_EDITMAX` is what a label can
 be; a wider line would be text this app can write into a cell and the user
 cannot retype into the same cell.
+
+#### 81.81.2.1 No line ends in a space
+
+`.lead` takes the leading spaces off the next line, but a break landing on
+the SECOND of two consecutive spaces left the first one stored, and a line
+that ends where the source does keeps whatever the source ended with —
+`alpha beta gamma delta` + `epsilon zeta ` emitted `delta epsilon zeta `.
+A justified line is written back as a **label**, so that space is a character
+the cell really holds.
+
+`sh_ju_nextline` right-trims before it emits. The gate's fixture carries that
+trailing space on purpose: the expectation does not change, so it costs the
+fixture nothing and fails the moment the trim goes. Found by tracing the wrap
+by hand, not by a test.
 
 #### 81.81.3 What is scoped out, and why it is the WRITE and not the ask
 
