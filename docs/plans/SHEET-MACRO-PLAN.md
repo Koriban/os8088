@@ -1,6 +1,6 @@
 # SHEET's macro language — finishing it
 
-**Status: planned 2026-09-21. Waves 0-3 done; wave 4 next.** Every count here was
+**Status: planned 2026-09-21. Waves 0-3 done; wave 4 text files and events done (§81.91, §81.92); the rest waits on the 64 KB wall (§81.93.1).** Every count here was
 measured from Microsoft Excel **Version 2.0**'s *Functions and Macros* manual
 (`_LIBRARY/documentation/excel_man/`), OCR-repaired by hand where the scan
 split a name, and cross-checked against SHEET's own `sh_functab` through

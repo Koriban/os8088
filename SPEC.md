@@ -104478,6 +104478,72 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.93 What the macro language does not do, and where the module stands
+
+This is Excel 2.0's macro vocabulary as `docs/plans/SHEET-MACRO-PLAN.md`
+measured it, against what SHEET builds. A name listed here evaluates
+`#NAME?`. The decision about it is below, so it is not a gap nobody has
+looked at.
+
+**Declined, with the reason (59):**
+
+- **Printing (6)**, out of scope by the owner's decision: PAGE.SETUP,
+  PRINTER.SETUP, REMOVE.PAGE.BREAK, SET.PAGE.BREAK, SET.PRINT.AREA,
+  SET.PRINT.TITLES.
+- **The application window (6).** The OS owns every window's size,
+  position and state: APP.ACTIVATE, APP.MAXIMIZE, APP.MINIMIZE, APP.MOVE,
+  APP.RESTORE, APP.SIZE.
+- **More than one document (15).** SHEET has one document per instance
+  (§81.39.2): ACTIVATE, ACTIVATE.NEXT, ACTIVATE.PREV, ARRANGE.ALL,
+  CLOSE.ALL, DOCUMENTS, FILE.CLOSE, HIDE, MOVE, NEW.WINDOW, ON.WINDOW,
+  SAVE.WORKSPACE, SIZE, SPLIT, WINDOWS.
+- **Another program (8).** There is no DDE, no DLL and no callable code
+  outside a package: CALL, EXEC, EXECUTE, ON.DATA, POKE, REGISTER, REQUEST,
+  TERMINATE.
+- **A chart document (23).** SHEET's chart is a rendering of a range (§82),
+  not a document with arrows, overlays and a plot area to select: ADD.ARROW,
+  ADD.OVERLAY, ATTACH.TEXT, AXES, COMBINATION, COPY.CHART, DELETE.ARROW,
+  DELETE.OVERLAY, FORMAT.LEGEND, FORMAT.MOVE, FORMAT.SIZE, FORMAT.TEXT,
+  GET.CHART.ITEM, MAIN.CHART, MAIN.CHART.TYPE, OVERLAY, OVERLAY.CHART.TYPE,
+  PATTERNS, PREFERRED, SCALE, SELECT.CHART, SELECT.PLOT.AREA,
+  SET.PREFERRED.
+- **Links (1):** CHANGE.LINK, for the one-document reason.
+
+**Blocked on a SHEET feature (16).** Each drives a command SHEET does not
+have, and the function comes cheaply with the command:
+
+- APPLY.NAMES, CREATE.NAMES, DELETE.FORMAT, FORMULA.REPLACE, HELP,
+  OPEN.LINKS, SELECT.SPECIAL, SHORT.MENUS, SHOW.CLIPBOARD, SHOW.INFO, STYLE,
+  TABLE and WORKSPACE, from the plan;
+- FORMULA.ARRAY, FILL.LEFT and FILL.UP, from wave 3 (§81.90.1).
+
+#### 81.93.1 The 64 KB wall
+
+CHART.OVL is one segment, and its claim is `CH_OVKB` KB. **63 is the
+ceiling**, the most that `mov cx, CH_OVKB * 1024` can express. The module
+image is **58,793 bytes**, so **5,719 bytes are left**. Every one of them is
+also text-file buffer (§81.91.1): what the module grows by, a macro's files
+lose.
+
+**Not built, because they do not fit:**
+
+- **the custom menus:** ADD.BAR, ADD.COMMAND, ADD.MENU, CHECK.COMMAND,
+  DELETE.BAR, DELETE.COMMAND, DELETE.MENU, ENABLE.COMMAND, RENAME.COMMAND,
+  SHOW.BAR;
+- **DIALOG.BOX;**
+- **the reader half:** ptg `0x58`, and the macro-sheet kind;
+- **SEND.KEYS.**
+
+Together they are estimated at 5–6.5 KB. Getting there takes one of these,
+which is the owner's call, not this section's:
+
+- **a second overlay module,** which first needs a claim slot, since SHEET
+  holds `MEM_OWNER_MAX`'s eight. Carving the border and note tables (4 KB
+  and 5 KB) from one claim frees one;
+- **or dropping something from CHART.OVL.** Measured candidates: dBASE III
+  read/write 1,588 bytes, Data ▸ Form 1,851, the regression family
+  (LINEST/LOGEST/TREND/GROWTH) about 1,500, DIF about 930, CSV/TXT 755.
+
 ### 81.92 ON.KEY and ON.TIME
 
 Each starts a run the way Macro ▸ Run does: it sets `sh_macro_col/row`,
