@@ -104993,6 +104993,33 @@ teeth: **No must not delete.** A build that ignored the answer would still
 pass the Yes check. The third pins §81.79.2 — the open document is still on
 the volume afterwards.
 
+#### 81.79.3 `SH_NAMEMAX` and `SH_NAME_MAX` were two constants one underscore apart
+
+Both were **12** and they mean different things. `SH_NAMEMAX` bounds an **8.3
+file name** — it fills `sh_name`, `sh_delname` (§81.79.2's own buffer) and
+`sh_chart_name`, each sized *"13: 8.3 name + NUL"*. `SH_NAME_MAX` is a
+**defined name's** length (§81.29). Neither carried a comment saying so, and
+the first had no comment at all, so a reader had nothing to tell them apart
+by and either could have been edited for the other's reason.
+
+Three things changed and **the package image is byte-for-byte identical**,
+which is what says it was a naming defect and not a behavioural one:
+
+1. The file-name constant is **`SH_FNAME_MAX`** now, and says what it is.
+2. **`shm_mname` was bounded by the wrong one.** Its own header says it
+   gathers *"a word that is a DEFINED NAME"* and it tested the FILE-name
+   bound — correct only because the two were equal. It reads `SH_NAME_MAX`.
+3. The three buffers are **sized from the constant** rather than from a
+   hand-written `13`. That is the part that closes the hazard rather than
+   labelling it: raising `SH_FNAME_MAX` used to run every copy past the end
+   of its buffer and into the next bss symbol, silently. Setting it to 20 now
+   moves all three and the `OS88_BSS` check reports the shortfall — proven,
+   not assumed.
+
+Two constants that must stay equal are a bug waiting; two that merely happen
+to be equal are a bug already, because nothing says which one a given use
+meant.
+
 ### 81.78 Options ▸ Calculate Now
 
 Excel's Options menu carries **Calculate Now** directly after

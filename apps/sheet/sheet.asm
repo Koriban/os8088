@@ -229,7 +229,13 @@ SH_SB_H      equ 16                 ; stage 2.x: the status bar strip at
                                      ; same height as the formula bar for
                                      ; visual symmetry
 SH_EDITMAX   equ 63                 ; room for a formula, not just a number
-SH_NAMEMAX   equ 12
+; AN 8.3 FILE NAME: 8 + '.' + 3. NOT a defined name's length, which is
+; SH_NAME_MAX down in the names section and is also 12 - two different limits
+; that happen to coincide, which is why this one is spelled out. It bounds
+; sh_name, sh_delname and sh_chart_name, every one of them sized "13: 8.3
+; name + NUL". It was `SH_NAMEMAX` with no comment at all, one underscore
+; away from the other, and a reader had nothing to tell them apart by.
+SH_FNAME_MAX equ 12
 SH_RW_CAP    equ 80                  ; stage 2.x: sh_formula_reidx's own
                                      ; output cap - a shifted reference can
                                      ; grow by a digit or two (row 9->10,
@@ -3240,7 +3246,7 @@ sh_note_arg:
     mov ax, KERNEL_SEG                ; the name lives in the KERNEL's segment,
     mov es, ax                        ; not ours
     mov di, sh_name
-    mov cx, SH_NAMEMAX
+    mov cx, SH_FNAME_MAX
 .cp:
     mov al, [es:si]
     mov [di], al
@@ -10514,7 +10520,7 @@ sh_chartexp_ondlg:
     push di
     mov si, di
     mov di, sh_chart_name
-    mov cx, SH_NAMEMAX               ; the count lives in CX - the loop
+    mov cx, SH_FNAME_MAX               ; the count lives in CX - the loop
 .copy:                               ; body writes AL, so AX cannot hold it
     mov al, [es:si]
     mov [di], al
@@ -17354,7 +17360,7 @@ sh_ondlg:
 .dest:                               ; document's own name, and Save would
                                      ; then have written over the file the
                                      ; user had just chosen to delete
-    mov dx, SH_NAMEMAX               ; the count lives in DX - the loop body
+    mov dx, SH_FNAME_MAX               ; the count lives in DX - the loop body
 .copy:                               ; writes AL, so AX cannot hold it, and
     mov al, [es:si]                  ; CX holds the window
     mov [di], al
@@ -34953,8 +34959,11 @@ shm_mname:
     cmp al, 'Z'
     ja .e
 .k:
-    cmp cx, SH_NAMEMAX
-    jae .no
+    cmp cx, SH_NAME_MAX               ; a DEFINED name, which is what this
+    jae .no                           ; routine's own header says it gathers -
+                                       ; it used to read SH_NAMEMAX, the 8.3
+                                       ; FILE name bound, and was right only
+                                       ; because the two constants were both 12
     mov [di], al
     inc di
     inc si
@@ -43856,8 +43865,15 @@ sh_dlg_del    equ sh_editbuf + 64           ; byte: 81.79, the file dialog was
                                              ; opened by File > Delete
 sh_delname    equ sh_dlg_del + 1            ; 13: ...and the name it chose,
                                              ; kept apart from sh_name
-sh_name       equ sh_delname + 13           ; 13: 8.3 name + NUL
-sh_ox         equ sh_name + 13
+sh_name       equ sh_delname + SH_FNAME_MAX + 1   ; 8.3 name + NUL, and
+sh_ox         equ sh_name + SH_FNAME_MAX + 1      ; DERIVED, not 13: three
+                                                   ; buffers are filled with
+                                                   ; SH_FNAME_MAX bytes and
+                                                   ; were each sized by a
+                                                   ; hand-written literal, so
+                                                   ; raising the constant
+                                                   ; would have run every copy
+                                                   ; into the symbol after it
 sh_oy         equ sh_ox + 2
 sh_cw         equ sh_oy + 2
 sh_ch         equ sh_cw + 2
@@ -44367,7 +44383,7 @@ sh_chart_name  equ sh_chart_cnt + 2        ; 13: the exported .BMP's own 8.3
                                              ; load/save filename)
 
 ; apps/os88chart.inc's own required scratch (see that file's header comment)
-sh_chart_title equ sh_chart_name + 13       ; 16: "Column A"
+sh_chart_title equ sh_chart_name + SH_FNAME_MAX + 1  ; 16: "Column A"
 sh_scan_col    equ sh_chart_title + 16  ; which column a scan pass reads...
 sh_scan_off    equ sh_scan_col + 2      ; ...and where in sh_stgseg it lands
 sh_chart_cnt2  equ sh_scan_off + 2      ; the second series' own count
