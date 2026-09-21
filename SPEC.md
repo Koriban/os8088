@@ -104478,6 +104478,95 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.85 The reference family: OFFSET, ABSREF, RELREF, REFTEXT, TEXTREF, DEREF, SELECTION, CALLER
+
+The second half of wave 1 of `docs/plans/SHEET-MACRO-PLAN.md`. These are the
+functions that let a macro compute a place instead of naming one. The
+definitions come from *Functions and Macros*, and each one is checked against
+the manual's own example:
+
+| function | answers | the manual's example, and SHEET's answer |
+|---|---|---|
+| `OFFSET(ref,rows,cols[,h[,w]])` | a reference | `OFFSET(C3,2,3,1,1)` = F5; `OFFSET(C3:E5,-1,0,3,3)` = C2:E4; over the edge = `#REF!` |
+| `ABSREF(ref_text,ref)` | a reference | `ABSREF("R[-2]C[-2]",C3)` = A1. The text is relative to ref's top-left |
+| `RELREF(ref,rel_to_ref)` | text | `RELREF(A1,C3)` = `"R[-2]C[-2]"`. A zero part is written bare, as in `"RC[1]"` |
+| `REFTEXT(ref[,a1])` | text | absolute: `"$C$3"` when a1 is TRUE, `"R3C3"` when it is FALSE or omitted |
+| `TEXTREF(text[,a1])` | a reference | `TEXTREF("R5C5",FALSE)` = E5; `TEXTREF("B7",FALSE)` = `#REF!` |
+| `DEREF(ref)` | a value | ref's top-left value, and never a reference |
+| `SELECTION()` | a reference | the whole selection |
+| `CALLER()` | a reference | the cell whose formula called the running subroutine (§81.84); `#REF!` in a macro the user started |
+
+**`ACTIVE.CELL()` is a reference now as well** (it is one in Excel), so
+`SET.VALUE(OFFSET(ACTIVE.CELL(),1,0),x)` writes below the active cell.
+**Resident +0 bytes. `CHART.OVL` +1,055 bytes** (48,586 → 49,641 of
+`CH_OVKB`'s 51,200). All eight functions are extension functions (§81.83),
+with Ftab indices from MS-XLS 2.5.198.17. The selfcheck holds them to that
+document and was mutated on an index and on an arity.
+
+#### 81.85.1 A reference is two answers, and the argument decides which one it reads
+
+SHEET's evaluator has **no reference value**. An expression answers a
+number, text, a logical or an error. A reference exists only as formula
+TEXT, which an argument parser recognises (`sh_pargref`). Adding a fifth
+value type would change every function in the evaluator. Instead, a
+reference function gives two answers:
+
+- **its value**, which is the top-left cell's value. Excel converts a
+  reference to a value like this wherever a value is wanted, and in SHEET
+  that is everywhere except one place;
+- **its reference**, which goes into a record in module state
+  (`shm_rrok`…`shm_rrr2`). The one place is a macro function's reference
+  argument (`shm_mref`, `shm_mrangeref`), and it reads the record back only
+  when **the whole argument is exactly one call to the function that wrote
+  it**.
+
+"Whole" is decided by **position, not by name**. `shm_pmacro` records where
+the answering call's arguments begin and end. `shm_refarg` accepts the
+argument only if both of these hold:
+
+- the argument ends where the call ends;
+- everything before the call's `(` is a single identifier.
+
+`SET.VALUE(OFFSET(C3,0,5)+0,77)` is therefore refused, because the argument
+is an expression. Its value names no cell, even though OFFSET set the
+record. Nesting needs no extra machinery. `OFFSET(OFFSET(A1,1,1),12,6)`
+records the inner call and then the outer one over it, and the outer one is
+the argument. The gate breaks both rules:
+
+- a `shm_refarg` that accepts any argument fails the refusal row;
+- a record that keeps its first stamp fails the nested row.
+
+#### 81.85.2 Two passes over a text argument
+
+`ABSREF` and `TEXTREF` take text followed by a second argument, and the
+second argument's evaluation can reuse `sh_sacc`. They do not copy the text
+into a buffer, which a nested call would overwrite. Instead they evaluate it
+**twice**: once to get past it, and again after the second argument is
+known, parsing it straight away. This is INPUT's approach again, and the text
+is almost always a literal.
+
+`ABSREF` parses with the ordinary R1C1 reader, swapping `ref`'s top-left in
+for the active cell during the parse, so a relative part means what it means
+everywhere else in SHEET. `TEXTREF` reads **only** the style its `a1`
+argument names. That is what makes the manual's `TEXTREF("B7",FALSE)` a
+`#REF!`, and `shm_rangetext`'s two halves are called on their own for it.
+
+#### 81.85.3 What this does NOT do
+
+- **A worksheet function cannot be given a range.** `SUM(OFFSET(A1,0,0,3,1))`
+  sums A1 alone, where Excel sums A1:A3. SUM's arguments are read from
+  formula text by `sh_pargref`, and a reference value does not exist
+  (§81.85.1). A function that answers a reference is exact **as a macro
+  function's argument**, which is what the macro language needs.
+- **No sheet qualification.** Excel's `REFTEXT` and `SELECTION` name the
+  document. SHEET's text is the bare reference, because a formula can see
+  only its own sheet.
+- **CALLER is not an array formula's range.** SHEET has no multi-cell
+  array formulas (§81.67). A subroutine's caller is one cell.
+
+`tests/sheetmref.py` has 15 checks, one per row of the table above plus both
+halves of §81.85.1.
+
 ### 81.84 Subroutines, ARGUMENT and RETURN(value)
 
 The first wave of `docs/plans/SHEET-MACRO-PLAN.md` that adds functions, and

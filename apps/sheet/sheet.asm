@@ -34944,7 +34944,16 @@ shm_pmacro:
     jne .inert
 .act:
     shl di, 1
+    push si                           ; wave 1b: where its arguments start
+    mov byte [cs:shm_rrnew], 0
     call word [cs:di + shm_mtab]      ; CS: the table is the module's own
+    pop dx
+    cmp byte [cs:shm_rrnew], 0        ; it answered a REFERENCE: say which
+    je .out                           ; call it was, by where its text is
+    mov byte [cs:shm_rrnew], 0        ; (shm_refarg)
+    mov [cs:shm_rrin], dx
+    mov [cs:shm_rrout], si
+    mov byte [cs:shm_rrok], 1
     jmp short .out
 .inert:
     SHOUT sh_skipargs
@@ -34963,6 +34972,8 @@ shm_mtab:
     dw shm_mfor, shm_mwhile, shm_mnext, shm_mbreak, shm_mactcell
     dw shm_mcopy, shm_mcut, shm_mpaste, shm_mclear, shm_mcalc
     dw shm_mcall, shm_margument, shm_mresult          ; wave 1a
+    dw shm_moffset, shm_mabsref, shm_mrelref, shm_mreftext ; wave 1b
+    dw shm_mtextref, shm_mderef, shm_mselection, shm_mcaller
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -34976,6 +34987,8 @@ shm_mkind:
     db 0, 0, 0, 0, 1,  0, 0, 0, 0, 0  ; FOR .. ACTIVE.CELL .. CALCULATE.NOW
     db 0, 1, 0                        ; CALL, ARGUMENT (a VALUE: it answers
                                        ; wherever x is read), RESULT
+    db 1, 1, 1, 1,  1, 1, 1, 1        ; OFFSET .. CALLER: the reference
+                                       ; family, every one a value
 shm_mkind_end:
 
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
@@ -34984,6 +34997,14 @@ shm_mxnames:
                                        ; hold, so shm_mfind cannot return it
     db 'ARGUMENT', 0
     db 'RESULT', 0
+    db 'OFFSET', 0                    ; wave 1b: the REFERENCE family
+    db 'ABSREF', 0
+    db 'RELREF', 0
+    db 'REFTEXT', 0
+    db 'TEXTREF', 0
+    db 'DEREF', 0
+    db 'SELECTION', 0
+    db 'CALLER', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -34992,6 +35013,14 @@ shm_mxrpn:
     db 0xFF, 1, 0                     ; the CALL: no BIFF form yet (wave 5)
     db 0x51, 1, 0                     ; ARGUMENT(name[,type[,ref]]) - Ftab
     db 0x60, 1, 0                     ; RESULT([type]) - Ftab
+    db 0x4E, 1, 0                     ; OFFSET(ref,rows,cols[,h[,w]])
+    db 0x4F, 0, 0                     ; ABSREF(ref_text,ref)
+    db 0x50, 0, 0                     ; RELREF(ref,rel_to_ref)
+    db 0x92, 1, 0                     ; REFTEXT(ref[,a1])
+    db 0x93, 1, 0                     ; TEXTREF(text[,a1])
+    db 0x5A, 0, 0                     ; DEREF(ref)
+    db 0x5F, 0, 0                     ; SELECTION()
+    db 0x59, 0, 0                     ; CALLER()
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -35693,8 +35722,17 @@ shm_mref:
 .name:
     call shm_mname                    ; ...a defined name standing alone
     jc .out
-    SHOUT sh_pcmp                     ; ...or anything that ANSWERS with one
-    cmp byte [sh_curtype], SH_T_TEXT
+    push cx
+    push dx
+    push si
+    mov byte [cs:shm_rrok], 0
+    SHOUT sh_pcmp                     ; ...or anything that ANSWERS with one:
+    pop dx                            ; a reference function, called as the
+    call shm_refarg                   ; whole argument (wave 1b)...
+    pop dx
+    pop cx
+    jc .out
+    cmp byte [sh_curtype], SH_T_TEXT  ; ...or text
     jne .no
     push si
     mov si, sh_sacc
@@ -35943,8 +35981,13 @@ shm_mrangeref:
 .name:
     call shm_mname                    ; a defined name, near/far corner both
     jc .out
-    SHOUT sh_pcmp                     ; ...or anything that ANSWERS with text
-    cmp byte [sh_curtype], SH_T_TEXT
+    push si
+    mov byte [cs:shm_rrok], 0
+    SHOUT sh_pcmp                     ; ...a reference function's answer
+    pop dx
+    call shm_refarg
+    jc .out
+    cmp byte [sh_curtype], SH_T_TEXT  ; ...or anything that ANSWERS with text
     jne .no
     push si
     mov si, sh_sacc
@@ -35955,6 +35998,547 @@ shm_mrangeref:
     clc
 .out:
     ret
+
+; =============================================================================
+; THE REFERENCE FAMILY (macro plan wave 1b): OFFSET, ABSREF, RELREF, REFTEXT,
+; TEXTREF, DEREF, SELECTION, CALLER - and ACTIVE.CELL, which is one too.
+;
+; SHEET's evaluator has no reference VALUE: an expression answers a number, a
+; text, a logical or an error, and a reference is something only an argument
+; parser recognises in the formula's TEXT (sh_pargref). So a function that
+; answers a reference answers two things. Its VALUE is the top-left cell's,
+; which is what Excel converts a reference to wherever a value is wanted - and
+; here that is everywhere but one place. Its REFERENCE goes in the record
+; below, and the one place is a macro function's reference argument
+; (shm_mref, shm_mrangeref), which reads it back when - and only when - the
+; WHOLE argument was one call to the function that wrote it:
+;
+;   SELECT(OFFSET(A1,1,1))        B2 - the argument is the call
+;   SET.VALUE(OFFSET(A1,1,1)+1,5) the argument is an expression; its value
+;                                 is a number, which names no cell - refused
+;   SELECT(SUM(OFFSET(A1,0,0)))   SUM's call, not OFFSET's - refused
+;
+; "Whole" is decided by POSITION, not by name. shm_pmacro stamps where the
+; answering call's arguments began and ended; the argument is that call when
+; it ends where the call ends and everything before the call's '(' is one
+; identifier. Nesting needs nothing more: OFFSET(OFFSET(A1,1,1),1,1) stamps
+; the inner call, then the outer one over it, and the outer one is the
+; argument.
+;
+; What this cannot do is hand a RANGE to a worksheet function: SUM(OFFSET(..))
+; sums the top-left cell, where Excel sums the range, because SUM's arguments
+; are sh_pargref's and it reads formula text. Declared, 81.85.
+; =============================================================================
+shm_rrok:   db 0                      ; the record below is this argument's
+shm_rrnew:  db 0                      ; the handler just answered a reference
+shm_rrin:   dw 0                      ; SI just past the call's '('
+shm_rrout:  dw 0                      ; ...and just past its ')'
+shm_rrc1:   dw 0                      ; the reference, top-left first
+shm_rrr1:   dw 0
+shm_rrc2:   dw 0
+shm_rrr2:   dw 0
+
+; shm_refarg - was the argument that began at DX and ends at SI exactly one
+; call to a reference function? out: CF=1 AX/BX near corner, CX/DX far;
+; CF=0 otherwise. SI is unchanged either way
+shm_refarg:
+    cmp byte [cs:shm_rrok], 0
+    je .no
+    cmp si, [cs:shm_rrout]            ; it ends where the argument ends...
+    jne .no
+    push si
+    mov si, dx
+    mov dx, [cs:shm_rrin]
+    dec dx                            ; ...and starts, name and all, here:
+    cmp si, dx                        ; its '('
+    jae .nop
+.id:
+    mov al, [si]                      ; nothing but one identifier before it
+    call shm_isname
+    jnc .nop
+    inc si
+    cmp si, dx
+    jb .id
+    cmp byte [si], '('
+    jne .nop
+    pop si
+    mov ax, [cs:shm_rrc1]
+    mov bx, [cs:shm_rrr1]
+    mov cx, [cs:shm_rrc2]
+    mov dx, [cs:shm_rrr2]
+    mov byte [sh_evalerr], 0          ; the CELL's error is not the argument's
+    stc
+    ret
+.nop:
+    pop si
+.no:
+    clc
+    ret
+
+; shm_isname - CF=1 when AL can be part of a function's name
+shm_isname:
+    cmp al, '.'
+    je .y
+    cmp al, '_'
+    je .y
+    cmp al, '0'
+    jb .n
+    cmp al, '9'
+    jbe .y
+    and al, 0xDF
+    cmp al, 'A'
+    jb .n
+    cmp al, 'Z'
+    ja .n
+.y:
+    stc
+    ret
+.n:
+    clc
+    ret
+
+; shm_refret - answer the reference AX/BX .. CX/DX (either corner order):
+; record it, consume the rest of the arguments, and answer the top-left
+; cell's value - an empty cell is zero, as ACTIVE.CELL always answered
+shm_refret:
+    cmp ax, cx
+    jbe .c
+    xchg ax, cx
+.c:
+    cmp bx, dx
+    jbe .r
+    xchg bx, dx
+.r:
+    mov [cs:shm_rrc1], ax
+    mov [cs:shm_rrr1], bx
+    mov [cs:shm_rrc2], cx
+    mov [cs:shm_rrr2], dx
+    mov byte [cs:shm_rrnew], 1
+    SHOUT sh_skipargs
+    mov ax, [cs:shm_rrc1]
+    mov bx, [cs:shm_rrr1]
+    SHOUT sh_getcell2
+    jc .out
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+.out:
+    ret
+
+; shm_referr - answer the error AL (unless an argument already answered one)
+; and consume the rest of the arguments
+shm_referr:
+    cmp byte [sh_evalerr], 0
+    jne .have
+    mov [sh_evalerr], al
+.have:
+    SHOUT sh_skipargs
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+    ret
+shm_refbad:
+    mov al, SH_ERR_VALUE
+    jmp short shm_referr
+shm_refnone:
+    mov al, SH_ERR_REF
+    jmp short shm_referr
+
+; shm_intarg - an optional integer argument after a ','. in: AX = what an
+; omitted one is worth; out: AX, SI past it; CF=1 when it is there and is
+; not a number (an error, or text)
+shm_intarg:
+    cmp byte [si], ','
+    jne .dflt
+    inc si
+    cmp byte [si], ','
+    je .dflt
+    cmp byte [si], ')'
+    je .dflt
+    SHOUT sh_pcmp
+    cmp byte [sh_evalerr], 0
+    jne .bad
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .bad
+    SHOUT sh_acc_toint                ; CF=1 when it did not fit
+    ret
+.bad:
+    stc
+    ret
+.dflt:
+    clc
+    ret
+
+; shm_boolarg - an optional logical after a ','. out: AL = 1 true, 0 false or
+; omitted, SI past it
+shm_boolarg:
+    xor al, al
+    cmp byte [si], ','
+    jne .out
+    inc si
+    cmp byte [si], ')'
+    je .out
+    SHOUT sh_pcmp
+    call shm_mtruth
+    mov al, 0
+    jnc .out
+    inc al
+.out:
+    ret
+
+; shm_textarg - SI at a TEXT argument: evaluate it and PARSE it in the same
+; breath, before anything else can reuse sh_sacc. in: AH = 0 R1C1, 1 A1, 2
+; either (shm_rangetext's own choice). out: CF=1 AX/BX .. CX/DX; CF=0 when
+; it is not text or does not read as a reference, all of it
+shm_textarg:
+    push ax
+    SHOUT sh_pcmp
+    pop ax
+    cmp byte [sh_evalerr], 0
+    jne .no
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .no
+    push si
+    mov si, sh_sacc
+    cmp ah, 1
+    je .a1
+    ja .any
+    call shm_rangetext.dorc
+    jmp short .done
+.a1:
+    call shm_rangetext.doa1
+    jmp short .done
+.any:
+    call shm_rangetext
+.done:
+    pop si
+    ret
+.no:
+    clc
+    ret
+
+; shm_rtcat - the DS string at SI onto DI
+shm_rtcat:
+    push ax
+    push si
+.c:
+    mov al, [si]
+    or al, al
+    jz .e
+    mov [di], al
+    inc si
+    inc di
+    jmp short .c
+.e:
+    pop si
+    pop ax
+    ret
+
+; shm_rtnum - AX as one part of an R1C1 reference at DI, in the form
+; [cs:shm_rtform]: 0 absolute (a 0-based index, written 1-based), 2 relative
+; (an offset: "[n]", or nothing at all for zero - "RC", not "R[0]C[0]", which
+; is Excel's own form)
+shm_rtnum:
+    push ax
+    push si
+    cmp byte [cs:shm_rtform], 2
+    jne .abs
+    or ax, ax
+    jz .out
+    mov byte [di], '['
+    inc di
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call shm_rtcat
+    mov byte [di], ']'
+    inc di
+    jmp short .out
+.abs:
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call shm_rtcat
+.out:
+    pop si
+    pop ax
+    ret
+
+; shm_rtone - one cell AX col, BX row at DI, in the form [cs:shm_rtform]:
+; 0 "R3C3", 1 "$C$3", 2 the relative "R[-2]C[-2]" (AX/BX are then offsets)
+shm_rtone:
+    push ax
+    push si
+    cmp byte [cs:shm_rtform], 1
+    je .a1
+    mov byte [di], 'R'
+    inc di
+    push ax
+    mov ax, bx
+    call shm_rtnum
+    pop ax
+    mov byte [di], 'C'
+    inc di
+    call shm_rtnum
+    jmp short .out
+.a1:
+    mov byte [di], '$'
+    inc di
+    SHOUT sh_colname
+    mov si, sh_colbuf
+    call shm_rtcat
+    mov byte [di], '$'
+    inc di
+    mov ax, bx
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call shm_rtcat
+.out:
+    pop si
+    pop ax
+    ret
+
+shm_rtform: db 0                      ; shm_rtone's form, set by its caller:
+                                       ; CX is the far column, so not CL
+
+; shm_rttext - AX/BX .. CX/DX as the TEXT answer, in the form [cs:shm_rtform]
+; (shm_rtone's): a range is two cells and a ':', one cell is one
+shm_rttext:
+    push di
+    mov di, sh_sacc
+    call shm_rtone
+    cmp ax, cx
+    jne .two
+    cmp bx, dx
+    je .one
+.two:
+    mov byte [di], ':'
+    inc di
+    mov ax, cx
+    mov bx, dx
+    call shm_rtone
+.one:
+    mov byte [di], 0
+    pop di
+    SHOUT sh_skipargs
+    xor ax, ax
+    SHOUT sh_acc_int                  ; the number underneath a string is zero
+    mov byte [sh_curtype], SH_T_TEXT
+    ret
+
+; OFFSET(ref, rows, cols[, height[, width]]) - ref's top-left moved down rows
+; and right cols, height by width (ref's own when omitted). Over the edge of
+; the sheet is #REF!, and so is a height or width under one
+shm_moffset:
+    call shm_mrangeref
+    jc .ref
+    jmp shm_refbad
+.ref:
+    push bp
+    mov bp, sp                        ; SS: these four are on the stack
+    sub cx, ax                        ; ref's own size, for an omitted one
+    inc cx
+    sub dx, bx
+    inc dx
+    push ax                           ; [bp-2] col
+    push bx                           ; [bp-4] row
+    push dx                           ; [bp-6] height
+    push cx                           ; [bp-8] width
+    xor ax, ax
+    call shm_intarg                   ; rows
+    jc .bad
+    add [bp-4], ax
+    xor ax, ax
+    call shm_intarg                   ; cols
+    jc .bad
+    add [bp-2], ax
+    mov ax, [bp-6]
+    call shm_intarg                   ; height
+    jc .bad
+    mov [bp-6], ax
+    mov ax, [bp-8]
+    call shm_intarg                   ; width
+    jc .bad
+    mov [bp-8], ax
+    mov ax, [bp-2]
+    mov bx, [bp-4]
+    cmp word [bp-6], 1
+    jl .none
+    cmp word [bp-8], 1
+    jl .none
+    cmp ax, SH_COLS                   ; unsigned: above or left of the sheet
+    jae .none                         ; wraps high and is refused with it
+    cmp bx, SH_ROWS
+    jae .none
+    mov cx, ax
+    add cx, [bp-8]
+    dec cx
+    cmp cx, SH_COLS
+    jae .none
+    mov dx, bx
+    add dx, [bp-6]
+    dec dx
+    cmp dx, SH_ROWS
+    jae .none
+    add sp, 8                         ; the four above, all still there
+    pop bp
+    jmp shm_refret
+.bad:
+    add sp, 8                         ; the four above, all still there
+    pop bp
+    jmp shm_refbad
+.none:
+    add sp, 8                         ; the four above, all still there
+    pop bp
+    jmp shm_refnone
+
+; ABSREF(ref_text, ref) - the R1C1 text read relative to ref's TOP-LEFT
+; instead of the active cell. The text is evaluated TWICE, once to get past it
+; to ref and again once ref is known, because ref's own evaluation can reuse
+; sh_sacc - INPUT's idiom, and the text is nearly always a literal. It is
+; parsed by shm_rangetext with the active cell swapped for ref's corner, so a
+; relative part means exactly what it means everywhere else here
+shm_mabsref:
+    push si                           ; the text, for the second pass
+    SHOUT sh_pcmp
+    cmp byte [si], ','
+    jne .badpop
+    inc si
+    call shm_mrangeref
+    jnc .badpop
+    mov di, si                        ; where ref ended
+    pop si
+    push di
+    push word [sh_selcol]
+    push word [sh_selrow]
+    mov [sh_selcol], ax
+    mov [sh_selrow], bx
+    mov ah, 2
+    call shm_textarg
+    pop word [sh_selrow]              ; POP to memory: the flags and the four
+    pop word [sh_selcol]              ; corners survive it
+    pop si
+    jnc .none
+    jmp shm_refret
+.badpop:
+    pop di
+    jmp shm_refbad
+.none:
+    jmp shm_refnone
+
+; RELREF(ref, rel_to_ref) - ref as R1C1 text relative to rel_to_ref's
+; top-left: RELREF(A1,C3) is "R[-2]C[-2]"
+shm_mrelref:
+    call shm_mrangeref
+    jnc .bad
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp byte [si], ','
+    jne .badpop
+    inc si
+    call shm_mrangeref                ; AX/BX the base
+    jnc .badpop
+    pop dx
+    sub dx, bx
+    pop cx
+    sub cx, ax
+    pop di
+    sub di, bx
+    mov bx, di
+    pop di
+    sub di, ax
+    mov ax, di
+    mov byte [cs:shm_rtform], 2
+    jmp shm_rttext
+.badpop:
+    add sp, 8
+.bad:
+    jmp shm_refbad
+
+; REFTEXT(ref[, a1]) - ref as ABSOLUTE text: "$C$3" when a1 is TRUE, "R3C3"
+; when it is FALSE or omitted. Excel's names the sheet as well; this one has
+; the one sheet a formula can see
+shm_mreftext:
+    call shm_mrangeref
+    jnc .bad
+    push ax
+    push bx
+    push cx
+    push dx
+    call shm_boolarg
+    mov [cs:shm_rtform], al           ; 1 A1, 0 R1C1 - shm_rtone's numbering
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp shm_rttext
+.bad:
+    jmp shm_refbad
+
+; TEXTREF(text[, a1]) - the reverse: text as A1 when a1 is TRUE, as R1C1 when
+; it is FALSE or omitted - and only as that, so TEXTREF("B7",FALSE) is #REF!.
+; A relative R1C1 part is relative to the active cell. Two passes over the
+; text, for ABSREF's reason: a1 is evaluated between them
+shm_mtextref:
+    push si
+    SHOUT sh_pcmp
+    call shm_boolarg
+    mov di, si
+    pop si
+    push di
+    mov ah, al                        ; 1 A1, 0 R1C1 - shm_textarg's
+    call shm_textarg
+    pop si
+    jnc .none
+    jmp shm_refret
+.none:
+    jmp shm_refnone
+
+; DEREF(ref) - the value of ref's top-left cell, and never the reference:
+; SET.VALUE(DEREF(A1),..) writes to the cell A1 NAMES, if it names one
+shm_mderef:
+    call shm_mrangeref
+    jnc .bad
+    push ax
+    push bx
+    SHOUT sh_skipargs
+    pop bx
+    pop ax
+    SHOUT sh_getcell2
+    jc .out
+    xor ax, ax
+    SHOUT sh_acc_int
+    mov byte [sh_curtype], SH_T_NUM
+.out:
+    ret
+.bad:
+    jmp shm_refbad
+
+; SELECTION() - the selection, all of it
+shm_mselection:
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    mov cx, [sh_selcol2]
+    mov dx, [sh_selrow2]
+    jmp shm_refret
+
+; CALLER() - the cell whose formula called the running subroutine; #REF! in
+; a macro the user started, which nothing called
+shm_mcaller:
+    cmp byte [cs:shm_csp], 0
+    je .none
+    push di
+    call shm_ctop
+    mov ax, [cs:di]
+    mov bx, [cs:di+2]
+    pop di
+    mov cx, ax
+    mov dx, bx
+    jmp shm_refret
+.none:
+    jmp shm_refnone
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
@@ -36577,16 +37161,11 @@ shm_mbeep:
 ; ACTIVE.CELL() - the selected cell's value (Excel converts the reference to
 ; its contents wherever a value is wanted, which is everywhere here)
 shm_mactcell:
-    SHOUT sh_skipargs
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_getcell2
-    jc .out
-    xor ax, ax                        ; an empty cell is zero
-    SHOUT sh_acc_int
-    mov byte [sh_curtype], SH_T_NUM
-.out:
-    ret
+    mov ax, [sh_selcol]               ; ...and, since wave 1b, a REFERENCE:
+    mov bx, [sh_selrow]               ; SET.VALUE(ACTIVE.CELL(), 5) is the
+    mov cx, ax                        ; active cell, as it is in Excel
+    mov dx, bx
+    jmp shm_refret
 
 ; --- the commands: the menu's own routines, on the selection ---------------
 shm_mcopy:

@@ -4882,6 +4882,15 @@ SOAK = [
         "design review caught losing the call until a pending call outranked "
         "every other control in the step",
         needs=("marty",), serial=True),
+    Row("sheetmref", "soak", py("tests/sheetmref.py"), 400.0,
+        "SPEC.md 81.85: the reference family - OFFSET, ABSREF, RELREF, "
+        "REFTEXT, TEXTREF, DEREF, SELECTION, CALLER, and ACTIVE.CELL as a "
+        "reference. A reference function answers its top-left VALUE and "
+        "leaves the reference for a reference argument that is exactly one "
+        "call to it: both halves, a range, nesting, CALLER in and out of a "
+        "subroutine, the manual's own #REF! for TEXTREF, and an expression "
+        "refused as a target",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

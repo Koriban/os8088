@@ -103,6 +103,15 @@ BIFF_MACRO_FUNCS = {
     # signatures - ARGUMENT(name_text,data_type_num,ref), RESULT(type_number)
     0x51: ('ARGUMENT'   , (1, 3)  , (1, 3)),
     0x60: ('RESULT'     , (0, 1)  , (0, 1)),
+    # wave 1b, the reference family - same source, same order as shm_mxrpn
+    0x4E: ('OFFSET'     , (3, 5)  , (3, 5)),
+    0x4F: ('ABSREF'     , (2, 2)  , (2, 2)),
+    0x50: ('RELREF'     , (2, 2)  , (2, 2)),
+    0x92: ('REFTEXT'    , (1, 2)  , (1, 2)),
+    0x93: ('TEXTREF'    , (1, 2)  , (1, 2)),
+    0x5A: ('DEREF'      , (1, 1)  , (1, 1)),
+    0x5F: ('SELECTION'  , (0, 0)  , (0, 0)),
+    0x59: ('CALLER'     , (0, 0)  , (0, 0)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its

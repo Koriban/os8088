@@ -1,6 +1,6 @@
 # SHEET's macro language — finishing it
 
-**Status: planned 2026-09-21. Wave 0 done; wave 1 next.** Every count here was
+**Status: planned 2026-09-21. Waves 0 and 1 done; wave 2 next.** Every count here was
 measured from Microsoft Excel **Version 2.0**'s *Functions and Macros* manual
 (`_LIBRARY/documentation/excel_man/`), OCR-repaired by hand where the scan
 split a name, and cross-checked against SHEET's own `sh_functab` through
@@ -111,9 +111,12 @@ either table. Resident **+30**, module **+153**. `sheetmacro`, `sheetrecord`,
 `sheetmbiff`, `sheetfunc` and `sheeteval` pass unchanged. **The hit path has
 no function to find yet** — wave 1's first one is what proves it.
 
-**Wave 1 — subroutines and references (10).**
+**Wave 1 — subroutines and references (10). DONE.**
 `ARGUMENT`, `CALLER`, `RESULT` — a macro called as `=NAME(args)` from another, with a return;
-the plan's "the one that makes the rest worth having". Then `ABSREF`, `DEREF`, `OFFSET`, `REFTEXT`, `RELREF`, `SELECTION`, `TEXTREF`.
+the plan's "the one that makes the rest worth having" (§81.84, `sheetmsub`). Then `ABSREF`, `DEREF`, `OFFSET`, `REFTEXT`, `RELREF`, `SELECTION`, `TEXTREF`
+(§81.85, `sheetmref`): a reference function answers its top-left value and
+leaves the reference for a macro argument that is exactly one call to it.
+Resident +0, module +1,055; `CHART.OVL` 49,641 of `CH_OVKB`'s 51,200.
 
 **Wave 2 — control and information (17).**
 `CANCEL.KEY`, `DISABLE.INPUT`, `ECHO`, `ERROR`, `RESTART`, `STEP`, `WAIT`; `DIRECTORY`, `GET.CELL`, `GET.DEF`, `GET.DOCUMENT`, `GET.FORMULA`, `GET.NAME`, `GET.NOTE`, `GET.WINDOW`, `GET.WORKSPACE`, `NAMES`.
