@@ -65,7 +65,12 @@ JUSTIFY = 7                             # ...and Justify LAST in it: Excel's
 # A build that merged the whole column instead would wrap the SAME two lines
 # plus 'solo' and lay them in rows 1-3, leaving row 4 empty - the exact
 # mirror of what is right, which is why row 3 and row 4 are both asserted.
-PARA = ['alpha beta gamma delta', 'epsilon zeta']
+# NOTE THE TRAILING SPACE on the second one. It is deliberate: a line that
+# ends where the source does keeps whatever the source ended with, so this is
+# what proves sh_ju_nextline right-trims. Without that, the last line comes
+# back as 'delta epsilon zeta ' - a space the cell really holds - and the
+# expectation below does not change, so this costs the fixture nothing.
+PARA = ['alpha beta gamma delta', 'epsilon zeta ']
 SOLO = 'solo'
 WANT = ['alpha beta gamma', 'delta epsilon zeta', None, 'solo']
 
@@ -184,7 +189,10 @@ def main():
           "text the user cannot retype into the cell it came out of",
           got=[len(got[0] or ''), len(got[1] or '')], want="both <= 21")
     joined = ' '.join(x for x in got if x)
-    want = ' '.join(PARA) + ' ' + SOLO
+    want = ' '.join((' '.join(PARA) + ' ' + SOLO).split())   # the fixture's
+                                                             # own trailing
+                                                             # space is not a
+                                                             # word
     check(joined == want, "...and not one word is lost or reordered",
           "wrapping is a re-break, not a rewrite: the words come back in "
           "order and entire, which is the one property that holds however "

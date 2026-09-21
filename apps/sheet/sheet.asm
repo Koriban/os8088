@@ -11730,6 +11730,21 @@ sh_ju_nextline:
     add si, dx
     mov cx, dx
 .emit:
+    ; ...and no line ENDS in a space. `.lead` takes the leading ones off the
+    ; next line, but a break that lands on the SECOND of two consecutive
+    ; spaces leaves the first one stored: 'aa  bb' at width 4 emitted 'aa '.
+    ; A justified line is written back as a label, so that space is a
+    ; character the cell really holds.
+.rtrim:
+    or cx, cx
+    jz .emit0
+    mov bx, cx
+    dec bx
+    cmp byte [sh_ju_line + bx], ' '
+    jne .emit0
+    mov cx, bx
+    jmp short .rtrim
+.emit0:
     mov bx, cx
     mov byte [sh_ju_line + bx], 0
     mov [sh_ju_si], si
@@ -26203,12 +26218,18 @@ sh_rpn_fce:
     db 1, 1, 1, 1, 1                  ; COPY CUT PASTE CLEAR CALCULATE.NOW
 sh_rpn_fce_end:
 SH_FN_MAC0 equ (sh_functab_mac0 - sh_functab) / 2
-  %if (sh_rpn_fce_end - sh_rpn_fce) != 20
-    %error "sh_rpn_fce must have one entry per macro function - see 81.83"
-  %endif
-  %if (sh_rpn_fid_mac0 - sh_rpn_fid) != SH_FN_MAC0
-    %error "sh_rpn_fid's macro run is not at sh_functab's - see 81.83"
-  %endif
+; TIMES AND NOT %if, and that distinction cost a vacuous assertion. `%if` is a
+; PREPROCESSOR test and label arithmetic is not reliably available to it -
+; NASM evaluates it against pass-1 values - so `%if (end - start) != 20` sat
+; here testing NOTHING, and a mutation that made the table twenty-one entries
+; long built cleanly. `times` is assembled, emits nothing when the count is
+; zero, and drives NEGATIVE when it is not, which -w+error turns into a build
+; failure naming the line. It is the same idiom OS88_BSS uses below and for
+; the same reason. Proven by mutation, both ways, not by reading.
+    times ((sh_rpn_fce_end - sh_rpn_fce) - 20) db 0
+    times (20 - (sh_rpn_fce_end - sh_rpn_fce)) db 0
+    times ((sh_rpn_fid_mac0 - sh_rpn_fid) - SH_FN_MAC0) db 0
+    times (SH_FN_MAC0 - (sh_rpn_fid_mac0 - sh_rpn_fid)) db 0
 
 sh_rpn_fvar:
     db 1, 1, 1, 1, 1                  ; SUM AVERAGE MIN MAX COUNT
