@@ -128,6 +128,9 @@ BIFF_MACRO_FUNCS = {
     0xBB: ('GET.WINDOW' , (1, 2)  , (1, 2)),
     0xBA: ('GET.WORKSPACE', (1, 1), (1, 1)),
     0x7B: ('DIRECTORY'  , (0, 1)  , (0, 1)),
+    # slice 3b (81.89): the two that are Ftab functions, not Cetab commands
+    0x58: ('SET.NAME'   , (1, 2)  , (1, 2)),
+    0xC0: ('NOTE'       , (0, 4)  , (0, 4)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its
@@ -174,6 +177,38 @@ BIFF_CETAB = {
     0x92: 'DATA.FORM',
     0x96: 'FORMAT.FONT',
     0xA7: 'CALCULATE.DOCUMENT',
+    # slice 3b (81.89): Formula, Data, RUN, movement, the gallery
+    0x11: 'RUN',
+    0x22: 'DATA.FIND',
+    0x23: 'EXTRACT',
+    0x24: 'DATA.DELETE',
+    0x27: 'SORT',
+    0x3D: 'DEFINE.NAME',
+    0x3F: 'FORMULA.GOTO',
+    0x40: 'FORMULA.FIND',
+    0x41: 'SELECT.LAST.CELL',
+    0x42: 'SHOW.ACTIVE.CELL',
+    0x43: 'GALLERY.AREA',
+    0x44: 'GALLERY.BAR',
+    0x45: 'GALLERY.COLUMN',
+    0x46: 'GALLERY.LINE',
+    0x47: 'GALLERY.PIE',
+    0x48: 'GALLERY.SCATTER',
+    0x5B: 'PARSE',
+    0x63: 'DATA.FIND.NEXT',
+    0x64: 'DATA.FIND.PREV',
+    0x65: 'FORMULA.FIND.NEXT',
+    0x66: 'FORMULA.FIND.PREV',
+    0x6A: 'UNLOCKED.NEXT',
+    0x6B: 'UNLOCKED.PREV',
+    0x6E: 'DELETE.NAME',
+    0x70: 'VLINE',
+    0x71: 'HLINE',
+    0x72: 'VPAGE',
+    0x73: 'HPAGE',
+    0x74: 'VSCROLL',
+    0x75: 'HSCROLL',
+    0xBB: 'SELECT.END',
 }
 
 # It is here, in the SECOND reader, for the reason this whole file exists: a

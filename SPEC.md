@@ -104478,6 +104478,59 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.89 Command equivalents, slice 3b: Formula, Data, RUN, movement, the gallery
+
+33 more commands, built as in §81.88. The **one-line dialog** gets the same
+treatment as the others: `shm_idk` writes the text argument into
+`sh_idlg_buf` and calls `sh_idlg_apply`, just as typing it and pressing OK
+would. FORMULA.FIND and PARSE go that way.
+
+| group | commands | here |
+|---|---|---|
+| Formula | FORMULA.GOTO, FORMULA.FIND, FORMULA.FIND.NEXT | Goto is SELECT's own handler; Find is the dialog's: displayed text, part of it, any case, forwards from the cell after the active one |
+| names | DEFINE.NAME, SET.NAME, DELETE.NAME | a name is a place (§81.84.3), so refers_to and value must be references; DELETE.NAME slides the table down |
+| | NOTE | the whole note; empty or omitted removes it |
+| Data | DATA.FIND, DATA.FIND.NEXT, DATA.DELETE, EXTRACT, PARSE, SORT | DATA.DELETE does not ask: a macro that says so has answered the question. SORT is by rows, one key, which must lie inside the selection (§81.80) |
+| Macro | RUN | a **subroutine** call to its reference: §81.84's mechanism with no arguments, and RETURN's value is RUN's answer |
+| movement | VLINE, HLINE, VPAGE, HPAGE, VSCROLL, HSCROLL | the window, not the selection |
+| | SHOW.ACTIVE.CELL, SELECT.LAST.CELL, SELECT.END | SELECT.LAST.CELL uses GET.DOCUMENT's own extents; SELECT.END is Ctrl+arrow |
+| | UNLOCKED.NEXT, UNLOCKED.PREV | walk the border table, which is sorted in reading order, so walking it *is* reading order |
+| gallery | GALLERY.AREA … GALLERY.SCATTER | Chart Gallery's choice; SHEET has one format per type |
+
+**Refused:** FORMULA.FIND.PREV, DATA.FIND.PREV, and FORMULA.FIND with dir 2
+(backwards), because SHEET's searches go one way; SORT with a second key or
+by columns; SET.NAME with a value that is not a reference.
+
+**Resident +0 code; bss +8** (the NOTE vector, and `SH_IDENT_MAX` 16 → 20).
+**`CHART.OVL` +2,098** (56,639). **8,897 bytes remain to the 64 KB wall.**
+
+#### 81.89.1 Names longer than the lexer
+
+FORMULA.FIND.NEXT and FORMULA.FIND.PREV are 17 characters, and
+CALCULATE.DOCUMENT is 18. `SH_IDENT_MAX` was 16, so each one collected cut
+short and evaluated to `#NAME?`. That is §81.83.3.1's failure again, one
+size up.
+
+The gate caught it only because FIND.NEXT's answer was checked. FIND.PREV's
+refusal was the second sign: it "ran", and the run carried on. The cap is now
+20, above the longest name in the plan.
+
+#### 81.89.2 Three register defects, each found by a check
+
+- **SELECT.END read its direction after `sh_skipargs`,** which writes AL.
+  Every direction became "up", and from row 1 that is nowhere.
+- **UNLOCKED.NEXT kept the comparison's flags with `lahf`,** which writes
+  AH, and AH was half of the packed row being compared. The answer was
+  P1545. It uses `pushf`/`popf` now.
+- **HSCROLL/VSCROLL banked the position in `sh_acc`,** which the second
+  argument's evaluation then overwrote. `VSCROLL(1,TRUE)` passed by the
+  accident that TRUE is 1. Both readings of the position are now taken
+  before the second argument is read.
+
+`tests/sheetmcmd2.py` has 24 checks, including FIND.PREV's refusal
+arriving at ERROR's handler, and the handler's next row never being
+reached.
+
 ### 81.88 Command equivalents, slice 3a: Format, Edit and Options
 
 The first slice of wave 3 of `docs/plans/SHEET-MACRO-PLAN.md`, 26

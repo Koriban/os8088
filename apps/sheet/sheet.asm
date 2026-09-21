@@ -1690,6 +1690,9 @@ sh_x_sh_nt_get:                     ; 81.87: GET.NOTE
 sh_x_sh_macro_mfire:                ; 81.88: a menu item, from a macro
     call sh_macro_mfire
     retf
+sh_x_sh_nt_set:                     ; 81.89: NOTE
+    call sh_nt_set
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1742,6 +1745,7 @@ sh_ovshims:
     dw sh_x_sh_pnow, sh_x_sh_macro_arm                               ; 81.86
     dw sh_x_sh_nt_get                                                ; 81.87
     dw sh_x_sh_macro_mfire                                           ; 81.88
+    dw sh_x_sh_nt_set                                                ; 81.89
 sh_entry:
     push ax
     push dx
@@ -14348,7 +14352,8 @@ SH_NAME_MAX  equ 12                  ; characters, not counting the NUL
 ; #NAME? - in sh_functab, listed among the twenty, and unreachable since the
 ; day it was added. Raising SH_NAME_MAX instead would widen all SH_NAME_CAP
 ; defined-NAME RECORDS for a reason that has nothing to do with them.
-SH_IDENT_MAX equ 16                  ; the longest name any lexer COLLECTS
+SH_IDENT_MAX equ 20                  ; the longest name any lexer COLLECTS:
+                                     ; CALCULATE.DOCUMENT is 18 (81.89)
 SH_NAME_REC  equ SH_NAME_MAX + 1 + 8 ; text + NUL + col + row + col2 + row2
 
 ; -----------------------------------------------------------------------------
@@ -35123,6 +35128,40 @@ shm_mtab:
     dw shm_mfreeze
     dw shm_mprotdoc
     dw shm_mprecision
+; slice 3b (81.89): Formula, Data, RUN, movement, the gallery
+    dw shm_mfgoto
+    dw shm_mffind
+    dw shm_mffnext
+    dw shm_mprevno
+    dw shm_mdefnm
+    dw shm_msetname
+    dw shm_mdelname
+    dw shm_mnote
+    dw shm_mdfind
+    dw shm_mdfnext
+    dw shm_mprevno
+    dw shm_mddelete
+    dw shm_mextract
+    dw shm_mparse
+    dw shm_msort
+    dw shm_mrun
+    dw shm_mvline
+    dw shm_mhline
+    dw shm_mvpage
+    dw shm_mhpage
+    dw shm_mvscroll
+    dw shm_mhscroll
+    dw shm_mshowact
+    dw shm_mselast
+    dw shm_mselend
+    dw shm_munlnext
+    dw shm_munlprev
+    dw shm_mgarea
+    dw shm_mgbar
+    dw shm_mgcol
+    dw shm_mgline
+    dw shm_mgpie
+    dw shm_mgscat
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35141,6 +35180,7 @@ shm_mkind:
     db 0, 0, 0, 0,  0, 0, 0           ; ECHO .. WAIT: commands, every one
     db 1, 1, 1, 1,  1, 1, 1, 1,  1, 1 ; GET.CELL .. DIRECTORY: values
     times 26 db 0                     ; wave 3a: commands, every one
+    times 33 db 0                     ; slice 3b: commands, every one
 shm_mkind_end:
 
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
@@ -35200,6 +35240,39 @@ shm_mxnames:
     db 'FREEZE.PANES', 0
     db 'PROTECT.DOCUMENT', 0
     db 'PRECISION', 0
+    db 'FORMULA.GOTO', 0
+    db 'FORMULA.FIND', 0
+    db 'FORMULA.FIND.NEXT', 0
+    db 'FORMULA.FIND.PREV', 0
+    db 'DEFINE.NAME', 0
+    db 'SET.NAME', 0
+    db 'DELETE.NAME', 0
+    db 'NOTE', 0
+    db 'DATA.FIND', 0
+    db 'DATA.FIND.NEXT', 0
+    db 'DATA.FIND.PREV', 0
+    db 'DATA.DELETE', 0
+    db 'EXTRACT', 0
+    db 'PARSE', 0
+    db 'SORT', 0
+    db 'RUN', 0
+    db 'VLINE', 0
+    db 'HLINE', 0
+    db 'VPAGE', 0
+    db 'HPAGE', 0
+    db 'VSCROLL', 0
+    db 'HSCROLL', 0
+    db 'SHOW.ACTIVE.CELL', 0
+    db 'SELECT.LAST.CELL', 0
+    db 'SELECT.END', 0
+    db 'UNLOCKED.NEXT', 0
+    db 'UNLOCKED.PREV', 0
+    db 'GALLERY.AREA', 0
+    db 'GALLERY.BAR', 0
+    db 'GALLERY.COLUMN', 0
+    db 'GALLERY.LINE', 0
+    db 'GALLERY.PIE', 0
+    db 'GALLERY.SCATTER', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35259,6 +35332,39 @@ shm_mxrpn:
     db 0x87, 1, 1                     ; FREEZE.PANES - Cetab
     db 0x1C, 1, 1                     ; PROTECT.DOCUMENT - Cetab
     db 0x1D, 1, 1                     ; PRECISION - Cetab
+    db 0x3F, 1, 1                     ; FORMULA.GOTO
+    db 0x40, 1, 1                     ; FORMULA.FIND
+    db 0x65, 0, 1                     ; FORMULA.FIND.NEXT
+    db 0x66, 0, 1                     ; FORMULA.FIND.PREV
+    db 0x3D, 1, 1                     ; DEFINE.NAME
+    db 0x58, 1, 0                     ; SET.NAME
+    db 0x6E, 0, 1                     ; DELETE.NAME
+    db 0xC0, 1, 0                     ; NOTE
+    db 0x22, 1, 1                     ; DATA.FIND
+    db 0x63, 0, 1                     ; DATA.FIND.NEXT
+    db 0x64, 0, 1                     ; DATA.FIND.PREV
+    db 0x24, 0, 1                     ; DATA.DELETE
+    db 0x23, 1, 1                     ; EXTRACT
+    db 0x5B, 1, 1                     ; PARSE
+    db 0x27, 1, 1                     ; SORT
+    db 0x11, 1, 1                     ; RUN
+    db 0x70, 0, 1                     ; VLINE
+    db 0x71, 0, 1                     ; HLINE
+    db 0x72, 0, 1                     ; VPAGE
+    db 0x73, 0, 1                     ; HPAGE
+    db 0x74, 1, 1                     ; VSCROLL
+    db 0x75, 1, 1                     ; HSCROLL
+    db 0x42, 0, 1                     ; SHOW.ACTIVE.CELL
+    db 0x41, 0, 1                     ; SELECT.LAST.CELL
+    db 0xBB, 0, 1                     ; SELECT.END
+    db 0x6A, 0, 1                     ; UNLOCKED.NEXT
+    db 0x6B, 0, 1                     ; UNLOCKED.PREV
+    db 0x43, 1, 1                     ; GALLERY.AREA
+    db 0x44, 1, 1                     ; GALLERY.BAR
+    db 0x45, 1, 1                     ; GALLERY.COLUMN
+    db 0x46, 1, 1                     ; GALLERY.LINE
+    db 0x47, 1, 1                     ; GALLERY.PIE
+    db 0x48, 1, 1                     ; GALLERY.SCATTER
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -38780,6 +38886,759 @@ shm_mprecision:
     jmp shm_mtrue
 .bad:
     jmp shm_merr
+
+; --- slice 3b (81.89): Formula, Data, RUN, movement, the chart gallery ------
+
+; shm_idk - the one-line dialog of kind AL, as if the TEXT just evaluated
+; had been typed into it and OK pressed (sh_idlg_apply, the module's own)
+shm_idk:
+    mov [sh_idlg_kind], al
+    push si
+    push di
+    mov si, sh_sacc
+    mov di, sh_idlg_buf
+    mov cx, SH_EDITMAX
+.c:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .e
+    inc si
+    inc di
+    loop .c
+    mov byte [di], 0
+.e:
+    pop di
+    pop si
+    SHOUT sh_skipargs
+    push si
+    call sh_idlg_apply
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; shm_textfirst - the argument at SI, which must be TEXT. CF=1 it is not
+shm_textfirst:
+    SHOUT sh_pcmp
+    cmp byte [sh_evalerr], 0
+    jne .no
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; FORMULA.FIND(text[, in[, at[, by[, dir]]]]) - Formula > Find: displayed
+; text, a part of it, any case, forwards. Where to look, whole-cell matching
+; and the order are read and not used; dir 2, BACKWARDS, is refused - SHEET's
+; Find goes one way. The text is read on a SECOND pass, after the numbers,
+; ABSREF's idiom (81.85.2)
+shm_mffind:
+    push si                           ; the text, for the second pass
+    SHOUT sh_pcmp
+    call shm_intarg                   ; in_num
+    call shm_intarg                   ; at_num
+    call shm_intarg                   ; by_num
+    mov ax, 1
+    call shm_intarg                   ; dir_num
+    jc .badpop
+    cmp ax, 1
+    jne .badpop
+    pop si
+    call shm_textfirst
+    jc .bad
+    mov al, SH_ID_FIND
+    jmp shm_idk
+.badpop:
+    pop si
+.bad:
+    jmp shm_merr
+
+; FORMULA.FIND.NEXT() - the same text again, from the next cell
+shm_mffnext:
+    SHOUT sh_skipargs
+    push si
+    SHOUT sh_docmd_find
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; FORMULA.FIND.PREV() / DATA.FIND.PREV() - backwards: refused, as above
+shm_mprevno:
+    jmp shm_merr
+
+; PARSE(parse_text) - Data > Parse's bracket line, as typed
+shm_mparse:
+    call shm_textfirst
+    jc .bad
+    mov al, SH_ID_PARSE
+    jmp shm_idk
+.bad:
+    jmp shm_merr
+
+; shm_tident - the TEXT just evaluated, uppercased into sh_ident; CF=1 it is
+; empty or too long for a name
+shm_tident:
+    push si
+    push di
+    push cx
+    mov si, sh_sacc
+    mov di, sh_ident
+    mov cx, SH_NAME_MAX + 1
+.c:
+    mov al, [si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 32
+.u:
+    mov [di], al
+    or al, al
+    jz .e
+    inc si
+    inc di
+    loop .c
+    stc                               ; longer than a name holds
+    jmp short .out
+.e:
+    cmp di, sh_ident                  ; ...or empty
+    je .empty
+    clc
+    jmp short .out
+.empty:
+    stc
+.out:
+    pop cx
+    pop di
+    pop si
+    ret
+
+; DEFINE.NAME(name_text[, refers_to]) / SET.NAME(name_text, value) - a name
+; here is a PLACE (81.84.3), so refers_to and value must be references: the
+; selection when refers_to is omitted, and SET.NAME's value is required. The
+; name is read on a second pass, after the reference, for ABSREF's reason
+shm_msetname:
+    mov byte [cs:shm_acc8], 1         ; SET.NAME: the reference is required
+    jmp short shm_mdefnm2
+shm_mdefnm:
+    mov byte [cs:shm_acc8], 0
+shm_mdefnm2:
+    push si
+    SHOUT sh_pcmp                     ; past the name
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    mov cx, [sh_selcol2]
+    mov dx, [sh_selrow2]
+    cmp byte [si], ','
+    jne .noref
+    inc si
+    call shm_mrangeref
+    jnc .badpop
+    jmp short .have
+.noref:
+    cmp byte [cs:shm_acc8], 0
+    jne .badpop
+.have:
+    mov [cs:shm_ext_r1], ax           ; banked across the name's second
+    mov [cs:shm_ext_r2], bx           ; evaluation, which keeps no register
+    mov [cs:shm_ext_c1], cx
+    mov [cs:shm_ext_c2], dx
+    mov di, si                        ; where the arguments ended
+    pop si
+    push di
+    call shm_textfirst
+    jc .badpop
+    call shm_tident
+    jc .badpop
+    pop si
+    SHOUT sh_skipargs
+    push si
+    mov ax, [cs:shm_ext_r1]
+    mov bx, [cs:shm_ext_r2]
+    mov cx, [cs:shm_ext_c1]
+    mov dx, [cs:shm_ext_c2]
+    mov si, sh_ident
+    SHOUT sh_name_def
+    pop si
+    jc .full
+    jmp shm_mtrue
+.badpop:
+    pop si
+    jmp shm_merr
+.full:
+    jmp shm_merr0
+
+; DELETE.NAME(name_text) - the name is gone; one not defined is an error
+shm_mdelname:
+    call shm_textfirst
+    jc .bad
+    call shm_tident
+    jc .bad
+    SHOUT sh_skipargs
+    push si
+    mov si, sh_names
+    mov cx, [sh_nnames]
+    jcxz .none
+.n:
+    push si
+    mov di, sh_ident
+.c:
+    mov al, [si]
+    cmp al, [di]
+    jne .next
+    or al, al
+    jz .hit
+    inc si
+    inc di
+    jmp short .c
+.next:
+    pop si
+    add si, SH_NAME_REC
+    loop .n
+.none:
+    pop si
+    jmp shm_merr0
+.hit:
+    pop di                            ; DI = the record; the rest slide down
+    dec cx                            ; records after it
+    mov ax, cx
+    mov bx, SH_NAME_REC
+    mul bx
+    mov cx, ax
+    mov si, di
+    add si, SH_NAME_REC
+.mv:
+    jcxz .done
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jmp short .mv
+.done:
+    dec word [sh_nnames]
+    inc word [sh_pass]                ; a formula naming it must evaluate again
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; NOTE([add_text[, cell_ref]]) - the note on cell_ref (the active cell) is
+; add_text; an empty or omitted one removes it. Excel's start_char and
+; num_chars, which edit PART of a note, are read and not used
+shm_mnote:
+    mov byte [sh_sacc], 0
+    push si                           ; the text, for the second pass
+    cmp byte [si], ')'
+    je .noarg
+    cmp byte [si], ','
+    je .noarg
+    SHOUT sh_pcmp
+.noarg:
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    cmp byte [si], ','
+    jne .have
+    inc si
+    call shm_mrangeref
+    jnc .badpop
+.have:
+    mov [cs:shm_gcol], ax
+    mov [cs:shm_grow], bx
+    mov di, si
+    pop si
+    push di
+    mov byte [sh_sacc], 0
+    cmp byte [si], ')'
+    je .t
+    cmp byte [si], ','
+    je .t
+    call shm_textfirst
+    jc .badpop
+.t:
+    pop si
+    SHOUT sh_skipargs
+    push si
+    mov ax, [cs:shm_gcol]
+    mov bx, [cs:shm_grow]
+    mov si, sh_sacc
+    SHOUT sh_nt_set
+    pop si
+    jc .full
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.badpop:
+    pop si
+    jmp shm_merr
+.full:
+    jmp shm_merr0
+
+; DATA.FIND(logical) - into Find mode, or out of it; the menu item toggles,
+; so it is fired only when the mode differs
+shm_mdfind:
+    call shm_boolarg0
+    jnc .flip
+    xor bl, bl
+    cmp word [sh_i_data + 2], sh_it_exitfnd  ; the relabel IS the state
+    jne .st
+    inc bl
+.st:
+    cmp al, bl
+    je .done
+.flip:
+    mov ax, (SH_MI_DATA << 8) | 1
+    SHOUT sh_macro_mfire
+.done:
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+; DATA.FIND.NEXT() - the next matching record, forwards. DATA.DELETE() -
+; the matching records removed, without the menu's question: a macro that
+; says so has answered it
+shm_mdfnext:
+    mov al, SH_DBC_FIND
+    jmp short shm_mdbrun
+shm_mddelete:
+    mov al, SH_DBC_DELETE
+shm_mdbrun:
+    push ax
+    SHOUT sh_skipargs
+    pop ax
+    push si
+    SHOUT sh_docmd_dbrun
+    pop si
+    jc .no
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.no:
+    jmp shm_mfalse                    ; refused: the status line says why
+
+; EXTRACT([unique]) - Data > Extract, the unique box as its argument
+shm_mextract:
+    xor dx, dx
+    call shm_boolarg0
+    jnc .go
+    mov dl, al
+.go:
+    mov al, SH_FDK_EXTRACT
+    jmp shm_fdk
+
+; SORT(sort_by, key1[, order1]) - by ROWS (1) only, one key, which must lie
+; inside the selection as the dialog's must (81.80); order 1 ascending, 2
+; descending. A second or third key SHEET does not have: refused
+shm_msort:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    cmp ax, 1
+    jne .bad
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    call shm_mrangeref                ; AX = the key's column
+    jnc .bad
+    mov [cs:shm_gcol], ax
+    mov ax, 1
+    call shm_intarg
+    jc .bad
+    dec ax
+    cmp ax, 2
+    jae .bad
+    mov [cs:shm_acc8], al
+    cmp byte [si], ','                ; key2: refused
+    je .bad
+    mov ax, [cs:shm_gcol]
+    mov bx, [sh_selcol]
+    mov cx, [sh_selcol2]
+    cmp bx, cx
+    jbe .span
+    xchg bx, cx
+.span:
+    cmp ax, bx
+    jb .bad
+    cmp ax, cx
+    ja .bad
+    mov [sh_sort_keycol], ax
+    mov al, [cs:shm_acc8]
+    mov [sh_sort_desc], al
+    SHOUT sh_skipargs
+    push si
+    call sh_docmd_sortcol
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; RUN([reference]) - run the macro at reference as a SUBROUTINE: its RETURN
+; comes back here, with RUN's answer its value (81.84's call, with no
+; arguments and a reference for a target rather than a name)
+shm_mrun:
+    cmp byte [cs:shm_cans], 0
+    je .call
+    mov byte [cs:shm_cans], 0
+    SHOUT sh_skipargs
+    mov di, shm_ans
+    jmp shm_vget
+.call:
+    inc byte [cs:shm_ccount]
+    cmp byte [cs:shm_ccount], 1
+    jne .bad
+    call shm_mrangeref
+    jnc .bad
+    mov [cs:shm_ctcol], ax
+    mov [cs:shm_ctrow], bx
+    mov byte [cs:shm_cnargs], 0
+    mov ax, [cs:shm_pused]
+    mov [cs:shm_ptent], ax
+    SHOUT sh_skipargs
+    mov byte [cs:shm_cpend], 1
+    jmp shm_mfalse
+.bad:
+    jmp shm_merr
+
+; --- movement: the window, not the selection ------------------------------
+; VLINE(n) / HLINE(n) - scroll n rows / columns; VPAGE(n) / HPAGE(n) - n
+; windows' worth
+shm_mvline:
+    mov bx, sh_scrollrow
+    mov cx, 1
+    jmp short shm_mscrollby
+shm_mhline:
+    mov bx, sh_scrollcol
+    mov cx, 1
+    jmp short shm_mscrollby
+shm_mvpage:
+    mov bx, sh_scrollrow
+    mov cx, [sh_vrows]
+    jmp short shm_mscrollby
+shm_mhpage:
+    mov bx, sh_scrollcol
+    mov cx, [sh_vcols]
+shm_mscrollby:
+    mov [cs:shm_gcol], bx             ; which word, and by how much a step:
+    mov [cs:shm_grow], cx             ; the evaluator keeps no register
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    imul word [cs:shm_grow]           ; DX:AX, the lines
+    mov bx, [cs:shm_gcol]
+    add ax, [bx]
+    jmp shm_mscrollto
+.bad:
+    jmp shm_merr
+
+; VSCROLL(position[, row_logical]) / HSCROLL - to row (column) position when
+; the second argument is TRUE, else to that FRACTION of the sheet
+shm_mvscroll:
+    mov word [cs:shm_gcol], sh_scrollrow
+    mov word [cs:shm_grow], SH_ROWS
+    jmp short shm_mscrollabs
+shm_mhscroll:
+    mov word [cs:shm_gcol], sh_scrollcol
+    mov word [cs:shm_grow], SH_COLS
+shm_mscrollabs:
+    SHOUT sh_pcmp                     ; BOTH readings of the position, now:
+    cmp byte [sh_evalerr], 0          ; the second argument's evaluation
+    jne .bad                          ; overwrites sh_acc
+    SHOUT sh_acc_toint                ; a row or column NUMBER, 1-based...
+    mov [cs:shm_gst], ax
+    SHOUT sh_acc_load_a               ; ...or a fraction of the sheet
+    mov ax, [cs:shm_grow]
+    dec ax
+    SHOUT fp_i2b
+    SHOUT fp_mul
+    SHOUT fp_a2i
+    jc .bad
+    mov [cs:shm_gcnt], ax
+    call shm_boolnext
+    mov ax, [cs:shm_gcnt]
+    jnc .have
+    or al, al
+    mov ax, [cs:shm_gcnt]
+    jz .have
+    mov ax, [cs:shm_gst]
+    dec ax
+.have:
+    mov bx, [cs:shm_gcol]
+    jmp short shm_mscrollto
+.bad:
+    jmp shm_merr
+
+; shm_mscrollto - [BX] (sh_scrollrow or sh_scrollcol) becomes AX, kept on
+; the sheet; the frozen panes are the painter's own business
+shm_mscrollto:
+    or ax, ax
+    jns .lo
+    xor ax, ax
+.lo:
+    mov cx, SH_ROWS - 1
+    cmp bx, sh_scrollrow
+    je .hi
+    mov cx, SH_COLS - 1
+.hi:
+    cmp ax, cx
+    jbe .set
+    mov ax, cx
+.set:
+    mov [bx], ax
+    SHOUT sh_skipargs
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; SHOW.ACTIVE.CELL() - scroll it into view
+shm_mshowact:
+    SHOUT sh_skipargs
+    push si
+    SHOUT sh_scrollto
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; SELECT.LAST.CELL() - the last used row and the last used column's cell
+; (GET.DOCUMENT 10 and 12's own, 81.87)
+shm_mselast:
+    SHOUT sh_skipargs
+    call shm_extent
+    mov ax, [cs:shm_ext_c2]
+    mov bx, [cs:shm_ext_r2]
+    or ax, ax
+    jz .empty
+    dec ax
+    dec bx
+    jmp short shm_mselone
+.empty:
+    xor bx, bx                        ; an empty sheet's last cell is A1
+; shm_mselone - select the one cell AX/BX, and show it
+shm_mselone:
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    mov [sh_selrow], bx
+    mov [sh_selrow2], bx
+    push si
+    SHOUT sh_scrollto
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; SELECT.END(direction_num) - Ctrl with an arrow: 1 left, 2 right, 3 up, 4
+; down. From a cell with something next to it, to the last filled cell of
+; that run; otherwise to the next filled cell, or the sheet's edge
+shm_mselend:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    dec ax
+    cmp ax, 4
+    jae .bad
+    mov di, ax                        ; 0 left, 1 right, 2 up, 3 down - and
+    SHOUT sh_skipargs                 ; BEFORE this, which writes AL
+    mov ax, [sh_selcol]
+    mov bx, [sh_selrow]
+    call shm_step1                    ; is the NEXT cell filled?
+    jc .edge                          ; the edge already: stay
+    push ax
+    push bx
+    call shm_filled
+    pop bx
+    pop ax
+    jnc .seek                         ; no: on to the next filled one
+.run:                                 ; yes: along the run to its end
+    mov [cs:shm_gcol], ax
+    mov [cs:shm_grow], bx
+    call shm_step1
+    jc .last
+    push ax
+    push bx
+    call shm_filled
+    pop bx
+    pop ax
+    jc .run
+.last:
+    mov ax, [cs:shm_gcol]
+    mov bx, [cs:shm_grow]
+    jmp shm_mselone
+.seek:
+    push ax
+    push bx
+    call shm_filled
+    pop bx
+    pop ax
+    jc .there
+    call shm_step1
+    jnc .seek
+.there:                               ; a filled cell, or the edge itself
+.edge:
+    jmp shm_mselone
+.bad:
+    jmp shm_merr
+
+; shm_step1 - AX/BX one cell in direction DI (0 left 1 right 2 up 3 down);
+; CF=1 and AX/BX unchanged at the sheet's edge
+shm_step1:
+    cmp di, 1
+    jb .l
+    je .r
+    cmp di, 3
+    je .d
+    or bx, bx                         ; up
+    jz .edge
+    dec bx
+    clc
+    ret
+.d:
+    cmp bx, SH_ROWS - 1
+    jae .edge
+    inc bx
+    clc
+    ret
+.l:
+    or ax, ax
+    jz .edge
+    dec ax
+    clc
+    ret
+.r:
+    cmp ax, SH_COLS - 1
+    jae .edge
+    inc ax
+    clc
+    ret
+.edge:
+    stc
+    ret
+
+; shm_filled - CF=1 when the cell AX/BX holds something
+shm_filled:
+    push di
+    SHOUT sh_findcell                 ; which does not keep DI
+    pop di
+    ret
+
+; UNLOCKED.NEXT() / UNLOCKED.PREV() - the next (previous) unlocked cell,
+; row by row, wrapping round the sheet. An unlocked cell is a border-table
+; record with the UNLOCK bit (81.46), and that table is SORTED by sheet, row
+; and column (sh_bt_findcell's binary search), so walking it in order IS
+; walking the sheet in reading order
+shm_munlnext:
+    mov byte [cs:shm_acc8], 0
+    jmp short shm_munl
+shm_munlprev:
+    mov byte [cs:shm_acc8], 1
+shm_munl:
+    SHOUT sh_skipargs
+    push si
+    push es
+    mov ax, [sh_cursheet]             ; the active cell, as the table keys it
+    mov cl, SH_ROW_BITS
+    shl ax, cl
+    or ax, [sh_selrow]
+    mov [cs:shm_gst], ax
+    mov word [cs:shm_gcol], 0xFFFF    ; the answer: none yet
+    mov word [cs:shm_ext_c1], 0xFFFF  ; the first unlocked on this sheet...
+    mov word [cs:shm_ext_c2], 0xFFFF  ; ...and the last, for the wrap
+    xor si, si
+    mov cx, [sh_nbord]
+.l:
+    jcxz .done
+    mov es, [sh_bordseg]
+    test byte [es:si+4], SH_PROT_UNLOCK
+    jz .next
+    mov ax, [es:si]                   ; sheet and row
+    mov bx, [es:si+2]                 ; column
+    push cx
+    mov dx, ax
+    mov cl, SH_ROW_BITS
+    shr dx, cl
+    pop cx
+    cmp dx, [sh_cursheet]
+    jne .next
+    cmp word [cs:shm_ext_c1], 0xFFFF
+    jne .notfirst
+    mov [cs:shm_ext_r1], ax
+    mov [cs:shm_ext_c1], bx
+.notfirst:
+    mov [cs:shm_ext_r2], ax
+    mov [cs:shm_ext_c2], bx
+    cmp ax, [cs:shm_gst]              ; this record against the active cell
+    jne .cmpd
+    cmp bx, [sh_selcol]
+.cmpd:
+    je .next                          ; the active cell itself
+    pushf                             ; the ORDER, kept across the test of
+    cmp byte [cs:shm_acc8], 0         ; which way we are going - pushf and
+    jne .prev                         ; not lahf, which writes AH, and AH is
+    popf                              ; half the row being compared
+    jb .next                          ; NEXT: the first one past it
+    cmp word [cs:shm_gcol], 0xFFFF
+    jne .next
+    jmp short .take
+.prev:
+    popf
+    jae .next                         ; PREV: the last one before it
+.take:
+    mov [cs:shm_grow], ax
+    mov [cs:shm_gcol], bx
+.next:
+    add si, SH_BT_SZ
+    dec cx
+    jmp short .l
+.done:
+    pop es
+    pop si
+    mov ax, [cs:shm_gcol]
+    mov bx, [cs:shm_grow]
+    cmp ax, 0xFFFF
+    jne .go
+    mov ax, [cs:shm_ext_c1]           ; nothing that way: wrap round
+    mov bx, [cs:shm_ext_r1]
+    cmp byte [cs:shm_acc8], 0
+    je .wrapped
+    mov ax, [cs:shm_ext_c2]
+    mov bx, [cs:shm_ext_r2]
+.wrapped:
+    cmp ax, 0xFFFF
+    je .none
+.go:
+    and bx, SH_ROW_MASK               ; the row, without its sheet
+    jmp shm_mselone
+.none:
+    jmp shm_mtrue                     ; no unlocked cell: nowhere to go
+
+; GALLERY.AREA .. GALLERY.SCATTER(type_num, ...) - Data > Chart Gallery's
+; choice, sh_gal_map's order; SHEET's gallery has one format of each type, so
+; type_num is read and not used
+shm_mgarea:   mov dx, 0
+              jmp short shm_mgal
+shm_mgbar:    mov dx, 1
+              jmp short shm_mgal
+shm_mgcol:    mov dx, 2
+              jmp short shm_mgal
+shm_mgline:   mov dx, 3
+              jmp short shm_mgal
+shm_mgpie:    mov dx, 4
+              jmp short shm_mgal
+shm_mgscat:   mov dx, 5
+shm_mgal:
+    mov [cs:shm_gcnt], dx             ; the evaluator keeps no register
+    SHOUT sh_skipargs
+    mov dx, [cs:shm_gcnt]
+    mov al, SH_FDK_GAL
+    mov [sh_fdlg_kind], al
+    mov [sh_fdlg_sel], dx
+    push si
+    call sh_fdlg_apply
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; FORMULA.GOTO(reference) - Formula > Goto: the reference selected and shown,
+; which is SELECT's own work
+shm_mfgoto equ shm_mselect
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
@@ -47570,7 +48429,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8544                     ; +4 for 81.88's menu vector (146);
+    OS88_BSS 8552                     ; +4 for 81.89's SH_IDENT_MAX 20;
+                                       ; +4 for 81.89's NOTE vector (147);
+                                       ; +4 for 81.88's menu vector (146);
                                        ; +4 for 81.87's GET.NOTE vector (145);
                                        ; +11 for 81.86: three macro bytes (the
                                        ; alert's set and answer, Esc) and
@@ -48635,12 +49496,13 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 146
+SH_NVEC       equ 147
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
 sh_v_sh_macro_mfire          equ sh_v_sh_nt_get + 4
-sh_v_end      equ sh_v_sh_macro_mfire + 4
+sh_v_sh_nt_set               equ sh_v_sh_macro_mfire + 4
+sh_v_end      equ sh_v_sh_nt_set + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against

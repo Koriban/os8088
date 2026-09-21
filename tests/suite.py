@@ -4913,6 +4913,12 @@ SOAK = [
         "SET.DATABASE, each read back through the GET.* functions 81.87 "
         "verified",
         needs=("marty",), serial=True),
+    Row("sheetmcmd2", "soak", py("tests/sheetmcmd2.py"), 400.0,
+        "SPEC.md 81.89: command equivalents, slice 3b - FORMULA.GOTO/FIND/"
+        "FIND.NEXT, DEFINE/SET/DELETE.NAME, NOTE, SORT, RUN as a subroutine, "
+        "VSCROLL/VLINE/HSCROLL, SELECT.END both ways, UNLOCKED.NEXT/PREV "
+        "wrapping, SELECT.LAST.CELL, and FIND.PREV refused into ERROR's ref",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "
