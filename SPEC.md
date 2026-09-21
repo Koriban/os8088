@@ -104478,6 +104478,115 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.83 A macro cell's FORMULA survives a Normal save
+
+Every one of §81.63's twenty macro functions was `0xFF` in `sh_rpn_fid`, so a
+Normal save wrote the cell's **cached value** and the macro was gone. SYLK
+carried it; BIFF did not. §81.68 recorded the blocker and §81.68's own
+correction records why it was not one: the Command Equivalents Table is in
+`docs/ms-xls.pdf`, and the numbers are verified against a macro sheet real
+Excel 2.1d wrote.
+
+**45 bytes resident, 43 of `CHART.OVL`, 1 of bss.**
+
+#### 81.83.1 Two tables, and the split is not guessable
+
+Ten of the twenty are **commands** (`Cetab`) and ten are **functions**
+(`Ftab`). Nothing about a name says which: `SELECT` and `FORMULA` are
+commands, and `GOTO` and `RETURN` — which read exactly like commands — are
+functions. `sh_rpn_fce` is which, twenty bytes beside `sh_rpn_fid`.
+
+`SH_FN_MAC0` is **derived** from a label in `sh_functab`, and two `%if`s
+refuse the build if `sh_rpn_fce` is not twenty entries or if `sh_rpn_fid`'s
+macro run is not where `sh_functab`'s is. These tables are positional and
+nothing else checks that they line up.
+
+#### 81.83.2 BIFF2/3 select the table by the PTG
+
+`fCeFunc` is BIFF8's mechanism — bit 15 of a two-byte index — and BIFF2/3
+have only one byte. What Excel 2.1d writes instead is a **different ptg**:
+`0x58` for a command, `0x42` for a function. That is in no document here; it
+came off Excel's own file (§81.68). Both forms are emitted, since the
+workbook writer emits BIFF4 where the index *is* a word and `fCeFunc` *is*
+bit 15.
+
+#### 81.83.3 A dot is part of a name — in THREE lexers, not one
+
+`sh_rpn_func` gathered `A-Z` and stopped at anything else, so `SET.VALUE`,
+`ACTIVE.CELL` and `CALCULATE.NOW` could not be written **even once their
+numbers were known** — three of the twenty, lost in the lexer. A dot is taken
+into the identifier now; a *leading* dot still ends it, so nothing that was
+not already a name becomes one.
+
+**Fixing that one was not enough, and the reason generalises.** The writer
+looks ahead with `sh_rpn_isfunc` before committing — *"a letter starts either
+a reference or a FUNCTION CALL, and only the character after the name tells
+them apart"* — and that lookahead has a gather of its own. It stopped at the
+dot, found `.` where it wanted `(`, reported "not a call", and handed the
+whole thing to the **reference** parser, which declined and took the formula
+with it. The two have to agree or the name is never even offered.
+
+`sheet.asm` has **ten** identifier gathers. Six of them *should* stop at a
+dot — `sh_pcellref`, `sh_copy_cellpart` and the rest are reading a cell
+REFERENCE, which cannot contain one — so this is not a sweep to apply
+everywhere; it is a distinction to get right per gather, and the way to find
+them is to list them all and say which kind each is.
+
+#### 81.83.3.1 And the cap was the wrong constant
+
+`CALCULATE.NOW` is **thirteen** characters. Every gather capped at
+`SH_NAME_MAX` = 12, on reasoning the evaluator's own comment states: *"a
+DEFINED NAME can be this long, so the cap is its length rather than a column
+pair's — a function name is shorter than either."*
+
+That stopped being true the day §81.63 added the macro functions.
+`CALCULATE.NOW` collected as `CALCULATE.NO`, matched nothing, and **evaluated
+to `#NAME?`** — in `sh_functab`, listed among the twenty, and unreachable
+since it was added. Nothing noticed because nothing had ever written one to a
+file, which is the only thing that reads them back.
+
+So `SH_IDENT_MAX` (16) is what a lexer COLLECTS and `SH_NAME_MAX` (12)
+remains what a defined-name RECORD holds. Raising the latter would have
+widened all `SH_NAME_CAP` name records for a reason that has nothing to do
+with them.
+
+#### 81.83.4 Arity from the document, not from one file
+
+The first draft marked all twenty variable-arity, on the strength of "Excel
+writes them in the three-byte form". That was an **over-reading of one file**:
+the sheet examined contains `SELECT`, `FORMULA` and `RETURN`, and all three
+are variable — it says nothing about `NEXT` or `BREAK`. They follow the
+document's arities now, and `tools/os88sheetfmt.py --selfcheck` holds them
+there, the same way it holds every other row. It caught this.
+
+#### 81.83.5 The trap: a near call from the module to the resident half
+
+`sh_rpn_func` is in `CHART.OVL`. The Cetab lookup was written as a resident
+helper and near-called from it — **a call across a segment boundary**, which
+jumps into whatever is at that offset in the module. The machine **hung on
+every save, in every format**, and the failure surfaced as the mouse pointer
+freezing rather than as anything about macros.
+
+`os88ovlchk` catches exactly this and reports it by name. It did not, because
+**`make build/sheet.o88` does not run it** — only a full `make` does, and the
+whole edit-build-test loop had been on the target alone. The lookup is
+inlined now; §81.82.8 is the same rule (`movsb` through `ES`) one step along,
+and both are the package boundary being invisible until it is not.
+
+#### 81.83.6 What this does NOT do
+
+**A macro sheet still reopens as a worksheet.** `dt = 0x0040` is confirmed
+from Excel's own `BOF` and is not written, because SHEET has no macro-sheet
+state to write it from: `New ▸ Macro Sheet` makes an ordinary sheet and says
+so on the status line, deliberately (*"this app has one grid type, so Chart
+and Macro Sheet do the honest thing rather than the flattering one"*). Giving
+a document a KIND is its own change — New, the readers, Save and the grid all
+have to agree — and it is not smuggled in here.
+
+So: the formulas are in the file and are the bytes Excel writes. What is
+missing is the sheet saying what it is.
+
+
 ### 81.82 Data ▸ Parse
 
 Excel's Data menu carries **Parse** after Table, and §81.39.2 listed it as one

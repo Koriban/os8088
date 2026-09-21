@@ -14287,6 +14287,15 @@ sh_find_match:
 ; =============================================================================
 SH_NAME_CAP  equ 16
 SH_NAME_MAX  equ 12                  ; characters, not counting the NUL
+; 81.83: THE GATHER BUFFER IS NOT THE NAME RECORD. Every identifier lexer in
+; this file capped at SH_NAME_MAX, on the reasoning that a defined name is the
+; longest thing collected and "a function name is shorter than either". That
+; stopped being true when 81.63 added CALCULATE.NOW, which is THIRTEEN
+; characters: it collected as CALCULATE.NO, matched nothing, and evaluated to
+; #NAME? - in sh_functab, listed among the twenty, and unreachable since the
+; day it was added. Raising SH_NAME_MAX instead would widen all SH_NAME_CAP
+; defined-NAME RECORDS for a reason that has nothing to do with them.
+SH_IDENT_MAX equ 16                  ; the longest name any lexer COLLECTS
 SH_NAME_REC  equ SH_NAME_MAX + 1 + 8 ; text + NUL + col + row + col2 + row2
 
 ; -----------------------------------------------------------------------------
@@ -26050,6 +26059,14 @@ SH_PTG_STR     equ 0x17               ; error constant - cch byte, then bytes
 SH_PTG_ERR     equ 0x1C               ; one byte, BIFF's own error code
 SH_PTG_INT     equ 0x1E                 ; + a 16-bit unsigned
 SH_PTG_NUM     equ 0x1F                 ; + an IEEE double
+SH_PTG_FUNCCE  equ 0x58                 ; 81.83: tFuncVar for a COMMAND
+                                         ; EQUIVALENT. BIFF8 carries fCeFunc
+                                         ; as bit 15 of a two-byte index and
+                                         ; BIFF2/3 have only one byte, so what
+                                         ; Excel 2.1d actually writes is a
+                                         ; DIFFERENT PTG. That is in no
+                                         ; document here; it came off its own
+                                         ; file (81.68)
 SH_PTG_FUNCV   equ 0x41                 ; tFuncV / tFuncVarV (3.7.1, 3.7.2).
 SH_PTG_FUNCVARV equ 0x42                ; VALUE class throughout, like the refs
                                          ; below: a cell formula's result is a
@@ -26143,10 +26160,20 @@ sh_rpn_fid:
                                        ; in revision 1.42, not recalled -
                                        ; the copy in docs/ is the 2002
                                        ; revision whose 3.11 reads "2do"
-    times 20 db 0xFF                  ; the MACRO functions (81.63): no source
-                                       ; here gives their numbers, and a guess
-                                       ; is a file Excel runs differently -
-                                       ; SYLK carries a macro, BIFF its value
+; 81.83: THE MACRO FUNCTIONS, and they come from TWO tables. Excel numbers
+; macro COMMANDS through the Command Equivalents Table (Cetab) and macro
+; FUNCTIONS through the ordinary function table (Ftab), and nothing about a
+; name says which - SELECT and FORMULA are commands, GOTO and RETURN are
+; functions. sh_rpn_fce below is which. Sourced from docs/ms-xls.pdf's
+; sections 2.5.198.4 and 2.5.198.17 and VERIFIED against a macro sheet real
+; Excel 2.1d wrote (81.68): ten and ten.
+sh_rpn_fid_mac0:
+    db 0x35, 0x37, 0x36, 0x6C         ; GOTO RETURN HALT SET.VALUE   - Ftab
+    db 0x6D, 0x60, 0x76, 0x7A, 0x00   ; SELECT FORMULA ALERT MESSAGE BEEP - Ce
+    db 0x68                           ; INPUT                        - Ftab
+    db 0xAB, 0xAC, 0xAE, 0xAD         ; FOR WHILE NEXT BREAK         - Ftab
+    db 0x5E                           ; ACTIVE.CELL                  - Ftab
+    db 0x32, 0x31, 0x33, 0x34, 0x1F   ; COPY CUT PASTE CLEAR CALCULATE.NOW - Ce
     db 42, 40, 199, 44, 43             ; DAVERAGE DCOUNT DCOUNTA DMAX DMIN -
     db 189, 45, 195, 41, 47            ; DPRODUCT DSTDEV DSTDEVP DSUM DVAR -
     db 196                             ; DVARP (81.65). Revision 1.42's 3.11
@@ -26162,6 +26189,27 @@ sh_rpn_fid_end:
 ; tFuncVar (which carries a count byte); 0 = fixed, written as tFunc. This is
 ; "min par != max par" in that same table, NOT a guess about how it is used -
 ; TRUNC is 1..2 in BIFF3 even though this app only ever passes it one.
+; 81.83: 1 = this macro function is a COMMAND and goes out through the Cetab
+; (ptg 0x58 / fCeFunc), 0 = it is a function and goes through the Ftab. Twenty
+; entries, sh_rpn_fid_mac0's order, and the split is the thing a guess gets
+; wrong - it is not "commands are the ones that look like menu items", since
+; GOTO and RETURN look exactly like that and are Ftab.
+sh_rpn_fce:
+    db 0, 0, 0, 0                     ; GOTO RETURN HALT SET.VALUE
+    db 1, 1, 1, 1, 1                  ; SELECT FORMULA ALERT MESSAGE BEEP
+    db 0                              ; INPUT
+    db 0, 0, 0, 0                     ; FOR WHILE NEXT BREAK
+    db 0                              ; ACTIVE.CELL
+    db 1, 1, 1, 1, 1                  ; COPY CUT PASTE CLEAR CALCULATE.NOW
+sh_rpn_fce_end:
+SH_FN_MAC0 equ (sh_functab_mac0 - sh_functab) / 2
+  %if (sh_rpn_fce_end - sh_rpn_fce) != 20
+    %error "sh_rpn_fce must have one entry per macro function - see 81.83"
+  %endif
+  %if (sh_rpn_fid_mac0 - sh_rpn_fid) != SH_FN_MAC0
+    %error "sh_rpn_fid's macro run is not at sh_functab's - see 81.83"
+  %endif
+
 sh_rpn_fvar:
     db 1, 1, 1, 1, 1                  ; SUM AVERAGE MIN MAX COUNT
     db 1, 0, 0, 1, 1                  ; IF NOT ABS AND OR
@@ -26201,7 +26249,22 @@ sh_rpn_fvar:
                                        ; argument (A1 vs R1C1) is one this
                                        ; app never passes, exactly as the
                                        ; TRUNC note above says
-    times 20 db 0                     ; the macro functions, never written
+; 81.83: the macro functions. VARIABLE where the table says so, fixed where
+; it does not - the same rule as every row above, and os88sheetfmt.py's
+; --selfcheck holds it. The first draft made all twenty variable on the
+; strength of "Excel writes them in the three-byte form", which was an
+; over-reading: the file that was looked at contains SELECT, FORMULA and
+; RETURN, and all three ARE variable. It says nothing about NEXT or BREAK.
+    db 0, 1, 1, 0                     ; GOTO(1) RETURN(0-1) HALT(0-1) SET.VALUE(2)
+    db 1, 1, 1, 1, 1                  ; SELECT FORMULA ALERT MESSAGE BEEP - the
+                                       ; Cetab five, and a COMMAND always
+                                       ; carries its count (the Cetab's own
+                                       ; *n(val) forms), which is what the
+                                       ; observed 0x58 tokens show
+    db 1                              ; INPUT(1-7)
+    db 1, 0, 0, 0                     ; FOR(3-4) WHILE(1) NEXT(0) BREAK(0)
+    db 0                              ; ACTIVE.CELL(0)
+    db 1, 1, 1, 1, 1                  ; COPY CUT PASTE CLEAR CALCULATE.NOW - Ce
     times 11 db 0                     ; the DATABASE functions (81.65) - all
                                        ; eleven fixed at exactly 3 arguments
     db 1                               ; CELL is 1..2 in that table (81.66)
@@ -26242,7 +26305,16 @@ sh_rpn_fargc:
     db 0, 0, 0, 0, 0               ; DDB IPMT PPMT RATE IRR
     db 3, 0, 1, 1, 0               ; MIRR NOW ISNONTEXT CLEAN RAND
     db 0                           ; INDIRECT
-    times 20 db 0                  ; the macro functions (81.63)
+    db 1, 0, 0, 2                  ; 81.83: GOTO RETURN HALT SET.VALUE - the
+    db 0, 0, 0, 0, 0               ; fixed ones carry their count here, the
+    db 0                           ; variable ones carry 0 and bring their
+    db 0, 1, 0, 0                  ; own. SELECT..BEEP and COPY..CALCULATE.NOW
+    db 0                           ; are Cetab and the check skips them
+    db 0, 0, 0, 0, 0               ; ...and the run above is, in order: GOTO(1)
+                                    ; RETURN HALT SET.VALUE(2) / SELECT
+                                    ; FORMULA ALERT MESSAGE BEEP / INPUT /
+                                    ; FOR WHILE(1) NEXT BREAK / ACTIVE.CELL /
+                                    ; COPY CUT PASTE CLEAR CALCULATE.NOW
     db 3, 3, 3, 3, 3               ; DAVERAGE DCOUNT DCOUNTA DMAX DMIN - the
     db 3, 3, 3, 3, 3               ; DATABASE functions (81.65), every one
     db 3                           ; DFUNC(database, field, criteria)
@@ -26274,8 +26346,13 @@ sh_rpn_isfunc:
     inc si
     jmp .skipname
 .past:
-    cmp al, ' '                       ; "SUM (" is still a call
-    jne .test
+    cmp al, '.'                       ; 81.83: ...and "CALCULATE.NOW (" is one
+    jne .nodot                        ; too. THIS IS THE LOOKAHEAD, and it has
+    inc si                            ; to agree with sh_rpn_func's gather or
+    jmp .skipname                     ; a dotted name is read this far, found
+.nodot:                               ; not to be followed by '(' , and handed
+    cmp al, ' '                       ; to the REFERENCE parser instead - which
+    jne .test                         ; declines, and the whole formula with it
 .spaces:
     inc si
     mov al, [si]
@@ -26318,11 +26395,18 @@ sh_rpn_func:
     ja .nolower
     sub al, 32                        ; sh_funcid matches uppercase
 .nolower:
-    cmp al, 'A'
-    jb .gathered
-    cmp al, 'Z'
+    cmp al, '.'                       ; 81.83: a DOT is part of the name, not
+    jne .notdot                       ; the end of it. Excel's macro commands
+    or cx, cx                         ; are CALCULATE.NOW and SET.VALUE and
+    jz .gathered                      ; ACTIVE.CELL, and this lexer stopped at
+    jmp short .take                   ; the dot - so three of 81.63's twenty
+.notdot:                              ; could not be written to a file even
+    cmp al, 'A'                       ; once their numbers were known. A
+    jb .gathered                      ; LEADING dot still ends it, so nothing
+    cmp al, 'Z'                       ; that was not already a name becomes one
     ja .gathered
-    cmp cx, SH_NAME_MAX
+.take:
+    cmp cx, SH_IDENT_MAX
     jae .bad
     mov [di], al
     inc di
@@ -26390,6 +26474,20 @@ sh_rpn_func:
     jne .bad
     inc si
     mov [sh_rpn_p], si
+    ; 81.83: Cetab or Ftab? INLINE, and that is not a size choice - this
+    ; body is in the module and a resident helper would be a near call
+    ; across a segment boundary (68.10 rule 1). The first draft had one and
+    ; the machine HUNG on every save, in every format: os88ovlchk catches
+    ; exactly this, and `make build/sheet.o88` does not run it.
+    mov byte [sh_rpn_isce], 0
+    push bx
+    sub bx, SH_FN_MAC0                ; below the macro run this wraps far
+    cmp bx, sh_rpn_fce_end - sh_rpn_fce  ; above the count, so one unsigned
+    jae .noce                         ; compare answers both ends
+    mov al, [sh_rpn_fce + bx]
+    mov [sh_rpn_isce], al
+.noce:
+    pop bx
     cmp byte [sh_rpn_fvar + bx], 0
     jne .variable
     mov al, SH_PTG_FUNCV
@@ -26397,6 +26495,10 @@ sh_rpn_func:
     jmp .index
 .variable:
     mov al, SH_PTG_FUNCVARV
+    cmp byte [sh_rpn_isce], 0         ; a COMMAND is its own ptg in the
+    je .putptg                        ; one-byte world (81.83)
+    mov al, SH_PTG_FUNCCE
+.putptg:
     call sh_rpn_put
     mov al, cl                        ; the count comes before the index
     call sh_rpn_put
@@ -26406,7 +26508,11 @@ sh_rpn_func:
     cmp byte [sh_wb_xf4], 0           ; BIFF2-3 carry a ONE-byte index and
     je .out                           ; BIFF4-8 a word (3.7.1/3.7.2) - the
     xor al, al                        ; workbook writer emits BIFF4, so the
-    call sh_rpn_put                   ; high byte goes out there and not here
+    cmp byte [sh_rpn_isce], 0         ; high byte goes out there and not here
+    je .puthi                         ; ...AND IT IS WHERE fCeFunc LIVES in
+    mov al, 0x80                      ; that form: bit 15 of the word, which
+.puthi:                               ; is the same distinction the 0x58 ptg
+    call sh_rpn_put                   ; makes one byte down
     jmp .out
 .bad:
     mov byte [sh_rpn_bad], 1
@@ -28045,17 +28151,19 @@ sh_pident:
     jne .doneletters                  ; is how ERROR.TYPE is spelled. Only
     or cx, cx                         ; after a letter, so a LEADING '.' is
     jz .doneletters                   ; still the start of a number (`.5`) and
-    cmp cx, SH_NAME_MAX               ; a cell reference still cannot hold one
+    cmp cx, SH_IDENT_MAX              ; a cell reference still cannot hold one
     jae .doneletters
     jmp .store                        ; ...and it does NOT go through the
                                        ; uppercase fold below: '.' AND 0xDF is
                                        ; 0x0E, which would have put a control
                                        ; character in the middle of the name
 .isletter:
-    cmp cx, SH_NAME_MAX               ; a DEFINED NAME can be this long, so the
-    jae .doneletters                  ; cap is its length rather than a column
-                                       ; pair's - a function name is shorter
-                                       ; than either
+    cmp cx, SH_IDENT_MAX              ; 81.83: the COLLECTED length, which is
+    jae .doneletters                  ; no longer a defined name's - a macro
+                                       ; function name is LONGER than either
+                                       ; (CALCULATE.NOW is 13). What a defined
+                                       ; name may be is still SH_NAME_MAX and
+                                       ; is checked where one is STORED
     and al, 0xDF                      ; normalize to uppercase
 .store:
     mov [di], al
@@ -42373,6 +42481,11 @@ sh_functab:
     dw sh_f_now                       ; 106 (81.42)
     dw sh_f_isnontext, sh_f_clean, sh_f_rand   ; 107 108 109 (81.43)
     dw sh_f_indirect                  ; 110 (81.44)
+sh_functab_mac0:                      ; 81.83: the macro run's own index, so
+                                      ; SH_FN_MAC0 below is DERIVED and a row
+                                      ; inserted above it cannot silently
+                                      ; point the Cetab flags at the wrong
+                                      ; twenty functions
     dw sh_f_goto, sh_f_return, sh_f_halt, sh_f_setvalue, sh_f_select ; 111- :
     dw sh_f_formula, sh_f_alert, sh_f_message, sh_f_beep, sh_f_input  ; the
     dw sh_f_for, sh_f_while, sh_f_next, sh_f_break, sh_f_actcell     ; MACRO
@@ -43677,7 +43790,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8520                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8525                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -43862,8 +43975,8 @@ sh_fbuf       equ sh_pnest + 2              ; SH_EVAL_MAXDEPTH * 64: one
                                              ; sh_eval_cell), copied out of
                                              ; sh_txtseg so the parser never
                                              ; needs a segment override
-sh_ident      equ sh_fbuf + (SH_EVAL_MAXDEPTH * 64) ; SH_NAME_MAX+1: a collected name/column
-sh_pxsheet    equ sh_ident + SH_NAME_MAX + 1              ; stage 2.0: a "SheetN!" prefix
+sh_ident      equ sh_fbuf + (SH_EVAL_MAXDEPTH * 64) ; SH_IDENT_MAX+1: a collected name/column
+sh_pxsheet    equ sh_ident + SH_IDENT_MAX + 1             ; stage 2.0: a "SheetN!" prefix
                                              ; sh_pident just consumed,
                                              ; 0xFF = none (see sh_psheetpfx)
 sh_pcol       equ sh_pxsheet + 1              ; sh_pident's cell-ref column
@@ -44994,7 +45107,9 @@ sh_pa_st      equ sh_pa_n + 2                ; SH_PA_MAXF words each: the
 sh_pa_en      equ sh_pa_st + SH_PA_MAXF * 2  ; fields' start and end columns
 sh_pa_src     equ sh_pa_en + SH_PA_MAXF * 2  ; SH_EDITMAX+1: the row's text
 sh_pa_fld     equ sh_pa_src + SH_EDITMAX + 1 ; ...and one field out of it
-sh_pa_tmp     equ sh_pa_fld + SH_EDITMAX + 1 ; Guess builds here, because it
+sh_rpn_isce   equ sh_pa_fld + SH_EDITMAX + 1 ; 81.83: byte, this function is
+                                             ; a command equivalent
+sh_pa_tmp     equ sh_rpn_isce + 1            ; Guess builds here, because it
                                              ; GROWS the line and cannot write
                                              ; into the buffer it is reading
 sh_bss_end        equ sh_pa_tmp + SH_EDITMAX * 2 + 2

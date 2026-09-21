@@ -83,6 +83,40 @@ ERR_CODES = dict((v, k) for k, v in BIFF_ERRORS.items())
 # ATAN2 and SUMX2MY2 really end in digits. Two indices change name between
 # the versions (204 YEN -> USDOLLAR, 215 JIS -> DBCS); the BIFF4 name is kept.
 #
+# 81.83: the MACRO FUNCTIONS' own numbers, which are in this same Ftab and
+# which this table never carried because SHEET could not write them. From
+# docs/ms-xls.pdf section 2.5.198.17, and cross-checked against a macro sheet
+# real Excel 2.1d wrote (SPEC.md 81.68). Arity ranges are that document's.
+BIFF_MACRO_FUNCS = {
+    0x35: ('GOTO'       , (1, 1)  , (1, 1)),
+    0x36: ('HALT'       , (0, 1)  , (0, 1)),
+    0x37: ('RETURN'     , (0, 1)  , (0, 1)),
+    0x5E: ('ACTIVE.CELL', (0, 0)  , (0, 0)),
+    0x68: ('INPUT'      , (1, 7)  , (1, 7)),
+    0x6C: ('SET.VALUE'  , (2, 2)  , (2, 2)),
+    0xAB: ('FOR'        , (3, 4)  , (3, 4)),
+    0xAC: ('WHILE'      , (1, 1)  , (1, 1)),
+    0xAD: ('BREAK'      , (0, 0)  , (0, 0)),
+    0xAE: ('NEXT'       , (0, 0)  , (0, 0)),
+}
+
+# ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its
+# own numbering - the thing SPEC.md 81.68 recorded as unavailable and which
+# docs/ms-xls.pdf section 2.5.198.4 has in full. Only the entries SHEET can
+# write are here; the table itself is 395 long.
+BIFF_CETAB = {
+    0x00: 'BEEP',
+    0x1F: 'CALCULATE.NOW',
+    0x31: 'CUT',
+    0x32: 'COPY',
+    0x33: 'PASTE',
+    0x34: 'CLEAR',
+    0x60: 'FORMULA',
+    0x6D: 'SELECT',
+    0x76: 'ALERT',
+    0x7A: 'MESSAGE',
+}
+
 # It is here, in the SECOND reader, for the reason this whole file exists: a
 # table SHEET copied by hand had six wrong entries (UPPER/LOWER swapped, INDEX
 # as DATE, PMT as DMIN, RATE and MIRR one place off) that nothing noticed,
@@ -975,7 +1009,16 @@ def _sheet_tables(path='apps/sheet/sheet.asm'):
         return out
     fid, fvar, fargc = (table('sh_rpn_fid'), table('sh_rpn_fvar'),
                         table('sh_rpn_fargc'))
-    return [(nm, fid[i], fvar[i], fargc[i] if fargc else None)
+    # 81.83: sh_rpn_fce says which TABLE a macro function's number is in, and
+    # it covers only the macro run - so it is expanded to sh_functab's length
+    # against the names it names, not against an offset counted here.
+    fce = table('sh_rpn_fce') or []
+    first = order.index('GOTO') if 'GOTO' in order else len(order)
+    ce = [0] * len(order)
+    for k, v in enumerate(fce):
+        if first + k < len(order):
+            ce[first + k] = v
+    return [(nm, fid[i], fvar[i], fargc[i] if fargc else None, ce[i])
             for i, nm in enumerate(order)]
 
 
@@ -988,10 +1031,19 @@ _FVAR_KNOWN = {'FIXED'}
 
 def _check_functab(bad):
     rows = _sheet_tables()
-    for nm, fid, fvar, fargc in rows:
+    for nm, fid, fvar, fargc, isce in rows:
         if fid == 0xFF:
             continue
-        ent = BIFF_FUNCS.get(fid)
+        if isce:
+            # 81.83: a COMMAND EQUIVALENT is numbered in its own table, and
+            # checking it against the Ftab is how a build that put all twenty
+            # macro functions in one table would look correct
+            got = BIFF_CETAB.get(fid)
+            if got != nm:
+                bad.append('sh_rpn_fid: %s is written as Cetab index %d, '
+                           'which is %s' % (nm, fid, got or 'no command'))
+            continue
+        ent = BIFF_FUNCS.get(fid) or BIFF_MACRO_FUNCS.get(fid)
         if ent is None or ent[0] != nm:
             bad.append('sh_rpn_fid: %s is written as index %d, which is %s'
                        % (nm, fid, ent[0] if ent else 'no function'))

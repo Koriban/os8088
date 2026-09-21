@@ -4872,6 +4872,15 @@ SOAK = [
         "an error constant survives Fill Right, Copy/Paste and typing, "
         "which stored 0, pasted 0 and made a label",
         needs=("marty",), serial=True),
+    Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
+        "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
+        "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "
+        "value and the macro was gone. Byte-level on purpose: SELECT and "
+        "RETURN are checked against the tokens in a macro sheet REAL Excel "
+        "2.1d wrote, because our reader and writer can agree with each other "
+        "and both be wrong - which is why 81.68 refused to guess. Both "
+        "tables and both ptgs, and a dotted name through the lexer",
+        needs=("marty",), serial=True),
     Row("sheetparse", "soak", py("tests/sheetparse.py"), 400.0,
         "SPEC.md 81.82: Data > Parse splits one column at FIXED CHARACTER "
         "POSITIONS, not at a delimiter. 'New York' must survive as one "
