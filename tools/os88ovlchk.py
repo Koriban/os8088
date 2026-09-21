@@ -45,7 +45,7 @@ CELL = re.compile(r'^\s*OSAPI_(?:SLOT|JSLOT|NSTUB|XSTUB)\s+(?:\w+\s*,\s*)?'
 # targets were not merely untested above - they were not in the label map at
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
-MODS = ('.modc', '.modf', '.modl', '.modh', '.modp', '.modd', '.modk')  # module images (2.8).
+MODS = ('.modc', '.modm', '.modf', '.modl', '.modh', '.modp', '.modd', '.modk')  # module images (2.8).
 # `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
 # docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
 # that build and into `.cold` on kern_big, which is the first conditional
@@ -120,8 +120,9 @@ EXTRA = {'apps/os88ui.inc': '.cold',
 # source can build SHEET (.modc, a real overlay) and PLAN (.text, one file).
 # The alias is a section name to NASM and has to be one here too, or every
 # thunk in the module reads as a .modc -> .text crossing.
-SECT_ALIAS = {'SH_MODSEC': '.modc'}
-SECT = re.compile(r'^\s*section\s+(\.\w+|SH_MODSEC)')
+SECT_ALIAS = {'SH_MODSEC': '.modc',
+              'SH_MODSEC2': '.modm'}   # 81.94: SHEET's second module, MACRO.OVL
+SECT = re.compile(r'^\s*section\s+(\.\w+|SH_MODSEC2?)')
 _WALK = {}
 
 # ...and the rest of the per-line patterns, compiled once for the same reason.
@@ -1215,7 +1216,7 @@ def check_pkgs():
         rows, cur = [], '.text'
         for f, n, raw in stream:
             line = raw.split(';')[0]
-            m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC)', line)
+            m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC2?)', line)
             if m:
                 cur = SECT_ALIAS.get(m.group(1), m.group(1))
                 continue
@@ -1228,7 +1229,7 @@ def check_pkgs():
         # directives for the KERNEL's benefit (it is %included into a cold
         # block there) and those must not be read as a boundary here - without
         # this fold, 70 correct calls were reported.
-        fold = lambda x: x if x == '.modc' else '.text'
+        fold = lambda x: x if x in ('.modc', '.modm') else '.text'
 
         # A FILE %included TWICE was deduped here by keeping the LAST copy, on
         # the reasoning that the code-bearing include comes last. It does not
@@ -1328,7 +1329,7 @@ def check_pkgs():
         rows, cur = [], '.text'
         for f, n, raw in stream:
             line = raw.split(';')[0]
-            m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC)', line)
+            m = re.match(r'\s*section\s+(\.\w+|SH_MODSEC2?)', line)
             if m:
                 cur = SECT_ALIAS.get(m.group(1), m.group(1))
                 continue
@@ -1341,7 +1342,7 @@ def check_pkgs():
         # directives for the KERNEL's benefit (it is %included into a cold
         # block there) and those must not be read as a boundary here - without
         # this fold, 70 correct calls were reported.
-        fold = lambda x: x if x == '.modc' else '.text'
+        fold = lambda x: x if x in ('.modc', '.modm') else '.text'
 
         # A FILE %included TWICE IS ONE FILE. apps/os88img.inc is deliberately
         # included once for its constants and once for its code, guarded by
@@ -1395,6 +1396,7 @@ def check_pkgs():
 # so a tail that outgrows its claim is not an error - it is a module truncated
 # at a byte boundary, which fails later and somewhere else (82.16.9).
 CLAIMS = [('build/CHART.OVL',  'apps/os88chartovl.inc', 'CH_OVKB'),
+          ('build/MACRO.OVL',  'apps/sheet/sheet.asm',  'SH_M2KB'),
           ('build/SCRIBE.OVL', 'apps/scribe/scribe.asm', 'SC_OVKB')]
 
 

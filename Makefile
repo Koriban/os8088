@@ -4692,16 +4692,23 @@ $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
 # to it; this is for `make build/sheet.o88` on its own, which runs no tier.
 $(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py
 	python3 tools/os88ovl.py $(BUILD)/sheet.bin -o $(BUILD)/CHART.OVL \
-		--trim $(BUILD)/sheet.trim.bin
+		--trim $(BUILD)/sheet.trim.bin --second $(BUILD)/MACRO.OVL
 	@ovkb=$$(sed -n 's/^CH_OVKB *equ *\([0-9]*\).*/\1/p' apps/os88chartovl.inc); \
 	 have=$$(wc -c < $(BUILD)/CHART.OVL); cap=$$((ovkb * 1024)); \
 	 if [ $$have -gt $$cap ]; then \
 	   echo "CHART.OVL is $$have bytes; CH_OVKB reserves $$cap - raise it" >&2; \
 	   exit 1; fi; \
 	 echo "CHART.OVL: $$have of $$cap bytes claimed (CH_OVKB=$$ovkb)"
+	@m2kb=$$(sed -n 's/^SH_M2KB *equ *\([0-9]*\).*/\1/p' apps/sheet/sheet.asm); \
+	 have=$$(wc -c < $(BUILD)/MACRO.OVL); cap=$$((m2kb * 1024)); \
+	 if [ $$have -gt $$cap ]; then \
+	   echo "MACRO.OVL is $$have bytes; SH_M2KB reserves $$cap - raise it" >&2; \
+	   exit 1; fi; \
+	 echo "MACRO.OVL: $$have of $$cap bytes claimed (SH_M2KB=$$m2kb); the rest is the text files' tail (81.91.1)"
 	python3 tools/os88pkg.py $(BUILD)/sheet.trim.bin -o $@
 
 $(BUILD)/CHART.OVL: $(BUILD)/sheet.o88 ;
+$(BUILD)/MACRO.OVL: $(BUILD)/sheet.o88 ;
 
 # FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
 # Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
@@ -5686,9 +5693,10 @@ $(BUILD)/cmemmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/chello.o88 \
 # has. With it, the five movable claims have a pinned wall among them, which
 # is the arrangement a user actually gets.
 $(BUILD)/sheetmove360.img: $(BUILD)/heapfrag.o88 $(BUILD)/sheet.o88 \
-                           $(BUILD)/CHART.OVL tools/os88disk.py
+                           $(BUILD)/CHART.OVL $(BUILD)/MACRO.OVL \
+                           tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/heapfrag.o88 \
-		$(BUILD)/sheet.o88 $(BUILD)/CHART.OVL
+		$(BUILD)/sheet.o88 $(BUILD)/CHART.OVL $(BUILD)/MACRO.OVL
 
 # ...and the three editors' disk, for tests/editmove.py (SPEC.md 66.5.7). One
 # image for all three because each run needs heapfrag plus exactly ONE app -
@@ -9846,7 +9854,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/modplug.o88 $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/CHART.OVL \
-              $(BUILD)/telnet.o88 \
+              $(BUILD)/MACRO.OVL $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88
 # PACMAN.O88 IS OFF THE DISKS WHILE DOT DELIRIUM IS DEVELOPED, by the owner's
 # decision and not as a shipping choice: the 360KB apps disk had eight spare
@@ -10301,7 +10309,7 @@ $(PLANDIR)/PLAN.O88: $(PLANDIR)/plan.bin tools/os88pkg.py $(PKGZSTAMP)
 	 else echo "plan: 128KB machine: FITS, $$((51712-i-b-c)) bytes spare"; fi
 
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-                               $(BUILD)/CHART.OVL,$(APPS_TOOLS))
+                               $(BUILD)/CHART.OVL $(BUILD)/MACRO.OVL,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -10453,8 +10461,10 @@ OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
 # open or save a file, and could not open a single dialog.
 #
 # It fits and always did - 184 of 354 clusters used before it, 43 needed.
-OFFICE360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL $(BUILD)/CHART.OVL $(OFFICE_DATA)
+OFFICE360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL $(BUILD)/CHART.OVL \
+             $(BUILD)/MACRO.OVL $(OFFICE_DATA)
 OFFICEARGS360 := $(OFFICE_PKGS) $(BUILD)/WORD.OVL $(BUILD)/CHART.OVL \
+                 $(BUILD)/MACRO.OVL \
                  $(addprefix MEDIA:,$(OFFICE_DATA)) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -11087,7 +11097,8 @@ imager:
 # tool - Calc stays for the arithmetic a field run needs.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/modplug.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
-              $(BUILD)/sheet.o88 $(BUILD)/chart.o88 $(BUILD)/CHART.OVL
+              $(BUILD)/sheet.o88 $(BUILD)/chart.o88 $(BUILD)/CHART.OVL \
+              $(BUILD)/MACRO.OVL
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 

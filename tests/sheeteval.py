@@ -233,7 +233,7 @@ def build_disk():
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:" + src],
+                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 
@@ -256,7 +256,7 @@ def main():
         M.settle(m)
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
-        mo.dblclick(*SF.SHIN_ROW)
+        SF.open_shin(m, mo)
         M.settle(m, limit=180)
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)

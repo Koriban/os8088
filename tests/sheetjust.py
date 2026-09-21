@@ -84,7 +84,7 @@ def build_disk():
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "build/sheet.o88",
-                    "build/CHART.OVL", src],   # the ROOT, and opened BY NAME:
+                    "build/CHART.OVL", "build/MACRO.OVL", src],   # the ROOT, and opened BY NAME:
                                                # a row index would depend on
                                                # how SHIN.SLK sorts against
                                                # the two binaries (81.78's

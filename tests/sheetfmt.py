@@ -145,7 +145,6 @@ FMT_Y = {'bif': 55, 'slk': 71, 'dif': 87,   # Normal / SYLK / DIF ...
 FMT_OK = (267, 170)
 SAVE_BUTTON = (340, 65)
 APPS_FOLDER = (140, 67)
-SHIN_ROW = (165, 121)
 
 # SHEET's extensions against os88sheetfmt's names for the grammars.
 READER = {'bif': 'biff', 'slk': 'sylk', 'dif': 'dif',
@@ -157,7 +156,7 @@ def build_disk():
     open("build/SHIN.SLK", "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/SHIN.SLK"],
+                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:build/SHIN.SLK"],
                    check=True, stdout=subprocess.DEVNULL)
 
 
@@ -295,6 +294,21 @@ def recalc_flags(data):
     return _first_sheet(out)
 
 
+def open_shin(m, mo, name="SHIN.SLK"):
+    """Open the fixture BY NAME in the front Disk window.
+
+    dispcp.open_named, which its own docstring calls the only way a test
+    should name a file. Every row that opens SHIN used to double-click the
+    THIRD row, on the arithmetic that CHART.OVL and SHEET.O88 sort ahead of
+    it - and SPEC.md 81.94's MACRO.OVL sorts between those two, so the third
+    row became SHEET.O88 itself and seven rows opened an empty sheet.
+    """
+    S = lambda n: m.sym(n)
+    ds = dispcp.win_list(m, S)[-1]
+    wx, wy, _, _ = dispcp.win_rect(m, S, ds)
+    dispcp.open_named(m, mo, S, M.settle, wx, wy, name=name)
+
+
 def main():
     build_disk()
     with M.launch(SYS, apps=DISK, machine=MACHINE) as m:
@@ -304,7 +318,7 @@ def main():
         M.settle(m)
         mo.dblclick(*APPS_FOLDER)
         M.settle(m)
-        mo.dblclick(*SHIN_ROW)          # the ASSOCIATION opens it
+        open_shin(m, mo)                # the ASSOCIATION opens it
         M.settle(m, limit=180)
 
         # A1 is the selected cell on load, so this needs no cell click:

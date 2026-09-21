@@ -104478,6 +104478,90 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.94 MACRO.OVL: the macro language gets a module of its own
+
+Option 1 of §81.93.1, the owner's choice. The macro language moved out of
+CHART.OVL into a **second module, MACRO.OVL**, loaded at entry into a claim
+of its own. That leaves room for the rest of wave 4 and for the reader half,
+without dropping anything.
+
+#### 81.94.1 A claim slot, carved
+
+SHEET held `MEM_OWNER_MAX`'s eight claims, so MACRO.OVL's claim had nowhere
+to come from. **The border and note tables are now one claim, carved.**
+They were 4 KB and 5 KB; now they are one claim of 9 KB, with the note table
+starting `SH_CLAIM_BORD_KB * 64` paragraphs in. It stays movable:
+`sh_reloc` patches the border table's word and then derives the note
+table's from it, because no word names the note table's base as a claim.
+This is §50's "one claim, carved" applied to a package.
+
+**The first build declared the wrong segment movable.** `OSAPI_MEM_MOVABLE`
+takes the claim's base in DX, and DX had already been advanced to the note
+table's start. The kernel refused the declaration, so the carved claim
+stayed silently pinned. `tests/sheetmove.py` counts the declared claims,
+and it failed on 4 against the 5 expected. It now also checks that
+`sh_noteseg` follows the border table.
+
+**What the gate has not seen:** in its compaction, the kernel moved the
+cells and text claims, not the carved one. So `sh_reloc`'s recompute ran,
+harmlessly, on both of those moves, but a move of the carved claim itself
+is not exercised.
+
+#### 81.94.2 One assembly, two modules
+
+MACRO.OVL is a **section**, `.modm vstart=0 follows=.modc`, in the same
+assembly, so every symbol it names is the package's own address (§68.10's
+reason for one assembly). Its offset 0 is its dispatcher (`SHM2_*` verbs:
+the macro functions, and a run starting or resuming). The eight bytes
+after that dispatcher's jump are **`SHMACRO2`**, the mark
+`tools/os88ovl.py --second` cuts the file at. The tool refuses unless the
+mark occurs exactly once and follows a short jump, so the boundary lives in
+the image and nowhere else.
+
+**What stayed in CHART.OVL:**
+
+- `shm_mxnames` and `shm_mxrpn`, the names and BIFF rows, because the
+  evaluator's lookup and the BIFF writer read them there;
+- `shm_mfind`;
+- `shm_mname`, which the database functions use too.
+
+**How the two modules call each other:**
+
+- **MACRO.OVL → CHART.OVL** goes through verbs, `CHOUT <verb>`, which is a
+  far call through `ch_ovfar`. The verbs are the dialog applies, the R1C1
+  converters, `sh_setext`, `shm_mname`, `sh_read_rc`, the reader, Sort and
+  Series. The two slots the old macro verbs held are reused.
+- **CHART.OVL → MACRO.OVL** does not happen.
+- **Resident code → MACRO.OVL** goes through `sh_m2call`: `sh_pmacro` (the
+  evaluator's door) and `sh_macro_onalert` (every resume).
+
+#### 81.94.3 A near call across the two sections assembles and runs wrong
+
+NASM assembled a planted `call sh_fdlg_apply` from `.modm` into `.modc`
+without a word: `E8 9110`, relative to the wrong segment. So the migration
+was gated by a cross-section check over the listing, and was proven by
+exactly that plant. The check flags:
+
+- any reference between `.modc` and `.modm`;
+- any resident reference into `.modm`;
+- any near call or jump from a module into resident code.
+
+**Sizes, measured:**
+
+- CHART.OVL is **45,070** bytes of `CH_OVKB` 46;
+- MACRO.OVL is **13,883** of `SH_M2KB` 28;
+- resident +152 bytes and bss +5 (the door, the loader, and the pointer and
+  failure byte);
+- the text-file tail (§81.91.1) is **MACRO.OVL's** now: 14,789 bytes, two
+  channels of **7,392** bytes.
+
+Together the two claims are 74 KB, against 63 KB for the one before: 11 KB
+more heap for the room to finish.
+
+**MACRO.OVL ships beside CHART.OVL** on every disk that carries SHEET. Every
+test disk carries both. `tests/sheetxl2.py` does not yet, because it holds
+the owner's uncommitted work and was not edited.
+
 ### 81.93 What the macro language does not do, and where the module stands
 
 This is Excel 2.0's macro vocabulary as `docs/plans/SHEET-MACRO-PLAN.md`
@@ -104517,7 +104601,7 @@ have, and the function comes cheaply with the command:
   TABLE and WORKSPACE, from the plan;
 - FORMULA.ARRAY, FILL.LEFT and FILL.UP, from wave 3 (§81.90.1).
 
-#### 81.93.1 The 64 KB wall
+#### 81.93.1 The 64 KB wall - resolved by §81.94
 
 CHART.OVL is one segment, and its claim is `CH_OVKB` KB. **63 is the
 ceiling**, the most that `mov cx, CH_OVKB * 1024` can express. The module
@@ -104623,9 +104707,9 @@ The first part of wave 4 of `docs/plans/SHEET-MACRO-PLAN.md`.
 3. FCLOSE writes the file back whole with `OSAPI_FILE_WRITE`, if it
    changed. A new file is always written, empty or not.
 
-**The memory is the tail of CHART.OVL's own claim,** the bytes between the
-module image's end (`shm_modend`, the last `.modc` fragment in source order)
-and `CH_OVKB` KB. It is not a claim of its own, and the gate found why
+**The memory is the tail of the macro module's own claim** - CHART.OVL's
+when this was built, **MACRO.OVL's since §81.94** - the bytes between the
+module image's end (`shm_m2end`) and `SH_M2KB` KB. It is not a claim of its own, and the gate found why
 twice:
 
 - **`MEM_OWNER_MAX` is 8 claims an owner, and SHEET already holds 8**

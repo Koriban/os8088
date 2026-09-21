@@ -53,7 +53,7 @@ def build_disk():
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:" + src],
+                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 
@@ -70,7 +70,7 @@ def main():
         M.settle(m)
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
-        mo.dblclick(*SF.SHIN_ROW)
+        SF.open_shin(m, mo)
         M.settle(m, limit=180)
         w, h, rows = m.vram("cga")
         g = glass.grid(w, h, rows)

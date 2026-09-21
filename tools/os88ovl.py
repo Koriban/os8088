@@ -41,6 +41,13 @@ def main():
     ap.add_argument('-o', '--overlay', required=True, help='the .OVL to write')
     ap.add_argument('--trim', required=True,
                     help='the resident image to write (what os88pkg.py takes)')
+    ap.add_argument('--second', metavar='OVL',
+                    help='a SECOND module after the first (SHEET\'s MACRO.OVL, '
+                         'SPEC.md 81.94): it starts two bytes before the one '
+                         'occurrence of --mark, its dispatcher\'s short jump '
+                         'being those two')
+    ap.add_argument('--mark', default='SHMACRO2',
+                    help='the second module\'s cut mark (default %(default)s)')
     args = ap.parse_args()
 
     raw = open(args.image, 'rb').read()
@@ -59,11 +66,27 @@ def main():
                  'image' % args.image)
 
     head, tail = raw[:cut], raw[cut:]
+    second = b''
+    if args.second:
+        mark = args.mark.encode('ascii')
+        at = [i for i in range(len(tail)) if tail.startswith(mark, i)]
+        if len(at) != 1:
+            sys.exit('os88ovl: the mark %r occurs %d times in the module tail '
+                     '- it must occur exactly once, or the cut is a guess'
+                     % (args.mark, len(at)))
+        split = at[0] - 2
+        if split <= 0 or tail[split] != 0xEB:
+            sys.exit('os88ovl: the mark is not two bytes after a short jump - '
+                     'the second module must START with its dispatcher')
+        tail, second = tail[:split], tail[split:]
+        open(args.second, 'wb').write(second)
     open(args.trim, 'wb').write(head)
     open(args.overlay, 'wb').write(tail)
-    sys.stderr.write('os88ovl: %s -> %s (%d resident) + %s (%d on demand)\n'
+    sys.stderr.write('os88ovl: %s -> %s (%d resident) + %s (%d on demand)%s\n'
                      % (args.image, args.trim, len(head),
-                        args.overlay, len(tail)))
+                        args.overlay, len(tail),
+                        ' + %s (%d)' % (args.second, len(second))
+                        if args.second else ''))
 
 
 if __name__ == '__main__':

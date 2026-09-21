@@ -58,9 +58,11 @@ MC_SIZE, MEM_MAX = os88geom.MC_SIZE, os88geom.MEM_MAX
 PKG_HEAPFRAG, PKG_SHEET = "HEAPFRAG.O88", "SHEET.O88"
 DISK = "build/sheetmove360.img"
 
-# the six that are declared - Undo's joined them in SPEC.md 81.57 - and the
-# one that is deliberately not
-MOVABLE = ["sh_cellseg", "sh_txtseg", "sh_bordseg", "sh_noteseg",
+# the five that are declared - Undo's joined them in SPEC.md 81.57, and the
+# border and note tables became ONE carved claim in 81.94 - and the one that
+# is deliberately not. sh_noteseg is not a claim of its own any more: it is
+# the carved claim's second part, and is checked below to follow it
+MOVABLE = ["sh_cellseg", "sh_txtseg", "sh_bordseg",
            "sh_chartseg", "sh_undoseg"]
 PINNED = "sh_stgseg"
 
@@ -295,6 +297,11 @@ def main():
         print("  3 every word names a claim %s"
               % ("OK" if not stale else "STALE: " + ", ".join(stale)))
         bad += bool(stale)
+        nt = sword("sh_noteseg")              # 81.94: carved, so it FOLLOWS
+        nt_ok = nt == w1["sh_bordseg"] + 4 * 64   # the border table's move
+        print("  3a sh_noteseg follows      %s" % ("OK" if nt_ok else
+              "STALE: %04x, border table at %04x" % (nt, w1["sh_bordseg"])))
+        bad += not nt_ok
         pin_ok = w1[PINNED] == w0[PINNED]
         print("  3b %s stayed put         %s"
               % (PINNED, "OK" if pin_ok else "MOVED <-- it is a file target"))

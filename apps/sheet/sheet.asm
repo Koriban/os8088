@@ -758,6 +758,11 @@ sh_reloc:
 .next:
     add si, 2
     loop .l
+    push ax                           ; 81.94: the note table is carved from
+    mov ax, [sh_bordseg]              ; the border table's claim, so it moves
+    add ax, SH_CLAIM_BORD_KB * 64     ; with it - no word names it as a base
+    mov [sh_noteseg], ax
+    pop ax
     pop di
     pop si
     pop cx
@@ -769,11 +774,11 @@ sh_reloc:
 ; and they close the one window where a chart export could be holding a stale
 ; segment across the OSAPI_FILE_WRITE in the middle of it.
 sh_segw:
-    dw sh_cellseg, sh_txtseg, sh_bordseg, sh_noteseg
+    dw sh_cellseg, sh_txtseg, sh_bordseg
     dw sh_chartseg
     dw ch_srcseg, ch_stgseg, ch_srcseg2
     dw sh_undoseg
-SH_NSEGW equ 9
+SH_NSEGW equ 8
 
 ; =============================================================================
 ; sh_entry - package entry point (SPEC.md 20.2). Claims run here, and only
@@ -807,8 +812,22 @@ SH_NSEGW equ 9
 %macro SHOUT 1
     call far [sh_v_%1]
 %endmacro
+; CHOUT - MACRO.OVL's calls into CHART.OVL (81.94): a verb, through the far
+; pointer the resident half already keeps. BP carries it, as ch_ovcall's does
+%macro CHOUT 1
+    push bp
+    mov bp, %1
+    call far [ch_ovfar]
+    pop bp
+%endmacro
+SHM2_PMACRO  equ 0                  ; MACRO.OVL's verbs: the macro functions,
+SHM2_MRESUME equ 1                  ; and a run starting or carrying on
+SHM2_N       equ 2
+SH_M2KB      equ 28                 ; MACRO.OVL's claim, KB: the module and the
+                                     ; text files' tail (81.91.1)
 
   %define SH_MODSEC .modc
+  %define SH_MODSEC2 .modm           ; 81.94: MACRO.OVL, the macro language
 %define CH_MODC_OPENED              ; os88chart.inc must not re-open .modc
 SHM_READ   equ 3                    ; SHEET's verbs continue CHART's numbering
 SHM_WRITE  equ 4                    ; past CHM_MAX, asserted against it at the
@@ -817,8 +836,8 @@ SHM_FIN    equ 6                    ; 82.16.10: the financial family
 SHM_TEXT   equ 7                    ; 81.62: the text functions,
 SHM_TRANS  equ 8                    ; the logarithms and trigonometry,
 SHM_INFO   equ 9                    ; and ISBLANK...ERROR.TYPE
-SHM_MACRO  equ 10                   ; 81.63: the macro functions,
-SHM_MRESUME equ 11                  ; and a run starting or carrying on
+SHM_IDAPPLY equ 10                 ; 81.94: MACRO.OVL's ways into this module:
+SHM_BDAPPLY equ 11                 ; the one-line and Border dialogs' applies
 SHM_DATABASE equ 12                 ; 81.65: DAVERAGE...DVARP
 SHM_CELL   equ 13                   ; 81.66: CELL
 SHM_MATRIX equ 14                   ; 81.67: MDETERM...GROWTH
@@ -862,7 +881,12 @@ SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
                                      ; sub-op byte, because sh_modc_ext
                                      ; already dispatches on a number and a
                                      ; callback must not spend a register
-SHM_N      equ 39                   ; a COUNT, not a max: sh_modc_ext does
+SHM_TOR1C1 equ 42                   ; 81.94: ...and the R1C1 converters, the
+SHM_FROMR1C1 equ 43                 ; name gather and the R1C1 part reader,
+SHM_SETEXT equ 44                   ; which the macro language calls and the
+SHM_MNAME  equ 45                   ; rest of this module uses too
+SHM_READRC equ 46
+SHM_N      equ 44                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -882,7 +906,7 @@ sh_modc_ext:
 sh_mverb:
     dw sh_m_doread, sh_m_dowrite, sh_m_difbbox, sh_m_pfin
     dw sh_m_ptext, sh_m_ptrans, sh_m_pinfo          ; 81.62
-    dw sh_m_pmacro, sh_m_mresume                    ; 81.63
+    dw sh_m_idapply, sh_m_bdapply                   ; 81.94
     dw sh_m_pdatabase                                ; 81.65
     dw sh_m_pcell                                     ; 81.66
     dw sh_m_pmatrix                                    ; 81.67
@@ -898,6 +922,8 @@ sh_mverb:
     dw sh_m_fdapply
     dw sh_m_justify                                       ; 81.81
     dw sh_m_mfind                                         ; macro plan wave 0
+    dw sh_m_tor1c1, sh_m_fromr1c1, sh_m_setext, sh_m_mname  ; 81.94
+    dw sh_m_readrc
 
 sh_m_doread:
     call shm_doread
@@ -924,13 +950,30 @@ sh_m_pinfo:
     call shm_pinfo
     clc
     retf
-sh_m_pmacro:                        ; 81.63
-    call shm_pmacro
+sh_m_idapply:                       ; 81.94: MACRO.OVL's ways in. The two
+    call sh_idlg_apply              ; applies say nothing in CF, and CLC is
+    clc                             ; the module-presence answer as above;
+    retf                            ; shm_mname and sh_read_rc ANSWER in CF,
+sh_m_bdapply:                       ; so theirs is passed through untouched
+    call sh_bdlg_apply
     clc
     retf
-sh_m_mresume:
-    call shm_mresume
+sh_m_tor1c1:
+    call sh_formula_to_r1c1
     clc
+    retf
+sh_m_fromr1c1:
+    call sh_formula_from_r1c1
+    retf
+sh_m_setext:
+    call sh_setext
+    clc
+    retf
+sh_m_mname:
+    call shm_mname
+    retf
+sh_m_readrc:
+    call sh_read_rc
     retf
 sh_m_pdatabase:                     ; 81.65
     call shm_pdatabase
@@ -992,6 +1035,37 @@ sh_m_mfind:                         ; macro plan wave 0: AX = the id or 0xFF
     call shm_mfind
     clc
     retf
+
+; =============================================================================
+; MACRO.OVL (81.94): the macro language's own module, a second segment after
+; CHART.OVL in the same assembly. Its offset 0 is ITS dispatcher, the way
+; .modc's is CHART.OVL's, and the eight bytes after the jump are the mark
+; tools/os88ovl.py cuts the file at - so the boundary is IN the image and not
+; in a second place to keep in step.
+; =============================================================================
+section .modm vstart=0 align=1 follows=.modc
+sh_modm0:
+    jmp short sh_modm_disp
+    db 'SHMACRO2'                     ; os88ovl.py's cut mark: exactly once
+sh_modm_disp:
+    cmp bp, SHM2_N
+    jae .bad
+    shl bp, 1
+    jmp word [cs:bp+sh_m2verb]
+.bad:
+    stc
+    retf
+sh_m2verb:
+    dw sh_m2_pmacro, sh_m2_mresume
+sh_m2_pmacro:
+    call shm_pmacro
+    clc
+    retf
+sh_m2_mresume:
+    call shm_mresume
+    clc
+    retf
+section SH_MODSEC
 sh_m_justify:                       ; 81.81
     call sh_docmd_justify
     clc                             ; ...and CF=0 says the MODULE ran, which
@@ -1176,10 +1250,13 @@ sh_pinfo:
     push bp
     mov bp, SHM_INFO
     jmp short sh_pdoor
-sh_pmacro:                          ; 81.63: the macro functions
-    push bp
-    mov bp, SHM_MACRO
-    jmp short sh_pdoor
+sh_pmacro:                          ; 81.63: the macro functions - MACRO.OVL's
+    push bp                         ; since 81.94, through its own door
+    mov bp, SHM2_PMACRO
+    call sh_m2call
+    pop bp
+    jc sh_pdoor.nomod
+    ret
 sh_pdatabase:                       ; 81.65: DAVERAGE...DVARP
     push bp
     mov bp, SHM_DATABASE
@@ -1211,6 +1288,81 @@ sh_pdoor:
     pop cx
     pop bx
     ret
+
+; -----------------------------------------------------------------------------
+; sh_m2call - far-call MACRO.OVL (81.94). in: BP = its verb (SHM2_*), the rest
+; as the verb documents. out: as the verb; CF=1 the module is not there.
+; sh_m2need - make sure it is: CHART.OVL first, because the macro module calls
+; into it (CHOUT), then MACRO.OVL read into its own claim, from the folder
+; SHEET was launched from - ch_ovneed's recipe, and its banked folder words.
+; Taken at the entry proc with the other claims (SPEC.md 50.3); this lazy path
+; runs only if that one failed, and a failure is remembered, not retried
+; -----------------------------------------------------------------------------
+sh_m2call:
+    call sh_m2need
+    jc .no
+    call far [sh_m2far]
+.no:
+    ret
+sh_m2need:
+    cmp word [sh_m2far + 2], 0
+    jne .ok
+    cmp byte [sh_m2fail], 0
+    jne .no
+    call ch_ovneed
+    jc .fail
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    call OSAPI_FILE_HERE                ; where the USER is, to be put back
+    mov [ch_ovwas], dx
+    mov [ch_ovwdr], bl
+    mov dx, [ch_ovdir]                  ; ...and off to where we were launched
+    mov bl, [ch_ovdrv]
+    call OSAPI_FILE_GOTO
+    mov ax, SH_M2KB
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov es, dx
+    xor bx, bx
+    mov cx, SH_M2KB * 1024
+    push dx
+    xor dx, dx
+    mov si, sh_m2name
+    call OSAPI_FILE_READ
+    pop dx
+    jc .noread
+    mov word [sh_m2far], 0              ; the dispatcher is at the claim's 0
+    mov [sh_m2far + 2], dx
+    call ch_ovback
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ok:
+    clc
+    ret
+.noread:
+    call OSAPI_MEM_FREE                 ; DX is the claim: a half-loaded
+.nomem:                                 ; module is worse than none
+    call ch_ovback
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.fail:
+    mov byte [sh_m2fail], 1
+.no:
+    stc
+    ret
+sh_m2name: db 'MACRO.OVL', 0
 
 ; -----------------------------------------------------------------------------
 ; sh_ovbind - fill the vector table: this package's shim offsets and its own
@@ -1783,20 +1935,20 @@ sh_entry:
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_stgseg], dx
-    mov ax, SH_CLAIM_BORD_KB
+    ; THE BORDER AND NOTE TABLES ARE ONE CLAIM, CARVED (81.94): MEM_OWNER_MAX
+    ; is eight claims an owner and SHEET held eight, so MACRO.OVL's claim had
+    ; nowhere to come from. The note table is the claim's second part, and
+    ; sh_reloc derives its segment from the border table's after a move
+    mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_bordseg], dx
-    mov ax, sh_reloc
-    call OSAPI_MEM_MOVABLE
+    mov ax, sh_reloc                   ; DX IS THE CLAIM HERE: MEM_MOVABLE
+    call OSAPI_MEM_MOVABLE             ; takes the claim's base, and the first
+    add dx, SH_CLAIM_BORD_KB * 64      ; build declared the NOTE table's - not
+    mov [sh_noteseg], dx               ; a claim, refused, silently pinned
     mov word [sh_nbord], 0
-    mov ax, SH_CLAIM_NOTE_KB
-    call OSAPI_MEM_CLAIM
-    jc .fail
-    mov [sh_noteseg], dx
     call sh_colw_clear                 ; every column the standard width (81.56)
-    mov ax, sh_reloc
-    call OSAPI_MEM_MOVABLE
     mov word [sh_nnote], 0
     mov ax, SH_CLAIM_CHART_KB
     call OSAPI_MEM_CLAIM
@@ -1811,6 +1963,9 @@ sh_entry:
     mov ax, sh_reloc
     call OSAPI_MEM_MOVABLE
 .noundo:
+    call sh_m2need                      ; 81.94: MACRO.OVL's, with CHART.OVL's
+                                        ; before it (sh_m2need asks for that
+                                        ; one first) - CF not read, as below
     call ch_ovneed                      ; CHART.OVL's CH_OVKB claim is taken
                                         ; HERE, with every other claim, because
                                         ; SPEC.md 50.3 is not advice. CF is not
@@ -34847,8 +35002,8 @@ sh_macro_run:
 ; way every paused run carries on: the module, verb SHM_MRESUME
 sh_macro_onalert:
     push bp
-    mov bp, SHM_MRESUME
-    call ch_ovcall
+    mov bp, SHM2_MRESUME
+    call sh_m2call
     pop bp
     jnc .out
     mov byte [sh_macro_running], 0    ; no module: no macro
@@ -35098,7 +35253,7 @@ sh_macro_clear:                      ; AX = Edit > Clear's row, SI = the
 ; The engine and every macro function are CHART.OVL's (82.16): the package
 ; keeps the names, the door (sh_pmacro), the Run dialog and the resumptions.
 ; =============================================================================
-section SH_MODSEC                      ; 81.63
+section SH_MODSEC2                     ; 81.63 - MACRO.OVL since 81.94
 
 ; shm_pmacro - the macro functions, ids SH_FID_MACRO and up. in: AX = the id,
 ; SI just past '('. out: SI past ')', the answer in sh_acc/sh_curtype, AX 0
@@ -35267,6 +35422,9 @@ shm_mkind:
                                        ; write again; FREAD moves the position
 shm_mkind_end:
 
+section SH_MODSEC                      ; 81.94: the NAMES and BIFF rows stay in
+                                       ; CHART.OVL - the evaluator's lookup and
+                                       ; the BIFF writer read them there
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
 shm_mxnames:
     db 1, 0                           ; the CALL: a name sh_ident can never
@@ -35488,6 +35646,7 @@ shm_mxrpn_end:
     times ((SH_MF_N + SHM_MX_N) - (shm_mkind_end - shm_mkind)) db 0
     times ((shm_mxrpn_end - shm_mxrpn) - 3 * SHM_MX_N) db 0
     times (3 * SHM_MX_N - (shm_mxrpn_end - shm_mxrpn)) db 0
+section SH_MODSEC2
 
 ; =============================================================================
 ; SUBROUTINES (macro plan wave 1). Excel's `ref(arg1, ...)`: a defined name
@@ -36104,6 +36263,7 @@ shm_mdefname:
     pop ax
     ret
 
+section SH_MODSEC                      ; 81.94: CHART.OVL's too - a lookup
 ; shm_mfind - is the name in sh_ident (DS, uppercase) an EXTENSION macro
 ; function? out: AX = its id, SH_FID_MX.., or 0xFF. Preserves the rest.
 shm_mfind:
@@ -36148,6 +36308,7 @@ shm_mfind:
     pop bx
     ret
 
+section SH_MODSEC2
 ; shm_mtrue / shm_mfalse - the answer, a logical
 shm_mtrue:
     push ax
@@ -36195,7 +36356,7 @@ shm_mref:
     stc
     ret
 .name:
-    call shm_mname                    ; ...a defined name standing alone
+    CHOUT SHM_MNAME                    ; ...a defined name standing alone
     jc .out
     push cx
     push dx
@@ -36237,6 +36398,8 @@ shm_mref:
 .out:
     ret
 
+section SH_MODSEC                      ; 81.94: CHART.OVL's - the database
+                                       ; functions gather names with it too
 ; shm_mname - SI at a word that is a DEFINED NAME and nothing else, before a
 ; ',' or ')': CF=1, AX/BX its near corner, CX/DX its far corner (equal to
 ; AX/BX for a single cell), SI past it. CF=0 with SI where it was otherwise.
@@ -36300,6 +36463,7 @@ shm_mname:
     clc
     ret
 
+section SH_MODSEC2
 ; shm_r1c1one - SI = an R1C1 reference; unlike the old shm_r1c1 this does NOT
 ; require the string to end there - shm_rangetext checks for ':' itself, so
 ; a lone reference and the first half of a range share one parser. out: CF=1
@@ -36313,7 +36477,7 @@ shm_r1c1one:
     cmp al, 'R'
     jne .no
     inc si
-    call sh_read_rc                   ; BX = the value, CL = 1 absolute
+    CHOUT SHM_READRC                   ; BX = the value, CL = 1 absolute
     jc .no
     mov dx, bx
     or cl, cl
@@ -36325,7 +36489,7 @@ shm_r1c1one:
     cmp al, 'C'
     jne .no
     inc si
-    call sh_read_rc
+    CHOUT SHM_READRC
     jc .no
     or cl, cl
     jnz .cabs
@@ -36454,7 +36618,7 @@ shm_mrangeref:
     stc
     ret
 .name:
-    call shm_mname                    ; a defined name, near/far corner both
+    CHOUT SHM_MNAME                    ; a defined name, near/far corner both
     jc .out
     push si
     mov byte [cs:shm_rrok], 0
@@ -37725,7 +37889,7 @@ shm_mgetformula:
     mov [sh_rc_ccol], ax
     mov [sh_rc_crow], bx
     inc si
-    call sh_formula_to_r1c1           ; -> sh_rwdst, [sh_rw_di] long
+    CHOUT SHM_TOR1C1           ; -> sh_rwdst, [sh_rw_di] long
     mov bx, [sh_rw_di]
     mov byte [sh_rwdst + bx], 0
     mov byte [sh_clipbuf], '='
@@ -38588,7 +38752,7 @@ shm_fdk:
     mov [sh_fdlg_sel], dx
     SHOUT sh_skipargs
     push si                           ; SI IS THE PARSE POINTER, and an apply
-    call sh_fdlg_apply                ; written for a dialog owes it nothing
+    CHOUT SHM_FDAPPLY                ; written for a dialog owes it nothing
     pop si                            ; (81.87.3's lesson)
     mov byte [sh_macro_dirty], 1
     jmp shm_mtrue
@@ -38836,7 +39000,7 @@ shm_mborder:
     mov [sh_bdlg_sel], al
     SHOUT sh_skipargs
     push si                           ; sh_bdlg_apply leaves SI the window
-    call sh_bdlg_apply
+    CHOUT SHM_BDAPPLY
     SHOUT sh_undo_drop
     pop si
     mov byte [sh_macro_dirty], 1
@@ -39028,7 +39192,7 @@ shm_idk:
     pop si
     SHOUT sh_skipargs
     push si
-    call sh_idlg_apply
+    CHOUT SHM_IDAPPLY
     pop si
     mov byte [sh_macro_dirty], 1
     jmp shm_mtrue
@@ -39383,7 +39547,7 @@ shm_msort:
     mov [sh_sort_desc], al
     SHOUT sh_skipargs
     push si
-    call sh_docmd_sortcol
+    CHOUT SHM_SORT
     pop si
     mov byte [sh_macro_dirty], 1
     jmp shm_mtrue
@@ -39747,7 +39911,7 @@ shm_mgal:
     mov [sh_fdlg_kind], al
     mov [sh_fdlg_sel], dx
     push si
-    call sh_fdlg_apply
+    CHOUT SHM_FDAPPLY
     pop si
     mov byte [sh_macro_dirty], 1
     jmp shm_mtrue
@@ -39847,7 +40011,7 @@ shm_mnew:
     mov byte [sh_fdlg_kind], SH_FDK_NEW
     SHOUT sh_skipargs
     push si
-    call sh_fdlg_apply
+    CHOUT SHM_FDAPPLY
     pop si
     jmp short shm_mendrun
 .bad:
@@ -39859,7 +40023,7 @@ shm_mopen:
     SHOUT sh_skipargs
     call shm_tosh_name
     push si
-    call shm_doread                   ; sh_doread's own body: we are in the
+    CHOUT SHM_READ                   ; sh_doread's own body: we are in the
     SHOUT sh_undo_drop                ; module already
     mov si, [sh_ownwin]
     SHOUT sh_repaint
@@ -39902,7 +40066,7 @@ shm_mfsaveas:
     call shm_tosh_name
     push si
     mov si, [cs:shm_gcnt]
-    call sh_setext
+    CHOUT SHM_SETEXT
     pop si
     mov ax, (SH_MI_FILE << 8) | 2     ; File > Save, under the new name
     SHOUT sh_macro_mfire
@@ -40032,7 +40196,7 @@ shm_mseries:
     mov [sh_ser_r2], ax
     SHOUT sh_skipargs
     push si
-    call shm_series
+    CHOUT SHM_SERIES
     SHOUT sh_undo_drop
     pop si
     mov byte [sh_macro_dirty], 1
@@ -40063,8 +40227,8 @@ SHM_FCH    equ 2                      ; channels open at once
 SHM_FREC   equ 24                     ; +0 name (13) +13 mode +14 dirty
                                        ; +15 open +16 base (in THIS segment)
                                        ; +18 size +20 position +22 capacity
-SHM_FTAIL  equ (shm_modend - sh_modc0) ; where the image ends, and the tail
-SHM_FEACH  equ ((CH_OVKB * 1024 - SHM_FTAIL) / SHM_FCH) & 0xFFF0
+SHM_FTAIL  equ (shm_m2end - sh_modm0)  ; where the image ends, and the tail
+SHM_FEACH  equ ((SH_M2KB * 1024 - SHM_FTAIL) / SHM_FCH) & 0xFFF0
 shm_fch:   times SHM_FCH * SHM_FREC db 0
 
 ; shm_fchan - the channel number argument at SI -> DI = its record. CF=1 not
@@ -41226,7 +41390,7 @@ shm_mformula:
     push bx                           ; the macro - ax/bx are both already it
     mov si, sh_editbuf
     inc si                            ; sh_formula_from_r1c1 wants no leading
-    call sh_formula_from_r1c1         ; '=' - SYLK's ;E field has none either,
+    CHOUT SHM_FROMR1C1         ; '=' - SYLK's ;E field has none either,
     mov byte [sh_editbuf], '='        ; and A1 text passes through unchanged
     mov si, sh_rwdst                  ; (81.7.1's own header), so this is safe
     mov di, sh_editbuf + 1            ; to run over EVERY typed formula, R1C1
@@ -41790,6 +41954,8 @@ shm_mword:
     pop si
     pop ax
     ret
+shm_m2end:                            ; 81.94: MACRO.OVL's last byte + 1 - the
+                                       ; text files' buffers are its claim's tail
 
 section SH_MODSEC                      ; 81.65: DAVERAGE...DVARP, CHART.OVL
 ; =============================================================================
@@ -49538,18 +49704,14 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 %endif
 
 %include "os88chart.inc"
-; the module image's END (81.91): the LAST .modc fragment in source order,
-; so this is the byte after CHART.OVL's image - and the macro text files'
-; buffers are the claim's tail from here to CH_OVKB KB
-section .modc
-shm_modend:
-section .text
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8577                     ; +25 for 81.92's ON.KEY table and
+    OS88_BSS 8582                     ; +5 for 81.94's MACRO.OVL pointer and
+                                       ; its failure byte;
+                                       ; +25 for 81.92's ON.KEY table and
                                        ; ON.TIME's flag;
                                        ; +4 for 81.89's SH_IDENT_MAX 20;
                                        ; +4 for 81.89's NOTE vector (147);
@@ -50898,7 +51060,10 @@ sh_macro_btn  equ sh_macro_aset + 1          ; byte: ...the button it answered
 sh_macro_esc  equ sh_macro_btn + 1           ; byte: Esc cut a WAIT short
 sh_macro_ontp equ sh_macro_esc + 1           ; byte: ON.TIME has a request
 sh_macro_keys equ sh_macro_ontp + 1          ; SH_MKEYS * SH_MKREC: ON.KEY
-sh_bss_end        equ sh_macro_keys + SH_MKEYS * SH_MKREC
+sh_m2far      equ sh_macro_keys + SH_MKEYS * SH_MKREC ; 4: MACRO.OVL's
+                                             ; (offset, segment), 0 = not loaded
+sh_m2fail     equ sh_m2far + 4               ; byte: ...and it could not be
+sh_bss_end        equ sh_m2fail + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

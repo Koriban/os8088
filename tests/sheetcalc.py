@@ -42,13 +42,14 @@ import glass                                                 # noqa: E402
 
 WORK = "build/sheetcalc"                # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetcalc.img"
-NAME = "SHIN.SLK"                       # NOT "CALC.SLK": the Disk window lists
-                                        # files SORTED, SF.SHIN_ROW is the
-                                        # third row, and CALC sorts ahead of
-                                        # CHART.OVL and SHEET.O88 - so the
-                                        # double-click launched SHEET itself
-                                        # and the sheet came up empty, which
-                                        # reads as "the grid is not there"
+NAME = "SHIN.SLK"                       # the fixture's shared name. It was
+                                        # NOT "CALC.SLK" because the rows
+                                        # clicked the third row of a SORTED
+                                        # listing, and CALC sorted ahead of
+                                        # CHART.OVL and SHEET.O88; since
+                                        # 81.94 they open it BY NAME
+                                        # (SF.open_shin), which no file sorting
+                                        # in between can move
 
 OPTIONS = (371, 45)                     # the Options menu, sheetfreeze's
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
@@ -69,7 +70,7 @@ def build_disk():
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:" + src],
+                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 
@@ -86,7 +87,7 @@ def main():
         M.settle(m)
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
-        mo.dblclick(*SF.SHIN_ROW)
+        SF.open_shin(m, mo)
         M.settle(m, limit=180)
 
         def look(tag):

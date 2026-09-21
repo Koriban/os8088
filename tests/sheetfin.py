@@ -205,7 +205,7 @@ def build_disk():
     open(src, "wb").write(F.write_sylk(cells()))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
                     "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:" + src],
+                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 
@@ -253,7 +253,7 @@ def main():
         M.settle(m)
         mo.dblclick(*SF.APPS_FOLDER)
         M.settle(m)
-        mo.dblclick(*SF.SHIN_ROW)           # the ASSOCIATION opens it
+        SF.open_shin(m, mo)           # the ASSOCIATION opens it
         M.settle(m, limit=240)              # RATE and IRR iterate on a 5150
         shot(m, "1-loaded")
 
