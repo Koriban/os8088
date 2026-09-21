@@ -103107,7 +103107,7 @@ harmless.
 | Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
 | Format | 8 | 8 | **none** — Justify closed in §81.81 |
 | File | 5 | 11 | Links, Save Workspace, Page Setup, Printer Setup, Print — `Delete` closed in §81.79, and **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
-| Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
+| Options | 6 | 10 | Set Print Area/Titles/Page Break, Workspace, Short Menus — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
 
