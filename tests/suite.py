@@ -4872,6 +4872,13 @@ SOAK = [
         "an error constant survives Fill Right, Copy/Paste and typing, "
         "which stored 0, pasted 0 and made a label",
         needs=("marty",), serial=True),
+    Row("sheetjust", "soak", py("tests/sheetjust.py"), 400.0,
+        "SPEC.md 81.81: Format > Justify re-wraps a paragraph down the left "
+        "column at the width of the WHOLE selection, a blank cell divides "
+        "the range into sections justified inside their own rows, and a "
+        "value in the left column refuses the block rather than being "
+        "skipped - with a marker cell proving the save that shows it landed",
+        needs=("marty",), serial=True),
     Row("sheetfunc", "soak", py("tests/sheetfunc.py"), 400.0,
         "SPEC.md 81.62: all 48 text, information and transcendental "
         "functions, each evaluated from a formula cached with a wrong value "

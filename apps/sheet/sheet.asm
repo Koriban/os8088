@@ -846,11 +846,15 @@ SHM_IDCLOSE equ 38
 SHM_FDAPPLY equ 39                  ; ...and CLEAR()'s own way in, which is
                                      ; the macro engine reusing that dialog's
                                      ; apply rather than a second clear
+SHM_JUSTIFY equ 40                  ; 81.81: Format > Justify's whole worker.
+                                     ; One verb and no callback, SHM_SORT's
+                                     ; shape - it asks through os88ui_ask,
+                                     ; which is resident and reached by SHOUT
 SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
                                      ; sub-op byte, because sh_modc_ext
                                      ; already dispatches on a number and a
                                      ; callback must not spend a register
-SHM_N      equ 37                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 38                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -884,6 +888,7 @@ sh_mverb:
     dw sh_m_fdopen, sh_m_fdpaint, sh_m_fdclick, sh_m_fdclose  ; 81.74.2
     dw sh_m_idopen, sh_m_idpaint, sh_m_idkey, sh_m_idclick, sh_m_idclose
     dw sh_m_fdapply
+    dw sh_m_justify                                       ; 81.81
 
 sh_m_doread:
     call shm_doread
@@ -974,6 +979,12 @@ sh_m_fclose:
     call sh_df_close                   ; here: the field being edited is
     clc                                ; committed, the way Close itself does
     retf
+sh_m_justify:                       ; 81.81
+    call sh_docmd_justify
+    clc                             ; ...and CF=0 says the MODULE ran, which
+    retf                            ; is not the same as the command having
+                                    ; done anything - Justify's own refusals
+                                    ; speak through [sh_msg]
 sh_m_sortcol:                       ; 81.71.6
     call sh_docmd_sortcol
     clc
@@ -2876,10 +2887,15 @@ SH_UL_INS    equ 7
 SH_UL_FILLR  equ 8
 SH_UL_FILLD  equ 9
 SH_UL_SORT   equ 10
+SH_UL_JUST   equ 11                    ; 81.81: Format > Justify, and the
+                                       ; Reference Guide names Undo as the way
+                                       ; back from an overwrite, so it is one
+                                       ; of the reversible ones and not a DROP
 SH_UL_KEEP   equ 0xFE                  ; sh_ud_kind: changes nothing Undo holds
 SH_UL_DROP   equ 0xFF                  ; ...or changes what it cannot reverse
 sh_ud_names:  dw sh_ud_n0, sh_ud_n1, sh_ud_n2, sh_ud_n3, sh_ud_n4, sh_ud_n5
               dw sh_ud_n6, sh_ud_n7, sh_ud_n8, sh_ud_n9, sh_ud_n10
+              dw sh_ud_n11
 sh_ud_n0:     db 'Entry', 0
 sh_ud_n1:     db 'Cut', 0
 sh_ud_n2:     db 'Paste', 0
@@ -2891,6 +2907,7 @@ sh_ud_n7:     db 'Insert', 0
 sh_ud_n8:     db 'Fill Right', 0
 sh_ud_n9:     db 'Fill Down', 0
 sh_ud_n10:    db 'Sort', 0
+sh_ud_n11:    db 'Justify', 0
 sh_ud_sundo:  db 'Undo ', 0
 sh_ud_sredo:  db 'Redo ', 0
 sh_ud_cant:   db MENU_DIS, "Can't Undo", 0
@@ -7902,6 +7919,11 @@ sh_docmd_format:
     call sh_idlg_open_r
     ret
 .notcolw:
+    cmp al, 7                          ; 81.81: Justify, and it has to be
+    jne .notjust                       ; caught HERE - the fallthrough below
+    call sh_justify_r                  ; opens an sh_fdlg of kind AL, so an
+    ret                                ; unintercepted 7 would open kind 7
+.notjust:
     call sh_fdlg_open_r
     ret
 
@@ -11307,6 +11329,464 @@ sh_docmd_sortcol:
     pop ax
     ret
 
+
+; =============================================================================
+; 81.81: Format > Justify - re-wrap a paragraph down the LEFT column of the
+; selection, to the width of the WHOLE selection.
+;
+; The contract is Excel 2.1d's Reference Guide, "Format Justify command", and
+; it is more specific than "wrap a long label":
+;
+;   - the text comes from the LEFT COLUMN of the range and nowhere else. The
+;     other columns only lend their WIDTH; what is in them is untouched, and
+;     the Guide's own note is that they "should be blank or they will
+;     interfere with the display of the text"
+;   - every cell in that left column must be TEXT or BLANK. A value refuses
+;     the whole command rather than being skipped
+;   - a BLANK cell is a PARAGRAPH SEPARATOR. It divides the range into
+;     sections that are each justified INDIVIDUALLY, inside their own rows -
+;     the Guide's five-row example with the third cell blank
+;   - the lines go back down the left column, and rows a section does not
+;     need are left blank
+;
+; WHAT IS SCOPED OUT, and said rather than hidden: Excel ASKS when the text
+; does not fit and, on OK, writes past the bottom of the selection. This
+; refuses instead, naming the rows it would have needed. The ask is not the
+; expensive part - os88ui_ask is one call - the WRITE is: the alert is
+; asynchronous (81.79's shape), so the wrapped text has to survive in staging
+; across a window the user can click anywhere in, and staging is the scratch
+; that Undo, the clipboard and every file write also use. Refusing costs the
+; user one Column Width away from the same result and costs no data.
+; =============================================================================
+section SH_MODSEC                      ; 81.81: Format > Justify, CHART.OVL
+
+SH_JU_LMAX equ SH_EDITMAX              ; a line is a label, and this is a label
+
+sh_docmd_justify:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call sh_ju_block                   ; the ordered block and the width
+    call sh_ju_check                   ; ...and every left-column cell is text
+    jc .notext
+    ; --- PASS 1: every section, counted and NOTHING written ------------------
+    mov ax, [sh_ju_r1]
+    mov [sh_ju_a], ax
+.p1:
+    call sh_ju_section                 ; CF=1 when there are no more
+    jc .p1done
+    call sh_ju_stage                   ; the section merged into staging
+    call sh_ju_count                   ; CX = the lines it wraps to
+    mov ax, [sh_ju_b]
+    sub ax, [sh_ju_a]
+    inc ax                             ; the rows the section HAS
+    cmp cx, ax
+    ja .toobig
+    mov ax, [sh_ju_b]
+    inc ax
+    mov [sh_ju_a], ax
+    jmp .p1
+.p1done:
+    ; --- PASS 2: the same walk, writing. Nothing has been touched yet, so a
+    ;     section that would not fit has already refused above -------------
+    mov al, SH_UL_JUST
+    SHOUT sh_undo_begin
+    mov ax, [sh_ju_r1]
+    mov [sh_ju_a], ax
+.p2:
+    call sh_ju_section
+    jc .p2done
+    call sh_ju_stage
+    call sh_ju_write
+    mov ax, [sh_ju_b]
+    inc ax
+    mov [sh_ju_a], ax
+    jmp .p2
+.p2done:
+    SHOUT sh_undo_end
+    mov word [sh_msg], sh_s_ju_done
+    ; DELIBERATELY NOT RECORDED. 81.74's recorder emits only what 81.63's 20
+    ; functions can say, so that a recording is an ordinary macro sheet
+    ; afterwards; there is no JUSTIFY() to emit, and inventing one here would
+    ; write a recording that no longer replays. Not recorded is the bargain
+    ; that section already makes, and is not the same as refused.
+    jmp short .out
+.notext:
+    mov word [sh_msg], sh_s_ju_notext
+    jmp short .out
+.toobig:
+    mov word [sh_msg], sh_s_ju_toobig
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ju_block - the selection, ordered, and the line width.
+;
+; The width is the sum of the SELECTED columns' widths, which is what "fill to
+; the edge of that row of the selection" means. A hidden column answers zero
+; (81.73) and so contributes nothing, which is right: it shows no characters.
+; Clamped to SH_JU_LMAX because the result is a LABEL.
+; -----------------------------------------------------------------------------
+sh_ju_block:
+    push ax
+    push bx
+    push cx
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .c
+    xchg ax, bx
+.c:
+    mov [sh_ju_c1], ax
+    mov [sh_ju_c2], bx
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .r
+    xchg ax, bx
+.r:
+    mov [sh_ju_r1], ax
+    mov [sh_ju_r2], bx
+    xor cx, cx
+    mov ax, [sh_ju_c1]
+.wsum:
+    cmp ax, [sh_ju_c2]
+    ja .wdone
+    push ax
+    SHOUT sh_colwidth                  ; AX = its width, 0 when hidden
+    add cx, ax
+    pop ax
+    inc ax
+    cmp cx, SH_JU_LMAX                 ; no point summing 256 of them
+    jb .wsum
+.wdone:
+    cmp cx, SH_JU_LMAX
+    jbe .wok
+    mov cx, SH_JU_LMAX
+.wok:
+    or cx, cx                          ; every column hidden: one character,
+    jnz .wset                          ; so it wraps rather than dividing by
+    mov cx, 1                          ; zero further down
+.wset:
+    mov [sh_ju_w], cx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ju_check - CF=1 when any cell of the left column, within the rows, is
+; something other than a label. A FORMULA refuses too, whatever it evaluates
+; to: the Guide says the cells "must either contain text or be blank", and a
+; formula is neither - justifying it would replace it with its own text.
+; -----------------------------------------------------------------------------
+sh_ju_check:
+    push ax
+    push bx
+    push di
+    push es
+    mov bx, [sh_ju_r1]
+.row:
+    cmp bx, [sh_ju_r2]
+    ja .ok
+    mov ax, [sh_ju_c1]
+    SHOUT sh_findcell                  ; DI = the record, CF=0 when empty
+    jnc .next
+    mov es, [sh_cellseg]
+    test byte [es:di+4], 1             ; HASFORMULA
+    jnz .bad
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    jne .bad
+.next:
+    inc bx
+    jmp .row
+.ok:
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop es
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ju_section - from [sh_ju_a], find the next run of non-blank left-column
+; cells and leave it in [sh_ju_a]..[sh_ju_b]. CF=1 when there is none left.
+; The blank rows BETWEEN sections are skipped and stay blank, which is the
+; Guide's paragraph separator.
+; -----------------------------------------------------------------------------
+sh_ju_section:
+    push ax
+    push bx
+    mov bx, [sh_ju_a]
+.skip:
+    cmp bx, [sh_ju_r2]
+    ja .none
+    call sh_ju_isblank
+    jnc .found                         ; occupied: the section starts here
+    inc bx
+    jmp .skip
+.found:
+    mov [sh_ju_a], bx
+.run:
+    inc bx
+    cmp bx, [sh_ju_r2]
+    ja .end
+    call sh_ju_isblank
+    jnc .run
+.end:
+    dec bx
+    mov [sh_ju_b], bx
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
+
+; sh_ju_isblank - in: BX = row; CF=1 when the LEFT column's cell there is
+; empty. sh_ju_check has already refused anything that is not a label, so
+; "occupied" and "has text" are the same question by the time this runs.
+sh_ju_isblank:
+    push ax
+    push di
+    mov ax, [sh_ju_c1]
+    SHOUT sh_findcell
+    jc .full
+    stc
+    jmp short .out
+.full:
+    clc
+.out:
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ju_stage - merge rows [sh_ju_a]..[sh_ju_b] of the left column into one
+; NUL-terminated string at sh_stgseg:0, a single space between rows. The text
+; goes through sh_editbuf rather than being copied arena-to-staging directly,
+; because those are two different segments and DS is the package's own
+; (81.18.2's hang: switch DS to read someone else's memory and your own bss
+; reads back as theirs).
+; -----------------------------------------------------------------------------
+sh_ju_stage:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    xor di, di
+    mov bx, [sh_ju_a]
+.row:
+    cmp bx, [sh_ju_b]
+    ja .done
+    call sh_ju_gettext                 ; the row's label -> sh_editbuf
+    or di, di
+    jz .copy                           ; the first one needs no separator
+    mov es, [sh_stgseg]
+    mov byte [es:di], ' '
+    inc di
+.copy:
+    mov si, sh_editbuf
+    mov es, [sh_stgseg]
+.byte:
+    mov al, [si]
+    or al, al
+    jz .rownext
+    cmp di, SH_STAGE_MAX - 2           ; staging is 32KB and the text arena is
+    jae .done                          ; 8, so this cannot fire today - it is
+    mov [es:di], al                    ; here because "cannot" is a property of
+    inc di                             ; two constants that have both moved
+    inc si
+    jmp .byte
+.rownext:
+    inc bx
+    jmp .row
+.done:
+    mov es, [sh_stgseg]
+    mov byte [es:di], 0
+    mov [sh_ju_len], di
+    mov word [sh_ju_si], 0
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_ju_gettext - in: BX = row; copies the LEFT column's label into
+; sh_editbuf, empty when there is none.
+sh_ju_gettext:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov byte [sh_editbuf], 0
+    mov ax, [sh_ju_c1]
+    SHOUT sh_findcell
+    jnc .out
+    mov es, [sh_cellseg]
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    jne .out
+    mov si, [es:di+SH_C_FOFF]          ; a label shares the formula arena
+    mov es, [sh_txtseg]
+    mov di, sh_editbuf
+    mov cx, SH_EDITMAX
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .out
+    inc si
+    inc di
+    dec cx
+    jnz .cp
+    mov byte [di], 0
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ju_nextline - the greedy wrap, one line a call, out of staging and into
+; sh_ju_line. CF=1 when the staged string is spent.
+;
+; Break at the last space that fits; a word longer than the whole width is cut
+; where it runs out, because the alternative is a line this app cannot store.
+; -----------------------------------------------------------------------------
+sh_ju_nextline:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov es, [sh_stgseg]
+    mov si, [sh_ju_si]
+.lead:
+    cmp byte [es:si], ' '              ; leading spaces belong to the break,
+    jne .start                         ; not to the line
+    inc si
+    jmp .lead
+.start:
+    cmp byte [es:si], 0
+    je .spent
+    xor cx, cx                         ; characters taken
+    mov dx, 0xFFFF                     ; the last space's index, none yet
+.take:
+    mov al, [es:si]
+    or al, al
+    jz .emit                           ; the rest fits whole
+    cmp cx, [sh_ju_w]
+    jae .full
+    cmp al, ' '
+    jne .put
+    mov dx, cx
+.put:
+    mov bx, cx
+    mov [sh_ju_line + bx], al
+    inc cx
+    inc si
+    jmp .take
+.full:
+    cmp byte [es:si], ' '              ; it broke exactly on a space: clean
+    je .emit
+    cmp dx, 0xFFFF
+    je .emit                           ; one word wider than the line: cut it
+    sub si, cx                         ; back up to the last space
+    add si, dx
+    mov cx, dx
+.emit:
+    mov bx, cx
+    mov byte [sh_ju_line + bx], 0
+    mov [sh_ju_si], si
+    clc
+    jmp short .out
+.spent:
+    mov [sh_ju_si], si
+    stc
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_ju_count - out: CX = the lines the staged section wraps to. Leaves the
+; cursor rewound, so the same staging can be wrapped again to write.
+sh_ju_count:
+    xor cx, cx
+    mov word [sh_ju_si], 0
+.l:
+    call sh_ju_nextline
+    jc .done
+    inc cx
+    jmp .l
+.done:
+    mov word [sh_ju_si], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_ju_write - wrap the staged section and write it down the left column from
+; [sh_ju_a]. Rows the section does not need are CLEARED: the Guide's "unused
+; cells are left blank", and without it the tail of a paragraph that shrank
+; would stay on the sheet underneath the new text.
+; -----------------------------------------------------------------------------
+sh_ju_write:
+    push ax
+    push bx
+    push si
+    mov word [sh_ju_si], 0
+    mov bx, [sh_ju_a]
+.l:
+    cmp bx, [sh_ju_b]
+    ja .done
+    call sh_ju_nextline
+    jc .blank
+    mov ax, [sh_ju_c1]
+    mov si, sh_ju_line
+    SHOUT sh_settext                   ; CF=1: the arena is full, and the cell
+    jc .done                           ; keeps what it had - so STOP rather
+    inc bx                             ; than write half a paragraph
+    jmp .l
+.blank:
+    mov ax, [sh_ju_c1]
+    SHOUT sh_clearcell
+    inc bx
+    jmp .l
+.done:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+section .text
+
 section .text
 
 
@@ -13930,6 +14410,16 @@ sh_ldlg_tpl:
 ; invariant as 81.71.5.1's: the OPEN forces the module in, and refuses to
 ; create a window at all if it cannot, so no paint holding the gfx lock is
 ; ever the call that has to read a disk.
+; 81.81: Format > Justify, SHM_SORT's shape - one verb, no callback.
+sh_justify_r:                       ; NOT sh_justify, which is 81.13's
+    push bp                         ; align-a-value-INSIDE-a-cell helper and
+    mov bp, SHM_JUSTIFY             ; has nothing to do with this command
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    ret
 sh_fdlg_open_r:
     push bp
     mov bp, SHM_FDOPEN
@@ -40781,7 +41271,7 @@ sh_mtab:
     dw sh_m_file,    sh_i_file,    5
     dw sh_m_edit,    sh_i_edit,    12
     dw sh_m_formula, sh_i_formula, 7
-    dw sh_m_format,  sh_i_format,  7
+    dw sh_m_format,  sh_i_format,  8
     dw sh_m_data,    sh_i_data,    SH_DATA_N
     dw sh_m_options, sh_i_options, 6
     dw sh_m_macro,   sh_i_macro,   4
@@ -40870,7 +41360,11 @@ sh_m_format:    db 'Format', 0
 ; Number/Alignment/Font/Border/CELL PROTECTION/Row Height/Column
 ; Width/Justify. Cell Protection sits between
 ; Border and Row Height, which is not where it would have been guessed.
-sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_fprot, sh_it_frowh, sh_it_fcolw
+; 81.81: Justify is APPENDED. Excel 2.1d's Format is Number/Alignment/Font/
+; Border/Cell Protection/Row Height/Column Width/Justify, so the missing item
+; is the LAST one and no index below it moved - File > Delete's happy case
+; again (81.79), and the opposite of what Short Menus will be.
+sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_fprot, sh_it_frowh, sh_it_fcolw, sh_it_fjust
 sh_it_fprot:     db 'Cell Protection...', 0
 sh_it_fnum:      db 'Number...', 0
 sh_it_falign:    db 'Alignment...', 0
@@ -40878,6 +41372,7 @@ sh_it_ffont:     db 'Font...', 0
 sh_it_fborder:   db 'Border...', 0
 sh_it_frowh:     db 'Row Height...', 0
 sh_it_fcolw:     db 'Column Width...', 0
+sh_it_fjust:     db 'Justify', 0    ; no ellipsis: it asks only when it has to
 
 ; Stage 2.0: the Sheet menu switches which of this instance's SH_SHEETS
 ; grids is active (see the multi-sheet cell-record comment above
@@ -41027,6 +41522,9 @@ sh_s_nw_macro: db 'New sheet - Macro > Run reads commands from cells.', 0
 sh_s_calc_auto: db 'Calculation: Automatic', 0
 sh_s_calc_man:  db 'Calculation: Manual - Calculate Now to recompute.', 0
 sh_s_calc_now:  db 'Recalculated.', 0
+sh_s_ju_done:   db 'Justified.', 0
+sh_s_ju_notext: db 'Justify needs text or blank cells.', 0
+sh_s_ju_toobig: db 'Select more rows - the text needs them.', 0
 sh_s_id:       db 'ID;PWXL;N;E', 13, 10, 0
 sh_s_c:        db 'C;X', 0
 sh_s_y:        db ';Y', 0
@@ -42548,7 +43046,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8140                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8224                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -43841,7 +44339,21 @@ sh_df_svc2    equ sh_df_svr1 + 2
 sh_df_svr2    equ sh_df_svc2 + 2
 sh_df_line    equ sh_df_svr2 + 2             ; OS88LINE_SZ: the one live field
 sh_df_buf     equ sh_df_line + OS88LINE_SZ   ; SH_EDITMAX+1: what it edits
-sh_bss_end        equ sh_df_buf + SH_EDITMAX + 1
+; 81.81: Format > Justify. The line buffer is SH_EDITMAX wide DELIBERATELY -
+; a justified line is a label, and SH_EDITMAX is what a label can be; a wider
+; line would be one this app can produce and the user cannot retype.
+sh_ju_c1      equ sh_df_buf + SH_EDITMAX + 1 ; the block, ordered
+sh_ju_c2      equ sh_ju_c1 + 2
+sh_ju_r1      equ sh_ju_c2 + 2
+sh_ju_r2      equ sh_ju_r1 + 2
+sh_ju_w       equ sh_ju_r2 + 2               ; the line width in characters
+sh_ju_a       equ sh_ju_w + 2                ; the section being worked, which
+sh_ju_b       equ sh_ju_a + 2                ; a blank left-column cell ends
+sh_ju_len     equ sh_ju_b + 2                ; how much is staged
+sh_ju_si      equ sh_ju_len + 2              ; the wrap cursor into staging
+sh_ju_n       equ sh_ju_si + 2               ; lines counted this section
+sh_ju_line    equ sh_ju_n + 2                ; SH_EDITMAX+1: the line being built
+sh_bss_end        equ sh_ju_line + SH_EDITMAX + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

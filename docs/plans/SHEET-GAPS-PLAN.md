@@ -162,7 +162,7 @@ assertion**, not at a table and a toggle.
 
 | | what it is | the real cost |
 |---|---|---|
-| **`Format ▸ Justify`** | wrap a long label down a selected block, splitting on spaces | a text operation over a range; no new storage. The one Format command missing |
+| ~~**`Format ▸ Justify`**~~ | **done, §81.81** | 131 resident + 671 module + 84 bss. The estimate here was right about the cost and wrong about the SHAPE: it is not "splitting on spaces" over a block, it is a paragraph operation on the LEFT column at the width of the whole selection, with blank cells as separators. The Reference Guide had four clauses a sensible guess misses |
 | **`Data ▸ Parse`** | split a column of text into columns | a dialog with a guessed split, then a write across. Module work |
 | **`Macro ▸ Start Recorder` / `Resume`** | the recorder's other two commands | §81.74 names these as its own documented shortfalls, so the design already exists |
 | **`Edit ▸ Repeat`** | repeat the last command | **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
@@ -221,8 +221,11 @@ fix, not a language one, and it can be done first and alone.
    features because it is *wrong* rather than *missing*, and behind the cheap
    ones because it is the one item here that could break something that works
    today. Nothing broke: the full `sheet*` soak is unchanged.
-4. **`Format ▸ Justify`**, then **`Data ▸ Parse`** — self-contained, and they
-   finish the Format and Data rows apart from `Table`.
+4. ~~**`Format ▸ Justify`**~~ — **done, §81.81**, and it finishes the Format
+   row outright. Then **`Data ▸ Parse`**, which finishes Data apart from
+   `Table`. Read Parse's Reference Guide entry before costing it: Justify's
+   own one-line estimate here described a different command from the one
+   Excel documents, and the difference was the feature.
 5. **The macro language**, starting with the Normal-save fix, then
    subroutines, then `OFFSET`. Custom dialogs last, and only if asked for.
 6. **`Data ▸ Table`** last of the features: it is the most self-contained large

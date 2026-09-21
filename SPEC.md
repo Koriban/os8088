@@ -103105,7 +103105,7 @@ harmless.
 |---|---|---|---|
 | Formula | 7 | 7 | **none** |
 | Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
-| Format | 7 | 8 | Justify |
+| Format | 8 | 8 | **none** — Justify closed in §81.81 |
 | File | 5 | 11 | Links, Save Workspace, Page Setup, Printer Setup, Print — `Delete` closed in §81.79, and **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 11, 8 shared | 10 | **Table, Parse** — Series closed 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row |
@@ -103166,8 +103166,11 @@ Almost everything above hangs off six pieces of work:
    bytes of headroom, so two dialogs moved into `CHART.OVL` to pay for the
    sixth (§81.71.5.1). Three Data commands are left, and none of them is
    downstream of this one.
-4. **Per-row geometry** → row heights, and `Justify` (per-column widths are
-   §81.56's).
+4. ~~**Per-row geometry** → row heights, and `Justify`~~ — **both done**
+   (§81.60 and §81.81; per-column widths are §81.56's). Justify turned out
+   not to need row geometry at all: it moves TEXT between rows that already
+   exist, and the Reference Guide's answer to "it does not fit" is more rows
+   selected, not taller ones.
 5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
 6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
@@ -104474,6 +104477,101 @@ hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
 and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
+
+### 81.81 Format ▸ Justify
+
+Excel's Format menu carries **Justify** after Column Width, and §81.39.2
+listed it as the one command that menu was missing. **131 bytes resident, 671
+of `CHART.OVL`, 84 of bss** — the worker is in the module, which is where
+§81.39's headroom note puts a command nobody runs in a loop.
+
+**Like §81.79 and unlike §81.78, nothing moved.** Excel's Format is
+Number/Alignment/Font/Border/Cell Protection/Row Height/Column Width/Justify,
+which is SHEET's seven in Excel's own order plus one at the END, so no index
+below it shifted. It is worth saying because the command after this one —
+`Short Menus` — is the opposite case, and its whole cost is that the hidden
+items are interleaved.
+
+#### 81.81.1 The contract is more specific than "wrap a long label"
+
+Read out of the 2.1d Reference Guide's *Format Justify command* entry rather
+than guessed, because four of its five clauses are things a reasonable
+implementation gets wrong:
+
+1. **The text comes from the LEFT COLUMN and nowhere else.** The other
+   columns lend their WIDTH and nothing else; what is in them is untouched.
+   The Guide's own note is that they "should be blank or they will interfere
+   with the display of the text" — a display problem, not a data one.
+2. **The line is as wide as the WHOLE selection.** "Enough text in the
+   upper-left cell to fill to the edge of that row of the selection." A build
+   that wrapped to the left column's own width produces lines that look
+   perfectly plausible and are about a third as long as they should be.
+3. **Every cell in the left column must be text or blank.** A value refuses
+   the whole command; it is not skipped and not stringified.
+4. **A blank cell is a PARAGRAPH SEPARATOR** — the Guide's five-row example,
+   where a blank third cell makes the top two rows one paragraph and the
+   bottom two another, each justified *inside its own rows*.
+5. **Rows a section does not need are left blank.**
+
+Clause 4 is the one that makes this a real feature rather than a loop. Without
+it, Justify is "merge the column and re-break it", which produces *the same
+lines in the wrong rows* — so a gate that only asks whether the text wrapped
+passes on it. `tests/sheetjust.py` asserts the row a line lands in, and the
+mutation that collapses the sections into one fails exactly that check and no
+other value check.
+
+#### 81.81.2 The width, and what a hidden column contributes
+
+`sh_ju_block` sums `sh_colwidth` across the selected columns. A hidden column
+answers **zero** (§81.73), so it contributes nothing — which is right, since
+it shows no characters to fill. A selection of nothing but hidden columns
+would give a width of zero, so it is floored at one: a one-character wrap is
+a silly answer and a divide-free loop that never terminates is a worse one.
+
+It is capped at `SH_EDITMAX`, and that is a decision rather than a buffer
+size. **A justified line is a LABEL**, and `SH_EDITMAX` is what a label can
+be; a wider line would be text this app can write into a cell and the user
+cannot retype into the same cell.
+
+#### 81.81.3 What is scoped out, and why it is the WRITE and not the ask
+
+Excel, when the text does not fit, **asks** whether it may go past the bottom
+of the selection and on OK overwrites what is there. SHEET refuses instead,
+with the rows it would have needed.
+
+The ask is not the expensive part — `os88ui_ask` is one call, and §81.79 has
+the pattern. The **write** is: the alert is asynchronous, so the wrapped text
+would have to survive in `sh_stgseg` across a window the user can click
+anywhere in, and staging is the same scratch that Undo's swap, the clipboard
+block and every file write also use. Refusing costs the user one Column Width
+or one more selected row and costs no data; getting the other one subtly
+wrong costs the cells below the selection.
+
+It is checked **before anything is written**, over every section, which is
+what makes the refusal total: a document where section one fitted and section
+two did not would otherwise be half justified.
+
+#### 81.81.4 Not recorded, which is not the same as refused
+
+§81.74's recorder emits only what §81.63's twenty macro functions can say, so
+that a recording is an ordinary macro sheet afterwards. There is no
+`JUSTIFY()` in that language, and inventing one at the emitter would have
+written recordings that no longer replay. So Justify is simply not recorded —
+the bargain that section already documents for every command its language
+cannot express, and the same one Excel's own recorder makes.
+
+Undo, by contrast, **does** cover it: the Guide names Edit Undo as the way
+back from a justification that overwrote something, so `SH_UL_JUST` is a real
+label and not one of `sh_ud_kind`'s `DROP`s.
+
+#### 81.81.5 The overlay went to 45KB
+
+`CHART.OVL` came to 44,990 of the 45,056 that `CH_OVKB` = 44 reserves — **59
+bytes spare**. That is the case that constant's own comment already refuses
+in as many words: a margin of one is not a margin, it is the next change
+failing a build for a reason that has nothing to do with it. 45 it is, and
+1,090 bytes spare. It is heap, not image.
+
 
 ### 81.80 Sort puts a BLANK key cell last, in both directions
 
