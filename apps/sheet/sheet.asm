@@ -856,11 +856,13 @@ SHM_JUSTIFY equ 40                  ; 81.81: Format > Justify's whole worker.
                                      ; One verb and no callback, SHM_SORT's
                                      ; shape - it asks through os88ui_ask,
                                      ; which is resident and reached by SHOUT
+SHM_MFIND  equ 41                   ; SHEET-MACRO-PLAN wave 0: find an
+                                     ; EXTENSION macro function by name
 SHM_FCLICK equ 19                   ; FOUR verbs rather than one with a
                                      ; sub-op byte, because sh_modc_ext
                                      ; already dispatches on a number and a
                                      ; callback must not spend a register
-SHM_N      equ 38                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 39                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -895,6 +897,7 @@ sh_mverb:
     dw sh_m_idopen, sh_m_idpaint, sh_m_idkey, sh_m_idclick, sh_m_idclose
     dw sh_m_fdapply
     dw sh_m_justify                                       ; 81.81
+    dw sh_m_mfind                                         ; macro plan wave 0
 
 sh_m_doread:
     call shm_doread
@@ -984,6 +987,10 @@ sh_m_fclose:
     call sh_df_savefld                 ; a background click is not a cancel
     call sh_df_close                   ; here: the field being edited is
     clc                                ; committed, the way Close itself does
+    retf
+sh_m_mfind:                         ; macro plan wave 0: AX = the id or 0xFF
+    call shm_mfind
+    clc
     retf
 sh_m_justify:                       ; 81.81
     call sh_docmd_justify
@@ -14550,6 +14557,19 @@ sh_ldlg_tpl:
 ; invariant as 81.71.5.1's: the OPEN forces the module in, and refuses to
 ; create a window at all if it cannot, so no paint holding the gfx lock is
 ; ever the call that has to read a disk.
+; macro plan wave 0: sh_ident is not a resident function - is it one of the
+; EXTENSION macro functions, whose names live in CHART.OVL? AX = the id
+; (SH_FID_MX..) or 0xFF, and 0xFF too when there is no module to ask, which
+; leaves the word #NAME? exactly as it was.
+sh_mfind_r:
+    push bp
+    mov bp, SHM_MFIND
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov ax, 0xFF
+.out:
+    ret
 ; 81.81: Format > Justify, SHM_SORT's shape - one verb, no callback.
 sh_justify_r:                       ; NOT sh_justify, which is 81.13's
     push bp                         ; align-a-value-INSIDE-a-cell helper and
@@ -26404,6 +26424,39 @@ sh_rpn_isfunc:
 ; count are kept in registers banked across the recursion rather than in bss,
 ; which a nested call would overwrite.
 ; -----------------------------------------------------------------------------
+; sh_rpn_meta - in: BX = a function id, resident or EXTENSION; out: AL = its
+; BIFF index (0xFF: none at this version), AH = 1 if variable-arity, and
+; [sh_rpn_isce] = 1 if it is a Cetab COMMAND. A MODULE-local helper, which is
+; the point: 81.83.5's hang was a module body near-calling a RESIDENT one.
+sh_rpn_meta:
+    push bx
+    cmp bx, SH_FID_MX
+    jae .ext
+    mov byte [sh_rpn_isce], 0
+    push bx
+    sub bx, SH_FN_MAC0                ; below the macro run this wraps far
+    cmp bx, sh_rpn_fce_end - sh_rpn_fce  ; above the count, so one unsigned
+    jae .noce                         ; compare answers both ends
+    mov al, [sh_rpn_fce + bx]
+    mov [sh_rpn_isce], al
+.noce:
+    pop bx
+    mov al, [sh_rpn_fid + bx]
+    mov ah, [sh_rpn_fvar + bx]
+    jmp short .out
+.ext:
+    sub bx, SH_FID_MX
+    mov ax, bx
+    add bx, bx
+    add bx, ax                        ; three bytes a row
+    mov al, [cs:bx + shm_mxrpn + 2]
+    mov [sh_rpn_isce], al
+    mov al, [cs:bx + shm_mxrpn]
+    mov ah, [cs:bx + shm_mxrpn + 1]
+.out:
+    pop bx
+    ret
+
 sh_rpn_func:
     push ax
     push bx
@@ -26452,11 +26505,15 @@ sh_rpn_func:
     inc si
     mov [sh_rpn_p], si
     SHOUT sh_funcid                    ; AL = this app's own id, 0xFF unknown
-    cmp al, 0xFF
-    je .bad
     xor ah, ah
+    cmp ax, 0xFF
+    jne .resfn
+    call shm_mfind                    ; macro plan wave 0: an EXTENSION one -
+    cmp ax, 0xFF                      ; a near call, both are in the module
+    je .bad
+.resfn:
     mov bx, ax                        ; BX = that id, kept across the arguments
-    mov al, [sh_rpn_fid + bx]
+    call sh_rpn_meta                  ; AL = its BIFF index, AH = variable
     cmp al, 0xFF
     je .bad                           ; no index at this BIFF version
     cmp al, 63                        ; RAND, NOW and INDIRECT are the three
@@ -26501,22 +26558,9 @@ sh_rpn_func:
     jne .bad
     inc si
     mov [sh_rpn_p], si
-    ; 81.83: Cetab or Ftab? INLINE, and that is not a size choice - this
-    ; body is in the module and a resident helper would be a near call
-    ; across a segment boundary (68.10 rule 1). The first draft had one and
-    ; the machine HUNG on every save, in every format: os88ovlchk catches
-    ; exactly this, and `make build/sheet.o88` does not run it.
-    mov byte [sh_rpn_isce], 0
-    push bx
-    sub bx, SH_FN_MAC0                ; below the macro run this wraps far
-    cmp bx, sh_rpn_fce_end - sh_rpn_fce  ; above the count, so one unsigned
-    jae .noce                         ; compare answers both ends
-    mov al, [sh_rpn_fce + bx]
-    mov [sh_rpn_isce], al
-.noce:
-    pop bx
-    cmp byte [sh_rpn_fvar + bx], 0
-    jne .variable
+    call sh_rpn_meta                  ; again, from BX: the arguments above
+    or ah, ah                         ; recursed and any bss they touched is
+    jne .variable                     ; theirs now, so nothing is carried over
     mov al, SH_PTG_FUNCV
     call sh_rpn_put
     jmp .index
@@ -26530,7 +26574,7 @@ sh_rpn_func:
     mov al, cl                        ; the count comes before the index
     call sh_rpn_put
 .index:
-    mov al, [sh_rpn_fid + bx]
+    call sh_rpn_meta
     call sh_rpn_put
     cmp byte [sh_wb_xf4], 0           ; BIFF2-3 carry a ONE-byte index and
     je .out                           ; BIFF4-8 a word (3.7.1/3.7.2) - the
@@ -29218,9 +29262,15 @@ sh_pfunc:
     inc si                            ; name is #NAME?, exactly as in Excel -
     call sh_funcid                    ; sh_pident only routes one here once
     xor ah, ah                        ; sh_name_lookup has already declined it
+    cmp ax, 0xFF                      ; macro plan wave 0: not resident - then
+    jne .knownfn                      ; ask CHART.OVL, where every macro
+    call sh_mfind_r                   ; function after the first twenty lives
+.knownfn:
     mov [sh_pfid], ax
     cmp ax, 0xFF                      ; ...and so is a CALL to a function this
     je .noname                        ; app does not have. Reading either as a
+    cmp ax, SH_FID_MX                 ; an EXTENSION id is a macro function,
+    jae .domacro                      ; and it is above every other range
     cmp ax, 5
     je .doif
     cmp ax, 24                        ; CHOOSE answers a VALUE, not an integer
@@ -34670,6 +34720,17 @@ SH_FID_LOGEST   equ 148
 SH_FID_TREND    equ 149
 SH_FID_GROWTH   equ 150
 SH_MF_ACTCELL  equ 14                ; ...and ACTIVE.CELL's, counted from it
+; SHEET-MACRO-PLAN wave 0: EXTENSION macro functions. The twenty above stay in
+; the resident sh_functab at SH_FID_MACRO.. - moving them would renumber the
+; twenty database/CELL/matrix ids after them for ~300 bytes - and every new
+; one lives in CHART.OVL instead, NAME AND ALL, with a WORD id from 0x100.
+; The evaluator's ids were always words (sh_pfid); only sh_funcid's AL return
+; is a byte, which is why an extension name is found by a second lookup and
+; never by sh_funcid itself - its byte callers (bare TRUE/FALSE) cannot see
+; one and so cannot misread one. APP_MAX_SIZE left 2,475 resident bytes, and
+; 117 names at the twenty's price would have spent all of them.
+SH_FID_MX      equ 0x100              ; the first extension id
+SH_MF_N        equ 20                 ; the resident twenty, counted in shm_mtab
 SH_MC_NONE     equ 0                 ; what a step asked for (sh_macro_ctl):
 SH_MC_GOTO     equ 1                 ; the next cell is [sh_macro_ncol/nrow]
 SH_MC_STOP     equ 2                 ; RETURN, HALT, or a macro error
@@ -34832,10 +34893,19 @@ shm_pmacro:
     push cx
     push dx
     push di
+    cmp ax, SH_FID_MX                 ; wave 0: an EXTENSION id indexes the
+    jb .res                           ; same tables, after the resident twenty
+    sub ax, SH_FID_MX - SH_MF_N
+    jmp short .idx
+.res:
     sub ax, SH_FID_MACRO
+.idx:
     mov di, ax
-    cmp di, SH_MF_ACTCELL             ; the value function answers anywhere
-    je .act
+    cmp byte [cs:di + shm_mkind], 0   ; a VALUE function answers anywhere -
+    jne .act                          ; ACTIVE.CELL was the only one, and a
+                                       ; single `cmp di, SH_MF_ACTCELL` stood
+                                       ; for the whole rule. REFTEXT, OFFSET and
+                                       ; the GET family are the same kind
     cmp byte [sh_macro_exec], 0       ; ...a command only for the step engine,
     je .inert                         ; at its own depth: not for a repaint,
     mov ax, [sh_evaldepth]            ; not for a worksheet formula
@@ -34861,7 +34931,77 @@ shm_mtab:
     dw shm_mformula, shm_malert, shm_mmessage, shm_mbeep, shm_minput
     dw shm_mfor, shm_mwhile, shm_mnext, shm_mbreak, shm_mactcell
     dw shm_mcopy, shm_mcut, shm_mpaste, shm_mclear, shm_mcalc
+; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
+; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
+; are held to one count below.
 shm_mtab_end:
+SHM_MX_N equ (shm_mtab_end - shm_mtab) / 2 - SH_MF_N
+
+; 1 = a VALUE function, which answers wherever it is evaluated; 0 = a COMMAND,
+; which acts only for the step engine at its own depth (81.63)
+shm_mkind:
+    db 0, 0, 0, 0, 0,  0, 0, 0, 0, 0  ; GOTO .. INPUT
+    db 0, 0, 0, 0, 1,  0, 0, 0, 0, 0  ; FOR .. ACTIVE.CELL .. CALCULATE.NOW
+shm_mkind_end:
+
+; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
+shm_mxnames:
+    db 0
+
+; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
+; Cetab COMMAND (ptg 0x58) rather than an Ftab function (81.83.2).
+shm_mxrpn:
+shm_mxrpn_end:
+
+; All four tables, one count - assembled, not preprocessed (81.83.3.3)
+    times ((shm_mkind_end - shm_mkind) - (SH_MF_N + SHM_MX_N)) db 0
+    times ((SH_MF_N + SHM_MX_N) - (shm_mkind_end - shm_mkind)) db 0
+    times ((shm_mxrpn_end - shm_mxrpn) - 3 * SHM_MX_N) db 0
+    times (3 * SHM_MX_N - (shm_mxrpn_end - shm_mxrpn)) db 0
+
+; shm_mfind - is the name in sh_ident (DS, uppercase) an EXTENSION macro
+; function? out: AX = its id, SH_FID_MX.., or 0xFF. Preserves the rest.
+shm_mfind:
+    push bx
+    push cx
+    push si
+    push di
+    mov di, shm_mxnames
+    xor cx, cx
+.name:
+    cmp byte [cs:di], 0               ; an empty name: the end of the table
+    je .none
+    mov si, sh_ident
+.cmp:
+    mov al, [cs:di]
+    cmp al, [si]
+    jne .skip
+    or al, al
+    jz .hit                           ; both ended together
+    inc si
+    inc di
+    jmp short .cmp
+.skip:                                ; on to this name's NUL, then past it
+    cmp byte [cs:di], 0
+    je .next
+    inc di
+    jmp short .skip
+.next:
+    inc di
+    inc cx
+    jmp short .name
+.hit:
+    mov ax, cx
+    add ax, SH_FID_MX
+    jmp short .out
+.none:
+    mov ax, 0xFF
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
 
 ; shm_mtrue / shm_mfalse - the answer, a logical
 shm_mtrue:
