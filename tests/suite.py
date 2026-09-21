@@ -4872,6 +4872,15 @@ SOAK = [
         "an error constant survives Fill Right, Copy/Paste and typing, "
         "which stored 0, pasted 0 and made a label",
         needs=("marty",), serial=True),
+    Row("sheetparse", "soak", py("tests/sheetparse.py"), 400.0,
+        "SPEC.md 81.82: Data > Parse splits one column at FIXED CHARACTER "
+        "POSITIONS, not at a delimiter. 'New York' must survive as one "
+        "field - Guess's rule is two spaces - and the boundaries guessed "
+        "from the FIRST cell must be applied to rows that pad differently, "
+        "which is what separates this from a per-row tokenise. Fields are "
+        "typed by their spelling as a CSV field is, and no brackets is a "
+        "refusal rather than a no-op that eats the column",
+        needs=("marty",), serial=True),
     Row("sheetjust", "soak", py("tests/sheetjust.py"), 400.0,
         "SPEC.md 81.81: Format > Justify re-wraps a paragraph down the left "
         "column at the width of the WHOLE selection, a blank cell divides "

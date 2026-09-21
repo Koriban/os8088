@@ -32,7 +32,7 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 45                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 46                 ; the claim CHART.OVL is read into, KB.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
                                     ; took it to 13,485 bytes; 82.16.10's
@@ -52,7 +52,8 @@ CH_OVKB      equ 45                 ; the claim CHART.OVL is read into, KB.
                                     ; 81.81's Format > Justify 44,9xx, so 45
                                     ; - taken for the SAME reason as the step
                                     ; below, 59 bytes being no more a margin
-                                    ; than one was. THAT
+                                    ; than one was; and 81.82's Data > Parse
+                                    ; 45,896, so 46. THAT
                                     ; LAST STEP WAS TAKEN FOR ONE BYTE, and
                                     ; deliberately: 43 still built, with a
                                     ; single byte spare, and a margin of one

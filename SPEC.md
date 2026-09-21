@@ -103108,7 +103108,7 @@ harmless.
 | Format | 8 | 8 | **none** — Justify closed in §81.81 |
 | File | 5 | 11 | Links, Save Workspace, Page Setup, Printer Setup, Print — `Delete` closed in §81.79, and **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
 | Options | 5 | 10 | Set Print Area/Titles/Page Break, Calculate Now, Workspace, Short Menus (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
-| Data | 11, 8 shared | 10 | **Table, Parse** — Series closed 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row |
+| Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2) — and
@@ -104477,6 +104477,138 @@ hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
 and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
+
+### 81.82 Data ▸ Parse
+
+Excel's Data menu carries **Parse** after Table, and §81.39.2 listed it as one
+of that menu's two missing commands. **120 bytes resident, 920 of `CHART.OVL`,
+296 of bss.**
+
+**Parse is not CSV, and the difference is the whole feature.** CSV splits on a
+delimiter. Parse splits at **fixed character positions**, because what it
+exists for is a report another program *printed* — every record in one cell,
+the fields lining up because they were laid out for a printer. §81.40 already
+serves the delimited case; nothing served this one.
+
+#### 81.82.1 Excel's place in the menu, and what that moved
+
+SHEET's Data menu was Excel's first eight commands in Excel's order (§81.71)
+followed by three charting items of its own, which Excel has no Data entry
+for. Parse goes at **index 8 — Excel's position, directly after Series** —
+and the three chart items each moved down one.
+
+**That is the insertion §81.78 paid a test for**, taken deliberately this
+time and only after measuring: nothing in `tests/` clicks Data items 8–10 by
+index, so the blast radius is one dispatch chain in `sh_docmd_data`. The
+alternative — appending Parse after SHEET's own extras — costs nothing and
+would have put an Excel command below three items Excel does not have, which
+is not "Excel's order" in any useful sense.
+
+#### 81.82.2 The bracket line, on the dialog that already existed
+
+The parse line is a one-line `os88line` field, which is what §81.74.2's input
+dialog already is — so the caret, LEFT/RIGHT, Backspace and Delete that the
+Reference Guide names come free, and what had to be added is what it
+*refuses*: every printable key but `[` and `]` is dropped before the field
+sees it. That is the Guide's *"the only editing allowed in the parse line is
+adding and deleting brackets"*, said in one test.
+
+**Guess and Clear fit without making any other dialog taller.** `SH_IDLG_H`
+is derived from the last button's bottom, so a new row of buttons would have
+grown all eleven kinds — Goto and Column Width included — for a feature they
+do not have. The Cancel row's left half is empty on every kind, and that is
+where the two go (`SH_IDLG_G1X1`/`G2X1`). They are painted and hit-tested
+only for this kind.
+
+#### 81.82.3 Guess is a TWO-SPACE rule
+
+A printed report separates its columns with a **run** of spaces and puts
+single spaces inside a field. So a field ends at two spaces, not one, and
+`New York  10001` is two fields rather than three.
+
+This is the single most likely wrong implementation and the one the gate is
+shaped to catch: splitting on every space puts `New` and `York` in different
+columns and shifts every field after them. The mutation that makes Guess
+one-space fails that check with `('New', 'York', 1234.0)`.
+
+#### 81.82.4 The positions are in the TEXT, not in the line
+
+`sh_parse_fields` counts **non-bracket** characters as it walks, because a
+bracket marks a position in the cell's text and occupies none of it. Without
+that, every field after the first would be displaced by the number of
+brackets before it — and the displacement grows left to right, so the first
+field would look right.
+
+The settings come from the first cell and are applied to all of them, as the
+Guide says. That is why the fixture pads its three rows differently: a build
+that re-guessed per row passes §81.82.3's check and fails this one.
+
+#### 81.82.5 A field is typed by its spelling
+
+Exactly as a CSV field is (§81.40): a complete number is a number, `TRUE`/
+`FALSE` is the logical, anything else is a label, and an error *spelling*
+comes back as text — because neither Parse nor CSV has a type field to say
+otherwise. A grid of labels that look like numbers and will not add up is the
+failure this avoids, and it is asserted on the saved SYLK's types rather than
+on what the cells look like.
+
+**The row is read whole before the first field is written**, into `sh_pa_src`.
+The first field lands on the very cell it came from, so reading as it went
+would parse the second field out of its own first.
+
+#### 81.82.6 No brackets is a refusal
+
+A line with no bracket pair writes nothing and says so. The shape to avoid is
+a worker that loops over zero fields and clears as it goes, which would
+destroy the column it was asked to split — so the gate presses **Clear**, then
+OK, and asserts the column is whole *and* that nothing was written beside it,
+with a marker cell proving that save landed at all (§81.81's lesson, applied
+without having to relearn it).
+
+Excel warns that Parse overwrites the cells to the right; this does too, and
+that is what `SH_UL_PARSE` is for.
+
+#### 81.82.7 A body inserted into a FALL-THROUGH path
+
+The worse of this section's two traps, because it broke a command in a
+different menu and the symptom named neither.
+
+`sh_idlg_open` prefills the field per kind, and its branches END BY FALLING
+THROUGH to `.prenone`, which was a bare label. §81.82 put `.preparse:` with a
+body in it immediately above that label — so `.pregoto`, having just built
+`A1` into the buffer, ran on into `sh_parse_pre` and had it overwritten with
+the column's first label.
+
+`.pregoto` serves **Goto, Sort and Run**. So `Data ▸ Sort` opened its key
+dialog prefilled with `pear`, the key validator refused it as it should, and
+**the command silently did nothing** — with no message about Parse, in a menu
+Parse is not in, three items above where Parse was added.
+
+`tests/sheetsort.py` caught it: 5 of 10, column A in its original order. It
+was not found by `sheetparse`, which passed throughout — **a fifth feature
+running whose defect was found by something other than its own gate**, and
+the argument for the whole-family soak rather than the row just written.
+
+Two things generalise. A branch that ends by falling through to a label is
+**an implicit contract with whatever comes next**, and nothing in the file
+says so; the fix is one `jmp short .prenone`, which makes it explicit.
+And an insertion is not only "does my code run" but "does it run for anyone
+else" — the mirror of §81.78's menu-index lesson, where a body moved and here
+a body arrived.
+
+#### 81.82.8 `movsb` moves to ES:DI
+
+Recorded because it cost a build and the symptom pointed nowhere near the
+cause. `sh_parse_guess` built the bracketed line with `movsb`, which moves
+`DS:SI` to **`ES:DI`** — and ES in a package is whatever was last loaded, here
+the cell or text segment. The brackets, written DS-relative with `mov [di]`,
+landed in the buffer; every character between them went somewhere else. The
+parse line came back as a single `[`.
+
+Every other string move in `sheet.asm` sets `ES` first and on purpose. This
+one had no `mov es` at all, which is the tell — and it was found by *looking
+at the screenshot*, not by a test.
+
 
 ### 81.81 Format ▸ Justify
 

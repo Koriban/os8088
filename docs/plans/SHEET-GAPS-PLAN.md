@@ -41,6 +41,32 @@ Two consequences:
 - **`Data ▸ Table` and the macro language cannot both be resident.** Neither
   should be.
 
+## 0.1 A defect found while building §81.82, NOT fixed — the menu's tail
+
+**SHEET's pulldown leaves its bottom rows painted on the desktop.** `sh_mclose`
+repaints `[sh_ownwin]`, but a pulldown taller than the window has drawn *past*
+the window's bottom edge, and nothing repaints what is beyond it. Open Data,
+dismiss it, and the last item or two stay on the desktop until something else
+covers them.
+
+**It is PRE-EXISTING**, and that was established rather than assumed: the same
+gesture on the pre-§81.82 build leaves `Export Chart as BMP...` behind, so the
+defect predates Parse. What §81.82 did was make it one row worse, because a
+twelfth Data item is twelve more pixels of overhang.
+
+**It is not a quick fix, which is why it is recorded rather than patched into
+that commit.** There is no save-under for a transient in the API
+(`OSAPI_WM_SAVEU` is a window's content cache for a raise, not this), so the
+honest options are (a) SHEET's pulldown becomes a real window, which is what
+§81.54 moved *away* from because `OS88_MENUSET` capped at five menus, or (b)
+`sh_mclose` repaints the screen region below the window, which means a package
+reaching outside its own clip and asking the desktop to redraw. (a) is the
+right shape and is a change to the menu bar, not to a command.
+
+Worth noting WORD does not have this: its menu is `os88ui`'s, with an
+`OS88UI_MN_RPNTH` repaint hook. So the mechanism to copy already exists, which
+makes this smaller than it first looks.
+
 ## 1. Two defects — ~~still open~~ **both closed**
 
 These are not gaps. They are wrong behaviour, and they came first. Both are
@@ -163,7 +189,7 @@ assertion**, not at a table and a toggle.
 | | what it is | the real cost |
 |---|---|---|
 | ~~**`Format ▸ Justify`**~~ | **done, §81.81** | 131 resident + 671 module + 84 bss. The estimate here was right about the cost and wrong about the SHAPE: it is not "splitting on spaces" over a block, it is a paragraph operation on the LEFT column at the width of the whole selection, with blank cells as separators. The Reference Guide had four clauses a sensible guess misses |
-| **`Data ▸ Parse`** | split a column of text into columns | a dialog with a guessed split, then a write across. Module work |
+| ~~**`Data ▸ Parse`**~~ | **done, §81.82** | 120 resident + 920 module + 296 bss. This estimate was right, unlike Justify's: it IS a dialog with a guessed split and a write across, and it IS module work. What it understates is that the split is at FIXED CHARACTER POSITIONS rather than at a delimiter, which is the whole reason the feature exists beside CSV |
 | **`Macro ▸ Start Recorder` / `Resume`** | the recorder's other two commands | §81.74 names these as its own documented shortfalls, so the design already exists |
 | **`Edit ▸ Repeat`** | repeat the last command | **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
 | **`File ▸ Links`** | external references | only meaningful once a second document can be open. Probably out of scope with `Close` |
@@ -221,11 +247,12 @@ fix, not a language one, and it can be done first and alone.
    features because it is *wrong* rather than *missing*, and behind the cheap
    ones because it is the one item here that could break something that works
    today. Nothing broke: the full `sheet*` soak is unchanged.
-4. ~~**`Format ▸ Justify`**~~ — **done, §81.81**, and it finishes the Format
-   row outright. Then **`Data ▸ Parse`**, which finishes Data apart from
-   `Table`. Read Parse's Reference Guide entry before costing it: Justify's
-   own one-line estimate here described a different command from the one
-   Excel documents, and the difference was the feature.
+4. ~~**`Format ▸ Justify`**~~ and ~~**`Data ▸ Parse`**~~ — **both done**
+   (§81.81, §81.82). Format is complete against Excel 2.1d and Data is
+   complete apart from `Table`. Reading the Reference Guide first was worth
+   it both times: Justify's one-line estimate here described a different
+   command from the one Excel documents, and Parse's understated what the
+   split is (character positions, not delimiters).
 5. **The macro language**, starting with the Normal-save fix, then
    subroutines, then `OFFSET`. Custom dialogs last, and only if asked for.
 6. **`Data ▸ Table`** last of the features: it is the most self-contained large

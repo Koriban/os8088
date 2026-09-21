@@ -695,7 +695,7 @@ SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
 ; is no menu left to open, so SHF_DATAMENU is the OR of what is left and
 ; SH_DATA_N is how many - one number, used by sh_mtab, by sh_i_data's own
 ; list and by nothing else.
-  %define SH_DATA_N 11
+  %define SH_DATA_N 12
 
 SH_MI_FILE    equ 0
 SH_MI_EDIT    equ 1
@@ -2887,6 +2887,9 @@ SH_UL_INS    equ 7
 SH_UL_FILLR  equ 8
 SH_UL_FILLD  equ 9
 SH_UL_SORT   equ 10
+SH_UL_PARSE  equ 12                    ; 81.82: Data > Parse, which overwrites
+                                       ; the cells to the right and so is
+                                       ; exactly what Undo is for
 SH_UL_JUST   equ 11                    ; 81.81: Format > Justify, and the
                                        ; Reference Guide names Undo as the way
                                        ; back from an overwrite, so it is one
@@ -2895,7 +2898,7 @@ SH_UL_KEEP   equ 0xFE                  ; sh_ud_kind: changes nothing Undo holds
 SH_UL_DROP   equ 0xFF                  ; ...or changes what it cannot reverse
 sh_ud_names:  dw sh_ud_n0, sh_ud_n1, sh_ud_n2, sh_ud_n3, sh_ud_n4, sh_ud_n5
               dw sh_ud_n6, sh_ud_n7, sh_ud_n8, sh_ud_n9, sh_ud_n10
-              dw sh_ud_n11
+              dw sh_ud_n11, sh_ud_n12
 sh_ud_n0:     db 'Entry', 0
 sh_ud_n1:     db 'Cut', 0
 sh_ud_n2:     db 'Paste', 0
@@ -2908,6 +2911,7 @@ sh_ud_n8:     db 'Fill Right', 0
 sh_ud_n9:     db 'Fill Down', 0
 sh_ud_n10:    db 'Sort', 0
 sh_ud_n11:    db 'Justify', 0
+sh_ud_n12:    db 'Parse', 0
 sh_ud_sundo:  db 'Undo ', 0
 sh_ud_sredo:  db 'Redo ', 0
 sh_ud_cant:   db MENU_DIS, "Can't Undo", 0
@@ -7641,15 +7645,21 @@ sh_mfire:
 .data8:
     cmp al, 8
     jne .data9
-    call sh_docmd_chart                ; 8..10: this app's own charting, which
-    jmp .out                           ; real Excel has no Data item for
+    mov al, SH_ID_PARSE                ; 8: Parse... (81.82). EXCEL'S OWN PLACE,
+    call sh_idlg_open_r                ; after Series - so the three chart
+    jmp .out                           ; items below it each moved down one
 .data9:
     cmp al, 9
     jne .data10
+    call sh_docmd_chart                ; 9..11: this app's own charting, which
+    jmp .out                           ; real Excel has no Data item for, so it
+.data10:                               ; trails Excel's list rather than
+    cmp al, 10                         ; sitting inside it
+    jne .data11
     mov al, SH_FDK_GAL
     call sh_fdlg_open_r
     jmp .out
-.data10:
+.data11:
     call sh_docmd_chartexport
     jmp .out
 .sheets:
@@ -13336,7 +13346,8 @@ SH_ID_RUN    equ 6                   ; Macro > Run... (81.63): where to start
 SH_ID_INPUT  equ 7                   ; ...and INPUT(), a macro's own question
 SH_ID_SERSTEP equ 8                  ; 81.72: Data ▸ Series...' step value,
 SH_ID_RECNAME equ 9                  ; part two of two; 81.74: what to call
-SH_ID_NKIND  equ 10                  ; the recording about to be made
+SH_ID_PARSE  equ 10                  ; 81.82: Data > Parse...' bracket line
+SH_ID_NKIND  equ 11                  ; the recording about to be made
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -13349,6 +13360,16 @@ SH_IDLG_OKY1 equ 26
 SH_IDLG_OKY2 equ 46
 SH_IDLG_CAY1 equ 54
 SH_IDLG_CAY2 equ 74
+; 81.82: Guess and Clear, which Parse alone has. They go on the CANCEL ROW,
+; in the space to the left of it - the field above ends at FY2 and Cancel
+; starts at BTX1, so this rectangle is empty on all eleven kinds today. That
+; is what keeps SH_IDLG_H below unchanged: two more buttons and not one pixel
+; of extra dialog, where a row of their own would have made every Goto and
+; Column Width taller for a feature they do not have.
+SH_IDLG_G1X1 equ SH_IDLG_FX1
+SH_IDLG_G1X2 equ SH_IDLG_FX1 + 64
+SH_IDLG_G2X1 equ SH_IDLG_FX1 + 72
+SH_IDLG_G2X2 equ SH_IDLG_FX1 + 136
 SH_IDLG_H    equ SH_IDLG_CAY2 + SH_DLG_BMARG + TITLE_H + 1
 
 sh_idlg_tpl:
@@ -13362,10 +13383,12 @@ sh_idlg_tpl:
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
                dw sh_s_id_tsort, sh_s_id_trun, sh_s_id_tinput, sh_s_id_tser
-               dw sh_s_id_trec
+               dw sh_s_id_trec, sh_s_id_tparse
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
                dw sh_s_id_psort, sh_s_id_pgoto, sh_macro_msg, sh_s_id_pser
-               dw sh_s_id_prec
+               dw sh_s_id_prec, sh_s_id_pparse
+sh_s_id_tparse: db 'Parse', 0
+sh_s_id_pparse: db 'Parse line:', 0     ; the Reference Guide's own words
 sh_s_id_trec:  db 'Record Macro', 0
 sh_s_id_prec:  db 'Name:', 0
 sh_s_id_tser:  db 'Series', 0
@@ -13422,6 +13445,10 @@ sh_idlg_open:
     je .pregoto                        ; same reference Goto shows - it is the
     cmp byte [sh_idlg_kind], SH_ID_SERSTEP  ; 81.72: a step of 1 is what
     je .preone                              ; almost every series wants, so
+    cmp byte [sh_idlg_kind], SH_ID_PARSE ; 81.82: the parse line shows the
+    je .preparse                       ; FIRST NON-BLANK cell of the column,
+                                       ; and must be tested before the .jae
+                                       ; below, which would open it empty
     cmp byte [sh_idlg_kind], SH_ID_DEFN ; key you get by pressing Enter
     jae .prenone                       ; Define Name and Find open EMPTY: there
     cmp byte [sh_idlg_kind], SH_ID_GOTO ; is no current value for either, and
@@ -13461,6 +13488,21 @@ sh_idlg_open:
     SHOUT sh_itoa
     mov si, sh_numbuf
     SHOUT sh_strcpy_to_di
+    jmp short .prenone                 ; ...AND OUT. This used to fall through
+                                       ; into whatever came next, which was
+                                       ; .prenone and harmless until 81.82 put
+                                       ; a body there: sh_parse_pre then ran
+                                       ; on every Goto, Sort and Run, throwing
+                                       ; away the 'A1' just built and leaving
+                                       ; the column's first label in its place.
+                                       ; Sort's key came out as 'pear', was
+                                       ; refused, and the command did nothing
+.preparse:
+    call sh_parse_pre                  ; ...and NO brackets yet: the Guide's
+                                       ; own procedure makes Guess a step the
+                                       ; user takes, and a line that opened
+                                       ; pre-bracketed would make the button
+                                       ; look like it had already been pressed
 .prenone:
 .haveinit:
     mov si, sh_idlg_line
@@ -13562,6 +13604,30 @@ sh_idlg_paint:
     xor di, di
     SHOUT os88ui_btn
 
+    cmp byte [sh_idlg_kind], SH_ID_PARSE   ; 81.82's two, and ONLY this kind's
+    jne .nobrk
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G1X1
+    mov [sh_idlg_rect], ax
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G1X2
+    mov [sh_idlg_rect+4], ax               ; the y pair is still Cancel's, set
+    mov bx, sh_idlg_rect                   ; above - same row, other side
+    mov si, sh_s_idlg_guess
+    xor di, di
+    SHOUT os88ui_btn
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G2X1
+    mov [sh_idlg_rect], ax
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G2X2
+    mov [sh_idlg_rect+4], ax
+    mov bx, sh_idlg_rect
+    mov si, sh_s_idlg_clear
+    xor di, di
+    SHOUT os88ui_btn
+.nobrk:
+
     pop di
     pop si
     pop dx
@@ -13582,6 +13648,18 @@ sh_idlg_onkey:
     je .cancel
     cmp al, 0x0D
     je .accept
+    cmp byte [sh_idlg_kind], SH_ID_PARSE
+    jne .toline
+    cmp al, 0x20                       ; 81.82: "the only editing allowed in
+    jb .toline                         ; the parse line is adding and deleting
+    cmp al, 0x7E                       ; brackets" - so every PRINTABLE key but
+    ja .toline                         ; the two brackets is dropped here, and
+    cmp al, '['                        ; the control keys fall through to the
+    je .toline                         ; field, which is what gives LEFT/RIGHT/
+    cmp al, ']'                        ; BACKSPACE/DELETE the Guide names
+    je .toline
+    jmp .out
+.toline:
     mov si, sh_idlg_line
     SHOUT os88line_key
     jc .out
@@ -13622,6 +13700,21 @@ sh_idlg_onclick:
     pop cx
     sub cx, ax
     sub dx, [sh_idlg_oy]
+    cmp byte [sh_idlg_kind], SH_ID_PARSE   ; 81.82's two, tested FIRST because
+    jne .btns                              ; they sit to the LEFT of BTX1 and
+    cmp dx, SH_IDLG_CAY1                   ; the test below returns on that
+    jb .btns
+    cmp dx, SH_IDLG_CAY2
+    jg .btns
+    cmp cx, SH_IDLG_G1X1
+    jb .btns
+    cmp cx, SH_IDLG_G1X2
+    jle .doGuess
+    cmp cx, SH_IDLG_G2X1
+    jb .btns
+    cmp cx, SH_IDLG_G2X2
+    jle .doClear
+.btns:
     cmp cx, SH_IDLG_BTX1
     jb .out
     cmp cx, SH_IDLG_BTX2
@@ -13636,6 +13729,18 @@ sh_idlg_onclick:
     jle .doCancel
     jmp .out
 .redraw:
+    mov si, [sh_idlg_win]
+    call sh_idlg_paint
+    jmp .out
+.doGuess:
+    call sh_parse_guess                ; both rewrite the LINE and leave the
+    jmp .reline                        ; dialog up - they are edits, not
+.doClear:                              ; answers
+    call sh_parse_clear
+.reline:
+    mov si, sh_idlg_line               ; the caret and view follow the new
+    mov di, sh_idlg_buf                ; length, which os88line_set is what
+    SHOUT os88line_set                 ; recomputes
     mov si, [sh_idlg_win]
     call sh_idlg_paint
     jmp .out
@@ -13668,6 +13773,8 @@ sh_idlg_apply:
     push cx
     push dx
     push si
+    cmp byte [sh_idlg_kind], SH_ID_PARSE
+    je .parse
     cmp byte [sh_idlg_kind], SH_ID_DEFN
     je .defname
     cmp byte [sh_idlg_kind], SH_ID_FIND
@@ -13848,6 +13955,9 @@ sh_idlg_apply:
 ; The TEXT is read rather than an integer parsed: Growth by 1.5 and a linear
 ; step of 0.25 are both ordinary, and sh_pnum_at answers integers only -
 ; which is what the three numeric kinds above it want and this one does not.
+.parse:
+    call sh_parse_do                   ; 81.82
+    jmp .redraw
 .serstep:
     mov si, sh_idlg_buf
     SHOUT sh_ser_setstep                ; CF=0 = not a number at all: refused
@@ -15013,6 +15123,521 @@ sh_ldlg_close:
     pop bx
     pop ax
     ret
+
+
+; =============================================================================
+; 81.82: Data > Parse - distribute ONE column of text across several, cutting
+; at FIXED CHARACTER POSITIONS.
+;
+; Not at delimiters: that is what the CSV reader is for, and the two solve
+; different problems. Parse is for a report PRINTED by another program, where
+; every record arrived in one cell and the fields line up by column because
+; they were laid out for a printer.
+;
+; The contract is Excel 2.0's Reference Guide, "Data Parse command":
+;
+;   - the range is any number of rows and ONE COLUMN wide
+;   - the PARSE LINE shows the first non-blank cell, and the only editing
+;     allowed in it is adding and deleting BRACKETS
+;   - the settings made on that first cell apply to every cell in the range
+;   - GUESS places a set of brackets; CLEAR removes them all
+;   - it fills cells TO THE RIGHT, and what is there is overwritten
+;
+; A bracket PAIR is one field. The positions are counted in the underlying
+; text, so the brackets themselves do not shift the columns they mark - which
+; is why sh_parse_fields counts non-bracket characters as it walks.
+; =============================================================================
+section SH_MODSEC                      ; 81.82: Data > Parse, CHART.OVL
+
+SH_PA_MAXF equ 8                       ; fields, and so columns written. Eight
+                                       ; is what fits SH_EDITMAX at a useful
+                                       ; width; a ninth bracket pair is
+                                       ; ignored rather than refused, since
+                                       ; the line is the user's own editing
+
+; -----------------------------------------------------------------------------
+; sh_parse_pre - the parse line's initial contents: the FIRST NON-BLANK cell
+; of the selected column, as the Guide says. Not the first cell: a range
+; selected from a heading row down would otherwise open on an empty line and
+; Guess would have nothing to work with.
+; -----------------------------------------------------------------------------
+sh_parse_pre:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov byte [sh_idlg_buf], 0
+    call sh_parse_span
+    mov bx, [sh_pa_r1]
+.row:
+    cmp bx, [sh_pa_r2]
+    ja .out
+    mov ax, [sh_pa_col]
+    SHOUT sh_findcell
+    jnc .next
+    mov es, [sh_cellseg]
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    jne .next                          ; a VALUE is nothing to parse, so it is
+    mov si, [es:di+SH_C_FOFF]          ; skipped rather than refused - only a
+    mov es, [sh_txtseg]                ; TEXT cell can be the sample
+    mov di, sh_idlg_buf
+    mov cx, SH_EDITMAX
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .out
+    inc si
+    inc di
+    dec cx
+    jnz .cp
+    mov byte [di], 0
+    jmp short .out
+.next:
+    inc bx
+    jmp .row
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_parse_span - the selection's rows, ordered, and its LEFT column. The
+; Guide's "no more than one column wide" is not enforced: a wider selection
+; parses its left column, which is the same answer and needs no refusal.
+sh_parse_span:
+    push ax
+    push bx
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .r
+    xchg ax, bx
+.r:
+    mov [sh_pa_r1], ax
+    mov [sh_pa_r2], bx
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .c
+    mov ax, bx
+.c:
+    mov [sh_pa_col], ax
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_parse_clear - every bracket out of the line, in place.
+; -----------------------------------------------------------------------------
+sh_parse_clear:
+    push ax
+    push si
+    push di
+    mov si, sh_idlg_buf
+    mov di, sh_idlg_buf
+.l:
+    mov al, [si]
+    inc si
+    cmp al, '['
+    je .l
+    cmp al, ']'
+    je .l
+    mov [di], al
+    inc di
+    or al, al
+    jnz .l
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_parse_guess - bracket the fields the way the data lays them out.
+;
+; THE RULE IS TWO SPACES. A printed report separates its columns by a RUN of
+; spaces and puts single spaces inside a field, so `Jones  1234  45.60` is
+; three fields and `New York  10001` is two - which a split on every space
+; would get wrong in the one case that matters most.
+;
+; It clears first, so pressing Guess twice is the same as pressing it once.
+; -----------------------------------------------------------------------------
+; NO `movsb` IN HERE, and that is not a style note. It moves DS:SI to ES:DI,
+; and ES in a package is whatever was last loaded; every other string move in
+; this file sets ES first and on purpose. The first draft used it, so the
+; brackets - written DS-relative with `mov [di]` - landed in sh_pa_tmp while
+; every character between them went through ES to somewhere else, and the
+; parse line came back as a single '['.
+sh_parse_guess:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    call sh_parse_clear
+    mov si, sh_idlg_buf                ; SI walks the cleared text
+    mov di, sh_pa_tmp                  ; DI builds the bracketed line
+    xor cx, cx                         ; fields so far
+.field:
+    cmp byte [si], ' '                 ; skip the run between fields, and it
+    jne .start                         ; goes into the output as it stands
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    jmp .field
+.start:
+    cmp byte [si], 0
+    je .done
+    cmp cx, SH_PA_MAXF
+    jae .rest                          ; out of fields: the tail goes through
+    mov byte [di], '['                 ; unbracketed rather than being cut
+    inc di
+    inc cx
+.body:
+    mov al, [si]
+    or al, al
+    jz .close
+    cmp al, ' '
+    jne .take
+    cmp byte [si+1], ' '               ; ONE space is inside the field; TWO
+    je .close                          ; end it
+    cmp byte [si+1], 0
+    je .close
+.take:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    jmp .body
+.close:
+    mov byte [di], ']'
+    inc di
+    jmp .field
+.rest:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .rest
+    jmp short .copy
+.done:
+    mov byte [di], 0
+.copy:
+    mov si, sh_pa_tmp                  ; back over the line, clipped to what
+    mov di, sh_idlg_buf                ; the field can hold
+    mov cx, SH_EDITMAX
+.cp:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .out
+    inc si
+    inc di
+    dec cx
+    jnz .cp
+    mov byte [di], 0
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_parse_fields - the bracket pairs in the line, as offsets into the text
+; WITHOUT the brackets. [sh_pa_n] pairs, starts in sh_pa_st and ends in
+; sh_pa_en. CF=1 when there are none.
+;
+; The count that matters is of NON-BRACKET characters: a bracket marks a
+; position in the cell's text and occupies none of it, so a line with three
+; pairs in it still describes the same columns of the original.
+; -----------------------------------------------------------------------------
+sh_parse_fields:
+    push ax
+    push bx
+    push cx
+    push si
+    mov word [sh_pa_n], 0
+    xor cx, cx                         ; the text column
+    xor bx, bx                         ; open field? 0 no
+    mov si, sh_idlg_buf
+.l:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .done
+    cmp al, '['
+    je .open
+    cmp al, ']'
+    je .close
+    inc cx                             ; an ordinary character: one column on
+    jmp .l
+.open:
+    or bx, bx
+    jnz .l                             ; '[[' - the second is noise
+    mov bx, [sh_pa_n]
+    cmp bx, SH_PA_MAXF
+    jae .l
+    shl bx, 1
+    mov [sh_pa_st + bx], cx
+    mov bx, 1
+    jmp .l
+.close:
+    or bx, bx
+    jz .l                              ; ']' with no '[' - noise
+    mov bx, [sh_pa_n]
+    cmp bx, SH_PA_MAXF
+    jae .noroom
+    shl bx, 1
+    mov [sh_pa_en + bx], cx
+    inc word [sh_pa_n]
+.noroom:
+    xor bx, bx
+    jmp .l
+.done:
+    or bx, bx                          ; a '[' never closed runs to the end,
+    jz .fin                            ; which is what an unfinished edit
+    mov bx, [sh_pa_n]                  ; looks like and is the useful reading
+    cmp bx, SH_PA_MAXF
+    jae .fin
+    shl bx, 1
+    mov [sh_pa_en + bx], cx
+    inc word [sh_pa_n]
+.fin:
+    cmp word [sh_pa_n], 0
+    je .none
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_parse_do - OK. Split every row of the column at those offsets and write
+; the pieces across, starting in the parsed column itself.
+; -----------------------------------------------------------------------------
+sh_parse_do:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call sh_parse_span
+    call sh_parse_fields
+    jc .nofields
+    mov al, SH_UL_PARSE
+    SHOUT sh_undo_begin
+    mov bx, [sh_pa_r1]
+.row:
+    cmp bx, [sh_pa_r2]
+    ja .done
+    call sh_parse_row
+    inc bx
+    jmp .row
+.done:
+    SHOUT sh_undo_end
+    mov word [sh_msg], sh_s_pa_done
+    jmp short .out
+.nofields:
+    mov word [sh_msg], sh_s_pa_nobrk
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_parse_row - in: BX = row. The cell's text is taken FIRST, whole, into
+; sh_pa_src, because the very first field written lands on the cell it came
+; from and would otherwise be read after it was overwritten.
+sh_parse_row:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [sh_pa_src], 0
+    mov ax, [sh_pa_col]
+    SHOUT sh_findcell
+    jnc .out                           ; an empty row stays empty: there is
+    mov es, [sh_cellseg]               ; nothing to distribute and clearing
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT   ; the row to its right would
+    jne .out                           ; destroy data on the strength of a
+    mov si, [es:di+SH_C_FOFF]          ; blank
+    mov es, [sh_txtseg]
+    mov di, sh_pa_src
+    mov cx, SH_EDITMAX
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .have
+    inc si
+    inc di
+    dec cx
+    jnz .cp
+    mov byte [di], 0
+.have:
+    xor cx, cx                         ; the field index
+.f:
+    cmp cx, [sh_pa_n]
+    jae .out
+    call sh_parse_cut                  ; sh_pa_fld = this field, trimmed
+    mov ax, [sh_pa_col]
+    add ax, cx
+    cmp ax, SH_COLS
+    jae .out                           ; off the right edge: stop, silently -
+    mov si, sh_pa_fld                  ; there is nowhere to put it
+    call sh_parse_put
+    inc cx
+    jmp .f
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_parse_cut - in: CX = field index; out: sh_pa_fld = sh_pa_src's characters
+; [st..en), leading and trailing spaces removed. A field that starts past the
+; end of a short row is empty, which is right: the record simply had nothing
+; in that column.
+sh_parse_cut:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, cx
+    shl bx, 1
+    mov dx, [sh_pa_en + bx]            ; DX = end column
+    mov bx, [sh_pa_st + bx]            ; BX = start column
+    mov si, sh_pa_src
+    mov di, sh_pa_fld
+    xor cx, cx                         ; the column SI is looking at
+.find:
+    cmp cx, bx
+    jae .take
+    cmp byte [si], 0
+    je .fin
+    inc si
+    inc cx
+    jmp .find
+.take:
+    cmp cx, dx
+    jae .fin
+    mov al, [si]
+    or al, al
+    jz .fin
+    mov [di], al
+    inc di
+    inc si
+    inc cx
+    jmp .take
+.fin:
+    mov byte [di], 0
+    mov si, sh_pa_fld                  ; trim: leading first, then trailing
+    mov di, sh_pa_fld
+.lead:
+    cmp byte [si], ' '
+    jne .shift
+    inc si
+    jmp .lead
+.shift:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .shift
+.trail:
+    cmp di, sh_pa_fld + 1
+    jbe .done
+    dec di
+    cmp byte [di-1], ' '
+    jne .done
+    mov byte [di-1], 0
+    jmp .trail
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_parse_put - in: AX = col, BX = row, SI = the field. THE FIELD'S SPELLING
+; DECIDES, exactly as a CSV field's does (81.40): a complete number is a
+; number, TRUE/FALSE is the logical, everything else is a label, and an error
+; SPELLING comes back as text - which is CSV's answer too, because neither
+; format has a type to say otherwise.
+sh_parse_put:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [si], 0
+    je .empty
+    push ax
+    push si
+    SHOUT fp_atof                      ; CF=1: no number there at all. SHOUT
+                                       ; and not `call`: this body is in the
+                                       ; module and fp_atof is resident, which
+                                       ; os88ovlchk catches as a near call
+                                       ; across a segment boundary (68.10)
+    jc .notnum
+    mov al, [si]                       ; ...and anything it did not consume
+    or al, al                          ; ENTIRELY is not one either, which is
+    jnz .notnum                        ; what keeps '3.5kg' a label
+    pop si
+    pop ax
+    SHOUT sh_acc_store
+    SHOUT sh_setvald
+    jmp short .out
+.notnum:
+    pop si
+    pop ax
+    SHOUT sh_setlabel                  ; TRUE/FALSE inside it, label otherwise
+    jmp short .out
+.empty:
+    SHOUT sh_clearcell
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+section .text
 
 section .text
 
@@ -41456,7 +42081,9 @@ sh_it_filldown:  db 'Fill Down', 0
 sh_m_data:     db 'Data', 0
 sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
                dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
+               dw sh_it_parse                       ; 81.82, in Excel's place
                dw sh_it_chart, sh_it_gallery, sh_it_chartexp
+sh_it_parse:   db 'Parse...', 0
 sh_it_form:    db 'Form...', 0
 sh_it_dfind:   db 'Find', 0              ; 81.71, relabelled in place while a
 sh_it_exitfnd: db 'Exit Find', 0         ; find is live - Excel's own item
@@ -41523,6 +42150,10 @@ sh_s_calc_auto: db 'Calculation: Automatic', 0
 sh_s_calc_man:  db 'Calculation: Manual - Calculate Now to recompute.', 0
 sh_s_calc_now:  db 'Recalculated.', 0
 sh_s_ju_done:   db 'Justified.', 0
+sh_s_pa_done:   db 'Parsed.', 0
+sh_s_pa_nobrk:  db 'Put brackets round the fields, or press Guess.', 0
+sh_s_idlg_guess: db 'Guess', 0
+sh_s_idlg_clear: db 'Clear', 0
 sh_s_ju_notext: db 'Justify needs text or blank cells.', 0
 sh_s_ju_toobig: db 'Select more rows - the text needs them.', 0
 sh_s_id:       db 'ID;PWXL;N;E', 13, 10, 0
@@ -43046,7 +43677,7 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8224                     ; +38 for 81.71's Data commands: 26 of
+    OS88_BSS 8520                     ; +38 for 81.71's Data commands: 26 of
                                        ; state (the extract range, Delete's
                                        ; three cursors, the Find mode byte)
                                        ; and 12 because SH_NVEC went 96 -> 99
@@ -44353,7 +44984,20 @@ sh_ju_len     equ sh_ju_b + 2                ; how much is staged
 sh_ju_si      equ sh_ju_len + 2              ; the wrap cursor into staging
 sh_ju_n       equ sh_ju_si + 2               ; lines counted this section
 sh_ju_line    equ sh_ju_n + 2                ; SH_EDITMAX+1: the line being built
-sh_bss_end        equ sh_ju_line + SH_EDITMAX + 1
+; 81.82: Data > Parse. sh_pa_src is the row being split, taken whole BEFORE
+; the first field is written back over the cell it came from.
+sh_pa_col     equ sh_ju_line + SH_EDITMAX + 1
+sh_pa_r1      equ sh_pa_col + 2
+sh_pa_r2      equ sh_pa_r1 + 2
+sh_pa_n       equ sh_pa_r2 + 2               ; bracket pairs found
+sh_pa_st      equ sh_pa_n + 2                ; SH_PA_MAXF words each: the
+sh_pa_en      equ sh_pa_st + SH_PA_MAXF * 2  ; fields' start and end columns
+sh_pa_src     equ sh_pa_en + SH_PA_MAXF * 2  ; SH_EDITMAX+1: the row's text
+sh_pa_fld     equ sh_pa_src + SH_EDITMAX + 1 ; ...and one field out of it
+sh_pa_tmp     equ sh_pa_fld + SH_EDITMAX + 1 ; Guess builds here, because it
+                                             ; GROWS the line and cannot write
+                                             ; into the buffer it is reading
+sh_bss_end        equ sh_pa_tmp + SH_EDITMAX * 2 + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
