@@ -106063,24 +106063,56 @@ reference) split into `shm_r1c1one`, which does not require that - both
 `shm_rangetext` (checking for `:` first) need to keep going past one
 reference now.
 
-**Why BIFF encoding is still out of scope, not merely unfinished.** A macro
-sheet's `dt` flag (`0040H`, confirmed in `docs/excelfileformat.pdf`) is easy
-and sourced; the functions themselves are not. Excel numbers worksheet
-functions through one table (`tools/os88sheetfmt.py`'s `BIFF_FUNCS`, sourced
-from that same document) and macro COMMANDS through an entirely different
-one - the Command Equivalents Table - that document does not carry at all
-(checked directly, not assumed: no `Cetab`, `tFuncCE` or "Command
-Equivalent" text anywhere in it). §81.63's own header already refused this
-for exactly this reason: "no reference on hand gives Excel's numbers for
-them, and a guess is a file Excel runs differently." That has not changed -
-this session found no new source for the table either - so macro functions
-stay `0xFF` in `sh_rpn_fid`, a Normal save keeps a macro cell's VALUE and not
-its formula, and a macro sheet reopens as data, never as a script. Closing
-this for real needs either a primary source for the table or an empirical
-one built by decoding real Excel-written macro sheets byte for byte and
-correlating against what each cell is known to do - which is a research
-project of its own, not a coding continuation, and is recorded here rather
-than attempted on a guess.
+**Why BIFF encoding WAS out of scope — and is not any more (2026-09-21).**
+
+A macro sheet's `dt` flag (`0040H`, confirmed in `docs/excelfileformat.pdf`)
+is easy and sourced; the functions were not. Excel numbers worksheet
+functions through one table (`tools/os88sheetfmt.py`'s `BIFF_FUNCS`, from
+that same document) and macro COMMANDS through an entirely different one —
+the **Command Equivalents Table** — which `excelfileformat.pdf` does not
+carry at all. §81.63's header refused the work on that basis: *"no reference
+on hand gives Excel's numbers for them, and a guess is a file Excel runs
+differently."* This paragraph used to end by calling the alternative "a
+research project of its own, not a coding continuation".
+
+**That premise was false, and had been for as long as it was written down.**
+The check behind it was made against `excelfileformat.pdf` **only**. The
+tree also holds **`[MS-XLS].pdf`** — Microsoft's own *Excel Binary File
+Format (.xls) Structure*, now linked as `docs/ms-xls.pdf` — and its own
+section 2.5.198.4, **`Cetab`**, is the Command Equivalents Table in full:
+395 entries from `0x0000 BEEP`. Its section 2.5.198.17, **`Ftab`**, is the
+function table, 372 entries. (Those are MS-XLS's numbers, not this
+document's.)
+`PtgFuncVar`'s **`fCeFunc`** bit is what selects between them.
+
+All twenty of §81.63's macro functions are sourced by those two tables —
+**ten in each**, which is itself the thing a guess would have got wrong:
+
+| Cetab (commands) | | Ftab (functions) | |
+|---|---|---|---|
+| `BEEP` | `0x0000` | `GOTO` | `0x0035` |
+| `CALCULATE.NOW` | `0x001F` | `HALT` | `0x0036` |
+| `CUT` | `0x0031` | `RETURN` | `0x0037` |
+| `COPY` | `0x0032` | `ACTIVE.CELL` | `0x005E` |
+| `PASTE` | `0x0033` | `INPUT` | `0x0068` |
+| `CLEAR` | `0x0034` | `SET.VALUE` | `0x006C` |
+| `FORMULA` | `0x0060` | `FOR` | `0x00AB` |
+| `SELECT` | `0x006D` | `BREAK` | `0x00AD` |
+| `ALERT` | `0x0076` | `WHILE` | `0x00AC` |
+| `MESSAGE` | `0x007A` | `NEXT` | `0x00AE` |
+
+**What still needs checking before any of it is written to a file**:
+`[MS-XLS]` documents BIFF8, and these numbers are asserted to be stable back
+to BIFF2 rather than shown to be. The numbers SHEET needs are all below
+`0x00AE` — the original Excel 2.x range — which is consistent but is not
+evidence. The evidence is already in the tree: `tests/sheetxl2.py`'s fixture
+is a **macro sheet written by real Excel 2.1**, so the tables can be checked
+against bytes Excel itself produced rather than trusted.
+
+The lesson is the one §81.81.1 records one section along: **a check is only
+as wide as the documents it was made against**, and "no reference on hand"
+was a claim about one file that read like a claim about the tree. It cost
+this feature a cycle.
 
 `tests/sheetmacro.py` is the gate for what closed here: `FORMULA` entering
 an R1C1 formula and reading back the value it should compute, `SELECT`
