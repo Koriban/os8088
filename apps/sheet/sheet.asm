@@ -35162,6 +35162,13 @@ shm_mtab:
     dw shm_mgline
     dw shm_mgpie
     dw shm_mgscat
+; slice 3c (81.90): File, FORMULA.FILL, DATA.SERIES
+    dw shm_mfdelete
+    dw shm_mnew
+    dw shm_mopen
+    dw shm_mfsaveas
+    dw shm_mffill
+    dw shm_mseries
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35181,6 +35188,7 @@ shm_mkind:
     db 1, 1, 1, 1,  1, 1, 1, 1,  1, 1 ; GET.CELL .. DIRECTORY: values
     times 26 db 0                     ; wave 3a: commands, every one
     times 33 db 0                     ; slice 3b: commands, every one
+    times 6 db 0                      ; slice 3c: commands, every one
 shm_mkind_end:
 
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
@@ -35273,6 +35281,12 @@ shm_mxnames:
     db 'GALLERY.LINE', 0
     db 'GALLERY.PIE', 0
     db 'GALLERY.SCATTER', 0
+    db 'FILE.DELETE', 0
+    db 'NEW', 0
+    db 'OPEN', 0
+    db 'SAVE.AS', 0
+    db 'FORMULA.FILL', 0
+    db 'DATA.SERIES', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35365,6 +35379,12 @@ shm_mxrpn:
     db 0x46, 1, 1                     ; GALLERY.LINE
     db 0x47, 1, 1                     ; GALLERY.PIE
     db 0x48, 1, 1                     ; GALLERY.SCATTER
+    db 0x06, 0, 1                     ; FILE.DELETE
+    db 0x77, 1, 1                     ; NEW
+    db 0x01, 1, 1                     ; OPEN
+    db 0x05, 1, 1                     ; SAVE.AS
+    db 0x61, 1, 1                     ; FORMULA.FILL
+    db 0x28, 1, 1                     ; DATA.SERIES
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -39639,6 +39659,290 @@ shm_mgal:
 ; FORMULA.GOTO(reference) - Formula > Goto: the reference selected and shown,
 ; which is SELECT's own work
 shm_mfgoto equ shm_mselect
+
+; --- slice 3c (81.90): File, FORMULA.FILL, DATA.SERIES ---------------------
+
+; shm_fname - the TEXT argument at SI into sh_delname (DS), cut to an 8.3
+; name; CF=1 not text or empty. The DELETE buffer, not sh_name: a name that
+; turns out wrong must not have renamed the open document
+shm_fname:
+    call shm_textfirst
+    jc .no
+    push si
+    push di
+    push cx
+    mov si, sh_sacc
+    mov di, sh_delname
+    mov cx, SH_FNAME_MAX
+.c:
+    mov al, [si]
+    cmp al, 'a'
+    jb .u
+    cmp al, 'z'
+    ja .u
+    sub al, 32
+.u:
+    mov [di], al
+    or al, al
+    jz .e
+    inc si
+    inc di
+    loop .c
+    mov byte [di], 0
+.e:
+    pop cx
+    pop di
+    pop si
+    cmp byte [sh_delname], 0
+    je .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; shm_tosh_name - sh_delname becomes the document's name
+shm_tosh_name:
+    push si
+    push di
+    mov si, sh_delname
+    mov di, sh_name
+.c:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .c
+    pop di
+    pop si
+    ret
+
+; FILE.DELETE(file_text) - the file is deleted, in this instance's current
+; folder (DIRECTORY's, 81.87.4); one that is not there is an error
+shm_mfdelete:
+    call shm_fname
+    jc .bad
+    SHOUT sh_skipargs
+    push si
+    mov si, sh_delname
+    call OSAPI_FILE_DELETE            ; CF=0 AX=0, else FERR_*
+    pop si
+    jc .gone
+    jmp shm_mtrue
+.gone:
+    jmp shm_merr0
+.bad:
+    jmp shm_merr
+
+; NEW([type_num]) and OPEN(file_text, ...) - another document, IN THIS
+; WINDOW: SHEET is one document an instance, and a macro lives in the
+; document it runs in (81.88.2). So the run ENDS here - the cells it was
+; running are gone - which is what Excel does when a macro closes its own
+; macro sheet. 1 worksheet, 2 chart, 3 macro sheet, as File > New asks
+shm_mnew:
+    mov ax, 1
+    call shm_intarg1
+    jc .bad
+    dec ax
+    cmp ax, 3
+    jae .bad
+    mov [sh_fdlg_sel], ax
+    mov byte [sh_fdlg_kind], SH_FDK_NEW
+    SHOUT sh_skipargs
+    push si
+    call sh_fdlg_apply
+    pop si
+    jmp short shm_mendrun
+.bad:
+    jmp shm_merr
+
+shm_mopen:
+    call shm_fname
+    jc shm_mopen_bad
+    SHOUT sh_skipargs
+    call shm_tosh_name
+    push si
+    call shm_doread                   ; sh_doread's own body: we are in the
+    SHOUT sh_undo_drop                ; module already
+    mov si, [sh_ownwin]
+    SHOUT sh_repaint
+    pop si
+shm_mendrun:
+    mov byte [sh_macro_ctl], SH_MC_STOP
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+shm_mopen_bad:
+    jmp shm_merr
+
+; SAVE.AS(file_text[, type_num]) - the document saved under that name, in
+; that format: 1 Normal (BIFF), 2 SYLK, 3 Text, 6 CSV, 8 dBASE III, 9 DIF.
+; WKS, WK1 and dBASE II SHEET does not write, and those are refused.
+; Excel's password and backup arguments are read and not used
+shm_mfsaveas:
+    push si                           ; the name, for the second pass
+    SHOUT sh_pcmp
+    mov ax, 1
+    call shm_intarg
+    jc .badpop
+    mov bx, shm_saext
+.f:
+    cmp byte [cs:bx], 0
+    je .badpop
+    cmp al, [cs:bx]
+    je .have
+    add bx, 3
+    jmp short .f
+.have:
+    mov ax, [cs:bx+1]                 ; the extension's ".XXX"
+    mov [cs:shm_gcnt], ax
+    mov di, si
+    pop si
+    push di
+    call shm_fname
+    jc .badpop
+    pop si
+    SHOUT sh_skipargs
+    call shm_tosh_name
+    push si
+    mov si, [cs:shm_gcnt]
+    call sh_setext
+    pop si
+    mov ax, (SH_MI_FILE << 8) | 2     ; File > Save, under the new name
+    SHOUT sh_macro_mfire
+    jmp shm_mtrue
+.badpop:
+    pop si
+    jmp shm_merr
+shm_saext:                            ; type_num, then its extension string
+    db 1
+    dw sh_s_ext_biff
+    db 2
+    dw sh_s_ext_sylk
+    db 3
+    dw sh_s_ext_txt
+    db 6
+    dw sh_s_ext_csv
+    db 8
+    dw sh_s_ext_dbf
+    db 9
+    dw sh_s_ext_dif
+    db 0
+
+; FORMULA.FILL(formula_text, reference) - the formula into every cell of the
+; reference, relative references moving as they would for each cell: the
+; top-left cell gets it as FORMULA would put it there, and Fill Down then
+; Fill Right carry it across, which is exactly how those two adjust
+shm_mffill:
+    push si                           ; the formula, for the second pass
+    SHOUT sh_pcmp
+    cmp byte [si], ','
+    jne .badpop
+    inc si
+    call shm_mrangeref
+    jnc .badpop
+    mov [sh_selcol], ax               ; the reference IS the selection now,
+    mov [sh_selrow], bx               ; which is what both fills act on
+    mov [sh_selcol2], cx
+    mov [sh_selrow2], dx
+    pop si
+    call shm_mformula                 ; FORMULA(x) - into the active cell,
+    cmp byte [sh_macro_ctl], SH_MC_STOP ; its top-left, and past every
+    je .out                           ; argument
+    push si
+    mov ax, (SH_MI_EDIT << 8) | 11    ; Fill Down
+    SHOUT sh_macro_mfire
+    mov ax, (SH_MI_EDIT << 8) | 10    ; Fill Right
+    SHOUT sh_macro_mfire
+    pop si
+.out:
+    ret
+.badpop:
+    pop si
+    jmp shm_merr
+
+; DATA.SERIES([rowcol[, type[, date[, step[, stop]]]]]) - Data > Series on
+; the selection. Rows or columns come from its shape, as the dialog's do
+; (81.72); type 1 linear, 2 growth, 3 date (date 1 day, 2 weekday, 3 month,
+; 4 year); step 1 by default. A STOP value is 81.72's own shortfall: refused
+shm_mseries:
+    call shm_intarg1                  ; rowcol: derived, read and not used
+    mov ax, 1
+    call shm_intarg                   ; type
+    jc .bad
+    mov [cs:shm_gcol], ax
+    mov ax, 1
+    call shm_intarg                   ; date unit
+    jc .bad
+    mov [cs:shm_grow], ax
+    mov ax, 1                         ; the step: 1 unless there is one
+    SHOUT sh_acc_int
+    cmp byte [si], ','
+    jne .havestep
+    inc si
+    cmp byte [si], ','
+    je .havestep
+    cmp byte [si], ')'
+    je .havestep
+    SHOUT sh_pcmp
+    cmp byte [sh_evalerr], 0
+    jne .bad
+.havestep:
+    push si                           ; the step's eight bytes, banked
+    push di
+    mov si, sh_acc
+    mov di, sh_ser_step
+    mov cx, 8
+.cp:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cp
+    pop di
+    pop si
+    cmp byte [si], ','                ; stop: refused
+    jne .nostop
+    cmp byte [si+1], ')'
+    jne .bad
+.nostop:
+    mov ax, [cs:shm_gcol]             ; the type, as the radio numbers it
+    dec ax
+    jz .lin                           ; 1 linear
+    dec ax
+    jz .gro                           ; 2 growth
+    dec ax
+    jnz .bad                          ; 3 date, by its unit
+    mov ax, [cs:shm_grow]
+    dec ax
+    cmp ax, 4
+    jae .bad
+    add al, SH_SER_DAY
+    jmp short .type
+.gro:
+    mov al, SH_SER_GRO
+    jmp short .type
+.lin:
+    mov al, SH_SER_LIN
+.type:
+    mov [sh_ser_type], al
+    mov ax, [sh_selcol]
+    mov [sh_ser_c1], ax
+    mov ax, [sh_selrow]
+    mov [sh_ser_r1], ax
+    mov ax, [sh_selcol2]
+    mov [sh_ser_c2], ax
+    mov ax, [sh_selrow2]
+    mov [sh_ser_r2], ax
+    SHOUT sh_skipargs
+    push si
+    call shm_series
+    SHOUT sh_undo_drop
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it

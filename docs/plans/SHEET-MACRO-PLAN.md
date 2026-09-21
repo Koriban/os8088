@@ -1,6 +1,6 @@
 # SHEET's macro language — finishing it
 
-**Status: planned 2026-09-21. Waves 0, 1 and 2 done; wave 3 next.** Every count here was
+**Status: planned 2026-09-21. Waves 0-3 done; wave 4 next.** Every count here was
 measured from Microsoft Excel **Version 2.0**'s *Functions and Macros* manual
 (`_LIBRARY/documentation/excel_man/`), OCR-repaired by hand where the scan
 split a name, and cross-checked against SHEET's own `sh_functab` through
@@ -125,8 +125,9 @@ is what waves 3 and 4 have. WAIT's timer path is unverified: the gate's 5150
 has no BIOS clock.
 `CANCEL.KEY`, `DISABLE.INPUT`, `ECHO`, `ERROR`, `RESTART`, `STEP`, `WAIT`; `DIRECTORY`, `GET.CELL`, `GET.DEF`, `GET.DOCUMENT`, `GET.FORMULA`, `GET.NAME`, `GET.NOTE`, `GET.WINDOW`, `GET.WORKSPACE`, `NAMES`.
 
-**Wave 3 — command equivalents (68),
-by menu.** Each one runs SHEET's existing command with the macro's arguments
+**Wave 3 — command equivalents (68), by menu. DONE, 65 of 68** (§81.88,
+§81.89, §81.90; FORMULA.ARRAY, FILL.LEFT and FILL.UP are features SHEET
+lacks). `CHART.OVL` 57,263: **8,273 bytes to the 64 KB wall** for wave 4. Each one runs SHEET's existing command with the macro's arguments
 where the menu would have asked in a dialog.
 
 - File: `FILE.DELETE`, `NEW`, `OPEN`, `SAVE`, `SAVE.AS`

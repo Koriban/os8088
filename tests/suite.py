@@ -4919,6 +4919,13 @@ SOAK = [
         "VSCROLL/VLINE/HSCROLL, SELECT.END both ways, UNLOCKED.NEXT/PREV "
         "wrapping, SELECT.LAST.CELL, and FIND.PREV refused into ERROR's ref",
         needs=("marty",), serial=True),
+    Row("sheetmcmd3", "soak", py("tests/sheetmcmd3.py"), 400.0,
+        "SPEC.md 81.90: command equivalents, slice 3c - FORMULA.FILL moving "
+        "relative references both ways, DATA.SERIES linear and growth, "
+        "FILE.DELETE (off the volume itself) and its refusal, SAVE.AS "
+        "writing the very file the answers are read from, and OPEN ending "
+        "the run with the other document in the window",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

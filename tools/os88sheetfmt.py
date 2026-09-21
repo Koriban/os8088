@@ -209,6 +209,13 @@ BIFF_CETAB = {
     0x74: 'VSCROLL',
     0x75: 'HSCROLL',
     0xBB: 'SELECT.END',
+    # slice 3c (81.90): File, FORMULA.FILL, DATA.SERIES
+    0x01: 'OPEN',
+    0x05: 'SAVE.AS',
+    0x06: 'FILE.DELETE',
+    0x28: 'DATA.SERIES',
+    0x61: 'FORMULA.FILL',
+    0x77: 'NEW',
 }
 
 # It is here, in the SECOND reader, for the reason this whole file exists: a

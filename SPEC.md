@@ -104478,6 +104478,60 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.90 Command equivalents, slice 3c: File, FORMULA.FILL, DATA.SERIES; wave 3 closed
+
+Six more commands, which close wave 3: 65 of the plan's 68 are built.
+
+- **FILE.DELETE(file_text)** deletes the file in this instance's current
+  folder (DIRECTORY's, §81.87.4). A file that is not there is an error. The
+  name goes through `sh_delname`, File ▸ Delete's own buffer, so a bad name
+  cannot rename the open document.
+- **SAVE.AS(file_text[, type_num])** takes Excel's type numbers: 1 Normal
+  (BIFF), 2 SYLK, 3 Text, 6 CSV, 8 dBASE III, 9 DIF. WKS, WK1 and dBASE II
+  are refused, because SHEET does not write them. It renames the document,
+  fixes the extension (`sh_setext`) and fires File ▸ Save.
+- **NEW([type_num]) and OPEN(file_text)** put another document **in this
+  window**. SHEET has one document per instance, and a macro lives in the
+  document it runs in (§81.88.2). So **the run ends there**: the cells it
+  was running are gone. That is what Excel does when a macro closes its own
+  macro sheet. OPEN calls the reader's module body (`shm_doread`) directly.
+- **FORMULA.FILL(formula_text, ref)** puts the formula into ref's top-left
+  cell, as FORMULA does, then runs Fill Down and then Fill Right over ref.
+  Those two already adjust relative references, and in that order they
+  reach every cell.
+- **DATA.SERIES** works on the selection. Rows or columns follow its shape
+  (§81.72). Type 1 is linear, 2 growth, 3 a date by unit, and the step
+  defaults to 1. A **stop** value is §81.72's documented shortfall and is
+  refused.
+
+**Resident +0. `CHART.OVL` +624** (57,263); **8,273 bytes remain to the 64
+KB wall**, which is what wave 4 has.
+
+#### 81.90.1 The three not built
+
+- **FORMULA.ARRAY:** SHEET has no multi-cell array formulas (§81.67).
+- **FILL.LEFT and FILL.UP:** SHEET's Edit menu has Fill Right and Fill Down
+  only. These are missing features, not command equivalents to write, and a
+  macro naming them evaluates `#NAME?`.
+
+#### 81.90.2 What the gates call without checking the effect
+
+A command can be called in a gate without the gate checking what it did.
+These have not been verified by any gate, and are stated rather than
+counted:
+
+- **menu-fired, with effects unchecked:** UNDO, PASTE.LINK, FILL.RIGHT,
+  JUSTIFY, SAVE, SET.CRITERIA, DATA.FORM, FREEZE.PANES;
+- **not called at all:** DATA.FIND, DATA.FIND.NEXT, DATA.DELETE, EXTRACT,
+  PARSE, HLINE, HPAGE, VPAGE, NEW, and five of the six GALLERY.* commands.
+
+Each one fires the same code as its menu item or its dialog's OK, so each
+is only as unverified as the plumbing to it.
+
+`tests/sheetmcmd3.py` has 10 checks. It reads its answers from the file
+that SAVE.AS wrote, reads FILE.DELETE's effect off the volume itself, and
+checks that OPEN's replacement document carries the other file's marker.
+
 ### 81.89 Command equivalents, slice 3b: Formula, Data, RUN, movement, the gallery
 
 33 more commands, built as in §81.88. The **one-line dialog** gets the same
