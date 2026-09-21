@@ -104478,6 +104478,78 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.88 Command equivalents, slice 3a: Format, Edit and Options
+
+The first slice of wave 3 of `docs/plans/SHEET-MACRO-PLAN.md`, 26
+commands. **Every one is SHEET's own command, reached by the code a click
+reaches.**
+
+- **A command that acts at once** fires its own menu item through
+  `sh_mfire`, SHEET's single menu dispatcher, so it cannot drift from the
+  menu. Each costs a five-byte stub: FILL.RIGHT, FILL.DOWN, PASTE.LINK,
+  UNDO, JUSTIFY, SAVE, SET.DATABASE, SET.CRITERIA, CALCULATE.DOCUMENT and
+  DATA.FORM. DATA.FORM opens the Form dialog and the run carries on, which
+  is Excel's `?` form rather than its argument form.
+- **A command that takes arguments** sets the state its dialog would have
+  set, then calls the dialog's own apply (`sh_fdlg_apply`, `sh_bdlg_apply`,
+  `sh_nf_apply`, `sh_colw_set`, `sh_rowh_set`). The arguments therefore reach
+  the same code that OK does: ALIGNMENT, FORMAT.FONT, FORMAT.NUMBER, BORDER,
+  CELL.PROTECTION, COLUMN.WIDTH, ROW.HEIGHT, INSERT, EDIT.DELETE,
+  PASTE.SPECIAL and CALCULATION.
+- **The Options toggles** fire their menu item only when the flag differs, so
+  the menu's own labels follow: DISPLAY, FREEZE.PANES and PROTECT.DOCUMENT.
+- CANCEL.COPY forgets the copy. PRECISION(TRUE) is the only precision SHEET
+  has.
+
+**Resident +15 bytes** (the door and its vector), **bss +4, `CHART.OVL`
++1,325** (54,541). `CH_OVKB` 54 → **58**.
+
+#### 81.88.1 What is refused rather than pretended
+
+Each of these is a macro error, which ERROR() can turn off:
+
+- ALIGNMENT(5), Fill, which has no bit in the format byte;
+- FORMAT.NUMBER with a format that is not one of the 21 built-in ones;
+- PASTE.SPECIAL with an operation, skip-blanks or transpose, none of which
+  SHEET's Paste Special does;
+- INSERT and EDIT.DELETE with shift_num 1 or 2 (shift cells), because SHEET
+  inserts and deletes whole rows and columns only;
+- PRECISION(FALSE).
+
+These arguments are read and not used, because SHEET has one of them only:
+
+- FORMAT.FONT's face and size;
+- DISPLAY's headings, zeros and colour;
+- PROTECT.DOCUMENT's windows and password.
+
+BORDER and CELL.PROTECTION act on the active cell, as their dialogs do.
+
+#### 81.88.2 A macro lives in the document it edits
+
+Excel keeps a macro on its own macro sheet. SHEET keeps it on the sheet it
+works on, and two things follow from that. The gate found both.
+
+- **A row inserted through the macro's own rows moves the macro.** The
+  engine then runs the moved INSERT again, which loops until the step
+  limit.
+- **Insert and Delete rewrite every formula's references (81.3.1), and the
+  macro's formulas are formulas.** A `SET.VALUE(H16,K81)` that runs after a
+  row is inserted above row 81 reads K82, where the value went. That is
+  correct, and it is why the gate expects it.
+
+#### 81.88.3 A ghost, found by the first macro to format without a dialog
+
+`sh_fdlg_apply`'s format path repainted with SI still holding its loop's
+last column. `sh_repaint` takes the window in SI, so it drew a ghost of the
+sheet at a garbage origin. The dialog's own close repaint had always
+covered it. FORMAT.* from a macro showed it, and it is fixed by loading the
+window first. Screenshots taken before and after the fix are the evidence:
+the gate reads cells, not glass.
+
+`tests/sheetmcmd.py` has 20 checks. Each reads a command's effect back
+through the GET.* functions that §81.87 verified, so a command that did
+nothing reads the default rather than passing.
+
 ### 81.87 Macro information: GET.CELL, GET.FORMULA, GET.NAME, GET.DEF, GET.NOTE, NAMES, GET.DOCUMENT, GET.WINDOW, GET.WORKSPACE, DIRECTORY
 
 The information half of wave 2 of `docs/plans/SHEET-MACRO-PLAN.md`. All ten

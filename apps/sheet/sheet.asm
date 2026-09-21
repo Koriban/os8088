@@ -1687,6 +1687,9 @@ sh_x_sh_macro_arm:                  ; ...and its timer
 sh_x_sh_nt_get:                     ; 81.87: GET.NOTE
     call sh_nt_get
     retf
+sh_x_sh_macro_mfire:                ; 81.88: a menu item, from a macro
+    call sh_macro_mfire
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1738,6 +1741,7 @@ sh_ovshims:
     dw sh_x_sh_bt_findcell, sh_x_sh_bt_removecell
     dw sh_x_sh_pnow, sh_x_sh_macro_arm                               ; 81.86
     dw sh_x_sh_nt_get                                                ; 81.87
+    dw sh_x_sh_macro_mfire                                           ; 81.88
 sh_entry:
     push ax
     push dx
@@ -12679,8 +12683,12 @@ sh_fdlg_apply0:
     inc cx
     cmp cx, si
     jbe .fmtcolloop
-    SHOUT sh_repaint                    ; ONE repaint for the whole block
-    jmp .out
+    mov si, [sh_ownwin]                ; SI WAS THE LAST COLUMN: sh_repaint
+    SHOUT sh_repaint                    ; takes the window there, and got a
+    jmp .out                           ; column index - a ghost of the sheet
+                                       ; drawn at a garbage origin, which a
+                                       ; dialog's own close repaint covered
+                                       ; and a macro's FORMAT.* did not (81.88)
 .insertrc:
     cmp byte [sh_protected], 0        ; a structure change is refused for the
     jne .protdoc                      ; WHOLE document, not per cell: inserting
@@ -34866,6 +34874,10 @@ sh_macro_alertup:
     pop bx
     pop ax
     ret
+sh_macro_mfire:                      ; 81.88: AH = menu, AL = item - the
+    call sh_mfire                    ; command equivalents' own door, the
+    mov byte [sh_macro_dirty], 1     ; one a click goes through
+    ret
 sh_macro_onbtn:                      ; ...and hears which one: AL, 0-based,
     mov [sh_macro_btn], al           ; or OS88UI_ACANCEL
     jmp sh_macro_onalert
@@ -35084,6 +35096,33 @@ shm_mtab:
     dw shm_mgetcell, shm_mgetformula, shm_mgetname, shm_mgetdef ; wave 2:
     dw shm_mgetnote, shm_mnames, shm_mgetdoc, shm_mgetwin       ; information
     dw shm_mgetws, shm_mdirectory
+; wave 3a (81.88): command equivalents - Format, Edit, Options
+    dw shm_x_fillr
+    dw shm_x_filld
+    dw shm_x_plink
+    dw shm_x_undo
+    dw shm_x_just
+    dw shm_x_save
+    dw shm_x_setdb
+    dw shm_x_setcr
+    dw shm_x_calcd
+    dw shm_x_dform
+    dw shm_malign
+    dw shm_mfont
+    dw shm_mfmtnum
+    dw shm_mborder
+    dw shm_mprot
+    dw shm_mcolw
+    dw shm_mrowh
+    dw shm_minsert
+    dw shm_mdelete
+    dw shm_mpspec
+    dw shm_mccopy
+    dw shm_mcalcn
+    dw shm_mdisplay
+    dw shm_mfreeze
+    dw shm_mprotdoc
+    dw shm_mprecision
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35101,6 +35140,7 @@ shm_mkind:
                                        ; family, every one a value
     db 0, 0, 0, 0,  0, 0, 0           ; ECHO .. WAIT: commands, every one
     db 1, 1, 1, 1,  1, 1, 1, 1,  1, 1 ; GET.CELL .. DIRECTORY: values
+    times 26 db 0                     ; wave 3a: commands, every one
 shm_mkind_end:
 
 ; The extension NAMES, uppercase, each NUL-terminated; an empty name ends it.
@@ -35134,6 +35174,32 @@ shm_mxnames:
     db 'GET.WINDOW', 0
     db 'GET.WORKSPACE', 0
     db 'DIRECTORY', 0
+    db 'FILL.RIGHT', 0
+    db 'FILL.DOWN', 0
+    db 'PASTE.LINK', 0
+    db 'UNDO', 0
+    db 'JUSTIFY', 0
+    db 'SAVE', 0
+    db 'SET.DATABASE', 0
+    db 'SET.CRITERIA', 0
+    db 'CALCULATE.DOCUMENT', 0
+    db 'DATA.FORM', 0
+    db 'ALIGNMENT', 0
+    db 'FORMAT.FONT', 0
+    db 'FORMAT.NUMBER', 0
+    db 'BORDER', 0
+    db 'CELL.PROTECTION', 0
+    db 'COLUMN.WIDTH', 0
+    db 'ROW.HEIGHT', 0
+    db 'INSERT', 0
+    db 'EDIT.DELETE', 0
+    db 'PASTE.SPECIAL', 0
+    db 'CANCEL.COPY', 0
+    db 'CALCULATION', 0
+    db 'DISPLAY', 0
+    db 'FREEZE.PANES', 0
+    db 'PROTECT.DOCUMENT', 0
+    db 'PRECISION', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35167,6 +35233,32 @@ shm_mxrpn:
     db 0xBB, 1, 0                     ; GET.WINDOW(type[,name])
     db 0xBA, 0, 0                     ; GET.WORKSPACE(type)
     db 0x7B, 1, 0                     ; DIRECTORY([path])
+    db 0x38, 0, 1                     ; FILL.RIGHT - Cetab
+    db 0x39, 0, 1                     ; FILL.DOWN - Cetab
+    db 0x7C, 0, 1                     ; PASTE.LINK - Cetab
+    db 0x30, 0, 1                     ; UNDO - Cetab
+    db 0x5C, 0, 1                     ; JUSTIFY - Cetab
+    db 0x04, 0, 1                     ; SAVE - Cetab
+    db 0x25, 0, 1                     ; SET.DATABASE - Cetab
+    db 0x26, 0, 1                     ; SET.CRITERIA - Cetab
+    db 0xA7, 0, 1                     ; CALCULATE.DOCUMENT - Cetab
+    db 0x92, 0, 1                     ; DATA.FORM - Cetab
+    db 0x2B, 1, 1                     ; ALIGNMENT - Cetab
+    db 0x96, 1, 1                     ; FORMAT.FONT - Cetab
+    db 0x2A, 0, 1                     ; FORMAT.NUMBER - Cetab
+    db 0x2D, 1, 1                     ; BORDER - Cetab
+    db 0x2E, 1, 1                     ; CELL.PROTECTION - Cetab
+    db 0x2F, 1, 1                     ; COLUMN.WIDTH - Cetab
+    db 0x7F, 1, 1                     ; ROW.HEIGHT - Cetab
+    db 0x37, 1, 1                     ; INSERT - Cetab
+    db 0x36, 1, 1                     ; EDIT.DELETE - Cetab
+    db 0x35, 1, 1                     ; PASTE.SPECIAL - Cetab
+    db 0x78, 0, 1                     ; CANCEL.COPY - Cetab
+    db 0x20, 1, 1                     ; CALCULATION - Cetab
+    db 0x1B, 1, 1                     ; DISPLAY - Cetab
+    db 0x87, 1, 1                     ; FREEZE.PANES - Cetab
+    db 0x1C, 1, 1                     ; PROTECT.DOCUMENT - Cetab
+    db 0x1D, 1, 1                     ; PRECISION - Cetab
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -35850,15 +35942,17 @@ shm_mbool:
 
 ; shm_merr - a macro that cannot go on: stop it and say so
 shm_merr:
+    SHOUT sh_skipargs
+; shm_merr0 - the same, once the arguments are consumed already
+shm_merr0:
     cmp byte [cs:shm_errmode], 1      ; 81.86: ERROR() decides - 1 is the
     jne .notnormal                    ; default, and stops the run
     mov byte [sh_macro_ctl], SH_MC_STOP
     mov word [sh_msg], sh_s_macroerr
-.skip:
-    SHOUT sh_skipargs
+.f:
     jmp short shm_mfalse
 .notnormal:
-    jb .skip                          ; ERROR(FALSE): ignore it, carry on
+    jb .f                             ; ERROR(FALSE): ignore it, carry on
     push ax                           ; ERROR(TRUE, ref): run from ref
     mov ax, [cs:shm_errcol]
     mov [sh_macro_ncol], ax
@@ -35866,7 +35960,7 @@ shm_merr:
     mov [sh_macro_nrow], ax
     pop ax
     mov byte [sh_macro_ctl], SH_MC_GOTO
-    jmp short .skip
+    jmp short .f
 
 ; shm_mref - a REFERENCE argument at SI: a reference, a name, or text - "B5",
 ; or "R[1]C" relative to the active cell. out: CF=1 AX = col, BX = row, SI
@@ -37248,7 +37342,7 @@ shm_gctab:
     db GI_FN
     dw shm_gc_bold                    ; 20 bold
     db GI_BOOL
-    dw 0                              ; 21 italic: SHEET has none (81.x)
+    dw 0                              ; 21 italic: SHEET draws none
     db GI_FN
     dw shm_gc_under                   ; 22 underlined
     db GI_BOOL
@@ -38227,6 +38321,465 @@ shm_dfind:
     pop cx
     pop ax
     ret
+
+; =============================================================================
+; COMMAND EQUIVALENTS (macro plan wave 3, 81.88): the menu's own commands,
+; from a macro.
+;
+; A command that acts at once is its MENU ITEM, fired through sh_mfire - the
+; same dispatch a click reaches, so it cannot drift from the menu - and costs
+; a five-byte stub. A command that takes arguments sets the state its dialog
+; would have set and calls the dialog's own apply (sh_fdlg_apply, which lives
+; here in the module), so the arguments reach the same code a click on OK
+; does.
+; =============================================================================
+; the menu-fired ones: AH = the menu, AL = the item (sh_mfire's contract)
+shm_x_fillr:  mov ax, (SH_MI_EDIT << 8) | 10
+              jmp short shm_mfirec
+shm_x_filld:  mov ax, (SH_MI_EDIT << 8) | 11
+              jmp short shm_mfirec
+shm_x_plink:  mov ax, (SH_MI_EDIT << 8) | 7
+              jmp short shm_mfirec
+shm_x_undo:   mov ax, (SH_MI_EDIT << 8) | 0
+              jmp short shm_mfirec
+shm_x_just:   mov ax, (SH_MI_FORMAT << 8) | 7
+              jmp short shm_mfirec
+shm_x_save:   mov ax, (SH_MI_FILE << 8) | 2
+              jmp short shm_mfirec
+shm_x_setdb:  mov ax, (SH_MI_DATA << 8) | 4
+              jmp short shm_mfirec
+shm_x_setcr:  mov ax, (SH_MI_DATA << 8) | 5
+              jmp short shm_mfirec
+shm_x_calcd:  mov ax, (SH_MI_OPTIONS << 8) | 4
+              jmp short shm_mfirec
+shm_x_dform:  mov ax, (SH_MI_DATA << 8) | 0
+shm_mfirec:
+    push ax
+    SHOUT sh_skipargs
+    pop ax
+    SHOUT sh_macro_mfire
+    jmp shm_mtrue
+
+; shm_fdk - the dialog of kind AL, as if OK were pressed on choice DX
+shm_fdk:
+    mov [sh_fdlg_kind], al
+    mov [sh_fdlg_sel], dx
+    SHOUT sh_skipargs
+    push si                           ; SI IS THE PARSE POINTER, and an apply
+    call sh_fdlg_apply                ; written for a dialog owes it nothing
+    pop si                            ; (81.87.3's lesson)
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; shm_boolnext - a further optional logical: CF=1 AL = 1/0 when there is
+; one, CF=0 when it is omitted (",," or the end). SI past it
+shm_boolnext:
+    cmp byte [si], ','
+    jne .none
+    inc si
+    cmp byte [si], ','
+    je .none
+    cmp byte [si], ')'
+    je .none
+    SHOUT sh_pcmp
+    call shm_mtruth
+    mov al, 0
+    jnc .f
+    inc al
+.f:
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; ALIGNMENT(type_num) - 1 General, 2 Left, 3 Center, 4 Right; 5 Fill has no
+; bit in the format byte, which is full, so it is refused
+shm_malign:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    dec ax
+    cmp ax, 4
+    jae .bad
+    mov dx, ax
+    mov al, 1
+    jmp shm_fdk
+.bad:
+    jmp shm_merr
+
+; FORMAT.FONT(name, size, bold, italic, underline, strike) - bold and
+; underline; the face and size are SHEET's one font, and it has no italic or
+; strikeout
+shm_mfont:
+    mov byte [cs:shm_acc8], 0         ; NOT a register: sh_pcmp is the whole
+    call shm_boolarg0                 ; evaluator, and keeps none of them.
+    call shm_boolnext                 ; name and size: read, and not used
+    call shm_boolnext                 ; bold
+    jnc .b
+    or [cs:shm_acc8], al
+.b:
+    call shm_boolnext                 ; italic
+    call shm_boolnext                 ; underline
+    jnc .u
+    shl al, 1
+    or [cs:shm_acc8], al
+.u:
+    mov dl, [cs:shm_acc8]
+    xor dh, dh
+    mov al, 2
+    jmp shm_fdk
+shm_acc8: db 0
+
+; CELL.PROTECTION(locked, hidden) - stored inverted: bit 0 is UNLOCKED
+shm_mprot:
+    mov byte [cs:shm_acc8], 0         ; omitted: locked, and not hidden
+    call shm_boolarg0
+    jnc .l
+    xor al, 1
+    mov [cs:shm_acc8], al
+.l:
+    call shm_boolnext
+    jnc .h
+    shl al, 1
+    or [cs:shm_acc8], al
+.h:
+    mov dl, [cs:shm_acc8]
+    xor dh, dh
+    mov al, SH_FDK_PROT
+    jmp shm_fdk
+
+; CALCULATION(type_num) - 1 Automatic, 2 Automatic Except Tables (SHEET has
+; no tables, so automatic), 3 Manual
+shm_mcalcn:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    xor dx, dx
+    cmp ax, 3
+    jne .auto
+    inc dx
+    jmp short .go
+.auto:
+    dec ax
+    cmp ax, 2
+    jae .bad
+.go:
+    mov al, SH_FDK_CALC
+    jmp shm_fdk
+.bad:
+    jmp shm_merr
+
+; PASTE.SPECIAL(paste_num[, operation_num[, skip_blanks[, transpose]]]) -
+; 1 All .. 5 Notes; SHEET's Paste Special has no arithmetic, no skip and no
+; transpose, so any of those is refused rather than quietly ignored
+shm_mpspec:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    dec ax
+    cmp ax, 5
+    jae .bad
+    push ax
+    mov ax, 1
+    call shm_intarg                   ; operation: 1 None only
+    jc .badpop
+    cmp ax, 1
+    jne .badpop
+    call shm_boolnext                 ; skip blanks
+    jnc .s
+    or al, al
+    jnz .badpop
+.s:
+    call shm_boolnext                 ; transpose
+    jnc .t
+    or al, al
+    jnz .badpop
+.t:
+    pop dx
+    mov al, SH_FDK_PSPEC
+    jmp shm_fdk
+.badpop:
+    pop ax
+.bad:
+    jmp shm_merr
+
+; INSERT(shift_num) / EDIT.DELETE(shift_num) - 3 the entire row, 4 the
+; entire column (omitted: the row). SHEET inserts and deletes rows and
+; columns; shifting cells within one is not something it does
+shm_minsert:
+    mov bl, 3
+    jmp short shm_mrowcol
+shm_mdelete:
+    mov bl, 4
+shm_mrowcol:
+    push bx
+    mov ax, 3
+    call shm_intarg1
+    pop bx
+    jc .bad
+    sub ax, 3
+    cmp ax, 2
+    jae .bad
+    mov dx, ax
+    mov al, bl
+    jmp shm_fdk
+.bad:
+    jmp shm_merr
+
+; CANCEL.COPY() - the copy is forgotten
+shm_mccopy:
+    mov byte [sh_clip_valid], 0
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+; FORMAT.NUMBER(format_text) - one of the 21 built-in formats, by its text
+; exactly as the Number dialog lists it (case aside); a code of one's own is
+; not something SHEET's formats are (81.55)
+shm_mfmtnum:
+    SHOUT sh_pcmp
+    cmp byte [sh_curtype], SH_T_TEXT
+    jne .bad
+    SHOUT sh_skipargs
+    push si
+    xor cx, cx
+.f:
+    mov bx, cx
+    shl bx, 1
+    mov di, [bx + sh_nf_codes]
+    mov si, sh_sacc
+.c:
+    mov al, [si]
+    mov ah, [di]
+    cmp al, 'a'
+    jb .u1
+    cmp al, 'z'
+    ja .u1
+    sub al, 32
+.u1:
+    cmp ah, 'a'
+    jb .u2
+    cmp ah, 'z'
+    ja .u2
+    sub ah, 32
+.u2:
+    cmp al, ah
+    jne .next
+    or al, al
+    jz .hit
+    inc si
+    inc di
+    jmp short .c
+.next:
+    inc cx
+    cmp cx, SH_NF_N
+    jb .f
+    pop si
+    jmp shm_merr0                     ; the arguments are consumed already
+.hit:
+    pop si
+    mov al, cl
+    push si
+    SHOUT sh_nf_apply
+    SHOUT sh_undo_drop
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; BORDER(outline, left, right, top, bottom, shade) - the Border dialog's own
+; six boxes; outline is the four edges at once
+shm_mborder:
+    mov byte [cs:shm_acc8], 0
+    call shm_boolarg0
+    jnc .o
+    or al, al
+    jz .o
+    mov byte [cs:shm_acc8], 0x1E      ; outline: left, right, top, bottom
+.o:
+    mov byte [cs:shm_gmask], 2        ; bits 1..5, the dialog's own layout
+.l:
+    call shm_boolnext
+    jnc .n
+    or al, al
+    jz .n
+    mov al, [cs:shm_gmask]
+    or [cs:shm_acc8], al
+.n:
+    shl byte [cs:shm_gmask], 1
+    cmp byte [cs:shm_gmask], 0x40
+    jb .l
+    mov al, [cs:shm_acc8]
+    mov [sh_bdlg_sel], al
+    SHOUT sh_skipargs
+    push si                           ; sh_bdlg_apply leaves SI the window
+    call sh_bdlg_apply
+    SHOUT sh_undo_drop
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+
+; COLUMN.WIDTH(width[, ref]) - in characters, every column of the selection
+; (or of ref); 0 is the standard width
+shm_mcolw:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    cmp ax, SH_CW_MAXCH
+    ja .bad
+    mov [cs:shm_gst], ax
+    mov ax, [sh_selcol]
+    mov cx, [sh_selcol2]
+    cmp byte [si], ','
+    jne .have
+    inc si
+    call shm_mrangeref
+    jnc .bad
+.have:
+    cmp ax, cx
+    jbe .go
+    xchg ax, cx
+.go:
+    mov bx, cx
+    mov cl, [cs:shm_gst]
+.l:
+    SHOUT sh_colw_set
+    inc ax
+    cmp ax, bx
+    jbe .l
+    SHOUT sh_skipargs
+    push si
+    SHOUT sh_undo_drop
+    pop si
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; ROW.HEIGHT(height[, ref]) - in POINTS, as the dialog takes them, every row
+; of the selection (or of ref); kept in twips (81.60)
+shm_mrowh:
+    SHOUT sh_pcmp
+    cmp byte [sh_evalerr], 0
+    jne .bad
+    SHOUT sh_acc_load_a
+    mov ax, 20
+    SHOUT fp_i2b
+    SHOUT fp_mul
+    SHOUT fp_a2i                      ; AX = twips; CF=1 did not fit
+    jc .bad
+    or ax, ax
+    jz .std
+    cmp ax, SH_RH_TWMIN
+    jb .bad
+    cmp ax, SH_RH_TWMAX
+    ja .bad
+.std:
+    mov [cs:shm_gst], ax
+    mov ax, [sh_selrow]
+    mov dx, [sh_selrow2]
+    cmp byte [si], ','
+    jne .have
+    inc si
+    call shm_mrangeref
+    jnc .bad
+    mov ax, bx
+.have:
+    cmp ax, dx
+    jbe .go
+    xchg ax, dx
+.go:
+    mov bx, dx
+    mov cx, [cs:shm_gst]
+    push si
+.l:
+    SHOUT sh_rowh_set
+    jc .full
+    inc ax
+    cmp ax, bx
+    jbe .l
+.full:
+    SHOUT sh_undo_drop
+    pop si
+    SHOUT sh_skipargs
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; DISPLAY(formula, gridline, heading, zero, color) - Options' own toggles, so
+; the menu's labels follow; a heading, zero or colour choice SHEET does not
+; have is read and not used
+shm_mdisplay:
+    call shm_boolarg0
+    jnc .g
+    cmp al, [sh_showformulas]
+    je .g
+    mov ax, (SH_MI_OPTIONS << 8) | 1
+    SHOUT sh_macro_mfire
+.g:
+    call shm_boolnext
+    jnc .done
+    cmp al, [sh_gridlines]
+    je .done
+    mov ax, (SH_MI_OPTIONS << 8) | 0
+    SHOUT sh_macro_mfire
+.done:
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+; FREEZE.PANES(logical) - freeze at the active cell, or unfreeze; omitted
+; toggles, as the menu item does
+shm_mfreeze:
+    call shm_boolarg0
+    jnc .flip
+    xor bl, bl                        ; frozen now? (after the argument:
+    mov cx, [sh_freezecol]            ; the evaluator keeps no register)
+    or cx, [sh_freezerow]
+    jz .st
+    inc bl
+.st:
+    cmp al, bl
+    je .done
+.flip:
+    mov ax, (SH_MI_OPTIONS << 8) | 5
+    SHOUT sh_macro_mfire
+.done:
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+; PROTECT.DOCUMENT(contents, windows, password) - contents only: SHEET has no
+; window protection and no passwords
+shm_mprotdoc:
+    call shm_boolarg0
+    jnc .flip
+    mov bl, [sh_protected]
+    or bl, bl
+    jz .c
+    mov bl, 1
+.c:
+    cmp al, bl
+    je .done
+.flip:
+    mov ax, (SH_MI_OPTIONS << 8) | 2
+    SHOUT sh_macro_mfire
+.done:
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+
+; PRECISION(logical) - TRUE is full precision, the only kind SHEET has;
+; FALSE, "as displayed", is refused rather than pretended
+shm_mprecision:
+    call shm_boolarg0
+    jnc .ok
+    or al, al
+    jz .bad
+.ok:
+    SHOUT sh_skipargs
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
@@ -47017,7 +47570,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8540                     ; +4 for 81.87's GET.NOTE vector (145);
+    OS88_BSS 8544                     ; +4 for 81.88's menu vector (146);
+                                       ; +4 for 81.87's GET.NOTE vector (145);
                                        ; +11 for 81.86: three macro bytes (the
                                        ; alert's set and answer, Esc) and
                                        ; SH_NVEC 142 -> 144;
@@ -48081,11 +48635,12 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 145
+SH_NVEC       equ 146
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
-sh_v_end      equ sh_v_sh_nt_get + 4
+sh_v_sh_macro_mfire          equ sh_v_sh_nt_get + 4
+sh_v_end      equ sh_v_sh_macro_mfire + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against

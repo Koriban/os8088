@@ -147,6 +147,33 @@ BIFF_CETAB = {
     0x7A: 'MESSAGE',
     0x8C: 'DISABLE.INPUT',              # wave 2 (81.86)
     0x95: 'WAIT',
+    # wave 3a (81.88): Format, Edit, Options - from docs/ms-xls.pdf's Cetab
+    0x04: 'SAVE',
+    0x1B: 'DISPLAY',
+    0x1C: 'PROTECT.DOCUMENT',
+    0x1D: 'PRECISION',
+    0x20: 'CALCULATION',
+    0x25: 'SET.DATABASE',
+    0x26: 'SET.CRITERIA',
+    0x2A: 'FORMAT.NUMBER',
+    0x2B: 'ALIGNMENT',
+    0x2D: 'BORDER',
+    0x2E: 'CELL.PROTECTION',
+    0x2F: 'COLUMN.WIDTH',
+    0x30: 'UNDO',
+    0x35: 'PASTE.SPECIAL',
+    0x36: 'EDIT.DELETE',
+    0x37: 'INSERT',
+    0x38: 'FILL.RIGHT',
+    0x39: 'FILL.DOWN',
+    0x5C: 'JUSTIFY',
+    0x78: 'CANCEL.COPY',
+    0x7C: 'PASTE.LINK',
+    0x7F: 'ROW.HEIGHT',
+    0x87: 'FREEZE.PANES',
+    0x92: 'DATA.FORM',
+    0x96: 'FORMAT.FONT',
+    0xA7: 'CALCULATE.DOCUMENT',
 }
 
 # It is here, in the SECOND reader, for the reason this whole file exists: a

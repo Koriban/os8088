@@ -4905,6 +4905,14 @@ SOAK = [
         "each answer, including a DIRECTORY walk into a folder and a refused "
         "one that must leave the instance where it stood",
         needs=("marty",), serial=True),
+    Row("sheetmcmd", "soak", py("tests/sheetmcmd.py"), 400.0,
+        "SPEC.md 81.88: command equivalents, slice 3a - Format (ALIGNMENT, "
+        "FORMAT.FONT, FORMAT.NUMBER, BORDER, CELL.PROTECTION, COLUMN.WIDTH, "
+        "ROW.HEIGHT), Edit (FILL.DOWN, INSERT, EDIT.DELETE, PASTE.SPECIAL, "
+        "CANCEL.COPY), Options (CALCULATION, DISPLAY, PROTECT.DOCUMENT) and "
+        "SET.DATABASE, each read back through the GET.* functions 81.87 "
+        "verified",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

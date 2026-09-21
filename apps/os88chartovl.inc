@@ -32,7 +32,7 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 54                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 58                 ; the claim CHART.OVL is read into, KB.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
                                     ; took it to 13,485 bytes; 82.16.10's
@@ -61,7 +61,9 @@ CH_OVKB      equ 54                 ; the claim CHART.OVL is read into, KB.
                                     ; wall: the module is ONE segment; and
                                     ; wave 2's control functions (81.86)
                                     ; 50,725, so 54 ahead of the information
-                                    ; half, which is the bigger one. THAT
+                                    ; half, which is the bigger one; and wave
+                                    ; 3a's command equivalents (81.88) 54,541,
+                                    ; so 58. THAT
                                     ; LAST STEP WAS TAKEN FOR ONE BYTE, and
                                     ; deliberately: 43 still built, with a
                                     ; single byte spare, and a margin of one
