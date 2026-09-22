@@ -4938,6 +4938,13 @@ SOAK = [
         "PRESSED with no run going, F7 unbound again, and x bound to nothing "
         "so that typing it over a cell leaves the cell empty",
         needs=("marty",), serial=True),
+    Row("sheetmmenu", "soak", py("tests/sheetmmenu.py"), 400.0,
+        "SPEC.md 81.95: custom menus - a menu after Help built from a range, "
+        "a command added, ticked, greyed and renamed, then USED with the "
+        "mouse (the renamed one runs, the greyed one does not); a menu too "
+        "wide for the bar refused; the custom bar made, shown and picked "
+        "from, and SHOW.BAR()/DELETE.BAR/DELETE.MENU putting SHEET's own back",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

@@ -713,6 +713,19 @@ SH_MI_MACRO   equ SH_MI_OPTIONS + 1
 SH_MI_SHEET   equ SH_MI_MACRO + 1
 SH_MI_HELP    equ SH_MI_SHEET + 1
 SH_MENU_N     equ SH_MI_HELP + 1
+; 81.95: CUSTOM MENUS. The bar walks [sh_mtabp], [sh_mcount] entries long -
+; sh_mtab for the built-in bar, whose custom menus are appended after Help,
+; or sh_mtabc for the one custom bar. A custom menu's RECORD holds its
+; title, its items and the cell each runs; its table entry points into it
+SH_MCUST      equ 3                  ; custom menus, both bars together
+SH_MCITEMS    equ 6                  ; ...commands a custom menu holds
+SH_MCTXT      equ 16                 ; an item's text: +0 check, +1 disabled
+                                      ; prefix, +2 the name (13 and a NUL)
+SH_MCREC      equ 2 + 14 + SH_MCITEMS * 2 + SH_MCITEMS * SH_MCTXT + SH_MCITEMS * 4
+SH_MC_ITEMS   equ 16                 ; ...its item pointers,
+SH_MC_TEXT    equ SH_MC_ITEMS + SH_MCITEMS * 2   ; texts
+SH_MC_CELLS   equ SH_MC_TEXT + SH_MCITEMS * SH_MCTXT ; and cells
+SH_BAR_CUSTOM equ 7                  ; the custom bar's number (Excel's first)
 SH_M_NONE    equ 0xFF
 
 ; =============================================================================
@@ -1845,6 +1858,9 @@ sh_x_sh_macro_mfire:                ; 81.88: a menu item, from a macro
 sh_x_sh_nt_set:                     ; 81.89: NOTE
     call sh_nt_set
     retf
+sh_x_sh_mtab_calc:                  ; 81.95: the bar's titles, re-measured
+    call sh_mtab_calc
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1898,6 +1914,7 @@ sh_ovshims:
     dw sh_x_sh_nt_get                                                ; 81.87
     dw sh_x_sh_macro_mfire                                           ; 81.88
     dw sh_x_sh_nt_set                                                ; 81.89
+    dw sh_x_sh_mtab_calc                                             ; 81.95
 sh_entry:
     push ax
     push dx
@@ -7156,15 +7173,21 @@ sh_mtab_calc:
     push cx
     push si
     push di
+    cmp word [sh_mtabp], 0            ; 81.95: the first call sets up the
+    jne .set                          ; built-in bar
+    mov word [sh_mtabp], sh_mtab
+    mov word [sh_mcount], SH_MENU_N
+.set:
     xor cx, cx
 .loop:
-    cmp cx, SH_MENU_N
+    cmp cx, [sh_mcount]
     jae .done
     mov ax, cx
     mov bx, 6
     mul bx
     mov bx, ax
-    mov si, [sh_mtab + bx]
+    add bx, [sh_mtabp]
+    mov si, [bx]
     call OSAPI_FONT_WIDTH
     mov di, cx
     shl di, 1
@@ -7259,7 +7282,7 @@ sh_mbar_draw:
     mov word [sh_mto], 0
 .loop:
     mov ax, [sh_mli]
-    cmp ax, SH_MENU_N
+    cmp ax, [sh_mcount]
     jae .done
     mov al, [sh_mli]
     call sh_mboxof
@@ -7280,7 +7303,8 @@ sh_mbar_draw:
     call OSAPI_SET_COLOR
 .drawtitle:
     mov bx, [sh_mto]
-    mov si, [sh_mtab + bx]
+    add bx, [sh_mtabp]
+    mov si, [bx]
     mov cx, [sh_mbx1]
     add cx, SH_MPAD
     mov dx, [sh_oy]
@@ -7304,6 +7328,43 @@ sh_mbar_draw:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_mcrun - a custom menu's command (81.95): AH = the menu's place on the
+; bar, AL = the command. Its table entry points at its record's items, so
+; the record, and the cell the command runs, are a subtraction away. A run
+; already going (paused) is not interrupted - the gate has the click anyway
+; -----------------------------------------------------------------------------
+sh_mcrun:
+    push ax
+    push bx
+    push cx
+    mov bl, ah
+    xor bh, bh
+    mov cx, bx
+    shl bx, 1
+    add bx, cx
+    shl bx, 1                         ; x6: the entry
+    add bx, [sh_mtabp]
+    mov bx, [bx + 2]                  ; the items: the record + SH_MC_ITEMS
+    sub bx, SH_MC_ITEMS
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx + SH_MC_CELLS]        ; the command's cell
+    cmp ax, 0xFFFF                    ; a command with no macro
+    je .out
+    mov [sh_macro_col], ax
+    mov ax, [bx + SH_MC_CELLS + 2]
+    mov [sh_macro_row], ax
+    mov byte [sh_macro_wait], SH_MW_START
+    call sh_macro_onalert
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_mbar_hit - CX,DX (screen-absolute) -> AL = menu index or SH_M_NONE
 ; -----------------------------------------------------------------------------
 sh_mbar_hit:
@@ -7319,7 +7380,7 @@ sh_mbar_hit:
     mov word [sh_mli], 0
 .loop:
     mov ax, [sh_mli]
-    cmp ax, SH_MENU_N
+    cmp ax, [sh_mcount]
     jae .no
     mov al, [sh_mli]
     call sh_mboxof
@@ -7370,9 +7431,10 @@ sh_mdrop_geo:
     mov cx, 6
     mul cx
     mov bx, ax
-    mov si, [sh_mtab + bx + 2]
+    add bx, [sh_mtabp]
+    mov si, [bx + 2]
     mov [sh_mip], si
-    mov ax, [sh_mtab + bx + 4]
+    mov ax, [bx + 4]
     mov [sh_mcnt], ax
 
     mov word [sh_mmaxw], 0
@@ -7407,6 +7469,15 @@ sh_mdrop_geo:
     add bx, ax
     dec bx
     mov [sh_mrx2], bx
+    mov ax, [sh_ox]                   ; 81.95: INSIDE THE WINDOW. A custom
+    add ax, [sh_cw]                   ; menu after Help opens at the bar's
+    dec ax                            ; right edge, and a panel past it was
+    cmp bx, ax                        ; drawn outside the window and never
+    jbe .fits                         ; erased - so it moves left instead
+    sub bx, ax
+    sub [sh_mrx1], bx
+    sub [sh_mrx2], bx
+.fits:
 
     mov ax, [sh_mcnt]
     mov cx, SH_MI_H
@@ -7671,6 +7742,16 @@ sh_mfire:
     push ax
     push si
     mov si, [sh_ownwin]
+    cmp word [sh_mtabp], sh_mtab      ; 81.95: the custom bar, or a custom
+    jne .custom                       ; menu after Help, runs a macro
+    cmp ah, SH_MENU_N
+    jb .builtin
+.custom:
+    call sh_mcrun
+    pop si
+    pop ax
+    ret
+.builtin:
     ; WHAT UNDO CANNOT REVERSE ENDS IT (81.57): a snapshot older than a
     ; format, a name, a note or a macro would put them back too, silently.
     ; Excel 2.1 cannot undo any of these either
@@ -35396,6 +35477,17 @@ shm_mtab:
     dw shm_mfsize
 ; wave 4b (81.92): events
     dw shm_monkey, shm_montime
+; wave 4c (81.95): custom menus
+    dw shm_maddbar
+    dw shm_mshowbar
+    dw shm_mdelbar
+    dw shm_maddmenu
+    dw shm_maddcmd
+    dw shm_mdelmenu
+    dw shm_mdelcmd
+    dw shm_menablecmd
+    dw shm_mcheckcmd
+    dw shm_mrencmd
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35418,6 +35510,7 @@ shm_mkind:
     times 6 db 0                      ; slice 3c: commands, every one
     times 8 db 0                      ; wave 4a: text files, COMMANDS - a
     db 0, 0                           ; wave 4b: ON.KEY, ON.TIME, commands
+    times 10 db 0                     ; wave 4c: the menus, commands
                                        ; repaint re-evaluating FWRITE would
                                        ; write again; FREAD moves the position
 shm_mkind_end:
@@ -35531,6 +35624,16 @@ shm_mxnames:
     db 'FSIZE', 0
     db 'ON.KEY', 0
     db 'ON.TIME', 0
+    db 'ADD.BAR', 0
+    db 'SHOW.BAR', 0
+    db 'DELETE.BAR', 0
+    db 'ADD.MENU', 0
+    db 'ADD.COMMAND', 0
+    db 'DELETE.MENU', 0
+    db 'DELETE.COMMAND', 0
+    db 'ENABLE.COMMAND', 0
+    db 'CHECK.COMMAND', 0
+    db 'RENAME.COMMAND', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35639,6 +35742,16 @@ shm_mxrpn:
     db 0x86, 0, 0                     ; FSIZE
     db 0xA8, 1, 1                     ; ON.KEY - Cetab
     db 0x94, 1, 1                     ; ON.TIME - Cetab
+    db 0x97, 1, 0                     ; ADD.BAR
+    db 0x9D, 1, 0                     ; SHOW.BAR
+    db 0xC8, 0, 0                     ; DELETE.BAR
+    db 0x98, 1, 0                     ; ADD.MENU
+    db 0x99, 1, 0                     ; ADD.COMMAND
+    db 0x9E, 1, 0                     ; DELETE.MENU
+    db 0x9F, 1, 0                     ; DELETE.COMMAND
+    db 0x9A, 1, 0                     ; ENABLE.COMMAND
+    db 0x9B, 1, 0                     ; CHECK.COMMAND
+    db 0x9C, 1, 0                     ; RENAME.COMMAND
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -40903,6 +41016,906 @@ shm_ontime:
     mov byte [sh_macro_ontp], 0
     clc
     ret
+
+; =============================================================================
+; CUSTOM MENUS (macro plan wave 4, 81.95): ADD.BAR, SHOW.BAR, DELETE.BAR,
+; ADD.MENU, ADD.COMMAND, DELETE.MENU, DELETE.COMMAND, ENABLE.COMMAND,
+; CHECK.COMMAND, RENAME.COMMAND.
+;
+; Bar 1 is SHEET's own; a custom menu added to it goes after Help. Bar 7 is
+; the ONE custom bar ADD.BAR makes, holding custom menus only. The records are
+; resident (sh_mcrec) because the bar is drawn and clicked there; this is
+; only the bookkeeping. SHEET's own menus and commands are not edited: every
+; function here refuses a built-in menu, which Excel's ENABLE.COMMAND already
+; does for a built-in command.
+; =============================================================================
+shm_bar7:  db 0                       ; the custom bar exists
+shm_n1:    db 0                       ; custom menus on bar 1...
+shm_n7:    db 0                       ; ...and on bar 7
+shm_mbar:  db 0                       ; ADD.MENU's bar - NOT shm_acc8, which
+                                       ; shm_mcrows spends as its title flag
+
+; shm_barent - AL = the bar (1 or 7). out: BX = its table's first CUSTOM
+; entry, CL = how many; CF=1 not a bar there is
+shm_barent:
+    cmp al, 1
+    jne .b7
+    mov bx, sh_mtab + SH_MENU_N * 6
+    mov cl, [cs:shm_n1]
+    clc
+    ret
+.b7:
+    cmp al, SH_BAR_CUSTOM
+    jne .no
+    cmp byte [cs:shm_bar7], 0
+    je .no
+    mov bx, sh_mtabc
+    mov cl, [cs:shm_n7]
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; shm_barshow - the bar showing is re-read: its length, its titles' widths,
+; and a repaint. AL = the bar to show
+shm_barshow:
+    push ax
+    push bx
+    push cx
+    cmp al, SH_BAR_CUSTOM
+    je .c
+    mov word [sh_mtabp], sh_mtab
+    mov al, [cs:shm_n1]
+    xor ah, ah
+    add ax, SH_MENU_N
+    jmp short .set
+.c:
+    mov word [sh_mtabp], sh_mtabc
+    mov al, [cs:shm_n7]
+    xor ah, ah
+.set:
+    mov [sh_mcount], ax
+    SHOUT sh_mtab_calc
+    mov byte [sh_macro_dirty], 1
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_barnow - AL = the bar showing (1 or 7)
+shm_barnow:
+    mov al, 1
+    cmp word [sh_mtabp], sh_mtabc
+    jne .out
+    mov al, SH_BAR_CUSTOM
+.out:
+    ret
+
+; shm_barref - the bar_num argument, then ',' and the menu argument: its
+; position on the bar (1-based) or its title. out: AL = the bar, BX = the
+; menu's table ENTRY, DI = its record; CF=1 no such custom menu. SI past it
+shm_barref:
+    xor ax, ax
+    call shm_intarg1
+    jc .no
+    push ax
+    call shm_barent
+    pop ax
+    jc .no
+    mov [cs:shm_acc8], al
+    mov [cs:shm_gcol], bx             ; the first custom entry
+    mov [cs:shm_gst], cx              ; ...and how many
+    cmp byte [si], ','
+    jne .no
+    inc si
+    SHOUT sh_pcmp
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .byname
+    SHOUT sh_acc_toint
+    jc .no
+    dec ax                            ; a position: past the built-in nine
+    cmp byte [cs:shm_acc8], 1         ; on bar 1
+    jne .pos
+    sub ax, SH_MENU_N
+.pos:
+    cmp ax, [cs:shm_gst]
+    jae .no                           ; a built-in menu, or none
+    mov bx, ax
+    shl bx, 1
+    add bx, ax
+    shl bx, 1
+    add bx, [cs:shm_gcol]
+    jmp short .have
+.byname:
+    mov bx, [cs:shm_gcol]
+    mov cx, [cs:shm_gst]
+    jcxz .no
+.n:
+    push si
+    push di
+    mov si, sh_sacc
+    mov di, [bx]                      ; the title
+    call shm_streqi
+    pop di
+    pop si
+    je .have
+    add bx, 6
+    loop .n
+    jmp short .no
+.have:
+    mov di, [bx + 2]
+    sub di, SH_MC_ITEMS               ; the record
+    mov al, [cs:shm_acc8]
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; shm_streqi - ZF=1 when DS:SI and DS:DI are the same text, any case, a
+; command's check/disabled prefix bytes skipped on DI's side
+shm_streqi:
+    push ax
+    push si
+    push di
+.p:
+    cmp byte [di], 3
+    jae .c
+    cmp byte [di], 0
+    je .c
+    inc di
+    jmp short .p
+.c:
+    mov al, [si]
+    mov ah, [di]
+    cmp al, 'a'
+    jb .u1
+    cmp al, 'z'
+    ja .u1
+    sub al, 32
+.u1:
+    cmp ah, 'a'
+    jb .u2
+    cmp ah, 'z'
+    ja .u2
+    sub ah, 32
+.u2:
+    cmp al, ah
+    jne .out
+    or al, al
+    jz .out
+    inc si
+    inc di
+    jmp short .c
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; shm_cmdref - after shm_barref: ',' and the command, its position (1-based)
+; or its name. in DI = the record, BX = the entry. out: CX = its index, CF=1
+; none such. SI past it
+shm_cmdref:
+    cmp byte [si], ','
+    jne .no
+    inc si
+    push bx
+    push di
+    SHOUT sh_pcmp
+    pop di
+    pop bx
+    mov cx, [bx + 4]                  ; the count
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .byname
+    push cx
+    SHOUT sh_acc_toint
+    pop cx
+    jc .no
+    or ax, ax                         ; 0: the menu itself (ENABLE, RENAME)
+    jz .zero
+    dec ax
+    cmp ax, cx
+    jae .no
+    mov cx, ax
+    clc
+    ret
+.zero:
+    mov cx, 0xFFFF
+    clc
+    ret
+.byname:
+    jcxz .no
+    push bx
+    push si
+    xor ax, ax
+.n:
+    mov bx, ax
+    shl bx, 1
+    add bx, di
+    mov bx, [bx + SH_MC_ITEMS]        ; its text
+    push di
+    mov si, sh_sacc
+    mov di, bx
+    call shm_streqi
+    pop di
+    je .hit
+    inc ax
+    cmp ax, cx
+    jb .n
+    pop si
+    pop bx
+.no:
+    stc
+    ret
+.hit:
+    mov cx, ax
+    pop si
+    pop bx
+    clc
+    ret
+
+; shm_mcitem - item CX of the record at DI: its name is the DS string at SI
+; (13 characters kept), its cell AX/BX (0xFFFF: none); plain, not checked
+; and not disabled
+shm_mcitem:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push bx
+    push ax
+    mov ax, cx
+    shl ax, 1
+    shl ax, 1
+    mov bx, di
+    add bx, ax
+    pop word [bx + SH_MC_CELLS]
+    pop word [bx + SH_MC_CELLS + 2]
+    mov ax, cx
+    mov bx, SH_MCTXT
+    mul bx
+    mov bx, di
+    add bx, SH_MC_TEXT
+    add bx, ax                        ; the text
+    mov ax, cx
+    shl ax, 1
+    add ax, di
+    mov di, ax
+    lea ax, [bx + 2]
+    mov [di + SH_MC_ITEMS], ax        ; the pointer: the name, no prefix
+    mov word [bx], 0
+    add bx, 2
+    mov cx, SH_MCTXT - 3
+.c:
+    mov al, [si]
+    mov [bx], al
+    or al, al
+    jz .e
+    inc si
+    inc bx
+    loop .c
+    mov byte [bx], 0
+.e:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_mcflags - item CX of record DI: AH bit 0 checked, bit 1 disabled,
+; written as the prefix bytes sh_mdrop_draw reads (SH_MENU_CHK then
+; MENU_DIS), and the pointer set to the first one there is
+shm_mcflags:
+    push ax
+    push bx
+    push dx
+    mov dl, ah                        ; the flags, before MUL takes AH
+    mov ax, cx
+    mov bx, SH_MCTXT
+    push dx
+    mul bx
+    pop dx
+    mov bx, di
+    add bx, SH_MC_TEXT
+    add bx, ax                        ; the text: +0 +1 prefixes, +2 name
+    lea ax, [bx + 2]                  ; neither: the name itself
+    test dl, 2
+    jz .nodis
+    mov byte [bx + 1], MENU_DIS
+    dec ax
+.nodis:
+    test dl, 1
+    jz .set
+    dec ax                            ; ...and the tick in front of that
+    push bx
+    mov bx, ax
+    mov byte [bx], SH_MENU_CHK
+    pop bx
+.set:
+    mov bx, cx
+    shl bx, 1
+    add bx, di
+    mov [bx + SH_MC_ITEMS], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; shm_mcstate - item CX of record DI -> AH: bit 0 checked, bit 1 disabled,
+; read back from where its pointer starts
+shm_mcstate:
+    push bx
+    push dx
+    mov bx, cx
+    shl bx, 1
+    add bx, di
+    mov bx, [bx + SH_MC_ITEMS]
+    xor ah, ah
+.l:
+    mov dl, [bx]
+    cmp dl, SH_MENU_CHK
+    jne .d
+    or ah, 1
+    inc bx
+    jmp short .l
+.d:
+    cmp dl, MENU_DIS
+    jne .out
+    or ah, 2
+    inc bx
+    jmp short .l
+.out:
+    pop dx
+    pop bx
+    ret
+
+; shm_mcrows - the rows of a description range (ref at SI) into record DI
+; from item CX on: each row's first cell the command's name, its second the
+; macro to run - a reference or a name, as text. out: CX = the items now.
+; A row past SH_MCITEMS is dropped. When AL is 1 the FIRST row is the
+; menu's title instead, into the record's +2
+shm_mcrows:
+    mov [cs:shm_acc8], al
+    mov [cs:shm_gcnt], cx
+    push di
+    call shm_mrangeref                ; AX/BX .. CX/DX
+    pop di
+    jnc .bad
+    cmp bx, dx
+    jbe .o
+    xchg bx, dx
+.o:
+    mov [cs:shm_ext_c1], ax           ; the name column
+    mov [cs:shm_ext_r1], bx           ; the first row
+    mov [cs:shm_ext_r2], dx           ; the last
+.row:
+    mov bx, [cs:shm_ext_r1]
+    cmp bx, [cs:shm_ext_r2]
+    ja .done
+    mov ax, [cs:shm_ext_c1]
+    SHOUT sh_cell_totext              ; -> sh_clipbuf
+    cmp byte [cs:shm_acc8], 0
+    je .cmd
+    mov byte [cs:shm_acc8], 0         ; the title
+    push si
+    push di
+    mov si, sh_clipbuf
+    add di, 2
+    mov cx, 13
+.t:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .te
+    inc si
+    inc di
+    loop .t
+    mov byte [di], 0
+.te:
+    pop di
+    pop si
+    jmp short .next
+.cmd:
+    mov cx, [cs:shm_gcnt]
+    cmp cx, SH_MCITEMS
+    jae .next                         ; full: the row is dropped
+    push si
+    push di
+    mov si, sh_clipbuf                ; the name, banked where the macro's
+    mov di, shm_anstxt                ; text read will not reach it
+.cp:
+    mov al, [si]
+    mov [cs:di], al
+    inc si
+    inc di
+    or al, al
+    jnz .cp
+    mov ax, [cs:shm_ext_c1]
+    inc ax
+    mov bx, [cs:shm_ext_r1]
+    SHOUT sh_cell_totext              ; the macro column
+    mov si, sh_clipbuf
+    mov di, sh_sacc
+.cq:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .cq
+    mov ax, 0xFFFF                    ; no macro: a command that does nothing
+    mov bx, ax
+    cmp byte [sh_sacc], 0
+    je .nomac
+    call shm_macref
+    jc .mac
+    mov ax, 0xFFFF
+    mov bx, ax
+.mac:
+.nomac:
+    mov si, shm_anstxt                ; back into DS for shm_mcitem
+    mov di, sh_clipbuf
+.cr:
+    mov cl, [cs:si]
+    mov [di], cl
+    inc si
+    inc di
+    or cl, cl
+    jnz .cr
+    pop di
+    push di
+    mov cx, [cs:shm_gcnt]
+    mov si, sh_clipbuf
+    call shm_mcitem
+    inc word [cs:shm_gcnt]
+    pop di
+    pop si
+.next:
+    inc word [cs:shm_ext_r1]
+    jmp .row
+.done:
+    mov cx, [cs:shm_gcnt]
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; ADD.BAR() - the custom bar: 7. There is one; a second is refused
+shm_maddbar:
+    SHOUT sh_skipargs
+    cmp byte [cs:shm_bar7], 0
+    jne .bad
+    mov byte [cs:shm_bar7], 1
+    mov byte [cs:shm_n7], 0
+    mov ax, SH_BAR_CUSTOM
+    jmp shm_anum
+.bad:
+    jmp shm_merr0
+
+; SHOW.BAR([bar_num]) - that bar in the window; omitted, SHEET's own
+shm_mshowbar:
+    mov ax, 1
+    call shm_intarg1
+    jc .bad
+    push ax
+    SHOUT sh_skipargs
+    pop ax
+    push ax
+    call shm_barent
+    pop ax
+    jc .bad0
+    call shm_barshow
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+.bad0:
+    jmp shm_merr0
+
+; DELETE.BAR(bar_num) - the custom bar and its menus, when it is not the one
+; showing (Excel's own rule)
+shm_mdelbar:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    cmp ax, SH_BAR_CUSTOM
+    jne .bad
+    SHOUT sh_skipargs
+    cmp byte [cs:shm_bar7], 0
+    je .bad0
+    call shm_barnow
+    cmp al, SH_BAR_CUSTOM
+    je .bad0
+    mov bx, sh_mtabc                  ; its menus' records go free
+    mov cl, [cs:shm_n7]
+    xor ch, ch
+    jcxz .gone
+.f:
+    mov di, [bx + 2]
+    sub di, SH_MC_ITEMS
+    mov byte [di], 0
+    add bx, 6
+    loop .f
+.gone:
+    mov byte [cs:shm_bar7], 0
+    mov byte [cs:shm_n7], 0
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+.bad0:
+    jmp shm_merr0
+
+; ADD.MENU(bar_num, menu_ref) - the menu the range describes, its first row
+; the title and the rest its commands, onto the bar. out: its position
+shm_maddmenu:
+    xor ax, ax
+    call shm_intarg1
+    jc .bad
+    push ax
+    call shm_barent                   ; BX = where its entries start, CL =
+    pop ax                            ; how many
+    jc .bad
+    mov [cs:shm_mbar], al
+    mov di, sh_mcrec                  ; a free record
+    mov dx, SH_MCUST
+.f:
+    cmp byte [di], 0
+    je .got
+    add di, SH_MCREC
+    dec dx
+    jnz .f
+    jmp .bad
+.got:
+    xor ch, ch
+    mov ax, cx                        ; the new entry: after the others
+    shl ax, 1
+    add ax, cx
+    shl ax, 1
+    add bx, ax
+    push bx
+    cmp byte [si], ','
+    jne .badpop
+    inc si
+    push ax
+    mov al, [cs:shm_mbar]
+    mov [di], al                      ; taken, by this bar
+    pop ax
+    mov byte [di + 2], 0
+    mov al, 1                         ; the first row is the title
+    xor cx, cx
+    push di
+    call shm_mcrows
+    pop di
+    jc .badrec
+    pop bx
+    lea ax, [di + 2]                  ; the entry: title, items, count
+    mov [bx], ax
+    lea ax, [di + SH_MC_ITEMS]
+    mov [bx + 2], ax
+    mov [bx + 4], cx
+    SHOUT sh_skipargs
+    push bx                           ; ...and it must FIT: the bar is drawn
+    mov bx, sh_mtab                   ; in the window, and a title past its
+    mov cl, [cs:shm_n1]               ; edge was drawn outside it and left
+    add cl, SH_MENU_N + 1             ; there. Bar 1 has room for about three
+    cmp byte [cs:shm_mbar], 1         ; letters after Help
+    je .fit
+    mov bx, sh_mtabc
+    mov cl, [cs:shm_n7]
+    inc cl
+.fit:
+    xor ch, ch
+    call shm_barfits
+    pop bx
+    jnc .fits
+    mov byte [di], 0                  ; refused: the record and the entry go
+    mov word [bx], 0
+    mov word [bx + 2], 0
+    mov word [bx + 4], 0
+    jmp shm_merr0
+.fits:
+    mov al, [cs:shm_mbar]             ; one more on that bar
+    mov bx, shm_n1
+    cmp al, 1
+    je .inc
+    mov bx, shm_n7
+.inc:
+    inc byte [cs:bx]
+    mov ah, [cs:bx]                   ; its position, and the bar re-read if
+    push ax                           ; it is the one showing
+    call shm_barnow
+    pop dx
+    cmp al, dl
+    jne .pos
+    push dx                           ; sh_mtab_calc does not keep DX
+    call shm_barshow
+    pop dx
+.pos:
+    mov al, dh
+    xor ah, ah
+    cmp dl, 1
+    jne .n
+    add ax, SH_MENU_N
+.n:
+    jmp shm_anum
+.badrec:
+    mov byte [di], 0
+.badpop:
+    pop bx
+.bad:
+    jmp shm_merr
+
+; shm_barfits - CF=1 when CX titles of the table at BX, each with its pads,
+; are wider than the window's content
+shm_barfits:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor dx, dx
+.l:
+    jcxz .done
+    mov si, [bx]
+    call OSAPI_FONT_WIDTH             ; AX
+    add ax, SH_MPAD * 2
+    add dx, ax
+    add bx, 6
+    dec cx
+    jmp short .l
+.done:
+    mov ax, [sh_cw]
+    cmp ax, dx                        ; CF=1: the window is narrower
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ADD.COMMAND(bar_num, menu, command_ref) - more commands onto a custom menu
+shm_maddcmd:
+    call shm_barref
+    jc .bad
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    push bx
+    mov cx, [bx + 4]
+    xor al, al
+    push di
+    call shm_mcrows
+    pop di
+    pop bx
+    jc .bad
+    mov [bx + 4], cx
+    SHOUT sh_skipargs
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; DELETE.MENU(bar_num, menu) - the menu gone, the ones after it moving up
+shm_mdelmenu:
+    call shm_barref
+    jc .bad
+    push si
+    mov byte [di], 0                  ; the record is free
+    mov [cs:shm_acc8], al
+    mov cx, [cs:shm_gst]              ; the bar's custom entries end here
+    mov ax, cx
+    shl ax, 1
+    add ax, cx
+    shl ax, 1
+    add ax, [cs:shm_gcol]
+    mov di, bx
+    lea si, [bx + 6]
+.mv:
+    cmp si, ax
+    jae .mvd
+    mov dx, [si]
+    mov [di], dx
+    add si, 2
+    add di, 2
+    jmp short .mv
+.mvd:
+    mov word [di], 0
+    mov word [di + 2], 0
+    mov word [di + 4], 0
+    mov bx, shm_n1
+    cmp byte [cs:shm_acc8], 1
+    je .d
+    mov bx, shm_n7
+.d:
+    dec byte [cs:bx]
+    pop si
+    SHOUT sh_skipargs
+    call shm_barnow
+    cmp al, [cs:shm_acc8]
+    jne .done
+    call shm_barshow
+.done:
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; DELETE.COMMAND(bar_num, menu, command) - the command gone, the ones after
+; it moving up: their texts, cells and pointers together, because an item's
+; text slot is found by its index
+shm_mdelcmd:
+    call shm_barref
+    jc .bad
+    call shm_cmdref
+    jc .bad
+    cmp cx, 0xFFFF
+    je .bad
+    push si
+    push bx
+    mov dx, [bx + 4]
+    dec dx                            ; the last index, once one is gone
+.l:
+    cmp cx, dx
+    jae .last
+    push cx                           ; text[i] <- text[i+1]
+    mov ax, cx
+    mov bx, SH_MCTXT
+    push dx
+    mul bx
+    pop dx
+    lea si, [di + SH_MC_TEXT]
+    add si, ax
+    mov bx, si
+    add si, SH_MCTXT
+    mov cx, SH_MCTXT
+.t:
+    mov al, [si]
+    mov [bx], al
+    inc si
+    inc bx
+    loop .t
+    pop cx
+    mov bx, cx                        ; ptr[i] <- ptr[i+1] - SH_MCTXT
+    shl bx, 1
+    add bx, di
+    mov ax, [bx + SH_MC_ITEMS + 2]
+    sub ax, SH_MCTXT
+    mov [bx + SH_MC_ITEMS], ax
+    mov bx, cx                        ; cell[i] <- cell[i+1]
+    shl bx, 1
+    shl bx, 1
+    add bx, di
+    mov ax, [bx + SH_MC_CELLS + 4]
+    mov [bx + SH_MC_CELLS], ax
+    mov ax, [bx + SH_MC_CELLS + 6]
+    mov [bx + SH_MC_CELLS + 2], ax
+    inc cx
+    jmp short .l
+.last:
+    pop bx
+    dec word [bx + 4]
+    pop si
+    SHOUT sh_skipargs
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
+; ENABLE.COMMAND(bar_num, menu, command, enable) / CHECK.COMMAND(bar_num,
+; menu, command, check) - the command greyed or not, ticked or not; command 0
+; is every command of the menu for ENABLE (Excel's "the entire menu")
+shm_menablecmd:
+    mov byte [cs:shm_gmask], 2
+    jmp short shm_mflagcmd
+shm_mcheckcmd:
+    mov byte [cs:shm_gmask], 1
+shm_mflagcmd:
+    call shm_barref
+    jc .bad
+    call shm_cmdref
+    jc .bad
+    push bx
+    push cx
+    push di
+    call shm_boolnext
+    pop di
+    pop cx
+    pop bx
+    jnc .bad
+    xor al, 1                         ; ENABLE TRUE is NOT disabled
+    cmp byte [cs:shm_gmask], 2
+    je .v
+    xor al, 1                         ; CHECK TRUE is checked
+.v:
+    mov [cs:shm_acc8], al
+    SHOUT sh_skipargs
+    cmp cx, 0xFFFF
+    jne .one
+    cmp byte [cs:shm_gmask], 2        ; 0: the whole menu - ENABLE only
+    jne .bad0
+    mov dx, [bx + 4]
+    xor cx, cx
+.all:
+    cmp cx, dx
+    jae .done
+    call shm_mcset1
+    inc cx
+    jmp short .all
+.one:
+    call shm_mcset1
+.done:
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+.bad0:
+    jmp shm_merr0
+
+; shm_mcset1 - item CX of record DI: its [shm_gmask] bit set if [shm_acc8]
+shm_mcset1:
+    push ax
+    call shm_mcstate
+    mov al, [cs:shm_gmask]
+    not al
+    and ah, al
+    cmp byte [cs:shm_acc8], 0
+    je .w
+    or ah, [cs:shm_gmask]
+.w:
+    call shm_mcflags
+    pop ax
+    ret
+
+; RENAME.COMMAND(bar_num, menu, command, name_text) - a new name, the state
+; kept; command 0 renames the menu itself
+shm_mrencmd:
+    call shm_barref
+    jc .bad
+    call shm_cmdref
+    jc .bad
+    cmp byte [si], ','
+    jne .bad
+    inc si
+    push bx
+    push cx
+    push di
+    call shm_textfirst
+    pop di
+    pop cx
+    pop bx
+    jc .bad
+    SHOUT sh_skipargs
+    push si
+    lea bx, [di + 2]                  ; the title...
+    cmp cx, 0xFFFF
+    je .copy
+    mov ax, cx                        ; ...or the command's name
+    mov bx, SH_MCTXT
+    mul bx
+    lea bx, [di + SH_MC_TEXT + 2]
+    add bx, ax
+.copy:
+    mov si, sh_sacc
+    mov cx, 13
+.c:
+    mov al, [si]
+    mov [bx], al
+    or al, al
+    jz .e
+    inc si
+    inc bx
+    loop .c
+    mov byte [bx], 0
+.e:
+    pop si
+    call shm_barnow                   ; a title's width changed
+    call shm_barshow
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
 
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
@@ -47928,6 +48941,7 @@ sh_mtab:
     dw sh_m_macro,   sh_i_macro,   4
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
+    times SH_MCUST * 6 db 0           ; 81.95: custom menus added to this bar
 
 ; Excel 2.1d's Formula menu, in its own order: Paste Name.../Paste Function.../
 ; Reference/Define Name.../Note.../Goto.../Find... - all seven now. The note
@@ -49709,7 +50723,10 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 8582                     ; +5 for 81.94's MACRO.OVL pointer and
+    OS88_BSS 9058                     ; +476 for 81.95's custom menus: the
+                                       ; bar pointer and length, the custom
+                                       ; bar's table, three records;
+                                       ; +5 for 81.94's MACRO.OVL pointer and
                                        ; its failure byte;
                                        ; +25 for 81.92's ON.KEY table and
                                        ; ON.TIME's flag;
@@ -50203,9 +51220,9 @@ sh_mrx2       equ sh_mry1 + 2
 sh_mry2       equ sh_mrx2 + 2
 sh_mbx1       equ sh_mry2 + 2              ; sh_mboxof's own output: one
 sh_mbx2       equ sh_mbx1 + 2              ; menu title's screen box
-sh_mw         equ sh_mbx2 + 2              ; SH_MENU_N words: each title's
+sh_mw         equ sh_mbx2 + 2              ; SH_MENU_N + SH_MCUST words: each title's
                                              ; pixel width (sh_mtab_calc)
-sh_mli        equ sh_mw + (SH_MENU_N*2)    ; generic loop-index scratch,
+sh_mli        equ sh_mw + ((SH_MENU_N + SH_MCUST) * 2) ; generic loop-index scratch,
                                              ; shared by every sh_m* routine
                                              ; above (none of them nest)
 sh_mto        equ sh_mli + 2               ; generic sh_mtab byte-offset
@@ -50780,13 +51797,14 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 147
+SH_NVEC       equ 148
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
 sh_v_sh_macro_mfire          equ sh_v_sh_nt_get + 4
 sh_v_sh_nt_set               equ sh_v_sh_macro_mfire + 4
-sh_v_end      equ sh_v_sh_nt_set + 4
+sh_v_sh_mtab_calc            equ sh_v_sh_nt_set + 4
+sh_v_end      equ sh_v_sh_mtab_calc + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -51063,7 +52081,11 @@ sh_macro_keys equ sh_macro_ontp + 1          ; SH_MKEYS * SH_MKREC: ON.KEY
 sh_m2far      equ sh_macro_keys + SH_MKEYS * SH_MKREC ; 4: MACRO.OVL's
                                              ; (offset, segment), 0 = not loaded
 sh_m2fail     equ sh_m2far + 4               ; byte: ...and it could not be
-sh_bss_end        equ sh_m2fail + 1
+sh_mtabp      equ sh_m2fail + 1              ; 81.95: the bar's table...
+sh_mcount     equ sh_mtabp + 2               ; ...and its length
+sh_mtabc      equ sh_mcount + 2              ; SH_MCUST * 6: the custom bar's
+sh_mcrec      equ sh_mtabc + SH_MCUST * 6    ; SH_MCUST * SH_MCREC: the menus
+sh_bss_end        equ sh_mcrec + SH_MCUST * SH_MCREC
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

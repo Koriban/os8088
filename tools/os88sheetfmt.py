@@ -140,6 +140,17 @@ BIFF_MACRO_FUNCS = {
     0x89: ('FWRITELN'   , (2, 2), (2, 2)),
     0x8B: ('FPOS'       , (1, 2), (1, 2)),
     0x86: ('FSIZE'      , (1, 1), (1, 1)),
+    # wave 4c (81.95): custom menus
+    0x97: ('ADD.BAR'       , (0, 1), (0, 1)),
+    0x9D: ('SHOW.BAR'      , (0, 1), (0, 1)),
+    0xC8: ('DELETE.BAR'    , (1, 1), (1, 1)),
+    0x98: ('ADD.MENU'      , (2, 4), (2, 4)),
+    0x99: ('ADD.COMMAND'   , (3, 5), (3, 5)),
+    0x9E: ('DELETE.MENU'   , (2, 3), (2, 3)),
+    0x9F: ('DELETE.COMMAND', (3, 4), (3, 4)),
+    0x9A: ('ENABLE.COMMAND', (4, 5), (4, 5)),
+    0x9B: ('CHECK.COMMAND' , (4, 5), (4, 5)),
+    0x9C: ('RENAME.COMMAND', (4, 5), (4, 5)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its

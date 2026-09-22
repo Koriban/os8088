@@ -104478,6 +104478,64 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.95 Custom menus
+
+ADD.BAR, SHOW.BAR, DELETE.BAR, ADD.MENU, ADD.COMMAND, DELETE.MENU,
+DELETE.COMMAND, ENABLE.COMMAND, CHECK.COMMAND and RENAME.COMMAND, on SHEET's
+own in-window bar (§81.54).
+
+- **The bar walks a pointer now**, `[sh_mtabp]`, `[sh_mcount]` entries
+  long, instead of `sh_mtab` and `SH_MENU_N`.
+  - **Bar 1** is `sh_mtab`, SHEET's nine menus with the custom menus added
+    after Help.
+  - **Bar 7** is `sh_mtabc`, the one custom bar ADD.BAR makes. It holds
+    custom menus only, so Macro ▸ Run is not on it; ON.KEY is the way back
+    (the gate uses F9).
+- **A custom menu is a resident record** (`sh_mcrec`, three of them, 148
+  bytes each): a title, up to six commands, and the cell each command runs.
+  Its table entry points into the record, so `sh_mfire` finds the command's
+  cell by subtraction (`sh_mcrun`) and starts a run the way Macro ▸ Run does.
+- **The menu description** is Excel's: a range whose first row is the title,
+  followed by one row per command, holding its name and its macro (a
+  reference or a name, as text).
+- **Checked and disabled** are the prefix bytes `sh_mdrop_draw` already
+  reads (`SH_MENU_CHK`, then `MENU_DIS`). A command's state is read back from
+  where its pointer starts, so there is no second copy of it to keep in step.
+- **SHEET's own menus and commands are not edited:** every function refuses
+  a built-in menu. That is Excel's own rule for ENABLE.COMMAND on a built-in
+  command, applied to all ten.
+
+#### 81.95.1 The bar is the window's width
+
+A title past the window's edge was drawn outside the window and never
+erased, and the gate's screenshots showed it. So:
+
+- **ADD.MENU refuses a menu that does not fit its bar**, measured with
+  `OSAPI_FONT_WIDTH` and the pads. On a 562-pixel window, bar 1 has room
+  for one title of about three letters after Help. The custom bar has room
+  for several.
+- **A dropdown that would run past the window's right edge moves left**
+  (`sh_mdrop_geo`). The built-in menus never reached the edge, so this had
+  never come up.
+
+A RENAME.COMMAND of a title (command 0) is not measured.
+
+#### 81.95.2 What the gate found
+
+- **ADD.MENU banked its bar in `shm_acc8`,** and `shm_mcrows`, which it
+  calls, uses that byte as its title flag. The menu was counted on the wrong
+  bar.
+- **`shm_mcflags` read its flags after a `MUL` had overwritten AH, and
+  popped a misaligned stack.** The first CHECK.COMMAND corrupted the screen
+  and wedged the machine.
+- **`shm_barshow` calls `sh_mtab_calc`,** which does not keep DX, and ADD.MENU
+  held its answer there.
+
+**Resident +155 bytes, bss +476, MACRO.OVL +1,731** (15,614 bytes). Each
+text channel (§81.91.1) is now **6,528 bytes**. Resident headroom is 1,118
+bytes of `APP_MAX_SIZE`. `tests/sheetmmenu.py` has 8 checks, and every
+command is picked with the mouse.
+
 ### 81.94 MACRO.OVL: the macro language gets a module of its own
 
 Option 1 of §81.93.1, the owner's choice. The macro language moved out of
@@ -104553,7 +104611,8 @@ exactly that plant. The check flags:
 - resident +152 bytes and bss +5 (the door, the loader, and the pointer and
   failure byte);
 - the text-file tail (§81.91.1) is **MACRO.OVL's** now: 14,789 bytes, two
-  channels of **7,392** bytes.
+  channels of **7,392** bytes when this was built (§81.95 took them to
+  6,528).
 
 Together the two claims are 74 KB, against 63 KB for the one before: 11 KB
 more heap for the room to finish.
