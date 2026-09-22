@@ -9,9 +9,15 @@ an option group of two, and a number box - and MAIN puts it up four times.
 The first is typed at and clicked through, then Enter: every result lands in
 the seventh column and the cell answers 1, the default OK's item number. The
 second is dismissed with Esc, the third with its Cancel button, and neither
-touches a result. The fourth, OK clicked with the mouse, answers 1 again.
-Before any of them, a range with a list box (type 15) is refused, under
-ERROR(FALSE), as FALSE. Everything is read back from SHEET's own save.
+touches a result. The fourth, OK clicked with the mouse, answers 1 again, and the fifth is
+dismissed with its CLOSE BOX, which must also answer FALSE and must not cost
+a window slot - the kernel only HIDES a package's secondary window, so the
+dialog has to refuse that close and destroy itself instead (81.96.2).
+Before any of them, three ranges are refused under ERROR(FALSE), each as
+FALSE: one with a list box (type 15), one only three columns wide - which
+would read its sizes from cells outside itself and write every result over
+them - and one of a single row, which would be a dialog with no items and no
+button to end it. Everything is read back from SHEET's own save.
 """
 import os
 import subprocess
@@ -29,6 +35,7 @@ import dispcp                                                # noqa: E402
 import os88sym                                              # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
+from os88geom import WIN_SIZE, MAX_WIN, W_FLAGS                 # noqa: E402
 
 WORK = "build/sheetmdbox"               # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetmdbox.img"
@@ -57,11 +64,14 @@ BAD = [(None, None, None, 200, 100, 'Bad', None),
 MACROS = {
     10: ('MAIN', ['ERROR(FALSE)',
                   'SET.VALUE(J5,DIALOG.BOX(B12:H13))',
+                  'SET.VALUE(J6,DIALOG.BOX(B1:D10))',
+                  'SET.VALUE(J7,DIALOG.BOX(B1:H1))',
                   'ERROR(TRUE)',
                   'SET.VALUE(J1,DIALOG.BOX(B1:H10))',
                   'SET.VALUE(J2,DIALOG.BOX(B1:H10))',
                   'SET.VALUE(J3,DIALOG.BOX(B1:H10))',
                   'SET.VALUE(J4,DIALOG.BOX(B1:H10))',
+                  'SET.VALUE(J8,DIALOG.BOX(B1:H10))',
                   'RETURN()']),
 }
 
@@ -133,6 +143,20 @@ def main():
         def at(o, x, y):                # dialog units to the glass
             return o[0] + x, o[1] + y * 2 // 3
 
+        def rect():
+            for sl in dispcp.win_list(m, S, check=False):
+                r = dispcp.win_rect(m, S, sl)
+                if r[2:] == (DLG_W, DLG_H):
+                    return r
+            return None
+
+        def used():                     # window records IN USE, hidden or not
+            t = m.read(S("wm_wins"), MAX_WIN * WIN_SIZE)
+            return sum(1 for i in range(MAX_WIN)
+                       if int.from_bytes(t[i * WIN_SIZE + W_FLAGS:
+                                           i * WIN_SIZE + W_FLAGS + 2],
+                                         "little") & 1)
+
         def keys(text):
             for ch in text:
                 m.type_text(ch)
@@ -145,6 +169,7 @@ def main():
         M.settle(m, limit=300)
         o = dialog()
         seen.append(o is not None)
+        where = rect()
         shot("1-dialog")
         if o:
             keys("\b\b\bAnn")                   # the text box has the keys
@@ -173,8 +198,16 @@ def main():
         if o:
             mo.click(*at(o, 230, 18))
             M.settle(m, limit=300)
-        seen.append(dialog() is None)
-        shot("4-done")
+        slots = used()                          # the fifth: its CLOSE BOX
+        r = rect()
+        seen.append(r is not None)
+        if r:
+            mo.click(r[0] + 9, r[1] + 9)
+            M.settle(m, limit=300)
+        shot("4-closed")
+        leaked = used() - (slots - 1)           # one window went, and no
+        seen.append(dialog() is None)           # record stayed behind
+        shot("5-done")
         before = open(os.path.join(WORK, NAME), "rb").read()
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
@@ -195,13 +228,36 @@ def main():
     j = lambda r: g(r - 1, 9)
     check(data is not None, "SHEET saved the sheet", "the rest reads it",
           want=NAME)
-    check(seen == [True] * 5,
+    check(seen == [True] * 6,
           "each DIALOG.BOX put its window up, and the last one went",
           "a 282x120 window in the kernel's list while the run waits",
-          got=seen, want=[True] * 5)
+          got=seen, want=[True] * 6)
+    # centred, then SNAPPED so the content starts on an 8-pixel column
+    # (SPEC.md 11.94), which is why x is 175 and not 179
+    mid = ((640 - DLG_W) // 2, (200 - DLG_H) // 2)
+    ok = (where is not None and abs(where[0] - mid[0]) <= 8
+          and (where[0] + 1) % 8 == 0 and where[1] == mid[1])
+    check(ok, "the dialog is CENTRED on the screen",
+          "OSAPI_VIDEO answers the size in AX/BX and CLOBBERS CX and DX, so "
+          "centring off the registers it was called with put it at x=231, "
+          "y=28 - and would have clamped a wide one instead of centring it",
+          got=where, want="%r, snapped to an 8-pixel column" % (mid,))
+    check(leaked == 0, "the close box costs no window record",
+          "the kernel only HIDES a package's secondary window, so its slot "
+          "would never come back: MAX_WIN is 12 and SHEET's dialogs would "
+          "stop opening", got=leaked, want=0)
+    check(j(8) == FA, "...and the close box answers FALSE, like Cancel",
+          "the run must carry on, not wait for a window that is gone",
+          got=j(8), want=FA)
     check(j(5) == FA, "a list box (type 15) is refused",
           "ERROR(FALSE): the refusal answers FALSE and the run goes on",
           got=j(5), want=FA)
+    check(j(6) == FA, "a range narrower than seven columns is refused",
+          "B1:D10 would take each item's size from cells outside the range, "
+          "and OK would write every result over them", got=j(6), want=FA)
+    check(j(7) == FA, "a range of one row is refused",
+          "the dialog row alone: no items, so no button either, and only the "
+          "close box could end it", got=j(7), want=FA)
     check(j(1) == 1.0, "Enter presses the default OK: the answer is its "
           "item number", "OK is the first row after the dialog's own",
           got=j(1), want=1.0)

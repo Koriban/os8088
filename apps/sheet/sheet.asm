@@ -781,11 +781,14 @@ sh_reloc:
     pop cx
     ret
 
-; The words that name a movable claim. The first five are the claims
-; themselves; the last three are os88chart.inc's borrowed copies, taken inside
-; ch_bars_draw/ch_bmp_write and dead between calls - they cost two bytes each
-; and they close the one window where a chart export could be holding a stale
-; segment across the OSAPI_FILE_WRITE in the middle of it.
+; The words that name a movable claim: cellseg, txtseg, bordseg, chartseg and
+; undoseg are the claims themselves, and ch_srcseg, ch_stgseg and ch_srcseg2
+; are os88chart.inc's borrowed copies, taken inside ch_bars_draw/ch_bmp_write
+; and dead between calls - they cost two bytes each and they close the one
+; window where a chart export could be holding a stale segment across the
+; OSAPI_FILE_WRITE in the middle of it. The note table's segment is NOT here:
+; it is derived from bordseg's carve, which sh_reloc recomputes after its
+; patch loop (81.94.1).
 sh_segw:
     dw sh_cellseg, sh_txtseg, sh_bordseg
     dw sh_chartseg
@@ -941,6 +944,13 @@ sh_mverb:
     dw sh_m_mfind                                         ; macro plan wave 0
     dw sh_m_tor1c1, sh_m_fromr1c1, sh_m_setext, sh_m_mname  ; 81.94
     dw sh_m_readrc
+sh_mverb_end:
+    ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
+    ; answers CF=1, which every caller reports as "there is no module"; a
+    ; count raised without the entry jumps through the two bytes AFTER the
+    ; table, which is a wild far jump with no diagnostic
+    times ((sh_mverb_end - sh_mverb) / 2 - SHM_N) db 0
+    times (SHM_N - (sh_mverb_end - sh_mverb) / 2) db 0
 
 sh_m_doread:
     call shm_doread
@@ -1074,6 +1084,9 @@ sh_modm_disp:
     retf
 sh_m2verb:
     dw sh_m2_pmacro, sh_m2_mresume, sh_m2_dpaint, sh_m2_dkey, sh_m2_dclick
+sh_m2verb_end:
+    times ((sh_m2verb_end - sh_m2verb) / 2 - SHM2_N) db 0   ; sh_mverb's own
+    times (SHM2_N - (sh_m2verb_end - sh_m2verb) / 2) db 0   ; assertion, here
 sh_m2_pmacro:
     call shm_pmacro
     clc
@@ -7365,7 +7378,9 @@ sh_mcrun:
     shl bx, 1                         ; x6: the entry
     add bx, [sh_mtabp]
     mov bx, [bx + 2]                  ; the items: the record + SH_MC_ITEMS
-    sub bx, SH_MC_ITEMS
+    or bx, bx                         ; ...and 0 is a menu deleted since the
+    jz .out                           ; dropdown opened (81.95.3), not a
+    sub bx, SH_MC_ITEMS               ; record near the top of the segment
     xor ah, ah
     shl ax, 1
     shl ax, 1
@@ -7469,8 +7484,11 @@ sh_mdrop_geo:
     add si, bx
     mov si, [si]
     mov al, [si]
-    cmp al, MENU_DIS
-    jne .measure
+    cmp al, MENU_DIS                  ; either PREFIX byte, as sh_mdrop_draw
+    je .prefix                        ; skips both - measuring the check byte
+    cmp al, SH_MENU_CHK               ; as a glyph made a ticked item's
+    jne .measure                      ; dropdown one cell too wide
+.prefix:
     inc si
 .measure:
     call OSAPI_FONT_WIDTH
@@ -17759,8 +17777,10 @@ sh_new:
                                      ; and would read new text through it
     cmp byte [sh_dockind], 0           ; 81.97: a macro sheet showed its
     je .wsheet                         ; formulas; a new document is a
-    mov byte [sh_dockind], 0           ; worksheet, which shows values
-    mov byte [sh_showformulas], 0
+    cmp byte [sh_dockind], 2           ; worksheet, which shows values -
+    mov byte [sh_dockind], 0           ; unless they were the user's own
+    jne .wsheet                        ; (sh_kindreset's rule, inline: this
+    mov byte [sh_showformulas], 0      ; is resident and that is CHART.OVL's)
     mov word [sh_i_options+2], sh_it_form_off
 .wsheet:
     mov word [sh_cursheet], 0
@@ -19228,8 +19248,12 @@ sh_doread_dif:
 ; sh_macsheet - make this document a macro sheet, formulas shown
 sh_macsheet:
     mov byte [sh_dockind], 1
-    mov byte [sh_showformulas], 1
+    cmp byte [sh_showformulas], 0     ; 2 = and the formulas on show are
+    jne .out                          ; THIS document's doing, so closing it
+    mov byte [sh_dockind], 2          ; takes them away again; 1 = the user
+    mov byte [sh_showformulas], 1     ; already had them on and keeps them
     mov word [sh_i_options+2], sh_it_form_on
+.out:
     ret
 
 ; sh_kindreset - a worksheet again: the formulas a macro sheet showed go, and
@@ -19237,7 +19261,9 @@ sh_macsheet:
 sh_kindreset:
     cmp byte [sh_dockind], 0
     je .out
+    cmp byte [sh_dockind], 2          ; 1: the user's own Formulas, untouched
     mov byte [sh_dockind], 0
+    jne .out
     mov byte [sh_showformulas], 0
     mov word [sh_i_options+2], sh_it_form_off
 .out:
@@ -21135,6 +21161,7 @@ sh_biff_dcrpn:
     xor ax, ax
     mov [sh_dc_end], ax
     mov [sh_dc_sp], ax
+    mov byte [cs:sh_dc_cept], 0       ; 81.97.4: never from a formula before
 .tok:
     cmp di, [sh_dc_tend]
     jae .done
@@ -21541,10 +21568,11 @@ sh_dc_fnv:                            ; 22H argc index
     inc cx
 .n:
     call sh_dc_need
-    jc .x
-    push cx
-    mov bx, 2
-    call sh_dc_index
+    jc .xce                           ; 81.97.4: a TRUNCATED 58H token never
+    push cx                           ; reaches sh_dc_index, and the flag it
+    mov bx, 2                         ; set would then be read by the NEXT
+    call sh_dc_index                  ; token - in the next formula, or the
+                                       ; next document
     pop cx
     jc .x
     call sh_dc_name
@@ -21558,6 +21586,10 @@ sh_dc_fnv:                            ; 22H argc index
     pop cx
     jc .x
     add di, cx
+    jmp short .x
+.xce:
+    mov byte [cs:sh_dc_cept], 0
+    stc
 .x:
     pop si
     pop cx
@@ -35308,15 +35340,29 @@ sh_macro_arm:
 sh_macro_ontimer:
     cmp byte [sh_macro_wait], SH_MW_WAIT
     je .go
-    cmp byte [sh_macro_wait], SH_MW_DBOX ; 81.96: DIALOG.BOX's window was
-    jne .notdbox                      ; closed by its close box - Cancel,
-    cmp word [sh_dbx_win], 0          ; once the kernel has finished closing
-    je .go                            ; it (sh_dbx_close_r)
+    cmp byte [sh_macro_wait], SH_MW_DBOX ; 81.96: DIALOG.BOX's window, and
+    jne .notdbox                      ; its close box asked (sh_dbx_close_r):
+    cmp byte [sh_dbx_cls], 0          ; destroy it HERE, where no kernel
+    je .notdbox                       ; close is half done, and answer Cancel
+    mov byte [sh_dbx_cls], 0
+    push bx
+    mov bx, [sh_dbx_win]
+    mov word [sh_dbx_win], 0
+    or bx, bx
+    jz .nodbw
+    call OSAPI_WM_DESTROY
+.nodbw:
+    pop bx
+    jmp .go
 .notdbox:
     cmp byte [sh_macro_ontp], 0       ; 81.92: ON.TIME has a request - and a
     je .out                           ; run that is going, paused on a
     cmp byte [sh_macro_running], 0    ; dialog, makes it wait its turn
     jne .later
+    cmp byte [sh_mopen], SH_M_NONE    ; ...and so does an OPEN MENU (81.95.3):
+    jne .later                        ; sh_mtrack yields, and a run started
+                                       ; here could delete the very menu whose
+                                       ; dropdown is on the glass
     mov byte [sh_macro_wait], SH_MW_ONTIME
 .go:
     jmp sh_macro_onalert
@@ -35345,14 +35391,15 @@ sh_dbx_open:
     mov [sh_dbx_tpl + WT_W], cx
     mov [sh_dbx_tpl + WT_H], dx
     mov byte [sh_dbx_done], 0
-    call OSAPI_VIDEO                  ; centred, below the menu bar
-    sub ax, cx
-    sar ax, 1
-    jns .x
-    xor ax, ax
-.x:
+    mov byte [sh_dbx_cls], 0          ; nothing owed from the LAST dialog
+    call OSAPI_VIDEO                  ; centred, below the menu bar - and it
+    sub ax, [sh_dbx_tpl + WT_W]       ; answers the size in AX/BX while
+    sar ax, 1                         ; CLOBBERING CX and DX (the dock row,
+    jns .x                            ; the adapter), so the size is read
+    xor ax, ax                        ; back from the template and not from
+.x:                                   ; the registers it came in
     mov [sh_dbx_tpl + WT_X], ax
-    sub bx, dx
+    sub bx, [sh_dbx_tpl + WT_H]
     sar bx, 1
     cmp bx, MBAR_H + 8
     jge .y
@@ -35401,18 +35448,26 @@ sh_dbx_ev:
 .out:
     ret
 
-; sh_dbx_close_r - the close box (SPEC.md 75.1): let it close, and answer
-; Cancel on the next tick, once the kernel has finished - a run resumed from
-; in here could open the next DIALOG.BOX while this one is half gone
+; sh_dbx_close_r - the close box (SPEC.md 75.1). It REFUSES the close and
+; takes it on the next tick instead, which is the only way to end up calling
+; OSAPI_WM_DESTROY: a package's secondary window has no owner record, so the
+; kernel's own close merely HIDES it and the slot is never free again (81.6,
+; and 81.96.2 is this one). Refusing owes the user a way out, and the tick is
+; it - a run resumed from in here could open the next DIALOG.BOX while this
+; window is still half closed
 sh_dbx_close_r:
-    mov word [sh_dbx_win], 0
     cmp byte [sh_macro_wait], SH_MW_DBOX
-    jne .out
+    jne .let                          ; not a paused run's: not ours to keep
     push ax
+    mov byte [sh_dbx_cls], 1
     mov ax, 1
-    call sh_macro_arm
-    pop ax
-.out:
+    call sh_macro_arm                 ; CF=1: no timer on this kernel, and
+    pop ax                            ; then a refusal would strand the run
+    jc .let
+    stc
+    ret
+.let:
+    mov word [sh_dbx_win], 0
     clc
     ret
 
@@ -41318,8 +41373,16 @@ shm_mbar:  db 0                       ; ADD.MENU's bar - NOT shm_acc8, which
                                        ; shm_mcrows spends as its title flag
 
 ; shm_barent - AL = the bar (1 or 7). out: BX = its table's first CUSTOM
-; entry, CL = how many; CF=1 not a bar there is
+; entry, CX = how many; CF=1 not a bar there is
+;
+; CX AND NOT CL, which is what it used to say while its callers stored the
+; whole WORD: CH then arrived from whatever the evaluator or a kernel
+; callback had left in it, and shm_barref's copy into shm_gst is read as a
+; COUNT by DELETE.MENU's shift-down. One nonzero high byte moves fifteen
+; hundred bytes of this package's own data - every built-in menu's title and
+; item table - six bytes down, and the bar draws as rubble
 shm_barent:
+    xor ch, ch
     cmp al, 1
     jne .b7
     mov bx, sh_mtab + SH_MENU_N * 6
@@ -41931,6 +41994,27 @@ shm_maddmenu:
 .bad:
     jmp shm_merr
 
+shm_rent:   db 0                      ; RENAME.COMMAND is renaming a TITLE...
+shm_renbar: db 0                      ; ...on this bar
+
+; shm_renfits - CF=1 when the bar in shm_renbar no longer fits its window
+shm_renfits:
+    push bx
+    push cx
+    mov bx, sh_mtab
+    mov cl, [cs:shm_n1]
+    add cl, SH_MENU_N
+    cmp byte [cs:shm_renbar], 1
+    je .go
+    mov bx, sh_mtabc
+    mov cl, [cs:shm_n7]
+.go:
+    xor ch, ch
+    call shm_barfits
+    pop cx
+    pop bx
+    ret
+
 ; shm_barfits - CF=1 when CX titles of the table at BX, each with its pads,
 ; are wider than the window's content
 shm_barfits:
@@ -42171,9 +42255,30 @@ shm_mrencmd:
     jc .bad
     SHOUT sh_skipargs
     push si
+    mov al, [cs:shm_acc8]             ; the bar, banked before the copy: that
+    mov [cs:shm_renbar], al           ; byte is shared scratch
+    mov byte [cs:shm_rent], 0
     lea bx, [di + 2]                  ; the title...
     cmp cx, 0xFFFF
-    je .copy
+    jne .name
+    mov byte [cs:shm_rent], 1         ; ...which has to FIT (81.95.3), so the
+    push si                           ; old one is banked to put back
+    push di
+    mov si, bx
+    mov di, sh_tbuf
+    mov cx, SH_MC_ITEMS - 2           ; the TITLE field, and not SH_MCTXT: an
+.bk:                                  ; item's text is 16 and a title 14, and
+                                       ; the two bytes past it are the first
+                                       ; item's pointer
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .bk
+    pop di
+    pop si
+    jmp short .copy
+.name:
     mov ax, cx                        ; ...or the command's name
     mov bx, SH_MCTXT
     mul bx
@@ -42193,6 +42298,23 @@ shm_mrencmd:
     mov byte [bx], 0
 .e:
     pop si
+    cmp byte [cs:shm_rent], 0
+    je .fits
+    call shm_renfits                  ; a title past the window's edge is
+    jnc .fits                         ; drawn outside it and left there
+    push si
+    lea bx, [di + 2]
+    mov si, sh_tbuf
+    mov cx, SH_MC_ITEMS - 2
+.put:
+    mov al, [si]
+    mov [bx], al
+    inc si
+    inc bx
+    loop .put
+    pop si
+    jmp shm_merr0
+.fits:
     call shm_barnow                   ; a title's width changed
     call shm_barshow
     jmp shm_mtrue
@@ -42368,15 +42490,26 @@ shm_mdbox:
     push ax                           ; sh_skipargs takes AL
     SHOUT sh_skipargs
     pop ax
-    cmp bx, dx
+    cmp bx, dx                        ; the range corners in either order
     jbe .o
     xchg bx, dx
 .o:
+    cmp ax, cx
+    jbe .oc
+    xchg ax, cx
+.oc:
+    sub cx, ax                        ; SEVEN columns, as Excel asks: type,
+    cmp cx, 6                         ; x, y, width, height, text and the
+    jb .bad0                          ; result. A narrower range would take
+                                       ; an item's size from cells OUTSIDE
+                                       ; it, and OK would write every result
+                                       ; over them
     mov [cs:shm_dbcol], ax
     mov [cs:shm_dbrow], bx
     sub dx, bx                        ; the items: every row after the first
-    cmp dx, SHM_DBMAX
-    ja .bad0
+    jz .bad0                          ; ...and a dialog with no items has no
+    cmp dx, SHM_DBMAX                 ; button either, so nothing but the
+    ja .bad0                          ; close box could end it
     mov [cs:shm_dbn], dl
     mov byte [cs:shm_dbfoc], 0xFF
     mov byte [cs:shm_dbdef], 0xFF
@@ -42432,8 +42565,8 @@ shm_mdbox:
     add ax, 3
     mov bx, [cs:shm_dbrow]
     call shm_dbnum
-    or ax, ax
-    jnz .w
+    cmp ax, 0                         ; ...only be ended by the close box
+    jg .w
     mov ax, 320
 .w:
     add ax, 2
@@ -42442,9 +42575,9 @@ shm_mdbox:
     add ax, 4
     call shm_dbnum
     call shm_db23
-    or ax, ax
-    jnz .h
-    mov ax, 100
+    cmp ax, 0                         ; a NEGATIVE size would make a window
+    jg .h                             ; no click can ever hit (wm_hit tests
+    mov ax, 100                       ; x < W_X + W_W), and the run could
 .h:
     add ax, TITLE_H + 2
     mov [cs:shm_dbh], ax
@@ -42500,11 +42633,19 @@ shm_dbparse:
     mov ax, [cs:shm_dbcol]
     add ax, 3
     call shm_dbnum
+    or ax, ax                         ; a negative width or height is none,
+    jns .wok                          ; so shm_dbsize gives the item its own
+    xor ax, ax
+.wok:
     mov [cs:di+6], ax
     mov ax, [cs:shm_dbcol]
     add ax, 4
     call shm_dbnum
     call shm_db23
+    or ax, ax
+    jns .hok
+    xor ax, ax
+.hok:
     mov [cs:di+8], ax
     mov ax, cx                        ; its text
     mov dx, SHM_DBTXT
@@ -43050,8 +43191,6 @@ shm_dbnextedit:
     cmp cl, 0xFF
     je .out
     xor ch, ch
-    mov ax, cx
-    call shm_dbitem
     push cx
     mov cx, [cs:shm_dbn]              ; at most every item once round
     and cx, 0xFF
@@ -44138,6 +44277,7 @@ shm_mstep:
     pop cx
     jnc .out
     mov byte [cs:shm_dbpend], 0       ; no window to make: the run stops
+    mov byte [sh_macro_wait], 0       ; ...owing nothing to a later tick
     mov word [sh_msg], sh_s_macroerr
     jmp .fin
 .ask:
@@ -52076,7 +52216,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9119                     ; +1 for 81.97's document kind;
+    OS88_BSS 9120                     ; +1 for 81.96.2's close-box byte;
+                                       ; +1 for 81.97's document kind;
                                        ; +60 for 81.96's DIALOG.BOX: the
                                        ; window, its done byte, one line
                                        ; block and one edit buffer, and its
@@ -53450,7 +53591,9 @@ sh_dbx_done   equ sh_dbx_win + 2             ; byte: a button closed it
 sh_dbx_line   equ sh_dbx_done + 1            ; OS88LINE_SZ: its edit boxes'
                                              ; one line block...
 sh_dbx_ebuf   equ sh_dbx_line + OS88LINE_SZ  ; SH_DBX_EDLEN: ...and buffer
-sh_dockind    equ sh_dbx_ebuf + SH_DBX_EDLEN ; 81.97: byte, 1 = this is a
+sh_dbx_cls    equ sh_dbx_ebuf + SH_DBX_EDLEN ; 81.96.2: byte, the close box
+                                             ; asked and the next tick does it
+sh_dockind    equ sh_dbx_cls + 1 ; 81.97: byte, 1 = this is a
                                              ; MACRO SHEET (BIFF's dt 0040H)
 sh_bss_end        equ sh_dockind + 1
 

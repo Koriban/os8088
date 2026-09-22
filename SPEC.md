@@ -104498,7 +104498,8 @@ macro sheets opened with every command as its cached value.
 - **The extension functions decode too.** Waves 1–4's names live in
   CHART.OVL's `shm_mxnames` and `shm_mxrpn`, which the old lookup never
   searched. A hit is copied into `sh_ident`, which the decode does not
-  otherwise use and which holds the longest of them (SHOW.ACTIVE.CELL, 16).
+  otherwise use and which holds the longest of them: CALCULATE.DOCUMENT, 18
+  characters, against `SH_IDENT_MAX` 20.
 - **`shm_mxargc`** is new: each extension function's fixed argument count,
   since a tFunc token carries only an index. It is 0 for a variable
   function and for every command, which Excel writes with a count of their
@@ -104528,7 +104529,9 @@ SHEET's macros have always run from ordinary cells. What changes:
   sheet document: the kind is the document's, and SHEET's four sheets are
   one document;
 - **a macro sheet shows its formulas,** as Excel's does (`sh_macsheet` sets
-  Options ▸ Formulas and its label);
+  Options ▸ Formulas and its label) - and `sh_dockind` is **2** when they
+  are the document's doing and **1** when the user already had them on, so
+  closing it takes away only what it turned on;
 - **File ▸ New ▸ Macro Sheet makes one.** §81.83.6's "an ordinary sheet,
   and a status line saying so" is retired: the status line now says "New
   macro sheet - formulas shown; Macro > Run runs them."
@@ -104536,7 +104539,8 @@ SHEET's macros have always run from ordinary cells. What changes:
 **Every reader and New put it back** (`sh_kindreset`, beside each reader's
 `sh_nnames` reset, and inline in the resident `sh_new`). The formulas a
 macro sheet turned on go with it, while a Formulas the user turned on for a
-worksheet stays.
+worksheet stays - the kind byte is what tells them apart, and the gate reads
+both bytes out of SHEET's own memory rather than off the glass.
 
 **SYLK, DIF, CSV, text and dBASE carry no kind,** so a macro sheet saved in
 one of them reopens as a worksheet, with its formulas intact.
@@ -104554,13 +104558,30 @@ Each claim was mutated to prove it can fail:
 
 - removing the 38H dispatch fails the formulas check;
 - a `sh_kindreset` that returns at once fails the worksheet's dt;
-- a `sh_rd_bofkind` that returns at once fails the macro sheet's dt.
+- a `sh_rd_bofkind` that returns at once fails the macro sheet's dt;
+- putting §81.97.4's flag leak back turns the `=IF()` into `OPEN()`;
+- a `sh_kindreset` that clears Formulas unconditionally fails the
+  ownership check.
 
-That formulas are shown was checked by screenshot, not by an assertion.
+Nine checks. That the formulas are SHOWN is read as `sh_showformulas`
+itself, not off the glass.
 
-**CHART.OVL +351 bytes** (45,584 of `CH_OVKB` 46), resident bss +1, resident
-code +29 (the inline reset in `sh_new`). Resident headroom is 825 bytes of
-`APP_MAX_SIZE`.
+**CHART.OVL +385 bytes** (45,618 of `CH_OVKB` 46), resident bss +1, resident
+code +29 (the inline reset in `sh_new`).
+
+#### 81.97.4 A ptg's flag outlived its own token
+
+`sh_dc_fnce` set "this index is a command" and fell into `sh_dc_fnv`, which
+has an earlier exit than `sh_dc_index`: a TRUNCATED 58H token - the ptg with
+its count and index cut off - returned with the flag still set. The next
+token to carry an index then read it, and every Cetab number collides with
+an Ftab one, so a worksheet's `=IF(A5,1,2)` was decoded, stored and SAVED
+BACK as `OPEN(A5,1,2)`. Nothing cleared the flag between documents either,
+so a crafted file poisoned the next clean one opened after it.
+
+It is cleared on that exit and again at the start of every decode.
+`tests/sheetmkind.py` carries the case - a truncated 58H above an `=IF()` -
+and the mutation that puts the bug back reproduces `OPEN($A$5,1,2)` exactly.
 
 ### 81.96 DIALOG.BOX
 
@@ -104606,10 +104627,12 @@ at, which saves 99 bytes of resident bss against a buffer per box.
 
 - **A button** sets `sh_dbx_done`. The resident thunk destroys the window
   and resumes the run, INPUT's order.
-- **The close box** is let through (§75.1, CF = 0) and answers Cancel on the
-  next tick (`sh_macro_ontimer`, `SH_MW_DBOX`). A run resumed from inside
-  the negotiator could open the next DIALOG.BOX while this one is half
-  gone. The gate does not drive the close box.
+- **The close box REFUSES and closes itself** (§81.96.2), on the next tick
+  (`sh_macro_ontimer`, `SH_MW_DBOX`), answering Cancel. Two reasons, and the
+  first is the one that matters: a package's SECONDARY window has no owner
+  record, so the kernel's own close only HIDES it and the slot never comes
+  back; and a run resumed from inside the negotiator could open the next
+  DIALOG.BOX while this window is half closed.
 - **A click on the sheet** raises the dialog (§81.86.4's gate).
 
 #### 81.96.1 What the gate found
@@ -104626,9 +104649,52 @@ default OK, then Esc, the Cancel button and the OK button each close one of
 three more dialogs, and a list box is refused. Every result is read from
 SHEET's own save.
 
-**Resident +203 bytes, bss +60, MACRO.OVL +2,860** (18,474 bytes). Each
-text channel (§81.91.1) is now **5,088 bytes**. Resident headroom is 855
-bytes of `APP_MAX_SIZE`.
+**Resident +252 bytes, bss +61, MACRO.OVL +3,021** (18,635 bytes). Each
+text channel (§81.91.1) is now **5,008 bytes**, and resident headroom **756
+bytes** of `APP_MAX_SIZE` - every figure measured on the build these three
+sections were finished on, since they share one budget.
+
+#### 81.96.2 The close box was costing a window record
+
+`sh_dbx_close_r` first answered CF = 0 - let the close happen - having
+already cleared `sh_dbx_win`. `app_close_win` finds no instance for a
+secondary window and takes `wm_hide`, which clears only W_FLAGS bit 1: the
+record stays IN USE, `wm_create` never reuses it, and nothing in SHEET can
+still name it. `MAX_WIN` is 12, so about ten dismissals stop every window on
+the machine from opening - §81.6's defect, one door along.
+
+It refuses now (CF = 1) and arms the one-tick timer, and the tick calls
+`OSAPI_WM_DESTROY` itself, where no kernel close is half done. A refusal
+owes the user a way out (§75.1) and the tick is it. If the timer cannot be
+armed - `kern_small`, which does not carry SHEET at all (§24.5) - it lets
+the close through instead, because a refusal with nothing behind it would
+strand the run.
+
+The gate counts window records IN USE, not visible ones: a leaked slot is
+used and invisible, so `dispcp.win_list` cannot see it, and the check reads
+W_FLAGS bit 0 across all twelve.
+
+#### 81.96.3 Three more the review found
+
+- **The dialog was never centred.** `OSAPI_VIDEO` answers the screen size in
+  AX/BX and CLOBBERS CX and DX (the dock row, the adapter), which is what
+  `sh_dbx_open` then subtracted. The window landed at x = 231, y = 28
+  instead of 175, 40 - and a wide dialog would have been clamped by `wm_fit`
+  and truncated rather than centred. The size is read back from the template
+  now. The gate checks the position, allowing for §11.94's 8-pixel snap.
+- **A negative width or height** made a window no click could ever hit
+  (`wm_hit` tests `x < W_X + W_W`), so a paused run could only be ended by
+  Esc or the close box. A size that is not positive takes the default now,
+  for the dialog and for each item.
+- **A dialog that could not be created** left `sh_macro_wait` at
+  `SH_MW_DBOX`, which a later ON.TIME tick would then consume. It clears it.
+
+**The one-flag limit, which INPUT shares.** `shm_dbpend` is one flag, so two
+DIALOG.BOX calls IN THE SAME CELL do not work: the second consumes the
+first's pending answer and the first then asks again. `SH_MACRO_MAXSTEPS`
+bounds it and the close box ends it. INPUT's `sh_macro_ansok` is the same
+shape (§81.63), and a per-call answer is a change to that mechanism rather
+than to this function.
 
 ### 81.95 Custom menus
 
@@ -104682,6 +104748,42 @@ A RENAME.COMMAND of a title (command 0) is not measured.
   and wedged the machine.
 - **`shm_barshow` calls `sh_mtab_calc`,** which does not keep DX, and ADD.MENU
   held its answer there.
+
+#### 81.95.3 What an adversarial review found afterwards
+
+The gate passed 8/8 with three of these live, which is what a gate over
+VALUES cannot see.
+
+- **`shm_barent` answered a count in CL and its callers stored CX.** CH
+  arrived from whatever the evaluator or a kernel callback had left there.
+  `shm_barref` copies that word into `shm_gst`, and DELETE.MENU uses it as
+  the end of its shift-down: one nonzero high byte moves about fifteen
+  hundred bytes of SHEET's own data segment - every built-in menu's title
+  and item table - six bytes down, and the bar draws as rubble while the
+  test's H-column values all still pass. Proven by injecting `mov ch, 1`
+  before the call, which nothing in the call chain rules out. It zeroes CH
+  now, at the source, and its header says CX.
+- **A menu deleted while its dropdown was open** left `sh_mcrun` reading
+  the zeroed table entry, subtracting `SH_MC_ITEMS` from 0 and taking the
+  command's cell from 0xFFF0 - a wild read near the top of the segment.
+  `sh_mtrack` yields, so an ON.TIME run can fire mid-dropdown. Two fixes: a
+  zero entry is refused, and `sh_macro_ontimer` makes an ON.TIME request
+  wait while a menu is open, as it already does while a run is going.
+- **RENAME.COMMAND of a TITLE was not measured**, which §81.95.1 recorded
+  as a gap: it is the very defect `shm_barfits` was added for. It is
+  measured now, with the old title banked and put back when the new one
+  does not fit, and the gate has the case.
+- **A CHECKED item measured one cell wider than it drew**, because
+  `sh_mdrop_geo` skipped `MENU_DIS` and not `SH_MENU_CHK` while
+  `sh_mdrop_draw` skips both. Pre-dates §81.95 and reachable from the
+  built-in menus.
+
+Two of the four are gated: the title rename has a check of its own, and the
+wild record read is covered by the picks the gate already makes. The CL/CX
+defect is not - the value that triggers it cannot be produced from a macro
+today, which is why the fix is at the source rather than at the call sites -
+and neither is the ON.TIME-mid-dropdown race, which needs a timer to fire
+inside `sh_mtrack`'s yield.
 
 **Resident +155 bytes, bss +476, MACRO.OVL +1,731** (15,614 bytes). Each
 text channel (§81.91.1) is now **6,528 bytes**. Resident headroom is 1,118
@@ -104772,6 +104874,19 @@ more heap for the room to finish.
 **MACRO.OVL ships beside CHART.OVL** on every disk that carries SHEET. Every
 test disk carries both. `tests/sheetxl2.py` does not yet, because it holds
 the owner's uncommitted work and was not edited.
+
+#### 81.94.4 Both dispatch tables are held to their counts
+
+A review of this migration found the hazard §81.83.3.3 is about, in the
+verb tables themselves: nothing bound `sh_mverb` to `SHM_N` or `sh_m2verb`
+to `SHM2_N`. A verb added without raising the count answers CF = 1, which
+every caller reports as "there is no module" - a feature that silently does
+nothing. A count raised without the entry jumps through the two bytes AFTER
+the table, which is a wild far jump with no diagnostic.
+
+Both carry `times` pairs now, assembled rather than preprocessed, and both
+were proven by mutation: raising either count alone fails the build with
+`TIMES value -1 is negative` on the assertion's own line.
 
 ### 81.93 What the macro language does not do, and where the module stands
 

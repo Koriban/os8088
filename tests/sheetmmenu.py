@@ -56,6 +56,9 @@ MACROS = {
                  'CHECK.COMMAND(1,10,2,TRUE)',
                  'ENABLE.COMMAND(1,10,3,FALSE)',
                  'RENAME.COMMAND(1,10,1,"Hi")',
+                 'ERROR(FALSE)',
+                 'SET.VALUE(H10,RENAME.COMMAND(1,10,0,"Toolbox"))',
+                 'ERROR(TRUE)',
                  'RETURN()']),
     4: ('HEL', ['SET.VALUE(H2,H2+1)', 'RETURN()']),
     5: ('BYE', ['SET.VALUE(H3,H3+1)', 'RETURN()']),
@@ -174,6 +177,10 @@ def main():
     check(h(4) is None, "the greyed third command runs nothing",
           "ENABLE.COMMAND(...,FALSE): a pick on it is refused", got=h(4),
           want=None)
+    check(h(10) == ('bool', False), "RENAME.COMMAND of a TITLE is measured "
+          "too", "the same refusal ADD.MENU got: \"Toolbox\" would be drawn "
+          "past the window's edge and left there. The menu below still works, "
+          "so the old title was put back", got=h(10), want=('bool', False))
     check(h(9) == ('bool', False), "a menu too wide for the bar is refused",
           "Help ends 575 and the window 617: \"Toolbox\" would be drawn past "
           "the window's edge, and was, and was never erased", got=h(9),
