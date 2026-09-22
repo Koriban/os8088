@@ -4945,6 +4945,13 @@ SOAK = [
         "wide for the bar refused; the custom bar made, shown and picked "
         "from, and SHOW.BAR()/DELETE.BAR/DELETE.MENU putting SHEET's own back",
         needs=("marty",), serial=True),
+    Row("sheetmdbox", "soak", py("tests/sheetmdbox.py"), 400.0,
+        "SPEC.md 81.96: DIALOG.BOX - a dialog described by a range, typed "
+        "at, clicked and Tabbed through, then Entered: the text, check box, "
+        "option group and number box results in the seventh column and the "
+        "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
+        "list box refused",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

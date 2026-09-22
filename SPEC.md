@@ -104478,6 +104478,74 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.96 DIALOG.BOX
+
+DIALOG.BOX(dialog_ref) puts up a dialog that a range describes, in Excel's
+seven columns: item type, x, y, width, height, text, and the initial value,
+which becomes the result. The first row is the dialog itself: its width and
+height in columns 4 and 5, and its title in column 6.
+
+- **Types built:** 1 default OK, 2 default Cancel, 3 OK, 4 Cancel, 5 text,
+  6 text edit, 7 integer edit, 8 number edit, 9 formula edit, 10 reference
+  edit, 11 option group, 12 option button, 13 check box, 14 group box.
+- **Refused:** the list boxes (15, 16), more than 16 items, and more than 4
+  edit boxes. A refusal is a macro error, so ERROR(FALSE) turns it into
+  FALSE.
+- **Units:** Excel's dialog units are an eighth of a character across and a
+  twelfth down. With the 8×8 cell that is a pixel across and two thirds of
+  one down. A blank width or height takes the item's own: every button
+  `OS88UI_ABW` wide, text its own length, an edit box twenty characters, and
+  a check box or option button its glyph plus its label.
+- **The run pauses while it is up,** by INPUT's mechanism (§81.63): the cell
+  answers FALSE, the step pauses with `SH_MC_PAUSEH`, and the second
+  evaluation answers. That answer is the pressed button's item number,
+  counted from the second row, or FALSE for Cancel, Esc or the close box.
+- **OK writes every result into the seventh column first:** an edit box's
+  text (a number, for the integer and number boxes, when it reads as one), a
+  check box's TRUE or FALSE, and an option group's place of the button that
+  is on.
+- **Keys:** Enter presses the default button. When no default is named,
+  that is the first OK. Esc cancels, Tab moves to the next edit box, and
+  every other key goes to the focused edit box (`os88line_key`).
+
+**Where it lives.** The engine is in MACRO.OVL: parsing, painting, keys,
+clicks and the results. The resident part is what the kernel calls or
+names: the template `sh_dbx_tpl`, three thunks forwarding to `sh_m2call`
+(verbs `SHM2_DPAINT`, `SHM2_DKEY` and `SHM2_DCLICK`), the create, and the
+close negotiator. The create is resident because `OSAPI_WM_ONCLOSE` takes a
+near proc in the caller's segment. The edit boxes share **one** line block
+and one 33-byte buffer in DS, where `os88line` reads its buffer. Each box's
+text and caret live in the module and are swapped in to be drawn or typed
+at, which saves 99 bytes of resident bss against a buffer per box.
+
+**Closing.**
+
+- **A button** sets `sh_dbx_done`. The resident thunk destroys the window
+  and resumes the run, INPUT's order.
+- **The close box** is let through (§75.1, CF = 0) and answers Cancel on the
+  next tick (`sh_macro_ontimer`, `SH_MW_DBOX`). A run resumed from inside
+  the negotiator could open the next DIALOG.BOX while this one is half
+  gone. The gate does not drive the close box.
+- **A click on the sheet** raises the dialog (§81.86.4's gate).
+
+#### 81.96.1 What the gate found
+
+**The window was painted over.** DIALOG.BOX opened its window while the
+formula was being evaluated. The step then paused, and the pause's repaint
+of the sheet drew over it: the first screenshot had the dialog's items
+floating on the grid with no window around them. The window now opens at
+the pause, after the repaint, which is where INPUT's has always opened.
+
+`tests/sheetmdbox.py` has 10 checks. It types into the text box, clicks the
+check box and an option button, and Tabs to the number box. Enter takes the
+default OK, then Esc, the Cancel button and the OK button each close one of
+three more dialogs, and a list box is refused. Every result is read from
+SHEET's own save.
+
+**Resident +203 bytes, bss +60, MACRO.OVL +2,860** (18,474 bytes). Each
+text channel (§81.91.1) is now **5,088 bytes**. Resident headroom is 855
+bytes of `APP_MAX_SIZE`.
+
 ### 81.95 Custom menus
 
 ADD.BAR, SHOW.BAR, DELETE.BAR, ADD.MENU, ADD.COMMAND, DELETE.MENU,
@@ -104628,7 +104696,7 @@ measured it, against what SHEET builds. A name listed here evaluates
 `#NAME?`. The decision about it is below, so it is not a gap nobody has
 looked at.
 
-**Declined, with the reason (59):**
+**Declined, with the reason (60):**
 
 - **Printing (6)**, out of scope by the owner's decision: PAGE.SETUP,
   PRINTER.SETUP, REMOVE.PAGE.BREAK, SET.PAGE.BREAK, SET.PRINT.AREA,
@@ -104643,6 +104711,11 @@ looked at.
 - **Another program (8).** There is no DDE, no DLL and no callable code
   outside a package: CALL, EXEC, EXECUTE, ON.DATA, POKE, REGISTER, REQUEST,
   TERMINATE.
+- **Keystrokes (1): SEND.KEYS.** Excel's sends keys to the active
+  application. Here that would be SHEET itself, whose run gate eats every
+  key while a macro runs (§81.86.4), and the kernel has no slot that posts a
+  keystroke to anything: `OSAPI_KEY_DOWN` only asks whether a key is held.
+  A kernel primitive for one package is not a trade to make for it.
 - **A chart document (23).** SHEET's chart is a rendering of a range (§82),
   not a document with arrows, overlays and a plot area to select: ADD.ARROW,
   ADD.OVERLAY, ATTACH.TEXT, AXES, COMBINATION, COPY.CHART, DELETE.ARROW,

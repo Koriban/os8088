@@ -1,6 +1,6 @@
 # SHEET's macro language — finishing it
 
-**Status: planned 2026-09-21. Waves 0-3 done; wave 4 text files and events done (§81.91, §81.92); the rest waits on the 64 KB wall (§81.93.1).** Every count here was
+**Status: planned 2026-09-21. Waves 0-4 done: text files and events (§81.91, §81.92), MACRO.OVL past the 64 KB wall (§81.94), custom menus (§81.95) and DIALOG.BOX (§81.96); SEND.KEYS declined (§81.93). Wave 5, the reader half, is next.** Every count here was
 measured from Microsoft Excel **Version 2.0**'s *Functions and Macros* manual
 (`_LIBRARY/documentation/excel_man/`), OCR-repaired by hand where the scan
 split a name, and cross-checked against SHEET's own `sh_functab` through
@@ -18,7 +18,7 @@ Excel 2.0 has **about 209 macro-side functions**. SHEET has **20**
 | **decline** | **59** | each for a reason that is a property of this OS or of SHEET — §3 |
 | **blocked** | **13** | the SHEET feature they drive does not exist yet — §4 |
 
-**Finished = the 117 built, the 59 declined in SPEC with their reasons, and
+**Finished = the 117 built, the 60 declined in SPEC with their reasons, and
 the 13 recorded against the feature each waits on.** Not "209 of 209":
 `APP.MAXIMIZE` on a machine where the OS owns every window is a function that
 could only lie.
@@ -140,7 +140,7 @@ where the menu would have asked in a dialog.
 - Movement: `HLINE`, `HPAGE`, `HSCROLL`, `SELECT.END`, `SELECT.LAST.CELL`, `SHOW.ACTIVE.CELL`, `UNLOCKED.NEXT`, `UNLOCKED.PREV`, `VLINE`, `VPAGE`, `VSCROLL`
 - Chart gallery: `GALLERY.AREA`, `GALLERY.BAR`, `GALLERY.COLUMN`, `GALLERY.LINE`, `GALLERY.PIE`, `GALLERY.SCATTER`
 
-**Wave 4 — customizing (22).**
+**Wave 4 — customizing (22). DONE, 21 of 22** (§81.91 `sheetmfile`, §81.92 `sheetmevt`, §81.95 `sheetmmenu`, §81.96 `sheetmdbox`; SEND.KEYS declined in §81.93).
 Text files: `FCLOSE`, `FOPEN`, `FPOS`, `FREAD`, `FREADLN`, `FSIZE`, `FWRITE`, `FWRITELN`. Events: `ON.KEY`, `ON.TIME`, `SEND.KEYS` (`OSAPI_WM_TIMER` is
 `ON.TIME`'s clock). Custom menus on SHEET's own bar (§81.54): `ADD.BAR`, `ADD.COMMAND`, `ADD.MENU`, `CHECK.COMMAND`, `DELETE.BAR`, `DELETE.COMMAND`, `DELETE.MENU`, `ENABLE.COMMAND`, `RENAME.COMMAND`, `SHOW.BAR`.
 And `DIALOG.BOX` last, as the gap plan already said: the largest item and

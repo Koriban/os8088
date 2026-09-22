@@ -151,6 +151,8 @@ BIFF_MACRO_FUNCS = {
     0x9A: ('ENABLE.COMMAND', (4, 5), (4, 5)),
     0x9B: ('CHECK.COMMAND' , (4, 5), (4, 5)),
     0x9C: ('RENAME.COMMAND', (4, 5), (4, 5)),
+    # wave 4d (81.96): a custom dialog
+    0xA1: ('DIALOG.BOX'    , (1, 1), (1, 1)),
 }
 
 # ...and the COMMAND EQUIVALENTS TABLE, which is a DIFFERENT TABLE with its

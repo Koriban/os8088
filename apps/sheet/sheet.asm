@@ -835,7 +835,11 @@ SH_NSEGW equ 8
 %endmacro
 SHM2_PMACRO  equ 0                  ; MACRO.OVL's verbs: the macro functions,
 SHM2_MRESUME equ 1                  ; and a run starting or carrying on
-SHM2_N       equ 2
+SHM2_DPAINT  equ 2                  ; 81.96: DIALOG.BOX's window - its paint,
+SHM2_DKEY    equ 3                  ; its keys and its clicks, through the
+SHM2_DCLICK  equ 4                  ; resident thunks (sh_dbx_*)
+SHM2_N       equ 5
+SH_DBX_EDLEN equ 33                 ; 81.96: an edit box's text, with its NUL
 SH_M2KB      equ 28                 ; MACRO.OVL's claim, KB: the module and the
                                      ; text files' tail (81.91.1)
 
@@ -1069,13 +1073,25 @@ sh_modm_disp:
     stc
     retf
 sh_m2verb:
-    dw sh_m2_pmacro, sh_m2_mresume
+    dw sh_m2_pmacro, sh_m2_mresume, sh_m2_dpaint, sh_m2_dkey, sh_m2_dclick
 sh_m2_pmacro:
     call shm_pmacro
     clc
     retf
 sh_m2_mresume:
     call shm_mresume
+    clc
+    retf
+sh_m2_dpaint:
+    call shm_dbpaint
+    clc
+    retf
+sh_m2_dkey:
+    call shm_dbkey
+    clc
+    retf
+sh_m2_dclick:
+    call shm_dbclick
     clc
     retf
 section SH_MODSEC
@@ -1861,6 +1877,9 @@ sh_x_sh_nt_set:                     ; 81.89: NOTE
 sh_x_sh_mtab_calc:                  ; 81.95: the bar's titles, re-measured
     call sh_mtab_calc
     retf
+sh_x_sh_dbx_open:                   ; 81.96: DIALOG.BOX's window
+    call sh_dbx_open
+    retf
 
 sh_ovshims:
     dw sh_x_sh_itoa, sh_x_sh_unpackrow, sh_x_sh_pint, sh_x_sh_setvald
@@ -1915,6 +1934,7 @@ sh_ovshims:
     dw sh_x_sh_macro_mfire                                           ; 81.88
     dw sh_x_sh_nt_set                                                ; 81.89
     dw sh_x_sh_mtab_calc                                             ; 81.95
+    dw sh_x_sh_dbx_open                                              ; 81.96
 sh_entry:
     push ax
     push dx
@@ -35038,6 +35058,7 @@ SH_MW_INPUT    equ 3
 SH_MW_WAIT     equ 4                 ; 81.86: WAIT's timer
 SH_MW_STEP     equ 5                 ; ...and the Single Step dialog
 SH_MW_ONTIME   equ 6                 ; 81.92: ON.TIME's look at the clock
+SH_MW_DBOX     equ 7                 ; 81.96: DIALOG.BOX's own window
 SH_MKEYS       equ 4                 ; ON.KEY's bindings (81.92)...
 SH_MKREC       equ 6                 ; ...each the key word, then the col and
                                       ; row to run (col 0xFFFF: swallow it)
@@ -35153,6 +35174,11 @@ sh_macro_arm:
 sh_macro_ontimer:
     cmp byte [sh_macro_wait], SH_MW_WAIT
     je .go
+    cmp byte [sh_macro_wait], SH_MW_DBOX ; 81.96: DIALOG.BOX's window was
+    jne .notdbox                      ; closed by its close box - Cancel,
+    cmp word [sh_dbx_win], 0          ; once the kernel has finished closing
+    je .go                            ; it (sh_dbx_close_r)
+.notdbox:
     cmp byte [sh_macro_ontp], 0       ; 81.92: ON.TIME has a request - and a
     je .out                           ; run that is going, paused on a
     cmp byte [sh_macro_running], 0    ; dialog, makes it wait its turn
@@ -35166,6 +35192,94 @@ sh_macro_ontimer:
     call sh_macro_arm
     pop ax
 .out:
+    ret
+
+;
+; DIALOG.BOX's window (81.96). The module draws it, reads its keys and its
+; clicks; what stays here is what the kernel calls or names - the template,
+; the three thunks, the close negotiator - and the CREATE, because
+; OSAPI_WM_ONCLOSE takes a near proc in the CALLER's segment
+sh_dbx_tpl:
+    dw 0, 0, 0, 0
+    dw sh_macro_msg, sh_dbx_paint_r, sh_dbx_key_r, sh_dbx_click_r
+
+; sh_dbx_open - in: CX = width, DX = height; out: CF=1 not made
+sh_dbx_open:
+    push ax
+    push bx
+    push si
+    mov [sh_dbx_tpl + WT_W], cx
+    mov [sh_dbx_tpl + WT_H], dx
+    mov byte [sh_dbx_done], 0
+    call OSAPI_VIDEO                  ; centred, below the menu bar
+    sub ax, cx
+    sar ax, 1
+    jns .x
+    xor ax, ax
+.x:
+    mov [sh_dbx_tpl + WT_X], ax
+    sub bx, dx
+    sar bx, 1
+    cmp bx, MBAR_H + 8
+    jge .y
+    mov bx, MBAR_H + 8
+.y:
+    mov [sh_dbx_tpl + WT_Y], bx
+    mov si, sh_dbx_tpl
+    call OSAPI_WM_CREATE
+    jc .out
+    mov [sh_dbx_win], bx
+    mov ax, sh_dbx_close_r
+    call OSAPI_WM_ONCLOSE
+    call OSAPI_WM_SHOW
+    clc
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+sh_dbx_paint_r:                       ; SI = the window, the gfx lock held
+    push bp
+    mov bp, SHM2_DPAINT
+    call sh_m2call
+    pop bp
+    ret
+sh_dbx_key_r:                         ; AL = ascii, AH = scan
+    push bp
+    mov bp, SHM2_DKEY
+    jmp short sh_dbx_ev
+sh_dbx_click_r:                       ; CX,DX = the click
+    push bp
+    mov bp, SHM2_DCLICK
+sh_dbx_ev:
+    call sh_m2call
+    pop bp
+    cmp byte [sh_dbx_done], 0         ; a button: the window goes, and the
+    je .out                           ; run carries on - INPUT's order
+    mov byte [sh_dbx_done], 0
+    push bx
+    mov bx, [sh_dbx_win]
+    mov word [sh_dbx_win], 0
+    call OSAPI_WM_DESTROY
+    pop bx
+    jmp sh_macro_onalert
+.out:
+    ret
+
+; sh_dbx_close_r - the close box (SPEC.md 75.1): let it close, and answer
+; Cancel on the next tick, once the kernel has finished - a run resumed from
+; in here could open the next DIALOG.BOX while this one is half gone
+sh_dbx_close_r:
+    mov word [sh_dbx_win], 0
+    cmp byte [sh_macro_wait], SH_MW_DBOX
+    jne .out
+    push ax
+    mov ax, 1
+    call sh_macro_arm
+    pop ax
+.out:
+    clc
     ret
 
 ; sh_macro_keyck - ON.KEY (81.92): AX (AL the character, AH the scan) bound?
@@ -35251,6 +35365,9 @@ sh_macro_gate:
     or bx, bx
     jnz .raise
     mov bx, [sh_idlg_win]             ; ...or INPUT's
+    or bx, bx
+    jnz .raise
+    mov bx, [sh_dbx_win]              ; ...or DIALOG.BOX's (81.96)
     or bx, bx
     jz .none
 .raise:
@@ -35488,6 +35605,8 @@ shm_mtab:
     dw shm_menablecmd
     dw shm_mcheckcmd
     dw shm_mrencmd
+; wave 4d (81.96): a custom dialog
+    dw shm_mdbox
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -35511,6 +35630,8 @@ shm_mkind:
     times 8 db 0                      ; wave 4a: text files, COMMANDS - a
     db 0, 0                           ; wave 4b: ON.KEY, ON.TIME, commands
     times 10 db 0                     ; wave 4c: the menus, commands
+    db 0                              ; wave 4d: DIALOG.BOX, a command - it
+                                       ; pauses the run
                                        ; repaint re-evaluating FWRITE would
                                        ; write again; FREAD moves the position
 shm_mkind_end:
@@ -35634,6 +35755,7 @@ shm_mxnames:
     db 'ENABLE.COMMAND', 0
     db 'CHECK.COMMAND', 0
     db 'RENAME.COMMAND', 0
+    db 'DIALOG.BOX', 0
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -35752,6 +35874,7 @@ shm_mxrpn:
     db 0x9A, 1, 0                     ; ENABLE.COMMAND
     db 0x9B, 1, 0                     ; CHECK.COMMAND
     db 0x9C, 1, 0                     ; RENAME.COMMAND
+    db 0xA1, 0, 0                     ; DIALOG.BOX
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -41917,6 +42040,1056 @@ shm_mrencmd:
 .bad:
     jmp shm_merr
 
+; =============================================================================
+; DIALOG.BOX (macro plan wave 4, 81.96): a dialog a macro describes in a
+; range seven columns wide - item type, x, y, width, height, text, and the
+; initial value that becomes the result - whose first row is the dialog
+; itself. The run PAUSES while it is up (INPUT's mechanism, 81.63) and the
+; cell answers on its second evaluation: the pressed button's item number,
+; counted from the second row, or FALSE for Cancel. OK first writes every
+; item's result into its seventh column.
+;
+; Types: 1 default OK, 2 default Cancel, 3 OK, 4 Cancel, 5 text, 6 text edit,
+; 7 integer edit, 8 number edit, 9 formula edit, 10 reference edit, 11 option
+; group, 12 option button, 13 check box, 14 group box. The list boxes (15,
+; 16) are refused, and so is a dialog with more than SHM_DBMAX items or
+; SHM_DBEDITS edit boxes.
+;
+; Positions are Excel's dialog units: an eighth of a character across and a
+; twelfth down - a pixel across and two thirds of one down, with this
+; machine's 8x8 cell. The window's template, its thunks and its close are
+; resident (sh_dbx_*), because the kernel calls near procs in the package.
+; The edit boxes share ONE line block and ONE buffer in DS (os88line reads
+; its buffer there); each box's text lives here and is swapped in to be
+; drawn or typed at.
+; =============================================================================
+SHM_DBMAX   equ 16                    ; items after the first row
+SHM_DBREC   equ 12                    ; +0 type +1 state (check: on; group:
+                                       ; the button on, 1-based; edit: its
+                                       ; slot) +2 x +4 y +6 w +8 h (pixels,
+                                       ; from the content's origin) +10 text
+SHM_DBTXT   equ 24
+SHM_DBEDITS equ 4
+shm_dbn:    db 0                      ; items
+shm_dbpend: db 0                      ; DIALOG.BOX waits for its answer...
+shm_dbans:  db 0                      ; ...which is the item, 0 for Cancel
+shm_dbfoc:  db 0xFF                   ; the ITEM whose edit box has the keys
+shm_dbslots: db 0                     ; edit slots given out
+shm_dbdef:  db 0xFF                   ; the item Enter presses
+shm_dbcol:  dw 0                      ; the range's first column and row
+shm_dbrow:  dw 0
+shm_dbw:    dw 0                      ; the window's size, until it opens
+shm_dbh:    dw 0
+shm_dbopen: db 0                      ; ...which the pause is to do
+shm_dbox:   dw 0                      ; the content's origin
+shm_dboy:   dw 0
+shm_dbit:   times SHM_DBMAX * SHM_DBREC db 0
+shm_dbtx:   times SHM_DBMAX * SHM_DBTXT db 0
+shm_dbed:   times SHM_DBEDITS * SH_DBX_EDLEN db 0
+shm_dbcv:   times SHM_DBEDITS * 4 db 0 ; each box's LN_CAR and LN_VIEW
+shm_s_dbok: db 'OK', 0
+shm_s_dbcan: db 'Cancel', 0
+
+; shm_dbnum - the number in the cell AX col, BX row, as an integer: text,
+; an error or an empty cell is 0. A logical is 1 or 0
+shm_dbnum:
+    push si
+    push di
+    push es
+    SHOUT sh_findcell
+    jnc .zero
+    mov es, [sh_cellseg]
+    cmp byte [es:di+SH_C_TYPE], SH_T_TEXT
+    je .zero
+    cmp byte [es:di+SH_C_TYPE], SH_T_ERR
+    je .zero
+    mov si, di
+    SHOUT sh_cellval_to_acc_si
+    SHOUT sh_acc_toint
+    jnc .out
+.zero:
+    xor ax, ax
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; shm_dbitem - DI = item AX's record (AX 0-based)
+shm_dbitem:
+    push ax
+    push dx
+    mov dx, SHM_DBREC
+    mul dx
+    add ax, shm_dbit
+    mov di, ax
+    pop dx
+    pop ax
+    ret
+
+; shm_dbslot - BX = the text of item DI's edit box (CS), and SI = its caret
+; pair in shm_dbcv
+shm_dbslot:
+    push ax
+    push dx
+    mov al, [cs:di+1]
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    add si, shm_dbcv
+    mov dx, SH_DBX_EDLEN
+    mul dx
+    add ax, shm_dbed
+    mov bx, ax
+    pop dx
+    pop ax
+    ret
+
+; shm_db23 - AX = AX * 2 / 3: Excel's vertical dialog unit, in pixels
+shm_db23:
+    push dx
+    push bx
+    shl ax, 1
+    xor dx, dx
+    mov bx, 3
+    div bx
+    pop bx
+    pop dx
+    ret
+
+; shm_dbtext - the text of the cell AX col, BX row into CS:DI, CX bytes at
+; most with the NUL. out: AX = its length
+shm_dbtext:
+    push si
+    push di
+    push cx
+    SHOUT sh_cell_totext
+    pop cx
+    push cx
+    dec cx
+    xor ax, ax
+    mov si, sh_clipbuf
+.c:
+    cmp byte [si], 0
+    je .e
+    push ax
+    mov al, [si]
+    mov [cs:di], al
+    pop ax
+    inc ax
+    inc si
+    inc di
+    loop .c
+.e:
+    mov byte [cs:di], 0
+    pop cx
+    pop di
+    pop si
+    ret
+
+; DIALOG.BOX(dialog_ref)
+shm_mdbox:
+    cmp byte [cs:shm_dbpend], 0       ; the second evaluation: the answer
+    je .ask
+    mov byte [cs:shm_dbpend], 0
+    SHOUT sh_skipargs
+    mov al, [cs:shm_dbans]
+    or al, al
+    jz .f
+    xor ah, ah
+    jmp shm_anum
+.f:
+    jmp shm_mfalse
+.ask:
+    cmp word [sh_dbx_win], 0          ; one at a time
+    jne .bad
+    call shm_mrangeref
+    jnc .bad
+    push ax                           ; sh_skipargs takes AL
+    SHOUT sh_skipargs
+    pop ax
+    cmp bx, dx
+    jbe .o
+    xchg bx, dx
+.o:
+    mov [cs:shm_dbcol], ax
+    mov [cs:shm_dbrow], bx
+    sub dx, bx                        ; the items: every row after the first
+    cmp dx, SHM_DBMAX
+    ja .bad0
+    mov [cs:shm_dbn], dl
+    mov byte [cs:shm_dbfoc], 0xFF
+    mov byte [cs:shm_dbdef], 0xFF
+    mov byte [cs:shm_dbans], 0
+    mov byte [cs:shm_dbslots], 0
+    push si
+    xor cx, cx
+.item:
+    cmp cl, [cs:shm_dbn]
+    jae .made
+    call shm_dbparse
+    jc .refuse
+    inc cx
+    jmp short .item
+.refuse:
+    pop si
+.bad0:
+    jmp shm_merr0
+.made:
+    cmp byte [cs:shm_dbdef], 0xFF     ; no default named: the first OK
+    jne .title
+    xor cx, cx
+.fd:
+    cmp cl, [cs:shm_dbn]
+    jae .title
+    mov ax, cx
+    call shm_dbitem
+    cmp byte [cs:di], 3
+    je .fdok
+    inc cx
+    jmp short .fd
+.fdok:
+    mov [cs:shm_dbdef], cl
+.title:
+    mov ax, [cs:shm_dbcol]            ; the dialog's own row: its title...
+    add ax, 5
+    mov bx, [cs:shm_dbrow]
+    SHOUT sh_cell_totext
+    mov si, sh_clipbuf
+    mov di, sh_macro_msg              ; ...where the template names it
+    mov cx, OS88UI_AMAX
+.tt:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .size
+    inc si
+    inc di
+    loop .tt
+    mov byte [di], 0
+.size:
+    mov ax, [cs:shm_dbcol]            ; ...and its size
+    add ax, 3
+    mov bx, [cs:shm_dbrow]
+    call shm_dbnum
+    or ax, ax
+    jnz .w
+    mov ax, 320
+.w:
+    add ax, 2
+    push ax
+    mov ax, [cs:shm_dbcol]
+    add ax, 4
+    call shm_dbnum
+    call shm_db23
+    or ax, ax
+    jnz .h
+    mov ax, 100
+.h:
+    add ax, TITLE_H + 2
+    mov [cs:shm_dbh], ax
+    pop ax
+    mov [cs:shm_dbw], ax
+    pop si
+    mov byte [cs:shm_dbpend], 1       ; the window opens when the step
+    mov byte [cs:shm_dbopen], 1       ; pauses (shm_mstep), AFTER the sheet
+                                       ; is painted - a window made here was
+                                       ; painted over by the pause's repaint
+    mov byte [sh_macro_ctl], SH_MC_PAUSEH
+    mov byte [sh_macro_wait], SH_MW_DBOX
+    jmp shm_mfalse
+.bad:
+    jmp shm_merr
+
+; shm_dbparse - item CX (0-based) off its row into its record. CF=1 refused
+shm_dbparse:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, cx
+    call shm_dbitem                   ; DI = its record
+    mov bx, [cs:shm_dbrow]
+    add bx, cx
+    inc bx                            ; BX = its row, from here to the end
+    mov ax, [cs:shm_dbcol]
+    call shm_dbnum
+    cmp ax, 1
+    jb .no
+    cmp ax, 14
+    ja .no                            ; 15, 16: the list boxes
+    mov [cs:di], al
+    mov byte [cs:di+1], 0
+    cmp al, 2                         ; 1 and 2 are the DEFAULT button
+    ja .notdef
+    cmp byte [cs:shm_dbdef], 0xFF
+    jne .notdef
+    mov [cs:shm_dbdef], cl
+.notdef:
+    mov ax, [cs:shm_dbcol]
+    inc ax
+    call shm_dbnum
+    mov [cs:di+2], ax
+    mov ax, [cs:shm_dbcol]
+    add ax, 2
+    call shm_dbnum
+    call shm_db23
+    mov [cs:di+4], ax
+    mov ax, [cs:shm_dbcol]
+    add ax, 3
+    call shm_dbnum
+    mov [cs:di+6], ax
+    mov ax, [cs:shm_dbcol]
+    add ax, 4
+    call shm_dbnum
+    call shm_db23
+    mov [cs:di+8], ax
+    mov ax, cx                        ; its text
+    mov dx, SHM_DBTXT
+    mul dx
+    add ax, shm_dbtx
+    mov [cs:di+10], ax
+    push di
+    mov di, ax
+    mov ax, [cs:shm_dbcol]
+    add ax, 5
+    push cx
+    mov cx, SHM_DBTXT
+    call shm_dbtext
+    pop cx
+    pop di
+    call shm_dbsize                   ; a blank width or height: its own
+    mov dx, [cs:shm_dbcol]            ; DX = the initial value's column
+    add dx, 6
+    mov al, [cs:di]
+    cmp al, 13
+    je .check
+    cmp al, 11
+    je .group
+    cmp al, 6
+    jb .ok
+    cmp al, 10
+    ja .ok
+    mov al, [cs:shm_dbslots]          ; an edit box: a slot of its own
+    cmp al, SHM_DBEDITS
+    jae .no
+    inc byte [cs:shm_dbslots]
+    mov [cs:di+1], al
+    cmp byte [cs:shm_dbfoc], 0xFF     ; the first edit box has the keys
+    jne .nofoc
+    mov [cs:shm_dbfoc], cl
+.nofoc:
+    push bx
+    call shm_dbslot                   ; BX its text, SI its caret pair
+    mov ax, dx
+    mov di, bx
+    pop bx
+    push cx
+    mov cx, SH_DBX_EDLEN
+    call shm_dbtext                   ; AX = its length...
+    pop cx
+    mov [cs:si], ax                   ; ...the caret at the END, as
+    mov word [cs:si+2], 0             ; os88line_set would put it
+    jmp short .ok
+.check:
+    mov ax, dx
+    call shm_dbnum
+    or ax, ax
+    jz .ok
+    mov byte [cs:di+1], 1
+    jmp short .ok
+.group:
+    mov ax, dx
+    call shm_dbnum
+    or ax, ax
+    jnz .gset
+    inc ax                            ; blank: the first button, as Excel
+.gset:
+    mov [cs:di+1], al
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_dbsize - item DI's blank width or height, from what it is
+shm_dbsize:
+    push ax
+    push bx
+    push si
+    mov si, [cs:di+10]                ; the text's length, in pixels
+    xor bx, bx
+.l:
+    cmp byte [cs:si+bx], 0
+    je .e
+    inc bx
+    jmp short .l
+.e:
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    cmp word [cs:di+6], 0
+    jne .hgt
+    mov ax, OS88UI_ABW                ; a button: every one the same
+    cmp byte [cs:di], 4
+    jbe .setw
+    mov ax, bx                        ; text: its own length
+    cmp byte [cs:di], 5
+    je .setw
+    mov ax, 160                       ; an edit box: twenty characters
+    cmp byte [cs:di], 10
+    jbe .setw
+    lea ax, [bx+16]                   ; a check or option: the glyph too
+.setw:
+    mov [cs:di+6], ax
+.hgt:
+    cmp word [cs:di+8], 0
+    jne .out
+    mov ax, 15
+    cmp byte [cs:di], 4
+    jbe .seth
+    mov ax, 8
+    cmp byte [cs:di], 5
+    je .seth
+    mov ax, 14
+.seth:
+    mov [cs:di+8], ax
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; shm_dbrect - item DI's rectangle on the glass into sh_tbuf's first eight
+; bytes (DS, where os88ui_btn reads one): x1 y1 x2 y2, inclusive
+shm_dbrect:
+    push ax
+    mov ax, [cs:di+2]
+    add ax, [cs:shm_dbox]
+    mov [sh_tbuf], ax
+    add ax, [cs:di+6]
+    dec ax
+    mov [sh_tbuf+4], ax
+    mov ax, [cs:di+4]
+    add ax, [cs:shm_dboy]
+    mov [sh_tbuf+2], ax
+    add ax, [cs:di+8]
+    dec ax
+    mov [sh_tbuf+6], ax
+    pop ax
+    ret
+
+; shm_dblabel - item DI's text into sh_tbuf+8 (DS), a button's own default
+; when it has none; out SI = it
+shm_dblabel:
+    push ax
+    push bx
+    push di
+    mov bx, [cs:di+10]
+    cmp byte [cs:bx], 0
+    jne .have
+    cmp byte [cs:di], 4
+    ja .have
+    mov bx, shm_s_dbok
+    test byte [cs:di], 1              ; 1 and 3 are OK, 2 and 4 Cancel
+    jnz .have
+    mov bx, shm_s_dbcan
+.have:
+    mov di, sh_tbuf + 8
+.c:
+    mov al, [cs:bx]
+    mov [di], al
+    inc bx
+    inc di
+    or al, al
+    jnz .c
+    pop di
+    pop bx
+    pop ax
+    mov si, sh_tbuf + 8
+    ret
+
+; shm_dbload - point the shared edit block at item DI's box: its rect, its
+; text swapped into the one DS buffer, its caret, and the focus if it has it.
+; out: SI = the block
+shm_dbload:
+    push ax
+    push bx
+    push cx
+    push di
+    call shm_dbrect
+    call shm_dbslot                   ; BX its text, SI its caret pair
+    push si
+    mov si, sh_dbx_line
+    mov ax, [sh_tbuf]
+    mov [si+LN_X1], ax
+    mov ax, [sh_tbuf+2]
+    mov [si+LN_Y1], ax
+    mov ax, [sh_tbuf+4]
+    mov [si+LN_X2], ax
+    mov ax, [sh_tbuf+6]
+    mov [si+LN_Y2], ax
+    mov word [si+LN_BUF], sh_dbx_ebuf
+    mov word [si+LN_MAX], SH_DBX_EDLEN
+    mov cx, di                        ; the focus: is it this item?
+    sub cx, shm_dbit
+    mov ax, cx
+    mov cl, SHM_DBREC
+    div cl
+    cmp al, [cs:shm_dbfoc]
+    mov byte [si+LN_FOCUS], 0
+    jne .nf
+    mov byte [si+LN_FOCUS], 1
+.nf:
+    mov di, sh_dbx_ebuf
+    xor cx, cx
+.c:
+    mov al, [cs:bx]
+    mov [di], al
+    or al, al
+    jz .e
+    inc bx
+    inc di
+    inc cx
+    jmp short .c
+.e:
+    mov [si+LN_LEN], cx
+    pop bx                            ; the caret pair
+    mov ax, [cs:bx]
+    cmp ax, cx
+    jbe .car
+    mov ax, cx
+.car:
+    mov [si+LN_CAR], ax
+    mov ax, [cs:bx+2]
+    mov [si+LN_VIEW], ax
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_dbsave - the shared block's text and caret back into item DI's box
+shm_dbsave:
+    push ax
+    push bx
+    push si
+    push di
+    call shm_dbslot
+    mov di, sh_dbx_line
+    mov ax, [di+LN_CAR]
+    mov [cs:si], ax
+    mov ax, [di+LN_VIEW]
+    mov [cs:si+2], ax
+    mov si, sh_dbx_ebuf
+.c:
+    mov al, [si]
+    mov [cs:bx], al
+    inc si
+    inc bx
+    or al, al
+    jnz .c
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; shm_dbgroup - item CX (an option button): AL = its place in its group,
+; 1-based, and DI = the group's record; CF=1 it has no group
+shm_dbgroup:
+    push cx
+    mov al, 1
+.back:
+    jcxz .none
+    dec cx
+    push ax
+    mov ax, cx
+    call shm_dbitem
+    pop ax
+    cmp byte [cs:di], 12
+    jne .top
+    inc al
+    jmp short .back
+.top:
+    cmp byte [cs:di], 11
+    jne .none
+    clc
+    pop cx
+    ret
+.none:
+    stc
+    pop cx
+    ret
+
+; shm_dbdraw - item CX, on the glass (the gfx lock held)
+shm_dbdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, cx
+    call shm_dbitem
+    call shm_dbrect
+    call shm_dblabel                  ; SI = its label, in DS
+    mov al, [cs:di]
+    cmp al, 4
+    ja .notbtn
+    mov bx, sh_tbuf                   ; a button
+    mov di, OS88UI_FILL
+    cmp cl, [cs:shm_dbdef]
+    jne .btn
+    or di, OS88UI_DEF
+.btn:
+    SHOUT os88ui_btn
+    jmp .out
+.notbtn:
+    cmp al, 5
+    jne .notext
+.label:
+    cmp byte [si], 0
+    je .out
+    mov cx, [sh_tbuf]
+    mov dx, [sh_tbuf+2]
+.run:
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+    jmp .out
+.notext:
+    cmp al, 10
+    ja .notedit
+    call shm_dbload
+    SHOUT os88line_draw
+    jmp .out
+.notedit:
+    cmp al, 11
+    je .box
+    cmp al, 14
+    je .box
+    mov ah, OS88UI_GCHECK             ; a check box or an option button
+    cmp al, 13
+    je .chk
+    mov ah, OS88UI_GRADIO
+    push di
+    push ax
+    call shm_dbgroup                  ; AL its place, DI its group
+    mov dl, al
+    pop ax
+    jc .off
+    cmp dl, [cs:di+1]
+    jne .off
+    or ah, OS88UI_GON
+.off:
+    pop di
+    jmp short .glyph
+.chk:
+    cmp byte [cs:di+1], 0
+    je .glyph
+    or ah, OS88UI_GON
+.glyph:
+    mov al, ah
+    xor ah, ah
+    mov cx, [sh_tbuf]
+    mov dx, [sh_tbuf+2]
+    SHOUT os88ui_glyph
+    add cx, OS88UI_GW + 4
+    add dx, 2
+    cmp byte [si], 0
+    jne .run
+    jmp short .out
+.box:
+    cmp word [cs:di+6], 0             ; a group box - drawn only when it
+    je .out                           ; has a size
+    mov ax, [sh_tbuf]
+    mov bx, [sh_tbuf+2]
+    add bx, 4
+    mov cx, [sh_tbuf+4]
+    mov dx, [sh_tbuf+6]
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FRAME
+    cmp byte [si], 0                  ; its title, across the top edge
+    je .out
+    mov cx, [sh_tbuf]
+    add cx, 8
+    mov dx, [sh_tbuf+2]
+    jmp .run
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; verb SHM2_DPAINT: the whole dialog. SI = the window, the gfx lock held
+shm_dbpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, si
+    call OSAPI_WM_CONTENT
+    mov [cs:shm_dbox], ax
+    mov [cs:shm_dboy], dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    xor cx, cx
+.l:
+    cmp cl, [cs:shm_dbn]
+    jae .out
+    call shm_dbdraw
+    inc cx
+    jmp short .l
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_dbpress - item CX pressed: an OK writes every result and answers CX+1,
+; a Cancel answers FALSE; either way the resident thunk closes the window
+; and the run carries on (sh_dbx_ev)
+shm_dbpress:
+    push ax
+    push di
+    mov ax, cx
+    call shm_dbitem
+    mov byte [cs:shm_dbans], 0
+    test byte [cs:di], 1              ; 1 and 3 are OK
+    jz .done
+    call shm_dbresults
+    mov al, cl
+    inc al
+    mov [cs:shm_dbans], al
+.done:
+    mov byte [sh_dbx_done], 1
+    pop di
+    pop ax
+    ret
+
+; shm_dbresults - every item's result into its seventh column: an edit box
+; its text (a number when it reads as one, for the number boxes), a check box
+; TRUE or FALSE, an option group the place of the button that is on
+shm_dbresults:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor cx, cx
+.l:
+    cmp cl, [cs:shm_dbn]
+    jb .more
+    jmp .out
+.more:
+    mov ax, cx
+    call shm_dbitem
+    mov bx, [cs:shm_dbrow]
+    add bx, cx
+    inc bx
+    mov ax, [cs:shm_dbcol]
+    add ax, 6
+    mov dl, [cs:di]
+    cmp dl, 13
+    je .check
+    cmp dl, 11
+    je .group
+    cmp dl, 6
+    jb .next
+    cmp dl, 10
+    ja .next
+    push bx                           ; an edit box: its text, into DS
+    call shm_dbslot
+    mov si, bx
+    mov di, sh_rwsrc
+.c:
+    push ax
+    mov al, [cs:si]
+    mov [di], al
+    pop ax
+    inc si
+    inc di
+    cmp byte [di-1], 0
+    jne .c
+    pop bx
+    cmp dl, 7                         ; the integer and number boxes: a
+    je .num                           ; number when it is one
+    cmp dl, 8
+    jne .text
+.num:
+    push ax
+    push bx
+    push si
+    mov si, sh_rwsrc
+    SHOUT fp_atof
+    jc .ntext
+    cmp byte [si], 0
+    jne .ntext
+    SHOUT sh_acc_store
+    pop si
+    pop bx
+    pop ax
+    SHOUT sh_setvald
+    jmp short .next
+.ntext:
+    pop si
+    pop bx
+    pop ax
+.text:
+    mov si, sh_rwsrc
+    SHOUT sh_settext
+    jmp short .next
+.check:
+    mov dl, [cs:di+1]
+    SHOUT sh_setbool
+    jmp short .next
+.group:
+    push ax
+    mov al, [cs:di+1]
+    xor ah, ah
+    SHOUT sh_acc_int
+    pop ax
+    SHOUT sh_setvald
+.next:
+    inc cx
+    jmp .l
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_dbnextedit - the keys to the edit box after the focused one (Tab)
+shm_dbnextedit:
+    push ax
+    push cx
+    push di
+    mov cl, [cs:shm_dbfoc]
+    cmp cl, 0xFF
+    je .out
+    xor ch, ch
+    mov ax, cx
+    call shm_dbitem
+    push cx
+    mov cx, [cs:shm_dbn]              ; at most every item once round
+    and cx, 0xFF
+    mov ah, cl
+    pop cx
+.l:
+    inc cl
+    cmp cl, [cs:shm_dbn]
+    jb .t
+    xor cl, cl
+.t:
+    push ax
+    mov ax, cx
+    call shm_dbitem
+    pop ax
+    cmp byte [cs:di], 6
+    jb .n
+    cmp byte [cs:di], 10
+    jbe .found
+.n:
+    dec ah
+    jnz .l
+    jmp short .out
+.found:
+    call shm_dbfocus
+.out:
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; shm_dbfocus - the keys to item CX's edit box: the old one drawn without
+; its caret, the new one with it
+shm_dbfocus:
+    push ax
+    push cx
+    mov al, [cs:shm_dbfoc]
+    mov [cs:shm_dbfoc], cl
+    cmp al, 0xFF
+    je .new
+    cmp al, cl
+    je .new
+    push cx
+    mov cl, al
+    xor ch, ch
+    call shm_dbdraw
+    pop cx
+.new:
+    call shm_dbdraw
+    pop cx
+    pop ax
+    ret
+
+; verb SHM2_DKEY: AL = the character, AH = the scan
+shm_dbkey:
+    push ax
+    push cx
+    push si
+    push di
+    cmp al, 13                        ; Enter: the default button
+    jne .notent
+    mov cl, [cs:shm_dbdef]
+    cmp cl, 0xFF
+    je .out
+    xor ch, ch
+    call shm_dbpress
+    jmp short .out
+.notent:
+    cmp al, 27                        ; Esc: Cancel
+    jne .notesc
+    mov byte [cs:shm_dbans], 0
+    mov byte [sh_dbx_done], 1
+    jmp short .out
+.notesc:
+    cmp al, 9                         ; Tab: the next edit box
+    jne .notab
+    call shm_dbnextedit
+    jmp short .out
+.notab:
+    mov cl, [cs:shm_dbfoc]            ; everything else is the edit box's
+    cmp cl, 0xFF
+    je .out
+    xor ch, ch
+    push ax
+    mov ax, cx
+    call shm_dbitem
+    pop ax
+    call shm_dbload                   ; SI = the block
+    SHOUT os88line_key
+    jc .out
+    call shm_dbsave
+    SHOUT os88line_draw
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; verb SHM2_DCLICK: CX,DX = the click, on the glass
+shm_dbclick:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov ax, cx
+    xor cx, cx
+.l:
+    cmp cl, [cs:shm_dbn]
+    jae .out
+    push ax
+    mov ax, cx
+    call shm_dbitem
+    pop ax
+    call shm_dbrect
+    cmp ax, [sh_tbuf]
+    jl .n
+    cmp ax, [sh_tbuf+4]
+    jg .n
+    cmp dx, [sh_tbuf+2]
+    jl .n
+    cmp dx, [sh_tbuf+6]
+    jg .n
+    mov bl, [cs:di]                   ; inside item CX
+    cmp bl, 4
+    ja .notbtn
+    call shm_dbpress
+    jmp short .out
+.notbtn:
+    cmp bl, 13
+    jne .notchk
+    xor byte [cs:di+1], 1
+    call shm_dbdraw
+    jmp short .out
+.notchk:
+    cmp bl, 12
+    jne .notopt
+    push ax
+    call shm_dbgroup                  ; AL its place, DI its group
+    jc .nogrp
+    mov [cs:di+1], al
+    call shm_dbredio                  ; every option button, again
+.nogrp:
+    pop ax
+    jmp short .out
+.notopt:
+    cmp bl, 6
+    jb .n
+    cmp bl, 10
+    ja .n
+    call shm_dbfocus                  ; an edit box: the keys, and the caret
+    push cx                           ; where it was clicked
+    push ax
+    mov ax, cx
+    call shm_dbitem
+    call shm_dbload
+    pop cx                            ; the click's x
+    SHOUT os88line_click
+    call shm_dbsave
+    SHOUT os88line_draw
+    pop cx
+    jmp short .out
+.n:
+    inc cx
+    jmp .l
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; shm_dbredio - every option button drawn again (one moved)
+shm_dbredio:
+    push ax
+    push cx
+    push di
+    xor cx, cx
+.l:
+    cmp cl, [cs:shm_dbn]
+    jae .out
+    mov ax, cx
+    call shm_dbitem
+    cmp byte [cs:di], 12
+    jne .n
+    call shm_dbdraw
+.n:
+    inc cx
+    jmp short .l
+.out:
+    pop di
+    pop cx
+    pop ax
+    ret
+
 ; shm_mstore - the answer just evaluated into the cell at AX,BX, as what it is
 ; - a label, a logical, an error or a number. CF=1 when the cell refused it
 shm_mstore:
@@ -42659,6 +43832,8 @@ shm_mresume:
     mov byte [cs:shm_stepgo], 0       ; for the rest
     mov byte [cs:shm_wtpend], 0
     mov byte [cs:shm_alpend], 0
+    mov byte [cs:shm_dbpend], 0       ; 81.96: a halted run's DIALOG.BOX
+    mov byte [cs:shm_dbopen], 0
     mov byte [cs:shm_escwas], 1       ; an Esc already down is not a press
     mov byte [sh_macro_esc], 0
     mov word [sh_msg], 0
@@ -42786,9 +43961,26 @@ shm_mstep:
 .pause:
     call shm_mpaint
     cmp byte [sh_macro_wait], SH_MW_ALERT
-    jne .ask
+    jne .notalert
     SHOUT sh_macro_alertup
     jmp .out
+.notalert:
+    cmp byte [sh_macro_wait], SH_MW_DBOX ; 81.96: DIALOG.BOX's own window
+    jne .ask
+    cmp byte [cs:shm_dbopen], 0
+    je .out
+    mov byte [cs:shm_dbopen], 0
+    push cx
+    push dx
+    mov cx, [cs:shm_dbw]
+    mov dx, [cs:shm_dbh]
+    SHOUT sh_dbx_open
+    pop dx
+    pop cx
+    jnc .out
+    mov byte [cs:shm_dbpend], 0       ; no window to make: the run stops
+    mov word [sh_msg], sh_s_macroerr
+    jmp .fin
 .ask:
     mov byte [sh_macro_ansok], 0
     SHOUT sh_macro_inputup
@@ -50723,7 +51915,11 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9058                     ; +476 for 81.95's custom menus: the
+    OS88_BSS 9118                     ; +60 for 81.96's DIALOG.BOX: the
+                                       ; window, its done byte, one line
+                                       ; block and one edit buffer, and its
+                                       ; vector (149);
+                                       ; +476 for 81.95's custom menus: the
                                        ; bar pointer and length, the custom
                                        ; bar's table, three records;
                                        ; +5 for 81.94's MACRO.OVL pointer and
@@ -51797,14 +52993,15 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 148
+SH_NVEC       equ 149
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
 sh_v_sh_macro_mfire          equ sh_v_sh_nt_get + 4
 sh_v_sh_nt_set               equ sh_v_sh_macro_mfire + 4
 sh_v_sh_mtab_calc            equ sh_v_sh_nt_set + 4
-sh_v_end      equ sh_v_sh_mtab_calc + 4
+sh_v_sh_dbx_open             equ sh_v_sh_mtab_calc + 4
+sh_v_end      equ sh_v_sh_dbx_open + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -52085,7 +53282,13 @@ sh_mtabp      equ sh_m2fail + 1              ; 81.95: the bar's table...
 sh_mcount     equ sh_mtabp + 2               ; ...and its length
 sh_mtabc      equ sh_mcount + 2              ; SH_MCUST * 6: the custom bar's
 sh_mcrec      equ sh_mtabc + SH_MCUST * 6    ; SH_MCUST * SH_MCREC: the menus
-sh_bss_end        equ sh_mcrec + SH_MCUST * SH_MCREC
+sh_dbx_win    equ sh_mcrec + SH_MCUST * SH_MCREC ; 81.96: DIALOG.BOX's
+                                             ; window, 0 = none
+sh_dbx_done   equ sh_dbx_win + 2             ; byte: a button closed it
+sh_dbx_line   equ sh_dbx_done + 1            ; OS88LINE_SZ: its edit boxes'
+                                             ; one line block...
+sh_dbx_ebuf   equ sh_dbx_line + OS88LINE_SZ  ; SH_DBX_EDLEN: ...and buffer
+sh_bss_end        equ sh_dbx_ebuf + SH_DBX_EDLEN
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it
