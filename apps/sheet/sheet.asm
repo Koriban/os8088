@@ -13040,6 +13040,7 @@ sh_fdlg_apply0:
     cmp word [sh_fdlg_sel], 2
     jne .nwdone
     mov word [sh_msg], sh_s_nw_macro
+    call sh_macsheet                  ; 81.97: a macro sheet is a KIND now
 .nwdone:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
@@ -17756,6 +17757,12 @@ sh_new:
                                      ; pointing at cells no longer there
                                      ; an OFFSET into the arena reset above,
                                      ; and would read new text through it
+    cmp byte [sh_dockind], 0           ; 81.97: a macro sheet showed its
+    je .wsheet                         ; formulas; a new document is a
+    mov byte [sh_dockind], 0           ; worksheet, which shows values
+    mov byte [sh_showformulas], 0
+    mov word [sh_i_options+2], sh_it_form_off
+.wsheet:
     mov word [sh_cursheet], 0
     mov cx, SH_SHEETS * 6            ; 6 words per sheet: sel/row/scl/scr,
                                       ; and 81.70's own fcl/frw
@@ -18631,6 +18638,7 @@ sh_doread_sylk:
     mov word [sh_nnote], 0            ; notes too, not just its cells
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0           ; ...and its defined names (81.10.8)
+    call sh_kindreset                  ; 81.97: a worksheet until a BOF says
     mov cx, ax                        ; a file this small never exceeds 64KB
     xor si, si
     call sh_parseslk
@@ -19042,6 +19050,7 @@ sh_doread_dif:
     mov word [sh_nnames], 0            ; DIF carries no names, so a DIF load
                                        ; leaves none - still a REPLACEMENT,
                                        ; not an inheritance
+    call sh_kindreset                  ; 81.97: a worksheet until a BOF says
     mov es, [sh_stgseg]
     mov di, ax                         ; DI = end (bytes read)
     xor si, si
@@ -19210,6 +19219,52 @@ sh_doread_dif:
 ; written at all: General/Currency/Comma/Percent all land on real BIFF
 ; built-in number-format ids (0/5/3/9), the 0-decimal-place forms.
 ; =============================================================================
+
+; 81.97: THE DOCUMENT'S KIND. Excel has worksheets and macro sheets, and the
+; BOF record's dt word says which a stream is (0010H, 0040H). A macro sheet
+; here is a worksheet that SAYS so - every cell, function and command works
+; the same on both, because SHEET's macros have always run from ordinary
+; cells - and that shows its formulas, as Excel's does.
+; sh_macsheet - make this document a macro sheet, formulas shown
+sh_macsheet:
+    mov byte [sh_dockind], 1
+    mov byte [sh_showformulas], 1
+    mov word [sh_i_options+2], sh_it_form_on
+    ret
+
+; sh_kindreset - a worksheet again: the formulas a macro sheet showed go, and
+; a Formulas the user turned on for a worksheet stays
+sh_kindreset:
+    cmp byte [sh_dockind], 0
+    je .out
+    mov byte [sh_dockind], 0
+    mov byte [sh_showformulas], 0
+    mov word [sh_i_options+2], sh_it_form_off
+.out:
+    ret
+
+; sh_biff_dt - AX = the BOF's dt for this document
+sh_biff_dt:
+    mov ax, 0x0010
+    cmp byte [sh_dockind], 0
+    je .out
+    mov ax, 0x0040
+.out:
+    ret
+
+; sh_rd_bofkind - a BOF at ES:SI, DX long: dt 0040H makes this a macro sheet.
+; A workbook's globals BOF (0100H) and a worksheet's say nothing, so a
+; workbook with one macro sheet in it is a macro sheet document - SHEET's
+; kind is the document's, not a sheet's
+sh_rd_bofkind:
+    cmp dx, 4
+    jb .out
+    cmp word [es:si+2], 0x0040
+    jne .out
+    call sh_macsheet
+.out:
+    ret
+
 
 ; -----------------------------------------------------------------------------
 ; sh_biffw - append raw word AX to ES:DI (little-endian, matching BIFF and
@@ -19589,7 +19644,7 @@ sh_dowrite_biff:
     call sh_biffw
     mov ax, 0x0300                   ; vers = BIFF3, matching the BOF above
     call sh_biffw
-    mov ax, 0x0010                   ; dt = worksheet
+    call sh_biff_dt                  ; dt = worksheet, or macro sheet
     call sh_biffw
     xor ax, ax                       ; BIFF3's BOF carries two more bytes,
     call sh_biffw                    ; documented as "not used" - BIFF2's
@@ -20347,7 +20402,7 @@ sh_biff_workbook:
     call sh_biffw
     mov ax, 0x0400
     call sh_biffw
-    mov ax, 0x0010                    ; dt = worksheet
+    call sh_biff_dt                   ; dt = worksheet, or macro sheet
     call sh_biffw
     xor ax, ax
     call sh_biffw
@@ -21167,6 +21222,8 @@ sh_dc_tab:
     dw sh_dc_fn
     db 0x22
     dw sh_dc_fnv
+    db 0x38                           ; 58H folded: tFuncVarCE, a command
+    dw sh_dc_fnce
     db 0x24
     dw sh_dc_ref
     db 0x25
@@ -21454,11 +21511,8 @@ sh_dc_fn:                             ; 21H index - a FIXED count, from the
     call sh_dc_index                  ; AL = the index, CF if not a function
     pop cx
     jc .x
-    call sh_dc_look                   ; BX = SHEET's id for it
+    call sh_dc_name                   ; SI = its name, AL = its count
     jc .x
-    mov si, [bx+sh_functab]           ; (a WORD table: sh_dc_look answers
-    shr bx, 1                         ; the id doubled)
-    mov al, [bx+sh_rpn_fargc]
     push cx
     mov cl, al
     xor ch, ch
@@ -21473,6 +21527,9 @@ sh_dc_fn:                             ; 21H index - a FIXED count, from the
     pop ax
     ret
 
+sh_dc_fnce:                           ; 58H argc index - a macro COMMAND,
+    mov byte [cs:sh_dc_cept], 1       ; BIFF2/3's way of saying so (81.97),
+                                       ; and otherwise tFuncVar exactly
 sh_dc_fnv:                            ; 22H argc index
     push ax
     push bx
@@ -21490,9 +21547,8 @@ sh_dc_fnv:                            ; 22H argc index
     call sh_dc_index
     pop cx
     jc .x
-    call sh_dc_look
+    call sh_dc_name
     jc .x
-    mov si, [bx+sh_functab]
     mov al, [es:di+1]
     and al, 0x7F                      ; bit 7: a macro command's prompt
     push cx
@@ -21557,15 +21613,23 @@ sh_dc_area:                           ; 25H row1 row2 col1 col2
     ret
 
 ; --- the primitives ----------------------------------------------------------
-; sh_dc_index - in BX = the index's offset in the token; out AL = it, CF=1
-; when it is a macro command, past one byte, or POWER's 0FFH "unwritable".
+; sh_dc_index - in BX = the index's offset in the token; out AL = it, and
+; [cs:sh_dc_ce] which table it numbers - 1 for a macro COMMAND, when the ptg
+; said so (58H, sh_dc_fnce) or BIFF4's bit 15 does (fCeFunc, 81.83.2). CF=1
+; past one byte, or POWER's 0FFH "unwritable". Clobbers AH
 sh_dc_index:
     mov al, [es:di+bx]
+    mov ah, [cs:sh_dc_cept]
+    mov byte [cs:sh_dc_cept], 0
     cmp byte [sh_dc_ver], 4
     jb .one
-    cmp byte [es:di+bx+1], 0          ; BIFF4's high byte: bit 15 is a macro
-    jne .bad                          ; command, and SHEET has no function
-.one:                                 ; past 255
+    cmp byte [es:di+bx+1], 0          ; BIFF4's high byte: 0 a function,
+    je .one                           ; 80H a command, and SHEET has no
+    cmp byte [es:di+bx+1], 0x80       ; function past 255
+    jne .bad
+    mov ah, 1
+.one:
+    mov [cs:sh_dc_ce], ah
     cmp al, 0xFF
     je .bad
     clc
@@ -21573,30 +21637,90 @@ sh_dc_index:
 .bad:
     stc
     ret
+sh_dc_ce:   db 0                      ; the index just read is a command...
+sh_dc_cept: db 0                      ; ...because its ptg is 58H (81.97)
 
-; sh_dc_look - AL = a BIFF function index -> BX = SHEET's id for it, DOUBLED
-; for sh_functab's words; CF=1 if SHEET has no such function. Through
-; sh_rpn_fid, the table the writer uses - so a mismatch between the two is
-; one table wrong, which os88sheetfmt.py --selfcheck checks against 3.11.
-sh_dc_look:
-    cmp al, 0xFF                      ; 255 is no function of Excel's - the
-    je .none                          ; add-in call - and every one of SHEET's
-    push cx                           ; that BIFF cannot carry says 0xFF, so
-    xor bx, bx                        ; it would decode as the first of those
+; sh_dc_name - AL = a BIFF index, numbered in the table [cs:sh_dc_ce] names
+; -> SI = the function's name (DS) and AL = its argument count when it is
+; FIXED; CF=1 SHEET has no such function. sh_rpn_fid first, the table the
+; writer uses, and then the extension functions' shm_mxrpn - so a mismatch
+; with the writer is one table wrong, which --selfcheck checks. The TABLE
+; matters as much as the number: every Cetab index collides with a function's
+; (81.83.2), and a command read as a function is a different formula
+sh_dc_name:
+    push bx
+    push cx
+    push dx
+    push di
+    mov dl, [cs:sh_dc_ce]
+    xor bx, bx
     mov cx, sh_rpn_fid_end - sh_rpn_fid
 .l:
     cmp [bx+sh_rpn_fid], al
+    jne .n
+    xor dh, dh                        ; this one's table: the Ftab, unless
+    mov di, bx                        ; it is one of sh_rpn_fce's commands
+    sub di, SH_FN_MAC0
+    jb .t
+    cmp di, sh_rpn_fce_end - sh_rpn_fce
+    jae .t
+    mov dh, [di+sh_rpn_fce]
+.t:
+    cmp dh, dl
     je .hit
+.n:
     inc bx
     loop .l
-    pop cx
-.none:
+    xor bx, bx                        ; ...and the extension functions
+    mov di, shm_mxrpn
+    mov cx, SHM_MX_N
+.x:
+    cmp [cs:di], al
+    jne .xn
+    cmp [cs:di+2], dl
+    je .xhit
+.xn:
+    add di, 3
+    inc bx
+    loop .x
     stc
-    ret
+    jmp short .out
 .hit:
+    mov al, [bx+sh_rpn_fargc]
     shl bx, 1
-    pop cx
+    mov si, [bx+sh_functab]
     clc
+    jmp short .out
+.xhit:
+    mov al, [cs:bx+shm_mxargc]
+    mov di, shm_mxnames               ; the BX'th name, copied into DS -
+.w:                                   ; sh_ident, which the decode does not
+    or bx, bx                         ; use, holds the longest of them
+    jz .cp
+.s:
+    inc di
+    cmp byte [cs:di-1], 0
+    jne .s
+    dec bx
+    jmp short .w
+.cp:
+    mov si, sh_ident
+    push ax
+.c:
+    mov al, [cs:di]
+    mov [si], al
+    inc di
+    inc si
+    or al, al
+    jnz .c
+    pop ax
+    mov si, sh_ident
+    clc
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; sh_dc_call - SI = a function's name (DS), CX = its argument count: the top
@@ -21848,6 +21972,7 @@ sh_doread_biff:
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0            ; the DEFINEDNAME records below refill
                                        ; this; they precede the cell records
+    call sh_kindreset                  ; 81.97: a worksheet until a BOF says
     mov word [sh_biff_nfont], 0
     mov word [sh_biff_nxf], 0
     mov word [sh_b2], 0                ; sh_b2 and sh_b2_int: BIFF3 until a
@@ -21880,6 +22005,15 @@ sh_doread_biff:
                                        ; also bounds every unknown-opcode
                                        ; .skip (every byte off a disk is
                                        ; hostile)
+    cmp ax, 0x0009                     ; 81.97: every BOF says what KIND
+    je .bofk                           ; of sheet follows - BIFF2's, 3's and
+    cmp ax, 0x0209                     ; 4's alike, dt at +2
+    je .bofk
+    cmp ax, 0x0409
+    jne .nbofk
+.bofk:
+    call sh_rd_bofkind
+.nbofk:
     cmp ax, 0x000A                     ; EOF - but a WORKBOOK has one per sheet
     je .iseof                          ; substream plus its own, so the first
                                        ; is not the end of anything (81.10.5)
@@ -35630,10 +35764,10 @@ shm_mkind:
     times 8 db 0                      ; wave 4a: text files, COMMANDS - a
     db 0, 0                           ; wave 4b: ON.KEY, ON.TIME, commands
     times 10 db 0                     ; wave 4c: the menus, commands
-    db 0                              ; wave 4d: DIALOG.BOX, a command - it
-                                       ; pauses the run
                                        ; repaint re-evaluating FWRITE would
                                        ; write again; FREAD moves the position
+    db 0                              ; wave 4d: DIALOG.BOX, a command - it
+                                       ; pauses the run
 shm_mkind_end:
 
 section SH_MODSEC                      ; 81.94: the NAMES and BIFF rows stay in
@@ -35882,6 +36016,31 @@ shm_mxrpn_end:
     times ((SH_MF_N + SHM_MX_N) - (shm_mkind_end - shm_mkind)) db 0
     times ((shm_mxrpn_end - shm_mxrpn) - 3 * SHM_MX_N) db 0
     times (3 * SHM_MX_N - (shm_mxrpn_end - shm_mxrpn)) db 0
+
+; 81.97: how many arguments each extension function takes when it is FIXED
+; (shm_mxrpn's second byte 0) - the decoder's, because a tFunc token carries
+; only an index. 0 for a variable one and for every command: Excel writes
+; those with a count of their own. From the document's arity, and
+; tools/os88sheetfmt.py --selfcheck holds it there.
+shm_mxargc:
+    db 0, 0, 0, 0, 2, 2, 0, 0    ; the CALL ARGUMENT RESULT OFFSET ABSREF RELREF REFTEXT TEXTREF
+    db 1, 0, 0, 0, 0, 0, 0, 0    ; DEREF SELECTION CALLER ECHO ERROR RESTART STEP CANCEL.KEY
+    db 0, 0, 0, 1, 0, 0, 0, 0    ; DISABLE.INPUT WAIT GET.CELL GET.FORMULA GET.NAME GET.DEF GET.NOTE NAMES
+    db 0, 0, 1, 0, 0, 0, 0, 0    ; GET.DOCUMENT GET.WINDOW GET.WORKSPACE DIRECTORY FILL.RIGHT FILL.DOWN PASTE.LINK UNDO
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; JUSTIFY SAVE SET.DATABASE SET.CRITERIA CALCULATE.DOCUMENT DATA.FORM ALIGNMENT FORMAT.FONT
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; FORMAT.NUMBER BORDER CELL.PROTECTION COLUMN.WIDTH ROW.HEIGHT INSERT EDIT.DELETE PASTE.SPECIAL
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; CANCEL.COPY CALCULATION DISPLAY FREEZE.PANES PROTECT.DOCUMENT PRECISION FORMULA.GOTO FORMULA.FIND
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; FORMULA.FIND.NEXT FORMULA.FIND.PREV DEFINE.NAME SET.NAME DELETE.NAME NOTE DATA.FIND DATA.FIND.NEXT
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; DATA.FIND.PREV DATA.DELETE EXTRACT PARSE SORT RUN VLINE HLINE
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; VPAGE HPAGE VSCROLL HSCROLL SHOW.ACTIVE.CELL SELECT.LAST.CELL SELECT.END UNLOCKED.NEXT
+    db 0, 0, 0, 0, 0, 0, 0, 0    ; UNLOCKED.PREV GALLERY.AREA GALLERY.BAR GALLERY.COLUMN GALLERY.LINE GALLERY.PIE GALLERY.SCATTER FILE.DELETE
+    db 0, 0, 0, 0, 0, 0, 1, 2    ; NEW OPEN SAVE.AS FORMULA.FILL DATA.SERIES FOPEN FCLOSE FREAD
+    db 1, 2, 2, 0, 1, 0, 0, 0    ; FREADLN FWRITE FWRITELN FPOS FSIZE ON.KEY ON.TIME ADD.BAR
+    db 0, 1, 0, 0, 0, 0, 0, 0    ; SHOW.BAR DELETE.BAR ADD.MENU ADD.COMMAND DELETE.MENU DELETE.COMMAND ENABLE.COMMAND CHECK.COMMAND
+    db 0, 1                      ; RENAME.COMMAND DIALOG.BOX
+shm_mxargc_end:
+    times ((shm_mxargc_end - shm_mxargc) - SHM_MX_N) db 0
+    times (SHM_MX_N - (shm_mxargc_end - shm_mxargc)) db 0
 section SH_MODSEC2
 
 ; =============================================================================
@@ -50377,7 +50536,7 @@ sh_s_num:      db 'NUM', 0
 sh_s_calcind:  db 'CALCULATE', 0
 sh_s_nw_sheet: db 'New worksheet.', 0
 sh_s_nw_chart: db 'New sheet - use Data > Chart Column to chart it.', 0
-sh_s_nw_macro: db 'New sheet - Macro > Run reads commands from cells.', 0
+sh_s_nw_macro: db 'New macro sheet - formulas shown; Macro > Run runs them.', 0
 sh_s_calc_auto: db 'Calculation: Automatic', 0
 sh_s_calc_man:  db 'Calculation: Manual - Calculate Now to recompute.', 0
 sh_s_calc_now:  db 'Recalculated.', 0
@@ -51244,6 +51403,7 @@ sh_doread_dbf:
     mov word [sh_nnote], 0
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0
+    call sh_kindreset                  ; 81.97: a worksheet until a BOF says
     ; --- the descriptors: names into row 0, widths and types banked ---------
     mov word [sh_wcol], 0
     mov word [sh_wrow], 0
@@ -51670,6 +51830,7 @@ sh_doread_sep:
     mov word [sh_nnote], 0
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0
+    call sh_kindreset                  ; 81.97: a worksheet until a BOF says
     mov es, [sh_stgseg]
     mov [sh_sepend], ax               ; the end, for sh_sep_field
     xor si, si
@@ -51915,7 +52076,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9118                     ; +60 for 81.96's DIALOG.BOX: the
+    OS88_BSS 9119                     ; +1 for 81.97's document kind;
+                                       ; +60 for 81.96's DIALOG.BOX: the
                                        ; window, its done byte, one line
                                        ; block and one edit buffer, and its
                                        ; vector (149);
@@ -53288,7 +53450,9 @@ sh_dbx_done   equ sh_dbx_win + 2             ; byte: a button closed it
 sh_dbx_line   equ sh_dbx_done + 1            ; OS88LINE_SZ: its edit boxes'
                                              ; one line block...
 sh_dbx_ebuf   equ sh_dbx_line + OS88LINE_SZ  ; SH_DBX_EDLEN: ...and buffer
-sh_bss_end        equ sh_dbx_ebuf + SH_DBX_EDLEN
+sh_dockind    equ sh_dbx_ebuf + SH_DBX_EDLEN ; 81.97: byte, 1 = this is a
+                                             ; MACRO SHEET (BIFF's dt 0040H)
+sh_bss_end        equ sh_dockind + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

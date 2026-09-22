@@ -104478,6 +104478,90 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.97 The reader half: macro sheets come back as macro sheets
+
+Wave 5 of `docs/plans/SHEET-MACRO-PLAN.md`. §81.83 made the writer emit a
+macro cell's formula. The reader could not read one back, so Excel's own
+macro sheets opened with every command as its cached value.
+
+#### 81.97.1 Commands decode
+
+- **Ptg 58H** (tFuncVarCE: 58H, 38H and 78H fold to 38H) is BIFF2/3's
+  command. It decodes as tFuncVar does, with its index looked up in the
+  **Cetab** (`sh_dc_fnce`).
+- **BIFF4's fCeFunc,** bit 15 of the index word, says the same thing.
+  `sh_dc_index` used to refuse any high byte; it now takes 80H as a command.
+- **The lookup honours the table** (`sh_dc_name`). Every Cetab index
+  collides with an Ftab one: 6DH is SELECT in the Cetab and a worksheet
+  function in the Ftab. A match in `sh_rpn_fid` counts only when
+  `sh_rpn_fce` agrees about the table.
+- **The extension functions decode too.** Waves 1–4's names live in
+  CHART.OVL's `shm_mxnames` and `shm_mxrpn`, which the old lookup never
+  searched. A hit is copied into `sh_ident`, which the decode does not
+  otherwise use and which holds the longest of them (SHOW.ACTIVE.CELL, 16).
+- **`shm_mxargc`** is new: each extension function's fixed argument count,
+  since a tFunc token carries only an index. It is 0 for a variable
+  function and for every command, which Excel writes with a count of their
+  own. `tools/os88sheetfmt.py --selfcheck` holds it to the document, and was
+  proven by a mutation (DEREF's 1 set to 2).
+
+The host decoder (`decode_rpn`) learned the same three things, with four
+selfcheck vectors: a 58H command, a BIFF4 fCeFunc command, a macro Ftab
+function, and a command SHEET lacks, which must stay a value. It had also
+looked only in `BIFF_FUNCS`, so the macro Ftab functions (GOTO, RETURN)
+never decoded on the host either.
+
+**Excel 2.1d's KWWHAT.CPM** now reads with all **71** of its formulas on
+the host, and SHEET brings every one of them back as a formula:
+`tests/sheetxl2.py`'s macro arm, the owner's work, passes 31/31.
+
+#### 81.97.2 A document has a kind
+
+`sh_dockind` (one byte of bss): 1 is a **macro sheet**, BIFF's dt 0040H.
+It changes nothing about how cells, functions and commands behave, because
+SHEET's macros have always run from ordinary cells. What changes:
+
+- **the BOF** says so, in the BIFF3 stream and in each BIFF4 sheet
+  substream (`sh_biff_dt`);
+- **a BOF that says 0040H makes the document one** (`sh_rd_bofkind`),
+  whether BIFF2, 3 or 4. A workbook with one macro sheet in it is a macro
+  sheet document: the kind is the document's, and SHEET's four sheets are
+  one document;
+- **a macro sheet shows its formulas,** as Excel's does (`sh_macsheet` sets
+  Options ▸ Formulas and its label);
+- **File ▸ New ▸ Macro Sheet makes one.** §81.83.6's "an ordinary sheet,
+  and a status line saying so" is retired: the status line now says "New
+  macro sheet - formulas shown; Macro > Run runs them."
+
+**Every reader and New put it back** (`sh_kindreset`, beside each reader's
+`sh_nnames` reset, and inline in the resident `sh_new`). The formulas a
+macro sheet turned on go with it, while a Formulas the user turned on for a
+worksheet stays.
+
+**SYLK, DIF, CSV, text and dBASE carry no kind,** so a macro sheet saved in
+one of them reopens as a worksheet, with its formulas intact.
+
+#### 81.97.3 The gate, and its mutations
+
+`tests/sheetmkind.py` (5 checks) has the host write a BIFF2 macro sheet
+whose formulas are SELECT by ptg 58H, ECHO (a variable extension function),
+DEREF (a fixed one, which only `shm_mxargc` can count) and RETURN. SHEET
+opens it and saves it Normal. Then File ▸ Open, in the same window, opens a
+BIFF2 worksheet, which is saved too. The host reads both saves, with its own
+decoder checked against the fixture first.
+
+Each claim was mutated to prove it can fail:
+
+- removing the 38H dispatch fails the formulas check;
+- a `sh_kindreset` that returns at once fails the worksheet's dt;
+- a `sh_rd_bofkind` that returns at once fails the macro sheet's dt.
+
+That formulas are shown was checked by screenshot, not by an assertion.
+
+**CHART.OVL +351 bytes** (45,584 of `CH_OVKB` 46), resident bss +1, resident
+code +29 (the inline reset in `sh_new`). Resident headroom is 825 bytes of
+`APP_MAX_SIZE`.
+
 ### 81.96 DIALOG.BOX
 
 DIALOG.BOX(dialog_ref) puts up a dialog that a range describes, in Excel's
@@ -105546,6 +105630,9 @@ have to agree — and it is not smuggled in here.
 
 So: the formulas are in the file and are the bytes Excel writes. What is
 missing is the sheet saying what it is.
+
+**§81.97 supplies it:** the document kind, New ▸ Macro Sheet, and the
+reader half.
 
 
 ### 81.82 Data ▸ Parse

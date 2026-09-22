@@ -4952,6 +4952,12 @@ SOAK = [
         "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
         "list box refused",
         needs=("marty",), serial=True),
+    Row("sheetmkind", "soak", py("tests/sheetmkind.py"), 400.0,
+        "SPEC.md 81.97: the reader half - a host-written BIFF2 macro sheet "
+        "(BOF dt 0040H) whose formulas are a ptg-58H command, a variable and "
+        "a fixed extension function and RETURN, saved Normal: dt 0040H and "
+        "all four formulas back; a worksheet opened next saves as 0010H",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

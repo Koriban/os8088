@@ -552,23 +552,31 @@ def decode_rpn(tok, ver, known=None):
             elif t == 0x1F:
                 st.append('%.15g' % struct.unpack_from('<d', tok, i + 1)[0])
                 i += 9
-            elif t in (0x21, 0x22):
-                if t == 0x22:
-                    argc = tok[i + 1] & 0x7F
+            elif t in (0x21, 0x22, 0x38):
+                if t != 0x21:
+                    argc = tok[i + 1] & 0x7F    # bit 7: a command's prompt
                     j = i + 2
                 else:
                     j = i + 1
                 idx = (tok[j] if ver in (2, 3)
                        else struct.unpack_from('<H', tok, j)[0])
-                if idx & 0x8000:
-                    return None                 # a macro command
-                ent = BIFF_FUNCS.get(idx)
-                if ent is None:
-                    return None
-                name = ent[0]
+                if t == 0x38 or idx & 0x8000:
+                    # 81.83.2 / 81.97: a macro COMMAND - ptg 58H in BIFF2/3,
+                    # fCeFunc (bit 15) in BIFF4 - numbered in the Cetab
+                    name = BIFF_CETAB.get(idx & 0x7FFF)
+                    if name is None:
+                        return None
+                    ent = None
+                else:
+                    ent = BIFF_FUNCS.get(idx) or BIFF_MACRO_FUNCS.get(idx)
+                    if ent is None:
+                        return None
+                    name = ent[0]
                 if known is not None and name not in known:
                     return None
                 if t == 0x21:
+                    if ent is None:
+                        return None
                     mm = ent[1] if ver in (2, 3) else ent[2]
                     if mm is None:
                         return None
@@ -1194,6 +1202,27 @@ def _check_ext(bad):
         if bool(fvar) != (mn != mx):
             bad.append('shm_mxrpn: %s is %s, but it takes %d-%d arguments'
                        % (nm, 'variable' if fvar else 'fixed', mn, mx))
+    # 81.97: the decoder's fixed counts, one per row, in the same order
+    import re
+    src = open('apps/sheet/sheet.asm').read()
+    ag = re.search(r'^shm_mxargc:\n(.*?)^shm_mxargc_end:', src, re.M | re.S)
+    argc = []
+    for line in ag.group(1).split('\n'):
+        code = line.split(';')[0].replace('db', '')
+        argc += [int(x) for x in re.findall(r'\b\d+\b', code)]
+    rows = _ext_tables()
+    if len(argc) != len(rows):
+        bad.append('shm_mxargc has %d entries and shm_mxrpn %d rows'
+                   % (len(argc), len(rows)))
+        return
+    for (nm, fid, fvar, isce), n in zip(rows, argc):
+        want = 0
+        if fid != 0xFF and not isce and not fvar:
+            ent = BIFF_MACRO_FUNCS.get(fid) or BIFF_FUNCS.get(fid)
+            want = ent[2][0] if ent else 0
+        if n != want:
+            bad.append('shm_mxargc: %s says %d arguments, the table %d'
+                       % (nm, n, want))
 
 
 # SHEET writes one table for BIFF3 and BIFF4 both, so a function whose arity
@@ -1261,6 +1290,12 @@ def _check_rpn(bad, book):
         (3, b'\x43\x01\x00' + bytes(8), None),  # tName
         (3, b'\x19\x04\x01\x00\x02\x00', None),  # tAttrChoose
         (3, ref(0xC000, 0) + b'\x41\xff', None),   # no function 255
+        # 81.97: a macro COMMAND - ptg 58H in BIFF2/3, fCeFunc in BIFF4 - is
+        # numbered in the Cetab, where 6DH is SELECT and not the Ftab's 6DH
+        (2, b'\x17\x02A1' + b'\x58\x01\x6d', 'SELECT("A1")'),
+        (4, b'\x17\x02A1' + b'\x42\x01\x6d\x80', 'SELECT("A1")'),
+        (2, b'\x42\x00\x37', 'RETURN()'),       # a macro FUNCTION, Ftab
+        (2, b'\x58\x00\xfe', None),             # a command SHEET lacks
     ]
     for ver, tok, want in cases:
         got = decode_rpn(tok, ver)

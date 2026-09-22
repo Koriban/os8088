@@ -1,6 +1,6 @@
 # SHEET's macro language — finishing it
 
-**Status: planned 2026-09-21. Waves 0-4 done: text files and events (§81.91, §81.92), MACRO.OVL past the 64 KB wall (§81.94), custom menus (§81.95) and DIALOG.BOX (§81.96); SEND.KEYS declined (§81.93). Wave 5, the reader half, is next.** Every count here was
+**Status: planned 2026-09-21. Waves 0-4 done: text files and events (§81.91, §81.92), MACRO.OVL past the 64 KB wall (§81.94), custom menus (§81.95) and DIALOG.BOX (§81.96); SEND.KEYS declined (§81.93). Wave 5, the reader half and the macro-sheet kind, done (§81.97).** Every count here was
 measured from Microsoft Excel **Version 2.0**'s *Functions and Macros* manual
 (`_LIBRARY/documentation/excel_man/`), OCR-repaired by hand where the scan
 split a name, and cross-checked against SHEET's own `sh_functab` through
@@ -146,7 +146,7 @@ Text files: `FCLOSE`, `FOPEN`, `FPOS`, `FREAD`, `FREADLN`, `FSIZE`, `FWRITE`, `F
 And `DIALOG.BOX` last, as the gap plan already said: the largest item and
 the least load-bearing.
 
-**Wave 5 — the reader half.** Decode ptg `0x58` (§81.83.2) so a macro sheet
+**Wave 5 — the reader half. DONE** (§81.97 `sheetmkind`; KWWHAT's 71 formulas in `sheetxl2`). Decode ptg `0x58` (§81.83.2) so a macro sheet
 reopens as a script — which needs the ptg to pick the table, because every
 Cetab number collides with a worksheet function's. And the macro-sheet KIND
 (`dt = 0x0040`), which needs SHEET to have one (§81.83.6).
