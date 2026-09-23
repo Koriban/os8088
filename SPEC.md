@@ -103112,7 +103112,8 @@ harmless.
 | Formula | 7 | 7 | **none** |
 | Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
 | Format | 8 | 8 | **none** — Justify closed in §81.81 |
-| File | 5 | 11 | Links, Save Workspace, Page Setup, Printer Setup, Print — `Delete` closed in §81.79, and **Close came OFF this list** (measured 2026-09-20): it is `Exit`'s case one step on |
+| File | 5 | 11 | Page Setup, Printer Setup, Print (printing, out of scope) — `Delete` closed in §81.79. **Struck as MDI** (2026-09-22): Links and Save Workspace, which exist to reach and to re-open OTHER documents, and Close, which came off this list 2026-09-20 as `Exit`'s case one step on |
+| Window | 0 | 5 + the window list | **the whole menu is struck as MDI**: New Window, Show Info, Arrange All, Hide, Unhide and the list of open windows all manage document windows, and SHEET has one. So is the Control menu's document half - Maximize, Restore and Close of a DOCUMENT window (§81.93's MDI group has the macro side) |
 | Options | 6 | 10 | Set Print Area/Titles/Page Break, Workspace, Short Menus — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
@@ -103148,9 +103149,11 @@ and §82 is this tree's answer to that.
   text files (§81.91), ON.KEY and ON.TIME (§81.92), custom menus (§81.95),
   DIALOG.BOX (§81.96), and a macro sheet that saves and reopens as one, with
   its formulas, through BIFF (§81.83, §81.97). What is not built is DECLINED
-  with a reason in §81.93 - 60 names, SEND.KEYS among them - or blocked on a
-  SHEET command that does not exist yet (16, `TABLE` and `SHORT.MENUS` the
-  two a later command would bring). The recorder (§81.74) still lacks Start
+  with a reason in §81.93 - 71 names, 22 of them MDI and SEND.KEYS among
+  the rest - or blocked on a SHEET command that does not exist yet (14,
+  `TABLE` and `SHORT.MENUS` the two a later command would bring). Five names
+  a 2026-09-22 sweep of the book found in neither list are listed there as
+  not yet decided. The recorder (§81.74) still lacks Start
   Recorder and Resume.
 - **No Short/Full menus toggle**. Freeze Panes is done (§81.70).
 - **Smaller, each listed where it was found — all three closed:** Sort puts
@@ -104909,42 +104912,63 @@ measured it, against what SHEET builds. A name listed here evaluates
 `#NAME?`. The decision about it is below, so it is not a gap nobody has
 looked at.
 
-**Declined, with the reason (60):**
+**Re-swept 2026-09-22 against the book itself** (`Microsoft Excel Functions
+and Macros`, 347 names in its directory): fourteen names were in neither
+list. Nine were classified by decisions already on record - MDI below, and
+PRINT, GRIDLINES, LEGEND, INITIATE and QUIT into their existing groups -
+and the five with no decision yet are listed last.
 
-- **Printing (6)**, out of scope by the owner's decision: PAGE.SETUP,
+**Declined, with the reason (71):**
+
+- **Printing (7)**, out of scope by the owner's decision: PAGE.SETUP, PRINT,
   PRINTER.SETUP, REMOVE.PAGE.BREAK, SET.PAGE.BREAK, SET.PRINT.AREA,
   SET.PRINT.TITLES.
-- **The application window (6).** The OS owns every window's size,
-  position and state: APP.ACTIVATE, APP.MAXIMIZE, APP.MINIMIZE, APP.MOVE,
-  APP.RESTORE, APP.SIZE.
-- **More than one document (15).** SHEET has one document per instance
-  (§81.39.2): ACTIVATE, ACTIVATE.NEXT, ACTIVATE.PREV, ARRANGE.ALL,
-  CLOSE.ALL, DOCUMENTS, FILE.CLOSE, HIDE, MOVE, NEW.WINDOW, ON.WINDOW,
-  SAVE.WORKSPACE, SIZE, SPLIT, WINDOWS.
-- **Another program (8).** There is no DDE, no DLL and no callable code
-  outside a package: CALL, EXEC, EXECUTE, ON.DATA, POKE, REGISTER, REQUEST,
-  TERMINATE.
+- **The application window (7).** The OS owns every window's size,
+  position and state, and its lifetime - `Exit` is the OS menu's (§12.2):
+  APP.ACTIVATE, APP.MAXIMIZE, APP.MINIMIZE, APP.MOVE, APP.RESTORE, APP.SIZE,
+  QUIT.
+- **MDI - more than one document window (22).** SHEET has one document per
+  instance and one window per document, and the OS has no multiple-document
+  interface for it to use, so everything that CREATES, SWITCHES, ARRANGES,
+  HIDES, SIZES, CLOSES or LINKS document windows is struck (§81.39.2 has the
+  menu side): ACTIVATE, ACTIVATE.NEXT, ACTIVATE.PREV, ARRANGE.ALL, CLOSE
+  (Control ▸ Close of a DOCUMENT window), CLOSE.ALL, DOCUMENTS, FILE.CLOSE,
+  FULL (Control ▸ Maximize/Restore of a DOCUMENT window), HIDE, MOVE,
+  NEW.WINDOW, ON.WINDOW, SAVE.WORKSPACE, SHOW.INFO (the Info window is a
+  second document window), SIZE, SPLIT, UNHIDE, WINDOWS - and the three LINK
+  functions, which exist to reach ANOTHER open document through external
+  references: CHANGE.LINK, LINKS, OPEN.LINKS.
+- **Another program (9).** There is no DDE, no DLL and no callable code
+  outside a package: CALL, EXEC, EXECUTE, INITIATE, ON.DATA, POKE, REGISTER,
+  REQUEST, TERMINATE.
 - **Keystrokes (1): SEND.KEYS.** Excel's sends keys to the active
   application. Here that would be SHEET itself, whose run gate eats every
   key while a macro runs (§81.86.4), and the kernel has no slot that posts a
   keystroke to anything: `OSAPI_KEY_DOWN` only asks whether a key is held.
   A kernel primitive for one package is not a trade to make for it.
-- **A chart document (23).** SHEET's chart is a rendering of a range (§82),
+- **A chart document (25).** SHEET's chart is a rendering of a range (§82),
   not a document with arrows, overlays and a plot area to select: ADD.ARROW,
   ADD.OVERLAY, ATTACH.TEXT, AXES, COMBINATION, COPY.CHART, DELETE.ARROW,
   DELETE.OVERLAY, FORMAT.LEGEND, FORMAT.MOVE, FORMAT.SIZE, FORMAT.TEXT,
-  GET.CHART.ITEM, MAIN.CHART, MAIN.CHART.TYPE, OVERLAY, OVERLAY.CHART.TYPE,
-  PATTERNS, PREFERRED, SCALE, SELECT.CHART, SELECT.PLOT.AREA,
-  SET.PREFERRED.
-- **Links (1):** CHANGE.LINK, for the one-document reason.
+  GET.CHART.ITEM, GRIDLINES, LEGEND, MAIN.CHART, MAIN.CHART.TYPE, OVERLAY,
+  OVERLAY.CHART.TYPE, PATTERNS, PREFERRED, SCALE, SELECT.CHART,
+  SELECT.PLOT.AREA, SET.PREFERRED.
 
-**Blocked on a SHEET feature (16).** Each drives a command SHEET does not
+**Blocked on a SHEET feature (14).** Each drives a command SHEET does not
 have, and the function comes cheaply with the command:
 
 - APPLY.NAMES, CREATE.NAMES, DELETE.FORMAT, FORMULA.REPLACE, HELP,
-  OPEN.LINKS, SELECT.SPECIAL, SHORT.MENUS, SHOW.CLIPBOARD, SHOW.INFO, STYLE,
-  TABLE and WORKSPACE, from the plan;
+  SELECT.SPECIAL, SHORT.MENUS, SHOW.CLIPBOARD, STYLE, TABLE and WORKSPACE,
+  from the plan - SHOW.CLIPBOARD stays here rather than under MDI: the
+  Reference Guide has it run Windows' separate Clipboard UTILITY, not open a
+  document window, and WORKSPACE is the display-settings dialog (fixed
+  decimals, R1C1, the scroll, status and formula bars), not window control;
 - FORMULA.ARRAY, FILL.LEFT and FILL.UP, from wave 3 (§81.90.1).
+
+**Not yet decided (5):** A1.R1C1 (Options ▸ Workspace's reference style -
+§81.39.2's Preferences question), COPY.PICTURE, FILES, GET.BAR and
+REPLACE.FONT. None is MDI; each is a small build or a decline nobody has
+taken yet.
 
 #### 81.93.1 The 64 KB wall - resolved by §81.94
 

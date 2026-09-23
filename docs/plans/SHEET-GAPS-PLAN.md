@@ -217,7 +217,7 @@ assertion**, not at a table and a toggle.
 | ~~**`Data ▸ Parse`**~~ | **done, §81.82** | 120 resident + 920 module + 296 bss. This estimate was right, unlike Justify's: it IS a dialog with a guessed split and a write across, and it IS module work. What it understates is that the split is at FIXED CHARACTER POSITIONS rather than at a delimiter, which is the whole reason the feature exists beside CSV |
 | **`Macro ▸ Start Recorder` / `Resume`** | the recorder's other two commands | §81.74 names these as its own documented shortfalls, so the design already exists |
 | **`Edit ▸ Repeat`** | repeat the last command | **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
-| **`File ▸ Links`** | external references | only meaningful once a second document can be open. Probably out of scope with `Close` |
+| ~~**`File ▸ Links`**~~ | — | **struck as MDI, 2026-09-22**: it exists to reach a second open document, and SHEET has one per instance. §81.93 declines its macro functions (CHANGE.LINK, LINKS, OPEN.LINKS) on the same ground |
 
 ### 2.3 Number formats — the residual, and it is storage
 
@@ -308,8 +308,14 @@ Macro 4), which agrees with §81.39.2.
 | **`Macro ▸ Start Recorder` / `Resume`** | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
 | **`Edit ▸ Repeat`** | unbounded until scoped | Sections 2.2 and 3: scope it first |
 | `Options ▸ Workspace` | unscoped | in §81.39.2's missing list, never sized here |
-| `File ▸ Links`, `Save Workspace` | out with MDI | need a second open document |
 | printing (6 commands) | out of scope | by decision; no print backend in the OS |
+
+**Struck as MDI** (2026-09-22) — neither SHEET nor the OS has a
+multiple-document interface, so these are not gaps: `File ▸ Links`, `File ▸
+Save Workspace`, `File ▸ Close`, the whole of Excel's `Window` menu (New
+Window, Show Info, Arrange All, Hide, Unhide, the window list), and the
+Control menu's document Maximize/Restore/Close. §81.39.2 has the menu side
+and §81.93 the 22 macro functions.
 
 **Behaviour:** custom number-format codes in the dialog (per-cell STORAGE,
 section 2.3) and SYLK carrying 4 of the 21 built-ins (a compatibility decision).
