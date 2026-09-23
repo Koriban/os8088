@@ -29,6 +29,10 @@ VGA machine (640x480) it asserts, through the card's own rendered
 framebuffer, that opening and closing Data leaves ZERO differing pixels -
 and then, as tests/atmenusu.py does, pokes the bank flag to 0 while the
 panel is up so the close takes the REPAINT fallback, and checks that too.
+
+`--card herc` runs the same two photographs on the Hercules machine
+(720x348): one plane like CGA, but the four-bank interleave and the wider
+row are its own, and a CGA pass says nothing about them.
 """
 import argparse
 import os
@@ -86,14 +90,23 @@ def fdiff(a, b, w, h, y0):
     return n, box
 
 
-def main_vga():
-    """the four-plane path: exact restore, and the repaint fallback"""
+# the photographed arms: machine, screen, and what the bank is on that card
+CARDS = {"vga": ("os8088_xt_vga", (640, 480), "mode 12h, FOUR planes"),
+         # 350, not the kernel's 348: fbuf is the card's APERTURE (mode 7
+         # rasters 720x350), the same note tests/dispcheck.py carries
+         "herc": ("os8088_5150_herc_gla", (720, 350),
+                  "Hercules page 0, ONE plane, four interleaved banks")}
+
+
+def main_card(card):
+    """exact restore and the repaint fallback, photographed on `card`"""
+    machine, size, what = CARDS[card]
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
     S = os88sym.linear
     sym = pkg_syms("apps/sheet/sheet.asm")
     got = {}
-    with M.launch(SF.SYS, apps=DISK, machine="os8088_xt_vga") as m:
+    with M.launch(SF.SYS, apps=DISK, machine=machine) as m:
         M.settle(m)
         M.no_saver(m)
         mo = Mouse(marty=m)
@@ -132,16 +145,16 @@ def main_vga():
             banked = word("sh_mbanked") & 0xFF
             rect = (word("sh_mrx1"), word("sh_mry1"), word("sh_mrx2"),
                     word("sh_mry2"))
-            os88marty.write_png_rgb(os.path.join(WORK, "vga-%s-held.png"
-                                                 % tag), *m.fbuf())
+            os88marty.write_png_rgb(os.path.join(WORK, "%s-%s-held.png"
+                                                 % (card, tag)), *m.fbuf())
             if refuse:                          # what a refused save leaves
                 m.write(seg() * 16 + sym["sh_mbanked"], b"\x00")
             mo.to(*park, l=True)                # button down: off the panel
             mo._edge(False)
             M.settle(m, limit=120)
             after = m.fbuf()
-            os88marty.write_png_rgb(os.path.join(WORK, "vga-%s-after.png"
-                                                 % tag), *after)
+            os88marty.write_png_rgb(os.path.join(WORK, "%s-%s-after.png"
+                                                 % (card, tag)), *after)
             vw, vh = before[0], before[1]
             n, box = fdiff(before[2], after[2], vw, vh, 20)
             return dict(opened=opened, banked=banked, rect=rect, n=n,
@@ -155,19 +168,19 @@ def main_vga():
         got["ab"] = fdiff(bank_after[2], fall_after[2], vw, vh, 20)
 
     a, f = got["bank"], got["fall"]
-    print("   VGA %r, window %r, panel %r" % (a["size"], a["win"], a["rect"]))
-    check(a["size"] == (640, 480), "the machine is VGA, 640x480",
-          "os8088_xt_vga: mode 12h, four planes", got=a["size"],
-          want=(640, 480))
+    print("   %s %r, window %r, panel %r" % (card, a["size"], a["win"],
+                                           a["rect"]))
+    check(a["size"] == size, "the machine is %s, its frame %dx%d" % ((card,) + size),
+          "%s: %s" % (machine, what), got=a["size"], want=size)
     check(a["opened"] == 4, "Data's panel opened", "sh_mopen names Data",
           got=a["opened"], want=4)
-    check(a["banked"] == 1, "...and the FOUR-PLANE bank was taken",
+    check(a["banked"] == 1, "...and the bank was taken (%s)" % what,
           "sh_mbank sized it planes x rows x byte columns, under the "
           "staging claim's 32 KB", got=a["banked"], want=1)
     sb = (a["win"][1] + a["win"][3] - 14, a["win"][1] + a["win"][3] - 1)
     inbar = a["box"] is None or (a["box"][1] >= sb[0] - 2
                                  and a["box"][3] <= sb[1])
-    check(inbar, "closing it restores everything the panel covered, on VGA",
+    check(inbar, "closing it restores everything the panel covered, on %s" % card,
           "from the card's own rendered framebuffer: the only pixels that "
           "may change are the STATUS BAR's, which the click that opened the "
           "menu cleared - a wrong plane count or rect would show anywhere",
@@ -176,7 +189,7 @@ def main_vga():
     inside = a["rect"][3] <= a["win"][1] + a["win"][3] - 1
     ab_n, ab_box = got["ab"]
     check(inside, "the panel is inside the window here, so the two paths "
-          "can be compared", "a 480-row screen has room for Data; the tail "
+          "can be compared", "this screen has room for Data; the tail "
           "is CGA's case and the CGA arms cover it", got=a["rect"],
           want="bottom <= %d" % (a["win"][1] + a["win"][3] - 1))
     check(ab_n == 0, "the bank path lands on the SAME PIXELS as the repaint",
@@ -184,14 +197,15 @@ def main_vga():
           "status redraw against a full repaint - every pixel below the "
           "kernel's bar must agree. It is the check that found the stale "
           "status line", got="%d px, box %r" % (ab_n, ab_box), want=0)
-    done("sheetmtail --card vga")
+    done("sheetmtail --card %s" % card)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--card", choices=("cga", "vga"), default="cga")
-    if ap.parse_args().card == "vga":
-        return main_vga()
+    ap.add_argument("--card", choices=("cga",) + tuple(CARDS), default="cga")
+    card = ap.parse_args().card
+    if card in CARDS:
+        return main_card(card)
     os.chdir(os.path.join(HERE, ".."))
     build_disk()
     S = os88sym.linear

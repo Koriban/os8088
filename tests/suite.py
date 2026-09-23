@@ -4972,6 +4972,24 @@ SOAK = [
         "the panel covered, and the bank path lands on the same pixels as a "
         "full repaint - the A/B that caught the stale status line",
         needs=("marty",), serial=True),
+    Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 400.0,
+        "SPEC.md 81.100: a dialog's CLOSE BOX leaves its engine usable - the "
+        "list (Format Number) and input (Goto) dialogs closed by their boxes "
+        "clear their window words, and Paste Function and Define Name then "
+        "open; the kernel only HIDES an unowned window (75.1)",
+        needs=("marty",), serial=True),
+    Row("sheetdlgcga", "soak", py("tests/sheetdlgcga.py"), 400.0,
+        "SPEC.md 81.100: SHEET's tall fixed dialogs keep their height on a "
+        "CGA (WF_KEEPH, 11.93) - radio 171 and Border 159 rows against a "
+        "155-row band, still on the display, and closing each leaves "
+        "nothing below SHEET's window; list and Data Form as controls",
+        needs=("marty",), serial=True),
+    Row("sheetmtailherc", "soak",
+        py("tests/sheetmtail.py", "--card", "herc"), 400.0,
+        "SPEC.md 81.98.1: the same save-under photographs on the Hercules "
+        "machine (os8088_5150_herc_gla, 720x348): one plane, but the "
+        "four-bank interleave and 90-byte row are its own",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

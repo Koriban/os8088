@@ -104497,6 +104497,91 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.100 Four displays, and the two dialog defects only two of them showed
+
+The 1.8 look measurement (§81.39; `docs/reports/SHEET-EXCEL-LOOK-2026-09-22.md`)
+photographed SHEET on VGA only. It was then repeated on all four displays the
+OS drives, and two defects came out of it. Neither shows on VGA.
+
+| Display | Machine | Geometry | Result |
+|---|---|---|---|
+| CGA | MartyPC `os8088_5150_cga_gla` | 640×200, one plane | both defects |
+| Hercules | MartyPC `os8088_5150_herc_gla` | 720×348 (a 720×350 frame) | defect 1 only |
+| EGA | QEMU, `VIDEO=ega` forced onto its VGA | 640×350, mode 10h, planar | defect 1 only |
+| VGA | MartyPC `os8088_xt_vga` | 640×480, four planes | defect 1 only |
+
+**There is no MartyPC EGA.** Its EGA card needs IBM's ROM, which is not
+bundled. The EGA row is therefore QEMU's VGA forced into the EGA geometry
+(the Makefile's `VIDFORCE` note). That exercises the 350-row layout and the
+planar renderer, but NOT the period EGA probe or a real mode 10h set. Those
+remain `make xt-ega`'s, and it is interactive.
+`build/macwork/probe18ega.py` is the harness. It drives QEMU through
+`tests/ethernet.py`'s `Qemu` and `dispcp`'s blind path, the same way
+`tests/minesrc.py` does.
+
+**The pulldown save-under (§81.98) holds on all four.** EGA: all nine menus
+were opened and released off every item, and the window came back
+pixel-identical. The only differences were one clock digit and the status
+bar's "Loaded" → "Ready". `sheetmtail --card herc` (6 checks) joins the CGA
+and VGA arms.
+
+#### 81.100.1 A close box shut two dialog engines for the session
+
+A package's secondary window has no owner record, so the kernel's close box
+only HIDES it (§75.1, and §81.96.2 for DIALOG.BOX). Each of SHEET's dialog
+engines refuses to open while its window word is set. `sh_onclick`'s
+gate-lock recovery clears that word for the radio, Border and Form dialogs
+on the next grid click. It never covered the other two:
+
+- **the list dialog**: Format ▸ Number, Paste Function, Paste Name;
+- **the input dialog**: Goto, Define Name, Row Height, Column Width, Sort,
+  Run, and the macro engine's INPUT.
+
+So closing Format ▸ Number with its box left Paste Function and Paste Name
+refusing, in silence, until SHEET was restarted. The first photograph run
+showed an empty Paste Function on all four displays.
+
+Each engine now has a close negotiator (`OSAPI_WM_ONCLOSE`) that takes the
+close itself and answers CF = 1. This is `sc_close`'s shape and
+`os88ui_aclose`'s.
+
+- `sh_ldlg_cls_r` destroys the list dialog; it has no Cancel beyond that.
+- `sh_idlg_cls_r` sends Esc through the input dialog's own key door, so an
+  INPUT or a Run resumes exactly as Cancel resumes it.
+
+Both are installed from the RESIDENT open doors (`SH_ONCLOSE`), not from the
+module. The proc is a near pointer in the window's segment, and CHART.OVL
+runs banked (§81.71.5.1). `tests/sheetdlgclose.py` has 6 checks. With both
+installs removed it fails 4.
+
+#### 81.100.2 On a CGA, two dialogs were cut and drew through their frames
+
+`wm_fit` cuts any window taller than the desktop band, which is 155 rows on
+a CGA (§11.93). The package is not told. Two of SHEET's fixed dialogs are
+taller than that:
+
+- the radio column (`SH_FDLG_H`, 171 rows: Alignment, Font, Calculation, New,
+  File Format, Insert, Delete, Gallery);
+- Border (`SH_BDLG_H`, 159).
+
+On the radio kinds, OK and Cancel landed through the bottom frame. They
+were outside the window's clicks, and a close left them painted on the
+desktop, where later photographs still showed them.
+
+Both dialogs now ask for `OSAPI_WM_KEEPH` before their show. They hang over
+the dock instead: 171 rows from y 20 end at 191, inside the 200 rows the
+display has.
+
+The list (147 rows) and Data Form (153) fit the band already and are left
+alone. That was measured, not assumed: an earlier reading of the list's
+photograph as cut was wrong, because the line was its own frame.
+
+`tests/sheetdlgcga.py` has 16 checks. For each dialog, the window table's
+height must match the template's, the window must end on the display, and
+closing it must leave zero changed pixels below SHEET. With both KEEPH calls
+removed, radio and Border lose their height, and the radio dialog leaves 203
+pixels behind.
+
 ### 81.99 Edit ▸ Repeat is dropped, and its row with it
 
 The owner's decision, 2026-09-22: `Edit ▸ Repeat` is not coming, and the

@@ -12661,6 +12661,13 @@ sh_fdlg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [sh_fdlg_win], bx
+    push ax                           ; a FIXED layout, taller than a CGA's
+    mov al, 1                         ; 155-row desktop band: wm_fit cut it
+    call OSAPI_WM_KEEPH               ; and the buttons drew through the frame,
+    pop ax                            ; below the window and past its clicks.
+                                      ; Hang over the dock instead (SPEC.md
+                                      ; 11.93, 81.100) - 28 + 171 still fits
+                                      ; the 200 rows the display has
     call OSAPI_WM_SHOW
 .out:
     pop di
@@ -13508,6 +13515,10 @@ sh_bdlg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [sh_bdlg_win], bx
+    push ax                           ; over the dock rather than cut on a
+    mov al, 1                         ; CGA - sh_fdlg_open's reason (81.100)
+    call OSAPI_WM_KEEPH
+    pop ax
     call OSAPI_WM_SHOW
 .out:
     pop si
@@ -15051,6 +15062,21 @@ sh_fdlg_apply_r:
     call ch_ovcall
     pop bp
     ret
+; SH_ONCLOSE win_word - install AX, a resident negotiator, on the dialog the
+; open just made, if it made one. HERE and not in the module's open: the proc
+; is a near pointer in the WINDOW's segment (SPEC.md 75.1), and CHART.OVL runs
+; banked (81.71.5.1). pushf: an open door's caller may read CF
+%macro SH_ONCLOSE 1
+    pushf
+    push bx
+    mov bx, [%1]
+    or bx, bx
+    jz %%none
+    call OSAPI_WM_ONCLOSE
+%%none:
+    pop bx
+    popf
+%endmacro
 sh_idlg_open_r:
     push bp
     mov bp, SHM_IDOPEN
@@ -15059,6 +15085,36 @@ sh_idlg_open_r:
     jnc .out
     mov word [sh_msg], sh_s_noovl
 .out:
+    push ax
+    mov ax, sh_idlg_cls_r
+    SH_ONCLOSE sh_idlg_win
+    pop ax
+    ret
+; sh_idlg_cls_r / sh_ldlg_cls_r - the two dialogs' CLOSE BOXES. A package's
+; secondary window has no owner record, so the kernel's own close only HIDES
+; it (SPEC.md 75.1, 81.96.2): the slot leaked, [sh_?dlg_win] stayed set, and
+; every later open refused in silence - Format > Number closed by its box left
+; Paste Function and Paste Name dead for the session (found photographing
+; 1.8 on four adapters, 81.100). sh_onclick's gate-lock recovery covers the
+; radio, Border and Form dialogs and never covered these two. Each negotiator
+; takes the close ITSELF and answers CF = 1 (sc_close's shape): the input
+; dialog as Esc, so an INPUT or a Run resumes exactly as Cancel resumes it;
+; the list dialog has no Cancel beyond the close
+sh_idlg_cls_r:
+    mov ax, 27
+    call sh_idlg_key_r
+    stc
+    ret
+sh_ldlg_cls_r:
+    push bx
+    mov bx, [sh_ldlg_win]
+    mov word [sh_ldlg_win], 0
+    or bx, bx
+    jz .gone
+    call OSAPI_WM_DESTROY               ; see sh_fdlg_close on why not CLOSE
+.gone:
+    pop bx
+    stc
     ret
 sh_idlg_paint_r:
     push bp
@@ -15086,6 +15142,10 @@ sh_ldlg_open_r:
     jnc .out
     mov word [sh_msg], sh_s_noovl
 .out:
+    push ax
+    mov ax, sh_ldlg_cls_r
+    SH_ONCLOSE sh_ldlg_win
+    pop ax
     ret
 sh_ldlg_paint_r:
     push bp
@@ -15183,8 +15243,11 @@ sh_ldlg_open:
     mov si, sh_ldlg_tpl
     call OSAPI_WM_CREATE               ; the window comes back in BX, NOT SI -
     jc .out                            ; SI is still the template - and it is
-    mov [sh_ldlg_win], bx              ; created HIDDEN, so the show is not
-    call OSAPI_WM_SHOW                 ; optional
+    mov [sh_ldlg_win], bx
+    call OSAPI_WM_SHOW                 ; created HIDDEN, so the show is not
+                                       ; optional. No WF_KEEPH: 147 rows from
+                                       ; y 28 ends at 175, inside a CGA's
+                                       ; band (81.100 measured it)
 .out:
     pop di
     pop si

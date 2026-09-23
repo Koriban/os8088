@@ -77,13 +77,23 @@ words, "a published contract twenty-two packages rest on".
   That is correct, and it stays.
 - **Colour.** SHEET draws in black and white on every adapter, VGA included:
   a count of the photographs finds two colours, plus one grey for disabled
-  items. Excel uses blue title bars, a cyan menu bar and a red highlight.
-  This was decided in `sh_mbar_draw`'s comment, so that nothing in SHEET
-  depends on a colour existing, since two of the OS's three adapters are one
-  bit deep. It is listed here because it is the single largest visual
-  difference, and whether 1.8 wants colour on colour adapters is the
-  owner's call. It was an earlier session's reasoning, never a decision the
-  owner took.
+  items. **The capture's colours are not Excel's.** The blue title bars, the
+  cyan menu bar and the red highlight are Windows 2's system colours, which
+  every Windows application of the day drew in.
+  - **The OS's equivalent is a theme, not a package's choice.** SPEC §76 has
+    three: Bright, Dark and **Color** (§76.12, patterned on Windows 3.1, EGA
+    and VGA only). The user picks one in Control Panel ▸ Theme, and it is
+    stored in `SYSTEM.CFG`.
+  - **A theme colours the CHROME only:** the desktop, the menu bar, the dock
+    and window title bars. §76 draws that line deliberately: "a window's
+    content is not themed", so no package is asked for a dark mode.
+  - **SHEET's in-window menu bar is content, not chrome.** It is SHEET's
+    own, replacing the kernel's (see the memory on the custom bar). So under
+    Color, SHEET's window title goes blue but its menu bar stays black on
+    white.
+  - **No package API reads the theme:** there is no theme slot in
+    `os88api.inc`. A SHEET that matched the theme would need the OS to
+    publish it first. That is an OS decision, the same kind as section 2.
 
 ## 4. Gaps SHEET could close
 
@@ -150,9 +160,10 @@ Grouped by what they cost, with the most visible first in each group.
 
 ## 5. What this measurement did NOT cover
 
-- **Hercules and CGA.** Everything here is VGA. The 1-bit adapters are
-  SHEET's primary targets, and any change from section 4 must be looked at on
-  them too (CLAUDE.md's rule for drawing changes).
+- **The period EGA probe.** Section 6 covers CGA, Hercules and EGA's 640×350
+  geometry, but EGA ran on QEMU's VGA forced into mode 10h. MartyPC's EGA
+  needs IBM's ROM, which is not bundled, so the real card's detection and
+  mode set are `make xt-ega`'s, which is interactive.
 - **Motion**: menu tracking speed, redraw flicker, and timing on the 8088.
   These are PERFORMANCE.md's questions, not the captures'.
 - **Scenes with no capture**: Row Height, Column Width, Define Name, Paste
@@ -160,3 +171,47 @@ Grouped by what they cost, with the most visible first in each group.
   The Reference Guide has pictures of some of them; they were not compared.
 - **Excel's own behaviour beyond the look**, for instance how the arrow keys
   move a selection. The captures cannot show it.
+
+## 6. The other three displays (added the same day)
+
+Everything above was photographed on VGA. The same probe was then run on the
+other three displays the OS drives:
+
+- `probe18.py` takes a machine and an output directory;
+- `probe18ega.py` is a QEMU harness for EGA.
+
+| Display | Machine | Photographs | Menus restored (§81.98) |
+|---|---|---|---|
+| CGA 640×200 | MartyPC `os8088_5150_cga_gla` | `build/sheet18-cga/` | `sheetmtail` (8 checks) |
+| Hercules 720×348 | MartyPC `os8088_5150_herc_gla` | `build/sheet18-herc/` | `sheetmtail --card herc` (6), new |
+| EGA 640×350 | QEMU `VIDEO=ega` | `build/sheet18-ega/` | all 9 menus pixel-identical after closing |
+| VGA 640×480 | MartyPC `os8088_xt_vga` | `build/sheet18/` | `sheetmtail --card vga` (6) |
+
+**Two defects were found, and both are fixed (SPEC §81.100):**
+
+1. **A close box shut two dialog engines for the session.** This happened on
+   every display. The list dialog (Number, Paste Function, Paste Name) and
+   the input dialog (Goto, Define Name, Row Height, Column Width, Sort, Run,
+   INPUT) never learned that the kernel had only hidden them. Closing Number
+   by its box left Paste Function silently dead: its first photograph on
+   every display was an empty sheet. The gate is `tests/sheetdlgclose.py`.
+2. **On CGA, two dialogs were cut and drew through their frames.** The radio
+   dialog (171 rows) and Border (159) are taller than a CGA's 155-row desktop
+   band. On the radio dialogs, OK and Cancel sat under the frame, took no
+   clicks, and were left on the desktop after closing. Both now use the OS's
+   `WF_KEEPH` (§11.93). The gate is `tests/sheetdlgcga.py`.
+
+**What else the three displays show, and none of it is a defect:**
+
+- **On CGA the default window shows four grid rows.** The desktop band is
+  155 rows. After the title bar, SHEET's menu bar, the formula bar, the
+  headings, the horizontal scroll bar and the status bar, that leaves four.
+  It is the same arithmetic for every package on a CGA, not a SHEET layout
+  bug. It does mean the Excel look costs most where the screen is smallest:
+  the formula bar and status bar take two of what would otherwise be six
+  rows.
+- **Hercules and EGA show 15 rows, VGA 20.** Hercules' window is narrower
+  than its 720-pixel screen: SHEET's window keeps its template width.
+- **The photographs are black and white on EGA too.** That is section 3's
+  colour point: the theme on the probe's boot was Bright.
+
