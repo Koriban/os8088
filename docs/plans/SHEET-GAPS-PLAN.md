@@ -5,6 +5,12 @@ first because it changes what the remaining list looks like: six of the
 thirteen missing menu commands are downstream of it, so removing it removes
 almost half the arithmetic and none of the work.
 
+**Status 2026-09-22: the macro language is finished** (section 2.4 below,
+and `docs/plans/SHEET-MACRO-PLAN.md`), both defects in section 1 are closed,
+and section 0.1's menu tail is the one known defect still open. Section 4 at
+the end is what is left, re-measured that day; the sections above it are
+kept as the record.
+
 Everything below was **measured on 2026-09-20**, off SHEET's own tables and
 source rather than off §81.39 — which had itself gone stale in one row
 (`Data ▸ Series` was listed missing and had closed in §81.72). §81.39's own
@@ -13,6 +19,20 @@ gone stale within days of being written — quote a count only after re-making
 it.* Re-measure before acting on any line here.
 
 ## 0. The constraint that shapes the whole plan
+
+**Re-measured 2026-09-22** - the figures under this line are 2026-09-20's and
+kept as the record; the macro language took most of what was left:
+
+```
+sheet.o88   image 51,564 + bss 9,120 = 60,684 of 61,440 (APP_MAX_SIZE)
+            -> 756 bytes free
+CHART.OVL   45,618 of the 47,104 CH_OVKB (46) reserves -> 1,486 free
+MACRO.OVL   18,635 of the 28,672 SH_M2KB (28) reserves -> 10,037 free, but
+            that tail IS the two macro text-file buffers (5,008 each,
+            §81.91.1): what the module grows by, a macro's files lose
+```
+
+2026-09-20's figures:
 
 ```
 sheet.o88   image 49,975 + bss 8,119 = 58,094 of 61,440 (APP_MAX_SIZE)
@@ -42,6 +62,11 @@ Two consequences:
   should be.
 
 ## 0.1 A defect found while building §81.82, NOT fixed — the menu's tail
+
+**Still open 2026-09-22**: `sh_mclose` still repaints `[sh_ownwin]` and
+nothing else. §81.95 made a dropdown that would run past the window's RIGHT
+edge move left (`sh_mdrop_geo`); the BOTTOM overhang this section is about
+is untouched by it.
 
 **SHEET's pulldown leaves its bottom rows painted on the desktop.** `sh_mclose`
 repaints `[sh_ownwin]`, but a pulldown taller than the window has drawn *past*
@@ -220,8 +245,13 @@ recomputes a formula across the block. It needs: the table range, the input
 cell(s), a substitute-and-evaluate loop, and a decision about whether the
 results are live or frozen. **Module work, with a verb and a door.**
 
-**The macro language — 20 functions of ~90.** The only remaining *family*, and
-the roadmap puts it ahead of the 1.8 UI work. Three things are missing and
+**The macro language — ~~20 functions of ~90~~ DONE, 2026-09-21.** Every
+name in the vocabulary is built or declined with its reason: subroutines
+(§81.84), `OFFSET` and the reference family (§81.85), custom dialogs (§81.96),
+and the Normal-save fix (§81.83) all shipped, plus everything
+`docs/plans/SHEET-MACRO-PLAN.md` added beyond this list. §81.93 is the
+declined list. What follows is the 2026-09-20 text, kept as the record: the
+only remaining *family*, and the roadmap puts it ahead of the 1.8 UI work. Three things are missing and
 they are not equal:
 
 1. **Subroutines** — calling one macro from another, with a return. This is
@@ -253,8 +283,8 @@ fix, not a language one, and it can be done first and alone.
    it both times: Justify's one-line estimate here described a different
    command from the one Excel documents, and Parse's understated what the
    split is (character positions, not delimiters).
-5. **The macro language**, starting with the Normal-save fix, then
-   subroutines, then `OFFSET`. Custom dialogs last, and only if asked for.
+5. ~~**The macro language**~~ — **done** (§81.83-§81.97), in this order:
+   the Normal-save fix, subroutines, `OFFSET`, and custom dialogs last.
 6. **`Data ▸ Table`** last of the features: it is the most self-contained large
    item, so it loses least by waiting, and it wants module room that the macro
    work may move around.
@@ -262,3 +292,42 @@ fix, not a language one, and it can be done first and alone.
 **`Edit ▸ Repeat` is deliberately unplaced.** It is cheap or unbounded
 depending entirely on a scope decision nobody has taken yet, and it should not
 be started until that decision is.
+
+## 4. What is left — re-measured 2026-09-22
+
+Off the source, not off the sections above: every menu's item table was
+counted (`sh_i_*`: File 5, Edit 12, Formula 7, Format 8, Data 12, Options 6,
+Macro 4), which agrees with §81.39.2.
+
+**Commands:**
+
+| | cost | note |
+|---|---|---|
+| **`Data ▸ Table`** | large, module | Section 2.4. The last multi-cell feature; the one Data command left |
+| **`Options ▸ Short Menus`** | ~300 bytes + a remap layer | Section 2.1.1. Items dispatch by POSITION and the hidden ones are interleaved |
+| **`Macro ▸ Start Recorder` / `Resume`** | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
+| **`Edit ▸ Repeat`** | unbounded until scoped | Sections 2.2 and 3: scope it first |
+| `Options ▸ Workspace` | unscoped | in §81.39.2's missing list, never sized here |
+| `File ▸ Links`, `Save Workspace` | out with MDI | need a second open document |
+| printing (6 commands) | out of scope | by decision; no print backend in the OS |
+
+**Behaviour:** custom number-format codes in the dialog (per-cell STORAGE,
+section 2.3) and SYLK carrying 4 of the 21 built-ins (a compatibility decision).
+
+**Defects and limits:**
+
+- Section 0.1's menu tail - still open.
+- Two `DIALOG.BOX` calls (or two `INPUT`s) in ONE cell loop: one pending
+  answer, INPUT's design since §81.63; the step limit bounds it and the close
+  box ends it (§81.96.3).
+- Not reached by any gate: WAIT's and ON.TIME's clock paths (the 5150 has no
+  BIOS clock, §81.86/§81.92), and the ON.TIME-inside-an-open-dropdown race
+  §81.95.3 guards against.
+
+**Next, by the roadmap:** stage 1.8, the Excel 2.0 look without MDI. Much of
+it landed piecemeal (the in-window menu bar §81.54, the formula and status
+bars, the scroll bars, borders); it has never been MEASURED against the
+reference captures, so how much of 1.8 remains is not known, and that
+measurement is its first step.
+
+With 756 resident bytes, everything above except a small fix is module work.

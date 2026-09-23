@@ -103061,6 +103061,12 @@ reader that had not been written by the same hand as the writer.**
 
 ### 81.39 What SHEET still lacks, measured (2026-09-11)
 
+> **Re-measured 2026-09-22**, after the macro language was finished: every
+> name in Excel 2.x's macro vocabulary is now built or declined with its
+> reason (§81.83-§81.97, §81.93 is the declined list). §81.39.3 and §81.39.4
+> said otherwise in three places and are corrected below; the menu table in
+> §81.39.2 was re-counted against `sh_i_*` and is unchanged.
+>
 > **Re-measured 2026-09-11**, over the 2026-09-03 count this section first
 > held. Closed since: `NOW RAND CLEAN ISNONTEXT INDIRECT` (§81.42 on), Paste
 > Special and Paste Link (§81.45), cell protection (§81.46), the logical value
@@ -103136,16 +103142,21 @@ and §82 is this tree's answer to that.
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
   downstream of that one absence.
-- **The macro language is 20 functions** of a language with ~90 (§81.63):
-  control and loops, the sheet, the user, five menu commands, and **a
-  recorder since §81.74** that emits exactly those 20. No subroutines,
-  no references as values (OFFSET), no custom dialogs, and a
-  Normal save keeps a macro cell's value, not its formula - SYLK carries it.
+- **The macro language is finished** (docs/plans/SHEET-MACRO-PLAN.md,
+  waves 0-5): subroutines (§81.84), references as values (§81.85), control
+  and information (§81.86, §81.87), the command equivalents (§81.88-§81.90),
+  text files (§81.91), ON.KEY and ON.TIME (§81.92), custom menus (§81.95),
+  DIALOG.BOX (§81.96), and a macro sheet that saves and reopens as one, with
+  its formulas, through BIFF (§81.83, §81.97). What is not built is DECLINED
+  with a reason in §81.93 - 60 names, SEND.KEYS among them - or blocked on a
+  SHEET command that does not exist yet (16, `TABLE` and `SHORT.MENUS` the
+  two a later command would bring). The recorder (§81.74) still lacks Start
+  Recorder and Resume.
 - **No Short/Full menus toggle**. Freeze Panes is done (§81.70).
-- **Smaller, each listed where it was found:** Sort leaves empty cells where
-  they are rather than last (§81.61) — the one of these three still open. A
-  centred or right-aligned label runs on into its neighbours since §81.76, and
-  a formatted empty cell keeps its format through BIFF since §81.77. Fill's error constant, SYLK's `;` inside a
+- **Smaller, each listed where it was found — all three closed:** Sort puts
+  a blank key cell last in both directions since §81.80, a centred or
+  right-aligned label runs on into its neighbours since §81.76, and a
+  formatted empty cell keeps its format through BIFF since §81.77. Fill's error constant, SYLK's `;` inside a
   formula and Sort's labels, logicals and errors were closed by §81.61.
 
 #### 81.39.4 The enablers, in dependency order
@@ -103164,8 +103175,9 @@ Almost everything above hangs off six pieces of work:
    it**: `Data ▸ Find`, `Extract`, `Delete` and `Form` added no matching
    logic at all, and what they cost instead was ROOM — the package had ~46
    bytes of headroom, so two dialogs moved into `CHART.OVL` to pay for the
-   sixth (§81.71.5.1). Three Data commands are left, and none of them is
-   downstream of this one.
+   sixth (§81.71.5.1). **One** Data command is left - `Table`, since Parse
+   (§81.82) and Series (§81.72) closed - and it is not downstream of this
+   one.
 4. ~~**Per-row geometry** → row heights, and `Justify`~~ — **both done**
    (§81.60 and §81.81; per-column widths are §81.56's). Justify turned out
    not to need row geometry at all: it moves TEXT between rows that already
@@ -103174,9 +103186,11 @@ Almost everything above hangs off six pieces of work:
 5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
 6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
-Beside them: **a macro recorder and a real macro language** → the Macro menu.
-The cheap remainder, needing none of them: ~~`CELL`~~ — **done in §81.66**,
-`MDETERM`, Calculate Now, and a right-aligned label running on to its left.
+Beside them: ~~**a macro recorder and a real macro language**~~ — **done**
+(§81.74's recorder, §81.83-§81.97's language), leaving the recorder's Start
+Recorder and Resume. The cheap remainder, needing none of them, is **all
+closed**: `CELL` (§81.66), `MDETERM` (§81.67), Calculate Now (§81.78), and a
+right-aligned label running on to its left (§81.76).
 
 
 ### 81.40 CSV and tab-delimited text
