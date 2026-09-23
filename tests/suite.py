@@ -4958,6 +4958,20 @@ SOAK = [
         "a fixed extension function and RETURN, saved Normal: dt 0040H and "
         "all four formulas back; a worksheet opened next saves as 0010H",
         needs=("marty",), serial=True),
+    Row("sheetmtail", "soak", py("tests/sheetmtail.py"), 400.0,
+        "SPEC.md 81.98: the pulldown leaves nothing behind it - Data's panel "
+        "hangs past the window over the dock, is banked, and closing it "
+        "leaves every row below the window as it was; with the window "
+        "dragged low the panel runs off the screen, is NOT slid up, and the "
+        "bank clips at the last row",
+        needs=("marty",), serial=True),
+    Row("sheetmtailvga", "soak", py("tests/sheetmtail.py", "--card", "vga"),
+        400.0,
+        "SPEC.md 81.98.1: the pulldown's save-under on the FOUR-PLANE path "
+        "(os8088_xt_vga, 640x480): the bank is taken, closing changes nothing "
+        "the panel covered, and the bank path lands on the same pixels as a "
+        "full repaint - the A/B that caught the stale status line",
+        needs=("marty",), serial=True),
     Row("sheetmbiff", "soak", py("tests/sheetmbiff.py"), 400.0,
         "SPEC.md 81.83: a macro cell's FORMULA survives a Normal save. Every "
         "one of 81.63's twenty was 0xFF in sh_rpn_fid, so BIFF got the cached "

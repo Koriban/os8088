@@ -49,7 +49,7 @@ DISK = "build/sheetside.img"
 EDIT = (123, 45)
 OPTIONS = (371, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
-DELETE, INSERT = 8, 9
+DELETE, INSERT = 7, 8
 RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)
 OK = (267, 172)
 

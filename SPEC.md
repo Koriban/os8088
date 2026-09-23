@@ -103110,11 +103110,11 @@ harmless.
 | menu | SHEET | Excel 2.1d | missing |
 |---|---|---|---|
 | Formula | 7 | 7 | **none** |
-| Edit | 12 | 12 | none — Undo and Redo since §81.57; **Repeat** is still `Can't Repeat` |
+| Edit | 11 | 12 | none — Undo and Redo since §81.57. **Repeat is DROPPED** (the owner's decision, 2026-09-22) **and its greyed `Can't Repeat` row REMOVED** (§81.99), so SHEET's Edit is Excel's less its second row - the one deliberate difference from the capture |
 | Format | 8 | 8 | **none** — Justify closed in §81.81 |
 | File | 5 | 11 | Page Setup, Printer Setup, Print (printing, out of scope) — `Delete` closed in §81.79. **Struck as MDI** (2026-09-22): Links and Save Workspace, which exist to reach and to re-open OTHER documents, and Close, which came off this list 2026-09-20 as `Exit`'s case one step on |
 | Window | 0 | 5 + the window list | **the whole menu is struck as MDI**: New Window, Show Info, Arrange All, Hide, Unhide and the list of open windows all manage document windows, and SHEET has one. So is the Control menu's document half - Maximize, Restore and Close of a DOCUMENT window (§81.93's MDI group has the macro side) |
-| Options | 6 | 10 | Set Print Area/Titles/Page Break, Workspace, Short Menus — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
+| Options | 6 | 10 | Set Print Area/Titles/Page Break (printing, out of scope), Workspace; **Short Menus DROPPED** (the owner's decision, 2026-09-22) — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
 | Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
 
@@ -103139,7 +103139,7 @@ and §82 is this tree's answer to that.
   §81.56, **hiding either is §81.73** — a height or width of 0, which also
   turned the viewport's visible-to-real mapping from arithmetic into a table —
   and **dragging a heading to resize is §81.73.2**. The pair is closed.
-- **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is not done.
+- **Undo is one level, as Excel 2.1's is** (§81.57); Repeat is dropped (dropped by the owner, 2026-09-22).
 - **No printing at all** — and not SHEET's fault: there is no print backend
   anywhere in this OS. Seven of the missing File/Options commands are
   downstream of that one absence.
@@ -103149,13 +103149,13 @@ and §82 is this tree's answer to that.
   text files (§81.91), ON.KEY and ON.TIME (§81.92), custom menus (§81.95),
   DIALOG.BOX (§81.96), and a macro sheet that saves and reopens as one, with
   its formulas, through BIFF (§81.83, §81.97). What is not built is DECLINED
-  with a reason in §81.93 - 71 names, 22 of them MDI and SEND.KEYS among
-  the rest - or blocked on a SHEET command that does not exist yet (14,
-  `TABLE` and `SHORT.MENUS` the two a later command would bring). Five names
+  with a reason in §81.93 - 72 names, 22 of them MDI and SEND.KEYS among
+  the rest - or blocked on a SHEET command that does not exist yet (13,
+  `TABLE` the one a later command would bring). Five names
   a 2026-09-22 sweep of the book found in neither list are listed there as
   not yet decided. The recorder (§81.74) still lacks Start
   Recorder and Resume.
-- **No Short/Full menus toggle**. Freeze Panes is done (§81.70).
+- **No Short/Full menus toggle**, and none is coming: dropped (dropped by the owner, 2026-09-22). Freeze Panes is done (§81.70).
 - **Smaller, each listed where it was found — all three closed:** Sort puts
   a blank key cell last in both directions since §81.80, a centred or
   right-aligned label runs on into its neighbours since §81.76, and a
@@ -103186,7 +103186,7 @@ Almost everything above hangs off six pieces of work:
    not to need row geometry at all: it moves TEXT between rows that already
    exist, and the Reference Guide's answer to "it does not fit" is more rows
    selected, not taller ones.
-5. ~~An undo record~~ — **done in §81.57** (Repeat remains).
+5. ~~An undo record~~ — **done in §81.57** (Repeat dropped, 2026-09-22).
 6. **A print backend** (OS-level, not SHEET's) → 7 File/Options commands.
 
 Beside them: ~~**a macro recorder and a real macro language**~~ — **done**
@@ -103585,7 +103585,8 @@ constants, which is why it kept working.
 ### 81.45 Paste Special, Paste Link, and reading the menu instead of remembering it
 
 Excel 2.1d's Edit menu has twelve items. SHEET's had nine. The three missing
-ones are **Can't Repeat**, **Paste Special...** and **Paste Link**, and the
+ones are **Can't Repeat**, **Paste Special...** and **Paste Link** (Can't
+Repeat left again in §81.99, by the owner's decision), and the
 first thing this change did was open the real Excel 2.1d capture of that menu
 (`menu_edit_full.png`, in the out-of-tree reference material — see above) and
 the Reference Guide's own picture of it on p.117, rather than write the order
@@ -103721,6 +103722,7 @@ every enter needs its leave, and the two callers must never nest.
   is not shared. Absent rather than faked.
 - **Repeat.** "Can't Repeat" is a `MENU_DIS` item beside "Can't Undo", which is
   what Excel shows most of the time and is honest about what the app does.
+  **Dropped by the owner, 2026-09-22**, and the row removed (§81.99).
   Real Repeat needs a command-replay model — the macro language is the nearest
   thing and it records commands, not their arguments.
 - **Cell Protection**, and with it Options > Protect Document. `SH_C_FLAGS`
@@ -104495,6 +104497,138 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.99 Edit ▸ Repeat is dropped, and its row with it
+
+The owner's decision, 2026-09-22: `Edit ▸ Repeat` is not coming, and the
+permanently greyed `Can't Repeat` row goes too. SHEET's Edit menu is now
+Excel 2.1d's less its second row - the one deliberate difference from the
+capture. Repeat has no macro function to decline: the book says "There is
+no command-equivalent macro function for the Edit Repeat command".
+
+**Taking a row out is the dangerous kind of menu change.** An item is
+dispatched by its POSITION - `AL` is the row that was clicked - so removing
+row 1 moves every row after it, and a number left unchanged anywhere does
+not crash: it silently runs the NEIGHBOURING command. This file already
+records one such orphan: a `cmp al, 9 / je .sort` left behind when Sort
+moved to Data, which would have turned Insert into Sort the day three items
+were added. The row numbers were in four places:
+
+- the dispatch chain in `sh_docmd_edit` (10 comparisons);
+- its undo-snapshot choice (Cut, Paste, Paste Link, Fill Right, Fill Down);
+- the command equivalents that fire an Edit item by number (FILL.RIGHT,
+  FILL.DOWN, PASTE.LINK, UNDO, and FORMULA.FILL's own Fill Right and Fill
+  Down in `shm_mffill`);
+- the bar's own count, 12, in `sh_mtab`.
+
+**They are names now** - `SH_EI_UNDO` … `SH_EI_FILLD` and `SH_EI_N` - and
+`sh_i_edit` labels each of its rows. A `times` pair per row holds each
+label's position to its constant (§81.83.3.3: assembled, not preprocessed),
+so moving a row without its constant, or the reverse, fails the build on
+that row's own line. `sh_docmd_edit`'s header, which listed the rows by
+number, had gone stale twice over: it still read "1 Cut, 2 Copy" with Repeat
+sitting at 1.
+
+What did NOT need changing, checked rather than assumed: the click path
+(the row comes from the hit test, so it follows the table), `sh_mfire`'s
+undo-drop rules (they name menus, not Edit rows), the recorder (it is called
+from inside each command, not by position), custom menus (they refuse
+built-in menus), and Undo's own relabelling (it rewrites `sh_it_undo` by
+label).
+
+Six gates click Edit items by row - sheetundo, sheetside, sheetrecord,
+sheetrowh, sheetsort, sheetcolw - and each had its numbers moved by one for
+every row after Undo. They assert what each command DID (Insert inserts,
+Fill fills, Undo undoes), so a row that still pointed at its neighbour would
+fail rather than pass.
+
+The assertions were proven by mutation both ways: swapping the Cut and Copy
+rows, and raising `SH_EI_PASTE` alone, each fail the build on the row
+concerned. **Resident -16 bytes** (the row and its string); §81.98.1 has
+the headroom after all three.
+
+### 81.98 The pulldown leaves nothing behind it
+
+`docs/plans/SHEET-GAPS-PLAN.md` section 0.1's defect. A pulldown taller than
+the room under SHEET's bar hangs PAST the window's bottom edge - on a
+200-row screen, Data's twelve items reach row 199 from a window that ends at
+174, over the dock - and `sh_mclose` repainted the window and nothing else,
+so the rows below it kept the menu's last items for the rest of the session.
+No repaint SHEET can make reaches them: they belong to the desktop, the dock
+or another window.
+
+**The pixels are banked instead** - the kernel menu's own answer (§12.4),
+and Word's (§68.2.1):
+
+- **`sh_mbank`** runs between `sh_mdrop_geo` and the first draw and calls
+  `OSAPI_GFX_SAVE` over the panel's rect. Its size is §13.16.4's formula,
+  planes × rows × byte columns, with the plane count from
+  `OSAPI_WM_DISPLAY` (never `OSAPI_VIDEO`, §39.16.4). The bottom is clamped
+  to the display's last row, in `[sh_mbky2]`.
+- **`sh_mclose`** writes it back with `OSAPI_GFX_REST` and redraws the bar
+  so the title is plain again. The full `sh_repaint` it used to make is now
+  the REFUSAL path only: no bank (a rect straddling two displays, or one
+  past the buffer) closes exactly as before. §68.2.1's rule: every refusal
+  is the old path, never a new one.
+- **The buffer is the staging claim** (`sh_stgseg`, 32 KB), not a claim of
+  its own: SHEET holds `MEM_OWNER_MAX`'s eight (§81.94.1) and §50.3 keeps
+  its claims in the entry proc. Staging holds nothing between commands -
+  every one of its seventy uses is scratch inside one command or one paint,
+  and Copy and Paste only stage through it: the clipboard is the OS's. A
+  menu is closed, and its bank written back, before the picked command runs.
+  Data's panel, measured by the gate, is 25 byte columns × 148 rows:
+  3,700 bytes on CGA and 14,800 on a four-plane display, against 32,768.
+
+**The lock stays HELD while the panel is up.** `sh_mtrack` was Word's
+`wd_mtrack`: unlock, yield, relock between reads. That is right for a panel
+inside its own window, where no other task can draw - which is exactly why
+the shared element (§13.16) can bank under it. SHEET's panel hangs past its
+window, where other tasks CAN draw, and a restore would then put their
+pixels back stale. So it takes `menu_drop`'s discipline instead: it yields
+with the lock held, and nothing else draws until the panel is gone. It is
+the same pause every task already takes under the kernel's own menus.
+
+**Not slid up when it runs off the screen**, although §12.4's popup slides.
+A window dragged low pushes a tall menu past the display's last row, and
+those items are drawn nowhere and cannot be reached - as before this
+section, and as the shared element's own `os88ui_mngeo` does. The first build
+slid the panel up, and the gate's screenshot showed why the element refuses
+to: a slid bar menu covers its own title and lands UNDER THE POINTER, so a
+plain click on the title releases on an item and runs it. The bank clips at
+the last row, so closing such a panel still leaves nothing.
+
+`tests/sheetmtail.py` (8 checks) reads the panel's rect out of SHEET's own
+memory to prove it overhangs the window - a panel inside it would make every
+other check pass by default - then compares every row below the window with
+a photograph taken before it opened. The same happens with the window
+dragged 24 rows lower, where the panel runs off the screen. Skipping the
+restore fails both comparisons.
+
+**Resident +174 bytes, bss +3** on the build this section first shipped on.
+
+#### 81.98.1 What the VGA machine found
+
+The gates above run on the 5150's CGA, whose one plane is the only path they
+reach. `tests/sheetmtail.py --card vga` runs `os8088_xt_vga` (640×480, four
+planes) and reads the card's own rendered framebuffer. There the panel fits
+inside the window, so it adds the comparison `tests/atmenusu.py` makes: one
+close through the bank and one with the bank poked to 0 - the repaint - and
+**both must land on the same pixels**.
+
+**They did not, by 63 pixels, and the bank was the one that was wrong.** The
+click that opens a menu clears `[sh_msg]` in `sh_onclick`, and the old full
+repaint drew the status bar as a side effect, so "Loaded" became "Ready". The
+bank put back the pixels it saved, the stale message among them. Nothing that
+compared only against a photograph taken before the menu opened could see it,
+because that photograph was stale in the same way. `sh_mclose` now redraws
+the status bar after the bar on the bank path: one row of text, where the old
+path repainted the whole window. Taking the call out again fails the A/B.
+
+The four-plane bank itself restored the screen exactly on the first run. The
+only pixels that ever differed were the status bar's.
+
+**Resident +3 bytes for the status redraw.** SHEET after §81.98, §81.98.1 and
+§81.99: 51,725 + 9,123 bss of 61,440, **592 bytes** of headroom.
+
 ### 81.97 The reader half: macro sheets come back as macro sheets
 
 Wave 5 of `docs/plans/SHEET-MACRO-PLAN.md`. §81.83 made the writer emit a
@@ -104918,7 +105052,7 @@ list. Nine were classified by decisions already on record - MDI below, and
 PRINT, GRIDLINES, LEGEND, INITIATE and QUIT into their existing groups -
 and the five with no decision yet are listed last.
 
-**Declined, with the reason (71):**
+**Declined, with the reason (72):**
 
 - **Printing (7)**, out of scope by the owner's decision: PAGE.SETUP, PRINT,
   PRINTER.SETUP, REMOVE.PAGE.BREAK, SET.PAGE.BREAK, SET.PRINT.AREA,
@@ -104946,6 +105080,10 @@ and the five with no decision yet are listed last.
   key while a macro runs (§81.86.4), and the kernel has no slot that posts a
   keystroke to anything: `OSAPI_KEY_DOWN` only asks whether a key is held.
   A kernel primitive for one package is not a trade to make for it.
+- **Dropped by the owner (1): SHORT.MENUS**, with `Options ▸ Short Menus`
+  (2026-09-22). Edit ▸ Repeat went the same day and has no macro function to
+  decline: the book says so ("There is no command-equivalent macro function
+  for the Edit Repeat command").
 - **A chart document (25).** SHEET's chart is a rendering of a range (§82),
   not a document with arrows, overlays and a plot area to select: ADD.ARROW,
   ADD.OVERLAY, ATTACH.TEXT, AXES, COMBINATION, COPY.CHART, DELETE.ARROW,
@@ -104954,11 +105092,11 @@ and the five with no decision yet are listed last.
   OVERLAY.CHART.TYPE, PATTERNS, PREFERRED, SCALE, SELECT.CHART,
   SELECT.PLOT.AREA, SET.PREFERRED.
 
-**Blocked on a SHEET feature (14).** Each drives a command SHEET does not
+**Blocked on a SHEET feature (13).** Each drives a command SHEET does not
 have, and the function comes cheaply with the command:
 
 - APPLY.NAMES, CREATE.NAMES, DELETE.FORMAT, FORMULA.REPLACE, HELP,
-  SELECT.SPECIAL, SHORT.MENUS, SHOW.CLIPBOARD, STYLE, TABLE and WORKSPACE,
+  SELECT.SPECIAL, SHOW.CLIPBOARD, STYLE, TABLE and WORKSPACE,
   from the plan - SHOW.CLIPBOARD stays here rather than under MDI: the
   Reference Guide has it run Windows' separate Clipboard UTILITY, not open a
   document window, and WORKSPACE is the display-settings dialog (fixed
@@ -105932,7 +106070,8 @@ Number/Alignment/Font/Border/Cell Protection/Row Height/Column Width/Justify,
 which is SHEET's seven in Excel's own order plus one at the END, so no index
 below it shifted. It is worth saying because the command after this one —
 `Short Menus` — is the opposite case, and its whole cost is that the hidden
-items are interleaved.
+items are interleaved. (Short Menus was then dropped by the owner,
+2026-09-22.)
 
 **The menu ORDER is from the 2.1d capture and the BEHAVIOUR from the manual**,
 and they are two sources on purpose. `menu_format_full.png` in the reference
@@ -106567,7 +106706,8 @@ cannot be undone rather than half-undone.
 - Undo **abandons an edit in progress**, as Excel's does; committing it would
   have snapshot over the snapshot.
 
-**Not done**: Repeat is still "Can't Repeat", and cancelling a Format dialog
+**Not done**: Repeat is still "Can't Repeat" - dropped by the owner on
+2026-09-22, and the row removed (§81.99) - and cancelling a Format dialog
 ends Undo where Excel's would keep it (the drop is taken when the menu
 fires).
 

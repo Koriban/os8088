@@ -21,9 +21,9 @@ Excel 2.0 has **about 209 macro-side functions**. SHEET has **20**
 **Finished = the 117 built, the 60 declined in SPEC with their reasons, and
 the 13 recorded against the feature each waits on.** (Superseded 2026-09-22:
 a sweep of the book's own 347-name directory found fourteen names this table
-had missed. §81.93 now carries 71 declined - everything MDI struck as one
-group of 22 - 14 blocked, and 5 not yet decided; it, not this table, is the
-count.) Not "209 of 209":
+had missed. §81.93 now carries 72 declined - everything MDI struck as one
+group of 22, and SHORT.MENUS dropped with its command - 13 blocked, and 5
+not yet decided; it, not this table, is the count.) Not "209 of 209":
 `APP.MAXIMIZE` on a machine where the OS owns every window is a function that
 could only lie.
 

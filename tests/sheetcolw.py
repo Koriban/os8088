@@ -53,7 +53,7 @@ WIDTHS = {1: 20, 3: 3}
 # off a held-open menu, not assumed: 59 + 11 * 6 landed on Row Height
 COLW_ITEM = (SF.FORMAT_MENU[0] + 15, 57 + 12 * 6 + 2)
 EDIT_MENU = (123, 45)
-INSERT_ITEM = (140, 57 + 12 * 9 + 2)    # Edit's 10th, measured the same way
+INSERT_ITEM = (140, 57 + 12 * 8 + 2)    # Edit's 9th since 81.99 took Repeat out
 COLUMN_RADIO = (SF.FMT_RADIO_X, 71)     # the Insert dialog's second radio
 INSERT_OK = (267, 172)
 

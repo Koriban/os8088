@@ -713,6 +713,24 @@ SH_MI_MACRO   equ SH_MI_OPTIONS + 1
 SH_MI_SHEET   equ SH_MI_MACRO + 1
 SH_MI_HELP    equ SH_MI_SHEET + 1
 SH_MENU_N     equ SH_MI_HELP + 1
+; 81.99: EDIT'S ITEMS BY NAME. An item is dispatched by its POSITION - AL is
+; the row clicked - so a bare number names it only until a row is added or
+; taken away, and then silently names its NEIGHBOUR. Every site that names an
+; Edit item uses these, and sh_i_edit's own row labels hold each one to its
+; row at assembly time (the TIMES pairs after the table). Repeat was row 1
+; until 81.99 took it out
+SH_EI_UNDO    equ 0
+SH_EI_CUT     equ 1
+SH_EI_COPY    equ 2
+SH_EI_PASTE   equ 3
+SH_EI_CLEAR   equ 4
+SH_EI_PASTESP equ 5
+SH_EI_PASTELK equ 6
+SH_EI_DELETE  equ 7
+SH_EI_INSERT  equ 8
+SH_EI_FILLR   equ 9
+SH_EI_FILLD   equ 10
+SH_EI_N       equ 11
 ; 81.95: CUSTOM MENUS. The bar walks [sh_mtabp], [sh_mcount] entries long -
 ; sh_mtab for the built-in bar, whose custom menus are appended after Help,
 ; or sh_mtabc for the one custom bar. A custom menu's RECORD holds its
@@ -7524,7 +7542,14 @@ sh_mdrop_geo:
     add ax, [sh_mry1]
     dec ax
     mov [sh_mry2], ax
-
+                                      ; 81.98: NOT slid up when it runs off
+                                      ; the screen, though the kernel's popup
+                                      ; slides: a bar menu slid up covers its
+                                      ; own title and lands UNDER THE POINTER,
+                                      ; and a plain click on the title then
+                                      ; releases on an item and fires it. The
+                                      ; shared element (os88ui_mngeo) refuses
+                                      ; the same slide for the same reason
     pop si
     pop cx
     pop bx
@@ -7710,18 +7735,122 @@ sh_mclose:
     mov byte [sh_mopen], SH_M_NONE
     mov byte [sh_mhi], SH_M_NONE
     mov si, [sh_ownwin]
-    call sh_repaint
+    cmp byte [sh_mbanked], 0            ; 81.98: the pixels the panel covered,
+    je .repaint                       ; WHEREVER they were - the part past the
+    mov byte [sh_mbanked], 0            ; window's bottom edge included, which
+    push bx                           ; the repaint below cannot reach: it
+    push cx                           ; draws this window, and the tail was on
+    push dx                           ; the desktop or another window
+    push es
+    push si
+    mov es, [sh_stgseg]
+    xor si, si
+    mov ax, [sh_mrx1]
+    mov bx, [sh_mry1]
+    mov cx, [sh_mrx2]
+    mov dx, [sh_mbky2]
+    call OSAPI_GFX_REST
+    pop si
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    jc .repaint
+    call sh_mbar_draw                 ; ...and the title back to plain
+    call sh_drawstatus                ; ...and the STATUS BAR, which the old
+    jmp short .out                    ; full repaint refreshed as a side
+                                       ; effect: the click that opened this
+                                       ; menu cleared [sh_msg] (sh_onclick),
+                                       ; and the bank put back the old message.
+                                       ; The VGA gate caught it by comparing
+                                       ; this path with the repaint's
+.repaint:
+    call sh_repaint                   ; refused: what it always did
+.out:
     pop si
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_mtrack - the press-drag-release gesture (word.asm's wd_mtrack pattern:
-; a tight OSAPI_MOUSE poll with an unlock/yield/relock between reads, never
-; W_ONDRAG - see the SH_MBAR_H section comment for why). in: AL = menu
+; sh_mbank - 81.98: save what the dropdown is about to cover, in the staging
+; claim - which holds nothing between commands (Copy and Paste stage through
+; it and the clipboard is the OS's), and no command runs while a menu is up.
+; [sh_mbanked] = 1 with the rect's bottom, clamped to the display, in
+; [sh_mbky2]; or 0 when anything refused, and sh_mclose repaints as before.
+; The size is SPEC.md 13.16.4's: planes * rows * byte columns, the plane
+; count from OSAPI_WM_DISPLAY (never OSAPI_VIDEO: 39.16.4)
+; -----------------------------------------------------------------------------
+sh_mbank:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [sh_mbanked], 0
+    mov bx, [sh_ownwin]
+    call OSAPI_WM_DISPLAY             ; BX = height, DH = bits per pixel
+    dec bx
+    mov ax, [sh_mry2]
+    cmp ax, bx
+    jbe .y2
+    mov ax, bx
+.y2:
+    mov [sh_mbky2], ax
+    mov di, ax                        ; DI = the last row, kept across mul
+    mov ax, [sh_mrx2]
+    mov cl, 3
+    shr ax, cl
+    mov bx, [sh_mrx1]
+    shr bx, cl
+    sub ax, bx
+    inc ax                            ; AX = byte columns
+    mov bx, di
+    sub bx, [sh_mry1]
+    inc bx                            ; BX = rows
+    push dx
+    mul bx                            ; DX:AX = one plane
+    pop bx                            ; BH = bits per pixel
+    cmp bh, 4
+    jne .one
+    shl ax, 1                         ; four planes
+    rcl dx, 1
+    shl ax, 1
+    rcl dx, 1
+.one:
+    or dx, dx
+    jnz .out
+    cmp ax, SH_STAGE_MAX
+    ja .out
+    mov es, [sh_stgseg]
+    xor di, di
+    mov ax, [sh_mrx1]
+    mov bx, [sh_mry1]
+    mov cx, [sh_mrx2]
+    mov dx, [sh_mbky2]
+    call OSAPI_GFX_SAVE               ; CF=1: the rect straddles two displays
+    jc .out
+    mov byte [sh_mbanked], 1
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_mtrack - the press-drag-release gesture: a tick-paced OSAPI_MOUSE poll,
+; never W_ONDRAG - see the SH_MBAR_H section comment for why. in: AL = menu
 ; index to open, SI = window ptr (this callback's own, untouched SI - see
-; sh_onclick); called with the gfx lock already held, exactly the state
-; the unlock/relock pair expects.
+; sh_onclick); called with the gfx lock already held, and it KEEPS it held
+; until the panel is gone (81.98). It was word.asm's wd_mtrack pattern, an
+; unlock/yield/relock between reads, and that is right for a panel inside
+; its own window, where no other task can draw; SHEET's hangs past the
+; window's bottom, so it takes the kernel menu's discipline instead.
 ; -----------------------------------------------------------------------------
 sh_mtrack:
     push ax
@@ -7730,19 +7859,19 @@ sh_mtrack:
     mov [sh_mopen], al
     mov byte [sh_mhi], SH_M_NONE
     call sh_mdrop_geo
+    call sh_mbank                      ; 81.98: before anything is drawn
     call sh_mbar_draw
     call sh_mdrop_draw
 .loop:
-    call OSAPI_GFX_UNLOCK
-    call OSAPI_GET_TICKS
-    mov bx, ax
-.spin:
-    call OSAPI_TASK_YIELD
-    call OSAPI_GET_TICKS
-    cmp ax, bx
-    je .spin
-    call OSAPI_GFX_LOCK
-    call OSAPI_MOUSE                   ; cx=x, dx=y, al=buttons
+    call OSAPI_GET_TICKS               ; 81.98: THE LOCK STAYS HELD while the
+    mov bx, ax                         ; panel is up - the kernel menu's own
+.spin:                                 ; discipline (menu_drop: "nothing else
+    call OSAPI_TASK_YIELD              ; draws while we hold the lock"). The
+    call OSAPI_GET_TICKS               ; panel hangs past the window onto other
+    cmp ax, bx                         ; windows and the desktop, and a task
+    je .spin                           ; repainting under it would be put back
+    call OSAPI_MOUSE                   ; STALE by the restore; cx=x, dx=y,
+                                       ; al=buttons
     test al, 1
     jz .release
     call sh_mitem_hit
@@ -8252,14 +8381,16 @@ sh_docmd_format:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_docmd_edit - Edit menu item AL. 0 is "Can't Undo" (MENU_DIS - the
-; kernel never sends a click for a disabled item, so index 0 is dead here,
-; not a bug). 1 Cut, 2 Copy, 3 Paste use the real system clipboard
-; (OSAPI_CLIP_*). 4 Clear. 5 Delete... / 6 Insert... both open the
+; sh_docmd_edit - Edit menu item AL, NAMED by the SH_EI_ constants (81.99).
+; This header used to list the rows by number, and the numbers had gone stale
+; twice over - it still said 1 Cut, 2 Copy while Repeat sat at 1 - which is
+; the whole case for the names. Undo is Undo or Redo when there is a snapshot
+; and MENU_DIS when there is not (81.57). Cut, Copy and Paste use the real
+; system clipboard (OSAPI_CLIP_*). Delete... and Insert... both open the
 ; Row/Column picker (sh_fdlg_* kinds 4 and 3 - see the dialog engine's own
-; comment for why one engine now serves 5 kinds). 7 Fill Right / 8 Fill
-; Down are deliberately scoped down from real Excel: fill acts on just the
-; one adjacent cell.
+; comment for why one engine serves several kinds). Fill Right and Fill Down
+; are deliberately scoped down from real Excel: fill acts on just the one
+; adjacent cell.
 ;
 ; THIS USED TO SAY "no range selection exists in this app (W_ONDRAG is
 ; missing... so a real rectangular selection was ruled out)". Stage 3.0a
@@ -8270,27 +8401,27 @@ sh_docmd_format:
 ; because it says the thing cannot be done.
 ; -----------------------------------------------------------------------------
 sh_docmd_edit:
-    or al, al                          ; 0 is Undo or Redo when there is a
-    jnz .notundo                       ; snapshot, and MENU_DIS - so it never
+    cmp al, SH_EI_UNDO                 ; Undo or Redo when there is a
+    jne .notundo                       ; snapshot, and MENU_DIS - so it never
     call sh_undo_do                    ; arrives - when there is not (81.57)
     ret
 .notundo:
     push ax                            ; the commands that act at once take
     mov ah, al                         ; their snapshot here; the dialogs'
     mov al, SH_UL_CUT                  ; take it at OK, in sh_fdlg_apply
-    cmp ah, 2
+    cmp ah, SH_EI_CUT
     je .snap
     mov al, SH_UL_PASTE
-    cmp ah, 4
+    cmp ah, SH_EI_PASTE
     je .snap
     mov al, SH_UL_PLINK
-    cmp ah, 7
+    cmp ah, SH_EI_PASTELK
     je .snap
     mov al, SH_UL_FILLR
-    cmp ah, 10
+    cmp ah, SH_EI_FILLR
     je .snap
     mov al, SH_UL_FILLD
-    cmp ah, 11
+    cmp ah, SH_EI_FILLD
     jne .nosnap
 .snap:
     call sh_undo_begin
@@ -8301,25 +8432,25 @@ sh_docmd_edit:
 .nosnap:
     pop ax
 .cmd:
-    cmp al, 2                          ; 1 Can't Repeat is MENU_DIS, so it
-    je .cut                            ; never arrives
-    cmp al, 3
+    cmp al, SH_EI_CUT
+    je .cut
+    cmp al, SH_EI_COPY
     je .copy
-    cmp al, 4
+    cmp al, SH_EI_PASTE
     je .paste
-    cmp al, 5
+    cmp al, SH_EI_CLEAR
     je .clear
-    cmp al, 6
+    cmp al, SH_EI_PASTESP
     je .pastesp
-    cmp al, 7
+    cmp al, SH_EI_PASTELK
     je .pastelk
-    cmp al, 8
+    cmp al, SH_EI_DELETE
     je .delete
-    cmp al, 9
+    cmp al, SH_EI_INSERT
     je .insert
-    cmp al, 10
+    cmp al, SH_EI_FILLR
     je .fillright
-    cmp al, 11
+    cmp al, SH_EI_FILLD
     je .filldown
     ret                                ; THERE WAS A `cmp al, 9 / je .sort`
                                        ; HERE, left behind when Sort moved to
@@ -39170,13 +39301,13 @@ shm_dfind:
 ; does.
 ; =============================================================================
 ; the menu-fired ones: AH = the menu, AL = the item (sh_mfire's contract)
-shm_x_fillr:  mov ax, (SH_MI_EDIT << 8) | 10
+shm_x_fillr:  mov ax, (SH_MI_EDIT << 8) | SH_EI_FILLR
               jmp short shm_mfirec
-shm_x_filld:  mov ax, (SH_MI_EDIT << 8) | 11
+shm_x_filld:  mov ax, (SH_MI_EDIT << 8) | SH_EI_FILLD
               jmp short shm_mfirec
-shm_x_plink:  mov ax, (SH_MI_EDIT << 8) | 7
+shm_x_plink:  mov ax, (SH_MI_EDIT << 8) | SH_EI_PASTELK
               jmp short shm_mfirec
-shm_x_undo:   mov ax, (SH_MI_EDIT << 8) | 0
+shm_x_undo:   mov ax, (SH_MI_EDIT << 8) | SH_EI_UNDO
               jmp short shm_mfirec
 shm_x_just:   mov ax, (SH_MI_FORMAT << 8) | 7
               jmp short shm_mfirec
@@ -40560,9 +40691,9 @@ shm_mffill:
     cmp byte [sh_macro_ctl], SH_MC_STOP ; its top-left, and past every
     je .out                           ; argument
     push si
-    mov ax, (SH_MI_EDIT << 8) | 11    ; Fill Down
+    mov ax, (SH_MI_EDIT << 8) | SH_EI_FILLD
     SHOUT sh_macro_mfire
-    mov ax, (SH_MI_EDIT << 8) | 10    ; Fill Right
+    mov ax, (SH_MI_EDIT << 8) | SH_EI_FILLR
     SHOUT sh_macro_mfire
     pop si
 .out:
@@ -50424,7 +50555,7 @@ sh_mf_ret:
 ; what made the renumber safe to do at all.
 sh_mtab:
     dw sh_m_file,    sh_i_file,    5
-    dw sh_m_edit,    sh_i_edit,    12
+    dw sh_m_edit,    sh_i_edit,    SH_EI_N
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  8
     dw sh_m_data,    sh_i_data,    SH_DATA_N
@@ -50519,7 +50650,8 @@ sh_m_format:    db 'Format', 0
 ; 81.81: Justify is APPENDED. Excel 2.1d's Format is Number/Alignment/Font/
 ; Border/Cell Protection/Row Height/Column Width/Justify, so the missing item
 ; is the LAST one and no index below it moved - File > Delete's happy case
-; again (81.79), and the opposite of what Short Menus will be.
+; again (81.79), and the opposite of what Short Menus would have been
+; (dropped by the owner, 2026-09-22).
 sh_i_format:    dw sh_it_fnum, sh_it_falign, sh_it_ffont, sh_it_fborder, sh_it_fprot, sh_it_frowh, sh_it_fcolw, sh_it_fjust
 sh_it_fprot:     db 'Cell Protection...', 0
 sh_it_fnum:      db 'Number...', 0
@@ -50578,16 +50710,48 @@ sh_it_absrec:  db 'Absolute Record', 0   ; it WOULD do, as Excel's does
 sh_m_edit:     db 'Edit', 0
 ; READ OFF THE REAL MENU
 ; (LIBRARY/documentation/screenshots/excel/menu_edit_full.png, and the
-; Reference Guide's own picture of it on p.117): Can't Undo / Can't Repeat /
+; Reference Guide's own picture of it on p.117) - less Repeat since 81.99:
+; Can't Undo / Can't Repeat /
 ; Cut / Copy / Paste / Clear... / Paste Special... / Paste Link / Delete... /
 ; Insert... / Fill Right / Fill Down. PASTE SPECIAL AND PASTE LINK COME
 ; AFTER CLEAR, not after Paste, which is where they would have gone from
 ; memory.
-sh_i_edit:     dw sh_it_undo, sh_it_repeat, sh_it_cut, sh_it_copy, sh_it_paste, sh_it_clear, sh_it_pastesp, sh_it_pastelk, sh_it_delete, sh_it_insert, sh_it_fillright, sh_it_filldown
+; 81.99: Repeat is GONE from this list - the owner's decision, 2026-09-22 -
+; so SHEET's Edit is Excel's less its second row. Each row has a label, and
+; the TIMES pairs below hold it to its SH_EI_ constant: moving a row without
+; its constant, or the reverse, fails the build on that row's own line
+sh_i_edit:
+.undo:     dw sh_it_undo
+.cut:      dw sh_it_cut
+.copy:     dw sh_it_copy
+.paste:    dw sh_it_paste
+.clear:    dw sh_it_clear
+.pastesp:  dw sh_it_pastesp
+.pastelk:  dw sh_it_pastelk
+.delete:   dw sh_it_delete
+.insert:   dw sh_it_insert
+.fillr:    dw sh_it_fillright
+.filld:    dw sh_it_filldown
+.end:
+%macro SH_EIROW 2
+    times ((sh_i_edit.%1 - sh_i_edit) / 2 - (%2)) db 0
+    times ((%2) - (sh_i_edit.%1 - sh_i_edit) / 2) db 0
+%endmacro
+    SH_EIROW undo, SH_EI_UNDO
+    SH_EIROW cut, SH_EI_CUT
+    SH_EIROW copy, SH_EI_COPY
+    SH_EIROW paste, SH_EI_PASTE
+    SH_EIROW clear, SH_EI_CLEAR
+    SH_EIROW pastesp, SH_EI_PASTESP
+    SH_EIROW pastelk, SH_EI_PASTELK
+    SH_EIROW delete, SH_EI_DELETE
+    SH_EIROW insert, SH_EI_INSERT
+    SH_EIROW fillr, SH_EI_FILLR
+    SH_EIROW filld, SH_EI_FILLD
+    SH_EIROW end, SH_EI_N
 sh_it_undo:    db MENU_DIS, "Can't Undo", 0     ; REWRITTEN by sh_undo_label
                times 10 db 0                      ; (81.57): "Undo Paste Special"
                                                   ; and its NUL fit the slack
-sh_it_repeat:  db MENU_DIS, "Can't Repeat", 0
 sh_it_pastesp: db 'Paste Special...', 0
 sh_it_pastelk: db 'Paste Link', 0
 sh_it_cut:     db 'Cut', 0
@@ -52216,7 +52380,8 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9120                     ; +1 for 81.96.2's close-box byte;
+    OS88_BSS 9123                     ; +3 for 81.98's menu save-under;
+                                       ; +1 for 81.96.2's close-box byte;
                                        ; +1 for 81.97's document kind;
                                        ; +60 for 81.96's DIALOG.BOX: the
                                        ; window, its done byte, one line
@@ -53595,7 +53760,10 @@ sh_dbx_cls    equ sh_dbx_ebuf + SH_DBX_EDLEN ; 81.96.2: byte, the close box
                                              ; asked and the next tick does it
 sh_dockind    equ sh_dbx_cls + 1 ; 81.97: byte, 1 = this is a
                                              ; MACRO SHEET (BIFF's dt 0040H)
-sh_bss_end        equ sh_dockind + 1
+sh_mbanked    equ sh_dockind + 1             ; 81.98: byte, the open
+                                             ; dropdown's pixels are banked...
+sh_mbky2      equ sh_mbanked + 1             ; ...word, down to this row
+sh_bss_end        equ sh_mbky2 + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

@@ -42,7 +42,7 @@ DISK = "build/sheetundo.img"
 CELLS = {(0, 0): 1.0, (1, 0): 2.0, (0, 1): 'x'}
 EDIT = (123, 45)
 ITEM = lambda i: (140, 57 + 12 * i + 2)     # the Edit menu's rows, measured
-UNDO, COPY, PASTE, CLEAR, INSERT = 0, 3, 4, 5, 9
+UNDO, COPY, PASTE, CLEAR, INSERT = 0, 2, 3, 4, 8
 RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)   # a radio dialog's rows
 OK = (267, 172)
 

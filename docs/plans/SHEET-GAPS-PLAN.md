@@ -7,9 +7,9 @@ almost half the arithmetic and none of the work.
 
 **Status 2026-09-22: the macro language is finished** (section 2.4 below,
 and `docs/plans/SHEET-MACRO-PLAN.md`), both defects in section 1 are closed,
-and section 0.1's menu tail is the one known defect still open. Section 4 at
-the end is what is left, re-measured that day; the sections above it are
-kept as the record.
+and section 0.1's menu tail was the one known defect still open - closed
+the same day by §81.98. Section 4 at the end is what is left, re-measured
+that day; the sections above it are kept as the record.
 
 Everything below was **measured on 2026-09-20**, off SHEET's own tables and
 source rather than off §81.39 — which had itself gone stale in one row
@@ -61,9 +61,14 @@ Two consequences:
 - **`Data ▸ Table` and the macro language cannot both be resident.** Neither
   should be.
 
-## 0.1 A defect found while building §81.82, NOT fixed — the menu's tail
+## 0.1 A defect found while building §81.82 — the menu's tail — **fixed, §81.98**
 
-**Still open 2026-09-22**: `sh_mclose` still repaints `[sh_ownwin]` and
+**Fixed 2026-09-22 (§81.98)**, by neither option below: the panel's pixels
+are BANKED in the staging claim and written back on close - the kernel
+menu's own answer, with the gfx lock held while the panel is up so nothing
+can draw under it. What follows is the record.
+
+**Still open 2026-09-22 (before §81.98)**: `sh_mclose` still repaints `[sh_ownwin]` and
 nothing else. §81.95 made a dropdown that would run past the window's RIGHT
 edge move left (`sh_mdrop_geo`); the BOTTOM overhang this section is about
 is untouched by it.
@@ -175,7 +180,7 @@ but nothing holds it that way while §2.3 is built on top of it.
 | ~~**`File ▸ Delete`**~~ | — | **done, §81.79.** 152 bytes. It was cheap as predicted, and the two things worth knowing were not in the prediction: the picker is an `FDLG_OPEN` and says so, and the chosen name had to be kept out of `sh_name` — which is the OPEN DOCUMENT's name |
 | ~~**`File ▸ Close`**~~ | — | **measured, and it is NOT a gap.** Excel's Close ends a DOCUMENT because Excel is MDI; this app has one document per instance and the window's close box already ends both, so the item would be a second name for the close box and express no distinction this app has. Recorded as a deliberate absence beside `Exit` |
 
-### 2.1.1 `Options ▸ Short Menus` — measured, and NOT cheap
+### 2.1.1 ~~`Options ▸ Short Menus`~~ — measured, and NOT cheap — **DROPPED by the owner, 2026-09-22**
 
 It was listed above as *"pure menu-table work"*. That is the easy half.
 
@@ -216,7 +221,7 @@ assertion**, not at a table and a toggle.
 | ~~**`Format ▸ Justify`**~~ | **done, §81.81** | 131 resident + 671 module + 84 bss. The estimate here was right about the cost and wrong about the SHAPE: it is not "splitting on spaces" over a block, it is a paragraph operation on the LEFT column at the width of the whole selection, with blank cells as separators. The Reference Guide had four clauses a sensible guess misses |
 | ~~**`Data ▸ Parse`**~~ | **done, §81.82** | 120 resident + 920 module + 296 bss. This estimate was right, unlike Justify's: it IS a dialog with a guessed split and a write across, and it IS module work. What it understates is that the split is at FIXED CHARACTER POSITIONS rather than at a delimiter, which is the whole reason the feature exists beside CSV |
 | **`Macro ▸ Start Recorder` / `Resume`** | the recorder's other two commands | §81.74 names these as its own documented shortfalls, so the design already exists |
-| **`Edit ▸ Repeat`** | repeat the last command | **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
+| ~~**`Edit ▸ Repeat`**~~ | **DROPPED by the owner, 2026-09-22** | ~~repeat the last command~~. Its greyed `Can't Repeat` row was removed too (§81.99), behind named constants for every Edit position. **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
 | ~~**`File ▸ Links`**~~ | — | **struck as MDI, 2026-09-22**: it exists to reach a second open document, and SHEET has one per instance. §81.93 declines its macro functions (CHANGE.LINK, LINKS, OPEN.LINKS) on the same ground |
 
 ### 2.3 Number formats — the residual, and it is storage
@@ -289,7 +294,7 @@ fix, not a language one, and it can be done first and alone.
    item, so it loses least by waiting, and it wants module room that the macro
    work may move around.
 
-**`Edit ▸ Repeat` is deliberately unplaced.** It is cheap or unbounded
+**~~`Edit ▸ Repeat` is deliberately unplaced.~~** Dropped by the owner, 2026-09-22 - the scope decision below was taken by not building it. It is cheap or unbounded
 depending entirely on a scope decision nobody has taken yet, and it should not
 be started until that decision is.
 
@@ -304,11 +309,13 @@ Macro 4), which agrees with §81.39.2.
 | | cost | note |
 |---|---|---|
 | **`Data ▸ Table`** | large, module | Section 2.4. The last multi-cell feature; the one Data command left |
-| **`Options ▸ Short Menus`** | ~300 bytes + a remap layer | Section 2.1.1. Items dispatch by POSITION and the hidden ones are interleaved |
 | **`Macro ▸ Start Recorder` / `Resume`** | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
-| **`Edit ▸ Repeat`** | unbounded until scoped | Sections 2.2 and 3: scope it first |
 | `Options ▸ Workspace` | unscoped | in §81.39.2's missing list, never sized here |
 | printing (6 commands) | out of scope | by decision; no print backend in the OS |
+
+**Dropped by the owner** (2026-09-22): `Options ▸ Short Menus` and
+`Edit ▸ Repeat` - and Repeat's greyed row is gone from the menu too (§81.99),
+every Edit position now named rather than numbered.
 
 **Struck as MDI** (2026-09-22) — neither SHEET nor the OS has a
 multiple-document interface, so these are not gaps: `File ▸ Links`, `File ▸
@@ -322,7 +329,10 @@ section 2.3) and SYLK carrying 4 of the 21 built-ins (a compatibility decision).
 
 **Defects and limits:**
 
-- Section 0.1's menu tail - still open.
+- ~~Section 0.1's menu tail~~ - **fixed, §81.98**. What remains of it: a
+  window dragged low pushes a tall menu's last items past the screen, where
+  they cannot be reached (the panel is deliberately not slid up - §81.98
+  says why).
 - Two `DIALOG.BOX` calls (or two `INPUT`s) in ONE cell loop: one pending
   answer, INPUT's design since §81.63; the step limit bounds it and the close
   box ends it (§81.96.3).
@@ -330,10 +340,11 @@ section 2.3) and SYLK carrying 4 of the 21 built-ins (a compatibility decision).
   BIOS clock, §81.86/§81.92), and the ON.TIME-inside-an-open-dropdown race
   §81.95.3 guards against.
 
-**Next, by the roadmap:** stage 1.8, the Excel 2.0 look without MDI. Much of
-it landed piecemeal (the in-window menu bar §81.54, the formula and status
-bars, the scroll bars, borders); it has never been MEASURED against the
-reference captures, so how much of 1.8 remains is not known, and that
-measurement is its first step.
+**Next, by the roadmap:** stage 1.8, the Excel 2.0 look without MDI -
+**measured 2026-09-22** in `docs/reports/SHEET-EXCEL-LOOK-2026-09-22.md`,
+SHEET on VGA beside 21 of the Excel 2.1d captures. Eighteen gaps, grouped
+small / medium / large, plus what is OS-owned and what is decided out; the
+largest single difference is colour, which was never the owner's decision
+and is flagged for one.
 
 With 756 resident bytes, everything above except a small fix is module work.

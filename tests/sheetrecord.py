@@ -44,7 +44,7 @@ MACRO = (435, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 RECORD, RUN, SETREC = 0, 1, 2           # 81.74's Macro menu
 EDIT = (123, 45)
-CLEAR = 5                               # Edit > Clear..., sh_i_edit's order
+CLEAR = 4                               # Edit > Clear..., sh_i_edit's order
 REC_COL = 4                             # E: the recorder range, clear of the
                                          # cells the macro itself touches
 # Enter MOVES the selection after it commits, and the recorder records that
