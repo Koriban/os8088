@@ -104497,6 +104497,95 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.101 Keyboard shortcuts — the modern set
+
+The owner's decision, 2026-09-23: SHEET takes **today's** shortcuts, not
+Excel 2.1d's. Excel 2.1d's Edit menu captions Cut, Copy and Paste as
+Shift+Del, Ctrl+Ins and Shift+Ins
+(`_LIBRARY/documentation/screenshots/excel/menu_edit_full.png`). No other
+menu in the captures names a key.
+
+| Key | Item | Menu, row |
+|---|---|---|
+| Ctrl+N | New... | File 0 |
+| Ctrl+O | Open... | File 1 |
+| Ctrl+S | Save | File 2 |
+| Ctrl+Z | Undo | Edit `SH_EI_UNDO` |
+| Ctrl+X | Cut | Edit `SH_EI_CUT` |
+| Ctrl+C | Copy | Edit `SH_EI_COPY` |
+| Ctrl+V | Paste | Edit `SH_EI_PASTE` |
+| Ctrl+R | Fill Right | Edit `SH_EI_FILLR` |
+| Ctrl+D | Fill Down | Edit `SH_EI_FILLD` |
+| F3 | Paste Name... | Formula 0 |
+| Shift+F3 | Paste Function... | Formula 1 |
+| Ctrl+G, F5 | Goto... | Formula 5 |
+| Ctrl+F | Find... | Formula 6 |
+| F9 | Calculate Now | Options 4 |
+
+F2 (edit in place) and Delete (clear the cell) were already handled and
+have no menu item to caption.
+
+**One table drives both halves.** `sh_katab` holds the key and the caption
+together. `sh_kaccel` reads it for the key; `sh_kcap` reads it for the
+caption that `sh_mdrop_geo` measures and `sh_mdrop_draw` right-aligns. So a
+caption can never name a key that does something else.
+
+- A caption is drawn OPAQUE, with `OSAPI_FONT_RUN` (§6.6): the panel's
+  ground was filled in the same pass, which is the pair §6.6.2 does not
+  allow, so the transparent count stays at its registered 17. `font_run`
+  honours the greyed pen itself, so a greyed item's key is grey, and the
+  hot row's inverts with it.
+- Where an item has two keys (Goto), the first entry is the one shown.
+- A Ctrl+letter matches its control byte, which int 16h already delivers
+  (Word decodes keys the same way). A function key matches its scan code.
+  Ctrl+H, Ctrl+I and Ctrl+M are Backspace, Tab and Enter, and cannot be
+  shortcuts.
+
+**A shortcut fires the ITEM, through `sh_mfire`.** That is the door a
+click already uses, and so does a macro's command equivalent (§81.88). The
+undo snapshot, the recorder and every refusal are therefore the item's own,
+not copies. Before firing, the status line is drawn, which is the order a
+click has: `sh_mclose` draws it before `sh_mfire`.
+
+**A shortcut is swallowed, not passed on, in three cases:**
+
+- **while a cell is being edited.** Modern Excel greys its commands during
+  entry, and SHEET's field has no clipboard for Ctrl+C to mean anything
+  else. Control characters never reached a cell anyway.
+- **when its item is greyed**, as the menu would refuse it.
+- **while a macro's custom bar is up** (§81.95). The built-in commands are
+  not on the screen, and the custom menus name no keys.
+
+A key bound by ON.KEY (§81.92) is asked about first, so a macro can still
+take any of these.
+
+**Cost: 420 resident bytes** (image 51,800 → 52,220). The table, the
+dispatcher and the captions have to be resident, because the key callback
+and the panel drawing are. That leaves **97 bytes** under `APP_MAX_SIZE`,
+which is the resident room `docs/plans/SHEET-PROPORTIONAL-PLAN.md` measures
+against.
+
+**Not added:**
+
+- **Keyboard menus** (Alt or F10, and the underlined letters), gap #17.
+  Those are a separate feature.
+- **Ctrl+B and Ctrl+U.** SHEET's bold and underline are four choices in one
+  Font dialog, not two toggles, so neither key has an item to fire.
+- **F12 (Save As).** Word notes that the keyboard path does not reliably
+  deliver the F11 and F12 scan codes.
+
+`tests/sheetkeys.py` (19 checks, cycle-accurate CGA) drives the real
+keyboard through MartyPC. With the hook in `sh_onkey` removed it fails 11.
+The one that still passes is the entry-swallow check, which guards a later
+change rather than this one. It checks:
+
+- the Edit captions and Options' F9, read off the screen;
+- Ctrl+C then Ctrl+V; Ctrl+Z tied to the paste having happened; Ctrl+X then
+  Ctrl+V; Ctrl+D over A1:A3;
+- no paste mid-entry;
+- the six dialog keys opening their engines;
+- Ctrl+S saving in place, read back off the disk.
+
 ### 81.100 Four displays, and the two dialog defects only two of them showed
 
 The 1.8 look measurement (§81.39; `docs/reports/SHEET-EXCEL-LOOK-2026-09-22.md`)

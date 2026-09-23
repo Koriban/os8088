@@ -675,6 +675,7 @@ SH_ROW_MASK  equ 0x3FFF
 SH_MBAR_H    equ 14                  ; the in-window menu bar strip
 SH_MI_H      equ 12                  ; a dropdown item's row height
 SH_MPAD      equ 8                   ; left/right pixel pad per title/item
+SH_MKGAP     equ 24                  ; 81.101: label to shortcut caption
 SH_MCHKX     equ 2                   ; SPEC.md 81.30: the check mark, a solid
 SH_MCHKY     equ 4                   ; square centred in the 8px check column
 SH_MCHKS     equ 5                   ; and on the row's 8px glyph line
@@ -4642,6 +4643,8 @@ sh_onkey:
     mov word [sh_msg], 0
     mov bx, si
     call sh_geom
+    call sh_kaccel                     ; 81.101: Ctrl+X, F9 and the rest
+    jc .out                            ; fire their menu item
     or al, al
     jz .navkey
     ; stage 3.0a: a shift+arrow arrives WITH an ASCII byte. The arrow and the
@@ -7510,6 +7513,15 @@ sh_mdrop_geo:
     inc si
 .measure:
     call OSAPI_FONT_WIDTH
+    call sh_kcap                      ; 81.101: a shortcut's caption widens
+    jc .nocap                         ; the row by a gap and itself
+    push ax
+    call OSAPI_FONT_WIDTH
+    mov si, ax
+    pop ax
+    add ax, si
+    add ax, SH_MKGAP
+.nocap:
     cmp ax, [sh_mmaxw]
     jbe .wnext
     mov [sh_mmaxw], ax
@@ -7663,6 +7675,22 @@ sh_mdrop_draw:
     add cx, SH_MPAD + SH_MCHKW
     mov dx, [sh_mry_row]
     call OSAPI_FONT_STR_XPARENT
+    call sh_kcap                      ; 81.101: the shortcut, RIGHT-aligned.
+    jc .nextrow                       ; OPAQUE (SPEC.md 6.6): the panel ground
+    call OSAPI_FONT_WIDTH             ; was filled this same pass, which is
+    mov cx, [sh_mrx2]                 ; the pair 6.6.2 does not allow, so the
+    inc cx                            ; run redraws its own cells' ground in
+    sub cx, SH_MPAD                   ; the row's colours. font_run honours
+    sub cx, ax                        ; the greyed pen itself (6.6.2's retired
+    mov dx, [sh_mry_row]              ; sixth), so a greyed item's key is
+    mov ax, (CWHITE << 8) | CBLACK    ; grey, and the hot row - never a greyed
+    mov bl, [sh_mli]                  ; one (sh_mitem_hit) - inverts
+    cmp bl, [sh_mhi]
+    jne .capgo
+    mov ax, (CBLACK << 8) | CWHITE
+.capgo:
+    call OSAPI_FONT_RUN
+.nextrow:
     mov ax, [sh_mli]
     inc ax
     mov [sh_mli], ax
@@ -7895,6 +7923,162 @@ sh_mtrack:
 .out:
     pop si
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; 81.101: KEYBOARD SHORTCUTS, the modern set (the owner's choice over Excel
+; 2.1d's Shift+Del / Ctrl+Ins / Shift+Ins). ONE TABLE drives both halves: the
+; key that fires an item and the caption the pulldown draws beside it, so the
+; two cannot disagree. A shortcut FIRES THE MENU ITEM through sh_mfire, the
+; door a click and a macro's command equivalent already share - so the undo
+; snapshot, the recorder and every refusal are the item's own, not a copy.
+;
+; An entry: the ASCII byte, the scan (0 = any: a Ctrl+letter is its control
+; character whatever the scan), the menu, the row, the caption. The first
+; entry naming an item is the one its caption shows (Goto has two keys).
+; Ctrl+H/I/M are Backspace/Tab/Enter and cannot be shortcuts.
+; -----------------------------------------------------------------------------
+%macro SH_KA 5
+    db %1, %2, %3, %4
+    dw %5
+%endmacro
+SH_KA_SZ     equ 6
+sh_katab:
+    SH_KA 0x0E, 0,    SH_MI_FILE,    0,              sh_kc_n     ; New
+    SH_KA 0x0F, 0,    SH_MI_FILE,    1,              sh_kc_o     ; Open
+    SH_KA 0x13, 0,    SH_MI_FILE,    2,              sh_kc_s     ; Save
+    SH_KA 0x1A, 0,    SH_MI_EDIT,    SH_EI_UNDO,     sh_kc_z
+    SH_KA 0x18, 0,    SH_MI_EDIT,    SH_EI_CUT,      sh_kc_x
+    SH_KA 0x03, 0,    SH_MI_EDIT,    SH_EI_COPY,     sh_kc_c
+    SH_KA 0x16, 0,    SH_MI_EDIT,    SH_EI_PASTE,    sh_kc_v
+    SH_KA 0x12, 0,    SH_MI_EDIT,    SH_EI_FILLR,    sh_kc_r
+    SH_KA 0x04, 0,    SH_MI_EDIT,    SH_EI_FILLD,    sh_kc_d
+    SH_KA 0,    0x3D, SH_MI_FORMULA, 0,              sh_kc_f3    ; Paste Name
+    SH_KA 0,    0x56, SH_MI_FORMULA, 1,              sh_kc_sf3   ; Paste Fn
+    SH_KA 0x07, 0,    SH_MI_FORMULA, 5,              sh_kc_g     ; Goto
+    SH_KA 0,    0x3F, SH_MI_FORMULA, 5,              sh_kc_g     ; F5 too
+    SH_KA 0x06, 0,    SH_MI_FORMULA, 6,              sh_kc_f     ; Find
+    SH_KA 0,    0x43, SH_MI_OPTIONS, 4,              sh_kc_f9    ; Calc Now
+sh_katab_end:
+SH_KA_N      equ (sh_katab_end - sh_katab) / SH_KA_SZ
+sh_kc_n:   db 'Ctrl+N', 0
+sh_kc_o:   db 'Ctrl+O', 0
+sh_kc_s:   db 'Ctrl+S', 0
+sh_kc_z:   db 'Ctrl+Z', 0
+sh_kc_x:   db 'Ctrl+X', 0
+sh_kc_c:   db 'Ctrl+C', 0
+sh_kc_v:   db 'Ctrl+V', 0
+sh_kc_r:   db 'Ctrl+R', 0
+sh_kc_d:   db 'Ctrl+D', 0
+sh_kc_f3:  db 'F3', 0
+sh_kc_sf3: db 'Shift+F3', 0
+sh_kc_g:   db 'Ctrl+G', 0
+sh_kc_f:   db 'Ctrl+F', 0
+sh_kc_f9:  db 'F9', 0
+
+; sh_kaccel - W_ONKEY's AL/AH: a shortcut? CF=1 it was, and it is spent -
+; fired, or swallowed because its item cannot run now. CF=0 not one.
+; Swallowed, not passed on: while a cell is being EDITED (modern Excel greys
+; the menus during entry, and the field has no clipboard for Ctrl+C to mean
+; anything else), when the item is greyed, and when a macro's custom bar is
+; up (81.95: the built-in commands are not on the screen to be named)
+sh_kaccel:
+    push bx
+    push cx
+    push si
+    mov si, sh_katab
+    mov cx, SH_KA_N
+.find:
+    mov bl, [si]
+    or bl, bl
+    jz .scan
+    cmp bl, al                         ; a Ctrl+letter: its control byte
+    je .hit
+    jmp short .next
+.scan:
+    or al, al                          ; a function key: no ASCII, its scan
+    jnz .next
+    cmp [si + 1], ah
+    je .hit
+.next:
+    add si, SH_KA_SZ
+    loop .find
+    clc
+    jmp short .out
+.hit:
+    cmp byte [sh_editing], 0
+    jne .spent
+    cmp word [sh_mtabp], sh_mtab
+    jne .spent
+    push ax
+    mov ah, [si + 2]
+    mov al, [si + 3]
+    call sh_mitemp                     ; SI = the item's string
+    cmp byte [si], MENU_DIS            ; greyed in the menu: not runnable
+    je .grey
+    push ax
+    call sh_drawstatus                 ; the order a click has: the status
+    pop ax                             ; line first (sh_mclose's), then
+    call sh_mfire                      ; the command
+.grey:
+    pop ax
+.spent:
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; sh_mitemp - AH = menu, AL = row of the BUILT-IN bar -> SI = the item's
+; string, as the table holds it now (relabels included)
+sh_mitemp:
+    push ax
+    push bx
+    mov bl, ah
+    xor bh, bh
+    mov si, bx
+    shl bx, 1                          ; x 6: a sh_mtab row
+    add bx, si
+    shl bx, 1
+    mov si, [sh_mtab + 2 + bx]
+    xor ah, ah
+    shl ax, 1
+    add si, ax
+    mov si, [si]
+    pop bx
+    pop ax
+    ret
+
+; sh_kcap - the caption for row [sh_mli] of the open pulldown: SI = it and
+; CF=0, or CF=1 none. None on a custom bar: a macro's menus name no keys
+sh_kcap:
+    push ax
+    push cx
+    cmp word [sh_mtabp], sh_mtab
+    jne .none
+    cmp byte [sh_mopen], SH_MENU_N
+    jae .none
+    mov ah, [sh_mopen]
+    mov al, [sh_mli]
+    mov si, sh_katab
+    mov cx, SH_KA_N
+.find:
+    cmp [si + 2], ah
+    jne .next
+    cmp [si + 3], al
+    jne .next
+    mov si, [si + 4]
+    clc
+    jmp short .out
+.next:
+    add si, SH_KA_SZ
+    loop .find
+.none:
+    stc
+.out:
+    pop cx
     pop ax
     ret
 

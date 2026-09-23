@@ -156,7 +156,7 @@ Grouped by what they cost, with the most visible first in each group.
 |---|---|---|---|
 | 16 | **Proportional cell text** (Helv 10) and bold proportional headers | the fixed 8×8 face everywhere | the biggest remaining difference in texture. It also sets the default row height (Excel 17 px, SHEET 14) and column width (64 px against 56). The OS composes proportional rows for Word, so the mechanism exists, but every cell draw, width measurement and spill decision would move |
 | 17 | **Menus from the keyboard**: Alt or F10 and underlined mnemonic letters, in the bar and every menu | mouse only: no handler exists (checked in the source) and nothing is underlined | behaviour as much as look |
-| 18 | Keyboard shortcuts shown in Edit (Shift+Del, Ctrl+Ins, Shift+Ins, Del) | not shown, and those keys are not handled (checked in the source) | labels are cheap; the keys are not |
+| 18 | Keyboard shortcuts shown in Edit (Shift+Del, Ctrl+Ins, Shift+Ins, Del) | **done 2026-09-23 (SPEC §81.101), with the MODERN set by the owner's choice:** Ctrl+X/C/V/Z and ten more, captioned in the pulldowns | Excel 2.1d's own chords were declined |
 
 ## 5. What this measurement did NOT cover
 

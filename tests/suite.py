@@ -4972,6 +4972,12 @@ SOAK = [
         "the panel covered, and the bank path lands on the same pixels as a "
         "full repaint - the A/B that caught the stale status line",
         needs=("marty",), serial=True),
+    Row("sheetkeys", "soak", py("tests/sheetkeys.py"), 400.0,
+        "SPEC.md 81.101: the modern keyboard shortcuts on the cycle-accurate "
+        "CGA - the captions the pulldowns draw, Ctrl+C/V copy, Ctrl+Z undo, "
+        "Ctrl+X move, Ctrl+D fill, nothing pasted mid-entry, F3/Shift+F3/"
+        "Ctrl+G/F5/Ctrl+F/Ctrl+N open their dialogs, and Ctrl+S saves",
+        needs=("marty",), serial=True),
     Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 400.0,
         "SPEC.md 81.100: a dialog's CLOSE BOX leaves its engine usable - the "
         "list (Format Number) and input (Goto) dialogs closed by their boxes "
