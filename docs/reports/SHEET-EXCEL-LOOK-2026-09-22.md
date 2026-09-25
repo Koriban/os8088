@@ -108,9 +108,9 @@ Grouped by what they cost, with the most visible first in each group.
 | 3 | Status bar: a divider, and NUM drawn INVERTED | **done 2026-09-24 (SPEC §81.104)** | the indicator went opaque, so the text registry fell 17 → 16 |
 | 4 | Cell text inset about 2 px from the gridline | text starts ON the left gridline, and "Sales" in B1 touches it | every cell draw, and the run-on (§81.54) logic |
 | 5 | Scroll thumb always shown | no thumb when the used range fits the view | DELIBERATE (`sh_sbsync`'s comment: the range is the used extent plus one screen); listed so it is a choice |
-| 6 | Options: Display..., **Freeze Panes second**, Protect Document, Calculation, Calculate Now, **Workspace...** | Gridlines and Formulas toggles, Protect Document, Calculation, Calculate Now, **Freeze Panes last**; no Workspace | the order is a table edit with §81.99's named-constant care; Workspace is in section 4 of the gaps plan |
-| 7 | Formula ▸ **Reference** toggles the reference being EDITED between relative and absolute (greyed when not editing) | "Reference: A1" switches the whole sheet between A1 and R1C1 display | a DIFFERENT COMMAND under Excel's name. In Excel, A1/R1C1 is in Options ▸ Workspace, the Preferences question recorded before |
-| 8 | Macro: Record, Run, **Start Recorder**, Set Recorder, Relative Record | no Start Recorder | the gaps plan's Start Recorder / Resume |
+| 6 | Options: Display..., **Freeze Panes second**, Protect Document, Calculation, Calculate Now, **Workspace...** | **done 2026-09-25 (SPEC §81.106):** Excel's order; Display... (Formulas, Gridlines) and Workspace... (R1C1) as check-box dialogs | Display's Headings/Zero Values and Workspace's other options remain (4.3) |
+| 7 | Formula ▸ **Reference** toggles the reference being EDITED between relative and absolute (greyed when not editing) | **done 2026-09-25 (SPEC §81.106, §81.108):** A1/R1C1 moved to Options ▸ Workspace; Reference (and F4) cycles the reference at the caret, live only mid-formula | |
+| 8 | Macro: Record, Run, **Start Recorder**, Set Recorder, Relative Record | **done 2026-09-25 (SPEC §81.107):** greyed until a range exists; continues the macro over Stop's RETURN() | Resume stays out (§81.74) |
 
 ### 4.2 Medium
 

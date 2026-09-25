@@ -220,7 +220,7 @@ assertion**, not at a table and a toggle.
 |---|---|---|
 | ~~**`Format ▸ Justify`**~~ | **done, §81.81** | 131 resident + 671 module + 84 bss. The estimate here was right about the cost and wrong about the SHAPE: it is not "splitting on spaces" over a block, it is a paragraph operation on the LEFT column at the width of the whole selection, with blank cells as separators. The Reference Guide had four clauses a sensible guess misses |
 | ~~**`Data ▸ Parse`**~~ | **done, §81.82** | 120 resident + 920 module + 296 bss. This estimate was right, unlike Justify's: it IS a dialog with a guessed split and a write across, and it IS module work. What it understates is that the split is at FIXED CHARACTER POSITIONS rather than at a delimiter, which is the whole reason the feature exists beside CSV |
-| **`Macro ▸ Start Recorder` / `Resume`** | the recorder's other two commands | §81.74 names these as its own documented shortfalls, so the design already exists |
+| **`Macro ▸ Resume`** (Start Recorder done, §81.107) | the recorder's last command | §81.74 names it as a documented shortfall |
 | ~~**`Edit ▸ Repeat`**~~ | **DROPPED by the owner, 2026-09-22** | ~~repeat the last command~~. Its greyed `Can't Repeat` row was removed too (§81.99), behind named constants for every Edit position. **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
 | ~~**`File ▸ Links`**~~ | — | **struck as MDI, 2026-09-22**: it exists to reach a second open document, and SHEET has one per instance. §81.93 declines its macro functions (CHANGE.LINK, LINKS, OPEN.LINKS) on the same ground |
 
@@ -309,7 +309,7 @@ Macro 4), which agrees with §81.39.2.
 | | cost | note |
 |---|---|---|
 | **`Data ▸ Table`** | large, module | Section 2.4. The last multi-cell feature; the one Data command left |
-| **`Macro ▸ Start Recorder` / `Resume`** | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
+| **`Macro ▸ Resume`** (Start Recorder done, §81.107) | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
 | `Options ▸ Workspace` | unscoped | in §81.39.2's missing list, never sized here |
 | printing (6 commands) | out of scope | by decision; no print backend in the OS |
 

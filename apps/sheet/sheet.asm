@@ -711,7 +711,21 @@ SH_MI_FORMULA equ 2
 SH_MI_FORMAT  equ 3
 SH_MI_DATA    equ 4
 SH_MI_OPTIONS equ SH_MI_DATA + 1
+SH_OI_DISPLAY   equ 0                ; 81.106: the Options menu's rows, named
+SH_OI_FREEZE    equ 1                ; (sh_i_options asserts each against its
+SH_OI_PROT      equ 2                ; label). CALCNOW stayed at 4, so F9's
+SH_OI_CALC      equ 3                ; key and CALCULATE.DOCUMENT moved
+SH_OI_CALCNOW   equ 4                ; nowhere
+SH_OI_WORKSPACE equ 5
+SH_OI_N         equ 6
 SH_MI_MACRO   equ SH_MI_OPTIONS + 1
+SH_FI_REF       equ 2                ; 81.108: Formula > Reference's row
+SH_MAI_RECORD   equ 0                ; 81.107: the Macro menu's rows, named -
+SH_MAI_RUN      equ 1                ; Start Recorder went in at Excel's 2,
+SH_MAI_START    equ 2                ; so Set Recorder and Relative Record
+SH_MAI_SETREC   equ 3                ; moved down one
+SH_MAI_REL      equ 4
+SH_MAI_N        equ 5
 SH_MI_SHEET   equ SH_MI_MACRO + 1
 SH_MI_HELP    equ SH_MI_SHEET + 1
 SH_MENU_N     equ SH_MI_HELP + 1
@@ -930,7 +944,8 @@ SHM_NOPEN  equ 47                   ; 81.102: the Note dialog and its
 SHM_NPAINT equ 48                   ; multi-line box (os88text.inc) - resident
 SHM_NKEY   equ 49                   ; room, and the box's only consumer
 SHM_NCLICK equ 50
-SHM_N      equ 48                   ; a COUNT, not a max: sh_modc_ext does
+SHM_REFCYC equ 51                   ; 81.108: Formula > Reference's cycle
+SHM_N      equ 49                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -969,6 +984,7 @@ sh_mverb:
     dw sh_m_tor1c1, sh_m_fromr1c1, sh_m_setext, sh_m_mname  ; 81.94
     dw sh_m_readrc
     dw sh_m_nopen, sh_m_npaint, sh_m_nkey, sh_m_nclick     ; 81.102
+    dw sh_m_refcyc                                        ; 81.108
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1193,6 +1209,10 @@ sh_m_idclick:
     retf
 sh_m_idclose:
     call sh_idlg_close
+    clc
+    retf
+sh_m_refcyc:                        ; 81.108
+    call sh_refcyc
     clc
     retf
 sh_m_nopen:                         ; 81.102
@@ -2129,10 +2149,6 @@ sh_entry:
     mov byte [sh_mhi], SH_M_NONE      ; see the SH_MBAR_H section comment
     mov byte [sh_gridlines], 1
     mov byte [sh_showformulas], 0
-    mov word [sh_i_options], sh_it_grid_on   ; match sh_i_options's own
-                                              ; label to the actual default
-                                              ; (sh_it_form_off already does,
-                                              ; since Formulas defaults off)
     mov word [sh_cellw], SH_CW_NORMAL        ; stage 2.x: runtime cell size
     mov word [sh_cellh], SH_RH_NORMAL        ; defaults - see the SH_CW_*/
     mov word [sh_cellch], SH_CW_NORMAL / 8   ; SH_RH_* section comment
@@ -8020,6 +8036,7 @@ sh_mtrack:
     push ax
     push bx
     push si
+    call sh_refmark                    ; 81.108: live only mid-formula
     mov [sh_mopen], al
     mov byte [sh_mhi], SH_M_NONE
     call sh_mdrop_geo
@@ -8091,11 +8108,12 @@ sh_katab:
     SH_KA 0x12, 0,    SH_MI_EDIT,    SH_EI_FILLR,    sh_kc_r
     SH_KA 0x04, 0,    SH_MI_EDIT,    SH_EI_FILLD,    sh_kc_d
     SH_KA 0,    0x3D, SH_MI_FORMULA, 0,              sh_kc_f3    ; Paste Name
+    SH_KA 0,    0x3E, SH_MI_FORMULA, SH_FI_REF,      sh_kc_f4    ; Reference
     SH_KA 0,    0x56, SH_MI_FORMULA, 1,              sh_kc_sf3   ; Paste Fn
     SH_KA 0x07, 0,    SH_MI_FORMULA, 5,              sh_kc_g     ; Goto
     SH_KA 0,    0x3F, SH_MI_FORMULA, 5,              sh_kc_g     ; F5 too
     SH_KA 0x06, 0,    SH_MI_FORMULA, 6,              sh_kc_f     ; Find
-    SH_KA 0,    0x43, SH_MI_OPTIONS, 4,              sh_kc_f9    ; Calc Now
+    SH_KA 0,    0x43, SH_MI_OPTIONS, SH_OI_CALCNOW,  sh_kc_f9    ; Calc Now
 sh_katab_end:
 SH_KA_N      equ (sh_katab_end - sh_katab) / SH_KA_SZ
 sh_kc_n:   db 'Ctrl+N', 0
@@ -8108,6 +8126,7 @@ sh_kc_v:   db 'Ctrl+V', 0
 sh_kc_r:   db 'Ctrl+R', 0
 sh_kc_d:   db 'Ctrl+D', 0
 sh_kc_f3:  db 'F3', 0
+sh_kc_f4:  db 'F4', 0
 sh_kc_sf3: db 'Shift+F3', 0
 sh_kc_g:   db 'Ctrl+G', 0
 sh_kc_f:   db 'Ctrl+F', 0
@@ -8143,8 +8162,12 @@ sh_kaccel:
     clc
     jmp short .out
 .hit:
-    cmp byte [sh_editing], 0
+    call sh_refmark                    ; 81.108: Reference's live state first
+    cmp word [si + 2], (SH_FI_REF << 8) | SH_MI_FORMULA
+    je .entry                          ; ...the ONE item that works DURING an
+    cmp byte [sh_editing], 0           ; entry and nowhere else (F4, Excel's)
     jne .spent
+.entry:
     cmp word [sh_mtabp], sh_mtab
     jne .spent
     push ax
@@ -8219,6 +8242,35 @@ sh_kcap:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_refmark - Formula > Reference is live only while a FORMULA is being
+; entered in A1 style (81.108), which is the only time Excel's cycles
+; anything. Asked when a pulldown opens and on F4, rather than kept current
+; on every keystroke. Preserves all registers and flags
+; -----------------------------------------------------------------------------
+sh_refmark:
+    pushf
+    push ax
+    mov ax, sh_it_refdis
+    cmp byte [sh_editing], 0
+    je .set
+    cmp byte [sh_editbuf], '='
+    jne .set
+    cmp byte [sh_a1style], 0
+    jne .set
+    mov ax, sh_it_ref
+.set:
+    mov [sh_i_formula + SH_FI_REF * 2], ax
+    pop ax
+    popf
+    ret
+sh_refcyc_r:                          ; its door into CHART.OVL
+    push bp
+    mov bp, SHM_REFCYC
+    call ch_ovcall
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_mfire - AH = menu index, AL = item index -> dispatch. Sets SI to
 ; [sh_ownwin] unconditionally before calling anything: this runs from
 ; sh_mtrack's own polling loop, not a kernel AM_ONCMD callback, so nothing
@@ -8287,18 +8339,11 @@ sh_mfire:
     call sh_ldlg_open_r
     jmp .out
 .fm2:
-    cmp al, 2
-    jne .fm3
-    xor byte [sh_a1style], 1          ; Reference: the item relabels itself,
-    mov word [sh_i_formula+4], sh_it_ref_a1
-    cmp byte [sh_a1style], 0
-    je .fmref
-    mov word [sh_i_formula+4], sh_it_ref_rc
-.fmref:
-    mov si, [sh_ownwin]
-    call sh_repaint
-    jmp .out
-.fm3:
+    cmp al, 2                         ; Reference (81.108): the reference at
+    jne .fm3                          ; the caret, one step round Excel's
+    call sh_refcyc_r                  ; cycle. Refused inside, as the item is
+    jmp .out                          ; greyed, unless a formula is being
+.fm3:                                 ; entered
     cmp al, 3
     jne .fm4
     mov al, SH_ID_DEFN
@@ -8433,22 +8478,27 @@ sh_mfire:
     call sh_docmd_options
     jmp .out
 .macro:
-    or al, al
-    jnz .macro1
-    call sh_docmd_record               ; 0: Record... / Stop Recorder (81.74)
+    cmp al, SH_MAI_RECORD
+    jne .macro1
+    call sh_docmd_record               ; Record... / Stop Recorder (81.74)
     jmp .out
 .macro1:
-    cmp al, 1
+    cmp al, SH_MAI_RUN
     jne .macro2
-    call sh_macro_run                  ; 1: Run...
+    call sh_macro_run                  ; Run...
     jmp .out
 .macro2:
-    cmp al, 2
+    cmp al, SH_MAI_START
     jne .macro3
-    call sh_docmd_setrec               ; 2: Set Recorder
+    call sh_docmd_startrec             ; Start Recorder (81.107)
     jmp .out
 .macro3:
-    xor byte [sh_rec_rel], 1           ; 3: Relative / Absolute Record - the
+    cmp al, SH_MAI_SETREC
+    jne .macro4
+    call sh_docmd_setrec               ; Set Recorder
+    jmp .out
+.macro4:
+    xor byte [sh_rec_rel], 1           ; Relative / Absolute Record - the
     call sh_recmark                    ; item names what choosing it WOULD do
     jmp .out
 .help:
@@ -8490,40 +8540,34 @@ sh_calc_now:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_docmd_options - AL = 0 Gridlines / 1 Formulas: flip the flag, re-point
-; the item's own string to the matching On/Off label (the same relabel-by-
-; repointing idea documented above MENU_DIS in apps/os88api.inc, applied to
-; sh_i_options directly rather than through the kernel), repaint.
+; sh_docmd_options - AL = the Options row (SH_OI_*). Display... and
+; Workspace... are the check-box engine's kinds 1 and 2 (81.106); Protect
+; Document and Freeze Panes relabel themselves (the relabel-by-repointing idea
+; documented above MENU_DIS in apps/os88api.inc)
 ; -----------------------------------------------------------------------------
 sh_docmd_options:
     push si
-    cmp al, 5
+    cmp al, SH_OI_FREEZE
     je .freeze
-    cmp al, 4
+    cmp al, SH_OI_CALCNOW
     je .calcnow
-    cmp al, 3
+    cmp al, SH_OI_CALC
     je .calc
-    cmp al, 2
+    cmp al, SH_OI_PROT
     je .protect
-    or al, al
-    jnz .formulas
-    xor byte [sh_gridlines], 1
-    cmp byte [sh_gridlines], 0
-    je .goff
-    mov word [sh_i_options], sh_it_grid_on
-    jmp .repaint
-.goff:
-    mov word [sh_i_options], sh_it_grid_off
-    jmp .repaint
-.formulas:
-    xor byte [sh_showformulas], 1
-    cmp byte [sh_showformulas], 0
-    je .foff
-    mov word [sh_i_options+2], sh_it_form_on
-    jmp .repaint
-.foff:
-    mov word [sh_i_options+2], sh_it_form_off
-    jmp .repaint
+    cmp al, SH_OI_DISPLAY
+    je .display
+    cmp al, SH_OI_WORKSPACE
+    jne .done
+    mov al, SH_BK_WORKSPACE
+    call sh_bdlg_open_r
+    pop si
+    ret
+.display:
+    mov al, SH_BK_DISPLAY
+    call sh_bdlg_open_r
+    pop si
+    ret
 .calcnow:                              ; 81.78: Excel's own menu item, doing
     call sh_calc_now                   ; exactly what the Calculation dialog's
     jmp .repaint                       ; third choice does - one body, so the
@@ -8533,16 +8577,17 @@ sh_docmd_options:
                                        ; is Excel's behaviour too
 .protect:                              ; NO PASSWORD, and no ellipsis on the
     xor byte [sh_protected], 1         ; item to promise one - see 81.46.3.
-    cmp byte [sh_protected], 0         ; The label flips, the way Gridlines
-    je .poff                           ; and Formulas above already do
-    mov word [sh_i_options+4], sh_it_prot_on
+    cmp byte [sh_protected], 0         ; The label flips, the way Freeze
+    je .poff                           ; Panes' does
+    mov word [sh_i_options + SH_OI_PROT * 2], sh_it_prot_on
     jmp .repaint
 .poff:
-    mov word [sh_i_options+4], sh_it_prot_off
+    mov word [sh_i_options + SH_OI_PROT * 2], sh_it_prot_off
     jmp .repaint
 .calc:
     mov al, SH_FDK_CALC
     call sh_fdlg_open_r
+.done:
     pop si
     ret
 ; FREEZE PANES (81.70). Excel's own: the split is AT the active cell, so
@@ -8671,6 +8716,7 @@ sh_docmd_format:
 .notnum:
     cmp al, 3
     jne .notborder
+    mov al, SH_BK_BORDER
     call sh_bdlg_open_r
     ret
 .notborder:
@@ -10635,13 +10681,21 @@ sh_recmark:
     je .set0
     mov ax, sh_it_recoff
 .set0:
-    mov [sh_i_macro], ax
+    mov [sh_i_macro + SH_MAI_RECORD * 2], ax
     mov ax, sh_it_relrec               ; the item names what choosing it WOULD
     cmp byte [sh_rec_rel], 0           ; do, which is Excel's own wording and
     je .set1                           ; the opposite of the state it is in
     mov ax, sh_it_absrec
 .set1:
-    mov [sh_i_macro + 6], ax
+    mov [sh_i_macro + SH_MAI_REL * 2], ax
+    mov ax, sh_it_startdis             ; 81.107: "You cannot choose Macro
+    cmp byte [sh_rec_on], 0            ; Start Recorder until you set the
+    jne .set2                          ; recorder range" - and not while one
+    cmp byte [sh_rec_set], 0           ; is running, when Stop Recorder is
+    je .set2                           ; the item that means something
+    mov ax, sh_it_startrec
+.set2:
+    mov [sh_i_macro + SH_MAI_START * 2], ax
     pop ax
     ret
 
@@ -10662,6 +10716,8 @@ sh_docmd_setrec:
     mov al, [sh_cursheet]
     mov [sh_rec_sheet], al
     mov byte [sh_rec_set], 1
+    mov byte [sh_rec_ret], 0           ; 81.107: a NEW range has no RETURN of
+    call sh_recmark                    ; ours at its end; Start is live now
     mov word [sh_msg], sh_s_rec_set
     call sh_recrepaint
     pop ax
@@ -10692,12 +10748,44 @@ sh_docmd_record:
     mov si, sh_s_rec_return
     call sh_rec_emit
     mov byte [sh_rec_on], 0
-    mov word [sh_msg], sh_s_rec_off
+    mov byte [sh_rec_ret], 1           ; 81.107: the row above the recorder
+    mov word [sh_msg], sh_s_rec_off    ; cell is OUR RETURN()
     call sh_recmark
     call sh_recrepaint
 .out:
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_docmd_startrec - Macro ▸ Start Recorder (81.107). "Records subsequent
+; actions and commands until you choose Macro Stop Recorder ... You can use
+; Macro Start Recorder and Macro Stop Recorder to temporarily pause while
+; recording a macro. You can also use them to add to an existing macro."
+;
+; So it CONTINUES the macro rather than beginning another: "If the end of the
+; recorder range contains a RETURN function, RETURN is overwritten." The one
+; RETURN this knows is at that end is its own - Stop Recorder writes it and
+; sets [sh_rec_ret] - so that is the one stepped back over. No name is asked
+; for (Record... names a NEW macro; this adds to one). The item is greyed
+; with no range or with a recording live (sh_recmark), and a macro's fire of
+; it is refused the same way here.
+; -----------------------------------------------------------------------------
+sh_docmd_startrec:
+    cmp byte [sh_rec_on], 0
+    jne .out
+    cmp byte [sh_rec_set], 0
+    je .out
+    cmp byte [sh_rec_ret], 0
+    je .go
+    mov byte [sh_rec_ret], 0
+    cmp word [sh_rec_row], 0
+    je .go
+    dec word [sh_rec_row]              ; back over our RETURN(): the next
+.go:                                   ; write lands on it
+    call sh_rec_start
+    call sh_recrepaint
+.out:
     ret
 
 ; sh_rec_start - what SH_ID_RECNAME's OK does
@@ -13729,10 +13817,16 @@ SH_BDLG_H      equ SH_BDLG_GY2 + SH_DLG_BMARG + TITLE_H + 1
                                      ; was 131 tall and this line sat at 132 -
                                      ; the group box's bottom edge was one
                                      ; pixel outside the window
+SH_BDLG_BTNBOT equ 70                ; 81.106: Cancel's bottom edge - the
+                                     ; floor of a short kind's height
 SH_BDLG_ROWTOP equ 26                ; first checkbox row, and OK/Cancel
 SH_BDLG_ROWH   equ 18                ; both measured from the SAME origin
 SH_BDLG_NITEMS equ 6
 
+SH_BK_BORDER    equ 0                ; 81.106: the check-box engine's KINDS -
+SH_BK_DISPLAY   equ 1                ; Excel's three dialogs of this shape:
+SH_BK_WORKSPACE equ 2                ; a titled group of independent boxes,
+SH_BK_N         equ 3                ; OK/Cancel stacked beside it
 SH_BDLG_B_OUTLINE equ 0x01           ; the dialog's own 6-bit UI state -
 SH_BDLG_B_LEFT    equ 0x02           ; bits 1-4 line up with SH_BORD_LEFT..
 SH_BDLG_B_RIGHT   equ 0x04           ; SH_BORD_BOTTOM shifted up by one (to
@@ -13749,6 +13843,19 @@ sh_bdlg_tpl:
 
 sh_s_bdlg_title: db 'Border', 0
 sh_bdlg_items: dw sh_bdlg_i0, sh_bdlg_i1, sh_bdlg_i2, sh_bdlg_i3, sh_bdlg_i4, sh_bdlg_i5
+; 81.106: per KIND - the title (which is the group box's label too, as in
+; Excel's Display dialog), the item list and its length. Resident, because
+; the module reads them through DS and the kernel reads the title
+sh_bdlg_ktitle: dw sh_s_bdlg_title, sh_s_disp_title, sh_s_ws_title
+sh_bdlg_kitems: dw sh_bdlg_items, sh_disp_items, sh_ws_items
+sh_bdlg_kn:     db SH_BDLG_NITEMS, 2, 1
+sh_s_disp_title: db 'Display', 0
+sh_disp_items:  dw sh_disp_i0, sh_disp_i1
+sh_disp_i0:     db 'Formulas', 0           ; Excel's order: Formulas first
+sh_disp_i1:     db 'Gridlines', 0
+sh_s_ws_title:  db 'Workspace', 0
+sh_ws_items:    dw sh_ws_i0
+sh_ws_i0:       db 'R1C1', 0
 sh_bdlg_i0:    db 'Outline', 0
 sh_bdlg_i1:    db 'Left', 0
 sh_bdlg_i2:    db 'Right', 0
@@ -13801,12 +13908,31 @@ section SH_MODSEC                      ; 81.71.5.1: the Border dialog
 ; (sh_bt_get); a cell with no border record at all reads back as 0, same
 ; "dialog still opens, OK on it is just a no-op" scope as sh_fdlg_open's.
 ; -----------------------------------------------------------------------------
-sh_bdlg_open:
+sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     push ax
     push bx
     push si
     cmp word [sh_bdlg_win], 0
     jne .out
+    cmp al, SH_BK_N
+    jae .out
+    mov [sh_bdlg_kind], al
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    mov bx, [sh_bdlg_ktitle + si]
+    mov [sh_bdlg_tpl + WT_TITLE], bx
+    call sh_bdlg_gy2                   ; the window's height follows the
+    cmp ax, SH_BDLG_BTNBOT             ; group box, or the buttons if they
+    jae .tall                          ; reach lower
+    mov ax, SH_BDLG_BTNBOT
+.tall:
+    add ax, SH_DLG_BMARG + TITLE_H + 1
+    mov [sh_bdlg_tpl + WT_H], ax
+    cmp byte [sh_bdlg_kind], SH_BK_DISPLAY
+    je .display
+    cmp byte [sh_bdlg_kind], SH_BK_WORKSPACE
+    je .workspace
     mov ax, [sh_selcol]
     mov bx, [sh_selrow]
     SHOUT sh_bt_get                     ; al = stored border byte
@@ -13820,6 +13946,17 @@ sh_bdlg_open:
     or bl, SH_BDLG_B_OUTLINE
 .noout:
     mov [sh_bdlg_sel], bl
+    jmp short .place
+.display:                             ; bit 0 Formulas, bit 1 Gridlines
+    mov bl, [sh_gridlines]
+    shl bl, 1
+    or bl, [sh_showformulas]
+    mov [sh_bdlg_sel], bl
+    jmp short .place
+.workspace:                           ; bit 0 R1C1
+    mov bl, [sh_a1style]
+    mov [sh_bdlg_sel], bl
+.place:
     call OSAPI_VIDEO
     sub ax, SH_BDLG_W
     sar ax, 1
@@ -13868,17 +14005,23 @@ sh_bdlg_paint:
     add bx, SH_BDLG_GY1
     mov cx, [sh_bdlg_ox]
     add cx, SH_BDLG_GX2
-    mov dx, [sh_bdlg_oy]
-    add dx, SH_BDLG_GY2
+    push ax
+    call sh_bdlg_gy2                    ; 81.106: as tall as this kind's rows
+    mov dx, ax
+    pop ax
+    add dx, [sh_bdlg_oy]
     call OSAPI_GFX_FRAME                ; the group box itself
     mov al, CWHITE
     call OSAPI_SET_COLOR
+    call sh_bdlg_label                  ; 81.106: SI = this kind's title
+    call OSAPI_FONT_WIDTH
+    mov cx, ax                          ; the gap is the label's width + 4
     mov ax, [sh_bdlg_ox]
     add ax, SH_BDLG_GX1 + 6
     mov bx, [sh_bdlg_oy]
     add bx, SH_BDLG_GY1 - 3
-    mov cx, ax
-    add cx, 40
+    add cx, ax
+    add cx, 3
     mov dx, bx
     add dx, 7
     call OSAPI_GFX_FILL                 ; erase the frame line behind the
@@ -13890,13 +14033,14 @@ sh_bdlg_paint:
     add cx, SH_BDLG_GX1 + 8
     mov dx, [sh_bdlg_oy]
     add dx, SH_BDLG_GY1 - 4
-    mov si, sh_s_bdlg_title
+    call sh_bdlg_label
     call OSAPI_FONT_STR_XPARENT
     mov word [sh_bdlg_ri], 0
 .rowloop:
-    mov ax, [sh_bdlg_ri]
-    cmp ax, SH_BDLG_NITEMS
+    call sh_bdlg_count                  ; 81.106: AX = this kind's rows
+    cmp [sh_bdlg_ri], ax
     jae .rowsdone
+    mov ax, [sh_bdlg_ri]
     mov bx, SH_BDLG_ROWH
     mul bx
     add ax, SH_BDLG_ROWTOP
@@ -13915,9 +14059,13 @@ sh_bdlg_paint:
     add cx, SH_BDLG_GX1 + 8
     mov dx, [sh_bdlg_ry]
     SHOUT os88ui_glyph
+    mov bl, [sh_bdlg_kind]
+    xor bh, bh
+    shl bx, 1
+    mov si, [sh_bdlg_kitems + bx]
     mov bx, [sh_bdlg_ri]
     shl bx, 1
-    mov si, [sh_bdlg_items + bx]
+    mov si, [si + bx]
     mov cx, [sh_bdlg_ox]
     add cx, SH_BDLG_GX1 + 24
     mov dx, [sh_bdlg_ry]
@@ -14002,13 +14150,19 @@ sh_bdlg_onclick:
     xor dx, dx
     mov si, SH_BDLG_ROWH
     div si
-    cmp ax, SH_BDLG_NITEMS
+    push ax
+    call sh_bdlg_count
+    mov dx, ax
+    pop ax
+    cmp ax, dx
     jae .out
     mov cl, al
     mov bh, 1
     shl bh, cl
     xor [sh_bdlg_sel], bh
-    cmp al, 0
+    cmp byte [sh_bdlg_kind], SH_BK_BORDER
+    jne .redraw                         ; 81.106: Outline's coupling is the
+    cmp al, 0                           ; Border's alone
     je .wasoutline
     mov al, [sh_bdlg_sel]
     and al, 0x1E
@@ -14049,6 +14203,58 @@ sh_bdlg_onclick:
 ; existed) if the cell ends up with no border at all.
 ; -----------------------------------------------------------------------------
 sh_bdlg_apply:
+    cmp byte [sh_bdlg_kind], SH_BK_BORDER
+    je sh_bdlg_apbord
+    push ax                             ; 81.106: Display and Workspace set
+    mov al, [sh_bdlg_sel]               ; the flags their boxes stand for
+    cmp byte [sh_bdlg_kind], SH_BK_DISPLAY
+    jne .ws
+    mov ah, al
+    and al, 1
+    mov [sh_showformulas], al
+    shr ah, 1
+    and ah, 1
+    mov [sh_gridlines], ah
+    jmp short .shown
+.ws:
+    and al, 1
+    mov [sh_a1style], al
+.shown:
+    push si
+    mov si, [sh_ownwin]
+    SHOUT sh_repaint
+    pop si
+    pop ax
+    ret
+; sh_bdlg_count - AX = the open kind's number of boxes
+sh_bdlg_count:
+    push bx
+    mov bl, [sh_bdlg_kind]
+    xor bh, bh
+    mov al, [sh_bdlg_kn + bx]
+    xor ah, ah
+    pop bx
+    ret
+; sh_bdlg_gy2 - AX = the group box's bottom edge, content-relative: the last
+; row's box and a margin. SH_BDLG_GY2 is what it comes to for the Border's six
+sh_bdlg_gy2:
+    push dx
+    call sh_bdlg_count
+    mov dx, SH_BDLG_ROWH
+    mul dx
+    add ax, SH_BDLG_ROWTOP - 2
+    pop dx
+    ret
+; sh_bdlg_label - SI = the open kind's title, which is its group's label too
+sh_bdlg_label:
+    push bx
+    mov bl, [sh_bdlg_kind]
+    xor bh, bh
+    shl bx, 1
+    mov si, [sh_bdlg_ktitle + bx]
+    pop bx
+    ret
+sh_bdlg_apbord:
     push ax
     push bx
     push dx
@@ -17128,6 +17334,217 @@ sh_ndlg_close:
 section .text
 
 ; =============================================================================
+; FORMULA ▸ REFERENCE (SPEC.md 81.108), Excel's own: "Converts the selected
+; references in the formula bar from relative to absolute, from absolute to
+; mixed, and from mixed back to relative ... if the insertion point is within
+; or next to the reference. Shortcut key: F4."  A1 > $A$1 > A$1 > $A1 > A1.
+;
+; THE REFERENCE is the run of '$', letters and digits the caret is in or
+; touching, and it has to READ as one - $?, one or two letters, $?, digits,
+; and nothing after - so a function name (SUM), a defined name (RATE1) or a
+; sheet-qualified cell's sheet part (Sheet2!, which '!' ends) is left alone.
+;
+; THE EDIT goes through the field's own keys (sh_flkey), as Paste Function's
+; does: Right to the reference's end, Backspace over it, the new form typed -
+; so the field's text, length, caret, view and SHEET's sh_editlen stay one
+; story, and the caret ends after the reference, where a second F4 finds it.
+; A1 style only: in R1C1 a reference reads R[1]C[2], and the item is greyed
+; there (sh_refmark), which this checks again for a macro's fire of it
+; =============================================================================
+section SH_MODSEC
+sh_refcyc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [sh_editing], 0
+    je .out
+    cmp byte [sh_editbuf], '='
+    jne .out
+    cmp byte [sh_a1style], 0
+    jne .out
+    mov bx, [sh_fline + LN_CAR]        ; the caret
+    mov dx, [sh_fline + LN_LEN]
+    mov si, bx
+.left:                                 ; start: back over reference chars,
+    cmp si, 1                          ; never over the leading '='
+    jbe .ldone
+    mov al, [sh_editbuf + si - 1]
+    call sh_refch
+    jnc .ldone
+    dec si
+    jmp short .left
+.ldone:
+    mov di, bx
+.right:
+    cmp di, dx
+    jae .rdone
+    mov al, [sh_editbuf + di]
+    call sh_refch
+    jnc .rdone
+    inc di
+    jmp short .right
+.rdone:
+    cmp si, di
+    jae .out                           ; nothing at the caret
+    mov [sh_rf_s], si
+    mov [sh_rf_e], di
+    mov [sh_rf_c], bx
+    ; --- parse [si, di): $? L{1,2} $? D+ ---
+    xor ah, ah                         ; bit 1 column absolute, bit 0 row
+    cmp byte [sh_editbuf + si], '$'
+    jne .let
+    or ah, 2
+    inc si
+.let:
+    mov cx, si                         ; the letters start here
+.letl:
+    cmp si, di
+    jae .bad
+    mov al, [sh_editbuf + si]
+    or al, 0x20                        ; fold to lower case
+    cmp al, 'a'
+    jb .letd
+    cmp al, 'z'
+    ja .letd
+    inc si
+    jmp short .letl
+.letd:
+    mov [sh_rf_l0], cx
+    sub cx, si
+    neg cx                             ; CX = letters counted
+    jz .bad
+    cmp cx, 2
+    ja .bad
+    mov [sh_rf_ln], cx
+    cmp byte [sh_editbuf + si], '$'
+    jne .dig
+    or ah, 1
+    inc si
+.dig:
+    mov [sh_rf_d0], si
+.digl:
+    cmp si, di
+    jae .digd
+    mov al, [sh_editbuf + si]
+    cmp al, '0'
+    jb .bad
+    cmp al, '9'
+    ja .bad
+    inc si
+    jmp short .digl
+.digd:
+    mov cx, si
+    sub cx, [sh_rf_d0]
+    jz .bad                            ; no row digits
+    cmp cx, 5                          ; ...or more than a row can have
+    ja .bad                            ; (16,384 is five), which also bounds
+                                       ; sh_rf_buf: $ + 2 + $ + 5 + NUL
+    ; --- the next form: 00 > 11 > 01 > 10 > 00 (column bit, row bit) ---
+    mov bl, ah
+    xor bh, bh
+    mov ah, [cs:sh_rf_next + bx]       ; CS: the table is the module's own
+    mov di, sh_rf_buf
+    test ah, 2
+    jz .nc
+    mov byte [di], '$'
+    inc di
+.nc:
+    mov si, [sh_rf_l0]
+    mov cx, [sh_rf_ln]
+.cl:
+    mov al, [sh_editbuf + si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cl
+    test ah, 1
+    jz .nr
+    mov byte [di], '$'
+    inc di
+.nr:
+    mov si, [sh_rf_d0]
+.cd:
+    cmp si, [sh_rf_e]
+    jae .built
+    mov al, [sh_editbuf + si]
+    mov [di], al
+    inc si
+    inc di
+    jmp short .cd
+.built:
+    mov byte [di], 0
+    ; --- through the field's own keys ---
+    mov cx, [sh_rf_e]
+    sub cx, [sh_rf_c]
+    jz .atend
+.rk:
+    mov ax, 0x4D00                     ; Right
+    call sh_rf_key
+    loop .rk
+.atend:
+    mov cx, [sh_rf_e]
+    sub cx, [sh_rf_s]
+.bk:
+    mov ax, 8                          ; Backspace
+    call sh_rf_key
+    loop .bk
+    mov si, sh_rf_buf
+.ty:
+    mov al, [si]
+    or al, al
+    jz .out
+    xor ah, ah
+    call sh_rf_key
+    inc si
+    jmp short .ty
+.bad:
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+sh_rf_next: db 3, 2, 0, 1              ; indexed by (col << 1) | row
+
+; sh_refch - CF=1 when AL can be part of a reference: '$', a letter, a digit
+sh_refch:
+    cmp al, '$'
+    je .yes
+    cmp al, '0'
+    jb .no
+    cmp al, '9'
+    jbe .yes
+    push ax
+    or al, 0x20
+    cmp al, 'a'
+    jb .nop
+    cmp al, 'z'
+    ja .nop
+    pop ax
+.yes:
+    stc
+    ret
+.nop:
+    pop ax
+.no:
+    clc
+    ret
+
+; sh_rf_key - AX to the entry field, as a keystroke (sh_ldlg_putc's shape)
+sh_rf_key:
+    push si
+    mov si, [sh_ownwin]
+    SHOUT sh_flkey
+    pop si
+    ret
+section .text
+
+; =============================================================================
 ; DATA ▸ FORM (SPEC.md 81.71.5) - one record at a time, in a dialog.
 ;
 ; THE SIXTH DIALOG ENGINE, and the first that needed to be: sh_fdlg is a radio
@@ -18356,7 +18773,6 @@ sh_new:
     mov byte [sh_dockind], 0           ; unless they were the user's own
     jne .wsheet                        ; (sh_kindreset's rule, inline: this
     mov byte [sh_showformulas], 0      ; is resident and that is CHART.OVL's)
-    mov word [sh_i_options+2], sh_it_form_off
 .wsheet:
     mov word [sh_cursheet], 0
     mov cx, SH_SHEETS * 6            ; 6 words per sheet: sel/row/scl/scr,
@@ -18406,11 +18822,11 @@ sh_frzmark:
     mov ax, [sh_freezecol]
     or ax, [sh_freezerow]
     jnz .on
-    mov word [sh_i_options+10], sh_it_frz_off
+    mov word [sh_i_options + SH_OI_FREEZE * 2], sh_it_frz_off
     pop ax
     ret
 .on:
-    mov word [sh_i_options+10], sh_it_frz_on
+    mov word [sh_i_options + SH_OI_FREEZE * 2], sh_it_frz_on
     pop ax
     ret
 
@@ -19827,7 +20243,6 @@ sh_macsheet:
     jne .out                          ; THIS document's doing, so closing it
     mov byte [sh_dockind], 2          ; takes them away again; 1 = the user
     mov byte [sh_showformulas], 1     ; already had them on and keeps them
-    mov word [sh_i_options+2], sh_it_form_on
 .out:
     ret
 
@@ -19840,7 +20255,6 @@ sh_kindreset:
     mov byte [sh_dockind], 0
     jne .out
     mov byte [sh_showformulas], 0
-    mov word [sh_i_options+2], sh_it_form_off
 .out:
     ret
 
@@ -39763,7 +40177,7 @@ shm_x_setdb:  mov ax, (SH_MI_DATA << 8) | 4
               jmp short shm_mfirec
 shm_x_setcr:  mov ax, (SH_MI_DATA << 8) | 5
               jmp short shm_mfirec
-shm_x_calcd:  mov ax, (SH_MI_OPTIONS << 8) | 4
+shm_x_calcd:  mov ax, (SH_MI_OPTIONS << 8) | SH_OI_CALCNOW
               jmp short shm_mfirec
 shm_x_dform:  mov ax, (SH_MI_DATA << 8) | 0
 shm_mfirec:
@@ -40121,25 +40535,24 @@ shm_mrowh:
 .bad:
     jmp shm_merr
 
-; DISPLAY(formula, gridline, heading, zero, color) - Options' own toggles, so
-; the menu's labels follow; a heading, zero or colour choice SHEET does not
-; have is read and not used
+; DISPLAY(formula, gridline, heading, zero, color) - the Display dialog's two
+; settings, set as its OK sets them (81.106: they are check boxes there now,
+; not menu rows to fire); a heading, zero or colour choice SHEET does not have
+; is read and not used
 shm_mdisplay:
     call shm_boolarg0
     jnc .g
-    cmp al, [sh_showformulas]
-    je .g
-    mov ax, (SH_MI_OPTIONS << 8) | 1
-    SHOUT sh_macro_mfire
+    mov [sh_showformulas], al
 .g:
     call shm_boolnext
     jnc .done
-    cmp al, [sh_gridlines]
-    je .done
-    mov ax, (SH_MI_OPTIONS << 8) | 0
-    SHOUT sh_macro_mfire
+    mov [sh_gridlines], al
 .done:
     SHOUT sh_skipargs
+    push si                           ; one repaint whatever changed: no
+    mov si, [sh_ownwin]               ; "dirty" byte, because a byte defined
+    SHOUT sh_repaint                  ; here would sit in MACRO.OVL's segment
+    pop si                            ; and DS is the package's
     jmp shm_mtrue
 
 ; FREEZE.PANES(logical) - freeze at the active cell, or unfreeze; omitted
@@ -40156,7 +40569,7 @@ shm_mfreeze:
     cmp al, bl
     je .done
 .flip:
-    mov ax, (SH_MI_OPTIONS << 8) | 5
+    mov ax, (SH_MI_OPTIONS << 8) | SH_OI_FREEZE
     SHOUT sh_macro_mfire
 .done:
     SHOUT sh_skipargs
@@ -40175,7 +40588,7 @@ shm_mprotdoc:
     cmp al, bl
     je .done
 .flip:
-    mov ax, (SH_MI_OPTIONS << 8) | 2
+    mov ax, (SH_MI_OPTIONS << 8) | SH_OI_PROT
     SHOUT sh_macro_mfire
 .done:
     SHOUT sh_skipargs
@@ -51005,8 +51418,8 @@ sh_mtab:
     dw sh_m_formula, sh_i_formula, 7
     dw sh_m_format,  sh_i_format,  8
     dw sh_m_data,    sh_i_data,    SH_DATA_N
-    dw sh_m_options, sh_i_options, 6
-    dw sh_m_macro,   sh_i_macro,   4
+    dw sh_m_options, sh_i_options, SH_OI_N
+    dw sh_m_macro,   sh_i_macro,   SH_MAI_N
     dw sh_m_sheet,   sh_i_sheet,   SH_SHEETS
     dw sh_m_help,    sh_i_help,    1
     times SH_MCUST * 6 db 0           ; 81.95: custom menus added to this bar
@@ -51019,11 +51432,15 @@ sh_mtab:
 ; Define Name needed, and Reference had nowhere to show its answer until the
 ; reference box existed.
 sh_m_formula:    db 'Formula', 0
-sh_i_formula:    dw sh_it_pname, sh_it_pfunc, sh_it_ref_a1, sh_it_defname, sh_it_note, sh_it_goto, sh_it_find
+sh_i_formula:    dw sh_it_pname, sh_it_pfunc, sh_it_refdis, sh_it_defname, sh_it_note, sh_it_goto, sh_it_find
 sh_it_pname:     db 'Paste Name...', 0
 sh_it_pfunc:     db 'Paste Function...', 0
-sh_it_ref_a1:    db 'Reference: A1', 0     ; the same relabel-by-repointing
-sh_it_ref_rc:    db 'Reference: R1C1', 0   ; the Options toggles use
+sh_it_refdis:    db MENU_DIS, 'Reference', 0   ; 81.108: Excel's meaning -
+sh_it_ref:       db 'Reference', 0     ; cycle the reference at the caret
+                                       ; A1 > $A$1 > A$1 > $A1 > A1 - and so
+                                       ; GREYED except while a formula is
+                                       ; being entered (sh_refmark). Its old
+                                       ; job, A1/R1C1, is Workspace's (81.106)
 sh_it_defname:   db 'Define Name...', 0
 sh_it_note:      db 'Note...', 0
 sh_it_goto:      db 'Goto...', 0
@@ -51136,7 +51553,27 @@ sh_sheet_chk:   dw sh_it_sheet1c, sh_it_sheet2c, sh_it_sheet3c, sh_it_sheet4c
 ; Relative Record. 81.74 adds three of the four it was missing; Start
 ; Recorder and Resume are that section's own documented shortfalls.
 sh_m_macro:    db 'Macro', 0
-sh_i_macro:    dw sh_it_recon, sh_it_run, sh_it_setrec, sh_it_relrec
+; 81.107: Excel's five, in Excel's order - Start Recorder is third. Rows are
+; dispatched by POSITION, so each has a name and a times pair (81.99)
+sh_i_macro:
+.record:   dw sh_it_recon
+.run:      dw sh_it_run
+.start:    dw sh_it_startdis
+.setrec:   dw sh_it_setrec
+.rel:      dw sh_it_relrec
+.end:
+%macro SH_MAIROW 2
+    times ((sh_i_macro.%1 - sh_i_macro) / 2 - (%2)) db 0
+    times ((%2) - (sh_i_macro.%1 - sh_i_macro) / 2) db 0
+%endmacro
+    SH_MAIROW record, SH_MAI_RECORD
+    SH_MAIROW run, SH_MAI_RUN
+    SH_MAIROW start, SH_MAI_START
+    SH_MAIROW setrec, SH_MAI_SETREC
+    SH_MAIROW rel, SH_MAI_REL
+    SH_MAIROW end, SH_MAI_N
+sh_it_startrec: db 'Start Recorder', 0     ; 81.107: live only with a recorder
+sh_it_startdis: db MENU_DIS, 'Start Recorder', 0   ; range and none running
 sh_it_run:     db 'Run', 0
 sh_it_recon:   db 'Record...', 0     ; 81.74, relabelled while a recording is
 sh_it_recoff:  db 'Stop Recorder', 0 ; live - Excel's own pair
@@ -51249,22 +51686,41 @@ sh_m_options:  db 'Options', 0
 ; (LIBRARY/documentation/screenshots/excel/menu_options_full.png). Gridlines
 ; and Formulas are items here where Excel keeps them inside Display... - that
 ; divergence is 81.31's, not this one's.
-sh_i_options:  dw sh_it_grid_off, sh_it_form_off, sh_it_prot_off, sh_it_calc
-               dw sh_it_calcnow, sh_it_frz_off
+; 81.106: EXCEL'S ORDER, less the three print items and Short Menus (both
+; decided out): Display..., Freeze Panes, Protect Document, Calculation...,
+; Calculate Now, Workspace.... Gridlines and Formulas were two relabelling
+; toggles here; in Excel they are check boxes in Display..., and A1/R1C1 is
+; one in Workspace..., so that is where they are. Rows are dispatched by
+; POSITION, so each has a name and a times pair (81.99's care)
+sh_i_options:
+.display:   dw sh_it_display
+.freeze:    dw sh_it_frz_off
+.protect:   dw sh_it_prot_off
+.calc:      dw sh_it_calc
+.calcnow:   dw sh_it_calcnow
+.workspace: dw sh_it_workspace
+.end:
+%macro SH_OIROW 2
+    times ((sh_i_options.%1 - sh_i_options) / 2 - (%2)) db 0
+    times ((%2) - (sh_i_options.%1 - sh_i_options) / 2) db 0
+%endmacro
+    SH_OIROW display, SH_OI_DISPLAY
+    SH_OIROW freeze, SH_OI_FREEZE
+    SH_OIROW protect, SH_OI_PROT
+    SH_OIROW calc, SH_OI_CALC
+    SH_OIROW calcnow, SH_OI_CALCNOW
+    SH_OIROW workspace, SH_OI_WORKSPACE
+    SH_OIROW end, SH_OI_N
+sh_it_display:   db 'Display...', 0
+sh_it_workspace: db 'Workspace...', 0
 sh_it_prot_off: db 'Protect Document', 0
 sh_it_prot_on:  db 'Unprotect Document', 0
-sh_it_grid_on:  db 'Gridlines: On', 0
-sh_it_grid_off: db 'Gridlines: Off', 0
-sh_it_form_on:  db 'Formulas: On', 0
-sh_it_form_off: db 'Formulas: Off', 0
 sh_it_calc:     db 'Calculation...', 0
 sh_it_calcnow:  db 'Calculate Now', 0    ; 81.78: Excel puts it immediately
-                                          ; after Calculation..., which is why
-                                          ; it is index 4 and Freeze Panes -
-                                          ; this app's own item, and not one
-                                          ; of Excel's - moved along to 5
-sh_it_frz_off:  db 'Freeze Panes', 0     ; 81.70, relabelled like the three
-sh_it_frz_on:   db 'Unfreeze Panes', 0   ; toggles above rather than ticked
+                                          ; after Calculation...
+sh_it_frz_off:  db 'Freeze Panes', 0     ; 81.70, relabelled like Protect
+sh_it_frz_on:   db 'Unfreeze Panes', 0   ; Document rather than ticked; second
+                                          ; since 81.106, as Excel has it
 sh_s_frz_at_a1: db 'Select below or right of the split first.', 0
 
 ; Help
@@ -52828,7 +53284,10 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9148                     ; +21 for 81.103's window caption;
+    OS88_BSS 9174                     ; +24 for 81.108's Reference scratch;
+                                       ; +1 for 81.107's own-RETURN byte;
+                                       ; +1 for 81.106's check-box kind;
+                                       ; +21 for 81.103's window caption;
                                        ; +4 for 81.102's sh_note_load vector;
                                        ; +3 for 81.98's menu save-under;
                                        ; +1 for 81.96.2's close-box byte;
@@ -54216,7 +54675,21 @@ sh_mbanked    equ sh_dockind + 1             ; 81.98: byte, the open
 sh_mbky2      equ sh_mbanked + 1             ; ...word, down to this row
 sh_ttlbuf     equ sh_mbky2 + 2               ; 81.103: the caption,
                                              ; "Sheet - " + an 8.3 name + NUL
-sh_bss_end        equ sh_ttlbuf + SH_TTL_PRE + SH_FNAME_MAX + 1
+sh_bdlg_kind  equ sh_ttlbuf + SH_TTL_PRE + SH_FNAME_MAX + 1   ; 81.106:
+                                             ; byte, the check-box engine's
+                                             ; SH_BK_* kind
+sh_rec_ret    equ sh_bdlg_kind + 1           ; 81.107: byte, the row
+                                             ; above the recorder cell is the
+                                             ; RETURN() Stop Recorder wrote
+sh_rf_s       equ sh_rec_ret + 1             ; 81.108: Reference's scratch -
+sh_rf_e       equ sh_rf_s + 2                ; the reference's start and end,
+sh_rf_c       equ sh_rf_e + 2                ; the caret, where its letters
+sh_rf_l0      equ sh_rf_c + 2                ; start and how many, where its
+sh_rf_ln      equ sh_rf_l0 + 2               ; digits start,
+sh_rf_d0      equ sh_rf_ln + 2
+sh_rf_buf     equ sh_rf_d0 + 2               ; ...and the new form: $A$ +
+                                             ; row digits + NUL, 12 bytes
+sh_bss_end        equ sh_rf_buf + 12
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

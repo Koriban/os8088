@@ -4972,6 +4972,17 @@ SOAK = [
         "the panel covered, and the bank path lands on the same pixels as a "
         "full repaint - the A/B that caught the stale status line",
         needs=("marty",), serial=True),
+    Row("sheetrefcyc", "soak", py("tests/sheetrefcyc.py"), 400.0,
+        "SPEC.md 81.108: Formula > Reference and F4, Excel's own - the "
+        "reference at the caret round A1 > $A$1 > A$1 > $A1 > A1, by key and "
+        "by menu, live only mid-formula, and a function's name left alone",
+        needs=("marty",), serial=True),
+    Row("sheetopts", "soak", py("tests/sheetopts.py"), 400.0,
+        "SPEC.md 81.106: the Options menu in Excel's order off the glass, "
+        "Display... (kind 1: Formulas, Gridlines) and Workspace... (kind 2: "
+        "R1C1, the reference box then reads R1C1) setting their flags, and "
+        "Formula > Reference greyed",
+        needs=("marty",), serial=True),
     Row("sheetclip", "soak", py("tests/sheetclip.py"), 400.0,
         "SPEC.md 81.105 (upstream issue #152): sh_repaint arms its own clip "
         "region - Data > Chart Column opens the Chart over SHEET and then "
@@ -5106,7 +5117,9 @@ SOAK = [
         "below it stays put - which is what separates it from Edit > Delete",
         needs=("marty",), serial=True),
     Row("sheetrecord", "soak", py("tests/sheetrecord.py"), 450.0,
-        "SPEC.md 81.74: the macro recorder. 81.68 is titled \"the way the "
+        "SPEC.md 81.74 and 81.107: the macro recorder, and Start Recorder "
+        "greyed until a range exists and continuing the same macro over "
+        "Stop's own RETURN(). 81.68 is titled \"the way the "
         "recorder writes them\" and this is that recorder - it emits the SAME "
         "language 81.63 runs, so the test does not just read the cells it "
         "wrote, it RUNS them after clearing the originals. Set Recorder, "

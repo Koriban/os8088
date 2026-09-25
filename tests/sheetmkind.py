@@ -50,8 +50,8 @@ from paintmove import pkg_syms                                  # noqa: E402
 WORK = "build/sheetmkind"               # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetmkind.img"
 OPEN_ITEM = (SF.FILE_MENU[0] + 15, 59 + 11)     # sheetxl2's own
-OPTIONS = (370, 45)                             # its menu, and Formulas
-FORMULAS = (OPTIONS[0] - 8, 57 + 12 + 2)
+OPTIONS = (370, 45)                             # its menu: Formulas is a
+                                                # box in Display... (81.106)
 LIST_X, LIST_Y0, LIST_DY, LIST_ROWS = 150, 67, 16, 6
 R = 0xC000
 FALSE8 = bytes([1, 0, 0, 0, 0, 0, 0xFF, 0xFF])  # a cached logical FALSE
@@ -197,8 +197,7 @@ def main():
         own.append((sheet_byte("sh_dockind"), sheet_byte("sh_showformulas")))
         saved["WS"] = save("WS.BIF", files["WS.BIF"])
         # ...and again with Formulas the USER's own
-        mo.menu(OPTIONS[0], OPTIONS[1], *FORMULAS)
-        M.settle(m)
+        SF.display_toggle(m, mo, SF.DISP_FORMULAS, OPTIONS)  # 81.106
         own.append((sheet_byte("sh_dockind"), sheet_byte("sh_showformulas")))
         reopen("MAC.BIF")
         own.append((sheet_byte("sh_dockind"), sheet_byte("sh_showformulas")))

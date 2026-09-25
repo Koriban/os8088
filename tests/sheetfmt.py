@@ -309,6 +309,36 @@ def open_shin(m, mo, name="SHIN.SLK"):
     dispcp.open_named(m, mo, S, M.settle, wx, wy, name=name)
 
 
+# SPEC.md 81.106: Options > Display... is the check-box engine's kind 1, and
+# its geometry is the Border dialog's (sheet.asm's SH_BDLG_*): a box's glyph
+# at content (GX1 + 8, ROWTOP + i * ROWH), OK stacked right at (GX2 + 10 ..
+# W - 10, 20 .. 40). Rows: 0 Formulas, 1 Gridlines, Excel's order
+OPTIONS_MENU = (371, 45)                    # the CGA machine's Options title
+BDLG_GX1, BDLG_GX2, BDLG_W, BDLG_ROWTOP, BDLG_ROWH = 10, 104, 190, 26, 18
+DISP_FORMULAS, DISP_GRIDLINES = 0, 1
+
+
+def display_toggle(m, mo, box, title=OPTIONS_MENU, row=0):
+    """Options > Display..., flip ONE box, OK. `title` is the Options menu's
+    title on this machine and `row` Display's row in it (SH_OI_DISPLAY).
+    The dialog is found through the window table, not assumed where it opens.
+    Returns True when a dialog opened and was answered."""
+    S = lambda n: m.sym(n)
+    before = dispcp.win_list(m, S, check=False)
+    mo.menu(title[0], title[1], title[0] + 17, 57 + 12 * row + 2)
+    M.settle(m)
+    wins = dispcp.win_list(m, S, check=False)
+    if len(wins) <= len(before) and wins[-1:] == before[-1:]:
+        return False
+    x, y, _, _ = dispcp.win_rect(m, S, wins[-1])
+    cx, cy = x + 1, y + 18                  # the content origin
+    mo.click(cx + BDLG_GX1 + 8 + 4, cy + BDLG_ROWTOP + BDLG_ROWH * box + 4)
+    M.settle(m)
+    mo.click(cx + (BDLG_GX2 + 10 + BDLG_W - 10) // 2, cy + 30)
+    M.settle(m)
+    return True
+
+
 def main():
     build_disk()
     with M.launch(SYS, apps=DISK, machine=MACHINE) as m:

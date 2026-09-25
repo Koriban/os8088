@@ -103,8 +103,9 @@ def main():
             return
         ys, xs = g
         at = lambda r, c: ((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
-        mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], 0))   # Gridlines: Off
-        M.settle(m)
+        # Gridlines off: a box in Options > Display... since 81.106
+        check(SF.display_toggle(m, mo, SF.DISP_GRIDLINES, OPTIONS),
+              "Options > Display... opened, Gridlines unchecked")
 
         def look(tag):
             mo.click(*at(3, 5))             # the selection, well away

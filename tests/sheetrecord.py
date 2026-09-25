@@ -18,6 +18,14 @@ part of the sheet, and checks the actions happened again.
   3. ...and running it from Macro > Run puts 11 and 22 back after A1:A2 has
      been cleared, which is the part that proves the recording is a MACRO and
      not a transcript
+
+and Macro > Start Recorder (81.107), Excel's pause-and-continue:
+
+  4. it is GREYED before Set Recorder, and live after the first Stop
+  5. choosing it CONTINUES the same macro: typing 33 into A3 lands on the
+     row Stop's RETURN() was on - "if the end of the recorder range contains
+     a RETURN function, RETURN is overwritten" - and the second Stop writes
+     the one RETURN at the new end. The replay then puts 33 back as well
 """
 import os
 import subprocess
@@ -36,13 +44,16 @@ import os88sym                                              # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
+from os88geom import WIN_SIZE, W_SEG                            # noqa: E402
+from paintmove import pkg_syms                                  # noqa: E402
 
 WORK = "build/sheetrecord"              # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetrecord.img"
 NAME = "REC.SLK"
 MACRO = (435, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
-RECORD, RUN, SETREC = 0, 1, 2           # 81.74's Macro menu
+RECORD, RUN, START, SETREC = 0, 1, 2, 3  # the Macro menu: Start Recorder
+                                         # third since 81.107, as Excel has it
 EDIT = (123, 45)
 CLEAR = 4                               # Edit > Clear..., sh_i_edit's order
 REC_COL = 4                             # E: the recorder range, clear of the
@@ -53,7 +64,9 @@ REC_COL = 4                             # E: the recorder range, clear of the
 # between them records NOTHING, because Enter had already put the selection
 # there and sh_rec_sel does not write a move that did not happen.
 WANT = ['SELECT("R1C1")', 'FORMULA("11")', 'SELECT("R2C1")',
-        'FORMULA("22")', 'SELECT("R3C1")', 'RETURN()']
+        'FORMULA("22")', 'SELECT("R3C1")',
+        # 81.107: Start Recorder continued it here, over Stop's RETURN()
+        'FORMULA("33")', 'SELECT("R4C1")', 'RETURN()']
 
 
 def build_disk():
@@ -95,6 +108,16 @@ def main():
             return
         ys, xs = g
         at = lambda r, c: ((xs[c] + xs[c + 1]) // 2, (ys[r] + ys[r + 1]) // 2)
+        sym = pkg_syms("apps/sheet/sheet.asm")
+        sl = dispcp.win_list(m, S, check=False)[-1]
+        sseg = m.read(S("wm_wins") + sl * WIN_SIZE + W_SEG, 2)
+        sseg = sseg[0] | (sseg[1] << 8)
+
+        def start_greyed():
+            """Start Recorder's item string begins with MENU_DIS (1)"""
+            v = m.readseg(sseg, sym["sh_i_macro"] + 2 * START, 2)
+            return m.readseg(sseg, v[0] | (v[1] << 8), 1)[0] == 1
+        grey = {"fresh": start_greyed()}
 
         def mac(i):
             mo.menu(MACRO[0], MACRO[1], *ITEM(MACRO[0], i))
@@ -128,12 +151,22 @@ def main():
         mac(RECORD)                            # ...which reads Stop Recorder
         M.settle(m, limit=180)
         shot("3-stopped")
+        grey["stopped"] = start_greyed()
+        # --- 81.107: Start Recorder continues the same macro -------------
+        mac(START)
+        M.settle(m, limit=120)
+        grey["recording"] = start_greyed()
+        m.type_text("33\n")                   # A3: Enter left it selected
+        M.settle(m, limit=120)
+        mac(RECORD)                            # Stop Recorder again
+        M.settle(m, limit=180)
+        shot("3b-continued")
 
         # --- 3: clear A1:A2, then run the recording back --------------------
         mo.click(*at(0, 0))
         M.settle(m)
         m.key("ShiftLeft", down=True, up=False)
-        mo.click(*at(1, 0))
+        mo.click(*at(2, 0))                    # A1:A3
         m.key("ShiftLeft", down=False, up=True)
         M.settle(m)
         mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], CLEAR))
@@ -171,11 +204,16 @@ def main():
           "the recording is the macro language itself, in absolute R1C1: %r"
           % (WANT,),
           "column E holds %r" % (rec,))
-    a1, a2 = got.get((0, 0)), got.get((1, 0))
-    check(a1 == 11.0 and a2 == 22.0,
-          "...and RUNNING it puts 11 and 22 back after the cells were "
-          "cleared, which is what makes it a macro and not a transcript",
-          "A1, A2 hold %r, %r" % (a1, a2))
+    a1, a2, a3 = got.get((0, 0)), got.get((1, 0)), got.get((2, 0))
+    check(a1 == 11.0 and a2 == 22.0 and a3 == 33.0,
+          "...and RUNNING it puts 11, 22 and 33 back after the cells were "
+          "cleared, which is what makes it a macro and not a transcript - "
+          "the continued part included",
+          "A1, A2, A3 hold %r, %r, %r" % (a1, a2, a3))
+    check(grey == {"fresh": True, "stopped": False, "recording": True},
+          "Start Recorder is greyed with no recorder range and while "
+          "recording, and live once a recording has stopped (81.107)",
+          "%r" % (grey,))
     done("sheetrecord")
 
 

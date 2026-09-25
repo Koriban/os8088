@@ -104509,6 +104509,192 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.108 Formula ▸ Reference, and F4
+
+The rest of gap #7. §81.106 moved A1/R1C1 to Workspace and greyed this
+item. It now does what Excel's does (Reference Guide, p. 381): *"Converts
+the selected references in the formula bar from relative to absolute, from
+absolute to mixed, and from mixed back to relative ... if the insertion
+point is within or next to the reference. Shortcut key: F4."*
+
+**The cycle:** A1 → $A$1 → A$1 → $A1 → A1, as a four-entry table indexed
+by (column-absolute, row-absolute).
+
+**The reference is whatever the caret is in or touching**, found as the run
+of `$`, letters and digits around it. That run has to read as exactly one
+reference: `$?`, one or two letters, `$?`, one to five digits, and nothing
+after. Anything else is left alone:
+
+- a function's name (`SUM`);
+- a defined name (`RATE1`);
+- a sheet qualifier (`Sheet2!` ends the run at its `!`);
+- a longer string of digits than a row can have (16,384 is five digits).
+  That limit also bounds the 12-byte buffer the new form is built in.
+
+**The edit goes through the field's own keys** (`sh_flkey`), as Paste
+Function's insertion already did: Right to the reference's end, Backspace
+over it, then the new form typed. So the field's text, length, caret and
+view, and SHEET's `sh_editlen`, stay consistent with each other. The caret
+ends just after the reference, where the next F4 finds it again.
+
+**When it is live:** only while a **formula** is being entered in **A1
+style**. In R1C1 a reference reads `R[1]C[2]`, and cycling those is a
+different job. `sh_refmark` sets the item live or greyed. It is called when
+a pulldown opens and when F4 is pressed, rather than kept current on every
+keystroke. The routine checks the same conditions again, for a macro's fire
+of the item.
+
+**F4 is the one shortcut allowed during entry.** §81.101 swallows
+shortcuts while a cell is being edited. Reference is the one command that
+only *means* something during entry, so `sh_kaccel` lets its entry through,
+and the Formula pulldown captions it `F4`.
+
+The routine lives in CHART.OVL behind one door (`SHM_REFCYC`). Resident:
+the door, `sh_refmark` and the two item strings. Cost: resident 50,832 →
+50,911, bss +24 (its scratch), CHART.OVL +400.
+
+**Evidence:** `tests/sheetrefcyc.py` (6 checks, CGA, the real keyboard,
+reading `sh_editbuf`):
+
+- outside an entry, the item is greyed and F4 is inert;
+- `=A1+B2` with the caret after B2: four F4s walk B2 round the whole cycle
+  and back, and A1 is untouched;
+- with the caret in A1, F4 converts A1;
+- mid-entry the menu item is live and does the same;
+- with the caret after `SUM` in `=SUM(A1)`, nothing changes.
+
+With the cycle table made the identity, three of the six fail.
+
+### 81.107 Macro ▸ Start Recorder
+
+Gap #8 of the 1.8 look report. Excel 2.1d's Macro menu is **Record...,
+Run..., Start Recorder, Set Recorder, Relative Record**, and SHEET lacked
+the third item. §81.74 left it out on the grounds that there was no
+"armed but paused" state. There is one: a recorder range, whether set by
+Set Recorder or left behind by a stopped recording. The Reference Guide
+(p. 504) describes the command:
+
+- *"You cannot choose Macro Start Recorder until you set the recorder
+  range."* So it is **greyed** until `[sh_rec_set]`, and greyed while a
+  recording is live, when Stop Recorder is the item that means something.
+  `sh_recmark` repoints it between a live and a `MENU_DIS` copy, as it
+  already did for Record/Stop and Relative/Absolute.
+- *"You can use Macro Start Recorder and Macro Stop Recorder to
+  temporarily pause while recording a macro. You can also use them to add
+  to an existing macro."* So it **continues** the macro: *"If the end of
+  the recorder range contains a RETURN function, RETURN is overwritten."*
+  The RETURN this code knows is at that end is its own. Stop Recorder
+  writes it and sets `[sh_rec_ret]`, and Start steps `[sh_rec_row]` back
+  over it, so the next write lands on it. Set Recorder clears the flag,
+  since a new range has no RETURN of ours at its end.
+
+Unlike Record..., it asks for **no name**: Record names a new macro, and
+this adds to one. A macro's fire of the item is refused under the same two
+conditions as the greying.
+
+**Rows are named** (`SH_MAI_RECORD` … `SH_MAI_REL`, `SH_MAI_N`, each held
+by a `times` pair). Start Recorder went in at Excel's row 2, so Set Recorder
+and Relative Record each moved down one. No macro function fires a Macro
+row by number; `tests/sheetrecord.py` was the only thing that did.
+
+**The one limit, stated.** Excel reads the range's end to find a RETURN.
+This code trusts its own flag. If the user overtypes that RETURN between
+Stop and Start, Start still steps back and writes over the overtyped cell.
+The same flag cannot claim a RETURN it did not write.
+
+**Evidence:** `tests/sheetrecord.py` (4 checks, CGA) records A1 and A2,
+stops, then Start Recorder, types 33 into A3, and stops again:
+
+- column E reads as one macro, with `FORMULA("33")` on the row the first
+  `RETURN()` held and the single `RETURN()` at the new end;
+- running it after A1:A3 are cleared puts 11, 22 and 33 back;
+- the item is greyed fresh, live after Stop, and greyed while recording.
+
+Without the step back, the old RETURN stays mid-macro, and both the text
+check and the replay fail (A3 stays empty). Cost: 123 bytes, bss +1.
+
+### 81.106 The Options menu in Excel's order, with Display and Workspace
+
+Gap #6 of the 1.8 look report, which takes #7's wrong half with it.
+
+Excel 2.1d's Options menu (`menu_options_full.png`), less the three print
+items and Short Menus, both decided out, is:
+
+**Display..., Freeze Panes, Protect Document, Calculation..., Calculate
+Now, Workspace...**
+
+SHEET's had Gridlines and Formulas as two relabelling toggles at the top,
+Freeze Panes last, and no Workspace. Its A1/R1C1 switch sat on the Formula
+menu, under the name of Excel's Reference command, which does something
+else. In Excel, Gridlines and Formulas are check boxes in **Display...**
+(`dialog_display.png`), and R1C1 is one in **Workspace...** (Reference
+Guide, p. 584). That is where they are now.
+
+**The rows are named.** `SH_OI_DISPLAY` … `SH_OI_WORKSPACE` and `SH_OI_N`,
+with `sh_i_options` labelling each row and a `times` pair holding each label
+to its constant (§81.99's device). Swapping two rows fails the build on
+those two rows' lines; that was tried. Calculate Now stayed at row 4, so
+F9 (§81.101) and CALCULATE.DOCUMENT moved nowhere. FREEZE.PANES and
+PROTECT.DOCUMENT fire by constant.
+
+**Display and Workspace are the check-box engine's kinds 1 and 2**, beside
+the Border dialog's kind 0 (`SH_BK_*`). Excel's three dialogs of this shape
+share a layout: a titled group of independent boxes, with OK/Cancel stacked
+beside it. So one engine gains a kind, the way the radio engine has one.
+Each kind has its own title (which is also the group's label, as in
+Excel's), item list and count, in resident tables the module reads through
+DS.
+
+- The group box and the window height follow the count
+  (`sh_bdlg_gy2`: `ROWTOP + n × ROWH − 2`, which is the Border's 132 for
+  six). The window is never shorter than the buttons.
+- Outline's coupling of the four edges applies to kind 0 alone.
+- The label's gap in the frame is measured from the label.
+- Display opens on the live state: bit 0 Formulas, bit 1 Gridlines, in
+  Excel's order. Its OK writes both flags. Workspace's R1C1 box writes
+  `sh_a1style`.
+
+**What each dialog leaves out:**
+
+- **Display** leaves out Row & Column Headings, Zero Values and the colour
+  group. The colour group is ruled out by the black-and-white decision. The
+  other two are real features SHEET lacks, and remain in the report's 4.3.
+- **Workspace** leaves out Fixed Decimal Places, Scroll Bars, Formula Bar,
+  Status Bar, Alternate Menu Key and Ignore Remote Requests. The bars would
+  change the window's layout, and none of them has a setting in SHEET yet.
+
+**Formula ▸ Reference was greyed here** (`MENU_DIS`), as Excel's is whenever
+no formula is being edited, which the capture shows. §81.108 then gave it
+Excel's meaning, live mid-formula. Its old job moved to
+Workspace, so nothing was lost. Its Excel meaning, flipping the edited
+reference between relative and absolute, is gap #7. A macro that fires it
+does nothing, as Excel's would. The row stays, so Define Name, Note, Goto
+and Find keep their numbers, and their shortcuts with them.
+
+**DISPLAY()** (the macro function) now sets the two flags and repaints
+once. It used to fire menu rows that no longer toggle. The first draft
+kept a "changed" byte beside it, which would have lived in MACRO.OVL's
+segment and been read through DS; a single repaint needs no byte.
+
+**Cost:** resident 50,780 → **50,709**, down, because the toggle code went.
+bss +1 (the kind).
+
+**Evidence:** `tests/sheetopts.py` (6 checks, CGA, off the glass and
+SHEET's bytes):
+
+- the pulldown reads the six in order;
+- Display opens as kind 1 on the live state, and its OK sets Gridlines off
+  and Formulas on;
+- Workspace opens as kind 2, and R1C1 switches the reference box to read
+  `R1C1`;
+- Formula ▸ Reference's string starts with `MENU_DIS`.
+
+With Display's gridline write removed, the OK check fails. Three existing
+gates follow the new rows: `sheetfreeze` (Freeze Panes is 1),
+`sheetside` and `sheetmkind`. The last two go through a shared
+`tests/sheetfmt.py` helper, `display_toggle`, which finds the dialog
+through the window table.
+
 ### 81.105 `sh_repaint` arms its own clip region
 
 Upstream issue #152 (jggonz/os8088). `sh_repaint`, SHEET's whole-content
@@ -108646,9 +108832,9 @@ is how this app's own parser reads a quote inside a string (§81.18's
 `"a""b"`), so a label containing one records as a macro that re-enters that
 same label.
 
-**Not implemented, with reasons:** `Start Recorder` (this has no separate
-"recording is armed but paused" state — `Record...` both arms and starts), and
-`Resume`. Excel's `Resume` continues a macro halted by `PAUSE()`; §81.63's only
+**Not implemented, with reasons:** `Resume` (and `Start Recorder` was listed
+here until §81.107 built it: a range set by Set Recorder, or left by a stopped
+recording, *is* the "armed but paused" state it needed). Excel's `Resume` continues a macro halted by `PAUSE()`; §81.63's only
 pause is `ALERT`/`INPUT`, which resumes on its own dialog's OK through
 `sh_idlg_after`, so there is nothing for a menu item to resume.
 
