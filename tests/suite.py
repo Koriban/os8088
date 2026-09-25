@@ -4972,6 +4972,24 @@ SOAK = [
         "the panel covered, and the bank path lands on the same pixels as a "
         "full repaint - the A/B that caught the stale status line",
         needs=("marty",), serial=True),
+    Row("sheetclip", "soak", py("tests/sheetclip.py"), 400.0,
+        "SPEC.md 81.105 (upstream issue #152): sh_repaint arms its own clip "
+        "region - Data > Chart Column opens the Chart over SHEET and then "
+        "repaints SHEET, and SHEET's ink stays out of the Chart and its "
+        "FRAME is whole (37 of 398 edge pixels without the clip)",
+        needs=("marty",), serial=True),
+    Row("sheetstatus", "soak", py("tests/sheetstatus.py"), 400.0,
+        "SPEC.md 81.104: the status bar in Excel's shape on the 1bpp CGA - "
+        "a divider down the strip at right - SH_SB_DIVX, and the indicator "
+        "INVERTED in a solid 1px-ringed black box (its gaps black), the "
+        "message still black on white",
+        needs=("marty",), serial=True),
+    Row("sheettitle", "soak", py("tests/sheettitle.py"), 400.0,
+        "SPEC.md 81.103: the window names the document - 'Sheet - <NAME>' "
+        "from the first frame for a double-clicked document (composed at "
+        "entry, never in a paint, 11.92), renamed by File > New, and the "
+        "caption strip really redrawn",
+        needs=("marty",), serial=True),
     Row("sheetkeys", "soak", py("tests/sheetkeys.py"), 400.0,
         "SPEC.md 81.101: the modern keyboard shortcuts on the cycle-accurate "
         "CGA - the captions the pulldowns draw, Ctrl+C/V copy, Ctrl+Z undo, "

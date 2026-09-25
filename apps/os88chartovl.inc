@@ -32,7 +32,9 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 46                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 48                 ; the claim CHART.OVL is read into, KB.
+                                    ; 48 for 81.102: the Note dialog and
+                                    ; os88text.inc moved in, 47,364 bytes.
                                     ; 8 held the rasterizer alone; 82.16.9 put
                                     ; SHEET's file formats in the same tail and
                                     ; took it to 13,485 bytes; 82.16.10's

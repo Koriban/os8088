@@ -103,9 +103,9 @@ Grouped by what they cost, with the most visible first in each group.
 
 | # | Excel | SHEET | Note |
 |---|---|---|---|
-| 1 | Window title names the DOCUMENT ("Sheet1", or the file) | always "Sheet": the open file's name appears nowhere on screen | `OSAPI_WM_TITLE` exists; the highest-value small item |
-| 2 | A plus-shaped pointer over the grid | the arrow everywhere | `OSAPI_CUR_CROSS` exists |
-| 3 | Status bar: a divider, and NUM drawn INVERTED | NUM plain, no divider | drawing only |
+| 1 | Window title names the DOCUMENT ("Sheet1", or the file) | **done 2026-09-24 (SPEC §81.103):** "Sheet - LEDGER.SLK", "Sheet - SHEET1.SLK" for a new sheet | |
+| 2 | A plus-shaped pointer over the grid | the arrow everywhere | **deferred (SPEC §81.104):** `OSAPI_WM_CURSOR` dresses the WHOLE content, and SHEET's menu bar, formula bar and scroll bars are content, where Excel shows the arrow. Needs a kernel content sub-rectangle for the shape, which is the owner's decision |
+| 3 | Status bar: a divider, and NUM drawn INVERTED | **done 2026-09-24 (SPEC §81.104)** | the indicator went opaque, so the text registry fell 17 → 16 |
 | 4 | Cell text inset about 2 px from the gridline | text starts ON the left gridline, and "Sales" in B1 touches it | every cell draw, and the run-on (§81.54) logic |
 | 5 | Scroll thumb always shown | no thumb when the used range fits the view | DELIBERATE (`sh_sbsync`'s comment: the range is the used extent plus one screen); listed so it is a choice |
 | 6 | Options: Display..., **Freeze Panes second**, Protect Document, Calculation, Calculate Now, **Workspace...** | Gridlines and Formulas toggles, Protect Document, Calculation, Calculate Now, **Freeze Panes last**; no Workspace | the order is a table edit with §81.99's named-constant care; Workspace is in section 4 of the gaps plan |

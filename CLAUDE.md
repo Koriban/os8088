@@ -52,7 +52,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
 | **[docs/plans/SHEET-GAPS-PLAN.md](docs/plans/SHEET-GAPS-PLAN.md)** | picking up SHEET — what is left, in the order to do it. **Its section 4 is the current list** (re-measured 2026-09-22): the macro language is finished (`docs/plans/SHEET-MACRO-PLAN.md`, §81.83-§81.97), the two defects it opened with are closed, and so is the menu's-tail defect (its section 0.1, §81.98). The gaps are grouped by what they cost rather than by menu, under a resident-headroom constraint that is down to 756 bytes, so nearly everything left is module work. **Printing is out of scope in it by decision**, which removes six of the missing menu commands and none of the work. §81.39 is the inventory — re-measure it, never quote it |
-| **[docs/plans/SHEET-PROPORTIONAL-PLAN.md](docs/plans/SHEET-PROPORTIONAL-PLAN.md)** | setting SHEET's cells in Helvetica — a study, nothing built: the OS's `os88type.inc` does it on every adapter, and what stands in the way is SHEET's 8 of 8 claims, 97 bytes of resident room and a layout that counts characters. Staged path with the layout converted to pixels first, while the 8×8 glass gates can still see it |
+| **[docs/plans/SHEET-PROPORTIONAL-PLAN.md](docs/plans/SHEET-PROPORTIONAL-PLAN.md)** | setting SHEET's cells in Helvetica — a study, nothing built: the OS's `os88type.inc` does it on every adapter, and what stands in the way is SHEET's 8 of 8 claims (resident room is 1,683 bytes after stage 0's first move, §81.102) and a layout that counts characters. Staged path with the layout converted to pixels first, while the 8×8 glass gates can still see it |
 
 ## Commands
 
@@ -619,12 +619,13 @@ learned.
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 72 sites in 22 files, every one
+  finished** (§6.6.5): the registry stands at 71 sites in 22 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. It went 62→79 when `apps/plan/plan.asm` was split out
   of `sheet.asm` (§81.75) — the same seventeen sites, in a second file — and
   it came back down to 72 as PLAN's cuts landed, since seven of those
-  seventeen were in families PLAN no longer has.
+  seventeen were in families PLAN no longer has; and to 71 when SHEET's
+  status-bar indicator went opaque (§81.104).
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors

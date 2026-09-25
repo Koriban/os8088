@@ -17,6 +17,11 @@ appearing (a window word alone could be set by a create that drew nothing):
   2. ...and Formula > Paste Function then OPENS - the list engine lives
   3. Formula > Goto, closed by its box: [sh_idlg_win] back to 0
   4. ...and Formula > Define Name then OPENS - the input engine lives
+  5. Formula > Note (81.102: its engine and os88text.inc now run from
+     CHART.OVL): typed text and OK store the note, and reopening loads it
+     back into the box - open, key, click, apply and load, every door
+  6. ...closed by its box, [sh_noteopen] and the window word clear, and it
+     opens again: the third engine 81.100.1 missed
 """
 import os
 import subprocess
@@ -114,6 +119,31 @@ def main():
         got["dn_open"] = (word("sh_idlg_win"), top() != sl)
         close_box()
 
+        def byte(name, n=1):
+            return m.readseg(seg, sym[name], n)
+
+        open_item("Formula", 4)                  # 5: Note - type, OK
+        got["nt_open"] = (word("sh_ndlg_win"), top() != sl)
+        for ch in "hi":
+            m.type_text(ch)
+            M.guest_sleep(m, 0.3)
+        M.settle(m)
+        t = top()
+        if t is not None and t != sl:
+            nx, ny, _, _ = dispcp.win_rect(m, S, t)
+            M.write_png_rgb(os.path.join(WORK, "note.png"), *m.fbuf())
+            mo.click(nx + 1 + 254, ny + 18 + 34)  # OK: SH_NDLG_BTX1..2, OKY1..2
+            M.settle(m)
+        got["nt_ok"] = (word("sh_ndlg_win"), byte("sh_noteopen")[0])
+        open_item("Formula", 4)                  # ...reopened: loaded back
+        got["nt_load"] = bytes(byte("sh_notetext", 3))
+        close_box()                              # 6: its close box
+        got["nt_shut"] = (word("sh_ndlg_win"), byte("sh_noteopen")[0],
+                          top() == sl)
+        open_item("Formula", 4)
+        got["nt_again"] = (word("sh_ndlg_win"), top() != sl)
+        close_box()
+
     print("  ", got)
     check(got["n_open"][0] != 0 and got["n_open"][1],
           "Format > Number opened (the arm is not vacuous)",
@@ -135,6 +165,20 @@ def main():
     check(got["dn_open"][0] != 0 and got["dn_open"][1],
           "...so Formula > Define Name then OPENS", "the input engine lives",
           got=got["dn_open"])
+    check(got["nt_open"][0] != 0 and got["nt_open"][1],
+          "Formula > Note opens from CHART.OVL", "81.102's open door",
+          got=got["nt_open"])
+    check(got["nt_ok"] == (0, 0), "typing and OK closes it",
+          "the module's key, click and apply", got=got["nt_ok"], want=(0, 0))
+    check(got["nt_load"] == b"hi\0", "reopened, the box holds the note typed",
+          "stored by sh_nt_set, loaded by sh_note_load through its new "
+          "vector", got=got["nt_load"], want=b"hi\0")
+    check(got["nt_shut"] == (0, 0, True),
+          "its CLOSE BOX clears the window word and [sh_noteopen]",
+          "sh_ndlg_cls_r: before 81.102 the kernel only hid it",
+          got=got["nt_shut"], want=(0, 0, True))
+    check(got["nt_again"][0] != 0 and got["nt_again"][1],
+          "...so Formula > Note opens again", got=got["nt_again"])
     done("sheetdlgclose")
 
 

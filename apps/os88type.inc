@@ -52,16 +52,40 @@
 ; =============================================================================
 
 TY_MAXFACE  equ 4               ; faces open at once, INCLUDING face 0
+%ifdef TY_BAND_STRIDE
+%if TY_BAND_STRIDE % 2
+%error "TY_BAND_STRIDE must be even: the unrolled compose stores words"
+%endif
+TY_STRIDE   equ TY_BAND_STRIDE
+%else
 TY_STRIDE   equ 92              ; the band's stride in bytes, an ASSEMBLE-TIME
-                                ; constant on purpose (SPEC.md 6.3): with it a
+%endif                          ; constant on purpose (SPEC.md 6.3): with it a
                                 ; literal, a glyph's rows are displacements off
                                 ; one DI and nothing advances a pointer between
                                 ; them. 92 covers the widest line any adapter
                                 ; shows - Hercules at 720px is 90 bytes - plus
                                 ; the byte a glyph at the right-hand end spills
-                                ; into, rounded up to even
-TY_BROWS    equ 16              ; ...and the tallest legal face, so one band
-TY_BANDSZ   equ TY_STRIDE * TY_BROWS    ; serves every one of them: 1,472 B
+                                ; into, rounded up to even.
+                                ;
+                                ; A PACKAGE MAY SET IT SMALLER - `%define
+                                ; TY_BAND_STRIDE n` before the %include - and
+                                ; the band's bss shrinks with it. A macro of
+                                ; its own name, so TY_STRIDE stays an equ any
+                                ; line can name, above the include too
+                                ; (tests/facetest does). THAT IS A PROMISE:
+                                ; nothing in the compose bounds the pen, so
+                                ; every run the package sets must end before
+                                ; (n - 1) * 8 pixels, the last byte being the
+                                ; spill. The default relies on no screen being
+                                ; wider than 90 bytes; a smaller stride relies
+                                ; on the caller. SHEET's cells (at most 320 px)
+                                ; are the case it is for
+%ifdef TY_BAND_ROWS
+TY_BROWS    equ TY_BAND_ROWS    ; ...the same, with the same promise, for a
+%else                           ; package whose faces are all shorter
+TY_BROWS    equ 16              ; the tallest legal face, so one band serves
+%endif                          ; every one of them
+TY_BANDSZ   equ TY_STRIDE * TY_BROWS    ; 1,472 B at the defaults
 
 TY_FIRST    equ 32              ; the glyph range, and it MUST equal the
 TY_LAST     equ 126             ; kernel's FONT_FIRST/FONT_LAST

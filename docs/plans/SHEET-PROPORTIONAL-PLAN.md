@@ -1,5 +1,9 @@
 # SHEET in proportional type: what it would take
 
+> **Deferred by the owner, 2026-09-24:** "skip the proportional font for now". Stage 0's
+> room-making shipped regardless (SPEC §81.102, §81.102.1); the claim for the face, and
+> everything from stage 1 on, waits until this is picked up again.
+
 **Status:** a study, not a start. Nothing here is built. Written 2026-09-23 for the owner's
 request to "look into supporting proportional" fonts, after the 1.8 look measurement listed
 proportional cell text as its largest remaining gap
@@ -17,7 +21,8 @@ things stand in the way:
 
 - **No claim slot is free.** SHEET holds 8 of `MEM_OWNER_MAX`'s 8, and the library wants one or
   two more.
-- **No resident room.** The library's bss alone is 1,933 bytes against 97 free.
+- **Resident room: 1,683 bytes free** after stage 0's first move (§81.102); the library's
+  bss alone is 1,933.
 - **Character-based layout.** Everything that lays out a cell counts in 8-pixel characters.
 - **Screen-reading tests.** 19 test files read cell text off the screen by matching 8×8 glyphs.
 
@@ -104,10 +109,11 @@ What the library claims:
 **The heap is not the constraint:** 169 KB contiguous was free with SHEET open (same
 `heapmap` run). **Slots are.**
 
-### 3.2 Resident bytes: 97 free
+### 3.2 Resident bytes: 1,683 free (after §81.102)
 
 `build/sheet.o88`'s header: image 52,220, bss 9,123, total 61,343 of `APP_MAX_SIZE` 0xF000 =
-61,440 (`apps/os88api.inc:93`). **97 bytes free.** The study measured 517 (image 51,800);
+61,440 (`apps/os88api.inc:93`). **97 bytes free** after §81.101. **§81.102 then moved the Note dialog and os88text.inc to
+CHART.OVL: image 50,630, bss 9,127, 1,683 free.** The study measured 517 (image 51,800);
 §81.101's keyboard shortcuts, built the same day, took 420 of them: the table, the dispatcher
 and the pulldown captions must be resident, since the key callback and the panel drawing are.
 The gaps plan's figure of 756 predates §81.99 to §81.101.
@@ -175,7 +181,7 @@ render the expected text from it.
 
 - **Needed resident:** bss about 960 B (stride 42) + draw-path changes, *estimate* 400–700 B →
   about 1.4–1.7 KB.
-- **Free:** 97 B (after §81.101).
+- **Free:** 1,683 B after §81.102 (it was 97 after §81.101).
 - **Gap:** move roughly **1.3–1.9 KB** of resident code to an overlay first, or 4.2 KB if the
   library itself stays resident.
 
@@ -266,7 +272,7 @@ Each stage is its own SPEC §81 section and its own gate, and each one ships.
 
 | Stage | Work | Buys | Rough cost |
 |---|---|---|---|
-| **0. Make room** | move ≥1.5 KB of resident code to an overlay (candidates to be measured, not guessed); add `%ifndef TY_STRIDE`/`TY_BROWS` to `os88type.inc`; carve chart+undo into one claim, freeing 1 slot; fix the stale comment at `sheet.asm:644` | a slot, resident headroom, and nothing visible | `tests/sheetmove.py` extended; `ovlchk` clean; all 48 `sheet*` suite rows unchanged |
+| **0. Make room** — *all but the claim done (SPEC §81.102, §81.102.1): 1,683 B resident free; `TY_BAND_STRIDE`/`TY_BAND_ROWS`; the claim comments corrected from the kernel* | move ≥1.5 KB of resident code to an overlay (candidates to be measured, not guessed); add `%ifndef TY_STRIDE`/`TY_BROWS` to `os88type.inc`; carve chart+undo into one claim, freeing 1 slot; fix the stale comment at `sheet.asm:644` | a slot, resident headroom, and nothing visible | `tests/sheetmove.py` extended; `ovlchk` clean; all 48 `sheet*` suite rows unchanged |
 | **1. Pixel layout, still 8×8** | re-express `sh_justify`, the formula-text truncation, `sh_spill` and `####` in **pixels**, measured through `ty_widthn` / `ty_fit` with **face 0**, the kernel's 8×8, which the library exposes on the same calls | the whole layout converted with **zero pixels changed**, which every existing glass gate proves | the risky stage, done where the tests can still see |
 | **2. Helv cells, behind a setting** | `ty_openfam` Helvetica at entry (one face claim, no pre-shift table); cells drawn as bands with the gridline, shading and bold composed in; a new **Helv glass reader** that renders from `faces/helv.t88` on the host; a grid-paint timing on CGA and VGA | Excel's texture, measured | new gate(s); the table is added later if the measurement asks for it |
 | **3. Headers and digits** | bold Helv row/column headers; tabular digits (section 6.4) | Excel's headers | small |

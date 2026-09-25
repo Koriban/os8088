@@ -228,6 +228,9 @@ SH_SB_H      equ 16                 ; stage 2.x: the status bar strip at
                                      ; the very bottom of the window,
                                      ; same height as the formula bar for
                                      ; visual symmetry
+SH_SB_DIVX   equ 96                 ; 81.104: the status bar's divider, from
+                                     ; the content's right edge: 8 px clear
+                                     ; of the indicator at right - 88
 SH_EDITMAX   equ 63                 ; room for a formula, not just a number
 ; AN 8.3 FILE NAME: 8 + '.' + 3. NOT a defined name's length, which is
 ; SH_NAME_MAX down in the names section and is also 12 - two different limits
@@ -313,10 +316,10 @@ SH_CLAIM_NOTE_KB  equ 5             ; stage 3.0b: the note table - SH_NOTE_CAP
 SH_CLAIM_BORD_KB  equ 4             ; stage 2.x: the border table (below) -
                                      ; a separate claim rather than growing
                                      ; every cell record, since almost no
-                                     ; cell ever has a border and this app
-                                     ; already has 3 claims plus its own
-                                     ; region. MEM_OWNER_MAX is 8 and SHEET
-                                     ; holds all eight now (81.2)
+                                     ; cell ever has a border. MEM_OWNER_MAX
+                                     ; is 8 and SHEET holds all eight now -
+                                     ; its REGION is not one of them (81.102:
+                                     ; the list is at the note table's header)
 SH_CHART_S2  equ 512                ; where a chart's SECOND series lands in
                                     ; sh_stgseg - the first sits at 0 and needs
                                     ; CH_MAXBARS words, so 512 is clear of it
@@ -336,11 +339,10 @@ SH_CLAIM_CHART_KB equ 19            ; stage 2.x: the live Chart Column window's
                                      ; bytes/row (already a multiple of 4, so
                                      ; the BMP export below needs no row
                                      ; padding logic) = 19200 bytes -> 19KB.
-                                     ; This is Sheet's 5th claim (own region +
-                                     ; cellseg/txtseg/stgseg/bordseg), so 6/8
-                                     ; of MEM_OWNER_MAX WHEN THIS WAS WRITTEN.
-                                     ; The note table and CHART.OVL took the
-                                     ; last two: it is 8/8 now (81.2).
+                                     ; This is Sheet's 5th claim (after
+                                     ; cellseg/txtseg/stgseg/bordseg). SHEET
+                                     ; holds 8 of MEM_OWNER_MAX's 8 now; the
+                                     ; list is at the note table's header.
                                      ; No pixel-readback API exists anywhere in
                                      ; this OS (checked every OSAPI_GFX_*), so
                                      ; this buffer - not the screen - is the
@@ -640,9 +642,8 @@ SH_XFP_CAP       equ 64             ; distinct (format, border) pairs one file
 ; so "sheets" here are multiple grids living inside this ONE instance's
 ; existing three claims, distinguished by a sheet index folded into the
 ; cell record's own row field rather than by claiming more segments (the
-; kernel caps any one owner at MEM_OWNER_MAX=8 claims, and this package's
-; region already counts as one of them - three fresh claims per extra sheet
-; would run out fast). SH_ROWS needs exactly 14 bits (0..16383), leaving
+; kernel caps any one owner at MEM_OWNER_MAX=8 claims - three fresh claims per
+; extra sheet would run out fast). SH_ROWS needs exactly 14 bits (0..16383), leaving
 ; exactly 2 spare bits in that word for a sheet index - hence exactly
 ; SH_SHEETS=4, not a rounder number chosen for its own sake.
 SH_SHEETS    equ 4
@@ -925,7 +926,11 @@ SHM_FROMR1C1 equ 43                 ; name gather and the R1C1 part reader,
 SHM_SETEXT equ 44                   ; which the macro language calls and the
 SHM_MNAME  equ 45                   ; rest of this module uses too
 SHM_READRC equ 46
-SHM_N      equ 44                   ; a COUNT, not a max: sh_modc_ext does
+SHM_NOPEN  equ 47                   ; 81.102: the Note dialog and its
+SHM_NPAINT equ 48                   ; multi-line box (os88text.inc) - resident
+SHM_NKEY   equ 49                   ; room, and the box's only consumer
+SHM_NCLICK equ 50
+SHM_N      equ 48                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -963,6 +968,7 @@ sh_mverb:
     dw sh_m_mfind                                         ; macro plan wave 0
     dw sh_m_tor1c1, sh_m_fromr1c1, sh_m_setext, sh_m_mname  ; 81.94
     dw sh_m_readrc
+    dw sh_m_nopen, sh_m_npaint, sh_m_nkey, sh_m_nclick     ; 81.102
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1187,6 +1193,22 @@ sh_m_idclick:
     retf
 sh_m_idclose:
     call sh_idlg_close
+    clc
+    retf
+sh_m_nopen:                         ; 81.102
+    call sh_ndlg_open
+    clc
+    retf
+sh_m_npaint:
+    call sh_ndlg_paint
+    clc
+    retf
+sh_m_nkey:
+    call sh_ndlg_onkey
+    clc
+    retf
+sh_m_nclick:
+    call sh_ndlg_onclick
     clc
     retf
 sh_m_fdapply:
@@ -1903,6 +1925,9 @@ sh_x_sh_nt_get:                     ; 81.87: GET.NOTE
 sh_x_sh_macro_mfire:                ; 81.88: a menu item, from a macro
     call sh_macro_mfire
     retf
+sh_x_sh_note_load:                  ; 81.102: the Note dialog's open
+    call sh_note_load
+    retf
 sh_x_sh_nt_set:                     ; 81.89: NOTE
     call sh_nt_set
     retf
@@ -1967,6 +1992,7 @@ sh_ovshims:
     dw sh_x_sh_nt_set                                                ; 81.89
     dw sh_x_sh_mtab_calc                                             ; 81.95
     dw sh_x_sh_dbx_open                                              ; 81.96
+    dw sh_x_sh_note_load                                             ; 81.102
 sh_entry:
     push ax
     push dx
@@ -2083,6 +2109,13 @@ sh_entry:
     pop si
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
+    mov si, sh_defname                ; the document's NAME before the window:
+    mov di, sh_name                   ; the template's title is sh_ttlbuf, so
+    call sh_strcpy                    ; the first frame already says which
+    call sh_note_arg                  ; document it is (81.103). A document
+    call sh_title_sync                ; double-clicked in the Disk window is
+                                       ; NOTED here and READ at the first paint
+                                       ; - see sh_note_arg's header
     mov si, sh_tpl
     call OSAPI_WM_CREATE
     jc .fail
@@ -2150,12 +2183,6 @@ sh_entry:
                                        ; About... item instead, which put the
                                        ; same text somewhere nobody looks for
                                        ; it on this system.
-    mov si, sh_defname
-    mov di, sh_name
-    call sh_strcpy
-    call sh_note_arg                  ; a document double-clicked in the Disk
-                                       ; window. NOTED here, READ at the first
-                                       ; paint - see sh_note_arg's header
     clc
     jmp .out
 .fail:
@@ -3569,6 +3596,28 @@ sh_paint:
     pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; sh_repaint - SI = this window, the gfx lock held: the whole content again.
+;
+; IT ARMS ITS OWN CLIP REGION (81.105, upstream issue #152). Almost none of its
+; fifty callers is a W_PAINT - they are menu commands, dialog applies and edit
+; paths, which arrive with NO region armed (SPEC.md 11.3) - so the fill and
+; every glyph went onto the glass wherever they landed, over any window
+; stacked above SHEET. The Chart window is the one that shows it: shown, then
+; painted, then SHEET repainted UNDER it and over it, and 11.96's raise cache
+; banked the damage and carried it along on the next drag. One arm HERE, not
+; one per call site, so the fifty-first caller cannot forget.
+;
+; ...AND CLEARS IT the moment SHEET's own content is down. A region lives to
+; the next GFX_UNLOCK, and what these callers draw next is not SHEET's
+; content: the Chart window below (on top of SHEET, and repainted only when
+; wholly uncovered), a dialog, the pulldown hanging past the window. Clipped
+; to SHEET's region they would vanish. So only SHEET's own drawing is
+; clipped, and everything after runs exactly as it did. No caller is a
+; W_PAINT (a paint's region is the kernel's; walked, 81.105), so the clear
+; drops nothing it was handed. Wholly covered: nothing of SHEET is drawn, and
+; the chart and the caption still get their turn
+; -----------------------------------------------------------------------------
 sh_repaint:
     push ax
     push bx
@@ -3576,6 +3625,8 @@ sh_repaint:
     push dx
     mov bx, si
     call sh_geom
+    call OSAPI_WM_CLIP_SET              ; BX = this window: CF = 1 not one
+    jc .covered                         ; pixel of it is visible
     mov al, CWHITE
     call OSAPI_SET_COLOR
     mov ax, [sh_ox]
@@ -3588,6 +3639,8 @@ sh_repaint:
     dec dx
     call OSAPI_GFX_FILL
     call sh_drawall
+    call OSAPI_WM_CLIP_CLEAR
+.covered:
     cmp word [sh_chartwin], 0           ; stage 2.x: keep the live Chart Column
     je .nochart                         ; window in sync with every data-
     cmp byte [sh_chartdirty], 0         ; changing command that already routes
@@ -3609,11 +3662,63 @@ sh_repaint:
 .chartobscured:
     pop bx
 .nochart:
-    pop dx
-    pop cx
+    call sh_title_sync                  ; 81.103: Open, Save As, New and the
+    pop dx                              ; macro file commands all end here - an
+    pop cx                              ; EVENT, as 11.92 asks, never a paint
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; sh_title_sync - the window's caption says which document this is (81.103):
+; "Sheet - <sh_name>", Word's "Microsoft Word - <NAME>" convention. Composes
+; [sh_ttlbuf] only when it no longer matches [sh_name], and then tells the
+; kernel (OSAPI_WM_TITLE, AX = 0: "the bytes W_TITLE names changed"), which
+; redraws the 17-row strip and nothing else. Before the window exists
+; ([sh_ownwin] 0, the entry proc) it composes and tells nobody. Needs the
+; gfx lock when a window exists: sh_repaint's callers hold it. NOT FROM
+; sh_paint - 11.92: a caption changes on an event and never on a paint, and
+; wm_title_set's own clip handling would disarm a paint's armed region.
+; Preserves all registers
+; -----------------------------------------------------------------------------
+SH_TTL_PRE  equ 8                       ; "Sheet - "
+sh_title_sync:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, sh_name
+    mov di, sh_ttlbuf + SH_TTL_PRE
+    cmp byte [sh_ttlbuf], 0             ; never composed: the entry's call
+    je .compose
+.cmp:
+    mov al, [si]
+    cmp al, [di]
+    jne .compose
+    inc si
+    inc di
+    or al, al
+    jnz .cmp
+    jmp short .out                      ; unchanged: no strip redrawn
+.compose:
+    mov si, sh_ttl_pre
+    mov di, sh_ttlbuf
+    call sh_strcpy
+    mov si, sh_name
+    mov di, sh_ttlbuf + SH_TTL_PRE
+    call sh_strcpy
+    mov bx, [sh_ownwin]
+    or bx, bx
+    jz .out
+    xor ax, ax
+    call OSAPI_WM_TITLE
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+sh_ttl_pre:    db 'Sheet - ', 0
 
 ; -----------------------------------------------------------------------------
 ; sh_onclick - W_ONCLICK: CX=x, DX=y (screen), SI=window; gfx lock held
@@ -6539,6 +6644,20 @@ sh_drawstatus:
     je .indi
     mov si, sh_s_calcind
 .indi:
+    ; 81.104: Excel's two things here - a DIVIDER between the message and the
+    ; indicators, and the indicator drawn INVERTED. The divider is one vline
+    ; down the strip's interior; the pen is still the hline's black
+    mov ax, [sh_ox]
+    add ax, [sh_cw]
+    sub ax, SH_SB_DIVX
+    mov bx, [sh_oy]
+    add bx, [sh_ch]
+    sub bx, SH_SB_H
+    inc bx
+    mov dx, [sh_oy]
+    add dx, [sh_ch]
+    dec dx
+    call OSAPI_GFX_VLINE
     mov cx, [sh_ox]
     add cx, [sh_cw]
     sub cx, 88
@@ -6546,7 +6665,24 @@ sh_drawstatus:
     add dx, [sh_ch]
     sub dx, SH_SB_H
     add dx, 4
-    call OSAPI_FONT_STR_XPARENT
+    ; the inverted box: a 1px frame JUST OUTSIDE the run, then the run white
+    ; on black, OPAQUE (SPEC.md 6.6) - no pixel of the box is written twice,
+    ; and this was one of the file's transparent calls, so the registry
+    ; goes 17 -> 16
+    push cx
+    push dx
+    call OSAPI_FONT_WIDTH             ; AX = the indicator's width
+    mov bx, dx
+    dec bx                            ; y1 = the run's top - 1
+    add dx, 8                         ; y2 = its bottom + 1
+    xchg ax, cx                       ; CX = width, AX = x
+    add cx, ax                        ; x2 = x + width
+    dec ax                            ; x1 = x - 1
+    call OSAPI_GFX_FRAME
+    pop dx
+    pop cx
+    mov ax, (CBLACK << 8) | CWHITE    ; AL = ink, AH = ground
+    call OSAPI_FONT_RUN
 
     pop si
     pop dx
@@ -8171,7 +8307,7 @@ sh_mfire:
 .fm4:
     cmp al, 4
     jne .fm5
-    call sh_ndlg_open
+    call sh_ndlg_open_r
     jmp .out
 .fm5:
     cmp al, 5
@@ -16618,12 +16754,67 @@ SH_NDLG_H    equ SH_NDLG_BY2 + SH_DLG_BMARG + TITLE_H + 1   ; the text box is
 
 sh_ndlg_tpl:
     dw 0, 0, SH_NDLG_W, SH_NDLG_H
-    dw sh_s_ndlg_title, sh_ndlg_paint, sh_ndlg_onkey, sh_ndlg_onclick
+    dw sh_s_ndlg_title, sh_ndlg_paint_r, sh_ndlg_onkey_r, sh_ndlg_onclick_r
 
 sh_s_ndlg_title: db 'Note', 0
 sh_s_ndlg_cell:  db 'Cell:', 0
 sh_s_ndlg_ok:    db 'OK', 0
 sh_s_ndlg_can:   db 'Cancel', 0
+
+; 81.102: THE ENGINE IS IN CHART.OVL, with os88text.inc - the box's only
+; consumer - and these are its resident doors. The template, its strings
+; (the kernel and FONT_STR read them through DS) and sh_note_load (Paste
+; uses it too) stay here. The open door forces the module in before the
+; window exists, 81.71.5.1's invariant, and installs the close negotiator:
+; the kernel's close box only HID this window (75.1), so [sh_noteopen]
+; stayed set and Formula > Note refused for the session - 81.100.1's
+; defect, in the one dialog that pass did not look at
+sh_ndlg_open_r:
+    push bp
+    mov bp, SHM_NOPEN
+    call ch_ovcall
+    pop bp
+    jnc .out
+    mov word [sh_msg], sh_s_noovl
+.out:
+    push ax
+    mov ax, sh_ndlg_cls_r
+    SH_ONCLOSE sh_ndlg_win
+    pop ax
+    ret
+sh_ndlg_paint_r:
+    push bp
+    mov bp, SHM_NPAINT
+    call ch_ovcall
+    pop bp
+    ret
+sh_ndlg_onkey_r:
+    push bp
+    mov bp, SHM_NKEY
+    call ch_ovcall
+    pop bp
+    ret
+sh_ndlg_onclick_r:
+    push bp
+    mov bp, SHM_NCLICK
+    call ch_ovcall
+    pop bp
+    ret
+; the close box is Cancel: the edit copy is dropped, the table untouched
+sh_ndlg_cls_r:
+    push bx
+    mov bx, [sh_ndlg_win]
+    mov word [sh_ndlg_win], 0
+    mov byte [sh_noteopen], 0
+    or bx, bx
+    jz .gone
+    call OSAPI_WM_DESTROY
+.gone:
+    pop bx
+    stc
+    ret
+
+section SH_MODSEC                      ; 81.102: the Note dialog, CHART.OVL
 
 ; -----------------------------------------------------------------------------
 ; sh_ndlg_open - load the selected cell's note into the edit buffer and put
@@ -16644,10 +16835,10 @@ sh_ndlg_open:
     mov bx, [sh_selrow]
     mov [sh_noterow], bx
     mov byte [sh_notetext], 0          ; no note = an empty box, not stale text
-    call sh_nt_get
+    SHOUT sh_nt_get
     jnc .nonote
     mov si, ax                         ; ax = the text's offset in the arena
-    call sh_note_load
+    SHOUT sh_note_load
 .nonote:
     mov si, sh_notebox                 ; the field, over the buffer
     mov word [si + TX_BUF], sh_notetext
@@ -16690,6 +16881,8 @@ sh_ndlg_open:
 ; A byte-at-a-time copy through ES rather than a rep movsb, so DS is never
 ; changed at all - the alternative wants DS pointing at the claim, and every
 ; sh_* symbol in this file is DS-relative.
+section .text                          ; sh_note_load stays: Paste uses it too
+
 ; -----------------------------------------------------------------------------
 sh_note_load:
     push ax
@@ -16721,6 +16914,8 @@ sh_note_load:
 
 ; -----------------------------------------------------------------------------
 ; sh_ndlg_paint - SI = the dialog window
+section SH_MODSEC
+
 ; -----------------------------------------------------------------------------
 sh_ndlg_paint:
     push ax
@@ -16744,14 +16939,14 @@ sh_ndlg_paint:
     call OSAPI_FONT_STR_XPARENT
     mov di, sh_tbuf                     ; the reference, built the same way the
     mov ax, [sh_notecol]                ; formula bar's own name box builds it
-    call sh_colname
+    SHOUT sh_colname
     mov si, sh_colbuf
-    call sh_strcpy_to_di
+    SHOUT sh_strcpy_to_di
     mov ax, [sh_noterow]
     inc ax
-    call sh_itoa
+    SHOUT sh_itoa
     mov si, sh_numbuf
-    call sh_strcpy_to_di
+    SHOUT sh_strcpy_to_di
     mov cx, [sh_ndlg_ox]
     add cx, SH_NDLG_BX1 + 48
     mov dx, [sh_ndlg_oy]
@@ -16789,7 +16984,7 @@ sh_ndlg_paint:
     mov bx, sh_ndlg_rect
     mov si, sh_s_ndlg_ok
     mov di, OS88UI_DEF
-    call os88ui_btn
+    SHOUT os88ui_btn
     mov ax, [sh_ndlg_oy]                ; Cancel - same x, two new y's
     add ax, SH_NDLG_CAY1
     mov [sh_ndlg_rect+2], ax
@@ -16799,7 +16994,7 @@ sh_ndlg_paint:
     mov bx, sh_ndlg_rect
     mov si, sh_s_ndlg_can
     xor di, di
-    call os88ui_btn
+    SHOUT os88ui_btn
 
     pop di
     pop si
@@ -16903,11 +17098,11 @@ sh_ndlg_apply:
     mov ax, [sh_notecol]
     mov bx, [sh_noterow]
     mov si, sh_notetext
-    call sh_nt_set                      ; CF=1 = table or arena full. Silent,
+    SHOUT sh_nt_set                      ; CF=1 = table or arena full. Silent,
                                         ; the same scope limit sh_bdlg_apply
                                         ; documents for a full border table.
     mov si, [sh_ownwin]
-    call sh_repaint
+    SHOUT sh_repaint
     pop si
     pop bx
     pop ax
@@ -16929,6 +17124,8 @@ sh_ndlg_close:
     pop bx
     pop ax
     ret
+
+section .text
 
 ; =============================================================================
 ; DATA ▸ FORM (SPEC.md 81.71.5) - one record at a time, in a dialog.
@@ -24523,11 +24720,13 @@ sh_bt_get:
 ; arena fills, sh_txt_append returns CF=1 and the edit is refused rather than
 ; half-applied.
 ;
-; This is Sheet's 7th claim of MEM_OWNER_MAX's 8 (own region + cellseg/txtseg/
-; stgseg/bordseg/chartseg/noteseg). "So there is exactly one left" stood here
-; and IS NO LONGER TRUE: 82.16 spent it on CHART.OVL's claim, taken at start-up
-; with the rest. SHEET holds 8 OF 8 and the kernel refuses a ninth
-; (kernel/memory.inc's MEM_OWNER_MAX). See 81.2.
+; SHEET HOLDS 8 OF MEM_OWNER_MAX's 8, and the kernel refuses a ninth. The
+; eight: cellseg, txtseg, stgseg, bordseg (the border table with this note
+; table carved into it, 81.94), chartseg, undoseg, CHART.OVL's and, on the
+; first macro, MACRO.OVL's. THE REGION IS NOT ONE OF THEM, which this comment
+; and three others said it was until 81.102: its record's owner is the
+; INSTANCE SLOT, while every data claim's owner word is the region's SEGMENT
+; (kernel/memory.inc's mem_own), and the cap counts owner words that match.
 ; =============================================================================
 
 ; sh_nt_findcell - binary search for (col,row); in AX=col,BX=row;
@@ -50777,7 +50976,7 @@ sh_strcpy_to_di:
 ; =============================================================================
 sh_tpl:
     dw 60, 40, 560, 380
-    dw sh_ttl, sh_paint, sh_onkey, sh_onclick
+    dw sh_ttlbuf, sh_paint, sh_onkey, sh_onclick
 
 ; The EMPTY kernel menu set (SPEC.md 12.2), same idea as apps/word/word.asm's
 ; wd_menus0: zero real menus, but its AM_NAME still puts 'Sheet' in the
@@ -50830,12 +51029,12 @@ sh_it_note:      db 'Note...', 0
 sh_it_goto:      db 'Goto...', 0
 sh_it_find:      db 'Find...', 0
 
-; 81.75: the window title and the kernel menu bar's AM_NAME. The PACKAGE name
-; in OS88_HEADER is PLAN; these two are what the user reads, so they have to
-; agree with it - a window captioned "Sheet" launched from PLAN.O88 is two
-; things answering to one name, which is the rule (73.12) this build exists
-; to keep on the right side of.
-sh_ttl:        db 'Sheet', 0
+; 81.75: the kernel menu bar's AM_NAME, and (81.103) the prefix of the window
+; title, which is sh_ttl_pre + the document's name in sh_ttlbuf now. The
+; PACKAGE name in OS88_HEADER is PLAN; these are what the user reads, so they
+; have to agree with it - a window captioned "Sheet" launched from PLAN.O88 is
+; two things answering to one name, which is the rule (73.12) this build
+; exists to keep on the right side of.
 sh_s_appname:  db 'Sheet', 0
 sh_m_file:     db 'File', 0
 sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas
@@ -52603,7 +52802,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; conventions (caller owns the block, passed in SI; no storage of its own).
 ; First consumer: Formula > Note..., which is Excel 2.1's cell notes and the
 ; first place in this app where free text can be typed at all.
-%include "os88text.inc"
+section SH_MODSEC                      ; 81.102: CHART.OVL, with its only
+%include "os88text.inc"                ; consumer, the Note dialog
+section .text
 
 ; stage 2.x: Data > Chart Column.../Export Chart as BMP...'s shared
 ; rasterizer + BMP writer - see that file's own header comment for the
@@ -52627,7 +52828,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9123                     ; +3 for 81.98's menu save-under;
+    OS88_BSS 9148                     ; +21 for 81.103's window caption;
+                                       ; +4 for 81.102's sh_note_load vector;
+                                       ; +3 for 81.98's menu save-under;
                                        ; +1 for 81.96.2's close-box byte;
                                        ; +1 for 81.97's document kind;
                                        ; +60 for 81.96's DIALOG.BOX: the
@@ -53708,7 +53911,7 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 149
+SH_NVEC       equ 150
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
@@ -53716,7 +53919,8 @@ sh_v_sh_macro_mfire          equ sh_v_sh_nt_get + 4
 sh_v_sh_nt_set               equ sh_v_sh_macro_mfire + 4
 sh_v_sh_mtab_calc            equ sh_v_sh_nt_set + 4
 sh_v_sh_dbx_open             equ sh_v_sh_mtab_calc + 4
-sh_v_end      equ sh_v_sh_dbx_open + 4
+sh_v_sh_note_load            equ sh_v_sh_dbx_open + 4
+sh_v_end      equ sh_v_sh_note_load + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
@@ -54010,7 +54214,9 @@ sh_dockind    equ sh_dbx_cls + 1 ; 81.97: byte, 1 = this is a
 sh_mbanked    equ sh_dockind + 1             ; 81.98: byte, the open
                                              ; dropdown's pixels are banked...
 sh_mbky2      equ sh_mbanked + 1             ; ...word, down to this row
-sh_bss_end        equ sh_mbky2 + 2
+sh_ttlbuf     equ sh_mbky2 + 2               ; 81.103: the caption,
+                                             ; "Sheet - " + an 8.3 name + NUL
+sh_bss_end        equ sh_ttlbuf + SH_TTL_PRE + SH_FNAME_MAX + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

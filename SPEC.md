@@ -7395,6 +7395,18 @@ adapter can show — Hercules at 720 px is 90 bytes — plus the one byte a glyp
 the right-hand end spills into, rounded to even. A caller composing a narrower
 band simply uses fewer bytes of each row.
 
+**A package may set it smaller**, with `%define TY_BAND_STRIDE n` before the
+include (and `TY_BAND_ROWS` for the height). Both are macros of their own
+names, so `TY_STRIDE` and `TY_BROWS` stay `equ`s that any line can name,
+including lines above the include, as `tests/facetest` has. An odd stride is
+a build error: the unrolled compose stores words.
+
+**The override is a promise.** Nothing in the compose bounds the pen. The
+default relies on no screen being wider than 90 bytes; a smaller stride
+relies on the caller ending every run before (n − 1) × 8 pixels. SHEET's
+cells, at most 320 px, are the case it exists for: a stride of 42 takes the
+bss from 1,933 bytes to 1,133 (§81.102.1).
+
 **What this costs against the face it replaces**, and both halves are true:
 against `font_run` at an unaligned x — which is what every proportional pen
 is — a composed line is **2.68× cheaper**; against a byte-aligned 8×8 run,
@@ -104496,6 +104508,232 @@ hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
 and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
+
+### 81.105 `sh_repaint` arms its own clip region
+
+Upstream issue #152 (jggonz/os8088). `sh_repaint`, SHEET's whole-content
+redraw, drew with **no clip region armed**. Nearly none of its fifty callers
+is a `W_PAINT`: they are menu commands, dialog applies and edit paths, and
+those arrive with no region (§11.3). So the white fill and every glyph landed
+on the glass wherever they fell, including over any window stacked above
+SHEET.
+
+**Data ▸ Chart Column... shows it.** `sh_docmd_chart` creates the Chart
+window at (0, 0), over SHEET's top-left corner, shows it, paints it, and
+then calls `sh_repaint`. In this tree it looks different from the issue's
+account. `sh_repaint`'s own tail repaints a dirty, uncovered Chart's
+**content** after SHEET draws, so the content survived. The Chart's
+**frame**, which only the kernel draws and nothing redraws, lost its right
+and bottom edges to SHEET's fill. §11.96's raise cache then banks that
+damage and carries it along on the next drag, which is how the issue saw it.
+
+**The fix is one arm in one place, so a new caller cannot forget it.**
+`sh_repaint` calls `OSAPI_WM_CLIP_SET` on its own window before the fill
+(CF = 1, meaning SHEET is wholly covered, draws nothing). It calls
+`OSAPI_WM_CLIP_CLEAR` as soon as SHEET's content is down.
+
+**The clear is load-bearing.** A region lives until the next
+`OSAPI_GFX_UNLOCK`, and what these callers draw afterwards is not SHEET's:
+
+- the Chart's repaint in `sh_repaint`'s own tail (the Chart is *above*
+  SHEET);
+- a dialog;
+- a pulldown hanging past the window.
+
+Clipped to SHEET's region, all of those would vanish. Clearing instead
+drops nothing a caller was handed: every path from a paint callback was
+walked, including the overlay paints behind the `*_r` doors, and none
+reaches `sh_repaint`. The only caller that armed a region itself,
+`sh_abdismiss`, draws nothing after.
+
+A side benefit: a dialog's OK that repaints SHEET before the dialog closes
+no longer flashes SHEET's fill across the dialog.
+
+**What remains exposed.** SHEET's narrower draws (the selection repaint,
+the status bar, the menu bar) are still unclipped. They matter less than
+it sounds, because every click or key reaches SHEET only after the window
+manager has **raised** it, so nothing is above it then. The windows that
+can be above SHEET while it draws are the ones it just opened itself (the
+Chart, dialogs) and a timer's or a macro's work. The issue's wider point,
+sweeping other packages for a bare content fill with nothing armed, is its
+own job and is not done here.
+
+**Evidence:** `tests/sheetclip.py`, VGA, off the card's frame:
+
+- SHEET's ink is photographed where the Chart will land;
+- Data ▸ Chart Column opens the Chart over it;
+- in the overlap, SHEET's black pixels are not painted back over the Chart;
+- the Chart's frame is whole: **398 of 398** edge pixels black.
+
+Without the arm: **37 of 398**. The first version checked only the
+content, and passed the unfixed build. The frame is where this tree shows
+the defect, which is why the frame check is there. Cost: 12 bytes.
+
+### 81.104 The status bar's divider, and NUM inverted
+
+Gap #3 of the 1.8 look report. Excel 2.1d's status bar has a vertical
+**divider** between the message and the indicator block, and draws **NUM
+inverted**, white in a black box. SHEET had neither.
+
+- **The divider** is one `OSAPI_GFX_VLINE` down the strip's interior, at
+  `right − SH_SB_DIVX` (96), which is 8 px clear of the indicator at
+  `right − 88`.
+- **The indicator** (NUM, or CALCULATE when Manual mode has left the sheet
+  stale) is a 1-pixel `OSAPI_GFX_FRAME` **just outside** the text, then
+  `OSAPI_FONT_RUN`, white on black. The ring touches no pixel of the run, so
+  nothing in the box is written twice.
+
+This was one of `sheet.asm`'s transparent text calls, so the §6.6 registry
+goes **17 → 16**, and that line's backlog note now names only the
+message. The message still sits over the strip's fill; §6.6.2 leaves it in
+the backlog, because making it opaque costs more primitive calls than it
+saves on this bar.
+
+**Gap #2, the plus-shaped pointer, is NOT done, and here is why.**
+`OSAPI_WM_CURSOR` (§7.2) dresses a window's **whole content**, and the
+kernel decides the shape with `wm_hit`. SHEET's menu bar, formula bar and
+scroll bars are inside its content, and Excel shows the arrow over all of
+those. So a cross there would look less like Excel than the arrow does.
+Doing it properly needs a content sub-rectangle for the shape: a kernel
+mechanism, and the owner's to decide on.
+
+**Evidence:** `tests/sheetstatus.py` runs on the 1-bit CGA, where an
+inverted box has to survive, and reads SHEET's own geometry words:
+
+- the divider column is black on every interior row, and is one column
+  wide;
+- the ring is solid black;
+- inside it the glyphs are white, and every cell's column 7 (the space
+  between letters) is black;
+- "Ready" is still black on white.
+
+With the divider removed and the run drawn plain, the divider and
+inversion checks fail. Cost: 63 bytes.
+
+### 81.103 The window names the document
+
+Gap #1 of the 1.8 look report: the caption always read "Sheet", so the open
+file's name appeared nowhere on the screen. Excel's window names its
+document. SHEET's caption is now **`Sheet - <NAME>`**, which is Word's
+`Microsoft Word - <NAME>` convention (§68). A new sheet reads
+`Sheet - SHEET1.SLK`, since `sh_defname` is SHEET's equivalent of Excel's
+"Sheet1".
+
+**The mechanism is Word's too.** The window template's title points at a
+resident buffer, `sh_ttlbuf` (21 bytes of bss). `sh_title_sync` composes it
+from `[sh_name]` only when the two differ, then calls `OSAPI_WM_TITLE` with
+AX = 0 ("the bytes `W_TITLE` names changed"). That redraws the 17-row strip
+and nothing else (§11.92).
+
+**It is called from two places, and one place it is not:**
+
+- **At entry, before `OSAPI_WM_CREATE`.** The name seed (`sh_defname`, then
+  `sh_note_arg`) moved ahead of the create for this, so the first frame
+  already carries the right caption. With no window yet, it composes and
+  tells nobody.
+- **At the end of `sh_repaint`.** Open, Save As, New and the macro file
+  commands all end there, and each is an event with the lock held.
+- **Not from `sh_paint`**, although that is where a double-clicked document
+  is actually read (`sh_deferred_ld`). §11.92 says a caption changes on an
+  event and never on a paint, and `wm_title_set`'s own clip handling would
+  disarm a paint's armed region. The name was already known at entry,
+  because `sh_note_arg` copies it without touching the disk, so nothing
+  needs the paint path.
+
+`sh_ttl` ("Sheet") lost its only user and is gone. The prefix is
+`sh_ttl_pre`. Cost: 75 bytes of image and 21 of bss.
+
+**Evidence:** `tests/sheettitle.py` reads the caption the way the kernel
+does, through the record's `W_TITLE` in the window's own segment:
+
+- a double-clicked `LEDGER.SLK` is named from the start;
+- File ▸ New renames the caption to `SHEET1.SLK`;
+- the caption strip's pixels changed, so it was redrawn, not only recorded.
+
+Every test that finds SHEET's window by title matches a prefix
+(`startswith`), so the longer caption breaks none of them; checked by
+grep, and by the `sheet*` soak rows.
+
+### 81.102 Resident room: the Note dialog and its box move to `CHART.OVL`
+
+Stage 0 of `docs/plans/SHEET-PROPORTIONAL-PLAN.md`, the part that needed no
+owner's decision. §81.101 had left **97 bytes** under `APP_MAX_SIZE`, and
+anything more that SHEET draws needs room.
+
+**Resident 52,220 → 50,630: 1,590 bytes.** With bss 9,127, that leaves
+**1,683** of 61,440.
+
+**What moved** is the one block that is both large and self-contained:
+
+- **Formula ▸ Note's engine**: open, paint, key, click, apply and close.
+- **`apps/os88text.inc`**, the multi-line box. This is 1,280 bytes, and the
+  Note dialog is its only consumer in SHEET.
+
+The rule is §81.62's: what runs least, and what takes the fewest new doors.
+The box calls nothing but itself and the kernel, and every resident routine
+the dialog calls already had a vector except `sh_note_load`. That one gained
+a vector (`SH_NVEC` 149 → 150, +4 bss).
+
+**What stays resident, and why:**
+
+- **the window template and its four strings.** The kernel reads the
+  template, and FONT_STR reads the strings, through DS, which is the
+  package.
+- **`sh_note_load`.** Paste uses it too.
+- **four doors** (`sh_ndlg_open_r`, `_paint_r`, `_onkey_r`, `_onclick_r`)
+  on verbs `SHM_NOPEN` to `SHM_NCLICK` (47–50, `SHM_N` 44 → 48).
+
+The open door forces the module in before the window exists (81.71.5.1's
+invariant). **`CH_OVKB` goes 46 → 48**: CHART.OVL is 47,364 bytes, which is
+heap and not image.
+
+**A defect came out of it: the Note dialog's close box.** It was §81.100.1's
+defect again, in the one engine that pass did not look at. The kernel's
+close box only hides the window, so `[sh_noteopen]` stayed set and
+Formula ▸ Note refused for the rest of the session. The open door now
+installs `sh_ndlg_cls_r`, which takes the close as Cancel (the edit copy is
+dropped and the note table is untouched) and answers CF = 1.
+
+**Not done here:** carving the chart and undo claims into one. That is the
+plan's §8 question 2, which is the owner's.
+
+**Evidence:** `tests/sheetdlgclose.py` gains the Note arms (11 checks):
+
+- the dialog opens from the module;
+- typed text and OK store the note;
+- reopening loads it back, which exercises every door, the new vector and
+  the box's key path;
+- the close box clears both words, and the dialog opens again.
+
+With the negotiator's install removed, the two close-box checks fail. The
+dialog was also looked at, to confirm the box, label and buttons paint from
+the module. All 49 `sheet*` soak rows pass on this build.
+
+#### 81.102.1 The rest of stage 0 that needed no decision
+
+**The band's size is SHEET's to set.** `apps/os88type.inc` takes
+`TY_BAND_STRIDE` and `TY_BAND_ROWS` (§6.3). The five packages that include
+it today set neither, so fontview, cword, scribe, word and `tests/facetest`
+assemble **byte-identical** to before; each was compared against its
+pre-change binary. `tests/facetest` assembled with a stride of 42 takes the
+bss from 1,933 to 1,133 bytes (800 saved), and with 43 the build stops
+with the reason. SHEET does not include the library yet, so nothing in
+SHEET changes.
+
+**SHEET's claim count, measured from the kernel and corrected in four
+comments.** Four comments in `sheet.asm` said the package's region "counts
+as one of" `MEM_OWNER_MAX`'s eight. It does not:
+
+- a region's record is owned by the **instance slot**;
+- every data claim's owner word is the region's **segment**
+  (`kernel/memory.inc`'s `mem_own`);
+- the cap counts only records whose owner word matches.
+
+The study's live `heapmap` count agreed. The eight are cellseg, txtseg,
+stgseg, bordseg (with the note table carved in), chartseg, undoseg,
+CHART.OVL's and, from the first macro, MACRO.OVL's. That is still 8 of 8,
+so a proportional face still needs a slot freed; that is the owner's
+question above.
 
 ### 81.101 Keyboard shortcuts — the modern set
 
