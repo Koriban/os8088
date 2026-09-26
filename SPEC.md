@@ -23566,9 +23566,11 @@ label**.
 
 ### 13.16 The IN-WINDOW MENU — the fifth shared element (`OS88UI_MENU`)
 
-**PARTIAL, and deliberately: the GEOMETRY has moved and nothing else has yet.**
-`docs/plans/UI-MENU-ELEMENT.md` is the costing and the wave plan; this section
-is the contract for what exists.
+**Complete for Word: all three waves have landed** (§13.16.2–§13.16.4 are
+the geometry, the drawing and the gesture), and Word is its one user.
+`docs/plans/UI-MENU-ELEMENT.md` is the costing and the wave plan; this
+section is the contract for what exists. **Sheet has not converted, and
+§81.109.1 is why**, measured on 2026-09-25.
 
 The kernel's bar is the desktop's and `MENU_APPMAX` is five titles, so a
 package whose menus outgrow that — or which is imitating a program that put
@@ -104508,6 +104510,90 @@ hang right into `H2`; `D3` centred reaches `C3` and `E3` and stops before `B3`
 and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
+
+### 81.109 The pulldowns carry Excel's group separators
+
+Gap #12 of the 1.8 look report. Excel 2.1d draws a line between the groups
+of every menu, and SHEET drew none.
+
+**The shape is a HAIRLINE inside the existing 12 px pitch**, which was the
+owner's choice over Word's 5 px separator band. The line sits at
+`row_top + 10`: two clear pixel rows below the glyph, one above the next
+row. No row moves, so each row's y position, the hit test, the save-under
+rect, the panel height (`12 × n + 4`) and every gate that clicks a row by
+its pitch are all unchanged. About 34 gate files click that way, one of
+them the owner's own work in progress.
+
+**The groups are a MASK, not rows.** `sh_msep` holds one word per built-in
+menu, in `sh_mtab`'s order, with bit *i* meaning "a line after row *i*". A
+`times` pair holds its length to `SH_MENU_N`, and the bits are built from
+the named row constants where the rows have names (`SH_EI_*`, `SH_OI_*`,
+`SH_MAI_*`, `SH_FI_REF`). Word makes a separator an item record. Here that
+would renumber every row after it, which is exactly the hazard §81.99's
+constants exist for. The mask renumbers nothing.
+
+`sh_msepdraw` runs **after** the rows, so a highlight redraw never loses a
+line; over the lit row it is black on black. A macro's custom bar (§81.95),
+and any menu after Help, has no lines.
+
+The groups are read off Excel's captures (`menu_*.png`):
+
+| Menu | Lines after |
+|---|---|
+| File | Open |
+| Edit | Undo, Paste Link, Insert |
+| Formula | Reference, Define Name, Note |
+| Format | Cell Protection, Column Width |
+| Data | Form, Set Criteria, Sort, Parse. The last one sets SHEET's own chart items apart |
+| Options | Freeze Panes, Protect Document |
+| Macro | Run |
+
+Sheets and Help have none. Cost: 107 bytes.
+
+**Evidence:** `tests/sheetmsep.py` (14 checks, CGA) holds each built-in
+menu open and reads SHEET's own panel words:
+
+- where a line is expected, the whole interior span at `row_top + 10` is
+  ink, and everywhere else that gap is paper;
+- every panel is exactly `12 × n + 4` tall.
+
+With the draw call removed, all seven line checks fail and the seven height
+checks still pass.
+
+#### 81.109.1 Why not the shared menu element
+
+The measurement the owner asked for before choosing. §13.16's element
+(`OS88UI_MENU`, Word's menus) was the "use the OS's own" option, and it
+loses for SHEET today:
+
+- **Resident cost: about +950 bytes net**, of the 1,355 free after §81.108:
+  - the element itself: 1,905 bytes, assembled into a package that already
+    has SHEET's other `os88ui.inc` controls;
+  - SHEET's own control code it would replace: −1,331 (bar, pulldown, hit
+    test, gesture, bank);
+  - about +270 for the item tables, at 8 bytes per item instead of a
+    2-byte pointer;
+  - about +100 for the hooks.
+
+  It cannot go in an overlay, because it near-calls the caller's hooks.
+- **Its save-under claims a heap block on every open** (`os88ui_mnbank` →
+  `OSAPI_MEM_CLAIM`). SHEET holds 8 of `MEM_OWNER_MAX`'s 8, so every one
+  would be refused, and SHEET would lose §81.98's save-under, which banks
+  into the staging claim SHEET already has. Adopting the element needs it
+  to take a bank from its caller first, with Word proved byte-identical.
+- **It does not do keyboard menus.** It draws the mnemonic underlines and
+  runs click-to-open, but Alt+letter and the arrow keys are Word's own
+  code. So it would not deliver gap #17 either.
+- SHEET's macro-built custom menus (§81.95) would need rewriting into the
+  element's record format.
+
+`UI-MENU-ELEMENT.md`'s figure, "Sheet can then delete ~1,382 bytes and stop
+repainting its whole content on every menu close", predates §81.98's
+save-under and §81.101's captions, and counts none of the above. It is
+corrected there. **When to revisit:** once the element takes a
+caller-supplied bank, and ideally once Word's keyboard handling has moved
+into it. Then SHEET would gain #17 with the conversion, instead of paying
+for a second copy.
 
 ### 81.108 Formula ▸ Reference, and F4
 

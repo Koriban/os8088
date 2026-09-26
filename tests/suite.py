@@ -4972,6 +4972,12 @@ SOAK = [
         "the panel covered, and the bank path lands on the same pixels as a "
         "full repaint - the A/B that caught the stale status line",
         needs=("marty",), serial=True),
+    Row("sheetmsep", "soak", py("tests/sheetmsep.py"), 400.0,
+        "SPEC.md 81.109: every built-in pulldown carries Excel's group "
+        "separators as a hairline at row_top + 10, exactly where sh_msep "
+        "says and nowhere else, and no panel grew - 12 * n + 4, so no row "
+        "moved",
+        needs=("marty",), serial=True),
     Row("sheetrefcyc", "soak", py("tests/sheetrefcyc.py"), 400.0,
         "SPEC.md 81.108: Formula > Reference and F4, Excel's own - the "
         "reference at the caret round A1 > $A$1 > A$1 > $A1 > A1, by key and "

@@ -7851,12 +7851,88 @@ sh_mdrop_draw:
     clc
     call OSAPI_GFX_PEN                 ; leave the pen live (its own "put it
                                         ; back" rule) for whatever draws next
+    call sh_msepdraw                   ; 81.109: the group lines, last
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; sh_msepdraw - the open pulldown's SEPARATORS (81.109): a 1px line in the gap
+; after each row sh_msep marks, as Excel groups its menus. A HAIRLINE IN THE
+; EXISTING PITCH and not Word's 5px band (the owner's choice): no row moves,
+; so a row's y, the hit test, the save-under rect and every test that clicks
+; by the 12px pitch are all exactly what they were. Row i's glyph is at
+; row_top + 0..7; the line sits at row_top + 10, two clear rows below it and
+; one above the next row's. Drawn AFTER the rows, so a highlight redraw never
+; loses one (over the lit row it is black on black). A custom bar's menus and
+; any past Help (81.95) have none. Preserves every register
+; -----------------------------------------------------------------------------
+sh_msepdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp word [sh_mtabp], sh_mtab
+    jne .out
+    mov bl, [sh_mopen]
+    cmp bl, SH_MENU_N
+    jae .out
+    xor bh, bh
+    shl bx, 1
+    mov si, [sh_msep + bx]              ; bit i: a line after row i
+    or si, si
+    jz .out
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov dx, [sh_mry1]
+    add dx, 2 + 10                      ; row 0's line
+    mov cx, [sh_mcnt]
+    dec cx                              ; never after the last row
+    jle .out
+.row:
+    shr si, 1
+    jnc .next
+    push cx
+    mov ax, [sh_mrx1]
+    inc ax
+    mov bx, [sh_mrx2]
+    dec bx
+    call OSAPI_GFX_HLINE                ; AX..BX at DX
+    pop cx
+.next:
+    add dx, SH_MI_H
+    loop .row
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; the lines, per built-in menu in sh_mtab's order: bit i = after row i.
+; Excel 2.1d's own groups, read off its captures (menu_*.png); SHEET's rows
+; that Excel lacks sit in the group they belong to, and Data's chart items -
+; SHEET's own - get a group of their own after Parse
+%define SH_SEP(r) (1 << (r))
+sh_msep:
+    dw SH_SEP(1)                                           ; File: New, Open |
+    dw SH_SEP(SH_EI_UNDO) | SH_SEP(SH_EI_PASTELK) | SH_SEP(SH_EI_INSERT) ; Edit
+    dw SH_SEP(SH_FI_REF) | SH_SEP(3) | SH_SEP(4)           ; Formula: | Define
+                                                           ; Name | Note |
+    dw SH_SEP(4) | SH_SEP(6)                               ; Format: | Row H,
+                                                           ; Col W | Justify
+    dw SH_SEP(0) | SH_SEP(5) | SH_SEP(6) | SH_SEP(8)       ; Data
+    dw SH_SEP(SH_OI_FREEZE) | SH_SEP(SH_OI_PROT)           ; Options
+    dw SH_SEP(SH_MAI_RUN)                                  ; Macro: | recorder
+    dw 0, 0                                                ; Sheets, Help
+sh_msep_end:
+    times ((sh_msep_end - sh_msep) / 2 - SH_MENU_N) db 0   ; one word a menu,
+    times (SH_MENU_N - (sh_msep_end - sh_msep) / 2) db 0   ; in sh_mtab's order
 
 ; -----------------------------------------------------------------------------
 ; sh_mitem_hit - CX,DX (screen-absolute) -> AL = item index, or SH_M_NONE

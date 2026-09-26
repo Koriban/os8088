@@ -1,7 +1,11 @@
 # The IN-WINDOW MENU as a shared element (`OS88UI_MENU`)
 
 **Status: ALL THREE WAVES LANDED. Word's in-window menu is the shared
-element.** SPEC.md 13.16 is the contract; Sheet is the open item (§1).
+element.** SPEC.md 13.16 is the contract; Sheet is the open item (§1) - and
+**§7's case for converting Sheet is out of date**: measured 2026-09-25
+(SPEC.md 81.109.1), converting costs Sheet about +950 resident bytes, and
+the element's per-open bank claim would be refused on a package at 8 of 8
+claims. See §7's note.
 **And the element got SMALLER afterwards**: the three combos this file treated
 as anchored lists are `os88ui_drop` records now (SPEC.md 68.2.3), so the
 anchored path and its two record words are gone - the note under §3's record
@@ -239,3 +243,14 @@ repainting its whole content on every menu close**. Across the two packages
 that is about -1,080 and one fewer body; in Word alone it is +300 and a
 standard control. Both numbers should be quoted, and the second one is the
 one that decides.
+
+> **Superseded for Sheet, 2026-09-25 (SPEC.md 81.109.1).** The "-1,382 and
+> stop repainting" above was true when written and is not now. Sheet banks
+> its own pulldown since §81.98 (so there is no whole-content repaint to
+> save), and its menu code has grown captions (§81.101) and custom menus
+> (§81.95). Measured against the tree: the element is 1,905 bytes
+> assembled, Sheet's replaceable control half is 1,331, and the
+> 8-byte-per-item tables add about 270. **Net about +950 for Sheet, not
+> -1,382.** And `os88ui_mnbank` claims a heap block per open, which Sheet,
+> at `MEM_OWNER_MAX`, would always be refused. Converting Sheet waits for
+> a caller-supplied bank.

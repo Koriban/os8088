@@ -119,7 +119,7 @@ Grouped by what they cost, with the most visible first in each group.
 | 9 | **Gridlines DOTTED** | solid | the most visible difference in the grid. Pattern lines cost more per edge, so price it on the 8088 first |
 | 10 | **Headers BOXED**: lines through the header row and column, and a corner box | letters and numbers float outside the grid, with no lines | |
 | 11 | **A selected range INVERTED** | a thick outline around the block | behaviour-visible; the redraw cost of inversion needs pricing |
-| 12 | **Menu separators** between item groups, in every menu | none | a separator is a row that is NOT an item, and Edit's rows dispatch by position (§81.99's named constants make it safe to do) |
+| 12 | **Menu separators** between item groups, in every menu | **done 2026-09-25 (SPEC §81.109):** Excel's groups, as a 1px hairline in the existing pitch (the owner's choice: no row moves) | the shared menu element was measured and declined for now (§81.109.1) |
 | 13 | Status bar describes the HIGHLIGHTED menu item ("Create new document", "Undo last command"), and a dialog's help hint | "Ready", or the last message | one string per menu item - 58 of them - which belong in a module |
 | 14 | Formula bar has a THIRD box, where ✗ and ✓ appear during entry | two boxes; no cancel or enter buttons | |
 | 15 | Radio dialogs frame their choices in a titled group box, with OK/Cancel stacked top-right | no group box, and OK/Cancel along the bottom | ONE engine (`sh_fdlg`) draws Alignment, Font, Calculation, New and the rest, so one change fixes them all. Number and Border already follow Excel |
