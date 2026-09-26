@@ -6446,7 +6446,7 @@ PL_FDLG_H      equ PL_FDLG_BTY2 + PL_DLG_BMARG + TITLE_H + 1
 
 pl_fdlg_tpl:
     dw 0, 0, PL_FDLG_W, PL_FDLG_H
-    dw 0, pl_fdlg_paint_r, 0, pl_fdlg_click_r
+    dw 0, pl_fdlg_paint_r, 0, 0    ; W_ONCLICK: os88ui_btninit's (20.5.1.3.3)
 
 ; Stage 2.x's Edit menu Insert.../Delete... reuse this same engine as kinds
 ; 3 and 4 - just a 2-item Row/Column pick instead of a 4-item format
@@ -6685,6 +6685,23 @@ pl_fdlg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [pl_fdlg_win], bx
+    push ax                            ; **THE GESTURE'S THREE SLOTS** (SPEC.md
+    push bx                            ; 20.5.1.3): the buttons fire on the
+    push si                            ; RELEASE, and the library takes the
+    push di                            ; press first
+    push dx
+    mov ax, bx
+    mov bx, pl_fdlg_btrec
+    call pl_btunlink                   ; off the list first: a re-open would
+    mov si, pl_fdlg_onup                ; otherwise link the record to itself
+    mov di, pl_fdlg_ondrag
+    mov dx, pl_fdlg_click_r             ; our own click work (rows / field)
+    call os88ui_btninit
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
     call OSAPI_WM_SHOW
 .out:
     pop di
@@ -6770,26 +6787,27 @@ pl_fdlg_paint:
     mov ax, [pl_fdlg_oy]
     add ax, PL_FDLG_BTY2
     mov [pl_fdlg_rect+6], ax
-    mov bx, pl_fdlg_rect
-    mov si, pl_s_fd_ok
-    mov di, OS88UI_DEF
-    SHOUT os88ui_btn
-    mov ax, [pl_fdlg_ox]
+    mov ax, [pl_fdlg_ox]               ; ...and Cancel into rect ONE, beside it
     add ax, 96
-    mov [pl_fdlg_rect], ax
+    mov [pl_fdlg_rect+8], ax
     mov ax, [pl_fdlg_oy]
     add ax, PL_FDLG_BTY1
-    mov [pl_fdlg_rect+2], ax
+    mov [pl_fdlg_rect+10], ax
     mov ax, [pl_fdlg_ox]
     add ax, 150
-    mov [pl_fdlg_rect+4], ax
+    mov [pl_fdlg_rect+12], ax
     mov ax, [pl_fdlg_oy]
     add ax, PL_FDLG_BTY2
-    mov [pl_fdlg_rect+6], ax
-    mov bx, pl_fdlg_rect
-    mov si, pl_s_fd_cancel
-    xor di, di
-    SHOUT os88ui_btn
+    mov [pl_fdlg_rect+14], ax
+    mov word [pl_fdlg_btrec+OS88UI_BT_RECTS], pl_fdlg_rect
+    mov word [pl_fdlg_btrec+OS88UI_BT_LABELS], pl_dlg_blfd
+    mov word [pl_fdlg_btrec+OS88UI_BT_FLAGS], pl_dlg_bflags
+    mov word [pl_fdlg_btrec+OS88UI_BT_N], 2
+    mov bx, pl_fdlg_btrec
+    mov al, 1
+    SHOUT os88ui_btn                    ; OK
+    mov al, 2
+    SHOUT os88ui_btn                    ; ...and Cancel
     pop di
     pop si
     pop dx
@@ -6797,6 +6815,13 @@ pl_fdlg_paint:
     pop bx
     pop ax
     ret
+
+; --- the dialogs' button groups (SPEC.md 20.5.1.3) ---------------------------
+; OK is index 1 and Cancel index 2 in both, so the FLAGS are shared outright:
+; OK carries the default ring and Cancel carries nothing.
+pl_dlg_bflags: dw OS88UI_DEF, 0
+pl_dlg_blfd:   dw pl_s_fd_ok,   pl_s_fd_cancel
+pl_dlg_blidlg: dw pl_s_idlg_ok, pl_s_idlg_can
 
 ; -----------------------------------------------------------------------------
 ; pl_fdlg_onclick - in: CX=x, DX=y (screen-absolute, same convention as
@@ -6815,25 +6840,8 @@ pl_fdlg_onclick:
     sub bx, dx                         ; bx = click y, content-relative
     pop cx
     sub cx, ax                         ; cx = click x, content-relative
-    cmp cx, 8
-    jb .checkcancel
-    cmp cx, 62
-    ja .checkcancel
-    cmp bx, PL_FDLG_BTY1
-    jb .checkcancel
-    cmp bx, PL_FDLG_BTY2
-    ja .checkcancel
-    jmp .doOK
-.checkcancel:
-    cmp cx, 96
-    jb .checkrows
-    cmp cx, 150
-    ja .checkrows
-    cmp bx, PL_FDLG_BTY1
-    jb .checkrows
-    cmp bx, PL_FDLG_BTY2
-    ja .checkrows
-    jmp .doCancel
+                                       ; (OK/Cancel are the library's press
+                                       ; now, and fire in pl_fdlg_onup)
 .checkrows:
     cmp cx, 8
     jb .out
@@ -6849,23 +6857,81 @@ pl_fdlg_onclick:
     mov [pl_fdlg_sel], ax
     mov si, [pl_fdlg_win]
     call pl_fdlg_paint
-    jmp .out
-.doOK:
-    call pl_fdlg_apply
-    call pl_fdlg_close
-    cmp byte [pl_savepend], 0         ; File Format's OK owes a Save As, and it
-    je .out                           ; runs only now that the format dialog's
-    mov byte [pl_savepend], 0         ; window is DESTROYED. Opening the file
-    mov si, [pl_ownwin]               ; dialog from inside apply would stack a
-    mov al, FDLG_SAVE                 ; second dialog on a window slot that is
-    SHOUT pl_dlg                       ; still in use, which is how one gets
-    jmp .out                          ; orphaned behind the other
-.doCancel:
-    call pl_fdlg_close
 .out:
     pop di
     pop si
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pl_fdlg_onup / pl_fdlg_ondrag - the release and the tracking edge (13.7/13.8.2)
+; -----------------------------------------------------------------------------
+pl_fdlg_onup:
+    push ax
+    push bx
+    push si
+    push di
+    mov bx, pl_fdlg_btrec
+    call os88ui_btnup                 ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    jz .uout
+    cmp al, 1
+    jne .ucancel
+    call pl_fdlg_apply
+    call pl_fdlg_close
+    cmp byte [pl_savepend], 0         ; File Format's OK owes a Save As, and it
+    je .uout                          ; runs only now that the format dialog's
+    mov byte [pl_savepend], 0         ; window is DESTROYED. Opening the file
+    mov si, [pl_ownwin]               ; dialog from inside apply would stack a
+    mov al, FDLG_SAVE                 ; second dialog on a window slot that is
+    SHOUT pl_dlg                       ; still in use, which is how one gets
+    jmp short .uout                   ; orphaned behind the other
+.ucancel:
+    call pl_fdlg_close
+.uout:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+pl_fdlg_ondrag:
+    push ax
+    push bx
+    mov bx, pl_fdlg_btrec
+    call os88ui_btndrag
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pl_btunlink - BX = a button record: take it OFF os88ui_btlist if it is on it.
+; Preserves all registers.
+;
+; os88ui_btninit PREPENDS its record every call, and a dialog re-opened calls
+; it again with the SAME record - whose NEXT would then point at itself, and a
+; press that has to walk past it would spin forever in os88ui_btnclick. So
+; every btninit here is preceded by this.
+; -----------------------------------------------------------------------------
+pl_btunlink:
+    push ax
+    push si
+    mov si, os88ui_btlist             ; SI -> the word that points at the
+.walk:                                ; current node (the head, then a NEXT)
+    mov ax, [si]
+    or ax, ax
+    jz .done                          ; not on the list
+    cmp ax, bx
+    je .unlink
+    mov si, ax
+    add si, OS88UI_BT_NEXT
+    jmp short .walk
+.unlink:
+    mov ax, [bx+OS88UI_BT_NEXT]
+    mov [si], ax
+.done:
+    pop si
     pop ax
     ret
 
@@ -7292,7 +7358,7 @@ PL_IDLG_H    equ PL_IDLG_CAY2 + PL_DLG_BMARG + TITLE_H + 1
 
 pl_idlg_tpl:
     dw 0, 0, PL_IDLG_W, PL_IDLG_H
-    dw pl_s_id_tgoto, pl_idlg_paint_r, pl_idlg_key_r, pl_idlg_click_r
+    dw pl_s_id_tgoto, pl_idlg_paint_r, pl_idlg_key_r, 0    ; W_ONCLICK: os88ui_btninit's
 ; The title above is only a PLACEHOLDER: pl_idlg_open overwrites
 ; [pl_idlg_tpl + WT_TITLE] with whichever of pl_s_id_t* the kind names, before
 ; OSAPI_WM_CREATE. WT_TITLE is a pointer TO the text, so the pointer has to go
@@ -7395,6 +7461,23 @@ pl_idlg_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [pl_idlg_win], bx
+    push ax                            ; **THE GESTURE'S THREE SLOTS** (SPEC.md
+    push bx                            ; 20.5.1.3): the buttons fire on the
+    push si                            ; RELEASE, and the library takes the
+    push di                            ; press first
+    push dx
+    mov ax, bx
+    mov bx, pl_idlg_btrec
+    call pl_btunlink                   ; off the list first: a re-open would
+    mov si, pl_idlg_onup                ; otherwise link the record to itself
+    mov di, pl_idlg_ondrag
+    mov dx, pl_idlg_click_r             ; our own click work (rows / field)
+    call os88ui_btninit
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
     call OSAPI_WM_SHOW
 .out:
     pop di
@@ -7458,20 +7541,25 @@ pl_idlg_paint:
     mov ax, [pl_idlg_oy]
     add ax, PL_IDLG_OKY2
     mov [pl_idlg_rect+6], ax
-    mov bx, pl_idlg_rect
-    mov si, pl_s_idlg_ok
-    mov di, OS88UI_DEF
-    SHOUT os88ui_btn
-    mov ax, [pl_idlg_oy]               ; Cancel - same x, two new y's
+    mov ax, [pl_idlg_rect]             ; Cancel: OK's x, two new y's
+    mov [pl_idlg_rect+8], ax
+    mov ax, [pl_idlg_rect+4]
+    mov [pl_idlg_rect+12], ax
+    mov ax, [pl_idlg_oy]
     add ax, PL_IDLG_CAY1
-    mov [pl_idlg_rect+2], ax
+    mov [pl_idlg_rect+10], ax
     mov ax, [pl_idlg_oy]
     add ax, PL_IDLG_CAY2
-    mov [pl_idlg_rect+6], ax
-    mov bx, pl_idlg_rect
-    mov si, pl_s_idlg_can
-    xor di, di
-    SHOUT os88ui_btn
+    mov [pl_idlg_rect+14], ax
+    mov word [pl_idlg_btrec+OS88UI_BT_RECTS], pl_idlg_rect
+    mov word [pl_idlg_btrec+OS88UI_BT_LABELS], pl_dlg_blidlg
+    mov word [pl_idlg_btrec+OS88UI_BT_FLAGS], pl_dlg_bflags
+    mov word [pl_idlg_btrec+OS88UI_BT_N], 2
+    mov bx, pl_idlg_btrec
+    mov al, 1
+    SHOUT os88ui_btn                    ; OK
+    mov al, 2
+    SHOUT os88ui_btn                    ; ...and Cancel
 
     pop di
     pop si
@@ -7522,43 +7610,48 @@ pl_idlg_onclick:
     push di
     mov si, pl_idlg_line               ; the field's rect is already
     SHOUT os88line_click                ; screen-absolute from the last paint
-    jnc .redraw
-    mov bx, [pl_idlg_win]
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT
-    pop dx
-    pop cx
-    sub cx, ax
-    sub dx, [pl_idlg_oy]
-    cmp cx, PL_IDLG_BTX1
-    jb .out
-    cmp cx, PL_IDLG_BTX2
-    ja .out
-    cmp dx, PL_IDLG_OKY1
-    jb .out
-    cmp dx, PL_IDLG_OKY2
-    jle .doOK
-    cmp dx, PL_IDLG_CAY1
-    jb .out
-    cmp dx, PL_IDLG_CAY2
-    jle .doCancel
-    jmp .out
-.redraw:
+    jc .out                            ; not the field: OK/Cancel are the
+.redraw:                               ; library's press, fired in pl_idlg_onup
     mov si, [pl_idlg_win]
     call pl_idlg_paint
-    jmp .out
-.doOK:
-    call pl_idlg_apply
-    call pl_idlg_close
-    jmp .out
-.doCancel:
-    call pl_idlg_close
 .out:
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pl_idlg_onup / pl_idlg_ondrag - the release and the tracking edge (13.7/13.8.2)
+; -----------------------------------------------------------------------------
+pl_idlg_onup:
+    push ax
+    push bx
+    push si
+    push di
+    mov bx, pl_idlg_btrec
+    call os88ui_btnup                  ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    jz .uout
+    cmp al, 1
+    jne .ucancel
+    call pl_idlg_apply
+.ucancel:
+    call pl_idlg_close
+.uout:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+pl_idlg_ondrag:
+    push ax
+    push bx
+    mov bx, pl_idlg_btrec
+    call os88ui_btndrag
     pop bx
     pop ax
     ret
@@ -16506,7 +16599,7 @@ pl_s_ext_txt:  db '.TXT', 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3151                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3199                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4
@@ -16766,9 +16859,12 @@ pl_fdlg_itemsptr equ pl_fdlg_oy + 2         ; this dialog's 4-item label
                                              ; array, for the row loop
 pl_fdlg_rowidx equ pl_fdlg_itemsptr + 2     ; the row loop's own index
 pl_fdlg_rowy   equ pl_fdlg_rowidx + 2       ; ...and that row's y
-pl_fdlg_rect   equ pl_fdlg_rowy + 2         ; 4 words: one button rect,
-                                             ; reused for OK then Cancel
-pl_fdlg_count  equ pl_fdlg_rect + 8         ; word: this kind's row count
+pl_fdlg_rect   equ pl_fdlg_rowy + 2         ; 8 words: TWO button rects,
+                                             ; OK then Cancel - a group's
+                                             ; rects must be contiguous
+pl_fdlg_btrec  equ pl_fdlg_rect + 16        ; the standard button record
+                                             ; (SPEC.md 20.5.1.3)
+pl_fdlg_count  equ pl_fdlg_btrec + OS88UI_BT_SIZE         ; word: this kind's row count
                                              ; (4 for Number/Align/Font, 2
                                              ; for Insert/Delete's Row/
                                              ; Column pick) - see
@@ -17015,12 +17111,13 @@ pl_idlg_buf       equ pl_idlg_kind + 1 ; PL_EDITMAX bytes: what is typed
 pl_idlg_line      equ pl_idlg_buf + PL_EDITMAX   ; OS88LINE_SZ bytes
 pl_idlg_ox        equ pl_idlg_line + 20
 pl_idlg_oy        equ pl_idlg_ox + 2
-pl_idlg_rect      equ pl_idlg_oy + 2   ; 4 words: one button rect
+pl_idlg_rect      equ pl_idlg_oy + 2   ; 8 words: OK's rect, then Cancel's
+pl_idlg_btrec     equ pl_idlg_rect + 16 ; the standard button record
 
 ; stage 3.0e: absolute references. Each scanner records whether the reference
 ; it is looking at pinned its column and/or its row with '$', and its adjuster
 ; then declines to move the pinned half - that refusal is the whole feature.
-pl_rw_absc        equ pl_idlg_rect + 8 ; byte: Insert/Delete's scanner
+pl_rw_absc        equ pl_idlg_btrec + OS88UI_BT_SIZE ; byte: Insert/Delete's scanner
 pl_rw_absr        equ pl_rw_absc + 1
 pl_cp_absc        equ pl_rw_absr + 1   ; byte: Copy/Paste + Fill's scanner
 pl_cp_absr        equ pl_cp_absc + 1

@@ -131,6 +131,12 @@ mn_entry:
     mov si, mn_tpl
     call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     jc .full
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
     mov si, mn_about                 ; ...and 'About Mines' above the Close the
@@ -967,7 +973,7 @@ mn_draw_status:
 ; every background task for as long as the reader left the credits up.
 
 ; -----------------------------------------------------------------------------
-; mn_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; mn_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ;

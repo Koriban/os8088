@@ -201,7 +201,7 @@ def main():
     # on a 1bpp adapter. This row then compared a solid canvas against an
     # alternating file and read 20,327 differing pixels of 51,260, which is
     # indistinguishable from the decoder bug it exists to catch and was filed
-    # as a pre-existing failure (docs/plans/HANDOFF-SOAK-FINDINGS.md F1).
+    # as a pre-existing failure.
     #
     # So: the logo itself. It is two colours, 39.4 sends each to a solid
     # class, and the docstring at the top of this file is true again.
@@ -272,7 +272,11 @@ def main():
         print("   blit x=%d y=%d w=%d h=%d" % (x, y, bw, bh))
         m.bp_exec()
         m.run()
-        os88marty.guest_sleep(m, 6.0)
+        # the rest of the load: the drive going quiet here, and the rows it
+        # blits after the first going still in the settle below - this was a
+        # blind six guest seconds in front of that settle
+        os88marty.quiesce(m, lambda: m.disk().get("reads"), guest=1.0,
+                          what="the picture to finish loading")
         mo.to(4, 4)
         os88marty.settle(m)
         w, h, fb = m.fbuf(card=0)

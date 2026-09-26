@@ -23,19 +23,19 @@ entirely its layout:
     lose - `os88disk.py` writes one only for a volume it was handed
     PACKAGES for, so a disk whose packages moved into a folder still gets
     one and a disk built from data alone gets none at all.
-  * WORD.OVL IS BESIDE WORD.O88.  Word resolves its overlay with
-    OSAPI_FILE_HERE/_GOTO in the package's own folder (SPEC.md 68.4), so
-    the two files are one unit: WORD.OVL in MEDIA/, or absent, is a Word
-    that launches and then refuses its own second segment on the first
-    menu command that needs it.  That failure is invisible on a host.
+  * THERE IS NO WORD.OVL.  Word's second segment is a PART inside
+    WORD.O88 now (SPEC.md 68.10), where it was a file that had to ride
+    beside the package - so a WORD.OVL on a disk is a stale build artefact
+    carried by a recipe nobody updated, and the next person to read that
+    disk's file list would reasonably conclude Word still needs it.
 
 WHAT THIS DELIBERATELY DOES NOT CHECK is which packages are on which disk.
 SPEC.md 24.6.1 is explicit that the membership list is a decision with a
 date on it, remade every time the geometry runs out; a gate that pinned it
 would fail on purpose every time the owner re-curated, which is the shape of
 a test people learn to edit rather than read.  So the assertions here are
-about the disks' SHAPE, plus the one membership fact that is a correctness
-requirement rather than a preference (WORD.OVL beside WORD.O88).
+about the disks' SHAPE, plus one membership fact that is not a preference
+(no WORD.OVL, which nothing reads any more).
 
 FAST, on t_image's argument: it reads the shipped images that every build
 already produces, costs milliseconds, and needs no emulator.
@@ -54,7 +54,7 @@ from t_image import Vol, read                             # noqa: E402
 # from the format rather than imported, so a change to the writer that
 # breaks the reader shows up here instead of agreeing with itself.
 ASC_MAGIC = b"OS88AC"
-ASC_HDR, ASC_ROW = 16, 80
+ASC_HDR, ASC_ROW = 16, 88          # a VERSION 2 row (SPEC.md 54.3.2)
 
 DISKS = ["office360.img", "network360.img", "games360.img"]
 
@@ -128,6 +128,10 @@ def main():
             check(blob[:6] == ASC_MAGIC, "%s: ASSOC.DAT is one" % img,
                   "the header is read from SPEC.md 54.7's format here rather "
                   "than imported from the writer", got=blob[:6], want=ASC_MAGIC)
+            check(len(blob) > 6 and blob[6] == 2,
+                  "%s: ASSOC.DAT is version 2" % img,
+                  "SPEC.md 54.3.2: the rows carry the glyph column, and the "
+                  "stride below is read against that", got=blob[6:7])
             napp = blob[7]
             check(napp == len(root_pkgs),
                   "%s: ASSOC.DAT caches all %d packages" % (img, len(root_pkgs)),
@@ -147,13 +151,11 @@ def main():
                   "is a package the cache will look for in a folder that is "
                   "not where it is", got=roots)
 
-        # 4. WORD.OVL beside WORD.O88, wherever WORD.O88 is.
-        if "WORD.O88" in tree:
-            check("WORD.OVL" in tree, "%s: WORD.OVL rides beside WORD.O88" % img,
-                  "the overlay is resolved with OSAPI_FILE_HERE/_GOTO in the "
-                  "package's OWN folder (SPEC.md 68.4), so a copy elsewhere - "
-                  "or none - is a Word that launches and then refuses its "
-                  "second segment on the first command that needs it")
+        # 4. no WORD.OVL: Word's second segment is a part of WORD.O88.
+        check("WORD.OVL" not in tree, "%s: no WORD.OVL" % img,
+              "SPEC.md 68.10 made Word's second segment a PART of WORD.O88 - "
+              "nothing reads a WORD.OVL, so this one is a recipe that was "
+              "not updated")
 
     check(seen == len(DISKS), "every category disk was read", got=seen)
     print("t_catdisk: %d disks" % seen)

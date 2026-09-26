@@ -64,7 +64,7 @@ Two rules bind every QEMU row. **It kills what it launched** — `make test`
 daemonises QEMU and the process outlives the script, so `tests/os88qemu.py`
 is the teardown every launcher owes and `tests/unit/t_qemuown.py` checks it is
 used. And **`tests/dispcp.py` drives QEMU rows too**, without `m.sym` or a
-cycle counter, so its waits there are host-clock loops (docs/plans/HANDOFF-SOAK-FINDINGS.md B5).
+cycle counter, so its waits there are host-clock loops.
 
 | reach for | when | why |
 |---|---|---|
@@ -97,6 +97,42 @@ drive returns short, and interrupt stack depth (SPEC.md §8) are still the
 GLaBIOS turns an `int 13h` around 1.61x faster than the 1982 ROM. Counts are
 fine on any machine; a timing is not. docs/MARTYPC-DEBUG.md's *Which of them
 a DISK number may come off* is the per-machine table.
+
+### …and the HARD DISK has no model at all, so its timings are not even askable
+
+Everything above is the **floppy**. MartyPC's hard disk has **no mechanical
+model whatsoever**: `ata_device.rs` carries one constant,
+`ATA_RESET_DELAY_US` = 200 ms, and `operation_read_sector` fetches the next
+sector the instant the buffer is exhausted with nothing gating it. There is
+no `05-hard-disk-timing.patch` beside the floppy's and there has never been a
+field check for one.
+
+So a hard-disk figure off MartyPC is **the guest CPU in the controller's
+option ROM and nothing else** — which for `os8088_xt_hdd`'s XTIDE Universal
+BIOS is a byte-at-a-time programmed-I/O loop on a 4.77 MHz 8088, measured at
+**25 KB/s written and 38 KB/s read**. The field machine's transport is an
+**ST-225 on an ST-11M** (docs/FIELD-MACHINES.md,
+docs/plans/completed/BOOT-PERF-PLAN.md §1), which does ~320 KB/s — **8–13x**,
+and that gap is the controller rather than the emulator being wrong.
+
+**The failure it produces is not a wrong number, it is a wrong CONCLUSION.**
+A session measured os8088's hibernate round trip on `os8088_xt_hdd` at **43.4
+guest seconds**, wrote it into a plan as the price of a feature, and put the
+resulting trade to the owner — who had just done the same operation on iron in
+about **four** (docs/reports/KERN-DOS-BUDGET-2026-09-13.md §3). The reading
+was exact, reproducible to 1.5% over three runs, and about the wrong machine.
+
+Counts, sector traffic, call shapes and `int 13h` batching off MartyPC's hard
+disk are exact as ever, and that is what `tests/hibernate.py` and the other
+hard-disk rows assert. **Milliseconds are not — and 86Box is where they go
+instead**, which is the one place this table's *"only where a person is
+watching"* row earns its keep rather than merely existing. 86Box models
+period controllers, and its **ST-225 has been checked against a real ST-225
+spinning in the field 5150** on exactly this operation: ~2 s emulated against
+~2 s on iron, plus a third reading off `8088VGA` with a WD controller that
+agrees (docs/reports/KERN-DOS-BUDGET-2026-09-13.md §3.2). So a hard-disk
+timing is asked of 86Box with somebody watching, or of the field machine —
+never of MartyPC, which has no answer to give.
 
 ### Which ROM did it actually load? Fingerprint it, never infer it
 
@@ -202,9 +238,14 @@ to fit in a table. **Read that section before running a tier on a schedule of
 your own** — running all three at every step is not caution, it is spending
 two hours to be told what thirteen seconds already said.
 
-The tiers are cumulative. **The runner FAILS the tier when the wall clock
-overruns its budget**, green rows or not: a suite with no ceiling grows until
-it is too slow to run. Each row also declares its own `secs` and is reported
+The tiers are cumulative. **The runner FAILS the tier when it overruns its
+budget**, green rows or not: a suite with no ceiling grows until it is too
+slow to run. The budget is CHARGED IN CPU - each row's own user+sys (wait4,
+so an emulator the row reaps is in it) laid out over the runner's lanes the
+way the runner lays them out, which is an idle box's wall clock. It was the
+wall clock itself until a `make` beside a soak failed `fast` with 46 rows
+green: contention stretches the wall and not the work, and a gate that fails
+for the box teaches everyone to ignore it. Each row also declares its own `secs` and is reported
 when it overruns them, so the row that got slower is named.
 
 ### When to run which tier
@@ -1153,9 +1194,12 @@ shape:
 - **A scratch disk is rebuilt, never cached on existence.**
 
 `--small` needs `os88sym.syms(("KERN_SMALL",), check=False)` and
-**`WIN_SIZE` 28, not 34** (`W_ONDRAG`, `W_ONTIMER`, `W_TIMER` are inside
-`%ifdef KERN_BIG`); read with 34 the table is plausible for slot 0 and
-nonsense from slot 1 on.
+**`WIN_SIZE` 65, not 72** (`W_ONDRAG`, `W_ONTIMER`, `W_TIMER` and the last
+byte, `W_PKIND`, are inside `%ifdef KERN_BIG`, so every per-slot field after
+`W_SIDE` sits at a different offset too); read with 72 the table is plausible
+for slot 0 and nonsense from slot 1 on. `tools/os88geom.py` carries both
+strides off `$OS88_DEFINES`, and `os88sym.wfield()` reads a field by name, so
+take them from there rather than writing a number down.
 
 ## Modelling the old machine from a fast one
 

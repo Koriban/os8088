@@ -58,8 +58,15 @@ import argparse
 import sys
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
+import os
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 
 from os88geom import (VID_CTX_SZ, VID_CTX_VX,          # noqa: E402
                       VID_CTX_VY, VID_CTX_KIND, VID_CTX_CH)
@@ -532,7 +539,16 @@ def launch_subject(m, mo, pri):
     bx, by = dispcp.win_rect(m, S, disk)[:2]
     dispcp.open_named(m, mo, S, os88marty.settle, bx, by, SUBJECT_FILE,
                       card=pri)
-    time.sleep(4)
+    # THE WINDOW, NOT A PAUSE: a launch reads the package and draws nothing
+    # while it does, so the answer is the window list and the wait is the
+    # guest's. It was a 4-second host sleep.
+    try:
+        os88marty.until(m, lambda mm: [x for x in dispcp.win_list(mm, S)
+                                       if x != disk],
+                        "%s's window" % SUBJECT_FILE, poll=0.2, limit=30.0)
+    except os88marty.MartyError:
+        pass
+    os88marty.settle(m, card=pri)
     other = [x for x in dispcp.win_list(m, S) if x != disk]
     if not other:
         sys.exit("%s did not launch out of %s" % (SUBJECT_FILE, SUBJECT_DIR))

@@ -127,10 +127,14 @@ spk_tone:
                                 ; never read
     pushf
     cli
-    mov al, 0xB6                ; ch2, lobyte/hibyte, mode 3 (square wave)
-    out 0x43, al
-    mov al, bl
-    out 0x42, al
+    cmp byte [snd_ch2mode], 1   ; ...AND ONLY WHEN A TONE IS NOT ALREADY
+    je .count                   ; SOUNDING (SPEC.md 34.1.1): the control word
+    mov al, 0xB6                ; RESTARTS the wave, so writing it on every
+    out 0x43, al                ; change makes a glide wobble instead of glide.
+.count:                         ; Mode 3 takes a new count at the end of the
+    mov al, bl                  ; current half-cycle, which is a clean retune,
+    out 0x42, al                ; and mode 3 is this chip's resting state -
+                                ; spk_pcm_idle latches it back (34.4)
     mov al, bh
     out 0x42, al
     in al, 0x61                 ; gate + speaker data on; upper bits kept
@@ -671,7 +675,27 @@ snd_disp_set:
 ; and sets snd_live LAST: the publish that arms snd_tick and the public
 ; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
 
-section .ovlw                  ; the boot overlay (SPEC.md 2.5): saving the boot
+%ifndef KERN_SMALL
+section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+                                ; whose window has room to spare
+%else
+section .ovl                    ; ...and kern_small: the BLOB half instead
+                                ; (SPEC.md 2.5.3.2, mouse_init's shape). The
+                                ; deadline is the same either way - kmain runs
+                                ; this long before drv_boot - so the choice is
+                                ; only about WHOSE bytes. On that kernel
+                                ; `.ovlw` is read onto the FAT window and the
+                                ; mount buffers, and SPEC.md 22.6.3 has just
+                                ; taken the LISTING out of that region: the
+                                ; 800 bytes it gave back are only 288 of heap
+                                ; while the overlay still needs the rest, so
+                                ; every body moved here turns one more of them
+                                ; into heap. `.ovl` is written LAST on
+                                ; purpose: tools/os88ovlchk.py reads SOURCE
+                                ; and cannot evaluate the %ifdef, so it files
+                                ; this block by the arm below - which is the
+                                ; build the check exists to protect
+%endif
                                 ; 61h bits and publishing snd_live happens
                                 ; once. snd_unhook below is the shutdown
                                 ; path and stays resident. Nothing here
@@ -778,7 +802,7 @@ osapi_snd_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_fm - the public FM request (slot 0x00F8, SPEC.md 20.3/34.2)
+; osapi_snd_fm - the public FM request (slot 0x00E3, SPEC.md 20.3/34.2)
 ;
 ; in:       AL = verb, and the verb's own registers. Verb 2's patch pointer
 ;           has ALREADY been staged into the kernel by the slot's X stub, so
@@ -821,9 +845,9 @@ snd_str_busy:
 osapi_snd_fm_x:
     cmp al, 2
     jne osapi_snd_fm            ; every verb but patch-load carries no pointer
-    push cx                     ; verb 2: stage the caller's 11 bytes into
-    push si                     ; the kernel, the dsk_get_dir idiom - the
-    push di                     ; driver runs with DS = its own segment and
+    push si                     ; verb 2: stage the caller's 11 bytes into
+    push di                     ; the kernel, the dsk_get_dir idiom - the
+    push cx                     ; driver runs with DS = its own segment and
     mov di, snd_patch           ; cannot reach the caller's
     mov cx, SND_PATCH_N
 .stage:
@@ -832,11 +856,11 @@ osapi_snd_fm_x:
     inc si
     inc di
     loop .stage
-    mov si, snd_patch
-    pop di
-    call osapi_snd_fm
+    pop cx                      ; CL = THE CHANNEL AGAIN, before the driver
+    pop di                      ; sees it (SPEC.md 34.2.2): the `loop` leaves
+    mov si, snd_patch           ; CX = 0, and every patch-load on every
+    call osapi_snd_fm           ; channel used to land on channel 0
     pop si
-    pop cx
     ret
 
 osapi_snd_fm:
@@ -856,7 +880,7 @@ osapi_snd_fm:
 %endif                          ; OS88_SNDCARD - the FM slot's live body ends
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_stream - the public stream request (slot 0x0100, SPEC.md 34.5)
+; osapi_snd_stream - the public stream request (slot 0x00EA, SPEC.md 34.5)
 ; in:       AL = verb, and the verb's own registers
 ; out:      AX = the verb's answer; DX = bytes consumed ON VERB 3 ONLY;
 ;           CF = 1 no streaming sink, or the driver refused
@@ -895,6 +919,8 @@ osapi_snd_stream:
     push bp
     cmp al, 3
     je .status
+    cmp al, 9                   ; verb 9 answers in DX as verb 3 does (SPEC.md
+    je .status                  ; 34.5.1)
     push dx                     ; every other verb gets its DX back
     mov bx, es                  ; BX = the CALLER'S SEGMENT, which verbs 5 and
                                 ; 6 copy to and from: the X stub put the
@@ -929,7 +955,7 @@ osapi_snd_stream:
 %endif                          ; OS88_SNDCARD - the stream slot's live body
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_tone - the public tone request (slot 0x00E8, SPEC.md 20.3)
+; osapi_snd_tone - the public tone request (slot 0x00D3, SPEC.md 20.3)
 ;
 ; in:       AX = frequency Hz (0 = off), CX = duration ticks (0 = until off),
 ;           DL = priority
@@ -977,7 +1003,7 @@ snd_req_inst:
     jmp inst_caller
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00F0, SPEC.md
+; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00DB, SPEC.md
 ;                  20.3/34.4 - live from Phase 2)
 ;
 ; in:       ES:SI = 8-bit unsigned mono samples, CX = count (<= 65535),

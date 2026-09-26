@@ -94,6 +94,19 @@
 
 %include "os88api.inc"
 
+; UPSTREAM's scroll-bar rates (13.10.5.4.1, merged 2026-09-26): the element
+; picks the 8088's or the 286's per machine. SH_SBIDLE is upstream's pause
+; commit (13.10.5.4.2), NOT taken yet - its timer has to share W_ONTIMER with
+; the macro engine's WAIT/ON.TIME/DIALOG.BOX (81.86, 81.96), one dispatcher
+; for both, and is a job of its own. SPEC.md 81.110 lists what the merge
+; took and what it did not
+%ifndef SH_SBRATE
+%define SH_SBRATE 2                 ; ticks between commits on an 8086/8088
+%endif
+%ifndef SH_SBRATE286
+%define SH_SBRATE286 2              ; ...and on a 286 or better
+%endif
+
     OS88_HEADER 'SHEET', sh_entry, 3   ; packs it, and an indirected one comes
                                         ; bit 0 = icon, bit 1 = the
                                         ; association block below
@@ -862,6 +875,44 @@ SH_NSEGW equ 8
 %macro SHOUT 1
     call far [sh_v_%1]
 %endmacro
+; 81.111: the button gesture's macros - the doors and the record of six dialog
+; engines, which sh_btfix attaches from each engine's own open routine
+; SH_BTDOORS eng, verb - the two gesture doors of a dialog's record: the
+; RELEASE asks the library what fired and hands it to the engine (AL = the
+; button, 1-based) through its verb; the DRAG only tracks
+%macro SH_BTDOORS 2
+sh_%1_onup_r:
+    push ax
+    push bx
+    mov bx, sh_%1_btrec
+    call os88ui_btnup                  ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    jz %%no
+    push bp
+    mov bp, %2
+    call ch_ovcall
+    pop bp
+%%no:
+    pop bx
+    pop ax
+    ret
+sh_%1_ondrag_r:
+    push bx
+    mov bx, sh_%1_btrec
+    call os88ui_btndrag
+    pop bx
+    ret
+%endmacro
+; SH_BTREC eng, n, labels - the record and its n rects
+%macro SH_BTREC 3
+    OS88UI_BTNREC sh_%1_btrec, sh_%1_btrects, %3, sh_dlg_bflags, %2
+sh_%1_btrects: times 4 * %2 dw 0
+%endmacro
+; SH_BTRECF eng, n, labels, flags - the same with a flags array of its own
+%macro SH_BTRECF 4
+    OS88UI_BTNREC sh_%1_btrec, sh_%1_btrects, %3, %4, %2
+sh_%1_btrects: times 4 * %2 dw 0
+%endmacro
 ; CHOUT - MACRO.OVL's calls into CHART.OVL (81.94): a verb, through the far
 ; pointer the resident half already keeps. BP carries it, as ch_ovcall's does
 %macro CHOUT 1
@@ -875,7 +926,8 @@ SHM2_MRESUME equ 1                  ; and a run starting or carrying on
 SHM2_DPAINT  equ 2                  ; 81.96: DIALOG.BOX's window - its paint,
 SHM2_DKEY    equ 3                  ; its keys and its clicks, through the
 SHM2_DCLICK  equ 4                  ; resident thunks (sh_dbx_*)
-SHM2_N       equ 5
+SHM2_DFIRE   equ 5                  ; 81.111: the released button fires
+SHM2_N       equ 6
 SH_DBX_EDLEN equ 33                 ; 81.96: an edit box's text, with its NUL
 SH_M2KB      equ 28                 ; MACRO.OVL's claim, KB: the module and the
                                      ; text files' tail (81.91.1)
@@ -945,7 +997,17 @@ SHM_NPAINT equ 48                   ; multi-line box (os88text.inc) - resident
 SHM_NKEY   equ 49                   ; room, and the box's only consumer
 SHM_NCLICK equ 50
 SHM_REFCYC equ 51                   ; 81.108: Formula > Reference's cycle
-SHM_N      equ 49                   ; a COUNT, not a max: sh_modc_ext does
+SHM_BDBTN  equ 53                   ; ...and the Border dialog's (and
+                                     ; Display's and Workspace's, 81.106)
+SHM_FIND   equ 58                   ; Formula > Find, moved out for room
+SHM_DFBTN  equ 57                   ; ...the Data Form's
+SHM_NDBTN  equ 56                   ; ...the Note dialog's
+SHM_LDBTN  equ 55                   ; ...the list dialog's
+SHM_IDBTN  equ 54                   ; ...the one-line dialog's
+SHM_FDBTN  equ 52                   ; 81.111: a dialog BUTTON FIRED (on the
+                                     ; release, the library's gesture): AL =
+                                     ; which, 1-based
+SHM_N      equ 56                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -985,6 +1047,8 @@ sh_mverb:
     dw sh_m_readrc
     dw sh_m_nopen, sh_m_npaint, sh_m_nkey, sh_m_nclick     ; 81.102
     dw sh_m_refcyc                                        ; 81.108
+    dw sh_m_fdbtn, sh_m_bdbtn, sh_m_idbtn, sh_m_ldbtn     ; 81.111
+    dw sh_m_ndbtn, sh_m_dfbtn, sh_m_find
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1125,6 +1189,7 @@ sh_modm_disp:
     retf
 sh_m2verb:
     dw sh_m2_pmacro, sh_m2_mresume, sh_m2_dpaint, sh_m2_dkey, sh_m2_dclick
+    dw sh_m2_dfire
 sh_m2verb_end:
     times ((sh_m2verb_end - sh_m2verb) / 2 - SHM2_N) db 0   ; sh_mverb's own
     times (SHM2_N - (sh_m2verb_end - sh_m2verb) / 2) db 0   ; assertion, here
@@ -1146,6 +1211,10 @@ sh_m2_dkey:
     retf
 sh_m2_dclick:
     call shm_dbclick
+    clc
+    retf
+sh_m2_dfire:
+    call shm_dbfire
     clc
     retf
 section SH_MODSEC
@@ -1209,6 +1278,256 @@ sh_m_idclick:
     retf
 sh_m_idclose:
     call sh_idlg_close
+    clc
+    retf
+sh_m_find:
+    call sh_docmd_find
+    clc
+    retf
+; -----------------------------------------------------------------------------
+; sh_docmd_find - Formula > Find... (in CHART.OVL since 81.111, reached
+; from MACRO.OVL as SHM_FIND): move the selection to the next cell whose
+; DISPLAYED TEXT contains what was typed.
+;
+; Displayed text, not stored value, and that is the useful definition rather
+; than the easy one: it finds 3.5 in a cell holding 3.5, "Total" in a label,
+; and - because a formula cell displays its result - 1003.5 in a cell holding
+; =A2+A3. A search over stored bytes would have matched none of those the way
+; a user expects, since a double's eight bytes look nothing like what is on
+; screen.
+;
+; Case-insensitive, and it wraps: the walk starts at the cell AFTER the
+; selection and comes back round to it, so Find repeated from the same box
+; steps through every match rather than sticking on the first.
+; -----------------------------------------------------------------------------
+sh_docmd_find:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov si, sh_idlg_buf
+    SHOUT sh_upcase_at
+    cmp byte [sh_idlg_buf], 0
+    je .none
+    ; the scan order is the CELL ARRAY's, which is sorted by row then column -
+    ; so "next" here means next in reading order, which is what it looks like
+    mov cx, [sh_ncells]
+    or cx, cx                         ; not jcxz: it is short-only and .none
+    jz .none                          ; is past its reach from here
+    xor bx, bx                        ; bx = index into the array
+.each:
+    push cx
+    mov ax, bx
+    mov cx, SH_C_SZ
+    mul cx
+    mov si, ax
+    pop cx
+    mov es, [sh_cellseg]
+    mov ax, [es:si]
+    push bx
+    SHOUT sh_unpackrow                 ; ax = row, bx = sheet
+    mov dx, bx
+    pop bx
+    cmp dx, [sh_cursheet]
+    jne .next
+    mov [sh_find_row], ax
+    mov ax, [es:si+2]
+    mov [sh_find_col], ax
+    ; skip everything at or before the current selection on this pass
+    mov ax, [sh_find_row]
+    cmp ax, [sh_selrow]
+    jb .next
+    ja .test
+    mov ax, [sh_find_col]
+    cmp ax, [sh_selcol]
+    jbe .next
+.test:
+    call sh_find_text                 ; builds the cell's displayed text
+    call sh_find_match
+    jc .found
+.next:
+    inc bx
+    cmp bx, cx
+    jb .each
+    ; nothing after the selection: go round again from the top, so a repeated
+    ; Find wraps rather than stopping
+    xor bx, bx
+.each2:
+    push cx
+    mov ax, bx
+    mov cx, SH_C_SZ
+    mul cx
+    mov si, ax
+    pop cx
+    mov es, [sh_cellseg]
+    mov ax, [es:si]
+    push bx
+    SHOUT sh_unpackrow
+    mov dx, bx
+    pop bx
+    cmp dx, [sh_cursheet]
+    jne .next2
+    mov [sh_find_row], ax
+    mov ax, [es:si+2]
+    mov [sh_find_col], ax
+    call sh_find_text
+    call sh_find_match
+    jc .found
+.next2:
+    inc bx
+    cmp bx, cx
+    jb .each2
+.none:
+    mov word [sh_msg], sh_s_id_nofnd
+    jmp .out
+.found:
+    mov ax, [sh_find_col]
+    mov bx, [sh_find_row]
+    mov si, [sh_ownwin]
+    SHOUT sh_select
+    SHOUT sh_scrollto
+    mov word [sh_msg], 0
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_find_text - the cell at (sh_find_col, sh_find_row) as UPPERCASE text in
+; sh_find_buf. Goes through sh_getcell2 so a formula cell yields its RESULT,
+; which is what the grid shows and therefore what a search should match.
+sh_find_text:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [sh_find_buf], 0
+    mov ax, [sh_find_col]
+    mov bx, [sh_find_row]
+    SHOUT sh_getcell2
+    jnc .out
+    cmp byte [sh_curtype], SH_T_TEXT
+    je .istext
+    cmp byte [sh_curtype], SH_T_BOOL  ; a LOGICAL is found by the name it
+    jne .fnum                         ; shows (81.51)
+    mov ax, dx
+    SHOUT sh_boolname
+    mov si, sh_numbuf
+    mov di, sh_find_buf
+    SHOUT sh_strcpy
+    jmp .up
+.fnum:
+    SHOUT sh_acc_load_a                ; a number: the same ten significant
+    mov di, sh_find_buf               ; digits the cell itself shows
+    mov ax, 10
+    SHOUT fp_ftoa
+    jmp .up
+.istext:
+    push es
+    mov es, [sh_txtseg]
+    mov si, [sh_curtoff]
+    mov di, sh_find_buf
+    mov cx, SH_EDITMAX
+.tc:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .tcd
+    inc si
+    inc di
+    dec cx
+    jnz .tc
+    mov byte [di], 0
+.tcd:
+    pop es
+.up:
+    mov si, sh_find_buf
+    SHOUT sh_upcase_at
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_find_match - CF=1 if sh_idlg_buf occurs anywhere in sh_find_buf
+sh_find_match:
+    push ax
+    push bx
+    push si
+    push di
+    mov si, sh_find_buf
+.at:
+    cmp byte [si], 0
+    je .no
+    mov bx, si
+    mov di, sh_idlg_buf
+.cmp:
+    mov al, [di]
+    or al, al
+    jz .yes
+    cmp al, [bx]
+    jne .adv
+    inc bx
+    inc di
+    jmp .cmp
+.adv:
+    inc si
+    jmp .at
+.no:
+    ; an empty needle would have matched at the first character above, so
+    ; reaching here means it really is absent
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.yes:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+sh_m_dfbtn:
+    dec al                             ; the record counts from 1, dobtn
+    cbw                                ; from 0
+    call sh_df_dobtn
+    clc
+    retf
+sh_m_ndbtn:
+    call sh_ndlg_onbtn
+    clc
+    retf
+sh_m_ldbtn:
+    call sh_ldlg_onbtn
+    clc
+    retf
+sh_m_idbtn:
+    call sh_idlg_onbtn
+    clc
+    retf
+sh_m_bdbtn:
+    call sh_bdlg_onbtn
+    clc
+    retf
+sh_m_fdbtn:                         ; 81.111
+    call sh_fdlg_onbtn
     clc
     retf
 sh_m_refcyc:                        ; 81.108
@@ -1864,9 +2183,6 @@ sh_x_sh_chart_render:
 sh_x_sh_dlg:
     call sh_dlg
     retf
-sh_x_sh_docmd_find:
-    call sh_docmd_find
-    retf
 sh_x_sh_docmd_paste:
     call sh_docmd_paste
     retf
@@ -1948,6 +2264,9 @@ sh_x_sh_macro_mfire:                ; 81.88: a menu item, from a macro
 sh_x_sh_note_load:                  ; 81.102: the Note dialog's open
     call sh_note_load
     retf
+sh_x_sh_btfix:                      ; 81.111: a dialog engine's window made
+    call sh_btfix
+    retf
 sh_x_sh_nt_set:                     ; 81.89: NOTE
     call sh_nt_set
     retf
@@ -1997,7 +2316,7 @@ sh_ovshims:
     dw sh_x_sh_nf_apply
     dw sh_x_sh_acc_toudw, sh_x_sh_ser_to_ymd, sh_x_sh_ymd_to_ser     ; 81.72
     dw sh_x_sh_chart_paint, sh_x_sh_chart_render
-    dw sh_x_sh_dlg, sh_x_sh_docmd_find, sh_x_sh_docmd_paste
+    dw sh_x_sh_dlg, sh_x_sh_docmd_paste
     dw sh_x_sh_geom, sh_x_sh_new
     dw sh_x_sh_pnum_at, sh_x_sh_prot_blocked, sh_x_sh_ptwips
     dw sh_x_sh_rec_cmd, sh_x_sh_rec_start, sh_x_sh_rowcol_op
@@ -2013,6 +2332,7 @@ sh_ovshims:
     dw sh_x_sh_mtab_calc                                             ; 81.95
     dw sh_x_sh_dbx_open                                              ; 81.96
     dw sh_x_sh_note_load                                             ; 81.102
+    dw sh_x_sh_btfix                                                 ; 81.111
 sh_entry:
     push ax
     push dx
@@ -5998,7 +6318,8 @@ sh_sbclick:
     je .vpgup
     cmp di, SH_SB_PGDN
     je .vpgdn
-    mov al, 2                          ; SB_THUMB. A rate of 2 ticks (~110ms)
+    mov ax, SH_SBRATE | (SH_SBRATE286 << 8)
+    call os88ui_sbrate                 ; SB_THUMB. A rate of 2 ticks (~110ms)
     call os88ui_sbgrab                 ; rather than 0: the view FOLLOWS the
                                         ; thumb as it moves, throttled, which
                                         ; is 13.10.5.4's purpose - rate 0 means
@@ -8718,7 +9039,7 @@ sh_docmd_help:
     ret
 
 ; -----------------------------------------------------------------------------
-; sh_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2).
+; sh_about - the OSAPI_ABOUT_SET handler (slot 0x018A, SPEC.md 12.2).
 ; in: SI = our window ptr; the UI task, gfx lock HELD, far-called at our own
 ; segment - a window callback in every respect that matters.
 ;
@@ -13153,6 +13474,7 @@ sh_fdlg_open:
                                       ; 11.93, 81.100) - 28 + 171 still fits
                                       ; the 200 rows the display has
     call OSAPI_WM_SHOW
+    SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop di
     pop si
@@ -13225,37 +13547,26 @@ sh_fdlg_paint:
     mov [sh_fdlg_rowidx], ax
     jmp .rowloop
 .rowsdone:
-    mov ax, [sh_fdlg_ox]
-    add ax, 8
-    mov [sh_fdlg_rect], ax
+    mov ax, [sh_fdlg_ox]               ; 81.111: OK then Cancel, CONTIGUOUS in
+    add ax, 8                          ; the record's own array, and drawn by
+    mov [sh_fdlg_btrects], ax          ; index - the library owns the pressed
+    add ax, 54                         ; look
+    mov [sh_fdlg_btrects+4], ax
+    add ax, 34
+    mov [sh_fdlg_btrects+8], ax
+    add ax, 54
+    mov [sh_fdlg_btrects+12], ax
     mov ax, [sh_fdlg_oy]
     add ax, SH_FDLG_BTY1
-    mov [sh_fdlg_rect+2], ax
-    mov ax, [sh_fdlg_ox]
-    add ax, 62
-    mov [sh_fdlg_rect+4], ax
-    mov ax, [sh_fdlg_oy]
-    add ax, SH_FDLG_BTY2
-    mov [sh_fdlg_rect+6], ax
-    mov bx, sh_fdlg_rect
-    mov si, sh_s_fd_ok
-    mov di, OS88UI_DEF
+    mov [sh_fdlg_btrects+2], ax
+    mov [sh_fdlg_btrects+10], ax
+    add ax, SH_FDLG_BTY2 - SH_FDLG_BTY1
+    mov [sh_fdlg_btrects+6], ax
+    mov [sh_fdlg_btrects+14], ax
+    mov bx, sh_fdlg_btrec
+    mov al, 1
     SHOUT os88ui_btn
-    mov ax, [sh_fdlg_ox]
-    add ax, 96
-    mov [sh_fdlg_rect], ax
-    mov ax, [sh_fdlg_oy]
-    add ax, SH_FDLG_BTY1
-    mov [sh_fdlg_rect+2], ax
-    mov ax, [sh_fdlg_ox]
-    add ax, 150
-    mov [sh_fdlg_rect+4], ax
-    mov ax, [sh_fdlg_oy]
-    add ax, SH_FDLG_BTY2
-    mov [sh_fdlg_rect+6], ax
-    mov bx, sh_fdlg_rect
-    mov si, sh_s_fd_cancel
-    xor di, di
+    mov al, 2
     SHOUT os88ui_btn
     pop di
     pop si
@@ -13282,25 +13593,9 @@ sh_fdlg_onclick:
     sub bx, dx                         ; bx = click y, content-relative
     pop cx
     sub cx, ax                         ; cx = click x, content-relative
-    cmp cx, 8
-    jb .checkcancel
-    cmp cx, 62
-    ja .checkcancel
-    cmp bx, SH_FDLG_BTY1
-    jb .checkcancel
-    cmp bx, SH_FDLG_BTY2
-    ja .checkcancel
-    jmp .doOK
-.checkcancel:
-    cmp cx, 96
-    jb .checkrows
-    cmp cx, 150
-    ja .checkrows
-    cmp bx, SH_FDLG_BTY1
-    jb .checkrows
-    cmp bx, SH_FDLG_BTY2
-    ja .checkrows
-    jmp .doCancel
+                                       ; (81.111: a press on OK or Cancel
+                                       ; never reaches here - the library's
+                                       ; gesture takes it, sh_fdlg_onbtn acts)
 .checkrows:
     cmp cx, 8
     jb .out
@@ -13316,8 +13611,20 @@ sh_fdlg_onclick:
     mov [sh_fdlg_sel], ax
     mov si, [sh_fdlg_win]
     call sh_fdlg_paint
-    jmp .out
-.doOK:
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; sh_fdlg_onbtn - AL = the button that FIRED on the release (81.111): 1 OK,
+; 2 Cancel. What sh_fdlg_onclick used to do on the PRESS
+sh_fdlg_onbtn:
+    push ax
+    push si
+    cmp al, 1
+    jne .cancel
     call sh_fdlg_apply
     call sh_fdlg_close
     cmp byte [sh_savepend], 0         ; File Format's OK owes a Save As, and it
@@ -13326,13 +13633,11 @@ sh_fdlg_onclick:
     mov si, [sh_ownwin]               ; dialog from inside apply would stack a
     mov al, FDLG_SAVE                 ; second dialog on a window slot that is
     SHOUT sh_dlg                       ; still in use, which is how one gets
-    jmp .out                          ; orphaned behind the other
-.doCancel:
+    jmp short .out                    ; orphaned behind the other
+.cancel:
     call sh_fdlg_close
 .out:
-    pop di
     pop si
-    pop bx
     pop ax
     ret
 
@@ -13942,6 +14247,8 @@ sh_bdlg_i5:    db 'Shade', 0
 ; the resident thunks (81.71.5.1) - sh_bdlg_open_r is the menu's, and it is
 ; what forces CHART.OVL in before any window exists, so neither callback can
 ; be the call that has to read a disk
+    SH_BTREC bdlg, 2, sh_dlg_blfd           ; 81.111
+    SH_BTDOORS bdlg, SHM_BDBTN
 sh_bdlg_open_r:
     push bp
     mov bp, SHM_BOPEN
@@ -14053,6 +14360,7 @@ sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     call OSAPI_WM_KEEPH
     pop ax
     call OSAPI_WM_SHOW
+    SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop si
     pop bx
@@ -14154,31 +14462,26 @@ sh_bdlg_paint:
     mov [sh_bdlg_ri], ax
     jmp .rowloop
 .rowsdone:
-    mov ax, [sh_bdlg_ox]
-    add ax, SH_BDLG_GX2 + 10
-    mov [sh_bdlg_rect], ax
+    mov ax, [sh_bdlg_ox]               ; 81.111: OK over Cancel, contiguous in
+    add ax, SH_BDLG_GX2 + 10           ; the record's array, drawn by index
+    mov [sh_bdlg_btrects], ax
+    mov [sh_bdlg_btrects+8], ax
+    add ax, SH_BDLG_W - 10 - (SH_BDLG_GX2 + 10)
+    mov [sh_bdlg_btrects+4], ax
+    mov [sh_bdlg_btrects+12], ax
     mov ax, [sh_bdlg_oy]
     add ax, 20
-    mov [sh_bdlg_rect+2], ax
-    mov ax, [sh_bdlg_ox]
-    add ax, SH_BDLG_W - 10
-    mov [sh_bdlg_rect+4], ax
-    mov ax, [sh_bdlg_oy]
-    add ax, 40
-    mov [sh_bdlg_rect+6], ax
-    mov bx, sh_bdlg_rect
-    mov si, sh_s_fd_ok
-    mov di, OS88UI_DEF
+    mov [sh_bdlg_btrects+2], ax
+    add ax, 20
+    mov [sh_bdlg_btrects+6], ax
+    add ax, 10
+    mov [sh_bdlg_btrects+10], ax
+    add ax, 20
+    mov [sh_bdlg_btrects+14], ax
+    mov bx, sh_bdlg_btrec
+    mov al, 1
     SHOUT os88ui_btn
-    mov ax, [sh_bdlg_oy]
-    add ax, 50
-    mov [sh_bdlg_rect+2], ax
-    mov ax, [sh_bdlg_oy]
-    add ax, 70
-    mov [sh_bdlg_rect+6], ax
-    mov bx, sh_bdlg_rect
-    mov si, sh_s_fd_cancel
-    xor di, di
+    mov al, 2
     SHOUT os88ui_btn
     pop di
     pop si
@@ -14204,18 +14507,8 @@ sh_bdlg_onclick:
     sub bx, dx                          ; bx = click y, content-relative
     pop cx
     sub cx, ax                          ; cx = click x, content-relative
-    cmp cx, SH_BDLG_GX2 + 10
-    jb .checkrows
-    cmp cx, SH_BDLG_W - 10
-    ja .checkrows
-    cmp bx, 20
-    jb .checkrows
-    cmp bx, 40
-    jle .doOK
-    cmp bx, 50
-    jb .checkrows
-    cmp bx, 70
-    jle .doCancel
+                                        ; (81.111: OK/Cancel are the
+                                        ; library's gesture, sh_bdlg_onbtn)
 .checkrows:
     cmp cx, SH_BDLG_GX1 + 8
     jb .out
@@ -14259,19 +14552,20 @@ sh_bdlg_onclick:
 .redraw:
     mov si, [sh_bdlg_win]
     call sh_bdlg_paint
-    jmp .out
-.doOK:
-    call sh_bdlg_apply
-    call sh_bdlg_close
-    jmp .out
-.doCancel:
-    call sh_bdlg_close
 .out:
     pop di
     pop si
     pop bx
     pop ax
     ret
+
+; sh_bdlg_onbtn - AL = the button FIRED on the release (81.111): 1 OK, 2 Cancel
+sh_bdlg_onbtn:
+    cmp al, 1
+    jne .cancel
+    call sh_bdlg_apply
+.cancel:
+    jmp sh_bdlg_close
 
 ; -----------------------------------------------------------------------------
 ; sh_bdlg_apply - write sh_bdlg_sel's edges/shade (bits 1-5) into the
@@ -14605,6 +14899,7 @@ sh_idlg_open:
     jc .out
     mov [sh_idlg_win], bx
     call OSAPI_WM_SHOW
+    SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop di
     pop si
@@ -14655,54 +14950,58 @@ sh_idlg_paint:
     mov [si + LN_Y2], ax
     SHOUT os88line_draw
 
-    mov ax, [sh_idlg_ox]               ; OK
-    add ax, SH_IDLG_BTX1
-    mov [sh_idlg_rect], ax
-    mov ax, [sh_idlg_oy]
-    add ax, SH_IDLG_OKY1
-    mov [sh_idlg_rect+2], ax
+    mov ax, [sh_idlg_ox]               ; 81.111: OK, Cancel (same x), and
+    add ax, SH_IDLG_BTX1               ; for Parse Guess and Clear on
+    mov [sh_idlg_btrects], ax          ; Cancel's row - the record's array,
+    mov [sh_idlg_btrects+8], ax        ; drawn by index
     mov ax, [sh_idlg_ox]
     add ax, SH_IDLG_BTX2
-    mov [sh_idlg_rect+4], ax
+    mov [sh_idlg_btrects+4], ax
+    mov [sh_idlg_btrects+12], ax
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G1X1
+    mov [sh_idlg_btrects+16], ax
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G1X2
+    mov [sh_idlg_btrects+20], ax
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G2X1
+    mov [sh_idlg_btrects+24], ax
+    mov ax, [sh_idlg_ox]
+    add ax, SH_IDLG_G2X2
+    mov [sh_idlg_btrects+28], ax
+    mov ax, [sh_idlg_oy]
+    add ax, SH_IDLG_OKY1
+    mov [sh_idlg_btrects+2], ax
     mov ax, [sh_idlg_oy]
     add ax, SH_IDLG_OKY2
-    mov [sh_idlg_rect+6], ax
-    mov bx, sh_idlg_rect
-    mov si, sh_s_idlg_ok
-    mov di, OS88UI_DEF
-    SHOUT os88ui_btn
-    mov ax, [sh_idlg_oy]               ; Cancel - same x, two new y's
+    mov [sh_idlg_btrects+6], ax
+    mov ax, [sh_idlg_oy]
     add ax, SH_IDLG_CAY1
-    mov [sh_idlg_rect+2], ax
+    mov [sh_idlg_btrects+10], ax
+    mov [sh_idlg_btrects+18], ax
+    mov [sh_idlg_btrects+26], ax
     mov ax, [sh_idlg_oy]
     add ax, SH_IDLG_CAY2
-    mov [sh_idlg_rect+6], ax
-    mov bx, sh_idlg_rect
-    mov si, sh_s_idlg_can
-    xor di, di
+    mov [sh_idlg_btrects+14], ax
+    mov [sh_idlg_btrects+22], ax
+    mov [sh_idlg_btrects+30], ax
+    mov bx, sh_idlg_btrec
+    mov word [bx + OS88UI_BT_N], 2     ; how many are LIVE: Parse's two only
+    cmp byte [sh_idlg_kind], SH_ID_PARSE   ; for its own kind (81.82)
+    jne .nb4
+    mov word [bx + OS88UI_BT_N], 4
+.nb4:
+    mov al, 1
+    SHOUT os88ui_btn
+    mov al, 2
     SHOUT os88ui_btn
 
     cmp byte [sh_idlg_kind], SH_ID_PARSE   ; 81.82's two, and ONLY this kind's
     jne .nobrk
-    mov ax, [sh_idlg_ox]
-    add ax, SH_IDLG_G1X1
-    mov [sh_idlg_rect], ax
-    mov ax, [sh_idlg_ox]
-    add ax, SH_IDLG_G1X2
-    mov [sh_idlg_rect+4], ax               ; the y pair is still Cancel's, set
-    mov bx, sh_idlg_rect                   ; above - same row, other side
-    mov si, sh_s_idlg_guess
-    xor di, di
+    mov al, 3
     SHOUT os88ui_btn
-    mov ax, [sh_idlg_ox]
-    add ax, SH_IDLG_G2X1
-    mov [sh_idlg_rect], ax
-    mov ax, [sh_idlg_ox]
-    add ax, SH_IDLG_G2X2
-    mov [sh_idlg_rect+4], ax
-    mov bx, sh_idlg_rect
-    mov si, sh_s_idlg_clear
-    xor di, di
+    mov al, 4
     SHOUT os88ui_btn
 .nobrk:
 
@@ -14770,49 +15069,38 @@ sh_idlg_onclick:
     mov si, sh_idlg_line               ; the field's rect is already
     SHOUT os88line_click                ; screen-absolute from the last paint
     jnc .redraw
-    mov bx, [sh_idlg_win]
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT
-    pop dx
-    pop cx
-    sub cx, ax
-    sub dx, [sh_idlg_oy]
-    cmp byte [sh_idlg_kind], SH_ID_PARSE   ; 81.82's two, tested FIRST because
-    jne .btns                              ; they sit to the LEFT of BTX1 and
-    cmp dx, SH_IDLG_CAY1                   ; the test below returns on that
-    jb .btns
-    cmp dx, SH_IDLG_CAY2
-    jg .btns
-    cmp cx, SH_IDLG_G1X1
-    jb .btns
-    cmp cx, SH_IDLG_G1X2
-    jle .doGuess
-    cmp cx, SH_IDLG_G2X1
-    jb .btns
-    cmp cx, SH_IDLG_G2X2
-    jle .doClear
-.btns:
-    cmp cx, SH_IDLG_BTX1
-    jb .out
-    cmp cx, SH_IDLG_BTX2
-    ja .out
-    cmp dx, SH_IDLG_OKY1
-    jb .out
-    cmp dx, SH_IDLG_OKY2
-    jle .doOK
-    cmp dx, SH_IDLG_CAY1
-    jb .out
-    cmp dx, SH_IDLG_CAY2
-    jle .doCancel
-    jmp .out
-.redraw:
+    jmp .out                           ; 81.111: the buttons are the
+.redraw:                               ; library's gesture (sh_idlg_onbtn)
     mov si, [sh_idlg_win]
     call sh_idlg_paint
-    jmp .out
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_idlg_onbtn - AL = the button FIRED on the release (81.111): 1 OK,
+; 2 Cancel, and Parse's 3 Guess and 4 Clear. What the press used to do
+sh_idlg_onbtn:
+    push si
+    push di
+    cmp al, 3
+    je .doGuess
+    cmp al, 4
+    je .doClear
+    cmp al, 1
+    jne .doCancel
+    call sh_idlg_apply
+.doCancel:
+    call sh_idlg_close
+    SHOUT sh_idlg_after                ; a Run or an INPUT goes on (81.63)
+    jmp short .out
 .doGuess:
     call sh_parse_guess                ; both rewrite the LINE and leave the
-    jmp .reline                        ; dialog up - they are edits, not
+    jmp short .reline                  ; dialog up - they are edits, not
 .doClear:                              ; answers
     call sh_parse_clear
 .reline:
@@ -14821,22 +15109,9 @@ sh_idlg_onclick:
     SHOUT os88line_set                 ; recomputes
     mov si, [sh_idlg_win]
     call sh_idlg_paint
-    jmp .out
-.doOK:
-    call sh_idlg_apply
-    call sh_idlg_close
-    SHOUT sh_idlg_after
-    jmp .out
-.doCancel:
-    call sh_idlg_close
-    SHOUT sh_idlg_after
 .out:
     pop di
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -15002,7 +15277,7 @@ sh_idlg_apply:
     mov word [sh_msg], sh_s_id_nofit
     jmp .redraw
 .find:
-    SHOUT sh_docmd_find
+    call sh_docmd_find                 ; a neighbour here since 81.111
     jmp .redraw
 ; Data > Sort..., part one of two. The KEY is a reference, so it needs a field;
 ; the ORDER is a two-way pick, so it needs radios; and no dialog engine here
@@ -15112,225 +15387,6 @@ sh_idlg_close:
 
 section .text
 
-
-; -----------------------------------------------------------------------------
-; sh_docmd_find - Formula > Find...: move the selection to the next cell whose
-; DISPLAYED TEXT contains what was typed.
-;
-; Displayed text, not stored value, and that is the useful definition rather
-; than the easy one: it finds 3.5 in a cell holding 3.5, "Total" in a label,
-; and - because a formula cell displays its result - 1003.5 in a cell holding
-; =A2+A3. A search over stored bytes would have matched none of those the way
-; a user expects, since a double's eight bytes look nothing like what is on
-; screen.
-;
-; Case-insensitive, and it wraps: the walk starts at the cell AFTER the
-; selection and comes back round to it, so Find repeated from the same box
-; steps through every match rather than sticking on the first.
-; -----------------------------------------------------------------------------
-sh_docmd_find:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov si, sh_idlg_buf
-    call sh_upcase_at
-    cmp byte [sh_idlg_buf], 0
-    je .none
-    ; the scan order is the CELL ARRAY's, which is sorted by row then column -
-    ; so "next" here means next in reading order, which is what it looks like
-    mov cx, [sh_ncells]
-    or cx, cx                         ; not jcxz: it is short-only and .none
-    jz .none                          ; is past its reach from here
-    xor bx, bx                        ; bx = index into the array
-.each:
-    push cx
-    mov ax, bx
-    mov cx, SH_C_SZ
-    mul cx
-    mov si, ax
-    pop cx
-    mov es, [sh_cellseg]
-    mov ax, [es:si]
-    push bx
-    call sh_unpackrow                 ; ax = row, bx = sheet
-    mov dx, bx
-    pop bx
-    cmp dx, [sh_cursheet]
-    jne .next
-    mov [sh_find_row], ax
-    mov ax, [es:si+2]
-    mov [sh_find_col], ax
-    ; skip everything at or before the current selection on this pass
-    mov ax, [sh_find_row]
-    cmp ax, [sh_selrow]
-    jb .next
-    ja .test
-    mov ax, [sh_find_col]
-    cmp ax, [sh_selcol]
-    jbe .next
-.test:
-    call sh_find_text                 ; builds the cell's displayed text
-    call sh_find_match
-    jc .found
-.next:
-    inc bx
-    cmp bx, cx
-    jb .each
-    ; nothing after the selection: go round again from the top, so a repeated
-    ; Find wraps rather than stopping
-    xor bx, bx
-.each2:
-    push cx
-    mov ax, bx
-    mov cx, SH_C_SZ
-    mul cx
-    mov si, ax
-    pop cx
-    mov es, [sh_cellseg]
-    mov ax, [es:si]
-    push bx
-    call sh_unpackrow
-    mov dx, bx
-    pop bx
-    cmp dx, [sh_cursheet]
-    jne .next2
-    mov [sh_find_row], ax
-    mov ax, [es:si+2]
-    mov [sh_find_col], ax
-    call sh_find_text
-    call sh_find_match
-    jc .found
-.next2:
-    inc bx
-    cmp bx, cx
-    jb .each2
-.none:
-    mov word [sh_msg], sh_s_id_nofnd
-    jmp .out
-.found:
-    mov ax, [sh_find_col]
-    mov bx, [sh_find_row]
-    mov si, [sh_ownwin]
-    call sh_select
-    call sh_scrollto
-    mov word [sh_msg], 0
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_find_text - the cell at (sh_find_col, sh_find_row) as UPPERCASE text in
-; sh_find_buf. Goes through sh_getcell2 so a formula cell yields its RESULT,
-; which is what the grid shows and therefore what a search should match.
-sh_find_text:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov byte [sh_find_buf], 0
-    mov ax, [sh_find_col]
-    mov bx, [sh_find_row]
-    call sh_getcell2
-    jnc .out
-    cmp byte [sh_curtype], SH_T_TEXT
-    je .istext
-    cmp byte [sh_curtype], SH_T_BOOL  ; a LOGICAL is found by the name it
-    jne .fnum                         ; shows (81.51)
-    mov ax, dx
-    call sh_boolname
-    mov si, sh_numbuf
-    mov di, sh_find_buf
-    call sh_strcpy
-    jmp .up
-.fnum:
-    call sh_acc_load_a                ; a number: the same ten significant
-    mov di, sh_find_buf               ; digits the cell itself shows
-    mov ax, 10
-    call fp_ftoa
-    jmp .up
-.istext:
-    push es
-    mov es, [sh_txtseg]
-    mov si, [sh_curtoff]
-    mov di, sh_find_buf
-    mov cx, SH_EDITMAX
-.tc:
-    mov al, [es:si]
-    mov [di], al
-    or al, al
-    jz .tcd
-    inc si
-    inc di
-    dec cx
-    jnz .tc
-    mov byte [di], 0
-.tcd:
-    pop es
-.up:
-    mov si, sh_find_buf
-    call sh_upcase_at
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; sh_find_match - CF=1 if sh_idlg_buf occurs anywhere in sh_find_buf
-sh_find_match:
-    push ax
-    push bx
-    push si
-    push di
-    mov si, sh_find_buf
-.at:
-    cmp byte [si], 0
-    je .no
-    mov bx, si
-    mov di, sh_idlg_buf
-.cmp:
-    mov al, [di]
-    or al, al
-    jz .yes
-    cmp al, [bx]
-    jne .adv
-    inc bx
-    inc di
-    jmp .cmp
-.adv:
-    inc si
-    jmp .at
-.no:
-    ; an empty needle would have matched at the first character above, so
-    ; reaching here means it really is absent
-    pop di
-    pop si
-    pop bx
-    pop ax
-    clc
-    ret
-.yes:
-    pop di
-    pop si
-    pop bx
-    pop ax
-    stc
-    ret
 
 ; =============================================================================
 ; DEFINED NAMES (stage 3.0c) - Formula > Define Name... binds a name to the
@@ -15631,6 +15687,92 @@ sh_justify_r:                       ; NOT sh_justify, which is 81.13's
     mov word [sh_msg], sh_s_noovl
 .out:
     ret
+; =============================================================================
+; THE BUTTON GESTURE (SPEC.md 20.5.1.3, 81.111) - upstream's os88ui_btn takes a
+; RECORD now and fires on the RELEASE, and a package's dialogs attach to it
+; with os88ui_btninit. In this tree the dialog ENGINES run from CHART.OVL, so
+; everything the kernel calls is RESIDENT: the record (initialised data, so the
+; overlay's first paint already finds it whole), the release and drag doors
+; (SH_BTDOORS) and the attach (sh_btattach, from each open door once the
+; overlay has made the window). The overlay's painters fill the rects and draw
+; through os88ui_btn; its click handlers no longer see a button's press.
+; =============================================================================
+sh_dlg_bflags: dw OS88UI_DEF, 0                ; OK is button 1, Cancel 2, in
+sh_dlg_blfd:   dw sh_s_fd_ok, sh_s_fd_cancel   ; every dialog here: the flags
+                                               ; are shared outright
+
+; sh_btattach - BX = the record, AX = the window, SI/DI = its release/drag
+; doors, DX = its own click door: UNLINK the record from os88ui's list, then
+; os88ui_btninit. The unlink is not tidiness: btninit PREPENDS, so re-opening
+; a dialog made its record's NEXT point at ITSELF, and a click whose walk had
+; to pass it never returned. Preserves all registers
+; sh_btfix - attach the record of EVERY dialog engine whose window is up.
+; The engines' open routines run in CHART.OVL and are reached two ways - the
+; resident door, and each other (Sort's key dialog opens its order dialog,
+; Series and Extract likewise, File Format's OK the Save As), so the attach
+; is the open routine's own last act rather than the door's. Attaching a
+; window that already is only re-installs the same three procs
+sh_bttab:  dw sh_fdlg_btrec, sh_fdlg_win, sh_fdlg_onup_r, sh_fdlg_ondrag_r, sh_fdlg_click_r
+           dw sh_bdlg_btrec, sh_bdlg_win, sh_bdlg_onup_r, sh_bdlg_ondrag_r, sh_bdlg_click_r
+           dw sh_idlg_btrec, sh_idlg_win, sh_idlg_onup_r, sh_idlg_ondrag_r, sh_idlg_click_r
+           dw sh_ldlg_btrec, sh_ldlg_win, sh_ldlg_onup_r, sh_ldlg_ondrag_r, sh_ldlg_click_r
+           dw sh_ndlg_btrec, sh_ndlg_win, sh_ndlg_onup_r, sh_ndlg_ondrag_r, sh_ndlg_onclick_r
+           dw sh_df_btrec, sh_df_win, sh_df_onup_r, sh_df_ondrag_r, sh_df_onclick_r
+sh_bttab_end:
+sh_btfix:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    push bp
+    mov bp, sh_bttab
+.l:
+    mov bx, [ds:bp+2]
+    mov ax, [bx]
+    or ax, ax
+    jz .n
+    mov bx, [ds:bp]
+    mov si, [ds:bp+4]
+    mov di, [ds:bp+6]
+    mov dx, [ds:bp+8]
+    call sh_btattach
+.n:
+    add bp, 10
+    cmp bp, sh_bttab_end
+    jb .l
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    clc                               ; the open's own CF=0, kept
+    ret
+
+sh_btattach:
+    push cx
+    push si
+    mov si, os88ui_btlist - OS88UI_BT_NEXT   ; the head, as if it were a NEXT
+.walk:
+    mov cx, [si + OS88UI_BT_NEXT]
+    jcxz .gone
+    cmp cx, bx
+    je .unlink
+    mov si, cx
+    jmp short .walk
+.unlink:
+    mov cx, [bx + OS88UI_BT_NEXT]
+    mov [si + OS88UI_BT_NEXT], cx
+.gone:
+    pop si
+    pop cx
+    call os88ui_btninit
+    ret
+
+
+    SH_BTREC fdlg, 2, sh_dlg_blfd
+    SH_BTDOORS fdlg, SHM_FDBTN
 sh_fdlg_open_r:
     push bp
     mov bp, SHM_FDOPEN
@@ -15679,6 +15821,10 @@ sh_fdlg_apply_r:
     pop bx
     popf
 %endmacro
+sh_idlg_blab:  dw sh_s_idlg_ok, sh_s_idlg_can, sh_s_idlg_guess, sh_s_idlg_clear
+sh_idlg_bflag: dw OS88UI_DEF, 0, 0, 0     ; 81.111: OK Cancel, and Parse's two
+    SH_BTRECF idlg, 4, sh_idlg_blab, sh_idlg_bflag
+    SH_BTDOORS idlg, SHM_IDBTN
 sh_idlg_open_r:
     push bp
     mov bp, SHM_IDOPEN
@@ -15736,6 +15882,8 @@ sh_idlg_click_r:
     call ch_ovcall
     pop bp
     ret
+    SH_BTREC ldlg, 2, sh_dlg_blfd
+    SH_BTDOORS ldlg, SHM_LDBTN
 sh_ldlg_open_r:
     push bp
     mov bp, SHM_LOPEN
@@ -15847,6 +15995,7 @@ sh_ldlg_open:
     jc .out                            ; SI is still the template - and it is
     mov [sh_ldlg_win], bx
     call OSAPI_WM_SHOW                 ; created HIDDEN, so the show is not
+    SHOUT sh_btfix                     ; the gesture (81.111), from here
                                        ; optional. No WF_KEEPH: 147 rows from
                                        ; y 28 ends at 175, inside a CGA's
                                        ; band (81.100 measured it)
@@ -16004,31 +16153,30 @@ sh_ldlg_paint:
     mov bx, sh_ldsb
     SHOUT os88ui_sbar
 .buttons:
-    mov ax, [sh_ldlg_ox]
-    add ax, SH_LDLG_BTX1
-    mov [sh_ldlg_rect+0], ax
-    mov ax, [sh_ldlg_oy]
-    add ax, SH_LDLG_OKY1
-    mov [sh_ldlg_rect+2], ax
+    mov ax, [sh_ldlg_ox]               ; 81.111: the record's array, OK over
+    add ax, SH_LDLG_BTX1               ; Cancel at one x
+    mov [sh_ldlg_btrects+0], ax
+    mov [sh_ldlg_btrects+8], ax
     mov ax, [sh_ldlg_ox]
     add ax, SH_LDLG_BTX2
-    mov [sh_ldlg_rect+4], ax
+    mov [sh_ldlg_btrects+4], ax
+    mov [sh_ldlg_btrects+12], ax
+    mov ax, [sh_ldlg_oy]
+    add ax, SH_LDLG_OKY1
+    mov [sh_ldlg_btrects+2], ax
     mov ax, [sh_ldlg_oy]
     add ax, SH_LDLG_OKY2
-    mov [sh_ldlg_rect+6], ax
-    mov bx, sh_ldlg_rect
-    mov si, sh_s_fd_ok
-    mov di, OS88UI_DEF
-    SHOUT os88ui_btn
+    mov [sh_ldlg_btrects+6], ax
     mov ax, [sh_ldlg_oy]
     add ax, SH_LDLG_CAY1
-    mov [sh_ldlg_rect+2], ax
+    mov [sh_ldlg_btrects+10], ax
     mov ax, [sh_ldlg_oy]
     add ax, SH_LDLG_CAY2
-    mov [sh_ldlg_rect+6], ax
-    mov bx, sh_ldlg_rect
-    mov si, sh_s_fd_cancel
-    xor di, di
+    mov [sh_ldlg_btrects+14], ax
+    mov bx, sh_ldlg_btrec
+    mov al, 1
+    SHOUT os88ui_btn
+    mov al, 2
     SHOUT os88ui_btn
     pop di
     pop si
@@ -16109,29 +16257,10 @@ sh_ldlg_onclick:
     mov [sh_ldlg_top], ax
     jmp .redraw
 .notbar:
-    mov ax, cx                        ; --- the buttons ---
-    sub ax, [sh_ldlg_ox]
-    mov bx, dx
+    mov ax, cx                        ; the buttons are the library's gesture
+    sub ax, [sh_ldlg_ox]              ; (81.111, sh_ldlg_onbtn): only the
+    mov bx, dx                        ; list is left to this handler
     sub bx, [sh_ldlg_oy]
-    cmp ax, SH_LDLG_BTX1
-    jb .list
-    cmp ax, SH_LDLG_BTX2
-    ja .list
-    cmp bx, SH_LDLG_OKY1
-    jb .notok
-    cmp bx, SH_LDLG_OKY2
-    ja .notok
-    call sh_ldlg_apply
-    call sh_ldlg_close
-    jmp .out
-.notok:
-    cmp bx, SH_LDLG_CAY1
-    jb .out
-    cmp bx, SH_LDLG_CAY2
-    ja .out
-    call sh_ldlg_close
-    jmp .out
-.list:
     cmp ax, SH_LDLG_LX1
     jb .out
     cmp ax, SH_LDLG_LX2
@@ -16162,6 +16291,14 @@ sh_ldlg_onclick:
     pop bx
     pop ax
     ret
+
+; sh_ldlg_onbtn - AL = the button fired on the release (81.111): 1 OK, 2 Cancel
+sh_ldlg_onbtn:
+    cmp al, 1
+    jne .cancel
+    call sh_ldlg_apply
+.cancel:
+    jmp sh_ldlg_close
 
 ; sh_ldlg_maxtop - AX = the largest legal sh_ldlg_top
 sh_ldlg_maxtop:
@@ -17040,8 +17177,6 @@ sh_ndlg_tpl:
 
 sh_s_ndlg_title: db 'Note', 0
 sh_s_ndlg_cell:  db 'Cell:', 0
-sh_s_ndlg_ok:    db 'OK', 0
-sh_s_ndlg_can:   db 'Cancel', 0
 
 ; 81.102: THE ENGINE IS IN CHART.OVL, with os88text.inc - the box's only
 ; consumer - and these are its resident doors. The template, its strings
@@ -17051,6 +17186,8 @@ sh_s_ndlg_can:   db 'Cancel', 0
 ; the kernel's close box only HID this window (75.1), so [sh_noteopen]
 ; stayed set and Formula > Note refused for the session - 81.100.1's
 ; defect, in the one dialog that pass did not look at
+    SH_BTREC ndlg, 2, sh_dlg_blfd
+    SH_BTDOORS ndlg, SHM_NDBTN
 sh_ndlg_open_r:
     push bp
     mov bp, SHM_NOPEN
@@ -17146,6 +17283,7 @@ sh_ndlg_open:
     mov [sh_ndlg_win], bx
     mov byte [sh_noteopen], 1
     call OSAPI_WM_SHOW
+    SHOUT sh_btfix                     ; the gesture (81.111), from here
 .out:
     pop es
     pop di
@@ -17251,31 +17389,30 @@ sh_ndlg_paint:
     mov [si + TX_Y2], ax
     call os88text_draw
 
-    mov ax, [sh_ndlg_ox]                ; OK - os88ui_btn takes BX = a POINTER
-    add ax, SH_NDLG_BTX1                ; to the rect, not the rect in
-    mov [sh_ndlg_rect], ax              ; AX/BX/CX/DX
-    mov ax, [sh_ndlg_oy]
-    add ax, SH_NDLG_OKY1
-    mov [sh_ndlg_rect+2], ax
+    mov ax, [sh_ndlg_ox]                ; OK over Cancel at one x, into the
+    add ax, SH_NDLG_BTX1                ; record's array (81.111)
+    mov [sh_ndlg_btrects], ax
+    mov [sh_ndlg_btrects+8], ax
     mov ax, [sh_ndlg_ox]
     add ax, SH_NDLG_BTX2
-    mov [sh_ndlg_rect+4], ax
+    mov [sh_ndlg_btrects+4], ax
+    mov [sh_ndlg_btrects+12], ax
+    mov ax, [sh_ndlg_oy]
+    add ax, SH_NDLG_OKY1
+    mov [sh_ndlg_btrects+2], ax
     mov ax, [sh_ndlg_oy]
     add ax, SH_NDLG_OKY2
-    mov [sh_ndlg_rect+6], ax
-    mov bx, sh_ndlg_rect
-    mov si, sh_s_ndlg_ok
-    mov di, OS88UI_DEF
-    SHOUT os88ui_btn
-    mov ax, [sh_ndlg_oy]                ; Cancel - same x, two new y's
+    mov [sh_ndlg_btrects+6], ax
+    mov ax, [sh_ndlg_oy]
     add ax, SH_NDLG_CAY1
-    mov [sh_ndlg_rect+2], ax
+    mov [sh_ndlg_btrects+10], ax
     mov ax, [sh_ndlg_oy]
     add ax, SH_NDLG_CAY2
-    mov [sh_ndlg_rect+6], ax
-    mov bx, sh_ndlg_rect
-    mov si, sh_s_ndlg_can
-    xor di, di
+    mov [sh_ndlg_btrects+14], ax
+    mov bx, sh_ndlg_btrec
+    mov al, 1
+    SHOUT os88ui_btn
+    mov al, 2
     SHOUT os88ui_btn
 
     pop di
@@ -17327,38 +17464,11 @@ sh_ndlg_onclick:
     push di
     mov si, sh_notebox                  ; the field first: its own rect is
     call os88text_click                 ; already screen-absolute from the
-    jnc .redraw                         ; last paint, so no conversion here
-    mov bx, [sh_ndlg_win]
-    push cx
-    push dx
-    call OSAPI_WM_CONTENT
-    pop dx
-    pop cx
-    sub cx, ax                          ; cx,dx = content-relative
-    sub dx, [sh_ndlg_oy]
-    cmp cx, SH_NDLG_BTX1
-    jb .out
-    cmp cx, SH_NDLG_BTX2
-    ja .out
-    cmp dx, SH_NDLG_OKY1
-    jb .out
-    cmp dx, SH_NDLG_OKY2
-    jle .doOK
-    cmp dx, SH_NDLG_CAY1
-    jb .out
-    cmp dx, SH_NDLG_CAY2
-    jle .doCancel
-    jmp .out
-.redraw:
+    jc .out                             ; last paint, so no conversion here;
+                                        ; the buttons are the library's
+                                        ; gesture (81.111, sh_ndlg_onbtn)
     mov si, sh_notebox                  ; only the caret moved: redraw the
     call os88text_draw                  ; box, not the dialog's chrome
-    jmp .out
-.doOK:
-    call sh_ndlg_apply
-    call sh_ndlg_close
-    jmp .out
-.doCancel:
-    call sh_ndlg_close
 .out:
     pop di
     pop si
@@ -17367,6 +17477,14 @@ sh_ndlg_onclick:
     pop bx
     pop ax
     ret
+
+; sh_ndlg_onbtn - AL = the button fired on the release (81.111): 1 OK, 2 Cancel
+sh_ndlg_onbtn:
+    cmp al, 1
+    jne .cancel
+    call sh_ndlg_apply
+.cancel:
+    jmp sh_ndlg_close
 
 ; -----------------------------------------------------------------------------
 ; sh_ndlg_apply - commit the edit buffer to the cell the dialog was opened on.
@@ -17678,6 +17796,9 @@ sh_s_df_title: db 'Form', 0
 sh_s_df_of:    db ' of ', 0
 sh_df_btns:    dw sh_s_df_prev, sh_s_df_next, sh_s_df_new, sh_s_df_del
                dw sh_s_df_close
+sh_df_bflag:   dw 0, 0, 0, 0, OS88UI_DEF    ; Close carries the ring (81.111)
+    SH_BTRECF df, SH_DF_NBT, sh_df_btns, sh_df_bflag
+    SH_BTDOORS df, SHM_DFBTN
 sh_s_df_prev:  db 'Prev', 0
 sh_s_df_next:  db 'Next', 0
 sh_s_df_new:   db 'New', 0
@@ -17795,6 +17916,7 @@ sh_docmd_form:
     jc .out
     mov [sh_df_win], bx
     call OSAPI_WM_SHOW
+    SHOUT sh_btfix                     ; the gesture (81.111), from here
     jmp .out
 .nodb:
     mov word [sh_msg], sh_s_df_nodb
@@ -18280,49 +18402,41 @@ sh_df_valtext:
     pop ax
     ret
 
-; sh_df_btnrect - in: AX = a button index; fills sh_df_rect from the live
-; content origin. One place, so the painter and the hit test cannot drift
-sh_df_btnrect:
+; sh_df_btnpaint - button [sh_df_i]: its rect into the record's array from
+; the live content origin, then drawn by index (81.111). Close carries the
+; ring (sh_df_bflag): it is the one button Enter should never fire by
+; accident, and the one a user always wants within reach
+sh_df_btnpaint:
     push ax
     push bx
+    push cx
     push dx
+    push di
+    mov di, [sh_df_i]
+    mov cl, 3
+    shl di, cl
+    add di, sh_df_btrects
+    mov ax, [sh_df_i]
     mov bx, SH_DF_BTW + SH_DF_BTGAP
     mul bx
     add ax, 4
     add ax, [sh_df_ox]
-    mov [sh_df_rect], ax
+    mov [di], ax
     add ax, SH_DF_BTW
-    mov [sh_df_rect+4], ax
+    mov [di+4], ax
     mov ax, [sh_df_oy]
     add ax, SH_DF_BTY1
-    mov [sh_df_rect+2], ax
+    mov [di+2], ax
     mov ax, [sh_df_oy]
     add ax, SH_DF_BTY2
-    mov [sh_df_rect+6], ax
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-sh_df_btnpaint:
-    push ax
-    push bx
-    push si
-    push di
-    mov ax, [sh_df_i]
-    call sh_df_btnrect
-    mov bx, [sh_df_i]
-    shl bx, 1
-    mov si, [sh_df_btns + bx]
-    xor di, di
-    cmp word [sh_df_i], SH_DF_NBT - 1  ; Close carries the ring: it is the
-    jne .draw                          ; one button Enter should never fire
-    mov di, OS88UI_DEF                 ; by accident, and the one a user
-.draw:                                 ; always wants within reach
-    mov bx, sh_df_rect
+    mov [di+6], ax
+    mov al, [sh_df_i]
+    inc al
+    mov bx, sh_df_btrec
     SHOUT os88ui_btn
     pop di
-    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -18393,23 +18507,9 @@ sh_df_onclick:
     pop cx
     sub cx, ax
     sub dx, [sh_df_oy]
-    cmp dx, SH_DF_BTY1                 ; the button row?
-    jb .fields
-    cmp dx, SH_DF_BTY2
-    ja .out
-    mov ax, cx
-    sub ax, 4
-    jl .out
-    mov bx, SH_DF_BTW + SH_DF_BTGAP
-    xor dx, dx
-    div bx
-    cmp dx, SH_DF_BTW                  ; in the GAP between two buttons
-    ja .out
-    cmp ax, SH_DF_NBT
-    jae .out
-    call sh_df_dobtn
-    jmp .out
-.fields:                               ; a click on another field focuses it
+    cmp dx, SH_DF_BTY1                 ; the button row is the library's
+    jae .out                           ; gesture (81.111, sh_m_dfbtn)
+                                       ; a click on another field focuses it
     sub dx, SH_DF_ROWTOP
     jl .out
     mov ax, dx
@@ -36450,6 +36550,44 @@ sh_dbx_tpl:
     dw 0, 0, 0, 0
     dw sh_macro_msg, sh_dbx_paint_r, sh_dbx_key_r, sh_dbx_click_r
 
+; 81.111: its buttons are ITEMS among other controls rather than a group, so
+; they take two one-button records. The PAINT record is staged per item by
+; shm_dbdraw straight out of sh_tbuf; the GESTURE record is staged only by a
+; press (shm_dbgrab) and no repaint touches it, so the release is judged
+; against the button the press armed. Its label is a copy of its own, since
+; the library redraws it on the drag and the release
+    OS88UI_BTNREC sh_dbx_prec, sh_tbuf, sh_dbx_plab, sh_dbx_pflg, 1
+sh_dbx_plab:  dw sh_tbuf + 8
+sh_dbx_pflg:  dw 0
+    OS88UI_BTNREC sh_dbx_btrec, sh_dbx_btrects, sh_dbx_glab, sh_dbx_gflg, 1
+sh_dbx_btrects: times 4 dw 0
+sh_dbx_glab:  dw sh_dbx_gtxt
+sh_dbx_gflg:  dw 0
+sh_dbx_gitem: db 0xFF                 ; the item staged there, 0xFF = none
+sh_dbx_grab:  db 0                    ; the module staged one: arm it
+sh_dbx_gtxt:  times 24 db 0           ; SHM_DBTXT, asserted beside it
+
+sh_dbx_onup_r:
+    push ax
+    push bx
+    mov bx, sh_dbx_btrec
+    call os88ui_btnup                 ; AX = what FIRED, 0 = cancelled
+    or ax, ax
+    pop bx
+    pop ax
+    jz .out
+    push bp
+    mov bp, SHM2_DFIRE
+    jmp sh_dbx_ev
+.out:
+    ret
+sh_dbx_ondrag_r:
+    push bx
+    mov bx, sh_dbx_btrec
+    call os88ui_btndrag
+    pop bx
+    ret
+
 ; sh_dbx_open - in: CX = width, DX = height; out: CF=1 not made
 sh_dbx_open:
     push ax
@@ -36480,6 +36618,18 @@ sh_dbx_open:
     mov ax, sh_dbx_close_r
     call OSAPI_WM_ONCLOSE
     call OSAPI_WM_SHOW
+    push dx
+    push di
+    mov ax, bx
+    mov bx, sh_dbx_btrec
+    mov si, sh_dbx_onup_r
+    mov di, sh_dbx_ondrag_r
+    mov dx, sh_dbx_click_r
+    call sh_btattach
+    mov byte [sh_dbx_gitem], 0xFF     ; nothing staged from the LAST dialog
+    mov word [sh_dbx_btrects + 4], -1 ; ...and a rect no point is inside
+    pop di
+    pop dx
     clc
 .out:
     pop si
@@ -36503,6 +36653,16 @@ sh_dbx_click_r:                       ; CX,DX = the click
 sh_dbx_ev:
     call sh_m2call
     pop bp
+    cmp byte [sh_dbx_grab], 0         ; a button the gesture record was not
+    je .nograb                        ; staged at: the module has staged it,
+    mov byte [sh_dbx_grab], 0         ; so the press is armed on it now
+    push ax
+    push bx
+    mov bx, sh_dbx_btrec
+    call os88ui_btnpress
+    pop bx
+    pop ax
+.nograb:
     cmp byte [sh_dbx_done], 0         ; a button: the window goes, and the
     je .out                           ; run carries on - INPUT's order
     mov byte [sh_dbx_done], 0
@@ -40756,7 +40916,7 @@ shm_mffind:
 shm_mffnext:
     SHOUT sh_skipargs
     push si
-    SHOUT sh_docmd_find
+    CHOUT SHM_FIND                     ; in CHART.OVL since 81.111
     pop si
     mov byte [sh_macro_dirty], 1
     jmp shm_mtrue
@@ -43416,6 +43576,8 @@ SHM_DBREC   equ 12                    ; +0 type +1 state (check: on; group:
                                        ; slot) +2 x +4 y +6 w +8 h (pixels,
                                        ; from the content's origin) +10 text
 SHM_DBTXT   equ 24
+    times SHM_DBTXT - 24 db 0         ; sh_dbx_gtxt's literal (81.111)
+    times 24 - SHM_DBTXT db 0
 SHM_DBEDITS equ 4
 shm_dbn:    db 0                      ; items
 shm_dbpend: db 0                      ; DIALOG.BOX waits for its answer...
@@ -44014,12 +44176,20 @@ shm_dbdraw:
     mov al, [cs:di]
     cmp al, 4
     ja .notbtn
-    mov bx, sh_tbuf                   ; a button
-    mov di, OS88UI_FILL
-    cmp cl, [cs:shm_dbdef]
+    xor ax, ax                        ; a button, through the paint record
+    cmp cl, [cs:shm_dbdef]            ; (81.111): the default wears the ring
     jne .btn
-    or di, OS88UI_DEF
+    mov al, OS88UI_DEF
 .btn:
+    mov [sh_dbx_pflg], ax
+    xor ax, ax                        ; ...and the pressed look is the
+    cmp cl, [sh_dbx_gitem]            ; gesture record's, for the one item
+    jne .up                           ; it is staged at
+    mov ax, [sh_dbx_btrec + OS88UI_BT_DOWN]
+.up:
+    mov bx, sh_dbx_prec
+    mov [bx + OS88UI_BT_DOWN], ax
+    mov al, 1
     SHOUT os88ui_btn
     jmp .out
 .notbtn:
@@ -44384,8 +44554,8 @@ shm_dbclick:
     mov bl, [cs:di]                   ; inside item CX
     cmp bl, 4
     ja .notbtn
-    call shm_dbpress
-    jmp short .out
+    call shm_dbgrab                   ; a button fires on the RELEASE now
+    jmp short .out                    ; (81.111, sh_dbx_ev arms it)
 .notbtn:
     cmp bl, 13
     jne .notchk
@@ -44429,6 +44599,58 @@ shm_dbclick:
     pop cx
     pop bx
     pop ax
+    ret
+
+; shm_dbgrab - stage the gesture record at button item CX (DI = its record,
+; its rect in sh_tbuf) and ask the resident thunk to arm it
+shm_dbgrab:
+    push ax
+    push si
+    push di
+    mov si, sh_tbuf
+    mov di, sh_dbx_btrects
+    mov ax, [si]
+    mov [di], ax
+    mov ax, [si+2]
+    mov [di+2], ax
+    mov ax, [si+4]
+    mov [di+4], ax
+    mov ax, [si+6]
+    mov [di+6], ax
+    pop di
+    push di
+    call shm_dblabel                  ; SI = its label, in DS
+    mov di, sh_dbx_gtxt
+.c:
+    mov al, [si]
+    inc si
+    mov [di], al
+    inc di
+    or al, al
+    jnz .c
+    xor ax, ax
+    cmp cl, [cs:shm_dbdef]
+    jne .nd
+    mov al, OS88UI_DEF
+.nd:
+    mov [sh_dbx_gflg], ax
+    mov [sh_dbx_gitem], cl
+    mov byte [sh_dbx_grab], 1
+    pop di
+    pop si
+    pop ax
+    ret
+
+; verb SHM2_DFIRE - the gesture record's button was released on (81.111)
+shm_dbfire:
+    push cx
+    mov cl, [sh_dbx_gitem]
+    cmp cl, 0xFF
+    je .out
+    xor ch, ch
+    call shm_dbpress
+.out:
+    pop cx
     ret
 
 ; shm_dbredio - every option button drawn again (one moved)
@@ -53360,7 +53582,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9174                     ; +24 for 81.108's Reference scratch;
+    OS88_BSS 9174                     ; 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -54423,8 +54645,7 @@ sh_v_sh_ymd_to_ser           equ sh_v_sh_ser_to_ymd + 4
 sh_v_sh_chart_paint           equ sh_v_sh_ymd_to_ser + 4
 sh_v_sh_chart_render          equ sh_v_sh_chart_paint + 4
 sh_v_sh_dlg                   equ sh_v_sh_chart_render + 4
-sh_v_sh_docmd_find            equ sh_v_sh_dlg + 4
-sh_v_sh_docmd_paste           equ sh_v_sh_docmd_find + 4
+sh_v_sh_docmd_paste           equ sh_v_sh_dlg + 4
 sh_v_sh_geom                  equ sh_v_sh_docmd_paste + 4
 sh_v_sh_new                   equ sh_v_sh_geom + 4
 sh_v_sh_pnum_at               equ sh_v_sh_new + 4
@@ -54455,7 +54676,8 @@ sh_v_sh_nt_set               equ sh_v_sh_macro_mfire + 4
 sh_v_sh_mtab_calc            equ sh_v_sh_nt_set + 4
 sh_v_sh_dbx_open             equ sh_v_sh_mtab_calc + 4
 sh_v_sh_note_load            equ sh_v_sh_dbx_open + 4
-sh_v_end      equ sh_v_sh_note_load + 4
+sh_v_sh_btfix                equ sh_v_sh_note_load + 4
+sh_v_end      equ sh_v_sh_btfix + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against

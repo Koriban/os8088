@@ -25,8 +25,9 @@ is the only way to get one on screen; the listing is this test's own disk, so
 """
 import os
 import subprocess
+import os
+import re
 import sys
-import time
 
 sys.path.insert(0, "tools")
 import os88build as _B
@@ -36,8 +37,28 @@ from os88geom import WIN_SIZE, MAX_WIN
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 MACHINE = ARGS[0] if ARGS else "os8088_5150_cga_gla"
+
+
+def _buildnum(path, name, env, default):
+    """The constant THIS BUILD was assembled with, not a default typed here.
+
+    `--rate=` used to default to 0, which was the shipped value and stopped
+    being it when 13.10.5.4.1's 8086 column was measured: the row then asserted
+    "the view did not move" against a kernel whose rate is 1 and went red for a
+    change that was correct. A gate's expectation has to come from the build.
+    The knob wins over the source, exactly as tests/sbrate286.py does it.
+    """
+    for d in os.environ.get(env, "").replace("-D", " ").split():
+        k, _, v = d.partition("=")
+        if k == name and v:
+            return int(v, 0)
+    m = re.search(r"^%define\s+" + name + r"\s+(\d+)", open(path).read(), re.M)
+    return int(m.group(1)) if m else default
+
+
 RATE = int(next((a.split("=")[1] for a in sys.argv[1:]
-                 if a.startswith("--rate=")), "0"))
+                 if a.startswith("--rate=")),
+                str(_buildnum("kernel/fdlg.inc", "FD_SBRATE", "OS88_DEFINES", 0))))
 W_FLAGS, W_X, W_Y, W_W, W_H, W_TITLE = 0, 2, 4, 6, 8, 10
 SBCELL, SBMINH = 10, 8
 
@@ -197,7 +218,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     was = scrl(m)
     mo.to(cx, top + h // 2)
     mo._edge(True)
-    time.sleep(0.8)
+    M.pace(m, 0.8)                      # ...a window for "nothing yet" too
     check("a press on the thumb starts a gesture", dragon(m) == 1)
     check("...and scrolls nothing yet", scrl(m) == was,
           f"(fdlg_scrl {scrl(m)}, was {was})")
@@ -209,7 +230,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
     # --- B/C: drag DOWN ----------------------------------------------------
     target = y2 - SBCELL - 1 - h // 2
     mo.to(cx, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     after = dragpos(m)
     t2 = thumb(ksb(m))
     check("...the element tracked it", after > 0, f"(pos {after})")
@@ -225,7 +246,7 @@ with M.launch("build/os8088-360.img", apps=DISK, machine=MACHINE) as m:
 
     # --- D: x is never read -------------------------------------------------
     mo.to(cx - 150, target, l=True)
-    time.sleep(1.2)
+    M.pace(m, 1.2)
     check("x is never read: 150px off the bar is the same pos",
           dragpos(m) == after, f"({dragpos(m)} vs {after})")
 

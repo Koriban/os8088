@@ -41,7 +41,6 @@ false of a machine working perfectly.
 import argparse
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -65,7 +64,24 @@ APPS = {"word":    ("WORD.O88", "Word"),
         "tank":    ("TANK.O88", "Tank"),
         "ftpd":    ("FTPD.O88", "FTP"),
         "browser": ("BROWSER.O88", "Browser"),
-        "audio":   ("AUDIO.O88", "Audio")}
+        "audio":   ("AUDIO.O88", "Audio"),
+        # ...and the two SHAPES the five above do not carry (SPEC.md
+        # 66.6.1.1). All five hire a worker, so this row proved the RESTART
+        # half five times over and the plain declaration not once - and the
+        # plain one is what 39 of the tree's 41 are. Calc has no worker at
+        # all, so it is movable on I_TASK == 0xFF and asserts MC_RLOC alone;
+        # REGPAIR is the canonical pair, and its worker is hired from the
+        # PAINT rather than the entry, so the ten seconds below is also what
+        # gives it a frame to hire in.
+        #
+        # REGPAIR IS A FIXTURE AND PAC-MAN WAS NOT, which is the whole of why
+        # this line changed. PACMAN.O88 held the slot until it was retired
+        # (SPEC.md 89.12, apps/RETIRED.txt), and a gate resting on a shipping
+        # program can have its case taken away by a decision that was never
+        # about the gate - which is exactly what happened. tests/regpair is
+        # 208 bytes, ships nowhere, and exists for this row alone.
+        "calc":    ("CALC.O88", "Calculator"),
+        "regpair": ("REGPAIR.O88", "Reg Pair")}
 
 
 def main():
@@ -103,13 +119,32 @@ def main():
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
             raise_disk()
             dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=fname)
-            time.sleep(10)
             # NO settle: Tank Attack redraws every frame for ever, and this
             # row reads guest MEMORY rather than the glass, so it does not
             # need the screen to hold still - which is what lets one row
-            # cover an animating package at all.
-            new = [w for w in os88geom.windows(m, S)
-                   if w.visible and w.i not in before]
+            # cover an animating package at all. So the wait is the window,
+            # then the memory this reads holding still for four GUEST seconds.
+            def fresh():
+                return [w for w in os88geom.windows(m, S)
+                        if w.visible and w.i not in before]
+
+            def held():
+                t = m.read(S("inst_tab"), INST_MAX * I_RECSZ)
+                return ([(w.i, u16(m.read(os88geom.winptr(m, w.i, S)
+                                          + os88geom.W_SEG, 2)))
+                         for w in fresh()],
+                        claims(m, S),
+                        [bytes(t[i * I_RECSZ:i * I_RECSZ + 12])  # not I_CYC,
+                         for i in range(INST_MAX)],              # which runs
+                        bytes(m.read(S("inst_restart"), INST_MAX * 2)))
+            try:
+                os88marty.until(m, lambda _: fresh(), "%s's window" % name,
+                                poll=0.3, limit=30)
+                os88marty.quiesce(m, held, guest=2.0,
+                                  what="%s's region and worker" % name)
+            except os88marty.MartyError as e:
+                print("  (%s)" % e)
+            new = fresh()
             if not new:
                 print("FAIL %-8s never opened a window" % name)
                 bad += 1

@@ -409,7 +409,7 @@ menu_activate:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_owner - who is the ACTIVE APPLICATION? (API 0x02B8, SPEC.md 12/12.6)
+; OSAPI_MENU_OWNER - who is the ACTIVE APPLICATION? (SPEC.md 12/12.6)
 ; in:  nothing
 ; out: BX = the window owning the menu bar, 0 = Locator. Every other
 ;      register, and FLAGS, preserved.
@@ -424,13 +424,13 @@ menu_activate:
 ; frame, exactly like wm_top. It is a plain word read: [menu_win] is written
 ; only by menu_activate on the UI task, and the 8086 recognises interrupts
 ; only at instruction boundaries, so it cannot be torn.
+;
+; AN INLINE CELL (SPEC.md 20.3): the cell is `mov bx, [cs:menu_win] / retf`
+; and there is no body - which is also what makes the per-frame poll cheap.
 ; -----------------------------------------------------------------------------
-menu_owner:
-    mov bx, [menu_win]
-    ret
 
 ; -----------------------------------------------------------------------------
-; menu_win_set - attach an app menu set to a window (API 0x0148, SPEC 12.2)
+; menu_win_set - attach an app menu set to a window (API 0x011E, SPEC 12.2)
 ; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
@@ -1984,14 +1984,14 @@ menu_drop:
     mov word [menu_sseg], 0
     call menu_save_kb           ; AX = what THIS menu's rect needs, not the
                                 ; worst case any menu could
-    mov bx, MEM_K_SAVE
+    mov bx, MEM_P_MSAVE         ; TRIVIAL-purgeable (SPEC.md 12.4.2)
     call mem_claim
     jc .noclaim                 ; refused: the restore repaints instead
     mov [menu_sseg], dx
 %ifdef OS88_COMPACT
     push ax                     ; ...and MOVABLE (SPEC.md 66.5.6). It is only
     mov ax, menu_reloc          ; 20KB and only lives for one menu - but that
-    mov bx, MEM_K_SAVE          ; is 20KB sitting mid-arena at exactly the
+    mov bx, MEM_P_MSAVE         ; is 20KB sitting mid-arena at exactly the
     call COLD_SEG:mmf_mem_movable ; moment a MENU COMMAND claims, which is one of
     pop ax                      ; the commonest ways a claim happens at all
 %endif                          ; ...and on kern_small nothing moves (SPEC.md
@@ -2005,10 +2005,8 @@ menu_drop:
     jz .nosave                  ; no buffer: the restore repaints instead
     mov es, ax
     xor di, di
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_save
 .nosave:
 
@@ -2028,16 +2026,12 @@ menu_drop:
 %endif
     ; --- draw the menu: the chrome's ground, its frame, items 8px in ---------
     call thm_bg
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_fill
     call thm_ink
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_frame
 
     mov bx, [menu_iptr]
@@ -2138,10 +2132,8 @@ menu_drop:
     jz .repaint
     mov es, ax
     xor si, si
-    mov ax, [menu_x1]
-    mov bx, [menu_y1]
-    mov cx, [menu_x2]
-    mov dx, [menu_y2]
+    call rect_get               ; the rect -> AX..DX, four adjacent words
+    dw menu_x1
     call gfx_restore
     jmp short .sel
 .repaint:                       ; no buffer: put back what the MENU covered,
@@ -2169,16 +2161,16 @@ menu_drop:
                                 ; is refused every time, so this WAS the
                                 ; normal path there and every menu after the
                                 ; first left its title inverted.
-    mov ax, [menu_x1]           ; which is the rect it drew and nothing else -
-    mov bx, [menu_y1]           ; gfx_save captures exactly this, there is no
-    mov cx, [menu_x2]           ; shadow outside it, and everything beyond it
-    mov dx, [menu_y2]           ; is still correct on screen (SPEC.md 11.91)
+    call rect_get               ; which is the rect it drew and nothing else -
+    dw menu_x1                  ; gfx_save captures exactly this, there is no
+                                ; shadow outside it, and everything beyond it
+                                ; is still correct on screen (SPEC.md 11.91)
     call wm_paint_dmg
 .sel:
     mov dx, [menu_sseg]         ; the menu is off the screen: hand the buffer
     or dx, dx                   ; back rather than hold 20KB until the next
     jz .nofree                  ; one (SPEC.md 12.4/50.2)
-    mov bx, MEM_K_SAVE
+    mov bx, MEM_P_MSAVE
     call mem_free
     mov word [menu_sseg], 0
 .nofree:
@@ -2347,16 +2339,32 @@ section .text
 ; -----------------------------------------------------------------------------
 menu_hover:
     push cx
-    mov ax, [mouse_x]
-    cmp ax, [menu_x1]
+    pushf                       ; ONE READING OF THE POINTER (SPEC.md 12.4.1).
+    cli                         ; mou_apply stores [mouse_x] and THEN
+    mov cx, [mouse_x]           ; [mouse_y], so a packet decoded between two
+    mov ax, [mouse_y]           ; plain loads hands this routine the OLD x
+    popf                        ; with the NEW y - a position the pointer
+                                ; never occupied. Everywhere else that would
+                                ; be one wrong XOR frame; here menu_drop
+                                ; LATCHES the answer in [menu_sel] and the
+                                ; release RUNS it, and one Microsoft packet
+                                ; carries the deltas and the button level
+                                ; together - so the report that lets go is
+                                ; exactly the one that can tear. Measured: a
+                                ; single (-100, +18, up) packet off a title
+                                ; launched the menu's first item 4 times in
+                                ; 320, from two coordinates neither of which
+                                ; is over it
+    cmp cx, [menu_x1]
     jb .none
-    cmp ax, [menu_x2]
+    cmp cx, [menu_x2]
     ja .none
-    mov cx, [menu_y1]
-    inc cx                      ; the top frame row is not an item cell
-    mov ax, [mouse_y]
-    sub ax, cx                  ; rows above the first cell borrow out
-    jb .none
+    sub ax, [menu_y1]           ; rows above the first cell borrow out, and
+    jbe .none                   ; the frame row ITSELF is not an item cell -
+    dec ax                      ; which is the [menu_y1] + 1 this used to
+                                ; add, spelled so that the y can stay in AX
+                                ; and the routine still clobbers nothing but
+                                ; it
     mov cl, 4
     shr ax, cl                  ; / 16 -> cell index
     cmp ax, [menu_cnt]
@@ -2722,11 +2730,15 @@ menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
                                 ; menu is always cell 0)
 menu_ent:   resw 1              ; -> bar cell being tracked
 menu_cell:  resb 1              ; its index (the AH half of menu_track's out)
-menu_x1:    resw 1              ; dropped menu rect, left
-menu_x2:    resw 1              ; dropped menu rect, right
-menu_y1:    resw 1              ; dropped menu rect, top - MBAR_H from the
+menu_x1:    resw 1              ; dropped menu rect, left. IN RECT ORDER
+menu_y1:    resw 1              ; (x1,y1,x2,y2) since size pass 4, so menu_drop
+                                ; reads it with rect_get: top - MBAR_H from the
                                 ; bar, the shifted anchor from a popup (12.4)
+menu_x2:    resw 1              ; dropped menu rect, right
 menu_y2:    resw 1              ; dropped menu rect, bottom
+RECT4 menu_x1, menu_y1, menu_x2, menu_y2 ; wm.inc's rect_get assertion, here
+                                ; and not at wm.inc's foot: menu.inc is
+                                ; included after it, so there these are forward
 menu_cnt:   resw 1              ; item count of the tracked menu
 menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the

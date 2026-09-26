@@ -58,8 +58,9 @@ HF_DMAKB  equ 60              ; check 14's page-constrained block: the head
 HF_MINKB  equ 64              ; below this there is no room to build a comb
                               ; that proves anything, and the suite says so
                               ; rather than passing vacuously
-HF_ROWS   equ 15
-HF_BSS_TOTAL equ 128
+HF_ROWS   equ 18                ; ...15 to 18 at SPEC.md 66.4.3
+HF_RROWS  equ 4                 ; ...and the KEY-driven region suite's own
+HF_BSS_TOTAL equ 176
 
 ; -----------------------------------------------------------------------------
 ; hf_entry - just the window; the suite runs on the first paint (see the header)
@@ -69,7 +70,167 @@ hf_entry:
     mov si, hf_tpl
     call OSAPI_WM_CREATE
     mov [hf_win], bx            ; the worker needs it (SPEC.md 20.6)
+    ; OUR OWN REGION IS A CANDIDATE, which is what checks 16-18 are about
+    ; (SPEC.md 66.4.3): without the declaration mem_can_move refuses on
+    ; MC_RLOC before mem_frameless is ever reached, so the what-if's excuse -
+    ; the one line under test - is never executed and the rows below pass
+    ; vacuously. The restart point goes with it because this package owns a
+    ; worker (SPEC.md 66.6.2), and hf_worker is safe to re-enter at the top:
+    ; it parks and sleeps and holds nothing across either.
+    OS88_REGION_MOVABLE
+    clc                         ; ...and the entry owes the loader CF = 0:
+                                ; OSAPI_MEM_MOVABLE answers in CF and the macro
+                                ; leaves it, so without this the launch aborts
+                                ; with LD_EABORT and the package refuses itself
+    push ax
+    mov ax, hf_wake             ; ...and check 18 is answered there, because
+    call OSAPI_WM_ONWAKE        ; that is the whole shape under test: a package
+    pop ax                      ; cannot compact its own region from inside its
+                                ; own callback, so it posts and is woken
     pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; hf_wake - W_ONWAKE: checks 17 and 18, which cannot run at suite time
+; in:  SI = our window; the UI task, no gfx lock (SPEC.md 74.1)
+;
+; SPEC.md 66.4.3. Check 16 posted OSAPI_MEM_COMPACT and RETURNED, which is
+; the only way a package's own region can be planned as movable: at ui_task's
+; step 0 our callback has returned, [wm_pkgd] is 0, and mem_frameless answers
+; "movable" for us with no predicate changed. Arriving here at all is check 17.
+;
+; And check 18 is the promise the whole design rests on: plain OSAPI_MEM_AVAIL
+; read HERE is EXACT, because the pass has run and the heap really is packed
+; both ways - so a package with an exact requirement claims against a true
+; number instead of an estimate. It must be at least what the what-if said
+; before the post; more is legitimate (the machine moved on), less is the
+; failure that would have this package refuse a file it could have opened.
+; -----------------------------------------------------------------------------
+hf_wake:
+    push ax
+    push bx
+    cmp byte [hf_woke], 0
+    jne .region                 ; THE KEY'S POST, not the suite's: 17 and 18
+                                ; are already recorded and recording them
+                                ; twice would push hf_n past HF_ROWS and slide
+                                ; every label in the harness by two
+    mov byte [hf_woke], 1
+    call OSAPI_MEM_AVAIL        ; AX = largest run KB, and now it is the truth
+    mov [hf_avwake], ax
+    call hf_pass                ; 17: the post round-tripped
+    mov bx, [hf_avmax]
+    cmp ax, bx
+    jb .short
+    call hf_pass                ; 18: ...and the wake's answer is not short of
+    jmp short .region           ; what the what-if predicted
+.short:
+    call hf_fail
+.region:
+    cmp word [hf_rn], 0
+    je .out                     ; the key has not run, so there is no hole
+                                ; above us and nothing to say
+    mov ax, cs
+    cmp ax, [hf_rseg0]
+    jbe .nomove
+    call hf_rpass               ; R3: OUR OWN REGION WENT UP, which is the
+    jmp short .wav              ; whole feature - and CS is the reading,
+                                ; because the bytes we are executing are the
+                                ; ones that moved
+.nomove:
+    call hf_rfail
+.wav:
+    call OSAPI_MEM_AVAIL
+    mov [hf_ravwake], ax
+    cmp ax, [hf_rmax]
+    jb .noav
+    call hf_rpass               ; R4: ...and plain mem_avail here is not short
+    jmp short .out              ; of what the what-if said before the post
+.noav:
+    call hf_rfail
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hf_key - W_ONKEY: THE REGION'S OWN MOVE, which the suite cannot ask
+;
+; SPEC.md 66.4.3. While the suite runs, this package's region is the TOPMOST
+; claim on the heap - a region is claimed top-down and nothing else has been
+; launched - so there is never a hole above it and the what-if has nothing to
+; find. The harness builds the reported scenario instead: open PAINT FIRST so
+; its region takes the ceiling and ours lands underneath, let the suite run,
+; CLOSE Paint, and press a key. A package standing in for the unmounted
+; driver, and the hole in the same place.
+;
+; ONCE. A second keystroke would post again, which is the go-round the SDK
+; warns about: the what-if measured a state the machine has since left, and
+; the number to claim against is the one on the wake.
+; -----------------------------------------------------------------------------
+hf_key:
+    push ax
+    push bx
+    cmp word [hf_rn], 0
+    jne .out
+    mov ax, cs
+    mov [hf_rseg0], ax          ; where we are BEFORE
+    call OSAPI_MEM_AVAIL
+    mov [hf_rav], ax
+    mov ax, MEM_LVL_TOP         ; THE SAME LEVEL AS THE PLAIN SLOT ABOVE, or
+    call OSAPI_MEM_COMPACT      ; the two are answers to different questions
+                                ; (AH = MEMC_WHATIF)
+    mov [hf_rmax], ax
+    cmp ax, [hf_rav]
+    jb .nomax                   ; **NOT STRICTLY GREATER.** The what-if can
+    call hf_rpass               ; only ever find MORE room, never less, and
+    jmp short .post             ; that half holds in every layout - but whether
+.nomax:                         ; it finds any depends on where the holes are,
+    call hf_rfail               ; and a kernel 11KB bigger moved this machine
+                                ; out of the regime the strict test assumed
+                                ; (measured: a 223KB hole below a pinned block
+                                ; and 9KB above it, so excusing our 3KB region
+                                ; grew the SMALLER of the two). The exact
+                                ; assertion needs a model of the map and lives
+                                ; on the HOST, in tests/heapcheck.py - which is
+                                ; also the only thing that can see a what-if
+                                ; reading SHORT, since R4 below is one-sided
+.post:
+    mov bx, [hf_win]
+    mov ax, (MEMC_POST << 8) | MEM_LVL_TOP
+    call OSAPI_MEM_COMPACT
+    jc .nopost
+    call hf_rpass               ; R2: posted - and R3 and R4 are answered in
+    jmp short .out              ; hf_wake, because that is the whole shape
+.nopost:
+    call hf_rfail
+.out:
+    pop bx
+    pop ax
+    ret
+
+; --- hf_rpass / hf_rfail - the REGION suite's own result bytes ---------------
+; Separate from hf_res on purpose: nine test files put HEAPFRAG.O88 on a disk
+; and the harness that reads hf_n expects exactly HF_ROWS, so a key-driven
+; check appended there would make every one of them report a short suite.
+hf_rpass:
+    push bx
+    mov bx, [hf_rn]
+    cmp bx, HF_RROWS
+    jae .out
+    mov byte [bx+hf_rres], 0
+    inc word [hf_rn]
+.out:
+    pop bx
+    ret
+hf_rfail:
+    push bx
+    mov bx, [hf_rn]
+    cmp bx, HF_RROWS
+    jae .out
+    mov byte [bx+hf_rres], 1
+    inc word [hf_rn]
+.out:
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -109,6 +270,51 @@ hf_worker:
 ; its holder is the failure that leaves a package reading its old address, and
 ; from inside the package that is indistinguishable from not having moved.
 ; -----------------------------------------------------------------------------
+; hf_availp - OSAPI_MEM_AVAIL with every block this suite holds PINNED, and
+; the declarations given back after (SPEC.md 66.4.3.5). Three checks size a
+; claim at one KB past the largest run so that only a MERGE can fund it, and
+; that run has to be measured without the merge: mem_avail answers what a
+; claim would be handed, a claim parks this package's worker and then moves
+; these blocks, so asked with them movable it answers the merged figure and
+; the +1 is a claim the contract says must fail. Out: AX, BX as the slot.
+hf_availp:
+    push ax
+    xor ax, ax
+    call hf_setrloc             ; AX = 0 pins every block held
+    pop ax
+    call OSAPI_MEM_AVAIL
+    push ax
+    mov ax, hf_reloc
+    call hf_setrloc             ; ...and movable again, bar HF_PIN
+    pop ax
+    ret
+
+; hf_setrloc - AX = the relocation proc to declare on every block still held -
+; the comb and the slot past it that checks 13 and 14 ride in - (0 = pin it),
+; HF_PIN excepted: that one stays pinned whatever is asked. Preserves all.
+hf_setrloc:
+    push bx
+    push dx
+    push di
+    xor di, di
+.lp:
+    cmp di, [hf_pin]
+    je .nx
+    mov bx, di
+    shl bx, 1
+    mov dx, [bx+hf_base]
+    or dx, dx
+    jz .nx                      ; one step 5 freed
+    call OSAPI_MEM_MOVABLE
+.nx:
+    inc di
+    cmp di, HF_N
+    jbe .lp
+    pop di
+    pop dx
+    pop bx
+    ret
+
 hf_reloc:
     push ax
     push cx
@@ -157,6 +363,11 @@ hf_run:
     mov bx, [hf_win]
     call OSAPI_TASK_SPAWN       ; UI-task callback with the lock held, which
     jc .noworker                ; is this slot's contract (SPEC.md 20.6)
+    OS88_WORKER_RESTARTABLE hf_worker   ; ...and HERE, not in the entry proc:
+                                ; there is no worker to make restartable until
+                                ; the spawn has taken (SPEC.md 66.6.2), and
+                                ; without it mem_frameless hard-pins our region
+                                ; on I_TASK alone and checks 16-18 go vacuous
     call hf_pass
     jmp short .room
 .noworker:
@@ -277,7 +488,15 @@ hf_run:
     ; proves nothing at all. THE ASSERTION IS THAT THE ANSWER IS NO before it
     ; is yes.
 .frag:
-    call OSAPI_MEM_AVAIL        ; AX = largest run, BX = total free
+    ; MEASURED WITH THE COMB PINNED (SPEC.md 66.4.3.5). OSAPI_MEM_AVAIL answers
+    ; what a claim would be handed, and a claim PARKS this package's worker and
+    ; then moves the comb - so asked with the comb movable it answers the
+    ; COMPACTED run, want = L1 + 1 is a claim the contract says must fail, and
+    ; this suite proves nothing. It used to be pinned by accident: the plan
+    ; asked about the worker as it stood, found it running, and walled the comb
+    ; in. The question this check asks is "the biggest run without moving MY
+    ; blocks", so it says so - pin, measure, and give the declaration back.
+    call hf_availp              ; AX = largest run, BX = total free
     mov [hf_l1], ax
     mov [hf_tot], bx
     inc ax                      ; ONE KB MORE THAN THE BIGGEST HOLE ANYWHERE,
@@ -436,7 +655,7 @@ hf_run:
     mov dx, [hf_hia]
     call OSAPI_MEM_FREE         ; the hole above it exists from here
     mov word [hf_hia], 0
-    call OSAPI_MEM_AVAIL        ; ...and the run below it is the largest thing
+    call hf_availp              ; ...and the run below it is the largest thing
     inc ax                      ; on the machine, so one KB more than it can
     call OSAPI_MEM_CLAIM        ; only come from the two being MERGED - which
     jc .ceilnoc                 ; needs the block between them to pack up
@@ -520,7 +739,7 @@ hf_run:
     mov dx, [hf_bigseg]         ; ...and NOW open the hole under it
     call OSAPI_MEM_FREE
     mov word [hf_bigseg], 0
-    call OSAPI_MEM_AVAIL
+    call hf_availp
     inc ax                      ; one KB more than the largest single run, so
     call OSAPI_MEM_CLAIM        ; only a merge can fund it - and the block in
     jc .dmapop                  ; the way is the page-constrained one
@@ -558,6 +777,72 @@ hf_run:
     mov dx, [bx+hf_base]
     call OSAPI_MEM_FREE
     mov word [bx+hf_base], 0
+
+    ; --- 15. mem_avail's ANSWER IS CLAIMABLE (SPEC.md 66.4.3.1) -------------
+    ; The one gate that guards the whole combined plan, and the only direction
+    ; of error that matters: mem_avail now models BOTH passes, so an arithmetic
+    ; slip there promises memory mem_claim cannot produce - and a claim that
+    ; fails is DESTRUCTIVE, shedding the disk caches on its way to the refusal.
+    ; Ask, claim exactly that, and give it straight back.
+    ; A LIVE CEILING MOVER FIRST, and without one these rows test nothing:
+    ; mem_cp_newbase is only ever called for a top-down claim the descending
+    ; pass may move, and by here check 13 has freed its own and our REGION is
+    ; pinned by the worker. Verified by amputation - mem_cp_newbase patched to
+    ; answer [mem_top] and every row below still green - which is exactly the
+    ; hole docs/WRITING-TESTS.md 1 is about.
+    mov ax, [hf_s]
+    call OSAPI_MEM_CLAIM_HI
+    jc .av_nohi
+    mov [hf_hia], dx
+    mov ax, hf_reloc
+    call OSAPI_MEM_MOVABLE      ; DX is still its base
+.av_nohi:
+    call OSAPI_MEM_AVAIL
+    mov [hf_av], ax
+    or ax, ax
+    jz .av_bad
+    call OSAPI_MEM_CLAIM
+    jc .av_bad                  ; it promised more than it had
+    call OSAPI_MEM_FREE         ; DX is still the base
+    call hf_pass
+    jmp short .avmax
+.av_bad:
+    call hf_fail
+
+    ; --- 16. ...and the what-if is never SMALLER ----------------------------
+    ; The what-if plans the same heap with our own region excused, so it can
+    ; only ever find more room, never less. Bigger is the interesting case and
+    ; needs a hole above this package's region to show - which this package
+    ; cannot build for itself, being the topmost thing on the heap. What is
+    ; asserted here is the half that holds in every layout, and it is the half
+    ; a sign error would break.
+.avmax:
+    mov ax, MEM_LVL_TOP         ; AH = MEMC_WHATIF
+    call OSAPI_MEM_COMPACT
+    mov [hf_avmax], ax
+    cmp ax, [hf_av]
+    jb .max_bad
+    call hf_pass
+    jmp short .post
+.max_bad:
+    call hf_fail
+
+    ; --- ...and POST, whose answer arrives in hf_wake (checks 17 and 18) ----
+    ; The suite ends here deliberately: a package may not compact its own
+    ; region from inside its own callback, so this records the wish and
+    ; RETURNS, and ui_task's step 0 spends it with nothing held.
+.post:
+    mov dx, [hf_hia]            ; the ceiling mover has done its job
+    or dx, dx
+    jz .post2
+    call OSAPI_MEM_FREE
+    mov word [hf_hia], 0
+.post2:
+    mov bx, [hf_win]
+    mov ax, (MEMC_POST << 8) | MEM_LVL_TOP  ; every cache may go, an ordinary
+    call OSAPI_MEM_COMPACT      ; claim's rank
+    jc .done
+    mov byte [hf_posted], 1
 
 .done:
     cmp word [hf_bigseg], 0     ; GIVE THE BIG CLAIM BACK, always. It has done
@@ -851,7 +1136,7 @@ hf_numgo:
 
 hf_tpl:
     dw 140, 26, 250, 250
-    dw hf_ttl, hf_paint, 0, 0
+    dw hf_ttl, hf_paint, hf_key, 0
 
 hf_ttl:    db 'Heap Compaction', 0
 hf_s_pass: db 'PASS', 0
@@ -904,7 +1189,22 @@ hf_tot     equ os88_image_end + 90   ; word: total free KB when the comb broke
 hf_done    equ os88_image_end + 28   ; byte: the suite has run
 hf_pad     equ os88_image_end + 29   ; byte:
 hf_num     equ os88_image_end + 32   ; 8 bytes: the number formatter
-hf_res     equ os88_image_end + 40   ; HF_ROWS result bytes, 0 = PASS
+hf_av      equ os88_image_end + 40   ; word: OSAPI_MEM_AVAIL at check 15
+hf_avmax   equ os88_image_end + 42   ; word: ...and the what-if
+hf_avwake  equ os88_image_end + 44   ; word: ...and plain avail ON THE WAKE,
+                                  ; which the harness cross-checks against its
+                                  ; own model of the claim map (SPEC.md 66.4.3)
+hf_posted  equ os88_image_end + 46   ; byte: the compaction was posted
+hf_woke    equ os88_image_end + 47   ; byte: ...and the wake arrived
+hf_rres    equ os88_image_end + 148  ; HF_RROWS region-suite bytes, 0 = PASS
+hf_rn      equ os88_image_end + 152  ; word: region checks recorded
+hf_rseg0   equ os88_image_end + 154  ; word: our region's base BEFORE the post
+hf_rav     equ os88_image_end + 156  ; word: mem_avail at the key
+hf_rmax    equ os88_image_end + 158  ; word: ...and mem_avail_max
+hf_ravwake equ os88_image_end + 160  ; word: ...and plain avail on the wake
+hf_res     equ os88_image_end + 128  ; HF_ROWS result bytes, 0 = PASS. Moved
+                                  ; out of +40 when the suite went to 18 rows:
+                                  ; 18 bytes there would have run into hf_base
 hf_base    equ os88_image_end + 56   ; HF_N+1 words: each block's LIVE base,
                                   ; the last being check 13's ceiling block
 hf_base0   equ os88_image_end + 92   ; HF_N+1 words: ...and where it started

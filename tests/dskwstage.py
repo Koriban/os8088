@@ -132,7 +132,7 @@ class Caller(object):
         self.lock = os88sym.linear("sch_lock")
         # **ON TASK 0's STACK, NOT ON THE INTERRUPTED TASK'S**, and this is
         # what the row was failing on - `dskw_write_x never returned`, 2 runs
-        # in 3, at both ends of the pass (docs/plans/HANDOFF-SOAK-FINDINGS.md E2,
+        # in 3, at both ends of the pass (
         # which got as far as ruling out the ROM and the box's load).
         #
         # It used to take the paused machine's own SS:SP and drop 96 bytes,
@@ -272,7 +272,7 @@ def _where(m, limit):
     """WHERE the guest is, for a call that never came back.
 
     `wait_stop`'s budget is GUEST seconds now (os88marty, and
-    docs/plans/HANDOFF-SOAK-FINDINGS.md E2 is the entry that made it so), so a
+    the pass-3 soak is what made it so), so a
     timeout here means the machine really did run that long inside the call -
     it is not the box being loaded. What it does NOT say is where, and "the
     machine is still running" was the whole of the old message: E2 spent four
@@ -424,11 +424,21 @@ def run(img, apps, machine, want_bug, verbose):
         # not run, and IRQ6 may still be pending. Everything below then runs
         # `int 13h` with IF clear (see the Caller), so a completion that
         # arrives from the PREVIOUS operation is one this call will never
-        # account for. Five guest seconds is past every motor timeout in the
-        # ROMs here, and the machine spends them halted (SPEC.md 8.1.2), so it
-        # is five seconds of nothing rather than five seconds of work.
+        # account for. So wait for the drive, not for five idle seconds: no
+        # controller traffic for 2.5 guest seconds (past the IBM ROM's
+        # 37-tick motor-off count, which is 2.03), and then the BIOS's own
+        # MOTOR STATUS at 0040:003F with its four drive bits clear, for a ROM
+        # that keeps one - GLaBIOS reads 0 there throughout. Five guest
+        # seconds, what this was as a sleep, bounds the second half.
         m.run()
-        os88marty.guest_sleep(m, 5.0)
+        os88marty.quiesce(m, m.disk, guest=1.25,
+                          what="the floppy controller's traffic")
+        try:
+            os88marty.until(m, lambda _: not (m.read(0x43F, 1)[0] & 0x0F),
+                            "the diskette motors to stop", poll=0.05,
+                            guest=5.0)
+        except os88marty.MartyError:
+            pass
         m.bp_exec(os88sym.linear("sch_idle_body.loop"))
         m.run()
         if m.wait_stop(30.0) is None:
@@ -661,7 +671,7 @@ def main():
                                                   "os8088-360.img"))
     ap.add_argument("--apps", default=os.path.join(ROOT, "build",
                                                    "apps360.img"))
-    # The twin: docs/plans/HANDOFF-SOAK-FINDINGS.md E2 ran this row on the IBM ROM
+    # The twin: the pass-3 soak ran this row on the IBM ROM
     # and on GLaBIOS and got the identical hang, so the ROM is measured NOT
     # to be the variable here.
     ap.add_argument("--machine",

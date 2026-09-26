@@ -5,9 +5,13 @@
 > design record: what was measured, what the measurement overturned, and what
 > is deliberately left as a knob.
 
-Read `docs/plans/HANDOFF-SOAK-FINDINGS.md` first if a row is failing — it is the
-queue of known findings and most failures are already in it. This file is
-about the RUN rather than the rows.
+**A failing row is a defect until it is diagnosed, and there is no list of
+rows it is acceptable to find red.** There used to be one — a one-time
+handoff of what a size pass's soak turned up — and it was read as a standing
+permission to look a failure up rather than fix it, so it is gone. A row that
+an agent runs and then ignores the result of is worse than no row: it costs
+the emulator time and buys nothing. This file is about the RUN rather than
+the rows.
 
 ---
 
@@ -158,24 +162,26 @@ sleeping through a dead machine.
 
 ---
 
-## 3. THE ONE THING LEFT AS A KNOB, and why
+## 3. THE PACE IS GUEST TIME - it was the one thing left as a knob
 
-`OS88_GUEST_PACE=<ratio>` routes `os88mouse`'s three fixed settles through
-`guest_sleep`. It is **off by default.**
+`os88marty.GUEST_PACE` is how many GUEST seconds a harness pause spends per
+second the caller wrote, and every pause in the harness goes through
+`os88marty.pace()`: `settle`'s stillness window, `os88mouse`'s click, drag and
+menu settles and its gap between packets, `os88mouserel`'s wall pacing,
+`bp_count`'s arm, quiet and first windows, and `launch(boot=<secs>)`. The
+default is **4.5**, the idle ratio measured on this container (4.4-4.8 over
+three samples, idle desktop), so every existing call spends what it spent on a
+quiet box - and now spends it on a busy one too.
 
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` B5 is right that rewriting these waits onto
-guest time "reaches 194 files, changes how much guest work every row gets per
-settle, and would want a full soak behind it". A knob is how this project
-takes a change of that shape: the arm exists, it is measurable against the
-default, and the flip is a decision somebody makes **with a soak behind it**
-rather than one that happens quietly.
+It was a knob, **off by default**, while it waited for "a full soak behind
+it"; the flip came with a sweep of the individual `time.sleep` calls in
+`tests/` onto guest state and guest time, validated row by row.
+`OS88_GUEST_PACE=0` puts the host sleeps back, for an A/B and nothing else.
 
-Set it to the box's own idle ratio (~4.8 here) to reproduce today's coverage
-exactly. Below that and rows get less guest time than they do now.
-
-**The asymmetry that makes this safe to flip when somebody does:** raising the
-guest time a wait spends can only turn a failure into a pass. It cannot change
-what a passing row measures. What it costs is wall clock under load.
+**The asymmetry that made it safe to flip:** raising the guest time a wait
+spends can only turn a failure into a pass. It cannot change what a passing
+row measures. What it costs is wall clock under load, which is the honest
+price of asking for the same work.
 
 ---
 
@@ -266,7 +272,7 @@ cause failures". What DOES perturb a run is running rows beside it, or a
 
 ## 5. THE IBM ROM — the case, and why none of the rows made it
 
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` E3: *"a machine naming an IBM romset SILENTLY
+The pass-3 soak found that *"a machine naming an IBM romset SILENTLY
 RESOLVES to `glabios_pc` when the ROM file is absent, so the handful of rows
 that ask for one were not testing it either."* Nine rows named a non-GLaBIOS
 machine; four were registered; **not one had ever run on the ROM it asked
@@ -329,7 +335,7 @@ All four registered rows pass on the twins: `drvcall` 57.1 s, `fillpat` 24.5 s,
 soak row declaring 60 seconds, and reported **`ok` in 0.1 s**: it booted
 nothing, asserted nothing, and could never fail.
 
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` B4 records three rows that FAILED in 0.1 s
+The pass-2 soak turned up three rows that FAILED in 0.1 s
 where they meant to skip, and those got investigated **because they were red**.
 A green row that tests nothing is the worse half of the same shape, because
 nobody investigates a pass.
@@ -374,14 +380,14 @@ Both re-declared at 60.
   ("one passing run is not a classification"); this is the same lesson
   arriving from the other side, and it is a row for the test-fixing pass
   rather than for this one.
-* **The `guest_sleep` sweep across 99 files has not been taken**, and should
-  not be until `OS88_GUEST_PACE` has a soak behind it (§3).
+* **The `guest_sleep` sweep has been taken** (§3): the harness pauses are
+  guest time by default and the individual sleeps in `tests/` wait on guest
+  state or spend guest time.
 * **`GUEST_BUDGET_RATIO` is set from one box's measurement.** `OS88_WAITLOG`
   on the next full soak is what confirms or moves it; the widest wait seen so
   far leaves 17x of headroom, so it is not close.
 * **`blitp` and `blitpair` fail, and they failed before this work** — same
-  20,327 pixels, same message, at `af1f2e0`. Recorded as
-  `docs/plans/HANDOFF-SOAK-FINDINGS.md` F1 with the base-worktree recipe that
+  20,327 pixels, same message, at `af1f2e0`. The base-worktree recipe
   settled it in four minutes.
 * **No full soak has been run behind this.** The gates that have: `make`'s
   fast tier (44/44), `os88test full` (56 passed, 0 failed, 0 skipped, 401.8 s),
@@ -440,6 +446,19 @@ them is 36 MB and `make clean` sweeps them.
   for the first's *build*, not for its run;
 * **`build/` is never written by a row at all**, so a person or another agent
   may `make` in the checkout while a soak runs.
+
+**THE ARTEFACTS ARE FROZEN AND THE SOURCE IS NOT — so nothing may change the
+checkout's source while a soak runs: no merge, no pull, no edit under
+`kernel/`, `apps/`, `drivers/` or `boot/`.** Two things still read the working
+tree. `tools/os88sym.py` assembles `kernel.asm` from the checked-out source and
+refuses a map that does not match the tree's `kernel.bin`, and every row that
+builds INTO the run's tree (`make telnettest` and the like) builds it from
+that source too. Soak `20260925-003439` was lost to exactly this: a merge
+landed a real change to `kernel/disk.inc` twenty-four minutes in, the next
+`make` a row ran rebuilt the frozen tree's `kernel.bin` beside images that
+still carried the old one, and every result after it was about two kernels at
+once. It was stopped and re-run from zero. Merge after the run, or soak a
+separate checkout.
 
 **The lock is `flock`, held only across the build.** That is the argument for
 deleting `martylock.py` rather than reusing it: a lease was needed there
@@ -544,11 +563,11 @@ A tree has to NAME what it wants, and naming it is a question the shared
   `make mseg && python3 tests/mseglazy.py`, `mseg` is not in `all`, and neither
   row built it — so on any tree where nobody had typed that by hand they died
   with `FileNotFoundError` on `build/mseg.o88`. That is
-  `docs/plans/HANDOFF-SOAK-FINDINGS.md` B4's shape exactly: an **absent** gate
+  the ABSENT-artefact shape exactly: an **absent** gate
   reading as a failing one. Both build it in their tree now, and `mseglazy`
   passes in 39 s.
 * **`msegnomem` then produced its FIRST EVER VERDICT, and it is a failure** —
-  see F2 in the findings.
+  the row's own header carries the diagnosis.
 
 **And a third row could only ever run ONCE per checkout.** `knobhd` installs to
 a hard disk in one machine and boots it in another, which needs a run tree that
@@ -867,7 +886,7 @@ python3 tools/os88bisect.py search <row> --good <ref> --bad <ref>
 python3 tools/os88bisect.py clean
 ```
 
-`docs/plans/HANDOFF-SOAK-FINDINGS.md` E1 is a bisect that was published-adjacent and
+The pass-3 soak ran a bisect that was published-adjacent and
 **wrong**: it named a commit whose entire diff to shipped code is four comment
 lines. Three errors stacked, each cheap to repeat by hand:
 
@@ -994,6 +1013,19 @@ with a smaller `quiet` needs proportionally more captures.
 **The floor is real, so the only way to spend less is not to settle** — which
 is what `tools/os88ui.py` is for, and this is the measurement that made it
 worth building.
+
+**...and later it came down anyway, by asking the machine instead of the
+screen.** The floor is real for the case the gap log measured - a screen that
+goes still *while something is still working* - and that case is visible
+from inside: ui_task is not asleep, the gfx lock is held, an event is queued
+or the drive is reading. `os88marty.ui_idle` reads those five facts, and
+`settle` keeps its full `quiet` window for any interval where one of them is
+true and uses 0.2 guest seconds where none is, a capture only counting as the
+same if the UI was still idle and the drive still unmoved at its end. On
+`dispcheck` the settles after a gesture fell from 9+ guest seconds each to
+0.8-0.9, while a display-mode change kept its full 5.5 because the UI was
+repainting through all of it. The mouse verbs' fixed pauses went the same
+way (`ui_done`, capped at the old pause). `OS88_SETTLE_UI=0` is the A/B.
 
 ### 11.3 What came off, in four steps
 
@@ -1634,3 +1666,80 @@ cursor, `_edge()` proves `mouse_btn`, and neither proves that the kernel's
 event ring took anything. The only honest confirmation of a gesture is the
 state the gesture is *for* — `ui_dragwin` for a drag, `menu_dropd` for a menu
 — and a row that waits on anything else is waiting on a fact it already had.
+
+## 16. `/dev/null` — THE BOX ITSELF, and it broke mid-run here
+
+**CLOSED: it was NASM, run by this repo's own tests.** A container gave this
+project a `/dev/null` that was a **regular file** rather than a character
+device, and it did it *during* a soak - the run went 14:24→16:18 and the
+node's birth time was **15:14**. It happened again on 2026-09-24, born at
+15:33:45 with the `kd*`/`dos*` rows in flight, and this time the cause was
+measured rather than inferred. NASM treats its output files as its own: on a
+FAILED assembly it unlinks the file `-o` names, and it REPLACES the file `-l`
+names even on a successful one. Measured on 2.16.01 and 3.02 against a private
+`mknod c 1 3`:
+
+| | success | failure |
+|---|---|---|
+| `-o <device>` | still a character device | **unlinked** |
+| `-l <device>` | **a regular file** | **a regular file** |
+
+This container runs as root, so pointed at `/dev/null` that is the device
+itself. `tests/kerndos.py` assembled `kdboot.asm` with `-l /dev/null` on every
+soak - the `kerndos` row sat inside the minute the node was born - and eleven
+more sites passed `-o /dev/null` and were one failed assembly away from the
+same thing. The earlier reading that nasm "truncates rather than replaces"
+was true of the one case it tested, a successful `-o`, and of neither of the
+two that break it. Every site now writes a temp file beside the listing or map
+it wanted, and `tests/unit/t_nulldev.py` (fast tier) fails the build on the
+ARGUMENT - `-o` or `-l` then `/dev/null` in a command that names nasm - so it
+is caught at the edit rather than two hours into a run.
+
+**Ask before a two-hour run, because nothing it breaks names it:**
+
+```sh
+stat -c %F /dev/null        # must say: character special file
+```
+
+`os88soak.py check` asks it now, beside the assembler, and prints the repair as
+its fix line:
+
+```sh
+mknod /dev/null.new c 1 3 && chmod 666 /dev/null.new \
+    && mv -f /dev/null.new /dev/null        # as root
+```
+
+### 16.1 Why it is worth one `stat`
+
+Four separate failures, none of which mentions `/dev/null`:
+
+- **`./configure` dies on a spliced `config.status`.** autoconf's default
+  `cache_file` **is** `/dev/null`, so its cache flush's
+  `diff "$cache_file" confcache >/dev/null 2>&1` writes instead of discarding,
+  and the diff lands inside the `config.status` being generated, which then
+  fails on `0a1,180: command not found`. That is the whole reason an nasm 3
+  could not be built here (docs/MARTYPC-DEBUG.md, *An nasm 3 in a fresh
+  container*), and `--cache-file=` does not help because the `>/dev/null` is
+  the broken half rather than the cache.
+- **IT GROWS ON DISK WHERE OUTPUT SHOULD VANISH**, which is the one to
+  remember, because a soak that runs out of space looks like a soak that runs
+  out of space. Measured here: Python's `subprocess.DEVNULL` opens with
+  `O_RDWR` and **no `O_TRUNC`**, so 1 MB written is 1 MB on disk — and a shell
+  `>` truncating under a long-lived holder does **not** reclaim it, because the
+  holder keeps its own offset. This tree's own use is a short `cp`, and
+  MartyPC's output goes to a real log file, so the repo is not the big writer;
+  nothing stops a third-party tool being one.
+- **`diff`, `cmp` and `test -s` against it answer wrongly**, and a read gives
+  junk instead of EOF.
+- **At mode 0644 a non-root writer gets `EACCES`** outright.
+
+### 16.2 What settled it
+
+A watcher polling `[ -c /dev/null ]` at 0.2 s, logging `lsof` and every
+process younger than 90 s, caught one destruction and named nothing: a nasm
+that unlinks its output and exits is gone long before a 0.2 s poll can look
+for it, which is also why only `/dev/null` was ever wrong and never `zero` or
+`tty` - nothing here hands those to an assembler. What named it was the
+node's BIRTH time (`stat -c %w /dev/null`) laid against the soak's own row
+order, and then a `mknod` of our own to test nasm against without breaking
+the box.

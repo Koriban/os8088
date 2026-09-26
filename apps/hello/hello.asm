@@ -47,6 +47,12 @@ hl_entry:
     mov si, hl_tpl
     call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     jc .out
+    ; OUR REGION MAY MOVE (SPEC.md 66.6.1). Here, where the window
+    ; exists, and not beside any worker's declaration: a package with
+    ; NO worker is the case that moves most easily, and putting it at
+    ; the spawn left exactly those runs declaring nothing - measured,
+    ; by the row that reads MC_RLOC back out of the kernel's own table.
+    OS88_REGION_MOVABLE
     mov si, hl_menus
     call OSAPI_MENU_SET              ; BX = the window we just created
     mov si, hl_about                 ; ...and the STANDARD About (SPEC.md 12.2,
@@ -167,7 +173,7 @@ hl_oncmd:
 ; draws the card last, and a handler that takes it down.
 
 ; -----------------------------------------------------------------------------
-; hl_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; hl_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------

@@ -48,9 +48,15 @@ import sys
 import threading
 import time
 
-sys.path.insert(0, "/home/user/os8088/tools")
-sys.path.insert(0, "/home/user/os8088/tests")
-sys.path.insert(0, "/home/user/os8088/tests/lptlink")
+# THIS TREE'S root, DERIVED - never a hard-coded path. A literal is right in the
+# checkout it was written in and wrong in a git worktree, which is how parallel
+# work is done here: os88sym re-assembles ROOT/kernel/kernel.asm and compares it
+# against ROOT/build/kernel.bin, so a literal ROOT answers about a DIFFERENT
+# kernel from the image being booted.
+_OS88_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
+sys.path.insert(0, os.path.join(_OS88_ROOT, "tests/lptlink"))
 import dispcp                                          # noqa: E402
 import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
@@ -109,6 +115,11 @@ class Server(threading.Thread):
         self.s.listen(2)
         self.request = None
         self.sent = 0
+        self.m = None               # the guest, once it is up: the gap's
+                                    # budget is ITS clock, not this box's
+
+    def _cycles(self):
+        return int(self.m.status()["cycles"]) if self.m is not None else 0
 
     def reply(self):
         head = (b"HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n"
@@ -133,8 +144,9 @@ class Server(threading.Thread):
             c.sendall(head)
             self.sent += len(head)
             want = self.box.empty_up + 1        # ...the gap assertion 3 lives
-            t0 = time.time()                    # in, waited for and not slept
-            while self.box.empty_up < want and time.time() - t0 < 240:
+            c0 = self._cycles()                 # in, waited for and not slept
+            while (self.box.empty_up < want and (self._cycles() - c0)
+                   / os88marty.GUEST_HZ < 240 * os88marty.GUEST_BUDGET_RATIO):
                 time.sleep(0.05)
             self.gap = self.box.empty_up >= want
             c.sendall(body)
@@ -167,6 +179,7 @@ def main():
     with os88marty.launch("build/os8088-360.img",
                           apps="build/socktest360.img",
                           machine=MACHINE) as m:
+        srv.m = m
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
         p = P.Partner(m)

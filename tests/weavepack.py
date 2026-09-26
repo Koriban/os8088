@@ -193,7 +193,7 @@ def build_disk(projects, errs):
     # LOAD, and a 360KB drive cannot step there. What the row reported was
     # "LOOM opens on the double-click" failing with no toast, no instance and
     # ld_status still 0, nine times over, which reads as an association or a
-    # double-click problem and is neither. docs/plans/HANDOFF-SOAK-FINDINGS.md E6
+    # double-click problem and is neither. The pass-3 soak
     # spent three runs on the host-speed theory the row's own message
     # proposes; the row was never able to load the package at all.
     #
@@ -214,33 +214,26 @@ def pack_one(m, mo, S, wx, wy, stem):
     WAIT ON THE WINDOW, NOT ON THE PICTURE - weavesmoke's own note, and its
     reason applies twice as hard here: a package LOAD draws nothing while it
     runs, and so does a PACK, so `settle` sees perfect stillness partway
-    through either and returns. os88marty.until is the bounded wait that the
-    retry can catch."""
+    through either and returns. os88marty.until is the bounded wait, and
+    NOTHING IS RETRIED: os88mouse steps the guest by cycles between a
+    double-click's two presses (`Mouse.DBL_STEP`), so the 9-tick window sees
+    the same gesture whatever the host is doing, and a launch that does not
+    happen is a finding."""
     before = set(dispcp.win_list(m, S))
-    win = None
-    for attempt in range(3):
-        try:
-            dispcp.open_named(m, mo, S, M.settle, wx, wy, "%s.WML" % stem)
-            M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
-                    "LOOM's window for %s" % stem, limit=25.0)
-        except Exception as e:                                  # noqa: BLE001
-            if attempt == 2:
-                check(False, "%s: LOOM opens on the double-click" % stem,
-                      "os88mouse refuses a double-click whose two presses "
-                      "straddled the kernel's 9-tick window - a statement "
-                      "about the HOST, retried three times and then "
-                      "reported. The .WML association is LOOM's "
-                      "(WEAVE-SPEC 1.5 step 2)",
-                      got=str(e)[:200], want="a package window")
-                return 0
-            continue
-        M.settle(m)
-        now = set(dispcp.win_list(m, S)) - before
-        if now:
-            win = sorted(now)[-1]
-            break
-    if win is None:
+    try:
+        dispcp.open_named(m, mo, S, M.settle, wx, wy, "%s.WML" % stem)
+        M.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
+                "LOOM's window for %s" % stem, limit=25.0)
+    except Exception as e:                                      # noqa: BLE001
+        check(False, "%s: LOOM opens on the double-click" % stem,
+              "the .WML association is LOOM's (WEAVE-SPEC 1.5 step 2)",
+              got=str(e)[:200], want="a package window")
         return 0
+    M.settle(m)
+    now = set(dispcp.win_list(m, S)) - before
+    if not now:
+        return 0
+    win = sorted(now)[-1]
 
     m.ctrl(K_PACK)                      # WEAVE-SPEC 1.7's ^P
     M.settle(m)

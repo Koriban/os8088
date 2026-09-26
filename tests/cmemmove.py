@@ -42,7 +42,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -114,6 +113,36 @@ def pkg_seg(m, S, title):
     return None, None
 
 
+def heapfrag_ran(m, S):
+    """HEAPFRAG's suite has RETURNED, and the compaction it posts has landed.
+
+    The suite runs inside its first W_PAINT with the gfx lock held, so the
+    screen is stillest exactly while it works and a settle alone returns
+    mid-run. [hf_done] is set as the run starts, the lock comes free when the
+    paint that ran it returns, and [hf_woke] is the posted pass arriving.
+    """
+    seg, _ = pkg_seg(m, S, "Heap")
+    if not seg:
+        return False
+    img = u16(m.read(seg * 16 + 8, 2))
+    b = m.read(seg * 16 + img, 48)
+    done, posted, woke = b[28], b[46], b[47]      # heapfrag.asm's bss table
+    locked = m.read(S("gfx_lock_flag"), 1)[0]
+    return bool(done and not locked and (woke or not posted))
+
+
+def opened(m, S, title):
+    """Wait for a package's window, then for the claims it makes to land."""
+    try:
+        os88marty.until(m, lambda _: pkg_seg(m, S, title)[0],
+                        "%s's window" % title, poll=0.3, limit=60)
+    except os88marty.MartyError as e:
+        print("  (%s)" % e)             # the row's own check says the rest
+        return
+    os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
+                      what="%s's claims" % title)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
@@ -146,7 +175,9 @@ def main():
 
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
-        time.sleep(22)
+        os88marty.until(m, lambda _: heapfrag_ran(m, S),
+                        "heapfrag's suite and its posted pass", poll=0.5,
+                        limit=120)
         os88marty.settle(m)
         hf_seg, hf_win = pkg_seg(m, S, "Heap")
         print("heapfrag at %04x" % (hf_seg or 0))
@@ -154,7 +185,7 @@ def main():
         # --- then chello, which lands ABOVE it ------------------------------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_CHELLO)
-        time.sleep(6)
+        opened(m, S, "C Hello")
         os88marty.settle(m)
         ch_seg, ch_win = pkg_seg(m, S, "C Hello")
         if ch_seg is None:
@@ -200,12 +231,16 @@ def main():
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
-        time.sleep(22)
+        os88marty.until(m, lambda _: heapfrag_ran(m, S),
+                        "heapfrag's suite and its posted pass", poll=0.5,
+                        limit=120)
         os88marty.settle(m)
 
         base1, moves, was = cword("_ch_seg"), cword("_ch_moves"), cword("_ch_was")
-        print("  claim %04x -> %04x, os88_onmove called %d time(s), was=%04x"
-              % (base0, base1, moves, was))
+        was0 = cword("_ch_was0")
+        print("  claim %04x -> %04x, os88_onmove called %d time(s), "
+              "was=%04x first=%04x"
+              % (base0, base1, moves, was, was0))
 
         moved = base1 != base0
         print("  2 moved, and C followed  %s"
@@ -214,10 +249,19 @@ def main():
                  "NO  <-- the run proves nothing"))
         bad += not (moved and moves)
 
-        ok3 = was == base0 and base1 != was
+        # **THE FIRST `was`, NOT THE LAST**, because SPEC.md 66.4.3's self-
+        # compaction can move one claim more than once in a single pass:
+        # measured here at 4ca0 -> 3d60 -> 2be0, three bases and two calls.
+        # `_ch_was` is what the handler was told LAST (chello.c says so), so
+        # against `base0` it reads WRONG while every call was right - which
+        # is what this check reported before it asked for `_ch_was0`. The
+        # chain is still pinned at both ends: the first `was` is the base the
+        # host read before the pass, and the last `now` is where it ended up.
+        ok3 = was0 == base0 and base1 != was0 and was != base1
         print("  3 (was, now) not swapped %s"
               % ("OK" if ok3 else
-                 "WRONG: was=%04x, old base was %04x" % (was, base0)))
+                 "WRONG: first was=%04x, last was=%04x, old base was %04x, "
+                 "now %04x" % (was0, was, base0, base1)))
         bad += not ok3
 
         if moved:

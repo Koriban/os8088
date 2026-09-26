@@ -56,6 +56,22 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from harness import check, done                             # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+import os88build                                            # noqa: E402
+
+
+def _at(rel):
+    """A `build/...` path, RESOLVED AGAINST THE RUN'S OWN TREE.
+
+    `os88soak` freezes a tree and builds every declared artefact into it, so
+    under a parallel run these four live in `build/trees/plain-<hash>/` and
+    NOT in `build/` - and a row that names `build/` there reads a directory
+    the freeze exists to leave alone. Measured: all four reported "missing"
+    against a tree that had all four, which is a false red with a message
+    pointing at the builder.
+    """
+    p = os88build.at(rel)
+    return p if os.path.isabs(p) else os.path.join(ROOT, p)
 ROOT = os.path.abspath(ROOT)
 
 # THE SYSTEM PAIR AND THE APPS PAIR, both geometries of each. All four are
@@ -88,12 +104,19 @@ FORBIDDEN = {
     "FTPD.O88":     "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "TELNET.O88":   "ETHER.DRV is in no small driver set (SPEC.md 24.5, 72)",
     "THEWIRE.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 92)",
-    "MODPLUG.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse
     "SKIES.O88":    "a 32KB claim inside the fsx bracket - the refusal is a "
                     "black screen (SPEC.md 24.5, 88)",
+    "PXSTEIN.O88":  "one contiguous parts claim of ~56KB and more (a part 0 "
+                    "of ~56KB holding two 4KB map layouts and two 4KB spotvis "
+                    "arrays, with the scalers' scratch and the byte textures, "
+                    "in ONE carve the loader makes before the program can "
+                    "refuse in its own words) plus a 9.8KB level claim the "
+                    "loader fetches and a shadow claim of 16KB (6.4KB of it "
+                    "composed today), against a 52.5KB arena whose largest "
+                    "run is 17.5-20KB (SPEC.md 24.5, 97.9)",
     # DOTDEL.O88 IS NOT A ROW. It was omitted beside SKIES on a ground that
     # SPEC.md 5.4.2.5.1 withdrew (kern_small has a `gfx_blit1` body now), and
     # SPEC.md 24.5.5 is the measurement that put it back on the floppy. A name
@@ -113,7 +136,7 @@ FORBIDDEN = {
     # 24.5 - the data files, whose readers are all above
     "BROWSER.HTM":  "the Browser's own manual, and nothing else on the machine "
                     "opens a .HTM (SPEC.md 24.5, 71.12)",
-    "BEVERLY.MOD":  "the module for two players that are not on this disk "
+    "BEVERLY.MOD":  "the module for a player that is not on this disk "
                     "(SPEC.md 24.5, 24.4)",
 }
 
@@ -129,7 +152,7 @@ FORBIDDEN = {
 # reads one", never "these are the only documents allowed".
 READERS = {
     "HTM": ("BROWSER.O88",),
-    "MOD": ("MODPLUG.O88", "TRACKER.O88"),
+    "MOD": ("TRACKER.O88",),         # ModPlug is RETIRED (SPEC.md 56.15)
     # SLK has three readers and the third is the only one the floor machine
     # gets: SHEET is in $(SMALLOMIT) and CHART goes with it, so before PLAN
     # (SPEC.md 81.75) a .SLK on a small volume had nothing to open it. PLAN
@@ -168,7 +191,7 @@ def main():
     seen = 0
     pkgs = {}
     for rel in IMGS:
-        path = os.path.join(ROOT, rel)
+        path = _at(rel)
         if not os.path.exists(path):
             # NOT a silent pass. `make` does not build these - `make small`
             # and `make smallapps` do - so the row declares them in `wants=`

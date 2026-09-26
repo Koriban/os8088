@@ -26,6 +26,14 @@ That is checked rather than assumed: the header's +8 must land inside the file
 and must leave a non-empty tail, or this refuses. A package with no `.modc` at
 all has no tail and is refused too - being asked to cut a module out of an
 image that has none is a build-order mistake, not a no-op.
+
+**`--pad-bss` is the PARTS form of the same cut** (SPEC.md 68.10, 20.12.10).
+A package whose image becomes PART 0 of a parted `.O88` has its bss shipped
+inside it, because the kernel does not zero a part - so the resident half is
+written as image followed by the header's bss in zeros, which is the length
+tools/os88pkg.py holds a program part to. Word declares its bss as running up
+to where part 1 is assembled, so that length is also where the tail belongs
+in memory: the two files are the segment, cut in two.
 """
 import argparse
 import struct
@@ -48,6 +56,9 @@ def main():
                          'being those two')
     ap.add_argument('--mark', default='SHMACRO2',
                     help='the second module\'s cut mark (default %(default)s)')
+    ap.add_argument('--pad-bss', action='store_true',
+                    help='append the header\'s bss to the resident image as '
+                         'zeros: it is a PART, which the kernel does not zero')
     args = ap.parse_args()
 
     raw = open(args.image, 'rb').read()
@@ -80,6 +91,8 @@ def main():
                      'the second module must START with its dispatcher')
         tail, second = tail[:split], tail[split:]
         open(args.second, 'wb').write(second)
+    if args.pad_bss:
+        head += bytes(struct.unpack_from('<H', raw, H_BSS)[0])
     open(args.trim, 'wb').write(head)
     open(args.overlay, 'wb').write(tail)
     sys.stderr.write('os88ovl: %s -> %s (%d resident) + %s (%d on demand)%s\n'

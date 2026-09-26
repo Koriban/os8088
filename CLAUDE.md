@@ -105,7 +105,8 @@ make bootdiag # WHY a BIOS answers `Disk error` and stops (§2.9.10). SIX
               # but not this. Nothing here ever writes to a disk
 make test-fast   # THE REGRESSION SUITE (docs/TESTING.md, tools/os88test.py,
 make test-full   #   tests/suite.py). Three tiers, each with an ENFORCED
-make test-soak   #   wall-clock budget — the runner FAILS a tier that
+make test-soak   #   budget CHARGED IN CPU, not wall clock, so a loaded box
+                 #   cannot fail it — the runner FAILS a tier that
                  #   overruns, so a row that no longer fits is a decision
                  #   somebody takes rather than a drift nobody notices.
                  #   fast ~2s, host-side only, and it already runs as part of
@@ -478,6 +479,12 @@ lands on a floppy:
 | `NOHEDGE=1` | put sea life back on the **whole screen width** on Hercules — the saver before SPEC.md §79.5.10, and the A/B for it. The field reported a swimmer at the right edge lighting a pixel at column 0; §79.5.9 places that in **86Box's plain `hercules` renderer and not in this kernel**, because the mark is **one row DOWN** from the source and no write here can reach row *y+1* column 0 from row *y* — the byte after row *y*'s last is row *y+4*'s first. So the default reserves `SV_HEDGE` = **8 pixels** at the right and never lights them, leaving the copy nothing to carry, and the reporter confirms it clean on 86Box **and on the 5150**. What it costs the picture is eight columns of 720 the sea is already black in; what it costs the machine is **nothing measurable** — the pass is 54.93 ms median either way, exactly one tick, on both 1bpp adapters. Eight rather than one is not a performance trade in the other direction either: a **byte** column is a width cut where a single column would need a per-row bit mask. It is a knob because it is a **look question with a workaround in it** — the artifact is one emulator's, and possibly one class of monitor's, so a fork that would rather draw the whole screen than hide someone else's defect flips this and loses nothing. `tests/fishedge.py` is the behaviour gate and pokes `[sv_hlim]` at runtime rather than rebuilding; this knob is what keeps the unreserved arm **assembling**, and it is the first knob here that reaches a driver rather than the kernel, so it has the saver's own stamp and rebuilds two files |
 | `NOKZIP=1` | ship the kernel UNCOMPRESSED — `KERNEL.SYS` as the assembler left it, 204 sectors instead of 164 (SPEC.md 2.9.13). The packed kernel is the DEFAULT on every geometry, on `kern_small` and on the hard disk, so this is the A/B and the only thing that ever runs the unpacked arm of either loader — `tests/kzboot.py --nokzip`. What the default buys, measured on a 4.77MHz 8088 booting the 360KB disk: **599 ms** and 40 sectors, the read falling 7,098 → 5,820 ms against a decode of 799, at 39.9 cycles an output byte. What it costs is **180 bytes of the BLOB and nothing resident** — `mem_unblob` gives it all back at the end of `kmain`. Its decoder is **unbounded**, which is legitimate exactly once: this is the only stream on the machine that nothing but `make` ever writes, and §18.93.1's canary has verified the transfer before a byte is expanded. `SPLSTARS=1` requires this knob — the twinkle and the decoder are 2,748 bytes of a 2,624-byte `.boot2` |
 | `TITLESNAP=1` | centre a window title on the nearest 8px **cell** instead of the exact pixel (docs/plans/completed/TEXT-PLAN.md §6.1). A title moves ≤4px and `wm_draw_title` reaches §6.1's fast path. A **look** question, so it is a knob until somebody has looked — and **a plain build is where to look**: §5.9.6 sent the composed title bar back to a knob, so the fifteen-call path is what every shipped kernel draws and the snap is reached on every title. It is `BAND=1` that hides it — the composer centres its own caption, and the snap then sits in the FALLBACK below `wm_title_band`'s `jnc .sep`, assembled and never reached. Measured, plain against `TITLESNAP=1`: **0 differing pixels of 307,200** |
+| `DPTROM=1` | leave `int 1Eh` **pointing at the ROM's own diskette parameter table** — in stage 1, in stage 2 and in the kernel — so a BIOS that swaps tables per MEDIA keeps doing so. SPEC.md §18.92 takes that vector for ONE byte, EOT, because the IBM PC and XT ROMs ship 8; this is the A/B for what that costs the other kind of machine (docs/FIELD-NOTES.md 32, candidate 1). **It is a DIAGNOSTIC and not an arm**: on a ROM whose EOT really is 8 this build reads nine sectors where the table allows eight, which is exactly the defect §18.92 exists to fix. Point it at an AT-class machine — the case is 720KB media in a 1.44MB drive, where the boot media's parameters are not the mounted media's — and nowhere else |
+| `NOKDKBD=1` | leave `kern_dos`'s `int 09h` **exactly as DOS leaves it**: the ROM's own handler, unguarded (SPEC.md §96.50). The default carries §9.8's buffer guard, because the handoff's step 6 has to unhook `kbm_isr` — it sits at a `KERNEL_SEG` offset that is `kern_dos`'s image one instruction later — and nothing put anything back in its place. Reported off a 386: hold a direction key in a game that is busy drawing, the BIOS buffer fills, and the ROM's beep is longer than the typematic interval, so the next repeat overflows DURING the beep and it never stops. It is a knob because `kern_dos`'s whole promise is *"the machine with no operating system on it"* and the guard is a deliberate departure from it — MEASURED as such: a real IBM DOS 3.30 leaves `int 09h` at `F000:E987` and so did `kern_dos`, the same address to the byte. `tests/kdkbd.py` is the row |
+| `DOSRMARK=1` | trace SPEC.md §96.49's **live resume** on the glass: an info line through the ROM's teletype with every number the far jump depends on, then one character per stage of the stub, then one from the restored kernel (`kernel/hbmark.inc`). It is the one path on this machine that nothing can watch — no kernel, no task, no debugger hook — so a machine that stops in it is one still photograph and every stage looks identical from outside. **It reaches TWO assemblies and both are needed**: `kernel/hbstub.inc` is staged by `kernel/hiber.inc` for an ordinary resume and by `kerndos/kdresume.inc` for the DOS one, and neither host can reach the other's copy. `make DOSRMARK=1 kdostest` |
+| `DOSNETCARD=1` | force the DOS box's **cable translation** (SPEC.md §96.26) on a machine that HAS a card, which is the only way it can be driven at all — `net_find` prefers the card and §96.23's raw path is strictly better there, so the translation would otherwise never run anywhere an emulator can reach it. **It is stamped, and it has to be**: a knob with no stamp leaves an up-to-date `dos.bin` from the other arm, so `make ethertest DOSNETCARD=1` after a plain `make` silently ships the STOCK package and the row then tests the card path while reporting on the cable one. That is the standing warning below about knob kernels, one artefact along, and it was walked into on this knob's first use — two runs disagreed about whether an ARP reached the wire and both answers were correct for the build actually on the disk |
+| `LDDIAG=1` | put back the loader's **four failure reasons** - disk error, bad package, too large, refused to start - that a shipped kernel folds into one `Load failed` (kernel size pass 4, `files.inc`'s `fm_stattab`). None of the four is something a user acts on differently, so the shipped kernel spends no bytes telling them apart; this is how a developer does. The Disk window's toast and the Task Manager's then say which. `LD_EBIG` is not a memory verdict - it is a file whose image + bss exceeds `APP_MAX_SIZE`, which no RAM fixes - so only `LD_ENOMEM` reads `Out of memory` on either build |
+| `DRVDIAG=1` | a **diagnostic line** at the top-left of the loading screen, drawn from IRQ0 while the splash is up - for a machine that stops on `Loading Driver n/N`. `Drs cccc:iiii Fffff Mmm Qqqqq Ttttt` is `drv_boot`'s row and `drv_load_row`'s step (1 entry, 2 mounted, 3 found, 4 claimed, 5 read, 6 checked, 8 calling the driver, 9 returned, F done), the CS:IP and FLAGS the tick interrupted, the PIC mask, row 0's segment and the ISR's own count. **One photograph names the step**, says whether the code is in the BIOS, the kernel or the driver image, and - by whether the count still moves - whether IRQ0 is alive. It paints only on the splash, only with `spl_busy` free, and saves the pen; the shipped kernel is byte-identical |
 
 All are stamp-tracked, so changing one rebuilds the kernel. Without that, make
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
@@ -497,7 +504,7 @@ controller, so no XT profile can host one),
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
-`xt-weave`, `386-weave`, `xt-weave-256`;
+`xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -536,7 +543,8 @@ reaches the `]` prompt and answers a keystroke and is a machine to look at,
 which is why the Wire record is tier 3; it was 0.41% until APPLE2-SPEC
 section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-weave`/`386-weave`/`xt-weave-256` the Weave family's
-(WEAVE-SPEC §13.1) — the eighteen that put a dedicated
+(WEAVE-SPEC §13.1), and `xt-pixelstein`/`xt-pixelstein-herc` PIXELSTEIN 3D's
+(§97.15) — the twenty that put a dedicated
 floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
@@ -545,7 +553,18 @@ which is WEAVE-SPEC §1.4's floor machine: it holds exactly ONE Weave app and
 the second launch refuses before any I/O with the arithmetic on the glass.
 That machine is for LOOKING at the refusal — 86Box cannot assert anything
 (docs/TESTING.md) — and `tests/weaveone.py` asserts the same sentence under
-MartyPC. `make zdisk` builds the story disk
+MartyPC. **`xt-pixelstein` / `xt-pixelstein-herc` are PIXELSTEIN 3D's
+(§97.15)** — `vm/xt-cga` and `vm/xt-hercules` with `games360.img` in B:,
+the uuid changed, and **640KB on an `ibmxt86` board** in place of the
+copies' 256KB `ibmxt`: the one bend of the copy rule, so the machines show
+the TEXTURED game a 640KB XT gets rather than the 256KB Flat rung with
+boxes and no gun (§97.9) — 86Box's `ibmxt` board tops out at 256KB and
+rewrote 640 back on the first launch, which is why the board key moved
+with it. Both boot to the desktop with B: in ~90 s; reaching the game is a
+human's double-click on `PXSTEIN.O88` — this host cannot send one into
+86Box — so they are where a human LOOKS at the CGA 320x200x4 bracket, the
+160x100x16 retime and the Hercules box. Every number is MartyPC's
+(`tests/pixelstein.py`, a 640KB 5150). `make zdisk` builds the story disk
 (`tools/getstories.py` fetches the stories, which are never committed), `make
 worddisk` the Word disk, `make cworddisk` the CWORD disk — which carries
 `WELCOME.RTF`, the same welcome document the Word disk carries as a `.DOC`,
@@ -644,7 +663,8 @@ learned.
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
-  `CLONE.DRV`, `HIBER.DRV`, and on kern_small `FILECP.DRV` and `FDLG.DRV`) and
+  `CLONE.DRV`, `HIBER.DRV`, on kern_big `DOCK.DRV` and `EXTD.DRV`, and on
+  kern_small `FILECP.DRV` and `FDLG.DRV`) and
   is read into a heap claim when the feature is asked for, freed when it is
   done. A feature qualifies when the system disk is already required to use
   it, or can be required without interrupting what the user was doing. When
@@ -656,7 +676,8 @@ learned.
   **docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md is what the mechanism
   REFUSES**, and it refused two of four candidates: `mod_need`'s own transitive
   cone is 155 symbols in 7 files, so a module inside it must be gated rather
-  than moved, and a layer with 33 entry points cannot fit `MOD_NENT`'s 7.
+  than moved. There is no entry cap (§2.8.1): a module's slot block is its
+  own entry count.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
@@ -796,7 +817,14 @@ docs/TESTING.md is the authority on which emulator to reach for, and its
 opening currently argues MartyPC first — so expect it to disagree with the
 paragraph above.
 
-Three traps not written down elsewhere:
+Four traps not written down elsewhere:
+
+- **Never hand `/dev/null` to nasm as `-o` or `-l`.** A failed assembly
+  unlinks its `-o` target and `-l` replaces its target with a regular file, so
+  as root the device itself is replaced and everything after misbehaves
+  without naming the cause. Write to a temp file. `tests/unit/t_nulldev.py`
+  refuses the pattern in the tree; `stat -c %F /dev/null` must say
+  `character special file`.
 
 - **A knob kernel in `build/` is a different kernel to the symbol reader.**
   Every emulator row resolves kernel symbols through `tools/os88sym.py`, which

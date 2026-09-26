@@ -35,6 +35,19 @@ FOUR ASSERTIONS:
      through `sh_cellseg`, so a stale word here draws a plausible wrong sheet
      rather than crashing - which is the whole reason assertion 2 is not
      enough.
+
+**AND THE ROW'S OWN TRAP, WHICH COST IT ITS POINT: SHEET'S REGION MOVES TOO.**
+Every read of the package's words is `sh_seg * 16 + offset`, and Sheet declares
+its region movable (SPEC.md 66.6.1), so the pass this row FORCES can relocate
+the region as well as the claims under it.  Reading through the base captured
+before the compaction neither crashes nor answers empty - a move COPIES and
+does not erase, so the old base still holds the PRE-MOVE bytes - and the row
+then reports "a declared claim moved NO <-- the run proves nothing" about a
+pass that moved three of them.  Measured on the kernel that made the compaction
+reach further (SPEC.md 66.10.4): region 7c60 -> 92c0, with cellseg 5060 ->
+4b20, txtseg 5860 -> 5320 and bordseg 4da0 -> 4a20, while this row printed all
+six words unchanged and `Sheet now holds []`.  So Sheet is re-found after the
+launch and every read below uses the base it is at NOW.
 """
 import argparse
 import hashlib
@@ -42,7 +55,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
@@ -143,6 +155,36 @@ def pkg_seg(m, S, title):
     return None, None
 
 
+def heapfrag_ran(m, S):
+    """HEAPFRAG's suite has RETURNED, and the compaction it posts has landed.
+
+    The suite runs inside its first W_PAINT with the gfx lock held, so the
+    screen is stillest exactly while it works and a settle alone returns
+    mid-run. [hf_done] is set as the run starts, the lock comes free when the
+    paint that ran it returns, and [hf_woke] is the posted pass arriving.
+    """
+    seg, _ = pkg_seg(m, S, "Heap")
+    if not seg:
+        return False
+    img = u16(m.read(seg * 16 + 8, 2))
+    b = m.read(seg * 16 + img, 48)
+    done, posted, woke = b[28], b[46], b[47]      # heapfrag.asm's bss table
+    locked = m.read(S("gfx_lock_flag"), 1)[0]
+    return bool(done and not locked and (woke or not posted))
+
+
+def opened(m, S, title):
+    """Wait for a package's window, then for the claims it makes to land."""
+    try:
+        os88marty.until(m, lambda _: pkg_seg(m, S, title)[0],
+                        "%s's window" % title, poll=0.3, limit=60)
+    except os88marty.MartyError as e:
+        print("  (%s)" % e)             # the row's own check says the rest
+        return
+    os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
+                      what="%s's claims" % title)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
@@ -175,7 +217,9 @@ def main():
 
         # --- heapfrag first, so it owns the floor of the arena --------------
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
-        time.sleep(22)
+        os88marty.until(m, lambda _: heapfrag_ran(m, S),
+                        "heapfrag's suite and its posted pass", poll=0.5,
+                        limit=120)
         os88marty.settle(m)
         hf_seg, hf_win = pkg_seg(m, S, "Heap")
         # SHOVE IT TO THE LEFT EDGE, before Sheet opens. Sheet's window is
@@ -194,7 +238,7 @@ def main():
         # --- then Sheet, which lands ABOVE it -------------------------------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_SHEET)
-        time.sleep(8)
+        opened(m, S, "Sheet")
         os88marty.settle(m)
         sh_seg, sh_win = pkg_seg(m, S, "Sheet")
         if sh_seg is None:
@@ -265,12 +309,31 @@ def main():
         # --- and run it again, whose big claim forces the compaction --------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name=PKG_HEAPFRAG)
-        time.sleep(22)
+        os88marty.until(m, lambda _: heapfrag_ran(m, S),
+                        "heapfrag's suite and its posted pass", poll=0.5,
+                        limit=120)
         os88marty.settle(m)
 
-        after = mine(claims(m, S), sh_seg)
+        # **RE-FIND SHEET FIRST: THE REGION MOVES TOO** (SPEC.md 66.6.1).
+        # Sheet declares its region movable, so the pass this row forces can
+        # relocate the region as well as the claims under it - and every read
+        # below is `sh_seg * 16 + offset`.  Reading through the base captured
+        # before the compaction is not a crash and not an empty answer: a move
+        # COPIES and does not erase, so the old base still holds the pre-move
+        # bytes and the row reports "nothing moved" about a pass that moved
+        # three claims.  Measured: region 7c60 -> 92c0 with cellseg 5060 ->
+        # 4b20, txtseg 5860 -> 5320 and bordseg 4da0 -> 4a20, while this row
+        # printed all six unchanged and `Sheet now holds []`.
+        sh_seg1, _ = pkg_seg(m, S, "Sheet")
+        if sh_seg1 != sh_seg:
+            print("  0 Sheet's REGION moved     %04x -> %04x" % (sh_seg, sh_seg1))
+
+        def sword1(name):
+            return u16(m.read(sh_seg1 * 16 + SH[name], 2))
+
+        after = mine(claims(m, S), sh_seg1)
         live = set(c[0] for c in after)
-        w1 = dict((n, sword(n)) for n in MOVABLE + [PINNED])
+        w1 = dict((n, sword1(n)) for n in MOVABLE + [PINNED])
         print("Sheet now holds %s"
               % ["%04x/%dKB" % (b, p // 64) for b, p, _, _ in after])
         print("  " + "  ".join("%s=%04x" % (n[3:], w1[n])

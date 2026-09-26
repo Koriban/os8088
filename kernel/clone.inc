@@ -169,17 +169,16 @@ CLO_NENT     equ 2              ; ...and a SECOND for the compressor, which
                                 ; rides in this image since SPEC.md 20.15.3 -
                                 ; compress.inc is `.modl` too, included right
                                 ; after this file, and CMZFP is the slot
-CLFP         equ mod_fp + MOD_CLONE * MODFP_STRIDE
 
 ; The extended-memory pool is reached through its own API cells rather than
 ; through a new pair of cw_ shims (SPEC.md 18.99.4). An OSAPI_SLOT is
 ; `push ds / push cs / pop ds / call <body> / pop ds / retf` - a far-callable
 ; wrapper around a near proc, which is exactly what a module needs and what
 ; four new shims in `.text` would have been, at 6 resident bytes each.
-CLO_XCAPS    equ 0x0190         ; SPEC.md 41: out AX = free KB
-CLO_XALLOC   equ 0x0198         ; in DX:AX = bytes; out CF, DX:AX = the base
-CLO_XFREE    equ 0x01A0         ; in DX:AX = a base this caller owns
-CLO_XCOPY    equ 0x01A8         ; in ES:SI / DX:AX / CX / DI = direction
+CLO_XCAPS    equ apic_xm_caps          ; SPEC.md 41: out AX = free KB
+CLO_XALLOC   equ apic_xm_alloc         ; in DX:AX = bytes; out CF, DX:AX = the base
+CLO_XFREE    equ apic_xm_free          ; in DX:AX = a base this caller owns
+CLO_XCOPY    equ apic_xm_copy          ; in ES:SI / DX:AX / CX / DI = direction
 
 section .modl                   ; the on-demand image (SPEC.md 2.8)
 modl_hdr:
@@ -192,7 +191,6 @@ modl_hdr:
     dw CLO_NENT                 ; MOD_H_NENT
     dw modl_e_disp
     dw modl_e_cmz               ; ...the compressor's (compress.inc)
-    times MOD_NENT - CLO_NENT dw 0
 
 modl_e_disp:    call clo_disp_x
             retf
@@ -399,7 +397,10 @@ clo_plan:
     push cx
     push dx
     push di
-    call COLD_SEG:mmf_mem_avail ; AX = the largest free run, in KB
+    call KERNEL_SEG:apic_osapi_mem_avail ; AX = the largest free run, in KB.
+                                ; The CELL (0x0210), whose chain ends at the
+                                ; same mem_avail_x our own shim called:
+                                ; osapi_mem_avail_x is a bare `jmp` to it
     sub ax, CLO_SLACK
     jc .nomem
     cmp ax, CLO_MINKB

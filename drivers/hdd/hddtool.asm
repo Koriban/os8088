@@ -46,6 +46,8 @@
 %include "fmt.inc"
 %include "tool.inc"
 %include "inst.inc"
+%include "cppage.inc"
+%include "iassoc.inc"
 
 ; -----------------------------------------------------------------------------
 ; hd_tentry - the dispatcher's landing site
@@ -68,6 +70,14 @@ hd_tentry:
     je hd_tshut
     cmp al, HDT_BUSY
     je hd_tbusy
+    cmp al, HDT_PAINT
+    je hd_page_paint            ; the page is ours now (SPEC.md 52.13), and
+    cmp al, HDT_CLICK           ; the kernel's own registers came through
+    je hd_page_click            ; hd_tool_call untouched - so these are the
+    cmp al, HDT_UP              ; kernel's cells reached one image further
+    je hd_page_up               ; out, with a verb in front of them
+    cmp al, HDT_DRAG
+    je hd_page_drag
     stc                         ; a verb from a newer resident than this image
     ret                         ; - refuse it rather than run another one
 
@@ -126,7 +136,7 @@ hd_tinst:
 ; in:  nothing
 ; out: CF = 0
 ;
-; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (slot 0x0398) was added
+; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (slot 0x02BC) was added
 ; for. Hiding takes the pixels down and leaves the RECORD, holding a W_SEG that
 ; names this image - inert while nothing re-shows it, and a loaded gun once the
 ; image is freed and something else claims the memory. It also costs a window

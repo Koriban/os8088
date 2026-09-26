@@ -87,6 +87,8 @@ DRVC_OVL     equ 0x40           ; NOT A KERNEL CLASS, so it stays here. A
 SND_CAP_FM       equ 02h        ; 9-ch 2-op patch + note-on/off (OPL2 model)
 SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
 SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
+SND_CAP_PCM_HI   equ 20h        ; ...and PCM_BG above 22,222 Hz: DSP >= 3.00,
+                                ; an SB Pro or SB16 (SPEC.md 34.2.1)
 
 ; --- sound tiers (SPEC.md 34.8): what DRVV_TIER's AH carries -----------------
 ; The kernel's own [snd_route], mirrored here so a driver can compare against
@@ -98,6 +100,15 @@ SND_RT_FM    equ 2              ; AdLib - FM only
 SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
 
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
+; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---
+DQ_CLASS     equ 0              ; db: the DRVC_* this record is about
+DQ_FLAGS     equ 1              ; db: bit 0 = it went
+DQ_A         equ 2              ; dw: your class's own three words
+DQ_B         equ 4              ; dw
+DQ_C         equ 6              ; dw
+DQ_SIZE      equ 8
+DQ_MAXREC    equ 8              ; ...and the most one call can write
+
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
 DRVV_DETACH  equ 1              ; out: nothing. Cannot fail.
@@ -113,6 +124,22 @@ DRVV_READY   equ 3              ; "your services are published; the kernel can
                                 ; created by an attach that then says no would
                                 ; outlive the image. Optional - return if you
                                 ; have nothing to do here.
+DRVV_HWINFO  equ 4              ; "WHERE IS YOUR HARDWARE?" (SPEC.md 51.11.2).
+                                ; No inputs. out CF=0 with AX/BX/CX = your
+                                ; CLASS's own three words - for DRVC_SOUND the
+                                ; DSP base port, then (IRQ | DMA<<8), then the
+                                ; DSP version - or CF=1 if you have nothing to
+                                ; say. OPTIONAL, and asked only by
+                                ; OSAPI_DRV_SUSPEND on the way past: you are
+                                ; about to be unloaded so a fullscreen program
+                                ; can have the hardware, and you are the last
+                                ; thing that knows where it is.
+                                ;
+                                ; ANSWER CF=1 RATHER THAN A ZERO ADDRESS when
+                                ; the hardware is not there. The caller turns
+                                ; this into something a program acts on - a
+                                ; BLASTER= - and one naming a card that is
+                                ; absent is worse than none at all.
 DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
                                 ; (SPEC.md 34.8); out CF=0 and SI = your
                                 ; service table, which the kernel RE-COPIES
@@ -348,6 +375,13 @@ FSV_WRITE    equ 8              ; KERNEL_SEG on entry to everything the kernel
                                 ; buffer's segment - DSV_BLK's rule, SPEC.md
                                 ; 51.8, and `mov es, dx` is yours to do)
 FSV_APPEND   equ 10             ; the chunked pair (18.4.4), so a copy streams
+; A DRVC_FILE driver's own DSV_CAPS bit (SPEC.md 62.9.2.2). Set it when your
+; FSV_READAT is a MEMORY read - no wire, no seek, no motor - and the mount
+; will HARVEST package icons off your volume instead of taking SPEC.md
+; 62.9.2.1's cache-only pass. Leave it clear and you get exactly the
+; behaviour every DRVC_FILE driver had before the bit existed.
+FSCAP_LOCAL  equ 1              ; my reads cost what a memcpy costs
+
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name
 FSV_RENAME   equ 16             ; SI = old, DI = new
@@ -476,7 +510,7 @@ FSV_SIZE     equ 30
 ;      frees your image the moment detach returns, and a worker still on the
 ;      run queue leaves the scheduler holding a stack frame whose CS points
 ;      at memory the next heap claim takes.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x0248
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x01D9
 
 ; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
 ; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,
@@ -490,8 +524,10 @@ FSV_SIZE     equ 30
 ;                        CX = the volume's sector count, for the kernel's own
 ;                            "does this BPB claim to be bigger than its
 ;                            partition" check
-;                        DX = a listing claim's segment, or 0 for the kernel's
-;                            32-entry floor. HDD_LISTKB below is its size
+;                        DX = RESERVED, pass 0. It took a listing claim your
+;                            driver funded, which SPEC.md 22.6 retired: the
+;                            kernel lists every volume into its own buffers
+;                            now, at the same cap for all of them
 ;                        SI = a NUL desktop label in YOUR segment (0 = the
 ;                            kernel derives 'Disk X' from the index)
 ;                    out CF = 0 and AL = the volume index; CF = 1 = no room
@@ -517,16 +553,18 @@ FSV_SIZE     equ 30
 ; The five slots themselves are published by os88api.inc, which this file
 ; includes: a slot number belongs in one place (SPEC.md 20.8).
 
-; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries
-; followed by the same number of 64-byte icon slots. Claim it before
-; OSAPI_VOL_ADD and hand over the segment; pass 0 instead and the volume lists
-; into the kernel's own 32-entry buffers, which works and shows fewer files.
-; **Claim 6KB whatever the kernel's own stride is.** The entry a driver hands
-; over through OSAPI_FS_ENT is DSK_DE_SIZE (32) bytes wide and always will be;
-; what the kernel STORES in the claim is narrower (SPEC.md 19.1), so this
-; number is a ceiling the kernel writes under rather than a layout to mirror -
-; which is what keeps it off a driver's rebuild list.
-HDD_LISTKB   equ 6
+; HDD_LISTKB WAS HERE, and SPEC.md 22.6 retired it. A mounted volume used to
+; want a 6KB listing claim from its driver, handed to OSAPI_VOL_ADD in DX, so
+; that a hard disk could list more entries than the kernel's own floor. Two
+; changes took its reason away: SPEC.md 25.9 moved the icon bodies out of a
+; listing and into one machine-wide store - four fifths of the claim - and the
+; 64-entry pass raised the floor to the same cap the claim funded, after which
+; the donation bought a listing the kernel already gave for free.
+;
+; It is not coming back per-driver. A hard disk's directories and a floppy's
+; are busy for the same reason, so the cap moves for both at once: raise
+; DSK_NENT in kernel/dskwin.inc and every volume gets it, at `.lowbss` bytes
+; that a machine with no hard disk was paying for the option anyway.
 
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
 ; Everything in the app SDK's memory section applies to you unchanged - your
@@ -539,6 +577,11 @@ HDD_LISTKB   equ 6
 ; than claiming, testing the address, and claiming again while holding the
 ; block that failed - that pattern can hold four buffers to find one, and
 ; refuse on a machine that had the room all along.
+; A DRIVER FAR-CALLS THE API TABLE TOO, so its format byte moves with it
+; (SPEC.md 20.2.0): 4 until pass 4 renumbered the cells, 7 now. Mirrored in
+; kernel/driver.inc and tools/os88drv.py.
+DRV_VER equ 7
+
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte
 ; header. Emits cpu 8086 / bits 16 / org 0 first, so it must be the first
@@ -550,7 +593,7 @@ HDD_LISTKB   equ 6
     bits 16
     org 0
     db 'O', '8'             ; +0  magic (word 0x384F), a package's own
-    db 4                    ; +2  format 4 = DRIVER. A package is 3, so the
+    db DRV_VER              ; +2  the DRIVER format. A package is PKG_FMT, so the
                             ;     application loader refuses this file even
                             ;     if one ever reaches it (SPEC.md 51.1)
     db %2                   ; +3  class: the kernel checks it against the
@@ -610,7 +653,7 @@ HDD_LISTKB   equ 6
     bits 16
     org 0
     db 'O', '8'             ; +0  magic
-    db 4                    ; +2  format 4: driver-shaped, not an application
+    db DRV_VER              ; +2  driver-shaped, not an application
     db DRVC_OVL             ; +3  ...but no class the kernel will load
     dw 0                    ; +4  link base: 0
     dw (%3) - $$            ; +6  entry offset

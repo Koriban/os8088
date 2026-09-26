@@ -625,6 +625,11 @@ tk_onkey:
     push ax
     call tk_abdismiss               ; any key takes the credits down, and is
     jc .out                         ; spent doing it
+    cmp ax, KEY_ALTENTER            ; Alt+Enter is the same door (SPEC.md
+    je .go                          ; 11.2.1.1), and a plain Enter already
+                                    ; opens it three lines down - so this is
+                                    ; the chord agreeing with the key rather
+                                    ; than a new action. On AX: ascii is 0
     cmp al, 'f'
     je .go
     cmp al, 'F'
@@ -719,7 +724,7 @@ tk_s_enter:  db 'PRESS ENTER', 0
 ; whole frame - the arkanoid/tracker pattern.
 
 ; -----------------------------------------------------------------------------
-; tk_about - the OSAPI_ABOUT_SET handler (slot 0x01E0)
+; tk_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; the UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -1122,6 +1127,7 @@ tk_tpl:
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else:
 %define OS88UI_NOBTN            ; the attract panel is the game's own chrome
+%include "os88alt.inc"              ; SPEC.md 11.2.1.1's edge, for the bracket
 %include "os88ui.inc"
 
 ; --- the embeddable graphics library (SPEC.md 5.12) ---------------------------
