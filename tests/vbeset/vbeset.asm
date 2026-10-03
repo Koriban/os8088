@@ -202,6 +202,7 @@ vs_again:
     call vs_check               ; read it back through GC4
 
     call vs_getkey              ; hold the picture for the camera
+    call vs_pal                 ; ...then read the palette, STILL IN THE MODE
 
     mov ax, 0x0003              ; back to text for the verdict
     int 0x10
@@ -1227,6 +1228,135 @@ vs_check:
     ret
 
 ; =============================================================================
+; vs_pal - read the 16-colour palette as the hardware actually holds it
+;
+; A PHOTOGRAPH CANNOT ANSWER A PALETTE QUESTION and two attempts proved it:
+; the panel is TN, so its colour shifts with height, and the control arm's
+; picture is letterboxed mid-panel while the VBE arm's fills the screen - so
+; the same colour is photographed at two different viewing angles. Normalising
+; each bar row against its own colour 0 and 15 cancels that, but only if the
+; picture's rectangle is found correctly in the photo, and the room behind the
+; laptop is brighter than the frame. Both attempts latched onto the room.
+;
+; The hardware is readable, so read it. Colour -> Attribute Controller palette
+; register -> DAC entry -> six-bit RGB, which is the whole chain and leaves
+; nothing to a camera. Both arms print it, so they compare directly.
+;
+; Reading the AC is the one part with a trap: writing an index with bit 5
+; CLEAR is what lets 3C1h be read, and it also disconnects the palette from
+; the screen - leaving it that way blanks the display. The 20h write at the
+; end puts it back, and the 3DAh read before each index resets the address/
+; data flip-flop, which is shared and has no other way to be put in a known
+; state.
+; =============================================================================
+vs_pal:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, 0
+.ac:
+    mov dx, 0x3DA               ; reset the AC's address/data flip-flop
+    in al, dx
+    mov dx, 0x3C0
+    mov al, cl                  ; index, bit 5 CLEAR: this is a read
+    out dx, al
+    mov dx, 0x3C1
+    in al, dx
+    mov bx, cx
+    mov [vs_pac + bx], al
+    inc cx
+    cmp cx, 16
+    jb .ac
+    mov dx, 0x3DA               ; video back on: bit 5 reconnects the palette
+    in al, dx                   ; to the screen, and without this the display
+    mov dx, 0x3C0               ; stays blank
+    mov al, 0x20
+    out dx, al
+
+    mov cx, 0
+.dac:
+    mov bx, cx
+    mov al, [vs_pac + bx]
+    and al, 0x3F
+    mov dx, 0x3C7               ; DAC read index
+    out dx, al
+    jmp short $+2               ; the classic I/O settle, twice - the DAC is
+    jmp short $+2               ; the slowest thing on these ports
+    mov dx, 0x3C9
+    mov bx, cx
+    shl bx, 1
+    add bx, cx                  ; BX = colour * 3
+    in al, dx
+    mov [vs_pdac + bx], al
+    in al, dx
+    mov [vs_pdac + bx + 1], al
+    in al, dx
+    mov [vs_pdac + bx + 2], al
+    inc cx
+    cmp cx, 16
+    jb .dac
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vs_palprint - four lines of four, "colour AC=RRGGBB"
+vs_palprint:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, vs_s_pal
+    call vs_puts
+    mov cx, 0
+.one:
+    mov al, ' '
+    call vs_putc
+    mov al, cl
+    call vs_hexnib
+    mov al, ' '
+    call vs_putc
+    mov bx, cx
+    mov al, [vs_pac + bx]
+    call vs_hex2
+    mov al, '='
+    call vs_putc
+    mov bx, cx
+    shl bx, 1
+    add bx, cx
+    mov al, [vs_pdac + bx]
+    call vs_hex2
+    mov al, [vs_pdac + bx + 1]
+    call vs_hex2
+    mov al, [vs_pdac + bx + 2]
+    call vs_hex2
+    inc cx
+    mov ax, cx
+    and ax, 3
+    jnz .one
+    call vs_nl
+    cmp cx, 16
+    jb .one
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+vs_hexnib:
+    push ax
+    and al, 0x0F
+    add al, 0x90
+    daa
+    adc al, 0x40
+    daa
+    call vs_putc
+    pop ax
+    ret
+
+; =============================================================================
 ; vs_report - the verdict, in text mode
 ; =============================================================================
 vs_report:
@@ -1324,6 +1454,7 @@ vs_report:
     inc di
     jmp short .one
 .tail:
+    call vs_palprint
     mov si, vs_s_rtail
     call vs_puts
     ret
@@ -1509,6 +1640,9 @@ vs_s_rok:
 vs_s_rbad:      db 13, 10, 'MISSED:', 13, 10, 0
 vs_s_rwant:     db '  want ', 0
 vs_s_rgot:      db '  got ', 0
+vs_s_pal:
+    db 13, 10, 'palette - colour, AC register = DAC RGB (6-bit):', 13, 10
+    db 'mode 12h has 6 -> AC 14 = 2A1500 (brown). AC 06 = 2A2A00, dark yellow.', 13, 10, 0
 vs_s_rtail:     db 13, 10, 'R runs it again, any other key halts.', 13, 10, 0
 vs_s_bye:       db 13, 10, 'Left the mode alone. Power off.', 13, 10, 0
 
@@ -1536,6 +1670,8 @@ vs_winshift db 16
 vs_winmask  dw 0xFFFF
 vs_rowsplit dw 0
 vs_rowrem   dw 0
+vs_pac      times 16 db 0
+vs_pdac     times 48 db 0
 vs_px       dw 0
 vs_banked   db 1
 vs_barw     dw 0

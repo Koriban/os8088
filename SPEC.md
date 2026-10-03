@@ -64235,8 +64235,44 @@ right everywhere; anything that looks wrong on the panel is therefore the DAC
 or the display and not the drawing. (Colour 8 does read as nearly black
 against the ground in the photograph, where the control's reads as a mid
 grey.) Readback cannot see a DAC, so whether `0104h` arrives with mode 12h's
-palette loaded still needs its own look — it is open, and it is now known to
-be *only* a palette question.
+palette loaded needs its own instrument — and the test has one now.
+
+#### 39.28.2.4 The palette is read, not photographed
+
+**Two attempts to answer the palette question from the photographs failed,
+and the second failure is why the test grew a palette readback instead.** The
+panel is TN, so its colour shifts with height; the control arm's picture is
+letterboxed mid-panel while the VBE arm's fills the screen, so the same colour
+is photographed at two different viewing angles. Normalising each bar row
+against *its own* colour 0 and colour 15 cancels that correctly — but only if
+the picture's rectangle is located in the photo first, and **the room behind
+the laptop is brighter than the frame**. Both attempts latched onto the room,
+the second returning a picture five pixels wide. A photograph of a lit LCD is
+not a colorimeter and no amount of normalising makes it one.
+
+The hardware is readable, so `vs_pal` reads it: colour → Attribute Controller
+palette register → DAC entry → six-bit RGB, which is the whole chain. Both
+arms print it, so they compare directly and neither is a camera.
+
+Reading the AC has one trap worth recording: writing an index with **bit 5
+clear** is what makes 3C1h readable, and it also disconnects the palette from
+the screen — leaving it so blanks the display. The `20h` write at the end puts
+it back, and the 3DAh read before each index resets the shared address/data
+flip-flop, which has no other way to be put in a known state.
+
+Verified against a known-good reference first — the control arm under QEMU
+returns exactly the canonical mode 12h palette, **entry 6 → AC `14` = `2A1500`,
+brown**, which is the diagnostic entry: a palette that was never programmed
+leaves 6 → AC `06` = `2A2A00`, dark yellow.
+
+```
+ 0 00=000000  1 01=00002A  2 02=002A00  3 03=002A2A
+ 4 04=2A0000  5 05=2A002A  6 14=2A1500  7 07=2A2A2A
+ 8 38=151515  9 39=15153F  A 3A=153F15  B 3B=153F3F
+ C 3C=3F1515  D 3D=3F153F  E 3E=3F3F15  F 3F=3F3F3F
+```
+
+The `0104h` reading from the Satellite is outstanding.
 
 ## 41. xmem.inc — memory above 1MB
 
