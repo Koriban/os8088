@@ -216,6 +216,46 @@ hits the same **2,161 B/s** floppy wall as the 5150 under `FLOPPY1=1`
 
 ---
 
+## The Toshiba Satellite 4025CDT — `Koriban/os8088`'s, the VBE machine
+
+Far past the target and useful for exactly that: a Pentium II laptop whose
+BIOS and chipset are a *late* PC, which is where questions about VESA, PS/2
+pointing devices and IDE geometry get answered. **Nothing timed on it means
+anything** — it is roughly three orders of magnitude off a 4.77 MHz 8088, so
+every result from it is about *capability*, never about speed.
+
+| | |
+|---|---|
+| owner | **`Koriban/os8088`** |
+| CPU | Pentium II, 233 MHz |
+| video | **NeoMagic**, VGA — and a **VBE 2.0** BIOS with 2 MB (§39.28.1) |
+| floppy | **one 1.44 MB 3.5" drive**, and only one: a disk that needs a separate boot floppy cannot be run here |
+| pointer | **PS/2 trackpad** |
+| storage | an 8 GB **CompactFlash** card on the IDE bus |
+| disks | the **1.44 MB** images. `tools/os88flop.py` lists them and writes them |
+
+What it has been worth so far:
+
+- **`0104h` (1024x768x16 planar) is present and hardware-supported**, at 64 KB
+  granularity, and VGA-compatible with windowed memory — SPEC.md §39.28.1 has
+  the table and what it rules in, and
+  `docs/photos/vbeprobe-satellite-4025cdt.jpg` is the screen it was read off.
+  This is the only machine here that can answer that question at all.
+- **The PS/2 pointer path works on iron.** `sysbench` drove the trackpad, which
+  is the first confirmation of §9.9 off a real machine rather than an
+  emulated one.
+- **The CF needed a geometry retarget.** `hdd read error code 4` (sector not
+  found) on the stock image, because the BIOS presents the card as 255/63 and
+  the image was built for another geometry; `tools/os88disk.py --retarget` with
+  `--geometry 255/63` is what fixes it.
+
+**One drive is a constraint, not a detail.** The two-floppy shape every other
+harness here uses — boot disk in A:, payload in B: — is not a procedure this
+machine can follow, so anything meant to run on it ships as a single bootable
+image (`build/vbeprobeboot.img` is the worked example).
+
+---
+
 ## The Compaq Portable III — `Elendilon/os8088`'s, the two-port machine
 
 An AT-class BIOS, a 1.2 MB drive and a cross-wired serial card: it keeps the

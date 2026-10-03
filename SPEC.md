@@ -64022,10 +64022,71 @@ mode   width height bpp mdl gran wsize attr
 ```
 
 `mdl` 3 is planar and 4 is packed, so the pair at 1024x768 is exactly the
-choice described above. **This is QEMU's BIOS and settles nothing about real
-hardware** — it establishes only that the probe reads a VBE correctly. The
-machine the question is actually about is the Satellite 4025CDT's NeoMagic,
-and that answer can only come from running this on it.
+choice described above. This settles nothing about real hardware — it
+establishes only that the probe reads a VBE correctly.
+
+#### 39.28.1 The answer from the Satellite 4025CDT — `0104h` is there
+
+Run on the machine the question was about (NeoMagic, 2026-10-03), photographed
+off the screen — `docs/photos/vbeprobe-satellite-4025cdt.jpg`, which is the
+provenance docs/FIELD-MACHINES.md asks every field result to carry. **VBE 2.0,
+2MB, 31 report lines of 31 — the list is complete and nothing was truncated.**
+
+```
+mode   width height bpp mdl gran wsize attr
+0102     800    600   4   3   64    64 001F
+0104    1024    768   4   3   64    64 001F
+0105    1024    768   8   4   64    64 009F
+0106    1280   1024   4   3   64    64 001F
+0118    1024    768  24   6   64    64 009A
+```
+
+`0104h` is present and hardware-supported, at 64KB granularity with a 64KB
+window — the simple banking case, not the 4KB one.
+
+**And its attributes are better than the emulator's, which is the part a
+QEMU-only run would have got wrong.** `001F` against QEMU's `003B` differs in
+bit 5, and bit 5 is *VGA compatible* inverted: QEMU's std VGA says `0104h` is
+NOT VGA-compatible, the NeoMagic says it is. Bit 6 is clear on both, so the
+VGA-compatible *windowed* memory mode is available. Together that means the
+ordinary VGA registers — the Sequencer map mask the renderer already drives
+(§39.3) — are the interface in this mode, rather than a VBE-specific path.
+Bit 7 is clear: no linear framebuffer, which costs nothing, because an 8086
+could not address one anyway.
+
+**The `attr` bit-0 test is doing real work rather than being a formality.**
+Under QEMU every listed mode had it set. Here the 24bpp modes and the 15/16bpp
+modes at 1280x1024 come back `009A` — **listed by the BIOS and not supported
+by the card**. A probe that reported presence alone would have called those
+available.
+
+**`0104h` is also the only planar mode on this machine whose rows do not
+straddle a bank**, which is the §39.28 argument confirmed against the real
+list rather than assumed:
+
+| mode | bytes/row/plane | rows per 64KB | |
+|---|---:|---:|---|
+| 12h 640x480 | 80 | 819.20 | straddles — but the whole plane is 38,400 bytes, so it never banks at all |
+| `0102` 800x600 | 100 | 655.36 | straddles |
+| **`0104` 1024x768** | **128** | **512.00** | **exact** |
+| `0106` 1280x1024 | 160 | 409.60 | straddles |
+
+`0106h` is supported too and is the tempting one — it is bigger and it is
+planar — but it has 800x600's defect, so taking it would mean teaching every
+primitive about a boundary inside a row instead of teaching `gfx_rowbase`
+(§39.3.1) alone about banks. 1024x768 is not merely the biggest safe mode; on
+this hardware it is the *only* one.
+
+A plane there is 98,304 bytes, so the framebuffer spans two banks and a
+fraction — one switch for most of a full-screen pass. The card has 2MB and
+the mode needs 384KB across four planes, so memory is not a constraint.
+
+**What this does NOT establish.** That the mode can be *set* and drawn on. The
+probe deliberately never calls `AX=4F02h` (see above), so everything here is
+the BIOS's own description of itself. A card whose BIOS advertises a mode it
+mis-programs is a known failure class, and the next step is a throwaway that
+sets the mode, writes a recognisable pattern through the map mask, and is
+shot with a camera — not a change to os8088.
 
 ## 41. xmem.inc — memory above 1MB
 
