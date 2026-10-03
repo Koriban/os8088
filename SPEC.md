@@ -63952,6 +63952,71 @@ only ever REUSE it in place (docs/plans/MONO-RECLAIM-PLAN.md §3); `kern_small`
 carries no hole at all, because the bytes stopped existing at assembly time.
 **Only one of the two has anything to spend, and it is not the small one.**
 
+### 39.28 `tests/vbeprobe` — asking the machine, not the datasheet
+
+Whether os8088 could ever run above 640x480 is a question about a *particular
+BIOS on a particular card*, and no amount of reading settles it: cards that
+advertise VESA routinely implement the packed 256-colour modes and skip the
+16-colour planar ones entirely. `tests/vbeprobe` asks the machine. It lives in
+`tests/` with fontbench, typebench and netbench, for the same reason they do
+(§24, the "benchmarks are not in `apps/`" rule): it ships on no disk, `all`
+builds none of it, and it answers one question once.
+
+```
+make vbeprobe && make test TESTAPPS=build/vbeprobe.img
+```
+
+R re-probes, S writes `VBEPROBE.TXT` beside the package so the report can be
+read off the floppy on the host rather than off the glass.
+
+**It sets no mode.** `INT 10h AX=4F00h` and `AX=4F01h` are pure queries that
+fill a buffer and return. `AX=4F02h` is deliberately absent and must stay
+absent: os8088 owns the display (§39.6), and a package that switched the mode
+behind the window manager would take the desktop with it.
+
+**What it is looking for is `0104h`, and the reason is the pixel format, not
+the resolution.** The renderer is four-bit planar throughout — mode 12h's
+format, planes selected by the Sequencer's map mask at one address. `0104h`
+(1024x768x16) is that same shape one size up, so every primitive keeps its
+format. The 256-colour modes are PACKED: not an extension of this renderer
+but a second one.
+
+**And the aperture lines up, which is what makes `0104h` interesting rather
+than merely bigger.** 1024 pixels is 128 bytes a row a plane, and a 64KB
+window holds exactly 512 of those — so a bank boundary falls BETWEEN rows and
+never inside one, and `gfx_rowbase` (§39.3.1) stays the single place that
+would have to learn about banks. 800x600 is the *harder* mode, not the
+easier one: 100 bytes a row divides 65536 into 655.36, so a row there
+straddles a boundary and every primitive has to care.
+
+The report gives window granularity and size per mode because that is what
+the banking would cost: 64KB granularity with a 64KB window is the simple
+case, 4KB granularity is a different sum.
+
+**The verdict is computed from every mode in the list, not from the printed
+rows.** `VP_MAXM` caps the rows so a long list cannot page the answer off the
+screen, and a report that hits the cap says so — but the `0104h` test runs
+before the cap, because a BIOS that lists it at position 65 would otherwise
+be reported as not having it at all. Both halves are proven by mutation:
+with `VP_MAXM` cut to 4 under QEMU, `0104h` prints no row and the verdict
+still finds it.
+
+Measured under QEMU's `std` VGA, 2026-10-03 — VBE 3.0, 16MB, and `0104h`
+present with attribute bit 0 set:
+
+```
+mode   width height bpp mdl gran wsize attr
+0102     800    600   4   3   64    64 003B
+0104    1024    768   4   3   64    64 003B
+0105    1024    768   8   4   64    64 00BB
+```
+
+`mdl` 3 is planar and 4 is packed, so the pair at 1024x768 is exactly the
+choice described above. **This is QEMU's BIOS and settles nothing about real
+hardware** — it establishes only that the probe reads a VBE correctly. The
+machine the question is actually about is the Satellite 4025CDT's NeoMagic,
+and that answer can only come from running this on it.
+
 ## 41. xmem.inc — memory above 1MB
 
 `xmem.inc` sizes the store above 1MB, allocates out of it, and moves bytes

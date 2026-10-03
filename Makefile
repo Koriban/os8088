@@ -9689,6 +9689,28 @@ $(BUILD)/fontbnch.bin: tests/fontbench/fontbench.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/fontbnch.o88: $(BUILD)/fontbnch.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/fontbnch.bin -o $@
 
+# VBEPROBE - what video modes this machine's BIOS offers (tests/vbeprobe).
+# NOT a benchmark and not a gate: it answers one question, on the machine,
+# before any work is done on a resolution above mode 12h. It only QUERIES -
+# AX=4F00h and AX=4F01h fill a buffer and return - and must never grow the
+# call that switches a mode, because os8088 owns the display (SPEC.md 39).
+$(BUILD)/vbeprobe.bin: tests/vbeprobe/vbeprobe.asm tests/benchlib.inc \
+                       apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vbeprobe/vbeprobe.asm
+	@echo "vbeprobe: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vbeprobe.o88: $(BUILD)/vbeprobe.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vbeprobe.bin -o $@
+
+$(BUILD)/vbeprobe.img: $(BUILD)/vbeprobe.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vbeprobe.o88
+
+.PHONY: vbeprobe
+vbeprobe: $(BUILD)/vbeprobe.img
+	@echo "vbeprobe: $< - boot it with"
+	@echo "          make test TESTAPPS=$<"
+	@echo "          R re-probes, S saves VBEPROBE.TXT to the disk"
+
 $(BUILD)/typebnch.bin: tests/typebench/typebench.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/typebench/typebench.asm
 	@echo "typebnch: $(call FILESIZE,$@) bytes"

@@ -258,6 +258,11 @@ make netbench   # THE STACK'S PROFILER (SPEC.md 72.15): NETBENCH.O88 beside
                 #   MartyPC has NO NIC, so the milliseconds are only real on
                 #   86Box or the 5150; under QEMU the calls and bytes are
                 #   exact and the times are the host's
+make vbeprobe   # DOES THIS BIOS OFFER A BIGGER PLANAR MODE (SPEC.md 39.28):
+                #   VBEPROBE.O88 on its own 1.44MB disk. int 10h AX=4F00h/4F01h
+                #   only - it SETS NO MODE and must not, os8088 owns the
+                #   display. R re-probes, S writes VBEPROBE.TXT to the floppy
+                #   so the report is read on the host, not off the glass
 make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   VMMOUSE.DRV's bit already set, ethertest's shape - the
                 #   driver is NOT wanted by default, so a stock os8088.img
