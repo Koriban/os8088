@@ -35,23 +35,54 @@ needs a system disk booted first.
 
 ## Writing one
 
-The safe way, which checks before it writes and verifies after:
+Run it with no arguments. It lists every image with a number, **finds the
+floppy drive**, and asks which one to write:
 
 ```sh
-python3 tools/os88flop.py --write build/combo144.img /dev/fd0
+python3 tools/os88flop.py
 ```
 
-It refuses on four separate grounds before it asks for anything — the target
-must be a block device, it must be **removable**, nothing on it may be
-mounted, and its capacity must **equal** the image's — then asks for the
+```
+  5  sudo dd if=build/vbeprobeboot.img    of=/dev/sdb bs=512 conv=fsync    # BOOTABLE
+  6  sudo dd if=build/vbeset.img          of=/dev/sdb bs=512 conv=fsync    # BOOTABLE
+
+# 6 image(s). Device /dev/sdb - 1.44MB disk in it
+
+Which image? [1-6, Enter to quit]: 6
+Device [/dev/sdb]:
+```
+
+**The device is looked for, not assumed.** It used to print `/dev/fd0`, which
+is wrong on every machine whose only floppy drive is a USB one — and a printed
+command that has to be hand-edited before it runs is worse than no command,
+because the thing being edited sits one letter away from `/dev/sda`. The
+drive is identified by being a whole removable block device whose capacity is
+a floppy geometry; a drive with **no disk in it** reports a size of 0, so it
+is named by its model and flagged as empty rather than going unmentioned.
+`--device` overrides, and `--list` prints without prompting (as does any
+non-interactive run, so pipes and scripts are unchanged).
+
+Picking a number ends in the same checked write as `--write`, which is also
+still there for a scripted one:
+
+```sh
+python3 tools/os88flop.py --write build/combo144.img /dev/sdb
+```
+
+Either way it refuses on four separate grounds before asking for anything —
+the target must be a block device, it must be **removable**, nothing on it
+may be mounted, and its capacity must **equal** the image's. All four are
+answered out of sysfs and `/proc`, so a wrong disk is rejected *before*
+anybody is asked for a password; root is checked for separately, once they
+have passed, and the message names the command to re-run. Then it asks for the
 device name to be typed back, writes, and reads the whole image back to
 compare SHA-256s.
 
 The raw equivalent, if you would rather do it yourself:
 
 ```sh
-lsblk -o NAME,SIZE,RM,TRAN,MOUNTPOINTS     # FIND THE DEVICE FIRST
-sudo dd if=build/combo144.img of=/dev/fd0 bs=512 conv=fsync status=progress
+lsblk -d -o NAME,SIZE,RM,TRAN,MODEL        # FIND THE DEVICE FIRST
+sudo dd if=build/combo144.img of=/dev/sdb bs=512 conv=fsync status=progress
 ```
 
 On **Windows**, use [rawwrite](http://www.chrysocome.net/rawwrite) or Rufus;
@@ -60,11 +91,12 @@ and not a filesystem to copy files into.
 
 ## Four ways to get it wrong
 
-- **The device.** `/dev/fd0` is a guess. A USB floppy drive is usually
-  `/dev/sdX`, and `/dev/sda` is very often the disk you are running from —
-  a mistyped device node is somebody's backup drive. `tools/os88flop.py`
-  refuses a non-removable device *by name* rather than warning about it,
-  which is `tools/os88burn.py`'s rule for the same reason.
+- **The device.** A USB floppy drive is `/dev/sdX`, not `/dev/fd0`, and
+  `/dev/sda` is very often the disk you are running from — a mistyped device
+  node is somebody's backup drive. This is why `tools/os88flop.py` looks the
+  drive up instead of printing a guess, and why it refuses a non-removable
+  device *by name* rather than warning about it, which is
+  `tools/os88burn.py`'s rule for the same reason.
 - **The media.** The image's size and the disk's must match. A 1.44MB image
   on 720KB media is a truncated write that will mount and then fail somewhere
   in the middle; a 720KB image on 1.44MB media needs the **HD hole taped
