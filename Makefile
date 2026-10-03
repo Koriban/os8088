@@ -9721,6 +9721,53 @@ $(BUILD)/vbeprobeboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vbeprobe.o88 $(APPDATAFOLDER)
 
+# VBESET - can mode 0104h actually be SET, and does the renderer work in it
+# (SPEC.md 39.28.2). vbeprobe above asked the BIOS to describe itself; this
+# writes pixels and reads them back.
+#
+# IT IS A BOOT DISK AND NOT A PACKAGE, and the rule is binding: SPEC.md 53.7
+# forbids an `int 10h` mode set outside fsx_mode, and SPEC.md 53.6 SKIPS the
+# restoring mode set when fsx_mode was never called - so a package that set
+# 0104h would leave the machine in it with no path back to the desktop. It
+# boots the machine itself and owns everything instead.
+#
+# The loader is bootdiag's own paranoid sector, UNCHANGED (one sector an int
+# 13h, no relocation, geometry out of the BPB): it loads the first file in the
+# data area, which is what --kernel lays down, so nothing new had to be
+# written to boot this.
+VS_SECS := 12
+
+$(BUILD)/vbeset.bin: tests/vbeset/vbeset.asm Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -o $(BUILD)/vbeset0.bin tests/vbeset/vbeset.asm
+	@python3 -c "import sys; \
+	  o = bytearray(open('$(BUILD)/vbeset0.bin','rb').read()); \
+	  n = $(VS_SECS) * 512; \
+	  sys.exit('vbeset: the code is %d bytes and VS_SECS leaves %d - raise '  \
+	           'VS_SECS, never let the loader read fewer sectors than the '   \
+	           'image has' % (len(o), n)) if len(o) > n else None; \
+	  o.extend(b'\0' * (n - len(o))); \
+	  open('$@','wb').write(o); \
+	  print('vbeset: %d bytes of code in %d sectors' % (len(o), $(VS_SECS)))"
+
+# bdboot.asm again, assembled for THIS payload's sector count. A separate
+# object from build/bdboot.bin on purpose: the two payloads are different
+# lengths, and one binary serving both would read the wrong number of sectors
+# for whichever was built second.
+$(BUILD)/vsboot.bin: tests/bootdiag/bdboot.asm Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DSECS=$(VS_SECS) -o $@ tests/bootdiag/bdboot.asm
+	@test $(call FILESIZE,$@) -eq 512 || { echo "vsboot is not 512 bytes"; exit 1; }
+
+$(BUILD)/vbeset.img: $(BUILD)/vsboot.bin $(BUILD)/vbeset.bin tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/vsboot.bin --kernel $(BUILD)/vbeset.bin
+
+.PHONY: vbeset
+vbeset: $(BUILD)/vbeset.img
+	@echo "vbeset: build/vbeset.img - a BOOTABLE 1.44MB floppy. It is not an"
+	@echo "        os8088 disk and carries no kernel: it boots straight into"
+	@echo "        the test. Esc leaves the mode alone; a key sets it."
+	@echo "        TWO photographs - the pattern, then the verdict screen."
+
 .PHONY: vbeprobe
 vbeprobe: $(BUILD)/vbeprobe.img $(BUILD)/vbeprobeboot.img
 	@echo "vbeprobe: build/vbeprobeboot.img - ONE bootable floppy, for a real"

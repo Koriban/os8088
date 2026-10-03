@@ -263,6 +263,17 @@ make vbeprobe   # DOES THIS BIOS OFFER A BIGGER PLANAR MODE (SPEC.md 39.28):
                 #   only - it SETS NO MODE and must not, os8088 owns the
                 #   display. R re-probes, S writes VBEPROBE.TXT to the floppy
                 #   so the report is read on the host, not off the glass
+make vbeset     # ...AND CAN IT BE SET (SPEC.md 39.28.2): a BOOTABLE floppy
+                #   that is NOT an os8088 disk - SPEC.md 53.7 forbids an int
+                #   10h mode set outside fsx_mode and 53.6 skips the restore
+                #   when fsx_mode was never called, so a package doing this
+                #   would strand the machine in 1024x768. It boots itself.
+                #   TWO ARMS and the control is not optional: 1 sets VBE
+                #   0104h, 2 sets plain VGA 12h and runs the IDENTICAL code,
+                #   because a test only ever seen to fail cannot tell a bad
+                #   card from bad code. Probes are read back through GC4, so
+                #   the verdict is text and the photograph only confirms the
+                #   display
 make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   VMMOUSE.DRV's bit already set, ethertest's shape - the
                 #   driver is NOT wanted by default, so a stock os8088.img

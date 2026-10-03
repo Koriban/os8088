@@ -64088,6 +64088,101 @@ mis-programs is a known failure class, and the next step is a throwaway that
 sets the mode, writes a recognisable pattern through the map mask, and is
 shot with a camera — not a change to os8088.
 
+### 39.28.2 `tests/vbeset` — setting it, and drawing in it
+
+§39.28.1 is the BIOS describing itself. A BIOS that advertises a mode it
+mis-programs is a known failure class, so the next question is whether
+`0104h` can be **set**, and whether os8088's own renderer works once it is.
+`tests/vbeset` writes pixels.
+
+```
+make vbeset     -> build/vbeset.img, a bootable 1.44MB floppy
+```
+
+**It is a boot disk and not a package, and the rule is binding.** §53.7
+forbids an `int 10h` mode set outside `fsx_mode` — *"the kernel must know what
+it is restoring from"* — and §53.6 step 1 **skips** the restoring mode set when
+`fsx_mode` was never called. A package that set `0104h` behind the bracket's
+back would leave the machine in 1024x768 with the kernel's renderer writing
+mode-12h geometry into it and no path home. `fsx_mode` has no VBE id (they
+stop at 8), and adding one is a kernel change that must not be made on the
+strength of a BIOS describing itself. So it boots the machine itself and owns
+everything: nothing to restore, no kernel to strand. It is bootdiag's shape
+(§2.9.10) and reuses bootdiag's own paranoid loader unchanged.
+
+**Nothing is assumed.** The stride, window segment, granularity and window
+size are read from `AX=4F01h` and used; the bank arithmetic and every
+coordinate in the pattern are derived from them. A machine reporting a stride
+that is not 128 gets a pattern laid out for the stride it reported.
+
+**The pattern exercises kernel/vga12.inc's paths, with its register
+sequences** — because "does VBE work" is not the question and "does *this
+renderer* work in this mode" is: 16 colour bars through Set/Reset (GC0/GC1); a
+1px frame and a diagonal through single-pixel Bit Mask writes with a
+latch-loading read, at both ends of a byte; three bank lines at the rows
+either side of a granule boundary; a second bar set drawn past that boundary;
+a comb of 1px columns; and three XOR blocks (fill 7, XOR once, XOR twice)
+through the ALU function GC3 = 18h, where the first and third must match and
+the middle must not.
+
+**It does not depend on the photograph.** Every probe point is read back
+through Read Map Select (GC4) — vga12.inc's own plane-read path — and compared
+with what was written, and the verdict prints per-probe PASS/FAIL in text
+mode. A photograph then confirms the *display*, which readback cannot see.
+
+#### 39.28.2.1 Two arms, and the control is not optional
+
+`1` sets VBE `0104h`; **`2` sets plain VGA 12h and runs the identical code**.
+A test that has only ever been seen to fail cannot tell a card that cannot do
+the mode from a bug in the code asking it to, and this one did fail first:
+under QEMU every probe read zero and the screen stayed black. The control is
+what makes that reading worth anything. It is `make bootdiag`'s principle —
+*the pair is the experiment, and neither disk alone is* — inside one image.
+
+**A raw-memory probe separates the two failures that look identical from
+outside.** Before any drawing, with Set/Reset off, write mode 0 and the Map
+Mask open on all four planes, one byte is written and read back per plane:
+all four holding it means the window *is* the framebuffer and any pattern
+failure is in the GC path; anything else means the memory is not there and
+nothing built on it could have worked.
+
+Measured under QEMU's `std` VGA, 2026-10-03:
+
+| arm | raw write at (8,400) | probes |
+|---|---|---|
+| VBE `0104h` | wrote A5, read back `00 00 00 00` | **0 of 13** |
+| control, mode 12h | wrote A5, read back `A5 A5 A5 A5` | **10 of 10** |
+
+So the code is right and QEMU's `0104h` window is not CPU-addressable at
+`A000` — **which is exactly what QEMU's own attribute word said**: its
+`003B` has bit 5 set, meaning *not* VGA compatible. The emulator is consistent
+with itself, and this is the one machine property §39.28.1 found the Satellite
+reporting differently (`001F`, bit 5 clear). **QEMU therefore cannot answer
+this question, and the run is not evidence against the Satellite.**
+
+#### 39.28.2.2 The defect the comb caught
+
+The control did not pass first time: it came back **8 of 10**, missing only
+the two comb probes, while the screendump plainly showed the comb drawn
+correctly. The read path had
+
+```nasm
+    mov ax, cx
+    mov cl, 3           ; destroys the low byte of CX - which IS x
+    shr ax, cl
+    mov [vs_bytex], ax
+    mov ax, cx          ; reads the wrecked x
+```
+
+so the bit index came out 4 for every pixel on the screen: it read the
+**neighbouring** pixel. Eight of the ten probes sit inside solid blocks where
+the neighbour is the same colour, so they passed while testing nothing. Only
+the comb — 1px columns alternating with 1px gaps — is fine-grained enough for
+a one-pixel error to change the answer, and it is in the pattern for that
+reason. **A probe in a solid region cannot detect an off-by-one in
+addressing**, which is this project's "a values-only gate is blind to the
+chrome" (§81.98) one layer down.
+
 ## 41. xmem.inc — memory above 1MB
 
 `xmem.inc` sizes the store above 1MB, allocates out of it, and moves bytes
