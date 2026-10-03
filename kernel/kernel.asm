@@ -6393,6 +6393,11 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
                                 ; splash and everything above it eats that
                                 ; module's residency budget
 %include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
+%include "vbe.inc"              ; the kernel's HALF of VBE 1024x768 planar
+                                ; (SPEC.md 39.29): a row outside drv_tab, the
+                                ; dispatch and the load/free pair. No boot
+                                ; sniff - the probe needs a buffer and its one
+                                ; consumer already required the disk
 %include "xmem.inc"             ; the kernel's HALF of the store above 1MB
                                 ; (SPEC.md 41.12): four cells, a boot sniff
                                 ; and the dispatch. The gate itself, the

@@ -64274,6 +64274,141 @@ leaves 6 → AC `06` = `2A2A00`, dark yellow.
 
 The `0104h` reading from the Satellite is outstanding.
 
+### 39.29 VBE 1024x768x16 — `VBE.DRV` and the banked planar geometry
+
+§39.28 asked whether a bigger PLANAR mode exists, and §39.28.2.3 answered it on
+the iron: mode `0104h` sets, draws, and os8088's own three register paths —
+Set/Reset, the Bit Mask and the XOR ALU — behave in it exactly as in mode 12h,
+readback 13 of 13 including the rows either side of the bank boundary. This
+section is what the system does with that.
+
+**It is one kernel, not a build.** The probe is `int 10h AX=4F00h`, which is
+8086 code, so there is a resident question an XT can ask and a 286 or 386 with
+a VESA card can act on — which is exactly `XMEM.DRV`'s situation (§41.12.1) and
+exactly not `kern_emu`'s, whose probe is 386-only (§9.11.7). The rule those two
+settle between them: *a resident sniff is legitimate iff the target machine can
+execute the probe and do something with the answer.*
+
+#### 39.29.1 The arithmetic that shapes everything
+
+A 1024-wide 4bpp plane is **128 bytes a row**, and `65536 / 128 = 512` exactly.
+So:
+
+- a row never straddles a 64KB window;
+- the plane is 98,304 bytes — two windows and a fraction;
+- **the 16-bit carry out of `DI` *is* the bank crossing**, and nothing else has
+  to detect it.
+
+```nasm
+    add di, [vid_stride]
+    jnc  .same                  ; 511 times out of 512
+    call vbe_bank_next          ; ...and exactly on the boundary
+.same:
+```
+
+On mode 12h that `jnc` can never be taken — the largest `DI` is `479 x 80 =
+38,320` — so **one body is correct on both adapters**, which is what keeps this
+out of a second renderer.
+
+**`gfx_rowbase`'s contract changes, and this is the load-bearing edit.** It
+returns `AX` = a 16-bit offset and `gfx_rowbase_calc` discards the high word of
+its multiply on the written ground that *"DX is always 0 (86*90 at worst)"*.
+At stride 128 that holds to row 511 and fails at 512 — the same line as the
+bank boundary, necessarily, both being `65536 / stride`. In this mode it
+therefore means *"select the window, return the offset within it"*, and the
+`vid_rowtab` fast path is switched off (`[vid_rowmax] = 0`) because a table of
+16-bit offsets cannot describe row 512 at all. `vid_ctx_act` already switches
+that table off for a display of another kind (§39.12), so the mechanism exists.
+
+**The existing `vid_bmask`/`vid_bshift` bank cannot express this** and must not
+be stretched to try. That one is the CGA/Hercules *interleave* — `(y & bmask) *
+0x2000` **inside one segment**, with the LOW bits as the bank — and its own
+`%error` at `viddet.inc:1492` already records that it stops working once a bank
+holds more rows than its window. VBE needs the HIGH bits as the bank and a
+side-effecting window write. Two formulas, named apart.
+
+#### 39.29.2 `VBE.DRV` — the cold half, and only the cold half
+
+`XMEM.DRV`'s shape exactly (§41.12): `DRVC_OVL`, **no `drv_tab` row**, no
+publication slot, no `SYSTEM.CFG` bit, no Drivers-page tick. A machine either
+offers `0104h` or it does not; a tick box would only ever be a way to break a
+working machine. `kernel/vbe.inc` carries the sixteen-byte `DRVR_`-shaped
+record outside `drv_tab`, the dispatch, and the load/free pair.
+
+**There is no boot sniff, and that is the one place this departs from
+`XMEM.DRV`.** `xm_sniff` exists because a package can ask for extended memory
+at any moment with no disk in the drive, so the answer has to already be known
+— and `int 15h AH=88h` is free to ask. VBE's probe is not free: `AX=4F00h`
+fills 512 bytes and `AX=4F01h` 256, and a kernel that reserved either would be
+spending resident RAM on a question one page in the system asks. It does not
+have to: the only consumer is Control Panel's Display page, which lives in
+`CTRL.DRV` and is itself read from the system disk when the user opens it, so
+**the disk is already required at the only moment the question is ever asked**
+— §2.8's own qualifying test, one layer out.
+
+**It does not reach the image through `drv_call`, and that is a measurement.**
+`drv_call` range-checks `BX` against `drv_tab` and refuses a row outside it, so
+using it needs a third name on the `.stray` whitelist (§41.12.5) — and that
+whitelist is in `.cold`, which had **one byte** of its rung left. Six bytes
+there crossed it: **+512 bytes of every machine's RAM** for a feature an 8088
+can detect and could never usefully run. `xm_dsp` already far-calls the
+header directly for its service verbs (§41.12.2); doing the same for `ATTACH`
+as well costs about fifteen bytes of `.text`, where there was room, and the
+rung stays uncrossed. What `drv_call` was doing is replicated by hand and
+named: `DS` = the image, `ES` = `KERNEL_SEG`, a zero `DRVR_SEG` refused rather
+than far-called, and the compaction nest held across the call (§66.6.3) so the
+image's own claim cannot move under it.
+
+It owns the probe, the mode set, the palette, the geometry handoff and the
+window-switch body. It does **not** own drawing.
+
+**The renderer cannot be loadable, and that is settled rather than judged:**
+
+1. `gfx_*` bodies are **API slots**, and an `OSAPI_SLOT` names a `KERNEL_SEG`
+   offset (§41.12's own words), so they cannot be `.cold` — let alone a file.
+2. The renderer is called **from inside `mod_need`'s own load**: `fpg_busy`
+   draws for every sector read (`disk.inc:1171`, *"EVERY SECTOR IN THE MACHINE
+   PASSES HERE"*). A renderer module would be drawn with by its own loader.
+3. The **mouse ISR** draws the cursor through `int 13h` (§7.4), where
+   `mod_need` is unreachable.
+
+§79.2 refuses the module route for drawing code outright, on the separate
+ground that a module's data must live in the kernel's `.text`. So the split is
+not a preference: **the once-per-mode work is a file and the per-pixel work is
+resident**, and the window switch — at most once per multi-row operation,
+because 128 divides 65536 — reaches the file through a published service cell,
+which is `drv_svc_call`'s "a near read plus one far call".
+
+#### 39.29.3 What the mode costs the machine that cannot use it
+
+Reported the way docs/KERNEL-MEMORY.md requires — per-section bytes and the
+accrued figure, never "crossed no rung".
+
+| | |
+|---|---|
+| resident, `kern_big` | the `jnc` at 13 row-advance sites, `gfx_rowbase`'s second formula, and the row + dispatch + load pair — **`.text` +141 measured, `.cold` +0, no rung crossed** (accrued 172/512 -> 313/512) |
+| resident, `kern_small` | **nothing**: it cannot load a `.DRV` of any kind (§51.0), so the sniff and the row are `%ifdef OS88_DRIVERS` |
+| per row, on mode 12h | 2 bytes and one not-taken `jnc` |
+
+**That last figure is to be MEASURED on a 4.77MHz 8088 and recorded in
+PERFORMANCE.md, not asserted here.** If it reads badly the thirteen loops get
+banked twins selected once per operation, which costs bytes instead of time and
+needs no redesign.
+
+#### 39.29.4 Acceptance
+
+- Mode 12h output must be **byte-identical** before and after, since one body
+  now serves both. This is the classic failure of a change like this and it is
+  what catches a `jnc` written at twelve sites instead of thirteen.
+- The banking gate is **mutation-tested**: force the window to the wrong bank
+  and the gate must fail. A banking test that passes while banking is broken is
+  the defect class §39.28.2.2 already records against this very feature.
+- **QEMU cannot test any of this.** Its `0104h` window is not CPU-addressable
+  at `A000` — `tests/vbeset`'s raw probe reads `00 00 00 00` there against
+  `A5 A5 A5 A5` in mode 12h — exactly as its own attribute word (`003B`, bit 5
+  set) advertises. Every stage is verified on the Satellite 4025CDT
+  (docs/FIELD-MACHINES.md) and photographed.
+
 ## 41. xmem.inc — memory above 1MB
 
 `xmem.inc` sizes the store above 1MB, allocates out of it, and moves bytes

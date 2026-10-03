@@ -2952,6 +2952,14 @@ DRIVERS += $(BUILD)/hddtool.drv
 # because SPEC.md 41.11 took the whole feature out of that kernel and nothing
 # in it can name, read or load the file
 DRIVERS += $(BUILD)/xmem.drv
+# ...and VBE.DRV (SPEC.md 39.29), an overlay for the same reasons and on the
+# same terms: no drv_tab row, no Drivers-page tick, no SYSTEM.CFG bit. Where
+# XMEM's boot sniff decides whether to read the file, this one is read by the
+# ONE page that asks - Control Panel's Display page, which is itself loaded
+# from the system disk - so a machine that never opens it never touches this.
+# kern_small filters it out with the rest ($(SMALLDRIVERS)): it cannot load a
+# .DRV of any kind.
+DRIVERS += $(BUILD)/vbe.drv
 # ...and the animated screen saver (SPEC.md 79), which is an overlay for the
 # same reasons and rides every KERN_BIG disk the same way: no drv_tab row, no
 # Drivers-page tick, no SYSTEM.CFG bit of its own. blank.inc reads it when the
@@ -3466,6 +3474,17 @@ $(BUILD)/xmem.bin: drivers/xmem/xmem.asm drivers/os88drv.inc apps/os88api.inc \
 
 $(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/xmem.bin -o $@
+
+# VBE mode 0104h, 1024x768x16 planar (SPEC.md 39.29). Same shape as xmem above
+# and loaded the same way - DRVC_OVL, which the kernel deliberately does not
+# know, so nothing can load it but kernel/vbe.inc's own vbe_caps.
+$(BUILD)/vbe.bin: drivers/vbe/vbe.asm drivers/os88drv.inc apps/os88api.inc \
+                  | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/vbe/vbe.asm
+	@echo "vbe:    $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vbe.drv: $(BUILD)/vbe.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/vbe.bin -o $@
 
 # The animated screen saver (SPEC.md 79). An OVERLAY for XMEM.DRV's reason and
 # one of its own: a screen saver is mostly DATA - a sine table, four mode state

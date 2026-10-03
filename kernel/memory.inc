@@ -2838,6 +2838,7 @@ mem_rr_tab:
 %ifdef OS88_DRIVERS
     MEM_RR_ONE ss_row + DRVR_SEG    ; SAVER.DRV (kernel/blank.inc)
     MEM_RR_ONE xm_row + DRVR_SEG    ; XMEM.DRV (kernel/xmem.inc)
+    MEM_RR_ONE vbe_row + DRVR_SEG   ; VBE.DRV (kernel/vbe.inc)
     MEM_RR_ONE drv_blkseg           ; the block-verb far pointer's segment half
 %endif
     dw 0
