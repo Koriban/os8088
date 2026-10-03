@@ -241,6 +241,10 @@ What it has been worth so far:
   the table and what it rules in, and
   `docs/photos/vbeprobe-satellite-4025cdt.jpg` is the screen it was read off.
   This is the only machine here that can answer that question at all.
+- **And it can be SET and drawn in.** `tests/vbeset` put the machine in
+  1024x768 planar and drew through kernel/vga12.inc's own register sequences;
+  the bank boundary measures at 66.6-67.4% of the picture against a predicted
+  66.7% (SPEC.md §39.28.2.3). The readback count is still to come.
 - **The PS/2 pointer path works on iron.** `sysbench` drove the trackpad, which
   is the first confirmation of §9.9 off a real machine rather than an
   emulated one.

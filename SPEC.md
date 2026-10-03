@@ -64183,6 +64183,48 @@ reason. **A probe in a solid region cannot detect an off-by-one in
 addressing**, which is this project's "a values-only gate is blind to the
 chrome" (§81.98) one layer down.
 
+#### 39.28.2.3 The answer from the Satellite — it sets, and it draws
+
+Run on the NeoMagic, 2026-10-03. Photographs in `docs/photos/`:
+`vbeset-satellite-0104h.jpg` and `vbeset-satellite-control-12h.jpg`.
+
+**`AX=4F02h` set `0104h`, and the pattern came out at 1024x768.** The whole
+panel is the picture — the control arm's 640x480 sits letterboxed in the
+middle of the same screen, which is the two arms telling each other apart at a
+glance. Every item is present: both bar sets, the three XOR blocks with the
+first and third matching and the middle one different, the comb, a frame on
+all four edges and a diagonal that is straight corner to corner.
+
+**The bank boundary is where the arithmetic put it.** The frame gives the
+picture's extent in the photograph and the bank line is the one isolated
+bright band inside it, so its position is measurable without trusting a
+colour:
+
+| | |
+|---|---|
+| bank line, measured in the photograph | **66.6% – 67.4%** of the way down |
+| row 512 of 768, predicted | **66.7%** |
+
+That is §39.28's central claim — 128 bytes a row, 512 rows to a 64KB granule,
+the boundary falling *between* rows and never inside one — confirmed on the
+hardware rather than derived from a datasheet. Content is drawn on both sides
+of it, so the window switch carries drawing and not merely addressing.
+
+**What is still outstanding is the readback count.** The verdict screen is a
+second photograph and has not been taken yet, so the per-probe PASS/FAIL is
+unknown; everything above is what the picture shows. The picture is the weaker
+instrument of the two by design — it cannot see a one-pixel addressing error,
+which is exactly the defect §39.28.2.2 records the comb catching — so the
+mode is **demonstrated to work and not yet verified to the probe**.
+
+**Nothing here says anything about the palette.** The two photographs were
+taken at different angles of a TN panel, whose colours shift with viewing
+angle, and an attempt to sample the bars off them produced numbers that did
+not survive checking the frame-detection they rested on. Readback reads the
+*planes* and not the DAC, so it would not answer a palette question either:
+whether `0104h` arrives with mode 12h's palette is a separate question needing
+its own look, and it is open.
+
 ## 41. xmem.inc — memory above 1MB
 
 `xmem.inc` sizes the store above 1MB, allocates out of it, and moves bytes
