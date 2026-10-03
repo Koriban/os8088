@@ -63969,6 +63969,16 @@ make vbeprobe && make test TESTAPPS=build/vbeprobe.img
 R re-probes, S writes `VBEPROBE.TXT` beside the package so the report can be
 read off the floppy on the host rather than off the glass.
 
+**`make vbeprobe` builds two disks, and the second is the one for real
+hardware.** `build/vbeprobe.img` is a plain B: disk, which is what an
+emulator wants and what netbench's disks are. But the machine this probe
+exists for is a laptop with ONE floppy drive, where "boot the system disk,
+then insert the probe disk" is not a procedure that can be followed — so
+`build/vbeprobeboot.img` is the whole system disk with `VBEPROBE.O88` added
+at its root: one floppy, one boot, and S writes the report back to the same
+disk. It is a full bootable image, so it carries the build number (§14.2)
+and goes stale on the next commit like every other one.
+
 **It sets no mode.** `INT 10h AX=4F00h` and `AX=4F01h` are pure queries that
 fill a buffer and return. `AX=4F02h` is deliberately absent and must stay
 absent: os8088 owns the display (§39.6), and a package that switched the mode

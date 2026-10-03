@@ -9695,7 +9695,8 @@ $(BUILD)/fontbnch.o88: $(BUILD)/fontbnch.bin tools/os88pkg.py
 # AX=4F00h and AX=4F01h fill a buffer and return - and must never grow the
 # call that switches a mode, because os8088 owns the display (SPEC.md 39).
 $(BUILD)/vbeprobe.bin: tests/vbeprobe/vbeprobe.asm tests/benchlib.inc \
-                       apps/os88api.inc | $(BUILD)
+                       apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vbeprobe/vbeprobe.asm
 	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vbeprobe/vbeprobe.asm
 	@echo "vbeprobe: $(call FILESIZE,$@) bytes"
 
@@ -9705,11 +9706,29 @@ $(BUILD)/vbeprobe.o88: $(BUILD)/vbeprobe.bin tools/os88pkg.py
 $(BUILD)/vbeprobe.img: $(BUILD)/vbeprobe.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vbeprobe.o88
 
+# ...AND A BOOTABLE ONE, which the plain B: disk above cannot replace. The
+# machine this probe exists for is a laptop with ONE floppy drive (the
+# Satellite 4025CDT, docs/FIELD-MACHINES.md), so "boot the system disk, then
+# put the probe disk in" is not a procedure it can follow. This is the whole
+# system disk with VBEPROBE.O88 added, so the answer is one floppy and one
+# boot. It is a full image, so it carries the build number like every other
+# bootable disk (SPEC.md 14.2) and goes stale on the next commit.
+$(BUILD)/vbeprobeboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+                           $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) \
+                           $(FACELIC) $(BUILD)/vbeprobe.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vbeprobe.o88 $(APPDATAFOLDER)
+
 .PHONY: vbeprobe
-vbeprobe: $(BUILD)/vbeprobe.img
-	@echo "vbeprobe: $< - boot it with"
-	@echo "          make test TESTAPPS=$<"
-	@echo "          R re-probes, S saves VBEPROBE.TXT to the disk"
+vbeprobe: $(BUILD)/vbeprobe.img $(BUILD)/vbeprobeboot.img
+	@echo "vbeprobe: build/vbeprobeboot.img - ONE bootable floppy, for a real"
+	@echo "          machine with one drive. VBEPROBE.O88 is at the ROOT of"
+	@echo "          the A: disk - open the drive icon, not the desktop."
+	@echo "          build/vbeprobe.img - the B: disk, for \`make test"
+	@echo "          TESTAPPS=build/vbeprobe.img\` under an emulator."
+	@echo "          R re-probes, S saves VBEPROBE.TXT to the disk it ran from."
 
 $(BUILD)/typebnch.bin: tests/typebench/typebench.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/typebench/typebench.asm
