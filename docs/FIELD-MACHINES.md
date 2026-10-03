@@ -244,7 +244,8 @@ What it has been worth so far:
 - **And it can be SET and drawn in.** `tests/vbeset` put the machine in
   1024x768 planar and drew through kernel/vga12.inc's own register sequences;
   the bank boundary measures at 66.6-67.4% of the picture against a predicted
-  66.7% (SPEC.md §39.28.2.3). The readback count is still to come.
+  66.7%, and the readback is **13 of 13** against the control arm's 10 of 10
+  (SPEC.md §39.28.2.3). The mode is verified, not merely demonstrated.
 - **The PS/2 pointer path works on iron.** `sysbench` drove the trackpad, which
   is the first confirmation of §9.9 off a real machine rather than an
   emulated one.

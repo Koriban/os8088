@@ -64210,20 +64210,33 @@ the boundary falling *between* rows and never inside one — confirmed on the
 hardware rather than derived from a datasheet. Content is drawn on both sides
 of it, so the window switch carries drawing and not merely addressing.
 
-**What is still outstanding is the readback count.** The verdict screen is a
-second photograph and has not been taken yet, so the per-probe PASS/FAIL is
-unknown; everything above is what the picture shows. The picture is the weaker
-instrument of the two by design — it cannot see a one-pixel addressing error,
-which is exactly the defect §39.28.2.2 records the comb catching — so the
-mode is **demonstrated to work and not yet verified to the probe**.
+**And the readback is clean: 13 of 13**
+(`docs/photos/vbeset-satellite-verdict.jpg`), with the raw plane write
+reading back `A5 A5 A5 A5`. The control arm on the same machine reads 10 of
+10. Every probe point held exactly what was written, which between them is:
 
-**Nothing here says anything about the palette.** The two photographs were
-taken at different angles of a TN panel, whose colours shift with viewing
-angle, and an attempt to sample the bars off them produced numbers that did
-not survive checking the frame-detection they rested on. Readback reads the
-*planes* and not the DAC, so it would not answer a palette question either:
-whether `0104h` arrives with mode 12h's palette is a separate question needing
-its own look, and it is open.
+| probe | covers |
+|---|---|
+| `(352,32)` = 5, `(608,32)` = 9 | all four planes through Set/Reset |
+| `(210,110)` = 7, `(310,110)` = 8, `(410,110)` = 7 | the XOR ALU — filled, XORed once, XORed twice |
+| `(500,511)` = 14, **`(500,512)` = 12**, `(500,513)` = 10 | the rows either side of the granule boundary, so the **bank switch** |
+| `(352,620)` = 5 | a fill drawn *past* the boundary |
+| `(100,710)` = 15, `(101,710)` = 1 | the comb — 1px precision, the probe that caught §39.28.2.2 |
+| `(0,767)` = 15, `(1023,767)` = 15 | the frame, and the **last address in the framebuffer** |
+
+So `0104h` on this machine is **verified, not merely demonstrated**: the mode
+sets, the window banks, and Set/Reset, the Bit Mask and the XOR ALU — the
+three register paths kernel/vga12.inc is built on — all behave as they do in
+mode 12h.
+
+**On the palette, this narrows the question rather than answering it.** The
+probe at `(310,110)` expecting colour 8 passed, so the *plane* values are
+right everywhere; anything that looks wrong on the panel is therefore the DAC
+or the display and not the drawing. (Colour 8 does read as nearly black
+against the ground in the photograph, where the control's reads as a mid
+grey.) Readback cannot see a DAC, so whether `0104h` arrives with mode 12h's
+palette loaded still needs its own look — it is open, and it is now known to
+be *only* a palette question.
 
 ## 41. xmem.inc — memory above 1MB
 
