@@ -41,6 +41,7 @@ section .text
 VBV_CAPS    equ 0x40            ; out: ES:DI filled with the VBG_ block
 VBV_SET     equ 0x41            ; set the mode, palette and bank 0
 VBV_BANK    equ 0x42            ; in AH = bank; map window A over it
+VBV_PROVE   equ 0x43            ; set it, prove the window, put mode 12h back
 
 ; --- the geometry block the overlay fills, read into vid_tab's row -----------
 VBG_W       equ 0
@@ -213,7 +214,25 @@ vbe_avail:
     mov byte [vbe_known], 1     ; asked, whatever the answer
     call vbe_caps
     jc .out                     ; the bit stays clear, and vbe_caps has already
-    call vbe_setrow             ; given the image back
+                                ; given the image back
+
+    ; ...AND THE BIOS SAYING YES IS NOT THE SAME AS THE CARD BEING DRIVABLE.
+    ; VBV_PROVE sets the mode, writes one byte through the window, reads it
+    ; back and puts mode 12h again - so a card that lists 0104h and cannot map
+    ; it never grows a Display row at all, instead of growing one that has to
+    ; be RECOVERED from at the moment it is picked. That is SPEC.md 47's "grey
+    ; a fact, never a guess" with the fact measured.
+    ;
+    ; [spl_busy] is held across it for vid_setmode's own reason (SPEC.md
+    ; 15.3.8.3): for part of it the card is not in the mode [vid_seg]
+    ; describes, and a loading-screen frame arriving from IRQ0 would write its
+    ; box at an address that is not the framebuffer.
+    inc byte [spl_busy]
+    mov al, VBV_PROVE
+    call vbe_call
+    dec byte [spl_busy]
+    jc .out
+    call vbe_setrow
     or byte [vid_avail], VID_A_VBE
 .out:
     pop ax

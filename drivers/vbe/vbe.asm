@@ -63,7 +63,9 @@ VB_INFO     equ 512             ; ...and the VbeInfoBlock AX=4F00h does
 ; added to the kernel later can never collide with one of ours.
 VBV_CAPS    equ 0x40            ; out: ES:DI filled with the VBG_ block, CF=0
 VBV_SET     equ 0x41            ; set the mode, palette and bank 0; out CF
-VBV_BANK    equ 0x42            ; in AL = bank; map window A over it; out CF
+VBV_BANK    equ 0x42            ; in AH = bank; map window A over it; out CF
+                                ; - AH because AL carried the verb in here
+VBV_PROVE   equ 0x43            ; set it, prove the window, put mode 12h back
 
 ; --- the geometry block the kernel copies into vid_tab (SPEC.md 39.29.1) -----
 VBG_W       equ 0               ; word: pixels across
@@ -112,6 +114,8 @@ vb_entry:
     je vb_set
     cmp al, VBV_BANK
     je vb_bank
+    cmp al, VBV_PROVE
+    je vb_prove
     stc
     ret
 
@@ -341,6 +345,34 @@ vb_set:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vb_prove - can this card actually be DRIVEN in 0104h? (VBV_PROVE)
+; out:      CF = 0 yes, and the card is back in mode 12h either way
+;
+; ASKED AT BOOT, BEFORE THE MODE IS EVER OFFERED. vb_set already refuses a
+; window it cannot write (see there), but a refusal at SELECT time is a
+; RECOVERY - the kernel has published the 1024-wide geometry by then and has
+; to walk it back. Asking here instead means the Display page never grows a
+; row on a card that cannot do it, which is SPEC.md 47's "grey a fact, never a
+; guess" with the fact MEASURED rather than taken from the BIOS's mode list.
+;
+; The cost is one mode set and one restore per boot on a VBE-capable machine,
+; behind the loading screen, with the kernel holding [spl_busy] across it.
+; -----------------------------------------------------------------------------
+vb_prove:
+    call vb_set
+    jc .no                      ; vb_set has already put mode 12h back
+    push ax
+    mov ax, 0x0012              ; it works - and we are not staying, because
+    int 0x10                    ; the desktop is still a 640x480 one
+    pop ax
+    mov byte [vb_cbank], 0xFF
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

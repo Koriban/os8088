@@ -64458,8 +64458,22 @@ overlay, and `vid_setmode`'s arm then sets `[vid_kind]` to `VID_VGA` and re-runs
 **The refusal is recovered from in `vid_setmode` and not reported upwards**,
 because by then `vid_switch` has already published the 1024-wide geometry — a
 failure returned from here would leave every primitive addressing a mode the
-card is not in. Verified on QEMU: selecting `Vbe 1024x512` leaves the desktop
-intact at 640x480.
+card is not in.
+
+**But the recovery is the second line of defence, not the first.** `VBV_PROVE`
+asks the same question at BOOT, behind the loading screen, before the mode is
+ever offered: it sets `0104h`, writes and reads one byte through the window,
+and puts mode 12h back whatever the answer. Only then is `VID_A_VBE` lit. So a
+card that lists the mode and cannot map it never grows a Display row, which is
+§47's *grey a fact, never a guess* with the fact **measured** rather than taken
+from the BIOS's own mode list — and the user never meets a row that has to be
+recovered from. `[spl_busy]` is held across it for `vid_setmode`'s own reason
+(§15.3.8.3).
+
+Verified on QEMU both ways, because a path only ever seen to fail proves
+nothing: stock, `[vid_avail]` reads `0x05` — VGA and CGA, no VBE row, desktop
+unaffected by the boot-time mode set and restore. With the window compare
+mutated to pass, it reads `0x15` and the row appears. The chain is live.
 
 #### 39.29.7 Acceptance
 
