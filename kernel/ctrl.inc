@@ -3603,7 +3603,11 @@ cp_vid_slot:
     inc cl
 .skip:
     inc bl
-    cmp bl, 4                   ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
+    cmp bl, VID_KIND_MAX + 1    ; FOLLOWS THE CONSTANT, because this was a
+                                ; literal 4 and a fifth kind made it a bound
+                                ; that silently hid a row. An unavailable kind
+                                ; is skipped above on [vid_avail], so widening
+                                ; it offers nothing a machine cannot do
     jb .n
     pop cx
     pop bx
@@ -6602,12 +6606,13 @@ CPS cp_s_vvga,  'Vga 640x480'
 CPS cp_s_vherc, 'Hercules 720x348'
 CPS cp_s_vcga,  'Cga 640x200'
 CPS cp_s_vega,  'Ega 640x350'
-; FOUR ROWS SINCE SPEC.md 39.24, and the table is indexed by the VID_* enum -
+CPS cp_s_vvbe,  'Vbe 1024x512'
+; FIVE ROWS SINCE SPEC.md 39.29, and the table is indexed by the VID_* enum -
 ; so this row is EGA's because it is fourth, not because of its name. It lives
 ; here rather than beside cp_s_vid because SPEC.md 51.5.3 moved the page's
 ; strings into CTRL.DRV's image; adding it up there would put 14 bytes back
 ; into every machine's resident .text.
-cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega
+cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega, cp_s_vvbe
 CPS cp_s_vact,  'Set Primary'
 ; The Display caption, inside the pane's 27-character limit. It is ONE string
 ; and the page's only constant line: it says what the button does, on every

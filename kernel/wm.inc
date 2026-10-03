@@ -1768,6 +1768,13 @@ wm_display:
     jz .r                       ; VID_VGA -> 4 planes
     cmp dl, VID_EGA
     je .r                       ; VID_EGA -> 4 planes too, mode 10h (39.24)
+    cmp dl, VID_VBE
+    je .r                       ; ...and VID_VBE, which is the same four planes
+                                ; at 1024 wide (SPEC.md 39.29). THIS ONE WAS
+                                ; NOT A RANGE ERROR BUT A WRONG ANSWER: without
+                                ; it a VBE machine fell to the 1bpp arm below
+                                ; and every save-under wm_fit sized was a
+                                ; quarter of the bytes it needed
     mov dh, 1                    ; HERC / CGA / a secondary's mono kind (39.4)
 .r:
 %endif

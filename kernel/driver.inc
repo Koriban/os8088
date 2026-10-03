@@ -4348,6 +4348,35 @@ drv_boot_x:
     xor ch, ch                  ; CH = 1 once a settings RECORD has been read
     call COLD_SEG:drvf_drv_mounted
     jc .nodisk
+
+%ifdef KERN_BIG
+    ; IS 1024x768 PLANAR AVAILABLE? (SPEC.md 39.29.2) ABOVE the settings read
+    ; and not below it, because the `jc .load` on the next line is taken on
+    ; every disk that has no SYSTEM.CFG - which is every shipped floppy but
+    ; kern_emu's. Put inside that block this ran on no stock machine at all,
+    ; and the only symptom was a Display page with one row fewer and nothing
+    ; anywhere saying why; [vbe_known] read 0 out of the guest, which is what
+    ; said so.
+    ;
+    ; It reads a file, so it cannot be asked from a PAINT path either: the
+    ; first version put it in cp_vid_slot, which resolves a row while the
+    ; Control Panel is drawing and therefore under the gfx lock - and the
+    ; progress widget every sector lights (SPEC.md 7.4) cannot draw while the
+    ; lock is held by us. That deadlocked, with the page blank and the disk
+    ; light stuck on. Here the volume is mounted, the splash owns the screen,
+    ; and reading a driver image is what this routine is about to do anyway.
+    ;
+    ; THE TIER GATE IS ABOUT USEFULNESS AND NOT CAPABILITY, which is where it
+    ; differs from xm_sniff's (SPEC.md 41.12.1). An 8088 CAN execute
+    ; int 10h AX=4F00h and an ISA VESA card in an XT will answer it - but
+    ; 1024x768 is 2.56x the pixels of a mode whose primitives already cost
+    ; ~756us there, so the honest cost on the machine this project is
+    ; calibrated against is one compare and no read.
+    cmp byte [cpu_tier], CPU_8086
+    je .novbe
+    call KERNEL_SEG:cw_vbe_avail
+.novbe:
+%endif
     call ovl_cfg_load       ; CF = 1: no file, so every default stands -
     jc .load                    ; and every default is now "not wanted", so
     mov ch, 1                   ; the loop below correctly loads nothing.

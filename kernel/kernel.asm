@@ -7149,6 +7149,8 @@ cw_gfx_pen_live:        call gfx_pen_live
                     retf
 cw_gfx_rowbase:         call gfx_rowbase
                     retf
+cw_vbe_avail:           call vbe_avail
+                    retf
 cw_gfx_unlock:          call gfx_unlock
                     retf
 cw_gfx_xor_fill:        call gfx_xor_fill

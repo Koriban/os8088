@@ -64386,7 +64386,7 @@ accrued figure, never "crossed no rung".
 
 | | |
 |---|---|
-| resident, `kern_big` | the `jnc` at 13 row-advance sites, `gfx_rowbase`'s second formula, and the row + dispatch + load pair — **`.text` +141 measured, `.cold` +0, no rung crossed** (accrued 172/512 -> 313/512) |
+| resident, `kern_big` | the row + dispatch + load pair, the fifth `vid_tab` row and the kind's arms — **`.text` +312, `.ovl` +12, `.cold` +0 measured, no rung crossed** (accrued image 172/512 -> 484/512). Stage 2's `jnc` at 13 row-advance sites and `gfx_rowbase`'s second formula are not in that figure, and **28 bytes of the rung remain**, so they will cross it |
 | resident, `kern_small` | **nothing**: it cannot load a `.DRV` of any kind (§51.0), so the sniff and the row are `%ifdef OS88_DRIVERS` |
 | per row, on mode 12h | 2 bytes and one not-taken `jnc` |
 
@@ -64395,7 +64395,73 @@ PERFORMANCE.md, not asserted here.** If it reads badly the thirteen loops get
 banked twins selected once per operation, which costs bytes instead of time and
 needs no redesign.
 
-#### 39.29.4 Acceptance
+#### 39.29.4 What the fifth kind touched, and what it silently broke
+
+`VID_VBE` is kind 4, and `vidsel.inc`'s `%error` exists to make that expensive.
+Each predicate it names was checked rather than assumed, and **all three were
+already right**: `vid_blank` only asks "is this the mono card" by comparing
+against `VID_HERC`; `thm_set`'s `dec ah / cmp ah, 2 / jae` maps VBE to 3, which
+is colour; and `vid_avail_test`'s range follows `VID_KIND_MAX` itself. A mode
+that is four-plane colour and not Hercules needs no arm in any of them, and the
+guard's wording now says *that* rather than "a fifth kind".
+
+**What it did break was four tables indexed by `[vid_kind]` with no bound**, and
+the build was clean for all four — which is the same silence one layer out:
+
+| | |
+|---|---|
+| `fsx_capstab` (`fsx.inc`) | four rows; kind 4 read **past the end** |
+| `app_about_vid` (`apps.inc`) | four pointers; same |
+| `cp_vidnam` (`ctrl.inc`) | four names; the Display row had nothing to draw |
+| `wm.inc`'s kind→planes | **not out of range but WRONG**: VBE fell to the 1bpp arm, so every save-under `wm_fit` sized was a quarter of the bytes it needed |
+
+The last is the dangerous one, because it would have corrupted memory rather
+than faulted. A sixth kind gets the same sweep.
+
+#### 39.29.5 The probe's placement, which took three attempts
+
+Asking "can this card do `0104h`" means reading a file, and that constrains
+*where* far more than it looks:
+
+1. **Not from a paint path.** The first version called it from `cp_vid_slot`,
+   which resolves a Display row while the Control Panel is drawing — under the
+   gfx lock. The progress widget every sector lights (§7.4) cannot draw while
+   the lock is held by us, so the page came up blank with the disk light stuck
+   on.
+2. **Not from the settings block in `drv_boot_x`.** That block sits below a
+   `jc .load` taken on every disk with no `SYSTEM.CFG` — which is every shipped
+   floppy but `kern_emu`'s. It ran on no stock machine at all, and the only
+   symptom was a Display page one row short. `[vbe_known]` read `0` out of the
+   guest, which is what said so; guessing had already produced two wrong fixes.
+3. **Above the settings read, right after the mount.** The volume is there, the
+   splash owns the screen, and reading a driver image is what the routine is
+   about to do anyway.
+
+**`LOADED IS NOT ATTACHED`** is the other defect this cost: `drv_load_at` does
+the mount, the claim, the read and `drv_check` and *stops*, so the probe inside
+the image had never run. The kernel was asking a freshly-loaded overlay for a
+geometry it had not measured, getting zeros, and lighting nothing.
+
+#### 39.29.6 The window is proved before the mode is kept
+
+A BIOS can set the mode and still not put the framebuffer where a real-mode CPU
+can reach it, and then every primitive writes into nothing: a black screen with
+no way back, which is not a refusal a user can act on. **QEMU is exactly that
+machine** — `003B` has bit 5 set for *not* VGA compatible, and `tests/vbeset`'s
+raw probe reads `00 00 00 00` at `A000` there against `A5 A5 A5 A5` in mode 12h.
+
+So `VBV_SET` asks the same one-byte question `vbeset` does, after the mode set
+and before the palette. A card that cannot answer gets mode 12h put back by the
+overlay, and `vid_setmode`'s arm then sets `[vid_kind]` to `VID_VGA` and re-runs
+`vid_apply` so the kernel agrees with the card again.
+
+**The refusal is recovered from in `vid_setmode` and not reported upwards**,
+because by then `vid_switch` has already published the 1024-wide geometry — a
+failure returned from here would leave every primitive addressing a mode the
+card is not in. Verified on QEMU: selecting `Vbe 1024x512` leaves the desktop
+intact at 640x480.
+
+#### 39.29.7 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body
   now serves both. This is the classic failure of a change like this and it is

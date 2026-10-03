@@ -154,12 +154,16 @@ app_about_s3c:  db 'cooperative', 0
 app_about_vid:  dw app_about_v0, app_about_v1, app_about_v2
 %ifdef GFX_VGA                  ; the EGA row is kern_big's alone - a build
                 dw app_about_v3 ; with no VGA renderer never detects one
-%endif
+                dw app_about_v4 ; ...and VBE rides with it, for the same reason
+%endif                          ; and because this table is indexed by kind
+                                ; with no bound - a missing row is a pointer
+                                ; read out of whatever follows
 app_about_v0:   db 'VGA - 640x480 - 16 colors', 0
 app_about_v1:   db 'Hercules - 720x348 - mono', 0
 app_about_v2:   db 'CGA - 640x200 - mono', 0
 %ifdef GFX_VGA
 app_about_v3:   db 'EGA - 640x350 - 16 colors', 0
+app_about_v4:   db 'VBE - 1024x512 - 16 colors', 0
 %endif
 
 ; =============================================================================

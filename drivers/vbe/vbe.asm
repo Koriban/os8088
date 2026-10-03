@@ -300,14 +300,40 @@ vb_set:
                                 ; across two banks
     cmp ax, 0x004F
     jne .no
-    call vb_palette
     mov byte [vb_cbank], 0xFF    ; the mode set moved the window; forget it
     xor al, al
     call vb_bank_set
-    jc .no
+    jc .back
+
+    ; --- IS THE WINDOW ACTUALLY THERE? ---------------------------------------
+    ; A BIOS can set the mode and still not put the framebuffer where a real-
+    ; mode CPU can reach it, and then every primitive in the system writes into
+    ; nothing and the screen is black with no way back. That is not
+    ; hypothetical: QEMU's own 0104h does exactly this - tests/vbeset's raw
+    ; probe reads 00 00 00 00 at A000 there against A5 A5 A5 A5 in mode 12h -
+    ; and its attribute word says so honestly with bit 5 set for NOT VGA
+    ; compatible (SPEC.md 39.28.2.1).
+    ;
+    ; So the same one-byte question vbeset asks is asked here, and a card that
+    ; cannot answer it gets mode 12h back and a refusal the caller can act on,
+    ; rather than a desktop nobody can see.
+    push es
+    mov es, [vb_geom + VBG_SEG]
+    mov al, [es:0]              ; bank what was there - this runs before the
+    mov ah, al                  ; palette, so the BIOS's own clear is all that
+    mov byte [es:0], 0xA5       ; has touched it, but putting it back costs
+    cmp byte [es:0], 0xA5       ; two instructions and assumes nothing
+    mov [es:0], ah
+    pop es
+    jne .back
+
+    call vb_palette             ; ...and only now is it worth programming
     clc
     jmp short .out
-.no:
+.back:
+    mov ax, 0x0012              ; put a mode the machine can draw in back, so
+    int 0x10                    ; the caller is recovering a working card and
+.no:                            ; not a dark one
     stc
 .out:
     pop si

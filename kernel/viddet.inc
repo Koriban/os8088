@@ -82,6 +82,16 @@
 VID_VGA     equ 0
 VID_HERC    equ 1
 VID_CGA     equ 2
+VID_VBE     equ 4              ; VBE 0104h, 1024x768 planar (SPEC.md 39.29).
+                               ; NOT a fourth renderer either, and for VID_EGA's
+                               ; reason one size up: 0104h is mode 12h's
+                               ; framebuffer WIDER, four planes selected by the
+                               ; same Sequencer map mask at the same segment,
+                               ; so [vid_mono] = 0 and vga12.inc is reused.
+                               ; The geometry row below is PATCHED from what the
+                               ; card reports rather than written here, because
+                               ; a BIOS that advertises a mode it mis-programs
+                               ; is a known class (SPEC.md 39.28.2)
 VID_EGA     equ 3              ; VGA's planar path at 640x350 (SPEC.md 39.24,
                                ; docs/plans/completed/EGA-PLAN.md). NOT a fourth renderer:
                                ; mode 10h is mode 12h's framebuffer, shorter -
@@ -107,7 +117,7 @@ VID_H_MIN   equ 200            ; ...and the SHORTEST row of vid_tab, which is
                                ; menu.inc, and vid_tab's CGA row below is
                                ; written from it.
 
-VID_KIND_MAX equ VID_EGA        ; the highest kind there is - vid_avail_test's
+VID_KIND_MAX equ VID_VBE        ; the highest kind there is - vid_avail_test's
                                 ; whole range check is one compare against it,
                                 ; and a fourth adapter is what raises it.
                                 ; **EGA IS THAT FOURTH ADAPTER**, so this line
@@ -151,6 +161,24 @@ vid_tab:
     ;   adapter test, exactly as on VGA (SPEC.md 39.3/39.24). 349*80 = 27,920,
     ;   well inside one 0x8000 plane, so nothing here needs the intra-bank
     ;   assertion the two mono rows do.
+vid_tab_vbe:
+    dw VGA_SEG,     128,    0,     0,    128,       0,      0,1024, 512
+    ; ^ VID_VBE: THE ONLY ROW IN THIS TABLE THAT IS NOT A CONSTANT. vbe_setrow
+    ;   (kernel/vbe.inc) overwrites seg, stride, rowadd and cw from what
+    ;   AX=4F01h actually reported before anything reads it; the values here
+    ;   are what mode 0104h is supposed to be, so a misread leaves a sane row
+    ;   rather than zeros. bmask/bshift/wrapbit are 0 for the VGA row's reason
+    ;   - this is a LINEAR surface, and the 0x2000 interleave those three
+    ;   encode is the 1bpp cards' and cannot describe a VBE window anyway
+    ;   (SPEC.md 39.29.1).
+    ;
+    ;   512 AND NOT 768, and that is the whole of what ships today: 1024 px is
+    ;   128 bytes a row, 65536/128 is exactly 512, so the rows in this row fit
+    ;   ONE 64KB window and nothing below has to know about banking. 511*128 =
+    ;   65,408 still fits the 16-bit offset gfx_rowbase returns; row 512 would
+    ;   not, which is the same line as the bank boundary and necessarily so.
+    ;   The bottom third of the panel is unused and black. Stage 2 is what
+    ;   makes it 768 (SPEC.md 39.29.3).
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -572,8 +600,10 @@ vid_depth_set:
     je .colour                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
 %ifdef GFX_VGA                  ; `jne` BELOW**, and without a VGA renderer
     cmp al, VID_EGA             ; the first compare is the whole answer.
-%endif                          ; EGA is the same four-plane
-.colour:                        ; 16-colour depth as VGA - mode 10h, just
+    je .colour                  ; VBE 0104h is the same four planes again, one
+    cmp al, VID_VBE             ; size up (SPEC.md 39.29), so it joins the set
+%endif                          ; rather than needing an arm. EGA is the same
+.colour:                        ; four-plane 16-colour depth as VGA - mode 10h,
                                 ; shorter (SPEC.md 39.24) - so `colour` is
                                 ; `al == VID_VGA || al == VID_EGA`, and the
                                 ; two `mov`s between here and the test set no
@@ -953,6 +983,13 @@ vid_setmode:
     cmp al, VID_HERC            ; AL is idle until `mov ax, 0x0010`, and
     je .herc                    ; `cmp reg,imm8` is 2 bytes where
 %ifdef GFX_VGA                  ; `cmp byte [mem],imm8` is 5
+    cmp al, VID_VBE             ; VBE 0104h is set by the OVERLAY and not by an
+    je .vbe                     ; int 10h from here (SPEC.md 39.29.2): the mode
+                                ; set, the palette and the first window all
+                                ; belong to the file, which vbe_avail has
+                                ; already loaded - no disk is touched here, and
+                                ; could not be, since this runs under the gfx
+                                ; lock inside the splash's resident window
     cmp al, VID_EGA             ; A build with no VGA renderer never detects
     jne .colorbios              ; an EGA either (2.4: the gated probes fall
     mov ax, 0x0010             ; through to the equipment word), so the arm
@@ -963,6 +1000,25 @@ vid_setmode:
                               ; CGA-equipment quirk (see below), and an EGA
                               ; BIOS is not equipment-driven that way; it
                               ; sets mode 10h whatever 40:10 says.
+.vbe:
+    mov al, VBV_SET             ; it clears the framebuffer itself, both banks,
+    call vbe_call               ; which is why no vid_wipe follows - ours is one
+    jnc .done                   ; rep stosw from offset 0 and 98,304 bytes do
+                                ; not fit one (SPEC.md 39.29.1)
+
+    ; A REFUSAL IS RECOVERED FROM HERE AND NOT REPORTED UPWARDS, because by the
+    ; time this runs vid_switch has ALREADY published the 1024-wide geometry -
+    ; so returning a failure would leave every primitive addressing a mode the
+    ; card is not in, which is a dark screen with no way back rather than an
+    ; error. The overlay has put mode 12h on the card; this makes the kernel
+    ; agree with it again. The one machine class that takes this path is a BIOS
+    ; that lists 0104h and cannot map its window (SPEC.md 39.28.2.1).
+    mov byte [vid_kind], VID_VGA
+    call vid_apply              ; BACKWARDS in this file, so the splash's
+                                ; resident-window rule is satisfied
+    jmp .done                   ; the card is already in mode 12h: the caller
+                                ; owes the repaint, exactly as it does on the
+                                ; path that worked
 .colorbios:
 %endif
     call vid_cga_equip          ; EITHER COLOUR CARD, NOT JUST THE CGA (SPEC.md

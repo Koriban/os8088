@@ -77,6 +77,7 @@ vbe_row:
                                 ; all, and no settings file can reach this
     db DRVE_OK                  ; DRVR_ERR
 
+vbe_known:  db 0            ; 0 = the card has not been asked yet
 vbe_geom:   times VBG_SZ db 0   ; what the card actually reports. THE KERNEL
                                 ; NEVER ASSUMES THESE: a BIOS that advertises a
                                 ; mode it mis-programs is a known class, which
@@ -159,12 +160,21 @@ vbe_caps:
     mov bx, vbe_row
     call COLD_SEG:drvf_drv_load_at
     jc .no
+    mov al, DRVV_ATTACH         ; LOADED IS NOT ATTACHED, and the distinction
+    mov ah, VBE_ABI_VER         ; is drv_load_at's own: it does the mount, the
+    call vbe_call               ; claim, the read and drv_check and STOPS, so
+    jc .drop                    ; the probe inside the image has not run yet.
+                                ; Leaving this out loaded the file, asked it
+                                ; for a geometry it had never measured, and
+                                ; lit nothing - the Display page simply had no
+                                ; extra row and nothing said why
     push cs
     pop es                      ; the overlay writes the block through ES, and
     mov di, vbe_geom            ; ES is KERNEL_SEG inside every call we make
     mov al, VBV_CAPS
     call vbe_call
     jnc .out
+.drop:
     call vbe_drop               ; it took the file and then refused
 .no:
     stc
@@ -172,6 +182,79 @@ vbe_caps:
     pop es
     pop di
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; vbe_avail - ask once, and light [vid_avail]'s bit if the answer is yes
+; out:      nothing (all registers preserved)
+;
+; THE ONE CALLER IS THE CONTROL PANEL'S DISPLAY PAGE, through cw_vbe_avail,
+; and that is the whole of why there is no boot sniff: CTRL.DRV has just been
+; read off the system disk to draw the page, so the disk is demonstrably there
+; at the one moment the question is asked. A machine that never opens that
+; page never reads this file, and an 8088 - which can execute the probe and
+; could never usefully run the mode - pays nothing either way.
+;
+; ASKED ONCE A SESSION. [vid_avail] is fixed for the life of the machine
+; everywhere else (vid_probe_avail writes it once), so a second answer here
+; would be the only moving bit in that byte.
+;
+; THE IMAGE IS KEPT, and that is a deliberate 1,372 bytes rather than an
+; oversight: vid_setmode's VBE arm dispatches VBV_SET, and vid_setmode runs
+; under the splash's resident-window rule and the gfx lock, where a disk read
+; is not available to it. Loading here is what makes the mode settable there.
+; Freeing it again when the user switches away is SPEC.md 39.29.3's, not this
+; stage's.
+; -----------------------------------------------------------------------------
+vbe_avail:
+    push ax
+    cmp byte [vbe_known], 0
+    jne .out
+    mov byte [vbe_known], 1     ; asked, whatever the answer
+    call vbe_caps
+    jc .out                     ; the bit stays clear, and vbe_caps has already
+    call vbe_setrow             ; given the image back
+    or byte [vid_avail], VID_A_VBE
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vbe_setrow - overwrite vid_tab's VBE row with what the card actually reports
+; out:      nothing (all registers preserved)
+;
+; vid_tab is otherwise four rows of constants, and this is the fifth being
+; honest instead: a BIOS that advertises a mode it mis-programs is a known
+; class (SPEC.md 39.28.2), so the segment, stride and width come from AX=4F01h
+; and not from this file.
+;
+; THE HEIGHT IS NOT TAKEN FROM THE CARD. It is the rows ONE 64KB window holds -
+; 65536 / stride - or the card's own height, whichever is smaller, because
+; nothing below the renderer knows about banking yet (SPEC.md 39.29.1). At
+; stride 128 that is 512 of the 768 the card offers, and the bottom third of
+; the panel stays black until stage 2.
+; -----------------------------------------------------------------------------
+vbe_setrow:
+    push ax
+    push dx
+    mov ax, [vbe_geom + VBG_SEG]
+    mov [vid_tab_vbe], ax
+    mov ax, [vbe_geom + VBG_STRIDE]
+    mov [vid_tab_vbe + 2], ax           ; stride
+    mov [vid_tab_vbe + 8], ax           ; ...and rowadd, which is the same
+                                        ; number on a linear surface
+    mov ax, [vbe_geom + VBG_W]
+    mov [vid_tab_vbe + 14], ax          ; cw
+    xor ax, ax                          ; rows a window = 65536 / stride, built
+    mov dx, 1                           ; as DX:AX because 65536 is not a word
+    div word [vbe_geom + VBG_STRIDE]
+    cmp ax, [vbe_geom + VBG_H]
+    jbe .st                             ; a window holds fewer rows than the
+    mov ax, [vbe_geom + VBG_H]          ; mode has: that is the clamp
+.st:
+    mov [vid_tab_vbe + 16], ax          ; ch
+    pop dx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
