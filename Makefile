@@ -9960,6 +9960,26 @@ ifneq ($(NOBIG),)
 FIELDBENCH := $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat
 else
 FIELDBENCH := $(BENCHPKGS) $(BENCHDATA)   # bigfile.dat is in BENCHDATA now
+
+# --- AND WHY THE 360KB FIELD DISKS CARRY NEITHER ETHER.DRV NOR THE WIRE -----
+# The same argument DOS.O88 came off for, and the same one COMBO_DRVDROP
+# already makes: NOT ONE MACHINE IN docs/FIELD-MACHINES.md HAS A NETWORK CARD.
+# ETHER.DRV is 12 clusters that can never attach to anything, and THEWIRE.O88
+# is 11 more whose whole subject is fetching software over the card that is
+# not there - kern_small drops it for exactly this reason (SMALLSYSAPPS), and
+# a Wire without a NIC is a program that can do nothing but say so.
+#
+# This disk has now overflowed TWICE. It was "348 of 354, with six to spare"
+# when DOS.O88 came off; it grew to 360 and stopped building. Taking 23 off
+# puts it at 337 with SEVENTEEN to spare, which is headroom rather than
+# another six-cluster wait. The rule the paragraph above states still holds:
+# on a one-drive calibration machine the fix is to take something off.
+#
+# cga720.img is NOT in this list: 720KB holds 713 clusters and it builds at
+# 360 of them. The combo family drops by geometry for the same reason.
+FIELD_DRVDROP    := $(BUILD)/ether.drv
+FIELDDRIVERS     := $(filter-out $(FIELD_DRVDROP),$(DRIVERS))
+FIELDSYSAPPSARGS := $(addprefix SYSTEM:,$(filter-out $(BUILD)/thewire.o88,$(SYSAPPS)))
 endif
 CGADIR     := $(BUILD)/cgak
 F1DIR      := $(BUILD)/f1k
@@ -10821,7 +10841,7 @@ $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
 	@$(MAKE) BUILD=$(HERCDIR) $(FIELDKNOBS) $(HERCDIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(HERCDIR)/boot360.bin --kernel $(HERCDIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(FIELDDRIVERS) $(FIELDSYSAPPSARGS) $(FIELDBENCH)
 	@python3 tools/fieldsize.py $(BUILD)/kernel.bin $(HERCDIR)/kernel.bin
 	@echo "field: $@ - the PROBE kernel; on a machine holding both cards it"
 	@echo "       finds the Hercules (SPEC.md 39.1)"
@@ -10834,7 +10854,7 @@ $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CGADIR)/boot360.bin --kernel $(CGADIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(FIELDDRIVERS) $(FIELDSYSAPPSARGS) $(FIELDBENCH)
 	@echo "field: $@ - VIDEO=cga, so the Hercules is ignored and the CGA"
 	@echo "       column can be taken without opening the machine"
 
@@ -10881,7 +10901,7 @@ $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	@$(MAKE) BUILD=$(F1DIR) FLOPPY1=1 $(FIELDKNOBS) $(F1DIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(F1DIR)/boot360.bin --kernel $(F1DIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(FIELDDRIVERS) $(FIELDSYSAPPSARGS) $(FIELDBENCH)
 	@echo "field: $@ - FLOPPY1=1, one sector per int 13h. The A/B against"
 	@echo "       herc.img for docs/FIELD-NOTES.md 7 - run SYSBENCH on both"
 
@@ -10907,7 +10927,7 @@ $(BUILD)/cqdiag.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 	@$(MAKE) BUILD=$(CQDIR) BOOTDIAG=1 $(FIELDKNOBS) $(CQDIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CQDIR)/boot360.bin --kernel $(CQDIR)/$(KERNNAME) \
-		$(DRIVERS) $(SYSAPPSARGS) $(FIELDBENCH)
+		$(FIELDDRIVERS) $(FIELDSYSAPPSARGS) $(FIELDBENCH)
 	@echo "field: $@ - BOOTDIAG=1. A boot that fails prints int 13h's status"
 
 # STACKPROBE measures the 256-byte task-stack margin (SPEC.md 8) from the
@@ -12099,20 +12119,58 @@ allapps: $(ALLAPPSIMG) $(ALLAPPSIMG120)
 # is here for its reason: a --select that fails prints nothing on stdout, and
 # without this the disk would build with an empty A\0 and verify clean -
 # which reads exactly like a working disk.
+# --- WHAT THE 1.2MB DISK DROPS, AND WHY IT IS A FILTER AND NOT A SECOND LIST -
+# The paragraph above refuses "a 1.44MB-only entry here" because two
+# hand-maintained everything-lists drift. A DROP FILTER is not that: the
+# payload stays ONE list and this names what comes off the binding geometry,
+# exactly as COMBO_DROP does for 360KB. Add a name here, not a list there.
+#
+# The absorber ran out. RunCPM's drive A is sized from whatever is left, and
+# "whatever is left" went negative: at 1.2MB the selection chose ONE file and
+# os88disk still refused the disk at 2,493 clusters against 2,371. The
+# paragraph above already named that failure mode - "a CP/M emulator with no
+# CP/M on its drive A" - and this is one step past it.
+#
+# TWO NAMES, each costing the disk no CAPABILITY:
+#
+#   CWORD    114 cl. It is Word 1.1a AGAIN, in C (SPEC.md 73.12) - and
+#            WORD.O88 stays, so what the disk loses is a second
+#            implementation of a program it still has.
+#   PACCMAN  152 cl. Also a second implementation (SPEC.md 91, beside
+#            SPEC.md 89's assembly Pac-Man) - and this is the geometry where
+#            that matters: a 1.2MB 5.25" HD drive is an AT-class PERIOD
+#            machine, and §91's own field answer is that the C port runs it
+#            at 2.18 fps against PACMAN.O88's 4.14 on an XT. It is the port
+#            whose own section records it as the slower one on the hardware
+#            this disk is for.
+#
+# 266 clusters off puts the disk at ~2,227 of 2,371 and hands RunCPM's drive A
+# about 144 clusters - more than the 43 it had when the paragraph above was
+# written, so the CP/M software comes BACK rather than being squeezed further.
+#
+# --folders still passes the FULL count: two folders that now hold nothing are
+# two clusters of over-pricing, which is the safe direction.
+ALLAPPS120_DROP      := CWORD:% PACCMAN:%
+ALLAPPS120_DROPFILES := $(BUILD)/cword.o88 $(BUILD)/CWORD.OVL \
+                        $(BUILD)/WELCOME.RTF $(PACCMANDISK)
+ALLAPPSARGS120  := $(filter-out $(ALLAPPS120_DROP),$(ALLAPPSARGS))
+ALLAPPSFILES120 := $(filter-out $(ALLAPPS120_DROPFILES),$(ALLAPPSFILES))
+
+# $(1) image, $(2) geometry, $(3) the DIR:file args, $(4) the --reserve list
 define ALLAPPSIMGRULE
-sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(ALLAPPSFILES) | sed 's,^,RUNCPM/A/0:,')"; \
+sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select $(2) --dir-slots $(RUNCPMSLOTS) --folders $(ALLAPPSFOLDERS) --reserve-clusters $(ALLAPPSEXTRA) --reserve $(4) | sed 's,^,RUNCPM/A/0:,')"; \
 [ -n "$$sel" ] || { echo "allapps: getruncpm.py --select $(2) chose nothing"; exit 1; }; \
-python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(ALLAPPSARGS) $$sel
+python3 tools/os88disk.py -o $(1) --size $(2) --deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) --dir-slots LOOM=32 --folder DOCS $(APPDATAFOLDER) $(3) $$sel
 endef
 
 $(ALLAPPSIMG): $(ALLAPPS) tools/os88disk.py
-	$(call ALLAPPSIMGRULE,$@,1440)
+	$(call ALLAPPSIMGRULE,$@,1440,$(ALLAPPSARGS),$(ALLAPPSFILES))
 	@python3 tools/os88disk.py --verify $@
 	@echo "allapps: $@ - every app on one 1.44MB floppy; boot the system"
 	@echo "         disk with it in B: (make run RUNAPPS=$@)"
 
 $(ALLAPPSIMG120): $(ALLAPPS) tools/os88disk.py
-	$(call ALLAPPSIMGRULE,$@,1200)
+	$(call ALLAPPSIMGRULE,$@,1200,$(ALLAPPSARGS120),$(ALLAPPSFILES120))
 	@python3 tools/os88disk.py --verify $@
 	@echo 'allapps: $@ - the same disk at 1.2MB, for the 5.25" HD machine'
 	@echo "         (make run-120 RUNAPPS120=$@)"
@@ -12476,11 +12534,32 @@ imager:
 # drop is a statement about what the disk would carry, not the fix for the
 # overflow - that is a decision for whoever owns the field disk, and
 # tests/pxsdisk.py asserts the omission only when the image exists.
+# 2026-10-03: THE DISK STOPPED BUILDING AND THESE ARE THE NAMES THAT FIXED IT.
+# The paragraph above says what to do - "another name goes in COMBO_DROP" -
+# and 515 of 354 needed 161 clusters of them. Every one has a home at THIS
+# geometry already, which is what makes the cut a move rather than a loss:
+#
+#   browser, telnet, ftpd, thewire  51 cl. COMBO_DRVDROP already takes
+#        ETHER.DRV off this disk, so all four are programs that cannot do
+#        anything on the machine it is for - 51 clusters of dead weight, and
+#        network360.img is where a 360KB machine finds them.
+#   DOS.O88                         48 cl. The same argument the `make field`
+#        disks took it off for: nothing left on this disk opens a .COM.
+#   SKIES, DOTDEL, CYCLONE          74 cl. The three largest games;
+#        games360.img carries all three, and SPEC.md 24.5 already argues
+#        CLEAR SKIES' contiguous carve against the small machine. Arkanoid,
+#        Tank, Mines, Missile, Solitaire and Tamegram stay, so the disk is
+#        not without games.
+#
+# 342 of 354, twelve to spare. THE "every game" CLAIM IN
+# docs/FIELD-MACHINES.md IS NO LONGER TRUE OF THIS DISK and says so there.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 $(BUILD)/CHART.OVL \
               $(BUILD)/MACRO.OVL \
-              $(BUILD)/pxstein.o88
+              $(BUILD)/pxstein.o88 \
+              $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/ftpd.o88 \
+              $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 $(BUILD)/cyclone.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -12511,7 +12590,11 @@ COMBOBENCH := $(BENCHPKGS) $(BUILD)/bench.dat $(BUILD)/benchsml.dat
 # ticking the row in the Drivers page reports what it reports for any driver
 # that is not on the system disk.
 COMBO_DRVDROP := $(BUILD)/ether.drv
-COMBOSYS360 := $(filter-out $(COMBO_DRVDROP),$(DRIVERS)) $(SYSAPPSARGS) $(SYSROOTARG)
+# ...and the last two are not in APPS_TOOLS or APPS_GAMES for COMBO_DROP to
+# filter: THEWIRE is a SYSAPP and DOS.O88 is $(SYSROOTARG). They come off here
+# instead, for the reasons in the COMBO_DROP block above.
+COMBOSYS360 := $(filter-out $(COMBO_DRVDROP),$(DRIVERS)) \
+               $(addprefix SYSTEM:,$(filter-out $(BUILD)/thewire.o88,$(SYSAPPS)))
 
 COMBOARGS := $(COMBOSYS360) \
              $(addprefix APPS:,$(COMBO_TOOLS)) \
@@ -12580,6 +12663,48 @@ $(BUILD)/combo144.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) \
 # heads are identical and the sector derives the cylinder from the LBA rather
 # than counting them, so what differs is the BPB, which os88disk.py writes over
 # the first 62 bytes. $(IMG720) above is the same argument for the system disk.
+# --- WHAT THE 720KB COMBO DROPS (and the comment above is now out of date) --
+# "The 720KB and 1.44MB combos are built from the full lists" was true when
+# the full payload was 304 clusters of 713. It is 994 now, and `make combo720`
+# stopped building. 1.44MB still carries everything (2,847 clusters); 720KB
+# cannot, so this geometry gets a drop list of its own - DERIVED FROM
+# COMBO_DROP rather than hand-written beside it, so the two cannot drift.
+#
+# IT KEEPS WHAT THE 360KB DISK CANNOT AFFORD: Artful, TeXPad and Tracker come
+# back, and MEDIA/BEVERLY.MOD with the last of them, because a Tracker with no
+# module to open is the complaint docs/FIELD-MACHINES.md makes about exactly
+# that pairing. What it loses is what the 360KB disk loses for reasons that
+# still apply here - the spreadsheet family and PIXELSTEIN are not
+# field-calibration tools - plus the two bulk DATA files (BIGFILE.DAT is on
+# the `make field` disks, which is where sysbench's cache sweep reads it) and
+# ETHER.DRV, for the no-NIC reason COMBO_DRVDROP already gives.
+#
+#   full payload                     994 cl
+#   - sheet/chart/CHART.OVL/MACRO.OVL/pxstein   179
+#   - BIGFILE.DAT 104, README.TXT 8             112
+#   - ETHER.DRV                                  12
+#   = 691 of 713, twenty-two to spare.
+# COMBO720_KEEP IS THE WHOLE POINT OF THE DERIVATION and has to be maintained
+# with it: COMBO_DROP grows for 360KB reasons, and every name added there is
+# added here too unless this list says otherwise. Three names were not enough
+# the moment the 360KB disk shed six more - the 720KB disk silently fell to
+# 577 of 713, wasting 136 clusters it had no reason to waste.
+#
+# It keeps the three APPLICATIONS the 360KB disk cannot afford, and the three
+# GAMES it sheds to games360.img. It does NOT keep Browser, Telnet or FTPD:
+# COMBO720SYS drops ETHER.DRV for the same no-NIC reason, so they could not
+# work here either. 651 of 713, sixty-two to spare.
+COMBO720_KEEP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 \
+                 $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 $(BUILD)/cyclone.o88
+COMBO720_DROP := $(filter-out $(COMBO720_KEEP),$(COMBO_DROP))
+COMBO720SYS   := $(filter-out $(COMBO_DRVDROP),$(DRIVERS)) $(SYSAPPSARGS) \
+                 $(SYSROOTARG)
+COMBO720ARGS  := $(COMBO720SYS) \
+                 $(addprefix APPS:,$(filter-out $(COMBO720_DROP),$(APPS_TOOLS))) \
+                 $(addprefix GAMES:,$(filter-out $(COMBO720_DROP),$(APPS_GAMES))) \
+                 $(COMBOBENCH) \
+                 MEDIA:apps/tracker/beverly.mod $(SYSLOGOARG)
+
 combo720: $(BUILD)/combo720.img
 
 $(BUILD)/combo720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
@@ -12589,7 +12714,7 @@ $(BUILD)/combo720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
                     apps/tracker/beverly.mod tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(COMBO144ARGS)
+		$(COMBO720ARGS)
 	@echo "combo720: $@ - the combo disk at 720KB, full 1.44MB payload."
 	@echo "          The geometry a Gotek or a USB floppy reads. Boots any"
 	@echo "          machine with a 3.5\" DD drive; NOT the 5150, which is"

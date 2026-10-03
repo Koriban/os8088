@@ -497,20 +497,39 @@ make combo144       # the same, full payload, for a 1.44MB drive (NOT the 5150)
 ```
 
 **Build and send this for a field or bench request unless something below
-says otherwise.** The system, the applications, every game and all the
-benchmarks on one bootable 360 KB floppy, with room left for the reports and
-`SYSTEM.CFG`.
+says otherwise.** The system, the benchmarks and as much of the applications
+and games as 354 clusters will hold, on one bootable 360 KB floppy, with room
+left for the reports and `SYSTEM.CFG`.
+
+**It used to say "the applications, every game and all the benchmarks", and
+that stopped being true on 2026-10-03.** The payload reached 515 clusters of
+354 and the disk would not build at all; what it carries now is the
+measurement half intact and the rest curated, because *the benchmarks are the
+reason this disk exists*.
 
 **"The applications" is a maintained list.** The packages outgrew 354
 clusters, so `COMBO_DROP` in the Makefile names what comes off the 360 KB
-disk — currently **Artful, ModPlug, TeXPad, Tracker, Recorder, Sheet and
-Chart** — and `COMBO_DRVDROP` takes **`ETHER.DRV`** off with them, because the
-machine this disk is for has no NIC and it is the largest file after the
-kernel. A combo disk therefore cannot bring the Ethernet stack up on a
+disk. It is **Artful, TeXPad, Tracker, Sheet, Chart, PIXELSTEIN, Browser,
+Telnet, FTPD, CLEAR SKIES, Dot Delirium and Cyclone** now, with `THEWIRE.O88`
+and `DOS.O88` coming off `COMBOSYS360` beside them — and `COMBO_DRVDROP`
+takes **`ETHER.DRV`** off because the machine this disk is for has no NIC and
+it is the largest file after the kernel.
+
+**Nine of those are a MOVE and not a loss**, which is what makes the cut
+bearable: Browser, Telnet, FTPD and the Wire are on `network360.img`; CLEAR
+SKIES, Dot Delirium, Cyclone and PIXELSTEIN on `games360.img`; Artful,
+TeXPad, Sheet and Chart on `office360.img`. §24.6's disk-per-subject is what
+absorbs this. Arkanoid, Tank, Mines, Missile, Solitaire and Tamegram stay, so
+the disk is not without games — and with `ETHER.DRV` gone the four network
+programs could not have done anything on it anyway. A combo disk therefore cannot bring the Ethernet stack up on a
 machine that has a card: `make ethertest` is that disk. Ticking Ethernet in
 the Drivers page on this disk reports `Not on the system disk`, which is what
-that page says for any driver that is not there. `combo720` and `combo144`
-drop nothing (713 and 2,847 clusters). When the 360 KB disk stops fitting
+that page says for any driver that is not there. `combo144` drops nothing
+(2,847 clusters). **`combo720` no longer drops nothing either** — the full
+payload reached 994 clusters of 713, so it takes `COMBO720_DROP`, derived
+from `COMBO_DROP` by *keeping* Artful, TeXPad and Tracker (and `BEVERLY.MOD`
+with the last of them) and dropping the rest, plus `BIGFILE.DAT`,
+`README.TXT` and `ETHER.DRV`: 691 of 713. When the 360 KB disk stops fitting
 again, `os88disk.py` refuses it with `packages need N clusters; disk holds
 354` and another name goes in `COMBO_DROP`.
 
