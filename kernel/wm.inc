@@ -1599,14 +1599,29 @@ wm_pref_take:
     push es
 %ifdef GFX_VGA                  ; no EGA on a build with no VGA renderer
     cmp al, VID_EGA             ; the per-window PREF table has THREE entries,
-    jne .kindok                 ; VID_VGA / VID_HERC / VID_CGA, and the kind
-    mov al, VID_VGA             ; indexes it (kind*4) below - so an unclamped
-.kindok:                        ; EGA reads si+12, off the end of a table in
+    je .asvga                   ; VID_VGA / VID_HERC / VID_CGA, and the kind
+    cmp al, VID_VBE             ; indexes it (kind*4) below - so an unclamped
+    jne .kindok                 ; EGA reads si+12 and an unclamped VBE reads
+.asvga:                         ; si+16, OFF THE END of a table in the
+    mov al, VID_VGA             ; PACKAGE's own segment. Both take VGA's row -
+.kindok:                        ; each is VGA's planar path at another size -
 %endif
-                                ; the PACKAGE's own segment. An EGA machine
-                                ; takes VGA's row - it is VGA's planar path,
-                                ; and a package cannot supply a fourth pair
-                                ; without an ABI break (SPEC.md 39.8, 39.24).
+                                ; and a package cannot supply a fourth or
+                                ; fifth pair without an ABI break (SPEC.md
+                                ; 39.8, 39.24, 39.29).
+                                ;
+                                ; VBE WAS THE ONE THAT SHIPPED BROKEN. The
+                                ; field photographed a Task Manager whose
+                                ; TITLE BAR ran the full width of a 1024x768
+                                ; desktop, over the window beside it, with its
+                                ; caption centred on the SCREEN: wm_bar_span
+                                ; reads W_X and W_W and nothing else, so the
+                                ; record itself held whatever four bytes
+                                ; followed that package's three-entry table.
+                                ; Stage 1 found four kernel tables indexed by
+                                ; [vid_kind] with no bound (SPEC.md 39.29.4)
+                                ; and missed this one, because the table it
+                                ; runs off is not the kernel's.
     test byte [bx+W_FLAGS+1], WF_USRSZ >> 8
     jnz .no                     ; A USER OUTRANKS AN APPLICATION (SPEC.md
                                 ; 11.100.5): once somebody has sized this window

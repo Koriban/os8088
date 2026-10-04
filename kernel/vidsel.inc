@@ -1940,6 +1940,11 @@ vid_pt_clamp:
 ; ...AND IT PRESERVES AH, which vid_disp_init now relies on: it loads the
 ; primary's kind ONCE above its own branch and both arms below read it back.
 vid_dual_ok:
+    cmp byte [vid_kind], VID_VBE    ; VBE is single-display for EGA's reason and
+    je .no                          ; one of its own: the per-display context is
+                                    ; not in scope, and vid_ctx_act switches the
+                                    ; row table off per display while 39.29
+                                    ; needs it off ALWAYS (SPEC.md 39.29.10)
     cmp byte [vid_kind], VID_EGA    ; EGA is a single-display adapter here
     je .no                          ; (SPEC.md 39.24: the per-display context
                                     ; is not in scope for it). A machine that

@@ -2980,9 +2980,11 @@ cp_thm_colgrey:
     je .live
     cmp byte [vid_kind], VID_EGA
     je .live
-    stc
-    ret
-.live:
+    cmp byte [vid_kind], VID_VBE    ; ...and VBE 0104h is the same four planes
+    je .live                        ; again (SPEC.md 39.29), so Color is a fact
+    stc                             ; about it too - without this the Theme
+    ret                             ; page greyed Color on the one adapter
+.live:                              ; with the most of it
     clc
     ret
 %endif

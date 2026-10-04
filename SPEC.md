@@ -64781,6 +64781,44 @@ hold live pointers in exactly those registers: `DI` is a save-under buffer in
 `WinFuncPtr` preserves what it does not return; eight bytes buys the question
 outright rather than trusting a laptop BIOS to mean it.
 
+#### 39.29.4.1 The fifth table was in the PACKAGE's segment
+
+§39.29.4 swept the kernel for tables indexed by `[vid_kind]` with no bound and
+found four. It missed a fifth, and the reason it missed it is the lesson: **the
+table that `VID_VBE` runs off is not the kernel's.**
+
+`wm_pref_take` reads a window's preferred-size table (`OSAPI_WM_PREFER`,
+§11.100.1) at `kind * 4`. `OS88_PREFER` builds **three** `(w, h)` pairs —
+`VID_VGA`, `VID_HERC`, `VID_CGA`, twelve bytes — and the routine already
+clamped `VID_EGA` to `VID_VGA` with a comment saying why. `VID_VBE` is 4, and
+it was not clamped, so it read `si+16`: **four bytes past the end of a table in
+the package's own image.**
+
+Measured on `build/taskmgr.bin`, whose table is
+`(232,284) (232,284) (464,284)`:
+
+| | |
+|---|---|
+| bytes at `si+16` | `53 56 c6 06` — `push bx / push si / mov byte [...],1` |
+| read as a size | **W = 11491, H = 35073** |
+
+`wm_fit` then clamped 11491 down to the display band, which is what made it
+present as a **full-width title bar with its caption centred on the screen**,
+sitting over the window beside it, while the application's own content was
+drawn where the application expected it. `wm_bar_span` reads `W_X` and `W_W`
+and nothing else, so nothing downstream could have caught it.
+
+Both now take `VID_VGA`'s row, for the same reason EGA does: each is VGA's
+planar path at another size, and a package cannot supply a fourth or fifth pair
+without an ABI break.
+
+**Two more predicates were missed the same way and are fixed here.**
+`cp_thm_colgrey` greyed the Theme page's Color option on the one adapter with
+the most colour, and `vid_dual_ok` would have allowed a two-display desktop in
+a banked mode. A third, `thm`'s depth test in `vga12.inc`, is correct **by
+luck**: `dec ah / cmp ah, 2 / jae` maps `VID_VBE` to 3, which passes. Luck is
+not a reason to leave it unremarked.
+
 #### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
 
 **86Box is the only emulator in this tree that can enter `0104h` at all**, and
