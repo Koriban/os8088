@@ -485,7 +485,10 @@ ico_pass:
     mov al, bh                  ; --- byte 0, column [ico_col] ---
     or  al, al
     jz .b1
-    cmp word [ico_col], ROW_BYTES
+    push ax                     ; AL IS THE PLANE MASK the `out` below sends,
+    mov ax, [vid_stride]        ; so the limit is fetched around it - `pop`
+    cmp [ico_col], ax           ; sets no flag, so the compare survives
+    pop ax
     jae .b1
     out dx, al
     mov al, [es:di]             ; load latches
@@ -494,7 +497,11 @@ ico_pass:
     mov al, bl                  ; --- byte 1, column +1 ---
     or  al, al
     jz .b2
-    cmp word [ico_col], ROW_BYTES-1
+    push ax
+    mov ax, [vid_stride]
+    dec ax
+    cmp [ico_col], ax
+    pop ax
     jae .b2
     out dx, al
     mov al, [es:di+1]
@@ -503,7 +510,11 @@ ico_pass:
     mov al, ah                  ; --- byte 2, column +2 ---
     or  al, al
     jz .wnext
-    cmp word [ico_col], ROW_BYTES-2
+    push ax
+    mov ax, [vid_stride]
+    sub ax, 2
+    cmp [ico_col], ax
+    pop ax
     jae .wnext
     out dx, al
     mov al, [es:di+2]

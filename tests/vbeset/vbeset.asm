@@ -139,6 +139,13 @@ vs_main:
     cld
 
 vs_again:
+    mov word [vs_logn], 0       ; A RE-RUN STARTS A FRESH TRANSCRIPT. Without
+                                ; this the log accumulated across R and the
+                                ; second copy was cut off mid-sentence at
+                                ; VS_LOG - a field run came back 1,987 bytes
+                                ; of 2,048 holding one complete report and
+                                ; most of another, which reads as corruption
+                                ; rather than as two runs
     mov ax, 0x0003              ; a known text mode, whatever we were left in
     int 0x10
     mov ax, cs

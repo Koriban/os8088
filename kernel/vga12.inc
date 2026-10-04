@@ -3209,7 +3209,7 @@ vga_solid_rect:
 .lcol:
     mov al, [es:di]             ; load latches
     mov [es:di], al
-    add di, ROW_BYTES
+    add di, [vid_stride]
     dec si
     jnz .lcol
     mov bx, [gfx_rspan]
@@ -3223,7 +3223,7 @@ vga_solid_rect:
 .rcol:
     mov al, [es:di]
     mov [es:di], al
-    add di, ROW_BYTES
+    add di, [vid_stride]
     dec si
     jnz .rcol
     dec bx                      ; interior bytes per row
@@ -3233,7 +3233,7 @@ vga_solid_rect:
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
-    mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
+    mov dx, [vid_stride]        ; DX = the row step LESS what the rep advances
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
@@ -3568,7 +3568,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, [es:di]             ; load latches for the masked write
     mov [es:di], bh
     not bh                      ; AA <-> 55 each row
-    add di, ROW_BYTES
+    add di, [vid_stride]
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3584,7 +3584,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, [es:di]
     mov [es:di], bh
     not bh
-    add di, ROW_BYTES
+    add di, [vid_stride]
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3596,7 +3596,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov si, [gfx_rrows]
     mov ah, bl                  ; the row pattern moves to AH so BX can carry
     mov bx, cx                  ; the count the rep destroys, and DX the row
-    mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
+    mov dx, [vid_stride]        ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
 .irow:
     mov al, ah
@@ -3715,7 +3715,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov [es:di], ah
     inc bx
     and bx, 7
-    add di, ROW_BYTES
+    add di, [vid_stride]
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3734,7 +3734,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov [es:di], ah
     inc bx
     and bx, 7
-    add di, ROW_BYTES
+    add di, [vid_stride]
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3752,7 +3752,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, dx
     rep stosb
     sub di, dx
-    add di, ROW_BYTES
+    add di, [vid_stride]
     inc bx
     and bx, 7
     dec si
@@ -4031,7 +4031,7 @@ vga_save_vram:                              ; only renderer gfx_save has
 .row:
     mov cx, bp
     rep movsb                   ; buffer DI advances contiguously
-    add si, ROW_BYTES
+    add si, [vid_stride]
     sub si, bp
     dec dx
     jnz .row
@@ -4283,7 +4283,7 @@ vga_restore_vram:                              ; only renderer gfx_restore has
     mov cx, bp
     rep movsb
     add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
-    add di, ROW_BYTES
+    add di, [vid_stride]
     sub di, bp
     dec dx
     jnz .row

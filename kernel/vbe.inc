@@ -231,6 +231,7 @@ vbe_avail:
     mov al, VBV_PROVE
     call vbe_call
     dec byte [spl_busy]
+
     jc .out
     call vbe_setrow
     or byte [vid_avail], VID_A_VBE

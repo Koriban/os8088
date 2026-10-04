@@ -64379,6 +64379,40 @@ resident**, and the window switch — at most once per multi-row operation,
 because 128 divides 65536 — reaches the file through a published service cell,
 which is `drv_svc_call`'s "a near read plus one far call".
 
+#### 39.29.2.1 The renderer's stride had to move FIRST, and the plan said otherwise
+
+The staging said 1024x512 "needs no change to any hot loop", because rows
+0..511 are one window and nothing has to bank. **That was wrong, and it
+conflated two separate things.** Avoiding the bank boundary avoids *banking*;
+it does not change the fact that **1024 pixels is 128 bytes a row**, whatever
+rows you use.
+
+`gfx_rowbase` was already right — it goes through `mul word [cs:vid_stride]`.
+But eighteen sites carried the stride as the assembly-time `ROW_BYTES` (80):
+eleven in `vga12.inc`, two in `font.inc` (one of them `font_char`'s open-coded
+`y * 80`, the only row base in the kernel that bypasses `gfx_rowbase`
+entirely), one in `mouse.inc`'s cursor draw and three `icons.inc` right-edge
+clips. Every multi-row primitive therefore stepped 80 bytes down a 128-byte
+row and skewed.
+
+**It shipped and the Satellite showed it**: the desktop came up correct at
+640x480 and the Display page offered the row, and selecting it drew a
+horizontally smeared screen with the text still legible and each row further
+out of place than the last. §39.3's note that *"the planar bodies in vga12.inc
+are simply unreachable on mono, so they keep their assembly-time `ROW_BYTES`"*
+is exactly the assumption a fifth kind breaks — the bodies are reachable now.
+
+The conversion is nearly free in bytes, which is why it was worth doing in one
+pass rather than per-primitive: `add di, imm16` and `add di, [mem16]` are both
+four bytes on an 8086, so the fetch floor that dominates this machine
+(PERFORMANCE.md Part 2) charges the same for either.
+
+**`icons.inc` is the one that nearly shipped broken a second way.** Its three
+clips sit between `mov al, <plane mask>` and `out dx, al`, so fetching the
+limit into AX destroyed the mask and would have corrupted every icon on every
+adapter. The limit is read around a `push`/`pop` — `pop` sets no flag, so the
+compare survives it.
+
 #### 39.29.3 What the mode costs the machine that cannot use it
 
 Reported the way docs/KERNEL-MEMORY.md requires — per-section bytes and the
