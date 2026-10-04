@@ -64749,6 +64749,38 @@ rule: they write every plane *inside* the row, so each makes a single walk.
 What matters is not how many planes a primitive touches but how many times it
 returns to `[gfx_roff]`.
 
+#### 39.29.10.3 Re-home the window BEFORE arming the registers
+
+**`VBHOME` can far-call the card's VESA BIOS, so it must never sit between a
+register write and the walk that depends on it.** §39.29.10.2 placed it
+immediately *after* the `out dx, ax` that arms the plane select — `GC4` Read
+Map Select in `vga_save_vram`, `SEQ2` Map Mask in `vga_restore_vram`, `GC8`
+Bit Mask in the three edge-column fills. A BIOS window routine that touches
+the Sequencer or Graphics Controller index ports eats the register just
+programmed, and the walk then reads or writes nothing.
+
+The field reported it as **the display going black on the switch to VBE**.
+
+All eight sites now re-home first and arm second, which is the right order on
+its own terms: **the window is a property of the rect, the registers are a
+property of the walk.** `gfx_blitp`'s `.fpl` already had it this way, which is
+why the plane-major blit was the one shape that did not have to change.
+
+**Why it was the SWITCH and not the boot**, and this is the part worth keeping:
+booting straight into the mode has no window open, so `vga_save_vram` never
+runs and the defect cannot appear. `make vbebox` (§39.29.8.2) boots *into* the
+mode by `SYSTEM.CFG`, so it rendered a correct desktop on the broken build. The
+cards differ too — 86Box's Trident keeps its bank register at `3C4` index
+`0x0E`, where the field machine is a NeoMagic — so a register this one leaves
+alone is not a register that one leaves alone.
+
+**`vbe_bank` also preserves `SI`, `DI`, `ES` and `DS` across the BIOS call**
+now, where it saved only `AX`/`BX`/`CX`/`DX`. The four row loops that reach it
+hold live pointers in exactly those registers: `DI` is a save-under buffer in
+`vga_save_vram` and `SI` the source in `vga_restore_vram`. VBE says
+`WinFuncPtr` preserves what it does not return; eight bytes buys the question
+outright rather than trusting a laptop BIOS to mean it.
+
 #### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
 
 **86Box is the only emulator in this tree that can enter `0104h` at all**, and
