@@ -64710,6 +64710,45 @@ CS, because the inner loops are precisely where DS is not ours.* A routine's
 own call sites are not a survey to be redone per change — `gfx_rowbase_calc`
 already documents this for the stride, and `vbe_bank` now does for the bank.
 
+#### 39.29.10.2 A primitive that walks its rect twice must re-home the window
+
+**`gfx_rect_setup` selects the bank once — for the first row of the first
+walk.** `VBROW` then steps the window forward as that walk crosses row 512. A
+primitive that then walks the *same* rect again restarts its pointer at
+`[gfx_roff]`, which is a **bank-0 offset**, while the window is still wherever
+the previous walk ended. Everything the second walk touches lands 512 rows
+away.
+
+Six primitives do this, in two shapes:
+
+| | shape |
+|---|---|
+| `vga_solid_rect`, `gfx_fill_gray_raw`, `gfx_fill_pat_raw` | left edge column, then right edge column, then the interior — **three** walks |
+| `vga_save_vram`, `vga_restore_vram`, the plane-major blit | once per **plane** — four walks |
+
+`vbe_home` puts the window back on the bank `gfx_rowbase_calc` last homed on
+(`[vbe_hbank]`, recorded where that bank is computed), and the `VBHOME` macro
+is what the walkers call between walks. The first walk needs none: it inherits
+the setup's bank, and in all three edge-column routines that walk is
+unconditional. The plane loops take it at the top of the loop, so plane 0 pays
+one compare.
+
+**It is gated on `VID_VBE` and that gate is load-bearing.** With no banked mode
+`[vbe_geom]` is zero, so an unconditional `vbe_bank` here would far-call
+`0000:0000` on every machine that has never seen a VESA BIOS.
+
+**What the field saw**, with the mode switch itself already correct: solid
+light-grey blocks left wherever a window had been dragged — the *interior* of a
+fill landing in the wrong window while its edge columns landed in the right one
+— and the dragged window's own text drawn **twice, 512 rows apart**, which is
+three of four planes being saved from the wrong bank. The staircase shape is
+the drag's successive positions accumulating.
+
+`ico_pass` and `cur_draw` are **not** in this set, and the distinction is the
+rule: they write every plane *inside* the row, so each makes a single walk.
+What matters is not how many planes a primitive touches but how many times it
+returns to `[gfx_roff]`.
+
 #### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body

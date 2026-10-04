@@ -81,6 +81,8 @@ vbe_row:
     db DRVE_OK                  ; DRVR_ERR
 
 vbe_cbank:  db 0xFF         ; the mapped bank, 0xFF = none known
+vbe_hbank:  db 0            ; ...and the bank gfx_rowbase last HOMED on,
+                            ; for a primitive that walks its rect twice
 vbe_known:  db 0            ; 0 = the card has not been asked yet
 vbe_geom:   times VBG_SZ db 0   ; what the card actually reports. THE KERNEL
                                 ; NEVER ASSUMES THESE: a BIOS that advertises a
@@ -375,6 +377,41 @@ vbe_bank_next:
 ; -----------------------------------------------------------------------------
 vbe_bank_reset:
     mov byte [cs:vbe_cbank], 0xFF
+    ret
+
+; -----------------------------------------------------------------------------
+; vbe_home - put the window back where this rect STARTED
+; out:      nothing (every register and the flags preserved)
+;
+; A PRIMITIVE THAT WALKS ITS RECT MORE THAN ONCE MUST CALL THIS BETWEEN WALKS,
+; and six of them do. gfx_rect_setup selects the bank ONCE, for the first row of
+; the first walk; VBROW then steps it forward as the walk crosses row 512. The
+; second walk restarts its pointer at [gfx_roff] - a bank-0 offset - and
+; without this the window is still wherever the first walk ended, so everything
+; the second walk touches lands 512 rows away.
+;
+; The walkers are the three that fill an edge column, the other edge column and
+; then the interior (vga_solid_rect, gfx_fill_gray_raw, gfx_fill_pat_raw), and
+; the three that walk once per PLANE (vga_save_vram, vga_restore_vram and the
+; plane-major blit). The field saw it as solid light-grey blocks where a window
+; had been dragged, and as the dragged window's own text drawn twice 512 rows
+; apart - the interior of a fill and three planes of a save landing in the
+; wrong window. SPEC.md 39.29.10.2.
+;
+; The `cmp` is what keeps it off every other adapter: with no banked mode
+; [vbe_geom] is zero, so an unconditional vbe_bank here would far-call 0000:0000
+; on a machine that has never seen a VESA BIOS.
+; -----------------------------------------------------------------------------
+vbe_home:
+    pushf                       ; a walk's loop flags are its own, as in VBROW
+    push ax
+    cmp byte [cs:vid_kind], VID_VBE
+    jne .out
+    mov al, [cs:vbe_hbank]
+    call vbe_bank               ; ...which early-outs when it is already there,
+.out:                           ; so a walk that never straddled pays a compare
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------

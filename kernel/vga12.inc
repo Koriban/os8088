@@ -2890,6 +2890,8 @@ gfx_blitp:
 .fpl:
     pop di
     push di
+    VBHOME                      ; every plane restarts at the block's first byte
+                                ; - so the window must come back too
     push si
     push ax
     mov dx, VGA_SEQ
@@ -3217,6 +3219,7 @@ vga_solid_rect:
     jz .reset
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
+    VBHOME                      ; second walk over the same rect: re-home first
     mov di, [gfx_roff]
     add di, bx
     mov si, [gfx_rrows]
@@ -3230,6 +3233,7 @@ vga_solid_rect:
     jz .reset
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
+    VBHOME                      ; ...and the interior is the third walk
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
@@ -3576,6 +3580,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     jz .reset
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
+    VBHOME                      ; second walk over the same rect: re-home first
     mov di, [gfx_roff]
     add di, cx
     mov si, [gfx_rrows]
@@ -3591,6 +3596,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     jz .reset
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
+    VBHOME                      ; ...and the interior is the third walk
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
@@ -3723,6 +3729,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     jz .reset
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
+    VBHOME                      ; second walk over the same rect: re-home first
     mov di, [gfx_roff]
     add di, cx
     mov si, [gfx_rrows]
@@ -3741,6 +3748,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     jz .reset
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
+    VBHOME                      ; ...and the interior is the third walk
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
@@ -4021,6 +4029,8 @@ vga_save_vram:                              ; only renderer gfx_save has
     mov ah, [vga_plane]
     mov al, 4                   ; GC4: Read Map Select
     out dx, ax
+    VBHOME                      ; the NEXT plane restarts here, and the last one
+                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov si, [gfx_roff]
     mov dx, [gfx_rrows]
     mov bp, [gfx_rspan]
@@ -4272,6 +4282,8 @@ vga_restore_vram:                              ; only renderer gfx_restore has
     mov ah, [vga_plane]
     mov al, 2                   ; SEQ2: Map Mask = this plane only
     out dx, ax
+    VBHOME                      ; the NEXT plane restarts here, and the last one
+                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov di, [gfx_roff]
     mov dx, [gfx_rrows]
     mov bp, [gfx_rspan]

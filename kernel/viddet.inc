@@ -1494,6 +1494,17 @@ vid_text:
   %endif
 %endmacro
 
+; ...and VBHOME, for a primitive about to walk the SAME rect again. VBROW steps
+; the window forward across row 512; a second walk restarts at [gfx_roff], which
+; is a bank-0 offset, so the window has to come back first. See vbe_home.
+%macro VBHOME 0
+  %ifdef GFX_VGA
+   %ifdef OS88_DRIVERS
+    call vbe_home
+   %endif
+  %endif
+%endmacro
+
 ; -----------------------------------------------------------------------------
 ; gfx_rowbase - byte offset of the first byte of a scan line (SPEC.md 39.3)
 ;
@@ -1557,6 +1568,10 @@ gfx_rowbase_calc:
     ; when the window is already the right one, which is nearly every call.
     cmp byte [cs:vid_kind], VID_VBE
     jne .nobank
+    mov [cs:vbe_hbank], dl      ; ...and REMEMBER it: a primitive that walks
+                                ; this rect a second time restarts its pointer
+                                ; at a bank-0 offset and needs the window put
+                                ; back here first (vbe_home, SPEC.md 39.29.10.2)
     push ax
     mov al, dl
     call vbe_bank               ; preserves every register and the flags
