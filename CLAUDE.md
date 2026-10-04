@@ -274,6 +274,15 @@ make vbeset     # ...AND CAN IT BE SET (SPEC.md 39.28.2): a BOOTABLE floppy
                 #   card from bad code. Probes are read back through GC4, so
                 #   the verdict is text and the photograph only confirms the
                 #   display
+make vbesetbox  # ...AND RUN IT ON A REAL VESA BIOS (SPEC.md 39.28.2, 39.29.8):
+                #   86Box with a Trident TGUI9440, HEADLESS
+                #   (QT_QPA_PLATFORM=offscreen - it is Qt with no headless mode
+                #   of its own, and x11grab is black on Wayland). It reads the
+                #   transcript off LBA 100 of the floppy, because 86Box has no
+                #   QMP and no screen to read. **QEMU CANNOT ANSWER ANYTHING
+                #   ABOUT VBE**: its Bochs BIOS advertises 0104h and cannot map
+                #   the window. Needs vm/vbe486/nvr seeded - a cleared CMOS
+                #   stops an AT BIOS in setup and the run says nothing
 make vmmousetest # THE ABSOLUTE POINTER'S DISK (§9.11.6): a SYSTEM.CFG with
                 #   VMMOUSE.DRV's bit already set, ethertest's shape - the
                 #   driver is NOT wanted by default, so a stock os8088.img

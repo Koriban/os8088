@@ -83,6 +83,16 @@ VS_MODE     equ 0x0104          ; 1024x768x16 PLANAR - and the planar is the
                                 ; point, not the resolution (SPEC.md 39.28)
 VS_INFO     equ 512             ; the VbeInfoBlock AX=4F00h fills
 VS_MINFO    equ 256             ; the ModeInfoBlock AX=4F01h fills
+VS_LOG      equ 2048            ; bytes of transcript kept for vs_save
+VS_LOGSEC   equ 100             ; ...and the LBA it is written to. Well clear of
+                                ; the payload (os88disk puts that at LBA 33) and
+                                ; inside a 1.44MB disk's 2880 sectors
+VS_SPT      equ 18              ; the geometry vs_save converts LBA with. The
+VS_HEADS    equ 2               ; Makefile builds this image --size 1440 and
+                                ; nothing else, so these are facts rather than
+                                ; assumptions - but they are named, because a
+                                ; second geometry would silently write to the
+                                ; wrong track
 VS_HAND     equ 0x10            ; bdboot.asm writes its 15-byte handover record
                                 ; into the PAYLOAD's own image at this offset,
                                 ; after the load. Nothing of ours may live here
@@ -142,6 +152,12 @@ vs_again:
 
     mov si, vs_s_ready
     call vs_puts
+%ifdef AUTORUN
+    jmp .vbearm                 ; NO KEY. This build exists to be run by a
+                                ; script on an emulator with no way to type:
+                                ; it takes arm 1, writes the transcript to the
+                                ; disk and halts, and the host reads the image
+%endif
 .key:
     call vs_getkey
     cmp al, 27                  ; Esc - leave the mode alone
@@ -150,7 +166,7 @@ vs_again:
     je .control
     cmp al, '1'
     jne .key
-
+.vbearm:
     ; --- the one irreversible step -------------------------------------------
     mov byte [vs_banked], 1
     mov ax, 0x4F02
@@ -201,7 +217,15 @@ vs_again:
     call vs_draw                ; the pattern
     call vs_check               ; read it back through GC4
 
-    call vs_getkey              ; hold the picture for the camera
+%ifndef AUTORUN
+    call vs_getkey              ; hold the picture for the camera - and THE
+                                ; AUTORUN BUILD MUST NOT, which is the third
+                                ; of three key waits in this file and the one
+                                ; that was missed. It blocked forever with the
+                                ; card still in 0104h, so the screendump came
+                                ; back 1024x768 and black and the transcript
+                                ; was never written
+%endif
     call vs_pal                 ; ...then read the palette, STILL IN THE MODE
 
     mov ax, 0x0003              ; back to text for the verdict
@@ -210,8 +234,20 @@ vs_again:
     mov ds, ax
     mov es, ax
     call vs_report
+%ifdef AUTORUN
+    call vs_save                ; the transcript is the whole output of this
+    jmp vs_halt                 ; build; nothing is waiting to read a screen
+%endif
     call vs_getkey
     or al, 0x20
+    cmp al, 's'
+    jne .nosave
+    call vs_save                ; ...and interactively too, so a run on real
+    mov si, vs_s_saved          ; hardware comes back as TEXT rather than as a
+    call vs_puts                ; photograph of an LCD (SPEC.md 39.28.2.4)
+    call vs_getkey
+    or al, 0x20
+.nosave:
     cmp al, 'r'
     je vs_again
 vs_bye:
@@ -222,6 +258,14 @@ vs_bye:
     mov si, vs_s_bye
     call vs_puts
 vs_halt:
+%ifdef AUTORUN
+    ; EVERY PATH SAVES, not just the one that worked. The first version only
+    ; wrote the transcript after a successful run, so a machine that REFUSED
+    ; the mode - which is the answer most worth having - halted with an empty
+    ; sector and nothing to read. A second save after the normal one is
+    ; harmless; an unsaved refusal is a run wasted.
+    call vs_save
+%endif
     cli
     hlt
     jmp short vs_halt
@@ -1473,8 +1517,14 @@ vs_puts:
 vs_putc:
     push ax
     push bx
-    mov ah, 0x0E
-    mov bx, 0x0007
+    mov bx, [vs_logn]           ; TEE EVERY CHARACTER. The screen is the only
+    cmp bx, VS_LOG              ; output this had, and a screen needs a camera
+    jae .scr                    ; to leave the machine - which is a photograph
+    mov [vs_log + bx], al       ; of an LCD at an angle, and SPEC.md 39.28.2.4
+    inc word [vs_logn]          ; records what those are worth. The transcript
+.scr:                           ; goes to a sector instead and comes back as
+    mov ah, 0x0E                ; text, on 86Box, on MartyPC and off the
+    mov bx, 0x0007              ; Satellite alike
     int 0x10
     pop bx
     pop ax
@@ -1560,6 +1610,71 @@ vs_getkey:
     int 0x16
     ret
 
+; -----------------------------------------------------------------------------
+; vs_save - put the transcript on the disk at LBA VS_LOGSEC
+; out:      CF = 1 if int 13h refused (write-protected, or no disk)
+;
+; A RAW SECTOR AND NOT A FILE, because this disk has no filesystem to speak of:
+; it is a boot sector and a payload laid down by os88disk, and the whole of
+; what reads it back is four lines of Python on the host. A FAT writer here
+; would be a hundred bytes to make the answer openable by something nothing is
+; going to open it with.
+;
+; The log is padded to a whole number of sectors with spaces rather than zeros,
+; so a host that prints it gets a transcript and not a wall of NULs.
+; -----------------------------------------------------------------------------
+vs_save:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+
+    mov bx, [vs_logn]           ; pad to a sector boundary
+    mov al, ' '
+.pad:
+    test bx, 511
+    jz .padded
+    cmp bx, VS_LOG
+    jae .padded
+    mov [vs_log + bx], al
+    inc bx
+    jmp short .pad
+.padded:
+    mov ax, bx
+    mov cl, 9
+    shr ax, cl                  ; AX = sectors to write
+    or ax, ax
+    jnz .have
+    inc ax
+.have:
+    mov [vs_logsc], ax
+
+    mov ax, VS_LOGSEC           ; LBA -> CHS, the bdboot idiom
+    xor dx, dx
+    mov bx, VS_SPT
+    div bx
+    inc dx
+    mov cl, dl                  ; CL = sector, 1-based
+    xor dx, dx
+    mov bx, VS_HEADS
+    div bx
+    mov ch, al                  ; CH = cylinder
+    mov dh, dl                  ; DH = head
+    mov dl, 0                   ; drive A: - this image boots from nowhere else
+    push cs
+    pop es
+    mov bx, vs_log
+    mov ax, [vs_logsc]
+    mov ah, 0x03                ; AH = 03h write, AL = the sector count
+    int 0x13
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; the probe table - x, y, expected colour, five bytes each. 0FFFFh ends it.
 ;
@@ -1643,7 +1758,10 @@ vs_s_rgot:      db '  got ', 0
 vs_s_pal:
     db 13, 10, 'palette - colour, AC register = DAC RGB (6-bit):', 13, 10
     db 'mode 12h has 6 -> AC 14 = 2A1500 (brown). AC 06 = 2A2A00, dark yellow.', 13, 10, 0
-vs_s_rtail:     db 13, 10, 'R runs it again, any other key halts.', 13, 10, 0
+vs_s_rtail:
+    db 13, 10, 'S writes this to the disk, R runs it again,', 13, 10
+    db 'any other key halts.', 13, 10, 0
+vs_s_saved:     db 'written to sector 100.', 13, 10, 0
 vs_s_bye:       db 13, 10, 'Left the mode alone. Power off.', 13, 10, 0
 
 ; =============================================================================
@@ -1679,8 +1797,13 @@ vs_yb2      dw 0
 vs_ycomb    dw 0
 vs_pp       dw 0
 vs_rawr     times 4 db 0
+vs_logn     dw 0                ; characters logged so far
+vs_logsc    dw 0
 vs_results  times 24 db 0
 vs_info     times VS_INFO db 0
 vs_minfo    times VS_MINFO db 0
+
+    align 512                   ; the transcript, written as whole sectors
+vs_log      times VS_LOG db 0
 
 vs_end:

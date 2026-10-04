@@ -121,7 +121,24 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
             $(EXAMPLESIMGS)
 
-BOX   := /Applications/86Box.app/Contents/MacOS/86Box
+# 86Box, wherever this box keeps it. It was a bare macOS path, so on Linux
+# every one of the targets below silently pointed at a file that is not there -
+# and `make 486` failed with "No such file", which reads as 86Box not being
+# installed rather than as the Makefile only knowing one platform.
+BOX_MAC   := /Applications/86Box.app/Contents/MacOS/86Box
+BOX_LINUX := $(firstword $(wildcard $(HOME)/.local/opt/86box/86Box*.AppImage) \
+                         $(shell command -v 86Box 2>/dev/null) \
+                         $(shell command -v 86box 2>/dev/null))
+ifeq ($(shell uname -s),Darwin)
+BOX   := $(BOX_MAC)
+else
+BOX   := $(BOX_LINUX)
+endif
+
+# ...and 86Box is a Qt program with no headless mode of its own, which the
+# offscreen platform plugin supplies: it runs with no window and no X server,
+# which is the only way it can be driven from here at all (SPEC.md 39.29.8).
+BOXHEADLESS := QT_QPA_PLATFORM=offscreen
 
 # RESET= clears a machine's non-volatile state on the way in, and it reaches
 # EVERY 86Box target at once because all twenty-three of them launch through
@@ -9754,7 +9771,7 @@ $(BUILD)/vbeprobeboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
 # 13h, no relocation, geometry out of the BPB): it loads the first file in the
 # data area, which is what --kernel lays down, so nothing new had to be
 # written to boot this.
-VS_SECS := 12
+VS_SECS := 20
 
 $(BUILD)/vbeset.bin: tests/vbeset/vbeset.asm Makefile | $(BUILD)
 	$(NASM) -f bin -w+error -o $(BUILD)/vbeset0.bin tests/vbeset/vbeset.asm
@@ -9780,8 +9797,47 @@ $(BUILD)/vbeset.img: $(BUILD)/vsboot.bin $(BUILD)/vbeset.bin tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/vsboot.bin --kernel $(BUILD)/vbeset.bin
 
+# ...and the same payload with no prompt in it, for an emulator that has no
+# way to type: it takes the VBE arm, writes the transcript to LBA 100 and
+# halts. 86Box runs HEADLESS (QT_QPA_PLATFORM=offscreen) and has no QMP, so
+# this is how its answer is read - and the same sector comes back off a real
+# machine's floppy, which is a transcript instead of a photograph.
+$(BUILD)/vbesetauto.bin: tests/vbeset/vbeset.asm Makefile | $(BUILD)
+	$(NASM) -f bin -w+error -DAUTORUN -o $(BUILD)/vbesetauto0.bin \
+		tests/vbeset/vbeset.asm
+	@python3 -c "import sys; \
+	  o = bytearray(open('$(BUILD)/vbesetauto0.bin','rb').read()); \
+	  n = $(VS_SECS) * 512; \
+	  sys.exit('vbesetauto: %d bytes over %d' % (len(o), n)) if len(o) > n else None; \
+	  o.extend(b'\0' * (n - len(o))); open('$@','wb').write(o)"
+
+$(BUILD)/vbesetauto.img: $(BUILD)/vsboot.bin $(BUILD)/vbesetauto.bin tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/vsboot.bin --kernel $(BUILD)/vbesetauto.bin
+
+# RUN THE AUTO BUILD ON 86Box, HEADLESS, AND READ THE ANSWER OFF THE FLOPPY.
+# This is the only emulator here that models a REAL VESA BIOS - QEMU's is
+# Bochs's, which advertises 0104h and cannot map its window (SPEC.md
+# 39.28.2.1) - so it is the only one that can answer anything about this mode.
+#
+# vm/vbe486 is a 486 with a Trident TGUI9440. **Its nvr/ is gitignored like
+# every other machine's**, and an AT-class BIOS with a cleared CMOS stops in
+# SETUP waiting for a keypress that cannot be sent headlessly: seed it with
+#     mkdir -p vm/vbe486/nvr && cp vm/486/nvr/ami471.nvr vm/vbe486/nvr/
+# or run the machine once with a window and pick EXIT FOR BOOT.
+.PHONY: vbesetbox
+vbesetbox: $(BUILD)/vbesetauto.img
+	@test -x "$(BOX)" || { echo "86Box not found - set BOX="; exit 1; }
+	@test -f vm/vbe486/nvr/ami471.nvr || { \
+	  echo "vm/vbe486/nvr is empty: a cleared CMOS stops in BIOS setup."; \
+	  echo "  mkdir -p vm/vbe486/nvr && cp vm/486/nvr/ami471.nvr vm/vbe486/nvr/"; \
+	  exit 1; }
+	$(BOXHEADLESS) $(BOX) -P vm/vbe486 -N & \
+	  p=$$!; sleep 75; kill $$p 2>/dev/null; wait $$p 2>/dev/null; true
+	@python3 tools/os88vbelog.py $(BUILD)/vbesetauto.img
+
 .PHONY: vbeset
-vbeset: $(BUILD)/vbeset.img
+vbeset: $(BUILD)/vbeset.img $(BUILD)/vbesetauto.img
 	@echo "vbeset: build/vbeset.img - a BOOTABLE 1.44MB floppy. It is not an"
 	@echo "        os8088 disk and carries no kernel: it boots straight into"
 	@echo "        the test. Esc leaves the mode alone; a key sets it."

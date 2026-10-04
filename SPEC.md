@@ -64475,7 +64475,47 @@ nothing: stock, `[vid_avail]` reads `0x05` — VGA and CGA, no VBE row, desktop
 unaffected by the boot-time mode set and restore. With the window compare
 mutated to pass, it reads `0x15` and the row appears. The chain is live.
 
-#### 39.29.7 Acceptance
+#### 39.29.8 86Box is the development machine, and QEMU cannot be
+
+QEMU's VBE is **Bochs's**, and it advertises `0104h` with `003B` — bit 5 set,
+*not VGA compatible* — then fails to map the window at `A000`. So it can
+exercise a refusal and nothing else. Every VM in this tree runs `oti067`, an
+Oak SVGA whose ROMs contain **no VESA BIOS at all**, which is why this never
+came up before.
+
+**86Box models real cards with their real ROMs**, and a Trident TGUI9440
+answers exactly as the Satellite's NeoMagic does — measured, not assumed:
+
+| | Satellite (NeoMagic) | 86Box `tgui9440_vlb` | QEMU (Bochs) |
+|---|---|---|---|
+| `attr` | `001F` | **`001F`** | `003B` |
+| VGA compatible | yes | **yes** | **NO** |
+| raw plane write | `A5 A5 A5 A5` | **`A5 A5 A5 A5`** | `00 00 00 00` |
+| readback | 13 of 13 | **13 of 13** | 0 of 13 |
+
+It also answers §39.28.2.4's palette question on that card: entry 6 → AC `14`
+= `2A1500`, brown — mode 12h's palette exactly.
+
+So `make vbesetbox` is the loop this feature is developed in, and the Satellite
+is for final confirmation rather than for every question. Three things make it
+work and each cost a wrong answer first:
+
+- **`QT_QPA_PLATFORM=offscreen`.** 86Box is Qt with no headless mode of its
+  own. Screen capture is not an alternative here: this host is Wayland, and an
+  `x11grab` of the whole root comes back black because XWayland does not
+  composite into it.
+- **The transcript goes to a SECTOR, not the screen.** `vbeset` tees every
+  character it prints into a buffer and writes it to LBA 100; `make vbeset`
+  builds a second image with `-DAUTORUN` that takes the VBE arm with no
+  keypress, since there is no way to send one. **Every exit path saves** — the
+  first version only wrote after a *successful* run, so a refusal, which is
+  the answer most worth having, halted with an empty sector.
+- **The CMOS must be seeded.** `vm/*/nvr` is gitignored, and an AT-class BIOS
+  with a cleared CMOS stops in SETUP waiting for a keypress that cannot be
+  sent. The floppy sat untouched through a three-minute run saying nothing
+  about why; CLAUDE.md's `RESET=` note already records this one.
+
+#### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body
   now serves both. This is the classic failure of a change like this and it is
