@@ -64630,6 +64630,25 @@ from the mouse ISR, and no dispatcher, so it is not worth a call into the
 overlay. `vbe_bank` early-outs on a compare, which is what nearly every
 primitive hits.
 
+**THE BANK IS SELECTED WHENEVER THE MODE HAS ONE, INCLUDING BANK 0**, and
+getting that wrong is the one mistake this design invites. The first build
+gated the select on `or dx, dx / jz` — reading *"bank 0"* as *"nothing to
+do"*. Nothing to do leaves whatever window the **last** primitive finished
+with: a desktop fill spans rows 0..767 and ends on bank 1, so the menu bar
+then asked for row 0, skipped the select, and drew into bank 1. The whole
+chrome appeared 512 rows down the panel. The test is *"is this mode banked"*,
+and `vbe_bank`'s own compare is what keeps it cheap — it returns immediately
+when the window is already right, which is nearly every call.
+
+**And anything that bypasses `gfx_rowbase` bypasses the select with it.**
+`font_char` computes its row base inline — the only one in the kernel that
+does — and its `mul dx` carried the comment *"DX clobbered, product fits"*,
+true while a planar surface was 480 rows of 80 and false at 768 of 128, where
+the product is 98,176 and **DX is the bank**. Every glyph went to whichever
+window happened to be mapped. `gfx_pt_rmax`'s four inline copies of the *fast*
+path are safe by a different route: they compare against `[vid_rowmax]`, which
+is 0 here, so they always fall through to `gfx_rowbase_calc`.
+
 **`vid_rowtab` is switched off in this mode.** Its entries are 16-bit
 *bank-0* offsets and the fast path returns one without selecting a window, so
 `[vid_rowmax]` is 0 here and every row goes through `gfx_rowbase_calc`.

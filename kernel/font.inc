@@ -416,8 +416,20 @@ font_char:
                                 ; prefetch floor, better on both terms
     mov ax, [vid_stride]        ; ...and the ONE open-coded row base in the
                                 ; kernel, which bypasses gfx_rowbase
-    mul dx                      ; AX = y * 80 (DX clobbered, product fits) -
-    add di, ax                  ; DI = y * 80 + x / 8. CH is x's high byte
+    mul dx                      ; DX:AX = y * stride. "DX clobbered, product
+                                ; fits" was true while a planar surface was
+                                ; 480 rows of 80; at 768 of 128 the product is
+                                ; 98,176 and DX IS THE BANK (SPEC.md 39.29.10)
+%ifdef GFX_VGA
+    cmp byte [cs:vid_kind], VID_VBE     ; bypassing gfx_rowbase means bypassing
+    jne .nobank                         ; its bank select too, so this arm is
+    push ax                             ; the same five instructions - without
+    mov al, dl                          ; them every glyph went to whichever
+    call vbe_bank                       ; window the last primitive left mapped
+    pop ax
+.nobank:
+%endif
+    add di, ax                  ; DI = rowbase + x / 8. CH is x's high byte
                                 ; here and is loaded with [wm_clip_rn] three
                                 ; instructions down, before anything reads it
 

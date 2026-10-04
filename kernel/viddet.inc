@@ -1544,8 +1544,19 @@ gfx_rowbase_calc:
                                 ; that was already here computes both; what
                                 ; this adds is noticing.
 %ifdef GFX_VGA
-    or dx, dx                   ; four clocks on a 362-clock path, and never
-    jz .nobank                  ; taken on any mode but 0104h
+    ; THE BANK IS SELECTED WHENEVER THE MODE HAS ONE, INCLUDING BANK 0. The
+    ; first version gated on `or dx, dx / jz`, reading "bank 0" as "nothing to
+    ; do" - and nothing to do leaves whatever window the LAST primitive
+    ; finished with. A desktop fill spans rows 0..767 and ends with bank 1
+    ; mapped, so the menu bar then asked for row 0, skipped the select, and
+    ; drew into bank 1: the whole chrome appeared 512 rows down the panel,
+    ; which is what the Satellite showed.
+    ;
+    ; So the test is "is this mode banked", not "is this row in bank 0", and
+    ; vbe_bank's own compare is what makes it cheap - it returns immediately
+    ; when the window is already the right one, which is nearly every call.
+    cmp byte [cs:vid_kind], VID_VBE
+    jne .nobank
     push ax
     mov al, dl
     call vbe_bank               ; preserves every register and the flags
