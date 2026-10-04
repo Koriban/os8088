@@ -4120,7 +4120,7 @@ cur_geom:
     ; bytes-in-row = stride - column; skip the DI+1 write that would otherwise
     ; wrap onto the next scan line. There is no DI+2: an 8px arrow spans two
     ; bytes however far it is shifted (CUR_SPAN).
-    mov dx, [vid_stride]
+    mov dx, [cs:vid_stride]
     sub dx, ax                  ; DX = bytes available in this row (>= 1)
     mov byte [cur_b1ok], 0
     cmp dx, 2
@@ -5228,7 +5228,7 @@ cur_draw:
     mov al, bl
     mov [es:di+1], al
 .next:
-    add di, [vid_stride]
+    add di, [cs:vid_stride]
     dec ch
     jnz .row
     mov ax, 0xFF08              ; GC8 back to all bits (SPEC.md 1 rule 7)

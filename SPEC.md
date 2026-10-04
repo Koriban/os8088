@@ -64407,6 +64407,23 @@ pass rather than per-primitive: `add di, imm16` and `add di, [mem16]` are both
 four bytes on an 8086, so the fetch floor that dominates this machine
 (PERFORMANCE.md Part 2) charges the same for either.
 
+**AND THE STRIDE MUST BE READ `cs:`-RELATIVE, WHICH IS WHERE THE FIRST
+CONVERSION WENT WRONG.** `ROW_BYTES` was an immediate and touched no memory;
+`[vid_stride]` is a DS-relative read, and **DS is not `KERNEL_SEG` in the two
+routines that matter most**. `vga_save_vram` switches it to `VGA_SEG` for its
+`movsb`, so a plain read fetched *pixels* and used them as the row step;
+`vga_restore_vram` has DS pointing at the save-under claim, one line below a
+comment that already says **"CS: IS MANDATORY - DS is the BUFFER in here"**.
+
+The result was reported off the Satellite as corruption trailing the cursor —
+and then, correctly, as *"not just the cursor, it's also the windows"*, which is
+the symptom naming the cause: the cursor, every menu drop and every window
+save-under go through that one pair. `gfx_rowbase_calc` documents the rule
+already: every parameter it reads is `cs:`, because `sw_xfer` runs with DS set
+to the framebuffer or to a claim. Every converted site is `[cs:vid_stride]`
+now — correct wherever DS points, one byte each, and the same idiom the file
+was already using.
+
 **`icons.inc` is the one that nearly shipped broken a second way.** Its three
 clips sit between `mov al, <plane mask>` and `out dx, al`, so fetching the
 limit into AX destroyed the mask and would have corrupted every icon on every
