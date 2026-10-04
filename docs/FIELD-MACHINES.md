@@ -246,6 +246,13 @@ What it has been worth so far:
   the bank boundary measures at 66.6-67.4% of the picture against a predicted
   66.7%, and the readback is **13 of 13** against the control arm's 10 of 10
   (SPEC.md §39.28.2.3). The mode is verified, not merely demonstrated.
+- **And os8088 now runs a desktop in it.** 1024x512 draws correctly here -
+  chrome, text, dock, pointer, menus and windows, with no corruption
+  (SPEC.md §39.29.8.1). It took four round trips and found three defects that
+  **no gate in the tree could see**, because QEMU cannot enter the mode at all:
+  a misdiagnosis, eighteen sites carrying the stride as a compile-time
+  constant, and that constant's replacement being read through the wrong
+  segment. This machine is the only instrument for that class.
 - **The PS/2 pointer path works on iron.** `sysbench` drove the trackpad, which
   is the first confirmation of §9.9 off a real machine rather than an
   emulated one.

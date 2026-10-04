@@ -64566,6 +64566,35 @@ work and each cost a wrong answer first:
   sent. The floppy sat untouched through a three-minute run saying nothing
   about why; CLAUDE.md's `RESET=` note already records this one.
 
+#### 39.29.8.1 Stage 1 confirmed on the Satellite, and what it cost to get there
+
+**A 1024x512 desktop draws correctly on the NeoMagic** (2026-10-04): menu bar
+across the full width, window chrome, text, the dock, the drive icon, and the
+unused rows below 512 dark - with no corruption as the pointer, menus and
+windows move. `VBE.DRV`, the fifth adapter kind, the patched `vid_tab` row and
+the live stride are all working on real hardware.
+
+**It took four field round trips, and no gate in this tree caught any of the
+three defects.** That is worth recording as plainly as the result:
+
+| reported | actually | why nothing here saw it |
+|---|---|---|
+| "garbled display on boot" | boot was fine; only the VBE *mode* was garbled | I fixed the wrong thing first. The photographs said so and I had read the sentence too quickly |
+| the mode drew smeared | 18 sites carried the stride as the assembly-time `ROW_BYTES` | QEMU cannot enter the mode; mode 12h reads 80 either way, so every test passed |
+| "not just the cursor, it's also the windows" | the stride read was DS-relative where DS is `VGA_SEG` or a save-under claim | same: invisible without entering the mode, and it is a *register discipline* fault, not a value fault |
+
+The second and third are the same root cause one layer apart — converting a
+compile-time constant into a live variable changes **what segment the read
+goes through**, and §39.3's note that the planar bodies may keep their
+assembly-time `ROW_BYTES` *because they are unreachable on mono* is exactly the
+assumption a fifth kind retires.
+
+**The 86Box loop (§39.29.8) cannot catch this class either**, for the same
+reason it is useful: it has no screen. A pixel-level save-under gate - compare
+a region saved and restored against the pixels under it, at both strides - is
+what would have, and it is the thing to build before stage 2 touches these
+routines again.
+
 #### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body
