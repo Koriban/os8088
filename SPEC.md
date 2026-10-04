@@ -64658,8 +64658,13 @@ is 0 here, so they always fall through to `gfx_rowbase_calc`.
 **Cost, as docs/KERNEL-MEMORY.md requires it reported.** Stage 2 is `.text`
 +106 on top of stage 1's 422 (528 in all for §39.29), `.cold` +0, and crosses
 no further rung — 324 bytes of the image rung remain. What the XT pays for a
-mode it cannot run is the `or dx, dx` in `gfx_rowbase_calc` and a `jnc` it
-never takes, per row, at the fifteen advances `VBROW` now covers.
+mode it cannot run is the `cmp byte [cs:vid_kind], VID_VBE` in
+`gfx_rowbase_calc` and a `jnc` it never takes, per row, at the fifteen
+advances `VBROW` now covers. **It is a `cmp` against the kind and not an
+`or dx, dx`**: a zero `DX` is the *wanted* bank 0, not "no banking to do", and
+treating the two as the same leaves whatever window the previous primitive
+ended on mapped — which put the menu bar 512 rows down the first time this
+was flashed.
 
 **What this does NOT make work is `gfx_scroll`.** `vgas_lincopy` moves a region
 through the VGA latches with source and destination both in VRAM, stepping by
@@ -64668,6 +64673,42 @@ at the same instant, which one window cannot express and the latch path cannot
 survive. Its own comment already says it assumes one bank. A scroll that
 straddles is refused here and the caller repaints instead; VBE's window B is
 the eventual answer and is not pass 1.
+
+#### 39.29.10.1 `vbe_bank` addresses its own state through CS
+
+**Every byte `vbe_bank`, `vbe_bank_next` and `vbe_bank_reset` touch carries a
+`cs:` override, and that is a correctness requirement rather than a style.**
+The bank select is reached from inside three row loops that have *given DS
+away*:
+
+| caller | what DS holds in there |
+|---|---|
+| `vga12.inc`'s plane-major blit (`VBROWR di, bp`) | the caller's plane rows |
+| `vga_save_vram` (`VBROWCS si`) | `VGA_SEG` |
+| `vga_restore_vram` (`VBROWCS di`) | the save-under claim |
+
+So a plain DS read in the bank select reads whatever *those* routines pointed
+at, and all three of its accesses are catastrophic rather than merely wrong:
+
+- `cmp al, [vbe_cbank]` compares the wanted bank against **a pixel**. When the
+  pixel happens to equal `AL` the routine takes its early-out and the window is
+  never moved.
+- `mov [vbe_cbank], al` **writes a byte into the framebuffer**.
+- `call far [vbe_geom + VBG_WFN]` **fetches a far pointer out of video memory
+  and calls it**.
+
+It shipped that way and the field reported exactly the pair of symptoms those
+two outcomes predict: *the desktop went black on the mode switch* (the wild far
+call) and *dragging a window past row 512 left a staircase of save-under
+debris* (the compare that matched a pixel). `CS` is `KERNEL_SEG` throughout
+`.text`, so the override is correct at every call site and costs one byte each.
+
+**This is §39.29.10's `[vid_stride]` defect one level down, and it is the third
+time the class has been paid for in this feature.** The rule it generalises
+to: *anything a drawing inner loop can call must address its own state through
+CS, because the inner loops are precisely where DS is not ours.* A routine's
+own call sites are not a survey to be redone per change — `gfx_rowbase_calc`
+already documents this for the stride, and `vbe_bank` now does for the bank.
 
 #### 39.29.9 Acceptance
 

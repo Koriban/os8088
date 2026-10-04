@@ -304,21 +304,45 @@ vbe_setrow:
 ; THE EARLY-OUT IS MOST OF THE VALUE. A full-screen repaint is hundreds of
 ; primitives and nearly every one is wholly inside one bank, so this is a
 ; compare and a return for all of them.
+;
+; EVERY BYTE THIS ROUTINE TOUCHES IS `cs:`, AND THAT IS NOT STYLE. It is
+; reached from inside three row loops that have given DS away - vga12.inc's
+; plane-major blit (DS = the caller's planes), vga_save_vram (DS = VGA_SEG)
+; and vga_restore_vram (DS = the save-under claim) - so a plain DS read here
+; is a read of whatever those routines pointed at. It shipped that way once
+; and all three reads are catastrophic rather than merely wrong:
+;
+;   cmp al, [vbe_cbank]       compares the wanted bank against A PIXEL, so a
+;                             pixel that happens to equal AL takes `.same`
+;                             and the window is never moved
+;   mov [vbe_cbank], al       WRITES A BYTE INTO THE FRAMEBUFFER
+;   call far [vbe_geom+WFN]   fetches a far pointer OUT OF VIDEO MEMORY and
+;                             calls it
+;
+; The field saw exactly that pair of symptoms: the desktop went black on the
+; mode switch (the wild far call) and dragging a window across row 512 left a
+; staircase of save-under debris (the compare that matched). CS is KERNEL_SEG
+; throughout `.text`, so the override is correct at every call site and costs
+; one byte each. SPEC.md 39.29.10.1.
+;
+; This is the same defect as `[vid_stride]` (SPEC.md 39.29.10) one level up:
+; anything a drawing inner loop can call must address its own state through
+; CS, because the inner loops are precisely where DS is not ours.
 ; -----------------------------------------------------------------------------
 vbe_bank:
-    cmp al, [vbe_cbank]
+    cmp al, [cs:vbe_cbank]
     je .same
     pushf                       ; a row loop's flags are its own
     push ax
     push bx
     push cx
     push dx
-    mov [vbe_cbank], al
+    mov [cs:vbe_cbank], al
     xor ah, ah
-    mul word [vbe_geom + VBG_GRAN]      ; DX:AX = the window position
+    mul word [cs:vbe_geom + VBG_GRAN]   ; DX:AX = the window position
     mov dx, ax
     xor bx, bx                  ; BH = 0 set, BL = 0 window A
-    call far [vbe_geom + VBG_WFN]
+    call far [cs:vbe_geom + VBG_WFN]
     pop dx
     pop cx
     pop bx
@@ -339,7 +363,7 @@ vbe_bank:
 vbe_bank_next:
     pushf
     push ax
-    mov al, [vbe_cbank]
+    mov al, [cs:vbe_cbank]      ; cs: for vbe_bank's reason, below
     inc al
     call vbe_bank
     pop ax
@@ -350,7 +374,7 @@ vbe_bank_next:
 ; vbe_bank_reset - forget which window is mapped (a mode set moved it)
 ; -----------------------------------------------------------------------------
 vbe_bank_reset:
-    mov byte [vbe_cbank], 0xFF
+    mov byte [cs:vbe_cbank], 0xFF
     ret
 
 ; -----------------------------------------------------------------------------
