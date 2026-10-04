@@ -342,7 +342,7 @@ ico_core:
     mov ax, [ico_ww]            ; source/VRAM stride bookkeeping
     shl ax, 1
     mov [ico_rb], ax            ; bytes per icon row (= 2 * wwords)
-    mov bx, [cs:vid_stride]
+    mov bx, [vid_stride]
     sub bx, ax
     mov [ico_rowadv], bx        ; DI advance after a row's words (the planar
                                 ; pass only - the banked one goes through
@@ -486,7 +486,7 @@ ico_pass:
     or  al, al
     jz .b1
     push ax                     ; AL IS THE PLANE MASK the `out` below sends,
-    mov ax, [cs:vid_stride]        ; so the limit is fetched around it - `pop`
+    mov ax, [vid_stride]        ; so the limit is fetched around it - `pop`
     cmp [ico_col], ax           ; sets no flag, so the compare survives
     pop ax
     jae .b1
@@ -498,7 +498,7 @@ ico_pass:
     or  al, al
     jz .b2
     push ax
-    mov ax, [cs:vid_stride]
+    mov ax, [vid_stride]
     dec ax
     cmp [ico_col], ax
     pop ax
@@ -511,7 +511,7 @@ ico_pass:
     or  al, al
     jz .wnext
     push ax
-    mov ax, [cs:vid_stride]
+    mov ax, [vid_stride]
     sub ax, 2
     cmp [ico_col], ax
     pop ax
@@ -544,7 +544,7 @@ ico_pass:
 ; -----------------------------------------------------------------------------
 ico_core_bb:
     mov ax, [ico_col0]
-    cmp ax, [cs:vid_stride]        ; x < 0 (huge unsigned) or entirely off the
+    cmp ax, [vid_stride]        ; x < 0 (huge unsigned) or entirely off the
     jae .none                   ; right edge: the passes would skip every
                                 ; byte - so skip them. It is also what proves
                                 ; ico_pass_bb's byte column cannot wrap: col0
@@ -596,8 +596,8 @@ ico_pass_bb:
                                 ; and the walk never restarted. The two
                                 ; restart-point cells existed only to restart
                                 ; it, and go with it.
-    mov dh, [cs:vid_stride]        ; DH = the right-edge limit, for the whole
-                                ; pass. A BYTE READ OF A WORD: [cs:vid_stride] is
+    mov dh, [vid_stride]        ; DH = the right-edge limit, for the whole
+                                ; pass. A BYTE READ OF A WORD: [vid_stride] is
                                 ; 80, 80 or 90 on the three adapters, so the
                                 ; high byte is zero on all of them and no %if
                                 ; can check a runtime value. A stride over 255

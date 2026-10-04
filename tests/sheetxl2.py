@@ -58,6 +58,9 @@ ARCHIVE = os.environ.get("EXCEL21D_7Z", os.path.join(
 # no function at all. Named A1-A3 so each is inside the Open list's six rows
 # when its turn comes (tests/sheetbool.py says why that list)
 CORPUS = (("EXPENSES", "A1"), ("SAMPLES1", "A2"), ("PAYROLL", "A3"))
+# ...and one of Excel 2.1's own MACRO SHEETS (81.68): KWWHAT's recorded
+# SELECT("RC[1]"), FORMULA("=Price-Down_Pmt"), CLEAR(1) and RETURN()
+MACROS = (("KWWHAT", "A0"),)                # A0: first on the Open list
 OPEN_ITEM = (SF.FILE_MENU[0] + 15, 59 + 11)
 LIST_X, LIST_Y0, LIST_DY, LIST_ROWS = 150, 67, 16, 6
 R = 0xC000                              # a token's row word, both relative
@@ -202,6 +205,14 @@ def unsz(d):
     return bytes(out[:n])
 
 
+def a1(t, r, c):
+    """a SYLK formula in A1 outside its string constants (SELECT("RC[1]")
+    keeps its R1C1 text, which is the macro's, not a reference to convert)"""
+    parts = t.split('"')
+    return '"'.join(SD.r1c1_to_a1(p, r, c) if k % 2 == 0 else p
+                    for k, p in enumerate(parts))
+
+
 def corpus():
     """{short name: Excel's bytes}, or None with the reason."""
     if not os.path.exists(ARCHIVE):
@@ -215,10 +226,11 @@ def corpus():
         subprocess.run(["7z", "e", "-y", "-o" + tmp, ARCHIVE, "*/library.img"],
                        check=True, stdout=subprocess.DEVNULL)
     got = {}
-    for src, short in CORPUS:
-        cps = os.path.join(tmp, src + ".CPS")
+    for (src, short), ext in ([(c, "CPS") for c in CORPUS] +
+                              [(c, "CPM") for c in MACROS]):
+        cps = os.path.join(tmp, src + "." + ext)
         subprocess.run(["mcopy", "-n", "-o", "-i", img,
-                        "::/EXCELCBT/%s.CPS" % src, cps], check=True)
+                        "::/EXCELCBT/%s.%s" % (src, ext), cps], check=True)
         got[short] = unsz(open(cps, "rb").read())
     return got, None
 
@@ -286,7 +298,7 @@ def main():
         # each one names, which SYLK has no way to say
         saved["Z2s"] = save('slk', "Z2.SLK")
         saved["Z2"] = save('bif', "Z2.BIF", before=files["Z2.BIF"])
-        for _, short in (CORPUS if xl else ()):
+        for _, short in ((CORPUS + MACROS) if xl else ()):
             name = short + ".XLS"
             shown = sorted(e.name for e in vol().listdir()
                            if not e.is_system and not e.is_dir)
@@ -358,6 +370,33 @@ def main():
               "%s.XLS: all %d cells as Excel wrote them" % (src, len(want)),
               "%d differ, %d extra - first %r" % (len(bad), len(extra),
                                                   bad[:3] or extra[:3]))
+    # ARM C (81.68): Excel's own macro sheet. A formula the host decodes -
+    # a macro function or command SHEET has - must come back as that formula;
+    # one it cannot must keep Excel's value; nothing is compared by value
+    # otherwise, because a macro cell's cached value is whatever Excel last
+    # left there and SHEET, outside a run, answers FALSE
+    for src, short in (MACROS if xl else ()):
+        want = F.read_biff(xl[short])
+        data = saved.get(short)
+        got = F.read_sylk(data) if data else {}
+        bad, nf = [], 0
+        for key, w in want.items():
+            g = got.get(key)
+            if isinstance(w, tuple) and w[0] == 'formula':
+                if w[1] is None:
+                    ok = same(w[2], g)
+                else:
+                    nf += 1
+                    ok = (isinstance(g, tuple) and g[0] == 'formula'
+                          and a1(g[1], key[0], key[1]) == w[1])
+            else:
+                ok = same(w, g)
+            if not ok:
+                bad.append((key, w, g))
+        check(data is not None and nf >= 20 and not bad,
+              "Excel 2.1's macro sheet %s: its %d macro formulas SHEET has come "
+              "back as formulas, the rest as Excel's values" % (src, nf),
+              "%d differ - first %r" % (len(bad), bad[:3]))
     done("sheetxl2")
 
 

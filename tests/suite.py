@@ -6228,6 +6228,21 @@ SOAK = [
     Row("dispmine", "soak", py("tests/dispmine.py"), 30.0,
         "Can Minesweeper's bottom row be PLAYED on a CGA? (SPEC.md 11.93)",
         needs=("marty",), serial=True),
+    Row("curtrail", "full", py("tests/curtrail.py"), 30.0,
+        "Does the pointer's save-under put back EXACTLY what was under it? "
+        "(SPEC.md 7.1) Walk the arrow across the desktop, park it where it "
+        "started, and the screen must be the pixel it was. FULL and not soak "
+        "because of what it cost to find out the hard way: SPEC.md 39.29 gave "
+        "the renderer a live stride, and turning an immediate into a memory "
+        "read changed WHICH SEGMENT it goes through - DS is VGA_SEG inside "
+        "vga_save_vram and the save-under claim inside vga_restore_vram, the "
+        "one pair the cursor, every menu drop and every window share. It "
+        "shipped, and it was found BY EYE on a Toshiba Satellite after four "
+        "round trips. It is visible at stride 80 in one screenshot; what was "
+        "missing was anybody moving the pointer and looking. Mutation-proven "
+        "both ways: the DS-relative read fails it, the pre-39.29 kernel "
+        "passes it",
+        needs=("qemu",), serial=True),
     Row("curshape", "soak", py("tests/curshape.py"), 60.0,
         "Does the pointer change SHAPE over a window that asks for one? "
         "(SPEC.md 7.2) - nothing covered it when 7.2.1.1 rewrote the test",

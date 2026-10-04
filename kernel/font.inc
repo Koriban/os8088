@@ -414,7 +414,7 @@ font_char:
     and cl, 7                   ; then took from CL anyway. Four `mov r16,r16`
                                 ; fewer - 6 bytes and ~34.7 clocks by the
                                 ; prefetch floor, better on both terms
-    mov ax, [cs:vid_stride]        ; ...and the ONE open-coded row base in the
+    mov ax, [vid_stride]        ; ...and the ONE open-coded row base in the
                                 ; kernel, which bypasses gfx_rowbase
     mul dx                      ; AX = y * 80 (DX clobbered, product fits) -
     add di, ax                  ; DI = y * 80 + x / 8. CH is x's high byte
@@ -459,7 +459,7 @@ font_char:
     mov al, [es:di+1]           ; load latches
     mov [es:di+1], al
 .no_second:
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec ch
     jnz .row
 

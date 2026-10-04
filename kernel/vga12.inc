@@ -2863,7 +2863,7 @@ gfx_blitp:
     ; ~2,600 cycles a row on a 4.77 MHz 8088 whatever its width, against
     ; gfx_blit1's ~125. A block with no right-edge mask and wholly on the
     ; screen in y has nothing left to decide per row - its rows are
-    ; [cs:vid_stride] apart, every planar surface being ONE bank ([vid_bmask] is
+    ; [vid_stride] apart, every planar surface being ONE bank ([vid_bmask] is
     ; a 1bpp adapter's, and those were refused above) - so each plane is ONE
     ; Map Mask and a `rep movsb` a row. Anything else takes the row loop.
     cmp byte [ss:vga_pr_rm], 0xFF
@@ -2880,7 +2880,7 @@ gfx_blitp:
     pop cx
     add ax, cx
     push ax                     ; the block's first framebuffer byte
-    mov bp, [cs:vid_stride]
+    mov bp, [vid_stride]
     sub bp, [ss:vga_pr_n]       ; BP = a row's framebuffer advance past it
     mov ax, VGA_SEG
     mov es, ax
@@ -3209,7 +3209,7 @@ vga_solid_rect:
 .lcol:
     mov al, [es:di]             ; load latches
     mov [es:di], al
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec si
     jnz .lcol
     mov bx, [gfx_rspan]
@@ -3223,7 +3223,7 @@ vga_solid_rect:
 .rcol:
     mov al, [es:di]
     mov [es:di], al
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec si
     jnz .rcol
     dec bx                      ; interior bytes per row
@@ -3233,7 +3233,7 @@ vga_solid_rect:
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
-    mov dx, [cs:vid_stride]        ; DX = the row step LESS what the rep advances
+    mov dx, [vid_stride]        ; DX = the row step LESS what the rep advances
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
@@ -3568,7 +3568,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, [es:di]             ; load latches for the masked write
     mov [es:di], bh
     not bh                      ; AA <-> 55 each row
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3584,7 +3584,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, [es:di]
     mov [es:di], bh
     not bh
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3596,7 +3596,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov si, [gfx_rrows]
     mov ah, bl                  ; the row pattern moves to AH so BX can carry
     mov bx, cx                  ; the count the rep destroys, and DX the row
-    mov dx, [cs:vid_stride]        ; step less that count (SPEC.md 5.7.1)
+    mov dx, [vid_stride]        ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
 .irow:
     mov al, ah
@@ -3715,7 +3715,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov [es:di], ah
     inc bx
     and bx, 7
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3734,7 +3734,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov [es:di], ah
     inc bx
     and bx, 7
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3752,7 +3752,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, dx
     rep stosb
     sub di, dx
-    add di, [cs:vid_stride]
+    add di, [vid_stride]
     inc bx
     and bx, 7
     dec si
@@ -4887,11 +4887,11 @@ vgas_lincopy:
 .r:
     mov ax, bx
     add ax, [vgas_sdy]
-    mul word [cs:vid_stride]       ; AX = src row * stride (DX:AX, DX = 0)
+    mul word [vid_stride]       ; AX = src row * stride (DX:AX, DX = 0)
     add ax, [vgas_col]
     mov si, ax
     mov ax, bx
-    mul word [cs:vid_stride]
+    mul word [vid_stride]
     add ax, [vgas_col]
     mov di, ax
     mov cx, [vgas_nb]
@@ -4913,15 +4913,15 @@ vgas_lincopy:
     mov ax, [vgas_rows]
     mov [vgas_left], ax
     mov ax, [vgas_ydst]
-    mul word [cs:vid_stride]
+    mul word [vid_stride]
     add ax, [vgas_col]
     mov di, ax                  ; DI = the destination cursor
     mov ax, [vgas_sdy]          ; the delta, ONCE. `mul` is unsigned and sdy is
-    mul word [cs:vid_stride]       ; signed, and that is fine: only the low word
+    mul word [vid_stride]       ; signed, and that is fine: only the low word
     mov dx, ax                  ; is used, and a product mod 65536 does not
                                 ; care which sign the operand was read as -
                                 ; the same reason DI itself may wrap
-    mov bx, [cs:vid_stride]        ; BX = the per-row step, in the walk's own
+    mov bx, [vid_stride]        ; BX = the per-row step, in the walk's own
     cmp word [vgas_step], 0     ; direction (down: bottom-up, so backwards)
     jg .fwd
     neg bx
@@ -4980,7 +4980,7 @@ vgas_bankcopy:
     mov ax, [vgas_sdy]          ; delta = (dy >> bshift) * stride, signed - SAR
     mov cl, [vid_bshift]        ; because dy may be negative and the shift has
     sar ax, cl                  ; to floor; exact, because dy is a multiple of
-    mul word [cs:vid_stride]       ; the bank count (mul's low word again)
+    mul word [vid_stride]       ; the bank count (mul's low word again)
     mov dx, ax
     cld
     cmp word [vgas_step], 0

@@ -64420,9 +64420,17 @@ and then, correctly, as *"not just the cursor, it's also the windows"*, which is
 the symptom naming the cause: the cursor, every menu drop and every window
 save-under go through that one pair. `gfx_rowbase_calc` documents the rule
 already: every parameter it reads is `cs:`, because `sw_xfer` runs with DS set
-to the framebuffer or to a claim. Every converted site is `[cs:vid_stride]`
-now — correct wherever DS points, one byte each, and the same idiom the file
-was already using.
+to the framebuffer or to a claim.
+
+**`cs:` goes on those two sites and nowhere else, and the narrowness is the
+point.** A blanket `cs:` passes the gate below, but it is only accidentally
+right: `CS` is `KERNEL_SEG` in `.text` and is **`COLD_SEG` in cold code and the
+blob's segment in an overlay**, so a site that later moves section would break
+silently. `DS` is `KERNEL_SEG` everywhere by §2.6 *except* where a routine
+loads it itself, and exactly two do — `vga_save_vram` (`mov ds, VGA_SEG`) and
+`vga_restore_vram` (`push es / pop ds`, which LOADS it rather than restoring
+it). So the plain form is correct by construction at the other twenty-eight
+sites, and the override is correct by construction at these two.
 
 **`icons.inc` is the one that nearly shipped broken a second way.** Its three
 clips sit between `mov al, <plane mask>` and `out dx, al`, so fetching the
