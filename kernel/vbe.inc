@@ -339,12 +339,23 @@ vbe_bank:
     push bx
     push cx
     push dx
+    push si                     ; ...and the pointer registers, which the four
+    push di                     ; row loops that reach this hold LIVE across it
+    push es                     ; (DI is a save-under buffer in vga_save_vram,
+    push ds                     ; SI the source in vga_restore_vram). VBE says
+                                ; WinFuncPtr preserves what it does not return,
+                                ; and a laptop BIOS is still a laptop BIOS:
+                                ; eight bytes buys the whole question
     mov [cs:vbe_cbank], al
     xor ah, ah
     mul word [cs:vbe_geom + VBG_GRAN]   ; DX:AX = the window position
     mov dx, ax
     xor bx, bx                  ; BH = 0 set, BL = 0 window A
     call far [cs:vbe_geom + VBG_WFN]
+    pop ds
+    pop es
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx

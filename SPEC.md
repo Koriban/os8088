@@ -64749,6 +64749,47 @@ rule: they write every plane *inside* the row, so each makes a single walk.
 What matters is not how many planes a primitive touches but how many times it
 returns to `[gfx_roff]`.
 
+#### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
+
+**86Box is the only emulator in this tree that can enter `0104h` at all**, and
+until now it could only be started, waited on, and read off a disk sector
+(§39.29.8). That is enough for `tests/vbeset`, which writes text, and no use at
+all for a DESKTOP — so every VBE rendering defect was found by photographing a
+laptop. **Five field round trips for one feature.**
+
+`QT_QPA_PLATFORM=offscreen` is 86Box's only headless mode and it has no screen
+to read. An `x11grab` of this host's root is black, because the session is
+Wayland and XWayland does not composite into it. **Neither of those is a
+statement about X**: `tools/os88box.py` gives 86Box an X server *of its own* —
+`Xvfb` on a private display — and then the screen is reachable.
+
+Two ways, and both are used:
+
+- **86Box's own screenshot** (`Ctrl+F11`, sent with `xdotool`), which writes a
+  PNG of the **emulated framebuffer** into `vm/<name>/screenshots/`. That is
+  the one to want: the guest's own pixels, no window chrome, no scaling.
+- an `xwd` of the 86Box window as the fallback, so a run where the hotkey does
+  not land says something is wrong rather than nothing.
+
+**And it makes INPUT possible for the first time.** `xdotool` types and clicks
+into a real X window, so a machine that could only be watched can now be
+driven.
+
+**The disk is what selects the mode, because 86Box takes no scripted input at
+the moment the choice is made.** `build/vbeos.img` is `ethertest`'s shape one
+setting along: a `SYSTEM.CFG` whose `VM` record already names `VID_VBE`, so the
+machine reaches a 1024×768 desktop with no Control Panel click. A machine with
+no VESA BIOS refuses it and boots VGA, which is `drv_boot`'s own rule.
+
+**What it does and does not discriminate.** It proved §39.29.10.2's fix renders
+a correct 1024×768 desktop, and it is the reason that stopped being a guess.
+It did **not** reproduce §39.29.10.3's black screen, and the two reasons are
+worth keeping: this boots *into* the mode, where no window exists and so
+`vga_save_vram` never runs; and 86Box's card is a **Trident**, whose bank
+register is at `3C4` index `0x0E`, while the field machine is a **NeoMagic**.
+A gate that passes here is necessary and not sufficient — the Satellite is
+still the authority on anything touching the card's own BIOS.
+
 #### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body

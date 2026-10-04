@@ -4190,6 +4190,42 @@ $(BUILD)/vmmouse.img: $(KERNEL_SRC) $(KERNEL_INC) $(EMUDRIVERS) $(SYSAPPS) $(SYS
 		$(EMUDRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/vmmcfg/system.cfg
 
+# VBEOS - THE SYSTEM DISK THAT BOOTS STRAIGHT INTO VBE 1024x768 (SPEC.md
+# 39.29.8.2). ethertest's and vmmousetest's shape, one setting along: a
+# SYSTEM.CFG whose VM record already names VID_VBE, so the machine reaches a
+# 1024x768 desktop with no Control Panel click.
+#
+# IT EXISTS BECAUSE 86Box TAKES NO SCRIPTED INPUT. There is no QMP and no
+# socket; the only things this host can do to a running 86Box are start it,
+# wait, and look. So "switch to VBE" cannot be driven - it has to be a
+# property of the disk, exactly as "the NIC is up" is for ethertest.
+#
+# The VM record is `key(2) ver len data` like every other: version 2, three
+# bytes, and the first is a VID_* KIND and not a bitmap (drv_cfg's table,
+# kernel/driver.inc). 4 is VID_VBE; the other two are 39.19's arrangement
+# bytes, left at Single/0. A machine with no VESA BIOS REFUSES this and boots
+# VGA, which is drv_boot's own rule and not something this disk arranges.
+$(BUILD)/vbecfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/vbecfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'VM' + bytes([2,3]) + \
+	  bytes([4,0,0]) + b'\0\0')" > $@
+
+$(BUILD)/vbeos.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vbecfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vbecfg/system.cfg
+
+# ...and the machine that boots it. 86Box is the ONLY emulator here that can
+# enter 0104h at all (SPEC.md 39.29.8): QEMU's Bochs BIOS advertises the mode
+# and cannot map the window. tools/os88box.py supplies the display 86Box has
+# no headless mode for, and takes the picture.
+.PHONY: vbebox
+vbebox: $(BUILD)/vbeos.img
+	@test -x "$(BOX)" || { echo "86Box not found - set BOX="; exit 1; }
+	python3 tools/os88box.py vm/vbeos --shot $(BUILD)/vbebox.png
+
 .PHONY: vmmousetest
 vmmousetest: $(BUILD)/vmmouse.img
 	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."

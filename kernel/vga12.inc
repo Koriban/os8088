@@ -3217,9 +3217,9 @@ vga_solid_rect:
     mov bx, [gfx_rspan]
     or bx, bx
     jz .reset
+    VBHOME                      ; second walk over the same rect: re-home first
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
-    VBHOME                      ; second walk over the same rect: re-home first
     mov di, [gfx_roff]
     add di, bx
     mov si, [gfx_rrows]
@@ -3231,9 +3231,9 @@ vga_solid_rect:
     jnz .rcol
     dec bx                      ; interior bytes per row
     jz .reset
+    VBHOME                      ; ...and the interior is the third walk
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
-    VBHOME                      ; ...and the interior is the third walk
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
@@ -3578,9 +3578,9 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov cx, [gfx_rspan]
     or cx, cx
     jz .reset
+    VBHOME                      ; second walk over the same rect: re-home first
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
-    VBHOME                      ; second walk over the same rect: re-home first
     mov di, [gfx_roff]
     add di, cx
     mov si, [gfx_rrows]
@@ -3594,9 +3594,9 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     jnz .rcol
     dec cx                      ; interior bytes per row
     jz .reset
+    VBHOME                      ; ...and the interior is the third walk
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
-    VBHOME                      ; ...and the interior is the third walk
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
@@ -3727,9 +3727,9 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, [gfx_rspan]
     or cx, cx
     jz .reset
+    VBHOME                      ; second walk over the same rect: re-home first
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
-    VBHOME                      ; second walk over the same rect: re-home first
     mov di, [gfx_roff]
     add di, cx
     mov si, [gfx_rrows]
@@ -3746,9 +3746,9 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     jnz .rcol
     dec cx                      ; interior bytes per row
     jz .reset
+    VBHOME                      ; ...and the interior is the third walk
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
-    VBHOME                      ; ...and the interior is the third walk
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
@@ -4025,12 +4025,12 @@ vga_save_vram:                              ; only renderer gfx_save has
     jc .done
     mov byte [vga_plane], 0
 .plane:
+    VBHOME                      ; the NEXT plane restarts here, and the last one
+                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov dx, VGA_GC
     mov ah, [vga_plane]
     mov al, 4                   ; GC4: Read Map Select
     out dx, ax
-    VBHOME                      ; the NEXT plane restarts here, and the last one
-                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov si, [gfx_roff]
     mov dx, [gfx_rrows]
     mov bp, [gfx_rspan]
@@ -4278,12 +4278,12 @@ vga_restore_vram:                              ; only renderer gfx_restore has
     mov al, [vga_pm]            ; plane mask bit, 1/2/4/8 - or 0Fh, which is
     mov [vga_plane], al         ; ONE pass into all four (SPEC.md 11.96.17)
 .plane:
+    VBHOME                      ; the NEXT plane restarts here, and the last one
+                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov dx, VGA_SEQ
     mov ah, [vga_plane]
     mov al, 2                   ; SEQ2: Map Mask = this plane only
     out dx, ax
-    VBHOME                      ; the NEXT plane restarts here, and the last one
-                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov di, [gfx_roff]
     mov dx, [gfx_rrows]
     mov bp, [gfx_rspan]
