@@ -29,6 +29,29 @@ AND IT MAKES INPUT POSSIBLE AT ALL. xdotool can type and click into a real X
 window, so a machine that could previously only be started and watched can now
 be driven. That is what `--key` and `--click` are for.
 
+WHAT DOES NOT WORK, MEASURED, SO NOBODY REDOES IT: pointer MOTION.
+86Box captures the pointer and WARPS IT BACK to the centre of its render area
+after every motion event, and it forwards the warp's own delta to the guest as
+well - so an XTEST `mousemove_relative dx dy` and the warp that follows it
+cancel exactly. `--do probe` prints the host pointer and it reads the SAME
+coordinate after every move (534,452 here, pinned). The guest arrow jitters in
+a ~70px box around wherever it started and goes nowhere: driving it to
+(950,700) left the changed pixels at guest (439..520, 317..396), which is where
+it already was. Using `--window` is worse, not better - that sends SYNTHETIC
+XSendEvent, which the grabbing render widget ignores outright, and then not
+even the jitter happens.
+
+KEYS DO work (Ctrl+F11 is how the screenshot is taken), so this is specific to
+the pointer and the warp.
+
+THE ROUTE THAT SHOULD WORK is not X at all: 86Box has serial passthrough with
+a "Create pseudoterminal" and a "TCP/IP listening port" mode, and os8088 wants
+a Microsoft serial mouse on COM1 - so the harness can BE the mouse and write
+the protocol itself, the way tools/mouse.py drives QEMU's msmouse. The obstacle
+to size first is SPEC.md 9.4.1's identify handshake: the driver toggles RTS/DTR
+and expects an `M` back, and neither a pty nor a socket carries a modem control
+line. Streaming `M` until the window opens is the likely answer.
+
 KILLING 86Box: MATCH THE COMMAND LINE, NOT `comm`. The AppImage renames its
 main thread to `qt_thread`, so a comm-based sweep misses it completely and
 leaves instances running at ~70% CPU each. The VM path is in the cmdline and
@@ -146,8 +169,102 @@ class Xvfb:
 
 
 def xdo(env, *args):
+    """ALWAYS XTEST, never `--window`.
+
+    `xdotool click --window <id>` sends a SYNTHETIC XSendEvent, and Qt's render
+    widget - which has the pointer GRABBED while 86Box has the mouse captured -
+    ignores synthetic events outright. The first version of this harness used
+    --window and the guest pointer never moved: the only pixels that changed
+    between a click run and a no-click run were the menu bar CLOCK. Without
+    --window xdotool goes through the XTEST extension, which the server
+    delivers exactly as it delivers real hardware, grabs included.
+    """
     return subprocess.run(["xdotool", *args], env=env,
                           capture_output=True, text=True)
+
+
+def win_geom(env, win):
+    r = xdo(env, "getwindowgeometry", "--shell", win).stdout
+    g = dict(l.split("=", 1) for l in r.strip().splitlines() if "=" in l)
+    return (int(g["X"]), int(g["Y"]), int(g["WIDTH"]), int(g["HEIGHT"]))
+
+
+# The serial mouse's own limits, which are the guest's and not the host's:
+# the Microsoft protocol truncates a large delta, and 1200 baud drops a packet
+# that is still in flight. tests/curtrail.py settled these against QEMU and
+# they are the same protocol here.
+STEP = 60
+PACE = 0.06
+
+
+class Pointer:
+    """the guest's arrow, in GUEST pixels, over a captured relative mouse.
+
+    86Box hands the guest RELATIVE motion once it has captured the pointer, so
+    there is no host->guest coordinate map to get wrong - and no need for one.
+    Absolute position is reached the way tests/curtrail.py reaches it: shove
+    the arrow into a corner until the KERNEL'S OWN EDGE CLAMP has it pinned,
+    which is a known position, then walk back from there.
+    """
+
+    def __init__(self, env, win, w, h):
+        self.env, self.win, self.w, self.h = env, win, w, h
+        self.captured = False
+
+    def capture(self):
+        """click once in the middle of the window, which is certainly inside
+        the render area whatever chrome 86Box has put around it"""
+        x, y, ww, wh = win_geom(self.env, self.win)
+        xdo(self.env, "mousemove", str(x + ww // 2), str(y + wh // 2))
+        time.sleep(0.3)
+        xdo(self.env, "click", "1")
+        time.sleep(1.2)
+        self.captured = True
+
+    def rel(self, dx, dy):
+        while dx or dy:
+            cx = max(-STEP, min(STEP, dx))
+            cy = max(-STEP, min(STEP, dy))
+            xdo(self.env, "mousemove_relative", "--", str(cx), str(cy))
+            time.sleep(PACE)
+            dx -= cx
+            dy -= cy
+
+    def goto(self, gx, gy):
+        if not self.captured:
+            self.capture()
+        for _ in range((max(self.w, self.h) + STEP - 1) // STEP):
+            xdo(self.env, "mousemove_relative", "--", str(STEP), str(STEP))
+            time.sleep(PACE)
+        self.rel(gx - (self.w - 1), gy - (self.h - 1))
+
+    def click(self, gx, gy):
+        self.goto(gx, gy)
+        time.sleep(0.3)
+        xdo(self.env, "click", "1")
+        time.sleep(0.8)
+
+    def dclick(self, gx, gy):
+        self.goto(gx, gy)
+        time.sleep(0.3)
+        xdo(self.env, "click", "--repeat", "2", "--delay", "80", "1")
+        time.sleep(1.2)
+
+    def drag(self, x1, y1, x2, y2):
+        self.goto(x1, y1)
+        time.sleep(0.3)
+        xdo(self.env, "mousedown", "1")
+        time.sleep(0.3)
+        self.rel(x2 - x1, y2 - y1)
+        time.sleep(0.3)
+        xdo(self.env, "mouseup", "1")
+        time.sleep(1.0)
+
+    def release(self):
+        """give the pointer back to the host - 86Box's own hotkey"""
+        xdo(self.env, "key", "ctrl+End")
+        time.sleep(0.4)
+        self.captured = False
 
 
 def find_window(env, tries=60):
@@ -186,10 +303,13 @@ def main():
                     help="GUEST seconds to let it boot before looking")
     ap.add_argument("--screen", default="1280x1024",
                     help="the Xvfb screen, which must exceed the guest's")
-    ap.add_argument("--click", default=None, metavar="X,Y",
-                    help="click once at window-relative X,Y before the shot")
-    ap.add_argument("--key", action="append", default=[],
-                    help="xdotool key to send before the shot (repeatable)")
+    ap.add_argument("--guest", default="1024x768",
+                    help="the GUEST's own geometry, which --do coordinates are "
+                         "in and which the edge-clamp pin walks back from")
+    ap.add_argument("--do", action="append", default=[], metavar="ACTION",
+                    help="a step, repeatable and run in order. "
+                         "click:X,Y  dclick:X,Y  drag:X1,Y1,X2,Y2  "
+                         "key:ctrl+F11  shot:path.png  wait:SECONDS  release")
     ap.add_argument("--keep", action="store_true",
                     help="leave 86Box running (for a human to look)")
     a = ap.parse_args()
@@ -246,48 +366,66 @@ def main():
         xdo(env, "windowactivate", "--sync", win)
         xdo(env, "windowfocus", win)
 
-        if a.click:
-            cx, cy = (int(v) for v in a.click.split(","))
-            xdo(env, "mousemove", "--window", win, str(cx), str(cy))
-            time.sleep(0.4)
-            xdo(env, "click", "--window", win, "1")
-            time.sleep(1.5)
-        for k in a.key:
-            xdo(env, "key", "--window", win, k)
-            time.sleep(1.0)
+        gw, gh = (int(v) for v in a.guest.lower().split("x"))
+        ptr = Pointer(env, win, gw, gh)
 
-        if a.shot:
-            out = os.path.abspath(os.path.join(ROOT, a.shot)) \
-                if not os.path.isabs(a.shot) else a.shot
-            os.makedirs(os.path.dirname(out), exist_ok=True)
-
-            # 86Box's OWN screenshot: the emulated framebuffer, no chrome
-            xdo(env, "key", "--window", win, "ctrl+F11")
-            got = None
+        def shoot(dest):
+            """86Box's OWN screenshot, with an xwd of the window as the
+            fallback so a run where the hotkey does not land says so"""
+            dest = dest if os.path.isabs(dest) else os.path.join(ROOT, dest)
+            os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+            mark = time.time() - 0.5
+            xdo(env, "key", "ctrl+F11")
             for _ in range(20):
                 time.sleep(0.5)
-                got = newest_png(shots, t0)
-                if got:
-                    break
-            if got:
-                shutil.copyfile(got, out)
-                print("  %s <- 86Box's own screenshot" % a.shot)
-            else:
-                # the fallback, which says something is wrong rather than
-                # nothing: the window as the X server sees it
-                xwd = out + ".xwd"
-                with open(xwd, "wb") as f:
-                    subprocess.run(["xwd", "-id", win], env=env, stdout=f,
-                                   check=True)
-                from PIL import Image
-                Image.open(xwd).save(out)
-                os.unlink(xwd)
-                print("  %s <- xwd of the WINDOW (Ctrl+F11 did not land; this"
-                      " includes 86Box's own chrome)" % a.shot)
-
+                g = newest_png(shots, mark)
+                if g:
+                    shutil.copyfile(g, dest)
+                    from PIL import Image
+                    print("  %s  %dx%d" % (dest, *Image.open(dest).size))
+                    return
+            xwd = dest + ".xwd"
+            with open(xwd, "wb") as f:
+                subprocess.run(["xwd", "-id", win], env=env, stdout=f,
+                               check=True)
             from PIL import Image
-            im = Image.open(out)
-            print("  %dx%d" % im.size)
+            Image.open(xwd).save(dest)
+            os.unlink(xwd)
+            print("  %s <- xwd fallback (Ctrl+F11 did not land)" % dest)
+
+        for step in a.do:
+            op, _, arg = step.partition(":")
+            n = [int(v) for v in arg.split(",")] if arg and op in (
+                "click", "dclick", "drag") else None
+            print("  do %s" % step)
+            if op == "click":
+                ptr.click(*n)
+            elif op == "dclick":
+                ptr.dclick(*n)
+            elif op == "drag":
+                ptr.drag(*n)
+            elif op == "key":
+                xdo(env, "key", arg)
+                time.sleep(1.0)
+            elif op == "wait":
+                time.sleep(float(arg))
+            elif op == "release":
+                ptr.release()
+            elif op == "goto":
+                ptr.goto(*[int(v) for v in arg.split(",")])
+            elif op == "rel":
+                ptr.rel(*[int(v) for v in arg.split(",")])
+            elif op == "probe":
+                r = xdo(env, "getmouselocation", "--shell").stdout
+                print("     host pointer: %s" % " ".join(r.split()))
+            elif op == "shot":
+                shoot(arg)
+            else:
+                print("os88box: unknown action %r" % step, file=sys.stderr)
+                return 2
+
+        if a.shot:
+            shoot(a.shot)
 
         if a.keep:
             print("  --keep: 86Box left running on %s" % x.disp)
