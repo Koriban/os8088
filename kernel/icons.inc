@@ -525,7 +525,7 @@ ico_pass:
     add word [ico_col], 2
     dec word [ico_wleft]
     jnz .word
-    add di, [ico_rowadv]        ; next scanline (80 - 2*wwords)
+    VBROWR di, [ico_rowadv]     ; next scanline (stride - 2*wwords)
     dec bp
     jnz .row
 .done:

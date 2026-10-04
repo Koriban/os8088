@@ -163,7 +163,7 @@ app_about_v1:   db 'Hercules - 720x348 - mono', 0
 app_about_v2:   db 'CGA - 640x200 - mono', 0
 %ifdef GFX_VGA
 app_about_v3:   db 'EGA - 640x350 - 16 colors', 0
-app_about_v4:   db 'VBE - 1024x512 - 16 colors', 0
+app_about_v4:   db 'VBE - 1024x768 - 16 colors', 0
 %endif
 
 ; =============================================================================

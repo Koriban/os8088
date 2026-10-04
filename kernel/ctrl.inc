@@ -6606,7 +6606,7 @@ CPS cp_s_vvga,  'Vga 640x480'
 CPS cp_s_vherc, 'Hercules 720x348'
 CPS cp_s_vcga,  'Cga 640x200'
 CPS cp_s_vega,  'Ega 640x350'
-CPS cp_s_vvbe,  'Vbe 1024x512'
+CPS cp_s_vvbe,  'Vbe 1024x768'
 ; FIVE ROWS SINCE SPEC.md 39.29, and the table is indexed by the VID_* enum -
 ; so this row is EGA's because it is fourth, not because of its name. It lives
 ; here rather than beside cp_s_vid because SPEC.md 51.5.3 moved the page's

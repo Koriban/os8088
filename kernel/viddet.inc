@@ -856,6 +856,18 @@ vid_apply:
                                 ; block used to open and close on five
                                 ; push/pop pairs that protected nothing
     jne .norowtab
+%ifdef GFX_VGA
+    cmp byte [vid_kind], VID_VBE    ; THE TABLE IS BANK-0 OFFSETS AND SELECTS
+    je .norowtab                    ; NO WINDOW, so in a banked mode it would
+                                    ; hand back an address in whichever bank
+                                    ; happened to be mapped (SPEC.md 39.29.10).
+                                    ; [vid_rowmax] stays 0 and every row goes
+                                    ; through gfx_rowbase_calc, which does
+                                    ; select one - vid_ctx_act already switches
+                                    ; the table off for a display of another
+                                    ; kind, so both the mechanism and what it
+                                    ; costs are known (39.12)
+%endif
     mov si, vid_rowtab
     xor di, di                  ; DI = rowbase(0), which is 0 on every adapter
     mov cx, VID_ROWTAB          ; ...and CX may be the counter now: it is
@@ -1003,6 +1015,9 @@ vid_setmode:
 .vbe:
     mov al, VBV_SET             ; it clears the framebuffer itself, both banks,
     call vbe_call               ; which is why no vid_wipe follows - ours is one
+    pushf
+    call vbe_bank_reset         ; the mode set moved the window, so what the
+    popf                        ; kernel believes is mapped is now a guess
     jnc .done                   ; rep stosw from offset 0 and 98,304 bytes do
                                 ; not fit one (SPEC.md 39.29.1)
 
@@ -1428,6 +1443,58 @@ vid_text:
                                 ; push list is vid_setmode's. See vid_pop8.
 
 ; -----------------------------------------------------------------------------
+; VBROW - advance a framebuffer pointer one row, crossing a bank if it must
+;
+;   VBROW di                    ; the step is [vid_stride]
+;   VBROWR di, dx               ; ...or already in a register
+;
+; THE CARRY IS THE BANK CROSSING and nothing else has to detect it (SPEC.md
+; 39.29.10). 1024 pixels is 128 bytes a row and 128 divides 65536, so the add
+; wraps out of 16 bits precisely when row 512 begins - and wraps to the right
+; offset inside the new bank, being the same arithmetic. On every other mode
+; this machine drives, the carry can never happen: the largest DI mode 12h can
+; reach is 479*80 = 38,320. So ONE body is correct on all of them, and what it
+; costs an XT is two bytes and a jump that is never taken.
+;
+; A `call` and not an inline body because the taken path is one row in 512 and
+; the fall-through is the hot one.
+; -----------------------------------------------------------------------------
+%macro VBROW 1
+    add %1, [vid_stride]
+  %ifdef GFX_VGA
+   %ifdef OS88_DRIVERS
+    jnc %%same
+    call vbe_bank_next
+%%same:
+   %endif
+  %endif
+%endmacro
+
+%macro VBROWR 2
+    add %1, %2
+  %ifdef GFX_VGA
+   %ifdef OS88_DRIVERS
+    jnc %%same
+    call vbe_bank_next
+%%same:
+   %endif
+  %endif
+%endmacro
+
+; ...and the same thing where the stride must be read CS-relative, because the
+; caller has pointed DS at the framebuffer or at a save-under claim.
+%macro VBROWCS 1
+    add %1, [cs:vid_stride]
+  %ifdef GFX_VGA
+   %ifdef OS88_DRIVERS
+    jnc %%same
+    call vbe_bank_next
+%%same:
+   %endif
+  %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
 ; gfx_rowbase - byte offset of the first byte of a scan line (SPEC.md 39.3)
 ;
 ; in:       AX = y
@@ -1469,7 +1536,22 @@ gfx_rowbase_calc:
     and bx, [cs:vid_bmask]      ; BX = bank number
     mov cl, [cs:vid_bshift]
     shr ax, cl                  ; AX = row within the bank
-    mul word [cs:vid_stride]    ; DX:AX; DX is always 0 (86*90 at worst)
+    mul word [cs:vid_stride]    ; DX:AX. DX is 0 on every adapter whose whole
+                                ; surface fits one 64KB window - 86*90 at
+                                ; worst on the two mono rows - and on VBE it
+                                ; is THE BANK NUMBER, with AX the offset
+                                ; inside it (SPEC.md 39.29.10). The multiply
+                                ; that was already here computes both; what
+                                ; this adds is noticing.
+%ifdef GFX_VGA
+    or dx, dx                   ; four clocks on a 362-clock path, and never
+    jz .nobank                  ; taken on any mode but 0104h
+    push ax
+    mov al, dl
+    call vbe_bank               ; preserves every register and the flags
+    pop ax
+.nobank:
+%endif
     mov cl, 3                   ; ...and BX = bank * 0x2000. `ror` BY 3 IS
     ror bx, cl                  ; `shl` BY 13 for any value that fits in three
     add ax, bx                  ; bits, which the bank does - [vid_bmask] is

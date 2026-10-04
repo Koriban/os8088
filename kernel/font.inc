@@ -459,7 +459,7 @@ font_char:
     mov al, [es:di+1]           ; load latches
     mov [es:di+1], al
 .no_second:
-    add di, [vid_stride]
+    VBROW di
     dec ch
     jnz .row
 

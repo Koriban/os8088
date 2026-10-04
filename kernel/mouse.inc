@@ -5228,7 +5228,7 @@ cur_draw:
     mov al, bl
     mov [es:di+1], al
 .next:
-    add di, [vid_stride]
+    VBROW di
     dec ch
     jnz .row
     mov ax, 0xFF08              ; GC8 back to all bits (SPEC.md 1 rule 7)

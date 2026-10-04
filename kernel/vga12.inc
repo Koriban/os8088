@@ -2902,7 +2902,7 @@ gfx_blitp:
     mov cx, [ss:vga_pr_n]
     rep movsb
     add si, ax
-    add di, bp
+    VBROWR di, bp
     dec dx
     jnz .frow
     pop ax
@@ -3209,7 +3209,7 @@ vga_solid_rect:
 .lcol:
     mov al, [es:di]             ; load latches
     mov [es:di], al
-    add di, [vid_stride]
+    VBROW di
     dec si
     jnz .lcol
     mov bx, [gfx_rspan]
@@ -3223,7 +3223,7 @@ vga_solid_rect:
 .rcol:
     mov al, [es:di]
     mov [es:di], al
-    add di, [vid_stride]
+    VBROW di
     dec si
     jnz .rcol
     dec bx                      ; interior bytes per row
@@ -3240,7 +3240,7 @@ vga_solid_rect:
 .irow:
     mov cx, bx
     rep stosb
-    add di, dx
+    VBROWR di, dx
     dec si
     jnz .irow
     jmp short .reset
@@ -3250,7 +3250,7 @@ vga_solid_rect:
     mov al, [es:di]
     stosb
     loop .xbyte
-    add di, dx
+    VBROWR di, dx
     dec si
     jnz .xrow
 .reset:
@@ -3568,7 +3568,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, [es:di]             ; load latches for the masked write
     mov [es:di], bh
     not bh                      ; AA <-> 55 each row
-    add di, [vid_stride]
+    VBROW di
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3584,7 +3584,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, [es:di]
     mov [es:di], bh
     not bh
-    add di, [vid_stride]
+    VBROW di
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3602,7 +3602,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, ah
     mov cx, bx
     rep stosb
-    add di, dx
+    VBROWR di, dx
     not ah
     dec si
     jnz .irow
@@ -3715,7 +3715,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov [es:di], ah
     inc bx
     and bx, 7
-    add di, [vid_stride]
+    VBROW di
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3734,7 +3734,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov [es:di], ah
     inc bx
     and bx, 7
-    add di, [vid_stride]
+    VBROW di
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3752,7 +3752,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, dx
     rep stosb
     sub di, dx
-    add di, [vid_stride]
+    VBROW di
     inc bx
     and bx, 7
     dec si
@@ -4031,7 +4031,7 @@ vga_save_vram:                              ; only renderer gfx_save has
 .row:
     mov cx, bp
     rep movsb                   ; buffer DI advances contiguously
-    add si, [cs:vid_stride]     ; CS: IS MANDATORY - DS is VGA_SEG in here for
+    VBROWCS si                  ; CS: IS MANDATORY - DS is VGA_SEG in here for
     sub si, bp                  ; the movsb, so a DS-relative read of the
                                 ; stride fetches PIXELS. That is what it did:
                                 ; the cursor, every menu and every window
@@ -4286,7 +4286,7 @@ vga_restore_vram:                              ; only renderer gfx_restore has
     mov cx, bp
     rep movsb
     add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
-    add di, [cs:vid_stride]     ; ...and so is this one, for the same reason -
+    VBROWCS di                  ; ...and so is this one, for the same reason -
                                 ; the line above was already saying so
     sub di, bp
     dec dx
@@ -4793,6 +4793,21 @@ gfx_scroll:
                                 ; left - and the two edge tests below then
                                 ; REFUSE a rect that reaches past that display,
                                 ; which is 39.14.2's straddle rule for free
+%ifdef GFX_VGA
+    cmp byte [vid_kind], VID_VBE    ; A BANKED SURFACE CANNOT BE SCROLLED
+    je .no                          ; THROUGH THE LATCHES (SPEC.md 39.29.10).
+                                    ; vgas_lincopy moves the region with source
+                                    ; and destination BOTH in VRAM, stepping by
+                                    ; the stride - and across a bank boundary
+                                    ; the two ends want different windows at
+                                    ; the same instant, which one window cannot
+                                    ; express. Its own comment already says it
+                                    ; assumes one bank. This is a REFUSAL the
+                                    ; contract above already has, and every
+                                    ; caller answers it with a full repaint;
+                                    ; VBE's window B is the eventual answer and
+                                    ; is not pass 1
+%endif
     test ax, 7                  ; byte-column granularity on every adapter
     jnz .no
     mov di, cx

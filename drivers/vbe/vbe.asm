@@ -73,13 +73,24 @@ VBG_H       equ 2               ; word: rows
 VBG_STRIDE  equ 4               ; word: bytes a row a plane
 VBG_SEG     equ 6               ; word: the window segment, as the BIOS says
 VBG_BANKS   equ 8               ; word: 64KB windows the plane spans
-VBG_SZ      equ 10
+VBG_WFN     equ 10              ; dword: VBE's own WinFuncPtr - the far address
+                                ; that moves window A, which the kernel calls
+                                ; DIRECTLY on the drawing path. That is what
+                                ; the field exists for: int 10h AX=4F05h does
+                                ; the same thing through a BIOS that is not
+                                ; re-entrant, and the cursor moves the window
+                                ; from inside IRQ4 (SPEC.md 39.29.10)
+VBG_GRAN    equ 14              ; word: granules to a 64KB bank, so the kernel
+                                ; can turn a bank number into a window
+                                ; position without knowing the granularity
+VBG_SZ      equ 16
 
 ; --- ModeInfoBlock offsets ---------------------------------------------------
 MI_ATTR     equ 0
 MI_GRAN     equ 4               ; WinGranularity, KB
 MI_WSIZE    equ 6               ; WinSize, KB
 MI_WASEG    equ 8
+MI_WINFN    equ 12              ; dword: WinFuncPtr
 MI_STRIDE   equ 16              ; BytesPerScanLine
 MI_XRES     equ 18
 MI_YRES     equ 20
@@ -230,6 +241,12 @@ vb_attach:
     mov [vb_geom + VBG_STRIDE], ax
     mov ax, [vb_minfo + MI_WASEG]
     mov [vb_geom + VBG_SEG], ax
+    mov ax, [vb_minfo + MI_WINFN]       ; the window function, both halves
+    mov [vb_geom + VBG_WFN], ax
+    mov ax, [vb_minfo + MI_WINFN + 2]
+    mov [vb_geom + VBG_WFN + 2], ax
+    mov ax, [vb_bmul]
+    mov [vb_geom + VBG_GRAN], ax
 
     ; banks = ceil(h * stride / 65536), computed as (h + rows-1) / rows so the
     ; 17-bit product never has to exist

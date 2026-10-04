@@ -49,7 +49,9 @@ VBG_H       equ 2
 VBG_STRIDE  equ 4
 VBG_SEG     equ 6
 VBG_BANKS   equ 8
-VBG_SZ      equ 10
+VBG_WFN     equ 10              ; dword: VBE's WinFuncPtr (see the driver)
+VBG_GRAN    equ 14              ; word: granules to a 64KB bank
+VBG_SZ      equ 16
 
 VBE_ABI_VER equ 1               ; what we expect the image to be; it refuses a
                                 ; mismatch at LOAD rather than at the first
@@ -78,6 +80,7 @@ vbe_row:
                                 ; all, and no settings file can reach this
     db DRVE_OK                  ; DRVR_ERR
 
+vbe_cbank:  db 0xFF         ; the mapped bank, 0xFF = none known
 vbe_known:  db 0            ; 0 = the card has not been asked yet
 vbe_geom:   times VBG_SZ db 0   ; what the card actually reports. THE KERNEL
                                 ; NEVER ASSUMES THESE: a BIOS that advertises a
@@ -265,16 +268,89 @@ vbe_setrow:
                                         ; number on a linear surface
     mov ax, [vbe_geom + VBG_W]
     mov [vid_tab_vbe + 14], ax          ; cw
-    xor ax, ax                          ; rows a window = 65536 / stride, built
-    mov dx, 1                           ; as DX:AX because 65536 is not a word
-    div word [vbe_geom + VBG_STRIDE]
-    cmp ax, [vbe_geom + VBG_H]
-    jbe .st                             ; a window holds fewer rows than the
-    mov ax, [vbe_geom + VBG_H]          ; mode has: that is the clamp
-.st:
+    mov ax, [vbe_geom + VBG_H]          ; THE CARD'S OWN HEIGHT. It used to be
+                                        ; clamped to the rows one 64KB window
+                                        ; holds, because nothing below the
+                                        ; renderer could cross a bank; SPEC.md
+                                        ; 39.29.10's carry test is what lifts
+                                        ; that, and the bottom third of the
+                                        ; panel stops being dead
     mov [vid_tab_vbe + 16], ax          ; ch
     pop dx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vbe_bank - map window A over bank AL (SPEC.md 39.29.10)
+; in:       AL = the 64KB bank
+; out:      nothing. ALL REGISTERS AND THE FLAGS ARE PRESERVED, because the
+;           callers are row loops that are carrying their own arithmetic in
+;           every register they have, and gfx_rowbase_calc's own contract
+;           preserves BX
+;
+; THE HOT PATH, and the reason it does not go through vbe_call. Three things
+; rule that out: vbe_call brackets the dispatch with the heap compaction nest
+; (SPEC.md 66.6.3), which is not an ISR-safe thing to do and the CURSOR draws
+; from IRQ4; the overlay's answer would be an `int 10h AX=4F05h` into a BIOS
+; that is not re-entrant; and both cost a far call through a dispatcher for
+; what is six instructions of port writing.
+;
+; VBE publishes WinFuncPtr for exactly this - a far address that moves the
+; window with no BIOS entry at all - and the driver hands it over at CAPS. It
+; takes BH = 0 (set), BL = 0 (window A), DX = the position in GRANULES, which
+; is why [vbe_gran] is published with it: a bank is 64KB and a granule may be
+; smaller, so the kernel multiplies rather than assuming they are the same.
+;
+; THE EARLY-OUT IS MOST OF THE VALUE. A full-screen repaint is hundreds of
+; primitives and nearly every one is wholly inside one bank, so this is a
+; compare and a return for all of them.
+; -----------------------------------------------------------------------------
+vbe_bank:
+    cmp al, [vbe_cbank]
+    je .same
+    pushf                       ; a row loop's flags are its own
+    push ax
+    push bx
+    push cx
+    push dx
+    mov [vbe_cbank], al
+    xor ah, ah
+    mul word [vbe_geom + VBG_GRAN]      ; DX:AX = the window position
+    mov dx, ax
+    xor bx, bx                  ; BH = 0 set, BL = 0 window A
+    call far [vbe_geom + VBG_WFN]
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+.same:
+    ret
+
+; -----------------------------------------------------------------------------
+; vbe_bank_next - the row walk has just carried out of 16 bits: step the window
+; out:      nothing (every register and the flags preserved)
+;
+; Reached only from VBROW below, and only on the one row in 512 where
+; `add di, [vid_stride]` wraps - which is exactly the row that enters the next
+; bank, because 128 divides 65536 (SPEC.md 39.29.10). DI has already wrapped to
+; the correct offset INSIDE that bank, by the same arithmetic.
+; -----------------------------------------------------------------------------
+vbe_bank_next:
+    pushf
+    push ax
+    mov al, [vbe_cbank]
+    inc al
+    call vbe_bank
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; vbe_bank_reset - forget which window is mapped (a mode set moved it)
+; -----------------------------------------------------------------------------
+vbe_bank_reset:
+    mov byte [vbe_cbank], 0xFF
     ret
 
 ; -----------------------------------------------------------------------------

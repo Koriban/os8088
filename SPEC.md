@@ -64603,6 +64603,53 @@ a region saved and restored against the pixels under it, at both strides - is
 what would have, and it is the thing to build before stage 2 touches these
 routines again.
 
+#### 39.29.10 Banking to the full 768 rows
+
+Rows 0..511 are one 64KB window and need nothing; rows 512..767 need the window
+moved. Three facts make that far cheaper than the staging plan assumed, and all
+three were found by reading the code rather than by designing around it:
+
+**1. `gfx_rowbase_calc` already computes the bank.** Its body ends in
+`mul word [cs:vid_stride]`, which leaves `DX:AX` — and on a linear surface
+**`DX` is the 64KB bank and `AX` is the offset within it**, exactly. Verified
+at y = 0, 347, 511, 512, 600 and 767 at stride 128. The code discards `DX`
+today on the written ground that it is always 0, which is true of every mode
+but this one. So the base half is `or dx, dx` / `jz` / `call` in **one
+routine**, and mode 12h pays four clocks on a 362-clock path.
+
+**2. The 16-bit carry out of `DI` IS the bank crossing.** 128 divides 65536, so
+`add di, [vid_stride]` wraps to zero precisely when row 512 begins — and wraps
+to the *correct* in-window offset, because the wrap is the same arithmetic. A
+row advance becomes `jnc` past a call. On mode 12h the carry can never happen
+(the largest `DI` is `479 x 80 = 38,320`), so one body is correct on both and
+the XT pays two bytes and a not-taken jump per row.
+
+**3. The window is moved through VBE's own `WinFuncPtr`, not `int 10h`.** A far
+address that writes the card's registers directly: no BIOS entry, so it is safe
+from the mouse ISR, and no dispatcher, so it is not worth a call into the
+overlay. `vbe_bank` early-outs on a compare, which is what nearly every
+primitive hits.
+
+**`vid_rowtab` is switched off in this mode.** Its entries are 16-bit
+*bank-0* offsets and the fast path returns one without selecting a window, so
+`[vid_rowmax]` is 0 here and every row goes through `gfx_rowbase_calc`.
+`vid_ctx_act` already switches the table off for a display of another kind
+(§39.12), so the mechanism and its cost are both known.
+
+**Cost, as docs/KERNEL-MEMORY.md requires it reported.** Stage 2 is `.text`
++106 on top of stage 1's 422 (528 in all for §39.29), `.cold` +0, and crosses
+no further rung — 324 bytes of the image rung remain. What the XT pays for a
+mode it cannot run is the `or dx, dx` in `gfx_rowbase_calc` and a `jnc` it
+never takes, per row, at the fifteen advances `VBROW` now covers.
+
+**What this does NOT make work is `gfx_scroll`.** `vgas_lincopy` moves a region
+through the VGA latches with source and destination both in VRAM, stepping by
+the stride — and across a bank boundary the two ends are in *different windows*
+at the same instant, which one window cannot express and the latch path cannot
+survive. Its own comment already says it assumes one bank. A scroll that
+straddles is refused here and the caller repaints instead; VBE's window B is
+the eventual answer and is not pass 1.
+
 #### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body
