@@ -653,7 +653,23 @@ font_char:
     out dx, ax                  ; GC8 Bit Mask = second-byte glyph bits
     xchg [di+1], al             ; load latches and write, as above
 .no_second:
-    VBROW di
+    VBROWCS di                  ; CS: IS MANDATORY - DS IS THE FRAMEBUFFER in
+                                ; this loop (the `mov ds, ax` above says so,
+                                ; and says nothing below may read a kernel word
+                                ; except through CS). A plain VBROW fetches the
+                                ; stride out of PIXELS, and the glyph then
+                                ; walks by whatever was on the screen: the
+                                ; 2026-10-05 upstream merge put this loop's
+                                ; DS switch around a row advance that had not
+                                ; needed one, and every window CAPTION came out
+                                ; as fragments - on VGA as well, the stride
+                                ; being read wrong at any width. SPEC.md
+                                ; 39.29.10 is the same defect in the save-under
+                                ; pair, and this is the fourth time it has been
+                                ; paid for: a macro that touches memory must
+                                ; use the CS form wherever a routine has given
+                                ; DS away, and a MERGE can move a DS switch
+                                ; around code that was correct without it.
     dec ch
     jnz .row
 
