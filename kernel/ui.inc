@@ -73,6 +73,13 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; -----------------------------------------------------------------------------
 ui_task:
 .loop:
+%ifdef VBE_DIAG
+    call vbd_step               ; VBEDIAG=1 (SPEC.md 39.29.12): does nothing at
+                                ; all until its first step is due, then opens a
+                                ; window and drags it across row 512 and back.
+                                ; HERE because it is a TASK - it may take the
+                                ; gfx lock, which an ISR hook could not
+%endif
 %ifdef KFZTRACE
     inc word [khb_uipass]       ; ONE PASS OF THE UI TASK. The watchdog keyed
                                 ; on a HELD mutex and never fired in the field,

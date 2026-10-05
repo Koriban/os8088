@@ -6398,6 +6398,11 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
                                 ; dispatch and the load/free pair. No boot
                                 ; sniff - the probe needs a buffer and its one
                                 ; consumer already required the disk
+%ifdef VBE_DIAG
+%include "vbediag.inc"          ; VBEDIAG=1: move a window across the bank
+                                ; boundary with no mouse (SPEC.md 39.29.12)
+%endif
+
 %include "xmem.inc"             ; the kernel's HALF of the store above 1MB
                                 ; (SPEC.md 41.12): four cells, a boot sniff
                                 ; and the dispatch. The gate itself, the

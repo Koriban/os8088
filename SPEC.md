@@ -64896,6 +64896,45 @@ register is at `3C4` index `0x0E`, while the field machine is a **NeoMagic**.
 A gate that passes here is necessary and not sufficient — the Satellite is
 still the authority on anything touching the card's own BIOS.
 
+#### 39.29.12 `VBEDIAG=1` — move a window across the boundary with no mouse
+
+`make VBEDIAG=1`. Fourteen seconds after the desktop settles the kernel opens a
+window of its own, drags it **down** across row 512, drags it back **up**, and
+stops. Nothing is clicked and nothing is typed.
+
+**It is a knob for this tree's own recorded reason**, one device along from
+`STKDIAG` and `BOOTMARK`: the operator's click lands inside the thing being
+measured, or cannot be sent at all. **86Box takes no scripted input** — no QMP,
+no socket — and its pointer capture **warps the cursor back to the centre after
+every motion event**, forwarding the warp's own delta, so an XTEST relative
+move and the warp cancel exactly. `tools/os88box.py` measured it: the host
+pointer reads the same coordinate after every move, and the guest arrow stays
+in a ~70px box around where it started (§39.29.8.2).
+
+**What it is aimed at, and why the aim is narrow.** The field reports a window
+that MOVES leaving its old image behind, and two observations bound it:
+
+| | clears the ghost? |
+|---|---|
+| a **full** repaint — swapping themes, the screen saver | **yes** |
+| a window **drag**, and the refit a mode switch runs | **no** |
+
+Those are two different repaints. `wm_paint_all` redraws the whole desktop;
+`ui_drag`'s commit calls `wm_dmg_vacate` → `wm_dmg_union` → `wm_paint_dmg`,
+which redraws only the damage and reaches the dither through an **armed clip
+region** (`wm_dmg_gray`). So the suspect is the damage path, not the renderer —
+and the knob drives **exactly those three calls in that order**, with the
+window's own rect. A reproduction built on `wm_paint_all` would prove nothing,
+because that is the arm already known to work.
+
+**It runs on the field machine too**, and that is not incidental: 86Box's
+Trident has shown a clean 1024×768 desktop through every build in which the
+Satellite's NeoMagic was broken. The same floppy asks the same question of the
+card that actually shows the defect.
+
+It draws no numbers. Where the window **is**, and whether a second copy of it
+is left where it **was**, is the whole reading.
+
 #### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body
