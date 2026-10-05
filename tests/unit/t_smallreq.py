@@ -106,6 +106,8 @@ FORBIDDEN = {
     "THEWIRE.O88":  "ETHER.DRV is in no small driver set (SPEC.md 24.5, 92)",
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
+    "MIDIRACK.O88": "SOUND.DRV is in no small driver set, and its speaker "
+                    "synth is an FSXF_RATE bracket (SPEC.md 24.5, 105)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse
     "SKIES.O88":    "a 32KB claim inside the fsx bracket - the refusal is a "
                     "black screen (SPEC.md 24.5, 88)",
@@ -153,10 +155,13 @@ FORBIDDEN = {
 READERS = {
     "HTM": ("BROWSER.O88",),
     "MOD": ("TRACKER.O88",),         # ModPlug is RETIRED (SPEC.md 56.15)
+    "MID": ("MIDIRACK.O88",),        # SPEC.md 105
     # SLK has three readers and the third is the only one the floor machine
     # gets: SHEET is in $(SMALLOMIT) and CHART goes with it, so before PLAN
     # (SPEC.md 81.75) a .SLK on a small volume had nothing to open it. PLAN
-    # is on both `make smallapps` disks and on apps360.img.
+    # is on both `make smallapps` disks and on apps360.img. UPSTREAM HAS NO
+    # PLAN, which is why its row is the two-reader one - ours wins here and
+    # its MID row comes across whole.
     "SLK": ("SHEET.O88", "CHART.O88", "PLAN.O88"),
     "CSV": ("SHEET.O88", "PLAN.O88"),
     # ...and DIF is NOT given PLAN: it reads SYLK and CSV and nothing else,

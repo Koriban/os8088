@@ -3,6 +3,7 @@
 
     make lzmodtest && python3 tests/lzmod.py              # SPEC.md 20.14.5
     make lzmodtest && python3 tests/lzmod.py --dialog     # SPEC.md 38.6.1
+    make lzmodtest && python3 tests/lzmod.py --nohint     # SPEC.md 20.14.6.3
 
 TWO ROUTES, AND THE SECOND ONE IS WHY THIS FILE HAS A FLAG. Until SPEC.md
 38.6.1 this row drove a double-click ONLY, which is the route that goes
@@ -36,6 +37,13 @@ bumped ES, the borrowed match source one segment down, lz_cross splitting a
 copy at the boundary, and LZ_F_BUMP retiring the offset compare - runs here and
 nowhere else.
 
+--nohint IS THE FIELD'S DISK. The module's directory hint (SPEC.md 20.14.1)
+is struck on a scratch copy - which is what Windows leaves when the MEDIA
+folder is copied out and back, since it writes NTRes and CrtTimeTenth itself -
+so OSAPI_FILE_FIND reports the PACKED 42KB, Tracker claims that, and the read's
+sniff (20.14.6) finds 116KB. Before 20.14.6.3 that was 'File too big' and no
+module; the read now says how many KB it needs and Tracker claims again.
+
 FOUR ASSERTIONS, and the third is the one that makes the others worth having:
 
   1. the disk file really is compressed - the 'CZ' header and the directory
@@ -64,6 +72,7 @@ import os88marty                                       # noqa: E402
 import os88mouse                                       # noqa: E402
 import os88sym                                         # noqa: E402
 import os88build                                       # noqa: E402
+import os88spkfx                                        # noqa: E402
 import os88lz                                          # noqa: E402
 import dispcp                                          # noqa: E402
 import os88geom                                        # noqa: E402
@@ -160,6 +169,10 @@ def main():
                          "ever EXECUTED (SPEC.md 20.14.5). It costs ~10s of "
                          "host compression in the FIXTURE, which is why it is "
                          "not the default")
+    ap.add_argument("--nohint", action="store_true",
+                    help="strike BEVERLY.MOD's directory hint on a scratch "
+                         "copy first, as a Windows copy does (SPEC.md "
+                         "20.14.6.3)")
     a = ap.parse_args()
 
     global PACKED, IMG
@@ -176,8 +189,46 @@ def main():
     fails = []
     plain = host_checks(fails)
     P = pkg_syms("apps/tracker/tracker.asm")
+    apps = os88build.at(IMG)
+    if a.nohint:
+        apps = strike(apps)
+    try:
+        return run(a, apps, plain, P, fails)
+    finally:
+        if a.nohint:
+            os.remove(apps)
 
-    with os88marty.launch("build/os8088-360.img", apps=IMG,
+
+def strike(src):
+    """A scratch copy of `src` with BEVERLY.MOD's hint zeroed: the three
+    cells SPEC.md 20.14.1 keeps it in, which a foreign OS writes as its own."""
+    d = bytearray(open(src, "rb").read())
+    bps = struct.unpack_from("<H", d, 11)[0]
+    res = struct.unpack_from("<H", d, 14)[0]
+    nfat, nent = d[16], struct.unpack_from("<H", d, 17)[0]
+    fsz = struct.unpack_from("<H", d, 22)[0]
+    off = (res + nfat * fsz) * bps
+    for i in range(nent):
+        e = off + i * 32
+        if d[e:e + 11] == b"BEVERLY MOD":
+            d[e + CZ_M] = d[e + CZ_H] = 0
+            d[e + CZ_L] = d[e + CZ_L + 1] = 0
+            break
+    else:
+        sys.exit("lzmod: no BEVERLY.MOD in %s to strike" % src)
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                       "build", "lzmod-nohint-%d.img" % os.getpid())
+    out = os.path.abspath(out)          # ABSOLUTE: under a frozen soak tree
+                                        # launch() maps a relative build/
+                                        # path into THAT tree, where this
+                                        # scratch copy is not
+    open(out, "wb").write(d)
+    say("  hint       STRUCK on a scratch copy (--nohint)")
+    return out
+
+
+def run(a, apps, plain, P, fails):
+    with os88marty.launch("build/os8088-360.img", apps=apps,
                           machine=a.machine) as m:
         os88marty.settle(m, gate=os88marty.desktop_up)
         os88marty.no_saver(m)   # SPEC.md 79: it DRAWS, so the settle
@@ -304,9 +355,23 @@ def main():
                             poll=0.2, guest=60.0)
         except os88marty.MartyError:
             pass
-        os88marty.settle(m)
+        # ...and THE LOAD DONE, read rather than settled on: with no card
+        # Tracker PLAYS what it loaded, through the speaker in its window
+        # (SPEC.md 45.25), so the screen never stops changing and a settle
+        # there waits out its whole budget
+        try:
+            os88marty.until(
+                m, lambda mm: int.from_bytes(
+                    mm.readseg(pseg, P["mp_loaded"], 2), "little"),
+                "Tracker to finish the load", poll=0.2, guest=60.0)
+        except os88marty.MartyError:
+            pass
         modseg = claimed(m)
         if not modseg:
+            msg = int.from_bytes(m.readseg(pseg, P["tui_msgp"], 2), "little")
+            say("  status     %s" % next(
+                (k for k, v in P.items() if v == msg and k.startswith("trk_s_")),
+                "+%04x" % msg))
             fails.append(
                 "[trk_modseg] is 0: Tracker opened and holds no module - a "
                 "read that was REFUSED looks exactly like this" +
@@ -319,14 +384,41 @@ def main():
             return report(fails)
         say("  module     claimed at %04X" % modseg)
 
+        # NO CARD: Tracker pre-emphasises the samples IN PLACE once the load
+        # is done (SPEC.md 45.25) - the speaker's filter paid once rather
+        # than per output sample - so the bytes in memory are the file's with
+        # each sample's play length through that filter. The ranges are read
+        # out of Tracker's own sample table rather than re-derived, and the
+        # filter applied to the file's bytes here: the header and patterns
+        # must still match to the byte, and the samples to the filter.
+        want = plain
+        if "tsp_pre" in P:
+            try:
+                os88marty.until(
+                    m, lambda mm: mm.readseg(pseg, P["tsp_pre"], 1)[0],
+                    "the samples filtered", poll=0.2, guest=20.0)
+            except os88marty.MartyError:
+                pass
+            if m.readseg(pseg, P["tsp_pre"], 1)[0]:
+                want = bytearray(plain)
+                tab = m.readseg(pseg, P["mp_smptab"], 31 * 12)
+                for i in range(31):
+                    sg, of, pl = (int.from_bytes(tab[i * 12 + k:i * 12 + k + 2],
+                                                 "little") for k in (0, 2, 4))
+                    at = (sg << 4) + of - (modseg << 4)
+                    want[at:at + pl] = os88spkfx.tracker_natural(bytes(want[at:at + pl]))
+                want = bytes(want)
+                say("  samples    high-passed in place, a bass or a drum "
+                    "squared up (no card, SPEC.md 45.25.4): compared "
+                    "through tools/os88spkfx.py's tracker_natural")
         got = b""
         while len(got) < len(plain):        # 116KB, in segment-sized reads
             k = min(0x8000, len(plain) - len(got))
             got += m.readseg(modseg + (len(got) >> 4), 0, k)
-        if got == plain:
+        if got == want:
             say("  bytes      ok  (all %d, byte for byte)" % len(plain))
         else:
-            bad = [i for i in range(len(plain)) if got[i] != plain[i]]
+            bad = [i for i in range(len(plain)) if got[i] != want[i]]
             fails.append("%d of %d bytes differ, first at %d (0x%X) - which "
                          "is %s the 64KB boundary"
                          % (len(bad), len(plain), bad[0], bad[0],

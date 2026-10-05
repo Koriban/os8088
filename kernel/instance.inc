@@ -189,11 +189,13 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw inst_ico_about
     db 1, 0                     ; About: stateless singleton
 %ifdef KERN_BIG                 ; SPEC.md 14.6: Timer and Bounce are kern_big's
-    dw app_tpl_timer,  app_tmr_task,    app_tmr_pool,  TMR_SIZE, app_tmr_kinit, app_ttl_timer
+    dw app_tpl_timer,  0,               app_tmr_pool,  TMR_SIZE, app_tmr_kinit, app_ttl_timer
     dw inst_ico_timer
-    db 10, 0                    ; Timer: 10 x 16-byte time state, one task each
-                                ; (8 of the 16 are the cells on screen, so a
-                                ; redraw can be the ones that moved - SPEC.md 14)
+    db 10, 0                    ; Timer: 10 x 16-byte time state and NO task -
+                                ; its clock is the window's one-shot timer
+                                ; (SPEC.md 13.9, 14.7). 8 of the 16 are the
+                                ; cells on screen, so a redraw can be the ones
+                                ; that moved (SPEC.md 14)
     dw app_tpl_bounce, app_bounce_task, app_ball_pool, 8,   app_bounce_kinit, app_ttl_bounce
     dw inst_ico_bounce
     db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
@@ -651,10 +653,7 @@ inst_restart_set:
     mov [bx+inst_restart], ax   ; this being the only WORD table among them
     clc                         ; inst_fhome_idx clobbers the flags
 .no:
-    pop di
-    pop bx
-    pop ax
-    ret
+    jmp short inst_parksafe_set.no  ; the same three pops, one routine up
 
 ; -----------------------------------------------------------------------------
 ; inst_park_req - ask every package worker to stand still, and wait for them
@@ -850,7 +849,6 @@ inst_svc_parked:
     jb .scan
     pop cx
     pop bx
-    clc
     ret
 .busy:
     pop cx
@@ -978,7 +976,11 @@ inst_rel_rec:
     call inst_idx               ; AL = the instance slot, once for the pair
     call snd_release_inst       ; "clobbers: nothing", so AL survives it
     pop ax
+%ifdef KERN_BIG
     jmp xm_release_rec          ; ...and every extended-memory block with it
+%else                           ; (kern_small has no store above 1MB and its
+    ret                         ; xm_release_rec is a bare `ret`: this IS it)
+%endif
 
 ; -----------------------------------------------------------------------------
 ; inst_of_win - find the instance owning a window
@@ -1093,7 +1095,8 @@ inst_alloc:
 ; This body was snd_req_inst and is instance.inc's now, because the question
 ; it answers - who is the kernel doing this on behalf of? - stopped being the
 ; sound tier's alone when the file API needed it (SPEC.md 19.2.1).
-; snd_req_inst is a jump to it, so SPEC.md 34.3's contract is untouched.
+; snd_req_inst is a second name for it - a label on the same instruction and
+; not a jump (size pass 5) - so SPEC.md 34.3's contract is untouched.
 ;
 ; The stamp is only the answer for a caller running INSIDE that callback, and
 ; the callback runs on one task. A worker that pre-empts it is a different
@@ -1111,6 +1114,7 @@ inst_alloc:
 ; the instance's. It is the FIRST thing a package runs and the natural place
 ; to size itself, which is what made it worth the four instructions.
 ; -----------------------------------------------------------------------------
+snd_req_inst:                   ; SPEC.md 34.3's name for the same question
 inst_caller:
     push bx
     mov bx, [snd_inst]          ; BL = the stamped instance, BH = the task
@@ -1559,11 +1563,10 @@ app_launch:
 
     call inst_find_kind         ; a true singleton: front the live one instead
     jc .failj                   ; only dying ones exist: retry later
-    call gfx_lock
-    call inst_restore           ; un-minimize and show, THE one copy of it -
-                                ; it banks BX, which neither this path nor
-                                ; ui_tm_open's reads afterwards
-    call gfx_unlock
+    mov bp, inst_restore        ; un-minimize and show, THE one copy of it -
+    call ui_lcall               ; it banks BX, which neither this path nor
+                                ; ui_tm_open's reads afterwards (BP is not
+                                ; this routine's record until .alloc)
     jmp .ok
 
 .alloc:
@@ -1669,9 +1672,10 @@ app_launch:
     xor bx, bx                  ; written next: a built-in kind's task is
                                 ; kernel code
     mov cx, SCH_BUILTIN_STK     ; ...and asks for a sleeper's stack (SPEC.md
-                                ; 8.7): the two built-ins that take a task are
-                                ; Timer and Bounce, and six Bounces at once
-                                ; measured +10..24 over the floor
+                                ; 8.7): Bounce is the one built-in that takes
+                                ; a task, and six at once measured +10..24
+                                ; over the floor. The Timer took one too until
+                                ; SPEC.md 14.7 measured it going through it
     call task_spawn             ; in AX, BX, CX, DX; out CF / AL = slot
     jc .rollback
     mov [ds:bp+I_TASK], al
@@ -2021,7 +2025,6 @@ inst_wchk:
     div cl                      ; AH = offset mod WIN_SIZE
     test ah, ah
     jnz .bad                    ; not record-aligned
-    clc
     jmp short .out
 .bad:
     stc
@@ -2147,7 +2150,6 @@ inst_pkg_spawn:
     mov ah, ch                  ; ...and the caller's AH out of its high half
     jc .out                     ; task table full: nothing was created
     mov [di+I_TASK], al         ; the record now owns the worker
-    clc
     jmp short .out
 .fail:
     stc
@@ -2248,7 +2250,7 @@ inst_launch_post:
     mov ah, 0
     inc ax
     mov [inst_launch], ax
-    mov byte [ui_post], 1       ; ...and SAY SO once (SPEC.md 13.13)
+    inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
     pop ax
     retf
 

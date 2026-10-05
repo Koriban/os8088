@@ -62,7 +62,7 @@ Read first: [§21 loader.inc](../SPEC.md#21-loaderinc); [§26 desk.inc — deskt
 | slot | call | takes |
 |---|---|---|
 | `0x03F2` | `OSAPI_PKG_START` | SI = a NUL-terminated 8.3 name, at most 12 characters, in YOUR segment... |
-| `0x03F8` | `OSAPI_DESK_SVC` | AL = 1 add / 0 withdraw; ES:SI = a 39-byte record in YOUR segment (add only): +0 12 the caption, NUL (<= 11 chars) +12 13 the 8.3 file the zone... |
+| `0x03F8` | `OSAPI_DESK_ITEM` | AL = 1 add / 0 remove add: ES:SI = a record in YOUR segment, COPIED, so it may be anything of yours... |
 | `0x03FE` | `OSAPI_PKG_REHOME` | DX = the segment your program part's IMAGE starts at (op_seg answers it), AX = the bytes available there... |
 
 ### Menus and the menu bar
@@ -164,6 +164,8 @@ Read first: [§18 disk.inc — floppy I/O (BIOS int 13h) + the FAT driver](../SP
 | `0x02B6` | `OSAPI_BATCH_END` | ...and the other end |
 | `0x0286` | `OSAPI_FILE_APPEND` | SI = NUL 8.3 name, ES:BX = bytes, CX = count (>= 1); out CF=0 AX=0, else AX = FERR_*... |
 | `0x028C` | `OSAPI_FILE_READ_AT` | SI = name, ES:BX = buffer, CX = its capacity in BYTES, DX:AX = the offset to read from... |
+| `0x0455` | `OSAPI_FILE_READ_SEQ` | A STREAMING READ (SPEC.md 18.4.8, KERN_BIG; the small kernel answers CF=1 FERR_NAME)... |
+| `0x0461` | `OSAPI_FILE_WRITE_SEQ` | A STREAMING APPEND (SPEC.md 18.4.9, KERN_BIG; the small kernel answers CF=1 FERR_NAME)... |
 | `0x03D9` | `OSAPI_FILE_FIND_RAW` | OSAPI_FILE_FIND, with +18 the size the file OCCUPIES rather than the one it expands to (SPEC.md 20.14.3)... |
 | `0x0292` | `OSAPI_FILE_MKDIR` | SI = a NUL 8.3 name; creates a FOLDER in your current directory (SPEC.md 18.5)... |
 | `0x0385` | `OSAPI_FILE_RMDIR` | SI = a NUL 8.3 name in your current directory, AL = 0 remove it only if it is EMPTY / non-zero remove it AND EVERYTHING UNDER IT (SPEC.md 18.6)... |
@@ -220,7 +222,7 @@ Read first: [§34 snd.inc — the sound layer](../SPEC.md#34-sndinc--the-sound-l
 |---|---|---|
 | `0x00CD` | `OSAPI_SND_CAPS` | out AX = caps word (SND_CAP_*), BL = where a tone goes right now: 0 the speaker / 1 a sound driver's sink (34.8), DX bit 0 = the speaker is present... |
 | `0x00D3` | `OSAPI_SND_TONE` | AX = freq Hz (0 = off), CX = duration ticks (0 = until off), DL = priority (default 0x40); out CF=1 refused, else AL = owner generation |
-| `0x00DB` | `OSAPI_SND_PLAY` | PCM_EXCL clip (SPEC.md 34.4): ES:SI = your 8-bit unsigned samples, CX = count, DX = rate 4,679..16,124 Hz; out AX = 0 ok / 1..5 err... |
+| `0x00DB` | `OSAPI_SND_PLAY` | THE PCM_EXCL CLIP'S DOOR (SPEC.md 34.4). PLAY A CLIP WITH apps/os88pcm.inc's os88pcm_play, which is this door's one caller and has the contract this... |
 | `0x00E3` | `OSAPI_SND_FM` | FM verbs (SPEC.md 34.2), live only while a sound DRIVER is loaded (SPEC.md 51.4) - CF=1 when none is... |
 | `0x00EA` | `OSAPI_SND_STREAM` | PCM_BG streams + staging: the driver's too, and likewise CF=1 without one... |
 
@@ -256,6 +258,7 @@ Read first: [§53 fsx.inc — fullscreen exclusive](../SPEC.md#53-fsxinc--fullsc
 
 | slot | call | takes |
 |---|---|---|
+| `0x045B` | `OSAPI_FSX_SPK` | THE SPEAKER AT A SAMPLE RATE (SPEC.md 34.11), from INSIDE YOUR OWN FSXF_RATE BRACKET only (53.2.2) - PCM with no card... |
 | `0x00F7` | `OSAPI_FULLSCREEN` | AL = 1 enter (BX=win ptr) / 0 exit; caller holds the gfx lock (window callbacks do); out CF=1 enter refused (screen already owned)... |
 | `0x022F` | `OSAPI_FSX_CAPS` | in BX = the window to ask ABOUT (0 = whatever is frontmost)... |
 | `0x0235` | `OSAPI_FSX_RUN` | the bracket (SPEC.md 53.1). In AX = a near proc in your image, BX = your window ptr, CX = flags (bit 0 = FSXF_KEEPWORKER, bit 1 = FSXF_FASTTICK... |
@@ -285,7 +288,7 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 
 | include | SPEC | what it gives you |
 |---|---|---|
-| `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in place of a caption, drawn in one write with no ground fill, are `%define OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a package with no check box or radio sheds that code with `%define OS88UI_NOGLYPH`. |
+| `apps/os88ui.inc` | §13, 75 | Buttons, check boxes, radio dots, scroll bars, group boxes, the standard alert, the standard About card and the drop-down. Opt into the alert with `%define OS88UI_ALERT`, the About card with `%define OS88UI_ABOUT`, the scroll bar with `%define OS88UI_SCROLL` and its thumb-drag half with `%define OS88UI_SBDRAG`, and the drop-down - one pick out of a short list, a Macintosh popup's gesture - with `%define OS88UI_DROP` (SPEC.md 13.14). Buttons that carry an ICON_DRAW image in place of a caption, drawn in one write with no ground fill, are `%define OS88UI_BIMG` and the `OS88UI_IMG` flag (SPEC.md 13.8.9); a button whose face the PACKAGE paints, keeping the library's press gesture, is `%define OS88UI_BOWN` and the `OS88UI_OWN` flag (SPEC.md 13.8.10); a package with no check box or radio sheds that code with `%define OS88UI_NOGLYPH`. |
 | `apps/os88alt.inc` | §11.2.1.1 | Alt+Enter, the full-screen key, for a package on SPEC.md 53's BRACKET - where no event is dispatched, so the kernel's synthesised keystroke cannot reach you and your own int 16h poll cannot see the key either. `os88alt_edge` asks the key-state map and finds the edge in it. A package on SPEC.md 11.2's LATCH needs none of this file: one `cmp ax, KEY_ALTENTER` in its W_ONKEY is both directions. Both want `OS88_ALTENTER_ARM` (apps/os88api.inc) in the entry proc, without which the chord is silently dead. |
 | `apps/os88line.inc` | §83 | A one-line text field: caret, horizontal scroll, focus, click-to-position and the editing keys. The caller owns a 20-byte block. |
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
@@ -295,8 +298,13 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88chartovl.inc` | §82.16 | The resident half of the CHART.OVL split: loader, verb dispatch and the shims os88chart.inc calls back out through. Only a package that %defines CH_OVERLAY needs it - today that is SHEET alone. |
 | `apps/os88fp.inc` | §84 | IEEE-754 double arithmetic in software, with an 8087 path chosen at run time. Parse, format, add, subtract, multiply, divide, compare, sqrt, trunc, floor, round, and ln/exp/pow (84.8). |
 | `apps/os88img.inc` | §93 | Picture decoders: .PIX, .BMP and .PCX into the packed 4bpp that OSAPI_GFX_BLIT4 takes. Owns no state - the caller passes a block in SI. 8-bit files are refused by name, not approximated. |
+| `apps/os88spkfx.inc` | §34.11.9 | The SPEAKER SHAPER, beside os88spk.inc: 8-bit PCM made into pulse counts a 5150's cone can play - a first-difference pre-emphasis, a leveller chosen per span from the peak held over three spans, a soft clip and the carrier put away in the quiet, all one `xlatb` and one subtract a sample. `os88spkfx_init` builds the level family in your own segment after `os88spk_init`; `os88spkfx_level` decides a span, `os88spkfx_emit` translates it into the ring in any number of pieces. tools/os88spkfx.py is its reference to the byte. |
+| `apps/os88spkfx_t.inc` | §34.11.9 | os88spkfx.inc's tables - the soft clip's curve, the level gains, the peak-to-level table - GENERATED by `tools/os88spkfx.py gen`; never edited by hand, and t_spkfx holds it to the model. |
+| `apps/os88spk.inc` | §34.11 | PCM through the PC SPEAKER, with no card, from inside your own FSXF_RATE bracket: the ring player on OSAPI_FSX_SPK. The ring is the external ring's layout (SPEC.md 34.5.3), so a player that feeds a Sound Blaster feeds this the same way, but it holds PWM COUNTS - `os88spk_init` writes the table a sample goes through. `os88spk_go` plays, `os88spk_stop` pauses or stops. It costs the machine an interrupt a sample (SPEC.md 34.11 has the measured share). |
+| `apps/os88pcm.inc` | §34.4 | A PWM CLIP through the PC speaker on the desktop, run to completion: `os88pcm_play` takes ES:SI, CX samples and a rate and answers AX = 0 or 1..5, the contract OSAPI_SND_PLAY had before it became this player's door (grant, release, the scheduler lock and the click's drain). It FREEZES the desktop for the clip; a click skips it. UI task only. 256 bytes of your image are its rescale table. |
 | `apps/os88sock.inc` | §20.11, 62.11, 72 | Finding the socket driver: `net_find` answers CF=1 when neither ETHER.DRV nor NET.DRV is loaded and sets `NET_CLASS` otherwise, so every `OSAPI_DRV_CALL` after it addresses the right class. The verbs themselves are `drivers/net/netpkg.inc`'s. |
 | `apps/os88gfx.inc` | §5.12 | The EMBEDDABLE graphics library: drawing code that lives in the PACKAGE rather than in the kernel, taken one capability at a time. `%define GFXE_BAND` composes into your own 1bpp band and commits it with one `OSAPI_GFX_BLIT1` - the pixel primitive is a bit-set, not a slot - and `%define GFXE_LINE` adds the Bresenham, which implies the band because a line needs somewhere to land. An app-side rasteriser is FASTER than the slot (24.6 us a pixel against `gfx_line`'s 31.6 with the arrival removed). |
+| `apps/os88rseq.inc` | §18.4.8.1 | `os88_rseq`: `OSAPI_FILE_READ_AT`'s registers plus a 16-byte cursor at `DS:DI`, served by `OSAPI_FILE_READ_SEQ` - one FAT link a chunk where `READ_AT` walks the chain from the front every call. The offset stays yours and a cursor whose offset differs is re-seeded, so a seek needs nothing; the small kernel's `FERR_NAME` is retried as `READ_AT`. Zero the cursor with `os88_rseq_new` whenever the FILE changes. |
 | `apps/os88pit.inc` | §72.15.1 | `pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, good for an hour before it wraps. Sub-tick timing for a profiler. |
 | `apps/os88type.inc` | §6.3, 6.5 | Proportional type: composes a row of glyphs from an `.F88` face into a 1bpp band in your own RAM and puts it up with one `OSAPI_GFX_BLIT1`. |
 | `apps/os88parts.inc` | §20.12 | Package parts: named, sized parts inside one `.O88` - claimed, loaded on demand, optionally into XMS, and refused with an arithmetic the package states itself. A package over 64KB is still a package. |
@@ -310,6 +318,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 
 | package | source | SPEC | ships |
 |---|---|---|---|
+| 1942 | `apps/1942/1942.asm` | §101 | yes |
 | APPLE2 | `apps/apple2/apple2.asm` | `docs/APPLE2-SPEC.md` | yes |
 | ARKANOID | `apps/arkanoid/arkanoid.asm` | §44 | yes |
 | AUDIO PLAYER | `apps/audio/audio.asm` | §86 | yes |
@@ -323,14 +332,18 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | DOS | `apps/dos/dos.asm` | §96 | no |
 | DOS | `apps/dos/dosload.asm` | §96 | no |
 | DOTDEL | `apps/dotdel/dotdel.asm` | §93 | yes |
+| DRMARCO | `apps/drmario/drmario.asm` | §100 | no |
+| EXCITEBIKE | `apps/excitebike/excitebike.asm` | §102 | no |
 | FONT VIEWER | `apps/fontview/fontview.asm` | §90 | yes |
 | FPTEST | `apps/fptest/fptest.asm` |  | no |
 | FRACTAL | `apps/fractal/fractal.asm` | §40 | yes |
 | FROTZ | `apps/frotz/frotz.asm` | §61 | yes |
 | FTPD | `apps/ftpd/ftpd.asm` | §77 | yes |
+| GORILLAS | `apps/gorillas/gorillas.asm` | §99 | yes |
 | HELLO | `apps/hello/hello.asm` | §27 | no |
 | IMGTEST | `apps/imgtest/imgtest.asm` |  | no |
 | LOOM | `apps/loom/loom.asm` | `docs/WEAVE-SPEC.md` | yes |
+| MIDIRack | `apps/midirack/midirack.asm` | §105 | yes |
 | MINES | `apps/mines/mines.asm` | §23 | yes |
 | MISSILE | `apps/missile/missile.asm` | §48 | yes |
 | MODPLUG | `apps/modplug/modplug.asm` | §56 | **retired** |
@@ -342,6 +355,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | Pixelstein 3D | `apps/pixelstein/pxgame.asm` | §97 | no |
 | Pixelstein 3D | `apps/pixelstein/pxstein.asm` | §97 | yes |
 | RECORDER | `apps/recorder/recorder.asm` | §35 | no |
+| REDLINE | `apps/redline/redline.asm` | §103 | yes |
 | RUNCPM | `apps/runcpm/runcpm.asm` | §74 | yes |
 | SCRIBE | `apps/scribe/scribe.asm` | §95 | no |
 | SHEET | `apps/sheet/sheet.asm` | §81 | yes |
@@ -355,6 +369,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | TRACKER | `apps/tracker/tracker.asm` | §45 | yes |
 | TaskMgr | `apps/taskmgr/taskmgr.asm` | §28 | yes |
 | The Wire | `apps/thewire/thewire.asm` | §92 | no |
+| Video Player | `apps/video/video.asm` | §98 | yes |
 | WEAVE | `apps/weave/weave.asm` | `docs/WEAVE-SPEC.md` | yes |
 | WIRE | `apps/wire/wire.asm` | §78 | no |
 | WORD | `apps/word/wdload.asm` | §68 | no |
@@ -462,18 +477,25 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 95 | SCRIBE (`apps/scribe/`) — the fork of WORD |
 | 96 | DOS — running `.COM` and `.EXE` programs (`apps/dos/`) |
 | 97 | PIXELSTEIN 3D — a raycast shooter in a foreign mode (`apps/pixelstein/`) |
+| 98 | VIDEO PLAYER — full-motion video on a 4.77 MHz 8088 (`apps/video/`, `.V88`) |
+| 99 | Gorillas (`apps/gorillas/gorillas.asm`) |
+| 100 | DrMarco (`apps/drmario/drmario.asm`) |
+| 101 | 1942 — native vertical shooter (`apps/1942/`) |
+| 102 | Excitebike — native motocross racer (`apps/excitebike/excitebike.asm`) |
+| 103 | REDLINE — CPU and graphics benchmarks (`apps/redline/`) |
+| 105 | MIDIRack — a MIDI file player (`apps/midirack/`) |
 
 ## docs/
 
 **The DIRECTORY says what a document is, and the filename does not.** `docs/` describes how the system works today - instructions, contracts and maintained reference. Everything under `docs/plans/` is a design record: what was considered, including the options that were rejected, and it is never a description of what shipped - SPEC.md is the current state and these are how it got there. `docs/plans/completed/` is the subset whose work has landed; what stays directly in `docs/plans/` still has work open. `docs/history/` is superseded or closed - a record of a moment that has passed, and true of no tree you can check out. `docs/reports/` is a MEASUREMENT taken at a point in time: true of the tree it was taken on, quotable with its date and its box, and never to be read as a description of today.
 
-*How it works today - `docs/` (26):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `FLOPPY-WRITING.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `IMGCONV-PLAN.md`, `KERNEL-MEMORY.md`, `KODAK-EXAMPLE.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `PRINT-PLAN.md`, `README.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`
+*How it works today - `docs/` (27):* `APPLE2-PORT-PLAN.md`, `APPLE2-SPEC.md`, `BIFF-NOTES.md`, `C-TOOLCHAIN.md`, `C64-SPEC.md`, `DOS-DEBUGGING.md`, `FIELD-MACHINES.md`, `FIELD-NOTES.md`, `FLOPPY-WRITING.md`, `HEAP-CLAIMS.md`, `HERCULES-TESTING.md`, `IMAGER.md`, `IMGCONV-PLAN.md`, `KERNEL-MEMORY.md`, `KODAK-EXAMPLE.md`, `LIVE-MEDIA.md`, `MARTYPC-DEBUG.md`, `PACCMAN-PORT-PLAN.md`, `PRINT-PLAN.md`, `README.md`, `REDLINE.md`, `TELNET-PLAN.md`, `TESTING.md`, `UPSTREAM.md`, `WEAVE-SPEC.md`, `WIRE-PLAN.md`, `WRITING-TESTS.md`
 
-*Plans with work still open - `docs/plans/` (34):* `ARTFUL-PERF-PLAN.md`, `BUTTON-GESTURE-PLAN.md`, `CGA-SNOW-PLAN.md`, `DISK-CPU-PLAN.md`, `DOS-CABLE-NET-PLAN.md`, `DOS-EXEC-PLAN.md`, `HANDOFF-STOP-DETECTION.md`, `HDD-RESIDENT-PLAN.md`, `HEAP-UNPIN-PLAN.md`, `ICON-IDENTITY-PLAN.md`, `KERN-DOS-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LISTING-HOME-PLAN.md`, `MODULE-SELFCONTAIN-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `NAV-COST-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PATH-WAVE-PLAN.md`, `PIXELSTEIN-PLAN.md`, `REGION-SELF-COMPACT-PLAN.md`, `SCRIBE-OVL-PLAN.md`, `SHEET-GAPS-PLAN.md`, `SHEET-MACRO-PLAN.md`, `SHEET-PROPORTIONAL-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `UI-MENU-ELEMENT.md`, `UI-TEXTFIELD-PLAN.md`
+*Plans with work still open - `docs/plans/` (42):* `ARTFUL-PERF-PLAN.md`, `ASSOC-FIND-PLAN.md`, `BUTTON-GESTURE-PLAN.md`, `CGA-SNOW-PLAN.md`, `DISK-CPU-PLAN.md`, `DOS-CABLE-NET-PLAN.md`, `DOS-EXEC-PLAN.md`, `EXCITEBIKE-PLAN.md`, `GORILLAS-PARITY-PLAN.md`, `HANDOFF-STOP-DETECTION.md`, `HDD-RESIDENT-PLAN.md`, `HEAP-UNPIN-PLAN.md`, `ICON-IDENTITY-PLAN.md`, `KERN-DOS-PLAN.md`, `KERN-SMALL-CUT-PLAN.md`, `KERN-SMALL-NOCOMPACT.md`, `KERNEL-BYTE-QUEUE.md`, `LAST-DROP-BYTES.md`, `LAST-DROP-PERF.md`, `LISTING-HOME-PLAN.md`, `MARTYPC-PLAN.md`, `MODULE-SELFCONTAIN-PLAN.md`, `MONO-RECLAIM-PLAN.md`, `MOUSE-BOOT-FREEZE-PLAN.md`, `NAV-COST-PLAN.md`, `O88-COMPRESSION-PLAN.md`, `PARTS-REHOME-PLAN.md`, `PATH-WAVE-PLAN.md`, `PIXELSTEIN-PLAN.md`, `REGION-SELF-COMPACT-PLAN.md`, `SCRIBE-OVL-PLAN.md`, `SHEET-GAPS-PLAN.md`, `SHEET-MACRO-PLAN.md`, `SHEET-PROPORTIONAL-PLAN.md`, `SKIES-FRAME-PLAN.md`, `SOAK-PARALLEL.md`, `SPEAKER-LEVELLER-NEXT.md`, `STREAM-WRITER-PLAN.md`, `UI-MENU-ELEMENT.md`, `UI-TEXTFIELD-PLAN.md`, `UPSTREAM-MERGE-20261005.md`, `VIDEO-PLAN.md`
 
-*Design records for what shipped - `docs/plans/completed/` (74):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DISK-PERF-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-CARVE-COMPACT.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-ICOSHED-DOSGLYPH.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE-P5.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SKIES-ENGINE-SOUND.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-CARET-OVERLAY-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
+*Design records for what shipped - `docs/plans/completed/` (84):* `ASSOC-PLAN.md`, `AUDIO-PLAN.md`, `BOOT-LADDER-PLAN.md`, `BOOT-PERF-PLAN.md`, `BROWSER-PLAN.md`, `C64-PORT-PLAN.md`, `CTRL-GLYPH-PLAN.md`, `CURSOR-PLAN.md`, `DBLCLICK-PLAN.md`, `DEBUG-PLAN.md`, `DESK-CLIP-PLAN.md`, `DESKTOP-SHORTCUTS-PLAN.md`, `DISK-PERF-PLAN.md`, `DOS-STREAM-PLAN.md`, `DUAL-DISPLAY-PLAN.md`, `DUAL-DISPLAY-VGA.md`, `EGA-PLAN.md`, `FROTZ-PLAN.md`, `FSX-PLAN.md`, `FTP-PERF.md`, `GFX-EMBEDDABLE-PLAN.md`, `GFX-FSX-PLAN.md`, `GFX-REWORK-PLAN.md`, `HANDOFF-CARVE-COMPACT.md`, `HANDOFF-DISK-IO.md`, `HANDOFF-DOTDEL-TEXT.md`, `HANDOFF-FONTCHAR-SEAM.md`, `HANDOFF-ICOSHED-DOSGLYPH.md`, `HANDOFF-KERNEL-SIZE-P2.md`, `HANDOFF-KERNEL-SIZE-P3.md`, `HANDOFF-KERNEL-SIZE-P4.md`, `HANDOFF-KERNEL-SIZE-P5.md`, `HANDOFF-KERNEL-SIZE-P6.md`, `HANDOFF-KERNEL-SIZE-P7.md`, `HANDOFF-KERNEL-SIZE-P9.md`, `HANDOFF-KERNEL-SIZE.md`, `HANDOFF-PAINT-BLANK-LOAD.md`, `HANDOFF-REDRAW.md`, `HANDOFF-SOUND-MEMORY.md`, `HANDOFF-V20-FREEZE.md`, `HANDOFF.md`, `HDD-PLAN.md`, `HDD-SPLIT-PLAN.md`, `HEAP-COMPACTION-PLAN.md`, `KERN-SMALL-CUT-BUILT.md`, `KERN-SMALL-MODULE-SPLIT.md`, `LINE-PERF-PLAN.md`, `MEMORY-PLAN.md`, `MOUSEUP-PLAN.md`, `NET-PLAN.md`, `NET-STACK-PLAN.md`, `NOTEPAD-NOTES.md`, `O88-MULTISEG-PLAN.md`, `ONDEMAND-PLAN.md`, `PAINT-1BPP-PLAN.md`, `PAINT-NOTES.md`, `PAINT-STROKE-PLAN.md`, `PROXY-PLAN.md`, `RUNCPM-PORT-PLAN.md`, `SAVEUNDER-LIVE-PLAN.md`, `SCHED-IDLE-PLAN.md`, `SDK-INCLUDE-SIZE.md`, `SETTINGS-COST.md`, `SKIES-ENGINE-SOUND.md`, `SNAP-PLAN.md`, `SNAPSHOT-PLAN.md`, `SPEAKER-PCM-HANDOFF.md`, `SPEAKER-PCM-PLAN.md`, `STACK-SLOTS-PLAN.md`, `STKBALANCE-KERNEL.md`, `TEXT-PLAN.md`, `TITLE-PLAN.md`, `TOAST-PLAN.md`, `UI-FREEZE-PLAN.md`, `UIHELPERS-PLAN.md`, `UNIFIED-DESKTOP-PLAN.md`, `VMMOUSE-PLAN.md`, `WEAVE-PLAN.md`, `WINDOW-ANIM-PLAN.md`, `WINDOW-SIZING-PLAN.md`, `WMEVENT-PLAN.md`, `WORD-CARET-OVERLAY-PLAN.md`, `WORD-PLAN.md`, `XMEM-DRIVER-PLAN.md`
 
 *Superseded and closed - `docs/history/` (9):* `DUAL-DISPLAY-BUG2.md`, `HANDOFF-TESTS-A-STRADDLE.md`, `HANDOFF-TESTS-B-LAUNCH.md`, `HANDOFF-TESTS-C-FRESH.md`, `HANDOFF-TESTS.md`, `KERN-SPLIT-PLAN.md`, `SOUND-PLAN.md`, `TRACKER-PLAN.md`, `WM-ARTIFACTS.md`
 
-*Measurements, each true of the tree it was taken on - `docs/reports/` (27):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOCK-RESIDENT-COST-2026-09-17.md`, `DOS-GAMES-2026-09-16.md`, `DOS-INT21-REGISTERS-2026-09-15.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GFXBENCH-SIZE-PASS-2026-09-16.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERN-DOS-BUDGET-2026-09-13.md`, `KERN-DOS-PART-COST-2026-09-14.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-17.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md`, `MODULE-RESIDENT-DATA-2026-09-12.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `PXS-FRAME-2026-09-14.md`, `PXS-FRAME-2026-09-21.md`, `PXS-FRAME-2026-09-22.md`, `PXS-FRAME-2026-09-23.md`, `SBRATE-COMMIT-COST-2026-09-11.md`, `SEAM-DRAG-CRASH-2026-09-20.md`, `SHEET-EXCEL-LOOK-2026-09-22.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `TIER-TIMINGS-2026-09-07.md`, `TRACKER-XT-SPECTRUM-2026-09-24.md`
+*Measurements, each true of the tree it was taken on - `docs/reports/` (36):* `BUSY-CURSOR-COST-2026-09-10.md`, `CYCLONE-STACK-2026-09-10.md`, `DOCK-RESIDENT-COST-2026-09-17.md`, `DOS-GAMES-2026-09-16.md`, `DOS-INT21-REGISTERS-2026-09-15.md`, `DOTDEL-FRAME-PROFILE-2026-09-09.md`, `GFXBENCH-SIZE-PASS-2026-09-16.md`, `GLYPH-AND-LINE-COST-2026-09-10.md`, `KERN-DOS-BUDGET-2026-09-13.md`, `KERN-DOS-PART-COST-2026-09-14.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-07.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-17.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-25.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-09-28.md`, `KERNEL-BYTES-SINCE-SQUASH-2026-10-01.md`, `MODULE-RESIDENT-DATA-2026-09-12.md`, `PR-CYCLE-ACCOUNTING-2026-09-11.md`, `PXS-FRAME-2026-09-13.md`, `PXS-FRAME-2026-09-14.md`, `PXS-FRAME-2026-09-21.md`, `PXS-FRAME-2026-09-22.md`, `PXS-FRAME-2026-09-23.md`, `SBRATE-COMMIT-COST-2026-09-11.md`, `SEAM-DRAG-CRASH-2026-09-20.md`, `SHEET-EXCEL-LOOK-2026-09-22.md`, `SKIES-FRAME-DELTA-2026-09-10.md`, `STKDIAG-PC5150-2026-09-10.md`, `STREAM-WRITER-AB-2026-09-29.md`, `STREAM-WRITER-SIZE-2026-09-30.md`, `TIER-TIMINGS-2026-09-07.md`, `TRACKER-XT-SPECTRUM-2026-09-24.md`, `VIDDISK-ST225-2026-09-27.md`, `VIDEO-86BOX-286-2026-09-26.md`, `VIDEO-86BOX-ST11R-2026-09-25.md`, `VIDEO-PROFILE-2026-09-27.md`, `VIDEO-W0-2026-09-25.md`
 

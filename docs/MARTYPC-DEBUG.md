@@ -1209,6 +1209,7 @@ this tree), `glabios_pc`/`glabios_xt` are bundled with MartyPC.
 | `os8088_xt_vga_mda` / `os8088_xt_vga_herc` | a VGA beside an MDA / a Hercules — the other period two-card pair (docs/plans/completed/DUAL-DISPLAY-VGA.md). The apertures are disjoint (A0000+B8000 against B0000) so no patch is needed and block order decides nothing. The VGA is declared first, so it is MartyPC's card 0 |
 | `os8088_5150_sb` / `_sb_gla` | an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7). `_sb_gla` is the one a container can run; not a disk instrument |
 | `os8088_5150_sbonly` | a DSP at 0x220 and **nothing at 0x388** — SPEC.md §51.3.1's jumpered-off-FM case; `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
+| `os8088_5150_herc_mpu_720_gla` | a Hercules 5150 whose ONLY card is an **MPU-401** at 330h — patch 09's recording one, which keeps every byte it is sent for the debug server's `midi` command (`{"cmd": "midi", "reset": true}` answers `bytes` in hex, `us` per byte and `uart`). SOUND.DRV attaches on it alone (SPEC.md §34.13); boot `make miditest`'s disk, whose SYSTEM.CFG asks for the driver the kernel's boot sniff cannot see a reason to load |
 | `os8088_5150_sb_128k` / `_sb_256k` | `_sb` at 128 KB and 256 KB: SPEC.md §34.6's two claims are sized against the small one; Tracker cannot run at 128 KB at all, so the 256 KB one decides whether a MOD player's grants fit. IBM ROM, so neither boots in a container |
 | `os8088_5150_cga_128k` | **the 128 KB floor machine** — `kern_small`'s own (`make small && python3 tests/small128.py`). GLaBIOS |
 | `os8088_5150_cga_gla_256k` | 256 KB on GLaBIOS: the Weave family's floor (WEAVE-SPEC §1.4, `tests/weaveone.py`) |
@@ -1549,7 +1550,12 @@ It models the reset handshake, `0xE1` version, `0xF2` forced IRQ (how a
 driver *finds* its line), `0x40` time constant, `0x48` block length,
 `0x14`/`0x24` single-cycle and `0x1C`/`0x2C` auto-init in both directions,
 `0xD0`/`0xD4` pause and continue, `0xD1`/`0xD3` speaker and `0xDA`
-exit-at-the-block-boundary. Reading base+0xE acknowledges the 8-bit IRQ, and
+exit-at-the-block-boundary - and, since patch 06, **`0x7D` auto-init 4-bit
+ADPCM with a reference byte**, decoded with DOSBox's tables, which are the
+ones `tools/os88vid.py` encodes against (SPEC.md 98.1.1.1). That makes the
+Video Player's ADPCM4 path testable here (`tests/vidsound.py --audio
+adpcm4`), but only against itself: 86Box's card and a real one are the
+independent check of the tables. Reading base+0xE acknowledges the 8-bit IRQ, and
 a block completing while the previous interrupt is still unacknowledged is
 counted as a **missed ack** rather than hidden. It pulls bytes through the
 real 8237 (`do_dma_read_u8`, the FDC's call) and resamples through a carried

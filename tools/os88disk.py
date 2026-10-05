@@ -349,14 +349,20 @@ A_HIDDEN = 0x02
 A_SYS    = 0x04
 A_ARCH   = 0x20
 A_SYSTEM = A_RDONLY | A_HIDDEN | A_SYS      # KERNEL.SYS and every *.DRV
-A_LOCKED = A_RDONLY | A_ARCH                # visible, but not yours to delete
+# ...and what the same two classes are on a HARD DISK (--hdd), which is what
+# os8088's own installer writes them as (SPEC.md 52.10.15): OSAPI_FILE_WRITE_SYS
+# creates hidden + system and the commit ORs archive, OSAPI_FILE_WRITE creates
+# archive and nothing else. NEITHER is read-only, and that is not a nicety -
+# see sys_attr.
+A_HDDSYS = A_HIDDEN | A_SYS | A_ARCH
 
 
 ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
 ASC_MAGIC = b"OS88AC"
 ASC_VER   = 2                # rows carry the glyph column (SPEC.md 54.3.2);
-                             # the kernel reads version 1 too, nothing
-                             # writes it any more
+                             # the ONLY version the kernel reads - it
+                             # dropped version 1 in kernel size pass 5, so
+                             # any other byte here is a cold cache
 ASC_HDR   = 16
 ASC_ROW   = 88               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
                              # + document glyph 8
@@ -470,25 +476,38 @@ def build_assoc(groups):
     return buf, rowdirs
 
 
-def sys_attr(name11: bytes, boot: bool) -> int:
+def sys_attr(name11: bytes, boot: bool, hdd: bool = False) -> int:
     """An entry's attributes. Only a SYSTEM disk locks anything down: a
     data disk is the user's and everything on it is an ordinary file.
 
     The rule is by EXTENSION so it needs no maintenance as drivers are added:
-    a `.DRV` on the boot disk is kernel machinery and disappears, anything
-    else is visible but read-only, because the boot disk holds nothing a user
-    should be deleting by accident. SYSTEM.CFG is not here - the kernel
-    creates that one itself, and stamps it the same way (SPEC.md 51.5).
+    a `.DRV` on the boot disk is kernel machinery and disappears, and so does
+    KERNEL.SYS (build() stamps that one itself). SYSTEM.CFG is not here - the
+    kernel creates that one itself, and stamps it the same way (SPEC.md 51.5).
 
-    It is by DISK and by name, never by directory: TASKMGR.O88 moved from the
-    boot disk's root into SYSTEM/ (SPEC.md 28.3) and is the same file it was,
-    so the stamp follows it rather than staying behind with the folder it
-    left."""
+    **EVERYTHING ELSE IS AN ORDINARY FILE, on the boot disk too** (SPEC.md
+    19.6). It used to be read-only + archive - "the boot disk holds nothing a
+    user should be deleting by accident" - and that was the wrong owner: the
+    packages in APPS/ and GAMES/, SYSTEM/DOS/'s tools, the faces and the
+    manual are the user's to delete when they rework their own system disk,
+    and a lock on them stopped a hard-disk upgrade dead (SPEC.md 52.10.15.1).
+    Only what would unboot the disk is locked.
+
+    **A HARD DISK's system files are not read-only either** (`hdd`, SPEC.md
+    52.10.15.1): it is stamped exactly as os8088's own installer would have
+    written it, so a host-built volume and an installed one cannot be told
+    apart. The read-only stamp is what stopped a keep-install there - the
+    kernel's replace refuses a read-only entry (`dskw_pmask`) and forgives it
+    only on a file already wearing hidden + system (19.6.2), so the first
+    ordinary file the walk reached answered FERR_PROT: a VIDDEMO disk stopped
+    on `ARCHIVO.F88` with the new kernel already committed."""
     if name11 == ASC_NAME:
         return A_HIDDEN | A_SYS     # the kernel rewrites it, so not read-only
     if not boot:
         return A_ARCH
-    return A_SYSTEM if name11.endswith(b"DRV") else A_LOCKED
+    if not name11.endswith(b"DRV"):
+        return A_ARCH
+    return A_HDDSYS if hdd else A_SYSTEM
 
 
 # THE COMPRESSION HINT (docs/plans/O88-COMPRESSION-PLAN.md 15). A FAT12/16 entry is
@@ -868,6 +887,22 @@ def build(args) -> int:
         if len(mbr) != HP_TBL:
             fail(f"{args.mbr} is {len(mbr)} bytes, not {HP_TBL}")
         spt, heads, tot, media = HDD_SPT, HDD_HEADS, HDD_PSECS, 0xF8
+        hcyls, hbase, htot = HDD_CYLS, HDD_BASE, HDD_TOT
+        if args.geometry:
+            # A GEOMETRY OF ITS OWN (the demo video disks, an ST-238R on an
+            # ST11R): the partition from the MBR's own track to the end, as
+            # drivers/hdd/part.inc and tools/os88hdd.py lay one out, capped
+            # at the kernel's 65,535-sector volume on a track boundary
+            try:
+                hcyls, heads, spt = parse_geometry(args.geometry)
+            except ValueError as e:
+                fail(str(e))
+            if hcyls is None:
+                fail("--hdd --geometry wants C/H/S")
+            hbase, htot = spt, hcyls * heads * spt
+            tot = htot - hbase
+            if tot > 65535:
+                tot = (65535 // spt) * spt
     else:
         spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
         if args.fatcap:
@@ -990,7 +1025,7 @@ def build(args) -> int:
     for key in dirs:
         shown = len(kids[key]) + sum(
             1 for n, _, _ in groups[key]
-            if not sys_attr(n, bool(boot)) & A_HIDDEN)
+            if not sys_attr(n, bool(boot), args.hdd) & A_HIDDEN)
         if shown > cap and not args.deep_folders:
             fail(f"{shown} listed entries in folder {key}; the kernel "
                  f"lists at most {cap} per directory (--deep-folders "
@@ -1000,7 +1035,7 @@ def build(args) -> int:
     # against it: a hidden system file (SPEC.md 19.6) never takes a listing
     # slot. It still takes a directory slot, which is the second check.
     shown = len(root_dirs) + sum(1 for n, _, _ in root_files
-                                 if not sys_attr(n, bool(boot)) & A_HIDDEN)
+                                 if not sys_attr(n, bool(boot), args.hdd) & A_HIDDEN)
     if shown > cap:
         fail(f"{shown} listed root entries; the kernel lists "
              f"at most {cap} per directory")
@@ -1148,7 +1183,7 @@ def build(args) -> int:
             slot += 1
         for i, (name11, body, _) in enumerate(groups[k]):
             off = (slot + i) * 32
-            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot),
+            raw[off:off + 32] = dirent(name11, sys_attr(name11, boot, args.hdd),
                                        chains[at + i][0], len(body), body)
         at += len(groups[k])
         put(dir_chains[k], bytes(raw))
@@ -1158,7 +1193,8 @@ def build(args) -> int:
     slot = 1                                     # kernel filters it, so the
     if boot:                                     # first listed entry is 0
         root[slot * 32:(slot + 1) * 32] = dirent(
-            KERNEL_NAME, A_SYSTEM, kchain[0], len(kern))
+            KERNEL_NAME, A_HDDSYS if args.hdd else A_SYSTEM, kchain[0],
+            len(kern))
         slot += 1
     for k in root_dirs:
         root[slot * 32:(slot + 1) * 32] = dirent(
@@ -1167,7 +1203,7 @@ def build(args) -> int:
     for i, (name11, body, _) in enumerate(root_files):
         chain = chains[len(files) - len(root_files) + i]
         root[slot * 32:(slot + 1) * 32] = dirent(
-            name11, sys_attr(name11, boot), chain[0], len(body), body)
+            name11, sys_attr(name11, boot, args.hdd), chain[0], len(body), body)
         slot += 1
 
     # THE SERIAL IS DERIVED FROM WHAT IS ON THE VOLUME (vol_id): it is the
@@ -1176,7 +1212,7 @@ def build(args) -> int:
     body = bytes(fat.buf + fat.buf + root + data_area)
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
                                   media, lay, boot, label,
-                                  hidden=HDD_BASE if args.hdd else 0,
+                                  hidden=hbase if args.hdd else 0,
                                   drvnum=0x80 if args.hdd else 0,
                                   ksecs=ksecs if args.hdd else 0,
                                   volid=vol_id(body)))
@@ -1192,15 +1228,16 @@ def build(args) -> int:
         sec0[0:HP_TBL] = mbr
         ent = bytearray(16)
         ent[0] = 0x80                            # active
-        ent[1:4] = hdd_chs(HDD_BASE)
+        ent[1:4] = hdd_chs(hbase, heads, spt)
         ent[4] = 0x04                            # FAT16 under 32MB
-        ent[5:8] = hdd_chs(HDD_BASE + HDD_PSECS - 1)
-        struct.pack_into("<I", ent, 8, HDD_BASE)
-        struct.pack_into("<I", ent, 12, HDD_PSECS)
+        ent[5:8] = hdd_chs(hbase + tot - 1, heads, spt)
+        struct.pack_into("<I", ent, 8, hbase)
+        struct.pack_into("<I", ent, 12, tot)
         sec0[HP_TBL:HP_TBL + 16] = ent
         sec0[510:512] = b"\x55\xAA"
-        image = bytes(sec0) + bytes((HDD_BASE - 1) * SECTOR) + bytes(image)
-        assert len(image) == HDD_TOT * SECTOR
+        image = bytes(sec0) + bytes((hbase - 1) * SECTOR) + bytes(image)
+        image += bytes((htot - hbase - tot) * SECTOR)  # (past the cap)
+        assert len(image) == htot * SECTOR
 
     try:
         with open(args.output, "wb") as f:
@@ -1208,8 +1245,8 @@ def build(args) -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
-    geom = (f"{HDD_CYLS}/{HDD_HEADS}/{HDD_SPT} hdd, partition at LBA "
-            f"{HDD_BASE} for {HDD_PSECS} sectors" if args.hdd
+    geom = (f"{hcyls}/{heads}/{spt} hdd, partition at LBA "
+            f"{hbase} for {tot} sectors" if args.hdd
             else f"{args.size}KB, {spt} spt")
     print(f"os88disk: {args.output} ({geom}, "
           f"{lay.type_name}) {len(files)} file(s)"
@@ -1399,7 +1436,7 @@ def verify_hdd(path: str) -> int:
                     d += psec(data_lba + (c - 2) * spc, spc)
                     c = ent(f1, c)
                     guard += 1
-            subs = []
+            subs, names = [], set()
             for i in range(0, len(d), 32):
                 e = d[i:i + 32]
                 if not e or e[0] == 0:
@@ -1416,6 +1453,11 @@ def verify_hdd(path: str) -> int:
                 clus, = struct.unpack_from("<H", e, 26)
                 size, = struct.unpack_from("<I", e, 28)
                 full = path_ + nm + ("." + ex if ex else "")
+                if e[0:11] in names:
+                    # two entries, one name: every lookup finds the first
+                    # and the second's clusters are unreachable by name
+                    errors.append(f"{full}: DUPLICATE NAME in {path_}")
+                names.add(e[0:11])
                 if attr & 0x10:
                     if clus:
                         chain(clus, full + "/ (dir)")
@@ -1685,7 +1727,11 @@ def main() -> int:
     ap.add_argument("--geometry", metavar="[C/]H/S",
                     help="with --retarget: heads/sectors-per-track, or a "
                          "whole C/H/S line - the cylinders are checked "
-                         "against the image's size and written nowhere")
+                         "against the image's size and written nowhere. "
+                         "With --hdd: the C/H/S to BUILD for, the partition "
+                         "from the MBR's track to the end (an ST-238R on an "
+                         "ST11R is 613/4/26: tools/os88hdd.py --wrap adds "
+                         "the card's hidden cylinder and a VHD footer)")
     ap.add_argument("--boot", metavar="BOOT.bin",
                     help="os8088's own 512-byte boot sector: makes this a "
                          "bootable SYSTEM disk (needs --kernel)")
@@ -1720,7 +1766,7 @@ def main() -> int:
                          "folder above it too")
     args = ap.parse_args()
 
-    if args.retarget or args.geometry:
+    if args.retarget or (args.geometry and not args.hdd):
         if not (args.retarget and args.geometry and args.output):
             ap.error("--retarget needs --geometry and -o")
         if args.size or args.scramble or args.packages or args.folder \

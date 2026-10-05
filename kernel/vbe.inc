@@ -214,6 +214,21 @@ vbe_caps:
 ; -----------------------------------------------------------------------------
 vbe_avail:
     push ax
+    cmp byte [cpu_tier], CPU_8086   ; THE TIER GATE LIVES HERE AND NOT AT THE
+    je .out                         ; CALL SITE, which is drv_boot_x's `.ovl`
+                                    ; (SPEC.md 39.29.2). It is the same refusal
+                                    ; either way - an XT reads no file - and it
+                                    ; costs the XT one far call a boot instead
+                                    ; of a compare. What it BUYS is seven bytes
+                                    ; of the BOOT OVERLAY, which the upstream
+                                    ; merge of 2026-10-05 left five bytes over
+                                    ; BOOT2_PAD: the alternative was raising
+                                    ; BOOT2_SECS 10 -> 11, a whole sector off
+                                    ; every boot read plus KSIG_OFF retuned
+                                    ; against the canary band on four
+                                    ; geometries (the Makefile's own warning).
+                                    ; Seven bytes of .text for a sector of
+                                    ; boot is the trade, and it is not close
     cmp byte [vbe_known], 0
     jne .out
     mov byte [vbe_known], 1     ; asked, whatever the answer

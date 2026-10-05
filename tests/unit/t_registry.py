@@ -72,6 +72,9 @@ UNREGISTERED = {
                    "(docs/WRITING-TESTS.md 2.1)",
 
     # --- library and support code, not tests ---
+    "mrprobe.py": "MIDIRack's guest reader (SPEC.md 105.11) - the running "
+                  "package's variables by NAME, for tests/midirack.py; "
+                  "library, not a test",
     "dispcells.py": "the CELLS-not-calls counter two gates share (SPEC.md "
                     "11.3.3), not a test",
     "pxslib.py": "PIXELSTEIN 3D's guest reader (SPEC.md 97.12) - the "
@@ -110,6 +113,10 @@ UNREGISTERED = {
                 "a cell's text by the kernel's own glyphs - for the gates "
                 "whose subject is what is drawn (SPEC.md 81.54, 81.55); "
                 "library, imported by them, not a test",
+    "fatdel.py": "deletes one file anywhere in a FAT12 image, a sub-folder "
+                 "too, which tools/os88fat.py's `del` refuses - imported by "
+                 "assocstale.py to take a program out from under the "
+                 "ASSOC.DAT that names it; library, not a test",
     "harness.py": "tests/unit/'s check library - check(), eq(), done() - "
                   "imported by every t_*.py there, not a test",
     "mkclick.py": "a GENERATOR, not a test: it writes build/click.mod - a "
