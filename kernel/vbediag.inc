@@ -56,6 +56,17 @@ VBD_DY      equ 330             ; how far DOWN. The window starts at y=140 and
 VBD_SH      equ 2               ; the drop shadow, included in the vacated rect
                                 ; the way ui_drag includes it
 
+; WHAT THE FIRST TWO RUNS SAID, kept because it is the bisect and not a note:
+;
+;   VBD_DY = 330   the window lands at 470..670, ACROSS row 512
+;                  -> the WHOLE window is left behind at 470. The field's ghost.
+;   VBD_DY = 150   it lands at 290..490, wholly inside bank 0
+;                  -> only a ~10-row strip at the bottom edge survives
+;
+; So the damage path is very nearly right inside one bank and fails wholesale
+; across the boundary: CROSSING is the variable, not the path. Change this
+; constant and rebuild to re-run that bisect - it is two minutes.
+
 vbd_state:  db 0                ; 0 = not armed yet, 1 = waiting to open,
                                 ; 2 = opened, 3 = moved down, 4 = finished
 vbd_win:    dw 0                ; the window, once there is one
