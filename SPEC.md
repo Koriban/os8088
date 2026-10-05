@@ -64896,6 +64896,47 @@ register is at `3C4` index `0x0E`, while the field machine is a **NeoMagic**.
 A gate that passes here is necessary and not sufficient — the Satellite is
 still the authority on anything touching the card's own BIOS.
 
+#### 39.29.11 Display 0's context was never recaptured on a mode switch
+
+**The ghost had nothing to do with banking.** `vid_ctx` holds a per-display
+copy of the nine live geometry words (§39.12), and `vid_ctx_capture` is the
+only thing that refreshes it. It is called from exactly one place:
+`vid_disp_init`'s `.single` arm. On a machine with a **single adapter**
+`vid_dual_ok` refuses, `[vid_ndisp]` is 1, and the routine returns at `.jout`
+**before reaching that arm** — so display 0's record kept whatever geometry was
+captured at boot, for the life of the machine.
+
+`wm_dmg_bands` asks `vid_ctx_rect` for each display's rect and clamps the
+damage band to it. With the context stuck at 640×480 every damage band was
+clamped to **row 479**.
+
+**Why it survived every adapter this project already had:** a stale context is
+only harmful when it is *too small*. 640×480 → 640×200 leaves a context too
+LARGE, which clamps nothing. **VBE 1024×768 is the first mode in this OS wider
+and taller than the boot mode.**
+
+That single number explains every observation, and the bisect is what produced
+it (`VBEDIAG=1`, §39.29.12):
+
+| case | predicted by a 479 clamp | observed |
+|---|---|---|
+| VGA 640×480 | correct | clean |
+| VBE, window moved 290→490 | erases to 479, ~10 rows left | a ~10-row strip |
+| VBE, window moved 680→742 | nothing erased | the whole strip |
+| VBE, moved across row 512 (470→670) | only 470–479 erased | the whole window |
+| `wm_paint_all` (theme swap, screen saver) | does not use the band | clears it |
+| the same rect refilled **unclipped** | does not use the band | clears it |
+
+**The routine documents the hazard two paragraphs above the defect.** The
+comment at the refusal explains that returning early would leave "display 0's
+`vid_ctx` describing the card we have just switched away from" — and fixes it
+for the `ndisp = 2` case, stopping one machine short of the commonest one.
+`.jout` is only "unchanged" on the **boot** path; after a `vid_switch`,
+`vid_apply` has already run and the live geometry has moved under it.
+
+The fix is one call on the single-display path. **It is not a VBE fix**: any
+future mode larger than the boot mode would have met the same clamp.
+
 #### 39.29.12 `VBEDIAG=1` — move a window across the boundary with no mouse
 
 `make VBEDIAG=1`. Fourteen seconds after the desktop settles the kernel opens a

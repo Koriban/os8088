@@ -47,11 +47,21 @@ VBD_T0      equ 18 * 14         ; ticks before step 1 - the desktop, settled.
                                 ; wait with room for a slow floppy
 VBD_GAP     equ 18 * 5          ; ...and between the steps, so a photograph or
                                 ; a screenshot can land between any two
-VBD_DY      equ 330             ; how far DOWN. The window starts at y=140 and
-                                ; is 200 tall, so it lands at 470..670 - ACROSS
-                                ; row 512, which is the whole point. A move
-                                ; that stayed inside one bank would reproduce
-                                ; nothing and would look like a pass
+%ifndef VBD_DY                  ; ...all three overridable from the command
+%define VBD_DY 330              ; line - `make VBEDIAG=1 VBDARGS='-DVBD_DY=60
+%endif                          ; -DVBD_Y0=530 -DVBD_H=150'` - because the
+%ifndef VBD_Y0                  ; BISECT is the instrument, and editing source
+%define VBD_Y0 140              ; between runs is how a sweep goes wrong
+%endif
+%ifndef VBD_H
+%define VBD_H 200
+%endif
+                                ; VBD_DY is how far DOWN. The default window
+                                ; starts at y=140 and is 200 tall, so it lands
+                                ; at 470..670 - ACROSS row 512, which is the
+                                ; whole point. A move that stayed inside one
+                                ; bank reproduces almost nothing and would read
+                                ; as a pass
 
 VBD_SH      equ 2               ; the drop shadow, included in the vacated rect
                                 ; the way ui_drag includes it
@@ -78,9 +88,10 @@ vbd_due:    dw 0                ; the tick the next step is owed at - SEEDED ON
                                 ; an absolute VBD_T0 would already be in the
                                 ; past and every step would fire at once
 vbd_oy:     dw 0                ; where it was, for the vacate
+vbd_r:      dw 0,0,0,0          ; ...and the whole vacated rect, for VBD_PROBE
 
-vbd_tpl:    dw 180, 140         ; x, y - ABOVE the boundary, so the first move
-            dw 360, 200         ; w, h   is the one that crosses it
+vbd_tpl:    dw 180, VBD_Y0      ; x, y - ABOVE the boundary by default, so the
+            dw 360, VBD_H       ; w, h   first move is the one that crosses it
             dw vbd_ttl, 0, 0, 0 ; title, paint, onkey, onclick. W_PAINT = 0 is
                                 ; legal (wm_draw_win tests it), and the frame
                                 ; plus the caption is enough to see a ghost by
@@ -196,7 +207,25 @@ vbd_commit:
     mov dx, bx
     add dx, [si+W_H]
     add dx, VBD_SH
+    mov [vbd_r+0], ax           ; banked for the probe below, which wants the
+    mov [vbd_r+2], bx           ; SAME rect the damage path was just given
+    mov [vbd_r+4], cx
+    mov [vbd_r+6], dx
     call wm_dmg_vacate
     call wm_dmg_union           ; ...grown to cover where it is now
     call wm_paint_dmg
+%ifdef VBD_PROBE
+    ; --- THE CONTROL: the same rect again, with NO CLIP REGION ARMED --------
+    ; wm_paint_dmg reaches the dither through wm_dmg_gray, which ARMS a clip
+    ; region first; wm_paint_all calls thm_desk with none. That is the only
+    ; structural difference between the repaint that clears the ghost and the
+    ; one that does not, so this fills the vacated rect the UNCLIPPED way
+    ; immediately afterwards. If the ghost goes, the clipped path is the fault
+    ; and the renderer is fine. If it stays, the clip is innocent.
+    mov ax, [vbd_r+0]
+    mov bx, [vbd_r+2]
+    mov cx, [vbd_r+4]
+    mov dx, [vbd_r+6]
+    call thm_desk
+%endif
     jmp gfx_unlock              ; the tail call ui_drag's own `.done` makes

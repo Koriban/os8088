@@ -2070,11 +2070,31 @@ vid_disp_init:
     ; from, which is a desktop drawn into the wrong segment at the wrong
     ; stride. A refusal has to bring the arrangement DOWN.
     cmp byte [vid_ndisp], 1
-    je .jout                    ; nothing live: unchanged, and the boot path
-                                ; ...otherwise collapse it through the arm
-    call vid_disp_other         ; that already knows how. [vid_dmode] is kept:
-    jmp short .single           ; the arrangement is impossible on THIS
+    jne .collapse               ; ...otherwise collapse it through the arm
+                                ; that already knows how. [vid_dmode] is kept:
+                                ; the arrangement is impossible on THIS
                                 ; primary, not forgotten
+
+    ; --- ONE DISPLAY, AND ITS GEOMETRY MAY HAVE JUST MOVED ------------------
+    ; "nothing live: unchanged" is true of the BOOT path and false of a
+    ; vid_switch, which has already run vid_apply by the time this is reached.
+    ; The paragraph above fixes exactly this staleness for the ndisp = 2 case
+    ; and stopped one machine short of the commonest one: a box with a SINGLE
+    ; adapter never reaches .single, so display 0's vid_ctx kept whatever
+    ; geometry was captured at boot, for the life of the machine.
+    ;
+    ; It is only visible when the new mode is BIGGER than the old, which is
+    ; why it survived every adapter this project had: 640x480 -> 640x200 leaves
+    ; a context too LARGE, which clamps nothing. VBE 1024x768 is the first mode
+    ; wider and taller than the boot mode, and a context stuck at 640x480 made
+    ; wm_dmg_bands clamp every damage band to row 479 - so a window moved below
+    ; it was never erased and its image stayed on the glass (SPEC.md 39.29.11).
+    xor al, al
+    call vid_ctx_capture        ; AX is this routine's own, pushed on entry
+    jmp short .out
+.collapse:
+    call vid_disp_other
+    jmp short .single
 .paired:
     call vid_disp_other         ; ...and AL = the other display's adapter, which
                                 ; is NOT simply the other of two kinds - see
