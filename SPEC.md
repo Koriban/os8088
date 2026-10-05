@@ -64819,6 +64819,42 @@ a banked mode. A third, `thm`'s depth test in `vga12.inc`, is correct **by
 luck**: `dec ah / cmp ah, 2 / jae` maps `VID_VBE` to 3, which passes. Luck is
 not a reason to leave it unremarked.
 
+#### 39.29.10.4 The carry is only the crossing if the add is the WHOLE step
+
+§39.29.10's design rests on one sentence: *the 16-bit carry out of
+`add di, [vid_stride]` **is** the bank crossing.* That is true, and it is true
+only when **the entire row advance is that one add**. Where a `rep` has already
+moved the pointer, the carry is computed on a different number than the one the
+rule is about.
+
+Three of the four shapes are correct, and the arithmetic says why:
+
+| | advance | carry computed on | correct? |
+|---|---|---|---|
+| the three edge-column fills | `rep` by `bx`, then `add dx` where `dx = stride - bx` | `start + bx + (stride - bx)` = `start + stride` | **yes** |
+| the plane-major blit | `rep` by `n`, then `add bp` where `bp = stride - n` | `start + n + (stride - n)` = `start + stride` | **yes** |
+| `.lcol` / `.rcol` / `cur_draw` / `font_char` | no `rep` before the add | `start + stride` | **yes** |
+| **`vga_save_vram` / `vga_restore_vram`** | `rep` by `bp`, then add the **FULL** stride, then `sub bp` | `start + bp + stride` | **NO** |
+
+The pair adds the whole stride on top of an already-advanced pointer and
+subtracts the span afterwards, so its test fires when
+`start + bp + stride > 65535` while the real crossing is at
+`start + stride > 65535`. **They differ by `bp`** — the window's own bytes per
+row — so the window is banked up to a row early, and which row depends on the
+window's `x` and width. It is the save-under pair, which is every window drag
+and every menu.
+
+The fix is free: **subtract back to the row's own base before the step**, so
+the add is the whole step and the rule holds again. No instruction was added;
+two were reordered.
+
+**The general rule, which is the thing to carry forward:** a row walk may
+advance the pointer in as many pieces as it likes, but the piece that carries
+must be the one that completes `start + stride`. Adding the full stride to a
+partially-advanced pointer and correcting afterwards is the one arrangement
+that breaks it, and it reads as correct because the pointer ends up right —
+only the FLAG is wrong.
+
 #### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
 
 **86Box is the only emulator in this tree that can enter `0104h` at all**, and

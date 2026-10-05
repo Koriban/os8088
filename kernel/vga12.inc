@@ -4041,8 +4041,13 @@ vga_save_vram:                              ; only renderer gfx_save has
 .row:
     mov cx, bp
     rep movsb                   ; buffer DI advances contiguously
+    sub si, bp                  ; BACK TO THE ROW'S OWN BASE **BEFORE** THE
+                                ; STEP, or the carry is computed on
+                                ; start+bp+stride and the true crossing is at
+                                ; start+stride - so the bank advances up to BP
+                                ; bytes early (SPEC.md 39.29.10.4)
     VBROWCS si                  ; CS: IS MANDATORY - DS is VGA_SEG in here for
-    sub si, bp                  ; the movsb, so a DS-relative read of the
+                                ; the movsb, so a DS-relative read of the
                                 ; stride fetches PIXELS. That is what it did:
                                 ; the cursor, every menu and every window
                                 ; save-under came back as garbage trails
@@ -4298,9 +4303,10 @@ vga_restore_vram:                              ; only renderer gfx_restore has
     mov cx, bp
     rep movsb
     add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
+    sub di, bp                  ; ...and the row's own base BEFORE the step,
+                                ; for vga_save_vram's reason (39.29.10.4)
     VBROWCS di                  ; ...and so is this one, for the same reason -
                                 ; the line above was already saying so
-    sub di, bp
     dec dx
     jnz .row
     pop es
