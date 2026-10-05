@@ -7154,8 +7154,10 @@ cw_gfx_pen_live:        call gfx_pen_live
                     retf
 cw_gfx_rowbase:         call gfx_rowbase
                     retf
-cw_vbe_avail:           call vbe_avail
-                    retf
+%ifdef KERN_BIG                 ; its caller is kern_big only - and vbe_avail
+cw_vbe_avail:           call vbe_avail      ; itself only EXISTS under
+                    retf                    ; OS88_DRIVERS, which kern_small has
+%endif                                      ; none of (SPEC.md 39.29.2)
 cw_gfx_unlock:          call gfx_unlock
                     retf
 cw_gfx_xor_fill:        call gfx_xor_fill
