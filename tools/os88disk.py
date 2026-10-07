@@ -621,13 +621,24 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     struct.pack_into("<H", bs, 14, lay.rsvd)    # BPB_RsvdSecCnt
     bs[16] = lay.nfats                          # BPB_NumFATs
     struct.pack_into("<H", bs, 17, root_ent)    # BPB_RootEntCnt
-    struct.pack_into("<H", bs, 19, tot)         # BPB_TotSec16
+    # BPB rule 8: ONE of the two sector counts is used and the other is 0.
+    # Under 65,536 it is TotSec16 and TotSec32 stays zero, which is every
+    # floppy this tool has ever built and every --hdd image before SPEC.md
+    # 18.7.5 - so this is a NO-OP for all of them and the byte-identity of
+    # every shipped image is kept. At or past 65,536 the word cannot carry
+    # it and FAT's own answer is the 32-bit field; the kernel folds TotSec32
+    # in (18.7.5), which tests/bigvol.py proves against an mtools-formatted
+    # volume used past sector 65,536.
+    if tot <= 0xFFFF:
+        struct.pack_into("<H", bs, 19, tot)     # BPB_TotSec16
     bs[21] = media                              # BPB_Media
     struct.pack_into("<H", bs, 22, fatsz)       # BPB_FATSz16
     struct.pack_into("<H", bs, 24, spt)         # BPB_SecPerTrk
     struct.pack_into("<H", bs, 26, heads)       # BPB_NumHeads
     # On a floppy BPB_HiddSec, BS_DrvNum and BPB_TotSec32 stay 0.
     struct.pack_into("<I", bs, 28, hidden)      # BPB_HiddSec
+    if tot > 0xFFFF:
+        struct.pack_into("<I", bs, 32, tot)     # BPB_TotSec32
     bs[36] = drvnum                             # BS_DrvNum
     bs[38] = 0x29                               # BS_BootSig
     struct.pack_into("<I", bs, 39,
@@ -901,8 +912,19 @@ def build(args) -> int:
                 fail("--hdd --geometry wants C/H/S")
             hbase, htot = spt, hcyls * heads * spt
             tot = htot - hbase
-            if tot > 65535:
-                tot = (65535 // spt) * spt
+            # THE CEILING IS FAT16's NOW, NOT THE WORD'S (SPEC.md 18.7.5).
+            # It was 65,535 sectors because a volume-relative LBA was a word;
+            # kern_big carries the high word beside it, so what bounds a
+            # volume is FAT16 itself - 65,524 clusters of at most 32KB, just
+            # under 2GB. hdd_layout is the authority on whether a given count
+            # HAS a layout, so the cap is found by asking it rather than by
+            # a second constant that could disagree with it.
+            while tot > 65535:
+                try:
+                    hdd_layout(tot)
+                    break
+                except SystemExit:
+                    tot -= spt                  # back off a track and re-ask
     else:
         spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
         if args.fatcap:
@@ -1229,7 +1251,12 @@ def build(args) -> int:
         ent = bytearray(16)
         ent[0] = 0x80                            # active
         ent[1:4] = hdd_chs(hbase, heads, spt)
-        ent[4] = 0x04                            # FAT16 under 32MB
+        # 04h is FAT16 UNDER 32MB and 06h is FAT16 at or past it: the same
+        # file system, and the type byte is what a foreign reader uses to
+        # decide which sector count to believe (SPEC.md 52.2). os8088's mount
+        # reads the BPB either way, but a disk this tool writes is read by
+        # DOS and by the machine's own BIOS too.
+        ent[4] = 0x04 if tot <= 0xFFFF else 0x06
         ent[5:8] = hdd_chs(hbase + tot - 1, heads, spt)
         struct.pack_into("<I", ent, 8, hbase)
         struct.pack_into("<I", ent, 12, tot)

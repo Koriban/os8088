@@ -13249,23 +13249,48 @@ $(BUILD)/cfcfg/system.cfg: Makefile | $(BUILD)
 	  b'DW' + bytes([1,2]) + (1 << 1).to_bytes(2,'little') + \
 	  b'VM' + bytes([2,3]) + bytes([4,0,0]) + b'\0\0')" > $@
 
-$(BUILD)/cfpart1.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+# THE GEOMETRY IS STAMPED, or `make cfimg CFGEOM=...` after a plain one
+# silently re-uses the 32MB partition and lays FOUR OF IT on an 8GB card.
+# Same rule as $(VIDSTAMP): a flag that changes the OUTPUT has to be a
+# PREREQUISITE, or make cannot know. Bitten within ten minutes of adding
+# CFGEOM, which is this tree's own recorded trap (docs: makefile-flag rules
+# go stale) arriving on schedule.
+CFSTAMP := $(BUILD)/.cfgeom-$(if $(CFGEOM),$(subst /,-,$(CFGEOM)),fixed)
+$(CFSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.cfgeom-* $(BUILD)/cfpart1.img
+	@touch $@
+
+$(BUILD)/cfpart1.img: $(CFSTAMP) $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
                       $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
                       $(SYSAPPS) $(SYSROOT) $(ALLAPPSFILES) \
                       $(BUILD)/cfcfg/system.cfg tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --hdd \
+	python3 tools/os88disk.py -o $@ --hdd $(CFGEOMARG) \
 		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
 		--kernel $(KERNFILE) \
 		--folder DOCS $(APPDATAFOLDER) \
 		$(LIVEARGS) $(BUILD)/cfcfg/system.cfg
 
+# CFGEOM=C/H/S sizes the PARTITION, and CFSECTORS the CARD. Empty CFGEOM is
+# os88disk.py's fixed 63/16/65 shape - 32MB, every byte of what shipped before
+# SPEC.md 18.7.5 - so a plain `make cfimg` is unchanged. A big card wants a
+# geometry of its own: 255x63 keeps a cylinder number inside CHS's 1024 for
+# anything up to 8.4GB, and the cylinder count is what sets the partition's
+# size. 194 cylinders is ~1.49GB and four of them fit a 6.4 billion-byte disk;
+# 261 is ~2.0GB, which is FAT16's own ceiling (65,524 clusters of 32KB) and
+# the largest a single os8088 volume can be.
+CFGEOM    ?=
+CFGEOMARG = $(if $(CFGEOM),--geometry $(CFGEOM))
+CFOUT     ?= $(BUILD)/cf484.img
+CFPARTS   ?= 4
+
 .PHONY: cfimg
 cfimg: $(BUILD)/cfpart1.img tools/os88cf.py
-	python3 tools/os88cf.py -o $(BUILD)/cf484.img --sectors $(CFSECTORS) \
+	python3 tools/os88cf.py -o $(CFOUT) --sectors $(CFSECTORS) \
+		--parts $(CFPARTS) \
 		--part1 $(BUILD)/cfpart1.img --mbr $(BUILD)/mbr.bin
 	@python3 tools/os88disk.py --verify-hdd $(BUILD)/cfpart1.img
-	@echo "cfimg:  build/cf484.img - write it RAW to the whole card, not to"
-	@echo "        a partition:  sudo dd if=build/cf484.img of=/dev/sdX bs=1M"
+	@echo "cfimg:  $(CFOUT) - write it RAW to the whole card, not to"
+	@echo "        a partition:  sudo dd if=$(CFOUT) of=/dev/sdX bs=1M"
 	@echo "        CFSECTORS=$(CFSECTORS). Check yours first:"
 	@echo "          cat /sys/block/sdX/size"
 
