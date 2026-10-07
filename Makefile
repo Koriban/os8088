@@ -10947,7 +10947,7 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
 # its widest. Hercules is the bigger board and was measured too - 8KB windowed,
 # 19KB fullscreen - so 19 is the deepest kern_small can ever be asked for.
 # `soak -k 'ddsmall'` is that measurement kept runnable (SPEC.md 24.5.5).
-SMALLOMIT_GAMES := $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(DM_SHIP)
+SMALLOMIT_GAMES = $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 $(DM_SHIP)
 #   pxstein                 PIXELSTEIN 3D (SPEC.md 97.9, 24.5): a REQUIREMENT
 #                           the arena cannot meet. Its program part is a
 #                           ~33KB image with two 4KB map layouts and two
