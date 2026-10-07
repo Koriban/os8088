@@ -233,7 +233,6 @@ section .bss
 hb_mode:    resb 1              ; HB_M_*
 hb_vol:     resb 1              ; the volume the image is (or will be) on
 hb_down:    resb 1              ; the button the press armed, 1/2, 0 = none
-hb_pad:     resb 1
 hb_drvmask: resw 1              ; drv_tab rows detached before the image
 hb_sp:      resw 1              ; hbm_perform's entry SP (SPEC.md 87.4)
 hb_wakep:   resw 2              ; hbm_wake as off:seg, in the image's module
@@ -592,8 +591,7 @@ hbf_open:
     call far [HBFP + HBE_OPEN*4]
     retf
 .no:
-    call hbf_nodisk
-    retf
+    jmp short hbf_perform.toast ; the toast and the retf, hbf_perform's
 
 hbf_nodisk:
     push ax
@@ -603,10 +601,7 @@ hbf_nodisk:
     mov bx, cp_opentab
     mov cx, CP_NOPEN
     call ct_toast_say
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_cx                ; pop cx, bx, ax and ret
 
 ; hbf_perform - a posted UI_RBQ_HIBER / UI_RBQ_RESUME / UI_RBQ_ASK, spent by
 ;               ui_task with nothing held (SPEC.md 87.4, 87.5)
@@ -628,7 +623,8 @@ hbf_perform:
     mov word [hb_dosseg], 0
     cmp al, UI_RBQ_ASK          ; a question that cannot be asked is not
     je .quiet                   ; worth a toast: the pointer stays for a
-    call hbf_nodisk             ; boot that has the system disk in
+.toast:                         ; boot that has the system disk in (and
+    call hbf_nodisk             ; hbf_open's refusal is this toast too)
 .quiet:
     retf
 
@@ -655,10 +651,7 @@ hbf_closed:
     cmp byte [hb_mode], HB_M_GONE
     je .out
     mov byte [hb_mode], HB_M_GONE
-    push ax
-    mov al, MOD_HIBER
-    call mod_drop
-    pop ax
+    call hbf_dropck             ; ...which now finds it GONE and drops
 .out:
     retf
 
@@ -825,7 +818,7 @@ hbm_btnrect:
     cmp byte [hb_mode], HB_M_RESUME
     jne .out
     mov si, hbm_s_bres
-    jmp short .out
+    ret                         ; (.out is a bare `ret`)
 .two:
     add cx, HBW_B2X
     mov [bx], cx
@@ -1027,8 +1020,7 @@ hbm_win:
     or si, si
     jz .no
     pop di
-    pop ax
-    clc
+    pop ax                      ; (CF = 0: the `or`'s, which `jz` left)
     ret
 .no:
     pop di
@@ -1487,8 +1479,7 @@ hbm_wrimg:
     mov cx, HBP_SIZE
     call COLD_SEG:dwf_dskw_write
     jc .no
-    pop ax
-    clc
+    pop ax                      ; (CF = 0 from the `jc`)
     ret
 .no:
     pop ax
@@ -1946,15 +1937,19 @@ hbm_imgsize:
     pop cx
     ret
 
+hbm_res_f:                      ; hbm_res's two first refusals, whose .fail
+    jmp hbm_res.fail            ; is past short reach: one trampoline behind
+                                ; the `ret` above for two 5-byte jccs
+
 ; -----------------------------------------------------------------------------
 ; hbm_res - put the image back (SPEC.md 87.5): the extents, then the stub
 ; in:  the question was answered Resume; no lock held
 ; -----------------------------------------------------------------------------
 hbm_res:
     call hbm_enter              ; where the user stands, for a refusal
-    jc .fail
+    jc hbm_res_f
     call hbm_findimg            ; BX = its first cluster
-    jc .fail
+    jc hbm_res_f
     push bx
     call hbm_xcap               ; 2. sized for THIS volume, not the worst one
     mov bx, MEM_K_HIB
@@ -2676,16 +2671,17 @@ hbm_extat:
     cmp [cs:hbm_xskip], dx
     jb .here                    ; the part starts inside this cluster
     sub [cs:hbm_xskip], dx      ; ...or past it: step over, reading nothing
-    jmp short .next
-.here:
+    jmp .next                   ; (near: SPEC.md 18.7.5's high word took the
+.here:                          ; short one out of reach)
     mov ax, si
     mov bp, dsk_clus2lba_x
     call COLD_SEG:wm_cbd        ; AX = its first LBA, volume-relative
     jc .bad
     add ax, [cs:hbm_xskip]      ; ...plus however far in the part starts
+    mov bx, [dsk_c2hi]          ; ...in 32 bits: the volume-relative LBA's own
+    adc bx, 0                   ; high word (SPEC.md 18.7.5)
     sub dx, [cs:hbm_xskip]      ; DX = sectors of this cluster we want
     mov word [cs:hbm_xskip], 0
-    xor bx, bx
     add ax, [hb_base]           ; DX:AX would be the absolute LBA, and the
     adc bx, [hb_base + 2]       ; high half is BX because DX is in use
     cmp dx, [cs:hbm_xtake]
@@ -2821,7 +2817,7 @@ hbm_extents:
     mov bp, dsk_clus2lba_x
     call COLD_SEG:wm_cbd  ; AX = its first LBA, volume-relative
     jc .bad
-    xor dx, dx
+    mov dx, [dsk_c2hi]          ; ...and its high word (SPEC.md 18.7.5)
     add ax, [hb_base]
     adc dx, [hb_base + 2]       ; DX:AX = absolute
     mov bl, [dsk_spc]
@@ -3078,6 +3074,9 @@ hbm_wake:
     mov bp, dsk_rah_flush
     call COLD_SEG:wm_cbd
     mov word [mem_pinseg], 0    ; dsk_xfer's pin, mid-transfer in the image
+%ifdef OS88_BIGVOL
+    mov word [dsk_lbahi], 0     ; ...and its LBA's high word, which only its
+%endif                          ; .out spends (SPEC.md 18.7.5)
     ; ...AND THE EXTENT LIST THE PICTURE WAS TAKEN OVER (SPEC.md 87.6.1).
     ; `mem_pinseg` one level up: a word that was true of the machine that
     ; wrote the image and is meaningless in the machine that reads it - except
@@ -3222,6 +3221,35 @@ hbm_wake:
     ;    any disk work, so the progress widget has a graphics mode to draw in
     mov bp, vid_setmode
     call KERNEL_SEG:cw_mem_disp
+%ifndef BAKED_FONT
+    ; 4a. ...AND THE GLYPH TABLE, which the image names BY ADDRESS (SPEC.md
+    ;     6.0.1). The renderers read [font_seg]:[font_base] in a ROM, and the
+    ;     image carries the pointer the WRITING machine's boot chose - so
+    ;     this asks the reading machine the same question, with the same
+    ;     body (FONT_PICK). A heap copy is refilled in place, since its claim
+    ;     came back with the image; a ROM pointer is simply replaced. No
+    ;     claim is made here: an option ROM found slow only at a resume is
+    ;     read in place, which is slower and never wrong. The same TIMED
+    ;     pick, so the fastest candidate is still the one taken. Nothing is live across
+    ;     it - every register below is reloaded before it is read.
+    FONT_PICK hbf               ; DX:BP = this machine's fastest table
+    mov ax, [font_seg]
+    cmp ax, 0xA000              ; a ROM (C000 up) or the image's heap copy
+    jae .fptr
+    push ds
+    mov es, ax
+    mov ds, dx
+    mov si, bp
+    xor di, di
+    mov cx, FONT_BYTES / 2
+    rep movsw
+    pop ds
+    jmp short .fdone
+.fptr:
+    mov [font_seg], dx
+    mov [font_base], bp
+.fdone:
+%endif
     mov byte [hb_mode], HB_M_GONE   ; before the close: app_close_win's hook
     call hbm_win                ; leaves a GONE window's image to the thunk
     jc .nowin                   ; (SPEC.md 87.1), and this code IS the image
@@ -3329,6 +3357,9 @@ hbm_wake:
                                 ; from that is a machine that never switches
     mov sp, [hb_sp]
     ret
+%ifndef BAKED_FONT
+    FONT_TIMERS hbf             ; step 4a's clock (kernel/font.inc)
+%endif
 
 ; =============================================================================
 ; THE STUB (SPEC.md 87.5). Copied to HS_CODE in the text framebuffer and

@@ -269,7 +269,7 @@ dkb_band:
     mov [vid_band_x0], ax       ; immediate one, and AX is about to be reloaded
     mov ax, [vid_pw]
     mov [vid_band_xe], ax
-    sub ax, 56
+    sub ax, DESK_ZXOFF          ; cell 0 (SPEC.md 26.9)
     mov [vid_desk_zx], ax
     mov ax, [vid_ph]
     sub ax, DOCK_H
@@ -1169,11 +1169,7 @@ db_click:
     clc                         ; but the comment at both ends. `jmp`, never
 .out:                           ; `jmp short`: a body that outgrows the rel8
     pop di                      ; range then costs a byte instead of an error
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp kret_dx
 
 ; -----------------------------------------------------------------------------
 ; db_rclick - right-press on the strip: a tile's context menu (SPEC.md 30.2)
