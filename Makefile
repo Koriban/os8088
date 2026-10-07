@@ -12578,6 +12578,57 @@ $(USBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	@echo "        partition mounts as C:. QEMU: qemu-system-i386 -drive"
 	@echo "        file=$@,format=raw -boot c"
 
+# =============================================================================
+# CF484 - rebuild a whole CompactFlash card (SPEC.md 52.2)
+# =============================================================================
+# `make cfimg CFSECTORS=991872` writes build/cf484.img: an MBR and FOUR 32MB
+# os8088 partitions, the first a complete bootable volume and the other three
+# entries only, for the machine's own Format to lay down.
+#
+# FOUR, AND NOT ONE SPANNING THE CARD, is the kernel's rule and not a choice
+# here: a partition is capped at 65,535 sectors by the volume ceiling
+# (SPEC.md 18.7/52.2) because that layer counts sectors in a WORD, and FAT16
+# media with TotSec16 == 0 - anything 32MB or over - is REFUSED by the mount
+# rules rather than truncated. SPEC.md 52.2 adds that "four primaries is the
+# whole offering and an extended chain is not implemented", so 4 x 32MB =
+# 128MB is the most of ANY card this OS can reach. tools/os88cf.py prints
+# what is left over rather than leaving the card looking broken.
+#
+# Partition 1 carries the system, every driver and the everything-disk payload
+# (SPEC.md 19.10), plus a SYSTEM.CFG that asks for TWO things before the first
+# paint: VBE 1024x768 (the VM record) and the HARD DISK DRIVER (the DW record,
+# bit 1 - drv_bit's table, NOT the row index). Without that second bit nothing
+# loads it: SPEC.md 51.3, "NOTHING LOADS UNLESS SYSTEM.CFG ASKS FOR IT", and
+# the Hard Drive page would not be there to Format the other three with.
+CFSECTORS ?= 991872
+
+$(BUILD)/cfcfg/system.cfg: Makefile | $(BUILD)
+	@mkdir -p $(BUILD)/cfcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + \
+	  b'DW' + bytes([1,2]) + (1 << 1).to_bytes(2,'little') + \
+	  b'VM' + bytes([2,3]) + bytes([4,0,0]) + b'\0\0')" > $@
+
+$(BUILD)/cfpart1.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+                      $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+                      $(SYSAPPS) $(SYSROOT) $(ALLAPPSFILES) \
+                      $(BUILD)/cfcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --hdd \
+		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+		--kernel $(KERNFILE) \
+		--folder DOCS $(APPDATAFOLDER) \
+		$(LIVEARGS) $(BUILD)/cfcfg/system.cfg
+
+.PHONY: cfimg
+cfimg: $(BUILD)/cfpart1.img tools/os88cf.py
+	python3 tools/os88cf.py -o $(BUILD)/cf484.img --sectors $(CFSECTORS) \
+		--part1 $(BUILD)/cfpart1.img --mbr $(BUILD)/mbr.bin
+	@python3 tools/os88disk.py --verify-hdd $(BUILD)/cfpart1.img
+	@echo "cfimg:  build/cf484.img - write it RAW to the whole card, not to"
+	@echo "        a partition:  sudo dd if=build/cf484.img of=/dev/sdX bs=1M"
+	@echo "        CFSECTORS=$(CFSECTORS). Check yours first:"
+	@echo "          cat /sys/block/sdX/size"
+
 $(LIVEISO): $(USBIMG) $(SYSDOCRAW) tools/os88iso.py
 	python3 tools/os88iso.py -o $@ --boot-image $(USBIMG) \
 		--file README.TXT=$(SYSDOCRAW)
