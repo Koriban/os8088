@@ -13508,7 +13508,8 @@ COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 $(BUILD)/CHART.OVL \
               $(BUILD)/MACRO.OVL \
-              $(BUILD)/pxstein.o88 $(DM_SHIP) \
+              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/gorillas.o88 \
+              $(BUILD)/midirack.o88 $(BUILD)/video.o88 \
               $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/ftpd.o88 \
               $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 $(BUILD)/cyclone.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
@@ -13547,10 +13548,17 @@ COMBO_DRVDROP := $(BUILD)/ether.drv
 COMBOSYS360 := $(filter-out $(COMBO_DRVDROP),$(DRIVERS)) \
                $(addprefix SYSTEM:,$(filter-out $(BUILD)/thewire.o88,$(SYSAPPS)))
 
+# ...AND NOT $(COMBOBENCH) AT 360KB. The 2026-10-05 merge put MIDIRack and the
+# Video Player on this disk and it went 78 clusters over 354; dropping both,
+# and Gorillas, left it FIVE over. The benchmarks are what came off, and they
+# are the honest cut: sysbench and gfxbench are INSTRUMENTS, not software
+# anybody boots a one-floppy 360KB machine to use, and 34KB buys four times
+# the headroom the overflow needed. combo720 keeps them - it has sixty-odd
+# clusters spare and SPEC.md 24.6.1's rule is per-geometry, "a decision with a
+# date on it, remade every time this geometry runs out".
 COMBOARGS := $(COMBOSYS360) \
              $(addprefix APPS:,$(COMBO_TOOLS)) \
-             $(addprefix GAMES:,$(COMBO_GAMES)) \
-             $(COMBOBENCH)
+             $(addprefix GAMES:,$(COMBO_GAMES))
 
 combo: $(BUILD)/combo.img
 

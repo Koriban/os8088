@@ -1379,6 +1379,22 @@ FAST = [
 # tier`).
 # --------------------------------------------------------------------------
 FULL = [
+    Row("products", "full", py("tests/unit/t_products.py"), 6.0,
+        "the SHIPPING configurations `all` does not build - kern_emu and the "
+        "three combo floppies. buildmatrix below already builds emu and "
+        "small, correctly, and is in SOAK because 99 knob configurations is "
+        "not 'did you break the build'. That is right for a KNOB and wrong "
+        "for a PRODUCT: the 2026-10-05 upstream merge broke FOUR of these - "
+        "kern_small, kern_emu, combo and combo720 - and `make` plus "
+        "test-full between them reported ONE. The other three were found by "
+        "hand, days apart, by a human typing the target. Two of the four "
+        "broke at DISK PACKING and not at nasm (78 and 34 clusters over), "
+        "which is the commonest way a merge that adds packages breaks a "
+        "geometry and which no assembly-only row can see. kern_small is not "
+        "here because small128 builds that kernel AND boots it on a 128KB "
+        "machine. ~31s in the SHARED tree, which is safe for exactly these "
+        "targets: none of them writes build/kernel.bin",
+        wants=("build/kernel.sys",)),
     Row("buildmatrix", "soak", py("tests/unit/t_buildmatrix.py"), 180.0,
         "the knob kernels and kern_small - every configuration `all` "
         "does not build, and so the only thing that keeps them assembling"
