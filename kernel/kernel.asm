@@ -2515,7 +2515,7 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; pick (font_init in the blob on both kernels), and KSIG_OFF moved one memory
 ; sector down with it (6144 -> 5632) so the FILE sector is still 21. It sits
 ; inside the same int 13h run on all four geometries (tests/unit/t_blobruns.py).
-BOOT2_SECS  equ 10              ; sectors stage 1 reads before it jumps - the
+BOOT2_SECS  equ 11              ; sectors stage 1 reads before it jumps - the
                                 ; loader and its screen up to OVL_AT, then the
                                 ; boot overlay from there to BOOT2_PAD. THE
                                 ; SPLIT IS OVL_AT AND THE TOTAL IS THIS, so

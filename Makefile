@@ -913,7 +913,21 @@ BOOT2_PAD  := $(shell echo $$(( $(BOOT2_SECS) * 512 )))
 # SPEC.md 6.0.1 took the blob to TEN sectors, and the probe moved one memory
 # sector down with it - 5632, memory sector 11, file sector 11 + 10 = 21, the
 # same file sector - so the band argument above is untouched.
-KSIG_OFF := 5632
+#
+# ...AND THE 2026-10-05 UPSTREAM MERGE TOOK IT TO ELEVEN, by the same move for
+# the same reason: 5120, memory sector 10, file sector 10 + 11 = 21. The file
+# sector is the invariant, so every line of the band table above still holds
+# and t_canary re-derives it from the shipped images either way.
+#
+# WHAT FORCED THE ELEVENTH SECTOR was kern_emu, and it was not kern_emu's
+# fault. kern_big sat at 5,118 bytes of a 5,120-byte blob - TWO SPARE - so the
+# merge's growth had already spent the margin and the next build to want a
+# byte was always going to be the one that reported it. A second blob length
+# for the one kernel was the alternative and is refused: SPEC.md 15.3.8.5.1
+# deleted the second constant, the second split and this file's second `sed`
+# precisely because ONE length is what widens the canary's common band, and
+# t_canary "refuses a second blob length outright" three paragraphs up.
+KSIG_OFF := 5120
 #
 # A PAYLOAD SHORTER THAN THE OFFSET DEFINES NO KSIG AT ALL, and that is the
 # whole of this line's second job. It used to answer 0, and a fabricated zero is
