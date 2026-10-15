@@ -11008,6 +11008,19 @@ SOAK = [
         "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
         "list box refused",
         needs=("marty",), serial=True),
+    Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
+        "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
+        "to the new box. The grow box dragged in 160x24 and back out, with "
+        "the kernel's W_W/W_H, the package's sh_cw/sh_ch and the walk counts "
+        "sh_vcols/sh_vrows read each time - the counts are the claim, since "
+        "sh_geom walks slots until the pixels run out rather than reading a "
+        "number from the template. The pixel leg is 11.94.5.1's: the status "
+        "strip's rule must be solid to the NEW right edge and gone from the "
+        "old one, because every count can be right while the layout is "
+        "still drawn at the width the window ASKED for",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
     Row("sheetmkind", "soak", py("tests/sheetmkind.py"), 400.0,
         "SPEC.md 81.97: the reader half - a host-written BIFF2 macro sheet "
         "(BOF dt 0040H) whose formulas are a ptg-58H command, a variable and "

@@ -204,6 +204,21 @@ SH_RH_STDTW  equ 255                ; the standard height, 12.75 points
 SH_RH_TWMIN  equ 146                ; 7.3 points -> 8 px
 SH_RH_TWMAX  equ 874                ; 43.7 points -> 48 px
 SH_MAXVR     equ 64                 ; visible rows at most: 480px / SH_RH_MIN
+                                        ; - and DELIBERATELY still 480px now
+                                        ; that 81.112 makes the window
+                                        ; sizable on a 1024x768 desktop. The
+                                        ; bound it sets is 675px of grid over
+                                        ; 64 rows = 10.5px a row; the standard
+                                        ; height is 14px (SH_RH_STDTW), which
+                                        ; wants 48. So the cap only bites on a
+                                        ; sheet whose rows are near SH_RH_MIN,
+                                        ; and raising it to 96 costs 96 bytes
+                                        ; of bss where SHEET has 262 left in
+                                        ; APP_MAX_SIZE. Measured, not assumed:
+                                        ; tools/os88pkgsize.py. The walk just
+                                        ; halts (sh_geom), so what a 1024-wide
+                                        ; window with minimum rows loses is
+                                        ; white below the grid, not a refusal
 SH_RH_W      equ 40                 ; row-header column, 5 digits at 8px
 SH_CH_H      equ 14
 SH_FB_H      equ 16
@@ -494,7 +509,13 @@ SH_ROWH_OFF  equ SH_COLW_OFF + 1024 ; 4096: the ROW HEIGHTS (81.60), a sorted
 SH_ROWH_CAP  equ 255                ; records; the count is the KB's last word
 SH_ROWH_N    equ SH_ROWH_OFF + 1022
 SH_ROWH_REC  equ 4
-SH_MAXVC     equ 80                 ; visible columns at most: 640px / 8
+SH_MAXVC     equ 80                 ; visible columns at most: 640px / 8,
+                                        ; and still 640px for the reason
+                                        ; SH_MAXVR carries: 968px of grid over
+                                        ; 80 slots is 12px a column against
+                                        ; SH_CW_NORMAL's 7, so only a
+                                        ; sheet at SH_CW_MINCH reaches it, and
+                                        ; 128 would cost 144 bytes of bss
 SH_NOTEMAX   equ 240                ; the longest note the dialog will take,
                                     ; INCLUDING its NUL - 6 lines of 39 in the
                                     ; box below, which is what fits
@@ -687,6 +708,19 @@ SH_ROW_MASK  equ 0x3FFF
 ; This works on both kernel variants because it never touches the optional
 ; drag/timer slots at all.
 SH_MBAR_H    equ 14                  ; the in-window menu bar strip
+; A FLOOR UNDER THE GROW BOX (SPEC.md 11.100.2, 81.112). WMIN_W/WMIN_H are 96
+; and 64 for the whole machine, and this window's chrome alone is 54px across
+; and 74px down: at 96x64 the content is 45px tall, sh_geom clamps the grid to
+; nothing, and the horizontal bar is computed INSIDE the formula bar. So the
+; floor is the chrome plus one header, one row and one standard column - the
+; smallest SHEET that is still a spreadsheet. Derived from the strips rather
+; than written as a number, so a strip that changes height carries it.
+; It lives HERE, below SH_MBAR_H, because an `equ` cannot forward-
+; reference: at the geometry block above, SH_VSB_W and SH_MBAR_H are
+; still 500 lines away
+SH_MINW      equ SH_RH_W + SH_VSB_W + SH_CW_NORMAL + 2
+SH_MINH      equ SH_MBAR_H + SH_FB_H + SH_CH_H + SH_HSB_H + SH_SB_H \
+                 + SH_RH_NORMAL + TITLE_H + 1
 SH_MI_H      equ 12                  ; a dropdown item's row height
 SH_MPAD      equ 8                   ; left/right pixel pad per title/item
 SH_MKGAP     equ 24                  ; 81.101: label to shortcut caption
@@ -2459,6 +2493,26 @@ sh_entry:
     mov si, sh_tpl
     call OSAPI_WM_CREATE
     jc .fail
+    push ax                           ; SIZABLE (SPEC.md 11.1, 81.112). The
+    mov al, 1                         ; contract is that a resizable window's
+    call OSAPI_WM_SIZABLE             ; paint lays out from the LIVE record
+    pop ax                            ; every call, and sh_paint has always
+                                       ; done exactly that: it calls sh_geom,
+                                       ; which asks OSAPI_WM_CONTENT for the
+                                       ; content box and WALKS columns and
+                                       ; rows until the pixels run out. The
+                                       ; grid was never fixed at the
+                                       ; template's 560x380 - only the window
+                                       ; was, because nothing ever asked for
+                                       ; the flag. Notepad's np_paint carries
+                                       ; the same comment for the same reason
+    push cx                           ; ...and a FLOOR under it (SPEC.md
+    push dx                           ; 11.100.2): see SH_MINW above. A window
+    mov cx, SH_MINW                   ; that may be dragged can be dragged to
+    mov dx, SH_MINH                   ; WMIN_W x WMIN_H, where this one's own
+    call OSAPI_WM_MINSIZE             ; strips do not fit each other
+    pop dx
+    pop cx
     mov [sh_ownwin], bx               ; stage 2.0: os88ui_ask needs our own
                                        ; window ptr, and it's asked for from
                                        ; the macro engine, which has no window
@@ -7020,6 +7074,20 @@ sh_drawstatus:
     pop cx
     mov ax, (CBLACK << 8) | CWHITE    ; AL = ink, AH = ground
     call OSAPI_FONT_RUN
+
+    ; ...AND THE GROW BOX BACK (SPEC.md 11.1/81.112). The white fill at the
+    ; top of this routine runs to the content's right edge, and since 81.112
+    ; made the window sizable the kernel's 13x13 box lives in that strip's
+    ; bottom-right corner - so every selection move ate it, while wm_hit went
+    ; on reporting AL=4 from geometry alone: an invisible corner that still
+    ; resizes, which is the failure OSAPI_WM_GROW's own banner names. ONE call
+    ; here covers all eight callers, sh_repaint's full repaint among them,
+    ; because the fill that erases the box is this one. The indicator block
+    ; above stops at sh_cw-16 and the box starts at sh_cw-13, so they do not
+    ; overlap; the strip's top rule is at sh_ch-16, three rows above the box.
+    mov bx, [sh_ownwin]               ; Word and Browser spell this `mov bx,
+    call OSAPI_WM_GROW                ; si` - SI is the window in their paints
+                                       ; and is the message string in this one
 
     pop si
     pop dx

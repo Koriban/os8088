@@ -423,6 +423,56 @@ def main():
         print("  4 repaint identical        %s"
               % ("OK" if same else "DIFFERENT"))
         bad += not same
+
+        # --- ...and the GROW BOX is still in the corner ---------------------
+        # SPEC.md 11.1: wm_grow_paint draws a 13x13 box at the bottom-right
+        # of the frontmost visible WF_SIZABLE window, and SHEET asks for the
+        # flag since 81.112. Sheet is frontmost in BOTH shots, so the box
+        # belongs to both.
+        #
+        # It did not. The day the flag went on this row failed "12 of 135
+        # rows" at x 603..614, y 186..197 - which is that corner exactly -
+        # because sh_drawstatus' white fill runs to the content's right edge
+        # and ate the box the kernel had drawn, while wm_hit went on
+        # reporting AL=4 from geometry alone: an invisible corner that still
+        # resizes. The band saw it as a DIFFERENCE because the two shots lose
+        # it differently - at rest SHEET's own status-bar repaint had run
+        # last, and after the raise the kernel's wm_draw_win had - so the
+        # pixels moved while the defect sat in both.
+        #
+        # So this names it. It is not redundant with the band: a box missing
+        # from both shots is identical to itself.
+        shl = [w for w in os88geom.windows(m, S) if w.i == sh_win.i][0]
+        if shl.flags & os88geom.WF_SIZABLE:
+            gx0, gy0 = shl.x + shl.w - 14, shl.y + shl.h - 14
+            x0, x1 = max(gx0, cx0), min(gx0 + 13, cx1)
+            y0, y1 = max(gy0, cy0), min(gy0 + 13, cy1)
+
+            def boxed(v):
+                """thm_bg fill, thm_ink frame: the box's top row and left
+                column are one ink colour and its interior is not that
+                colour. Clipped to the band, so normally 12x12 of the 13."""
+                _, _, rows = v
+                g = [bytes(rows[y][x0:x1]) for y in range(y0, min(y1,
+                                                                 len(rows)))]
+                if len(g) < 3 or len(g[0]) < 3:
+                    return None                 # the frame clipped it away
+                ink = set(g[0]) | set(r[0] for r in g)
+                return len(ink) == 1 and not (set(g[1][1:-1]) & ink)
+
+            b4, after = boxed(shot0), boxed(shot1)
+            if b4 is None or after is None:
+                print("  4a grow box                SKIPPED: clipped away at "
+                      "(%d,%d)" % (gx0, gy0))
+            else:
+                miss = " and ".join(w for w, g in (("at rest", b4),
+                                                    ("after the raise", after))
+                                    if not g)
+                print("  4a grow box in both shots  %s"
+                      % ("OK" if not miss else
+                         "MISSING %s - a sizable window's own repaint owes "
+                         "OSAPI_WM_GROW (apps/os88api.inc)" % miss))
+                bad += bool(miss)
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)
         return 1 if bad else 0
 

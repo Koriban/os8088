@@ -122460,6 +122460,107 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.112 SHEET's window resizes
+
+`OSAPI_WM_SIZABLE` with `AL=1`, once, straight after `OSAPI_WM_CREATE`. That
+is the whole of the feature, and the reason is that **the grid was never fixed
+at the template's 560x380 - only the window was.** `sh_geom` asks
+`OSAPI_WM_CONTENT` and `OSAPI_WM_GEOM` for the content box on every call, and
+`sh_paint` calls `sh_geom` on every repaint; the column walk and the row walk
+then fill slots until the pixels run out (§81.56, §81.60). Nothing in the
+package held a width. So the layout followed the new size on the first drag
+with no further change, and that is the same property §11.1 asks of a
+resizable window: lay out from the LIVE record every paint. `np_paint` carries
+the identical note for the identical reason.
+
+**What it did owe was the grow box.** §11.1's 13x13 corner belongs to the
+frontmost visible `WF_SIZABLE` window, `wm_grow_paint` draws it, and
+`wm_grow_erase` takes it off when that window loses the front - but
+`sh_drawstatus` erases the status strip's interior all the way to the
+content's right edge, which is where the box sits, and SHEET called
+`OSAPI_WM_GROW` nowhere. So every selection move ate the box while `wm_hit`
+went on reporting `AL=4` from geometry alone: **an invisible corner that still
+resizes**, which is exactly the failure the API's own banner names. One call
+at the end of `sh_drawstatus` pays all eight of its callers, `sh_repaint`'s
+full repaint among them, because the fill that erases the box is that one.
+Word and Browser spell it `mov bx, si`; this one reads `[sh_ownwin]`, SI being
+the message string here and not the window.
+
+The box does not collide with anything: the indicator block (§81.104) ends at
+`sh_cw-16` and the box starts at `sh_cw-13`, and the strip's top rule is at
+`sh_ch-16`, three rows above it.
+
+**`SH_MAXVR` and `SH_MAXVC` were left alone, and that is a measurement rather
+than an oversight.** They cap the walks, so on a desktop bigger than the one
+they were sized for the grid would end in mid-air - white below and to the
+right of the last slot, not a refusal. The numbers:
+
+A maximized window on that desktop is `W_W` 1024, `W_H` 768, so `sh_cw` is
+1022 and `sh_ch` 749; the grid is `sh_cw` less `SH_RH_W + SH_VSB_W` (54) by
+`sh_ch` less the five strips above and below it (74).
+
+| | cap | grid px | px per slot the cap allows | what the standard size wants |
+|---|---:|---:|---:|---|
+| rows | 64 | 675 | 10.5 | 14px (`SH_RH_STDTW`, 12.75pt) -> 48 |
+| columns | 80 | 968 | 12.1 | 56px (`SH_CW_NORMAL`, 7 chars) -> 17 |
+
+So both caps are reached only by a sheet whose rows are near `SH_RH_MIN` (8px,
+84 slots) or whose columns are at `SH_CW_MINCH` (1 character, 121 slots). Raising them to 96 and 128 - 768px and
+1024px at the minimum, which is the rule the original numbers followed - costs
+**240 bytes of bss**, and §81.111 left SHEET **262 bytes** of `APP_MAX_SIZE`.
+Spending 92% of the remaining budget on the pathological configuration is the
+wrong trade while the headroom is what it is; the caps go up in the same
+commit that moves another resident routine to CHART.OVL. Measured with
+`tools/os88pkgsize.py`, which is the only honest way to quote this.
+
+**A FLOOR comes with the flag** (§11.100.2). `WMIN_W`/`WMIN_H` are 96 and 64
+for the whole machine, and this window's chrome alone is 54px across and 74px
+down: at 96x64 `sh_cw`/`sh_ch` are 94x45, `sh_geom` clamps both grid
+dimensions to zero, and the horizontal bar - placed at
+`sh_ch - SH_SB_H - SH_HSB_H` - lands inside the formula bar. So the entry proc
+calls `OSAPI_WM_MINSIZE` with `SH_MINW` x `SH_MINH`, which are **derived from
+the strips** rather than written as numbers, so a strip that changes height
+carries the floor with it:
+
+| | |
+|---|---|
+| `SH_MINW` | `SH_RH_W + SH_VSB_W + SH_CW_NORMAL + 2` = 112 |
+| `SH_MINH` | `SH_MBAR_H + SH_FB_H + SH_CH_H + SH_HSB_H + SH_SB_H + SH_RH_NORMAL + TITLE_H + 1` = 107 |
+
+They sit below `SH_MBAR_H` and not up in the geometry block, because an `equ`
+cannot forward-reference and half their inputs are 500 lines further down.
+Measured: dragged as small as the glass allows, SHEET comes to rest at 114x107
+outer with a 112x88 content and **exactly one column and one row**.
+
+**The cost of the feature is 36 bytes**: image 52,040 with 9,174 of bss, so
+226 bytes of resident room are left.
+
+`tests/sheetsize.py` is the row, and it drags rather than reads: SIZABLE,
+SHRUNK (`W_W`/`W_H` and `sh_cw`/`sh_ch` both fall), FEWER (`sh_vcols`/
+`sh_vrows` fall - the claim, since the walks fill slots until the pixels run
+out), INSIDE (§11.94.5.1's leg: the status strip's rule must be solid ink to
+the NEW right edge and no longer a rule at the old one, because every count
+can be right while the layout is still drawn at the width the window ASKED
+for), FLOOR and GREW. **It packs its own floppy, so it declares
+`build/sheet.o88` and the two overlays in `wants=`** - without that it built
+them itself under the other rows, and before that it did not build them at
+all and the control below passed all five legs against the previous build.
+
+The control is `OSAPI_WM_SIZABLE` with `AL=0`: SIZABLE, SHRUNK, FEWER and
+INSIDE all fail and GREW passes, a window that never resizes ending with the
+counts it began with.
+
+`tests/sheetmove.py` grows check **4a**: the grow box is a framed box in both
+of its shots. That row already compared Sheet's content rectangle byte for
+byte either side of a heap compaction and a raise, and the erase defect failed
+it as "12 of 135 rows" differing at x 603..614, y 186..197 - the corner
+exactly. It read as a DIFFERENCE rather than an absence because the two shots
+lose the box differently: at rest SHEET's own status-bar repaint ran last, and
+after the raise `wm_draw_win` did. 4a names it, and it is not redundant with
+the band, because a box missing from both shots is identical to itself.
+Mutation-tested per the standing rule: with the `OSAPI_WM_GROW` call commented
+out, check 4 reports DIFFERENT and 4a reports MISSING at rest.
+
 ### 81.111 Every SHEET dialog button fires on the release
 
 Upstream changed `os88ui_btn` (§20.5.1.3): it draws button *n* of a RECORD
