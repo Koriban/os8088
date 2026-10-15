@@ -3,9 +3,22 @@ cell SHOWS - for gates whose subject is what is drawn rather than what is
 stored (SPEC.md 81.54, 81.55).
 
 The screen is m.vram()'s 1bpp picture, in which ink is 0. The glyphs are the
-kernel's own (`font_glyphs`, 32..126, eight bytes a glyph, bit 7 the left
-pixel, 1 ink): whatever the BIOS handed font_init is what the grid was drawn
-with, so a match is exact and there is no font file to keep in step.
+kernel's own (32..126, eight bytes a glyph, bit 7 the left pixel, 1 ink):
+whatever the BIOS handed font_init is what the grid was drawn with, so a match
+is exact and there is no font file to keep in step.
+
+THEY ARE FOLLOWED THROUGH [font_seg]:[font_base] AND NOT READ AT A SYMBOL.
+This used to read `font_glyphs`, which SPEC.md 6.0.1 made conditional: that
+buffer is `%ifdef BAKED_FONT` now, because a baked face (SPEC.md 6.2) is
+overlay bytes and has to be copied somewhere that stays, while THE ROM'S FACE
+IS READ WHERE IT IS. A stock kernel defines no such symbol, so every gate
+that read cell text through here died with `no kernel symbol 'font_glyphs'`.
+
+font_init's whole job is to leave [font_seg]:[font_base] pointing at glyph
+FONT_FIRST wherever it decided the table lives - the ROM, .lowbss under
+BAKED_FONT, or the 1KB heap claim the timed COPY verdict takes (FONTSLOW=1).
+Following the pointer is correct for all three and cannot go stale the way a
+symbol did.
 """
 
 FONT_FIRST, FONT_N = 32, 95
@@ -13,7 +26,9 @@ FONT_FIRST, FONT_N = 32, 95
 
 def glyphs(m):
     """{8-byte glyph: character} from the running kernel."""
-    raw = m.read(m.sym("font_glyphs"), FONT_N * 8)
+    seg = int.from_bytes(m.read(m.sym("font_seg"), 2), "little")
+    base = int.from_bytes(m.read(m.sym("font_base"), 2), "little")
+    raw = m.readseg(seg, base, FONT_N * 8)
     out = {}
     for i in range(FONT_N):
         g = bytes(raw[i * 8:i * 8 + 8])
