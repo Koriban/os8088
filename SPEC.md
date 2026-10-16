@@ -136754,10 +136754,25 @@ behind it, and a later redraw paints an **8-row band — y 112–185, the full
 window width, x 56–487** — as striped rubble, FPTEST's own text with vertical
 bars through it. What is measured, and no more than that:
 
-- the DATA is untouched. `fpt_bad` reads 0 and `fpt_r` 38 in every frame,
-  before and after, and the gate reads bss and is blind to it either way;
-- **the same 126 cases in a 300-wide window corrupt nothing at all**, so it
-  is the overlap and not the two-second paint. That is the whole A/B;
+- **it needs BOTH the width and the long paint, not either alone.** The same
+  126 cases in a 300-wide window corrupt nothing; and a 460-wide window whose
+  paint is made fast — the series call cut out, all 126 rows still drawn —
+  corrupts nothing either. (An earlier revision of this section said the
+  overlap alone was "the whole A/B". It was written before the second half of
+  that A/B existed, and it was wrong.)
+- **the data is NOT merely untouched, and this is the part to chase first.**
+  The FIRST paint is always right — every run, every probe, `fpt_bad` 0 and
+  the gate's line correct, which is why `tests/fptest.py` is honest: it reads
+  the first complete line and returns. But a 135-second watch caught a later
+  redraw ending with **`fpt_bad` = 236, and then 217**. There are 126 cases
+  and the byte is zeroed at the top of `fpt_runall`, so no single run can
+  reach either number. Something is counting past the table or two runs are
+  interleaving;
+- **re-entrancy is NOT yet proven.** A build instrumented with a nesting
+  counter in `fpt_paint` reports `maxnest` = 1 — but in those runs no redraw
+  ever happened, so the instrument has not yet seen the case that matters.
+  Redraws here are not deterministic: of the runs attempted, the artefact
+  appeared in two and the other four never repainted at all;
 - FPTEST is the FRONT window (`z-order bottom-first ['APPS', 'FP self-test']`),
   so this is not the app being clipped against something above it;
 - the band is wider than the window behind it — x 56 is 274 pixels left of the
@@ -136765,9 +136780,26 @@ bars through it. What is measured, and no more than that:
   either, and no mechanism is claimed here;
 - the width itself is ordinary: `isotron` is 640 wide and `midirack` 624.
 
+- **a 126-case paint is ~8 GUEST seconds, and the pointer cannot move
+  through it.** That is what defeated every attempt to force a redraw and
+  measure one: `ui.close()` gives a raise 8 guest seconds and `os88mouse.to`
+  gives a move 6, and both expire inside a single repaint. The emulator runs
+  at ~3.6x real time, so the 2.3 host seconds the first paint takes are
+  roughly 8 of the guest's own. It is not a kernel fault — §11.90.1 prices
+  Paint's own `W_PAINT` at 8.7 seconds and §28.10 calls that interval what it
+  is — but it does mean this window is hostile to drive, and anything that
+  wants to catch a redraw needs budgets raised past one paint first.
+
 A first clean frame is `screenshots/fptest-126.png`, and it carries one
 8-pixel scanline of the same artefact at y 167 — the smallest instance of it,
 left in the picture rather than cropped out.
+
+**What NOT to do with this.** The app's own header says running the cases in
+`W_PAINT` is deliberate, *"so the answer on screen is never a stale one"*, and
+caching the results would make a redraw cheap by giving up exactly that. The
+gate does not need it either: `tests/fptest.py` reads the first complete line,
+and the first paint has been correct in every run of every probe. Fix the
+redraw, or leave it; do not buy a quiet redraw with a stale verdict.
 
 ### 84.5 A design note worth keeping
 
