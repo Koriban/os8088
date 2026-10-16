@@ -58,6 +58,14 @@ VMPORT ?= off
 QEMUMACH := -machine pc,vmport=$(VMPORT)
 QEMU  := qemu-system-i386
 BUILD := build
+# CC_OVLZ, HOISTED. apps/cc/Makefile.inc owns it and is included ~7,800 lines
+# below, but make expands a rule's PREREQUISITES when the rule is READ, so any
+# disk naming $(CC_OVLZ)/<NAME>.OVL before that include got an EMPTY variable
+# and a prerequisite of `/CHART.OVL`. That is not a build failure anybody sees:
+# the disk simply does not build, os88test reports the row SKIPPED, and a skip
+# in a 56-row sweep reads like a pass. build/sheetmove360.img sat that way for
+# two full sweeps. The include re-states this with the same expression.
+CC_OVLZ := $(BUILD)/ovlz
 IMG   := $(BUILD)/os8088.img
 # ...and the 1.2MB 5.25" HD pair (SPEC.md 19), which is the AT-class machine
 # with a 5.25" drive and nothing else in it. That machine can read the 360KB
