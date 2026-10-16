@@ -130226,6 +130226,47 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
+
+Four things, and three of them are invisible in a diff.
+
+**`OSAPI_FILE_GOTO` became `OSAPI_FILE_GOTO_QM`** (§19.9.1). The deferred
+load stands in the document's folder QUIETLY: nothing here lists it, so the
+remount's scan, sort and icon harvest were about half a second of floppy
+bought for no reader.
+
+**`sh_itoa` is `dec_s16` now** (`apps/os88dec.inc`, §20.5.2) - upstream
+consolidated the signed itoa this file and `os88chart.inc` each carried. THE
+TRAP IS THE SECTION, not the call: `os88chart.inc` includes `os88dec.inc`
+when nobody else has, and under `CH_OVERLAY` that put `dec_s16` in `.modc`
+while `sh_itoa` calls it near from TWELVE resident callers. `sheet.asm` claims
+the include for `.text` before `os88chartovl.inc`, and `os88chart.inc`'s own
+guarded copy moved ABOVE its section switch - `tools/os88ovlchk.py` does not
+evaluate `%ifdef` and takes a file's LAST inclusion, so the source has to be
+unambiguous and not merely correct. The module reaches both routines through
+`CHFP`'s vectors like every other resident routine it needs, which is two
+more shims, two more `ch_v_*` slots and `OS88_BSS` 9,174 -> 9,182.
+
+**Both modules SHIP PACKED** (§20.13.5, §73.14.1). `CHART.OVL` and `MACRO.OVL`
+go through the C SDK's `CC_OVLZ_RULE` although SHEET is assembly, exactly as
+`SCRIBE.OVL` does: `ch_ovneed` reads with `OSAPI_FILE_READ`, which is
+transparent, and the `CH_OVKB`/`SH_M2KB` checks are against the UNPACKED cut.
+A disk names `$(CC_OVLZ)/<NAME>.OVL`; `tests/unit/t_pkgzrules.py` fails the
+build otherwise, and `t_pkg` had to learn that `build/ovlz/` overrides the
+top-level copy.
+
+**AND THE STANDARD FILE DIALOG IS A DISK WINDOW** (§38.3, upstream 2657efea's
+line), which is what the merge actually cost. Its buttons are a column down
+the right edge and its list is a Disk window's rows; this fork's sheet fixture
+clicked both at the old geometry and **38 of 56 rows failed with no error
+message anywhere** - the click lands in the file list, selects nothing, the
+chooser stays up, and every later assertion reads `None`. The 18 that passed
+are exactly the ones that never open a chooser. The rows drive it BY NAME now
+(`tools/os88ui.py`'s `chooser_open`/`chooser_save`, which confirm against the
+chooser's own `FS_SEL`), which is `open_shin`'s lesson one dialog along:
+rows double-clicked the THIRD row until §81.94's `MACRO.OVL` sorted between
+`CHART.OVL` and `SHEET.O88` and seven of them opened an empty sheet.
+
 ### 81.112 SHEET's window resizes
 
 `OSAPI_WM_SIZABLE` with `AL=1`, once, straight after `OSAPI_WM_CREATE`. That
@@ -135853,6 +135894,24 @@ something to point at.
 existing two-lowest-column logic picks within it — which for the usual
 one-column name is that column and nothing else, so **no new selection
 machinery was needed**, only a filter in front of the old one.
+
+**THE FILTER NEVER RAN UNTIL THE 2026-10-14 MERGE.** The paragraph above
+describes what the code was shaped to do and not what it did: `ct_reset_series`
+zeroed `ct_wantrng` and EVERY READER called it first, so `Data > <a name>` set
+the request, re-read the file, and `ct_record` then tested a zero and filtered
+nothing. Every chart was the lowest column's, exactly as before the feature.
+
+It survived because **nothing tests Chart**: there is no `tests/chart*.py` and
+no chart row in `tests/suite.py`, so the only thing that could have caught it
+was reading the reset and the test together, which nobody had reason to do.
+Upstream's own restructure is what fixed it - the per-reader reset became one
+reset in `ct_read_by_ext`, and `ct_wantrng` is pointedly NOT in it, because the
+request has to outlive the read it is requesting. `ct_ondlg` clears it for a
+NEW file, which is the only place that ever wanted it cleared.
+
+A feature whose gate does not exist is a feature nobody can say is working,
+and this one was written down as working for two cycles. The gap is recorded
+rather than closed here.
 
 **It is a relabelling, not a second menu.** The `Data` menu's eight slots are
 buffers, filled at startup with `Column A`..`Column H` and overwritten with
