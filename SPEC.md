@@ -135907,12 +135907,22 @@ mutations say so:
 | §82.18's `0xFFFF` test deleted | 3 and 4 |
 | the per-file `ct_nnames` reset removed (§82.17) | **6 alone** |
 | `abs()` in `ct_record`'s store — a defect **shared** by all three readers | **5 alone, with 4 passing** |
+| the slot/file routing defect restored (§82.15) | **8 alone** |
 
 The first two are the argument for check 4: a decoder that drops a sign or
 shifts an RK wrong still hands `ct_record` four numbers, so checks 1–3 all
 pass on four wrong ones. The last is the argument for check 5: a defect in
 the *shared* path leaves the three readers agreeing, so check 4 passes and
 only a check tying the published words back to the data can catch it.
+
+**Checks 7 and 8 are `Data > Column` (§82.12), the untested twin of §82.15's
+range filter** — `ct_wantcol` and `ct_wantrng` are a pair and only the range
+half had ever been exercised. Check 7 is the ordinary path, on the BIFF file,
+which carries no names; **check 8 is the same menu item on the SYLK, which
+does**, and it failed the first time it ran. §82.15 has the defect it found.
+That is the second time in this chapter that a feature was written down as
+working and was not, and both times the reason was the same: nothing drove
+the menu.
 
 #### 82.18.1 What Chart still does not know
 
@@ -135982,6 +135992,31 @@ drops, so nothing has to be rebuilt; a genuinely dynamic menu would have to
 be, and the kernel's menu set is a static structure (§13.5). Any slot past
 the last name keeps its column label, so a half-filled menu still says what
 the rest are.
+
+**That last sentence was false for as long as the feature existed, and
+`tests/chartread.py` found it on its first run (§82.18.2).** The labels were
+right — `ct_labels_names` calls `ct_labels_cols` first and overwrites only
+the slots a name occupies, exactly as described — but the *handler* decided
+which KIND a slot was by asking whether the file had any names at all:
+
+```nasm
+    cmp byte [ct_nnames], 0
+    je .dcol
+    mov [ct_wantrng], ax            ; ...for ALL EIGHT slots
+```
+
+So one name in a file made every slot a name. Picking `Column B` on a
+one-name document stored `ct_wantrng` = 2, which selects **name record #1 —
+a record no file ever defined**, and `ct_record` then filtered the cells
+against whatever corners that slot happened to hold. The menu said one thing
+and the app did another, and only a document with *both* a name and data
+outside it can tell: `chartname`'s fixture has one name and two columns but
+never picks a column, so it could not.
+
+The fix is that **the slot decides, not the file** — `cmp al, [ct_nnames]` /
+`ja .dcol`, `AL` being the 1-based slot, so "past the last name" is a column.
+It subsumes the old zero test (with no names every slot is past the last one)
+and the package got a byte smaller.
 
 Names belong to **the file that is open**: a read clears the table first, and
 opening another file relabels from that one. `Automatic` clears both the

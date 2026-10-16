@@ -13288,7 +13288,14 @@ SOAK = [
         "by 3 each fail 4 ALONE; dropping the per-file ct_nnames reset fails "
         "6 alone; deleting 82.18's 0xFFFF test charts the dead cell and "
         "fails 3 and 4; and abs() in ct_record's store - a defect SHARED by "
-        "all three readers, so they still agree - fails 5 with 4 passing",
+        "all three readers, so they still agree - fails 5 with 4 passing. "
+        "Checks 7-8 are Data > Column (82.12), the untested twin of 82.15's "
+        "range filter: 7 on the BIFF (no names) and 8 on the SYLK (one "
+        "name), where the SAME menu item must still mean a column. 8 FAILED "
+        "the first time it ran - the handler asked whether the FILE had any "
+        "names rather than which SLOT was picked, so one name made all eight "
+        "slots names and Column B selected a name record nothing defined. "
+        "Fixed in the same commit; restoring it fails 8 alone",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,

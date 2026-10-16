@@ -312,8 +312,20 @@ ct_oncmd:
     xor ah, ah
     or ax, ax
     jz .dauto                           ; Automatic clears both, whichever the
-    cmp byte [ct_nnames], 0             ; eight slots are currently showing
-    je .dcol
+                                        ; eight slots are currently showing
+    cmp al, [ct_nnames]                 ; THE SLOT DECIDES, NOT THE FILE. This
+    ja .dcol                            ; tested `cmp byte [ct_nnames], 0`, so
+                                        ; one name in the file made all EIGHT
+                                        ; slots names - including the ones
+                                        ; ct_labels_names leaves saying
+                                        ; "Column B".."Column H", which 82.15
+                                        ; says keep their column label "so a
+                                        ; half-filled menu still says what the
+                                        ; rest are". Picking one stored a
+                                        ; wantrng of 2..8 and selected a name
+                                        ; record no file ever defined. AL is
+                                        ; the 1-based slot, so `ja` is
+                                        ; "past the last name"
     mov [ct_wantrng], ax                ; the slots are NAMES: chart that range
     mov word [ct_wantcol], 0
     jmp short .dshow

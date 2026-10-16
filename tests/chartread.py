@@ -52,6 +52,14 @@ against a file Sheet wrote and the host decoded" and had no gate.
                all three readers agreed on rubble cannot pass
   6 NAMES      a name belongs to the FILE: the SYLK carries one, and after the
                BIFF (which carries none) is opened the menu offers none
+  7 COLUMN     Data > Column B charts column B (82.12) - the untested twin of
+               82.15's range filter, and the same shape of mechanism
+  8 BOTH       ...AND IT STILL DOES WHEN THE FILE HAS A NAME IN IT. The Data
+               menu's eight slots are names FIRST and "Column X" for the rest
+               (ct_labels_names: "so a half-filled menu says what the rest
+               still are"), so a one-name file offers PICK, Column B, Column
+               C... The handler decides which KIND a slot is by whether the
+               file has any names at all, not by which slot was picked
 """
 import os
 import struct
@@ -332,6 +340,42 @@ def main():
               got="%d after the SYLK, %d after the BIFF"
                   % (names_after_sylk, rdb("ct_nnames")),
               want="1 after the SYLK, 0 after the BIFF")
+
+        # --- Data > Column, on the file that has no names in it -------------
+        ui.menu_pick("Data", "Column B")
+        ui.settle()
+        col = published()
+        check(rd("ct_wantcol") == 2 and rd("ct_wantrng") == 0
+              and col[1] == 1, "7 COLUMN",
+              "Data > Column B stores the 1-based COLUMN and charts it "
+              "(82.12). This is 82.15's filter one branch along - the pair "
+              "ct_wantcol/ct_wantrng - and only the range half had a test",
+              got="wantcol %d, wantrng %d, column %d"
+                  % (rd("ct_wantcol"), rd("ct_wantrng"), col[1]),
+              want="wantcol 2, wantrng 0, column 1")
+        check(col[1] != bif[1], "7a ...AND IT CHANGED THE ANSWER",
+              "the control: Automatic charted column A, so a row that only "
+              "asked whether picking a column charted SOMETHING would pass "
+              "against a choice that never reached the reader",
+              got="Automatic %d, Column B %d" % (bif[1], col[1]),
+              want="different columns")
+
+        # --- ...and on the file that DOES have a name ----------------------
+        # The menu now reads PICK, Column B, Column C...: slot 0 is the name
+        # and ct_labels_names leaves the rest saying what they still are.
+        load(SLK)
+        ui.menu_pick("Data", "Column B")
+        ui.settle()
+        check(rd("ct_wantcol") == 2 and rd("ct_wantrng") == 0, "8 BOTH",
+              "the SAME menu item must mean the same thing when the file "
+              "also has a name. ct_labels_names fills slot 0 with PICK and "
+              "slots 1-7 with Column B..Column H, so this item IS a column - "
+              "but the handler tests `cmp byte [ct_nnames], 0` and routes "
+              "EVERY slot to ct_wantrng once the file has any name at all. "
+              "A wantrng of 2 selects name record #1, which no file defined",
+              got="wantcol %d, wantrng %d"
+                  % (rd("ct_wantcol"), rd("ct_wantrng")),
+              want="wantcol 2, wantrng 0")
     done("chartread")
 
 
