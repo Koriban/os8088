@@ -110,19 +110,19 @@ vid_dbg_blk:
 ; stop existing when kmain gives the blob back.
 ; =============================================================================
 %ifndef KERN_SMALL
-section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
+section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3) -
                                 ; forfeit at the first mount, and this build's
                                 ; window has room to spare
 %else
-section .ovl                    ; ...and kern_small: the BLOB half instead
+section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; (SPEC.md 2.5.3.2). Same deadline either way -
                                 ; every caller here runs before drv_boot - so
                                 ; the choice is only about WHOSE bytes: on this
-                                ; kernel `.ovlw` is what sizes the FAT window
+                                ; kernel `.ovl` is what sizes the FAT window
                                 ; plus the mount buffers, and those bytes are
                                 ; the listing's. The blob is already read and
                                 ; has room, so the body goes there and the
-                                ; region sheds. `.ovl` is written LAST on
+                                ; region sheds. `.boot2` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE and
                                 ; cannot evaluate the %ifdef, so it files this
                                 ; block by the arm below - which is the build
@@ -288,7 +288,7 @@ vid_probe_avail:
     pop cx
     pop ax
     retf                        ; FAR: the trio's only entry from outside the
-                                ; blob, reached by OVLGATE1 from kmain. The two
+                                ; blob, reached by SPLGATE1 from kmain. The two
                                 ; bodies around it are near-called from in here
                                 ; and keep their near `ret`
 
@@ -442,12 +442,12 @@ vid_equip:
     jne .go
     mov bl, 0x30                ; 11b = monochrome at B000
 .go:
-    mov ax, 0x0040              ; the BIOS data area
-    mov ds, ax
-    mov al, [0x0010]
+    xor ax, ax                  ; the BIOS data area, by segment 0 and the
+    mov ds, ax                  ; LINEAR offset 0x410 = 0040:0010 (a byte
+    mov al, [0x0410]            ; shorter than mov ax, 40h - size pass 9)
     and al, 0xCF
     or al, bl
-    mov [0x0010], al
+    mov [0x0410], al
     pop ds
     pop bx
     pop ax
@@ -511,7 +511,9 @@ vid_mono_text:
     mov cx, 2000
     cld
     rep stosw
-    mov dx, 0x3B8               ; high-res text, video ON, blink on - IBM's own
+    mov dl, 0xB8                ; high-res text, video ON, blink on - IBM's own
+                                ; (3B8h: vid_6845_prog leaves DX at 3B4h, and
+                                ; rep stosw moves no DX)
     mov al, 0x29                ; mode 7 value, and the last write for the same
     out dx, al                  ; reason vid_setmode's is (39.6): onto a page
     pop es                      ; that is already blank
@@ -580,12 +582,12 @@ vid_reboot:
 ; reads as a hang. A line under the bar naming the file being read turns it
 ; into a machine that is visibly working.
 ;
-; **EVERY BYTE OF THE CODE, THE STRINGS AND THE BUFFER IS IN `.ovl`**, which
+; **EVERY BYTE OF THE CODE, THE STRINGS AND THE BUFFER IS IN `.boot2`**, which
 ; is what makes the feature free: the overlay rides stage 2's blob (SPEC.md
 ; 2.9.6), which stage 1 reads before it jumps and kmain gives back after
 ; spl_finish - so this is drawing code that exists for exactly as long as there
 ; is a loading screen to draw on, and then stops existing. The resident cost is
-; 4 bytes (ovw_font_run_x) plus the two OVLCALL sites.
+; 4 bytes (ovw_font_run_x) plus the two SPLCALL sites.
 ;
 ; **That is only possible since SPEC.md 2.5.1.** The overlay used to BE the FAT
 ; window, so the first mount ate it - and drv_boot's own mount is the very
@@ -632,7 +634,7 @@ vid_reboot:
 ; shown until after spl_finish, and [spl_live] refuses spl_mdraw the moment
 ; the desktop owns the screen.
 ; =============================================================================
-section .ovl
+section .boot2
 
 SPL_MSG_CELLS equ 32            ; the reserved width, in 8px cells. 32 because
                                 ; the longest line the tree can compose is
@@ -649,11 +651,11 @@ SPL_MSG_Y     equ 288           ; VGA: under the bar trough (rows 262..281) and
 ;
 ; **THE FIRST THREE ARE NEAR NOW** (SPEC.md 2.5.2): drv_boot_x moved into this
 ; same section, and it is their only caller, so what used to be a 20-byte
-; OVLCALL through spl_fp is three bytes of near call in one address space and
+; SPLCALL through spl_fp is three bytes of near call in one address space and
 ; the `retf` they answered it with is a `ret`. That collapse is most of why
 ; docs/plans/LAST-DROP-BYTES.md row 1 is the only row in the register that returns
 ; more than it spends. ovl_spl_redraw below keeps its `retf` - spl_reset is in
-; `.boot2` and reaches it through OVLCALL still.
+; `.boot2` and reaches it through SPLCALL still.
 ; -----------------------------------------------------------------------------
 ovl_spl_msg_cfg:                ; 'Loading SYSTEM.CFG'
     push si
@@ -1383,12 +1385,12 @@ vid_ac_pal:
     cli
     mov dx, 0x3DA               ; Input Status 1: latch to INDEX...
     in al, dx
-    mov dx, 0x3C0
+    mov dl, 0xC0                ; (3C0h: DH is 3 from the move above)
     mov al, 0x32                ; ...AC 12h, Color Plane Enable, WITH BIT 5
     out dx, al
     mov al, ah
     out dx, al                  ; 0 = every pixel reads as attribute 0
-    mov dx, 0x3DA               ; leave the latch where every reader assumes
+    mov dl, 0xDA                ; leave the latch where every reader assumes
     in al, dx                   ; it, INDEX, and not mid-pair
     popf
     pop dx
@@ -1686,11 +1688,11 @@ vid_ctx_act:
 ; docs/plans/LAST-DROP-BYTES.md row 13) - and a stale comment naming a runtime caller
 ; is exactly how a later session would add the one that breaks it silently.
 ;
-; Its two outbound calls go through cw_ shims, which is `.ovl`'s discipline
+; Its two outbound calls go through cw_ shims, which is `.boot2`'s discipline
 ; unchanged from `.cold`'s: CS is the blob's, DS is still KERNEL_SEG, so the
 ; body reads [vid_ndisp] and [vid_ox] exactly as it did.
 ; -----------------------------------------------------------------------------
-section .ovlw
+section .ovl
 vid_ctx_init:
     push ax
     push cx
@@ -1712,7 +1714,7 @@ vid_ctx_init:
     pop di
     pop cx
     pop ax
-    retf                        ; FAR: kmain reaches this through OVLGATE1
+    retf                        ; FAR: kmain reaches this through SPLGATE1
 section .text
 
 ; (vid_fsx_enter/leave/unblank: EXTD.DRV's EXT_FSX, kernel/extmod.inc -
@@ -1760,9 +1762,8 @@ vid_disp_of:
 ; display" is exactly the case it exists to correct.
 ; -----------------------------------------------------------------------------
 vid_disp_find:
-    push bx
-    push cx
-    push dx
+    push cx                     ; (BX is only READ here, so it is not banked -
+    push dx                     ; size pass 9; vid_span_one leans on that too)
     push di
     xor cl, cl                  ; CL = the display being tested, and DI walks
     mov di, vid_ctx             ; the records rather than vid_ctx_ptr deriving
@@ -1797,9 +1798,8 @@ vid_disp_find:
     cmc                         ; 1 on a miss - with AL = the count on a miss,
                                 ; which the header's "clobbers AX" allows
     pop di                      ; pop touches no flag, so the CF set above
-    pop dx                      ; survives all four
+    pop dx                      ; survives all three
     pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1828,10 +1828,10 @@ vid_disp_planes:
     push di
     call vid_disp_of            ; AL = the display holding it...
     call vid_kind_of            ; ...and AL = that display's adapter
-    mov cx, 4
-    cmp al, VID_VGA
-    je .out
     mov cx, 1
+    cmp al, VID_VGA
+    jne .out
+    mov cl, 4
 .out:
     pop di
     pop ax
@@ -1847,32 +1847,31 @@ vid_pt_clamp:
     push cx
     push dx
     push di
-    push ax
+    push si
+    xchg ax, si                 ; SI = x
+    push bx                     ; ...and y, banked
     mov al, cl
-    call vid_ctx_ptr
-    pop ax
-    mov dx, [di+VID_CTX_VX]     ; x into [vx, vx + cw - 1]
-    cmp ax, dx
-    jge .xlo
-    mov ax, dx
+    call vid_ctx_rect           ; AX..DX = display CL's rect (size pass 9: the
+    cmp si, ax                  ; clamp is gfx_rect_isect's shape against the
+    jge .xlo                    ; one routine that builds the rect, rather
+    mov si, ax                  ; than a third copy of building it)
 .xlo:
-    add dx, [di+VID_CTX_CW]
-    dec dx
-    cmp ax, dx
+    cmp si, cx                  ; x into [vx, vx + cw - 1]
     jle .xok
-    mov ax, dx
+    mov si, cx
 .xok:
-    mov dx, [di+VID_CTX_VY]
-    cmp bx, dx
+    pop ax                      ; y into [vy, vy + ch - 1]
+    cmp ax, bx
     jge .ylo
-    mov bx, dx
+    mov ax, bx
 .ylo:
-    add dx, [di+VID_CTX_CH]
-    dec dx
-    cmp bx, dx
+    cmp ax, dx
     jle .yok
-    mov bx, dx
+    mov ax, dx
 .yok:
+    xchg ax, bx                 ; BX = y
+    xchg ax, si                 ; AX = x
+    pop si
     pop di
     pop dx
     pop cx
@@ -1930,8 +1929,10 @@ vid_pt_clamp:
 ; Control Panel then OFFERS the desktop radios that SPEC.md 47 says it must
 ; grey, fsx hands out a second page that is not there, and vid_disp_init takes
 ; the extend arm into an empty socket. Restored to two exits deliberately.
-; ...AND IT PRESERVES AH, which vid_disp_init now relies on: it loads the
-; primary's kind ONCE above its own branch and both arms below read it back.
+; ...AND IT PRESERVES AX, which vid_disp_init now relies on: it loads the
+; primary's kind ONCE above its own branch and both arms below read it back,
+; and since size pass 9 it asks vid_disp_other above the branch too, so AL
+; (the other display's kind) must survive this as well.
 vid_dual_ok:
     cmp byte [vid_kind], VID_VBE    ; VBE is single-display for EGA's reason and
     je .no                          ; one of its own: the per-display context is
@@ -2047,6 +2048,11 @@ vid_disp_init:
     push ax
     push di
     mov ah, [vid_kind]          ; the primary, banked across the two applies -
+    call vid_disp_other         ; (AL = the other display's adapter, which is
+                                ; NOT simply the other of two kinds - see there,
+                                ; and see what a VGA's CGA bit means. Above the
+                                ; branch since size pass 9: every arm that
+                                ; goes on wants it, and vid_dual_ok keeps AL)
     call vid_dual_ok            ; ONE load above the branch, because both arms
     jnc .paired                 ; below want it and vid_dual_ok keeps AH (it
                                 ; is three compares, a clc and an stc)
@@ -2062,7 +2068,7 @@ vid_disp_init:
     ; from, which is a desktop drawn into the wrong segment at the wrong
     ; stride. A refusal has to bring the arrangement DOWN.
     cmp byte [vid_ndisp], 1
-    jne .collapse               ; ...otherwise collapse it through the arm
+    jne .single                 ; ...otherwise collapse it through the arm
                                 ; that already knows how. [vid_dmode] is kept:
                                 ; the arrangement is impossible on THIS
                                 ; primary, not forgotten
@@ -2083,14 +2089,8 @@ vid_disp_init:
     ; it was never erased and its image stayed on the glass (SPEC.md 39.29.11).
     xor al, al
     call vid_ctx_capture        ; AX is this routine's own, pushed on entry
-    jmp short .out
-.collapse:
-    call vid_disp_other
-    jmp short .single
+    jmp short .jout
 .paired:
-    call vid_disp_other         ; ...and AL = the other display's adapter, which
-                                ; is NOT simply the other of two kinds - see
-                                ; there, and see what a VGA's CGA bit means
     cmp byte [vid_dmode], 0
     jne .extend
 
@@ -2143,11 +2143,25 @@ vid_disp_init:
 ; the whole of it: displays do not overlap (SPEC.md 39.19.2 places them edge
 ; to edge), so a rect inside one of them is inside the one holding its origin.
 ; -----------------------------------------------------------------------------
+vid_span_wh:                    ; ...and the same question of a WIDTH and a
+    push cx                     ; HEIGHT (AX/BX = x/y, CX/DX = w/h, all three
+    push dx                     ; blitters' own convention), which they each
+    add cx, ax                  ; converted inline before size pass 9. Keeps
+    dec cx                      ; CX and DX
+    add dx, bx
+    dec dx
+    call vid_span_one
+    pop dx
+    pop cx
+    ret
+cw_vid_span_wh:                 ; ...and gfx_blit1's door, from .cold
+    call vid_span_wh
+    retf
+
 vid_span_one:
     push ax
-    push bx
-    push si
-    push di
+    push si                     ; (no BX bank: nothing below writes it, and
+    push di                     ; vid_disp_of keeps it - size pass 9)
     mov si, ax                  ; SI = x1; vid_disp_of ANSWERS in AL
     call vid_disp_of            ; AL = the display holding (x1, y1)...
     call vid_ctx_ptr            ; DI = its record
@@ -2161,13 +2175,14 @@ vid_span_one:
     jae .no                     ; x2 past this display's right edge
     mov ax, [di+VID_CTX_VY]
     add ax, [di+VID_CTX_CH]
-    cmp dx, ax
-    jae .no                     ; ...or y2 past its bottom
-    clc
-.out:
+    cmp dx, ax                  ; ...or y2 past its bottom: CF = 1 is y2 <
+    cmc                         ; bottom, the FIT, so one cmc is the answer and
+.out:                           ; the fit falls through with no `clc` (size
+                                ; pass 9) and no branch (size pass 10: a
+                                ; not-taken `jbe` was 2 bytes and 4 clocks,
+                                ; `cmc` is 1 and 2)
     pop di                      ; pop touches no flag, so the CF set above
-    pop si                      ; survives all four
-    pop bx
+    pop si                      ; survives all three
     pop ax
     ret
 .no:                            ; BELOW the epilogue on purpose: the common
@@ -2223,11 +2238,9 @@ vid_disp_relayout:
 ; corner.
 ; -----------------------------------------------------------------------------
 vid_desk_union:
-    push ax
-    push cx
-    push dx
-    push si
-    push di
+    call kent_di                ; = push ax/bx/cx/dx/si/di. BX is not spent:
+                                ; it is banked so the exit is kret_di's
+                                ; ladder (SPEC.md 15.1.2)
     xor cx, cx                  ; CX/DX = the far corner, exclusive
     xor dx, dx
     xor si, si
@@ -2257,11 +2270,6 @@ vid_desk_union:
     mov [vid_h], dx
     dec dx
     mov [vid_hm1], dx
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+    jmp kret_di
 
 %endif  ; KERN_BIG

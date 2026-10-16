@@ -563,6 +563,21 @@ class Marty:
             # something at the MDA aperture" answers yes on a CGA-only
             # machine - which is exactly the wrong answer, silently.
             vt = self.cmd(cmd="video")["type"]
+            if vt not in ("cga", "mda", "hercules"):
+                # ...AND REFUSE A CARD THAT IS NEITHER. This used to send
+                # everything that was not a CGA down the Hercules arm, so on a
+                # VGA it read 0xB0000 - unmapped there, and an unmapped
+                # aperture reads as zeroes rather than erroring - and handed
+                # back a 720x348 screen with NOTHING lit. tests/saver.py's
+                # boot gate read that as "not a desktop" on os8088_xt_vga for
+                # as long as the row had a --machine flag; a caller comparing
+                # two captures would have read it as "nothing changed" and
+                # passed. A planar card wants `fbuf` (see above).
+                raise MartyError(
+                    "vram() reads a 1bpp framebuffer and this card is %r: "
+                    "mode 12h is four planes behind the Graphics Controller, "
+                    "so there is no flat framebuffer to read - use fbuf()"
+                    % vt)
             kind = "cga" if vt == "cga" else "herc"   # MDA and Hercules share
                                                       # a layout and an aperture
         if kind == "cga":
@@ -1587,6 +1602,24 @@ def _drop_instance(d, heavy_only=False):
     the record and the log stay until `reap()` prunes them.
     """
     import shutil
+    # A LEDGER OF EVERY DROP, one line each, beside the records. A launch
+    # once died because its own `media/hdds` was gone before MartyPC read it
+    # (1942front, at the start of a scoped soak - once in 132 instances, and
+    # not reproduced since), and nothing could say WHO had removed it. The
+    # next time it happens this names the process, the record and the reason.
+    try:
+        import traceback
+        why = "<".join(f.name for f in traceback.extract_stack(limit=4)[-2::-1])
+        led = os.path.join(_inst_root(), "drops.log")
+        big = os.path.exists(led) and os.path.getsize(led) > (1 << 20)
+        with open(led, "w" if big else "a") as f:       # a MB, then restart
+            f.write("%.3f pid %d %s drop %s run_dir %s heavy=%d ended=%s\n"
+                    % (time.time(), os.getpid(), why,
+                       os.path.basename(d.get("dir", "?")),
+                       d.get("run_dir"), int(bool(heavy_only)),
+                       d.get("ended_reason") or d.get("ended")))
+    except OSError:
+        pass
     # PRIVATE ONLY. A caller that staged its own run tree keeps it - the
     # record is ours to retire and the directory is not, and a registry that
     # deleted somebody's staging tree would be a worse bug than the one this
@@ -3302,6 +3335,19 @@ def until(m, cond, what="that condition", poll=1.0, limit=600.0, guest=None):
         # advancing it. Without this the same wait raises at random under a
         # trace, which is the intermittent this harness spends its sessions on.
         if st["state"] != "running" and not getattr(m, "_pumping", 0):
+            # ONE MORE LOOK FIRST, because the stop can be the ANSWER. `cond`
+            # and the `status` above are two round trips, and a guest running
+            # between them can stop exactly where the caller wanted it - a
+            # breakpoint armed at the very place `cond` waits for, or a store
+            # the guest made just before a stop. The first look saw it running
+            # and the second saw it stopped, and raising here reported a
+            # machine "not executing" that had done precisely what was asked
+            # (pxfsx, at `px_fsmain`, after every assertion had passed). A
+            # stopped guest cannot change what it reads any further, so this
+            # second look is final and is not a retry.
+            if cond(m):
+                prog.done("until")
+                return time.time() - t0
             raise MartyError(
                 "waited %.0f guest seconds for %s, but the guest is %r at "
                 "%04X:%04X and is not executing - a stopped machine can never "
@@ -3372,6 +3418,7 @@ def scratch_disk(path, *files, **kw):
     # matters, the whole invocation is compared.
     want = "\n".join([str(kw.get("size", 360))] + list(files))
     side = path + ".args"
+    _sweep_sidecars(os.path.dirname(path))
     try:
         have = os.path.getmtime(path)
         fresh = all(os.path.getmtime(s) <= have for s in srcs)
@@ -3386,6 +3433,49 @@ def scratch_disk(path, *files, **kw):
              "--size", str(kw.get("size", 360))] + list(files))
         open(side, "w").write(want)
     return path
+
+
+def scratch_drop(*paths):
+    """Remove scratch disks `scratch_disk` built, AND their `.args` sidecars.
+
+    A per-run image (`czjoin-<pid>.img`, `lzcomp360-<pid>.img`) is removed
+    on the way out so nothing inherits it - and the sidecar `scratch_disk`
+    wrote beside it was left behind, one file per run, for ever: a pid is
+    never re-used soon enough for the next run to overwrite it. Call this
+    rather than `os.remove(img)`. Missing files are not an error.
+    """
+    import os
+    for p in paths:
+        for f in (p, p + ".args"):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
+def _sweep_sidecars(d):
+    """Delete `<img>.args` files whose image is gone, in directory `d`.
+
+    The belt under `scratch_drop`: a row that removed its image by hand, or
+    one written before the helper existed, left the sidecar - and one that was
+    KILLED left both, so the image goes with its sidecar the next time anybody
+    removes it. A sidecar describes an image, and without the image it says
+    nothing: the freshness test above already treats a missing image as
+    stale, so removing an orphan can never make a cached disk be believed.
+    One `listdir` of the directory a scratch disk is being made in.
+    """
+    import os
+    try:
+        names = os.listdir(d or ".")
+    except OSError:
+        return
+    have = set(names)
+    for n in names:
+        if n.endswith(".img.args") and n[:-len(".args")] not in have:
+            try:
+                os.remove(os.path.join(d, n))
+            except OSError:
+                pass
 
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
@@ -3581,9 +3671,15 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
     port = None
     for _ in range(240):
         if proc.poll() is not None:
+            try:                        # what the emulator found, BEFORE _die
+                had = sorted(os.listdir(os.path.join(run_dir, "media")))
+            except OSError as e:        # drops the private half of it
+                had = "unreadable (%s)" % e
             _die("martypc_headless exited at once (rc=%s). The last lines of "
                  "the log say why - a missing ROM set and a port already held "
-                 "are the two usual answers." % proc.returncode)
+                 "are the two usual answers. media/ held %s at exit; "
+                 "build/martypc/inst/drops.log says who removed what."
+                 % (proc.returncode, had))
         try:
             with open(portfile) as f:
                 text = f.read().split()

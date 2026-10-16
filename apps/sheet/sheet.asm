@@ -3948,16 +3948,23 @@ sh_deferred_ld:
     push dx
     push si                           ; sh_paint takes SI as its window ptr
     push di                           ; the instruction after this returns -
-    push es                           ; OSAPI_FILE_GOTO documents no output
-    mov byte [sh_needld], 0           ; but promises nothing about SI either
-
-    mov dx, [sh_argdir]
-    mov bl, [sh_argdrv]
-    call OSAPI_FILE_GOTO
-    jc .out                           ; could not list it: the volume is back
-    call sh_doread                    ; at the root and sh_name still names a
-.out:                                 ; file that is not here - leave the
-    pop es                            ; sheet empty rather than half-read
+    push es                           ; OSAPI_FILE_GOTO_QM answers in AX and,
+    mov byte [sh_needld], 0           ; on a redirected volume, hands CX, SI
+                                      ; and DI to the driver (SPEC.md 62.9.1)
+    mov dx, [sh_argdir]               ; Stand in the document's folder QUIETLY
+    mov bl, [sh_argdrv]               ; and move the instance with it: nothing
+    call OSAPI_FILE_GOTO_QM           ; here lists the folder, so the remount's
+                                      ; scan, sort and icon harvest were ~0.5 s
+                                      ; of floppy bought for no reader
+                                      ; (docs/plans/NAV-COST-PLAN.md, SPEC.md
+                                      ; 19.9.1). sh_doread's by-name read then
+                                      ; resolves in the instance's folder,
+                                      ; which is now this one.
+    jc .out                           ; could not stand there, and NOTHING
+    call sh_doread                    ; moved: sh_name would resolve in the
+.out:                                 ; package's own folder and could find a
+    pop es                            ; same-named stranger - leave the sheet
+                                      ; empty rather than read the wrong file
     pop di
     pop si
     pop dx
@@ -29601,7 +29608,7 @@ sh_ppowcont:
     pop word [sh_lhs+2]               ; many times, with a comment saying "a
     pop word [sh_lhs+4]               ; fractional power needs logarithms,
     pop word [sh_lhs+6]               ; which this file does not have" - which
-    push si                           ; stopped being true at 84.8. 2^0.5 is
+    push si                           ; stopped being true at 84.10. 2^0.5 is
     mov si, sh_lhs                    ; 1.414 and not 1
     call fp_unpack_a
     pop si
@@ -49612,52 +49619,13 @@ sh_colname:
     pop ax
     ret
 
-; sh_itoa - signed AX to a NUL-terminated decimal string in sh_numbuf
+; sh_itoa - signed AX to a NUL-terminated decimal string in sh_numbuf -
+; apps/os88dec.inc's dec_s16 (SPEC.md 20.5.2), which os88chart.inc includes
 sh_itoa:
-    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
-    push ax
-    push bx
-    push cx
-    push dx
     push di
     mov di, sh_numbuf
-    or ax, ax
-    jns .pos
-    mov byte [di], '-'
-    inc di
-    neg ax
-.pos:
-    xor cx, cx
-    or ax, ax
-    jnz .divloop
-    mov byte [di], '0'
-    inc di
-    jmp .term
-.divloop:
-    or ax, ax
-    jz .emit
-    xor dx, dx
-    mov bx, 10
-    div bx
-    push dx
-    inc cx
-    jmp .divloop
-.emit:
-    or cx, cx
-    jz .term
-    pop dx
-    add dl, '0'
-    mov [di], dl
-    inc di
-    dec cx
-    jmp .emit
-.term:
-    mov byte [di], 0
+    call dec_s16
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -53636,6 +53604,18 @@ section .text
 ; scratch, declared in the bss chain below.
 %include "os88fp.inc"
 
+; apps/os88dec.inc RESIDENT, and that is a REQUIREMENT rather than a tidy-up.
+; os88chart.inc includes it when nobody else has, and under CH_OVERLAY that
+; puts dec_s16 in `.modc` while sh_itoa - which has TWELVE resident callers -
+; calls it near. os88ovlchk names it exactly: `.text -> .modc, near: dec_s16`,
+; and it is the one thing the 2026-10-14 upstream merge broke that no conflict
+; marker showed, sheet.asm having merged clean. Claiming it HERE puts it in
+; .text; os88chart.inc's own `%ifdef OS88DEC_INC` guard then skips its copy,
+; and the module reaches it through CHFP's vector like every other resident
+; routine it needs. DEC_S16 brings DEC_U16 with it (os88dec.inc's header).
+%define DEC_S16
+%include "os88dec.inc"
+
 %define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
@@ -53650,7 +53630,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9174                     ; 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9182                     ; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -54433,7 +54413,7 @@ fp_hw             equ fp_tv + 8        ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
 fp_sw             equ fp_x2 + 10       ; where the status word lands
-fp_e0             equ fp_sw + 2        ; --- the transcendental layer (84.8)
+fp_e0             equ fp_sw + 2        ; --- the transcendental layer (84.10)
 fp_e1             equ fp_e0 + 8        ; four packed temporaries and a
 fp_e2             equ fp_e1 + 8        ; counter, which fp_ln, fp_exp and
 fp_e3             equ fp_e2 + 8        ; fp_pow share

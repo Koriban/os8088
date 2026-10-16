@@ -210,8 +210,13 @@ MEM_K_CMPR equ 0xFF0D           ; the Compress verb's working block (SPEC.md
                                 ; 0xFF0B is skipped (it was MEM_K_OVL and is
                                 ; retired above) and so is 0xFF0C, which is
                                 ; MEM_K_HIB's
-MEM_K_FDLG equ 0xFF0F           ; the Standard File dialog's LISTING (SPEC.md
-                                ; 38.2, docs/plans/LISTING-HOME-PLAN.md 13):
+MEM_K_FDLG equ 0xFF0F           ; RESERVED, AND NOTHING CLAIMS UNDER IT: the
+                                ; chooser's listing is its Disk window's own
+                                ; VIEW claim since SPEC.md 38.1, billed to its
+                                ; record. Kept because the tag is published
+                                ; (os88api.inc, the Task Manager's names).
+                                ; What it WAS - the Standard File dialog's
+                                ; LISTING (docs/plans/LISTING-HOME-PLAN.md 13):
                                 ; claimed at fdlg_open, handed to dsk_dest_x
                                 ; so every mount the dialog makes writes
                                 ; straight into it, and freed at fdlg_close.
@@ -240,6 +245,10 @@ MEM_K_SC   equ 0xFF11           ; the desktop SHORTCUTS' table (SPEC.md 26.8):
                                 ; one claim for all of them, a KB per eight,
                                 ; movable, freed with the last one. 0xFF10 is
                                 ; the font's, so this is 0xFF11
+MEM_K_IMG  equ 0xFF12           ; a MOUNTED IMAGE's run table (SPEC.md
+                                ; 18.101): 1KB a mount, top-down and pinned,
+                                ; freed at its unmount. 0xFF11 is the
+                                ; shortcuts', so this is 0xFF12
 MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
                                 ; sized to what is in it, freed when it is
                                 ; emptied, and deliberately NOT an instance's,
@@ -326,9 +335,11 @@ MEM_P_FATW_N equ 8              ; 18.8.4): MED, and it was LOW for one commit
                                 ; a name ending _N is a length, not a tag
 %ifdef KERN_SMALL
 MEM_P_VIEW  equ MEM_PG_LOW<<8 | 0x10    ; a Disk window's listing cache (SPEC.md
-MEM_P_VIEW_N equ 4              ; 22.1), kern_small only. A LITERAL and not
-%if MEM_P_VIEW_N != VIEW_SLOTS  ; VIEW_SLOTS, because apps/os88api.inc mirrors
-%error "MEM_P_VIEW_N has drifted from VIEW_SLOTS"
+MEM_P_VIEW_N equ 5              ; 22.1), kern_small only - the user's four
+                                ; and the Standard File chooser's (38.1). A
+                                ; LITERAL and not
+%if MEM_P_VIEW_N != VIEW_SLOTS+1 ; VIEW_SLOTS+1, because apps/os88api.inc mirrors
+%error "MEM_P_VIEW_N has drifted from VIEW_SLOTS+1"
 %endif                          ; it and t_mirror compares the two files as
                                 ; TEXT - MEM_P_FATW_N's shape exactly, which is
                                 ; 8 here and DVOL_MAX asserted beside it. LOW -
@@ -358,6 +369,16 @@ MEM_P_VIEW_N equ 4              ; 22.1), kern_small only. A LITERAL and not
                                 ; way, so shedding one there would be paying
                                 ; floppy I/O for room it does not need
 %endif
+MEM_P_FLIST equ MEM_PG_MED<<8 | 0x30    ; the Disk window's MULTI-FILE
+                                ; CLIPBOARD (SPEC.md 22.27): the names a Cut
+                                ; or Copy of a whole selection put on it, 1KB.
+                                ; MED because losing it loses the user's
+                                ; clipboard - a gesture to repeat - and it is
+                                ; cleared on paste anyway. Its zero is "the
+                                ; clipboard is empty", which Paste already
+                                ; handles, and a paste raises the floor to
+                                ; this rank so its own copy buffer cannot
+                                ; take the list it is walking
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window:
                                 ; HIGH, because it is the difference between
                                 ; 316 int 13h calls and 114 on an install
@@ -430,21 +451,21 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; section (SPEC.md 7's only-the-UI-task-calls-BIOS rule holds here).
 ; -----------------------------------------------------------------------------
 %ifndef KERN_SMALL
-section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
                                 ; whose window has room to spare
 %else
-section .ovl                    ; ...and kern_small: the BLOB half instead
+section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; (SPEC.md 2.5.3.2, mouse_init's shape). The
                                 ; deadline is the same either way - kmain runs
                                 ; this long before drv_boot - so the choice is
                                 ; only about WHOSE bytes. On that kernel
-                                ; `.ovlw` is read onto the FAT window and the
+                                ; `.ovl` is read onto the FAT window and the
                                 ; mount buffers, and SPEC.md 22.6.3 has just
                                 ; taken the LISTING out of that region: the
                                 ; 800 bytes it gave back are only 288 of heap
                                 ; while the overlay still needs the rest, so
                                 ; every body moved here turns one more of them
-                                ; into heap. `.ovl` is written LAST on
+                                ; into heap. `.boot2` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE
                                 ; and cannot evaluate the %ifdef, so it files
                                 ; this block by the arm below - which is the
@@ -676,7 +697,7 @@ mem_floor_ax:
 ;
 ; They were down there because OSAPI_MEM_CLAIM was the only door a driver had.
 ; These two are the other one. Nothing else changes: the scan, the page bump
-; and the record are the same code, reached with mem_dir set.
+; and the record are the same code, reached with the direction (DI) set.
 mem_claim_dma_hi_x:
     push si
     push di
@@ -705,13 +726,11 @@ mem_claim_dma_x:
 mem_claim_hi_x:
     push si
     push di
-    xor si, si
     mov di, MC_DMA_HI           ; ...and this one MEANS it: an explicit hi
-    jmp short mem_claim_x.go    ; claim is a caller's request, not a tag's
+    jmp short mem_claim_x.nodma ; claim is a caller's request, not a tag's
 mem_claim_x:
     push si
     push di
-    xor si, si
     xor di, di                  ; A PURGEABLE TAG IS AN ORDINARY DATA CLAIM
                                 ; (SPEC.md 50.6.1). It used to place itself
                                 ; top-down under a ceiling of its own, and
@@ -723,6 +742,8 @@ mem_claim_x:
                                 ; packed underneath it and shedding it opened
                                 ; an island above them that only another
                                 ; top-down claim could ever reach
+.nodma:
+    xor si, si                  ; no 64KB page rule on either plain door
 .go:
 %ifdef OS88_COMPACT
     cmp byte [mem_cp_busy], 0   ; INSIDE A COMPACTION - a relocation proc that
@@ -758,10 +779,11 @@ mem_claim_x:
                                 ; are none, and because a compaction packs
                                 ; every movable claim against the one below
                                 ; it - so the next call finds no movers and
-                                ; answers CF = 1 (SPEC.md 66.4)
-    jmp short .out
+                                ; answers CF = 1 (SPEC.md 66.4) - which is
+%ifdef OS88_COMPACT             ; already set as it falls through here
 .busy:
     stc
+%endif
 .out:
     pop di
     pop si
@@ -784,14 +806,19 @@ mem_claim_1:
     push cx
     push si
     push di
+    push bp
     pushf
     cli                         ; the whole scan-and-publish, one window -
     mov [mem_dma], si           ; the operation's PARAMETERS included. The
-    mov [mem_dir], di           ; entries stage them in registers because a
+    mov bp, di                  ; entries stage them in registers because a
                                 ; global stored BEFORE the cli is another
                                 ; task's to overwrite in the gap: a worker's
                                 ; DMA head silently dropped, or a region
-                                ; claim allocating from the wrong end
+                                ; claim allocating from the wrong end. BP IS
+                                ; THE DIRECTION for the rest of the scan
+                                ; (0 = bottom up, MC_DMA_HI = top down): it
+                                ; was a word of .bss, [mem_dir], read three
+                                ; times at five bytes a test (size pass 9)
 
     or ax, ax                   ; (the ceiling the scan may not pass is
                                 ; [mem_top] for every claim there is now -
@@ -801,36 +828,35 @@ mem_claim_1:
     mov cl, 6
     shl ax, cl                  ; AX = paragraphs wanted
     jc .fail0                   ; > 1MB asked for
-    cmp word [mem_dma], 0x1000  ; ...and a head bigger than a 64KB page can
-    ja .fail0                   ; never sit inside one
+    cmp si, 0x1000              ; ...and a head bigger than a 64KB page can
+    ja .fail0                   ; never sit inside one (SI is still the head
+                                ; [mem_dma] was stored from: a register
+                                ; compare, two bytes under the memory one)
 
-    mov di, mem_tab             ; this owner's share first (MEM_OWNER_MAX):
-    mov cx, MEM_MAX             ; the table is a shared resource and running
-    xor si, si                  ; it out stops packages LOADING, so the app
-.own:                           ; that wants a ninth claim pays, not the next
-    cmp word [ss:di+MC_SEG], 0     ; app to ask for its first
-    je .ownext
+    mov di, mem_tab + MEM_MAX*MC_SIZE   ; this owner's share first
+    mov cx, MEM_MAX             ; (MEM_OWNER_MAX): the table is a shared
+    xor si, si                  ; resource and running it out stops packages
+    xor dx, dx                  ; LOADING, so the app that wants a ninth
+.own:                           ; claim pays, not the next app to ask for its
+    sub di, MC_SIZE             ; first. The SAME walk finds the free record:
+    cmp word [ss:di+MC_SEG], 0  ; it runs top down so the last free one it
+    jne .used                   ; meets is the FIRST in the table, the one the
+    mov dx, di                  ; separate walk that used to follow this one
+    jmp short .ownext           ; took (a free record has no owner to count)
+.used:
     cmp [ss:di+MC_OWN], bx
     jne .ownext
     inc si
 .ownext:
-    add di, MC_SIZE
     loop .own
     cmp si, MEM_OWNER_MAX
     jae .fail0
+    mov di, dx                  ; DI = the free record, 0 = the table is full:
+    or di, di                   ; refusing early costs nothing and keeps the
+    jz .fail0                   ; scan simple
 
-    mov di, mem_tab             ; a free record next: refusing early costs
-.rec:                           ; nothing and keeps the scan simple
-    cmp word [ss:di+MC_SEG], 0
-    je .haverec
-    add di, MC_SIZE
-    cmp di, mem_tab + MEM_MAX*MC_SIZE
-    jb .rec
-    jmp short .fail0
-.haverec:
-
-    cmp word [mem_dir], 0
-    jne .hi
+    or bp, bp
+    jnz .hi
     mov dx, [mem_base]          ; DX = candidate base
     jmp short .retry
 
@@ -852,7 +878,7 @@ mem_claim_1:
     cmp word [mem_dma], 0       ; the 64KB DMA-page test, when one was asked
     je .fit                     ; for (CX is dead here - .fit rebuilds it)
     mov cx, dx
-    and cx, 0x0FFF              ; paragraphs into this 64KB physical page
+    and ch, 0x0F                ; paragraphs into this 64KB physical page
     add cx, [mem_dma]
     cmp cx, 0x1000              ; the head has to END inside the same page
     jbe .fit
@@ -860,8 +886,8 @@ mem_claim_1:
     and cx, 0xF000              ; can work is the next page's floor...
     add cx, 0x1000
     jc .fail0                   ; ...past 1MB, so there is no next page
-    cmp word [mem_dir], 0
-    je .dmago
+    or bp, bp
+    jz .dmago
     sub cx, [mem_dma]           ; ...and going DOWN, the highest base in THIS
     cmp cx, [mem_base]          ; page whose head still fits. Below the heap
     jb .fail                    ; floor means every lower page is too
@@ -875,18 +901,18 @@ mem_claim_1:
     cmp cx, [mem_top]
     ja .fail
 
-    mov si, mem_tab             ; overlap scan: CX is the candidate end and
+    mov si, MEM_FIRST           ; overlap scan: CX is the candidate end and
 .scan:                          ; the only register free, so it doubles as
-    cmp word [ss:si+MC_SEG], 0     ; the claim-end scratch and is rebuilt after
-    je .next
+    call mem_next               ; the claim-end scratch and is rebuilt after
+    jc .publish
     cmp [ss:si+MC_SEG], cx         ; claim starts at/past our end: no overlap
-    jae .next
+    jae .scan
     mov cx, [ss:si+MC_SEG]
     add cx, [ss:si+MC_PARA]        ; CX = this claim's end
     cmp cx, dx
     jbe .nover                  ; claim ends at/before our start: ditto
-    cmp word [mem_dir], 0
-    jne .down
+    or bp, bp
+    jnz .down
     mov dx, cx                  ; overlap: restart just past this claim...
     jmp .retry
 .down:                          ; ...or just BELOW it, coming down from the
@@ -899,29 +925,36 @@ mem_claim_1:
 .nover:
     mov cx, dx                  ; rebuild the candidate end and carry on
     add cx, ax
-.next:
-    add si, MC_SIZE
-    cmp si, mem_tab + MEM_MAX*MC_SIZE
-    jb .scan
+    jmp short .scan
 
-    mov [ss:di+MC_SEG], dx         ; publish the claim
-    mov [ss:di+MC_PARA], ax
-    mov [ss:di+MC_OWN], bx
-    mov word [ss:di+MC_RLOC], 0    ; PINNED until the holder says otherwise
-                                ; (SPEC.md 66.2). A record is REUSED - freeing
-                                ; is one store to MC_SEG - so a stale handle
-                                ; here would let the compactor move a new
-                                ; tenant's block and then call the PREVIOUS
-                                ; tenant's proc to tell it about it
-    push ax
-    mov ax, [mem_dma]           ; ...and the page constraint it was granted
-    or ax, [mem_dir]            ; under, with WHICH DOOR it came in through in
-                                ; the top bit of the same word - the two being
+.publish:
+%if MC_SEG != 0 || MC_PARA != 2 || MC_OWN != 4 || MC_DMA != 6 || MC_RLOC != 8 || MC_SIZE != 10
+  %error "mem_claim_1 publishes the record as five words in order through ES:DI"
+%endif
+    push es                     ; publish the claim: the five words IN ORDER
+    push ss                     ; through ES:DI = the record (LOW_SEG), six
+    pop es                      ; bytes under five displaced SS stores (size
+    cld                         ; pass 10). AX, DX and BX come back as they
+    xchg ax, dx                 ; went in: DX is the base this answers, and
+    stosw                       ; AX is popped below anyway
+    xchg ax, dx                 ; MC_SEG = the base...
+    stosw                       ; MC_PARA = the length...
+    xchg ax, bx
+    stosw                       ; MC_OWN = the owner...
+    xchg ax, bx
+    mov ax, [mem_dma]           ; MC_DMA = the page constraint it was granted
+    or ax, bp                   ; under, with WHICH DOOR it came in through in
+    stosw                       ; the top bit of the same word - the two being
                                 ; the whole of where a later move may put it
-                                ; (SPEC.md 50.3.2). [mem_dir] IS that bit: 0
-                                ; or MC_DMA_HI, and a head is <= 0x1000
-    mov [ss:di+MC_DMA], ax
-    pop ax
+                                ; (SPEC.md 50.3.2). BP IS that bit: 0 or
+                                ; MC_DMA_HI, and a head is <= 0x1000
+    xor ax, ax                  ; ...and MC_RLOC = 0: PINNED until the holder
+    stosw                       ; says otherwise (SPEC.md 66.2). A record is
+    pop es                      ; REUSED - freeing is one store to MC_SEG - so
+                                ; a stale handle here would let the compactor
+                                ; move a new tenant's block and then call the
+                                ; PREVIOUS tenant's proc to tell it about it.
+                                ; DI walked: it is popped at .out
     popf
     clc
     jmp short .out
@@ -930,6 +963,7 @@ mem_claim_1:
     xor dx, dx
     stc
 .out:
+    pop bp
     pop di                      ; the parameters, so a RETRY re-enters with
     pop si                      ; the same ones (pop touches no flag, and CF
     pop cx                      ; is this routine's answer)
@@ -985,9 +1019,14 @@ mem_pg_own:
     dw MEM_P_WSAVE, wm_su_segs,  MAX_WIN
     dw MEM_P_MSAVE, menu_sseg,   1
     dw MEM_P_DIRW,  dsk_rah_seg, 1
+mem_pg_fatwrow:                 ; NAMED: mem_pg_forget asks which ROW matched
     dw MEM_P_FATW,  dsk_fatwc,   MEM_P_FATW_N
     dw MEM_P_ICO,   ico_seg,     MEM_P_ICO_N
+%ifdef FM_MSEL
+    dw MEM_P_FLIST, fcp_lseg,    1
+%endif
 %ifdef KERN_SMALL
+mem_pg_viewrow:
     dw MEM_P_VIEW,  0,           MEM_P_VIEW_N
 %endif                          ; ...and its PGO_BASE is 0 because this row's
                                 ; naming word is not in a flat array of words:
@@ -1078,23 +1117,21 @@ mem_shed_one:
     xor di, di                  ; DI = the best candidate so far, 0 = none
                                 ; the scan is seeded with, so that only
                                 ; STRICTLY cheaper records win
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc .done
     mov dl, [ss:si+MC_OWN+1]
     cmp dl, MEM_PG_MIN          ; not a cache at all: never takeable
-    jb .next
+    jb .scan
     cmp dl, al                  ; at or above the best so far (which starts at
-    jae .next                   ; the claimant's rank): leave it
+    jae .scan                   ; the claimant's rank): leave it
     call mem_fatw_dirty         ; ...and never the FAT window somebody is
-    jc .next                    ; part-way through writing (SPEC.md 18.8.4)
+    jc .scan                    ; part-way through writing (SPEC.md 18.8.4)
     mov al, dl                  ; a new cheapest
     mov di, si
-.next:
-    add si, MC_SIZE
-    loop .scan
+    jmp short .scan
+.done:
     or di, di
     jz .none
     mov bx, [ss:di+MC_OWN]
@@ -1102,13 +1139,9 @@ mem_shed_one:
                                 ; there is no window in which the word names
                                 ; memory somebody else already holds
     mov word [ss:di+MC_SEG], 0
-    popf
-    clc
-    jmp short .out
 .none:
     popf
-    stc
-.out:
+    cmp di, 1                   ; CF = 1 exactly when nothing was takeable
     pop di
     pop si                      ; SI BEFORE DX - the pair was crossed here, and
     pop dx                      ; SI is mem_claim_x's PARAMETER (SPEC.md
@@ -1138,19 +1171,14 @@ mem_pg_forget:
     add si, PGO_SIZE
     jmp short .lp
 .hit:
-    shl cx, 1                   ; a word per entry (see the header: there is
-    add cx, [si+PGO_BASE]       ; no stride column because there is nothing
-    mov si, cx                  ; for it to be)
 %ifdef KERN_SMALL
-    mov cx, bx                  ; ...and a DISK WINDOW'S CACHE has two as well
-    sub cx, MEM_P_VIEW          ; (SPEC.md 22.1), for the reason in the table
-    cmp cx, MEM_P_VIEW_N        ; above
-    jb .view
-%endif
-    mov cx, bx                  ; A FAT WINDOW HAS MORE NAMING WORDS THAN THIS
-    sub cx, MEM_P_FATW          ; PROTOCOL CARRIES (SPEC.md 18.8.4): the LIVE
-    cmp cx, MEM_P_FATW_N        ; one is also [dsk_fatseg], which every access
-    jb .fatw                    ; reads, and [dsk_fatw0], which says what is
+    cmp si, mem_pg_viewrow      ; ...and a DISK WINDOW'S CACHE has two as well
+    je .view                    ; (SPEC.md 22.1), for the reason in the table
+%endif                          ; above. The ROW that matched says which
+    cmp si, mem_pg_fatwrow      ; A FAT WINDOW HAS MORE NAMING WORDS THAN THIS
+    je .fatw                    ; PROTOCOL CARRIES (SPEC.md 18.8.4): the LIVE
+                                ; one is also [dsk_fatseg], which every access
+                                ; reads, and [dsk_fatw0], which says what is
 %ifdef DSK_WANT_ICONS
     cmp bx, MEM_P_ICO           ; ...AND SO DOES THE ICON STORE (SPEC.md
     je .ico                     ; 25.9.5): [ico_n] beside it says how many rows
@@ -1160,6 +1188,9 @@ mem_pg_forget:
                                 ; the next mount paid a sector per package.
                                 ; MEM_P_ICO_N is 1, so this is one compare and
                                 ; needs no range
+    shl cx, 1                   ; a word per entry (see the header: there is
+    add cx, [si+PGO_BASE]       ; no stride column because there is nothing
+    mov si, cx                  ; for it to be)
     mov word [si], 0            ; resident - and dsk_fat_window believing that
     jmp short .out              ; returns WITHOUT loading, so the reads and
 .fatw:                          ; writes after it land in whatever claim owns
@@ -1184,6 +1215,32 @@ mem_pg_forget:
     ret
 
 ; -----------------------------------------------------------------------------
+; mem_next - SI = the next LIVE record of mem_tab after SI (module internal)
+; in:  SI = a record, or MEM_FIRST to start a walk from the top of the table
+; out: CF = 0 and SI = the next record whose MC_SEG is not 0; CF = 1 the
+;      table is done (SI is then past its end)
+; clobbers: nothing else (flags)
+;
+; THE WALK THE CLAIM MAP'S READERS ALL WROTE OUT (size pass 9): `mov si,
+; mem_tab / mov cx, MEM_MAX / .scan: cmp word [ss:si+MC_SEG], 0 / je .next /
+; ... / .next: add si, MC_SIZE / loop .scan` was seventeen bytes and a CX at
+; every one of them, where `call mem_next / jc .done` and a `jmp short` back
+; is seven and no CX. Cold, every caller: a claim, a free, a shed, a walk the
+; Task Manager asks for - none of them is per frame.
+; -----------------------------------------------------------------------------
+MEM_FIRST equ mem_tab - MC_SIZE ; (wraps below 0 harmlessly: the add brings it
+                                ; back to mem_tab and the carry is not read)
+mem_next:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX*MC_SIZE
+    cmc                         ; CF = 1 once SI is past the last record
+    jc .out
+    cmp word [ss:si+MC_SEG], 0  ; CF = 0: no unsigned word is below 0
+    je mem_next                 ; a free record - skip it
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; mem_runfree - is the paragraph run [CX, DI) clear of every live claim?
 ; in:  CX = first paragraph, DI = one past the last, [mem_skip] = a record to
 ;      ignore (0 = ignore none)
@@ -1192,32 +1249,22 @@ mem_pg_forget:
 ; -----------------------------------------------------------------------------
 mem_runfree:
     push ax
-    push bx
-    push dx
-    mov bx, mem_tab
-    mov dx, MEM_MAX
+    push si
+    mov si, MEM_FIRST
 .next:
-    cmp bx, [mem_skip]
-    je .skip
-    cmp word [ss:bx+MC_SEG], 0
-    je .skip
-    mov ax, [ss:bx+MC_SEG]
+    call mem_next
+    cmc                         ; the table is done: CF = 0, the run is free
+    jnc .out
+    cmp si, [mem_skip]
+    je .next
+    mov ax, [ss:si+MC_SEG]
     cmp ax, di
-    jae .skip                   ; it starts at or past our end
-    add ax, [ss:bx+MC_PARA]
-    cmp ax, cx
-    ja .busy                    ; ...and it ends past our start: overlap
-.skip:
-    add bx, MC_SIZE
-    dec dx
-    jnz .next
-    clc
-    jmp short .out
-.busy:
-    stc
+    jae .next                   ; it starts at or past our end
+    add ax, [ss:si+MC_PARA]
+    cmp cx, ax                  ; ...and it ends past our start: overlap,
+    jae .next                   ; and CF = 1 as it falls out
 .out:
-    pop dx
-    pop bx
+    pop si
     pop ax
     ret
 
@@ -1244,36 +1291,19 @@ mem_runfree:
 ; clobbers: nothing else (flags)
 ;
 ; mem_claim's scan does this inline because it also has to BUMP to the next
-; page floor; mem_hifit only has to reject, so it asks here. One predicate,
-; two callers, and the second one is the whole reason a moved claim keeps the
-; property it was granted under.
+; page floor; mem_hifit only has to reject. It is INLINED there now, its one
+; caller (size pass 9), and it lost its "no rule" test on the way: with
+; [mem_dma] = 0 the sum is CX's offset into its page, at most 0x0FFF, which
+; never reaches 0x1001 - so the general compare already answers "fine".
 ; -----------------------------------------------------------------------------
-mem_dmaok:
-    push ax
-    cmp word [mem_dma], 0
-    je .ok
-    mov ax, cx
-    and ax, 0x0FFF              ; paragraphs into this 64KB physical page
-    add ax, [mem_dma]
-    cmp ax, 0x1000              ; the head has to END inside the same page
-    ja .no
-.ok:
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop ax
-    ret
 
 mem_hifit:
     push ax
-    push bx
-    push dx
-    push di
+    push bx                     ; (no DX: nothing here writes it, mem_runfree
+    push di                     ; included - banked until size pass 10)
     push si
-    mov word [mem_skip], 0      ; a destination may overlap nothing at all
     xor si, si                  ; SI = best base so far, 0 = none
+    mov [mem_skip], si          ; ...and a destination may overlap nothing at all
     mov bx, mem_tab
     mov cx, [mem_base]          ; the first candidate is the heap's floor
 .cand:
@@ -1284,34 +1314,30 @@ mem_hifit:
     ja .step
     call mem_runfree
     jc .step
-    call mem_dmaok              ; a constrained block may not straddle a 64KB
-    jc .step                    ; page here any more than at its first claim
+    mov di, cx                  ; mem_dmaok, inlined: a constrained block may
+    and di, 0x0FFF              ; not straddle a 64KB page here any more than
+    add di, [mem_dma]           ; at its first claim. DI (the run's end) is
+    cmp di, 0x1001              ; dead once mem_runfree has answered, and the
+    jae .step                   ; head has to END inside the same page
     cmp cx, si
     jbe .step
     mov si, cx                  ; a higher one that fits
 .step:                          ; ...then the end of each live claim, and the
     cmp bx, mem_tab + MEM_MAX*MC_SIZE   ; table bound is the loop bound: a
     jae .done                           ; count could walk one record past it
-    cmp word [ss:bx+MC_SEG], 0
-    je .skiprec                 ; a free record has no end to try
     mov cx, [ss:bx+MC_SEG]
-    add cx, [ss:bx+MC_PARA]
     add bx, MC_SIZE
+    jcxz .step                  ; a free record has no end to try
+    add cx, [ss:bx+MC_PARA-MC_SIZE]
     jmp short .cand
-.skiprec:
-    add bx, MC_SIZE
-    jmp short .step
 .done:
     mov cx, si
-    or si, si
-    jz .none
-    jmp short .out
-.none:
-    stc
+    or si, si                   ; CF = 0...
+    jnz .out
+    stc                         ; ...or nothing that big was free
 .out:
     pop si
     pop di
-    pop dx
     pop bx
     pop ax
     ret
@@ -1416,7 +1442,8 @@ mem_bpara:
     jz .go
     mov si, cx                  ; ...or the LAST word, which is where a chunk
     shl si, 1                   ; whose destination overlaps its own source has
-    sub si, 2                   ; to start
+    dec si                      ; to start (the flags are nobody's: two decs
+    dec si                      ; are a byte under `sub si, 2`)
 .go:
     mov di, si
     rep movsw
@@ -1574,9 +1601,33 @@ mem_can_move:
     jae .notslot
     call mem_is_region          ; an instance slot owns a package's REGION and
     jnc .ok                     ; a built-in's data claims alike, and only the
-    call mem_frameless          ; first of those is a CS - and a CS may move
-    jc .pin                     ; when nothing anywhere refers to it (SPEC.md
-    jmp short .ok               ; 66.6.1)
+                                ; first of those is a CS - and a CS may move
+                                ; when nothing anywhere refers to it (SPEC.md
+                                ; 66.6.1). MEM_FRAMELESS, INLINED (size pass
+                                ; 9 - this was its one caller; its header below
+                                ; carries the reasons for every test, and AX,
+                                ; BX and DI are this routine's to spend, .cf
+                                ; restoring all three):
+.frameless:                     ; (mem_can_move.frameless: the name SPEC.md
+                                ; 66.6.1 and 66.4.3.2 use for this predicate)
+    mov ax, bx                  ; the slot to its record - inst_ptr's own job
+    call KERNEL_SEG:cw_inst_ptr ; (mem_is_region's own shim); AH is 0 by the
+                                ; cmp bx, INST_MAX / jae above
+    cmp byte [di+I_TASK], 0xFF
+    je .fmseg                   ; no worker at all: SPEC.md 66.6.1's own case
+    shl bx, 1                   ; IT OWNS A WORKER: without a declared restart
+    cmp word [bx+inst_restart], 0   ; point (SPEC.md 66.6.2) this is a hard
+    je .pin                     ; pin, asked BEFORE the running/parked question
+.fmseg:
+    mov bx, [di+I_SPTR]         ; the segment the package runs in = the claim's
+    cmp bx, [ld_base]           ; base (SPEC.md 66.6.1.2)
+    je .pin                     ; the loader is standing in it
+    cmp word [mem_cp_self], 0   ; THE WHAT-IF (SPEC.md 66.4.3.2) excuses both
+    jne .ok                     ; remaining tests
+    call mem_in_nest            ; a callback is standing in the REGION
+    jc .pin
+    jmp short .busy             ; ...and is its worker running: the question a
+                                ; package's DATA claim asks, the same body
 .notslot:
     cmp bh, 0xFF
     je .ok                      ; a kernel tag: its proc is the kernel's own
@@ -1610,9 +1661,19 @@ mem_can_move:
                                 ; worker while [mem_cp_self] stands - the
                                 ; posted pass parks them all - which covers the
                                 ; asker's as one case of many
-    call mem_busy_seg           ; ...a package's or a driver's own segment,
-    jc .pin                     ; and somebody may be RUNNING in it
-    jmp short .ok
+.busy:                          ; ...a package's or a driver's own segment,
+                                ; and somebody may be RUNNING in it - which was
+                                ; mem_busy_seg, this one caller's, inline since
+                                ; size pass 10 (its notes are where it stood)
+    call KERNEL_SEG:inst_seg_parked     ; CF = 0: no worker, or one that has
+    jnc .cf                             ; PARKED at OSAPI_TASK_ALIVE (66.5).
+                                        ; A segment matching no instance -
+                                        ; a driver's image - answers CF = 1
+    mov byte [mem_wpin], 1      ; ...and RECORD that this is why we refused, so
+    jmp short .pin              ; mem_compact knows a park would be worth
+                                ; asking for. Without it the compactor either
+                                ; pays for a park on every failed claim or
+                                ; never asks for one at all
 %ifdef OS88_DRIVERS
 .drvimg:
     ; THREE FACTS AND NO DECLARATION (SPEC.md 66.6.3). The kernel owns every
@@ -1639,16 +1700,11 @@ mem_can_move:
                                 ;    does
 %endif
 .ok:
+    CLC_OR_STC .pin             ; CF = 0 movable, or (.pin) CF = 1 pinned
+.cf:
     pop di
     pop bx
     pop ax
-    clc
-    ret
-.pin:
-    pop di
-    pop bx
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1670,13 +1726,8 @@ mem_can_move:
 ; what lets AX come back between the answer and the `ret`. mem_is_hi was a
 ; routine of its own for one caller and is folded in here.
 ; -----------------------------------------------------------------------------
-mem_cp_mine:
-    push ax
-    mov ax, [ss:si+MC_DMA]      ; bit 15 is the door it came in by...
-    xor ax, [mem_cp_msk]        ; ...complemented coming down, so it is 0
-    add ax, ax                  ; exactly when it agrees with this pass - and
-    pop ax                      ; `add` lifts that bit straight into the carry
-    ret
+; (INLINED into mem_cp_walk, its one caller, by size pass 9 - the four
+; instructions below are this header's body.)
 
 ; -----------------------------------------------------------------------------
 ; mem_cp_both - the largest run BOTH passes would leave, and the total (internal)
@@ -1742,68 +1793,9 @@ mem_cp_mine:
 ; up inside an ascending walk writes onto claims the walk has not visited yet.
 ; That is what the two separate mem_cp_run calls in mem_compact are for.
 ; -----------------------------------------------------------------------------
-mem_cp_both:
-    push cx
-    push dx
-    push si
-    push di
-    call mem_cp_fill0           ; BX = [mem_base], and the search key with it.
-                                ; ASCENDING: [mem_cp_msk] is 0 on every path
-                                ; out of mem_compact, and mem_avail refuses
-                                ; inside one (.nested), so it is 0 here
-    mov di, [mem_top]           ; DI = the total: the arena, less every claim
-    sub di, bx                  ; that counts
-    xor cx, cx                  ; CX = the largest run so far
-    xor dx, dx                  ; DX = a run of ceiling movers is pending
-.loop:
-    call mem_cp_next
-    jc .tail
-    call mem_cp_step            ; past this claim's ORIGINAL base
-    call mem_pg_cheap
-    jnc .loop                   ; a cache this rank may drop: free space, and
-                                ; no barrier to anything
-    call mem_can_move
-    jc .barrier                 ; pinned: a barrier where it stands
-    test byte [ss:si+MC_DMA+1], MC_DMA_HI >> 8
-    jz .lo
-    inc dx                      ; a ceiling mover: its size joins the fill
-    jmp short .pack             ; point and a run is pending
-.lo:
-    or dx, dx                   ; a floor mover packs onto the fill point...
-    jz .pack
-.barrier:                       ; ...unless a run is pending under it, and
-    mov ax, [ss:si+MC_SEG]      ; then it is where that run stops: the hole is
-    call .run                   ; base - fill, which is B - S - fill, and the
-    xor dx, dx                  ; fill point resumes at its base
-.pack:
-    sub di, [ss:si+MC_PARA]     ; it counts against free...
-    add bx, [ss:si+MC_PARA]     ; ...and the fill point moves past it
-    jmp short .loop
-.tail:
-    mov ax, [mem_top]           ; ...and the run past everything
-    call .run
-    mov ax, cx
-    mov bx, di
-    pop di
-    pop si
-    pop dx
-    pop cx
-    ret
-; .run - AX = an edge: the run from the fill point up to it goes into CX if it
-; is the largest yet, and BX = that edge on the way out, which is where the
-; fill point resumes past a barrier. `pop` writes no flags. The `jbe` also
-; catches an edge the fill point has already passed, which interleaving can
-; produce and which is not a run.
-.run:
-    push ax
-    sub ax, bx
-    jbe .r
-    cmp ax, cx
-    jbe .r
-    mov cx, ax
-.r:
-    pop bx
-    ret
+; (mem_cp_both's walk is written inline in mem_avail_lvl_x since size pass 10
+; - its one caller, whose bank it now shares - and `.run` sits after that
+; routine's `ret`. Everything above still describes it.)
 
 ; -----------------------------------------------------------------------------
 ; mem_is_region - is the claim at SI a package's REGION? (module internal)
@@ -1889,15 +1881,12 @@ mem_is_region:
 ; a design that hoisted this out of that loop for speed would be wrong in a way
 ; nothing would catch.
 ; -----------------------------------------------------------------------------
-mem_frameless:
-    push ax
-    push bx
-    push di
-    mov ax, bx                  ; the slot to its record - inst_ptr's own job
-    call KERNEL_SEG:cw_inst_ptr ; (mem_is_region's own shim), and mem_can_move
+; (mem_frameless's CODE is at its one call site in mem_can_move since size
+; pass 9; what follows is its commentary, test by test, kept in order.)
+                                ; the slot to its record - inst_ptr's own job
+                                ; (mem_is_region's own shim), and mem_can_move
                                 ; has tested cmp bx, INST_MAX / jae, so AH is 0
-    cmp byte [di+I_TASK], 0xFF
-    je .seg                     ; no worker at all: SPEC.md 66.6.1's own case
+                                ; no worker at all: SPEC.md 66.6.1's own case
     ; IT OWNS A WORKER, and 66.6.2 is the only way past that. Has the package
     ; DECLARED a restart point? Without it the worker's stack carries this
     ; segment at a depth nothing can find, and no amount of waiting changes
@@ -1905,11 +1894,8 @@ mem_frameless:
     ; for nothing. Raising [mem_wpin] here would spend the pass's one park
     ; request on a region that could not have used it, which is why the
     ; declaration is tested BEFORE the running/parked question below.
-    shl bx, 1                   ; the side table is WORDS - it holds an offset
-    cmp word [bx+inst_restart], 0
-    je .nope
-.seg:
-    mov bx, [di+I_SPTR]         ; the segment the package runs in - which is
+                                ; the side table is WORDS - it holds an offset
+                                ; the segment the package runs in - which is
                                 ; the claim's base too, for every package
                                 ; (SPEC.md 66.6.1.2), and a byte shorter to
                                 ; read off the record DI still holds from the
@@ -1919,10 +1905,9 @@ mem_frameless:
                                 ; [ld_base] is the part's after step 8a, and
                                 ; mem_busy_seg's header says "a segment that
                                 ; owns claims"
-    cmp bx, [ld_base]
-    je .nope                    ; the loader is standing in it
-    cmp word [mem_cp_self], 0   ; ...UNLESS THIS IS THE WHAT-IF (SPEC.md
-    jne .self                   ; 66.4.3.2) - about ANY declared region, and
+                                ; the loader is standing in it
+                                ; ...UNLESS THIS IS THE WHAT-IF (SPEC.md
+                                ; 66.4.3.2) - about ANY declared region, and
                                 ; not only the asker's own. It was the asker's
                                 ; alone, and that read LOW on exactly the heap
                                 ; the feature is for: every other package's
@@ -1937,12 +1922,12 @@ mem_frameless:
                                 ; ask; the restart declaration above still
                                 ; binds, and a region without one never gets
                                 ; here
-    call mem_in_nest            ; ...or a callback is, and this claim is the
-    jc .nope                    ; REGION, so a frame's return address points
+                                ; ...or a callback is, and this claim is the
+                                ; REGION, so a frame's return address points
                                 ; into it (SPEC.md 66.6.1). No [mem_wpin]: a
                                 ; park does not retire a return address
-    call mem_busy_seg           ; ...AND THE REST IS THE QUESTION A PACKAGE'S
-    jc .nope                    ; DATA CLAIM ALREADY ASKS: is a frame standing
+                                ; ...AND THE REST IS THE QUESTION A PACKAGE'S
+                                ; DATA CLAIM ALREADY ASKS: is a frame standing
                                 ; in the segment, and is its worker running.
                                 ; This used to re-derive both from [wm_pkgs],
                                 ; I_TASK and [sch_parked] by hand - three
@@ -1955,7 +1940,7 @@ mem_frameless:
                                 ; declaration above is in hand - and it raises
                                 ; [mem_wpin] itself, so a region asks for the
                                 ; park on the same terms a data claim does
-.self:                          ; THE WHAT-IF EXCUSES BOTH REMAINING TESTS, and
+                                ; THE WHAT-IF EXCUSES BOTH REMAINING TESTS, and
                                 ; the worker is the half that was missed: at
                                 ; ui_task's service point the asker's callback
                                 ; has returned, so the nest is empty - and
@@ -1974,17 +1959,7 @@ mem_frameless:
                                 ; read LOW would have a package skip a post
                                 ; that would have worked - which is the failure
                                 ; that is silent
-    pop di
-    pop bx
-    pop ax
-    clc
-    ret
-.nope:
-    pop di
-    pop bx
-    pop ax
-    stc
-    ret
+                                ; CF = 0 frameless, or (.nope) CF = 1
 
 ; -----------------------------------------------------------------------------
 ; mem_busy_seg - is anybody RUNNING in the image at BX? (module internal)
@@ -2017,21 +1992,8 @@ mem_frameless:
 ; Both of these lift when SPEC.md 66.5's park handshake lands - the point of
 ; putting them behind one predicate is that they lift in one place.
 ; -----------------------------------------------------------------------------
-mem_busy_seg:
-    call KERNEL_SEG:inst_seg_parked     ; CF = 0: no worker, or one that has
-    jnc .free                           ; PARKED at OSAPI_TASK_ALIVE (66.5).
-                                        ; A segment matching no instance -
-                                        ; a driver's image - answers CF = 1,
-                                        ; which is the header's rule
-    mov byte [mem_wpin], 1      ; ...and RECORD that this is why we refused, so
-                                ; mem_compact knows a park would be worth
-                                ; asking for. Without it the compactor either
-                                ; pays for a park on every failed claim or
-                                ; never asks for one at all
-.pin:
-    stc
-.free:                          ; (`jnc` arrives with CF = 0)
-    ret
+; (mem_busy_seg's body is mem_can_move's .busy arm, inline since size pass
+; 10: it was the one caller. Everything above still describes it.)
 
 ; -----------------------------------------------------------------------------
 ; mem_in_nest - is a frame standing in the image at BX? (module internal)
@@ -2067,11 +2029,7 @@ mem_in_nest:
     inc di
     loop .s
 .no:
-    clc
-    jmp short .out
-.yes:
-    stc
-.out:
+    CLC_OR_STC .yes             ; CF = 0 not in the nest, or (.yes) CF = 1
     pop di
     pop cx
     ret
@@ -2121,13 +2079,10 @@ mem_fatw_dirty:
     je .no                      ; nothing is dirty anywhere
     mov ax, [dsk_fatseg]
     cmp ax, [ss:si+MC_SEG]      ; ...and is THIS the window it is dirty in?
-    jne .no
-    pop ax
-    stc
-    ret
+    je .yes
 .no:
+    CLC_OR_STC .yes             ; CF = 0 clean, or (.yes) CF = 1 dirty here
     pop ax
-    clc
     ret
 
 %ifdef OS88_COMPACT
@@ -2170,13 +2125,12 @@ mem_in_xfer:
 ; drop, because the A: mount claimed this cache four routines ago and the
 ; desktop would then run with no read-ahead until the next mount.
 ; -----------------------------------------------------------------------------
-mem_cp_drop:
-    cmp byte [mem_pg_rank], 0
-    je .no
-    call mem_fatw_dirty         ; SPEC.md 18.8.4, and mem_shed_one's other half
-    jc .no
-    call mem_in_xfer            ; A DROP IS NOT A WEAKER PIN THAN A MOVE HERE.
-    jc .no                      ; The walk reaches this AFTER mem_can_move has
+; THE BODY IS AT ITS ONE CALL SITE, mem_cp_walk's .pinned (size pass 9): the
+; rank test, then mem_fatw_dirty (SPEC.md 18.8.4, and mem_shed_one's other
+; half), then mem_in_xfer, then mem_pg_cheap. Why mem_in_xfer is there:
+;
+;                               A DROP IS NOT A WEAKER PIN THAN A MOVE HERE.
+;                               The walk reaches this AFTER mem_can_move has
                                 ; already refused, so every other reason that
                                 ; routine pins is being deliberately overruled
                                 ; - which is right for all of them but one.
@@ -2192,10 +2146,6 @@ mem_cp_drop:
                                 ; claim - and "no caller does that" is not the
                                 ; same statement as "this cannot happen",
                                 ; which is mem_can_move's own rule
-    jmp short mem_pg_cheap
-.no:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 %endif                          ; OS88_COMPACT - SPAN B. mem_pg_cheap below is
@@ -2222,12 +2172,8 @@ mem_pg_cheap:
     jb .no
     cmp al, [mem_pg_rank]
     jae .no
+    CLC_OR_STC .no              ; CF = 0 takeable, or (.no) CF = 1
     pop ax
-    clc
-    ret
-.no:
-    pop ax
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2283,20 +2229,10 @@ mem_cp_next:
 .next:
     add di, MC_SIZE
     loop .scan
-    or si, si
-    jz .none
+    cmp si, 1                   ; CF = 1 exactly when SI = 0: none ahead
     pop bp
     pop di
-    jmp kretc_dx
-.none:
-    pop bp
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
+    jmp kretc_dx                ; (pops write no flag)
 
 ; -----------------------------------------------------------------------------
 ; THE EIGHT PLACES THE TWO PASSES DIFFER (SPEC.md 66.4)
@@ -2340,28 +2276,12 @@ mem_cp_step:                    ; the key steps past SI's ORIGINAL base, which
     pop ax
     ret
 
-mem_cp_near:                    ; AX = the edge that must MEET the fill point
-    mov ax, [ss:si+MC_PARA]     ; for the claim to be already packed: its base
-    and ax, [mem_cp_msk]        ; going up, its end coming down - the length
-    add ax, [ss:si+MC_SEG]      ; masked in (0 or 0xFFFF), no branch
-    ret
-
-mem_cp_far:                     ; AX = where the fill point resumes past a
-    mov ax, [mem_cp_msk]        ; barrier: its end going up, its base coming
-    not ax                      ; down - the length masked by the complement
-    and ax, [ss:si+MC_PARA]
-    add ax, [ss:si+MC_SEG]
-    ret
-
-mem_cp_adv:                     ; BX past a claim this pass just packed -
-    mov bx, [mem_cp_msk]        ; FROM ITS DESTINATION and not from the old
-    not bx                      ; fill point, because mem_cp_dest's page bump
-    and bx, [ss:si+MC_PARA]     ; can put the two apart (SPEC.md 66.4.2).
-    add bx, di                  ; Coming down the destination IS the new fill
-    ret                         ; point; going up it is a block-length below it.
-                                ; (All three leave flags no caller reads.)
+; (mem_cp_near, mem_cp_far and mem_cp_adv were three-instruction routines
+; with one caller each; size pass 9 put each body at its call site - in
+; mem_cp_gap and mem_cp_walk's .nogap and .stay.)
 
 ; mem_cp_dest - DI = where SI's bytes belong at the fill point, PAGE-SAFELY.
+; clobbers: AX (mem_cp_walk's scratch), flags
 ;
 ; Going up that is the fill point; coming down it is a block-length below it.
 ; And then, for a claim carrying MC_DMA, it is bumped off a 64KB physical page
@@ -2381,11 +2301,11 @@ mem_cp_dest:
     je .page
     sub di, [ss:si+MC_PARA]
 .page:
-    push ax
-    push cx
-    mov ax, [ss:si+MC_DMA]      ; AX = the page-safe head, 0 = no constraint
-    and ax, MC_DMA_HEAD         ; (bit 15 is the door, and no business of the
-    jz .out                     ; arithmetic below)
+    push cx                     ; CX is the walk's largest run. NOT AX: it is
+    mov ax, [ss:si+MC_DMA]      ; the walk's scratch, and the one caller banks
+    and ax, MC_DMA_HEAD         ; it at its own entry (size pass 10). AX = the
+    jz .out                     ; page-safe head, 0 = no constraint (bit 15 is
+                                ; the door, no business of the arithmetic)
     mov cx, di                  ; the head's LAST paragraph...
     add cx, ax
     dec cx
@@ -2397,30 +2317,32 @@ mem_cp_dest:
     add cx, 0x1000              ; the top of this page
     jc .stay                    ; ...past 1MB, so there is no next page at all
     cmp byte [mem_cp_msk], 0
-    je .up                      ; going up, that floor IS the answer
-    sub cx, ax                  ; coming down, back off by the head: the
-    mov di, cx                  ; highest base in THIS page that still fits
-    cmp di, [ss:si+MC_SEG]
+    mov di, cx                  ; going up, that floor IS the answer (`mov`
+    je .up                      ; writes no flag, so it is staged ahead of the
+    sub di, ax                  ; test); coming down, back off by the head:
+    cmp di, [ss:si+MC_SEG]      ; the highest base in THIS page that still fits
     jae .out                    ; ...and a bump PAST its own base is not
     jmp short .stay             ; packing, it is moving it
 .up:
-    mov di, cx
     cmp di, [ss:si+MC_SEG]
     jbe .out                    ; the mirror going up
 .stay:
     mov di, [ss:si+MC_SEG]      ; the bump has nowhere legal to go: leave it
 .out:
     pop cx
-    pop ax
     ret
 
-; mem_cp_gap / mem_cp_tail leave the SUBTRACTION's flags live, and both callers
-; read them with `jbe`: zero says the claim is already packed against the fill
-; point, and a borrow says the walk has gone wrong and the answer must not be
-; taken as a run.
+; mem_cp_gap / mem_cp_tail measure a run and KEEP THE LONGEST: CX = the
+; larger of CX and the run, where a run of zero (the claim already packed
+; against the fill point) or a borrow (the walk has gone wrong, and the answer
+; must not be taken as a run) leaves CX alone. AX is clobbered. Their only
+; caller is mem_cp_walk, and the keep was written out after each of its two
+; calls until size pass 10 put it here, once.
 mem_cp_gap:                     ; AX = the hole between the fill point and SI
-    call mem_cp_near
-    jmp short mem_cp_sub
+    mov ax, [ss:si+MC_PARA]     ; ...measured from the edge that must MEET the
+    and ax, [mem_cp_msk]        ; fill point for the claim to be already
+    add ax, [ss:si+MC_SEG]      ; packed: its base going up, its end coming
+    jmp short mem_cp_sub        ; down - the length masked in, no branch
 
 mem_cp_tail:                    ; AX = the run from the fill point to the end
     mov ax, [mem_top]           ; of the arena this pass is walking into
@@ -2429,21 +2351,26 @@ mem_cp_tail:                    ; AX = the run from the fill point to the end
     mov ax, [mem_base]
 
 ; mem_cp_sub - AX = the distance from the fill point in BX to AX, measured the
-; way this pass walks, and it leaves the SUBTRACTION's flags live because both
-; callers read them with `jbe`: zero says the claim is already packed against
-; the fill point, and a borrow says the walk has gone wrong and the answer must
-; not be taken as a run. Two callers, one direction test - the gap beside a
-; barrier and the run past the last claim are the same measurement.
+; way this pass walks, and then the keep above off the SUBTRACTION's flags:
+; `jbe` is zero or a borrow, and either is no run. Two callers, one direction
+; test - the gap beside a barrier and the run past the last claim are the same
+; measurement.
 mem_cp_sub:
     cmp byte [mem_cp_msk], 0
     jne .down
     sub ax, bx
-    ret
+    jmp short .keep
 .down:
     push bx                     ; POP WRITES NO FLAGS, which is what lets the
     xchg ax, bx                 ; fill point come back after the subtraction
-    sub ax, bx                  ; that the caller is about to branch on
+    sub ax, bx                  ; that the keep is about to branch on
     pop bx
+.keep:
+    jbe .r                      ; no run at all
+    cmp ax, cx
+    jbe .r
+    mov cx, ax                  ; a longer one
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2489,7 +2416,7 @@ mem_cp_walk:
                                 ; through here (SPEC.md 66.10.3)
     xor dx, dx                  ; movers
     xor cx, cx                  ; largest run
-    mov byte [mem_wpin], 0      ; ...and "a worker is what stopped me", which
+    mov [mem_wpin], cl          ; ...and "a worker is what stopped me", which
                                 ; mem_busy_seg raises (SPEC.md 66.5)
     call mem_cp_fill0           ; BX = the fill point - the first paragraph
                                 ; nothing has been packed into yet - and the
@@ -2502,8 +2429,16 @@ mem_cp_walk:
                                 ; here because a move is about to overwrite it
     call mem_can_move
     jc .pinned
-    call mem_cp_mine            ; ...and is it THIS pass's to move (66.4)
-    jc .pinned
+                                ; mem_cp_mine, inlined: is it THIS pass's to
+    mov ax, [ss:si+MC_DMA]      ; move (66.4)? Bit 15 is the door it came in
+    xor ax, [mem_cp_msk]        ; by, complemented coming down, so it is 0
+    add ax, ax                  ; exactly when it agrees with this pass - and
+    jc .pinned                  ; `add` lifts that bit straight into the carry.
+                                ; AX IS THIS WALK'S SCRATCH: the entry banks
+                                ; it, and nothing in the loop carries a value
+                                ; in it from one claim to the next (it was
+                                ; banked round this, and inside mem_cp_dest,
+                                ; until size pass 10)
                                 ; **THE ROOM MODE THAT WAS HERE IS GONE**
                                 ; (SPEC.md 66.10.4): BP=2 counted a movable
                                 ; cache as DISSOLVED for mem_avail_lvl's sake,
@@ -2517,45 +2452,51 @@ mem_cp_walk:
     cmp di, [ss:si+MC_SEG]      ; up, a block-length below it coming down, and
     je .stay                    ; off a 64KB page boundary its MC_DMA head
                                 ; would straddle. Equal to its own base means
-                                ; already where it belongs
-    cmp bp, 1                   ; ...and only mode 1 TOUCHES anything: 0 is
-    jne .count                  ; mem_compact's plan and counts
-    call mem_cp_move
+                                ; already where it belongs (NOT inline: built
+                                ; and measured in size pass 10, the walk grows
+                                ; past three short jcc's and they cost nine
+                                ; bytes against the call's four)
+    test bp, bp                 ; ...and only mode 1 TOUCHES anything: 0 is
+    jz .count                   ; mem_compact's plan and counts
+    ; --- mem_cp_move, INLINE (size pass 10: this was its one caller, and its
+    ; header below is where the IF = 0 reasoning still lives). BX is dead
+    ; here - .stay rebuilds the fill point from DI - so it carries the OLD
+    ; base to mem_reloc_call directly, and SI and DI come back off mem_bcopy,
+    ; which banks both; CX and DX are spent, as they always were
+    pushf
+    cmp word [ss:si+MC_OWN], MEM_K_DRV
+    jne .noff
+    cli                         ; A DRIVER IMAGE MOVES AT IF = 0, AND ONLY ONE
+.noff:
+    mov cx, [ss:si+MC_PARA]     ; only what is claimed travels
+    push si                     ; the RECORD: SI is about to become the source
+    mov si, [ss:si+MC_SEG]
+    call mem_bcopy              ; source SI, destination DI, CX paragraphs -
+                                ; segment-stepped, so a block over 64KB moves
+                                ; without a 16-bit offset ever binding, and
+                                ; from the top down when DI is above SI
+    pop si
+    mov bx, [ss:si+MC_SEG]      ; BX = where it WAS, for the notification
+    mov [ss:si+MC_SEG], di      ; the map follows the bytes...
+    mov dx, di                  ; ...and the holder follows the map (BX = old
+    call mem_reloc_call         ; base, DX = new)
+    popf                        ; ...and IF back, whatever it was
 .count:
     inc dx
 .stay:
-    call mem_cp_adv             ; the fill point advances past the DESTINATION
-    jmp short .loop
-.pinned:
-    call mem_cp_drop            ; ...unless it is a cache this pass may
-    jc .barrier                 ; dissolve (SPEC.md 66.10): the fill point does
-                                ; NOT advance and no barrier is recorded, so
-                                ; the plan counts exactly the room the run is
-                                ; about to produce. The KEY has already stepped
-                                ; past it, so it is not revisited
-.dropped:
-    cmp bp, 1
-    jne .count2
-    call mem_cp_kill
-.count2:
-    inc dx
-    jmp short .loop
-.barrier:
-    call mem_cp_gap             ; the gap beside a pinned claim is a hole that
-    jbe .nogap                  ; compaction cannot close - it is a barrier,
-    cmp ax, cx                  ; and claims past it still pack against it
-    jbe .nogap
-    mov cx, ax
-.nogap:
-    call mem_cp_far             ; the fill point resumes past it
-    mov bx, ax
-    jmp short .loop
-.tail:
+    mov bx, [mem_cp_msk]        ; the fill point advances past the DESTINATION
+    not bx                      ; and not from the old fill point, because
+    and bx, [ss:si+MC_PARA]     ; mem_cp_dest's page bump can put the two apart
+    add bx, di                  ; (SPEC.md 66.4.2): coming down the destination
+                                ; IS the new fill point; going up it is a
+                                ; block-length below it
+.next:
+    jmp .loop
+.tail:                          ; (HERE, in the middle, so the loop head's
+                                ; `jc .tail` is short: below the barrier arms
+                                ; it was the five-byte inverted jcc)
     call mem_cp_tail            ; ...and the run past everything, which is the
-    jbe .done                   ; one compaction is usually enlarging
-    cmp ax, cx
-    jbe .done
-    mov cx, ax
+                                ; one compaction is usually enlarging
 .done:
     pop di
     pop si
@@ -2563,11 +2504,47 @@ mem_cp_walk:
     pop ax
     pop bp
     ret
+.pinned:                        ; ...unless it is a cache this pass may
+    cmp byte [mem_pg_rank], 0   ; dissolve - mem_cp_drop, inlined (its header
+    je .barrier                 ; carries the reasons for each test):
+    call mem_fatw_dirty
+    jc .barrier
+    call mem_in_xfer
+    jc .barrier
+    call mem_pg_cheap
+    jc .barrier                 ; (SPEC.md 66.10): the fill point does
+                                ; NOT advance and no barrier is recorded, so
+                                ; the plan counts exactly the room the run is
+                                ; about to produce. The KEY has already stepped
+                                ; past it, so it is not revisited
+.dropped:
+    test bp, bp                 ; BP = 0: only planning
+    jz .count2
+    push bx                     ; mem_cp_kill, inlined: the owner is told
+    mov bx, [ss:si+MC_OWN]      ; BEFORE the record goes - mem_shed_one's
+    call mem_pg_forget          ; order, for its reason - and BX, the FILL
+    pop bx                      ; POINT, does not move
+    mov word [ss:si+MC_SEG], 0
+.count2:
+    inc dx
+    jmp short .next             ; ...through .stay's own jmp: .loop is out of
+                                ; short reach from here
+.barrier:
+    call mem_cp_gap             ; the gap beside a pinned claim is a hole that
+                                ; compaction cannot close - it is a barrier,
+                                ; and claims past it still pack against it
+    mov di, [ss:si+MC_SEG]      ; the fill point resumes past it: its end
+    jmp short .stay             ; going up, its base coming down - which is
+                                ; .stay's sum with the claim's OWN base in DI
+                                ; for the destination (DI is dead outside
+                                ; .stay: mem_cp_dest writes it before every
+                                ; other read)
 
 ; -----------------------------------------------------------------------------
-; mem_cp_move - the RUN pass's move (module internal)
-; in:  SI = the record, BX = the fill point, DI = where its bytes belong
-; out: BX and SI preserved; AX, CX and DX are spent
+; mem_cp_move - the RUN pass's move - INLINE in mem_cp_walk since size pass
+;               10 (it was the one caller); these are its notes
+; in:  SI = the record, DI = where its bytes belong
+; out: SI and DI preserved; BX, CX and DX are spent
 ;
 ; A DRIVER IMAGE MOVES AT IF=0, AND ONLY A DRIVER IMAGE (SPEC.md 66.6.3.1). Its
 ; vectors name the OLD segment until mem_region_reloc rewrites them, so an ISR
@@ -2591,45 +2568,14 @@ mem_cp_walk:
 ; flag unchanged. And no PACKAGE code runs inside it, a driver image's holder
 ; being mem_region_reloc and not a dispatcher.
 ; -----------------------------------------------------------------------------
-mem_cp_move:
-    pushf
-    cmp word [ss:si+MC_OWN], MEM_K_DRV
-    jne .noff
-    cli
-.noff:
-    push si                     ; the RECORD: SI is about to become the source
-    push bx                     ; the fill point
-    push di                     ; ...and the destination, for MC_SEG below
-    mov cx, [ss:si+MC_PARA]     ; only what is claimed travels
-    mov si, [ss:si+MC_SEG]
-    call mem_bcopy              ; source SI, destination DI, CX paragraphs -
-                                ; segment-stepped, so a block over 64KB moves
-                                ; without a 16-bit offset ever binding, and
-                                ; from the top down when DI is above SI
-    pop dx                      ; DX = the new base
-    pop bx
-    pop si
-    mov ax, [ss:si+MC_SEG]      ; AX = where it WAS, for the notification
-    mov [ss:si+MC_SEG], dx      ; the map follows the bytes...
-    push bx
-    mov bx, ax
-    call mem_reloc_call         ; ...and the holder follows the map (BX = old
-    pop bx                      ; base, DX = new)
-    popf                        ; ...and IF back, whatever it was
-    ret
 
 ; mem_cp_kill - the RUN pass's dissolve (module internal). The owner is told
 ; BEFORE the record goes - mem_shed_one's order, for its reason: there is no
 ; instant in which a kernel word names memory somebody else already holds. BX
 ; is the FILL POINT and does not move, which is what makes this walk the plan's
 ; step for step.
-mem_cp_kill:
-    push bx
-    mov bx, [ss:si+MC_OWN]
-    call mem_pg_forget
-    pop bx
-    mov word [ss:si+MC_SEG], 0
-    ret
+; (mem_cp_kill's body is at its one call site, mem_cp_walk's .dropped, since
+; size pass 9.)
 
 section .text                   ; A KERNEL RELOCATION PROC IS A NEAR PROC IN
                                 ; .text: cw_mem_disp reaches it with `call bp`
@@ -2643,7 +2589,7 @@ section .text                   ; A KERNEL RELOCATION PROC IS A NEAR PROC IN
 ; out: SI past the group's terminator
 ; clobbers: AX, CX, DI (flags)
 ;
-; ONE LOOP FOR FOUR ADDRESS SPACES, which is what makes the eleven holders of
+; ONE LOOP FOR FOUR ADDRESS SPACES, which is what makes the twelve holders of
 ; SPEC.md 66.6 cost a table row each instead of a loop each. A row is
 ; `dw base` + `db count` + `db stride`: four bytes, and a SCALAR is the row
 ; with count 1 and stride 0, so a lone kernel word costs the same four bytes it
@@ -2678,11 +2624,11 @@ mem_rr_walk:
     or di, di
     jz .done                    ; a zero base ends the group
     lodsw                       ; AL = how many, AH = the stride between them
-    mov cl, al
-    xor ch, ch
-    mov al, ah
-    xor ah, ah                  ; AX = the stride; a SCALAR row's is 0 and its
-.l:                             ; count 1, so it never uses it
+    xchg ax, cx                 ; CL = how many, CH = the stride
+    mov al, ch
+    cbw                         ; AX = the stride - every one is under 128,
+    xor ch, ch                  ; which MEM_RR_ROW asserts; a SCALAR row's is
+.l:                             ; 0 and its count 1, so it never uses it
     cmp [es:di], bx
     jne .n
     mov [es:di], dx
@@ -2698,7 +2644,7 @@ mem_rr_walk:
 ; in:  BX = the base segment it WAS at, DX = the base it is at NOW
 ; out: nothing; every register preserved
 ;
-; SPEC.md 66.6 lists eleven holders and it listed four for a year. Each of the
+; SPEC.md 66.6 lists twelve holders and it listed four for a year. Each of the
 ; seven that were missing fails in a way nobody would trace back to a
 ; compaction - a stale [menu_seg] draws every bar title out of the wrong
 ; segment, a stale [fdlg_rqsp] makes the completion callback silently skip so
@@ -2762,8 +2708,57 @@ mem_region_reloc:
     shl bx, 1                   ; indexing lives
     mov cx, [bx+inst_restart]
     jcxz .nowk                  ; never declared: it cannot have moved, and if
-    mov bx, dx                  ; it did, the wrong thing to do is guess
-    call sch_wk_restart         ; AL = slot, BX = the new segment, CX = entry
+                                ; it did, the wrong thing to do is guess
+    ; --- sch_wk_restart, INLINE (size pass 10; it had this one caller): throw
+    ; the worker's stack away and re-enter it (SPEC.md 66.6.2). AL = the task
+    ; slot, DX = the new segment, CX = the entry offset. task_spawn's tail,
+    ; run again on a slot that ALREADY EXISTS - the one way past SPEC.md
+    ; 66.6.1's limit: a worker's stack carries its own package's segment from
+    ; before its first instruction and at depths nothing can find
+    ; (docs/plans/HEAP-UNPIN-PLAN.md 4.1), so the answer is to arrange for the
+    ; stack not to matter, which only the package can authorise
+    ; (OSAPI_TASK_RESTARTABLE). A REBUILD IN PLACE AND NOT A KILL AND
+    ; RESPAWN: a respawn can FAIL (first fit over a busy table), and
+    ; task_exit releases the INSTANCE record with the task. The slice keeps
+    ; its 0xCC fill and its SCH_MAGIC canary - properties of a slice already
+    ; cut, and the high-water mark tools/stkwater.py reads stays the deepest
+    ; this worker has ever been. AX, CX, SI, DI and ES are this routine's own
+    ; bank's; DX and BP are pushed here, and the flags ride the pushf.
+    push dx
+    push bp
+    pushf
+    cli                         ; the frame below is what sch_switch resumes
+                                ; from, so it is built whole or not at all
+    mov bp, dx                  ; BP = the segment, sch_frame's DS and CS
+    cbw                         ; AX = the slot (under MAX_TASKS: AH = 0)
+    mov si, ax
+    mov byte [si+sch_parked], 0 ; **IT MUST CLEAR [sch_parked].** The worker
+                                ; is standing in inst_park_hold or gfx_lock's
+                                ; .block arm, and BOTH clear that byte on the
+                                ; way out - a way out this has just deleted.
+                                ; Left set, inst_seg_parked answers "parked"
+                                ; for ever and the next compaction moves the
+                                ; claims of a worker that is running. (Its
+                                ; [gfx_lock_want] stays set, harmlessly: SPEC.md
+                                ; 7.3 makes it a fairness hint.)
+    shl si, 1                   ; SI = slot*2, the index BOTH slice tables take
+    mov di, [si+sch_stkbase]
+    add di, [si+sch_stksize]    ; base + size = the slice TOP...
+    sub di, SCH_FRAME           ; ...and the frame is carved from it, exactly
+    shl si, 1                   ; as task_spawn carves it. T_SIZE = 8, so the
+    shl si, 1                   ; record index is two more open shifts
+    mov [si+sch_tasks+T_SP], di
+    mov dl, [si+sch_tasks+T_INST]   ; DX = THE INSTANCE INDEX and not the task
+    xor dh, dh                      ; slot: it is task_spawn's spawn argument
+                                    ; and the worker's documented `in:`
+    mov si, cx                  ; SI = the entry, the builder's register
+    push ss
+    pop es                      ; ES = LOW_SEG: the frame lives there and DS
+    cld                         ; cannot reach it
+    call sch_frame              ; ...and the same twelve words task_spawn
+    popf                        ; writes, from the same body
+    pop bp
+    pop dx
 .nowk:
     pop bx
     pop es
@@ -2773,7 +2768,7 @@ mem_region_reloc:
     pop ax
     ret
 
-; --- THE ELEVEN HOLDERS, AS ROWS (SPEC.md 66.6) ------------------------------
+; --- THE TWELVE HOLDERS, AS ROWS (SPEC.md 66.6) ------------------------------
 ; `dw base, db count, db stride`, in three groups by the segment they live in.
 ; What needs NOTHING is most of the kernel: sound grants, XMS blocks, toast
 ; ownership, the dock, the clipboard, wm_owner and every wm_about / wm_onwk /
@@ -2783,8 +2778,11 @@ mem_region_reloc:
 ; the image survives untouched and only SEGMENT words are ever wrong.
 %macro MEM_RR_ROW 3
     dw %1
-    db %2, %3
-%endmacro
+    db %2, (%3) | ((%3) & 0x80) << 1    ; = the stride, and "byte data exceeds
+%endmacro                       ; bounds" (an error under -w+error) when it is
+                                ; 128 or more: mem_rr_walk widens it with cbw.
+                                ; An %if cannot say it - three of the strides
+                                ; are defined in modules included after this
 %macro MEM_RR_ONE 1
     dw %1
     db 1, 0                     ; a lone word: one of it, and no stride
@@ -2799,9 +2797,13 @@ mem_rr_tab:
     ; (mem_reloc_call), and a block that is not a driver matches none of them.
 %ifdef OS88_DRIVERS
     MEM_RR_ROW drv_tab + DRVR_SEG, DRV_MAX, DRVR_SIZE
-    MEM_RR_ROW drv_fseg,           5,       4   ; the five published class fast
-%endif                                          ; paths, contiguous BY DESIGN
-                                                ; (driver.inc:841)
+    MEM_RR_ROW drv_fseg,    DRVC_MAX,       4   ; EVERY published class's fast
+%endif                                          ; path, contiguous BY DESIGN
+                                                ; (driver.inc:841). It said 5
+                                                ; through two appended classes
+                                                ; - DRVC_POINT's and DRVC_EMS's
+                                                ; segments went stale on a move
+                                                ; - so it names the ceiling now
     ; A DONATED listing claim had two rows here - dsk_vtab's DV_SEG and the
     ; live [dsk_dseg] - and SPEC.md 22.6 retired the donation, so DV_SEG can
     ; no longer name one.
@@ -2825,8 +2827,11 @@ mem_rr_tab:
                                 ; rule 3 names
     MEM_RR_ONE fdlg_rqsp        ; the file dialog's staleness cookie
 %ifdef KERN_BIG
-    MEM_RR_ONE drv_dlg_seg      ; kern_small's driver file-dialog slot is a
-%endif                          ; refusing stub and has no state (62.9.15)
+    MEM_RR_ROW hb_dosseg, 2, 2  ; the DOS handoff's posted region (SPEC.md
+                                ; 96.40.8) and the driver file dialog's
+                                ; image; kern_small has neither - no
+                                ; HIBER.DRV, and its dialog slot is a
+%endif                          ; refusing stub with no state (62.9.15)
     MEM_RR_ROW dskw_seg, 2, 2   ; a CALLER's segment and the advancing one,
     MEM_RR_ONE dskw_czseg       ; banked across a whole file transfer
     ; ...and the driver words that are NOT in drv_tab. Three of them are rows
@@ -2857,6 +2862,14 @@ mem_rr_tab:
     ; are covered for four bytes rather than left as the next reader's trap.
     MEM_RR_ROW 0x08*4 + 2, 8, 4     ; IRQ0..7  -> int 08h..0Fh, the SEGMENT half
     MEM_RR_ROW 0x70*4 + 2, 8, 4     ; IRQ8..15 -> int 70h..77h
+    ; ...and int 33h, the POINTING class's own vector (SPEC.md 66.6.3.1,
+    ; 9.12.7). USBMOUSE.DRV's PicoMEM backend hooks it, because the card's
+    ; IRQ multiplexer hands each report to `int 33h AX=0060h` - so a move
+    ; left the vector on the OLD copy, whose bytes still ran and whose feed
+    ; the fence then refused: a pointer dead for the session with nothing
+    ; else wrong (docs/FIELD-NOTES.md 67, after a Video Player play). Not
+    ; scratch on any machine: it is the mouse driver's interrupt or nothing
+    MEM_RR_ONE 0x33*4 + 2
     dw 0
 %endif
 section .cold
@@ -2934,13 +2947,15 @@ mem_reloc_call:
 
     mov bp, [ss:si+MC_RLOC]     ; BP = the proc, PKG_DISP's own contract
     mov ax, [ss:si+MC_OWN]
-    cmp ah, MEM_PG_MIN
-    jb .notk
-    cmp ah, MEM_LVL_TOP
-    jbe .kernel                 ; 0xFExx and 0xFFxx alike: a kernel tag. A
-                                ; SEGMENT can never collide with this range -
-                                ; conventional memory ends at 0xA000
-.notk:
+%if MEM_LVL_TOP != 0xFF
+  %error "mem_reloc_call's one compare takes MEM_PG_MIN..MEM_LVL_TOP as 'AH at or above MEM_PG_MIN': the top must be 0xFF"
+%endif
+    cmp ah, MEM_PG_MIN          ; MEM_PG_MIN..MEM_LVL_TOP, and the top IS 0xFF,
+    jae .kernel                 ; so one compare (its upper bound was a second,
+                                ; always true, until size pass 10). 0xFBxx up
+                                ; to 0xFFxx alike: a kernel tag. A SEGMENT can
+                                ; never collide with this range - conventional
+                                ; memory ends at 0xA000
     cmp ax, INST_MAX
     jae .pkg                    ; a package's or a driver's own SEGMENT
     push bx                     ; an instance slot, and it is TWO things
@@ -3021,14 +3036,14 @@ mem_compact:
 
 
     cmp byte [mem_cp_busy], 0
-    jne .none                   ; a relocation proc that claimed would arrive
+    jne .none0                  ; a relocation proc that claimed would arrive
                                 ; here inside the walk it is being driven by,
                                 ; and the walk's own map would move under it
                                 ; (SPEC.md 66.3 rule 3 forbids it; this is what
                                 ; makes the forbidden thing bounded)
     mov cl, 6
     shl ax, cl                  ; KB -> paragraphs; 0 stays 0
-    jc .none                    ; more than a megabyte: nothing to do here
+    jc .none0                   ; more than a megabyte: nothing to do here
     mov di, ax                  ; DI = what the caller needs
     or di, di                   ; ...and the rank a drop is judged against
     jz .rank                    ; (SPEC.md 66.10.1), WHICH WITH NO PENDING
@@ -3128,6 +3143,10 @@ mem_compact:
     inc byte [mem_parked]       ; ...and it is withdrawn on EVERY path out
     jmp short .plan             ; ...then ask again, with whoever parked now
                                 ; movable
+.none0:                         ; THE PROLOGUE'S REFUSALS land here: .none is
+    jmp short .none             ; past short reach of them, and nothing falls
+                                ; into this spot (two bytes against two
+                                ; five-byte relaxed jccs)
 
     ; --- STILL not enough: pack the CEILING instead (SPEC.md 66.4) ----------
     ; The last resort, and it is asked last for the reason every tier here is:
@@ -3148,9 +3167,8 @@ mem_compact:
     jmp short .plan
 .doit:
     call mem_cp_run
-    call mem_cp_end
-    clc
-    jmp short .out
+    mov bx, sp                  ; any NON-ZERO word: one pass funds it, so the
+    jmp short .end              ; answer below is CF = 0
 .both:
     ; NEITHER PASS ALONE FUNDS IT, so take BOTH - which is what SPEC.md
     ; 66.4.1's alternatives rule refused, and it refused it by copying NOTHING
@@ -3183,30 +3201,32 @@ mem_compact:
     not word [mem_cp_msk]       ; 0 -> 0xFFFF (no walk writes it)
     call mem_cp_run             ; ...and then the ceiling packs up
     or bx, dx                   ; DID EITHER PASS MOVE ANYTHING? mem_claim's
-    call mem_cp_end             ; retry loop rests on CF = 1 when nothing did -
-    or bx, bx                   ; a CF = 0 that moved nothing is an infinite
-    jz .none                    ; loop there (SPEC.md 66.4's termination)
-    jmp short .out
+                                ; retry loop rests on CF = 1 when nothing did -
+                                ; a CF = 0 that moved nothing is an infinite
+                                ; loop there (SPEC.md 66.4's termination)
+.end:
+    ; HAND THE MACHINE BACK. Every path that raised the lock leaves through
+    ; here - one body, so "left as it was found" cannot drift between two
+    ; (it was a routine, mem_cp_end, while it had two callers). AX is free:
+    ; kentc_di banked it.
+    xor ax, ax
+    cmp [mem_parked], al        ; release the workers, if this pass ever asked
+    je .nopark                  ; them to stand (SPEC.md 66.5)
+    mov [mem_parked], al
+    mov [inst_parkreq], al      ; withdraw the request: every parked worker
+                                ; resumes (inst_park_end was this one store
+                                ; behind a far call, size pass 9)
+.nopark:
+    mov [mem_cp_msk], ax        ; mem_avail plans through mem_cp_plan too, so
+    dec byte [sch_lock]         ; the direction goes back as it was found
+    dec byte [mem_cp_busy]
+    or bx, bx                   ; ...and the answer: `or` leaves CF = 0
+    jnz .out
 .none:                          ; .both gave the lock back itself; this is the
     stc                         ; only arm left that never took it
 .out:
     jmp kretc_di
 
-; mem_cp_end - hand the machine back (module internal). Every path that raised
-; the lock leaves through here, which is what makes "left as it was found" a
-; property of one body rather than of two that have to be kept agreeing. It
-; WRITES the flags: both callers set the caller's CF after it returns, which is
-; the one place the answer is decided.
-mem_cp_end:
-    cmp byte [mem_parked], 0    ; release the workers, if this pass ever asked
-    je .nopark                  ; them to stand (SPEC.md 66.5)
-    mov byte [mem_parked], 0
-    call KERNEL_SEG:inst_park_end
-.nopark:
-    mov word [mem_cp_msk], 0    ; mem_avail plans through mem_cp_plan too, so
-    dec byte [sch_lock]         ; the direction goes back as it was found
-    dec byte [mem_cp_busy]
-    ret
 
 %endif
 
@@ -3271,17 +3291,15 @@ mem_cp_end:
 ; -----------------------------------------------------------------------------
 mem_runat:
     push bx
-    push cx
     push dx
     push si
     mov dx, [mem_top]           ; the ceiling, until a barrier undercuts it
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc .done
     call mem_pg_cheap           ; CF = 0 is TAKEABLE - room, not a wall - and
-    jnc .next                   ; the polarity is the way round mem_avail's
+    jnc .scan                   ; the polarity is the way round mem_avail's
                                 ; own total reads it five lines further down.
                                 ; Inverted, this walk called every cache a
                                 ; wall and every wall room, and answered 48.0
@@ -3292,17 +3310,16 @@ mem_runat:
     cmp bx, di
     jbe .below
     cmp bx, dx
-    jae .next
+    jae .scan
     mov dx, bx                  ; the lowest wall above us so far
-    jmp short .next
+    jmp short .scan
 .below:
     add bx, [ss:si+MC_PARA]     ; it starts at or below DI - does it REACH it?
     cmp bx, di
-    jbe .next
+    jbe .scan
     mov dx, di                  ; DI is inside it: no run here at all, and no
-.next:                          ; later record can lower DX past DI
-    add si, MC_SIZE
-    loop .scan
+    jmp short .scan             ; later record can lower DX past DI
+.done:
     mov ax, dx
     sub ax, di
     jnc .out
@@ -3310,40 +3327,35 @@ mem_runat:
 .out:
     pop si
     pop dx
-    pop cx
     pop bx
     ret
 
 mem_bigrun:
     push bx
-    push cx
     push si
     push di
     mov di, [mem_base]          ; candidate 0: the floor
     call mem_runat
     mov bx, ax                  ; BX = best so far
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .cand:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc .done
     call mem_pg_cheap
-    jnc .next                   ; a takeable cache is not a wall, so its end
+    jnc .cand                   ; a takeable cache is not a wall, so its end
                                 ; is not a candidate either - the run through
                                 ; it was measured from the wall below
     mov di, [ss:si+MC_SEG]
     add di, [ss:si+MC_PARA]     ; ...just past a wall
     call mem_runat
     cmp ax, bx
-    jbe .next
+    jbe .cand
     mov bx, ax
-.next:
-    add si, MC_SIZE
-    loop .cand
+    jmp short .cand
+.done:
     mov ax, bx
     pop di
     pop si
-    pop cx
     pop bx
     ret
 %endif
@@ -3362,14 +3374,12 @@ mem_bigrun:
 ; first test and now does.
 ; -----------------------------------------------------------------------------
 mem_find_own:
-    push cx
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next                    ; a free record can match a DX of 0
+    call mem_next               ; (skipping free records, which could match
+    jc .out                     ; a DX of 0) - CF = 1: no such claim
     cmp [ss:si+MC_SEG], dx
-    jne .next
+    jne .scan
     cmp [ss:si+MC_OWN], bx
     je .out                     ; equal, so CF is already 0
     cmp dx, bx                  ; ...OR IT IS THE CALLER ITSELF: a package's
@@ -3380,12 +3390,41 @@ mem_find_own:
                                 ; bytes, and it WIDENS the fence rather than
                                 ; holing it - the two words still have to agree
                                 ; about something
-.next:
-    add si, MC_SIZE
-    loop .scan
+    jmp short .scan
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_free - release a block (SPEC.md 50.3)
+;
+; in:       DX = the base segment mem_claim returned, BX = the owner word it
+;           was claimed with
+; out:      CF = 0 released; CF = 1 no such claim, or not this owner's
+; clobbers: nothing else (flags)
+;
+; The owner test is what stops a package freeing the kernel's own claims,
+; or another instance's canvas, with one wrong word.
+; -----------------------------------------------------------------------------
+mem_free_x:
+    push si
+    pushf
+    cli
+%ifdef OS88_COMPACT
+    cmp byte [mem_cp_busy], 0   ; a relocation proc may not free (SPEC.md 66.3
+    jne .busy                   ; rule 3): the walk is standing on the record
+%endif                          ; ...and kern_small has no walk to be inside
+    call mem_find_own
+    jc .busy
+    mov word [ss:si+MC_SEG], 0     ; the record IS the allocator (SPEC.md 50.3)
+.ok:                            ; ...and mem_movable_x's two exits, below, are
+    popf                        ; these: the same fence under the same IF = 0
+    clc                         ; window, writing a different word
+    jmp short .out
+.busy:
+    popf
     stc
 .out:
-    pop cx                      ; pop writes no flag: the answer survives it
+    pop si
     ret
 
 mem_movable_x:
@@ -3402,17 +3441,9 @@ mem_movable_x:
     pushf
     cli
     call mem_find_own           ; the mem_free fence: yours, or not at all
-    jc .no
-    mov [ss:si+MC_RLOC], ax
-    popf
-    clc
-    jmp short .out
-.no:
-    popf
-    stc
-.out:
-    pop si
-    ret
+    jc mem_free_x.busy          ; ...and mem_free's own two exits, directly
+    mov [ss:si+MC_RLOC], ax     ; above: the same pushf/si frame
+    jmp short mem_free_x.ok
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -3461,11 +3492,10 @@ mem_movable_x:
 ; leaves a hole behind it, and fragmentation not created needs no repairing.
 ; -----------------------------------------------------------------------------
 mem_regrow:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
+    push ax                     ; (no BX: nothing here writes it - every
+    push cx                     ; callee banks its own - which is a byte under
+    push si                     ; the kretc_cx ladder it left through until
+    push di                     ; size pass 10)
     pushf
     cli
 %ifdef OS88_COMPACT
@@ -3481,9 +3511,7 @@ mem_regrow:
     call mem_find_own           ; it must be a base, and yours
     jc .fail
     cmp ax, [ss:si+MC_PARA]
-    ja .grow
-    mov [ss:si+MC_PARA], ax        ; 1. shrink or level: the tail is free now
-    jmp short .ok
+    jbe .set                    ; 1. shrink or level: the tail is free now
 
 .grow:
     mov di, dx                  ; 2. does it fit where it stands?
@@ -3496,9 +3524,7 @@ mem_regrow:
     add cx, [ss:si+MC_PARA]        ; CX = our end = the extension's start
     call mem_runfree
     mov word [mem_skip], 0
-    jc .move
-    mov [ss:si+MC_PARA], ax        ; it does: extend, copy nothing
-    jmp short .ok
+    jnc .set                    ; it does: extend, copy nothing
 
 .move:                          ; 3. the highest block that will take it
                                 ; the constraint this block was GRANTED under
@@ -3511,9 +3537,9 @@ mem_regrow:
                                 ; care - the rule is on the HEAD, so a shrink
                                 ; and an extend upward both keep it
     call mem_hifit              ; CX = its base
-    pushf
     mov word [mem_dma], 0       ; a transient, and this window is the only
-    popf                        ; place it may be set (the whole op is IF=0)
+                                ; place it may be set (the whole op is IF=0).
+                                ; A mov writes no flag: CF is mem_hifit's
     jc .shed                    ; no run: SHED AND RETRY (.shed, past the
                                 ; `ret` below)
     push ax
@@ -3527,9 +3553,10 @@ mem_regrow:
     pop cx
     pop ax
     mov [ss:si+MC_SEG], cx         ; the record follows the bytes; MC_DMA is
-    mov [ss:si+MC_PARA], ax        ; already right - it never changed
+                                   ; already right - it never changed
     mov dx, cx                  ; ...and the caller is told where it went
-.ok:
+.set:                           ; (all three paths: the new length)
+    mov [ss:si+MC_PARA], ax
     popf
     clc
     jmp short .out
@@ -3539,7 +3566,9 @@ mem_regrow:
 .out:
     pop di
     pop si
-    jmp kretc_cx
+    pop cx
+    pop ax
+    ret
 
     ; SHED AND RETRY, which mem_claim has had all along and this routine had
     ; not (SPEC.md 50.6.2.1). A purgeable block is memory the kernel holds on
@@ -3572,37 +3601,6 @@ mem_regrow:
     jnc .grow
     jmp short .fail
 
-; -----------------------------------------------------------------------------
-; mem_free - release a block (SPEC.md 50.3)
-;
-; in:       DX = the base segment mem_claim returned, BX = the owner word it
-;           was claimed with
-; out:      CF = 0 released; CF = 1 no such claim, or not this owner's
-; clobbers: nothing else (flags)
-;
-; The owner test is what stops a package freeing the kernel's own claims,
-; or another instance's canvas, with one wrong word.
-; -----------------------------------------------------------------------------
-mem_free_x:
-    push si
-    pushf
-    cli
-%ifdef OS88_COMPACT
-    cmp byte [mem_cp_busy], 0   ; a relocation proc may not free (SPEC.md 66.3
-    jne .busy                   ; rule 3): the walk is standing on the record
-%endif                          ; ...and kern_small has no walk to be inside
-    call mem_find_own
-    jc .busy
-    mov word [ss:si+MC_SEG], 0     ; the record IS the allocator (SPEC.md 50.3)
-    popf
-    clc
-    jmp short .out
-.busy:
-    popf
-    stc
-.out:
-    pop si
-    ret
 
 ; -----------------------------------------------------------------------------
 ; mem_free_owner - release every claim an owner holds (SPEC.md 50.4)
@@ -3615,24 +3613,20 @@ mem_free_x:
 ; megabyte than it can leave a tone droning.
 ; -----------------------------------------------------------------------------
 mem_free_owner_x:
-    push cx
     push si
     pushf
     cli
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc .done
     cmp [ss:si+MC_OWN], bx
-    jne .next
+    jne .scan
     mov word [ss:si+MC_SEG], 0
-.next:
-    add si, MC_SIZE
-    loop .scan
+    jmp short .scan
+.done:
     popf
     pop si
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3643,6 +3637,8 @@ mem_free_owner_x:
 ; in:       BX = the owner word to match, DX = the owner word to write,
 ;           AX = a segment INSIDE one of those claims - the claim it lies in
 ;                gives up its head, up to AX, to the heap
+;           CX = the paragraphs of that claim, from AX, to KEEP -
+;                its tail past them goes back too; 0xFFFF keeps it whole
 ; out:      nothing (all registers preserved)
 ;
 ; mem_free_owner_x above with one instruction changed, and deliberately a
@@ -3669,21 +3665,21 @@ mem_free_owner_x:
 ; name and a containment arm, answered by the equality that already held for
 ; every other package: seven bytes here against ~150 there.
 ; -----------------------------------------------------------------------------
+%ifndef KERN_SMALL                  ; step 8a's alone, and kern_small has no
+                                    ; step 8a (SPEC.md 20.12.10.7)
 mem_reown_x:
-    push cx
     push si
     pushf
     cli                         ; the walk-and-write, one window, exactly as
                                 ; mem_free_owner_x's is: a claim published
                                 ; between the compare and the store would keep
                                 ; the owner that is about to stop existing
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc mem_free_owner_x.done    ; its exit too: the same pushf/si frame
     cmp [ss:si+MC_OWN], bx
-    jne .next
+    jne .scan
     mov [ss:si+MC_OWN], dx
     push ax
     sub ax, [ss:si+MC_SEG]      ; AX = how far into this claim the program sits
@@ -3691,15 +3687,17 @@ mem_reown_x:
     jae .whole                  ; not inside it: an ordinary claim, kept whole
     add [ss:si+MC_SEG], ax      ; the head slack goes back to the heap, so the
     sub [ss:si+MC_PARA], ax     ; base IS the segment the program runs in
+    cmp [ss:si+MC_PARA], cx     ; ...AND THE TAIL past what the loader said
+    jbe .whole                  ; the program keeps (SPEC.md 20.12.10.5):
+    mov [ss:si+MC_PARA], cx     ; 0xFFFF keeps it whole, which is every
+                                ; loader that did not say. A free run is the
+                                ; gap between two claims, so a shorter claim
+                                ; IS the free - it merges with whatever run
+                                ; stood above it the way any free does
 .whole:
     pop ax
-.next:
-    add si, MC_SIZE
-    loop .scan
-    popf
-    pop si
-    pop cx
-    ret
+    jmp short .scan
+%endif                              ; KERN_SMALL
 
 ; -----------------------------------------------------------------------------
 ; mem_free_rec - mem_free_owner for an instance record pointer
@@ -3775,10 +3773,14 @@ mem_avail_x:
 mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
                                 ; AL = the caller's own level otherwise, and
                                 ; only caches BELOW it count (SPEC.md 50.6.4)
-    push cx
-    push dx
+    push cx                     ; ...and, on the kernel with the walk, the DX,
+%ifdef OS88_COMPACT             ; SI and DI mem_cp_both's walk below spends;
+    push dx                     ; on the one without, the SI of its own .tot
+    push si                     ; walk (mem_bigrun banks everything it spends)
+    push di                     ; - nothing else here writes DX or DI
+%else
     push si
-    push di
+%endif
     pushf
     cli
 %ifdef OS88_COMPACT
@@ -3796,24 +3798,56 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
                                 ; 66.4.3.5): inst_seg_parked answers "parked" for
                                 ; every package worker while it stands, because
                                 ; the claim this answers for parks them first
-    call mem_cp_both            ; AX = the largest run compaction would leave,
-                                ; BX = the total, both in paragraphs -
-                                ; caches at or below AL dissolved with it - and
-                                ; BOTH PASSES, because mem_claim takes both
-                                ; (SPEC.md 66.4.1). It was mem_cp_plan, which
-                                ; models the ascending one alone and so
-                                ; answered up to 48KB short of what the
-                                ; allocator would hand out - measured over
-                                ; thirteen layouts by tools/heapwhatif.py
-                                ;
-                                ; **AND IT SUBSUMES mem_cp_room** (66.10.4),
-                                ; which was this call site's other fix and
-                                ; arrived on another branch: .loop skips a
-                                ; claim mem_pg_cheap passes WITHOUT advancing
-                                ; the fill point, so a cache this rank
-                                ; outranks already counts as free whether or
-                                ; not it could have moved - which is the whole
-                                ; of what the third walk mode was for
+    ; --- mem_cp_both, INLINE (size pass 10; its header, where it stood, is
+    ; the design): AX = the largest run compaction would leave, BX = the
+    ; total, both in paragraphs - caches at or below AL dissolved with it -
+    ; and BOTH PASSES, because mem_claim takes both (SPEC.md 66.4.1). It was
+    ; mem_cp_plan, which models the ascending one alone and so answered up to
+    ; 48KB short of what the allocator would hand out - measured over
+    ; thirteen layouts by tools/heapwhatif.py.
+    ;
+    ; **AND IT SUBSUMES mem_cp_room** (66.10.4), which was this call site's
+    ; other fix and arrived on another branch: .loop skips a claim
+    ; mem_pg_cheap passes WITHOUT advancing the fill point, so a cache this
+    ; rank outranks already counts as free whether or not it could have
+    ; moved - which is the whole of what the third walk mode was for
+    call mem_cp_fill0           ; BX = [mem_base], and the search key with it.
+                                ; ASCENDING: [mem_cp_msk] is 0 on every path
+                                ; out of mem_compact, and mem_avail refuses
+                                ; inside one (.nested), so it is 0 here
+    mov di, [mem_top]           ; DI = the total: the arena, less every claim
+    sub di, bx                  ; that counts
+    xor cx, cx                  ; CX = the largest run so far
+    xor dx, dx                  ; DX = a run of ceiling movers is pending
+.loop:
+    call mem_cp_next
+    jc .tail
+    call mem_cp_step            ; past this claim's ORIGINAL base
+    call mem_pg_cheap
+    jnc .loop                   ; a cache this rank may drop: free space, and
+                                ; no barrier to anything
+    call mem_can_move
+    jc .barrier                 ; pinned: a barrier where it stands
+    test byte [ss:si+MC_DMA+1], MC_DMA_HI >> 8
+    jz .lo
+    inc dx                      ; a ceiling mover: its size joins the fill
+    jmp short .pack             ; point and a run is pending
+.lo:
+    or dx, dx                   ; a floor mover packs onto the fill point...
+    jz .pack
+.barrier:                       ; ...unless a run is pending under it, and
+    mov ax, [ss:si+MC_SEG]      ; then it is where that run stops: the hole is
+    call .run                   ; base - fill, which is B - S - fill, and the
+    xor dx, dx                  ; fill point resumes at its base
+.pack:
+    sub di, [ss:si+MC_PARA]     ; it counts against free...
+    add bx, [ss:si+MC_PARA]     ; ...and the fill point moves past it
+    jmp short .loop
+.tail:
+    mov ax, [mem_top]           ; ...and the run past everything
+    call .run
+    mov ax, cx
+    mov bx, di
     dec byte [mem_cp_pl]
 %else
     call mem_bigrun             ; ...and where nothing moves, the run a
@@ -3827,19 +3861,17 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
                                 ; ...AND THE TOTAL IS A WALK OF ITS OWN HERE,
                                 ; where the compact walk folds it in: heap
                                 ; less every claim that OUTRANKS the caller
-    mov si, mem_tab             ; total free = heap - sum of claims, and a
+    mov si, MEM_FIRST           ; total free = heap - sum of claims, and a
     mov bx, [mem_top]           ; PURGEABLE claim is only one of them when it
     sub bx, [mem_base]          ; OUTRANKS the caller - a total that disagreed
-    mov cx, MEM_MAX             ; with the run scan above would be the same lie
-.tot:                           ; in the other register
-    cmp word [ss:si+MC_SEG], 0
-    je .tnext
+.tot:                           ; with the run scan above would be the same lie
+    call mem_next               ; in the other register
+    jc .tdone
     call mem_pg_cheap           ; takeable = it does NOT count against free
-    jnc .tnext
+    jnc .tot
     sub bx, [ss:si+MC_PARA]
-.tnext:
-    add si, MC_SIZE
-    loop .tot
+    jmp short .tot
+.tdone:
 
 %endif
     popf
@@ -3847,9 +3879,13 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
     shr ax, cl                  ; the answer must always fit
     shr bx, cl
 .out:
+%ifdef OS88_COMPACT
     pop di
     pop si
     pop dx
+%else
+    pop si
+%endif
     pop cx
     ret
 %ifdef OS88_COMPACT
@@ -3858,6 +3894,21 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
     xor ax, ax
     xor bx, bx
     jmp short .out
+; .run - AX = an edge: the run from the fill point up to it goes into CX if it
+; is the largest yet, and BX = that edge on the way out, which is where the
+; fill point resumes past a barrier. `pop` writes no flags. The `jbe` also
+; catches an edge the fill point has already passed, which interleaving can
+; produce and which is not a run.
+.run:
+    push ax
+    sub ax, bx
+    jbe .r
+    cmp ax, cx
+    jbe .r
+    mov cx, ax
+.r:
+    pop bx
+    ret
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -3876,25 +3927,19 @@ mem_avail_lvl_x:                  ; as free, because mem_claim sheds them all.
 ; resident bytes for a segment crossing to the segment it was already in.
 ; -----------------------------------------------------------------------------
 mem_owned_kb:
-    push cx
-    push si
-    xor ax, ax
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    push cx                     ; mem_sum_kb's frame, so its tail below is this
+    push dx                     ; routine's too: DX the paragraphs, AX the
+    push si                     ; total they are added to - 0, and `cwd` off
+    xor ax, ax                  ; that 0 is the byte-short zero of DX
+    cwd
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc mem_sum_kb.done
     cmp [ss:si+MC_OWN], bx
-    jne .next
-    add ax, [ss:si+MC_PARA]
-.next:
-    add si, MC_SIZE
-    loop .scan
-    mov cl, 6
-    shr ax, cl
-    pop si
-    pop cx
-    ret
+    jne .scan
+    add dx, [ss:si+MC_PARA]
+    jmp short .scan
 
 ; -----------------------------------------------------------------------------
 ; mem_sum_kb - the Task Manager's two heap terms
@@ -3918,15 +3963,14 @@ mem_sum_kb:
     push dx
     push si
     xor dx, dx
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp word [ss:si+MC_SEG], 0
-    je .next
+    call mem_next
+    jc .done
     cmp byte [ss:si+MC_OWN+1], MEM_PG_MIN  ; PURGEABLE is in nobody's total,
     jb .notpg                       ; not even System's (SPEC.md 50.6.3) - and
     cmp byte [ss:si+MC_OWN+1], MEM_PG_MAX  ; it is a RANGE now, because the
-    jbe .next                       ; high byte carries the priority (50.6.4).
+    jbe .scan                       ; high byte carries the priority (50.6.4).
 .notpg:                             ; It is not memory anyone can run out of -
                                     ; the next claim that needs it takes it -
                                     ; so counting it as used would be the
@@ -3934,19 +3978,22 @@ mem_sum_kb:
     or bx, bx
     jz .take
     cmp byte [ss:si+MC_OWN+1], 0xFF    ; the kernel tags are 0xFFxx; an instance
-    je .take                        ; slot is 0..INST_MAX-1
+%ifndef OS88_DRIVERS                ; slot is 0..INST_MAX-1 (kern_small: no
+    jne .scan                       ; segment is a driver's, so the test below
+%else                               ; always skipped - kernel size pass 11)
+    je .take
     push bx                         ; ...and a LOADED DRIVER's own buffers,
     mov bx, [ss:si+MC_OWN]             ; which name themselves by the segment the
     call drv_owns_seg_x               ; driver runs in and so match neither test
     pop bx                          ; above. They belong under System, where
-    jc .next                        ; the driver's image already is (51.3) -
+    jc .scan                        ; the driver's image already is (51.3) -
                                     ; without this they were in the totals and
                                     ; in the map, and in no row at all
+%endif
 .take:
     add dx, [ss:si+MC_PARA]
-.next:
-    add si, MC_SIZE
-    loop .scan
+    jmp short .scan
+.done:
     mov cl, 6
     shr dx, cl                  ; paragraphs -> KB
     add ax, dx
@@ -3977,18 +4024,11 @@ mem_sum_kb:
 ; also mem_sum_kb's first caller - the wrapper it used to reach it through
 ; had been written for this and never wired up, which is why the duplicate
 ; walk survived being noticed.
+;
+; INLINE in osapi_sys_kb_x since size pass 9 - that is its one caller, and
+; the call and the ret were four bytes of nothing. The block there is marked
+; with this name, so what the SPEC.md citations call it still finds it.
 ; -----------------------------------------------------------------------------
-mem_total_kb:
-    push cx
-    xor ax, ax
-    xor bx, bx                  ; BX = 0: every owner (and BX is an OUTPUT
-    call mem_sum_kb             ; here, written two instructions below)
-    mov bx, [mem_top]
-    sub bx, [mem_base]
-    mov cl, 6
-    shr bx, cl
-    pop cx
-    ret
 
 ; =============================================================================
 ; The API slot targets (SPEC.md 20.3/50.3).
@@ -4008,13 +4048,15 @@ mem_total_kb:
 ; The plain claim IS the DMA claim with no head to constrain, so it borrows the
 ; body rather than repeating it - and it has to bank CX, which is the head
 ; parameter there and one of the registers this slot promises to preserve.
+; ITS CELL'S FAR ENTRY IS THE BODY (SPEC.md 2.6.1): nothing near-calls it, so
+; it ends in `retf` and the `call / retf` shim that named it is gone.
 ; -----------------------------------------------------------------------------
-osapi_mem_claim_x:
+mmf_osapi_mem_claim:
     push cx
     xor cx, cx                  ; no head: no 64KB page constraint
     call osapi_mem_claim_dma_x
-    pop cx                      ; pop leaves CF alone, and so does ret
-    ret
+    pop cx                      ; pop leaves CF alone, and so does retf
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_claim_dma - in: AX = KB, CX = KB of the head that must not cross a
@@ -4031,12 +4073,12 @@ osapi_mem_claim_x:
 ; region, so it belongs at the same end - and out of the arena the compactor
 ; and every data claim share.
 ; -----------------------------------------------------------------------------
-osapi_mem_claim_hi_x:
+mmf_osapi_mem_claim_hi:         ; (the cell's far entry, as mmf_osapi_mem_claim)
     push cx
     xor cx, cx                  ; no head: no 64KB page constraint
     call osapi_mem_claim_dma_hi_x
-    pop cx                      ; pop leaves CF alone, and so does ret
-    ret
+    pop cx                      ; pop leaves CF alone, and so does retf
+    retf
 
 osapi_mem_claim_dma_hi_x:
     push bx
@@ -4062,14 +4104,14 @@ osapi_mem_claim_dma_x:
 ; osapi_mem_free - in: DX = segment, ES = the caller's segment
 ;                  out: CF = 0 released, CF = 1 refused (not yours)
 ; -----------------------------------------------------------------------------
-osapi_mem_free_x:
+mmf_osapi_mem_free:             ; (the cell's far entry, as mmf_osapi_mem_claim)
     push bx
     call mem_own
     jc .out                     ; CF = 1 already
     call mem_free_x
 .out:
     pop bx
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; osapi_mem_regrow - in: DX = the claim, AX = new size in KB, ES = the
@@ -4187,8 +4229,7 @@ osapi_mem_compact_x:
     cmp word [mem_cpq], 0
     jne .no                     ; one is already standing
     mov [mem_cpq], bx
-    mov [mem_cpq_lvl], al
-    clc
+    mov [mem_cpq_lvl], al       ; (CF = 0 still: the cmp found it free)
     retf
 .no:
     stc
@@ -4325,11 +4366,16 @@ mem_own:
                                      ; it has no instance, so the test above
                                      ; can never say yes about it
     push dx                          ; ...or by a SEGMENT that is itself a
-    mov dx, bx                       ; driver image: SPEC.md 52.11.7's second
-    call mem_own_drv                 ; image, one level and no further. DX is
-    pop dx                           ; banked because osapi_mem_free passes the
-    jc .no                           ; segment to free in it, and `pop` leaves
-                                     ; the flags alone
+    push si                          ; driver image: SPEC.md 52.11.7's second
+    mov dx, bx                       ; image, one level and no further (this
+    mov bx, MEM_K_DRV                ; was mem_own_drv - its header below -
+    call mem_find_own                ; inline since size pass 9: "the claim
+    pop si                           ; based at DX and owned by MEM_K_DRV").
+    pop dx                           ; DX is banked because osapi_mem_free
+    jc .no                           ; passes the segment to free in it, SI
+                                     ; because mem_find_own walks it, and BX
+                                     ; is this routine's output either way
+                                     ; (`pop` leaves the flags alone)
 .yes:
     mov bx, es                       ; the OWNER WORD is that same segment -
     clc                              ; the walk above spent BX on the answer
@@ -4350,26 +4396,20 @@ mem_own:
 ; THAT. This is the step; each fence decides for itself what a valid answer is.
 ; -----------------------------------------------------------------------------
 mem_owner_of_x:
-    push cx
     push si
-    mov si, mem_tab
-    mov cx, MEM_MAX
+    mov si, MEM_FIRST
 .scan:
-    cmp [ss:si+MC_SEG], bx
-    je .hit
-    add si, MC_SIZE
-    loop .scan
-    stc
-    jmp short .out
-.hit:                           ; `je` arrives with CF = 0, and `mov` keeps it
-    mov bx, [ss:si+MC_OWN]
-.out:
-    pop si
-    pop cx
+    call mem_next               ; the walk every other reader of the map takes,
+    jc .out                     ; and it SKIPS FREE RECORDS - so a BX of 0 is
+    cmp [ss:si+MC_SEG], bx      ; "no claim starts there", as the header says,
+    jne .scan                   ; where the counted loop this was matched the
+    mov bx, [ss:si+MC_OWN]      ; first free record and answered its stale
+.out:                           ; owner (size pass 10). `jne` falls out with
+    pop si                      ; CF = 0 and `mov` keeps it
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_own_drv - is DX the segment of a DRIVER's image? (module internal)
+; mem_own_drv - is DX the segment of a DRIVER's image? (INLINE in mem_own)
 ; in:  DX = a candidate segment
 ; out: CF = 0 yes, CF = 1 no
 ; clobbers: flags
@@ -4391,14 +4431,6 @@ mem_owner_of_x:
 ; [MC_OWN], INST_MAX / jb .yes` failed), so DX can never be 0 - what the test
 ; refuses is a FREE record whose stale MC_OWN would otherwise have been read.
 ; -----------------------------------------------------------------------------
-mem_own_drv:
-    push bx                     ; BX and SI are mem_own's - it is mid-walk
-    push si                     ; with the record in SI when it asks
-    mov bx, MEM_K_DRV
-    call mem_find_own           ; ...which is exactly "the claim based at DX
-    pop si                      ; and owned by BX", one owner word fixed
-    pop bx
-    ret
 
 ; =============================================================================
 ; osapi_claim_snapshot - API slot 0x0216: the whole claim table into the caller's
@@ -4422,9 +4454,10 @@ mem_own_drv:
     || CLS_RECSZ != 6 || MC_SIZE < CLS_RECSZ
 %error "a claim record is no longer its own snapshot prefix - the copy below"
 %endif
-osapi_claim_snapshot_x:
-    push ds
-    push cx
+mmf_osapi_claim_snapshot:       ; (the cell's far entry, as mmf_osapi_mem_claim)
+    push cx                     ; NO DS BANK: the one door in is the RCSLOT
+                                ; cell, whose api_rsc banks and restores DS
+                                ; round this whole body (size pass 10)
     push si
     push di
     push ss                     ; DS = LOW_SEG for the duration: the claim map
@@ -4443,9 +4476,8 @@ osapi_claim_snapshot_x:
     pop di
     pop si
     pop cx
-    pop ds
     mov ax, MEM_MAX
-    ret
+    retf
 
 ; =============================================================================
 ; osapi_sys_kb - API slot 0x021C: what the KERNEL occupies and what the heap
@@ -4498,6 +4530,7 @@ osapi_claim_snapshot_x:
 osapi_sys_kb_x:
     push ax
     push bx
+    push cx
     push di
     mov ax, KERN_KB
     mov bx, SK_IMG_KB           ; ...and on a machine with NO VGA the kernel is
@@ -4523,31 +4556,34 @@ osapi_sys_kb_x:
     sub bx, SK_VGAB_KB
 .kern:
 %endif
-    mov [es:di+SK_KERN], ax
-    mov [es:di+SK_IMG],  bx
-%if SK_FAT != 4 || SK_STK != 6 || SK_STK0 != 8 || SK_BUF != 10
-%error "osapi_sys_kb stores four CONSECUTIVE words; these are not consecutive"
+%if SK_KERN != 0 || SK_IMG != 2 || SK_FAT != 4 || SK_STK != 6 || SK_STK0 != 8 || SK_BUF != 10 || SK_HEAP != 12 || SK_CLAIM != 14 || SK_KCLAIM != 16 || SK_XMS != 18
+%error "osapi_sys_kb stores the ten words in order with one walking pointer; they are no longer consecutive from 0"
 %endif
-    push di                     ; four build constants into four adjacent
-    add di, SK_FAT              ; words: one walking pointer beats four
-    cld                         ; displaced immediate stores. AX is free -
-    mov ax, SK_FAT_KB           ; SK_KERN and SK_IMG are already written
+    cld                         ; ALL TEN WORDS IN ORDER, through one walking
+    stosw                       ; pointer (size pass 10: it was four of them,
+    xchg ax, bx                 ; and six displaced stores either side).
+    stosw                       ; SK_KERN, SK_IMG
+    mov ax, SK_FAT_KB
     stosw
     mov ax, SK_STK_KB
     stosw
     mov ax, SK_STK0_KB
     stosw
-    mov ax, KBUF_KB             ; SK_BUF LAST, because it is the highest of
-    stosw                       ; the four - it is FAT + stacks together,
-    pop di                      ; and reads like a header
-    call mem_total_kb           ; AX = claimed KB, BX = heap size KB (DI kept)
-    mov [es:di+SK_CLAIM], ax
-    mov [es:di+SK_HEAP], bx
+    mov ax, KBUF_KB             ; SK_BUF, FAT + stacks together
+    stosw
+    mov ax, [mem_top]           ; SK_HEAP - mem_total_kb's other half, inline
+    sub ax, [mem_base]
+    mov cl, 6
+    shr ax, cl
+    stosw
     xor ax, ax
-    mov bx, 1                   ; BX = 1: kernel tags (0xFF00 and up) only.
-                                ; SK_HEAP has already been stored from BX
-    call mem_sum_kb             ; AX += the kernel's own tagged claims (DI kept)
-    mov [es:di+SK_KCLAIM], ax
+    xor bx, bx                  ; BX = 0: every owner
+    call mem_sum_kb             ; ...which preserves BX and DI
+    stosw                       ; SK_CLAIM
+    xor ax, ax
+    inc bx                      ; BX = 1: kernel tags (0xFF00 and up) only
+    call mem_sum_kb             ; AX = the kernel's own tagged claims
+    stosw                       ; SK_KCLAIM
 %ifdef KERN_BIG
     mov ax, [xm_kb]             ; the pool above 1MB, 0 on tier 0 (SPEC.md 41)
 %else
@@ -4557,8 +4593,9 @@ osapi_sys_kb_x:
                                 ; reads 'XMS 0/0K' - the same words on the
                                 ; same build for the same reason
 %endif
-    mov [es:di+SK_XMS], ax
+    stosw                       ; SK_XMS
     pop di
+    pop cx
     pop bx
     pop ax
     retf
@@ -4570,8 +4607,7 @@ osapi_sys_kb_x:
 ; =============================================================================
 mmf_mem_claim:            call mem_claim_x
                       retf
-mmf_osapi_mem_claim_hi:   call osapi_mem_claim_hi_x
-                          retf
+
 mmf_osapi_mem_claim_dma_hi: call osapi_mem_claim_dma_hi_x
                           retf
 mmf_mem_free:             call mem_free_x
@@ -4580,18 +4616,15 @@ mmf_mem_free:             call mem_free_x
 mmf_mem_movable:          call mem_movable_x
                       retf
 %endif
-mmf_osapi_claim_snapshot: call osapi_claim_snapshot_x
-                      retf
+
 mmf_osapi_mem_avail:      mov bh, MEM_LVL_TOP     ; an ordinary claim's rank...
                       call mem_rank_bh        ; ...net of THIS TASK's floor
                       call mem_avail_lvl_x    ; (SPEC.md 50.6.6): the number a
                       retf                    ; claim from here will be SERVED
-mmf_osapi_mem_claim:      call osapi_mem_claim_x
-                      retf
+
 mmf_osapi_mem_claim_dma:  call osapi_mem_claim_dma_x
                       retf
-mmf_osapi_mem_free:       call osapi_mem_free_x
-                      retf
+
 
 
 ; -----------------------------------------------------------------------------
@@ -4614,14 +4647,10 @@ mem_fptr: resw 2                  ; mem_reloc_call's staged far pointer. HERE
 section .bss
 
 
-mem_dir:  resw 1                  ; 0 = mem_claim (bottom up), MC_DMA_HI =
-                                  ; mem_claim_hi
-                                  ; (top down, a package's region). A word so
-                                  ; the entries can stage it in a register and
-                                  ; store it INSIDE the cli window - it is a
-                                  ; global only because the scan reads it per
-                                  ; candidate, never a parameter channel
-mem_dma:  resw 1                  ; ...and mem_claim_dma's head, in paragraphs,
+                                  ; (mem_dir, the claim's DIRECTION, was a word
+                                  ; here until size pass 9 - it lives in BP for
+                                  ; the length of mem_claim_1, the one reader)
+mem_dma:  resw 1                  ; mem_claim_dma's head, in paragraphs,
                                   ; for the same reason: 0 = no page constraint
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
 mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none

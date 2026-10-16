@@ -160,7 +160,14 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # byte a pixel - is typed out in a2scr.c as well: the composer writes
        # it and the frame loop strides by it, and a drift is a picture that
        # walks sideways one line at a time rather than an error.
-       "apps/apple2/a2fsx.inc"]
+       "apps/apple2/a2fsx.inc",
+       # SOUND.DRV's package verbs (SPEC.md 34.14): apps/os88spk.inc asks the
+       # Covox's port with SNDV_DACINFO and types the number out itself, so
+       # Tracker, Audio and the Video Player - which every symbol-reading
+       # test reassembles with its own include list - need no -I
+       # drivers/sound/. A drifted copy asks the driver a different verb and
+       # reads the answer as a port.
+       "drivers/sound/sndpkg.inc", "apps/os88spk.inc"]
 
 # ...and the kernel, whole. `kernel/*.inc` + `kernel.asm`: 44 files, of which
 # the hand-written list named five. The knob-only files (band.inc, moudiag.inc)
@@ -248,6 +255,10 @@ ALIAS = [
     ("kernel/clock.inc", "CLK_DEF_Y", "apps/dos/dos.asm", "CLK_DEF_Y"),
     ("kernel/clock.inc", "CLK_DEF_M", "apps/dos/dos.asm", "CLK_DEF_M"),
     ("kernel/clock.inc", "CLK_DEF_D", "apps/dos/dos.asm", "CLK_DEF_D"),
+    # SPEC.md 20.2.0. The loader's `wrong os8088 version` verdict, published
+    # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
+    # and The Wire words it rather than printing the number.
+    ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
 ]
 DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 

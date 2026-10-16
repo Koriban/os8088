@@ -30,7 +30,7 @@ tools/os88venc.py encodes it three ways. Four questions:
    3c. WHAT A CUT FRAME SPENDS ON (98.2.1.2): the same clip at 12 KB/s with
    the look-ahead and the error as seen (the defaults) must flicker back at
    most half as much as with neither, and be no worse as seen; and the
-   header names the ring its reserve banks in - 2 slots at 16 KB, 8 at the
+   header names the ring its reserve banks in - 3 slots at 16 KB, 8 at the
    default 192 (98.1.1). 3d. --aim size (98.2.1.4) at the default budget
    must be 5% smaller than as asked, and still converge on the still.
 4. DOES IT CONVERGE? Two seconds of a still picture after the motion: the
@@ -54,6 +54,13 @@ tools/os88venc.py encodes it three ways. Four questions:
    half the rows shown twice and every store a pair or a group - and CGA
    in colour, mode 4 with the palette byte the overrides name (39h) and
    the 160 x 100 text hack, every frame its target.
+5h. PAGE-AHEAD BY DEFAULT (98.2.1.8.1): Mode X stills with hard cuts must
+   come out page-ahead with --page-ahead left at auto, plain with off, and
+   plain again when the page pass is made to look worse - the drop is the
+   decision under test, so it is forced rather than hoped for.
+5i. PAGE-AHEAD PRUNED (98.2.1.8.2): one build forced to have hurt - rescue
+   ships a third pass one flip short, off two passes and the plain file,
+   always three passes and a page-ahead file; the passes are counted.
 8. DOES COMPOSITE DIFFUSION SEE THE MODEL? A picture rendered through the
    model from known nibbles, in runs of 2 to 6 cells, must come back as 90%
    or more of them (94% measured). Without the lookahead - a cell judged as
@@ -62,14 +69,33 @@ tools/os88venc.py encodes it three ways. Four questions:
    white, with noise - what an MP4 delivers - must dither solid. Spread over
    the whole 0..255 the threshold map lit one dot in every 8 x 8 tile of
    Bad Apple's black and white (the owner's report; --clip 0 is that).
+   5c.1. IS IT STILL FLAT ONCE A GRADIENT GOES? (98.2.3) A VGA8 field that
+   fades into white, and one into black, by less than --vga8-stable must
+   be solid on the second frame; with the dead band holding past the clip,
+   as it did, every dot of the first frame stays (the owner's Bad Carrot).
+   5f. IS A MEASURED MACHINE PRICED AS IT WAS MEASURED? (98.2.3.3) Each
+   of VIDBENCH's synthetic frames, priced by `286-speeddemon`'s and `486-dx2-66`'s own
+   tables, must come back within 1% of the microseconds the owner's 86Box
+   machines decoded it in - and the wave 0 model scaled by `speed` must be
+   10% or more under on a frame of runs (24% on the 286, 18% on the 486),
+   which is the mispricing the
+   tables exist for (with profile_table ignoring `cyc_us`, it FAILS on
+   every row of runs).
+   5g. DOES A FLIPPED FILE KEEP UP? (98.2.1.1.1) A noisy pan flipped on
+   the 486 at 90% / 140%, replayed as the player runs it - a call every
+   half period off the card, one frame a call - must leave no frame a
+   whole frame behind. Without the flip schedule (the ceiling the peak
+   alone) 68 are.
 
 Broken on purpose - the measured retry in Encoder.frame skipped, so a
 frame is chosen by the per-span estimate alone - question 3 FAILS naming
 the frame over its ceiling. The whole row needs ffmpeg and numpy, and
 SKIPS without them: that is the box declining to answer, not a pass.
 """
+import math
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -243,12 +269,8 @@ def main():
         r = vid.Reader(path)
         diff = sum(1 for f, surf, rec, at, i in vid.v88_frames(r)
                    if r.g.canvas(surf) != keep[f].tobytes())
-        masks = set()
-        for rec, _, _ in r.records():
-            si = 6
-            while rec[si]:
-                masks.add(rec[si])
-                si = vid.walk_lists(bytearray(65536), rec, si + 1)
+        masks = {lead for rec, _, _ in r.records()
+                 for lead, s0, s1 in vid.subs_of(rec, r.g)}
         print("   modex 2x2: %d x %d shown x%d, Map Masks %s, %d of %d "
               "frames differ" % (r.g.w, r.g.h, r.rowscale, sorted(masks),
                                  diff, r.frames))
@@ -294,6 +316,44 @@ def main():
                  / period, low[0], low[1]))
         if not cut:
             bad.append("the tight profile cut nothing: it tests nothing")
+        # --- 3a: W*H for WxH (98.2.1): accepted, and recorded as WxH
+        pa = venc.parser().parse_args([src, "o.V88", "--box", "640*480",
+                                       "--detail", "2*1", "--screen",
+                                       "320*240"])
+        print("   W*H: --box %s --detail %s --screen %s"
+              % (pa.box, pa.detail, pa.screen))
+        if (pa.box, pa.detail, pa.screen) != ("640x480", "2x1", "320x240"):
+            bad.append("W*H was not taken as WxH")
+        # --- 3a': --audio speaker refuses a bank, a layer and Live from XMS
+        # (98.3.18.5): the player makes no XMS copy under the speaker
+        for extra in (["--bank", "2048"], ["--layer-disk", "600000"]):
+            try:
+                run("spkx", "--preset", "herc-spk", "--end", "1", *extra)
+                bad.append("--audio speaker took %s" % extra[0])
+            except vid.V88Error:
+                print("   --audio speaker refuses %s" % extra[0])
+        # --- 3b: --avg auto (98.2.1.5) - the per-frame ceiling on a profile
+        # with a disk curve, the profile's own average on one without, and
+        # the record holds the SHARE it came to, never the word
+        for prof, want in (("5150-st225", 0.85), ("floppy", 0.50)):
+            p2, res2, k2 = run("auto-" + prof, "--preset", "herc",
+                               "--profile", prof, "--avg", "auto",
+                               "--end", "1")
+            got = vid.Reader(p2).options()["o"].get("avg")
+            print("   --avg auto on %s: %r (want %r)" % (prof, got, want))
+            if got != want:
+                bad.append("--avg auto on %s came to %r, not %r"
+                           % (prof, got, want))
+            # ...AND IT IS THE DEFAULT (98.2.1.5): no --avg at all comes to
+            # the same share, and the profile's old fixed one is still a
+            # number away
+            p3, res3, k3 = run("dflt-" + prof, "--preset", "herc",
+                               "--profile", prof, "--end", "1")
+            got3 = vid.Reader(p3).options()["o"].get("avg")
+            print("   no --avg on %s: %r (want %r)" % (prof, got3, want))
+            if got3 != want:
+                bad.append("no --avg on %s came to %r, not AUTO's %r - "
+                           "AUTO is not the default" % (prof, got3, want))
         # ...and its FIRST PICTURE is whole before the keyframes start (the
         # pre-roll, SPEC.md 98.2.9): key 0 is exactly its frame's target -
         # a half-painted one is where a colour play starts
@@ -367,8 +427,8 @@ def main():
         q2, r2, k2 = picq("asked")
         print("   the ring the header asks: %d slots at 16 KB, %d at the "
               "default reserve" % (r1.ring, r2.ring))
-        if (r1.ring, r2.ring) != (4, 8):
-            bad.append("rings of %d and %d slots, not 4 and 8"
+        if (r1.ring, r2.ring) != (3, 8):
+            bad.append("rings of %d and %d slots, not 3 and 8"
                        % (r1.ring, r2.ring))
         # --- 3d: --aim size (98.2.1.4): smaller than asked where the budget
         # is not what binds, and the still after the motion still converges
@@ -411,6 +471,726 @@ def main():
             if dots:
                 bad.append("a flat %s (grey %d) dithers to %d dots, not "
                            "solid" % (name, grey, dots))
+    # --- 5b: ...and the COLOUR formats' solid colours (--clip, SPEC.md
+    # 98.2.3, 98.2.5): a noisy flat field that is nearly a palette colour -
+    # the black level, and the 16's red - stays that colour, where the
+    # pattern and the ordered dither left an even grid of dots. --clip 0
+    # is the old dither, and must show the dots, or the leg tests nothing
+    rnd = np.random.default_rng(5)
+    ramp = bytes(np.repeat(np.arange(256) // 4, 3).astype(np.uint8))
+    for name, base, mk in (
+            ("vga4 black", (6, 5, 8),
+             lambda c: venc.KnollDitherer(160, 120, vid.STD16, 0, c)),
+            ("vga4 red", (165, 6, 6),
+             lambda c: venc.KnollDitherer(160, 120, vid.STD16, 0, c)),
+            ("vga8 black", (5, 5, 5),
+             lambda c: venc.Vga8Ditherer(160, 120, ramp, 24, 0, c))):
+        f = np.clip(np.array(base, np.float32) + rnd.normal(
+            0, 3, (120, 160, 3)), 0, 255).astype(np.uint8)
+        stray = []
+        for clip in (0, 16):
+            d = mk(clip)
+            idx = d(f)                  # (a first frame: nothing held)
+            vals, cnt = np.unique(idx, return_counts=True)
+            stray.append(int(idx.size - cnt.max()))
+        print("   %s: %d stray dots with --clip 0, %d with 16 (of %d)"
+              % (name, stray[0], stray[1], f.shape[0] * f.shape[1]))
+        if stray[0] < 200:
+            bad.append("%s: --clip 0 left %d dots - the leg tests nothing"
+                       % (name, stray[0]))
+        if stray[1] * 10 > stray[0] or stray[1] > 0.01 * f.size / 3:
+            bad.append("%s: --clip 16 still leaves %d stray dots"
+                       % (name, stray[1]))
+    # --- 5c: ...and a colour held by the PATTERN'S stability (SPEC.md
+    # 98.2.5) is one the pixel's new plan still mixes. A dim red field
+    # puts red in a few cells of each tile; when it sinks to near-black by
+    # less than --vga4-stable, black's plan is black and the red goes - it
+    # once stayed until the scene changed, a trail behind every line that
+    # crossed a dark picture. The field must show red first, or the leg
+    # tests nothing
+    dim = np.full((120, 160, 3), (30, 6, 6), np.uint8)
+    dark = np.full((120, 160, 3), (12, 6, 6), np.uint8)
+    for name, mk, red in (
+            ("vga4", lambda: venc.KnollDitherer(160, 120, vid.STD16, 24.0,
+                                                16.0), lambda i: i != 0),
+            ("c512 pattern", lambda: venc.C512Ditherer(
+                160, 120, vid.CARD_NEW, 0, 0, mix=4, mstable=24.0),
+             None)):
+        d = mk()
+        a0 = d(dim)
+        a1 = d(dark)
+        if red is None:                 # C512: no code of black's plan
+            fresh = mk()(dark)
+            red = lambda i, f=fresh: i != f
+            held = int(red(a1).sum())
+            first = int((a0 != fresh).sum())
+        else:
+            held, first = int(red(a1).sum()), int(red(a0).sum())
+        print("   %s: %d dots in a dim red field, %d left when it goes "
+              "near-black" % (name, first, held))
+        if first < 100:
+            bad.append("%s: the dim field put %d dots down - the leg tests "
+                       "nothing" % (name, first))
+        if held:
+            bad.append("%s: %d dots outlived the dim field the pattern put "
+                       "them down for" % (name, held))
+    # --- 5c.1: ...and VGA8's dead band never holds a pixel the clip makes
+    # SOLID (98.2.3). A grey field that fades up into white, and a glow
+    # that fades out into black, each by less than --vga8-stable: the
+    # dither's colours on the first frame were held on the second, a grey
+    # speck standing still in a white or a black for as long as it stayed
+    # flat (the owner's Bad Carrot, 2026-10-07). The first frame must put
+    # down colours the second would hold, or the leg tests nothing
+    for name, was, now, end in (("white", 236, 248, 255),
+                                ("black", 20, 8, 0)):
+        d = venc.Vga8Ditherer(160, 120, ramp, 24, 18.0, 16)
+        f0 = np.full((120, 160, 3), was, np.uint8)
+        f1 = np.full((120, 160, 3), now, np.uint8)
+        a0 = d(f0)
+        first = int((np.abs(d.pal[a0] - now).max(-1) * np.sqrt(3) <
+                     18.0).sum() - (np.abs(d.pal[a0] - end).max(-1) <
+                                    1).sum())
+        a1 = d(f1)
+        held = int((np.abs(d.pal[a1] - end).max(-1) >= 1).sum())
+        print("   vga8 %s: %d dots the dead band could hold, %d held when "
+              "the field goes solid" % (name, first, held))
+        if first < 100:
+            bad.append("vga8 %s: the first field put %d holdable dots down "
+                       "- the leg tests nothing" % (name, first))
+        if held:
+            bad.append("vga8 %s: %d dots held in a field the clip makes "
+                       "solid" % (name, held))
+    # --- 5c.2: --palette greyN (98.2.3.7): a ramp of N greys. A flat grey
+    # ON a level is that level alone - Vga8Ditherer spreads one over three
+    # of its 32 - a horizontal ramp reaches every level, the ends are solid,
+    # and a Mode X file made with it uses its N indices and no other. The
+    # control is the 256-colour ditherer over the same 64-grey ramp: it
+    # must spread the flat level over several, or the leg tests nothing
+    for n in (2, 4, 64):
+        lv = [(v * 255 + 31) // 63 for v in venc.grey_levels(n)]
+        mid = lv[len(lv) // 2] if n > 2 else 128
+        flat = venc.GreyDitherer(160, 120, n, "bayer", 0.0, 16)(
+            np.full((120, 160, 3), mid, np.uint8))
+        nflat = len(np.unique(flat))
+        ramp_in = np.tile(np.arange(256, dtype=np.uint8)[None, :, None],
+                          (16, 1, 3))
+        reach = len(np.unique(venc.GreyDitherer(256, 16, n, "bayer", 0.0,
+                                                0)(ramp_in)))
+        got = venc.GreyDitherer(256, 16, n, "bayer", 0.0, 16)(ramp_in)
+        ends = (int(got[:, :17].max()), int(got[:, -17:].min()))
+        print("   grey%d: a flat level is %d level(s), a ramp reaches %d of "
+              "%d, its ends %d and %d" % (n, nflat, reach, n, ends[0],
+                                          ends[1]))
+        if n == 64:
+            ctl = len(np.unique(venc.Vga8Ditherer(
+                160, 120, venc.grey_palette(64), 24, 0, 16)(
+                np.full((120, 160, 3), mid, np.uint8))))
+            print("   (control: the 256-colour ditherer makes that flat "
+                  "level %d levels)" % ctl)
+            if ctl < 2:
+                bad.append("grey64's control made one level - the leg "
+                           "tests nothing")
+        if (n > 2 and nflat != 1) or reach != n or ends != (0, n - 1):
+            bad.append("grey%d: a flat level made %d levels, a ramp %d "
+                       "of %d, ends %s" % (n, nflat, reach, n, ends))
+    gtmp = tempfile.mkdtemp()
+    gsrc, g4 = os.path.join(gtmp, "g.mkv"), os.path.join(gtmp, "g4.V88")
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+                    "testsrc2=size=320x240:rate=15:duration=1", "-c:v",
+                    "ffv1", gsrc], check=True)
+    venc.encode(venc.parser().parse_args(
+        [gsrc, g4, "--quiet", "--preset", "modex-small", "--profile",
+         "lossless", "--audio", "none", "--palette", "grey4"]), None)
+    r = vid.Reader(g4)
+    surf = r.g.surface()
+    used = set()
+    for rec, _, _ in r.records():
+        r.apply(surf, rec)
+        used |= set(r.g.canvas(surf))
+    want = bytes(v for v in venc.grey_levels(4) for _ in range(3))
+    print("   --palette grey4: indices %s, the palette's first four %s"
+          % (sorted(used), "the ramp" if r.palette[:12] == want else
+             "NOT the ramp"))
+    if not used <= {0, 1, 2, 3} or r.palette[:12] != want:
+        bad.append("--palette grey4 used %s, palette %s"
+                   % (sorted(used), r.palette[:12].hex()))
+    # --- 5c.3: --screen (98.2.5.1): sixteen colours on a screen of its
+    # own, flipped, in a ramp of its own - the screen and the pages in the
+    # header, the canvas at the screen's shape, and N colours written as
+    # PLANE_CODES' values with the palette's entries at them. A file whose
+    # 2 greys came out as 0 and 1 would cost four stores a byte, not one.
+    # 640 x 480 is the desktop's mode and one page: its own palette there
+    # (98.1.3.2.2) is unflipped, and full screen by the player's choice
+    for scrn, pal, n, box, flip in (
+            ("640x400", "grey4", 4, (640, 400), True),
+            ("320x240", "grey2", 2, (320, 240), True),
+            ("640x480", "grey4", 4, (640, 480), False)):
+        sv = os.path.join(gtmp, "s%s.V88" % scrn)
+        venc.encode(venc.parser().parse_args(
+            [gsrc, sv, "--quiet", "--preset", "vga4-full", "--profile",
+             "lossless", "--audio", "none", "--screen", scrn, "--palette",
+             pal] + (["--flip"] if flip else [])), None)
+        r = vid.Reader(sv)
+        surf = r.g.surface()
+        used = set()
+        for rec, _, _ in r.records():
+            r.apply(surf, rec)
+            used |= set(r.g.canvas(surf))
+        codes = vid.PLANE_CODES[n]
+        lv = venc.grey_levels(n)
+        palok = all(tuple(r.palette[3 * c:3 * c + 3]) == (v, v, v)
+                    for c, v in zip(codes, lv)) and not any(r.palette[48:])
+        print("   --screen %s --palette %s: screen %d, flip %s, canvas %d "
+              "x %d, values %s, palette %s" % (
+                  scrn, pal, r.screen, r.flip, r.g.w, r.g.h,
+                  " ".join("%X" % v for v in sorted(used)),
+                  "at them" if palok else "WRONG"))
+        if r.screen != vid.SCREEN_BY_NAME[scrn] or r.flip != flip or \
+                (r.g.w, r.g.h) != box or not used <= set(codes) or \
+                not palok:
+            bad.append("--screen %s --palette %s: screen %d flip %s canvas "
+                       "%dx%d values %s palette %s"
+                       % (scrn, pal, r.screen, r.flip, r.g.w, r.g.h,
+                          sorted(used), palok))
+    # ...and NOT Live (98.1.3.2.2): a Live file plays on the desktop, in the
+    # desktop's sixteen, so its own palette is refused before any encode
+    try:
+        venc.encode(venc.parser().parse_args(
+            [gsrc, os.path.join(gtmp, "slive.V88"), "--quiet", "--live",
+             "vga", "--pixfmt", "vga4", "--profile", "lossless",
+             "--audio", "none", "--palette", "grey4"]), None)
+        bad.append("--live with --palette grey4 was not refused")
+        print("   --live --palette grey4: NOT refused")
+    except vid.V88Error as e:
+        print("   --live --palette grey4: refused (%s)" % str(e)[:50])
+    # --- 5c.4: --palette colour16 (VIDEO-PALETTE-PLAN 10.1): a DARK clip -
+    # a grey gradient, a faintly blue sky, a small red headlight (0.13% of
+    # the frame) - chosen for colour, the headlight gets an entry of its own
+    # within 4 of its six-bit (52, 6, 6). palettegen's sixteen spend
+    # themselves on the greys and draw it a dull (41, 13, 10): that is the
+    # leg's broken-on-purpose arm, run beside it every time
+    dk = os.path.join(gtmp, "dark.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         "gradients=s=320x240:c0=0x060606:c1=0x383838:speed=0.02:"
+         "duration=2:rate=15,format=rgb24", "-vf",
+         "drawbox=x=0:y=0:w=320:h=40:color=0x1c2840:t=fill,"
+         "drawbox=x=150:y=150:w=10:h=10:color=0xd01818:t=fill,"
+         "noise=alls=5:allf=t", "-c:v", "ffv1", dk], check=True)
+    near = {}
+    for pal in ("colour16", "clip16"):
+        dv = os.path.join(gtmp, "d%s.V88" % pal)
+        venc.encode(venc.parser().parse_args(
+            [dk, dv, "--quiet", "--preset", "vga4", "--profile", "lossless",
+             "--audio", "none", "--palette", pal]), None)
+        r = vid.Reader(dv)
+        ents = [tuple(r.palette[3 * k:3 * k + 3]) for k in range(16)]
+        near[pal] = min(ents, key=lambda c: max(abs(c[0] - 52),
+                                                abs(c[1] - 6),
+                                                abs(c[2] - 6)))
+    dist = {k: max(abs(c[0] - 52), abs(c[1] - 6), abs(c[2] - 6))
+            for k, c in near.items()}
+    print("   --palette colour16: the headlight's nearest entry %s (%d off); "
+          "clip16's %s (%d off)" % (near["colour16"], dist["colour16"],
+                                     near["clip16"], dist["clip16"]))
+    if dist["colour16"] > 4:
+        bad.append("--palette colour16 drew the red headlight from %s, %d "
+                   "off its (52, 6, 6)" % (near["colour16"],
+                                           dist["colour16"]))
+    if dist["clip16"] <= 4:
+        bad.append("palettegen's sixteen found the headlight too (%s): the "
+                   "leg no longer tells colour from population"
+                   % (near["clip16"],))
+    # --- 5c.5: --vga4-hold-score (VIDEO-PALETTE-PLAN 10.2): a dark blue
+    # scene cut to a dark grey one ~30 levels away, held at 40. Scored, the
+    # screen follows the cut within five frames; at a score of 0 - the
+    # unscored hold, the broken-on-purpose arm - most of it keeps the last
+    # scene's blue
+    ct = os.path.join(gtmp, "cut.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         "color=c=0x101838:s=320x240:d=1:r=15", "-f", "lavfi", "-i",
+         "color=c=0x262626:s=320x240:d=1:r=15", "-filter_complex",
+         "[0][1]concat=n=2:v=1,noise=alls=4:allf=t,format=rgb24",
+         "-c:v", "ffv1", ct], check=True)
+    olds = {}
+    for sc in (60, 0):
+        cv = os.path.join(gtmp, "cut%d.V88" % sc)
+        venc.encode(venc.parser().parse_args(
+            [ct, cv, "--quiet", "--preset", "vga4", "--profile", "lossless",
+             "--audio", "none", "--palette", "colour16", "--vga4-hold", "40",
+             "--vga4-hold-score", str(sc)]), None)
+        r = vid.Reader(cv)
+        p8 = [tuple(v * 255 // 63 for v in r.palette[3 * k:3 * k + 3])
+              for k in range(16)]
+        surf = r.g.surface()
+        for n, (rec, _, _) in enumerate(r.records()):
+            r.apply(surf, rec)
+            if n == 20:             # five frames past the cut at 15
+                break
+        px = r.g.canvas(surf)
+        nold = sum(1 for v in px
+                   if sum(abs(a - b) for a, b in zip(p8[v], (16, 24, 56))) <
+                   sum(abs(a - b) for a, b in zip(p8[v], (38, 38, 38))))
+        olds[sc] = 100.0 * nold / len(px)
+    print("   --vga4-hold 40: five frames past a cut, %.1f%% of the screen "
+          "is the last scene's scored, %.1f%% unscored"
+          % (olds[60], olds[0]))
+    if olds[60] > 5:
+        bad.append("--vga4-hold 40 scored 60 kept %.1f%% of the last scene "
+                   "five frames past the cut" % olds[60])
+    if olds[0] < 50:
+        bad.append("the unscored hold let go of the last scene (%.1f%% "
+                   "kept): the leg no longer shows what the score is for"
+                   % olds[0])
+    # --- 5c.7: --step-down (98.2.1.9): a calm scene, then a heavy one the
+    # 286 cannot draw - a gradient under heavy noise. The first pass
+    # breaks the heavy one, the ladder steps it below sixteen, and the real
+    # pass draws it in fewer pixel values; the calm one keeps its sixteen.
+    # (Muted: a scene of saturated colours is the guard's to keep at 16)
+    # Broken on purpose - a ladder that steps nothing - this FAILS
+    lp = os.path.join(gtmp, "ladder.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         "gradients=s=640x360:c0=0x203040:c1=0x405060:speed=0.0001:seed=3:"
+         "duration=1:rate=30", "-f", "lavfi", "-i",
+         "gradients=s=640x360:c0=0x303030:c1=0x909090:speed=0.08:seed=5:"
+         "duration=1.5:rate=30", "-filter_complex",
+         "[0]format=rgb24[a];[1]noise=alls=40:allf=t,format=rgb24[b];"
+         "[a][b]concat=n=2:v=1,format=rgb24", "-c:v", "ffv1", lp],
+        check=True)
+    lv = os.path.join(gtmp, "ladder.V88")
+    import io, contextlib
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        venc.encode(venc.parser().parse_args(
+            [lp, lv, "--preset", "vga4-full", "--profile", "286-fast",
+             "--audio", "none", "--palette", "colour16", "--scene-palettes",
+             "--scene-min", "45", "--step-down", "on"]), None)
+    said = [x for x in out.getvalue().splitlines() if "step-down:" in x]
+    r = vid.Reader(lv)
+    fps = r.rate / r.spf
+    vals = []
+    for f0, _ in r.pev:
+        n = min(r.frames - 1, f0 + int(0.4 * fps))
+        vals.append(len(set(vid.decode_at(r, n))))
+    print("   --step-down: %s; pixel values a scene %s"
+          % (" / ".join(x.strip()[11:70] for x in said) or "nothing said",
+             vals))
+    if len(r.pev) < 2 or not any("->" in x for x in said):
+        bad.append("--step-down stepped no scene of a clip whose second "
+                   "scene the 286 cannot draw: %s" % said)
+    elif max(vals[1:]) > 12:
+        bad.append("--step-down's stepped scene was drawn in %s pixel "
+                   "values (the calm one in %d)" % (vals[1:], vals[0]))
+    # --- 5c.8: --coarse-cut auto (98.2.5): a cut the budgets can draw is
+    # drawn WHOLE - two flat scenes - and one they cannot - 5c.7's noise - in
+    # flat cells. Broken on purpose (a picker that always says 64x8, or
+    # always whole) one of the two FAILS
+    fl = os.path.join(gtmp, "flat.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         "color=c=0x204060:s=640x360:d=2:r=30", "-f", "lavfi", "-i",
+         "color=c=0x806040:s=640x360:d=2:r=30", "-filter_complex",
+         "[0][1]concat=n=2:v=1,format=rgb24", "-c:v", "ffv1", fl],
+        check=True)
+    cells = {}
+    for name, src in (("flat", fl), ("noise", lp)):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            venc.encode(venc.parser().parse_args(
+                [src, os.path.join(gtmp, "cc%s.V88" % name), "--preset",
+                 "vga4-full", "--profile", "286-fast", "--audio", "none",
+                 "--palette", "colour16", "--scene-palettes",
+                 "--scene-min", "45"]), None)
+        line = [x for x in out.getvalue().splitlines() if "coarse cuts:" in x]
+        cells[name] = line[0].split("coarse cuts:")[1].strip() if line \
+            else "none"
+    print("   --coarse-cut auto: two flat scenes %s; into noise %s"
+          % (cells["flat"], cells["noise"]))
+    if not cells["flat"].startswith("1 whole"):
+        bad.append("--coarse-cut auto drew a cut between two flat scenes in "
+                   "cells: %s" % cells["flat"])
+    if "whole" in cells["noise"] or cells["noise"] == "none":
+        bad.append("--coarse-cut auto drew a cut into heavy noise whole: %s"
+                   % cells["noise"])
+    # --- 5c.6: a clip's own colours DITHER (VIDEO-PALETTE-PLAN 10.11): a
+    # slow grey ramp with the source's noise, --palette colour16 at its
+    # defaults (--clip 0 --vga4-sparse 2), keeps a pattern across the ramp;
+    # --clip 16, the default it replaced and the broken-on-purpose arm,
+    # flattens it into bands. The record keeps the option as asked (None)
+    rp = os.path.join(gtmp, "ramp.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         "gradients=s=320x240:c0=0x303848:c1=0x8890a0:speed=0.0001:seed=1:"
+         "duration=1:rate=15,format=rgb24", "-vf", "noise=alls=3:allf=t",
+         "-c:v", "ffv1", rp], check=True)
+    pat = {}
+    for arm, extra in (("default", []), ("clip16", ["--clip", "16"])):
+        rv = os.path.join(gtmp, "ramp%s.V88" % arm)
+        venc.encode(venc.parser().parse_args(
+            [rp, rv, "--quiet", "--preset", "vga4", "--profile", "lossless",
+             "--audio", "none", "--palette", "colour16"] + extra), None)
+        r = vid.Reader(rv)
+        px = vid.decode_at(r, r.frames - 1)
+        w = r.g.w
+        pat[arm] = 100.0 * sum(1 for i in range(len(px) - 1)
+                               if (i + 1) % w and px[i] != px[i + 1]) / \
+            len(px)
+        if arm == "default":
+            doc = r.options()
+            rec = venc.opts_migrate(doc)[0] if doc else {}
+            if not rec or (rec.get("clip"), rec.get("vga4_sparse")) != \
+                    (None, None):
+                bad.append("a default encode recorded --clip %r "
+                           "--vga4-sparse %r, not None: a re-encode would "
+                           "not follow the format's default"
+                           % (rec.get("clip"), rec.get("vga4_sparse")))
+    print("   --palette colour16 on a noisy ramp: %.1f%% of neighbours "
+          "differ at its defaults, %.1f%% at --clip 16"
+          % (pat["default"], pat["clip16"]))
+    if pat["default"] < 1.5 * pat["clip16"] or pat["default"] < 35:
+        bad.append("--palette colour16's default dither is flat (%.1f%% of "
+                   "neighbours differ against --clip 16's %.1f%%)"
+                   % (pat["default"], pat["clip16"]))
+    # --- 5d: --cut (98.2.1.2.1), Mode X pans lossless, so the 30 KB a
+    # record holds is the only thing that cuts them; the decoded file is
+    # held to the targets frame for frame. A FLAT picture flipping to its
+    # negative each frame is about half the size the per-span estimate
+    # says: RANK cuts frames that would have fitted, and FILL grows the
+    # estimate until the record fills its room - here, the whole frame.
+    # A NOISY one overruns the record whatever is done: TEAR keeps whole
+    # rows in screen order, so a frame's stale rows are one band (and its
+    # wrap) where RANK scatters them
+    def cut_pan(name, vf, modes):
+        ctmp = tempfile.mkdtemp()
+        pan = os.path.join(ctmp, "pan.mkv")
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+             "testsrc2=size=960x240:rate=24:duration=1", "-vf",
+             "crop=320:240:'mod(n*24,640)':0," + vf, "-c:v", "ffv1", pan],
+            check=True)
+        res = {}
+        for mode in modes:
+            out = os.path.join(ctmp, "pan_%s.V88" % mode)
+            keep = []
+            venc.encode(venc.parser().parse_args(
+                [pan, out, "--quiet", "--preset", "modex", "--profile",
+                 "lossless", "--audio", "none", "--cut", mode]), keep)
+            r = vid.Reader(out)
+            surf = r.g.surface()
+            wrong, runs = 0, []
+            for f, (rec, _, _) in enumerate(r.records()):
+                r.apply(surf, rec)
+                cv = np.frombuffer(bytes(r.g.canvas(surf)), np.uint8) \
+                    .reshape(r.g.h, r.g.w)
+                w = cv != keep[f]
+                wrong += int(w.sum())
+                st = w.mean(1) > 0.02           # a row 2% wrong is stale
+                runs.append(int(st[0]) + int((st[1:] & ~st[:-1]).sum()))
+            res[mode] = (wrong, max(runs), sum(x > 0 for x in runs))
+            print("   --cut %s, %s pan: %d pixels wrong in %d frames, at "
+                  "most %d bands of stale rows in one" % (
+                      mode, name, wrong, len(runs), res[mode][1]))
+        shutil.rmtree(ctmp, ignore_errors=True)
+        return res
+    fl = cut_pan("flat", "negate=enable='mod(n\\,2)'", ("rank", "fill"))
+    if fl["rank"][0] < 10000:
+        bad.append("--cut: rank left %d pixels wrong on the flat pan - the "
+                   "leg tests nothing" % fl["rank"][0])
+    if fl["fill"][0] * 10 > fl["rank"][0]:
+        bad.append("--cut fill left %d pixels wrong on the flat pan, rank "
+                   "%d: the record was not grown into its room"
+                   % (fl["fill"][0], fl["rank"][0]))
+    nz = cut_pan("noisy", "noise=alls=30:allf=t", ("rank", "tear"))
+    if nz["rank"][2] < 10 or nz["rank"][1] <= 3:
+        bad.append("--cut: rank's noisy pan cut %d frames, %d bands - the "
+                   "leg tests nothing" % (nz["rank"][2], nz["rank"][1]))
+    if nz["tear"][1] > 3:
+        bad.append("--cut tear left %d bands of stale rows in a frame - a "
+                   "tear is its line, its wrap and a half-done row"
+                   % nz["tear"][1])
+    # --- 5e: --bands (98.2.1.2.2): a Mode X frame drawn in bands of rows,
+    # every plane of a band before the next - so the rows its writes land
+    # on, in the order the player makes them, only ever move DOWN a band,
+    # where plane by plane they climb back to the top at every plane
+    ctmp = tempfile.mkdtemp()
+    pan = os.path.join(ctmp, "pan.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=960x240:rate=24:duration=0.5", "-vf",
+         "crop=320:240:'mod(n*24,640)':0,noise=alls=30:allf=t",
+         "-c:v", "ffv1", pan], check=True)
+    climbs = {}
+    for nb in (0, 8):
+        out = os.path.join(ctmp, "b%d.V88" % nb)
+        venc.encode(venc.parser().parse_args(
+            [pan, out, "--quiet", "--preset", "modex", "--profile",
+             "lossless", "--audio", "none", "--bands", str(nb)]))
+        vid.verify_v88(out)
+        r = vid.Reader(out)
+        up = 0
+        for rec, _, _ in r.records():
+            rows, si = [], vid.REC_HDR
+            buf = bytearray(vid.PLANE * 4)
+            while rec[si]:
+                mask = rec[si]
+                si += 1
+                for p in range(4):
+                    if mask >> p & 1:
+                        end = vid.walk_sub(
+                            memoryview(buf)[p * vid.PLANE:], rec, si, r.g,
+                            lambda k, di, m: rows.append(r.g.rowof[di]))
+                si = end
+            bands = [y * 8 // r.g.h for y in rows]     # (eighths, both)
+            up += sum(1 for a, b in zip(bands, bands[1:]) if b < a)
+        climbs[nb] = up
+        print("   --bands %d: the writes went back up a band %d times over "
+              "%d frames" % (nb, up, r.frames))
+    # ...and at 63.5 KB in 12 bands a whole noisy 320 x 240 frame - 75 KB
+    # of changes - is CUT to its room: the estimate left the bands' own
+    # bytes out and built it 2.6 KB past the record's length word, which
+    # ended the encode (the owner's report, 2026-10-07)
+    out = os.path.join(ctmp, "big.V88")
+    try:
+        venc.encode(venc.parser().parse_args(
+            [pan, out, "--quiet", "--preset", "modex", "--profile",
+             "lossless", "--audio", "none", "--bands", "12", "--frame-cap",
+             "63.5", "--detail", "1x1", "--fit", "fill"]))
+        vid.verify_v88(out)
+        big = max(len(rec) for rec, _, _ in vid.Reader(out).records())
+        print("   --bands 12 at 63.5 KB: the largest record %d bytes" % big)
+        if big > 127 * vid.SECTOR - 4:
+            bad.append("--bands 12 at 63.5 KB: a record of %d bytes" % big)
+    except vid.V88Error as e:
+        bad.append("--bands 12 at 63.5 KB: %s" % e)
+    shutil.rmtree(ctmp, ignore_errors=True)
+    if climbs[0] == 0:
+        bad.append("--bands: plane by plane never climbed - the leg tests "
+                   "nothing")
+    if climbs[8]:
+        bad.append("--bands 8: the writes climbed back %d times"
+                   % climbs[8])
+    # --- 5f: a profile's measured decode (98.2.3.3): VIDBENCH's frames, as
+    # the owner's 86Box machines decoded them (microseconds, the report's
+    # rows), priced back by each profile's own table
+    meas = {"286-speeddemon": (28.1, 900.1, 92.6, 1199.9, 1291.3, 1516.3, 1427.1,
+                        2606.7, 2376.8, 2662.8, 2379.6, 246.4),
+            "486-dx2-66": (2.5, 232.8, 19.7, 394.7, 428.5, 557.8, 545.6, 1055.4,
+                    1010.3, 1035.5, 977.4, 60.1),
+            # the owner's REAL 286 (docs/reports/VIDBENCH-PVGA286-2026-10-08.md)
+            "286-fast": (25.4, 1014.1, 101.4, 1458.5, 1516.1, 1901.2, 1808.4,
+                         3229.4, 3075.6, 2971.7, 2739.1, 274.3)}
+    for name, us in meas.items():
+        P = venc.PROFILES[name]
+        k = vid.HZ / 1e6 * P["speed"]
+        t, sub = venc.profile_table(P, vid.LAY_MODEX)
+        worst, under = 0.0, 1.0
+        for (label, ops), m in zip(vid.synth_frames(), us):
+            rec = bytes(vid.REC_HDR) + vid.to_lists(ops)[0]
+            got = vid.cycles_of(rec, table=t) / k
+            worst = max(worst, abs(got / m - 1))
+            if label.startswith("S RUN"):
+                under = min(under, vid.cycles_of(rec) / k / m)
+        print("   5f: %s priced within %.2f%% of its bench; the wave 0 model "
+              "puts its runs at %.0f%% of what they took"
+              % (name, 100 * worst, 100 * under))
+        if worst > 0.01:
+            bad.append("%s: a VIDBENCH frame priced %.1f%% off what the "
+                       "machine took" % (name, 100 * worst))
+        if under > 0.9:
+            bad.append("%s: the wave 0 model prices runs at %.0f%% of what "
+                       "they took - the leg tests nothing" % (name,
+                                                             100 * under))
+    # --- 5g: THE FLIP SCHEDULE (98.2.1.1.1): a flipped file whose frames
+    # may run over their period is replayed as the player runs it - a call
+    # every half period off the card, one frame a call, a frame late when a
+    # call finds a whole one more due - and no frame may be late. The
+    # replay prices each frame as charge() does (its record, and the back
+    # page brought up by the copy or the last record again), and nothing
+    # of the encoder's own bookkeeping
+    ftmp = tempfile.mkdtemp()
+    noisy = os.path.join(ftmp, "noisy.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=960x240:rate=24:duration=3", "-f", "lavfi", "-i",
+         "sine=frequency=440:sample_rate=22050:duration=3", "-vf",
+         "crop=320:240:'mod(n*24,640)':0,noise=alls=40:allf=t",
+         "-c:v", "ffv1", "-c:a", "pcm_s16le", noisy], check=True)
+    P = venc.PROFILES["486-dx2-66"]
+    t, sub = venc.profile_table(P, vid.LAY_MODEX)
+    kk = P["lcopy_us"] * vid.HZ / 1e6 * P["speed"]
+    for sched in (True, False):
+        out = os.path.join(ftmp, "f%d.V88" % sched)
+        args = venc.parser().parse_args(
+            [noisy, out, "--quiet", "--preset", "modex", "--profile", "486-dx2-66",
+             "--flip", "--rate", "22050", "--avg", "9", "--peak", "14",
+             "--fit", "fill"])
+        if not sched:                   # broken on purpose: no schedule
+            real = venc.EncoderX.begin
+            venc.EncoderX.begin = lambda self: (real(self), setattr(
+                self, "ceil", self.peak))
+        try:
+            venc.encode(args)
+        finally:
+            if not sched:
+                venc.EncoderX.begin = real
+        r = vid.Reader(out)
+        q = vid.HZ / r.fps * P["speed"]
+        aud = venc.CYC_AUDIO * r.abytes + venc.HOOK_CYC
+        end, late, prev, over = 0.0, 0, None, 0
+        for i, (rec, _, _) in enumerate(r.records()):
+            c = vid.cycles_of(rec, True, table=t, sub=sub,
+                              sub2=r.g.sub2) + aud
+            if prev is not None:
+                y0, y1 = struct.unpack_from("<HH", prev, 2)
+                rows = max(0, y1 - y0)
+                c += rows * 80 * kk + venc.CYC_LCOPY0 \
+                    if len(prev) > vid.PREV_MAX or \
+                    rows * 80 * venc.VP_LCW < len(prev) else \
+                    vid.cycles_of(prev, True, table=t, sub=sub,
+                                  sub2=r.g.sub2)
+            prev = rec
+            start = math.ceil(max(i * q, end) / (q / 2) - 1e-9) * (q / 2)
+            late += start - i * q >= q
+            over += c > q
+            end = start + c
+        print("   5g: flipped at 90%% / 140%%%s: %d frames over their period, "
+              "%d late in the player's schedule"
+              % ("" if sched else ", NO schedule", over, late))
+        if sched and late:
+            bad.append("the flip schedule: %d frames late" % late)
+        if not sched and not late:
+            bad.append("the flip schedule: without it nothing is late - the "
+                       "leg tests nothing")
+    shutil.rmtree(ftmp, ignore_errors=True)
+    # --- 5h: PAGE-AHEAD BY DEFAULT (98.2.1.8.1): Mode X, five stills with a
+    # hard cut between them, on 286-fast - a whole new 320 x 180 picture is
+    # past one record, so each cut is a target. Left at its default the
+    # file must be page-ahead and KEPT, flipping; --page-ahead off must be
+    # plain; and a page pass made WORSE on purpose (page_compare forced to
+    # say so) must be DROPPED for the plain encode
+    ptmp = tempfile.mkdtemp()
+    cuts = os.path.join(ptmp, "cuts.mkv")
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=320x180:rate=24:duration=0.05,tpad=stop_mode=clone:"
+         "stop_duration=1.5", "-f", "lavfi", "-i",
+         "mandelbrot=size=320x180:rate=24,trim=duration=0.05,tpad=stop_mode="
+         "clone:stop_duration=1.5", "-f", "lavfi", "-i",
+         "smptehdbars=size=320x180:rate=24:duration=0.05,tpad=stop_mode="
+         "clone:stop_duration=1.5", "-f", "lavfi", "-i",
+         "rgbtestsrc=size=320x180:rate=24:duration=0.05,tpad=stop_mode="
+         "clone:stop_duration=1.5", "-f", "lavfi", "-i",
+         "mandelbrot=size=320x180:rate=24:start_scale=0.3,trim=duration="
+         "0.05,tpad=stop_mode=clone:stop_duration=1.5", "-filter_complex",
+         "[0:v][1:v][2:v][3:v][4:v]concat=n=5:v=1:a=0[v]", "-map", "[v]",
+         "-c:v", "ffv1", cuts], check=True)
+
+    def penc(name, *extra):
+        out = os.path.join(ptmp, name + ".V88")
+        res = venc.encode(venc.parser().parse_args(
+            [cuts, out, "--quiet", "--preset", "modex", "--profile",
+             "286-fast", "--audio", "none", "--fit", "fill"] + list(extra)))
+        return vid.Reader(out), res
+    rd, resd = penc("default")
+    ro, _ = penc("off", "--page-ahead", "off")
+    real = venc.page_compare
+    venc.page_compare = lambda p, b, *m: (["the test's say-so"], [])
+    try:
+        rw_, _ = penc("worse")
+    finally:
+        venc.page_compare = real
+    fl = (resd.get("page") or {}).get("flips", 0)
+    print("   5h: page-ahead by default %s with %d flips; off %s; a worse "
+          "page pass %s" % ("ON" if rd.page else "off", fl,
+                            "ON" if ro.page else "off",
+                            "KEPT" if rw_.page else "dropped"))
+    if not rd.page or not fl:
+        bad.append("page-ahead: a Mode X clip of scene cuts is not "
+                   "page-ahead by default")
+    if ro.page:
+        bad.append("page-ahead: --page-ahead off made a page-ahead file")
+    if rw_.page:
+        bad.append("page-ahead: a page pass that made the picture worse "
+                   "was kept")
+    # --- 5h.1: NO READABLE KEY 0, NO PAGE-AHEAD (98.1.3.7; the owner's
+    # GASGAS4, 2026-10-14): a page-ahead file's key 0 is the hidden page's
+    # first picture, and a key 0 the player cannot read left that page
+    # black under plane writes that assumed it. The read limit is lowered
+    # under this clip's key 0, so --page-ahead on must ship the PLAIN file
+    # and say why. Broken on purpose - page_key0 answering None - the file
+    # is page-ahead and this FAILS
+    realk = venc.KEY_PLAYER
+    venc.KEY_PLAYER = 100
+    try:
+        rk, _ = penc("bigkey", "--page-ahead", "on")
+    finally:
+        venc.KEY_PLAYER = realk
+    print("   5h.1: key 0 past the read, --page-ahead on: %s"
+          % ("page-ahead" if rk.page else "the plain encode"))
+    if rk.page:
+        bad.append("page-ahead: a file whose key 0 the player cannot read "
+                   "was made page-ahead")
+    # --- 5i: PAGE-AHEAD PRUNED (98.2.1.8.2): the same clip, with ONE build
+    # said to have made its own stretch worse (page_hurt forced) and the
+    # whole page pass said to be worse than the plain encode (page_compare
+    # forced on its FIRST call only, so every later comparison is real).
+    # rescue must run a third pass and ship it, one flip short; off must
+    # run none and ship the plain file; always, with nothing forced worse,
+    # must run the third pass and keep the better of the two page files.
+    # The passes are COUNTED, so a third pass that never ran cannot pass
+    starts = sorted((resd.get("page") or {}).get("start", {}).items(),
+                    key=lambda x: x[1])
+    calls = []
+    real_e, real_h = venc._encode, venc.page_hurt
+
+    def counted(*x, **k):
+        calls.append(1)
+        return real_e(*x, **k)
+
+    def first_worse():
+        seen = []
+
+        def cmp(p, b, *m):
+            if not seen:
+                seen.append(1)
+                return ["the test's say-so"], []
+            return real(p, b, *m)
+        return cmp
+    arms = {}
+    venc._encode = counted
+    venc.page_hurt = lambda p, q: [starts[-1][0]] if starts else []
+    try:
+        for arm in ("rescue", "off", "always"):
+            del calls[:]
+            if arm != "always":
+                venc.page_compare = first_worse()
+            r, res = penc("prune_" + arm, "--page-prune", arm)
+            venc.page_compare = real
+            arms[arm] = (bool(r.page), (res.get("page") or {})
+                         .get("flips", 0), len(calls))
+    finally:
+        venc._encode, venc.page_hurt, venc.page_compare = \
+            real_e, real_h, real
+    print("   5i: %d builds; rescue %s; off %s; always %s (page-ahead, "
+          "flips, passes)" % (len(starts), arms["rescue"], arms["off"],
+                              arms["always"]))
+    if len(starts) < 2:
+        bad.append("page-ahead prune: the clip has %d builds, so leaving "
+                   "one out tests nothing" % len(starts))
+    elif arms["rescue"] != (True, fl - 1, 3):
+        bad.append("page-ahead prune: rescue gave %s, not a page-ahead "
+                   "file of %d flips from three passes" % (arms["rescue"],
+                                                           fl - 1))
+    if arms["off"][0] or arms["off"][2] != 2:
+        bad.append("page-ahead prune: off gave %s, not the plain file "
+                   "from two passes" % (arms["off"],))
+    if arms["always"][0] is not True or arms["always"][2] != 3 or \
+            arms["always"][1] not in (fl, fl - 1):
+        bad.append("page-ahead prune: always gave %s, not a page-ahead file "
+                   "from three passes" % (arms["always"],))
+    shutil.rmtree(ptmp, ignore_errors=True)
     # --- 6: ADPCM4's exact search
     rnd = np.random.default_rng(7)
     t = np.arange(22050) / 11025.0

@@ -57,7 +57,8 @@ DRV_MAX = 40 * 1024                  # DRV_MAX_KB in kernel/driver.inc
 # driver's own loadable half (OS88_OVERLAY, SPEC.md 52.11), which the kernel
 # never loads - its OWNER does - and which is stamped here because the header,
 # the dispatcher and the one-claim load discipline are identical.
-DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point",
+DRV_CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "net", 5: "file", 6: "point", 7: "ems",
+               8: "file2",
                0x40: "overlay"}
 MAP_MAGIC = b"O8MM"
 MOD_H_IMG, MOD_H_NENT = 8, 10
@@ -259,6 +260,20 @@ def main():
             p = os.path.join(faces, f)
             if os.path.isfile(p) and f.endswith(".f88"):
                 arts[f.upper()] = read(p)
+    # ...and the OVERLAYS, same shape and the same reason (SPEC.md 20.13.5,
+    # 73.14.1): build/ovlz/<NAME>.OVL is what CC_OVLZ_RULE wrapped and what a
+    # disk carries, so it OVERRIDES the top-level cut of the same basename,
+    # which is what tools/os88ovl.py wrote and what the size checks read.
+    # SCRIBE.OVL never needed this because it rides no floppy; SHEET's
+    # CHART.OVL and MACRO.OVL are the first packed overlays on a shipped
+    # image, and without this the row reported every disk carrying them stale
+    # - naming the one failure mode it exists to catch, about a current build.
+    ovlz = os.path.join(build, "ovlz")
+    if os.path.isdir(ovlz):
+        for f in sorted(os.listdir(ovlz)):
+            q = os.path.join(ovlz, f)
+            if os.path.isfile(q):
+                arts[f.upper()] = read(q)
     # ...and the DATA files, same shape and a sharper reason (SPEC.md 20.13.5):
     # build/zdata-<fmt>/ is what os88lz wrapped and what the disk carries, and
     # it OVERRIDES a top-level file of the same basename. That is not a tidy

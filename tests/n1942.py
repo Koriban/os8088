@@ -523,7 +523,7 @@ def campaign_flow(g,tag):
     # Stage 3's five staggered orange rows are one formation, not five POWs.
     for escaped in (False,True):
         g.fixture();g.put('stage',3);g.call('n_stageinit')
-        g.put('event',g.get('event')+6*4);g.put('distance',591);g.put('routefrac',3)
+        g.put('event',g.get('event')+6*3);g.put('distance',591);g.put('routefrac',3)
         guest('mov cx,25\n.loop: push cx\ncall %d\npop cx\nloop .loop'%g.code['n_scripts'])
         assert g.get('spawned')==5
         for i in range(5):
@@ -562,7 +562,7 @@ def campaign_flow(g,tag):
     for stage,events in enumerate(data['stages'],1):
         g.put('stage',stage);g.call('n_stageinit');start=g.get('event')
         guest(body)
-        assert g.get('event')==start+4*len(events),('unconsumed stage event',stage,(g.get('event')-start)//4,len(events),g.get('distance'))
+        assert g.get('event')==start+3*len(events),('unconsumed stage event',stage,(g.get('event')-start)//3,len(events),g.get('distance'))
         assert g.get('distance')==1875,('stage route stalled',stage)
         assert bool(g.get('bossmade',1))==(stage in data['bosses']),('boss stage',stage)
         assert not any(g.data('enemies',12*24)[12::24]),('landing aircraft',stage)
@@ -764,7 +764,11 @@ def run(tag,off,code):
         audio=(g.get('musicptr'),g.get('effectptr'));g.frame(3)
         assert audio==(g.get('musicptr'),g.get('effectptr')),'muting advanced audio streams'
         g.key('KeyM');assert g.get('sound',1)==1
-        g.key('KeyX');assert g.get('rolls')==2 and g.get('roll')>0
+        # X is POLLED (OSAPI_KEY_DOWN once a game frame), so it is HELD across
+        # one: a g.key() tap is down one emulator frame, shorter than the game's,
+        # and only passed while MartyPC dropped its break (MARTYPC-PLAN 2).
+        m.key('KeyX',up=False);g.frame();m.key('KeyX',down=False);g.frame()
+        assert g.get('rolls')==2 and g.get('roll')>0
         g.bullet();g.frame();assert g.get('lives')==3,'roll failed to protect'
         # Natural gameplay, and actual guest-clock frame rate.
         g.key('KeyN');m.key('Space',up=False)

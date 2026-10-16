@@ -171,6 +171,16 @@ _MIRROR = {
     "WM_BOX_W": ("kernel/wm.inc", 10),
     "WM_BOX_Y0": ("kernel/wm.inc", 4),
     "WM_BOX_Y1": ("kernel/wm.inc", 14),
+    # ...and the WINDOWS theme's three buttons (SPEC.md 76.14.3), which stand
+    # at the RIGHT of every window's title bar and are measured from its right
+    # edge: a button's left column is W_X + W_W - WN_*. close_xy and os88ui's
+    # raise point read these when the theme is live.
+    "WN_CLOSE": ("kernel/winmod.inc", 19),
+    "WN_MAX": ("kernel/winmod.inc", 37),
+    "WN_MIN": ("kernel/winmod.inc", 53),
+    "WN_BTY": ("kernel/winmod.inc", 2),
+    "WN_BTH": ("kernel/winmod.inc", 14),
+    "THM_WIN": ("kernel/vga12.inc", 3),
     "W_MENUS": ("kernel/wm.inc", 18),
     "W_SEG": ("kernel/wm.inc", 22),
     "WF_SIZABLE": ("kernel/wm.inc", 4),
@@ -235,6 +245,7 @@ _MIRROR = {
     # ...and two fields of its per-window state block, which is what lets a
     # harness ask WHERE THE LIST IS SCROLLED TO instead of assuming row 0 is
     # entry 0. That assumption is the one dispcp.open_named exists to end.
+    "FS_SEL": ("kernel/files.inc", 0),
     "FS_SCRL": ("kernel/files.inc", 2),
     # ...and WHICH VOLUME, AT WHICH FOLDER, which is what makes "open drive B"
     # confirmable. FS_CWD == 0 is a ROOT (files.inc says so at its only clear
@@ -297,27 +308,13 @@ _MIRROR = {
     "CUR_GH": ("kernel/mouse.inc", 12),
     "CUR_XHX": ("kernel/mouse.inc", 3),
     "CUR_XHY": ("kernel/mouse.inc", 5),
-    # kernel/fdlg.inc - the Standard File dialog's chrome, content-relative
-    # (SPEC.md 38.4). Two test scripts click these, and a third copy is one
-    # `equ` change away from a row that clicks empty background and reports a
-    # feature broken.
-    "FD_BX1": ("kernel/fdlg.inc", 224),
-    "FD_BX2": ("kernel/fdlg.inc", 286),
-    "FD_BY0": ("kernel/fdlg.inc", 20),
-    "FD_BY1": ("kernel/fdlg.inc", 40),
-    "FD_BY2": ("kernel/fdlg.inc", 60),
-    "FD_BH": ("kernel/fdlg.inc", 13),
-    "FD_LX1": ("kernel/fdlg.inc", 6),
-    "FD_LX2": ("kernel/fdlg.inc", 213),
-    "FD_ROW0": ("kernel/fdlg.inc", 22),
-    "FD_ROWH": ("kernel/fdlg.inc", 16),
-    # FD_TEXTX is deliberately NOT here. apps/ftpd/ftpd.asm defines its own
-    # (8, the Setup page's text pen) and tests/ftpdflick.py carries a THIRD
-    # value, 6 - so registering the kernel's 28 makes the gate compare two
-    # constants that were never the same one. A row that wants to click a
-    # listing entry should take FD_LX1..FD_LX2 and aim at the middle of the
-    # row, which is what the whole row is: less coupled, and it does not need
-    # this name at all.
+    # kernel/files.inc - the Standard File chooser's button column (SPEC.md
+    # 38.3): the chooser is a Disk window whose content is FM_CHCOLW narrower,
+    # its three buttons FM_BTN_W x FM_BTN_H at fm_rgt+5, 20px apart.
+    # tools/os88ui.py's chooser verbs aim at them.
+    "FM_CHCOLW": ("kernel/files.inc", 72),
+    "FM_BTN_W": ("kernel/files.inc", 63),
+    "FM_BTN_H": ("kernel/files.inc", 14),
     # kernel/toast.inc - the strip's message (SPEC.md 59)
     # TOAST_MAX is the TIGHT one by its own comment, so a local copy that is
     # one short truncates exactly the message it was added to read.
@@ -820,8 +817,27 @@ def snapx(x, nosnap=False, span=False):
     return c if c >= 0 else c + 8
 
 
-def close_xy(wx, wy):
+def win95(m, sym=None):
+    """Is the WINDOWS theme live (SPEC.md 76.14)? Its buttons are on the
+    RIGHT, so every helper that aims at one has to ask - the Mac close box's
+    position is a TITLE DRAG there, which closes nothing."""
+    return m.read(_sym(m, sym)("thm_kind"), 1)[0] == THM_WIN
+
+
+def button_xy(wx, wy, ww, which):
+    """The centre of a Windows-theme caption button (SPEC.md 76.14.3):
+    `which` is "close", "max" or "min"."""
+    off = {"close": WN_CLOSE, "max": WN_MAX, "min": WN_MIN}[which]
+    return (wx + ww - off + 8, wy + WN_BTY + WN_BTH // 2)
+
+
+def close_xy(wx, wy, ww=None, m=None, sym=None):
     """The close box's centre for a window whose frame starts at (wx, wy).
+
+    Pass the window's width and the Marty (`ww=`, `m=`) and the answer follows
+    the THEME: under Windows (SPEC.md 76.14) the close button is at the right
+    and this is its centre instead. Without them it is the Mac box, which is
+    every caller written before the theme existed.
 
     wm_hit accepts columns W_X+WM_BOX_X0 .. +WM_BOX_X0+WM_BOX_W and rows
     W_Y+WM_BOX_Y0 .. +WM_BOX_Y1, so the centre is the safe aim - a click one
@@ -830,6 +846,8 @@ def close_xy(wx, wy):
     W_X+W_W-1-WM_BOX_X0, and is not written out here because nothing asks for
     it yet; the four constants above are what an asker would need.
     """
+    if ww is not None and m is not None and win95(m, sym):
+        return button_xy(wx, wy, ww, "close")
     return (wx + WM_BOX_X0 + WM_BOX_W // 2,
             wy + (WM_BOX_Y0 + WM_BOX_Y1) // 2)
 
@@ -938,6 +956,15 @@ def drive_ordinal(m, letter="B", sym=None):
     want = ord(letter.upper()) - ord("A") if isinstance(letter, str) else letter
     if not 0 <= want < DVOL_MAX:        # a letter no volume row can have: the
         return None                     # byte past the volumes is the Wire's
+    # NO LAYOUT, NO CELL. A guest still booting has `desk_zslot` as zeroed
+    # RAM, and a zero byte reads as "cell 0" - so a wait for a drive's zone
+    # passed before the kernel had run at all, and drive_xy then divided by
+    # a [desk_rows] of 0. desk_layout writes that word before any zone can
+    # be drawn (the kernel's own desk_cell_xy divides by it), so a zero there
+    # is the machine saying no cell exists yet. Loaded boxes hit it: QEMU
+    # spends longer in the window the first read can land in.
+    if not word(m, "desk_rows", sym):
+        return None
     v = m.read(_sym(m, sym)("desk_zslot") + want, 1)[0]
     if v >= DSL_GONE:
         return None
@@ -957,7 +984,10 @@ def drive_xy(m, ordinal, sym=None):
     zh1 = word(m, "desk_zh1", sym)
     zx = word(m, "vid_desk_zx", sym)
     col, row = divmod(ordinal, rows)
-    return (zx - col * DESK_PX + (DESK_CW - DESK_ZW) // 2 + DESK_ZW // 2,
+    # the column on the byte grid (SPEC.md 26.9.9's DESKPIC: the centred x
+    # rounded to the nearest multiple of 8)
+    return (((zx - col * DESK_PX + (DESK_CW - DESK_ZW) // 2 + 4) & ~7)
+            + DESK_ZW // 2,
             DESK_ZY0 + row * step + zh1 // 2)
 
 
@@ -992,6 +1022,166 @@ _COLLISIONS = {
     "BAND_KB": "kernel/band.inc's title-bar composer buffer vs Paint's own "
                "band-cache threshold in tests/paintsu.py - unrelated",
 }
+
+
+# Parsed once per (path, mtime) and shared by `scan` and `unmirrored`: t_mirror
+# runs the pair three times over ~800 host scripts, and parsing every one each
+# time - then visiting every EXPRESSION node of it with ast.walk, when an
+# assignment is a statement - was 16 of the fast tier's 30 seconds.
+_ASSIGNS = {}
+
+
+_TARGETISH = re.compile(r"\b([A-Za-z_]\w*)[ \t\\\r\n]*[,=)]")
+
+
+def _named(names):
+    """The names a file must spell as a target before it is worth parsing.
+
+    Every assignment target the callers count is a bare Name, so its spelling
+    is in the source followed by `=`, by the `,` of a tuple or by the `)` that
+    closes one. Most host scripts mention none of the constants that way, and
+    one regex pass over the text is far cheaper than ast.parse."""
+    return frozenset(names)
+
+
+def _assigns(path, named=None):
+    """[(lineno, targets, value)] for every `Assign` statement in `path` - or
+    [] at once when `named` is given and the text cannot hold one of them."""
+    import ast
+    import warnings
+
+    try:
+        key = (path, os.stat(path).st_mtime_ns)
+    except OSError:
+        return []
+    got = _ASSIGNS.get(key)
+    if got is None:
+        try:
+            text = open(path, "r", errors="replace").read()
+        except OSError:
+            return []
+        disk = _disk_assigns()
+        sha = _sha(text)
+        ent = disk.get(path)
+        if ent and ent[0] == sha:
+            got = [text, frozenset(ent[1]),
+                   None if ent[2] is None else [(ln, [_dec(t) for t in tg], _dec(v))
+                                                for ln, tg, v in ent[2]]]
+        else:
+            got = [text, frozenset(_TARGETISH.findall(text)), None]
+            disk[path] = [sha, sorted(got[1]), None]
+            _DISKA_DIRTY[0] = True
+        _ASSIGNS[key] = got
+    text, words, found = got
+    if found is None:
+        if named is not None and named.isdisjoint(words):
+            return []
+        try:
+            with warnings.catch_warnings():
+                # Somebody's invalid escape in a docstring is not this
+                # module's business, and printing it is half of a parse.
+                warnings.simplefilter("ignore")
+                tree = ast.parse(text)
+        except SyntaxError:
+            tree = None
+        found = []
+        # Statements only: an Assign is a statement, so nothing below an
+        # expression can hold one, and skipping them is most of the tree.
+        todo = [tree] if tree is not None else []
+        while todo:
+            node = todo.pop()
+            if isinstance(node, ast.Assign):
+                found.append((node.lineno, node.targets, node.value))
+            for _, val in ast.iter_fields(node):
+                if isinstance(val, list):
+                    todo.extend(v for v in val
+                                if isinstance(v, (ast.stmt, ast.excepthandler,
+                                                  getattr(ast, "match_case",
+                                                          ()))))
+        found.sort(key=lambda r: r[0])
+        got[2] = found
+        ent = _disk_assigns().get(path)
+        if ent is not None and ent[0] == _sha(text):
+            ent[2] = [(ln, [_enc(t) for t in tg], _enc(v)) for ln, tg, v in found]
+            _DISKA_DIRTY[0] = True
+    return found
+
+
+# --- ...and kept between RUNS, by content -----------------------------------
+# A script's assignments are a function of its text, and the ~900 host
+# scripts this reads change one or two at a time, so the answer is kept on
+# disk (build/.os88geom-assigns.json) under each file's SHA-1. Only the
+# shapes the callers test survive the round trip - a Name, a Tuple of them,
+# an int (or bool) Constant - and anything else comes back as a bare ast.expr
+# that no caller's isinstance() accepts, exactly as before. Cold, t_mirror
+# parses as it always did (~5s); warm it is a hash per file.
+# $OS88_NOGEOMCACHE=1 skips the disk.
+_DISKA = None
+_DISKA_DIRTY = [False]
+
+
+def _sha(text):
+    import hashlib
+    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _disk_path():
+    b = os.path.join(ROOT, "build")
+    return os.path.join(b, ".os88geom-assigns.json") if os.path.isdir(b) else None
+
+
+def _disk_assigns():
+    global _DISKA
+    if _DISKA is None:
+        _DISKA = {}
+        p = _disk_path()
+        if p and not os.environ.get("OS88_NOGEOMCACHE"):
+            import json
+            try:
+                with open(p) as f:
+                    _DISKA = json.load(f)
+            except (OSError, ValueError):
+                _DISKA = {}
+            import atexit
+            atexit.register(_disk_save)
+    return _DISKA
+
+
+def _disk_save():
+    p = _disk_path()
+    if not (p and _DISKA_DIRTY[0]):
+        return
+    import json
+    import tempfile
+    try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(p), suffix=".tmp")
+        with os.fdopen(fd, "w") as f:
+            json.dump(_DISKA, f)
+        os.replace(tmp, p)          # atomic for a parallel reader
+    except OSError:
+        pass
+
+
+def _enc(node):
+    import ast
+    if isinstance(node, ast.Name):
+        return ["N", node.id]
+    if isinstance(node, ast.Tuple):
+        return ["T", [_enc(e) for e in node.elts]]
+    if isinstance(node, ast.Constant) and isinstance(node.value, int):
+        return ["C", node.value]
+    return ["X"]
+
+
+def _dec(e):
+    import ast
+    if e[0] == "N":
+        return ast.Name(id=e[1])
+    if e[0] == "T":
+        return ast.Tuple(elts=[_dec(x) for x in e[1]])
+    if e[0] == "C":
+        return ast.Constant(value=e[1])
+    return ast.expr()
 
 
 def unmirrored(root=None, least=2):
@@ -1029,6 +1219,8 @@ def unmirrored(root=None, least=2):
                     pass
 
     hits = {}
+    named = _named([k for k in kern if len(k) >= 4 and k.isupper()
+                    and k not in _MIRROR and k not in _COLLISIONS])
     for sub in ("tools", "tests", os.path.join("tests", "unit")):
         d = os.path.join(root, sub)
         if not os.path.isdir(d):
@@ -1036,21 +1228,13 @@ def unmirrored(root=None, least=2):
         for fn in sorted(os.listdir(d)):
             if not fn.endswith(".py") or fn == "os88geom.py":
                 continue
-            try:
-                tree = ast.parse(open(os.path.join(d, fn), "r",
-                                      errors="replace").read())
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign):
-                    continue
-                for tgt in node.targets:
+            for lineno, targets, value in _assigns(os.path.join(d, fn), named):
+                for tgt in targets:
                     if (isinstance(tgt, ast.Name)
-                            and isinstance(node.value, ast.Constant)
-                            and isinstance(node.value.value, int)):
+                            and isinstance(value, ast.Constant)
+                            and isinstance(value.value, int)):
                         hits.setdefault(tgt.id, []).append(
-                            (os.path.join(sub, fn), node.lineno,
-                             node.value.value))
+                            (os.path.join(sub, fn), lineno, value.value))
 
     out = []
     for name, places in hits.items():
@@ -1079,6 +1263,7 @@ def scan(root=None):
 
     root = root or ROOT
     out = []
+    named = _named(_KNOWN)
     for sub in ("tools", "tests"):
         d = os.path.join(root, sub)
         if not os.path.isdir(d):
@@ -1087,30 +1272,24 @@ def scan(root=None):
             if not fn.endswith(".py") or fn == "os88geom.py":
                 continue
             path = os.path.join(d, fn)
-            try:
-                tree = ast.parse(open(path, "r", errors="replace").read())
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Assign):
-                    continue
-                for tgt in node.targets:
+            for lineno, targets, value in _assigns(path, named):
+                for tgt in targets:
                     # NAME = 18, and NAME, OTHER = 18, 20 - the two spellings
                     # the harness actually uses.
                     pairs = []
                     if isinstance(tgt, ast.Name):
-                        pairs = [(tgt, node.value)]
+                        pairs = [(tgt, value)]
                     elif (isinstance(tgt, ast.Tuple)
-                          and isinstance(node.value, ast.Tuple)
-                          and len(tgt.elts) == len(node.value.elts)):
-                        pairs = list(zip(tgt.elts, node.value.elts))
+                          and isinstance(value, ast.Tuple)
+                          and len(tgt.elts) == len(value.elts)):
+                        pairs = list(zip(tgt.elts, value.elts))
                     for nm, val in pairs:
                         if not isinstance(nm, ast.Name) or nm.id not in _KNOWN:
                             continue
                         if not isinstance(val, ast.Constant) \
                                 or not isinstance(val.value, int):
                             continue
-                        out.append((os.path.join(sub, fn), node.lineno, nm.id,
+                        out.append((os.path.join(sub, fn), lineno, nm.id,
                                     val.value, _KNOWN[nm.id]))
     return sorted(out, key=lambda r: (r[3] == r[4], r[0], r[1]))
 

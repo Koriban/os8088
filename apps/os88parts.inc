@@ -125,6 +125,17 @@ OP_R_ZKB      equ 6             ; FOUR MEANINGS, one per flag combination, and
                                 ; on an OP_COMP|OP_LAZY row the packed length
                                 ; BEFORE the fetch and the segment after
                                 ; (SPEC.md 20.12.7.4)
+OP_SELF       equ 256           ; **AN ASSEMBLER-ONLY FLAG, never in the file**
+                                ; - it is above the byte, and OS88_PART writes
+                                ; the row's flags masked to eight bits. On an
+                                ; OP_LAZY row it says THE PACKAGE READS THIS
+                                ; PART ITSELF (OSAPI_FILE_READ_AT off op_row's
+                                ; `off`), so the standard carries no op_fetch,
+                                ; op_drop, op_lazyok or op_lazykb for it - a
+                                ; table whose every lazy row says so assembles
+                                ; none of them (SPEC.md 20.12.9.1). Clear Skies'
+                                ; loader is the shape: its streams part is only
+                                ; an OFFSET handed to the program
 OP_FETCHED    equ 32            ; **A RUNTIME FLAG, never in the file** - set by
                                 ; op_fetch and cleared by op_drop, and it is
                                 ; what "is this part here?" asks. It used to be
@@ -137,7 +148,9 @@ OP_FETCHED    equ 32            ; **A RUNTIME FLAG, never in the file** - set by
                                 ; nothing. os88pkg.py refuses the bit in a
                                 ; file, so a row always begins clear
 OP_SPENT      equ 0xFFFF        ; ...and what op_drop leaves in a dropped
-                                ; OP_COMP|OP_LAZY row, because the packed
+                                ; OP_COMP|OP_LAZY row whose shadow word is 0
+                                ; (SPEC.md 20.12.7.4.1 - it never is once
+                                ; op_fetch has banked one), because the packed
                                 ; length it would need to be read again is the
                                 ; word the segment was banked in. 0 would mean
                                 ; `not fetched` and a second op_fetch would
@@ -160,6 +173,11 @@ OP_T_FMT      equ 9             ; ...and the byte before them is the FORMAT the
                                 ; package's own scope, so it needs nothing of
                                 ; the header's and nothing of the kernel's
 
+OP_SECMAX     equ 1920          ; the carve's ceiling in sectors, packed AND
+                                ; unpacked (SPEC.md 20.12.11): op_cap counts
+                                ; PARAGRAPHS in a word, and 1,920 sectors plus
+                                ; a 32KB cluster of slack is 65,503 of them.
+                                ; Mirrored by os88pkg.py (t_lzfmt checks)
 OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
                                 ; EVERY legal cluster size (512 bytes to 32KB,
                                 ; a power of two capped at 64 sectors by BPB
@@ -190,6 +208,19 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
 %assign OP_HAS_OPT  0
 %assign OP_HAS_LAZY 0
 %assign OP_HAS_COMP 0
+%assign OP_HAS_ZLAZY 0              ; ...and a sixth, derived like them: a row
+                                    ; that is BOTH, which is what earns the
+                                    ; shadow words below (SPEC.md 20.12.7.4.1)
+%assign OP_HAS_PLAZY 0              ; ...a PLAIN lazy row op_fetch reads, which
+                                    ; is what earns its move-down (SPEC.md
+                                    ; 20.12.7.4.4) - ZLAZY's other half
+%assign OP_HAS_FETCH 0              ; ...and either of them: a lazy row the
+                                    ; STANDARD fetches rather than one marked
+                                    ; OP_SELF, which is what earns op_fetch,
+                                    ; op_drop, op_lazyok and op_lazykb (SPEC.md
+                                    ; 20.12.9.1). OP_HAS_LAZY still says there
+                                    ; is a lazy row at all, which op_size steps
+                                    ; over and op_seg answers 0 for
 
 %macro OS88_PARTS_BEGIN 1
     %assign OS88_PART_N 0
@@ -241,6 +272,9 @@ op_t_n:
     ; word is shared in TIME instead: zkb is the PACKED LENGTH until the part
     ; is fetched and the SEGMENT afterwards, which is the order op_fetch
     ; reads them in.
+    %if ((%2) & OP_SELF) && !((%2) & OP_LAZY)
+        %error "OP_SELF on an eager part: only a LAZY part is outside the carve, so only a lazy part is one the package could read for itself"
+    %endif
     %if ((%2) & OP_COMP) && ((%2) & OP_XMS)
         %error "OP_COMP with OP_XMS: the span above 1MB is staged through a transient conventional buffer a chunk at a time, and a stream cannot be expanded a chunk at a time - the parts up there are stored plain"
     %endif
@@ -259,8 +293,16 @@ op_t_n:
     %if ((%2) & OP_COMP)
         %assign OP_HAS_COMP 1
     %endif
+    %if ((%2) & OP_LAZY) && !((%2) & OP_SELF)
+        %assign OP_HAS_FETCH 1
+        %if ((%2) & OP_COMP)
+            %assign OP_HAS_ZLAZY 1
+        %else
+            %assign OP_HAS_PLAZY 1
+        %endif
+    %endif
     db %1                       ; +0 kind
-    db %2                       ; +1 flags
+    db (%2) & 0xFF              ; +1 flags - OP_SELF is above the byte
     dw 0                        ; +2 off, in 512-byte units - the packer's
     dw 0                        ; +4 len, in bytes           - the packer's
     dw %3                       ; +6 zkb, in KB              - yours
@@ -279,6 +321,18 @@ op_t_n:
     %endif
     %if ($ - op_table) != OP_T_ROWS + OP_ROW * OS88_PART_N
         %error "the part table is 10 bytes plus 8 per part - write nothing else between the brackets"
+    %endif
+    ; THE SHADOW (SPEC.md 20.12.7.4.1): a word a row, after the rows and so
+    ; outside what os88pkg.py walks, for a table with an OP_COMP|OP_LAZY row
+    ; ONLY - every other package assembles to the byte it did. op_fetch copies
+    ; a compressed lazy row's PACKED length here before the segment overwrites
+    ; it in zkb, and op_drop puts it back, so a dropped compressed part can be
+    ; fetched again. It is the package's own data, in its own segment (a C
+    ; package's `.data`, where this macro is expanded), so it needs no format
+    ; change and no kernel byte.
+    %if OP_HAS_ZLAZY
+op_zshadow:
+        times OS88_PART_N dw 0
     %endif
 %endmacro
 
@@ -303,6 +357,76 @@ op_t_n:
 %include "os88partsbody.inc"
 %endmacro
 
+; -----------------------------------------------------------------------------
+; OS88_REHOME - hand the program part at DX to the kernel, KEEPING the carve
+;               only to the end of its last part (SPEC.md 20.12.10.5)
+; in:  DX = the program part's segment (op_seg's answer), its handoff already
+;      written into the head of its bss (SPEC.md 20.12.10.2)
+; out: OSAPI_PKG_REHOME's CF: 0 recorded, 1 refused
+; clobbers: AX, BX, CX, SI, DI, flags
+;
+; It is OSAPI_PKG_REHOME's KEEP form with the figure worked out from the
+; table, so a loader states it without knowing it: the walk visits every row
+; the CARVE holds - not a lazy one, which is a claim of its own, and not a
+; refused optional or one above 1MB, both of which op_seg answers 0 for - and
+; keeps up to whichever of them ENDS highest. That is the program alone for
+; a carve whose only other rows are lazy (DOS.O88, Clear Skies), part 1 for
+; Word, the asset for tests/rehome and the scratch for Pixelstein, and what
+; it returns to the heap is the read's margin past it - R's extra sector, the
+; run rounded to clusters and the claim rounded to a KB - which nothing ever
+; reads. A loader that has put something of its OWN past its parts (no
+; loader in the tree does) cannot use this and writes the call itself.
+;
+; A MACRO AND NOT A ROUTINE IN os88partsbody.inc, because only a re-homing
+; loader wants it and the body's gates are derived from the table - which is
+; written AFTER the entry proc that expands this, so a gate here could not
+; read it. Expanded once, in a loader whose image is freed the instant the
+; kernel acts on the call, so its bytes are the file's and never the
+; session's. The scratch arm is assembled whatever the table says, and never
+; taken without an OP_ZERO row: a filed row's offset is never 0.
+; -----------------------------------------------------------------------------
+%macro OS88_REHOME 0
+    push dx
+    mov bx, dx                  ; BX = the highest END so far: the program's
+    xor di, di                  ; DI = the row
+%%row:
+    mov ax, di
+    cmp al, [op_t_n]
+    jae %%done
+    call op_row                 ; SI -> the row, AX kept
+    test byte [si+OP_R_FLAG], OP_LAZY
+    jnz %%next                  ; a claim of its own, wherever it landed
+    call op_seg                 ; AX = where the carve put it, 0 = nowhere
+    or ax, ax
+    jz %%next
+    xchg ax, dx                 ; DX = that segment
+    mov ax, [si+OP_R_ZKB]       ; a SCRATCH part is zkb KB long...
+    mov cl, 6
+    cmp word [si+OP_R_OFF], 0
+    je %%kb
+    mov ax, [si+OP_R_LEN]       ; ...and a filed one is len bytes UNPACKED,
+    add ax, 15                  ; which is how op_unpack laid it down. A part
+    mov cl, 4                   ; is at most OP_PARTMAX, so this cannot carry
+    shr ax, cl
+    db 0x3D                     ; `cmp ax, imm16` swallows the two-byte shl
+%%kb:                           ; below: a byte rather than a jump round it,
+    shl ax, cl                  ; and it writes no register - CLC_OR_STC's
+                                ; trick, one operand byte wider
+    add ax, dx                  ; AX = the paragraph this part ENDS at
+    cmp ax, bx
+    jbe %%next
+    xchg ax, bx
+%%next:
+    inc di
+    jmp short %%row
+%%done:
+    pop dx
+    mov cx, bx
+    sub cx, dx                  ; CX = the paragraphs at DX to keep
+    xor ax, ax                  ; AX = 0: the KEEP form
+    call OSAPI_PKG_REHOME
+%endmacro
+
 ; --- our bss, and YOURS FOLLOWS IT ------------------------------------------
 ; This SDK's bss is an equ chain off os88_image_end (SPEC.md 20.5), so the
 ; standard takes the first OP_BSS bytes of it and a package bases its own at
@@ -320,11 +444,17 @@ op_name     equ OP_BSS_AT + 0       ; the file we came out of, NUL-term
 op_first    equ OP_BSS_AT + 13      ; the carved run's first sector
 op_secs     equ OP_BSS_AT + 15      ; ...its length in sectors, 0 = none
 op_kb       equ OP_BSS_AT + 17      ; ...in KB
-op_bytes    equ OP_BSS_AT + 19      ; ...and in bytes
+op_bendh    equ OP_BSS_AT + 19      ; op_bend's HIGH word. It was op_bytes,
+                                    ; the run in a word of bytes, which is
+                                    ; what held the carve under 64KB; the
+                                    ; read counts paragraphs now (SPEC.md
+                                    ; 20.12.11) and the slot is reused so
+                                    ; that no offset below moves
 op_clb      equ OP_BSS_AT + 21      ; this volume's bytes per cluster
 op_off      equ OP_BSS_AT + 23      ; the cluster-aligned read offset (32)
 op_slack    equ OP_BSS_AT + 27      ; ...how far the run is past it
-op_cap      equ OP_BSS_AT + 29      ; the capacity that read asks for
+op_cap      equ OP_BSS_AT + 29      ; the capacity that read asks for, in
+                                    ; PARAGRAPHS (SPEC.md 20.12.11)
 op_base     equ OP_BSS_AT + 31      ; the claim it lands in
 op_reqkb    equ OP_BSS_AT + 33      ; the run plus the REQUIRED scratch...
 op_allkb    equ OP_BSS_AT + 35      ; ...and plus the optional too
@@ -360,17 +490,17 @@ op_xneed    equ OP_BSS_AT + 63      ; ...what the read has to cover in all
 op_xcap     equ OP_BSS_AT + 65      ; ...one bufferful of it
 op_xstg     equ OP_BSS_AT + 67      ; ...and the transient claim it uses
 op_want     equ OP_BSS_AT + 69      ; bytes of the run that MUST still arrive,
-                                    ; so a file that ends inside it refuses
-                                    ; rather than filling half a claim
-                                    ; (OP_BSS_AT + 71 was op_tail, the padding
-                                    ; after the run's last body. op_bend
-                                    ; already excludes it, so measuring it
-                                    ; twice is what made a payload under 512
-                                    ; bytes refuse itself - SPEC.md 20.12.7.3.
-                                    ; The word is left UNNAMED rather than
-                                    ; reclaimed: every offset below it would
-                                    ; move, and this chain is read by
-                                    ; apps/cc/crt0.asm too)
+                                    ; 32 BITS, so a file that ends inside it
+                                    ; refuses rather than filling half a claim.
+                                    ; (OP_BSS_AT + 71, its high word, was
+                                    ; op_tail, the padding after the run's last
+                                    ; body - which op_bend already excludes,
+                                    ; so measuring it twice made a payload
+                                    ; under 512 bytes refuse itself, SPEC.md
+                                    ; 20.12.7.3. It sat unnamed until the carve
+                                    ; passed 64KB and the count needed it,
+                                    ; 20.12.11 - and the chain did not move,
+                                    ; which apps/cc/crt0.asm reads too)
 
 op_zn       equ OP_BSS_AT + 73      ; byte: how many rows carry OP_COMP. ZERO
                                     ; IS THE WHOLE OF THE OLD BEHAVIOUR - every
@@ -378,11 +508,15 @@ op_zn       equ OP_BSS_AT + 73      ; byte: how many rows carry OP_COMP. ZERO
                                     ; what it took before, so a package with no
                                     ; compressed part is unchanged to the
                                     ; instruction (SPEC.md 20.12.7)
-op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors...
-op_ubytes   equ OP_BSS_AT + 76      ; ...and in bytes. The claim is cut from
-                                    ; these and the READ from op_secs/op_bytes,
-                                    ; and the two are the same run measured at
-                                    ; its two ends
+op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors.
+                                    ; The claim is cut from this and the READ
+                                    ; from op_secs, and the two are the same
+                                    ; run measured at its two ends.
+                                    ; (OP_BSS_AT + 76 was op_ubytes, the same
+                                    ; in a word of bytes. R comes from the two
+                                    ; sector counts now (SPEC.md 20.12.11), and
+                                    ; the word is left UNNAMED, op_tail's way,
+                                    ; so no offset below moves)
 op_rpara    equ OP_BSS_AT + 78      ; R, in paragraphs: how far up the claim the
                                     ; packed run lands so op_unpack can walk
                                     ; down onto it. 0 = it lands at the base,
@@ -394,8 +528,9 @@ op_rdseg    equ OP_BSS_AT + 80      ; ...and the segment that comes to, which is
 op_zsrc     equ OP_BSS_AT + 82      ; op_unpack's read pointer, as a segment -
                                     ; BP is its write pointer and there is no
                                     ; third register left to hold this one
-op_bend     equ OP_BSS_AT + 84      ; the run's EXACT byte end, where op_bytes
-                                    ; is the same run rounded to whole sectors.
+op_bend     equ OP_BSS_AT + 84      ; the run's EXACT byte end, low word -
+                                    ; op_bendh is the high one, because the
+                                    ; run may pass 64KB (SPEC.md 20.12.11).
                                     ; op_want is cut from this one, because the
                                     ; last part's padding is the end of the
                                     ; FILE and asking for it is a short read

@@ -126,8 +126,8 @@ dock_cfg:   db DOCK_P_BOTTOM
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-; IN THE BOOT OVERLAY (SPEC.md 2.5.3 - the WINDOW half, which is what OVWCALL
-; reaches; 2.5.2 is `.ovl`), docs/plans/LAST-DROP-BYTES.md row 15. One caller,
+; IN THE BOOT OVERLAY (SPEC.md 2.5.3 - the WINDOW half, which is what OVLCALL
+; reaches; 2.5.2 is `.boot2`), docs/plans/LAST-DROP-BYTES.md row 15. One caller,
 ; kmain:4525.
 ;
 ; It has NO outbound call at all now, which is what it costs `.text`: it used
@@ -146,7 +146,7 @@ dock_cfg:   db DOCK_P_BOTTOM
 ; 8..316 and the rights 31..339, and every one of the twelve passes both
 ; bounds. [vid_pwm1] is live here - vid_init is kmain MARK 7 and this is
 ; between MARK 21 and 22.
-section .ovlw
+section .ovl
 dock_init:
     push ax
     mov word [dock_dx1], 0      ; THE WHOLE STRIP is owed - dock_force's own
@@ -160,7 +160,7 @@ dock_init:
     inc ax                      ; 07FFFh..08000h and refuses every rect
     mov [dock_px2], ax
     pop ax
-    retf                        ; FAR: kmain reaches this through OVLGATE1
+    retf                        ; FAR: kmain reaches this through SPLGATE1
 section .text
 
 %ifdef DOCK_OPT
@@ -213,7 +213,7 @@ DK_NENT       equ 2             ; DOCK.DRV's mod_fp entries: hook, unhook
 dkb_geom:
     cmp word [spl_fseg], COLD_SEG
     jbe .panel
-    OVLGATE1 ovl_dock_geom
+    SPLGATE1 ovl_dock_geom
     ret
 .panel:
     call far [CPFP + CPE_DOCK_GEOM*4]
@@ -255,7 +255,7 @@ dkb_geom:
     pop ax
     ret
 %endmacro
-section .ovl
+section .boot2
 ovl_dock_geom:
     call ovd_geom
     retf
@@ -288,11 +288,9 @@ dkb_band:
 ; raise caches go because a window that did not move can have had the strip
 ; stand up or lie down behind it.
 ; -----------------------------------------------------------------------------
-dock_apply:
-    call COLD_SEG:dkf_apply
-    ret
 section .cold
-dkf_apply:
+dock_apply:                     ; (the name its callers knew: they far-call
+dkf_apply:                      ; dkf_apply, and the .text thunk is gone)
     push ax
     mov al, MOD_DOCK
     test byte [dock_cfg], DOCK_P_MASK | DOCK_F_AUTO
@@ -491,14 +489,11 @@ db_paint:
                                 ; CF = 0, "nothing was drawn", which is what
                                 ; wm_dock_under needs to hear
 .go:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si                     ; SI IS ALREADY PRESERVED (nothing between
-    push di                     ; here and the exit touches it) - it is pushed
-                                ; to make ax..di the shared epilogue ladder's
-                                ; own run, which is what kret_di wants
+    call kent_di                ; = push ax/bx/cx/dx/si/di. SI IS ALREADY
+                                ; PRESERVED (nothing between here and the
+                                ; exit touches it) - it is banked to make
+                                ; ax..di the shared epilogue ladder's own
+                                ; run, which is what kret_di wants
 
     mov al, [gfx_color]         ; byte-only read: gfx_lock_flag lives next
     push ax                     ; door. ON THE STACK, not in .bss, and that
@@ -511,8 +506,12 @@ db_paint:
                                 ; which is a slow death nothing in the tree
                                 ; would report. See the matching `pop ax`.
     mov byte [dock_drew], 0
-    mov word [dock_px1], 07FFFh ; ...and nothing of the strip is painted YET
-    mov word [dock_px2], 08000h ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+    mov ax, 07FFFh              ; ...and nothing of the strip is painted YET
+    mov cx, 08000h              ; (SPEC.md 30.3.3): [dock_px1]/[dock_px2] are
+    mov [dock_px1], ax          ; (the same two registers carry the sentinel
+    mov [dock_px2], cx          ; into `.full`'s exchange: wm_top and
+                                ; inst_win_owner preserve both - kernel size
+                                ; pass 9, five bytes and two immediates fewer)
                                 ; this pass's answer, not the last one's, and
                                 ; EMPTY is the inverted bounding box 07FFFh..
                                 ; 08000h so that db_px_hit's signed compares
@@ -553,8 +552,7 @@ db_paint:
                                 ; the window as well, and this does not depend
                                 ; on believing it. `pushf`/`popf`, never
                                 ; `cli`/`sti` - the caller's IF is its own.
-    mov ax, 07FFFh
-    mov cx, 08000h
+                                ; AX:CX = 07FFFh:08000h still, from above
     pushf
     cli
     xchg ax, [dock_dx1]
@@ -1109,12 +1107,12 @@ db_hit:
 ;
 ; Two things about the active test. It asks wm_top HERE rather than reading
 ; [dock_act], which is db_paint's scratch and valid only inside the paint
-; that resolved it - fdlg_sel_bar's rule about [fdlg_shown] (SPEC.md 38.3) in
-; another module. And it compares WINDOWS where db_key compares records:
-; inst_bind_win is the only writer of I_WIN and of wm_owner and writes both
-; together, so wm_top == [di+I_WIN] and inst_win_owner(wm_top) == di cannot
-; disagree - this is the same predicate the tile's own mark is drawn from,
-; taken the cheaper way round.
+; that resolved it - the retired dialog's fdlg_sel_bar rule about
+; [fdlg_shown] (SPEC.md 30.4) in another module. And it compares WINDOWS
+; where db_key compares records: inst_bind_win is the only writer of I_WIN
+; and of wm_owner and writes both together, so wm_top == [di+I_WIN] and
+; inst_win_owner(wm_top) == di cannot disagree - this is the same predicate
+; the tile's own mark is drawn from, taken the cheaper way round.
 ;
 ; A window hidden WITHOUT being minimized is never wm_top's answer (it counts
 ; visible windows only), so it still takes the wm_front path exactly as

@@ -20,7 +20,7 @@ somebody types the knob by hand:
     `REDRAWFULL=`, `HEAPCOMPACT=`, `FDDPROBE=`, `SNAPAUDIT=`, `BOOTPROF=`,
     `MOUIDSLOW=`, `TRACKRUN=`, `QUANTUM=`,
     `SBDRAGOFF=`/`SBRATE=`/`SBRATE286=`/`SBIDLE=`,
-    `DIRW1=`, `PICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`,
+    `DIRW1=`, `NOPICOMEM=`, `BOOTMARK=`/`BOOTHALT=`/`BOOTSTOP=`, `NOPS2=`,
     `BAND=`, `TITLESNAP=`, `SPLSTARS=`, `NOUNAL=`,
     `NOFLUSHR=`, `FATWGATE=`, `FDDSLOW=`.
     Each one is
@@ -147,7 +147,7 @@ NOWASTE = ["NOOVLCHK=1", "NOKERNSIZE=1"]
 # its own because it is a whole second tree (its own drivers, its own Control
 # Panel), and the rows below that say `boot360.bin` are the ones whose %ifdef
 # arms are in the BOOT SECTOR. A knob that reaches only a DRIVER or a PACKAGE
-# names that file: a `kernel.bin` row for PICOMEM assembled a kernel the knob
+# names that file: a `kernel.bin` row for PICOMEM (now NOPICOMEM) assembled a kernel the knob
 # never touches and reported the sound driver's arm alive.
 #
 # THIS TABLE IS THE VALUE EACH KNOB NEEDS, not the roster: main() reads the
@@ -180,15 +180,25 @@ KNOBS = [
     ("fddprobe",    ["FDDPROBE=0"]),
     ("snapaudit",   ["SNAPAUDIT=1"]),
     ("dirw1",       ["DIRW1=1"]),
-    # PICOMEM= reaches SOUND.DRV and nothing else (SNDDEF), so the target is
-    # the driver: this row built kernel.bin for a year and assembled no arm.
-    # PM_BASE/PM_SB_PORT are only read under it, so one row takes all three.
-    ("picomem",     ["PICOMEM=1"], "sound.drv"),
-    ("picomem-ports", ["PICOMEM=1", "PM_BASE=0x2A0", "PM_SB_PORT=0x220"],
+    # NOPICOMEM= reaches SOUND.DRV and nothing else (SNDDEF), so the target
+    # is the driver: the row built kernel.bin for a year and assembled no arm.
+    # The tier is the DEFAULT now (SPEC.md 34.10.3), so the arm this keeps
+    # assembling is the driver WITHOUT it. PM_BASE/PM_SB_PORT are read only
+    # with the tier in, which is the plain build, so their row sets nothing
+    # else.
+    ("nopicomem",   ["NOPICOMEM=1"], "sound.drv"),
+    ("picomem-ports", ["PM_BASE=0x2A0", "PM_SB_PORT=0x220"],
      "sound.drv"),
     ("bootprof",    ["BOOTPROF=1"]),
     ("mouidslow",   ["MOUIDSLOW=1"]),
     ("trackrun",    ["TRACKRUN=1"], "boot360.bin"),
+    # NOHDCYL= and HDCYLPROBE= reach HDD.DRV as well as the kernel (DRVDEF
+    # and VIDDEF both), and the driver's arms (hdd.asm, mount.inc) are the
+    # ones nothing else assembles - so the target is hdd.bin, which hangs
+    # off KERNEL.SYS through hddtool.bin and boothd.bin and so builds the
+    # knob's kernel on the way
+    ("nohdcyl",     ["NOHDCYL=1"], "hdd.bin"),
+    ("hdcylprobe",  ["HDCYLPROBE=1"], "hdd.bin"),
     # SPEC.md 18.93.1/18.93.2's instruments. BOOTMARK= puts a MARK expansion
     # into ~60 places in kmain that expand to NOTHING in every other build, so
     # nothing else assembles them; BOOTHALT= is the arm inside that macro;
@@ -203,6 +213,12 @@ KNOBS = [
     # single spender in the sector.
     ("bootmark",    ["BOOTMARK=1"]),
     ("boothalt",    ["BOOTMARK=1", "BOOTHALT=20"]),
+    # ...and BOOTMARK= with a knob that grows the LOADER: the MARKW sites and
+    # DISKAL=1's 2,491-byte loader both draw on the blob. They were balanced
+    # against kernel.asm's OVL_KNOBGIVE until SPEC.md 2.9.14 made the blob one
+    # section; now they share one pool and this row is its fullest knob pair. boot360.bin, so pass 2's decoder arguments are what is
+    # measured - the loader is one byte longer with them than with pass 1's.
+    ("bootmark-diskal", ["BOOTMARK=1", "DISKAL=1"], "boot360.bin"),
     # ...and on kern_small, which is a different blob: SPEC.md 2.5.3.3 put
     # kmain's boot half in it, so every MARKW site is blob bytes, and the
     # shipped kern_small leaves the blob ~40 of them. What keeps these arms
@@ -248,6 +264,9 @@ KNOBS = [
     # counters go round a lap instead of saturating, so it is the kernel's and
     # the default target is right.
     ("mouround",    ["MOUROUND=1"]),
+    # `KBDDIAG=1` (SPEC.md 9.8.1) records every IRQ1 and draws the ring on the
+    # desktop; kernel-only, so the default target is right.
+    ("kbddiag",     ["KBDDIAG=1"]),
     # `DPTROM=1` (SPEC.md 18.92) TAKES BOTH ARMS, for BOOTSTOP's reason: it
     # appends -DDPT_ROM to $(VIDDEF) *and* to $(BOOTDEF), so one target
     # assembles half of it. The kernel arm is the default and the sector arm
@@ -287,36 +306,16 @@ KNOBS = [
     ("fontslow",    ["FONTSLOW=1"]),     # SPEC.md 6.0.1: the copy verdict forced
     # SPLSTARS= is TITLESNAP's sentence one screen along - the loading screen's
     # animation A/B (SPEC.md 15.3.7) - and it carries a second reason this
-    # roster is the only thing watching: it is the ONE configuration whose
-    # `.boot2` differs from the shipped one at all. It USED to take an OVL_AT
-    # of its own (3,072 against 2,560) AND a BOOT2_SECS of its own, one sector
-    # up, because the twinkle wanted ~330 bytes of `.boot2` the shipped split
-    # had not got - over WHEREVER OVL_AT fell, so moving the split alone could
-    # not pay for it. SPEC.md 15.3.8.5.1 is the size pass that took that arm to
-    # 2,568 + 1,421 = 3,993 of 4,096, and BOTH of those constants went with it:
-    # one blob length, one split at 2,624, and KSIG_OFF freed from an
-    # intersection over two blob lengths (SPEC.md 18.93.1).
-    #
-    # The margins are NOT quoted here any more and that is the fix rather than
-    # an omission: they were "34 on one side and 30 on the other" against an
-    # OVL_AT of 2704, and every one of those three numbers was stale - the
-    # constant had moved to 3072 and the two halves had moved with every commit
-    # that spent a blob byte since. A margin printed in a comment is a number
-    # nobody re-measures. What does not rot is the mechanism: BOTH halves are
-    # asserted at the foot of kernel.asm, each `%error` names which one ran
-    # out, and THIS ROW is the only thing that ever runs those assertions for
-    # the knob arm - which matters MORE now, not less: the knob arm's `.boot2`
-    # is what sets the floor under OVL_AT for every build in this table.
-    #
-    # **IT IS PAIRED WITH NOKZIP=1 AND THAT IS THE SAME STORY AGAIN** (SPEC.md
-    # 15.3.8.5.2). The twinkle is 318 bytes of `.boot2` over the spinner and
-    # the compressed kernel's decoder is 180 more, which is 2,748 of 2,624; a
-    # ninth blob sector would fit them and would cost every shipped image 512
-    # bytes and bring back the two blob lengths the size pass deleted. So the
-    # two knobs are exclusive, the Makefile says so in a sentence rather than
-    # leaving a %error about a constant to be decoded, and this row is the arm
-    # that keeps BOTH of the assertions above running.
-    ("splstars",    ["SPLSTARS=1", "NOKZIP=1"]),
+    # roster is the only thing watching: its `.boot2` loader is the LARGEST in
+    # the tree (the twinkle's tables and renderer, plus the compressed kernel's
+    # decoder), so it is the build nearest the blob's one ceiling. It used to
+    # need an OVL_AT of its own, then a blob sector of its own, then NOKZIP=1,
+    # each because the blob was cut in two at a hand-set line (SPEC.md
+    # 15.3.8.5, 15.3.8.5.2). SPEC.md 2.9.14 made the blob one section and the
+    # knob's is a sector longer, so it builds with the compressed kernel like
+    # every other knob and this row is the arm that keeps `BOOT2_SIZE >
+    # BOOT2_PAD` honest at the top of its range.
+    ("splstars",    ["SPLSTARS=1"]),
     # NOHEDGE= is the first knob in this table that reaches a DRIVER and not
     # the kernel, so it names a target of its own - SAVER.DRV - and the row
     # costs two files instead of a tree. It is SPEC.md 79.5.10's A/B: the
@@ -401,6 +400,9 @@ KNOBS = [
     # NOPLANE's sentence exactly: an A/B that stopped assembling is found at
     # the moment somebody reaches for it to tell a real fix from a null run.
     ("noseamcut",   ["NOSEAMCUT=1"]),
+    # NOFDMEDIA= takes SPEC.md 38.10's MEDIA default out of the Standard File
+    # chooser - kept assembling so the bytes stay one flag away.
+    ("nofdmedia",   ["NOFDMEDIA=1"]),
     # COMPRESS= picks which decompressors the kernel carries
     # (docs/plans/O88-COMPRESSION-PLAN.md 12.7, SPEC.md 20.13.6). `both` SHIPS now,
     # so the rows here are the two SINGLE-format arms, and neither is the same
@@ -445,6 +447,7 @@ KNOBS = [
     ("disink0",     ["DISINK0=1"]),
     ("themedark",   ["THEMEDARK=1"]),
     ("themedark2",  ["THEMEDARK=2"]),
+    ("themedark3",  ["THEMEDARK=3"]),       # Windows (SPEC.md 76.14)
     # STKDIAG=1 refuses QUANTUM= (the Makefile's $(error)), so it is a row of
     # its own and never paired; NOMOUPRIV/NOCHAINPRIV are `make stkdiag`'s
     # arms 2 and 3 and were built by nothing in the suite.
@@ -460,6 +463,7 @@ KNOBS = [
     ("nouiblock",   ["NOUIBLOCK=1"]),
     ("nocurdisk",   ["NOCURDISK=1"]),
     ("nofddpark",   ["NOFDDPARK=1"]),
+    ("mseloff",     ["MSELOFF=1"]),
     ("vgadirty",    ["VGADIRTY=1"]),
     ("dljunk",      ["DLJUNK=0x61"], "boot360.bin"),
 ]

@@ -38,15 +38,16 @@ section .text
 kd_text_start:
 ; --- THE FIXED HEADER (kdlayout.inc) ----------------------------------------
 ; The stub arrives with no symbol table and jumps to KD_SEG:0000, so the first
-; eight bytes are a contract: a NEAR jump (`near` spelled out, because nasm
-; would shrink a resolved short one and move everything after it) and the two
-; words that say where the launch block goes.
+; eight bytes are a contract: a NEAR jump (`strict near` spelled out, because
+; nasm would shrink a resolved short one - nasm 3.01 even when it says `near` -
+; and move everything after it) and the two words that say where the launch
+; block goes.
 %ifdef KD_GATE
     %define kd_head_entry kd_dos_entry
 %else
     %define kd_head_entry kd_entry
 %endif
-    jmp near kd_head_entry          ; KD_H_JMP
+    jmp strict near kd_head_entry   ; KD_H_JMP
     db 0
 kd_lbp:  dw kd_lblock               ; KD_H_LBP
 kd_lbsz: dw KDL_SIZE                ; KD_H_LBSZ
@@ -127,9 +128,9 @@ KD_S_TEXT equ kd_e_text - $$
 section .cold
 kd_e_cold:
 KD_S_COLD equ kd_e_cold - $$
-section .ovlw
-kd_e_ovlw:
-KD_S_OVLW equ kd_e_ovlw - $$
+section .ovl
+kd_e_ovl:
+KD_S_OVL equ kd_e_ovl - $$
 section .modf
 modf_end:
 kd_e_modf:
@@ -147,7 +148,7 @@ kd_text_end:
 ; rung short by a kilobyte puts the FAT snapshot INSIDE the code: measuring
 ; `.text` alone passed at 40KB on a 45KB image, and the mount then overwrote
 ; the routine that called it.
-KTEXT_SIZE equ KD_S_TEXT + KD_S_COLD + KD_S_OVLW + KD_S_MODF
+KTEXT_SIZE equ KD_S_TEXT + KD_S_COLD + KD_S_OVL + KD_S_MODF
 ; **AND THE BSS, WHICH `-f bin` PUTS ABOVE THE IMAGE** and which read `equ 0`
 ; here while it was thousands of bytes. It is the SAME hazard as the one the
 ; paragraph above records, one section along: `.bss` is nobits so it costs no

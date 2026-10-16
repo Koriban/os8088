@@ -44,8 +44,9 @@ MOD_NIMG    equ 5               ; SMALL: file operations, no hibernate, and
 %else
 MOD_DOCK    equ 4
 MOD_EXT     equ 5               ; ...and the extended desktop (SPEC.md 39.19.6)
-MOD_NIMG    equ 6               ; BIG: hibernate, resident file operations,
-                                ; the optional Dock and EXTD.DRV
+MOD_WIN     equ 6               ; ...and the Windows theme's chrome (76.14)
+MOD_NIMG    equ 7               ; BIG: hibernate, resident file operations,
+                                ; the optional Dock, EXTD.DRV and WIN95.DRV
 %endif
 ; MOD_NIMG is the IMAGES os88mod.py cuts out; MOD_MAX the ROWS. They differ by
 ; one row that is not an image of its own: MOD_SETS, CTRL.DRV's first
@@ -59,7 +60,8 @@ MOD_MAX     equ MOD_NIMG
 %endif
 MOD_CTRL    equ 0               ; the Control Panel (SPEC.md 31)
 MOD_FMT     equ 1               ; the floppy formatter (SPEC.md 18.96)
-MOD_CLONE   equ 2               ; the disk cloner (SPEC.md 18.99)
+MOD_DISKOPS equ 2               ; DISKOPS.DRV: the cloner, Write Img and
+                                ; the compressor (SPEC.md 18.99)
 %ifdef KERN_BIG
 MOD_HIBER   equ 3               ; hibernate and resume (SPEC.md 87) - kern_big
 %endif                          ; alone: the 128KB machine has no hard disk to
@@ -155,10 +157,12 @@ mod_f_dock: db 'DOCK.DRV', 0
 %endif
 %ifdef KERN_BIG
 mod_f_ext:  db 'EXTD.DRV', 0
+mod_f_win:  db 'WIN95.DRV', 0
 %endif
 mod_f_ctrl: db 'CTRL.DRV', 0    ; .DRV for the attributes and nothing else
 mod_f_fmt:  db 'FORMAT.DRV', 0  ; (SPEC.md 19.6): os88disk.py stamps anything
-mod_f_clon: db 'CLONE.DRV', 0   ; ...and a third of them (SPEC.md 18.99)
+mod_f_dops: db 'DISKOPS.DRV', 0 ; ...and a third (SPEC.md 18.99; CLONE.DRV
+                                ; until it held more than the cloner)
 %ifdef KERN_BIG
 mod_f_hib:  db 'HIBER.DRV', 0   ; ...and a fourth: hibernate (SPEC.md 87),
                                 ; which qualifies twice - the user is leaving
@@ -175,10 +179,24 @@ mod_f_fdlg: db 'FDLG.DRV', 0    ; ...and its sixth (SPEC.md 38.0)
                                 ; drv_tab, so nothing lists them as drivers or
                                 ; tries to attach one
 
+; THE HEADER mod_check EXPECTS, as the image carries it (kernel size pass 9):
+; the magic, the version, an id byte mod_check stamps per call, this build's
+; number and this kernel's layout stamp - four words one `repe cmpsw` asks in
+; place of four compares with an immediate each. It is .text because it is
+; WRITTEN (the id), and data so MOD_STAMP's self-reference cannot reach it:
+; a `dw` is two bytes whatever value it holds.
+%if MOD_H_MAGIC != 0 || MOD_H_VER != 2 || MOD_H_ID != 3 || MOD_H_BUILD != 4 || MOD_H_STAMP != 6
+  %error "mod_hdrt is the image header's first four words, in MOD_H_* order"
+%endif
+mod_hdrt:   dw 0x384F           ; MOD_H_MAGIC
+            db MOD_VER, 0       ; MOD_H_VER, MOD_H_ID (mod_check's to stamp)
+            dw BUILD_NUM        ; MOD_H_BUILD
+            dw MOD_STAMP        ; MOD_H_STAMP
+
 mod_tab:
     dw 0, mod_f_ctrl            ; MOD_CTRL
     dw 0, mod_f_fmt             ; MOD_FMT
-    dw 0, mod_f_clon            ; MOD_CLONE
+    dw 0, mod_f_dops            ; MOD_DISKOPS
 %ifdef KERN_BIG
     dw 0, mod_f_hib             ; MOD_HIBER
 %endif
@@ -204,6 +222,7 @@ mod_r_dock:
 %endif
 %ifdef KERN_BIG
     dw 0, mod_f_ext             ; MOD_EXT, kern_big's alone (SPEC.md 39.19.6)
+    dw 0, mod_f_win             ; MOD_WIN, kern_big's alone (SPEC.md 76.14)
 %endif
 %ifdef OS88_SHORTCUTS
     dw 0, mod_f_ctrl            ; MOD_SETS: the SAME file, cut short (2.8.7)
@@ -370,11 +389,12 @@ mod_need:
 %ifdef OS88_SHORTCUTS
     cmp di, MOD_SETS            ; ...or the SETTINGS CORE's, which is only the
     jne .whole                  ; file's first MODS_SIZE bytes (SPEC.md 2.8.7):
-    mov ax, MODS_SIZE           ; the claim is sized for those and the read
-    mov bp, ax
-    mov byte [dskw_trunc], 1    ; stops there. MODS_SIZE is this assembly's,
-.whole:                         ; like every offset the module is called at
-%endif
+    mov ax, MODC_SIZE           ; the read stops there, but the CLAIM is the
+    mov bp, MODS_SIZE           ; WHOLE image's, so the module's bss tail
+    mov byte [dskw_trunc], 1    ; (cpc_buf) is inside it on either load. Both
+.whole:                         ; are this assembly's constants, like every
+%endif                          ; offset the module is called at - never the
+                                ; file's size, which a short file would shrink
 
     call mem_bytes_kb_x         ; -> whole KB. The size is well under 64KB,
     cmp ax, MOD_MAX_KB          ; so this cannot carry out
@@ -475,10 +495,6 @@ mod_need:
 mod_check:
     push bx
     mov es, [bx+MODR_SEG]
-    cmp word [es:MOD_H_MAGIC], 0x384F
-    jne .bad
-    cmp byte [es:MOD_H_VER], MOD_VER
-    jne .bad
     mov ax, di                  ; the id mod_need was CALLED with - nine
 %ifdef OS88_SHORTCUTS
     cmp al, MOD_SETS            ; ...whose image is CTRL.DRV's, cut short
@@ -486,22 +502,15 @@ mod_check:
     mov al, MOD_CTRL
 .id:
 %endif
-    cmp [es:MOD_H_ID], al       ; bytes of arithmetic recovered a number the
-    jne .bad                    ; caller was holding. If DI were ever
-                                ; clobbered on the way here the failure is a
-                                ; REFUSAL and not a wrong dispatch, which is
-                                ; the safe direction
-    cmp word [es:MOD_H_BUILD], BUILD_NUM
-    jne .bad
-    cmp word [es:MOD_H_STAMP], strict word MOD_STAMP
-                                ; STRICT, because MOD_STAMP is the sum of the
-                                ; section sizes THIS instruction is in: a
-                                ; stamp of 0xFF80..0xFFFF fits a sign-extended
-                                ; byte, the byte shortens .cold, the stamp
-                                ; leaves that range, and nasm never settles
-                                ; ("stalled for 1001 passes"). kern_small hit
-                                ; it on a one-byte saving in desk_rowcalc
-    jne .bad
+    mov [mod_hdrt + MOD_H_ID], al ; bytes of arithmetic recovered a number the
+    push di                     ; caller was holding. If DI were ever
+    mov si, mod_hdrt            ; clobbered on the way here the failure is a
+    xor di, di                  ; REFUSAL and not a wrong dispatch, which is
+    mov cx, 4                   ; the safe direction. The magic, the version,
+    cld                         ; the id, the BUILD and the layout STAMP
+    repe cmpsw                  ; (SPEC.md 2.8.2) in one compare against
+    pop di                      ; mod_hdrt; SI and CX are this routine's to
+    jne .bad                    ; spend (the arming below reloads both)
     mov ax, [es:MOD_H_IMG]
     cmp ax, bp                  ; the image IS the file
 %ifdef OS88_SHORTCUTS
@@ -536,7 +545,6 @@ mod_check:
                                 ; the `pop bx / push bx` that used to put the
                                 ; row back goes with the id derivation
     mov si, MOD_H_ENT           ; ...and CX is the count both sides agreed
-    cld
 .arm:
     es lodsw                    ; the entry table, one word a pass
     cmp ax, dx

@@ -13,9 +13,10 @@
 ; the host does not include. What it can know is where the core BEGINS, and
 ; the first bytes of the core are this table.
 ;
-; `jmp near` IS SPELLED OUT, and it has to be. nasm shrinks a resolved short
-; jump, which would make the entries two bytes instead of three and move every
-; slot after the first backward branch - in a build where the two halves are
+; `jmp strict near` IS SPELLED OUT, and it has to be. nasm shrinks a resolved
+; short jump (nasm 3.01 shrinks one written `jmp near` too; only `strict`
+; stops it), which would make the entries two bytes instead of three and move
+; every slot after the first short one - in a build where the two halves are
 ; assembled separately and the host would simply call the wrong routine.
 ; `kerndos/kdos.asm`'s fixed header carries the same instruction for the same
 ; reason.
@@ -61,7 +62,7 @@ CORE_ORG    equ 0x0080
 ; opposite sides, so growing either one costs the other. This is a rung the
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
-CORE_MAX    equ 16384            ; +512 for SPEC.md 96.7.2's stack swap and
+CORE_MAX    equ 15312            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -78,7 +79,11 @@ CORE_MAX    equ 16384            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; not fit in 30. Task #27 is where it comes
                                 ; back: a kilobyte here is a kilobyte off
                                 ; KD_IMG_KB, so it is a kilobyte off the DOS
-                                ; program on the shut-down arm
+                                ; program on the shut-down arm.
+                                ; **16,384 -> 15,312 IN APPS SIZE PASS 1**
+                                ; (SPEC.md 96.7.3, 96.44.15): the core fell
+                                ; to 15,311, so the kilobyte came back and
+                                ; one more with it - KD_IMG_KB 35 -> 33
 ; ...and the core's bss sits directly above its code, at the same offset in
 ; every host, which is what SPEC.md 96.44.2 requires of every `DBSS` cell.
 ; --- THE CORE'S BLOCK IS A BUDGET, NOT A SUM (SPEC.md 96.44.2) --------------
@@ -130,7 +135,7 @@ CORE_BSS_AT equ CORE_ORG + CORE_MAX
 ; be still fits it.
 DVOL_CAP    equ 8
 
-DOSC_STRIDE equ 3               ; a `jmp near` - see the header
+DOSC_STRIDE equ 3               ; a `jmp strict near` - see the header
 
 %ifdef DOS_EXTCORE
 ; --- A HOST: every name becomes its slot ------------------------------------
@@ -175,7 +180,7 @@ DOSC_NDAT equ DOSC_DN
 DOSC_TAB:
     %assign DOSC_N 0
     %macro DOSC_E 1
-        jmp near %1
+        jmp strict near %1
         %assign DOSC_N DOSC_N + 1
     %endmacro
     %macro DOSC_D 1

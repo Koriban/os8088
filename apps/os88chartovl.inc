@@ -122,6 +122,12 @@ ch_s_aiszero:
     mov bx, fp_am0
     call fp_iszero
     retf
+ch_s_dec_s16:                         ; apps/os88dec.inc's two, which sheet.asm
+    call dec_s16                      ; claims for .text because sh_itoa calls
+    retf                              ; dec_s16 near from there (20.5.2)
+ch_s_dec_u16:
+    call dec_u16
+    retf
 
 ; ch_ovbind - fill the vector table: this package's shim offsets, and this
 ; package's segment. The offsets are assembled in; only the segment is a
@@ -134,7 +140,7 @@ ch_ovbind:
     mov si, ch_ovshims
     mov di, ch_v_first
     mov ax, cs
-    mov bx, 7
+    mov bx, 9                         ; ch_ovshims' length, and ch_v_*'s
 .l:
     push ax
     mov ax, [si]
@@ -154,6 +160,7 @@ ch_ovbind:
 ch_ovshims:
     dw ch_s_unpacka, ch_s_unpackb, ch_s_a2i, ch_s_cmpab
     dw ch_s_round, ch_s_scale10, ch_s_aiszero
+    dw ch_s_dec_s16, ch_s_dec_u16     ; ...in ch_v_*'s own order, below
 
 ; -----------------------------------------------------------------------------
 ; ch_ovneed - make sure CHART.OVL is loaded.

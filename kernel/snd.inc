@@ -48,6 +48,9 @@
 ; The FM / background-PCM / input bits went with the hardware that had them.
 SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
+SND_CAP_LPTDAC   equ 0100h      ; a Covox, announced by the user's tier -
+                                ; the driver's bit, read by the Sound page's
+                                ; dot (ctrl.inc) and nothing resident (34.14)
 
 ; --- which sound hardware the machine uses (SPEC.md 34.8), a user setting ---
 ; Three tiers, not two, and the middle one is the point: an AdLib is an OPL2
@@ -60,6 +63,18 @@ SND_RT_AUTO equ 0               ; unset (a fresh SYSTEM.CFG): the best tier
 SND_RT_SPK  equ 1               ; the PC speaker, whatever else is loaded
 SND_RT_FM   equ 2               ; AdLib: FM only - no streams, no 12KB
 SND_RT_SB   equ 3               ; Sound Blaster: FM and streams both
+SND_RT_LPT  equ 4               ; Covox on LPT1; + 1 LPT2, + 2 LPT3: FM, no
+                                ; streams, and that parallel port's DAC
+                                ; (SPEC.md 34.14) - SIBLINGS of SND_RT_FM, not
+                                ; rungs above SND_RT_SB, so they are compared
+                                ; for as `>= SND_RT_LPT` and never in the
+                                ; ladder's own `>= SND_RT_SB`. No
+                                ; resident byte reads it: snd_rt_card already
+                                ; sends a tone to the driver for anything but
+                                ; SND_RT_SPK, which is the AdLib here
+%if SND_RT_LPT != 4
+  %error "ctrl.inc's Sound page numbers a Covox port CPS_NROW + n = 4 + n, and that is its tier SND_RT_LPT + n"
+%endif
 SND_RT_CARD equ SND_RT_FM       ; the old two-value name, kept so a SYSTEM.CFG
                                 ; written before the split still reads as "a
                                 ; card" - and reads as the CHEAP card, which
@@ -181,11 +196,7 @@ spk_tone:
     out 0x61, al                ; both arms end in the popf that closes
 .pf:                            ; SPEC.md 34.1's window and the CF=0 answer
     popf
-    clc
-    jmp short .out
-.bad:
-    stc
-.out:
+    CLC_OR_STC .bad             ; CF = 0 done, or (.bad) CF = 1 refused
     pop dx
     pop bx
     pop ax
@@ -297,24 +308,22 @@ snd_tone_req:
     call snd_tone_out           ; the tier's sink: a loaded driver's, else
     pop dx                      ; the speaker's. CF = bad frequency
     jc .refuse                  ; nothing changed: the old owner still sounds
-    inc byte [snd_gen]          ; stamp the owner record - same IF=0 window
-    mov al, [snd_gen]           ; as the port writes (SPEC.md 34.3)
-    mov [snd_town_gen], al
-    mov [snd_texp_gen], al
-    mov [snd_town_pri], dx      ; DL the priority, DH the instance: one
-                                ; word (adjacent - the %if under the .bss)
+    mov [snd_town_pri], dx      ; stamp the owner record - same IF=0 window
+                                ; as the port writes (SPEC.md 34.3). DL the
+                                ; priority, DH the instance: one word
+                                ; (adjacent - the %if under the .bss)
     mov [snd_town_exp], cx
     mov byte [snd_town_act], 1
     mov byte [snd_ch2mode], 1
-.granted:
+.granted:                       ; ...and a release updates the record too
+    inc byte [snd_gen]          ; (34.3): the generation, which is AL, the
+    mov al, [snd_gen]           ; answer to both
     popf
     clc
     jmp short .out
 
 .off:                           ; --- tone off: release the channel ----------
     call snd_town_off
-    inc byte [snd_gen]          ; a release updates the record too (34.3)
-    mov al, [snd_gen]
     jmp short .granted          ; same window close, same CF=0 answer, same
                                 ; AL = the generation
 
@@ -340,14 +349,14 @@ snd_town_off:
     push bx
     push dx
     push si
-    cmp byte [snd_town_act], 0
+    xor ax, ax                  ; AX is banked: the zero every store below
+    cmp [snd_town_act], al      ; is made of, and the off frequency
     je .clear
-    xor ax, ax
     xor dl, dl
     call snd_tone_out           ; whichever sink granted it, silences it
-    mov byte [snd_ch2mode], 0
+    xor ax, ax                  ; (a driver's sink need not keep AX)
+    mov [snd_ch2mode], al
 .clear:
-    xor ax, ax                  ; AX is banked: two zero stores through it
     mov [snd_town_act], al
     mov [snd_town_exp], ax
     pop si
@@ -371,10 +380,8 @@ snd_rt_card:
 %ifdef OS88_SNDCARD
     cmp byte [snd_route], SND_RT_SPK
     je .no
-    cmp word [drv_svc+DSV_TONE], 0
-    je .no
-    clc
-    ret
+    cmp word [drv_svc+DSV_TONE], 1  ; CF = 1 exactly when no driver has a
+    ret                             ; tone verb - and CF = 0 is the card
 .no:
 %endif
     stc                         ; SPEC.md 34.0: always the speaker, and the
@@ -414,10 +421,14 @@ snd_beep:
 ; snd_live gate (SPEC.md 34.7, binding): until snd_init publishes, every
 ; .bss byte below is garbage and this routine reads none of it.
 ;
-; Duty: count a duration-limited tone down and, at zero WITH the grant's
-; generation still current, silence it on the sink it is sounding on. The
-; generation guard means a tick can never silence a tone granted after the
-; one whose expiry it is retiring (SPEC.md 34.3).
+; Duty: count a duration-limited tone down and, at zero, silence it on the
+; sink it is sounding on. A tick can never silence a tone granted after the
+; one whose expiry it is retiring, because a grant writes the owner record
+; and the expiry in ONE IF=0 window (SPEC.md 34.3) - so the expiry counting
+; down is always the current owner's. That is also why there is no
+; generation compare here any more: the two bytes it compared were written
+; together, in that window, from the same register, and so were equal on
+; every tick that ever read them (kernel size pass 10).
 ; -----------------------------------------------------------------------------
 snd_tick:
     cmp byte [snd_live], 0      ; the boot gate - nothing else is readable
@@ -427,7 +438,12 @@ snd_tick:
     je .tone                    ; a loaded driver may want the tick too; it
     mov bp, [drv_svc+DSV_TICK]  ; runs here, inside IRQ0, at IF=0 - and
     call drv_svc_call           ; banks nothing: AX and BP are sch_isr's
-.tone:                          ; scratch here like the rest (see above)
+.tone:                          ; scratch here like the rest (see above).
+                                ; NOT `mov bp / or bp, bp / jz` (3 bytes
+                                ; less): on the machine with no driver - the
+                                ; common one - that is ~6 cycles a tick MORE
+                                ; on an 8088 (the 2-byte `or` pays its fetch),
+                                ; and this is inside IRQ0 (size pass 9)
 %endif                          ; SPEC.md 34.0: no driver, so nothing else
                                 ; wants the tick and the expiry test is the
                                 ; whole of it. The one gate here that is on a
@@ -436,11 +452,8 @@ snd_tick:
     cmp word [snd_town_exp], 0
     je .done
     dec word [snd_town_exp]
-    jnz .done
-    mov al, [snd_texp_gen]      ; expiry generation-guarded (SPEC.md 34.3)
-    cmp al, [snd_town_gen]
-    jne .done
-    call snd_town_off           ; IF is already 0: the tick IS the window.
+    jz snd_town_off             ; (a TAIL call since size pass 9: its ret is
+                                ; ours) IF is already 0: the tick IS the window.
                                 ; No push bx/si: snd_town_off banks both in
                                 ; its own frame, on its one exit
 .done:
@@ -463,16 +476,19 @@ snd_release_inst:
     cli
     cmp byte [snd_live], 0
     je .done
-    cmp word [drv_svc+DSV_RELINST], 0
-    je .spk                     ; a loaded driver's grants go first: its FM
-    push ax                     ; channels and streams are stamped with the
-    push bp                     ; same instance slot ours are (SPEC.md 34.3)
-    push dx
+%ifdef OS88_DRIVERS             ; (kern_small: no driver, so no grants)
+    push ax                     ; a loaded driver's grants go first: its FM
+    push bp                     ; channels and streams are stamped with the
+    push dx                     ; same instance slot ours are (SPEC.md 34.3)
     mov bp, [drv_svc+DSV_RELINST]
-    call drv_svc_call
+    call drv_svc_call           ; ...which refuses a BP of 0 itself (CF = 1,
+                                ; AX = 0), and this routine puts back AX and
+                                ; the flags: no test of its own (kernel size
+                                ; pass 10)
     pop dx
     pop bp
     pop ax
+%endif
 .spk:                           ; (no clip to flag down: a clip holds the
                                 ; lock on its owner's own UI callback from
                                 ; GRANT to RELEASE, so nothing can release
@@ -542,21 +558,21 @@ snd_disp_set:
 ; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
 
 %ifndef KERN_SMALL
-section .ovlw                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
+section .ovl                   ; kern_big: the WINDOW half (SPEC.md 2.5.3),
                                 ; whose window has room to spare
 %else
-section .ovl                    ; ...and kern_small: the BLOB half instead
+section .boot2                    ; ...and kern_small: the BLOB half instead
                                 ; (SPEC.md 2.5.3.2, mouse_init's shape). The
                                 ; deadline is the same either way - kmain runs
                                 ; this long before drv_boot - so the choice is
                                 ; only about WHOSE bytes. On that kernel
-                                ; `.ovlw` is read onto the FAT window and the
+                                ; `.ovl` is read onto the FAT window and the
                                 ; mount buffers, and SPEC.md 22.6.3 has just
                                 ; taken the LISTING out of that region: the
                                 ; 800 bytes it gave back are only 288 of heap
                                 ; while the overlay still needs the rest, so
                                 ; every body moved here turns one more of them
-                                ; into heap. `.ovl` is written LAST on
+                                ; into heap. `.boot2` is written LAST on
                                 ; purpose: tools/os88ovlchk.py reads SOURCE
                                 ; and cannot evaluate the %ifdef, so it files
                                 ; this block by the arm below - which is the
@@ -581,8 +597,6 @@ snd_init:
     mov byte [snd_town_act], 0
     mov byte [snd_town_inst], 0xFF
     mov byte [snd_town_pri], 0
-    mov byte [snd_town_gen], 0
-    mov byte [snd_texp_gen], 0
     mov word [snd_town_exp], 0
 
     mov byte [snd_pcm_busy], 0  ; the PWM clip's grant (SPEC.md 34.4)
@@ -594,7 +608,7 @@ snd_init:
     retf                        ; FAR, and the shim that used to own this
                                 ; return is deleted (SPEC.md 2.6.1, 2.5.2):
                                 ; kmain names this body directly through
-                                ; OVLGATE1 and nothing near-calls it
+                                ; SPLGATE1 and nothing near-calls it
 
 ; -----------------------------------------------------------------------------
 ; snd_unhook - quiesce the sound hardware for reboot (SPEC.md 34.7)
@@ -1118,8 +1132,6 @@ snd_town_pri:  resb 1           ;   owner priority
 snd_town_inst: resb 1           ;   owning instance slot (0xFF = kernel) -
                                 ;   DIRECTLY after the priority: a grant
                                 ;   stores the pair from DX as one word
-snd_town_gen:  resb 1           ;   generation stamped at grant
-snd_texp_gen:  resb 1           ;   generation the pending expiry belongs to
 snd_town_exp:  resw 1           ;   remaining ticks, 0 = no self-expiry
 snd_inst:      resw 1           ; low byte: instance slot being dispatched
                                 ; (0xFF = none). HIGH byte: the task that

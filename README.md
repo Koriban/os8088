@@ -62,6 +62,7 @@ make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
               # swaps the B: floppy, so any 1.2MB app disk can be looked at
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
+make wireball-pair # two 86Box XTs linked over COM2 for WireBall (86Box 6.0+)
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
@@ -115,6 +116,19 @@ make xt-pixelstein # 86Box: the 4.77MHz 640KB XT on CGA with games360.img in
               # the CGA 320x200x4 bracket and whose Mode row's second item
               # the 160x100x16 retime (SPEC.md 97.15)
 make xt-pixelstein-herc # ...the same XT on a Hercules: F takes the box
+make isotrondisk # isoTron, a light-wall duel on a raised 3D slab (SPEC.md 108):
+              # the package and its README in all four geometries
+              # (isotron.img, isotron720/120/360.img). It is on the apps
+              # disks and games360.img too; apps/isotron/README.md.
+              # `make isotrontest` runs its gates (the host model, then
+              # seeded games, pictures, toggle, flow, sound, keys and pace
+              # on MartyPC); `tests/isotron.py --perf all` is the XT audit
+make xt-isotron # 86Box: the 4.77MHz 640KB VGA XT with isotron360.img in B:
+              # (double-click ISOTRON.O88; F is the 320x200x16 bracket)
+make xt-isotron-cga # ...a 640KB CGA XT: 1bpp windowed, F the 320x200x4 palette 1
+make xt-isotron-herc # ...a Hercules XT: F takes 720x348 at 2x by 1.5
+make xt-isotron-ega # ...the 256KB IBM XT with a real EGA: F is a same-mode
+              # bracket in 16 colours at 640x350
 make pmcbandbench # its band composer's benchmark, under QEMU -icount shift=3
 make c64disk  # build the C64 floppy - a Commodore 64: the package, its
               # overlay; the KERNAL/BASIC/CHARGEN ROM rides INSIDE the
@@ -161,6 +175,11 @@ make 286-525-cword#   -z -word -cword -runcpm -c64 -weave -loom -all. The
 make 286-525-all  #   ONLY machines that read a 1.2MB disk (an XT cannot)
 make redlinedisk # REDLINE CPU/graphics lab, four disk sizes; R runs, S saves
 make redline-profile # record the cycle-accurate 4.77 MHz MartyPC reference
+make pixeldisk # PiXEL, the image viewer, with its sample gallery in PICTURES/,
+              # four disk sizes
+make xt-pixel # 86Box: the 4.77MHz 640KB VGA XT with the 360KB pixeldisk in
+              # B: (double-click PIXEL.O88, or a picture in PICTURES/)
+make 386-pixel # 86Box: the 386DX/25 with the 1.44MB pixeldisk in B:
 make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
               # family included - apps-all-1.img, -2.img, ... at 1.44MB and
@@ -235,6 +254,12 @@ when it is plugged, not only at boot. The socket is a CH375 chip that the
 Book8088's BIOS uses for flash drives, so the driver leaves a flash drive
 alone. It has been exercised against a model of the chip rather than a real
 Book8088, so a report from one is welcome (SPEC.md 9.12).
+
+An **EMS board** -- a Lo-tech 2MB board, or a PicoMEM's EMS -- gives programs
+up to 4MB of expanded memory, even on an XT: tick **EMS** on the Drivers page.
+It looks for the board at its usual places (ports 260h-26Ch, frame E000h,
+D000h or C000h) and needs no setting. Programs that use it are still to come;
+the driver is the first step (SPEC.md 107).
 
 ## What it does
 
@@ -312,7 +337,14 @@ multi-instance:
   band: eight floors with textured walls, guards and dogs, sliding doors,
   keys and secret doors, a status bar, a Tab map of what you have seen,
   floor passwords instead of saves, a high-score table, and a timedemo - T
-  on the title page - that prints the machine's own frame rate).
+  on the title page - that prints the machine's own frame rate), and
+  [isoTron](apps/isotron/README.md) (a light-wall duel against the computer on
+  a raised slab drawn in 3D, every trail an extruded wall, and two wins in a
+  row stacking the next arena one slab higher, a tower four levels tall; in a
+  desktop window on every adapter and full screen in colour wherever the
+  card has it - CGA 320x200x4, VGA 320x200x16, 16 colours on an EGA - with F
+  to switch at any time. A step writes one column of the picture and redraws
+  nothing, so the game keeps its pace on a 4.77 MHz XT).
 - ...plus the Task Manager itself, and HELLO, a minimal package that exists to
   be the smallest thing the SDK can build.
 
@@ -528,6 +560,22 @@ three graphics tiers in a canvas that doubles in height when it fits.
 VGA bars use color and share a highest-score-plus-5x scale; CGA/Hercules/VGA have measured
 4.77 MHz references. R runs and S saves `REDLINE.TXT`. See [the research, CPU/MHz detection limits
 and reproducible baseline](docs/REDLINE.md).
+
+**PiXEL** is the image viewer and editor, laid out like a modern photo tool -
+a toolbar, a tool column, the canvas, Navigator / Histogram / Image Info
+panels and a status bar - on VGA, Hercules and CGA alike (SPEC.md
+106, [the design record](docs/plans/PIXEL-PLAN.md)). It opens JPEG (baseline
+and progressive, decoded straight to 1/2, 1/4 or 1/8 when memory or speed
+asks), PNG, GIF (and plays an animated one), BMP, PCX, TGA, PNM, TIFF, ICO,
+IFF/LBM, MacPaint and os8088's own PIX, dithering them to the desktop's 16
+or 2 colours, and shows them full screen in more where the card has them -
+256 on a VGA, 16 adaptive, the CGA's four and its 160x100x16. Prev/Next walk
+the folder, with a slideshow. It edits - six tools, palette
+and pixel operations, undo - and saves as BMP, PCX, GIF, PNG or PIX. Every
+heavy decoder is a compressed part loaded only when a picture needs it, and
+the whole thing is priced against a 4.77 MHz XT (SPEC.md 106.26 has the
+numbers). `make pixeldisk` builds its floppy with a gallery of original
+sample pictures; `make xt-pixel` / `make 386-pixel` boot it on 86Box.
 
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary

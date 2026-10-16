@@ -141,7 +141,14 @@ def main():
     ap.add_argument("--rows2", action="store_true")
     ap.add_argument("--flip", action="store_true")
     ap.add_argument("--repeat", choices=("seam", "key"))
+    ap.add_argument("--lcopy", action="store_true",
+                    help="with --flip: every frame's back page brought up "
+                    "to date by the LATCH COPY of the last record's rows "
+                    "off the glass (98.3.8.1), vp_flcw set 0, instead of "
+                    "decoding the last record again")
     a = ap.parse_args()
+    if a.lcopy and not a.flip:
+        sys.exit("vidvga8: --lcopy is a flipped play's")
     rs = 2 if a.rows2 else 1
     global H
     H //= rs
@@ -162,12 +169,8 @@ def main():
         r = vid.Reader(v88)
         g = r.g
         if modex:                       # both halves of the decoder
-            masks = set()
-            for rec, _, _ in r.records():
-                si = 6
-                while rec[si]:
-                    masks.add(rec[si])
-                    si = vid.walk_lists(bytearray(65536), rec, si + 1)
+            masks = {lead for rec, _, _ in r.records()
+                     for lead, s0, s1 in vid.subs_of(rec, r.g)}
             print("   the clip's Map Masks: %s" % sorted(masks))
             if 0x0F not in masks or not masks & {3, 12} or \
                     not masks & {1, 2, 4, 8}:
@@ -270,6 +273,8 @@ def main():
 
             # --- 3: every frame right, in its colours
             m.write(base + syms["vp_nowin"], b"\1")
+            if a.lcopy:
+                ww("vp_flcw", 0)
             stops = STOPS
             if a.repeat:                # two laps, held across each join
                 j = LOOP + 1 if a.repeat == "seam" else 1

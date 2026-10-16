@@ -338,6 +338,9 @@ def fat_get(buf: bytes, fat12: bool, n: int) -> int:
 
 
 KERNEL_NAME = b"KERNEL  SYS"   # the kernel, as a file (SPEC.md 19.3)
+HDBOOT_NAME = b"BOOTHD  SYS"   # ...and the hard-disk boot sector built with
+                               # it, which the installer reads (SPEC.md 52.10.16)
+CFG_NAME    = b"SYSTEM  CFG"   # the Control Panel's settings (SPEC.md 51.5)
 
 # Directory attributes. A system disk hides the things that are the KERNEL's
 # business and nobody else's, from DOS and from os8088's own file manager
@@ -482,8 +485,20 @@ def sys_attr(name11: bytes, boot: bool, hdd: bool = False) -> int:
 
     The rule is by EXTENSION so it needs no maintenance as drivers are added:
     a `.DRV` on the boot disk is kernel machinery and disappears, and so does
-    KERNEL.SYS (build() stamps that one itself). SYSTEM.CFG is not here - the
-    kernel creates that one itself, and stamps it the same way (SPEC.md 51.5).
+    KERNEL.SYS (build() stamps that one itself) and BOOTHD.SYS, the hard-disk
+    boot sector that goes with it (SPEC.md 52.10.16) - by NAME, being the one
+    file of its kind.
+
+    **SYSTEM.CFG on a boot disk is stamped as the kernel would have made it**
+    (SPEC.md 19.6's table): hidden + system + archive, and NOT read-only.
+    This used to leave it out on the grounds that the kernel creates that file
+    itself - true of a disk nobody ships one on, and false of every disk that
+    does (`make emu`, `make usb-emu`, the gate disks). dskw_write_sys stamps
+    hidden + system only on a CREATE and keeps the old attribute on a replace,
+    so a plain host-built file stayed plain through every save: listed in the
+    Disk window, deletable, and unlike every SYSTEM.CFG the kernel writes. On
+    a DATA disk it stays an ordinary file - a hidden one there is SPEC.md
+    51.5.1's litter, which nothing inside os8088 can list or delete.
 
     **EVERYTHING ELSE IS AN ORDINARY FILE, on the boot disk too** (SPEC.md
     19.6). It used to be read-only + archive - "the boot disk holds nothing a
@@ -505,7 +520,9 @@ def sys_attr(name11: bytes, boot: bool, hdd: bool = False) -> int:
         return A_HIDDEN | A_SYS     # the kernel rewrites it, so not read-only
     if not boot:
         return A_ARCH
-    if not name11.endswith(b"DRV"):
+    if name11 == CFG_NAME:
+        return A_HIDDEN | A_SYS | A_ARCH    # dskw_write_sys's create + commit
+    if not (name11.endswith(b"DRV") or name11 == HDBOOT_NAME):
         return A_ARCH
     return A_HDDSYS if hdd else A_SYSTEM
 

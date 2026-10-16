@@ -18,7 +18,7 @@
 ;            OSAPI_DESK_ITEM link, and the SYSTEM.CFG trailer. Every one of
 ;            them ends in a SYSTEM.CFG write and the writer is already in that
 ;            image, so the gesture rides the load the save needed anyway
-;   .ovl     the boot reader, which runs once and is gone
+;   .boot2     the boot reader, which runs once and is gone
 ;
 ; THE TABLE IS A HEAP CLAIM, never .bss: one claim for every shortcut, grown
 ; and shrunk a KB at a time (eight records a KB), freed when the last one goes.
@@ -72,6 +72,9 @@ SC_OP_MOVE  equ 1               ; core's one entry (SPEC.md 2.8.7) - takes
 SC_OP_DEL   equ 2               ; these in AH (SPEC.md 26.8.7)
 SC_OP_ADD   equ 3               ; a package's link, OSAPI_DESK_ITEM (26.9)
 SC_OP_PDEL  equ 4               ; ...and its remove, named by the record
+SC_OP_VGC   equ 5               ; ...and Force Color at boot (SPEC.md 39.30):
+                                ; not a shortcut, but the core is the part of
+                                ; CTRL.DRV a boot can afford to read
 
 ; =============================================================================
 section .cold
@@ -271,23 +274,49 @@ desk_key_x:
 ;
 ; On a shortcut: select it and pop its one command (SPEC.md 26.8.5) - which
 ; IS Locator's File item, kept current by desk_select, so the popup and the
-; menu cannot disagree. A drive or the service item has no command to offer.
+; menu cannot disagree. On a drive that is a MOUNTED IMAGE: its one command,
+; Unmount Image (SPEC.md 18.101.5) - the same string and the same verb as the
+; Disk window's menu. Any other drive, and the service item, has none.
 ; -----------------------------------------------------------------------------
 sc_rclick_x:
     call desk_hit               ; AL = the zone under it...
     jc .out
+%ifdef OS88_IMG
+    cmp al, DESK_SVZ            ; a DRIVE's zone is its volume (desk_open),
+    jae .notvol                 ; and a mounted image's has one command:
+    mov bl, al                  ; Unmount Image (SPEC.md 18.101.5)
+    call dsk_vol_row_x          ; CF = 1 a free row - ZF is then set (the
+    jc .out                     ; `cmp` with DVK_FREE), so test CF first
+    cmp byte [bx+DV_CLASS], DRVC_IMG
+    je .pop
+.notvol:
+%endif
     cmp al, DESK_SC0            ; ...and only a SHORTCUT has the command
     jb .out
+.pop:
     call desk_select
     call ct_cw_gfx_lock
     push ax
+    mov bx, menu_items_file + 2
+%ifdef OS88_IMG
+    cmp al, DESK_SVZ
+    jae .items
+    mov bx, sc_umnt
+.items:
+%endif
     mov cx, di
     mov dx, si
-    mov bx, menu_items_file + 2
     mov ax, 1
     call KERNEL_SEG:cw_menu_popup
     pop ax                      ; `pop` writes no flag: the pick's CF stands
     jc .u
+%ifdef OS88_IMG
+    cmp al, DESK_SVZ
+    jae .del
+    mov dl, CLV_UNMNT           ; AL = the volume: it says what happened, and
+    call fm_imgcall             ; the zone goes with the row (dsk_vol_del's
+    jmp short .u                ; desk_reflow)
+%endif
 .del:
     mov ah, SC_OP_DEL
     call sc_modcall
@@ -295,6 +324,35 @@ sc_rclick_x:
     call ct_cw_gfx_unlock
 .out:
     stc
+    retf
+
+; -----------------------------------------------------------------------------
+; vgcf_boot - Force Color at boot (SPEC.md 39.30), from drv_boot_x
+; in:  [drv_cfg+CFG_VGC], just read; the system volume mounted
+; out: nothing; every register preserved
+;
+; The box's TEST is here and not at the call site because the call site is
+; the boot overlay, which is full (SPEC.md 39.30 prices both).
+;
+; FAR, for the boot overlay, and NOT sc_modcall: that one's refusal is
+; `Needs Sys Disk A:` as a toast, and there is no desktop yet to say it on. A
+; core that cannot be read here leaves the BIOS's palette as it was - the
+; machine boots grey, exactly as it would with the box clear.
+; -----------------------------------------------------------------------------
+vgcf_boot:
+    test byte [drv_cfg+CFG_VGC], 1
+    jz .ret                     ; the box is clear: the BIOS's verdict stands
+    push ax
+    mov al, MOD_SETS
+    call mod_need               ; every register kept, CF = could not
+    jc .out
+    mov ah, SC_OP_VGC
+    call far [SETFP]            ; the core's one slot, CPE_SC
+    mov al, MOD_SETS
+    call mod_drop
+.out:
+    pop ax
+.ret:
     retf
 
 ; =============================================================================
@@ -312,22 +370,29 @@ sc_reloc:
 ; --- the File menu's item and the right-click's, ONE string ------------------
 ; desk_select points item 1 at the MENU_DIS byte or past it, the Close Window
 ; idiom (menu.inc), so the greyed twin costs one byte and not a second string.
+%ifdef OS88_IMG
+sc_umnt     dw fm_s_umnt        ; the image zone's one-item popup (sc_rclick)
+%endif
 sc_s_remx   db MENU_DIS
 sc_s_rem    db 'Remove Shortcut'    ; NO NUL OF ITS OWN: it ends on sc_nul's,
 sc_nul      db 0                ; ...which is also an EMPTY name, for a
                                 ; document's open. Nothing may go between
 sc_s_nf     db 'Shortcut not found (?:)', 0   ; 23: exactly a toast
 sc_bdg      db 1, 10            ; the badge: 10x10, one word across - a box
-            times 10 dw 0xFFC0  ; the mask: the whole box white
-            dw 0xFFC0, 0x8040, 0x8740, 0x8340, 0x8540   ; the box, and an arrow
-            dw 0xB840, 0xA040, 0xA040, 0x8040, 0xFFC0   ; curving up and right
+            times 10 dw 0x07FE  ; the mask: the whole box white
+            dw 0x07FE, 0x0402, 0x043A, 0x041A, 0x042A   ; the box, and an arrow
+            dw 0x05C2, 0x0502, 0x0502, 0x0402, 0x07FE   ; curving up and right
+                                ; ...FIVE PIXELS IN from the word's left, so
+                                ; it is drawn at the picture column's own x,
+                                ; on the byte grid (SPEC.md 26.9.9), and lands
+                                ; where the 10x10 box always did: eleven left
+                                ; of the link's 16x16 picture
 
 ; =============================================================================
 section .bss
 ; =============================================================================
 sc_seg      resw 1              ; the table's claim, 0 = no shortcuts
 sc_nrows    resb 1              ; rows the claim holds, 0..SC_MAX
-sc_vol      resb 1              ; sc_open: the volume, across its walk
 
 ; =============================================================================
 section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
@@ -345,7 +410,12 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
     dec ah
     jz .del
     dec ah
-    jnz .pdel
+    jz .add
+    dec ah
+    jz .pdel
+    call cp_vgc_force           ; SC_OP_VGC (SPEC.md 39.30)
+    jmp short .out
+.add:
     call sc_m_add
     jmp short .out
 .pdel:
@@ -365,9 +435,16 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
 
 ; sc_m_cold - call the kernel's cold routine at BP (wm_cbd), near from here:
 ; one far entry the kernel already has, where a resident stub per routine
-; was four bytes each
+; was four bytes each. sc_m_xor and sc_m_cmark are its two routines that
+; four sites each named: the drag outline and a cell's mark
+sc_m_xor:
+    mov bp, fm_dgxor
+    jmp short sc_m_cold
+sc_m_cmark:
+    mov bp, desk_cmark
 sc_m_cold:
     call COLD_SEG:wm_cbd
+sc_m_ret:                       ; ...and sc_m_new's early refusals' `ret`
     ret
 
 ; -----------------------------------------------------------------------------
@@ -387,19 +464,16 @@ sc_m_cold:
 ; -----------------------------------------------------------------------------
 sc_m_new:
     cmp dx, MBAR_H              ; not the bar, not the dock, not another
-    jb .ret                     ; display: those are not the desktop, and a
+    jb sc_m_ret                     ; display: those are not the desktop, and a
     cmp dx, [vid_dock_y0]       ; drop there does what it always did -
-    jae .ret                    ; nothing
+    jae sc_m_ret                    ; nothing
     cmp cx, [vid_band_x0]
-    jb .ret
+    jb sc_m_ret
     cmp cx, [vid_band_xe]
-    jae .ret
-    push cx
-    push dx
-    call sc_m_row               ; AL = a free zone
-    pop dx
-    pop cx
-    jc .ret                     ; ...and the user has been told why not
+    jae sc_m_ret
+    call sc_m_row               ; AL = a free zone - and CX/DX survive it:
+    jc sc_m_ret                     ; sc_m_off, sc_m_kb and the toasts all bank
+                                    ; them. ...and the user has been told why not
     mov [cs:sc_mz], al
     mov bl, 0xFF                ; no row to leave out of the search
     call sc_m_cell              ; [cs:sc_bc] = the nearest free cell
@@ -410,8 +484,7 @@ sc_m_new:
     mov ax, [fm_dgidx]
     mov bp, fmv_get_icon
     call sc_m_cold              ; dsk_ico = its 64-byte body
-    mov al, [cs:sc_mz]
-    call sc_m_off
+    call sc_m_offz
     mov al, [fcp_cbtype]
     cmp al, 2
     jbe .kind
@@ -440,8 +513,7 @@ sc_m_new:
     mov bx, [fcp_cbcwd]
     call COLD_SEG:fcpf_fcp_goto
     jc .bad
-    mov al, [cs:sc_mz]
-    call sc_m_off
+    call sc_m_offz
     add di, SC_R_PATH - 1       ; ONE BEFORE THE FIELD, so dsk_path's leading
     mov cx, SC_PATHMAX + 1 - SC_CAPMAX  ; `\` lands on the spare byte and
     call COLD_SEG:dsk_path_x    ; the field is the path BELOW THE ROOT. The
@@ -456,8 +528,7 @@ sc_m_new:
     mov si, fcp_cbname
     mov cx, SC_CAPMAX
     rep movsb                   ; `APPS\CALC.O88` (SPEC.md 26.8.1)
-    mov al, [cs:sc_mz]
-    call sc_m_off
+    call sc_m_offz
     cmp byte [es:di+SC_R_KIND], 1
     jne .capx
     mov si, fcp_cbname          ; a PACKAGE is captioned with its header name
@@ -487,18 +558,17 @@ sc_m_new:
     ja .stem                    ; longer than the cell: the stem instead
     inc cx                      ; ...with its NUL
     lea si, [bx+16]
-    mov al, [cs:sc_mz]
     push ds                     ; the kernel's DS, for after
     push es                     ; the header's segment
-    call sc_m_off               ; ES:DI = the record
+    call sc_m_offz              ; ES:DI = the record
     pop ds                      ; DS = the header's segment
     add di, SC_R_CAP
     rep movsb
     pop ds
     jmp short .capx
 .stem:
-    mov al, [cs:sc_mz]          ; the 8.3 name up to its dot - CALC.O88 is
-    call sc_m_off               ; CALC, which a desktop should say even where
+                                ; the 8.3 name up to its dot - CALC.O88 is
+    call sc_m_offz              ; CALC, which a desktop should say even where
     add di, SC_R_CAP            ; the Disk window's listing would not
 .st:
     mov al, [es:di]
@@ -513,8 +583,8 @@ sc_m_new:
 .capx:                          ; the caption is measured at paint, as every
     jmp short .done             ; item's is (SPEC.md 26.9)
 .bad:
-    mov al, [cs:sc_mz]          ; the folder is gone or its path will not fit
-    call sc_m_off
+                                ; the folder is gone or its path will not fit
+    call sc_m_offz
     mov byte [es:di+SC_R_VOL], 0xFF
     call COLD_SEG:drvf_drv_vol_back
     mov si, sc_s_path
@@ -524,16 +594,13 @@ sc_m_new:
     mov bl, [cs:sc_mz]          ; its cell, PLACED, in the one table (SPEC.md
     xor bh, bh                  ; 26.9) - and posted, so ui_task paints it
     mov al, [cs:sc_bc]
-    mov bp, desk_cmark
-    call sc_m_cold
+    call sc_m_cmark
     or al, DSL_PIN
     mov [bx+desk_zslot], al
     jmp sc_m_save
 .noroom:
     mov si, sc_s_room
     jmp sc_m_say
-.ret:
-    ret
 
 ; -----------------------------------------------------------------------------
 ; sc_m_add - SC_OP_ADD: a PACKAGE's link, through OSAPI_DESK_ITEM (SPEC.md 26.9)
@@ -547,11 +614,8 @@ sc_m_new:
 ; file would keep it for ever.
 ; -----------------------------------------------------------------------------
 sc_m_add:
-    push dx
-    push cx
     call sc_m_row               ; AL = a free zone, the claim grown if need be
-    pop si
-    pop dx
+    mov si, cx                  ; (DX:CX survives it, as sc_m_new says)
     jc .no                      ; ...and the user has been told why not
     mov [cs:sc_mz], al
     call sc_m_off               ; ES:DI = the row
@@ -585,8 +649,8 @@ sc_m_add:
     mov si, sc_s_room
     call sc_m_say
 .bad:
-    mov al, [cs:sc_mz]          ; the row back, unused
-    call sc_m_off
+                                ; the row back, unused
+    call sc_m_offz
     mov byte [es:di+SC_R_VOL], 0xFF
 .no:
     mov al, 0xFF
@@ -623,15 +687,14 @@ sc_m_mem:
     pop ax
     ret
 
-; sc_m_say - toast one of THIS image's strings, at CS:SI
-sc_m_say:
-    push cs
-    pop es
-    xor cx, cx
-    call KERNEL_SEG:cw_toast_show
-    ret
+; sc_m_say - toast one of THIS image's strings, at CS:SI - in ctrl.inc now,
+; beside cp_toast, its twin for a line in KERNEL_SEG (CTRL.DRV size pass 1)
 
+; sc_m_offz - sc_m_off of the zone in [cs:sc_mz], which is what seven sites
+;             loaded into AL first (CTRL.DRV size pass 1); out: AL = it too
 ; sc_m_off - AL = a zone -> ES:DI = its record. Preserves AX.
+sc_m_offz:
+    mov al, [cs:sc_mz]
 sc_m_off:
     push ax
     sub al, DESK_SC0
@@ -733,10 +796,7 @@ sc_m_row:
     pop ax
     jnc .s
     mov si, fm_s_nomem          ; the Disk window's own words
-    push ds
-    pop es
-    xor cx, cx
-    call KERNEL_SEG:cw_toast_show
+    call cp_toast
     stc
     ret
 .full:
@@ -819,8 +879,7 @@ sc_m_move:
     mov [cs:sc_mz], al
     mov bp, fm_dgmove
     call sc_m_cold
-    mov bp, fm_dgxor
-    call sc_m_cold    ; the outline is up from here on
+    call sc_m_xor    ; the outline is up from here on
 .track:
     mov di, ui_ev               ; THE RELEASE IS AN EVENT, and the mouse ISR
     call KERNEL_SEG:cw_evq_mup  ; queued it with the point it happened at -
@@ -838,15 +897,13 @@ sc_m_move:
     mov [ui_ev+EV_B], ax
     jmp short .drop
 .held:
-    mov bp, fm_dgxor
-    call sc_m_cold    ; erase at the old place...
+    call sc_m_xor    ; erase at the old place...
     call KERNEL_SEG:cw_gfx_unlock   ; ...and only then may the lock drop
     call KERNEL_SEG:cw_task_yield
     call KERNEL_SEG:cw_gfx_lock
     mov bp, fm_dgmove
     call sc_m_cold
-    mov bp, fm_dgxor
-    call sc_m_cold
+    call sc_m_xor
     mov ax, [ticks]             ; held with the outline lit (fm_drag's linger)
 .l:
     call KERNEL_SEG:cw_task_yield
@@ -854,8 +911,7 @@ sc_m_move:
     je .l
     jmp short .track
 .drop:
-    mov bp, fm_dgxor
-    call sc_m_cold
+    call sc_m_xor
     mov cx, [ui_ev+EV_A]        ; WHERE IT WAS LET GO, not where the pointer
     mov dx, [ui_ev+EV_B]        ; has wandered since (SPEC.md 26.9.5)
     mov bl, [cs:sc_mz]          ; its own cell is free to it
@@ -867,11 +923,9 @@ sc_m_move:
     and al, DSL_SLOT
     cmp al, [cs:sc_bc]
     je .ret                     ; it went nowhere: nothing to write
-    mov bp, desk_cmark
-    call sc_m_cold    ; the old cell, bare desktop or the next
+    call sc_m_cmark    ; the old cell, bare desktop or the next
     mov al, [cs:sc_bc]          ; drive to pack into it...
-    mov bp, desk_cmark
-    call sc_m_cold    ; ...and the new one
+    call sc_m_cmark    ; ...and the new one
     or al, DSL_PIN              ; PLACED, whatever it is: a drive dragged is
     mov [bx+desk_zslot], al     ; where the user put it (SPEC.md 26.9)
     jmp sc_m_save
@@ -948,8 +1002,7 @@ sc_m_del:
     cmp al, DSL_GONE
     jae .kbz
     and al, DSL_SLOT
-    mov bp, desk_cmark
-    call sc_m_cold
+    call sc_m_cmark
 .kbz:
     mov cl, [sc_nrows]          ; the highest row still in use decides the KB
 .h:
@@ -1152,9 +1205,9 @@ sc_s_many   db 'Too many shortcuts', 0      ; copies, and these cost the
 sc_s_path   db 'Path too long', 0           ; kernel nothing (SPEC.md 2.8)
 
 ; =============================================================================
-section .ovl                    ; the BOOT half (SPEC.md 2.5.1): runs once,
+section .boot2                    ; the BOOT half (SPEC.md 2.5.1): runs once,
 ; =============================================================================
-; from ovc_load, and costs no resident byte and no disk read - .ovl rides the
+; from ovc_load, and costs no resident byte and no disk read - .boot2 rides the
 ; fixed ten-sector blob (docs/plans/completed/DESKTOP-SHORTCUTS-PLAN.md 3.1).
 
 ; ovl_sc_load's EXITS, AHEAD OF ITS ENTRY. Behind the body they were ~250

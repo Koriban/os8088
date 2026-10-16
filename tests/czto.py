@@ -14,6 +14,12 @@ bytes on the floppy afterwards:
   esc     ESC.001 in B:'s root and no ESC.002 anywhere: the prompt comes up
           asking for part 2, Esc stops it, and nothing is left on A: - no
           result, no CMPRESS~.TMP - and the claim word is empty.
+  abandon ESC.001 again, and at the prompt a CLICK on a row of the Disk
+          window: that ends every prompt (fm_edit_end), the join's with it,
+          and A: must hold nothing of it. The walk that ends it was handed a
+          CX of [clo_seg] back and zeroed a byte every FS_SIZE through the
+          kernel segment (SPEC.md 22.23.6.3), so CX and DI must be the same
+          on both sides of its `call clo_call`.
   swap    SET.001 in B:/PARTS, SET.002 on a second disk, SET.003 on a third.
           The prompt asks for part 2; Enter with the SAME disk still in says
           `Missing SET.002` and keeps asking; the second disk goes in (and the
@@ -21,6 +27,13 @@ bytes on the floppy afterwards:
           SPEC.md 18.9.1), Enter joins part 2 from its ROOT and asks for part
           3; the third disk, Enter, `Uncompressed`, and A:'s copy is the
           original byte for byte.
+
+  same    ONE floppy carries the set, changed between the parts the way a
+          DOS machine changes it: SAME.001 alone, then SAME.001 and SAME.002
+          on an image whose boot sector is the first one's to the byte. Enter
+          must find SAME.002 (SPEC.md 22.23.6.2). The boot sector is all the
+          signature reads, so the hop back kept the FAT window and was served
+          the old root out of the cache, and said `Missing SAME.002` for ever.
 
   ioerr   BAD.001 on the third disk, BAD.002 on the second, which is the
           marginal one: after the prompt and the swap its reads fail, and
@@ -75,6 +88,8 @@ FS_EDIT = os88sym.equates()["FS_EDIT"]
 CL_STEP = 2
 CLS_JOIN = 0x80
 HDR_K = 16 + 8                  # CMZ_JST + cmz_jk's place in cmz_jst
+STILL = 0.2 * os88marty.GUEST_PACE  # guest s a reading must hold: two
+                                     # 0.2s polls on an idle box
 
 
 def say(*a):
@@ -107,6 +122,8 @@ def main():
         sys.exit("czto: the fixtures are %d/%d/%d parts, wanted 2/2+/3"
                  % (len(qkp), len(escp), len(setp)))
 
+    same = half_text(60000, 17)
+    samep = os88cz.split(same, "SAME.DAT", 40000, os88cz.M_STORE, jobs=1)
     bad = half_text(60000, 13)
     badp = os88cz.split(bad, "BAD.DAT", 40000, os88cz.M_STORE, jobs=1)
     hopp = os88cz.split(half_text(60000, 15), "HOP.DAT", 40000,
@@ -114,7 +131,7 @@ def main():
     work = os.path.abspath(os.path.join(os88build.at("build"),
                                         "czto-%d" % os.getpid()))
     shutil.rmtree(work, ignore_errors=True)
-    for d in ("x", "x/ALL", "x/PARTS", "y", "y/SUB", "z"):
+    for d in ("x", "x/ALL", "x/PARTS", "y", "y/SUB", "z", "w"):
         os.makedirs(os.path.join(work, d))
 
     def put(d, name, data):
@@ -143,6 +160,15 @@ def main():
               "SUB:" + put("y/SUB", "NOTE.TXT", b"one sector\r\n"))
     dz = disk("z.img", put("z", "SET.003", setp[2]),
               put("z", "BAD.001", badp[0]))
+    # the SAME disk before and after: os88disk derives the volume serial from
+    # the content (SPEC.md 18.8.2), so the second image is built and then
+    # given the first one's boot sector - which is what a DOS machine leaves
+    # when it copies a file onto a floppy
+    dw2 = disk("w2.img", put("w", "SAME.001", samep[0]),
+               put("w", "SAME.002", samep[1]))
+    dw1 = disk("w1.img", put("w", "SAME.001", samep[0]))
+    with open(dw2, "r+b") as f2, open(dw1, "rb") as f1:
+        f2.write(f1.read(512))
     fails = []
 
     def leg(tag, ok, msg):
@@ -209,9 +235,19 @@ def main():
                 # freed - so one poll can land between the two and read a
                 # prompt that is being left. A paused prompt and a finished
                 # join both hold still; that moment does not
+                #
+                # And STILL IS A GUEST INTERVAL, not two host polls: a poll is
+                # 0.2 HOST seconds, and on a loaded box that is a third of the
+                # guest work it is on an idle one - so two polls could both
+                # land inside the join's own toast-then-free window and call
+                # it still. The reading has to hold for STILL guest seconds
+                # (what two polls span on an idle box), whatever the box does
                 now = (claim(), mode(), ui.toast())
+                cyc = int(m.status()["cycles"])
                 if box.get("last") != now:
-                    box["last"] = now
+                    box["last"], box["since"] = now, cyc
+                    return False
+                if (cyc - box["since"]) / os88marty.GUEST_HZ < STILL:
                     return False
                 c = claim()
                 if c and c[0] == CLS_JOIN and mode() == 7:
@@ -220,8 +256,13 @@ def main():
                             (hex(w16("clo_seg")), c, w16("fm_vp"),
                              int(m.status()["cycles"])))
                         return False
+                    # a toast over a STANDING prompt is a re-ask only when
+                    # it says so: 'Missing SET.003'. The join's verdict
+                    # ('Uncompressed', 'Disk error') is said with the claim
+                    # still up too, and is the "said" arm's once it is freed
                     t, on = ui.toast()
-                    if was is None or c[1] != was or (on and t):
+                    if (was is None or c[1] != was
+                            or (on and t.startswith("Missing"))):
                         box["r"] = ("asked", c[1])
                         box["why"] = (t, on, c, mode(),
                                       int(m.status()["cycles"]))
@@ -282,6 +323,52 @@ def main():
         leg("esc", "ESC.DAT" not in af and "CMPRESS~.TMP" not in af,
             "A: holds %s" % sorted(n for n in af if n.startswith(("ESC",
                                                                   "CMP"))))
+
+        # --- abandon: a click ends the prompt, and the kernel survives it --
+        unto("ESC.001")
+        r = outcome()
+        leg("abandon-ask", r == ("asked", 2), repr(r))
+        # Break on both sides of fm_edit_end's `call clo_call`: the walk's
+        # loop count (CX) and block pointer (DI) must come back as they went
+        # in. A byte diff of the kernel is the wrong instrument - with the
+        # defect [clo_seg] was 2480h here and changed 533 bytes, most of the
+        # stride landing on bytes that were already zero
+        cg = S("fm_edit_end.clonegone")
+        back = cg + 5                   # mov dl, imm8 (2), call near (3)
+        assert m.read(cg, 5)[2] == 0xE8, "clonegone is not mov dl/call clo_call"
+        win = ui.raise_window(ui.disk_window())
+        idx, _ = ui.entry("ESC.001", win)
+        ui.mo.to(*ui.row_xy(win, ui.scroll_to(idx, win=win)))
+        m.bp_exec(cg, back)
+        seen = {}
+        try:
+            m.mouse(l=True)             # any click in a Disk window
+            for _ in range(8):
+                if m.wait_stop(limit=10.0) != "breakpoint":
+                    break
+                rg = m.regs()
+                here = (rg["cs"] << 4) + rg["ip"]
+                seen[here] = (rg["cx"], rg["di"])
+                m.run()
+                if back in seen:
+                    break
+        finally:
+            m.bp_exec()
+            m.run()
+        m.mouse()
+        try:
+            os88marty.until(m, lambda mm: claim() is None and mode() == 0,
+                            "the click to end the join", poll=0.2, guest=30.0)
+            ui.settle()
+        except Exception as e:          # the defect wrecks the machine here
+            seen["dead"] = str(e)
+        af = a_files()
+        leg("abandon", "dead" not in seen and cg in seen and seen.get(back) == seen[cg]
+            and "ESC.DAT" not in af and "CMPRESS~.TMP" not in af,
+            "(CX, DI) %s round CLV_FREE; A: holds %s"
+            % (" -> ".join("%04x/%04x" % v for v in
+                           (seen.get(cg, (0, 0)), seen.get(back, (0, 0)))),
+               sorted(n for n in af if n.startswith(("ESC", "CMP")))))
 
         # --- swap: three disks -----------------------------------------------
         ui.open("PARTS")
@@ -383,9 +470,35 @@ def main():
                 m.bp_exec()
                 m.run()
 
+        # --- same: one floppy, and part 2 copied onto it at the prompt -----
+        motor_off()
+        m.mount(1, dw1)
+        ui.open("..")                   # that disk's root
+        unto("SAME.001")
+        r = outcome()
+        leg("same-ask", r == ("asked", 2), repr(r))
+        motor_off()
+        m.mount(1, dw2)                 # ...the same disk, with SAME.002
+        key("Enter")
+        r = outcome(was=2)
+        af = a_files()
+        got = (fl.volume(0).read(af["SAME.DAT"].path) if "SAME.DAT" in af
+               else None)
+        leg("same", r == ("said", "Uncompressed") and got == same
+            and "CMPRESS~.TMP" not in af,
+            "%r, SAME.DAT %s" % (r, "identical" if got == same else
+                                 "MISSING" if got is None else "WRONG"))
+        if r[0] == "asked":
+            key("Escape")               # ...and give the machine back
+            os88marty.until(m, lambda mm: claim() is None and mode() == 0,
+                            "Esc to end the join", poll=0.2, guest=30.0)
+        motor_off()
+        m.mount(1, dz)
+        ui.menu_pick("Nav", "Refresh")  # the third disk's root
+        ui.settle()
+
         # ioerr: BAD.001 on the third disk, BAD.002 on the second - which is
         # the marginal one. The prompt, the swap, then its reads fail
-        ui.open("..")                   # the third disk's root
         unto("BAD.001")
         r = outcome()
         leg("bad-ask", r == ("asked", 2), repr(r))

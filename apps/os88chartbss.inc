@@ -146,7 +146,9 @@ ch_v_cmpab     equ ch_v_a2i + 4
 ch_v_round     equ ch_v_cmpab + 4
 ch_v_scale10   equ ch_v_round + 4
 ch_v_aiszero   equ ch_v_scale10 + 4
-ch_v_end       equ ch_v_aiszero + 4
+ch_v_dec_s16   equ ch_v_aiszero + 4   ; os88dec.inc's two: resident in the
+ch_v_dec_u16   equ ch_v_dec_s16 + 4   ; includer, far-called from the module
+ch_v_end       equ ch_v_dec_u16 + 4
 
 ; --- the loader's own state (82.16) ------------------------------------------
 ; Package-side, not module-side: the module never reads these. They sit in the

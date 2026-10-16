@@ -6,14 +6,17 @@
 ; The aircraft bands share ONE frame and a plane record names
 ; the one it is drawn from in CSP_ART (SPEC.md 88.10.1).
 ;
-; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are a PART
-; of SKIES.O88 - the LZ4 stream this same script writes with
-; --stream - so the program's image carries the offsets and nothing
-; else. apps/skies/csload.asm fetches that part, expands it into a
-; claim and hands the segment over, and every blit reads
-; [cs_artseg]:offset exactly as it did when the stream was in the
-; image. The names below are OFFSETS INTO THAT BLOB and not labels
-; in this segment.
+; THE BANDS ARE NOT IN THIS FILE (SPEC.md 88.10.3). They are the
+; LAST stream of csw.z - the raw bands this same script writes with
+; --raw, which tools/csworlds.py packs band by band beside the
+; worlds (88.10.7, 88.10.7.1) - so the program's image carries the
+; offsets and nothing else. The program keeps that stream packed
+; and expands each band into the bss UNION it shares with the
+; bracket's own tables when it is first drawn, and every blit
+; reads ES:offset with ES out of cs_artes exactly as it did when
+; the bands were in the image. The names below are OFFSETS INTO
+; THAT BLOB and not labels in this segment - and csworlds.py reads
+; them as the band boundaries, so each must be a paragraph.
 
 cs_art_title_w equ 272
 cs_art_title_h equ 40
@@ -28,7 +31,5 @@ cs_art_bijave    equ 6832
 cs_art_a5        equ 8656
 
 CS_ART_SIZE equ 10480        ; the bands, UNPACKED - what the
-                             ; loader claims and decodes into
-CS_ART_ZLEN equ 4487         ; ...out of this many, T word in -
-                             ; which is part 1's whole length
-CS_ART_KB   equ 11            ; ...into a claim of this many KB
+                             ; union must hold (skies.asm
+                             ; asserts it)

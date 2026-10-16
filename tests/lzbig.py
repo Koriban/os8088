@@ -20,14 +20,21 @@ different half of what had to change:
              mirror is asked first and must refuse too, or the fixture is
              the wrong one.
 
-  BIG3.TXT   250KB: too big to hold TWICE on a 640KB machine (the whole
-             path wants 2U + 41KB), so Compress STREAMS it (SPEC.md 22.22.5)
+  BIG3.TXT   270KB: too big to hold TWICE on a 640KB machine (the whole
+             path wants 2U + 41KB = 569KB), so Compress STREAMS it (SPEC.md
+             22.22.5)
              - one pass through 48KB and 33KB windows, written as it goes to
              a new file that takes the name at the end. Same byte-for-byte
              assertion: the parse is the same parse, which is the whole
              design. That it really streamed is read off fm_ebuf, which holds
              the temporary name only if the streamed path ran - and its cut
              stays in the output window, so the truncate must NOT run.
+             It was 250KB, whose 531KB the heap only just failed to fund:
+             DISKOPS.DRV's claim fell a KB (SPEC.md 2.8) and the file went
+             WHOLE - correctly, and with the right bytes - so the row failed
+             on a fixture that had stopped being too big. 569KB is ~25KB
+             past everything 640KB holds above a 96.5KB kern_big, so the
+             next kilobyte a kernel or module gives back does not move it.
   BIG4.TXT   230KB of text and 45KB of noise: the cut falls before the noise,
              ~50KB of output before the end, so the window has written past it
              and the file must be TRUNCATED back (OSAPI_FILE_WRITE_AT with a
@@ -55,6 +62,7 @@ DOS-DEBUGGING.md's trap), so a 360KB or 720KB disk would either not hold them
 or hand the verb a short read and a wrong answer.
 """
 import argparse
+import tempfile
 import os
 import subprocess
 import sys
@@ -136,7 +144,7 @@ def watched(m, mo, wx, wy, fails):
     moves = sum(1 for a, b in zip(look, look[1:])
                 if a[0] and b[0] and (a[1], a[2]) != (b[1], b[2]))
     # the toast goes up once the module is in and the file sized - the first
-    # second of the hold is CLONE.DRV's own read - so it is counted from the
+    # second of the hold is DISKOPS.DRV's own read - so it is counted from the
     # look where it first appears, and from there it must never go down
     first = next((i for i, s in enumerate(held)
                   if s[3] and s[4].startswith(lzcomp.BUSY)), len(held))
@@ -221,7 +229,7 @@ def streamed(m, mo, wx, wy, fl, name, want, trunc, fails):
     # ...AND THE VOLUME IS STILL A VOLUME. A truncate that freed one cluster
     # too few leaks it, and one too many cross-links the next file: the bytes
     # of THIS file read back perfectly either way, so os88disk's fsck is asked
-    img = "/tmp/lzbig-fsck-%d.img" % os.getpid()
+    img = tempfile.gettempdir() + "/lzbig-fsck-%d.img" % os.getpid()
     fl.save(1, img)
     r = subprocess.run([sys.executable,
                         os.path.join(HERE, "..", "tools", "os88disk.py"),
@@ -244,7 +252,7 @@ def main():
     big1 = half_text(100000, 7)
     big2 = half_text(160000, 11)
     tail = half_text(40000, 3) + noise(70000, 5)
-    big3 = half_text(250000, 13)
+    big3 = half_text(270000, 13)
     big4 = half_text(230000, 17) + noise(45000, 19)
     want1 = cz(os88lz.lzb_compress_machine(big1), len(big1))
     want2 = cz(os88lz.lzb_compress_machine(big2), len(big2))
@@ -267,7 +275,7 @@ def main():
     # Per-run and removed on the way out: the verbs WRITE this disk, so a kept
     # image would hand the next run files that are already compressed
     # (tests/lzcomp.py's note on the same trap).
-    img = "/tmp/lzbig-%d.img" % os.getpid()
+    img = tempfile.gettempdir() + "/lzbig-%d.img" % os.getpid()
     d = os.path.join(os88build.at("build"), "lzbig")
     os.makedirs(d, exist_ok=True)
     disk = os88marty.scratch_disk(
@@ -329,10 +337,7 @@ def main():
         leg("unbig1", "BIG1.TXT", big1, item=FM_IUNCOMP,
             expect="Uncompressed")
 
-    try:
-        os.remove(img)
-    except OSError:
-        pass
+    os88marty.scratch_drop(img)         # and scratch_disk's sidecar
     for f in fails:
         say("  FAIL: " + f)
     say("lzbig: %s" % ("FAILED" if fails else "ok"))

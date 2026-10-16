@@ -89,7 +89,7 @@ wr_afeed:
     mov word [wr_acnt], 0
     mov byte [wr_aph], WAP_ENT
     mov byte [wr_apw], WW_HDR       ; ...and the UI task owes us the claim
-    jmp short .pause                ; before the first entry byte is stored
+    jmp .pause                      ; before the first entry byte is stored
 
 .ent:
     mov di, [wr_acnt]               ; --- one entry header, 64 bytes
@@ -124,7 +124,15 @@ wr_afeed:
     mov ax, [wr_aout]               ; the stored bytes are all consumed, so
     cmp ax, [wr_asize]              ; the output must be complete TO THE BYTE
     jne .bad                        ; (92.13: a stream that ends short)
-    jmp short .entdone
+    cmp byte [wr_abig], 0
+    je .entdone
+    sub [wr_abrem], ax              ; --- A PIECE of a big entry (92.13.1):
+    sbb word [wr_abrem + 2], 0      ; the claim is full, and unless that was
+    mov ax, [wr_abrem]              ; the last of it the UI task writes it
+    or ax, [wr_abrem + 2]           ; and hands the claim back empty
+    jz .entdone
+    mov byte [wr_apw], WW_PIECE
+    jmp short .pause
 .notin:
     mov ax, [wr_aout]
     cmp ax, [wr_asize]
@@ -177,8 +185,10 @@ wr_ahdrck:
     jne .no
     cmp word [wr_ahdr + WA_MAGIC + 2], 'AK'
     jne .no
-    cmp byte [wr_ahdr + WA_VER], WARC_VER
-    jne .no
+    mov al, [wr_ahdr + WA_VER]      ; 1, or 2 (SPEC.md 92.13.1) - and the
+    dec ax                          ; reader takes a big entry in EITHER, the
+    cmp al, WARC_VER2 - 1           ; version being for the readers before it
+    ja .no
     mov ax, [wr_ahdr + WA_N]
     or ax, ax
     jz .no
@@ -217,10 +227,17 @@ wr_ahdrck:
 ; out: CF = 1 refused
 ;
 ; BOTH SIZES ARE HELD IN WORDS and a dword that needs its high half is
-; refused here. The unpacked size is bounded by WIRE_FILEMAX = 63KB, which is
-; one claim and one OSAPI_FILE_WRITE (92.2); the STORED size has no such bound
-; in the format, so this is where it gets one - a body of 64KB or more is
-; refused rather than counted in a word that would lap.
+; refused here - with ONE exception. The unpacked size is bounded by the claim
+; (WA_MAXENT, itself <= WIRE_FILEMAX), which is one OSAPI_FILE_WRITE (92.2);
+; the STORED size has no such bound in the format, so this is where it gets
+; one - a body of 64KB or more is refused rather than counted in a word that
+; would lap.
+;
+; THE EXCEPTION IS 92.13.1's BIG ENTRY: STORED, its stored size equal to its
+; unpacked one, below WIRE_ARCMAX, and past the claim. It is counted in PIECES
+; of [wr_dmax] - the words below then hold one piece, and the dword
+; [wr_abrem] what is left - so nothing laps. An LZSS entry past the claim is
+; still refused: its back-references are copies WITHIN the claim.
 ; -----------------------------------------------------------------------------
 wr_aentck:
     push ax
@@ -231,13 +248,17 @@ wr_aentck:
     ja .no
     cmp byte [wr_ehdr + WA_DEPTH], WARC_DEPTH
     ja .no
-    cmp word [wr_ehdr + WA_SIZE + 2], 0
-    jne .no
+    xor ax, ax
+    mov [wr_abig], ax               ; wr_abig AND wr_apiece: a small entry,
+                                    ; and nothing of it written yet
+    mov bx, [wr_ehdr + WA_SIZE + 2]
     mov ax, [wr_ehdr + WA_SIZE]
-    cmp ax, WIRE_FILEMAX
-    ja .no
-    cmp ax, [wr_dmax]               ; ...and it must fit the claim the header
-    ja .no                          ; bought, which WA_MAXENT promised
+    or bx, bx
+    jnz .big
+    cmp ax, [wr_dmax]               ; ...it must fit the claim the header
+    ja .big                         ; bought, which WA_MAXENT promised - and
+                                    ; [wr_dmax] is at most WIRE_FILEMAX, so
+                                    ; that bound is this one too
     mov [wr_asize], ax
     cmp word [wr_ehdr + WA_STORED + 2], 0
     jne .no
@@ -247,8 +268,25 @@ wr_aentck:
     jnz .sok
     or ax, ax
     jnz .no                         ; no body and a size: a short stream, and
-.sok:                               ; saying so here beats waiting for a byte
-    mov cl, [wr_ehdr + WA_DEPTH]    ; that never comes
+    jmp short .sok                  ; saying so here beats waiting for a byte
+                                    ; that never comes
+.big:
+    cmp byte [wr_ehdr + WA_METHOD], WAM_STORED
+    jne .no                         ; --- 92.13.1: STORED, stored = unpacked,
+    cmp bx, WIRE_ARCMAX >> 16       ; below WIRE_ARCMAX - and past the claim,
+    jae .no                         ; which is how it got here
+    cmp ax, [wr_ehdr + WA_STORED]
+    jne .no
+    cmp bx, [wr_ehdr + WA_STORED + 2]
+    jne .no
+    mov [wr_abrem], ax
+    mov [wr_abrem + 2], bx
+    inc byte [wr_abig]
+    mov ax, [wr_dmax]               ; the first piece is a whole claim, and
+    mov [wr_asize], ax              ; wr_anext sizes the rest
+    mov [wr_asto], ax
+.sok:
+    mov cl, [wr_ehdr + WA_DEPTH]
     xor ch, ch
     inc cx                          ; the folders AND the file name
     mov si, wr_ehdr + WA_PATH
@@ -457,13 +495,7 @@ wr_lzb:
 ; WW_HDR pause and writes [wr_dseg] and [wr_dmax] then.
 ; -----------------------------------------------------------------------------
 wr_arcstart:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov di, wr_fname                ; /wire/pkg/<STEM>.WPK
     mov si, wr_x_wpk
     call wr_stemput
@@ -479,13 +511,6 @@ wr_arcstart:
     xor cx, cx
     mov dx, WK_ARC
     call wr_start
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -494,13 +519,7 @@ wr_arcstart:
 ; out: CF = 1 and [wr_msg] said; CF = 0 and [wr_state] is back at WS_BODY
 ; -----------------------------------------------------------------------------
 wr_arcbase:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     mov ax, [wr_ahdr + WA_MAXENT]   ; --- ONE claim for every entry in turn
     add ax, 1023
     and ax, 0xFC00                  ; the capacity in BYTES, rounded up to the
@@ -550,13 +569,6 @@ wr_arcbase:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- wr_amkcd - make the folder named at DS:SI if it is missing, and enter it
@@ -585,13 +597,7 @@ wr_amkcd:
 ; difference over a sixty-file tree is tens of seconds of the field machine.
 ; -----------------------------------------------------------------------------
 wr_arcwrite:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     push ds
     pop es
     mov di, wr_fname                ; --- the NAME is the slot after the
@@ -604,6 +610,15 @@ wr_arcwrite:
     mov word [wr_wname], wr_fname   ; BANKED, because on a DVK_FILE volume CX,
                                     ; SI and DI are the driver's across the
                                     ; write itself (SPEC.md 62.9)
+    cmp byte [wr_apiece], 0         ; --- a LATER PIECE of a big entry
+    je .first                       ; (92.13.1): the file exists and we stand
+    mov si, wr_fname                ; in its folder, so it is one append
+    mov es, [wr_dseg]
+    xor bx, bx
+    mov cx, [wr_asize]
+    call OSAPI_FILE_APPEND
+    jmp short .wrote
+.first:
     mov cl, [wr_ehdr + WA_DEPTH]    ; --- are we standing there already?
     cmp cl, [wr_ldep]
     jne .move
@@ -654,6 +669,7 @@ wr_arcwrite:
     mov cx, [wr_asize]
     xor dx, dx
     call OSAPI_FILE_WRITE
+.wrote:
     jc .no
     clc
     jmp short .out
@@ -661,13 +677,6 @@ wr_arcwrite:
     call wr_wrfail                  ; 'Could not write <name>' - a failure
     stc                             ; mid-tree LEAVES WHAT WAS WRITTEN (22)
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; --- wr_aname - SI = a NUL-TERMINATED copy of the slot at DS:SI -------------
@@ -693,6 +702,29 @@ wr_aname:
     pop es
     pop di
     pop cx
+    pop ax
+    ret
+
+; --- wr_anext - the NEXT piece of a big entry (SPEC.md 92.13.1) ------------
+; The UI task, at a WW_PIECE pause, once the piece is written and before the
+; worker is let go: a whole claim, or what is left of the entry if that is
+; less, with both counters back at zero. [wr_apiece] going non-zero is what
+; makes every later write an append.
+wr_anext:
+    push ax
+    inc byte [wr_apiece]
+    mov ax, [wr_dmax]
+    cmp word [wr_abrem + 2], 0
+    jne .full
+    cmp ax, [wr_abrem]
+    jbe .full
+    mov ax, [wr_abrem]
+.full:
+    mov [wr_asize], ax
+    mov [wr_asto], ax
+    xor ax, ax
+    mov [wr_aout], ax
+    mov [wr_ain], ax
     pop ax
     ret
 
@@ -732,13 +764,7 @@ wr_apathn:
 ; point is one of NET_SOCKS four held for nothing.
 ; -----------------------------------------------------------------------------
 wr_arcend:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
+    call wr_sv                          ; AX..DI and ES, given back by the ret
     inc byte [wr_gen]
     call wr_hclose
     mov byte [wr_state], WS_DONE
@@ -758,9 +784,8 @@ wr_arcend:
                                     ; want of a file, and the file is the one
                                     ; thing this chain has just made
     call wr_pkgrun                  ; NO LOCK: it opens a window (92.5)
-    call OSAPI_GFX_LOCK
-    call wr_clip                    ; ...and the launched window is now ON TOP
-    call wr_geom                    ; of ours, which is what 92.6.1 is about
+    call wr_lockarm                 ; ...and the launched window is now ON TOP
+                                    ; of ours, which is what 92.6.1 is about
     call wr_dend
     jmp short .un
 .noprog:
@@ -768,13 +793,6 @@ wr_arcend:
     call wr_chaindone               ; the toast says which disk it landed on
 .un:
     call OSAPI_GFX_UNLOCK
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================

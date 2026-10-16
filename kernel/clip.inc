@@ -88,13 +88,7 @@ CLIP_MAXKB equ 32               ; the ceiling, KB. Not arbitrary: the largest
 ; an X stub would have reached the package's image and nothing else.
 ; -----------------------------------------------------------------------------
 clip_put:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp
     push ds
     push es
     mov bp, es                  ; bank the caller's segment: the copy runs
@@ -160,13 +154,11 @@ clip_put:
                                 ; addressing SS and kret_bp being a run of pops
                                 ; and a ret. Do not re-add a `push cs / pop ds`
                                 ; here: it wrote a register nobody read
-    jmp short .ok
-.empty:
-    call clip_drop
-.ok:                            ; both of these are the CF=0 answer, so one
-    clc                         ; `clc` serves them; `.toobig` still enters at
-    jmp short .out              ; its own `stc` below
-.toobig:
+    jmp short .out              ; CF = 0: `xor di, di` cleared it and REP
+.empty:                         ; MOVSB writes no flag
+    call clip_drop              ; ...and CF = 0 out of clip_drop too (its
+    jmp short .out              ; header says so); `.toobig` enters at its
+.toobig:                        ; own `stc` below
     stc
 .out:
     pop es                      ; POP touches no flags, so the answer above
@@ -188,11 +180,10 @@ clip_put:
 ; corrupted anything.
 ; -----------------------------------------------------------------------------
 clip_get:
-    push bx
-    push dx
-    push si
-    push di
-    push ds
+    push si                     ; NO BX OR DX BANK: nothing below writes
+    push di                     ; either - clip_size spends AX alone and the
+    push ds                     ; copy CX/SI/DI - so the pair pushed for
+                                ; nobody (kernel size pass 10: 4 bytes)
     call clip_size              ; the slot below IS this test: it answers
     jc .empty                   ; CF=1 with AX=0 when empty and CF=0 with the
                                 ; length otherwise, which is the pair of facts
@@ -220,8 +211,6 @@ clip_get:
     pop ds
     pop di
     pop si
-    pop dx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -250,8 +239,9 @@ clip_size:
 
 ; -----------------------------------------------------------------------------
 ; clip_drop - give the block back and forget it (module-internal)
-; in:  nothing; out: nothing (every register preserved; the FLAGS are not -
-;      see the `ret` below, which is where the two call sites are audited)
+; in:  nothing; out: CF = 0 (every register preserved; the other flags are
+;      not - see the `ret` below, which is where the two call sites are
+;      audited)
 ; -----------------------------------------------------------------------------
 clip_drop:
     push ax
@@ -283,9 +273,11 @@ clip_drop:
                                 ; clip_put and neither reads the flags - the
                                 ; first is followed by `mov bx,MEM_K_CLIP` and
                                 ; a mem_claim that sets CF itself, the second
-                                ; (.empty) falls into .ok's `clc`. The
-                                ; contract line above is the whole contract,
-                                ; this proc being module-internal
+                                ; (.empty) RETURNS this CF = 0 as clip_put's
+                                ; answer - both paths end on OR or XOR, which
+                                ; clear it. The contract line above is the
+                                ; whole contract, this proc being
+                                ; module-internal
 
 section .text
 

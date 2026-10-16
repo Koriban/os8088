@@ -11771,7 +11771,7 @@ pl_ppowcont:
     call fx_a_to_b                    ; This banked it through pl_acc_toint
     pop word [pl_lhs]                 ; and multiplied the base by itself that
     pop word [pl_lhs+2]               ; many times, with a comment saying "a
-    push si                           ; stopped being true at 84.8. 2^0.5 is
+    push si                           ; stopped being true at 84.10. 2^0.5 is
     mov si, pl_lhs                    ; 1.414 and not 1
     call fx_unpack_a
     pop si

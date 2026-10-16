@@ -29,6 +29,19 @@ and its guest sampled from outside instead (flat_ip, ~150 a second, the
 guest charged nothing), bucketed by the package's labels, the kernel's and
 the ROM's - where a play's time goes when it does not keep up.
 
+--covox plays an 8,000 Hz WAV on MartyPC's Covox machine (a Covox on LPT2,
+no card, `make covoxtest`'s disk, the WAV on a scratch floppy in B:): on a
+Covox Audio copies a WAV's samples into the ring as a card would play them
+(SPEC.md 86.21.3), so after the ring's first silence the bytes on port 378h
+are THE FILE'S OWN SAMPLES, in order, one for one - no model needed - and
+not one byte goes to 42h. Broken on purpose - aps_plan's Covox copy taken
+out, so the leveller runs - it FAILS on the first sample the gain moves.
+
+--card also holds the STATUS LINE: the data's normal end is not an error, so
+[ap_msg] must never be `apw_e_io` ("Cannot read the file") on the way to the
+list's end. Broken on purpose - ap_refill_chunk's end-of-data test falling
+into .ioerr, as it shipped until the apps size pass - it FAILS.
+
 --pause also reads the menu bar once the bracket is up: the progress
 widget the file's read armed must be gone from it (SPEC.md 86.21.2). Broken
 on purpose - apu_repaint's OSAPI_WM_CLIP_CLEAR taken out - it FAILS on the
@@ -57,8 +70,25 @@ from cycweb import pkg_syms                          # noqa: E402
 
 PULSES = 800
 LOSS = 0.04
-DRYMAX = 40         # dry grants the list's end may take: its last span
-                    # played out, then the bracket's next pass sees it
+# KEEPING TIME, AND THE LIST'S END, ARE TWO DIFFERENT DRY RUNS. A producer
+# behind the pulses runs the ring dry and then catches up, over and over - dry
+# grants with GRANTED ones between them. The list's end drains it ONCE: from
+# its last span until the bracket's next pass notices, every grant is dry, one
+# a grant period apart (~2 ms here) up to the door's close. This used to be a
+# single COUNT, DRYMAX = 40, over both - and the drain alone measured 27 for
+# pcm8 and 40 for step on the same build, 41 in a soak, because how long the
+# bracket takes to notice depends on where in its pass the ring empties and
+# step's passes are longer. The count was at its limit with nothing wrong.
+#
+# So: dry grants OUTSIDE the trailing run must be NONE, and the trailing run
+# is bounded in TIME by the bracket's notice latency rather than in grants.
+DRYGAP_MS = 10      # consecutive dries closer than this are one run: the
+                    # grant period is 2 ms at 8 kHz and 3.6 ms at rung 2's
+                    # 5.5 kHz, so a run of dries never has a 10 ms hole
+DRAIN_MS = 165      # the trailing run's longest: three ticks for the
+                    # bracket's next pass to see the list is done. Measured
+                    # 56-82 ms; a producer behind the pulses across the whole
+                    # play reads as SECONDS, which is what this still catches
 MBAR_H = 20         # kernel.asm: the menu bar's height
 FPG_W = 80          # fprog.inc: the progress widget's width
 MACHINE = "os8088_5150_herc_hdd_gla"
@@ -338,14 +368,22 @@ def card(a):
                 base = (rec[geom.W_SEG] | rec[geom.W_SEG + 1] << 8) << 4
                 rw = lambda n_: (lambda b: b[0] | b[1] << 8)(
                     m.read(base + syms[n_], 2))
-                tr.until(lambda: rw("ap_msg") == syms["ap_s_endlist"],
-                         "the list's end", limit=600.0)
+                said = set()
+
+                def ended():
+                    msg = rw("ap_msg")
+                    said.add(msg)
+                    return msg == syms["ap_s_endlist"]
+                tr.until(ended, "the list's end", limit=600.0)
             print("   card: the stream opened %d time%s, the speaker's door "
                   "%d; it ended on the list's end" % (
                       ev["stream"], "" if ev["stream"] == 1 else "s",
                       ev["spk"]))
             if ev["stream"] != 1 or ev["spk"]:
                 bad.append("the play was not the card's")
+            if syms["apw_e_io"] in said:
+                bad.append("the status line said 'Cannot read the file' on "
+                           "a file that read to its end")
         finally:
             m.close()
     for b in bad:
@@ -478,6 +516,81 @@ def pause(a):
     return 1 if bad else 0
 
 
+def covox(a):
+    """the WAV's samples, one for one, on the Covox's port (86.21.3)"""
+    os.chdir(ROOT)
+    bad = []
+    n = 300
+    with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
+        xs = song(int(8000 * max(a.secs, 4.0)), 8000)
+        path = os.path.join(tmp, "T0.WAV")
+        wav(path, 8000, xs)
+        img = os.path.join(tmp, "cvx.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", img,
+                        "--size", "720", os88build.at("build/audio.o88"),
+                        path], check=True, capture_output=True)
+        m = os88marty.launch("build/covoxsys720.img", apps=img,
+                             machine="os8088_5150_herc_covox_720_gla")
+        try:
+            ui = os88ui.UI(m)
+            ui.ready(limit=240)
+            k_open = m.sym("osapi_fsx_spk")
+            ev = {"open": 0, "w": []}
+
+            def hit(mm, rec):
+                r_ = mm.regs()
+                if rec.get("addr") == k_open:
+                    if r_["ax"] & 0xFF == 0:
+                        ev["open"] += 1
+                        mm.breakpoints([{"type": "io", "addr": 0x378}])
+                elif len(ev["w"]) < n:
+                    ev["w"].append(r_["ax"] & 0xFF)
+                    if len(ev["w"]) == n:
+                        mm.breakpoints([])
+            with os88marty.bp_trace(m, k_open, on_hit=hit) as tr:
+                ui.path("B:/T0.WAV")
+                tr.until(lambda: len(ev["w"]) >= n, "the play's first "
+                         "samples on 378h", limit=300.0)
+            got = ev["w"]
+            # THE RING'S FIRST SILENCE (80h, a dry grant's) runs into the
+            # song's own first samples, which are 80h too - so the start is
+            # FOUND, as the shortest lead of 80h after which the writes are
+            # the file, rather than counted
+            lead = 0
+            while lead < 64 and got[lead] == 0x80 and \
+                    bytes(got[lead:]) != bytes(xs[:len(got) - lead]):
+                lead += 1
+            body = got[lead:]
+            print("   %d writes to 378h: %d of the ring's silence, then %s"
+                  % (len(got), lead, bytes(body[:12]).hex()))
+            if bytes(body) != bytes(xs[:len(body)]):
+                k = next(i for i, (x, y) in enumerate(zip(body, xs)) if x != y)
+                bad.append("covox: write %d is %02x, the file's sample is %02x"
+                           " - the DAC is not being handed the WAV"
+                           % (lead + k, body[k], xs[k]))
+            elif len(body) < n // 2:
+                bad.append("covox: only %d of the file's samples reached the "
+                           "port" % len(body))
+            else:
+                print("   ok   covox: %d samples on 378h, the file's own, in "
+                      "order" % len(body))
+            spk = []
+            with os88marty.bp_trace(m, {"type": "io", "addr": 0x42},
+                                    on_hit=lambda mm, rec: spk.append(1)):
+                os88marty.pace(m, 2.0)
+            if spk:
+                bad.append("covox: %d writes to the speaker's 42h while the "
+                           "Covox played" % len(spk))
+            else:
+                print("   ok   covox: nothing written to 42h in two seconds")
+        finally:
+            m.close()
+    for b_ in bad:
+        print("   FAIL " + b_)
+    print("apspk: %s" % ("FAIL" if bad else "ok"))
+    return 1 if bad else 0
+
+
 def u16r(m, addr, off):
     b = m.read(addr + off, 2)
     return b[0] | b[1] << 8
@@ -497,7 +610,12 @@ def main():
                     help="Space a second in (back to the desktop, paused), "
                          "Space again (the play resumes AT the sample it "
                          "stopped on), then Esc (stopped, the door shut)")
+    ap.add_argument("--covox", action="store_true",
+                    help="MartyPC's Covox machine: the WAV's own samples on "
+                         "port 378h, one for one (86.21.3)")
     a = ap.parse_args()
+    if a.covox:
+        return covox(a)
     if a.cardcounts:
         return cardcounts(a)
     if a.card:
@@ -548,13 +666,14 @@ def main():
             io42 = {"type": "io", "addr": 0x42}
             ex_d = {"type": "exec", "addr": -1}
             for i, name in enumerate(legs):
-                ev = {"open": [], "close": [], "w": [], "dry": 0}
+                ev = {"open": [], "close": [], "w": [], "dry": 0, "dc": []}
 
                 def hit(mm, rec):
                     r_ = mm.regs()
                     if rec.get("addr") == k_open and r_["ax"] & 0xFF == 0:
                         ev["open"].append(rec["cycles"])
                         ev["dry"] = 0           # counted from the LAST open
+                        ev["dc"] = []
                         if len(ev["open"]) == 1:
                             f = mm.read((r_["ss"] << 4) + r_["sp"], 4)
                             ex_d["addr"] = ((f[2] | f[3] << 8) << 4) + \
@@ -562,6 +681,7 @@ def main():
                             mm.breakpoints([ex_o, ex_c, ex_d, io42])
                     elif rec.get("addr") == ex_d["addr"]:
                         ev["dry"] += 1
+                        ev["dc"].append(rec["cycles"])
                     elif rec.get("addr") == k_off:
                         if ev["open"]:
                             ev["close"].append(rec["cycles"])
@@ -624,8 +744,19 @@ def main():
                 # 3: KEEPING TIME is the ring never running dry once the
                 # ladder has found the rung - a producer behind the pulses
                 # runs it dry over and over; the list's end drains it once
+                # the trailing run: walk back from the last dry while the
+                # gaps stay under DRYGAP_MS; everything before it is mid-play
+                ms_ = 4772.727
+                dc = ev["dc"]
+                k = max(0, len(dc) - 1)     # the last dry starts the run...
+                while k > 0 and (dc[k] - dc[k - 1]) / ms_ < DRYGAP_MS:
+                    k -= 1                  # ...and each close one joins it
+                mid, drain = dc[:k], dc[k:]
+                drain_ms = (drain[-1] - drain[0]) / ms_ if drain else 0.0
                 print("      the ring ran dry %d time%s after the last door "
-                      "opened" % (ev["dry"], "" if ev["dry"] == 1 else "s"))
+                      "opened: %d at the list's end (%.0f ms), %d before it"
+                      % (ev["dry"], "" if ev["dry"] == 1 else "s",
+                         len(drain), drain_ms, len(mid)))
                 msg = m.read(base + syms["ap_msg"], 2)
                 msg = [k_ for k_, v in syms.items() if v == (msg[0] | msg[1] << 8)
                        and k_.startswith("ap_s_")]
@@ -633,9 +764,17 @@ def main():
                 if msg != ["ap_s_endlist"]:
                     bad.append("3: %s ended on %s, not the list's end"
                                % (name, msg))
-                if ev["dry"] > DRYMAX and name not in LAGS:
-                    bad.append("3: %s: the ring ran dry %d times" % (
-                        name, ev["dry"]))
+                if mid and name not in LAGS:
+                    bad.append("3: %s: the ring ran dry %d times BEFORE the "
+                               "list's end (first %.0f ms after the open) - "
+                               "the producer fell behind the pulses" % (
+                                   name, len(mid),
+                                   (mid[0] - ev["open"][-1]) / ms_))
+                if drain_ms > DRAIN_MS and name not in LAGS:
+                    bad.append("3: %s: the list's end drained dry for %.0f ms "
+                               "- longer than the bracket's next pass can "
+                               "take to notice (%d ms)" % (name, drain_ms,
+                                                            DRAIN_MS))
                 if not falls and abs(secs - want_s) > 0.05 * want_s + 0.3:
                     bad.append("3: %s played %.2f s for %.2f" % (name, secs,
                                                                  want_s))

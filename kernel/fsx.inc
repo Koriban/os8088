@@ -159,12 +159,7 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3,
 ; near proc with a near ret, exactly a W_ONKEY's environment.
 ; -----------------------------------------------------------------------------
 fsx_run:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kent_di                ; = push ax/bx/cx/dx/si/di
     jmp short .tests            ; THE REFUSAL TRAMPOLINE. Nine `j.. .fail`
 .fail:                          ; below were out of short reach and assembled
     stc                         ; as the 5-byte inverted-jump-plus-near-jmp
@@ -266,6 +261,13 @@ fsx_run:
 .nokeep:                        ; keeping nothing is not an error
 
     mov [fsx_task], dx          ; arm the freeze (SPEC.md 53.2): both bytes
+%ifdef KBD_DIAG
+    push ax                     ; KBDDIAG=1 (SPEC.md 9.8.1): the bracket's
+    mov al, 'E'                 ; edge, with its flags, AFTER the arm so the
+    mov ah, cl                  ; record says it is inside
+    call kbg_mark
+    pop ax
+%endif
                                 ; or neither, in ONE instruction - DL into
                                 ; fsx_task and DH into fsx_worker (little-
                                 ; endian, adjacent - the %if at fsx_mine). An
@@ -299,7 +301,10 @@ fsx_run:
     ; thaw safe. The caller's own grants stay - it keeps running, which is
     ; what carries a FSXF_KEEPWORKER stream in.
     mov si, inst_tab
-    mov cx, INST_MAX
+    mov cl, INST_MAX            ; CL alone: CH is 0, because the flags test at
+                                ; the door refused every CX >= 8 and nothing
+                                ; since has written CX (the fence's clobbers
+                                ; are DX and DI)
     xor al, al
 .rel:
     cmp byte [si+I_STATE], 0
@@ -349,34 +354,14 @@ fsx_run:
     mov bp, ax                  ; offset in BP (SPEC.md 53.1)
     call wm_pkgcall
     pop bp
-    call fsx_restore            ; SPEC.md 53.6, ordered
-    clc
-.out:
-    jmp kret_di
-
-; -----------------------------------------------------------------------------
-; fsx_restore - one path home (SPEC.md 53.6, order binding)
-;
-; 1. the desktop's mode back (skipped when no fsx_mode call happened - the
-;    screen is already the desktop's mode); the BIOS mode set also restores
-;    the default palette and the standard planar write state; 2. drain the
-;    BIOS key buffer and the event queue - keys typed and clicks queued at
-;    the game must not land in the desktop ladder (the SPEC.md 34.4
-;    click-abort drain is the precedent); 3. disarm the freeze; 4. repaint
-;    the desktop under the still-held lock. The callback epilogue's
-;    gfx_unlock then flushes (if buffered) and re-shows the cursor with a
-;    fresh save-under from the restored VRAM - SPEC.md 7's own contract.
-;
-; Step 4 is a wm_paint_all on every machine and every CPU tier, and SPEC.md
-; 53.6.1 is the record of the snapshot that used to short-circuit it: a
-; bracket takes real TIME, so the desktop behind it is live state (the bar's
-; clock, the Timer, a Bounce, and the exclusive app's own window content)
-; rather than an image to be put back. wm_paint_all asks every window what it
-; looks like NOW, which is the only question with a correct answer here.
-; -----------------------------------------------------------------------------
-fsx_restore:
-    push ax
-    push di
+.restore:                       ; FSX_RESTORE - one path home, SPEC.md 53.6,
+                                ; ordered (its header, below, is the order)
+%ifdef KBD_DIAG
+    push ax                     ; KBDDIAG=1 (SPEC.md 9.8.1): the other edge,
+    mov ax, 'L'                 ; BEFORE the drain below empties the BIOS
+    call kbg_mark               ; buffer - a head short of the tail here is a
+    pop ax                      ; key int 16h never handed the app
+%endif
 %ifdef KERN_BIG
     call spk_off                ; a speaker ring the app left open (SPEC.md
                                 ; 34.11): channel 2 idle and channel 0 at the
@@ -449,9 +434,32 @@ fsx_restore:
                                 ; The bracket WAS the user. CF is not read:
                                 ; the screen cannot be dark here, because
                                 ; entering a bracket took the input that lit it
-    pop di
-    pop ax
-    ret
+    clc
+.out:
+    jmp kret_di
+
+; -----------------------------------------------------------------------------
+; fsx_restore - one path home (SPEC.md 53.6, order binding)
+;
+; 1. the desktop's mode back (skipped when no fsx_mode call happened - the
+;    screen is already the desktop's mode); the BIOS mode set also restores
+;    the default palette and the standard planar write state; 2. drain the
+;    BIOS key buffer and the event queue - keys typed and clicks queued at
+;    the game must not land in the desktop ladder (the SPEC.md 34.4
+;    click-abort drain is the precedent); 3. disarm the freeze; 4. repaint
+;    the desktop under the still-held lock. The callback epilogue's
+;    gfx_unlock then flushes (if buffered) and re-shows the cursor with a
+;    fresh save-under from the restored VRAM - SPEC.md 7's own contract.
+;
+; Step 4 is a wm_paint_all on every machine and every CPU tier, and SPEC.md
+; 53.6.1 is the record of the snapshot that used to short-circuit it: a
+; bracket takes real TIME, so the desktop behind it is live state (the bar's
+; clock, the Timer, a Bounce, and the exclusive app's own window content)
+; rather than an image to be put back. wm_paint_all asks every window what it
+; looks like NOW, which is the only question with a correct answer here.
+; -----------------------------------------------------------------------------
+; (THE CODE IS fsx_run's .restore, its one caller, since size pass 9: AX
+; and DI are fsx_run's to restore at kret_di, so the body banks nothing.)
 
 ; -----------------------------------------------------------------------------
 ; fsx_mode - set a foreign mode and describe it (SPEC.md 53.4, 0x02D0)
@@ -463,12 +471,7 @@ fsx_restore:
 ;           bit). Every register preserved.
 ; -----------------------------------------------------------------------------
 fsx_mode:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kent_di                ; = push ax/bx/cx/dx/si/di
     jmp short .tests            ; the refusal trampoline, fsx_run's - and for
 .fail:                          ; the same reason: `.fail` is a NASM local and
     stc                         ; must stay inside the routine that owns it
@@ -542,12 +545,53 @@ fsx_mode:
 .modex:
     mov al, 0x13
     call fsx_setbios
-    call fsx_modex              ; unchain + retime to 320x240 (SPEC.md 53.4)
+    push cx                     ; FSX_MODEX, inlined: unchain + retime to
+    push di                     ; 320x240 (SPEC.md 53.4). CH is the id, ES:DI
+    push es                     ; the buffer .fill writes; vid_wipe spends all three
+    mov dx, 0x3C4
+    mov ax, 0x0604              ; chain4 off, odd/even off
+    out dx, ax
+    mov ax, 0x0100              ; sync reset while the clock changes
+    out dx, ax
+    mov dl, 0xC2                ; DH is 3 from here to the wipe: every port
+    mov al, 0xE3                ; below is 3xxh, so each move is of DL alone
+    out dx, al                  ; (25MHz, 60Hz, 480-line sync polarity)
+    mov dl, 0xC4
+    mov ax, 0x0300              ; run again
+    out dx, ax
+    mov dl, 0xD4
+    mov al, 0x11                ; unprotect CRTC 0..7
+    out dx, al
+    inc dx
+    in al, dx
+    and al, 0x7F
+    out dx, al
+    dec dx
+    mov si, fsx_xcrtc
+    mov cx, 10
+    cld
+.crtc:
+    lodsw
+    out dx, ax
+    loop .crtc
+    mov dl, 0xC4                ; (DX was 3D4h: the CRTC loop moves no DX)
+    mov ax, 0x0F02              ; map mask: all four planes...
+    out dx, ax
+    mov ax, 0xA000              ; ...and clear the whole 256KB. vid_wipe is
+    mov cx, 0x8000              ; this body, factored (viddet.inc): both ends
+    call vid_wipe               ; are .text in KERNEL_SEG so the call is near,
+                                ; the four registers it clobbers - AX, CX, DI
+                                ; and ES - are all pushed at this routine's
+                                ; own entry, and zero is the right fill. Its
+                                ; own `cld` is redundant after the one above
+                                ; and harmless
+    pop es
+    pop di
+    pop cx
 %endif
 .fill:
-    mov al, ch                  ; DS:SI = the id's row, ES:DI = the buffer;
-    mov ah, FSXR_SIZE           ; the row IS bytes 0..13 of the block
-    mul ah
+    mov al, FSXR_SIZE           ; DS:SI = the id's row, ES:DI = the buffer;
+    mul ch                      ; the row IS bytes 0..13 of the block
     add ax, fsx_mtab
     xchg si, ax
     push cx                     ; CH is the id and rep movsw eats CX whole
@@ -577,7 +621,9 @@ fsx_mode:
     mov al, [vid_kind]          ; read ONCE, accumulator form - AL is spent
     cmp al, VID_HERC            ; here (the mul's product went into SI four
     jne .f2                     ; instructions above) and the caller's AX is
-    mov word [es:di+FSI_SEG-FSI_SIZE], 0xB000
+    mov byte [es:di+FSI_SEG+1-FSI_SIZE], 0xB0 ; B800h -> B000h: the
+                                ; FSXM_TEXT80 row's segment has a zero low
+                                ; byte, so its HIGH byte is the whole edit
     mov byte [es:di+FSI_PAGES-FSI_SIZE], 1
     jmp short .f3
 .f2:
@@ -657,13 +703,9 @@ fsx_surf:
 ; in: AL = BIOS mode number
 ; -----------------------------------------------------------------------------
 fsx_setbios:
-    push ax                     ; banked only so the exit is kret_es's:
-    push bx                     ; AX comes back too, which nobody reads
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; = push ax/bx/cx/dx/si/di/bp, banked only so
+                                ; the exit is kret_es's: AX comes back too,
+                                ; which nobody reads
     push es
     call vid_cga_equip          ; THE THIRD SITE OF SPEC.md 39.19.4's defect,
                                 ; and the same fix: this routine is reached
@@ -692,57 +734,9 @@ fsx_setbios:
 ; on, and all four planes cleared through map mask 0Fh - the BIOS cleared
 ; only the 64KB the chained mode could see.
 ; -----------------------------------------------------------------------------
-fsx_modex:
-    push ax
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov dx, 0x3C4
-    mov ax, 0x0604              ; chain4 off, odd/even off
-    out dx, ax
-    mov ax, 0x0100              ; sync reset while the clock changes
-    out dx, ax
-    mov dx, 0x3C2
-    mov al, 0xE3                ; 25MHz, 60Hz, 480-line sync polarity
-    out dx, al
-    mov dx, 0x3C4
-    mov ax, 0x0300              ; run again
-    out dx, ax
-    mov dx, 0x3D4
-    mov al, 0x11                ; unprotect CRTC 0..7
-    out dx, al
-    inc dx
-    in al, dx
-    and al, 0x7F
-    out dx, al
-    dec dx
-    mov si, fsx_xcrtc
-    mov cx, 10
-    cld
-.crtc:
-    lodsw
-    out dx, ax
-    loop .crtc
-    mov dx, 0x3C4
-    mov ax, 0x0F02              ; map mask: all four planes...
-    out dx, ax
-    mov ax, 0xA000              ; ...and clear the whole 256KB. vid_wipe is
-    mov cx, 0x8000              ; this body, factored (viddet.inc): both ends
-    call vid_wipe               ; are .text in KERNEL_SEG so the call is near,
-                                ; the four registers it clobbers - AX, CX, DI
-                                ; and ES - are all pushed at this routine's
-                                ; own entry, and zero is the right fill. Its
-                                ; own `cld` is redundant after the one above
-                                ; and harmless
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
+; (THE CODE IS fsx_mode's .modex since size pass 9, its one caller. fsx_mode
+; restores AX, DX and SI at kret_di; CX (the id in CH), DI and ES (the
+; caller's buffer) are banked around it because .fill reads them.)
 
 fsx_xcrtc:                      ; Mode X CRTC retiming, index in the low byte
     dw 0x0D06, 0x3E07, 0x4109, 0xEA10, 0xAC11
@@ -833,30 +827,19 @@ fsx_wait:
     mov dx, 0x3DA               ; the port by the CURRENT mode: on a Hercules
     cmp byte [vid_kind], VID_HERC ; machine every settable mode is the 3BAh
     jne .pa                     ; family, on VGA/CGA every one is 3DAh - so
-    mov dx, 0x3BA               ; the adapter kind IS the mode's family
+    mov dl, 0xBA                ; the adapter kind IS the mode's family (DH
+                                ; is 3 from the move above)
 .pa:
     mov bx, [ticks]             ; phase A: wait until OUT of retrace, so a
 .paw:                           ; call landing mid-retrace syncs to the NEXT
-    call fsx_insync
-    jnc .pb
-    mov ax, [ticks]
-    sub ax, bx
-    cmp ax, 3
-    jb .paw
-    jmp short .ok               ; dead port: timed out, return anyway
-.pb:                            ; phase B: wait until retrace begins
-    mov ax, [ticks]
-    sub ax, bx
-    cmp ax, 3
-    jae .ok
-    call fsx_insync
-    jnc .pb
+    call fsx_insync             ; one. fsx_insync owns the timeout (its
+    jz .ok                      ; header): ZF = 1 is a dead port, timed out,
+    jnc .paw                    ; return anyway. CF = 0 is IN retrace
+.pb:                            ; phase B: wait until retrace begins - and a
+    call fsx_insync             ; timeout here is ZF = 1 with CF = 0, which
+    jc .pb                      ; falls out of this loop by itself
 .ok:
-    clc
-    jmp short .out
-.fail:
-    stc
-.out:
+    CLC_OR_STC .fail            ; CF = 0 waited, or (.fail) CF = 1 refused
     pop dx
     pop bx
     pop ax
@@ -902,27 +885,32 @@ fsx_page:
     jne fsx_wait.fail
     cmp al, 3                       ; Mode X: three pages of 19,200 bytes,
     jae fsx_wait.fail                       ; and 3 x 19,200 still fits a segment
-    mov bl, al
-    xor bh, bh
-    mov ax, 19200
-    mul bx                          ; DX:AX, and DX is 0 by construction
-    mov bl, al                      ; AH is ALREADY the start address's high
-    mov al, 0x0C                    ; byte, so only the LOW one is banked
-    mov dx, 0x3D4                   ; (after the mul, which clobbers DX)
+%if 19200 % 256 || 2 * (19200 / 256) > 255
+  %error "fsx_page writes Mode X's start address as an 8-bit page product in the HIGH byte and 0 in the low"
+%endif
+    mov ah, 19200 / 256             ; 19,200 is 4B00h: the start address's
+    mul ah                          ; LOW byte is 0 on every page, so the high
+    mov ah, al                      ; one is the page x 4Bh, an 8-bit product
+    mov al, 0x0C                    ; (at most 96h) - one byte mul, no DX
+    mov dx, 0x3D4
     out dx, ax                      ; start address high...
-    mov ah, bl
-    mov al, 0x0D                    ; ...and low
+    mov ax, 0x000D                  ; ...and low, always 0
     out dx, ax
-    jmp short .sync
+    jmp short fsx_wait.vsync
 .herc:
     cmp al, 2
     jae fsx_wait.fail
-    mov bx, 0x010A                  ; BL = graphics + video on, BH = 3BFh bit
-    or al, al                       ; 0 alone, which is what vid_setmode leaves
-    jz .h0                          ; (SPEC.md 39.6). One word, two registers
+    mov bx, 0x030A                  ; graphics + video, both lone-Hercules pages
 %ifdef KERN_BIG
+    push ax
     call vid_dual_ok                ; **AND THE SECOND PAGE IS REFUSED ON A
-    jnc fsx_wait.fail                       ; MACHINE THAT HAS A COLOUR CARD TOO**
+    pop ax
+    jc .single
+    or al, al
+    jnz fsx_wait.fail               ; MACHINE THAT HAS A COLOUR CARD TOO**
+    mov bh, 1                      ; dual-card page 0 must not decode B8000h
+    jmp .h0
+.single:
 %endif                              ; (SPEC.md 53.10). vid_setmode leaves 3BFh
                                     ; bit 1 clear for a reason it states at the
                                     ; write: that page is at B8000, where a CGA
@@ -935,17 +923,19 @@ fsx_page:
                                     ; NOT [vid_ndisp]: vid_fsx_enter has
                                     ; already forced that to 1 by the time any
                                     ; call can reach here
+    or al, al
+    jz .h0
     or bl, 0x80                     ; ...and page 1
     mov bh, 3                       ; ...whose decode has to be allowed with it
 .h0:
     mov dx, 0x3BF                   ; ALLOW the second page: bit 0 graphics,
-    mov al, bh                      ; bit 1 the page - and bit 1 goes back off
-    out dx, al                      ; for page 0, which needs no second decode
-    mov dx, 0x3B8                   ; and is the state the desktop comes back
-    mov al, bl                      ; to
+    mov al, bh                      ; retain both pages on a lone Hercules
+    out dx, al                      ; dual-card page 0 retains only its own RAM
+    mov dl, 0xB8                    ; and is the state the desktop comes back
+    mov al, bl                      ; to (3B8h: DH is still 3)
     out dx, al
-.sync:                              ; the latch happens at the retrace, so the
-    jmp fsx_wait.vsync              ; page is only really shown after one -
+                                    ; the latch happens at the retrace, so the
+    jmp short fsx_wait.vsync        ; page is only really shown after one -
                                     ; and fsx_wait's own timeout means a dead
                                     ; status port cannot hang this. A TAIL
                                     ; JUMP into its retrace wait: the frame is
@@ -966,7 +956,7 @@ fsx_page:
 ; clobbers: flags. AX IS PRESERVED, and that is a difference from the four
 ;           guards this replaces: each of them left AH = [fsx_task] behind.
 ;           AH is dead at all four sites, checked one by one - fsx_mode
-;           reloads it at `mov ah, FSXR_SIZE` before its only `mul`, fsx_surf
+;           overwrites it with its only `mul` (AX = the product), fsx_surf
 ;           did `pop ax / xor ax,ax`, fsx_wait never reads AH, and fsx_page
 ;           reloads it with [fsx_cur]. AL is the argument at three of them and
 ;           survives either way.
@@ -995,12 +985,29 @@ fsx_mine:
     ret
 
 ; -----------------------------------------------------------------------------
-; fsx_insync - CF = 1 when the adapter at DX is in vertical retrace.
+; fsx_insync - one poll of fsx_wait's retrace spin, timeout included
+;
+; in:       DX = the status port, BX = the [ticks] the wait began at
+; out:      ZF = 1 (and CF = 0): three ticks have passed - a dead port, and
+;           the wait returns anyway (SPEC.md 37.90's rule). Otherwise ZF = 0
+;           and CF = 1 when the adapter is NOT in vertical retrace, CF = 0
+;           when it is.
+; clobbers: AX - both callers are fsx_wait's .paw and .pb, which bank it
+;
 ; VGA/CGA (3DAh): bit 3 set. Hercules (3BAh): bit 7 LOW while vertical sync
 ; is active - the polarity is inverted there.
+;
+; THE TIMEOUT LIVES HERE (size pass 10, -9 bytes): both phases spelled the
+; same three-instruction [ticks] delta out, phase A after its poll and phase
+; B before it. Checking before every read changes no outcome - a timed-out
+; phase A went to phase B, whose first act was that same check - and the
+; poll lost its push/pop of AX, ~27 clocks off every iteration.
 ; -----------------------------------------------------------------------------
 fsx_insync:
-    push ax
+    mov ax, [ticks]
+    sub ax, bx
+    cmp ax, 3
+    jae .tmo
     in al, dx
     mov ah, 8                   ; VGA/CGA (3DAh): bit 3, active HIGH
     cmp dl, 0xBA
@@ -1008,16 +1015,16 @@ fsx_insync:
     mov ah, 0x80                ; Hercules (3BAh): bit 7, active LOW - so
     not al                      ; invert the byte and ONE test serves both
 .go:
-    and al, ah
-    neg al                      ; CF = "that bit was set", which IS the answer
-    pop ax                      ; the two stc/clc arms were computing (`pop`
-    ret                         ; touches no flag on an 8086). Both callers
-                                ; (.paw and .pb, inside fsx_wait's spin) read
-                                ; CF alone, and the old body left ZF and SF
-                                ; undefined too. Four bytes and two taken
-                                ; `jmp short`s off the retrace poll:
+    and al, ah                  ; 0, or the bit alone (8 or 80h)
+    sub al, 1                   ; CF = "that bit was CLEAR", and ZF = 0
+    ret                         ; either way: 0 - 1 is FFh, the bit less one
+                                ; is 7 or 7Fh. The callers read both flags
+.tmo:
+    xor ax, ax                  ; ZF = 1, CF = 0
+    ret                         ; (The retrace test without the timeout:
                                 ; ~164 -> ~142 clocks on the VGA in-retrace
-                                ; path, ~13%, the `in` at 41.5 dominating.
+                                ; path at size pass 6, the `in` at 41.5
+                                ; dominating.)
                                 ; SPEC.md 53.5.1 measured fsx_insync plus
                                 ; fsx_wait at 28.8% of a 4.77 MHz 8088 with
                                 ; Tracker pacing on it

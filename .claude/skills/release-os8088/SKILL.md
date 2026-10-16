@@ -166,11 +166,21 @@ geometries of each pair since SPEC.md 19's 1.2MB disk, plus the 360KB-only media
 disk and SPEC.md 24.6's three 360KB-only category disks -- at that size the
 spreadsheet and the chart viewer ship on the office disk and on NO other.)
 
-The build enforces its own invariants -- a 512-byte boot sector and a kernel
-that fits under offset 0xA000 -- so a build failure here is a real problem, not
-something to work around. Report the kernel size; if it has grown, say by how
-much and how much headroom is left (the ceiling is 0xA000 =
-40,960 bytes for image + bss).
+The build enforces its own invariants, so a build failure here is a real
+problem, not something to work around. **Then the kernel budgets, which the
+build does NOT enforce exactly**:
+
+```bash
+make budget-check
+```
+
+Branch and integration work may run a kernel up to 2KB over its budget
+(`KERN_GRACE`, docs/KERNEL-MEMORY.md) and `make` lets it; **a release may not
+run one byte over**. `budget-check` measures kern_big, kern_small and kern_emu
+against 100,864 / 64,000 / 100,864 and fails naming the one that is over. If it
+fails, STOP: that is a size pass or a conversation with the owner about the
+budgets, never a raise to get the release out. Report each kernel's
+`KERN_SIZE` and spare from its output.
 
 **`make emu` is not optional, though `make` does not run it.** It builds
 `build/emu.img`, the **emulator system disk** (SPEC.md 9.11.7): the `kern_emu`
@@ -204,12 +214,19 @@ make loomdisk                         # loom*.img -- the same family's IDE disk,
 make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk redlinedisk             # 1942*.img, redline*.img
+make midirackdisk pixeldisk           # midirack*.img, pixel*.img
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
                                       # Needs the fetch on the line above and
                                       # the C toolchain, like allapps
+make usb-emu                          # os8088-emu-usb.img -- THE WEBSITE'S DEMO
+                                      # DISK (SPEC.md 80.7), the same volume on
+                                      # kern_emu with VMMOUSE.DRV wanted. Not
+                                      # in the zip; the web repo's release.py
+                                      # publishes it, and skipping it leaves
+                                      # the demo on last release's build
 ```
 
 Offer these, do not assume them. If `tools/setup-cc.sh` cannot run -- no
