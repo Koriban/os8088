@@ -143,7 +143,23 @@ FMT_Y = {'bif': 55, 'slk': 71, 'dif': 87,   # Normal / SYLK / DIF ...
          'csv': 103, 'txt': 119,            # ...CSV / Text (81.40)
          'dbf': 135}                        # ...and DBF 3 (81.41)
 FMT_OK = (267, 170)
-SAVE_BUTTON = (340, 65)
+# THE CHOOSER IS A DISK WINDOW SINCE THE 2026-10-14 MERGE (upstream 2657efea,
+# SPEC.md 38.3), so its buttons are a COLUMN down the right edge and not a row
+# along the bottom. (340, 65) was the old centre-bottom Save and now lands
+# inside the FILE LIST: the click selects nothing, the chooser stays up, the
+# save never happens and every later assertion reads None. 38 of 56 sheet rows
+# failed that way, and the 18 that passed are exactly the ones that never open
+# a chooser.
+#
+# DERIVED, not eyeballed - tools/os88ui.py's chooser_button_xy, read off the
+# live window ('Save As' at (119,20,322,155) on this machine):
+#     rgt = (w.x + 1) + (w.w - 2 - FM_CHCOLW) - 1
+#     (rgt + 5 + FM_BTN_W//2,  (w.y + TITLE_H + 1) + 2 + 20*k + FM_BTN_H//2)
+# k = 0 Save/Open, 1 Cancel, 2 Drive -> (403, 48), (403, 68), (403, 88).
+# A row that wants this computed rather than pinned has that helper; this is
+# one constant for 42 call sites on one machine, which is what it has always
+# been.
+SAVE_BUTTON = (403, 48)
 APPS_FOLDER = (140, 67)
 
 # SHEET's extensions against os88sheetfmt's names for the grammars.

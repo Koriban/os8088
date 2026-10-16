@@ -33,7 +33,8 @@ import os88marty as M                                       # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 import os88flush                                             # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
-import dispcp                                                # noqa: E402
+import dispcp
+import os88ui                                                # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
@@ -72,20 +73,24 @@ def main():
         M.settle(m)
         M.no_saver(m)
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, mouse=mo)
         dispcp.open_drive(m, mo, lambda n: m.sym(n), M.settle, letter="B")
         M.settle(m)
-        mo.dblclick(*SF.APPS_FOLDER)
-        M.settle(m)
+        ui.open("APPS")                 # BY NAME: SF.open_shin's own lesson
         SF.open_shin(m, mo)
         M.settle(m, limit=180)
 
         def delete(answer, tag):
             mo.menu(FILE_MENU[0], FILE_MENU[1], *ITEM(FILE_MENU[0], DELETE))
             M.settle(m, limit=60)
-            mo.click(*PICK_ROW)
-            M.settle(m)
-            mo.click(*PICK_OK)
-            M.settle(m, limit=60)
+            ui.chooser_open(JUNK)       # THE PICKER IS A DISK WINDOW since
+                                        # the 2026-10-14 merge (38.3), so its
+                                        # rows and its buttons both moved -
+                                        # PICK_ROW/PICK_OK were the old
+                                        # geometry. By NAME, confirmed against
+                                        # the chooser's own FS_SEL, so a
+                                        # re-sorted listing cannot pick the
+                                        # wrong file the way it once did
             w, h, rows = m.vram("cga")
             M.write_png(os.path.join(WORK, tag + "-ask.png"), w, h, rows)
             mo.click(*answer)

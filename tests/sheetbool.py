@@ -41,6 +41,7 @@ import os88sheetfmt as F                                     # noqa: E402
 import os88sym                                              # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
+import os88ui                                                # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
@@ -142,6 +143,7 @@ def main():
         M.settle(m)
         M.no_saver(m)                   # four saves outlast its timeout
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, mouse=mo)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
         M.settle(m)
         ds = dispcp.win_list(m, S)[-1]
@@ -160,9 +162,10 @@ def main():
                       % name, "row %d of %s" % (row, shown))
                 mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], *OPEN_ITEM)
                 M.settle(m)
-                mo.click(LIST_X, LIST_Y0 + LIST_DY * row)
-                M.settle(m)
-                mo.click(*OPEN_BUTTON)
+                ui.chooser_open(name)   # BY NAME: the chooser is a Disk
+                                        # window since the 2026-10-14 merge
+                                        # (38.3), so LIST_* and OPEN_BUTTON
+                                        # were both the old geometry
             M.settle(m, limit=240)
             out = name.split('.')[0] + ".BIF"
             before = FILES.get(out)         # LX.BIF is saved over itself

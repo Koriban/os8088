@@ -45,6 +45,7 @@ import os88sheetfmt as F                                     # noqa: E402
 import os88sym                                              # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
+import os88ui
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 import sheetdec as SD                                        # noqa: E402
@@ -269,6 +270,7 @@ def main():
         M.settle(m)
         M.no_saver(m)
         mo = Mouse(marty=m)
+        ui = os88ui.UI(m, mouse=mo)
         dispcp.open_drive(m, mo, S, M.settle, letter="B")
         M.settle(m)
         ds = dispcp.win_list(m, S)[-1]
@@ -307,9 +309,10 @@ def main():
                   % name, "row %d of %s" % (row, shown))
             mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], *OPEN_ITEM)
             M.settle(m)
-            mo.click(LIST_X, LIST_Y0 + LIST_DY * row)
-            M.settle(m)
-            mo.click(*SF.SAVE_BUTTON)       # Open: the same dialog's button
+            ui.chooser_open(name)       # BY NAME: the chooser is a Disk
+                                        # window since the 2026-10-14 merge
+                                        # (38.3), LIST_* being its old
+                                        # geometry
             M.settle(m, limit=240)
             saved[short] = save('slk', short + ".SLK")
 
