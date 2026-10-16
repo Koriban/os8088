@@ -13265,6 +13265,32 @@ SOAK = [
         "the same scaled words and only [ch_e10] would differ",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartread", "soak", py("tests/chartread.py"), 300.0,
+        "SPEC.md 82.18: CHART's THREE readers are one reader. It opens SYLK, "
+        "DIF and BIFF, and until this row only SYLK had ever been executed "
+        "by a test - chartname opens one .SLK and nothing else - so "
+        "ct_read_dif, ct_read_biff and ct_rkdec were a few hundred bytes of "
+        "record walking apiece that nothing ran. One dataset is written "
+        "three ways by the HOST (and read back with tools/os88sheetfmt.py "
+        "before the guest sees it, so a writer defect cannot pass as a "
+        "reader one) and the three readings are compared to EACH OTHER: "
+        "ct_valcnt, ct_mincol, [ch_e10] and the ct_wvals the drawing "
+        "actually runs on. Column A is 12.5, -3.25, 1000.0, 0.125 so BIFF "
+        "must carry fractions as NUMBER records while column B's whole "
+        "numbers go as RK, putting ct_rkdec under the row too. Check 4 is "
+        "why 1-3 are not enough: a decoder that drops a sign or shifts an "
+        "RK wrong still hands ct_record four numbers. Check 5 is why 4 is "
+        "not enough either - it ties the published words back to the data, "
+        "so three readers agreeing on rubble cannot pass. The BIFF file "
+        "also carries a FORMULA whose cached result is #DIV/0! (top word "
+        "0xFFFF), which 82.18 says must be skipped and had no gate. Red on "
+        "purpose five ways: ct_rkdec shifted by 1 and the DIF parse stepped "
+        "by 3 each fail 4 ALONE; dropping the per-file ct_nnames reset fails "
+        "6 alone; deleting 82.18's 0xFFFF test charts the dead cell and "
+        "fails 3 and 4; and abs() in ct_record's store - a defect SHARED by "
+        "all three readers, so they still agree - fails 5 with 4 passing",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "

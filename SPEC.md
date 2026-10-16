@@ -135866,6 +135866,54 @@ Verified against a file Sheet wrote and the host decoded: a `LABEL` heading,
 four `FORMULA` records cached at 20/30/40/50, and a fifth whose cached result
 is non-numeric. Chart draws four bars — the same four the live chart draws.
 
+#### 82.18.2 The readers have a gate now — `tests/chartread.py`
+
+**Until this row only SYLK had ever been executed by a test.** `chartname`
+(§82.15) opens one `.SLK` and nothing else, so `ct_read_dif`, `ct_read_biff`
+and `ct_rkdec` were a few hundred bytes of record walking apiece that nothing
+ran — and a decoder that is wrong does not fail, it charts a number. That is
+the same shape as the defect that made `chartname` exist.
+
+**One dataset, written three ways by the HOST, and the three readings are
+compared to each other.** A reader is checked against its siblings rather than
+against a number recomputed in the test, because `ch_scale` normalises a
+series into signed words against `[ch_e10]` and restating that arithmetic on
+the host would test the test's copy of it. What is compared is what the
+*drawing* reads — `ct_valcnt`, `ct_mincol`, `[ch_e10]` and `ct_wvals` — since
+the raw doubles live in the staging claim `ct_read_by_ext` frees before it
+returns (§82.14).
+
+**The host reads each fixture back with `tools/os88sheetfmt.py` before the
+guest sees it.** A DIF or BIFF writer defect would otherwise arrive as a data
+defect and be read as Chart's; the round trip fails on the host, at build
+time, where it is legible.
+
+**Column A is 12.5, −3.25, 1000.0, 0.125** — a fraction, a negative, three
+orders of magnitude, and nothing that survives truncation to an integer — and
+in the BIFF file its four values are written **one record kind each**: NUMBER,
+FORMULA, RK, NUMBER. Column B's whole numbers go as RK. One file therefore
+exercises every value record `ct_read_biff` knows, `ct_rkdec` included. A
+*fifth* cell in column A is a FORMULA whose cached result is `#DIV/0!`, and
+§82.18's own claim is that it is skipped: `ct_valcnt` staying 4 is that
+assertion, and it had no gate before this row.
+
+**Two checks exist because the ones above them are not enough**, and the
+mutations say so:
+
+| mutation | what fails |
+|---|---|
+| `ct_rkdec` shifts an RK by 1 instead of 2 | **4 alone** |
+| the DIF parse steps past `"0,"` by 3 instead of 2 | **4 alone** |
+| §82.18's `0xFFFF` test deleted | 3 and 4 |
+| the per-file `ct_nnames` reset removed (§82.17) | **6 alone** |
+| `abs()` in `ct_record`'s store — a defect **shared** by all three readers | **5 alone, with 4 passing** |
+
+The first two are the argument for check 4: a decoder that drops a sign or
+shifts an RK wrong still hands `ct_record` four numbers, so checks 1–3 all
+pass on four wrong ones. The last is the argument for check 5: a defect in
+the *shared* path leaves the three readers agreeing, so check 4 passes and
+only a check tying the published words back to the data can catch it.
+
 #### 82.18.1 What Chart still does not know
 
 Recorded rather than fixed, because both are honest limits and neither is
