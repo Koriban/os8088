@@ -11,18 +11,28 @@ line in its own bss:
     os88fp ALL PASS  soft 0  8087 -
 
 That line is what this row reads, out of the package's segment (W_SEG of its
-window) at `os88_image_end + 7` (fpt_out, after fpt_ox/oy/bad/r/cferr). It is
-the same string the window draws, so a pass here is the reading a person took
-before - without the picture.
+window) at `os88_image_end + 7` (fpt_line, after fpt_ox/oy/bad/r/cferr - the
+summary has its OWN buffer there now, SPEC.md 84.4.1, because it used to
+share one with the doubles a case lives in and a redraw wrote over its tail
+mid-read). It is the same string the window draws, so a pass here is the
+reading a person took before - without the picture.
 
 Sheet and Chart call fp_i2a, fp_a2i and fp_cmpab (and fpx_cmpab with an 8087)
 and those had no case until this row's commit; they are rows 15-32 of the
 x-150 column now.
 
 VERIFIED TO FAIL, through `--o88` on a copy assembled with one include
-swapped: `I2A 1000, d_1000` pointed at d_100 reads `FAILURES  soft 1`, and
-fps_cmpab's trailing `cmp ax, 0` changed to `cmp ax, 1` - AX right, the FLAGS
-wrong - reads `soft 3` (the three cases whose answer is not -1).
+swapped - seven ways, each a different mechanism and each its own count:
+
+    I2A 1000, d_1000 pointed at d_100            FAILURES  soft 1
+    fps_cmpab's `cmp ax, 0` made `cmp ax, 1`     soft 3   (AX right, flags wrong)
+    MATH O_LN, d_2 expecting d_ln10              soft 1
+    fpt_ulps forced to refuse everything         soft 18  (of the 38 series cases)
+    fp_sin and fp_cos swapped in fpt_mops        soft 10  (every SIN and COS)
+    POW2^10's tenths 100 -> 50                   soft 1
+    fpt_runall's verdict inverted                soft 126 (every case, and the
+                                                 proof fpt_appn's hundreds digit
+                                                 works)
 
   python3 tests/fptest.py [machine] [--o88 PATH]
 """
@@ -65,9 +75,24 @@ def main():
                 b = bytes(mm.readseg(seg, image + FPT_OUT, 40))
                 return b.split(b"\0")[0].decode("latin-1")
 
-            M.until(m, lambda mm: line(mm).startswith("os88fp "),
-                    "FPTEST's summary line", poll=0.2, limit=60.0)
-            got = line()
+            # WAIT FOR A COMPLETE LINE AND KEEP THE TEXT THAT MATCHED. A
+            # paint that runs 126 cases takes seconds on a 4.77MHz 8088, so a
+            # redraw - which re-runs every case - can arrive while this reads,
+            # and it rebuilds fpt_line from "os88fp " up. Settling for the
+            # prefix and then reading again returned a half-built line.
+            snap = []
+
+            def ready(mm):
+                s = line(mm)
+                f = s.split()
+                if not (s.startswith("os88fp ") and "soft" in f
+                        and "8087" in f and f.index("8087") + 1 < len(f)):
+                    return False
+                snap.append(s)
+                return True
+
+            M.until(m, ready, "FPTEST's summary line", poll=0.2, limit=90.0)
+            got = snap[0]
     finally:
         for f in (img, img + ".args"):     # scratch_disk's sidecar too
             try:

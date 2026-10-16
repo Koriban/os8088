@@ -136690,11 +136690,13 @@ thing to debug from inside a spreadsheet: a wrong bit in the guard region
 surfaces as one cell being slightly off, on some inputs. So the expectations
 are **generated on the host in real double precision** and embedded as exact
 bytes — the reference is not the same arithmetic restated in assembly — and a
-case passes only if all eight bytes match. 70 cases: carrying, cancellation,
-mixed signs, ties that must round to even, ties broken only by bits lost below
-the working form, an operand lost below the guard, 1e±300 extremes,
-non-terminating quotients, `0.1+0.2`, the text round trip, negative and
-oversized text exponents, and `sqrt`/`floor`/`trunc`/`round`. The stated
+case passes only if all eight bytes match — with one stated exception, the
+series layer of §84.10.1. **126 cases, counted 2026-10-16** (re-measure, never
+quote this): carrying, cancellation, mixed signs, ties that must round to
+even, ties broken only by bits lost below the working form, an operand lost
+below the guard, 1e±300 extremes, non-terminating quotients, `0.1+0.2`, the
+text round trip, negative and oversized text exponents,
+`sqrt`/`floor`/`trunc`/`round`, and the 38 of §84.11.2. The stated
 simplifications are covered too — the overflow clamp, the subnormal flush, and
 division by zero with its **CF asserted, not just its bytes** — and those
 expected values are the posture of §84.2, marked as such, where a real double
@@ -136707,16 +136709,65 @@ to `os88fp.inc` has to build it on purpose. This said *"breaks the build"*
 until the first apps size pass found `all` had stopped naming it.
 
 **The cases are POOLED, which is a size decision and not a weaker test.** The
-70 cases name only 68 distinct doubles, 29 of them zero below the top word, so
-`fpcases.inc` writes each double once and a case names it by a one-byte index
-that `fpt_ld` expands back into the same eight bytes; the operator rides in
-bit 7 of two index bytes, a case's name follows it inline, and a round trip
-whose output is its input says so with an empty string. The four kinds of case
-are one walk over that stream with a handler each. The image fell **7,164 ->
-5,813 bytes** and the bss 219 -> 169, a **6 KB** claim where it was 8, with the
-window drawn pixel for pixel as before and each kind of case — a low-bits-only
-miss, a CF-only miss on every division, a parse, a round trip — confirmed to
-go red when broken, on both the software and the coprocessor pass.
+126 cases name only 105 distinct doubles, 35 of them zero below the top word,
+so `fpcases.inc` writes each double once and a case names it by a one-byte
+index that `fpt_ld` expands back into the same eight bytes; the operator rides
+in bit 7 of two index bytes, a case's name follows it inline, and a round trip
+whose output is its input says so with an empty string. The eight kinds of
+case are one walk over that stream with a handler each. The image fell
+**7,164 -> 5,813 bytes** and the bss 219 -> 169, a **6 KB** claim where it was
+8, with the window drawn pixel for pixel as before and each kind of case — a
+low-bits-only miss, a CF-only miss on every division, a parse, a round trip —
+confirmed to go red when broken, on both the software and the coprocessor
+pass. A seven-bit index caps the pool at 128 and the file asserts it.
+
+#### 84.4.1 What the 38 series cases cost the instrument
+
+Four things had to move, each a constraint the file had not met before —
+and a fifth was found on the glass and deliberately left alone.
+
+**A THIRD COLUMN, and `FPT_W` 300 -> 460.** Rows 0–32 already carry two
+verdicts and two names out to x 270 and rows 33–44 three items out to x 232;
+there was no gap for 38 more rows. The new column puts its verdict at x 300
+and its name at x 340, where `POW1.12^6` — the longest — ends at 412.
+
+**The group header's column became a word.** It was `db count, x, firstrow`,
+which cannot express 300. It is `db count, firstrow` then `dw x, handler` now,
+and `fpt_runall` keeps the column in `fpt_vx` instead of the high half of CX.
+
+**`fpt_appn` prints three digits.** 126 cases can fail, and `AAM` alone
+reports 126 as `1` followed by the character 26 past `'0'`. The file's guard
+moved from 99 to 999 with the code that backs it.
+
+**The summary line got its own 32 bytes.** It shared `fpt_out` with the four
+doubles a case lives in, which was free while a paint took half a second: the
+gate read the line long before anything wrote there again. At 126 cases a
+paint runs over two seconds — long enough for a REDRAW to arrive, and a redraw
+re-runs every case, so the first thing it did was put a double over the line's
+tail while the gate was reading it. Measured, not feared: `  8087 -` came back
+as `` a\xe7R\xee!0``. `tests/fptest.py` waits for a COMPLETE line and keeps
+the text that matched, rather than settling for the prefix and reading again.
+
+**An OPEN cosmetic defect, found by widening the window and NOT chased.**
+At 460 wide the window overlaps the Disk window the harness leaves open
+behind it, and a later redraw paints an **8-row band — y 112–185, the full
+window width, x 56–487** — as striped rubble, FPTEST's own text with vertical
+bars through it. What is measured, and no more than that:
+
+- the DATA is untouched. `fpt_bad` reads 0 and `fpt_r` 38 in every frame,
+  before and after, and the gate reads bss and is blind to it either way;
+- **the same 126 cases in a 300-wide window corrupt nothing at all**, so it
+  is the overlap and not the two-second paint. That is the whole A/B;
+- FPTEST is the FRONT window (`z-order bottom-first ['APPS', 'FP self-test']`),
+  so this is not the app being clipped against something above it;
+- the band is wider than the window behind it — x 56 is 274 pixels left of the
+  Disk window's edge — so "the window behind leaked through" does not fit
+  either, and no mechanism is claimed here;
+- the width itself is ordinary: `isotron` is 640 wide and `midirack` 624.
+
+A first clean frame is `screenshots/fptest-126.png`, and it carries one
+8-pixel scanline of the same artefact at y 167 — the smallest instance of it,
+left in the picture rather than cropped out.
 
 ### 84.5 A design note worth keeping
 
@@ -136968,15 +137019,20 @@ to `fp_ln` loses it, and §81.35 is what that cost the first time.
 
 `apps/fptest`'s algebraic rows compare **bytes** — `fp_sqrt`'s Newton iteration
 really is bit-exact against the host. **A truncated series is not**, and
-demanding it would be demanding the wrong thing. So `fp_ln` and `fp_exp` are
-compared exactly on the top three words and to within **64 units in the last
-place** on the fourth: a hundred times tighter than the series' own error bound
-and a hundred times looser than a bit-for-bit demand it cannot meet.
+demanding it would be demanding the wrong thing. So a series result is
+compared bit for bit FIRST and, only when that fails, by **distance: 64 units
+in the last place over the whole 64 bits** — a hundred times tighter than the
+series' own error bound and a hundred times looser than a bit-for-bit demand
+it cannot meet. (This section used to say "exactly on the top three words and
+to within 64 ulp on the fourth", which §84.11.1 had already replaced and which
+`tan(π/4)` disproves; the sentence outlived the rule it described.)
 
 Twelve cases, every expected value computed on the host from Python's `math`
 and packed as a real double: `LN` of 1, 2, 10, 0.5, 1e10 and 0.001; `EXP` of 0,
-1, −1, 10, 0.5 and −5. **All pass, on both the software and the 8087 path**
-(`screenshots/fptest-transcendental.png`).
+1, −1, 10, 0.5 and −5. **All pass, on both the software and the 8087 path.**
+`screenshots/fptest-transcendental.png` and `screenshots/fptest-trig.png` are
+these rows in the layout they had before §84.4.1 widened the window; the
+current picture is `screenshots/fptest-126.png`.
 
 
 ### 84.11 sin, cos, tan and atan
@@ -137015,8 +137071,34 @@ is exactly half the double `π`. No ulp rule can bridge 0 and 1.2e-16, and the
 case was testing the *reduction's* cancellation rather than the series. `sin(3)`
 replaced it, where the answer is O(0.14) and the series is what is under test.
 
-**46 cases, all passing, on both the software and the 8087 path**
-(`screenshots/fptest-trig.png`).
+#### 84.11.2 The 38 series cases, and what proves they are a test
+
+`fpcases.inc` carries **38** of them — `LN` 6, `EXP` 6, `SIN` 6, `COS` 4,
+`TAN` 3, `ATAN` 6, `POW` 7 — in one group run by `fpt_hmath`. Three things
+about that group are not like the rest of the file.
+
+**The operator is a WHOLE BYTE.** `fpt_op` reads bit 7 of two index bytes,
+which names four operations; this layer has seven. Nothing else needed to
+change — the pool index is still seven bits and `fpt_ld` still masks it.
+
+**`POW` has no field for its second operand**, so the record's spare argument
+word carries the exponent in TENTHS: enough for 0.5, 6, −2, 10 and 3 without
+widening all 38 records by eight bytes. `fpt_pow` divides it by ten through
+`fp_i2a`/`fp_i2b`/`fp_div` and hands `fp_pow` the pair.
+
+**The 64-ulp arm is reached, and the number says how often.** Forcing
+`fpt_ulps` to refuse everything turns **18 of the 38** red — so 20 land bit
+for bit on the host's own libm and 18 need the tolerance. It is not dead code
+and it is not covering for a broken routine.
+
+**MUTATION-TESTED five ways**, each a different mechanism and each a different
+verdict: one host expectation pointed at the wrong double reads `soft 1`; the
+64-ulp arm refusing reads `soft 18`; `fp_sin` and `fp_cos` swapped in
+`fpt_mops` reads `soft 10`, which is every `SIN` and `COS` case and no other;
+`POW2^10`'s tenths changed from 100 to 50 reads `soft 1`; and inverting the
+verdict reads `soft 126`, which is also what proves `fpt_appn`'s new hundreds
+digit. **126 of 126 pass** on the software path, and on an 8087 the same
+bytes are demanded of the coprocessor.
 
 ## 85. TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`)
 

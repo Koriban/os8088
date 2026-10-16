@@ -19,20 +19,28 @@
 ; exponents, the classic 0.1+0.2, quotients that do not terminate (1/3, 2/3),
 ; ties broken only by bits lost below the working form, the overflow clamp,
 ; division by zero (CF asserted too, not just the bytes), the subnormal flush,
-; sqrt/trunc/floor/round, text -> double, and text -> double -> text.
+; sqrt/trunc/floor/round, the logarithms, the trigonometry, powers, text ->
+; double, and text -> double -> text.
 ;
-; ONE RUNNER, FOUR HANDLERS (the first apps size pass). The four kinds of case
-; were four copies of the same loop - run, pack, compare eight bytes, place a
-; row, draw a verdict - and are now one walk over fpcases.inc's groups that
+; ONE RUNNER, A HANDLER PER KIND OF CASE (the first apps size pass). The
+; kinds were copies of the same loop - run, pack, compare eight bytes, place
+; a row, draw a verdict - and are now one walk over fpcases.inc's groups that
 ; calls a handler per record. Every case is checked exactly as before.
+;
+; THE ONE PLACE EIGHT BYTES ARE NOT DEMANDED is fpt_hmath's group, and the
+; reason is arithmetic rather than convenience: a TRUNCATED SERIES is not the
+; correctly-rounded double and no amount of care makes it one. Those cases
+; are compared bit for bit first and, only when that fails, by DISTANCE -
+; FPT_ULPS units in the last place over the whole 64 bits. Everything else
+; here, fp_sqrt and fp_round included, still has to match exactly.
 ; =============================================================================
 
 %include "os88api.inc"
 
     OS88_HEADER 'FPTEST', fpt_entry
 
-FPT_W      equ 300
-FPT_H      equ 440
+FPT_W      equ 460               ; 460 and not 300 for a THIRD column: see
+FPT_H      equ 440               ; fpcases.inc, above FPT_XN's group header
 FPT_ROWH   equ 9                    ; 45 row slots have to fit the content area
 
 ; -----------------------------------------------------------------------------
@@ -81,25 +89,48 @@ fpt_apps:
 
 ; fpt_appn - AX = a failure count, appended in decimal at ES:DI; -1 prints
 ; as '-', "this pass did not run". A count is at most fpcases.inc's total,
-; which that file holds under 100, so AAM's two digits are all of it.
+; which that file holds under 1000 - the HUNDREDS place arrived with the
+; series cases (84.11), which took the total past AAM's two digits.
+; BX and DX are the caller's: fpt_paint holds the 8087 pass's count in DX
+; across the software pass's call to here.
 fpt_appn:
     inc ax                            ; -1 -> 0
     jz .dash
     dec ax
+    push bx
+    push dx
+    xor dx, dx
+    mov bx, 100
+    div bx                            ; AX = hundreds, DX = the last two
+    mov bl, al
+    xchg ax, dx
     aam                               ; AH = tens, AL = units
     add ax, '00'
+    or bl, bl
+    jz .tens
+    add bl, '0'
+    xchg ax, bx
+    stosb                             ; the hundreds...
+    xchg ax, bx
+    jmp short .ten                    ; ...and then the tens, unsuppressed
+.tens:
     cmp ah, '0'
-    je .u
+    je .out
+.ten:
     xchg al, ah
     stosb
     xchg al, ah
-    jmp short .u
-.dash:
-    mov al, '-'
-.u:
+.out:
     stosb
+    pop dx
+    pop bx
+.z:
     mov byte [di], 0
     ret
+.dash:
+    mov al, '-'
+    stosb
+    jmp short .z
 
 ; -----------------------------------------------------------------------------
 ; fpt_paint - run every case and draw the result table. Running the tests in
@@ -217,12 +248,15 @@ fpt_runall:
     mov byte [fpt_bad], 0
     mov si, fpt_data
 .grp:
-    lodsw                             ; AL = the count, AH = the verdict's x
-    xchg cx, ax
+    lodsb
+    mov cl, al                        ; CL = the count; a zero one ends the
+    mov ch, 0                         ; walk, which is what `dw 0` reads as
     jcxz .end
     lodsb
     mov [fpt_r], al                   ; the group's first row
     lodsw
+    mov [fpt_vx], ax                  ; its verdict column - a WORD, since
+    lodsw                             ; FPT_XN's is at 300
     xchg bp, ax                       ; BP = its handler
 .case:
     push cx
@@ -241,8 +275,7 @@ fpt_runall:
     mov si, fpt_s_fail
     inc byte [fpt_bad]
 .verdict:
-    mov cl, ch
-    mov ch, 0
+    mov cx, [fpt_vx]
     add cx, [fpt_ox]
     call fpt_row
     mov si, bx
@@ -360,6 +393,120 @@ fpt_div:
 
 fpt_ops:    dw fp_add, fp_sub, fp_mul, fpt_div
 fpt_uops:   dw fp_sqrt, fp_trunc, fp_floor, fp_round
+fpt_mops:   dw fp_ln, fp_exp, fp_sin, fp_cos, fp_tan, fp_atan, fpt_pow
+
+; 64 ulps: a hundred times tighter than the series' own error bound and a
+; hundred times looser than a demand they cannot meet. It is a bound on the
+; LIBRARY, not a knob - loosening it to make a case pass is the one thing it
+; must never be used for.
+FPT_ULPS    equ 64
+
+; fpt_hmath - [op][expected][a][arg lo][arg hi] 'name': A = op(a), where the
+; operator is a WHOLE byte and not fpt_op's two bits - fpt_mops has seven
+; entries. Every one of them is a SERIES, so the eight-byte comparison is
+; followed by fpt_ulps when it fails; fpt_uops' four are exact and stay in
+; fpt_huna's group, where nothing but an exact match passes.
+fpt_hmath:
+    lodsb
+    cbw
+    shl ax, 1
+    xchg bx, ax                       ; BX = the operator * 2
+    mov di, fpt_exp
+    call fpt_ld                       ; -> fpt_exp
+    call fpt_ld                       ; -> fpt_a
+    lodsw
+    xchg cx, ax                       ; CX = the spare argument, for O_POW
+    push si
+    mov si, fpt_a
+    call fp_unpack_a
+    call [bx + fpt_mops]
+    pop si
+    call fpt_chk                      ; packs A into fpt_got; ZF = bit-exact
+    pushf
+    mov bx, si                        ; the case's name, beside the verdict
+    call fpt_skip
+    popf
+    jz .out                           ; bit for bit: nothing more to ask
+    call fpt_ulps
+.out:
+    ret
+
+; fpt_pow - fp_pow, whose SECOND operand no MATH record has a field for: the
+; spare argument carries the exponent in TENTHS, which reaches 0.5, 6, -2, 10
+; and 3 without widening every other record in the group by eight bytes.
+; In A = the base, CX = the tenths. SI is the caller's to lose.
+fpt_pow:
+    mov di, fp_tv                     ; the base, parked
+    call fp_pack_a
+    xchg ax, cx
+    call fp_i2a
+    mov ax, 10
+    call fp_i2b
+    call fp_div                       ; A = arg / 10
+    call fp_a_to_b                    ; -> B, the exponent
+    mov si, fp_tv
+    call fp_unpack_a                  ; A = the base again
+    jmp fp_pow
+
+; fpt_ulps - how far fpt_got is from fpt_exp in UNITS IN THE LAST PLACE over
+; the whole 64 bits, with ZF = 1 for FPT_ULPS or fewer. DX is the row's y and
+; survives; CX, AX and DI are lost.
+;
+; THE WHOLE 64 BITS, and not "the low word may differ": that was the first
+; version and tan(pi/4) failed on it, where the answer is 1.0 and the
+; reference 0.9999999999999999 - one ulp apart, on opposite sides of an
+; exponent step, so THREE of the four words differ. Two same-signed doubles
+; read as 64-bit integers are monotonic, and then a subtraction says it.
+fpt_ulps:
+    push si
+    push di
+    push bx
+    mov si, fpt_exp
+    mov di, fpt_got
+    mov bx, fpt_ulp
+    mov cx, 4
+    clc                               ; `mov`, `not`, `inc` and `loop` all
+.sub:                                 ; leave CF alone, which is why the
+    mov ax, [si]                      ; pointers walk by `inc` twice and not
+    sbb ax, [di]                      ; by `add bx, 2`
+    mov [bx], ax
+    inc si
+    inc si
+    inc di
+    inc di
+    inc bx
+    inc bx
+    loop .sub
+    jnc .pos
+    mov cx, 4                         ; expected < got: negate the distance
+    mov bx, fpt_ulp
+    stc
+.neg:
+    mov ax, [bx]
+    not ax
+    adc ax, 0
+    mov [bx], ax
+    inc bx
+    inc bx
+    loop .neg
+.pos:
+    mov ax, [fpt_ulp+2]               ; anything above the low word is already
+    or ax, [fpt_ulp+4]                ; further than FPT_ULPS can reach
+    or ax, [fpt_ulp+6]
+    jnz .far
+    cmp word [fpt_ulp], FPT_ULPS
+    jbe .near
+.far:
+    mov al, 1
+    jmp short .z
+.near:
+    xor al, al
+.z:
+    or al, al                         ; ZF = 1 only within the tolerance
+    pop bx
+    pop di
+    pop si
+    ret
 
 ; fpt_hatof - 'text' [expected]: text -> double.
 fpt_hatof:
@@ -370,7 +517,7 @@ fpt_hatof:
     mov di, fpt_exp
     call fpt_ld
     xor bx, bx
-    jmp short fpt_chk
+    jmp fpt_chk
 
 ; fpt_hstr - 'in' 'expected': text -> double -> text, at ten significant
 ; digits as a cell shows them. An empty expectation is the input itself. The
@@ -485,7 +632,7 @@ fpt_skip:
 ; bss - including every scratch word os88fp.inc's header says the caller owes
 ; it. They are ordinary bss like any other; the include never touches DS.
 ; -----------------------------------------------------------------------------
-    OS88_BSS 213
+    OS88_BSS 245
     OS88_IMAGE_END
 
 fpt_ox      equ os88_image_end + 0
@@ -493,16 +640,30 @@ fpt_oy      equ fpt_ox + 2
 fpt_bad     equ fpt_oy + 2            ; byte: this pass's failures
 fpt_r       equ fpt_bad + 1           ; byte: the row being drawn
 fpt_cferr   equ fpt_r + 1             ; non-zero: a div returned the wrong CF
-fpt_out     equ fpt_cferr + 1         ; 34: ONE buffer, four lives - see below
+fpt_line    equ fpt_cferr + 1         ; 32: the summary line, ON ITS OWN
+fpt_out     equ fpt_line + 32         ; 34: ONE buffer, three lives - below
 
-; fpt_out is the formatted text under test in a round trip, and then the
-; summary line - and, for an arithmetic case, which never formats anything,
-; it is the four doubles: the expectation, both operands and the result.
+; FPT_OUT = 7 IS A PUBLISHED OFFSET: tests/fptest.py reads the summary line
+; out of this segment at os88_image_end + 7, which is fpt_line - the five
+; bytes above are all that may ever go before it. A new field goes at the
+; END of this block, with fpt_vx, and not here.
+;
+; THE SUMMARY HAS ITS OWN BUFFER, and did not used to. It shared fpt_out,
+; 32 of whose 34 bytes are the four doubles a case under test lives in, and
+; that was free while a paint took half a second: the gate read the line long
+; before anything wrote there again. At 126 cases a paint takes over two
+; seconds - long enough for a REDRAW to arrive, and a redraw re-runs the
+; cases, so the first thing it did was put a double over the line's tail
+; while the gate was reading it. MEASURED, not feared: '  8087 -' came back
+; as ' a\xe7R\xee!0'. 32 bytes, in an app that ships on no disk.
+
+; fpt_out is the formatted text under test in a round trip - and, for an
+; arithmetic case, which never formats anything, it is the four doubles: the
+; expectation, both operands and the result.
 fpt_exp     equ fpt_out               ; 8: the expected double, expanded
 fpt_a       equ fpt_exp + 8           ; 8: operand a
 fpt_b       equ fpt_a + 8             ; 8: operand b
 fpt_got     equ fpt_b + 8             ; 8: the packed result under test
-fpt_line    equ fpt_out               ; the summary is built after the passes
 
 fp_as       equ fpt_out + 34          ; --- os88fp.inc's scratch ---
 fp_bs       equ fp_as + 1
@@ -541,10 +702,10 @@ fp_e1       equ fp_e0 + 8             ; four packed temporaries and a
 fp_e2       equ fp_e1 + 8             ; counter, which fp_ln, fp_exp and
 fp_e3       equ fp_e2 + 8             ; fp_pow share
 fp_ek       equ fp_e3 + 8
-fpt_mop     equ fp_ek + 2             ; the math op, for the comparison
-fpt_ulp     equ fpt_mop + 2           ; 8: the signed distance between
-                                      ; the answer and the reference
-fpt_bss_end equ fpt_ulp + 8
+fpt_ulp     equ fp_ek + 2             ; 8: ours, the signed distance between
+                                      ; a series answer and the reference
+fpt_vx      equ fpt_ulp + 8           ; word: the group's verdict column
+fpt_bss_end equ fpt_vx + 2
 
 %define FPT_BSS_NEED (fpt_bss_end - os88_image_end)
     times (FPT_BSS_NEED - OS88_BSS_SIZE) db 0

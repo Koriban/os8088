@@ -6926,11 +6926,17 @@ SOAK = [
         wants=("build/brtest360.img",)),
     Row("fptest", "soak", py("tests/fptest.py"), 120.0,
         "SPEC.md 84.4: apps/os88fp.inc against host-computed IEEE-754 bytes - "
-        "88 cases, the summary line read out of FPTEST's own bss. The "
+        "126 cases, the summary line read out of FPTEST's own bss. The "
         "float library Sheet and Chart compute with; fp_i2a, fp_a2i and "
-        "fp_cmpab (whose AX AND flags are both checked) gained cases here. "
-        "Red on purpose two ways: a wrong expectation, and fps_cmpab's flags "
-        "disagreeing with its AX",
+        "fp_cmpab (whose AX AND flags are both checked) have cases, and so "
+        "do the 38 of 84.11.2 - ln, exp, sin, cos, tan, atan and pow, which "
+        "are a SERIES and so are allowed 64 ulps where everything else here "
+        "must match all eight bytes. Red on purpose five ways (84.11.2): a "
+        "wrong expectation reads soft 1, the ulp arm refusing reads soft 18, "
+        "sin and cos swapped reads soft 10, a changed pow exponent soft 1, "
+        "and an inverted verdict soft 126 - plus the two this row was born "
+        "with, a wrong I2A expectation and fps_cmpab's flags disagreeing "
+        "with its AX",
         needs=("marty",), serial=True,
         wants=("build/fptest.o88",)),
     Row("imgtest", "soak", py("tests/imgtest.py"), 135.0,

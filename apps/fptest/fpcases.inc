@@ -69,6 +69,9 @@ fpt_pw:                                ; ...the low 48 bits zero: the top word
     FPW d_32768,               0x40E0           ; 32768.0  (fp_a2i: one past)
     FPW d_m32768,              0xC0E0           ; -32768.0 (the int16 floor)
     FPW d_m65536,              0xC0F0           ; -65536.0 (fp_a2i: under)
+    FPW d_m5,                  0xC014           ; -5.0
+    FPW d_9,                   0x4022           ; 9.0
+    FPW d_1024,                0x4090           ; 1024.0  (2^10, exactly)
 FPT_NW equ fpt_np                       ; the word class ends here
 fpt_pq:                                ; ...and the rest, whole
     FPQ d_0p1,                 0x999A, 0x9999, 0x9999, 0x3FB9 ; 0.1
@@ -111,16 +114,50 @@ fpt_pq:                                ; ...and the rest, whole
     FPQ d_0p001,               0xA9FC, 0xD2F1, 0x624D, 0x3F50 ; 0.001
     FPQ d_m0p025,              0x999A, 0x9999, 0x9999, 0xBF99 ; -0.025
     FPQ d_32767,               0x0000, 0x0000, 0xFFC0, 0x40DF ; 32767.0
+; ...and the LOGARITHM, TRIGONOMETRY and POWER layer's (SPEC.md 84.11). Every
+; one of these came off the host's own libm, printed as bytes - the same rule
+; as the rest of the pool, checked the same way.
+    FPQ d_ln2,                 0x39EF, 0xFEFA, 0x2E42, 0x3FE6 ; 0.6931471805599453 (ln 2)
+    FPQ d_ln10,                0x5516, 0xBBB5, 0x6BB1, 0x4002 ; 2.302585092994046 (ln 10)
+    FPQ d_mln2,                0x39EF, 0xFEFA, 0x2E42, 0xBFE6 ; -0.6931471805599453 (ln 0.5)
+    FPQ d_ln1e10,              0xAA5B, 0x2AA2, 0x069E, 0x4037 ; 23.025850929940457
+    FPQ d_ln1em3,              0xFFA0, 0x998F, 0xA18A, 0xC01B ; -6.907755278982137
+    FPQ d_e,                   0x5769, 0x8B14, 0xBF0A, 0x4005 ; 2.718281828459045
+    FPQ d_rece,                0xEF38, 0x362C, 0x8B56, 0x3FD7 ; 0.36787944117144233 (1/e)
+    FPQ d_exp10,               0x0560, 0xCF95, 0x829D, 0x40D5 ; 22026.465794806718
+    FPQ d_sqrte,               0x069C, 0x8E1E, 0x6129, 0x3FFA ; 1.6487212707001282
+    FPQ d_expm5,               0x5376, 0xE00D, 0x993F, 0x3F7B ; 0.006737946999085467
+    FPQ d_pi6,                 0x7365, 0x382D, 0xC152, 0x3FE0 ; 0.5235987755982988 (pi/6)
+    FPQ d_pi4,                 0x2D18, 0x5444, 0x21FB, 0x3FE9 ; 0.7853981633974483 (pi/4)
+    FPQ d_mpi4,                0x2D18, 0x5444, 0x21FB, 0xBFE9 ; -0.7853981633974483
+    FPQ d_pi3,                 0x7365, 0x382D, 0xC152, 0x3FF0 ; 1.0471975511965976 (pi/3)
+    FPQ d_pi2,                 0x2D18, 0x5444, 0x21FB, 0x3FF9 ; 1.5707963267948966 (pi/2)
+    FPQ d_pi,                  0x2D18, 0x5444, 0x21FB, 0x4009 ; 3.141592653589793
+    FPQ d_0p5minus,            0xFFFF, 0xFFFF, 0xFFFF, 0x3FDF ; 0.49999999999999994
+    FPQ d_0p5plus,             0x0001, 0x0000, 0x0000, 0x3FE0 ; 0.5000000000000001
+    FPQ d_sin1,                0x0CEE, 0x8F09, 0xED54, 0x3FEA ; 0.8414709848078965
+    FPQ d_msin1,               0x0CEE, 0x8F09, 0xED54, 0xBFEA ; -0.8414709848078965
+    FPQ d_sin3,                0xD55B, 0x6DB6, 0x1038, 0x3FC2 ; 0.1411200080598672
+    FPQ d_cos1,                0x068C, 0x0FB5, 0x4A28, 0x3FE1 ; 0.5403023058681398
+    FPQ d_1minus,              0xFFFF, 0xFFFF, 0xFFFF, 0x3FEF ; 0.9999999999999999
+    FPQ d_tan1,                0xE3A6, 0x5CBE, 0xEB24, 0x3FF8 ; 1.5574077246549023
+    FPQ d_atan0p5,             0xBB4F, 0x0561, 0xAC67, 0x3FDD ; 0.4636476090008061
+    FPQ d_atan10,              0x0054, 0x2C16, 0x89BD, 0x3FF7 ; 1.4711276743037347
+    FPQ d_atan1e3,             0x58BD, 0xC0E6, 0x1DE2, 0x3FF9 ; 1.5697963271282298
+    FPQ d_1p12,                0x51EC, 0x1EB8, 0xEB85, 0x3FF1 ; 1.12
+    FPQ d_pow112,              0x7DB3, 0x188F, 0x94C7, 0x3FFF ; 1.973822685184001 (1.12^6)
+    FPQ d_pow2e1,              0x0664, 0xEE25, 0x25FB, 0x3FF1 ; 1.0717734625362931 (2^0.1)
 %if fpt_np > 128
 %error "the pool has outgrown a 7-bit index: bit 7 of an index byte is an op bit"
 %endif
 
-; --- the CASES, in four groups. A group header is its case count, the x of
+; --- the CASES, in groups. A group header is its case count, the x of
 ; its verdict column, its first row and the handler that runs one record;
 ; fpt_runall walks headers until a zero count. Every handler leaves ZF = pass.
+; The COLUMN is a word: it was a byte until FPT_XN's column at 300.
 %macro GRP 4                            ; count, verdict x, first row, handler
-    db %1, %2, %3
-    dw %4
+    db %1, %3
+    dw %2, %4
 %assign fpt_nc 0
 %endmacro
 
@@ -146,6 +183,28 @@ O_FLOOR equ 2                           ; fp_floor
 O_ROUND equ 3                           ; fp_round, CX = the digit count
 %macro UNA 5
     db %3 | (((%1) & 2) << 6), %2 | (((%1) & 1) << 7), %4, %5, 0
+%assign fpt_nc fpt_nc+1
+%endmacro
+
+; MATH op, a, expected, arg, 'name' - the LOGARITHM, TRIGONOMETRY and POWER
+; layer (SPEC.md 84.11). The operator is a WHOLE BYTE here and does not ride
+; on an index's spare bit: fpt_op's two bits name four operations and this
+; layer has seven. Every one of them is a SERIES, which is why they are not
+; in UNA's group - fpt_hmath allows FPT_ULPS of distance where fpt_huna's
+; sqrt/trunc/floor/round are exact and compared bit for bit.
+; `arg` is spare for every op but O_POW, which spends it on its second
+; operand in TENTHS - see fpt_pow.
+O_LN equ 0                              ; fp_ln
+O_EXP equ 1                             ; fp_exp
+O_SIN equ 2                             ; fp_sin
+O_COS equ 3                             ; fp_cos
+O_TAN equ 4                             ; fp_tan
+O_ATAN equ 5                            ; fp_atan
+O_POW equ 6                             ; fp_pow, through fpt_pow
+%macro MATH 5
+    db %1, %3, %2
+    dw %4
+    db %5, 0
 %assign fpt_nc fpt_nc+1
 %endmacro
 
@@ -298,8 +357,53 @@ fpt_data:
     RT '0'
     RT '3.14159'
     GEND FPT_SN
+; A THIRD COLUMN, and the reason FPT_W is 460 and not 300: rows 0-32 already
+; carry two verdicts and two names out to x 270, and rows 33-44 three items
+; out to x 232, so the 38 cases below had nowhere to go on a 300-wide window.
+; Their own column starts at 300 with names at 340 - 'POW1.12^6' is the
+; longest and ends at 412.
+    GRP FPT_XN, 300, 0, fpt_hmath          ; rows 0-37, verdict at x 300
+    MATH O_LN, d_1, d_0, 0, 'LN1'                             ; ln(1) = 0
+    MATH O_LN, d_2, d_ln2, 0, 'LN2'                           ; ln(2) = 0.6931471805599453
+    MATH O_LN, d_10, d_ln10, 0, 'LN10'                        ; ln(10) = 2.302585092994046
+    MATH O_LN, d_0p5, d_mln2, 0, 'LN0.5'                      ; ln(0.5) = -ln(2), the sign through the range reduction
+    MATH O_LN, d_10000000000, d_ln1e10, 0, 'LN1e+10'          ; ln(1e10) = 23.025850929940457, 34 binary exponents of reduction
+    MATH O_LN, d_0p001, d_ln1em3, 0, 'LN0.001'                ; ln(0.001) = -6.907755278982137
+    MATH O_EXP, d_0, d_1, 0, 'EXP0'                           ; exp(0) = 1
+    MATH O_EXP, d_1, d_e, 0, 'EXP1'                           ; exp(1) = e
+    MATH O_EXP, d_m1, d_rece, 0, 'EXP-1'                      ; exp(-1) = 1/e
+    MATH O_EXP, d_10, d_exp10, 0, 'EXP10'                     ; exp(10) = 22026.465794806718
+    MATH O_EXP, d_0p5, d_sqrte, 0, 'EXP0.5'                   ; exp(0.5) = 1.6487212707001282
+    MATH O_EXP, d_m5, d_expm5, 0, 'EXP-5'                     ; exp(-5) = 0.006737946999085467
+    MATH O_SIN, d_0, d_0, 0, 'SIN0'                           ; sin(0) = 0
+    MATH O_SIN, d_pi6, d_0p5minus, 0, 'SIN0.5236'             ; sin(pi/6) = 0.49999999999999994, NOT the exact half
+    MATH O_SIN, d_pi2, d_1, 0, 'SIN1.571'                     ; sin(pi/2) = 1, the top of the range reduction
+    MATH O_SIN, d_1, d_sin1, 0, 'SIN1'                        ; sin(1) = 0.8414709848078965
+    MATH O_SIN, d_m1, d_msin1, 0, 'SIN-1'                     ; sin(-1) = -sin(1): an odd function, asserted
+    MATH O_SIN, d_3, d_sin3, 0, 'SIN3'                        ; sin(3) = 0.1411200080598672, past pi/2 and reduced
+    MATH O_COS, d_0, d_1, 0, 'COS0'                           ; cos(0) = 1
+    MATH O_COS, d_pi3, d_0p5plus, 0, 'COS1.047'               ; cos(pi/3) = 0.5000000000000001, the half from the OTHER side
+    MATH O_COS, d_1, d_cos1, 0, 'COS1'                        ; cos(1) = 0.5403023058681398
+    MATH O_COS, d_pi, d_m1, 0, 'COS3.142'                     ; cos(pi) = -1, the sin(x + pi/2) identity at its worst point
+    MATH O_TAN, d_0, d_0, 0, 'TAN0'                           ; tan(0) = 0
+    MATH O_TAN, d_pi4, d_1minus, 0, 'TAN0.7854'               ; tan(pi/4) = 0.9999999999999999: ONE ulp under 1.0 and across an exponent step
+    MATH O_TAN, d_1, d_tan1, 0, 'TAN1'                        ; tan(1) = 1.5574077246549023
+    MATH O_ATAN, d_0, d_0, 0, 'ATN0'                          ; atan(0) = 0
+    MATH O_ATAN, d_1, d_pi4, 0, 'ATN1'                        ; atan(1) = pi/4
+    MATH O_ATAN, d_m1, d_mpi4, 0, 'ATN-1'                     ; atan(-1) = -pi/4
+    MATH O_ATAN, d_0p5, d_atan0p5, 0, 'ATN0.5'                ; atan(0.5) = 0.4636476090008061, inside fp_c_atlim
+    MATH O_ATAN, d_10, d_atan10, 0, 'ATN10'                   ; atan(10) = 1.4711276743037347, the reciprocal arm
+    MATH O_ATAN, d_1000, d_atan1e3, 0, 'ATN1000'              ; atan(1000) = 1.5697963271282298, close to pi/2
+    MATH O_POW, d_2, d_sqrt2, 5, 'POW2^0.5'                   ; 2^0.5 = sqrt(2) through exp(y ln x), NOT fp_sqrt
+    MATH O_POW, d_2, d_1024, 100, 'POW2^10'                   ; 2^10 = 1024 EXACTLY: the repeated-squaring arm
+    MATH O_POW, d_1p12, d_pow112, 60, 'POW1.12^6'             ; 1.12^6 = 1.973822685184001, squaring with a rounding at every step
+    MATH O_POW, d_10, d_0p01, -20, 'POW10^-2'                 ; 10^-2 = 0.01: a NEGATIVE whole exponent, one over the square
+    MATH O_POW, d_2, d_pow2e1, 1, 'POW2^0.1'                  ; 2^0.1 = 1.0717734625362931
+    MATH O_POW, d_9, d_3, 5, 'POW9^0.5'                       ; 9^0.5 = 3, which the series has to land on exactly or near enough
+    MATH O_POW, d_0p5, d_0p125, 30, 'POW0.5^3'                ; 0.5^3 = 0.125, a base under 1
+    GEND FPT_XN
     dw 0                                   ; no more groups
 
-%if fpt_ncase > 99
-%error "fpt_appn prints a failure count in at most two digits"
+%if fpt_ncase > 999
+%error "fpt_appn prints a failure count in at most three digits"
 %endif
