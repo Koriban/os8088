@@ -13243,6 +13243,22 @@ SOAK = [
         "answer 1; Esc and Cancel answering FALSE; OK by the mouse; and a "
         "list box refused",
         needs=("marty",), serial=True),
+    Row("chartname", "soak", py("tests/chartname.py"), 300.0,
+        "SPEC.md 82.15: CHART charts the range Sheet NAMED, not the lowest "
+        "column - THE FIRST TEST CHART HAS EVER HAD, and it exists because "
+        "of what that cost: the filter NEVER RAN, ct_reset_series having "
+        "zeroed ct_wantrng at the top of every reader, and 82.15 asserted the "
+        "opposite for two cycles because there was no chart row to say "
+        "otherwise. The fixture makes the two answers DIFFER - column A is "
+        "10,20,30,40, column B is 7,3,9,1 and the only name is B1:B4 - so "
+        "Automatic keeps column A and the name must keep B. Check 5a is the "
+        "control: a row that only asked whether picking a name charted "
+        "SOMETHING would have passed against the broken code, which charted "
+        "the wrong column every time. The values are deliberately not "
+        "proportional, because ch_scale would give two proportional columns "
+        "the same scaled words and only [ch_e10] would differ",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "

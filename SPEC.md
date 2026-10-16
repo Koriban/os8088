@@ -135910,8 +135910,21 @@ request has to outlive the read it is requesting. `ct_ondlg` clears it for a
 NEW file, which is the only place that ever wanted it cleared.
 
 A feature whose gate does not exist is a feature nobody can say is working,
-and this one was written down as working for two cycles. The gap is recorded
-rather than closed here.
+and this one was written down as working for two cycles.
+
+**`tests/chartname.py` is the gate now** - the first test Chart has ever had.
+Its fixture makes the two answers DIFFER, which is the whole design: column A
+is 10,20,30,40, column B is 7,3,9,1, and the only name in the file is B1:B4,
+so `Automatic` must keep column A (`ct_mincol` 0) and the name must keep B
+(`ct_mincol` 1). **Check 5a is the control** - a row that only asked whether
+picking a name charted SOMETHING would have passed against the broken code,
+because it did chart something: the wrong column, every time. The two columns
+are deliberately not proportional, because `ch_scale` normalises a series
+against `[ch_e10]` and two proportional columns produce the SAME scaled words
+with only the exponent differing, so a check on the drawn numbers could not
+tell them apart. Mutation-tested by restoring the defect itself - zeroing
+`ct_wantrng` in `ct_read_by_ext` - which fails checks 4, 5 and 5a and leaves
+the other four passing, exactly as the shipped defect did.
 
 **It is a relabelling, not a second menu.** The `Data` menu's eight slots are
 buffers, filled at startup with `Column A`..`Column H` and overwritten with
