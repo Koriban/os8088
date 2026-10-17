@@ -13414,6 +13414,31 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
                "build/os8088-360.img")),
+    Row("sheettblshift", "soak", py("tests/sheettblshift.py"), 560.0,
+        "SPEC.md 81.114.9: a Data > Table's stored RECTANGLE follows the "
+        "grid. Insert/Delete Row/Column move the cells and move a result "
+        "cell's MARK with them for free - it is a bit in the border byte, "
+        "and sh_rc_sides already shifts that table - but the 16-byte table "
+        "record did not move, so a table whose sheet gained a row above it "
+        "was guarded against a rectangle one row too high. sh_rc_table is "
+        "the generic shifter for (packed row/sheet, column) records and "
+        "does NOT fit: a row inserted above moves the rectangle, one "
+        "inserted INSIDE grows it, a delete inside shrinks it, deleting the "
+        "top row takes the formulas so the table goes, and deleting an "
+        "input cell leaves nothing to substitute. Every rectangle is read "
+        "OUT OF THE RECORD, never inferred from what the guard then "
+        "allowed - the cells moving and the record moving are different "
+        "facts and the whole defect is the two disagreeing. Check 5 is "
+        "Undo, which did not carry the table list at all until this stage: "
+        "an undone Insert Row restored every cell and every mark and left "
+        "the rectangle shifted, which is a half-restoring Undo and worse "
+        "than none. Check 7 is a SORT, an arbitrary permutation, which "
+        "drops any table whose range it touches and SAYS SO on the status "
+        "line - the message is asserted too, because a table silently "
+        "ceasing to be one is found out about much later",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
     Row("sheettblcalc", "soak", py("tests/sheettblcalc.py"), 520.0,
         "SPEC.md 81.114.8: a Data > Table RECALCULATES, and Excel's three "
         "modes decide when. A result cell holds a STORED value, so this "

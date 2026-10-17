@@ -130787,6 +130787,166 @@ Check **0 FILLED has no mutation of its own and is not claimed to**: it is the
 control, and that the rectangle fills correctly in the first place is
 `sheettable`'s subject and §81.114.7's.
 
+#### 81.114.9 Stage 3b — the stored rectangle follows the grid
+
+`Insert`/`Delete Row`/`Column` move the cells, and they move a result cell's
+**mark** with them for free: the mark is a bit in the border byte, and
+`sh_rc_sides` already shifts that table. The 16-byte table **record** did not
+move. A table whose sheet gained a row above it was therefore guarded against
+a rectangle one row too high — a clear refused when it should be allowed, or
+allowed when it should be refused. Never a wrong number; the numbers are
+stored. Wrong *behaviour*, which §81.114.7 said plainly was outstanding.
+
+##### Why the generic shifter does not fit
+
+`sh_rc_table` shifts any sparse table whose record begins *(packed row/sheet,
+column)* — borders, notes and row heights all go through it. A table record
+is not a point, and every one of these is a different answer:
+
+| | |
+|---|---|
+| a row inserted **above** | the whole rectangle moves down, **and the input cell with it** |
+| a row inserted **inside** | the rectangle **grows**: `r2` moves, `r1` does not |
+| a row deleted **inside** | it shrinks, and the table goes when no interior is left |
+| the **top row** deleted | that row is the formulas (or the input values), so the table goes |
+| an **input cell** deleted | nothing is left to substitute, so the table goes |
+
+Columns are the mirror, with one extra: `c1`/`c2` are single **bytes** in the
+record, because that is what BIFF3's `DATATABLE` has, so the write-back is
+where a column pushed past 255 is refused.
+
+**The order matters.** `sh_tbl_rcshift` runs *after* `sh_rc_sides`, not
+before: a table it drops has to unmark its result cells, and those marks are
+in the border table the previous line has just moved — so the rectangle to
+unmark is the **shifted** one, not the one the record still holds.
+
+##### Undo did not carry the table list, and that is older than this stage
+
+The snapshot held cells, borders, notes and the text arena. It did **not**
+hold the table list, which §81.114.7 added without noticing — so an undone
+`Insert Row` restored every cell and every mark and left every rectangle
+shifted, and an undone `Edit ▸ Clear` restored the cells of a table it had
+dropped without restoring the table. **A half-restoring Undo is worse than
+none, because the user believes it** — and the state it left is precisely the
+cells and the record disagreeing, which is the defect this whole stage
+exists to prevent.
+
+`SH_UD_HDR` is 10 now, with `ntbl` as its fifth word and the list as the
+fourth array. 74 resident bytes, which is what saying so costs.
+
+##### Sort drops, and says so
+
+A sort is an arbitrary permutation of rows. A table whose range it touches
+stops being a table: the results are still the right numbers, in an order
+nothing can reconstruct. The record goes and the marks with it, and the
+**values stay where the sort put them** — the same shape of answer SYLK gives
+a table it cannot describe (§81.114.7).
+
+It is **said**, on the status line, because a table silently ceasing to be
+one is the kind of thing a user finds out about much later. The test asserts
+the message as well as the count, for that reason.
+
+The test for overlap is the **whole range**, not the result area: a sort that
+reorders only the formula row, or only the input values, has broken the table
+just as surely.
+
+##### Three defects, and one is a family this feature keeps producing
+
+Two were caught by re-reading before the first build:
+
+- a stray **global label** in the middle of a routine — this tree is one flat
+  namespace (§1) and every module-internal label carries its prefix or is a
+  NASM local;
+- a **stale flag**: `test byte [sh_rc_op], 1` sat between a `cmp ax, bx` and
+  the `je` that wanted its flags, so "this index was deleted" could never
+  have fired. The compare is repeated at the branch now, with the reason at
+  the instruction.
+
+The third survived to the gate. `sh_tbl_sortdrop` counted dropped tables in
+`DL` and computed the list's length with `mul cx` — **which writes `DX`**. The
+count came back as the multiply's high word, which is 0 for any list that
+fits, so the tables were dropped correctly and the status line never said so.
+That is the **third** instance in this feature of a documented output
+register eating a caller's live value: §81.114.6's `sh_getcell2` returning in
+`DX` while `DX` held a destination row, §81.114.7's `sh_tbl_overlap`
+answering in `AL` while `AX` held a length, and now `mul`. §81.17's
+`sh_findcell`/`DI` is the same family and predates all three.
+
+##### Evidence
+
+`tests/sheettblshift.py`, **9 checks**, every rectangle read **out of the
+record itself** and never inferred from what the guard then allowed — the
+cells moving and the record moving are different facts, and the whole defect
+is the two disagreeing.
+
+0 RECORDED the control · 1 ABOVE the rectangle and both input cells move down
+· 2 INSIDE an inserted row grows it, `r2` moving and `r1` not · 3 SHRINK and
+deleting it shrinks it back · 4 COLUMN `c1`, `c2` and the input columns move,
+which is also the check that the byte fields are written back · 5 UNDO the
+**record** comes back, not only the cells · 6 TOPROW deleting the table's own
+top row drops it and unmarks its cells · 7 UNDROP and Undo brings that whole
+table back, count and all · 8 SORT a sort over its range drops it, with the
+status line saying so.
+
+##### THREE MUTATIONS PASSED, AND ALL THREE INDICTED THE FIXTURE
+
+Not one of them was a weak assertion. Each time the check was right and the
+**fixture never reached the code the mutation broke**:
+
+| mutation that passed | why the fixture could not see it |
+|---|---|
+| the ROW input cell's shift removed | the table was **one-input**, so `sh_tbl_ir`/`ic` stayed `SH_TBL_NONE` and half the input-shifting code was never entered |
+| the **top-row** drop rule removed | the input cell sat on the table's own top row, so deleting it dropped the table through the **input-cell** rule instead — the right outcome for the wrong reason |
+| Undo's `ntbl` restore removed | check 5 undoes an `Insert Column`, which leaves the count unchanged, so a count that was never restored was unobservable |
+
+The fixture is two-input now, with **both input cells below the table** at A5
+and A6, and check 7 undoes an operation that **changes** the number of
+tables. That is the whole repair: the assertions did not move.
+
+**This is five for five in this feature.** §81.114.7's orphaned mark needed a
+*second table*; §81.114.8's `[sh_cursheet]` needed *Sheet 2*; and these three
+needed a second input cell, a different row, and an undo that counts. Every
+time, the mutation passed because the fixture sat on a degenerate value — one
+table, one sheet, one input cell, a row that collided, a count that did not
+change. **When a mutation passes, suspect the fixture before the check.**
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| no rectangle shift at all | 1, 2, 3, 4, 5, 6, 7 |
+| the ROW input cell's shift removed | 1, 2, 3, 4, 5, 7 |
+| `r1` never moves, so an insert above never relocates | 1, 2, 3, 4, 5, 6, 7 |
+| `c1` not written back to the record's byte | **4 alone** |
+| Undo does not copy the list back | 5, 6, 7 |
+| Undo does not restore the count | 7, 8 |
+| the top-row rule removed | **6 alone** |
+| a dropped table keeps its marks | **6 alone** |
+| a sort does not drop | **8 alone** |
+| the drop is silent | **8 alone** |
+
+Five isolate a single check. Check **0 RECORDED has no mutation of its own
+and is not claimed to** — it is the control, and that the dialog stores the
+rectangle at all is §81.114.7's subject.
+
+##### What stage 3b cost
+
+| | stage 3a | stage 3b |
+|---|---|---|
+| region | 61,168 of 61,440 | **61,309 — 131 spare** |
+| `CHART.OVL` | 49,381 of 52,224 | 50,109 |
+| bss | 9,280 | 9,280 |
+
+Of the 141 resident bytes, **74 are Undo's** — the fifth array in the
+snapshot, in `sh_undo_size`, `sh_undo_save` and `sh_undo_load` alike. The
+shifter itself is the module's, behind a stub of the same shape as
+§81.114.8's: `sh_rowcol_op` is resident and this is a menu operation, not a
+hot path.
+
+**131 bytes is the number to watch.** Stage 4's reader and writer are
+`CHART.OVL`'s (§82.16.9), which has 2,115 free, but any resident thunk they
+need comes out of this.
+
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
 Four things, and three of them are invisible in a diff.

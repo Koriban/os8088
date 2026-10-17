@@ -396,6 +396,33 @@ def menu_pick(m, mo, seg, sym, items, name, settle=None):
     mo.menu(x, y, 0, 0, settle=settle, aim=aim)
 
 
+# THE TABLE LIST read straight out of the guest (SPEC.md 81.114.7/.9): the
+# third carve of the border claim, SH_T_SZ=18 a record, and the first SIXTEEN
+# bytes are BIFF3's DATATABLE body field for field. Reading the RECORD is how
+# a row asserts that a rectangle followed the grid - the cells moving is a
+# different fact, and the whole defect 81.114.9 fixes is the two disagreeing.
+SH_T_SZ = 18
+SH_TBL_NONE = 0xFFFF
+
+
+def tbl_rec(m, seg, sym, i=0):
+    """Table `i` as a dict, or None when there is no such record."""
+    if i >= _w(m, seg, sym["sh_ntbl"]):
+        return None
+    base = _w(m, seg, sym["sh_tblseg"])
+    b = m.readseg(base, i * SH_T_SZ, SH_T_SZ)
+    g = lambda o: b[o] | (b[o + 1] << 8)
+    return {"r1": g(0), "r2": g(2), "c1": b[4], "c2": b[5], "flags": g(6),
+            "ir": g(8), "ic": g(10), "ir2": g(12), "ic2": g(14),
+            "sheet": b[16]}
+
+
+def tbl_rect(m, seg, sym, i=0):
+    """Just (r1, r2, c1, c2) - the whole RANGE, formulas and values and all."""
+    r = tbl_rec(m, seg, sym, i)
+    return None if r is None else (r["r1"], r["r2"], r["c1"], r["c2"])
+
+
 # THE CELL RECORDS read straight out of the guest (SPEC.md 81, 81.114.8): a
 # sorted sparse array of SH_C_SZ=20 at [sh_cellseg] - packed row/sheet, col,
 # flags, format, type, aux, then the IEEE-754 double.

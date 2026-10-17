@@ -1092,6 +1092,7 @@ SHM_BDBTN  equ 53                   ; ...and the Border dialog's (and
                                      ; Display's and Workspace's, 81.106)
 SHM_FIND   equ 58                   ; Formula > Find, moved out for room
 SHM_TBLRUN equ 59                   ; 81.114.8: re-run every Data > Table
+SHM_TBLADJ equ 60                   ; 81.114.9: ...and shift their rectangles
 SHM_DFBTN  equ 57                   ; ...the Data Form's
 SHM_NDBTN  equ 56                   ; ...the Note dialog's
 SHM_LDBTN  equ 55                   ; ...the list dialog's
@@ -1099,7 +1100,7 @@ SHM_IDBTN  equ 54                   ; ...the one-line dialog's
 SHM_FDBTN  equ 52                   ; 81.111: a dialog BUTTON FIRED (on the
                                      ; release, the library's gesture): AL =
                                      ; which, 1-based
-SHM_N      equ 57                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 58                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -1142,6 +1143,7 @@ sh_mverb:
     dw sh_m_fdbtn, sh_m_bdbtn, sh_m_idbtn, sh_m_ldbtn     ; 81.111
     dw sh_m_ndbtn, sh_m_dfbtn, sh_m_find
     dw sh_m_tblrun                                        ; 81.114.8
+    dw sh_m_tbladj                                        ; 81.114.9
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1152,6 +1154,9 @@ sh_mverb_end:
 
 sh_m_tblrun:
     call sh_tbl_runall
+    retf
+sh_m_tbladj:
+    call sh_tbl_rcshift
     retf
 sh_m_doread:
     call shm_doread
@@ -1685,6 +1690,20 @@ sh_tbl_run_all:
     je .out                             ; it costs a compare rather than a
     push bp                             ; far call into the module
     mov bp, SHM_TBLRUN
+    call ch_ovcall
+    pop bp
+.out:
+    ret
+
+; sh_tbl_rc_adj - 81.114.9's, and sh_tbl_run_all's shape exactly: a table's
+; stored rectangle follows an Insert/Delete Row/Column. sh_rowcol_op is
+; resident and this work is the module's, which is the right side of the line
+; - it is a menu operation, not a hot path.
+sh_tbl_rc_adj:
+    cmp word [sh_ntbl], 0
+    je .out
+    push bp
+    mov bp, SHM_TBLADJ
     call ch_ovcall
     pop bp
 .out:
@@ -3629,10 +3648,17 @@ sh_vidx_row:
 ; operation again.
 ;
 ; Layout in sh_undoseg, and in staging during a swap: SH_UD_HDR bytes of
-; header - ncells, nbord, nnote, txtlen - then the three arrays and the 2048
-; bytes of widths and row heights (the height table carries its own count).
+; header - ncells, nbord, nnote, txtlen, ntbl - then the FOUR arrays and the
+; 2048 bytes of widths and row heights (the height table carries its own
+; count).
+;
+; 81.114.9 ADDED THE TABLE LIST, and it had to: without it, Undo of an Insert
+; Row put the cells and the result-cell MARKS back where they were and left
+; every table's stored RECTANGLE shifted - and Undo of an Edit > Clear that
+; dropped a table restored the cells without the table. A half-restoring Undo
+; is worse than none, because the user believes it.
 ; =============================================================================
-SH_UD_HDR    equ 8
+SH_UD_HDR    equ 10
 SH_UL_ENTRY  equ 0                     ; the labels, sh_ud_names' order
 SH_UL_CUT    equ 1
 SH_UL_PASTE  equ 2
@@ -3775,6 +3801,13 @@ sh_undo_size:
     pop dx
     add ax, dx
     jc .big
+    push ax
+    mov ax, [sh_ntbl]                  ; 81.114.9
+    mov dx, SH_T_SZ
+    mul dx
+    pop dx
+    add ax, dx
+    jc .big
     add ax, SH_UD_HDR + 2048
     jc .big
     cmp ax, SH_CLAIM_UNDO_KB * 1024
@@ -3819,6 +3852,8 @@ sh_undo_save:
     mov [es:4], ax
     mov ax, [sh_txtlen]
     mov [es:6], ax
+    mov ax, [sh_ntbl]                  ; 81.114.9
+    mov [es:8], ax
     mov di, SH_UD_HDR
     mov ax, [sh_ncells]                ; every length from OUR bss before any
     mov bx, SH_C_SZ                    ; segment register moves (the lesson of
@@ -3845,6 +3880,15 @@ sh_undo_save:
     pop dx
     mov cx, ax
     mov ax, [sh_noteseg]
+    xor si, si
+    call sh_fcopy
+    mov ax, [sh_ntbl]                  ; 81.114.9: ...and the table list
+    mov bx, SH_T_SZ
+    push dx
+    mul bx
+    pop dx
+    mov cx, ax
+    mov ax, [sh_tblseg]
     xor si, si
     call sh_fcopy
     mov cx, 2048                       ; the widths and the row heights, from
@@ -3879,6 +3923,8 @@ sh_undo_load:
     mov [sh_nnote], bx
     mov bx, [es:6]
     mov [sh_txtlen], bx
+    mov bx, [es:8]                     ; 81.114.9
+    mov [sh_ntbl], bx
     mov si, SH_UD_HDR
     push ax
     mov ax, [sh_ncells]
@@ -3905,6 +3951,15 @@ sh_undo_load:
     mov cx, ax
     pop ax
     mov dx, [sh_noteseg]
+    xor di, di
+    call sh_fcopy
+    push ax                            ; 81.114.9
+    mov ax, [sh_ntbl]
+    mov bx, SH_T_SZ
+    mul bx
+    mov cx, ax
+    pop ax
+    mov dx, [sh_tblseg]
     xor di, di
     call sh_fcopy
     mov cx, 2048
@@ -10843,6 +10898,7 @@ sh_sort_permcol:
 section .text
 
 sh_s_sortfull: db 'Sort incomplete - text area full.', 0
+sh_s_sorttbl:  db 'Sorted - a table in the range is no longer one.', 0
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_sortcol - sorts the selected column's occupied cells (on the
@@ -12827,6 +12883,17 @@ sh_docmd_sortcol:
                                        ; would shear the table row from row
 .wbdone:
     call sh_sort_carry                ; ...and bring the other columns with it
+    ; 81.114.9: A SORT IS AN ARBITRARY PERMUTATION, so a table whose range it
+    ; touched stops being a table - its results are still the right numbers,
+    ; in an order nothing can reconstruct. The record goes and the marks with
+    ; it; the VALUES stay where the sort put them, which is the same shape of
+    ; answer SYLK gives a table it cannot describe. It is SAID, because a
+    ; table silently ceasing to be one is the kind of thing a user finds out
+    ; about much later.
+    call sh_tbl_sortdrop
+    or al, al
+    jz .wbpaint
+    mov word [sh_msg], sh_s_sorttbl
 .wbpaint:
     mov si, [sh_ownwin]
     SHOUT sh_repaint
@@ -15752,6 +15819,398 @@ sh_tbl_unmark:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; 81.114.9 - THE STORED RECTANGLE FOLLOWS THE GRID.
+;
+; Insert/Delete Row/Column move the cells, and they move a result cell's MARK
+; with them for free - the mark lives in the border byte, and sh_rc_sides
+; already shifts that table. The 16-byte table record does NOT move, so
+; without this a table whose sheet gained a row above it is guarded against a
+; rectangle one row too high: a clear refused when it should be allowed, or
+; allowed when it should be refused.
+;
+; sh_rc_table is the GENERIC shifter for a sparse table whose record begins
+; (packed row/sheet, column), and it does not fit, because a table record is
+; not a point:
+;
+;   a row inserted ABOVE it     moves the whole rectangle down
+;   a row inserted INSIDE it    GROWS it - r2 moves, r1 does not
+;   a row deleted INSIDE it     shrinks it, and the table goes when no
+;                               interior is left
+;   the TOP row deleted         takes the formulas (or the input values)
+;                               with it, so the table goes
+;   an INPUT CELL deleted       leaves nothing to substitute, so the table
+;                               goes
+;
+; A dropped table is UNMARKED first, over where its marks now are - the
+; border table was shifted before this ran, so the rectangle to unmark is the
+; SHIFTED one and not the one the record still holds.
+; =============================================================================
+
+; sh_tbl_shiftv - AX = a row or column index that is not SH_TBL_NONE;
+; DX = the grid's bound in that direction. [sh_rc_op]/[sh_rc_idx] say what
+; happened. out: AX shifted, CF=1 = this index is GONE - it was the deleted
+; one, or an insert pushed it off the end of the grid.
+sh_tbl_shiftv:
+    push bx
+    mov bx, [sh_rc_idx]
+    cmp ax, bx
+    jb .same                           ; before the pivot: untouched
+    test byte [sh_rc_op], 1            ; ops 1 and 3 are the deletes
+    jnz .del
+    inc ax
+    cmp ax, dx
+    jae .gone                          ; pushed off the grid
+.same:
+    pop bx
+    clc
+    ret
+.del:
+    cmp ax, bx                         ; RE-COMPARED ON PURPOSE: the `test`
+    je .gone                           ; above ate the flags from the compare
+    dec ax                             ; at the top, so a `je` resting on
+    pop bx                             ; them would never have fired - and a
+    clc                                ; stale flag has no name (81.17's
+    ret                                ; family)
+.gone:
+    pop bx
+    stc
+    ret
+
+; sh_tbl_rcone - one record, at ES:SI and known to be on this sheet.
+; out: CF=1 drop it, and either way [sh_tbl_tr1..tc2] is the RESULT
+; rectangle where this table's marks now are.
+sh_tbl_rcone:
+    push ax
+    push bx
+    push dx
+    mov ax, [es:si+SH_T_R1]
+    mov [sh_tbl_r1], ax
+    mov ax, [es:si+SH_T_R2]
+    mov [sh_tbl_r2], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C1]
+    mov [sh_tbl_c1], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C2]
+    mov [sh_tbl_c2], ax
+    mov ax, [es:si+SH_T_IR]
+    mov [sh_tbl_ir], ax
+    mov ax, [es:si+SH_T_IC]
+    mov [sh_tbl_ic], ax
+    mov ax, [es:si+SH_T_IR2]
+    mov [sh_tbl_ir2], ax
+    mov ax, [es:si+SH_T_IC2]
+    mov [sh_tbl_ic2], ax
+
+    mov bx, [sh_rc_idx]
+    cmp byte [sh_rc_op], 2
+    jae .col
+
+    ; --- ROWS: the rectangle ------------------------------------------------
+    mov dx, SH_ROWS
+    mov ax, [sh_tbl_r1]
+    cmp ax, bx
+    jb .r2                             ; the pivot is below r1: r1 stays
+    cmp byte [sh_rc_op], 1
+    jne .rins1
+    cmp ax, bx                         ; DELETING THE TOP ROW takes the
+    je .drop                           ; formulas, or the input values, with
+                                       ; it - there is no table left
+    dec ax
+    mov [sh_tbl_r1], ax
+    jmp short .r2
+.rins1:
+    inc ax
+    cmp ax, SH_ROWS
+    jae .drop
+    mov [sh_tbl_r1], ax
+.r2:
+    mov ax, [sh_tbl_r2]
+    cmp ax, bx
+    jb .rinputs                        ; wholly above the pivot: nothing moves
+    cmp byte [sh_rc_op], 1
+    jne .rins2
+    dec ax                             ; a delete at or inside the rectangle
+    mov [sh_tbl_r2], ax                ; SHRINKS it
+    mov bx, [sh_tbl_r1]
+    cmp ax, bx
+    jbe .drop                          ; ...and no interior is left
+    mov bx, [sh_rc_idx]
+    jmp short .rinputs
+.rins2:
+    inc ax
+    cmp ax, SH_ROWS
+    jae .drop
+    mov [sh_tbl_r2], ax
+.rinputs:
+    mov ax, [sh_tbl_ir]
+    cmp ax, SH_TBL_NONE
+    je .rin2
+    call sh_tbl_shiftv
+    jc .drop                           ; the input cell is gone
+    mov [sh_tbl_ir], ax
+.rin2:
+    mov ax, [sh_tbl_ir2]
+    cmp ax, SH_TBL_NONE
+    je .ok
+    call sh_tbl_shiftv
+    jc .drop
+    mov [sh_tbl_ir2], ax
+    jmp short .ok
+
+    ; --- COLUMNS: the mirror, and SH_COLS is 256 so c1/c2 stay bytes --------
+.col:
+    mov dx, SH_COLS
+    mov ax, [sh_tbl_c1]
+    cmp ax, bx
+    jb .c2
+    cmp byte [sh_rc_op], 3
+    jne .cins1
+    cmp ax, bx
+    je .drop
+    dec ax
+    mov [sh_tbl_c1], ax
+    jmp short .c2
+.cins1:
+    inc ax
+    cmp ax, SH_COLS
+    jae .drop
+    mov [sh_tbl_c1], ax
+.c2:
+    mov ax, [sh_tbl_c2]
+    cmp ax, bx
+    jb .cinputs
+    cmp byte [sh_rc_op], 3
+    jne .cins2
+    dec ax
+    mov [sh_tbl_c2], ax
+    mov bx, [sh_tbl_c1]
+    cmp ax, bx
+    jbe .drop
+    mov bx, [sh_rc_idx]
+    jmp short .cinputs
+.cins2:
+    inc ax
+    cmp ax, SH_COLS
+    jae .drop
+    mov [sh_tbl_c2], ax
+.cinputs:
+    mov ax, [sh_tbl_ic]
+    cmp ax, SH_TBL_NONE
+    je .cin2
+    call sh_tbl_shiftv
+    jc .drop
+    mov [sh_tbl_ic], ax
+.cin2:
+    mov ax, [sh_tbl_ic2]
+    cmp ax, SH_TBL_NONE
+    je .ok
+    call sh_tbl_shiftv
+    jc .drop
+    mov [sh_tbl_ic2], ax
+.ok:
+    call sh_tbl_resultrect
+    ; write the shifted rectangle back
+    mov ax, [sh_tbl_r1]
+    mov [es:si+SH_T_R1], ax
+    mov ax, [sh_tbl_r2]
+    mov [es:si+SH_T_R2], ax
+    mov al, byte [sh_tbl_c1]
+    mov [es:si+SH_T_C1], al
+    mov al, byte [sh_tbl_c2]
+    mov [es:si+SH_T_C2], al
+    mov ax, [sh_tbl_ir]
+    mov [es:si+SH_T_IR], ax
+    mov ax, [sh_tbl_ic]
+    mov [es:si+SH_T_IC], ax
+    mov ax, [sh_tbl_ir2]
+    mov [es:si+SH_T_IR2], ax
+    mov ax, [sh_tbl_ic2]
+    mov [es:si+SH_T_IC2], ax
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.drop:
+    call sh_tbl_resultrect             ; where the marks are NOW, which is
+    pop dx                             ; what sh_tbl_unmark needs
+    pop bx
+    pop ax
+    stc
+    ret
+
+; sh_tbl_resultrect - [sh_tbl_tr1..tc2] from the working rectangle: the range
+; less its top row and left column, which is sh_tbl_overlap's own convention.
+sh_tbl_resultrect:
+    push ax
+    mov ax, [sh_tbl_r1]
+    inc ax
+    mov [sh_tbl_tr1], ax
+    mov ax, [sh_tbl_r2]
+    mov [sh_tbl_tr2], ax
+    mov ax, [sh_tbl_c1]
+    inc ax
+    mov [sh_tbl_tc1], ax
+    mov ax, [sh_tbl_c2]
+    mov [sh_tbl_tc2], ax
+    pop ax
+    ret
+
+; sh_tbl_drop1 - unmark and remove the record at ES:SI. [sh_tbl_tr1..tc2] is
+; already the rectangle whose marks are to go.
+sh_tbl_drop1:
+    push ax
+    push cx
+    push dx
+    push di
+    call sh_tbl_unmark
+    mov ax, [sh_ntbl]
+    mov cx, SH_T_SZ
+    mul cx
+    mov cx, ax                         ; the list's length, in bytes
+    sub cx, si
+    sub cx, SH_T_SZ                    ; ...past this record
+    jcxz .last
+    mov di, si
+    push si
+    add si, SH_T_SZ
+    push ds
+    push es
+    pop ds
+    cld
+    rep movsb
+    pop ds
+    pop si
+.last:
+    dec word [sh_ntbl]
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_tbl_rcshift - SHM_TBLADJ's work: every table on this sheet follows an
+; Insert/Delete Row/Column. Called from sh_rowcol_op AFTER sh_rc_sides, so
+; the marks have already moved and a drop unmarks where they now are.
+; -----------------------------------------------------------------------------
+sh_tbl_rcshift:
+    cmp word [sh_ntbl], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx                            ; `mul` below writes it, and this
+    push si                            ; routine's contract is "preserves
+    push es                            ; everything"
+
+    mov es, [sh_tblseg]
+    xor si, si
+.l:
+    mov ax, [sh_ntbl]
+    mov cx, SH_T_SZ
+    mul cx
+    cmp si, ax
+    jae .done
+    xor ax, ax
+    mov al, [es:si+SH_T_SHEET]
+    cmp ax, [sh_cursheet]
+    jne .next                          ; another sheet's grid did not move
+    call sh_tbl_rcone
+    jnc .next
+    call sh_tbl_drop1
+    jmp short .l                       ; ...and judge THIS index again
+.next:
+    add si, SH_T_SZ
+    jmp short .l
+.done:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_tbl_sortdrop - a SORT is an arbitrary permutation of rows, so a table
+; whose rectangle it touches stops being a table: its results are still the
+; right numbers, in an order nothing can reconstruct. The record goes and the
+; marks with it, which leaves the VALUES where the sort put them - the same
+; shape of answer SYLK gives a table it cannot describe (81.114.7).
+;
+; in: [sh_sort_r1/r2/c1/c2], the block as sh_docmd_sortcol normalised it.
+; out: AL = how many tables were dropped, for the status line.
+; -----------------------------------------------------------------------------
+sh_tbl_sortdrop:
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    xor dl, dl                         ; DL counts them
+    cmp word [sh_ntbl], 0
+    je .done
+    mov es, [sh_tblseg]
+    xor si, si
+.l:
+    push dx                            ; `mul` WRITES DX, and DL is the
+    mov ax, [sh_ntbl]                  ; counter: without this the count came
+    mov cx, SH_T_SZ                    ; back as the multiply's high word,
+    mul cx                             ; which is 0 for any list that fits -
+    mov bx, ax                         ; so the tables were dropped correctly
+    pop dx                             ; and the status line never said so.
+    cmp si, bx                         ; Third of its family in this feature
+    jae .done
+    xor ax, ax
+    mov al, [es:si+SH_T_SHEET]
+    cmp ax, [sh_cursheet]
+    jne .next
+    ; THE WHOLE RANGE, not the result area: a sort that reorders only the
+    ; formula row or the input values has broken the table just as surely.
+    mov ax, [es:si+SH_T_R2]
+    cmp ax, [sh_sort_r1]
+    jb .next
+    mov ax, [es:si+SH_T_R1]
+    cmp ax, [sh_sort_r2]
+    ja .next
+    xor ax, ax
+    mov al, [es:si+SH_T_C2]
+    cmp ax, [sh_sort_c1]
+    jb .next
+    xor ax, ax
+    mov al, [es:si+SH_T_C1]
+    cmp ax, [sh_sort_c2]
+    ja .next
+    mov ax, [es:si+SH_T_R1]
+    mov [sh_tbl_r1], ax
+    mov ax, [es:si+SH_T_R2]
+    mov [sh_tbl_r2], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C1]
+    mov [sh_tbl_c1], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C2]
+    mov [sh_tbl_c2], ax
+    call sh_tbl_resultrect
+    call sh_tbl_drop1
+    inc dl
+    jmp short .l
+.next:
+    add si, SH_T_SZ
+    jmp short .l
+.done:
+    mov al, dl
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -26800,6 +27259,12 @@ sh_rowcol_op:
     mov [sh_rc_idx], bx
     call sh_colw_shift                ; a column's WIDTH goes with it (81.56)
     call sh_rc_sides                  ; ...and its borders and notes (81.58)
+    call sh_tbl_rc_adj                ; ...and 81.114.9's table RECTANGLES.
+                                      ; AFTER sh_rc_sides and not before: a
+                                      ; table this drops has to unmark its
+                                      ; result cells, and those marks are in
+                                      ; the border table that the line above
+                                      ; has just moved
     mov word [sh_rc_stgcnt], 0
     mov ax, [sh_cursheet]
     mov [sh_rc_savedsheet], ax
