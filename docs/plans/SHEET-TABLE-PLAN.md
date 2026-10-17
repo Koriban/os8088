@@ -44,9 +44,9 @@ Automatic.
 ## How it persists — the format, settled
 
 The library's `excelfileformat.pdf` (the 2002 revision `docs/` points at) has
-§4.5 *Multiple Operations* as **`2do`** and documents no record. The fuller
+*Multiple Operations* (its section 4.5) as **`2do`** and documents no record. The fuller
 revision beside it, `excelfileformat(1).pdf`, documents all of it, and
-`[MS-XLS]` (`docs/ms-xls.pdf` §2.4.319, §2.5.198.92) agrees field for field.
+`[MS-XLS]` (`docs/ms-xls.pdf`, sections 2.4.319 and 2.5.198.92) agrees field for field.
 Both were read; the BIFF2/BIFF3 column below is the one that matters, because
 SHEET writes BIFF3 (§81.10).
 
@@ -56,7 +56,7 @@ It **immediately follows the FIRST `FORMULA` record** of the table's range.
 
 | off | size | contents |
 |---|---|---|
-| 0 | 6 | cell range address of the table range (the §2.5.14 Ref form) |
+| 0 | 6 | cell range address of the table range (that document's 2.5.14 Ref form) |
 | 6 | 2 | option flags |
 | 8 | 2 | row of the first input cell (in 2-D mode, the **row** input cell) |
 | 10 | 2 | column of the first input cell |
@@ -79,7 +79,7 @@ BIFF3 and not drop to 2.
 
 ### `tTbl` — the token every result cell carries
 
-Record §3.10.2. **It is always the only token in the array**, and it is only
+That document's section 3.10.2. **It is always the only token in the array**, and it is only
 legal in a `FORMULA` record.
 
 | off | size | BIFF2 | BIFF3–8 |
