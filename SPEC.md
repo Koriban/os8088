@@ -135863,6 +135863,32 @@ every other label would otherwise wear its decimals whether it needed them or
 not: `44.10` where the number is 44.1, and `0.00` — or, at a negative exponent,
 `0000` — where the number is 0.
 
+#### 82.13.2 The gate — `tests/chartexp.py`
+
+Five checks, one per clause above, and each asserts the **words** as well as
+`E`: an exponent on its own says what the labels will claim, and `ct_wvals`
+says what the bars will be. A scale that picked the right exponent and wrote
+the wrong words would draw a correct axis against wrong heights, which is the
+shape of the defect this section exists to have fixed.
+
+| mutation | what fails |
+|---|---|
+| `CHFP round` dropped, so `fp_a2i` truncates | **4 alone** — `0.66666e4` comes back 6666 against 6667, the one unit this section's own sentence is about |
+| `CH_E10_MAX` 4 → 9 | **3 alone** — E 6 and every word a hundred times bigger |
+| `ct_finalize`'s two `ch_scale` calls swapped | **all five** |
+
+**That third result was not what was predicted, and the reason is worth
+having.** Reversing the order was expected to fail only the two-series check,
+since that is the case the ordering comment is written about. It fails every
+check — and on the SINGLE-column files `[ch_e10]` comes back **0** with the
+words still perfectly correct. Scaling an empty second series is not a no-op:
+it writes `ch_e10` like any other call, and zero is what it writes. So
+"series two first, series one last" is load-bearing for **every** chart in
+the app, not only for the two that have a second series, and getting it wrong
+draws correct bars against an axis labelled in the wrong units on every file
+it opens. The comment in `ct_finalize` explains the two-series case; this is
+the larger half of what it is protecting.
+
 **Two series, one exponent word.** Scatter and Combination (§82.8) each draw
 against their own `ch_max`/`ch_max2`, and only the first is labelled —
 Combination's value axis measures its columns, which *are* series one, and a

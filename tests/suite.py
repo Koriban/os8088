@@ -13348,6 +13348,25 @@ SOAK = [
         "which this row first reported as a shared maximum",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartexp", "soak", py("tests/chartexp.py"), 300.0,
+        "SPEC.md 82.13: the series' decimal exponent, at both ends and in "
+        "the middle. ch_scale picks one E per series to fit signed words, "
+        "capped at CH_E10_MAX 4 and CH_E10_MIN -9, and [ch_e10] is how the "
+        "labels are told. One check per clause: positive E keeps fractions "
+        "(44.1 -> 4410 at E=2), negative E makes a large series chartable at "
+        "all (3.4e6 -> 3400 at E=-3, the section's own example), the cap "
+        "binds (0.004 wants E=6, gets 4), scaling ROUNDS rather than "
+        "truncates (0.66666e4 is 6666.6 -> 6667, and one unit is the whole "
+        "of that sentence), and [ch_e10] is left holding SERIES ONE's - "
+        "ct_finalize scales series two first for exactly that reason. Every "
+        "check asserts the WORDS as well as E, since a right exponent with "
+        "wrong words draws a correct axis against wrong bars. Red on "
+        "purpose: dropping the round fails 4 alone, raising the cap fails 3 "
+        "alone, and swapping the two ch_scale calls fails ALL FIVE - on a "
+        "one-column file ch_e10 comes back 0 with the words still right, "
+        "because scaling an empty second series writes ch_e10 too",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "
