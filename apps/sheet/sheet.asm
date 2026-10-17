@@ -341,6 +341,15 @@ SH_CLAIM_NOTE_KB  equ 5             ; stage 3.0b: the note table - SH_NOTE_CAP
                                     ; not in here; it goes in the formula
                                     ; arena, for the reason sh_nt_findcell's
                                     ; header gives.
+SH_CLAIM_TBL_KB   equ 1             ; 81.114.7: Data > Table's table LIST -
+                                    ; SH_TBL_CAP records of SH_T_SZ, the
+                                    ; THIRD part carved out of the one claim
+                                    ; below, for the reason 81.94 carved the
+                                    ; note table into it: MEM_OWNER_MAX is
+                                    ; eight claims an owner and SHEET holds
+                                    ; eight. It sits past the note claim's
+                                    ; whole five KB, column widths and row
+                                    ; heights included.
 SH_CLAIM_BORD_KB  equ 4             ; stage 2.x: the border table (below) -
                                      ; a separate claim rather than growing
                                      ; every cell record, since almost no
@@ -622,6 +631,41 @@ SH_FMT_NUM_MASK      equ 0x30
 SH_FMT_NUM_CLR       equ 0xCF        ; ~SH_FMT_NUM_MASK & 0xFF
 SH_FMT_NUM_SHIFT     equ 4
 SH_FMT_NUM_GENERAL   equ 0
+; --- 81.114.7: a TABLE, in the sh_tblseg list ------------------------------
+; THE FIRST SIXTEEN BYTES ARE BIFF3's DATATABLE BODY, field for field, so
+; stage 4's writer copies this record rather than building one: ref(6) then
+; the option flags then the two input cells. The seventeenth byte is ours -
+; which sheet this table is on, since the list is one array for all four and
+; a BIFF file only ever describes one.
+SH_T_R1      equ 0                  ; word: first row of the whole range
+SH_T_R2      equ 2                  ; word: last row
+SH_T_C1      equ 4                  ; byte: first column (SH_COLS is 256)
+SH_T_C2      equ 5                  ; byte: last column
+SH_T_FLAGS   equ 6                  ; word: DATATABLE's option flags
+SH_T_IR      equ 8                  ; word: row of the first input cell...
+SH_T_IC      equ 10                 ; word: ...and its column
+SH_T_IR2     equ 12                 ; word: the second input cell, 2-D only
+SH_T_IC2     equ 14
+SH_T_SHEET   equ 16                 ; byte: 0..3, ours and not the format's
+SH_T_SZ      equ 18                 ; (padded even, the way every table here is)
+SH_TBL_CAP   equ 56                 ; floor(1024 / SH_T_SZ)
+SH_TF_ROWDATA equ 0x0004            ; flags bit 2: the input data is in the
+                                    ; ROW above and the formulas in the column
+                                    ; left - clear is the other way round
+SH_TF_TWOD    equ 0x0008            ; flags bit 3: two-dimensional
+
+; --- the banking slot sh_table_cell keeps an input cell in ------------------
+; COL AND ROW ARE THE SLOT'S OWN, not read back out of the banked record.
+; The record's SH_C_ROW is row|sheet PACKED, and sh_findcell wants a plain
+; row, so unbanking through the record restored nothing at all on sheets 2-4
+; - and an input cell that did not EXIST had no record to read them from, so
+; the substitution stayed in the user's sheet.
+SH_TBS_COL   equ 0                  ; word: the cell, plainly
+SH_TBS_ROW   equ 2
+SH_TBS_HAVE  equ 4                  ; word: 1 = it existed; 0 = it did not
+SH_TBS_REC   equ 6                  ; ...and its record when it did
+SH_TBS_SZ    equ SH_TBS_REC + SH_C_SZ
+
 SH_FMT_NUM_CURRENCY  equ 1
 SH_FMT_NUM_COMMA     equ 2
 SH_FMT_NUM_PERCENT   equ 3
@@ -652,6 +696,16 @@ SH_BORD_EDGES  equ 0x0F             ; Left|Right|Top|Bottom together
 SH_PROT_UNLOCK equ 0x20             ; bit 5: this cell is NOT locked
 SH_PROT_HIDDEN equ 0x40             ; bit 6: hide its formula when protected
 SH_PROT_MASK   equ 0x60             ; the two together, for preserving them
+; --- 81.114.7: and the LAST free bit of that byte marks a table result cell -
+; A result cell is sparse exactly as a bordered one is, and sh_prot_blocked
+; already reads this byte for every cell of the selection - so the guard that
+; refuses an edit inside a table costs ONE `test` and no second lookup.
+; SH_C_FLAGS was the plan's home for it and this byte is the better one for
+; the reason written above: that byte is written as a WORD with the format at
+; several sites and cleared outright when a formula becomes a value, so a
+; mark there would survive some edits and not others.
+SH_TBL_RESULT  equ 0x80             ; bit 7: a Data > Table result cell
+SH_BT_KEEP     equ 0xE0             ; the three bits a BORDER write must keep
 
 ; sh_doread_biff's FONT/XF tracking tables (a real file might reference more
 ; than this app itself ever writes - beyond the cap, a cell just reads back
@@ -856,6 +910,8 @@ sh_reloc:
     mov ax, [sh_bordseg]              ; the border table's claim, so it moves
     add ax, SH_CLAIM_BORD_KB * 64     ; with it - no word names it as a base
     mov [sh_noteseg], ax
+    add ax, SH_CLAIM_NOTE_KB * 64     ; ...and 81.114.7's table list after it,
+    mov [sh_tblseg], ax               ; for the same reason and no word either
     pop ax
     pop di
     pop si
@@ -869,7 +925,8 @@ sh_reloc:
 ; window where a chart export could be holding a stale segment across the
 ; OSAPI_FILE_WRITE in the middle of it. The note table's segment is NOT here:
 ; it is derived from bordseg's carve, which sh_reloc recomputes after its
-; patch loop (81.94.1).
+; patch loop (81.94.1). Nor is the TABLE LIST's (81.114.7) - a third carve of
+; that same claim, derived in the same place and for the same reason.
 sh_segw:
     dw sh_cellseg, sh_txtseg, sh_bordseg
     dw sh_chartseg
@@ -2408,7 +2465,7 @@ sh_entry:
     ; is eight claims an owner and SHEET held eight, so MACRO.OVL's claim had
     ; nowhere to come from. The note table is the claim's second part, and
     ; sh_reloc derives its segment from the border table's after a move
-    mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB
+    mov ax, SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB + SH_CLAIM_TBL_KB
     call OSAPI_MEM_CLAIM
     jc .fail
     mov [sh_bordseg], dx
@@ -2416,6 +2473,9 @@ sh_entry:
     call OSAPI_MEM_MOVABLE             ; takes the claim's base, and the first
     add dx, SH_CLAIM_BORD_KB * 64      ; build declared the NOTE table's - not
     mov [sh_noteseg], dx               ; a claim, refused, silently pinned
+    add dx, SH_CLAIM_NOTE_KB * 64      ; ...and the table list past all five
+    mov [sh_tblseg], dx                ; of the note claim's KB (81.114.7)
+    mov word [sh_ntbl], 0
     mov word [sh_nbord], 0
     call sh_colw_clear                 ; every column the standard width (81.56)
     mov word [sh_nnote], 0
@@ -5359,6 +5419,21 @@ sh_onkey:
     jmp .out
 .delcell:
     mov byte [sh_editing], 0
+    ; THE GUARD WAS MISSING HERE, and it was missing for 81.46 before this
+    ; feature existed: Del is the one write path in this app that never asked
+    ; sh_prot_blocked, so it cleared a locked cell on a protected document
+    ; and would have cleared a table result cell. Every other write - typing,
+    ; Paste, Fill, a sort's write-back - goes through sh_commit, which asks.
+    ; It is asked STRICTLY, with [sh_prot_clr] left at 0: Del clears the one
+    ; selected cell, and clearing one cell of a table is exactly the partial
+    ; clear 81.114.7 refuses.
+    call sh_prot_blocked
+    jnc .delok
+    call sh_repaint                    ; A REFUSAL STILL HAS TO REPAINT, or
+    jmp .out                           ; the status bar never shows what it
+.delok:                                ; just said (SI is the window here -
+                                       ; .delcell's own sh_repaint below takes
+                                       ; it from the same place)
     mov al, SH_UL_CLEAR                ; Del is Edit Clear's key, and undoable
     call sh_undo_begin                 ; as it is (81.57)
     mov ax, [sh_selcol]
@@ -9381,7 +9456,11 @@ sh_prot_blocked:
     push si
     mov byte [sh_prot_hit], 0
     cmp byte [sh_protected], 0
-    je .done
+    jne .scan
+    cmp word [sh_ntbl], 0             ; 81.114.7: an unprotected document with
+    je .done                          ; no table on it is every document this
+.scan:                                ; app had before Data > Table, and the
+                                      ; scan below costs it nothing at all
     ; THE WHOLE SELECTION, not the anchor. Cut and Clear act on the block,
     ; and a guard that asked about one corner would have let a Cut take
     ; every locked cell beside it. sh_commit's selection is 1x1 by the time
@@ -9409,13 +9488,29 @@ sh_prot_blocked:
     mov ax, cx
     mov bx, si
     call sh_bt_get                    ; 0 when there is no record, and no
-    test al, SH_PROT_UNLOCK           ; record is the LOCKED default
-    pop dx                            ; (pop does not touch the flags)
-    pop cx
-    pop bx
-    pop ax
+    mov [sh_prot_bt], al              ; record is the LOCKED default. THE BYTE
+    pop dx                            ; GOES TO BSS, not to AH: every register
+    pop cx                            ; here is the caller's and the pops are
+    pop bx                            ; what put them back, so a half-register
+    pop ax                            ; would not survive them
+    test byte [sh_prot_bt], SH_TBL_RESULT
+    jz .notres                        ; 81.114.7: a Data > Table result cell
+    cmp byte [sh_prot_clr], 0         ; cannot be edited, protected document
+    je .hittbl                        ; or not - except by Edit > Clear, which
+.notres:                              ; asks the WIDER question in
+                                      ; sh_tbl_clearguard: a clear that covers
+                                      ; a whole table is how a table is
+                                      ; dropped, and must reach it to be
+                                      ; judged
+    cmp byte [sh_protected], 0
+    je .next
+    test byte [sh_prot_bt], SH_PROT_UNLOCK
     jnz .next
     mov byte [sh_prot_hit], 1
+    pop cx
+    jmp .done
+.hittbl:
+    mov byte [sh_prot_hit], 2
     pop cx
     jmp .done
 .next:
@@ -9432,9 +9527,14 @@ sh_prot_blocked:
     pop cx
     pop bx
     pop ax
+    mov byte [sh_prot_clr], 0         ; one call's worth, never a mode
     cmp byte [sh_prot_hit], 0
     je .ok
     mov word [sh_msg], sh_s_locked
+    cmp byte [sh_prot_hit], 2
+    jne .say
+    mov word [sh_msg], sh_s_tblpart
+.say:
     stc
     ret
 .ok:
@@ -13826,10 +13926,38 @@ sh_clear_one:
     jmp .out
 .fmt:
     SHOUT sh_findcell
-    jnc .out
-    mov es, [sh_cellseg]
-    mov byte [es:di+5], 0             ; Formats: only the format byte, and the
-    SHOUT sh_bt_removecell             ; border table entry beside it
+    jnc .fmtbord                      ; no CELL record is no reason to leave
+    mov es, [sh_cellseg]              ; the border table alone
+    mov byte [es:di+5], 0             ; Formats: the format byte...
+.fmtbord:
+    ; ...AND THE BORDER RECORD'S FORMAT HALF, BUT NOT THE WHOLE RECORD. This
+    ; was a plain sh_bt_removecell, which takes everything stored for the
+    ; cell - so Clear > Formats reset Locked/Hidden to the default, which is
+    ; an 81.46 defect older than this feature, and once 81.114.7 put the
+    ; table mark in the same byte it UN-PROTECTED a table's result cells
+    ; while leaving the table itself recorded. The edges, the shade and the
+    ; number format are what Formats means; SH_BT_KEEP's three bits are not,
+    ; and the record goes only when nothing is left in it - which is
+    ; sh_bdlg_apbord's own .clearit, exactly.
+    push ax
+    push bx
+    SHOUT sh_bt_findcell
+    jnc .fmtdone
+    push es
+    mov es, [sh_bordseg]
+    and byte [es:di+4], SH_BT_KEEP
+    mov byte [es:di+5], 0             ; the number format too (81.55)
+    mov al, [es:di+4]
+    pop es
+    or al, al
+    jnz .fmtdone
+    pop bx
+    pop ax
+    SHOUT sh_bt_removecell            ; nothing left: the record goes after all
+    jmp .out
+.fmtdone:
+    pop bx
+    pop ax
 .out:
     pop es
     pop di
@@ -14020,13 +14148,18 @@ sh_fdlg_apply0:
 
 ; --- stage 3.0c: the four that used to be immediate menu commands -----------
 .doclear:
-    SHOUT sh_prot_blocked
+    mov byte [sh_prot_clr], 1         ; 81.114.7: a result cell reaches the
+    SHOUT sh_prot_blocked             ; guard below instead of being refused
     jc .refused                       ; ...and the same here: this engine's
     push si                           ; 81.74: CLEAR() takes no argument here,
     mov si, sh_s_rec_clear            ; so the three radio modes all record as
     SHOUT sh_rec_cmd                   ; the one the language has
     pop si
                                       ; .out does not repaint either
+    call sh_tbl_clearguard            ; 81.114.7: all of a table or none of
+    jc .refused                       ; it - Excel's "You must clear all the
+                                      ; resulting values", and a cover that
+                                      ; is whole DROPS the table in here
     ; Over the WHOLE SELECTION, like Excel's Clear and like the block the user
     ; has highlighted. It used to clear the anchor alone (81.17's third case,
     ; after Fill and the format dialogs).
@@ -14735,7 +14868,7 @@ sh_bdlg_apbord:
     push es
     mov es, [sh_bordseg]
     mov al, [es:di+4]
-    and al, SH_PROT_MASK                ; THE PROTECTION BITS ARE NOT THIS
+    and al, SH_BT_KEEP                  ; THE PROTECTION BITS ARE NOT THIS
     or al, dl                           ; DIALOG'S TO WRITE. This was a plain
     mov [es:di+4], al                   ; store of the border bits, which was
     pop es                              ; right while it owned the whole byte
@@ -14745,7 +14878,7 @@ sh_bdlg_apbord:
     jnc .out                            ; take the record away with them if the
     push es                             ; cell is also unlocked or hidden
     mov es, [sh_bordseg]
-    and byte [es:di+4], SH_PROT_MASK
+    and byte [es:di+4], SH_BT_KEEP
     mov ax, [es:di+4]                   ; the number format too (81.55)
     pop es
     or ax, ax
@@ -14962,13 +15095,29 @@ sh_table_run:
     cmp ax, [sh_tbl_c2]
     jae .bad
     ; --- which shape? --------------------------------------------------------
+    mov word [sh_tbl_flags], 0
     mov ax, [sh_tbl_ir]
     cmp ax, SH_TBL_NONE
     jne .haverow
     mov ax, [sh_tbl_ir2]
     cmp ax, SH_TBL_NONE
     je .bad                            ; neither: nothing to substitute
+    jmp short .shaped                  ; COLUMN input only: the values are
+                                       ; down the left column, so the input
+                                       ; data is in the column and bit 2 is 0
 .haverow:
+    ; 81.114.7: the flags BIFF3's DATATABLE carries, settled here where the
+    ; shape is decided rather than guessed again by the writer. Bit 3 is
+    ; two-dimensional; bit 2 says the input data is in the ROW above and the
+    ; formulas down the column left, which is the row-input-only shape.
+    mov ax, [sh_tbl_ir2]
+    cmp ax, SH_TBL_NONE
+    je .rowdata
+    mov word [sh_tbl_flags], SH_TF_TWOD
+    jmp short .shaped
+.rowdata:
+    mov word [sh_tbl_flags], SH_TF_ROWDATA
+.shaped:
     ; --- the interior, cell by cell -----------------------------------------
     mov bx, [sh_tbl_r1]
     inc bx                             ; the first result row
@@ -14991,8 +15140,9 @@ sh_table_run:
     inc bx
     jmp short .rowloop
 .done:
-    clc
-    jmp short .out
+    call sh_tbl_add                    ; ...and the table OUTLIVES the run
+    clc                                ; (81.114.7). CF is not read: a full
+    jmp short .out                     ; list costs protection, not numbers
 .bad:
     stc
 .out:
@@ -15091,6 +15241,11 @@ sh_table_cell:
     mov ax, [sh_tbl_cc]
     mov bx, [sh_tbl_cr]
     SHOUT sh_setvald
+    call sh_table_mark                 ; 81.114.7: ...and it is a RESULT cell
+                                       ; now, which no edit may touch. AFTER
+                                       ; the store, never before: sh_setvald
+                                       ; writes the cell record and this
+                                       ; writes the border table beside it
     mov di, sh_tbl_sav1
     call sh_table_unbank
     mov di, sh_tbl_sav2
@@ -15100,6 +15255,391 @@ sh_table_cell:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; 81.114.7 - THE TABLE LIST. A table outlives the run that made it: a result
+; cell cannot be edited, a clear is all-or-nothing, and stage 4 has to write
+; one DATATABLE record per table. None of that is answerable from the cell
+; records, so the rectangle and the input cells are kept in a list of their
+; own - SH_T_SZ a table, carved out of the border claim (SHEET holds all
+; eight of MEM_OWNER_MAX's claims, so a ninth is refused).
+;
+; WHICH CELLS ARE RESULTS is NOT read from this list on the hot path. Every
+; result cell carries SH_TBL_RESULT in the border byte, which sh_prot_blocked
+; already fetches for each cell of the selection - so the guard that refuses
+; an edit is one `test` and the list is only walked by Clear, which is a menu
+; command and may spend a scan.
+; =============================================================================
+
+; sh_tbl_selnorm - the selection into [sh_tbl_sr1..sc2], top-left first.
+sh_tbl_selnorm:
+    push ax
+    push bx
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .r
+    xchg ax, bx
+.r:
+    mov [sh_tbl_sr1], ax
+    mov [sh_tbl_sr2], bx
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .c
+    xchg ax, bx
+.c:
+    mov [sh_tbl_sc1], ax
+    mov [sh_tbl_sc2], bx
+    pop bx
+    pop ax
+    ret
+
+; sh_tbl_findrec - the record for the rectangle now in [sh_tbl_r1]/[sh_tbl_c1]
+; on the current sheet. in: ES = [sh_tblseg]. out: CF=1 and DI = its offset.
+; The top-left corner and the sheet are the identity: re-running Data > Table
+; over the same rectangle REPLACES its record rather than adding a second.
+sh_tbl_findrec:
+    push ax
+    push cx
+    xor di, di
+    mov cx, [sh_ntbl]
+    jcxz .no
+.l:
+    mov ax, [sh_tbl_r1]
+    cmp ax, [es:di+SH_T_R1]
+    jne .next
+    mov al, byte [sh_tbl_c1]
+    cmp al, [es:di+SH_T_C1]
+    jne .next
+    mov al, byte [sh_cursheet]
+    cmp al, [es:di+SH_T_SHEET]
+    je .yes
+.next:
+    add di, SH_T_SZ
+    loop .l
+.no:
+    clc
+    jmp short .out
+.yes:
+    stc
+.out:
+    pop cx
+    pop ax
+    ret
+
+; sh_tbl_add - record the table sh_table_run has just filled, from the same
+; [sh_tbl_*] words it ran off. out: CF=1 the list is full and nothing was
+; stored - the numbers are still right, the table is simply not protected,
+; which is the same scope limit every other table in this file takes when it
+; fills (the border table's own writers say so).
+sh_tbl_add:
+    push ax
+    push cx
+    push dx
+    push di
+    push es
+    mov es, [sh_tblseg]
+    call sh_tbl_findrec
+    jc .fill
+    cmp word [sh_ntbl], SH_TBL_CAP
+    jae .full
+    mov ax, [sh_ntbl]
+    mov cx, SH_T_SZ
+    mul cx
+    mov di, ax
+    inc word [sh_ntbl]
+.fill:
+    mov ax, [sh_tbl_r1]
+    mov [es:di+SH_T_R1], ax
+    mov ax, [sh_tbl_r2]
+    mov [es:di+SH_T_R2], ax
+    mov al, byte [sh_tbl_c1]
+    mov [es:di+SH_T_C1], al
+    mov al, byte [sh_tbl_c2]
+    mov [es:di+SH_T_C2], al
+    mov ax, [sh_tbl_flags]
+    mov [es:di+SH_T_FLAGS], ax
+    mov ax, [sh_tbl_ir]
+    mov [es:di+SH_T_IR], ax
+    mov ax, [sh_tbl_ic]
+    mov [es:di+SH_T_IC], ax
+    mov ax, [sh_tbl_ir2]
+    mov [es:di+SH_T_IR2], ax
+    mov ax, [sh_tbl_ic2]
+    mov [es:di+SH_T_IC2], ax
+    mov al, byte [sh_cursheet]
+    mov [es:di+SH_T_SHEET], al
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; sh_tbl_overlap - how the record at ES:DI sits against the selection in
+; [sh_tbl_sr1..sc2]. out: AL = 0 apart, 1 PARTLY covered, 2 wholly covered.
+; THE RESULT AREA, not the range: the top row and the left column of a
+; table's rectangle are the user's own formulas and input values, and
+; clearing those is not clearing the table.
+sh_tbl_overlap:
+    mov al, byte [sh_cursheet]
+    cmp al, [es:di+SH_T_SHEET]
+    jne .none                          ; another sheet's table
+    push ax
+    mov ax, [es:di+SH_T_R1]
+    inc ax
+    mov [sh_tbl_tr1], ax
+    mov ax, [es:di+SH_T_R2]
+    mov [sh_tbl_tr2], ax
+    xor ax, ax
+    mov al, [es:di+SH_T_C1]
+    inc ax
+    mov [sh_tbl_tc1], ax
+    xor ax, ax
+    mov al, [es:di+SH_T_C2]
+    mov [sh_tbl_tc2], ax
+    ; apart?
+    mov ax, [sh_tbl_tr2]
+    cmp ax, [sh_tbl_sr1]
+    jb .nonep
+    mov ax, [sh_tbl_tr1]
+    cmp ax, [sh_tbl_sr2]
+    ja .nonep
+    mov ax, [sh_tbl_tc2]
+    cmp ax, [sh_tbl_sc1]
+    jb .nonep
+    mov ax, [sh_tbl_tc1]
+    cmp ax, [sh_tbl_sc2]
+    ja .nonep
+    ; wholly inside?
+    mov ax, [sh_tbl_tr1]
+    cmp ax, [sh_tbl_sr1]
+    jb .partp
+    mov ax, [sh_tbl_tr2]
+    cmp ax, [sh_tbl_sr2]
+    ja .partp
+    mov ax, [sh_tbl_tc1]
+    cmp ax, [sh_tbl_sc1]
+    jb .partp
+    mov ax, [sh_tbl_tc2]
+    cmp ax, [sh_tbl_sc2]
+    ja .partp
+    pop ax
+    mov al, 2
+    ret
+.partp:
+    pop ax
+    mov al, 1
+    ret
+.nonep:
+    pop ax
+.none:
+    xor al, al
+    ret
+
+; sh_tbl_dropsel - forget every table the selection covers WHOLLY. Called
+; only after sh_tbl_clearguard has agreed, so a partial cover never reaches
+; it. The result cells' SH_TBL_RESULT marks go with the border records
+; sh_clear_one removes; this takes the table itself away.
+sh_tbl_dropsel:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [sh_tblseg]
+    xor di, di
+.l:
+    mov ax, [sh_ntbl]
+    mov cx, SH_T_SZ
+    mul cx                             ; AX = the list's length, in bytes
+    cmp di, ax
+    jae .out
+    call sh_tbl_overlap
+    cmp al, 2
+    jne .keep
+    call sh_tbl_unmark                 ; THE MARKS GO WITH THE TABLE, here and
+                                       ; not in sh_clear_one: All removes the
+                                       ; whole border record anyway, but
+                                       ; FORMULAS keeps it (81.63 - a cell
+                                       ; with a border is kept), so a clear
+                                       ; that way dropped the table and left
+                                       ; every result cell marked. An orphan
+                                       ; mark refuses edits for ever, and only
+                                       ; while another table keeps
+                                       ; sh_prot_blocked's scan armed - which
+                                       ; is as hard to see as it sounds
+    mov ax, [sh_ntbl]                  ; THE LENGTH IS RE-TAKEN, not the one
+    mov cx, SH_T_SZ                    ; computed four instructions ago:
+    mul cx                             ; sh_tbl_overlap answers in AL, so AX
+                                       ; came back as (old AH):(0|1|2) and
+                                       ; `mov cx, ax` made a byte count out of
+                                       ; whatever AH happened to be. The
+                                       ; rep movsb below then ran off the end
+                                       ; of a 10KB claim and the machine said
+                                       ; STACK OVERFLOW, three structures
+                                       ; away from the mistake
+    mov cx, ax                         ; close the gap: everything past this
+    sub cx, di                         ; record moves down over it
+    sub cx, SH_T_SZ
+    jcxz .last
+    mov si, di
+    add si, SH_T_SZ
+    push di
+    push ds                            ; DS GOES BACK BEFORE THE LOOP TURNS:
+    push es                            ; [sh_ntbl] and the rectangles below
+    pop ds                             ; are in OUR segment, not the claim's
+    cld
+    rep movsb
+    pop ds
+    pop di
+.last:
+    dec word [sh_ntbl]
+    jmp short .l                       ; ...and judge THIS index again
+.keep:
+    add di, SH_T_SZ
+    jmp short .l
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; sh_tbl_unmark - clear SH_TBL_RESULT over the result rectangle now in
+; [sh_tbl_tr1..tc2] on the current sheet, which sh_tbl_overlap has just
+; filled. ONE WALK of the border table rather than a lookup per cell: the
+; rectangle can be large and the table is SH_BORD_CAP records at most.
+;
+; A record left holding nothing is NOT removed here - every reader of this
+; table treats a zero record exactly as it treats no record, and removing one
+; mid-walk would shift the array under the cursor. Clear > All takes the
+; record away in sh_clear_one anyway; what can be left behind is a zero
+; record per result cell of a table cleared through FORMULAS, bounded by the
+; number of distinct result cells the document has ever had.
+sh_tbl_unmark:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    mov es, [sh_bordseg]
+    xor si, si
+    mov cx, [sh_nbord]
+    jcxz .out
+.l:
+    test byte [es:si+4], SH_TBL_RESULT
+    jz .next
+    mov ax, [es:si]                    ; row, packed with the sheet
+    mov bx, ax
+    and bx, 0xC000
+    push cx                            ; 8086: a shift is by 1 or by CL
+    mov cl, 6
+    shr bh, cl
+    pop cx
+    cmp bh, byte [sh_cursheet]
+    jne .next
+    and ax, 0x3FFF
+    cmp ax, [sh_tbl_tr1]
+    jb .next
+    cmp ax, [sh_tbl_tr2]
+    ja .next
+    mov ax, [es:si+2]
+    cmp ax, [sh_tbl_tc1]
+    jb .next
+    cmp ax, [sh_tbl_tc2]
+    ja .next
+    and byte [es:si+4], ~SH_TBL_RESULT & 0xFF
+.next:
+    add si, SH_BT_SZ
+    loop .l
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_tbl_clearguard - Edit > Clear over a selection that touches a table.
+; in: the selection, and [sh_fdlg_sel] = 0 All / 1 Formulas / 2 Formats
+; out: CF=1 REFUSED and [sh_msg] says why; CF=0 go ahead, and every table
+;      the selection covered wholly has been dropped
+;
+; Excel's rule in its own words: "You must clear all the resulting values."
+; A clear that covers every result cell of every table it touches is allowed
+; and takes those tables with it; one that covers part of a table is refused.
+;
+; FORMATS IS EXEMPT, and that is Excel too rather than a shortcut: a table's
+; cells can be formatted - that is why the guide tells you to - so clearing a
+; number format off them is a format change and not an edit of the values.
+; -----------------------------------------------------------------------------
+sh_tbl_clearguard:
+    cmp word [sh_fdlg_sel], 2
+    je .ok
+    cmp word [sh_ntbl], 0
+    je .ok
+    push ax
+    push cx
+    push di
+    push es
+    call sh_tbl_selnorm
+    mov es, [sh_tblseg]
+    xor di, di
+    mov cx, [sh_ntbl]
+.l:
+    call sh_tbl_overlap
+    cmp al, 1
+    je .part
+    add di, SH_T_SZ
+    loop .l
+    call sh_tbl_dropsel
+    pop es
+    pop di
+    pop cx
+    pop ax
+.ok:
+    clc
+    ret
+.part:
+    mov word [sh_msg], sh_s_tblpart
+    pop es
+    pop di
+    pop cx
+    pop ax
+    stc
+    ret
+
+; sh_table_mark - (AX=col, BX=row) is a result cell. 81.114.7's bit 7 of the
+; border byte, which is where sh_prot_blocked already looks - so this costs a
+; border record per result cell and nothing per edit. A border table that
+; fills is a silent no-op, as it is at every other writer: the cell keeps the
+; right NUMBER and loses only its protection.
+sh_table_mark:
+    push ax
+    push bx
+    push di
+    push es
+    SHOUT sh_bt_addcell
+    jc .out
+    mov es, [sh_bordseg]
+    or byte [es:di+4], SH_TBL_RESULT
+.out:
+    pop es
+    pop di
     pop bx
     pop ax
     ret
@@ -15147,16 +15687,18 @@ sh_table_bank:
     push di
     push es
     push ds
-    mov word [di], 0
-    cmp ax, SH_TBL_NONE
-    je .out
-    add di, 2
+    mov word [di+SH_TBS_HAVE], 0
+    mov [di+SH_TBS_COL], ax            ; WHICH CELL, written before the
+    mov [di+SH_TBS_ROW], bx            ; lookup: unbank needs it whether or
+    cmp ax, SH_TBL_NONE                ; not there turns out to be a record,
+    je .out                            ; and must not read it back out of one
+    add di, SH_TBS_REC
     push di
     SHOUT sh_findcell                  ; CF=1 = DI is the record
     mov si, di
     pop di
     jnc .out
-    mov word [di-2], 1
+    mov word [di-SH_TBS_REC+SH_TBS_HAVE], 1
     ; DS:SI = the record, in the CELL segment; ES:DI = the slot, in ours.
     ; SI and DI are already that way round - `mov si, di` took the record and
     ; `pop di` the slot - and an `xchg si, di` left here from an earlier
@@ -15188,12 +15730,14 @@ sh_table_unbank:
     push si
     push di
     push es
-    cmp word [di], 0
+    mov ax, [di+SH_TBS_COL]
+    mov bx, [di+SH_TBS_ROW]
+    cmp ax, SH_TBL_NONE                ; no input cell of this kind at all
     je .out
+    cmp word [di+SH_TBS_HAVE], 0
+    je .gone
     mov si, di
-    add si, 2
-    mov ax, [si+SH_C_COL]
-    mov bx, [si+SH_C_ROW]
+    add si, SH_TBS_REC
     push si
     SHOUT sh_findcell
     pop si
@@ -15202,6 +15746,13 @@ sh_table_unbank:
     mov cx, SH_C_SZ
     cld
     rep movsb                          ; DS:SI the slot -> ES:DI the record
+    jmp short .out
+.gone:
+    ; THE CELL DID NOT EXIST, so putting it back means taking it away again.
+    ; sh_table_subst created it to substitute into, and leaving it would put
+    ; a number in a cell the user never filled - the last value of the input
+    ; range, sitting in the sheet looking like data.
+    SHOUT sh_clearcell
 .out:
     pop es
     pop di
@@ -19418,6 +19969,7 @@ sh_new:
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
     mov word [sh_nbord], 0           ; the discarded document's borders and
+    mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0           ; notes go with it - a note record holds
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0          ; ...and its NAMES, which used to survive
@@ -20304,6 +20856,7 @@ sh_doread_sylk:
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0           ; "replacing the sheet" means the old
     mov word [sh_nbord], 0            ; document's arena text, borders and
+    mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0            ; notes too, not just its cells
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0           ; ...and its defined names (81.10.8)
@@ -20714,6 +21267,7 @@ sh_doread_dif:
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0            ; "replacing the sheet" - see
     mov word [sh_nbord], 0             ; sh_doread_sylk's same three
+    mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0            ; DIF carries no names, so a DIF load
@@ -23647,6 +24201,7 @@ sh_doread_biff:
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0            ; "replacing the sheet" - see
     mov word [sh_nbord], 0             ; sh_doread_sylk's same three
+    mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0            ; the DEFINEDNAME records below refill
@@ -52229,6 +52784,7 @@ sh_s_delfail:  db 'Could not delete it.', 0
 sh_s_nocopyarea: db 'Copy a cell or range first.', 0
 sh_s_sheetpfx: db 'Sheet', 0
 sh_s_locked:   db 'Locked cell on a protected document.', 0
+sh_s_tblpart:  db 'Cannot change part of a table.', 0
 sh_s_protdoc:  db 'The document is protected.', 0
 
 ; Stage 1.8/2.x: matches real Excel 2.0/2.1's own Format menu shape
@@ -52404,15 +52960,29 @@ sh_it_filldown:  db 'Fill Down', 0
 ; paid once - the whole reason this package has a menu bar of its own is to
 ; look like the captures.
 sh_m_data:     db 'Data', 0
-sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
-               dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
-               dw sh_it_dtable                      ; 81.114, BETWEEN Series
+; ONE LABEL A ROW, sh_i_edit's shape, so the row NUMBER is addressable by
+; name - from the assembler's map by a test, and from here by a reader. Data
+; > Table... going in at index 8 pushed Parse to 9 and broke three rows that
+; had counted, and counting is the good case: a shifted index that lands on
+; another LIVE item runs the wrong command and blames the feature.
+sh_i_data:
+.form:      dw sh_it_form
+.dfind:     dw sh_it_dfind
+.extract:   dw sh_it_extract
+.del:       dw sh_it_del
+.setdb:     dw sh_it_setdb
+.setcrit:   dw sh_it_setcrit
+.sort:      dw sh_it_sort
+.series:    dw sh_it_series
+.dtable:    dw sh_it_dtable                         ; 81.114, BETWEEN Series
                                                     ; and Parse - the capture
                                                     ; (menu_data_full.png) is
                                                     ; where that order comes
                                                     ; from, not from memory
-               dw sh_it_parse                       ; 81.82, in Excel's place
-               dw sh_it_chart, sh_it_gallery, sh_it_chartexp
+.parse:     dw sh_it_parse                          ; 81.82, in Excel's place
+.chart:     dw sh_it_chart
+.gallery:   dw sh_it_gallery
+.chartexp:  dw sh_it_chartexp
 sh_it_dtable:  db 'Table...', 0
 sh_it_parse:   db 'Parse...', 0
 sh_it_form:    db 'Form...', 0
@@ -53359,6 +53929,7 @@ sh_doread_dbf:
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0
     mov word [sh_nbord], 0
+    mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0
@@ -53786,6 +54357,7 @@ sh_doread_sep:
     mov word [sh_ncells], 0
     mov word [sh_txtlen], 0           ; "replacing the sheet", the same three
     mov word [sh_nbord], 0            ; sh_doread_dif clears
+    mov word [sh_ntbl], 0            ; 81.114.7: ...and its TABLES
     mov word [sh_nnote], 0
     SHOUT sh_colw_clear                ; ...and every column's width (81.56)
     mov word [sh_nnames], 0
@@ -54049,7 +54621,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9249                     ; +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9279                     ; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -54970,7 +55542,13 @@ sh_stbusy     equ sh_trsi + 2        ; byte: a variance fold is running. Only
                                        ; 81.34.1
 sh_rndlo      equ sh_stbusy + 2      ; RAND's 32-bit LCG state
 sh_rndhi      equ sh_rndlo + 2
-sh_prot_hit   equ sh_rndhi + 2      ; byte: sh_prot_blocked's scan result
+sh_prot_bt    equ sh_rndhi + 2      ; byte: the border byte, across the pops
+                                    ; that put sh_prot_blocked's registers
+                                    ; back (81.114.7)
+sh_prot_clr   equ sh_prot_bt + 1     ; byte: this call is Edit > Clear's, so a
+                                    ; table result cell is for its own guard
+                                    ; to judge and not an outright refusal
+sh_prot_hit   equ sh_prot_clr + 1     ; byte: sh_prot_blocked's scan result
 sh_protected  equ sh_prot_hit + 2   ; byte: Options > Protect Document (81.46)
 sh_ps_ownsheet equ sh_protected + 2   ; word: 81.45.4's banked sheet
 sh_ps_mode    equ sh_ps_ownsheet + 2  ; byte: which parts of a copied cell the
@@ -55469,10 +56047,21 @@ sh_tbl_ir2        equ sh_tbl_ic + 2      ; the COLUMN input cell, or NONE
 sh_tbl_ic2        equ sh_tbl_ir2 + 2
 sh_tbl_cr         equ sh_tbl_ic2 + 2     ; the result cell being filled
 sh_tbl_cc         equ sh_tbl_cr + 2
-sh_tbl_sav1       equ sh_tbl_cc + 2      ; 2 + SH_C_SZ: present flag, record
-sh_tbl_sav2       equ sh_tbl_sav1 + 2 + SH_C_SZ
-sh_tbl_pend       equ sh_tbl_sav2 + 2 + SH_C_SZ   ; byte: part two is owed
-sh_bss_end        equ sh_tbl_pend + 1
+sh_tbl_sav1       equ sh_tbl_cc + 2      ; SH_TBS_SZ each: which cell, whether
+sh_tbl_sav2       equ sh_tbl_sav1 + SH_TBS_SZ   ; it existed, and its record
+sh_tbl_pend       equ sh_tbl_sav2 + SH_TBS_SZ   ; byte: part two is owed
+sh_tblseg         equ sh_tbl_pend + 1    ; word: 81.114.7's table list, the
+                                         ; THIRD carve of the border claim
+sh_ntbl           equ sh_tblseg + 2      ; word: tables on the document
+sh_tbl_sr1        equ sh_ntbl + 2        ; the SELECTION, normalised, for
+sh_tbl_sr2        equ sh_tbl_sr1 + 2     ; sh_tbl_overlap - four words rather
+sh_tbl_sc1        equ sh_tbl_sr2 + 2     ; than four registers, because the
+sh_tbl_sc2        equ sh_tbl_sc1 + 2     ; test compares eight bounds
+sh_tbl_tr1        equ sh_tbl_sc2 + 2     ; ...and a table's RESULT rectangle,
+sh_tbl_tr2        equ sh_tbl_tr1 + 2     ; which is its range less the top row
+sh_tbl_tc1        equ sh_tbl_tr2 + 2     ; and the left column
+sh_tbl_tc2        equ sh_tbl_tc1 + 2
+sh_bss_end        equ sh_tbl_tc2 + 2
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

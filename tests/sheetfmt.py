@@ -325,6 +325,121 @@ def open_shin(m, mo, name="SHIN.SLK"):
     dispcp.open_named(m, mo, S, M.settle, wx, wy, name=name)
 
 
+# =============================================================================
+# SHEET'S OWN MENU BAR, driven BY NAME (SPEC.md 81.99, 81.114.7)
+#
+# The bar in SHEET's window is the package's own, not the kernel's, so
+# os88ui.menu_pick cannot reach it and every row that drives it has carried
+# measured pixel constants and a counted item index. Three rows broke at once
+# when Data > Table... was inserted at index 8 and pushed Parse to 9 - and
+# breaking is the GOOD outcome: a shifted index that lands on another live
+# item runs the wrong command, and the row then reports the feature as broken.
+#
+# This asks the guest instead, and nothing here can go stale:
+#
+#   the MENU index   from [sh_mtabp], whose entries are 6 bytes and whose
+#                    second word is the items pointer - so the menu is found
+#                    by the ADDRESS of its own item array
+#   the ITEM index   from the assembler's map: sh_i_edit.clear's offset minus
+#                    sh_i_edit's, over two. The labels are in the source
+#                    beside the items they name (sh_i_edit's own rows), so an
+#                    inserted item moves the label with it
+#   the title's x    from [sh_mw], the per-title widths sh_mboxof adds up
+#   the item's y     from [sh_mry1] and SH_MI_H, read WITH THE BUTTON DOWN
+#                    once the pull-down is on screen
+#
+# ...and it ASSERTS [sh_mopen] mid-hold, so a press that landed on the wrong
+# title fails here rather than three steps later.
+# =============================================================================
+SH_MPAD, SH_MBAR_H, SH_MI_H = 8, 14, 12     # sheet.asm's own three
+
+
+def _w(m, seg, off):
+    v = m.readseg(seg, off, 2)
+    return v[0] | (v[1] << 8)
+
+
+def menu_index(m, seg, sym, items):
+    """The bar position of the menu whose items array is `items`."""
+    tab = _w(m, seg, sym["sh_mtabp"])
+    n = _w(m, seg, sym["sh_mcount"])
+    want = sym[items]
+    for i in range(n):
+        if _w(m, seg, tab + i * 6 + 2) == want:
+            return i
+    raise AssertionError("%s is not on the bar (%d titles)" % (items, n))
+
+
+def item_index(sym, items, name):
+    """`items`'s row number for the label `items`.`name`."""
+    return (sym["%s.%s" % (items, name)] - sym[items]) // 2
+
+
+def menu_pick(m, mo, seg, sym, items, name, settle=None):
+    """Press the title that owns `items`, drag to its `name` row, release."""
+    mi = menu_index(m, seg, sym, items)
+    ii = item_index(sym, items, name)
+    x = _w(m, seg, sym["sh_ox"])
+    for k in range(mi):
+        x += _w(m, seg, sym["sh_mw"] + k * 2) + SH_MPAD * 2
+    x += (_w(m, seg, sym["sh_mw"] + mi * 2) + SH_MPAD * 2) // 2
+    y = _w(m, seg, sym["sh_oy"]) + SH_MBAR_H // 2
+
+    def aim(_mo):
+        got = m.readseg(seg, sym["sh_mopen"], 1)[0]
+        assert got == mi, ("the press opened menu %d, wanted %d (%s)"
+                           % (got, mi, items))
+        ix = (_w(m, seg, sym["sh_mrx1"]) + _w(m, seg, sym["sh_mrx2"])) // 2
+        iy = _w(m, seg, sym["sh_mry1"]) + 2 + ii * SH_MI_H + SH_MI_H // 2
+        return ix, iy
+
+    mo.menu(x, y, 0, 0, settle=settle, aim=aim)
+
+
+# The BORDER TABLE read straight out of the guest (SPEC.md 81.55, 81.114.7):
+# a sorted sparse array of SH_BT_SZ=6 records at [sh_bordseg] - row packed
+# with the sheet, column, then the byte that carries the four border edges,
+# the shade, the two protection bits and SH_TBL_RESULT. Reading it directly
+# is how a row asserts a MARK rather than inferring one from what the guard
+# then did, which is a different fact and can agree for the wrong reason.
+SH_BT_SZ = 6
+SH_TBL_RESULT, SH_PROT_UNLOCK, SH_PROT_HIDDEN = 0x80, 0x20, 0x40
+
+
+def bt_byte(m, seg, sym, col, row, sheet=0):
+    """The border byte stored for (col,row), or None when no record is."""
+    base = _w(m, seg, sym["sh_bordseg"])
+    n = _w(m, seg, sym["sh_nbord"])
+    want = row | (sheet << 14)
+    for i in range(n):
+        off = i * SH_BT_SZ
+        if (_w(m, base, off) == want) and (_w(m, base, off + 2) == col):
+            return m.readseg(base, off + 4, 1)[0]
+    return None
+
+
+# The radio dialog (sh_fdlg, SPEC.md 81.74.2) answered out of its OWN rects:
+# sh_fdlg_paint writes OK's and Cancel's into [sh_fdlg_btrects] as it draws
+# them, screen-absolute, so there is nothing here to measure or to keep in
+# agreement with the dialog's derived height (SH_FDLG_H's comment is what
+# happens when there is).
+SH_FDLG_ROWTOP, SH_FDLG_ROWH = 12, 16
+
+
+def fdlg_ok(m, mo, seg, sym, row=None):
+    """Pick `row` if asked (None keeps the default) and press OK."""
+    if row is not None:
+        mo.click(_w(m, seg, sym["sh_fdlg_ox"]) + 12,
+                 _w(m, seg, sym["sh_fdlg_oy"]) + SH_FDLG_ROWTOP
+                 + SH_FDLG_ROWH * row + 6)
+        M.settle(m)
+    b = sym["sh_fdlg_btrects"]
+    x1, y1, x2, y2 = (_w(m, seg, b + k) for k in (0, 2, 4, 6))
+    assert x2 > x1 and y2 > y1, ("the dialog never painted its buttons: %r"
+                                 % ((x1, y1, x2, y2),))
+    mo.click((x1 + x2) // 2, (y1 + y2) // 2)
+
+
 # SPEC.md 81.106: Options > Display... is the check-box engine's kind 1, and
 # its geometry is the Border dialog's (sheet.asm's SH_BDLG_*): a box's glyph
 # at content (GX1 + 8, ROWTOP + i * ROWH), OK stacked right at (GX2 + 10 ..

@@ -130347,15 +130347,34 @@ It did not, so the write had never happened.
 An input cell is an ordinary cell of the user's sheet: it may hold a formula
 or a label, and `sh_setvald` over one would leave a value where a formula
 was. So each is banked as its **whole 20-byte record** with a present flag,
-and restored after every result cell — an absent input cell banks as absent
-and is deleted again, so a table does not leave a zero behind in a cell the
-user never filled.
+and restored after every result cell.
 
 Restoring is not tidiness. Every later result reads the input cell, so
 leaving the last substitution in it would make the table depend on the order
 it was filled.
 
-#### 81.114.5 What it cost
+**Two of this paragraph's claims were false when it was written**, and both
+are in §81.114.7's evidence now:
+
+- *"an absent input cell banks as absent and is deleted again"* — it was
+  banked as absent and then **nothing happened**. `sh_table_subst` creates
+  the cell to substitute into, and unbanking a slot whose present flag was 0
+  returned at once, so the last input value stayed in a cell the user never
+  filled, looking like data. A worked example out of the Reference Guide
+  always gives its input cells a value, which is why neither the guide nor
+  `tests/sheettable.py`'s fixture could show it.
+- the slot's cell was read back out of the **banked record**, whose
+  `SH_C_ROW` is row **packed with the sheet**, and handed to `sh_findcell`,
+  which wants a plain row. On Sheet 1 the two are the same number, so this
+  worked everywhere a test had looked and restored nothing at all on sheets
+  2–4.
+
+The slot carries the plain column and row in its own header now
+(`SH_TBS_COL`/`SH_TBS_ROW`, written **before** the lookup), so unbanking
+knows which cell it is putting back whether or not there turned out to be a
+record to read it from.
+
+#### 81.114.5 What stage 1 cost
 
 | | before | after |
 |---|---|---|
@@ -130367,6 +130386,225 @@ sh_idlg_open_r`; the dialogs and the engine are `CHART.OVL`'s, because 772
 bytes of region was all there was. The bss is 66 bytes and **the first
 sixteen are laid out as BIFF3's `DATATABLE` body (`0236H`)**, so the writer
 of §81.114's later stage copies them rather than building them.
+
+#### 81.114.7 Stage 2 — a result cell cannot be edited, and a clear is all or nothing
+
+Stage 1 filled the rectangle. What makes it a **table** rather than a one-shot
+fill is that the result cells stop being ordinary cells, and the Reference
+Guide (pp. 150–156) states both halves of that:
+
+> Other than copying, you cannot edit cells inside the table. If you try to
+> edit a portion of the table, Microsoft Excel displays a message.
+
+> Clearing the Values in a Table: … You must clear all the resulting values.
+
+**The table outlives the run.** A 16-byte record goes in a list carved from
+the border claim, and **the sixteen bytes are BIFF3's `DATATABLE` body field
+for field** — range, option flags, both input cells — so stage 4's writer
+copies the record rather than building one. A seventeenth byte says which of
+the four sheets it is on, which the format never needs because a BIFF file
+describes one sheet. `SH_TBL_CAP` is 56 at `SH_CLAIM_TBL_KB` = 1.
+
+**It is the claim's THIRD carve, not a ninth claim.** `MEM_OWNER_MAX` is
+eight an owner and SHEET holds eight (§81.102's list), so this is §81.94's
+answer applied once more: one `OSAPI_MEM_CLAIM` of `BORD + NOTE + TBL`, with
+the note table at `+BORD` and this at `+BORD+NOTE`, both derived in `sh_reloc`
+after its patch loop because no word names either as a base.
+
+##### The mark is in the BORDER byte, and the plan was wrong about where
+
+`docs/plans/SHEET-TABLE-PLAN.md` put the result-cell mark in `SH_C_FLAGS`
+bit 2, on the correct observation that bits 2–7 are free there. **§81.46's
+own comment, six hundred lines up the same file, is the argument against
+it**: that byte is written as a WORD together with the format at several
+sites and cleared outright when a formula becomes a value, so a bit there
+would survive some edits and not others. It is the reason cell PROTECTION
+went into the border byte, and it applies here unchanged.
+
+So `SH_TBL_RESULT` is **bit 7 of the border byte** — the last free one, beside
+`SH_PROT_UNLOCK` and `SH_PROT_HIDDEN` — and `SH_BT_KEEP` (0E0h) is what a
+border write must preserve, which is `SH_PROT_MASK` with this bit added.
+
+That choice is also why the guard is free. `sh_prot_blocked` **already**
+fetches the border byte for every cell of the selection, to test the lock
+bit; the table test is one more `test` on a byte already in hand, and no cell
+record is looked up at all. The list is walked only by `Edit ▸ Clear`, which
+is a menu command and may spend a scan.
+
+**A result cell costs a border-table record**, which is the price of putting
+the mark in a sparse table instead of in every cell. A 10 × 10 table takes
+100 of `SH_BORD_CAP`'s 682; a table that exhausts the border table keeps the
+right numbers and silently loses its protection, the same scope limit every
+other writer of that table takes.
+
+##### Two guards, because Clear asks a different question
+
+Typing is always one cell, so "may this cell be edited" refuses it outright.
+A clear is a block, and the question is **coverage**:
+
+| | asks |
+|---|---|
+| typing, Paste, Fill, a sort's write-back, Cut, formats, notes | `sh_prot_blocked` — refused on any result cell |
+| `Edit ▸ Clear` | …the same, with `[sh_prot_clr]` set so the table test is **deferred**, then `sh_tbl_clearguard` |
+
+`sh_tbl_clearguard` walks the list and compares each table's **result
+rectangle** — the range less its top row and left column, since those are the
+user's own formulas and input values — against the selection. Any table
+covered *partly* refuses the whole clear; when none is, every table covered
+*wholly* is dropped. `[sh_prot_clr]` is cleared inside `sh_prot_blocked` on
+every exit, so it is one call's worth and never a mode.
+
+**Clearing FORMATS is exempt, and that is Excel too rather than a shortcut.**
+A table's cells can be formatted — the guide tells you to — so taking a
+number format off them is a format change and not an edit of the values.
+
+##### Two more defects in the same byte, both older than the mark
+
+`SH_TBL_RESULT` shares the border byte with the four edges, the shade and
+§81.46's two protection bits. Putting it there found two things already wrong
+with the cells that byte describes:
+
+**`Clear ▸ Formats` removed the whole record.** `sh_clear_one`'s `.fmt` arm
+was a plain `sh_bt_removecell`, which takes everything stored for the cell —
+so clearing formats **reset Locked and Hidden to the default**, which is a
+§81.46 defect that predates this feature entirely, and once the table mark
+joined them it silently un-protected a table's result cells while leaving the
+table itself recorded. It clears the edges, the shade and the number format
+now, keeps `SH_BT_KEEP`, and removes the record only when nothing is left —
+which is `sh_bdlg_apbord`'s own `.clearit`, unchanged for cycles, three
+hundred lines away.
+
+**`Clear ▸ Formulas` orphaned the marks.** §81.63 keeps a cell that still has
+a border record, on purpose, so clearing a whole table that way dropped the
+table and left every result cell marked. An orphaned mark refuses edits for
+ever — and only while some *other* table keeps `sh_prot_blocked`'s scan
+armed, which makes it as hard to see as it sounds. `sh_tbl_dropsel` unmarks
+the rectangle it is dropping, so every clear mode behaves the same and the
+`Clear ▸ All` path's own `sh_bt_removecell` is belt and braces.
+
+`sh_tbl_unmark` is ONE walk of the border table rather than a lookup per
+cell: the rectangle can be large and the table is `SH_BORD_CAP` records at
+most. It does not remove a record left holding nothing — every reader treats
+a zero record exactly as it treats no record, and removing one mid-walk would
+shift the array under the cursor — so a table cleared through `Formulas` can
+leave one empty record per result cell, bounded by the number of distinct
+result cells the document has ever had.
+
+##### The Del key never asked any guard at all
+
+`.delcell` cleared `[sh_selcol]`/`[sh_selrow]` directly. Every other write
+path in this app funnels through `sh_commit`, which asks `sh_prot_blocked`;
+Del did not, so **it cleared a locked cell on a protected document** and
+would have cleared a table result cell. That is a §81.46 defect that predates
+this feature by a long way, found only because this feature went looking at
+every write path. It asks now, strictly — Del clears one cell, and one cell of
+a table is exactly the partial clear that is refused — and it repaints on the
+refusal, or the status line would never show what it just said.
+
+##### A defect the gate caught and reading did not
+
+`sh_tbl_dropsel` computed the list's length in `AX`, called `sh_tbl_overlap`,
+and then used `AX` as that length. **`sh_tbl_overlap` answers in `AL`**, so
+`AX` came back as the old `AH` over a 0, 1 or 2, and the `rep movsb` that
+closes the gap ran with a byte count out of nowhere — off the end of a 10 KB
+claim. The machine reported **`STACK OVERFLOW TASK 00`**, three structures
+away from the mistake, and the Clear dialog stayed up. Same family as stage
+1's own two (§81.114.6) and as §81.17's `sh_findcell`/`DI`: a documented
+output register eating a caller's live value. The length is re-taken after
+the call now, with the reason written at the instruction.
+
+##### Evidence
+
+`tests/sheettbl2.py`, **9 checks**, through the menus and a SYLK save, on the
+cycle-accurate CGA. **Two** one-input tables side by side in rows 1–3, and
+**neither input cell is in the file at all** — so the absent-cell arm of
+§81.114.4 is the one under test, rather than the restore-what-was-there arm
+`sheettable.py`'s zero-filled inputs exercise.
+
+1 RECORDED `[sh_ntbl]` is 2 · 2 REFUSED typing into a result cell sets the
+status line to `sh_s_tblpart` · 3 PART a clear over half a result area is
+refused and both tables survive · 4 FORMATS the *same* half-selection cleared
+as Formats is allowed · 5 FMTKEEP …and it did not un-protect the cells, read
+off the border table itself · 6 WHOLE a clear over all of one table's results
+drops that table, 2 → 1 · 7 DROPPED so those cells take a typed value, while
+the second table keeps the guard armed · 8 FORMULAS the second table cleared
+the *other* allowed way loses its marks too · 9 INPUT both input cells are
+still absent in the saved file, the typed 99 is in C2, and every other result
+cell of both tables is gone.
+
+**Three of those nine are there because a mutation refused to fail**, and
+each is a shape worth keeping:
+
+- **A cheap early-out makes every check behind it vacuous.**
+  `sh_prot_blocked` returns at once on `[sh_ntbl] == 0`. With ONE table,
+  clearing it takes that counter to zero and the guard never reads a mark —
+  so the mutation that leaves the cleared cells marked **passed all six
+  checks of the one-table version of this row**, against a paragraph of this
+  section that said it would fail. Hence two tables.
+- **Allowed and harmless are different facts.** Check 4 asks whether the
+  Formats clear went through; it passed throughout the defect in which that
+  clear was wiping the mark and both protection bits. Check 5 reads the
+  border byte, and only a direct read of the thing itself found it.
+- **A fix needs the path it exists for.** `sh_tbl_dropsel`'s unmark is
+  unreachable through `Clear ▸ All`, which removes the whole border record in
+  `sh_clear_one` anyway; with All alone, deleting the unmark **passed all
+  eight checks**. Check 8 clears the second table through `Formulas`, the
+  path §81.63 keeps the record on.
+
+Check 4's control is check 3: same cells, same menu, the radio row is the only
+difference. Checks 8 and 9 overlap on one fix and say so — 8 reads the border
+table, 9 reads the file, where an orphaned mark shows up as `0.0` in a cell
+that should hold nothing.
+
+Mutations, each built and run **twice**, and these are the runs' own numbers
+rather than the ones predicted for them:
+
+| mutation | fails |
+|---|---|
+| no `sh_tbl_add` — the table is never recorded | **all nine**: the same early-out means an unrecorded table is an unprotected one, so the record is load-bearing for protection and not only for Clear |
+| no `sh_table_mark` | 2, 5, 8 |
+| a partial cover reported as whole | 3, 4, 5 |
+| Formats guarded like every other clear | 4 |
+| Formats wiping the whole border byte | 5 |
+| no `sh_tbl_dropsel` | 6, 7, 8, 9 |
+| no unmark on the drop | 8, 9 |
+| `sh_table_unbank`'s absent-cell arm removed | 9 |
+
+Four of the eight isolate a single check. The four that do not each fail
+checks genuinely downstream of what they broke, and the table says which.
+
+##### What stage 2 does NOT do yet, said plainly
+
+**`Insert`/`Delete Row`/`Column` and `Sort` do not move a table's stored
+rectangle.** The result cells' marks DO move, because they live in the border
+table and `sh_rowcol_op` adjusts that; the 16-byte record does not, so a table
+with a row inserted above it is guarded against a rectangle one row too high.
+The symptom is a clear that is refused when it should be allowed, or allowed
+when it should be refused — never a wrong number, because the marks are what
+refuse an edit. It belongs with stage 3's recalculation, which has to walk the
+same records on the same four operations; §81.108's reference adjustment is
+the worked example of what that costs.
+
+**Nothing recalculates a table yet.** Editing an input value leaves the
+results as the run left them. That is stage 3, and it is the reason Excel has
+an `fAlwaysCalc` bit in the record this one already stores.
+
+##### What stage 2 cost
+
+| | stage 1 | stage 2 |
+|---|---|---|
+| region | 60,880 of 61,440 | **61,040 — 400 spare** |
+| `CHART.OVL` | 48,473 of 49,152 | **49,204 of 52,224 — 3,020 free** |
+| `CH_OVKB` | 48 | **51** |
+| bss | 9,249 | 9,279 |
+
+**`CHART.OVL` is the constraint now, not the region**, and stage 2 ran out in
+it mid-fix: 49,204 against 48 KB's 49,152. `CH_OVKB` went to **51 — three
+ahead on purpose**, which is the step `os88chartovl.inc`'s own history took at
+50 and for the same stated reason: `SHEET-TABLE-PLAN` has three stages left
+and stage 4 is a BIFF reader *and* a writer. It is HEAP and not image —
+§82.16.3 already says a machine too small for the claim still runs the
+spreadsheet — and 63 is the wall, the module being one segment.
 
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 

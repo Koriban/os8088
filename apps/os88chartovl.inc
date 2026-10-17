@@ -32,7 +32,7 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 48                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 51                 ; the claim CHART.OVL is read into, KB.
                                     ; 48 for 81.102: the Note dialog and
                                     ; os88text.inc moved in, 47,364 bytes.
                                     ; 8 held the rasterizer alone; 82.16.9 put
@@ -80,7 +80,20 @@ CH_OVKB      equ 48                 ; the claim CHART.OVL is read into, KB.
                                     ; would silently truncate the module, so
                                     ; it IS checked against the file, twice:
                                     ; the sheet.o88 rule, and os88ovlchk.py's
-                                    ; CLAIMS row in the fast tier
+                                    ; CLAIMS row in the fast tier.
+                                    ; AND 81.114.7's Data > Table stage 2
+                                    ; (the table list, the two guards and the
+                                    ; unmark walk) 49,204, so 51 - THREE
+                                    ; ahead, the same deliberate step as 50
+                                    ; above and for the same reason:
+                                    ; SHEET-TABLE-PLAN has three stages left,
+                                    ; and stage 4 is a BIFF reader AND a
+                                    ; writer. 48 had 90 bytes spare when
+                                    ; stage 2 began and 48 was where stage 2
+                                    ; ran out, mid-fix. This is HEAP and not
+                                    ; image - 82.16.3 already says a machine
+                                    ; too small for the claim still runs the
+                                    ; spreadsheet - and 63 is the wall
 CHM_DRAW     equ 0                  ; the verbs - the module's dispatch indices
 CHM_SCALE    equ 1
 CHM_BMPWRITE equ 2

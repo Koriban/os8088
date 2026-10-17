@@ -13378,10 +13378,39 @@ SOAK = [
         "one-input table whose values run down the left column and formulas "
         "across the top, and a two-input table with one corner formula. "
         "Check 4 reads the INPUT CELLS back, which is what caught the "
-        "substitution writing to row = the value (81.114.6); check 5 asks "
-        "that the four results DIFFER, which is what the pass stamp buys - "
-        "without it sh_eval_cell's memoization fills the interior with one "
-        "number repeated and the feature looks like it works",
+        "substitution writing to row = the value (81.114.6); check 5 names "
+        "the FIRST result of each table, which is the one and only cell the "
+        "pass stamp buys - this row first asked instead whether the four "
+        "results DIFFER, on a story about memoization repeating ONE number, "
+        "and that check PASSED on its own mutation because 0, 14, 18 and 19 "
+        "are four distinct values",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
+    Row("sheettbl2", "soak", py("tests/sheettbl2.py"), 520.0,
+        "SPEC.md 81.114.7: a Data > Table is PROTECTED and clears "
+        "all-or-nothing. sheettable proves the numbers; this proves the "
+        "thing that makes them a table - the Reference Guide's 'you cannot "
+        "edit cells inside the table' and 'you must clear all the resulting "
+        "values'. Each table outlives its run in a list carved from the "
+        "border claim, and each result cell is marked by bit 7 of the BORDER "
+        "byte, which sh_prot_blocked already fetches. THREE of its nine "
+        "checks are there because a mutation refused to fail, and each is a "
+        "shape worth keeping: (a) a cheap early-out makes every check behind "
+        "it vacuous - sh_prot_blocked returns at once on [sh_ntbl]==0, so "
+        "with ONE table the mutation that leaves cleared cells MARKED passed "
+        "all six checks, hence two tables; (b) allowed and harmless are "
+        "different facts - the check that the Formats clear went through "
+        "passed throughout the defect where that clear wiped the mark AND "
+        "both protection bits, so check 5 reads the border byte itself; (c) "
+        "a fix needs the path it exists for - the unmark on a table's drop "
+        "is unreachable through Clear > All, which removes the whole record "
+        "anyway, so check 8 clears the second table through FORMULAS, the "
+        "path 81.63 keeps the record on. Both input cells are DELIBERATELY "
+        "ABSENT from the fixture, the arm sheettable's zero-filled inputs "
+        "cannot reach. The menu is driven BY NAME out of the assembler's map "
+        "and the guest's own rects, so an inserted item cannot silently aim "
+        "it at a live neighbour the way index 8 did to three rows",
         needs=("marty",), serial=True,
         wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
                "build/os8088-360.img")),

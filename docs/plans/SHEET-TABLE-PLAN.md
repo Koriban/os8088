@@ -130,7 +130,13 @@ construction. The same pattern §81's border table uses, and for the same
 reason: the cell record is full and this is sparse.
 
 **A result cell is marked by a free flag bit** (`SH_C_TABLE`, bit 2) and
-finds its table by the rect that contains it. Excel puts the top-left corner
+finds its table by the rect that contains it. — **WRONG, and stage 2 says
+why**: `SH_C_FLAGS` bit 2 *is* free, but that byte is written as a word with
+the format at several sites and cleared outright when a formula becomes a
+value, so a mark there survives some edits and not others. That is §81.46's
+own recorded reason for putting cell protection in the border byte, and the
+mark went to **bit 7 of the border byte** beside it — which also makes the
+guard free, since `sh_prot_blocked` fetches that byte already. Excel puts the top-left corner
 in every cell's `tTbl` token to make that O(1); a scan of a short list is
 cheaper here than two more bytes in 1,638 cell records, and the token is
 still written on the way out because the format demands it.
@@ -145,9 +151,15 @@ restore. One full evaluation per cell — Excel's own cost, and the reason
 1. **The side table, the dialog and one evaluation.** `Data ▸ Table…` with
    Row Input Cell / Column Input Cell, the three shapes detected from the
    selection, the rect filled. No protection, no persistence yet.
-2. **Protection and clearing.** Typing into a result cell is refused with a
-   message; `Edit ▸ Clear` over the whole rect drops the table; a partial
-   clear is refused the way Excel refuses it.
+2. **Protection and clearing.** *(DONE — SPEC.md §81.114.7.)* Typing into a
+   result cell is refused with a message; `Edit ▸ Clear` over the whole rect
+   drops the table; a partial clear is refused the way Excel refuses it.
+   **The side table landed here, not in stage 1**, which left stage 1 with no
+   record of a table at all — the two rules above cannot be asked without
+   one, and stages 3 and 4 need the same record, so it is built once.
+   **And the mark is in the BORDER byte, not `SH_C_FLAGS`**: §81.46's own
+   comment is the argument, and the border byte is what `sh_prot_blocked`
+   already holds. `tests/sheettbl2.py`, 6 checks.
 3. **Recalculation.** Editing an input value or a formula re-runs the table
    under Automatic; `Calculate Now` re-runs it under Manual.
 4. **BIFF.** Write `FORMULA`+`tTbl` per cell and one `DATATABLE` after the
