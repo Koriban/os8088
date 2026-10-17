@@ -164,7 +164,7 @@ vid_tab:
 vid_tab_vbe:
     dw VGA_SEG,     128,    0,     0,    128,       0,      0,1024, 512
     ; ^ VID_VBE: THE ONLY ROW IN THIS TABLE THAT IS NOT A CONSTANT. vbe_setrow
-    ;   (kernel/vbe.inc) overwrites seg, stride, rowadd and cw from what
+    ;   (kernel/vbe.inc) overwrites seg, stride, rowadd, cw AND ch from what
     ;   AX=4F01h actually reported before anything reads it; the values here
     ;   are what mode 0104h is supposed to be, so a misread leaves a sane row
     ;   rather than zeros. bmask/bshift/wrapbit are 0 for the VGA row's reason
@@ -172,13 +172,19 @@ vid_tab_vbe:
     ;   encode is the 1bpp cards' and cannot describe a VBE window anyway
     ;   (SPEC.md 39.29.1).
     ;
-    ;   512 AND NOT 768, and that is the whole of what ships today: 1024 px is
-    ;   128 bytes a row, 65536/128 is exactly 512, so the rows in this row fit
-    ;   ONE 64KB window and nothing below has to know about banking. 511*128 =
-    ;   65,408 still fits the 16-bit offset gfx_rowbase returns; row 512 would
-    ;   not, which is the same line as the bank boundary and necessarily so.
-    ;   The bottom third of the panel is unused and black. Stage 2 is what
-    ;   makes it 768 (SPEC.md 39.29.3).
+    ;   THE 512 HERE IS THE FALLBACK, NOT WHAT SHIPS. The live height is the
+    ;   card's own - 768 on the mode this row is for - since stage 2 taught
+    ;   the renderer to cross a bank (SPEC.md 39.29.10): the 16-bit carry out
+    ;   of DI IS the boundary, because 128 divides 65536, so `add di, stride`
+    ;   wraps to zero precisely when row 512 begins and wraps to the RIGHT
+    ;   in-window offset. 512 is what one 64KB window holds and is the only
+    ;   height that is safe without that, which is why it is the literal a
+    ;   card that cannot be asked falls back to.
+    ;
+    ;   This comment read "512 AND NOT 768, and that is the whole of what
+    ;   ships today ... Stage 2 is what makes it 768" for three commits after
+    ;   stage 2 shipped, which is worse than saying nothing: it tells a reader
+    ;   the renderer cannot cross a bank, and VBROW and vbe_bank below do.
 %endif
 
 ; -----------------------------------------------------------------------------

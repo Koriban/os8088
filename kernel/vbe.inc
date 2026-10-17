@@ -268,11 +268,12 @@ vbe_avail:
 ; class (SPEC.md 39.28.2), so the segment, stride and width come from AX=4F01h
 ; and not from this file.
 ;
-; THE HEIGHT IS NOT TAKEN FROM THE CARD. It is the rows ONE 64KB window holds -
-; 65536 / stride - or the card's own height, whichever is smaller, because
-; nothing below the renderer knows about banking yet (SPEC.md 39.29.1). At
-; stride 128 that is 512 of the 768 the card offers, and the bottom third of
-; the panel stays black until stage 2.
+; THE HEIGHT COMES FROM THE CARD TOO, and did not always: it used to be
+; clamped to the rows ONE 64KB window holds - 65536 / stride, which at stride
+; 128 is 512 of the 768 mode 0104h offers - because nothing below the renderer
+; could cross a bank, and the bottom third of the panel was black. SPEC.md
+; 39.29.10's carry test lifted that in stage 2 and the clamp went with it.
+; This paragraph said the opposite for three commits after the code changed.
 ; -----------------------------------------------------------------------------
 vbe_setrow:
     push ax
