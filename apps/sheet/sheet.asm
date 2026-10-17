@@ -750,7 +750,7 @@ SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
 ; is no menu left to open, so SHF_DATAMENU is the OR of what is left and
 ; SH_DATA_N is how many - one number, used by sh_mtab, by sh_i_data's own
 ; list and by nothing else.
-  %define SH_DATA_N 12
+  %define SH_DATA_N 13
 
 SH_MI_FILE    equ 0
 SH_MI_EDIT    equ 1
@@ -8322,7 +8322,13 @@ sh_msep:
                                                            ; Name | Note |
     dw SH_SEP(4) | SH_SEP(6)                               ; Format: | Row H,
                                                            ; Col W | Justify
-    dw SH_SEP(0) | SH_SEP(5) | SH_SEP(6) | SH_SEP(8)       ; Data
+    dw SH_SEP(0) | SH_SEP(5) | SH_SEP(6) | SH_SEP(9)       ; Data: Table...
+                                                           ; went in at 8, so
+                                                           ; the rule that
+                                                           ; separated Excel's
+                                                           ; list from this
+                                                           ; app's charts
+                                                           ; moved with Parse
     dw SH_SEP(SH_OI_FREEZE) | SH_SEP(SH_OI_PROT)           ; Options
     dw SH_SEP(SH_MAI_RUN)                                  ; Macro: | recorder
     dw 0, 0                                                ; Sheets, Help
@@ -8925,21 +8931,31 @@ sh_mfire:
 .data8:
     cmp al, 8
     jne .data9
-    mov al, SH_ID_PARSE                ; 8: Parse... (81.82). EXCEL'S OWN PLACE,
-    call sh_idlg_open_r                ; after Series - so the three chart
-    jmp .out                           ; items below it each moved down one
-.data9:
+    mov al, SH_ID_TBLROW               ; 8: Table... (81.114), Excel's own
+    call sh_idlg_open_r                ; place - and Parse and the three
+    jmp .out                           ; chart items each moved down one,
+.data9:                                ; exactly as 81.82 moved them before
     cmp al, 9
+                                       ; THE SELECTION IS NOT BANKED: nothing
+                                       ; moves it while a modal dialog owns
+                                       ; the input, so the engine reads
+                                       ; sh_selrow/sh_selcol two dialogs later
     jne .data10
-    call sh_docmd_chart                ; 9..11: this app's own charting, which
-    jmp .out                           ; real Excel has no Data item for, so it
-.data10:                               ; trails Excel's list rather than
-    cmp al, 10                         ; sitting inside it
+    mov al, SH_ID_PARSE                ; 9: Parse... (81.82)
+    call sh_idlg_open_r
+    jmp .out
+.data10:
+    cmp al, 10
     jne .data11
+    call sh_docmd_chart                ; 10..12: this app's own charting,
+    jmp .out                           ; which real Excel has no Data item
+.data11:                               ; for, so it trails Excel's list
+    cmp al, 11                         ; rather than sitting inside it
+    jne .data12
     mov al, SH_FDK_GAL
     call sh_fdlg_open_r
     jmp .out
-.data11:
+.data12:
     call sh_docmd_chartexport
     jmp .out
 .sheets:
@@ -14794,7 +14810,24 @@ SH_ID_INPUT  equ 7                   ; ...and INPUT(), a macro's own question
 SH_ID_SERSTEP equ 8                  ; 81.72: Data ▸ Series...' step value,
 SH_ID_RECNAME equ 9                  ; part two of two; 81.74: what to call
 SH_ID_PARSE  equ 10                  ; 81.82: Data > Parse...' bracket line
-SH_ID_NKIND  equ 11                  ; the recording about to be made
+SH_ID_TBLROW equ 11                  ; 81.114: Data > Table...' two fields.
+SH_ID_TBLCOL equ 12                  ; EXCEL ASKS FOR BOTH IN ONE DIALOG and
+                                     ; no engine here has two fields, so they
+                                     ; are asked one after the other - the
+                                     ; same shape 81.72's Series uses for its
+                                     ; type and step, and 81.74's recorder
+                                     ; for its name. Either may be left
+                                     ; EMPTY, which is how a one-input table
+                                     ; says which kind it is: Excel spells
+                                     ; that as the comma's side in
+                                     ; {=TABLE($D$9,)} and {=TABLE(,$E$8)}
+SH_ID_NKIND  equ 13                  ; the recording about to be made
+; 81.114: "no input cell of this kind". NOT zero - row 0 column 0 is cell A1,
+; a perfectly ordinary input cell - and not -1 either, since every other
+; row/col here is an unsigned word and a compare against 0FFFFh reads the
+; same whichever it is. SH_ROWS is 16384 and SH_COLS 256, so this is past
+; both and can never collide with a real reference.
+SH_TBL_NONE  equ 0xFFFF
 
 SH_IDLG_W    equ 268
 SH_IDLG_FX1  equ 8                   ; the field, content-relative
@@ -14830,10 +14863,15 @@ sh_idlg_tpl:
 ; into whatever follows, which is exactly what it did.
 sh_id_titles:  dw sh_s_id_tgoto, sh_s_id_trowh, sh_s_id_tcolw, sh_s_id_tdefn, sh_s_id_tfind
                dw sh_s_id_tsort, sh_s_id_trun, sh_s_id_tinput, sh_s_id_tser
-               dw sh_s_id_trec, sh_s_id_tparse
+               dw sh_s_id_trec, sh_s_id_tparse, sh_s_id_ttbl, sh_s_id_ttbl
 sh_id_prompts: dw sh_s_id_pgoto, sh_s_id_prowh, sh_s_id_pcolw, sh_s_id_pdefn, sh_s_id_pfind
                dw sh_s_id_psort, sh_s_id_pgoto, sh_macro_msg, sh_s_id_pser
-               dw sh_s_id_prec, sh_s_id_pparse
+               dw sh_s_id_prec, sh_s_id_pparse, sh_s_id_ptblr, sh_s_id_ptblc
+sh_s_id_ttbl:  db 'Table', 0            ; 81.114, and both halves wear it:
+sh_s_id_ptblr: db 'Row Input Cell:', 0  ; Excel's one dialog has one title
+sh_s_id_ptblc: db 'Column Input Cell:', 0
+sh_s_id_tblbad: db 'Select the formulas and the input values.', 0
+sh_s_id_tbldone: db 'Table filled.', 0
 sh_s_id_tparse: db 'Parse', 0
 sh_s_id_pparse: db 'Parse line:', 0     ; the Reference Guide's own words
 sh_s_id_trec:  db 'Record Macro', 0
@@ -14861,6 +14899,317 @@ sh_s_id_nofnd: db 'Not found.', 0
 sh_s_idlg_ok:  db 'OK', 0
 sh_s_idlg_can: db 'Cancel', 0
 section SH_MODSEC                      ; 81.74.2: the one-line input dialog, CHART.OVL
+
+; =============================================================================
+; sh_table_run - Data > Table (SPEC.md 81.114). CHART.OVL's, near-called from
+; sh_idlg_apply's second half.
+; in:  [sh_tbl_ir]/[sh_tbl_ic]   the ROW input cell, or SH_TBL_NONE
+;      [sh_tbl_ir2]/[sh_tbl_ic2] the COLUMN input cell, or SH_TBL_NONE
+;      the selection is the whole rectangle, formulas and input values and all
+; out: CF=1 = the selection is not a table shape; nothing was written
+;
+; THE SELECTION INCLUDES THE EDGES. Excel's own words are "select the range of
+; cells containing the row and column of values and the formula", so the
+; rectangle handed in here is one row and one column LARGER than the cells
+; that get filled: the top row and the left column are the inputs and the
+; formulas, and the interior is the result.
+;
+; WHICH OF THE THREE SHAPES (4.9's numbering, and the Reference Guide's two
+; sections) is decided by which input cells were given, not by guessing from
+; the data:
+;
+;   both given     a two-input table. One formula, in the top-left corner;
+;                  the column of values below it feeds the COLUMN input cell
+;                  and the row of values right of it feeds the ROW input cell
+;   column only    one-input, formulas across the top row, values down the
+;                  left column
+;   row only       one-input, formulas down the left column, values across
+;                  the top row
+;
+; and neither is a refusal, because then nothing says what to substitute.
+; =============================================================================
+sh_table_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    ; --- the rectangle, normalised ------------------------------------------
+    mov ax, [sh_selcol]
+    mov bx, [sh_selcol2]
+    cmp ax, bx
+    jbe .c_ok
+    xchg ax, bx
+.c_ok:
+    mov [sh_tbl_c1], ax
+    mov [sh_tbl_c2], bx
+    mov ax, [sh_selrow]
+    mov bx, [sh_selrow2]
+    cmp ax, bx
+    jbe .r_ok
+    xchg ax, bx
+.r_ok:
+    mov [sh_tbl_r1], ax
+    mov [sh_tbl_r2], bx
+    ; A TABLE NEEDS AN INTERIOR. One row or one column of selection has an
+    ; edge and nothing to fill, which is a mis-selection and not an empty
+    ; table - Excel refuses it too.
+    mov ax, [sh_tbl_r1]
+    cmp ax, [sh_tbl_r2]
+    jae .bad
+    mov ax, [sh_tbl_c1]
+    cmp ax, [sh_tbl_c2]
+    jae .bad
+    ; --- which shape? --------------------------------------------------------
+    mov ax, [sh_tbl_ir]
+    cmp ax, SH_TBL_NONE
+    jne .haverow
+    mov ax, [sh_tbl_ir2]
+    cmp ax, SH_TBL_NONE
+    je .bad                            ; neither: nothing to substitute
+.haverow:
+    ; --- the interior, cell by cell -----------------------------------------
+    mov bx, [sh_tbl_r1]
+    inc bx                             ; the first result row
+.rowloop:
+    cmp bx, [sh_tbl_r2]
+    ja .done
+    mov ax, [sh_tbl_c1]
+    inc ax                             ; ...and the first result column
+.colloop:
+    cmp ax, [sh_tbl_c2]
+    ja .nextrow
+    push ax
+    push bx
+    call sh_table_cell                 ; AX=col, BX=row of the result cell
+    pop bx
+    pop ax
+    inc ax
+    jmp short .colloop
+.nextrow:
+    inc bx
+    jmp short .rowloop
+.done:
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_table_cell - one result cell. in: AX = col, BX = row (inside the table).
+;
+; Substitute this cell's governing input value(s) into the input cell(s),
+; evaluate the governing formula, store the answer here, and PUT THE INPUT
+; CELLS BACK. The restore is not tidiness: the input cell is an ordinary cell
+; of the user's sheet and every later result reads it, so leaving the last
+; substitution in it would make the table depend on the order it was filled.
+; -----------------------------------------------------------------------------
+sh_table_cell:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [sh_tbl_cc], ax
+    mov [sh_tbl_cr], bx
+    ; --- 1. bank both input cells, WHOLE RECORDS ----------------------------
+    ; Not just their values: an input cell is an ordinary cell of the user's
+    ; sheet and may hold a formula or a label, and sh_setvald over one would
+    ; leave a value where a formula was. Twenty bytes each, put back below
+    ; whatever happens in between.
+    mov ax, [sh_tbl_ic]
+    mov bx, [sh_tbl_ir]
+    mov di, sh_tbl_sav1
+    call sh_table_bank
+    mov ax, [sh_tbl_ic2]
+    mov bx, [sh_tbl_ir2]
+    mov di, sh_tbl_sav2
+    call sh_table_bank
+    ; --- 2. substitute, and remember where the formula is -------------------
+    mov ax, [sh_tbl_ir]
+    cmp ax, SH_TBL_NONE
+    je .colonly
+    mov ax, [sh_tbl_ir2]
+    cmp ax, SH_TBL_NONE
+    je .rowonly
+    ; BOTH: a two-input table. One formula, in the corner; this cell's row
+    ; value feeds the COLUMN input cell and its column value the ROW one.
+    mov ax, [sh_tbl_c1]                ; the left column, at this row
+    mov bx, [sh_tbl_cr]
+    mov cx, [sh_tbl_ic2]
+    mov dx, [sh_tbl_ir2]
+    call sh_table_subst
+    mov ax, [sh_tbl_cc]                ; the top row, at this column
+    mov bx, [sh_tbl_r1]
+    mov cx, [sh_tbl_ic]
+    mov dx, [sh_tbl_ir]
+    call sh_table_subst
+    mov ax, [sh_tbl_c1]                ; ...and the formula is the corner
+    mov bx, [sh_tbl_r1]
+    jmp short .evaluate
+.colonly:
+    ; A COLUMN input cell only: the values are down the left column and the
+    ; formulas are across the top row, so this cell's formula is the one
+    ; above it and its value the one to its left.
+    mov ax, [sh_tbl_c1]
+    mov bx, [sh_tbl_cr]
+    mov cx, [sh_tbl_ic2]
+    mov dx, [sh_tbl_ir2]
+    call sh_table_subst
+    mov ax, [sh_tbl_cc]
+    mov bx, [sh_tbl_r1]
+    jmp short .evaluate
+.rowonly:
+    ; A ROW input cell only: the values are across the top row and the
+    ; formulas down the left column - the mirror of the above.
+    mov ax, [sh_tbl_cc]
+    mov bx, [sh_tbl_r1]
+    mov cx, [sh_tbl_ic]
+    mov dx, [sh_tbl_ir]
+    call sh_table_subst
+    mov ax, [sh_tbl_c1]
+    mov bx, [sh_tbl_cr]
+.evaluate:
+    ; --- 3. evaluate the governing formula ----------------------------------
+    ; THE PASS STAMP MUST MOVE. sh_eval_cell memoizes per repaint pass, so
+    ; without this every cell of the table would answer with the value the
+    ; formula had the first time and the whole interior would be one number
+    ; repeated. The same `inc` is what Calculate Now spends (81.78).
+    inc word [sh_pass]
+    SHOUT sh_getcell2                  ; AX=col, BX=row -> the value in sh_acc
+    ; --- 4. store it, and only then put the inputs back ---------------------
+    mov ax, [sh_tbl_cc]
+    mov bx, [sh_tbl_cr]
+    SHOUT sh_setvald
+    mov di, sh_tbl_sav1
+    call sh_table_unbank
+    mov di, sh_tbl_sav2
+    call sh_table_unbank
+    inc word [sh_pass]                 ; ...and nothing may keep a value that
+    pop di                             ; was computed against a substitution
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_table_subst - read the value at AX,BX and write it into the cell at
+; CX,DX. The one step the whole feature is: "on calculation, this cell
+; reference is replaced by the respective value from the input value range".
+sh_table_subst:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp cx, SH_TBL_NONE
+    je .out
+    ; THE DESTINATION IS BANKED ACROSS THE READ. sh_getcell2's contract is
+    ; "out: CF=1 occupied + DX = value" - DX is an OUTPUT - so holding the
+    ; destination row there across the call hands sh_setvald the VALUE as a
+    ; row. Every substitution went to row 4 for an input of 4, the input
+    ; cell itself was never written, and the table filled with the formula's
+    ; original answer repeated. Same family as sh_findcell not preserving DI
+    ; (81.17): a documented output register eating a caller's live input.
+    push cx                            ; the destination column...
+    push dx                            ; ...and row
+    SHOUT sh_getcell2                  ; the input VALUE, into sh_acc
+    pop bx
+    pop ax
+    SHOUT sh_setvald                   ; ...and into the input cell
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sh_table_bank / sh_table_unbank - AX,BX = a cell; DI = a 22-byte slot.
+; The first word of the slot says whether the cell existed at all; the
+; twenty after it are its record. An absent input cell banks as absent and
+; is deleted again on the way out, so a table does not leave a zero behind
+; in a cell the user never filled.
+sh_table_bank:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    mov word [di], 0
+    cmp ax, SH_TBL_NONE
+    je .out
+    add di, 2
+    push di
+    SHOUT sh_findcell                  ; CF=1 = DI is the record
+    mov si, di
+    pop di
+    jnc .out
+    mov word [di-2], 1
+    ; DS:SI = the record, in the CELL segment; ES:DI = the slot, in ours.
+    ; SI and DI are already that way round - `mov si, di` took the record and
+    ; `pop di` the slot - and an `xchg si, di` left here from an earlier
+    ; arrangement reversed them, so `rep movsb` wrote twenty bytes of the
+    ; cell segment OVER THE PACKAGE'S OWN DATA at a record offset. The window
+    ; came back blank, which is what a package scribbling on itself looks
+    ; like. [sh_cellseg] is read in the same instruction that loads DS, so
+    ; nothing reads this segment's own bss with DS already pointing away.
+    push ds
+    pop es
+    mov ds, [sh_cellseg]
+    mov cx, SH_C_SZ
+    cld
+    rep movsb
+.out:
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+sh_table_unbank:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    cmp word [di], 0
+    je .out
+    mov si, di
+    add si, 2
+    mov ax, [si+SH_C_COL]
+    mov bx, [si+SH_C_ROW]
+    push si
+    SHOUT sh_findcell
+    pop si
+    jnc .out
+    mov es, [sh_cellseg]
+    mov cx, SH_C_SZ
+    cld
+    rep movsb                          ; DS:SI the slot -> ES:DI the record
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_idlg_open - in: AL = SH_ID_*. Preloads the field with the CURRENT value
@@ -15219,6 +15568,10 @@ sh_idlg_apply:
     je .serstep
     cmp byte [sh_idlg_kind], SH_ID_RECNAME
     je .recname
+    cmp byte [sh_idlg_kind], SH_ID_TBLROW
+    je .tblrow
+    cmp byte [sh_idlg_kind], SH_ID_TBLCOL
+    je .tblcol
     cmp byte [sh_idlg_kind], SH_ID_ROWH
     je .rowh
     mov si, sh_idlg_buf                ; the column width
@@ -15254,6 +15607,60 @@ sh_idlg_apply:
     inc ax
     cmp ax, bx
     jbe .cwl
+    jmp .redraw
+; 81.114: Data > Table, part one of two. An EMPTY field is not a refusal -
+; it is how a one-input table says it has no row input cell - so the parse
+; failing stores SH_TBL_NONE and the second half decides whether the pair
+; makes sense. Deciding here would refuse a legal one-input table.
+.tblrow:
+    mov word [sh_tbl_ir], SH_TBL_NONE
+    mov word [sh_tbl_ic], SH_TBL_NONE
+    mov si, sh_idlg_buf
+    SHOUT sh_upcase_at
+    mov si, sh_idlg_buf
+    cmp byte [si], 0
+    je .tblrnext
+    SHOUT sh_pcellref                  ; CF=1 = AX col, BX row
+    jnc .tblrnext
+    mov [sh_tbl_ic], ax
+    mov [sh_tbl_ir], bx
+.tblrnext:
+    mov byte [sh_tbl_pend], 1          ; ...and ask the other one AFTER this
+                                       ; dialog has closed, not here:
+                                       ; sh_idlg_open refuses while
+                                       ; [sh_idlg_win] is set, and the apply
+                                       ; runs BEFORE sh_idlg_close. The hook
+                                       ; for it is sh_idlg_after, whose own
+                                       ; comment says why it exists - "after
+                                       ; and not inside the apply, because
+                                       ; the run may open this same dialog
+                                       ; again". 81.72's Series could call
+                                       ; straight through only because its
+                                       ; first half is the RADIO engine and
+                                       ; this one is not.
+                                       ; A CANCEL NEVER REACHES HERE, so the
+                                       ; flag also makes cancelling the first
+                                       ; half cancel the whole command
+    jmp .out
+.tblcol:
+    mov word [sh_tbl_ir2], SH_TBL_NONE
+    mov word [sh_tbl_ic2], SH_TBL_NONE
+    mov si, sh_idlg_buf
+    SHOUT sh_upcase_at
+    mov si, sh_idlg_buf
+    cmp byte [si], 0
+    je .tblgo
+    SHOUT sh_pcellref
+    jnc .tblgo
+    mov [sh_tbl_ic2], ax
+    mov [sh_tbl_ir2], bx
+.tblgo:
+    call sh_table_run                  ; CHART.OVL's own, so a near call
+    jc .tblbad
+    mov word [sh_msg], sh_s_id_tbldone
+    jmp .redraw
+.tblbad:
+    mov word [sh_msg], sh_s_id_tblbad
     jmp .redraw
 .rowh:
     ; ROW HEIGHT IS IN POINTS, Excel's unit, fractions allowed, and applies
@@ -36526,6 +36933,12 @@ sh_macro_onalert:
 ; an INPUT - answered or cancelled - lets it carry on. After and not inside
 ; the apply, because the run may open this same dialog again
 sh_idlg_after:
+    cmp byte [sh_tbl_pend], 0          ; 81.114: Data > Table's second field
+    je .notbl
+    mov byte [sh_tbl_pend], 0
+    mov al, SH_ID_TBLCOL
+    jmp sh_idlg_open_r
+.notbl:
     cmp byte [sh_idlg_kind], SH_ID_RUN
     jb .out
     cmp byte [sh_macro_wait], 0
@@ -51993,8 +52406,14 @@ sh_it_filldown:  db 'Fill Down', 0
 sh_m_data:     db 'Data', 0
 sh_i_data:     dw sh_it_form, sh_it_dfind, sh_it_extract, sh_it_del
                dw sh_it_setdb, sh_it_setcrit, sh_it_sort, sh_it_series
+               dw sh_it_dtable                      ; 81.114, BETWEEN Series
+                                                    ; and Parse - the capture
+                                                    ; (menu_data_full.png) is
+                                                    ; where that order comes
+                                                    ; from, not from memory
                dw sh_it_parse                       ; 81.82, in Excel's place
                dw sh_it_chart, sh_it_gallery, sh_it_chartexp
+sh_it_dtable:  db 'Table...', 0
 sh_it_parse:   db 'Parse...', 0
 sh_it_form:    db 'Form...', 0
 sh_it_dfind:   db 'Find', 0              ; 81.71, relabelled in place while a
@@ -53630,7 +54049,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9182                     ; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9249                     ; +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -55035,7 +55454,25 @@ sh_rf_ln      equ sh_rf_l0 + 2               ; digits start,
 sh_rf_d0      equ sh_rf_ln + 2
 sh_rf_buf     equ sh_rf_d0 + 2               ; ...and the new form: $A$ +
                                              ; row digits + NUL, 12 bytes
-sh_bss_end        equ sh_rf_buf + 12
+; --- 81.114: Data > Table's own, and the 16 at the front are laid out as
+; BIFF3's DATATABLE record body is (0236H), so that stage 4's writer copies
+; them rather than building them. The two banked cell records behind them are
+; this app's, not the format's.
+sh_tbl_r1         equ sh_rf_buf + 12     ; the selection, normalised: the
+sh_tbl_r2         equ sh_tbl_r1 + 2      ; whole rectangle INCLUDING the
+sh_tbl_c1         equ sh_tbl_r2 + 2      ; formulas and the input values,
+sh_tbl_c2         equ sh_tbl_c1 + 2      ; which is what Excel asks for
+sh_tbl_flags      equ sh_tbl_c2 + 2      ; word: DATATABLE's option flags
+sh_tbl_ir         equ sh_tbl_flags + 2   ; the ROW input cell, or SH_TBL_NONE
+sh_tbl_ic         equ sh_tbl_ir + 2
+sh_tbl_ir2        equ sh_tbl_ic + 2      ; the COLUMN input cell, or NONE
+sh_tbl_ic2        equ sh_tbl_ir2 + 2
+sh_tbl_cr         equ sh_tbl_ic2 + 2     ; the result cell being filled
+sh_tbl_cc         equ sh_tbl_cr + 2
+sh_tbl_sav1       equ sh_tbl_cc + 2      ; 2 + SH_C_SZ: present flag, record
+sh_tbl_sav2       equ sh_tbl_sav1 + 2 + SH_C_SZ
+sh_tbl_pend       equ sh_tbl_sav2 + 2 + SH_C_SZ   ; byte: part two is owed
+sh_bss_end        equ sh_tbl_pend + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

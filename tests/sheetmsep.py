@@ -40,7 +40,10 @@ TITLES = ["File", "Edit", "Formula", "Format", "Data", "Options", "Macro"]
 # the rows a line FOLLOWS, per menu - sheet.asm's sh_msep, restated as the
 # captures read (a transcription the gate checks, not a copy of the table)
 SEPS = {"File": {1}, "Edit": {0, 6, 8}, "Formula": {2, 3, 4},
-        "Format": {4, 6}, "Data": {0, 5, 6, 8}, "Options": {1, 2},
+        # Data's last rule separates EXCEL'S list from this app's three chart
+        # items, so it moves whenever a command goes in above it: 81.82's
+        # Parse pushed it to 8 and 81.114's Table... to 9.
+        "Format": {4, 6}, "Data": {0, 5, 6, 9}, "Options": {1, 2},
         "Macro": {1}}
 SH_MI_H = 12
 

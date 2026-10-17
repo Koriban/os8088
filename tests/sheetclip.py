@@ -90,7 +90,9 @@ def main():
         M.settle(m)
         before = m.fbuf()
         M.write_png_rgb(os.path.join(WORK, "1-sheet.png"), *before)
-        mo.menu(X["Data"], bar, *item("Data", 9))      # Chart Column...
+        mo.menu(X["Data"], bar, *item("Data", 10))     # Chart Column... -
+                                                      # 9 until 81.114 put
+                                                      # Table... in at 8
         M.settle(m, limit=120)
         mo.to(*park)
         M.settle(m)

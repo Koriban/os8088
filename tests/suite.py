@@ -13367,6 +13367,24 @@ SOAK = [
         "because scaling an empty second series writes ch_e10 too",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("sheettable", "soak", py("tests/sheettable.py"), 400.0,
+        "SPEC.md 81.114: Data > Table, the last menu command Excel 2.1d has "
+        "that SHEET did not. A result cell is the governing formula "
+        "evaluated with an input value substituted into an input cell "
+        "elsewhere on the sheet, so the assertion is the NUMBERS and the "
+        "fixture is built so no two expected values agree - a transposed "
+        "substitution cannot land on a right answer by luck. Two tables, "
+        "side by side in rows 1-3 so both can be selected by clicking: a "
+        "one-input table whose values run down the left column and formulas "
+        "across the top, and a two-input table with one corner formula. "
+        "Check 4 reads the INPUT CELLS back, which is what caught the "
+        "substitution writing to row = the value (81.114.6); check 5 asks "
+        "that the four results DIFFER, which is what the pass stamp buys - "
+        "without it sh_eval_cell's memoization fills the interior with one "
+        "number repeated and the feature looks like it works",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "

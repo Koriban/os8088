@@ -54,7 +54,9 @@ DISK = "build/sheetparse.img"
 NAME = "SHIN.SLK"
 DATA = (311, 45)                        # the Data menu, sheetsort's own
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
-PARSE = 8                               # ...and Parse in EXCEL'S place, after
+PARSE = 9                               # 81.114 put Table... in at 8, so this
+                                        # moved from 8 to 9 - and Parse in
+                                        # EXCEL'S place, after
                                         # Series - so SHEET's own three chart
                                         # items moved down one (81.82)
 # MEASURED off the open dialog, not stepped: sh_idlg's content origin is

@@ -130251,6 +130251,123 @@ and `F3`. They sit in rows 2 and 3 rather than rows of their own because the
 window is **four rows tall** on this machine — CGA is 640x200 — and a fifth
 row would have been off the glass, where the failure reads as "no grid".
 
+### 81.114 `Data ▸ Table` — the last missing menu command
+
+§81.39's inventory had exactly one menu command left that Excel 2.1d has and
+this app does not, printing (no OS backend) and MDI (struck on purpose) aside.
+This is it, and it also unblocks 13 declined macro names, `TABLE` among them
+(§81.93). `docs/plans/SHEET-TABLE-PLAN.md` carries the full reading of the
+Reference Guide and of the file format, and the staging; this section is what
+is built.
+
+**Where it goes in the menu came off the capture**, not from memory:
+`LIBRARY/documentation/screenshots/excel/menu_data_full.png` shows `Table...`
+between `Series...` and `Parse...`, so it went in at index 8 and Parse and
+this app's three chart items each moved down one — exactly as §81.82 moved
+them when Parse went in.
+
+#### 81.114.1 Two dialogs, because Excel's one has two fields
+
+Excel asks for the Row Input Cell and the Column Input Cell in a single
+dialog. **No engine here has two fields**, so they are asked one after the
+other — the shape §81.72's Series already uses for its type and its step, and
+§81.74's recorder for its name. The second opens from the first's `OK`, with
+a plain near call inside `CHART.OVL`, the way `.doseries` opens its own.
+
+**Either field may be left EMPTY, and that is not a refusal.** It is how a
+one-input table says which kind it is: Excel spells the same distinction as
+the comma's side in `{=TABLE($D$9,)}` versus `{=TABLE(,$E$8)}`. An empty
+field stores `SH_TBL_NONE`, and only the second half decides whether the pair
+makes sense — refusing in the first half would reject a legal one-input
+table. `SH_TBL_NONE` is `0FFFFh` and not zero, because row 0 column 0 is cell
+A1, a perfectly ordinary input cell.
+
+#### 81.114.2 Which of the three shapes, decided and not guessed
+
+The selection is the whole rectangle **including** the formulas and the input
+values — Excel's own words are "select the range of cells containing the row
+and column of values and the formula" — so the interior that gets filled is
+one row and one column smaller than what the user selected. A selection with
+no interior is refused.
+
+Which shape it is comes from **which input cells were given**, never from
+guessing at the data:
+
+| given | shape |
+|---|---|
+| both | two-input: one formula in the corner, the column of values below it feeding the COLUMN input cell and the row right of it feeding the ROW one |
+| column only | formulas across the top row, values down the left column |
+| row only | formulas down the left column, values across the top row |
+| neither | refused — nothing says what to substitute |
+
+#### 81.114.3 The pass stamp is what makes it a table and not one number
+
+`sh_eval_cell` memoizes per repaint pass, so the evaluation needs
+`inc word [sh_pass]` in front of it — the same `inc` `Calculate Now` spends
+(§81.78) — and another after the inputs are put back, so that nothing keeps
+a value computed against a substitution.
+
+**What removing it actually costs is ONE CELL, not the table**, and the
+difference matters because this section first said otherwise. Taking the
+stamp out leaves **the first result of each table** reading the formula's
+unsubstituted answer and the other six correct: the pass moves on its own
+after that first evaluation. The claim here was "the table fills with one
+number repeated", `tests/sheettable.py` was given a check that asked whether
+the four results DIFFER on the strength of it, and **that check passed on
+its own mutation** — 0, 14, 18 and 19 being four distinct values. The check
+now names the two cells that really move; the story was wrong and the gate
+inherited it.
+
+#### 81.114.6 Two defects, and neither was found by reading the code
+
+Both were in the engine, both survived three readings that concluded it was
+correct, and both were found by driving it.
+
+**A stale `xchg si, di` in the banking helper.** `mov si, di` had already
+taken the record and `pop di` the slot, so the exchange — left from an
+earlier arrangement of the routine — reversed them and `rep movsb` wrote
+twenty bytes of the CELL segment over the package's own data segment at a
+record offset. The symptom was a **blank window**, which is what a package
+scribbling on itself looks like; it also made the next selection appear not
+to take, which read as a second, unrelated harness fault.
+
+**The destination row held in `DX` across `sh_getcell2`.** That routine's
+contract is *"out: CF=1 occupied + DX = value"* — `DX` is an **output**. So
+the substitution handed `sh_setvald` the value as a row: every write went to
+row 4 for an input of 4, the input cell was never written, and the table
+filled with the formula's original answer. The tell was a stray `3` sitting
+in cell A4 in a photograph, skimmed past twice. It is the same family as
+§81.17's `sh_findcell` not preserving `DI` — a documented output register
+eating a caller's live input — and what finally isolated it was disabling
+the restore to ask one bit: does the input cell keep the last substitution?
+It did not, so the write had never happened.
+
+#### 81.114.4 The input cells are banked WHOLE, and put back
+
+An input cell is an ordinary cell of the user's sheet: it may hold a formula
+or a label, and `sh_setvald` over one would leave a value where a formula
+was. So each is banked as its **whole 20-byte record** with a present flag,
+and restored after every result cell — an absent input cell banks as absent
+and is deleted again, so a table does not leave a zero behind in a cell the
+user never filled.
+
+Restoring is not tidiness. Every later result reads the input cell, so
+leaving the last substitution in it would make the table depend on the order
+it was filled.
+
+#### 81.114.5 What it cost
+
+| | before | after |
+|---|---|---|
+| region | 60,668 of 61,440 | **60,862 — 578 spare** |
+| `CHART.OVL` | 47,902 of 49,152 | **48,477 — 675 free** |
+
+The resident half is the menu row and `mov al, SH_ID_TBLROW` / `call
+sh_idlg_open_r`; the dialogs and the engine are `CHART.OVL`'s, because 772
+bytes of region was all there was. The bss is 66 bytes and **the first
+sixteen are laid out as BIFF3's `DATATABLE` body (`0236H`)**, so the writer
+of §81.114's later stage copies them rather than building them.
+
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
 Four things, and three of them are invisible in a diff.
