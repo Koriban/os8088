@@ -135649,6 +135649,51 @@ it away — it is the next-lowest by construction.
 Neither app invents data. A file with one column of numbers gets a scatter
 against the row index and a combination that is just its columns.
 
+#### 82.8.2 The data model has a gate now — `tests/chart2ser.py`
+
+`chartgal` (§82.4.1) proves Scatter and Combination **draw** differently from
+the other five. It cannot see the half §82.8 calls the hard one — *"it is a
+data-model change, not a drawing one"* — and that half had no test.
+
+**The demotion is why the row exists.** `ct_record` keeps the two
+lowest-numbered columns, and §82.8.1 states what happens when a column
+arrives that is lower than the series already being built: it **demotes**
+that series to second rather than discarding it, *"it is the next-lowest by
+construction"*. A SYLK in plain row-major order **never reaches that path** —
+the lowest column is in the very first row and nothing ever supersedes it —
+so the fixture puts column B in rows 0–3 and column A only in rows 4–7. The
+answer must come out the same as the row-major file's.
+
+**And the counts are not the assertion.** Two counts and two column numbers
+would pass just as happily if both series held column A, and the demote path
+*copies one array over the other*, so the check that matters reads the
+**values**: column A rises throughout and column B does not, and `ch_scale`
+normalises both against one `[ch_e10]`, so two non-proportional columns
+cannot produce the same scaled words.
+
+| mutation | what fails |
+|---|---|
+| `jmp` over the demotion, so a superseded series is thrown away | 3 and 3a — check 1's row-major file reaches `.newcol` with a count of zero and never demotes, so it stays green |
+| the demotion copies series two over series one | **3a alone** — every count and column number is still right |
+
+**The second of those was MISSED by the first version of this row, and the
+miss is the reason check 3a exists.** The values check was written against
+the row-major file — the one fixture that never takes the demote path — so a
+`rep movsw` with its pointers swapped satisfied every count, every column
+number, and the values of a file it had not touched. It passed five of five.
+Check 3a reads the demoted series two back and compares it against **the same
+column read the ordinary way**, which is the only comparison that can see
+which array the copy actually took.
+
+**One finding came out of writing it, and it was the test that was wrong.**
+Check 5 asserts §82.8's independent scales and first read `[ch_max2]` as 0,
+which it reported as one maximum shared by both series. It is not: `ch_prep2`
+is called from the **Scatter and Combination arms of `ch_draw` and nowhere
+else**, so the second scale is computed by the types that *spend* it rather
+than by the reader, and on the Column chart a file opens as it is simply
+still zero. The check picks a Scatter first now. A gate that reads a value
+before anything computes it diagnoses a correct app as broken.
+
 ### 82.9 A category's band is derived from the count, never fixed
 
 `ch_band` answers *"which pixels belong to category N"* for every type that

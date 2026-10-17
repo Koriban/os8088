@@ -13298,7 +13298,7 @@ SOAK = [
         "Fixed in the same commit; restoring it fails 8 alone",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
-    Row("chartgal", "soak", py("tests/chartgal.py"), 400.0,
+    Row("chartgal", "soak", py("tests/chartgal.py"), 600.0,
         "SPEC.md 82.4/82.6: the Gallery actually DRAWS seven different "
         "charts - THE FIRST CHART ROW THAT LOOKS AT PIXELS. chartname and "
         "chartread both read numbers out of bss, and no amount of that can "
@@ -13322,6 +13322,30 @@ SOAK = [
         "loosened check 2 to a pixel threshold to tolerate a Pie that "
         "sometimes never settled - and THAT MADE THE ROW MISS ITS OWN "
         "MUTATION on one run. Both comparisons are exact again",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chart2ser", "soak", py("tests/chart2ser.py"), 300.0,
+        "SPEC.md 82.8/82.8.1: CHART keeps the TWO lowest columns, and "
+        "DEMOTES. chartgal proves Scatter and Combination draw differently "
+        "from the other five; this is the data model under them, which 82.8 "
+        "calls the hard half ('a data-model change, not a drawing one'). "
+        "Check 3 is why the row exists: ct_record demotes a series when a "
+        "LOWER column arrives rather than discarding it, and a SYLK in plain "
+        "row-major order never reaches that path - the lowest column is in "
+        "the first row and nothing supersedes it - so DEMOTE.SLK puts column "
+        "B in rows 0-3 and column A only in rows 4-7. Check 2 is check 1's "
+        "control: two counts would pass if both series held the same column, "
+        "and the demote path COPIES one array over the other, so the values "
+        "are what say the copy took the right source - but they have to be "
+        "read off the DEMOTED file, which is check 3a and which the first "
+        "version of this row did not have: it checked values on the "
+        "row-major file, the one that never demotes, and MISSED the "
+        "wrong-direction-copy mutation entirely. Red on purpose, twice each: "
+        "jumping over the demotion fails 3 and 3a; copying it the wrong way "
+        "round fails 3a ALONE, every count still right. ch_max2 is read on a "
+        "SCATTER because ch_prep2 runs only in the two ch_draw arms that "
+        "spend it - on the Column chart a file opens as it is still zero, "
+        "which this row first reported as a shared maximum",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
