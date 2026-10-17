@@ -135384,6 +135384,79 @@ also does not exist yet; `apps/paint`'s glyph-stamping into its own private
 canvas is the model, since it is buffer-targeted rather than screen-targeted
 and maps onto `ch_fillrect` almost directly.
 
+#### 82.4.1 The Gallery has a gate now, and it is the first one with pixels in it
+
+`chartname` and `chartread` both read **numbers out of the package's bss**,
+and no amount of that can see the drawing: `ch_type` dispatches seven types
+through `ch_draw`, and an arm that silently did nothing would leave
+`ct_valcnt`, `ct_mincol` and `ct_wvals` all perfectly correct. The whole
+drawing half of this package was in exactly the position §82.15 and §82.18.2
+were in — asserted in words, with nothing driving it.
+
+**`tests/chartgal.py` reads §82.1's offscreen canvas, not the screen.**
+240×160 at 4bpp from `ct_chartseg`, which is the buffer both halves draw into
+and the same pixels `File > Export as BMP...` writes, so the row needs no
+export dialog, no floppy to extract from and no screen geometry.
+
+Five checks, and the shape of the argument is the same as the reader row's:
+every type **inks** something; **no two types draw the same picture** (a
+`ct_gal_map` with a repeated entry, or a `ch_draw` arm falling into its
+neighbour, leaves every number right and two menu items doing one thing);
+Column and Bar are **transposed**; Area carries strictly **more ink** than
+Line, being the same walk filled to the axis; and Pie's bounding box has an
+**inked centre with four blank corners**.
+
+| mutation | what fails |
+|---|---|
+| `ct_gal_map`'s Bar entry pointed at `CH_T_COLUMN` | 2 and 3 |
+| `ch_draw`'s Area arm sent to `.line`, so the fill never runs | 2 and 4 (`Area==Line`, 719 ink each) |
+
+**Two of the five metrics were wrong the first time, and the canvas said
+so** — which is the argument for looking at pixels rather than reasoning
+about them:
+
+- *"how many columns and how many rows carry any ink"* separates nothing.
+  A column chart's tallest bar reaches the top of the canvas, so every row
+  has ink; the axis labels (§82.7, drawn in colour 0) spread ink across the
+  top, so every column does too. Both charts measured 240×160. **Longest run
+  per colour** is the real transposition, and it is immune to both.
+- **the pie is an ELLIPSE**, 94×70 on this data. A near-square test on its
+  bounding box fails on a correct picture; "centre inked, corners blank"
+  does not, and says the same thing about a disc.
+
+**And the row's own read is where all the difficulty was**, which is the tax
+on looking at pixels instead of bss. Three things are needed and none of them
+works alone:
+
+1. **The guest is PAUSED for the read.** 19,200 bytes is not one round trip,
+   so a running guest can redraw underneath one and hand back a frame that
+   never existed.
+2. **Wait for the canvas to CHANGE from the previous type's.** `ui.settle()`
+   watches the *screen* stop changing, and a canvas still being computed has
+   not reached the screen — the frame is already still, so settle on its own
+   returns before the drawing starts. That returned a half-swept pie under a
+   mutation that cannot touch Pie at all.
+3. **Then let the screen settle.** The canvas is rasterised and *then*
+   blitted, so a screen that has stopped changing is a render that finished
+   and reached the glass. With (2) in front of it this is exact.
+
+**The failure worth recording is the version in between.** Before (3), the
+row took the first picture *seen twice* and tolerated never seeing one —
+because Pie sometimes never settled, and what kept moving said why: 24 bytes
+on EVEN rows 72–80, §82.6.2's alternate-row slice hatching, a sweep still
+running. To stop a half-swept pie forging a match, check 2 was loosened from
+exact equality to a 0.5%-of-canvas threshold. **That made the gate miss its
+own mutation.** With `ct_gal_map`'s Bar entry pointed at `CH_T_COLUMN` the
+two charts are identical, but read at different moments they drifted past the
+threshold, and one run reported seven distinct pictures. The same version
+also failed check 5 spuriously on a pie read mid-sweep.
+
+A gate that intermittently fails wastes an afternoon; **one that
+intermittently misses is worse than not existing**. The tolerance was
+treating a measurement problem as a tolerance problem. With the read made
+exact, both picture comparisons went back to exact equality, and the
+`ct_gal_map` mutation now fails checks 2 and 3 on every run.
+
 ### 82.6 CH_T_PIE — the one type that is not a rectangle
 
 **No trigonometry exists anywhere in this tree**, which is the whole reason

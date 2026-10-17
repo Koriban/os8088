@@ -13298,6 +13298,32 @@ SOAK = [
         "Fixed in the same commit; restoring it fails 8 alone",
         needs=("marty",), serial=True,
         wants=("build/chart.o88", "build/os8088-360.img")),
+    Row("chartgal", "soak", py("tests/chartgal.py"), 400.0,
+        "SPEC.md 82.4/82.6: the Gallery actually DRAWS seven different "
+        "charts - THE FIRST CHART ROW THAT LOOKS AT PIXELS. chartname and "
+        "chartread both read numbers out of bss, and no amount of that can "
+        "see the drawing: a ch_draw arm that silently did nothing leaves "
+        "ct_valcnt, ct_mincol and ct_wvals all correct. It reads 82.1's "
+        "offscreen canvas (240x160 4bpp at ct_chartseg) rather than the "
+        "screen, which is the buffer both halves draw into and what Export "
+        "as BMP writes. Checks: every type drew ink; no two types drew the "
+        "SAME picture; Column and Bar are TRANSPOSED by longest-run (Excel's "
+        "naming - Bar is the horizontal one); Area carries strictly more ink "
+        "than Line, being the same walk filled to the axis; and Pie's "
+        "bounding box has an inked centre with four blank corners. Red on "
+        "purpose: ct_gal_map's Bar entry pointed at CH_T_COLUMN fails 2 and "
+        "3, and ch_draw's Area arm sent to .line fails 2 and 4 (Area==Line, "
+        "719 ink each). The canvas is read with the guest PAUSED, after it "
+        "has CHANGED from the previous type's AND the screen has settled - "
+        "all three are needed: a running guest redraws under a 19,200-byte "
+        "read, settle() alone returns before the drawing starts (the frame "
+        "is already still), and the change alone cannot tell started from "
+        "finished. An earlier version took the first picture seen twice and "
+        "loosened check 2 to a pixel threshold to tolerate a Pie that "
+        "sometimes never settled - and THAT MADE THE ROW MISS ITS OWN "
+        "MUTATION on one run. Both comparisons are exact again",
+        needs=("marty",), serial=True,
+        wants=("build/chart.o88", "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "
