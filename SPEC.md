@@ -128905,8 +128905,10 @@ and §82 is this tree's answer to that.
   the rest - or blocked on a SHEET command that does not exist yet (13,
   `TABLE` the one a later command would bring). Five names
   a 2026-09-22 sweep of the book found in neither list are listed there as
-  not yet decided. The recorder (§81.74) still lacks Start
-  Recorder and Resume.
+  not yet decided. **The recorder is complete**: `Start Recorder` shipped in
+  §81.107 and `Resume` is not an Excel 2.1d command at all (the note at the
+  top of this section) - this sentence carried the phantom in a second place
+  until 2026-10-16.
 - **No Short/Full menus toggle**, and none is coming: dropped (dropped by the owner, 2026-09-22). Freeze Panes is done (§81.70).
 - **Smaller, each listed where it was found — all three closed:** Sort puts
   a blank key cell last in both directions since §81.80, a centred or
