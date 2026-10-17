@@ -128790,12 +128790,28 @@ reader that had not been written by the same hand as the writer.**
 
 ### 81.39 What SHEET still lacks, measured (2026-09-11)
 
-> **Re-measured 2026-10-16.** The Macro row listed `Start Recorder` and
-> `Resume` as missing; the first shipped in §81.107 and the second is
-> DECLINED in §81.74.1 and always was. That is the FOURTH time a row of this
-> table has gone stale, in a section whose own first sentence says to
-> re-measure rather than quote. **The only menu command still genuinely
-> missing anywhere below is `Data ▸ Table`.**
+> **Re-measured 2026-10-16, and the Macro row was not stale — it was
+> INVENTED.** It read "Macro | 4 | ~6 | Start Recorder, Resume". `Start
+> Recorder` shipped in §81.107, so that half was merely out of date. The
+> other half never existed: **Excel 2.1d's Macro menu has FIVE items** —
+> Record…, Run…, Start Recorder, Set Recorder, Relative Record — and the
+> capture this section names as its authority
+> (`LIBRARY/documentation/screenshots/excel/menu_macro.png`) shows exactly
+> those five with no Resume among them. `Macro Resume command` appears
+> nowhere in the Reference Guide, which names the other five; and `PAUSE()`,
+> the function §81.74.1 says Resume resumes, appears nowhere in *Microsoft
+> Excel Functions and Macros* — what suspends a macro there is
+> `WAIT(serial_number)`, an `ALERT`/`INPUT` dialog, or the ESC interrupt's
+> **Halt / Step / Continue**. `PAUSE`/`Resume` are a LATER Excel's macro
+> language, imported into a 2.1d inventory by mistake.
+>
+> So SHEET's Macro menu is complete and has been. The lesson is §81.39's own
+> and it is now four for four: **a gap in this table is not evidence that
+> the gap exists.** An inventory written from memory of the product invents
+> requirements as readily as it forgets closed ones, and a phantom costs
+> more than a stale row - it sends someone to build something the reference
+> does not have. **The only menu command still genuinely missing anywhere
+> below is `Data ▸ Table`.**
 >
 > **Re-measured 2026-09-22**, after the macro language was finished: every
 > name in Excel 2.x's macro vocabulary is now built or declined with its
@@ -128852,7 +128868,7 @@ harmless.
 | Window | 0 | 5 + the window list | **the whole menu is struck as MDI**: New Window, Show Info, Arrange All, Hide, Unhide and the list of open windows all manage document windows, and SHEET has one. So is the Control menu's document half - Maximize, Restore and Close of a DOCUMENT window (§81.93's MDI group has the macro side) |
 | Options | 6 | 10 | Set Print Area/Titles/Page Break (printing, out of scope), Workspace; **Short Menus DROPPED** (the owner's decision, 2026-09-22) — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
-| Macro | 5 | ~6 | **none** — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), `Start Recorder` in §81.107, and **`Resume` is DECLINED, not missing** (§81.74.1): Excel's Resume continues a macro halted by `PAUSE()`, there is no `PAUSE` in this app's macro vocabulary, and §81.63's only pause is `ALERT`/`INPUT`, which resumes on its own dialog's OK. **Re-measured 2026-10-16**, when this row still listed both as missing and sent a reader looking for work that does not exist |
+| Macro | 5 | **5** | **none** — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74) and `Start Recorder` in §81.107. **`Resume` IS NOT AN EXCEL 2.1d COMMAND AT ALL** — see the note below; this row carried it as missing work for its whole life |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2) — and
 **`Close` is absent for the same reason one step on**: Excel's Close ends a
@@ -134914,11 +134930,19 @@ is how this app's own parser reads a quote inside a string (§81.18's
 `"a""b"`), so a label containing one records as a macro that re-enters that
 same label.
 
-**Not implemented, with reasons:** `Resume` (and `Start Recorder` was listed
-here until §81.107 built it: a range set by Set Recorder, or left by a stopped
-recording, *is* the "armed but paused" state it needed). Excel's `Resume` continues a macro halted by `PAUSE()`; §81.63's only
-pause is `ALERT`/`INPUT`, which resumes on its own dialog's OK through
-`sh_idlg_after`, so there is nothing for a menu item to resume.
+**Nothing is left unimplemented here, and the one thing that was listed
+never existed.** `Start Recorder` was listed until §81.107 built it (a range
+set by Set Recorder, or left by a stopped recording, *is* the "armed but
+paused" state it needed). `Resume` was listed beside it, declined on the
+ground that *"Excel's Resume continues a macro halted by `PAUSE()`"* — and
+**Excel 2.1d has no `Resume` command and no `PAUSE()` function**. The Macro
+menu capture (§81.39's own authority) holds five items and none is Resume;
+the Reference Guide names the other five commands and never that one; and
+*Functions and Macros* offers `WAIT(serial_number)`, `ALERT`/`INPUT` and the
+ESC interrupt's **Halt / Step / Continue** as the ways a 2.x macro stops.
+`PAUSE`/`Resume` belong to a later Excel. The decline was right by accident
+and wrong in its reason, which is worse than either: it made the phantom
+look checked.
 
 `tests/sheetrecord.py` is the gate.
 
