@@ -396,6 +396,33 @@ def menu_pick(m, mo, seg, sym, items, name, settle=None):
     mo.menu(x, y, 0, 0, settle=settle, aim=aim)
 
 
+# THE CELL RECORDS read straight out of the guest (SPEC.md 81, 81.114.8): a
+# sorted sparse array of SH_C_SZ=20 at [sh_cellseg] - packed row/sheet, col,
+# flags, format, type, aux, then the IEEE-754 double.
+#
+# STORED, NOT PUBLISHED, and for a Data > Table result cell those are the
+# same thing: it holds a stored NUMBER, which is the whole reason an ordinary
+# recalculation does nothing for it. Do NOT read a FORMULA cell this way and
+# call it the answer - the record's value is whatever the last evaluation
+# left there, which is 81's "stored vs published" trap.
+SH_C_SZ, SH_C_TYPE, SH_C_VAL = 20, 6, 8
+SH_T_BLANK, SH_T_NUM, SH_T_TEXT, SH_T_BOOL, SH_T_ERR = 0, 1, 2, 3, 4
+
+
+def cell_val(m, seg, sym, col, row, sheet=0):
+    """The number stored in (col,row), or None when no cell record is."""
+    base = _w(m, seg, sym["sh_cellseg"])
+    n = _w(m, seg, sym["sh_ncells"])
+    want = row | (sheet << 14)
+    for i in range(n):
+        off = i * SH_C_SZ
+        if _w(m, base, off) == want and _w(m, base, off + 2) == col:
+            if m.readseg(base, off + SH_C_TYPE, 1)[0] != SH_T_NUM:
+                return None
+            return struct.unpack("<d", m.readseg(base, off + SH_C_VAL, 8))[0]
+    return None
+
+
 # The BORDER TABLE read straight out of the guest (SPEC.md 81.55, 81.114.7):
 # a sorted sparse array of SH_BT_SZ=6 records at [sh_bordseg] - row packed
 # with the sheet, column, then the byte that carries the four border edges,
@@ -424,6 +451,34 @@ def bt_byte(m, seg, sym, col, row, sheet=0):
 # agreement with the dialog's derived height (SH_FDLG_H's comment is what
 # happens when there is).
 SH_FDLG_ROWTOP, SH_FDLG_ROWH = 12, 16
+
+
+# sheet.asm's SH_CALC_* - the MODE values, which are the radio rows and are
+# also GET.DOCUMENT(14)'s numbering less one (81.114.8).
+CALC_AUTO, CALC_AUEX, CALC_MANUAL = 0, 1, 2
+
+
+def radio_row(m, seg, sym, items, label, cap=8):
+    """The row of `items` that shows the string at `label`.
+
+    A radio dialog's rows are an array of label POINTERS (sh_fd_i_calc and
+    its kin), so the row number is derivable from the name of the text it
+    shows, and a row inserted above it moves the answer with it.
+
+    MEASURED NECESSARY: 81.114.8 put Excel's "Automatic except Tables"
+    between Automatic and Manual, and two rows that had written `MANUAL = 1`
+    went on clicking row 1 - which is a LIVE row, so both silently selected
+    the new middle mode and reported the feature as broken. That is the
+    dialog-shaped twin of the menu index that shifted when Data > Table...
+    went in at 8, and it is the same answer: ask, do not count.
+    """
+    want = sym[label]
+    base = sym[items]
+    for i in range(cap):
+        if _w(m, seg, base + i * 2) == want:
+            return i
+    raise AssertionError("%s is not one of %s's first %d rows"
+                         % (label, items, cap))
 
 
 def fdlg_ok(m, mo, seg, sym, row=None):

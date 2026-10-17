@@ -39,6 +39,8 @@ import dispcp                                                # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
+from paintmove import pkg_syms                                # noqa: E402
+from os88geom import WIN_SIZE, W_SEG                          # noqa: E402
 
 WORK = "build/sheetcalc"                # this row's own paths (WRITING-TESTS 5.5)
 DISK = "build/sheetcalc.img"
@@ -59,7 +61,12 @@ CALCULATION, CALCNOW = 3, 4             # ...and the two items, by POSITION
 # fdlg kind is the same size (SH_FDLG_H derives from SH_FDLG_MAXROWS), so it
 # opens in the same place and sheetfmt's own coordinates carry straight over.
 ROW0, ROWH = 55, 16                     # SH_FDLG_ROWTOP/ROWH, on the glass
-MANUAL = 1                              # 0 Automatic / 1 Manual / 2 Calc Now
+# ...and the MANUAL row is ASKED FOR BY NAME, never counted. It was written
+# here as 1, with a comment reading "0 Automatic / 1 Manual / 2 Calc Now",
+# and 81.114.8 put Excel's "Automatic except Tables" between the first two.
+# Row 1 is still a LIVE row, so this went on clicking it, silently selected
+# the new middle mode, and reported Manual as broken - the dialog-shaped twin
+# of the menu index that shifted when Data > Table... went in at 8.
 
 CELLS = {(0, 0): 1.0, (0, 1): ('formula', 'A1+1', 2.0)}
 
@@ -89,6 +96,11 @@ def main():
         M.settle(m)
         SF.open_shin(m, mo)
         M.settle(m, limit=180)
+        sym = pkg_syms("apps/sheet/sheet.asm")
+        sl = dispcp.win_list(m, lambda n: m.sym(n), check=False)[-1]
+        seg = m.read(m.sym("wm_wins") + sl * WIN_SIZE + W_SEG, 2)
+        seg = seg[0] | (seg[1] << 8)
+        MANUAL = SF.radio_row(m, seg, sym, "sh_fd_i_calc", "sh_fd_cmanual")
 
         def look(tag):
             mo.to(634, 180)             # the pointer off the grid: it is ink

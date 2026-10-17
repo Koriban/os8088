@@ -1091,6 +1091,7 @@ SHM_REFCYC equ 51                   ; 81.108: Formula > Reference's cycle
 SHM_BDBTN  equ 53                   ; ...and the Border dialog's (and
                                      ; Display's and Workspace's, 81.106)
 SHM_FIND   equ 58                   ; Formula > Find, moved out for room
+SHM_TBLRUN equ 59                   ; 81.114.8: re-run every Data > Table
 SHM_DFBTN  equ 57                   ; ...the Data Form's
 SHM_NDBTN  equ 56                   ; ...the Note dialog's
 SHM_LDBTN  equ 55                   ; ...the list dialog's
@@ -1098,7 +1099,7 @@ SHM_IDBTN  equ 54                   ; ...the one-line dialog's
 SHM_FDBTN  equ 52                   ; 81.111: a dialog BUTTON FIRED (on the
                                      ; release, the library's gesture): AL =
                                      ; which, 1-based
-SHM_N      equ 56                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 57                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -1140,6 +1141,7 @@ sh_mverb:
     dw sh_m_refcyc                                        ; 81.108
     dw sh_m_fdbtn, sh_m_bdbtn, sh_m_idbtn, sh_m_ldbtn     ; 81.111
     dw sh_m_ndbtn, sh_m_dfbtn, sh_m_find
+    dw sh_m_tblrun                                        ; 81.114.8
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1148,6 +1150,9 @@ sh_mverb_end:
     times ((sh_mverb_end - sh_mverb) / 2 - SHM_N) db 0
     times (SHM_N - (sh_mverb_end - sh_mverb) / 2) db 0
 
+sh_m_tblrun:
+    call sh_tbl_runall
+    retf
 sh_m_doread:
     call shm_doread
     retf
@@ -1664,6 +1669,25 @@ sh_dowrite:
     mov bp, SHM_WRITE
     call ch_ovcall
     pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_tbl_run_all - 81.114.8's recalculation, resident side. A table's result
+; cells hold STORED VALUES, so `inc word [sh_pass]` - this app's whole
+; recalculation - does nothing for them; they have to be computed again.
+;
+; CF IS NOT READ, and must not be: a machine with no room for CHART.OVL is a
+; machine that never opened the Data > Table dialog either, so there are no
+; tables for this to miss (82.16.3 is the same argument for the chart).
+; -----------------------------------------------------------------------------
+sh_tbl_run_all:
+    cmp word [sh_ntbl], 0               ; the overwhelmingly common case, and
+    je .out                             ; it costs a compare rather than a
+    push bp                             ; far call into the module
+    mov bp, SHM_TBLRUN
+    call ch_ovcall
+    pop bp
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5440,6 +5464,10 @@ sh_onkey:
     mov bx, [sh_selrow]
     call sh_clearcell
     call sh_undo_end
+    cmp byte [sh_calcmode], SH_CALC_AUTO  ; 81.114.8: Del does not go through
+    jne .delnorec                      ; sh_commit, and the cell it just
+    call sh_tbl_run_all                ; emptied may be an INPUT cell
+.delnorec:
     call sh_repaint
 .out:
     pop dx
@@ -5684,6 +5712,22 @@ sh_commit:
 .out:                                 ; the logical constant (81.51)
     pushf                             ; 81.74: every caller reads this CF
     call sh_rec_flush
+    ; 81.114.8: ONE FUNNEL, SO ONE RECALCULATION. Typing, Paste in all six
+    ; modes, Fill Right and Fill Down and a sort's write-back all end up
+    ; here, which is the same reason sh_prot_blocked sits at the other end of
+    ; this routine - so hooking the table re-run here covers every one of
+    ; them and no call site learns about tables.
+    ;
+    ; GATED ON sh_commitdirty, not on reaching .out: a REFUSED commit comes
+    ; through here too, and typing into a result cell is refused by
+    ; construction - so without the gate every rejected keystroke would
+    ; re-run every table on the document.
+    cmp byte [sh_calcmode], SH_CALC_AUTO
+    jne .norecalc
+    cmp byte [sh_commitdirty], 0
+    je .norecalc
+    call sh_tbl_run_all
+.norecalc:
     popf
     pop es
     pop si
@@ -5704,8 +5748,8 @@ sh_drawall:
     push dx
     push si
     push di
-    cmp byte [sh_calcmanual], 0       ; stage 3.0c Options > Calculation. NOT
-    jne .nocalc                       ; advancing the pass stamp is the whole
+    cmp byte [sh_calcmode], SH_CALC_MANUAL  ; stage 3.0c Options > Calculation.
+    jae .nocalc                       ; NOT advancing the pass stamp is the whole
     inc word [sh_pass]                ; mechanism: sh_eval_cell's memoization
 .nocalc:                              ; keys off it, so every formula reads as
                                        ; a cache hit and nothing re-evaluates.
@@ -7112,9 +7156,17 @@ sh_drawstatus:
     ; and for the word CALCULATE when Manual mode has left the sheet stale.
     ; CALCULATE takes precedence, because it is the one that means something
     ; is WRONG on screen rather than something is set on the keyboard.
+    ; 81.114.8: and CALCULATE means the same thing under the middle mode,
+    ; but only when there is a table to be stale - "automatic except tables"
+    ; on a sheet with no table recalculates everything, so nothing is owed.
     mov si, sh_s_num
-    cmp byte [sh_calcmanual], 0
+    cmp byte [sh_calcmode], SH_CALC_MANUAL
+    jae .stale
+    cmp byte [sh_calcmode], SH_CALC_AUEX
+    jne .indi
+    cmp word [sh_ntbl], 0
     je .indi
+.stale:
     mov si, sh_s_calcind
 .indi:
     ; 81.104: Excel's two things here - a DIVIDER between the message and the
@@ -9096,6 +9148,13 @@ sh_mfire:
 sh_calc_now:
     push si
     inc word [sh_pass]                ; a pass stamp nothing has cached, which
+    call sh_tbl_run_all               ; 81.114.8: ...and a table's results are
+                                      ; STORED, so the stamp does nothing for
+                                      ; them. WHATEVER THE MODE: Calculate Now
+                                      ; is the command that means "catch
+                                      ; everything up", and under Automatic
+                                      ; except Tables it is the only thing
+                                      ; that ever will
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
     mov si, sh_s_rec_calc             ; 81.74: and the recorder sees it
     call sh_rec_cmd
@@ -13430,8 +13489,16 @@ sh_fd_i_new:    dw sh_fd_nwsheet, sh_fd_nwchart, sh_fd_nwmacro
 sh_fd_nwsheet:  db 'Worksheet', 0
 sh_fd_nwchart:  db 'Chart', 0
 sh_fd_nwmacro:  db 'Macro Sheet', 0
-sh_fd_i_calc:   dw sh_fd_cauto, sh_fd_cmanual, sh_fd_cnow
+; 81.114.8: Excel 2.1's Calculation dialog is Automatic / Automatic except
+; Tables / Manual, and the middle one is there for exactly the reason it is
+; needed here - a table is a full formula evaluation PER RESULT CELL, where
+; an ordinary formula is a memoized one. The capture is
+; LIBRARY/documentation/screenshots/excel/dialog_calculation.png. Calculate
+; Now is this app's own fourth row rather than Excel's separate menu item
+; (81.78), and it stays where it was, after the three modes.
+sh_fd_i_calc:   dw sh_fd_cauto, sh_fd_cauex, sh_fd_cmanual, sh_fd_cnow
 sh_fd_cauto:    db 'Automatic', 0
+sh_fd_cauex:    db 'Automatic except Tables', 0
 sh_fd_cmanual:  db 'Manual', 0
 sh_fd_cnow:     db 'Calculate Now', 0
 sh_fd_i_sort:   dw sh_fd_sasc, sh_fd_sdesc
@@ -13463,7 +13530,18 @@ sh_s_fd_cancel: db 'Cancel', 0
 ; = 2 rows, 5/6 retired) - sh_fdlg_open copies the
 ; matching entry into [sh_fdlg_count], which sh_fdlg_paint/sh_fdlg_onclick
 ; loop and hit-test against instead of the fixed SH_FDLG_NITEMS.
-sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 3, 3, 2, 7, 6, 5, 4, 2, 6
+sh_fdlg_counts: dw 4, 4, 4, 2, 2, 0, 0, 3, 4, 3, 2, 7, 6, 5, 4, 2, 6
+
+; 81.114.8: Options > Calculation's three MODES, in Excel's own order, and
+; the dialog row after them that is this app's folded-in Calculate Now.
+; The order matters twice over: it IS the radio row number, and it is
+; GET.DOCUMENT(14)'s own numbering less one (1 Automatic, 2 Automatic except
+; tables, 3 Manual), which is why shm_gd_calc is now `mode + 1` instead of a
+; two-way pick that could not say the middle one.
+SH_CALC_AUTO   equ 0
+SH_CALC_AUEX   equ 1                ; automatic, except tables
+SH_CALC_MANUAL equ 2
+SH_CALC_NOWROW equ 3                ; not a mode: the dialog's fourth row
 
 SH_FDK_CLEAR equ 7
 SH_FDK_NEW   equ 8
@@ -13605,7 +13683,7 @@ sh_fdlg_open:
     jmp .noprefill
 .prefillcalc:
     xor ah, ah
-    mov al, [sh_calcmanual]
+    mov al, [sh_calcmode]
     mov [sh_fdlg_sel], ax
     jmp .noprefill
 .cellpre:
@@ -14192,6 +14270,13 @@ sh_fdlg_apply0:
     cmp cx, si
     jbe .clcolloop
 .cldone:
+    cmp byte [sh_calcmode], SH_CALC_AUTO  ; 81.114.8: a clear does not go
+    jne .clnorec                       ; through sh_commit either, and what
+    call sh_tbl_runall                 ; it emptied may be another table's
+.clnorec:                              ; INPUT cell. The tables this clear
+                                       ; COVERED are already gone, so this
+                                       ; re-runs the ones that merely read
+                                       ; what it took away
     mov si, [sh_ownwin]               ; ONE repaint for the block
     SHOUT sh_repaint
     jmp .out
@@ -14216,17 +14301,22 @@ sh_fdlg_apply0:
     jmp .out
 
 .docalc:
-    ; 0 Automatic / 1 Manual / 2 Calculate Now. Manual is not a no-op with a
-    ; label on it: sh_drawgrid re-evaluates every formula cell on every
-    ; repaint, so switching it off is what a big sheet on a 4.77MHz 8088
-    ; actually needs, and Calculate Now is then the only way to catch up.
-    cmp word [sh_fdlg_sel], 2
+    ; 0 Automatic / 1 Automatic except Tables / 2 Manual / 3 Calculate Now.
+    ; Manual is not a no-op with a label on it: sh_drawgrid re-evaluates every
+    ; formula cell on every repaint, so switching it off is what a big sheet
+    ; on a 4.77MHz 8088 actually needs, and Calculate Now is then the only
+    ; way to catch up. The MIDDLE one is 81.114.8's, and it is the mode a
+    ; machine this slow wants the moment a table exists.
+    cmp word [sh_fdlg_sel], SH_CALC_NOWROW
     je .calcnow
     mov ax, [sh_fdlg_sel]
-    mov [sh_calcmanual], al
+    mov [sh_calcmode], al
     mov word [sh_msg], sh_s_calc_auto
     or al, al
     jz .calcrepaint
+    mov word [sh_msg], sh_s_calc_auex
+    cmp al, SH_CALC_MANUAL
+    jb .calcrepaint
     mov word [sh_msg], sh_s_calc_man
     jmp .calcrepaint
 .calcnow:
@@ -14239,6 +14329,9 @@ sh_fdlg_apply0:
     ; routine, silently; four duplicated lines are the cheaper risk. Change
     ; one and change the other.
     inc word [sh_pass]                ; a pass stamp nothing has cached, which
+    call sh_tbl_runall                ; 81.114.8 - and THIS copy calls the
+                                      ; module's own routine directly, being
+                                      ; already inside it
     mov word [sh_msg], sh_s_calc_now  ; is exactly what forces the recompute
     push si                           ; 81.74
     mov si, sh_s_rec_calc
@@ -15118,7 +15211,34 @@ sh_table_run:
 .rowdata:
     mov word [sh_tbl_flags], SH_TF_ROWDATA
 .shaped:
-    ; --- the interior, cell by cell -----------------------------------------
+    call sh_table_fill                 ; the interior, cell by cell
+    call sh_tbl_add                    ; ...and the table OUTLIVES the run
+    clc                                ; (81.114.7). CF is not read: a full
+    jmp short .out                     ; list costs protection, not numbers
+.bad:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_table_fill - the interior of the rectangle now in [sh_tbl_r1..c2], with
+; the input cells in [sh_tbl_ir/ic/ir2/ic2]. No validation and no record: the
+; caller has already decided this is a table.
+;
+; SPLIT OUT FOR 81.114.8. sh_table_run reads the SELECTION, which is right
+; once - when the dialog is answered - and wrong every time after, because a
+; recalculation re-runs a table that is not selected and may be on another
+; sheet entirely. The loop itself is unchanged.
+; -----------------------------------------------------------------------------
+sh_table_fill:
+    push ax
+    push bx
     mov bx, [sh_tbl_r1]
     inc bx                             ; the first result row
 .rowloop:
@@ -15140,18 +15260,79 @@ sh_table_run:
     inc bx
     jmp short .rowloop
 .done:
-    call sh_tbl_add                    ; ...and the table OUTLIVES the run
-    clc                                ; (81.114.7). CF is not read: a full
-    jmp short .out                     ; list costs protection, not numbers
-.bad:
-    stc
-.out:
-    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_tbl_runall - re-run EVERY table on the document (81.114.8). The resident
+; half reaches this through SHM_TBLRUN.
+;
+; A table's result cells hold STORED VALUES, not formulas, so this app's
+; ordinary recalculation - `inc word [sh_pass]`, and sh_eval_cell re-evaluates
+; lazily as the grid draws - does nothing for them at all. They have to be
+; computed again, which is one full formula evaluation PER RESULT CELL. That
+; cost is the whole reason Excel's own Calculation dialog offers "Automatic
+; except Tables", and 81.114.8 offers it for the same reason.
+;
+; THE SHEET IS SET FROM THE RECORD. sh_getcell2 and sh_setvald work on
+; [sh_cursheet], and a table on Sheet 3 re-run while Sheet 1 is showing would
+; otherwise read and write the wrong grid - sh_recalc_all's own push/pop of
+; that word, for the same reason.
+; -----------------------------------------------------------------------------
+sh_tbl_runall:
+    cmp byte [sh_tbl_busy], 0          ; a table's formula cannot reach here,
+    jne .out                           ; but a guard is two bytes and the
+    cmp word [sh_ntbl], 0              ; failure it prevents is unbounded
+    je .out
+    push ax
+    push cx
+    push dx
+    push si
+    push es
+    push word [sh_cursheet]
+    mov byte [sh_tbl_busy], 1
+    mov es, [sh_tblseg]
+    xor si, si
+    mov cx, [sh_ntbl]
+.l:
+    xor ax, ax
+    mov al, [es:si+SH_T_SHEET]
+    mov [sh_cursheet], ax
+    mov ax, [es:si+SH_T_R1]
+    mov [sh_tbl_r1], ax
+    mov ax, [es:si+SH_T_R2]
+    mov [sh_tbl_r2], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C1]
+    mov [sh_tbl_c1], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C2]
+    mov [sh_tbl_c2], ax
+    mov ax, [es:si+SH_T_IR]
+    mov [sh_tbl_ir], ax
+    mov ax, [es:si+SH_T_IC]
+    mov [sh_tbl_ic], ax
+    mov ax, [es:si+SH_T_IR2]
+    mov [sh_tbl_ir2], ax
+    mov ax, [es:si+SH_T_IC2]
+    mov [sh_tbl_ic2], ax
+    push cx
+    push si
+    call sh_table_fill
+    pop si
+    pop cx
+    mov es, [sh_tblseg]                ; re-read: sh_table_fill writes cells,
+    add si, SH_T_SZ                    ; and a write can compact the heap
+    loop .l
+    mov byte [sh_tbl_busy], 0
+    pop word [sh_cursheet]
+    pop es
     pop si
     pop dx
     pop cx
-    pop bx
     pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -40898,11 +41079,12 @@ shm_gd_name:
 .none:
     jmp shm_ana
 shm_gd_calc:
-    mov ax, 1
-    cmp byte [sh_calcmanual], 0
-    je .have
-    mov al, 3
-.have:
+    ; GET.DOCUMENT(14): 1 Automatic, 2 Automatic except tables, 3 Manual -
+    ; which is 81.114.8's mode plus one, exactly. This used to answer 1 or 3
+    ; and had no way to say the middle one, the mode not existing yet.
+    xor ah, ah
+    mov al, [sh_calcmode]
+    inc ax
     jmp shm_anum
 shm_gd_maxch:                         ; 0.001
     mov ax, 1
@@ -41555,22 +41737,23 @@ shm_mprot:
     mov al, SH_FDK_PROT
     jmp shm_fdk
 
-; CALCULATION(type_num) - 1 Automatic, 2 Automatic Except Tables (SHEET has
-; no tables, so automatic), 3 Manual
+; CALCULATION(type_num) - 1 Automatic, 2 Automatic Except Tables, 3 Manual,
+; which is Excel's own numbering and is now exactly the dialog's radio row
+; plus one (81.114.8).
+;
+; THIS USED TO FOLD 2 INTO AUTOMATIC, on the written ground that "SHEET has
+; no tables, so automatic" - true when it was written and false from
+; 81.114's first stage, which is the whole hazard of a comment that reasons
+; from a feature's ABSENCE. A macro asking for the one mode that exists to
+; make tables affordable was silently given the mode that does not.
 shm_mcalcn:
     xor ax, ax
     call shm_intarg1
     jc .bad
-    xor dx, dx
-    cmp ax, 3
-    jne .auto
-    inc dx
-    jmp short .go
-.auto:
-    dec ax
-    cmp ax, 2
-    jae .bad
-.go:
+    dec ax                            ; 1..3 -> the radio row 0..2
+    cmp ax, SH_CALC_NOWROW            ; ...and 4 is not a mode: Calculate Now
+    jae .bad                          ; is CALCULATE.NOW(), its own command
+    mov dx, ax
     mov al, SH_FDK_CALC
     jmp shm_fdk
 .bad:
@@ -52835,7 +53018,11 @@ sh_it_fjust:     db 'Justify', 0    ; no ellipsis: it asks only when it has to
 ; stage - simpler, and a macro's "SheetN!" reference (see sh_pident) needs
 ; a name it can recognize regardless of what the user might have typed.
 sh_m_sheet:    db 'Sheets', 0
-sh_i_sheet:    dw sh_it_sheet1, sh_it_sheet2, sh_it_sheet3, sh_it_sheet4
+sh_i_sheet:                          ; one label a row, sh_i_edit's shape, so
+.sheet1:       dw sh_it_sheet1       ; the row NUMBER is addressable by name
+.sheet2:       dw sh_it_sheet2
+.sheet3:       dw sh_it_sheet3
+.sheet4:       dw sh_it_sheet4
 sh_it_sheet1:  db 'Sheet1', 0
 sh_it_sheet2:  db 'Sheet2', 0
 sh_it_sheet3:  db 'Sheet3', 0
@@ -53067,6 +53254,7 @@ sh_s_nw_sheet: db 'New worksheet.', 0
 sh_s_nw_chart: db 'New sheet - use Data > Chart Column to chart it.', 0
 sh_s_nw_macro: db 'New macro sheet - formulas shown; Macro > Run runs them.', 0
 sh_s_calc_auto: db 'Calculation: Automatic', 0
+sh_s_calc_auex: db 'Calculation: Automatic except Tables.', 0
 sh_s_calc_man:  db 'Calculation: Manual - Calculate Now to recompute.', 0
 sh_s_calc_now:  db 'Recalculated.', 0
 sh_s_ju_done:   db 'Justified.', 0
@@ -54621,7 +54809,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9279                     ; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9280                     ; +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -55071,8 +55259,12 @@ sh_sort_currow  equ sh_sort_c2 + 2             ; whether a row is in play; the
 sh_sort_haskey  equ sh_sort_currow + 2         ; row being grouped; and whether
                                                ; it has yet shown a KEY cell
 sh_sort_desc    equ sh_sort_haskey + 1         ; byte: 0 ascending, 1 descending
-sh_calcmanual   equ sh_sort_desc + 1        ; byte: Options > Calculation
-sh_mchk         equ sh_calcmanual + 1       ; byte: this dropdown row is the
+sh_calcmode     equ sh_sort_desc + 1        ; byte: Options > Calculation's
+                                            ; mode, SH_CALC_* (81.114.8) -
+                                            ; three values now, not a flag,
+                                            ; which is why it is no longer
+                                            ; called sh_calcmanual
+sh_mchk         equ sh_calcmode + 1       ; byte: this dropdown row is the
                                              ; checked one
 sh_a1style      equ sh_mchk + 1             ; byte: 0 = A1, 1 = R1C1 - what
                                              ; the reference box and Goto show
@@ -56061,7 +56253,8 @@ sh_tbl_tr1        equ sh_tbl_sc2 + 2     ; ...and a table's RESULT rectangle,
 sh_tbl_tr2        equ sh_tbl_tr1 + 2     ; which is its range less the top row
 sh_tbl_tc1        equ sh_tbl_tr2 + 2     ; and the left column
 sh_tbl_tc2        equ sh_tbl_tc1 + 2
-sh_bss_end        equ sh_tbl_tc2 + 2
+sh_tbl_busy       equ sh_tbl_tc2 + 2   ; byte: a table re-run is in progress
+sh_bss_end        equ sh_tbl_busy + 1
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

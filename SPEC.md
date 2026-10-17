@@ -130606,6 +130606,187 @@ and stage 4 is a BIFF reader *and* a writer. It is HEAP and not image —
 §82.16.3 already says a machine too small for the claim still runs the
 spreadsheet — and 63 is the wall, the module being one segment.
 
+#### 81.114.8 Stage 3a — recalculation, and Excel's third mode
+
+A table's result cells hold **stored values**. This app's entire
+recalculation mechanism is `inc word [sh_pass]`, after which `sh_eval_cell`
+re-evaluates lazily as the grid draws and memoizes per pass — which is cheap,
+and which does **nothing whatever** for a table. Its cells have to be
+computed again: one full formula evaluation per result cell, plus the
+substitute-and-restore either side of it.
+
+That cost is not a detail to be optimised away later. It is the reason
+Excel 2.1's own Calculation dialog has three modes and not two, and the
+capture is the authority —
+`LIBRARY/documentation/screenshots/excel/dialog_calculation.png` reads
+**Automatic / Automatic except Tables / Manual**. This app had Automatic /
+Manual / Calculate Now; it has Excel's three, with Calculate Now kept as the
+fourth row (§81.78's folded-in menu command, which Excel has as a separate
+item beside `Calculation…`).
+
+`sh_calcmanual` is `sh_calcmode` now, because a byte with three values whose
+name says "manual" is a false premise waiting to be read as a flag — and two
+of its three readers tested it as one.
+
+##### Every table, entirely, and that is the design
+
+**There is no dependency tracking.** A recalculation re-runs every table on
+the document from its stored record, start to finish. A cell's formula is not
+analysed to discover that it mentions an input cell, and a table is not asked
+whether anything it reads has changed.
+
+That is a deliberate choice and not a shortcut deferred: the dependency graph
+would have to be rebuilt on every structural edit, it would cost resident
+bytes this package does not have, and **the mode switch is the user-facing
+answer Excel itself shipped** for exactly this. A sheet where the cost bites
+is a sheet whose owner moves to Automatic except Tables, and the status bar
+says `CALCULATE` while anything is owed.
+
+##### Where it hooks, and the two paths that bypass the funnel
+
+`sh_commit` is the one funnel — typing, Paste in all six modes, Fill Right,
+Fill Down and a sort's write-back all end up there, which is the same reason
+`sh_prot_blocked` sits at its other end. The re-run goes at its exit, inside
+the `pushf`/`popf` that preserves the carry every caller reads.
+
+It is **gated on `[sh_commitdirty]`, not on reaching the exit**: a refused
+commit comes through there too, and under §81.114.7 typing into a result cell
+is refused *by construction* — so without the gate every rejected keystroke
+would re-run every table on the document.
+
+Two paths write cells without going through `sh_commit`, and each owes its
+own call:
+
+- **the Del key**, which clears the selected cell directly — and that cell
+  may be an input cell;
+- **`Edit ▸ Clear`**, whose loop is the module's. The tables it *covered* are
+  already gone by then (§81.114.7's drop); this re-runs the ones that merely
+  **read** what it took away.
+
+`Calculate Now` re-runs tables **whatever the mode**. Under Automatic except
+Tables it is the only thing that ever will, which is the whole point of the
+command; and it exists in two copies, resident and module, for the reason
+§81.78 already records — so both were changed.
+
+##### The sheet comes from the record
+
+`sh_getcell2` and `sh_setvald` work on `[sh_cursheet]`. A table on Sheet 3
+re-run while Sheet 1 is showing would read and write the wrong grid
+entirely, so `sh_tbl_runall` sets that word from each record's
+`SH_T_SHEET` byte and puts it back — `sh_recalc_all`'s own push/pop, for the
+same reason. `sh_table_run` was split for this: the half that reads the
+**selection** is right exactly once, when the dialog is answered, and wrong
+every time after, because a recalculation re-runs a table that is not
+selected and may not even be on the visible sheet. `sh_table_fill` is the
+half that does not care.
+
+A re-entrancy guard byte sits in front of the walk. Nothing can reach it
+today — a table's formula is evaluated, not committed — but the guard is two
+bytes and what it prevents is unbounded.
+
+##### Two things the third mode made sayable
+
+- **`GET.DOCUMENT(14)`** answers 1 Automatic, 2 Automatic except tables,
+  3 Manual. This app answered 1 or 3 and had **no way to say 2**, the mode
+  not existing; it is `[sh_calcmode] + 1` now, which is exactly Excel's
+  numbering. That the old code picked 1 and 3 rather than 1 and 2 says the
+  author knew the numbering and was working around the missing mode.
+- **the `CALCULATE` indicator** means "something on screen is stale". Under
+  Automatic except Tables that is true when a table exists and false when
+  none does, so the indicator reads `[sh_ntbl]` as well as the mode.
+
+##### What the third mode broke, and it was not the feature
+
+Adding a row to the Calculation dialog broke **two existing gates and one
+shipped macro command**, and all three had the same shape: something counted
+a position that moved.
+
+**`CALCULATION(2)` was folded into Automatic**, on this written ground:
+
+> `; CALCULATION(type_num) - 1 Automatic, 2 Automatic Except Tables (SHEET has`
+> `; no tables, so automatic), 3 Manual`
+
+True when it was written and false from §81.114's first stage. That is the
+whole hazard of a comment reasoning from a feature's **absence**: nothing
+re-reads it when the feature arrives, and a macro asking for the one mode
+that exists to make tables affordable was given the mode that does not. It is
+`type_num - 1` now, which is the radio row and is Excel's numbering.
+`tests/sheetmcmd.py` gained the case — the number was not **sayable** before,
+so no row could have caught it.
+
+**`tests/sheetcalc.py` and `tests/sheetmcmd.py` both selected the wrong
+mode.** `sheetcalc` carried `MANUAL = 1` with the comment
+`0 Automatic / 1 Manual / 2 Calc Now`; row 1 is still a **live** row, so it
+went on clicking it, silently chose the new middle mode and reported Manual
+as broken. This is the dialog-shaped twin of the menu index that shifted when
+`Table...` went in at 8 (§81.114.7), and it has the same answer: **ask, do
+not count.** `sheetfmt.radio_row` reads the row out of the dialog's own array
+of label pointers, so a row inserted above the one wanted moves the answer
+with it, and the new row uses it too.
+
+The pattern is now three for three in this feature: an inserted **menu**
+item, an inserted **dialog row**, and a **mode number** that a comment had
+reasoned away. Each was found by a gate going red rather than by review.
+
+##### Evidence
+
+`tests/sheettblcalc.py`, **8 checks**, on the cycle-accurate CGA, every value
+read **out of the cell records** rather than off the glass or out of a saved
+file. For a result cell that is sound and exact: it holds a stored number, so
+the record *is* the answer — which is also what lets this row assert a table
+that did **not** move as precisely as one that did. §81's "stored vs
+published" trap is about FORMULA cells, and this row never reads one.
+
+0 FILLED the control · 1 AUTO changing an input value re-runs it · 2 FORMULA
+and so does changing the governing formula · 3 AUEX the same edit under
+Automatic except Tables leaves the table alone · 4 NOW and Calculate Now
+catches it up · 5 MANUAL neither moves until Calculate Now, which moves both
+· 6 DEL the Del key owes its own re-run · 7 SHEET2 a table on Sheet 2,
+re-run by a commit made while Sheet 1 is showing, still reads and writes
+Sheet 2.
+
+**Checks 3 and 5 assert that nothing changed, and are only worth anything
+because 4 and 6 follow them**: the later check needs the earlier edit to have
+landed, so an edit that silently missed fails the pair. A "nothing changed"
+check standing alone passes when the keystroke never arrived.
+
+**Check 7 exists because a mutation refused to fail.** Deleting the
+`[sh_cursheet]` assignment from the walk passed all seven of the checks
+above, every one of which used Sheet 1 — where the assignment is a no-op.
+That is the *same bug class, in the same feature*, that §81.114.4 records:
+`sh_table_unbank` restored input cells correctly on Sheet 1 and nowhere
+else, for a whole cycle, because no fixture had ever used another sheet.
+**The ghost is the sharp half of the check**: Sheet 2's values could survive
+by simply not being touched, where a cell appearing at those coordinates on
+Sheet 1 can only have been written by this walk.
+
+**What the row does NOT claim:** that only the affected results are
+recomputed. Every table re-runs entirely, so row 3 standing still after an
+edit to row 2's input proves nothing about which cells were visited — its
+inputs did not change either way. No assertion tries to.
+
+##### What stage 3a cost
+
+| | stage 2 | stage 3a |
+|---|---|---|
+| region | 61,040 of 61,440 | **61,168 — 272 spare** |
+| `CHART.OVL` | 49,204 of 52,224 | 49,381 |
+| bss | 9,279 | 9,280 |
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| no re-run on commit | 1, 2, 3 |
+| the commit hook ignoring the mode | 3, 5 |
+| `Calculate Now` not re-running tables | 4, 5 |
+| the Del hook removed | 6 |
+| `[sh_cursheet]` not set from the record | 7 — and **nothing at all** until check 7 existed |
+
+Check **0 FILLED has no mutation of its own and is not claimed to**: it is the
+control, and that the rectangle fills correctly in the first place is
+`sheettable`'s subject and §81.114.7's.
+
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
 Four things, and three of them are invisible in a diff.

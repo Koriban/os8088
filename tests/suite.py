@@ -13414,6 +13414,36 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
                "build/os8088-360.img")),
+    Row("sheettblcalc", "soak", py("tests/sheettblcalc.py"), 520.0,
+        "SPEC.md 81.114.8: a Data > Table RECALCULATES, and Excel's three "
+        "modes decide when. A result cell holds a STORED value, so this "
+        "app's whole recalculation - advance [sh_pass] and let sh_eval_cell "
+        "re-evaluate lazily - does nothing for it; the table has to be "
+        "computed again, one full formula evaluation per result cell. That "
+        "cost is why Excel 2.1's Calculation dialog offers Automatic / "
+        "Automatic except Tables / Manual rather than two modes "
+        "(dialog_calculation.png is the authority), and this row drives all "
+        "three. sh_commit is the one funnel for typing, Paste, Fill and a "
+        "sort's write-back; Del and Edit > Clear bypass it and owe their "
+        "own call; Calculate Now re-runs tables WHATEVER the mode. Every "
+        "value is read out of the CELL RECORDS, which is exact for a stored "
+        "number and is what lets the row assert a table that did NOT move. "
+        "Checks 3 and 5 assert that nothing changed and are only worth "
+        "anything because 4 and 6 follow them - the later check needs the "
+        "earlier edit to have landed, so an edit that silently missed fails "
+        "the pair, where a 'nothing changed' check alone passes when the "
+        "keystroke never arrived. CHECK 7 USES SHEET 2, and exists because "
+        "a mutation refused to fail: deleting the [sh_cursheet] assignment "
+        "from the walk passed all seven checks above, every one of which "
+        "used Sheet 1 - where cursheet 0 makes the packed row equal the "
+        "plain row and the assignment is a no-op. That is the same bug "
+        "class, in the same feature, that 81.114.4 records. The sharp half "
+        "is the GHOST: Sheet 2's values can survive by not being touched, "
+        "where a cell appearing at those coordinates on Sheet 1 can only "
+        "have been written by this walk",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
     Row("sheetsize", "soak", py("tests/sheetsize.py"), 400.0,
         "SPEC.md 81.112: SHEET's window RESIZES and its grid re-lays itself "
         "to the new box. The grow box dragged in 160x24 and back out, with "

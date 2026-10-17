@@ -162,6 +162,25 @@ restore. One full evaluation per cell — Excel's own cost, and the reason
    already holds. `tests/sheettbl2.py`, 6 checks.
 3. **Recalculation.** Editing an input value or a formula re-runs the table
    under Automatic; `Calculate Now` re-runs it under Manual.
+   - **3a DONE — SPEC.md §81.114.8.** And the plan missed the mode that
+     makes it affordable: Excel 2.1's Calculation dialog is **Automatic /
+     Automatic except Tables / Manual**, three modes, and the middle one
+     exists for exactly the cost this stage introduces. The capture
+     (`dialog_calculation.png`) is the authority; this app had two modes plus
+     a folded-in Calculate Now. `sh_commit` is the one hook for typing,
+     Paste, Fill and a sort's write-back; Del and `Edit ▸ Clear` bypass it.
+     **No dependency tracking, by decision** — every table re-runs entirely,
+     and the mode switch is the user-facing answer Excel itself shipped.
+     `tests/sheettblcalc.py`, 7 checks.
+   - **3b TO DO — the stored rectangle must follow the grid.**
+     Insert/Delete Row/Column and Sort move the cells and move the result
+     cells' MARKS (they live in the border table, which `sh_rc_sides`
+     already shifts), but the 16-byte record is untouched, so the guard
+     judges against a stale rectangle. A table record is not a point record:
+     a row inserted INSIDE it should grow it, one inserted above should move
+     it, and a delete that takes an input cell or the last interior row
+     should drop it. `sh_rc_table` is the generic shifter for (packed
+     row/sheet, column) records and does not fit; this needs its own.
 4. **BIFF.** Write `FORMULA`+`tTbl` per cell and one `DATATABLE` after the
    first; read both back. This is the stage that makes the feature real, and
    the host side (`tools/os88sheetfmt.py`) learns the record first so the

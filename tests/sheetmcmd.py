@@ -59,6 +59,14 @@ STEPS = [
     (None, (10, 'GET.CELL(17,C3)', 15.0, "in points, kept in twips")),
     ('CALCULATION(3)', None),
     (None, (11, 'GET.DOCUMENT(14)', 3.0, "3 is Manual")),
+    ('CALCULATION(2)', None),
+    (None, (21, 'GET.DOCUMENT(14)', 2.0,
+            "2 is Automatic except Tables (81.114.8). THIS NUMBER WAS NOT "
+            "SAYABLE before: shm_mcalcn folded 2 into Automatic on the "
+            "written ground that 'SHEET has no tables, so automatic', and "
+            "GET.DOCUMENT answered 1 or 3 with nothing in between. A macro "
+            "asking for the one mode that exists to make tables affordable "
+            "was given the mode that does not")),
     ('CALCULATION(1)', None),
     ('DISPLAY(,FALSE)', None),
     (None, (12, 'GET.WINDOW(9)', FA, "the second argument is gridlines")),
