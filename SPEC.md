@@ -128790,6 +128790,13 @@ reader that had not been written by the same hand as the writer.**
 
 ### 81.39 What SHEET still lacks, measured (2026-09-11)
 
+> **Re-measured 2026-10-16.** The Macro row listed `Start Recorder` and
+> `Resume` as missing; the first shipped in §81.107 and the second is
+> DECLINED in §81.74.1 and always was. That is the FOURTH time a row of this
+> table has gone stale, in a section whose own first sentence says to
+> re-measure rather than quote. **The only menu command still genuinely
+> missing anywhere below is `Data ▸ Table`.**
+>
 > **Re-measured 2026-09-22**, after the macro language was finished: every
 > name in Excel 2.x's macro vocabulary is now built or declined with its
 > reason (§81.83-§81.97, §81.93 is the declined list). §81.39.3 and §81.39.4
@@ -128845,7 +128852,7 @@ harmless.
 | Window | 0 | 5 + the window list | **the whole menu is struck as MDI**: New Window, Show Info, Arrange All, Hide, Unhide and the list of open windows all manage document windows, and SHEET has one. So is the Control menu's document half - Maximize, Restore and Close of a DOCUMENT window (§81.93's MDI group has the macro side) |
 | Options | 6 | 10 | Set Print Area/Titles/Page Break (printing, out of scope), Workspace; **Short Menus DROPPED** (the owner's decision, 2026-09-22) — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
 | Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
-| Macro | 4 | ~6 | Start Recorder, Resume — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), and the other two are that section's own documented shortfalls |
+| Macro | 5 | ~6 | **none** — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74), `Start Recorder` in §81.107, and **`Resume` is DECLINED, not missing** (§81.74.1): Excel's Resume continues a macro halted by `PAUSE()`, there is no `PAUSE` in this app's macro vocabulary, and §81.63's only pause is `ALERT`/`INPUT`, which resumes on its own dialog's OK. **Re-measured 2026-10-16**, when this row still listed both as missing and sent a reader looking for work that does not exist |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2) — and
 **`Close` is absent for the same reason one step on**: Excel's Close ends a
