@@ -132780,12 +132780,29 @@ stretch the evenly spaced run past it), and isolating a line by its
 neighbours (drops the real line where §81.116.1's header rule sits beside
 column A's). With the change in, **3 of 5 glass rows failed**.
 
-**The anchor that fixes this is §81.116.1's own**, which is why the two items
-separate cleanly: the header rules are SOLID and unique, so the grid's origin
-is their intersection and the search can be BOUNDED to the grid rectangle,
-where no desktop dither reaches. That is a redesign of the detector twelve
-rows depend on, and it is its own piece of work rather than a rider on this
-one.
+**A SECOND attempt was made after §81.116.1 landed, on the theory that the
+corner box's solid rules would anchor the search. It got close and it is not
+enough**, and the detail is worth keeping because the next attempt should not
+start there:
+
+| | |
+|---|---|
+| dotted AND isolated, on BOTH axes | the right pair of tests. *Dotted* excludes the window's solid borders; *isolated* excludes the desktop's dithered area, every column of which is dotted by construction. Neither alone works: without the first the border becomes column A, without the second the desktop contributed 56 candidates and the row-header column measured 96 pixels wide |
+| the gap walk goes away | with those two tests the columns ARE the gridlines, and the 36..46 gap that used to find column A past the row header is no longer needed — the border it measured from is solid and no longer in the list |
+| sampling must start at the SECOND row line | the corner box's own vertical is solid down to the first gridline, so a column sampled from there is solid for its top 14 rows and fails the dotted test — which loses column A, the line every caller indexes from |
+
+That reached **5 of 8 rows green**, with `sheetcolw`, `sheetrowh` and
+`sheethide` still failing — the three whose geometry is UNEVEN and which read
+the header letters as well as the cells. Reverted.
+
+**What the next attempt should do instead of a better heuristic: BOUND the
+search.** Every one of these failures is a pixel heuristic mistaking one part
+of the screen for another, and the kernel already knows exactly where SHEET's
+window is. A detector handed the window rect — `wm_wins`, which
+`tests/dispcp.py` and `tools/os88geom.py` already read — can compute the grid
+origin from `SH_RH_W`/`SH_CH_H`/`SH_FB_H` and never look at the desktop at
+all. The cost is that `glass.grid`'s callers must pass it, which is the same
+shape of churn §81.115 paid for the dialogs and for the same reason.
 
 So the gridlines stay solid, the measurement stands, and the two lines that
 change them are named here. `glass.py` already carries the dotted-aware
