@@ -1496,9 +1496,11 @@ vid_text:
     add %1, [vid_stride]
   %ifdef GFX_VGA
    %ifdef OS88_DRIVERS
+    %ifndef NOVBEROW
     jnc %%same
     call vbe_bank_next
 %%same:
+    %endif
    %endif
   %endif
 %endmacro
@@ -1507,9 +1509,11 @@ vid_text:
     add %1, %2
   %ifdef GFX_VGA
    %ifdef OS88_DRIVERS
+    %ifndef NOVBEROW
     jnc %%same
     call vbe_bank_next
 %%same:
+    %endif
    %endif
   %endif
 %endmacro
@@ -1520,9 +1524,11 @@ vid_text:
     add %1, [cs:vid_stride]
   %ifdef GFX_VGA
    %ifdef OS88_DRIVERS
+    %ifndef NOVBEROW
     jnc %%same
     call vbe_bank_next
 %%same:
+    %endif
    %endif
   %endif
 %endmacro

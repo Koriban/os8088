@@ -73784,9 +73784,36 @@ accrued figure, never "crossed no rung".
 | per row, on mode 12h | 2 bytes and one not-taken `jnc` |
 
 **That last figure is to be MEASURED on a 4.77MHz 8088 and recorded in
-PERFORMANCE.md, not asserted here.** If it reads badly the thirteen loops get
-banked twins selected once per operation, which costs bytes instead of time and
-needs no redesign.
+PERFORMANCE.md, not asserted here.** If it reads badly the loops get banked
+twins selected once per operation, which costs bytes instead of time and needs
+no redesign.
+
+##### 39.29.3.1 The BYTE half, measured — and why the image size is not it
+
+`NOVBEROW=1` compiles the bank test out of `VBROW`/`VBROWR`/`VBROWCS` and
+leaves a bare `add`. It is the A/B this section asks for, and the only thing
+keeping the un-banked row advance assembling.
+
+**The site count is 22, not the thirteen first planned** — `vga12.inc` 19,
+and one each in `font.inc`, `icons.inc` and `mouse.inc`. Assembled in
+isolation, 22 instances cost **201 bytes with the test and 91 without: 110
+bytes, 5 a site** (`jnc` 2, `call` 3).
+
+**The whole-kernel size is NOT that figure and must not be quoted as it.**
+`kernel.bin` measures **512 bytes LARGER** with the test compiled OUT — the
+wrong direction and four times the magnitude, because padding and rung
+alignment swamp a 110-byte change. An A/B taken off an image size would have
+reported a saving that does not exist, with a sign that says the change does
+the opposite of what it does. Per-section figures, as docs/KERNEL-MEMORY.md
+requires, or nothing.
+
+**The TIME half is still owed**, and is the figure a 4.77MHz machine actually
+cares about. Two instruments are missing for it and the gap is named here so
+the next attempt does not rediscover it: `tests/gfxbench` publishes through
+§57's registry and has **no reader**, and the harness has no way to call a
+kernel routine, so a repaint cannot be driven directly. Boot-to-desktop
+cycles do not substitute — the two arms differ in sector count, and an
+`int 13h` is ~400 ms against a per-row cost measured in microseconds.
 
 #### 39.29.4 What the fifth kind touched, and what it silently broke
 
