@@ -74511,11 +74511,10 @@ the row reads a decision already taken.
 - The banking gate is **mutation-tested**: force the window to the wrong bank
   and the gate must fail. A banking test that passes while banking is broken is
   the defect class §39.28.2.2 already records against this very feature.
-  **PART MET, and the part that is not is named.** The CUT is
-  mutation-tested — skipping one row at the boundary inside `vbe_cut_run`
-  reddens `--cutrow 200` with a bounding box of exactly the poked row — but
-  the BANK SELECT is not, because on mode 12h there is no window to move, so
-  the mutation has nothing to act on. That one needs 86Box or the Satellite.
+  **MET, both halves.** The CUT: skipping one row at the boundary inside
+  `vbe_cut_run` reddens `tests/vbeident.py --cutrow 200` with a bounding box
+  of exactly the poked row. The BANK SELECT: §39.29.9.2, on 86Box, because
+  mode 12h has no window to move and so nothing for that mutation to act on.
 - **The banked mode itself is now exercised** (§39.29.9.1), which it was not
   when this list was written.
 - **QEMU cannot test any of this.** Its `0104h` window is not CPU-addressable
@@ -74555,6 +74554,40 @@ register is elsewhere, so anything touching the card's own BIOS is the
 Satellite's to confirm. This boots INTO the mode, so `vga_save_vram` — which
 keeps its per-row test (§39.29.10.6) — runs only for the menu drop and the
 window drag, not for a mode switch with windows already up.
+
+##### 39.29.9.2 ...and the bank select, mutated: the chrome 512 rows down
+
+**The reading in §39.29.9.1 would be worth nothing if the window never had to
+move.** A card that mapped all 98,304 bytes at `A000` — or an emulator that
+modelled one — would render that desktop correctly with the bank select
+doing nothing at all, and every VBE figure taken here would be vacuous. That
+is §39.28.2.2's defect class and it is the reason this list asks for the
+mutation rather than the picture.
+
+So `vbe_bank` was broken on purpose, in the one place that separates the two:
+
+```nasm
+    mov [cs:vbe_cbank], al
+    xor al, 1                   ; the CACHE records the bank we meant; the
+                                ; WINDOW is set to the other one
+```
+
+The cache keeps the value the kernel believes, so every early-out still
+behaves and nothing refuses; only the hardware window is wrong. **The
+desktop comes up with the menu bar, the clock and the floppy icon 512 rows
+down the panel, a black band where the real window was never written, and
+dither above and below** — which is, to the pixel, the failure §39.29.10
+already records from the Satellite in its own words: *"the whole chrome
+appeared 512 rows down the panel"*.
+
+Reverting and re-running reproduces §39.29.9.1's picture with **0 differing
+pixels** outside the clock's field, so the three runs are an A/B/A and not
+two photographs that happen to differ.
+
+It is a ONE-OFF edit and deliberately not a knob: the arm it would keep
+assembling is a kernel that cannot draw, and the only machines that can run
+it are 86Box and the Satellite. The two lines above are the whole of it, kept
+here so the next person repeats the experiment instead of re-deriving it.
 
 ### 39.30 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
 
