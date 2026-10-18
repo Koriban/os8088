@@ -360,4 +360,10 @@ small / medium / large, plus what is OS-owned and what is decided out; the
 largest single difference is colour, which was never the owner's decision
 and is flagged for one.
 
-With 756 resident bytes, everything above except a small fix is module work.
+**Re-measured 2026-10-18: 122 resident bytes free**, not the 756 this line
+carried and not the 1,683 CLAUDE.md carried — `image 52,029 + bss 9,289 =
+61,318 of APP_MAX_SIZE 61,440`. The overlays are where the room is:
+`CHART.OVL` 1,300 spare of 52,224 and `MACRO.OVL` 9,841 of 28,672. So
+everything above is module work, without the "except a small fix" — and
+anything landing in `CHART.OVL` has to be priced too. **Measure before
+planning against this line; it has now been stale twice.**
