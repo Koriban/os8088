@@ -2040,11 +2040,25 @@ vid_disp_init:
     ; from, which is a desktop drawn into the wrong segment at the wrong
     ; stride. A refusal has to bring the arrangement DOWN.
     cmp byte [vid_ndisp], 1
-    je .jout                    ; nothing live: unchanged, and the boot path
-                                ; ...otherwise collapse it through the arm
-    jmp short .single           ; that already knows how. [vid_dmode] is kept:
+    jne .single                 ; ...otherwise collapse it through the arm
+                                ; that already knows how. [vid_dmode] is kept:
                                 ; the arrangement is impossible on THIS
                                 ; primary, not forgotten
+
+    ; --- ONE DISPLAY, AND ITS GEOMETRY MAY HAVE JUST MOVED ------------------
+    ; "nothing live: unchanged" is true of the BOOT path and false of a
+    ; vid_switch, which has already run vid_apply by the time this is reached.
+    ; The paragraph above fixes exactly this staleness for the ndisp = 2 case
+    ; and stops one machine short of the commonest one: a box with a SINGLE
+    ; adapter never reaches .single, so display 0's vid_ctx keeps whatever
+    ; geometry was captured at boot, for the life of the machine.
+    ;
+    ; vid_ctx is the per-display copy of the nine live geometry words that
+    ; wm_dmg_bands clamps a damage band to (vid_ctx_rect), and
+    ; vid_ctx_capture is the only thing that refreshes it.
+    xor al, al
+    call vid_ctx_capture        ; AX is this routine's own, pushed on entry
+    jmp short .jout
 .paired:
     cmp byte [vid_dmode], 0
     jne .extend
