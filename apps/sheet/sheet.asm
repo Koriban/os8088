@@ -5826,6 +5826,7 @@ sh_drawall:
     call sh_hsb_draw
     call sh_drawcolhdrs
     call sh_drawrowhdrs
+    call sh_drawhdrrules              ; 81.116.1: and the lines that box them
     call sh_dmgfull                   ; the three grid painters below are
     call sh_drawgrid                  ; RANGED now (sh_dmgc1..sh_dmgr2); a
     call sh_drawlines                 ; full draw is the whole viewport
@@ -7292,6 +7293,67 @@ sh_drawstatus:
     ret
 
 ; -----------------------------------------------------------------------------
+; sh_drawhdrrules - 81.116.1: the CORNER BOX that encloses the headers (stage
+; 1.8's item 10 - "lines through the header row and column, and a corner
+; box"). SHEET's letters and numbers floated outside the grid with no lines.
+;
+; TWO SHORT RULES AND NOT TWO LONG ONES: row 1's own top gridline already
+; rules the column headers off across the width of the grid, and column A's
+; own left gridline does the same down its height. All that was missing is
+; the L that closes the corner - so these two spans are the row-header
+; column's width and the column-header band's height, and nothing else.
+;
+; SOLID, where the cell gridlines next door are dotted (81.116), which is
+; Excel's own distinction rather than an oversight: a header rule is a real
+; edge and a gridline is a guide.
+;
+; THE CORNER BOX IS WHERE THE TWO MEET and needs no third call - which is
+; what keeps this inside SHEET's resident headroom. Per-header separators
+; were written first and taken out: they are 27 more one-pixel fills on a
+; ten-by-fifteen viewport, they are not what the look report asked for, and
+; the routine did not FIT - 129 bytes is what the package has (81.115), and
+; this engine cannot move to CHART.OVL the way the dialogs did, because a
+; repaint may not depend on an on-demand overlay being loaded.
+;
+; TWO fills on a full repaint, at the 608.61 us Set 163 measured: ~1.2 ms
+; against the ~3 ms a SINGLE cell's opaque text run costs. Not on the damage
+; path - a cell edit repaints its own rect and never comes here.
+; -----------------------------------------------------------------------------
+sh_drawhdrrules:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [sh_ox]                   ; under the ROW-HEADER column only -
+    mov cx, ax                        ; row 1's own top gridline already rules
+    add cx, SH_RH_W - 1               ; the column headers off for the width of
+                                      ; the grid, and a second line one pixel
+                                      ; above it put a GAP OF 1 in the row list
+                                      ; tests/glass.py's rgrid walks
+    mov bx, [sh_goy]
+    add bx, SH_FB_H + SH_CH_H - 1
+    mov dx, bx
+    call OSAPI_GFX_FILL
+    mov ax, [sh_ox]                   ; ...and right of the row headers -
+    add ax, SH_RH_W - 1               ; THROUGH THE HEADER BAND ONLY, which is
+    mov cx, ax                        ; what makes the corner box. Column A's
+    mov bx, [sh_goy]                  ; own left gridline already rules the
+    add bx, SH_FB_H                   ; headers off for the whole grid height,
+    mov dx, bx                        ; so a second line beside it is
+    add dx, SH_CH_H - 1               ; redundant - and it broke
+    call OSAPI_GFX_FILL               ; tests/glass.py's column walk, which
+                                      ; reads the row-header column from the
+                                      ; GAP between the first two lines and
+                                      ; found 161 where it wanted 36..46
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sh_drawcolhdrs - the column letters, centred in each visible column's band
 ; -----------------------------------------------------------------------------
 sh_drawcolhdrs:
@@ -7617,10 +7679,23 @@ sh_drawgrid:
 ; -----------------------------------------------------------------------------
 ; sh_drawlines - the cell-boundary lines over the damage range (sh_dmgc1..
 ; sh_dmgr2; sh_dmgfull for the whole viewport): c2-c1+2 vertical and r2-r1+2
-; horizontal, each a degenerate (1px) OSAPI_GFX_FILL rectangle spanning just
-; the damaged cells. Drawn AFTER sh_drawgrid: OSAPI_FONT_RUN's opaque erase
-; is exactly one cell wide and would otherwise paint back over a line drawn
-; first.
+; horizontal, each a degenerate (1px) rectangle spanning just the damaged
+; cells. Drawn AFTER sh_drawgrid: OSAPI_FONT_RUN's opaque erase is exactly
+; one cell wide and would otherwise paint back over a line drawn first.
+;
+; 81.116: THE RECTANGLE IS FILLED WITH THE 50% DITHER AND NOT WITH BLACK,
+; because on a ONE-PIXEL line a dither IS a dotted line - which is what Excel
+; draws (the 1.8 look measurement's item 9, the most visible difference in
+; the grid). gfx_fill_gray's pattern is 0AAh on even rows and 55h on odd, so
+; a horizontal line alternates along its length and a vertical one alternates
+; down it, from the same primitive and with no pattern to stage.
+;
+; AND IT IS FREE - measured, because the look report said to price pattern
+; lines before drawing them and expected them to cost more. On a 4.77MHz 8088
+; GFX_FILL_GRAY 256x1 is 599.49 us against GFX_FILL 256x1's 608.61, so the
+; dotted line is 9 us FASTER (PERFORMANCE.md Set 163). A one-row solid fill
+; pays for arming Set/Reset and for two masked edge columns; the gray body
+; writes a pattern byte a row and nothing else.
 ; -----------------------------------------------------------------------------
 sh_drawlines:
     push ax
@@ -7677,7 +7752,8 @@ sh_drawlines:
     mov cx, ax
     mov bx, [sh_ly1]
     mov dx, [sh_ly2]
-    call OSAPI_GFX_FILL
+    call OSAPI_GFX_FILL                ; 81.116: solid for now - the dither
+                                       ; is measured and deferred, see there
     mov ax, [sh_wcol]
     inc ax
     mov [sh_wcol], ax
@@ -7698,7 +7774,7 @@ sh_drawlines:
     mov dx, ax
     mov ax, [sh_lx1]
     mov cx, [sh_lx2]
-    call OSAPI_GFX_FILL
+    call OSAPI_GFX_FILL                ; 81.116: ...and so is this one
     mov ax, [sh_wrow]
     inc ax
     mov [sh_wrow], ax

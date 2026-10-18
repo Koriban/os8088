@@ -1346,6 +1346,24 @@ gb_prims:
     mov si, gb_r_frow               ; per-ROW one: fitting c + a*rows + b*px to
     xor al, al
     call bl_run                     ; 8x8 / 64x64 / 256x128 gave a NEGATIVE c
+
+    ; ...AND THE SAME ROW DITHERED, which is one decision's whole evidence:
+    ; a 50% dither on a ONE-PIXEL line IS a dotted line, so what SHEET's
+    ; dotted gridlines (SPEC.md 81.116) cost over its solid ones is exactly
+    ; the gap between these two rows. The 64x64 pair below cannot answer it -
+    ; gray's extra work is per ROW, and a gridline has one.
+    mov word [bl_n], 100
+    mov word [bl_body], gb_b_gray
+    mov si, gb_r_gyrow
+    xor al, al
+    call bl_run
+    call gb_boxrow                  ; (bl_run left the sandbox alone; this is
+                                     ; belt, since the next row reads gb_tfbox)
+    mov word [bl_n], 100
+    mov word [bl_body], gb_b_fill
+    mov si, gb_r_frow
+    xor al, al
+    call bl_run
     mov ax, [bl_last]               ; (PERFORMANCE.md Part 9 Set 1). Holding
     mov dx, [bl_last+2]             ; the width fixed and varying only the rows
     mov [gb_tfrow], ax              ; leaves nothing else in the subtraction
@@ -3162,6 +3180,7 @@ gb_r_mclr: db 'clear mask 2048', 0
 gb_r_pts1: db 'GFX_POINTS 8 pts', 0
 gb_r_pts3: db 'GFX_POINTS 24 pts', 0
 gb_r_frow: db 'GFX_FILL 256x1', 0
+gb_r_gyrow: db 'GFX_FILL_GRAY 256x1', 0
 gb_r_fr:   db 'GFX_FRAME 64x64', 0
 gb_r_gy:   db 'GFX_FILL_GRAY 64x64', 0
 gb_r_pt:   db 'GFX_FILL_PAT 64x64', 0

@@ -15059,3 +15059,43 @@ pixel-neutral and is - 0 differing pixels on all three frames - and that 0 is
 not vacuous: skipping one row at the boundary inside `vbe_cut_run` reddens the
 gate with a bounding box of exactly `(105, 200, 424, 200)`, the poked boundary
 row and nothing else.
+
+### Set 163 — a dotted gridline is CHEAPER than a solid one (SPEC.md §81.116)
+
+Measured 2026-10-18 with `python3 tools/gfxbenchread.py`, MartyPC's
+cycle-accurate 4.77 MHz 8088, `os8088_xt_vga_144`, VGA mode 12h.
+
+SHEET's 1.8 look measurement lists dotted gridlines as *"the most visible
+difference in the grid"* and adds a caution: **"pattern lines cost more per
+edge, so price it on the 8088 first."** Priced, the caution is wrong in sign.
+
+| row | N | µs/op | cycles |
+| --- | ---: | ---: | ---: |
+| `GFX_FILL 256x1` (solid) | 100 | 608.61 | 2,905 |
+| **`GFX_FILL_GRAY 256x1`** (dithered) | 100 | **599.49** | **2,861** |
+| `GFX_FILL 256x1`, again in the same run | 100 | 608.66 | 2,905 |
+
+**The dithered one-pixel line is 9 µs FASTER, −1.5%**, and the instrument's
+own spread is 0.05 µs — the two solid rows in the same run agree to 0.01%, so
+nine microseconds is a measurement and not noise.
+
+**Why, and it is the shape rather than the pattern.** `vga_solid_rect` arms
+Set/Reset with two `OUT`s and walks a left mask column, a right mask column
+and an interior — three arms, each paying its own setup, and at one row tall
+the setup *is* the cost. `gfx_fill_gray_raw` has nothing to arm: Set/Reset is
+off, the Map Mask is 0Fh, the CPU byte IS the data, and it writes one pattern
+byte per row. At 64×64 the gray body loses (4,618 µs against 3,890, Set 162)
+because that per-row work runs 64 times; at **one** row it wins.
+
+**So the dotted grid is free in TIME** — and it is not shipped, for a reason
+that has nothing to do with this measurement: a 50% dither and a dotted line
+are locally the same thing, and `tests/glass.py` finds SHEET's grid by
+looking for lines. Three detectors were tried and 3 of 5 glass rows failed;
+SPEC.md §81.116.2 has the account and names the anchor that fixes it. The two
+lines that make the change are named there, and this row is why they are
+worth coming back to.
+
+The row that answers this (`GFX_FILL_GRAY 256x1`) is new in
+`tests/gfxbench`, beside the solid one it is compared against and inside the
+same one-row sandbox. The 64×64 pair already there cannot answer it: gray's
+extra work is per row, and a gridline has one.

@@ -132738,6 +132738,99 @@ SHEET's segment would have had to teach thirty-five files how to find it.
 Deleting the names is what stops the next geometry change re-arming this.
 
 
+### 81.116 Dotted gridlines: measured, free, and DEFERRED on the instrument
+
+Stage 1.8's §9, *"the most visible difference in the grid"*. Excel 2.1d draws
+the cell boundaries DOTTED; SHEET draws them solid. **The drawing change is
+two lines and it is not what stopped this.**
+
+`sh_drawlines` already draws every boundary as a degenerate one-pixel
+rectangle, so the whole change is which primitive fills it —
+`OSAPI_GFX_FILL_GRAY` instead of `OSAPI_GFX_FILL`. On a one-pixel line a 50%
+dither IS a dotted line, and one primitive dots both directions: the pattern
+is `0AAh` on even rows and `55h` on odd, so a horizontal alternates along its
+length and a vertical alternates down it. Nothing is staged.
+
+**THE LOOK REPORT SAID TO PRICE IT FIRST AND EXPECTED IT TO COST MORE. It is
+free** (PERFORMANCE.md Set 163): `GFX_FILL_GRAY 256x1` is **599.49 µs against
+`GFX_FILL 256x1`'s 608.61** — the dotted line is **9 µs FASTER**, with the
+instrument's spread at 0.05 µs. A one-row solid fill pays to arm Set/Reset and
+to walk a masked left column, a masked right column and an interior; the gray
+body arms nothing and writes one pattern byte a row. At 64×64 that per-row
+work loses by 19%; at one row it wins. It is 7 bytes smaller too, the
+`OSAPI_SET_COLOR` ahead of the loops being dead once the fill ignores it.
+
+#### 81.116.2 Why it is not shipped yet: a dotted line and a DITHER are the same thing
+
+**`tests/glass.py` finds the grid by looking for lines, and a 50% dither is
+locally indistinguishable from a dotted line.** Twelve sheet rows read cell
+text through it. Measured on real captures, with the gridlines dotted:
+
+| | |
+|---|---|
+| a horizontal gridline | lit on one phase of x, blank on the other |
+| a row of the DESKTOP's 50% dither | exactly the same, on every row of it |
+| a vertical gridline | lit on one parity of rows |
+| a column through any dithered area | exactly the same |
+
+Three detectors were tried and each failed on the next capture: sampling one
+phase (finds the desktop), requiring the opposite phase to be blank (finds a
+dithered *block* — twelve consecutive "lines" below the grid, which then
+stretch the evenly spaced run past it), and isolating a line by its
+neighbours (drops the real line where §81.116.1's header rule sits beside
+column A's). With the change in, **3 of 5 glass rows failed**.
+
+**The anchor that fixes this is §81.116.1's own**, which is why the two items
+separate cleanly: the header rules are SOLID and unique, so the grid's origin
+is their intersection and the search can be BOUNDED to the grid rectangle,
+where no desktop dither reaches. That is a redesign of the detector twelve
+rows depend on, and it is its own piece of work rather than a rider on this
+one.
+
+So the gridlines stay solid, the measurement stands, and the two lines that
+change them are named here. `glass.py` already carries the dotted-aware
+helpers (`_run_h`, `_run_v`, `_dotted_lines`) from the attempt; they are
+harmless on solid lines and are half of what the bounded detector needs.
+
+### 81.116.1 The headers are BOXED — two solid rules, and the corner where they meet
+
+Stage 1.8's §10. SHEET's column letters and row numbers floated outside the
+grid with no lines at all; Excel rules the header row and the header column
+off from the grid and from each other.
+
+`sh_drawhdrrules` draws exactly two one-pixel fills, and they are SHORT:
+row 1's own top gridline already rules the column headers off across the
+width of the grid, and column A's left gridline does the same down its
+height. What was missing is only the **L that closes the corner** — the
+row-header column's width, and the column-header band's height. 83 bytes,
+leaving **46** of `APP_MAX_SIZE` (§81.115 re-measured that figure, and it has
+been stale twice).
+
+**They started as two LONG rules and the gates cut them down**, which is
+worth recording because the reason is not cosmetic. A full-width rule sits
+one pixel above row 1's gridline and a full-height one sits one pixel beside
+column A's, and `tests/glass.py` reads the grid out of the GAPS between the
+lines it finds: the pair produced a gap of 1 in the row list (`sheetrowh`:
+*"the gaps are [1, 11, 14, 33]"*) and a first gap of 161 where the column
+walk wanted the row-header column's 36..46 (`sheetcolw`). Shortening them to
+the corner removes both collisions AND the redundancy that caused them.
+
+Per-header separators between each letter and each number were written first
+and taken out. They are 27 more one-pixel fills on a ten-by-fifteen
+viewport, they are not what the look report asked for — *"lines through the
+header row and column, and a corner box"* — and the routine **did not fit**.
+It cannot move to `CHART.OVL` the way the dialog engine did (§81.115), either:
+a repaint may not depend on an on-demand overlay being loaded.
+
+**They are SOLID**, which is Excel's own distinction rather than an oversight:
+a header rule is a real edge and a gridline is a guide. When §81.116 lands
+that distinction becomes load-bearing twice over, since it is also what lets
+`glass.py` tell chrome from a cell boundary.
+
+Two fills on a full repaint, at the 608.61 µs Set 163 measured: ~1.2 ms,
+against the ~3 ms a SINGLE cell's opaque text run costs. Not on the damage
+path — a cell edit repaints its own rect and never comes here.
+
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
 Four things, and three of them are invisible in a diff.
