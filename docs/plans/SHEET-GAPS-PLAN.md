@@ -353,6 +353,11 @@ section 2.3) and SYLK carrying 4 of the 21 built-ins (a compatibility decision).
   BIOS clock, §81.86/§81.92), and the ON.TIME-inside-an-open-dropdown race
   §81.95.3 guards against.
 
+**Colour is CLOSED, 2026-10-18, by the owner: SHEET follows os8088** - no
+theme slot, no borrowed palette, content black and white as every package's
+is (the report's section 3). It was the largest single difference in the
+measurement and it is a non-gap, not outstanding work.
+
 **Next, by the roadmap:** stage 1.8, the Excel 2.0 look without MDI -
 **measured 2026-09-22** in `docs/reports/SHEET-EXCEL-LOOK-2026-09-22.md`,
 SHEET on VGA beside 21 of the Excel 2.1d captures. Eighteen gaps, grouped

@@ -94,6 +94,16 @@ words, "a published contract twenty-two packages rest on".
   - **No package API reads the theme:** there is no theme slot in
     `os88api.inc`. A SHEET that matched the theme would need the OS to
     publish it first. That is an OS decision, the same kind as section 2.
+  - **DECIDED BY THE OWNER, 2026-10-18: SHEET FOLLOWS os8088.** No theme
+    slot is added and SHEET does not reach for Excel's or Windows 2's
+    colours. Its content stays black and white like every other package's,
+    its window title follows the theme because the KERNEL draws it, and its
+    own in-window menu bar stays black on white under Color — which is §76's
+    rule ("a window's content is not themed") working, not SHEET falling
+    short of it. **This closes the largest single difference in the
+    measurement as a non-gap**: the capture's colours were Windows 2's
+    system colours, and os8088's answer to that question is a theme the user
+    picks, not a palette an application brings.
 
 ## 4. Gaps SHEET could close
 
