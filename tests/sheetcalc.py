@@ -57,10 +57,13 @@ OPTIONS = (371, 45)                     # the Options menu, sheetfreeze's
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 CALCULATION, CALCNOW = 3, 4             # ...and the two items, by POSITION
 
-# The Calculation dialog is an sh_fdlg like the Save-format one, and every
-# fdlg kind is the same size (SH_FDLG_H derives from SH_FDLG_MAXROWS), so it
-# opens in the same place and sheetfmt's own coordinates carry straight over.
-ROW0, ROWH = 55, 16                     # SH_FDLG_ROWTOP/ROWH, on the glass
+# The Calculation dialog is an sh_fdlg like the Save-format one. THE CLAIM
+# THAT USED TO BE HERE - "every fdlg kind is the same size, so it opens in
+# the same place and sheetfmt's own coordinates carry straight over" - was
+# true until 81.115 sized each kind to its own rows, and it is exactly the
+# shape of assumption that makes a click land on a live WRONG row. The rows
+# are asked for now (SF.fdlg_xy reads the window), not stepped from a
+# remembered origin.
 # ...and the MANUAL row is ASKED FOR BY NAME, never counted. It was written
 # here as 1, with a comment reading "0 Automatic / 1 Manual / 2 Calc Now",
 # and 81.114.8 put Excel's "Automatic except Tables" between the first two.
@@ -120,9 +123,9 @@ def main():
         # --- Calculation: Manual ----------------------------------------------
         mo.menu(OPTIONS[0], OPTIONS[1], *ITEM(OPTIONS[0], CALCULATION))
         M.settle(m)
-        mo.click(SF.FMT_RADIO_X, ROW0 + ROWH * MANUAL)
+        mo.click(*SF.fdlg_xy(m, MANUAL))
         M.settle(m)
-        mo.click(*SF.FMT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m)
 
         # ...and a value under the formula, which must NOT be picked up

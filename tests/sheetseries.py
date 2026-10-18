@@ -55,7 +55,6 @@ NAME = "SER.SLK"
 DATA = (311, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 SERIES = 7                              # 81.72's slot in the Excel-order menu
-RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)
 LINEAR, GROWTH, D_DAY, D_WD, D_MON, D_YR = 0, 1, 2, 3, 4, 5
 
 JAN31_1990 = 32904.0                    # the serial the host and SHEET must
@@ -125,9 +124,9 @@ def main():
             M.settle(m)
             mo.menu(DATA[0], DATA[1], *ITEM(DATA[0], SERIES))
             M.settle(m)
-            mo.click(*RADIO(kind))
+            mo.click(*SF.fdlg_xy(m, kind))
             M.settle(m)
-            mo.click(*SF.FMT_OK)
+            mo.click(*SF.fdlg_okxy(m))
             M.settle(m, limit=120)
             m.type_text("\b" * 8 + step + "\n")
             M.settle(m, limit=180)
@@ -140,9 +139,9 @@ def main():
         before = open(os.path.join(WORK, NAME), "rb").read()
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
-        mo.click(SF.FMT_RADIO_X, SF.FMT_Y['slk'])
+        mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.settle(m)
-        mo.click(*SF.FMT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m, limit=120)
         mo.click(*SF.SAVE_BUTTON)
         for _ in range(90):

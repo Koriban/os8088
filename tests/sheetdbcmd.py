@@ -67,7 +67,7 @@ ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 FORM = 0                                # 81.71's Excel-order Data menu:
 FIND, EXTRACT, DELETE = 1, 2, 3         # Form, Find, Extract, Delete,
 SET_DB, SET_CRIT = 4, 5                 # Set Database, Set Criteria, Sort
-FMT_OK = SF.FMT_OK                      # the radio dialog's own OK
+# 81.115: the radio dialog's OK is DERIVED now - SF.fdlg_okxy(m)
 ALERT_OK = (0, 0)                       # filled in from the alert's geometry
 
 # --- the sheet -----------------------------------------------------------
@@ -210,7 +210,7 @@ def main():
         # --- 3: Extract into G1:H3 ------------------------------------------
         select(0, 6, 2, 7)
         menu(EXTRACT)
-        mo.click(*FMT_OK)                   # All Matching Records (index 0)
+        mo.click(*SF.fdlg_okxy(m))                # All Matching Records (index 0)
         M.settle(m, limit=120)
 
         # --- 4: Delete, through its alert -----------------------------------
@@ -224,9 +224,9 @@ def main():
         before = open(os.path.join(WORK, NAME), "rb").read()
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
-        mo.click(SF.FMT_RADIO_X, SF.FMT_Y['slk'])
+        mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.settle(m)
-        mo.click(*SF.FMT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m, limit=120)
         mo.click(*SF.SAVE_BUTTON)
         for _ in range(90):

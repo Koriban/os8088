@@ -132,17 +132,18 @@ CELL_PROT = (259 + 34, 59 + 11 * 4)
 # one face; the item pitch is the File menu's own 11 from y=59.
 SHEETS_MENU = (75 + 424, 45)
 SHEET2 = (75 + 424 + 34, 59 + 11 * 1)
-FMT_RADIO_X = 246
-# MEASURED, not stepped: the radio glyphs sit at 55/71/87/103/119/135, a pitch
-# of SIXTEEN. This table was 59/73/87 with a pitch of 14 while the dialog had
-# three entries, which lands inside the right row for the first three and
-# drifts a whole row by the sixth - so adding DBF silently saved a .TXT
-# instead. The standing rule about not reusing a remembered dialog offset
-# applies to a pitch just as much (81.41).
-FMT_Y = {'bif': 55, 'slk': 71, 'dif': 87,   # Normal / SYLK / DIF ...
-         'csv': 103, 'txt': 119,            # ...CSV / Text (81.40)
-         'dbf': 135}                        # ...and DBF 3 (81.41)
-FMT_OK = (267, 170)
+# FMT_RADIO_X, FMT_Y and FMT_OK ARE GONE (81.115), and their absence is the
+# point. They were screen absolutes - x 246, the rows at 55/71/87/103/119/135,
+# OK at (267, 170) - and they were right only while every kind of this dialog
+# was one size and so opened in one place. 81.115 gave each kind its own
+# height and moved the buttons to a stacked column, and a constant that is
+# wrong by a row does not fail: it clicks a LIVE row and the test reports the
+# feature broken. That had already happened once here, when DBF was added and
+# a pitch of 14 silently saved a .TXT.
+#
+# fdlg_xy(m, row) and fdlg_okxy(m) ask the window instead. Deleting the names
+# rather than re-measuring them is what stops the next geometry change
+# re-arming this.
 # THE CHOOSER IS A DISK WINDOW SINCE THE 2026-10-14 MERGE (upstream 2657efea,
 # SPEC.md 38.3), so its buttons are a COLUMN down the right edge and not a row
 # along the bottom. (340, 65) was the old centre-bottom Save and now lands
@@ -477,7 +478,49 @@ def bt_byte(m, seg, sym, col, row, sheet=0):
 # them, screen-absolute, so there is nothing here to measure or to keep in
 # agreement with the dialog's derived height (SH_FDLG_H's comment is what
 # happens when there is).
-SH_FDLG_ROWTOP, SH_FDLG_ROWH = 12, 16
+# 81.115 moved this engine to Excel's shape - a titled group box with OK and
+# Cancel STACKED at the top right - so the rows sit inside the box and the
+# dialog is sized to ITS OWN row count rather than to the tallest kind's.
+SH_FDLG_GX1, SH_FDLG_GY1, SH_FDLG_GX2 = 10, 12, 200
+SH_FDLG_ROWTOP, SH_FDLG_ROWH = SH_FDLG_GY1 + 14, 16
+SH_FDLG_BTX, SH_FDLG_BTW, SH_FDLG_BTH = SH_FDLG_GX2 + 10, 54, 16
+
+# The File Format dialog's rows, BY NAME. The y they used to be clicked at was
+# a screen absolute (55 + 16 * row) that was correct only while every kind of
+# this dialog was the same size and so opened in the same place - the comment
+# in tests/sheetcalc.py said exactly that, and 81.115 made it false. Ask the
+# window where it is instead.
+FMT_ROW = {'bif': 0, 'slk': 1, 'dif': 2, 'csv': 3, 'txt': 4, 'dbf': 5}
+
+
+def _fdlg_content(m):
+    """The front window's content origin - the dialog's, when one is up.
+
+    Kernel-side on purpose: most of the rows that drive these dialogs are
+    glass-and-file tests with no package symbols at all, so a helper that
+    wanted [sh_fdlg_ox] would have to teach thirty-five files how to find
+    SHEET's segment. The dialog is the frontmost window and the kernel's own
+    record says where it is.
+    """
+    import os88geom as geom
+    addr = geom.top(m)
+    assert addr, "no window is frontmost: the dialog never opened"
+    x, y = struct.unpack_from("<HH", bytes(m.read(addr + geom.W_X, 4)), 0)
+    return x + 1, y + geom.TITLE_H
+
+
+def fdlg_xy(m, row):
+    """Where a radio dialog's row `row` IS, derived from the live window."""
+    ox, oy = _fdlg_content(m)
+    return (ox + SH_FDLG_GX1 + 12,
+            oy + SH_FDLG_ROWTOP + SH_FDLG_ROWH * row + 6)
+
+
+def fdlg_okxy(m):
+    """...and where its OK button is - the top of the stacked pair."""
+    ox, oy = _fdlg_content(m)
+    return (ox + SH_FDLG_BTX + SH_FDLG_BTW // 2,
+            oy + SH_FDLG_GY1 + SH_FDLG_BTH // 2)
 
 
 # sheet.asm's SH_CALC_* - the MODE values, which are the radio rows and are
@@ -511,7 +554,7 @@ def radio_row(m, seg, sym, items, label, cap=8):
 def fdlg_ok(m, mo, seg, sym, row=None):
     """Pick `row` if asked (None keeps the default) and press OK."""
     if row is not None:
-        mo.click(_w(m, seg, sym["sh_fdlg_ox"]) + 12,
+        mo.click(_w(m, seg, sym["sh_fdlg_ox"]) + SH_FDLG_GX1 + 12,
                  _w(m, seg, sym["sh_fdlg_oy"]) + SH_FDLG_ROWTOP
                  + SH_FDLG_ROWH * row + 6)
         M.settle(m)
@@ -570,17 +613,22 @@ def main():
         # whole of 81.47's extra-XF mechanism without the Border dialog.
         mo.menu(FORMAT_MENU[0], FORMAT_MENU[1], CELL_PROT[0], CELL_PROT[1])
         M.settle(m)
-        mo.click(FMT_RADIO_X, FMT_Y['slk'])     # row 1 = Unlocked
+        mo.click(*fdlg_xy(m, 1))                  # row 1 = Unlocked. THIS IS
+                                                  # Cell Protection, not File
+                                                  # Format: it borrowed
+                                                  # FMT_Y['slk'] only because
+                                                  # that row happened to be
+                                                  # the same y
         M.settle(m)
-        mo.click(*FMT_OK)
+        mo.click(*fdlg_okxy(m))
         M.settle(m, limit=120)
 
         for kind in KINDS:
             mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
             M.settle(m)
-            mo.click(FMT_RADIO_X, FMT_Y[kind])
+            mo.click(*fdlg_xy(m, FMT_ROW[kind]))
             M.settle(m)
-            mo.click(*FMT_OK)
+            mo.click(*fdlg_okxy(m))
             M.settle(m, limit=120)
             mo.click(*SAVE_BUTTON)
             M.settle(m, limit=180)
@@ -602,9 +650,9 @@ def main():
         m.type_text("88"); m.key("Enter"); M.settle(m)
         mo.menu(FILE_MENU[0], FILE_MENU[1], SAVE_AS[0], SAVE_AS[1])
         M.settle(m)
-        mo.click(FMT_RADIO_X, FMT_Y['bif'])
+        mo.click(*fdlg_xy(m, FMT_ROW['bif']))
         M.settle(m)
-        mo.click(*FMT_OK)
+        mo.click(*fdlg_okxy(m))
         M.settle(m, limit=120)
         mo.click(*SAVE_BUTTON)
         M.settle(m, limit=240)

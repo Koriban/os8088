@@ -255,9 +255,9 @@ def main():
         # --- 3: Save As Normal -------------------------------------------------
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
-        mo.click(SF.FMT_RADIO_X, SF.FMT_Y['bif'])
+        mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
         M.settle(m)
-        mo.click(*SF.FMT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m, limit=120)
         mo.click(*SF.SAVE_BUTTON)
         before = open(os.path.join(WORK, "NF.BIF"), "rb").read()

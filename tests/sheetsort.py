@@ -51,8 +51,6 @@ ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 COPY, PASTE, FILLR = 2, 3, 9
 SORT = 6                                # 81.71 put the Data menu in Excel's
                                          # own order, which moved Sort down
-RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)
-OK = (267, 172)
 T, FA = ('bool', True), ('bool', False)
 NA, DIV = ('err', '#N/A'), ('err', '#DIV/0!')
 # 'Banana' and 'apple': in ASCII 'B' is below 'a', so a sort that does not
@@ -138,9 +136,9 @@ def main():
             m.type_text("\n")
             M.settle(m)
             if descending:
-                mo.click(*RADIO(1))
+                mo.click(*SF.fdlg_xy(m, 1))
                 M.settle(m)
-            mo.click(*OK)
+            mo.click(*SF.fdlg_okxy(m))
             M.settle(m, limit=120)
 
         def save(tag):
@@ -149,9 +147,9 @@ def main():
             mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
             M.settle(m)
-            mo.click(SF.FMT_RADIO_X, SF.FMT_Y['slk'])
+            mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
             M.settle(m)
-            mo.click(*SF.FMT_OK)
+            mo.click(*SF.fdlg_okxy(m))
             M.settle(m, limit=120)
             mo.click(*SF.SAVE_BUTTON)
             for _ in range(60):

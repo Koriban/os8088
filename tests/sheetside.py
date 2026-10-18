@@ -50,8 +50,6 @@ EDIT = (123, 45)
 OPTIONS = (371, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 DELETE, INSERT = 7, 8
-RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)
-OK = (267, 172)
 
 
 def rec(op, body):
@@ -130,9 +128,9 @@ def main():
             M.settle(m)
             mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], item))
             M.settle(m)
-            mo.click(*RADIO(0))             # Row
+            mo.click(*SF.fdlg_xy(m, 0))             # Row
             M.settle(m)
-            mo.click(*OK)
+            mo.click(*SF.fdlg_okxy(m))
             M.settle(m)
 
         look("1-open")
@@ -142,9 +140,9 @@ def main():
         look("3-deleted")
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
-        mo.click(SF.FMT_RADIO_X, SF.FMT_Y['bif'])
+        mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
         M.settle(m)
-        mo.click(*SF.FMT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m, limit=120)
         mo.click(*SF.SAVE_BUTTON)
         before = open(os.path.join(WORK, "SIDE.BIF"), "rb").read()

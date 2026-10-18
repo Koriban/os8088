@@ -43,8 +43,6 @@ CELLS = {(0, 0): 1.0, (1, 0): 2.0, (0, 1): 'x'}
 EDIT = (123, 45)
 ITEM = lambda i: (140, 57 + 12 * i + 2)     # the Edit menu's rows, measured
 UNDO, COPY, PASTE, CLEAR, INSERT = 0, 2, 3, 4, 8
-RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)   # a radio dialog's rows
-OK = (267, 172)
 
 
 def build_disk():
@@ -128,9 +126,9 @@ def main():
         mo.click(*at(0, 1))
         M.settle(m)
         edit(CLEAR)
-        mo.click(*RADIO(0))                 # All
+        mo.click(*SF.fdlg_xy(m, 0))                 # All
         M.settle(m)
-        mo.click(*OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m)
         look("3-cleared", [(0, 1)])
         edit(UNDO)
@@ -139,9 +137,9 @@ def main():
         mo.click(*at(1, 0))
         M.settle(m)
         edit(INSERT)
-        mo.click(*RADIO(1))                 # Column
+        mo.click(*SF.fdlg_xy(m, 1))                 # Column
         M.settle(m)
-        mo.click(*OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m)
         look("4-inserted", [(0, 0), (0, 1)])
         edit(UNDO)
@@ -169,9 +167,9 @@ def main():
         look("5-after", [(0, 3)])
         mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
         M.settle(m)
-        mo.click(SF.FMT_RADIO_X, SF.FMT_Y['slk'])
+        mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['slk']))
         M.settle(m)
-        mo.click(*SF.FMT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m, limit=120)
         mo.click(*SF.SAVE_BUTTON)
         before = open(os.path.join(WORK, "SHIN.SLK"), "rb").read()

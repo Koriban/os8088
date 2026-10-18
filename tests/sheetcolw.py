@@ -54,8 +54,7 @@ WIDTHS = {1: 20, 3: 3}
 COLW_ITEM = (SF.FORMAT_MENU[0] + 15, 57 + 12 * 6 + 2)
 EDIT_MENU = (123, 45)
 INSERT_ITEM = (140, 57 + 12 * 8 + 2)    # Edit's 9th since 81.99 took Repeat out
-COLUMN_RADIO = (SF.FMT_RADIO_X, 71)     # the Insert dialog's second radio
-INSERT_OK = (267, 172)
+COLUMN_ROW = 1                          # the Insert dialog's second radio
 
 
 def build_disk():
@@ -99,9 +98,9 @@ def biff_widths(data):
 def save(m, mo, kind, name, before=None):
     mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1], SF.SAVE_AS[0], SF.SAVE_AS[1])
     M.settle(m)
-    mo.click(SF.FMT_RADIO_X, SF.FMT_Y[kind])
+    mo.click(*SF.fdlg_xy(m, SF.FMT_ROW[kind]))
     M.settle(m)
-    mo.click(*SF.FMT_OK)
+    mo.click(*SF.fdlg_okxy(m))
     M.settle(m, limit=120)
     mo.click(*SF.SAVE_BUTTON)
     for _ in range(60):
@@ -181,9 +180,9 @@ def main():
             M.settle(m)
         mo.menu(EDIT_MENU[0], EDIT_MENU[1], *INSERT_ITEM)
         M.settle(m)
-        mo.click(*COLUMN_RADIO)
+        mo.click(*SF.fdlg_xy(m, COLUMN_ROW))
         M.settle(m)
-        mo.click(*INSERT_OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m)
         sylk2 = save(m, mo, 'slk', "SHIN.SLK", sylk)
 

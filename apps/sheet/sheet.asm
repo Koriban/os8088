@@ -13417,8 +13417,27 @@ section .text
 ; SH_FMT_BOLD|SH_FMT_UNDER's own bit pattern) - so applying a choice is a
 ; plain mask-and-OR, no translation table needed anywhere.
 ; =============================================================================
-SH_FDLG_W      equ 170
-SH_FDLG_ROWTOP equ 12
+; 81.115: EXCEL'S SHAPE, and it is the CHECK-BOX engine's shape too - a
+; titled group box around the choices with OK and Cancel STACKED at the top
+; right (dialog_alignment.png in the reference captures). sh_bdlg already had
+; it; this engine drew its buttons side by side along the bottom, which is the
+; one place the two engines disagreed with each other and with Excel.
+SH_FDLG_GX1    equ 10                ; the group box, inset from the content
+SH_FDLG_GY1    equ 12                ; origin - sh_bdlg's own two numbers
+SH_FDLG_GX2    equ 200               ; ...but WIDER than sh_bdlg's 104: the
+                                     ; longest label here is 'All Matching
+                                     ; Records' at 20 cells, which starts at
+                                     ; GX1 + 24 and so ends at 194
+SH_FDLG_BTW    equ 54                ; the button column, to the RIGHT of the
+SH_FDLG_BTH    equ 16                ; box and measured from the SAME origin
+SH_FDLG_BTGAP  equ 6                 ; as its top edge, which is what "stacked
+SH_FDLG_BTX    equ SH_FDLG_GX2 + 10  ; top right" means
+SH_FDLG_BTBOT  equ SH_FDLG_GY1 + 2 * SH_FDLG_BTH + SH_FDLG_BTGAP
+SH_FDLG_W      equ SH_FDLG_BTX + SH_FDLG_BTW + 10
+SH_FDLG_ROWTOP equ SH_FDLG_GY1 + 14  ; the first radio row, inside the box and
+                                     ; clear of the label on its top edge -
+                                     ; sh_bdlg's 26, reached by derivation so
+                                     ; moving GY1 moves both
 SH_FDLG_ROWH   equ 16
 SH_FDLG_NITEMS equ 4
 ; THE BUTTON ROW AND THE WINDOW HEIGHT ARE ONE NUMBER, not two that have to be
@@ -13438,8 +13457,6 @@ SH_FDLG_MAXROWS equ 7                ; the tallest kind's row count, and the
                                      ; chosen when four was the most any kind
                                      ; had. A new kind with more rows changes
                                      ; this one number.
-SH_FDLG_BTY1   equ SH_FDLG_ROWTOP + SH_FDLG_MAXROWS * SH_FDLG_ROWH + 4
-SH_FDLG_BTY2   equ SH_FDLG_BTY1 + 16
 SH_DLG_BMARG   equ 8                 ; the gap every dialog leaves below its
                                      ; lowest element, and the reason all four
                                      ; heights below are DERIVED: a window's
@@ -13447,7 +13464,18 @@ SH_DLG_BMARG   equ 8                 ; the gap every dialog leaves below its
                                      ; hand-written height is a second number
                                      ; that has to agree with the first and
                                      ; silently did not
-SH_FDLG_H      equ SH_FDLG_BTY2 + SH_DLG_BMARG + TITLE_H + 1
+; THE HEIGHT IS PER KIND NOW (81.115) and this is only the TEMPLATE's, the
+; tallest one: sh_fdlg_open patches WT_H from [sh_fdlg_count] before it
+; creates the window, exactly as it already patches WT_X and WT_Y. Every kind
+; used to be sized for the tallest, so Insert's two choices got Gallery's
+; seven-row dialog - which was invisible while the body was bare rows and is
+; plainly wrong inside a group box.
+;
+; It is also what RELIEVES the CGA problem recorded at the OSAPI_WM_KEEPH call
+; below rather than working around it: the buttons no longer sit under the
+; rows, so even the tallest kind is shorter than the fixed 171 this was.
+SH_FDLG_BOXH   equ SH_FDLG_ROWTOP - SH_FDLG_GY1 + SH_FDLG_MAXROWS * SH_FDLG_ROWH + 4
+SH_FDLG_H      equ SH_FDLG_GY1 + SH_FDLG_BOXH + SH_DLG_BMARG + TITLE_H + 1
 
 sh_fdlg_tpl:
     dw 0, 0, SH_FDLG_W, SH_FDLG_H
@@ -13793,11 +13821,24 @@ sh_fdlg_open:
     shl bx, 1
     mov ax, [sh_fdlg_titles + bx]
     mov [sh_fdlg_tpl + WT_TITLE], ax
+    ; 81.115: THIS KIND'S OWN HEIGHT, patched the way WT_X and WT_Y below
+    ; already are - the box is as tall as the rows it holds, unless the two
+    ; stacked buttons beside it need more.
+    mov ax, [sh_fdlg_count]
+    mov cl, 4                         ; * SH_FDLG_ROWH; CX is this routine's
+    shl ax, cl                        ; own (pushed above), DX is not
+    add ax, SH_FDLG_ROWTOP + 4
+    cmp ax, SH_FDLG_BTBOT
+    jae .tallenough
+    mov ax, SH_FDLG_BTBOT
+.tallenough:
+    add ax, SH_DLG_BMARG + TITLE_H + 1
+    mov [sh_fdlg_tpl + WT_H], ax
     call OSAPI_VIDEO                  ; centre on the LIVE screen, the same
     sub ax, SH_FDLG_W                 ; way os88ui_ask does (apps/os88ui.inc)
     sar ax, 1
     mov [sh_fdlg_tpl + WT_X], ax
-    sub bx, SH_FDLG_H
+    sub bx, [sh_fdlg_tpl + WT_H]
     sar bx, 1
     cmp bx, MBAR_H + 8
     jge .placed
@@ -13846,10 +13887,47 @@ sh_fdlg_paint:
     mov bl, [sh_fdlg_kind]
     xor bh, bh
     shl bx, 1
-    mov si, [sh_fdlg_items + bx]       ; the window's own title bar already
-    mov [sh_fdlg_itemsptr], si         ; names the dialog (sh_fdlg_open set
-                                        ; WT_TITLE) - no need to repeat it as
-                                        ; content
+    mov si, [sh_fdlg_items + bx]
+    mov [sh_fdlg_itemsptr], si
+
+    ; --- 81.115: the group box, and its label BREAKING the top edge.
+    ; The title is on the window's title bar as well, and Excel repeats it
+    ; here - that repetition is the group box's whole grammar, naming what the
+    ; choices inside it are about.
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [sh_fdlg_ox]
+    add ax, SH_FDLG_GX1
+    mov cx, [sh_fdlg_ox]
+    add cx, SH_FDLG_GX2
+    mov bx, [sh_fdlg_oy]
+    add bx, SH_FDLG_GY1
+    mov dx, [sh_fdlg_count]           ; as tall as THIS kind's rows
+    push cx
+    mov cl, 4                         ; * SH_FDLG_ROWH, without touching DX's
+    shl dx, cl                        ; neighbour: `mul` would spend AX, which
+    pop cx                            ; is the box's left edge
+    add dx, bx
+    add dx, SH_FDLG_ROWTOP - SH_FDLG_GY1 + 4
+    call OSAPI_GFX_FRAME
+
+    ; ONE OPAQUE font_run, not sh_bdlg's FONT_WIDTH + GFX_FILL + transparent
+    ; string (SPEC.md 6.1, 6.6): the run paints its own cells' ground, which
+    ; is exactly the erase that breaks the line - the frame passes through the
+    ; middle of an 8-tall cell placed at GY1 - 4. Three calls become one, and
+    ; no new site joins tests/textsites.txt's ratchet.
+    mov bl, [sh_fdlg_kind]
+    xor bh, bh
+    shl bx, 1
+    mov si, [sh_fdlg_titles + bx]
+    mov cx, [sh_fdlg_ox]
+    add cx, SH_FDLG_GX1 + 8
+    mov dx, [sh_fdlg_oy]
+    add dx, SH_FDLG_GY1 - 4
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+
     mov word [sh_fdlg_rowidx], 0
 .rowloop:
     mov cx, [sh_fdlg_rowidx]
@@ -13869,7 +13947,7 @@ sh_fdlg_paint:
 .goff:
     mov ah, 0
     mov cx, [sh_fdlg_ox]
-    add cx, 8
+    add cx, SH_FDLG_GX1 + 8             ; 81.115: inside the group box now
     mov dx, [sh_fdlg_rowy]
     SHOUT os88ui_glyph                  ; preserves all registers (its own doc)
     mov si, [sh_fdlg_itemsptr]
@@ -13878,7 +13956,7 @@ sh_fdlg_paint:
     add si, bx
     mov si, [si]                       ; si = this row's label string
     mov cx, [sh_fdlg_ox]
-    add cx, 24
+    add cx, SH_FDLG_GX1 + 24            ; 81.115: ...and so is its label
     mov dx, [sh_fdlg_rowy]
     add dx, 2
     mov al, CBLACK
@@ -13889,21 +13967,26 @@ sh_fdlg_paint:
     mov [sh_fdlg_rowidx], ax
     jmp .rowloop
 .rowsdone:
-    mov ax, [sh_fdlg_ox]               ; 81.111: OK then Cancel, CONTIGUOUS in
-    add ax, 8                          ; the record's own array, and drawn by
-    mov [sh_fdlg_btrects], ax          ; index - the library owns the pressed
-    add ax, 54                         ; look
-    mov [sh_fdlg_btrects+4], ax
-    add ax, 34
-    mov [sh_fdlg_btrects+8], ax
-    add ax, 54
+    ; 81.111: OK then Cancel, CONTIGUOUS in the record's own array and drawn
+    ; by index - the library owns the pressed look. 81.115 moved them from a
+    ; row along the bottom to a STACKED COLUMN at the top right, which is both
+    ; Excel's shape and sh_bdlg's. The rects are what the click half and
+    ; tests/sheetfmt.py's fdlg_ok both read, so neither needs telling.
+    mov ax, [sh_fdlg_ox]
+    add ax, SH_FDLG_BTX
+    mov [sh_fdlg_btrects], ax          ; OK x1
+    mov [sh_fdlg_btrects+8], ax        ; ...and Cancel's, the same column
+    add ax, SH_FDLG_BTW
+    mov [sh_fdlg_btrects+4], ax        ; OK x2
     mov [sh_fdlg_btrects+12], ax
     mov ax, [sh_fdlg_oy]
-    add ax, SH_FDLG_BTY1
+    add ax, SH_FDLG_GY1                ; level with the box's top edge
     mov [sh_fdlg_btrects+2], ax
-    mov [sh_fdlg_btrects+10], ax
-    add ax, SH_FDLG_BTY2 - SH_FDLG_BTY1
+    add ax, SH_FDLG_BTH
     mov [sh_fdlg_btrects+6], ax
+    add ax, SH_FDLG_BTGAP
+    mov [sh_fdlg_btrects+10], ax
+    add ax, SH_FDLG_BTH
     mov [sh_fdlg_btrects+14], ax
     mov bx, sh_fdlg_btrec
     mov al, 1
@@ -13939,8 +14022,10 @@ sh_fdlg_onclick:
                                        ; never reaches here - the library's
                                        ; gesture takes it, sh_fdlg_onbtn acts)
 .checkrows:
-    cmp cx, 8
-    jb .out
+    cmp cx, SH_FDLG_GX1 + 8            ; 81.115: the rows moved INSIDE the
+    jb .out                            ; group box, so its left edge moved too
+    cmp cx, SH_FDLG_GX2                ; ...and a click to the RIGHT of the box
+    ja .out                            ; is the button column's, not a row's
     cmp bx, SH_FDLG_ROWTOP
     jb .out
     mov ax, bx

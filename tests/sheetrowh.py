@@ -56,8 +56,6 @@ EDIT = (123, 45)
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
 UNDO, INSERT = 0, 8
 ROWH_ITEM = (SF.FORMAT_MENU[0] + 15, 57 + 12 * 5 + 2)   # Format's 6th item
-RADIO = lambda row: (SF.FMT_RADIO_X, 55 + 16 * row)
-OK = (267, 172)
 # no 'l' and no 'I' in what is read: this BIOS face draws the two alike
 LABELS = {1: 'Hat', 2: 'Ox'}
 
@@ -178,9 +176,9 @@ def main():
             mo.menu(SF.FILE_MENU[0], SF.FILE_MENU[1],
                     SF.SAVE_AS[0], SF.SAVE_AS[1])
             M.settle(m)
-            mo.click(SF.FMT_RADIO_X, SF.FMT_Y['bif'])
+            mo.click(*SF.fdlg_xy(m, SF.FMT_ROW['bif']))
             M.settle(m)
-            mo.click(*SF.FMT_OK)
+            mo.click(*SF.fdlg_okxy(m))
             M.settle(m, limit=120)
             mo.click(*SF.SAVE_BUTTON)
             for _ in range(60):
@@ -199,9 +197,9 @@ def main():
         M.settle(m)
         mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], INSERT))
         M.settle(m)
-        mo.click(*RADIO(0))                 # Row
+        mo.click(*SF.fdlg_xy(m, 0))                 # Row
         M.settle(m)
-        mo.click(*OK)
+        mo.click(*SF.fdlg_okxy(m))
         M.settle(m)
         save("5-inserted")
         mo.menu(EDIT[0], EDIT[1], *ITEM(EDIT[0], UNDO))

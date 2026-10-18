@@ -132678,6 +132678,66 @@ alone — the same code, covered in the row that owns it.
 bytes of `CHART.OVL`, and the four positional tables it appends to are the
 module's own.
 
+### 81.115 The radio dialogs take Excel's shape — a group box, buttons stacked right
+
+Stage 1.8's §15, and it is **one engine for fifteen dialogs**: Format Number,
+Alignment, Font, Insert, Delete, Clear, New, Calculation, Sort, Gallery, File
+Format, Paste Special, Cell Protection, Extract and Series all come out of
+`sh_fdlg`, so the shape is changed once.
+
+Excel 2.1d's `dialog_alignment.png` is the reference: the choices live in a
+**group box titled with the dialog's name**, its label breaking the top edge
+at the left, and **OK and Cancel are stacked at the top right**, outside the
+box. SHEET drew its buttons side by side along the bottom with no box at all
+— the one place this engine disagreed both with Excel and with SHEET's OWN
+check-box engine (`sh_bdlg`, §81.106), which has had the Excel shape since it
+was written.
+
+| | |
+|---|---|
+| where it lives | `SH_MODSEC` — **CHART.OVL**, which is why this was affordable at all: the overlay went 50,924 → 51,037, **+113 bytes with 1,187 still spare**, and SHEET's resident image is byte-for-byte unchanged at 52,029 of the 61,440 it has 122 bytes left in |
+| the box | `OSAPI_GFX_FRAME` from `(GX1, GY1)` to `(GX2, GY1 + rows·ROWH + …)`, as tall as **this kind's** rows |
+| the label | **ONE opaque `font_run`**, not `sh_bdlg`'s `FONT_WIDTH` + `GFX_FILL` + transparent string. The run paints its own cells' ground, which is exactly the erase that breaks the frame line — the line passes through the middle of an 8-tall cell placed at `GY1 - 4`. Three calls become one, and no new site joins `tests/textsites.txt`'s ratchet (§6.6) |
+| the buttons | a stacked column at `BTX = GX2 + 10`, level with the box's top edge. The rects go into `[sh_fdlg_btrects]` exactly as before, so the click half and the gates both follow with no change |
+
+**THE HEIGHT IS PER KIND NOW, and that is not cosmetic.** Every kind used to
+be sized for the tallest (`SH_FDLG_MAXROWS` = 7), so Insert's two choices got
+Gallery's seven-row dialog. Bare rows hid it; a group box does not — a tall
+empty frame is plainly wrong. `sh_fdlg_open` patches `WT_H` from
+`[sh_fdlg_count]` before it creates the window, exactly as it already patched
+`WT_X` and `WT_Y`, taking the greater of the box and the two stacked buttons.
+
+It also **retires** the CGA workaround recorded at that routine's
+`OSAPI_WM_KEEPH` call rather than working around it: the buttons no longer sit
+below the rows, so even the tallest kind is shorter than the fixed 171 this
+used to be.
+
+#### 81.115.1 What it cost the GATES, and why they are better for it
+
+**Forty test files clicked these dialogs at screen absolutes** — `FMT_RADIO_X
+= 246`, rows at `55 + 16·row`, OK at `(267, 170)` — and all of them were
+wrong the moment the dialog changed width and height. That is the real bill
+for this change and it is worth writing down, because the constants were not
+careless: they were correct, and `tests/sheetcalc.py` even carried the reason
+in a comment — *"every fdlg kind is the same size, so it opens in the same
+place and sheetfmt's own coordinates carry straight over."* §81.115 made that
+sentence false.
+
+**A dialog coordinate that is wrong by one row does not fail — it clicks a
+LIVE row.** This engine has already paid for that once: when DBF was added,
+a pitch of 14 against a real 16 silently saved a `.TXT` (§81.41), and the
+same shape bit `MANUAL = 1` when "Automatic except Tables" went in above it
+(§81.114.8).
+
+So the constants are **deleted, not re-measured** — `fdlg_xy(m, row)` and
+`fdlg_okxy(m)` ask the live window instead, and 99 call sites across 40 files
+now go through them. The helpers read the FRONT WINDOW's rect out of the
+kernel's own `wm_wins` rather than `[sh_fdlg_ox]`: most of these rows are
+glass-and-file tests with no package symbols at all, so a helper wanting
+SHEET's segment would have had to teach thirty-five files how to find it.
+Deleting the names is what stops the next geometry change re-arming this.
+
+
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
 Four things, and three of them are invisible in a diff.
