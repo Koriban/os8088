@@ -13414,6 +13414,31 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
                "build/os8088-360.img")),
+    Row("sheettblbiff", "soak", py("tests/sheettblbiff.py"), 520.0,
+        "SPEC.md 81.114.10: a Data > Table survives SAVE AND LOAD. Until "
+        "this stage a table saved to any format kept its NUMBERS and "
+        "silently stopped being a table. Excel writes one as a FORMULA "
+        "record per RESULT cell whose whole token array is a single tTbl, "
+        "plus one DATATABLE (0236H in BIFF3) immediately after the first "
+        "FORMULA record of the table's RANGE - which is usually the user's "
+        "own top-row formula, not a result cell. THE HOST AUTHORS THE "
+        "INPUT, which is 81's format-gate rule: a file SHEET never wrote "
+        "cannot carry a writer defect, so a reader defect has nothing to "
+        "cancel against, and that trap has been caught here twice. The "
+        "input cell is a COLUMN one deliberately: the format names a "
+        "one-input table's single cell in the FIRST pair whichever kind it "
+        "is, with option bit 2 giving the orientation, where this app keeps "
+        "the row input first and the column input second ALWAYS - so the "
+        "column shape is the one where a verbatim copy of the sixteen bytes "
+        "is wrong in BOTH directions, and it is the common shape. Check 3 "
+        "runs Calculate Now on the LOADED table, which is what says the "
+        "record was read into a working table rather than merely stored; "
+        "check 5 asserts the tTbl's own BYTES, because a check that merely "
+        "noticed the formula would not decode is satisfied by any corrupt "
+        "array at all",
+        needs=("marty",), serial=True,
+        wants=("build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL",
+               "build/os8088-360.img")),
     Row("sheettblshift", "soak", py("tests/sheettblshift.py"), 560.0,
         "SPEC.md 81.114.9: a Data > Table's stored RECTANGLE follows the "
         "grid. Insert/Delete Row/Column move the cells and move a result "

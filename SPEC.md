@@ -130947,6 +130947,150 @@ hot path.
 `CHART.OVL`'s (§82.16.9), which has 2,115 free, but any resident thunk they
 need comes out of this.
 
+#### 81.114.10 Stage 4 — a table that survives save and load
+
+Until this stage a table saved to any format kept its **numbers** and
+silently stopped being a table. This is the stage the owner's "fully
+Excel-faithful" choice was really about.
+
+##### The two records
+
+Excel writes a table as a **`FORMULA` record per RESULT cell** whose entire
+token array is one `tTbl`, plus **one `DATATABLE`** immediately after the
+first `FORMULA` record of the table's range.
+
+| | |
+|---|---|
+| `tTbl` | `02H`, then the table's first row (2 bytes) and first column — **2 bytes in BIFF3**, 1 in BIFF2. Always the only token in its array, and legal only in a `FORMULA` record |
+| `DATATABLE` | **`0236H`** in BIFF3 (`0036H` in BIFF2, which split the two-input case into a second record `0037H`). 16 bytes: the range, the option flags, and two input cells |
+
+**A reader that knows neither still sees the right figures**, because the
+`FORMULA` record carries the cached result — which is exactly why this is
+the faithful shape rather than a private one.
+
+##### Where "the body is the record" stops being true
+
+§81.114.7 laid the list entry out as `DATATABLE`'s body field for field so
+that reading one would be a copy. The **range and the flags** are. The
+**input cells are not**, and this is the one place the two conventions
+genuinely differ:
+
+- the **format** names a one-input table's single cell in the **first** pair,
+  whichever kind it is, and option **bit 2** says the orientation; the second
+  pair is the two-dimensional case's alone;
+- this **app** keeps the row input in the first pair and the column input in
+  the second *always*, with `SH_TBL_NONE` in the unused one, because that is
+  what `sh_table_cell`'s `.rowonly`/`.colonly` arms read.
+
+Copied verbatim, every **column-input** table — the common shape — would
+write `0FFFFh` as its input cell, and every one read back would claim a
+**row** input cell and substitute along the wrong axis. Both directions
+translate, with the reason written at both.
+
+##### Which `FORMULA` record the `DATATABLE` follows
+
+The format says the **first of the range**, and that is usually the user's
+own formula in the top row rather than a result cell — so the hook is after
+*every* `FORMULA` this writer emits inside a table, not only after a `tTbl`
+one. A seven-byte bitmap (`SH_TBL_CAP` is 56) says which tables have already
+had theirs, cleared **once per file** rather than per sheet, because a
+workbook's tables are one list.
+
+##### The reader marks afterwards, not as it goes
+
+`SH_TBL_RESULT` is set on every result cell by a single pass **after the
+whole stream is in**. A `DATATABLE` arrives immediately after the *first*
+formula of its range, so most of the cells it describes are still ahead of
+it in the file; marking as it arrived would mark cells that do not exist
+yet. The sheet is impersonated per table, `sh_tbl_runall`'s reason exactly.
+
+The result cells themselves need no reader change: `sh_dc_decode` has no
+handler for token `02H`, so it refuses the array and the existing fallback
+stores the **cached value** — which for a table result cell is the whole
+answer.
+
+##### The other formats, unchanged and said again
+
+SYLK, DIF and CSV have **no table record of any kind**. A table saved to one
+keeps its values and loses its table-ness. That is a format limit rather than
+an app one, and it is the same shape of answer those formats already give to
+four number formats of twenty-one and to row heights (§81.114.7, §81.39.3).
+
+##### Evidence
+
+`tests/sheettblbiff.py`, **6 checks**. The host authors a BIFF3 stream
+containing a `DATATABLE`, four `tTbl` result cells and the governing
+formulas as real token arrays — and **asserts its own fixture through
+`read_biff_tables`/`read_biff_ttbl` before SHEET has seen it**, so a wrong
+fixture fails at the host rather than being blamed on the app.
+
+1 READ SHEET opens that file and has the table, every field against what
+went in · 2 MARKED its result cells are protected · 3 LIVE `Calculate Now`
+re-runs the loaded table to the same numbers · 4 DTOUT SHEET's own save
+carries one `DATATABLE`, every field asserted · 5 TTBL every result cell is
+a `FORMULA` whose only token is a `tTbl` naming the corner · 6 VALUES the
+numbers came back.
+
+**Check 3 is the one that says the record was read into a WORKING table**
+rather than merely stored: a re-run drives off the rectangle *and* the input
+cell, so either being wrong shows up as different numbers. Check 5 asserts
+the token's own **bytes**, because a check that merely noticed the formula
+would not decode is satisfied by any corrupt array at all.
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| `DATATABLE` not read at all | 1, 2, 4, 5 |
+| `DI` left advanced after the copy | 1, 3, 6 |
+| the input cells read verbatim | 1, 3, 6 |
+| no marking pass after a read | **2 alone** |
+| no `DATATABLE` written | **4 alone** |
+| the input cells written verbatim | **4 alone** |
+| no `tTbl` record, the cell goes out as a number | **5 alone** |
+| the cached result taken from `sh_wrec_val` | **6 alone** |
+
+Five isolate a single check, and every check is covered.
+
+##### Three defects, and two of them only the gate could find
+
+- `rep movsb` **advances `DI`**, and everything after the copy addressed the
+  record through it — so the sheet byte and the whole input-cell translation
+  landed sixteen bytes on, in the next record's space. The record read back
+  verbatim, which is exactly what the translation existed to prevent.
+- the cached result was copied from `sh_wrec_val`, **the word the RK path
+  packs an exact integer from**, not `sh_wrec_dval`, the double. Four cells
+  of denormal noise.
+- and `checkdocs` refused the build for a §81.114.10 citation written into
+  `os88sheetfmt.py` before this section existed, which is the doc gate doing
+  its job.
+
+The input-cell translation itself was found **by working out what the
+authored fixture should contain**, not by reading the code — which is the
+argument for the host learning the record first, in one line.
+
+##### What stage 4 cost
+
+| | stage 3b | stage 4 |
+|---|---|---|
+| region | 61,309 of 61,440 | **61,318 — 122 spare** |
+| `CHART.OVL` | 50,109 of 52,224 | 50,908 |
+| bss | 9,280 | 9,289 |
+
+**Nine resident bytes**, all of them the bitmap and two scratch flags. The
+reader, the writer, the translation and the marking pass are `CHART.OVL`'s
+entirely (§82.16.9 put the file formats there), which is the whole reason
+this stage fitted at all with 131 bytes of region left.
+
+##### The host learns the record first
+
+`tools/os88sheetfmt.py` gained `read_biff_tables` and `read_biff_ttbl`,
+through the **same walk** as the cells rather than a second loop that would
+go stale against it. That ordering is §81's format-gate rule: the host
+authors the input and verifies the output independently, so a writer defect
+and a reader defect cannot cancel — the trap that gate has already caught
+twice.
+
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
 Four things, and three of them are invisible in a diff.

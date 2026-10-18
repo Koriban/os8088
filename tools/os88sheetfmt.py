@@ -47,6 +47,18 @@ BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER = 0x01, 0x02, 0x03
 BIFF_LABEL, BIFF_BOOLERR, BIFF_FORMULA = 0x04, 0x05, 0x06
 BIFF_BOF, BIFF_EOF, BIFF_DIMENSIONS = 0x09, 0x0A, 0x00
 BIFF_RK = 0x7E                          # 027EH, BIFF3 on; replaces INTEGER
+# 0036H BIFF2 / 0236H BIFF3 on - Data > Table (SPEC.md 81.114.10). It follows
+# the FIRST FORMULA record of the table's range, and BIFF2 split the
+# two-input case into a second record (DATATABLE2, 0037H) where BIFF3 carries
+# both input cells in this one.
+BIFF_DATATABLE = 0x36
+# ...and tTbl, the token a result cell's formula is made of. It is ALWAYS the
+# only token in the array and is legal only in a FORMULA record: 02H then the
+# table's first row (2) and first column (1 byte in BIFF2, 2 from BIFF3).
+BIFF_TTBL = 0x02
+# The option flags that matter to a reader. 0 and 1 are recalculation hints.
+BIFF_DT_ROWDATA = 0x0004     # input data is in the ROW above, formulas left
+BIFF_DT_TWOD = 0x0008        # two-dimensional: both input cells are real
 
 # BIFF3 renumbers the cell records into the 02xxH block and widens the cell
 # header - row(2) col(2) then a 2-byte XF index where BIFF2 had 3 bytes of
@@ -807,7 +819,18 @@ def read_dif(data):
 # BIFF2.  <id:2><length:2><data>, and every cell record opens row(2) col(2)
 # attributes(3).
 # -----------------------------------------------------------------------------
-def _biff_walk(data):
+def _datatable(body):
+    """A DATATABLE body -> a dict. The field order IS the record's."""
+    r1, r2 = struct.unpack_from('<HH', body, 0)
+    c1, c2 = body[4], body[5]
+    flags, ir, ic, ir2, ic2 = struct.unpack_from('<HHHHH', body, 6)
+    return {'r1': r1, 'r2': r2, 'c1': c1, 'c2': c2, 'flags': flags,
+            'ir': ir, 'ic': ic, 'ir2': ir2, 'ic2': ic2,
+            'twod': bool(flags & BIFF_DT_TWOD),
+            'rowdata': bool(flags & BIFF_DT_ROWDATA)}
+
+
+def _biff_walk(data, tables=None, ttbl=None):
     """[(name, {(row, col): value})] - one entry per sheet, in file order.
 
     A single-sheet BIFF2/3 stream is one unnamed entry, which is what makes
@@ -860,12 +883,30 @@ def _biff_walk(data):
                 cells[pending] = (f[0], f[1], body[at:at + ln_s].decode('latin-1'))
             pending = None
             continue
+        if kind == BIFF_DATATABLE:
+            # NOT counted as "anything else ends a STRING wait": it follows a
+            # FORMULA record, and a string-valued table formula puts its
+            # STRING after the DATATABLE rather than after the FORMULA.
+            if tables is not None and ln >= 16:
+                tables.setdefault(len(sheets), []).append(_datatable(body))
+            continue
         pending = None
         if kind in (BIFF_BLANK, BIFF_INTEGER, BIFF_NUMBER, BIFF_LABEL,
                     BIFF_BOOLERR, BIFF_FORMULA, BIFF_RK):
             if ln < vstart:
                 raise FormatError('cell record 0x%04X is %d bytes' % (rid, ln))
             r, c = struct.unpack_from('<HH', body, 0)
+            if ttbl is not None and kind == BIFF_FORMULA:
+                # THE TOKEN ARRAY'S OWN BYTES, asserted rather than inferred:
+                # a tTbl is the only legal token in its array, so "five bytes
+                # beginning 02H" is the whole test. A reader that merely
+                # noticed the formula would not decode is satisfied by any
+                # corrupt array at all.
+                at = vstart + 8 + 2          # past the result and grbit
+                cce = struct.unpack_from('<H', body, at)[0]
+                tk = body[at + 2:at + 2 + cce]
+                if len(tk) == 5 and tk[0] == BIFF_TTBL:
+                    ttbl[(r, c)] = struct.unpack_from('<HH', tk, 1)
             v = _biff_value(kind, body, vstart, ver)
             if v is not None:
                 if isinstance(v, tuple) and len(v) == 3 and v[2] is _PENDING:
@@ -883,6 +924,26 @@ def _biff_walk(data):
 def read_biff_book(data):
     """Every sheet, as [(name, cells)].  A single-sheet stream is one entry."""
     return _biff_walk(data)
+
+
+def read_biff_tables(data):
+    """{sheet index: [table, ...]} - every DATATABLE record in the stream.
+
+    Through the SAME walk as the cells rather than a second loop of its own:
+    the substream and depth handling is the awkward part of reading BIFF and
+    a copy of it would go stale against this one.
+    """
+    out = {}
+    _biff_walk(data, tables=out)
+    return out
+
+
+def read_biff_ttbl(data):
+    """{(row, col): (first row, first col)} - every cell whose FORMULA record
+    carries a tTbl, and the table corner each one names."""
+    out = {}
+    _biff_walk(data, ttbl=out)
+    return out
 
 
 def read_biff(data):

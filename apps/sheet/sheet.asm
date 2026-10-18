@@ -16213,6 +16213,328 @@ sh_tbl_sortdrop:
     pop bx
     ret
 
+; =============================================================================
+; 81.114.10 - DATA > TABLE IN BIFF, the writer's half.
+;
+; Excel writes a table as a FORMULA record per RESULT cell whose token array
+; is a single tTbl, plus ONE DATATABLE record immediately after the FIRST
+; FORMULA record of the table's range. A reader that knows neither still sees
+; the right numbers - the FORMULA's cached result - which is why this is the
+; faithful shape rather than a private one.
+; =============================================================================
+
+; sh_tbl_atcell - AX = col, BX = row, on the sheet being written. out: CF=1
+; and SI = the record offset of the table whose RANGE contains the cell, with
+; [sh_tbl_isres] = 1 when it is in the RESULT interior as well.
+;
+; THE LIST DECIDES, NOT THE MARK. A border table that filled leaves a result
+; cell unmarked (81.114.7 takes that scope limit deliberately), and a file
+; that then wrote it as a plain number would lose the table on the way out
+; for a reason the user could not see.
+sh_tbl_atcell:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    mov byte [sh_tbl_isres], 0
+    mov byte [sh_tbl_idx], 0
+    mov cx, [sh_ntbl]
+    jcxz .no
+    xor si, si
+    mov es, [sh_tblseg]
+.l:
+    mov dl, [es:si+SH_T_SHEET]
+    xor dh, dh
+    cmp dx, [sh_wsheet]
+    jne .next
+    cmp bx, [es:si+SH_T_R1]
+    jb .next
+    cmp bx, [es:si+SH_T_R2]
+    ja .next
+    xor dx, dx
+    mov dl, [es:si+SH_T_C1]
+    cmp ax, dx
+    jb .next
+    xor dx, dx
+    mov dl, [es:si+SH_T_C2]
+    cmp ax, dx
+    ja .next
+    ; inside the RANGE. The result interior is that less the top row and the
+    ; left column, which is sh_tbl_overlap's convention throughout.
+    cmp bx, [es:si+SH_T_R1]
+    je .yes
+    xor dx, dx
+    mov dl, [es:si+SH_T_C1]
+    cmp ax, dx
+    je .yes
+    mov byte [sh_tbl_isres], 1
+.yes:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.next:
+    add si, SH_T_SZ
+    inc byte [sh_tbl_idx]
+    loop .l
+.no:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; sh_biff_ttbl - a FORMULA record whose whole token array is one tTbl, for
+; the result cell in sh_wrec_*. SI = its table's record offset.
+; out: CF=0 written, CF=1 no room (the caller falls back to RK/NUMBER).
+sh_biff_ttbl:
+    push ax
+    push bx
+    push cx
+    mov ax, di
+    add ax, 4 + 18 + 5
+    cmp ax, SH_STAGE_MAX
+    ja .no
+    mov ax, 0x0206                    ; FORMULA. A BIFF4 workbook needs 0406H,
+    cmp byte [sh_wb_xf4], 0           ; exactly as sh_biff_formula does
+    je .op3
+    mov ax, 0x0406
+.op3:
+    call sh_biffw
+    mov ax, 18 + 5                    ; row+col+xf+result(8)+grbit+cce, then
+    call sh_biffw                     ; the five bytes of the token
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    mov ax, [sh_wrec_ixfe]
+    call sh_biffw
+    mov bx, sh_wrec_dval              ; the CACHED RESULT, which is the whole
+    mov cx, 4                         ; point of the record: a reader that
+.val:                                 ; does not know tTbl still shows the
+    mov ax, [bx]                      ; right number. sh_wrec_DVAL and not
+                                      ; sh_wrec_val - that one is the WORD the
+                                      ; RK path packs an exact integer from,
+                                      ; and reading the double out of it gave
+                                      ; four cells of denormal noise
+    call sh_biffw
+    add bx, 2
+    loop .val
+    xor ax, ax                        ; grbit: nothing set
+    call sh_biffw
+    mov ax, 5                         ; cce - the token array's length
+    call sh_biffw
+    mov al, 0x02                      ; tTbl, and it is ALWAYS the only token
+    call sh_stgputb                   ; in the array
+    push es
+    mov es, [sh_tblseg]
+    mov ax, [es:si+SH_T_R1]
+    mov bx, ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C1]
+    mov cx, ax
+    pop es
+    mov ax, bx
+    call sh_biffw                     ; the table's first ROW...
+    mov ax, cx
+    call sh_biffw                     ; ...and its first COLUMN, two bytes in
+    pop cx                            ; BIFF3 where BIFF2 had one
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; sh_biff_dtafter - a FORMULA record has just been written for a cell in the
+; table at SI. If this is that table's FIRST, the DATATABLE goes here.
+;
+; "Immediately after the first FORMULA record of the range" is the format's
+; own rule, and the first such record is usually the USER'S OWN formula in
+; the top row rather than a result cell - so this is called after every
+; FORMULA this writer emits inside a table, not only after a tTbl one.
+sh_biff_dtafter:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov al, [sh_tbl_idx]              ; sh_tbl_atcell left it, so there is no
+    mov ah, al                        ; divide by SH_T_SZ here at all
+    shr al, 1
+    shr al, 1
+    shr al, 1                         ; AL = the byte of the bitmap
+    and ah, 7                         ; AH = the bit within it
+    mov bl, al
+    xor bh, bh
+    add bx, sh_tbl_wdone              ; BX AND NOT BP: [bp] addresses SS by
+    mov al, 1                         ; default and SS is not DS in a package
+    mov cl, ah                        ; (SPEC.md 1), so a bitmap read through
+    shl al, cl                        ; BP would have been another segment's
+    test [bx], al
+    jnz .done
+    or [bx], al
+    mov ax, di                        ; room for the record?
+    add ax, 4 + 16
+    cmp ax, SH_STAGE_MAX
+    ja .done
+    mov ax, 0x0236                    ; DATATABLE (BIFF3/BIFF4)
+    call sh_biffw
+    mov ax, 16
+    call sh_biffw
+    ; The RANGE and the FLAGS are the record's own, word for word.
+    push es
+    mov es, [sh_tblseg]
+    mov ax, [es:si+SH_T_R1]
+    mov bx, [es:si+SH_T_R2]
+    mov cx, [es:si+SH_T_C1]           ; c1 and c2 are adjacent BYTES, which
+    mov dx, [es:si+SH_T_FLAGS]        ; is one word
+    pop es
+    call sh_biffw
+    mov ax, bx
+    call sh_biffw
+    mov ax, cx
+    call sh_biffw
+    mov ax, dx
+    call sh_biffw
+    ; ...AND THE INPUT CELLS ARE TRANSLATED, which is where "the body is the
+    ; record" stops being true. The format names ONE input cell for a
+    ; one-input table - in the FIRST pair, whichever kind it is - and leaves
+    ; the second pair to the two-dimensional case, with option bit 2 saying
+    ; which orientation the single one has. This app keeps the ROW input in
+    ; the first pair and the COLUMN input in the second ALWAYS, with
+    ; SH_TBL_NONE in the unused one, because that is what its engine reads.
+    ; Copying the sixteen bytes verbatim would therefore write 0FFFFh as the
+    ; input cell of every column-input table - the common shape.
+    test dx, SH_TF_TWOD
+    jnz .twod
+    push es
+    mov es, [sh_tblseg]
+    mov ax, [es:si+SH_T_IR]           ; the live pair, whichever it is
+    mov bx, [es:si+SH_T_IC]
+    cmp ax, SH_TBL_NONE
+    jne .have1
+    mov ax, [es:si+SH_T_IR2]
+    mov bx, [es:si+SH_T_IC2]
+.have1:
+    pop es
+    call sh_biffw
+    mov ax, bx
+    call sh_biffw
+    xor ax, ax                        ; the second pair is 2-D's alone
+    call sh_biffw
+    call sh_biffw
+    jmp short .done
+.twod:
+    push es
+    mov es, [sh_tblseg]
+    mov ax, [es:si+SH_T_IR]
+    mov bx, [es:si+SH_T_IC]
+    mov cx, [es:si+SH_T_IR2]
+    mov dx, [es:si+SH_T_IC2]
+    pop es
+    call sh_biffw
+    mov ax, bx
+    call sh_biffw
+    mov ax, cx
+    call sh_biffw
+    mov ax, dx
+    call sh_biffw
+.done:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_tbl_markall - every table's result cells carry SH_TBL_RESULT (81.114.10).
+;
+; Run ONCE, after a whole BIFF stream is in, and not as each DATATABLE
+; arrives: the record follows the FIRST FORMULA of its range, so most of the
+; cells it describes are still ahead of it in the file and marking then would
+; mark cells that do not exist yet.
+;
+; THE SHEET IS IMPERSONATED per table, sh_tbl_runall's reason exactly:
+; sh_bt_addcell keys on [sh_cursheet], so a workbook's second sheet would
+; otherwise have its marks written into the first.
+; -----------------------------------------------------------------------------
+sh_tbl_markall:
+    cmp word [sh_ntbl], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    push word [sh_cursheet]
+    xor si, si
+    mov cx, [sh_ntbl]
+.t:
+    mov es, [sh_tblseg]
+    xor ax, ax
+    mov al, [es:si+SH_T_SHEET]
+    mov [sh_cursheet], ax
+    mov ax, [es:si+SH_T_R1]
+    mov [sh_tbl_r1], ax
+    mov ax, [es:si+SH_T_R2]
+    mov [sh_tbl_r2], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C1]
+    mov [sh_tbl_c1], ax
+    xor ax, ax
+    mov al, [es:si+SH_T_C2]
+    mov [sh_tbl_c2], ax
+    call sh_tbl_resultrect
+    push cx
+    push si
+    mov bx, [sh_tbl_tr1]
+.row:
+    cmp bx, [sh_tbl_tr2]
+    ja .rowsdone
+    mov ax, [sh_tbl_tc1]
+.col:
+    cmp ax, [sh_tbl_tc2]
+    ja .nextrow
+    push ax
+    push bx
+    call sh_table_mark                 ; AX = col, BX = row
+    pop bx
+    pop ax
+    inc ax
+    jmp short .col
+.nextrow:
+    inc bx
+    jmp short .row
+.rowsdone:
+    pop si
+    pop cx
+    add si, SH_T_SZ
+    loop .t
+    pop word [sh_cursheet]
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_tbl_clearguard - Edit > Clear over a selection that touches a table.
 ; in: the selection, and [sh_fdlg_sel] = 0 All / 1 Formulas / 2 Formats
@@ -22486,6 +22808,17 @@ sh_dowrite_biff:
     push di
     push es
 
+    push di                           ; 81.114.10: no table has had its
+    push es                           ; DATATABLE written into THIS file yet.
+    push ds                           ; Once per file and not per sheet: a
+    pop es                            ; workbook's tables are one list, and
+    mov di, sh_tbl_wdone              ; the bitmap is indexed by the list
+    mov cx, (SH_TBL_CAP + 7) / 8
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
     call sh_sheets_used               ; ONE sheet keeps the BIFF3 stream this
     cmp ax, 2                         ; writer has always produced, byte for
     jb .single                        ; byte. More than one needs a WORKBOOK,
@@ -23488,6 +23821,24 @@ sh_biff_cells:
     pop es                            ; ES = stgseg again
     call sh_biff_ixfe                 ; which XF this cell names (81.47)
 
+    ; 81.114.10: A RESULT CELL GOES OUT AS A FORMULA, whose whole token
+    ; array is one tTbl, with its stored number as the cached result. That is
+    ; Excel's own shape, and it is why a reader that knows nothing about
+    ; tables still shows the right figures.
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_tbl_atcell
+    jnc .nottbl
+    cmp byte [sh_tbl_isres], 0
+    je .nottbl                        ; inside the RANGE but not a result:
+                                      ; the user's own formula or input
+                                      ; value, written normally below - and
+                                      ; the DATATABLE may follow it there
+    call sh_biff_ttbl
+    jc .nottbl                        ; no room: out as a plain number, the
+    call sh_biff_dtafter              ; same scope limit every writer here
+    jmp .recnext                      ; takes when staging fills
+.nottbl:
     cmp byte [sh_wrec_hasf], 0
     je .notformula
     cmp byte [sh_wrec_type], SH_T_TEXT ; A TEXT RESULT IS A FORMULA TOO now
@@ -23506,6 +23857,14 @@ sh_biff_cells:
     jne .fdone
     call sh_biff_wstring              ; ...and the string it promised
 .fdone:
+    ; 81.114.10: and the FIRST formula record of a table's range is usually
+    ; THIS one - the user's own formula in the top row - not a result cell,
+    ; which is where the format says the DATATABLE goes
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    call sh_tbl_atcell
+    jnc .recnext
+    call sh_biff_dtafter
     jmp .recnext
 .notformula:
     cmp byte [sh_wrec_type], SH_T_TEXT
@@ -24948,6 +25307,11 @@ sh_doread_biff:
     je .iscolw
     cmp ax, 0x0208                     ; ROW (BIFF3 on): a row's height, in
     je .isrow                          ; twips (81.60)
+    cmp ax, 0x0236                     ; DATATABLE (BIFF3/4). 0036H is BIFF2's
+    je .isdatatable                    ; and splits the two-input case into a
+                                       ; second record; 81.114.10 reads this
+                                       ; one only, which is what this app
+                                       ; writes
     cmp ax, 0x0218                     ; DEFINEDNAME (BIFF3/4) - 0018H is the
     je .isname                         ; BIFF2/5/8 number and is NOT accepted
     jmp .skip                          ; here, because its body is a different
@@ -25612,6 +25976,85 @@ sh_doread_biff:
     mov cx, [sh_biff_end]              ; the loop bound again, as .islabel
     pop dx
     jmp .skip
+.isdatatable:
+    ; 81.114.10: THE BODY IS THE RECORD. sh_tblseg's entry was laid out as
+    ; BIFF3's DATATABLE field for field (81.114.7) precisely so that reading
+    ; one is a COPY - range, option flags, both input cells, sixteen bytes -
+    ; and the seventeenth, the sheet, is ours and not the format's.
+    cmp dx, 16
+    jb .skip
+    cmp word [sh_ntbl], SH_TBL_CAP
+    jae .skip
+    push ax
+    push bx
+    push cx
+    push dx                            ; `mul` BELOW WRITES DX, and DX is this
+                                       ; loop's record LENGTH - `.skip` adds
+                                       ; it to SI. Clobbering it does not
+                                       ; corrupt one table, it misparses
+                                       ; every record after this one. Fourth
+                                       ; of its family in this feature
+    push si
+    push di
+    push es
+    push ds
+    mov ax, [sh_ntbl]                  ; the destination offset, and the
+    mov cx, SH_T_SZ                    ; SEGMENT, both read while DS is still
+    mul cx                             ; ours - the lesson of the DS-switch
+    mov di, ax                         ; hang, which is one `mov ds` too early
+    mov bx, [sh_tblseg]
+    push es
+    pop ds                             ; DS:SI = the record's body
+    mov es, bx
+    mov cx, 16
+    cld
+    rep movsb
+    sub di, 16                         ; REP ADVANCES DI, and everything below
+                                       ; addresses the record through it - so
+                                       ; without this the sheet byte and the
+                                       ; input-cell translation land sixteen
+                                       ; bytes on, in the NEXT record's space
+    pop ds
+    pop es
+    mov bx, [sh_tblseg]
+    push es
+    mov es, bx
+    mov ax, [sh_rd_sheet]              ; which sheet this substream is
+    or ax, ax
+    jns .dtsheet
+    mov ax, [sh_cursheet]              ; a plain stream lands on the user's
+.dtsheet:
+    mov [es:di+SH_T_SHEET], al
+    ; ...AND THE INPUT CELLS COME BACK THE OTHER WAY (81.114.10). The format
+    ; names a one-input table's single cell in the FIRST pair whichever kind
+    ; it is, with option bit 2 giving the orientation; this app's engine
+    ; wants the ROW input in the first pair and the COLUMN input in the
+    ; second, with SH_TBL_NONE in the unused one. Read verbatim, every
+    ; column-input table would come back claiming a ROW input cell and
+    ; substitute along the wrong axis.
+    test word [es:di+SH_T_FLAGS], SH_TF_TWOD
+    jnz .dtdone
+    mov word [es:di+SH_T_IR2], SH_TBL_NONE
+    mov word [es:di+SH_T_IC2], SH_TBL_NONE
+    test word [es:di+SH_T_FLAGS], SH_TF_ROWDATA
+    jnz .dtdone                        ; bit 2 set: it IS the row input cell,
+                                       ; and the first pair is where it goes
+    mov ax, [es:di+SH_T_IR]            ; clear: a COLUMN input cell, so it
+    mov [es:di+SH_T_IR2], ax           ; belongs in the second pair here
+    mov ax, [es:di+SH_T_IC]
+    mov [es:di+SH_T_IC2], ax
+    mov word [es:di+SH_T_IR], SH_TBL_NONE
+    mov word [es:di+SH_T_IC], SH_TBL_NONE
+.dtdone:
+    pop es
+    inc word [sh_ntbl]
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp .skip
 .toolong:
     pop dx
     jmp .done
@@ -25619,6 +26062,11 @@ sh_doread_biff:
     add si, dx
     jmp .rechdr
 .done:
+    call sh_tbl_markall                ; 81.114.10: the result cells carry
+                                       ; SH_TBL_RESULT, and only now - the
+                                       ; DATATABLE can arrive before the
+                                       ; cells it describes, and marking as
+                                       ; it arrived would mark nothing
     mov ax, [sh_rd_home]               ; a plain single-sheet stream never
     cmp word [sh_rd_sheet], 0          ; touched sh_cursheet, so its cells
     jl .nowb                           ; landed on the user's own sheet and
@@ -55274,7 +55722,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9280                     ; +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9289                     ; +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -56719,7 +57167,15 @@ sh_tbl_tr2        equ sh_tbl_tr1 + 2     ; which is its range less the top row
 sh_tbl_tc1        equ sh_tbl_tr2 + 2     ; and the left column
 sh_tbl_tc2        equ sh_tbl_tc1 + 2
 sh_tbl_busy       equ sh_tbl_tc2 + 2   ; byte: a table re-run is in progress
-sh_bss_end        equ sh_tbl_busy + 1
+sh_tbl_isres      equ sh_tbl_busy + 1  ; byte: sh_tbl_atcell's second answer -
+                                       ; the cell is in the RESULT interior
+                                       ; and not merely in the range
+sh_tbl_idx        equ sh_tbl_isres + 1 ; byte: ...and which table, 0-based, so
+                                       ; the writer's bitmap needs no divide
+sh_tbl_wdone      equ sh_tbl_idx + 1   ; 81.114.10: one bit a table, "its
+                                       ; DATATABLE is already in this file".
+                                       ; SH_TBL_CAP is 56, so seven bytes
+sh_bss_end        equ sh_tbl_wdone + ((SH_TBL_CAP + 7) / 8)
 
 ; -----------------------------------------------------------------------------
 ; The bss size above is a PLAIN LITERAL and nothing in the toolchain checks it

@@ -185,10 +185,20 @@ restore. One full evaluation per cell — Excel's own cost, and the reason
      and left every rectangle shifted — a half-restoring Undo, which is
      worse than none. `SH_UD_HDR` is 10 now and the list is its fourth
      array. `tests/sheettblshift.py`, 8 checks.
-4. **BIFF.** Write `FORMULA`+`tTbl` per cell and one `DATATABLE` after the
-   first; read both back. This is the stage that makes the feature real, and
-   the host side (`tools/os88sheetfmt.py`) learns the record first so the
+4. **BIFF.** *(DONE — SPEC.md §81.114.10.)* Write `FORMULA`+`tTbl` per cell
+   and one `DATATABLE` after the first; read both back. This is the stage
+   that makes the feature real, and the host side (`tools/os88sheetfmt.py`)
+   learns the record first so the
    gate can author a file SHEET never wrote.
+   **And the plan was wrong that the sixteen bytes are a straight copy.**
+   The range and the flags are; the INPUT CELLS are not. The format names a
+   one-input table's single cell in the FIRST pair whichever kind it is,
+   with option bit 2 giving the orientation, where this app keeps the row
+   input first and the column input second always. Copied verbatim, every
+   column-input table — the common shape — writes `0FFFFh` as its input cell
+   and reads back substituting along the wrong axis. Both directions
+   translate. `tests/sheettblbiff.py`, 6 checks, 8 mutations.
+
 5. **The `TABLE` macro command**, which unblocks §81.93's 13.
 
 ## Verification
