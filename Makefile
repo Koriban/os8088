@@ -2092,7 +2092,8 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/ctrl.drv $(BUILD)/format.drv \
                                       $(BUILD)/diskops.drv $(BUILD)/hiber.drv \
                                       $(BUILD)/dock.drv $(BUILD)/extd.drv \
-                                      $(BUILD)/win95.drv \
+                                      $(BUILD)/win95.drv $(BUILD)/desk.drv \
+                                      $(BUILD)/stikmenu.drv \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin \
                                       $(BUILD)/boot120.bin \
                                       $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
@@ -2175,7 +2176,8 @@ KERNEL_SRC := kernel/kernel.asm
 # stale. Caught once already - a fix to the 286 head-cross gate assembled
 # perfectly, never reached the disk, and the only symptom was os88sym refusing
 # a map that described "a DIFFERENT kernel".
-KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm
+KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
+              drivers/thmpal/thmrows.inc
 
 .PHONY: stkdiag kbddiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
@@ -2503,12 +2505,16 @@ KMODS = $(KMODDIR)/ctrl.drv $(KMODDIR)/format.drv $(KMODDIR)/diskops.drv
 # no Dock placement or auto-hide, so no MOD_DOCK row and no file to cut. So is
 # EXTD.DRV (SPEC.md 39.19.6): kern_small has no second display at all. Being
 # in $(DRIVERS) through here is what puts it on every kern_big system disk in
-# all four geometries, the emu disk and the live media, beside CTRL.DRV.
+# all four geometries, the emu disk and the live media, beside CTRL.DRV. And
+# so is DESK.DRV (SPEC.md 11.103.10), the desk layer's code, which a Sticky App's
+# OSAPI_WM_DESK QUERY loads: kern_small has no desk layer at all. And so is
+# STIKMENU.DRV (SPEC.md 110.12), Locator's Sticky Apps menu, which its drop
+# loads and its pick drops: kern_small has no Sticky Apps menu.
 ifneq ($(KERN_SMALL),)
 BIGMODS =
 else
 BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv $(KMODDIR)/extd.drv \
-          $(KMODDIR)/win95.drv
+          $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv
 endif
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/diskops.drv
@@ -2529,7 +2535,8 @@ KMODARGS += -m 3=$(BUILD)/filecp.drv
 KMODARGS += -m 4=$(BUILD)/fdlg.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
-            -m 6=$(BUILD)/win95.drv
+            -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
+            -m 8=$(BUILD)/stikmenu.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -3165,6 +3172,16 @@ DRIVERS += $(BUILD)/vbe.drv
 # back out ($(SMALLDRIVERS) below): drv_load_at, its only loader, is inside
 # %ifdef KERN_BIG and nothing on that kernel can name the file
 DRIVERS += $(BUILD)/saver.drv
+# ...and the Customize... window for Color's eight presets (SPEC.md 76.14), an
+# overlay for the identical reason and riding every KERN_BIG disk the same
+# way: no drv_tab row, no Drivers-page tick, no SYSTEM.CFG bit of its own.
+# kernel/vga12.inc's thmv_open_x reads it when the Theme page's button is
+# pressed, and a machine that cannot read it beeps instead of opening the
+# window - so a disk without this file is a working machine whose Color
+# theme is stuck on whichever preset SYSTEM.CFG already names. kern_small
+# never carries it: Customize's button is %ifdef KERN_BIG, same as Color
+# itself (SPEC.md 76.12.3)
+DRIVERS += $(BUILD)/thmpal.drv
 # ...and SPEC.md 9.12's CH375 USB mouse, the Book8088's. A drv_tab row with a
 # SYSTEM.CFG bit (6) and not wanted by default, so a disk that carries it
 # costs a machine without the chip one directory slot and nothing read. On
@@ -3259,6 +3276,20 @@ EMUDIR := $(BUILD)/emuk
 # its one job. kern_small leaves it off ($(SMALLOMIT)).
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88 $(BUILD)/rlapply.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
+
+# --- ...and THE STICKY APPS in STIKAPPS/ (SPEC.md 110) --
+# A widget belongs to the BOOT volume - the desktop configuration that
+# relaunches it is that volume's SYSTEM.CFG, and its row names a path on it -
+# so it rides every SYSTEM disk and NO apps disk, the THEWIRE rule (SPEC.md
+# 92). Threaded EXPLICITLY into each system-disk recipe, the four geometries,
+# emu.img, the small pair (SMALLSTIKARGS) and the live media (LIVESYSARGS),
+# rather than folded into $(SYSAPPSARGS): that variable is restated in a dozen
+# tight 360KB GATE-disk recipes that have no room and no reason for it.
+# Measured at 360KB (`tools/os88disk.py --verify build/os8088-360.img`): 313
+# of 354 clusters in use before DESKCAL.O88 and its folder; SPEC.md 110.6 has
+# the figure after.
+STIKAPPS := $(BUILD)/deskcal.o88 $(BUILD)/stiknote.o88 $(BUILD)/deskclok.o88
+STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 
 # --- ...and DOS (SPEC.md 96) is in the system disk's APPS/, not SYSTEM/ ------
 # It belongs on the system disk for THE WIRE's reason one step along: a .COM
@@ -3643,18 +3674,41 @@ SYSDOCRAW := $(BUILD)/readme-plain.txt
 # opens it - this disk never carried the page. The 360KB gate disks
 # (ether360, thewire360, the usbm pair) take the same list; every network
 # row opens the browser off B:.
-SYS360OMIT := $(BUILD)/browser.o88 $(BUILD)/telnet.o88
+#
+# **AND MINES IS THE NEXT** (SPEC.md 24.3.1.3): STIKMENU.DRV, Locator's Sticky
+# Apps menu (SPEC.md 110.12), took four of the nine clusters left, and five
+# free is too few for the Desk Calendar's own first save - its state file and
+# SYSTEM.CFG together want seven, measured both sides of the line. The owner
+# took MINES.O88 off this geometry: a game, so 24.3's argument never covered
+# it, and it stays on apps360.img and games360.img and on every other disk.
+#
+# **AND PAINT, FOR THE SECOND STICKY APP** (SPEC.md 24.3.1.4): STIKNOTE.O88
+# and the state file its first save writes did not fit the eight clusters
+# Mines bought. The owner took PAINT.O88 off this geometry - 24.3.1.1's own
+# candidate, the largest package the Wire can give back - and it stays on
+# apps360.img and on every 720KB, 1.44MB and 1.2MB disk.
+#
+# **AND THE TYPEFACES, WITH THE FONT VIEWER, FOR THE THIRD** (SPEC.md
+# 24.3.1.5): DESKCLOK.O88, the Desk Clock (SPEC.md 110.14), did not fit what
+# Paint bought once Sticky Note's first save was counted. The owner moved
+# SYSTEM/FONTS - ten faces and their licence, fourteen clusters - to
+# office360.img, beside the programs that set type in them (Word, ArtfulType,
+# PiXEL and the Font Viewer), and FONTVIEW.O88 goes with them: on this disk it
+# would list a folder that is no longer here. apps/os88type.inc's ty_gofonts
+# looks on the program's OWN volume when the system disk has no SYSTEM/FONTS,
+# which is what makes office360's copy the one those programs find.
+SYS360OMIT := $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/mines.o88 \
+              $(BUILD)/paint.o88 $(BUILD)/fontview.o88
 CORE_TOOLS360 := $(filter-out $(SYS360OMIT),$(CORE_TOOLS))
 CORE_GAMES360 := $(filter-out $(SYS360OMIT),$(CORE_GAMES))
 COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
 COREAPPSARGS360 := $(addprefix APPS:,$(CORE_TOOLS360)) \
                    $(addprefix GAMES:,$(CORE_GAMES360))
-FACES360 := $(filter-out $(SYS360OMIT),$(FACES))
-# SYSTEM/FONTS: and not FONTS:, which is what this line said when it arrived -
-# SPEC.md 19.8.1 moved the folder INTO SYSTEM/ for the root's sake, and
-# ty_gofonts walks to exactly one folder, so a face at the root is bytes
-# nothing can open. tests/unit/t_fonts.py is the gate and it caught this.
-FACESARG360 := $(addprefix SYSTEM/FONTS:,$(FACES360)) SYSTEM/FONTS:$(FACELIC)
+# NO FACES at 360KB (SPEC.md 24.3.1.5): office360.img carries SYSTEM/FONTS
+# instead. Both stay variables, empty, so every 360KB gate disk that copies the
+# shipped disk's shape ($(FACESARG360) below) keeps copying it.
+FACES360 :=
+FACESARG360 :=
 
 SYSDOC := $(BUILD)/readme.txt
 
@@ -3904,6 +3958,22 @@ $(BUILD)/saver.bin: drivers/saver/saver.asm drivers/saver/svcube.inc \
 
 $(BUILD)/saver.drv: $(BUILD)/saver.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/saver.bin -o $@
+
+# THMPAL.DRV - the Customize... window for Color's eight presets (SPEC.md
+# 76.14). An overlay for SAVER.DRV's own two reasons: it is mostly DATA (ten
+# preset names, two button captions) a Control Panel page cannot afford, and
+# its owner is the kernel - kernel/vga12.inc's thmv_open_x reads it when the
+# Theme page's Customize... button is pressed and frees it again when the
+# Control Panel closes (kernel/ctrl.inc's cp_flush_close_x).
+$(BUILD)/thmpal.bin: drivers/thmpal/thmpal.asm drivers/thmpal/thmrows.inc \
+                     drivers/os88drv.inc \
+                     apps/os88api.inc apps/os88ui.inc \
+                     | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/thmpal/thmpal.asm
+	@echo "thmpal: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/thmpal.drv: $(BUILD)/thmpal.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/thmpal.bin -o $@
 
 # The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
 # incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):
@@ -4363,10 +4433,10 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4378,10 +4448,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPP
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4405,10 +4475,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(C
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -5066,10 +5136,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # ...and this one alone takes $(COREAPPSARGS360)/$(FACESARG360) - the 354
 # clusters that geometry has do not hold MINES.O88 and JETBRAIN.F88 as well as
 # SPEC.md 70.9's parser, and §24.3 carries the arithmetic.
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER)
 
 # FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
@@ -5435,6 +5505,26 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/hello.bin -o $@
 
+# TIMER and BOUNCE (SPEC.md 111, 112): the two kernel KINDS of SPEC.md 14
+# that became packages (14.8) - a stopwatch and a bouncing square, in
+# $(APPS_TOOLS) so they ride every apps disk the way the Builtins menu used
+# to offer them on every machine. Both carry their kind's icon in the header.
+$(BUILD)/timer.bin: apps/timer/timer.asm apps/os88api.inc apps/os88ui.inc \
+                    | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/timer/timer.asm
+	@echo "timer:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/timer.bin -o $@
+
+$(BUILD)/bounce.bin: apps/bounce/bounce.asm apps/os88api.inc apps/os88ui.inc \
+                     | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/bounce/bounce.asm
+	@echo "bounce: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/bounce.o88: $(BUILD)/bounce.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/bounce.bin -o $@
+
 # VIDEO PLAYER (SPEC.md 98.3, docs/plans/VIDEO-PLAN.md), in $(APPS_TOOLS) - on
 # every apps disk, by the owner's decision - and in $(SMALLOMIT), because what
 # it plays through is kern_big's. No video ships beside it yet (the owner's
@@ -5686,6 +5776,49 @@ $(BUILD)/calc.bin: apps/calc/calc.asm apps/os88api.inc apps/os88ui.inc | $(BUILD
 
 $(BUILD)/calc.o88: $(BUILD)/calc.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/calc.bin -o $@
+
+# Desk Calendar (SPEC.md 110.3): the first STICKY APP, in
+# STIKAPPS/ on every system disk ($(STIKARGS) above) and on no apps disk.
+# apps/os88stik.inc is its widget half - place, state file, desktop row, and
+# (v2) the widget treatment, which composes with apps/os88gfx.inc.
+DESKCALSRC := apps/deskcal/deskcal.asm apps/deskcal/dcdate.inc \
+              apps/deskcal/dcdraw.inc apps/deskcal/dcdata.inc \
+              apps/deskcal/dcrem.inc \
+              apps/os88stik.inc apps/os88ui.inc apps/os88line.inc \
+              apps/os88gfx.inc apps/os88api.inc
+$(BUILD)/deskcal.bin: $(DESKCALSRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/deskcal/ -o $@ apps/deskcal/deskcal.asm
+	@echo "deskcal: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/deskcal.o88: $(BUILD)/deskcal.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/deskcal.bin -o $@
+
+# Sticky Note (SPEC.md 110.13): the second STICKY APP - a pad on the desk and
+# an editor window behind it - in STIKAPPS/ beside the Desk Calendar.
+STIKNOTESRC := apps/stiknote/stiknote.asm apps/stiknote/sntext.inc \
+               apps/stiknote/snpad.inc apps/stiknote/sned.inc \
+               apps/os88stik.inc apps/os88ui.inc apps/os88gfx.inc \
+               apps/os88api.inc
+$(BUILD)/stiknote.bin: $(STIKNOTESRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/stiknote/ -o $@ apps/stiknote/stiknote.asm
+	@echo "stiknote: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/stiknote.o88: $(BUILD)/stiknote.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/stiknote.bin -o $@
+
+# Desk Clock (SPEC.md 110.14): the third STICKY APP - nine faces, three sizes,
+# an alarm - in STIKAPPS/ beside the Desk Calendar and Sticky Note.
+DESKCLOKSRC := apps/deskclok/deskclok.asm apps/deskclok/dkdraw.inc \
+               apps/deskclok/dkface.inc apps/deskclok/dkwid.inc \
+               apps/deskclok/dkset.inc apps/deskclok/dkalm.inc \
+               apps/os88stik.inc apps/os88ui.inc apps/os88gfx.inc \
+               apps/os88api.inc
+$(BUILD)/deskclok.bin: $(DESKCLOKSRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/deskclok/ -o $@ apps/deskclok/deskclok.asm
+	@echo "deskclok: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/deskclok.o88: $(BUILD)/deskclok.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/deskclok.bin -o $@
 
 # Browser (docs/plans/completed/BROWSER-PLAN.md): the text-and-table HTML viewer. Step 1 of
 # that document is the RENDERER, with no network in the machine - it opens a
@@ -7789,6 +7922,99 @@ $(BUILD)/deskitem.o88: $(BUILD)/deskitem.bin tools/os88pkg.py
 
 $(BUILD)/deskitem360.img: $(BUILD)/deskitem.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/deskitem.o88
+
+# stiktest: STICKY APPS' gate disks (SPEC.md 110.10) -
+# scratch 360KB SYSTEM disks, each the shipped one plus STIKPROB.O88 in
+# STIKAPPS\ and a SYSTEM.CFG (and a state file) that tools/os88stik.py, the
+# host's own second reader, writes. On demand, like every gate here:
+# `make stiktest && python3 tests/stikboot.py` (and stikmiss / stikshort /
+# stikhiber). STIKPROB never ships: it is the mechanism with no application.
+#
+#   restore  a Sticky App row to STIKAPPS\STIKPROB.O88; STIKPROB.DAT puts its frame
+#            at (303,184) on a 640x480 screen - 303 because a snapped window
+#            holds W_X = 7 mod 8 (SPEC.md 11.94), so the place is a fixpoint
+#   ghost    a Sticky App row to STIKAPPS\GONE.O88 AHEAD of the restore row
+#   bvol     a Sticky App row on B:, for a boot with no disk in B:
+#   short    three DRAG-MADE shortcuts, `\` at +3, and no Sticky App row - the
+#            regression for SPEC.md 26.8.1's +3, which was never spare
+#   hiber    the restore row, and HDD.DRV wanted: tests/stikhiber.py puts a
+#            HIBERNAT.PTR on a hard disk of its own, so the resume question
+#            is posted before stik_boot runs
+# ...and stikrestore.img, the restore row on a 1.44MB disk for QEMU.
+STIKFIX := $(BUILD)/stikfix
+STIKTESTS := restore ghost bvol short hiber
+STIKCFG_restore := --stik A:STIKAPPS/STIKPROB.O88=StikProbe
+STIKCFG_ghost  := --stik A:STIKAPPS/GONE.O88=Gone \
+                  --stik A:STIKAPPS/STIKPROB.O88=StikProbe
+STIKCFG_bvol   := --stik B:STIKPROB.O88=StikProbe
+STIKCFG_short  := --short 'A:SYSTEM/TASKMGR.O88=TASKMGR@1,3' \
+                  --short 'A:SYSTEM=SYSTEM@2,4' \
+                  --short 'A:README.TXT=README.TXT@0,5'
+STIKCFG_hiber  := --want 2 --stik A:STIKAPPS/STIKPROB.O88=StikProbe
+STIKCFG_desk   := --stik A:STIKAPPS/DESKPROB.O88=DeskProbe
+
+.PHONY: stiktest
+stiktest: $(foreach t,$(STIKTESTS),$(BUILD)/stik$(t)360.img) $(BUILD)/stikrestore.img $(BUILD)/stikdesk360.img $(BUILD)/deskprob.o88
+	@echo "stiktest: build/stik<restore|ghost|bvol|short|hiber|desk>360.img and build/stikrestore.img"
+	@echo "         Run them with: python3 tests/stikboot.py (stikmiss, stikshort, stikhiber;"
+	@echo "         deskz, deskdock, deskkeys, and desksmall after make small)"
+
+$(BUILD)/stikprob.bin: tests/stikprob/stikprob.asm apps/os88stik.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/stikprob/stikprob.asm
+	@echo "stikprob: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/stikprob.o88: $(BUILD)/stikprob.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/stikprob.bin -o $@
+
+# ...SECONDARY, or make deletes each as the intermediate of a pattern rule and
+# rebuilds every image on the next run
+.SECONDARY: $(foreach t,$(STIKTESTS) desk,$(STIKFIX)/$(t)/system.cfg)
+$(STIKFIX)/%/system.cfg: tools/os88stik.py Makefile | $(BUILD)
+	@mkdir -p $(STIKFIX)/$*
+	python3 tools/os88stik.py cfg -o $@ $(STIKCFG_$*)
+
+$(STIKFIX)/STIKPROB.DAT: tools/os88stik.py | $(BUILD)
+	@mkdir -p $(STIKFIX)
+	python3 tools/os88stik.py dat -o $@ --x 303 --y 184 --screen 640x480
+
+# THE DESK BUILD of the same probe (SPEC.md 11.103, v2's wave 1): DESKPROB.O88,
+# header flag OS88_F_DESK, OSAPI_WM_DESK's MAKE, a face of two white cards
+# with the desktop's ground between them. Its own build because the v1 rows
+# drag StikProbe by a title bar a desk window has not got. Since wave 3 it is
+# the include's STIK_WIDGET (SPEC.md 110.11), whose state file holds the FACE:
+# DESKPROB.DAT puts the face at (376,184), the frame at (375,184) - 375 = 7
+# mod 8, the snap's fixpoint (SPEC.md 11.94)
+$(BUILD)/deskprob.bin: tests/stikprob/stikprob.asm apps/os88stik.inc apps/os88gfx.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DDP_DESK -o $@ tests/stikprob/stikprob.asm
+	@echo "deskprob: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/deskprob.o88: $(BUILD)/deskprob.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/deskprob.bin -o $@
+
+$(STIKFIX)/DESKPROB.DAT: tools/os88stik.py | $(BUILD)
+	@mkdir -p $(STIKFIX)
+	python3 tools/os88stik.py dat -o $@ --x 376 --y 184 --screen 640x480 --cont
+
+$(BUILD)/stikdesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(STIKFIX)/desk/system.cfg $(STIKFIX)/DESKPROB.DAT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		STIKAPPS:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(STIKFIX)/DESKPROB.DAT \
+		$(STIKFIX)/desk/system.cfg
+
+$(BUILD)/stik%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/%/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
+		$(STIKFIX)/$*/system.cfg
+
+$(BUILD)/stikrestore.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/restore/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
+		$(STIKFIX)/restore/system.cfg
 
 # fcpapi: OSAPI_FILE_COPY's gate (SPEC.md 22.24). EVERY ANSWER IS A FILE - the
 # copies it makes and the verdict it writes - because a copy engine that goes
@@ -11377,13 +11603,19 @@ $(BUILD)/weaveband.img: $(BUILD)/wbband.o88 tools/os88disk.py
 $(BUILD)/bench.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHIMGPKGS) $(BENCHDATA)
 
-$(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BENCHIMGPKGS) $(BENCHDATA)
+# bench360.img carries SYSTEM/FONTS too (SPEC.md 24.3.1.5): the 360KB system
+# disk has no faces any more, so tests/facescan.py's FACETEST, standing on B:,
+# finds them by ty_gofonts' SECOND rung - the program's own volume - which is
+# the rung office360.img is there for. bench.img does not, and facescan144
+# boots the 1.44MB system disk, so the FIRST rung has its row as well.
+$(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) $(FACES) $(FACELIC) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BENCHIMGPKGS) $(BENCHDATA) $(FACESARG)
 
 # --- the BROWSER's test disk (docs/plans/completed/BROWSER-PLAN.md 10 step 1) -----------------
 # The renderer with no network in the machine: the package plus tests/htm/'s
-# fixtures, so a scripted session can open demo.htm, torture.htm and the
-# FrogFind capture off a floppy and diff the framebuffer. On demand only -
+# fixtures, so a scripted session can open demo.htm, formatting.htm, torture.htm, the
+# FrogFind capture and the frameset fixture off a floppy and diff the
+# framebuffer. On demand only -
 # `all` builds none of it and nothing here ships.
 #
 #   make browsertest                      # build the disks
@@ -11392,6 +11624,8 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #   python3 tests/brtest.py --page BROWSER.HTM
 #                                         # ...and on the page that SHIPS
 #                                         # (SPEC.md 71.12)
+#   python3 tests/brtest.py --page FORMAT.HTM
+#                                         # ...and on Browser 1.3 formatting
 #   python3 tests/brclick.py              # ...and the PAGE-CLICK one: links,
 #                                         # a form field and the submit button
 #                                         # (BROWSER-PLAN 5.1/7.4). Both use
@@ -11413,6 +11647,9 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 #                                         # three - an anchor inside a cell,
 #                                         # the doubled last line and a `..`
 #                                         # in a relative link
+#   python3 tests/br14.py                 # ...and Browser 1.4's cell spans,
+#                                         # per-cell alignment and refused
+#                                         # password/file/textarea controls
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots
@@ -11439,13 +11676,16 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) tools/os88disk.py
 # every shipped apps image then fails a freshness check about a disk that is
 # perfectly fresh. Renaming is a reason for a copy; having one is not.
 BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+           $(BUILD)/FORMAT.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
 
 $(BUILD)/DEMO.HTM: tests/htm/demo.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/FORMAT.HTM: tests/htm/formatting.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/TORTURE.HTM: tests/htm/torture.htm | $(BUILD)
 	cp $< $@
@@ -11458,6 +11698,8 @@ $(BUILD)/FFHOME.HTM: tests/htm/frogfind-home.htm | $(BUILD)
 $(BUILD)/LINKS.HTM: tests/htm/links.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
@@ -11944,6 +12186,11 @@ SMALLAPPSARGS  = $(addprefix APPS:,$(SMALLTOOLS))
 # system-disk package is subtracted here rather than in a second list.
 SMALLSYSAPPS      = $(call SMALLSUB,,$(filter-out $(SMALLOMIT) $(SMALLOMIT_ORPHAN),$(SYSAPPS)))
 SMALLSYSAPPSARGS  = $(addprefix SYSTEM:,$(SMALLSYSAPPS))
+# STIKAPPS/ rides the small system disks too (SPEC.md 24.5.1, 110.7): the
+# Desk Calendar needs no driver and has no small build, so it is the shipped
+# package - the API table is the same on both kernels (SPEC.md 20.8 rule 4)
+SMALLSTIKAPPS     = $(STIKAPPS)
+SMALLSTIKARGS     = $(addprefix STIKAPPS:,$(SMALLSTIKAPPS))
 
 # --- THE SMALL SYSTEM DISK CARRIES THE WHOLE APPS PAYLOAD (SPEC.md 24.5.6) ----
 #
@@ -12059,12 +12306,12 @@ $(BUILD)/small360.img: KMODDIR := $(SMALLDIR)
 smallsub:
 	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin $(SMALLDIR)/boot.bin
 
-$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
+$(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLSTIKAPPS) $(SMALLPKGS) \
                        $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA_360) \
                        $(PLANPKG) $(SYSDOC) tools/os88disk.py | smallsub
 	python3 tools/os88disk.py --fatcap 2 --kern-small -o $@ --size 360 \
 		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/$(KERNNAME) \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLSTIKARGS) \
 		$(SMALLAPPSARGS) APPS:$(PLANPKG) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA_360)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
@@ -12074,12 +12321,12 @@ $(BUILD)/small360.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
 # its kernel is $(SMALLDIR)'s, so its modules are too
 $(BUILD)/small.img: KMODDIR := $(SMALLDIR)
 
-$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLPKGS) \
+$(BUILD)/small.img: $(SMALLDRIVERS) $(SMALLSYSAPPS) $(SMALLSTIKAPPS) $(SMALLPKGS) \
                     $$(SMALLTOOLS) $$(SMALLGAMES) $$(SMALLDATA) \
                     $(PLANPKG) $(SYSDOC) tools/os88disk.py | smallsub
 	python3 tools/os88disk.py --fatcap 2 --kern-small -o $@ --size 1440 \
 		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/$(KERNNAME) \
-		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) \
+		$(SMALLDRIVERS) $(SMALLMODS) $(SMALLSYSAPPSARGS) $(SMALLSTIKARGS) \
 		$(SMALLAPPSARGS) APPS:$(PLANPKG) $(addprefix GAMES:,$(SMALLGAMES)) \
 		$(addprefix MEDIA:,$(SMALLDATA)) \
 		$(SYSDOC) $(MEDIAFOLDER) $(APPDATAFOLDER)
@@ -12139,13 +12386,13 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 # one feature it was built for has not been given anything. build/vmmcfg is the
 # gate's own SYSTEM.CFG with bit 5 set, which is the absolute mouse's bit and
 # not its row number (drv_cfgbit), and it is reused verbatim rather than copied.
-$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
 	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
-		$(EMUDRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vmmcfg/system.cfg \
 		$(APPDATAFOLDER)
 
@@ -12815,7 +13062,11 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(CC_OVLZ)/CHART.OVL \
               $(CC_OVLZ)/MACRO.OVL $(BUILD)/telnet.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
-              $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88
+              $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
+              $(BUILD)/timer.o88 $(BUILD)/bounce.o88
+# TIMER.O88 and BOUNCE.O88 are SPEC.md 14's two kinds as packages (14.8,
+# 111, 112): on every apps disk, every geometry, because the Builtins menu
+# that used to launch them was on every machine's bar.
 # MODPLUG.O88 IS RETIRED too (SPEC.md 56.15): Tracker's windowed face
 # (SPEC.md 45.21) is ModPlug's player done to the tree's standards, with the
 # playlist, the Repeat modes and the per-adapter faces carried over, so two
@@ -13638,14 +13889,27 @@ OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
 #     Filtered from the PREREQUISITES and the RECIPE together, which is the
 #     warning APPSARGS720 carries: filter one and a private-tree build names
 #     a file nothing made.
+#
+# SYSTEM/FONTS RIDES HERE AT 360KB TOO (SPEC.md 24.3.1.5, upstream's
+# 2026-10-18 decision): the 360KB system disk gave the faces up for the Desk
+# Clock, and this is the disk whose programs set type in them. ty_gofonts
+# finds them here because it falls back to the program's own volume when the
+# system disk has no SYSTEM/FONTS.
+#
+# THE TWO DECISIONS ARE THE UNION, and they are not in tension: both answer
+# the same 354-cluster pressure, and PiXEL coming off (above) is what pays
+# for the faces as well as for SHEET's modules. If this ever stops fitting,
+# os88disk.py says so by refusing to build the image, and the ORDER to give
+# things up is the one above - a functional regression last.
 OFF360OFF := $(BUILD)/pixel.o88 $(PXGFX) apps/pixel/samples/LAKE.JPG
 OFFICE360 := $(filter-out $(OFF360OFF),$(OFFICE_PKGS) $(CC_OVLZ)/CHART.OVL \
-             $(CC_OVLZ)/MACRO.OVL $(PXGFX) $(OFFICE_DATA))
+             $(CC_OVLZ)/MACRO.OVL $(PXGFX) $(OFFICE_DATA)) $(FACES) $(FACELIC)
 OFFICEARGS360 := $(filter-out $(OFF360OFF) \
                  $(addprefix MEDIA:,$(OFF360OFF)),\
                  $(OFFICE_PKGS) $(CC_OVLZ)/CHART.OVL \
                  $(CC_OVLZ)/MACRO.OVL $(PXGFX) \
                  $(addprefix MEDIA:,$(OFFICE_DATA))) \
+                 $(FACESARG) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
 # --- network360 --------------------------------------------------------------
@@ -13975,7 +14239,8 @@ LIVEISO := $(BUILD)/os8088.iso
 # desktop whose Wire zone opened nothing. Derived as the difference between
 # the two lists, so a second SYSAPPS package lands here the day it lands
 # there and neither list is edited twice.
-LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS)))
+LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
+               $(STIKARGS)
 # THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
 # RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
 # by `all` and shipped nowhere, and every one of those decisions is an argument
@@ -14025,9 +14290,12 @@ LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
                $(addprefix MEDIA:,$(MEDIA_EXTRA)) \
                $(MIDISONGARGS)
-$(if $(LIVESYSARGS),,$(error LIVESYSARGS is empty - $(SYSAPPS) and $(APPSYS) \
-     no longer differ, so THEWIRE.O88 is either on every apps disk or on \
-     none; SPEC.md 92.11 says it is on neither))
+$(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
+     empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
+     either on every apps disk or on none; SPEC.md 92.11 says it is on \
+     neither))
+# (the FILTER, not $(LIVESYSARGS): that also carries $(STIKARGS), so testing
+# it could never fire again - SPEC.md 110.9)
 
 # THE WHOLE STORY LIBRARY (SPEC.md 61, 80.6). FROTZ.O88 rides APPS/ on this
 # volume and has ridden it since the everything disk was built - WITH NOTHING
@@ -14089,6 +14357,43 @@ usb: $(USBIMG)
 iso: $(LIVEISO)
 live: $(USBIMG) $(LIVEISO)
 
+# A PLAIN `make` KEEPS A BUILT LIVE IMAGE CURRENT. tests/unit/t_livefull.py's
+# PART B walks $(USBIMG) whenever one exists, and only `make usb` ever rebuilt
+# it - so a tree that built it once failed every later `make` the day a
+# package joined $(LIVEARGS), on an artefact `make` could not fix (DESK.DRV,
+# DESKCAL.O88 and THMPAL.DRV did exactly that). When the image is there,
+# test-fast now brings it up to date first, and make's own prerequisites
+# decide whether that is a rebuild or nothing. When it is NOT there nothing
+# changes: `make usb` needs the C toolchain and three fetches a plain clone
+# has none of, which is why the live media is on demand at all, and PART B
+# skips. A knob build leaves it alone - test-fast skips there, and a knob
+# kernel must never land on the live volume. The ISO and usb-emu stay on
+# demand: no row in `all` reads either.
+#
+# AND THE IMAGE SAYS WHICH LIST IT WAS BUILT FROM, for every road that does
+# not come through here - `tools/os88test.py fast` run direct, a knob build's
+# tree, an image copied in from elsewhere. The recipe above copies
+# $(BUILD)/livepayload.txt to $(USBIMG).payload once the image has verified
+# (and deletes it first, so a failed build leaves none), and PART B judges an
+# image only when that record matches the list the build computes NOW. A
+# stale one is skipped with a line saying to run `make usb`, never failed: it
+# is a fact about when the image was built, not about the recipe. A recipe
+# that drops a listed file still fails, because right after `make usb` the
+# two lists agree.
+#
+# The list is an ordinary prerequisite of the image, and its rule above
+# rewrites it only when its CONTENT changes - so an edit to the Makefile that
+# leaves $(LIVEARGS) alone rebuilds nothing, and one that moves it rebuilds
+# the image. An image with no record at all (built before the record existed)
+# is rebuilt once, through the phony below.
+$(USBIMG): $(BUILD)/livepayload.txt \
+           $(if $(wildcard $(USBIMG).payload),,livelist-missing)
+.PHONY: livelist-missing
+livelist-missing:
+ifeq ($(KNOBS),)
+test-fast: $(if $(wildcard $(USBIMG)),$(USBIMG))
+endif
+
 # --- THE BROWSER'S IMAGE: THE SAME VOLUME ON kern_emu (SPEC.md 80.7) ----------
 # build/os8088-emu-usb.img is $(USBIMG) with three things changed and nothing
 # else: the kernel and its two boot sectors are $(EMUDIR)'s, the drivers are
@@ -14138,10 +14443,11 @@ $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
 # which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
-           $(SYSAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
+	@rm -f $@.payload
 	$(if $(LIVESUB),@$(LIVESUB))
 	gsel="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --select hdd | sed 's,^,RUNCPM/,')"; \
 	gcost="$$(python3 tools/getcpmsw.py -o $(CPMSWDIR) --cost hdd)"; \
@@ -14149,7 +14455,7 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	[ -n "$$gsel" ] || { echo "usb: getcpmsw.py --select hdd chose nothing"; exit 1; }; \
 	zsel="$$(python3 tools/getstories.py -o $(STORYDIR) --disk-args STORIES/)"; \
 	[ -n "$$zsel" ] || { echo "usb: getstories.py --disk-args printed nothing"; exit 1; }; \
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(STIKAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(LIVEKDIR)/mbr.bin --boot $(LIVEKDIR)/boothd.bin \
@@ -14158,6 +14464,7 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 		--folder DOCS $(APPDATAFOLDER) $(LIVESTORYDIRS) \
 		$(LIVEDRVS) $(LIVEREST) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
+	@$(if $(LIVESUB),true,cp -f $(BUILD)/livepayload.txt $@.payload)
 	@$(if $(LIVESUB),$(LIVENOTE_EMU),$(LIVENOTE_USB))
 
 LIVENOTE_USB = echo "usb:    $@ - the live USB image (SPEC.md 80.1). Write it raw"; \
@@ -14295,7 +14602,7 @@ $(BUILD)/livepayload.txt: Makefile | $(BUILD)
 	   printf 'LIVEPKGARGS %s\n' $(LIVEPKGARGS); \
 	   printf 'MEDIA_EXTRA %s\n' $(MEDIA_EXTRA); \
 	   printf 'APPSARGS %s\n' $(APPSARGS); } > $@.tmp
-	@mv -f $@.tmp $@
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv -f $@.tmp $@; fi
 
 # Discover built images and attached floppy/USB/CD media without building.
 .PHONY: imager

@@ -44,9 +44,10 @@ via the PIT timer interrupt, switchable at run time to cooperative from the
 Control Panel (§8.2/§31). Microsoft serial mouse on COM1 or COM2, and a
 PS/2 mouse on machines that have somewhere to put one (§9.9). Boots from floppy
 straight into the GUI: gray dithered desktop, menu bar with pull-down menus,
-draggable overlapping windows with title bars and close boxes. Built-in apps:
-About dialog, Timer and Bounce (each running as its own
-pre-empted background task, updating live while the user types or drags).
+draggable overlapping windows with title bars and close boxes. One built-in
+app, the About dialog; everything else - the stopwatch and the bouncing
+square included, since §14.8 - is a package loaded from a disk, running as
+its own pre-empted instance and updating live while the user types or drags.
 
 ## 1. Hard rules (apply to every module)
 
@@ -1647,8 +1648,11 @@ far-called through a table of entry pointers, and freed when the feature is
 finished. Both builds carry `CTRL.DRV`, the Control Panel (§31),
 `FORMAT.DRV`, the floppy formatter (§18.96), and `DISKOPS.DRV`, the disk cloner
 (§18.99). `kern_big` also carries `HIBER.DRV` (§87), the optional
-`DOCK.DRV`, advanced Dock behavior (§30.5), and `EXTD.DRV`, the extended
-desktop's placement policy (§39.19.6); `kern_small` instead carries
+`DOCK.DRV`, advanced Dock behavior (§30.5), `EXTD.DRV`, the extended
+desktop's placement policy (§39.19.6), `WIN95.DRV`, the Windows theme's
+chrome (§76.14), `DESK.DRV`, the desk layer's verbs, hover edge, show
+and key arms (§11.103.10), and `STIKMENU.DRV`, Locator's Sticky Apps menu
+(§110.12); `kern_small` instead carries
 `FILECP.DRV` and `FDLG.DRV` (§22.3, §38.0), bodies `kern_big` keeps resident.
 **On the disk every one is a `'CZ'` container** (§20.13.5): `os88mod.py`
 checks each image the way `mod_check` will and then wraps it, `mod_need`
@@ -1743,9 +1747,11 @@ in the tree.
   bytes) allocated and never armed on each kernel, made an eighth entry a hard
   NASM error in whichever module grew, and could not be per-build because the
   host tool scraped it with a regex. Removing it was −36 bytes on `kern_big`
-  and −38 on `kern_small`. `MOD_MAX` is 6 on `kern_big` and 5 on
-  `kern_small`. BIG has `MOD_HIBER` 3, `MOD_DOCK` 4 and `MOD_EXT` 5; SMALL has
-  `MOD_FCP` 3 and `MOD_FDLG` 4.
+  and −38 on `kern_small`. `MOD_MAX` is 10 on `kern_big` (nine images and
+  `MOD_SETS`, §2.8.7) and 5 on `kern_small`. BIG has `MOD_HIBER` 3,
+  `MOD_DOCK` 4, `MOD_EXT` 5, `MOD_WIN` 6, `MOD_DESK` 7 (`DKD_NENT` 4,
+  §11.103.10), `MOD_STIKM` 8 (`SMN_NENT` 2, §110.12) and `MOD_SETS` 9;
+  SMALL has `MOD_FCP` 3 and `MOD_FDLG` 4.
 - **`mod_fpr` indexes by `MOD_TAB_OFF` and not `mod_tab`, and that is an
   ASSEMBLER constraint rather than a taste.** An expression like
   `mod_fpt - mod_tab/2` is label arithmetic nasm 3 refuses outright
@@ -2018,7 +2024,15 @@ one-user argument they already shared), the arrow triangles' half-width
 tables (computed now: row r's width is r, or 3 − r), and `CTRL.DRV`'s own
 `SYSTEM.CFG` file buffer, which is the image's `.modcb` BSS rather than
 `times` bytes (MODULE-SELFCONTAIN-PLAN 3; it fits the claim's KB rounding and
-kernel.asm asserts so). What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
+kernel.asm asserts so). **An image that ends fewer than its bss's bytes short
+of a KB boundary is padded one byte PAST it** (kernel.asm's `MODC_UNPAD`
+`times`, `CTRL.DRV` only): the slack is then a whole KB, the claim is the one
+the bss needed anyway, and no resident byte is spent - where
+MODULE-SELFCONTAIN-PLAN 3.2's named fallback, a word per module in `mod_tab`,
+is 8 of them. The pad is zero bytes outside that zone, so every build that
+already fitted is byte-identical; it exists because `ANIMOFF=1` takes 124
+bytes of panel out and landed `CTRL.DRV` at 12,193 + 141 against a 12,288
+claim, refusing the knob build on §110's branch. What moved is page *body* text, whose only readers are the `cp_*_paint` bodies
 and their click ladders — every one inside the image, entered only through
 `call far [CPFP+…]` after `mod_need` succeeded. **The module-cannot-load path
 reads none of them**: `cp_open_x` is `.cold` and letters `cp_s_noload` /
@@ -2066,7 +2080,7 @@ first.**
 |---|---|---:|
 | `.modc` | the header and the SETTINGS CORE: `modc_e_sc` and the `sc_m_*` gestures (§26.8.7), the SYSTEM.CFG writer (`CFG_DATA`/`CFG_SAVE cpc`, `cp_cfg_save`), `cp_flush_x`, `cp_flush_cfg`, `cp_toast`/`sc_m_say`, and the image's epilogue ladder | `MODS_SIZE` = 2,447 bytes, 5 sectors |
 | `.modu` | the panel: every page, `cp_flush_close_x`'s RTC half, `clockw.inc` and shutdown (§12.3.2) | the rest, 11,119 in all |
-| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 131 bytes): BSS, in the claim's KB rounding and not in the file | — |
+| `.modcb` | the writer's file buffer, `cpc_buf` (`CFG_FBUF`, 163 bytes): BSS, in the claim's KB rounding and not in the file | — |
 
 `.modu` is `follows=.modc vfollows=.modc align=1`, so the two halves are
 one image at one set of offsets, and the panel reaches the core with a near
@@ -2100,6 +2114,14 @@ that row:
 **`sc_modcall` picks the copy.** If a Control Panel is open (`mod_live`),
 the whole image is already in memory and the gesture runs in it, at the same
 offset, and leaves it loaded. Otherwise the core is loaded, run and dropped.
+
+**The core carries §110.2's Sticky App rules**, because the core is what writes the
+trailer they live in: `sc_m_add` stores +3 = 0 on any record that is not a
+Sticky App record, refuses a Sticky App record whose KIND is not 1, finds an existing Sticky App
+row by its path's final component and updates it in place or — byte-identical
+— answers its zone and writes NOTHING, and gives a Sticky App row no cell and no
+`desk_free` refusal; `sc_m_pdel` takes AH = 0xFF as "find the Sticky App row by
+name". `MODS_SIZE` grows by what that costs (§110.6) and no resident byte.
 
 **CTRL.DRV ships PLAIN on kern_big** (`os88mod.py --plain 0`). It packed to
 90%, so it costs two sectors of disk, about what the decode it no longer
@@ -3443,7 +3465,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
 | `kernel/fprog.inc`  | the file-operation progress widget (§12.8): a document icon and a progress bar in a line box at the right end of the menu bar, armed by the file-operation layer and stepped from inside `dsk_xfer`'s per-sector loop — prefix `fpg_`, all state in `.text` |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
-| `kernel/apps.inc`   | built-in app kinds: About, Timer, Bounce — state pools, kinit procs, per-instance tasks |
+| `kernel/apps.inc`   | the built-in app kind: About — its template, strings and paint. Timer and Bounce were kinds here until §14.8 made them packages (§111, §112) |
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19); and `dsk_ncopy`/`dsk_streq`, the **counted DS:SI→DS:DI byte copy and the NUL string compare the whole `.cold` segment shares** — `diskw.inc`, `filecp.inc`, `files.inc` and `fdlg.inc` all call it, and it lives here because `disk.inc` is the first `.cold` `%include`, so every site is a backward near reference. It was the same seventeen bytes in four files. Not to be confused with a NUL-stopping bounded copy, which answers a different question |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write`. **`.cold`** (§2.6) |
 | `kernel/diskops.inc`  | the disk cloner (§18.99): the on-demand `DISKOPS.DRV` — sector-for-sector copy between any two floppy drives or one drive twice, its XMS/heap planner, its own geometry probe and its status-line prompts — prefix `clo_`; the resident half is one word and one thunk, both **`.cold`**/`.text` (§2.6) |
@@ -3458,6 +3480,8 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/dockmod.inc` | optional DOCK.DRV: placement, auto-hide, advanced painting and input (§30.5–30.6) |
 | `kernel/extmod.inc` | EXTD.DRV, `kern_big` only: the extended desktop's placement policy — bringing display 1 up, landing and the straddle fit, which display a window is on, the fsx bracket's collapse, and the second display's arms that run on a user's action (its ground, the zoom and fullscreen boxes, a drag's floor, fsx caps) — prefix `ext_`/`exk_`; the resident half is `exf_sync` in **`.cold`** and the `EXTCALL` sites (§39.19.6) |
 | `kernel/winmod.inc` | WIN95.DRV, `kern_big` only: the Windows theme's chrome — the title bar with its three buttons on the right, which button a point is on, a held button's rect, the size grip and the pull-down that stays open on a click — prefix `wn_`/`wnx_`/`wnk_`; the resident half is `thv`, its five `jmp far` doors and `thf_apply` in **`.cold`** (§76.14) |
+| `kernel/deskmod.inc` | DESK.DRV, `kern_big` only: the desk layer's code that runs only where a widget exists — `OSAPI_WM_DESK`'s MAKE, DRAG and RELEASE, the hover edge's body, a desk window's show and the widget's key arm — prefix `dkd_`; the resident half is `osapi_wm_desk_x`'s QUERY thunk and `desk_need` in **`.cold`** (which load it - `desk_need` is also the loader's step 5's, for an `OS88_F_DESK` package, and keeps an open `drv_vol` bracket's pair) and the slot calls in `cur_shape_pass`, `wm_show_b` and `fdlg_top_x` (§11.103.10) |
+| `kernel/stikmenu.inc` | STIKMENU.DRV, `kern_big` only: Locator's Sticky Apps menu (§110.12) — the scan of every reachable `STIKAPPS\`, the card reader, the panel's composer and tracker, and the posted pick's launch, close, hide, show and arrange — prefix `stm_`/`smn_`; the resident half is `stm_track_x` and `stm_act_x` in **`.cold`** (load, track, drop; the posted act, drop), `menu_track`'s test for the item-less kernel cell and `ui_cmd`'s `CMD_STIK` |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_`. **`.cold`** (§2.6) |
 | `kernel/snd.inc`    | sound core (§34): driver table + router, tone tier, speaker driver (tone + PWM clips), `snd_tick`, the five API slot targets, `snd_release_inst`/`snd_unhook` — prefix `snd_`, lands Phases 1–2 |
 | `kernel/fsx.inc`    | fullscreen exclusive (§53): the bracket, the scheduler freeze arming, foreign mode set + info block, and the frame clock/present — prefix `fsx_` |
@@ -7262,6 +7286,8 @@ and for os88ui.inc's reason (20.2's fixed image offsets).
 |---|---|---|
 | `GFXE_BAND` | — | compose into your own 1bpp band; commit it with one `OSAPI_GFX_BLIT1`. **The pixel primitive lives here** — a bit-set, not a slot |
 | `GFXE_LINE` | `GFXE_BAND` | Bresenham, whole line, into the band |
+| `GFXE_TEXT` | `GFXE_BAND` | the kernel's 8x8 glyphs into the band at ANY pixel `x`, normal or inverse, x1/x2/x3, optionally bold, rows clipped to the band; and a sub-rectangle fill (§5.12.8) |
+| `GFXE_BITS` | `GFXE_BAND` | a 16-wide bit record ANDed or ORed into the band at any `x` (§5.12.8) |
 
 ```
 gfxe_bnew     AX = x, DX = y            seed the running bounds
@@ -7287,7 +7313,7 @@ picked by a `%if` on the constant. It is once a **line**, not once a pixel, so
 even the multiply is noise against the walk — what the `%if` buys is that a
 caller who sizes a band conveniently is not paying for one who did not.
 
-#### 5.12.2 The ink polarity, and the one deliberately NOT there
+#### 5.12.2 The ink polarity, and where the other one is NOT
 
 A band is composed on **lit paper and inked by CLEARING bits**. `1 = a lit
 pixel` is `OSAPI_GFX_BLIT1`'s own convention (5.4.2) and 42.23 measured it the
@@ -7302,9 +7328,10 @@ branch for the wrap, and it is the whole reason a band composer beats a
 per-pixel slot.
 
 **The opposite polarity — ink that SETS bits, for white on a black ground — is
-six lines under a `%if` and is NOT in the file**, because an untested arm in a
-shared library is worse than an absent one. What it needs is written down rather
-than guessed at: BL walks a **one** (`mov bl, 080h`), the combine is `or`, and
+NOT in the PLOT** (`gfxe_bpix`, `gfxe_line`), because an untested arm in a
+shared library is worse than an absent one. `GFXE_TEXT` and `GFXE_BITS` DO
+carry it, as `GFXE_INV`, and it is tested there (§5.12.8). What the plot would
+need is written down rather than guessed at: BL walks a **one** (`mov bl, 080h`), the combine is `or`, and
 the two wrap branches invert sense because the carry out of the rotate is then
 the bit that just left. `gfxe_bclear` takes the paper word in AX already, so
 that half needs nothing.
@@ -7512,6 +7539,74 @@ byte survives, `[gfx_ln_ink]`, and `gfx_points` is its only reader.
   had to be a row rather than a note.
 - **`apps/paint`'s `PT_LNLINE` arm** — deleted. It was the A/B §42.23.8 was
   measured with, and that measurement cannot be repeated.
+
+#### 5.12.8 `GFXE_TEXT` and `GFXE_BITS` — a widget's face, composed (§110.11)
+
+The Sticky App widget treatment (§110.11) draws every pixel of a card into ONE band
+and puts it down with ONE `OSAPI_GFX_BLIT1`, so text on a card is never a
+`font_run` over a fill and nothing is written twice. These two capabilities
+are what it composes with; both imply `GFXE_BAND` and draw into
+`GFXE_BAND_BUF` at the caller's stride.
+
+```
+gfxe_glyph   AL = char, CX = x, DX = y       one 8x8 glyph; out CX += 8 x scale
+gfxe_text    SI = NUL string, CX = x, DX = y  ...a string; out CX after, SI past
+                                               the NUL
+gfxe_bfill   AX = x, BX = y, CX = w, DX = h   a rectangle of ink
+gfxe_bits    SI = record, CX = x, DX = y      a bit record: db rows, then a word
+                                               a row, bit 15 leftmost
+[gfxe_tsty]  the STYLE, a byte in the image: GFXE_INV (1) = SET bits - white
+             ink on a black ground - else CLEAR them (black ink on the lit
+             paper, §5.12.2's polarity); GFXE_BOLD (2) = the glyph ORed with
+             itself one pixel right; GFXE_X2 (4) / GFXE_X3 (8) = the scale
+```
+
+- **Any `x`, both senses.** `x` is a band pixel and need not be on the byte
+  grid: a row's pattern is built left-aligned in 32 bits and shifted into
+  place, so a x3 bold glyph (25 bits) still fits. The INVERSE sense is the
+  one §5.12.2 kept out of this file as untested; it is tested now - the
+  widget's focused plate and its handle are white text on black, and
+  `deskground` compares them pixel for pixel with the guest's own font.
+- **Clipping is by ROW and by the stride.** `y` is SIGNED and rows outside
+  `0 .. GFXE_BAND_H - 1` are skipped, which is what lets a card be composed
+  32 rows at a time (§110.11's slabs) with a glyph that straddles two slabs
+  drawn half into each; bytes past the stride are skipped; `x` itself must
+  not be negative. `gfxe_bfill` clips both ways.
+- **The glyphs are the kernel's** (`OSAPI_FONT_GLYPHS`, 8 bytes a glyph),
+  kept in three image words and asked for again whenever `[gfxe_fseg]` is
+  0 - **the address can MOVE**: a hibernate resume re-runs `FONT_PICK`
+  (`kernel/hiber.inc` step 4a) and replaces a ROM pointer with the resuming
+  machine's, so a caller that outlives a resume zeroes the word before it
+  composes. `os88stik.inc` does it at every `stik_paint` and tag draw, one far
+  call a paint. A code outside the table's range advances the pen and draws
+  nothing.
+- **A glyph wholly outside the band's rows costs the reject alone**, ~390
+  cycles (0.08 ms): a card composed one slab at a time visits every glyph
+  once a slab, so this is the price a slab pays for each glyph it does not
+  hold.
+- **The STRAIGHT PATH, x1** (bold or not, either ink, whenever the glyph has
+  two band bytes to land in): its visible rows clipped once, the row offset
+  taken once and stepped by the stride, the ink and the bold chosen once -
+  four loop bodies - and each row one `shr ax, cl` into two bytes (a bold x1
+  row is 9 bits and `x & 7` at most 7, so 16 bits always hold it). x2, x3
+  and a glyph in the stride's last byte take the GENERAL path: a nibble at
+  a time out of two 16-entry tables (`gfxe_x2t`, `gfxe_x3t`), shifted into
+  place once a glyph row, merged once a scale row, and a glyph row whose
+  copies miss the band never expanded.
+- **Cost on a 4.77 MHz 8088, MEASURED** (MartyPC's cycle counter at
+  `gfxe_glyph`'s entry and its `ret`, the probe's whole paint): a x1 glyph
+  **2,350 cycles, 0.49 ms**, black or white ink; bold **0.55 ms**; x1 in the
+  stride's last byte 1.1-1.3 ms; x2 bold 1.8-2.7 ms and x3 2.7-3.6 ms for the
+  half of a glyph that one slab holds. It was 2.3 ms a visit (median, every
+  style) before the straight path and the reject, and the probe's whole
+  paint **171 ms; it is 68 ms**, with two more glyphs in it. The x1 figure
+  beats a `font_run` cell's ~900 µs - which would also have to be clipped to
+  a slab it cannot see - but it is NOT the 0.1-0.2 ms this section first
+  claimed: a row is ~200 cycles on the 8088's bus, ~22 bytes of code
+  fetched at 4 clocks a byte and two read-modify-writes, so eight rows and
+  the setup are ~2,350. A face of ~190 x1 glyphs composes in ~95 ms before
+  its blits, and a `STIK_COMPOSE` that skips the glyphs a slab cannot hold
+  saves the rejects as well (§110.6).
 
 ### 5.13 `gfx_pixel` and `gfx_points` — which to reach for
 
@@ -10376,6 +10471,20 @@ the pointer off the screen there by construction, so an exclusive app draws
 its own pointer and always did. Missile Command therefore keeps `mc_cross_*`
 for its bracket and drops it windowed, which is where the two pointers were.
 
+**The same answer is the desk layer's HOVER EDGE** (§11.103.7). Right
+after `cur_shape_pass`'s `wm_hit`, one compare of BX against `[cur_hovw]`;
+only a CHANGE of window far-calls a cold body (`cur_hov_x`, with BX banked
+round it, so the shape below is still `wm_hit`'s answer) that clears
+`WF_HOVER` on the old window and sets it on the new one - each only if it is
+a `WF_DESK` window, and the new one only with no Standard File chooser up
+(a hover standing when a chooser opens is not cleared, §11.103.7) - and
+posts `wm_wake` to each. So a widget learns "the pointer is over
+me" at the cost of one compare per pass that runs anyway, with nothing at all
+while the pointer rests, and the edge inherits this section's two properties
+for free: it is UI-task-only, so the z-order cannot tear under it, and every
+raise, hide, close or drag under a standing pointer already sets
+`[cur_shchk]`, so a window opened over a hovered widget is a leave.
+
 ### 7.2.1.1 The "nothing moved" test sits ABOVE the frame
 
 `cur_shape_pass` is called by the UI ladder **671 times a second on an idle
@@ -12120,8 +12229,12 @@ A driver and the two kernel-side spawners have no header to declare in, so
 | | bytes | why |
 |---|---|---|
 | `SCH_IDLE_STK` | 128 | the idle task's own footprint is ≤ 4 bytes (§8.1.2), so what it needs *is* the interrupt floor — 32 on QEMU, 40–64 on real iron |
-| `SCH_BUILTIN_STK` | 128 | Bounce is the built-in kind that takes a task; six at once measured +10…24 over the floor. The Timer was the other until §14.7, sized from Bounce and never measured — it read 112 of 128 half covered, on a floor of 32 |
 | `SCH_DRV_STK` | 192 | the sound driver's stream task, the only driver worker in the tree, walks 28 bytes statically — 64 + 28 = 92, so 2.1× |
+
+(`SCH_BUILTIN_STK`, 128, was the third row: a built-in kind's task, which
+was Bounce's - six at once measured +10…24 over the floor - and the Timer's
+until §14.7. No kind has a task since §14.8; the Bounce PACKAGE declares
+`OS88_STACK_128`, the same class, in its header.)
 
 `OSAPI_DRV_TASK` is called from one driver in the whole tree — the sound
 driver's refill and drain spawners, both light — which is why one number
@@ -16653,7 +16766,8 @@ Frame drawing (paint-all does this before calling W_PAINT):
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
 dispatch) or on the window's own background task — which, since §20.6, may
-be a package's worker as well as a Timer or Bounce task. In all cases the
+be a package's worker as well as a Timer or Bounce task (the two kinds'
+tasks, before §14.8 made them packages). In all cases the
 caller of W_PAINT already holds the gfx lock. **W_PAINT must not lock and
 must not block.** `OSAPI_TASK_SPAWN` (§20.6) is legal here and is
 idempotent by construction — the second call refuses with CF=1 because the
@@ -20166,6 +20280,608 @@ slice at least that big, and a request no free slice can meet is a refusal
 slices cannot renumber what a package asked for, and cannot hand it a slice
 smaller than it declared.
 
+
+### 11.103 The desk layer (`WF_DESK`): windows that live under every application
+
+A **DESK WINDOW** is a window that belongs to the desktop rather than to the
+stack of applications: §110's widgets, the Desk Calendar first. It is drawn
+above the desktop's ground and its icons and **below every ordinary window**,
+it is never raised, it has no title bar, frame, shadow or boxes, it has no
+dock tile, and it takes the menu bar and the keys only while it is the last
+thing the user pressed. The owner asked for exactly that: *"the always behind
+layer, and ... a different window treatment than regular apps to
+differentiate them"*. The treatment itself - the cards, the name tag, the
+hover handle - is package code shared as source (`apps/os88stik.inc`,
+§110.11); what is here is the kernel's half, which is the layer and nothing
+that draws.
+
+It is **kern_big's** (and kern_emu's, which is kern_big plus §9.11.7).
+kern_small carries the two cells and refuses the one that matters (§11.103.9).
+
+**The bits.** `WF_DESK` = `0x0400` (W_FLAGS bit 10) marks a desk window and
+`WF_HOVER` = `0x0800` (bit 11) is §11.103.7's hover state. Both are in the
+shape byte, so both are in `WF_HIBITS` and `wm_cursor` and `cur_shape_pass`
+mask them by construction (§7.2.1, §11.96.17). `IF_DESK` = 4 (I_FLAGS bit 2)
+marks the owning INSTANCE, which is what the dock reads (§30). The SDK
+publishes all three as READ-ONLY facts - `[es:bx+W_FLAGS+1]` and the
+snapshot's `SSI_FLAGS` - and the kernel is the only writer (`OSAPI_WM_DESK`
+of `WF_DESK`, the loader of `IF_DESK`, §11.103.7's hover edge of
+`WF_HOVER`), so the "never by hand" rule binds as it does for every kernel
+bit.
+`tools/os88geom.py` mirrors them and `t_mirror` holds the copies.
+
+**What it costs**, measured at wave 1 (§110.6): **+104** bytes of `.text`
+on kern_big and kern_emu (image rungs 183 and 430 left before) and **+154**
+of `.cold` (351 and 227 before - kern_emu's is the binding one, 73 left
+after); kern_small spends the two cells' 12 bytes of `.text` and nothing
+else. No rung was crossed. Wave 1's review fixes (§110.9) add **+28** of
+`.text` and **+18** of `.cold` on both: kern_big image 51 left, cold 179;
+kern_emu image 298, cold **55**; kern_small unchanged. Wave 2 (the posted
+drag and the hover edge, §11.103.6-7) adds **+46** of `.text` (two of them
+`[cur_hovw]`, initialised data) and **+54** of `.cold` on both, and nothing
+on kern_small, which assembles byte for byte as before: kern_big image **5**
+left, cold 125; kern_emu image 252, cold **1** (§110.9). Wave 2's review
+fixes (§110.9) add **+5** of `.text` and take **1** of `.cold` back on both -
+the DRAG post names its window and the pick-up asks for a desk one - and
+nothing on kern_small: kern_big image **0** left, cold 126; kern_emu image
+247, cold **2**. **A
+rung crossing is a stop for the owner**, not a build fix (CLAUDE.md): the cut
+order is §110.10's.
+
+#### 11.103.1 The z invariant: every desk window is at the BOTTOM of `wm_zord`
+
+Every `WF_DESK` window occupies `wm_zord[0 .. k-1]` (`[0]` is the backmost)
+and every ordinary window is above them. There is **no count byte**: the
+invariant is kept by the only four writers `wm_zord` has, and they are
+named at its declaration.
+
+| writer | what it does with a desk window |
+|---|---|
+| `wm_create` | appends at the top, unchanged: the window is born hidden and ORDINARY |
+| `OSAPI_WM_DESK` MAKE (§11.103.9) | moves the entry to `[0]` ONCE, so the newest widget is the backmost - the rest shift up one, keeping their order |
+| `wm_lift` | **a no-op** for a desk window (`test` + `jnz` before `wm_zcut`, 6 bytes). It is the only reordering writer, so nothing else can lift one |
+| `wm_destroy` (`wm_zcut` + `dec [wm_zn]`) | the compaction keeps the order |
+
+Because the band is at the bottom, every reader of the order that walks
+ABOVE a window - `wm_obscured`, `wm_clip_set`, the damage pass's marking,
+`wm_hit` front to back - is correct with no change, and an ordinary window
+never pays clip arithmetic for a widget. `wm_paint_all` starts at
+`wm_fs_zpos` under a fullscreen window (§11.2), so a widget under one is not
+drawn and the fullscreen window wins `wm_hit`.
+
+**The order is unchanged for them; the SHADOW is not.** Two subtractions walk
+EVERY visible window and assume each one draws a drop shadow: `wm_clip_subl`,
+which takes the frame moved (1,1) out of the desktop's dither and its zones
+(`wm_occl_l`, §11.91.6), and `wm_clip_sub`, the occupied rect
+`(x,y)..(x+w,y+h)` that `wm_clip_rect` (a desktop zone's redraw) and
+`wm_clip_occl` (a window under another) subtract. A desk window draws no
+shadow, so both now take its FRAME (`WM_CHROMELESS bx` / `jnz wm_clip_subf`,
+7 bytes each, §11.103.5). Without that, column `x+w` and row `y+h` beside a
+widget were taken out of the dither and drawn by nobody: a window dragged or
+closed off them left a permanent 1-px line of itself there, and a widget under
+another widget lost the same strip.
+
+#### 11.103.2 "Front" means the front ORDINARY window: `wm_top`
+
+`wm_top`'s loop tests **visible and not `WF_DESK`** (`mov ax, [bx]` /
+`and ax, 0x0402` / `cmp ax, 2` in place of a one-bit test: +5 bytes on a
+path that runs per key and per raise). So every caller of it now means "the
+frontmost visible APPLICATION window": the key router (§13), Close Window and
+its greying (`ui_loc_gate`), `menu_check`'s promotion (§12), `wm_raise`'s
+outgoing title, `wm_dmg_wins`' pinstripes, `dock_act` (§30), the precover and
+the grow-box tests, and `OSAPI_WM_TOP`. With only widgets up, `wm_top`
+answers 0 - Locator - so Close Window greys and the bar goes to Locator when
+the last application closes, never to a widget.
+
+**`OSAPI_WM_TOP`'s contract changes in one word**: it was "the frontmost
+visible window" and it is "the frontmost visible window that is not a desk
+window". No shipped package can tell the difference, because no shipped
+package other than a Sticky App makes one, and a Sticky App asking `OSAPI_WM_TOP` about
+itself is asking the wrong question (§12.6's `OSAPI_MENU_OWNER` is the right
+one: "do I own the bar").
+
+#### 11.103.3 A desk window is SHOWN by the damage pass, and why not by the cull
+
+`wm_show_b` takes a desk arm before `wm_top` and the precover - since
+§11.103.10 a five-byte door, `call far [DKDFP+8]` / `ret`, into `DESK.DRV`'s
+`dkd_show`: the visible bit
+goes on, `wm_win_rect` is the damage, and **`wm_paint_dmg`** draws it - the
+drag-release pattern (`ui.inc`'s `wm_dmg_vacate` / `wm_paint_dmg`), under the
+lock `wm_show` already holds. `[wm_dmg_stwin]` is 0 (it is a one-shot), so
+`wm_dmg_stale` marks the widget, and the marking pass marks every ordinary
+window above it that it overlaps, which `wm_dmg_wins` redraws over it in
+z-order. There is no precover, no zoom (MAKE sets `WF_NOANIM`), no
+`wm_raise` and no `menu_activate`: showing a widget does not take the bar.
+
+**Not by `wm_draw_win` under `[wm_dmg_cullq]`**, the obvious shorter arm.
+`wm_dw_cull` arms `wm_clip_set` and `wm_clip_test` then ROUNDS OUTWARD -
+containment with the corners exchanged (`wm.inc`, "THE CULL ROUNDS
+OUTWARD") - so a glyph cell or an icon body straddling a covering window is
+drawn WHOLE, over that window. Inside `wm_dmg_wins` that is repaired, because
+the frame grows the damage for the windows above; outside it nothing repairs
+it, and "a package never draws a glyph in `W_PAINT`" is not an invariant
+anyone can hold. Showing a widget under open windows therefore redraws the
+ordinary windows it overlaps whole (`.mbelow`): that is rare - a boot's
+autostart runs before any application is open - and safe. **A DROP is the
+same marking and is not rare** once a widget can be dragged: §11.103.6
+prices it, and the cure is an owner's decision (§110.9).
+
+A desk window already on the glass shown again is the same arm: one damage
+pass over its frame.
+
+**Showing or hiding a desk window PROMOTES NOBODY**: both arms store
+`[wm_dmg_npro]` = 1 before `wm_paint_dmg` (`wm_show_desk`, and a `WF_DESK`
+test in `wm_hide_b`), the one-shot `desk_cell_rect` already uses (§11.91.6).
+A desk window is never `wm_top`, so its coming or going changes no front
+window, and without the store `.promote` re-drew the front application's
+title bar and grow box - the 15-call path, a visible re-flash - whenever that
+window lay clear of the widget. 16 bytes of `.text`. W2's desk drag pays
+the same store, for every window (§11.103.6).
+
+#### 11.103.4 Activation without a raise: the press, the keys and RELEASE
+
+- **A press on a desk window** is delivered without a raise. `wm_hit`
+  answers region 0 everywhere on it (§11.103.5), `ui.inc`'s
+  `menu_activate` on every window hit hands it the bar (CF = 1 repaints the
+  bar), and the content press then tests `WF_DESK` before `wm_top` and goes
+  straight to `.content_front` (+6 bytes): `W_ONCLICK` runs under the lock and
+  `[ui_armw]` owes it the release. The front application window keeps its z
+  place AND its pinstripes - the same split as a press on the bare desktop,
+  where the bar says Locator and the stripes stay on `wm_top` (§12.6).
+- **`wm_front` on a visible desk window** takes the existing already-frontmost
+  arm: `menu_activate`, `menu_draw_bar`, `wm_dock_under` - it activates and
+  never moves (+6 bytes). That covers the keyboard mouse (§9.6), the right
+  press's raise, `app_launch` at a singleton's refusal or the instance cap,
+  and a package's own `OSAPI_WM_FRONT`. A right press activates a widget and
+  delivers no `W_ONRC` (§13): a widget offers its commands in its own face.
+- **Keys follow a desk window that owns the bar.** The key router asks
+  `wm_top` and then `fdlg_top_x`; kern_big's body of the latter (`.cold`,
+  `kernel/fdlg.inc`) gains an arm on its "no chooser" path: if `[menu_win]` is
+  a `WF_DESK` window, the key goes to IT (§12.6). There is no visible test:
+  `menu_check` takes the bar off a window that is not visible at the paint
+  that hid it, so `[menu_win]` is never a hidden window (§110.9). A modal Standard
+  File chooser is tested first and still takes every key (§38.2); a chooser
+  gone and not yet reaped still sends the key nowhere. `desk_key_x` is already
+  gated on `[menu_win]` = 0 (§26.8.5), so a widget typing never selects a
+  desktop icon. 16 bytes of `.cold`, which this tree counts as resident -
+  until §11.103.10 put the test in `DESK.DRV` (`dkd_key`, slot 3): the
+  resident arm is a far call and its answer, 8 bytes of `.cold` above
+  kern_small's, and with no image the slot's `mod_gone` is "stand".
+- **The keys and the bar go back** on any press elsewhere (`ui.inc`'s
+  `menu_activate` on every window hit and on the bare desktop), on any raise
+  (`wm_raise`'s `menu_activate`), when the widget closes (`menu_check`, which
+  now promotes the front ORDINARY window), and when the widget gives them
+  back itself: `OSAPI_WM_DESK` RELEASE, which a widget calls on Esc.
+- **There is no lost-focus event.** A widget that shows focus polls
+  `OSAPI_MENU_OWNER` (an inline cell) only while it owns the bar (§110.11).
+
+#### 11.103.5 No chrome: the chromeless sites, and the `t_chromesites` ratchet
+
+`WF_FULL` (§11.2) was already the kernel's "no title, no border, no shadow"
+and most of its byte tests mean exactly that; a few mean THE LATCH - the one
+fullscreen window of the machine - and must not see a widget. **Each test is
+classified**, and `tests/unit/t_chromesites.py` (fast tier) is the ratchet:
+every `WF_FULL` reference in `kernel/` is registered by its enclosing routine
+as CHROMELESS (it must read `test word [..+W_FLAGS], WF_FULL | WF_DESK`,
+`0x0408`, one byte longer than the byte test) or FULL-ONLY (it must not name
+`WF_DESK`), each with its reason, and an unregistered or a stale entry fails
+`make`.
+
+| routine | class | why |
+|---|---|---|
+| `wm_hit` | CHROMELESS | every point is content: no title region, no boxes |
+| `wm_win_rect` | CHROMELESS | no drop shadow, so the occupied rect is the frame |
+| `wm_dmg_shadowed` | CHROMELESS | no shadow to owe |
+| `wm_content` | CHROMELESS | the content origin is `(W_X, W_Y)`: the frame IS the content |
+| `wm_geom` | CHROMELESS | ...and so is its size, `W_W` x `W_H` |
+| `wm_clip_set` (the seed) | CHROMELESS | the region is seeded with the frame |
+| `wm_seed_frame` | CHROMELESS | no shadow in the seed |
+| `wm_draw_title` | CHROMELESS | no title bar to draw |
+| `wm_chrome_relit_x` | CHROMELESS | no boxes to have lit |
+| `wm_title_set` | CHROMELESS | a retitle draws nothing (W_TITLE is still the widget's NAME, which the bar and the gates read) |
+| `wm_clip_sub` | CHROMELESS | the occupied rect `wm_clip_rect` and `wm_clip_occl` subtract is the frame: no shadow (§11.103.1) |
+| `wm_clip_subl` | CHROMELESS | `wm_occl_l`'s frame-and-L is the frame alone: no L to draw back (§11.103.1) |
+| `wm_refit` | FULL-ONLY | the latch's refit to its display |
+| `wm_raise` | FULL-ONLY | the incoming window covers the screen; a desk window is never raised |
+| `wm_snap_want` (and its assertion) | FULL-ONLY | a desk window KEEPS §11.94's snap: `W_X` = 7 mod 8, so the face at `W_X + 1` is on the byte grid (§110.11) |
+| `wm_fullscreen` | FULL-ONLY | the latch's own setter |
+| `wm_damage` | FULL-ONLY | FULL forces "whole" because its fill ignores `WF_OWNBG`; a desk window is OWNBG and gets a sub-rect |
+| `wm_cov_rect` | FULL-ONLY | a desk window reaches the frame through `wm_su_rect` (below) |
+| `wm_su_take` | FULL-ONLY | a desk window has no `WF_SAVEU`, so it never banks |
+| `wm_draw_win` | FULL-ONLY | the FULL arm fills white; the desk arm is a test of its own before it (below) |
+| `wm_grow_erase`, `wm_grow_paint` | FULL-ONLY | MAKE refuses a sizable window |
+| `inst_minimize` (`instance.inc`) | FULL-ONLY | `IF_FSMIN`: a Sticky App never minimizes its widget (§11.103.8) |
+
+Two sites carry the desk fact with a test of their own, because the `WF_FULL`
+arm there does something a widget must not:
+
+- **`wm_draw_win`**: `test byte [di+W_FLAGS+1], WF_DESK >> 8` / `jnz .paint`
+  ahead of the FULL test (+6 bytes). A desk window skips the outline, the
+  shadow, the title, `wm_su_try` and the white fill - MAKE forces
+  `WF_OWNBG`, so the package paints every pixel - and `W_PAINT` runs under
+  `wm_dw_cull` exactly as every other window's does.
+- **`wm_su_rect`**: a desk window answers its FRAME (`wm_win_rect`, which the
+  chromeless arm has already shrunk by the shadow). `wm_su_rect` is "the
+  content rect" for `wm_damage`, `wm_cov_rect`, the raise cache and the drag
+  cache, and its title inset would otherwise cut the top `TITLE_H` rows and
+  the borders off every damage rect `OSAPI_WM_DAMAGE` hands a widget (§110.9).
+
+#### 11.103.6 The posted drag, and no drag cache
+
+A widget has no title bar, so the kernel's outline drag (`ui_drag`) is
+started by the package: `OSAPI_WM_DESK` DRAG (§11.103.9), from inside
+`W_ONCLICK`, POSTS it, and the content press picks it up once the callback
+has returned. It cannot run inside the callback: `gfx_lock` is not recursive
+and `ui_track` takes it.
+
+**The post is the caller's window in `[ui_dragy]`, not a word of its own.**
+`.content_front` seeds `[ui_dragx]` / `[ui_dragy]` with the press point
+before every `W_ONCLICK` (§13.8.2), so DRAG writes `BX` - a window record's
+address, which no screen y equals - into `[ui_dragy]`, and right after
+`ui_bill` returns the press compares it with `SI`, the window PRESSED, and
+honours it only for a `WF_DESK` one. A DRAG made BEFORE the press is
+overwritten by that press's seed, so no later press can turn into a drag
+because of it; one naming any other window - a worker's, landing while the
+UI task is inside another package's `W_ONCLICK`, which is a race the worker
+cannot see - does not match; and one from an ordinary or a FULLSCREEN
+window's own `W_ONCLICK` fails the desk test, so the drop's `MBAR_H` floor
+can never pull a latched fullscreen window 20 rows off its latch (§11.2).
+That refusal is a misuse refused, not a feature: it comes after the arm is
+skipped, so it costs that press its `W_ONMOUSEUP`. A package therefore drags
+only a desk window it names, from that window's own press, and the SDK says
+"from its `W_ONCLICK`, on the UI task".
+
+**Posted outside `W_ONCLICK` it moves nothing, and it is not free.**
+`[ui_dragy]` is also what `ui_arm_trk` measures an ARMED region-0 press
+against (§13.8.2), so a post while any press is armed - a Sticky App's `W_ONTIMER`
+or `W_ONWAKE` during Calculator's button press - hands that press one
+`W_ONDRAG` at a point that did not move. §13.8.2's "only when the pointer
+actually MOVED" holds for every package that keeps DRAG in its own
+`W_ONCLICK`, which is the only place the SDK lets it be posted.
+
+**The pick-up sits BEFORE the arm.** When it fires, `[ui_armw]` is never set,
+so the drag eats the release (`ui_track`'s `evq_mup`) and no `W_ONMOUSEUP` or
+`W_ONDRAG` follows; the lock is given back and `ui_drag` runs with the press
+point, which `.content_front` banks on the stack across the dispatch (two
+pushes - `ui_bill` does not preserve `CX`/`DX`, and `[ui_dragy]` holds the
+post by then). The outline, the clamps, `wm_snap_ax`, `wm_dock_snap` and
+`wm_paint_dmg` over the vacated and the new rects are the kernel's,
+unchanged, and a press that does not move repaints nothing (§13). There is
+no cold body and no far shim: the pick-up jumps to the title bar's own
+`call ui_drag`. It lies inside the short reach of `.region`'s
+`je .title_bar` and of the press's `jc .yj1`, and NASM's growing passes
+widened both to five bytes although both still reached - so both are
+written `short` now, which costs nothing and is checked by the assembler
+(and `.yj1`'s own `jmp .yield` did go near, one byte). The desk test's six
+bytes then left `je short .title_bar` three past its reach, and they were
+paid by MOVING `.grow_box` (`call ui_grow` / `jmp short`, five bytes) above
+`.mdown`, behind `.yj2`'s jump: the region dispatch's `je .grow_box` reaches
+back to it in two bytes, and `je short .title_bar` is at 125 of 127 again.
+
+**A desk window takes `.nocache`**: `wm_dc_take` banks from the glass,
+which under a covering window is somebody else's pixels, and `wm_draw_win`'s
+desk arm never replays a cache anyway (a desk window's `x` is snapped, so
+`ui_drag_phase` has nothing to do for it either). A drop costs the widget
+one `W_PAINT` - **and it costs every ORDINARY window that overlaps the
+widget's old or new rect a whole redraw**, which is the design record's
+"one `W_PAINT`" proved wrong. `ui_drag`'s drop was written for a FRONT
+window and a desk window is the BACKMOST: `wm_dmg_stale` marks a window over
+the vacated rect that the new frame does not re-cover, `.mbelow` (the
+outward-rounding cull, §11.103.3) marks every window above the widget that
+it overlaps, and `wm_dg_precover` banks a save-under window behind the front
+one off the glass - and all of those pixels were already right. `deskdrag`
+E MEASURES it: a drop from under a Disk window runs `wm_draw_win` twice, the
+widget's and the Disk window's whole chrome, 15-call title bar and
+`W_PAINT` - on a 5150 about 40 ms of title bar and a package's paint a drop,
+on the order of a second with a Note Pad window over the widget. The same
+root is a standing cost once a widget is left over the dock: every dock
+change marks it through `dock_px_hit`, and that marks every window above it.
+**The cure is resident and kern_big's image rung has none** (§110.9's owner
+item): make "a desk window paints with exact primitives only" a contract,
+then have `wm_dmg_stale` treat the windows above a `WF_DESK`
+`[wm_dmg_stwin]` as clean and skip `.mbelow` - about 10 to 16 bytes of
+`.text`.
+
+**The drop's bound is the title bar's**, `y + TITLE_H <= [vid_h]`
+(`vid_ymax`), and a widget has no title bar: its grab handle and close box
+are in the tag row at the BOTTOM of its face. With `wm_dock_snap`'s
+half-strip rule, a widget can be dropped with only its top 18 rows on the
+glass - card 1, where a press is not a drag - so the tag row, the handle and
+the box are off it, the only grab points left are the 1-px ground columns,
+and the dock tiles under it answer the widget. `DESKPROB.DAT` saves that
+place and `stik_anchor` keeps a same-screen place unchanged. The kernel spends
+no byte on it (a `WF_DESK` clamp of `y + h` to the dock's top is 8 to 10 of
+`.text`, kern_big has 0): **wave 3's include re-fits the frame** - after a
+drop whose bottom is past `[vid_h]`, the poll that sees the drag is over
+brings the whole frame back on the glass before it saves the place, at one
+extra paint for an out-of-band drop only (§110.11).
+
+**A drag promotes nobody**: `ui_drag` stores `[wm_dmg_npro]` = 1 before its
+`wm_paint_dmg`, on kern_big, for EVERY window. A drag never changes which
+window is front. An ordinary window is raised before its title drag and is
+the moved window `wm_dmg_wins` marks unconditionally, so `.promote` found it
+redrawn and did nothing; for a widget, the front application window lies
+clear of the damage and `.promote` re-drew its title bar and grow box on
+every drop - the 15-call path, a visible re-flash, which is §11.103.3's
+store owed here too. Unconditional is 5 bytes; tested for `WF_DESK` it was
+11.
+
+Cost: **34** bytes of `.text` (the pick-up 17 and its desk test 6,
+`.nocache` 6, the store 5; the move of `.grow_box` is free) and the verb's
+**8** of `.cold`; no `.bss`. Wave 2 measured 29 and 9: the review's fix
+traded the `-1` sentinel's `or`/`cmp word ..., -1` for a register store and
+a register compare, a byte each, and spent six on the desk test. The
+pick-up's `je .qdrag` past the arm is two of them, and they are not
+decoration: without it the arm is set, `ui_drag` eats the release, and
+`ui_arm_trk` delivers a `W_ONDRAG` the very next pass because `[ui_dragy]`
+holds the post - `deskdrag` reads one on a broken build.
+
+#### 11.103.7 The hover edge (`WF_HOVER`, `[cur_hovw]`)
+
+`cur_shape_pass` already asks `wm_hit` which window is under the pointer on
+every move and every z change (§7.2.1). After that call, ONE compare of `BX`
+against `[cur_hovw]` (an initialised `.text` word, kern_big's); only a CHANGE of window
+banks `BX`, `xchg`es it into `[cur_hovw]` and far-calls `DESK.DRV`'s
+`dkd_hover` through its slot (§11.103.10; it was `cur_hov_x` in `.cold`
+until the module cut, and with no image the slot is `mod_gone`). The body:
+
+- a Standard File chooser up (`[fdlg_win]` non-zero) makes the new window
+  NOTHING - the `dkx_pass` precedent (§30.6): presses outside a chooser are
+  swallowed (§38.2), so a revealed handle there would be dead;
+- the new window is `xchg`ed into `[cur_hovw]` by the CALLER, which hands
+  the body the old one in `BX` - so `[cur_hovw]` is current even when no
+  image is loaded - and a chooser up stores 0 over it;
+- one loop of two passes - `CL` = 0 for the OLD window, `WF_HOVER >> 8` for
+  the NEW - does, for each that is a `WF_DESK` window, `and` off `WF_HOVER`,
+  `or` in `CL`, and post `wm_wake` to it (through `apic_wm_wake`: the cell is
+  the shim, as for `mem_cpq_run_x`).
+
+It only ever SETS or CLEARS, never toggles, so a record that died - which
+`wm_destroy` leaves with `W_FLAGS` = 0, not a desk window - gets nothing on
+its leave, and one reborn as a widget gets a clear and a wake it can ignore:
+the bit is STATE, read by a level-triggered `W_ONWAKE`, and `W_WKQ`'s
+coalesced single wake cannot desynchronise it. `cur_hovw` names a window
+record or 0 and is never dereferenced except through those tests, so a stale
+value from a warm boot is harmless too.
+
+**What it refuses, and what it leaves to the package.** Nothing is hovered
+over a covering window (`wm_hit` answers the covering one, so moving onto it
+is a leave), under a fullscreen window, a saver or a chooser, or during a
+menu drop or another window's title drag - no pass runs then, and one
+correct edge arrives afterwards. Under a chooser no NEW hover begins:
+`[cur_hovw]` goes to 0 at the first change of window, so every packet over a
+window far-calls the body for the chooser's life (one compare and a `retf`'s
+worth of work), and once the chooser is REAPED the first move gives the
+enter edge: its hide repaints while `[fdlg_win]` still names it.
+
+**Two refusals are NOT made**, both because the body runs only on a CHANGE
+of `wm_hit`'s answer and both for want of a byte:
+
+- **A hover standing when a chooser opens stays.** The chooser's repaint
+  sets `cur_shchk`, but `wm_hit` still answers the widget, which is
+  `[cur_hovw]`, so the body never runs and `WF_HOVER` stays set until the
+  pointer leaves the widget - the handle revealed under a modal chooser,
+  and a press on it swallowed by `fdlg_grab_x` like every press outside a
+  chooser (§38.2): a dead control shown, never a live one. The cure is an
+  edge to nothing at the chooser's show (`xor bx, bx` / `xor cx, cx` / the
+  far call, about 8 bytes of `.cold`), and kern_emu's cold rung has 2: the
+  owner's (§110.9). A package can refuse only for a chooser of its OWN.
+- **An open auto-hide dock over a widget is not a cover.** The edge asks
+  bare `wm_hit`, which does not know `[dock_up]` (§30.6.1), so the pointer
+  on an open strip lying over a widget reads as a hover. A hidden strip has
+  `dock_thk` = 0, so `wm_dock_snap` never nudged the widget off it. The
+  reveal is clipped round the strip and every press there goes to the dock
+  first (`ui.inc`'s `.on_desktop`), so again it is a handle shown that
+  cannot be pressed, and only while the dock is open; `dkx_pass`'s own
+  refusal in `cur_hov_x` is the cure, at `.cold` bytes kern_emu does not
+  have. A BUTTON HELD is the package's to refuse, at its dwell's expiry
+(`OSAPI_MOUSE`), not the kernel's: an armed press keeps the ladder running
+(§13.8.2), and a widget must see the leave and the re-entry of a press
+dragged off and back.
+
+Idle cost zero; per mouse packet one 6-byte compare; per change of window
+one far call and up to two wakes. **15** bytes of `.text`, `[cur_hovw]`'s
+**2** (an initialised word beside `[cur_shchk]`, so a warm boot's reload
+zeroes it) and **45** of `.cold` - which §11.103.10's cut moved into
+`DESK.DRV`'s image for one more byte of `.text` at the caller.
+
+#### 11.103.8 What a Sticky App must not do with its widget
+
+- **No `OSAPI_WM_MINIMIZE` and no `OSAPI_FULLSCREEN`** on a desk window. It
+  has no tile, so a minimized widget could not be brought back; a fullscreen
+  one would be a latch over the screen with no title to leave it by. A
+  written rule rather than a kernel refusal (STICKY-APPS-LAYER-PLAN.md §7's decision 12, the
+  default): `os88stik.inc` never calls either.
+- **No `OSAPI_SAVEU` after MAKE.** MAKE clears `WF_SAVEU` and `WF_1BPP`: a
+  covered widget banked off the glass would bank other windows' pixels, and a
+  widget under the Color theme shows teal in its gaps, which `WF_1BPP` would
+  promise away (§11.96.17).
+- **A future window cycler skips `WF_DESK`.** There is none in the tree; Close
+  Window never reaches a widget because `wm_top` does not.
+
+#### 11.103.9 The two cells: `OSAPI_WM_DESK` (0x047B) and `OSAPI_GFX_DESK` (0x0481)
+
+**`OSAPI_WM_DESK`**, a rare cell (`OSAPI_RCSLOT`) whose body is a `.cold`
+QUERY thunk in front of `DESK.DRV`'s `dkd_verb` (§11.103.10).
+`AL` = the verb; every register but the documented outputs is preserved, and
+CF answers.
+
+| AL | verb | in | what |
+|---|---|---|---|
+| 0 | QUERY | - | CF = 0: this kernel has the desk layer, **and `DESK.DRV` is now loaded and held until restart** (§11.103.10) - QUERY is the module's load point, so ask it in your ENTRY PROC, where the system disk is already required. CF = 1: no layer - kern_small (whose every verb refuses), or `DESK.DRV` missing, no heap for its 1 KB claim, or a stale stamp; take the titled path, as on kern_small |
+| 1 | MAKE | BX = your window | make it a desk window - **in your ENTRY PROC only**, between `OSAPI_WM_CREATE` and its return. **Refused (CF = 1)** for a window not in use, VISIBLE, `WF_FULL` or `WF_SIZABLE`, for a window that already HAS an owner, with no load in progress, and for a window the loading package did not make. That is how MAKE knows its caller for nothing: `wm_owner` is published only at the loader's step 9, AFTER the entry proc returns (§21), so the window being set up is the one nobody owns yet; `[ld_base]` is the loading package's segment from step 5 until step 9's show and 0 otherwise, so `W_SEG` = `[ld_base]` (non-zero) says the window is ITS, made in this load; and the loader's `[ld_rec]` is still unpublished (`I_STATE` = 0), which a callback that step 9's own repaint reaches is not (§110.9). Effect: `WF_DESK \| WF_NOANIM \| WF_OWNBG` on, `WF_SAVEU \| WF_1BPP` off, and the z entry ROTATED to `[0]` (each entry below it moves up one, in order). **`IF_DESK` is step 9's, not MAKE's**: the loader sets it on the record when the window the entry proc RETURNS is `WF_DESK`, so an instance is tile-less exactly when its own window is a widget - a Sticky App that also opens an ordinary window and returns that one keeps its tile, and the window it can be minimized by |
+| 2 | DRAG | BX = your DESK window | post the kernel's outline drag of BX (§11.103.6): `[ui_dragy]` = BX, which the content press compares with the window PRESSED once its `W_ONCLICK` has returned, and honours only for a `WF_DESK` one - so it is for your desk window's own `W_ONCLICK`, on the UI task, and never for a fullscreen window. Posted before a press, the press's seed wipes it; naming another window it does not match; from a worker it is a race. Anywhere else it moves nothing, but an ARMED press is handed one `W_ONDRAG` at an unmoved point. CF = 0. The drag eats the release: no `W_ONMOUSEUP` follows (nor after a refused post, which skipped the arm) |
+| 3 | RELEASE | BX = your window | if `[menu_win]` is BX, the bar - and with it the keys - goes to `wm_top` (the front application window, or Locator) and is redrawn. From a callback, under the lock (a widget's `W_ONKEY` on Esc). CF = 0 |
+
+**`OSAPI_GFX_DESK`**, a rare cell (`OSAPI_RSLOT thm_desk`): AX, BX = x1, y1
+and CX, DX = x2, y2, inclusive, with the gfx lock held - a `W_PAINT`. It lays
+**the desktop's own ground** over the rect: the theme's (§76.2) - Bright is
+§26's 50% dither phased on SCREEN coordinates, exactly `gfx_fill_gray`'s, so
+a widget's gaps meet the desktop with no seam; Dark is black; Color and
+Windows teal (§76.14: Windows is a row of the same `thm_tab`, so its ground
+is `thm_desk`'s solid arm with no code of its own, and its 1bpp row is
+Bright's dither) - and per display through `GFXDISP` (§39.14). **It leaves
+the theme's colour in `[gfx_color]`** on every solid ground - Dark, Color and
+Windows (`thm_desk` writes it) - so a caller sets its own pen after. kern_small has no themes (§76.13), and there it IS
+`gfx_fill_gray`. Until this cell a package could reach only
+`OSAPI_GFX_FILL_GRAY`, which is right on Bright alone.
+
+**The header flag, `OS88_F_DESK`** (flags bit 6, §20.2): a package that will
+make a desk window says so in its header, so that the loader can take its
+instance record from the TOP of `inst_tab` down (`inst_alloc_di`, a 3-byte
+entry into `inst_alloc`'s zeroing tail). The widget's slot is then
+`INST_MAX - 1`, its empty tile position is at the far end of the strip, and
+the user's first application takes tile 0 (§30). It changes nothing else, and
+kern_small's loader ignores it.
+
+Both cells are appended at the table's end, so the ABI lock moves without a
+`PKG_FMT` bump (§20.2.0.1). A package that calls either ships beside its own
+kernel - §110.8's "not on The Wire" already applies to every Sticky App.
+
+#### 11.103.10 `DESK.DRV`: the desk layer's code is an on-demand module
+
+**The owner's decision (2026-10-15).** Main's size pass left kern_big's and
+kern_emu's `.cold` at exactly a rung boundary (38,400 = 75 x 512, 0 spare),
+and the Sticky App kernel half needs +344 cold bytes, so ANY cold byte crosses that
+rung. A measured design showed that no module cut can reach main's rung: the
+most the Sticky App code can give up is ~201 bytes, because 143 of the 344 are code
+that must run when no widget exists (the loader's top-down record scan and
+its `IF_DESK` store, `desk_live`'s mark test, `sc_open`'s carry contract,
+`OSAPI_CLK_GET`). The owner therefore **accepted exactly ONE 512-byte `.cold`
+step on kern_big and kern_emu** (cold rung 75 -> 76 steps, footprint +512
+each: kern_big 98,816 -> 99,328, kern_emu 99,328 -> 99,840, both inside
+`KERN_BUDGET`) **and** the module cut below, so that the new step is not
+spent at once. Any second step, any image rung, and any kern_small rung stay
+stops. docs/KERNEL-MEMORY.md's History row records it.
+
+**`DESK.DRV` is `MOD_DESK` = 7** (kern_big and kern_emu; kern_small has no
+row, and its `OSAPI_WM_DESK` cell is still `mod_gone`). `MOD_SETS`, the row
+that is not an image (§2.8.7), moves to 8, last as before. The image is
+`kernel/deskmod.inc`'s section `.modj`, assembled with the kernel like every
+module (§2.8), and its slot block `DKDFP` has `DKD_NENT` = 4 entries:
+
+| slot | entry | what it is | reached from | with no image (`mod_gone`: CF = 1, registers kept) |
+|---|---|---|---|---|
+| 0 | `dkd_verb` | MAKE, DRAG and RELEASE (§11.103.9), the verb in AL; anything else is refused | `osapi_wm_desk_x`'s `jmp far [DKDFP]` | MAKE refused, so the Sticky App paints titled. DRAG and RELEASE only follow a MAKE that succeeded, so the image is there |
+| 1 | `dkd_hover` | the hover edge's body (§11.103.7). In: BX = the OLD window, `[cur_hovw]` = the new one, already exchanged by the caller | `cur_shape_pass`, on a change of window only | nothing is hovered: with no image there is no desk window, which is the right answer. **No disk read on the hover path, ever** |
+| 2 | `dkd_show` | `wm_show_b`'s desk arm (§11.103.3): the visible bit, `wm_win_rect` and `wm_paint_dmg` through their resident far shims | `wm_show_b`, for a `WF_DESK` window | unreachable: only MAKE, in the image, sets `WF_DESK` |
+| 3 | `dkd_key` | `fdlg_top_x`'s desk arm (§11.103.4): CF = 0 and BX = `[menu_win]` when it is a desk window, CF = 1 "stand" (`wm_top`'s answer) otherwise | `fdlg_top_x`, with no chooser up | CF = 1, stand: wm_top's answer, exactly right with no widget |
+
+**QUERY is the load point.** The resident half of `osapi_wm_desk_x` is a
+12-byte `.cold` thunk: AL = 0 calls `desk_need` (below) and returns its CF;
+every other verb is `jmp far [DKDFP]`. Three reasons make QUERY the
+place:
+
+- every Sticky App asks it first, inside its entry proc (`os88stik.inc`'s
+  `stik_wsize`), where it reads its own state file, so the system disk is
+  already required - ONDEMAND-PLAN §1's test is met without asking anything
+  new of the user;
+- `STIKPROB.O88` has no `OS88_F_DESK` header bit and still works;
+- a refusal comes BEFORE the window is sized, so the titled fallback is sized
+  as titled. Loading at MAKE would put every missing file on `stik_wmade`'s
+  "refused after a QUERY that succeeded" path, which paints a titled widget
+  in a desk-sized frame.
+
+**...and the loader asks first, for an `OS88_F_DESK` package.** Step 5's
+desk arm (the top-down record scan, §11.103.9) calls `desk_need` BEFORE the
+package's region is claimed, its answer ignored - a refusal is still the
+entry proc's QUERY's to give. The reason is WHERE the claim lands: a module
+is pinned and claimed top-down (§2.8.1), and taken from inside the entry
+proc it sat directly UNDER the widget's own region, so closing the widget
+left that region stranded above a pin for the rest of the session. Measured
+before this (heapmap.py on the live boot): `DESK.DRV` at 99000..99400,
+PINNED, the calendar at 99400..9F000, and after Close the free runs were
+466.5K + 23.0K - **24 KB less contiguous heap** than the 535.5K one run a
+pre-cut kernel gave back. Asked at step 5 the module is above the region,
+under the drivers, at boot and mid-session alike, and a closed widget's
+region merges back. A package WITHOUT the header bit (`STIKPROB.O88`) still
+loads it at its QUERY and still pays that placement; and a first Sticky App opened
+mid-session puts the 1 KB pin under whatever application regions are open
+above it - an island they free around, which only a drop rule (below)
+would remove. QUERY after a step-5 load is `mod_need`'s `.already`: no
+disk.
+
+**`desk_need` keeps the OUTER bracket's pair.** `mod_need` brackets its
+read with `drv_vol_bank` / `drv_vol_back` (§51.5.2), which keep ONE static
+pair on the rule that two brackets never nest - and both callers are inside
+one: a desktop shortcut's launch and `stik_boot`'s relaunch run under
+`sc_open`'s bracket, and the entry proc is reached from it. The inner bank
+overwrote the pair with the widget's FOLDER, so `sc_open`'s restore left
+the machine in `STIKAPPS` (cluster 89 on the 360KB disk) instead of the
+root, or mounted on B: for a row on B: - and every later bracket then paid
+a chdir or remount back there, and a name resolved with no instance stamp
+resolved in the wrong folder. `desk_need` pushes `drv_vol_cwd` as a word
+and `drv_vol_drv` as a byte (never `push word [drv_vol_drv]`: its high byte
+is unrelated `.text`), calls `mod_need MOD_DESK`, and puts both back - 24
+bytes of `.cold`. `tests/stiknodesk.py`'s E (every leg, B: included) is the
+row, and it reads the pair and `[dsk_cwd]`/`[disk_drive]` at an exec
+breakpoint on `stik_boot`'s RETURN - every `sc_open` bracket closed, the
+widget not yet run. Read once the window is up they name `STIKAPPS` on
+any build, because the widget's first tick has by then registered its row
+through the settings core (`mod_need MOD_SETS`, a bracket of its own, banked
+wherever the machine stands) and done its own file I/O; the row's first E
+read them there and failed on all three legs in the final pass for that
+reason, not `sc_open`'s.
+
+**What the first load costs.** A directory find of the system disk's root
+and a one-sector read of `DESK.DRV` - priced, not yet measured, at about one
+`int 13h` (~400 ms on a 5150, PERFORMANCE.md) plus the seek: on
+`os8088-360.img` `DESK.DRV` is cluster 334 (cylinder 37) and `DESKCAL.O88`
+clusters 114-129 (cylinder 13), and the step-5 load sits between the
+package's header peek and its body read, so it is a ~24-cylinder seek out
+and one back. It is paid ONCE a session - at boot for a relaunched widget,
+or on the first Sticky App opened - and never on a gesture after. The measurement
+is `tools/os88boot.py` over `stikboot`'s shape against `dfb62625`; it has not
+been taken.
+
+**The lifetime: held from the first QUERY that loads it until restart.**
+Widgets are session-long and are normally relaunched at boot (§110.4), so a
+drop rule would buy back a 1 KB claim on a machine that has run a Sticky App, at
+~43 more resident cold bytes (a drop check at the instance reap and after an
+`OS88_F_DESK` entry proc). No entry calls anything that can destroy a window,
+so the image is never freed under its own code - and it is never freed at
+all. What the session pays is the 1 KB AND its place - a pinned island
+where `desk_need` put it (above). A hibernate image carries the claim and
+the slots together (an ordinary `MEM_K_MOD` claim, `mod_tab` in `.text`,
+its slots in `.bss`), exactly as `DOCK.DRV` and `WIN95.DRV` survive one;
+the stamp is not re-checked on resume and need not be, the kernel in the
+image being the one that loaded it. **That is by reading, not by a row**:
+`stikhiber` asserts only that a pending resume stands `stik_boot` down, and no
+row hibernates with a widget up and checks `WF_HOVER` and the `DKDFP`
+slots after the resume. A resume step that re-ran `mod_init_x` would leave
+them at `mod_gone` and nothing would fail.
+
+**The failure path** - `DESK.DRV` missing from the system disk, no heap for
+its 1 KB claim, or a stale stamp (§2.8.2): QUERY answers CF = 1, which is
+`mod_need`'s refusal, and the Sticky App takes `stik_wsize`'s titled sizing and
+`stik_wmade`'s titled arm - kern_small's path exactly, a working titled widget
+with nothing half-done. **It says nothing**: the widget works, so there is
+no refusal for the user to act on (§47 rule 3). The boot relaunch is
+unaffected - `stik_boot` stays resident (§110.4, §110.9's module-cut entry) -
+so a Sticky App row still launches at boot and comes up titled, and its row is kept.
+Each launch of an `OS88_F_DESK` package pays TWO more `drv_find`s of
+`SYSTEM\` for the file that is not there - step 5's and the QUERY's, the
+first refusal not being remembered (a byte to remember it would be resident
+for a case that is a damaged system disk). `tests/stiknodesk.py` is the row.
+
+**The hover latency is unchanged.** One `cmp bx, [cur_hovw]` per pass and a
+far call only on a change, as before; the caller is `push bx / xchg bx,
+[cur_hovw] / call far [DKDFP+4] / pop bx` (10 bytes against 9), so
+`[cur_hovw]` is current even with no image and the next pass is one compare
+again; with the image held it is one far indirect call, about the cost of
+the `call COLD_SEG:` it replaced; and no `mod_need` is ever on the path.
+
+**What it measures** (kern_big; kern_emu is identical in `.cold`), against
+the merge before the cut: `.cold` **-163** (`osapi_wm_desk_x` 126 -> 16,
+`cur_hov_x` 45 -> 0, `fdlg_top_x`'s desk arm 20 -> 12), `.text` **-3** (the
+hover caller +1, `wm_show_desk` out for a 5-byte door, the module's name, row
+and `mod_fpt` word +15) and `.bss` **+16** (four slots). The figures the
+build measured are §110.6's last table: kern_big image rung **9** left,
+cold **331** left in its 76th step - **308** after the review fixes
+above (`desk_need` +24, the step-5 call +3, the thunk -4: `.cold` +23,
+nothing else). The image is **235 bytes** (stored
+plain - lz4 would not shrink it), a 1 KB claim, and one cluster on every kern_big system disk in all four geometries,
+the emu disk and the live media (`$(BIGMODS)`, which `$(DRIVERS)` carries).
 
 ## 12. menu.inc
 
@@ -23780,10 +24496,13 @@ whenever no window owns it.
 `menu_loc_set` (menu.inc data) is an ordinary §12.2 set with
 `AM_NAME` = `'Locator'` and **`AM_ONCMD` = 0**, the one value reserved to
 mean *dispatched by the kernel*: ui.inc recognises it and reconstructs a
-`CMD_*` instead of calling through (§13). Its menus are **File**: "Close
-Window" (CMD_CLOSE); and **Builtins**: "Timer" (CMD_TIMER), "Bounce"
-(CMD_BOUNCE), "Disk" (CMD_FILES) — see §12.3.1 for why that is not how they
-started. The System menu is cell 0 for every application: "About os8088..."
+`CMD_*` instead of calling through (§13). Its one menu is **File**: "Close
+Window" (CMD_CLOSE), and Remove Shortcut under `OS88_SHORTCUTS` (§26.8.5).
+It carried a **Builtins** menu too — "Timer" (CMD_TIMER), "Bounce"
+(CMD_BOUNCE), "Disk" (CMD_FILES) — from §12.3.1 to §14.8, which made the
+first two packages and left a menu whose one item duplicates the desktop's
+drive zones; it is gone on both kernels (§14.6 had already taken it off
+`kern_small`). The System menu is cell 0 for every application: "About os8088..."
 (CMD_ABOUT), "Control Panel" (CMD_CTRL, §31), "Task Manager" (CMD_TASKS,
 §28), a rule, "Hibernate..." (CMD_HIBER, §87 — kern_big only, so the ids
 below it are one lower in kern_small), "Restart" (CMD_REBOOT), and
@@ -23795,9 +24514,9 @@ bar — the item list is static `.text` and nothing relays the bar out when the
 last window goes, so layout time is too early. It is the §46 rule 5 case in
 its purest form (a stable, one-word fact) and the one a user meets on the
 desktop at boot before meeting any other; it used to be a live item that
-answered with a beep. The tables-full refusals beside it — Timer, Bounce and
-Disk at the instance cap — stay beeps on purpose: `MAX_TASKS` is 8, and the
-predicate is per-kind rather than one word.
+answered with a beep. The tables-full refusal of a Disk window at the
+instance cap stays a beep on purpose: the predicate is per-kind rather than
+one word. (Timer's and Bounce's were the same beep while they were kinds.)
 
 ```nasm
 CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
@@ -23805,12 +24524,23 @@ CMD_CTRL   equ 2
 CMD_TASKS  equ 3
 CMD_SEP    equ 4   ; the rule above Hibernate - no handler, see below
 CMD_HIBER  equ 5   ; kern_big only (§87); kern_small has no such item and
-CMD_REBOOT equ 6   ;   its ids from here stay one lower: REBOOT 5, CLOSE 6,
-CMD_CLOSE  equ 7   ;   TIMER 7, BOUNCE 8, FILES 9
-CMD_TIMER  equ 8   ; --- Locator: Builtins ---
-CMD_BOUNCE equ 9
-CMD_FILES  equ 10
+CMD_REBOOT equ 6   ;   its ids from here stay one lower: REBOOT 5,
+CMD_SHUTDOWN equ 7 ;   SHUTDOWN 6, CLOSE 7, FILES 8
+CMD_CLOSE  equ 8   ; --- Locator: File ---
+CMD_SCDEL  equ 9   ;   (OS88_SHORTCUTS only, §26.8.5; FILES is then 10)
+CMD_FILES  equ 9   ; no menu of its own since §14.8: the desktop's drive
+                   ; zone posts it (§26.1), so the id stays
+CMD_STIK   equ CMD_FILES + 1   ; kern_big: the Sticky Apps menu's pick,
+                   ; POSTED from under the lock (§110.12)
 ```
+
+**On kern_big and kern_emu both sets carry a second title, `Sticky Apps`**
+(§110.12): `menu_loc_set`'s second cell and `fm_menus`' fifth, the last
+`MENU_APPMAX` allows. It is a cell with NO items, and `menu_track` hands a
+kernel cell (`MB_SEG` 0, which no package's cell is) with `MB_NITEM` 0 to
+`STIKMENU.DRV` instead of dropping it - the module draws and tracks its own
+panel and POSTS what was picked as `CMD_STIK`, so `menu_track` answers 0FFFFh
+and neither `ui_dispatch` route sees the cell at all.
 
 The ids are contiguous **within** a menu, because that is what makes
 `ui_loc_base[cell] + item` work; they are internal constants and renumber
@@ -24107,6 +24837,17 @@ and a resume that does not answer it is a pause no key can undo: the resume
 sets the mode, the next worker frame reads the same unchanged owner and pauses
 again. `OSAPI_WM_FRONT` on the frontmost window is the whole fix, and §44.8.1
 is the worked example.
+
+**The desk layer is the case where the KEYS part from `wm_top` as well**
+(§11.103.4). A press on a desk window activates it without raising it, so
+`[menu_win]` names the widget while `wm_top` still names the application in
+front - and the key router sends keystrokes to `[menu_win]` when that window
+is `WF_DESK` (kern_big's `fdlg_top_x` body, after the modal chooser's test;
+`menu_check` already guarantees `[menu_win]` is visible, §11.103.4). That is the only time keys follow the bar rather than the
+z-order. They come back with the bar: a press anywhere else, any raise, the
+widget's close, or its own `OSAPI_WM_DESK` RELEASE. A widget asking "am I
+focused" asks THIS slot, never `wm_top`, which by §11.103.2 never names a
+desk window at all.
 
 ### 12.7 The app-name menu — `About` when it is offered, `Close` always
 
@@ -25497,6 +26238,17 @@ Two rules, and they are the whole of it:
   `CX`/`DX` are screen coordinates and may fall outside the content box, or
   go negative once the caller subtracts its origin. Range-testing them is the
   caller's job.
+- **A press on a DESK window is delivered without a raise** (§11.103.4):
+  `wm_hit` reports region 0 over the whole frame, the press activates it
+  (the bar, and with it the keys) and goes straight to `W_ONCLICK`, so the
+  release is armed exactly as for the front window. `OSAPI_WM_DESK` DRAG is
+  for INSIDE that `W_ONCLICK` (§11.103.6), naming the window pressed: it
+  posts the kernel's drag for the press being delivered, the press then arms
+  NOTHING, and the drag eats the release - no `W_ONMOUSEUP`. Posted from
+  anywhere else it moves nothing - the next press's seed of `[ui_dragy]`
+  wipes it - but a press already armed is handed one `W_ONDRAG` at an
+  unmoved point (§13.8.2 measures against that word), and from a worker it
+  races the press it lands in.
 
 **The kernel guarantees delivery; the package decides identity.** There is no
 widget layer, so the kernel cannot know what "the same control" means here and
@@ -25917,6 +26669,13 @@ the pane-relative point to the screen rather than lowering the rect, so there
 is one conversion at the asking end and no second copy of the rectangle.
 
 #### 13.8.5 The Timer, and the four states of two flags
+
+*(The Timer is the TIMER package since §14.8, and its buttons are the
+standard control's own gesture, §20.5.1.3 - `os88ui_btnup` and
+`os88ui_btndrag` over one record - rather than the hand-rolled edges this
+section describes. What it says about the four states still holds: the
+package's `tm_bok` is the one predicate and `tm_flags` writes it into the
+record, §111.2.)*
 
 The Timer (§14) is the first control converted where §47's **greying** and
 §13.8's **down state** both apply, and all four combinations are reachable in
@@ -28034,6 +28793,16 @@ definer (§6.2 of docs/plans/completed/GFX-EMBEDDABLE-PLAN.md). It also takes
 `apps/os88ui.inc` to **zero `OSAPI_GFX_LINE` call sites**, which is one of the
 conversions that plan's wave 8 needs.
 
+**A desk widget's check box carries a real tick, and it is not this mark
+revived** (§110.11, STICKY-APPS-LAYER-PLAN.md §7's decision 4). What this section retired was a
+pair of 1-pixel `gfx_line` diagonals, which are scattered single pixels on a
+1bpp adapter. The widget's tick is COMPOSED into its card's slab with strokes
+at least 2 pixels wide, and blitted with the rest of the slab in the one
+`OSAPI_GFX_BLIT1` - so it is solid on CGA and Hercules, and it costs the
+toggle no extra call. `os88ui.inc`'s solid square stands for every other
+package; the widget's form must be LOOKED at on both 1bpp adapters (§39.4)
+before it ships.
+
 #### 13.16.3 …and the drawing and the hit test
 
 Wave 2: `os88ui_mnbar`, `os88ui_mntxor`, `os88ui_mntitler`, `os88ui_mndraw`,
@@ -28307,38 +29076,27 @@ does nothing.
 
 ## 14. apps.inc
 
-The built-in app **kinds**: About, Timer, Bounce. Nothing is
-created at boot (there is no `apps_init`) — every instance is launched on
-demand through `app_launch` (§29), which allocates an instance record and
-a per-instance state block from the kind's pool, creates the window from
-the kind's template (cascaded +16px per pool slot so instances don't
-stack), runs the kind's init proc, and spawns the kind's task if it has
-one. Closing an instance frees all of it.
+The built-in app **kinds** that live in this file: **About**, and nothing else
+since §14.8. Nothing is created at boot (there is no `apps_init`) — an
+instance is launched on demand through `app_launch` (§29), which allocates an
+instance record, creates the window from the kind's template (cascaded +16px
+per pool slot so instances don't stack) and runs the kind's init proc if it
+has one. Closing an instance frees all of it, synchronously: no kind has a
+task any more (§29.3's `KD_TASK` word is `KD_PAD`).
 
-Per-instance state pools (**`.lowbss`**, reached through `ss:` — two of the
-four tables §2's optimization moved out of the kernel's own segment; slot
-stride and cap pinned in the §29 kind table): `app_tmr_pool` 10 × 16
-(TMR_HRS/MIN/SEC bytes at +0/+1/+2, **TMR_RUN byte at +3**, TMR_LAST word at
-+4, TMR_ACC word at +6, **TMR_SHOWN 8 bytes at +8**),
-`app_ball_pool` 10 × 8 (BAL_X/Y/VX/VY words). About is stateless. Init procs (KD_INIT contract,
-§29): `app_tmr_kinit` (h/m/s = 0, **run = 1**, last =
-[ticks], acc = 0, TMR_SHOWN forgotten, `wm_snap`), `app_bounce_kinit`
-(x=4, y=4, vx=3, vy=2).
+**Timer and Bounce were kinds in this file from the first Clock to §14.8** and
+are the TIMER and BOUNCE packages now (§111, §112; `apps/timer/`,
+`apps/bounce/`), loaded from the apps disk like every other program. The
+subsections below that record their design — §14.1's incremental digit
+redraw, §14.4's cut line, §14.5's flicker-free step, §14.7's taskless clock —
+describe mechanisms the packages carry unchanged and are kept as the record
+of why; the `app_tmr_*` / `app_bounce_*` / `app_ball_*` names in them are the
+kinds' bodies, which the packages spell `tm_*` and `bn_*`. The two `.lowbss`
+state pools (`app_tmr_pool`, 10 × 16; `app_ball_pool`, 10 × 8), the kinds'
+icons and the Builtins menu that launched them went with them.
 
-`TMR_RUN` is the byte that used to be the stride's padding, which is the
-whole reason the Timer's buttons cost no memory: the pool and the cap were
-exactly the Clock's. **The stride is not** — it went 8 → 16 when TMR_SHOWN
-arrived, and that is the one thing here with a price on it: 80 bytes of
-`.lowbss` crossed the 512-byte step its rung rounds to, so the kernel's
-footprint moved 81,920 → 82,432, one of the nine steps move 10 granted
-(docs/KERNEL-MEMORY.md). It buys the redraw below, and the alternative —
-a parallel array in `.bss`, where the rounding happened to have room —
-indexes per-instance state by a slot derived from a stride, which is the
-kind of thing that breaks silently the next time the stride moves.
-
-Paint/onkey/onclick procs receive SI = window ptr (§11) and find their state via
-`inst_of_win` (§29) + `I_SPTR`; module-level draw scratch (used only under
-the gfx lock) may stay shared. Kind behavior:
+Paint procs receive SI = window ptr (§11). About is stateless and has no
+onkey. Kind behavior:
 
 - **About** — 300×120 at (170,140), title "About os8088". Paint: four
   centered lines — "os8088 1.0  Build 333" (the version, and the build
@@ -28352,106 +29110,14 @@ the gfx lock) may stay shared. Kind behavior:
   be a constant in the third line any more, which is why it moved into a
   fourth; `app_about_center` re-measures every string, so unequal line
   lengths cost nothing. No onkey. Singleton (cap 1).
-- **Timer** — 160×60 at (330,60), title "Timer": a stopwatch, HH:MM:SS over a
-  row of three buttons. Cap 10 (the template
-  position keeps the whole +16·9 cascade on-screen and above the dock —
-  330 + 144 + 160 = 634 on a 640px screen; on a
-  shorter screen `wm_fit` clamps its tail back onto it, §39.7).
-  **No task** (§14.7): the clock is the window's one-shot timer (§13.9),
-  installed and armed for `APP_TMR_TICKS` = 9 by `app_tmr_kinit`, and
-  `app_tmr_tick` is its `W_ONTIMER` — the UI task, gfx lock held. Each
-  firing: re-arm 9; AX = [ticks]; delta = AX −
-  TMR_LAST (subtraction idiom, safe across wrap); **TMR_LAST = AX
-  unconditionally**; if TMR_RUN = 0 the delta is discarded here; else TMR_ACC
-  += delta*10, and while TMR_ACC >= 182: TMR_ACC −= 182 and advance seconds
-  with carries (s 60→0/m+1, m 60→0/h+1, h 24→0). This sampling runs
-  every firing, and a timer fires whether or not its window shows (§13.9),
-  so a minimized Timer keeps time; only drawing is conditional: `wm_clip_set`
-  (§11.3), which answers CF = 1 for a hidden window as well — if it does,
-  skip; else draw HH:MM:SS from the instance's TMR_HRS/MIN/SEC. The clip dies
-  at `ui_timer_pass`'s `gfx_unlock`. A task-less kind closes at once, and
-  `wm_destroy` zeroing `W_FLAGS` is what stops a dead Timer firing. A half-covered
-  Timer therefore redraws the half that shows, whole glyphs only, instead of
-  stopping. Paint proc forgets TMR_SHOWN (§14.1 — `wm_draw_win` has just
-  white-filled the content) and renders the same string from the state block,
-  then the three buttons. The accumulator design is binding.
 
-  **Sampling the tick while stopped is what Stop means.** The delta is taken
-  and banked into TMR_LAST on every wake whether the timer runs or not, so a
-  stopped interval is *thrown away* rather than owed; leaving TMR_LAST alone
-  would make Start jump forward by however long the timer had been stopped.
-  `app_tmr_onclick`'s Start re-stamps TMR_LAST for the same reason at finer
-  grain — up to 9 ticks of stopped time can be sitting unsampled at the
-  moment of the click.
-
-  **Layout** (content-relative; the window is fixed-size, never resizable,
-  and 160×60 fits inside every adapter's desktop band — CGA's is the
-  tightest — so `wm_fit` cannot shrink it and these may be constants rather
-  than another read of `[vid_*]`, §1/§39.7). Content is 158 × 41. Digits:
-  8 cells = 64px wide, centred across the content, top at +5. Buttons:
-  three of 46 × 15 with 6px gaps, left inset 4, top at +20 — rows 20..34 of
-  the 41 the content has. A label sits at +3 within its button, centred by
-  `font_width`.
-
-  **Start · Stop · Reset**, in that index order, hit-tested by
-  `app_tmr_hit` from those same constants (the `fm_hit` argument, §22.2):
-  Start sets TMR_RUN = 1 and re-stamps TMR_LAST; Stop clears TMR_RUN; Reset
-  zeroes h/m/s **and** TMR_ACC **and** re-stamps TMR_LAST — the part-second
-  in flight goes at both ends — and leaves TMR_RUN alone, so a reset while
-  running keeps running. **Opening the Timer starts it** (`app_tmr_kinit`
-  sets TMR_RUN = 1): the buttons are there to stop it and to put it back,
-  not to arm it.
-
-  **Greying follows §47.** `app_tmr_bok` is the one predicate — Start is
-  refused while running, Stop while stopped, Reset never — and it is what
-  both `gfx_pen_cf` and the click path read, so the greying and the refusal
-  cannot disagree (rule 2). The frame greys with the label, never just the
-  caption; a click on a greyed button does nothing at all, with no beep and
-  no notice, because a greyed control already explains itself (rule 6).
-  On the two 1bpp adapters that reads as a dotted frame around a
-  checkerboard label (§39.4), which is where it was looked at.
-
-  **`app_tmr_btn` erases its own button before drawing it**, and the fill and
-  the label are gated *together* on one `wm_clip_test` over the whole button:
-  a button is one control, so it is drawn whole or not at all, and §11.3's
-  granularity rule cannot bite. Both callers run with the clip disarmed —
-  `W_PAINT`, and `W_ONCLICK`, which fires on the frontmost window alone —
-  so the test always answers "free" today; it is there so the routine stays
-  safe to call from anywhere. A Start/Stop click redraws **those two buttons
-  and nothing else**; a Reset click redraws **the digits that changed and
-  nothing else** (§14.1). `app_tmr_render` sets its pen with `gfx_pen_live`
-  rather than a bare `[gfx_color]` store, because a button drawn just before
-  may have left `[gfx_dis]` set — and there that flag costs twice, since a
-  flagged glyph is a checkerboard *and* `font_run` refuses its fast path
-  while it is set. The buttons themselves are deliberately **not** converted
-  to `font_run`: a button is one `gfx_fill` erasing a frame plus one centred
-  label, so a run would repaint a background the fill already covered — the
-  Disk window's reasoning in §11.94 — and they are drawn on a click, not
-  twice a second.
-- **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (on VGA the
-  template position keeps the whole +16·9 cascade on-screen and above the
-  dock; on a shorter screen `wm_fit` clamps its tail back onto it, §39.7).
-  Per-instance task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
-  gfx_lock; **check under the lock** that the window is visible, then
-  `wm_clip_set` (§11.3); if both hold, erase the 8×8 black square at the old
-  pos (white fill), step, draw at the new pos — both fills cut to the
-  visible region, so a half-covered Bounce shows the square crossing the
-  half you can see. If either fails, **step anyway** and draw nothing;
-  gfx_unlock }. Paint proc: square at the instance's current pos.
-  **The step is unconditional**, which is what makes a fully covered or
-  minimized Bounce come back where it now is rather than where it was
-  buried; it is safe precisely because the paint proc draws from state.
-  (Before §11.3 the frame was skipped without erasing *or* stepping, and a
-  covered Bounce looked frozen. That rule is retired.)
-
-The close protocol for these tasks is §29's: the UI task never destroys a
-task-owned instance's window — it sets I_STATE = 2 and hides; the task
-notices at its next wake (≤ 9 ticks for Timer, ≤ 2 for Bounce) and tears
-itself down with `inst_task_die` → `task_exit`. A package's worker (§20.6)
-reaches exactly this path through `OSAPI_TASK_ALIVE`, whose whole job is to
-be the worker's "next wake" check; there the latency bound is whatever the
-worker's own sleep is, which is why rule 2 makes the call mandatory once
-per outer-loop iteration.
+A package's worker reaches §29's close protocol — the UI task sets I_STATE = 2
+and hides, the task notices at its next wake and tears itself down through
+`inst_task_die` → `task_exit` — through `OSAPI_TASK_ALIVE`, whose whole job is
+to be the worker's "next wake" check; the latency bound is whatever the
+worker's own sleep is, which is why §20.6 rule 2 makes the call mandatory
+once per outer-loop iteration. The Bounce package (§112) is the worked
+example, as the Bounce kind's task was before it.
 
 ### 14.1 The digits are one opaque run, and only of what changed
 
@@ -28843,6 +29509,76 @@ and is byte-identical. The 128 slot a Timer held is free for a Bounce or
 anything else that fits there, and ten Timers no longer take ten task slots. `tests/tmrnotask.py` is the row: no task
 spawned, guest time kept to the second, and §14.4's cut line drawing above
 the edge and not below it.
+
+### 14.8 Timer and Bounce are packages
+
+**What.** The Timer and Bounce kinds became `TIMER.O88` and `BOUNCE.O88`
+(§111, §112; `apps/timer/timer.asm`, `apps/bounce/bounce.asm`), in
+`$(APPS_TOOLS)` and so in `APPS/` on every apps disk in every geometry, with
+the icons the kinds wore embedded in their headers. The kernel keeps About.
+Both kernels are one shape here now: `kern_small` had left the pair out
+since §14.6, so this makes `kern_big` the same — and the two packages run on
+both, where the kinds ran on one.
+
+**Why.** The owner's call, priced since kernel size pass 9's "what is left"
+(docs/plans/completed/HANDOFF-KERNEL-SIZE-P10.md §4: *Timer / Bounce as
+packages, ~1.8KB big, a product decision*). A stopwatch and a bouncing square
+are applications; §2.8's test says a feature the machine can live without
+until it is asked for should not be resident, and the apps disk is where
+every other application already lives. They stayed as long as they did
+because they predate the package format (§20) — the Clock was kind 1 before
+Note Pad was a package — and because §20.6 pointed at Bounce's task as the
+reference implementation of a worker, which it still is, as a package.
+
+**What went** (`kern_big`; `kern_small` had none of it):
+
+- `apps.inc`: the two templates, titles, labels and limits, `[app_tmr_down]`,
+  the two KD_INIT procs, `app_state_of`, every `app_tmr_*`, `app_bounce_*`
+  and `app_ball_*` body, `app_tmr_str`, `app_bwy`, and the two `.lowbss`
+  pools (240 bytes).
+- `instance.inc`: `KIND_TIMER` and `KIND_BOUNCE` with their rows — `KIND_FILES`
+  is 1, `KIND_CTRL` 2 and `KIND_HIBER` 3 on `kern_big` now, the numbering
+  `kern_small` already had (§14.6.1: a table position, not an ABI); the two
+  icon bodies and the 29 pool rows only they used; `app_launch`'s task arm and
+  its `.rollback`, no kind naming a task any more (`KD_TASK` is `KD_PAD`, a
+  zero word kept so the stride stays a power of two); and the three `cw_`
+  thunks only they reached (`cw_inst_of_win`, `cw_task_sleep`,
+  `cw_inst_task_die`) with the three resident entry thunks for the
+  KD_INIT/KD_TASK words.
+- `sched.inc`: `SCH_BUILTIN_STK` (§8.7). The Bounce package's header declares
+  `OS88_STACK_128`, the same class; the Timer's `OS88_STACK_256`, for the
+  worker it runs only on `kern_small` (§111.3).
+- **The Builtins menu**, on `kern_big` as on `kern_small`: `CMD_TIMER`,
+  `CMD_BOUNCE`, `menu_items_builtin`, `ui_loc_base`'s third cell and
+  `fm_s_mbuilt`. Its two launches are packages and its third item, Disk,
+  duplicates the desktop's drive zones (§26.1), so what was left was a menu
+  of one item that duplicates a double-click — §14.6's argument, true of both
+  kernels now. Locator's bar is **System · File** everywhere; `CMD_FILES` is 9
+  (10 with `OS88_SHORTCUTS`) and stays, because the desktop zone posts it.
+
+**What it cost, measured** (`tools/kernsize.py`, `kern_big`, against
+`da3688c5`): `.text` −326, `.bss` −11, `.cold` −1,070, `.lowbss` −240 —
+**−1,647 resident bytes**, the cold rung uncrossed, **KERN_SIZE 99,328 →
+98,304 (−1,024)**, and the image rung from 15 bytes left to 352. The
+packages: TIMER.O88 2,012 bytes of image and 60 of bss, BOUNCE.O88 885 and
+14; three clusters of the 360KB apps disk (345 → 348 of 354).
+
+**What a user sees.** Timer and Bounce are a double-click on the apps disk
+rather than a pick from a menu that is gone; ten of either still open (a
+package is multi-instance, §20, and a second one opens on the first as a
+second Note Pad does - the kind cascaded +16px by pool slot, and a package has
+no pool and no index of its own to cascade by: the entry proc's DX is the
+loader's, not the instance's); a machine with no apps disk in B: has
+no stopwatch, as it has no Note Pad. Every `kern_big` machine gets 1KB of
+heap back, and a `kern_small` machine gets a Timer and a Bounce it never had.
+
+**Tests.** `bouncecost`, `tmrup` and `tmrnotask` measured the kinds and are
+retired with them (PERFORMANCE.md Set 110 keeps bouncecost's figures);
+`heapscrl` opens the two packages by name from the apps disk's `APPS/` where
+it picked the kinds off the Builtins menu; `dispfit` parks its poked handler
+at `sch_chstack`'s base where it used `app_ball_pool`; `desklayer` looks for
+Locator's File cell where it looked for Builtins. `tests/timerbounce.py`
+(§111.5) is the packages' own row.
 
 ## 15. kernel.asm — boot sequence
 
@@ -39499,6 +40235,10 @@ is the rung this decision was checked against: a family is ~1.5 KB a style, so
 the whole set is a rounding error there and would have been 27% of the apps
 floppy's free space.
 
+**At 360 KB they ride `office360.img` instead** (§24.3.1.5): that system disk
+gave its room to the Desk Clock, and `ty_gofonts`' second rung walks the same
+`SYSTEM/FONTS/` on the program's own volume when the system disk has none.
+
 **`OSAPI_VOL_SYS` (slot 0x0328) is what makes it reachable, and it had to be
 new.** A package stands in the folder it was launched from, or in one a Standard
 File dialog gave it (§19.2.1); **nothing told it where the SYSTEM's files were**.
@@ -39622,6 +40362,9 @@ Four things about the convention:
   volume it is a word once `dsk_media_ok` has agreed the floppy cannot have
   changed (§18.9.1.1), and otherwise a quiet mount that keeps the BPB, the FAT
   window and the directory cache.
+  A Sticky App's save (§110.5.1) still makes its FIRST step a full `OSAPI_FILE_GOTO`
+  — the one that re-reads a disk which may have been swapped — and walks the
+  rest quietly, and says why the first one must stay full.
 - **`SYSTEM/` is found by walking, not assumed.** `OSAPI_FILE_FIND` (§19.7.1)
   from the root, matching `type == OSAPI_FT_DIR` — the folder is an ordinary
   visible directory, unlike the system *files* inside it (§19.6).
@@ -39638,6 +40381,13 @@ folder rule with nothing to tolerate: the default is the shipping
 configuration, and the file exists so that a gate can point one machine at a
 host server (`make thewiretest`) and a user can point theirs at a mirror.
 Nothing on the machine writes it.
+
+**A Sticky App's state file is the fourth** (§110.5): `SYSTEM\APPDATA\DESKCAL.DAT`
+for the Desk Calendar, its window's place and the screen it was saved on
+ahead of its appointments and tasks, under a 16-byte Sticky App header that
+`apps/os88stik.inc` owns. It is on the widget's own volume like every other
+one here — which, a Sticky App living in the BOOT volume's `STIKAPPS\`, is the
+system disk.
 
 #### 19.9.1 `apps/os88data.inc` — the visit, written once
 
@@ -39903,7 +40653,7 @@ each needed a mechanism**:
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
 | 2   | 1    | format version = **10** (`PKG_FMT`): the segment-per-package layout, built against the API table as §20.3 lays it out now. Anything else — 1 to 9 included — is refused (§20.2.0) |
-| 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; bits 6–7 zero |
+| 3   | 1    | flags: bit 0 = embedded icon follows the header; bit 1 = an association block follows it (§54.6); **bit 2 = the FILE is longer than the image and the rest is the package's own (§20.12)**; **bit 3 = the image is COMPRESSED and the file is SHORTER than it, bit 4 = which format (0 = LZ4, 1 = LZB)** — docs/plans/O88-COMPRESSION-PLAN.md; **bit 5 = a 16-byte DOCUMENT-GLYPH block follows the association block (§54.3.2)**; **bit 6 = `OS88_F_DESK`, the package makes a desk window (§11.103.9): kern_big's loader takes its instance record from the top of the table down**; **bit 7 = `OS88_F_STIK`, a 192-byte STICKY APP CARD follows the rest of the clear prefix (§110.12)** |
 | 4   | 2    | link base — must be **0**: a v3 package links at org 0     |
 | 6   | 2    | entry offset (≥ 0x20; ≥ 0x60 with icon; < image size)      |
 | 8   | 2    | image size = resident bytes: header + icon + code + data. Equals the file size exactly — **unless flags bit 2 is set, when it may be smaller and the file's tail is the package's (§20.12)**. |
@@ -40130,8 +40880,16 @@ jump cells and the one far cell. Its last change (C3, below) then made fifteen
 cells **inline** and took the table to **1,093 bytes**: 43 plain SLOTs and 11
 X cells hot, 95 rare cells, 15 inline cells, six jump cells and the far cell.
 `OSAPI_FILE_READ_SEQ` (18.4.8) and `OSAPI_FSX_SPK` (34.11) have since added a
-96th and a 97th rare cell, **1,105 bytes**, which is what `kernel.asm`'s length
-guard asserts from the counts.
+96th and a 97th rare cell, **1,105 bytes**; `OSAPI_FILE_WRITE_SEQ` (18.4.9) a
+98th, 1,111; `OSAPI_FERR_TEXT` (18.4.11, at `0x0467`) a 99th, 1,117;
+`OSAPI_THM_SET` (§76.14.14, at `0x046D`) a sixteenth INLINE cell, of 8 bytes,
+1,125; and `OSAPI_CLK_GET` (§37.96, at `0x0475`) a 100th rare cell, 1,131
+bytes. The desk layer (§11.103.9) appends a 101st and a 102nd -
+`OSAPI_WM_DESK` at `0x047B` (a cold body, `kern_small`'s the `mod_gone`
+refusal) and `OSAPI_GFX_DESK` at `0x0481` (`thm_desk`, which IS
+`gfx_fill_gray` on `kern_small`) - **1,143 bytes**,
+which is what `kernel.asm`'s length guard asserts from the counts.
+`osapi_table_end` is `0x0487`.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -41690,14 +42448,12 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `OSAPI_GFX_UNLOCK`, so there is nothing to undo. `OSAPI_WM_OBSCURED` is
    still there and still correct, but it vetoes the whole frame for one
    covered pixel, which for a worker that spends minutes on a frame is the
-   wrong trade. This is the §14 Bounce idiom, and `app_bounce_task` in
-   `kernel/apps.inc` is the reference implementation for everything a
-   worker does, written inline as a package writes it: open, then
-   sleep / die-check / `gfx_lock` → `test W_FLAGS, 2` →
-   `OSAPI_WM_CLIP_SET` → draw → unlock. (It called three shared steps,
-   `app_kind_open`, `app_kind_wait` and `app_kind_arm`, while the Timer ran
-   the same spine; §14.7 took the Timer's task away and the indirection
-   went with it.)
+   wrong trade. This is the §14 Bounce idiom, and `bn_worker` in
+   `apps/bounce/bounce.asm` (§112.2) is the reference implementation for
+   everything a worker does - a package's worker in fact, since §14.8, where
+   it was the kernel's `app_bounce_task` written "as a package writes it":
+   open, then `OSAPI_TASK_ALIVE` / sleep / `OSAPI_GFX_LOCK` →
+   `test [es:bx+W_FLAGS], 2` → `OSAPI_WM_CLIP_SET` → draw → unlock.
 6. **The worker's stack is the CLASS the package's header declares** (§8.7.2,
    byte +15), resolved through `sch_clsbytes`: 128, 192, 256 or `SCH_STACK`
    (**384**). A header that declares nothing gets `SCH_STACK`, which is what
@@ -41765,12 +42521,12 @@ Two teardown corollaries, both about not trading a crash for a leak:
 **Refusal is normal, not exceptional.** `MAX_TASKS` is **14** on `kern_big`
 and **7** on `kern_small`, so there are 13 background slices on one and 6 on
 the other (§8.7) — the idle task holding one for the life of the machine — and
-the UI task, up to ten Timer/Bounce instances, the Task Manager's worker and a
+the UI task, every Bounce's worker (§112), the Task Manager's worker and a
 transient SB refill/drain task (§34.5) all draw from them, so CF=1 is an
 ordinary outcome, and it arrives sooner for a worker that asks for the largest
 class: `kern_big`'s partition has two 384-byte slices and `kern_small`'s one. A package must degrade — stay a perfectly good task-less
 package, window, callbacks, menus and close box all working — and **should
-retry**, because the condition is transient: closing one Timer frees the
+retry**, because the condition is transient: closing one Bounce frees the
 slot, and a package that latched its refusal is broken until it is
 relaunched. On refusal nothing was created and `I_TASK` is untouched, so a
 retry is free — ask again from every callback that already runs under the
@@ -43572,8 +44328,9 @@ step-2 peek all at once — every byte any of them reads is already in the first
 sector and already plain.
 
 The clear prefix is therefore **32 bytes**, plus 64 with an icon, plus 16 with
-an association block, plus 16 with a document glyph (§54.3.2): at most
-**128**, always inside the first sector, and **always a multiple of 16** —
+an association block, plus 16 with a document glyph (§54.3.2), plus 192 with
+a Sticky App card (§110.12): at most **320**, always inside the first sector,
+and **always a multiple of 16** —
 `ld_expand` puts the expanded body's destination a SEGMENT along (§20.14),
 which is why the glyph block is sixteen bytes for eight of glyph.
 
@@ -45185,7 +45942,12 @@ on entry. Steps:
    step 6 safe: it writes ceil(image/512)·512 ≤ need bytes, never a
    neighbour's region — and that is an invariant the carry fence is the
    whole of what enforces.)
-5. `inst_alloc` (§29) → CF → status 5. `mem_claim_hi` need KB → CF →
+5. `inst_alloc` (§29) → CF → status 5 - or, on kern_big for a package whose
+   header carries `OS88_F_DESK` (flags bit 6, §11.103.9), a scan of
+   `inst_tab` from the TOP down and `inst_alloc_di`, so a widget's record is
+   `INST_MAX - 1`. The flag rides `[ld_cfmt]` bit 3 beside the compression
+   format in bits 0-1, so that byte is TESTED by bit and never compared
+   whole. `mem_claim_hi` need KB → CF →
    status 5 (the unpublished instance record stays free). Note the
    record is not yet published, so the region is reserved only by
    single-threadedness (rule §29.2.8).
@@ -45227,7 +45989,7 @@ on entry. Steps:
    so a per-slot copy in kernel `.bss` was 768 bytes duplicating something
    that could not go away first. `inst_icon_ptr` stages one body back into
    the kernel segment when a tile is actually drawn (§25), which costs
-   nothing on any path that draws none. Then `inst_bind_win` BX, publish I_STATE = 1, **`[ld_status]`
+   nothing on any path that draws none. On kern_big, `IF_DESK` goes on the record when BX is `WF_DESK` (§11.103.9: an instance is tile-less exactly when its own window is a widget). Then `inst_bind_win` BX, publish I_STATE = 1, **`[ld_status]`
    = LD_OK and `[ld_painted]` = 1**, gfx_lock, `wm_show` BX, gfx_unlock,
    status 0. (`wm_create` failing inside the entry surfaces as CF =
    status 4.) The status is published **before** the repaint on purpose: a
@@ -46054,7 +46816,7 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Up One Folder / Root Folder | inline: `fmv_sync`, then the **`..` row's own handle** + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
 | as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL`. Not on the bar since §22.15 — the context menu and the in-window button reach them |
-| Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
+| Timer / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock. (Off this bar since §22.28, and packages since §14.8; `Nav > New Window` is the route that still posts a launch) |
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
 
@@ -49973,7 +50735,9 @@ Clone and Write Image (renamed from `Write Img…`, there being room) keep
 
 **Builtins left the Disk window's bar.** It is the DESKTOP's menu - Timer,
 Bounce and a new Disk window - and a Disk window is a program of its own,
-not a part of the desktop; Locator's own bar keeps it unchanged (§12.3.1).
+not a part of the desktop; Locator's own bar kept it unchanged (§12.3.1)
+until §14.8 made Timer and Bounce packages and took the menu off that bar
+too.
 Its three ids, three bodies and its item list went with it, and the bar is
 four cells on both builds, with one of `MENU_APPMAX`'s five spare - which is
 48px of the 640-wide bar given back to the clock and the toasts beside it
@@ -50623,6 +51387,90 @@ take the same list, as they took 24.3.1.1's; every network row opens the
 browser off `B:`. `tests/btnall.py` and `tests/btngesture.py`, which launched
 both off `A:`, now launch them off the apps disk they already boot with.
 
+#### 24.3.1.3 Mines leaves the 360KB system disk
+
+**`SYS360OMIT` gains `MINES.O88`**, by the owner's decision, for §110.12's
+Sticky Apps menu. `STIKMENU.DRV` must ride the system disk - `mod_need`
+reads a module off the boot volume (§2.8) - and it is four clusters, which
+took the disk from 345 to 349 of 354. That left five free, and **five is too
+few for the Desk Calendar's own first save**: its 2,456-byte state file (v1:
+three clusters, and three more while a save writes the new copy before it
+frees the old, §18.4) and the SYSTEM.CFG its registration rewrites want seven
+between them. Measured on
+`deskcaltask`, which saves both: it fails with five and six clusters free and
+passes with seven. A system disk on which the one Sticky App it ships cannot
+keep its own state is not shippable, so something had to go.
+
+Mines is a GAME, which 24.3's argument - programs the boot disk's own drivers
+make useful - never covered; it is the smallest package on the disk that is
+not a system program, and it stays on `apps360.img` (`GAMES/`) and
+`games360.img`, and on every 720KB, 1.44MB and 1.2MB disk. Every row that
+opens Mines on the 360KB machine already opens it off `B:`.
+
+| the 360KB system disk | clusters |
+|---|---|
+| main, before §110.12 | 345 of 354, 9 free |
+| with `STIKMENU.DRV` | 349 of 354, 5 free - the calendar's save refused |
+| `MINES.O88` and its `GAMES/` folder off | **346 of 354, 8 free** (measured) |
+
+(Timer and Bounce were never on a system disk: §14.8 made them packages on
+the apps disks alone.)
+
+**Then the calendar's payload went to v2** (§110.3): sixteen appointments and
+sixteen tasks, a 984-byte file - one cluster where v1's took three - so what
+its first save wants falls from seven free to three. Mines stays off: the
+owner's decision stands, and the room is the next Sticky App's.
+
+#### 24.3.1.4 Paint leaves the 360KB system disk
+
+**`SYS360OMIT` gains `PAINT.O88`**, by the owner's decision, for §110.13's
+Sticky Note. The second Sticky App rides `STIKAPPS\` on every system disk
+(§110.1), and on this geometry it did not fit the eight clusters Mines left:
+`STIKNOTE.O88` is fifteen clusters packed (14,762 bytes), and its state file
+is five more - and five again while a save writes the new chain before it
+frees the old (§18.4) - beside the calendar's three and SYSTEM.CFG's.
+
+Paint is §24.3.1.1's own candidate - the largest package the Wire can give
+back - and it stays on `apps360.img` and on every 720KB, 1.44MB and 1.2MB
+disk. Every row that opens Paint on the 360KB machine opens it off `B:`.
+
+| the 360KB system disk | clusters |
+|---|---|
+| main, after §24.3.1.3 | 346 of 354, 8 free |
+| `PAINT.O88` (22) off, `STIKNOTE.O88` (15) on | **339 of 354, 15 free** (measured) |
+
+#### 24.3.1.5 The typefaces and the Font Viewer move to the office disk
+
+**`SYSTEM/FONTS/` leaves the 360KB system disk for `office360.img`, and
+`SYS360OMIT` gains `FONTVIEW.O88`**, by the owner's decision, for §110.14's
+Desk Clock - the third Sticky App, which did not fit the fifteen clusters
+Paint left once Sticky Note's first save was counted. The ten faces and their
+licence are fourteen clusters and the folder one; the Font Viewer is four,
+and it goes with them because on this disk it would list a folder that is not
+there. Both stay on every 720KB, 1.44MB and 1.2MB system disk (§19.8), and the
+Font Viewer was on `office360.img` already.
+
+**The office disk is where the programs that set type ride** at this
+geometry - Word, ArtfulType, PiXEL and the Font Viewer - and `ty_gofonts`
+(`apps/os88type.inc`) finds the faces there because it has a SECOND RUNG
+now: when the system disk has no `SYSTEM/FONTS/`, it walks the same path on
+the volume the PROGRAM is standing on (the caller's banked
+`OSAPI_FILE_HERE`). The bank remembers which of the two it found, and the
+system disk is always asked first, so every larger geometry behaves exactly
+as before. ArtfulType off `apps360.img` finds no faces on this machine and
+offers the kernel's 8x8 cell alone - the empty-folder answer §19.8 already
+gave - until the office disk is the one in B:.
+
+| | clusters |
+|---|---|
+| the 360KB system disk, after §24.3.1.4 | 339 of 354, 15 free |
+| `SYSTEM/FONTS/` (15) and `FONTVIEW.O88` (4) off | **321 of 354, 33 free** (measured) |
+| `DESKCLOK.O88` (20) on | **341 of 354, 13 free** (measured): the three Sticky Apps' first saves are a cluster each (§110.5.3) |
+| `office360.img`, with `SYSTEM/FONTS/` | 303 → **318 of 354, 36 free** (measured) |
+
+`tests/unit/t_fonts.py` holds both halves: the faces on the three larger
+system images and on `office360.img`, and none at all on `os8088-360.img`.
+
 ### 24.4 The MEDIA DISK — a third shipped disk, at 360KB alone
 
 `build/media360.img` is a data floppy carrying `MEDIA/BEVERLY.MOD` and
@@ -50846,6 +51694,11 @@ this describes had never been the list on the disk. A core list quoted rather
 than derived is a list that goes stale the first time anything is swapped in
 it — which is an argument for §24.5.6's shape as much as a correction, since a
 disk that takes the WHOLE payload has no curated list to go stale.)
+
+**`STIKAPPS\` rides the small system disks too** (§110.7). A Sticky App needs no
+driver and a few KB of heap, so none of §24.5's three grounds applies; what
+kern_small lacks is the autostart, not the widget, and a widget launched by
+hand there keeps its place and its data in its own state file.
 
 #### 24.5.3 …and the readers left with nothing to read
 
@@ -51279,10 +52132,11 @@ db height        ; rows
 
 **Every built-in kind carries one** (`KD_ICON`, §29.3), in the header-less
 `icon_draw16` layout, stored in `instance.inc`'s `.text` next to
-`inst_kinds`: About is the DIP chip the System menu draws, Timer a stopwatch
-(crown, face, two hands), Bounce a ball with its arc and floor, Disk a folder (the drive icon is
-desk.inc's job, §26), Task Manager a bar chart on an axis, Control Panel
-three sliders. `KD_ICON` = 0 still means "the generic icon" and still works;
+`inst_kinds`: About is the DIP chip the System menu draws, Disk a folder (the drive icon is
+desk.inc's job, §26), Control Panel three sliders (the Timer's stopwatch -
+crown, face, two hands - and Bounce's ball with its arc and floor went into
+the two packages' headers with their kinds, §14.8; the Task Manager's bar
+chart on an axis went into TASKMGR.O88's the same way, §28). `KD_ICON` = 0 still means "the generic icon" and still works;
 what it stops meaning is "every built-in", which made the dock six identical
 tiles. The last two were the test: a framed list of bars and a framed list of
 sliders are the same shape at 16px, and had to be redrawn until they were
@@ -52747,7 +53601,7 @@ there would be nothing to keep one in.
 | 0 | 1 | the volume index (0 = A:), `0xFF` = a free row |
 | 1 | 1 | its byte of `[desk_zslot]` — in the FILE only: CTRL.DRV writes it from the table and the boot reader puts it back (§26.8.6) |
 | 2 | 1 | the kind: 0 document, 1 package, 2 folder (§19.1's type word) |
-| 3 | 1 | spare |
+| 3 | 1 | NOT spare, whatever this table said until §110: `\` (0x5C) on a shortcut dragged out of a Disk window — `sc_m_new` writes the path one byte early so `dsk_path`'s leading separator lands here — 0 on a package's link (`sc_m_add` stores it), and **`'D'`** (0x44) on a Sticky App row (§110.2). The Sticky App mark is an EQUALITY, so neither of the other two values can be read as one |
 | 4 | 45 | the entry's path BELOW THE ROOT, `APPS\CALC.O88`, NUL: `dsk_path`'s 32-byte folder path less its leading `\`, a `\` and an 8.3 name |
 | 49 | 13 | the caption, NUL |
 | 62 | 2 | `db 1, 16`: an icon record's header, so header and body ARE a record and the picture draws straight out of the claim |
@@ -52873,6 +53727,11 @@ then dispatch.
   thing. The letter is patched into the string before each toast,
   `desk_lbl_gen`'s way, and the 23 characters are exactly a toast's room. A
   package that will not load gets `ld_say_status`'s verdict.
+- **`sc_open` answers CF** (§110.4): CF = 1 iff the walk found no volume,
+  folder or file, after the toast; CF = 0 for everything else, a load the
+  loader REFUSED included (its sentence is the answer, and the target is
+  there). `desk_open`'s `jmp sc_open` ignores it; `stik_boot` is what reads
+  it, and downgrades a Sticky App row on CF = 1.
 
 **Remove** has three routes and one door, `SC_OP_DEL`:
 
@@ -53042,7 +53901,10 @@ The ZONE INDEX says what the item is: 0..`DVOL_MAX`−1 the volumes, `DESK_SVZ`
 = 8 the service item, `DESK_SC0` = 9 .. `DESK_NZ`−1 = 23 the shortcuts.
 kern_small has only the volumes, so its `DESK_NZ` is `DVOL_MAX`. "Is it
 live" is `desk_live`: a volume's `DV_FLAGS` bit 0, the service item's
-`[desk_svc_seg]`, a shortcut's row. `desk_owner` answers the inverse, which
+`[desk_svc_seg]`, a shortcut's row — unless that row carries §110.2's Sticky App
+mark, `'D'` at +3, which is a remembered WIDGET and not an icon: it is never
+live, so it holds no cell and is never painted or hit. That test has to be
+resident, on the reflow's own path, which never touches a disk. `desk_owner` answers the inverse, which
 zone a cell is showing.
 
 **A cell no screen has is DSL_SLOT itself**, 63, which `[desk_ncell]` is
@@ -53072,6 +53934,12 @@ to the reflow whatever it is. **A WISH IS A REMEMBERED CELL**: `OSAPI_DESK_ITEM`
 writes the asked-for cell as `DSL_PIN | DSL_GONE | cell` and pass 2 grants it
 if it can — "the slot you ask for, or the first available" is this routine
 and nothing new.
+
+**A Sticky App row is not live** (§26.9.2, §110.2), and its table byte is 0xFF, so
+the reflow never gives it a cell; rule 1's "a non-live row holds nothing" is
+the whole of its handling here. A row `stik_boot` downgrades (§110.4) loses
+its mark and so becomes live, and the reflow then places it like any new
+shortcut: the first free cell, pinned.
 
 **NOTHING HAPPENS UNTIL `[desk_ready]`.** The boot reads SYSTEM.CFG — the
 placed cells — and then the drivers add their volumes one at a time; a pass
@@ -53176,13 +54044,17 @@ SERVICE item, and anything else is a PACKAGE and adds a LINK.
                    +0   1  the volume, 0 = A:
                    +1   1  the cell it would like, 0xFF = the first free
                    +2   1  0 document, 1 package, 2 folder
+                   +3   1  'D' (OSAPI_STIK_MARK): a Sticky App row (§110.2) -
+                           KIND must be 1. Anything else is stored as 0
                    +4  45  the path BELOW THE ROOT, NUL
                    +49 13  the caption, NUL
                    +62  2  the kernel's - whatever is there is overwritten
                    +64 64  the 16x16 picture (§25's body form)
        AH    = (a package's remove) the zone its add returned, and ES:SI
                the record it added: the row goes only while its volume
-               and path are still that record's
+               and path are still that record's. AH = 0xFF: the Sticky App row
+               whose path's FINAL component is the record's (§110.2) -
+               found by name, then the same check
   out  CF = 0 AL = the item's ZONE (an add)
        CF = 1 refused: a second service item, a withdraw of somebody
               else's, a full desktop or table, no system disk, a link
@@ -53205,6 +54077,14 @@ validated: both strings are force-terminated and the picture's header is
 stamped `1, 16`, so a hostile record can mislead nobody but its own user.
 A kind above 2 or a volume past `DVOL_MAX` is refused, because those would
 send the open somewhere no code path goes.
+
+**A Sticky App record** (+3 = `'D'`, §110.2) is the same call with three differences
+the settings core makes: an add of a widget that already has a row is an
+UPDATE in place when its volume or path changed and a no-op that writes
+nothing when neither did; it is not refused by a full desktop and takes no
+cell (`[desk_zslot]` 0xFF); and its remove may name it by its final path
+component instead of a zone, AH = 0xFF, because a zone does not survive a
+boot. A Sticky App record whose KIND is not 1 is refused.
 
 **From a WINDOW CALLBACK only**, never a worker: the add loads `CTRL.DRV` and
 writes SYSTEM.CFG, and a worker may not touch a file (§20.6 rule 7).
@@ -59855,13 +60735,13 @@ I_CYC    equ 28   ; dword (lo word first): PIT cycles billed to this
 I_RECSZ  equ 32
 
 KIND_ABOUT   equ 0
-KIND_TIMER   equ 1       ; (Note Pad was kind 1 until it became the
-KIND_BOUNCE  equ 2       ;  NOTEPAD package, §27 — the numbering closed up;
-                         ;  kind 1 was the Clock until it gained its buttons
-                         ;  and became the Timer, §14)
-KIND_FILES   equ 3
-KIND_CTRL    equ 4       ; Control Panel (§31)
-KIND_HIBER   equ 5       ; the Hibernate window (§87.1), kern_big only
+KIND_FILES   equ 1       ; (the numbering has closed up three times: Note Pad,
+KIND_CTRL    equ 2       ;  kind 1, became the NOTEPAD package, §27; the Task
+                         ;  Manager, kind 4, TASKMGR, §28; and the Timer and
+                         ;  Bounce, kinds 1 and 2, TIMER and BOUNCE, §14.8 -
+                         ;  so both kernels number the same way now, which
+                         ;  §14.6.1 says is a table position and not an ABI)
+KIND_HIBER   equ 3       ; the Hibernate window (§87.1), kern_big only
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
 
@@ -60007,9 +60887,11 @@ without its twin, which is the standing arrangement `MAX_TASKS`, `INST_MAX` and
 
 ### 29.3 Kind descriptor table (.text, `inst_kinds`, stride KD_SIZE = 16)
 
-Per built-in kind: `KD_TPL` (word, wm_create template ptr), `KD_TASK`
-(word, task entry, 0 = task-less — built-in kinds only; a package's worker
-is claimed at run time through §20.6 and is declared nowhere),
+Per built-in kind: `KD_TPL` (word, wm_create template ptr), `KD_PAD`
+(word, 0 — this was `KD_TASK`, a kind's task entry, until §14.8: Bounce was
+the last kind with one, no row names a task now and `app_launch` spawns
+none; a package's worker is claimed at run time through §20.6 and is
+declared nowhere. The word stays so the stride keeps its power of two),
 `KD_POOL` (word, state pool base, 0 =
 stateless), `KD_SSIZE` (word, pool stride), `KD_INIT` (word, state-init
 proc or 0 — in: BX = window ptr, DI = state ptr or 0, SI = instance
@@ -60022,18 +60904,17 @@ only feature bits (WF_SIZABLE — never bits 0/1, and WF_FULL makes no
 sense at create time). The Disk kind sets WF_SIZABLE (§22); every other
 row keeps 0.
 
-Pinned caps: About 1 (stateless), Timer 10
-(stride 16 — 8 of state and 8 of §14.1's TMR_SHOWN), Bounce 10 (stride 8),
+Pinned caps: About 1 (stateless),
 **Files 4 (stride `FS_SIZE`, pool `fm_pool`)**,
-TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31),
+Control Panel 1 (no per-instance state, §31),
 Hibernate 1 (stateless, painted by its module, §87.1). The
 Files cap is 4 because each window claims its own `VIEW_KB` cache (§2.3); `KD_CAP`, `VIEW_SLOTS` and the `fm_pool` size are one
-number wearing three hats and must move together. The
-per-kind caps deliberately over-subscribe INST_MAX now that Timer and
-Bounce allow 10 each — `INST_MAX` (and MAX_TASKS, §8) is the real ceiling,
-and a launch on a full table simply fails with CF=1. Since §20.6 and §34.5
+number wearing three hats and must move together. (Timer and Bounce were
+10 each - stride 16, 8 of state and 8 of §14.1's TMR_SHOWN, and stride 8 -
+until §14.8; a package has no cap but `INST_MAX`, and `MAX_TASKS` (§8) is
+the ceiling a Bounce's worker meets first. Since §20.6 and §34.5
 put package workers and transient sound tasks in the same pool, MAX_TASKS
-is now the binding ceiling more often than INST_MAX is.
+is the binding ceiling more often than INST_MAX is.)
 
 `inst_kinds` rows are in KIND_* order, one 16-byte row per kind; the
 Control Panel's row is the last one and is task-less, pool-less and
@@ -60061,7 +60942,7 @@ init-less:
 | `inst_alloc` | out CF=0 + DI = a free record **wholly zeroed** — all `I_RECSZ` bytes, so I_NAME, I_WIN and I_TASK go with I_FLAGS/I_SPTR/I_SIZE/I_ICON/I_CYC; CF=1 table full. I_TASK therefore momentarily reads 0 rather than the last tenant's slot, which nothing can see: I_STATE is 0 across the whole gap and every walker skips a free row, and both callers write I_TASK = 0xFF before the record publishes. DF is left clear. Does NOT publish. UI task only. |
 | `inst_set_name_x` | in DI = record, **ES:SI** = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Byte I_NAME+15 is always 0 and the tail after a short name is NUL-padded by the same 15-step loop. Safe on a package header's 16-byte name field. The DS-relative `inst_set_name` was a thunk with one caller and is gone (kernel size pass 9): `app_launch` sets ES = DS and calls this. |
 | `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
-| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
+| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → gfx_lock, wm_show, gfx_unlock. (It spawned a kind's `KD_TASK` here, with a rollback for a full task table, until §14.8 left no kind with a task; a package's worker is its own to spawn, §20.6.) |
 | `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, I_STATE ← 0 — for a package instance that final store frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task tears down at its next wake — and for a package instance that took a §20.6 worker, `task_exit`'s release-byte store is what frees the region. A package instance reaches this second branch exactly when it owns a worker. |
 | `inst_minimize` | in BX = window ptr, lock held: set I_FLAGS bit0 (unowned → skip), wm_hide. |
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
@@ -60094,10 +60975,10 @@ count has reached `KD_CAP`, what happens next depends on whether the cap is
   About*, and there is one About, so the existing instance is fronted and
   un-minimized and the call succeeds. That is singleton semantics and it is the
   right answer.
-- **`KD_CAP` > 1** — Timer and Bounce, both 10. "Open Bounce" for the eleventh
-  time means *make me another one*, and fronting one of the ten already there is
-  not that. It **refuses**: CF = 1, and `ui_cmd` turns that into `snd_beep`
-  (§34.3).
+- **`KD_CAP` > 1** — the Disk window (4), and Timer and Bounce (both 10) until
+  §14.8. "Open Bounce" for the eleventh time means *make me another one*, and
+  fronting one of the ten already there is not that. It **refuses**: CF = 1,
+  and `ui_cmd` turns that into `snd_beep` (§34.3).
 
 **It used to front in both cases**, which made a multi-instance kind at its cap
 indistinguishable from nothing happening at all — the pick did nothing visible,
@@ -60214,6 +61095,17 @@ are mutually exclusive in practice, since a minimized window is not visible
 and so cannot be frontmost, but nothing depends on that; and a heavier
 border survives the reduction to three inks (§39.4) where a second colour
 would not.
+
+**A desk instance has no tile** (§11.103, `IF_DESK`): `db_key` answers 0 for
+it, `db_hit` reports no tile under it, and DOCK.DRV's twins - `dkx_key`,
+`dkx_hit` and `dkx_map`'s count and walk - skip it, so a packed side strip
+does not spend a tile on it either. Its SLOT still exists, so on the stable
+mapping its position is an empty hole - which is why a package with header
+flag `OS88_F_DESK` (§20.2) is given the TOP free record (`INST_MAX - 1`
+first) and the hole lands at the far end of the strip, where nothing follows
+it: the user's first application is tile 0, as it would be with no widget at
+all. `dock_act` needs nothing, because `wm_top` never names a desk window
+(§11.103.2).
 
 ### Geometry (pinned)
 
@@ -60858,6 +61750,13 @@ rests **on the line for `DOCK_HOVER_T` = 5 ticks** (0.27 s, the nearest
 tick to ¼ s) opens it; once open, it closes **`DOCK_LEAVE_T` = 14 ticks**
 (0.77 s, the nearest to ¾ s) after the pointer leaves the strip's rect, and
 a pointer that comes back inside that time resets the count.
+
+**A desk widget's handle uses the same two constants BY NAME** (§110.11):
+it is revealed `DOCK_HOVER_T` ticks after the pointer comes onto the widget
+and hidden `DOCK_LEAVE_T` ticks after it leaves, and it declines on the same
+four facts this strip declines on - a button held, a saver, a modal chooser,
+a fullscreen window - so the two auto-hiding things on the desktop keep one
+rhythm.
 
 `[dock_hidden]` is the one byte the module's own painters ask, and
 `dkx_live_set` is its one writer: hidden is *auto and not open*. It is in the
@@ -65661,10 +66560,10 @@ inks.
 
 The wall clock: one date + time of day for the whole system, seeded from
 the hardware RTC when the machine has one and advanced from the PIT
-afterwards. Label prefix `clk_` (the built-in **Timer** app of §14 keeps its
-own `app_tmr_` names and its own per-instance stopwatch state — the two are
-unrelated, and the app's rename away from "Clock" is what finally makes the
-two prefixes read differently). Included right after `events.inc`; `clk_init` runs in kmain
+afterwards. Label prefix `clk_` (the **Timer** - §14's kind, the TIMER
+package of §111 since §14.8 - keeps its own `tm_` names and its own
+per-instance stopwatch state — the two are unrelated, and the app's rename
+away from "Clock" is what finally makes the two read differently). Included right after `events.inc`; `clk_init` runs in kmain
 right after `sched_init` and `sch_idle_start` (§15). All code is near `.text`: it is called from
 the UI task's inner loop and from the Control
 Panel's far page (§31.5).
@@ -66309,6 +67208,39 @@ without `make BOOTMARK=1`.
 
 **48 and not 40**, because `mouse.inc` owns 40 to 47 and two marks in one
 column is a row nobody can read.
+
+### 37.96 `OSAPI_CLK_GET` — the date and time a package may read
+
+Until §110 the SDK had **no date at all**: `OSAPI_GET_TICKS` is a tick count,
+the menu bar's clock is the kernel's to draw, and the `'CK'` debug block
+(§37.92) is closed to shipped code (§57.3 rule 1). A calendar needs the day.
+So one RARE cell, appended at the end of the table on both kernels:
+
+```
+OSAPI_CLK_GET   KERNEL_SEG:0x0475
+  in   nothing
+  out  CX = the year (1980..2099)    DH = the month (1..12)   DL = the day
+       BH = the hour (0..23)         BL = the minute          AH = the second
+       AL = flags: bit 0 = a hardware RTC was found (clk_rtc),
+                   bit 1 = the user chose 12-hour display (clk_h12)
+       CF = 0; every other register preserved
+```
+
+- **It reads the LIVE fields under `cli`**, two words and three bytes, and
+  deliberately does not call `clk_snapshot`: the `clk_sn_*` copy belongs to the
+  menu bar's formatters (§37), and a package refreshing it would race their
+  next format. `clk_min`/`clk_hour` and `clk_day`/`clk_mon` are read as words,
+  which the field-order assertion beside them pins.
+- **The UI task is the only writer** (the clock above), so a read from the UI
+  task — an entry proc, a window callback, an ONWAKE handler — is always
+  consistent. A worker may call it and must accept a torn read across a
+  rollover.
+- **Bit 1 is display advice, not a conversion**: the hour is always 0..23.
+- **kern_small has the cell and the body**, its `clk_rtc` is 0 (§37.0.1's PIT
+  clock), so a package there can say "clock not set".
+- A package that calls it **ships beside its own kernel**: an older kernel at
+  the same `PKG_FMT` has no 0x0475 (§20.2.0.1's open gap), which is why the
+  Desk Calendar is not offered on The Wire (§110.8).
 
 ## 38. fdlg.inc — the Standard File dialog
 
@@ -90173,6 +91105,14 @@ page. The `[cp_sel]`-before-`KIND_CTRL` precedent is the menu bar clock's
 A machine with **no system disk at all** is not told about drivers it never
 enabled: only a row whose `DRVR_WANT` is set counts as a failure.
 
+**`stik_boot` is the first thing kern_big's `drv_notice` does** (§110.4):
+every Sticky App row SYSTEM.CFG put back is launched through `sc_open`, in this
+routine's context — painted desktop, no lock, the boot disk in A: — which is
+`OSAPI_PKG_START`'s own. It goes BEFORE the Control Panel's notice so a
+driver-failure panel opens in front of the widgets rather than behind them,
+and it stands down entirely while `[ui_rebootq]` holds a resume or DOS
+question. kern_small's `drv_notice_x` is the `retf` stub and calls nothing.
+
 **`.nodisk` sits below the load loop, so the loop must JUMP OVER IT**, and
 for one release it did not. §32's double-buffering removal deleted a
 `bb_set` call from the end of `drv_boot` — and the `jmp short .out` on the
@@ -90394,7 +91334,9 @@ the wrong settings. Every value now travels with a key that says what it is.
 the boot overlay and read by nothing resident. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
 drives' overrides and the read bound, one record so the page costs one key
 entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
-only. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+only. `TP` is §76.14.14's Color preset, seven bytes at ver 1 on both kernels -
+the preset's number, `[thm_cstrp]`'s title style and the five colours it puts
+in the Color row - one record so all three cost one header. Seven keys at the time this paragraph was written, 81 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
 clock 12/24, `CS` clock seconds, `SM` scheduler mode, and
 `HD` — a **driver's** own settings, whose contents the kernel does not know
 (§51.9). They are ASCII so a hex dump of the file reads as the list of
@@ -114813,6 +115755,119 @@ What a page holds while it is on screen, `eth.htm` (442 bytes) off the wire:
 links 1) - and the peak DURING a fetch is the 32KB source alone. A file load
 saves only the link arena's difference, its other three sizes being unchanged.
 
+### 71.15 Bounded compatibility for retro pages
+
+The Browser identifies itself as **os8088 Browser 1.4**. Its compatibility
+work stays within the existing page and link claims. HTTP redirects are limited
+to three hops, and a redirect is decided by the worker at the end of the drain,
+BEFORE the page buffers are claimed (71.14's hand-over): the source claim is
+still at its ceiling and nothing else has been claimed, so a hop leaks nothing,
+the target is not drained into a buffer cut to the redirect body's size, and a
+redirect with an empty body is followed rather than reported as an empty
+reply; forms retain a fixed maximum of four forms and twelve controls;
+images contribute only their alternate text; and a frameset is fetched child
+by child and appended into one page. URL, host, path, page, and link
+storage remain bounded. When a bound is reached, the Browser truncates or
+refuses the affected operation visibly rather than allocating without limit.
+
+**A frameset's children are drained into page buffers RE-CLAIMED AT THE
+CEILING.** The frameset page is parsed like any other and its `<frame src>`s
+are queued in the link arena; but 71.14's hand-over cut the source to the
+frameset's own size and claimed the document from it, and a child drained into
+those was cut at a kilobyte. So instead of fetching the first child the worker
+posts `[br_fin]` = 4 and a wake, and the UI task re-claims (`br_frameclaim`):
+the document and the line table are freed, the source is regrown to
+`BR_MAXKB` (or, when the heap cannot grow it where it stands, freed and
+claimed again at the ceiling - the frameset's source is parsed and not needed
+again), the two are claimed again from the ceiling (`br_claimpage`, the head
+of `br_claimrest`), and **the link arena is kept**, because the queued srcs and
+each child's base URL live in it. The UI task answers `[br_fin]` = 5 and the
+worker fetches the first child; a refusal is `Out of memory`. The hand-over
+byte's values are therefore 0 draining, 1 the page is in and the UI task owes
+its claims, 2 claimed, 3 parsing, 4 the UI task owes a frameset's re-claim, 5
+re-claimed. A frameset costs what the largest page costs - 32 KB of source,
+the document claim sized from `BR_MAXKB` through `BR_DOCMUL`/`BR_DOCSLK` and
+capped at `BR_DOCMAX` (63 KB), `BR_LINEKB` (8 KB) of lines - plus the frameset
+page's own link arena, min(frameset KB, `BR_LINKKB` = 6) KB, which bounds the
+children's links together: `Links limited` is the visible refusal. Each child
+resolves into the location bar and `br_host`/`br_path`; when the last child is
+in, or one is refused, the document is ended (an open frame table closed) and
+the frameset's own title, host, path and bar text are restored
+(`br_frameclose`), so Reload re-fetches the frameset and a top-level relative
+link resolves against it. File > Save As after a frameset writes the source
+claim, which holds the LAST child's bytes.
+
+### 71.16 Browser 1.3 — text formatting on the cell font
+
+The 1.3 renderer stays on the existing 8×8 cell font and linear document
+stream. `<b>`/`<strong>` use a one-pixel double-strike; `<i>`/`<em>` shear the
+existing glyph bitmap by at most two pixels; and `<u>` uses the existing row
+ink pass. Styled rows are composed from `OSAPI_FONT_GLYPHS` through one fixed
+`BR_MAXCOL`-byte scanline buffer and eight one-row `OSAPI_GFX_BLIT1` calls.
+The band is composed with a set bit as ink and handed over under an ink/paper
+pen; on a 1bpp adapter the pen is not read (SPEC.md 5.4.2.2) and a set bit is
+a lit pixel, so there the band is complemented before each blit. Layout
+reserves the scroll bar plus a two-cell margin at the right edge.
+Wrapping also subtracts each
+line's active heading, list, or quote indent before measuring its text.
+Unstyled rows retain the single opaque `OSAPI_FONT_RUN` path. This adds no font
+resource, framebuffer, dynamic allocation, or per-character drawing call. If
+the blit is refused by a small-kernel configuration, the row falls back to the
+normal cell font. Formatting markers are zero-width document controls, so
+wrapping, scrolling, links, and hit-testing continue to use the same bounded
+path.
+
+Headings remain block elements, gain a level-dependent left indent, and are
+underlined through the Browser's existing per-row ink pass. Unordered and
+ordered list items use the same compact `*` bullet and hanging indent. A
+blockquote receives a two-cell indent, including wrapped lines. `<pre>` keeps
+its existing literal spaces and line breaks and does not wrap. Paragraphs
+retain one blank line between nonempty blocks; duplicate empty breaks are
+coalesced. Unsupported styling such as CSS, colors, and font sizes remains
+ignored, and application content is never rewritten outside the Browser's
+own document buffer.
+
+### 71.17 Browser 1.4 — table spans, cell alignment and form POST
+
+The table renderer extends its bounded ASCII compositor. A `<td>` or `<th>`
+may span one through eight logical columns with `colspan`. Missing, malformed,
+zero or over-limit values fall back to one column. The cell's measured width is
+the sum of the spanned columns plus the existing separators. `align=left`,
+`align=center`, `align=middle` and `align=right` affect text in that cell; left
+is the default and `middle` aliases `center`. The eight-column limit,
+wrapping, link hit-testing and row bounds remain unchanged. Width, colors, CSS,
+borders and spacing remain ignored presentation hints.
+
+Forms retain their fixed limits and successful-control rules. `GET` remains
+the default; `method=post` sends the existing bounded, percent-encoded pairs
+as an `application/x-www-form-urlencoded` request body. The resolved `action`
+is the request target; submitted pairs are not appended to its URL. The
+request includes an exact `Content-Length` and uses the existing HTTP/1.0
+close-delimited flow. A `301`, `302` or `303` answering a POST is followed as a
+GET with no body, which is what a post-redirect-get server expects; `307` and
+`308` keep the method and the body, which is what those two codes are for.
+The encoded body is limited to 159 bytes and appended
+to the existing 512-byte request staging area; no second body buffer, dynamic
+allocation, framebuffer or kernel API is introduced. Oversized bodies are
+refused visibly, never truncated. Unchecked controls are omitted; checked choices and selected
+options remain successful controls. Only the CLICKED submit button is a
+successful control: a named `<input type=submit>` is not baked into the form's
+hidden pairs at parse time but keeps its tag's span in the retained source
+(`SUB_ASTART`/`SUB_AEND`, the submit record being `BR_SUBSZ` = 9 bytes), and
+`br_submit` encodes that one button's `name=value` after the fields, so a
+form with two buttons (Search / I'm Feeling Lucky, Login / Register) tells the
+server which was pressed. Return in a focused text field submits the field's
+own form with no button pair.
+
+Password and file controls remain visibly unsupported. With no TLS, the
+browser must not show a password control that could be submitted in plaintext.
+`<textarea>` remains outside the single-line control model and is shown as
+unsupported, while its source contents are skipped as control content rather
+than rendered as page text. The reference renderer and guest share fixtures
+for spans, alignment and unsupported controls; a local HTTP test checks the
+POST request line, headers, exact length and body. Existing GET, formatting
+and frame-navigation behavior remains covered.
+
 ### 72.1 What the packages did have to change, which is one question
 
 The claim "without one byte changing" is not quite true and the exact shortfall
@@ -120144,15 +121199,15 @@ back stale pixels.
 
 #### 76.14.10 The Theme page
 
-A fourth radio, **Windows**, under Color at pane y 66; the animation group
-moves down 16; and the **Screen Saver** button moves to the right-hand column
-beside the animation radios, whose labels are short. Its rows are the Off
-radio's rows too, so `cp_thm_click` claims the button only INSIDE its
-rectangle and sends any other press to the groups. The control ids are 1-4
-the theme rows, 5-6 the animation pair, 7 the button. Windows is never
-greyed on kern_big: whether `WIN95.DRV` can be read is a mount and a search,
-and §47 rule 3's only honest test is doing it — so a refusal is a toast and
-the radios redraw to what is live.
+Three theme radios - **Bright**, **Dark**, **Color** - with **Customize...**
+on the Color row (76.14.14), then the animation pair, and the **Screen
+Saver** button centred under them at pane y 110. **Windows is not a radio**:
+it is a title style of Color, chosen in Customize (76.14.13), so its row went
+and the animation group moved up to pane y 80. The control ids are 1-3 the
+theme rows, 4-5 the animation pair, 6 the Screen Saver button and 7
+Customize. Customize is live only while Color or Windows is (and Color is
+offered at all, 76.12.1); a Windows that `WIN95.DRV` cannot be read for is
+refused at the click that asked for it, with a toast.
 
 #### 76.14.11 Measured
 
@@ -120223,6 +121278,149 @@ re-deriving it:
   between pull-downs (§76.14.8 handles Esc, Up, Down and Enter only).
 - **Phase 1's own leftovers** - a bold caption, an ellipsis on a cut caption,
   a 3D window frame, and a bevelled pull-down with etched separators.
+
+#### 76.14.13 Title styles: Solid, Stripes, Windows, and 95
+
+Customize has a **Title bar style** group under the presets - **Solid**,
+**Stripes**, **Windows** - and a **95** box beside Windows. Solid and Stripes
+are the existing `wm_draw_title` bar without or with its pinstripes; no
+second renderer, framebuffer or palette change. **Windows is §76.14's chrome
+wearing the selected preset's colours**: its title pair and its buttons take
+the Color row (76.14.14), and 95 puts back main's original button face and
+bevel (`thm_bgc` face, black glyphs, white lit edge) while keeping the
+preset's bar. 95 is disabled unless Windows is chosen. Bright and Dark keep
+their striped rows whatever this says; inactive bars stay solid.
+
+`[thm_cstrp]` is the one resident byte: bit 0 stripes, bit 1 95, bit 2 the
+Windows style. `thm_set` promotes Color to Windows when bit 2 is set - so the
+saved theme stays Color and the style rides beside it - and clears bit 2
+when `WIN95.DRV` cannot be read, so an unavailable style is never saved. The
+settings writer saves a Windows reached through the style as Color for the
+same reason. A preset change keeps every bit. The byte persists as byte 1 of
+the `TP` record (76.14.14); there is no API cell for it.
+
+Apply keeps the live preview; Cancel, Escape and the close box restore the
+opening preset, style and kind. The window stays within EGA's 640x350
+desktop.
+
+#### 76.14.14 Color presets: one Color row, no preset table
+
+Eight presets on the fixed EGA palette: no DAC or attribute register is
+touched, every value is a standard index, and Color - so every preset - needs
+a four-plane primary, VGA (mode 12h) or EGA (mode 10h). On CGA and Hercules
+Color is refused and Customize greys with it (76.12.1). Bright, Dark and the
+original Color appearance (Classic, preset 0) are unchanged.
+
+**IT COSTS NO RESIDENT RUNG.** The kernel carries ONE Color row - the one it
+always had - and no preset table, no preset byte and no setter. A preset is a
+row of `drivers/thmpal/thmrows.inc` copied over that Color row, and what
+persists it is the row itself. Measured against `main` before it: kern_big's
+`.text`/`.bss` grow inside the image rung's standing slack, `.cold` by
+nothing, KERN_SIZE unchanged; kern_small unchanged.
+
+| ID | Name | Desktop | Active title | Inactive title | Inactive ink | Menu XOR | Menu highlight |
+|---|---|---|---|---|---|---|---|
+| 0 | Classic | 3 | 1 | 7 | 0 | 0Fh | dark grey bar, white text |
+| 1 | Workbench | 9 | 1 | 8 | 15 | 0Eh | light blue bar, yellow text |
+| 2 | Light | 7 | 3 | 8 | 15 | 08h | white bar, dark grey text |
+| 3 | Forest | 10 | 2 | 8 | 15 | 0Fh | dark grey bar, white text |
+| 4 | Amethyst | 13 | 5 | 8 | 15 | 0Fh | dark grey bar, white text |
+| 5 | Amber | 14 | 6 | 8 | 15 | 09h | yellow bar, light blue text |
+| 6 | Midnight | 1 | 8 | 7 | 0 | 07h | black bar, light grey text |
+| 7 | Desert | 6 | 4 | 8 | 15 | 0Fh | dark grey bar, white text |
+
+All presets use menu background 7, ink 0, disabled ink 8 and active title
+ink 15. **Window content is not themeable**: white paper and black text in
+every window the kernel draws, and an application's own colours untouched.
+
+**The row.** The live block and every `thm_tab` row are ten bytes: menu bg,
+ink, disabled ink, active title bg and ink, desktop, stripes, inactive title
+bg and ink, and the menu XOR mask. `thm_tab` has four rows - Bright, Dark,
+Color (`THM_CROW`, the one a preset lands in) and Windows-on-1bpp; Windows
+on a colour adapter wears the Color row (76.14.13).
+
+**The open menu's highlight is still one XOR.** `vga_xor_fill_vram` XORs the
+item's cell with the row's mask through the Graphics Controller's Set/Reset:
+one call per move, its own undo, never a second write. On grey (7) paper and
+black (0) ink a mask `m` gives a `7 xor m` bar with `m`-coloured text, so the
+bar and its text cannot be chosen apart - which is why Forest, Amethyst and
+Desert keep the dark-grey bar. `menu_drop` takes the mask once per menu
+(`[menu_xorm]`) so a theme change while a menu is down cannot make the
+off-XOR disagree with the on. 1bpp adapters invert as before, and every other
+XOR fill keeps 0Fh.
+
+**The chooser.** `THMPAL.DRV` (79.2's species) holds the rows and names.
+`CTRL.DRV` loads it - `cp_thmv_open`, in the panel's own image, so nothing
+of the loader is resident - and checks the private ABI word at header +10,
+now 4. OPEN is handed `SI` = the Color row, `DI` = `drv_cfg+CFG_THMP`, `DX` =
+`thm_cstrp`'s address and `CH` = `[thm_kind]`. Every change installs the row,
+the preset's number and the style bits, and makes ONE `OSAPI_THM_SET` with
+Color. The opening state is banked on a fresh open only; Cancel puts it back
+and sets nothing that did not change, and a kind that cannot come back
+(Windows whose `WIN95.DRV` has gone) is toasted.
+
+`OSAPI_THM_SET` (0x046D, after `OSAPI_FERR_TEXT`) is the one public cell:
+AL = 0..3 adopts a kind, posts the repaint and owes `SYSTEM.CFG` a write; CF
+= 1 when Windows was refused. It may read a disk, so it is for the UI task.
+**A change of kind through it drops every window's bank** (`wm_su_drop_all`):
+the Theme page draws its radios from `[thm_kind]`, and a panel behind the
+chooser is repainted from its bank (11.96.4) rather than its `W_PAINT` - so
+the bank would show the kind before the change, which is §11.96.1's promise
+broken from outside the window. A preview within one kind keeps every bank.
+
+**Persistence is the row.** One version-1 `TP` record of seven bytes,
+appended after `EP`: the preset's number, `[thm_cstrp]`, and the five colours
+a preset varies (active title, desktop, inactive pair, XOR mask). The number
+is read only by `THMPAL.DRV`. The other six are in `_map`, byte for byte onto
+`[thm_cstrp]` and the Color row, so the boot restores a preset with the loop
+that restores every other setting and needs no table - which is also what the
+boot blob had room for (2.9.14). kern_small carries the record untouched.
+
+**Lifetime.** `THMPAL.DRV` stays cached while the Control Panel is open. Its
+row (`thmv_row`) sits one row past `drv_tab`, outside `DRV_MAX`, so
+`drv_call`'s one range test reaches it with no compare in `.cold`, and
+`mem_rr_tab` names its segment so a compaction can move it (66.6.3). The
+panel's close branch in `instance.inc` far-calls the resident `thmv_reap_x`
+(`.cold`, §76.14.14.1) on EVERY close, before and independent of the settings
+write: the window goes first, then the image.
+
+**Verification.** `tests/colorpresets_qemu.py` drives each preset through the
+chooser's own click handler and asserts the desktop, both title pairs and the
+menu bar's XOR on and off, white content, Cancel, the style group, the
+private ABI refusal, the reap on panel close and a `SYSTEM.CFG` round trip
+across a reboot.
+
+##### 76.14.14.1 The theme's set path is `.cold`
+
+`thm_set`, `api_thm_set_x` (`OSAPI_THM_SET`'s body) and `thmv_reap_x` live
+in `.cold` on kern_big and kern_emu (§2.6) — they are still resident. Each
+runs at human cadence: a theme or preset change, a display switch, the
+boot's one palette resolve and a Control Panel close. None of them runs from
+an ISR or from the loading screen's IRQ0 path, and the cold segment is up
+before `kmain_o` reaches its palette resolve. They moved at the Sticky App merge
+onto #249 (§110.6), because that merge took kern_big's `.text` + `.bss` over
+its image rung. The move took **209** bytes off `.text` and added **229** to
+`.cold`, inside the 512-byte cold step the owner had already accepted for the
+Sticky App, so no rung was crossed.
+
+The shape:
+
+- **`thm_set` is a FAR body ending in `retf`.** It keeps its name, because
+  the boot ladder (`tools/os88ladder.py`) and `tests/colorpresets_qemu.py`
+  both name it. Every caller far-calls `COLD_SEG:thm_set`: `kmain_o`, the
+  settings reader, `CTRL.DRV`, `vid_switch` and `api_thm_set_x`. The 4-byte
+  `cw_thm_set` shim is gone.
+- **Its two calls back into `.text` cost one new shim.** `menu_force` is one
+  store, so `thm_set` writes `[menu_bdirty]` itself, the way `dock_init`
+  writes `dock_force`'s answer. `dock_force` goes through the new
+  `cw_dock_force`.
+- **`api_thm_set` stays in `.text` as a 6-byte thunk.** The cell is ABI: an
+  8-byte SLOT at 0x046D (§20.3) that near-calls a `.text` routine, so it
+  cannot name the cold body. `api_thm_set_x` reaches `wm_su_drop_all` through
+  the new `cw_wm_su_drop_all`.
+- **`thmv_reap_x` is far-called from `app_close_win` and ends in `retf`.** It
+  near-calls `drv_call` and `drv_release` directly, since both are cold
+  bodies. `thmv_fname` is data, so it stays in `.text` (§2.6's rule 1).
 
 ---
 
@@ -126046,6 +127244,16 @@ which is why four separate gaps sat in it at once.
   against `getcpmsw`'s `AREAS`, and every master-disk file against the fetch's
   own `A0.list`. That last one is the check that a floppy-priced selection
   cannot pass, and a truncated selection reads exactly like a working disk.
+  **It judges only an image built from the current list.** The recipe copies
+  `build/livepayload.txt` to `build/os8088-usb.img.payload` once the image
+  has verified, and an image whose record is missing or differs is STALE:
+  PART B skips it with a note to run `make usb`, because its verdict would be
+  about when it was built rather than about the recipe. A plain `make`
+  rebuilds an existing image before the fast tier runs - the list is one of
+  its prerequisites and is rewritten only when its content changes - so the
+  skip is for the roads that do not come through `make` (the runner run
+  direct, a knob tree, an image copied in). A tree that never built one
+  still builds none: `make usb` needs the C toolchain and three fetches.
 
 **The exemptions are a list with a reason each**, which is `$(CORE_SYSONLY)`'s
 shape (§24.3) borrowed: `apps/cc` is the C SDK, `apps/fptest` and
@@ -193210,3 +194418,3083 @@ The cycle-accurate video regression requires at least 45 displayed frames/s
 and 68 physics steps/s at 4.77 MHz. The native UART rate callback keeps an
 original 8250 serviced across vertical-retrace waits; its raw queue drains
 through the ordinary frame parser in the foreground.
+
+## 110. Sticky Apps (`STIKAPPS\`, `apps/os88stik.inc`)
+
+A **STICKY APP** — a widget — is a small program
+that belongs to the desktop rather than to a document: the Desk Calendar
+(§110.3) is the first. The ask was four things at once: it can be put
+anywhere on the desktop; the desktop remembers it between boots, from where
+it was last launched; a widget that cannot be found is a graceful failure and
+not a stopped boot; and it is "modularized like the dock" while changing the
+kernel as little as possible.
+
+So a Sticky App is **not a new kind of program**. It is an ordinary `.O88` package
+(§20) with three properties, and every one of them is a reuse:
+
+1. it ships in **`STIKAPPS\`** on the boot volume — a folder, not a header
+   flag and not a registry file;
+2. it includes **`apps/os88stik.inc`**, shared as SOURCE in `os88ui.inc`'s
+   shape, which owns its position, its state file's header and its presence;
+3. while it is open, the **desktop configuration** — §26.8.6's SYSTEM.CFG
+   trailer, the one that already keeps every desktop icon — holds one **Sticky App
+   ROW** for it (§110.2), and the kernel relaunches it from that row at boot
+   (§110.4).
+
+**"Like the dock" is the §2.8 lesson, not its vehicle.** DOCK.DRV is an
+on-demand module: what is resident is tests and thunks, and everything that
+touches a file is read from the system disk when it is asked for. Here the
+file-writing half — add, update and remove the row, and write SYSTEM.CFG —
+goes into the module that ALREADY owns that trailer, `CTRL.DRV`'s settings
+core (§2.8.7, §26.8.7). What stays resident is a liveness test, a carry bit
+and a boot loop, which is less than one new module's plumbing would have
+cost, and a new module would have cost a disk read on every boot just to
+learn there was nothing to do. A §51 DRIVER cannot do the job at all: a
+driver attaches inside `drv_boot` before `ui_task` exists, cannot reach
+`OSAPI_PKG_START`, and its worker may not touch a file (§20.6 rule 7).
+
+The design record is `docs/plans/completed/STICKY-APPS-PLAN.md`, the judged design
+the waves were built from with the builders' log of every deviation at its
+end; what the code proved it wrong about is also recorded here, where it
+bound (§110.9).
+
+v2's design record - the desk layer, the widget treatment and the calendar as
+the owner's second mockup - is `docs/plans/completed/STICKY-APPS-LAYER-PLAN.md`. **"The
+v2 design's open decision N"** in this section is that file's §7, item N
+(not STICKY-APPS-PLAN.md's D1-D5, which are v1's).
+
+### 110.1 What a Sticky App is, and where it lives
+
+```
+A:\STIKAPPS\DESKCAL.O88        the package; LZ4-packed by PKGZ like any other
+A:\STIKAPPS\STIKNOTE.O88       ...and the second Sticky App (§110.13)
+A:\STIKAPPS\DESKCLOK.O88       ...and the third (§110.14)
+A:\SYSTEM\APPDATA\DESKCAL.DAT    its state (§19.9), written at runtime, never shipped
+A:\SYSTEM\APPDATA\STIKNOTE.DAT   ...and the second's
+A:\SYSTEM\APPDATA\DESKCLOK.DAT   ...and the third's
+```
+
+- **`STIKAPPS\`** is on the BOOT volume, the THEWIRE rule (§92): a widget
+  belongs to the disk the machine booted from, so it rides no apps disk.
+- **It is a folder at the ROOT, beside `SYSTEM\` and `APPS\`**, on every
+  boot volume this tree builds: the four floppy system disks, `emu.img`, the
+  small pair (§24.5.1) and the live USB/CD (§80). Installing to a hard disk
+  carries it like any other folder, because the copy walks the whole tree
+  (§52.10.13). It was `SYSTEM\DIA\` while the family was called *Desktop
+  Integrated Applications* (DIA); the rename to **Sticky Apps** moved the
+  folder and renamed every `dia_`/`DIA_` symbol to `stik_`/`STIK_`, with no
+  value changed. The row mark stays `'D'` (`OSAPI_STIK_MARK`), so the ABI did
+  not move. A SYSTEM.CFG saved by an earlier build still names
+  `SYSTEM\DIA\DESKCAL.O88`. At the next boot that row is a §110.4 miss: one
+  toast, the row downgraded to a visible shortcut, and the calendar opened
+  once from `STIKAPPS\` writes the new row.
+- **Each Sticky App keeps to ONE APPDATA file.** `SYSTEM\APPDATA` holds ~14 entries
+  on a 1.44 MB or 1.2 MB root (FERR_DIRFULL, §18.5).
+- **A Sticky App is a DESK WINDOW** (§11.103) on kern_big and kern_emu: under
+  every application window, never raised, no title bar, frame, shadow or
+  dock tile, the bar and the keys only while it is the last thing pressed.
+  Its look is the WIDGET TREATMENT (§110.11) - chromeless cards with the
+  desktop between them and a name tag that turns into a handle under the
+  pointer - drawn by the package through `os88stik.inc`. On kern_small, and
+  under any kernel whose `OSAPI_WM_DESK` QUERY refuses, it is the TITLED
+  FALLBACK: an ordinary window with v2's face (§110.7). §11.94's snap
+  applies to both forms.
+- **Version 1** - an ordinary titled window with a dock tile, raised by a
+  click - is what the Desk Calendar still is until v2's wave 4 (§110.10); the
+  rest of this section describes v1 where it says "the window".
+- `apps/os88stik.inc` is the framework (§110.5): it loads the state file in the
+  entry proc — legal there, because the entry proc is stamped with its
+  instance (`kernel/loader.inc`'s note; §20.12) — places the window, and on
+  its first timer tick registers the Sticky App row. On close it removes the row by
+  NAME and saves.
+
+### 110.2 The Sticky App row
+
+A Sticky App row is a §26.8.1 shortcut record with two bytes pinned:
+
+| off | value | meaning |
+|---|---|---|
+| +2 (KIND) | `1` | a package — a Sticky App row of any other kind is refused |
+| +3 | **`'D'`** (0x44, `SC_STIK` / `OSAPI_STIK_MARK`) | the Sticky App MARK |
+| +1 (in memory) | `0xFF` in `[desk_zslot]` | no cell, never shown |
+
+**+3 was never spare, and the mark is an EQUALITY.** §26.8.1 called it spare,
+and every shortcut a user has ever dragged out of a Disk window carries `\`
+(0x5C) there: `sc_m_new` writes the path one byte before the field so
+`dsk_path`'s leading separator lands on it (§26.8.1 now says so). A link a
+package adds through `OSAPI_DESK_ITEM` carries whatever the package put at
++3. So a test of "+3 non-zero" would have hidden every drag-made shortcut on
+every disk at the next boot; the mark is `'D'` exactly, which neither `\` nor
+0 can be, and `sc_m_add` stores 0 at +3 of every record that is NOT a Sticky App
+record, so an old package's junk at +3 can never become a mark.
+
+**One row per widget, by NAME** (`sc_m_add`'s Sticky App arm, §2.8.7):
+
+- **add-or-update.** A Sticky App add first looks for a live row with the mark
+  whose path's FINAL COMPONENT equals the record's (`DESKCAL.O88`). If that
+  row is byte-identical in VOL and PATH, the add answers its zone and
+  **writes nothing** — so the widget may register on EVERY launch (it does:
+  a registration made only when the state file said "not open" goes stale
+  the first time a boot downgrades a row the package never saw). If it
+  differs, the record is copied over that row in place: **where it was LAST
+  launched from wins.** Otherwise it claims a row as any add does.
+- **no cell.** A Sticky App row skips the add's `desk_free` refusal (a full desktop
+  does not stop a widget being remembered) and its `[desk_zslot]` byte is
+  `0xFF`. `desk_live` answers "not live" for it (§26.9), so the reflow gives
+  it no cell and the paint and the hit test never see it.
+- **remove-by-name.** A package's remove with **AH = 0xFF** (§26.9.6) means
+  "the Sticky App row whose final component is my record's": the zone is found by
+  name, then the existing VOL + PATH check runs and matches. Zones renumber at
+  every boot because `ovl_sc_load` compacts the rows (§26.8.6), so a package
+  cannot hold its zone across a boot, and this is what makes the close work.
+- It shares §26.8.1's fifteen rows with the user's shortcuts. A full table
+  answers `Too many shortcuts`, the module's existing sentence: the widget
+  runs and is not remembered.
+- `SC_VER` stays 2. An OLDER kernel reads a Sticky App row as a plain package
+  shortcut and draws a Calendar icon in a cell, which is harmless.
+
+`'D'` is a byte in a record the kernel already copies verbatim — `ovl_sc_load`
+moves rows with `rep movsb` and `sc_m_add` with `rep movsw` — so the mark costs
+**no boot-overlay byte at all**, where a new KIND would have (`ovl_sc_load`
+turns a kind above 2 into a free row, and the blob has ~26 bytes left).
+
+### 110.3 The Desk Calendar (`apps/deskcal/`)
+
+The first Sticky App: a monthly calendar, a day's appointments, task checkboxes and
+reminders, two-colour on every adapter. `DESKCAL.O88` ships in `STIKAPPS\`
+on every system disk - the four geometries, `emu.img`, both small system
+disks and the live media - and on no apps disk (§110.1). v1's wave 2
+(§110.10) was the window, the month and its navigation; wave 3 the
+appointments, the tasks, the one-line entry and the Remind menu's lead times;
+wave 4 the reminders' FIRING, `kern_small`'s worker arm run end to end, and
+the measurements (§110.6). v2's wave 4 made it the widget below.
+
+**v2 (wave 4) is THREE CARDS ON THE DESK** - the owner's second mockup,
+"even more of a widget". What follows is v2 and the contract; v1's titled
+232-wide window, its four-cell day fields and `*` marks, the inverse header
+strip, the selection `GFX_FRAME` and the alert-on-fire are gone (§110.9's
+"v2, wave 4" says what each became and why). §110.11 is the widget treatment
+the calendar wears, and every card pixel below is composed by it.
+
+```
+apps/deskcal/deskcal.asm   header, entry proc, menus, keys, the card presses
+                           and releases, the edits, the tick
+apps/deskcal/dcdate.inc    the date maths: day of week, days in a month,
+                           the MONDAY-FIRST grid, the 1980-2099 clamp
+apps/deskcal/dcdraw.inc    the three layouts, the three cards' composers, the
+                           partial redraws, the hit tests, the entry field
+apps/deskcal/dcdata.inc    the payload: its check at load, the sorted insert,
+                           delete, the tasks, and the entry's time parser
+apps/deskcal/dcrem.inc     the reminders: the minute pass, the firing, the
+                           snooze, the dismiss, card 3's state
+```
+
+**The package.** `OS88_HEADER 'Desk Calendar', dc_entry, OS88_F_ICON |
+OS88_F_DESK` - header flag bit 6, so the loader gives it the TOP instance slot
+and the dock no tile (§11.103, §30) - a 16x16 calendar-page icon (also the Sticky App
+row's picture, so a row downgraded at boot shows it, §110.4),
+`OSAPI_ABOUT_SET` through `os88ui_about`, and `os88gfx.inc` (`GFXE_TEXT`,
+`GFXE_BITS`, a 176 x 32 band of 704 bytes in its own bss) with `os88stik.inc`
+included last. The Sticky App definitions are v1's (`STIK_DATNAME 'DESKCAL.DAT'`,
+`STIK_CAP 'Calendar'`, `STIK_PAYLEN` 968, `STIK_PAYVER` 2, `STIK_ICON` 32,
+`STIK_ONTICK dc_tick`) plus §110.11's: `STIK_WIDGET`, `STIK_TAG 'Desk
+Calendar'` (= the title), `STIK_RIGHT` 264, `STIK_LAYOUTS`, `STIK_PAINTCARD
+dc_pcard` (the include's `stik_slabs`, then the entry field when it is open),
+`STIK_COMPOSE dc_compose`, `STIK_ONCARD`, `STIK_ONCARDUP` and `STIK_ONFOCUS`.
+
+**The window** is the include's: a desk window 178 wide (the face and a
+ground column either side, §110.11) on kern_big and kern_emu, the titled
+fallback on kern_small (§110.7). `OSAPI_WM_KEEPH` stays; `OSAPI_WM_PREFER`
+and `OSAPI_WM_ONRESIZE` are GONE - the layout is chosen once, at `stik_load`,
+from `OSAPI_VIDEO`'s HEIGHT, and a PREFER pair is keyed by the adapter's KIND,
+which is the EGA bug §110.11 names (§110.9).
+
+**Three layouts by height** (`STIK_LAYOUT`, each `%error`-checked against its
+band): the face is 176 px wide on all three and each card is composed one
+32-row slab at a time.
+
+| | TALL (400+ rows: VGA) | MID (300-399: Hercules, EGA) | COMPACT (below: CGA) |
+|---|---|---|---|
+| band (h - 20 - 24) | 436 | 304 (Hercules), 306 (EGA) | 156 |
+| cards (rows) and the gap under each | 178 / 6, 91 / 6, 57 / 5 | 122 / 4, 67 / 4, 30 / 4 | 85 / 3, a 44-row SLOT / 3 |
+| tag row | 12 | 11 | 11 |
+| face | 176 x **355** | 176 x **242** | 176 x **146** |
+| default face origin | (screen w - 264, 42): (376, 42) | (456, 24) Hercules, (376, 24) EGA | (376, 22) |
+| titled fallback frame (kern_small) | 178 x 357 | 178 x 246 | 178 x 151 |
+
+**Card 1, the month** (all three layouts; card-local rows):
+
+| | TALL | MID | COMPACT |
+|---|---|---|---|
+| TODAY's day number, x3 (24 px a digit) / x2 (16) at x 8 | rows 7-30, x3 | 4-19, x2 | 2-17, x2 |
+| today's weekday, capitals (`MONDAY`), regular - x1 bold fuses it (v4 review) | x 64, rows 9-16 | x 48, rows 4-11 | x 48, rows 2-9 |
+| today's month, capitals (`AUG 2026`) | x 64, rows 22-29 | x 48, rows 13-20 | - (none) |
+| the nav: bare `<`, the month ON SHOW, `>` | rows 44-51: `<` x 8, `August 2026` centred, `>` x 160 | rows 26-33, the same | rows 10-17 beside the weekday: `<` x 48, `Aug 2026` x 64, `>` x 136 |
+| the weekday letters `M T W T F S S` (MONDAY FIRST) | rows 60-67 | 38-45 | 20-27 |
+| six week rows: first, pitch | 78, 16 | 50, 12 | 30, 9 |
+| a day: its number CENTRED in a 24 px field from x 4 (one digit at field + 8, two at + 4) | | | |
+| the dot of a day with appointments, 2 px wide | UNDER the number at field + 11, 2 rows at r + 9 | under it, 1 row at r + 8 | BESIDE it, 1 row at r + 3, one pixel past the number's cell: field + 16 after one digit, + 20 after two (§110.9) |
+| TODAY: an inverse box at field + 2, the number white | 20 wide, rows r - 4 .. r + 11 | 20 wide, r - 2 .. r + 9 | **22** wide (number, dot and a paper column), r - 1 .. r + 7 |
+| the SELECTED day when it is not today: a 1 px outline of that box | | | |
+
+The header block is TODAY's - the desk calendar's own page - and the nav
+and the grid are the month ON SHOW. At either end of the range (January
+1980, December 2099) its arrow is not drawn and the step is refused. Ink and
+paper only, never grey, so nothing rounds to black on 1bpp (§39.4).
+
+**Card 2, the day** (TALL and MID): a heading - `Today`, bold, when the
+selected day is today, else `Tue 25 Aug`, regular (x1 bold fills a date's
+`0`) - with a bold `+` at x 160; the
+selected day's appointments, or `No appointments` (regular, at the times' x
+8, on the first agenda line - card 3's `No reminders today` again, and the
+COMPACT slot's day page draws the same) when it has none; a 1 px rule (x 8..167); the TASK list (one list,
+not per day, as v1). TALL: heading rows 6-13, agenda lines at 22 and 36
+(`HH:MM` at x 8 - `--:--` all day - and the text at x 56, at most 14
+characters on the glass), the rule at 50, tasks at 57 and 73 (an 11 x 11 box
+at x 8, its text at x 32, at most 17 characters); MID: heading 4-11, agenda
+16 and 27, rule 39, tasks 42 and 54 with 9 x 9 boxes and the text at x 24.
+**Two lines each** (the mockup's 91-row card; the v2 design's open decision 2). When a
+list has more items than lines its LAST line reads `+N more` and a click on
+it shows the next page (the last page's click the first). The selected item
+is its line INVERSE. A DONE task's box carries a real TICK, 2 px strokes - a
+composed bit record (§13.16.2.1's note), never `os88ui`'s glyph, which this
+package no longer carries (`OS88UI_NOGLYPH`).
+
+**Card 3, the reminder** (TALL and MID), one of three states:
+
+| state | what it shows |
+|---|---|
+| RINGING - an appointment is DUE (fired, not dismissed) | a bell (16 x 15 TALL, 16 x 12 MID), its time (regular: x1 bold fills a `0`), its text, and `Snooze • Dismiss` (TALL: time x 32 rows 8-15, text rows 25-32, links rows 41-48 - Snooze x 32, the dot x 88, Dismiss x 104; MID: `21:00 Back up files` on rows 4-11, links 18-25) |
+| NEXT - the next armed reminder TODAY (or the snoozed one, at its snooze time) | the bell, the time and the text; no links |
+| NONE | the bell and `No reminders today` |
+
+**COMPACT's SLOT** (the CGA's second card, 44 rows) is ONE card that PAGES:
+its heading on rows 3-10 reads `Today >` (bold) or `Tue 25 Aug >`, `Tasks
+>` or `Reminder >`, with `+` at x 160 on the first two, and three lines at
+rows 14, 24, 34 hold that page - the day's appointments, the tasks (8 x 8
+boxes) or the reminder (an 8 x 8 bell, the time, the text, the links). A
+click on the heading, `Tab` or Calendar > Show Tasks / Show Day pages it, and
+**a reminder that goes off TAKES THE SLOT** (it pages to the reminder), giving
+it back to the day once it is dismissed or snoozed.
+
+**Every card pixel is composed, then one `OSAPI_GFX_BLIT1`** (§110.11): no
+`font_run`, no fill under a glyph, nothing written twice - with one exception,
+the open entry field, below. What a gesture costs (PERFORMANCE.md's unit,
+the budgets `deskcalperf` holds; §110.6 has the measured figures):
+
+| gesture | TALL calls | how |
+|---|---|---|
+| the full paint | ≤ 20 (COMPACT ≤ 14) | 11 card slabs (6 + 3 + 2), the two ground columns, 3 gaps, the tag's ground either side and its plate |
+| another day in the same month | ≤ 5 | the old day's box and the new day's, each ONE sub-rect `BLIT1` (16 rows, 3-4 bytes), and card 2 |
+| another month | ≤ 8 | card 1 from the nav down (5) and card 2 (3) |
+| a task's box | **1** | the box's 11 x 11 alone, a sub-rect `BLIT1` |
+| a reminder going off | 2 + the toast | card 3's two slabs |
+| an idle beat, a minute with nothing due | **0** | |
+
+**The controls** are presses on the cards (`STIK_ONCARD`, card-relative). A
+DAY, a task's BOX and a LINE act on the press; a BUTTON - `<`, `>`, the nav's
+month label and the header block (both Go to Today), `+`, `+N more`, `Snooze`,
+`Dismiss` and COMPACT's slot heading - LIGHTS on the press (its rect, rounded
+out to bytes, composed INVERSE - one `BLIT1`) and acts on a release inside it
+(`STIK_ONCARDUP`); a release off it un-lights it and does nothing (the §13.5
+gesture). The light is part of the PICTURE, so a repaint while a button is
+held draws it lit and cannot leave a stale inversion (§110.9).
+
+| press on | does |
+|---|---|
+| `<` / `>` | the previous / next month; the selected day kept or clamped |
+| the header block, the nav's label | Go to Today |
+| a day | select it; card 2 follows it |
+| `+` | the entry field, empty, in the heading's place: `HH:MM text` is an APPOINTMENT on the selected day, plain text a TASK (COMPACT's tasks page: a task) |
+| an agenda line / a task's text | select it; a press on the line ALREADY selected edits it |
+| a task's box | DONE, the box alone redrawn |
+| `+N more` | that list's next page |
+| `Snooze` / `Dismiss` | the ringing reminder: snoozed `DC_SNOOZE` = 5 minutes / dismissed |
+| COMPACT's slot heading | the slot's next page |
+
+**Keys** reach the widget while it owns the bar (§11.103.4): v1's table -
+Left / Right a day, Up / Down a week, PgUp / PgDn (`,` `.`) a month, `T`
+today, `N` a new appointment, `K` a new task, `Enter` edit, `Del` delete
+(after asking), `Space` a task's box, `Tab` COMPACT's slot - plus `S`
+snooze and `D` dismiss the ringing reminder, and `Esc`, which is
+`OSAPI_WM_DESK` RELEASE: the bar and the keys go back to the front
+application (on kern_small, where there is no RELEASE, `Esc` selects
+nothing, as v1). While the field is open its keys are `os88line_key`'s and
+only `Enter` and `Esc` come back.
+
+**The menus** are v1's, shown while the widget owns the bar: `Calendar` (New
+Appointment, New Task, Edit Item, Delete Item, Clear Done Tasks, Show Tasks /
+Show Day - live on COMPACT only, greyed `(both shown)` elsewhere - Go to
+Today, Previous Month, Next Month) and `Remind` (the leads), with every v1
+greying (§47). The app-name cell carries About and the kernel's Close,
+through `os88stik.inc`'s negotiator. **The About card** lies over the face
+(its lines are 14 cells at most) until a key, a press or a pick, and its
+take-down is ONE whole-face repaint (`stik_redraw`, §110.11).
+
+**The one-line entry** (`os88line.inc`) takes card 2's HEADING ROW (the
+slot's on COMPACT): content x 4..155, so the `+` stays, rows heading - 3 ..
+heading + 8. `N` (or `+` on the day) opens it for an appointment, `K` for a
+task, `Enter` (or a second press) holding the selected item; `+` opens it
+for EITHER, the parse deciding. It closes on `Enter` (kept), `Esc` (thrown
+away), a menu pick (as `Esc`, before the pick acts) and **losing the bar**
+(`STIK_ONFOCUS` with AL = 0: as `Esc`). Opening it is one `os88line_draw`
+over the heading; closing it is the heading's rows recomposed, one `BLIT1`.
+**A redraw of card 2's heading rows while it is open writes the field's
+pixels twice** - the slab (the heading not composed under an open field),
+then `os88line_draw` over it. It needs a paint while the user is typing, a
+midnight while it is open (`dc_rday`), or COMPACT's open that turns the
+slot's page to the field's list; `+`'s own un-light is not one, its rect
+being bytes 20..21, clear of the field's last byte (19), and a `dc_rrect`
+wholly right of byte 19 never draws the field (v4 review). The parser, the order, the limits and
+the edit rules are v1's:
+
+| typed | is |
+|---|---|
+| `9:30 Dentist`, `09:30 Dentist` | 09:30, `Dentist` |
+| `930 Dentist`, `0930 Dentist` | 09:30, `Dentist` - three or four digits are H MM / HH MM |
+| `Dentist`, `3 apples`, `24:00 x`, `9:5 x` | ALL DAY, the whole line - a first word that is not a time (one or two digits, an hour past 23, a minute past 59, a one-digit minute, anything followed by a letter) is text |
+
+A timed appointment is created with its reminder ARMED at the default lead
+unless the default is `No Reminder`; an all-day one has none. Its text is
+at most 25 characters and longer is REFUSED (`At most 25 letters`, the field
+stays open); a task's at most 23. Editing an appointment keeps its reminder
+and lead while it stays timed, and its FIRED mark only while its time does
+not move (a moved one also loses DUE and SNOOZED). Appointments are kept in
+`(date, time + 1)` order (all day first in its day); the load CHECKS the
+order and the counts, and a payload that fails is DAMAGED (§110.5.2). `Del`
+asks through `os88ui_ask` (`Delete this appointment?` / `Delete this
+task?`) - an ordinary window that lands ABOVE every application and over the
+widget and takes the bar, giving it to `wm_top` when it closes (§11.103.4;
+`deskmodal`). Clear Done Tasks removes every checked task without asking. A
+page is re-derived whenever its list changes shape, as v1. The limits grey
+as v1: `New Appointment (full)` at 48, `New Task (full)` at 32, `(no item)`,
+`(none done)`, `(typing)`.
+
+**Remind** sets a lead (At the Time, 5, 15, 30 Min Early, 1 Hour Early, No
+Reminder): the selected TIMED appointment's (FIRED, DUE and SNOOZED cleared,
+re-armed) or the DEFAULT for new ones, the toast saying which. v1's click on
+a line's mark column is gone with the mark.
+
+**A damaged state file** opens EMPTY and its first save asks `Replace
+damaged calendar?` (§110.5.2), as v1.
+
+**Date maths** (`dcdate.inc`) is v1's - Sakamoto's day of the week, the
+`0x15AA` month mask, navigation clamped to January 1980 .. December 2099 -
+with ONE change: the grid is MONDAY-FIRST (`dc_build` takes `(dow + 6) % 7`
+for the 1st's column). It is display only and fixed (the v2 design's open decision
+5); the payload holds dates, not columns. The 42-byte grid is still the
+first thing in the package's bss, byte `i` = week row `i / 7`, column `i %
+7` counted from MONDAY; `deskcalgrid` compares it with Python's
+`calendar.Calendar(firstweekday=0)`.
+
+**Reminders** (`dcrem.inc`). The beat (`STIK_ONTICK`, every 36 ticks) reads
+`OSAPI_CLK_GET`; nothing is done inside a minute and a minute with nothing
+due draws nothing. An appointment's flags (its RECORD's `+4`, `DCA_FLAGS` -
+not the payload's `+4`, which is the snooze slot's minute):
+
+| bit | | |
+|---|---|---|
+| 0 | `DCA_REMIND` = 1 | armed (v1) |
+| 1 | `DCA_FIRED` = 2 | it went off (v1) |
+| 2 | `DCA_SNOOZED` = 4 | **v2**: snoozed; it rings again at the snooze slot's time |
+| 3 | `DCA_DUE` = 8 | **v2**: it went off and is not dismissed - card 3 RINGS |
+
+- **Firing** - the first of today's armed, unfired, timed appointments whose
+  moment `max(0, time - lead)` is at or before now, one a minute - sets
+  `FIRED | DUE` and owes a save, chirps (880 then 660 Hz, `stik_nx`'s second
+  beat; one 880 Hz note of 8 ticks on kern_small's worker arm), says the
+  toast `09:30 Dentist` (§59.10) and recomposes card 3 to RINGING (COMPACT:
+  the slot pages to it). **There is no alert** - the modal `os88ui_ask` of v1
+  is REMOVED - so nothing waits on the user, nothing takes the keyboard, and
+  nothing is gated on an alert or an open field any more.
+- **Card 3 rings the FIRST due appointment** in table order; dismissing it
+  shows the next due one, if any. One that is NOT today's - a DUE left from
+  another day - carries its date before its time (`23 Aug 21:00` TALL and
+  COMPACT; MID's one line `Sun 21:00`, the text moved over 32 px and cut by
+  four characters), so a missed one never reads as today's going off early
+  (v4 review). `S` / Snooze and `D` / Dismiss act on it.
+- **Snooze** clears DUE, sets `SNOOZED`, and writes the SNOOZE SLOT, the
+  payload's spare words: `+4` the snooze's minute of the day, `+6` its FAT
+  date - now + `DC_SNOOZE` (5 minutes), into tomorrow past midnight. ONE
+  snooze is held: snoozing another puts the first back to DUE. The minute
+  pass re-fires a snoozed appointment once its slot is reached (the slot's
+  date before today counts as reached): SNOOZED off, DUE on, the chirp and
+  the toast again, card 3 ringing.
+- **Dismiss** clears DUE and SNOOZED.
+- **An old file** (v1's) has bits 2 and 3 clear, so nothing is due and
+  nothing snoozed, and a v1 FIRED reminder reads as already DISMISSED. The
+  slot's words are read only for an appointment whose SNOOZED is set, so a
+  v1 file's zeros there mean nothing. No `DCP_VER` or `STIK_HDR_VER` bump.
+- **Missed at launch**: today's armed reminders whose moment is BEFORE this
+  minute are marked `FIRED | DUE` - card 3 rings the first of them - and
+  summed up in ONE toast (`3 missed reminders`), staged for the first beat
+  as v1. Earlier days are not replayed. With no RTC and an armed reminder
+  still to come, `No RTC - check the time`, as v1.
+- **A moment already past is fired at once, silently** (FIRED, not DUE),
+  whenever a reminder is armed - a new timed appointment, a moved time, a
+  Remind pick - and one that IS this minute is the next beat's to fire, as
+  v1.
+- **Midnight**: the beat that finds the date changed recomposes card 1's
+  header and today's old and new boxes, card 2's heading and card 3, and
+  runs the minute's work for the new day.
+- The save a firing, a snooze or a dismiss owes waits for a quiet poll, as
+  every edit's (`STIK_ONTICK`'s CF, §110.5).
+
+**The state file** is **984 bytes** - §110.5's header and this payload,
+**v2** - with the snooze slot in the words v1 left zero:
+
+```
++0     db n_appt (0..16), n_task (0..16), lead_default, flags
+         flags bit 0 DCF_NOREM: a NEW timed appointment is created with
+         no reminder (REMIND clear); clear, it is armed at lead_default
+         (v1's bit, kept - `tools/os88stik.py`'s DESKCAL_NOREM)
++4     dw snooze minute (0..1439; read only beside a SNOOZED appointment)
++6     dw snooze date (FAT-packed)
++8     16 x 32 B APPT, sorted by (date, time):
+         +0 dw date   FAT-packed ((y-1980)<<9 | m<<5 | d)
+         +2 dw time   minute of the day, 0..1439, 0FFFFh = all day
+         +4 db flags  bit 0 REMIND, 1 FIRED, 2 SNOOZED, 3 DUE
+         +5 db lead   minutes before
+         +6 26 B text, NUL
++520   16 x 28 B TASK:
+         +0 db flags  bit 0 DONE, bit 1 DATED
+         +1 db 0
+         +2 dw due    packed date, valid iff DATED
+         +4 24 B text, NUL
+```
+
+`tools/os88stik.py` writes and reads it (`deskcal(snooze=...)`,
+`parse_deskcal()`'s `snoozed` / `due` and `snooze`), and `t_stik` holds the
+offsets, the two new bits and the slot equal to `deskcal.asm`'s by NASM's own
+evaluation. An edit owes a save, held while the field or the Delete question
+is open and until one poll has passed with no edit, as v1.
+
+**v2 is SIXTEEN APPOINTMENTS AND SIXTEEN TASKS** - v1's tables were 48 and
+32, a 2,456-byte file - by the owner's decision, for the 360 KB system disk.
+At 1,024-byte clusters v1's file was THREE clusters, and a save writes its
+new chain before it frees the old one (§18.4), so the calendar needed six
+free while it saved, plus SYSTEM.CFG's one for its registration; §110.12's
+module left five, and the calendar's saves were refused (§24.3.1.3). v2's
+984 bytes are ONE cluster - two while a save is in flight, three with
+SYSTEM.CFG. The full table's words follow the counts (`Calendar is full
+(16)`, `Task list is full (16)`, spelled from `DC_NAPPT`/`DC_NTASK` with
+`%defstr`), and the package's bss is 1,472 bytes smaller. **A v1 file is a
+DAMAGED file to v2** - its length and its payload version both differ - so
+it opens empty and its first edit asks `Replace damaged calendar?` (§110.5.2);
+no shipped release carried v1, so the only v1 files are a developer's. Card
+2 already pages its appointments (`+N more`), so nothing it draws assumed 48.
+
+**What it costs**: §110.6's package rows.
+
+### 110.4 The boot relaunch: `stik_boot`, and what a failure looks like
+
+`stik_boot` (`kernel/desksc.inc`, `.cold`, kern_big) is the first thing the
+kern_big `drv_notice_x` does (§51.3) — after the first desktop paint, with no
+lock held, task 0 about to become `ui_task` and A: still the boot disk, which
+is exactly `OSAPI_PKG_START`'s context. It is FIRST so that a driver-failure
+Control Panel still opens in front of the widgets.
+
+```
+stik_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
+                [sc_nrows] = 0     -> nothing (no row, no I/O)
+                for each row: +3 = 'D' and KIND = 1 ->
+                    sc_open; CF = 1 (not found) -> +3 := 0, desk_reflow
+```
+
+- **A machine with no Sticky App row reads nothing.** With no rows at all it pays
+  one byte compare (`[sc_nrows]`); with ordinary shortcuts and no Sticky App row,
+  one `sc_row` and one word compare per row. A machine with one pays the path
+  walk, the package read and whatever the package's entry proc reads
+  (§110.6).
+- **`sc_open` answers CF now** (§26.8.5): CF = 1 iff the walk found no
+  volume, folder or file. A load REFUSAL (memory, version) is CF = 0 — the
+  loader's own sentence has been said, and the row is KEPT for next time.
+- **A miss DOWNGRADES the row to the shortcut it is**, in memory: +3 becomes
+  0, `desk_reflow` gives it the first free cell, and it is pinned there like
+  any shortcut. The user sees ONE toast, the existing `Shortcut not found
+  (A:)` with the drive patched in, and a desktop icon captioned with the
+  widget's name — which they can double-click to try again or Delete. The
+  next SYSTEM.CFG write persists the downgrade. Several misses are several
+  icons and one toast (single slot, last wins, §59.3).
+- **`desk_reflow` with no lock is safe**: it rewrites `[desk_zslot]` and posts
+  `[desk_cdirty]` and nothing else, never draws, and runs lock-free already
+  from `desk_rowcalc_x` in kmain and from `OSAPI_DESK_ITEM`'s driver half at
+  attach. Nothing else can touch the table at this point: `ui_task` does not
+  exist yet and no package is running.
+- **A pending hibernate or DOS question stands everything down**: `hb_probe`
+  posts `UI_RBQ_ASK` (or `UI_RBQ_DOSRUN`) before this runs, and the image is
+  the session, so a Resume brings the widgets back as they were. A Discard
+  leaves them for the next boot.
+
+| case | what the user sees | the row |
+|---|---|---|
+| file deleted or renamed, `STIKAPPS` gone, or a file where a folder was | `Shortcut not found (A:)` and a captioned icon in a cell | downgraded, in memory; the next SYSTEM.CFG write keeps it so |
+| launched from B:, booted with no disk in B: | the same, naming `(B:)` | the same |
+| a hard-disk install: a row recorded against A: | the same — a row's VOL is a volume index, which is existing shortcut semantics (§26.8.1) | the same |
+| load refused (memory, version) | `ld_say_status`'s sentence | KEPT |
+| `DESK.DRV` missing from the system disk, or no heap for its 1 KB claim (§11.103.10) | the widget comes up TITLED - its QUERY refused, kern_small's path - and nothing is said | KEPT |
+| state file missing / damaged / position off this screen | the package's own answers (§110.5) | — |
+| hibernate or DOS question pending | nothing is launched | — |
+
+**`stik_boot` stays resident** after §11.103.10's module cut, and that is a
+measured choice (§110.9's module-cut entry): the loop is what relaunches a
+widget when `DESK.DRV` is NOT there, so in the module it would turn the
+titled fallback into no widget at all; and the bytes favour it where they
+are scarce - the move would save 38 bytes of `.cold`, which the accepted
+step has room for, and cost five of the IMAGE rung (a `.bss` count of Sticky App
+rows and a fifth 4-byte slot), which on kern_big has almost none, plus six
+of `.boot2`. The relaunched Sticky App's own QUERY is what loads the image
+(§11.103.9).
+
+**The boot always reaches the desktop.** Nothing on this path can stop it:
+every refusal is a toast or a downgrade.
+
+**A Restart does not close windows** (§12.3), so an open widget stays
+registered across a Restart, which is what "restore it between bootups" asks.
+A Task Manager kill also leaves the row, so a killed widget comes back at the
+next boot. Only its own close removes it.
+
+**A hostile SYSTEM.CFG can mark any package row `'D'`** and have it start at
+boot. That is accepted: SYSTEM.CFG is hidden + system on the boot disk
+(§19.6), and whoever can write it can write `KERNEL.SYS`.
+
+### 110.5 `os88stik.inc`, the Sticky App header and the state file
+
+The Sticky App's state file is `SYSTEM\APPDATA\<NAME>.DAT` on its OWN volume (§19.9's
+rule: `OSAPI_FILE_HERE`'s `BL`), reached bank, walk, act, walk back (§110.5.1).
+It is a 16-byte Sticky App header owned by `os88stik.inc`, then the application's
+payload.
+
+| off | size | field |
+|---|---|---|
+| +0 | 2 | `'DA'` |
+| +2 | 1 | header version, 1 |
+| +3 | 1 | flags: bit 0 = the position is valid; **bit 1 = `STIK_HF_CONT`, +4/+6 are the FACE's origin** (v2, §110.11) |
+| +4 | 2 | the frame's x (`W_X`) - or, with bit 1, the face's x |
+| +6 | 2 | the frame's y (`W_Y`) - or, with bit 1, the face's y |
+| +8 | 2 | the screen's width when it was saved |
+| +10 | 2 | the screen's height when it was saved |
+| +12 | 1 | the payload's version (`STIK_PAYVER`) |
+| +13 | 1 | 0 |
+| +14 | 2 | the payload's length WRITTEN: 0..`STIK_PAYLEN`, and the file's size − 16 (§110.5.3 - the zero tail is not written) |
+
+A file that is not exactly that is refused whole — missing is "defaults",
+damaged is "run empty, never overwrite silently". A file that could not be
+READ - `OSAPI_FILE_READ` answering `FERR_NODISK` or `FERR_IO` - is neither:
+nothing is known about it, so the widget runs on the defaults with the state
+READ-ONLY for the session (`STIK_S_RDONLY`), the unread file is never written
+over and never called damaged, and the next launch reads it again. A walk to
+`SYSTEM\APPDATA` that fails at the load (`STIK_S_NOHOME`) stops every save for
+the same reason, whether the folder is absent or the disk would not answer:
+a save over a file nobody has read is the one thing this must not do. **`tools/os88stik.py`** is
+the independent host reader and writer of both this header and the SYSTEM.CFG
+trailer's Sticky App row, `--selfcheck` round-trips them, and every fixture the
+gates boot is written by it.
+
+**The framework's calls**, at the package's own points (§110.5.2 has the
+four that wave 2 added):
+
+| call | when | what |
+|---|---|---|
+| `stik_load` | the entry proc, before `OSAPI_WM_CREATE` | refuse a SECOND instance (CF = 1, §110.5.2); copy the 8.3 name; bank `OSAPI_FILE_HERE` ONCE - the launch folder is HOME for the session; walk to `SYSTEM\APPDATA`; read and validate the file; place the template, anchored when the screen differs |
+| `stik_made` | after `OSAPI_WM_CREATE` **and the package's own sizing calls** (`KEEPH`, `PREFER`) | give back a restored `y` the create's fit pulled up and re-fit under the window's own height rule (§110.5.2); take the place the window OPENED at as the place on record; install `OSAPI_WM_ONTIMER` and `OSAPI_WM_ONCLOSE`; arm a 1-tick timer - or, where the timer is refused (kern_small), install the wake handler for the worker arm |
+| `stik_painted` | the end of the package's `W_PAINT` | on kern_small, hire the worker (once); nothing elsewhere |
+| `stik_touch` | whenever the payload changed | owe a save; the next tick makes it |
+| `stik_tick` | each timer tick (UI task, lock held) | the FIRST registers the Sticky App row (`OSAPI_DESK_ITEM` AL = 1, +3 = `'D'`, path from `OSAPI_FILE_PATH`); every one polls the frame's x,y and, once two polls agree on a place that is NOT the one on record, records it and owes a save; calls `STIK_ONTICK`, whose CF = 1 holds any save owed to a later poll (the package is mid-edit); saves what is owed; re-arms for 36 ticks - or ONCE for `stik_nx` ticks, when `STIK_ONTICK` stored a sooner beat there (the calendar's second chirp note, §110.3; the worker arm's sleep ignores it). A widget that has not been moved or edited writes nothing, whatever its state file was - unless its OWN payload changed by itself: the calendar's FIRED marks, set by a launch that missed reminders and by a reminder going off, owe a save like an edit (§110.3, §110.5.2) |
+| `stik_close` | `W_ONCLOSE` | `STIK_ONCLOSE`; remove the row by name (AL = 0, AH = 0xFF); save; let the close proceed - except that a remove `OSAPI_DESK_ITEM` REFUSED (no system disk in A: to read `CTRL.DRV` from, whose own toast asks for it) declines the FIRST close (CF = 1) so the user can put the disk back and close again; the next close goes ahead whatever the remove answers, so a refusal can never make the window unclosable. `STIK_ONCLOSE` can therefore run twice |
+
+**The row is about the PROGRAM, not the state file**, so the first tick
+registers on every launch whatever the file said: missing, DAMAGED, or no
+`SYSTEM\APPDATA` on the volume at all. A widget relaunched from a row whose
+state file had since gone bad must still be able to take that row away by
+closing, and the close removes only a row its own launch registered.
+
+A registration that is refused (no system disk in A:, a full table,
+kern_small) leaves the widget running and unregistered; `CTRL.DRV`'s own toast
+is the only message. One that WRITES - a hand launch, since the close took
+the row away, or a launch from a new place - is a SYSTEM.CFG save like any
+other, and `CTRL.DRV` says its verdict, `Settings Saved` (or `Not saved: disk
+error`); so does the close's remove. An autostart, whose row is already
+there, writes nothing and says nothing. A widget with a launch message of
+its own says it from its first `STIK_ONTICK`, after the registration, or it is
+covered (§110.3's missed summary). On the live CD (§80.3) the write refuses
+where it happens - that toast, the row kept in memory for the session only,
+nothing back at the next boot - and is not handled specially; no gate
+drives it. The record it registered stays in memory untouched until
+the close removes by it: the walk below has a find buffer of its own (a W1
+build used the record AS that buffer, and after the first save the close
+removed by `APPDATA`'s directory entry, matched nothing, and the widget came
+back at every boot - `stikboot`'s E leg is that case).
+
+#### 110.5.1 Saving: is this still home, and what a refusal costs
+
+A widget runs for hours while the user swaps the disk under it - at 360 KB
+that is the only way to reach another disk - so `stik_save` cannot trust
+§19.9's "the disk it was launched from, which is in the drive by
+definition". Its walk is:
+
+```
+GOTO       the volume's ROOT          a FULL mount: the disk may be another one
+GOTO_QM    home (the banked folder)   a word, inside the volume just mounted
+FIND       our own name there         IS THIS HOME? no -> not home now
+GOTO_QM    root, SYSTEM, APPDATA      words; FIND per component as §19.9
+WRITE      header + payload, one call
+GOTO_QM    home
+```
+
+- **ONE full mount, first.** `dsk_bpb_sig` cannot tell two os8088-built disks
+  of one geometry apart (§18.8.2: their boot sectors are byte-identical), so a
+  quiet mount on a swapped disk could reuse the other disk's banked FAT
+  window and the write would allocate from the wrong FAT. A full mount reads
+  this disk's own. Every step after it is in the same callback with the lock
+  held and the spindle turning, which is §18.9.3's batch argument exactly,
+  so the rest are `OSAPI_FILE_GOTO_QM` - the quiet stand that MOVES the
+  instance, which is what §19.9's reason for refusing `GOTO_Q` asked for.
+- **Home is the folder holding our own file.** A disk on which the banked
+  folder does not hold a file of the package's own name is not home, and the
+  save stays owed. Every shipped disk carries `SYSTEM\APPDATA`, so without
+  this a widget autostarted from the system disk wrote its state onto
+  whatever disk was in A: (measured: an apps disk gained
+  `SYSTEM\APPDATA\STIKPROB.DAT`) and the system disk's copy went stale. A
+  second disk carrying the same package at the same path IS home - a copy of
+  the system disk is the one way that happens.
+- **A failed save is classified, not retried blind.** `FERR_NODISK`,
+  `FERR_IO` and "not home" may clear when the user puts the disk back: the
+  save stays owed and the next try waits 1, 2, 4, 8 and then 16 polls (2 s to
+  32 s) - a W1 build retried every poll, two reads every 2 s under the lock
+  for as long as the disk was out. Anything else - `FERR_WPROT`, `FERR_FULL`,
+  `FERR_DIRFULL`, `FERR_PROT` - will not clear by waiting, so the state goes
+  READ-ONLY for the session (`STIK_S_RDONLY`): it is kept in memory and nothing
+  is tried again, which is §19.9's "keep the state in memory and say
+  nothing". The close always makes one last try that the backoff does not
+  gate.
+
+#### 110.5.2 One at a time, another screen, a damaged file, and kern_small
+
+- **A Sticky App is a SINGLETON.** Two calendars would be two writers of one state
+  file and two registrations of one row, so `stik_load` walks the window
+  slots with `OSAPI_WM_OWNSEG` (§11.96.3.1) and, when a window belongs to a
+  segment that is not ours and whose header carries our program name at +16,
+  toasts `STIK_ISOPEN` (`Desk Calendar is open`) and answers CF = 1. The
+  entry proc returns that CF, the loader tears the launch down, and because
+  the toast is the aborting entry proc's own the loader says nothing over it
+  (`ld_said`, §20.12.4). It runs FIRST, before any I/O, so a refused second
+  launch costs no disk call. A double-click on a widget that is already up
+  is the common way here, because an autostarted one is up before the user
+  has done anything.
+- **A position saved on another screen is ANCHORED, not dropped.** Wave 1
+  left the template where it was whenever the saved width or height differed
+  from `OSAPI_VIDEO`'s. Now each axis keeps its distance from the NEARER
+  edge of the old screen: with the frame's template width `w`, `x' = x` when
+  `x + w/2 < oldW/2`, else `x' = newW - (oldW - x)`; the same for `y` with
+  the template height and the screen's height. A calendar parked at the
+  right of a 720-wide Hercules desktop opens at the right of a 640-wide CGA
+  one. Whatever is left over is `wm_fit`'s, which clamps the frame onto the
+  glass inside `wm_create` (§39.7) - so an anchor that lands below a short
+  screen's dock is pulled up rather than lost. A negative result is clamped
+  to 0 here first. The template's `w` and `h` are the package's, so a
+  package whose frame differs by adapter sizes its template for this one
+  before `stik_load` (the calendar does, §110.3).
+- **A place over the dock is restored over the dock.** `wm_fit` keeps every
+  frame that FITS the band above the dock at creation, `OSAPI_WM_KEEPH` or
+  not (the flag only lowers the floor for a frame taller than the band) -
+  but a frame DRAGGED more than half over the strip is left there on
+  purpose (`wm_dock_snap`), and that is the place the user chose. So when
+  the place came from the state file and the create's fit pulled its `y`
+  UP, `stik_made` writes the restored `y` back into the record (the window
+  is not shown yet), down to `OSAPI_WM_DISPLAY`'s height − `W_H` − 1 - the
+  lowest `y` whose frame and shadow are on the display, which is `wm_fit`'s
+  own floor for a `KEEPH` window - and never past it. A `y` the fit pushed
+  DOWN (under the menu bar) and `x` are the fit's. The bank `wm_refit`
+  replays on an adapter change already holds the restored place, because
+  `stik_load` put it in the template the bank was taken from.
+- **v2: the give-back is measured with the FACE** (§110.11): a desk frame
+  is the face plus one ground column, so the shown height is the face's; a
+  titled fallback's is the face's plus `TITLE_H` + 1 less the tag and the
+  last gap. Either way the floor is the display's height less that height
+  less 1, as above.
+- **Nothing is written that the user did not cause.** `stik_made` takes the
+  place the window OPENED at as the place on record, and the poll owes a
+  save only when two polls agree on a DIFFERENT one. So a launch with no
+  state file writes nothing until the first drag, edit or close (§110.6's
+  "the first time the calendar is closed or moved"), and a place anchored or
+  clamped at launch is not written back as though the user had chosen it -
+  the file keeps the place the user DID choose, for the screen they chose it
+  on. A wave-2 build compared against "never saved" and wrote a missing file
+  ~2 s after every first launch, and put the damaged-file question up
+  unprompted ~2 s after every launch over a damaged one. **The one exception
+  is the calendar's reminders** (§110.3): a FIRED mark is the payload
+  changing, so a launch that finds reminders MISSED, and a reminder going
+  off with nobody at the machine, each owe a save at the next quiet poll -
+  §110.6 prices both. A launch with nothing missed still writes nothing.
+- **A DAMAGED file is asked about, once, before it is overwritten.** Wave 1
+  never saved over one. Now the first save that is owed - a settled drag
+  away from where the window opened, an edit (`stik_touch`); never a launch
+  by itself - asks `STIK_DAMAGEDQ` (`Replace damaged calendar?`) through
+  `os88ui_ask` with Yes / No, when the package includes `os88ui.inc` with
+  `OS88UI_ALERT` and defines that string. **Yes** clears the damage and the
+  next tick writes a whole new file; **No**, or a dismissed alert, makes the
+  state READ-ONLY for the session (`STIK_S_RDONLY`, §110.5.1's word for it):
+  kept in memory, never written, never asked again. The question is NOT put
+  from the close - the alert is a window of the closing package's own and
+  would die with it - so a damaged file the user never answered for stays
+  exactly as it was found. A package without the alert keeps wave 1's rule.
+- **kern_small has no `OSAPI_WM_TIMER`** (its window record stops at 28
+  bytes, §13.8.2), so the tick comes from a WORKER there. `stik_made` sees the
+  timer refused (CF = 1) and installs `stik_wake` as the window's
+  `OSAPI_WM_ONWAKE` handler; the package's `W_PAINT` ends in `stik_painted`,
+  which hires the worker on the first paint - the entry proc cannot, because
+  the loader has not published the instance yet (`apps/taskmgr`'s rule,
+  §28). The worker is `OSAPI_TASK_SLEEP` 36, `OSAPI_TASK_ALIVE`,
+  `OSAPI_WM_WAKE`, round again, and touches no file (§20.6 rule 7);
+  `stik_wake` runs on the UI task WITHOUT the lock, so it takes
+  `OSAPI_GFX_LOCK` around the WHOLE beat - the poll, `STIK_ONTICK` and the
+  save - which is kern_big's timer environment exactly: the application's
+  tick sees what it sees there, and the save runs under the lock as it does
+  there (its damaged-file question is an `os88ui_ask`, which wants the lock
+  held). One body, `stik_beat`, serves both arms. The worker is
+  declared restartable (§66.6.2). There is no registration on kern_small,
+  whose `OSAPI_DESK_ITEM` is the refusal (§110.7).
+
+#### 110.5.3 A state file is as long as its content
+
+**A save writes the header and the payload LESS ITS ZERO TAIL**, and +14 says
+how many payload bytes followed. A load accepts any length from 0 to
+`STIK_PAYLEN` that matches +14 and the file's size, and gives the rest back as
+zeros - so the payload in memory is byte for byte what it was when it was
+saved, and the package never sees the difference. It is the include's alone:
+no package names a length, and none had to change its payload to get it.
+
+What it bought is DISK, on the geometry that runs out first. Sticky Note's
+payload is a 4 KB pool (§110.13.2) and its file was 4,192 bytes - **five
+clusters on a 360 KB disk whatever it held** - where the welcome note is a
+few hundred bytes and one cluster. A payload whose free space sits at its END
+gets the whole of the saving; Sticky Note keeps its pool's free end zero for
+it (`sn_ztail`: after a delete moves the tail down, and at launch, for a file
+an older build wrote). The Desk Calendar's 984-byte payload was one cluster
+already and stays one.
+
+An OLDER build reads a shorter file as damaged and asks before replacing it
+(§110.5.2) - the right answer by a harmless route, the card's argument
+(§110.12.1), and a Sticky App ships on the system disk beside its own kernel.
+A file this build reads that an older one wrote is `STIK_PAYLEN` long, which
+is the longest legal length, so nothing migrates.
+
+### 110.6 What it costs
+
+The kernel half, measured by `tools/kernsize.py` against the tree it was cut
+from (2f6a0a88), on all three shipped kernels; the rungs left are re-read
+after merging `main`'s port pins (#248), which spent 11 more bytes of
+kern_big's image rung on its own account:
+
+| | `.text` | `.cold` | `.bss` | `.ovl` | rungs left after (before) |
+|---|---:|---:|---:|---:|---|
+| kern_big | **+6** | **+116** | 0 | 0 | image 183 (200), cold 351 (462) |
+| kern_emu | +6 | +116 | 0 | 0 | image 430 (447), cold 227 (338) |
+| kern_small | **+6** | **+32** | 0 | 0 | image 315 (321), cold 65 (97) |
+| `CTRL.DRV`'s settings core (`MODS_SIZE`, on demand) | | | | | 2,492 → **2,673** bytes (2,683 with #248): 5 sectors → **6** |
+
+The `.text` is the one rare cell. kern_small's `.cold` is `osapi_clk_get_x`
+alone; kern_big's adds `desk_live`'s mark test, `sc_open`'s two carry bits
+and its folder arm's, `stik_boot` and its call. **No rung was crossed on any
+kernel.** The settings core DID cross a sector: one more sector inside a
+cylinder run is about one revolution's worth of transfer, no extra `int 13h`
+call (§18.91.1), paid on every desktop gesture's core load.
+
+Nothing else moved: no `.bss`, no boot-overlay byte, no new module, no new
+SYSTEM.CFG key, and no `PKG_FMT` or `DRV_VER` bump — `OSAPI_CLK_GET` is a
+cell appended at the end, which §20.2.0.1 records without one.
+
+**v2's kernel half** (§11.103), wave 1, MEASURED against the tree it was cut
+from (8311137f):
+
+| | `.text` | `.cold` | `.bss` | rungs left after (before) |
+|---|---:|---:|---:|---|
+| kern_big | **+104** | **+154** | 0 | image 79 (183), cold 197 (351) |
+| kern_emu | +104 | +154 | 0 | image 326 (430), cold **73** (227) |
+| kern_small | **+12** | 0 | 0 | image 303 (315), cold 65 (65) |
+| DOCK.DRV (on demand) | | | | 2,246 → 2,270 bytes, 5 sectors |
+
+No rung is crossed on any kernel; the first MAKE did cross kern_emu's cold
+rung and was rewritten (§110.9). Wave 2's drag and hover come out of what is
+left - kern_emu's 73 cold bytes bind.
+
+**v2's widget** (§110.11), planned: the full paint ~18 calls on VGA (11 card
+slabs, the ground column, 3 gaps, the tag's two sides and its plate) against
+v1's 65, ≤ 20 TALL and ≤ 14 COMPACT as `deskcalperf`'s budget; a day select
+≤ 5, a month ≤ 8, a tick 1, a reveal 1 and a hide 3, idle 0. `DESKCAL.O88`
+grows from 13,168 to ~14.0-14.5 KB of image and ~0.8 KB of bss; the include
+~500 bytes of image under `STIK_WIDGET`. **Measured at wave 3, the include is
+2,235 bytes** of image under `STIK_WIDGET` (the paint 273, the tag 273, the
+slab painter 150, the hover and focus states ~550, the prefilters ~400, the
+sizing and the re-fit ~350) and `GFXE_TEXT` + `GFXE_BITS` ~600 more, which
+the plan did not price: a Sticky App pays ~2.8 KB for the treatment, in its own
+image and no resident byte (**after wave 3's review, ~3.3 KB**: the
+include ~2,305 bytes and the composer **994**, its straight path and nibble
+tables bought for 2.5x the speed - §5.12.8 - and the probe 4,832 → 5,360
+bytes of image with its own two additions), and wave 4 re-prices the calendar's file
+against the 360 KB system disk's clusters with that number. The probe's
+whole paint is 13 calls by its layout (6 card slabs, 2 ground columns, 2
+gaps, the tag's three); MEASURED, a reveal is 1 `BLIT1` and a hide 2
+`OSAPI_GFX_DESK` + 1 `BLIT1`, exactly 5 and 14 ticks after the kernel's
+edge (`deskhover`), and a focus edge 1 `BLIT1` (`deskz`, after wave 3's
+review: it was 3).
+
+**v2's calendar, MEASURED at wave 4** (`deskcalperf`, MartyPC's 4.77 MHz
+VGA XT and 5150 CGA; PERFORMANCE.md Part 5 carries the rows): the full paint
+**19 calls on TALL, 12 on COMPACT** (12 + 7 and 6 + 6 `BLIT1` + `GFX_DESK`),
+**265 / 169 ms** from the first compose to the last call; a day select 5 / 4,
+a month 5..8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - every
+CALL budget of §110.3 met. `DESKCAL.O88` is **18,336** bytes of image (13,168 at
+v1's polish) and **15,630** on disk lz4-packed (11,211): 16 clusters, the 360
+KB system disk **332 of 354** (22 left; 323 before) and the small one 280 of
+354. A cold boot with the calendar's row reaches the paint at 15.38 s and
+`ui_task` at 19.22 s (7 reads, 50 sectors after the paint) against 14.85 s
+with none - the package's five more clusters are +0.2 s against v1's 19.02.
+**The uncover** (measured in v2's completeness pass, `deskcalperf`'s last
+gesture): a Disk window over the left 154 of the frame's 178 columns dragged
+clear is **10 calls, 191 ms** on TALL (8 slabs, 2 grounds) and **11, 158 ms**
+on COMPACT, where it covered nearly the whole face - the widget's own
+`W_PAINT` over the slabs `OSAPI_WM_DAMAGE` names, since a desk window has no
+drag cache (§11.103.6).
+
+**Two regressions, FOR THE OWNER** (v4 review). The calls fell and the TIME
+did not: the full paint is **265 ms against v1's 177** (the design priced
+~90-110 ms) and a day select **88 / 73 ms against v1's 21 / 24**, about 4x -
+a composed slab is one call but every glyph on its rows is composed into the
+band at ~0.49 ms, and a sub-rect `BLIT1` of 3-4 bytes recomposed its card's
+whole width (all seven cells of a day box's week). The review fixes cut what
+is avoidable without a decision - a `dc_rrect` composes no string wholly
+outside the bytes it puts down (`dc_cx0` / `dc_cx1`), a select never redraws
+today's box (inverse whether selected or not), a commit redraws a day's box
+only when its dot appeared and card 3 only when it changed, a selection's
+change is the two lines' rows and not card 2, and the About card's take-down
+is its rows (`stik_redrawr`) - and `deskcalperf` re-measured them: a day
+select **60 / 48 ms** (4 / 3 calls), the About card's take-down **6 calls,
+54 / 95 ms** (it was the whole face), the first paint 263 / 161 ms. A select
+is still ~2.5x v1's and the full paint ~1.5x; that composing is the rest,
+and whether v2's look is worth it is the owner's. **The package overran the design's ledger**: §110.9's design said
+~14.0-14.5 KB of image and at most one more cluster on the 360 KB system disk
+(321-326 of 354); it is ~18.3 KB (18,912 after the v4 review) and five more
+clusters, the disk at 332 with 22 left - the composer, the three layouts'
+strings and tables and the calendar's own growth, ~4 KB the design did not
+price. No owner decision was asked for those four clusters; this is it.
+
+**v1's waves 2, 3 and 4 moved no kernel byte** (this paragraph and its table
+are v1's; v2's kernel half is the wave 1 table above, v2's wave 2 moved +46
+`.text` / +54 `.cold` more, and today kern_big has **0 image and 126 cold
+bytes** of its rungs left, kern_emu 247 and **2**, kern_small 303 and 65).
+Re-measured at v1's wave 4 head, `tools/kernsize.py` read `unchanged` on both
+kernels, and the absolute figures were the ledger above applied to the tree
+it was cut from:
+
+| | `.text` | `.cold` | `.bss` | `.lowbss` | `.ovl` | image rung left | cold rung left | footprint |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| kern_big | 44,346 | 38,049 | 5,135 | 5,598 | 2,490 | 183 | 351 | 99,328 of 129,536 (59 steps spare) |
+| kern_small (`--build build/smallk -DKERN_SMALL`) | 32,933 | 23,999 | 3,104 | 2,868 | 2,086 | 315 | 65 | 65,024 of 107,520 (83 steps spare) |
+
+The whole of the reminders (§110.3) is the package's: the shared include
+gained one bss byte, `stik_nx` - the once-only sooner beat the chirp's second
+note rides on - and the few bytes of `stik_tick` that read it (an `xchg`, an
+`or` and a `jnz` ahead of the re-arm): `STIKPROB.O88`, the include's own
+measure, went from 1,520 to **1,536** bytes of image and 196 to **197** of
+bss.
+
+**At runtime**, a machine with no Sticky App row reads nothing at boot (§110.4).
+What a widget costs, MEASURED on MartyPC's 4.77 MHz XT with its FDC counters
+(the probe: a 1 KB package and a 16-byte state file - the calendar adds its
+larger package and a five-sector file to the reads):
+
+| what | `int 13h` | 5150 clock | on the lock? |
+|---|---:|---:|---|
+| `stik_boot` to its return: `sc_open`'s walk, the package, `stik_load`'s walk and read | 6 reads | 2.84 s | no - kmain's tail |
+| the first tick: `OSAPI_FILE_PATH`'s `..` walk, then the settings core's read for a compare that writes nothing | 7 reads | 2.05 s | yes |
+| **a whole autostart** | **13 reads** | **~4.9 s** | |
+| a settled drag's save | 2 reads, 6 writes | ~3.2 s at PERFORMANCE.md's 400 ms a call | yes |
+| **the calendar's save** (a five-sector file): any edit's or drag's, and the two the user does not cause - a reminder going off (~2 s after it; under its alert in v1, v2 having none) and a launch that missed reminders (the first quiet poll after the registration) - for the FIRED marks | **3 reads, 8 writes** after a firing, 4 and 8 after a missed launch - counted at the drive by `deskcalperf` on both legs, both adapters | ~4.4-4.8 s at 400 ms a call | yes |
+| the close of a widget that owes nothing: the settings core, the row away, SYSTEM.CFG written | 8 reads, 6 writes | | yes |
+| an idle widget | 0 | 0 | |
+| **the calendar, v1's wave 4** (v2: 19.22 s, above): reset to `ui_task` with its row in SYSTEM.CFG, against the same disk with none | 7 reads, 44 sectors in `stik_boot` | **19.02 s against 14.85 s**: +0.55 s reading the trailer before the paint, +3.62 s autostarting - then the first tick's ~2 s, and on a day whose reminders came due before the boot (the first boot of a working day, typically) the missed marks' save ~2 s later, ~4.8 s more (the row above; `deskcalperf`'s boot leg has nothing missed) | no |
+
+The design priced an autostart at 8-10 calls and 3-4 s and a save at "one
+write, 1-2 s"; both were short. The calendar's own autostart (`deskcalperf`'s
+boot leg, MartyPC's VGA XT, cold) is 7 reads before `ui_task` and its first
+tick's 7 after - and a boot with NO row makes **no** disk call after its
+paint, which the row asserts. The FIRST TICK's cost is paid on EVERY
+launch, a double-click included, because the widget registers on every one
+(§110.5). The save's writes are the file system's own - the directory entry,
+the FAT and its copy, the data - and what §110.5.1's walk changed is the rest:
+the W1 walk made four full remounts around one 16-byte write, **6 reads and
+6 writes, ~4.8 s**, and one full mount plus quiet stands is **2 reads**.
+First registration and close each write SYSTEM.CFG once.
+
+**The packages** (the build's own figures; v1's - v2's are the wave 4
+paragraph above):
+
+| | image | bss | on disk (lz4) |
+|---|---:|---:|---:|
+| `DESKCAL.O88`, the polish pass | **13,168** (13,152 before its review: two clip clears and the field's inset are 13 bytes of code, which crossed a paragraph) | 2,941 | **11,211** (11,205) - the same 11 clusters |
+| `DESKCAL.O88`, wave 4 | 13,072 (13,056 before the completeness pass, 13,024 before the review fixes) | 2,909 | 11,141 (11,120; 11,111) |
+| `DESKCAL.O88`, wave 3 | 12,368 (12,160 before the review fixes) | 2,860 | 10,544 (10,411) |
+| `DESKCAL.O88`, wave 2 | 6,080 (5,808 before the review fixes) | 2,748 | 5,343 |
+| `STIKPROB.O88` (never shipped) | 1,536 (waves 2-3: 1,520; wave 1: 1,120) | 197 (196) | 1,536, not compressed |
+
+Wave 3 doubled the image: `os88line.inc` and `os88ui.inc`'s check box
+(`OS88UI_CHK`) and alert are shared source the package now carries, and the
+lists, the field, the parser and the edits are the rest. The code
+compresses poorly (lz4 keeps 86% of it), so the floppy bought most of it:
+the 360 KB system disk went from **321 to 326 of 354 clusters, 28 left**
+(three more at runtime for the state file), and the small 360 KB one from
+270 to 275. Wave 4's 567 more bytes on disk stayed inside the eleventh
+cluster: 326 and 275, unchanged.
+
+**What v1's calendar's gestures cost** (the titled window; v2's are the wave
+4 paragraph above, `tests/deskcalperf.py` rewritten for them): primitive calls counted at the API table's drawing
+cells, a call counted when its far return is the calendar's own segment, and
+the time from the first call to the last off MartyPC's cycle counter on a
+4.77 MHz 8088:
+
+| gesture | TALL (VGA XT) | COMPACT (5150, CGA) |
+|---|---|---|
+| the first paint (two appointments, three tasks) | **65** calls - 24 runs, 36 fills, 4 frames, 1 rule - 177 ms (wave 4: 54, 159 ms) | **31** - 15 runs, 14 fills, 1 frame, 1 rule - 117 ms (wave 4: 28, 106 ms) |
+| the About card taken down (the same picture, `dc_all`) | 65, 190 ms | 31, 121 ms |
+| selecting an empty day from today, which has two appointments | **6** - 2 frames, today's field, the heading, the two agenda lines that were occupied | 6 |
+| an idle stretch: five / four beats and a minute boundary, nothing due | **0** | **0** |
+| a reminder going off | **1** run of the calendar's (its line) + the alert's paint, 5 - and ~2 s later the save its FIRED mark owes, 3 reads and 8 writes (~4.4 s) on the lock, landing under the alert (asserted) | 1 + 5, and the same save |
+| a launch that missed a reminder | the first paint's calls, and the missed marks' save at the first quiet poll after the registration: 4 reads, 8 writes (asserted to write) | the same |
+
+`os88stik.inc` grew ~260 bytes in wave 2 - the singleton, the anchor, the
+worker arm and `stik_touch` - plus the damaged-file question in a package that
+defines `STIK_DAMAGEDQ`. **No kernel byte moved in wave 2**: `tools/kernsize.py`
+reads `unchanged` on kern_big and kern_small, and no SDK file changed, so the
+ABI lock is untouched.
+
+**Re-measured on `main` at `b47de145`** (the merge that moved the cells to
+`0x046D` / `0x0473` / `0x0479`, §20.3), the whole kernel half, v1 and v2
+together, against main's own kernels:
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) |
+|---|---:|---:|---:|---|
+| kern_big | **+190** | **+344** | 0 | image 22 (212), cold 168 (**0**) - **the cold rung CROSSED, 75 → 76 steps, footprint +512** |
+| kern_emu | +190 | +344 | 0 | image 275 (465), cold 168 (**0**) - **CROSSED, footprint +512** |
+| kern_small | **+18** | **+32** | 0 | image 382 (400), cold 54 (86) - none crossed |
+
+Main's size pass had taken kern_big's and kern_emu's `.cold` to exactly a
+rung boundary, so any cold byte crosses one: this is the owner's decision
+(CLAUDE.md, docs/KERNEL-MEMORY.md), and the merge is not blessed. The cold
+bytes by module: `wm.inc` +172 (`osapi_wm_desk_x` and `cur_hov_x`),
+`desksc.inc` +70, `loader.inc` +40, `clock.inc` +32 (`osapi_clk_get_x`),
+`fdlg.inc` +16, `desk.inc` +11, `driver.inc` +3. Both footprints stay inside
+`KERN_BUDGET` (big 1,536 spare, emu 1,024).
+
+**The owner ACCEPTED the step (2026-10-15)** - one 512-byte `.cold` step on
+kern_big and kern_emu and no other - together with §11.103.10's `DESK.DRV`
+cut, so that the new rung is not spent at once. MEASURED after the cut, against
+main's kernels (`tools/kernsize.py`, then `--bless` on all three):
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) | footprint |
+|---|---:|---:|---:|---|---|
+| kern_big | **+187** | **+181** | **+16** | image **9** (212), cold **331** (0) in rung 76 | 98,816 -> **99,328** of 100,864, 3 steps spare - the accepted step |
+| kern_emu | +187 | +181 | +16 | image 262 (465), cold **331** (0) in rung 76 | 99,328 -> **99,840**, 2 steps spare - the accepted step |
+| kern_small | +18 | +32 | 0 | image 382 (400), cold 54 (86) - none crossed, unchanged by the cut | 62,464, unchanged |
+| `DESK.DRV` (on demand, kern_big and kern_emu) | | | | 235 bytes (stored plain: lz4 would not shrink it), 4 entries | a 1 KB claim from a Sticky App's first QUERY until restart |
+
+Against the merge the cut is `.text` **-3**, `.cold` **-163** and `.bss`
+**+16** on both big kernels, as §11.103.10 priced it; the design's further
+-38 of `.cold` (`stik_boot`'s loop) was not taken, for §110.4's reason. The
+360 KB system disk is **343 of 354 clusters, 11 left** (12 before): one for
+`DESK.DRV`.
+
+**The review fixes after the cut** (§11.103.10's `desk_need`: the outer
+`drv_vol` pair kept, and the load moved ahead of the region claim for an
+`OS88_F_DESK` package) are `.cold` **+23** on kern_big and kern_emu and
+nothing else: cold **308** left in the accepted 76th step on both, kern_big
+image **9** left (unchanged), kern_small byte for byte unchanged, no rung
+crossed, blessed on all three. The package half (COMPACT's dot beside the
+number, card 2's `No appointments`) moved `DESKCAL.O88` to 16,171 bytes on
+disk inside the same clusters: the 360 KB system disk is still 343 of 354,
+the small one 296.
+
+**Re-measured on `main` at `70df8a99`, NOT blessed** (#249's `OSAPI_THM_SET`
+took `0x046D` as an 8-byte inline cell, so the Sticky App cells moved to `0x0475` /
+`0x047B` / `0x0481`, §20.3). Against main's own kernels:
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) | footprint |
+|---|---:|---:|---:|---|---|
+| kern_big | **+187** | **+204** | **+16** | image 318 (**9**) - **the IMAGE rung CROSSED, 96 -> 97**; cold 308 (0) - the accepted step | 98,816 -> **99,840**, +1,024, 2 steps spare |
+| kern_emu | +187 | +204 | +16 | image 59 (262), cold 308 (0) - the accepted step only | 99,328 -> 99,840, +512, 2 steps spare |
+| kern_small | +18 | +32 | 0 | image 373 (391), cold 54 (86) - none crossed | 62,464, unchanged |
+
+#249's own `.text` (+195 against `b47de145`) left kern_big's image rung at 9
+bytes, so the Sticky App's resident `.text` + `.bss` (+203) crosses it: a second
+step beyond the accepted one, and the owner's decision. 194 bytes off kern_big's
+`.text` + `.bss` un-cross it. The 360 KB system disk is 346 of 354 clusters
+(main's alone: 325).
+
+**The owner decided: cut first, else accept the image step.** The cut was
+enough, so the step was NOT taken. §76.14.14.1 moved #249's theme set path
+(`thm_set`, `api_thm_set_x` and `thmv_reap_x`) into `.cold`. That is 223 bytes
+of code, and it leaves a 6-byte `api_thm_set` thunk and two 4-byte shims
+(`cw_dock_force`, `cw_wm_su_drop_all`) in `.text`; `cw_thm_set` is deleted.
+Against the merge it is `.text` **-209** and `.cold` **+229** on kern_big and
+kern_emu. kern_small has no theme, so it is byte for byte unchanged. Measured
+against main's kernels, then `--bless` on all three:
+
+| | `.text` | `.cold` | `.bss` | rungs left after (main's) | footprint |
+|---|---:|---:|---:|---|---|
+| kern_big | **-22** | **+433** | **+16** | image **15** (9) - none crossed; cold **79** (0) in rung 76 - the accepted step | 98,816 -> **99,328**, +512, 3 steps spare |
+| kern_emu | -22 | +433 | +16 | image 268 (262); cold **79** (0) - the accepted step | 99,328 -> 99,840, +512, 2 steps spare |
+| kern_small | +18 | +32 | 0 | image 373 (391), cold 54 (86) - none crossed | 62,464, unchanged |
+
+The Sticky App's own candidates were measured and are not cuts. `wm_show_dk`
+(§11.103.10) is a 5-byte `call far [DKDFP+DKD_SHOW]` / `ret`, and it is the
+target of `wm_show_b`'s near `jnz`, so it cannot leave `.text`. `mod_f_desk`, the
+`DESK.DRV` name, is data: §2.6's rule 1 keeps it in `.text`, because DS
+reads it.
+
+**The disks.** `STIKAPPS\` costs a folder's cluster and `DESKCAL.O88` five
+more. Measured with `os88disk.py --verify`: the 360 KB system disk went from
+**313 to 319 of 354 clusters** and the small 360 KB one from 262 to 268; the
+`readme.txt` paragraph that tells a user about it took one more cluster on
+each (it crossed a 1 KB boundary), so the shipped 360 KB system disk was
+320 of 354; the review fixes' 229 lz4 bytes crossed one more, and it is
+**321 of 354, 33 left**. The state file is three more clusters at runtime,
+in `SYSTEM\APPDATA`, the first time the calendar is closed or moved.
+
+### 110.7 `kern_small`
+
+kern_small reads no SYSTEM.CFG (§51.5), has no shortcuts (`OS88_SHORTCUTS`)
+and its `OSAPI_DESK_ITEM` is the refusal, so **there is no autostart and no
+restore there**, and nothing of §110.2 or §110.4 is compiled. What it does
+have is `OSAPI_CLK_GET` (the cell is in both kernels, §20.8 rule 4; its
+`clk_rtc` is 0, the PIT clock of §37.0.1) and the whole of a Sticky App's own state:
+a widget launched by hand on kern_small opens where it was left, with its
+data, because both live in its state file. A registration refused there is
+silent. The small system disks carry `STIKAPPS\` too (§24.5.1).
+
+**The worker arm, end to end** (wave 4's `stiksmall`, MartyPC's 128 KB 5150
+with a CGA, off `make small`'s 360 KB system disk): the first paint hires the
+worker (`stik_st` = WORKER | HIRED), registration is never TRIED - the worker
+arm skips it, so nothing is asked and nothing is said, no toast at all - a
+drag is saved by the worker's beat, a reminder goes off through the same
+beat with ONE note (v1 also raised its alert; v2 has none and rings the CGA
+slot, below) (880 Hz, 8 ticks: the worker's 36-tick
+sleep has begun before the beat that could shorten it runs, so there is no
+second note to time), the close box closes at once with nothing to remove,
+a reset brings no calendar back, and opened by hand again it is where it was
+dragged with its data. Nothing about the calendar is a different build on
+kern_small: the same `DESKCAL.O88` is on both kinds of system disk.
+
+**v2: the titled fallback with v2's face** (§110.11, the v2 design's open decision 9's
+default). kern_small has the two cells of §11.103.9 and nothing else of the
+layer - its `.cold` rung has 65 bytes, and it has no WM timer for a handle's
+dwell - so `OSAPI_WM_DESK` QUERY refuses there and `stik_load` sizes a TITLED
+frame: v1's window - title bar, shadow, a dock tile, raised by a click, the
+kernel's close box and title-bar drag - wearing v2's cards, with the gaps
+white and ruled by a centred 1-pixel line rather than showing the desktop,
+and no tag and no last gap: the frame is `STIK_FACE_W + 2` by the face less
+its tag row and last gap, plus `TITLE_H + 1`. Each gap is composed in the
+band and put down in ONE `OSAPI_GFX_BLIT1` - white rows and the rule in one
+pass, never a fill and a line over it. `OWNBG` and `SAVEU ON|1BPP` are set
+for it, as v1 did; a press on a card is still `STIK_ONCARD`'s, and there is
+no hover, no handle and no `STIK_ONFOCUS` (an ordinary window owns the bar
+the ordinary way). The face is at `(W_X + 1, W_Y + TITLE_H)`, so its `x` is
+the desk form's, and the state file's face origin means the same place on
+both kernels. The worker arm still beats and a reminder rings card 3 (or the
+CGA slot) with its single note. `desksmall` is its gate: COMPACT on the
+128 KB CGA 5150, a 130 x 70 frame for the probe, a dock tile, the title-bar
+drag, and the gap white with its rule. **The calendar's is `stiksmall`**
+(wave 4): a 178 x 151 titled frame, no WF_DESK, an ordinary instance slot
+and its dock tile, the title-bar drag saved as the FACE's origin
+(`STIK_HF_CONT`), and a reminder that rings the CGA slot with ONE note and
+no alert.
+
+### 110.8 What is not done
+
+- **The desk layer and the chrome are DONE in v2** (§11.103, §110.11): the
+  owner asked for both. What v2 leaves:
+- **A drop repaints the widget.** A desk window takes no drag cache
+  (§11.103.6), so a move costs one `W_PAINT` - a few slabs' `BLIT1`s.
+- **Desktop shortcuts under a widget** are invisible and unclickable, as
+  under any window, and a shortcut DROPPED under one is accepted (`desk_free`
+  knows no windows; the v2 design's open decision 14). The right-anchored default
+  place keeps a widget off the drive column.
+- **A Sticky App runs only beside its own kernel**: `OSAPI_WM_DESK` and
+  `OSAPI_GFX_DESK` join `OSAPI_CLK_GET` on the list an older kernel at the
+  same `PKG_FMT` does not have (below).
+- **No move notification.** The position is polled every 2 s and written once
+  two polls agree, so a power-off within ~4 s of a drag loses that drag.
+- **No shutdown hook.** Restart and power-off do not close windows; the row
+  stays, which is what restore wants, and the last edit is what the last
+  save wrote.
+- **No relaunch after a hibernate Discard**; the widgets return at the next
+  boot.
+- **The 12-hour display is not honoured.** `OSAPI_CLK_GET`'s AL bit 1 is
+  the user's 12-hour choice (§37), and the calendar ignores it: the cards
+  and the toast are always 24-hour (`09:30`, `23:00`). The entry
+  parser reads 24-hour times only, so the two agree with each other.
+- **A past day's unfired reminders never ring.** Earlier days are not
+  replayed at launch (§110.3), so an armed reminder whose day went by with
+  the calendar closed stays armed and silent on that day for good (v2 has
+  no per-line mark to show it; card 3 is today's).
+- **kern_small with no RTC toasts at every launch.** Its clock is the PIT's
+  (§110.7, `clk_rtc` = 0 there), so every launch with an armed reminder
+  still to come says `No RTC - check the time`, whether or not the user set
+  the clock this session - the cell cannot say which (§110.3).
+- **Not on The Wire**: a Sticky App calls `OSAPI_CLK_GET` (0x0475), which an older
+  kernel at the same `PKG_FMT` does not have — the gap §20.2.0.1 names — so it
+  ships only beside its own kernel until a "highest cell used" fence exists.
+
+### 110.9 Where the code proved the design wrong
+
+- The design added `clk_hour - clk_min == 1` to `clock.inc`'s day+month
+  assertion. The first `%if` beside the fields already asserts
+  `clk_min - clk_sec == 1` and `clk_hour - clk_sec == 2`, which is the same
+  fact; `osapi_clk_get_x`'s two word reads are named in its message instead
+  of a third copy of the arithmetic.
+
+- **`stik_boot` is NEAR** (`call stik_boot`, `ret`), not the design's far
+  `stik_boot_x`: both ends are `.cold`, so the far form was two bytes of
+  call for nothing. A future far caller (a hibernate Discard's relaunch,
+  §110.8) gets a one-line thunk then.
+- **It preserves every register** (`kentc_bp` + `es`), because
+  `drv_notice_x`'s contract says it does, and it tests KIND and the mark in
+  ONE word compare.
+- **`sc_open`'s FOLDER arm needed the carry too**: it ended in a
+  `jmp fm_choose` whose flags are nobody's, so a Sticky App row whose path had
+  become a folder would have been downgraded at random. +2 bytes.
+- **`sc_m_add` checks a Sticky App record's KIND and VOLUME before it looks for the
+  row by name**, not after the copy as a plain link's are: an UPDATE writes
+  over a LIVE row, and the late refusal frees the row it wrote into.
+- **`osapi_clk_get_x` masks `clk_h12` to bit 0** (+2 bytes): `CFG_H12`
+  reaches it from SYSTEM.CFG, a file's byte.
+- **The settings core grew 181 bytes, not ~100-130**, and the design's
+  starting figure (2,447) had itself grown to 2,492 since it was measured:
+  the core is six sectors now.
+- **The fixture's place is (303,184), not (304,184)**: a snapped window
+  holds `W_X` ≡ 7 (mod 8) (§11.94), so 303 is the fixpoint a save writes
+  back.
+- **`os88stik.inc` lands in wave 1** as the subset the probe needs, rather
+  than only in wave 2, so `stikboot` can assert a RESTORED place; and
+  `STIKPROB.O88` is built by `make stiktest`, `deskitem`'s precedent, rather
+  than `make bench`.
+- **`stikhiber` puts `HIBERNAT.PTR` on a HARD DISK**: `hb_pick` asks only a
+  fixed volume, so a floppy fixture cannot post the question. It asserts the
+  ordering with a breakpoint on `stik_boot` reading `[ui_rebootq]`, and not
+  what `HIBER.DRV` then makes of a pointer that is not one.
+- **The walk is ONE full `OSAPI_FILE_GOTO` and then `OSAPI_FILE_GOTO_QM`**,
+  not a full GOTO per component as §19.9 prescribed and the design copied:
+  `GOTO_QM` (§74.1) is the quiet stand that moves the instance, which is the
+  property §19.9 refused `GOTO_Q` for lacking. 6 reads to 2 per save
+  (§110.6). The first stays full for §110.5.1's reason.
+- **A save asks whether the disk is still home** (§110.5.1), which the design
+  did not: it trusted §19.9's "in the drive by definition", which is not true
+  of a program that runs for hours across disk swaps.
+- **A failed save is classified and backed off** (§110.5.1), where the design
+  said "keep dirty, retry on the next tick, silently": that retried a
+  write-protected disk every 2 s for as long as the widget was open.
+- **The widget registers whatever its state file said**, where the design
+  skipped it with no `SYSTEM\APPDATA` and wave 1 also with a DAMAGED file:
+  a row from an earlier session could then never be removed by closing
+  (§110.5).
+- **`HOME` is banked once, at the load**, not at every save: a save after a
+  refused one would have banked wherever the refusal left the instance.
+- **Wave 2.** The layout is chosen from the CONTENT HEIGHT the kernel gave
+  the window, not from `OSAPI_VIDEO`'s height (the design's `BX >= 300`):
+  the same answer on every single-display machine, and the right one after a
+  drag onto another display, which only the box knows about.
+- **The day field is `[mark][d][d]`, not `dd*`**, and the mark is glyph 7
+  rather than `*`: an asterisk's middle row fills all eight columns, so a
+  frame on the field's outer column would cut it; with the mark first and a
+  glyph whose edge columns are clear, the frame and its erase never touch a
+  glyph pixel. COMPACT's week pitch is 9, not 8, for the same frame: its top
+  and bottom need a gap row to stand in.
+- **The calendar's menu carries only what works in the wave that ships
+  it**: Go to Today, Previous Month, Next Month. The design's
+  Calendar > Close is the application-name menu's own `Close` already, which
+  the kernel puts there for every package (§12.2).
+- **A package's menu set must NAME itself** (`AM_NAME` non-zero): the
+  calendar's first build passed 0 for "the instance's name" as the SDK
+  allows, and its bar came up as garbage. `menu_relayout`'s instance-name
+  fallback ends at the `.kseg` label, which sets `[menu_seg]` to 0 - the
+  KERNEL's segment - for the name AND for every menu cell after it, so the
+  titles and items are read out of kernel memory. No shipped package had hit
+  it because every one names its set. Wave 2 changes no kernel byte, so the
+  calendar names its set and the fallback is left for the owner: it is a
+  kernel defect reachable by any package (the fix is to set `[menu_seg]`
+  for the name alone).
+- **The singleton toasts and refuses; it does not raise the open one.** A
+  slot can be turned into its owner's segment (`OSAPI_WM_OWNSEG`) but not
+  into another package's window pointer, which `OSAPI_WM_FRONT` would need,
+  and the stride differs between kernels.
+- **The anchor's y uses the screen's height**, not the dock line: the header
+  records the height only, and `wm_fit` clamps the remainder above the dock.
+- **The kern_small wake takes the lock around the WHOLE beat** - the poll,
+  `STIK_ONTICK` and the save - not around `STIK_ONTICK` alone: the save then
+  runs exactly as it does in kern_big's timer callback, lock held, and one
+  body (`stik_beat`) serves both arms.
+- **The damaged-file question is the package's option** (`STIK_DAMAGEDQ` with
+  `OS88UI_ALERT`), never asked from the close, and a No is read-only for the
+  session (§110.5.2).
+- **The package's own state comes FIRST in its bss** (`STIK_BSS` = 112), so a
+  gate reads the grid at the image's end + 0; `tools/os88stik.py` names every
+  such offset and `t_stik` has NASM evaluate the package's own equates
+  against them.
+- Verified, not changed: `desk_reflow` is safe with no lock (above, §110.4),
+  so the design's deferred `[desk_zdirty]` path was not needed; and
+  `OSAPI_FILE_HERE`'s `BL` is `inst_fdrv`, the volume index a row's +0 holds
+  — `stikboot`'s byte-identical SYSTEM.CFG is that fact measured.
+- **Wave 2's review fixes** (no kernel or SDK byte; the package and the
+  include only):
+  - **The restored `y` was lost on a CGA**, and wherever the frame hung over
+    the dock. The design put the saved place in the template and trusted
+    `wm_fit` inside `wm_create` to clamp "whatever is left" - but that fit
+    runs before the entry proc's `PREFER` and `KEEPH`, which resize without
+    moving (§11.100.9), so it clamped against the 255-row TALL template on a
+    155-row band and every `y` came back as 20; and it keeps every frame
+    that fits the band above the dock, where `wm_dock_snap` lets a drag
+    leave one over it. The template is now sized for the adapter before the
+    create (§110.3) and `stik_made` gives a pulled-up `y` back (§110.5.2).
+    `stikmove` ran on VGA alone, where neither shows; `stikmovecga` and
+    `stikanchor` are the rows that would have caught both.
+  - **The poll compares against the place the window OPENED at**, not
+    against "never saved". The design's own words - the file appears "the
+    first time the calendar is closed or moved", the damaged question comes
+    from "a settled drag, an edit" - were what the wave-2 build broke: it
+    wrote a missing file ~2 s after every first launch (2 reads, 6 writes
+    under the lock), and put `Replace damaged calendar?` up unprompted ~2 s
+    after every launch over a damaged one, a Yes to which replaced a file
+    the user had not touched.
+  - **A read that FAILED is not a damaged file.** `FERR_NODISK` and
+    `FERR_IO` made the file DAMAGED, so the first owed save offered to
+    replace a file that had never been read; they are now read-only for the
+    session (§110.5). A walk that fails at the load stays `STIK_S_NOHOME` -
+    whatever the cause, saving over an unread file is what must not happen.
+  - **A close whose remove is refused is declined once** (§110.5): with the
+    system disk out of A:, `CTRL.DRV` cannot load, the row stayed and the
+    widget came back at the next boot although the user had closed it.
+    Declining every time would make it unclosable (§75.1), so only the first.
+  - **A date change re-runs the two fields** rather than the month (`~18`
+    calls to 1-3), and draws nothing under an open About card; a menu pick
+    takes the card down by its own draw, not by the card's repaint followed
+    by the month's (§110.3).
+  - `STIK_CAP` is checked by `%strlen`: the old check passed 13 and 14
+    characters into the row's picture header. The Makefile's `LIVESYSARGS`
+    guard tests the SYSAPPS filter itself, since `$(STIKARGS)` made the
+    variable it tested never empty.
+- **Wave 3** (the package and the host tool; no kernel or SDK byte):
+  - **Wave 2's day mark never drew.** Glyph 7 is outside the kernel's font,
+    which keeps glyphs 32..126 and draws any other as a space (`font.inc`),
+    so no day ever showed its bullet and nothing tested the pixels. The mark
+    is the design's `*` again, and the selection frame's erase - which a
+    star's middle row reaches, at the mark cell's column 0 - is answered the
+    way today's inverse always was: the old field is re-run when it is
+    marked, one run.
+  - **The entry field takes a HEADING's place**, not "the last row of the
+    active pane": an `os88line` field is twelve rows - a frame, three rows of
+    inset, the glyph band - and an agenda line is eight. In the heading's
+    place it opens as one `os88line_draw` over pixels that are already
+    ground, and on COMPACT its top edge lands on the rule itself.
+  - **The agenda is pitch 8, seven lines on TALL and four on COMPACT**, where
+    the design had five at pitch 10: a line is one run with no gap fill
+    under it, so the list costs fewer calls and shows more. The task list is
+    five rows at pitch 12 from content row 176 on TALL and **three** on
+    COMPACT, because the check box is twelve rows and 36 rows hold three.
+  - **COMPACT has no tab row**: the heading row is the agenda's or ` Tasks`,
+    swapped by Tab, a click on it or the menu - a tab row would cost a ninth
+    of a 120-row content box for a label.
+  - **The task's label is the calendar's own run**, not `os88ui_chk`'s:
+    that label's pen is the box's width plus a gap, 18 pixels in, which is
+    `font_run`'s two-pass fallback (§6.1). The box is the shared control's
+    `os88ui_chkdraw`; a toggle fills the mark alone (the review's change,
+    below).
+  - **All-day appointments sort FIRST in their day** - the key is
+    `time + 1`, where 0FFFFh wraps to 0 - and the design's `(date, time)`
+    put them last; `tools/os88stik.py` writes the same order.
+  - **A Remind pick changes ONE thing**: the selected timed appointment's
+    lead, or - with none selected - the default; the design changed both at
+    once, which a user can see neither half of. The menu gained 30 Min
+    Early and No Reminder (the payload's flags bit 0).
+  - **No "3 open" count in the task heading**: it would make a check box's
+    toggle redraw the heading as well as its mark.
+  - **The payload is checked at load** (counts inside the tables,
+    appointments in order); one that fails is a DAMAGED file, which the
+    design defined by the header alone.
+  - **The menus grew Edit Item, Delete Item and Show Tasks / Show Day**,
+    each greyed with its reason when it does not apply; `Esc` deselects and
+    `Space` checks the selected task; a list longer than its rows PAGES (the
+    last line is the pager) rather than scrolling.
+  - **While the Delete question is up nothing can be changed**, and its Yes
+    fixes the bullet of the deleted appointment's OWN day - the user may
+    have moved to another day meanwhile.
+  - **Wave 3's review moved four things.** `STIK_ONTICK` gained an answer,
+    CF = 1 = hold the save: the design priced a save as "one write" and it
+    is a remount, a walk and the write (the calendar's: 3 reads and 8
+    writes, ~4.4 s, §110.6) with the lock held, which
+    landed in the middle of a typed word at the next 2 s poll; the
+    calendar holds it while the field or its question is open and until a
+    poll passes with no edit. A check box's toggle is the calendar's own
+    6x6 fill and not `os88ui_chkmark`, whose published clear-the-box
+    contract writes the frame twice. The rows on the glass are counted to
+    the pager, so a pager that goes away is erased, and a page is
+    re-derived after a delete and a layout change, so a list that stops
+    paging starts at its top. New Appointment, New Task and Edit Item grey
+    `(typing)` while the field is open rather than close it and redraw the
+    band twice.
+- **Wave 4** (the package, the include's one byte, the gates; no kernel or
+  SDK byte):
+  - **The chirp's second note needed a beat of its own.** `OSAPI_SND_TONE`
+    is one channel and one request, so "880 then 660" is two requests four
+    ticks apart, and the Sticky App beat is 36 ticks: the include gained `stik_nx`,
+    a once-only sooner re-arm the package stores from `STIK_ONTICK`. The
+    worker arm cannot honour it - its next sleep has begun before the beat
+    runs - so kern_small chirps ONE note, 880 Hz for 8 ticks.
+  - **The agenda line is redrawn BEFORE the alert opens**, not after: the
+    clip a draw outside `W_PAINT` arms is the window's visible region as it
+    is then, and an alert created first would lie inside a region computed
+    before it existed.
+  - **The alert's line drops its `Reminder ` prefix when the text is long**
+    (over 19 characters), rather than letting `OS88UI_AMAX` clip the user's
+    text off its end. The design's "<= 34 characters" did not say which part
+    gives.
+  - **Missed at launch is strictly BEFORE this minute**; one due THIS minute
+    is the first beat's to fire, because the minute last seen starts as
+    none. The design's "due-but-unfired" left a launch at 09:30 reporting a
+    09:30 reminder as missed.
+  - **A reminder armed for a moment already past is fired at once,
+    silently** - a new appointment, a moved time, the mark column, a Remind
+    pick - which the design did not cover: typed at 10:00, a 09:30 appointment
+    went off the instant it was entered. Past is strictly before this minute;
+    one armed for THIS minute fires at the next beat with its alert.
+  - **The FIRED marks owe saves the user did not cause**: a launch that
+    missed reminders and an unattended firing each write the state file
+    (§110.5.2's one exception, §110.6's row). The design's "set FIRED and
+    dirty" implied it; the contract text had said nothing is ever written
+    unprompted.
+  - **The tone is asserted at the cell, not off the speaker.** The design's
+    `deskcalremind` had a QEMU `make test-snd` arm with `tools/sndcheck.py`
+    hearing 880 Hz; what was built reads `OSAPI_SND_TONE`'s AX and CX at a
+    breakpoint on the cell on MartyPC, which proves the requests the
+    calendar makes and not that the speaker sounds them - the cell's own
+    gates (§34) own that half. Nothing in §110's rows plays the speaker.
+  - **No `make stikshot` fixture.** The design's §9 set belongs to the pull
+    request that ships the series and was made there, as `docs/stikapps/*.png`,
+    by a driver outside the tree; `deskcal1bpp`'s framebuffer reads are
+    what holds the 1bpp look between pictures.
+  - **Nothing fires while the entry field is open**, as well as while an
+    alert is up: an alert takes the keyboard (keys go to the front window),
+    so one opening mid-word would have swallowed the rest of the line. The
+    reminder fires at the first minute after the field closes. (The first
+    build also held the firing's SAVE while its alert was up; the review
+    took that out, §110.3 - an alert can stay up for hours.)
+  - **The no-RTC toast is `No RTC - check the time`**, not `Clock not set
+    (no RTC)`: `OSAPI_CLK_GET` says there is no chip, not whether anybody set
+    the clock this session, and §47's rule is to say a fact. It is said at
+    launch only when a reminder is still to come and nothing was missed -
+    the toast slot holds one line, and the missed count is the one the user
+    can act on.
+  - **A reminder's moment is clamped at midnight**: `00:30` an hour early is
+    due at `00:00` that day, not at `23:30` the day before.
+  - **The launch's own toast is the first beat's, not the entry proc's**
+    (the completeness pass). The design said the missed summary at launch;
+    said there, a hand launch's registration - one SYSTEM.CFG write, whose
+    verdict `CTRL.DRV` toasts - replaced it with `Settings Saved` within
+    seconds, every time a user opened the calendar by hand on a day it had
+    missed something. The entry proc stages it (`dc_ltp`, two bytes of the
+    calendar's spare bss) and the first `STIK_ONTICK` says it and nothing
+    else, so a reminder due that very minute goes off one beat (2 s) later.
+    `deskcalremind` A reads the bar again once the row is granted, and is
+    verified to read `Settings Saved` with the toast put back in the entry
+    proc.
+- **The polish pass** (the package, its gates and `tools/os88stik.py`; no
+  kernel or SDK byte), off the PR's own screenshots:
+  - **A reminder's alert left `Cal` on the menu bar.** Not the toast's
+    placement and not `AM_NAME` (above): `dc_fire` draws the fired line
+    through the clip `dc_arm` armed and then calls `os88ui_ask`, whose
+    `OSAPI_WM_CREATE` recomposes the bar for the new front window - and
+    `menu_bar_text` draws through whatever clip is armed. The calendar's
+    region holds no bar pixel, so every cell of that composition was dropped
+    on the glass while `menu_bcell`, the record of what is on it, took them
+    as drawn: the `Calendar` and `Remind` titles' cells were recorded blank,
+    and only those a later composition happened to rewrite (the toast's
+    strip, the disk widget's cells) were ever repaired. Traced with a
+    breakpoint on `menu_bemit` reading `[wm_clip_n]`: 1 at the alert's
+    composition, 0 at every other. `dc_fire` now disarms the clip
+    (`OSAPI_WM_CLIP_CLEAR`) after the line and before the toast and the
+    alert. **The kernel half is recorded, not fixed**: the bar's painter
+    inherits its caller's clip, and only `toast_now` banks and clears
+    `[wm_clip_n]` around its own `menu_draw_bar`, so any package that arms a
+    clip and creates a window in the same lock hold loses bar cells the
+    same way. Banking it in `menu_draw_bar` is a resident-byte change for
+    whoever owns §12 to take.
+  - **The day field is `[ ][d][d][m]`, four cells, and the content 29
+    cells** (wave 2 above made it `[m][d][d]` in 26): with three cells the
+    mark was also the only thing between two numbers, so `15*16` was
+    either day's and `1* 2` read as the 1st's. A fourth cell is the blank
+    that is always there, and seven of them do not fit in 26 cells, so the
+    window grew 24 pixels (234 wide). The frame stands on the blank's column
+    1 and the mark's column 7; today's inverse is the number and its mark.
+  - **The agenda has a gap under every line** - pitch 10 on TALL, as the
+    design had it, 9 on COMPACT - where wave 3's pitch 8 put a descender on
+    the next line's capitals. Seven lines still on TALL (the content grew to
+    253 rows) and four on COMPACT; a full paint fills each gap once, +6 and
+    +3 fills.
+  - **The task boxes are inset**, at content x 4, at a pitch of 13: at x 0
+    the box's left side and the window's frame read as one 2-pixel line, and
+    at a pitch of 12 two stacked boxes shared their edge rows the same way.
+    +5 fills on a TALL full paint (the row under each box), and COMPACT's
+    content went from 120 rows to 123. `dc_line` moved to the end of the
+    calendar's bss, 32 bytes for the 29-cell row (`DC_BSS` 272 to 304,
+    `tools/os88stik.py`'s `DESKCAL_STIK_BSS` and its new `DESKCAL_BSS_LINE`
+    with it, held by `t_stik`).
+  - The template moved left to (336,40) - (335,40) under the snap - so the
+    wider frame and its shadow still end left of the drive icons.
+  - **The Delete question had the alert's defect too**, on two paths the
+    first fix did not reach (the review of this pass, on MartyPC): a
+    Calendar > Delete Item pick while the entry field is open runs
+    `dc_fclose`, and one while the About card is up runs `dc_arm` and
+    `dc_all` - both leave the clip armed when `dc_askdel` calls
+    `os88ui_ask`, and the question's bar kept `Calendar  Remind` (305 ink
+    pixels right of its app name, against 0 with the field shut).
+    `dc_askdel` now disarms before it asks, which covers both, and
+    `stik_save` does the same before `STIK_DAMAGEDQ`'s question, which runs
+    in the same beat as `STIK_ONTICK` - the calendar's day rollover arms the
+    clip there (reasoned from the code; no row reaches that beat).
+    `deskcaledit` G is the gate, verified to read 305 with the clear taken
+    out of `dc_askdel`.
+  - **The entry field is inset as the boxes are**, content x 4..227 (§110.3):
+    it had the boxes' 2-pixel line against the frame on both sides. No call
+    and no visible column of text is spent - the pen stays on cell 1.
+
+- **v2, wave 1 (the kernel's desk layer, §11.103)** - where the code proved
+  the design record wrong, each one kept here and in the builders' log:
+  - **The key target is in kern_big's `fdlg_top_x` BODY**, the `FDBODY` in
+    `.cold`, not the stub the design named: that stub is kern_small's
+    FDLG.DRV resident half (`%ifdef FDLG_MOD`), which kern_big does not
+    assemble. And it tests `WF_DESK` without the visible bit: every hide
+    repaints through `menu_draw_bar`, whose `menu_check` takes the bar off a
+    window that is not visible, so `[menu_win]` is never a hidden window past
+    the paint that hid it. 16 bytes of `.cold`.
+  - **`wm_su_rect` answers a desk window's FRAME** (§11.103.5). The design
+    kept `wm_damage` FULL-only and was right to, but missed that its
+    sub-rect path INTERSECTS the damage with `wm_su_rect`'s title-inset
+    content rect, which would have cut the top `TITLE_H` rows and the borders
+    off every `OSAPI_WM_DAMAGE` a widget is handed. One arm there (14 bytes)
+    also covers `wm_cov_rect`, which then stays FULL-only.
+  - **MAKE is the entry proc's alone**, and its caller is the loader's
+    `[ld_rec]`. The design's "`inst_win_owner` against the caller" cannot
+    work: `wm_owner` is published at step 9, after the entry proc returns
+    (§21), so the window being made is the one with NO owner; and the cold
+    body cannot reach `inst_caller` (`.text`) without a trampoline. "Unowned,
+    and a load in progress" names the window and the record for nothing. The
+    z entry moves to `[0]` by one ROTATION (`xchg al, [si]` up the order
+    until the carried entry is the window's) - 12 bytes against a 33-byte
+    scan-and-shift.
+  - **The desk frame is 178 wide, not 177**: `wm_create`'s size snap
+    (§11.94.5) puts `W_W` at 8k + 2 before MAKE runs, so the face has a
+    column of the desktop's ground on BOTH sides. That is the titled
+    fallback's width as well, so the two forms are one width (§110.11).
+  - **The header flag rides `[ld_cfmt]` bit 3**: step 5 runs before the image
+    is read, and `ld_check_hdr`'s two callers leave the header in different
+    places, so the flags byte's bit 6 is kept three shifts down beside the
+    compression format (`LD_CFMT_KEEP`) and the two format tests read bits 0-1
+    alone. No new `.bss` byte.
+  - **The chromeless sites are a macro, `WM_CHROMELESS`**, not 11 inline
+    word tests: on kern_small it is the old byte test, so not one byte of
+    that kernel moves (it spends exactly the two cells' 12 bytes).
+    `t_chromesites` checks the macro's body as well as every site.
+  - **kern_small's `OSAPI_GFX_DESK` names `gfx_fill_gray` itself**:
+    `vga12.inc`'s `%define thm_desk` on a theme-less build comes after the
+    table.
+  - **The probe opts in as a SECOND build of its source**, `DESKPROB.O88`
+    (`-DDP_DESK`), not by changing `STIKPROB.O88`: `stikboot` drags StikProbe
+    by its title bar and closes it with its close box, and a desk window has
+    neither until wave 2 brings DRAG and the widget's own close. The four
+    rows are one script, `tests/desklayer.py --leg z|dock|keys|small`; `deskz`
+    uses a Disk window over the probe, the calendar being v1 this wave.
+  - **What it cost, measured** (`tools/kernsize.py`, against the tree it was
+    cut from): kern_big and kern_emu `.text` **+104**, `.cold` **+154**,
+    `.bss` 0; kern_small `.text` **+12**, `.cold` 0. The design priced the
+    wave-1 items at ~75 and ~105: MAKE alone was first written at 182 bytes
+    of `.cold` and crossed **kern_emu's cold rung** (+512, 58 → 57 steps);
+    rewritten as above it is 98, and no rung is crossed on any kernel -
+    kern_big image 79 left (was 183), cold 197 (351); kern_emu image 326
+    (430), cold **73** (227); kern_small image 303 (315), cold 65 (65).
+    DOCK.DRV grew 24 bytes, still 5 sectors. **Wave 2 inherits 73 bytes of
+    kern_emu's cold rung** for the drag pick-up (~22) and the hover edge
+    (~40), so its own measurement decides whether §110.10's cut order runs.
+  - **Wave 1's review fixes**, each a place the wave's own code was wrong:
+    - **The shadow subtractions take a chromeless window's FRAME**
+      (§11.103.1). §11.103.1 said every z-order reader was unchanged, and for
+      the ORDER it is - but `wm_clip_subl` (`wm_occl_l`) and `wm_clip_sub`
+      (`wm_clip_rect`, `wm_clip_occl`) walk every visible window and
+      subtracted a drop shadow a desk window never draws, so column `x+w` and
+      row `y+h` beside the probe kept a departed window's pixels. Both are
+      `WM_CHROMELESS` sites now and registered in `t_chromesites`; `deskz` E2
+      reads the strip after the Disk window closes.
+    - **A desk window's show and hide promote nobody** (§11.103.3): without
+      `[wm_dmg_npro]` the pass re-drew the front application's title bar
+      whenever that window lay clear of the widget.
+    - **MAKE's fence is `[ld_base]` and `W_SEG`**, not `[ld_rec]` alone: the
+      loader never clears `[ld_rec]`, so after any launch it names a record
+      that may be FREE (`I_STATE` = 0), and a package's later windows are
+      never bound - so MAKE from a callback succeeded or refused on somebody
+      else's launch history, and a worker's MAKE during another package's
+      load put `IF_DESK` on THAT package. `[ld_base]` is 0 outside a load and
+      names the loading package's segment inside one (§21).
+    - **`IF_DESK` is set at the loader's step 9, off the window the entry
+      proc returns**, not by MAKE: an instance whose returned window was
+      ordinary was tile-less with a minimize box, and minimizing it lost it.
+      MAKE got 4 bytes shorter and step 9 10 longer.
+    - The text: `fdlg_top_x`'s key arm has no visible test and is 16 bytes of
+      `.cold` (§11.103.4, §12.6 said otherwise), `[ld_cfmt]`'s bit 3 is
+      written down at its declaration and in §21 step 5, the SDK says
+      `WF_HOVER` is not set before wave 2, and `deskz` asks the KERNEL's
+      `wm_top` (by calling it on the paused machine) rather than
+      `tools/os88geom.py`'s mirror, which skipped desk windows by
+      construction.
+    - Measured: **+28** `.text` and **+18** `.cold` on kern_big and kern_emu,
+      0 on kern_small; no rung crossed. kern_big image **51** left, cold 179;
+      kern_emu image 298, cold **55** - so wave 2 has 55 bytes of kern_emu's
+      cold rung, not 73, against ~62 planned: §110.10's cut order is likely
+      to run there.
+
+- **v2, wave 2 (the posted drag and the hover edge, §11.103.6-7)** - where
+  the code proved the design record wrong:
+  - **There is no `[ui_dragq]`, no cold pick-up and no far shim.** The post
+    is `-1` in `[ui_dragy]`, the word `.content_front` already seeds with
+    the press point before every `W_ONCLICK` (§13.8.2), so a DRAG made
+    anywhere but inside that callback is overwritten before the next press
+    can read it - the design's "legal only inside `W_ONCLICK`" and its
+    "a DRAG posted from a timer does not turn the next press into a drag"
+    hold by construction, where a word of its own needed a clear before
+    every dispatch. The reason is the budget, measured: wave 1 left
+    kern_emu's cold rung **55** bytes, and the design's ~22 + ~40 of `.cold`
+    would have crossed it; the verb is 9. (Wave 2's review replaced the `-1`
+    with the caller's `BX` and added the desk test - the bullets below.)
+  - **The pick-up is BEFORE the arm, and inline**: the press point is
+    banked on the stack across the dispatch (`ui_bill` keeps neither CX nor
+    DX, and `[ui_dragy]` holds the sentinel), `ZF` is carried past
+    `gfx_unlock` with `pushf`/`popf`, and the path jumps to the title bar's
+    own `call ui_drag`. Skipping the arm is what keeps `W_ONDRAG` silent
+    after a drop - without it `ui_arm_trk` delivers one on the next pass
+    (`deskdrag`'s break-it reads it) - so the design's "zero `[ui_armw]`"
+    is never needed.
+  - **`ui_drag` stores `[wm_dmg_npro]` for EVERY window** on kern_big (5
+    bytes against 11 tested): no drag changes the front window (§11.103.6),
+    so wave 1's "W2's desk drag owes the same store" is paid without a test.
+  - **Two short jumps are written `short`** (`.region`'s `je .title_bar`, the
+    press's `jc .yj1`): with the pick-up inside their reach NASM's growing
+    passes widened both to five bytes although both still reached, +6 bytes
+    of a rung that had 51. `.yj1`'s `jmp .yield` genuinely went near (+1).
+  - **The hover edge's caller banks BX and zeroes CL** (4 bytes of `.text`)
+    so the cold body is a two-pass loop with no frame: kern_big's image rung
+    had room and kern_emu's cold rung did not. `[cur_hovw]` is an
+    initialised word in `.text` beside `[cur_shchk]`, not `.bss`: `.bss`
+    survives a warm boot, the image does not.
+  - **The held-button refusal is the package's**, as the design said, and
+    the kernel reports edges with a button held - verified, since an armed
+    card press keeps the ladder running and the re-entry woke the probe.
+    The probe refuses at the wake (it has no dwell); the dwell, the linger
+    and "calls per edge 1 / 3" are wave 3's include and its rows.
+  - **The probe grew a tag row**: a 4-row gap and a 12-row tag under card 2
+    (face 104 rows, the desk frame 130 x 104, the titled one 130 x 123), its
+    `STIK_BSS` 16 -> 32 for a `W_ONDRAG` counter. `deskz`'s E2 moves the Disk
+    window down to reach the strip under the taller face.
+  - **The 1bpp legs are `--leg hovercga` / `--leg hoverherc`** of
+    `tests/desklayer.py` (rows `deskhovercga`, `deskhoverherc`), and they run
+    the edge and the two pictures; the cover, the held button and the
+    chooser are adapter-free logic and VGA's leg runs them.
+  - **What it cost, measured**: `.text` **+46**, `.cold` **+54** on kern_big
+    and kern_emu (the design: ~36 and ~62); kern_small byte for byte
+    unchanged. **No rung crossed** - but kern_big's image rung has **5**
+    bytes left and kern_emu's cold rung **1**, so wave 3's include must not
+    spend a resident kernel byte, and anything later that does crosses a
+    rung, which is the owner's call. §110.10's cut order was not run and
+    could not have helped: each of its cuts moves bytes INTO `.cold`.
+- **v2, wave 2's review fixes** - what the review proved, and what it cost:
+  - **The DRAG post names its window, and the pick-up honours a desk one
+    only** (§11.103.6). A bare `-1` tied the post to nobody: a worker's
+    post during another package's `W_ONCLICK` dragged THAT window, and a
+    fullscreen window's own post was clamped 20 rows off its latch. `mov
+    [ui_dragy], bx` and `cmp [ui_dragy], si` are a byte shorter each than
+    the sentinel's pair, and the desk test is 6: **+5** `.text`, **-1**
+    `.cold`. `je short .title_bar` then over-reached by three, and moving
+    `.grow_box` above `.mdown` paid them for nothing. kern_big's image rung
+    has **0** bytes left.
+  - **Measured, not cured** (each needs resident bytes there are none of,
+    so each is the OWNER's): a drop redraws every ordinary window over the
+    widget's old or new rect whole (§11.103.6 - `deskdrag` E now counts
+    `wm_draw_win` twice); a hover standing when a chooser opens stays set,
+    and an open auto-hide dock over a widget is no cover (§11.103.7). The
+    SPEC sentences that said otherwise ("a drop costs one `W_PAINT`", "a
+    package can only ever drag its own window", "never set under a
+    chooser", "a post anywhere else is inert") are corrected.
+  - **The drop's bound is the title bar's** (§11.103.6), so a widget can be
+    left with its tag row off the glass; wave 3's include re-fits it after a
+    drop, for no kernel byte.
+  - **`make ANIMOFF=1` assembles again.** Sticky App v1's `desksc.inc` grew
+    `CTRL.DRV` to 12,317 bytes, so the knob's 124 fewer landed it at 12,193
+    + 141 of bss against a 12,288 claim, and kernel.asm refused. The image
+    is now padded one byte past a KB boundary when its bss would not fit
+    (§2.8's claim paragraph): zero bytes on every build that fitted, which
+    are byte-identical, and no resident byte.
+
+- **v2, wave 3 (the widget treatment, §110.11 and §5.12.8)** - where the
+  code proved the design record wrong, or settled what it left open:
+  - **`GFXE_TEXT` carries a rectangle fill** (`gfxe_bfill`): the focused
+    plate, the handle's white box, the titled fallback's rule and a card's
+    inverse boxes are rectangles of ink in the band, and the design's two
+    capabilities had no way to lay one.
+  - **The plate fills the tag row**, the name at `(h - 8) / 2`: the design's
+    "plate 1+8+1" for an 11-row tag summed to 10, and the handle's close box
+    is 10 rows, so a tag row is 10 rows or more (`STIK_LAYOUT` refuses less).
+  - **A titled gap is ONE `BLIT1`** - its white rows and the rule composed
+    together - where the design said a fill plus a 1-px `gfx_hline`: the
+    same pixels in one pass and one call.
+  - **Focus GAIN is read at every press and every timer fire**, not only
+    polled while the widget owns the bar: a right press and a keyboard-mouse
+    front give the widget the bar (§11.103.4) without reaching any callback
+    of its, so a poll that ran only while it was already known to be focused
+    could never see them. Loss is still the 4-tick poll, only while focused.
+    `STIK_ONFOCUS` is the desk form's alone.
+  - **ONE timer, absolute deadlines.** The beat, the dwell or linger and the
+    focus poll each keep an absolute tick and every arm takes the soonest,
+    so a hover deadline never delays a beat and a beat never runs early -
+    the design's "a beat that comes early is harmless" was true of the poll
+    but would have run `STIK_ONTICK` early too.
+  - **The re-fit after an out-of-band drop is hide, `W_Y`, show** (no move
+    cell exists): two repaints, once, from the beat, before the place is
+    saved.
+  - **API additions**: `STIK_FACE_W` (a widget narrower than the calendar's
+    22 cells - the probe's is 16), `STIK_RIGHT`, `STIK_WAKE` (a package that
+    wants every wake), and `stik_slabs` + `STIK_COMPOSE` as the slab painter a
+    composing `STIK_PAINTCARD` is; `STIK_LAYOUT` is the include's macro, so
+    the tables go after the `%include`.
+  - **A MAKE refused after QUERY said yes** (never, in practice: MAKE
+    refuses only outside the entry proc, or a visible, fullscreen or sizable
+    window) is painted as titled in the frame it has.
+  - **What it cost**: the include **2,235** bytes of image under
+    `STIK_WIDGET` against ~500 planned, `GFXE_TEXT` / `GFXE_BITS` ~600 more
+    (§110.6). **No kernel byte**: `tools/kernsize.py` reads byte for byte the
+    same on kern_big, kern_emu and kern_small, and a v1 Sticky App - `STIKPROB.O88`,
+    `DESKCAL.O88` until wave 4 - assembles byte for byte as it did.
+  - **The gates**: the probe is the include's now (three layouts, a 128-wide
+    face, a 16-row band so a glyph straddles two slabs, `DESKPROB.DAT`
+    written `--cont` at face (376,184)); `deskground` changes the theme on
+    the Control Panel at RUNTIME rather than in a SYSTEM.CFG record, because
+    the harness's desktop gate reads Bright's menu bar - which is also the
+    stronger test, the widget being up through the change; `desksmall`
+    asserts the white ruled gap, so `OSAPI_GFX_DESK` on kern_small is no
+    longer seen by a row; `deskhover` now measures the dwell, the linger and
+    the calls per edge that wave 2 left to this wave.
+  - **Wave 3's review** (each finding re-verified against the code):
+    **the composer was 10x slower than this record said** - 0.1-0.2 ms a
+    glyph claimed, 2.3 ms a visit measured on MartyPC - so it has a reject
+    and a straight x1 path now, 0.49 ms, and §5.12.8 states the measured
+    figure; the design's ~90-110 ms full calendar paint rested on the old
+    claim and wave 4 re-prices it from §5.12.8's numbers. **The re-fit only
+    lifts** a frame, once: the layout is the primary's, and a face taller
+    than a second display was re-shown every beat. **`STIK_LAYOUT` refuses
+    a gap between cards taller than the band**, which the titled fallback
+    composes whole. **The worker arm keeps the package's `STIK_WAKE`**
+    instead of putting `stik_wake` over it. **The glyph table is asked for
+    at every paint**, a resume being able to move it. **A focus edge is
+    the plate alone**, 1 call where it was 3. **A quit owes nothing more**
+    (`STIK_F_QUIT`). `desksmall` sees `OSAPI_GFX_DESK` on kern_small again,
+    through a probe verb its beat lays on request.
+- **v2, wave 4 (the Desk Calendar as three cards, §110.3)** - where the code
+  and the rows proved the design record wrong, or left it to choose:
+  - **COMPACT's day box is rows r .. r + 8, not r - 1 .. r + 8.** At a 9-row
+    pitch the design's box began on the row the day ABOVE draws its dot
+    on, so a selected or today's box hid that day's dot - `deskcal1bpp`'s
+    "the 13th has none" read the 20th's outline there. Inside the box the
+    dot is white, as on the other layouts.
+  - **A day's number is CENTRED in its 24-pixel field** (one digit at field
+    + 8, two at + 4), not right-aligned: the mockup centres them under the
+    weekday letters.
+  - **`STIK_RIGHT` is a `%define`, not an `equ`** - the include tests it with
+    `%ifdef`, so §110.11's `equ` was silently ignored and the default place
+    was the template's (the Hercules look caught it, the face at 376 on a
+    720-wide screen).
+  - **No `OSAPI_WM_PREFER` and no `OSAPI_WM_ONRESIZE`.** The design kept
+    "three derived pairs", but a PREFER pair is keyed by the adapter's KIND
+    - the EGA bug itself - and the layout is chosen once by height at
+    `stik_load`. A runtime adapter switch keeps the layout; the beat's
+    re-fit (§110.11) lifts a face that no longer fits.
+  - **A held button's light is COMPOSED, not an `OSAPI_GFX_XOR_FILL`.** The
+    rect, rounded out to bytes, is inverted in the band and put down in
+    ONE `BLIT1` - the same one call - so a repaint while the button is held
+    (a beat, an uncover) draws it lit, and an XOR pair straddling such a
+    repaint cannot leave a stale inversion. The un-light is OWED
+    (`dc_lpend`) and settled by the act's own redraw when that covers the
+    rect, so `>` is the month's 8 calls and not 9.
+  - **A day, a task's box and a line act on the PRESS**; only the buttons
+    light and wait for a release. A selection needs no confirmation, and
+    the box's budget (1 call) has no room for a light.
+  - **A press pays the include's reveal**: the handle comes up at once
+    (§110.11), one tag-row `BLIT1` when it was down. The gestures' budgets
+    are the calendar's own draw; `deskcalperf` and `deskcaltask` set the
+    tag row's calls aside and say so.
+  - **`+` opens the field for EITHER** (`DCE_NEW`): the parse decides, and a
+    plain line longer than a task's 23 characters is REFUSED (`A task: at
+    most 23`), never cut - v1's rule.
+  - **Firing is gated on nothing.** v1 held it while any alert of the
+    calendar's was up or the field was open, because the firing put up an
+    alert; with no alert nothing waits on the user, and a reminder due
+    under an open field rings with the field still open.
+  - **A missed reminder RINGS** (`FIRED | DUE`), so the launch's toast has a
+    card to point at; a moment already past when it is armed is FIRED and
+    not DUE - silent, as v1.
+  - **Card 3 rings the FIRST DUE appointment in table order**, an earlier
+    day's undismissed one included: undismissed is undismissed.
+  - **The About card's lines fit the 176-pixel face** (`A desk widget`,
+    `SPEC.md 110`), and its take-down was ONE whole-face repaint through a
+    new include entry, `stik_redraw` (§110.11) - since the v4 review, the
+    card's rows alone (`stik_redrawr`, below).
+  - **MID's card 3 puts `21:00 Back up files` on one line** - bell at x 4,
+    time x 22, text x 68 - where the design's x 32 / x 80 cut the text at
+    eleven characters.
+  - **What a line shows**: an agenda line's text 14 characters, a task's 17
+    (TALL) or 18, card 3's 17 (TALL) or 13 (MID); an all-day appointment's
+    time `--:--`. The record keeps 25 / 23; the field edits all of it.
+  - **The rows**: `ui.raise_window`, `ui.close` and `ui.move_window` send a
+    desk window to `ui.widget_activate` / `widget_close` / `widget_drag`,
+    so a row written for a titled window drives a widget. `stikboot` and
+    `stikswap` stay on the v1 `STIKPROB.O88` - the include's v1 path is what
+    they gate - and the widget's relaunch (wm_zord[0], `INST_MAX - 1`) is
+    `stikmove` C's. `stiksmall` stays the calendar's kern_small row (the
+    titled fallback, 178 x 151, no alert, the slot ringing); `desksmall` is
+    the probe's.
+  - **What it cost**: `DESKCAL.O88` 13,168 -> **18,336** bytes of image, its
+    lz4 file 11,211 -> **15,630** (16 clusters, 11 before): the 360 KB
+    system disk is **332 of 354 clusters, 22 left** (323 at wave 3), the
+    small one 280 (275). The include and the composer are ~3.3 KB of it
+    (§110.6); the rest is the three cards' composers and hit tests. No
+    kernel byte.
+
+- **v4 review** (wave 4's four reviewers; each finding re-verified against
+  the code before it was fixed). What changed, and the design it departs
+  from where it does:
+  - **Renumbered**: `main` took §107 for `EMS.DRV` (#252), and §108 and §109
+    are isoTron's and WireBall's, so the Sticky App section is **§110** - every
+    citation in the branch's own lines, the index and `STICKY-APPS-LAYER-PLAN.md`.
+  - **x1 text is REGULAR**: `GFXE_BOLD` at x1 ORs each glyph one pixel right
+    and keeps the 8-px advance, so a glyph using columns 0-6 meets the next
+    one's column 0 - `21:00`'s zeros filled into one block and `MONDAY`
+    smeared. The weekday, card 3's time and a dated heading are regular, as
+    the mockup draws them; `Today`, `+` and the x2 / x3 day number keep bold.
+  - **The dot sits a row higher** on TALL (r + 9..10) and MID (r + 8), so
+    today's box closes under it with a black row and a selected day's
+    outline does not swallow it; on COMPACT today's box is **r .. r + 7** and
+    the dot row stays r + 8, under the box - today's own white dot is then
+    on paper and unseen, and a selected day's black one shows under its
+    outline. W4's deviation note said the dot was inside the box; the
+    captures said it notched the box's edge. COMPACT's box still has no row
+    above its digits (the design's r - 1 takes the day above's dot row), and
+    a 9-row pitch has no spare one: **for the owner** - drop the boxed day's
+    dot and box r - 1 .. r + 7, or move the weeks down a row into card 1's
+    one spare.
+  - **`+` lights bytes 20..21** (x 160..175), not 19..21: byte 19 is the
+    entry field's last, so the un-light whited its edge and `dc_fover` drew
+    the whole field again - a double write on every `+`. A `dc_rrect`
+    wholly right of byte 19 never draws the field now.
+  - **COMPACT's nav lights from its own row** (rows 10..19): two rows above
+    it are MONDAY's last.
+  - **A refused commit keeps the field's mode**: `dc_fenter` banks the mode
+    the field was opened in and puts it back when the commit refuses - a
+    `+` field stays for EITHER (it was left appointment-only) and an edit
+    stays an edit (a too-long task edit had become `+`'s).
+  - **Card 3's sync is owed, not dropped**: on COMPACT a reminder that rings
+    while the field is open sets `[dc_c3f]`, so the field's shutting - or a
+    task's commit, which now syncs too - pages the slot to it; and nothing
+    of card 3's is drawn while the About card is up (its take-down paints).
+  - **Card 3 dates another day's ring** (`23 Aug 21:00`; MID `Sun 21:00`).
+  - **The hover handle's close box is 8 x 8 under an 11-row tag** (MID and
+    COMPACT), on rows 1..8, so a black row stays above it.
+  - **Redraws** (the regressions §110.6 raises for the owner): a select
+    never redraws today's box, a commit draws a day's box only when its dot
+    appeared and card 3 only when it changed (or it was card 3's own
+    appointment that was edited), a selection's change is the old and new
+    lines' rows (one `dc_rrows` when their span fits a band), the About
+    card's take-down is its rows (`stik_redrawr`, a damage rect into
+    `stik_paint`'s body), and `dc_rrect` composes no string wholly outside
+    the bytes it puts down.
+  - **Unrecorded at W4, recorded here**: TALL's day number is on rows 7-30
+    (the design's 8-31) and COMPACT's slot heading on rows 3-10 (2-9), each
+    a row of air the composed slab needed; TALL's bell is 16 x 15, not 16.
+  - **`t_stik` holds `dc_lays`** - each layout's cards, tag, face height and
+    default y - to `DESKCAL_GEO`, not only `dc_geos`' 41 fields.
+  - **The design record is in the tree**: `docs/plans/completed/STICKY-APPS-LAYER-PLAN.md`.
+
+**v2, the completeness pass** (W5's part of it; `docs/plans/completed/STICKY-APPS-PLAN.md`
+"v2: what was built and why" is the account of the whole):
+
+  - **The uncover is measured** (§110.6): `deskcalperf`'s last gesture drags
+    a Disk window off the cards, 10 / 11 calls.
+  - **The three kernels are blessed** (`tools/kernsize.py --bless`): v2 is
+    big/emu `.text` +183 `.cold` +225, small `.text` +12, no rung crossed.
+  - **The PR set is v2's** (`docs/stikapps/*.png`, nineteen pictures, all taken
+    on MartyPC with the mockup's data, retaken after the merge onto main's
+    size pass and the module cut): on the VGA XT `full-vga` / `vga`
+    (the mockup's scene - a Disk window in front at the upper left, the
+    widget at rest at the right, the bar the Disk window's), `vga-hover`
+    (the handle and its close box, with a 4x crop of the tag row),
+    `vga-focus` (the bar taken by a press, the Disk window still striped),
+    `vga-covered` (a Disk window over the widget's left half: the widget
+    stays behind, its handle clipped), `vga-editing` (`+`), `vga-task-checked`
+    (one click on a box, before and after), `vga-reminder` (a reminder FIRING
+    live: card 3 ringing with `Snooze - Dismiss`, the toast on the bar, no
+    alert window, grabbed after the fire's save has finished so the arrow
+    is back and the file-activity widget is off the bar), `vga-moved`,
+    `vga-restored-boot` / `vga-restored` (a warm reset with no clock poke:
+    relaunched where it was dragged, on JULY, card 2 saying `No
+    appointments`), `vga-notfound`, `vga-stik-folder` and `vga-win95` (§76.14's
+    Windows theme picked on the Theme page, beside a Disk window in the
+    Windows chrome: the widget's ink is pixel-identical to `full-vga`'s and
+    only the desktop ground in its gaps differs, so the widget keeps its own
+    treatment); `cga-compact` / `cga-hover`, `herc`
+    (the whole 720x348) / `herc-hover`; and `smallk-cga` (kern_small's titled
+    fallback). The design's W5 list also named `vga-dark`, `vga-color`,
+    `ega-rest` and `cga-page1..3`: those are asserted on the framebuffer by
+    `deskground`, `deskfit` and `deskcal1bpp` and were not photographed. v1's
+    titled pictures are gone from the tree (the PR body's links are pinned
+    to a commit and still resolve).
+  - **The mockup's own data does not fit card 2** (open decision 2's default,
+    two agenda lines): with 09:00, 14:30 and the 21:00 reminder all today it
+    reads `09:00 Team sync` / `+2 more` where the mockup shows two lines -
+    the pager working as designed, and the owner's to weigh against 3 + 3.
+
+**v2, the module cut** (§11.103.10, after the merge onto main's size pass;
+the owner accepted one cold step and asked for the cut with it):
+
+  - **No module cut reaches main's cold rung**, which was measured before it
+    was built: of the 344 cold bytes, 143 run where no widget exists (the
+    loader's top-down scan and `IF_DESK`, `desk_live`'s mark test, `sc_open`'s
+    carry, `OSAPI_CLK_GET`, `drv_notice_x`'s call), so the most a cut can take
+    is ~201. Serving `OSAPI_CLK_GET` from the module would have been a clock
+    API with a precondition no other clock call has; it stays resident.
+  - **`stik_boot` STAYS RESIDENT**, against the cut design, which moved its
+    loop into the image behind a 28-byte pre-test and a `.bss` count of Sticky App
+    rows. In the image the loop would not run when `DESK.DRV` is missing, so
+    the titled fallback would have been no widget at all at boot - the design
+    said both, and the two cannot hold together. Kept resident it costs 38
+    more cold bytes (which the accepted step has room for) and saves five
+    IMAGE bytes (the count and a fifth slot) and six of `.boot2`: kern_big's
+    image rung is 9 left instead of the design's 4. `stikboot`'s, `stikhiber`'s
+    and `deskcalperf`'s breakpoints on `stik_boot` keep a kernel symbol.
+  - **No EXK device in the image**: `wm_win_rect` and `wm_paint_dmg` have
+    resident far shims already (`cw_wm_win_rect`, `cw_wm_paint_dmg`, which
+    DOCK.DRV uses), so `dkd_show` far-calls them and the ~22-byte `exk_go`
+    the design priced is not there. `DESK.DRV` is 235 bytes against ~355.
+  - **The slot block is `DKDFP` and the count `DKD_NENT`**, not the design's
+    `DSKFP` / `DSK_NENT`: `DSK_NENT` is the Disk window's directory count
+    (`files.inc`), and DOCK.DRV's block is `DKFP`.
+  - **The hover trace breaks on the module's entry**: `tests/desklayer.py`'s
+    `edge_trace` named `cur_hov_x`, a kernel symbol that is gone; it reads
+    `DKDFP`'s hover slot (a far pointer the widget's QUERY armed) and breaks
+    on that flat address, refusing loudly when the slot is still `mod_gone`.
+  - **`t_chromesites`' MAKE site moved files** (`kernel/deskmod.inc`
+    `dkd_verb`), the same FULLONLY test.
+
+**v2, the module cut's review** (four lenses over 62ced945; §11.103.10):
+
+  - **The load's bracket NESTED, and `drv_vol` keeps one pair.** QUERY's
+    `mod_need` ran inside `sc_open`'s bracket, so a relaunched widget left
+    the machine in `STIKAPPS` (cluster 89 on the 360KB disk; measured on
+    MartyPC), or mounted on B: for a row there, where the cut's own design
+    called the module's disk use free. `desk_need` keeps the outer pair;
+    `stiknodesk` E, on all three legs (a new `bdrive` leg puts the row on
+    B:), is the row.
+  - **The design's load point stranded heap.** Loaded from the entry proc,
+    the pinned 1 KB claim sat directly under the widget's region, and a
+    closed widget left 24 KB above an island (heapmap.py: 466.5K + 23.0K
+    free against 535.5K before the cut). The loader's step 5 now loads it
+    first for an `OS88_F_DESK` package; QUERY stays the load point for a
+    package without the bit, and the contract says so (`apps/os88api.inc`,
+    the ABI lock re-taken with no bump). `stiknodesk`'s `present` F is the
+    row. A first Sticky App opened mid-session still pins under any application
+    regions above it, and that is written into §11.103.10 rather than
+    bought back with a drop rule (~43 cold bytes).
+  - **The first load's cost is priced, not measured**: about one `int 13h`
+    and a ~24-cylinder seek on the 360KB disk, once a session
+    (§11.103.10). The `os88boot.py` figure is still owed.
+  - **No row resumes a hibernated widget**: §11.103.10 now says the
+    module's survival of a resume is by reading, and that `stikhiber`
+    asserts only the stand-down.
+  - **COMPACT's dot is BESIDE the number** (wave 4 left it "for the owner";
+    the review asked for a mark that touches nothing). At a 9-row pitch and
+    8-row digits r + 8 is the only paper row under a number, and anything
+    there touches the next week's digits - the 6th's dot read as a stroke of
+    the 13 and the 14th's as a flag on the 21. Beside the number - one
+    pixel past its cell, whose eighth column is the font's blank one, at
+    r + 3 - it has a paper ring on every side; so r + 8 is always paper, and
+    today's box takes r - 1 .. r + 7, a paper row clear of the digits above
+    and an ink row over its own, which the captures said it lacked. The box
+    is 22 wide on COMPACT so a two-digit day's dot (field + 20..21) keeps a
+    paper column before the outline's edge; `dc_rbox`'s byte range does not
+    move (field + 23 is in the same byte as field + 21). `deskcal1bpp` D
+    and `deskcalcards` C, D and G read the geometry through
+    `tools/os88stik.py`'s `deskcal_box` / `deskcal_dot`, and D adds the
+    paper ring and the paper row on COMPACT. TALL and MID are unchanged.
+  - **An empty day says so**: `No appointments` on card 2's first agenda
+    line, as card 3 says `No reminders today` - composed into the band like
+    every line, so no primitive call is added (`deskcalperf`'s counts).
+    `docs/stikapps/vga-restored.png` shows it, and the CGA pictures show the
+    beside dot (both retaken after this pass).
+
+### 110.10 How it was built, and its gates
+
+| wave | what | gates |
+|---|---|---|
+| 1 | the kernel half (K1-K6 below), the SDK, `tools/os88stik.py`, `tests/stikprob/`, `make stiktest` | `stikboot`, `stikmiss`, `stikshort`, `stikhiber`; `desksc`, `deskitem`, `cfgtrip` unchanged |
+| 2 | `os88stik.inc` in full (singleton, anchoring, damaged-file question, kern_small's worker arm), the calendar's window, grid and navigation, `STIKAPPS\` on every system disk | `stikregister`, `stikmove`, `stikmovecga`, `stikanchor`, `deskcalgrid`, `stikswap` D; `t_stik` E-G |
+| 3 | appointments and tasks: the payload checked at load, the one-line entry and its parser, the sorted insert, edit and delete, the check boxes, the limits greyed, the Remind menu's lead times | `deskcaledit`, `deskcaltask`; `t_stik` G (the new bss fields) |
+| 4 | reminders, kern_small's worker arm, measurement | `deskcalremind`, `stiksmall`, `deskcalperf` |
+
+**v2** (the desk layer and the widget treatment; the owner asked for both,
+and every §7 default of the design record was taken):
+
+| wave | what | gates |
+|---|---|---|
+| W0 | this document first: §11.103, §7.2.1, §12.6, §13.7, §13.16.2.1, §20.2, §20.3, §30, §30.6, §110.x; PERFORMANCE.md Part 5's placeholders and docs/KERNEL-MEMORY.md's planned bytes; the kernsize baselines | - |
+| W1 | the kernel layer: the flags, `wm_top`, `wm_lift`, `wm_show_b`'s and `wm_front_b`'s desk arms, the chromeless sites and `wm_draw_win`'s and `wm_su_rect`'s arms, the press without a raise, the key target, `OSAPI_WM_DESK` QUERY / MAKE / RELEASE and `OSAPI_GFX_DESK`, header flag bit 6 with the top-down slot, the dock and DOCK.DRV; `tests/stikprob`'s desk build. **The Desk Calendar is untouched** | `t_chromesites` (fast); `deskz`, `deskdock`, `deskkeys`, `desksmall`; kernsize on all three kernels - **a crossed rung is a stop for the owner**; `t_api_abi`, the ABI lock, `os88sym --all`, `os88ladder --selfcheck`, buildmatrix, test-full alone |
+| W2 | the DRAG verb (`[ui_dragy]` = the caller's window), its pick-up and desk test, the desk `.nocache` and the drag's `[wm_dmg_npro]`; the hover edge (`[cur_hovw]`, `cur_hov_x`, `WF_HOVER`); `tests/stikprob`'s tag row, handle and close box | `deskdrag`, `deskhover`, `deskhovercga`, `deskhoverherc`, `deskclose` (each broken on purpose and failing, §110.9); kernsize on all three kernels - measured +46 / +54, no rung crossed, kern_big image 5 and kern_emu cold 1 left; the review fixes +5 / -1, kern_big image **0** and kern_emu cold 2 left; `deskz`, `deskdock`, `deskkeys`, `desksmall` again |
+| W3 | `apps/os88gfx.inc` `GFXE_TEXT` / `GFXE_BITS` (§5.12.8); `os88stik.inc`'s `STIK_WIDGET` (§110.11): the geometry, the paint, the prefilters, the hover and focus states, `stik_quit`, the face-origin header, the titled fallback; `tests/stikprob`'s desk build onto it; `tools/os88stik.py` (`STIK_HF_CONT`, `widget_off`) and `t_stik` W | `deskground`, `deskfit` (new); every wave 1 and 2 row re-gated on the include - the tag row pixel for pixel against the guest's font, the dwell and linger to the tick, 1 / 3 calls an edge, the re-fit; kernsize unchanged on all three kernels |
+| W4 | the Desk Calendar as three cards (§110.3): header flag bit 6, the three layouts by height and their `dc_geos`, the slab composers, the Monday-first grid with dots, today's box and the outline, card 2's lists with real ticks and `+N more`, card 3's RINGING / NEXT / NONE, COMPACT's paging slot, the controls and keys, `DCA_SNOOZED` / `DCA_DUE` and the snooze slot, the alert-on-fire removed, the menus kept; `os88stik.inc`'s `stik_redraw`; `tools/os88stik.py`'s bits, slot and `DESKCAL_GEO`; `tools/os88ui.py`'s `widget_*` | `deskcaledit`, `deskcaltask`, `deskcalgrid`, `deskcalremind`, `deskcal1bpp`, `deskcalperf`, `stikregister`, `stikmove`, `stikmovecga`, `stikanchor`, `stiksmall` updated; `deskcalcards`, `deskcalsnooze`, `deskmodal` new; `t_stik` holds `dc_geos` to the host's mirror and the header's `OS88_F_DESK` |
+| W5 | look on 1bpp, EGA, Dark and Color; measure on MartyPC's 5150; `kernsize --bless`; `docs/stikapps/` retaken. **Done in the completeness pass**: the uncover measured (§110.6), the three kernels blessed, the PR set retaken as v2's widget (VGA, CGA, Hercules, kern_small), `docs/plans/completed/STICKY-APPS-PLAN.md` given its v2 account. EGA, Dark and Color are asserted by `deskfit` and `deskground` on the framebuffer and were not photographed; 86Box's `xt-multimon` and `xt-hercules` were not looked at (86Box cannot be driven from this host) | `deskcalperf`'s new budgets and its uncover, test-full alone, the soak |
+| cut | the owner's one accepted `.cold` step and `DESK.DRV` (§11.103.10): `osapi_wm_desk_x`'s QUERY thunk resident, MAKE / DRAG / RELEASE, the hover body, the desk show and the key arm in the image; `stik_boot` resident (§110.9's module-cut entry) | `stiknodesk` (new: DESK.DRV deleted from a scratch system disk - the calendar relaunched TITLED, nothing held, the row kept; and the control with it); every `stik*`, `desk*` and `deskcal*` row again; kernsize on all three kernels (only the accepted step), `os88sym --all`, `t_chromesites`, `livefull`, test-full alone |
+| cut review | `desk_need` (the outer `drv_vol` pair kept; the loader's step 5 loads `DESK.DRV` ahead of an `OS88_F_DESK` package's region), the SDK's QUERY contract and the ABI lock (no bump), COMPACT's dot beside the number and its 22-wide box, card 2's `No appointments` (§110.9's module-cut review entry) | host: `make`, `make small`, `make emu`, kernsize on all three (`.cold` +23 inside the accepted step, nothing crossed), `os88sym --all`, the fast tier (`t_stik`'s geometry, `abilock`); NAMED for the final pass: `stiknodesk` (E on three legs, `present` F, the new `bdrive` leg), `deskcal1bpp`, `deskcalcards`, `deskcalperf`, `stikboot`, `stikhiber`, `stikmiss`, `desklayer`, every `stik*` / `desk*` / `deskcal*` row |
+
+**If W1 or W2 measures a crossed rung**, the cut order is: move
+`wm_show_b`'s desk arm behind a far call into `.cold` (−17 `.text`, +22
+`.cold`); fold the hover edge's inline compare into its far call (−6
+`.text`, +13 µs a mouse packet); and only then, on the owner's word, accept
+the rung (KERN_SIZE +512, one footprint step).
+
+The kernel half, exactly:
+
+- **K1 `OSAPI_CLK_GET`** (§37, §20.3), a rare cell at `0x0475` on both kernels.
+- **K2** `SC_R_STIK` = 3 and `SC_STIK` = `'D'` (kernel) mirrored as
+  `OSAPI_DI_STIK` and `OSAPI_STIK_MARK` (SDK); `t_mirror` holds the pairs.
+- **K3** `desk_live` answers "not live" for a Sticky App row (§26.9).
+- **K4** `sc_open` answers CF (§26.8.5).
+- **K5** `stik_boot`, first in kern_big's `drv_notice_x` (§51.3).
+- **K6** `CTRL.DRV`'s settings core: `sc_m_add`'s Sticky App arm and +3 sanitising,
+  `sc_m_pdel`'s remove-by-name (§2.8.7, §26.9.6).
+
+**`make stiktest`** builds scratch 360 KB system images whose SYSTEM.CFG and
+state files `tools/os88stik.py` writes, each carrying `STIKPROB.O88` in
+`STIKAPPS\`:
+
+| image | carries | its row |
+|---|---|---|
+| `stikrestore360.img` | a Sticky App row to `STIKAPPS\STIKPROB.O88` and a state file placing it at (303,184) | `stikboot`: the probe is up where its state file put it, holds no cell, and SYSTEM.CFG was not written; then a drag, its save, and a close that takes the row away |
+| `stikghost360.img` | a Sticky App row to `STIKAPPS\GONE.O88` ahead of the restore row | `stikmiss`: `Shortcut not found (A:)`, a `GONE` icon in a cell, and the probe still launched |
+| `stikbvol360.img` | a Sticky App row on B:, booted with no B: | `stikmiss`: the same, naming `(B:)` |
+| `stikshort360.img` | three drag-made shortcuts carrying `\` at +3, no Sticky App row | `stikshort`, the regression for +3: all three drawn, nothing launched |
+| `stikhiber360.img` + a hard disk holding `HIBERNAT.PTR` | the restore row | `stikhiber`: the resume question is posted and no Sticky App is launched under it |
+
+`STIKPROB.O88` (`tests/stikprob/`, never shipped) is the smallest Sticky App: it
+includes `os88stik.inc`, registers on its first tick, removes by name on close
+and paints one fixed label.
+
+**Wave 2's rows**, on MartyPC's VGA XT off the SHIPPED 360 KB system disk -
+no fixture, because what is on it is what a user has:
+
+| row | asserts |
+|---|---|
+| `stikregister` | double-clicked out of `STIKAPPS`, the calendar opens on `OSAPI_CLK_GET`'s today and registers ONE Sticky App row, and untouched it writes nothing more (no `DESKCAL.DAT` seven guest seconds on); a second double-click is refused by the singleton (`Desk Calendar is open`, `LD_EABORT`, nothing written, SYSTEM.CFG unchanged); the close box removes the row and saves a 2,456-byte state file holding its place; a reset brings nothing back |
+| `stikmove` | a drag is saved within two polls, with the 640x480 screen; after a RESET the boot relaunches it at the dragged place, holding no cell |
+| `stikmovecga` | the same on the 5150's CGA (MartyPC `os8088_5150_cga`, its GLaBIOS twin), the adapter COMPACT is for: opened at (335,33), dragged to (119,24), and back at (119,24) after a reset - wave 2 brought every CGA place back at `y` = 20 |
+| `stikanchor` | `DESKCAL.DAT` written by `tools/os88stik.py` at (479,68) on 720x348 and put on the disk with `mcopy`: on 640x480 the calendar opens at (399,200), both axes anchored to the far edges and the frame hanging over the dock as it was left; seven guest seconds later nothing is owed and the file on A: is the fixture byte for byte |
+| `deskcalgrid` | the 42-byte grid read out of the guest's bss is Python `calendar`'s for Oct 2026, Feb 2028, Mar 2028 (by PgDn), Jan 1980 and Dec 2099, each reached by setting the machine's clock and pressing `T`; past either end the step is refused and the other way still moves |
+
+**v1 wave 3's rows** (as v1 shipped them - v2's rewrites are the v2 wave 4
+table below), the state file read back off the guest's own drive by
+`tools/os88stik.py`:
+
+| row | asserts |
+|---|---|
+| `deskcaledit` | MartyPC's VGA XT, the clock at 2026-10-14. A DAMAGED state file opens empty and its first edit puts `Replace damaged calendar?` up with the file on A: the fixture byte for byte, until Yes; `9:30 Dentist`, `1230 Lunch`, `815 Gym` and `Mum's birthday` are four appointments IN ORDER, all-day first and the three timed ones armed (H:MM, HHMM and HMM each by what the guest wrote); a clicked line and Enter open the field holding `09:30 Dentist`, and `Doctor` keeps the reminder; Del asks, Yes deletes; 26 characters are refused (`At most 25 letters`, the field still open, nothing written); Calendar > Delete Item picked with the field OPEN shuts it and asks on a bar with nothing inked between the question's app name and the clock (§110.9's polish pass; 305 ink pixels without `dc_askdel`'s clear). A second boot with 48 appointments: New Appointment greyed `(full)`, `N` answering `Calendar is full (48)` |
+| `deskcaltask` | MartyPC's Hercules 5150 (TALL, a 1bpp framebuffer it reads whole). Three typed tasks in order, their boxes four ground columns off the window's frame with a ground row under each; Clear Done greyed `(none done)`; a click on a box checks it and the window differs in the 6x6 mark and nothing else, with ZERO runs through the package's own `dc_run` (a breakpoint counter at the label a NASM map of the running image names; selecting a row, two runs, is its control); Space on the selected task the same; Clear Done Tasks leaves the unchecked one; Del and Yes empty the list; and a PAGED list (six tasks): a delete that ends paging starts the list at its top, and a pager that goes away is erased - row 4 ground, every pixel |
+
+Both are verified to fail on a broken build: a parser that refuses three
+digits stores `815 Gym` as an all-day line, and a toggle that redraws its row
+reads one run on the counter.
+
+**v1 wave 4's rows** (v1's titled window and its alert; v2 rewrote all
+four calendar rows - the v2 wave 4 table below):
+
+| row | asserts |
+|---|---|
+| `deskcalremind` | MartyPC's VGA XT, the clock SET through the live `clk_*` fields. A launch at 09:28 says `1 missed reminder` and marks it FIRED; at 09:30 Dentist goes off - the alert reads `Reminder 09:30 Dentist` (through `os88ui.inc`'s own message pointer), the toast `09:30 Dentist`, `OSAPI_SND_TONE` was asked for 880 then 660 Hz four ticks each (a breakpoint on the cell, AX and CX read at the stop), ONE run drawn, its line's mark `-`; two minutes pass under that alert and Call Bob waits - and once the toast is down the alert's menu bar is ground right of its name (the calendar's armed clip once left `Cal` there) - then goes off ALONE at the next minute after OK though another is due; a 23-letter text loses the prefix and keeps every letter; nothing goes off under an open entry field; a 09:30 appointment typed at 09:37 is created FIRED; the state file has every FIRED; a relaunch with the RTC flag down and a reminder to come says `No RTC - check the time`; at 23:59 the 23:00 one goes off, and at the rollover today's inverse moves in TWO runs and the 15th's 00:00 reminder goes off |
+| `stiksmall` | §110.7's paragraph, on MartyPC's 128 KB CGA 5150 |
+| `deskcalperf` | §110.6's tables, asserting the zeros and the selection's count exactly, that a boot with no Sticky App row makes no disk call after its paint, and - counted at the drive - that a launch that missed a reminder and a reminder going off each make the save their FIRED marks owe, the second with its alert still up |
+| `deskcal1bpp` | MartyPC's 5150 with a CGA and with a Hercules card, on the framebuffer's own bits: COMPACT 234x142 and TALL 234x272; today's field mostly ink and a plain day's mostly ground; a click on the 20th puts an unbroken ink rectangle round it and takes the 14th's off, which stays inverse; the 20th's mark cell, AFTER its number, carries its `*` and the blank before its number is ground; and the Calendar menu held down shows every item - the greyed `(no item)` ones included - with ink in its band |
+
+Each was verified to FAIL on a broken build: without dc_rpass's one-alert
+gate `deskcalremind` sees Call Bob go off under Dentist's alert; with the
+worker test taken out of dc_fire `stiksmall` hears two requests, the second
+36 ticks late; and a frame drawn every beat makes `deskcalperf`'s idle read
+4 calls. The review added three legs: `deskcalremind` C waits for the save
+Dentist's firing owed to land UNDER its alert, E types `0940 Right now` at
+09:40 and must see it go off (this minute is not past), and G relaunches AT
+Later's minute and must not call it missed - the toast is the no-RTC one
+and Later goes off on the first beat; `deskcalperf` counts both
+reminder-caused saves at the drive.
+
+**v2 wave 3's rows** (`tests/desklayer.py`, MartyPC, off `make stiktest`'s
+`stikdesk360.img`):
+
+| row | asserts |
+|---|---|
+| `deskground` | the VGA XT, the probe up: Bright, then Dark and Color picked on the Control Panel's Theme page - every gap pixel, both ground columns and the tag row beside the plate are the desktop's ground (the dither by screen parity, black, teal (0,170,170)), the cards and the plate white, both cards every pixel what the host composes from the guest's font (x3 across two slabs, bold, white on black, a tick, x2 bold at an odd `x`); under Color a Disk window over it, closed, leaves teal and the cards whole |
+| `deskfit` | a `VIDEO=ega` kernel in a private tree: `[vid_h]` 350, `[stik_li]` 1 (MID, not TALL), a 130 x 83 frame inside the 306-row band, its face drawn |
+
+**v2 wave 4's rows** (the calendar; every coordinate out of
+`tools/os88stik.py`'s `DESKCAL_GEO`, which `t_stik` holds to `dc_geos` and `dc_lays`):
+
+| row | asserts |
+|---|---|
+| `deskcalcards` | the owner's mockup in the state file, on VGA (TALL), CGA (COMPACT) and Hercules (MID): the frame 178 wide at face x = width - 264; card corners paper, every gap and ground column the desktop's dither; today's inverse box; the 6th's dot; the bell and both check-box records pixel for pixel; a pressed day's 1-px outline |
+| `deskcalsnooze` | a v1-shaped file loads with nothing due; Snooze on card 3 writes the slot (today 09:35) and shows the earlier one NEXT; a second snooze puts the first back to DUE; the snooze re-fires with its chirp; a 23:57 snooze's slot is tomorrow 00:02, read back off A: |
+| `deskmodal` | with a Disk window in front, Del's question is the top of wm_zord and owns the bar while the widget stays wm_zord[0]; Yes gives the bar to wm_top, never the widget |
+| `deskcalperf` | the budgets of §110.3, asserted - the first paint <= 20 (COMPACT <= 14), the About card's take-down FEWER than the first paint (its rows alone, v4 review), a day <= 5, a month <= 8, a tick 1, a reveal 1 and a hide 3, a firing 2, idle 0 - and the saves at the drive |
+| `deskcalremind` (v2) | MartyPC's VGA XT, the clock set through the live `clk_*` fields: a launch at 09:28 says `1 missed reminder` and card 3 RINGS Gym (a v1 FIRED one reads as dismissed); `D` shows the next; Dentist goes off at 09:30 - the toast, 880 then 660 Hz four ticks each, card 3's two slabs and nothing else, and NO ALERT (wm_zn unmoved); one ringing at a time - Call Bob waits under Dentist, Dismiss brings it up; an open entry field no longer holds a firing back; and the rollover |
+| `deskcal1bpp` (v2) | the 5150 with a CGA and with a Hercules card, on the framebuffer's bits: COMPACT 178 x 146 and MID 178 x 242 by the screen's height; today's box inverse, a plain day's ground; a press on the 20th outlines it and today stays inverse; the 20th's dot; every gap the desktop's dither; a greyed item still inked in the dropped Calendar menu |
+| `deskcaltask` (v2) | the Hercules 5150 (MID): three typed tasks in order, Clear Done greyed `(none done)`; a press on a 9 x 9 box checks it in EXACTLY ONE `BLIT1` that changes the box's rect and nothing else, and the box is the TICKED record pixel for pixel; the two-line list pages (`+2 more`), Space checks the selected one; Clear Done, Del and Yes, and the pager's wrap |
+| `deskcaledit` (v2) | the VGA XT: a DAMAGED file opens empty and its first edit asks `Replace damaged calendar?`; `9:30 Dentist`, `1230 Lunch`, `815 Gym`, `Mum's birthday` in order; edit keeps the reminder; Del asks; 26 characters refused with the field open; Delete Item with the field open shuts it on a clean bar; v2's FOCUS with a Disk window in front - a press on a card's margin takes the bar and the Disk window stays wm_top |
+
+**`t_stik`** (fast tier) is what keeps that include honest between MartyPC
+runs: it runs `tools/os88stik.py --selfcheck`, assembles `stikprob.asm` (so
+`os88stik.inc` is assembled by every `make`, where before only `make stiktest`
+did), and holds the Sticky App header's offsets in `os88stik.inc` equal to the host
+tool's. `t_mirror` holds the host tool's copies of `CFG_FBUF`, `DESK_SC0` and
+`DVOL_MAX` against the kernel's. Wave 2 adds three legs: every shipped SYSTEM
+image carries `STIKAPPS/DESKCAL.O88` byte for byte (the four geometries, and
+the small pair and `emu.img` when their own targets have built them since the
+package), NO data image carries a Sticky App, and the calendar's payload layout, its
+bss fields and the include's `stik_st` - evaluated by NASM from the package's
+own source - equal `tools/os88stik.py`'s.
+
+### 110.11 The widget treatment (v2: `%define STIK_WIDGET`)
+
+What makes a Sticky App LOOK like a widget is package code, shared as source in
+`apps/os88stik.inc` and opted into with `%define STIK_WIDGET`, so a Sticky App that
+does not define it stays v1. **No pixel of it is the kernel's**: the kernel's
+part is §11.103's layer, and it draws nothing.
+
+**Geometry.** The FACE is the column of cards plus the name tag, 22 cells
+(176 px) wide. The desk FRAME is **178** x H: a column of the desktop's
+ground either side - at `W_X` and at `W_X + 177` - and the face at
+`W_X + 1`, which §11.94's snap (`W_X` = 7 mod 8) puts on the byte grid for
+nothing. 178 and not the 177 one ground column would take, because
+`wm_create`'s SIZE snap (§11.94.5) puts every frame's `W_W` at 8k + 2 before
+MAKE runs (§110.9). The titled fallback (§110.7) is 178 wide too, with the
+face at `W_X + 1` again, so `x` and the width are the same in both forms.
+
+**Every pixel is written once per paint**:
+
+| pixels | drawn with | owner |
+|---|---|---|
+| the ground columns at `W_X` and `W_X + 177`, each gap, and the ground either side of the tag's plate | `OSAPI_GFX_DESK` (§11.103.9) | the include |
+| the tag's plate - at rest, inverse (focused) or the handle (hovered) - one composed slab | one `OSAPI_GFX_BLIT1` | the include |
+| each card's interior, white included, composed one 32-row slab at a time into a 704-byte band | one `OSAPI_GFX_BLIT1` a slab | the package |
+
+The slab is composed with **1 = white**, the default CWHITE ink on CBLACK
+paper, which means the same on all three adapters. Cards are content and are
+never themed (§76); under Dark the gaps are black and under Color teal. There
+is no save-under: the widget holds no themed pixel in any cache, so a theme
+change needs no drop. The composer is `apps/os88gfx.inc`'s two new
+capabilities, `GFXE_TEXT` (an 8x8 glyph from `OSAPI_FONT_GLYPHS` at any
+pixel `x`, normal or inverse, x1/x2/x3, optionally bold) and `GFXE_BITS` (a
+16-wide bit record ANDed or ORed in: the tick, the bell, the x, the grip, the
+dot).
+
+**The tag and its states.** Only the tag row changes - nothing overlays a
+card:
+
+| state | the tag row |
+|---|---|
+| REST | a white plate 112 px wide (13 cells and 4 px each side) with the name, ground either side |
+| FOCUS (the widget owns the bar) | the same plate inverse, like a selected icon's label (§76.8) |
+| HOVER | a face-width black bar: a white 10x10 close box with a black x at face `x` + 3..12 (under an 11-row tag, MID and COMPACT, an 8x8 box at `x` + 3..10 on rows 1..8, so a black row stays above it - v4 review), the name in white centred, a three-line dotted grip at `x` + 158..170 |
+
+It is revealed `DOCK_HOVER_T` ticks after the pointer comes over any visible
+part of the frame (§30.6's constants by name) and hidden `DOCK_LEAVE_T`
+ticks after it leaves; crossing a gap is not a leave, and a press anywhere
+on the widget reveals at once. Never with a button held, over a covering
+window, under a fullscreen window or a saver, and no new reveal under a
+chooser (§11.103.7) - but the kernel does not clear a hover that was
+standing when a chooser opened, nor one under an open auto-hide dock
+(§11.103.7's two refusals not made), so the include keeps a reveal it can
+leave up there. **After a drop** the include brings a frame whose bottom is
+past the screen back onto it before it saves the place (§11.103.6's bound),
+for no kernel byte.
+While the widget owns the bar its tick polls `OSAPI_MENU_OWNER` every 4
+ticks, and only then, so focus loss un-inverts the plate within 220 ms.
+
+**Gestures**: a press on the tag (outside a revealed x), a gap or the ground
+column DRAGS (`OSAPI_WM_DESK` DRAG, §11.103.6); a press on the revealed x
+arms it and its release closes through `stik_close`'s negotiator and then
+`OSAPI_WM_CLOSE`, sliding off cancels (§13.5); a press on a card is the
+package's. The keyboard has every route: the keyboard mouse (§9.6), the
+app-name cell's About and Close while the widget owns the bar (§12.7), Esc
+for RELEASE.
+
+**The include's API**, under `STIK_WIDGET` (wave 3). The caller defines,
+beside v1's (§110.5):
+
+```
+%define STIK_WIDGET
+%define STIK_TAG     'Desk Calendar'  the name tag - equal to the window's title
+STIK_FACE_W  equ 176                  the face's width: a multiple of 8, no wider
+                                      than GFXE_BAND_W (default 176, 22 cells)
+%define STIK_RIGHT 264                 optional: with no saved place the face
+                                      opens at x = screen width - STIK_RIGHT
+                                      (a %define: the include tests %ifdef)
+%define STIK_LAYOUTS my_lays          three STIK_LAYOUT entries: TALL, MID, COMPACT
+%define STIK_PAINTCARD proc            AL = the card, BX..DX = its damaged rows
+                                      (card-local, inclusive); or stik_slabs
+%define STIK_COMPOSE proc             stik_slabs' painter (below)
+%define STIK_ONCARD  proc             optional: AL = the card, CX,DX = the press,
+                                      card-relative - W_ONCLICK's environment
+%define STIK_ONCARDUP proc             optional: ...the release (it may be OFF
+                                      the card: the package decides "inside")
+%define STIK_ONFOCUS proc             optional: AL = 1 gained the bar, 0 lost it
+%define STIK_WAKE    proc             optional: the W_ONWAKE it installs - a
+                                      package that wants to see every wake
+                                      tail-jumps to stik_wake (the probe counts).
+                                      On BOTH arms: kern_small's worker kick
+                                      reaches it too, and stik_wake tells the
+                                      two apart by STIK_S_WORKER
+%define GFXE_TEXT / GFXE_BITS         and os88gfx.inc, whose band (GFXE_BAND_BUF,
+                                      GFXE_BAND_W >= STIK_FACE_W, GFXE_BAND_H >= the
+                                      tag row) the include composes the tag in
+```
+
+`STIK_LAYOUT band, facey, tagh, h0,g0 [, h1,g1 [, h2,g2 [, h3,g3]]]` is one
+layout: up to four cards, each with the gap UNDER it, the tag row's height
+(10 rows or more - the handle's box is 10 - and no taller than the band) and
+the default face `y`; it refuses at assembly time a face taller than `band`,
+a titled frame (the face less its tag and last gap, plus `TITLE_H` + 1)
+taller than `band`, and **a gap BETWEEN two cards taller than
+`GFXE_BAND_H`** - the titled fallback composes such a gap whole in the band
+(`stik_tgap`), and `gfxe_bclear` does not clip, so a taller one would paper
+past the band over the include's own bss (the state file's header and
+payload, the D row the close removes by name). The last gap is the tag's,
+drawn by `OSAPI_GFX_DESK` on a desk window and not at all titled, so it is
+not bound. It is a macro of the include's, so the table goes AFTER
+the `%include`. `stik_load` picks the layout from **`OSAPI_VIDEO`'s
+height** - 400 rows or more TALL, 300-399 MID, below that COMPACT - so EGA's
+640x350 takes Hercules' layout and not VGA's (§110.3's PREFER pair took the
+adapter's kind), and sizes the template itself.
+
+**Its calls** are v1's - `stik_load` in the entry proc, `stik_made` after
+`OSAPI_WM_CREATE`, `stik_touch` - plus:
+
+| call | what |
+|---|---|
+| `stik_load` | also: `OSAPI_WM_DESK` QUERY; the layout; the template's size and, from the state file or the default, its place - converting a v1 file's titled frame to a face |
+| `stik_made` | also: MAKE (the desk form) or `OWNBG` + `SAVEU ON\|1BPP` (the titled fallback); `W_ONCLICK` = `stik_click`, `W_ONMOUSEUP` = `stik_mup`, `W_ONWAKE` = `STIK_WAKE`; the place on record is the FACE's |
+| `stik_paint` | the template's `W_PAINT` (or the package's, tail-jumping to it): `OSAPI_WM_DAMAGE`, then only what intersects it - the two ground columns and every gap by `OSAPI_GFX_DESK`, each card by `STIK_PAINTCARD`, the tag row from the state - and `stik_painted` |
+| `stik_redraw` | (wave 4) the whole face again OUTSIDE a paint, SI = the window, the lock held: `OSAPI_WM_CLIP_SET`, then `stik_paint`'s body with the damage the whole of it - a package's About card taken down; nothing when none of the window shows |
+| `stik_slabs` | the slab painter a `STIK_PAINTCARD` may be: for each `GFXE_BAND_H`-row slab of the card that the rows touch, paper the band white, call `STIK_COMPOSE` (AL = the card, BX = the slab's first card row, CX = its rows; compose with `y` = card row - BX) and blit the damaged rows of it, ONE `OSAPI_GFX_BLIT1` |
+| `stik_click`, `stik_mup` | the prefilters (the gestures above) |
+| `stik_wake` | `W_ONWAKE`: on the worker arm, v1's beat; otherwise the hover edge's reconcile |
+| `stik_quit` | the close: `stik_close`'s negotiator and then `OSAPI_WM_CLOSE` - which is DEFERRED (§75.2), and `ui_task`'s timer pass runs before its close pass, so `stik_quit` sets `STIK_F_QUIT` and `stik_tick` and `stik_wake` do nothing once it is set: no beat - no `STIK_ONTICK` - after `STIK_ONCLOSE`, and no tag drawn |
+
+What it publishes for the painter: the bss WORDS `[stik_fx]`, `[stik_fy]` (the
+face's screen origin), `[stik_cy]`/`[stik_ch]` (the card being painted: its
+screen top and its height) and `[stik_lay]` (the layout's entry), and the
+BYTE `[stik_li]` (the layout, 0-2) - a byte, `[stik_ci]` (the paint's card)
+sits right after it.
+
+**The hover state is level-triggered** (`[stik_hv]`: HIDDEN, DWELL, SHOWN,
+LINGER, with FOCUS and ARMED bits in `[stik_wf]`). A wake reads `WF_HOVER`
+and moves HIDDEN to DWELL or SHOWN to LINGER - each with a deadline - or
+DWELL back to HIDDEN and LINGER back to SHOWN, and draws nothing: it has no
+lock. ONE timer serves everything: the beat, the dwell or linger, and the
+focus poll each keep an ABSOLUTE deadline in ticks and every arm takes the
+soonest, so a hover deadline never delays a beat and a beat that comes early
+does nothing early. When the dwell expires with a button held it waits
+another `DOCK_HOVER_T`; a linger that expires while the x is pressed waits
+for the release. The picture is drawn only on a change of it
+(`[stik_tagp]`), under `OSAPI_WM_CLIP_SET` - and a change from one PLATE to
+the other (a focus edge: REST and FOCUS differ in the plate alone) is the
+plate's `BLIT1` and nothing else, the ground beside it being on the glass
+already; a paint sets `[stik_tagp]` unknown first and draws the row whole.
+So a focus edge is 1 call, a reveal 1 and a hide 3. **Focus is read off
+`OSAPI_MENU_OWNER` at every press and at every timer fire** - so a press
+inverts the plate at once, a right press or a keyboard-mouse front (which
+reach no callback) within one beat, and a loss within `STIK_FOCUS_T` = 4
+ticks while the widget holds the bar, the only time the timer runs that
+often. The plate's picture is FOCUS only when the handle is down: the
+handle wins.
+
+**After a drop that left the frame's bottom past its display**
+(§11.103.6's bound is the title bar's), the beat hides the window, puts its
+`W_Y` back on the glass and shows it - there is no move cell, so it is two
+repaints, once, before the place is saved. **The layout is the PRIMARY's**
+(`OSAPI_VIDEO`'s height, chosen once at `stik_load`), so a face dropped on a
+shorter second display - a MID face on a 200-row CGA beside a Hercules, a
+TALL one on a 348-row Hercules beside a VGA - may not fit it at any `y`:
+the re-fit then lifts it to the menu bar ONCE and leaves it, because it
+moves a frame only UP. Without that rule it was hidden and shown again
+every beat, forever. `deskdrag`'s H leg drops the
+probe to a bottom at 544 on a 480-row screen and reads it back at 480.
+
+**The state file's place is the FACE's origin** (header +3 bit 1,
+`STIK_HF_CONT`, §110.5): a v1 file holds a titled frame, so its face is
+`(x + 1, y + TITLE_H)`, and there is no `STIK_HDR_VER` bump - no existing file
+reads as damaged. The bit is set in memory the moment the place on record is
+taken, so a v1 file is converted once, by its next save, and never twice.
+`stik_anchor` measures with the FACE's size. D rows carry no geometry
+(§110.2), so nothing migrates there. A `STIK_WIDGET` build is the only one
+that writes the bit; a v1 Sticky App's file is byte for byte what it was.
+
+It landed in v2's wave 3 (§110.10); the Desk Calendar adopted it in wave 4
+(§110.3).
+
+### 110.12 The Sticky Apps menu (`kernel/stikmenu.inc`, `STIKMENU.DRV`)
+
+Locator's bar carries a **`Sticky Apps`** title on kern_big and kern_emu
+(§12.3), beside File on the bare desktop and after Disk on a Disk window. It
+**discovers** every Sticky App the machine can reach, lists each by what the
+App says about itself, and starts, stops, hides, shows and arranges them.
+The owner's mockup is the shape: a two-line header, a row per App - its
+picture, its name, its description, and at the right a tick and `On` or an
+`Add` button - then `Arrange Sticky Apps...`, `Hide All Sticky Apps`, `More
+Sticky Apps...` and a hint line, `Drag a Sticky App to move it.`
+
+#### 110.12.1 The CARD: what a Sticky App says about itself
+
+A Sticky App answers "what are you" **without being launched**, in a block of
+its own header: the **Sticky App card**, flagged by header flags **bit 7,
+`OS88_F_STIK`** (§20.2), the last free bit.
+
+| off | size | field |
+|---|---|---|
+| +0 | 2 | `'SA'` |
+| +2 | 1 | the card's version, 1 |
+| +3 | 1 | 0 |
+| +4 | 24 | the NAME: 1..23 printable characters, NUL-padded |
+| +28 | 36 | the DESCRIPTION: 0..35 printable characters, NUL-padded |
+| +64 | 128 | the 32x32 PICTURE: 32 rows of 4 bytes, bit 7 of a row's first byte the leftmost pixel, 1 = ink |
+
+- **It is the LAST block of the clear prefix** (§20.13.1): it follows the
+  icon, the association block and the document glyph, whichever the flags
+  declare, so it starts at 32 + 64·bit0 + 16·bit1 + 16·bit5 and every older
+  reader finds its own block where it always was. The prefix becomes **at
+  most 320 bytes** and is still a multiple of 16 inside the first sector, so
+  a COMPRESSED Sticky App's card is read with no decoder - one sector, the
+  mount's own icon-harvest argument.
+- **What it cost the kernel is a step over it**: each of the two clear-prefix
+  ladders - the loader's (`ld_run_body_x`'s step 6a, `LD_HF_STIK` /
+  `LD_STIK_SIZE` in `loader.inc`) and the on-machine compressor's
+  (`cmz_cpre`) - adds 192 for bit 7. That is on every kernel, kern_small
+  included, because the Desk Calendar ships on every system disk; it is
+  **+8 bytes of `.cold`** on each.
+- **No `PKG_FMT` bump** (§20.2.0.1): nothing built before sets bit 7, so
+  everything built before still runs; the ABI lock records it without one.
+  A card-bearing package on an OLDER kernel takes the old prefix, expands its
+  body from inside the card and is refused as bad data, which is the right
+  answer by a harmless route - and a Sticky App ships on the system disk
+  beside its own kernel.
+- **The SDK writes it**: `OS88_STIKCARD 'Name', 'Description'`, then 32
+  `OS88_STIKROW '..##..'` lines of exactly 32 characters (`#` is ink), then
+  `OS88_STIKCARD_END`, right after the last block the header's flags declare.
+  The macros assert the card's place, the two lengths and the row count, so
+  a wrong card fails at ASSEMBLY; `OS88_HEADER` keeps its flags as
+  `OS88_HDR_FLAGS` so the first macro can find its place.
+- **`tools/os88pkg.py` validates it** (`stik_card_problem`: the magic, the
+  version, each field NUL-terminated inside itself, printable, an empty name
+  refused, zeros after the NUL) and `clear_prefix` counts it.
+  `tests/unit/t_stikcard.py` (fast tier) breaks each rule, keeps the card
+  verbatim through compression, holds the kernel's two ladders and the menu's
+  offsets to the tool's, and walks every shipped system image's `STIKAPPS/`
+  for a valid card; `t_pkg` checks it independently off the file.
+- **The Desk Calendar's card** is `'Desk Calendar'`, `'Dates, tasks &
+  reminders'` and today's page over the month's grid (§110.3), at +96.
+
+**Why not the other two shapes.** A SIDECAR file (`DESKCAL.STK`) changes no
+format and costs every App a second file that can be left behind on a copy -
+the App would list as a bare name. LAUNCHING each App to ask it is a load per
+App per menu drop, ~400 ms of `int 13h` apiece on the target before anything
+is drawn. The owner chose the card.
+
+#### 110.12.2 Discovery: `STIKAPPS\` on the boot volume and the fixed disks
+
+Every drop scans: the BOOT volume first (`[dsk_bootvol]` - its copy is the
+one a Sticky App row names, §110.4), then every other volume that is a FIXED
+disk - `hb_pick1`'s test (`dsk_vol_fixed_x` AL = 1, and not a redirected
+`DVK_FILE` volume, so not the RAM disk or the cable) less a mounted disk
+IMAGE (`DRVC_IMG`), which is a floppy's contents. On each: its root quietly
+(`fcp_goto`), `STIKAPPS` by name (`dskw_stat`), into it, then
+`dsk_find_x` by ordinal - stateless, so the header peeks between the calls
+cannot disturb it - and for each `.O88` its first sector (`dsk_peek_x`, 512
+bytes). It is LISTED when its magic is `'O8'`, bit 7 is set, the file holds
+the whole card and the card passes the menu's own check (`stm_cardok`: the
+validator's tests less "zeros after the NUL"). A NAME already listed is
+skipped, so the boot volume's copy wins over a hard disk's. **Up to
+`STM_MAX` = 64 are listed** - the owner wants many - and the machine's own
+place is banked round the whole walk (`drv_vol_bank`). An entry keeps its
+card's TEXT (96 bytes: the volume, the file, the program name, the name, the
+description and the first cluster); the 32x32 PICTURES are read again, out
+of each file's first sector, for the page on show only (`stm_loadpics`, at
+most `STM_PGMAX` = 8 of them) - on a floppy the scan's own reads are still in
+the track cache for the first page. 64 whole cards would not fit the
+module's 16 KB ceiling (`MOD_MAX_KB`); 64 entries do.
+
+An App is **RUNNING** when a live package instance's `I_NAME` - its header's
+program name, the loader's copy - is the App's: `stik_single`'s test (§110.5.2)
+from the kernel's side. The header says how many are (`1 Sticky App active`,
+`N Sticky Apps active`, `No Sticky Apps active`).
+
+**What a drop costs the target**, in `int 13h` calls (PERFORMANCE.md's unit):
+the module (1-2 on a floppy, `mod_need`), the boot volume's root and folder
+(0-2: the track cache of §18.95 holds most of a floppy's directory), one
+header peek per `.O88` (often 0 - DESKCAL's first sector is in the folder's
+track), and the same per fixed disk. On a floppy-booted 5150 with one App
+that is ~2-3 calls, about a second, before the panel is drawn; the title is
+lit the whole time. A press RELEASED in that second is the common case there,
+so the panel then STAYS UP for a click (`stm_loop`'s one difference from
+`menu_drop`); on a machine fast enough that the release lands after the
+panel, it behaves as every bar menu does.
+
+#### 110.12.3 The panel: composed a slab at a time, every pixel once
+
+The panel is a column of SLABS - the header, a rule, one per App, a rule,
+the three items, a rule, the hint - each **composed into a 1bpp band in the
+module and drawn by ONE `gfx_blit1`** (§5.4.2): the frame's two columns,
+the text, the picture, the tick, the button box, all in the band, so a slab
+is one primitive call and no pixel is written twice (§6.1's rule, which a
+fill-then-text menu would break on every row). Two fills draw the shadow.
+Every pen is on the byte grid (the panel's x is the title's, rounded down to
+8), so a slab is composed with byte ORs and blitted on the fast path. Text is
+the ROM 8x8 off `[font_seg]:[font_base]`; the Apps' names are BOLD (each row
+ORed with itself one pixel right); the tick is an 8x8 with 2-px strokes,
+which a 1bpp adapter keeps (§13.16.2.1).
+
+- **Three layouts**, by the primary's height (`[vid_ph]`), the widget's own
+  thresholds (§110.11): **TALL** at 400 rows or more (VGA) is the owner's
+  mockup - a 56-row App with the picture and the name-and-description block
+  both centred on its middle, the name and the description 18 rows apart,
+  18-row items, 11-row rules and two cells of margin; **MID** at 300-399
+  (Hercules, EGA) is a 40-row App with one cell of margin; **COMPACT** below
+  that (CGA's 200) is a 20-row App whose picture is its row PAIRS ORed, 16
+  rows, which on CGA's tall pixels is about square. Each layout carries its
+  own rows AND columns (`LY_*`), so the composers name no number.
+- **The width** is the widest name or description in cells plus the
+  layout's furniture either side of it (the margin, the picture and the gap
+  left of the text; the gap, the right column and the frame right of it),
+  and at least the hint with the header's margin either side; the panel
+  shifts left rather than leave the primary.
+- **PAGES.** As many Apps as the screen holds are shown at once; when there
+  are more, the last App row is followed by a **pager** - `Next page (1 of
+  3)`, and `First page (3 of 3)` on the last - and the page size is what
+  fits WITH it, at most `STM_PGMAX` = 8. A release (or, with the panel
+  staying up, a click) on the pager turns the page and the panel STAYS UP
+  for the next click: its pictures are read, every App slot and the pager
+  are recomposed, and nothing else is drawn, because every page has the same
+  slots - a short last page's empty ones are the frame alone and no pick.
+  On VGA that is five a page, on Hercules and EGA five, on CGA four.
+- **The save-under is up to TWO parts**: the rows one segment holds
+  (`STM_SAVEMAX` = 61,440 bytes, so `gfx_save` cannot wrap) and the rest. A
+  paged VGA panel is 440 rows, ~80 KB, so it takes both; one smaller takes
+  one. Either refused, neither is kept and the close repaints.
+- **The save-under's first part is `menu_drop`'s** (§12.4.2): `[menu_sseg]`,
+  `MEM_P_MSAVE`, `menu_reloc`, sized from the rect - ~34 KB on VGA and ~4 KB
+  on CGA for one App - and its second, when there is one, the module's own
+  `MEM_K_MOD` claim, freed at the close. A part shed while the menu is down
+  makes the close a repaint, with `menu_drop`'s `[menu_bdirty]` care. An open dock's hole is put away while it is down
+  (§30.6.1).
+- **The theme**: the band is composed 1 = ink and put in the pen's polarity -
+  Bright and Windows keep the default pen and invert the band (the blit's
+  fast path), any other theme gets `thm_inkc`/`thm_bgc` as the pen on a
+  planar adapter, and a 1bpp adapter inverts when the theme's ink is dark.
+  A GREYED item (Arrange and Hide with no widget, `No Sticky Apps found`) is
+  a checkerboard on 1bpp - which is what grey is there (§47) - and the
+  theme's `thm_disc` pen on a planar adapter.
+- **The highlight** recomposes the slab inverted INSIDE the frame and blits
+  it: two blits per move, the menu's XOR without the XOR.
+- **The arrow stays on the glass** while the panel is up, as it does over
+  WIN95.DRV's click-to-open menu (§76.14) and over no other pull-down. The
+  mouse ISR draws it only while the lock is free and the tracker holds the
+  lock, so the tracker draws it: `cur_unlazy` and `cursor_show` once the
+  panel is up, and on every MOVE `cursor_hide`, the highlight moved under it,
+  `cursor_show` where the pointer now is - a still pointer redraws nothing.
+  It is hidden again before the restore, so `menu_track`'s `gfx_unlock` puts
+  it back the way it always has.
+- **The stay-up click is drained**: when the panel stayed up because the press
+  was released during the scan, the click that later picks or dismisses it
+  leaves a press and a release in the event ring, and `evq_drain` empties it
+  at the close (`wn`'s own step) so neither reaches what the panel covered.
+
+#### 110.12.4 What a pick does
+
+A pick is not done under the lock - `menu_track` holds it and a launch takes
+it (§21.5) - so the module records it and POSTS `CMD_STIK` (`ui_post_cmd`),
+answers `menu_track` 0FFFFh, and stays loaded; `ui_cmd`'s `CMD_STIK` runs the
+module's ACT entry on `ui_task` with nothing held and drops it. A drop with
+no pick drops the module at once.
+
+| pick | what it does |
+|---|---|
+| an App with `Add` | `STIKAPPS\NAME.O88` off the volume it was found on: `sc_open`'s walk and its loader call (`ldf_ld_pkg_start`), a refusal saying the loader's own sentence; the App's first tick registers its row (§110.5) |
+| an App with the tick and `On` | **closes it** - `app_close_win` under the lock, as the user's own close, so the App's negotiator (`stik_close`) removes its Sticky App row and saves. Not `OSAPI_WM_CLOSE`, whose pass clears the negotiator first |
+| `Arrange Sticky Apps...` | a column down the right of the desktop band, `STM_ARR_R` = 64 px in from its edge (the drive zones' column), from `MBAR_H` + 4, 8 px apart, wrapping left; each desk window hidden, placed with `W_X` 7 mod 8 (the face on the grid, §110.11) and its natural rect banked, and shown - there is no move cell (§110.11) - and the App's own poll saves the place |
+| `Hide All Sticky Apps` | `wm_hide` on every desk window: nothing closed, nothing written, their timers still run |
+| `Show All Sticky Apps` | the same item while every desk window is hidden: `wm_show` on each. Hidden is DERIVED - a used, invisible `WF_DESK` window - since nothing else leaves one hidden at a moment this menu can run, and no byte records it. A Restart brings them back anyway (§110.4) |
+| `More Sticky Apps...` | The Wire (§92), as the desktop's service zone opens it; with no driver registered the module names `THEWIRE.O88` itself, and The Wire explains what it needs (§92.9) |
+| the pager | the next page, the panel kept up (110.12.3) - not a pick, nothing posted |
+| the hint | nothing: it is not a pick |
+
+Arrange and Hide/Show act on DESK windows; an App up TITLED (§110.7's
+fallback, no `DESK.DRV`) is listed and toggled but not arranged or hidden.
+
+#### 110.12.5 What it costs
+
+| | `.text` | `.bss` | `.cold` | rungs left after |
+|---|---:|---:|---:|---|
+| kern_big | **+72** | **+8** | **+47** | image 272 (352), cold 78 (125) |
+| kern_emu | +72 | +8 | +47 | image **13** (93), cold 78 (125) |
+| kern_small | 0 | 0 | +8 | image 429 (429), cold 46 (54): the card's ladder step alone |
+| `STIKMENU.DRV` (on demand) | | | | 4,040 bytes on the disk ('CZ'), a 14,758-byte image - most of it the scratch (64 entries, a page of pictures, the band), zeros that pack to nothing and come back zero at every load - a 15 KB claim from the press to the act, beside the save-under |
+
+The `.text` is the title, the two set entries, `menu_track`'s test, `CMD_STIK`
+and its handler, the module's row and file name, and the loader's step; the
+`.bss` the two slots; the `.cold` the two thunks and the ladder. No rung was
+crossed on any kernel, measured against main `a123653b` built alongside.
+**kern_emu's image rung is the one to watch**: 93 left before this, 13 now. The 360 KB system disk went 345 → 349 of 354
+clusters (`STIKMENU.DRV` is four), which left the Desk Calendar too little
+room to save; §24.3.1.3 took Mines off that disk, and it is 346, 8 free.
+
+#### 110.12.6 What is not done
+
+- **Hercules is not looked at on the glass here**: QEMU cannot show it
+  (docs/HERCULES-TESTING.md). Its layout is TALL on 1bpp, the two halves
+  CGA and VGA each check; a MartyPC or 86Box look is owed.
+- **One of the other Apps in the mockup** (Calculator) is not built: the
+  menu lists what `STIKAPPS\` holds, so today it lists three - the Desk
+  Calendar, Sticky Note (§110.13) and the Desk Clock (§110.14).
+- **A keyboard-only drop**: like every bar menu, the panel is reached by the
+  pointer or the keyboard mouse (§9.6); it does not step by item as
+  `menu_kbnav` does for a pull-down.
+- **No cache of the scan**: every drop reads `STIKAPPS\` again - a directory
+  walk and one header peek per App. That is what makes a newly copied App
+  appear with no refresh; on a floppy with MANY Apps it is a peek apiece
+  (~400 ms each where the track cache misses), so the scan is the thing to
+  cache when a machine first carries dozens.
+
+`tests/stikmenu.py` is the row (soak): one boot of the VGA XT on the shipped
+360 KB system disk, the panel read out of the module's own image, and every
+pick - Add, a release off the panel, Hide All and Show All, Arrange, and the
+running row's close removing its row.
+
+### 110.13 Sticky Note (`apps/stiknote/`)
+
+The second Sticky App: notes and checklists on the desk, kept where they were
+put. `STIKNOTE.O88` ships in `STIKAPPS\` beside the Desk Calendar on every
+system disk - the four geometries (the 360KB one gave Paint up for it,
+§24.3.1.4), `emu.img`, both small system disks and the live media - and its
+state is `SYSTEM\APPDATA\STIKNOTE.DAT`. The owner's two mockups are the
+shape: a pad on the desk, and an editor window behind it.
+
+```
+apps/stiknote/stiknote.asm   header, card, payload, bss, entry, menus, the tick
+apps/stiknote/sntext.inc     the note model: the pool, the wrap walk, the edits
+apps/stiknote/snpad.inc      the pad: three layouts, its composer, its presses
+apps/stiknote/sned.inc       the editor: layout, composer, keys, clicks, scroll
+```
+
+#### 110.13.1 Two windows, one program
+
+- **The PAD** is the Sticky App's own window - the one the instance is bound
+  to, so the boot relaunch (§110.4), the Sticky Apps menu (§110.12) and the
+  handle's x all mean it. It wears §110.11's treatment with ONE card: a
+  sheet on a stack of sheets (the one under it showing four pixels right and
+  below), its bottom-right corner turned, holding the CURRENT note - a pin,
+  the title and `+` over a rule, the body's lines with their boxes, and
+  `<  n / N  >` with the open-in-window arrow along the foot. The face is
+  192 px (24 cells, `STIK_FACE_W` as a `%define`: the include tests it with
+  `%ifndef`, so an `equ` silently loses to its 176).
+- **The EDITOR** is an ordinary titled window opened from the pad (the
+  arrow, `+`, Note > Open Editor): New, Delete and `On desktop` along the
+  top, the notes listed on the left, the current note on the right with its
+  scroll bar, the count and `Saved` / `Edited` / `Not saved` along the
+  bottom, and the grow box. It is a package's **second window** (§42.1):
+  unbound, so it has no dock tile and no Task Manager row. The kernel asks
+  `OSAPI_WM_ONCLOSE` before its close box hides it (`app_close_win` asks
+  any window first, §75.1): with the pad on the desk the editor hides; with
+  the pad OFF it, the editor was the program's only window, so the close is
+  refused and the PROGRAM closes through the pad's `stik_quit` - the row
+  removed, the state saved - and the teardown takes the editor with it.
+- **`On desktop`** is a flag in the payload. Off hides the pad; the program
+  then lives while the editor is up, and a launch with it off opens the
+  editor (the loader shows the bound window after the entry proc returns, so
+  the FIRST beat hides the pad - `[sn_boot]`). The editor's minimize box is
+  a plain hide for an unbound window (`inst_minimize`), which with the pad
+  off the desk would leave nothing on the glass, so the beat that notices
+  turns the pad back on. A pad the Sticky Apps menu's Show All brought back
+  is on the desk again. Off with no editor up opens the editor.
+- The pad's current note and the editor's selection are ONE note
+  (`SNP_CUR`): paging the pad selects in the list, and the other way.
+- **A press on the pad** acts only on its controls - `+`, the arrow, `<`,
+  `>` and a box; the rest of the card only hands the widget the bar, as the
+  calendar's margins do (`os88ui.widget_activate` presses one).
+
+#### 110.13.2 The payload, v1
+
+| off | size | field |
+|---|---|---|
+| +0 | 1 | notes in use, 0..24 |
+| +1 | 1 | the current note |
+| +2 | 1 | flags: bit 0 on the desk, bit 7 the welcome note was made |
+| +4 | 24 | each note's paper, 0..4 (yellow, pink, green, blue, white) |
+| +28 | 48 | each note's length, a word, in list order |
+| +80 | 4,096 | the POOL: the notes' text, one after the other |
+
+4,176 bytes - and a file only as long as the notes in it (§110.5.3): the
+pool's free end is kept zero and the save leaves it off, so the welcome note
+is one cluster on a 360KB disk where the whole pool was five. **One pool and
+not 24 slots** (the owner's choice): a note may be long while the others are
+short, and a note's place is the sum of the lengths before it, so an insert
+moves the pool's tail up a byte (`sn_ins`) and nothing else moves. A payload
+whose counts, current note, papers or lengths do not add up is DAMAGED
+(`sn_check`), and the include's §110.5.2 path asks before replacing it. A
+first launch with no file writes the WELCOME note, once.
+
+A note is lines separated by LF. **Line 0 is its TITLE** - the list's row,
+the pad's header - and is one line, as wide as the page: typing past it is
+refused, and a join that would overflow it toasts `The title would not
+fit`. **A body line whose first byte is `SN_BOX0` (1) or `SN_BOX1` (2) is a
+CHECK BOX**, open or ticked; the marker is never drawn as a character and
+the caret never stands on it (`sn_norm`). Typing `[ ]`, `[]` or `[x]` at a
+line's start makes one (the space typed after it is swallowed); Ctrl+T and
+Note > Check Box toggle one; Enter on a box continues the list and Enter on
+an EMPTY box ends it; Backspace just after the marker takes the box away,
+and a join takes the second line's marker with the LF. A click on a box
+ticks it, on the pad and in the editor alike.
+
+#### 110.13.3 The walk, and what a keystroke draws
+
+Nothing is cached: the body is cut into VISUAL lines for a width in cells
+whenever a line is wanted (`sn_body` / `sn_vline` / `sn_vadv`) - a line that
+does not fit breaks after its last space, or hard at the width with none.
+The pad's widths are 21 cells (text) and 19 (a box's, indented); the
+editor's follow its window. `tools/os88stik.py`'s `stiknote_wrap` is the
+walk's mirror. A whole 4KB note is a few milliseconds of walk on the target,
+against a line table every insert would have to patch.
+
+A keystroke redraws **the lines it changed and no more** (`sne_after`): the
+caret's line and the one before it (a wrap can pull a word back) to its
+paragraph's end when the body kept its line count, to the page's foot when
+it did not (with the scroll bar), the title row and its list row for a title
+edit, the page whole when the scroll moved. A caret move redraws its old
+line and its new one. The pad, which shows the same note, is not redrawn per
+keystroke: it is owed one at the next beat (`[snp_dirty]`), so a burst of
+typing is one pad redraw - and one save (`STIK_ONTICK` holds the save while
+edits land).
+
+#### 110.13.4 Every pixel composed
+
+Both windows are composed into one 480 x 32 band and put down with
+`OSAPI_GFX_BLIT1` a slab at a time - no fill-then-letter anywhere, no font
+call (§6.1's rule kept by construction). The editor is `OWNBG`; its paint
+composes only the slabs `OSAPI_WM_DAMAGE` touches. The pad's two NOTCHES -
+the card's top right and bottom left, where the stack's offset leaves the
+desktop showing - are `OSAPI_GFX_DESK`'s on a desk window and never in a
+blit: the top rows blit 188 columns, the bottom rows from face x 4, which is
+off the byte grid and which kern_big's BLIT1 takes (§5.4.2.8: the band's
+first byte is the byte column holding x, its first `x & 7` pixels skipped -
+the band is NOT shifted, which the first cut assumed and drew black). A desk
+window only exists on kern_big; the titled fallback draws the notches as
+paper.
+
+#### 110.13.5 Colour
+
+Every note has a PAPER, and a colour adapter draws the pad's sheet and the
+editor's page in it: the band is composed 1 = paper and blitted with
+`OSAPI_GFX_BLIT1_PEN` AL = the paper, AH = black, so text, rules and edges
+are black on yellow (`CYELLOW`), pink (`CLMAGENTA`), green (`CLGREEN`), blue
+(`CLCYAN`) or white. Yellow is a new note's. The editor's list, bar, scroll
+bar and status stay white: a slab whose rows hold the page is three blits -
+list, page, bar - and one when the paper is white. The pen is set before
+each blit (the lock's release puts it back to `CWHITE`), and reset after the
+pad's slabs so the include's tag is drawn in the default pen. A 1bpp adapter
+does not read the pen, so the papers are white there, and **the Color menu
+greys every item `(color screen)`** (§47). The titled fallback's save-under
+keeps four planes for a pink sheet (`%define STIK_COLOR`, os88stik.inc's one
+change).
+
+#### 110.13.6 The three layouts
+
+| layout | pad card | body lines | pitch | editor opens |
+|---|---|---|---|---|
+| TALL (VGA) | 156 rows | 8 | 12 | 384 x 248 |
+| MID (Hercules, EGA) | 124 | 7 | 10 | 384 x 212 |
+| COMPACT (CGA) | 92 | 6 | 9 | 384 x the desk band |
+
+The editor is resizable from 344 to 480 content columns (the band's width)
+and from the layout's least height; the list is 144 wide and the page takes
+the rest. `tools/os88stik.py`'s `STIKNOTE_GEO` / `STIKNOTE_ED` are both
+tables, and `t_stik` holds them to `snp_geos` / `sne_geos`.
+
+#### 110.13.7 What it costs
+
+**No kernel byte.** `STIKNOTE.O88` is a 17,488-byte image and 6,485 bytes of
+bss (the band is 1,920 of it, the payload 4,192), 14,762 bytes packed on the
+disk. `os88stik.inc` gained `STIK_COLOR`, which the Desk Calendar does not
+define, so its build is unchanged.
+
+#### 110.13.8 What is not done
+
+- **No thumb drag**: the scroll bar's arrows step a line and its track a page.
+- **No selection, clipboard or undo**, `os88text.inc`'s boundary (§83.2).
+- **No caret blink**, and the caret is drawn whether or not the editor is in
+  front.
+- **The pad's tag shows the FOCUSED plate while the editor is in front**: the
+  editor is unbound, so `OSAPI_MENU_OWNER` answers the program's bound window.
+- **Hercules is checked on MartyPC** (`stiknote`); QEMU cannot show it.
+
+`tests/stiknote.py` is the gate (soak): the `herc` leg on a Hercules 5150 -
+the welcome note's first save, the stack and the notches pixel for pixel,
+a box ticked on the pad, a note typed in the editor with its boxes, Ctrl+T,
+Delete, the desk flag and the close that ends the program, the relaunch off
+the desk, the greyed Color menu - and the `vga` leg (`stiknotevga`), the
+papers read off the card's rendered framebuffer. `t_stik` (fast) holds the
+payload, the bss fields and both geometry tables to the host tool and walks
+every system image for `STIKAPPS/STIKNOTE.O88`.
+
+### 110.14 Desk Clock (`apps/deskclok/`)
+
+The third Sticky App: a clock pinned to the desk, in nine faces, at three
+sizes, with a daily alarm. `DESKCLOK.O88` ships in `STIKAPPS\` beside the
+Desk Calendar and Sticky Note on every system disk - the four geometries (the
+360KB one gave its typefaces up for it, §24.3.1.5), `emu.img`, both small
+system disks and the live media - and its state is
+`SYSTEM\APPDATA\DESKCLOK.DAT`. The owner's two mockups are the shape: the
+clock on the desk - a dial over a white panel with the time, the date and the
+alarm's row, the `Desk Clock` tag under it - and `Desk Clock Settings`, a
+titled window with three check boxes, a size, a gallery of nine previews and
+Cancel / Apply / OK.
+
+```
+apps/deskclok/deskclok.asm   header, card, payload, bss, entry, the tick, keys,
+                             menus, the alarm's ringing
+apps/deskclok/dkdraw.inc     the composer: a 1- or 4-plane band, spans, mask
+                             rows, glyphs, rectangles, ellipses, lines
+apps/deskclok/dkface.inc     the nine faces as PROGRAMS, the time and the date
+apps/deskclok/dkwid.inc      the clock on the desk: layout, paint, the face
+                             cache, presses, redraws
+apps/deskclok/dkset.inc      the settings window
+apps/deskclok/dkalm.inc      the alarm window
+```
+
+#### 110.14.1 A face of its own size: `STIK_VARFACE`
+
+Every other Sticky App is one width (`STIK_FACE_W`, an assembly-time
+constant) in one layout per screen class. The clock is not: its width and its
+card's height follow the size (Small, Medium, Large), the kind of face (a
+dial, a rectangle), `Clock face only`, and whether an alarm is ringing. So
+`os88stik.inc` gained an opt-in, `%define STIK_VARFACE`, which leaves every
+other Sticky App **byte for byte** what it was (measured: `deskcal.bin` and
+`stiknote.bin` assemble identically before and after):
+
+- `STIK_FACE_W` becomes the WIDEST face (the band's bound) and **`[stik_fw]`**
+  the face now; every place the include took the constant takes the word
+  (`STIK_ADDFW`, `STIK_ADDFW1`, `STIK_MOVFW` emit the constant's own
+  instruction without the opt-in).
+- **`STIK_SIZEUP`**, the package's proc, sets `[stik_fw]` and may point
+  `[stik_lay]` at a layout entry of its own (the clock's `dk_lay`, ONE card).
+  It is called with the layout class chosen and the state file READ: under
+  `STIK_VARFACE`, `stik_load` reads the file first and sizes the template
+  after, and the saved place is anchored with the face's size as it is now.
+- **`stik_resize`** (SI = the window, the lock held): the package changed
+  something its size depends on. A frame of the same size is one
+  `stik_redraw`; another size is HIDDEN, re-sized from its top-left (kept on
+  its display and on the byte grid) and SHOWN - there is no move cell, and the
+  kernel's Arrange does the same (§110.12.4) - and a widget that owned the bar
+  takes it back with `OSAPI_WM_FRONT`, which on a desk window activates and
+  raises nothing (§11.103.4). The titled fallback goes through
+  `OSAPI_WM_RESIZE` and is drawn again whole (a shrink is no damage there).
+- **`[stik_np]`** = 1: the tag row at rest is the DESKTOP - no plate - which
+  is `Clock face only`'s "no desktop label". The handle still comes up under
+  the pointer, and on a face narrower than the plate's name (`STIK_NAMEMIN`)
+  it is the close box and the grip alone.
+
+#### 110.14.2 The clock on the desk
+
+ONE card: the face, centred, and - unless `Clock face only` - the INFO PANEL,
+128 px wide, under it: under a dial the time as text (`20:58` at x2, the
+seconds and AM/PM small beside it) with the dial's foot overlapping the
+panel's top as the mockup draws it; then the date (`MON 24 AUG 2026`), a rule,
+and the alarm's row - its bell, `Alarm off` / `Alarm 07:30` / `Zz 07:35`, and
+the settings gear at the right. A RINGING alarm turns the row into
+`21:00 Back up files` and adds `Snooze . Dismiss` under it, and shows those
+two rows even face-only (the panel is the alarm's alone then), because an
+alarm nobody can stop is worse than a label the user asked to hide. The
+frame grows for them and shrinks back after.
+
+| size | a dial's width | a digital face's width | the card with the panel |
+|---|---:|---:|---|
+| Small | 80 | 96 | 128 wide (the panel's) |
+| Medium | 112 | 128 | 128 |
+| Large | 152 | 176 | the face's |
+
+A dial is as tall as it is wide **to the eye**: its rows are its width times
+the screen's aspect (`[dk_ys]`, 256 on VGA's square pixels, 186 on EGA, 165 on
+Hercules, 107 on CGA), so every circle stays round on every adapter. A
+digital face's height is its own share of its width (`dk_fhr`: the Casios
+0.66, Mono Digital 0.53, the LEDs 0.5, the flip clock 0.47).
+
+**Presses.** The panel's controls - the bell's row opens the alarm window
+(§110.14.7), the gear the settings, `Snooze` and `Dismiss` - act on the
+release, sliding off cancels (§13.5). A DOUBLE click anywhere else (9 ticks,
+the kernel's `UI_TDBLT`, 4 px) opens the settings - on a face-only clock too.
+And any other press **drags the clock** (`OSAPI_WM_DESK` DRAG), as the tag and
+the gaps do, so a face-only clock is moved by grabbing it.
+
+**Keys**, while it owns the bar: Enter Settings, `A` the alarm window, `F`
+`Clock face only`, `S` seconds, `H` 24-hour, Left/Right the face, Up/Down the
+size, `Z` Snooze, `D` Dismiss, Esc dismisses a ringing alarm or hands the bar
+back. **Menus**: `Clock` (Settings..., Alarm..., the three toggles marked `* `,
+Snooze and Dismiss - greyed `(not ringing)`, §47), `Face` (the nine, the
+current one marked) and `Size`. A change from the keys or the menus is
+COMMITTED at once (saved); with the settings window up, its applied copy
+follows it so a later Cancel does not undo it. The app-name cell's About is
+a toast: the clock can be smaller than os88ui's About card.
+
+**Its time** is `OSAPI_CLK_GET`'s, read at every beat. The beat is aimed: every
+6 ticks while the seconds show or the alarm rings, else at the next minute
+(`(60 - s) x 18` ticks, at most `STIK_TICKS - 1` = 35 - the include's ceiling
+for `[stik_nx]`). A beat that finds nothing new draws nothing. The hour hand
+sits between the hours (`h mod 12 x 10 + m / 6`, 120 steps of 3 degrees) and
+the minute hand steps at the half minute too. A new DAY redraws the card
+whole. Under `kern_small` the worker's sleep ignores `[stik_nx]` (§110.5), so
+the seconds there move every 2 s.
+
+#### 110.14.3 Nine faces, as programs
+
+A face is a few dozen bytes of OPS interpreted by `dk_face`, never a drawing
+routine: every coordinate is a share of the face - a radius of the dial
+(/256), an angle in 3-degree steps clockwise from 12, or a fraction of the
+face's width and height - so one program draws the face at every size, in a
+gallery tile, and on every adapter.
+
+| op | its arguments |
+|---|---|
+| `OP_INK` | a logical colour (below) |
+| `OP_ELL` | the dial, centred, at radius f |
+| `OP_TICKS` | n (12 or 60), the inner and outer radius, the stroke, flags (skip the hours, skip 12/3/6/9, only on a face 120 px or wider) |
+| `OP_NUMS` | radius, colour: 12, 3, 6, 9 (x2 on a face 152 px or wider; none under 64) |
+| `OP_TRI` / `OP_DOT` / `OP_SQ` / `OP_POLY` | shapes in polar coordinates: Memphis' and Neon's markings |
+| `OP_HANDS` | the three hands' colours, lengths and strokes (the second only with seconds on) |
+| `OP_CAP` | the centre |
+| `OP_RRECT` | a rounded rectangle: a fraction rect, an inset in px, a corner radius (at a 128-px face) |
+| `OP_TEXTC` / `OP_DATE` / `OP_HLINE` | `CASIO`, `MO 8-24`, a rule |
+| `OP_TIME` | a rect, a style - seven segments, bitmap digits, split-flap panels - a lit colour, a dim one, a panel colour |
+| `OP_DYN` | what follows changes with the time (§110.14.4) |
+
+`OP_TIME` lays out `HH:MM` big and, when there are seconds to show or a
+12-hour clock's AM/PM, a narrow right column with the seconds small at its
+foot and `AM`/`PM` at its head (a dot for PM on a face too short for the
+letters). A 12-hour clock's tens digit is blank under 10. The seven-segment
+digits leave a pixel between segments; the LEDs draw the unlit ones dim. The
+bitmap digits (Mono Digital, the flip clock) are `dk_dfont`, a 6x7 face with
+two-pixel strokes - the ROM's slashed zero scales into a blot - no taller than
+1.5x their width to the eye. The flip clock's card is split across its middle.
+
+**COLOUR is logical.** A program names `dk_lc` entries, each a VGA colour,
+its dither partner and a 1bpp rendering, so one program draws both worlds:
+
+| face | VGA / EGA | 1bpp |
+|---|---|---|
+| Classic | white dial, black rim, ticks, numerals and hands, a light red second hand | as VGA; the second hand black |
+| Memphis '80 | white dial; a magenta zigzag and dot, a cyan and a yellow triangle, a red mark at 12 | the shapes black, 50% and 25% grey |
+| Neon '90 | navy dial; cyan markings and hour hand, magenta minute hand, triangle and squares | black dial, white markings |
+| Mono Digital | black digits in a white rounded frame | the same |
+| Casio LCD | dark bezel, `CASIO` in white, light-green glass, black segments, `MO 8-24` | the glass white |
+| Casio VGA | navy body, a cyan rim and a magenta one, yellow digits | black body, white digits and rims |
+| Red LED | light red segments, the unlit ones dark red dithered with black, on black | white segments, the unlit ones dotted |
+| Amber LED | AMBER = yellow and light red dithered pixel by pixel (the palette has no orange), the unlit ones brown with black | as the red |
+| Flip Clock | white digits on black cards edged grey | the same |
+
+The palette is the standard one and no theme remaps it (§76.12), so the
+colours are fixed; the 1bpp renderings are black, white, 50% and two 25%
+greys (`dk_mpat`).
+
+#### 110.14.4 Every pixel composed, once
+
+Everything the clock and its two windows draw is laid down in the package's
+own RAM first and put on the glass with ONE blit a slab: `OSAPI_GFX_BLITP`'s
+four planes (DI bit 14: an armed clip is walked, not refused) on a colour
+display, `OSAPI_GFX_BLIT1`'s one on a 1bpp display - and on a colour one where
+the BLITP probe refuses (`kern_small`, a straddle), where the faces are drawn
+in their 1bpp renderings. Nothing is written to the glass twice.
+
+- **INK IS A PATTERN.** `[ck_pp]` names a byte per plane per row parity, and
+  a span writes it under a mask: a solid colour is FF/00 a plane, a two-colour
+  dither AA/55. So the amber LED, the dim segments and the 1bpp greys are the
+  same code as black.
+- **THE DESKTOP IS SAMPLED, NOT DRAWN.** A round dial's corners, a narrow
+  face's sides and the gap over a digital face's panel are the desktop. The
+  include lays its two ground columns with `OSAPI_GFX_DESK` before the card,
+  so the card reads two pixels of one of them back (`OSAPI_WM_CLIP_TEST`, then
+  `OSAPI_GFX_SAVE`) and composes the desktop's own ground into the band. The
+  ground is a solid colour or §26's 50% dither, so two pixels a row apart say
+  both its colours and its phase: the dither runs on through the clock with
+  no seam, on every theme. No pixel readable this paint: the last sample.
+- **THE FACE CACHE.** Everything a program draws before `OP_DYN` - the ground
+  at its corners, the panel under a dial, the bezel, the dial, its ticks and
+  numerals - is composed ONCE into a heap claim the face's size
+  (`OSAPI_MEM_CLAIM`: a Medium dial is 7 KB on VGA, 2 KB on 1bpp; a Large
+  one 12 KB) and copied from there; only the hands, the time and the date are
+  drawn each time. A layout change drops it, a paint whose planes or desktop
+  ground differ rebuilds it, and a refused claim is no cache - every paint
+  composes the whole program.
+- **A CHANGE REDRAWS WHAT CHANGED.** A hand that moved repaints the box from
+  the dial's centre to its tip - its old one and its new one as ONE union -
+  and a box drawn from the centre lies inside the dial, so it never touches
+  the ground. A new second under a dial repaints the panel's `:07` alone; on a
+  digital face the right 3/10 of it. The paint composes only the damage's
+  byte columns and rows (`OSAPI_WM_CLIP_SET` arms the window's whole visible
+  region, not the damage, so a paint that put down more than it composed
+  would write stale band over the glass).
+
+**Measured on a 4.77 MHz 8088 (MartyPC, a VGA XT)**, the guest cycles between
+the tick's entry and its next-beat store:
+
+| what | time |
+|---|---|
+| a beat that finds nothing new | 0.4 ms |
+| a second, Medium Classic, seconds on | 104 - 147 ms (the hand's angle sets the box) |
+| a second, Medium Red LED, seconds on | 103 ms |
+| a new minute, seconds off | one such update a minute |
+| a face change (the cache rebuilt, the card whole) | ~0.75 s |
+| the settings window, opened (nine previews) | ~3.1 s |
+
+So the seconds cost an XT about 10-15% of its time, and the clock without
+them nothing it would notice. The first cut was a second's worth of work a
+second - the whole program re-run for every hand's box - and four things
+took it down: the face cache,
+lines as one span a row on an 8.8 slope (no multiply or divide a row), glyph
+rows as one masked write a plane (`ck_g1`, `ck_mrow`), and composing only a
+slab's live rows and columns.
+
+#### 110.14.5 The payload, v1
+
+| off | size | field |
+|---|---|---|
+| +0 | 1 | the face, 0..8 (the gallery's order) |
+| +1 | 1 | flags: bit 0 `Clock face only`, bit 1 seconds, bit 2 24-hour, bit 3 the alarm is set, bit 7 the defaults were made |
+| +2 | 1 | the size, 0 Small, 1 Medium, 2 Large |
+| +3 | 1 | the alarm's hour, 0..23 |
+| +4 | 1 | its minute |
+| +5 | 17 | its label: 0..16 printable characters and a NUL |
+
+32 bytes. A payload with no bit 7, or one `dk_check` refuses (a face, a size
+or a time out of range, a label without its NUL or not printable), is made
+the DEFAULTS: Classic, Medium, the panel shown, no seconds, the system's own
+12/24-hour choice (`OSAPI_CLK_GET` AL bit 1), the alarm off at 07:00
+`Wake up`. The file is as long as its content (§110.5.3): the label's NUL and
+what follows are not written. Its POSITION and whether it is open are the
+include's (§110.5, §110.2). `tools/os88stik.py`'s `deskclok()` /
+`parse_deskclok()` are the host's writer and reader.
+
+#### 110.14.6 The settings window
+
+`Desk Clock Settings`, an ordinary titled second window (unbound: no dock
+tile, §42.1), opened by the gear, a double click, Enter or Clock >
+Settings..., placed on the side of the clock with the more room - wholly
+clear of it where the screen allows, so the preview shows - and drawn in the
+same composer: `OWNBG`, every pixel composed, a slab at a time.
+
+- **Three layouts** by the screen's class, each a table of controls
+  (`dks_tall`, `dks_mid`, `dks_comp`): TALL is the mockup (the subtitle under
+  `Clock face only`, 88-row tiles with 64-px dial and 96-px digital
+  previews); MID drops nothing but height (60-row tiles, 56-px dials); COMPACT
+  (CGA's 200 rows) puts the three boxes on one row and the size and the
+  status on the next, with 30-row tiles (36 and 56 px previews), 156 rows in
+  all.
+- **The previews ARE the faces**: `dk_face` at the tile's size, with the time
+  as it is and the seconds and the 12/24 hours as the boxes say - so the
+  gallery is redrawn when either box changes. The selected tile has a double
+  border and its name white on a black bar beside a ticked box; the status
+  line says `Selected: Red LED`.
+- **A change previews at once**: the window edits the PAYLOAD itself and the
+  clock is laid out and drawn again (`dk_relay`), while `dk_sav` keeps what
+  was last applied. **Apply** makes the preview the applied state and owes
+  the save; **OK** is Apply and close; **Cancel**, Esc and the close box put
+  `dk_sav` back and close. The clock's tick holds any save while a window of
+  its is up (`STIK_ONTICK`'s CF), so a preview is never what the disk says;
+  closing the clock with a preview up restores first.
+- **Size** is a drop-down: the box shows the size and an arrow; a press opens
+  the three below it, over the gallery and in the same slabs, and a press on
+  one picks it.
+- **Keys**: the arrows walk the gallery (and preview), `F`, `S`, `H` the
+  boxes, `Z` the size, `A` Apply, Enter OK, Esc Cancel (or shuts the open
+  list). OK is the default button: its ring is two pixels thick.
+- A colour paint borrows a heap claim ONE TILE ROW tall (17 KB on VGA) for
+  its band and lays its slabs on the tile rows, so each preview is composed
+  once; refused, it paints with the 4.6 KB band, slower.
+
+#### 110.14.7 The alarm
+
+**The alarm window** (`Alarm`, titled, unbound, beside the clock): `[x] Alarm
+on`, `Time: [07] : [30] [AM]` with `-` and `+`, and `Label: [Wake up_]`. It
+edits a COPY; OK writes it into the payload - owing the save, dropping a
+snooze - and Cancel, Esc and the close box drop it. The keys: Tab and
+Left/Right walk the hour, the minute, the AM/PM (12-hour only) and the label;
+Up/Down and `-`/`+` step the hour or the minute round its dial; a digit types
+into one (the field's last digit becomes its tens); Space ticks the box
+outside the label; letters and Backspace edit the label (16 characters).
+
+**It rings** at its minute, once a day: the tick that sees a new minute
+compares it with the alarm's (or a snooze's), and `[dk_lfire]` keeps it to
+once a minute. Ringing: a toast `Alarm: <label>` (§59.10), the panel's rows
+grow `Snooze . Dismiss`, and the speaker chirps - 880 Hz and 660 Hz, a note a
+6-tick beat, `OSAPI_SND_TONE` at the package priority - for 30 seconds; its
+rows stay until one is picked. **Snooze** is 5 minutes (past midnight it
+rolls into tomorrow) and shows `Zz 07:35` on the row; **Dismiss** waits for
+tomorrow. Neither is modal and neither takes the keys (§110.3's rules).
+
+#### 110.14.8 What it costs
+
+**No kernel byte.** `DESKCLOK.O88` is a 25,152-byte image and 5,368 bytes of
+bss (its band 4,608 of it), 20,382 bytes packed on the disk - 20 clusters at
+360 KB, which is where §24.3.1.5's room went. At run time it claims the face
+cache (above) and, for a colour settings paint, its tall band. `os88stik.inc`
+gained `STIK_VARFACE`, which neither other Sticky App defines, so their builds
+are unchanged.
+
+#### 110.14.9 What is not done
+
+- **The Sticky Apps menu** (§110.12) starts and closes the clock as it does
+  every App; its settings are the clock's own: its menus, the gear, a double
+  click and Enter. A row of Locator's menu that opens an App's settings would
+  be a protocol between `STIKMENU.DRV` and the App, which nothing has yet.
+- **One alarm**, daily; no weekday set, no tune.
+- **Seconds every 2 s on kern_small** (the worker's beat), and the titled
+  fallback's corners are white (no desktop under a titled window).
+- **EGA is checked by its geometry**, not on the glass: MartyPC has no EGA,
+  and the MID layout is Hercules'.
+
+`tests/deskclock.py` is the gate (soak): the `vga` leg - the corners the
+desktop's dither, the seconds, Face > Red LED and its save, the settings
+window beside the clock with a tile's preview, Cancel and OK, `Clock face
+only`, the alarm saved, ringing at 07:00 on the guest's clock and snoozed, and
+the clock back after a reset - and the `herc` leg (`deskclockherc`), the Red
+LED face on one plane. `t_stik` (fast) holds the payload and the bss fields to
+the host tool and walks every system image for `STIKAPPS/DESKCLOK.O88`.
+
+## 111. TIMER — the stopwatch (`apps/timer/timer.asm`)
+
+The kernel's Timer kind (§14) as a package since §14.8: `TIMER.O88`, in
+`APPS/` on every apps disk, 2,012 bytes of image and 60 of bss, the
+stopwatch icon in its header, label prefix `tm_`. Everything §14 says about
+the Timer's behaviour holds — the window, the layout, the accumulator
+(binding), §14.1's incremental redraw, §14.4's cut line, §47's greying — and
+this section says only what is different about being a package.
+
+### 111.1 Window and layout
+
+160×60 at (330, 60), the kind's position; a second Timer opens on the first,
+as a second Note Pad does, where the kind cascaded +16px per pool slot (a
+package has no pool, and nothing at its entry names its instance - the entry
+proc's DX is the loader's). `WF_SNAP` asked for in the entry proc (§11.94) so
+the digit run at content x 48 is byte-aligned on every adapter. Content 158×41: digits 64px wide at +48,+5; three 46×15 buttons
+with 6px gaps at +4,+20. The `TM_*` constants mirror the kind's `APP_TMR_*`
+to the pixel, and the same assembly-time `%error` holds the digits on a cell.
+
+### 111.2 The buttons are the standard control
+
+One `OS88UI_BTNREC` — rects in the bss, filled by the painter (`tm_layout`)
+from `OSAPI_WM_CONTENT` each pass; labels; three flag words — and
+`os88ui_btninit` from the entry proc, which installs W_ONCLICK, W_ONMOUSEUP
+and W_ONDRAG itself (§20.5.1.3). So the kind's hand-rolled gesture
+(`app_tmr_hit` / `track` / `setdown` / `onup` / `ondrag`, §13.8.5) is the
+library's `os88ui_btnup` and `os88ui_btndrag` over the record, and a button
+fires on the RELEASE and un-draws as the pointer slides off it (§13.8) with
+nothing in this file saying how. `tm_bok` is the ONE predicate (§47 rule 2):
+`tm_flags` writes `OS88UI_DIS` on the button it refuses — Start while
+running, Stop while stopped, Reset never — and `tm_act` refuses the same one
+on the release, so the grey and the refusal cannot disagree. `OS88UI_FILL` on
+all three, because a button is redrawn over its previous pen's frame after a
+click. Start re-stamps the sample (up to 9 ticks of stopped time can be
+sitting unsampled at the click); Stop clears `tm_run`; Reset zeroes h/m/s AND
+the accumulator AND re-stamps, leaving `tm_run` alone. Start and Stop redraw
+those two buttons and nothing else; Reset redraws the digits that changed.
+
+### 111.3 The clock, on both kernels
+
+`OSAPI_WM_ONTIMER` and `OSAPI_WM_TIMER` for `TM_TICKS` = 9, re-armed inside
+the handler (`tm_tick`, §13.9), which arms the clip itself — a timer dispatch
+arrives without one (§11.3). **On `kern_small` `OSAPI_WM_TIMER` refuses**
+(it carries the slot and not the body), so there the clock is a WORKER
+(`tm_worker`) spawned at the first paint, in the class `OS88_STACK_256`: the
+kind's task overflowed a 128-byte slice drawing text through `font_run`'s
+per-cell path (§14.7 read 112 of 128), so the package asks for the class
+above it rather than guessing again. The worker does from a task exactly
+what the handler does from the UI task — `OSAPI_TASK_ALIVE`, sleep 9, lock,
+keep time, visible?, `OSAPI_WM_CLIP_SET`, digits, unlock. The kind never ran
+on `kern_small` (§14.6); the package does. `tm_keep` samples `[ticks]` on
+every firing whether running or not, and accumulates only while running:
+§14's design, binding.
+
+### 111.4 Drawing
+
+`tm_digits`: "HH:MM:SS" formatted with `aam` (the kind borrowed the kernel's
+`clk_put2`; a package has no near route to it, and the idiom is four
+instructions), one `OSAPI_WM_CLIP_TEST` over the whole line, the span of
+cells that differ from `tm_shown`, a cut line drawn whole and forgotten,
+`OSAPI_SET_COLOR CBLACK` before the run because a greyed button leaves the
+pen disabled (§47 rule 1, and the bare store is what clears the flag), then
+one `OSAPI_FONT_RUN`.
+
+### 111.5 About, and the row
+
+The standard About card (§20.5.1), two lines — 41px of content holds two.
+While the card is up the button record is told it has NO buttons, so a
+press anywhere in the content reaches the dismissal rather than the button
+under the card. `tests/timerbounce.py` is the gate (soak, MartyPC): it opens
+`TIMER.O88` and `BOUNCE.O88` by name out of the apps disk's `APPS/`, reads the
+Timer's seconds advancing out of its own bss, presses Stop and then Start
+through the real gesture and reads `tm_run` both ways, and reads the Bounce's
+square moving and its worker holding a task slot.
+
+## 112. BOUNCE — the square (`apps/bounce/bounce.asm`)
+
+The kernel's Bounce kind (§14) as a package since §14.8: `BOUNCE.O88`, in
+`APPS/` on every apps disk, 885 bytes of image and 14 of bss, the ball icon
+in its header, label prefix `bn_`. §14.5's draw-then-subtract and §11.3's
+unconditional step hold, and this section says only what is different about
+being a package.
+
+### 112.1 Window
+
+150×130 at (300, 150), the kind's position (a second one opens on the first,
+§111.1's reason); content 148×111,
+the square 8×8 at (4,4) with velocity (3,2) — the kind's seed, set in the
+entry proc rather than a KD_INIT. The `%error` that holds a step under the
+square's width, which is what keeps `bn_wipe` two strips, is the kind's.
+
+### 112.2 The worker IS §20.6's reference implementation
+
+`bn_worker` is spawned from the first paint (`bn_spawn_ck`; an entry proc
+cannot spawn, the loader has not published the instance), declared
+restartable there (§66.6.2), in the class `OS88_STACK_128` — the class the
+kind's task measured at, +10…24 over the floor six at once (§8.7). The loop
+is the one §20.6 names: `OSAPI_TASK_ALIVE`, sleep 2, `OSAPI_GFX_LOCK`,
+`test [es:bx+W_FLAGS], 2` with ES = KERNEL_SEG, `OSAPI_WM_CLIP_SET`, step,
+the new square black, the colour white, `bn_wipe`, unlock; a hidden or
+wholly covered window steps and draws nothing. §20.6 pointed at
+`app_bounce_task` as the reference for a worker "written as a package writes
+it"; it points here now, and the reference is a package.
+
+### 112.3 About
+
+The standard card, two lines; the window's W_ONCLICK is its dismissal, as
+Hello's is (§27).

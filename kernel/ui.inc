@@ -399,7 +399,7 @@ ui_task:
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
     call COLD_SEG:fdlg_grab_x   ; a modal file dialog swallows every press
-    jc .yj1                     ; outside its own frame (SPEC.md 38.2).
+    jc short .yj1               ; outside its own frame (SPEC.md 38.2).
                                 ; AHEAD of every branch below - modality is
                                 ; not a window property, and a press on the
                                 ; menu bar must die as firmly as one on
@@ -482,6 +482,14 @@ ui_task:
 
     ; AL = 0: content. Raise a background window; the front one gets its
     ; W_ONCLICK (if any) under the gfx lock, like W_ONKEY above.
+%ifdef KERN_BIG
+    mov si, bx                  ; (ui_raise's own first move)
+    test byte [si+W_FLAGS+1], WF_DESK >> 8
+    jnz .content_front          ; A DESK WINDOW TAKES ITS PRESS WITHOUT A
+%endif                          ; RAISE (SPEC.md 11.103.4): menu_activate above
+                                ; has already handed it the bar, and the front
+                                ; application window keeps its place and its
+                                ; pinstripes - a bare-desktop click's split
     call ui_raise               ; SI = BX = the hit window, raised and
     je .content_front           ; repainted unless it was already frontmost -
                                 ; which feeds the click handler instead
@@ -506,7 +514,9 @@ ui_task:
                                 ; TOLD about, so its first W_ONDRAG is the
                                 ; first place the pointer is not. BEFORE the
                                 ; dispatch: ui_bill does not preserve CX/DX
-%endif
+    push cx                     ; ...and the press point banked across it, for
+    push dx                     ; a DRAG the handler posts (SPEC.md 11.103.6):
+%endif                          ; [ui_dragy] holds the post by then
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
     push si                     ; BANKED: the handler may clobber SI (SPEC.md
     call ui_bill              ; 12.2) and ui_bill/wm_pkgcall do not save it,
@@ -514,6 +524,20 @@ ui_task:
                                 ; the handler left - 0 lost the release, and
                                 ; anything else dispatched it through a stray
                                 ; offset. (CX/DX survived wm_hit/wm_top/gfx_lock)
+%ifdef KERN_BIG
+    pop dx
+    pop cx
+    cmp [ui_dragy], si          ; THE POSTED DRAG (SPEC.md 11.103.6): the
+    je .qdrag                   ; handler's OSAPI_WM_DESK DRAG wrote ITS OWN
+                                ; WINDOW over the seed above - a record
+                                ; address, which no screen y can equal. A post
+                                ; made before this W_ONCLICK was wiped by that
+                                ; seed, and one naming any window but the one
+                                ; PRESSED (a worker's, during another
+                                ; package's handler) does not match it. BEFORE
+                                ; the arm: the drag eats the release. ZF
+                                ; carries the answer past gfx_unlock below
+%endif
     mov [ui_armw], si           ; ...and the RELEASE is owed to this window
     mov word [ui_post], 0x0001  ; ...SAY SO once (SPEC.md 13.13), and [ui_armr]
                                 ; = 0, the byte after it (the %if under the
@@ -521,8 +545,26 @@ ui_task:
                                 ; W_ONCLICK actually ran. A press that merely
                                 ; raised a window, or that this window refused
                                 ; above, arms nothing
+%ifdef KERN_BIG
+.qdrag:
+    pushf                       ; ZF = 1: a DRAG was posted (the two movs above
+    call gfx_unlock             ; write no flag) - and gfx_unlock writes them
+    popf
+    jne .yj1
+    test byte [si + W_FLAGS + 1], WF_DESK >> 8
+    jz .yj1                     ; ...and only a DESK window's: a fullscreen
+                                ; one would be clamped off its latch by the
+                                ; drop's MBAR_H floor (SPEC.md 11.103.6)
+    mov bx, si                  ; the title bar's own drag of the window that
+    jmp short .drag             ; was PRESSED, CX/DX the press point (SPEC.md
+                                ; 11.103.6); ui_track takes the lock itself.
+                                ; HERE and not out of line: every byte between
+                                ; .region's `je .title_bar` and its target is
+                                ; a byte of a short jump's reach
+%else
     call gfx_unlock
     jmp .yj1
+%endif
 
 .desk_icons:
     call dock_click             ; CX/DX; CF=1 = consumed (locks internally,
@@ -700,10 +742,11 @@ ui_task:
     call snd_beep               ; CF = the tables are full, or the kind is at
                                 ; its cap (SPEC.md 29.4.1) - the same audible
                                 ; refusal ui_cmd gives the Apple-menu route.
-                                ; This is the Disk window's Builtins route
-                                ; (fm_c_timer/fm_c_bounce), and it discarded
-                                ; the CF, so ten Bounces plus one more here
-                                ; did nothing and said nothing - exactly the
+                                ; This is the Disk window's New Window route
+                                ; (fm_newwin; it was Builtins' Timer and
+                                ; Bounce too until SPEC.md 14.8), and it
+                                ; discarded the CF, so ten Bounces plus one
+                                ; more here did nothing and said nothing -
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
     xor ax, ax                  ; set by files.inc's click handler, stored as
@@ -1669,6 +1712,10 @@ ui_drag:
                                 ; "because a drag does not resize" (SPEC.md
                                 ; 11.96.12). wm_su_ck would refuse the buffer
                                 ; anyway; this saves taking it
+    test byte [bx + W_FLAGS + 1], WF_DESK >> 8
+    jnz .nocache                ; ...nor is a DESK window's (SPEC.md 11.103.6):
+                                ; banked off the glass it holds whatever covers
+                                ; it, and wm_draw_win's desk arm never replays
 %endif
     call ui_drag_phase          ; ...onto a multiple of 8 FIRST (SPEC.md
                                 ; 11.96.13): the cache can only replay the
@@ -1752,6 +1799,15 @@ ui_drag:
                                 ; It is what makes dragging a window ACROSS
                                 ; another one cost the other one nothing
     call wm_dmg_union           ; ...grown to cover where it is now
+%ifdef KERN_BIG
+    mov byte [wm_dmg_npro], 1   ; A DRAG PROMOTES NOBODY (SPEC.md 11.103.6): it
+%endif                          ; never changes which window is front. An
+                                ; ordinary window was raised before its title
+                                ; drag and is the moved window the marking
+                                ; pass always redraws, so .promote had nothing
+                                ; to do; a WIDGET's front application window
+                                ; lies clear of the damage and was re-titled
+                                ; on every drop - the 15-call path
     call wm_paint_dmg           ; caller-held lock, per the wm contract
 %ifndef NODRAGCACHE
     call wm_dc_done             ; ...and the waiver is spent (SPEC.md 11.96.12)
@@ -2409,15 +2465,12 @@ ui_dispatch:
     jmp gfx_unlock
 
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
-; System menu, then Locator's File and Builtins (SPEC.md 12.3.1)
+; System menu, then Locator's File. There is no Builtins cell on either
+; build (SPEC.md 14.6, 14.8): its two launches are packages now and its
+; third, Disk, is the desktop's own drive zones
 ui_loc_base:
-%ifdef KERN_BIG
-    dw CMD_ABOUT, CMD_CLOSE, CMD_TIMER
-UI_LOC_N equ 3
-%else
-    dw CMD_ABOUT, CMD_CLOSE     ; SPEC.md 14.6: no Builtins cell on this build
+    dw CMD_ABOUT, CMD_CLOSE
 UI_LOC_N equ 2
-%endif
 
 ; -----------------------------------------------------------------------------
 ; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)
@@ -2793,8 +2846,8 @@ ui_sys_find:
 ; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
 ui_cmd:
-    dec ax                      ; CMD_ABOUT = 1 .. CMD_FILES (8 on small;
-    cmp ax, CMD_FILES           ; 11 or 12 on big with shortcuts) are CONTIGUOUS
+    dec ax                      ; CMD_ABOUT = 1 .. CMD_LAST (8 on small;
+    cmp ax, CMD_LAST            ; 11 or 12 on big with shortcuts) are CONTIGUOUS
     jae .done                   ; (SPEC.md 13, menu.inc), so an eight-deep
     mov bx, ax                  ; compare ladder is a table walk. AX = 0 wraps
     shl bx, 1                   ; to 0xFFFF and the same unsigned compare
@@ -2810,9 +2863,9 @@ ui_cmd:
                                 ; transfer, so EVERY ENTRY HERE MUST BE .text
                                 ; and is
 %ifdef OS88_SHORTCUTS
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .timer, .bounce, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .scdel, .files, .stik
 %elifdef KERN_BIG
-    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .timer, .bounce, .files
+    dw .about, .ctrl, .tasks, .done, .hiber, .reboot, .shutdown, .close, .files, .stik
 %else
     dw .about, .ctrl, .tasks, .done, .reboot, .shutdown, .close, .files
 %endif
@@ -2821,6 +2874,11 @@ ui_cmd:
 .hiber:
     call COLD_SEG:hbf_open      ; the module first, then the window (SPEC.md
     ret                         ; 87.1) - cp_open's shape, and its refusal
+.stik:
+    call COLD_SEG:stm_act_x     ; the Sticky Apps menu's pick (SPEC.md 110.12):
+    ret                         ; STIKMENU.DRV is still held from the drop, and
+                                ; this is the lock-free half that launches,
+                                ; closes, hides, arranges - then drops it
 %endif
 %ifdef OS88_SHORTCUTS
 .scdel:
@@ -2840,18 +2898,11 @@ ui_cmd:
                                 ; retf and ui_cmd does not, so the retf would
                                 ; pop a NEAR frame as CS:IP - a wild jump, and
                                 ; os88ovlchk refuses it
-%ifdef KERN_BIG
-.timer:
-    mov al, KIND_TIMER
-    jmp .launch
-.bounce:
-    mov al, KIND_BOUNCE
-    jmp .launch
-%endif                          ; KERN_BIG - SPEC.md 14.6
 .tasks:
     jmp ui_tm_open              ; not a kind any more: it is a package on the
                                 ; system disk (SPEC.md 28)
-.launch:
+.launch:                        ; About's alone now: Timer and Bounce are
+                                ; packages on the apps disk (SPEC.md 14.8)
     call app_launch             ; takes its own locks; out CF = tables full
     jnc .done
 .beep:
@@ -3052,7 +3103,13 @@ ui_dragy:   resw 1              ; delivered at, seeded at the press with the
                                 ; point W_ONCLICK was given. Only meaningful
                                 ; while [ui_armw] is set and [ui_armr] is 0,
                                 ; which is why nothing clears it - the arm
-                                ; re-seeds it every time
+                                ; re-seeds it every time. [ui_dragy] = a
+                                ; window record is also OSAPI_WM_DESK DRAG's
+                                ; POST (SPEC.md 11.103.6), compared with the
+                                ; window pressed after W_ONCLICK returns - the
+                                ; press's seed is what makes an earlier post
+                                ; move nothing (an ARMED press still sees one
+                                ; W_ONDRAG at an unmoved point)
 ui_armlit:  resb 1              ; SPEC.md 13.8.1: is that box currently DRAWN
                                 ; down? THE GLASS ALWAYS SHOWS THIS BYTE - that
                                 ; is the invariant the whole feature rests on,

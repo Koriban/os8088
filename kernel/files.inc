@@ -2338,10 +2338,9 @@ fm_s_folder:  db 'Folder', 0    ; with five bytes in front) ...and in a
 fm_s_mfile:   db 'File', 0
 fm_s_medit:   db 'Edit', 0
 fm_s_mnav:    db 'Nav', 0
-fm_s_mbuilt:  db 'Builtins', 0   ; the SAME menu as Locator's, with the
-                                ; same items in the same order (SPEC.md
-                                ; 12.3.1) - which is the whole point of
-                                ; the rename
+                                ; (fm_s_mbuilt, 'Builtins', went with the
+                                ; menu: SPEC.md 22.28 took the cell off this
+                                ; bar and 14.8 took the menu off Locator's)
 
 fm_s_open     equ fdlg_s_topen   ; the Standard File dialog's title, which
                                 ; is the same four bytes (SPEC.md 38)
@@ -2451,7 +2450,11 @@ fm_menus:
     dw menu_loc_name            ; AM_NAME: still 'Locator' (SPEC.md 12.3)
     dw fm_oncmd_x               ; AM_ONCMD: our own handler - the cold
                                 ; body, like fm_tpl's three above
+%ifdef KERN_BIG
+    dw 5                        ; AM_COUNT: the four below and Sticky Apps
+%else                           ; (SPEC.md 110.12), the bar's fifth and last
     dw 4                        ; AM_COUNT, both builds (SPEC.md 22.28): no
+%endif
                                 ; Builtins cell any more - a Disk window is a
                                 ; program of its own and Builtins is the
                                 ; DESKTOP's - and one cell left spare
@@ -2475,6 +2478,13 @@ fm_menus:
                                         ; File menu's items act ON
     dw fm_s_root, fm_items_disk, FM_NDISK   ; 'Disk' - the root title's own
                                         ; four bytes (SPEC.md 22.28)
+%ifdef KERN_BIG
+    dw menu_s_stik, 0, 0                ; the desktop's widgets (SPEC.md
+                                        ; 110.12): menu_track hands this cell
+                                        ; to STIKMENU.DRV, so fm_oncmd_x never
+                                        ; sees it. The kernel's own string, as
+                                        ; every title of this set is
+%endif
 section .cold                   ; ...and back to cold code
 
 

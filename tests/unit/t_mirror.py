@@ -130,6 +130,11 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # two entries, and the kernel's answer to every xmem failure is to
        # carry on with no store and tell nobody.
        "drivers/xmem/xmem.asm",
+       # THMPAL.DRV's private ABI (SPEC.md 76.14.14): THMV_ABI_VER, the three
+       # verbs and THM_COLOR, typed out in kernel/vga12.inc AND in the overlay
+       # for drivers/saver's reason. A drifted version word is a chooser the
+       # kernel refuses as DRVE_BAD; a drifted verb is the wrong one called.
+       "drivers/thmpal/thmpal.asm",
        # ASSOC.DAT's format (SPEC.md 54.7), which kernel/assoc.inc READS and
        # the hard-disk installer WRITES: an installed volume gets its own
        # cache built from its own packages (SPEC.md 52.10.14), so the row
@@ -259,6 +264,16 @@ ALIAS = [
     # to packages under the SDK's prefix: OSAPI_PKG_START answers it in AL,
     # and The Wire words it rather than printing the number.
     ("kernel/loader.inc", "LD_EVER", "apps/os88api.inc", "OSAPI_LD_EVER"),
+    # SPEC.md 110.2. The Sticky App mark: which byte of a desktop row says "this is
+    # a remembered widget", and the value it must EQUAL. The kernel's desk_live
+    # and stik_boot read it, CTRL.DRV's settings core writes it, a package sets
+    # it in the record it hands OSAPI_DESK_ITEM, and the host tool writes the
+    # fixtures every gate boots - four readers of one byte.
+    ("kernel/desksc.inc", "SC_R_STIK", "apps/os88api.inc", "OSAPI_DI_STIK"),
+    ("kernel/desksc.inc", "SC_STIK", "apps/os88api.inc", "OSAPI_STIK_MARK"),
+    ("kernel/desksc.inc", "SC_R_STIK", "tools/os88stik.py", "SC_R_STIK"),
+    ("kernel/desksc.inc", "SC_REC", "tools/os88stik.py", "SC_REC"),
+    ("kernel/desksc.inc", "SC_VER", "tools/os88stik.py", "SC_VER"),
 ]
 DEFINE = re.compile(r"^%define\s+([A-Z][A-Z0-9_]*)\s+([^\s;]+)", re.M)
 

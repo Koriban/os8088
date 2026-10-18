@@ -280,10 +280,38 @@ a Standard File dialog for opening and saving.
 - **Task Manager** — live CPU and RAM, one row per instance, with the work
   done inside an app's window callbacks billed to that app.
 - **Control Panel** — Scheduler, Buffer, Display, Sound and Date/Time.
+- **Desk Calendar** — the first *Sticky App*: a widget
+  in `STIKAPPS/` on the system disk that lives ON the desktop, under every
+  window, with no frame and no dock tile - three white cards (today and a
+  Monday-first month with a dot under each busy day; the chosen day's
+  appointments and your tasks with real ticks; a reminder card that rings,
+  with Snooze and Dismiss) and a name tag that turns into a handle to drag
+  it or close it while the pointer is over it. Its keys and menus are its
+  own once it is clicked. Once opened it comes back at every boot where it
+  was left, and a widget that has gone missing becomes a desktop shortcut
+  with one message rather than stopping the boot. `apps/os88stik.inc` is the
+  shared half a new widget includes (SPEC.md 110).
+- **Sticky Note** — the second Sticky App: a pinned note pad on the desk, a
+  sheet on a stack of sheets with its corner turned, showing one note at a
+  time with `< 1 / 3 >` to page through them, and an editor window behind it
+  with the notes listed beside the page. A note's first line is its title,
+  `[ ]` at the start of a line makes a check box, and a click ticks one on
+  the pad or in the editor. On VGA and EGA each note has a paper - yellow,
+  pink, green, blue or white (SPEC.md 110.13).
+- **Desk Clock** — the third Sticky App: a clock on the desk in nine faces -
+  three dials (Classic, Memphis '80, Neon '90) and six digital (Mono
+  Digital, Casio LCD, Casio VGA, Red LED, Amber LED, Flip Clock) - at three
+  sizes, with seconds or not, 12- or 24-hour, and a daily alarm with Snooze
+  and Dismiss. `Clock face only` leaves just the face on the desk; a double
+  click, the gear or Enter opens `Desk Clock Settings`, whose gallery
+  previews every face and whose changes preview on the desk before OK. In
+  colour on VGA and EGA, in black, white and greys on CGA and Hercules
+  (SPEC.md 110.14).
 - **Menu bar clock** — read from the hardware RTC at boot if the machine has
   one, kept from the PIT after that, and settable.
 - **A system clipboard**, shared across apps.
-- **Typefaces** — **ten** `.F88` faces in `SYSTEM/FONTS/` on the system disk, found
+- **Typefaces** — **ten** `.F88` faces in `SYSTEM/FONTS/` on the system disk (on the
+  office disk at 360KB, SPEC.md 24.3.1.5), found
   at run time by any app that asks: Charter and the house 8x8 cell, a Times, a
   Helvetica and a Courier, two more text faces and three monospaces, each
   fitted onto an 8-pixel grid from an open outline font (SPEC.md 6.4.1). The
@@ -389,9 +417,10 @@ there is no math engine, no figures and no colour. `PAPER.TEX` and `GUIDE.TEX`
 ride the software disk beside it, and `GUIDE.TEX` is the markup written up as
 a document TeXPad sets.
 
-Timer and Bounce are built into the kernel rather than loaded. **Drivers**
-load the same way packages do — hard disk, sound, and a serial debug
-monitor.
+Timer (a stopwatch) and Bounce (a square bouncing in its window) are
+packages too, `TIMER.O88` and `BOUNCE.O88` on every software disk; they were
+built into the kernel until it was asked what that cost. **Drivers** load the
+same way packages do — hard disk, sound, and a serial debug monitor.
 
 **Frotz** ships separately, on a story floppy of its own (`make zdisk`): an
 interpreter for Infocom's Z-machine, v1–v8, windowed, with a scrollback,
@@ -1050,9 +1079,9 @@ drive the system from a script.
 `make test` boots headless with a QMP socket at `build/qmp.sock`:
 
 ```
-python3 tools/mouse.py build/qmp.sock to 110 8          # Locator's File menu
+python3 tools/mouse.py build/qmp.sock to 12 8           # the System menu
 python3 tools/mouse.py build/qmp.sock down              # menus need press...
-python3 tools/mouse.py build/qmp.sock to 110 30         # ...drag to Timer...
+python3 tools/mouse.py build/qmp.sock to 60 30          # ...drag to About...
 python3 tools/mouse.py build/qmp.sock up                # ...release to choose
 python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "f313c179bb120bd6508c57bf54a87ccd8e31ad8329f9515c8ac8dd6d037e88ea",
+  "fingerprint": "be5ce5faeec75706cd33eac4de3838f259bcc56d073cc850fc1c2ad0883c7873",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "a2bee65027656e83a58bf15dfe7f26bb38dbfa83ae59f54904e877f89414fe13",
+  "fingerprint": "cb840b3e66b596fe66a7ad9b07f61f9c8f402799cfa71b8bdb83497b1a9b6f67",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -63,6 +63,76 @@
    "from": 9,
    "guard": "DRV_VER",
    "reason": "PKG_FMT 8 -> 10 and DRV_VER 9 -> 11 (SPEC.md 20.2.0): the RAM disk's class moved 5 -> 8 (DRVC_FILE -> DRVC_FILE2, SPEC.md 62.9.19), which the round's entry above recorded as an addition. It is not: RAMDISK.DRV's header class and RD_CLASS (drivers/ramdisk/rdpkg.inc, outside the locked surface) both name 8 now and drv_tab row 3 expects it, so an old RAMDISK.DRV would have been refused by drv_check as a bad driver, and an old package reaching the RAM disk through RD_CLASS - THEWIRE.O88's archive path - would have called class 5, NET.DRV's slot, and been told there is no RAM disk. At the new numbers that package is Wrong os8088 version (LD_EVER) at load and that driver fails on its version byte. 10 and 11 collide with no number ever used (module 5, package 3/6/8, driver 4/7/9) nor with each other.",
+   "to": 11
+  },
+  {
+   "fingerprint": "16b2fbfe6285c623f7411c01794bed407ebb40674797c457162a0181235d4b5d",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
+   "to": 10
+  },
+  {
+   "fingerprint": "fcc4cc6a5ff92fb80f83388d88603e5c85a65373efa0abf4403899f85b3c1dfe",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "Append the Color theme mode, preset, and style API cells at free slots 0x046D, 0x0475 and 0x047D. Existing binaries never called these cells; the style cell preserves its 0/1 meanings and adds bit 1 for the Windows Classic button layout, so PKG_FMT and DRV_VER remain unchanged.",
+   "to": 11
+  },
+  {
+   "fingerprint": "432329e4aff92c47b0957e27a5d8ce8886fb01fe0cecc86ed823873fcab1758a",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "PR #249 (Color presets) after the zero-resident redesign: OSAPI_THM_SET is ONE new cell appended at 0x046D, after OSAPI_FERR_TEXT; the PR's _SET_PRESET/_SET_STRIPES cells never shipped and are gone. Every existing cell keeps its address and contract, so nothing built before stops running",
+   "to": 10
+  },
+  {
+   "fingerprint": "b1f91147886e07beb2016963005e30d6be8487966b32cb8d5c7e01c05a8aa5b6",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "PR #249 (Color presets) after the zero-resident redesign: OSAPI_THM_SET is ONE new cell appended at 0x046D, after OSAPI_FERR_TEXT; the PR's _SET_PRESET/_SET_STRIPES cells never shipped and are gone. Every existing cell keeps its address and contract, so nothing built before stops running",
+   "to": 11
+  },
+  {
+   "fingerprint": "d6927629077962e494f119851ecea36972deaf327cfcd23c976e2781e2edca54",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "9b0a00f1f978abdfcf17b98e442435c737ebc3de1e2bfb245346700d60f18d91",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "feature/dia merged onto main 70df8a99 (PKG_FMT 10 / DRV_VER 11 kept): the Sticky App cells follow main's last cell, OSAPI_THM_SET's 8-byte inline cell at 0x046D - OSAPI_CLK_GET 0x0475 (SPEC.md 37.96), OSAPI_WM_DESK 0x047B and OSAPI_GFX_DESK 0x0481 (SPEC.md 11.103.9), osapi_table_end 0x0487; header flag bit 6 OS88_F_DESK, WF_DESK/WF_HOVER/IF_DESK, OSAPI_WM_TOP never answering a desk window, OSAPI_DESK_ITEM's Sticky App mark at +3 (SPEC.md 110.2) and OSAPI_WM_DESK QUERY loading DESK.DRV (SPEC.md 11.103.10). Cells appended after every existing one and contracts filled in on inputs no earlier package passed: everything built against main's SDK still runs, so no bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "6cfd133a4425ef421d43d7bba90562d044f557ef7023e39e2c58fcda2c0ff02f",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "rename only: the DIA concept is Sticky Apps (OSAPI_DIA_MARK -> OSAPI_STIK_MARK, OSAPI_DI_DIA -> OSAPI_DI_STIK, same values); nothing built before is affected",
+   "to": 10
+  },
+  {
+   "fingerprint": "ac878c472188707cb70d1cbff1e47c2d870f33531aa05680b6e01f712e78a1df",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "rename only: the DIA concept is Sticky Apps (OSAPI_DIA_MARK -> OSAPI_STIK_MARK, OSAPI_DI_DIA -> OSAPI_DI_STIK, same values); nothing built before is affected",
+   "to": 11
+  },
+  {
+   "fingerprint": "cb840b3e66b596fe66a7ad9b07f61f9c8f402799cfa71b8bdb83497b1a9b6f67",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
+   "to": 10
+  },
+  {
+   "fingerprint": "be5ce5faeec75706cd33eac4de3838f259bcc56d073cc850fc1c2ad0883c7873",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OS88_F_STIK (header flags bit 7) and OS88_STIKCARD/OS88_STIKROW/OS88_STIKCARD_END: the Sticky App card (SPEC.md 110.12), the last block of the clear prefix. ADDITIVE - no cell moved and no header field changed meaning; every package built before still runs (none sets bit 7), so no PKG_FMT bump. A new card-bearing package on an older kernel mis-places a compressed body and is refused as bad data",
    "to": 11
   }
  ]

@@ -54,12 +54,18 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 # all, which is how adding JSLOT alone would have bought nothing.
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modm', '.modu', '.modf', '.modl', '.modh', '.modp',
-        '.modd', '.modk', '.modx', '.modw')  # module images (2.8). THE UNION:
+        '.modd', '.modk', '.modx', '.modw', '.modj',
+        '.modn')  # module images (2.8). THE UNION:
         # .modm is this branch's and .modu upstream's, and a name missing here
         # is a module this tool silently does not check - which is why the
         # line carries that sentence, and why .modw joined it at the
-        # 2026-10-14 merge rather than replacing anything
-# `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone.
+        # 2026-10-14 merge, and .modj/.modn at the 2026-10-18 one, rather
+        # than replacing anything. THIS CONFLICT HAS NOW COME UP TWICE and
+        # the sentence above is what resolves it both times: take the union.
+# `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone, and
+# `.modj` deskmod.inc's DESK.DRV (SPEC.md 11.103.10), kern_big's alone too, and
+# `.modn` stikmenu.inc's STIKMENU.DRV (SPEC.md 110.12), kern_big's alone.
+# `.modm` is SHEET's MACRO.OVL (SPEC.md 81.94), this fork's alone.
 # `.modp` is Cut/Copy/Paste and kern_small's ALONE (SPEC.md 22.3,
 # docs/plans/completed/KERN-SMALL-MODULE-SPLIT.md 9.2): filecp.inc emits its bodies there on
 # that build and into `.cold` on kern_big, which is the first conditional

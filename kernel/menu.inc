@@ -77,14 +77,21 @@ CMD_SHUTDOWN equ 7
 CMD_CLOSE   equ 8               ; ids stay one lower
 %ifdef OS88_SHORTCUTS
 CMD_SCDEL   equ 9               ; Locator: File > Remove Shortcut (SPEC.md 26.8.5)
-CMD_TIMER   equ 10              ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 11
-CMD_FILES   equ 12
+CMD_FILES   equ 10
 %else
-CMD_TIMER   equ 9               ; --- Locator: Builtins (SPEC.md 12.3.1) ---
-CMD_BOUNCE  equ 10
-CMD_FILES   equ 11
+CMD_FILES   equ 9
 %endif
+CMD_STIK    equ CMD_FILES + 1   ; the Sticky Apps menu's pick, POSTED by
+                                ; STIKMENU.DRV from under the lock and spent
+                                ; by ui_cmd with nothing held (SPEC.md 110.12)
+CMD_LAST    equ CMD_STIK
+                                ; No Builtins menu on either build (SPEC.md
+                                ; 14.6, 14.8): CMD_TIMER and CMD_BOUNCE are
+                                ; gone with their kinds - the two are packages
+                                ; - and CMD_FILES survives only because ui_cmd
+                                ; still needs the id: a Disk window is opened
+                                ; from the desktop zone (SPEC.md 26.1), which
+                                ; posts it
 %else
 CMD_REBOOT  equ 5
 CMD_SHUTDOWN equ 6
@@ -95,6 +102,7 @@ CMD_CLOSE   equ 7               ; --- Locator: File ---
                                 ; id: a Disk window is opened from the desktop
                                 ; zone (SPEC.md 26.1), which posts it
 CMD_FILES   equ 8
+CMD_LAST    equ CMD_FILES
 %endif
 
 ; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
@@ -1708,6 +1716,15 @@ menu_track:
     mov [menu_ent], si
     call menu_title_xor         ; highlight the title cell (VRAM-direct, so
                                 ; no flush needed - SPEC.md 32)
+%ifdef KERN_BIG
+    mov ax, [ss:si + MB_SEG]    ; THE STICKY APPS CELL (SPEC.md 110.12): the
+    or ax, [ss:si + MB_NITEM]   ; kernel's own (MB_SEG 0, which no package's
+    jnz .plain                  ; cell is) and the one of those with no items.
+    mov bx, [ss:si + MB_XL]     ; Its panel is STIKMENU.DRV's, drawn and
+    call COLD_SEG:stm_track_x   ; tracked there; AX = 0xFFFF back, because a
+    jmp short .untitle          ; pick is posted and never dispatched
+.plain:
+%endif
 
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
     mov bx, [ss:si + MB_ITEMS]
@@ -1723,6 +1740,7 @@ menu_track:
     mov dx, MBAR_H              ; it always hangs from the bar
     mov cl, 1                   ; the LEFT button keeps a bar menu open
     call menu_pull              ; AX = item index, or 0xFFFF
+.untitle:
     call menu_title_xor         ; un-highlight the title (self-inverting)
     cmp ax, 0xFFFF
     je .out
@@ -2086,6 +2104,10 @@ menu_drop:
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
+%ifdef OS88_THEME
+    mov al, [thm_xorm]          ; the bar's XOR mask, ONCE per menu (SPEC.md
+    mov [menu_xorm], al         ; 76.14.14): a theme change while it is down
+%endif                          ; cannot make the off XOR disagree with the on
     mov byte [menu_dropd], 1    ; ...and while this is up, the keyboard mouse
                                 ; steps by ITEM rather than by KBM_MIN pixels
                                 ; (SPEC.md 9.6.3). Set HERE and not in either
@@ -2614,21 +2636,20 @@ menu_loc_name   db 'Locator', 0 ; the kernel's own application (SPEC 12.3)
                                 ; A menu item is a window title said twice by
                                 ; construction: the item OPENS the window.
 menu_s_file     equ fm_s_mfile          ; the Disk window's own File menu
-menu_s_builtin  equ fm_s_mbuilt         ; ...and its Builtins menu, which is
-                                ; the SAME menu with the same items in the
-                                ; same order (SPEC.md 12.3.1) - it was
-                                ; 'Special', and that was the wrong word
-                                ; twice over: it named a leftover rather than
-                                ; a category, and the things in it were
-                                ; somewhere ELSE on the desktop
+%ifdef KERN_BIG
+menu_s_stik     db 'Sticky Apps', 0     ; ...and the desktop's widgets (SPEC.md
+                                ; 110.12): a title with NO items, which is
+                                ; what menu_track hands to STIKMENU.DRV
+%endif
+                                ; (Its Builtins menu - Timer, Bounce, Disk -
+                                ; is gone from both bars: SPEC.md 12.3.1 put
+                                ; it in one place, 22.28 took it off the Disk
+                                ; window's, and 14.8 made the first two items
+                                ; packages, leaving a menu of one item that
+                                ; duplicated a double-click)
 
 menu_s_about    db 'About os8088...', 0
 menu_s_ctrl     equ cp_ttl              ; the Control Panel's window title
-%ifdef KERN_BIG
-menu_s_timer    equ app_ttl_timer       ; the two builtins' window titles
-menu_s_bounce   equ app_ttl_bounce
-%endif                          ; KERN_BIG - SPEC.md 14.6
-menu_s_disk     equ fm_s_root           ; the Disk window's title at the root
 menu_s_closex   db MENU_DIS     ; ...with nothing to close; ui_loc_gate points
 menu_s_close    db 'Close Window', 0    ; the item at one or the other before
 %if menu_s_close - menu_s_closex != 1
@@ -2705,12 +2726,6 @@ MENU_FILE_N equ 2
 %else
 MENU_FILE_N equ 1
 %endif
-%ifdef KERN_BIG
-menu_items_builtin:
-    dw menu_s_timer
-    dw menu_s_bounce
-    dw menu_s_disk
-%endif                          ; KERN_BIG - SPEC.md 14.6
 
 ; Locator's menu set (SPEC.md 12.3) - an ordinary SPEC.md 12.2 structure
 ; whose AM_ONCMD is 0, the one value reserved to mean "dispatched by the
@@ -2722,19 +2737,20 @@ menu_loc_set:
     dw menu_loc_name            ; AM_NAME
     dw 0                        ; AM_ONCMD: kernel-dispatched
 %ifdef KERN_BIG
-    dw 2                        ; AM_COUNT
-    dw menu_s_file,    menu_items_file,    MENU_FILE_N
-    dw menu_s_builtin, menu_items_builtin, 3
-%else
-    dw 1                        ; AM_COUNT: File alone (SPEC.md 14.6). The
-    dw menu_s_file,    menu_items_file,    1
-                                ; Builtins menu held Timer, Bounce and Disk,
-                                ; and on this build the first two do not exist
-                                ; while the third is reachable from the
-                                ; desktop's own drive zones (SPEC.md 26.1) -
-                                ; so what is left is a menu with one item that
-                                ; duplicates a double-click
+    dw 2                        ; AM_COUNT: File and Sticky Apps (SPEC.md
+%else                           ; 110.12); File alone on kern_small (SPEC.md
+    dw 1                        ; 14.6, 14.8)
 %endif
+    dw menu_s_file,    menu_items_file,    MENU_FILE_N
+%ifdef KERN_BIG
+    dw menu_s_stik,    0,                  0
+%endif
+                                ; (The Builtins menu held Timer,
+                                ; Bounce and Disk; the first two are packages
+                                ; on the apps disk now and the third is
+                                ; reachable from the desktop's own drive zones
+                                ; (SPEC.md 26.1) - so what was left was a menu
+                                ; with one item that duplicates a double-click)
 
 ; -----------------------------------------------------------------------------
 menu_s_abpfx db 'About ', 0     ; + the app's name -> menu_abstr (12.2)
@@ -2774,6 +2790,9 @@ menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
                                 ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
+%ifdef OS88_THEME
+menu_xorm:  resb 1              ; [thm_xorm] as the menu dropped (76.14.14)
+%endif
 menu_seg:   resw 1              ; the segment [menu_set] and the app's own
                                 ; strings live in; 0 = the kernel's own
                                 ; (Locator, and any built-in window)
