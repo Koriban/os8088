@@ -12058,7 +12058,21 @@ SMALLOMIT_GAMES = $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 
 # shipped system disk BECAUSE that disk has the programs that use them, and
 # spending eleven clusters of a 128KB machine's floppy on a viewer is the
 # size argument SPEC.md 24.5 forbids run in reverse.
-SMALLOMIT_ORPHAN := $(BUILD)/chart.o88 $(BUILD)/fontview.o88
+SMALLOMIT_ORPHAN := $(BUILD)/chart.o88 $(BUILD)/fontview.o88 \
+                    $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL
+# ...AND SHEET'S TWO MODULES, which rode $(APPS_TOOLS) onto every small disk
+# while SHEET ITSELF was omitted by $(SMALLOMIT) and CHART by the line above.
+# 66 clusters of a 354-cluster floppy - 47 for CHART.OVL and 19 for
+# MACRO.OVL - belonging to two packages that are not on it. That is this
+# list's own defect exactly ("a manual for a program that is not on the disk
+# is worse than no file at all"), and the filters could not catch it because
+# they name PACKAGES: a module is not its package and no rule said so.
+#
+# It had always been wasteful and had always FITTED, which is why nothing
+# noticed. The 2026-10-18 upstream merge put Timer, Bounce and three Sticky
+# Apps on the same floppy, the total went 354 -> 400, and `make` refused to
+# build it. The right answer was never a curation decision between those and
+# PLAN: it was the 66 clusters that should not have been there.
 
 # ...and it is applied EVERYWHERE $(SMALLOMIT) is - the apps list, the core
 # list, the sysapps list and both games lists - rather than only at the two
