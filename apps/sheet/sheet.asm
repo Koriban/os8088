@@ -1093,6 +1093,8 @@ SHM_BDBTN  equ 53                   ; ...and the Border dialog's (and
 SHM_FIND   equ 58                   ; Formula > Find, moved out for room
 SHM_TBLRUN equ 59                   ; 81.114.8: re-run every Data > Table
 SHM_TBLADJ equ 60                   ; 81.114.9: ...and shift their rectangles
+SHM_TBLCMD equ 61                   ; 81.114.11: TABLE() - MACRO.OVL's way to
+                                     ; the engine, which is CHART.OVL's
 SHM_DFBTN  equ 57                   ; ...the Data Form's
 SHM_NDBTN  equ 56                   ; ...the Note dialog's
 SHM_LDBTN  equ 55                   ; ...the list dialog's
@@ -1100,7 +1102,7 @@ SHM_IDBTN  equ 54                   ; ...the one-line dialog's
 SHM_FDBTN  equ 52                   ; 81.111: a dialog BUTTON FIRED (on the
                                      ; release, the library's gesture): AL =
                                      ; which, 1-based
-SHM_N      equ 58                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 59                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
@@ -1144,6 +1146,7 @@ sh_mverb:
     dw sh_m_ndbtn, sh_m_dfbtn, sh_m_find
     dw sh_m_tblrun                                        ; 81.114.8
     dw sh_m_tbladj                                        ; 81.114.9
+    dw sh_m_tblcmd                                        ; 81.114.11
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1157,6 +1160,9 @@ sh_m_tblrun:
     retf
 sh_m_tbladj:
     call sh_tbl_rcshift
+    retf
+sh_m_tblcmd:                          ; 81.114.11: CF=1 = not a table shape
+    call sh_table_run
     retf
 sh_m_doread:
     call shm_doread
@@ -39160,6 +39166,9 @@ shm_mtab:
     dw shm_mrencmd
 ; wave 4d (81.96): a custom dialog
     dw shm_mdbox
+; 81.114.11: Data > Table, the last of 81.93's "blocked on a SHEET feature"
+; that this feature unblocks
+    dw shm_mtable
 ; ...and the EXTENSION functions, SH_FID_MX.. in shm_mxnames' order. Each has
 ; a name there, a kind in shm_mkind and a BIFF row in shm_mxrpn, and the four
 ; are held to one count below.
@@ -39187,6 +39196,7 @@ shm_mkind:
                                        ; write again; FREAD moves the position
     db 0                              ; wave 4d: DIALOG.BOX, a command - it
                                        ; pauses the run
+    db 0                              ; 81.114.11: TABLE, a command
 shm_mkind_end:
 
 section SH_MODSEC                      ; 81.94: the NAMES and BIFF rows stay in
@@ -39309,6 +39319,7 @@ shm_mxnames:
     db 'CHECK.COMMAND', 0
     db 'RENAME.COMMAND', 0
     db 'DIALOG.BOX', 0
+    db 'TABLE', 0                     ; 81.114.11
     db 0
 
 ; Per extension function: its BIFF index, 1 if variable-arity, 1 if it is a
@@ -39428,6 +39439,19 @@ shm_mxrpn:
     db 0x9B, 1, 0                     ; CHECK.COMMAND
     db 0x9C, 1, 0                     ; RENAME.COMMAND
     db 0xA1, 0, 0                     ; DIALOG.BOX
+    db 0x29, 1, 1                     ; TABLE([row_in][,col_in]) - Cetab 0029H
+                                       ; and `table-params = *2(ref / val)`,
+                                       ; read out of [MS-XLS] 2.5.198.4 and
+                                       ; cross-checked against its neighbour
+                                       ; DATA.SERIES at 0028H, which this
+                                       ; table already carries. NOT GUESSED:
+                                       ; a wrong number is a file Excel runs
+                                       ; differently, which is why the CALL
+                                       ; above still says 0FFh. VARIABLE
+                                       ; (the second 1), because *2 means
+                                       ; nought to two - and the third 1 is
+                                       ; what says Cetab rather than Ftab,
+                                       ; where 0029H is DSUM
 shm_mxrpn_end:
 
 ; All four tables, one count - assembled, not preprocessed (81.83.3.3)
@@ -39456,7 +39480,7 @@ shm_mxargc:
     db 0, 0, 0, 0, 0, 0, 1, 2    ; NEW OPEN SAVE.AS FORMULA.FILL DATA.SERIES FOPEN FCLOSE FREAD
     db 1, 2, 2, 0, 1, 0, 0, 0    ; FREADLN FWRITE FWRITELN FPOS FSIZE ON.KEY ON.TIME ADD.BAR
     db 0, 1, 0, 0, 0, 0, 0, 0    ; SHOW.BAR DELETE.BAR ADD.MENU ADD.COMMAND DELETE.MENU DELETE.COMMAND ENABLE.COMMAND CHECK.COMMAND
-    db 0, 1                      ; RENAME.COMMAND DIALOG.BOX
+    db 0, 1, 0                   ; RENAME.COMMAND DIALOG.BOX TABLE
 shm_mxargc_end:
     times ((shm_mxargc_end - shm_mxargc) - SHM_MX_N) db 0
     times (SHM_MX_N - (shm_mxargc_end - shm_mxargc)) db 0
@@ -43065,6 +43089,52 @@ shm_mprevno:
     jmp shm_merr
 
 ; PARSE(parse_text) - Data > Parse's bracket line, as typed
+; =============================================================================
+; TABLE([row_input][, column_input]) - Data > Table, as a macro (81.114.11).
+; Cetab 0029H, and the document gives `table-params = *2(ref / val)`, which
+; is the two optional references this takes.
+;
+; EITHER ARGUMENT MAY BE OMITTED, and that is not a refusal: it is how a
+; one-input table says which kind it is, exactly as the dialog's empty field
+; does (81.114.1). Both omitted leaves nothing to substitute, and the engine
+; refuses that the same way it refuses it from the dialog.
+;
+; THE SELECTION IS THE RECTANGLE, as it is for the command - a macro selects
+; first. The engine is CHART.OVL's and this is MACRO.OVL, so it goes through
+; a verb rather than a near call.
+; =============================================================================
+shm_mtable:
+    mov word [sh_tbl_ir], SH_TBL_NONE
+    mov word [sh_tbl_ic], SH_TBL_NONE
+    mov word [sh_tbl_ir2], SH_TBL_NONE
+    mov word [sh_tbl_ic2], SH_TBL_NONE
+    cmp byte [si], ','                ; TABLE(,B1): no row input cell
+    je .second
+    cmp byte [si], ')'                ; TABLE(): neither, which the engine
+    je .run                           ; refuses below
+    call shm_mref
+    jnc .bad
+    mov [sh_tbl_ic], ax
+    mov [sh_tbl_ir], bx
+.second:
+    cmp byte [si], ','
+    jne .run
+    inc si
+    cmp byte [si], ')'                ; TABLE(A1,): no column input cell
+    je .run
+    call shm_mref
+    jnc .bad
+    mov [sh_tbl_ic2], ax
+    mov [sh_tbl_ir2], bx
+.run:
+    SHOUT sh_skipargs
+    CHOUT SHM_TBLCMD                  ; the engine, in the other module
+    jc .bad                           ; not a table shape
+    mov byte [sh_macro_dirty], 1
+    jmp shm_mtrue
+.bad:
+    jmp shm_merr
+
 shm_mparse:
     call shm_textfirst
     jc .bad

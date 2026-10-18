@@ -4,8 +4,11 @@
 
 `Data ▸ Table` is the **only menu command still genuinely missing** from
 SPEC.md §81.39's inventory — printing (no OS backend) and MDI (struck on
-purpose) aside. It also blocks 13 declined macro names, `TABLE` among them
-(§81.93).
+purpose) aside. It also blocks **one** declined macro name, `TABLE` — this
+line said "13 declined macro names, `TABLE` among them", which miscounted
+§81.93's whole "blocked on a SHEET feature" list as though this feature
+unblocked all of it. It unblocks exactly the one (§81.93); corrected when
+stage 5 went to read that list.
 
 The owner chose the **fully Excel-faithful** shape over a one-shot fill: the
 result cells carry a real table formula, cannot be edited, recalculate, and
@@ -199,7 +202,16 @@ restore. One full evaluation per cell — Excel's own cost, and the reason
    and reads back substituting along the wrong axis. Both directions
    translate. `tests/sheettblbiff.py`, 6 checks, 8 mutations.
 
-5. **The `TABLE` macro command**, which unblocks §81.93's 13.
+5. **The `TABLE` macro command.** *(DONE — SPEC.md §81.114.11.)* Which
+   unblocks exactly ONE of §81.93's thirteen, not all of them — see the
+   correction at the top of this file. The Cetab number was looked up
+   (`0029H`, `[MS-XLS]` 2.5.198.4) and the host's `--selfcheck` caught the
+   first attempt writing it as an Ftab index, where `0029H` is `DSUM`.
+   Reading §81.93 properly also found `WORKSPACE` no longer blocked — §81.106
+   built its dialog and nobody re-read the list.
+   **WITH THIS THE FEATURE IS FINISHED**: all five stages, and §81.39 has no
+   menu command Excel 2.1d has that this app does not, printing and MDI
+   aside.
 
 ## Verification
 

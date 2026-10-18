@@ -128788,8 +128788,17 @@ Neither defect is exotic and neither needed a clever test. They needed **one
 reader that had not been written by the same hand as the writer.**
 
 
-### 81.39 What SHEET still lacks, measured (2026-09-11)
+### 81.39 What SHEET still lacks, measured (2026-10-18)
 
+> **Re-measured 2026-10-18 for §81.114's completion**, and TWO rows were
+> stale: Data, which still named `Table` as missing, and Options, which
+> still named `Workspace` — §81.106 had built that one, and the row's own
+> count of 6 already included it, so the row disagreed with itself. Both
+> were found by grepping the finished feature's name through every
+> blocked/missing list, which is the habit §81.114.11 records. **The table
+> is now: nothing missing anywhere except printing and what is struck as
+> MDI.**
+>
 > **Re-measured 2026-10-16, and the Macro row was not stale — it was
 > INVENTED.** It read "Macro | 4 | ~6 | Start Recorder, Resume". `Start
 > Recorder` shipped in §81.107, so that half was merely out of date. The
@@ -128810,8 +128819,10 @@ reader that had not been written by the same hand as the writer.**
 > the gap exists.** An inventory written from memory of the product invents
 > requirements as readily as it forgets closed ones, and a phantom costs
 > more than a stale row - it sends someone to build something the reference
-> does not have. **The only menu command still genuinely missing anywhere
-> below is `Data ▸ Table`.**
+> does not have. The only menu command still genuinely missing anywhere
+> below was `Data ▸ Table`, and **it is built** (§81.114, five stages):
+> **nothing in this inventory is missing now**, printing (no OS backend) and
+> MDI (struck on purpose) aside.
 >
 > **Re-measured 2026-09-22**, after the macro language was finished: every
 > name in Excel 2.x's macro vocabulary is now built or declined with its
@@ -128866,8 +128877,8 @@ harmless.
 | Format | 8 | 8 | **none** — Justify closed in §81.81 |
 | File | 5 | 11 | Page Setup, Printer Setup, Print (printing, out of scope) — `Delete` closed in §81.79. **Struck as MDI** (2026-09-22): Links and Save Workspace, which exist to reach and to re-open OTHER documents, and Close, which came off this list 2026-09-20 as `Exit`'s case one step on |
 | Window | 0 | 5 + the window list | **the whole menu is struck as MDI**: New Window, Show Info, Arrange All, Hide, Unhide and the list of open windows all manage document windows, and SHEET has one. So is the Control menu's document half - Maximize, Restore and Close of a DOCUMENT window (§81.93's MDI group has the macro side) |
-| Options | 6 | 10 | Set Print Area/Titles/Page Break (printing, out of scope), Workspace; **Short Menus DROPPED** (the owner's decision, 2026-09-22) — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
-| Data | 12, 9 shared | 10 | **Table** — Parse closed in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69). `Table` is the one genuinely multi-cell feature left in this row, and now the only one |
+| Options | 6 | 10 | Set Print Area/Titles/Page Break (printing, out of scope) — **and `Workspace` came off this list in §81.106**, which built its check-box dialog. THE ROW CONTRADICTED ITSELF for that whole time: the count of 6 already included Workspace while the missing column still named it. Third stale row in this table, after `Calculate Now` and `Resume`. **Short Menus DROPPED** (the owner's decision, 2026-09-22) — **`Calculate Now` closed in §81.78 and this row still said it was missing**, which is this table going stale in one row for the second time; re-measure it, never quote it. (Gridlines and Formulas are Excel's Display... as two toggles; Freeze Panes closed 2026-09-18, §81.70) |
+| Data | 13, 9 shared | 10 | **none** — `Table` closed in §81.114 (five stages, 2026-10-18); Parse in §81.82, Series 2026-09-19 (§81.72), Form/Find/Extract/Delete 2026-09-18 (§81.71), Set Database/Set Criteria the same day (§81.69) |
 | Macro | 5 | **5** | **none** — Record, Set Recorder and Relative/Absolute Record closed 2026-09-19 (§81.74) and `Start Recorder` in §81.107. **`Resume` IS NOT AN EXCEL 2.1d COMMAND AT ALL** — see the note below; this row carried it as missing work for its whole life |
 
 `Exit` is absent from File deliberately — the OS menu owns it (§12.2) — and
@@ -128925,8 +128936,11 @@ Almost everything above hangs off six pieces of work:
 2. ~~Array formulas~~ — **turned out not to gate anything**: §81.67 found
    every one of the 8 functions can answer its own top-left element without
    multi-cell entry, matching Excel's own non-CSE behaviour, so all 8 are
-   done or in progress without it. `Data ▸ Table` remains undone - it is
-   genuinely a multi-cell feature, not just an array-returning function.
+   done or in progress without it. `Data ▸ Table` was the one thing left
+   that is genuinely a multi-cell feature rather than an array-returning
+   function, and **§81.114 built it** without array formulas either: a
+   result cell holds a stored value that the table engine recomputes, which
+   is what Excel's own `tTbl` describes.
 3. ~~A database + criteria area~~ — **done in §81.65** (the 11 functions),
    §81.69 (`Data ▸ Set Database`/`Set Criteria`) and **§81.71, which spent
    it**: `Data ▸ Find`, `Extract`, `Delete` and `Form` added no matching
@@ -130255,8 +130269,10 @@ row would have been off the glass, where the failure reads as "no grid".
 
 §81.39's inventory had exactly one menu command left that Excel 2.1d has and
 this app does not, printing (no OS backend) and MDI (struck on purpose) aside.
-This is it, and it also unblocks 13 declined macro names, `TABLE` among them
-(§81.93). `docs/plans/SHEET-TABLE-PLAN.md` carries the full reading of the
+This is it, and it unblocks **one** declined macro name, `TABLE` (§81.93) -
+this said "13 declined macro names, `TABLE` among them", which counted that
+section's whole "blocked on a SHEET feature" list as though this feature
+unblocked all of it. **Built in five stages**, §81.114.1 to §81.114.11. `docs/plans/SHEET-TABLE-PLAN.md` carries the full reading of the
 Reference Guide and of the file format, and the staging; this section is what
 is built.
 
@@ -131090,6 +131106,98 @@ go stale against it. That ordering is §81's format-gate rule: the host
 authors the input and verifies the output independently, so a writer defect
 and a reader defect cannot cancel — the trap that gate has already caught
 twice.
+
+#### 81.114.11 Stage 5 — `TABLE`, and the feature is finished
+
+`TABLE([row_input][, column_input])` is Excel's macro equivalent of
+`Data ▸ Table`, and with it **`Data ▸ Table` is complete** — §81.39's
+inventory now has no menu command Excel 2.1d has and this app does not,
+printing (no OS backend) and MDI (struck on purpose) aside.
+
+**Either argument may be omitted, and that is not a refusal**: it is how a
+one-input table says which kind it is, exactly as the dialog's empty field
+does (§81.114.1). Both omitted leaves nothing to substitute, and the engine
+refuses that the same way it refuses it from the dialog. The **selection**
+is the rectangle, as it is for the command.
+
+The engine is `CHART.OVL`'s and this is `MACRO.OVL`, so `TABLE` reaches it
+through a verb rather than a near call — `SHM_TBLCMD`, the shape §81.94
+established for every crossing between the two modules.
+
+##### The Cetab number was looked up, not guessed
+
+`TABLE` is **Cetab `0029H`**, and `[MS-XLS]` 2.5.198.4 gives
+`table-params = *2(ref / val)` — nought to two parameters, so the row is
+**variable** arity. Its neighbour `DATA.SERIES` at `0028H` is already in
+this tree's table, which is the cross-check that the numbering is the one
+being read.
+
+That mattered: the first row written here was `0x29, 0, 0`, and
+`tools/os88sheetfmt.py --selfcheck` refused the build with *"TABLE is Ftab
+index 41, which is DSUM"* — the third byte is what says Cetab rather than
+Ftab, and `0029H` in the Ftab really is `DSUM`. The host validating the
+assembler's tables against the document is what caught it in one build, and
+it is the same guard that keeps §81.63's `0FFh` honest: a guessed opcode is
+a file Excel runs differently.
+
+##### Two stale counts, found by going to read the list
+
+Stage 5's whole job was in §81.93, and reading it properly found that
+list wrong twice:
+
+- **the plan said this feature unblocks "13 declined macro names"**. It
+  unblocks **one**. Thirteen is the size of §81.93's whole "blocked on a
+  SHEET feature" list, of which `TABLE` is a single entry; the other twelve
+  are blocked on other missing commands. That sentence has been corrected
+  where it stands, with what it used to say.
+- **`WORKSPACE` had stopped being blocked** and nobody re-read the list.
+  §81.106 gave `Options ▸ Workspace...` its check-box dialog, which is the
+  command `WORKSPACE` drives. It moves to **not yet decided** rather than
+  being quietly built — the dialog exists, the decision does not.
+
+A list of "blocked on something that does not exist yet" goes stale the
+moment the thing arrives, and nothing re-reads it. This is the same shape as
+§81.114.8's `CALCULATION(2)` comment, which reasoned from a feature's
+absence and was never revisited when the feature came.
+
+##### Evidence
+
+`tests/sheetmcmd.py`, the command-equivalents gate, **24 checks** now. Three
+are `TABLE`'s: the near result and the far one of a one-input table built by
+`TABLE(,L25)` over a selected `M21:O23`, and **the input cell afterwards** —
+`L25` is not in the fixture at all, so a run that failed to put it back
+would leave the last substituted value in a cell the user never filled
+(§81.114.4). No two of the four results agree, so a substitution that went
+to the wrong cell cannot land on a right answer.
+
+Mutations, each built and run **twice**, and these are the runs' own numbers:
+
+| mutation | fails |
+|---|---|
+| the engine never reached | the two result checks |
+| an empty first argument refused instead of accepted | those two, the input-cell check, **and the run never reaching its end** |
+| the column input cell stored as a **row** one | the two result checks |
+
+The third is the pair §81.114.10 showed the two conventions disagree about,
+and it is worth a mutation of its own for that reason.
+
+**The input-cell check has no mutation HERE, and that is said rather than
+glossed**: it fails only under the mutation that halts the run, which is not
+a test of the restore. The restore itself is `sh_table_unbank`'s `.gone`
+arm, and `tests/sheettbl2.py`'s own mutation of that arm fails its check 9
+alone — the same code, covered in the row that owns it.
+
+##### What stage 5 cost
+
+| | stage 4 | stage 5 |
+|---|---|---|
+| region | 61,318 of 61,440 | **61,318 — 122 spare, unchanged** |
+| `MACRO.OVL` | 18,747 of 28,672 | 18,831 |
+| `CHART.OVL` | 50,908 of 52,224 | 50,924 |
+
+**Not one resident byte.** The handler is `MACRO.OVL`'s, the verb is twelve
+bytes of `CHART.OVL`, and the four positional tables it appends to are the
+module's own.
 
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
 
@@ -132630,21 +132738,34 @@ and the five with no decision yet are listed last.
   OVERLAY.CHART.TYPE, PATTERNS, PREFERRED, SCALE, SELECT.CHART,
   SELECT.PLOT.AREA, SET.PREFERRED.
 
-**Blocked on a SHEET feature (13).** Each drives a command SHEET does not
+**Blocked on a SHEET feature (11).** Each drives a command SHEET does not
 have, and the function comes cheaply with the command:
 
 - APPLY.NAMES, CREATE.NAMES, DELETE.FORMAT, FORMULA.REPLACE, HELP,
-  SELECT.SPECIAL, SHOW.CLIPBOARD, STYLE, TABLE and WORKSPACE,
+  SELECT.SPECIAL, SHOW.CLIPBOARD and STYLE,
   from the plan - SHOW.CLIPBOARD stays here rather than under MDI: the
   Reference Guide has it run Windows' separate Clipboard UTILITY, not open a
-  document window, and WORKSPACE is the display-settings dialog (fixed
-  decimals, R1C1, the scroll, status and formula bars), not window control;
+  document window;
 - FORMULA.ARRAY, FILL.LEFT and FILL.UP, from wave 3 (§81.90.1).
 
-**Not yet decided (5):** A1.R1C1 (Options ▸ Workspace's reference style -
-§81.39.2's Preferences question), COPY.PICTURE, FILES, GET.BAR and
-REPLACE.FONT. None is MDI; each is a small build or a decline nobody has
-taken yet.
+**This list was 13 and the count was stale twice over**, which is what a
+list of "blocked on something that does not exist yet" does when the thing
+arrives and nobody re-reads it:
+
+- **TABLE is built** (§81.114.11). It was the only one of the thirteen that
+  `Data ▸ Table` unblocks - the plan's "it also unblocks 13 declined macro
+  names" counted the whole list rather than the one entry, and that sentence
+  has been corrected where it stands.
+- **WORKSPACE's blocker went in §81.106**, which gave `Options ▸
+  Workspace...` its check-box dialog. It had been sitting here as blocked on
+  a command that already existed. It is **not yet decided** below now rather
+  than silently built: the function reads and writes settings whose dialog
+  exists, but nobody has taken that decision.
+
+**Not yet decided (6):** A1.R1C1 (Options ▸ Workspace's reference style -
+§81.39.2's Preferences question), COPY.PICTURE, FILES, GET.BAR,
+REPLACE.FONT and WORKSPACE (above). None is MDI; each is a small build or a
+decline nobody has taken yet.
 
 #### 81.93.1 The 64 KB wall - resolved by §81.94
 

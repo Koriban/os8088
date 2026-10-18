@@ -250,6 +250,10 @@ BIFF_CETAB = {
     0x05: 'SAVE.AS',
     0x06: 'FILE.DELETE',
     0x28: 'DATA.SERIES',
+    # 81.114.11: Data > Table. [MS-XLS] 2.5.198.4 gives 0029H and
+    # `table-params = *2(ref / val)`, which is its two optional references -
+    # cross-checked against DATA.SERIES at 0028H, directly above.
+    0x29: 'TABLE',
     0x61: 'FORMULA.FILL',
     0x77: 'NEW',
 }

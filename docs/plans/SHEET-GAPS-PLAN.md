@@ -242,8 +242,12 @@ look like one and are not:
 
 ### 2.4 The two large ones
 
-**`Data ▸ Table`** — the one genuinely multi-cell feature left, and §81.39.4
-names it as the single thing array formulas would have gated (*"it is
+**`Data ▸ Table`** — ***DONE, SPEC.md §81.114, in five stages.*** What
+follows is the sizing this file did BEFORE it was built; the record of what
+was actually built is §81.114.1–§81.114.11 and
+`docs/plans/SHEET-TABLE-PLAN.md`. It was the one genuinely multi-cell
+feature left, and §81.39.4 names it as the single thing array formulas would
+have gated (*"it is
 genuinely a multi-cell feature, not just an array-returning function"*). A one-
 or two-input table substitutes each row/column heading into an input cell and
 recomputes a formula across the block. It needs: the table range, the input
@@ -290,9 +294,12 @@ fix, not a language one, and it can be done first and alone.
    split is (character positions, not delimiters).
 5. ~~**The macro language**~~ — **done** (§81.83-§81.97), in this order:
    the Normal-save fix, subroutines, `OFFSET`, and custom dialogs last.
-6. **`Data ▸ Table`** last of the features: it is the most self-contained large
-   item, so it loses least by waiting, and it wants module room that the macro
-   work may move around.
+6. ~~**`Data ▸ Table`**~~ — **done** (§81.114), last of the features as
+   planned: it was the most self-contained large item, so it lost least by
+   waiting, and it wanted module room the macro work had moved around. It
+   took `CH_OVKB` from 48 to 51 and **nine resident bytes across all five
+   stages**, the engine, both file halves and the shifter all being
+   `CHART.OVL`'s.
 
 **~~`Edit ▸ Repeat` is deliberately unplaced.~~** Dropped by the owner, 2026-09-22 - the scope decision below was taken by not building it. It is cheap or unbounded
 depending entirely on a scope decision nobody has taken yet, and it should not
@@ -308,9 +315,9 @@ Macro 4), which agrees with §81.39.2.
 
 | | cost | note |
 |---|---|---|
-| **`Data ▸ Table`** | large, module | Section 2.4. The last multi-cell feature; the one Data command left |
+| ~~**`Data ▸ Table`**~~ | **DONE** | §81.114, five stages. Section 2.4 keeps the pre-build sizing |
 | **`Macro ▸ Resume`** (Start Recorder done, §81.107) | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
-| `Options ▸ Workspace` | unscoped | in §81.39.2's missing list, never sized here |
+| ~~`Options ▸ Workspace`~~ | **DONE** | §81.106 built its check-box dialog; this row and §81.93's `WORKSPACE` entry were both stale until §81.114.11 went to read them |
 | printing (6 commands) | out of scope | by decision; no print backend in the OS |
 
 **Dropped by the owner** (2026-09-22): `Options ▸ Short Menus` and

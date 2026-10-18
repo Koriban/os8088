@@ -92,6 +92,27 @@ STEPS = [
     ('CANCEL.COPY()', None),
     ('PRECISION(TRUE)', None),
     ('CALCULATE.DOCUMENT()', None),
+    # 81.114.11: TABLE, the macro equivalent of Data > Table and the last of
+    # 81.93's "blocked on a SHEET feature" that the feature unblocks. The
+    # rectangle is the SELECTION, formulas and input values and all, exactly
+    # as the command takes it; the EMPTY first argument is how a one-input
+    # table says it has a COLUMN input cell, the same thing the dialog's
+    # empty field says.
+    ('SELECT(M21:O23)', None),
+    ('TABLE(,L25)', None),
+    (None, (22, 'N22', 8.0,
+            "TABLE(,L25) over M21:O23 - N21 is =L25*2 and M22 is 4, so the "
+            "result is 8. The empty first argument is NOT a refusal: it is "
+            "how a one-input table says which kind it is")),
+    (None, (23, 'O23', 19.0,
+            "...and the far corner: O21 is =L25+10 over M23's 9. No two of "
+            "the four results agree, so a substitution that went to the "
+            "wrong cell cannot land on a right answer")),
+    (None, (24, 'L25', 0.0,
+            "AND THE INPUT CELL IS BACK. L25 is not in the fixture at all, "
+            "so a table that failed to put it back would leave the last "
+            "substituted value sitting in a cell the user never filled "
+            "(81.114.4) - and SET.VALUE reads it as 0 when it is empty")),
     (None, (19, '1', 1.0, "the run reached the end")),
 ]
 
@@ -99,7 +120,14 @@ STEPS = [
 def build_disk():
     os.makedirs(WORK, exist_ok=True)
     cells = {(2, 2): 33.0, (1, 3): 5.0, (1, 4): ('formula', 'RC[-1]*2', 10.0),
-             (80, 10): 7.0}
+             (80, 10): 7.0,
+             # 81.114.11's table: M21:O23 with the formulas across the top
+             # row and the values down the left column. Its input cell L25
+             # is DELIBERATELY ABSENT, which is 81.114.4's other arm.
+             (20, 13): ('formula', 'L25*2', 0.0),     # N21
+             (20, 14): ('formula', 'L25+10', 10.0),   # O21
+             (21, 12): 4.0,                           # M22
+             (22, 12): 9.0}                           # M23
     r = 0
     for stmt, chk in STEPS:
         f = stmt if stmt else 'SET.VALUE(H%d,%s)' % (chk[0], chk[1])
