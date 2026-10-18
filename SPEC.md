@@ -74505,14 +74505,57 @@ the row reads a decision already taken.
 - Mode 12h output must be **byte-identical** before and after, since one body
   now serves both. This is the classic failure of a change like this and it is
   what catches a `jnc` written at twelve sites instead of thirteen.
+  **MET** — `tests/vbeident.py --ref`, three settled frames at 307,200 pixels
+  each, 0 differing; and the gate is proved sensitive by a one-bit poke of
+  `gfx_lmtab[0]` moving 97 and 117 of them.
 - The banking gate is **mutation-tested**: force the window to the wrong bank
   and the gate must fail. A banking test that passes while banking is broken is
   the defect class §39.28.2.2 already records against this very feature.
+  **PART MET, and the part that is not is named.** The CUT is
+  mutation-tested — skipping one row at the boundary inside `vbe_cut_run`
+  reddens `--cutrow 200` with a bounding box of exactly the poked row — but
+  the BANK SELECT is not, because on mode 12h there is no window to move, so
+  the mutation has nothing to act on. That one needs 86Box or the Satellite.
+- **The banked mode itself is now exercised** (§39.29.9.1), which it was not
+  when this list was written.
 - **QEMU cannot test any of this.** Its `0104h` window is not CPU-addressable
   at `A000` — `tests/vbeset`'s raw probe reads `00 00 00 00` there against
   `A5 A5 A5 A5` in mode 12h — exactly as its own attribute word (`003B`, bit 5
   set) advertises. Every stage is verified on the Satellite 4025CDT
   (docs/FIELD-MACHINES.md) and photographed.
+##### 39.29.9.1 The cut, in the mode it exists for: 86Box, 1024x768
+
+`make vbebox` and `make VBEDIAG=1 build/vbeos.img` + `tools/os88box.py`, run
+2026-10-18 against the kernel §39.29.10.5 landed in. **86Box's Trident is the
+only card in this tree that enters `0104h`**, so until this the straddle cut
+had only ever been exercised by poking `[vbe_cutrow]` on mode 12h — a test
+that proves the cut is pixel-neutral and says nothing about the bank.
+
+Three readings, and the third is the one that carries:
+
+1. **A correct 1024x768 desktop.** Chrome at the TOP, the floppy icon in its
+   corner, and the dither unbroken through row 512. The desktop fill spans
+   rows 0..767, so it is a rect the cut SPLITS: this picture is the cut's
+   output in the banked mode. It is also the negative of §39.29.10's own
+   failure — *"the whole chrome appeared 512 rows down the panel"* — which is
+   what a bank left mapped from the previous primitive looks like.
+2. **A window drawn WHOLE across the boundary.** `VBEDIAG=1`'s window lands at
+   470..670 by construction (§39.29.12), and the photograph shows title bar,
+   frame, content, shadow and both corner boxes drawn once, in one piece, with
+   no tear at 512 and no half of it 512 rows away.
+3. **The screen after the round trip is BYTE-IDENTICAL to the screen before
+   it.** The window is dragged down across the boundary and back up; the
+   framebuffer PNG before the drag and the one after it have the same
+   SHA-256. No ghost at the vacated rect — §39.29.11's defect staying fixed —
+   and no residue anywhere else, at whole-screen resolution.
+
+**What it still does not answer** is §39.29.8.2's standing limit, unchanged:
+86Box's card is a **Trident** and the field machine a **NeoMagic**, whose bank
+register is elsewhere, so anything touching the card's own BIOS is the
+Satellite's to confirm. This boots INTO the mode, so `vga_save_vram` — which
+keeps its per-row test (§39.29.10.6) — runs only for the menu drop and the
+window drag, not for a mode switch with windows already up.
+
 ### 39.30 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
 
 **A VGA BIOS decides colour or monochrome ONCE, at POST, and never asks
