@@ -52,6 +52,10 @@ THE FRAMES, chosen so the rect primitives are all on the glass at once:
   calc   ...plus the Calculator, which is the one package in the tree chosen
          for having nothing that moves (dispcorner.py's SUBJECT: no worker, no
          clock, it draws once and stops)
+  paint  ...plus Paint - a fourth window of chrome, captured always and
+         compared only between two runs of one build. It does NOT reach
+         gfx_blitp's planar path; the note beside EXTRA says why, and that
+         note is the correction of what this frame was added for
 And a fourth check that needs NO reference, because it compares this kernel
 against itself: the System menu is dropped and dismissed with no command, and
 the screen afterwards must be byte-identical to the screen before. That is the
@@ -80,7 +84,23 @@ import os88geom as geom                                  # noqa: E402
 
 MBAR_H = geom.MBAR_H
 PARK = (4, MBAR_H + 4)
-FRAMES = ("desk", "disk", "calc")
+FRAMES = ("desk", "disk", "calc")       # the ones a --save/--ref carries
+# ...and one more, captured always and compared only between two runs of the
+# SAME build, so it needs no stored reference.
+#
+# **IT DOES NOT REACH `gfx_blitp`, AND IT WAS ADDED BELIEVING IT WOULD.** The
+# intent was to gate 39.29.10.5's straddle test on gfx_blitp's plane-major
+# path, Paint being the kernel's only caller of it - and the mutation says
+# otherwise: breaking gfx_blitp's general `.row` path by a byte changes
+# nothing in this frame. Paint opens with a PACKED canvas, ASKS whether
+# gfx_blitp works during a repaint (SPEC.md 5.4.3.2's probe), converts with
+# pt_toplanar only if told yes, and blits planar from the repaint AFTER that -
+# so one open and one settle never gets there. What the frame is worth is
+# what it turned out to be: a fourth window's worth of chrome, fills and
+# frames on the mode 12h identity surface. Reaching the planar path would
+# need the conversion forced and a second repaint driven, which is
+# tests/paintpack.py's territory.
+EXTRA = ("paint",)
 
 
 def u16(b, i=0):
@@ -169,6 +189,12 @@ def exercise(image="build/os8088.img", apps="build/apps.img",
         ui.settle()
         caps["calc"] = capture(m)
 
+        ui.open_drive("B")              # back to the Disk window: `path`
+        ui.path("APPS/PAINT.O88")       # walked it into APPS/ already
+        mo.to(*PARK)
+        ui.settle()
+        caps["paint"] = capture(m)
+
         # ...and the save-under round trip: drop the System menu and dismiss
         # it with no command (press and release on the title itself), then
         # the screen must be what it was. No reference needed - this one
@@ -205,9 +231,9 @@ def load(path):
     return out
 
 
-def compare(new, ref):
+def compare(new, ref, frames=FRAMES):
     bad = []
-    for k in FRAMES:
+    for k in frames:
         if k not in ref:
             bad.append("the reference has no %r frame" % k)
             continue
@@ -250,7 +276,8 @@ def main():
     bad = []
     # the self-consistency check first: it needs no reference and it is the
     # one assertion here that holds on a FIRST run, before any --save exists
-    d = diff(caps["_saveu"]["data"], caps["calc"]["data"], caps["calc"]["w"])
+    d = diff(caps["_saveu"]["data"], caps["paint"]["data"],
+             caps["paint"]["w"])
     print("   save-under round trip: %d differing pixel(s)%s"
           % (len(d), "" if not d else "   bbox %r" % (bbox(d),)))
     if d:
@@ -269,7 +296,7 @@ def main():
         print("   the SAME build with the straddle cut forced at row %d:"
               % a.cutrow)
         d = compare(exercise(a.image, a.apps, a.machine, knobs=tuple(a.knob),
-                             cutrow=a.cutrow), caps)
+                             cutrow=a.cutrow), caps, FRAMES + EXTRA)
         if d:
             bad += ["the straddle cut is NOT pixel-neutral: " + x for x in d]
         else:
@@ -278,11 +305,11 @@ def main():
     if a.twice:
         print("   second run of the SAME build:")
         bad += compare(exercise(a.image, a.apps, a.machine,
-                                knobs=tuple(a.knob)), caps)
+                                knobs=tuple(a.knob)), caps, FRAMES + EXTRA)
     if a.mutate:
         print("   the MUTANT (gfx_lmtab[0] ^ 1):")
         d = compare(exercise(a.image, a.apps, a.machine, knobs=tuple(a.knob),
-                             mutate=True), caps)
+                             mutate=True), caps, FRAMES + EXTRA)
         if not d:
             bad.append("the MUTANT produced an identical screen: these "
                        "captures do not reach gfx_rect_setup and this gate "

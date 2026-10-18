@@ -2920,6 +2920,21 @@ gfx_blitp:
     jbe .row                    ; borrow, when y is off it either way...
     cmp ax, dx
     jb .row                     ; ...and fewer than the block: .row skips them
+    ; ...AND NOT ACROSS A BANK BOUNDARY (SPEC.md 39.29.10.5). The fast path's
+    ; own account above says why it cannot be: it holds the block's first
+    ; framebuffer byte and steps by [vid_stride], "every planar surface being
+    ; ONE bank". A straddling block goes to .row, which calls gfx_rowbase for
+    ; EVERY row and so homes the window for every row - the general path the
+    ; plan always intended for this, and what 39.29.10 already does for
+    ; gfx_scroll. Two compares and an add, once a blit, both falling through
+    ; on every mode but 0104h because [vbe_cutrow] is 0xFFFF there and no
+    ; block can reach row 65,535.
+    cmp bx, [vbe_cutrow]
+    jae .row                    ; starts at or past a boundary
+    mov ax, bx
+    add ax, dx
+    cmp ax, [vbe_cutrow]
+    ja .row                     ; ...or ends past one
     mov ax, bx
     mov bx, dx                  ; BX = the rows, again for every plane
     push cx                     ; gfx_rowbase's calc path writes CL and DX
@@ -2936,9 +2951,11 @@ gfx_blitp:
     mov ah, 1                   ; this plane's Map Mask bit
 .fpl:
     pop di
-    push di
-    VBHOME                      ; every plane restarts at the block's first byte
-                                ; - so the window must come back too
+    push di                     ; every plane restarts at the block's first
+                                ; byte - and needs no vbe_home with it, the
+                                ; test above having confined this block to one
+                                ; bank, so the window has not moved since
+                                ; gfx_rowbase homed it (SPEC.md 39.29.10.5)
     push si
     push ax
     mov dx, VGA_SEQ
@@ -2951,7 +2968,7 @@ gfx_blitp:
     mov cx, [ss:vga_pr_n]
     rep movsb
     add si, ax
-    VBROWR di, bp
+    VBSTEPR di, bp              ; no bank test: one bank, by the test above
     dec dx
     jnz .frow
     pop ax

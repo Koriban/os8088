@@ -74263,7 +74263,7 @@ where the coordinates are already the display's own.
 | what a mode 12h machine pays | `cmp dx, [vbe_cutrow]` and a **not-taken** `jae`, once per primitive — about 17 clocks against `gfx_fill`'s 2,405-cycle floor |
 | what it pays per row | **nothing** |
 | `[vbe_cutrow]` | the first row of bank 1, or **0xFFFF** on every mode but 0104h. One unsigned compare therefore answers *"this surface is not banked"* and *"this rect does not straddle"* at once, with no kind test in it. Published by `vid_apply`, the one funnel every mode application goes through |
-| resident cost | `.text` **+96**, `.bss` +0, `.cold` +0, no rung crossed — nine `jnc`+`call` pairs and six `vbe_home` calls removed, against three arms, three tests, `vbe_cut_run` and `vid_apply`'s publish |
+| resident cost | `.text` **+104** with §39.29.10.6's `gfx_blitp` test (+96 without), `.bss` +0, `.cold` +0, no rung crossed — nine `jnc`+`call` pairs and six `vbe_home` calls removed, against three arms, three tests, `vbe_cut_run` and `vid_apply`'s publish |
 | what it BOUGHT, measured | every rect primitive **10 to 19% faster than the kernel that shipped** — `GFX_FILL 64x64` -19.45%, `GFX_VLINE 128px` -19.42%, `GFX_XOR_RECT 256x128` -16.40%, `GFX_FRAME 64x64` -15.21% (PERFORMANCE.md Set 162). Four rows beat even the `NOVBEROW=1` no-test floor, because `VBHOME` had no knob and so was paid by BOTH of Set 161's arms. A small rect is 1.6-2.7% above that floor and break-even against the shipped kernel: six bytes at the 8088's fetch floor, once |
 
 **The three hooks are on `vga_solid_rect`, `gfx_fill_gray_raw` and
@@ -74302,7 +74302,6 @@ that other position from the beginning:
 
 | | what else positions it | still on `VBROW` |
 |---|---|---|
-| `gfx_blitp`'s plane-major path | the SOURCE row, which advances with y | yes |
 | `vga_save_vram` / `vga_restore_vram` | the save-under BUFFER offset, which is cumulative across the rect | yes |
 | `font_char` | 8 rows, and the glyph row index | yes |
 | `ico_pass` | up to 32 rows, and the icon row index | yes |
@@ -74311,11 +74310,42 @@ that other position from the beginning:
 Their measured share is smaller by the same arithmetic that made the rect
 primitives' large: a fixed 8, 12 or 32-row shape pays 22 cycles a row over a
 few rows (`FONT_CHAR` measured **+3.3%**), where a rect pays it over up to 128
-rows times three walks. `gfx_blitp` at **+10.3%** is the one worth revisiting,
-and the shape of the answer is known — give the cut a source-row adjustment per
-piece — but it is not this pass.
+rows times three walks.
 
-`VBHOME` survives for exactly those five: a primitive that walks its rect once
+**`gfx_blitp` WAS on that list at +10.3% and is not any more**, and it took a
+different answer from the three rect primitives. Its per-row test was only
+ever in the **plane-major fast path**, whose own account says it holds the
+block's first framebuffer byte and steps by `[vid_stride]` *"every planar
+surface being ONE bank"* — so the fix is to make that true again rather than
+to patch around it: a block that would cross a boundary is sent to the
+general `.row` path, which calls `gfx_rowbase` for every row and therefore
+homes the window for every row. Two compares and an add, once per blit, both
+falling through on every mode but 0104h. `GFX_BLITP 64x64` went **13,770 →
+12,379 µs, -10.1%, and 0.9% BELOW the `NOVBEROW=1` no-test floor** —
+`VBHOME`'s four plane-loop calls again. This is what §39.29.10 always
+intended for it, and what it already does for `gfx_scroll`.
+
+**What that costs the machine that HAS the mode is named rather than hidden**:
+a block straddling row 512 draws at the general path's ~2,600 cycles a row
+instead of the fast path's ~125, and so does any block wholly in bank 1, the
+test being two compares against the one boundary rather than a division into
+banks. On a mode 12h machine it costs nothing at all, which is the trade this
+pass was taken for.
+
+**AND ITS ROUTING IS ONLY HALF GATED, which is worth stating because the
+obvious gate does not work.** The mode 12h direction is proved by
+MEASUREMENT: the fast path is 12,379 µs where the general path would be
+~35,000, so the compares demonstrably fall through. The *other* direction — a
+crossing block really reaching `.row` — is not gated here.
+`tests/vbeident.py` grew a Paint frame to do it and the mutation refused the
+claim: Paint opens with a packed canvas, asks §5.4.3.2's probe during a
+repaint, converts only if told yes, and blits planar from the repaint after
+that, so one open and one settle never reach the routine. Forcing it would
+need the conversion and a second repaint driven, which is
+`tests/paintpack.py`'s territory, and the direction it would prove only
+matters in a mode no emulator here can enter (§39.29.8).
+
+`VBHOME` survives for exactly those four: a primitive that walks its rect once
 per plane restarts at a bank-0 offset, which is §39.29.10.2's case and is
 untouched here. The six `VBHOME` calls inside the three CUT bodies are gone,
 because within one piece the window never moves.

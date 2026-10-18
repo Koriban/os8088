@@ -14961,7 +14961,7 @@ primitive can be cut at row 512 and run twice the way `gfx_disp_run` cuts at a
 display seam — which removes the per-row test altogether rather than making it
 cheaper.
 
-### Set 162 — the straddle cut: every rect primitive 10-19% faster than the shipped kernel, for 96 bytes (SPEC.md §39.29.10.5)
+### Set 162 — the straddle cut: every rect primitive 10-19% faster than the shipped kernel, and gfx_blitp 10% faster, for 104 bytes (SPEC.md §39.29.10.5, §39.29.10.6)
 
 Measured 2026-10-18, same instrument and machine as Set 161 — MartyPC's
 cycle-accurate 4.77 MHz 8088, `os8088_xt_vga_144`, VGA mode 12h, the ordinary
@@ -15013,16 +15013,39 @@ its 17 clocks. Against the kernel that actually shipped they are break-even
 (+0.1% to -3.8%), which is the comparison that matters: the test they replaced
 cost those same rows 22 cycles a row a walk.
 
-**THE ROWS THAT DID NOT MOVE ARE §39.29.10.6's LIST, exactly.** `GFX_BLITP
-64x64` is still +10.25% over the floor, `FONT_STR 10 aligned` +4.19%,
-`FONT_CHAR` +3.26%, and `GFX_BLIT4`, `GFX_SCROLL`, `mask line`, `xordiff` and
-every `WM_*` query are unchanged to 0.02%. Those are the primitives whose
-output position depends on more than the rect - a source row, a save-under
-buffer offset, a glyph row - so they keep the per-row test by design. Nothing
-in the table moved that should not have, which is the check that the hooks
-landed where they were meant to.
+**THE ROWS THAT DID NOT MOVE ARE §39.29.10.6's LIST, exactly.** `FONT_STR 10
+aligned` is +4.19% over the floor, `FONT_CHAR` +3.26%, and `GFX_BLIT4`,
+`GFX_SCROLL`, `mask line`, `xordiff` and every `WM_*` query are unchanged to
+0.02%. Those are the primitives whose output position depends on more than the
+rect - a save-under buffer offset, a glyph row, a cursor mask row - so they
+keep the per-row test by design. Nothing in the table moved that should not
+have, which is the check that the hooks landed where they were meant to.
 
-**Cost: `.text` +96 bytes, `.bss` +0, `.cold` +0, no rung crossed.** Nine
+**`GFX_BLITP` was +10.25% over the floor in that pass and is not any more**
+(SPEC.md §39.29.10.6). It took a different answer: its per-row test was only
+in the plane-major fast path, whose own account already assumed one bank, so a
+block that would cross a boundary is sent to the general `.row` path - which
+calls `gfx_rowbase` for every row and homes the window for every row - instead
+of the fast path being taught to bank. Two compares and an add, once a blit:
+
+| row | before µs | floor µs | cut µs | vs before | vs floor |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GFX_BLITP 64x64 | 13,770.47 | 12,490.20 | 12,379.50 | **-10.11%** | -0.89% |
+| GFX_BLITP 256x16 | 9,908.64 | 9,594.28 | 9,484.70 | -4.28% | -1.14% |
+
+Below the no-test floor again, and for the same reason: four `VBHOME` calls,
+one per plane, that neither of Set 161's arms had removed. **The ROUTING is
+proved in one direction only, by this measurement**: 12,379 µs is the fast
+path and the general path would be ~35,000, so the compares demonstrably fall
+through on mode 12h. A crossing block really reaching `.row` is not gated -
+`tests/vbeident.py` grew a Paint frame to do it and the mutation refused the
+claim, Paint not reaching its planar path on one open at all.
+
+**Total for both passes: `.text` +104 bytes** (44,269 -> 44,373), bss +0,
+cold +0, no rung crossed.
+
+**Cost: `.text` +96 bytes for the rect hooks, `.bss` +0, `.cold` +0, no rung
+crossed** (+104 with `gfx_blitp`'s test below). Nine
 `jnc`+`call` pairs and six `vbe_home` calls came out; three arms, three tests,
 `vbe_cut_run` and `vid_apply`'s publish went in.
 
