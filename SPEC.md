@@ -139219,6 +139219,40 @@ bars through it. What is measured, and no more than that:
   is — but it does mean this window is hostile to drive, and anything that
   wants to catch a redraw needs budgets raised past one paint first.
 
+**WHY EVERY INSTRUMENTED RUN HAS BEEN BLIND, probably** (2026-10-18, an
+attempt that did NOT solve this but narrowed it). FPTEST declares
+`OS88_REGION_MOVABLE` in its entry proc, so a compaction moves the region —
+and a probe that reads `W_SEG` **once** then samples through it is reading
+whatever took the old segment's place. Measured directly: with a cached
+segment the counters climbed for two samples and then sat at **zero for
+forty seconds** while the window's own summary line stayed correct on screen;
+re-reading `W_SEG` on every access instead showed a live paint
+(`nest` 1, then 0 when it ended). **That is a plausible account of
+"`maxnest` = 1 but no redraw ever happened in those runs"** — the earlier
+instrument may have been reading a dead segment rather than observing a
+quiet one. It is not proof: nobody has re-run that instrument with the
+segment re-read.
+
+Two further things that attempt established, both cheap to get wrong again:
+
+- **a package's bss is NOT zero at load.** `-f bin` zeroes nothing and
+  nothing else does it either, so an added counter starts as whatever was
+  there. The first probe read a nesting depth of **52** and, in the same
+  sample, a depth of 0 alongside "entered 2, exited 1" — arithmetically
+  impossible, which is the only reason it was caught. A believable garbage
+  value would have been read as a result. Zero any new field in the entry
+  proc.
+- **the counters must be read as RAW BYTES at least once** before being
+  trusted. Reading them as named fields showed a `maxnest` of 60 then 110
+  then 0 with `exits` stuck at 0 while `nest` demonstrably decremented —
+  symptoms that cannot all be true of the same memory, and that a hex dump
+  of the surrounding bytes would have separated sooner than another round of
+  naming them.
+
+**Still not solved, and still worth the next attempt** — the entry
+instrument works, the segment trap is known, and what is owed is a redraw
+forced with budgets raised past a paint (`os88mouse.to` takes `tries=`).
+
 A first clean frame is `screenshots/fptest-126.png`, and it carries one
 8-pixel scanline of the same artefact at y 167 — the smallest instance of it,
 left in the picture rather than cropped out.
