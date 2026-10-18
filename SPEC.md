@@ -73781,12 +73781,18 @@ accrued figure, never "crossed no rung".
 |---|---|
 | resident, `kern_big` | the row + dispatch + load pair, the fifth `vid_tab` row and the kind's arms — **`.text` +312, `.ovl` +12, `.cold` +0 measured, no rung crossed** (accrued image 172/512 -> 484/512). Stage 2's `jnc` at 13 row-advance sites and `gfx_rowbase`'s second formula are not in that figure, and **28 bytes of the rung remain**, so they will cross it |
 | resident, `kern_small` | **nothing**: it cannot load a `.DRV` of any kind (§51.0), so the sniff and the row are `%ifdef OS88_DRIVERS` |
-| per row, on mode 12h | 2 bytes and one not-taken `jnc` |
+| per row, on mode 12h | 2 bytes and one `jnc` - **TAKEN, and measured at 22 cycles** (PERFORMANCE.md Set 161) |
 
-**That last figure is to be MEASURED on a 4.77MHz 8088 and recorded in
-PERFORMANCE.md, not asserted here.** If it reads badly the loops get banked
-twins selected once per operation, which costs bytes instead of time and needs
-no redesign.
+**That last figure was to be MEASURED on a 4.77MHz 8088 and recorded in
+PERFORMANCE.md, not asserted here. It has been, and it reads badly**: 22
+cycles a row advance executed, which is **11-25% on every rect primitive**
+because `vga_solid_rect` walks up to three of its four `VBROW` arms over every
+row. The estimate above said nine clocks because it said *not-taken*, and the
+sense is backwards - `jnc %%same` jumps over the `call`, so it is taken 511
+times out of 512, and a taken Jcc on an 8088 is 16 clocks plus a prefetch
+flush against the not-taken 4. So the loops get the banked twins selected once
+per operation (arm B of the plan's table, bytes instead of time), or §39.29.10's
+revision finishes the job and the per-row test goes away altogether.
 
 ##### 39.29.3.1 The BYTE half, measured — and why the image size is not it
 
@@ -73807,13 +73813,23 @@ reported a saving that does not exist, with a sign that says the change does
 the opposite of what it does. Per-section figures, as docs/KERNEL-MEMORY.md
 requires, or nothing.
 
-**The TIME half is still owed**, and is the figure a 4.77MHz machine actually
-cares about. Two instruments are missing for it and the gap is named here so
-the next attempt does not rediscover it: `tests/gfxbench` publishes through
-§57's registry and has **no reader**, and the harness has no way to call a
-kernel routine, so a repaint cannot be driven directly. Boot-to-desktop
-cycles do not substitute — the two arms differ in sector count, and an
-`int 13h` is ~400 ms against a per-row cost measured in microseconds.
+**The TIME half is measured now** and it is PERFORMANCE.md Set 161: **22
+cycles per row advance executed**, 11-25% on every rect primitive, up to 24.8%
+on `GFX_VLINE 128px`. The instrument that was missing is
+`tools/gfxbenchread.py`, and the gap this section used to name was mis-stated
+as well as open: `tests/gfxbench` does **not** publish through §57's registry
+— benchlib keeps the whole report in the package's own bss (`bl_arena`,
+`bl_idx`, `bl_nrow`) and writes it to a file with `bl_save` — so the reader
+reads 74 rows out by symbol, and cross-checks them against the saved file read
+back with `os88flush`. The two readers agreed row for row on both arms. The
+`NOVBEROW=1` arm is built with `os88build.tree`, so `build/` is left alone and
+the control is the shipped kernel.
+
+What still stands from the paragraph this replaces: the harness has no way to
+call a kernel routine, and boot-to-desktop cycles do not substitute (the two
+arms differ in sector count, and an `int 13h` is ~400 ms against a per-row cost
+in microseconds). What makes the measurement work without either is that
+gfxbench's rows ARE the primitives, timed inside the guest by the PIT.
 
 #### 39.29.4 What the fifth kind touched, and what it silently broke
 
@@ -74215,6 +74231,94 @@ must be the one that completes `start + stride`. Adding the full stride to a
 partially-advanced pointer and correcting afterwards is the one arrangement
 that breaks it, and it reads as correct because the pointer ends up right —
 only the FLAG is wrong.
+
+#### 39.29.10.5 The per-row test is gone: cut the rect at the boundary instead
+
+**The per-row bank test was measured and it was unaffordable.** `VBROW`'s
+`jnc` past the bank call is **TAKEN 511 times out of 512** — it is the
+no-crossing case that jumps — and a taken Jcc on an 8088 is 16 clocks *plus a
+prefetch-queue flush* against the not-taken 4. §39.29.3 estimated nine clocks
+a row by calling it a *not-taken* `jnc`; the real figure is **22 cycles per row
+advance executed**, and `vga_solid_rect` walks up to three of its arms over
+every row, so a 64×64 fill paid 4,135 cycles of it. **11 to 25% on every rect
+primitive in the system** (PERFORMANCE.md Set 161), paid by every machine
+including the ones with no VESA card at all.
+
+So the boundary is cut **once per primitive** instead of tested once per row.
+`vbe_cut_run` splits a rect that straddles a bank into one rect per bank and
+runs the body once per piece, each piece a whole rect in its own right:
+`gfx_rect_setup`'s existing `gfx_rowbase` call then selects that piece's bank,
+which is also its *only* bank, so no walker can cross a window inside its own
+loop.
+
+**IT IS `gfx_disp_run`'s SHAPE WITH A DIFFERENT LINE** (§39.14.7), and that is
+not a coincidence: a display seam and a bank boundary are the same problem — a
+rect whose halves need different state — so the same answer serves. The
+difference is that a seam belongs to the DESKTOP and a bank to the
+FRAMEBUFFER, which is why this hook sits one level lower, below `GFXDISP`,
+where the coordinates are already the display's own.
+
+| | |
+|---|---|
+| what a mode 12h machine pays | `cmp dx, [vbe_cutrow]` and a **not-taken** `jae`, once per primitive — about 17 clocks against `gfx_fill`'s 2,405-cycle floor |
+| what it pays per row | **nothing** |
+| `[vbe_cutrow]` | the first row of bank 1, or **0xFFFF** on every mode but 0104h. One unsigned compare therefore answers *"this surface is not banked"* and *"this rect does not straddle"* at once, with no kind test in it. Published by `vid_apply`, the one funnel every mode application goes through |
+| resident cost | `.text` **+96**, `.bss` +0, `.cold` +0, no rung crossed — nine `jnc`+`call` pairs and six `vbe_home` calls removed, against three arms, three tests, `vbe_cut_run` and `vid_apply`'s publish |
+| what it BOUGHT, measured | every rect primitive **10 to 19% faster than the kernel that shipped** — `GFX_FILL 64x64` -19.45%, `GFX_VLINE 128px` -19.42%, `GFX_XOR_RECT 256x128` -16.40%, `GFX_FRAME 64x64` -15.21% (PERFORMANCE.md Set 162). Four rows beat even the `NOVBEROW=1` no-test floor, because `VBHOME` had no knob and so was paid by BOTH of Set 161's arms. A small rect is 1.6-2.7% above that floor and break-even against the shipped kernel: six bytes at the 8088's fetch floor, once |
+
+**The three hooks are on `vga_solid_rect`, `gfx_fill_gray_raw` and
+`gfx_fill_pat_raw`, and the first one's placement is the load-bearing
+choice.** `vga_solid_rect` is where all three routes into the shared body
+meet: `gfx_fill_raw` falls into it, `gfx_xor_fill_raw` arrives through
+`vga_xor_fill_vram`, and **`menu.inc` enters `vga_xor_fill_vram` directly**.
+A hook on the four `_raw` entries instead would have left that third route
+uncut while the body's row advances had already given up their test — the
+exact shape of a defect that appears only when a menu is open.
+
+Both of the others sit **below** the 1bpp jump, so a mono machine pays
+nothing at all.
+
+**`VBSTEP`/`VBSTEPR` are the row advance inside a cut rect** — a bare `add`,
+named so that it cannot quietly become one. `grep VBSTEP` is the list of
+everything the cut is load-bearing for, and a body that loses its `VBCUT` must
+change them back to `VBROW` in the same edit.
+
+**The re-entry label must be a LOCAL label**, and this cost a build. The first
+version had the macro emit `<name>_vbody:` — an ordinary global — in the
+middle of `vga_solid_rect`, which reset NASM's previous-non-local-label: every
+`.arm`, `.lcol`, `.rcol` and `.done` in the routine silently became
+`<name>_vbody.…`, and the build failed with `symbol vga_solid_rect.arm not
+defined` followed by thirty `label changed during code generation` errors
+naming `kernel_text_end` and the blob. **Not one of them points at the macro.**
+
+#### 39.29.10.6 What the cut does NOT cover, and why
+
+A piece is handed to the body as **a whole rect**, so a body needs no notion of
+being a half: it re-enters at its own top, clips, sets up and draws. That is
+what makes the hook three lines to apply — and it is also exactly what bounds
+where it can be applied. **A primitive whose output position depends on more
+than the rect cannot be cut this way**, because the second piece would restart
+that other position from the beginning:
+
+| | what else positions it | still on `VBROW` |
+|---|---|---|
+| `gfx_blitp`'s plane-major path | the SOURCE row, which advances with y | yes |
+| `vga_save_vram` / `vga_restore_vram` | the save-under BUFFER offset, which is cumulative across the rect | yes |
+| `font_char` | 8 rows, and the glyph row index | yes |
+| `ico_pass` | up to 32 rows, and the icon row index | yes |
+| `cur_draw` | the cursor's own mask row — and it runs in the mouse ISR | yes |
+
+Their measured share is smaller by the same arithmetic that made the rect
+primitives' large: a fixed 8, 12 or 32-row shape pays 22 cycles a row over a
+few rows (`FONT_CHAR` measured **+3.3%**), where a rect pays it over up to 128
+rows times three walks. `gfx_blitp` at **+10.3%** is the one worth revisiting,
+and the shape of the answer is known — give the cut a source-row adjustment per
+piece — but it is not this pass.
+
+`VBHOME` survives for exactly those five: a primitive that walks its rect once
+per plane restarts at a bank-0 offset, which is §39.29.10.2's case and is
+untouched here. The six `VBHOME` calls inside the three CUT bodies are gone,
+because within one piece the window never moves.
 
 #### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
 

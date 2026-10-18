@@ -7094,6 +7094,19 @@ SOAK = [
         "REPORTED ARTIFACTS, LOCALISED (a corner pixel, and two drags across"
         "a seam)",
         needs=("marty",), serial=True),
+    Row("vbeident", "soak", py("tests/vbeident.py", "--cutrow", "200"), 300.0,
+        "SPEC.md 39.29.10.5: is the BANK STRADDLE CUT pixel-neutral? A rect "
+        "primitive run twice over two halves of its own rect must draw what "
+        "running it once draws, so this boots mode 12h twice - once plain, "
+        "once with [vbe_cutrow] poked to row 200 so the cut fires on an "
+        "adapter every emulator here HAS - and asserts 0 differing pixels "
+        "over the desktop, a Disk window and the Calculator. The banked mode "
+        "itself cannot be entered under QEMU or MartyPC at all (39.29.8), so "
+        "without this the cut would only ever be exercised on the owner's "
+        "Satellite. It also asserts the menu save-under round trip inside "
+        "each run; --save/--ref are the cross-build before/after compare and "
+        "--mutate proves the captures reach gfx_rect_setup.",
+        needs=("marty",), serial=True),
     Row("dispdepth", "soak", py("tests/dispdepth.py"), 60.0,
         "Does a window dragged BACK from a different-depth display arrive"
         "intact?",

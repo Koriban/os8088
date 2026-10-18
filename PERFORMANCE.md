@@ -14862,3 +14862,177 @@ also saves a right-side hit with a deliberately stale paddle on the left PC
 and confirms that duplicate ownership grants cannot rewind or score twice.
 These are emulator measurements; they do not replace a physical XT/null-modem
 run.
+
+### Set 161 — what VBE's banked row advance costs mode 12h: 22 cycles a row, 11-25% on every rect (SPEC.md §39.29.3)
+
+Measured 2026-10-18 on MartyPC's cycle-accurate 4.77 MHz 8088
+(`os8088_xt_vga_144`, VGA mode 12h, the ordinary big kernel), with
+`python3 tools/gfxbenchread.py` and `--knob NOVBEROW=1` for the other arm.
+This is the figure SPEC.md §39.29.3 says is to be measured and not asserted,
+and it is **worse than the estimate by a factor of two to seven**.
+
+**The reader is new and is why this could be taken at all.** `tests/gfxbench`
+keeps its whole report in the package's own bss — benchlib's `bl_arena`,
+`bl_idx` and `bl_nrow` — so `tools/gfxbenchread.py` boots the bench disk,
+reaches Run through the Bench menu, waits for the end-of-report line and reads
+74 rows out by symbol. It then saves the report and reads the file back with
+`os88flush` as a second walk of the same rows: the two readers agreed row for
+row on both arms, which is the only thing that can catch either of them.
+
+**The sandbox was identical on both arms**, so the two runs drew the same
+pixels at the same alignment: the reports' provenance blocks differ only in
+kernel span (97 KB against 98), free heap and the boot tick count. And each
+report repeats six rows at its end, which agree with their first pass to
+**0.01%** — so a 20% delta is 2,000 times the instrument's own spread, not
+noise.
+
+| row | `NOVBEROW=1` µs | shipped µs | Δ cycles | Δ |
+| --- | ---: | ---: | ---: | ---: |
+| GFX_VLINE 128px | 2,395.35 | 2,989.67 | +2,837 | **+24.8%** |
+| GFX_FILL 64x64 | 3,962.99 | 4,829.30 | +4,135 | **+21.9%** |
+| GFX_XOR_RECT 256x128 | 6,704.93 | 7,875.20 | +5,585 | +17.5% |
+| GFX_FILL 64x64 clipped | 5,047.10 | 5,907.94 | +4,109 | +17.1% |
+| GFX_FILL_GRAY 64x64 | 4,680.05 | 5,381.92 | +3,350 | +15.0% |
+| GFX_FRAME 64x64 | 3,962.88 | 4,551.75 | +2,811 | +14.9% |
+| GFX_XOR_RECT 64x64 | 4,233.27 | 4,808.10 | +2,744 | +13.6% |
+| GFX_FILL_PAT 64x64 | 6,181.54 | 6,964.71 | +3,738 | +12.7% |
+| GFX_FILL 256x128 | 14,097.68 | 15,752.50 | +7,898 | +11.7% |
+| GFX_XOR_FILL 64x64 | 7,161.00 | 7,976.68 | +3,893 | +11.4% |
+| GFX_BLITP 64x64 | 12,490.20 | 13,770.47 | +6,110 | +10.3% |
+| GFX_FILL 8x8 | 569.24 | 606.70 | +179 | +6.6% |
+| GFX_VLINE 8px | 584.21 | 621.66 | +179 | +6.4% |
+| WM_TITLE strip | 27,092.21 | 28,473.60 | +6,593 | +5.1% |
+| PAIR 10 aligned | 8,127.68 | 8,531.78 | +1,929 | +5.0% |
+| FONT_RUN 10 coloured | 8,517.40 | 8,912.35 | +1,885 | +4.6% |
+| FONT_STR 10 aligned | 7,054.84 | 7,350.69 | +1,412 | +4.2% |
+| GFX_BLITP 256x16 | 9,594.28 | 9,908.64 | +1,500 | +3.3% |
+| FONT_CHAR one cell | 748.61 | 773.06 | +117 | +3.3% |
+| GFX_FILL 256x1 | 669.19 | 684.51 | +73 | +2.3% |
+| FULLSCREEN in+out | 2,059,714.56 | 2,100,908.85 | +196,609 | +2.0% |
+| GFX_HLINE 256px | 690.56 | 704.35 | +66 | +2.0% |
+| GFX_PIXEL | 478.48 | 485.89 | +35 | +1.5% |
+| GFX_HLINE 8px | 485.94 | 492.53 | +31 | +1.4% |
+| GFX_POINTS 24 pts | 11,154.20 | 11,251.62 | +465 | +0.9% |
+
+**The unit is 22 cycles per row advance EXECUTED, and the arithmetic closes.**
+GFX_VLINE 128px is 2,837 cycles over 128 rows = **22.2 a row**; GFX_VLINE 8px
+and GFX_FILL 8x8 are both 179 over 8 = **22.4**. A vline walks one column, so
+it pays once a row. **`vga_solid_rect` has FOUR `VBROW` sites** — a left-mask
+arm, a right-mask arm, a middle-span arm and a single-column arm — and a
+64-pixel-wide rect walks three of them over all 64 rows: 4,135 / 64 = **64.6 a
+row, which is 3 x 21.5**. GFX_FILL 256x128 is 7,898 / 128 = 61.7, the same
+three arms. Nothing has to be assumed about how many advances a primitive
+makes; the ratio says it.
+
+**Why the estimate was 9 clocks and the answer is 22: the branch is TAKEN.**
+`VBROW` is `add di, [vid_stride]` / `jnc %%same` / `call vbe_bank_next` /
+`%%same:`, so the jump over the call is taken **511 times out of 512** — it is
+the no-crossing case that jumps. A taken Jcc on an 8088 is 16 clocks *and
+flushes the prefetch queue*, where the not-taken one is 4. SPEC.md §39.29.3's
+"one not-taken `jnc`" has the sense backwards, and that one word is the whole
+of the gap between 9 and 22.
+
+**The rows that did NOT move are the control, and they are the better half of
+this measurement.** Every RAM and VRAM bandwidth row, `GFX_BLIT1`,
+`GFX_BLIT4 solid`, `GFX_SCROLL`, the `mask line`/`xordiff`/`clear mask` rows,
+`FONT_RUN` aligned, disabled, 19 col/blk, 20 text, 20 padded and skewed, every
+`WM_*` query, `MOUSE`, `one full-width row` and `whole page of rows` all agree
+between the arms to **0.02% or better** — and those are precisely the paths
+with no `VBROW` on them. `font_run` has none and did not move; `font_char`
+(`font.inc:656`) has one and moved 3.3%. An A/B where everything moved a
+little would have been measuring the build; this one moved exactly what the
+macro is on.
+
+Two rows went the other way and neither is evidence. `GFX_BLIT4 4px runs`
+reads −4.8%, and it is flagged **`w`** on both arms — it lapped the PIT and was
+re-run with method T, which is tick-granular and not comparable at this
+resolution. `GFX_UNLOCK+LOCK pair` reads −1.7% (40 cycles) and is the one row
+an IRQ can land inside (the pair contains the mouse cursor, SPEC.md §7.1).
+
+**The verdict this was taken to reach.** SPEC.md §39.29.3 says that if the
+time half reads badly the loops get banked twins selected once per operation —
+arm B of the plan's cost table, which pays bytes instead of time. It reads
+badly: an 8088 with no VESA card and no way to use the mode is paying **11-25%
+on every rect primitive in the system**, which is the single most-called family
+there is, against a documented budget in Part 5 that these rows feed. Take
+arm B, or finish §39.29.10's revision — `gfx_rowbase_calc`'s existing
+`mul word [cs:vid_stride]` already yields the bank in `DX`, and a straddling
+primitive can be cut at row 512 and run twice the way `gfx_disp_run` cuts at a
+display seam — which removes the per-row test altogether rather than making it
+cheaper.
+
+### Set 162 — the straddle cut: every rect primitive 10-19% faster than the shipped kernel, for 96 bytes (SPEC.md §39.29.10.5)
+
+Measured 2026-10-18, same instrument and machine as Set 161 — MartyPC's
+cycle-accurate 4.77 MHz 8088, `os8088_xt_vga_144`, VGA mode 12h, the ordinary
+big kernel, `python3 tools/gfxbenchread.py`. **Three arms this time**, and the
+third column is what makes the table worth reading:
+
+| | |
+|---|---|
+| **before** | the shipped kernel of Set 161 - `VBROW`'s per-row `jnc` past the bank call, plus `vbe_home` between walks |
+| **floor** | `NOVBEROW=1` - the per-row test compiled out, which is the fastest the row loops can possibly be... except that it does **not** remove `vbe_home`, which never had a knob |
+| **cut** | SPEC.md §39.29.10.5: the rect is cut at the bank boundary once per primitive, the row advances are bare adds, and the six `vbe_home` calls inside the three cut bodies are gone |
+
+| row | before µs | floor µs | cut µs | vs before | vs floor |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| GFX_FILL 64x64 | 4,829.30 | 3,962.99 | 3,890.11 | **-19.45%** | -1.84% |
+| GFX_VLINE 128px | 2,989.67 | 2,395.35 | 2,409.03 | **-19.42%** | +0.57% |
+| GFX_XOR_RECT 256x128 | 7,875.20 | 6,704.93 | 6,583.97 | -16.40% | -1.80% |
+| GFX_FILL 64x64 clipped | 5,907.94 | 5,047.10 | 4,973.63 | -15.81% | -1.46% |
+| GFX_FRAME 64x64 | 4,551.75 | 3,962.88 | 3,859.52 | -15.21% | -2.61% |
+| GFX_XOR_RECT 64x64 | 4,808.10 | 4,233.27 | 4,112.55 | -14.47% | -2.85% |
+| GFX_FILL_GRAY 64x64 | 5,381.92 | 4,680.05 | 4,618.59 | -14.18% | -1.31% |
+| GFX_FILL_PAT 64x64 | 6,964.71 | 6,181.54 | 6,121.06 | -12.11% | -0.98% |
+| GFX_XOR_FILL 64x64 | 7,976.68 | 7,161.00 | 7,085.61 | -11.17% | -1.05% |
+| GFX_FILL 256x1 | 684.51 | 669.19 | 608.62 | -11.09% | **-9.05%** |
+| GFX_FILL 256x128 | 15,752.50 | 14,097.68 | 14,022.94 | -10.98% | -0.53% |
+| GFX_HLINE 256px | 704.35 | 690.56 | 630.11 | -10.54% | **-8.75%** |
+| WM_TITLE strip | 28,473.60 | 27,092.21 | 26,597.52 | -6.59% | -1.83% |
+| GFX_XOR_RECT 256x1 | 1,164.57 | 1,157.34 | 1,093.12 | -6.14% | -5.55% |
+| GFX_VLINE 8px | 621.66 | 584.21 | 598.04 | -3.80% | +2.37% |
+| GFX_FILL 8x8 | 606.70 | 569.24 | 584.51 | -3.66% | +2.68% |
+| GFX_HLINE 8px | 492.53 | 485.94 | 494.05 | +0.31% | +1.67% |
+| GFX_PIXEL | 485.89 | 478.52 | 486.39 | +0.10% | +1.64% |
+
+**FOUR ROWS BEAT THE NO-TEST FLOOR, and that is not noise — it is `vbe_home`.**
+`VBHOME` expanded to an unconditional `call vbe_home` on every
+`GFX_VGA`+`OS88_DRIVERS` build, with no knob in front of it, so **both** of Set
+161's arms paid it: three calls per solid rect, three per gray, two per pat.
+Set 161 therefore *under-reported* what the per-row design cost, and the rows
+where the difference is largest are the ones where it is nearly the whole
+bill - `GFX_FILL 256x1` and `GFX_HLINE 256px` are ONE row, so they had almost
+no per-row test to pay and two `vbe_home` calls each. Within one cut piece the
+window never moves, so the re-home is not needed and those six calls are gone.
+
+**WHAT GOT SLOWER IS THE SMALL RECT, BY ABOUT 30 CYCLES.** `GFX_PIXEL`,
+`GFX_HLINE 8px`, `GFX_FILL 8x8` and `GFX_VLINE 8px` sit 1.6 to 2.7% above the
+floor: that is `cmp dx, [vbe_cutrow]` and a not-taken `jae`, six bytes, whose
+cost on an 8088 is set by the **fetch floor** (`4.34 × 6 = 26`) rather than by
+its 17 clocks. Against the kernel that actually shipped they are break-even
+(+0.1% to -3.8%), which is the comparison that matters: the test they replaced
+cost those same rows 22 cycles a row a walk.
+
+**THE ROWS THAT DID NOT MOVE ARE §39.29.10.6's LIST, exactly.** `GFX_BLITP
+64x64` is still +10.25% over the floor, `FONT_STR 10 aligned` +4.19%,
+`FONT_CHAR` +3.26%, and `GFX_BLIT4`, `GFX_SCROLL`, `mask line`, `xordiff` and
+every `WM_*` query are unchanged to 0.02%. Those are the primitives whose
+output position depends on more than the rect - a source row, a save-under
+buffer offset, a glyph row - so they keep the per-row test by design. Nothing
+in the table moved that should not have, which is the check that the hooks
+landed where they were meant to.
+
+**Cost: `.text` +96 bytes, `.bss` +0, `.cold` +0, no rung crossed.** Nine
+`jnc`+`call` pairs and six `vbe_home` calls came out; three arms, three tests,
+`vbe_cut_run` and `vid_apply`'s publish went in.
+
+**Correctness, because this is one body in front of both modes.** Mode 12h is
+**byte-identical** to the pre-change kernel over three settled frames - the
+desktop, a Disk window and the Calculator - at 307,200 pixels each
+(`tests/vbeident.py --ref`), and the gate is proved sensitive: one bit of
+`gfx_lmtab[0]` moves 97 and 117 pixels. The cut itself is checked by
+**forcing it on mode 12h** (`--cutrow 200`), where a correct cut must be
+pixel-neutral and is - 0 differing pixels on all three frames - and that 0 is
+not vacuous: skipping one row at the boundary inside `vbe_cut_run` reddens the
+gate with a bounding box of exactly `(105, 200, 424, 200)`, the poked boundary
+row and nothing else.

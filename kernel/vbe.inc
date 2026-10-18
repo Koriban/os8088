@@ -401,6 +401,105 @@ vbe_bank_next:
     ret
 
 ; -----------------------------------------------------------------------------
+; vbe_cut_run - run a rect primitive once per BANK its rect touches
+;               (SPEC.md 39.29.10.5)
+; in:       AX = x1, BX = y1, CX = x2, DX = y2 in DISPLAY-LOCAL coordinates,
+;           [vbe_cutfn] = near ptr to the body's re-entry (the label the VBCUT
+;           macro emitted below its own test)
+; out:      -
+; clobbers: flags
+;
+; THIS IS WHAT RETIRED THE PER-ROW BANK TEST, and the measurement is why:
+; `VBROW`'s `jnc` past the bank call is TAKEN 511 times out of 512, a taken
+; Jcc on an 8088 is 16 clocks plus a prefetch flush, and vga_solid_rect walks
+; up to three of its arms over every row - 22 cycles a row a walk, 11 to 25%
+; on every rect primitive in the system, paid by every machine that has no
+; VESA card at all (PERFORMANCE.md Set 161).
+;
+; So the boundary is cut ONCE, here, instead of tested on every row: a rect
+; that straddles row 512 is run as two rects, and neither of them can cross a
+; window inside its own loop. gfx_rect_setup's own gfx_rowbase call selects
+; the bank for each piece's first row, which is now also its last bank, so
+; the walkers need no per-row test AND no vbe_home between walks.
+;
+; IT IS gfx_disp_run's SHAPE WITH A DIFFERENT LINE (SPEC.md 39.14.7), and that
+; is not a coincidence - a display seam and a bank boundary are the same
+; problem: a rect whose two halves must be drawn with different state. The
+; difference is that a seam is a property of the DESKTOP and a bank of the
+; FRAMEBUFFER, so this sits one level lower, below GFXDISP, where the
+; coordinates are already the display's own.
+;
+; THE CLAMP IS NOT OPTIONAL. The bodies clip in gfx_rect_setup, which has not
+; run yet, so y2 arriving here can be any 16-bit number a caller passed - and
+; an unclamped 30,000 would be split into sixty pieces, fifty-nine of them
+; empty. Clamping first bounds the loop by the SURFACE and not by the
+; argument.
+;
+; EVERY PIECE IS HANDED TO THE BODY AS A WHOLE RECT, so a body needs no notion
+; of being a half: it re-enters at its own top, clips, sets up and draws. That
+; is what makes this cheap to apply and what limits where it can be applied -
+; a primitive whose output position depends on more than the rect (gfx_save's
+; buffer offset, a blit's source row) cannot be cut this way and keeps the
+; per-row test. SPEC.md 39.29.10.6 is that list.
+; -----------------------------------------------------------------------------
+; **BP IS NOT AVAILABLE IN HERE** and the body pointer therefore comes through
+; memory rather than a register. gfx_line carries its fill colour in BP across
+; gfx_fill and gfx_xor_fill - vga12.inc says so at gfx_xor_strips, and
+; gfx_fill_pat_raw's own "BP is not ours to spend" is the same invariant from
+; the other side - so a cut that spent BP would corrupt a line's colour on
+; exactly the rects this routine exists to split.
+vbe_cut_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    or bx, bx                   ; the clamp: gfx_rect_setup's own, because it
+    jns .y1ok                   ; has not run yet (see above)
+    xor bx, bx
+.y1ok:
+    cmp dx, [vid_ch]
+    jl .y2ok
+    mov dx, [vid_chm1]
+.y2ok:
+    cmp dx, bx
+    jl .out                     ; empty: the body would have clipped it away
+    mov si, [vbe_cutrow]
+    or si, si
+    jz .out                     ; 0 would not advance: impossible, and an
+                                ; infinite loop if it ever were
+.piece:
+    mov di, si                  ; DI = the first row of the bank AFTER BX.
+.bnd:                           ; A loop and not a divide: there are two banks
+    cmp di, bx                  ; in this mode and four is all the surface
+    ja .have                    ; assertions allow, so this runs at most four
+    add di, si                  ; times on the one straddling primitive
+    jnc .bnd
+    mov di, 0xFFFF              ; the surface cannot reach here; belt
+.have:
+    dec di                      ; DI = the last row of BX's own bank
+    push dx
+    cmp dx, di
+    jbe .run
+    mov dx, di                  ; ...and the piece ends there
+.run:
+    call word [vbe_cutfn]       ; the body: it preserves every register
+    pop dx
+    mov bx, di
+    inc bx                      ; the next piece starts on the next bank's
+    cmp bx, dx                  ; first row
+    jbe .piece
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; vbe_bank_reset - forget which window is mapped (a mode set moved it)
 ; -----------------------------------------------------------------------------
 vbe_bank_reset:

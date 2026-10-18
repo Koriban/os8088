@@ -3192,6 +3192,9 @@ vga_sr_xor:
     jmp short vga_solid_rect.arm
 vga_sr_dq:
     jmp vga_solid_rect.done
+    VBCUT_ARM vga_solid_rect    ; ...and the THIRD rare arm: a rect straddling
+                                ; a VBE bank boundary, cut into one rect per
+                                ; bank and run once each (SPEC.md 39.29.10.5)
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -3239,6 +3242,18 @@ gfx_fill_raw:
 ; The 1bpp arm pays nothing.
 ; -----------------------------------------------------------------------------
 vga_solid_rect:
+    VBCUT vga_solid_rect        ; one unsigned compare and a not-taken branch,
+                                ; here at the ENTRY rather than once a row
+                                ; inside three walks (PERFORMANCE.md Set 161).
+                                ; THE HOOK IS ON THIS ROUTINE AND NOT ON THE
+                                ; FOUR `_raw` ENTRIES ABOVE IT, because this
+                                ; is where all three routes meet:
+                                ; gfx_fill_raw falls in, gfx_xor_fill_raw
+                                ; arrives through vga_xor_fill_vram, and
+                                ; menu.inc enters vga_xor_fill_vram directly.
+                                ; One hook covers the lot; four would have
+                                ; left that third route uncut and this
+                                ; routine's VBSTEPs unsafe
     push ax
     push bx
     push cx
@@ -3269,17 +3284,18 @@ vga_solid_rect:
                                 ; instruction: Set/Reset supplies all four
                                 ; planes, so the byte written (AL's old value)
                                 ; is don't-care - font.inc's idiom
-    VBROW di                    ; ...and the BANKED row advance (SPEC.md
-                                ; 39.29.10). `add di, ROW_BYTES` is the
-                                ; FIXED-STRIDE form 1024 wide replaced: taking
-                                ; it back would un-fix every VBE row at once,
-                                ; silently, because mode 12h reads 80 either way
+    VBSTEP di                   ; the LIVE stride, and NO bank test: VBCUT
+                                ; above has confined this rect to one 64KB
+                                ; window, so the add cannot carry (SPEC.md
+                                ; 39.29.10.5). `add di, ROW_BYTES` is still
+                                ; wrong - 80 is the VGA REFERENCE stride and
+                                ; 1024 wide is 128 - which is what the macro
+                                ; is for
     dec si
     jnz .lcol
     mov bx, [gfx_rspan]
     or bx, bx
     jz .reset
-    VBHOME                      ; second walk over the same rect: re-home first
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
     mov di, [gfx_roff]
@@ -3287,12 +3303,11 @@ vga_solid_rect:
     mov si, [gfx_rrows]
 .rcol:
     xchg [es:di], al            ; latch load and masked write in ONE instruction
-    VBROW di                    ; ...banked, as .lcol above
+    VBSTEP di                    ; ...banked, as .lcol above
     dec si
     jnz .rcol
     dec bx                      ; interior bytes per row
     jz .reset
-    VBHOME                      ; ...and the interior is the third walk
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
     mov di, [gfx_roff]
@@ -3305,7 +3320,7 @@ vga_solid_rect:
 .irow:
     mov cx, bx
     rep stosb
-    VBROWR di, dx
+    VBSTEPR di, dx
     dec si
     jnz .irow
     jmp short .reset
@@ -3315,7 +3330,7 @@ vga_solid_rect:
     mov al, [es:di]
     stosb
     loop .xbyte
-    VBROWR di, dx
+    VBSTEPR di, dx
     dec si
     jnz .xrow
 .reset:
@@ -3577,6 +3592,7 @@ gfx_sp_next:
 ; every package and on every C package through os88thunk.asm. Do not re-derive
 ; it: docs/plans/LAST-DROP-BYTES.md 7.6 carries the numbers and the flip condition.
 ; -----------------------------------------------------------------------------
+    VBCUT_ARM gfx_fill_gray_raw ; the bank-straddle arm, above the entry
     GFXCLIP_ARM gfx_fill_gray
     GFXCLIP gfx_fill_gray
 gfx_fill_gray_d:
@@ -3587,6 +3603,9 @@ gfx_fill_gray_d:
 gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_gray
+    VBCUT gfx_fill_gray_raw     ; ...and BELOW the 1bpp jump, so a mono
+                                ; machine still pays nothing (SPEC.md
+                                ; 39.29.10.5)
     push ax
     push bx
     push cx
@@ -3613,13 +3632,12 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, bh                  ; the dither byte, then ONE xchg: the read
     xchg [es:di], al            ; loads the latches, the write is masked
     not bh                      ; AA <-> 55 each row
-    VBROW di
+    VBSTEP di
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
     or cx, cx
     jz .reset
-    VBHOME                      ; second walk over the same rect: re-home first
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
     mov di, [gfx_roff]
@@ -3630,12 +3648,11 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, bh
     xchg [es:di], al            ; latch load, then the dither byte
     not bh
-    VBROW di
+    VBSTEP di
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
     jz .reset
-    VBHOME                      ; ...and the interior is the third walk
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
     mov di, [gfx_roff]
@@ -3649,7 +3666,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, ah
     mov cx, bx
     rep stosb
-    VBROWR di, dx
+    VBSTEPR di, dx
     not ah
     dec si
     jnz .irow
@@ -3704,6 +3721,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
 ; pointer and always was; giving it a segment would put one on every kernel
 ; caller of a primitive that is drawn per fragment.
 ; -----------------------------------------------------------------------------
+    VBCUT_ARM gfx_fill_pat_raw  ; the bank-straddle arm, above the entry
     GFXCLIP_ARM gfx_fill_pat    ; gfx_fill_pat's clipped arm sits HERE, above
                                 ; the slot that falls into the entry, because
                                 ; nothing may sit between the two
@@ -3743,6 +3761,7 @@ gfx_fill_pat_d:
 gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_pat
+    VBCUT gfx_fill_pat_raw      ; ...and BELOW the 1bpp jump, as gfx_fill_gray
     push ax
     push bx
     push cx
@@ -3763,7 +3782,6 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, [gfx_rspan]
     or cx, cx
     jz .reset
-    VBHOME                      ; second walk over the same rect: re-home first
     mov ax, [vga_m8r]           ; right edge column
     out dx, ax
     mov di, [gfx_roff]
@@ -3771,7 +3789,6 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     call .col
     dec cx                      ; interior bytes per row
     jz .reset
-    VBHOME                      ; ...and the interior is the third walk
     mov ax, 0xFF08              ; full bytes: latches irrelevant
     out dx, ax
     mov di, [gfx_roff]
@@ -3785,7 +3802,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, dx
     rep stosb
     sub di, dx
-    VBROW di
+    VBSTEP di
     inc bx
     and bx, 7
     dec si
@@ -3810,9 +3827,9 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     xchg [es:di], ah            ; follow the latch load immediately
     inc bx
     and bx, 7
-    VBROW di                    ; not `add di, ROW_BYTES`: 80 is the VGA
-    dec si                      ; REFERENCE stride and this walks the LIVE one,
-    jnz .crow                   ; crossing a bank where there is one (39.29.11)
+    VBSTEP di                   ; not `add di, ROW_BYTES`: 80 is the VGA
+    dec si                      ; REFERENCE stride and this walks the LIVE one.
+    jnz .crow                   ; No bank test - VBCUT owns that (39.29.10.5)
     ret
 %endif
 

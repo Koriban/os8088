@@ -420,6 +420,35 @@ VID_ROWTAB  equ 128
 ; only thing between that and a progress bar drawn at a random offset.
 vid_rowmax  dw 0
 
+%ifdef GFX_VGA
+ %ifdef OS88_DRIVERS
+; THE CUT'S TWO WORDS LIVE HERE AND NOT IN vbe.inc, which is where the rest of
+; the VBE state is: kernel.asm includes vbe.inc AFTER vga12.inc, so a macro
+; expanded in the renderer would carry a FORWARD data reference - and nasm
+; sized the result differently on its two passes, failing the build with
+; `label kbld_blob changed during code generation` and three errors naming
+; kernel_text_end rather than anything about VBE. viddet.inc is included
+; before the renderer, so from here both words are backward references.
+vbe_cutrow: dw 0xFFFF       ; THE FIRST ROW OF BANK 1, or 0xFFFF when the live
+                            ; mode is not banked - which is every mode but
+                            ; 0104h, so this word alone is the whole of what a
+                            ; mode 12h machine tests (SPEC.md 39.29.10.5).
+                            ; Written by vid_apply, the one funnel every mode
+                            ; application goes through
+vbe_cutfn:  dw 0            ; ...and the body vbe_cut_run is re-entering.
+                            ; Module scratch, gfx_dfn's shape and for its
+                            ; reason: the bodies preserve every register and
+                            ; this only ever runs under the gfx lock. It is
+                            ; NOT saved across the call, and that is
+                            ; CHECKED rather than hoped: the three bodies
+                            ; under a cut call gfx_rect_setup, vga_gc_reset,
+                            ; gfx_pat_stage and gfx_fill_pat_raw's own .col
+                            ; and nothing else, so a cut cannot nest inside a
+                            ; cut. A body that grew a call to another rect
+                            ; primitive would need this word banked
+ %endif
+%endif
+
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss - 696
 vid_rowtab  resw VID_ROWTAB     ; bytes in the image rung would cross a step
 
@@ -706,6 +735,40 @@ vid_apply:
                                 ; dead across the copy above and reloaded
                                 ; immediately below, so the accumulator pair
                                 ; is a byte cheaper than `mov word [m], 0`
+
+%ifdef GFX_VGA
+ %ifdef OS88_DRIVERS
+    ; --- WHERE THE 64KB WINDOW ENDS (SPEC.md 39.29.10.5), published here
+    ; because this is the one funnel every mode application goes through -
+    ; vid_switch, vid_setmode's recovery arm and vid_ctx_act all arrive here,
+    ; and the row's live stride has already been copied above.
+    ;
+    ; 0xFFFF for every mode but 0104h, which is what makes the rect
+    ; primitives' own test one unsigned compare with no kind in it: a rect can
+    ; never reach row 65,535, so "does not straddle" and "is not banked" are
+    ; the same answer.
+    mov ax, 0xFFFF
+    cmp byte [vid_kind], VID_VBE
+    jne .cutrow
+    mov cx, [vid_stride]        ; 65536 / stride, which for the 128-byte row
+    xor dx, dx                  ; of 0104h is exactly 512 - and it is exact or
+    mov ax, dx                  ; nothing: SPEC.md 39.29.1 takes this mode
+    inc dx                      ; BECAUSE 128 divides 65536, so a boundary
+    cmp cx, 1                   ; falls BETWEEN two rows. A stride that did not
+    jbe .cutrow                 ; divide it would put a row across the window
+    div cx                      ; and no cut could express that; 1 and 0 are
+                                ; guarded because the divide would overflow
+    or dx, dx
+    jz .cutrow
+    mov ax, 0xFFFF              ; ...and a remainder means no clean boundary:
+                                ; refuse to cut rather than cut in the wrong
+                                ; place. A mode that got here is already
+                                ; unrenderable (39.29.1) and this is not where
+                                ; that is reported
+.cutrow:
+    mov [vbe_cutrow], ax
+ %endif
+%endif
 
     mov ax, [vid_h]             ; --- the heights that are NOT the display's
     sub ax, TITLE_H
@@ -1529,6 +1592,90 @@ vid_text:
     call vbe_bank_next
 %%same:
     %endif
+   %endif
+  %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
+; VBSTEP / VBSTEPR - a row advance inside a rect THE CUT HAS ALREADY CONFINED
+;                    to one bank (SPEC.md 39.29.10.5)
+;
+; A bare add, and the macro exists so that it cannot quietly become one. Every
+; site below sits in a body entered through VBCUT, so its rect is wholly
+; inside one 64KB window and `add di, [vid_stride]` cannot carry - which is
+; why there is no test here and why putting one back would cost 22 cycles a
+; row for nothing (PERFORMANCE.md Set 161). A body that LOSES its VBCUT must
+; change these back to VBROW in the same edit, and the name is what makes that
+; findable: `grep VBSTEP` lists everything the cut is load-bearing for.
+; -----------------------------------------------------------------------------
+%macro VBSTEP 1
+    add %1, [vid_stride]
+%endmacro
+
+%macro VBSTEPR 2
+    add %1, %2
+%endmacro
+
+; -----------------------------------------------------------------------------
+; VBCUT / VBCUT_ARM - cut a rect primitive at the bank boundary and run its
+;                     body once per piece (SPEC.md 39.29.10.5)
+;
+;       VBCUT_ARM vga_sr            ; the RARE arm, ABOVE the entry
+;   vga_solid_rect:
+;       VBCUT vga_sr                ; ...and the test, which falls through
+;       push ax                     ; vga_sr_vbody: is where a piece re-enters
+;
+; THE ARM GOES ABOVE AND THE TEST FALLS THROUGH, which is GFXCLIP_ARM's
+; arrangement in vga12.inc and is here for the reason kernel size pass 9
+; adopted it there: the common path must not take a branch. That is the whole
+; lesson of PERFORMANCE.md Set 161 - the per-row test this replaces cost 22
+; cycles rather than the estimated 9 precisely because its `jnc` was the
+; TAKEN direction, and a taken Jcc on an 8088 flushes the prefetch queue.
+;
+; So a mode 12h machine pays `cmp dx, [vbe_cutrow]` and a not-taken `jae`,
+; ONCE PER PRIMITIVE - about 17 clocks against gfx_fill's 2,405-cycle floor -
+; and no machine pays anything per row. [vbe_cutrow] is 0xFFFF on every mode
+; but 0104h, so the compare answers for "this surface is not banked" and
+; "this rect does not straddle" at once, with no kind test.
+;
+; DS IS OURS AT THESE SITES and that is worth stating, because the macro it
+; replaces needed `cs:` overrides (SPEC.md 39.29.10.1): VBROW is reached from
+; inside row loops that have given DS away, and this sits at a primitive's
+; ENTRY, where DS is still KERNEL_SEG.
+; -----------------------------------------------------------------------------
+; **THE RE-ENTRY LABEL IS `.vbody` AND IT HAS TO BE A LOCAL ONE.** The first
+; version emitted `<name>_vbody:` - an ordinary global - in the middle of
+; vga_solid_rect, and NASM's previous-non-local-label is what every `.arm`,
+; `.lcol`, `.rcol` and `.done` in that routine hangs off: they all silently
+; became `<name>_vbody.arm` and so on, and the build failed with
+; `symbol vga_solid_rect.arm not defined` followed by thirty
+; `label changed during code generation` errors naming kernel_text_end and the
+; blob. NONE of them points here, which is why it is written down: a label
+; emitted into the middle of a routine by a macro must begin with a period, or
+; it renames the routine's whole local namespace from that line down.
+%macro VBCUT 1
+  %ifdef GFX_VGA
+   %ifdef OS88_DRIVERS
+    cmp dx, [vbe_cutrow]
+    jae %1 %+ _vbc
+   %endif
+  %endif
+.vbody:
+%endmacro
+
+; ...and the arm it jumps to, placed ABOVE the entry so the common path falls
+; through (GFXCLIP_ARM's arrangement in vga12.inc, and Set 161's lesson about
+; which direction a branch may be taken in). `%1 %+ .vbody` is a REFERENCE to
+; the local label above, which is allowed and does not disturb the namespace -
+; only a DEFINITION sets the prefix. The `ret` is the primitive's own: this arm
+; is entered before the body has pushed anything.
+%macro VBCUT_ARM 1
+  %ifdef GFX_VGA
+   %ifdef OS88_DRIVERS
+%1 %+ _vbc:
+    mov word [vbe_cutfn], %1 %+ .vbody
+    call vbe_cut_run
+    ret
    %endif
   %endif
 %endmacro

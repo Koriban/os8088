@@ -1527,9 +1527,24 @@ endif
 # NOVBEROW=1 compiles the BANK TEST out of VBROW/VBROWR/VBROWCS (SPEC.md
 # 39.29.10): the row-advance macros go back to a bare `add`, which is what
 # every adapter but VBE 0104h needs. It is the A/B SPEC.md 39.29.3 asks for
-# and says must be MEASURED rather than asserted - 22 sites, each a `jnc`
-# that is not taken on mode 12h, on a machine calibrated at 4.77MHz. It is
-# also the only thing keeping the un-banked row advance assembling.
+# and says must be MEASURED rather than asserted - and the measurement is
+# PERFORMANCE.md Set 161, which killed the design it was testing: the `jnc`
+# past the bank call is TAKEN 511 times out of 512, a taken Jcc on an 8088 is
+# 16 clocks plus a prefetch flush, and vga_solid_rect walked three of its arms
+# over every row - 22 cycles a row, 11 to 25% on every rect primitive, paid by
+# machines with no VESA card.
+#
+# **SO THE RECT PRIMITIVES DO NOT USE VBROW ANY MORE** (SPEC.md 39.29.10.5,
+# PERFORMANCE.md Set 162): they are CUT at the bank boundary once per
+# primitive and their row advances are bare adds (`VBSTEP`). This knob now
+# A/Bs the SIX sites that are left - gfx_blitp, gfx_save, gfx_restore,
+# font_char, ico_pass and cur_draw, whose output position depends on more than
+# the rect and which therefore cannot be cut (39.29.10.6) - and it is still
+# the only thing keeping the un-banked form of those assembling.
+#
+# A STRADDLE CUT HAS ITS OWN GATE and it is not this knob: tests/vbeident.py
+# pokes [vbe_cutrow] so the cut fires on mode 12h, where it must be
+# pixel-neutral, because no emulator here can enter the banked mode at all.
 # IN $(VIDSTAMP) AND $(KNOBS), on the day it was added - NOSPLIT's lesson.
 ifneq ($(NOVBEROW),)
 VIDDEF += -DNOVBEROW

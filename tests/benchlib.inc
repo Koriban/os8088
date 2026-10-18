@@ -1406,6 +1406,12 @@ bl_key:
 ; page) - which is the disk the package was launched from, so a bench started
 ; out of a B: window writes to drive 1 and not drive 0. Look at both.
 ;
+; For GFXBENCH all of this is already written: `tools/gfxbenchread.py` runs the
+; suite and reads the rows out of THIS bss by symbol - bl_arena, bl_idx and
+; bl_nrow below - then saves the report and reads the file back through
+; os88flush as a second walk of the same rows, so a defect in either reader
+; shows up as a disagreement. PERFORMANCE.md Set 161 was taken with it.
+;
 ; THE ALTERNATIVE COSTS A SESSION AND IT HAS. A screen-read is 11 pages of
 ; PgDn, one framebuffer capture each, and then a human or a model reading
 ; digits off 8x8 glyphs - which is how `GFX_XOR_RECT 256x1` was first taken

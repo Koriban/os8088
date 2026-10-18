@@ -1127,6 +1127,38 @@ target now strips).
 - **Keep the driver script out of the session scratchpad**; a vanished
   script reads as `can't open file`.
 
+**A CODE PATH ONLY ONE MACHINE CAN ENTER CAN STILL BE GATED HERE, by poking
+the state that selects it.** No emulator in this tree can enter VBE 0104h
+(SPEC.md 39.29.8: QEMU's Bochs BIOS advertises the mode and cannot map the
+window; MartyPC and 86Box have no VESA BIOS that answers at all), so the bank
+straddle cut would have been exercised on the owner's Satellite and nowhere
+else. `tests/vbeident.py --cutrow 200` pokes `[vbe_cutrow]` - the word that
+says where the 64KB window ends - so the cut fires on **mode 12h**, where a
+correct cut must be PIXEL-NEUTRAL: running a rect primitive twice over two
+halves of its own rect has to draw what running it once draws. It compares a
+cut boot against a plain boot of the same build, needs no stored capture, and
+the 0 is not vacuous - skipping one row at the boundary reddens it with a
+bounding box of exactly the poked row. **Look for this shape whenever a
+feature's own hardware is unavailable: the question is often not "can I enter
+that mode" but "what does that mode change, and can I set it by hand".**
+
+`--save`/`--ref` are the same file's before/after compare for a change that
+puts one body in front of two modes, and `--mutate` (one bit of `gfx_lmtab[0]`)
+is its proof that the captures reach `gfx_rect_setup` at all.
+
+**For `gfxbench` all four steps are written**: `python3
+tools/gfxbenchread.py` boots the bench disk, picks Run off the Bench menu,
+waits for the end-of-report line and prints all 74 measurement rows with a
+cycles column, having read them out of the package's own bss by symbol
+(benchlib's `bl_arena`/`bl_idx`/`bl_nrow`) and cross-checked them against
+`bl_save`'s file read back through `os88flush`. `--knob K=V` builds the other
+arm of an A/B into a private tree and boots that instead, which is how
+PERFORMANCE.md Set 161 was taken; `--file` parses a report already in hand,
+and `--grep`/`--json` narrow and export. It waits for the Bench cell to reach
+the menu bar before picking — `open` returns when the WINDOW exists and the
+bar is relaid a UI pass later, so a pick sent immediately fails saying there
+is no Bench menu, which reads as the package having no menus.
+
 **On an extended desktop the name is the card the SANDBOX is on**, resolved
 against §57.4's `VD` block, so two cards give two reports from one launch.
 Check the `sandbox straddles` row before comparing two.
