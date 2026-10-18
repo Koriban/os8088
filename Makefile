@@ -14492,18 +14492,20 @@ LIVENOTE_EMU = echo "usb-emu: $@ - the browser's image (SPEC.md 80.7):"; \
 # =============================================================================
 # CF484 - rebuild a whole CompactFlash card (SPEC.md 52.2)
 # =============================================================================
-# `make cfimg CFSECTORS=991872` writes build/cf484.img: an MBR and FOUR 32MB
+# `make cfimg CFSECTORS=991872` writes build/cf484.img: an MBR and FOUR
 # os8088 partitions, the first a complete bootable volume and the other three
-# entries only, for the machine's own Format to lay down.
+# entries only, for the machine's own Format to lay down. Their SIZE is
+# whatever $(CFGEOM) made partition 1 - see that variable's own note below.
 #
-# FOUR, AND NOT ONE SPANNING THE CARD, is the kernel's rule and not a choice
-# here: a partition is capped at 65,535 sectors by the volume ceiling
-# (SPEC.md 18.7/52.2) because that layer counts sectors in a WORD, and FAT16
-# media with TotSec16 == 0 - anything 32MB or over - is REFUSED by the mount
-# rules rather than truncated. SPEC.md 52.2 adds that "four primaries is the
-# whole offering and an extended chain is not implemented", so 4 x 32MB =
-# 128MB is the most of ANY card this OS can reach. tools/os88cf.py prints
-# what is left over rather than leaving the card looking broken.
+# FOUR IS SPEC.md 52.2's OFFERING - "four primaries, and an extended chain is
+# not implemented" - and that is the only cap here now.
+#
+# **THIS BLOCK USED TO SAY "4 x 32MB = 128MB is the most of ANY card this OS
+# can reach"**, on the word-wide volume ceiling. SPEC.md 18.7.5 raised that to
+# FAT16's own, just under 2GB, on kern_big and kern_dos; the CFGEOM note 50
+# lines below was written for it and this block was not, so one Makefile
+# stated both. 32MB is kern_small's ceiling now and only its. Four 2.0GB
+# slices reach ~8GB, and tools/os88cf.py still prints what is left over.
 #
 # Partition 1 carries the system, every driver and the everything-disk payload
 # (SPEC.md 19.10), plus a SYSTEM.CFG that asks for TWO things before the first

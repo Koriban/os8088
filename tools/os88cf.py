@@ -4,20 +4,23 @@
     python3 tools/os88cf.py -o build/cf484.img --sectors 991872 \
         --part1 build/cfpart1.img --mbr build/mbr.bin
 
-WHY FOUR AND NOT ONE. **A partition is capped at 65,535 sectors by the
-kernel's volume ceiling (SPEC.md 18.7/52.2)** - the volume layer counts
-sectors in a WORD - so 32MB is the largest slice os8088 can mount, and
-`os88disk.py --hdd` is hard-wired to 63/16/65 = 65,520 sectors for exactly
-that reason. FAT16 media with `TotSec16 == 0` (anything >= 32MB) is REFUSED
-by the mount rules rather than truncated, so a single big partition would not
-degrade - it would simply not appear.
+WHY FOUR, AND WHAT A PARTITION MAY NOW BE. Four is `--parts`' default, not a
+cap this tool believes in: SPEC.md 52.2's offering is *"four primaries and an
+extended chain is not implemented"*, so four is the most it can lay.
 
-SPEC.md 52.2 settles the rest: *"four primaries is the whole offering and an
-extended chain is not implemented"*. So the most of a card os8088 can reach is
-**4 x 32MB = 128MB**, whatever its size, and a 484MB card carries 356MB it
-cannot address. That is a property of the OS, not of this tool, and the tool
-says so rather than quietly laying one partition and leaving the card looking
-broken.
+**THIS PARAGRAPH USED TO SAY 32MB WAS THE LARGEST SLICE os8088 COULD MOUNT.**
+That was the word-wide volume-relative LBA, and **SPEC.md 18.7.5 raised the
+ceiling to FAT16's own - just under 2GB - on `kern_big` and `kern_dos`**. The
+body below was changed for it and this header was not, which left the file
+stating a limit that the comment above `chs()` fifty lines down already said
+had moved. `kern_small` still refuses a `TotSec16` of 0, so 32MB remains its
+ceiling.
+
+So the size of each slice is **not this tool's to decide**: it is read off
+`--part1`'s own MBR and BPB (see `chs()`), which is an `os88disk.py --hdd`
+image that already states its geometry. A plain `make cfimg` still lays the
+63/16/65 = 65,520-sector shape that shipped before 18.7.5; `make cfimg
+CFGEOM=261/255/63` lays ~2.0GB slices, and four of those reach ~8GB.
 
 WHAT IT WRITES
 
@@ -28,6 +31,8 @@ WHAT IT WRITES
   LBA 65520      partition 2  )  entries only, type 06h, UNFORMATTED - the
   LBA 131040     partition 3  )  machine's own Format (the Hard Drive page,
   LBA 196560     partition 4  )  SPEC.md 52.3) is what should lay these down,
+                 (those three LBAs are the DEFAULT 32MB shape's; with a
+                 bigger --part1 they follow its geometry, not these numbers)
                                  because the formatter is the authority on
                                  what this kernel can mount and a filesystem
                                  hand-rolled here would only be a guess at it.

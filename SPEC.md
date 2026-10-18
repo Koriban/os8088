@@ -32801,11 +32801,16 @@ base.** They were 16-bit, which is what the rest of this paragraph is about;
 §18.7.5 carries a high word beside them on `kern_big` and moves the ceiling
 to FAT16's own, just under 2GB. That is the whole of what "partitions" means to os8088:
 `dsk_clus2lba`, `dsk_read_chain`'s run coalescer, `dsk_dirw_next` and
-`dskw_flush` are the floppy's code and are untouched by capacity. It caps a
-volume at 65,535 sectors — 31.99MB — which is exactly what BPB rule 8 already
-refused to go past, and exactly the DOS 3.3 partition limit the target
-machines ran. More capacity is **more partitions**, each its own volume and
-its own drive letter.
+`dskw_flush` are the floppy's code and are untouched by capacity.
+
+**The next two sentences used to read "it caps a volume at 65,535 sectors —
+31.99MB … more capacity is more partitions", directly after the sentence
+that says the ceiling moved**, and both halves sat here for a cycle. The
+32MB cap is `kern_small`'s now and only its: BPB rule 8 refuses a `TotSec16`
+of 0 there, so that build still stops at 65,535 sectors — which is exactly
+the DOS 3.3 partition limit the target machines ran. On `kern_big` and
+`kern_dos` more capacity is **either** a bigger volume **or** more
+partitions, each its own drive letter, up to §52.2's four primaries.
 
 It also makes an invariant free: with `TotSec16` a word, `dsk_clus2lba`'s
 16-bit `(cluster-2) × spc` cannot overflow, because the product is bounded by
