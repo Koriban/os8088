@@ -220,7 +220,7 @@ assertion**, not at a table and a toggle.
 |---|---|---|
 | ~~**`Format ▸ Justify`**~~ | **done, §81.81** | 131 resident + 671 module + 84 bss. The estimate here was right about the cost and wrong about the SHAPE: it is not "splitting on spaces" over a block, it is a paragraph operation on the LEFT column at the width of the whole selection, with blank cells as separators. The Reference Guide had four clauses a sensible guess misses |
 | ~~**`Data ▸ Parse`**~~ | **done, §81.82** | 120 resident + 920 module + 296 bss. This estimate was right, unlike Justify's: it IS a dialog with a guessed split and a write across, and it IS module work. What it understates is that the split is at FIXED CHARACTER POSITIONS rather than at a delimiter, which is the whole reason the feature exists beside CSV |
-| **`Macro ▸ Resume`** (Start Recorder done, §81.107) | the recorder's last command | §81.74 names it as a documented shortfall |
+| ~~**`Macro ▸ Resume`**~~ | **NOT AN EXCEL 2.1d COMMAND** | Its Macro menu has FIVE items and `menu_macro.png` shows no Resume among them. §81.39's Macro row was corrected and both rows here were not; §81.74's "documented shortfall" is about the RECORDER, not about a menu item that exists |
 | ~~**`Edit ▸ Repeat`**~~ | **DROPPED by the owner, 2026-09-22** | ~~repeat the last command~~. Its greyed `Can't Repeat` row was removed too (§81.99), behind named constants for every Edit position. **scope this before starting.** Repeating an arbitrary command means recording its arguments; Excel 2.1's Repeat is mostly the last *formatting* action. Do that, or it grows without limit |
 | ~~**`File ▸ Links`**~~ | — | **struck as MDI, 2026-09-22**: it exists to reach a second open document, and SHEET has one per instance. §81.93 declines its macro functions (CHANGE.LINK, LINKS, OPEN.LINKS) on the same ground |
 
@@ -305,18 +305,24 @@ fix, not a language one, and it can be done first and alone.
 depending entirely on a scope decision nobody has taken yet, and it should not
 be started until that decision is.
 
-## 4. What is left — re-measured 2026-09-22
+## 4. What is left — re-measured 2026-10-18
 
-Off the source, not off the sections above: every menu's item table was
-counted (`sh_i_*`: File 5, Edit 12, Formula 7, Format 8, Data 12, Options 6,
-Macro 4), which agrees with §81.39.2.
+Off the source, not off the sections above — the COUNTS in `sh_mtab`, which
+is what the bar is drawn from: **File 5, Edit 11, Formula 7, Format 8,
+Data 13, Options 6, Macro 5, Sheet 4, Help 1**.
+
+**Three of those had gone stale, and the line claimed to agree with §81.39.2
+while disagreeing with it**: Edit was 12 (Repeat's greyed row came off in
+§81.99), Data 12 (`Table...` went in at §81.114) and Macro 4 (`Start
+Recorder` in §81.107). Re-measure this line whenever a menu changes; it
+cannot be derived from the sections above and nothing checks it.
 
 **Commands:**
 
 | | cost | note |
 |---|---|---|
 | ~~**`Data ▸ Table`**~~ | **DONE** | §81.114, five stages. Section 2.4 keeps the pre-build sizing |
-| **`Macro ▸ Resume`** (Start Recorder done, §81.107) | medium | Section 2.2; the recorder's own documented shortfall (§81.74) |
+| ~~**`Macro ▸ Resume`**~~ | **NOT A COMMAND** | **Excel 2.1d's Macro menu has FIVE items** — Record…, Run…, Start Recorder, Set Recorder, Relative Record — and `menu_macro.png`, the capture §81.39 names as its authority, shows exactly those with no Resume among them. This row carried it as outstanding work for its whole life; §81.39's Macro row was corrected and this one was not |
 | ~~`Options ▸ Workspace`~~ | **DONE** | §81.106 built its check-box dialog; this row and §81.93's `WORKSPACE` entry were both stale until §81.114.11 went to read them |
 | printing (6 commands) | out of scope | by decision; no print backend in the OS |
 
