@@ -9,23 +9,24 @@
 ; no loaded image can be reached - so the once-per-mode half is a file and the
 ; per-pixel half is resident.
 ;
-; THERE IS NO BOOT SNIFF, and that is the one place this departs from
-; XMEM.DRV's shape (SPEC.md 41.12.1) deliberately rather than by omission.
+; THERE IS NO RESIDENT SNIFF of XMEM.DRV's shape (SPEC.md 41.12.1): no buffer
+; is reserved and no answer is cached at boot by this file. xm_sniff exists
+; because a package can ask for extended memory at any moment with no disk in
+; the drive, and int 15h AH=88h is free to ask; VBE's probe is not free -
+; AX=4F00h fills a 512-byte buffer and AX=4F01h a 256-byte one.
 ;
-; xm_sniff exists because a package can ask for extended memory at any moment,
-; with no disk in the drive and nothing the kernel could read - so the answer
-; has to already be known, and int 15h AH=88h is free to ask. VBE's probe is
-; not free: AX=4F00h fills a 512-byte buffer and AX=4F01h a 256-byte one, and
-; a kernel that reserved either would be spending resident RAM on a question
-; only one page in the system asks.
+; THE PROBE ITSELF RUNS AT BOOT, in drv_boot_x, above the settings read and
+; right after the mount (SPEC.md 39.29.5's THIRD placement). The paragraph
+; that used to stand here said the opposite - "the ONE consumer is Control
+; Panel's Display page, which is loaded when the user opens it" - which was
+; true of the first two attempts and not of the one that shipped. It was
+; written for the cp_vid_slot placement, which deadlocked under the gfx lock,
+; and left in place when the call moved. Reading a driver image is what
+; drv_boot_x is about to do anyway, the volume is mounted and the splash owns
+; the screen, which is why that is where it ended up.
 ;
-; And it does not have to. The ONE consumer is Control Panel's Display page,
-; which lives in CTRL.DRV and is itself loaded from the system disk when the
-; user opens it - so the disk is already required at the only moment the
-; question is ever asked (SPEC.md 2.8's own test, one layer out). Loading this
-; overlay to find out costs a read the user has already paid for, and costs an
-; 8088 - which can execute the probe but could never usefully run the mode -
-; exactly nothing.
+; The Display page is still the one CONSUMER of the answer; it is no longer
+; where the question is asked.
 ;
 ; .text and not .bss, because -f bin zeroes nothing.
 ; =============================================================================

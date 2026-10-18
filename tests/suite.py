@@ -8218,6 +8218,27 @@ SOAK = [
         "passed the whole fast tier and drew nothing",
         needs=("marty",), serial=True,
         wants=("build/office360.img",)),
+    Row("vberefuse", "soak", py("tests/vberefuse.py"), 200.0,
+        "SPEC.md 39.29.6: a card that ADVERTISES 1024x768 and cannot map it "
+        "is refused. QEMU is the machine this row wants and that is the "
+        "point, not a limitation: its Bochs BIOS answers int 10h AX=4F01h "
+        "for mode 0104h and lists it present, and the window it reports at "
+        "A000 is not CPU-addressable (39.29.8) - so QEMU is a BIOS THAT "
+        "LIES, which is the case the safeguard exists for. VBV_PROVE sets "
+        "the mode, writes a byte through the window, reads it back and puts "
+        "mode 12h again; if the read-back disagrees the bit stays clear and "
+        "the Display page never grows a row, instead of growing one that "
+        "has to be RECOVERED from at the moment somebody picks it. The "
+        "probe runs at BOOT (drv_boot_x, 39.29.5's third placement), so "
+        "there is nothing to click: the row reads a decision already taken. "
+        "Check 3 is the tick counter and not a window count - a bare "
+        "desktop HAS no windows, and checks 1 and 2 both read zero-ish "
+        "values that a kernel which died inside the probe would also give. "
+        "MUTATION: skip the window proof and check 1 alone fails with "
+        "[vid_avail] = 0x15. This is the NEGATIVE case and the only VBE "
+        "coverage that runs off the Satellite 4025CDT",
+        needs=("qemu",), serial=True,
+        wants=("build/os8088.img", "build/apps.img")),
     Row("dispmode", "soak", py("tests/dispmode.py"), 60.0,
         "Single or Extend, where the second display sits, and does it survive"
         "a",

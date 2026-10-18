@@ -74310,6 +74310,35 @@ card that actually shows the defect.
 It draws no numbers. Where the window **is**, and whether a second copy of it
 is left where it **was**, is the whole reading.
 
+#### 39.29.6.1 The refusal is gated, and QEMU is what gates it
+
+`tests/vberefuse.py`, **3 checks**, and it is the only VBE coverage that runs
+anywhere but the Satellite.
+
+**QEMU is the machine this row wants, and that is the point rather than a
+limitation.** Its Bochs BIOS answers `AX=4F01h` for `0104h` and lists the mode
+as present; the window it reports at `A000` is not CPU-addressable. So QEMU is
+a **BIOS that lies**, which is exactly the case §39.29.6 exists for, and it is
+free to anyone with the repo.
+
+1 REFUSED `VID_A_VBE` is clear in `[vid_avail]` after boot · 2 MODE 12h the
+desktop is still `VID_VGA` at 640×480, which is what "puts mode 12h again" has
+to leave behind · 3 ALIVE the BIOS tick counter moved between two reads.
+
+**Check 3 is liveness and it is not decoration**: 1 and 2 both assert
+zero-ish values, and a kernel that died inside the probe — which sets a mode,
+writes through a window and sets another — would give the same two answers.
+Its first version counted visible windows and asserted at least one, which
+reported 0 on a perfectly healthy machine: **a bare desktop has no windows**,
+the Disk window opening on a double-click.
+
+**Mutation**: `clc` after `VBV_PROVE`, so the BIOS is trusted and the proof
+skipped. Check 1 alone fails, with `[vid_avail] = 0x15`. Checks 2 and 3 still
+pass, correctly — the mode is advertised, not entered.
+
+**Nothing to click.** The probe runs at boot (§39.29.5's third placement), so
+the row reads a decision already taken.
+
 #### 39.29.9 Acceptance
 
 - Mode 12h output must be **byte-identical** before and after, since one body
