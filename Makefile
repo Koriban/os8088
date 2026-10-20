@@ -4832,6 +4832,26 @@ telnettest: $(BUILD)/telnetsys.img $(BUILD)/telnetdata.img
 	@echo "            build/telnetdata.img is the scratch B: a download writes."
 	@echo "            Run it with: python3 tests/telansi.py"
 
+# WIRECHATTEST - WireChat's gate (SPEC.md 113.12): telnettest's system disk,
+# whose SYSTEM.CFG already wants ETHER.DRV, and a scratch B: carrying the
+# package and a WIRECHAT.CFG aimed at tests/wirechat.py's fixture on the
+# host. The configuration is on the PACKAGE'S volume because that is where
+# WireChat reads it (SPEC.md 113.8, os88data.inc's own-volume rule), and the
+# B: is scratch because the package writes the file back.
+$(BUILD)/wirechatcfg/WIRECHAT.CFG: Makefile | $(BUILD)
+	@mkdir -p $(dir $@)
+	printf 'host 10.0.2.2:8093/chat/\r\nnick Tester\r\nfriend Alin\r\n' > $@
+
+$(BUILD)/wirechatdata.img: $(BUILD)/wirechat.o88 $(BUILD)/wirechatcfg/WIRECHAT.CFG tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/wirechat.o88 SYSTEM/APPDATA:$(BUILD)/wirechatcfg/WIRECHAT.CFG
+
+.PHONY: wirechattest
+wirechattest: $(BUILD)/telnetsys.img $(BUILD)/wirechatdata.img
+	@echo "wirechattest: build/telnetsys.img - ETHER.DRV already wanted, and"
+	@echo "              build/wirechatdata.img is B:, WIRECHAT.O88 at its root."
+	@echo "              Run it with: python3 tests/wirechat.py"
+
 # MIDITEST - the MIDI gate's system disk (SPEC.md 34.13, 105.8.5): the 720KB
 # system disk with a SYSTEM.CFG asking for SOUND.DRV (bit 0), for the one
 # machine the kernel's boot sniff cannot see - an MPU-401 with NO FM chip
@@ -5908,6 +5928,20 @@ $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
 
 $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	$(OS88PKGB) $(BUILD)/telnet.bin -o $@
+
+# WIRECHAT (SPEC.md 113) - Telnet's include set for Telnet's reason: netpkg.inc
+# is the driver's ABI header, included by both ends so they cannot drift.
+$(BUILD)/wirechat.bin: apps/wirechat/wirechat.asm apps/wirechat/wcnet.inc \
+                       apps/wirechat/wcproto.inc apps/wirechat/wcview.inc \
+                       apps/wirechat/wcact.inc apps/wirechat/wccfg.inc \
+                       apps/wirechat/wctxt.inc apps/os88api.inc \
+                       apps/os88ui.inc apps/os88line.inc apps/os88data.inc \
+                       apps/os88sock.inc drivers/net/netpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -o $@ apps/wirechat/wirechat.asm
+	@echo "wirechat: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/wirechat.bin -o $@
 
 # THE WIRE (SPEC.md 92) - Telnet's include set for Telnet's reason: netpkg.inc
 # is the DRIVER's own ABI header and both ends include it, so the two cannot
@@ -7863,6 +7897,14 @@ $(BUILD)/regpair.bin: tests/regpair/regpair.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/regpair.o88: $(BUILD)/regpair.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/regpair.bin -o $@
 
+# SPEC.md 5.4.1.5's fixture, for tests/b4walk.py: one window, one OSAPI_GFX_BLIT4
+# of a dithered block in its W_PAINT. The row writes its own scratch disk.
+$(BUILD)/b4walk.bin: tests/b4walk/b4walk.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/b4walk/b4walk.asm
+
+$(BUILD)/b4walk.o88: $(BUILD)/b4walk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/b4walk.bin -o $@
+
 # ...and the C SDK's, for tests/cmemmove.py
 # (docs/plans/HEAP-UNPIN-PLAN.md 2.1.1 item 3). CHELLO is the C toolchain's
 # capability gate (SPEC.md 73) and os88_mem_movable() is the fifth capability
@@ -8341,13 +8383,23 @@ pkgrun: $(BUILD)/pkgrun.img $(BUILD)/pkgrun360.img
 # they test has any geometry in it. The disk carries BOTH gates' fixtures
 # (tests/pkgbig.py and tests/pkgfence.py) because it is one `--raw` build and
 # one megabyte of it is HUGE.O88.
-$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tools/os88disk.py tools/os88pkg.py | $(BUILD)
+#
+# ...and PKGMAX.O88, the one fixture that IS a package (tests/pkgmax.py): a
+# real image + bss of exactly APP_MAX_SIZE, which must LOAD - SPEC.md 20.1.1's
+# 64KB claim, the size two of the loader's words used to wrap on.
+$(BUILD)/pkgbig.img: tests/pkgbig/mkfix.py tests/pkgbig/pkgmax.asm \
+                     apps/os88api.inc tools/os88disk.py tools/os88pkg.py \
+                     | $(BUILD)
 	python3 tests/pkgbig/mkfix.py $(BUILD)/pkgbig
+	$(NASM) -f bin -w+error -I apps/ -o $(BUILD)/pkgbig/pkgmax.bin \
+		tests/pkgbig/pkgmax.asm
+	$(OS88PKG) $(BUILD)/pkgbig/pkgmax.bin -o $(BUILD)/pkgbig/PKGMAX.O88
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--raw $(BUILD)/pkgbig/BIGPKG.O88 --raw $(BUILD)/pkgbig/HUGE.O88 \
 		--raw $(BUILD)/pkgbig/BSSWRAP.O88 --raw $(BUILD)/pkgbig/BSSWORST.O88 \
 		$(BUILD)/pkgbig/BIGPKG.O88 $(BUILD)/pkgbig/HUGE.O88 \
-		$(BUILD)/pkgbig/BSSWRAP.O88 $(BUILD)/pkgbig/BSSWORST.O88
+		$(BUILD)/pkgbig/BSSWRAP.O88 $(BUILD)/pkgbig/BSSWORST.O88 \
+		$(BUILD)/pkgbig/PKGMAX.O88
 	@python3 tools/os88disk.py --verify $@
 
 # --- PKGFMT, the format byte's disk (ON DEMAND: `make pkgfmt`) ---------------
@@ -8370,6 +8422,7 @@ pkgfmt: $(BUILD)/pkgfmt360.img
 #   make pkgbig                          builds the fixture disk
 #   python3 tests/pkgbig.py              runs the mount/size gate on MartyPC
 #   python3 tests/pkgfence.py            ...and the img+bss write-bound gate
+#   python3 tests/pkgmax.py              ...and a package AT the ceiling loads
 pkgbig: $(BUILD)/pkgbig.img
 
 # --- REHOME, the re-home's consumer (ON DEMAND: `make rehome`) --------------
@@ -11412,8 +11465,14 @@ vidpm: $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 \
 # the BIOS - the partition os8088's own installer makes, from LBA 26 for
 # 63,726 sectors - and os88hdd.py --wrap puts it under the card's hidden
 # cylinder and a VHD footer. On demand: 31 MB of video is no part of `all`.
+#
+# ...except VGA's, which is a 286's: a 504 MB IDE disk (1024/16/63, the
+# most a BIOS's CHS reaches without LBA), the volume from the MBR's own
+# track and a VHD footer of our own - its 290 MB of video is too much for an
+# XT's controller, and the videos were made for a 286 and a 486 anyway
 VIDDEMO_ADAPTERS := $(notdir $(patsubst %/,%,$(sort $(dir $(wildcard apps/video/demo/*/00-VIDS.TXT)))))
-VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-ST11R.VHD)
+VIDDEMO_IDE := vga
+VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-$(if $(filter $(a),$(VIDDEMO_IDE)),IDE,ST11R).VHD)
 # (= and $$(APPS) below, not :=: the apps disk's lists are defined further
 # down this file, and an immediate expansion here took them as EMPTY)
 VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
@@ -11448,6 +11507,22 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img --st11 \
 		--cyls 615 --heads 4 --spt 26 --out $@
+	rm -f $(BUILD)/viddemo/$*.img
+
+$(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) \
+	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
+	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
+	tools/os88disk.py tools/os88hdd.py
+	python3 tools/os88disk.py -o $(BUILD)/viddemo/$*.img --hdd \
+		--geometry 1024/16/63 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		$(addprefix MEDIA:,$(filter %/00-VIDS.TXT %.V88,$^))
+	python3 tools/os88disk.py --verify-hdd $(BUILD)/viddemo/$*.img
+	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img \
+		--cyls 1024 --heads 16 --spt 63 --out $@
 	rm -f $(BUILD)/viddemo/$*.img
 
 # THE ENCODER FOR PEOPLE WITH NO os8088 TREE (SPEC.md 98.2.13): the window,
@@ -11875,7 +11950,7 @@ budget-check: $(BUILD)/kernel.bin small emu
 # The programs that could not have started (SPEC.md 24.5 has the same
 # figures, re-measured together).
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
-             $(BUILD)/thewire.o88 \
+             $(BUILD)/thewire.o88 $(BUILD)/wirechat.o88 \
              $(BUILD)/tracker.o88 \
              $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88 \
              $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88
@@ -13014,6 +13089,7 @@ APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
               $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(BUILD)/telnet.o88 \
+              $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
               $(BUILD)/timer.o88 $(BUILD)/bounce.o88
@@ -13520,8 +13596,12 @@ APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
 #     dated 2026-10-02): that disk had 12 clusters spare and the player with
 #     its songs is ~50. It rides the MEDIA DISK instead (MEDIAARGS360) - the
 #     floppy whose subject is music already - at its root, songs in MEDIA/MIDI.
+#     WIRECHAT IS NOT CURATED ONTO IT (SPEC.md 113.11, 24.6.1's rule, dated
+#     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
+#     network360.img beside Telnet and the Browser.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88,$(APPS_TOOLS))
+                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
+                    $(BUILD)/wirechat.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -13721,7 +13801,7 @@ OFFICEARGS360 := $(OFFICE_PKGS) \
 # user it has nothing to serve here (it answered 'Bad package' once). The
 # root of this disk is for programs that run on this machine.
 NETWORK_PKGS := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
-                $(BUILD)/thewire.o88
+                $(BUILD)/thewire.o88 $(BUILD)/wirechat.o88
 NETWORK360 := $(NETWORK_PKGS) $(NETWORK_DATA) $(APPS_DOS)
 NETWORKARGS360 := $(NETWORK_PKGS) \
                   $(addprefix MEDIA:,$(NETWORK_DATA)) \
@@ -14459,10 +14539,14 @@ imager:
 #
 # ISOTRON (SPEC.md 108) goes on the same ground, added 2026-10-13: a game, not
 # a calibration instrument, and games360.img carries it at this geometry.
+#
+# WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
+# chat client is the network disk's subject, and network360.img carries it.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
               $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88
+              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
+              $(BUILD)/wirechat.o88
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
