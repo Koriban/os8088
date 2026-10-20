@@ -912,12 +912,72 @@ bl_hex4:
 ; benchmark that quietly loses its last twenty rows is worse than one that
 ; says it did.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; bl_intro - the FIRST TWO LINES of every report, and the reason they are here
+;            rather than in each bench's own header
+;
+; EVERY BENCH IN tests/ ALREADY SAVES ITS REPORT TO A TEXT FILE, and that is
+; written in CLAUDE.md, in docs/TESTING.md, in bl_save's own header twenty
+; lines up, and in the file comment of each bench. It is still not read: the
+; reports keep being taken by paging down and photographing the screen, which
+; is eleven captures and then a human or a model reading digits off 8x8
+; glyphs - and `GFX_XOR_RECT 256x1` was first taken that way, with middle
+; digits that are genuinely ambiguous at that cell size.
+;
+; So the sentence goes where somebody who is about to do that is ALREADY
+; LOOKING: line one of the report itself. Documentation that is not at the
+; point of use is documentation that is not read, and four copies of it did
+; not fix that.
+;
+; IT IS EMITTED FROM bl_lcommit, which is the one funnel every report line -
+; text or measured row - passes through, so a bench cannot forget to call it
+; and a NEW bench gets it without knowing it exists. [bl_introd] is what stops
+; the recursion, since bl_sline below re-enters the very routine that called
+; this. The caller's half-built line is parked in bl_draw, which is the
+; painter's scratch and is free while the report is being BUILT.
+; -----------------------------------------------------------------------------
+bl_intro:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, bl_lscr
+    mov di, bl_draw
+    mov cx, BL_MAXLINE + 4
+    rep movsb
+    mov si, bl_s_intro1
+    call bl_sline
+    mov si, bl_s_intro2
+    call bl_sline
+    mov si, bl_draw
+    mov di, bl_lscr
+    mov cx, BL_MAXLINE + 4
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 bl_lcommit:
     push ax
     push bx
     push cx
     push si
     push di
+    cmp word [bl_nrow], 0       ; the report's first line says where the
+    jne .introed                ; report GOES (bl_intro above)
+    cmp byte [bl_inintro], 0
+    jne .introed
+    mov byte [bl_inintro], 1
+    call bl_intro
+    mov byte [bl_inintro], 0
+.introed:
     mov cx, BL_MAXLINE          ; find the last non-space
 .tr:
     or cx, cx
@@ -1707,6 +1767,17 @@ bl_dbgfind:
 
 bl_s_nul:   db 0
 bl_s_us:    db 'us', 0
+; A RE-ENTRY GUARD AND NOT A "DONE" FLAG, which is why it is a byte of the
+; IMAGE and not of the bss. A package's bss is NOT ZEROED at load, so a
+; "have I done this" flag in there starts as whatever the machine left and
+; the banner is skipped on the first run - which is exactly what happened.
+; This is 0 whenever control is not inside bl_intro, so the assembler's zero
+; is the only initialisation it can need; and the CONDITION is [bl_nrow] = 0,
+; so a re-run - which clears the report - gets the banner again.
+bl_inintro: db 0
+
+bl_s_intro1: db 'THIS REPORT SAVES AS A TEXT FILE - press S, or the Bench menu.', 0
+bl_s_intro2: db 'Read it off any emulator with tools/os88flush.py. Do not screenshot it.', 0
 bl_s_head:  db 'measurement                 N    counts         us/op', 0
 bl_s_stat:  db 'rows', 0
 bl_s_dash:  db '-', 0
