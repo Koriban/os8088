@@ -5826,7 +5826,6 @@ sh_drawall:
     call sh_hsb_draw
     call sh_drawcolhdrs
     call sh_drawrowhdrs
-    call sh_drawhdrrules              ; 81.116.1: and the lines that box them
     call sh_dmgfull                   ; the three grid painters below are
     call sh_drawgrid                  ; RANGED now (sh_dmgc1..sh_dmgr2); a
     call sh_drawlines                 ; full draw is the whole viewport
@@ -7286,67 +7285,6 @@ sh_drawstatus:
                                        ; and is the message string in this one
 
     pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sh_drawhdrrules - 81.116.1: the CORNER BOX that encloses the headers (stage
-; 1.8's item 10 - "lines through the header row and column, and a corner
-; box"). SHEET's letters and numbers floated outside the grid with no lines.
-;
-; TWO SHORT RULES AND NOT TWO LONG ONES: row 1's own top gridline already
-; rules the column headers off across the width of the grid, and column A's
-; own left gridline does the same down its height. All that was missing is
-; the L that closes the corner - so these two spans are the row-header
-; column's width and the column-header band's height, and nothing else.
-;
-; SOLID, where the cell gridlines next door are dotted (81.116), which is
-; Excel's own distinction rather than an oversight: a header rule is a real
-; edge and a gridline is a guide.
-;
-; THE CORNER BOX IS WHERE THE TWO MEET and needs no third call - which is
-; what keeps this inside SHEET's resident headroom. Per-header separators
-; were written first and taken out: they are 27 more one-pixel fills on a
-; ten-by-fifteen viewport, they are not what the look report asked for, and
-; the routine did not FIT - 129 bytes is what the package has (81.115), and
-; this engine cannot move to CHART.OVL the way the dialogs did, because a
-; repaint may not depend on an on-demand overlay being loaded.
-;
-; TWO fills on a full repaint, at the 608.61 us Set 163 measured: ~1.2 ms
-; against the ~3 ms a SINGLE cell's opaque text run costs. Not on the damage
-; path - a cell edit repaints its own rect and never comes here.
-; -----------------------------------------------------------------------------
-sh_drawhdrrules:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [sh_ox]                   ; under the ROW-HEADER column only -
-    mov cx, ax                        ; row 1's own top gridline already rules
-    add cx, SH_RH_W - 1               ; the column headers off for the width of
-                                      ; the grid, and a second line one pixel
-                                      ; above it put a GAP OF 1 in the row list
-                                      ; tests/glass.py's rgrid walks
-    mov bx, [sh_goy]
-    add bx, SH_FB_H + SH_CH_H - 1
-    mov dx, bx
-    call OSAPI_GFX_FILL
-    mov ax, [sh_ox]                   ; ...and right of the row headers -
-    add ax, SH_RH_W - 1               ; THROUGH THE HEADER BAND ONLY, which is
-    mov cx, ax                        ; what makes the corner box. Column A's
-    mov bx, [sh_goy]                  ; own left gridline already rules the
-    add bx, SH_FB_H                   ; headers off for the whole grid height,
-    mov dx, bx                        ; so a second line beside it is
-    add dx, SH_CH_H - 1               ; redundant - and it broke
-    call OSAPI_GFX_FILL               ; tests/glass.py's column walk, which
-                                      ; reads the row-header column from the
-                                      ; GAP between the first two lines and
-                                      ; found 161 where it wanted 36..46
     pop dx
     pop cx
     pop bx

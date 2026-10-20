@@ -255,7 +255,8 @@ def main():
     for f in files:
         macro = None
         tcur = None                  # the `%1 %+ _x:` template label open now
-        for sect, n, line in sections(f):
+        tdecl = False                # ...and declared: FRAMEB below
+        for sect, n, line, raw in sections_raw(f):
             m = MACRO_D.match(line)
             if m:
                 macro = m.group(1)
@@ -280,14 +281,20 @@ def main():
                     tcur = [t.group(1), bool(TDATA.match(rest)), set(),
                             not rest]
                     tmpl[macro].append(tcur)
+                    # a TEMPLATE label can carry the return-kind rule's
+                    # declaration too (FRAMEB, below): kernel.asm's KGO_PAIR,
+                    # CTRL.DRV's and the boot blob's cp_kgo/bvs_kgo, is
+                    # exk_go's shape written once for two images. Its kinds
+                    # stay empty, which is "unjudged" - exactly a raw one's
+                    tdecl = 'ovlchk: builds its own far frame' in raw
                 elif tcur is not None:
                     if tcur[3] and line.strip():
                         tcur[1], tcur[3] = bool(TDATA.match(line)), False
                     r = TRET.match(line)
-                    if r:
+                    if r and not tdecl:
                         tcur[2].add(r.group(1).lower())
                     l = TLADJ.match(line)
-                    if l:
+                    if l and not tdecl:
                         tcur[2].add('retf' if l.group(1).lower()
                                     .startswith('kretfc_') else 'ret')
             m = LABEL.match(line)
@@ -1253,8 +1260,10 @@ def main():
     TOPL = re.compile(r'^([A-Za-z_]\w*):')
     FARC = re.compile(r'\bcall\s+(?:far\s+)?\w+\s*:\s*([A-Za-z_]\w*)')
     NRC  = re.compile(r'\bcall\s+(?:near\s+)?([A-Za-z_]\w*)\s*$')
-    # BLOBCALL is `push cs` + a near call: a FAR frame, so its target owns a retf
-    BLOBF = re.compile(r'\bBLOBCALL\s+([A-Za-z_]\w*)')
+    # BLOBCALL is `push cs` + a near call: a FAR frame, so its target owns a
+    # retf - and COLDCALL is the same two instructions inside `.cold`
+    # (kernel.asm, docs/plans/ROM-PLAN.md 3.2), judged the same way
+    BLOBF = re.compile(r'\b(?:BLOBCALL|COLDCALL)\s+([A-Za-z_]\w*)')
     #
     # A LABEL IS COLLECTED AS A LIST OF EXTENTS, NOT AS ONE.  `%ifdef
     # KERN_BIG` / `%else` is the ordinary shape for a routine whose small-
@@ -1740,9 +1749,14 @@ def check_pkgs():
 # compares that against the FILE. ch_ovneed reads CH_OVKB*1024 bytes into it,
 # so a tail that outgrows its claim is not an error - it is a module truncated
 # at a byte boundary, which fails later and somewhere else (82.16.9).
+# SCRIBE LEFT THIS LIST in the 2026-10-20 upstream merge: #268 made its
+# sidecar a PART of the package (SPEC.md 95.8.8), so there is no SC_OVKB to
+# compare a file against any more - upstream dropped the constant and the row
+# together, and the fork kept the row alone, which fails as "no SC_OVKB in
+# apps/scribe/scribe.asm" and reads as a missing constant rather than a
+# retired one.
 CLAIMS = [('build/CHART.OVL',  'apps/os88chartovl.inc', 'CH_OVKB'),
-          ('build/MACRO.OVL',  'apps/sheet/sheet.asm',  'SH_M2KB'),
-          ('build/SCRIBE.OVL', 'apps/scribe/scribe.asm', 'SC_OVKB')]
+          ('build/MACRO.OVL',  'apps/sheet/sheet.asm',  'SH_M2KB')]
 
 
 def check_claims():
