@@ -14812,6 +14812,13 @@ SOAK = [
         "Ctrl+X move, Ctrl+D fill, nothing pasted mid-entry, F3/Shift+F3/"
         "Ctrl+G/F5/Ctrl+F/Ctrl+N open their dialogs, and Ctrl+S saves",
         needs=("marty",), serial=True),
+    Row("sheetask", "soak", py("tests/sheetask.py"), 300.0,
+        "SPEC.md 81.118: SHEET asks before it throws a workbook away - "
+        "[sh_modified] 0 on open, 1 on an entry, 0 on a save that kept "
+        "everything and 1 again after; then the CLOSE BOX refuses and puts "
+        "75.3's Save/Discard/Cancel up, and Discard closes it. The four "
+        "flag readings are what stop a stuck 1 passing the close test",
+        needs=("marty",), serial=True),
     Row("sheetdlgclose", "soak", py("tests/sheetdlgclose.py"), 400.0,
         "SPEC.md 81.100: a dialog's CLOSE BOX leaves its engine usable - the "
         "list (Format Number) and input (Goto) dialogs closed by their boxes "
@@ -14820,9 +14827,10 @@ SOAK = [
         needs=("marty",), serial=True),
     Row("sheetdlgcga", "soak", py("tests/sheetdlgcga.py"), 400.0,
         "SPEC.md 81.100: SHEET's tall fixed dialogs keep their height on a "
-        "CGA (WF_KEEPH, 11.93) - radio 171 and Border 159 rows against a "
+        "CGA (WF_KEEPH, 11.93) - Gallery 169 and Border 159 rows against a "
         "155-row band, still on the display, and closing each leaves "
-        "nothing below SHEET's window; list and Data Form as controls",
+        "nothing below SHEET's window; Alignment (121 since 81.115), list "
+        "and Data Form as controls",
         needs=("marty",), serial=True),
     Row("sheetmtailherc", "soak",
         py("tests/sheetmtail.py", "--card", "herc"), 400.0,

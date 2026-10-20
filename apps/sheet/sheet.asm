@@ -1673,7 +1673,12 @@ sh_doread:
     mov bp, SHM_READ
     call ch_ovcall
     pop bp
-    jmp sh_undo_drop                   ; another document now (81.57)
+    cmp word [sh_msg], sh_m_loaded     ; a document just read is CLEAN - every
+    jne .kept                          ; cell it made marked it dirty on the
+    mov byte [sh_modified], 0          ; way in (81.118)
+.kept:
+    jmp sh_undo_drop                   ; another document now (81.57). It reads
+                                       ; no flag, so the compare above is free
 sh_dowrite:
     call sh_recalc_all                  ; every formula CURRENT before any
     push bp                             ; writer reads one - see below
@@ -2606,6 +2611,10 @@ sh_entry:
     mov si, sh_tpl
     call OSAPI_WM_CREATE
     jc .fail
+    push ax
+    mov ax, sh_onclose                ; the close negotiator (81.118, SPEC.md
+    call OSAPI_WM_ONCLOSE             ; 75.1): a changed workbook asks first
+    pop ax
     push ax                           ; SIZABLE (SPEC.md 11.1, 81.112). The
     mov al, 1                         ; contract is that a resizable window's
     call OSAPI_WM_SIZABLE             ; paint lays out from the LIVE record
@@ -9097,17 +9106,11 @@ sh_mfire:
     call sh_idlg_open_r
     jmp .out
 .file:
-    or al, al
-    jnz .fopen
-    mov al, SH_FDK_NEW
-    call sh_fdlg_open_r
-    jmp .out
-.fopen:
-    cmp al, 1
-    jne .fsave
-    mov al, FDLG_OPEN
-    call sh_dlg
-    jmp .out
+    cmp al, 1                          ; New and Open both throw the current
+    ja .fsave                          ; workbook away, so both ask first when
+    inc ax                             ; it has changes (81.118) - AL = 1 New,
+    call sh_ask_unsaved                ; 2 Open, the action owed once the
+    jmp .out                           ; question is answered
 .fsave:
     cmp al, 2
     jne .fsaveas
@@ -13711,6 +13714,9 @@ SH_CALC_MANUAL equ 2
 SH_CALC_NOWROW equ 3                ; not a mode: the dialog's fourth row
 
 SH_FDK_CLEAR equ 7
+SH_PEND_NEW  equ 1                  ; sh_ask_unsaved's owed action (81.118)
+SH_PEND_OPEN equ 2
+SH_PEND_CLOSE equ 3
 SH_FDK_NEW   equ 8
 SH_FDK_CALC  equ 9
 SH_FDK_SORT  equ 10
@@ -14189,6 +14195,7 @@ sh_setext:
 ; to keep goes altogether. in: AX = col, BX = row. Preserves all.
 ; -----------------------------------------------------------------------------
 sh_clear_one:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push di
@@ -14273,6 +14280,7 @@ sh_clear_one:
 ; skipped, which is what the single-cell version did too. Preserves all.
 ; -----------------------------------------------------------------------------
 sh_fmt_one:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -21155,6 +21163,13 @@ sh_new:
     call sh_frzmark                    ; ...and the item says so again
     mov byte [sh_editing], 0
     mov word [sh_msg], 0
+    mov byte [sh_modified], 0          ; A NEW DOCUMENT IS CLEAN (81.118), and
+                                       ; this is one place the port diverges
+                                       ; from main: 81.23's own comment says
+                                       ; the flag is "cleared by New" and its
+                                       ; sh_new does not clear it, so closing
+                                       ; straight after New asks about an
+                                       ; empty sheet nobody has touched
     call sh_repaint
     pop di
     pop si
@@ -21168,6 +21183,139 @@ sh_new:
 ; outgoing sheet's selection/scroll into its slot and restores the
 ; incoming sheet's own (all-zero the first time it's ever visited)
 ; -----------------------------------------------------------------------------
+; =============================================================================
+; Unsaved work (SPEC.md 81.118). [sh_modified] is set by every routine that
+; changes the document - a cell, a border, a note, a format - and cleared by
+; New, by a successful read and by a save that kept EVERYTHING. New, Open and
+; closing the window all throw the workbook away, so each asks first when it is
+; set, with SPEC.md 75.3's standard Save / Discard / Cancel alert: the same
+; question, in the same words, that Note Pad and Word ask.
+;
+; THIS IS MAIN'S 81.23, ported at the 2026-10-20 merge rather than written
+; again - the arrangement, the words and the refusal cases are its, and what
+; changed is where the pieces live: sh_fdlg_open is CHART.OVL's here, so
+; sh_proceed takes the resident thunk, and the whole family is `.text` because
+; a close negotiator must answer with the module unmounted.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sh_ask_unsaved - in: AL = what to do once the workbook may go: SH_PEND_NEW,
+; SH_PEND_OPEN or SH_PEND_CLOSE. Does it at once when nothing would be lost;
+; otherwise raises the alert and leaves it to sh_onask.
+; out: CF = 0 done (or asked), CF = 1 the alert could not be raised - one is
+;      already up and has been brought to the front, or the window table is
+;      full - and NOTHING was done. Gfx lock held. Preserves every register.
+; -----------------------------------------------------------------------------
+sh_ask_unsaved:
+    push ax
+    push bx
+    push si
+    push di
+    push dx
+    cmp byte [sh_modified], 0
+    jne .ask
+    mov [sh_pend], al
+    call sh_proceed
+    clc
+    jmp short .out
+.ask:
+    mov dl, al                        ; NOT [sh_pend] yet: an alert already up
+                                      ; is still owed ITS action, and a refused
+                                      ; ask must not change what that is
+    mov si, sh_s_askpre               ; 'Save changes to NAME?' - the name
+    mov di, sh_askmsg                 ; is at most SH_FNAME_MAX characters, so
+    call sh_strcpy                    ; the line fits OS88UI_AMAX
+    dec di
+    mov si, sh_name
+    call sh_strcpy_to_di
+    mov word [di], '?'                ; '?' and the NUL in one store
+    mov al, OS88UI_ASAVE
+    mov bx, [sh_ownwin]
+    mov si, sh_askmsg
+    mov di, sh_onask
+    call os88ui_ask                   ; CF = 1 refused: nothing happens
+    jc .out
+    mov [sh_pend], dl
+.out:
+    pop dx
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_onask - the alert's completion (SPEC.md 75.3). AL = 0 Save, 1 Discard,
+; 2 Cancel or OS88UI_ACANCEL; SI = our window; gfx lock held, alert gone.
+; A Save that did not keep EVERYTHING - a failed write, a truncated file, one
+; sheet of several - does NOT go on: the status line says what happened and
+; the workbook is still here, so the user can choose Discard knowingly.
+; -----------------------------------------------------------------------------
+sh_onask:
+    or al, al
+    jz .save
+    cmp al, 1
+    je .go
+    ret                               ; Cancel, or dismissed: stay as we are
+.save:
+    call sh_dowrite
+    cmp byte [sh_modified], 0         ; sh_dowrite clears it only for a save
+    je .go                            ; that kept the whole workbook
+    mov si, [sh_ownwin]
+    call sh_repaint                   ; ...and the status line says why not
+    ret
+.go:
+    jmp sh_proceed
+
+; -----------------------------------------------------------------------------
+; sh_proceed - do [sh_pend]'s action now. Gfx lock held.
+; -----------------------------------------------------------------------------
+sh_proceed:
+    push ax
+    push bx
+    push si
+    mov al, [sh_pend]
+    mov si, [sh_ownwin]
+    cmp al, SH_PEND_OPEN
+    je .open
+    cmp al, SH_PEND_CLOSE
+    je .close
+    mov al, SH_FDK_NEW                ; New asks which KIND first (.donew).
+    call sh_fdlg_open_r               ; the dialog engine is CHART.OVL's here
+    jmp short .out
+.open:
+    mov al, FDLG_OPEN
+    call sh_dlg
+    jmp short .out
+.close:
+    mov byte [sh_modified], 0         ; this IS the answer: not again
+    mov bx, si
+    call OSAPI_WM_CLOSE               ; DEFERRED (SPEC.md 75.2) - draw nothing
+.out:                                 ; after it
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_onclose - the CLOSE NEGOTIATOR (SPEC.md 75.1). SI = our window, gfx lock
+; held. CF = 0 close now (nothing to lose), CF = 1 not yet: the question is up
+; and sh_proceed closes once it is answered - or an alert is already up and
+; has been raised, and the window waits for it.
+; -----------------------------------------------------------------------------
+sh_onclose:
+    cmp byte [sh_modified], 0
+    je .go
+    push ax
+    mov al, SH_PEND_CLOSE
+    call sh_ask_unsaved
+    pop ax
+    stc
+    ret
+.go:
+    clc
+    ret
+
 ; -----------------------------------------------------------------------------
 ; sh_sheetmark - point every Sheets item at its plain string, then the CURRENT
 ; one at its marked twin. Called at startup and after every switch, so the mark
@@ -21397,9 +21545,14 @@ shm_dowrite:
     jne .warned                       ; write's "Err N" (or a truncated save's
                                       ; message) must not be replaced by a
                                       ; string that begins with "Saved"
+    mov byte [sh_modified], 0         ; ...and only a plain success makes the
+                                      ; document CLEAN: a truncated file, or
+                                      ; one that kept one sheet of several,
+                                      ; did not save everything (81.118)
     call sh_sheets_used
     cmp ax, 2
     jb .warned
+    mov byte [sh_modified], 1
     mov word [sh_msg], sh_s_onesheet
 .warned:
     pop bx
@@ -23071,9 +23224,13 @@ sh_dowrite_biff:
     call OSAPI_FILE_WRITE
     jc .werr
     mov word [sh_msg], sh_m_saved
+    mov byte [sh_modified], 0         ; BIFF writes the WORKBOOK, so a plain
+                                      ; success here is clean whatever
+                                      ; sh_sheets_used would say (81.118)
     cmp byte [sh_trunc], 0            ; cells dropped for room must not be
     je .wdone                         ; reported as a plain success
     mov word [sh_msg], sh_m_trunc
+    mov byte [sh_modified], 1         ; ...and a truncated file is not saved
     jmp .wdone
 .werr:
     call sh_setferr
@@ -27285,6 +27442,7 @@ sh_findcell:
 ;      CF=1 the table is full - no new record could be created
 ; -----------------------------------------------------------------------------
 sh_addcell:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -27363,6 +27521,7 @@ sh_addcell:
 ; sh_removecell - in: AX=col, BX=row; removes the record if present
 ; -----------------------------------------------------------------------------
 sh_removecell:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -27480,6 +27639,7 @@ sh_bt_findcell:
 ; sh_bt_addcell - find or create (col,row); in AX=col,BX=row;
 ; out CF=0 DI=offset (zeroed border byte if new), CF=1 table full
 sh_bt_addcell:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -27538,6 +27698,7 @@ sh_bt_addcell:
 
 ; sh_bt_removecell - in: AX=col, BX=row
 sh_bt_removecell:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -27701,6 +27862,7 @@ sh_nt_findcell:
 ; sh_nt_addcell - find or create (col,row); in AX=col,BX=row;
 ; out CF=0 DI=offset (zeroed text offset if new), CF=1 table full
 sh_nt_addcell:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -27760,6 +27922,7 @@ sh_nt_addcell:
 ; sh_nt_removecell - in: AX=col, BX=row. Deleting a note orphans its text in
 ; the arena; see this table's header on why that is the existing behaviour.
 sh_nt_removecell:
+    mov byte [sh_modified], 1          ; the document changed (81.118)
     push ax
     push bx
     push cx
@@ -54107,8 +54270,12 @@ sh_it_find:      db 'Find...', 0
 ; exists to keep on the right side of.
 sh_s_appname:  db 'Sheet', 0
 sh_m_file:     db 'File', 0
-sh_i_file:     dw sh_it_new, sh_it_open, sh_it_save, sh_it_saveas
-               dw sh_it_fdelete
+sh_i_file:                                ; LABELLED like sh_i_data's, so a
+.new:          dw sh_it_new                ; gate names a row instead of
+.open:         dw sh_it_open               ; counting one (sheetfmt's
+.save:         dw sh_it_save               ; item_index - 81.114.8's rule
+.saveas:       dw sh_it_saveas             ; about a row that moves)
+.fdelete:      dw sh_it_fdelete
 sh_it_new:     db 'New...', 0
 sh_it_open:    db 'Open...', 0
 sh_it_save:    db 'Save', 0
@@ -54449,6 +54616,7 @@ sh_s_r:        db 'R', 0
 sh_s_cu:       db 'C', 0
 sh_s_end:      db 'E', 13, 10, 0
 sh_m_saved:    db 'Saved', 0
+sh_s_askpre:   db 'Save changes to ', 0   ; SPEC.md 75.3's question (81.118)
 sh_m_trunc:    db 'Saved - TRUNCATED; sheet too large for this format.', 0
 sh_m_loaded:   db 'Loaded', 0
 sh_f_sum:      db 'SUM', 0
@@ -55980,7 +56148,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9293                     ; +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9331                     ; +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -57093,7 +57261,12 @@ sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; sh_blitdel, where this fork had
                                        ; already grown a chain - so it is
                                        ; re-anchored on the end of it
-sh_dc_ver         equ sh_abon + 1        ; byte: 2 BIFF3, 4 BIFF4 (81.10.10)
+sh_modified       equ sh_abon + 1      ; byte: the document has changed since
+                                       ; the last save or read (81.118)
+sh_pend           equ sh_modified + 1  ; byte: SH_PEND_*, owed once answered
+sh_askmsg         equ sh_pend + 1      ; OS88UI_AMAX+2: 'Save changes to X?'
+sh_askend         equ sh_askmsg + OS88UI_AMAX + 2
+sh_dc_ver         equ sh_askend          ; byte: 2 BIFF3, 4 BIFF4 (81.10.10)
 sh_dc_end         equ sh_dc_ver + 1      ; word: the decoded text's length
 sh_dc_sp          equ sh_dc_end + 2      ; word: fragments on the stack
 sh_dc_tend        equ sh_dc_sp + 2       ; word: where the token array ends

@@ -138635,7 +138635,12 @@ numbering**, which is not this file's — §81.22 here is a formula answering
 with text, and §81.23 is a different section again. That collision is the
 whole reason this one exists.
 
-**WHY THEY ARE NOT IN THIS MERGE, PLAINLY: SHEET HAS 46 RESIDENT BYTES**
+**THE FIRST OF THEM IS DONE — §81.118.** The 2026-10-20 merge of
+`1e3608d8..eea2d24a` raised `APP_MAX_SIZE` to `0xFE00` (§20.1.1) and the ask
+was the first thing that headroom bought, at 227 bytes of image and 38 of
+bss. The borders-and-notes WRITER is still owed.
+
+**WHY THEY WERE NOT IN THE FIRST MERGE, PLAINLY: SHEET HAD 46 RESIDENT BYTES**
 (§81.115, re-measured 2026-10-18 — image 52,105 + bss 9,289 of 61,440). Both
 features are hundreds of bytes and neither fits. Taking them needs resident
 room made first, and §81.116.2's own measurement says where it is not: the
@@ -138645,7 +138650,69 @@ tail, so this is a subsystem move to an overlay, not a size pass.
 **The order to do it in**, when the room exists: the ask comes first. It is
 the one a user can lose work to, it is cheaper than the XF collection, and
 Note Pad and Word already ask — so SHEET is the odd one out in its own
-system.
+system. That is what happened, and §81.118 is the record of it.
+
+
+### 81.118 Ask before throwing work away — main's §81.23, ported
+
+SHEET was the only document program in this system that would silently throw
+a changed workbook away. Note Pad, TeXPad, Paint and Word all answer §75.1's
+close negotiation; §81.117 recorded SHEET's absence as a real gap with the
+reason it could not be paid then — **46 resident bytes**. The 2026-10-20
+merge raised `APP_MAX_SIZE` from `0xF000` to `0xFE00` (§20.1.1), which is
+3,584 bytes of package headroom, and this is the first thing that room bought.
+
+**It is main's implementation, ported rather than written again**: the
+arrangement, the words and the refusal cases are `main`'s §81.23 at
+`eea2d24a`. `[sh_modified]` is a byte set by the eight routines that can
+change a document — `sh_addcell`, `sh_removecell`, `sh_bt_addcell`,
+`sh_bt_removecell`, `sh_nt_addcell`, `sh_nt_removecell`, `sh_clear_one` and
+`sh_fmt_one` — and cleared by New, by a successful read and by a save that
+kept EVERYTHING. `sh_ask_unsaved` raises §75.3's Save / Discard / Cancel
+alert; `sh_onask` acts on the answer; `sh_proceed` does the owed action; and
+`sh_onclose` is the negotiator `OSAPI_WM_ONCLOSE` is given.
+
+**Three things are this fork's rather than main's**, and each is a consequence
+of structure rather than a preference:
+
+* `sh_fdlg_open` is `CHART.OVL`'s here, so `sh_proceed` calls the resident
+  thunk `sh_fdlg_open_r`. The whole family is `.text` for the same kind of
+  reason: a close negotiator has to answer with the module unmounted.
+* **A new document is CLEAN.** §81.23's own comment says the flag is "cleared
+  by New" and `main`'s `sh_new` does not clear it, so on `main` a Close
+  straight after a New asks about an empty sheet nobody has touched. One
+  instruction at the foot of `sh_new`.
+* **BIFF's success path marks clean on its own.** The other five writers end
+  in `sh_dowrite`'s `.warn`, which is where the clean mark and the
+  one-sheet-only downgrade both live; `.biff` jumps to `sh_dowrite_biff` and
+  never reaches it. BIFF writes the whole workbook, so a plain success there
+  is clean whatever `sh_sheets_used` would say — and a TRUNCATED one is not.
+
+**Cost: 227 bytes of image and 38 of bss** (`sh_modified`, `sh_pend` and
+`sh_askmsg`'s `OS88UI_AMAX + 2`), leaving 3,235 spare.
+
+#### 81.118.1 The gate, and the two mutations
+
+`tests/sheetask.py` (`soak -k sheetask`) reads `[sh_modified]` at four states
+— opened 0, typed 1, saved 0, typed again 1 — and then drives the close box
+and answers the alert. **The four readings are what make the last two mean
+something**: a flag stuck at 1 would pass a close test on its own and fail
+nothing, which is the shape `tests/paintdirty.py` already argues for Paint.
+
+Mutated twice, because each half can fail without the other:
+
+| mutation | what the row says |
+|---|---|
+| `cmp byte [sh_modified], 0` → `, 2` in `sh_onclose` (never equal, so it never refuses) | the close box CLOSES a changed workbook; no alert; Discard never reached — 3 checks |
+| the clean mark in `sh_dowrite`'s `.warn` → `nop` | `[sh_modified] is 0 after saved` alone — 1 check, and the close half still passes |
+
+The second is the one worth having. Without the four readings it would have
+been invisible: the document stays dirty, the question still gets asked, and
+the only symptom is being asked to save a file that is already on the disk.
+
+**`sh_i_file` is LABELLED now** (`.new`, `.open`, `.save`, `.saveas`,
+`.fdelete`), the way `sh_i_data` already was, so the gate names the row it
+wants instead of counting to it — §81.114.8's rule about a row that moves.
 
 
 ### 81.113 The 2026-10-14 upstream merge, as it reached SHEET
