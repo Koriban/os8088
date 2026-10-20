@@ -360,7 +360,8 @@ make vencbundle #   every apps disk and plays `.V88` files, made on the host
                 #   by tools/os88venc.py or by the encoder's own window,
                 #   tools/os88vencgui.py. `viddemo` builds one hard disk per
                 #   directory of apps/video/demo/ - a whole install with the
-                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs;
+                #   COMMITTED demo videos in MEDIA/ - for 86Box's ST11R XTs,
+                #   and VGA's on a 504 MB IDE disk for a 286;
                 #   `vencbundle` zips the encoder, the tools it runs and
                 #   VIDEO.O88 for someone with no os8088 tree (§98.2.13).
                 #   Both on demand
@@ -837,12 +838,13 @@ whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4, §105.9.5) learned.
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 65 sites in 21 files, every one
+  finished** (§6.6.5): the registry stands at 66 sites in 22 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. (It read 59 in 20 here until the 2026-10-14 merge -
   stale on BOTH sides, and it did not conflict because neither side had
-  touched it. `tools/checkdocs.py` counts the registry against CLAUDE.md's
-  sentence and NOT against this one, which is how the drift went unseen.)
+  touched it, because `tools/checkdocs.py` counted the registry against
+  CLAUDE.md's sentence alone. It counts BOTH files now, which is what caught
+  the 2026-10-20 merges moving it to 65 and then 66.)
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors

@@ -1034,8 +1034,12 @@ def build(args) -> int:
         if args.geometry:
             # A GEOMETRY OF ITS OWN (the demo video disks, an ST-238R on an
             # ST11R): the partition from the MBR's own track to the end, as
-            # drivers/hdd/part.inc and tools/os88hdd.py lay one out, capped
-            # at the kernel's 65,535-sector volume on a track boundary
+            # drivers/hdd/part.inc and tools/os88hdd.py lay one out - capped
+            # at 65,535 sectors on a track boundary while that is the disk's
+            # whole size give or take a track, which keeps the 31 MB drives
+            # what they were; a disk well past it (VGA's 504 MB IDE drive)
+            # is ONE BIG VOLUME, TotSec32 and type 06h, which kern_big
+            # mounts and boots (SPEC.md 18.7.5, 52.3)
             try:
                 hcyls, heads, spt = parse_geometry(args.geometry)
             except ValueError as e:
@@ -1429,8 +1433,10 @@ def build(args) -> int:
     if args.hdd:
         # The MBR sector in front of the volume: boot/mbr.asm's 446 bytes,
         # one active entry whose CHS and LBA columns agree (SPEC.md 80.1),
-        # type 04h - the partition is under 32MB by construction - and the
-        # rest of the MBR's track left zero, which is where the era left it.
+        # type 04h for a partition under 32MB and 06h past it (what DOS 4
+        # and every later FDISK write, as HDD.DRV's hd_ent_fill does) - and
+        # the rest of the MBR's track left zero, which is where the era left
+        # it.
         sec0 = bytearray(SECTOR)
         sec0[0:HP_TBL] = mbr
         ent = bytearray(16)

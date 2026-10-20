@@ -2407,6 +2407,9 @@ sh_x_sh_note_load:                  ; 81.102: the Note dialog's open
 sh_x_sh_btfix:                      ; 81.111: a dialog engine's window made
     call sh_btfix
     retf
+sh_x_os88ui_sbwheel:                ; 13.18: the WHEEL, for the Paste list -
+    call os88ui_sbwheel             ; os88ui.inc is resident and sh_ldlg_* is
+    retf                            ; not, so this is os88ui_sbar's own route
 sh_x_sh_nt_set:                     ; 81.89: NOTE
     call sh_nt_set
     retf
@@ -2473,6 +2476,7 @@ sh_ovshims:
     dw sh_x_sh_dbx_open                                              ; 81.96
     dw sh_x_sh_note_load                                             ; 81.102
     dw sh_x_sh_btfix                                                 ; 81.111
+    dw sh_x_os88ui_sbwheel                                           ; 13.18
 sh_entry:
     push ax
     push dx
@@ -2657,6 +2661,11 @@ sh_entry:
     ; cannot be dragged never needs dropping.
     mov ax, sh_onmouseup
     call OSAPI_WM_ONMOUSEUP
+
+    ; The WHEEL (SPEC.md 13.18) scrolls the grid's rows. kern_small has no
+    ; wheel and the cell does nothing there; flags preserved, BX still ours.
+    mov ax, sh_onwheel
+    call OSAPI_WM_ONWHEEL
 
     ; stage 3.0b: the formula bar's content box. Only the buffer binding is
     ; set once - the rect is refreshed per draw by sh_flrect, since the window
@@ -6645,6 +6654,49 @@ sh_sbclick:
     pop bx
     pop ax
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_onwheel - W_ONWH (SPEC.md 13.18): AX = signed notches, SI = window, gfx
+; lock held, W_ONKEY's environment. WHEEL_STEPS ROWS a notch - a sheet row is
+; the grid's line - through sh_setscrollrow, the vertical arrows' own path, so
+; the view blits and letters only the vacated rows exactly as an arrow click
+; does, and draws nothing when it did not move. The VIEW moves; the selection
+; does not, as a scroll-bar click leaves it.
+;
+; The block's pos is CLAMPED to total - fit (sh_sbsync's own note) while the
+; view itself may sit past it - keyboard navigation and Goto move the origin
+; without consulting the bar - so os88ui_sbwheel's CF ("pos unchanged") is not
+; read: going UP from past the end lands inside the extent, which is a move
+; the CF would have refused, and going DOWN from there would answer the clamp,
+; which is UP, so a down turn that would raise the view is dropped instead.
+; -----------------------------------------------------------------------------
+sh_onwheel:
+    call sh_abdismiss                  ; the credits are up: the turn is spent
+    jc .ret                            ; taking them down, as a key's is
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, ax                         ; the turn's direction, for the guard
+    mov bx, si
+    call sh_geom                       ; [sh_vrows], which sh_sbsync's fit is
+    call sh_sbsync
+    mov bx, sh_vsb
+    mov cx, 1                          ; ONE LINE is one row in this bar
+    call os88ui_sbwheel                ; -> AX = the row the view belongs at
+    or dx, dx
+    js .go
+    cmp ax, [sh_scrollrow]
+    jb .out                            ; down never moves the view up
+.go:
+    call sh_setscrollrow
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -18094,11 +18146,20 @@ sh_ldlg_open:
     call OSAPI_WM_CREATE               ; the window comes back in BX, NOT SI -
     jc .out                            ; SI is still the template - and it is
     mov [sh_ldlg_win], bx
+    push ax
+    mov ax, sh_ldlg_onwheel            ; the wheel scrolls the list (13.18)
+    call OSAPI_WM_ONWHEEL
+    pop ax
     call OSAPI_WM_SHOW                 ; created HIDDEN, so the show is not
     SHOUT sh_btfix                     ; the gesture (81.111), from here
                                        ; optional. No WF_KEEPH: 147 rows from
                                        ; y 28 ends at 175, inside a CGA's
-                                       ; band (81.100 measured it)
+                                       ; band (81.100 measured it).
+                                       ; sh_btfix is this fork's own form of
+                                       ; main's inline os88ui_btninit: ONE
+                                       ; table walked for whichever dialog is
+                                       ; open, rather than the call repeated
+                                       ; at every open (81.111)
 .out:
     pop di
     pop si
@@ -18392,7 +18453,32 @@ sh_ldlg_onclick:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; sh_ldlg_onwheel - W_ONWH for the Paste list (SPEC.md 13.18): AX = signed
+; notches. WHEEL_STEPS items a notch - an item is the list's line - set the
+; way the bar's page arms set [sh_ldlg_top], and repainted by the same
+; sh_ldlg_paint they end in. A list already at that end draws nothing.
+; -----------------------------------------------------------------------------
+sh_ldlg_onwheel:
+    push ax
+    push bx
+    push cx
+    call sh_ldlg_sbset                ; total, fit and pos (the rect is not
+    mov bx, sh_ldsb                   ; read)
+    mov cx, 1
+    SHOUT os88ui_sbwheel              ; resident: this body is in CHART.OVL
+    jc .out
+    mov [sh_ldlg_top], ax
+    call sh_ldlg_paint                ; SI: W_ONWH names this window
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; sh_ldlg_onbtn - AL = the button fired on the release (81.111): 1 OK, 2 Cancel
+; main calls os88ui_btnup inline here; 81.111 made that ONE shared release
+; handler, so this is only what to do with the answer.
 sh_ldlg_onbtn:
     cmp al, 1
     jne .cancel
@@ -55834,6 +55920,9 @@ sh_s_dif_eod:  db '-1,0', 13, 10, 'EOD', 13, 10, 0
 %define OS88UI_SCROLL               ; stage 3.0a+: SPEC.md 13.10's shared
                                      ; scroll bar - OPT IN, and without it
                                      ; os88ui_sbar is simply not assembled
+%define OS88UI_WHEEL                ; ...and its wheel arithmetic (13.10.8):
+                                     ; the grid and the Paste list both scroll
+                                     ; on it
 %define OS88UI_SBDRAG               ; ...and the thumb-drag half of it
                                      ; shared scroll bar (SPEC.md 13.10.5),
                                      ; which needs W_ONCLICK/W_ONDRAG/
@@ -55891,7 +55980,7 @@ section .text
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9289                     ; +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9293                     ; +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -56986,7 +57075,7 @@ sh_v_sh_acc_fromudw          equ sh_v_sh_idlg_after + 4
 sh_v_sh_monlen               equ sh_v_sh_acc_fromudw + 4
 sh_v_sh_bt_findcell          equ sh_v_sh_monlen + 4
 sh_v_sh_bt_removecell        equ sh_v_sh_bt_findcell + 4
-SH_NVEC       equ 150
+SH_NVEC       equ 151
 sh_v_sh_pnow                 equ sh_v_sh_bt_removecell + 4
 sh_v_sh_macro_arm            equ sh_v_sh_pnow + 4
 sh_v_sh_nt_get               equ sh_v_sh_macro_arm + 4
@@ -56996,7 +57085,8 @@ sh_v_sh_mtab_calc            equ sh_v_sh_nt_set + 4
 sh_v_sh_dbx_open             equ sh_v_sh_mtab_calc + 4
 sh_v_sh_note_load            equ sh_v_sh_dbx_open + 4
 sh_v_sh_btfix                equ sh_v_sh_note_load + 4
-sh_v_end      equ sh_v_sh_btfix + 4
+sh_v_os88ui_sbwheel          equ sh_v_sh_btfix + 4
+sh_v_end      equ sh_v_os88ui_sbwheel + 4
 
 sh_abon           equ sh_v_end         ; byte: the About card is up (20.5.1)
                                        ; UPSTREAM added this against
