@@ -45651,6 +45651,28 @@ can carry it across a boundary with every build step green - and any listed
 name whose shipped file is not LZB at all. `--candidates` prints the LZ4
 packages LZB would save a cluster for, as information.
 
+**IT CAUGHT THE 2026-10-20 MERGE PUTTING TWO OF THEM BACK ON LZ4**, and the
+shape of that is worth keeping. `LZBPKGS` arrived from upstream naming `sheet`
+and `chart`; this fork's rules for those two are its OWN - SHEET packs
+`sheet.trim.bin`, the resident half left after `os88ovl.py` cuts CHART.OVL and
+MACRO.OVL out (§82.16) - so the auto-merge took the LIST and left both rules
+saying `$(OS88PKG)`. Nothing failed to build. The files shipped LZ4 and the
+360KB disks quietly paid **5 clusters for SHEET** (41,107 → 36,065 bytes) and
+**1 for CHART**, which is the saving this whole section exists to take.
+
+**The stamp could not see it**, and that is a limit of the mechanism rather
+than a defect in it: `PKGZBSTAMP` is keyed on a cksum of `LZBPKGS`, so it
+rebuilds when the LIST moves. Here the list was right and the RULES were
+wrong, so an existing tree kept its LZ4 files until they were removed by hand.
+A list this gate reads and rules it cannot are two statements of the same
+fact, and only one of them is checked.
+
+`t_lzbclust` also had to be taught SHEET's shape: it re-packs `build/<name>.bin`
+as its LZ4 control, and for SHEET that is the 122KB whole assembly rather than
+the 52KB the package carries - `os88pkg` refuses it outright with *"image size
+field != actual file size"*, which reads like a packing defect and is the gate
+holding the wrong file. It prefers `<name>.trim.bin` where one exists.
+
 The second of this section's two numbers has been TAKEN rather than predicted,
 on ArtfulType, on MartyPC's 4.77 MHz 5150 off a 360KB floppy, from
 `ld_run_body_x` to `lz_decomp_x`'s return: **+541 ms on a first launch**
@@ -137717,6 +137739,40 @@ kernel's own `wm_wins` rather than `[sh_fdlg_ox]`: most of these rows are
 glass-and-file tests with no package symbols at all, so a helper wanting
 SHEET's segment would have had to teach thirty-five files how to find it.
 Deleting the names is what stops the next geometry change re-arming this.
+
+#### 81.115.2 The sweep keyed on one idiom, and two rows used another
+
+**It missed two**, and the soak after the 2026-10-20 merge is what said so -
+both reading as merge fallout and neither being any such thing.
+
+`tests/sheettitle.py` did not use `sheetfmt`'s constants at all. It asked
+`dispcp.win_rect` where the dialog was and then clicked `dy + TITLE_H + 136`,
+a LITERAL carrying `SH_FDLG_BTY1..2` in a comment - so a sweep that replaced
+`FMT_RADIO_X` and its kin could not see it. The click landed on nothing, New
+was never OK'd, the document was never renamed, and the row reported *File >
+New does not rename the caption* - a defect in a feature that was working.
+**It is `fdlg_okxy(m)` now**, like the other 99.
+
+`tests/sheetdlgcga.py` is the sharper one, because it was not a coordinate at
+all. Its subject is §81.100: a dialog TALLER than a CGA's 155-row band keeps
+its height through `OSAPI_WM_KEEPH` instead of being cut, and it carried
+`radio (Alignment), 171` as the tall case. §81.115 sized the radio column per
+kind - **57 + 16·rows** - so Alignment is 121 and FITS. The row did not just
+fail; had the number been quietly updated it would have gone on passing while
+testing nothing, because a dialog that fits the band cannot exercise the thing
+being asserted.
+
+**Only one radio kind is still taller than the band**: Gallery, at seven rows
+and **169**. It is in the list now, driven from `Data` row 11, and Alignment
+has moved down to join the list (147) and Data Form (153) as a control. The
+heights are DERIVED from `sheetfmt`'s own `SH_FDLG_*` rather than written
+down, so the next geometry change moves them instead of staling them.
+
+**Mutated to prove it**: `mov al, 1` → `mov al, 0` at the `OSAPI_WM_KEEPH`
+call, and Gallery comes back **155 with 197 debris pixels** below SHEET's
+frame - §81.100's original defect, exactly. Alignment at 121 does **not**
+fail under that mutation, which is the measurement that says adding Gallery
+was necessary and not decoration.
 
 
 ### 81.116 Dotted gridlines: measured, free, and DEFERRED on the instrument

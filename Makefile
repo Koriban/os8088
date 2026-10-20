@@ -5915,7 +5915,7 @@ $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
 # called. tools/os88ovlchk.py's CLAIMS table already holds CHART.OVL to
 # CH_OVKB and its row is in the fast tier, so a full `make` was never blind
 # to it; this is for `make build/sheet.o88` on its own, which runs no tier.
-$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP)
+$(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
 	python3 tools/os88ovl.py $(BUILD)/sheet.bin -o $(BUILD)/CHART.OVL \
 		--trim $(BUILD)/sheet.trim.bin --second $(BUILD)/MACRO.OVL
 	@ovkb=$$(sed -n 's/^CH_OVKB *equ *\([0-9]*\).*/\1/p' apps/os88chartovl.inc); \
@@ -5930,7 +5930,7 @@ $(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZS
 	   echo "MACRO.OVL is $$have bytes; SH_M2KB reserves $$cap - raise it" >&2; \
 	   exit 1; fi; \
 	 echo "MACRO.OVL: $$have of $$cap bytes claimed (SH_M2KB=$$m2kb); the rest is the text files' tail (81.91.1)"
-	$(OS88PKG) $(BUILD)/sheet.trim.bin -o $@
+	$(OS88PKGB) $(BUILD)/sheet.trim.bin -o $@
 
 $(BUILD)/CHART.OVL: $(BUILD)/sheet.o88 ;
 $(BUILD)/MACRO.OVL: $(BUILD)/sheet.o88 ;
@@ -5999,8 +5999,8 @@ $(BUILD)/chart.bin: apps/chart/chart.asm apps/os88api.inc apps/os88chart.inc \
 # CHART does NOT overlay the module - it builds it straight in. It is 12KB of
 # a 60KB budget with nothing to save, and an overlay it does not need would
 # only buy it a way to fail (SPEC.md 82.16). Same source, one %define apart.
-$(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/chart.bin -o $@
+$(BUILD)/chart.o88: $(BUILD)/chart.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKGB) $(BUILD)/chart.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
 $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc apps/os88ui.inc \

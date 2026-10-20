@@ -83,11 +83,25 @@ def pack(binp, fmt, tmp):
     return os.path.getsize(out), None
 
 
+def source_bin(base, stem):
+    """The binary the package was PACKED from, which is not always <stem>.bin.
+
+    SHEET is packaged from `sheet.trim.bin`: os88ovl.py cuts CHART.OVL and
+    MACRO.OVL out of `sheet.bin` first and the package carries only what is
+    left (SPEC.md 82.16). Re-packing the whole assembly instead compares a
+    52KB shipped file against a 122KB one, and os88pkg refuses it outright -
+    "image size field != actual file size", which reads like a packing defect
+    and is this gate holding the wrong file.
+    """
+    trim = os.path.join(base, stem + ".trim.bin")
+    return trim if os.path.exists(trim) else os.path.join(base, stem + ".bin")
+
+
 def check_list(names, tmp):
     print("%-18s %7s %7s %9s %9s" % ("package", "LZB", "LZ4", "1K cl", "512 cl"))
     for name in names:
         o88 = os.path.join(BUILD, name + ".o88")
-        binp = os.path.join(BUILD, name + ".bin")
+        binp = source_bin(BUILD, name)
         if not harness.check(os.path.exists(o88) and os.path.exists(binp),
                              "%s: build/%s.o88 and .bin exist" % (name, name),
                              why="a name in LZBPKGS with nothing built is a list "
@@ -134,7 +148,7 @@ def candidates(listed, tmp):
             if not f.endswith(".o88"):
                 continue
             name = os.path.join(d, f[:-4]) if d else f[:-4]
-            binp = os.path.join(base, f[:-4] + ".bin")
+            binp = source_bin(base, f[:-4])
             if name in listed or not os.path.exists(binp):
                 continue
             data = open(os.path.join(base, f), "rb").read()

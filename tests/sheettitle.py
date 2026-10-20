@@ -88,8 +88,7 @@ def main():
         M.settle(m, limit=120)
         dlg = dispcp.win_list(m, S, check=False)[-1]
         if dlg != sl:
-            dx, dy, _, _ = dispcp.win_rect(m, S, dlg)
-            mo.click(dx + 1 + 35, dy + TITLE_H + 136)    # OK: SH_FDLG_BTY1..2
+            mo.click(*SF.fdlg_okxy(m))   # the live window's rect, not a literal
             M.settle(m, limit=120)
         mo.to(x0 + w0 - 30, y0 + h0 // 2)
         M.settle(m)

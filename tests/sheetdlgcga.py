@@ -4,13 +4,18 @@
     make && python3 tests/sheetdlgcga.py
 
 A CGA's desktop band is 155 rows, and wm_fit cuts any window taller than it
-(SPEC.md 11.93). SHEET's dialogs are FIXED layouts, and two are taller: the
-radio column (171 rows) and Border (159). Their records were cut while the
-package went on drawing every row - the radio kinds' OK and Cancel landed
-through the bottom frame, outside the window's clicks, and a close left them
-painted on the desktop (found photographing 1.8 on CGA). The list (147) and
-Data Form (153) fit the band already; they are here as the controls, so a
-change that shrank the band or grew them would show.
+(SPEC.md 11.93). SHEET's dialogs are FIXED layouts and the tall ones were
+having their records cut while the package went on drawing every row - the
+radio kinds' OK and Cancel landed through the bottom frame, outside the
+window's clicks, and a close left them painted on the desktop (found
+photographing 1.8 on CGA).
+
+THE RADIO COLUMN IS SIZED PER KIND NOW (SPEC.md 81.115): 57 + 16 rows, so the
+four-row kinds are 121 and only GALLERY, at seven rows and 169, is still
+taller than the band. Gallery is the one that has to be driven here, and
+Alignment joins the list (147) and Data Form (153) as a control - a change
+that shrank the band or grew them would show. Border (159) is the other tall
+one and is not a radio dialog.
 
 For each, on the cycle-accurate CGA machine, read out of the window table:
   - its height is the template's own (WF_KEEPH asked for it), and
@@ -41,8 +46,22 @@ NAME = "CGA.SLK"
 CGA_H = 200
 TITLES = ["File", "Edit", "Formula", "Format", "Data", "Options", "Macro",
           "Sheets", "Help"]
+# A radio dialog's height, DERIVED the way sheet.asm derives it, so a change
+# to the engine's geometry moves this with it instead of staling it: 81.115's
+# SH_FDLG_H is GY1 + (ROWTOP - GY1 + rows*ROWH + 4) + BMARG + TITLE_H + 1.
+SH_DLG_BMARG = 8
+TITLE_H_ = 18
+
+
+def fdlg_h(rows):
+    return (SF.SH_FDLG_GY1
+            + (SF.SH_FDLG_ROWTOP - SF.SH_FDLG_GY1 + rows * SF.SH_FDLG_ROWH + 4)
+            + SH_DLG_BMARG + TITLE_H_ + 1)
+
+
 # (menu, row, what, the template's height: SH_*_H, derived in sheet.asm)
-DIALOGS = [("Format", 1, "radio (Alignment)", 171),
+DIALOGS = [("Data", 11, "radio (Gallery)", fdlg_h(7)),
+           ("Format", 1, "radio (Alignment)", fdlg_h(4)),
            ("Format", 0, "list (Number)", 147),
            ("Format", 3, "Border", 159),
            ("Data", 0, "Data Form", 153)]
