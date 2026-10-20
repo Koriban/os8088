@@ -882,9 +882,9 @@
   "sources": [
    "apps/sheet"
   ],
-  "stamped": "3f41ce08",
-  "strings": "67d4e505285d1d30",
-  "why": "the 2026-10-20 upstream merge kept this fork's SHEET whole (SPEC.md 81.117), and the page described upstream's program: it said Sheet has no undo when Edit offers Undo/Redo with the action named, said Row Height and Column Width change the whole sheet when they are per row and per column, described Gridlines and Formulas as menu toggles when they are tick boxes in Options > Display..., and left out Paste Special, Paste Link, Cell Protection, Justify, the whole Data database half (Form, Find, Extract, Delete, Set Database, Set Criteria), Series, Table, Parse, Freeze Panes, Protect Document and Workspace. All now described at the page's own level of detail."
+  "stamped": "28df5fd7",
+  "strings": "0181232eaa931815",
+  "why": "81.118 landed the ask-before-discard this page already described - it arrived with #268 for main's Sheet and was the one paragraph here that was true of a program this tree did not have. Checked against the port: New, Open and the close box all ask; Save/Discard/Cancel; and a save that kept only one sheet stops with the status line saying so, which the page already states. The corner box (81.116.1) is drawn again and is below the page's level of detail"
  },
  "SHEET_WAB": {
   "sources": [],
