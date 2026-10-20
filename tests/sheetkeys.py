@@ -195,7 +195,26 @@ def main():
         opens("Ctrl+G", lambda: ctrl("G"), "sh_idlg_win")
         opens("F5", lambda: chord(None, "F5"), "sh_idlg_win")
         opens("Ctrl+F", lambda: ctrl("F"), "sh_idlg_win")
-        opens("Ctrl+N", lambda: ctrl("N"), "sh_fdlg_win")
+
+        # CTRL+N IS THE ONE THAT DOES NOT OPEN A DIALOG HERE, and that is the
+        # feature rather than the shortcut failing: steps 2-6 changed the
+        # document, so File > New asks before it throws the work away
+        # (81.118). What the accelerator has to prove is that it reaches
+        # File > New at all - the ALERT is that proof - so this counts the
+        # window and cancels it, and the New dialog itself is driven after
+        # Ctrl+S below, where the document is clean again.
+        nwin = len(dispcp.win_list(m, S, check=False))
+        ctrl("N")
+        M.settle(m, limit=120)
+        after = dispcp.win_list(m, S, check=False)
+        dlg["Ctrl+N asked"] = len(after) - nwin
+        dlg["Ctrl+N fdlg"] = word("sh_fdlg_win")
+        if len(after) > nwin:                   # Cancel: button 2 of 3
+            ax_, ay_, aw_, _ah = dispcp.win_rect(m, S, after[-1])
+            row = 3 * (72 + 12) - 12
+            mo.click(ax_ + (aw_ - row) // 2 + 2 * (72 + 12) + 36,
+                     ay_ + 18 + 46 + 6)
+            M.settle(m, limit=120)
 
         before = open(os.path.join(WORK, "SHIN.SLK"), "rb").read()
         ctrl("S")                               # 8: Save, in place
@@ -205,6 +224,11 @@ def main():
                 data = v.read(SAVED)
                 break
             M.settle(m, quiet=2.0, stable=2, limit=60)
+
+        # ...and NOW the document is clean, so the same accelerator opens the
+        # dialog it always did. The pair is the point: either reading alone
+        # would pass with the ask wired the wrong way round.
+        opens("Ctrl+N clean", lambda: ctrl("N"), "sh_fdlg_win")
 
     print("   captions", caps, "dialogs", dlg)
     for i, t in WANT.items():
@@ -232,9 +256,17 @@ def main():
           "mid-entry, Ctrl+V pastes nothing: the entry stays open and E1 "
           "takes the typed 7", got=(dlg.get("editing"), s("6-typed", (0, 4))),
           want=(1, '7'))
-    for tag in ("F3", "Shift+F3", "Ctrl+G", "F5", "Ctrl+F", "Ctrl+N"):
+    for tag in ("F3", "Shift+F3", "Ctrl+G", "F5", "Ctrl+F"):
         check(dlg.get(tag, 0) != 0, "%s opens its dialog" % tag,
               "the engine's window word is set", got=dlg.get(tag))
+    check(dlg.get("Ctrl+N asked") == 1 and dlg.get("Ctrl+N fdlg") == 0,
+          "Ctrl+N on a CHANGED document asks instead (81.118)",
+          "the accelerator reaches File > New, and New asks before it throws "
+          "the work away - one window more, and the New dialog NOT open",
+          got=(dlg.get("Ctrl+N asked"), dlg.get("Ctrl+N fdlg")), want=(1, 0))
+    check(dlg.get("Ctrl+N clean", 0) != 0,
+          "...and once Ctrl+S has saved it, Ctrl+N opens New",
+          "the engine's window word is set", got=dlg.get("Ctrl+N clean"))
     got = F.read_sylk(data) if data else {}
     want = {(0, 0): 1.0, (1, 0): 1.0, (2, 0): 1.0, (0, 3): 'x', (0, 4): 7.0}
     bad = {k: (v, got.get(k)) for k, v in want.items() if got.get(k) != v}
