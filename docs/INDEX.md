@@ -304,6 +304,8 @@ A package `%include`s these itself; they are not kernel calls. Include them at t
 | `apps/os88line.inc` | §83 | A one-line text field: caret, horizontal scroll, focus, click-to-position and the editing keys. The caller owns a 20-byte block. |
 | `apps/os88text.inc` | §83 | The multi-line sibling of os88line.inc. Enter inserts a newline; no wrap, no selection, no undo. |
 | `apps/os88chart.inc` | §82 | A 4bpp offscreen canvas and all seven chart types - area, bar, column, line, pie, scatter, combination - plus a BMP writer. Shared by CHART.O88 and Sheet's chart window. |
+| `apps/os88chartbss.inc` | §82 | The ch_* working set os88chart.inc runs on, declared once instead of hand-copied into both callers. Set `CH_BSS_BASE` to where the block goes and carry on from `CH_BSS_END`. |
+| `apps/os88chartovl.inc` | §82.16 | The resident half of the CHART.OVL split: loader, verb dispatch and the shims os88chart.inc calls back out through. Only a package that %defines CH_OVERLAY needs it - today that is SHEET alone. |
 | `apps/os88fp.inc` | §84 | IEEE-754 double arithmetic in software, with an 8087 path chosen at run time. Parse, format, add, subtract, multiply, divide, compare, sqrt, trunc, floor, round. |
 | `apps/os88xgap.inc` | §41.14 | Where a buffer that copies to and from XMS should START: `xg_gap` times 8 KB copies at six gaps against a block the caller owns and answers G, half a page-interleaved board's period, or 0. Place by (conventional - extended) mod 2G = G. Measured, never assumed - the period is the board's DRAM page. |
 | `apps/os88la.inc` | §41.13 | LOADALL on a 286: memory above 1 MB read and written IN PLACE through a hidden segment base, as one BORROW of the API table at physical 0x800 inside one cli window (`la_capture`, `la_probe`, `la_borrow`, `la_restore`). Tier 1 only, behind the INT 6 probe. XMEM.DRV's tier-1 copy is built on it, so a package that only wants bytes moved wants OSAPI_XMEM_COPY, not this. |
@@ -488,7 +490,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | 79 | The animated screen saver (`SAVER.DRV`, `kernel/blank.inc`) |
 | 80 | Live media — one bootable hard-disk image, a USB stick and a CD |
 | 81 | SHEET — the spreadsheet (`apps/sheet/sheet.asm`) |
-| 82 | CHART — charting, and the buffer both halves draw into (`apps/chart/chart.asm`, `apps/os88chart.inc`) |
+| 82 | CHART — charting, and the buffer both halves draw into |
 | 83 | Text input for packages (`apps/os88line.inc`, `apps/os88text.inc`) |
 | 84 | Software floating point (`apps/os88fp.inc`) |
 | 85 | TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`) |
