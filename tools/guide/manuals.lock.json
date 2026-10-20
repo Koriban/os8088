@@ -191,9 +191,9 @@
   "sources": [
    "apps/chart"
   ],
-  "stamped": "e4576a70",
-  "strings": "fe83b9c972b49330",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "3f41ce08",
+  "strings": "865c1b184df0f478",
+  "why": "checked against the fork's apps/chart after the 2026-10-20 merge: the menus, the gallery, the BMP export and the file formats are all still as the page describes them. One line added - the Data menu lists Sheet's NAMED RANGES in place of the column letters when the file has any (SPEC.md 82.15), which is the only user-visible difference."
  },
  "CITY_PCX": {
   "sources": [],
@@ -874,9 +874,9 @@
   "sources": [
    "apps/sheet"
   ],
-  "stamped": "2c8ba025",
-  "strings": "bfdc6bbbc5be137d",
-  "why": "Percent x100, Border over the block, ask before New/Open/Close, .XLS as Normal, what each format keeps (notes, borders) - all checked against SHEET.O88 under MartyPC"
+  "stamped": "3f41ce08",
+  "strings": "67d4e505285d1d30",
+  "why": "the 2026-10-20 upstream merge kept this fork's SHEET whole (SPEC.md 81.117), and the page described upstream's program: it said Sheet has no undo when Edit offers Undo/Redo with the action named, said Row Height and Column Width change the whole sheet when they are per row and per column, described Gridlines and Formulas as menu toggles when they are tick boxes in Options > Display..., and left out Paste Special, Paste Link, Cell Protection, Justify, the whole Data database half (Form, Find, Extract, Delete, Set Database, Set Criteria), Series, Table, Parse, Freeze Panes, Protect Document and Workspace. All now described at the page's own level of detail."
  },
  "SHEET_WAB": {
   "sources": [],

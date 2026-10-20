@@ -182,17 +182,30 @@ all four, draws a frame round it. **Shade** shades every cell in the block.
 Lines already drawn inside the block are kept.
 
 **Row Height...** and **Column Width...** ask for a number. Column width is
-in characters, from 1 to 40; row height is in pixels, from 8 to 48. Both
-change every row or column of the sheet at once.
+in characters and row height is in points. Each applies to the rows or
+columns the selection touches, so one column can be wide and its neighbour
+narrow. Only the Normal (`.BIF` or `.XLS`) format keeps row heights; SYLK
+keeps column widths, and DIF keeps neither.
+
+**Cell Protection...** marks the selection **Locked**, **Unlocked**,
+**Locked, Hidden** or **Unlocked, Hidden**. Nothing is refused until
+**Protect Document** is turned on in the Options menu; then a locked cell
+cannot be typed into and a hidden one shows its result with its formula kept
+out of the formula bar.
+
+**Justify** spreads a long label in the selected cell down the rows beneath
+it, breaking it at spaces so each line fits the column.
 
 ## The Edit menu
 
 | Item | What it does |
 |---|---|
-| Can't Undo | always greyed: Sheet has no undo |
+| Undo *action* | takes back the last change and names it — **Undo Entry**, **Undo Cut**, **Undo Paste**, **Undo Clear**, **Undo Paste Special**, **Undo Paste Link**, **Undo Delete** or **Undo Insert**. Choose it again and it reads **Redo**, which puts the change back. One step is kept; it is greyed until there is something to take back, and a change too large to hold drops what was kept |
 | Cut | copies the selection to the clipboard, then empties it |
 | Copy | copies the selection to the clipboard |
 | Paste | pastes the clipboard with its top-left corner at the selected cell |
+| Paste Special... | pastes part of what was copied: **All**, **Formulas**, **Values**, **Formats** or **Notes** |
+| Paste Link | fills the selection with formulas pointing at the copied cells, so the two keep the same values |
 | Clear... | asks **All**, **Formulas** or **Formats**. Formulas removes the contents and keeps the formatting; Formats does the opposite |
 | Delete... | asks **Row** or **Column**, and deletes the selected cell's row or column |
 | Insert... | asks **Row** or **Column**, and inserts one at the selected cell |
@@ -218,13 +231,38 @@ becomes `=A2*B2`. Fill adjusts references the same way.
 | Goto... | moves the selection to the cell you type, such as `F4` |
 | Find... | finds the next cell whose text contains what you type, upper or lower case alike. It looks at what cells show, so it finds the results of formulas. It goes round to the top again; it says `Not found.` when nothing matches |
 
-## The Data menu: sorting and charts
+## The Data menu: databases, sorting and charts
+
+A **database** is a block of cells with a heading row: one record per row,
+one field per column. **Set Database...** marks the selected block as the
+one the other commands work on, and **Set Criteria...** marks a second block
+holding a heading row and, under each heading, what to match.
+
+**Form...** opens one record at a time in a dialog, a field to a line, and
+walks the database with **Find Next** and **Find Prev**. Typing in a field
+changes that record. **Find** selects the next record matching the criteria;
+**Extract...** copies every matching record to the block below the criteria,
+asking **All Matching Records** or **Unique Records Only** first; **Delete**
+removes every matching record and closes the gap.
 
 **Sort...** asks **Ascending** or **Descending** and sorts the rows of the
 selection by the column where the selection started. The other columns of
 each row move with it, so a table stays together. With one cell selected it
 sorts that whole column. A row whose sort column holds a label, such as a
 heading, stays where it is.
+
+**Series...** fills the selection from its first cell: **Linear** adds a
+step each time, **Growth** multiplies, and the three date choices step by
+day, weekday or month.
+
+**Table...** fills a table of results from one formula. Put the formula in
+the corner of the block, the values to try down the left column or along the
+top row, and Table asks which cell to substitute them into; each result
+appears where its row and column meet, and the table recalculates with the
+sheet.
+
+**Parse...** splits a column of labels into several columns, cutting where
+the text lines up.
 
 **Chart Column...** opens a chart of the column the selection is in. Its
 numbers become columns on the chart; labels are skipped. If the next column
@@ -246,11 +284,12 @@ To work on the chart further, or chart a saved file without Sheet, use the
 
 | Item | What it does |
 |---|---|
-| Gridlines: On | turns the grid lines off and on |
-| Formulas: Off | shows each formula in its cell instead of the result, and back |
-| Calculation... | **Automatic** recalculates formulas as you go. **Manual** stops that, which keeps a large sheet quick; choose **Calculate Now** to bring it up to date |
-
-The Gridlines and Formulas items show the current setting.
+| Display... | tick **Formulas** to show each formula in its cell instead of its result, and **Gridlines** to draw the lines between cells |
+| Freeze Panes | holds the rows above and the columns left of the selected cell in place while the rest scrolls; choose it again to let them go |
+| Protect Document | refuses changes to cells marked Locked in Format > Cell Protection..., and keeps a Hidden cell's formula out of the formula bar |
+| Calculation... | **Automatic** recalculates formulas as you go, **Automatic except Tables** does the same but leaves Data > Table... until you ask, and **Manual** stops both, which keeps a large sheet quick |
+| Calculate Now | recalculates everything at once, for when Calculation is not Automatic |
+| Workspace... | tick **R1C1** to name cells by row and column number instead of letters |
 
 ## Four sheets in one workbook
 

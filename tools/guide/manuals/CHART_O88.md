@@ -37,7 +37,9 @@ Chart picks the column itself at first: the leftmost column that holds
 numbers. For the sample [[SALES.SLK]] that is the units, column B.
 
 The **Data** menu chooses instead. **Column A** to **Column H** chart that
-column, and **Automatic** goes back to the leftmost one. Chart reads the
+column, and **Automatic** goes back to the leftmost one. When the file holds
+ranges Sheet has named, the menu lists those names instead of the column
+letters and charts the range you pick. Chart reads the
 file again from the disk when you choose, so keep the disk in the drive. If
 the column holds no numbers, Chart says `No data in that column.`
 

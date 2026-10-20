@@ -2276,7 +2276,6 @@ all: checkdocs $(SHIPIMGS) $(PLANPKG) \
      $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
      $(BUILD)/hello.o88 $(BUILD)/video.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 \
-     $(BUILD)/ovlz/SCRIBE.OVL \
      $(BUILD)/livepayload.txt \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      $(BUILD)/doscore.bin \
@@ -2292,8 +2291,10 @@ all: checkdocs $(SHIPIMGS) $(PLANPKG) \
 # its own `make scribedisk` floppy - so `scribe` was a phony target and nothing
 # else, and plain `make` never assembled it. A source edit to scribe.asm
 # therefore did not reach build/scribe.o88 and did not reach test-fast; the
-# change LOOKED applied and the emulator ran the previous binary. `ovlchk`
-# reads SCRIBE.OVL, so it was checking a stale file for the same reason.
+# change LOOKED applied and the emulator ran the previous binary. (Its overlay
+# was a FILE beside the package then; the 2026-10-20 merge brought upstream's
+# conversion of it to a PART, so there is no SCRIBE.OVL to build or to ship
+# and `ovlchk` has no claim row for it either.)
 #
 # fptest.o88 and imgtest.o88 are here for wire.o88's reason below, and fptest
 # was NOT here until imgtest joined it: its own rule says "built here so it

@@ -274,6 +274,12 @@ kind = "program"
 summary = "A spreadsheet in the style of Excel 2.1, with formulas, formats, macros, charts and SYLK, DIF and BIFF files."
 short = "Excel 2.1-style spreadsheet"
 
+["PLAN.O88"]
+title = "Plan"
+kind = "program"
+summary = "A spreadsheet for the 128KB machine, where Sheet does not fit: formulas, formats and SYLK and CSV files."
+short = "spreadsheet for the 128KB machine"
+
 ["CHART.O88"]
 title = "Chart"
 kind = "program"
