@@ -231,6 +231,7 @@ hd_iw_open:
 ; freed memory. The unowned species (SPEC.md 38.1), so hiding IS closing.
 ; -----------------------------------------------------------------------------
 hd_iw_shut:
+    call hd_ia_rel              ; ...and an abandoned install's hold with it
     push bx
     mov bx, [hd_iwin]
     or bx, bx
@@ -1200,7 +1201,7 @@ hd_bp:      dw 0                ; hd_bn_save's own cursor into hd_bbuf
 hd_bvdrv:   db 0                ; ...and the volume it has to put back
 hd_bvclus:  dw 0
 hd_s_bfile: db 'INSTBNCH.TXT', 0
-hd_s_bhdr:  db 'os8088 install, SPEC.md 52.10.9', 13, 10
+hd_s_bhdr:  db 'os8088 install timings', 13, 10
             db '      fC   fS   dC   dS   tk', 13, 10, 0
             ; ...the ROW's own columns: 3 for the label, then five 5-wide
             ; fields. The window's legend is 5 spaces in and this is 3,
@@ -1626,6 +1627,8 @@ hd_iw_click:
     cmp al, [hd_isel]
     je .done
     mov [hd_isel], al
+    call hd_ia_rel                  ; (an install waiting on its apps disk is
+                                    ; abandoned by this too)
     mov byte [hd_iw_st], HII_IDLE   ; picking another row disarms, tool.inc's
     call hd_idefwipe                ; rule: anything but the same button again
     call hd_ickmsg
@@ -1658,6 +1661,13 @@ hd_inst_step:
     jmp short .out                  ; cheapest confirm that cannot be mistaken
                                     ; for the first (SPEC.md 52.2.3)
 .go:
+    call hd_ia_acq              ; HOLD the kernel's ASSOC.DAT writer FIRST
+                                ; (SPEC.md 54.7.6.4): the system phase below
+                                ; replaces FORMAT.DRV on the boot volume, and
+                                ; on a machine booted from this disk the new
+                                ; copy is stamped for a kernel that is not the
+                                ; one running - so the flush at the end would
+                                ; find nothing it may load
     call hd_inst_sys
     jc .failed
     call hd_iapps_find          ; ...and do not ask for a disk that is already
@@ -1672,13 +1682,21 @@ hd_inst_step:
 .apps:
     call hd_inst_apps
     jc .failed
-    call hd_iassoc              ; ...and the volume's OWN association cache,
-                                ; built from what is actually on it (SPEC.md
-                                ; 52.10.14). LAST, so it sees both disks'
+    push dx                     ; ...and the volume's OWN association cache,
+    mov dl, [hd_idrv]           ; built from what is actually on it (SPEC.md
+    mov al, ASSOC_FL_FULL       ; 52.10.14) - by the kernel's writer in FULL
+    call OSAPI_ASSOC_FLUSH      ; mode (SPEC.md 54.7.6), which was this
+    pop dx                      ; tool's own hd_iassoc until the runtime
+                                ; flush made it the second copy of one
+                                ; algorithm. LAST, so it sees both disks'
                                 ; packages, and SILENT: the MBR is already
                                 ; committed and a cache that cannot be written
                                 ; is SPEC.md 54.7's absent tier rather than a
-                                ; failed install
+                                ; failed install - and the first harvest of
+                                ; the installed volume writes it after all.
+                                ; A step that installs MORE disks flushes
+                                ; after each and releases once, at the end
+    call hd_ia_rel
     mov byte [hd_iw_st], HII_DONE
 %ifdef INSTBENCH
     mov word [hd_imsg], hd_s_bdone  ; the rows below are the report now, so the
@@ -1688,9 +1706,40 @@ hd_inst_step:
 %endif                              ; its own out of the stage machine
     jmp short .out
 .failed:
+    call hd_ia_rel
     mov byte [hd_iw_st], HII_IDLE   ; [hd_imsg] already names what went wrong
 .out:
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ia_acq / hd_ia_rel - hold and release the kernel's ASSOC.DAT writer
+; (SPEC.md 54.7.6.4) for the length of an install (module internal)
+; clobbers: nothing (flags)
+;
+; Held from the click that starts the copy to the end of the install, however
+; it ends - done, failed, or abandoned at the apps-disk prompt (another row
+; picked, the window closed, the driver detached). The release is cheap and
+; idempotent, so every exit simply asks; hd_iheld keeps it from releasing a
+; hold this tool never took.
+; -----------------------------------------------------------------------------
+hd_ia_acq:
+    push ax
+    mov al, ASSOC_FL_NOFLUSH | ASSOC_FL_HOLD
+    call OSAPI_ASSOC_FLUSH      ; a refusal (no image to be had) is the
+    mov byte [hd_iheld], 1      ; install's old behaviour: no cache at the end
+    pop ax
+    ret
+
+hd_ia_rel:
+    cmp byte [hd_iheld], 0
+    je .out
+    push ax
+    mov al, ASSOC_FL_NOFLUSH
+    call OSAPI_ASSOC_FLUSH
+    mov byte [hd_iheld], 0
+    pop ax
+.out:
     ret
 
 ; =============================================================================
@@ -2127,11 +2176,18 @@ hd_ifdd2:
 ; clobbers: flags. No I/O of any kind: this is what keeps a scan of eight
 ;           volumes down to the two or three drives a machine really has.
 ;
-; A REMOVABLE volume and nothing else (SPEC.md 18.7.2): the apps disk is a
-; floppy, so a hard-disk partition - the destination included - and a
-; redirected network volume (SPEC.md 62.9) are out by their KIND rather than
-; by their index, which is what makes this right on a machine whose floppies
-; are lettered A:, B:, D: and E: (SPEC.md 18.98).
+; A REMOVABLE volume, or a MOUNTED IMAGE (SPEC.md 18.7.2, 52.10.17): the
+; install set is two floppies, and a floppy's bytes in a `.IMG` on a hard disk
+; are the same disk. So a hard-disk partition - the destination included -
+; and a redirected network volume (SPEC.md 62.9) are out by their KIND rather
+; than by their index, which is what makes this right on a machine whose
+; floppies are lettered A:, B:, D: and E: (SPEC.md 18.98).
+;
+; AN IMAGE ON A FLOPPY already answered VK_REMOVABLE (SPEC.md 18.101.7). One
+; on a hard disk answers its host's VK_FIXED, and the transport is what tells
+; it from a partition: VT_DRIVER is a DRVC_DISK row, and the only two kinds of
+; those are this driver's own partitions and images. So a VT_DRIVER volume
+; that hd_iown does not find in hd_vols is an image.
 ; -----------------------------------------------------------------------------
 hd_iapps_cand:
     push ax
@@ -2146,13 +2202,55 @@ hd_iapps_cand:
     call OSAPI_VOL_KIND
     jc .no                      ; no such volume
     cmp al, VK_REMOVABLE
-    jne .no                     ; a hard disk is not where the apps disk is
+    je .yes                     ; a floppy, or an image on one
+    cmp ah, VT_DRIVER           ; a boot partition (VT_BIOS) and a cable
+    jne .no                     ; (VT_FILE) are not where the disk is...
+    call hd_iown                ; ...and nor is a partition we mounted, but
+    jnc .no                     ; an image of a floppy on a hard disk is
+.yes:
     pop ax
     clc
     ret
 .no:
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_iown - did THIS DRIVER mount that volume? (module internal)
+; in:  BL = a volume index
+; out: CF = 0 = it is one of hd_vols' partitions; CF = 1 = it is not
+; clobbers: flags
+;
+; hd_vols is the resident's, so this asks it one (device, slot) at a time
+; through HSV_VOLOF, the verb the State column's letters already use - four
+; slots on at most HD_MAXDEV devices, and no I/O. A resident too old for the
+; verb answers 0FFh to every question and so calls nothing ours; the content
+; tests that follow a candidate are what stop a partition being taken for a
+; disk then, as they always were for a floppy.
+; -----------------------------------------------------------------------------
+hd_iown:
+    push ax
+    push cx
+    xor cx, cx                  ; CL = the device, CH = the slot
+.ask:
+    cmp cl, [hd_ndev]
+    jae .no
+    mov ax, cx
+    call hd_vol_ask             ; AL = the volume on it, 0FFh = none
+    cmp al, bl
+    je .yes                     ; (CF = 0: equal)
+    inc ch
+    cmp ch, 4
+    jb .ask
+    mov ch, 0
+    inc cl
+    jmp short .ask
+.no:
+    stc
+.yes:
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2428,8 +2526,8 @@ hd_icopy_tree:
                                 ; destination, it is wrong in a way the
                                 ; kernel cannot tell from right: `.HTM`
                                 ; resolves to BROWSER and then to a cluster
-                                ; that means nothing on C:. hd_iassoc builds
-                                ; the volume its own at the end of the
+                                ; that means nothing on C:. OSAPI_ASSOC_FLUSH
+                                ; builds the volume its own at the end of the
                                 ; install.
                                 ;
                                 ; ROOT-ONLY like the kernel above, and for a
@@ -2876,7 +2974,8 @@ hd_iwrite_chunk:
 ; alone, on the reasoning that the machine booted off a floppy - which stopped
 ; being true when a kept install made the booted-from volume a target: that
 ; machine has a blank or nothing in A: and the new system disk wherever the
-; user put it. Falling back is silent because the user asked to install os8088
+; user put it. **And a mounted IMAGE of one is a floppy here** (§52.10.17):
+; hd_iapps_cand passes it, so an upgrade needs no disk written at all. Falling back is silent because the user asked to install os8088
 ; and not to install whatever they were last looking at - the volume they were
 ; on is put back afterwards either way ([hd_ivdrv] is untouched here). And the
 ; DESTINATION is never the source: on the booted-from volume the bank names a
@@ -2907,8 +3006,8 @@ hd_isrc_ck:
     jc .step                    ; with the new system disk in whichever drive
     mov [hd_isrcdrv], bl        ; is not the one the BIOS wanted a blank in.
     call hd_isrc_ck_one         ; hd_iapps_cand is the apps probe's own filter
-    jnc .found                  ; - removable, present, B: only on a two-drive
-.step:                          ; machine - so the two searches cannot
+    jnc .found                  ; - removable or an image, B: only on a two-
+.step:                          ; drive machine - so the two searches cannot
     inc bl                      ; disagree about what a floppy is
     cmp bl, HIA_VMAX
     jb .next
@@ -4220,6 +4319,7 @@ hd_isrcdrv:   db 0              ; the drive the COPY reads from, which is the
                                 ; two must not be the same word
 hd_iafound:   db 0              ; hd_iapps_find: an APPS folder has been seen
 hd_iappsc:    dw 0              ; ...and its first cluster, for the descent
+hd_iheld:     db 0              ; 1 = this install HOLDS the ASSOC.DAT writer
 hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
                                 ; .text with a real initialiser, hd_iwin's
                                 ; reason: -f bin zeroes nothing and 0 here is

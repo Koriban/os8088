@@ -272,6 +272,11 @@ def capabilities():
         caps.add("marty")
     if shutil.which("qemu-system-i386") or shutil.which("qemu-system-x86_64"):
         caps.add("qemu")
+    # ...and one that survives an interrupt taken on a stack in VGA memory,
+    # which QEMU 8 does not (os88build.qemu9() has the defect). Only a row
+    # that RESUMES a hibernate under QEMU needs it.
+    if os88build.qemu9():
+        caps.add("qemu9")
     # The BINARY, not the directory: build/cc exists from the moment
     # tools/setup-cc.sh starts cloning, so a half-finished or failed setup
     # would grant the capability and turn a skip into a confusing build
@@ -301,6 +306,10 @@ def capabilities():
     if shutil.which("ffmpeg") and shutil.which("ffprobe") and \
             os88build.have_numpy():
         caps.add("ffmpeg")
+    # ...and numpy alone, for a row that builds its fixtures with the
+    # encoder's picture code but never runs ffmpeg (tests/vidposter.py).
+    if os88build.have_numpy():
+        caps.add("numpy")
     # mtools, which tests/instkeep.py plants a user's files with on a copy of
     # the fixture partition (SPEC.md 52.10.15) - a HOST-side FAT writer that
     # is not os88disk.py, so the fixture is not built by the tree under test.
@@ -943,6 +952,14 @@ def main():
                         % (YELLOW, 100.0 * res.secs / res.row.secs,
                            res.row.secs, OFF))
             print("%s ok %s %-28s %5.1fs%s" % (GREEN, OFF, res.row.name, res.secs, slip))
+            # A row may pass and still have something to say: a line it
+            # starts with "warn:" is shown even when the row is ok, so a gate
+            # the fast tier only REPORTS (the guide lock) is heard on every
+            # `make` without holding one up.
+            if res.output and not a.verbose:
+                for line in res.output.splitlines():
+                    if line.startswith("warn:"):
+                        print("%s       | %s%s" % (YELLOW, line, OFF))
         else:
             print("%sFAIL%s %-28s %5.1fs  %s" % (RED, OFF, res.row.name, res.secs, res.reason))
         if res.output and (a.verbose or not (res.ok or res.skipped)):

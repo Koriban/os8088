@@ -48,7 +48,7 @@ feel what they were up against).
 > (legacy BIOS), in QEMU, or burned to a CD-R.
 > **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** walks through all of it:
 > grab the images from a [release](https://github.com/jggonz/os8088/releases)
-> or `make live`, then `make burn` guides you through writing the stick on a
+> or `make live`, then `make imager` guides you through writing the stick on a
 > Mac — it shows only the drives that could be the right answer, makes you
 > type the disk's name before erasing anything, and verifies every byte it
 > wrote by reading it back.
@@ -141,10 +141,10 @@ make xt-c64   # 86Box: the 4.77MHz XT with the 360KB C64 disk in B: - where
 make 286-c64  # 86Box: the 12.5MHz 286 with the 720KB one
 make 386-c64  # 86Box: the 386DX with the 1.44MB one
 make apple2disk # build the Apple II Plus floppy - a 48K II+: the package,
-              # its overlay, WELCOME.BAS, COPYING and README.TXT in one
-              # APPLE2/ folder;
+              # WELCOME.BAS, COPYING and README.TXT in one APPLE2/ folder;
               # Applesoft, the Monitor and the character generator ride
-              # INSIDE the package as an embedded part (SPEC.md 20.12).
+              # INSIDE the package as an embedded part (SPEC.md 20.12),
+              # and so does its overlay (SPEC.md 73.14.2).
               # The ROMs are Apple's and are FETCHED at a pin, never
               # committed - make apple2rom does that, and a tree with no
               # network and no build/apple2-rom/ cache cannot build it
@@ -631,8 +631,9 @@ emits the header, `OSAPI_*` constants name the kernel's jump-table entries
 once: a package is assembled once at `org 0` and loaded into a
 paragraph-aligned claim off the heap, which becomes its own CS = DS. Nothing
 in the image depends on where it landed, so `os88pkg.py` is a validator
-rather than a generator. The ceiling on one package is 60KB — that is the
-*segment*, not a pool; the pool it used to be allocated from was retired, and
+rather than a generator. The ceiling on one package is 63.5KB — that is the
+*segment* less what a 512-rounded size can hold in a word, not a pool; the
+60KB pool it used to be allocated from was retired, and
 deleting it is what returned 60KB to every machine and made a 128KB machine
 viable at all.
 
@@ -691,6 +692,36 @@ and says `Catalog not understood`.
 SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
 
+### WireChat — chat rooms on the wire
+
+`WIRECHAT.O88` is a chat client: four public rooms (lobby, hardware,
+development, games), private messages, a member list with each person's
+status, a friends list, a search through what is on screen, and a status of
+your own — Online, Away or Busy, and Away on its own after ten idle minutes. It
+talks plain HTTP/1.0 over `ETHER.DRV` to one server at **os8088.com/chat/**, a
+Cloudflare Durable Object in the website's repository, by **long poll**: the
+server holds each request until there is something to say, so a message
+arrives in about a second while an idle machine sends one request every fifty.
+One socket at a time — a message sent while a poll is held closes the poll, and
+the answer carries everything the poll would have.
+
+The lobby is open and public, so the server moderates it, not the 8088: every
+message and nick goes through a language scanner — LDNOOBW's lists in every
+language they have, folded to ASCII, and WireChat's own lists of evasion
+spellings and of the phrases of harassment and hate — and anything it misses
+can be flagged. A message flagged from **two different addresses**, neither the
+author's, is removed for everyone, and blocked or removed messages become
+mutes that grow. Every rate is limited, and the server counts its own requests
+against a daily budget, slowing every client down as it fills, so the chat
+stays inside the Workers Free plan. A few nicks are owned. Joining as one
+makes WireChat ask for that nick's code, which the server checks.
+
+The window follows the screen: three panes on VGA and Hercules, the side panes
+going as the window narrows, and a compact one-line message form on a CGA. The
+nick (and its code, if it has one), the friends and the notification switch live in `WIRECHAT.CFG` beside
+the program. It is on every apps disk but the 360KB one, where it rides the
+network disk. SPEC.md §113 is the protocol and the contract.
+
 ### A package can also be written in C
 
 The OS itself is assembly and stays that way. But a **package** can be written
@@ -703,11 +734,11 @@ and its **Font box lists the typefaces on the system disk** and sets the
 document in the one you pick, proportional metrics and all.
 
 It does not fit in one segment, and that is the interesting part. A package's
-image and bss share 60KB and that ceiling IS the segment; C costs two to three
+image and bss share 63.5KB and that ceiling IS the segment; C costs two to three
 times the image of hand assembly for the same work. So a good deal of it lives
-in `CWORD.OVL`, a file beside the package that is read into a heap claim the
-first time a dialog, a file command, the clipboard, the ruler or the Font list
-is asked for — the split falling exactly between what a keystroke touches and
+in its overlay, a second segment carried INSIDE `CWORD.O88` as a part and
+read into a heap claim at launch, right behind the program (SPEC.md 73.14.2) —
+the split falling exactly between what a keystroke touches and
 what a menu command touches. When the typefaces went in, that line is what
 moved: the resident half got *smaller* while the program grew a view and a text
 engine.
@@ -724,9 +755,10 @@ prompt (`make rczex`), and MBASIC, TE, PIP, SUBMIT and Z80ASM off RunCPM's
 master disk run on it. It is the port that gave the kernel its wake event —
 the emulator runs on the UI task in bounded slices and never blocks, so a
 program waiting for a key costs nothing — and it too spills into a second
-segment, `RUNCPM.OVL`, split by frequency: what a record, a console byte or a
-keystroke touches stays resident, and the per-command half of the disk layer
-goes out. `tools/getruncpm.py` takes the CCP and the master disk at a pinned
+segment, split by frequency: what a record, a console byte or a keystroke
+touches stays resident, and the per-command half of the disk layer goes out
+- into a part of `RUNCPM.O88` itself, with DRI's CCP inside it, so the program
+is one file (SPEC.md 74.3.1). `tools/getruncpm.py` takes the CCP and the master disk at a pinned
 commit out of a committed cache zip (`apps/runcpm/cache/`) and `make runcpmdisk` builds the
 four floppies from them (the 360KB one curated to the programs and texts,
 with a `LEFT-OFF.TXT` naming what it leaves off).
@@ -811,9 +843,9 @@ unsupported:
 - **stack frames over 96 bytes.** The UI task's whole stack is 1,024 bytes and
   a background task's is 256.
 
-The 60KB per-package ceiling is unchanged and C reaches it two to four times
+The 63.5KB per-package ceiling is unchanged and C reaches it two to four times
 sooner, so a C package is a small package. Everything else — the header, the
-loader, the disk format, the 60KB check — cannot tell a C package from an
+loader, the disk format, the 63.5KB check — cannot tell a C package from an
 assembly one, which is the test of whether it was done right.
 **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** is the guide;
 [SPEC.md](SPEC.md) §73 is the contract.
@@ -849,12 +881,12 @@ cleanly and runs wrong when C meets this machine.
 | `build/media360.img`   | 360KB FAT12              | 360KB media floppy — the shipped module, which the 360KB apps disk has no room for. It exists at that geometry **alone**: every other apps disk, the 1.2MB one included, carries `BEVERLY.MOD` in `MEDIA/` itself |
 | `build/zork*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Frotz story floppies (`make zdisk`). The 1.2MB one is the only list here that is a cut rather than a fill — the 1.44MB story set alone overruns it, so `ADVENT5.Z5` and `905.Z5` come off and nine of the eleven stay |
 | `build/word*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | Microsoft Word floppies (`make worddisk`) |
-| `build/scribe*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Scribe, the fork of Word: package + `SCRIBE.OVL` (`make scribedisk`) |
-| `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C, package + `CWORD.OVL` (`make cworddisk`) |
-| `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package + `RUNCPM.OVL` + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
+| `build/scribe*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Scribe, the fork of Word: one parted package + its welcome documents (`make scribedisk`) |
+| `build/cword*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Word in C: one package, its overlay a part of it, and `WELCOME.RTF` (`make cworddisk`) |
+| `build/runcpm*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | RunCPM, package (its module and the CCP inside it) + CP/M drive A + the games and applications each holds (`make runcpmdisk`). What drive A carries is chosen per geometry at build time, so the 1.2MB disk fills itself and names what it left off in its own `LEFT-OFF.TXT` |
 | `build/paccman*.img`   | 1.44MB / 720KB / 1.2MB / 360KB | PaccMan, the C Pac-Man: the package and its README, no overlay (`make paccmandisk`) |
-| `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64, package (the ROMs are part 0 of `C64.O88`) + `C64.OVL` (`make c64disk`) |
-| `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `APPLE2.OVL` + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs are inside the package as a part and are fetched at a pin, never committed |
+| `build/c64*.img`       | 1.44MB / 720KB / 1.2MB / 360KB | Commodore 64: one package (the ROMs and its overlay are parts of `C64.O88`) + `README.TXT` + `COPYING` (`make c64disk`) |
+| `build/apple2*.img`    | 1.44MB / 720KB / 1.2MB / 360KB | Apple II Plus, package + `WELCOME.BAS` + `README.TXT` + `COPYING` in one `APPLE2/` folder (`make apple2disk`). The Apple II+ ROMs and the overlay are inside the package as parts; the ROMs are fetched at a pin, never committed |
 | `build/weave*.img`     | 1.44MB / 720KB / 1.2MB / 360KB | Weave: the runtime and its two modules, the demo bundles, LOOM, the demo sources and `CATALOG.TXT` (`make weavedisk`) |
 | `build/loom*.img`      | 1.44MB / 720KB / 1.2MB / 360KB | the Weave IDE's own disk, with the demo sources flat (`make loomdisk`) |
 | `build/apps-all-N.img`   | 1.44MB FAT12, a set    | every program, on as many floppies as it takes — every on-demand disk above except Scribe's (`make allapps`). `build/apps-all.list` names them; `CONTENTS.TXT` on each disk maps the set |
@@ -867,7 +899,8 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 
 **No binary is committed to this repository.** `build/` is gitignored
 outright — the nine images, the kernel, the boot sectors, the drivers and
-every package are products of `make`, which needs only `nasm` and `python3`.
+every package are products of `make`, which needs only `nasm` and `python3`
+3.11 or newer.
 For a floppy you can boot without a toolchain, take a
 [release](https://github.com/jggonz/os8088/releases) or
 [os8088.com](https://os8088.com); the build is deterministic

@@ -1330,7 +1330,14 @@ cmz_verb:
     mov ax, [di+FS_SEL]
     cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
     jae .none
-    call COLD_SEG:fmf_fm_stage_onam ; fm_onam + [fm_odir] + [fm_ftype]
+%ifdef KERN_SMALL                ; (DISKOPS.DRV is exactly 7 KB there: the
+    call COLD_SEG:fmf_fm_stage_onam ; far entry stays rather than a byte more
+%else                           ; of image)
+    push bp                     ; ...and wm_cbd on kern_big, whose image has
+    mov bp, fm_stage_onam       ; the room - kernel size pass 13
+    call COLD_SEG:wm_cbd
+    pop bp
+%endif                          ; fm_onam + [fm_odir] + [fm_ftype]
     cmp byte [fm_odir], 0
     jne .none
     cmp word [fm_ftype], 3
@@ -1893,10 +1900,10 @@ cmz_uncomp:
 ; clobbers: CX, DX (an output), flags
 ;
 ; ONE KB OVER, for the round-up, and no more: a 'CZ' read expands in place
-; inside exactly U (SPEC.md 20.14.2). NOT through mem_bytes_kb_x, whose own
-; banner says a new caller must prove its input cannot wrap: `add ax, 1023`
-; carries for every U from 64,513 up and answers ZERO KB. A shift and an
-; increment cannot.
+; inside exactly U (SPEC.md 20.14.2). NOT through mem_bytes_kb_x, which takes
+; a 16-bit count and U is 24 bits (it USED to carry for every U from 64,513
+; up and answer ZERO KB, too, until SPEC.md 20.1.1). A shift and an increment
+; over DX:AX cannot.
 ; -----------------------------------------------------------------------------
 cmz_uclaim:
     push ax
@@ -2198,7 +2205,7 @@ cmz_jstart:
 %ifdef KERN_BIG
     mov bl, al
     mov al, [disk_drive]        ; source and target are this one folder, so
-    mov ah, al                  ; every hop is a word (fcp_goto's quiet arm)
+    mov ah, al                  ; every hop is a word (dsk_goto's quiet arm)
     mov dx, [dsk_cwd]
     call cmz_jwhere
     call COLD_SEG:dkf_dsk_batch_begin
@@ -2544,7 +2551,7 @@ cmz_jrmtmp:
     push bx                     ; and cmz_go's failure path IS cmz_jerr - so a
     mov al, [cs:cmz_jtgtd]      ; hop that failed here went back round with
     mov bx, [cs:cmz_jtgtc]      ; [cmz_jwrote] still set, for ever (SPEC.md
-    call COLD_SEG:fcpf_fcp_goto ; 22.23.6.1). A target it cannot reach keeps
+    call COLD_SEG:dskf_dsk_goto ; 22.23.6.1). A target it cannot reach keeps
     pop bx                      ; its CMPRESS~.TMP, as a failed rename does
     pop ax
     jc .no
@@ -2877,7 +2884,7 @@ cmz_jmsg:
 ; Uncompress To... (SPEC.md 22.23.6) - kern_big's alone
 ; =============================================================================
 ; cmz_gosrc / cmz_godst - stand in the source's folder or the target's, through
-; the far door DISKOPS.DRV already uses (fcp_goto, SPEC.md 18.99.8). Free inside
+; the far door DISKOPS.DRV already uses (dsk_goto, SPEC.md 18.99.8). Free inside
 ; the run's batch bracket (SPEC.md 18.9.3), and a word when the two are one
 ; folder. A failure never returns (cmz_jerr). clobbers: flags
 cmz_gosrc:
@@ -2892,7 +2899,7 @@ cmz_godst:
     mov al, [cs:cmz_jtgtd]
     mov bx, [cs:cmz_jtgtc]
 cmz_go:
-    call COLD_SEG:fcpf_fcp_goto
+    call COLD_SEG:dskf_dsk_goto
     jc .err
     pop bx
     pop ax
@@ -3106,7 +3113,7 @@ cmz_jdisp:
 ; put back signs the same (18.8.2) - its boot sector never changed - so the
 ; hop back would keep its FAT window and be served the OLD root out of the
 ; cache, and the part just copied onto it would be `Missing`. A failed hop
-; never returns (cmz_jerr). clobbers: BX CX, flags
+; never returns (cmz_jerr). clobbers: BX CX, flags (BP kept: CLO_KCALL's)
 cmz_jfresh:
     CMZ_GO dst                  ; OFF the source first: the hop back is then a
                                 ; mount however recently the motor ran, and
@@ -3115,13 +3122,10 @@ cmz_jfresh:
     xor bh, bh                  ; a volume this join mounted: < DVOL_MAX
     shl bx, 1
     mov word [dsk_fatwsig+bx], 0    ; 0 = nothing banked: dsk_fatw_pick loads
-    mov bx, dsk_rah_tab         ; ...and every cached chunk goes, which is
-    mov cx, DSK_RAH_RUNS        ; dsk_rah_flush's loop: it is .text, and this
-.chunk:                         ; is an image (DS is the kernel's)
-    and word [bx+RAH_N], 0
-    add bx, RAH_REC
-    loop .chunk
-    ret
+    push bp                     ; ...and every cached chunk goes: dsk_rah_flush
+    CLO_KCALL dsk_rah_flush     ; itself, which is .cold (disk.inc) and so one
+    pop bp                      ; wm_cbd away - where this was its loop copied,
+    ret                         ; on a belief it was .text (kernel size pass 12)
 
 ; cmz_jline - CLV_LINE: 'Put FILEA.002 in A:' over 'Enter=ready  Esc=stop'
 ; in:  AL = 0 / 1, DI = the kernel buffer. out: DI on the NUL, CF = 0
@@ -3306,10 +3310,10 @@ cmz_claim:
     push bx
     push cx
     call cmz_ukb                ; the source's KB, ROUNDED UP - and NOT through
-                                ; mem_bytes_kb_x, whose own banner says a new
-                                ; caller must prove its input cannot wrap: this
-                                ; one cannot, `add ax, 1023` carries for every
-    mov [cs:cmz_k], ax          ; U from 64,513 up and answers ZERO KB. A shift
+                                ; mem_bytes_kb_x, which takes 16 bits where U
+                                ; is 24 (and which, until SPEC.md 20.1.1,
+                                ; carried for every U from 64,513 up and
+    mov [cs:cmz_k], ax          ; answered ZERO KB). A shift
                                 ; and an increment is a KB more than needed
                                 ; when U is an exact multiple of 1,024, which
                                 ; the output region is glad of anyway
