@@ -3944,6 +3944,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/softgfx.inc`  | the software renderer (§32/§39.3): the software planar primitives, and the only video driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1/COM2 UARTs, IRQ4/IRQ3 ISRs, the 8042 auxiliary port and its IRQ12 ISR (§9.9), both packet decoders and the `mou_apply` back end they share, the keyboard mouse (§9.6), cursor (save-under) |
+| `kernel/serial.inc` | Desktop UART lease, routed through the mouse IRQ scan; on-demand `SERIAL.DRV`, instance cleanup (§115) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records (`EVT_MDOWN`/`MUP`/`RDOWN`, and `EVT_WAKE` — a package's own kick, §74.1), the system event ring queue, its two shared drains `evq_drain`/`evq_mup` (§10.3) and `evq_pending` (§13.4) |
 | `kernel/clock.inc`  | system clock (§37): the RTC ladder (§37.90 — MC146818 at 70h/71h, MM58167 and RP5C01 at 2C0h, int 1Ah last), the wall-clock date + time advanced from `[ticks]`, and formatting — prefix `clk_`. **Neither the field editor nor the RTC WRITE half is here**: `clk_fld_str`/`clk_fld_adj`/`clk_step` (§37.93) and the four rungs' writers (§37.94) are §37's code hosted in `CTRL.DRV`. What stays is the tick, the snapshot, the menu bar's formatter and the six port helpers **both** the boot overlay and that module need |
@@ -42525,7 +42526,9 @@ same tail: `OSAPI_MEM_HMA` (§2.10.8) at `0x0487`, a 103rd rare cell, and
 which is what `kernel.asm`'s length guard asserts from the counts.
 `OSAPI_ASSOC_FLUSH` (§54.7.6, at `0x0493`) is a 105th rare cell, 1,161, and
 `OSAPI_WM_ONWHEEL` (§13.18, at `0x0499`) a seventeenth INLINE cell, of six
-for parity, **1,167 bytes**. `osapi_table_end` is `0x049F`.
+for parity, **1,167 bytes**. The subsequent desktop serial lease (§115)
+appends one six-byte RXCELL at `0x049F`: **1,173 bytes**, with
+`osapi_table_end` at `0x04A5`. Earlier cell addresses are unchanged.
 Those counts are the tree it landed on, not a contract; `t_api_abi` prints
 the span it walked.
 
@@ -43965,6 +43968,29 @@ zeros). Audio's two are profile-build only (`APROF`). `apps/os88fp.inc`'s
 `tests/decfmt.py` (`soak -k decfmt`) runs every arm under Unicorn, seven
 builds of the include over a grid of words and doublewords, against Python's
 own formatting, every register and every byte outside the output checked.
+
+### 20.5.3 apps/os88flat.inc — the flat vocabulary for a colour face
+
+The second look a package can give itself on a 4bpp display, after
+§105.9.5's bevelled one: FLAT - filled shapes, one-pixel rims, colour that
+carries meaning, no light-and-shadow pairs. It is source the package
+includes (os88ui.inc's rule: at the end of the code, before `OS88_BSS`), it
+owns no state of its own beyond what the caller hands it, and every element
+writes each pixel once. WireFleet (§114.10) is the first user and the
+`vga-face` skill (`.claude/skills/vga-face/`) names it.
+
+| element | what it draws | primitive calls |
+|---|---|---|
+| `flat_bar` | a filled strip and an opaque text run on it | 2 (fill, `font_run`) |
+| `flat_card` | a rim, a title strip, the title, a ruled line | 4 |
+| `flat_lamp` | a filled square with a darker rim: a status light | 2 |
+| `flat_check` | a box, ticked or empty | 2 |
+| `flat_btn` | an `OS88UI_OWN` painter: rim, face ringed round an opaque caption, pressed and greyed states, and a per-button colour | 5-6 |
+| `flat_big` | a double-size bold caption into the caller's 1bpp band, put up with one `OSAPI_GFX_BLIT1` in an ink and paper of the caller's | 1 |
+
+The double-size caption composes through `apps/os88gfx.inc` (`GFXE_TEXT`,
+`GFXE_SCALE`), so a package that already carries the embeddable library
+pays only for the element.
 
 ### 20.6 Worker tasks — one background task per package instance
 
@@ -59052,7 +59078,7 @@ walk ran to the bottom of the view when only the band is drawn. Nothing below
 descriptions already match the glass.
 
 **It is 13.6x and it is still 3.8x over budget**, the target being one
-typematic repeat (~100 ms, §2951) so that no held key can outrun the editor.
+typematic repeat (~100 ms, §9.6.2) so that no held key can outrun the editor.
 What is left is 155 ms of pass 1 and 186 ms of drawing, and neither is a
 seeding problem — see docs/plans/completed/NOTEPAD-NOTES.md §7.
 
@@ -74430,7 +74456,15 @@ therefore checks `[vid_ndisp]` and, when something is running, collapses it
 through the SINGLE arm (the other card darked, `[vid_ndisp]` back to 1, the
 desktop re-unioned) instead of returning. `[vid_dmode]` is **kept**: the
 arrangement is impossible on this primary, not forgotten, so switching back
-restores it.
+restores it. With **one** display running it does not return either: it
+re-banks display 0's record from the live geometry (`vid_ctx_capture`, through
+the SINGLE arm's own call). A `vid_switch` on a single-card machine — the
+Display page's, or `drv_boot` applying SYSTEM.CFG's adapter — has just run
+`vid_apply`, and without the capture display 0 keeps the boot adapter's extent
+and **kind** for the life of the machine, which one display reads as well as
+two: the raise cache gates on that rect and sizes itself from that kind.
+`vid_disp_planes` counts `VID_EGA` as planar like `VID_VGA`, so a cache taken
+over an EGA desktop keeps all four planes.
 
 **Out of scope**, recorded so the next reader does not re-open it: `VID_EGA`
 as a member of a `KERN_BIG` per-display pair (§39.12 — it may be the primary
@@ -91925,7 +91959,7 @@ smaller one silently becomes the answer to both.
 | app walk, budget 64 | **60** | 240 | 68,541,774 |
 | **app walk, budget 32** | **57** | **241** | **68,298,000** |
 
-So the deadline regression §135.4 found is gone — 60 back to 57 against the
+So the deadline regression PERFORMANCE.md §135.4 found is gone — 60 back to 57 against the
 pre-conversion 56 — and it costs **one frame in four hundred** with dead smoke
 still on the screen, with the queue reaching 6 entries where it reached 5
 (`MC_MAXDRN` is 16, so nothing is near overflowing). The calmer scenario is
@@ -100376,7 +100410,8 @@ first thing to rely on it.
 ### 53.7 What a bracket may call (binding)
 
 Legal throughout: the file slots (UI-task context — this is it),
-`osapi_mouse`, `osapi_get_ticks`, the snd slots, mem/cm/xm slots,
+`osapi_mouse`, `osapi_get_ticks`, `osapi_serial` Read/Write on a lease
+opened before entry (§115), the snd slots, mem/cm/xm slots,
 `cpu_info`, `osapi_video`, `wm_top`, `osapi_font_glyphs` (the glyph
 *data* — how an app letters mode 13h without a renderer of its own), and
 the four `fsx_*` slots. Legal **until the first `fsx_mode` call**, and
@@ -145260,8 +145295,19 @@ week.
 
 So the order is: **the round-trip gate first, the move second.** The gate is
 worth having on its own terms and is buildable from parts that exist — the
-guest writes the file, the host reads the floppy back and checks it, which is
-the shape §772's cross-format row already uses. Doing the move first would mean
+guest writes the file, the host reads the floppy back and checks it.
+
+**BOTH HAVE SINCE HAPPENED**, which is what makes this paragraph history
+rather than a plan: §81.38's `sheetfmt` is that gate (the host authors the
+file from the published grammar, so the writer's defect and the reader's
+cannot cancel), the family is twenty rows now, and the move landed —
+`CHART.OVL` ships. The citation here named section **772**, which does not
+exist; it survived because `checkdocs`' patterns stopped at two digits and so
+never saw a number of three at all (upstream #279, raised by this fork's
+#269 — 283 headings and one bad citation in this tree were invisible to the
+gate until it was fixed).
+
+Doing the move first would have meant
 verifying it by opening a spreadsheet and looking at it, which is how the
 `rep movsw` that wrote MATCH's keys into another segment survived being looked
 at: text worked, numbers did not, and only one of the two was on screen.
@@ -194815,8 +194861,9 @@ gorillas. Music starts on the first worker frame after the initial paint. The
 completed score or any key opens setup: one/two players (default two), two names (ten
 characters each, default Player 1/Player 2 or Computer), winning score, and
 positive decimal gravity (0.001..9999.999 m/s², default 9.8), and gameplay music
-(Yes/No, default Yes; case-insensitive Y/N also accepted). The music question
-explains the M toggle during gameplay. Enter accepts defaults;
+(Yes/No, default Yes; case-insensitive Y/N also accepted), and aim guides
+(Yes/No, default No, the same parser). The music question explains the M toggle
+during gameplay. Enter accepts defaults;
 Backspace edits. Invalid numeric entries remain on the current question. Name
 entry consumes printable keys before gameplay shortcuts. Alt+Enter/Escape and
 the Game menu remain available. V selects the optional musical dance; P/Enter
@@ -194874,11 +194921,36 @@ coordinates, a signed 32-bit height, Q14 sine lookup, midpoint velocities
 and fractional acceleration accumulators. One frame represents .1 simulated
 seconds; adaptive substeps move at most one logical pixel per axis and test
 actual gorilla ink. The minimum gravity and maximum velocity keep peak height
-within the signed 32-bit range. The solo opponent in `grai.inc` evaluates one
-candidate power per worker tick using the same motion routines at 55 degrees,
-then adds -8..+8 velocity error, clamped to 1..360. Candidate searches stop after
-512 frames; difficult extreme-gravity shots may miss. Terrain can intercept it.
-Pause, focus and About suspend aiming. Humans cannot edit a pending computer
+within the signed 32-bit range. The solo opponent in `grai.inc` never aims at
+the human's position. It thinks for 24 worker ticks, then throws. A skyline's
+first throw is a guess: an angle of 45..70, kept for the skyline, and a velocity
+of 40..100. Each of its landings yields one verdict, short of the rival or past
+it, taken where the banana cratered or left the scene. The verdict brackets the
+velocity between the strongest short throw and the weakest long one. With both
+ends known the next throw is the midpoint ± a quarter of the gap. With one end
+known it is half as hard again, or a third softer, ± an eighth. The spread is
+never below 2 and the velocity is clamped to 5..360. A verdict that contradicts
+the bracket drops the stale end. A crater within 16 pixels of its own gorilla
+raises the angle by 10, up to 80, and empties the bracket. At 80 the same
+crater counts as short. `gr_city` forgets all of it with the skyline. Terrain
+can intercept any throw, and extreme gravity may take many turns. Its throw
+is chosen when its turn starts, so the HUD shows it during the thought.
+Pause, focus and About suspend aiming.
+
+Setup's seventh question, `Show aim guides? Yes or No` (default No, `gr_guide`),
+draws the active player's exit angle in `grguide.inc`. It is a straight ray of
+eight dots, at the scene's 15/16 aspect. The ray starts beside the thrower's
+shoulder, not at the release point above its head. On the tallest roof that point
+is in the HUD rows, and the ray's first three dots would be clipped.
+No gravity, wind or velocity enters it, so it says nothing of the landing. The
+dots sit 4..33 pixels out with widening gaps and stray up to 3 pixels off the
+line. The first four are ink 15 and the last four ink 7. They are drawn into
+the scene with the ink beneath each one saved. An angle edit, a turn change or
+the computer's choice restores the old dots and draws the new ones, then blits
+their union once. `gr_fire` takes the guide out before the first flight step,
+so collisions never meet a dot. A key of angle + 512 × turn skips the redraw
+when a HUD update moves no angle, and `gr_clear` drops the dots with the scene.
+`gr_city` draws the first one into the scene its caller paints whole. Humans cannot edit a pending computer
 shot. Only the active player's name and both scores appear in the first HUD row, with Angle and
 Velocity below. Wind appears beside Angle and as a proportional arrow in the
 reserved rows below the buildings. The arrow remains visible during flight.
@@ -196804,7 +196876,9 @@ deliberate simplifications. **The answer to the go/no-go is GO** (102.7.3), so t
 plays and `OSAPI_FSX_CAPS` bit `FSXM_HERC` is a playable adapter alongside `FSXM_VGA0D` and
 `FSXM_CGA320`; an EGA desktop still refuses (102.1).
 
-**102.7.1 The Hercules is the CGA engine with another card side.** `xb_herc` = 1 (and
+#### 102.7.1 The Hercules is the CGA engine with another card side
+
+`xb_herc` = 1 (and
 `xb_cga` = 1: the RAM side - the boxes, the poses, the footprints, the frame, the text grid
 - is shared whole). What is the Hercules's own is a card ADDRESS, in `herc.inc`:
 
@@ -196848,7 +196922,9 @@ game is `XH_COLS` = 45 columns wide, so `xb_wcols` = 45 and `xb_Smax` = ncols - 
 respawns ahead by `xa_ahead` = 215 + 40 (the same distance beyond the wider picture's edge).
 The opponents are two, the CGA's (`XB_NAI_CGA`, 102.4; three are over the gates on both, 102.7.3).
 
-**102.7.2 Compiled hot poses** (`sprite.inc`, `xs_compile`, `xs_compile_v`). The pose draw was
+#### 102.7.2 Compiled hot poses (`sprite.inc`, `xs_compile`, `xs_compile_v`)
+
+The pose draw was
 the biggest RAM cost of a frame (a rider's ~90 bytes at ~85 clocks each through the `(AND, OR)`
 loop; ~85 clocks a (byte, layer) pair on the VGA), and a pose's bytes are known at load. Poses
 0, 1 and 12 are 80% of a lap's frames and nine (0 1 12 15 16 9 2 11 10) are 94%
@@ -196879,7 +196955,9 @@ hangs outside the box being drawn still take the interpreter.** A neighbour whol
 box now takes the compiled draw too (`xc_draw` reads the record from `[xc_cj]` and the placement from
 `[xc_dy]`, `[xc_db]`, `[xc_dp]`, so the box's own bike and a neighbour share it).
 
-**102.7.3 The gate, and the answer.** `tests/excitebike_perf.py --herc --lap` (soak row
+#### 102.7.3 The gate, and the answer
+
+`tests/excitebike_perf.py --herc --lap` (soak row
 `excitebikelapherc`), MartyPC's Hercules XT (`os8088_5150_herc_gla`), Selection A at turbo over
 a whole course with the sound on: **mean period 94,871 clocks = 50.31 Hz (the plan's gate is
 18.2 Hz = 262,144: met 2.76x), p99 148,846, one CRT frame a game frame** (1.6% of the frames take
@@ -196915,7 +196993,9 @@ own registers and the frame length R4/R5 is untouched, but no monitor has been a
 docs/FIELD-MACHINES.md's to measure. Against a card twice as slow the lap would still be two CRT
 frames (25 Hz), over the gate.
 
-**102.7.4 Edge riders** (`xc_place`, `xc_drawc`; `xv_bike`'s record-skipping loop). A bike now
+#### 102.7.4 Edge riders (`xc_place`, `xc_drawc`; `xv_bike`'s record-skipping loop)
+
+A bike now
 shows from `XB_EDGE` = 22 pixels off the left edge to 22 off the right, on all three adapters
 (wave 4 drew a bike only when its 24-pixel box was wholly on the picture, so an opponent popped in and
 out). `xa_record` keeps a record for x in [-22, 8 x wcols - 2] (`xb_xlo`, `xb_xspan`) and x is read
@@ -196932,7 +197012,9 @@ pixels that show at each edge with the window scrolling, pixel for pixel against
 renderer (which clips at the pixel: the edges are byte boundaries) - on all three adapters, and 25%
 of the random-position arm's bikes are placed anywhere in [-22, width - 2].
 
-**102.7.5 The VGA 1-pixel pan: measured, and it stays OFF.** The plan's gate was "only if
+#### 102.7.5 The VGA 1-pixel pan: measured, and it stays OFF
+
+The plan's gate was "only if
 eight phases fit". They do fit a segment - the eight-phase VGA blob set is **58,259 bytes**
 (29,113 for four) - but not the plan's 44 KB claim, so the claim would be ~61 KB, and that is not
 the only price: the CRTC offset register counts words, so a 41-column window is an odd pitch the
@@ -196943,7 +197025,8 @@ in 0Dh (writing 4 shifts the picture 4 game pixels, measured), so the option is 
 somebody builds it; nothing in this wave does. The scroll stays at 8 pixels (one byte) on every
 adapter, the sprites at even x.
 
-**102.7.6 Validation** (all soak rows; nothing external is read).
+#### 102.7.6 Validation (all soak rows; nothing external is read)
+
 * `tests/excitebike_video.py --adapter herc` (row `excitebikevideoherc`): the whole pixel gate of
   102.6 with `Game.screen_herc` decoding the card's memory through the ring and banks the way the
   6845 scans them (a pair per game pixel) against `frame_herc`: the sprite claim's blobs AND its
@@ -196982,7 +197065,9 @@ line) do not apply and would have to be compiled for the (45, 4) pair.
 
 ### 102.8 Polish, the four geometries, the low-memory refusal (wave 7)
 
-**102.8.1 The lane dash, on the two adapters that could not show it.** The art pass looked at every
+#### 102.8.1 The lane dash, on the two adapters that could not show it
+
+The art pass looked at every
 contact sheet on the three adapters (`make excitebike-art`) and found one defect that only two of
 them have. The lane dividers of the track are drawn `99996666` (palette slot 9, white, and slot 6,
 the light dirt) on a ground of slot 5. On the VGA those are three colours. On the CGA the ink map
@@ -197002,7 +197087,9 @@ a tile and its mono form are the dash row, which no other tile shares; `excitebi
 were looked at on all five - meadow, dusk, desert, frost, night: every course has its sky, grass
 and track told apart and the rider readable - and are unchanged.
 
-**102.8.2 The four geometries.** `make excitebikedisk` builds the game floppy in 1.44MB, 720KB, 1.2MB
+#### 102.8.2 The four geometries
+
+`make excitebikedisk` builds the game floppy in 1.44MB, 720KB, 1.2MB
 and 360KB, each `os88disk.py --verify`'d in the recipe. `tests/excitebike_geom.py` (`make
 excitebikegeom`) holds them to more. `--host` (row `excitebikegeomhost`, no emulator) walks each of
 the four with `tests/unit/t_image.py`'s FAT12 reader - deliberately not os88disk's - and requires
@@ -197021,7 +197108,9 @@ walked and not booted**: it needs a 5.25" HD drive and no MartyPC machine has on
 hand on 86Box's `286-525` by pointing that profile's `fdd_02_fn` at `build/excitebike120.img`, which
 nothing here can drive.
 
-**102.8.3 The low-memory refusal, and the bug it found.** Before wave 7 every refused claim of the
+#### 102.8.3 The low-memory refusal, and the bug it found
+
+Before wave 7 every refused claim of the
 bracket ended as `EXB?.GFX MISSING`, a sentence about files (since 102.10 the non-memory sentence is
 `CANNOT LOAD THE RACE`: there are no such files any more). `XB_ERR_MEM` = 3 is the new answer
 (`const.inc`): `xb_nomem` is set by each of the three `OSAPI_MEM_CLAIM` sites of the bracket (the art
@@ -197046,7 +197135,9 @@ fallback runs for real: 28 poses loaded, none compiled, `xb_error` 0, and the wh
 (the twenty positions, the overlap and edge scenes, the rider's lap and crash, the synthetic course)
 identical to the model on the interpreted draw.
 
-**102.8.4 The banner flash.** The plan (4.4) called the themes and the banner flash DAC rewrites, not
+#### 102.8.4 The banner flash
+
+The plan (4.4) called the themes and the banner flash DAC rewrites, not
 new art. The themes are 102.1's `xb_palette`; the flash is `xb_banner` (`video.inc`), called once a
 frame after `xb_flow_frame`: while `xb_flash` runs - the lap flash (150 steps) and GO! (45) - DAC 13,
 the blue of the banner plates and pennants (and of the arrows and the cool end of the gauge, which
@@ -197063,7 +197154,9 @@ showed slot 13 before the flash (in the top 64 lines, more than fifty of them) t
 orange in more than 80% of them in some sample and are blue again in more than 80% in another, the state
 byte ends 0 and the pixels return to blue; on the CGA and the Hercules the state byte never leaves 0.
 
-**102.8.5 EGA: decided, and the refusal stays.** The plan asked wave 7 to decide whether an EGA machine
+#### 102.8.5 EGA: decided, and the refusal stays
+
+The plan asked wave 7 to decide whether an EGA machine
 plays through the CGA path (`FSXM_CGA320` is on the EGA's mode list, §53.4). It does not, for two
 reasons that are facts and not guesses. **An EGA has no port 3D9h**: the CGA colour-select register
 does not exist on the card, only the BIOS's `int 10h` AH = 0Bh emulates it, and `xb_palette` writes the
@@ -197076,14 +197169,17 @@ holding it: the whole splash and help, `VGA, CGA OR HERC ONLY` on the START line
 the heap back. Reopening it needs a machine that has an EGA and a decision to spend an `int 10h`
 call in the bracket.
 
-**102.8.6 The 86Box machine.** `vm/xt-excitebike/86box.cfg` is `vm/xt640` (a 4.77MHz IBM XT, 640KB, an
+#### 102.8.6 The 86Box machine
+
+`vm/xt-excitebike/86box.cfg` is `vm/xt640` (a 4.77MHz IBM XT, 640KB, an
 OTI-067 VGA) with `fdd_02_fn = ../../build/excitebike360.img` and a fresh uuid and NOTHING else, the
 copy rule `vm/386-c-word` records; `make xt-excitebike` runs it with the 360KB system floppy in A:.
 86Box cannot assert anything (docs/TESTING.md): it is where a human looks at the scroll, the banner
 flash and the palette (`C`) and double-clicks `EXCBIKE.O88` in drive B:. No 86Box run was made in the
 environment that wrote this.
 
-**102.8.7 Validation and what wave 7 could not do.**
+#### 102.8.7 Validation and what wave 7 could not do
+
 * `python3 tools/os88test.py soak -k 'excitebike*'` is every row of 102.6, 102.7 and this section:
   the new ones are `excitebikegeomhost`, `excitebikeboot360`, `excitebikeboot720`,
   `excitebikeboot1440`, `excitebikelowmem` and `excitebikesmallclaim`; `excitebikeflow` gained the
@@ -208448,7 +208544,8 @@ offered on The Wire (§20.2.0.1's gap).
 Files of the package: `wirechat.asm` (header, entry, template, menus, About,
 the bss), `wcnet.inc` (the worker and the HTTP client, §113.4),
 `wcproto.inc` (the reply parser, §113.2.3), `wcview.inc` (layout and every
-painter, §113.5), `wcact.inc` (keys, clicks, menus, popups, §113.6),
+painter, §113.5), `wcband.inc` (the band, its slots and the colour face,
+§113.5.1, §113.5.2), `wcact.inc` (keys, clicks, menus, popups, §113.6),
 `wccfg.inc` (`WIRECHAT.CFG`, §113.8), `wctxt.inc` (every string).
 
 ### 113.2 The wire format
@@ -208474,6 +208571,7 @@ field may itself contain spaces.
 | `st` | the status: `0` online, `1` away, `2` busy | `join`, `poll` |
 | `h` | `1` = send this view's history too | `poll` |
 | `m` | the sequence number of the message being flagged | `flag` |
+| `x` | `1` = the client reads §113.2.4's dates and mentions | every verb |
 
 A status or a view change RIDES ON THE NEXT REQUEST: there is no verb for
 either, so changing room or going Away costs one request, not two.
@@ -208524,12 +208622,13 @@ characters. The records:
 | `R` | ver n | the roster follows: `n` `P` lines, version `ver` |
 | `P` | nick room st | one live session, its room and its status |
 | `N` | text | a notice for the user |
+| `A` | seq room date hhmm nick | `nick` named this session in room `room` (§113.2.4; `x=1` only) |
 
 `M` and `D` arrive in sequence order. A history (`h=1`, and every `join`)
 is the view's last 30 messages. `D` records for conversations OTHER than the
 view arrive too, so the client can mark the conversation unread; a `D` for
 the view appends. The body is at most 6,144 bytes: the server drops the
-OLDEST `M`/`D` lines to fit, never a `C`, `X`, `N` or roster line.
+OLDEST `M`/`D` lines to fit, never a `C`, `X`, `N`, `A` or roster line.
 
 The codes, and what the client does with each:
 
@@ -208545,6 +208644,38 @@ The codes, and what the client does with each:
 | 422 | the language scanner refused it | says `text`; the text stays in the field |
 | 429 | rate limited | says `text`; the text stays in the field |
 | 503 | full, or resting until 00:00 UTC | waits `wait` seconds (at most an hour), then tries again |
+
+#### 113.2.4 Dates and mentions — `x=1`
+
+A client that sends `x=1` reads two things a client before it did not, and
+the server gives them to that client alone, so every WireChat already in the
+field keeps the format §113.2.3 pinned for it:
+
+- **A DATE ahead of every `hhmm`** in `M` and `D`: `yyyymmdd`, UTC, the same
+  instant's day. `M seq room date hhmm nick text`, `D seq date hhmm from to
+  text`. The client tells the two shapes apart by the number itself — a
+  `hhmm` is at most 2359 and a date at least 19700101 — so it reads either
+  server, and a server without the date gives a window without day dividers
+  (§113.5) rather than a wrong one.
+- **`A seq room date hhmm nick`** — `nick` named this session in a ROOM
+  message, `seq` being that message's. A message NAMES a session when its
+  text holds `@` followed by the session's nick, compared case-blind and not
+  continued by a nick character (`@Al` does not name `Alan`); what comes
+  before the `@` is not looked at. The record is for a session whose view is
+  NOT that room when the `say` is made — one that is will read the `M` itself
+  and finds the name in it — and never for the sender. It is delivered like
+  a notice: on the session's next reply after the `say`, and again on each
+  reply until a request's `s` is at or past its `seq`, which is how a reply
+  answered into a socket the client had already given up on is not a lost
+  mention; a held poll is answered for it at once (it is something new). The
+  server keeps a session's unread mentions for ten minutes, at most 20, and
+  drops one whose message has since been removed (§113.7) — it would point
+  at nothing. Only a session whose LAST request carried `x=1` is sent one or
+  keeps any.
+
+A private message cannot mention — it has one reader already — and an `A`
+carries no text: it says where to look, and the room's history is one Tab
+away. A client that has no `x=1` is never sent one.
 
 ### 113.3 The HTTP profile
 
@@ -208622,24 +208753,171 @@ Resizable. `OS88_PREFER` 608×400 VGA, 688×296 Hercules, 608×150 CGA;
 
 **Panes collapse by WIDTH**: content under 560px drops the right pane, under
 400 the left one too — rooms then come from the Rooms menu. **The topic line
-goes by HEIGHT**: under 200 rows of content (a CGA) the title is one row.
+goes by HEIGHT**: under 200 rows of content (a CGA) the title is one row, and
+the pane's first band starts one row below the Search button's last. It
+started ON it, so every redraw of that band took the button's bottom edge
+away until the next full paint — the first thing §113.5.1's identity
+assertion found, on CGA, before a line of this section's caches existed.
 A message is a HEADER LINE — `hh:mm` and the nick, bold — then its text
 word-wrapped from column 6; under 8 pane rows (a CGA) it is COMPACT, `hh:mm
 nick: text` on the first line. A word longer than the line is cut where the
-line ends.
+line ends. **The time is local and so is the DATE**: a DAY DIVIDER,
+`---- Tue Oct 20 ----`, is a line of its own above the first message of each
+local day — §113.2.4's UTC date with §113.6.5's offset carried into it, so a
+message at 23:30 UTC is tomorrow's east of Greenwich — and above the first
+message of the pane, so the pane always says which day it starts on. A
+server that sends no date gives a pane with no dividers rather than a wrong
+one. The divider is a line like any other: the pane scrolls it, a press on it
+selects the message below it, and `Find:` steps over it.
+
+**Badges.** A room or a conversation with unread messages has the count at
+its row's right end, at most 99. A room in which someone has `@`-named us
+(§113.2.4) since it was last the view has `@` ahead of its count — `@3`, or
+`@` alone — until it is the view again. On the colour face both are badges
+(§113.5.2).
 
 The status glyphs are 8×8: a filled circle Online, a clock Away, a barred
 circle Busy, a hollow circle for a private partner who is not in the roster.
 `#` is the font's.
 
-**Drawing.** Every row is one opaque `OSAPI_FONT_RUN` padded with spaces to
-its region's width, so nothing is filled and then lettered (PERFORMANCE.md
-rule 2). Bold is §6.6.2 case 6, an overstrike: the run, then the same
-string transparent at x+1 (`tests/textsites.txt`). Each region has its own
-painter and a DIRTY bit (`WCD_*`); a state change sets bits and `wc_flush`
-paints only those. A message arriving while the pane shows its last line
-moves the pane up by `OSAPI_GFX_SCROLL` and letters only the new rows; a
-refused scroll repaints the pane.
+**Drawing.** Every row is a BAND: one opaque `OSAPI_FONT_RUN` per colour span
+padded with spaces to its region's width, and the two rows of air above and
+below the glyphs filled in its ground, so nothing is filled and then lettered
+(PERFORMANCE.md rule 2) — on the mono face a band is one span, as it always
+was. Bold is §6.6.2 case 6, an overstrike: the run, then the same cells
+transparent at x+1 (`tests/textsites.txt`). Each region has its own painter
+and a DIRTY bit (`WCD_*`); a state change sets bits and `wc_flush` calls only
+those painters — and a painter draws only the bands that changed (§113.5.1).
+A move of the pane's top by fewer lines than it is tall — a message arriving
+while it shows its last line, an arrow key, the wheel, the scroll bar's
+arrows — moves what is on the glass by `OSAPI_GFX_SCROLL` and letters only
+the rows it uncovered; a refused scroll (a covered pane) and a popup over the
+pane draw the rows through their slots instead.
+
+#### 113.5.1 A change draws what it changed — the slots
+
+The first build drew a change the way the region bits said: a message
+arriving repainted the whole left pane for one count, a member going Away the
+left pane, the right pane and the status bar, and a press on `Notifications:`
+the whole status bar for two letters. **Measured** (`tests/wcdraw.py`: every
+far call the package makes into a drawing cell of the API table, armed on the
+cell itself so a menu and the title bar are never counted, each named by the
+package routine that made it), on MartyPC's 4.77 MHz 5150 with Hercules, its
+CGA, and the VGA XT:
+
+| gesture | Hercules before | after | CGA before | after | VGA before | after (colour) |
+|---|---:|---:|---:|---:|---:|---:|
+| a message arrives (the pane at its end) | 106 | 28 | 60 | 25 | 139 | 45 |
+| a member goes Away | 157 | 2 | 69 | 2 | 220 | 13 |
+| a key in the field | 5 | 5 | 5 | 5 | 5 | 12 |
+| PgUp: the pane a page | 70 | 61 | 31 | 17 | 103 | 85 |
+| Down: the pane a line | 70 | 7 | 31 | 7 | 103 | 10 |
+| Status > Busy | 23 | 6 | 24 | 6 | 21 | 16 |
+| a press on `Notifications:` | 24 | 1 | 24 | 1 | 24 | 7 |
+| **the eight gestures** | **455** | **110** | **244** | **63** | **615** | **188** |
+
+The "before" column did not count the bold overstrike (`OSAPI_FONT_STR_XPARENT`
+was not armed in that run), so it UNDER-states what the first build cost by
+one call a bold run; the "after" columns count it, and count only calls whose
+far return is into the package's own segment — the planar blit's clip walk
+re-enters its own cell once a fragment, which is the kernel's call and not
+ours. The VGA "before" is the
+mono face that build drew there, and "after" the colour face (§113.5.2), whose
+spans, badges and lamps are calls the mono face does not make — a key in the
+field is 12 there because Send's bevel is painted by the package. A page is
+dear on every face because every band of it is new.
+
+**How.** Every band is drawn THROUGH A SLOT (`wcband.inc`, `wc_bandc`): the
+slot holds the band's meta — its style, its colour spans, its glyphs, its
+overstrike — and its cells as they are on the glass. A band whose meta and
+cells are the slot's draws nothing. One whose meta matches and whose cells
+do not draws ONE `font_run` of the run from the first cell that differs to
+the last, split where it crosses a span, with the overstrike and any glyph
+inside it put back — `4` when `retrying in 5s` becomes `4s`. One whose only
+change is a glyph (a status, a lamp) draws that 8x8 cell alone, which is
+opaque. Anything else draws the band whole. There are 137 slots: 49 WIDE
+ones of 117 bytes (the header, the title, the topic, the notice line, the
+status bar and 44 pane rows) and 88 NARROW ones of 39 (44 left-pane bands and
+44 right-pane ones), 9,165 bytes of the bss; a band past the 44th of its pane
+is drawn whole and remembered nowhere, and a VGA's tallest window has 40.
+**A W_PAINT owes every slot** (`wc_owe`): the kernel white-filled the content
+before calling it, so nothing a slot says is true any more. So does a popup
+going down and the About card, which repaint.
+
+The pane's slots MOVE: `[wc_dtop]` is the top line the glass shows, and a
+paint whose top is a few lines from it scrolls the glass and shifts the slots
+by the same bands (`wc_pshift`), so the rows that moved find themselves
+already drawn. The scroll bar is the library's `os88ui_sbupd` (§13.10.5.6):
+three calls for a thumb that moved, none for one that did not, the whole bar
+only for a total or a fit that changed.
+
+**The slots are only sound if drawing through them arrives at the picture a
+paint from nothing does**, and `tests/wcdraw.py` asserts exactly that: after
+the gestures it captures the content, forces a full repaint (the status popup
+up and down) and captures again, and the two must be identical to the pixel —
+on Hercules, CGA and the VGA's colour face. It also holds each gesture under a
+CEILING a full repaint or a whole-pane pass would blow through, so a caller
+that goes back to repainting a region fails by name. MartyPC has no network
+card, so the row fills the window by INJECTION (`tests/wcprobe.py`): a reply
+§113.2.3 would send is written into `wc_resp` and handed to the UI task as the
+worker would hand it.
+
+#### 113.5.2 The colour face
+
+On a display of more than one bit a pixel — the one the window is ON
+(`OSAPI_WM_DISPLAY`, §39.16.4), asked at each full paint (`wc_face`), which
+for a window across two displays answers the more restrictive — WireChat is
+drawn as a **colour face**. The LAYOUT is the mono face's, column for column:
+WireChat's columns were already fixed widths on the 8-pixel grid (§113.5), so
+what changes is that colour carries what the mono face had to carry in black,
+and every size gate of §113.5 applies to both faces. A VGA's window is
+608 x 381 of content and an EGA's 640x350 one about 600 x 290, past every
+gate; a CGA and a Hercules are one bit a pixel and never see it. Content is
+the application's (§76), so it is still white paper:
+
+| on the glass | mono | colour |
+|---|---|---|
+| the header and the status bar | white | a light grey STRIP, black text |
+| the rules | black | dark grey |
+| ROOMS, MESSAGES, FRIENDS ONLINE, MEMBERS | bold | bold on a light grey strip, the left pane's run to its rule |
+| the view in the left pane, a selected message | inverted | white on blue |
+| `#` and `@` before a name | black | grey |
+| an unread count | the number | a red BADGE, white digits |
+| a room that named us | `@` ahead of the count | the badge magenta |
+| a status glyph and the header's status word | black | Online green, Away brown, Busy red, gone grey (light ones on blue) |
+| a message's time | black | dark grey |
+| a nick in a header | bold | bold, in one of six colours by a sum of its letters — always the same colour for the same nick, on every machine |
+| a header whose message names us | as any other | yellow |
+| the new-messages divider / a day divider | black | red / dark grey |
+| the notice line, the field's prompt | black | blue |
+| `Notifications: On` / `Off` | black | the word green / red |
+| the buttons | the library's | bevelled, the package's own (§13.8.10) |
+
+**Two LAMPS** take the status bar's link glyph's place: THE LINK — green with a
+session, amber while one is being made or the server asked for a rest, red
+with no card or after a failure, dark with no nick — and ACTIVITY — amber
+while a request the user made is on the wire (a join, a message, a flag; a
+held poll is waiting, not activity) and for a second or two after a reply that
+brought something, dark otherwise. A lamp is a rim, a body, a shade and a
+glint, four colours no icon pen lays down in one call, so each is an 8x8
+PLANAR picture put down by ONE `OSAPI_GFX_BLITP` (§5.4.3) — the picture is in
+the source as eight rows of colour digits (`WC_LED8`, `wcband.inc`), so the
+source IS the picture. A blit refused (a window across two displays) puts
+down the Online glyph in the lamp's colour instead.
+
+**The buttons** are MIDIRack's bevel (§105.9.5): a black frame, a white top
+and left and a grey bottom and right, the caption black on light grey —
+pressed, one grey line in and the caption a pixel down and right; greyed, the
+caption grey — painted through `OS88UI_BOWN` (§13.8.10), so the library's
+press, drag-off and release redraw the package's face. On the mono face the
+record's labels are the captions and every button is the library's.
+
+**The mono face is the contract.** It never adds a span — `wc_rspan` returns
+on it — so every band is the one span of its style, which on that face is
+black on white for every style but the selection's inverse: the call sequence
+`wc_band` made before any of this existed. `tests/wcdraw.py`'s Hercules
+picture of the populated window is byte-identical to the first build's, and
+CGA's differs in exactly the one row §113.5's Search-button fix moved.
 
 ### 113.6 What the user does
 
@@ -208679,8 +208957,12 @@ else dismisses it, and either repaints what it covered.
 
 #### 113.6.3 Keys
 
-Enter, Esc as §113.6.1; PgUp/PgDn a pane page, Up/Down a line; Tab the next
-room; everything else to the field.
+Enter, Esc as §113.6.1; PgUp/PgDn a pane page, Up/Down a line; everything
+else to the field. **Tab** right after `@` and the first letters of a nick
+COMPLETES the nick off the roster — `@ret` becomes `@RetroAmy` — and Tab
+again goes round the others that begin the same way; it never offers our own
+nick, and any other key ends the round. Anywhere else, and with nobody on the
+roster to complete, Tab is the next room.
 
 #### 113.6.4 Menus
 
@@ -208700,7 +208982,14 @@ room; everything else to the field.
   above the first of them; it goes when the view changes or the user sends.
 - **Notifications** (on by default): a 880 Hz chirp for a private message,
   or a room message naming the user's nick as a word, while the window is
-  not frontmost.
+  not frontmost — and for an `A` (§113.2.4), a mention in a room the user is
+  NOT looking at, whether the window is frontmost or not, because that room
+  cannot be seen from here.
+- **Mentions.** A message in the view that names the user's nick as a word
+  (`@George` or `George`; `Al` is not named by `Alan`) is marked, and its
+  header is yellow on the colour face. An `A` marks its room with `@`
+  (§113.5's badges) until the room is the view, and the notice line says
+  `RetroAmy mentioned you in #hardware`.
 - **Auto-away.** Ten minutes with no key and no press turns Online into Away;
   the next key or press turns it back. A status the user chose is left alone.
 - **Local time.** Times arrive in UTC (`hhmm`). The offset is the machine's
@@ -208762,15 +209051,20 @@ full`. The messages already shown stay shown.
 
 ### 113.10 Sizes
 
-Measured on the tree that added owned nicks: **image 15,901 bytes, bss
-19,896 — 35,797 of `APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 13,844 bytes packed.
+Measured on the tree that added the colour face: **image 19,658 bytes, bss
+29,217 — 48,875 of `APP_MAX_SIZE`'s 61,440**; `WIRECHAT.O88` is 17,092 bytes
+packed. It was 15,901 / 19,896 and 13,844 when owned nicks were added; the
+dates, the mentions and Tab's completion are ~1.0 KB of the image,
+§113.5.1's slots 9,165 bytes of the bss and their engine ~1.3 KB of image,
+and §113.5.2's face — the styles, the lamps, the bevel — ~1.4 KB.
 No heap claim: every buffer is in the package's own segment, which is what
 `OSAPI_DRV_CALL` wants of a socket buffer anyway (§72, `netpkg.inc`). The bss,
 largest first:
 
 | store | bytes | why that many |
 |---|---|---|
-| `wc_msgs` | 8,960 | 40 messages of 224 (`WC_MREC`): the server's history is 30 (§113.2.3) and ten more is what arrives while they are read |
+| `wc_slw`, `wc_sln` | 9,165 | §113.5.1's slots: 49 wide of 117 bytes, 88 narrow of 39 |
+| `wc_msgs` | 8,960 | 40 messages of 224 (`WC_MREC`, +222 the UTC day): the server's history is 30 (§113.2.3) and ten more is what arrives while they are read |
 | `wc_resp` | 6,146 | one reply body, `WC_RESPMAX` + the parser's NUL — the server's own ceiling |
 | `wc_rxb` | 1,024 | one `NETV_RECV`, `NET_SKMAX` |
 | `wc_ros` | 800 | the roster: 50 sessions, the server's limit (§113.7), at 16 |
@@ -208793,4 +209087,445 @@ own is `wc_nstep` → `wc_take` → `wc_hdrline` → `wc_dec32`.
 
 | row | tier | what |
 |---|---|---|
-| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code |
+| `wirechat` | soak | QEMU + ETHER.DRV against `tests/wirechat.py`'s fixture: join, a history, a held poll answered by a second session's message, a `say` round trip, a `422` shown, a flag, a room change, a private message, a `401` rejoined, a `428` answered with the code - and §113.2.4: `x=1` on every request, a message stored with its date, a mention in the view marked, an `A` from another room marking it, Tab completing an `@nick` |
+| `wcdraw` | soak | §113.5.1 on MartyPC's Hercules 5150: each gesture's drawing calls under its ceiling, and the incremental picture identical to a repaint's |
+| `wcdrawcga` | soak | the same on its CGA: the compact layout, and the Search button's edge |
+| `wcdrawvga` | soak | the same on the VGA XT: the colour face (§113.5.2) |
+
+## 114. WireFleet — naval battles over a null modem (`apps/wirefleet/`)
+
+`WIREFLET.O88` (the eight-character DOS stem) is WireFleet: **Two PCs. Two
+fleets. One winner.** This section is the contract for the delivery waves in
+`docs/plans/WIREFLEET-PLAN.md`; unchecked stories there are not yet shipped
+behavior. The build diary is `docs/HOW-WIREFLEET-WAS-BUILT.md`.
+
+### 114.1 Rules and deployment
+
+Each player has a private 10 by 10 grid: columns A–J, rows 1–10. There are
+five straight ships, of lengths 5 (carrier), 4 (battleship), 3 (cruiser),
+3 (submarine) and 2 (destroyer). Ships may touch, never overlap, and never
+extend past an edge. Horizontal and vertical are the only orientations.
+The local board holds 0 for water and ship IDs 1–5. Each placement record
+holds its anchor (0–99, row-major, FFh absent) and orientation (0 horizontal,
+1 vertical). Every cell of a ship holds its ID. Placement is validated in
+full before any cell changes. Removing a ship clears all its cells.
+
+The selected ship can be rotated, placed with a click or the keyboard, and
+removed again before Ready. Auto-place clears the board and constructs one
+legal fleet; it has bounded work, with a deterministic legal fallback.
+Clear removes the fleet. Ready is available only when all five ships are
+placed and prevents subsequent edits until a new match is explicitly begun.
+
+One shot per turn, including after a hit. Repeated shots and shots while it
+is the opponent's turn are refused. Miss, hit and sunk have different shapes
+as well as colors. All 17 occupied squares hit ends the game. The defending
+computer judges its fleet; undiscovered ship coordinates never cross the
+wire. A sunken ship may reveal its complete extent. Neither timeouts nor a
+disconnected cable change the turn or choose a new winner.
+
+### 114.2 Display and input
+
+One binary uses the window's actual display (§39.16.4). VGA has navy water,
+cyan grid lines, gray pixel ships, white misses, red hits and a yellow
+target. Hercules and windowed CGA use explicit 1bpp assets with readable
+ship outlines and shot shapes. Coordinates, target state and disabled
+controls remain readable without color. Layout follows the actual content
+height, including the 200-line CGA desktop; no control may sit below it.
+
+Native menus, release-fired buttons (`os88ui.inc`), clipped opaque text
+(`OSAPI_FONT_RUN`) and `OSAPI_ABOUT_SET` follow the system conventions.
+Arrow keys move the target, R rotates, Enter places or fires, A auto-places,
+C clears, digits 1–5 choose a ship, and M toggles sound. Chat editing is an
+explicit mode so printable game shortcuts cannot change a typed message.
+Escape leaves chat or About first. Fullscreen follows §11.2.1; a foreign
+CGA four-color framebuffer is exclusively inside §53 and never receives
+desktop drawing calls.
+
+Generated source art, its exact prompt and deterministic conversion are
+kept under `apps/wirefleet/art/` and `tools/wirefleet_assets.py`. Runtime
+assets are embedded; the game needs neither PNG decoding nor a sidecar.
+The board renderer composes opaque cells, redraws only changed cells during
+interaction, and coalesces full board painting by row. Presentation must not
+erase the board before replacing it. No animation requires continuous idle
+repainting.
+
+### 114.3 Link and persistence requirements
+
+Serial uses a crossed TX/RX null modem with shared signal ground, standard
+BIOS-advertised COM1 or COM2, 2400 baud, 8N1, no hardware flow control, and
+an original 8250 as the minimum UART. A live desktop mouse must continue to
+work. The active mouse port and an already leased port must be refused.
+UART/PIC state and every lease must be released on ordinary and forced close.
+The coordinated serial service's ABI will be pinned before its implementation;
+WireBall's FSX-only ownership is not a desktop serial API (§109.1).
+
+2400 is WireBall's rate, and it is chosen for the 4.77 MHz XT: an original
+8250 holds one received byte, and at 9600 the next one overwrites it 1.04 ms
+later. Two 86Box XTs linked at 9600 lost about 9% of received bytes (Link >
+Statistics read `err 628` of 7,139, bits 82h - UART overrun and ring
+overflow), and no 66-byte frame survived whole, while the same build linked
+at once in QEMU, whose CPU is a thousand times faster. At 2400 a byte waits
+4.17 ms.
+
+The link protocol must validate magic, version, bounded length, checksum,
+sender, recipient, match identity and turn before mutating game state.
+Messages are delimited and escaped, with resynchronization after garbage,
+truncation, overflow or UART line errors. Commands are acknowledged and
+retried; duplicate fire/result/chat messages must not apply twice.
+Silence pauses local battle input while retaining the fleet, transcript,
+turn and pending command. Rejoining the same match reconciles the last
+committed turn; unrelated peers must not overwrite it. Conflicting histories
+must refuse resume visibly. No disconnect automatically starts a new match.
+
+A versioned, checksummed saved match contains the private fleet, both shot
+grids, match/peer identity, committed turn and any unresolved command.
+Validate the entire file before replacing live state. Saving and loading are
+UI-task file operations (§20.6 rule 7). No write on every retry or heartbeat.
+
+### 114.4 Sound and validation
+
+Placement, ready, fire, miss, hit, sunk, link restoration and victory get
+finite nonblocking cues through the OS sound router (§34). The system's
+selected PC Speaker, AdLib or Sound Blaster route is respected; the game
+does not probe cards or program sound ports. Mute and close release only
+the instance's own grants. Repeated protocol messages do not repeat cues.
+
+The standalone application disk is built in all four geometries. The
+package belongs to the games category and live payload. Host checks cover
+asset reproducibility and bounds. Emulator acceptance uses the shipped
+assembly, real serial bytes between two OS instances, deliberate transport
+faults, three desktop adapters and CGA four-color fullscreen. Final row
+names and measured package/RAM sizes are recorded as their waves land.
+
+### 114.5 Deployment implementation
+
+The desktop frame preferences are 600×414 (VGA), 600×304 (Hercules), and
+600×154 (CGA), subject to the window manager's fit. Board cells are 24 pixels
+wide and 24, 16 or 8 high according to the actual content height. The compact
+grid begins at content y=25; taller grids at y=40. Buttons sit four pixels
+below the grid. A one-tick window timer polls the link and finite sound
+sequence; if timer registration is refused, a restartable worker only posts
+window wakes. Parsing, drawing and file access stay on the UI task. Ready
+locks a complete fleet and waits for both captains and the serial link.
+
+Auto-placement seeds the OS random generator from a fresh private PIT latch
+mixed with OS ticks at the Auto gesture. It does not reuse the discovery
+identity as a seed: that identity travels over the wire. Freshly booted PCs
+must not inherit identical fleets from the OS generator's default seed.
+The existing 64-attempt bound and legal fallback remain unchanged.
+
+`wirefleetdeploy` (soak) drives the shipped assembly on all three adapters:
+positive placement before overlap/edge refusals, moving without losing an
+old ship, vertical placement, removal, auto fleet geometry, Ready locking,
+button press/cancel, About and close. `wirefleetart` (soak) checks conversion
+reproducibility, bounds and distinct shot shapes in color and monochrome.
+During waves these are named, not re-run; the final pass runs their union.
+
+### 114.6 Serial protocol v1
+
+Frames begin and end with 7Eh; body bytes 7Eh/7Dh are escaped as 7Dh then
+byte XOR 20h. The decoded body is exactly 64 bytes. Bytes 0..1 are `WF`,
+2 version 1, 3 type (0 HELLO, 1 SYNC, 2 SHOT, 3 RESULT, 4 CHAT). Sender,
+recipient and match are little-endian 32-bit identities at 4, 8 and 12.
+The committed turn is a word at 16 (0..200); 18 is readiness (0/1),
+19 target (0..99), 20 result (1 miss, 2 hit, 3 sunk), 21 ship ID (1..5
+only for sunk), 22 sunk anchor, 23 direction. Bytes 24..25 are a chat
+sequence: CHAT's own sequence, otherwise the last received chat sequence.
+26 is CHAT length (1..32), 27..58 its printable ASCII text; unused bytes
+are zero. 59..60 is the committed shot-history hash, 61 reserved zero.
+62..63 is CRC-16/CCITT-FALSE (initial FFFFh, polynomial 1021h) over 0..61.
+
+HELLO may have recipient zero while discovering. A bound peer sends addressed
+traffic; state-bearing messages require the exact sender, recipient and match.
+The lower unsigned sender identity is captain 0 and fires first. The match
+identity is that captain's identity. Equal identities are regenerated before
+any battle. New match assigns a fresh identity and clears game history; both
+captains deliberately start a new match. Disconnect never does this.
+
+The shooter repeats SHOT for the current turn without advancing locally.
+The defender validates the turn, side and unused target, judges its private
+fleet, caches RESULT, applies it once and advances the committed turn. The
+shooter applies a matching pending RESULT once and advances, then its next
+SYNC acknowledges that turn. The defender cannot fire its next shot until
+that acknowledgment arrives. It repeats the cached result while the peer is
+one turn behind. Duplicate SHOT for that cached turn replays the result and
+never judges a square twice. No more than one shot may be in flight.
+
+The rolling history hash starts at FFFFh. Each committed result updates the
+same CRC with its turn word, target, result, sunk ship/anchor/direction; both
+peers use those seven canonical bytes in that order. SYNC at the same turn
+must have the same history hash; a difference beyond one turn or conflicting
+hash refuses play visibly. A one-turn gap is repaired only by the cached
+result for the pending shot, never by copying a peer's turn counter.
+
+Only a completely sunk ship reveals its ID, anchor and direction; other
+RESULTs have all three zero. The receiver validates the revealed extent and
+its previous hits before marking it sunk. Chat is independently sequenced:
+one outstanding message, repeated until a peer SYNC acknowledges it; a
+duplicate cannot append another transcript line. Heartbeats are no more
+frequent than nine ticks (a frame is 275 ms at 2400 baud; SHOT, RESULT and
+CHAT go at once). Fifty-five ticks without valid addressed traffic
+pauses battle input, preserving the pending shot and chat. Reconnect resumes
+the same identities/history; unexpected peers cannot replace an existing game.
+
+### 114.7 Saved match v1 (`.WFL`)
+
+Save and Load use the Standard File dialog, initially `FLEET.WFL`. A record
+is exactly 512 bytes, little endian, with CRC-16/CCITT-FALSE over 0..509
+at 510. Header 0..3 is `WFLT`, 4 version 1, 5 zero, 6..7 size 512.
+The data fields are:
+
+| offset | bytes | meaning |
+|---|---|---|
+| 8, 10 | 2 each | committed turn, history hash |
+| 12..15 | 1 each | captain side, ready, peer ready, finished (0/1 won/2 lost) |
+| 16, 20, 24 | 4 each | own identity, peer identity, match identity |
+| 28..31 | 1 each | pending shot flag, its cell, result-cache flag, sunk enemy bit mask |
+| 32 | 2 | cached result's turn |
+| 34..38 | 1 each | cached cell, result, ship ID, anchor, direction |
+| 39..43 | 1 each | selected ship, placement direction, cursor cell, placed count, mute |
+| 44, 49 | 5 each | own anchors, directions |
+| 54, 154, 254 | 100 each | private fleet, incoming shots, outgoing shots |
+| 354, 356 | 2 each | outgoing chat sequence, received chat sequence |
+| 358, 359 | 1 each | pending-chat flag, length |
+| 360 | 32 | pending chat text |
+| 392 | 1 | selected COM port (0 unset, 1/2) |
+
+393..509 are reserved zero. Shot values are 0 unknown, 1 miss, 2 hit, 3
+sunk. A load first validates header, CRC, all ranges, exact legal private
+fleet reconstruction, Ready's five ships, shot/fleet consistency, committed
+shot counts and turn parity, and pending-command bounds. It rejects a file
+of any other size before reading it. Only a valid record can disconnect the
+old lease and replace live fields. No serial pointer, ring index, displayed
+pixel, timer, current connection flag or sound ownership is restored from a
+file. The game starts paused until the link (§114.9's search, the saved
+port first) reaches the saved peer and its history agrees. Both PCs save their own private record; one PC's file is
+not a replacement for the other PC's fleet. The transcript is retained across
+a cable interruption in memory; only its sequence/undelivered message is
+persisted to disk. Saving is explicit, not a heartbeat side effect.
+
+### 114.8 Fullscreen and cues
+
+F or Alt+Enter toggles fullscreen. VGA and Hercules use the native fullscreen
+window (§11.2); `OSAPI_FULLSCREEN` is handed the window again after
+`OSAPI_WM_DISPLAY`, which answers the screen height in BX - until §114.10's
+delivery it was handed that height, and F hung those desktops. A 1bpp display offering `FSXM_CGA320` gets a §53 bracket in
+320×200 four-color mode, with 12×10 cells at x=20/176, y=40. The mode's
+`FSI_SEG`, stride and bank step define the framebuffer. Palette 1, bright,
+has black water, cyan grid, magenta hits and white ships/marks. Explicit
+packed 2bpp assets are derived from the same retained source; grays use
+black/white stipple so magenta remains an impact cue. The selected cell uses
+a border and all shot shapes remain distinct. This is one VRAM page; it
+redraws changed spans, with no full clear during ordinary play.
+
+The bracket copies the OS's ASCII glyphs before changing mode and renders
+its own text afterward. No desktop drawing/window slot is called in the
+foreign mode. Arrow keys and Enter work, mouse movement selects cells,
+left-click places before Ready, and an on-screen Fire target confirms battle
+shots. R/A/C/Y/1–5 remain deployment controls. T opens chat; while editing,
+printable keys and Backspace edit the message, Enter submits, Escape cancels
+editing. F/Escape or a fresh Alt+Enter edge returns to the desktop. S/O return
+to the native window before opening Save/Load dialogs. The lease and game
+state survive both directions. Serial service continues through IRQ3/4 while
+the foreground waits at `OSAPI_FSX_WAIT`; no rate hook or PIT rate change is
+needed for a turn-based game.
+
+Cues are finite tone sequences, priority 40h, through `OSAPI_SND_TONE`:
+place 660; ready 660/880; fire 165/110; miss 440/220; hit 110/82; sunk
+220/165/110; connection 440/880; victory 784/988/1175; defeat 330/220/165 Hz.
+The sequencer advances on OS ticks and never waits. The system routes these
+to its PC Speaker, AdLib or Sound Blaster FM sink. Mute and fullscreen exit
+stop further notes; the current finite note expires within three OS ticks.
+They do not send an unconditional tone-off, which could silence another
+instance that has since won the router. Kernel instance teardown releases
+this instance's actual device grants immediately, including on forced close.
+
+### 114.9 Automatic link
+
+The plan is docs/plans/WIREFLEET-FACE-PLAN.md. WireFleet looks for its
+opponent by itself: no menu use is needed to play.
+
+**Search.** The window's first tick starts the search, and so does Link →
+Automatic. A candidate list is COM1 and COM2 (the saved or chosen port
+first when there is one); a port the lease refuses as the mouse's (3) or
+absent (4) leaves the list for this search. With one candidate the lease
+stays on it. With two, the lease moves between them (§115.1) after a dwell
+of 40 to 71 ticks, the extra drawn from the OS generator at each move so
+two machines cannot stay in step on opposite ports. The first valid
+WireFleet frame on a port ends the moving: the search has its port, and it
+is remembered as the chosen port for Save.
+
+**Refusals.** Mouse unsettled (2) and busy (1) are retried every 18 ticks
+with a line that says what to do ("Move the mouse once so the OS can tell
+it from the cable"; "Another program is using the serial port"). A missing
+module (8) stops the search with its line; Link → Automatic tries again.
+No candidate left stops it with "No free serial port".
+
+**Fallback.** Link → Connect COM1 / COM2 pins the search to that port and
+nothing else; Disconnect stops searching until Automatic or Connect. A
+loaded saved match keeps its saved port as the first candidate.
+
+**Rebinding at turn 0.** Before any result is committed (turn 0, no shot
+pending, not finished) a HELLO from a new sender identity replaces the
+bound peer: the match identity is recomputed, the peer's readiness and chat
+sequence are reset, and the link is reported as found again. This covers an
+opponent that relaunched WireFleet or chose New fleet after linking, which
+otherwise left both PCs refusing each other's frames until both pressed N.
+From turn 1 the §114.6 rule stands: an unexpected peer cannot replace a
+game. After a finished match a HELLO from a new identity is announced as
+"Your opponent started a new match - press N to join".
+
+**Starting.** When both captains are Ready and linked, the captain whose
+turn it is may fire; the status line reads "Opponent ready" or "Opponent is
+placing ships" before that. Nothing about §114.6's frames changes.
+
+### 114.10 The colour face
+
+On a display that `OSAPI_WM_DISPLAY` reports as more than one bit per pixel,
+with a content box at least 560 pixels wide and 270 high, WireFleet draws a
+colour face; every other window - Hercules, windowed CGA, and the CGA
+fullscreen bracket (§114.8) - keeps the face §114.2 describes, unchanged.
+The verdict is taken at each full paint and banked for the incremental
+draws, MIDIRack's rule (§105.9.5).
+
+The face is built from `apps/os88flat.inc` (§20.5.3), the flat vocabulary:
+a title bar (navy, a double-size bold caption composed in one 1bpp band and
+put up with one `OSAPI_GFX_BLIT1`), a notice strip (light grey with a
+coloured lamp: green linked, yellow searching, red paused or refused), a
+status bar, framed cards with a title, flat buttons painted through
+`OS88UI_OWN` (§13.8.10) in a filled face with a darker rim, and check boxes.
+
+Deployment shows the board in a card with its coordinates and a "Your
+ships" card listing each ship's picture, name and length with a check box,
+the selected ship highlighted, the placed count, Rotate / Auto-place / Clear
+and a primary Ready. Battle shows "YOUR TURN" or "OPPONENT'S TURN" with the
+turn number, both boards in cards, the legend, a Fire button naming its
+target, and the chat panel. Cells are 24 pixels high on VGA and 16 on EGA;
+the hit-test follows the same geometry. Everything that changes is drawn
+through the same per-field caches as §114.2's face, so an idle window does
+not repaint and a gesture redraws only what it changed.
+
+#### 114.10.1 The boards, planar
+
+On a 4bpp window whose board rect `OSAPI_GFX_BLITP`'s probe (DI bit 15,
+§5.4.3.2) accepts, each changed span of a board row goes up with one
+`BLITP`, the clip walked (DI bit 14); the boards sit at content x 40 and 336
+and the ship pictures at 312, all on the 8-pixel grid. The tiles stay
+PACKED on disk (planar ones compressed 1.8 KB worse, and `apps360.img` had
+no cluster to spare); the first planar paint spreads the 38 stored tiles and
+the stamp's two tables to planes once per instance, into 11.5 KB of bss, a
+tile row as plane 0's three bytes then planes 1-3. Composing a row is then
+four 3-byte moves a scanline, the hit X the same AND/OR stamp, the yellow
+cursor two masks. Whatever the probe refuses - `kern_small`, a display
+straddle, an x off the grid (114.2's own face at 326) - takes the packed
+`OSAPI_GFX_BLIT4` path unchanged.
+
+Measured on MartyPC's 4.77 MHz VGA XT (`os8088_xt_vga`), breakpoints at
+`wf_paint` and its end: a full battle repaint **3.9 s -> 1.39 s** and a
+deployment one **2.7 s -> 1.1 s**; the two boards **3.46 s -> 0.95 s**. The
+blit was never the cost: `BLITP` puts a 240x24 row up in 0.7 ms, and the
+packed compose was ~150 ms of each row's 171.
+
+#### 114.10.2 The art, stamped
+
+`tools/wirefleet_assets.py` finds each ship's rows in the atlas (it is not
+five equal strips: cutting at fifths gave every ship after the carrier the
+previous one's keel as a grey line), drops the mast's narrow rows and
+area-averages an 18-row hull. Tiles 38..71 - a ship segment, hit - are not
+stored: each is its segment with the X stamped, `(pixel AND a) OR o` per
+byte, one table pair per form (colour, mono, CGA), and the converter refuses
+to emit tables that do not reproduce all 34 in all three forms. The art went
+from 31,104 bytes to 17,280 raw and 9,348 to 8,597 packed, which is what the
+face, the planar path and the automatic link were paid for with:
+`WIREFLET.O88` ships at 26,338 bytes against 26,416 before them.
+
+#### 114.10.3 What a gesture costs
+
+`tests/wfdraw.py` (rows `wfdraw`, VGA, and `wfdrawherc`, Hercules) counts
+every far call into a drawing cell, as `tests/mrdraw.py` does. On the VGA
+face: five seconds of the automatic search draws **nothing**; a cursor move
+is one `BLITP`; selecting a ship 6 calls; rotating 6; placing 11; Auto-place
+34; the Ready repaint 121 (the row counts hits, and a walked-clip `BLITP`
+re-enters its own cell, so each of its calls is two hits). After a run of gestures the window is captured,
+About is raised and dismissed - a full repaint - and captured again: the two
+are identical to the pixel.
+
+**114.2's face changed in one place, to fix it.** `wfdrawherc` found every
+cursor move on the Hercules enemy board leaving 22 lit pixels (44 across a
+row) that a repaint does not draw - on `main` as well, 66 after the same
+gestures. That board sat at content x 326, off the byte grid, and its
+one-row `OSAPI_GFX_BLIT1` of two cells lit pixels ~219 columns past its own
+48-pixel width; at x 328 (`WF_MGX1`) the same moves leave none. The
+2-pixel move is the fix shipped here; why an unaligned `BLIT1` writes past
+its width is a kernel question left open (§5.4.2.5 says it must not).
+
+## 115. Desktop serial lease (`kernel/serial.inc`, `SERIAL.DRV`)
+
+An on-demand kernel module (§2.8), on both kernels. Connecting may require
+the system disk; once open, no disk access is needed to move serial bytes.
+This qualifies as a module because inserting the boot disk during the
+explicit Connect gesture does not interrupt an active conversation. No UART
+ring or game state is resident in the kernel. One port may be leased at a
+time; a second application receives busy. The caller must pin its own region
+with `OSAPI_MEM_MOVABLE`, AX=0, before opening and keep its buffer there until
+close. It may opt back into movement after the lease is released.
+
+### 115.1 API and buffer
+
+`OSAPI_SERIAL`, appended at 049Fh (X cell), runs in UI-task context. It keeps
+all registers except AX and CF. AL is the verb; BL is COM1=1 or COM2=2 for
+Open, ignored for the other verbs. Every operation is bound to the calling
+instance. A winning serial mouse's port is never eligible. Until the mouse
+contest is settled, Open refuses with a distinct error; the caller tells the
+user to move the mouse. Nonstandard or unadvertised bases are refused.
+
+| AL | verb | arguments and result |
+|---|---|---|
+| 0 | Open | SI=offset of a 517-byte buffer in the pinned package region, BH=the divisor of 115200 (0 = 12, 9600 baud; 48 = 2400); CF=0 AX=0 on success |
+| 1 | Close | restores UART/PIC state, releases the lease and drops the module; succeeds if already closed; a foreign lease returns busy |
+| 2 | Read | CF=0 AL=byte, AH=line/overflow status accumulated since the preceding Read; CF=1 AX=6 if empty |
+| 3 | Write | CL=byte; CF=0 AX=0 queued; CF=1 AX=7 if the TX queue is full |
+
+Open by the instance that already holds the lease MOVES it (§114.9): the
+held port is restored and released exactly as Close would, the module stays
+loaded and the named port is opened. A refusal of the new port leaves the
+lease closed, as a failed Open always does. Any other holder is refused busy.
+
+Refusals are AX=1 busy/wrong owner, 2 mouse not settled, 3 mouse port,
+4 absent/unsupported port, 5 invalid caller/buffer, 8 module unavailable.
+The buffer is 0 RX head, 1 RX tail, 2 sticky error bits, 3 TX head, 4 TX tail,
+5..260 RX bytes, 261..516 TX bytes. Each 256-byte ring holds at most 255
+bytes. Original LSR error bits 1–4 are sticky at byte 2; bit 7 is RX overflow.
+The kernel and module own these bytes while leased. Publication advances the
+producer index last; a consumer advances its tail only after reading data.
+The API validates the complete buffer against the instance's region size.
+
+### 115.2 Hardware and lifetime
+
+Open saves LCR, IER, DLL, DLM, MCR and the standard port's PIC mask bit, then
+sets the divisor Open was given in BH (0 means 12, 9600 baud; WireFleet asks
+for 48, 2400), 8N1, DTR/RTS and OUT2, with RX interrupts enabled. THRE
+interrupts run only while queued TX needs service. No FIFO, scratch register,
+CTS/DSR gating, delay loop or new interrupt vector is required. The boot
+mouse probe already proves the standard 8250 divisor latches (§9.5).
+
+The existing IRQ3/IRQ4 mouse scan routes a leased row to the module before
+reading its UART; the module handles bounded RX/TX service and the existing
+mouse ISR owns EOI. Mouse register broadcasts skip the leased row. This
+preserves the cross-wired IRQ handling in §9.5.2.1 and keeps mouse movement
+from stealing serial data. The lease does not mask the winning mouse's line.
+Line errors or an overflowing ring are reported to the application so its
+framer can discard a partial message and resynchronize.
+
+Read and successful Write also run the same bounded service with interrupts
+disabled: acknowledge IIR, capture at most 16 RX bytes and start at most one
+ready TX byte. This starts a newly queued transmission immediately and
+recovers from a missed IRQ edge without waiting for another mouse event.
+The rings and their publication order are identical on both paths.
+
+Close first withdraws the row from serial dispatch with interrupts disabled,
+then restores the UART/PIC state before the module can be freed. Instance
+teardown force-releases its lease before freeing package memory; reboot
+silences it before mouse vectors are unhooked. A lease survives §53 entry.
+Hibernate is refused while a serial lease is active: UART registers and
+an attached peer cannot be restored by a RAM snapshot on another machine.

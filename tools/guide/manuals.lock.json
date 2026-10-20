@@ -464,9 +464,9 @@
   "sources": [
    "apps/gorillas"
   ],
-  "stamped": "e4576a70",
-  "strings": "a42f0c9c00a04c78",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "eb3a53c1",
+  "strings": "32a3e259cd3ebe70",
+  "why": "#281 edited the page with the change (seventh setup question for aim guides, the learning computer opponent) and did not restamp; checked against apps/gorillas README and setup"
  },
  "GUIDE_TEX": {
   "sources": [],
@@ -500,9 +500,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "4cd88043",
-  "strings": "d35ebdb2509f31a8",
-  "why": "hibernate carries the HMA driver pool (SPEC.md 87.4 step 3b): page gains the HMA resume requirement and the 'Not enough memory' refusal"
+  "stamped": "dc7a4142",
+  "strings": "22e67d0f6c954f23",
+  "why": "Document disconnecting a desktop serial lease before hibernate"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -878,6 +878,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "SERIAL_DRV": {
+  "sources": [
+   "kernel/serial.inc"
+  ],
+  "stamped": "dc7a4142",
+  "strings": "075d3ddf5a3a826e",
+  "why": "Document desktop serial connection, mouse port refusal and lifetime"
+ },
  "SHEET_O88": {
   "sources": [
    "apps/sheet"
@@ -1196,9 +1204,17 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "a805ac61",
-  "strings": "455f0b5acdca7829",
-  "why": "first page: written from SPEC.md 113 and apps/wirechat (menus, field modes, keys, wheel, status bar words, WIRECHAT.CFG, net_find's card-then-link)"
+  "stamped": "2edd2c29",
+  "strings": "9f00405fd48854f1",
+  "why": "dates and day dividers, @mentions and Tab completion, the colour face and its lamps (SPEC.md 113.2.4, 113.5.1, 113.5.2)"
+ },
+ "WIREFLET_O88": {
+  "sources": [
+   "apps/wirefleet"
+  ],
+  "stamped": "e3e1efbf",
+  "strings": "24bef22c86f73ff1",
+  "why": "2400 baud and Link > Statistics described"
  },
  "WORD": {
   "sources": [],

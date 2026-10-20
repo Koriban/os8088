@@ -1860,9 +1860,11 @@ vid_disp_planes:
     call vid_disp_of            ; AL = the display holding it...
     call vid_kind_of            ; ...and AL = that display's adapter
     mov cx, 1
-    cmp al, VID_VGA
-    jne .out
-    mov cl, 4
+    dec al                      ; vid_bk's mapping: VGA -> FF, HERC -> 0,
+    cmp al, 2                   ; CGA -> 1, EGA -> 2, so planar is `al >= 2`
+    jb .out                     ; unsigned. VID_EGA IS PLANAR (SPEC.md 39.24):
+    mov cl, 4                   ; counted as one plane, its cache kept plane 0
+                                ; and a reveal broadcast it to all four
 .out:
     pop di
     pop ax
@@ -2035,8 +2037,9 @@ vid_dual_ok:
 ;           second one black, [vid_ndisp] = 2, [vid_cur] = 0, display 1 banked
 ;           and placed. SINGLE: the other card dark, [vid_ndisp] = 1, the
 ;           desktop back to the primary alone. A machine vid_dual_ok refuses:
-;           untouched if nothing was live, and COLLAPSED to single if
-;           something was - see the refusal arm (SPEC.md 39.24)
+;           display 0 RE-BANKED from the live geometry if one display was
+;           live, and COLLAPSED to single if two were - see the refusal arm
+;           (SPEC.md 39.24)
 ; clobbers: flags
 ;
 ; IT IS RE-RUNNABLE AND THAT IS THE POINT (SPEC.md 39.19). It was a boot-time
@@ -2104,35 +2107,39 @@ vid_dual_ok:
     ; from, which is a desktop drawn into the wrong segment at the wrong
     ; stride. A refusal has to bring the arrangement DOWN.
     cmp byte [vid_ndisp], 1
-    jne .single                 ; ...otherwise collapse it through the arm
+    je .cap                     ; one display: re-bank it, below
+    jmp short .single           ; ...otherwise collapse it through the arm
                                 ; that already knows how. [vid_dmode] is kept:
                                 ; the arrangement is impossible on THIS
                                 ; primary, not forgotten
 
     ; --- ONE DISPLAY, AND ITS GEOMETRY MAY HAVE JUST MOVED ------------------
-    ; "nothing live: unchanged" is true of the BOOT path and false of a
-    ; vid_switch, which has already run vid_apply by the time this is reached.
-    ; The paragraph above fixes exactly this staleness for the ndisp = 2 case
-    ; and stopped one machine short of the commonest one: a box with a SINGLE
-    ; adapter never reaches .single, so display 0's vid_ctx kept whatever
-    ; geometry was captured at boot, for the life of the machine.
+    ; "nothing live: unchanged" was true of kmain's call and false of every
+    ; other: a vid_switch - the Display page's, or drv_boot applying
+    ; SYSTEM.CFG's adapter - has already run vid_apply by the time this is
+    ; reached. The paragraph above fixes exactly this staleness for the
+    ; ndisp = 2 case and stops one machine short of the commonest one: a box
+    ; with a SINGLE adapter never reaches .single, so display 0's vid_ctx kept
+    ; whatever vid_ctx_init captured at boot, for the life of the machine.
     ;
-    ; It is only visible when the new mode is BIGGER than the old, which is
-    ; why it survived every adapter this project had: 640x480 -> 640x200 leaves
-    ; a context too LARGE, which clamps nothing. VBE 1024x768 is the first mode
-    ; wider and taller than the boot mode, and a context stuck at 640x480 made
-    ; wm_dmg_bands clamp every damage band to row 479 - so a window moved below
-    ; it was never erased and its image stayed on the glass (SPEC.md 39.29.11).
-    xor al, al
-    %2 vid_ctx_capture          ; AX is this routine's own, pushed on entry.
-                                ; %2 AND NOT A PLAIN `call`: this macro is
-                                ; instantiated in .boot2 and in .modu as well
-                                ; as .text (the 2026-10-20 merge moved the
-                                ; Display page into .modu), and neither can
-                                ; reach .text near - os88ovlchk named both
-                                ; instantiations of this one line. The line
-                                ; below already had it right
-    jmp short .jout
+    ; vid_ctx is the per-display copy of the sixteen live geometry words and
+    ; the adapter kind, and one display reads it as well as two: wm_dmg_bands
+    ; clamps to its rect, the raise cache's take gates on it (vid_span_one)
+    ; and sizes itself from its kind (vid_disp_planes).
+    ;
+    ; So .cap is .single's own capture and not a second copy of it, because
+    ; the boot blob carries an expansion of this macro (driver.inc's bvs_)
+    ; and has no byte to spare. vid_desk_union runs too and is idempotent
+    ; here: one display at the origin, so it writes back the vid_w/vid_h that
+    ; vid_apply has just set from vid_cw/vid_ch.
+    ;
+    ; THIS FORK FOUND IT THROUGH A FIFTH READER and the sharper symptom:
+    ; it is only visible when the new mode is BIGGER than the old, which is
+    ; why it survived every adapter this project had - 640x480 -> 640x200
+    ; leaves a context too LARGE, which clamps nothing. VBE 1024x768
+    ; (SPEC.md 39.29.11) is the first mode wider and taller than the boot
+    ; mode, and a context stuck at 640x480 made wm_dmg_bands clamp every
+    ; damage band to row 479, so a window moved below it was never erased.
 .paired:
     cmp byte [vid_dmode], 0
     jne .extend
@@ -2146,6 +2153,7 @@ vid_dual_ok:
                                 ; the byte after, the %error beside them)
     mov [vid_kind], ah          ; (a no-op unless a caller moved it)
     %2 vid_apply                ; republishes the chrome extent AND re-homes
+.cap:
     xor al, al                  ; the pointer onto display 0 - which is what
     %2 vid_ctx_capture          ; a shrinking desktop owes it
     call %1 %+ _desk_union      ; ...and BANK BEFORE UNION, the extend path's

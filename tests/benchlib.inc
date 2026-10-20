@@ -906,23 +906,16 @@ bl_hex4:
     ret
 
 ; -----------------------------------------------------------------------------
-; bl_lcommit - append the scratch to the report, trailing spaces trimmed
-; Preserves every register. Silently drops the line once the arena or the row
-; table is full and records it in [bl_full], which the trailer reports - a
-; benchmark that quietly loses its last twenty rows is worse than one that
-; says it did.
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
 ; bl_intro - the FIRST TWO LINES of every report, and the reason they are here
 ;            rather than in each bench's own header
 ;
-; EVERY BENCH IN tests/ ALREADY SAVES ITS REPORT TO A TEXT FILE, and that is
-; written in CLAUDE.md, in docs/TESTING.md, in bl_save's own header twenty
-; lines up, and in the file comment of each bench. It is still not read: the
-; reports keep being taken by paging down and photographing the screen, which
-; is eleven captures and then a human or a model reading digits off 8x8
-; glyphs - and `GFX_XOR_RECT 256x1` was first taken that way, with middle
-; digits that are genuinely ambiguous at that cell size.
+; THE BENCHES IN tests/ SAVE THEIR REPORTS TO TEXT FILES, and that is
+; written in CLAUDE.md, in docs/TESTING.md, in bl_save's own header below, and
+; in the file comment of each bench. It is still not read: the reports keep
+; being taken by paging down and photographing the screen, which is eleven
+; captures and then a human or a model reading digits off 8x8 glyphs - and
+; `GFX_XOR_RECT 256x1` was first taken that way, with middle digits that are
+; genuinely ambiguous at that cell size.
 ;
 ; So the sentence goes where somebody who is about to do that is ALREADY
 ; LOOKING: line one of the report itself. Documentation that is not at the
@@ -931,11 +924,29 @@ bl_hex4:
 ;
 ; IT IS EMITTED FROM bl_lcommit, which is the one funnel every report line -
 ; text or measured row - passes through, so a bench cannot forget to call it
-; and a NEW bench gets it without knowing it exists. [bl_introd] is what stops
-; the recursion, since bl_sline below re-enters the very routine that called
-; this. The caller's half-built line is parked in bl_draw, which is the
-; painter's scratch and is free while the report is being BUILT.
+; and a NEW bench gets it without knowing it exists. The caller's half-built
+; line is parked in bl_draw, which is the painter's scratch and is free while
+; the report is being BUILT.
+;
+; NOT EVERY PACKAGE THAT INCLUDES THIS FILE SAVES THE SAME WAY, so the banner
+; is two knobs, each defined before the %include:
+;   BL_INTRO_HOW 'press W'   how THIS bench saves - the default is 'press S, or
+;                            the Bench menu', gfxbench's and sysbench's. NETBENCH
+;                            saves on W and zeroes its profiler on S, covbench
+;                            and spkbench have S and no menu, and the
+;                            vid* family, vidkern and pmdma save by themselves
+;                            when a test ends: a banner that names the wrong
+;                            key sends its reader to destroy the report
+;   BL_NOINTRO               no banner. REDLINE (it ships, its reader is a
+;                            user, and rl_frontclock keeps its rows by index)
+;                            and every bench that has no save path at all -
+;                            the band benches, romfont, pxsbench. Defined, the
+;                            package assembles byte for byte as before
 ; -----------------------------------------------------------------------------
+%ifndef BL_NOINTRO
+%ifndef BL_INTRO_HOW
+%define BL_INTRO_HOW 'press S, or the Bench menu'
+%endif
 bl_intro:
     push ax
     push cx
@@ -964,20 +975,39 @@ bl_intro:
     pop ax
     ret
 
+; A RE-ENTRY GUARD AND NOT A "DONE" FLAG. It is 0 whenever control is not
+; inside bl_intro, so the assembler's zero is the only initialisation it can
+; need; and the CONDITION below is [bl_nrow] = 0, so a re-run - which empties
+; the arena just under this - gets the banner again. A "have I done this" flag
+; is the build that never printed it, and not for want of zeroing (the loader
+; zeroes the bss, SPEC.md 20.2 and 21 step 8): gfxbench commits its facts page
+; at launch, before a Run resets [bl_nrow], so the flag was spent on that.
+bl_inintro: db 0
+%endif
+
+; -----------------------------------------------------------------------------
+; bl_lcommit - append the scratch to the report, trailing spaces trimmed
+; Preserves every register. Silently drops the line once the arena or the row
+; table is full and records it in [bl_full], which the trailer reports - a
+; benchmark that quietly loses its last twenty rows is worse than one that
+; says it did.
+; -----------------------------------------------------------------------------
 bl_lcommit:
     push ax
     push bx
     push cx
     push si
     push di
+%ifndef BL_NOINTRO
     cmp word [bl_nrow], 0       ; the report's first line says where the
-    jne .introed                ; report GOES (bl_intro above)
-    cmp byte [bl_inintro], 0
-    jne .introed
-    mov byte [bl_inintro], 1
+    jne .introed                ; report GOES (bl_intro above). ABOVE the
+    cmp byte [bl_inintro], 0    ; arena reset at .have, so the recursive
+    jne .introed                ; commit below is the one that empties it -
+    mov byte [bl_inintro], 1    ; the banner IS the report's first line
     call bl_intro
     mov byte [bl_inintro], 0
 .introed:
+%endif
     mov cx, BL_MAXLINE          ; find the last non-space
 .tr:
     or cx, cx
@@ -1473,12 +1503,6 @@ bl_key:
 ; page) - which is the disk the package was launched from, so a bench started
 ; out of a B: window writes to drive 1 and not drive 0. Look at both.
 ;
-; For GFXBENCH all of this is already written: `tools/gfxbenchread.py` runs the
-; suite and reads the rows out of THIS bss by symbol - bl_arena, bl_idx and
-; bl_nrow below - then saves the report and reads the file back through
-; os88flush as a second walk of the same rows, so a defect in either reader
-; shows up as a disagreement. PERFORMANCE.md Set 161 was taken with it.
-;
 ; THE ALTERNATIVE COSTS A SESSION AND IT HAS. A screen-read is 11 pages of
 ; PgDn, one framebuffer capture each, and then a human or a model reading
 ; digits off 8x8 glyphs - which is how `GFX_XOR_RECT 256x1` was first taken
@@ -1774,17 +1798,13 @@ bl_dbgfind:
 
 bl_s_nul:   db 0
 bl_s_us:    db 'us', 0
-; A RE-ENTRY GUARD AND NOT A "DONE" FLAG, which is why it is a byte of the
-; IMAGE and not of the bss. A package's bss is NOT ZEROED at load, so a
-; "have I done this" flag in there starts as whatever the machine left and
-; the banner is skipped on the first run - which is exactly what happened.
-; This is 0 whenever control is not inside bl_intro, so the assembler's zero
-; is the only initialisation it can need; and the CONDITION is [bl_nrow] = 0,
-; so a re-run - which clears the report - gets the banner again.
-bl_inintro: db 0
-
-bl_s_intro1: db 'THIS REPORT SAVES AS A TEXT FILE - press S, or the Bench menu.', 0
-bl_s_intro2: db 'Read it off any emulator with tools/os88flush.py. Do not screenshot it.', 0
+%ifndef BL_NOINTRO
+bl_s_intro1: db 'THIS REPORT SAVES AS A TEXT FILE - ', BL_INTRO_HOW, '.', 0
+%if $ - bl_s_intro1 > BL_MAXLINE + 1
+%error BL_INTRO_HOW is too long for one report line
+%endif
+bl_s_intro2: db 'Read it off the disk image (MartyPC: tools/os88flush.py). No screenshots.', 0
+%endif
 bl_s_head:  db 'measurement                 N    counts         us/op', 0
 bl_s_stat:  db 'rows', 0
 bl_s_dash:  db '-', 0

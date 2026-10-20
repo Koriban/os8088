@@ -63,6 +63,7 @@ make run-120  # the same, off the 1.2MB 5.25" HD pair. RUNAPPS120=<img>
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make wireball-pair # two 86Box XTs linked over COM2 for WireBall (86Box 6.0+)
+make wirefleet-pair # two 86Box XTs linked over COM2 for WireFleet
 make xt-mfm   # ...and a 20MB MFM hard disk on IBM's Fixed Disk Adapter
 make xt-cga   # the same XT with a CGA card instead of VGA
 make xt-hercules  # ...and the same XT with a Hercules card
@@ -692,6 +693,26 @@ and says `Catalog not understood`.
 SPEC.md §92 is the format and the contract; `docs/WIRE-PLAN.md` is why it
 reads that way.
 
+### WireFleet — Two PCs. Two fleets. One winner.
+
+`WIREFLET.O88` is a two-player naval game over a null modem cable. Place or
+auto-place five ships, ready both fleets, and take alternate shots. Dots,
+crosses and sunk markers keep both grids readable in color or monochrome.
+Chat shares the connection. A lost cable pauses the match; reconnecting the
+same peers preserves ships, shots and an unanswered shot. Save each PC's own
+`.WFL` file before closing, then load both files and connect to resume.
+
+VGA has a color desktop window; CGA and Hercules have monochrome desktop
+art, and CGA adds four-color fullscreen with `F` or `Alt+Enter`. Finite cues
+follow the system's PC Speaker, AdLib or Sound Blaster route. `M` mutes.
+Choose the free port in **Link** after the serial mouse is detected:
+9600 baud, 8N1, no flow control.
+
+`make wirefleetdisk` builds all four standalone disk sizes;
+`make wirefleet-pair` opens two linked 86Box XTs. The
+[build diary](docs/HOW-WIREFLEET-WAS-BUILT.md) records the design, generated
+art, recovery protocol and acceptance results.
+
 ### WireChat — chat rooms on the wire
 
 `WIRECHAT.O88` is a chat client: four public rooms (lobby, hardware,
@@ -716,8 +737,20 @@ against a daily budget, slowing every client down as it fills, so the chat
 stays inside the Workers Free plan. A few nicks are owned. Joining as one
 makes WireChat ask for that nick's code, which the server checks.
 
+Type `@` and a nick to mention someone — `Tab` finishes the nick off the
+member list — and they hear about it in whichever room they are in: the
+server tells that one client (an `A` record, §113.2.4), which marks the room
+with `@` and chirps. Every message carries its date as well as its time, so
+the pane says where each day begins (`---- Tue Oct 20 ----`), in local time.
+
 The window follows the screen: three panes on VGA and Hercules, the side panes
-going as the window narrows, and a compact one-line message form on a CGA. The
+going as the window narrows, and a compact one-line message form on a CGA. On
+a VGA or EGA it is drawn in **colour** (§113.5.2) — red unread badges, nicks
+in their own colours, the view in blue, a yellow header on a message that
+names you, and two lamps in the status bar for the link and for activity —
+and on CGA and Hercules it is the mono window it always was. Every row is
+drawn through a cache of what is already on the glass (§113.5.1), so a message
+arriving draws a few rows rather than the panes. The
 nick (and its code, if it has one), the friends and the notification switch live in `WIRECHAT.CFG` beside
 the program. It is on every apps disk but the 360KB one, where it rides the
 network disk. SPEC.md §113 is the protocol and the contract.

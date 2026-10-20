@@ -1965,6 +1965,31 @@ FULL = [
 # single-subject gates; several are worth reading before touching their area.
 # --------------------------------------------------------------------------
 SOAK = [
+    Row("wirefleetlink", "soak", py("tests/wirefleetlink.py"), 100.0,
+        "WireFleet two UART peers: turn rules, private fleets, lost result, save/load/reconnect, duplicate commands/chat, malformed frames, victory and cleanup (SPEC.md 114/115)",
+        needs=("qemu", "nasm", "pil"), wants=("build/wireflet.img", "build/os8088.img"), timeout=300),
+    Row("wirefleetsystem", "soak", py("tests/wirefleetsystem.py"), 120.0,
+        "WireFleet on 8088s: original 8250 lease and forced cleanup, CGA color fullscreen and return, saved-record validation, finite speaker/AdLib/SB cues (SPEC.md 114/115)",
+        needs=("marty", "nasm", "pil"), wants=("build/wireflet360.img", "build/wireflet720.img", "build/os8088-360.img", "build/os8088-720.img"), timeout=300),
+    Row("wirefleetart", "soak", py("tests/wirefleet.py", "--art"), 1.0,
+        "WireFleet generated tiles: reproducibility, palette/bounds, distinct color/mono shot shapes (SPEC.md 114)",
+        needs=("pil",)),
+    Row("wfdraw", "soak", py("tests/wfdraw.py"), 120.0,
+        "WireFleet's colour face priced in drawing calls (SPEC.md 114.10): five "
+        "seconds of the automatic search draws nothing, each gesture under a "
+        "ceiling a repaint blows through, and the cached picture pixel-identical "
+        "to a forced full repaint. The 4.77 MHz VGA XT",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/wireflet360.img")),
+    Row("wfdrawherc", "soak", py("tests/wfdraw.py", "--herc"), 120.0,
+        "wfdraw on the Hercules 5150: 114.2's mono face, the same idle, ceilings "
+        "and incremental-equals-repaint identity",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/wireflet360.img")),
+    Row("wirefleetdeploy", "soak", py("tests/wirefleet.py"), 80.0,
+        "WireFleet on VGA/CGA/Hercules: native deployment, bounds/overlap refusal, rotation, removal, auto, Ready, release/cancel and About (SPEC.md 114)",
+        needs=("marty", "nasm", "pil"),
+        wants=("build/wireflet360.img", "build/os8088-360.img"), timeout=240),
     Row("wireballphysics", "soak", py("tests/wireball.py", "--physics"), 65.0,
         "WireBall 8088 physics: center/end contact, paddle motion, ball extent, "
         "rally acceleration, swept end contact and remaining substep motion (SPEC.md 109)",
@@ -3351,7 +3376,7 @@ SOAK = [
         needs=("marty", "nasm"),
         wants=("build/isotron360.img", "build/os8088-360.img")),
     Row("isotronflow", "soak", py("tests/isotron.py", "--flow", "all"), 90.0,
-        "isoTron's FLOW driven through its UI (SPEC.md 108.13.6), MartyPC's "
+        "isoTron's FLOW driven through its UI (SPEC.md 108.13.5), MartyPC's "
         "XT-VGA: the title's own lines over the void and the block-letter word "
         "the model's; `1` - a real key - starts a STORED game (it_tflags SEED, "
         "BOT, FAST, HOLD) and EVERY round's arena is SWEPT in: at its first "
@@ -15297,7 +15322,7 @@ SOAK = [
         "WIRECHAT end to end over a real card (SPEC.md 113.12): the test's "
         "own fixture - a literal stdlib reading of SPEC.md 113.2 - on 8093, "
         "and `make wirechattest`'s B: carrying the package and a "
-        "WIRECHAT.CFG aimed at it. Eleven assertions: the join is 113.3's "
+        "WIRECHAT.CFG aimed at it. Fifteen assertions: the join is 113.3's "
         "request to the byte, the session goes live with the issued token, "
         "the lobby's history is in the store in order, a HELD poll is "
         "answered by a second session's message, a sent message is the "
@@ -15307,9 +15332,35 @@ SOAK = [
         "makes an unread conversation, a right press and Yes flag the "
         "message by its seq and the fixture's X removes it, a 401 is "
         "joined again with the same nick, and the Notifications switch is "
-        "written to the floppy's WIRECHAT.CFG. QEMU by name: MartyPC has "
-        "no network card (SPEC.md 72.9).",
+        "written to the floppy's WIRECHAT.CFG. Then SPEC.md 113.2.4: x=1 on "
+        "every request, a message stored with its date, a mention in the "
+        "view marked, an A from another room marking that room and saying "
+        "who, and Tab completing @ret to @RetroAmy off the roster. QEMU by "
+        "name: MartyPC has no network card (SPEC.md 72.9).",
         needs=("qemu",), serial=True, builds=True),
+    Row("wcdraw", "soak", py("tests/wcdraw.py"), 200.0,
+        "WireChat's redraw, priced in drawing calls (SPEC.md 113.5.1): every "
+        "far call the PACKAGE makes into a drawing cell of the API table, "
+        "per gesture - a message arriving, a member going Away, a key, a "
+        "page, a line, a status, a press on Notifications - each under a "
+        "ceiling a region repaint blows through, and the picture the slots "
+        "drew pixel-identical to a forced full repaint. MartyPC has no card, "
+        "so the window is filled by injecting replies (tests/wcprobe.py). "
+        "Hercules",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawcga", "soak", py("tests/wcdraw.py", "--cga"), 200.0,
+        "wcdraw on the 5150's CGA: the compact layout (one-line title, "
+        "compact messages) and the Search button's edge the first band used "
+        "to draw over (SPEC.md 113.5)",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
+    Row("wcdrawvga", "soak", py("tests/wcdraw.py", "--vga"), 200.0,
+        "wcdraw on the VGA XT, the colour face (SPEC.md 113.5.2): the same "
+        "ceilings and the same incremental-equals-repaint identity, with "
+        "the badges, the lamps and the package's bevelled buttons in it",
+        needs=("marty", "nasm"), serial=True,
+        wants=("build/os8088-360.img", "build/network360.img")),
     Row("telansi", "soak", py("tests/telansi.py"), 210.0,
         "SPEC.md 70.9/70.10/70.12: the ANSI-BBS PARSER on the machine, against "
         "tools/ansisim.py - the same state machine in Python, and the "

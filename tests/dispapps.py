@@ -177,7 +177,8 @@ def _map(app, defines=()):
         o88 = os88build.at(os.path.join("build", "planapp", "PLAN.O88"))
     else:
         o88 = os88build.at("%s/%s.o88"
-                           % (sub, {"solitaire": "solitair"}.get(app, app)))
+                           % (sub, {"solitaire": "solitair",
+                                    "wirefleet": "wireflet"}.get(app, app)))
     if not os.path.isabs(o88):
         o88 = os.path.join(ROOT, o88)
     #

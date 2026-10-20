@@ -55,13 +55,14 @@ CCELL = re.compile(r'^\s*OSAPI_(?:RCSLOT|RCXCELL|RNCELL|FCELL)\s+'
 CELLDEF = re.compile(r'^\s*OSAPI_(?:NSTUB|XSTUB)\s+([A-Za-z_]\w*)\s*,')
 MODS = ('.modc', '.modm', '.modu', '.modf', '.modl', '.modh', '.modp',
         '.modd', '.modk', '.modx', '.modw', '.modj',
-        '.modn')  # module images (2.8). THE UNION:
+        '.modn', '.mods')  # module images (2.8). THE UNION:
         # .modm is this branch's and .modu upstream's, and a name missing here
         # is a module this tool silently does not check - which is why the
         # line carries that sentence, and why .modw joined it at the
-        # 2026-10-14 merge, and .modj/.modn at the 2026-10-18 one, rather
-        # than replacing anything. THIS CONFLICT HAS NOW COME UP TWICE and
-        # the sentence above is what resolves it both times: take the union.
+        # 2026-10-14 merge, .modj/.modn at the 2026-10-18 one and .mods at
+        # the second 2026-10-20 one, rather than replacing anything. THIS
+        # CONFLICT HAS NOW COME UP THREE TIMES and the sentence above is what
+        # resolves it every time: take the union.
 # `.modw` is winmod.inc's WIN95.DRV (SPEC.md 76.14), kern_big's alone, and
 # `.modj` deskmod.inc's DESK.DRV (SPEC.md 11.103.10), kern_big's alone too, and
 # `.modn` stikmenu.inc's STIKMENU.DRV (SPEC.md 110.12), kern_big's alone.
