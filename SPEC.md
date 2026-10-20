@@ -143928,8 +143928,19 @@ week.
 
 So the order is: **the round-trip gate first, the move second.** The gate is
 worth having on its own terms and is buildable from parts that exist — the
-guest writes the file, the host reads the floppy back and checks it, which is
-the shape §772's cross-format row already uses. Doing the move first would mean
+guest writes the file, the host reads the floppy back and checks it.
+
+**BOTH HAVE SINCE HAPPENED**, which is what makes this paragraph history
+rather than a plan: §81.38's `sheetfmt` is that gate (the host authors the
+file from the published grammar, so the writer's defect and the reader's
+cannot cancel), the family is twenty rows now, and the move landed —
+`CHART.OVL` ships. The citation here named section **772**, which does not
+exist; it survived because `checkdocs`' patterns stopped at two digits and so
+never saw a number of three at all (upstream #279, raised by this fork's
+#269 — 283 headings and one bad citation in this tree were invisible to the
+gate until it was fixed).
+
+Doing the move first would have meant
 verifying it by opening a spreadsheet and looking at it, which is how the
 `rep movsw` that wrote MATCH's keys into another segment survived being looked
 at: text worked, numbers did not, and only one of the two was on screen.
