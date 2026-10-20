@@ -138561,22 +138561,25 @@ change them are named here. `glass.py` already carries the dotted-aware
 helpers (`_run_h`, `_run_v`, `_dotted_lines`) from the attempt; they are
 harmless on solid lines and are half of what the bounded detector needs.
 
-### 81.116.1 The headers are BOXED — written, shipped, and GIVEN BACK to the 2026-10-20 merge
+### 81.116.1 The headers are BOXED — given back to one merge and re-landed by the next
 
 Stage 1.8's §10. SHEET's column letters and row numbers floated outside the
 grid with no lines at all; Excel rules the header row and the header column
 off from the grid and from each other.
 
-**IT IS NOT IN THE TREE. It was built, measured, photographed and then given
-back to pay for the 2026-10-20 upstream merge** (§81.117): #268 grew the
-shared includes under SHEET — `os88api.inc` and `os88ui.inc` between them —
-and the package went **over `APP_MAX_SIZE` by at most 64 bytes** with 46 to
-spare. `sh_drawhdrrules` was 83 of them: the newest thing in the package, the
-only purely cosmetic one, and self-contained. Removing it left **34 bytes**.
+**IT WAS GIVEN BACK TO PAY FOR THE FIRST 2026-10-20 MERGE** (§81.117): #268
+grew the shared includes under SHEET — `os88api.inc` and `os88ui.inc` between
+them — and the package went **over `APP_MAX_SIZE` by at most 64 bytes** with
+46 to spare. `sh_drawhdrrules` was the newest thing in the package, the only
+purely cosmetic one, and self-contained. Removing it left **34 bytes**.
 
-The routine is below exactly as it was, and re-landing it is one `call` in
-`sh_full_draw` and the body — when SHEET has room, which is the work §81.117
-says comes first. What follows describes what it DID and would do again.
+**AND IT IS BACK**, unchanged, with the second merge of the same day: that
+one raised `APP_MAX_SIZE` from `0xF000` to `0xFE00` (§20.1.1), so a routine
+that had to be sold for 83 bytes costs **66** against 3,235 spare, and SHEET
+has 3,169. One `call` in `sh_drawall` and the body, exactly as this section
+said it would be. The three glass rows that shaped it — `sheetrowh`,
+`sheetcolw` and `sheethide` — are green on the re-landing, which is the
+check that matters: what follows is why they had to be.
 
 `sh_drawhdrrules` draws exactly two one-pixel fills, and they are SHORT:
 row 1's own top gridline already rules the column headers off across the
@@ -138626,7 +138629,42 @@ which is docs/UPSTREAM.md's rule about `--ours`:
 | gap | upstream's symbols | what it does |
 |---|---|---|
 | **Ask before throwing work away** | `sh_modified`, `sh_ask_unsaved`, `sh_pend`, `sh_onclose` — 34 references in `main`, **none here** | New, Open and Close put §75.3's alert in front of an unsaved workbook: *Save changes to SHEET1.SLK?*, Save / Discard / Cancel, the question Note Pad and Word already ask |
-| **Borders and notes SURVIVE A SAVE** | `sh_bxf_collect`, `SH_BXF_BASE`, `SH_BXF_CAP` | the writer's half. This fork READS border XFs (`sh_xf_bord`, `SH_BIFF_XF_CAP` = 128) so a file Excel wrote keeps its borders, and WRITES none of its own — a border or a note made here is lost on a Normal save, and SYLK carries neither |
+| **~~Borders and~~ notes SURVIVE A SAVE** | `sh_bxf_collect`, `SH_BXF_BASE`, `SH_BXF_CAP` | the writer's half — **and the BORDER half of this row was WRONG, see §81.117.1** |
+
+#### 81.117.1 The border half of that row was wrong
+
+Written from `main`'s symbol list rather than from this fork's writers, and
+reading them settles it: **this fork writes borders already, through
+machinery of its own that is a superset of main's.**
+
+`main` keys an extra XF on a **(format, border) pair** — `sh_bxf_collect`
+builds the list, `sh_bxf_find` looks one up, `sh_biff_xfof` points a cell's
+record at it. This fork keys on a **(format, border, number-format) TRIPLE**:
+`sh_xfp_scan` builds it, `sh_biff_ixfe` points the cell at it (§81.47.6 is
+where that walk learned to bank `[sh_cursheet]`, because a workbook write
+crosses sheets and the border table answers for the active one), and the XF
+body emits `SH_BORD_TOP`/`LEFT`/`BOTTOM`/`RIGHT` as BIFF line style 1 and
+`SH_BORD_SHADE` as area pattern 2. The triple is what §81.55 needed: main's
+pair cannot carry a number format, so two cells differing only in their
+format would share an XF.
+
+**What IS missing is narrower and still real**, and both halves are facts
+about the code rather than a measurement:
+
+* **NOTES ARE NEVER WRITTEN.** No writer in this file reads `[sh_nnote]` —
+  `sh_doread_sylk`, `sh_doread_dif`, `sh_doread_biff`, `sh_doread_dbf` and
+  `sh_doread_sep` all CLEAR it, and nothing emits BIFF's `001CH`. A note made
+  here is lost on every save, in every format. `main`'s `sh_biff_extras` is
+  the half to port.
+* **A BORDER ON AN EMPTY CELL IS LOST WITH IT.** `sh_xfp_scan` walks
+  `[sh_ncells]`, so a border held only in the border table — a box drawn
+  round cells nobody typed in — is never scanned and gets no XF, and there is
+  no cell record for one to ride on anyway. `main` emits a `BLANK` (`0201H`)
+  for each, in the same `sh_biff_extras`.
+
+**A ROUND-TRIP GATE IS OWED** for both. §81.63's shape is the one to use — the
+host authors the file so the writer's defect and the reader's cannot cancel —
+and until it exists these two are read off the source and marked as such.
 
 **The code is not lost and needs no copy kept**: it is
 `git show origin/main:apps/sheet/sheet.asm` at merge `1e3608d8`, and the
