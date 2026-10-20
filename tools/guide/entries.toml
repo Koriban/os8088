@@ -217,6 +217,13 @@ summary = "Lets programs use the extra memory on a LIM EMS expanded memory board
 short = "Use expanded memory boards"
 needs = "A LIM EMS memory board"
 
+["VBE.DRV"]
+title = "VESA 1024x768 display"
+kind = "driver"
+summary = "Runs the desktop at 1024x768 on a video card whose VESA BIOS offers that size, instead of 640x480."
+short = "A 1024x768 desktop"
+needs = "A VGA card whose VESA BIOS offers mode 1024x768 in 16 colours"
+
 ["RAMDISK.DRV"]
 title = "RAM disk"
 kind = "driver"
@@ -273,6 +280,18 @@ title = "Sheet"
 kind = "program"
 summary = "A spreadsheet in the style of Excel 2.1, with formulas, formats, macros, charts and SYLK, DIF and BIFF files."
 short = "Excel 2.1-style spreadsheet"
+
+["CHART.OVL"]
+title = "Sheet's charts"
+kind = "data"
+summary = "Sheet's charting, kept in a file of its own and read in when you make a chart from a sheet."
+short = "Sheet's charting, loaded on demand"
+
+["MACRO.OVL"]
+title = "Sheet's macros"
+kind = "data"
+summary = "Sheet's macro language, kept in a file of its own and read in when a macro sheet is run or recorded."
+short = "Sheet's macros, loaded on demand"
 
 ["PLAN.O88"]
 title = "Plan"

@@ -15835,7 +15835,7 @@ pl_tpl:
     dw pl_ttl, pl_paint, pl_onkey, pl_onclick
 
 ; The EMPTY kernel menu set (SPEC.md 12.2), same idea as apps/word/word.asm's
-; wd_menus0: zero real menus, but its AM_NAME still puts 'Sheet' in the
+; wd_menus0: zero real menus, but its AM_NAME still puts 'Plan' in the
 ; kernel bar. pl_mf_ret can never actually be called (there is nothing to
 ; pick) - it only satisfies the macro's layout.
     OS88_MENUSET pl_menus, pl_s_appname, pl_mf_ret
@@ -16003,8 +16003,8 @@ pl_s_badparen: db 'Unbalanced ( ) - kept as text.', 0
 pl_s_num:      db 'NUM', 0
 pl_s_calcind:  db 'CALCULATE', 0
 pl_s_nw_sheet: db 'New worksheet.', 0
-pl_s_nw_chart: db 'New sheet - use Data > Chart Column to chart it.', 0
-pl_s_nw_macro: db 'New sheet - Macro > Run reads commands from cells.', 0
+pl_s_nw_chart: db 'New sheet - Plan has no charts.', 0
+pl_s_nw_macro: db 'New sheet - Plan has no macros.', 0
 pl_s_calc_auto: db 'Calculation: Automatic', 0
 pl_s_calc_man:  db 'Calculation: Manual - Calculate Now to recompute.', 0
 pl_s_calc_now:  db 'Recalculated.', 0

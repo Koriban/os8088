@@ -142923,6 +142923,48 @@ matter as much — `214748*1` and `100000*2`, which must still evaluate. A clamp
 that fires one value early is the same defect facing the other way, and
 nothing else in the battery would catch it.
 
+#### 81.75.10 What the manual page found
+
+PLAN's page in the project guide (`tools/guide/manuals/PLAN_O88.md`) is the
+first time anybody read the whole program from the user's side, and reading it
+that way found three things the four rigs could not: a rig asserts what a
+cell holds, and none of these is about a cell.
+
+**Two status messages named menus PLAN has not got.** `File ▸ New...` keeps
+Excel's three kinds and makes a worksheet whichever is picked, with the status
+line saying what was actually made — the honest answer, and §81.75's own
+comment says so. The sentences it said were `New sheet - use Data > Chart
+Column to chart it.` and `New sheet - Macro > Run reads commands from cells.`
+Both menus went with the cuts. They are `Plan has no charts.` and `Plan has no
+macros.` now, which is the same honesty pointed at this program.
+
+**The About card's BODY survived its menu.** §81.75 withdrew the Help menu and
+left `OSAPI_ABOUT_SET` uncalled, which is the slot's own sanctioned state — and
+`pl_ablines`, its four strings, the paint call in `pl_drawall` and the dismiss
+in `pl_abdismiss` are all still here, with `pl_ab1` reading **`Sheet for
+os8088`**. Nothing ever sets `[pl_abon]`, so none of it can be reached. §81.75.5
+is this lesson about code that is no longer *reached* and §81.75.7 about code
+that still runs; this is the third case, a body whose only entry was the menu
+that went. **A sweep is owed** and it is wider than the card: `pl_fdlg_apply0`
+still has arms for Paste Special and the Gallery, `pl_idlg` titles for Goto,
+Find, Define Name, Record Macro, Run, Sort and Row Height, and
+`pl_fdlg_counts` rows for Protection, Extract and Series — every one of them a
+dialog kind no menu in this program can open. It is not urgent (the package has
+room) and it is not free to do carelessly, because `pl_abdismiss` is called
+from both `pl_onkey` and `pl_onclick`.
+
+**§81.55 did not come to PLAN.** *A number never shows part of itself* is
+SHEET's rule: General drops significant digits until the figure fits, any other
+format fills the cell with `#`, and the reason given there is that a truncated
+number is a plausible wrong answer nobody has cause to doubt. PLAN's `pl_rjust`
+pads a short value and copies a long one WHOLE, so a figure wider than its
+column is cut off at the column's edge and shows its leading digits. The
+manual says so in the reader's own terms — *a total that looks too small for
+its parts wants a wider column* — which is the honest thing to write and not a
+substitute for the fix. Fixing it properly needs `fx_` formatting at a chosen
+precision, the equivalent of SHEET's `.fit` loop; the `#` fill alone is cheap
+and would at least stop the wrong number.
+
 ### 82.1 The offscreen canvas, and why it is not optional
 
 Everything is drawn into a **private 4bpp buffer** in a claimed segment

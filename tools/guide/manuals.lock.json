@@ -740,6 +740,14 @@
   "strings": "40931b541b447702",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "PLAN_O88": {
+  "sources": [
+   "apps/plan"
+  ],
+  "stamped": "e780591d",
+  "strings": "ad3fe4da6a217e74",
+  "why": "new page, written from apps/plan/plan.asm and SPEC.md 81.75: the four menus of its own bar, the 64 functions it keeps, four decimal places, 320 cells, SYLK/CSV/Text, and the six screenshots taken off a real boot"
+ },
  "PONG_WAB": {
   "sources": [],
   "stamped": "e4576a70",
@@ -1103,6 +1111,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "VBE_DRV": {
+  "sources": [
+   "drivers/vbe"
+  ],
+  "stamped": "e780591d",
+  "strings": "310cb7c7361bc78e",
+  "why": "new page for the VESA 1024x768 overlay (SPEC.md 39.29), written from drivers/vbe/vbe.asm and the Control Panel's own Display list"
  },
  "VIDEO_O88": {
   "sources": [
