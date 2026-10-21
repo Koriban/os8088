@@ -19,7 +19,7 @@ Two rules the entries exist to serve:
   audio report sat here for months as a 5150 report and had come off PCem;
   the 5150 has no sound card.
 
-**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, 61, 63, 64, 66, and one residual
+**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, 61, 63, 64, 66, 68, and one residual
 each in 33 and 37.
 
 ---
@@ -4294,3 +4294,111 @@ out and green with it.
 2026-10-15). Videos have played since without the pointer dying. Whether
 that is this fix, or whether the condition simply has not come up again, is
 unknown. If the pointer is ever dead after a play again, reopen this entry.
+
+## 68. Satellite 4025CDT, VBE desktop: the keyboard stops after a full-screen app, the mouse does not (OPEN — NOT REPRODUCIBLE on current code, and the reporting build no longer exists)
+
+Reported off the owner's **Toshiba Satellite 4025CDT** (docs/FIELD-MACHINES.md)
+running the **VBE 1024x768 desktop** (SPEC.md 39.29): after exiting a
+full-screen game, or ARTFUL, the **keyboard stops responding and the mouse does
+not**. The desktop stays fully usable with the pointer - windows drag, menus
+open, packages launch - and only a restart brings the keys back.
+
+**The machine has a PS/2 keyboard AND a PS/2 mouse**, which is the fact that
+shapes everything below: both devices sit behind the one 8042, so the whole
+shared-buffer family is excluded at a stroke. A byte stranded in the output
+buffer with its interrupt edge erased silences *every* device behind that
+controller (that is what `Elendilon/os8088`'s `protected-mode` branch calls the
+shared-buffer signature, KERN-MEGA-PLAN 14.62-14.64), and this machine's mouse
+never stopped. Whatever stops the keyboard is keyboard-SPECIFIC.
+
+### 68.1 The instrument
+
+`tests/kbdfsx` was written for this report. It samples, into a report it can
+write to disk, the four things that are keyboard-specific on a PS/2 machine:
+IRQ1's mask at the master 8259 (`21` bit 1), the 8042 command byte, the
+`int 09h` vector against `int 74h`'s, and the BIOS buffer's head and tail at
+40:1A/40:1C. **The head/tail pair is the fork in the whole investigation**: if
+the tail moves on a keypress the byte arrived and the fault is above the ISR;
+if it does not, it never came.
+
+Two design points earned their keep. **Save is on the MENU**, reachable with
+the mouse alone - on the machine this is for, the keyboard is dead by the time
+the interesting rows exist, and a report needing a keystroke to write itself
+out could never be read. And **the 8042 command byte is not on the sample
+path**: reading it is `write 0x20 to 64h, read 60h`, and 60h is the one buffer
+both devices share, so a sample that read it would eat a keystroke or desync a
+mouse packet. It is a separate menu item that names itself in the row it
+writes.
+
+It carries two full-screen arms and **the pair is the experiment**: `same mode`
+never calls `OSAPI_FSX_MODE`, so SPEC.md 53.6 skips the restore and the card is
+never touched; `mode 13h` sets one, which is what a game does and what makes
+the kernel put the VBE desktop back through `VBE.DRV`.
+
+### 68.2 Four runs, and what each one killed
+
+All four on a current-tree build written to the owner's CF card, at the card's
+own geometry (194 cylinders at 255x63). The transcripts are kept whole in
+docs/reports/KBDFSX-SATELLITE-2026-10-21.md - a summary is not evidence, and
+the eliminations below rest on the columns rather than on this table.
+
+| | what was run | keys received after | result |
+|---|---|---:|---|
+| 1 | two brackets | 20 | keyboard alive; third bracket inconclusive |
+| 2 | both arms, labelled | 24 | alive after BOTH |
+| 3 | Cyclone + DrMarco (windowed), then both arms | 39 | alive |
+| 4 | Cyclone + DrMarco **full screen**, then both arms | 55 | alive |
+
+**The fault did not appear once.** Across every row of all four transcripts,
+`21` is `00B8` (IRQ1 unmasked), `i09` is `0060:351C`, `i74` is `0060:32EB`, and
+the 8042 command byte reads `0047` - `kbdint=1 auxint=1 kbdoff=0 auxoff=0`.
+
+So, ruled out, each on evidence rather than argument:
+
+- **A bare `OSAPI_FSX_RUN` bracket** (SPEC.md 53.1). Runs 2 and 4, both arms.
+- **The bracket's video restore**, including the VBE desktop's own path back
+  through `VBE.DRV`. The `mode 13h` arm printed `OSAPI_FSX_MODE set
+  320x200x256` on every run that took it, so the restore really was owed.
+- **IRQ1 masked at the master 8259.** Never once masked, in any row, in any run.
+- **The 8042 command byte** disabling the keyboard interface or its interrupt.
+- **`int 09h` stolen by a game.** `apps/cyclone` and `apps/drmario` both hook
+  it directly, and run 4 took both of them through a full-screen session: the
+  vector was `0060:351C` afterwards. They put it back.
+- **The stranded-byte class**, by the shared-8042 argument above.
+
+**A trap worth recording about run 4's reading:** its `start` row shows
+head/tail at `001E`, the pristine boot value, which looks like the games never
+ran. It is not - a game that hooks `int 09h` and does not chain takes keys
+*before* the ROM stores them, so those pointers do not move while it is up.
+The evidence the games ran is `i09` being back to the kernel's.
+
+### 68.3 What is left, and why it stops here
+
+The one variable not controlled is **the build**. The reporting install
+predated an upstream merge cycle; the test card was built from the tree after
+it. The economical explanation is that the defect is already fixed and these
+four runs are chasing something that is no longer in the code.
+
+**That cannot now be tested: the original card no longer exists.** So there is
+no next step of the usual kind, and this entry is here for the eliminations
+rather than for a plan - six of them, on transcripts, so that the next person
+to meet this symptom does not spend the day re-deriving them.
+
+If it recurs, the sequence is: reproduce, launch `KBDFSX.O88` **with the
+mouse** (its `start` row samples the machine the instant it opens, so it does
+not need to have been running), then `Sample Now`, `Read 8042`, `Save Report`.
+The column to read first is head/tail. Everything above says the fault is not
+in the documented path between the key and the kernel - so if it is real, the
+remaining candidates are the kernel's own key path above `kbm_isr`, or the
+keyboard DEVICE having stopped scanning, which nothing here has yet looked at.
+
+### 68.4 What the report found anyway
+
+The field report caught a defect that had nothing to do with it. On the
+1024x768 desktop, `Sample Now` painted white down the left of the SCREEN:
+benchlib's `bl_paint` takes the window handle in SI (`mov bx, si` at its head),
+and five sites across `tests/kbdfsx` and `tests/vbeprobe` set SI to a label or
+a filename and then repainted, handing a package-segment offset over as a
+kernel window pointer. `tests/vbeprobe` had carried it since it was written and
+never shown it, because that package has only ever been run at 640x480 where
+the bad geometry landed harmlessly.
