@@ -54770,14 +54770,26 @@ sh_s_frz_at_a1: db 'Select below or right of the split first.', 0
 
 ; Help
 sh_m_help:     db 'Help', 0
-sh_i_help:     dw sh_it_about
+sh_i_help:
+.about:        dw sh_it_about               ; labelled, like sh_i_file's
 sh_it_about:   db 'About Sheet...', 0
 ; --- the About card's lines (SPEC.md 20.5.1) ----------------------------------
+; SHEET'S OWN VERSION, and it is this package's and NOT the system's: the
+; About box of os8088 itself carries `os8088 1.0` (SPEC.md 14.2, a different
+; number with a different meaning, and tools/os88sym.py searches the kernel
+; image for that exact string). This one is named once here so that the card
+; below and SPEC.md 81 cannot drift apart.
+;
+; 2.1 is the roadmap's, not a count of releases: SHEET is an Excel 2.1d
+; imitation and the stages that carried it there are 81's (1.x the grid and
+; the formats, 2.0 the macro language, 3.0 the UI, 4.x the arithmetic).
+%define SH_VER '2.1'
 sh_ablines:
     dw sh_ab1, sh_ab2, sh_ab3, sh_ab4, 0
 sh_ab1:        db 'Sheet for os8088', 0
 sh_ab2:        db 'A spreadsheet in the shape of Excel 2.1d', 0
-sh_ab3:        db 0
+sh_ab3:        db 'Version ', SH_VER, 0      ; the line was EMPTY, which is
+                                              ; what the card uses for a gap
 sh_ab4:        db 'Contributed by Koriban', 0
 
 sh_defname:    db 'SHEET1.SLK', 0
