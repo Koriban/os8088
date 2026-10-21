@@ -1065,7 +1065,14 @@ cold:                           ; the routine a size pass edits
     times PAD nop
 .far:
 %ifdef NEARJMP
-    jmp near .end               ; a pinned near jmp...
+    jmp strict near .end        ; a pinned near jmp - and STRICT is what pins
+                                ; it. `jmp near` is a HINT: NASM 3.01 shortens
+                                ; it anyway, so both sides of this case came
+                                ; out identical, nothing shifted, and the one
+                                ; case about branch RELAXATION silently tested
+                                ; nothing. 9 of 9 on 2.16.01, 8 of 9 on 3.01,
+                                ; and the fixture was what differed rather
+                                ; than the tool
 %else
     jmp .end                    ; ...or nasm's short one: RELAXED, -1 byte
 %endif
@@ -1210,8 +1217,8 @@ def selfcheck():
             cases.append(what)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print("os88rdiff selfcheck: %d of %d cases %s" % (
-        len(cases) - bad, len(cases), "ok" if not bad else "FAILED"))
+    print("os88rdiff selfcheck: %d of %d cases ok%s" % (
+        len(cases) - bad, len(cases), "" if not bad else " - %d FAILED" % bad))
     return 1 if bad else 0
 
 

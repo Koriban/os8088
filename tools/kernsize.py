@@ -167,6 +167,7 @@ THEMES_END = "<!-- /kernsize:themes -->"
 # The same, per module, plus `.boot2`: splash.inc has no section directive
 # of its own and takes the `.boot2` it is included at (SPEC.md 2.9.4), so
 # without it here a 967-byte module reports as costing nothing.
+CONDOPEN = re.compile(r'^%(if|ifdef|ifndef|ifmacro|ifidn|ifn|ifctx|ifnum|ifstr|ifid|iftoken|ifempty)\b')
 MOD_SECTIONS = ("text", "bss", "lowbss", "vgabuf", "cold", "ovl", "boot2")
 # ...AND `kernel.asm`'s OWN `.boot2` FIGURE IS ALMOST ALL boot/boot2.asm.
 # Stage 2 is `%include`d at the FOOT of kernel.asm, below the last module this
@@ -264,9 +265,17 @@ THEMES = (
     # blank.inc (SPEC.md 64) is here and not under hardware, although all it
     # does is write a video port: what it owns is whether the SIGNAL is on,
     # which is a property of the adapter the rest of this group programs.
+    # vbe.inc (SPEC.md 39.29) is here with viddet.inc and vidsel.inc, which
+    # are the two it talks to: it is the resident HALF of the 1024x768 mode -
+    # the bank the renderer writes through and the straddle cut - while
+    # VBE.DRV does the probe and the mode set. A fifth adapter, in the group
+    # that programs the other four. It was in no theme at all until the first
+    # whole-tier soak ran t_kernmods: render_themes DROPS what it cannot
+    # place, so its bytes were simply missing from the theme total while the
+    # module total counted them.
     ("drawing: adapters, primitives, glyphs, icons",
      ("vga12.inc", "softgfx.inc", "font.inc", "band.inc", "icons.inc",
-      "viddet.inc", "vidsel.inc", "splash.inc", "blank.inc")),
+      "viddet.inc", "vidsel.inc", "vbe.inc", "splash.inc", "blank.inc")),
     # bootprof.inc (SPEC.md 15.5) is here because what it measures is kmain's
     # own phase sequence, which lives in kernel.asm - and because it is not in
     # a shipped build at all (`make BOOTPROF=1`), so no other theme's figure
@@ -387,12 +396,28 @@ def instrument(src):
     have been seen already.
     """
     mods, out, last_at, sect, at = [], [], None, ".text", ".text"
+    depth = 0
     for line in src.splitlines(keepends=True):
+        t = line.strip()
+        # A CONDITIONAL INCLUDE GETS NO MARKERS, and this is not tidiness.
+        # The markers go where the `%include` is, so one inside `%ifdef X`
+        # is assembled only with -DX - while the report block at the foot of
+        # the file names every marker UNCONDITIONALLY. Without this the whole
+        # pass dies on the first one with `symbol KSM6_boot2 not defined
+        # before use`, which names a marker and not the include that carries
+        # it, and `kernsize.py --bless` cannot write a baseline at all.
+        # kernel/vbediag.inc (VBEDIAG=1, SPEC.md 39.29.12) is the first such
+        # include this tree has had. Measuring it in a build that does not
+        # CONTAIN it would be meaningless anyway: its row would read zero.
+        if CONDOPEN.match(t):
+            depth += 1
+        elif t.startswith("%endif"):
+            depth = max(0, depth - 1)
         d = SECTION.match(line)
         if d:
             sect = "." + d.group(1)
         m = INCLUDE.match(line)
-        if m:
+        if m and not depth:
             out.append(_markers(len(mods), sect))
             mods.append(m.group(1))
             last_at = len(out) + 1        # ...after the include line itself
