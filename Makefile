@@ -15020,20 +15020,27 @@ $(BUILD)/cfcfg/system.cfg: Makefile | $(BUILD)
 # PREREQUISITE, or make cannot know. Bitten within ten minutes of adding
 # CFGEOM, which is this tree's own recorded trap (docs: makefile-flag rules
 # go stale) arriving on schedule.
-CFSTAMP := $(BUILD)/.cfgeom-$(if $(CFGEOM),$(subst /,-,$(CFGEOM)),fixed)
+# CFEXTRA=<file>... puts EXTRA files in partition 1's root - a field
+# instrument that is not shipped software and has no business in $(LIVEARGS).
+# `make cfimg CFEXTRA=build/kbdfsx.o88` is the case it was added for: the
+# machine with the fault boots off a CF card and its owner is out of floppies.
+# IT IS IN THE STAMP BELOW, which is not optional - see that comment.
+CFEXTRA   ?=
+CFEXTRASUM := $(if $(CFEXTRA),$(shell echo '$(CFEXTRA)' | cksum | cut -d' ' -f1),none)
+CFSTAMP := $(BUILD)/.cfgeom-$(if $(CFGEOM),$(subst /,-,$(CFGEOM)),fixed)-$(CFEXTRASUM)
 $(CFSTAMP): | $(BUILD)
 	@rm -f $(BUILD)/.cfgeom-* $(BUILD)/cfpart1.img
 	@touch $@
 
 $(BUILD)/cfpart1.img: $(CFSTAMP) $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
                       $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
-                      $(SYSAPPS) $(SYSROOT) $(ALLAPPSFILES) \
+                      $(SYSAPPS) $(SYSROOT) $(ALLAPPSFILES) $(CFEXTRA) \
                       $(BUILD)/cfcfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --hdd $(CFGEOMARG) \
 		--mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
 		--kernel $(KERNFILE) \
 		--folder DOCS $(APPDATAFOLDER) \
-		$(LIVEARGS) $(BUILD)/cfcfg/system.cfg
+		$(LIVEARGS) $(CFEXTRA) $(BUILD)/cfcfg/system.cfg
 
 # CFGEOM=C/H/S sizes the PARTITION, and CFSECTORS the CARD. Empty CFGEOM is
 # os88disk.py's fixed 63/16/65 shape - 32MB, every byte of what shipped before
