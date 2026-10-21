@@ -93,7 +93,30 @@ IMGS = ["build/small360.img", "build/small.img",
 # HDD.DRV, NET.DRV, ETHER.DRV, RAMDISK.DRV, RAMPAGE.DRV, HDDTOOL.DRV,
 # XMEM.DRV, SAVER.DRV and VMMOUSE.DRV are all out today, and so is the
 # eleventh one nobody has written.
-DRV_OK = {"CTRL.DRV", "FORMAT.DRV", "DISKOPS.DRV", "FILECP.DRV", "FDLG.DRV"}
+#
+# ...AND IT IS READ OUT OF THE MAKEFILE, not written down here. It was a
+# literal of five, and SERIAL.DRV joined $(KMODS) with WireFleet (#278)
+# without it: the gate then failed on the two small floppies with "SERIAL.DRV
+# is a driver kern_small has", naming as a violation the very thing its own
+# comment calls legal. A list this gate reads and the rules it cannot are two
+# statements of one fact and only one of them is checked - which is the shape
+# the comment above was already written to avoid, one level up.
+def _drv_ok(root):
+    """`$(KMODS)` + `$(SMALLMODS)`, as basenames: CTRL.DRV, SERIAL.DRV, ..."""
+    import re as _re
+    mk = open(os.path.join(root, "Makefile")).read()
+    out = set()
+    for var in ("KMODS", "SMALLMODS"):
+        m = _re.search(r"^%s\s*=([^\n]*(?:\\\n[^\n]*)*)" % var, mk, _re.M)
+        if not m:
+            sys.exit("t_smallreq: no $(%s) in the Makefile to read" % var)
+        for tok in m.group(1).replace("\\\n", " ").split():
+            if tok.endswith(".drv"):
+                out.add(os.path.basename(tok).upper())
+    return out
+
+
+DRV_OK = _drv_ok(ROOT)
 
 # (8.3 name, why it may not be on a small floppy). One row per SPEC.md 24.5
 # ground; the § is in the reason so a failure sends the reader to the argument
