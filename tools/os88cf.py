@@ -175,8 +175,25 @@ def main():
         e[5:8] = chs(st + psecs - 1, spt, heads)
         struct.pack_into("<II", e, 8, st, psecs)
         mbr += e
+    mbr += bytes(16 * (4 - len(starts)))        # THE TABLE IS ALWAYS FOUR
+                                                # ENTRIES, and the unused ones
+                                                # are zeros. It used to be one
+                                                # entry per --parts, which is
+                                                # 512 bytes only when --parts
+                                                # is 4 and a short sector for
+                                                # every other value - the
+                                                # assert below caught it, but
+                                                # only after cfpart1.img had
+                                                # been laid, so `--parts 1`
+                                                # died at the last step of a
+                                                # long build. A card too small
+                                                # for four of this partition
+                                                # is the ordinary case on a
+                                                # 502MB card with a 493MB
+                                                # volume on it.
     mbr += b"\x55\xAA"
-    assert len(mbr) == SECTOR
+    assert len(mbr) == SECTOR, \
+        "os88cf: the MBR came to %d bytes, not %d" % (len(mbr), SECTOR)
 
     # THE FILE STOPS AFTER p1 UNLESS --full, and on a big card that is the
     # difference between 40MB and 8GB. Only p1 has content: 2, 3 and 4 are
