@@ -4389,8 +4389,22 @@ mouse** (its `start` row samples the machine the instant it opens, so it does
 not need to have been running), then `Sample Now`, `Read 8042`, `Save Report`.
 The column to read first is head/tail. Everything above says the fault is not
 in the documented path between the key and the kernel - so if it is real, the
-remaining candidates are the kernel's own key path above `kbm_isr`, or the
-keyboard DEVICE having stopped scanning, which nothing here has yet looked at.
+remaining candidates are the kernel's own key path above `kbm_isr`, the
+keyboard DEVICE having stopped scanning, or the one below, and nothing here
+has yet looked at any of the three.
+
+**THE MACHINE'S ERA IS A CANDIDATE IN ITS OWN RIGHT, and it is the one to try
+first.** The Satellite is a **Pentium II whose hardware-support target is
+Windows 98** (docs/FIELD-MACHINES.md) - new enough for a BIOS carrying **USB
+legacy keyboard support**, whose SMM handler traps ports 60h and 64h even for
+a PS/2 keyboard. That is note 63's prime suspect on a machine of the same
+generation, and it would be invisible to every column this instrument reads:
+an SMI services the port behind the kernel's back, so IRQ1 stays unmasked, the
+command byte stays `0047`, both vectors stay the kernel's, and the BIOS buffer
+simply never fills - which is EXACTLY the shape all four runs show when the
+keyboard is not delivering. **Disable USB legacy support in the BIOS setup and
+re-run** before any more of this kernel is suspected. Note 63's own next step
+is the same sentence, and it has never been taken on either machine.
 
 ### 68.4 What the report found anyway
 

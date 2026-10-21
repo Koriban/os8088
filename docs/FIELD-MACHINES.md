@@ -226,10 +226,21 @@ pointing devices and IDE geometry get answered. **Nothing timed on it means
 anything** — it is roughly three orders of magnitude off a 4.77 MHz 8088, so
 every result from it is about *capability*, never about speed.
 
+**It is a Windows 98-era machine, and that cuts two ways.** It has no ISA
+slots, so every board-on-the-bus driver — `EMS.DRV` (§107) above all, whose
+attach WRITES to 260h..26Ch and 288h — has nothing to find here and should
+stay unwanted in its SYSTEM.CFG. And its BIOS is new enough to carry **USB
+legacy keyboard support**, whose SMM handler traps ports 60h and 64h even for
+a PS/2 keyboard: that is docs/FIELD-NOTES.md 63's prime suspect on a machine
+of the same generation, and it is worth ruling in or out before anything in
+this kernel is blamed for a keyboard that stops (note 68).
+
 | | |
 |---|---|
 | owner | **`Koriban/os8088`** |
-| CPU | Pentium II, 233 MHz |
+| CPU | **Pentium II, 300 MHz** - the owner's figure; this table said 233 |
+| RAM | 64 MB |
+| era | its hardware-support target is **Windows 98**, which is what dates the BIOS |
 | video | **NeoMagic**, VGA — and a **VBE 2.0** BIOS with 2 MB (§39.28.1) |
 | floppy | **one 1.44 MB 3.5" drive**, and only one: a disk that needs a separate boot floppy cannot be run here |
 | pointer | **PS/2 trackpad** |
