@@ -29,11 +29,18 @@ paint, count relocations. The declaration is checked here rather than assumed
 identical from inside the package (SPEC.md 66.5.6.2) and would make every
 assertion below vacuous.
 
-WHY SHEET IS STILL IN THE ROOM. "The region did not move" is worth nothing on
-its own - it is also what a pass that never ran says, and what a pass with
-nowhere to move anything says. SHEET is the control: it is declared, it owns no
-worker, and it sits in the same arena, so the run asserts PINME's region stood
-still WHILE SHEET'S MOVED. One without the other is not a result.
+WHY A SECOND PACKAGE IS STILL IN THE ROOM. "The region did not move" is worth
+nothing on its own - it is also what a pass that never ran says, and what a
+pass with nowhere to move anything says. CALCULATOR is the control: it is
+declared, it owns no worker, and it sits in the same arena, so the run asserts
+PINME's region stood still WHILE THE CONTROL'S MOVED. One without the other is
+not a result.
+
+IT WAS SHEET until 2026-10-21, and on this fork Sheet can never be it: the
+region is not declared movable and cannot be (SPEC.md 139090 - the overlay
+holds CS in CHART.OVL's vectors and a far frame across eleven file calls), so
+the control stood still too and the row reported a refusal it had not tested.
+tests/regmove.py's header has the same account from the positive side.
 
 WHY TWO PAINTS, AND IT IS THE OTHER HALF OF THE EXPERIMENT. The first version
 of this row was ALSO a false green for a second, unrelated reason, and it is
@@ -193,12 +200,12 @@ def main():
         # ceiling [ PAINT#1 ][ SHEET ][ PAINT#2 ][ PINME ] - see the header
         p1_seg, p1 = open_named("PAINT.O88", 6, (8, 22))
         raise_disk()
-        sh_seg, sh = open_named("SHEET.O88", 8, (8, 60))
+        sh_seg, sh = open_named("CALC.O88", 8, (8, 60))
         raise_disk()
         p2_seg, p2 = open_named("PAINT.O88", 6, (8, 98))
         raise_disk()
         pm_seg, pm = open_named("PINME.O88", 5, (8, 136))
-        print("paint1 %04x   sheet %04x   paint2 %04x   pinme %04x"
+        print("paint1 %04x   calc  %04x   paint2 %04x   pinme %04x"
               % (p1_seg, sh_seg, p2_seg, pm_seg))
         if not (p1_seg > sh_seg > p2_seg > pm_seg):
             print("FAIL: the regions are not stacked in open order, so "
@@ -245,7 +252,7 @@ def main():
             m.key("KeyA")
             try:                        # the first move, bounded by what an
                 os88marty.until(        # idle box's pause gave it...
-                    m, lambda _: pkg_seg(m, S, "Sheet")[0] not in (sh_seg,
+                    m, lambda _: pkg_seg(m, S, "Calculator")[0] not in (sh_seg,
                                                                    None),
                     "Sheet's region to move", poll=0.25,
                     guest=6 * os88marty.GUEST_PACE)
@@ -256,11 +263,11 @@ def main():
             os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
                               what="the compaction")
             os88marty.settle(m)
-            if pkg_seg(m, S, "Sheet")[0] not in (sh_seg, None):
+            if pkg_seg(m, S, "Calculator")[0] not in (sh_seg, None):
                 break
 
         pm_now = pkg_seg(m, S, "PinMe")[0]
-        sh_now = pkg_seg(m, S, "Sheet")[0]
+        sh_now = pkg_seg(m, S, "Calculator")[0]
         nreloc = u16(pm_bss(m, pm_now or pm_seg, PM_NRELOC))
         ok3 = pm_now == pm_seg and nreloc == 0
         print("  3 pinme region STAYED      %s"
@@ -272,7 +279,7 @@ def main():
         bad += not ok3
 
         moved = sh_now is not None and sh_now != sh_seg
-        print("  4 sheet region MOVED       %s"
+        print("  4 control region MOVED     %s"
               % ("%04x -> %04x, so the pass ran and could move a region"
                  % (sh_seg, sh_now) if moved else
                  "NO (%s) <-- the pass moved nothing, so assertion 3 proves "

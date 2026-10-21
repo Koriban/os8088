@@ -8043,10 +8043,14 @@ $(BUILD)/pinme.bin: tests/pinme/pinme.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/pinme.o88: $(BUILD)/pinme.bin tools/os88pkg.py | $(BUILD)
 	python3 tools/os88pkg.py $< -o $@
 
-$(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/sheet.o88 \
+# CALCULATOR AND NOT SHEET as the moving CONTROL, for tests/regmove.py's
+# reason: Sheet does not declare OS88_REGION_MOVABLE on this fork and cannot
+# (SPEC.md 139090), so the control could never move and the row's whole
+# result - "PINME stood still WHILE the control moved" - had no second half.
+$(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
                         $(BUILD)/paint.o88 $(BUILD)/pinme.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/pinme.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88
+		$(BUILD)/pinme.o88 $(BUILD)/paint.o88 $(BUILD)/calc.o88
 
 # PTSTEST - the differential gate for SPEC.md 5.6.9's gfx_points: the same
 # coordinate set drawn through the new slot and through OSAPI_GFX_PIXEL, into
@@ -13567,8 +13571,29 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 
 # 2026-10-13): that disk had 29 of its 354 clusters free when isoTron arrived,
 # and the curation is remade every time this geometry runs out - games360.img
 # carries every game, isoTron among them, and is where a 360KB machine finds it.
+#
+# WIREFLEET IS NOT ON apps360.img EITHER (SPEC.md 114, 24.6.1's rule, dated
+# 2026-10-21), and what made the decision is a build that REFUSED rather than
+# a disk that was merely tight. `lzship --fmt lz4` - the arm that proves an
+# LZB package falls back on a kernel carrying only the LZ4 decoder (20.13.5)
+# - could not build this disk at all: `packages need 356 clusters; disk holds
+# 354`. The shipped disk fits, with 21 free, but it fits BECAUSE OF LZB, and
+# a COMPRESS=lz4 field build could not have it.
+#
+# WireFleet is 26 of those clusters in that arm and arrived the day before
+# this line (#278, #282) - so of everything on the disk it is the newest
+# curation to remake, and 24.6.1 is explicit that being there is a decision
+# with a date and never a property of the package. It is also the one game
+# here that CANNOT BE PLAYED on the machine holding the floppy: it wants a
+# second PC and a null modem cable (114.1). games360.img carries it, which is
+# where a 360KB machine finds every game.
+#
+# Packing it LZB won four clusters back on the disks it still rides
+# (d385750a) and is why small360.img stopped failing regrowshed's fixture;
+# it does nothing for the lz4 arm, where everything is LZ4 by construction.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
-                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88,$(APPS_GAMES))
+                    $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
+                    $(BUILD)/wireflet.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
