@@ -16,9 +16,18 @@ BREAK IT ON PURPOSE (docs/WRITING-TESTS.md 1), measured: take the `call
 fmv_fit` out of fmv_load and the raise leaves 0 entries of 10
 (measured 2026-10-14, with Missile as the pressure).
 
+...AND IT IS WIREBALL NOW, NOT GORILLAS, because Gorillas is not on the
+small disk at all: ef258d6c put it in $(SMALLOMIT_GAMES) on 2026-10-07 and
+this row went on opening it, dying with "GORILLAS.O88 is not in this folder"
+for two weeks. Nothing noticed until the first whole-tier soak. WireBall is
+the largest package the small GAMES folder carries - image + bss 39,291
+against the Gorillas figure below's 46,031 - and the guard at the foot of
+this file is what says it is still enough: a launch that does NOT shed makes
+this row fail rather than pass.
+
 Gorillas ALONE was the pressure until the 2026-10 size passes: kern_small
 gave 2.5KB of heap back and Gorillas' image + bss fell 57,695 -> 46,031, so
-its launch now fits beside the store and the row read "no longer reaches the
+its launch fitted beside the store and the row read "no longer reaches the
 case". Missile (~16KB) is launched from the same window first; the shed
 check below stays, so a machine that stops reaching the case still says so
 rather than passing.
@@ -66,7 +75,7 @@ def main():
         ui.open("MISSILE.O88")          # the pressure Gorillas no longer is
         os88marty.pace(m, 3)            # alone (docstring)
         ui.raise_window(games())
-        ui.open("GORILLAS.O88")
+        ui.open("WIREBALL.O88")         # ...and GORILLAS is not on this disk
         os88marty.pace(m, 3)
         shed = state()
         print("  before %d entries; after the launch dirty %d, store %04x, "
