@@ -13,8 +13,24 @@ loaded.
 WHY THREE PACKAGES AND WHY THIS ORDER. A region is claimed top-down, so the
 first package to open takes the ceiling and there is nothing above it to pack
 into - which is correct behaviour and proves nothing. PAINT opens first and
-takes the top; SHEET opens under it and is the package whose region has to
-move; closing PAINT leaves the hole; and heapfrag's own suite then makes the
+takes the top; CALCULATOR opens under it and is the package whose region has
+to move - NOT Sheet, which cannot: this fork does not declare
+OS88_REGION_MOVABLE on it and SPEC.md 139090 says why (the overlay holds CS
+in CHART.OVL's vectors and a far frame across eleven file calls), so the row
+read "OSAPI_MEM_MOVABLE was refused and the package cannot tell" for as long
+as that decision has stood. Closing PAINT leaves the hole;
+
+CHECK 5 IS STILL RED ON CALCULATOR AND THE REASON IS PRECISE: 220 pixels on
+ONE ROW, y = 186 across the whole band, which is the History strip's
+separator at the foot of its window. Nothing else in the band moves - the
+display still reads 12345, every key is where it was - so the package
+plainly DID draw; what differs is one widget's rule between a paint and a
+repaint. Sheet was the subject that made this check exact, and no other
+movable package has been found with an idempotent repaint. Either that line
+is a Calculator defect worth its own row, or check 5 wants a subject chosen
+for this property; it is left failing and named rather than tuned away,
+because a threshold added to tolerate a bad read is how a gate stops seeing
+its own mutation. and heapfrag's own suite then makes the
 claim that no single run can satisfy, which is what reaches the descending
 pass at all.
 
@@ -82,6 +98,10 @@ def main():
         m.run()
         os88marty.settle(m, gate=os88marty.desktop_up)
         mo = os88mouse.Mouse(marty=m)
+        os88marty.no_saver(m)           # this row drags four windows and the
+                                        # saver has the time to arrive: it
+                                        # DRAWS, so settle can never return
+                                        # and everything armed is watching it
 
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         dslot = dispcp.win_list(m, S)[-1]
@@ -113,27 +133,27 @@ def main():
 
         # --- SHEET under it: the one that has to move -----------------------
         raise_disk()
-        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="SHEET.O88")
-        opened(m, "Sheet")
+        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="CALC.O88")
+        opened(m, "Calculator")
         os88marty.settle(m)
-        sh_seg, sh_win = pkg_seg(m, S, "Sheet")
+        sh_seg, sh_win = pkg_seg(m, S, "Calculator")
         if sh_seg is None:
-            print("FAIL: Sheet never opened a window")
+            print("FAIL: Calculator never opened a window")
             return 1
         mo.drag(sh_win.x + 60, sh_win.y + 9, sh_win.x + 60, sh_win.y + 9 + 25)
         os88marty.settle(m)
-        sh_seg, sh_win = pkg_seg(m, S, "Sheet")
-        print("sheet  region %04x at %s"
+        sh_seg, sh_win = pkg_seg(m, S, "Calculator")
+        print("calc   region %04x at %s"
               % (sh_seg, (sh_win.x, sh_win.y, sh_win.w, sh_win.h)))
         if sh_seg > pt_seg:
-            print("FAIL: Sheet's region %04x is ABOVE Paint's %04x, so "
+            print("FAIL: Calculator's region %04x is ABOVE Paint's %04x, so "
                   "closing Paint leaves no hole above it and the descending "
                   "pass would have nothing to do" % (sh_seg, pt_seg))
             return 1
 
         reg = [c for c in claims(m, S) if c[0] == sh_seg]
         if not reg:
-            print("FAIL: no claim in mem_tab starts at Sheet's segment %04x"
+            print("FAIL: no claim in mem_tab starts at Calculator's segment %04x"
                   % sh_seg)
             return 1
         rbase, rpara, rown, rrloc = reg[0]
@@ -224,7 +244,7 @@ def main():
             m.key("KeyA")
             try:                            # a fill or an ask: the move it
                 os88marty.until(            # forces, bounded by what an idle
-                    m, lambda _: pkg_seg(m, S, "Sheet")[0] != sh_seg,  # box's
+                    m, lambda _: pkg_seg(m, S, "Calculator")[0] != sh_seg,  # box's
                     "Sheet's region to move", poll=0.25,       # pause gave it
                     guest=6 * os88marty.GUEST_PACE)
             except os88marty.MartyError:
@@ -233,10 +253,10 @@ def main():
             os88marty.quiesce(m, lambda: claims(m, S), guest=1.0,
                               what="the compaction")
             os88marty.settle(m)
-            if pkg_seg(m, S, "Sheet")[0] != sh_seg:
+            if pkg_seg(m, S, "Calculator")[0] != sh_seg:
                 break
         dump("after the forcing asks")
-        sh_now, sh_win2 = pkg_seg(m, S, "Sheet")
+        sh_now, sh_win2 = pkg_seg(m, S, "Calculator")
         if sh_now is None:
             # THE SHAPE A STALE W_SEG MAKES, and it is worth naming rather
             # than crashing on: the window record still exists and its title

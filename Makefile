@@ -8019,10 +8019,16 @@ $(BUILD)/filler.o88: $(BUILD)/filler.bin tools/os88pkg.py
 # ceiling, SHEET opens under it and is the package whose REGION has to move,
 # FILLER opens under that and takes the arena down, and closing PAINT is what
 # leaves a hole above SHEET for the descending pass to pack it into.
-$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/sheet.o88 \
+# TEXPAD AND NOT SHEET as the package whose region moves: SHEET does not
+# declare OS88_REGION_MOVABLE on this fork and cannot (139090 - the overlay
+# holds CS in CHART.OVL's vectors and a far frame across eleven file calls),
+# so the row's subject could never move here and said so for as long as that
+# decision has stood. ArtfulType is the largest region that IS movable after
+# Paint, which this row already uses for the ceiling.
+$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
                          $(BUILD)/paint.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/paint.o88 $(BUILD)/sheet.o88
+		$(BUILD)/paint.o88 $(BUILD)/calc.o88
 
 # ...and the NEGATIVE arm's, for tests/regpin.py
 # (docs/plans/HEAP-UNPIN-PLAN.md 10.1). The same three plus PINME, which is the
