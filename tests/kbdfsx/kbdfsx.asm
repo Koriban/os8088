@@ -195,6 +195,13 @@ kf_onkey:
 .key:
     mov si, kf_l_key
     call kf_row
+    mov si, [kf_win]            ; SI IS THE WINDOW, and bl_paint reads it as one
+                                ; (`mov bx, si` at its head). Every site that
+                                ; set SI to a STRING and then repainted was
+                                ; handing a label or a filename over as a
+                                ; window handle - which is how `Sample Now`
+                                ; came to paint white down the left of a
+                                ; 1024x768 desktop
     call bl_paint
     jmp short .out
 .save:
@@ -227,6 +234,7 @@ kf_ontimer:
     mov al, 4
     call kf_lab
     call kf_row
+    mov si, [kf_win]            ; kf_lab left a LABEL in SI - see kf_onkey
     call bl_paint
 .out:
     call kf_arm                 ; ALWAYS re-armed, so Sample Now and the
@@ -285,7 +293,8 @@ kf_oncmd:
 .top:
     mov word [bl_top], 0
 .rep:
-    call bl_paint
+    mov si, [kf_win]            ; `.now` above left a LABEL in SI, and this is
+    call bl_paint               ; the arm it reached - see kf_onkey
 .out:
     pop di
     pop si
@@ -744,6 +753,7 @@ kf_save:
     push si
     mov si, kf_f_out
     call bl_save
+    mov si, [kf_win]            ; ...and the FILENAME, here - see kf_onkey
     call bl_paint
     pop si
     ret

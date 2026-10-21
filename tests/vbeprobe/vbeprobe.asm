@@ -122,6 +122,12 @@ vp_onkey:
 .save:
     mov si, vp_f_out
     call bl_save
+    mov si, [vp_win]            ; SI IS THE WINDOW and bl_paint reads it as one
+                                ; (`mov bx, si` at its head); the filename above
+                                ; would be handed over as a window handle. The
+                                ; same defect in tests/kbdfsx painted white down
+                                ; the left of a 1024x768 desktop, which is where
+                                ; it was found - this copy predates that one
     call bl_paint
 .out:
     pop di
