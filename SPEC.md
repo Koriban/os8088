@@ -133305,6 +133305,17 @@ bar, the reference box and formula bar above the grid, the "Ready" status line
 below it, and the dialogs, are meant to be that program rather than something
 like it.
 
+**SHEET IS AT VERSION 2.1**, and the number is the package's own: `SH_VER` in
+`sheet.asm`, on the About card's third line, which was empty. It is **not**
+the system's — os8088's own About box carries `os8088 1.0` (§14.2), a
+different number with a different meaning, and `tools/os88sym.py` searches
+the kernel image for that exact string, so the two must not be confused. The
+number is the roadmap's rather than a count of releases: the stages that
+carried this package to an Excel 2.1d imitation are the ones numbered below —
+1.x the grid and the file formats, 2.0 the macro language, 3.0 the user
+interface, 4.x the arithmetic. It is named once so the card and this section
+cannot drift.
+
 **The value model is an IEEE-754 double**, computed in software by
 `apps/os88fp.inc` (§84). A cell holds 3.5, `=1/3` is 0.3333333333, and
 `AVERAGE(1,2)` is 1.5. It was a signed 16-bit integer until stage 4.0, which is

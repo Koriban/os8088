@@ -369,4 +369,5 @@ saved in any of them.
 - Each dialog can be closed with its Cancel button. Goto, Find, Define Name,
   Row Height and Column Width also take **Enter** for OK and **Esc** for
   Cancel.
-- **Help > About Sheet...** and **Sheet > About Sheet** show who made it.
+- **Help > About Sheet...** and **Sheet > About Sheet** show the version and
+  who made it.
