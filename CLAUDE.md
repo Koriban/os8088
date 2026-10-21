@@ -573,8 +573,11 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   THEWIRE.O88 in SYSTEM/ (a SYSAPPS package the desktop zone
               #   launches out of the BOOT volume, and this IS that volume -
               #   its absence made the Wire zone open nothing on every live
-              #   image ever cut), the four packages that ride no floppy
-              #   (RECORDER, HELLO, PACMAN, SCRIBE), the WHOLE Frotz story
+              #   image ever cut), the three packages that ride no floppy
+              #   (RECORDER, HELLO, SCRIBE - four until PACMAN retired as a
+              #   failed port superseded by DOT DELIRIUM, SPEC.md 89.12 and
+              #   apps/RETIRED.txt; this line said four long after it stopped
+              #   being true, which is 89.12's own lesson), the WHOLE Frotz story
               #   library beside a FROTZ.O88 that had nothing to play, the
               #   WHOLE RunCPM master disk and all nine areas of the CP/M
               #   software collection - both fills were priced in 1.44MB
