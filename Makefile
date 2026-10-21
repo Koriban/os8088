@@ -8020,7 +8020,7 @@ $(BUILD)/filler.o88: $(BUILD)/filler.bin tools/os88pkg.py
 # FILLER opens under that and takes the arena down, and closing PAINT is what
 # leaves a hole above SHEET for the descending pass to pack it into.
 # TEXPAD AND NOT SHEET as the package whose region moves: SHEET does not
-# declare OS88_REGION_MOVABLE on this fork and cannot (139090 - the overlay
+# declare OS88_REGION_MOVABLE on this fork and cannot (81.110 - the overlay
 # holds CS in CHART.OVL's vectors and a far frame across eleven file calls),
 # so the row's subject could never move here and said so for as long as that
 # decision has stood. ArtfulType is the largest region that IS movable after
@@ -8045,7 +8045,7 @@ $(BUILD)/pinme.o88: $(BUILD)/pinme.bin tools/os88pkg.py | $(BUILD)
 
 # CALCULATOR AND NOT SHEET as the moving CONTROL, for tests/regmove.py's
 # reason: Sheet does not declare OS88_REGION_MOVABLE on this fork and cannot
-# (SPEC.md 139090), so the control could never move and the row's whole
+# (SPEC.md 81.110), so the control could never move and the row's whole
 # result - "PINME stood still WHILE the control moved" - had no second half.
 $(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
                         $(BUILD)/paint.o88 $(BUILD)/pinme.o88 tools/os88disk.py

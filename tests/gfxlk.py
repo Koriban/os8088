@@ -227,6 +227,14 @@ def main():
         # SELECTED, the pointer is parked where the window is about to
         # land, and Enter opens it - which is the field's own recipe.
         wx, wy, ww, wh = dispcp.win_rect(m, S, disk)
+        # RAISE THE DISK WINDOW FIRST. MINES.O88 was opened above and never
+        # closed, so ITS window holds the focus and the arrow keys
+        # scroll_to walks the list with go there instead - the list never
+        # moves, both of scroll_to's loops give up on their own time budget,
+        # and it ends on `scrolled PAST entry 2 - the list moved under us`
+        # about a list that did not move at all. One click on the title.
+        mo.click(wx + ww // 2, wy + 9)
+        settle(m)
         entry = dispcp.row_of(m, S, "CYCLONE.O88")
         row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
         rx, ry = dispcp.row_xy(wx, wy, row)

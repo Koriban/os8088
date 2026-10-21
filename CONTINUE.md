@@ -114,7 +114,7 @@ now, not the region**: 90 bytes free of 49,152.
 | kernel | `.text` +624 over the merge; **the image rung crossed 96 → 97**, 1,536 spare of `KERN_BUDGET` |
 | SHEET | image 51,761 + bss 9,279 = **61,040 of 61,440, 400 spare**; `CHART.OVL` **49,204 of 52,224, 3,020 free** (`CH_OVKB` 48 -> 51); both modules ship PACKED |
 | CHART | bss 2,185 → 792 (upstream moved its arrays into the staging claim) |
-| text registry | 65 sites in 21 files — RE-COUNTED, neither side's number |
+| text registry | RE-COUNTED at that merge, neither side's number (66 in 22 by the end of the day) |
 | FPTEST | 126 cases, 105 pooled doubles, image 8,492 + 245 bss; window 460 wide now |
 
 ## What the merge actually cost, and where it hid

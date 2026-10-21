@@ -15,7 +15,7 @@ first package to open takes the ceiling and there is nothing above it to pack
 into - which is correct behaviour and proves nothing. PAINT opens first and
 takes the top; CALCULATOR opens under it and is the package whose region has
 to move - NOT Sheet, which cannot: this fork does not declare
-OS88_REGION_MOVABLE on it and SPEC.md 139090 says why (the overlay holds CS
+OS88_REGION_MOVABLE on it and SPEC.md 81.110 says why (the overlay holds CS
 in CHART.OVL's vectors and a far frame across eleven file calls), so the row
 read "OSAPI_MEM_MOVABLE was refused and the package cannot tell" for as long
 as that decision has stood. Closing PAINT leaves the hole;

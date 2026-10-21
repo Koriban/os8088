@@ -37,7 +37,7 @@ PINME's region stood still WHILE THE CONTROL'S MOVED. One without the other is
 not a result.
 
 IT WAS SHEET until 2026-10-21, and on this fork Sheet can never be it: the
-region is not declared movable and cannot be (SPEC.md 139090 - the overlay
+region is not declared movable and cannot be (SPEC.md 81.110 - the overlay
 holds CS in CHART.OVL's vectors and a far frame across eleven file calls), so
 the control stood still too and the row reported a refusal it had not tested.
 tests/regmove.py's header has the same account from the positive side.
