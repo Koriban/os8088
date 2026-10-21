@@ -131,7 +131,12 @@ MACHINES = [
 
 # The 360KB geometry, because the 5150 machines above have 360KB drives. It is
 # also the tightest of the three, which is the one worth booting.
-DISK = "build/weave360.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+DISK = os88build.at("build/weave360.img")
 SYSIMG = "build/os8088-360.img"
 FOLDER = "WEAVE"                # the folder this opens first in the B: window
                                 # (WEAVE-SPEC 11.2's layout; weaveprev sets

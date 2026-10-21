@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 import os88marty as M                                       # noqa: E402
+import os88build                                             # noqa: E402
 import os88flush                                            # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
@@ -57,8 +58,13 @@ SYS = SF.SYS
 # the host file lives in a directory of its own and the image has its own
 # name. The file keeps the name SHIN.SLK ON THE FLOPPY, because that is what
 # puts it in the same listing row sheetfmt.py's coordinates double-click.
-WORK = "build/sheetfin"
-DISK = "build/sheetfin.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+WORK = os88build.at("build/sheetfin")
+DISK = os88build.at("build/sheetfin.img")
 WRONG = -999.0
 
 # IRR's range: Excel's own worked example, a 70,000 outlay and five inflows.

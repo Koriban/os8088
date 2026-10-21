@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 import os88marty as M                                       # noqa: E402
+import os88build                                             # noqa: E402
 import os88flush                                            # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
@@ -45,7 +46,12 @@ import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 
 WORK = "build/sheetjust"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetjust.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+DISK = os88build.at("build/sheetjust.img")
 NAME = "SHIN.SLK"
 FORMAT = (259, 45)                      # sheetfmt.py measured this one
 ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)

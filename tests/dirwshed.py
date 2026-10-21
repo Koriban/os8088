@@ -87,13 +87,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dosmap                                                  # noqa: E402
 import os88geom                                                # noqa: E402
 import os88marty                                               # noqa: E402
+import os88build                                             # noqa: E402
 import os88sym                                                 # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
 # B: carries a `.COM` for assertion 3 - a launch is what banks [dos_akb], and
 # every package on an apps disk is a `.O88`.  doscon.py's disk, for its reason.
-APPS = "build/doscom360.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+APPS = os88build.at("build/doscom360.img")
 BOX = "A:/APPS/DOS.O88"
 PROG = "DOSHELLO"
 

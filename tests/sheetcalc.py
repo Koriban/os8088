@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 import os88marty as M                                       # noqa: E402
+import os88build                                             # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
@@ -43,7 +44,12 @@ from paintmove import pkg_syms                                # noqa: E402
 from os88geom import WIN_SIZE, W_SEG                          # noqa: E402
 
 WORK = "build/sheetcalc"                # this row's own paths (WRITING-TESTS 5.5)
-DISK = "build/sheetcalc.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+DISK = os88build.at("build/sheetcalc.img")
 NAME = "SHIN.SLK"                       # the fixture's shared name. It was
                                         # NOT "CALC.SLK" because the rows
                                         # clicked the third row of a SORTED

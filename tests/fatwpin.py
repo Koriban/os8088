@@ -275,7 +275,12 @@ def phase(label, defs, maxheap, expect_move, tree=None):
                   want="FFFF")
 
 
-HEAPFRAG = "build/heapfrag360.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+HEAPFRAG = os88build.at("build/heapfrag360.img")
 
 
 def phase_shed():

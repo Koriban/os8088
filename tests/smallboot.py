@@ -60,7 +60,12 @@ MACHINES = [
     ("os8088_xt_vga",        "cga",  640, 200, "no renderer for this card"),
 ]
 
-IMAGE = "build/small360.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+IMAGE = os88build.at("build/small360.img")
 APPS = "build/apps360.img"
 
 

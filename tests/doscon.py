@@ -60,6 +60,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import dosmap                                                  # noqa: E402
 import os88marty                                               # noqa: E402
+import os88build                                             # noqa: E402
 import os88ui                                                  # noqa: E402
 
 SYS = "build/os8088-360.img"
@@ -67,7 +68,12 @@ SYS = "build/os8088-360.img"
 # a `.COM` at a root to type the bare name of, and no apps disk has one - every
 # package on those is a `.O88`. It costs nothing else: the only other thing B:
 # is for here is being a drive to switch to.
-APPS = "build/doscom360.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+APPS = os88build.at("build/doscom360.img")
 BOX = "A:/APPS/DOS.O88"
 BARE = "DOSHELLO"                    # ...and DOSHELLO.COM is what it finds
 

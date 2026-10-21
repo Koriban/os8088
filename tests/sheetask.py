@@ -44,14 +44,20 @@ import os88sheetfmt as F                                     # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
 import dispcp                                                # noqa: E402
 import os88sym                                               # noqa: E402
+import os88build                                             # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 import glass                                                 # noqa: E402
 from paintmove import pkg_syms                                # noqa: E402
 from os88geom import WIN_SIZE, W_SEG                          # noqa: E402
 
-WORK = "build/sheetask"
-DISK = "build/sheetask.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once.
+# This row BUILDS its own disk, so `wants=` cannot help - make has no
+# rule for it - and writing it to the shared build/ while os88marty
+# reads the run's tree is the soak-only FileNotFoundError that
+# tests/unit/t_artpath.py was written for, one use site along.
+WORK = os88build.at("build/sheetask")
+DISK = os88build.at("build/sheetask.img")
 NAME = "ASK.SLK"
 CELLS = {(0, 0): 'Item', (0, 1): 'Cost', (1, 0): 'Rope', (1, 1): 12.5}
 TITLE_H = 18

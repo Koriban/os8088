@@ -64,6 +64,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 import os88marty as M                                       # noqa: E402
+import os88build                                             # noqa: E402
 import os88flush                                            # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
@@ -73,7 +74,12 @@ from harness import check, done                              # noqa: E402
 KINDS = ('bif', 'slk', 'dif', 'csv', 'txt', 'dbf')
 MACHINE = "os8088_5150_cga_gla"
 SYS = "build/os8088-360.img"
-DISK = "build/sheetfmt.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+DISK = os88build.at("build/sheetfmt.img")
 
 # The cells the HOST authors.  One of everything the value model has that a
 # text format can express, plus the two that turned out to matter:

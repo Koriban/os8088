@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "tools"))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "unit"))
 import os88marty as M                                       # noqa: E402
+import os88build                                             # noqa: E402
 import os88flush                                            # noqa: E402
 import os88sheetfmt as F                                     # noqa: E402
 from os88mouse import Mouse                                  # noqa: E402
@@ -39,8 +40,13 @@ import glass                                                 # noqa: E402
 from os88geom import WIN_SIZE, W_SEG                            # noqa: E402
 from paintmove import pkg_syms                                  # noqa: E402
 
-WORK = "build/sheetkeys"
-DISK = "build/sheetkeys.img"
+# RESOLVED AT THE DEFINITION, which fixes every use below at once
+# (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
+# its artefact, so `wants=` cannot help - make has no rule for it -
+# and writing it into the shared build/ while os88marty reads the
+# run's frozen tree is a soak-only FileNotFoundError.
+WORK = os88build.at("build/sheetkeys")
+DISK = os88build.at("build/sheetkeys.img")
 CELLS = {(0, 0): 1.0, (1, 0): 2.0, (0, 1): 'x'}
 EDIT = (123, 45)                        # sheetundo's measured titles
 OPTIONS = (123 + 280, 45)
