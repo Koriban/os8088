@@ -934,7 +934,7 @@ kernel that takes it too** (§9.11.2.1): only an emulator can boot it, so the
 argument is the knob's, and kern_big and kern_small stay on ten. `KSIG_OFF` moves one memory sector
 down with it in both places that type it (5632 → 5120), so the canary stays on
 FILE sector 21 at either length; the shipped literal is still what comes first
-on each line and what `t_canary` compares. It was taken for §39.28: the `VC`
+on each line and what `t_canary` compares. It was taken for §39.30: the `VC`
 key costs the overlay 10 bytes on every build, and `BOOTMARK=1`'s overlay had
 6 — the give below could not grow to cover it without losing the
 `BOOTMARK=1 DISKAL=1` pairing it already balances. The shipped images are
@@ -2555,7 +2555,7 @@ than only when a record was read — so a machine with **no `SYSTEM.CFG`** appli
 that nothing has deserialised into. `drv_cfg` is `.bss` and nothing zeroed
 `.bss`, so those bytes were the previous session's on a warm restart and the
 machine's power-on RAM on a cold one (`drv_init` zeroes the struct now, for
-§39.28's `VC` byte). It has been carried by two accidents:
+§39.30's `VC` byte). It has been carried by two accidents:
 `CFG_VID` = 0 is `VID_VGA`, which `vid_switch` refuses on the adapters the
 target machine has, and the two arrangement bytes are range-checked before they
 are stored. Neither is a reason — the refusal is `vid_switch`'s job and this
@@ -9640,6 +9640,18 @@ so nothing advances a pointer between rows either. 92 covers the widest line any
 adapter can show — Hercules at 720 px is 90 bytes — plus the one byte a glyph at
 the right-hand end spills into, rounded to even. A caller composing a narrower
 band simply uses fewer bytes of each row.
+
+**A package may set it smaller**, with `%define TY_BAND_STRIDE n` before the
+include (and `TY_BAND_ROWS` for the height). Both are macros of their own
+names, so `TY_STRIDE` and `TY_BROWS` stay `equ`s that any line can name,
+including lines above the include, as `tests/facetest` has. An odd stride is
+a build error: the unrolled compose stores words.
+
+**The override is a promise.** Nothing in the compose bounds the pen. The
+default relies on no screen being wider than 90 bytes; a smaller stride
+relies on the caller ending every run before (n − 1) × 8 pixels. SHEET's
+cells, at most 320 px, are the case it exists for: a stride of 42 takes the
+bss from 1,933 bytes to 1,133 (§81.102.1).
 
 **What this costs against the face it replaces**, and both halves are true:
 against `font_run` at an unaligned x — which is what every proportional pen
@@ -29799,9 +29811,11 @@ in ETHER, RAMPAGE and The Wire.
 
 ### 13.16 The IN-WINDOW MENU — the fifth shared element (`OS88UI_MENU`)
 
-**PARTIAL, and deliberately: the GEOMETRY has moved and nothing else has yet.**
-`docs/plans/UI-MENU-ELEMENT.md` is the costing and the wave plan; this section
-is the contract for what exists.
+**Complete for Word: all three waves have landed** (§13.16.2–§13.16.4 are
+the geometry, the drawing and the gesture), and Word is its one user.
+`docs/plans/UI-MENU-ELEMENT.md` is the costing and the wave plan; this
+section is the contract for what exists. **Sheet has not converted, and
+§81.109.1 is why**, measured on 2026-09-25.
 
 The kernel's bar is the desktop's and `MENU_APPMAX` is five titles, so a
 package whose menus outgrow that — or which is imitating a program that put
@@ -34061,11 +34075,16 @@ base.** They were 16-bit, which is what the rest of this paragraph is about;
 §18.7.5 carries a high word beside them on `kern_big` and moves the ceiling
 to FAT16's own, just under 2GB. That is the whole of what "partitions" means to os8088:
 `dsk_clus2lba`, `dsk_read_chain`'s run coalescer, `dsk_dirw_next` and
-`dskw_flush` are the floppy's code and are untouched by capacity. It caps a
-volume at 65,535 sectors — 31.99MB — which is exactly what BPB rule 8 already
-refused to go past, and exactly the DOS 3.3 partition limit the target
-machines ran. More capacity is **more partitions**, each its own volume and
-its own drive letter.
+`dskw_flush` are the floppy's code and are untouched by capacity.
+
+**The next two sentences used to read "it caps a volume at 65,535 sectors —
+31.99MB … more capacity is more partitions", directly after the sentence
+that says the ceiling moved**, and both halves sat here for a cycle. The
+32MB cap is `kern_small`'s now and only its: BPB rule 8 refuses a `TotSec16`
+of 0 there, so that build still stops at 65,535 sectors — which is exactly
+the DOS 3.3 partition limit the target machines ran. On `kern_big` and
+`kern_dos` more capacity is **either** a bigger volume **or** more
+partitions, each its own drive letter, up to §52.2's four primaries.
 
 It also makes an invariant free: with `TotSec16` a word, `dsk_clus2lba`'s
 16-bit `(cluster-2) × spc` cannot overflow, because the product is bounded by
@@ -46272,6 +46291,28 @@ can carry it across a boundary with every build step green - and any listed
 name whose shipped file is not LZB at all. `--candidates` prints the LZ4
 packages LZB would save a cluster for, as information.
 
+**IT CAUGHT THE 2026-10-20 MERGE PUTTING TWO OF THEM BACK ON LZ4**, and the
+shape of that is worth keeping. `LZBPKGS` arrived from upstream naming `sheet`
+and `chart`; this fork's rules for those two are its OWN - SHEET packs
+`sheet.trim.bin`, the resident half left after `os88ovl.py` cuts CHART.OVL and
+MACRO.OVL out (§82.16) - so the auto-merge took the LIST and left both rules
+saying `$(OS88PKG)`. Nothing failed to build. The files shipped LZ4 and the
+360KB disks quietly paid **5 clusters for SHEET** (41,107 → 36,065 bytes) and
+**1 for CHART**, which is the saving this whole section exists to take.
+
+**The stamp could not see it**, and that is a limit of the mechanism rather
+than a defect in it: `PKGZBSTAMP` is keyed on a cksum of `LZBPKGS`, so it
+rebuilds when the LIST moves. Here the list was right and the RULES were
+wrong, so an existing tree kept its LZ4 files until they were removed by hand.
+A list this gate reads and rules it cannot are two statements of the same
+fact, and only one of them is checked.
+
+`t_lzbclust` also had to be taught SHEET's shape: it re-packs `build/<name>.bin`
+as its LZ4 control, and for SHEET that is the 122KB whole assembly rather than
+the 52KB the package carries - `os88pkg` refuses it outright with *"image size
+field != actual file size"*, which reads like a packing defect and is the gate
+holding the wrong file. It prefers `<name>.trim.bin` where one exists.
+
 The second of this section's two numbers has been TAKEN rather than predicted,
 on ArtfulType, on MartyPC's 4.77 MHz 5150 off a 360KB floppy, from
 `ld_run_body_x` to `lz_decomp_x`'s return: **+541 ms on a first launch**
@@ -54148,6 +54189,29 @@ the office one. Ten clusters is what it happens to cost; it is not why.
 
 Every other geometry carries the full list, and `make smallapps` is
 untouched.
+
+#### 24.6.3.1 …and its overlay had to follow it there
+
+`office360.img` carried `SHEET.O88` and `CHART.O88` and **not `CHART.OVL`**,
+from the day the disk was created until 2026-09-19. The Makefile's own comment
+elsewhere calls a SHEET without its module *"chartless"*, which was true when
+§82.16.3 first split it and had not been true for a long time: the module has
+since absorbed every file format (§82.16.9), five function families (§81.62),
+the macro engine (§81.63), the database commands (§81.71) and **every dialog
+engine** (§81.71.5.1, §81.71.6, §81.74.2).
+
+So on the one 360KB disk built to carry the spreadsheet, the spreadsheet could
+**not open or save a file and could not open a single dialog** — and the
+sample `SALES.SLK` §24.6.2 puts beside it was unopenable by either program
+that reads it.
+
+It fits and always did: 184 of 354 clusters before, 43 needed, 227 after.
+
+**The lesson is the one §24.5's omission list keeps teaching.** The word
+"chartless" recorded a *judgement* whose ground moved underneath it, and
+nothing re-read it when it did. A second file that a package cannot run
+without is part of that package, not an accessory to it — which is exactly
+what the `WORD.OVL` comment two lines above says, and it was right there.
 
 #### 24.6.4 Delivery
 
@@ -66048,7 +66112,7 @@ button and stops. The page has no state line left at all.
 
 One check box, **"Force Color"**, to the RIGHT of the Set Primary button and
 on its row: glyph at pane x 110, y 75 (centred on the button's 18 rows), label
-at x 128, ending at 215 inside `CP_PRGT`'s 221. It is §39.28's setting, and
+at x 128, ending at 215 inside `CP_PRGT`'s 221. It is §39.30's setting, and
 the page is its home because the page is the one about what the screen is
 driven as. It cannot go on its own row: on a VGA beside a Hercules the page
 holds three adapter rows, the button, the desktop line and its label and the
@@ -66064,16 +66128,16 @@ cannot disagree. Not hidden, at the owner's ask: a control that exists in this
 build and is unavailable on this machine is greyed, which is what the panel's
 other controls for absent hardware do. A VGA BIOS that happens to have
 recorded COLOUR this boot does not grey it — the verdict is per POWER-ON
-(§39.28), so the next boot can differ, and the setting is for that one.
+(§39.30), so the next boot can differ, and the setting is for that one.
 
 It is control id 5 (the rows are 0, Set Primary 1, the desktop radios 2..4),
 and like every check box in the panel it FIRES ON THE RELEASE (§13.8.3). The
-tick is bit 0 of `CFG_VGC` and the click stores 0 or 1 (§39.28), so a `VC`
+tick is bit 0 of `CFG_VGC` and the click stores 0 or 1 (§39.30), so a `VC`
 record holding any other value shows clear and the first click ticks it. The
 label is lettered by `cp_vid_paint` and the glyph by `cp_vid_ctls`, the
 Date/Time page's split, so a press edge redraws the glyph and not the words.
 The caption — "Switches now, and is kept" — is true of the tick; the un-tick
-is the one exception, §39.28 says why, and it is not spent a line of a page
+is the one exception, §39.30 says why, and it is not spent a line of a page
 that has none to spare.
 
 ### 31.13 Dock page — where the strip stands, and whether it hides
@@ -76168,7 +76232,1310 @@ only ever REUSE it in place (docs/plans/MONO-RECLAIM-PLAN.md §3); `kern_small`
 carries no hole at all, because the bytes stopped existing at assembly time.
 **Only one of the two has anything to spend, and it is not the small one.**
 
-### 39.28 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
+### 39.28 `tests/vbeprobe` — asking the machine, not the datasheet
+
+Whether os8088 could ever run above 640x480 is a question about a *particular
+BIOS on a particular card*, and no amount of reading settles it: cards that
+advertise VESA routinely implement the packed 256-colour modes and skip the
+16-colour planar ones entirely. `tests/vbeprobe` asks the machine. It lives in
+`tests/` with fontbench, typebench and netbench, for the same reason they do
+(§24, the "benchmarks are not in `apps/`" rule): it ships on no disk, `all`
+builds none of it, and it answers one question once.
+
+```
+make vbeprobe && make test TESTAPPS=build/vbeprobe.img
+```
+
+R re-probes, S writes `VBEPROBE.TXT` beside the package so the report can be
+read off the floppy on the host rather than off the glass.
+
+**`make vbeprobe` builds two disks, and the second is the one for real
+hardware.** `build/vbeprobe.img` is a plain B: disk, which is what an
+emulator wants and what netbench's disks are. But the machine this probe
+exists for is a laptop with ONE floppy drive, where "boot the system disk,
+then insert the probe disk" is not a procedure that can be followed — so
+`build/vbeprobeboot.img` is the whole system disk with `VBEPROBE.O88` added
+at its root: one floppy, one boot, and S writes the report back to the same
+disk. It is a full bootable image, so it carries the build number (§14.2)
+and goes stale on the next commit like every other one.
+
+**It sets no mode.** `INT 10h AX=4F00h` and `AX=4F01h` are pure queries that
+fill a buffer and return. `AX=4F02h` is deliberately absent and must stay
+absent: os8088 owns the display (§39.6), and a package that switched the mode
+behind the window manager would take the desktop with it.
+
+**What it is looking for is `0104h`, and the reason is the pixel format, not
+the resolution.** The renderer is four-bit planar throughout — mode 12h's
+format, planes selected by the Sequencer's map mask at one address. `0104h`
+(1024x768x16) is that same shape one size up, so every primitive keeps its
+format. The 256-colour modes are PACKED: not an extension of this renderer
+but a second one.
+
+**And the aperture lines up, which is what makes `0104h` interesting rather
+than merely bigger.** 1024 pixels is 128 bytes a row a plane, and a 64KB
+window holds exactly 512 of those — so a bank boundary falls BETWEEN rows and
+never inside one, and `gfx_rowbase` (§39.3.1) stays the single place that
+would have to learn about banks. 800x600 is the *harder* mode, not the
+easier one: 100 bytes a row divides 65536 into 655.36, so a row there
+straddles a boundary and every primitive has to care.
+
+The report gives window granularity and size per mode because that is what
+the banking would cost: 64KB granularity with a 64KB window is the simple
+case, 4KB granularity is a different sum.
+
+**The verdict is computed from every mode in the list, not from the printed
+rows.** `VP_MAXM` caps the rows so a long list cannot page the answer off the
+screen, and a report that hits the cap says so — but the `0104h` test runs
+before the cap, because a BIOS that lists it at position 65 would otherwise
+be reported as not having it at all. Both halves are proven by mutation:
+with `VP_MAXM` cut to 4 under QEMU, `0104h` prints no row and the verdict
+still finds it.
+
+Measured under QEMU's `std` VGA, 2026-10-03 — VBE 3.0, 16MB, and `0104h`
+present with attribute bit 0 set:
+
+```
+mode   width height bpp mdl gran wsize attr
+0102     800    600   4   3   64    64 003B
+0104    1024    768   4   3   64    64 003B
+0105    1024    768   8   4   64    64 00BB
+```
+
+`mdl` 3 is planar and 4 is packed, so the pair at 1024x768 is exactly the
+choice described above. This settles nothing about real hardware — it
+establishes only that the probe reads a VBE correctly.
+
+#### 39.28.1 The answer from the Satellite 4025CDT — `0104h` is there
+
+Run on the machine the question was about (NeoMagic, 2026-10-03), photographed
+off the screen — `docs/photos/vbeprobe-satellite-4025cdt.jpg`, which is the
+provenance docs/FIELD-MACHINES.md asks every field result to carry. **VBE 2.0,
+2MB, 31 report lines of 31 — the list is complete and nothing was truncated.**
+
+```
+mode   width height bpp mdl gran wsize attr
+0102     800    600   4   3   64    64 001F
+0104    1024    768   4   3   64    64 001F
+0105    1024    768   8   4   64    64 009F
+0106    1280   1024   4   3   64    64 001F
+0118    1024    768  24   6   64    64 009A
+```
+
+`0104h` is present and hardware-supported, at 64KB granularity with a 64KB
+window — the simple banking case, not the 4KB one.
+
+**And its attributes are better than the emulator's, which is the part a
+QEMU-only run would have got wrong.** `001F` against QEMU's `003B` differs in
+bit 5, and bit 5 is *VGA compatible* inverted: QEMU's std VGA says `0104h` is
+NOT VGA-compatible, the NeoMagic says it is. Bit 6 is clear on both, so the
+VGA-compatible *windowed* memory mode is available. Together that means the
+ordinary VGA registers — the Sequencer map mask the renderer already drives
+(§39.3) — are the interface in this mode, rather than a VBE-specific path.
+Bit 7 is clear: no linear framebuffer, which costs nothing, because an 8086
+could not address one anyway.
+
+**The `attr` bit-0 test is doing real work rather than being a formality.**
+Under QEMU every listed mode had it set. Here the 24bpp modes and the 15/16bpp
+modes at 1280x1024 come back `009A` — **listed by the BIOS and not supported
+by the card**. A probe that reported presence alone would have called those
+available.
+
+**`0104h` is also the only planar mode on this machine whose rows do not
+straddle a bank**, which is the §39.28 argument confirmed against the real
+list rather than assumed:
+
+| mode | bytes/row/plane | rows per 64KB | |
+|---|---:|---:|---|
+| 12h 640x480 | 80 | 819.20 | straddles — but the whole plane is 38,400 bytes, so it never banks at all |
+| `0102` 800x600 | 100 | 655.36 | straddles |
+| **`0104` 1024x768** | **128** | **512.00** | **exact** |
+| `0106` 1280x1024 | 160 | 409.60 | straddles |
+
+`0106h` is supported too and is the tempting one — it is bigger and it is
+planar — but it has 800x600's defect, so taking it would mean teaching every
+primitive about a boundary inside a row instead of teaching `gfx_rowbase`
+(§39.3.1) alone about banks. 1024x768 is not merely the biggest safe mode; on
+this hardware it is the *only* one.
+
+A plane there is 98,304 bytes, so the framebuffer spans two banks and a
+fraction — one switch for most of a full-screen pass. The card has 2MB and
+the mode needs 384KB across four planes, so memory is not a constraint.
+
+**What this does NOT establish.** That the mode can be *set* and drawn on. The
+probe deliberately never calls `AX=4F02h` (see above), so everything here is
+the BIOS's own description of itself. A card whose BIOS advertises a mode it
+mis-programs is a known failure class, and the next step is a throwaway that
+sets the mode, writes a recognisable pattern through the map mask, and is
+shot with a camera — not a change to os8088.
+
+### 39.28.2 `tests/vbeset` — setting it, and drawing in it
+
+§39.28.1 is the BIOS describing itself. A BIOS that advertises a mode it
+mis-programs is a known failure class, so the next question is whether
+`0104h` can be **set**, and whether os8088's own renderer works once it is.
+`tests/vbeset` writes pixels.
+
+```
+make vbeset     -> build/vbeset.img, a bootable 1.44MB floppy
+```
+
+**It is a boot disk and not a package, and the rule is binding.** §53.7
+forbids an `int 10h` mode set outside `fsx_mode` — *"the kernel must know what
+it is restoring from"* — and §53.6 step 1 **skips** the restoring mode set when
+`fsx_mode` was never called. A package that set `0104h` behind the bracket's
+back would leave the machine in 1024x768 with the kernel's renderer writing
+mode-12h geometry into it and no path home. `fsx_mode` has no VBE id (they
+stop at 8), and adding one is a kernel change that must not be made on the
+strength of a BIOS describing itself. So it boots the machine itself and owns
+everything: nothing to restore, no kernel to strand. It is bootdiag's shape
+(§2.9.10) and reuses bootdiag's own paranoid loader unchanged.
+
+**Nothing is assumed.** The stride, window segment, granularity and window
+size are read from `AX=4F01h` and used; the bank arithmetic and every
+coordinate in the pattern are derived from them. A machine reporting a stride
+that is not 128 gets a pattern laid out for the stride it reported.
+
+**The pattern exercises kernel/vga12.inc's paths, with its register
+sequences** — because "does VBE work" is not the question and "does *this
+renderer* work in this mode" is: 16 colour bars through Set/Reset (GC0/GC1); a
+1px frame and a diagonal through single-pixel Bit Mask writes with a
+latch-loading read, at both ends of a byte; three bank lines at the rows
+either side of a granule boundary; a second bar set drawn past that boundary;
+a comb of 1px columns; and three XOR blocks (fill 7, XOR once, XOR twice)
+through the ALU function GC3 = 18h, where the first and third must match and
+the middle must not.
+
+**It does not depend on the photograph.** Every probe point is read back
+through Read Map Select (GC4) — vga12.inc's own plane-read path — and compared
+with what was written, and the verdict prints per-probe PASS/FAIL in text
+mode. A photograph then confirms the *display*, which readback cannot see.
+
+#### 39.28.2.1 Two arms, and the control is not optional
+
+`1` sets VBE `0104h`; **`2` sets plain VGA 12h and runs the identical code**.
+A test that has only ever been seen to fail cannot tell a card that cannot do
+the mode from a bug in the code asking it to, and this one did fail first:
+under QEMU every probe read zero and the screen stayed black. The control is
+what makes that reading worth anything. It is `make bootdiag`'s principle —
+*the pair is the experiment, and neither disk alone is* — inside one image.
+
+**A raw-memory probe separates the two failures that look identical from
+outside.** Before any drawing, with Set/Reset off, write mode 0 and the Map
+Mask open on all four planes, one byte is written and read back per plane:
+all four holding it means the window *is* the framebuffer and any pattern
+failure is in the GC path; anything else means the memory is not there and
+nothing built on it could have worked.
+
+Measured under QEMU's `std` VGA, 2026-10-03:
+
+| arm | raw write at (8,400) | probes |
+|---|---|---|
+| VBE `0104h` | wrote A5, read back `00 00 00 00` | **0 of 13** |
+| control, mode 12h | wrote A5, read back `A5 A5 A5 A5` | **10 of 10** |
+
+So the code is right and QEMU's `0104h` window is not CPU-addressable at
+`A000` — **which is exactly what QEMU's own attribute word said**: its
+`003B` has bit 5 set, meaning *not* VGA compatible. The emulator is consistent
+with itself, and this is the one machine property §39.28.1 found the Satellite
+reporting differently (`001F`, bit 5 clear). **QEMU therefore cannot answer
+this question, and the run is not evidence against the Satellite.**
+
+#### 39.28.2.2 The defect the comb caught
+
+The control did not pass first time: it came back **8 of 10**, missing only
+the two comb probes, while the screendump plainly showed the comb drawn
+correctly. The read path had
+
+```nasm
+    mov ax, cx
+    mov cl, 3           ; destroys the low byte of CX - which IS x
+    shr ax, cl
+    mov [vs_bytex], ax
+    mov ax, cx          ; reads the wrecked x
+```
+
+so the bit index came out 4 for every pixel on the screen: it read the
+**neighbouring** pixel. Eight of the ten probes sit inside solid blocks where
+the neighbour is the same colour, so they passed while testing nothing. Only
+the comb — 1px columns alternating with 1px gaps — is fine-grained enough for
+a one-pixel error to change the answer, and it is in the pattern for that
+reason. **A probe in a solid region cannot detect an off-by-one in
+addressing**, which is this project's "a values-only gate is blind to the
+chrome" (§81.98) one layer down.
+
+#### 39.28.2.3 The answer from the Satellite — it sets, and it draws
+
+Run on the NeoMagic, 2026-10-03. Photographs in `docs/photos/`:
+`vbeset-satellite-0104h.jpg` and `vbeset-satellite-control-12h.jpg`.
+
+**`AX=4F02h` set `0104h`, and the pattern came out at 1024x768.** The whole
+panel is the picture — the control arm's 640x480 sits letterboxed in the
+middle of the same screen, which is the two arms telling each other apart at a
+glance. Every item is present: both bar sets, the three XOR blocks with the
+first and third matching and the middle one different, the comb, a frame on
+all four edges and a diagonal that is straight corner to corner.
+
+**The bank boundary is where the arithmetic put it.** The frame gives the
+picture's extent in the photograph and the bank line is the one isolated
+bright band inside it, so its position is measurable without trusting a
+colour:
+
+| | |
+|---|---|
+| bank line, measured in the photograph | **66.6% – 67.4%** of the way down |
+| row 512 of 768, predicted | **66.7%** |
+
+That is §39.28's central claim — 128 bytes a row, 512 rows to a 64KB granule,
+the boundary falling *between* rows and never inside one — confirmed on the
+hardware rather than derived from a datasheet. Content is drawn on both sides
+of it, so the window switch carries drawing and not merely addressing.
+
+**And the readback is clean: 13 of 13**
+(`docs/photos/vbeset-satellite-verdict.jpg`), with the raw plane write
+reading back `A5 A5 A5 A5`. The control arm on the same machine reads 10 of
+10. Every probe point held exactly what was written, which between them is:
+
+| probe | covers |
+|---|---|
+| `(352,32)` = 5, `(608,32)` = 9 | all four planes through Set/Reset |
+| `(210,110)` = 7, `(310,110)` = 8, `(410,110)` = 7 | the XOR ALU — filled, XORed once, XORed twice |
+| `(500,511)` = 14, **`(500,512)` = 12**, `(500,513)` = 10 | the rows either side of the granule boundary, so the **bank switch** |
+| `(352,620)` = 5 | a fill drawn *past* the boundary |
+| `(100,710)` = 15, `(101,710)` = 1 | the comb — 1px precision, the probe that caught §39.28.2.2 |
+| `(0,767)` = 15, `(1023,767)` = 15 | the frame, and the **last address in the framebuffer** |
+
+So `0104h` on this machine is **verified, not merely demonstrated**: the mode
+sets, the window banks, and Set/Reset, the Bit Mask and the XOR ALU — the
+three register paths kernel/vga12.inc is built on — all behave as they do in
+mode 12h.
+
+**On the palette, this narrows the question rather than answering it.** The
+probe at `(310,110)` expecting colour 8 passed, so the *plane* values are
+right everywhere; anything that looks wrong on the panel is therefore the DAC
+or the display and not the drawing. (Colour 8 does read as nearly black
+against the ground in the photograph, where the control's reads as a mid
+grey.) Readback cannot see a DAC, so whether `0104h` arrives with mode 12h's
+palette loaded needs its own instrument — and the test has one now.
+
+#### 39.28.2.4 The palette is read, not photographed
+
+**Two attempts to answer the palette question from the photographs failed,
+and the second failure is why the test grew a palette readback instead.** The
+panel is TN, so its colour shifts with height; the control arm's picture is
+letterboxed mid-panel while the VBE arm's fills the screen, so the same colour
+is photographed at two different viewing angles. Normalising each bar row
+against *its own* colour 0 and colour 15 cancels that correctly — but only if
+the picture's rectangle is located in the photo first, and **the room behind
+the laptop is brighter than the frame**. Both attempts latched onto the room,
+the second returning a picture five pixels wide. A photograph of a lit LCD is
+not a colorimeter and no amount of normalising makes it one.
+
+The hardware is readable, so `vs_pal` reads it: colour → Attribute Controller
+palette register → DAC entry → six-bit RGB, which is the whole chain. Both
+arms print it, so they compare directly and neither is a camera.
+
+Reading the AC has one trap worth recording: writing an index with **bit 5
+clear** is what makes 3C1h readable, and it also disconnects the palette from
+the screen — leaving it so blanks the display. The `20h` write at the end puts
+it back, and the 3DAh read before each index resets the shared address/data
+flip-flop, which has no other way to be put in a known state.
+
+Verified against a known-good reference first — the control arm under QEMU
+returns exactly the canonical mode 12h palette, **entry 6 → AC `14` = `2A1500`,
+brown**, which is the diagnostic entry: a palette that was never programmed
+leaves 6 → AC `06` = `2A2A00`, dark yellow.
+
+```
+ 0 00=000000  1 01=00002A  2 02=002A00  3 03=002A2A
+ 4 04=2A0000  5 05=2A002A  6 14=2A1500  7 07=2A2A2A
+ 8 38=151515  9 39=15153F  A 3A=153F15  B 3B=153F3F
+ C 3C=3F1515  D 3D=3F153F  E 3E=3F3F15  F 3F=3F3F3F
+```
+
+The `0104h` reading from the Satellite is outstanding.
+
+### 39.29 VBE 1024x768x16 — `VBE.DRV` and the banked planar geometry
+
+§39.28 asked whether a bigger PLANAR mode exists, and §39.28.2.3 answered it on
+the iron: mode `0104h` sets, draws, and os8088's own three register paths —
+Set/Reset, the Bit Mask and the XOR ALU — behave in it exactly as in mode 12h,
+readback 13 of 13 including the rows either side of the bank boundary. This
+section is what the system does with that.
+
+**It is one kernel, not a build.** The probe is `int 10h AX=4F00h`, which is
+8086 code, so there is a resident question an XT can ask and a 286 or 386 with
+a VESA card can act on — which is exactly `XMEM.DRV`'s situation (§41.12.1) and
+exactly not `kern_emu`'s, whose probe is 386-only (§9.11.7). The rule those two
+settle between them: *a resident sniff is legitimate iff the target machine can
+execute the probe and do something with the answer.*
+
+#### 39.29.1 The arithmetic that shapes everything
+
+A 1024-wide 4bpp plane is **128 bytes a row**, and `65536 / 128 = 512` exactly.
+So:
+
+- a row never straddles a 64KB window;
+- the plane is 98,304 bytes — two windows and a fraction;
+- **the 16-bit carry out of `DI` *is* the bank crossing**, and nothing else has
+  to detect it.
+
+```nasm
+    add di, [vid_stride]
+    jnc  .same                  ; 511 times out of 512
+    call vbe_bank_next          ; ...and exactly on the boundary
+.same:
+```
+
+On mode 12h that `jnc` can never be taken — the largest `DI` is `479 x 80 =
+38,320` — so **one body is correct on both adapters**, which is what keeps this
+out of a second renderer.
+
+**`gfx_rowbase`'s contract changes, and this is the load-bearing edit.** It
+returns `AX` = a 16-bit offset and `gfx_rowbase_calc` discards the high word of
+its multiply on the written ground that *"DX is always 0 (86*90 at worst)"*.
+At stride 128 that holds to row 511 and fails at 512 — the same line as the
+bank boundary, necessarily, both being `65536 / stride`. In this mode it
+therefore means *"select the window, return the offset within it"*, and the
+`vid_rowtab` fast path is switched off (`[vid_rowmax] = 0`) because a table of
+16-bit offsets cannot describe row 512 at all. `vid_ctx_act` already switches
+that table off for a display of another kind (§39.12), so the mechanism exists.
+
+**The existing `vid_bmask`/`vid_bshift` bank cannot express this** and must not
+be stretched to try. That one is the CGA/Hercules *interleave* — `(y & bmask) *
+0x2000` **inside one segment**, with the LOW bits as the bank — and its own
+`%error` at `viddet.inc:1492` already records that it stops working once a bank
+holds more rows than its window. VBE needs the HIGH bits as the bank and a
+side-effecting window write. Two formulas, named apart.
+
+#### 39.29.2 `VBE.DRV` — the cold half, and only the cold half
+
+`XMEM.DRV`'s shape exactly (§41.12): `DRVC_OVL`, **no `drv_tab` row**, no
+publication slot, no `SYSTEM.CFG` bit, no Drivers-page tick. A machine either
+offers `0104h` or it does not; a tick box would only ever be a way to break a
+working machine. `kernel/vbe.inc` carries the sixteen-byte `DRVR_`-shaped
+record outside `drv_tab`, the dispatch, and the load/free pair.
+
+**There is no boot sniff, and that is the one place this departs from
+`XMEM.DRV`.** `xm_sniff` exists because a package can ask for extended memory
+at any moment with no disk in the drive, so the answer has to already be known
+— and `int 15h AH=88h` is free to ask. VBE's probe is not free: `AX=4F00h`
+fills 512 bytes and `AX=4F01h` 256, and a kernel that reserved either would be
+spending resident RAM on a question one page in the system asks. It does not
+have to: the only consumer is Control Panel's Display page, which lives in
+`CTRL.DRV` and is itself read from the system disk when the user opens it, so
+**the disk is already required at the only moment the question is ever asked**
+— §2.8's own qualifying test, one layer out.
+
+**It does not reach the image through `drv_call`, and that is a measurement.**
+`drv_call` range-checks `BX` against `drv_tab` and refuses a row outside it, so
+using it needs a third name on the `.stray` whitelist (§41.12.5) — and that
+whitelist is in `.cold`, which had **one byte** of its rung left. Six bytes
+there crossed it: **+512 bytes of every machine's RAM** for a feature an 8088
+can detect and could never usefully run. `xm_dsp` already far-calls the
+header directly for its service verbs (§41.12.2); doing the same for `ATTACH`
+as well costs about fifteen bytes of `.text`, where there was room, and the
+rung stays uncrossed. What `drv_call` was doing is replicated by hand and
+named: `DS` = the image, `ES` = `KERNEL_SEG`, a zero `DRVR_SEG` refused rather
+than far-called, and the compaction nest held across the call (§66.6.3) so the
+image's own claim cannot move under it.
+
+It owns the probe, the mode set, the palette, the geometry handoff and the
+window-switch body. It does **not** own drawing.
+
+**The renderer cannot be loadable, and that is settled rather than judged:**
+
+1. `gfx_*` bodies are **API slots**, and an `OSAPI_SLOT` names a `KERNEL_SEG`
+   offset (§41.12's own words), so they cannot be `.cold` — let alone a file.
+2. The renderer is called **from inside `mod_need`'s own load**: `fpg_busy`
+   draws for every sector read (`disk.inc:1171`, *"EVERY SECTOR IN THE MACHINE
+   PASSES HERE"*). A renderer module would be drawn with by its own loader.
+3. The **mouse ISR** draws the cursor through `int 13h` (§7.4), where
+   `mod_need` is unreachable.
+
+§79.2 refuses the module route for drawing code outright, on the separate
+ground that a module's data must live in the kernel's `.text`. So the split is
+not a preference: **the once-per-mode work is a file and the per-pixel work is
+resident**, and the window switch — at most once per multi-row operation,
+because 128 divides 65536 — reaches the file through a published service cell,
+which is `drv_svc_call`'s "a near read plus one far call".
+
+#### 39.29.2.1 The renderer's stride had to move FIRST, and the plan said otherwise
+
+The staging said 1024x512 "needs no change to any hot loop", because rows
+0..511 are one window and nothing has to bank. **That was wrong, and it
+conflated two separate things.** Avoiding the bank boundary avoids *banking*;
+it does not change the fact that **1024 pixels is 128 bytes a row**, whatever
+rows you use.
+
+`gfx_rowbase` was already right — it goes through `mul word [cs:vid_stride]`.
+But eighteen sites carried the stride as the assembly-time `ROW_BYTES` (80):
+eleven in `vga12.inc`, two in `font.inc` (one of them `font_char`'s open-coded
+`y * 80`, the only row base in the kernel that bypasses `gfx_rowbase`
+entirely), one in `mouse.inc`'s cursor draw and three `icons.inc` right-edge
+clips. Every multi-row primitive therefore stepped 80 bytes down a 128-byte
+row and skewed.
+
+**It shipped and the Satellite showed it**: the desktop came up correct at
+640x480 and the Display page offered the row, and selecting it drew a
+horizontally smeared screen with the text still legible and each row further
+out of place than the last. §39.3's note that *"the planar bodies in vga12.inc
+are simply unreachable on mono, so they keep their assembly-time `ROW_BYTES`"*
+is exactly the assumption a fifth kind breaks — the bodies are reachable now.
+
+The conversion is nearly free in bytes, which is why it was worth doing in one
+pass rather than per-primitive: `add di, imm16` and `add di, [mem16]` are both
+four bytes on an 8086, so the fetch floor that dominates this machine
+(PERFORMANCE.md Part 2) charges the same for either.
+
+**AND THE STRIDE MUST BE READ `cs:`-RELATIVE, WHICH IS WHERE THE FIRST
+CONVERSION WENT WRONG.** `ROW_BYTES` was an immediate and touched no memory;
+`[vid_stride]` is a DS-relative read, and **DS is not `KERNEL_SEG` in the two
+routines that matter most**. `vga_save_vram` switches it to `VGA_SEG` for its
+`movsb`, so a plain read fetched *pixels* and used them as the row step;
+`vga_restore_vram` has DS pointing at the save-under claim, one line below a
+comment that already says **"CS: IS MANDATORY - DS is the BUFFER in here"**.
+
+The result was reported off the Satellite as corruption trailing the cursor —
+and then, correctly, as *"not just the cursor, it's also the windows"*, which is
+the symptom naming the cause: the cursor, every menu drop and every window
+save-under go through that one pair. `gfx_rowbase_calc` documents the rule
+already: every parameter it reads is `cs:`, because `sw_xfer` runs with DS set
+to the framebuffer or to a claim.
+
+**`cs:` goes on those two sites and nowhere else, and the narrowness is the
+point.** A blanket `cs:` passes the gate below, but it is only accidentally
+right: `CS` is `KERNEL_SEG` in `.text` and is **`COLD_SEG` in cold code and the
+blob's segment in an overlay**, so a site that later moves section would break
+silently. `DS` is `KERNEL_SEG` everywhere by §2.6 *except* where a routine
+loads it itself, and exactly two do — `vga_save_vram` (`mov ds, VGA_SEG`) and
+`vga_restore_vram` (`push es / pop ds`, which LOADS it rather than restoring
+it). So the plain form is correct by construction at the other twenty-eight
+sites, and the override is correct by construction at these two.
+
+**`icons.inc` is the one that nearly shipped broken a second way.** Its three
+clips sit between `mov al, <plane mask>` and `out dx, al`, so fetching the
+limit into AX destroyed the mask and would have corrupted every icon on every
+adapter. The limit is read around a `push`/`pop` — `pop` sets no flag, so the
+compare survives it.
+
+#### 39.29.3 What the mode costs the machine that cannot use it
+
+Reported the way docs/KERNEL-MEMORY.md requires — per-section bytes and the
+accrued figure, never "crossed no rung".
+
+| | |
+|---|---|
+| resident, `kern_big` | the row + dispatch + load pair, the fifth `vid_tab` row and the kind's arms — **`.text` +312, `.ovl` +12, `.cold` +0 measured, no rung crossed** (accrued image 172/512 -> 484/512). Stage 2's `jnc` at 13 row-advance sites and `gfx_rowbase`'s second formula are not in that figure, and **28 bytes of the rung remain**, so they will cross it |
+| resident, `kern_small` | **nothing**: it cannot load a `.DRV` of any kind (§51.0), so the sniff and the row are `%ifdef OS88_DRIVERS` |
+| per row, on mode 12h | 2 bytes and one `jnc` - **TAKEN, and measured at 22 cycles** (PERFORMANCE.md Set 161) |
+
+**That last figure was to be MEASURED on a 4.77MHz 8088 and recorded in
+PERFORMANCE.md, not asserted here. It has been, and it reads badly**: 22
+cycles a row advance executed, which is **11-25% on every rect primitive**
+because `vga_solid_rect` walks up to three of its four `VBROW` arms over every
+row. The estimate above said nine clocks because it said *not-taken*, and the
+sense is backwards - `jnc %%same` jumps over the `call`, so it is taken 511
+times out of 512, and a taken Jcc on an 8088 is 16 clocks plus a prefetch
+flush against the not-taken 4. So the loops get the banked twins selected once
+per operation (arm B of the plan's table, bytes instead of time), or §39.29.10's
+revision finishes the job and the per-row test goes away altogether.
+
+##### 39.29.3.1 The BYTE half, measured — and why the image size is not it
+
+`NOVBEROW=1` compiles the bank test out of `VBROW`/`VBROWR`/`VBROWCS` and
+leaves a bare `add`. It is the A/B this section asks for, and the only thing
+keeping the un-banked row advance assembling.
+
+**The site count is 22, not the thirteen first planned** — `vga12.inc` 19,
+and one each in `font.inc`, `icons.inc` and `mouse.inc`. Assembled in
+isolation, 22 instances cost **201 bytes with the test and 91 without: 110
+bytes, 5 a site** (`jnc` 2, `call` 3).
+
+**The whole-kernel size is NOT that figure and must not be quoted as it.**
+`kernel.bin` measures **512 bytes LARGER** with the test compiled OUT — the
+wrong direction and four times the magnitude, because padding and rung
+alignment swamp a 110-byte change. An A/B taken off an image size would have
+reported a saving that does not exist, with a sign that says the change does
+the opposite of what it does. Per-section figures, as docs/KERNEL-MEMORY.md
+requires, or nothing.
+
+**The TIME half is measured now** and it is PERFORMANCE.md Set 161: **22
+cycles per row advance executed**, 11-25% on every rect primitive, up to 24.8%
+on `GFX_VLINE 128px`. The instrument that was missing is
+`tools/gfxbenchread.py`, and the gap this section used to name was mis-stated
+as well as open: `tests/gfxbench` does **not** publish through §57's registry
+— benchlib keeps the whole report in the package's own bss (`bl_arena`,
+`bl_idx`, `bl_nrow`) and writes it to a file with `bl_save` — so the reader
+reads 74 rows out by symbol, and cross-checks them against the saved file read
+back with `os88flush`. The two readers agreed row for row on both arms. The
+`NOVBEROW=1` arm is built with `os88build.tree`, so `build/` is left alone and
+the control is the shipped kernel.
+
+What still stands from the paragraph this replaces: the harness has no way to
+call a kernel routine, and boot-to-desktop cycles do not substitute (the two
+arms differ in sector count, and an `int 13h` is ~400 ms against a per-row cost
+in microseconds). What makes the measurement work without either is that
+gfxbench's rows ARE the primitives, timed inside the guest by the PIT.
+
+#### 39.29.4 What the fifth kind touched, and what it silently broke
+
+`VID_VBE` is kind 4, and `vidsel.inc`'s `%error` exists to make that expensive.
+Each predicate it names was checked rather than assumed, and **all three were
+already right**: `vid_blank` only asks "is this the mono card" by comparing
+against `VID_HERC`; `thm_set`'s `dec ah / cmp ah, 2 / jae` maps VBE to 3, which
+is colour; and `vid_avail_test`'s range follows `VID_KIND_MAX` itself. A mode
+that is four-plane colour and not Hercules needs no arm in any of them, and the
+guard's wording now says *that* rather than "a fifth kind".
+
+**What it did break was four tables indexed by `[vid_kind]` with no bound**, and
+the build was clean for all four — which is the same silence one layer out:
+
+| | |
+|---|---|
+| `fsx_capstab` (`fsx.inc`) | four rows; kind 4 read **past the end** |
+| `app_about_vid` (`apps.inc`) | four pointers; same |
+| `cp_vidnam` (`ctrl.inc`) | four names; the Display row had nothing to draw |
+| `wm.inc`'s kind→planes | **not out of range but WRONG**: VBE fell to the 1bpp arm, so every save-under `wm_fit` sized was a quarter of the bytes it needed |
+
+The last is the dangerous one, because it would have corrupted memory rather
+than faulted. A sixth kind gets the same sweep.
+
+#### 39.29.5 The probe's placement, which took three attempts
+
+Asking "can this card do `0104h`" means reading a file, and that constrains
+*where* far more than it looks:
+
+1. **Not from a paint path.** The first version called it from `cp_vid_slot`,
+   which resolves a Display row while the Control Panel is drawing — under the
+   gfx lock. The progress widget every sector lights (§7.4) cannot draw while
+   the lock is held by us, so the page came up blank with the disk light stuck
+   on.
+2. **Not from the settings block in `drv_boot_x`.** That block sits below a
+   `jc .load` taken on every disk with no `SYSTEM.CFG` — which is every shipped
+   floppy but `kern_emu`'s. It ran on no stock machine at all, and the only
+   symptom was a Display page one row short. `[vbe_known]` read `0` out of the
+   guest, which is what said so; guessing had already produced two wrong fixes.
+3. **Above the settings read, right after the mount.** The volume is there, the
+   splash owns the screen, and reading a driver image is what the routine is
+   about to do anyway.
+
+**`LOADED IS NOT ATTACHED`** is the other defect this cost: `drv_load_at` does
+the mount, the claim, the read and `drv_check` and *stops*, so the probe inside
+the image had never run. The kernel was asking a freshly-loaded overlay for a
+geometry it had not measured, getting zeros, and lighting nothing.
+
+#### 39.29.6 The window is proved before the mode is kept
+
+A BIOS can set the mode and still not put the framebuffer where a real-mode CPU
+can reach it, and then every primitive writes into nothing: a black screen with
+no way back, which is not a refusal a user can act on. **QEMU is exactly that
+machine** — `003B` has bit 5 set for *not* VGA compatible, and `tests/vbeset`'s
+raw probe reads `00 00 00 00` at `A000` there against `A5 A5 A5 A5` in mode 12h.
+
+So `VBV_SET` asks the same one-byte question `vbeset` does, after the mode set
+and before the palette. A card that cannot answer gets mode 12h put back by the
+overlay, and `vid_setmode`'s arm then sets `[vid_kind]` to `VID_VGA` and re-runs
+`vid_apply` so the kernel agrees with the card again.
+
+**The refusal is recovered from in `vid_setmode` and not reported upwards**,
+because by then `vid_switch` has already published the 1024-wide geometry — a
+failure returned from here would leave every primitive addressing a mode the
+card is not in.
+
+**But the recovery is the second line of defence, not the first.** `VBV_PROVE`
+asks the same question at BOOT, behind the loading screen, before the mode is
+ever offered: it sets `0104h`, writes and reads one byte through the window,
+and puts mode 12h back whatever the answer. Only then is `VID_A_VBE` lit. So a
+card that lists the mode and cannot map it never grows a Display row, which is
+§47's *grey a fact, never a guess* with the fact **measured** rather than taken
+from the BIOS's own mode list — and the user never meets a row that has to be
+recovered from. `[spl_busy]` is held across it for `vid_setmode`'s own reason
+(§15.3.8.3).
+
+Verified on QEMU both ways, because a path only ever seen to fail proves
+nothing: stock, `[vid_avail]` reads `0x05` — VGA and CGA, no VBE row, desktop
+unaffected by the boot-time mode set and restore. With the window compare
+mutated to pass, it reads `0x15` and the row appears. The chain is live.
+
+#### 39.29.8 86Box is the development machine, and QEMU cannot be
+
+QEMU's VBE is **Bochs's**, and it advertises `0104h` with `003B` — bit 5 set,
+*not VGA compatible* — then fails to map the window at `A000`. So it can
+exercise a refusal and nothing else. Every VM in this tree runs `oti067`, an
+Oak SVGA whose ROMs contain **no VESA BIOS at all**, which is why this never
+came up before.
+
+**86Box models real cards with their real ROMs**, and a Trident TGUI9440
+answers exactly as the Satellite's NeoMagic does — measured, not assumed:
+
+| | Satellite (NeoMagic) | 86Box `tgui9440_vlb` | QEMU (Bochs) |
+|---|---|---|---|
+| `attr` | `001F` | **`001F`** | `003B` |
+| VGA compatible | yes | **yes** | **NO** |
+| raw plane write | `A5 A5 A5 A5` | **`A5 A5 A5 A5`** | `00 00 00 00` |
+| readback | 13 of 13 | **13 of 13** | 0 of 13 |
+
+It also answers §39.28.2.4's palette question on that card: entry 6 → AC `14`
+= `2A1500`, brown — mode 12h's palette exactly.
+
+So `make vbesetbox` is the loop this feature is developed in, and the Satellite
+is for final confirmation rather than for every question. Three things make it
+work and each cost a wrong answer first:
+
+- **`QT_QPA_PLATFORM=offscreen`.** 86Box is Qt with no headless mode of its
+  own. Screen capture is not an alternative here: this host is Wayland, and an
+  `x11grab` of the whole root comes back black because XWayland does not
+  composite into it.
+- **The transcript goes to a SECTOR, not the screen.** `vbeset` tees every
+  character it prints into a buffer and writes it to LBA 100; `make vbeset`
+  builds a second image with `-DAUTORUN` that takes the VBE arm with no
+  keypress, since there is no way to send one. **Every exit path saves** — the
+  first version only wrote after a *successful* run, so a refusal, which is
+  the answer most worth having, halted with an empty sector.
+- **The CMOS must be seeded.** `vm/*/nvr` is gitignored, and an AT-class BIOS
+  with a cleared CMOS stops in SETUP waiting for a keypress that cannot be
+  sent. The floppy sat untouched through a three-minute run saying nothing
+  about why; CLAUDE.md's `RESET=` note already records this one.
+
+#### 39.29.8.1 Stage 1 confirmed on the Satellite, and what it cost to get there
+
+**A 1024x512 desktop draws correctly on the NeoMagic** (2026-10-04): menu bar
+across the full width, window chrome, text, the dock, the drive icon, and the
+unused rows below 512 dark - with no corruption as the pointer, menus and
+windows move. `VBE.DRV`, the fifth adapter kind, the patched `vid_tab` row and
+the live stride are all working on real hardware.
+
+**It took four field round trips, and no gate in this tree caught any of the
+three defects.** That is worth recording as plainly as the result:
+
+| reported | actually | why nothing here saw it |
+|---|---|---|
+| "garbled display on boot" | boot was fine; only the VBE *mode* was garbled | I fixed the wrong thing first. The photographs said so and I had read the sentence too quickly |
+| the mode drew smeared | 18 sites carried the stride as the assembly-time `ROW_BYTES` | QEMU cannot enter the mode; mode 12h reads 80 either way, so every test passed |
+| "not just the cursor, it's also the windows" | the stride read was DS-relative where DS is `VGA_SEG` or a save-under claim | same: invisible without entering the mode, and it is a *register discipline* fault, not a value fault |
+
+The second and third are the same root cause one layer apart — converting a
+compile-time constant into a live variable changes **what segment the read
+goes through**, and §39.3's note that the planar bodies may keep their
+assembly-time `ROW_BYTES` *because they are unreachable on mono* is exactly the
+assumption a fifth kind retires.
+
+**The 86Box loop (§39.29.8) cannot catch this class either**, for the same
+reason it is useful: it has no screen. A pixel-level save-under gate - compare
+a region saved and restored against the pixels under it, at both strides - is
+what would have, and it is the thing to build before stage 2 touches these
+routines again.
+
+#### 39.29.10 Banking to the full 768 rows
+
+Rows 0..511 are one 64KB window and need nothing; rows 512..767 need the window
+moved. Three facts make that far cheaper than the staging plan assumed, and all
+three were found by reading the code rather than by designing around it:
+
+**1. `gfx_rowbase_calc` already computes the bank.** Its body ends in
+`mul word [cs:vid_stride]`, which leaves `DX:AX` — and on a linear surface
+**`DX` is the 64KB bank and `AX` is the offset within it**, exactly. Verified
+at y = 0, 347, 511, 512, 600 and 767 at stride 128. The code discards `DX`
+today on the written ground that it is always 0, which is true of every mode
+but this one. So the base half is `or dx, dx` / `jz` / `call` in **one
+routine**, and mode 12h pays four clocks on a 362-clock path.
+
+**2. The 16-bit carry out of `DI` IS the bank crossing.** 128 divides 65536, so
+`add di, [vid_stride]` wraps to zero precisely when row 512 begins — and wraps
+to the *correct* in-window offset, because the wrap is the same arithmetic. A
+row advance becomes `jnc` past a call. On mode 12h the carry can never happen
+(the largest `DI` is `479 x 80 = 38,320`), so one body is correct on both and
+the XT pays two bytes and a not-taken jump per row.
+
+**3. The window is moved through VBE's own `WinFuncPtr`, not `int 10h`.** A far
+address that writes the card's registers directly: no BIOS entry, so it is safe
+from the mouse ISR, and no dispatcher, so it is not worth a call into the
+overlay. `vbe_bank` early-outs on a compare, which is what nearly every
+primitive hits.
+
+**THE BANK IS SELECTED WHENEVER THE MODE HAS ONE, INCLUDING BANK 0**, and
+getting that wrong is the one mistake this design invites. The first build
+gated the select on `or dx, dx / jz` — reading *"bank 0"* as *"nothing to
+do"*. Nothing to do leaves whatever window the **last** primitive finished
+with: a desktop fill spans rows 0..767 and ends on bank 1, so the menu bar
+then asked for row 0, skipped the select, and drew into bank 1. The whole
+chrome appeared 512 rows down the panel. The test is *"is this mode banked"*,
+and `vbe_bank`'s own compare is what keeps it cheap — it returns immediately
+when the window is already right, which is nearly every call.
+
+**And anything that bypasses `gfx_rowbase` bypasses the select with it.**
+`font_char` computes its row base inline — the only one in the kernel that
+does — and its `mul dx` carried the comment *"DX clobbered, product fits"*,
+true while a planar surface was 480 rows of 80 and false at 768 of 128, where
+the product is 98,176 and **DX is the bank**. Every glyph went to whichever
+window happened to be mapped. `gfx_pt_rmax`'s four inline copies of the *fast*
+path are safe by a different route: they compare against `[vid_rowmax]`, which
+is 0 here, so they always fall through to `gfx_rowbase_calc`.
+
+**`vid_rowtab` is switched off in this mode.** Its entries are 16-bit
+*bank-0* offsets and the fast path returns one without selecting a window, so
+`[vid_rowmax]` is 0 here and every row goes through `gfx_rowbase_calc`.
+`vid_ctx_act` already switches the table off for a display of another kind
+(§39.12), so the mechanism and its cost are both known.
+
+**Cost, as docs/KERNEL-MEMORY.md requires it reported.** Stage 2 is `.text`
++106 on top of stage 1's 422 (528 in all for §39.29), `.cold` +0, and crosses
+no further rung — 324 bytes of the image rung remain. What the XT pays for a
+mode it cannot run is the `cmp byte [cs:vid_kind], VID_VBE` in
+`gfx_rowbase_calc` and a `jnc` it never takes, per row, at the fifteen
+advances `VBROW` now covers. **It is a `cmp` against the kind and not an
+`or dx, dx`**: a zero `DX` is the *wanted* bank 0, not "no banking to do", and
+treating the two as the same leaves whatever window the previous primitive
+ended on mapped — which put the menu bar 512 rows down the first time this
+was flashed.
+
+**What this does NOT make work is `gfx_scroll`.** `vgas_lincopy` moves a region
+through the VGA latches with source and destination both in VRAM, stepping by
+the stride — and across a bank boundary the two ends are in *different windows*
+at the same instant, which one window cannot express and the latch path cannot
+survive. Its own comment already says it assumes one bank. A scroll that
+straddles is refused here and the caller repaints instead; VBE's window B is
+the eventual answer and is not pass 1.
+
+#### 39.29.10.1 `vbe_bank` addresses its own state through CS
+
+**Every byte `vbe_bank`, `vbe_bank_next` and `vbe_bank_reset` touch carries a
+`cs:` override, and that is a correctness requirement rather than a style.**
+The bank select is reached from inside three row loops that have *given DS
+away*:
+
+| caller | what DS holds in there |
+|---|---|
+| `vga12.inc`'s plane-major blit (`VBROWR di, bp`) | the caller's plane rows |
+| `vga_save_vram` (`VBROWCS si`) | `VGA_SEG` |
+| `vga_restore_vram` (`VBROWCS di`) | the save-under claim |
+
+So a plain DS read in the bank select reads whatever *those* routines pointed
+at, and all three of its accesses are catastrophic rather than merely wrong:
+
+- `cmp al, [vbe_cbank]` compares the wanted bank against **a pixel**. When the
+  pixel happens to equal `AL` the routine takes its early-out and the window is
+  never moved.
+- `mov [vbe_cbank], al` **writes a byte into the framebuffer**.
+- `call far [vbe_geom + VBG_WFN]` **fetches a far pointer out of video memory
+  and calls it**.
+
+It shipped that way and the field reported exactly the pair of symptoms those
+two outcomes predict: *the desktop went black on the mode switch* (the wild far
+call) and *dragging a window past row 512 left a staircase of save-under
+debris* (the compare that matched a pixel). `CS` is `KERNEL_SEG` throughout
+`.text`, so the override is correct at every call site and costs one byte each.
+
+**This is §39.29.10's `[vid_stride]` defect one level down, and it is the third
+time the class has been paid for in this feature.** The rule it generalises
+to: *anything a drawing inner loop can call must address its own state through
+CS, because the inner loops are precisely where DS is not ours.* A routine's
+own call sites are not a survey to be redone per change — `gfx_rowbase_calc`
+already documents this for the stride, and `vbe_bank` now does for the bank.
+
+#### 39.29.10.2 A primitive that walks its rect twice must re-home the window
+
+**`gfx_rect_setup` selects the bank once — for the first row of the first
+walk.** `VBROW` then steps the window forward as that walk crosses row 512. A
+primitive that then walks the *same* rect again restarts its pointer at
+`[gfx_roff]`, which is a **bank-0 offset**, while the window is still wherever
+the previous walk ended. Everything the second walk touches lands 512 rows
+away.
+
+Six primitives do this, in two shapes:
+
+| | shape |
+|---|---|
+| `vga_solid_rect`, `gfx_fill_gray_raw`, `gfx_fill_pat_raw` | left edge column, then right edge column, then the interior — **three** walks |
+| `vga_save_vram`, `vga_restore_vram`, the plane-major blit | once per **plane** — four walks |
+
+`vbe_home` puts the window back on the bank `gfx_rowbase_calc` last homed on
+(`[vbe_hbank]`, recorded where that bank is computed), and the `VBHOME` macro
+is what the walkers call between walks. The first walk needs none: it inherits
+the setup's bank, and in all three edge-column routines that walk is
+unconditional. The plane loops take it at the top of the loop, so plane 0 pays
+one compare.
+
+**It is gated on `VID_VBE` and that gate is load-bearing.** With no banked mode
+`[vbe_geom]` is zero, so an unconditional `vbe_bank` here would far-call
+`0000:0000` on every machine that has never seen a VESA BIOS.
+
+**What the field saw**, with the mode switch itself already correct: solid
+light-grey blocks left wherever a window had been dragged — the *interior* of a
+fill landing in the wrong window while its edge columns landed in the right one
+— and the dragged window's own text drawn **twice, 512 rows apart**, which is
+three of four planes being saved from the wrong bank. The staircase shape is
+the drag's successive positions accumulating.
+
+`ico_pass` and `cur_draw` are **not** in this set, and the distinction is the
+rule: they write every plane *inside* the row, so each makes a single walk.
+What matters is not how many planes a primitive touches but how many times it
+returns to `[gfx_roff]`.
+
+#### 39.29.10.3 Re-home the window BEFORE arming the registers
+
+**`VBHOME` can far-call the card's VESA BIOS, so it must never sit between a
+register write and the walk that depends on it.** §39.29.10.2 placed it
+immediately *after* the `out dx, ax` that arms the plane select — `GC4` Read
+Map Select in `vga_save_vram`, `SEQ2` Map Mask in `vga_restore_vram`, `GC8`
+Bit Mask in the three edge-column fills. A BIOS window routine that touches
+the Sequencer or Graphics Controller index ports eats the register just
+programmed, and the walk then reads or writes nothing.
+
+The field reported it as **the display going black on the switch to VBE**.
+
+All eight sites now re-home first and arm second, which is the right order on
+its own terms: **the window is a property of the rect, the registers are a
+property of the walk.** `gfx_blitp`'s `.fpl` already had it this way, which is
+why the plane-major blit was the one shape that did not have to change.
+
+**Why it was the SWITCH and not the boot**, and this is the part worth keeping:
+booting straight into the mode has no window open, so `vga_save_vram` never
+runs and the defect cannot appear. `make vbebox` (§39.29.8.2) boots *into* the
+mode by `SYSTEM.CFG`, so it rendered a correct desktop on the broken build. The
+cards differ too — 86Box's Trident keeps its bank register at `3C4` index
+`0x0E`, where the field machine is a NeoMagic — so a register this one leaves
+alone is not a register that one leaves alone.
+
+**`vbe_bank` also preserves `SI`, `DI`, `ES` and `DS` across the BIOS call**
+now, where it saved only `AX`/`BX`/`CX`/`DX`. The four row loops that reach it
+hold live pointers in exactly those registers: `DI` is a save-under buffer in
+`vga_save_vram` and `SI` the source in `vga_restore_vram`. VBE says
+`WinFuncPtr` preserves what it does not return; eight bytes buys the question
+outright rather than trusting a laptop BIOS to mean it.
+
+#### 39.29.4.1 The fifth table was in the PACKAGE's segment
+
+§39.29.4 swept the kernel for tables indexed by `[vid_kind]` with no bound and
+found four. It missed a fifth, and the reason it missed it is the lesson: **the
+table that `VID_VBE` runs off is not the kernel's.**
+
+`wm_pref_take` reads a window's preferred-size table (`OSAPI_WM_PREFER`,
+§11.100.1) at `kind * 4`. `OS88_PREFER` builds **three** `(w, h)` pairs —
+`VID_VGA`, `VID_HERC`, `VID_CGA`, twelve bytes — and the routine already
+clamped `VID_EGA` to `VID_VGA` with a comment saying why. `VID_VBE` is 4, and
+it was not clamped, so it read `si+16`: **four bytes past the end of a table in
+the package's own image.**
+
+Measured on `build/taskmgr.bin`, whose table is
+`(232,284) (232,284) (464,284)`:
+
+| | |
+|---|---|
+| bytes at `si+16` | `53 56 c6 06` — `push bx / push si / mov byte [...],1` |
+| read as a size | **W = 11491, H = 35073** |
+
+`wm_fit` then clamped 11491 down to the display band, which is what made it
+present as a **full-width title bar with its caption centred on the screen**,
+sitting over the window beside it, while the application's own content was
+drawn where the application expected it. `wm_bar_span` reads `W_X` and `W_W`
+and nothing else, so nothing downstream could have caught it.
+
+Both now take `VID_VGA`'s row, for the same reason EGA does: each is VGA's
+planar path at another size, and a package cannot supply a fourth or fifth pair
+without an ABI break.
+
+**Two more predicates were missed the same way and are fixed here.**
+`cp_thm_colgrey` greyed the Theme page's Color option on the one adapter with
+the most colour, and `vid_dual_ok` would have allowed a two-display desktop in
+a banked mode. A third, `thm`'s depth test in `vga12.inc`, is correct **by
+luck**: `dec ah / cmp ah, 2 / jae` maps `VID_VBE` to 3, which passes. Luck is
+not a reason to leave it unremarked.
+
+#### 39.29.10.4 The carry is only the crossing if the add is the WHOLE step
+
+§39.29.10's design rests on one sentence: *the 16-bit carry out of
+`add di, [vid_stride]` **is** the bank crossing.* That is true, and it is true
+only when **the entire row advance is that one add**. Where a `rep` has already
+moved the pointer, the carry is computed on a different number than the one the
+rule is about.
+
+Three of the four shapes are correct, and the arithmetic says why:
+
+| | advance | carry computed on | correct? |
+|---|---|---|---|
+| the three edge-column fills | `rep` by `bx`, then `add dx` where `dx = stride - bx` | `start + bx + (stride - bx)` = `start + stride` | **yes** |
+| the plane-major blit | `rep` by `n`, then `add bp` where `bp = stride - n` | `start + n + (stride - n)` = `start + stride` | **yes** |
+| `.lcol` / `.rcol` / `cur_draw` / `font_char` | no `rep` before the add | `start + stride` | **yes** |
+| **`vga_save_vram` / `vga_restore_vram`** | `rep` by `bp`, then add the **FULL** stride, then `sub bp` | `start + bp + stride` | **NO** |
+
+The pair adds the whole stride on top of an already-advanced pointer and
+subtracts the span afterwards, so its test fires when
+`start + bp + stride > 65535` while the real crossing is at
+`start + stride > 65535`. **They differ by `bp`** — the window's own bytes per
+row — so the window is banked up to a row early, and which row depends on the
+window's `x` and width. It is the save-under pair, which is every window drag
+and every menu.
+
+The fix is free: **subtract back to the row's own base before the step**, so
+the add is the whole step and the rule holds again. No instruction was added;
+two were reordered.
+
+**The general rule, which is the thing to carry forward:** a row walk may
+advance the pointer in as many pieces as it likes, but the piece that carries
+must be the one that completes `start + stride`. Adding the full stride to a
+partially-advanced pointer and correcting afterwards is the one arrangement
+that breaks it, and it reads as correct because the pointer ends up right —
+only the FLAG is wrong.
+
+#### 39.29.10.5 The per-row test is gone: cut the rect at the boundary instead
+
+**The per-row bank test was measured and it was unaffordable.** `VBROW`'s
+`jnc` past the bank call is **TAKEN 511 times out of 512** — it is the
+no-crossing case that jumps — and a taken Jcc on an 8088 is 16 clocks *plus a
+prefetch-queue flush* against the not-taken 4. §39.29.3 estimated nine clocks
+a row by calling it a *not-taken* `jnc`; the real figure is **22 cycles per row
+advance executed**, and `vga_solid_rect` walks up to three of its arms over
+every row, so a 64×64 fill paid 4,135 cycles of it. **11 to 25% on every rect
+primitive in the system** (PERFORMANCE.md Set 161), paid by every machine
+including the ones with no VESA card at all.
+
+So the boundary is cut **once per primitive** instead of tested once per row.
+`vbe_cut_run` splits a rect that straddles a bank into one rect per bank and
+runs the body once per piece, each piece a whole rect in its own right:
+`gfx_rect_setup`'s existing `gfx_rowbase` call then selects that piece's bank,
+which is also its *only* bank, so no walker can cross a window inside its own
+loop.
+
+**IT IS `gfx_disp_run`'s SHAPE WITH A DIFFERENT LINE** (§39.14.7), and that is
+not a coincidence: a display seam and a bank boundary are the same problem — a
+rect whose halves need different state — so the same answer serves. The
+difference is that a seam belongs to the DESKTOP and a bank to the
+FRAMEBUFFER, which is why this hook sits one level lower, below `GFXDISP`,
+where the coordinates are already the display's own.
+
+| | |
+|---|---|
+| what a mode 12h machine pays | `cmp dx, [vbe_cutrow]` and a **not-taken** `jae`, once per primitive — about 17 clocks against `gfx_fill`'s 2,405-cycle floor |
+| what it pays per row | **nothing** |
+| `[vbe_cutrow]` | the first row of bank 1, or **0xFFFF** on every mode but 0104h. One unsigned compare therefore answers *"this surface is not banked"* and *"this rect does not straddle"* at once, with no kind test in it. Published by `vid_apply`, the one funnel every mode application goes through |
+| resident cost | `.text` **+104** with §39.29.10.6's `gfx_blitp` test (+96 without), `.bss` +0, `.cold` +0, no rung crossed — nine `jnc`+`call` pairs and six `vbe_home` calls removed, against three arms, three tests, `vbe_cut_run` and `vid_apply`'s publish |
+| what it BOUGHT, measured | every rect primitive **10 to 19% faster than the kernel that shipped** — `GFX_FILL 64x64` -19.45%, `GFX_VLINE 128px` -19.42%, `GFX_XOR_RECT 256x128` -16.40%, `GFX_FRAME 64x64` -15.21% (PERFORMANCE.md Set 162). Four rows beat even the `NOVBEROW=1` no-test floor, because `VBHOME` had no knob and so was paid by BOTH of Set 161's arms. A small rect is 1.6-2.7% above that floor and break-even against the shipped kernel: six bytes at the 8088's fetch floor, once |
+
+**The three hooks are on `vga_solid_rect`, `gfx_fill_gray_raw` and
+`gfx_fill_pat_raw`, and the first one's placement is the load-bearing
+choice.** `vga_solid_rect` is where all three routes into the shared body
+meet: `gfx_fill_raw` falls into it, `gfx_xor_fill_raw` arrives through
+`vga_xor_fill_vram`, and **`menu.inc` enters `vga_xor_fill_vram` directly**.
+A hook on the four `_raw` entries instead would have left that third route
+uncut while the body's row advances had already given up their test — the
+exact shape of a defect that appears only when a menu is open.
+
+Both of the others sit **below** the 1bpp jump, so a mono machine pays
+nothing at all.
+
+**`VBSTEP`/`VBSTEPR` are the row advance inside a cut rect** — a bare `add`,
+named so that it cannot quietly become one. `grep VBSTEP` is the list of
+everything the cut is load-bearing for, and a body that loses its `VBCUT` must
+change them back to `VBROW` in the same edit.
+
+**The re-entry label must be a LOCAL label**, and this cost a build. The first
+version had the macro emit `<name>_vbody:` — an ordinary global — in the
+middle of `vga_solid_rect`, which reset NASM's previous-non-local-label: every
+`.arm`, `.lcol`, `.rcol` and `.done` in the routine silently became
+`<name>_vbody.…`, and the build failed with `symbol vga_solid_rect.arm not
+defined` followed by thirty `label changed during code generation` errors
+naming `kernel_text_end` and the blob. **Not one of them points at the macro.**
+
+#### 39.29.10.6 What the cut does NOT cover, and why
+
+A piece is handed to the body as **a whole rect**, so a body needs no notion of
+being a half: it re-enters at its own top, clips, sets up and draws. That is
+what makes the hook three lines to apply — and it is also exactly what bounds
+where it can be applied. **A primitive whose output position depends on more
+than the rect cannot be cut this way**, because the second piece would restart
+that other position from the beginning:
+
+| | what else positions it | still on `VBROW` |
+|---|---|---|
+| `vga_save_vram` / `vga_restore_vram` | the save-under BUFFER offset, which is cumulative across the rect | yes |
+| `font_char` | 8 rows, and the glyph row index | yes |
+| `ico_pass` | up to 32 rows, and the icon row index | yes |
+| `cur_draw` | the cursor's own mask row — and it runs in the mouse ISR | yes |
+
+Their measured share is smaller by the same arithmetic that made the rect
+primitives' large: a fixed 8, 12 or 32-row shape pays 22 cycles a row over a
+few rows (`FONT_CHAR` measured **+3.3%**), where a rect pays it over up to 128
+rows times three walks.
+
+**`gfx_blitp` WAS on that list at +10.3% and is not any more**, and it took a
+different answer from the three rect primitives. Its per-row test was only
+ever in the **plane-major fast path**, whose own account says it holds the
+block's first framebuffer byte and steps by `[vid_stride]` *"every planar
+surface being ONE bank"* — so the fix is to make that true again rather than
+to patch around it: a block that would cross a boundary is sent to the
+general `.row` path, which calls `gfx_rowbase` for every row and therefore
+homes the window for every row. Two compares and an add, once per blit, both
+falling through on every mode but 0104h. `GFX_BLITP 64x64` went **13,770 →
+12,379 µs, -10.1%, and 0.9% BELOW the `NOVBEROW=1` no-test floor** —
+`VBHOME`'s four plane-loop calls again. This is what §39.29.10 always
+intended for it, and what it already does for `gfx_scroll`.
+
+**What that costs the machine that HAS the mode is named rather than hidden**:
+a block straddling row 512 draws at the general path's ~2,600 cycles a row
+instead of the fast path's ~125, and so does any block wholly in bank 1, the
+test being two compares against the one boundary rather than a division into
+banks. On a mode 12h machine it costs nothing at all, which is the trade this
+pass was taken for.
+
+**AND ITS ROUTING IS ONLY HALF GATED, which is worth stating because the
+obvious gate does not work.** The mode 12h direction is proved by
+MEASUREMENT: the fast path is 12,379 µs where the general path would be
+~35,000, so the compares demonstrably fall through. The *other* direction — a
+crossing block really reaching `.row` — is not gated here.
+`tests/vbeident.py` grew a Paint frame to do it and the mutation refused the
+claim: Paint opens with a packed canvas, asks §5.4.3.2's probe during a
+repaint, converts only if told yes, and blits planar from the repaint after
+that, so one open and one settle never reach the routine. Forcing it would
+need the conversion and a second repaint driven, which is
+`tests/paintpack.py`'s territory, and the direction it would prove only
+matters in a mode no emulator here can enter (§39.29.8).
+
+`VBHOME` survives for exactly those four: a primitive that walks its rect once
+per plane restarts at a bank-0 offset, which is §39.29.10.2's case and is
+untouched here. The six `VBHOME` calls inside the three CUT bodies are gone,
+because within one piece the window never moves.
+
+#### 39.29.8.2 `make vbebox` — 86Box with a display, and the picture
+
+**86Box is the only emulator in this tree that can enter `0104h` at all**, and
+until now it could only be started, waited on, and read off a disk sector
+(§39.29.8). That is enough for `tests/vbeset`, which writes text, and no use at
+all for a DESKTOP — so every VBE rendering defect was found by photographing a
+laptop. **Five field round trips for one feature.**
+
+`QT_QPA_PLATFORM=offscreen` is 86Box's only headless mode and it has no screen
+to read. An `x11grab` of this host's root is black, because the session is
+Wayland and XWayland does not composite into it. **Neither of those is a
+statement about X**: `tools/os88box.py` gives 86Box an X server *of its own* —
+`Xvfb` on a private display — and then the screen is reachable.
+
+Two ways, and both are used:
+
+- **86Box's own screenshot** (`Ctrl+F11`, sent with `xdotool`), which writes a
+  PNG of the **emulated framebuffer** into `vm/<name>/screenshots/`. That is
+  the one to want: the guest's own pixels, no window chrome, no scaling.
+- an `xwd` of the 86Box window as the fallback, so a run where the hotkey does
+  not land says something is wrong rather than nothing.
+
+**And it makes INPUT possible for the first time.** `xdotool` types and clicks
+into a real X window, so a machine that could only be watched can now be
+driven.
+
+**The disk is what selects the mode, because 86Box takes no scripted input at
+the moment the choice is made.** `build/vbeos.img` is `ethertest`'s shape one
+setting along: a `SYSTEM.CFG` whose `VM` record already names `VID_VBE`, so the
+machine reaches a 1024×768 desktop with no Control Panel click. A machine with
+no VESA BIOS refuses it and boots VGA, which is `drv_boot`'s own rule.
+
+**What it does and does not discriminate.** It proved §39.29.10.2's fix renders
+a correct 1024×768 desktop, and it is the reason that stopped being a guess.
+It did **not** reproduce §39.29.10.3's black screen, and the two reasons are
+worth keeping: this boots *into* the mode, where no window exists and so
+`vga_save_vram` never runs; and 86Box's card is a **Trident**, whose bank
+register is at `3C4` index `0x0E`, while the field machine is a **NeoMagic**.
+A gate that passes here is necessary and not sufficient — the Satellite is
+still the authority on anything touching the card's own BIOS.
+
+#### 39.29.11 Display 0's context was never recaptured on a mode switch
+
+**The ghost had nothing to do with banking.** `vid_ctx` holds a per-display
+copy of the nine live geometry words (§39.12), and `vid_ctx_capture` is the
+only thing that refreshes it. It is called from exactly one place:
+`vid_disp_init`'s `.single` arm. On a machine with a **single adapter**
+`vid_dual_ok` refuses, `[vid_ndisp]` is 1, and the routine returns at `.jout`
+**before reaching that arm** — so display 0's record kept whatever geometry was
+captured at boot, for the life of the machine.
+
+`wm_dmg_bands` asks `vid_ctx_rect` for each display's rect and clamps the
+damage band to it. With the context stuck at 640×480 every damage band was
+clamped to **row 479**.
+
+**Why it survived every adapter this project already had:** a stale context is
+only harmful when it is *too small*. 640×480 → 640×200 leaves a context too
+LARGE, which clamps nothing. **VBE 1024×768 is the first mode in this OS wider
+and taller than the boot mode.**
+
+That single number explains every observation, and the bisect is what produced
+it (`VBEDIAG=1`, §39.29.12):
+
+| case | predicted by a 479 clamp | observed |
+|---|---|---|
+| VGA 640×480 | correct | clean |
+| VBE, window moved 290→490 | erases to 479, ~10 rows left | a ~10-row strip |
+| VBE, window moved 680→742 | nothing erased | the whole strip |
+| VBE, moved across row 512 (470→670) | only 470–479 erased | the whole window |
+| `wm_paint_all` (theme swap, screen saver) | does not use the band | clears it |
+| the same rect refilled **unclipped** | does not use the band | clears it |
+
+**The routine documents the hazard two paragraphs above the defect.** The
+comment at the refusal explains that returning early would leave "display 0's
+`vid_ctx` describing the card we have just switched away from" — and fixes it
+for the `ndisp = 2` case, stopping one machine short of the commonest one.
+`.jout` is only "unchanged" on the **boot** path; after a `vid_switch`,
+`vid_apply` has already run and the live geometry has moved under it.
+
+The fix is one call on the single-display path. **It is not a VBE fix**: any
+future mode larger than the boot mode would have met the same clamp.
+
+#### 39.29.12 `VBEDIAG=1` — move a window across the boundary with no mouse
+
+`make VBEDIAG=1`. Fourteen seconds after the desktop settles the kernel opens a
+window of its own, drags it **down** across row 512, drags it back **up**, and
+stops. Nothing is clicked and nothing is typed.
+
+**It is a knob for this tree's own recorded reason**, one device along from
+`STKDIAG` and `BOOTMARK`: the operator's click lands inside the thing being
+measured, or cannot be sent at all. **86Box takes no scripted input** — no QMP,
+no socket — and its pointer capture **warps the cursor back to the centre after
+every motion event**, forwarding the warp's own delta, so an XTEST relative
+move and the warp cancel exactly. `tools/os88box.py` measured it: the host
+pointer reads the same coordinate after every move, and the guest arrow stays
+in a ~70px box around where it started (§39.29.8.2).
+
+**What it is aimed at, and why the aim is narrow.** The field reports a window
+that MOVES leaving its old image behind, and two observations bound it:
+
+| | clears the ghost? |
+|---|---|
+| a **full** repaint — swapping themes, the screen saver | **yes** |
+| a window **drag**, and the refit a mode switch runs | **no** |
+
+Those are two different repaints. `wm_paint_all` redraws the whole desktop;
+`ui_drag`'s commit calls `wm_dmg_vacate` → `wm_dmg_union` → `wm_paint_dmg`,
+which redraws only the damage and reaches the dither through an **armed clip
+region** (`wm_dmg_gray`). So the suspect is the damage path, not the renderer —
+and the knob drives **exactly those three calls in that order**, with the
+window's own rect. A reproduction built on `wm_paint_all` would prove nothing,
+because that is the arm already known to work.
+
+**It runs on the field machine too**, and that is not incidental: 86Box's
+Trident has shown a clean 1024×768 desktop through every build in which the
+Satellite's NeoMagic was broken. The same floppy asks the same question of the
+card that actually shows the defect.
+
+It draws no numbers. Where the window **is**, and whether a second copy of it
+is left where it **was**, is the whole reading.
+
+#### 39.29.6.1 The refusal is gated, and QEMU is what gates it
+
+`tests/vberefuse.py`, **3 checks**, and it is the only VBE coverage that runs
+anywhere but the Satellite.
+
+**QEMU is the machine this row wants, and that is the point rather than a
+limitation.** Its Bochs BIOS answers `AX=4F01h` for `0104h` and lists the mode
+as present; the window it reports at `A000` is not CPU-addressable. So QEMU is
+a **BIOS that lies**, which is exactly the case §39.29.6 exists for, and it is
+free to anyone with the repo.
+
+1 REFUSED `VID_A_VBE` is clear in `[vid_avail]` after boot · 2 MODE 12h the
+desktop is still `VID_VGA` at 640×480, which is what "puts mode 12h again" has
+to leave behind · 3 ALIVE the BIOS tick counter moved between two reads.
+
+**Check 3 is liveness and it is not decoration**: 1 and 2 both assert
+zero-ish values, and a kernel that died inside the probe — which sets a mode,
+writes through a window and sets another — would give the same two answers.
+Its first version counted visible windows and asserted at least one, which
+reported 0 on a perfectly healthy machine: **a bare desktop has no windows**,
+the Disk window opening on a double-click.
+
+**Mutation**: `clc` after `VBV_PROVE`, so the BIOS is trusted and the proof
+skipped. Check 1 alone fails, with `[vid_avail] = 0x15`. Checks 2 and 3 still
+pass, correctly — the mode is advertised, not entered.
+
+**Nothing to click.** The probe runs at boot (§39.29.5's third placement), so
+the row reads a decision already taken.
+
+#### 39.29.9 Acceptance
+
+- Mode 12h output must be **byte-identical** before and after, since one body
+  now serves both. This is the classic failure of a change like this and it is
+  what catches a `jnc` written at twelve sites instead of thirteen.
+  **MET** — `tests/vbeident.py --ref`, three settled frames at 307,200 pixels
+  each, 0 differing; and the gate is proved sensitive by a one-bit poke of
+  `gfx_lmtab[0]` moving 97 and 117 of them.
+- The banking gate is **mutation-tested**: force the window to the wrong bank
+  and the gate must fail. A banking test that passes while banking is broken is
+  the defect class §39.28.2.2 already records against this very feature.
+  **MET, both halves.** The CUT: skipping one row at the boundary inside
+  `vbe_cut_run` reddens `tests/vbeident.py --cutrow 200` with a bounding box
+  of exactly the poked row. The BANK SELECT: §39.29.9.2, on 86Box, because
+  mode 12h has no window to move and so nothing for that mutation to act on.
+- **The banked mode itself is now exercised** (§39.29.9.1), which it was not
+  when this list was written.
+- **QEMU cannot test any of this.** Its `0104h` window is not CPU-addressable
+  at `A000` — `tests/vbeset`'s raw probe reads `00 00 00 00` there against
+  `A5 A5 A5 A5` in mode 12h — exactly as its own attribute word (`003B`, bit 5
+  set) advertises. Every stage is verified on the Satellite 4025CDT
+  (docs/FIELD-MACHINES.md) and photographed.
+##### 39.29.9.1 The cut, in the mode it exists for: 86Box, 1024x768
+
+`make vbebox` and `make VBEDIAG=1 build/vbeos.img` + `tools/os88box.py`, run
+2026-10-18 against the kernel §39.29.10.5 landed in. **86Box's Trident is the
+only card in this tree that enters `0104h`**, so until this the straddle cut
+had only ever been exercised by poking `[vbe_cutrow]` on mode 12h — a test
+that proves the cut is pixel-neutral and says nothing about the bank.
+
+Three readings, and the third is the one that carries:
+
+1. **A correct 1024x768 desktop.** Chrome at the TOP, the floppy icon in its
+   corner, and the dither unbroken through row 512. The desktop fill spans
+   rows 0..767, so it is a rect the cut SPLITS: this picture is the cut's
+   output in the banked mode. It is also the negative of §39.29.10's own
+   failure — *"the whole chrome appeared 512 rows down the panel"* — which is
+   what a bank left mapped from the previous primitive looks like.
+2. **A window drawn WHOLE across the boundary.** `VBEDIAG=1`'s window lands at
+   470..670 by construction (§39.29.12), and the photograph shows title bar,
+   frame, content, shadow and both corner boxes drawn once, in one piece, with
+   no tear at 512 and no half of it 512 rows away.
+3. **The screen after the round trip is BYTE-IDENTICAL to the screen before
+   it.** The window is dragged down across the boundary and back up; the
+   framebuffer PNG before the drag and the one after it have the same
+   SHA-256. No ghost at the vacated rect — §39.29.11's defect staying fixed —
+   and no residue anywhere else, at whole-screen resolution.
+
+**What it still does not answer** is §39.29.8.2's standing limit, unchanged:
+86Box's card is a **Trident** and the field machine a **NeoMagic**, whose bank
+register is elsewhere, so anything touching the card's own BIOS is the
+Satellite's to confirm. This boots INTO the mode, so `vga_save_vram` — which
+keeps its per-row test (§39.29.10.6) — runs only for the menu drop and the
+window drag, not for a mode switch with windows already up.
+
+##### 39.29.9.2 ...and the bank select, mutated: the chrome 512 rows down
+
+**The reading in §39.29.9.1 would be worth nothing if the window never had to
+move.** A card that mapped all 98,304 bytes at `A000` — or an emulator that
+modelled one — would render that desktop correctly with the bank select
+doing nothing at all, and every VBE figure taken here would be vacuous. That
+is §39.28.2.2's defect class and it is the reason this list asks for the
+mutation rather than the picture.
+
+So `vbe_bank` was broken on purpose, in the one place that separates the two:
+
+```nasm
+    mov [cs:vbe_cbank], al
+    xor al, 1                   ; the CACHE records the bank we meant; the
+                                ; WINDOW is set to the other one
+```
+
+The cache keeps the value the kernel believes, so every early-out still
+behaves and nothing refuses; only the hardware window is wrong. **The
+desktop comes up with the menu bar, the clock and the floppy icon 512 rows
+down the panel, a black band where the real window was never written, and
+dither above and below** — which is, to the pixel, the failure §39.29.10
+already records from the Satellite in its own words: *"the whole chrome
+appeared 512 rows down the panel"*.
+
+Reverting and re-running reproduces §39.29.9.1's picture with **0 differing
+pixels** outside the clock's field, so the three runs are an A/B/A and not
+two photographs that happen to differ.
+
+It is a ONE-OFF edit and deliberately not a knob: the arm it would keep
+assembling is a kernel that cannot draw, and the only machines that can run
+it are 86Box and the Satellite. The two lines above are the whole of it, kept
+here so the next person repeats the experiment instead of re-deriving it.
+
+### 39.30 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
 
 **A VGA BIOS decides colour or monochrome ONCE, at POST, and never asks
 again.** It drives a fixed level onto the red and blue outputs and reads the
@@ -94047,7 +95414,7 @@ the wrong settings. Every value now travels with a key that says what it is.
         db  data[len]
 ```
 
-`VC` is §39.28's Force Color, one byte at ver 1 on `kern_big`, applied by
+`VC` is §39.30's Force Color, one byte at ver 1 on `kern_big`, applied by
 the boot overlay and read by nothing resident. `FD` is §31.14's Floppy page, two bytes at ver 1 on `kern_big` — the four
 drives' overrides and the read bound, one record so the page costs one key
 entry and one header. `DK` is the dock's one byte (§30.5), a key of its own at ver 1, on `kern_big`
@@ -137316,23 +138683,28 @@ body emits `SH_BORD_TOP`/`LEFT`/`BOTTOM`/`RIGHT` as BIFF line style 1 and
 pair cannot carry a number format, so two cells differing only in their
 format would share an XF.
 
-**What IS missing is narrower and still real**, and both halves are facts
-about the code rather than a measurement:
+**ONE THING WAS MISSING, AND IT WAS NOT THE ONE WRITTEN HERE FIRST.** This
+section claimed two further gaps. Only one was real, and the way the other
+died is the part worth keeping:
 
-* **NOTES ARE NEVER WRITTEN.** No writer in this file reads `[sh_nnote]` —
-  `sh_doread_sylk`, `sh_doread_dif`, `sh_doread_biff`, `sh_doread_dbf` and
-  `sh_doread_sep` all CLEAR it, and nothing emits BIFF's `001CH`. A note made
-  here is lost on every save, in every format. `main`'s `sh_biff_extras` is
-  the half to port.
-* **A BORDER ON AN EMPTY CELL IS LOST WITH IT.** `sh_xfp_scan` walks
-  `[sh_ncells]`, so a border held only in the border table — a box drawn
-  round cells nobody typed in — is never scanned and gets no XF, and there is
-  no cell record for one to ride on anyway. `main` emits a `BLANK` (`0201H`)
-  for each, in the same `sh_biff_extras`.
+* **A border on an empty cell was said to be lost.** It is not. §81.77
+  already met exactly this case: `sh_xfp_scan` has a SECOND pass over the
+  border table for entries with no cell record, and `sh_biff_cells` writes a
+  `BLANK` (`0201H`) for each. The claim came from reading `sh_xfp_scan`'s
+  first loop — `mov cx, [sh_ncells]` — and stopping there. The comment on the
+  second pass describes the very defect being claimed, in the past tense.
+* **Notes really were never written**, and that one is §81.119, which ports
+  `main`'s writer and reader and gates them.
 
-**A ROUND-TRIP GATE IS OWED** for both. §81.63's shape is the one to use — the
-host authors the file so the writer's defect and the reader's cannot cancel —
-and until it exists these two are read off the source and marked as such.
+**THREE CLAIMS, TWO WRONG, ALL THREE WRITTEN THE SAME WAY**: from `main`'s
+symbol list and a partial read of ours, in a section about what this fork
+does not have. The general form is worth more than the corrections — **a
+symbol `main` has and we do not is evidence about NAMES, not about
+BEHAVIOUR**, and the two diverged implementations of the same feature are
+exactly where that inference fails. The question that settles it is "what
+does our writer emit", and it is answerable by reading the writer or, better,
+by a round-trip gate: §81.119.1 is the first of those, and the remaining
+formats still owe one.
 
 **The code is not lost and needs no copy kept**: it is
 `git show origin/main:apps/sheet/sheet.asm` at merge `1e3608d8`, and the
@@ -137357,6 +138729,60 @@ tail, so this is a subsystem move to an overlay, not a size pass.
 the one a user can lose work to, it is cheaper than the XF collection, and
 Note Pad and Word already ask — so SHEET is the odd one out in its own
 system. That is what happened, and §81.118 is the record of it.
+
+
+### 81.119 A cell note survives a save
+
+SHEET has had cell notes since stage 3.0b (`Formula ▸ Note...`, §81.102's
+dialog) and **could not save one**. No writer in `sheet.asm` read
+`[sh_nnote]` and nothing emitted BIFF's `NOTE` (`001CH`), so a note made here
+was lost on every save in every format — silently, with the file looking
+complete. `main`'s Sheet has kept them since **its own 81.22.3**, a number
+that means something else here (§81.117 is where that collision is
+recorded), so a PR that
+replaces `main`'s `sheet.asm` wholesale would have TAKEN A WORKING FEATURE
+AWAY. That is what makes this a blocker rather than a gap.
+
+Both halves are `main`'s `sh_biff_extras` and its `.isnote` arm, ported: the
+writer walks the note table after the sheet's cells and the border table's
+`BLANK`s, emitting row, col, cch and the bytes; the reader feeds them to
+`sh_nt_set`, the same door a typed note takes, so a refusal (table or arena
+full) drops it exactly as typing one would. Two adaptations: our note record
+is `SH_NOTE_REC` and our `sh_unpackrow` is a `SHOUT`, and `jcxz` could not
+reach the end of the loop — it is short-only on an 8086, which is the kind of
+thing that only shows up once the body is long enough.
+
+**It cost 268 bytes of `CHART.OVL` (51,106 → 51,374 of 52,224) and NOT ONE
+RESIDENT BYTE**, because both the BIFF writer and the BIFF reader already
+live in the module.
+
+#### 81.119.1 The gate, and why the host parses the file
+
+`tests/sheetnote.py` (`soak -k sheetnote`) is §81.38's shape **with the ends
+swapped**, and deliberately: `tools/os88sheetfmt.py` writes no `NOTE` record,
+so the host cannot author the input. The GUEST writes the file and the HOST
+reads it back with a ten-line parser that knows nothing about `sheet.asm` —
+opcode, length, then row, col, cch, the bytes. Then the file goes in again
+and the note is read off the dialog.
+
+**Why the ten lines are worth it:** a writer and a reader that share a defect
+cancel it. Length in the wrong place, read from the same wrong place, and a
+round trip through SHEET alone passes while the file is one no other
+spreadsheet can read. Mutated both ways:
+
+| mutation | what the row says |
+|---|---|
+| the writer's `mov cx, [sh_nnote]` → `xor cx, cx` | the host finds no record AND the reload is empty — 2 checks |
+| the reader's `cmp ax, 0x001C` → a value no record has | **the reload alone** — 1 check, while the host still finds the record |
+
+The second is the one the parser buys. Without it that mutation is invisible.
+
+**THE ROW CAUGHT ITS OWN NAVIGATION FIRST.** It began by selecting B2 with
+`Formula ▸ Goto`, and the selection never moved: the note went on A1, the
+writer wrote A1 correctly, and the row reported *the host finds the NOTE on
+B2* as a failure of a writer that was right. It clicks the cell on the glass
+now and **asserts `[sh_selcol]`/`[sh_selrow]` before going on** — a gate that
+believes its own navigation reports the wrong half.
 
 
 ### 81.118 Ask before throwing work away — main's §81.23, ported

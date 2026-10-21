@@ -24489,6 +24489,83 @@ sh_biff_cells:
     dec cx
     jnz .bt
 .btdone:
+    ; --- AND THE NOTES (81.119) --------------------------------------------
+    ; A note lives only in the note table - packed row/sheet, col, and the
+    ; text's offset in the SHARED formula arena - and BIFF's NOTE (001CH) is
+    ; row, col, length, the bytes. Without this a note made here was lost on
+    ; every save in every format, while main's Sheet kept it; this is main's
+    ; sh_biff_extras' second half, with our six-byte table and SHOUT'd
+    ; sh_unpackrow.
+    mov cx, [sh_nnote]
+    or cx, cx                         ; NOT jcxz: it is short-only on an 8086
+    jnz .ntgo                         ; and .ntdone is past the note loop
+    jmp .ntdone
+.ntgo:
+    xor si, si
+.nt:
+    push cx
+    push si
+    mov es, [sh_noteseg]
+    mov ax, [es:si]
+    SHOUT sh_unpackrow                ; -> AX = row, BX = its sheet
+    cmp bx, [sh_wsheet]
+    jne .ntnext                       ; one pass writes ONE sheet
+    mov [sh_wrec_row], ax
+    mov es, [sh_noteseg]
+    mov ax, [es:si+2]
+    mov [sh_wrec_col], ax
+    mov dx, [es:si+4]                 ; DX = the text's arena offset, kept
+                                      ; across the length walk below
+    mov es, [sh_txtseg]               ; ...and its length, capped the way the
+    mov si, dx                        ; dialog caps what it will take
+    xor cx, cx
+.ntlen:
+    cmp byte [es:si], 0
+    je .nthave
+    inc si
+    inc cx
+    cmp cx, SH_NOTEMAX
+    jb .ntlen
+.nthave:
+    mov ax, di
+    add ax, cx
+    add ax, 10                        ; 4 of header and 6 of body, then text
+    cmp ax, SH_STAGE_MAX
+    jbe .ntroom
+    mov byte [sh_trunc], 1            ; out of staging: say so, as the cells
+    pop si                            ; and the borders do
+    pop cx
+    jmp short .ntdone
+.ntroom:
+    mov es, [sh_stgseg]
+    mov ax, 0x001C                    ; NOTE (BIFF3)
+    call sh_biffw
+    mov ax, cx
+    add ax, 6
+    call sh_biffw
+    mov ax, [sh_wrec_row]
+    call sh_biffw
+    mov ax, [sh_wrec_col]
+    call sh_biffw
+    mov ax, cx
+    call sh_biffw
+    jcxz .ntnext
+    mov si, dx
+.ntput:
+    push es
+    mov es, [sh_txtseg]               ; the arena holds the text and the
+    mov al, [es:si]                   ; STAGE is where it goes: two segments,
+    pop es                            ; one byte at a time
+    inc si
+    call sh_stgputb
+    loop .ntput
+.ntnext:
+    pop si
+    pop cx
+    add si, SH_NOTE_REC
+    dec cx
+    jnz .nt
+.ntdone:
     pop word [sh_cursheet]
     mov es, [sh_stgseg]               ; ES BACK TO THE STAGING SEGMENT. This
                                       ; routine's contract is "appended at
@@ -25692,6 +25769,8 @@ sh_doread_biff:
                                         ; one back, so its own file lost the
                                         ; format on the way in instead of on
                                         ; the way out
+    cmp ax, 0x001C                     ; NOTE (81.119): the text of a cell
+    je .isnote                         ; note, which SHEET writes now
     cmp ax, 0x027E                     ; RK cell record
     je .isrk
     cmp ax, 0x0203                     ; NUMBER: a whole IEEE-754 double, and
@@ -26039,6 +26118,58 @@ sh_doread_biff:
 .xfcounted:
     inc word [sh_biff_nxf]
     jmp .skip
+.isnote:
+    ; 81.119: row, col, cch, the bytes - into the note table through the same
+    ; sh_nt_set a typed note takes, so a refusal (table or arena full) drops
+    ; it exactly as typing one would. sh_notetext is the dialog's own buffer
+    ; and no dialog can be open during a read.
+    cmp dx, 6                          ; row, col, cch, then the text
+    jb .skip
+    mov ax, [es:si]
+    mov [sh_wrec_row], ax
+    mov ax, [es:si+2]
+    mov [sh_wrec_col], ax
+    call sh_biff_rcok                  ; a continuation record's row is FFFFH
+    jc .skip                           ; and lands here too
+    push dx
+    push si
+    push di
+    mov cx, [es:si+4]                  ; the text's length, bounded by the
+    sub dx, 6                          ; record's and by the dialog's buffer
+    cmp cx, dx
+    jbe .nlok
+    mov cx, dx
+.nlok:
+    cmp cx, SH_NOTEMAX - 1
+    jbe .nlok2
+    mov cx, SH_NOTEMAX - 1
+.nlok2:
+    add si, 6
+    mov di, sh_notetext
+    jcxz .nrend
+.nrd:
+    mov al, [es:si]
+    or al, al                          ; a NUL inside would end it early
+    jz .nrend                          ; anyway; end it here instead
+    mov [di], al
+    inc si
+    inc di
+    loop .nrd
+.nrend:
+    mov byte [di], 0
+    pop di
+    pop si
+    push es
+    mov ax, [sh_wrec_col]
+    mov bx, [sh_wrec_row]
+    push si
+    mov si, sh_notetext
+    SHOUT sh_nt_set                    ; CF = 1 table or arena full: dropped,
+    pop si                             ; as a typed one would be
+    pop es
+    pop dx
+    jmp .skip
+
 .isblank:
     ; A CELL WITH A FORMAT AND NO VALUE (81.77). There is nothing to store as
     ; a value - sh_setvald is not called at all - and the whole record is its
@@ -54310,7 +54441,14 @@ sh_mtab:
 ; Define Name needed, and Reference had nowhere to show its answer until the
 ; reference box existed.
 sh_m_formula:    db 'Formula', 0
-sh_i_formula:    dw sh_it_pname, sh_it_pfunc, sh_it_refdis, sh_it_defname, sh_it_note, sh_it_goto, sh_it_find
+sh_i_formula:                             ; LABELLED like sh_i_data's and
+.pname:          dw sh_it_pname           ; sh_i_file's, so a gate names the
+.pfunc:          dw sh_it_pfunc           ; row it wants instead of counting
+.reference:      dw sh_it_refdis          ; to it (81.114.8's rule)
+.defname:        dw sh_it_defname
+.note:           dw sh_it_note
+.goto:           dw sh_it_goto
+.find:           dw sh_it_find
 sh_it_pname:     db 'Paste Name...', 0
 sh_it_pfunc:     db 'Paste Function...', 0
 sh_it_refdis:    db MENU_DIS, 'Reference', 0   ; 81.108: Excel's meaning -
