@@ -14837,6 +14837,14 @@ SOAK = [
         "Ctrl+X move, Ctrl+D fill, nothing pasted mid-entry, F3/Shift+F3/"
         "Ctrl+G/F5/Ctrl+F/Ctrl+N open their dialogs, and Ctrl+S saves",
         needs=("marty",), serial=True),
+    Row("sheetnote", "soak", py("tests/sheetnote.py"), 300.0,
+        "SPEC.md 81.119: a cell NOTE survives a save. 81.38's shape with the "
+        "ends swapped - the host cannot author a NOTE record, so the GUEST "
+        "writes the file and the HOST reads it with a ten-line parser that "
+        "knows nothing about sheet.asm, then the file goes back in. The "
+        "reader-only mutation fails ONE check while the host still finds the "
+        "record, which is what the independent parser is for",
+        needs=("marty",), serial=True),
     Row("sheetask", "soak", py("tests/sheetask.py"), 300.0,
         "SPEC.md 81.118: SHEET asks before it throws a workbook away - "
         "[sh_modified] 0 on open, 1 on an entry, 0 on a save that kept "

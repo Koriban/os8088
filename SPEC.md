@@ -138683,23 +138683,28 @@ body emits `SH_BORD_TOP`/`LEFT`/`BOTTOM`/`RIGHT` as BIFF line style 1 and
 pair cannot carry a number format, so two cells differing only in their
 format would share an XF.
 
-**What IS missing is narrower and still real**, and both halves are facts
-about the code rather than a measurement:
+**ONE THING WAS MISSING, AND IT WAS NOT THE ONE WRITTEN HERE FIRST.** This
+section claimed two further gaps. Only one was real, and the way the other
+died is the part worth keeping:
 
-* **NOTES ARE NEVER WRITTEN.** No writer in this file reads `[sh_nnote]` —
-  `sh_doread_sylk`, `sh_doread_dif`, `sh_doread_biff`, `sh_doread_dbf` and
-  `sh_doread_sep` all CLEAR it, and nothing emits BIFF's `001CH`. A note made
-  here is lost on every save, in every format. `main`'s `sh_biff_extras` is
-  the half to port.
-* **A BORDER ON AN EMPTY CELL IS LOST WITH IT.** `sh_xfp_scan` walks
-  `[sh_ncells]`, so a border held only in the border table — a box drawn
-  round cells nobody typed in — is never scanned and gets no XF, and there is
-  no cell record for one to ride on anyway. `main` emits a `BLANK` (`0201H`)
-  for each, in the same `sh_biff_extras`.
+* **A border on an empty cell was said to be lost.** It is not. §81.77
+  already met exactly this case: `sh_xfp_scan` has a SECOND pass over the
+  border table for entries with no cell record, and `sh_biff_cells` writes a
+  `BLANK` (`0201H`) for each. The claim came from reading `sh_xfp_scan`'s
+  first loop — `mov cx, [sh_ncells]` — and stopping there. The comment on the
+  second pass describes the very defect being claimed, in the past tense.
+* **Notes really were never written**, and that one is §81.119, which ports
+  `main`'s writer and reader and gates them.
 
-**A ROUND-TRIP GATE IS OWED** for both. §81.63's shape is the one to use — the
-host authors the file so the writer's defect and the reader's cannot cancel —
-and until it exists these two are read off the source and marked as such.
+**THREE CLAIMS, TWO WRONG, ALL THREE WRITTEN THE SAME WAY**: from `main`'s
+symbol list and a partial read of ours, in a section about what this fork
+does not have. The general form is worth more than the corrections — **a
+symbol `main` has and we do not is evidence about NAMES, not about
+BEHAVIOUR**, and the two diverged implementations of the same feature are
+exactly where that inference fails. The question that settles it is "what
+does our writer emit", and it is answerable by reading the writer or, better,
+by a round-trip gate: §81.119.1 is the first of those, and the remaining
+formats still owe one.
 
 **The code is not lost and needs no copy kept**: it is
 `git show origin/main:apps/sheet/sheet.asm` at merge `1e3608d8`, and the
@@ -138724,6 +138729,60 @@ tail, so this is a subsystem move to an overlay, not a size pass.
 the one a user can lose work to, it is cheaper than the XF collection, and
 Note Pad and Word already ask — so SHEET is the odd one out in its own
 system. That is what happened, and §81.118 is the record of it.
+
+
+### 81.119 A cell note survives a save
+
+SHEET has had cell notes since stage 3.0b (`Formula ▸ Note...`, §81.102's
+dialog) and **could not save one**. No writer in `sheet.asm` read
+`[sh_nnote]` and nothing emitted BIFF's `NOTE` (`001CH`), so a note made here
+was lost on every save in every format — silently, with the file looking
+complete. `main`'s Sheet has kept them since **its own 81.22.3**, a number
+that means something else here (§81.117 is where that collision is
+recorded), so a PR that
+replaces `main`'s `sheet.asm` wholesale would have TAKEN A WORKING FEATURE
+AWAY. That is what makes this a blocker rather than a gap.
+
+Both halves are `main`'s `sh_biff_extras` and its `.isnote` arm, ported: the
+writer walks the note table after the sheet's cells and the border table's
+`BLANK`s, emitting row, col, cch and the bytes; the reader feeds them to
+`sh_nt_set`, the same door a typed note takes, so a refusal (table or arena
+full) drops it exactly as typing one would. Two adaptations: our note record
+is `SH_NOTE_REC` and our `sh_unpackrow` is a `SHOUT`, and `jcxz` could not
+reach the end of the loop — it is short-only on an 8086, which is the kind of
+thing that only shows up once the body is long enough.
+
+**It cost 268 bytes of `CHART.OVL` (51,106 → 51,374 of 52,224) and NOT ONE
+RESIDENT BYTE**, because both the BIFF writer and the BIFF reader already
+live in the module.
+
+#### 81.119.1 The gate, and why the host parses the file
+
+`tests/sheetnote.py` (`soak -k sheetnote`) is §81.38's shape **with the ends
+swapped**, and deliberately: `tools/os88sheetfmt.py` writes no `NOTE` record,
+so the host cannot author the input. The GUEST writes the file and the HOST
+reads it back with a ten-line parser that knows nothing about `sheet.asm` —
+opcode, length, then row, col, cch, the bytes. Then the file goes in again
+and the note is read off the dialog.
+
+**Why the ten lines are worth it:** a writer and a reader that share a defect
+cancel it. Length in the wrong place, read from the same wrong place, and a
+round trip through SHEET alone passes while the file is one no other
+spreadsheet can read. Mutated both ways:
+
+| mutation | what the row says |
+|---|---|
+| the writer's `mov cx, [sh_nnote]` → `xor cx, cx` | the host finds no record AND the reload is empty — 2 checks |
+| the reader's `cmp ax, 0x001C` → a value no record has | **the reload alone** — 1 check, while the host still finds the record |
+
+The second is the one the parser buys. Without it that mutation is invisible.
+
+**THE ROW CAUGHT ITS OWN NAVIGATION FIRST.** It began by selecting B2 with
+`Formula ▸ Goto`, and the selection never moved: the note went on A1, the
+writer wrote A1 correctly, and the row reported *the host finds the NOTE on
+B2* as a failure of a writer that was right. It clicks the cell on the glass
+now and **asserts `[sh_selcol]`/`[sh_selrow]` before going on** — a gate that
+believes its own navigation reports the wrong half.
 
 
 ### 81.118 Ask before throwing work away — main's §81.23, ported
