@@ -116,7 +116,22 @@ def main():
                     b"\0\0")
         subprocess.run([sys.executable, "tools/os88fat.py", "add", sysimg,
                         cfg, "SYSTEM.CFG"], check=True, capture_output=True)
-        with M.launch(sysimg, apps=os88build.at("build/apps360.img"),
+        # B: IS THIS ROW'S OWN FLOPPY, not the shipped apps disk. All the
+        # handler has to be is PRESENT: an association resolves on the disk
+        # the document was launched from and falls back across the mounted
+        # volumes, and what this row is about is the PLAYER reading a 32KB
+        # cluster off C:, not which floppy ships it. Depending on the shipped
+        # disk made the row an assertion about CURATION - and 24.6.1 says
+        # that is a dated decision, so this fork taking VIDEO.O88 off
+        # apps360.img on 2026-10-05 ("no .V88 for it to open at this
+        # geometry" - true of the FLOPPY, false once a hard disk carries one)
+        # turned three upstream rows red and nothing noticed until the first
+        # whole-tier soak.
+        bimg = os.path.join(tmp, "VIDB.IMG")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", bimg,
+                        "--size", "360", "APPS:" + os88build.at("build/video.o88")],
+                       check=True, capture_output=True)
+        with M.launch(sysimg, apps=bimg,
                       machine=MACHINE, run_dir=run_dir) as m:
             ui = os88ui.UI(m)
             ui.ready(limit=300)

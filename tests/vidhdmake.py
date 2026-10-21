@@ -156,7 +156,15 @@ def main():
                     b"\0\0")
         subprocess.run([sys.executable, "tools/os88fat.py", "add", sysimg,
                         cfg, "SYSTEM.CFG"], check=True, capture_output=True)
-        m = M.launch(sysimg, apps=os88build.at("build/apps360.img"),
+        # B: is this row's OWN floppy and not the shipped apps disk: all the
+        # handler has to be is PRESENT, and depending on the shipped one made
+        # the row an assertion about CURATION (24.6.1) - see
+        # tests/vidbigclus.py for the whole account.
+        bimg = os.path.join(tmp, "VIDB.IMG")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", bimg,
+                        "--size", "360", "APPS:" + os88build.at("build/video.o88")],
+                       check=True, capture_output=True)
+        m = M.launch(sysimg, apps=bimg,
                      machine=a.machine, extra=["--mount", "hd:0:" + img])
         try:
             ui = os88ui.UI(m)
