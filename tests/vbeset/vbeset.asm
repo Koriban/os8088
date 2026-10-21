@@ -44,7 +44,8 @@
 ;                       vertical edges into diagonals, which no photograph can
 ;                       mistake for working
 ;   diagonal            the same, a thousand times, across every row group
-;   three bank lines    at rowsplit-1 / rowsplit / rowsplit+1, the rows either
+;   three bank lines    at rowsplit-1 / rowsplit / rowsplit+1 of EVERY
+;                       granule boundary in the picture, the rows either
 ;                       side of a granule boundary. SPEC.md 39.28's whole claim
 ;                       is that this boundary falls BETWEEN rows here
 ;   second bar set      the same 16 colours drawn PAST the boundary, so a bank
@@ -81,9 +82,34 @@ bits 16                         ; 8086, so the same binary is worth booting on
 
 VS_MODE     equ 0x0104          ; 1024x768x16 PLANAR - and the planar is the
                                 ; point, not the resolution (SPEC.md 39.28)
+VS_MODE2    equ 0x0106          ; ...and 1280x1024x16, THE THIRD ARM. It is
+                                ; planar too and the card here lists it, and
+                                ; os8088 cannot use it: 160 bytes a row
+                                ; divides 65536 into 409.6, so a bank boundary
+                                ; falls INSIDE row 409 and the resident half's
+                                ; whole design is that the carry out of
+                                ; `add di, stride` IS the crossing
+VS_PADB     equ 256             ; so ask the BIOS to PAD the logical scan line
+                                ; to this, with AX=4F06h BL=02h. 256 divides
+                                ; 65536 exactly: 256 rows a bank, four banks
+                                ; for 1024 rows, boundaries BETWEEN rows, and
+                                ; the carry identity holds untouched. The
+                                ; visible width stays 1280; only the stride
+                                ; grows, which costs VRAM (256*1024*4 = 1MB)
+                                ; and nothing else.
+                                ; WHETHER A BIOS WILL DO THIS IN A PLANAR MODE
+                                ; IS THE WHOLE QUESTION - plenty implement
+                                ; 4F06h for packed modes only, and plenty
+                                ; round the length to their own granularity.
+                                ; It is asked here, on the card, and READ BACK
 VS_INFO     equ 512             ; the VbeInfoBlock AX=4F00h fills
 VS_MINFO    equ 256             ; the ModeInfoBlock AX=4F01h fills
-VS_LOG      equ 2048            ; bytes of transcript kept for vs_save
+VS_LOG      equ 4096            ; bytes of transcript kept for vs_save. 2048
+                                ; until the AUTORUN build ran TWO arms into
+                                ; one transcript (see vs_run) - one report is
+                                ; most of 2048 on its own, and the overflow
+                                ; reads as corruption rather than as two runs.
+                                ; tools/os88vbelog.py already read 8 sectors
 VS_LOGSEC   equ 100             ; ...and the LBA it is written to. Well clear of
                                 ; the payload (os88disk puts that at LBA 33) and
                                 ; inside a 1.44MB disk's 2880 sectors
@@ -139,6 +165,8 @@ vs_main:
     cld
 
 vs_again:
+    mov byte [vs_pass2], 0      ; R IS A FRESH RUN; vs_run below is not
+    mov word [vs_qmode], VS_MODE
     mov word [vs_logn], 0       ; A RE-RUN STARTS A FRESH TRANSCRIPT. Without
                                 ; this the log accumulated across R and the
                                 ; second copy was cut off mid-sentence at
@@ -146,6 +174,12 @@ vs_again:
                                 ; of 2,048 holding one complete report and
                                 ; most of another, which reads as corruption
                                 ; rather than as two runs
+vs_run:                         ; ...and THIS is where the second arm re-enters
+                                ; under AUTORUN, with the log intact, so one
+                                ; disk carries both modes' answers. 86Box's
+                                ; Trident is the only card here that enters
+                                ; 0104h at all, so a run on it is expensive
+                                ; enough to be worth asking both questions
     mov ax, 0x0003              ; a known text mode, whatever we were left in
     int 0x10
     mov ax, cs
@@ -162,8 +196,9 @@ vs_again:
 %ifdef AUTORUN
     jmp .vbearm                 ; NO KEY. This build exists to be run by a
                                 ; script on an emulator with no way to type:
-                                ; it takes arm 1, writes the transcript to the
-                                ; disk and halts, and the host reads the image
+                                ; it takes the arm [vs_qmode] names, writes the
+                                ; transcript to the disk and - on the first
+                                ; pass - comes back for the second
 %endif
 .key:
     call vs_getkey
@@ -171,13 +206,15 @@ vs_again:
     je vs_bye
     cmp al, '2'
     je .control
+    cmp al, '3'
+    je .pad3
     cmp al, '1'
     jne .key
 .vbearm:
     ; --- the one irreversible step -------------------------------------------
     mov byte [vs_banked], 1
     mov ax, 0x4F02
-    mov bx, VS_MODE             ; bit 15 clear: DO clear the framebuffer
+    mov bx, [vs_qmode]          ; bit 15 clear: DO clear the framebuffer
     int 0x10
     mov [vs_setax], ax
     mov ax, cs                  ; a sloppy VBE BIOS is a real thing, and the
@@ -185,7 +222,19 @@ vs_again:
     mov es, ax                  ; after
     cmp word [vs_setax], 0x004F
     jne vs_setfail
-    jmp short .armed
+    cmp word [vs_qmode], VS_MODE2
+    jne .armed
+    call vs_pad                 ; THE PADDED ARM ASKS FOR ONE MORE THING, and
+    jmp short .armed            ; 4F06h can only be asked of the mode it acts
+                                ; on - which is why this is here and not in
+                                ; tests/vbeprobe, where a mode set is forbidden
+
+    ; --- ARM 3: the same questions of 0106h, with the scan line padded -------
+.pad3:
+    mov word [vs_qmode], VS_MODE2
+    call vs_query               ; 0106h's OWN ModeInfoBlock, printed: the
+    jc vs_halt                  ; stride below is read, never assumed
+    jmp .vbearm
 
     ; --- THE CONTROL: the same code in a mode that is known to work ----------
     ; A test that has only ever been seen to FAIL cannot tell a card that
@@ -243,7 +292,11 @@ vs_again:
     call vs_report
 %ifdef AUTORUN
     call vs_save                ; the transcript is the whole output of this
-    jmp vs_halt                 ; build; nothing is waiting to read a screen
+    cmp byte [vs_pass2], 0      ; build; nothing is waiting to read a screen.
+    jne vs_halt                 ; SAVED EACH PASS, so a machine that hangs in
+    mov byte [vs_pass2], 1      ; the second arm still yields the first - the
+    mov word [vs_qmode], VS_MODE2   ; same argument as vs_halt's own save
+    jmp vs_run
 %endif
     call vs_getkey
     or al, 0x20
@@ -336,7 +389,7 @@ vs_query:
     inc di
     loop .clr2
     mov di, vs_minfo
-    mov cx, VS_MODE
+    mov cx, [vs_qmode]
     mov ax, 0x4F01
     int 0x10
     mov ax, cs
@@ -345,7 +398,11 @@ vs_query:
     cmp word [vs_minfo + MI_XRES], 0
     je .nomode
 
-    mov si, vs_s_geo
+    mov si, vs_s_geo            ; the mode NUMBER, because this routine serves
+    call vs_puts                ; three arms now and a fixed '0104h:' here
+    mov ax, [vs_qmode]          ; would mislabel two of them
+    call vs_hex4
+    mov si, vs_s_geo2
     call vs_puts
     mov ax, [vs_minfo + MI_XRES]
     call vs_dec
@@ -451,43 +508,10 @@ vs_query:
 .mdone:
     mov [vs_winmask], ax
 
-    ; rowsplit = granule bytes / stride, and the REMAINDER is the finding: zero
-    ; means a bank boundary falls between rows, which is SPEC.md 39.28's whole
-    ; argument for this mode over 800x600 and 1280x1024.
-    mov cl, [vs_winshift]
-    mov dx, 1                   ; DX:AX = 1 << winshift, built as a 32-bit
-    xor ax, ax                  ; value because shift 16 does not fit a word
-    cmp cl, 16
-    je .gb16
-    mov ax, 1
-    shl ax, cl
-    xor dx, dx
-.gb16:
-    div word [vs_minfo + MI_STRIDE]     ; DX:AX / stride -> AX quotient,
-    mov [vs_rowsplit], ax               ;                   DX remainder
-    mov [vs_rowrem], dx
-
-    mov si, vs_s_split
-    call vs_puts
-    mov ax, [vs_rowsplit]
-    call vs_dec
-    mov si, vs_s_rows
-    call vs_puts
-    cmp word [vs_rowrem], 0
-    jne .straddle
-    mov si, vs_s_exact
-    call vs_puts
-    clc
-    ret
-.straddle:
-    mov si, vs_s_strad          ; NOT a refusal: the pattern still draws, and
-    call vs_puts                ; the three bank lines are then the thing to
-    mov ax, [vs_rowrem]         ; look at hardest
-    call vs_dec
-    mov si, vs_s_strad2
-    call vs_puts
-    clc
-    ret
+    call vs_rowcalc             ; A ROUTINE NOW, because the padded arm has to
+    clc                         ; run it a SECOND time: AX=4F06h changes the
+    ret                         ; stride, and every number below is the
+                                ; stride's
 
 .novbe:
     mov si, vs_s_novbe
@@ -512,6 +536,127 @@ vs_query:
 .no:
     call vs_puts
     stc
+    ret
+
+; =============================================================================
+; vs_rowcalc - rows per granule, from the LIVE stride, computed and printed
+;
+; The remainder is the finding: zero means a bank boundary falls between rows,
+; which is SPEC.md 39.28's whole argument for 0104h over 0102h and 0106h.
+; It is a routine rather than a paragraph of vs_query because the padded arm
+; recomputes it after AX=4F06h, and a second copy would be a second opinion.
+; =============================================================================
+vs_rowcalc:
+    mov cl, [vs_winshift]
+    mov dx, 1                   ; DX:AX = 1 << winshift, built as a 32-bit
+    xor ax, ax                  ; value because shift 16 does not fit a word
+    cmp cl, 16
+    je .gb16
+    mov ax, 1
+    shl ax, cl
+    xor dx, dx
+.gb16:
+    div word [vs_minfo + MI_STRIDE]     ; DX:AX / stride -> AX quotient,
+    mov [vs_rowsplit], ax               ;                   DX remainder
+    mov [vs_rowrem], dx
+
+    mov si, vs_s_split
+    call vs_puts
+    mov ax, [vs_rowsplit]
+    call vs_dec
+    mov si, vs_s_rows
+    call vs_puts
+    cmp word [vs_rowrem], 0
+    jne .straddle
+    mov si, vs_s_exact
+    call vs_puts
+    ret
+.straddle:
+    mov si, vs_s_strad          ; NOT a refusal: the pattern still draws, and
+    call vs_puts                ; the bank lines are then the thing to look at
+    mov ax, [vs_rowrem]         ; hardest
+    call vs_dec
+    mov si, vs_s_strad2
+    call vs_puts
+    ret
+
+; =============================================================================
+; vs_pad - AX=4F06h BL=02h: ask for a logical scan line of VS_PADB BYTES
+; out: [vs_padok] = 1 and MI_STRIDE rewritten, or 0 and nothing changed
+;
+; THE READBACK IS THE ANSWER AND THE CALL'S OWN SUCCESS IS NOT. A VBE BIOS may
+; return 004Fh having rounded the length to its own granularity, and one that
+; implements 4F06h for packed modes only may do anything at all here. So all
+; four registers are read: AX the status, BX the bytes a scan line it actually
+; set, CX the pixels that came to, DX the scan lines that now fit in VRAM.
+; BX = VS_PADB and DX >= YRes is the only pass.
+;
+; A FAILURE IS NOT A REFUSAL. The pattern below draws at whatever stride the
+; card is really using - vs_win computes a bank per span from a 32-bit offset,
+; so this instrument can address a surface the KERNEL could not - and the
+; transcript then says both what was asked and what happened, which is the
+; answer either way.
+; =============================================================================
+vs_pad:
+    mov byte [vs_padok], 0
+    mov si, vs_s_padq
+    call vs_puts
+    mov ax, 0x4F06
+    mov bx, 0x0002              ; BH=0, BL=2: SET, in BYTES (VBE 2.0 and up)
+    mov cx, VS_PADB
+    int 0x10
+    mov [vs_padax], ax          ; PARKED FIRST, all four: the re-anchor below
+    mov [vs_padbx], bx          ; is a `mov ds, ax` and would eat the answer
+    mov [vs_padcx], cx
+    mov [vs_paddx], dx
+    mov ax, cs
+    mov ds, ax
+    mov es, ax
+
+    mov si, vs_s_padax
+    call vs_puts
+    mov ax, [vs_padax]
+    call vs_hex4
+    mov si, vs_s_padbx
+    call vs_puts
+    mov ax, [vs_padbx]
+    call vs_dec
+    mov si, vs_s_padcx
+    call vs_puts
+    mov ax, [vs_padcx]
+    call vs_dec
+    mov si, vs_s_paddx
+    call vs_puts
+    mov ax, [vs_paddx]
+    call vs_dec
+    call vs_nl
+
+    cmp word [vs_padax], 0x004F
+    jne .refused
+    mov ax, [vs_padbx]
+    cmp ax, VS_PADB
+    jne .rounded
+    mov ax, [vs_paddx]
+    cmp ax, [vs_minfo + MI_YRES]
+    jb .tooshort                ; it set the stride and the picture no longer
+                                ; fits the card: the mode is not reachable
+                                ; this way on this hardware
+    mov word [vs_minfo + MI_STRIDE], VS_PADB
+    mov byte [vs_padok], 1
+    mov si, vs_s_padok
+    call vs_puts
+    call vs_rowcalc             ; ...and the split AT THE NEW STRIDE, which is
+    ret                         ; what every coordinate below is built from
+.refused:
+    mov si, vs_s_padno
+    jmp short .say
+.rounded:
+    mov si, vs_s_padrd
+    jmp short .say
+.tooshort:
+    mov si, vs_s_padsh
+.say:
+    call vs_puts
     ret
 
 ; =============================================================================
@@ -930,28 +1075,38 @@ vs_geom:
     mov al, 7
     call vs_addp
 
-    ; the three rows either side of a granule boundary - ONLY when there is
-    ; one inside the picture, which the control arm has not got
+    ; the three rows either side of EVERY granule boundary inside the picture
+    ;
+    ; IT WAS THE FIRST BOUNDARY ONLY, which was the whole truth while 0104h
+    ; was the only mode here: two banks, one boundary. A padded 0106h has
+    ; FOUR banks and THREE boundaries, and a bank select that worked at row
+    ; 256 and failed at 512 would have read back clean.
     mov ax, [vs_rowsplit]
     or ax, ax
     jz .nobank
+    mov [vs_bndy], ax
+.bnd:
+    mov ax, [vs_bndy]
     inc ax
     cmp ax, [vs_minfo + MI_YRES]
-    jae .nobank
+    jae .nobank                 ; the row AFTER it is off the picture: done
     mov cx, 500
-    mov bx, [vs_rowsplit]
+    mov bx, [vs_bndy]
     dec bx
     mov al, 14
     call vs_addp
     mov cx, 500
-    mov bx, [vs_rowsplit]
+    mov bx, [vs_bndy]
     mov al, 12
     call vs_addp
     mov cx, 500
-    mov bx, [vs_rowsplit]
+    mov bx, [vs_bndy]
     inc bx
     mov al, 10
     call vs_addp
+    mov ax, [vs_rowsplit]
+    add [vs_bndy], ax
+    jmp short .bnd
 .nobank:
     mov cx, [vs_barw]           ; the second bar set
     mov ax, 5
@@ -988,6 +1143,14 @@ vs_geom:
 
     mov di, [vs_pp]             ; the terminator
     mov word [di], 0xFFFF
+    sub di, vs_probes           ; ...AND THE TABLE'S OWN BOUND, checked rather
+    cmp di, 24 * 5              ; than trusted: vs_geom's probe count depends
+    jbe .fits                   ; on how many banks the mode has, so a mode
+    mov si, vs_s_novroom        ; with more of them than this file expected
+    call vs_puts                ; would walk off the end of the table and into
+    cli                         ; the strings - which reads as a wrong PICTURE
+    hlt                         ; rather than as a table that overflowed
+.fits:
     ret
 
 ; vs_addp - append (CX, BX, AL) to the probe table
@@ -1166,30 +1329,43 @@ vs_draw:
     cmp cx, 163
     jbe .comb
 
-    ; --- the three bank lines ------------------------------------------------
+    ; --- the bank lines ------------------------------------------------------
     ; The rows either side of a granule boundary, in three colours a camera
     ; cannot confuse. If the boundary falls between rows these are three clean
     ; full-width lines; if drawing tears at the switch, this is where it shows.
+    ;
+    ; EVERY BOUNDARY, and this loop is the SECOND half of one change: vs_geom
+    ; probes them all, and a probe on a row the pattern never drew is a MISS
+    ; that reads exactly like a broken bank select. The first 1280x1024 run
+    ; came back 13 of 19 with boundaries 2 and 3 "failing", and the card was
+    ; innocent - the pattern simply stopped at boundary 1. Generalise the
+    ; probe and the PAINT together or not at all.
     mov ax, [vs_rowsplit]
     or ax, ax
     jz .nolines
+    mov [vs_bndy], ax
+.bline:
+    mov ax, [vs_bndy]
     inc ax
     cmp ax, [vs_minfo + MI_YRES]
     jae .nolines                ; the whole plane fits one granule: no boundary
     mov al, 14
     call vs_setcol
-    mov bx, [vs_rowsplit]
+    mov bx, [vs_bndy]
     dec bx
     call vs_fullrow
     mov al, 12
     call vs_setcol
-    mov bx, [vs_rowsplit]
+    mov bx, [vs_bndy]
     call vs_fullrow
     mov al, 10
     call vs_setcol
-    mov bx, [vs_rowsplit]
+    mov bx, [vs_bndy]
     inc bx
     call vs_fullrow
+    mov ax, [vs_rowsplit]
+    add [vs_bndy], ax
+    jmp .bline
 .nolines:
 
     ; --- the diagonal --------------------------------------------------------
@@ -1416,11 +1592,25 @@ vs_report:
     cmp byte [vs_banked], 0     ; name the ARM. A control run that reported
     je .ctl                     ; "4F02h set 0104h: OK" would be the one
     mov si, vs_s_rset           ; sentence in here able to answer the whole
-    jmp short .arm              ; question wrongly
+    call vs_puts                ; question wrongly - and so would a VBE run
+    mov ax, [vs_qmode]          ; that named 0104h while it was in 0106h
+    call vs_hex4
+    mov si, vs_s_rset2
+    call vs_puts
+    jmp short .arm
 .ctl:
     mov si, vs_s_rctl
-.arm:
     call vs_puts
+.arm:
+    cmp word [vs_qmode], VS_MODE2   ; ...and on the padded arm, whether the
+    jne .nopad                      ; BIOS actually padded, because every
+    mov si, vs_s_rpadok             ; number below is true of one stride or
+    cmp byte [vs_padok], 0          ; the other and the reader cannot tell
+    jne .padsay                     ; them apart from the probe counts
+    mov si, vs_s_rpadno
+.padsay:
+    call vs_puts
+.nopad:
 
     mov si, vs_s_rraw           ; the raw write first: everything below is
     call vs_puts                ; meaningless if the memory is not there
@@ -1691,7 +1881,7 @@ vs_save:
 ; last address in the framebuffer.
 ; =============================================================================
 vs_probes:
-    times 15 * 5 db 0           ; built by vs_geom, never written here: the
+    times 24 * 5 db 0           ; built by vs_geom, never written here: the
                                 ; coordinates depend on a geometry that is not
     dw 0xFFFF                   ; known until the mode has been set
 
@@ -1699,12 +1889,13 @@ vs_probes:
 ; strings
 ; =============================================================================
 vs_s_banner:
-    db 13, 10, 'os8088 VBESET - can mode 0104h be SET, and does the', 13, 10
-    db 'renderer work once it is? (SPEC.md 39.28.2)', 13, 10, 13, 10, 0
+    db 13, 10, 'os8088 VBESET - can a planar VBE mode be SET, and does', 13, 10
+    db 'the renderer work once it is? (SPEC.md 39.28.2, 39.29)', 13, 10, 13, 10, 0
 vs_s_ver:       db 'VBE version ', 0
 vs_s_mem:       db '   memory ', 0
 vs_s_memu:      db ' x 64KB', 13, 10, 0
-vs_s_geo:       db 'mode 0104h: ', 0
+vs_s_geo:       db 'mode ', 0
+vs_s_geo2:      db 'h: ', 0
 vs_s_bpp:       db ' bpp ', 0
 vs_s_planes:    db ' planes ', 0
 vs_s_model:     db ' model ', 0
@@ -1726,28 +1917,62 @@ vs_s_strad2:    db ' - ROWS STRADDLE the boundary', 13, 10, 0
 vs_s_ready:
     db 13, 10, '1  set VBE 0104h - the question', 13, 10
     db '2  set plain VGA 12h - THE CONTROL, same code, known-good mode', 13, 10
+    db '3  set VBE 0106h and PAD the scan line to 256 bytes (AX=4F06h)', 13, 10
     db 'Esc leave the mode alone', 13, 10, 13, 10
     db 'In graphics, press any key to come back.', 13, 10, 0
+vs_s_padq:
+    db 13, 10, 'AX=4F06h BL=02h: asking for a 256-byte logical scan line', 13, 10, 0
+vs_s_padax:     db '  AX ', 0
+vs_s_padbx:     db '  bytes/line ', 0
+vs_s_padcx:     db '  pixels/line ', 0
+vs_s_paddx:     db '  lines that fit ', 0
+vs_s_padok:
+    db 'PADDED: the stride is 256, so 65536/256 = 256 rows a bank and a', 13, 10
+    db 'boundary falls BETWEEN rows. Every number below is that stride.', 13, 10, 0
+vs_s_padno:
+    db 'AX=4F06h REFUSED. Plenty of BIOSes implement it for packed modes', 13, 10
+    db 'only. 0106h is then unreachable this way: drawing below is at the', 13, 10
+    db 'card stride, where a boundary falls INSIDE a row.', 13, 10, 0
+vs_s_padrd:
+    db 'AX=4F06h answered 004Fh and set a DIFFERENT length (above). A', 13, 10
+    db 'rounded stride is not a padded one - only a power of two divides', 13, 10
+    db '65536, and nothing else keeps the boundary between rows.', 13, 10, 0
+vs_s_padsh:
+    db 'It set the stride and the picture no longer fits the card: DX is', 13, 10
+    db 'under YRes. 1280x1024 padded wants 1MB across four planes.', 13, 10, 0
+vs_s_novroom:
+    db 13, 10, 'vs_probes overflowed: this mode has more bank boundaries', 13, 10
+    db 'than the table has room for. Raise it - the picture would have', 13, 10
+    db 'been drawn from coordinates read out of the strings.', 13, 10, 0
 vs_s_setfail:   db 13, 10, 'AX=4F02h REFUSED the mode: AX=', 0
 vs_s_setfail2:
-    db 13, 10, 'The BIOS listed 0104h and will not set it. That IS the', 13, 10
-    db 'answer: this card cannot be driven at 1024x768 planar.', 13, 10, 0
+    db 13, 10, 'The BIOS listed that mode and will not set it. That IS the', 13, 10
+    db 'answer: this card cannot be driven in it, whatever it offers.', 13, 10, 0
 vs_s_novbe:     db 'No VBE here: AX=4F00h returned no VESA signature.', 13, 10, 0
-vs_s_nomode:    db 'AX=4F01h gave mode 0104h no resolution: it is absent.', 13, 10, 0
+vs_s_nomode:    db 'AX=4F01h gave that mode no resolution: it is absent.', 13, 10, 0
 vs_s_unsup:
-    db 'attr bit 0 is CLEAR: the BIOS lists 0104h and the card does', 13, 10
+    db 'attr bit 0 is CLEAR: the BIOS lists that mode and the card does', 13, 10
     db 'not support it. Nothing below would mean anything.', 13, 10, 0
-vs_s_notplanar: db 'MemoryModel is not 3: this 0104h is not planar.', 13, 10, 0
+vs_s_notplanar: db 'MemoryModel is not 3: that mode is not planar.', 13, 10, 0
 vs_s_nowin:     db 'WinGranularity is 0: no windowed memory to bank through.', 13, 10, 0
 vs_s_nostride:  db 'BytesPerScanLine is unusable: nothing can be addressed.', 13, 10, 0
 vs_s_badgran:   db 'WinGranularity is not a power of two up to 64KB.', 13, 10, 0
 vs_s_rhdr:
     db 13, 10, 'os8088 VBESET - the verdict', 13, 10
     db '===========================', 13, 10, 13, 10, 0
-vs_s_rset:      db 'AX=4F02h set VBE mode 0104h: OK', 13, 10, 0
+vs_s_rset:      db 'AX=4F02h set VBE mode ', 0
+vs_s_rset2:     db 'h: OK', 13, 10, 0
+vs_s_rpadok:
+    db 'AX=4F06h padded the scan line to 256 bytes: the banking below is', 13, 10
+    db 'four banks with the boundaries between rows.', 13, 10, 0
+vs_s_rpadno:
+    db 'AX=4F06h did NOT pad (see above). Everything below is at the', 13, 10
+    db "card's own stride, which os8088's renderer could not drive.", 13, 10, 0
 vs_s_rctl:
     db 'CONTROL RUN: int 10h set plain VGA 12h, 640x480.', 13, 10
-    db 'This says nothing about 0104h - it says whether the CODE works.', 13, 10, 0
+    db 'This says nothing about any VBE mode - it says whether the CODE', 13, 10
+    db 'works. A test only ever seen to FAIL cannot tell a bad card from', 13, 10
+    db 'bad code, which is why this arm is not optional.', 13, 10, 0
 vs_s_rbank:
     db 'The bank switch is in that count: three of those probes are the', 13, 10
     db 'rows either side of a 64KB granule boundary.', 13, 10, 0
@@ -1775,6 +2000,16 @@ vs_s_bye:       db 13, 10, 'Left the mode alone. Power off.', 13, 10, 0
 ; variables - this is -f bin, so everything needs a real initialiser
 ; =============================================================================
 vs_setax    dw 0
+vs_qmode    dw VS_MODE          ; WHICH mode this run is about - vs_query,
+                                ; the mode set and the report all read it, so
+                                ; there is one answer to "which arm is this"
+vs_pass2    db 0                ; AUTORUN: the second arm has been entered
+vs_bndy     dw 0                ; vs_geom's walk over the bank boundaries
+vs_padax    dw 0                ; AX=4F06h's four answers, parked before the
+vs_padbx    dw 0                ; segment re-anchor can eat them
+vs_padcx    dw 0
+vs_paddx    dw 0
+vs_padok    db 0                ; ...and whether they amounted to a pad
 vs_colour   db 0
 vs_xorm     db 0
 vs_i        db 0

@@ -18,7 +18,13 @@ is never going to open it.
 import sys
 
 LBA = 100           # tests/vbeset's VS_LOGSEC
-SECS = 8            # ...and VS_LOG / 512
+SECS = 8            # ...and VS_LOG / 512, which it now actually is: this read
+                    # 8 sectors while VS_LOG was 2048 for as long as there was
+                    # one arm, so the two agreed by luck. The AUTORUN build
+                    # runs TWO arms into one transcript and VS_LOG went to
+                    # 4096 to hold them, which is what the comment says. KEEP
+                    # THEM EQUAL - a reader short of the log silently truncates
+                    # the LAST arm, which is the one a new run was taken for
 
 
 def main():

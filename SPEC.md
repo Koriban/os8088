@@ -76291,19 +76291,83 @@ be reported as not having it at all. Both halves are proven by mutation:
 with `VP_MAXM` cut to 4 under QEMU, `0104h` prints no row and the verdict
 still finds it.
 
-Measured under QEMU's `std` VGA, 2026-10-03 — VBE 3.0, 16MB, and `0104h`
-present with attribute bit 0 set:
+##### 39.28.0.1 The stride column, and the `use` column
+
+**`BytesPerScanLine` was not on the report for the first three revisions of
+it**, and it is the field every refusal here turns on. A width is not a
+substitute: a card is free to pad its scan line, and one that does reports
+the same width and behaves completely differently — which is not a
+hypothetical, see §39.29.13. Until the column existed, a field report could
+not be used to predict what `VBE.DRV` would accept, and the one number that
+decides it was being inferred from `width / 8`.
+
+**And the report scores every mode now.** The `use` column is
+`drivers/vbe/vbe.asm`'s own `vb_attach`, run over the list instead of over
+one constant: `y`, or the letter of the first rule that refused. A mode this
+machine cannot use is worth less than the *reason*, and "not planar" is a
+different answer from "the stride puts a bank boundary inside a row".
+
+| | the rule that refused |
+|---|---|
+| `y` | none — `VBE.DRV` would take this mode |
+| `a` | `attr` bit 0 clear: listed by the BIOS, not supported by the card |
+| `m` | `MemoryModel` ≠ 3 — **every packed 256-colour and direct-colour mode** |
+| `p` | planar but not 4bpp (a 1bpp planar mode is a real entry, see below) |
+| `g` | granule zero, not a power of two, or above 64KB |
+| `s` | stride neither a power of two ≤ 128 nor single-bank |
+| `b` | more than four banks — `vbe_cut_run`'s own `.bnd` bound |
+| `v` | `stride × h × 4` exceeds the `TotalMemory` 4F00h reported |
+| `n` | planar, 4bpp and usable, and **no bigger than mode 12h** |
+| `w` | narrower than 640, or a width that is not whole bytes |
+
+`b`, `v`, `w` and `n` are not in the shipped driver, because that driver asks
+for ONE mode and a rule only bites a list. They are in the instrument first
+on purpose: this is where the predicate is proved, on real cards, before any
+of it is resident. `WinSize` is reported and **not** judged, because
+`vb_attach` does not judge it either — a 32KB window under a 64KB granule
+would break `vbe_bank` on both sides of that fence, and closing it is a
+change to the pair rather than to one of them.
+
+**`n` was put there by the instrument's own first run** and is the finding
+that matters most here. A VBE mode list is not only the VESA numbers: a mode
+number with bit 8 clear is a VGA/OEM one, and a BIOS may list those too.
+QEMU enumerates `000Eh`, `0010h`, `0012h` and `006Ah`. **`0012h` passed every
+other rule** — planar, 4bpp, stride 80, one bank — and taking it would have
+given the machine a VESA path to the mode it already draws natively. A
+widest-wins pick would never have chosen it; a Display page listing every
+`y` would have offered it.
+
+Measured under QEMU's `std` VGA, 2026-10-21 — VBE 3.0, 16MB, 79 modes at 640
+wide or better, of which **70 `m`, 3 `n`, 2 `p`, 1 `s` and 3 `y`**:
 
 ```
-mode   width height bpp mdl gran wsize attr
-0102     800    600   4   3   64    64 003B
-0104    1024    768   4   3   64    64 003B
-0105    1024    768   8   4   64    64 00BB
+mode   width height bpp mdl gran wsize attr stride use
+0102     800    600   4   3   64    64 003B    100  y
+0104    1024    768   4   3   64    64 003B    128  y
+0105    1024    768   8   4   64    64 00BB   1024  m
+0106    1280   1024   4   3   64    64 003B    160  s
+0111     640    480  16   6   64    64 00BB   1280  m
+000E     640    200   4   3   64    64 003B     80  n
+0011     640    480   1   3   64    64 003B     80  p
+0012     640    480   4   3   64    64 003B     80  n
+006A     800    600   4   3   64    64 003B    100  y
+
+usable planar modes        3
+the widest of them      0104
 ```
 
-`mdl` 3 is planar and 4 is packed, so the pair at 1024x768 is exactly the
-choice described above. This settles nothing about real hardware — it
-establishes only that the probe reads a VBE correctly.
+Every letter above is earned by a real row rather than a contrived one.
+`0111h` is worth reading twice: its `bpp` column says **16**, and that is
+sixteen *bits* per pixel — direct colour, model 6 — not sixteen colours. It
+is the row most easily mistaken for the 640x480x16 this renderer wants, and
+**no such VBE mode exists**: the VESA list runs from 640x480x256 (`0101h`)
+straight to 800x600x16 (`0102h`), because every VGA already has 640x480x16
+as mode 12h and there was nothing to standardise. `006Ah` is the other way
+round — an OEM number for a mode the VESA list also carries, which is
+exactly what only an enumeration finds.
+
+This settles nothing about real hardware; it establishes that the probe reads
+a VBE correctly and that the predicate runs.
 
 #### 39.28.1 The answer from the Satellite 4025CDT — `0104h` is there
 
@@ -76344,18 +76408,37 @@ available.
 straddle a bank**, which is the §39.28 argument confirmed against the real
 list rather than assumed:
 
-| mode | bytes/row/plane | rows per 64KB | |
-|---|---:|---:|---|
-| 12h 640x480 | 80 | 819.20 | straddles — but the whole plane is 38,400 bytes, so it never banks at all |
-| `0102` 800x600 | 100 | 655.36 | straddles |
-| **`0104` 1024x768** | **128** | **512.00** | **exact** |
-| `0106` 1280x1024 | 160 | 409.60 | straddles |
+| mode | bytes/row/plane | plane | rows per 64KB | |
+|---|---:|---:|---:|---|
+| 12h 640x480 | 80 | 38,400 | 819.20 | **one bank** — nothing to straddle |
+| `0102` 800x600 | 100 | **60,000** | 655.36 | **one bank** — nothing to straddle |
+| **`0104` 1024x768** | **128** | 98,304 | **512.00** | 2 banks, boundary **between** rows |
+| `0106` 1280x1024 | 160 | 163,840 | 409.60 | 3 banks, boundary **inside** row 409 |
 
-`0106h` is supported too and is the tempting one — it is bigger and it is
-planar — but it has 800x600's defect, so taking it would mean teaching every
+**THIS TABLE SAID `0102` STRADDLED, AND IT DOES NOT.** The row above it
+carried the counter-argument from the first draft — mode 12h's 819.20 is just
+as inexact, and the note said *"the whole plane is 38,400 bytes, so it never
+banks at all"* — and the same sentence was never applied one row down.
+800x600 is **60,000 bytes a plane**, under 65,536, so there is no second bank
+for a boundary to fall into. A mode banks or it straddles; it cannot do both,
+and the quotient is only interesting once there is more than one bank. The
+`plane` column is here so the question cannot be asked without the number
+that answers it.
+
+So `0102h` is usable and was written off, and the conclusion that followed —
+*"1024x768 is not merely the biggest safe mode; on this hardware it is the
+only one"* — was wrong about this card. `tests/vbeprobe`'s `use` column
+(§39.28.0.1) scores it `y`, which is the whole reason that column exists:
+this verdict had been reached by hand, written down, and then stopped being
+questioned.
+
+**`0106h` is the one that really straddles**, and it is the tempting one —
+bigger, planar, and supported here. Taking it at 160 would mean teaching every
 primitive about a boundary inside a row instead of teaching `gfx_rowbase`
-(§39.3.1) alone about banks. 1024x768 is not merely the biggest safe mode; on
-this hardware it is the *only* one.
+(§39.3.1) alone about banks. §39.29.13 is the way round that, and §39.29.13.1
+is the measurement that undercuts even this row: a card is free to pad its
+scan line, and the one in `vm/vbe486` reports `0106h` at stride **256**, which
+is bank-clean. 160 is what `width / 8` predicts, not what a BIOS must report.
 
 A plane there is 98,304 bytes, so the framebuffer spans two banks and a
 fraction — one switch for most of a full-screen pass. The card has 2MB and
@@ -77534,6 +77617,100 @@ It is a ONE-OFF edit and deliberately not a knob: the arm it would keep
 assembling is a kernel that cannot draw, and the only machines that can run
 it are 86Box and the Satellite. The two lines above are the whole of it, kept
 here so the next person repeats the experiment instead of re-deriving it.
+
+#### 39.29.13 `0106h`, and asking the BIOS to pad the scan line
+
+`1280x1024x16` is planar, the cards here list it, and the arithmetic refuses
+it: 1280 pixels is **160 bytes a row**, 65536/160 is 409.6, so a bank
+boundary falls **inside row 409**. Everything in the resident half turns on
+the carry out of `add di, [vid_stride]` *being* the crossing (§39.29.1), and
+a stride that does not divide 65536 makes that false on every row.
+
+**`AX=4F06h BL=02h` is the way round it that costs the renderer nothing.**
+Set the *logical* scan line to 256 bytes while the visible width stays 1280:
+256 divides 65536, so it is 256 rows a bank, **four banks exactly** for 1024
+rows, and boundaries between rows. `vbe_cut_run`'s `.bnd` loop already walks
+"at most four", which is the bound this needs and not one more. The cost is
+VRAM — 256 x 1024 x 4 planes is 1MB — and nothing else.
+
+Whether a BIOS will do that **in a planar mode** is not answerable from a
+datasheet, so `tests/vbeset` grew a third arm that asks it on the card. It is
+in `vbeset` and not in `vbeprobe` for a reason that is not a preference:
+`4F06h` acts on the *current* mode, so asking it means setting one, and
+§53.7 forbids an `int 10h` mode set outside `fsx_mode` — which is the whole
+argument for `vbeset` being a bootable floppy that is not an os8088 disk.
+
+**All four returned registers are read, and the status alone is not the
+answer.** `AX` is the status, `BX` the bytes a scan line it actually set,
+`CX` the pixels that came to, `DX` the scan lines that now fit in VRAM. The
+pass is `BX` = 256 **and** `DX` >= YRes, and the first run proved the second
+half is load-bearing:
+
+| | `AX` | `BX` | `CX` | `DX` | |
+|---|---|---:|---:|---:|---|
+| QEMU, Bochs VBE 3.0 | `004F` | 256 | 2048 | **0** | set it, and nothing fits |
+| 86Box, Trident TGUI9440, VBE 1.2 | `004F` | 256 | 2048 | 2048 | padded |
+
+**QEMU answered `004Fh` and set the stride and reported that zero scan lines
+fit.** A check of `AX` alone would have called that a pass and drawn into a
+surface the card had just said it could not hold.
+
+##### 39.29.13.1 The Trident pads it ITSELF, and that is why the stride column exists
+
+The 86Box card reports `0106h` with **`BytesPerScanLine` = 256 already**, before
+`4F06h` is called at all — so on that card the mode is bank-clean natively and
+the pad call only confirms what was there. Every analysis of this mode up to
+here, including §39.28.1's own table, derived the stride from `width / 8` and
+got 160. **For this card that was never true.**
+
+That is the whole argument for §39.28.0.1's stride column in one measurement:
+the field reports taken before it cannot answer what any of those cards would
+actually have done, because the deciding number was inferred and not read. The
+NeoMagic's `0106h` stride is still unknown for exactly that reason.
+
+##### 39.29.13.2 Probing every boundary — and the fixture that did not paint them
+
+`vs_geom` placed its three bank probes at the **first** boundary only, which
+was the whole truth while `0104h` was the only mode here: two banks, one
+boundary. A padded `0106h` has four banks and **three**, and a bank select
+that worked at row 256 and failed at 512 would have read back clean.
+
+Generalising the probe alone produced **13 of 19**, with boundaries 2 and 3
+"failing" and the card innocent: `vs_draw` still stopped painting after the
+first set of lines, so three probes a boundary were reading rows nothing had
+drawn. **A probe on an unpainted row is indistinguishable from a broken bank
+select**, and it fails in the direction that looks like a finding. The paint
+loop and the probe loop are now the same walk, and `vs_geom` checks its own
+table bound rather than trusting the count — a mode with more boundaries than
+the table has room for would otherwise write its coordinates over the strings
+and draw a wrong picture, which is the same class of failure one level down.
+
+With both loops walking every boundary, on 86Box's Trident, 2026-10-21:
+
+| arm | mode | stride | banks | readback |
+|---|---|---:|---:|---|
+| 1 | `0104h` | 128 | 2 | **13 of 13** |
+| 3 | `0106h`, padded | 256 | 4 | **19 of 19** |
+
+Arm 1 is the control for the change itself — it is §39.29.9's own figure,
+unmoved — and arm 3 is the finding: **1280x1024x16 reads back clean across
+all three bank boundaries**, through the same Set/Reset, Bit Mask and XOR ALU
+paths `0104h` uses, with no change to the carry identity the renderer is
+built on. What that does *not* establish is the NeoMagic, whose bank register
+is elsewhere (§39.29.8.2) and whose `0106h` stride has never been read.
+
+##### 39.29.13.3 One disk, both questions
+
+86Box's Trident is the only card in this tree that enters `0104h` at all, so a
+run on it is expensive enough to be worth asking twice. The `AUTORUN` build
+now takes arm 1, saves, and re-enters at `vs_run` with the transcript intact
+to take arm 3 — one floppy carrying both modes' answers, and a save after each
+pass so a machine that hangs in the second still yields the first. `VS_LOG`
+went 2048 -> 4096 to hold them (one report is most of 2048 by itself) and
+`VS_SECS` 20 -> 24. `tools/os88vbelog.py` already read 8 sectors while
+`VS_LOG` was 2048, so the two now agree for the first time; keep them equal,
+because a reader short of the log silently truncates the LAST arm, which is
+the one a new run was taken for.
 
 ### 39.30 Force Color — a VGA BIOS that decided "monochrome" at power-on (`kern_big` only)
 

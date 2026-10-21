@@ -11330,7 +11330,7 @@ $(BUILD)/vbeprobeboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
 # 13h, no relocation, geometry out of the BPB): it loads the first file in the
 # data area, which is what --kernel lays down, so nothing new had to be
 # written to boot this.
-VS_SECS := 20
+VS_SECS := 24
 
 $(BUILD)/vbeset.bin: tests/vbeset/vbeset.asm Makefile | $(BUILD)
 	$(NASM) -f bin -w+error -o $(BUILD)/vbeset0.bin tests/vbeset/vbeset.asm

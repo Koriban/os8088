@@ -26,8 +26,21 @@
 ; 64KB window holds exactly 512 of those rows - so a bank boundary falls
 ; BETWEEN rows and never inside one. gfx_rowbase already turns a row number
 ; into an address and is the one place that would have to learn about banks.
-; 800x600 is the harder mode, not the easier one: 100 bytes a row divides
-; 65536 into 655.36, so a row there straddles.
+; 800x600 looks like the harder mode and is not: 100 bytes a row divides
+; 65536 into 655.36, so a boundary WOULD fall inside a row - but the whole
+; plane is 60,000 bytes, which is under 65,536, so there is no second bank for
+; one to fall into. A mode banks or it straddles; it cannot do both. 1280x1024
+; is the one that really straddles: 160 bytes a row, 163,840 a plane, and the
+; boundary lands inside row 409.
+;
+; --- and the report SCORES every mode now ------------------------------------
+;
+; The `use` column is drivers/vbe/vbe.asm's own vb_attach, run over the list
+; instead of over one constant: y, or the letter of the first rule that
+; refused. That is the whole point of the column - a mode this machine cannot
+; use is worth less than the REASON it cannot, and "not planar" (every packed
+; 256-colour and direct-colour mode) is a different answer from "the stride
+; puts a bank boundary inside a row".
 ;
 ; So the rows this report is for are, in order of how much they decide:
 ;
@@ -56,15 +69,35 @@
 
 VP_INFO     equ 512             ; the VbeInfoBlock AX=4F00h fills
 VP_MODE     equ 256             ; ...and the ModeInfoBlock AX=4F01h does
-VP_MAXM     equ 64              ; modes reported, most interesting first. The
+
+; --- the two blocks' fields, named once -------------------------------------
+; They were literals at every use (vp_minfo + 18, + 27, ...), which is how the
+; stride came to be missing: nothing named it, so nothing noticed.
+VI_MEM      equ 18              ; VbeInfoBlock: word, total memory in 64KB
+VPI_ATTR    equ 0               ; word  ModeAttributes
+VPI_GRAN    equ 4               ; word  WinGranularity, KB
+VPI_WSIZE   equ 6               ; word  WinSize, KB
+VPI_STRIDE  equ 16              ; word  BytesPerScanLine
+VPI_XRES    equ 18              ; word
+VPI_YRES    equ 20              ; word
+VPI_BPP     equ 25              ; byte  BitsPerPixel
+VPI_MODEL   equ 27              ; byte  MemoryModel: 3 planar, 4 packed, 6 dir
+VP_MAXM     equ 128             ; modes reported, most interesting first. The
                                 ; list a BIOS returns can be long and most of
-                                ; it is text modes and 320x200
+                                ; it is text modes and 320x200.
+                                ; 64 UNTIL A RUN NEEDED MORE: QEMU lists 79
+                                ; modes at 640 wide or better and the four
+                                ; usable ones past row 64 were counted and
+                                ; never shown, which is a report that disagrees
+                                ; with itself. It costs nothing but rows -
+                                ; nothing is indexed by it - and the arena
+                                ; holds 380 lines
 
 ; The row columns. These are the character positions of vp_s_hdr's own words
 ; and are only correct together with it - a heading that says one thing over a
 ; number that means another is the failure this names them to avoid.
-;        'mode   width height bpp mdl gran wsize attr'
-;         0      7     13     20  24  28   33    39
+;        'mode   width height bpp mdl gran wsize attr stride use'
+;         0      7     13     20  24  28   33    39   44     51
 VP_C_W      equ 7
 VP_C_H      equ 13
 VP_C_BPP    equ 20
@@ -72,6 +105,14 @@ VP_C_MDL    equ 24
 VP_C_GRAN   equ 28
 VP_C_WSZ    equ 33
 VP_C_ATTR   equ 39
+VP_C_STR    equ 44              ; BytesPerScanLine - THE FIELD EVERY REFUSAL
+                                ; BELOW TURNS ON, and this report did not have
+                                ; it. The stride is what admits 0104h and
+                                ; rejects 0106h, and a width is not a
+                                ; substitute: a card is free to pad, and one
+                                ; that does reports the same width and behaves
+                                ; completely differently
+VP_C_USE    equ 52              ; ...centred under 'use' at 51
 
 ; -----------------------------------------------------------------------------
 ; vp_entry - package entry (SPEC.md 20.2)
@@ -195,11 +236,20 @@ vp_probe:
     call bl_sline
     mov si, vp_s_hdr2
     call bl_sline
+    mov si, vp_s_hdr3
+    call bl_sline
+    mov si, vp_s_hdr4
+    call bl_sline
+    mov si, vp_s_hdr5
+    call bl_sline
     les di, [vp_info + 14]      ; the far pointer to the mode list
     mov [vp_lptr], di
     mov [vp_lseg], es
     mov word [vp_cnt], 0
     mov word [vp_found], 0
+    mov word [vp_nok], 0
+    mov word [vp_best], 0
+    mov word [vp_bestw], 0
 .each:
     mov es, [vp_lseg]
     mov di, [vp_lptr]
@@ -222,7 +272,7 @@ vp_probe:
     je .no104
     mov si, vp_s_yes
     call bl_sline
-    jmp short .done
+    jmp short .tally
 .no104:
     mov si, vp_s_no
     call bl_sline
@@ -230,7 +280,11 @@ vp_probe:
     call bl_sline
     mov si, vp_s_no3
     call bl_sline
-    jmp short .done
+.tally:
+    call vp_tally               ; ...and the 0104h verdict is no longer the
+    jmp short .done             ; whole of it: a card can be useless for the
+                                ; mode this was written to ask about and still
+                                ; have one this renderer could run in
 .novbe:
     mov si, vp_s_novbe
     call bl_sline
@@ -247,6 +301,179 @@ vp_probe:
     ret
 
 ; -----------------------------------------------------------------------------
+; vp_tally - how many modes the use column said yes to, and the widest
+; Preserves every register.
+; -----------------------------------------------------------------------------
+vp_tally:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    call bl_blank
+    mov si, vp_l_nok
+    mov ax, [vp_nok]
+    xor dx, dx
+    mov cx, 4
+    call bl_kv
+    cmp word [vp_nok], 0
+    je .none
+    call bl_lclr                ; the mode NUMBER is hex, so this one is laid
+    mov si, vp_l_best           ; out by hand rather than through bl_kv's
+    xor di, di                  ; decimal field
+    call bl_lput
+    mov di, BL_C_N
+    mov ax, [vp_best]
+    call bl_hex4
+    call bl_lcommit
+    jmp short .out
+.none:
+    mov si, vp_s_nonep
+    call bl_sline
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vp_judge - would VBE.DRV take the mode now in vp_minfo? (module internal)
+; out:      AL = the verdict letter: 'y', or the rule that refused it first
+; clobbers: AX (flags). BX, CX, DX survive.
+;
+; THE RULES ARE drivers/vbe/vbe.asm's vb_attach, IN ITS ORDER AND FOR ITS
+; REASON: attr bit 0 clear means the card does not support what the BIOS
+; advertised, and nothing after it means anything.
+;
+; THREE OF THEM ARE NOT IN THE SHIPPED DRIVER - 'b', 'v' and 'w' - because
+; that driver asks for ONE mode, and a rule only bites a list. They are here
+; FIRST on purpose: this is the instrument the predicate is meant to be proved
+; in, on real cards, before any of it is resident.
+;
+; 'n' IS NOT A REFUSAL BY THE CARD, it is one by us, and it was put here by
+; this instrument's own first run. A VBE mode list is not only the VESA
+; numbers: QEMU enumerates 000Eh, 0010h, 0012h and 006Ah below 0100h, because
+; a mode number with bit 8 clear is a VGA/OEM one and a BIOS may list those
+; too. 0012h passed every rule above - it is planar, 4bpp, stride 80, one
+; bank - and taking it would have given the machine a VESA path to the mode
+; it already draws natively. The widest-wins pick would never have chosen it;
+; a Display page listing every 'y' would have offered it.
+;
+; WinSize is reported and NOT judged, because vb_attach does not judge it
+; either. A 32KB window under a 64KB granule would break vbe_bank on both
+; sides of that fence, and closing it is a change to the PAIR - so it is named
+; here rather than silently fixed on one side.
+; -----------------------------------------------------------------------------
+vp_judge:
+    push bx
+    push cx
+    push dx
+    test word [vp_minfo + VPI_ATTR], 0x0001
+    jz .a                       ; listed by the BIOS, not supported by the card
+    cmp byte [vp_minfo + VPI_MODEL], 3
+    jne .m                      ; THE ONE THAT REJECTS EVERY 256-COLOUR AND
+                                ; DIRECT-COLOUR MODE, in one compare: packed
+                                ; is model 4 and direct is model 6, and
+                                ; neither is an extension of a four-bit planar
+                                ; renderer
+    cmp byte [vp_minfo + VPI_BPP], 4
+    jne .p
+    mov ax, [vp_minfo + VPI_GRAN]
+    or ax, ax
+    jz .g                       ; no windowed memory to bank through
+    cmp ax, 64
+    ja .g                       ; a granule above 64KB cannot be addressed
+                                ; through a real-mode window at all
+    mov bx, ax
+    dec bx
+    test ax, bx
+    jnz .g                      ; more than one bit set: not a power of two
+    mov ax, [vp_minfo + VPI_XRES]
+    cmp ax, 640
+    jb .w                       ; narrower than the mode we already have
+    test al, 7
+    jnz .w                      ; a planar row is whole bytes or it is nothing
+    cmp ax, 640                 ; ...and NO BIGGER than it is its own answer,
+    ja .big                     ; which this report found rather than predicted
+    cmp word [vp_minfo + VPI_YRES], 480 ; (see the 'n' note above). 640x480 or
+    jbe .n                              ; under IS mode 12h, by whatever number
+.big:                                   ; the BIOS files it under
+    mov ax, [vp_minfo + VPI_STRIDE]
+    or ax, ax
+    jz .s
+    mul word [vp_minfo + VPI_YRES]      ; DX:AX = one plane's whole extent
+    mov bx, dx                          ; banks = that, rounded up to 64KB
+    or ax, ax
+    jz .whole
+    inc bx
+.whole:
+    cmp bx, 1
+    je .sok                     ; ONE BANK: there is no boundary, so where one
+                                ; would have fallen cannot matter. This is the
+                                ; arm that admits 0102h, and the arm mode 12h
+                                ; has always taken without anybody writing it
+                                ; down
+    mov ax, [vp_minfo + VPI_STRIDE]
+    mov cx, ax                  ; banked: the stride must divide 65536, which
+    dec cx                      ; for a 16-bit stride is "a power of two", or
+    test ax, cx                 ; a boundary lands INSIDE a row and the
+    jnz .s                      ; resident half's carry test fires mid-row
+    cmp ax, 128
+    ja .s                       ; above 128 a window holds under 512 rows
+.sok:
+    cmp bx, 4
+    ja .b                       ; vbe_cut_run's .bnd loop walks at most four
+    mov ax, [vp_minfo + VPI_STRIDE]     ; and the card must HOLD it: four
+    mul word [vp_minfo + VPI_YRES]      ; planes of the extent, in 64KB blocks
+    shl ax, 1
+    rcl dx, 1
+    jc .v                       ; past 32 bits: no card on this bus has it
+    shl ax, 1
+    rcl dx, 1
+    jc .v
+    or ax, ax
+    jz .round
+    inc dx
+.round:
+    cmp dx, [vp_info + VI_MEM]
+    ja .v
+    mov al, 'y'
+    jmp short .out
+.a:
+    mov al, 'a'
+    jmp short .out
+.m:
+    mov al, 'm'
+    jmp short .out
+.p:
+    mov al, 'p'
+    jmp short .out
+.g:
+    mov al, 'g'
+    jmp short .out
+.w:
+    mov al, 'w'
+    jmp short .out
+.n:
+    mov al, 'n'
+    jmp short .out
+.s:
+    mov al, 's'
+    jmp short .out
+.b:
+    mov al, 'b'
+    jmp short .out
+.v:
+    mov al, 'v'
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; vp_one - AX = a mode number: query it and emit a row if it is worth one
 ; -----------------------------------------------------------------------------
 vp_one:
@@ -260,9 +487,16 @@ vp_one:
     mov [vp_mode], ax
     push cs
     pop es
+    mov di, vp_minfo            ; CLEARED FIRST, for the reason the
+    mov cx, VP_MODE             ; VbeInfoBlock above is cleared: a BIOS that
+    xor al, al                  ; answers 004Fh and fills nothing would be
+.clr:                           ; judged on the LAST mode's numbers. That was
+    mov [es:di], al             ; a wrong ROW before the use column and is a
+    inc di                      ; wrong VERDICT now, which is worse - a row is
+    loop .clr                   ; read with suspicion and a letter is not
     mov di, vp_minfo
-    mov cx, ax
-    mov ax, 0x4F01
+    mov cx, [vp_mode]           ; ...and the mode comes back from memory, the
+    mov ax, 0x4F01              ; clear above having spent AX and CX
     int 0x10
     cmp ax, 0x004F
     jne .out
@@ -274,6 +508,21 @@ vp_one:
     ; list does not page the verdict off the screen, and a verdict computed
     ; only from the printed rows would answer "no 0104h" for a BIOS that
     ; lists it at position 65. The cap costs rows, never the answer.
+    ; THE VERDICT IS TAKEN HERE, above the cap, for the same reason the 0104h
+    ; test below is: a tally computed only from the PRINTED rows is a tally
+    ; about the cap. The cap costs rows, never an answer.
+    call vp_judge
+    mov [vp_use], al
+    cmp al, 'y'
+    jne .judged
+    inc word [vp_nok]
+    mov ax, [vp_minfo + VPI_XRES]       ; the widest usable mode is the one a
+    cmp ax, [vp_bestw]                  ; driver that enumerated would pick
+    jbe .judged
+    mov [vp_bestw], ax
+    mov ax, [vp_mode]
+    mov [vp_best], ax
+.judged:
     cmp word [vp_mode], 0x0104
     jne .cap
     test byte [vp_minfo], 1
@@ -328,7 +577,14 @@ vp_one:
     mov di, VP_C_ATTR
     mov ax, [vp_minfo]          ; ModeAttributes
     call bl_hex4
-    call bl_lcommit
+    mov di, VP_C_STR
+    mov ax, [vp_minfo + VPI_STRIDE]     ; BytesPerScanLine, per PLANE in a
+    mov cx, 6                           ; planar mode - which is what makes it
+    xor dx, dx                          ; directly comparable with mode 12h's
+    call bl_dec                         ; 80
+    mov al, [vp_use]                    ; the verdict, written straight into
+    mov [bl_lscr + VP_C_USE], al        ; the scratch (bl_lscr + BL_C_FLAG's
+    call bl_lcommit                     ; own idiom)
 .out:
     pop es
     pop di
@@ -346,8 +602,14 @@ vp_s_t1:    db 'os8088 VBEPROBE - what modes this video BIOS offers', 0
 vp_s_t2:    db '===================================================', 0
 vp_l_ver:   db 'VBE version (hex-ish)', 0
 vp_l_mem:   db 'video memory (64KB)', 0   ; must stay under BL_C_N = 24
-vp_s_hdr:   db 'mode   width height bpp mdl gran wsize attr', 0
+vp_s_hdr:   db 'mode   width height bpp mdl gran wsize attr stride use', 0
 vp_s_hdr2:  db '  mdl: 3 planar 4 packed 6 direct. attr bit0 = supported.', 0
+vp_s_hdr3:  db '  use: y driver would take it. a card says unsupported,', 0
+vp_s_hdr4:  db '  m not planar, p not 4bpp, g granule, w width, s stride,', 0
+vp_s_hdr5:  db '  b over 4 banks, v video memory, n no bigger than 12h.', 0
+vp_l_nok:   db 'usable planar modes', 0     ; must stay under BL_C_N = 24
+vp_l_best:  db 'the widest of them', 0
+vp_s_nonep: db 'No planar mode here is usable - the use column says why.', 0
 vp_s_trunc: db '(list truncated at VP_MAXM modes - the rest are unread)', 0
 vp_s_vhdr:  db '-- the verdict --', 0
 vp_s_yes:   db '0104h (1024x768x16 PLANAR) is present AND supported.', 0
@@ -363,7 +625,7 @@ vp_tpl:
 
 %include "benchlib.inc"
 
-VP_O_INFO   equ 16
+VP_O_INFO   equ 24              ; 16 until the verdict needed four more words
 VP_O_MINFO  equ VP_O_INFO + VP_INFO
 VP_BSS_OWN  equ ((VP_O_MINFO + VP_MODE + 511) / 512) * 512
 
@@ -378,6 +640,10 @@ vp_lseg     equ os88_image_end + 4
 vp_cnt      equ os88_image_end + 6
 vp_found    equ os88_image_end + 8
 vp_mode     equ os88_image_end + 10
+vp_use      equ os88_image_end + 12     ; byte: vp_judge's letter for this row
+vp_nok      equ os88_image_end + 14     ; modes the letter was 'y' for
+vp_best     equ os88_image_end + 16     ; ...the widest of them, and its width
+vp_bestw    equ os88_image_end + 18
 vp_info     equ os88_image_end + VP_O_INFO
 vp_minfo    equ os88_image_end + VP_O_MINFO
     BL_BSS os88_image_end + VP_BSS_OWN
