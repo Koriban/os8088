@@ -224,7 +224,8 @@ kf_ontimer:
     mov [kf_win], si
     cmp byte [kf_watch], 0      ; only while a bracket has been run: before
     je .out                     ; that there is nothing to watch for
-    mov si, kf_l_tmr
+    mov al, 4
+    call kf_lab
     call kf_row
     call bl_paint
 .out:
@@ -295,6 +296,53 @@ kf_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
+; kf_modeline - say what OSAPI_FSX_MODE did, on the arm that asked it
+; -----------------------------------------------------------------------------
+kf_modeline:
+    push si
+    cmp byte [kf_setmode], 0
+    je .out                     ; the same-mode arm never asked
+    mov si, kf_s_modeok
+    cmp byte [kf_modefail], 0
+    je .say
+    mov si, kf_s_modeno
+.say:
+    call bl_sline
+    cmp byte [kf_modefail], 0
+    je .out
+    mov si, kf_s_modeno2
+    call bl_sline
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; kf_lab - AL = 0..4 (pre/in/end/after/timer) -> SI = the label for THIS ARM
+; Preserves every register but SI.
+;
+; THE ROWS HAVE TO NAME THEIR ARM. The first field run came back with three
+; brackets in it, logged as three identical pre-fs/in-fs/after triples, and
+; nothing in the report said which were `same mode` and which were `mode 13h`
+; - which is the entire comparison this package exists to make. The answer
+; then had to be asked of the operator's memory, which is precisely what a
+; written report is for not having to do.
+; -----------------------------------------------------------------------------
+kf_lab:
+    push ax
+    push bx
+    xor ah, ah
+    cmp byte [kf_setmode], 0
+    je .have
+    add ax, 5                   ; the second row of the table
+.have:
+    mov bx, ax
+    shl bx, 1
+    mov si, [bx + kf_labtab]
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; kf_bracket - one OSAPI_FSX_RUN, sampled on both sides of it
 ;
 ; [kf_setmode] picks the arm. THE PAIR IS THE EXPERIMENT (see the head of this
@@ -309,20 +357,29 @@ kf_bracket:
     push cx
     push si
     mov byte [kf_watch], 1      ; the timer starts sampling from here on
-    mov si, kf_l_pre
+    mov byte [kf_modefail], 0   ; THIS bracket's answer, not the last one's
+    xor al, al
+    call kf_lab
     call kf_grab                ; the LAST row before the screen is taken
     mov ax, kf_fsmain
     mov bx, [kf_win]
     xor cx, cx                  ; no worker to keep alive
     call OSAPI_FSX_RUN
     pushf
-    mov si, kf_l_post
+    mov al, 3
+    call kf_lab
     call kf_grab                ; ...and the FIRST one after it is given back
     popf
     jnc .flush
     mov si, kf_s_nofsx          ; refused: nothing was taken and nothing drawn
     call bl_sline
 .flush:
+    call kf_modeline            ; WHETHER THE MODE SET TOOK, which the first
+                                ; field build recorded in [kf_modefail] and
+                                ; then never printed. Without it a `mode 13h`
+                                ; arm that was REFUSED reads exactly like one
+                                ; that worked - and the two arms are then the
+                                ; same experiment run twice
     call kf_flush               ; every record since, turned into report lines
     pop si                      ; - and NOT one of them written from inside the
     pop cx                      ; bracket, which is the next routine's whole
@@ -363,7 +420,8 @@ kf_fsmain:
     mov byte [kf_modefail], 1   ; refused - the row after says so, and the
 .nomode:                        ; bracket still runs, which keeps the arms
                                 ; comparable
-    mov si, kf_l_in1
+    mov al, 1
+    call kf_lab
     call kf_grab                ; inside, as early as the bracket allows
 
     call OSAPI_GET_TICKS        ; ...hold it for KF_HOLD, on the system clock
@@ -374,7 +432,8 @@ kf_fsmain:
     cmp ax, KF_HOLD
     jb .wait
 
-    mov si, kf_l_in2
+    mov al, 2
+    call kf_lab
     call kf_grab                ; and again, just before handing it back
     pop si
     pop cx
@@ -729,13 +788,29 @@ kf_s_adis:  db 'auxoff=', 0
 kf_s_nofsx: db 'OSAPI_FSX_RUN REFUSED: the screen was not free. Nothing taken.', 0
 
 kf_l_start: db 'start', 0
-kf_l_pre:   db 'pre-fs', 0
-kf_l_in1:   db 'in-fs', 0
-kf_l_in2:   db 'in-fs end', 0
-kf_l_post:  db 'after', 0
-kf_l_tmr:   db 'timer', 0
 kf_l_now:   db 'now', 0
 kf_l_key:   db 'key', 0
+
+; Two rows of five, indexed by [kf_setmode] - see kf_lab. Ten characters is
+; the label column's whole width (KF_C_21 is 11), so these are as long as
+; they go.
+kf_labtab:
+    dw kf_l_p0, kf_l_i0, kf_l_e0, kf_l_a0, kf_l_t0
+    dw kf_l_p1, kf_l_i1, kf_l_e1, kf_l_a1, kf_l_t1
+kf_l_p0:    db 'pre same', 0
+kf_l_i0:    db 'in same', 0
+kf_l_e0:    db 'end same', 0
+kf_l_a0:    db 'aft same', 0
+kf_l_t0:    db 'tmr same', 0
+kf_l_p1:    db 'pre 13h', 0
+kf_l_i1:    db 'in 13h', 0
+kf_l_e1:    db 'end 13h', 0
+kf_l_a1:    db 'aft 13h', 0
+kf_l_t1:    db 'tmr 13h', 0
+
+kf_s_modeok:  db 'OSAPI_FSX_MODE set 320x200x256 - the kernel owes a real restore.', 0
+kf_s_modeno:  db 'OSAPI_FSX_MODE REFUSED. This arm changed NO mode, so it is the', 0
+kf_s_modeno2: db 'same experiment as the other one - do not read them as a pair.', 0
 
 kf_about:   db 'Kbd/Mouse FSX', 0
 
