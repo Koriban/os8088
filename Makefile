@@ -1796,7 +1796,7 @@ OS88PKGB := python3 tools/os88pkg.py $(if $(PKGZ),--compress-if=$(PKGZBFMT))
 # TAKING ONE OFF does not rebuild that package (its rule no longer names the
 # stamp): `rm build/<pkg>.o88` once, by hand.
 LZBPKGS := artful audio browser calc chart gorillas telnet thewire cyclone dotdel missile sheet solitair \
-           tamegram tank texpad wireball smallapp/calc smallapp/tank
+           tamegram tank texpad wireball wireflet smallapp/calc smallapp/tank
 PKGZBSTAMP := $(BUILD)/.pkgzb$(if $(PKGZ),-$(PKGZ)-$(PKGZBFMT))-$(shell printf '%s' '$(LZBPKGS)' | cksum | cut -d' ' -f1)
 
 # ...AND A STAMP, for exactly SBSTAMP's reason one paragraph up: none of the
@@ -16906,8 +16906,8 @@ wirefleettest: wirefleetdisk $(IMG)
 wirefleet: $(BUILD)/wireflet.o88
 $(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
-$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $< -o $@
+$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKGB) $< -o $@
 apps/wirefleet/art/tiles.inc: apps/wirefleet/art/ships-source.png tools/wirefleet_assets.py
 	python3 tools/wirefleet_assets.py
 wirefleetdisk: $(BUILD)/wireflet.img $(BUILD)/wireflet720.img $(BUILD)/wireflet120.img $(BUILD)/wireflet360.img
