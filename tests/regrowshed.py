@@ -106,6 +106,7 @@ import os88geom                                             # noqa: E402
 import os88sym                                              # noqa: E402
 import os88ui                                               # noqa: E402
 import dispapps                                             # noqa: E402
+import fatdel
 import os88flush                                             # noqa: E402
 
 ARM = ("KERN_SMALL",)
@@ -200,6 +201,14 @@ _FIX = _BOOT[:-4] + ".txt"
 atexit.register(lambda: [os.unlink(p) for p in (_BOOT, _FIX)
                          if os.path.exists(p)])
 shutil.copyfile(_T.img("small360.img"), _BOOT)
+# ...AND MAKE ROOM ON THE SCRATCH COPY. TOOBIG.TXT is 24 clusters and the
+# small system disk had 20 free: WireFleet (#278, merged 2026-10-20) is 26
+# clusters of GAMES/ on it and this row failed on the FIXTURE - `os88fat:
+# need 24 cluster(s), 20 free` - before the machine ever booted. The copy is
+# scratch and a game is nothing this row needs, so one goes; the alternative
+# is tuning BIG_BYTES down towards Note Pad's ceiling, which is the margin
+# the comment below exists to keep.
+fatdel.delete(_BOOT, "GAMES/WIREFLET.O88")
 _LINE = b"regrowshed: a file Note Pad must refuse as TOO BIG, not load.\r\n"
 with open(_FIX, "wb") as f:
     f.write((_LINE * (BIG_BYTES // len(_LINE) + 1))[:BIG_BYTES])
