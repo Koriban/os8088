@@ -11316,6 +11316,52 @@ $(BUILD)/vbeprobeboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vbeprobe.o88 $(APPDATAFOLDER)
 
+# KBDFSX - what the KEYBOARD and the MOUSE are doing either side of a
+# full-screen bracket (tests/kbdfsx). NOT a benchmark and not a gate: it is a
+# field instrument for docs/FIELD-NOTES.md's "the keyboard dies after a
+# full-screen app" on a Toshiba Satellite 4025CDT running the VBE desktop -
+# keyboard dead, mouse alive, the desktop still usable with the pointer.
+#
+# ITS SAVE IS ON THE MENU, reachable with the mouse alone, which is the whole
+# reason it can report at all on a machine whose keyboard has just died.
+$(BUILD)/kbdfsx.bin: tests/kbdfsx/kbdfsx.asm tests/benchlib.inc \
+                     apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/kbdfsx/kbdfsx.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/kbdfsx/kbdfsx.asm
+	@echo "kbdfsx: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/kbdfsx.o88: $(BUILD)/kbdfsx.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/kbdfsx.bin -o $@
+
+$(BUILD)/kbdfsx.img: $(BUILD)/kbdfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/kbdfsx.o88
+
+# ...and the bootable one, vbeprobeboot's shape and for its reason: the
+# Satellite has ONE floppy drive, so "boot the system disk, then swap" is not
+# a procedure that machine can follow. THIS ONE CARRIES THE VBE SYSTEM.CFG -
+# the fault is reported on the VBE desktop, so the disk that goes to the field
+# must come up in it without anyone being asked to set it first.
+$(BUILD)/kbdfsxboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+                         $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) \
+                         $(FACELIC) $(BUILD)/vbecfg/system.cfg \
+                         $(BUILD)/kbdfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vbecfg/system.cfg \
+		$(BUILD)/kbdfsx.o88 $(APPDATAFOLDER)
+
+.PHONY: kbdfsx
+kbdfsx: $(BUILD)/kbdfsx.img $(BUILD)/kbdfsxboot.img
+	@echo "kbdfsx: build/kbdfsxboot.img - ONE bootable floppy for the field"
+	@echo "        machine: the VBE desktop with KBDFSX.O88 at the ROOT of"
+	@echo "        A:. Open the drive icon, not the desktop."
+	@echo "        build/kbdfsx.img - the B: disk, for"
+	@echo "        \`make test TESTAPPS=build/kbdfsx.img\` under an emulator."
+	@echo "        Record menu: two Full Screen arms (with and without a mode"
+	@echo "        set), Sample Now, Read 8042, Save Report. SAVE IS ON THE"
+	@echo "        MENU so it works with no keyboard; it writes KBDFSX.TXT."
+
 # VBESET - can mode 0104h actually be SET, and does the renderer work in it
 # (SPEC.md 39.28.2). vbeprobe above asked the BIOS to describe itself; this
 # writes pixels and reads them back.
