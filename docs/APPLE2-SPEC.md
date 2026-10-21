@@ -3388,6 +3388,42 @@ counters are in memory now and the file says why.
 whose first job is a measured size line. Machine > Configure Slots... greys in
 the meantime with section 10.3's fact.
 
+#### 14.0 THE MEASURED SIZE LINE - the follow-up's first job, taken
+
+Taken from the package header of the tree's own `build/apple2.o88`
+(`os88pkg.image_unwrap`, then `+8` for the image and `+10` for the bss - the
+two fields `OS88_HEADER` writes), 2026-10-21:
+
+| | bytes |
+|---|---:|
+| resident image | **30,386** |
+| bss | **13,938** |
+| **resident total** | **44,324** of 61,440 - **17,116 spare** |
+| `APPLE2.OVL` | 3,403 |
+| the file on disk | 37,684, ROM and overlay parts included, both LZ4 |
+
+**Disk II's ~1,200 resident bytes fit with 15,916 to spare, and the 55,000
+split trigger is 10,676 away.** The gate of section 15.3 is passed and none of
+section 15.4's levers is needed.
+
+**AND THIS DOES NOT AGREE WITH SECTION 15.0.4, which says 53,284.** The bss
+figures are close (13,938 against 14,340) and the **image differs by 8,558**,
+on a tree that carries every file section 15.5 names - `a2disk.c` and
+`a2nib.inc` included - and whose binary is newer than all of them. The
+Makefile's own accounting agrees with the measurement here and not with
+15.0.4: its comment beside `APPLE2DISK` reads *"apple2.o88 37,684 (the ROM and
+the overlay parts included, both LZ4)"*, which is this file byte for byte.
+Section 15.4 also says **53,114** where 15.0.4's table says 53,284, so that
+figure disagrees with itself by 170 bytes as well.
+
+**What follows from it, and it is the only part that matters:** the follow-up
+opens from **17,116 spare and not 1,716**, so the sentence in 15.0.4 - *"with
+516 bytes over, which is the number that wave opens on rather than a
+comfortable one"* - is **not the number this wave opens on**. Nobody should
+pull a lever against it. The 15.0.4 column stays as the record of what was
+reported then; this is what the tree measures now, and SPEC.md's own rule is
+to re-measure rather than quote.
+
 **The wave keeps its number** in `docs/APPLE2-PORT-PLAN.md` - it is wave 6,
 marked "follow-up PR" - because renumbering a wave that is written down is how
 a plan and a branch stop agreeing.

@@ -764,6 +764,18 @@ FAST = [
         " objects in one frame when CS_NVIS is 32 and drops the rest silently. "
         "SOAK and not fast: CLEAR SKIES is ONE package, so this belongs "
         "beside a change to it - `soak -k 'cs*'`"),
+    Row("a2dsk", "soak", py("tests/unit/t_a2dsk.py"), 0.3,
+        "APPLE2-SPEC 14: tools/a2dsk.py builds the Disk II gate's fixture, "
+        "because NO .DSK SHIPS - the images people run are other people's. "
+        "It checks the 143,360-byte size, the image against its own pinned "
+        "sha256, and every logical sector under BOTH sector orders. What it "
+        "actually protects is that pair of tables: DOS 3.3's and ProDOS's "
+        "agree on logical 0 and 15 and on nothing between, so a reader using "
+        "the wrong one reads plausible bytes from the wrong place and only "
+        "an assertion like this ever says so. "
+        "SOAK and not fast, csart's reason one package along: APPLE2 is ONE "
+        "package, so this belongs beside a change to it - `soak -k 'a2*'`"),
+
     Row("csart", "soak", py("tests/unit/t_csart.py"), 0.6,
         "apps/skies/csart.inc is what tools/csart.py generates (SPEC.md 88.10):"
         " the launcher's two 1bpp bands are drawn by the tool and checked in,"
