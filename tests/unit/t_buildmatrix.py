@@ -174,6 +174,14 @@ KNOBS = [
     ("diskcnt",     ["DISKCNT=1"]),
     ("diskal",      ["DISKAL=1"], "boot360.bin"),
     ("dirtyram",    ["DIRTYRAM=1"]),
+    # 39.29's TWO, and they were in no row until the first whole-tier
+    # soak: NOVBEROW is the A/B the per-row bank test's removal was
+    # measured against (39.29.10.5) and VBEDIAG is the kernel driving
+    # its own window (39.29.12, kernel/vbediag.inc). Nothing assembled
+    # either arm, and VBEDIAG's include had meanwhile broken
+    # kernsize.py's whole measurement pass without a gate noticing.
+    ("novberow",    ["NOVBEROW=1"]),
+    ("vbediag",     ["VBEDIAG=1"]),
     ("fsnostamp",   ["FSNOSTAMP=1"]),
     ("redrawfull",  ["REDRAWFULL=1"]),
     ("heapcompact", ["HEAPCOMPACT=0"]),
