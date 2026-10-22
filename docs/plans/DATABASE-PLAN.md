@@ -1,3 +1,15 @@
+> **SUPERSEDED on the FILE FORMAT, 2026-10-21, same session.** The
+> owner asked to target dBASE III specifically - real `.DBF`/`.NDX`
+> compatibility and the actual command language, not an invented
+> format. `DBASE3-PLAN.md` is the live plan.
+>
+> **What still stands, unchanged, and is cited from there rather than
+> repeated:** section 1 (cluster-aligned `READ_AT`/`WRITE_AT`, no
+> byte-offset random access, page size read once at mount) and
+> section 2 (no file lock anywhere in the kernel - checked, not
+> assumed). Those are facts about THIS KERNEL and do not change with
+> the file format sitting on top of them.
+
 # A true database engine — dBASE's shape, not a worksheet's
 
 **The decision this plans:** a standalone record-database ENGINE and its own
@@ -159,7 +171,7 @@ report-writer shape, not a free-form layout tool.
 
 ## 7. First measurement, before story 1
 
-The same discipline §14.0 and the works plan's §7 both used: **measure
+The same discipline that took APPLE2-SPEC §14.0 and WORKS-PLAN.md's own §7 used: **measure
 before designing around a guess.** Two numbers, both on MartyPC at 4.77MHz:
 
 - **A page write's cost** at each shipped cluster size (512B floppy, the

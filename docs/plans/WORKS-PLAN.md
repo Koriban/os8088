@@ -1,3 +1,9 @@
+> **DROPPED by the owner, 2026-10-21, same session.** Kept as the
+> record of why architecture C was chosen and what each shape costs,
+> in case an integrated suite is revisited later. The database half
+> of the idea is its own, live plan now: `DATABASE-PLAN.md`, in turn
+> superseded by `DBASE3-PLAN.md`.
+
 # An integrated works — AppleWorks' shape, not ClarisWorks'
 
 **The decision this plans:** a works suite built as **separate packages sharing
