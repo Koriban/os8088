@@ -11435,6 +11435,12 @@ sh_chart_paint:
     push di
     push bp
     push es
+    cmp byte [sh_chartdirty], 0         ; sh_repaint's hook leaves the byte SET
+    je .clean                           ; while this window is obscured, so a
+    call sh_chart_scan                  ; raise is the first paint that can
+    call sh_chart_render                ; show the change - Chart Gallery's
+    mov byte [sh_chartdirty], 0         ; type, or a cell edited meanwhile -
+.clean:                                 ; and it re-reads before it blits
     mov bx, si
     call OSAPI_WM_CONTENT               ; ax=content x, dx=content y
     mov [ch_bx1], ax                    ; borrow this scratch - safe here,
