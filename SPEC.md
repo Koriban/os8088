@@ -133592,6 +133592,22 @@ folds); past it the parse refuses with `#VALUE!` instead of running SP off the
 stack's floor into `.lowbss`, the same refusal shape too-deep cell recursion
 already has.
 
+**A level is not a size, so the stack is tested in BYTES first.** Measured on
+a 5150 (task 0's water, 0xCC fill): a `(` is 12 bytes, a resident call 55, a
+CHART.OVL door call (`LEN`, `TEXT`, ...) 72, a cold cell 51 to 90, and a
+pending operator up to 44 more that charges nothing - so `=SUM(B2)` five
+cells deep, ten units of twelve, ran task 0 into its canary and
+`sch_stkdie`. `sh_eval_cell` keeps `[sh_pstk0]`, SP at the SHALLOWEST fresh
+evaluation (118 bytes below the top on the paint path), and both it and
+`sh_pnest_enter` refuse - a nested cell as too deep, a recursion point with
+`#VALUE!` - once SP is more than `SH_PSTK_MAX` = 206 bytes below that: a
+check at 324, plus the deepest one-function tail after it (`PROPER`, 132),
+plus IRQ0's 48 on whatever stack it lands, is the 512. It is §26.10.3's
+`LNK_SPMIN` idea inside a package, which cannot name `STK0_BOT`. Three
+nested text functions fit and a fourth refuses; a cold chain of plain
+references refuses at its sixth cell, a chain of `SUM`s at its fourth.
+`SH_PNEST_MAX` stays as the grammar's own cap.
+
 **A range folds by walking the RECORD ARRAY, not the rectangle.** The array
 is sorted by (packed row, col) — §81.1 — so `sh_foldrange` binary-searches the
 rectangle's first corner once and scans forward until the packed row passes
@@ -136436,6 +136452,13 @@ On the way back, **the declared type decides, not the spelling**: a `C` field
 holding `007` is text, because dBASE said it is character data and guessing
 would silently turn a part number into the number 7. A deleted record — flag
 byte `2Ah` — is skipped.
+
+**A `C` field is bounded by the buffer it passes through, at both ends.** A
+label goes out as at most `SH_NUMBUF_MAX` = 40 characters (`sh_dbf_cellstr`
+renders into `sh_numbuf`, and past it lie the claims' segment words), and a
+field comes back as at most `SH_EDITMAX` = 63 (`sh_dbf_getfield` stops
+storing at `sh_rwsrc`'s room), while the record pointer still advances by
+the width the file declared, up to 255.
 
 **The header's date stamp is zero, and that is a bug rather than a
 limitation.** dBASE III keeps the last-update YY/MM/DD in bytes 1..3. This
@@ -140023,7 +140046,9 @@ and Word's (§68.2.1):
 - **`sh_mbank`** runs between `sh_mdrop_geo` and the first draw and calls
   `OSAPI_GFX_SAVE` over the panel's rect. Its size is §13.16.4's formula,
   planes × rows × byte columns, with the plane count from
-  `OSAPI_WM_DISPLAY` (never `OSAPI_VIDEO`, §39.16.4). The bottom is clamped
+  `OSAPI_WM_DISPLAY` (never `OSAPI_VIDEO`, §39.16.4) and taken AS IT COMES,
+  §120.5's package rule: DH ≥ 4 is DH planes, 8 or 16 being the bytes a
+  column on a packed display, and only 1 is one plane. The bottom is clamped
   to the display's last row, in `[sh_mbky2]`.
 - **`sh_mclose`** writes it back with `OSAPI_GFX_REST` and redraws the bar
   so the title is plain again. The full `sh_repaint` it used to make is now
@@ -140032,9 +140057,14 @@ and Word's (§68.2.1):
   is the old path, never a new one.
 - **The buffer is the staging claim** (`sh_stgseg`, 32 KB), not a claim of
   its own: SHEET holds `MEM_OWNER_MAX`'s eight (§81.94.1) and §50.3 keeps
-  its claims in the entry proc. Staging holds nothing between commands -
-  every one of its seventy uses is scratch inside one command or one paint,
-  and Copy and Paste only stage through it: the clipboard is the OS's. A
+  its claims in the entry proc. Staging holds nothing a command reads back
+  without rebuilding it - its uses are scratch inside one command or one
+  paint, and Copy and Paste only stage through it: the clipboard is the
+  OS's. The one exception is the chart's staged series, which
+  `sh_chart_render` rasterizes from staging offset 0, so Data > Chart
+  Gallery... - reached only through the Data panel this bank has just
+  written over them - sets `[sh_chartdirty]` and lets `sh_repaint` rescan
+  rather than re-rendering what is there. A
   menu is closed, and its bank written back, before the picked command runs.
   Data's panel, measured by the gate, is 25 byte columns × 148 rows:
   3,700 bytes on CGA and 14,800 on a four-plane display, against 32,768.

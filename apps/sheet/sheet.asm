@@ -603,10 +603,18 @@ SH_PNEST_MAX equ 12                  ; the parser's own nesting budget (81.3):
                                       ; charged by sh_pnest_enter. 12 is what
                                       ; the deepest SH_EVAL_MAXDEPTH chain of
                                       ; folds needs (one call + one depth per
-                                      ; level); each level holds tens of bytes
-                                      ; of task 0's 512-byte stack, so the
-                                      ; cap is sized to that stack, not to the
-                                      ; grammar
+                                      ; level). It is the GRAMMAR's cap: a
+                                      ; level is 2 to 106 bytes of task 0's
+                                      ; 512-byte stack, so the stack has a
+                                      ; test of its own, in bytes, below
+SH_PSTK_MAX  equ 206                 ; 81.3: the bytes a parse may take below
+                                      ; [sh_pstk0], which sits 118 below task
+                                      ; 0's top on a 5150. Measured there: a
+                                      ; check at 118 + 206 = 324, plus the
+                                      ; deepest one-function tail after it
+                                      ; (PROPER, 132; 140 allowed), plus
+                                      ; IRQ0's 48 on whatever stack it lands,
+                                      ; is 512
 
 ; --- stage 1.6: per-cell text formatting -----------------------------------
 ; Packed into the cell record's byte at +5 (previously unused padding, see
@@ -8780,8 +8788,10 @@ sh_mclose:
 
 ; -----------------------------------------------------------------------------
 ; sh_mbank - 81.98: save what the dropdown is about to cover, in the staging
-; claim - which holds nothing between commands (Copy and Paste stage through
-; it and the clipboard is the OS's), and no command runs while a menu is up.
+; claim - which holds nothing a command reads back without rebuilding it
+; (Copy and Paste stage through it and the clipboard is the OS's; the
+; chart's staged series are there too, so Chart Gallery rescans rather than
+; re-rendering them), and no command runs while a menu is up.
 ; [sh_mbanked] = 1 with the rect's bottom, clamped to the display, in
 ; [sh_mbky2]; or 0 when anything refused, and sh_mclose repaints as before.
 ; The size is SPEC.md 13.16.4's: planes * rows * byte columns, the plane
@@ -8820,11 +8830,12 @@ sh_mbank:
     mul bx                            ; DX:AX = one plane
     pop bx                            ; BH = bits per pixel
     cmp bh, 4
-    jne .one
-    shl ax, 1                         ; four planes
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
+    jb .one                           ; 4 planes - or 8 or 16 BYTES a column
+    or dx, dx                         ; on a packed display (SPEC.md 120.5):
+    jnz .out                          ; DH AS IT COMES, never == 4
+    mov cl, bh
+    xor ch, ch
+    mul cx                            ; DX:AX = planes * one plane
 .one:
     or dx, dx
     jnz .out
@@ -10005,12 +10016,17 @@ sh_ps_valtext:
     mov di, sh_editbuf
     mov es, [sh_txtseg]
 .acopy:
+    cmp di, sh_editbuf + SH_EDITMAX   ; sh_editbuf's 63 and the NUL: a label
+    jae .acut                         ; another reader stored can be longer
     mov al, [es:si]
     mov [di], al
     inc si
     inc di
     or al, al
     jnz .acopy
+    jmp short .valdone
+.acut:
+    mov byte [di], 0
 .valdone:
     call sh_ps_mysheet                ; EVERY path leaves it, not just the
 .count:                               ; empty one - the caller commits to the
@@ -14646,10 +14662,11 @@ sh_fdlg_apply0:
     mov [ch_type], ax
     cmp word [sh_chartwin], 0         ; no chart window yet: the type is still
     je .galdone                       ; remembered, and the next Chart Column
-    SHOUT sh_chart_render              ; uses it
-    mov si, [sh_chartwin]
-    SHOUT sh_chart_paint
-.galdone:
+    mov byte [sh_chartdirty], 1       ; uses it. A RESCAN, not a re-render:
+.galdone:                             ; the pulldown that opened this dialog
+                                      ; banked its pixels over the staged
+                                      ; values (sh_mbank), so sh_repaint's
+                                      ; hook re-reads them, renders, paints
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
@@ -23991,6 +24008,13 @@ sh_biff_workbook:
     jz .next
     cmp byte [sh_trunc], 0
     jne .next
+    mov ax, di                        ; SHEETHDR 15, BOF 10, this sheet's
+    add ax, 15 + 10 + 4 + 4           ; EOF and the workbook's: none of them
+    cmp ax, SH_STAGE_MAX              ; is checked as it goes out
+    jbe .shroom
+    mov byte [sh_trunc], 1            ; no room for this sheet: say so
+    jmp .next
+.shroom:
 
     mov ax, 0x008F                    ; SHEETHDR
     call sh_biffw
@@ -24091,8 +24115,9 @@ sh_biff_cells:
     ; cells, in 1/256ths of a character. The sheet is sh_wsheet's, which
     ; sh_colwidth reads through sh_cursheet - impersonated, as sh_biff_ixfe
     ; does for the border table
-    push word [sh_cursheet]
-    mov ax, [sh_wsheet]
+    mov byte [sh_trunc], 0           ; here, not after the ROWs: a COLWIDTH
+    push word [sh_cursheet]          ; refused for room must survive to the
+    mov ax, [sh_wsheet]              ; caller's message
     mov [sh_cursheet], ax
     xor bx, bx
 .cw:
@@ -24100,6 +24125,12 @@ sh_biff_cells:
     SHOUT sh_colwidth
     cmp ax, [sh_defch]
     je .cwn
+    push ax
+    mov ax, di                       ; 8 of COLWIDTH and 4 of this sheet's
+    add ax, 8 + 4                    ; EOF: up to 256 of them is 2 KB, and
+    cmp ax, SH_STAGE_MAX             ; staging is the whole 32 KB claim
+    pop ax
+    ja .cwfull
     push ax
     mov ax, 0x0024                   ; COLWIDTH: first, last, width
     call sh_biffw
@@ -24116,6 +24147,10 @@ sh_biff_cells:
     inc bx
     cmp bx, 256
     jb .cw
+    jmp short .cwdone
+.cwfull:
+    mov byte [sh_trunc], 1
+.cwdone:
     pop word [sh_cursheet]
     ; ...and a ROW for every row of it not the standard height (81.60): the
     ; row, its first and one-past-last cell column (none are claimed), the
@@ -24169,7 +24204,6 @@ sh_biff_cells:
     dec cx
     jmp short .rh
 .rhd:
-    mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
 .rec:
     mov bx, [sh_wrow]
@@ -24458,7 +24492,10 @@ sh_biff_cells:
     mov ax, di
     add ax, 10                        ; BLANK is 4 of header and 6 of body
     cmp ax, SH_STAGE_MAX
-    ja .btdone                        ; out of staging: stop, as the cells do
+    jbe .btroom                       ; out of staging: stop, as the cells do,
+    mov byte [sh_trunc], 1            ; and SAY so, as they do - a dropped
+    jmp .btdone                       ; formatted cell is not a plain Saved
+.btroom:
     push cx
     push si
     mov es, [sh_bordseg]
@@ -31748,12 +31785,20 @@ sh_eval_cell:
     cmp word [sh_evaldepth], SH_EVAL_MAXDEPTH
     jae .toodeep
     cmp word [sh_evaldepth], 0        ; a FRESH evaluation starts clean; a
-    jne .depthok                      ; nested one must not, or a referenced
+    jne .nested                       ; nested one must not, or a referenced
     mov byte [sh_evalerr], 0          ; cell's error would be wiped on the way
     mov word [sh_sstk_sp], 0          ; back up. The string bank is reset with
-.depthok:                             ; it, so an error path that returned
-                                       ; early cannot leak a level into the
-                                       ; next formula
+    cmp sp, [sh_pstk0]                ; it, so an error path that returned
+    jbe .depthok                      ; early cannot leak a level into the
+    mov [sh_pstk0], sp                ; next formula. The SHALLOWEST fresh
+    jmp short .depthok                ; evaluation is the stack's anchor
+.nested:
+    mov ax, [sh_pstk0]                ; 81.3: and a nested one is tested in
+    sub ax, sp                        ; BYTES - a cold cell is 51 to 90 of
+    jb .depthok                       ; them, and five SUMs deep ran task 0
+    cmp ax, SH_PSTK_MAX               ; into its canary inside SH_PNEST_MAX
+    ja .toodeep
+.depthok:
     mov bx, [sh_evaldepth]
     inc word [sh_evaldepth]
     push bx                           ; this recursion level's buffer slot
@@ -32249,12 +32294,21 @@ sh_ppowcont:
 ; into .lowbss - silent corruption that fails later, somewhere unrelated.
 ; One counter charges every recursion point, with the cell depth folded in;
 ; over SH_PNEST_MAX the parse refuses with #VALUE! - the same refusal shape
-; sh_eval_cell's .toodeep already has.
+; sh_eval_cell's .toodeep already has. A LEVEL IS NOT A SIZE, though: a '('
+; is 12 bytes and a CHART.OVL door call 72, and a pending operator charges
+; nothing, so the stack itself is the first test - SP against [sh_pstk0],
+; SH_PSTK_MAX bytes down, as the kernel's LNK_SPMIN reads it (26.10).
 ; out: CF=1 refused (sh_evalerr raised, NOTHING charged - do not leave),
 ;      CF=0 charged - pair with exactly one sh_pnest_leave
 ; -----------------------------------------------------------------------------
 sh_pnest_enter:
     push ax
+    mov ax, [sh_pstk0]                ; the BYTES first: below the anchor
+    sub ax, sp                        ; sh_eval_cell keeps, past SH_PSTK_MAX
+    jb .room                          ; is past task 0's stack, whatever the
+    cmp ax, SH_PSTK_MAX               ; levels say (a door call alone is 72)
+    ja .full
+.room:
     mov ax, [sh_pnest]
     inc ax
     add ax, [sh_evaldepth]
@@ -36562,7 +36616,8 @@ section .text
 ; -----------------------------------------------------------------------------
 ; sh_ins_at - in: DI = where in sh_numbuf to insert, AL = the byte. Everything
 ; from DI to the NUL moves right one, the NUL included. The building block
-; both the thousands grouping and TEXT's leading zeros are made of.
+; both the thousands grouping and TEXT's leading zeros are made of. A string
+; already SH_NUMBUF_MAX long takes nothing: the byte is dropped.
 ; -----------------------------------------------------------------------------
 sh_ins_at:
     push ax
@@ -36579,10 +36634,12 @@ sh_ins_at:
     inc si
     jmp .flen
 .found:
-    mov di, si
-    inc di
-.shift:
-    mov al, [si]
+    cmp si, sh_numbuf + SH_NUMBUF_MAX ; full: the NUL is at the last byte,
+    jae .out                          ; and past it are the claims' segment
+    mov di, si                        ; words. Every caller inserts into
+    inc di                            ; sh_numbuf, so this one test bounds
+.shift:                               ; them all - TEXT's leading zeros cut
+    mov al, [si]                      ; at its 40, as sh_nf_putc's do
     mov [di], al
     cmp si, cx
     je .place
@@ -36592,6 +36649,7 @@ sh_ins_at:
 .place:
     mov di, cx
     mov [di], bl
+.out:
     pop di
     pop si
     pop cx
@@ -55320,8 +55378,8 @@ sh_dbf_cellstr:
 .text:
     mov si, [sh_curtoff]
     mov di, sh_numbuf
-    mov cx, 254
-    mov es, [sh_txtseg]
+    mov cx, SH_NUMBUF_MAX             ; sh_numbuf's room, never the field's:
+    mov es, [sh_txtseg]               ; past it are the claims' segment words
 .tc:
     mov al, [es:si]
     or al, al
@@ -55796,7 +55854,9 @@ sh_dbf_getfield:
     jnz .lead
 .copy:
     jcxz .trail
-    mov al, [es:si]
+    cmp di, sh_rwsrc + SH_EDITMAX     ; the file says the width, up to 255;
+    jae .trail                        ; sh_rwsrc holds 63 and the NUL, and SI
+    mov al, [es:si]                   ; is re-derived from the width below
     inc si
     mov [di], al
     inc di
@@ -56375,7 +56435,7 @@ section .text                          ; fragment, so nothing lands after this
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9333                     ; +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9335                     ; +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -56587,7 +56647,10 @@ sh_evaldepth  equ sh_evalerr + 2             ; sh_eval_cell's recursion depth
 sh_pnest      equ sh_evaldepth + 2           ; live parser recursion points -
                                              ; sh_pnest_enter's counter (81.3),
                                              ; balanced so it needs no reset
-sh_fbuf       equ sh_pnest + 2              ; SH_EVAL_MAXDEPTH * 64: one
+sh_pstk0      equ sh_pnest + 2              ; SP at the SHALLOWEST fresh
+                                             ; sh_eval_cell: the stack anchor
+                                             ; SH_PSTK_MAX is measured from
+sh_fbuf       equ sh_pstk0 + 2              ; SH_EVAL_MAXDEPTH * 64: one
                                              ; formula-text copy per
                                              ; recursion level (see
                                              ; sh_eval_cell), copied out of
