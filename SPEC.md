@@ -134479,8 +134479,13 @@ neither, so the extension typed into the file dialog is still what decides —
 *Normal* then `T.TXT` writes text.
 
 **Percent survives SYLK**: the `F` record's c1 is SYLK's own `%` code for
-it, and the reader maps `%` back. Borders and notes do not — SYLK as written
-here carries neither (§81.117).
+it, and the reader maps `%` back. **So do borders and notes**: `main`'s
+`sh_sylk_extras` is ported into `CHART.OVL` beside the writer — an
+`F;Xc;Yr;S<LRTBS>` record per bordered cell and a `C;Xc;Yr;A<text>` per note,
+skipped when the save is truncated — and the reader's `F` and `C` parsers
+take the `;S` and `;A` fields back, borders through `SH_BT_KEEP` so the
+protection and table bits are never the file's, notes through `sh_nt_set`
+(§81.119's door).
 
 ### 81.16 A formula must not wear the last cell it referenced
 
@@ -134545,17 +134550,21 @@ after the FIRST Format dialog because Number, Alignment and Font are the
 dialogs that walk the block. `SI` is reloaded from `[sh_ownwin]` before the
 repaint.
 
-#### 81.17.2 Border applies to the ANCHOR cell — the block walk is `main`'s
+#### 81.17.2 Border applies to the SELECTION too
 
-Border was the fourth command written before blocks existed: it reads and
-writes the anchor cell alone, so *Outline* on `C4:E6` frames `C4`. **In this
-fork it still does.** `main`'s `sh_bdlg_walk` does both halves over the block
-— each edge box meaning that side of the BLOCK, Shade every cell, a cell's
-*mask* the bits the dialog governs there, and the dialog opening on what the
-block already has — and the port is written and measured but NOT taken: it is
-141 bytes of packed `CHART.OVL`, and `office360.img` is full to its last
-cluster (§81.117). `sh_bdlg_apbord` writes the edges through `SH_BT_KEEP`, so
-the protection and table bits (§81.46, §81.114.7) are never the dialog's.
+Border was the fourth command written before blocks existed: it read and wrote
+the anchor cell alone, so *Outline* on `C4:E6` framed `C4`. `sh_bdlg_walk`,
+`main`'s and ported into `CHART.OVL`, does both halves over the block. **Each
+edge box means that side of the BLOCK** — Left is the left edge of the cells
+in its first column, Top the top edge of its first row — so Outline, which is
+all four, draws one frame round the block, and Shade means every cell. A
+cell's *mask* is the bits the dialog governs there (Shade, plus each block side
+it lies on); an inner edge set earlier is outside every mask and is kept, and
+so are `SH_BT_KEEP`'s protection and table bits (§81.46, §81.114.7), which no
+mask holds. The dialog opens on what the block already has: an edge box is
+ticked when every cell on that side carries it. A single cell is a 1x1 block
+whose four sides are its own, so the old behaviour is the special case. The
+walk keeps its bounds in a stack frame and costs no bss.
 
 **Left and top are drawn one pixel IN.** A cell's gridlines are its own first
 column and row, so a left or top edge drawn there landed on the gridline and
@@ -134563,13 +134572,13 @@ could not be seen — the frame Outline draws showed only its right and bottom
 sides, on one cell as on a block. Right and bottom were always visible because
 their pixel sits beside the *next* cell's gridline; `sh_drawborders` puts left
 and top beside this cell's own, so every edge is the same two-pixel line with
-gridlines on and one pixel with them off. That half IS taken: it is resident
-and two bytes smaller than what it replaced.
+gridlines on and one pixel with them off.
 
-`main`'s block meaning is Excel's for Outline and not for the four edge boxes
-— Excel draws Left on *every* cell of a block — and deliberately: the dialog
+This is Excel's meaning for Outline and not for the four edge boxes — Excel
+draws Left on *every* cell of a block — and that is deliberate: this dialog
 couples Outline to the four boxes (ticking it ticks them), so with Excel's
-meaning Outline on a block would rule every cell.
+meaning Outline on a block would rule every cell. One meaning for both is the
+one the dialog can show.
 
 #### 81.17.3 Percent multiplies by 100
 
@@ -138958,15 +138967,13 @@ whole reason this one exists.
 **THE FIRST OF THEM IS DONE — §81.118.** The 2026-10-20 merge of
 `1e3608d8..eea2d24a` raised `APP_MAX_SIZE` to `0xFE00` (§20.1.1) and the ask
 was the first thing that headroom bought, at 227 bytes of image and 38 of
-bss. The borders-and-notes WRITER is still owed — for **SYLK**. BIFF's half
-is §81.119's (and its borders were never missing, §81.117.1); Percent rides
-SYLK now (§81.15.1). SYLK's borders and notes are WRITTEN and not taken:
-`main`'s `sh_sylk_extras` and its `;S`/`;A` reader arms, ported into
-`CHART.OVL` beside the writers, measure 52,115 of `CH_OVKB`'s 52,224 bytes and
-**38,341 packed — 38 clusters where `CHART.OVL` has had 37**, on an
-`office360.img` already at 354 of 354. With §81.17.2's block walk the two cost
-about 520 packed bytes against 169 of room. What they wait on is §24.6.1's
-dated decision about that disk, not on code.
+bss. The borders-and-notes writer is done too: BIFF's half is §81.119's (and
+its borders were never missing, §81.117.1), and SYLK's — with Percent — is
+§81.15.1's, `main`'s `sh_sylk_extras` and its `;S`/`;A` reader arms ported
+into `CHART.OVL` at the review of PR #289 together with §81.17.2's block walk.
+The two took `CHART.OVL` to 52,373 bytes, so `CH_OVKB` 51 → **52**, and to 38
+clusters packed — which `office360.img` holds because the owner took
+`LAKE.JPG` off it the same day (§24.6.1).
 
 **WHY THEY WERE NOT IN THE FIRST MERGE, PLAINLY: SHEET HAD 46 RESIDENT BYTES**
 (§81.115, re-measured 2026-10-18 — image 52,105 + bss 9,289 of 61,440). Both

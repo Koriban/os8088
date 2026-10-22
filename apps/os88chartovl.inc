@@ -32,7 +32,11 @@
 ; in ch_ovdir/ch_ovdrv - that is where the .OVL lives, and the user is free to
 ; navigate away a moment later.
 ; =============================================================================
-CH_OVKB      equ 51                 ; the claim CHART.OVL is read into, KB.
+CH_OVKB      equ 52                 ; the claim CHART.OVL is read into, KB.
+                                    ; 52 at the review of PR #289: main's
+                                    ; SYLK borders/notes and the Border
+                                    ; dialog's block walk (81.17.2), ported
+                                    ; in, 52,372 of 51's 52,224.
                                     ; 48 for 81.102: the Note dialog and
                                     ; os88text.inc moved in, 47,364 bytes.
                                     ; 8 held the rasterizer alone; 82.16.9 put

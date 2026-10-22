@@ -14981,9 +14981,10 @@ sh_bdlg_close_r:                       ; the gate-lock recovery's own door
 section SH_MODSEC                      ; 81.71.5.1: the Border dialog
 
 ; -----------------------------------------------------------------------------
-; sh_bdlg_open - preselect from the selected cell's stored border byte
-; (sh_bt_get); a cell with no border record at all reads back as 0, same
-; "dialog still opens, OK on it is just a no-op" scope as sh_fdlg_open's.
+; sh_bdlg_open - preselect from what the SELECTION already has (sh_bdlg_walk's
+; GATHER, 81.17.2: a single cell is its stored byte); a cell with no border
+; record at all reads back as 0, same "dialog still opens, OK on it is just a
+; no-op" scope as sh_fdlg_open's.
 ; -----------------------------------------------------------------------------
 sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     push ax
@@ -15010,9 +15011,8 @@ sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     je .display
     cmp byte [sh_bdlg_kind], SH_BK_WORKSPACE
     je .workspace
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_get                     ; al = stored border byte
+    xor al, al                          ; GATHER over the selection: AL =
+    call sh_bdlg_walk                   ; the bits every cell's mask holds
     mov ah, al
     and ah, 0x1F
     mov bl, ah
@@ -15320,49 +15320,126 @@ sh_bdlg_label:
     ret
 sh_bdlg_apbord:
     push ax
-    push bx
-    push dx
-    push di                             ; DI is this table's record cursor and
-                                         ; two of the three paths below set it
-    mov al, [sh_bdlg_sel]
-    shr al, 1
-    and al, 0x1F
-    mov dl, al
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    or dl, dl
-    jz .clearit
-    SHOUT sh_bt_addcell
-    jc .out                             ; table full: silent no-op, same
-                                         ; scope limit as the main array's
-    push es
-    mov es, [sh_bordseg]
-    mov al, [es:di+4]
-    and al, SH_BT_KEEP                  ; THE PROTECTION BITS ARE NOT THIS
-    or al, dl                           ; DIALOG'S TO WRITE. This was a plain
-    mov [es:di+4], al                   ; store of the border bits, which was
-    pop es                              ; right while it owned the whole byte
-    jmp .out
-.clearit:
-    SHOUT sh_bt_findcell                 ; ...and clearing every border must not
-    jnc .out                            ; take the record away with them if the
-    push es                             ; cell is also unlocked or hidden
-    mov es, [sh_bordseg]
-    and byte [es:di+4], SH_BT_KEEP
-    mov ax, [es:di+4]                   ; the number format too (81.55)
-    pop es
-    or ax, ax
-    jnz .out                            ; something is still stored here
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_removecell
-.out:
+    mov ah, [sh_bdlg_sel]
+    shr ah, 1
+    and ah, 0x1F                        ; AH = the edges and Shade wanted
+    mov al, 1                           ; APPLY, over the whole selection
+    call sh_bdlg_walk                   ; (81.17.2)
     mov si, [sh_ownwin]
     SHOUT sh_repaint
-    pop di
-    pop dx
-    pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_bdlg_walk - Format > Border over the SELECTION (SPEC.md 81.17.2), main's
+; walk in this table's shape. Each edge box means that side of the BLOCK:
+; Left is the left edge of the cells in its first column, Top the top edge of
+; its first row, and so on, so Outline - all four - frames the block. Shade
+; means every cell. A single cell is a 1x1 block whose four sides are its own.
+;
+; A cell's MASK is the bits the dialog governs there (Shade, plus each block
+; side it lies on); bits outside it - an inner edge set earlier, and
+; SH_BT_KEEP's protection and table bits, which no mask holds - are kept.
+; in: AL = 0 GATHER: out AL = the bits set on EVERY cell whose mask holds
+;          them (what the dialog should open showing)
+;     AL = 1 APPLY: AH = the bits to write through every cell's mask, adding
+;          or removing border records; a record goes only when nothing at
+;          all is left in it (81.55's number format included), and a full
+;          table stops adding, silently, as the single-cell version did
+; The bounds live in a frame on the stack, so the walk costs no bss.
+; Preserves every register but AL.
+; -----------------------------------------------------------------------------
+sh_bdlg_walk:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    or al, al
+    jnz .ap
+    mov ah, 0x1F                        ; GATHER's accumulator starts full
+.ap:
+    mov cx, [sh_selcol]
+    mov dx, [sh_selcol2]
+    cmp cx, dx
+    jbe .cok
+    xchg cx, dx
+.cok:
+    mov si, [sh_selrow]
+    mov di, [sh_selrow2]
+    cmp si, di
+    jbe .rok
+    xchg si, di
+.rok:
+    mov bp, sp                          ; [bp-2] c1 [bp-4] c2 [bp-6] r1
+    push cx                             ; [bp-8] r2, then [bp-10] the mode
+    push dx                             ; and [bp-9] the bits - SS, which is
+    push si                             ; where a [bp] operand points
+    push di
+    push ax
+.row:
+    mov cx, [bp-2]
+.col:
+    mov ax, cx
+    mov bx, si
+    mov dl, SH_BORD_SHADE               ; DL = this cell's mask
+    cmp cx, [bp-2]
+    jne .m1
+    or dl, SH_BORD_LEFT
+.m1:
+    cmp cx, [bp-4]
+    jne .m2
+    or dl, SH_BORD_RIGHT
+.m2:
+    cmp si, [bp-6]
+    jne .m3
+    or dl, SH_BORD_TOP
+.m3:
+    cmp si, [bp-8]
+    jne .m4
+    or dl, SH_BORD_BOTTOM
+.m4:
+    SHOUT sh_bt_get                     ; AL = what the cell has now
+    mov dh, al
+    cmp byte [bp-10], 0
+    jne .apply
+    mov al, dl                          ; a bit outside the mask cannot veto,
+    not al                              ; so it reads as set
+    or al, dh
+    and [bp-9], al
+    jmp short .next
+.apply:
+    mov al, [bp-9]
+    xor al, dh
+    and al, dl                          ; AL = the governed bits that change
+    jz .next
+    xor dh, al                          ; DH = the cell's new byte
+    mov ax, cx
+    SHOUT sh_bt_addcell                 ; finds the record, or makes one
+    jc .next                            ; table full
+    mov es, [sh_bordseg]
+    mov [es:di+4], dh
+    cmp word [es:di+4], 0               ; no border, no protection, no number
+    jne .next                           ; format: the record is the default
+    SHOUT sh_bt_removecell
+.next:
+    inc cx
+    cmp cx, [bp-4]
+    jbe .col
+    inc si
+    cmp si, [bp-8]
+    jbe .row
+    mov al, [bp-9]                      ; GATHER's answer
+    add sp, 10                          ; the frame's five words
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -21900,11 +21977,12 @@ sh_wr_r1c1:
 ; all. A formatted cell's C (value) record is followed by a real SYLK F
 ; (formatting) record - "F;X<col>;Y<row>;F<c1><n><c2>[;K]" - using
 ; MultiPlan-era SYLK's actual format codes (stage 1.6): c1 is '$' for
-; Currency, '%' for Percent - SYLK's own percent code (81.15.1) - or 'G'
+; Currency, '%' for Percent - SYLK's own percent code (81.119.2) - or 'G'
 ; for everything else (General and Comma share 'G': real SYLK has no comma
 ; code of its own, so Comma instead sets the separate ;K "commas are set"
 ; flag), c2 is the real alignment code (G/L/C/R) matching this app's own
-; alignment 1:1. Real
+; alignment 1:1. Borders and notes follow the sheet's cells, from
+; sh_sylk_extras (81.119.2). Real
 ; SYLK, per the era's own documentation, has no bold/underline concept
 ; whatsoever - MultiPlan predates that - so neither persists here; this is
 ; the same "only persist what the real format actually has" rule DIF
@@ -22181,7 +22259,7 @@ sh_dowrite_sylk:
     mov al, '$'
     cmp bl, SH_FMT_NUM_CURRENCY
     je .c1ok
-    mov al, '%'                          ; SYLK's own percent code (81.15.1)
+    mov al, '%'                          ; SYLK's own percent code (81.119.2)
     cmp bl, SH_FMT_NUM_PERCENT
     je .c1ok
     mov al, 'G'
@@ -22229,6 +22307,10 @@ sh_dowrite_sylk:
     mov [sh_wrow], ax
     jmp .rec
 .footer:
+    cmp byte [sh_trunc], 0
+    jne .nomore
+    call sh_sylk_extras               ; borders and notes (81.119.2)
+.nomore:
     mov si, sh_s_end
     call sh_stgput
     mov [sh_stagelen], di
@@ -22251,6 +22333,169 @@ sh_dowrite_sylk:
 .wdone:
     pop es
     pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sylk_xy - "X<col+1>;Y<row+1>" for [sh_wrec_col]/[sh_wrec_row] at ES:DI.
+; -----------------------------------------------------------------------------
+sh_sylk_xy:
+    push ax
+    push si
+    mov ax, [sh_wrec_col]
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    mov si, sh_s_y
+    call sh_stgput
+    mov ax, [sh_wrec_row]
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sylk_extras - the current sheet's borders and notes, after its cells, at
+; ES:DI (81.119.2), main's writer in this file's tables. A border is an F
+; record of its own with SYLK's style field, ";S" and a letter an edge -
+; L R T B - and S for shaded:
+;     F;X3;Y4;SLT
+; A border-table record holding only protection or a number format (81.46,
+; 81.55) has no style to write and is passed over. A note is a C record
+; carrying only SYLK's comment field, ";A", so it neither needs a value nor
+; disturbs one: a ';' in the text is doubled, as every SYLK field's is, and a
+; line break is ESC " :", which is what Excel writes.
+; Sets [sh_trunc] if the buffer fills. Preserves everything but DI.
+; -----------------------------------------------------------------------------
+sh_sylk_extras:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor si, si
+    mov cx, [sh_nbord]
+    jcxz .notes
+.b:
+    push cx
+    push es
+    mov es, [sh_bordseg]
+    mov ax, [es:si]
+    mov cx, [es:si+2]
+    mov dl, [es:si+4]
+    pop es
+    and dl, 0x1F                       ; the edges and Shade alone
+    jz .bnext
+    SHOUT sh_unpackrow                 ; -> AX = row, BX = its sheet
+    cmp bx, [sh_cursheet]
+    jne .bnext
+    mov [sh_wrec_row], ax
+    mov [sh_wrec_col], cx
+    mov ax, di
+    add ax, 40
+    cmp ax, SH_STAGE_MAX
+    ja .full
+    push si
+    mov si, sh_s_sylk_fx               ; "F;X"
+    call sh_stgput
+    call sh_sylk_xy
+    mov si, sh_s_sylk_fs               ; ";S"
+    call sh_stgput
+    mov si, sh_sylk_bordch             ; one letter per bit, in bit order
+    mov ah, dl
+.bl:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .bldone
+    shr ah, 1
+    jnc .bl
+    call sh_stgputb
+    jmp short .bl
+.bldone:
+    mov si, sh_s_crlf
+    call sh_stgput
+    pop si
+.bnext:
+    pop cx
+    add si, SH_BT_SZ
+    loop .b
+.notes:
+    xor si, si
+    mov cx, [sh_nnote]
+    or cx, cx
+    jnz .n
+    jmp .out
+.n:
+    push cx
+    push es
+    mov es, [sh_noteseg]
+    mov ax, [es:si]
+    mov cx, [es:si+2]
+    mov dx, [es:si+4]                  ; the text's arena offset
+    pop es
+    SHOUT sh_unpackrow
+    cmp bx, [sh_cursheet]
+    jne .nnext
+    mov [sh_wrec_row], ax
+    mov [sh_wrec_col], cx
+    mov ax, di
+    add ax, 3 * SH_NOTEMAX + 30        ; every character could be a break
+    cmp ax, SH_STAGE_MAX
+    ja .full
+    push si
+    mov si, sh_s_c                     ; "C;X"
+    call sh_stgput
+    call sh_sylk_xy
+    mov si, sh_s_sylk_fa               ; ";A"
+    call sh_stgput
+    mov si, dx
+    mov cx, SH_NOTEMAX
+.nt:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    or al, al
+    jz .ntdone
+    inc si
+    cmp al, 10
+    jne .ntsemi
+    mov al, 27                         ; ESC " :" - a line break
+    call sh_stgputb
+    mov al, ' '
+    call sh_stgputb
+    mov al, ':'
+    jmp short .ntput
+.ntsemi:
+    cmp al, ';'
+    jne .ntput
+    call sh_stgputb                    ; doubled
+.ntput:
+    call sh_stgputb
+    loop .nt
+.ntdone:
+    mov si, sh_s_crlf
+    call sh_stgput
+    pop si
+.nnext:
+    pop cx
+    add si, SH_NOTE_REC
+    dec cx
+    jz .out
+    jmp .n
+.full:
+    mov byte [sh_trunc], 1
+    pop cx
+.out:
     pop si
     pop dx
     pop cx
@@ -27165,6 +27410,10 @@ sh_parsecrec:
     mov word [SH_TDVAL+4], 0
     mov word [SH_TDVAL+6], 0
     mov byte [SH_THAVE], 0
+    mov byte [sh_notetext], 0          ; no ;A field yet (81.119.2): the note
+                                       ; dialog's own buffer, as the BIFF
+                                       ; reader's .isnote uses it - no dialog
+                                       ; is open during a read
 .tok:
     cmp si, bx
     jae .apply
@@ -27179,6 +27428,8 @@ sh_parsecrec:
     je .isk
     cmp al, 'E'
     je .ise
+    cmp al, 'A'
+    je .isa
 .scan:
     cmp si, bx
     jae .apply
@@ -27357,9 +27608,58 @@ sh_parsecrec:
     pop di
     mov byte [SH_THASE], 1
     jmp .tok
+.isa:                                 ; ;A<text> - the cell's comment, which is
+    inc si                            ; its NOTE (81.119.2). It runs to a single
+    push di                           ; ';' or the line's end; ';;' is one ';'
+    push cx                           ; and ESC " :" a line break. The whole
+    mov di, sh_notetext               ; field is consumed and the first
+    mov cx, SH_NOTEMAX - 1            ; SH_NOTEMAX - 1 bytes kept, so a long
+.ac:                                  ; one cannot leave its tail to be read
+    cmp si, bx                        ; as fields
+    jae .acend
+    mov al, [es:si]
+    inc si
+    cmp al, ';'
+    jne .anotsemi
+    cmp si, bx
+    jae .acend
+    cmp byte [es:si], ';'
+    jne .acback                       ; a single ';' ends the field
+    inc si
+    jmp short .akeep
+.anotsemi:
+    cmp al, 27
+    jne .akeep
+    mov ax, si
+    add ax, 2
+    cmp ax, bx
+    ja .akeep27
+    cmp word [es:si], ' ' | (':' << 8)
+    jne .akeep27
+    add si, 2
+    mov al, 10
+    jmp short .akeep
+.akeep27:
+    mov al, 27
+.akeep:
+    jcxz .ac
+    mov [di], al
+    inc di
+    dec cx
+    jmp short .ac
+.acback:
+    dec si                            ; leave the ';' for the field scan
+.acend:
+    mov byte [di], 0
+    pop cx
+    pop di
+    jmp .tok
 .apply:
     cmp byte [SH_THAVE], 0
-    je .out
+    jne .applyok
+    cmp byte [sh_notetext], 0         ; a note alone is still worth the
+    je .out                           ; coordinates
+.applyok:
     mov ax, [SH_TCOL]
     cmp ax, 1
     jb .out
@@ -27373,6 +27673,15 @@ sh_parsecrec:
     dec ax
     dec cx
     mov bx, cx
+    cmp byte [sh_notetext], 0         ; the note first: it stands whether or
+    je .nonote                        ; not the record also carries a value
+    push si
+    mov si, sh_notetext
+    SHOUT sh_nt_set                    ; CF = 1 table or arena full: dropped,
+    pop si                            ; as a typed one would be
+.nonote:
+    cmp byte [SH_THAVE], 0
+    je .out
     cmp byte [SH_THASE], 0            ; a ;E field wins over ;K: the value is
     je .notformula_c                  ; only the cached result of it, and
     push ax                           ; storing that instead would flatten the
@@ -27448,6 +27757,7 @@ sh_parsefrec:
     push ax
     push bx
     push cx
+    push dx
     push si
     push di                           ; sh_findcell below is called for its
                                        ; side effect on DI, but sh_parseslk's
@@ -27459,6 +27769,10 @@ sh_parsefrec:
     mov byte [SH_TALIGN], 0
     mov byte [SH_TNUMFMT], 0
     mov byte [SH_TCOMMA], 0
+    xor dx, dx                        ; DL = ;S's border bits, DH = 1 once a
+                                       ; ;F or ;K says something about the
+                                       ; format (81.119.2) - registers, as
+                                       ; nothing this calls touches DX
 .tok:
     cmp si, bx
     jae .apply
@@ -27475,6 +27789,8 @@ sh_parsefrec:
     je .isk
     cmp al, 'W'
     je .isw
+    cmp al, 'S'
+    je .iss
 .scan:
     cmp si, bx
     jae .apply
@@ -27499,7 +27815,33 @@ sh_parsefrec:
 .isk:
     inc si
     mov byte [SH_TCOMMA], 1
+    mov dh, 1
     jmp .tok
+.iss:                                  ; ;S<letters> - the style field. L R T
+    inc si                             ; B are the edges and S is shaded
+.sl:                                   ; (81.119.2); D, I, M and any digits
+    cmp si, bx                         ; are Excel's bold, italic and font,
+    jae .tok                           ; and are passed over
+    mov al, [es:si]
+    cmp al, ';'
+    je .tok
+    inc si
+    push si
+    mov si, sh_sylk_bordch
+    mov ah, 1
+.sfind:
+    cmp byte [si], 0
+    je .snone
+    cmp al, [si]
+    je .shit
+    inc si
+    shl ah, 1
+    jmp short .sfind
+.shit:
+    or dl, ah
+.snone:
+    pop si
+    jmp short .sl
 .isw:                                  ; ;W<first> <last> <width>: column
     inc si                             ; widths, Walden's F-record field (7)
     SHOUT sh_pint                      ; (81.56). 1-based, spaces between
@@ -27530,6 +27872,7 @@ sh_parsefrec:
                                         ; internally, so it's parsed as its
                                         ; own little grammar before control
                                         ; returns to the outer ;-scan loop
+    mov dh, 1
     inc si
     cmp si, bx
     jae .tok
@@ -27580,6 +27923,17 @@ sh_parsefrec:
     dec ax
     dec cx
     mov bx, cx
+    or dl, dl                         ; a border needs no cell (81.119.2), and
+    jz .nobord                        ; it is ORed into the border bits, so
+    SHOUT sh_bt_addcell                ; SH_BT_KEEP's protection and table bits
+    jc .nobord                        ; are never written; table full:
+    push es                           ; dropped, as a typed one would be
+    mov es, [sh_bordseg]
+    or [es:di+4], dl
+    pop es
+.nobord:
+    or dh, dh                         ; a style-only record says nothing
+    jz .out                           ; about the format: leave it alone
     SHOUT sh_findcell
     jnc .out                          ; no prior C record for this cell:
                                        ; nothing to attach the format to
@@ -27605,6 +27959,7 @@ sh_parsefrec:
 .out:
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -27613,16 +27968,16 @@ sh_parsefrec:
 ; -----------------------------------------------------------------------------
 ; sh_sylk_numfmt_from_c1 - in: AL = an F record's c1 formatting-code char;
 ; out: AL = this app's SH_FMT_NUM_* code. Real SYLK's c1 codes are
-; 0/C/E/F/G/$/* (default/continuous/scientific/fixed/general/currency/
-; bargraph), and '%' is percent (81.15.1) - '$' and '%' have equivalents
-; here; everything else (including the codes this app never writes, like
-; scientific or bargraph) falls back to General, which is the honest answer
-; since this app has no comparable format for them either.
+; 0/C/E/F/G/$/*/% (default/continuous/scientific/fixed/general/currency/
+; bargraph/percent) - '$' and '%' have equivalents here; everything else
+; (including the codes this app never writes, like scientific or bargraph)
+; falls back to General, which is the honest answer since this app has no
+; comparable format for them either.
 ; -----------------------------------------------------------------------------
 sh_sylk_numfmt_from_c1:
     cmp al, '$'
     je .cur
-    cmp al, '%'                       ; percent, which SYLK does have
+    cmp al, '%'                       ; percent, which SYLK does have (81.119.2)
     je .pct
     xor al, al
     ret
@@ -55138,6 +55493,9 @@ sh_s_k:        db ';K', 0                  ; also the "commas are set" flag
 sh_s_sylk_fw:  db 'F;W', 0                 ; F;W<first> <last> <width> (81.56)
 sh_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 sh_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
+sh_s_sylk_fs:  db ';S', 0                  ; the style field: borders, shade
+sh_s_sylk_fa:  db ';A', 0                  ; a C record's comment: the note
+sh_sylk_bordch: db 'LRTBS', 0              ; SH_BORD_* bit order (81.119.2)
 sh_s_crlf:     db 13, 10, 0
 sh_s_nn:       db 'NN;N', 0           ; SYLK's defined-name record (81.29.1)
 sh_s_nne:      db ';E', 0
