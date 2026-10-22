@@ -906,7 +906,7 @@ user gives a different workflow. The worked example is
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 66 sites in 22 files, every one
+  finished** (§6.6.5): the registry stood at 66 sites in 22 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. It went 62→79 when `apps/plan/plan.asm` was split out
   of `sheet.asm` (§81.75) — the same seventeen sites, in a second file — and
@@ -918,7 +918,9 @@ user gives a different workflow. The worked example is
   under this fork's `plan.asm` line. Both sides' numbers were a count, so the
   merge had to RE-COUNT rather than pick, and `tools/checkdocs.py` is what
   counts. The 2026-10-20 merges did it twice more, to 65 and then **66 in 22
-  files** - WireChat arriving with one site of its own.
+  files** - WireChat arriving with one site of its own. LEDGER's fork from PLAN
+  took it to **76 in 23 files**, 2026-10-21 - the same ten sites `apps/plan/
+  plan.asm` itself arrived with, one fork further along.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors

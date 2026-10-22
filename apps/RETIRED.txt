@@ -25,6 +25,14 @@
 #               target and disks work; standard builds and release images do
 #               not require or redistribute those assets. This is not retirement.
 #
+#   building    A product the owner has committed to, under active
+#               construction - often a fork of an existing package, PLAN's
+#               own shape one step on (SPEC.md 81.75). `all` may build it, the
+#               same reason as `instrument`, but the INTENT is the opposite
+#               one: this is meant to ship once it is ready, not stay a bench
+#               forever. No shipped image or the live payload may carry it
+#               until the owner says so. This is not retirement either.
+#
 # tests/unit/t_retired.py is the gate. A `retired` line is checked HARDER
 # than an `instrument` one: `all` may not build it at all, where an
 # instrument may.
@@ -67,3 +75,12 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # and committed, so it needs no user-supplied asset, but it is not
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
+
+building   ledger      # A fork of apps/plan/plan.asm under the owner's name for it
+                       # (2026-10-21): a money manager. The transform is purely
+                       # mechanical so far - pl_/PL_/plm_ -> lg_/LG_/lgm_ and the
+                       # three user-visible identity strings, SPEC.md 81.75's own
+                       # method one step on, proved by reversing it and getting
+                       # apps/plan/plan.asm back byte for byte. No money-manager
+                       # feature exists yet; `make ledger` builds it standalone and
+                       # `all` keeps it assembling. The owner decides when it ships.

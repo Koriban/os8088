@@ -18,7 +18,8 @@ the same edit went wrong once before - the comment records that taking the
 package off the disk lists took it out of every BUILD too, because APPS_GAMES
 was the only thing that had ever named it.
 
-THREE KINDS; `retired` AND `local` ARE CHECKED HARDER THAN `instrument` (SPEC.md 20.16):
+FOUR KINDS; `retired` AND `local` ARE CHECKED HARDER THAN `instrument` AND
+`building` (SPEC.md 20.16):
 
   * `retired`    a failure. It may not be on any shipped image, may not be in
                  the live payload, and `all` may not even build it. Its source
@@ -29,6 +30,13 @@ THREE KINDS; `retired` AND `local` ARE CHECKED HARDER THAN `instrument` (SPEC.md
                  but no shipped image may carry it.
   * `local`      an application requiring user-supplied assets. Standalone
                  builds work; standard images, live media and `all` omit it.
+  * `building`   a product the owner has committed to, under active
+                 construction - often a fork of an existing package, PLAN's
+                 own shape one step on (SPEC.md 81.75). `all` MAY build it,
+                 the same reason as `instrument`, but the INTENT is the
+                 opposite one: this is meant to ship once it is ready, not to
+                 stay a bench forever. No shipped image or the live payload
+                 may carry it until the owner says so.
 
 THE LIVE PAYLOAD IS READ FROM build/livepayload.txt, which `all` emits from
 $(LIVEARGS) itself - the same file tests/unit/t_livefull.py reads, and for the
@@ -66,7 +74,7 @@ BUILD = os.path.join(ROOT, "build")
 MAKEFILE = os.path.join(ROOT, "Makefile")
 LIVEPAYLOAD = os.path.join(BUILD, "livepayload.txt")
 
-KINDS = ("retired", "instrument", "local")
+KINDS = ("retired", "instrument", "local", "building")
 
 # The SHIPPED images, and nothing else: an on-demand disk (zdisk, worddisk,
 # wiredisk, regapp360) is not a product, so an instrument riding one is
@@ -203,7 +211,8 @@ def main():
                   "apps/%s ships on no image and has no apps/RETIRED.txt line"
                   % pkg,
                   why="CLAUDE.md says everything in apps/ ships, so a package "
-                      "that does not needs a `retired`, `instrument` or `local` line "
+                      "that does not needs a `retired`, `instrument`, `local` or "
+                      "`building` line "
                       "saying so (SPEC.md 20.16). If it is meant to ship, a "
                       "disk list has lost it")
         else:

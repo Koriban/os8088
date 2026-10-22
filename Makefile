@@ -87,6 +87,11 @@ APPSIMG360 := $(BUILD)/apps360.img
 # an absent prerequisite is not an error.
 PLANDIR := $(BUILD)/planapp
 PLANPKG := $(PLANDIR)/PLAN.O88
+LEDGERDIR := $(BUILD)/ledgerapp
+LEDGERPKG := $(LEDGERDIR)/LEDGER.O88  # a fork of PLAN under construction
+                                      # as a money manager - apps/RETIRED.txt,
+                                      # `building` kind. Declared here, not in
+                                      # all:, for PLANPKG's own stated reason.
 # ...and the MEDIA disk, which exists at 360KB ALONE (SPEC.md 24.4): the third
 # shipped disk of that geometry, carrying BEVERLY.MOD, which is 114 of that
 # disk's 354 clusters and which the apps disk has run out of room for. There
@@ -2279,7 +2284,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
 # paragraph, only when the compiler is absent, never an error.
 WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
-all: checkdocs $(SHIPIMGS) $(PLANPKG) \
+all: checkdocs $(SHIPIMGS) $(PLANPKG) $(LEDGERPKG) \
      $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
      $(BUILD)/hello.o88 $(BUILD)/video.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 \
@@ -14145,6 +14150,35 @@ $(PLANDIR)/PLAN.O88: $(PLANDIR)/plan.bin tools/os88pkg.py $(PKGZSTAMP)
 	 if [ $$((i+b+c)) -gt 51712 ]; then \
 	   echo "plan: 128KB machine: $$((i+b+c-51712)) bytes TO GO"; \
 	 else echo "plan: 128KB machine: FITS, $$((51712-i-b-c)) bytes spare"; fi
+
+# LEDGER - a mechanical fork of PLAN under a new name (apps/RETIRED.txt's
+# `building` kind). PLAN -> LEDGER is the SAME transform SPEC.md 81.75 used
+# for SHEET -> PLAN: pl_/PL_/plm_ -> lg_/LG_/lgm_, proved by reversing it and
+# getting apps/plan/plan.asm back byte for byte - no feature has diverged yet,
+# so this recipe mirrors PLAN's exactly, tools/ledgerclaims.py included
+# (forked the same way, or the claims total silently reads 0 again - the
+# precise failure planclaims.py's own docstring records from the LAST time
+# this rename happened).
+$(LEDGERDIR)/ledger.bin: apps/ledger/ledger.asm apps/os88api.inc apps/os88fix.inc \
+                        apps/os88ui.inc apps/os88line.inc apps/os88text.inc
+	@mkdir -p $(LEDGERDIR)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/ledger/ledger.asm
+
+.PHONY: ledger
+ledger: $(LEDGERDIR)/LEDGER.O88
+
+$(LEDGERDIR)/LEDGER.O88: $(LEDGERDIR)/ledger.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(LEDGERDIR)/ledger.bin -o $@
+	@i=$$(wc -c < $(LEDGERDIR)/ledger.bin); \
+	 b=$$(python3 -c "import re,sys; s=open('apps/ledger/ledger.asm').read(); \
+	   m=re.search(r'OS88_BSS (\d+)', s); \
+	   print(m.group(1) if m else sys.exit('ledger: no OS88_BSS literal'))"); \
+	 c=$$(python3 tools/ledgerclaims.py); \
+	 echo "ledger: image $$i + bss $$b = $$((i+b)) of 65024 (APP_MAX_SIZE)"; \
+	 echo "ledger: region $$((i+b)) + claims $$c = $$((i+b+c)) of 51712 usable arena"; \
+	 if [ $$((i+b+c)) -gt 51712 ]; then \
+	   echo "ledger: 128KB machine: $$((i+b+c-51712)) bytes TO GO"; \
+	 else echo "ledger: 128KB machine: FITS, $$((51712-i-b-c)) bytes spare"; fi
 
 #
 # --- AND PIXEL IS NOT ON apps360.img (SPEC.md 106.7; 24.6.1's dated decision,

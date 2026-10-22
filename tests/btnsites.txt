@@ -46,6 +46,9 @@
                                    # gesture record, one button each
 4 apps/plan/plan.asm               # SHEET's radio and input dialog pairs,
                                    # a record each
+4 apps/ledger/ledger.asm           # PLAN's own four, unchanged - ledger.asm is a
+                                   # pure identifier-prefix fork so far (apps/
+                                   # RETIRED.txt's `building` kind)
 4 apps/dos/dos.asm                 # the bar's two and the Setup page's two,
                                    # one record repointed per page
 1 apps/ftpd/ftpd.asm               # Start/Stop, Setup, Done - one shared body (fd_btn_draw)

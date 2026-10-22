@@ -150,6 +150,11 @@ SITES_HIST = {
               "Sheet and Chart (SPEC.md 81, 83) were written on main while "
               "6.6 was being written here, so they joined the ratchet at the "
               "merge and neither number is the sweep's account of itself",
+    (66, 22): "CLAUDE.md/AGENTS.md's own 'the sweep is finished' figure, "
+              "2026-10-21, before apps/ledger/ledger.asm forked from "
+              "apps/plan/plan.asm (apps/RETIRED.txt's `building` kind) and "
+              "brought its own ten sites - the same ten, in a second file, "
+              "exactly plan.asm's own arrival one fork further along",
 }
 
 

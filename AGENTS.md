@@ -887,13 +887,16 @@ user gives a different workflow. The worked example is
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 66 sites in 22 files, every one
+  finished** (§6.6.5): the registry stood at 66 sites in 22 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. (It read 59 in 20 here until the 2026-10-14 merge -
   stale on BOTH sides, and it did not conflict because neither side had
   touched it, because `tools/checkdocs.py` counted the registry against
   CLAUDE.md's sentence alone. It counts BOTH files now, which is what caught
-  the 2026-10-20 merges moving it to 65 and then 66.)
+  the 2026-10-20 merges moving it to 65 and then 66.) It is **76 in 23 files**
+  now, 2026-10-21: `apps/ledger/ledger.asm` forked from `apps/plan/plan.asm`
+  (apps/RETIRED.txt's `building` kind) and brought the same ten sites plan.asm
+  itself arrived with, one fork further along.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
   VGA *reference* values, not the truth — the live screen is
   `[vid_w]`/`[vid_h]`/`[vid_stride]`. Anything that clips, centres or anchors
