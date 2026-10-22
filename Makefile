@@ -14151,14 +14151,13 @@ $(PLANDIR)/PLAN.O88: $(PLANDIR)/plan.bin tools/os88pkg.py $(PKGZSTAMP)
 	   echo "plan: 128KB machine: $$((i+b+c-51712)) bytes TO GO"; \
 	 else echo "plan: 128KB machine: FITS, $$((51712-i-b-c)) bytes spare"; fi
 
-# LEDGER - a mechanical fork of PLAN under a new name (apps/RETIRED.txt's
-# `building` kind). PLAN -> LEDGER is the SAME transform SPEC.md 81.75 used
-# for SHEET -> PLAN: pl_/PL_/plm_ -> lg_/LG_/lgm_, proved by reversing it and
-# getting apps/plan/plan.asm back byte for byte - no feature has diverged yet,
-# so this recipe mirrors PLAN's exactly, tools/ledgerclaims.py included
-# (forked the same way, or the claims total silently reads 0 again - the
-# precise failure planclaims.py's own docstring records from the LAST time
-# this rename happened).
+# LEDGER - started as a mechanical fork of PLAN (apps/RETIRED.txt's
+# `building` kind) and is a STANDARD BIG APP now, the owner's call
+# (2026-10-21, docs/plans/LEDGER-PLAN.md 1): no 128KB-machine arena ceiling,
+# the same plain APP_MAX_SIZE every kern_big package is held to. The
+# floor-machine claims check PLAN's own recipe runs is deliberately NOT
+# mirrored here any more - tools/ledgerclaims.py, which existed only to feed
+# it, is deleted with it rather than left as a caller-less orphan.
 $(LEDGERDIR)/ledger.bin: apps/ledger/ledger.asm apps/os88api.inc apps/os88fix.inc \
                         apps/os88ui.inc apps/os88line.inc apps/os88text.inc
 	@mkdir -p $(LEDGERDIR)
@@ -14169,16 +14168,6 @@ ledger: $(LEDGERDIR)/LEDGER.O88
 
 $(LEDGERDIR)/LEDGER.O88: $(LEDGERDIR)/ledger.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(LEDGERDIR)/ledger.bin -o $@
-	@i=$$(wc -c < $(LEDGERDIR)/ledger.bin); \
-	 b=$$(python3 -c "import re,sys; s=open('apps/ledger/ledger.asm').read(); \
-	   m=re.search(r'OS88_BSS (\d+)', s); \
-	   print(m.group(1) if m else sys.exit('ledger: no OS88_BSS literal'))"); \
-	 c=$$(python3 tools/ledgerclaims.py); \
-	 echo "ledger: image $$i + bss $$b = $$((i+b)) of 65024 (APP_MAX_SIZE)"; \
-	 echo "ledger: region $$((i+b)) + claims $$c = $$((i+b+c)) of 51712 usable arena"; \
-	 if [ $$((i+b+c)) -gt 51712 ]; then \
-	   echo "ledger: 128KB machine: $$((i+b+c-51712)) bytes TO GO"; \
-	 else echo "ledger: 128KB machine: FITS, $$((51712-i-b-c)) bytes spare"; fi
 
 #
 # --- AND PIXEL IS NOT ON apps360.img (SPEC.md 106.7; 24.6.1's dated decision,
