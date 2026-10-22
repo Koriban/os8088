@@ -6228,11 +6228,13 @@ $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
 # end at the image size the header already records, leaving the resident half
 # for os88pkg.py and CHART.OVL beside it.
 #
-# NOT COMPRESSED, and deliberately plain os88pkg.py rather than $(OS88PKG):
-# upstream packs every package EXCEPT the two that carry an overlay, WORD and
-# SCRIBE, and SHEET is the third. CHART.OVL itself must stay raw whatever the
-# package does - ch_ovneed reads it with a plain OSAPI_FILE_READ and far-calls
-# its offset 0, so a packed module would be executed as compressed bytes.
+# PACKED, both halves (SPEC.md 20.13.5, 73.14.1, 81.113). The trimmed package
+# goes through $(OS88PKGB) on the last line below, and CHART.OVL and MACRO.OVL
+# ship from $(CC_OVLZ) - CC_OVLZ_RULE further down packs them, as it does
+# SCRIBE.OVL - because ch_ovneed reads with OSAPI_FILE_READ, which expands a
+# packed file into a claim sized from the UNPACKED cut. The raw cuts written
+# here are what the CH_OVKB and SH_M2KB checks below hold, and no disk names
+# them (tests/unit/t_pkgzrules.py).
 #
 # ...AND THE CLAIM IS CHECKED HERE TOO, in upstream's SCRIBE shape. ch_ovneed
 # reads CH_OVKB*1024 bytes into a claim of that size, and a module that
@@ -8320,13 +8322,15 @@ $(BUILD)/filler.o88: $(BUILD)/filler.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filler.bin -o $@
 
 # FOUR packages, and each has a job: PAINT opens first and takes the top of the
-# ceiling, SHEET opens under it and is the package whose REGION has to move,
+# ceiling, CALC opens under it and is the package whose REGION has to move,
 # FILLER opens under that and takes the arena down, and closing PAINT is what
-# leaves a hole above SHEET for the descending pass to pack it into.
-$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/sheet.o88 \
+# leaves a hole above CALC for the descending pass to pack it into. CALC and
+# not SHEET, which was the subject until its region stopped being declared
+# (tests/movable.txt says why): the subject has to declare and hire nobody.
+$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
                          $(BUILD)/paint.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/paint.o88 $(BUILD)/sheet.o88
+		$(BUILD)/paint.o88 $(BUILD)/calc.o88
 
 # ...and the NEGATIVE arm's, for tests/regpin.py
 # (docs/plans/HEAP-UNPIN-PLAN.md 10.1). The same three plus PINME, which is the
@@ -8341,10 +8345,10 @@ $(BUILD)/pinme.bin: tests/pinme/pinme.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/pinme.o88: $(BUILD)/pinme.bin tools/os88pkg.py | $(BUILD)
 	python3 tools/os88pkg.py $< -o $@
 
-$(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/sheet.o88 \
+$(BUILD)/regpin360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
                         $(BUILD)/paint.o88 $(BUILD)/pinme.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/pinme.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88
+		$(BUILD)/pinme.o88 $(BUILD)/paint.o88 $(BUILD)/calc.o88
 
 # PTSTEST - the differential gate for SPEC.md 5.6.9's gfx_points: the same
 # coordinate set drawn through the new slot and through OSAPI_GFX_PIXEL, into
@@ -14726,10 +14730,14 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
 # fourth that is none of them is the row this disk would drop first.
 #
 # PIXEL rides here too (SPEC.md 106.7): the 360KB machine's home for it, off
-# apps360.img by the dated decision at APPS_TOOLS_360, with LAKE.JPG in
-# MEDIA/ as its one sample (24.6.2) - the picture its File dialog opens on,
-# and the gallery's smallest (18KB, greyscale): VACATION.JPG would have been
-# 85 of this disk's 181 free clusters.
+# apps360.img by the dated decision at APPS_TOOLS_360. LAKE.JPG rode MEDIA/
+# beside it as its one sample (24.6.2) - the gallery's smallest, 18KB - until
+# 2026-10-22, when the owner took it OFF THIS DISK ALONE (24.6.1's dated
+# decision): Sheet's two modules had filled the disk to 354 of 354 clusters,
+# so a save to it failed, and the picture was the 18 clusters that gave room
+# back without dropping a program. PIXEL.O88 stays. OFFICE_DATA still names
+# the picture, so MEDIA_EXTRA keeps it on the everything set and the live
+# media, and `make pixeldisk` carries the whole gallery.
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
                $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
@@ -14739,9 +14747,10 @@ OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
 # gave the faces up for the Desk Clock, and this is the disk whose programs set
 # type in them. ty_gofonts finds them here because it falls back to the
 # program's own volume when the system disk has no SYSTEM/FONTS.
-OFFICE360 := $(OFFICE_PKGS) $(OFFICE_DATA) $(FACES) $(FACELIC)
+OFFICE360_DATA := $(filter-out %/LAKE.JPG,$(OFFICE_DATA))
+OFFICE360 := $(OFFICE_PKGS) $(OFFICE360_DATA) $(FACES) $(FACELIC)
 OFFICEARGS360 := $(OFFICE_PKGS) \
-                 $(addprefix MEDIA:,$(OFFICE_DATA)) \
+                 $(addprefix MEDIA:,$(OFFICE360_DATA)) \
                  $(FACESARG) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 

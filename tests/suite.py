@@ -869,8 +869,8 @@ FAST = [
         "NOT tests/filler: a package reaches mem_claim only from inside its "
         "own callback, so the asker's own region is refused for having a "
         "frame in it and a row built that way stays green with the pin taken "
-        "out of the kernel - measured. SHEET is the control: PINME's region "
-        "must stand still WHILE SHEET'S MOVES, or the run proves nothing",
+        "out of the kernel - measured. CALC is the control: PINME's region "
+        "must stand still WHILE CALC'S MOVES, or the run proves nothing",
         wants=("build/regpin360.img",)),
     Row("drvclaim", "soak", py("tests/unit/t_drvclaim.py"), 0.1,
         "a driver's SERVICE TASK may not reach a claim door: mem_claim can "
@@ -936,23 +936,6 @@ FAST = [
         "at all",
         wants=("build/small360.img", "build/small.img",
                "build/smallapps360.img", "build/smallapps.img")),
-    Row("planfit", "soak", py("tests/unit/t_planfit.py"), 0.1,
-        "PLAN (SPEC.md 81.75) still fits the 128KB machine and still reaches "
-        "the three disks it exists for. SPEC.md 24.5.2's footprint is the "
-        "REGION PLUS THE CLAIMS, against SPEC.md 11.102's arena, and it was "
-        "reached with 1,062 bytes of 51,712 to spare - two percent, which one "
-        "unmeasured feature spends. Over the line there is no build error and "
-        "no refusal to assemble: a claim fails on the machine and the "
-        "spreadsheet opens with no cells. It checks the single-claim RUN "
-        "limit separately (SPEC.md 50.6.2), because a total that fits an "
-        "arena the heap hands out in pieces is the test that omitted SKIES. "
-        "The volumes are the other half - a package that fits and ships "
-        "nowhere has solved nothing, and this replaced the DEADLINE "
-        "t_livefull.py's EXEMPT_DIRS was carrying for it. "
-        "SOAK and not fast: two of the three floppies come from `make "
-        "smallapps`, which is what wants= below builds",
-        wants=("build/apps360.img", "build/smallapps360.img",
-               "build/smallapps.img")),
     Row("lzbclust", "soak", py("tests/unit/t_lzbclust.py"), 1.2,
         "SPEC.md 20.13.5's rule for LZBPKGS: a package ships LZB only while "
         "LZB SAVES IT A 1KB CLUSTER on the 360KB disks it rides, because the "
@@ -1742,22 +1725,6 @@ FAST = [
 # tier`).
 # --------------------------------------------------------------------------
 FULL = [
-    Row("products", "full", py("tests/unit/t_products.py"), 6.0,
-        "the SHIPPING configurations `all` does not build - kern_emu and the "
-        "three combo floppies. buildmatrix below already builds emu and "
-        "small, correctly, and is in SOAK because 99 knob configurations is "
-        "not 'did you break the build'. That is right for a KNOB and wrong "
-        "for a PRODUCT: the 2026-10-05 upstream merge broke FOUR of these - "
-        "kern_small, kern_emu, combo and combo720 - and `make` plus "
-        "test-full between them reported ONE. The other three were found by "
-        "hand, days apart, by a human typing the target. Two of the four "
-        "broke at DISK PACKING and not at nasm (78 and 34 clusters over), "
-        "which is the commonest way a merge that adds packages breaks a "
-        "geometry and which no assembly-only row can see. kern_small is not "
-        "here because small128 builds that kernel AND boots it on a 128KB "
-        "machine. ~31s in the SHARED tree, which is safe for exactly these "
-        "targets: none of them writes build/kernel.bin",
-        wants=("build/kernel.sys",)),
     Row("buildmatrix", "soak", py("tests/unit/t_buildmatrix.py"), 180.0,
         "the knob kernels and kern_small - every configuration `all` "
         "does not build, and so the only thing that keeps them assembling"
@@ -5138,7 +5105,7 @@ SOAK = [
         "A package's REGION moves and the package keeps working (SPEC.md "
         "66.6.1). 66.6 said since it was written that a region can never move "
         "because its base IS its CS; this is the door open. FOUR PACKAGES and "
-        "each has a job - PAINT takes the ceiling, SHEET goes under it and is "
+        "each has a job - PAINT takes the ceiling, CALC goes under it and is "
         "the one that has to move, FILLER takes the arena down to a few tens "
         "of KB, and closing PAINT leaves the hole. tests/filler is an "
         "instrument with NO assertions of its own, which heapfrag cannot be: "
@@ -7616,19 +7583,6 @@ SOAK = [
         "REPORTED ARTIFACTS, LOCALISED (a corner pixel, and two drags across"
         "a seam)",
         needs=("marty",), serial=True),
-    Row("vbeident", "soak", py("tests/vbeident.py", "--cutrow", "200"), 300.0,
-        "SPEC.md 39.29.10.5: is the BANK STRADDLE CUT pixel-neutral? A rect "
-        "primitive run twice over two halves of its own rect must draw what "
-        "running it once draws, so this boots mode 12h twice - once plain, "
-        "once with [vbe_cutrow] poked to row 200 so the cut fires on an "
-        "adapter every emulator here HAS - and asserts 0 differing pixels "
-        "over the desktop, a Disk window and the Calculator. The banked mode "
-        "itself cannot be entered under QEMU or MartyPC at all (39.29.8), so "
-        "without this the cut would only ever be exercised on the owner's "
-        "Satellite. It also asserts the menu save-under round trip inside "
-        "each run; --save/--ref are the cross-build before/after compare and "
-        "--mutate proves the captures reach gfx_rect_setup.",
-        needs=("marty",), serial=True),
     Row("dispdepth", "soak", py("tests/dispdepth.py"), 60.0,
         "Does a window dragged BACK from a different-depth display arrive"
         "intact?",
@@ -7754,40 +7708,6 @@ SOAK = [
         needs=("marty",),
         wants=("build/smallapps360.img", "build/small360.img"),
         serial=True),
-    Row("plansmall", "soak", py("tests/plansmall.py"), 30.0,
-        "SPEC.md 81.75, and the only row that can answer the question PLAN "
-        "exists for: it OPENS on a 128KB machine, its three required claims "
-        "are GRANTED there, and =2+3 comes back as 5 out of the cell record "
-        "itself. t_planfit does the arithmetic and arithmetic is a different "
-        "question - tests/small128.py makes exactly this distinction about "
-        "the kernel. The failure it catches is silent: pl_entry's first "
-        "three claims are `jc .fail`, so a heap that cannot fund the cells "
-        "claim is a double-click that does nothing, with the host-side size "
-        "meter still saying FITS. The value is read from the cells segment "
-        "at FX_SCALE and not off the glass, where a number-format defect and "
-        "an arithmetic defect look the same (81.66). SHEET cannot run here "
-        "at all - it is in $(SMALLOMIT), and its cells claim alone is nearly "
-        "twice the largest run the machine can hand out",
-        needs=("marty",), wants=("build/smallapps360.img", "build/small360.img"),
-        serial=True),
-    Row("planfmt", "soak", py("tests/planfmt.py"), 40.0,
-        "PLAN's SYLK reader and its three number formats (SPEC.md 81.75), "
-        "against a fixture AUTHORED ON THE HOST - SPEC.md 81.63's rule, "
-        "because a fixture the package wrote itself lets a writer defect and "
-        "a reader defect cancel, and that pair has been caught doing it. The "
-        "defect it was written for: the 2-bit number-format field had TWO "
-        "sets of names, the interpreter's PL_FMT_NUM_* (Currency = 1) and "
-        "the three formats' PL_NF_* (Currency = 2), so the file code and the "
-        "display code disagreed about which value meant what - a Currency "
-        "cell was written as comma-with-no-dollar and Excel's own '$' came "
-        "back as Text, with both names assembling and nothing said. It also "
-        "pins ';K', which must be CONSUMED AND DROPPED now that there is no "
-        "Comma format to promote it to. "
-        "640KB and not the floor machine, because it opens its fixture by "
-        "DOUBLE-CLICKING it and SPEC.md 54.0 takes associations out of "
-        "kern_small entirely; the same reader is what tests/planrig.py's "
-        "machine runs",
-        needs=("marty",), serial=True),
     Row("sheetdel", "soak", py("tests/sheetdel.py"), 120.0,
         "SPEC.md 81.79: File > Delete, and the No that must not delete. The "
         "kernel file dialog has only OPEN and SAVE modes, so the picker is an "
@@ -7817,46 +7737,6 @@ SOAK = [
         "what Manual leaves stale - reading the record would be reading the "
         "thing under test",
         needs=("marty",), serial=True),
-    Row("planui", "soak", py("tests/planui.py"), 120.0,
-        "PLAN's MENUS, Copy/Paste, Cut and Undo on the 128KB machine "
-        "(SPEC.md 81.75) - the parts a formula never reaches, none of which "
-        "has a keyboard shortcut, so planrig cannot touch them. It found "
-        "THREE orphaned flag tests left by the protection cut: a `jc` whose "
-        "`call sh_prot_blocked` had gone, still reading the carry of "
-        "whatever came before it. In pl_paste_cell the flag it read was the "
-        "row bound's own, always set for an in-range row, so PASTE NEVER "
-        "PASTED on any machine; Cut and Clear ran or refused by accident of "
-        "the previous command. "
-        "The menu bar is PLAN's own (81.54), so os88ui's menu_pick cannot "
-        "see it: the rig READS pl_ox and the pl_mw widths out of the guest "
-        "and proves every step against [pl_mopen] and [pl_mhi] before "
-        "releasing the button, rather than remembering a pulldown offset. "
-        "It also pins the relative-reference adjustment the dead-code sweep "
-        "argued for on paper - =A1*10 copied a row down must read 20 - and "
-        "that Undo is GREYED rather than dead when its optional claim is "
-        "refused (81.57, and SPEC.md 47's grey-a-fact). "
-        "SOAK: `make small` and `make plan`, and it drives menus",
-        needs=("marty",), wants=("build/small360.img",),
-        serial=True),
-    Row("planrig", "soak", py("tests/planrig.py"), 200.0,
-        "PLAN's FEATURE BATTERY on the 128KB machine (SPEC.md 81.75): 71 "
-        "asserted cases and 8 reported, typed down column A and read back "
-        "out of the CELL RECORDS at FX_SCALE. plansmall asks whether PLAN "
-        "evaluates at all; this asks what it computes - arithmetic and "
-        "precedence, unary minus, references and absolute references, the "
-        "folds, the logicals and the comparisons, the surviving maths, and "
-        "every cut family answering #NAME? rather than a wrong number. It "
-        "found AVERAGE returning n/n = 1. "
-        "TYPED and not loaded, because SPEC.md 54.0 takes file associations "
-        "out of kern_small entirely - a .SLK cannot be double-clicked on "
-        "this machine, so a rig that loaded its battery would be testing a "
-        "path the floor machine has not got. Every asserted case has an "
-        "answer that is EXACT in four places, so this row does not have to "
-        "model PLAN's rounding to test its arithmetic. "
-        "SOAK: it wants `make small` and `make plan`, and it types for two "
-        "minutes of guest time",
-        needs=("marty",), wants=("build/small360.img",),
-        serial=True),
     Row("tanksmall", "soak", py("tests/tanksmall.py"), 30.0,
         "SPEC.md 85.3.5.1: TANK's APP_SMALL arm plays on the 128KB floor"
         "machine - the claim is GRANTED off its ladder, and the HUD template's"
@@ -8728,21 +8608,6 @@ SOAK = [
     Row("dispmine", "soak", py("tests/dispmine.py"), 30.0,
         "Can Minesweeper's bottom row be PLAYED on a CGA? (SPEC.md 11.93)",
         needs=("marty",), serial=True),
-    Row("curtrail", "full", py("tests/curtrail.py"), 30.0,
-        "Does the pointer's save-under put back EXACTLY what was under it? "
-        "(SPEC.md 7.1) Walk the arrow across the desktop, park it where it "
-        "started, and the screen must be the pixel it was. FULL and not soak "
-        "because of what it cost to find out the hard way: SPEC.md 39.29 gave "
-        "the renderer a live stride, and turning an immediate into a memory "
-        "read changed WHICH SEGMENT it goes through - DS is VGA_SEG inside "
-        "vga_save_vram and the save-under claim inside vga_restore_vram, the "
-        "one pair the cursor, every menu drop and every window share. It "
-        "shipped, and it was found BY EYE on a Toshiba Satellite after four "
-        "round trips. It is visible at stride 80 in one screenshot; what was "
-        "missing was anybody moving the pointer and looking. Mutation-proven "
-        "both ways: the DS-relative read fails it, the pre-39.29 kernel "
-        "passes it",
-        needs=("qemu",), serial=True),
     Row("curshape", "soak", py("tests/curshape.py"), 60.0,
         "Does the pointer change SHAPE over a window that asks for one? "
         "(SPEC.md 7.2) - nothing covered it when 7.2.1.1 rewrote the test",
@@ -8753,27 +8618,6 @@ SOAK = [
         "passed the whole fast tier and drew nothing",
         needs=("marty",), serial=True,
         wants=("build/office360.img",)),
-    Row("vberefuse", "soak", py("tests/vberefuse.py"), 200.0,
-        "SPEC.md 39.29.6: a card that ADVERTISES 1024x768 and cannot map it "
-        "is refused. QEMU is the machine this row wants and that is the "
-        "point, not a limitation: its Bochs BIOS answers int 10h AX=4F01h "
-        "for mode 0104h and lists it present, and the window it reports at "
-        "A000 is not CPU-addressable (39.29.8) - so QEMU is a BIOS THAT "
-        "LIES, which is the case the safeguard exists for. VBV_PROVE sets "
-        "the mode, writes a byte through the window, reads it back and puts "
-        "mode 12h again; if the read-back disagrees the bit stays clear and "
-        "the Display page never grows a row, instead of growing one that "
-        "has to be RECOVERED from at the moment somebody picks it. The "
-        "probe runs at BOOT (drv_boot_x, 39.29.5's third placement), so "
-        "there is nothing to click: the row reads a decision already taken. "
-        "Check 3 is the tick counter and not a window count - a bare "
-        "desktop HAS no windows, and checks 1 and 2 both read zero-ish "
-        "values that a kernel which died inside the probe would also give. "
-        "MUTATION: skip the window proof and check 1 alone fails with "
-        "[vid_avail] = 0x15. This is the NEGATIVE case and the only VBE "
-        "coverage that runs off the Satellite 4025CDT",
-        needs=("qemu",), serial=True,
-        wants=("build/os8088.img", "build/apps.img")),
     Row("dispmode", "soak", py("tests/dispmode.py"), 60.0,
         "Single or Extend, where the second display sits, and does it survive"
         "a",

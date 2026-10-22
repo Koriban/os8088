@@ -42053,7 +42053,11 @@ program never needs a disk list edited:
   folder holds its overlay and its documents. `APPS\`, `GAMES\` and `MEDIA\`
   are *collections* of independent programs and are split only when one
   outgrows a whole floppy, between same-stem groups (a `GAMES\X.O88` keeps
-  any `X.*` data file beside it). Any other folder bigger than a floppy is
+  any `X.*` data file beside it). A module that shares a program but not its
+  stem is named in the tool's `COMPANIONS` and joins that program's group:
+  `CHART.OVL` and `MACRO.OVL` go with `SHEET.O88`, which reads both out of
+  the folder it was launched from (§82.16), and `CHART.OVL`'s own stem would
+  have put it with `CHART.O88`. Any other folder bigger than a floppy is
   refused by name: it needs a decision, not a bigger set.
 - **Placement is first fit in payload order**, so the set is a function of the
   payload alone. It is not stable against growth — a folder early in the order
@@ -54028,7 +54032,7 @@ everything on it and gain nothing from three.
 
 | disk | at the root | `MEDIA/` |
 |---|---|---|
-| `office360` | ArtfulType, Calculator, Chart, Font Viewer, Paint, Sheet, TeXPad, Word | `PAPER.TEX`, `GUIDE.TEX`, `SALES.SLK`, `WRITING.MD`, `WELCOME.DOC`, `SAMPLE.BMP` |
+| `office360` | ArtfulType, Calculator, Chart, Font Viewer, Paint, PiXEL, Sheet, TeXPad, Word | `PAPER.TEX`, `GUIDE.TEX`, `SALES.SLK`, `WRITING.MD`, `WELCOME.DOC`, `SAMPLE.BMP` (no `LAKE.JPG` since 2026-10-22, §24.6.1) |
 | `network360` | Browser, FTPD, Telnet, The Wire (+ `SYSTEM/DOS/OS88NET.COM`) | `BROWSER.HTM` |
 | `games360` | every package in the apps disk's `GAMES/` | — |
 
@@ -54099,6 +54103,15 @@ now"*), and so remade like every other row here the next time it runs out. The
 row to read is the Makefile's `APPS_TOOLS_360`, not a list here — a package
 list in prose goes stale the next time anything ships, and the enforcement is
 `os88disk.py` refusing an image that does not fit.
+
+**`office360.img` is curated the same way, and it ran out on 2026-10-22.**
+SHEET's two modules (§82.16, §81.94) took it to 354 of 354 clusters, so a save
+to it failed. The owner took **`LAKE.JPG` off that disk alone** — PiXEL's one
+sample there (§106.7), 18 clusters — rather than a program: `PIXEL.O88` stays,
+and the picture is still on the everything set and the live media (by way of
+`MEDIA_EXTRA`) and in every `make pixeldisk` gallery. The Makefile's
+`OFFICE360_DATA` is the row to read, and the decision is remade the next time
+this disk runs out.
 
 #### 24.6.2 One sample document per application
 
@@ -112612,11 +112625,16 @@ bytes shorter for a region and 4 for a worker, clobbering AX, the flags and
 matches `OS88_REGION_MOVABLE(_NOKEEP)` and `OS88_WORKER_RESTARTABLE(_NOKEEP)`
 alike - with the base names alone, `\b` after them misses the suffixed
 forms, since `_` is a word character, and the break-it-on-purpose run reads
-eight failures across six packages.
+eight failures across six packages. A hand-rolled call counts only in the
+REGION's shape, `DX = CS` with a proc in `AX`: the same slot declares every
+data claim, and a bare `call OSAPI_MEM_MOVABLE` once read SHEET's five claim
+declarations as the region it had stopped declaring.
 
 **Two shapes genuinely cannot take the bare form.** A package that has
 **stamped its own segment** somewhere the kernel does not know about —
-`apps/scribe`, into the vector table of a hand-rolled pre-parts `.ovl` module —
+`apps/scribe`, into the vector table of a hand-rolled pre-parts `.ovl` module,
+and `apps/sheet` today, whose `ch_ovbind` does the same to `CHART.OVL` and which
+is exempt in `tests/movable.txt` rather than declared (§82.16.9) —
 and a **re-homed** program (§20.12.10), whose loader named its assets by
 absolute segment and whose assets are *inside its own carve*, so they move with
 it. For those a bare `ret` is **silent corruption** rather than a missed
@@ -142775,22 +142793,6 @@ tells them apart.
 Resident +118 bytes (52,148 → 52,266, **3,079 free**), bss +289, `CHART.OVL`
 +2,266 (28,063 of 28,672).
 
-## 82. CHART — charting, and the buffer both halves draw into
-
-> **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts
-> through the same rasterizer and exports the same BMP, so the standalone
-> viewer was a second window onto a capability the spreadsheet already had, at
-> 13,865 bytes on every geometry. **`CHART.OVL` stays** — it is SHEET's module
-> and carries its file formats now (§82.16.9), and a disk without it leaves
-> SHEET unable to open or save anything.
->
-> The package is still **built**, in `all`, because it is the only thing that
-> compiles this file's RESIDENT half: SHEET builds the overlay half, so without
-> chart.o88 the `%ifndef CH_OVERLAY` branch is a path nothing assembles. The
-> asymmetry below is therefore still real and still checked — it is just no
-> longer a shipping decision. Everything in this section describes code that
-> still runs; only its second host stopped being on the floppy. (`apps/chart/chart.asm`, `apps/os88chart.inc`)
-
 ### 81.64 The menu tick is a SOLID SQUARE
 
 Sheet draws its own menus (§81), so it carried its own copy of the checked-item
@@ -144251,6 +144253,22 @@ its parts wants a wider column* — which is the honest thing to write and not a
 substitute for the fix. Fixing it properly needs `fx_` formatting at a chosen
 precision, the equivalent of SHEET's `.fit` loop; the `#` fill alone is cheap
 and would at least stop the wrong number.
+
+## 82. CHART — charting, and the buffer both halves draw into
+
+> **`CHART.O88` no longer ships (2026-09-03).** SHEET draws the same charts
+> through the same rasterizer and exports the same BMP, so the standalone
+> viewer was a second window onto a capability the spreadsheet already had, at
+> 13,865 bytes on every geometry. **`CHART.OVL` stays** — it is SHEET's module
+> and carries its file formats now (§82.16.9), and a disk without it leaves
+> SHEET unable to open or save anything.
+>
+> The package is still **built**, in `all`, because it is the only thing that
+> compiles this file's RESIDENT half: SHEET builds the overlay half, so without
+> chart.o88 the `%ifndef CH_OVERLAY` branch is a path nothing assembles. The
+> asymmetry below is therefore still real and still checked — it is just no
+> longer a shipping decision. Everything in this section describes code that
+> still runs; only its second host stopped being on the floppy. (`apps/chart/chart.asm`, `apps/os88chart.inc`)
 
 ### 82.1 The offscreen canvas, and why it is not optional
 
@@ -199682,9 +199700,11 @@ the bytes read.
 
 - **Where it ships:** `APPS_TOOLS`, so `apps.img` (1.44MB), `apps120.img`,
   the everything set and the live media — whose `MEDIA/` gets `LAKE.JPG` too,
-  by way of `MEDIA_EXTRA`; `office360.img` with
+  by way of `MEDIA_EXTRA`; `office360.img`, which carried
   `LAKE.JPG` in `MEDIA/` (§24.6.2: the gallery's smallest picture, 18 KB,
-  where `VACATION.JPG` would have taken 85 of that disk's 181 free clusters); and `make pixeldisk` in all four
+  where `VACATION.JPG` would have taken 85 of that disk's 181 free clusters)
+  until §24.6.1's dated decision of 2026-10-22 took the picture off that disk
+  alone, the package staying; and `make pixeldisk` in all four
   geometries — the package at the root, the gallery in `PICTURES/`,
   `SYSTEM/APPDATA/` made.
 - **Off `apps360.img` and `apps720.img`**, by §24.6.1's dated decision,

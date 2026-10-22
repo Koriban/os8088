@@ -788,7 +788,7 @@ SH_MINH      equ SH_MBAR_H + SH_FB_H + SH_CH_H + SH_HSB_H + SH_SB_H \
 SH_MI_H      equ 12                  ; a dropdown item's row height
 SH_MPAD      equ 8                   ; left/right pixel pad per title/item
 SH_MKGAP     equ 24                  ; 81.101: label to shortcut caption
-SH_MCHKX     equ 2                   ; SPEC.md 81.30: the check mark, a solid
+SH_MCHKX     equ 2                   ; SPEC.md 81.64: the check mark, a solid
 SH_MCHKY     equ 4                   ; square centred in the 8px check column
 SH_MCHKS     equ 5                   ; and on the row's 8px glyph line
 SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
@@ -8568,7 +8568,7 @@ sh_mdrop_draw:
     cmp byte [sh_mchk], 0
     je .nochk
     push ax                           ; the check: A SOLID SQUARE and not a
-    push bx                           ; tick (SPEC.md 81.30), because a thin
+    push bx                           ; tick (SPEC.md 81.64), because a thin
     push cx                           ; diagonal reads as scattered pixels on
     push dx                           ; the two 1bpp adapters (SPEC.md 39.4) -
     mov ax, [sh_mrx1]                 ; os88ui_chk's own mark and its own
