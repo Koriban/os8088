@@ -2082,6 +2082,9 @@ ct_s_noval:    db 'No numeric data found.', 0
                                         ; the merge made it load-bearing,
                                         ; fp_ln calling the very fp_sub and
                                         ; fp_i2a/fp_i2b the lines above drop
+%define FP_NO_POW                       ; ...and fp_pow, which nothing here
+                                        ; calls either - and with it the
+                                        ; fp_e0..fp_ek scratch (84.8)
 %define CH_NO_BMPWRITE                 ; the export is ct_flip's, in place
 %include "os88fp.inc"                  ; stage 4.6: the readers meet real
                                        ; decimals now (a BIFF NUMBER record IS
@@ -2100,7 +2103,7 @@ ct_s_noval:    db 'No numeric data found.', 0
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5)
 ; =============================================================================
-    OS88_BSS 792
+    OS88_BSS 758
     OS88_IMAGE_END
 
 ct_chartseg equ os88_image_end + 0  ; word: the offscreen canvas claim
@@ -2263,21 +2266,11 @@ fp_sgn            equ fp_tmp + 2       ; fp_atof's sign. fp_dig/fp_d10/fp_nd
 fp_hw             equ fp_sgn + 2       ; --- the coprocessor path ---
 fp_x1             equ fp_hw + 1        ; 10: A in 80-bit form
 fp_x2             equ fp_x1 + 10       ; 10: B
-fp_sw             equ fp_x2 + 10       ; where the status word lands
-fp_e0             equ fp_sw + 2        ; --- 84.10's four packed temporaries
-fp_e1             equ fp_e0 + 8        ; and its counter. STILL OWED under
-fp_e2             equ fp_e1 + 8        ; OS88FP_NOTRANS, and that was measured
-fp_e3             equ fp_e2 + 8        ; rather than assumed: the guard ends
-fp_ek             equ fp_e3 + 8        ; before fp_pow, whose INTEGER arm is
-                                       ; compiled either way and names
-                                       ; fp_e0..fp_e2 - only the fractional
-                                       ; arm (the one wanting a logarithm) is
-                                       ; stubbed out. Dropping them cost five
-                                       ; `symbol not defined` errors, not 34
-                                       ; bytes
-ct_abon     equ fp_ek + 2   ; byte: the About card is up (SPEC.md 20.5.1).
-                            ; UPSTREAM anchored it on fp_sw, where this fork
-                            ; had already grown the transcendental block
+fp_sw             equ fp_x2 + 10       ; where the status word lands.
+                                       ; fp_e0..fp_ek (84.10's scratch) are
+                                       ; not here: FP_NO_POW above dropped
+                                       ; fp_pow, the last routine naming them
+ct_abon     equ fp_sw + 2   ; byte: the About card is up (SPEC.md 20.5.1)
 ct_bss_end  equ ct_abon + 1
 
 ; -----------------------------------------------------------------------------

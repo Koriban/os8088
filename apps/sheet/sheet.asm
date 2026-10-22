@@ -17394,6 +17394,10 @@ sh_idlg_apply:
     je .tblrnext
     SHOUT sh_pcellref                  ; CF=1 = AX col, BX row
     jnc .tblrnext
+    cmp ax, SH_COLS                    ; ON the sheet, as .gotoref asks: 'A0'
+    jae .tblbad                        ; parses as row FFFFh, SH_TBL_NONE
+    cmp bx, SH_ROWS                    ; itself, and a row past SH_ROWS packs
+    jae .tblbad                        ; into the NEXT sheet's key
     mov [sh_tbl_ic], ax
     mov [sh_tbl_ir], bx
 .tblrnext:
@@ -17424,6 +17428,10 @@ sh_idlg_apply:
     je .tblgo
     SHOUT sh_pcellref
     jnc .tblgo
+    cmp ax, SH_COLS                    ; ...and the same for this one
+    jae .tblbad
+    cmp bx, SH_ROWS
+    jae .tblbad
     mov [sh_tbl_ic2], ax
     mov [sh_tbl_ir2], bx
 .tblgo:
@@ -28953,6 +28961,20 @@ sh_reidx_cellpart:
     jb .notref
     cmp al, '9'
     ja .notref
+    mov bx, si                         ; 81.35: letters, digits, then '(' is
+.fndig:                                ; a FUNCTION (LOG10, ATAN2), not a
+    inc bx                             ; reference - the parser's own rule,
+    mov al, [bx]                       ; so a shift never rewrites the name
+    cmp al, '0'
+    jb .fnend
+    cmp al, '9'
+    jbe .fndig
+.fnend:
+    cmp al, '('
+    jne .isref
+    mov si, bx                         ; the whole name goes out verbatim
+    jmp .notref
+.isref:
     call sh_identcol                   ; ax = 0-based col (from sh_ident)
     mov [sh_rw_refcol], ax
     mov bx, si
@@ -29743,6 +29765,20 @@ sh_copy_cellpart:
     jb .notref
     cmp al, '9'
     ja .notref
+    mov bx, si                         ; 81.35: letters, digits, then '(' is
+.fndig:                                ; a function - see sh_reidx_cellpart
+    inc bx
+    mov al, [bx]
+    cmp al, '0'
+    jb .fnend
+    cmp al, '9'
+    jbe .fndig
+.fnend:
+    cmp al, '('
+    jne .isref
+    mov si, bx
+    jmp .notref
+.isref:
     call sh_identcol                   ; ax = 0-based col (from sh_ident)
     cmp byte [sh_cp_absc], 0           ; a pinned column does not follow the
     jne .colpinned                     ; paste's own displacement
@@ -34439,7 +34475,7 @@ shm_pfin:
                                        ; a pointer to sh_fnt (81.37)           ; sh_fnarg[] is forty bytes and a task
     je .free                          ; stack is 384 (20.6 rule 6), so it is
     mov byte [sh_evalerr], SH_ERR_VALUE  ; not banked per nesting level and a
-    jmp .zero                         ; financial function inside another's
+    jmp .refused                      ; financial function inside another's
 .free:                                ; arguments refuses instead (47)
     mov byte [sh_fnbusy], 1
     cmp word [sh_fnid], 104           ; IRR and MIRR open with a RANGE, so
@@ -35294,12 +35330,21 @@ shm_pfin:
     inc si
 .out:
     mov byte [sh_fnbusy], 0
+.rout:
     xor ax, ax
     pop di
     pop dx
     pop cx
     pop bx
     ret
+.refused:                             ; the NESTED call's own exit. SI is its
+    SHOUT fp_azero                    ; position, just past its '(', while
+    SHOUT sh_acc_store                ; sh_trsi and sh_fnbusy are the OUTER
+    SHOUT sh_skipargs                 ; call's: .zero resumed the parse at a
+    cmp byte [si], ')'                ; stale sh_trsi and cleared the flag,
+    jne .rout                         ; so the next nested call ran and wiped
+    inc si                            ; sh_fnarg[] under the outer one
+    jmp short .rout
 
 ; -----------------------------------------------------------------------------
 ; sh_irwalk - walk the banked range in row-major order, summing each value
@@ -35725,12 +35770,14 @@ shm_ptrans:
 .trig:
     cmp di, 86
     jne .t1
-    SHOUT fp_sin
+    SHOUT fp_sin                      ; CF: an argument past a word of
+    jc .domain                        ; quadrants is #NUM!, not a stored 0
     jmp .store
 .t1:
     cmp di, 87
     jne .t2
     SHOUT fp_cos
+    jc .domain
     jmp .store
 .t2:
     cmp di, 88
@@ -50650,8 +50697,12 @@ shm_pcell:
 .format:
     mov ax, [sh_ci_col]
     mov bx, [sh_ci_row]
-    SHOUT sh_bt_getw                   ; AH = the number-format index, 0
-    mov bl, ah                         ; (General) when no record
+    SHOUT sh_cell_nfid                 ; AL = the id as Format > Number has
+    cmp al, SH_NF_N                    ; it: the table's id+1 less one, else
+    jb .fmtid                          ; the format byte's, else General - and
+    xor al, al                         ; never an index past the table
+.fmtid:
+    mov bl, al
     xor bh, bh
     shl bx, 1
     push si                            ; SI is the FORMULA position (past the
@@ -52074,14 +52125,16 @@ shm_pmatrix:
     xor ax, ax
     SHOUT sh_acc_int
     mov byte [sh_curtype], SH_T_NUM
-    jmp .out
+    jmp .done_clean                    ; THIS call set sh_mx_busy, so it
+                                       ; clears it - a bad argument list left
+                                       ; every array function refused after it
 .refused:
     SHOUT sh_skipargs
     mov byte [sh_evalerr], SH_ERR_VALUE
     xor ax, ax
     SHOUT sh_acc_int
     mov byte [sh_curtype], SH_T_NUM
-    jmp .out
+    jmp .out                           ; the OUTER call owns the flag
 .done_clean:
     mov byte [sh_mx_busy], 0
 .out:

@@ -135712,6 +135712,12 @@ name. `A1` and `$A$1` reach the reference path untouched — which is what
 `=A1+A1` answering 14 in the verification below is there to prove, and not a
 throwaway.
 
+**The two formula rewriters take the same rule.** `sh_reidx_cellpart`
+(Insert/Delete Row/Column) and `sh_copy_cellpart` (Copy, Fill) scan past a
+digit run before treating it as a row, and a `(` beyond it sends the whole
+name out verbatim. Without it every shift rewrote `LOG10(` as `LOG11(`, `LOF10(`
+or `#REF!(`, and `ATAN2(` the same way, and stored the result.
+
 #### 81.35.2 Verified
 
 `screenshots/sheet-logarithms.png`, with 7 in A1:
@@ -135739,7 +135745,8 @@ complete.
 `ASIN(x) = atan(x / √(1−x²))` and `ACOS(x) = π/2 − ASIN(x)`. The domain is
 `[-1, 1]`; at either end the square root is zero and the quotient has no value,
 so `±π/2` is written directly rather than divided for. Outside it, `#NUM!`.
-`TAN` at a pole is `#DIV/0!`, which is what a tangent's pole *is*.
+`TAN` at a pole is `#DIV/0!`, which is what a tangent's pole *is*. `SIN` and
+`COS` past a word of quadrants are `#NUM!` too, on `fp_sin`'s CF (§84.11).
 
 **`ATAN2(x_number, y_number)` takes x first**, which is the reverse of C's
 `atan2(y, x)` and the one thing about this function everybody gets wrong. It is
@@ -137726,7 +137733,10 @@ the comma's side in `{=TABLE($D$9,)}` versus `{=TABLE(,$E$8)}`. An empty
 field stores `SH_TBL_NONE`, and only the second half decides whether the pair
 makes sense — refusing in the first half would reject a legal one-input
 table. `SH_TBL_NONE` is `0FFFFh` and not zero, because row 0 column 0 is cell
-A1, a perfectly ordinary input cell.
+A1, a perfectly ordinary input cell. **A cell that is GIVEN must be on the
+sheet**, as Go To asks (column below `SH_COLS`, row below `SH_ROWS`), or the
+command refuses: `A0` parses as row `0FFFFh`, which is `SH_TBL_NONE` itself,
+and a row past `SH_ROWS` packed into the next sheet's key and wrote there.
 
 #### 81.114.2 Which of the three shapes, decided and not guessed
 
@@ -142896,7 +142906,7 @@ Each attribute:
 | `"protect"` | 1 if locked, 0 if not - reading the border table's inverted-sense bits exactly as Options ▸ Protect Document does (§81.46): no record there means LOCKED, an untouched sheet's real default |
 | `"address"` | the cell as text, `$A$1`-style, built from `sh_colname` and `sh_itoa` |
 | `"contents"` | the cell's own value, published exactly as `sh_getcell2` leaves it - a number stays a number, a label a label, matching INDEX's own "the caller reads whatever type is there" rule |
-| `"format"` | a short code for the cell's number format (`"G"`, `"F2"`, `"C2"`, `"P0"`, `"D1"`...) - one new table, `sh_ci_fmtcodes`, indexed exactly as §81.55's own `sh_nf_codes` is, so the two stay in step by construction |
+| `"format"` | a short code for the cell's number format (`"G"`, `"F2"`, `"C2"`, `"P0"`, `"D1"`...) - one new table, `sh_ci_fmtcodes`, indexed exactly as §81.55's own `sh_nf_codes` is, so the two stay in step by construction. The index is `sh_cell_nfid`'s, the id Format ▸ Number shows: the border table's stored id+1 less one, else the format byte's. A raw border-table byte answered the NEXT id's code, ignored the format byte, and read past the table at id 20; an id past `SH_NF_N` is `"G"` |
 | `"prefix"` | `'` left-aligned, `"` right-aligned, `^` centred, or `""` for General - reading the alignment bits `sh_getcell2` already publishes in `sh_curfmt` |
 | `"type"` | `"b"` blank, `"l"` label, `"v"` value - Excel's own three-letter answer |
 
@@ -142962,7 +142972,9 @@ MINVERSE's augmented `[A|I]` and MDETERM's plain triangulation alike, never
 both at once (`sh_mx_busy` - refused, not guarded, the same shape §81.65's
 `sh_db_busy` already uses and for the same reason: the workspace stays live
 across a whole elimination's worth of recursable `sh_getcell2` calls, not
-just one). `SH_MX_N` = 8 caps every array argument at 8 rows/columns each
+just one. The call that set it clears it on every exit it owns, a bad
+argument list included, which once left every array function refused for the
+session; a refused call leaves it to the outer one). `SH_MX_N` = 8 caps every array argument at 8 rows/columns each
 way. MDETERM triangulates with partial pivoting (the first nonzero entry at
 or below the pivot row, not the largest-magnitude one - correct, if less
 numerically robust than full partial pivoting, which nothing here has
@@ -145658,7 +145670,11 @@ back into the parser, the parser can evaluate a cell, and that cell's formula
 can call the family again — **the module is re-entered while it is still on the
 stack**. The dispatcher is stateless and indexes through `BP`, which the stub
 banks, so nothing in the path cares; `sh_fnbusy` still refuses a financial
-function inside another's arguments, exactly as it did resident.
+function inside another's arguments, exactly as it did resident. **The refusal
+has its own exit**: it skips its own arguments from its own `SI` and touches
+neither `sh_trsi` nor `sh_fnbusy`, which are the outer call's. Through `.zero`
+it resumed the parse at a stale `sh_trsi` and cleared the flag, so the next
+nested call ran and wiped `sh_fnarg[]` under the outer one.
 
 **The stub is the first one here that answers a refusal itself.** `sh_doread`,
 `sh_dowrite` and `sh_difbbox` hand `ch_ovcall`'s CF to callers that already
@@ -146008,13 +146024,16 @@ thing to debug from inside a spreadsheet: a wrong bit in the guard region
 surfaces as one cell being slightly off, on some inputs. So the expectations
 are **generated on the host in real double precision** and embedded as exact
 bytes — the reference is not the same arithmetic restated in assembly — and a
-case passes only if all eight bytes match — with one stated exception, the
-series layer of §84.10.1. **126 cases, counted 2026-10-16** (re-measure, never
-quote this): carrying, cancellation, mixed signs, ties that must round to
-even, ties broken only by bits lost below the working form, an operand lost
-below the guard, 1e±300 extremes, non-terminating quotients, `0.1+0.2`, the
-text round trip, negative and oversized text exponents,
-`sqrt`/`floor`/`trunc`/`round`, and the 38 of §84.11.2. The stated
+case passes only if all eight bytes match. **88 cases in this tree** (counted
+in `fpcases.inc`'s groups; re-measure, never quote this): carrying,
+cancellation, mixed signs, ties that must round to even, ties broken only by
+bits lost below the working form, an operand lost below the guard, 1e±300
+extremes, non-terminating quotients, `0.1+0.2`, the text round trip, negative
+and oversized text exponents, and `sqrt`/`floor`/`trunc`/`round`. **None
+reaches §84.10's layer**: the 126 this section counted on 2026-10-16 included
+the 38 series cases of §84.11.2, and those are not in `apps/fptest` as merged,
+which sets `OS88FP_NOTRANS` and `FP_NO_POW` (§84.8) and so assembles to the
+bytes it did before the layer existed. The stated
 simplifications are covered too — the overflow clamp, the subnormal flush, and
 division by zero with its **CF asserted, not just its bytes** — and those
 expected values are the posture of §84.2, marked as such, where a real double
@@ -146027,12 +146046,12 @@ to `os88fp.inc` has to build it on purpose. This said *"breaks the build"*
 until the first apps size pass found `all` had stopped naming it.
 
 **The cases are POOLED, which is a size decision and not a weaker test.** The
-126 cases name only 105 distinct doubles, 35 of them zero below the top word,
+88 cases name only 72 distinct doubles, 32 of them zero below the top word,
 so `fpcases.inc` writes each double once and a case names it by a one-byte
 index that `fpt_ld` expands back into the same eight bytes; the operator rides
 in bit 7 of two index bytes, a case's name follows it inline, and a round trip
-whose output is its input says so with an empty string. The eight kinds of
-case are one walk over that stream with a handler each. The image fell
+whose output is its input says so with an empty string. The kinds of case
+are one walk over that stream with a handler each. The image fell
 **7,164 -> 5,813 bytes** and the bss 219 -> 169, a **6 KB** claim where it was
 8, with the window drawn pixel for pixel as before and each kind of case — a
 low-bits-only miss, a CF-only miss on every division, a parse, a round trip —
@@ -146040,6 +146059,11 @@ confirmed to go red when broken, on both the software and the coprocessor
 pass. A seven-bit index caps the pool at 128 and the file asserts it.
 
 #### 84.4.1 What the 38 series cases cost the instrument
+
+**NOT IN THIS TREE.** What follows describes an `apps/fptest` with a third
+column, `FPT_W` 460, `fpt_hmath` and 126 cases. The FPTEST that is here is the
+300-wide, 88-case one of §84.4, and the record below stands until that
+version of `fptest.asm` and `fpcases.inc` is committed with it.
 
 Four things had to move, each a constraint the file had not met before —
 and a fifth was found on the glass and deliberately left alone.
@@ -146357,15 +146381,22 @@ takes opt-out gates, defined before the `%include`:
 | `FP_NO_FLOOR` | `fp_floor`, `fp_a_to_tv`, `fp_tv_to_a` | 57 |
 | `FP_NO_I2X` | `fp_i2a`, `fp_i2b` | 118 |
 | `FP_NO_SUB` | `fp_sub`, `fps_sub`, `fpx_sub` | 56 |
+| `FP_NO_POW` | `fp_pow`, and `fp_c_one` too when `OS88FP_NOTRANS` is set | 164 (+8) |
 
-The last two are called by the first three, and dropping one while a caller
-stays is refused by name in the include, not as an undefined symbol. A gate
+`FP_NO_SUB` and `FP_NO_I2X` are called by the first three, and dropping one
+while a caller stays is refused by name in the include, not as an undefined
+symbol. Nothing calls `fp_pow`, so `FP_NO_POW` needs no such check; with
+`OS88FP_NOTRANS` as well nothing names `fp_e0`–`fp_e3` or `fp_ek` (§84.10),
+and that scratch may go too. A gate
 takes its routine's caller-declared scratch with it (§84.3): `fp_dig`,
 `fp_d10` and `fp_nd` are `fp_ftoa`'s, `fp_sq` and `fp_g` `fp_sqrt`'s, `fp_tv`
 `fp_floor`'s. CHART sets all five - it parses numbers and scales a series, and
 never prints, roots or subtracts one - and with `apps/os88chart.inc`'s
 `CH_NO_BMPWRITE` (its export flips the canvas in place, §82.14) that is 1,035
-bytes of image and 52 of bss. SHEET and FPTEST set none.
+bytes of image and 52 of bss. CHART also sets `OS88FP_NOTRANS` and
+`FP_NO_POW`, which take §84.10's layer and its 34 bytes of scratch. FPTEST sets
+those two and no other, because it has no case for that layer (§84.4); SHEET
+sets none.
 ### 84.10 The transcendental layer: `ln`, `exp`, `pow`
 
 **None of this is free on hardware either**, which is the first thing to say
@@ -146386,7 +146417,14 @@ error is the *cell's* business, as it is everywhere else in this file.
 **`fp_exp`.** `k = round(x/ln2)` and `r = x − k·ln2`, so `|r| ≤ 0.3466` and
 `e^x = 2^k · e^r`; fifteen terms of `1 + r + r²/2! + …` take `0.3466¹⁵/15!` far
 below the last bit. **`2^k` goes onto the exponent** rather than through a
-multiply — it costs nothing and cannot round.
+multiply — it costs nothing and cannot round. `k` is rounded with `CX` = 0,
+whole units: `fp_round`'s `CX` is its decimal places, and the caller's
+(SHEET's recalculation holds a cell count there) once decided whether `k` was
+rounded, truncated or flushed to zero. **`|k|` past 2,200 is past any double**,
+and added to the working exponent it would wrap `fp_pack_a`'s signed test into
+a flush, so it goes where a `k` past a word goes: a negative `x` answers 0 and a
+positive one **clamps** to the largest finite double, §84.2's rule. `EXP(25000)`
+and `2^40000` answered 0.
 
 **`fp_pow`.** A **whole-number exponent goes by repeated squaring**, and not
 for speed: `exp(y·ln x)` is inexact for cases everyone expects to be exact —
@@ -146413,7 +146451,9 @@ to within 64 ulp on the fourth", which §84.11.1 had already replaced and which
 
 Twelve cases, every expected value computed on the host from Python's `math`
 and packed as a real double: `LN` of 1, 2, 10, 0.5, 1e10 and 0.001; `EXP` of 0,
-1, −1, 10, 0.5 and −5. **All pass, on both the software and the 8087 path.**
+1, −1, 10, 0.5 and −5. **They are not in this tree** (§84.4): the FPTEST here
+runs 88 cases and none of them reaches `fp_ln` or `fp_exp`, so nothing in it
+runs the 64-ulp arm either.
 `screenshots/fptest-transcendental.png` and `screenshots/fptest-trig.png` are
 these rows in the layout they had before §84.4.1 widened the window; the
 current picture is `screenshots/fptest-126.png`.
@@ -146429,6 +146469,9 @@ quadrant `k mod 4` says which of `±sin(r)`, `±cos(r)` the answer is; ten terms
 each. **The reduction is the accuracy limit, not the series**: π/2 is a double,
 so a very large `x` is reduced against a π/2 that is itself rounded and the
 answer degrades as `x` grows. Excel has the same limit for the same reason.
+`k` is rounded with `CX` = 0, as `fp_exp`'s is. Past a word of quadrants
+(`|x|` > 32767·π/2, about 51,470) `fp_sin` and `fp_cos` return **CF=1** and
+zero, and SHEET's `SIN` and `COS` answer `#NUM!` (§81.36), not a stored 0.
 
 **`fp_tan`** is sin/cos, with `x` banked **on the stack** because `fp_sin` and
 `fp_cos` both own `fp_e0`–`fp_e3`.
@@ -146457,8 +146500,10 @@ replaced it, where the answer is O(0.14) and the series is what is under test.
 
 #### 84.11.2 The 38 series cases, and what proves they are a test
 
-`fpcases.inc` carries **38** of them — `LN` 6, `EXP` 6, `SIN` 6, `COS` 4,
-`TAN` 3, `ATAN` 6, `POW` 7 — in one group run by `fpt_hmath`. Three things
+**NOT IN THIS TREE**, like §84.4.1: the `fpcases.inc` here carries **none** of
+them, and FPTEST runs 88 cases with the layer gated out (§84.4). As recorded,
+the group was **38** — `LN` 6, `EXP` 6, `SIN` 6, `COS` 4, `TAN` 3, `ATAN` 6,
+`POW` 7 — run by `fpt_hmath`. Three things
 about that group are not like the rest of the file.
 
 **The operator is a WHOLE BYTE.** `fpt_op` reads bit 7 of two index bytes,
@@ -146481,8 +146526,9 @@ verdict: one host expectation pointed at the wrong double reads `soft 1`; the
 `fpt_mops` reads `soft 10`, which is every `SIN` and `COS` case and no other;
 `POW2^10`'s tenths changed from 100 to 50 reads `soft 1`; and inverting the
 verdict reads `soft 126`, which is also what proves `fpt_appn`'s new hundreds
-digit. **126 of 126 pass** on the software path, and on an 8087 the same
-bytes are demanded of the coprocessor.
+digit. **126 of 126 passed** on the software path of that version, and on an
+8087 the same bytes were demanded of the coprocessor; none of it can be re-run
+until those sources are committed.
 
 ## 85. TANK ATTACK — a wireframe tank duel in a foreign mode (`apps/tank/`)
 
