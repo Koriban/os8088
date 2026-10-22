@@ -927,6 +927,9 @@ menu_furniture:
     push dx
     push di
     mov byte [menu_bovr], 0
+%ifdef OS88_SNDCARD
+    mov word [menu_mixcap], 0FFFFh
+%endif
 
     call thm_bg                
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
@@ -1466,6 +1469,12 @@ menu_bput:
 menu_clkcells:
     mov ax, [vid_wm8]
     sub ax, [vid_clk_hx]
+%ifdef OS88_SNDCARD
+    test word [drv_svc+DSV_CAPS], SND_CAP_MIXER
+    jz .plain
+    sub ax, 24
+.plain:
+%endif
     mov cl, 3
     shr ax, cl
     cmp ax, MENU_CLKC - 1
@@ -1475,6 +1484,9 @@ menu_clkcells:
     ret
 
 menu_draw_clock:
+%ifdef OS88_SNDCARD
+    call menu_sound
+%endif
     call kent_di                ; = push ax/bx/cx/dx/si/di
     push es
 
@@ -1587,13 +1599,16 @@ menu_draw_clock:
                                 ; DH <= the field's 25 cells, so `cbw` is a zero
                                 ; extension; AX is reloaded on both paths below
     mov dx, MENU_TEXT_Y
-    mov cx, [vid_clk_hx]
+    mov cx, [menu_clkx]
     mov si, menu_clkbuf
     or di, di
     jnz .strip
-    call thm_pair               ; --- no toast: one opaque pass over the lot
-                                
+%ifdef OS88_SNDCARD
+    call menu_clock_text        ; padding and text leave the speaker's cells
+%else
+    call thm_pair
     call font_run
+%endif
 .jout:
     jmp short .out
 .strip:
@@ -1650,7 +1665,7 @@ menu_draw_clock:
     mov ax, di                  ; --- and the clock the strip did not reach
     mov cl, 3
     shl ax, cl
-    add ax, [vid_clk_hx]
+    add ax, [menu_clkx]
     mov cx, ax
     mov si, menu_clkbuf
     add si, di
@@ -2675,6 +2690,12 @@ menu_s_shutdown db 'Shut Down...', 0
 menu_s_hiber    db 'Hibernate...', 0        ; SPEC.md 87.2: ui_loc_gate points
 menu_s_hibernh  db MENU_DIS, 'Hibernate (No HD)', 0  ; item 4 at one of the
 menu_s_hiberxm  db MENU_DIS, 'Hibernate (XMS)', 0    ; three, and the two
+%ifdef VID_EXT
+menu_s_hibervx  db MENU_DIS, 'Hibernate (VESA)', 0   ; ...and a fourth: the
+                                ; VESA display cannot be carried in an image
+                                ; (SPEC.md 120.4). Resident, as a menu string
+                                ; must be; HIBER.DRV's hb_ok chooses it
+%endif
                                 ; greyed ones say WHY NOT (SPEC.md 47 rule 3)
 menu_s_msep     db MENU_DIS, '-----------------', 0
                                 ; the rule above Hibernate: seventeen dashes,
@@ -2877,4 +2898,116 @@ menu_abstr: resb MENU_ABPFX_LEN + MENU_MAXCH + 1
                                 ; both strings the cell needs are KERNEL data
                                 ; and its MB_SEG is 0 even under a package
 
+section .text
+
+%ifdef OS88_SNDCARD
+; The clock's padding and text surround an independent speaker segment.
+; The driver owns its picture; redraw only on a move, capability or overwrite.
+menu_clock_text:
+    test word [menu_mixcap], SND_CAP_MIXER
+    jz .plain
+    mov di, [menu_mixx]
+    add di, 24                 ; visible clock starts just after the speaker
+    sub di, cx
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    add di, si                 ; first clock character in the staged field
+    push word [di]
+    mov byte [di], 0
+    mov cx, [vid_clk_hx]       ; include the three reserved cells in the pad
+    call thm_pair
+    call font_run              ; padding ends exactly where the icon starts
+    pop word [di]
+    mov si, di
+    mov cx, [menu_mixx]
+    add cx, 24
+.plain:
+    call thm_pair
+    jmp font_run
+
+menu_sound:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [vid_pw]
+    sub ax, 8 + MENU_CLK_W + 6
+    and ax, 0FFF8h             ; original clock field, from live geometry
+    mov [menu_clkx], ax
+    xor bp, bp
+    mov dx, [drv_svc+DSV_CAPS]
+    and dx, SND_CAP_MIXER
+    jz .origin
+    sub ax, 24                 ; reserve the icon LEFT of the full clock field
+    mov bp, ax                 ; fallback notification keeps the entire field
+    cmp byte [toast_on], 0
+    je .clock
+    cmp word [toast_scn], 0
+    je .origin
+.clock:
+    call clk_fmt               ; right-align against the visible clock text
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    mov bp, [vid_wm8]
+    sub bp, cx
+    sub bp, 24
+.origin:
+    cmp ax, [vid_clk_hx]
+    jne .changed
+    cmp dx, [menu_mixcap]
+    jne .changed
+    cmp bp, [menu_mixx]
+    je .out
+.changed:
+    mov [vid_clk_hx], ax
+    cmp word [menu_mixcap], SND_CAP_MIXER
+    jne .store
+    call thm_bg                 ; erase the old picture before menus reuse it
+    mov ax, [menu_mixx]
+    mov cx, ax
+    add cx, 23
+    mov bx, 2
+    push dx
+    mov dx, 17
+    call gfx_fill
+    pop dx
+.store:
+    mov [menu_mixcap], dx
+    mov [menu_mixx], bp
+    mov word [menu_ckck], 0
+    call menu_relayout          ; bounded at the new right-hand hit band
+    call menu_bar_text          ; compose only the changed menu cells
+    test word [menu_mixcap], SND_CAP_MIXER
+    jz .out
+    mov cx, [menu_mixx]
+    call thm_rpair             ; bitmap ones are paper, zeroes are the speaker
+    mov bx, DRVC_SOUND*256 + SNDV_MIXICON_THEME
+    push ds
+    pop es
+    call drv_pkg_call_x
+    jnc .out
+    mov bl, SNDV_MIXICON        ; a sound driver built before the themed verb
+    call drv_pkg_call_x
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+menu_mixcap: dw 0FFFFh
+menu_mixx:   dw 0
+menu_clkx:   dw 0
+%else
+menu_clkx equ vid_clk_hx
+%endif
 section .text

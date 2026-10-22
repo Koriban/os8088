@@ -96,6 +96,70 @@ LN_DIS    equ 19                ; byte: non-zero = DISABLED (SPEC.md 47). It
                                 ; kernel button's answer too
 OS88LINE_SZ equ 20
 
+; --- OS88LINE_PENS - the field in the PACKAGE's colours (SPEC.md 83.5) ------
+; Define it before the include and three bytes of your own,
+; `os88line_pens: db ink, ground, frame`, and every colour below is read from
+; them at the draw. Undefined, each macro is the literal it replaced, so
+; every other package assembles byte-identical.
+%ifdef OS88LINE_PENS
+  %define LN_INKAL  mov al, [os88line_pens]
+  %define LN_GNDAL  mov al, [os88line_pens+1]
+  %define LN_FRMAL  mov al, [os88line_pens+2]
+%else
+  %define LN_INKAL  mov al, CBLACK
+  %define LN_GNDAL  mov al, CWHITE
+  %define LN_FRMAL  mov al, CBLACK
+%endif
+%macro LN_PAIRAX 0             ; AL = ink, AH = ground
+%ifdef OS88LINE_PENS
+    mov ax, [os88line_pens]
+%else
+    mov al, CBLACK
+    mov ah, CWHITE
+%endif
+%endmacro
+
+; --- OS88LINE_RUN - the field in the PACKAGE's face (SPEC.md 83.6) ---------
+; Define it as a near routine with OSAPI_FONT_RUN's contract (CX = x, DX =
+; the 8x8 cell's top, SI = a NUL string, AL = ink, AH = ground, every register
+; kept) and every run the field draws calls it instead. A face whose cell is
+; not font_run's 8 rows says so with OS88LINE_RUNUP (rows its cell starts
+; ABOVE DX) and OS88LINE_RUNH (its rows), and the two cell blanks - a
+; rubbed-out character, a caret taken off past the end - cover that cell, so
+; a descender is never left behind. The caret stays font_run's 8 rows, which
+; the cell covers. The routine is not asked to grey: a carrier that disables
+; its field and wants the stipple keeps font_run. Undefined, every macro is
+; the call it replaced and every other package assembles byte-identical.
+%ifdef OS88LINE_RUN
+  %macro LN_RUN 0
+    call OS88LINE_RUN
+  %endmacro
+  %macro LN_URUN 0
+    call OS88LINE_RUN
+  %endmacro
+  %ifndef OS88LINE_RUNUP
+    %define OS88LINE_RUNUP 0
+  %endif
+  %ifndef OS88LINE_RUNH
+    %define OS88LINE_RUNH 8
+  %endif
+%else
+  %macro LN_RUN 0
+    call OSAPI_FONT_RUN
+  %endmacro
+  %macro LN_URUN 0
+    UI_RUN
+  %endmacro
+  %define OS88LINE_RUNUP 0
+  %define OS88LINE_RUNH 8
+%endif
+%macro LN_BLANKY 0             ; BX = DX = the glyph band's top -> BX, DX = the
+  %if OS88LINE_RUNUP           ; cell's first and last rows
+    sub bx, OS88LINE_RUNUP
+  %endif
+    add dx, OS88LINE_RUNH - OS88LINE_RUNUP - 1
+%endmacro
+
 LN_INSET  equ 3                 ; MINIMUM pixels between the frame and the first
                                 ; glyph. The pen is rounded UP from here to a
                                 ; multiple of 8 - see os88line_pen, which is
@@ -218,7 +282,7 @@ os88line_draw:
 
     cmp byte [si+LN_DIS], 0     ; the frame - in the CALLER's pen when this
     jne .frame                  ; field is disabled, so the ring and the text
-    mov al, CBLACK              ; inside it cannot come out one solid and one
+    LN_FRMAL                    ; inside it cannot come out one solid and one
     UI_INK                      ; stippled (SPEC.md 47 rule 2)
 .frame:
     mov ax, [si+LN_X1]
@@ -249,9 +313,8 @@ os88line_draw:
     add dx, LN_INSET
     push si
     mov si, bx                  ; ...SI is the TEXT for one call only
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN         ; ...one opaque pass: no blank, ever
+    LN_PAIRAX
+    LN_RUN                      ; ...one opaque pass: no blank, ever
     pop si
     pop ax
     mov [bx+di], al             ; ...and the banked byte back
@@ -278,7 +341,7 @@ os88line_draw:
     cmp ax, cx
     ja .caret
     push ax
-    mov al, CWHITE
+    LN_GNDAL
     UI_INK
     pop ax
     mov bx, [si+LN_Y1]
@@ -312,7 +375,7 @@ os88line_draw:
                                 ; a taller bar left its top and bottom rows
                                 ; behind at every column the caret visited
     push ax
-    mov al, CBLACK
+    LN_INKAL
     UI_INK
     pop ax
     UI_FILL                     ; a 1px bar: x1 = x2 = the caret's column
@@ -392,7 +455,7 @@ os88line_caron:
     add dx, 7
     mov cx, ax                  ; ...and a 1px bar is x1 = x2
     push ax
-    mov al, CBLACK
+    LN_INKAL
     UI_INK
     pop ax
     UI_FILL
@@ -439,24 +502,23 @@ os88line_caroff:
     push si
     mov si, bx                  ; ...SI is the TEXT for one call only
     mov cx, ax
-    mov al, CBLACK
-    mov ah, CWHITE
-    UI_RUN
+    LN_PAIRAX
+    LN_URUN
     pop si
     pop cx
     mov [bx+1], cl              ; ...and the banked byte back
     jmp short .out
 .blank:
-    mov bx, dx                  ; y1 = the band's top, y2 = 8 rows down
-    add dx, 7
+    mov bx, dx                  ; y1 = the band's top, y2 = 8 rows down (the
+    LN_BLANKY                   ; face's cell, under OS88LINE_RUN)
     mov cx, ax
     add cx, 7                   ; ...and the whole 8px cell across
     push ax
-    mov al, CWHITE
+    LN_GNDAL
     UI_INK
     pop ax
     UI_FILL
-    mov al, CBLACK              ; ...AND THE PEN BACK. fd_clear_content's bug
+    LN_INKAL                    ; ...AND THE PEN BACK. fd_clear_content's bug
     UI_INK                      ; is what a colour left behind looks like two
                                 ; callers later (SPEC.md 77.14.1)
 .out:
@@ -549,9 +611,9 @@ os88line_edit:
     mov cx, ax
     push si
     mov si, bx                  ; ...and ONE opaque cell, ground and glyph in
-    mov al, CBLACK              ; a single pass (SPEC.md 6.1). No NUL to bank:
-    mov ah, CWHITE              ; the last character is already followed by
-    call OSAPI_FONT_RUN         ; the buffer's own terminator
+    LN_PAIRAX                   ; a single pass (SPEC.md 6.1). No NUL to bank:
+                                ; the last character is already followed by
+    LN_RUN                      ; the buffer's own terminator
     pop si
     mov di, [si+LN_CAR]         ; ...AND NOTHING IS OWED AT .caret: the cell
                                 ; just drawn opaquely IS the one the bar was
@@ -565,16 +627,16 @@ os88line_edit:
     jc .caret
     push ax
     push dx
-    mov al, CWHITE              ; ...blanked, and only it
+    LN_GNDAL                    ; ...blanked, and only it
     UI_INK
     pop dx
     pop ax
     mov bx, dx
     mov cx, ax
     add cx, LN_CELL - 1
-    add dx, LN_CELL - 1
+    LN_BLANKY                   ; the cell's rows: 8, or the face's
     UI_FILL
-    mov al, CBLACK              ; AND THE PEN BACK: a colour left behind is
+    LN_INKAL                    ; AND THE PEN BACK: a colour left behind is
     UI_INK                      ; what shows up two callers later
     xor cx, cx
 .caret:

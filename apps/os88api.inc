@@ -601,6 +601,7 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; 34.5.3.1)
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
                                  ; (SPEC.md 34.5.3)
+SND_CAP_MIXER    equ 0200h       ; readable hardware mixer (SPEC.md 34.15)
 SND_CAP_LPTDAC   equ 0100h       ; a COVOX on a parallel port (SPEC.md 34.14):
                                  ; the user picked the Covox tier on the Sound
                                  ; page and a port answered. Not a streaming
@@ -1097,8 +1098,14 @@ FDLG_SAVE  equ 1                 ; coming back
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
                                  ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA /
-                                 ; 3 EGA, DH = bits per pixel, 4 or 1. Callable
-                                 ; from any context, lock held or not.
+                                 ; 3 EGA / 4 VESA, DH = bits per pixel: 4 or 1,
+                                 ; and 8 or 16 on a VESA display (SPEC.md 120),
+                                 ; whose desktop is still the sixteen colours
+                                 ; - OSAPI_GFX_BLITD is the one way past them.
+                                 ; COLOUR IS DH >= 4 AND NEVER DH == 4 (120.5):
+                                 ; seven packages had it the other way and drew
+                                 ; mono, or sized a save-under at a sixteenth.
+                                 ; Callable from any context, lock held or not.
                                  ;
                                  ; DON'T switch on DL as a fourth case: EGA is
                                  ; VGA's planar path at 640x350 (DH = 4). The
@@ -1109,6 +1116,10 @@ VID_VGA    equ 0                 ; the DL values
 VID_HERC   equ 1
 VID_CGA    equ 2
 VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.24)
+VID_VESA  equ 4             ; a packed VESA display (SPEC.md 120): square
+                            ; pixels, 8 or 16 bits each; the desktop is
+                            ; still sixteen colours and OSAPI_GFX_BLITD is
+                            ; the way to the rest
 ;
 ; On a 1bpp adapter every colour you pass is reduced to black, white or a
 ; 50% dither (SPEC.md 39.4): 0..6 go black, 12/14/15 go white, and 7..11
@@ -1784,6 +1795,13 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ;
 ;   bytes = planes * (y2-y1+1) * ((x2>>3) - (x1>>3) + 1)
 ;
+; ...with planes = DH AS IT COMES: 4 on VGA and EGA, 1 on a 1bpp card, and 8
+; or 16 on a packed VESA display (SPEC.md 120.5), where the save is the pixels
+; themselves and DH is the BYTES a column. Never fold it to 4-or-1: a package
+; that did sized a 16bpp save at a sixteenth, and the kernel wrote the rest
+; over whatever followed the claim. The product passes 64KB on a 1024-wide
+; display, so keep DX.
+;
 ; x1 is rounded DOWN to a byte column and x2 UP, which the formula already
 ; carries. The layout is plane-major: all of plane 0's rows, then plane 1,
 ; then 2, then 3 - one plane only on a 1bpp adapter.
@@ -1834,6 +1852,29 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region.
+; --- a block at the DISPLAY'S DEPTH (SPEC.md 120.7) ------------------------
+; The desktop is sixteen colours on every adapter, and OSAPI_GFX_BLIT4 is how
+; a block of them is drawn. On a VESA display (OSAPI_VIDEO's DL = 4, DH = 8
+; or 16) the card has more, and this cell is the one way a package reaches
+; them: the pixels are handed over AS THE MODE PACKS THEM - a byte an index
+; at 8bpp, an RGB565 word at 16 - and the driver puts them where they go,
+; clipped to the display in both axes and to nothing else: no clip region,
+; no window, so draw inside your own content rect on a window you know to be
+; in front. At 8bpp the bytes are DAC indices, and entries 16..255 are yours
+; to load through the PALETTE FORM: CX = 0, ES:SI = DX triples (a byte a
+; gun, 0..255), AX = the first entry (16 or more; AX + DX at most 256).
+; Entries 0..15 stay the desktop's.
+;
+; **CF = 1 IS A REFUSAL AND YOU MUST READ IT**: a display that is not VESA, a
+; kernel without the hook, a palette form at 16bpp or out of range - and
+; nothing was drawn. Test OSAPI_VIDEO's DH FIRST and keep the sixteen-colour
+; path you already have (PiXEL: SPEC.md 106.27). ES is yours here, as in
+; OSAPI_GFX_BLIT4 - a plain cell, no stub.
+%define OSAPI_GFX_BLITD     KERNEL_SEG:0x04AB   ; ES:SI = pixels at the depth,
+                                 ; BP = source stride in BYTES, AX/BX = x/y
+                                 ; (signed), CX/DX = width/height in pixels;
+                                 ; CX = 0: the palette form above. out CF = 1
+                                 ; refused, nothing drawn
 %define OSAPI_GFX_BLIT1     KERNEL_SEG:0x0320   ; ES:SI = a 1bpp BAND in the
                                  ; framebuffer's own bit order (row-major, bit
                                  ; 7 leftmost, 1 = a LIT pixel), BP = its
@@ -2607,10 +2648,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 8                 ; the most records one call can write, so
+DQ_MAXREC  equ 10                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 6, 5 or 4 depending on the
+                                 ; which is 10, 9 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
@@ -2780,6 +2821,73 @@ HDV_DISARM   equ 2              ; ES:DI = 8 bytes: bit n set = sector n of the
                                 ; buffer is in XMS and NOT in the buffer. Copy
                                 ; up the rest: a sector the kernel's cache
                                 ; served, or a disk on rung 0, is clear
+HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): CL = an HDI_*
+                                ; below, ES = yours, the rest per verb. CALL
+                                ; IT THROUGH OSAPI_DRV_USE's DRVU_CALL, never
+                                ; OSAPI_DRV_CALL: the install runs the
+                                ; machine's file walk, and through the plain
+                                ; door every name it writes resolves in YOUR
+                                ; folder instead (SPEC.md 51.2.3). It is
+                                ; HDDTOOL.DRV's own engine - the Control
+                                ; Panel's Install window's - read off the
+                                ; system volume on first use. CF=1 = the tool
+                                ; could not be reached (no system disk, no
+                                ; heap, another vintage) or the verb is not
+                                ; one it knows; CF=0 = it ran, answer in AL.
+                                ; Every register but AX preserved. UI task,
+                                ; from a callback: the install verbs copy
+                                ; whole floppies under the frozen interface
+HDI_DEVS     equ 0              ; ES:DI = 4 * HDIV_SIZE. out AL = devices
+HDI_SLOTS    equ 1              ; DL = a device, ES:DI = 4 * HDIS_SIZE. out
+                                ; AL = the slot the Install window would
+                                ; select, 0FFh none would do, 0FEh no such
+                                ; device or its geometry is unknown
+HDI_GO       equ 2              ; DL = device, DH = slot, CH = 1 erase / 0 keep
+                                ; the files; ES:DI = an HDIB_* block. out AL =
+                                ; an HDG_* and the engine's caption at HDIB_CAP.
+                                ; The Install window's two clicks in one
+HDI_APPS     equ 3              ; ES:DI = an HDIB_* block: the apps phase, once
+                                ; HDI_GO answered HDG_APPS. out as HDI_GO
+HDI_QUIT     equ 4              ; abandon a run waiting on its apps disk (its
+                                ; system part has committed and stays)
+HDI_CAPSZ    equ 48
+HDIB_CAP     equ 0              ; HDI_CAPSZ: the caption, out
+HDIB_LOG     equ 48             ; dw: a LOG PROC in the caller's segment, or 0
+                                ; (SPEC.md 117.4.1): called once per step,
+                                ; from inside the verb, as a package callback
+                                ; - DS = yours, ES = KERNEL_SEG, SI = the line
+                                ; at HDIB_LINE, gfx lock held. It may draw and
+                                ; clobber anything; it may NOT touch a file
+HDIB_LINE    equ 50             ; HDI_LINESZ: where each line is put
+HDI_LINESZ   equ 41             ; 40 characters and the NUL
+HDIB_SIZE    equ 91
+HDIV_KIND    equ 0              ; db: 1 = int 13h, 2 = the IDE task file
+HDIV_GEOM    equ 1              ; db: 1 = its geometry is known (installable)
+HDIV_UNIT    equ 2              ; db: the int 13h drive, or the IDE unit
+HDIV_BIOS    equ 3              ; db: the int 13h drive the ROM knows it as,
+                                ; IDE rows included (SPEC.md 52.1.1), or 0
+HDIV_SECS    equ 4              ; dd: cylinders x heads x sectors
+HDIV_SIZE    equ 8
+HDIS_STATE   equ 0              ; db: an HDS_* - may an install take it
+HDIS_VOL     equ 1              ; db: 1 = a FAT volume an install may KEEP
+HDIS_LET     equ 2              ; db: the letter it is mounted as, or 0
+HDIS_TYPE    equ 3              ; db: the partition table's type byte
+HDIS_SECS    equ 4              ; dd: its length (a free slot: what an install
+                                ; would make of it)
+HDIS_TEXT    equ 8              ; 26 bytes: the Install window's State column,
+                                ; NUL-ended ('C: FAT16', 'Unpartitioned', ...)
+HDIS_TEXTSZ  equ 26
+HDIS_SIZE    equ 34
+HDS_OK       equ 0              ; an install may take it
+HDS_SMALL    equ 1              ; under 2MB
+HDS_ALIEN    equ 2              ; somebody else's, or unreadable, or too big
+HDS_NONE     equ 3              ; free, and no room on the disk for it
+HDS_LIVE     equ 4              ; the volume this machine BOOTED from: keep
+                                ; only, never erase (SPEC.md 52.10.4.1)
+HDG_FAIL     equ 0              ; it stopped; the caption says where
+HDG_APPS     equ 2              ; the system part is on and the disk boots:
+                                ; insert the apps disk, then HDI_APPS
+HDG_DONE     equ 3              ; installed
                                 ; 3 was the serial monitor's and is RETIRED,
                                 ; not free: a class number is ABI, and a driver
                                 ; built against the old header would attach as
@@ -2799,6 +2907,10 @@ DRVC_POINT   equ 6              ; a pointing device the kernel does not
 DRVC_FILE2   equ 8              ; the SECOND file-redirector class (SPEC.md
                                 ; 62.9.19): RAMDISK.DRV's, so it and the
                                 ; cable (DRVC_FILE) can be attached at once
+DRVC_CD      equ 9              ; the THIRD file class: CDROM.DRV, an ATAPI
+                                ; CD-ROM (SPEC.md 119). Its volume is ISO 9660
+                                ; answered as FSV_* verbs; its package door is
+                                ; drivers/cdrom/cdpkg.inc - CD audio
 DRVC_EMS     equ 7              ; EXPANDED MEMORY - a LIM EMS board's page
                                 ; registers, EMS.DRV (SPEC.md 107). Pages are
                                 ; MAPPED into a 64 KB frame below 1 MB, never
@@ -5771,9 +5883,10 @@ WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
                                  ; window. Out: AX = width, BX = height, CX =
                                  ; the first row the dock owns, SI = the first
                                  ; row the desktop band has, DL = 0 VGA / 1
-                                 ; Hercules / 2 CGA / 3 EGA (the VID_* kinds),
-                                 ; DH = bits per pixel. DI preserved; no lock
-                                 ; needed, any context.
+                                 ; Hercules / 2 CGA / 3 EGA / 4 VESA (the VID_*
+                                 ; kinds), DH = bits per pixel - 4, 1, or 8
+                                 ; or 16 on a VESA display (SPEC.md 120). DI
+                                 ; preserved; no lock needed, any context.
                                  ;
                                  ; **OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY**
                                  ; (SPEC.md 39.2.1) and is right to - but on a
@@ -6015,6 +6128,37 @@ FSIF_BANKED equ 4
                                  ; 4 absent, 5 bad buffer/caller, 6 empty,
                                  ; 7 TX full, 8 module unavailable.
 SER_BUFFER_SIZE equ 517
+
+%define OSAPI_DRV_USE KERNEL_SEG:0x04A5 ; THE DRIVERS PAGE'S TICK, AS A DOOR
+                                 ; (SPEC.md 117.3). AL = a DRVC_* class, AH =
+                                 ; DRVU_UP: load and attach that class's
+                                 ; driver with the Control Panel's own code,
+                                 ; reading it (and CTRL.DRV) off the system
+                                 ; disk - out CF=0 it is up (or was), CF=1 AX
+                                 ; = the DRVE_* its row banked: 1 no system
+                                 ; disk, 2 not on it, 3 not a driver, 4 no
+                                 ; memory, 5 no hardware, 6 busy, 7 attached
+                                 ; twice, 8 nothing to mount; AX = 0 no driver
+                                 ; layer (kern_small). It RECORDS NOTHING: no
+                                 ; SYSTEM.CFG answer is written for a user who
+                                 ; never answered the Drivers page. AH =
+                                 ; DRVU_DONE: you have finished with that
+                                 ; driver's page tools - it is sent
+                                 ; DSV_CPCLOSE (HDD.DRV gives HDDTOOL.DRV
+                                 ; back) unless a Control Panel is open.
+                                 ; AH = DRVU_CALL: OSAPI_DRV_CALL_AT (BH =
+                                 ; class, BL = its verb, ES = yours, CX DX SI
+                                 ; DI its arguments) ASKED AS THE MACHINE -
+                                 ; the driver's file names resolve where the
+                                 ; machine stands and not in your folder, as
+                                 ; when the kernel calls it (SPEC.md 51.2.3).
+                                 ; For a verb that runs the system's own
+                                 ; machinery on your behalf: HDD.DRV's
+                                 ; HDV_TOOL. Every register but AX kept. UI
+                                 ; task, from a callback; a worker may not
+DRVU_UP      equ 0
+DRVU_DONE    equ 1
+DRVU_CALL    equ 2
 
 %define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
                                  ; COLOR(2)/WIN(3): adopts it as the system

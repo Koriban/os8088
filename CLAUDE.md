@@ -57,6 +57,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 | **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
+| **[docs/plans/VESA-PLAN.md](docs/plans/VESA-PLAN.md)** | anything in the VESA display (§120, `drivers/vesa/`, `kernel/vidext.inc`'s `VIDEXT` hook, the `DRVC_VIDEO` class) — the story list with what each wave actually shipped, the decisions taken against their judged alternatives (hooks in `kern_big` against a fourth kernel; a 16-colour desktop at any depth; banked window A against the linear framebuffer), and `docs/HOW-VESA-WAS-BUILT.md` is its diary. SPEC.md §120 is the contract and says per story whether it is pinned or shipped |
 
 ## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
 
@@ -237,6 +238,22 @@ make covl       #   covl is the OVERLAY gate (§73.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§73.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make lemmings     # LEMMINGS (§116): Lemmings (DMA Design / Psygnosis, 1991)
+make lemmingsdisk #   as a C package - all 120 levels with Lemmix's ORIG
+make xt-lemmings  #   mechanics, VGA mode 0Dh / CGA / Hercules, the original's
+make 386-lemmings #   preview and postview in a second foreign mode. The 26
+                  #   data files (and the spray's PARTICLES.DAT) are FETCHED
+                  #   (`tools/getlemmings.py`, pinned SHA-256) and NEVER
+                  #   committed: `make lemmings` needs no fetched data - the
+                  #   package reads its bands at run time and its host checks
+                  #   run against the committed synthetic fixture - while
+                  #   `make lemmingsdisk` needs the fetch and writes four
+                  #   geometries (the 360KB
+                  #   one two graphic sets and 53 levels, LEVELS.TXT saying
+                  #   which). `xt-lemmings` is the 640KB VGA XT with the
+                  #   360KB disk in B: and `386-lemmings` the 386DX with the
+                  #   1.44MB one - machines to LOOK at; the XT's frame rate
+                  #   is MartyPC's (`tests/lemplaymarty.py`, §116.7.4)
 make paccman      # PACCMAN (§91), the C toolchain's FOURTH application:
 make paccmandisk  #   Andre Weissflog's arcade-faithful pacman.c (MIT, pinned
 make xt-paccman   #   at 0f5ec5a) as a second Pac-Man beside §89's assembly
@@ -409,6 +426,15 @@ make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   all, and tests/ethernet.py asserts behaviour and never
                 #   speed because the machine under it is not an 8088
 make browsertest # ...and the browser's page disk, for tests/br*.py
+make cdromtest  # THE CD-ROM GATE (§119.7): a 1.44MB system disk whose
+                #   SYSTEM.CFG wants CDROM.DRV (bit 8), and build/cdfix.iso,
+                #   written by tools/os88cdiso.py - which is also the
+                #   REFERENCE for the driver's 8.3 names and handles (its
+                #   `list`). `make cdromtest && python3 tests/cdrom.py`.
+                #   QEMU by name: the one emulator here with a 286-class CPU
+                #   AND an ATAPI drive; CD audio it cannot play (§119.7), so
+                #   `--sim` uses build/cdromsim.img (-DCDSIM_AUDIO, fake audio
+                #   tracks) and `make 386-cdrom` is 86Box's audio CD to LOOK at
 make small    # kern_small and its system disks, into build/smallk/ (the
 make smallapps#   128KB floor machine, docs/history/KERN-SPLIT-PLAN.md). `smallapps` is
               #   the APPS half of it: the same floppies with the SMALL BUILD
@@ -680,7 +706,7 @@ controller, so no XT profile can host one),
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
 `xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`,
 `xt-pixel`, `386-pixel`, `xt-isotron`, `xt-isotron-cga`, `xt-isotron-herc`,
-`xt-isotron-ega`;
+`xt-isotron-ega`, `xt-lemmings`, `386-lemmings`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -725,7 +751,7 @@ section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-isotron`/`-cga`/`-herc`/`-ega` isoTron's (§108.15: copies of
 `xt-excitebike`, `xt-pixelstein`, `xt-pixelstein-herc` and `xt-ega` with
 `isotron360.img`; the EGA one is the only place its same-mode EGA bracket
-meets a real EGA) — the twenty-six that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+meets a real EGA), and `xt-lemmings`/`386-lemmings` LEMMINGS' (§116.9: `vm/xt-weave` with `lemmings360.img`, `vm/386dx` with `lemmings.img`) — the twenty-eight that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
 and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,
@@ -804,7 +830,13 @@ and buttons with their captions inside, in MIDIRack's bevelled look or the
 flat one `apps/os88flat.inc` gives (§20.5.3), with the mono faces left as
 they were — is `.claude/skills/vga-face` (`/vga-face <package>`, **manual
 invocation only**), whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4,
-§105.9.5) and WireFleet's (§114.10) learned.
+§105.9.5) and WireFleet's (§114.10) learned. Building an app whose UI is a
+styled piece of **hardware from the user's mockups** — host-generated art and
+fonts, a colour and a black-and-white theme as role tables, every field one
+band and one blit, cached element keys, and full / mid / compact layouts so
+every adapter gets a face — is `.claude/skills/retro-face`
+(`/retro-face <app> [mockups]`), whose `LESSONS.md` is what CDRack (SPEC.md
+§119.6) learned.
 
 ## Building an app or game in waves
 
@@ -875,7 +907,7 @@ user gives a different workflow. The worked example is
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stands at 56 sites in 21 files, every one
+  finished** (§6.6.5): the registry stands at 55 sites in 20 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are

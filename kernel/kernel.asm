@@ -218,6 +218,18 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %endif
 
+; --- VID_EXT: the external renderer hook (SPEC.md 120.3) ----------------------
+; kern_big's by default: one compare per planar drawing body, a far pointer
+; and a block of pointers (kernel/vidext.inc), so VESA.DRV can draw a fifth
+; adapter kind. `make NOVIDEXT=1` is the A/B that assembles the kernel before
+; it existed; kern_small never has it - no driver layer (SPEC.md 51.0), no
+; planar renderer (39.27), nothing for a hook to hook.
+%ifdef KERN_BIG
+ %ifndef NOVIDEXT
+  %define VID_EXT 1
+ %endif
+%endif
+
 ; BANDCOMP - the 1bpp band composer (SPEC.md 5.9), and since SPEC.md 5.9.6 it
 ; is a KNOB again rather than kern_big's default. `make BAND=1` compiles it in
 ; and puts wm_draw_title's interior on ONE composed blit; the default build
@@ -515,13 +527,13 @@ ROMF_HRESET equ 8               ; every block (a resume with no pool to restore)
 ROMF_HTAB   equ 9               ; -> DX:AX = the block table, CX = its bytes
                                 ; (a hibernate's copy, SPEC.md 87.4 step 3b)
 HMA_SEG     equ 0xFFFF          ; [api_coldseg] when `.cold` is in the HMA
-DRV_HMA_ORG equ 0xE000          ; a block in the HMA is SEG:DRV_HMA_ORG, never
+DRV_HMA_ORG equ 0xC000          ; a block in the HMA is SEG:DRV_HMA_ORG, never
                                 ; SEG:0 - nothing above 1MB has an offset 0 -
                                 ; so a driver placed there runs from a copy
                                 ; assembled at this origin (the Makefile's
                                 ; DRV_HMA_ORG, which tools/os88rom.py checks)
                                 ; and its dispatcher is here + PKG_DISP. Every
-                                ; such segment is F200-F7FF, and nothing else
+                                ; such segment is F400-F9FF, and nothing else
                                 ; that names a driver or a window is ever at or
                                 ; above DRV_HMA_SEG
 DRV_HMA_SEG equ 0xF000
@@ -2694,6 +2706,7 @@ apic_wm_minsize:
                                   ;         whole tree under it (SPEC.md 18.6).
                                   ;         The AL survives the N stub because
                                   ;         api_copyname banks AX
+apic_drv_call_at:                 ; (OSAPI_DRV_USE's DRVU_CALL, SPEC.md 117.3)
     OSAPI_SLOT drv_pkg_call_x     ; 0x038B - OSAPI_DRV_CALL WITH ES LEFT ALONE
                                   ;          (SPEC.md 20.11.2). The same
                                   ;          routine behind the same fence: the
@@ -3292,7 +3305,31 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
 %endif
     OSAPI_IEND
     OSAPI_RXCELL osapi_serial     ; 0x049F - desktop serial lease (SPEC.md 115)
-osapi_table_end:                  ; 0x04A5 today (0x049F before serial;
+    OSAPI_RCSLOT osapi_drv_use_x  ; 0x04A5 - THE DRIVERS PAGE'S TICK, AS A
+                                  ;          DOOR (SPEC.md 117.3). AH = 0 UP
+                                  ;          (AL = a DRVC_*): load and attach
+                                  ;          that class's driver with
+                                  ;          CTRL.DRV's own cdl_load, record
+                                  ;          nothing; AH = 1 DONE: the panel
+                                  ;          close's notifier, unless a
+                                  ;          Control Panel is open; AH = 2
+                                  ;          CALL: OSAPI_DRV_CALL_AT asked as
+                                  ;          the MACHINE (51.2.3). kern_small
+                                  ;          refuses
+    OSAPI_SLOT gfx_blitd          ; 0x04AB - A PACKAGE'S BLOCK AT THE DISPLAY'S
+                                  ;          DEPTH (SPEC.md 120.7): ES:SI the
+                                  ;          pixels as the mode packs them, BP
+                                  ;          the stride, AX/BX x/y, CX/DX w/h;
+                                  ;          CX = 0 loads DAC entries AX..
+                                  ;          AX+DX-1 from DX triples. ES is the
+                                  ;          caller's, as OSAPI_GFX_BLIT4's.
+                                  ;          CF = 1 on anything but a packed
+                                  ;          display (VID_VESA): the sixteen
+                                  ;          colours through BLIT4 are the
+                                  ;          fallback
+osapi_table_end:                  ; 0x04B3 today (0x04AB before the depth
+                                  ; blit; 0x04A5 before the drivers'
+                                  ; door; 0x049F before serial;
                                   ; 0x0499 before the wheel;
                                   ; 0x0493 before the ASSOC.DAT
                                   ; flush; 0x0487 before the HMA and
@@ -3319,8 +3356,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 43*8 + 11*7 + 106*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x0495 bytes: 43 SLOT (8), 11 XCELL (7), 106 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 107*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x04A3 bytes: 44 SLOT (8), 11 XCELL (7), 107 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 ; =============================================================================
@@ -4758,6 +4795,21 @@ kmain_o:
                                 ; erase. The LAST call of the body but one:
                                 ; kmain releases the blob as soon as this
                                 ; returns
+%ifdef VID_EXT
+    call COLD_SEG:vx_boot_x     ; ...and VESA.DRV, if SYSTEM.CFG asked for it
+                                ; (SPEC.md 120.4): a DRVC_OVL row drv_boot_x
+                                ; read and stopped at, attached here and the
+                                ; desktop switched onto it through the blob's
+                                ; own vid_switch - which is why this sits in
+                                ; kmain_o, after the loading screen is down
+                                ; (the mode change wipes nothing the first
+                                ; paint is not about to cover) and BEFORE the
+                                ; autostart below: a package it launches must
+                                ; find the display it will live on, not the
+                                ; VGA a switch is about to take away (PiXEL
+                                ; built its tables for the wrong depth when
+                                ; this ran after kmain_o)
+%endif
 %ifdef OS88_SHORTCUTS
     BLOBCALL as_boot            ; ...AUTOSTART, the one thing after it (SPEC.md
                                 ; 26.10.5): it LAUNCHES, and a launch must not
@@ -5441,6 +5493,9 @@ EXT_YLOW    equ 11              ; ui_ylow's arm, behind its caller's gate
                                 ; than merely the same size (docs/
                                 ; KERN-SPLIT-PLAN.md 1.1: a divergence that
                                 ; hides in the rung's padding is still real)
+%include "vidext.inc"           ; the external renderer hook (SPEC.md 120.3):
+                                ; its macros are used in vga12.inc, font.inc,
+                                ; icons.inc and mouse.inc, so it goes first
 %include "vga12.inc"
 %include "softgfx.inc"
 
@@ -6974,6 +7029,10 @@ COLD_START equ BOOT2_PAD + (COLD_RAM - KERNEL_SEG) * 16 ; after the gap
 %else
 COLD_START equ BOOT2_PAD + ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 512
 %endif
+
+VX_LAYOUT_ASSERT                ; vidext.inc's adjacency claims (SPEC.md 120.3.2),
+                                ; here because every cell they name is declared
+                                ; by now
 
 section .boot2
 %include "../boot/boot2.asm"    ; STAGE 2 (SPEC.md 2.9), here at the FOOT of

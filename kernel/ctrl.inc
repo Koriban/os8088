@@ -663,7 +663,14 @@ CPK_AY2   equ CPK_AY + CP_GW + 3        ; 89  gap above it is dead (76.4's rule)
 ; comment claiming it. Of 132 rows: adapters at 20/36/52, button 72..89,
 ; desktop label 94..101, desktop row 106..117, caption 122..129.
 CPV_R0Y   equ 20                ; row 0 glyph top
-CPV_ROWH  equ 16                ; row pitch: rows at 20, 36, 52
+%ifdef VID_EXT
+CPV_NROWS equ 4                 ; a VGA, a VESA and a mono card: FOUR rows
+CPV_ROWH  equ 12                ; (SPEC.md 120.6), at 20, 32, 44, 56 - an 8px
+                                ; glyph and four of gap, in the same band
+%else
+CPV_NROWS equ 3                 ; THREE is the most any machine has: VGA and
+CPV_ROWH  equ 16                ; EGA are mutually exclusive at detection
+%endif                          ; (rows at 20, 36, 52)
 CPV_BTNX  equ CP_PMX            ; the Set Primary button, under the rows
 CPV_BTNY  equ 72
 CPV_BTNW  equ 100               ; 'Set Primary' is 11 glyphs = 88px, and
@@ -700,7 +707,7 @@ CPV_CAPY  equ 122               ; caption row, LAST as it is on every page -
 ; not drawn is refused by cp_vid_row, not by the geometry.
 CPV_B0Y1  equ CPV_R0Y - 4                   ; 16: row 0 top
 CPV_BROWH equ CPV_ROWH                      ; ...and one band per row pitch
-CPV_B2Y2  equ CPV_R0Y + 2*CPV_ROWH + CP_GW - 1   ; 63: row 2 bottom
+CPV_B2Y2  equ CPV_R0Y + (CPV_NROWS-1)*CPV_ROWH + CP_GW - 1   ; the last row's bottom
 ; ...and the button's, which must start below them
 CPV_BB1   equ CPV_BTNY - 4
 CPV_BB2   equ CPV_BTNY + CPV_BTNH + 3
@@ -957,10 +964,12 @@ CPE_ONDRAG  equ CPE_B + 5       ; (SPEC.md 13.8.4) - and the drag and the KEY
 CPE_ONKEY   equ CPE_B + 6       ; (SPEC.md 31.9.2) are kern_big's alone, so
 %ifdef DOCK_OPT                 ; CP_NENT differs between the builds. Which is
 CPE_DOCK_GEOM equ CPE_B + 7     ; safe because MOD_H_NENT is IN the header and
-CP_NENT     equ CPE_B + 9       ; mod_check compares it against the file it
-%else                           ; just read, so a CTRL.DRV with the wrong count
-CP_NENT     equ CPE_B + 8       ; is refused rather than dispatched into - and
-%endif                          ; MOD_H_STAMP rejects one from another build
+CPE_DRVUP   equ CPE_B + 8       ; mod_check compares it against the file it
+CP_NENT     equ CPE_B + 10      ; just read, so a CTRL.DRV with the wrong count
+%else                           ; is refused rather than dispatched into - and
+CPE_DRVUP   equ CPE_B + 7       ; MOD_H_STAMP rejects one from another build.
+CP_NENT     equ CPE_B + 9       ; CPE_DRVUP is OSAPI_DRV_USE's (SPEC.md 117.3),
+%endif                          ; kern_big's alone: kern_small has no drivers
 %else
 %ifdef DOCK_OPT
 CPE_DOCK_GEOM equ CPE_B + 5
@@ -1004,6 +1013,9 @@ modc_hdr:
 %ifdef DOCK_OPT
     dw modc_e_dock_geom         ; CPE_DOCK_GEOM: Dock and Display settings
 %endif
+%ifdef KERN_BIG
+    dw modc_e_drvup             ; CPE_DRVUP: OSAPI_DRV_USE's load (117.3)
+%endif
     dw modc_e_shutdown          ; CPE_SHUTDOWN: confirmation and terminal splash
 section .modu                   ; ...and the PANEL from here on: the stubs below
                                 ; name the UI's bodies, so they are UI too.
@@ -1043,6 +1055,48 @@ kretf_bp:         pop bp
                   pop ax
                   retf
 %ifdef KERN_BIG
+
+; -----------------------------------------------------------------------------
+; modc_e_drvup - CPE_DRVUP: OSAPI_DRV_USE's UP (SPEC.md 117.3), entered FAR
+; in:  AL = a DRVC_* class
+; out: CF = 0 that class's first drv_tab row is loaded (or was); CF = 1 and
+;      AX = the DRVE_* its row banked (DRVE_NOENT: no row of that class)
+; clobbers: AX
+;
+; cp_drv_click's .try with the bookkeeping taken out: the same row walk the
+; page's bands index, the same cdl_load - and NOT the want, the answer or
+; cp_wdset, because nobody answered this page (osapi_drv_use_x's header).
+; -----------------------------------------------------------------------------
+modc_e_drvup:
+    push bx
+    push dx
+    mov dl, al                  ; DL = the class, DH = the row
+    xor dh, dh
+.row:
+    mov al, dh
+    call cp_drvrow              ; BX = the row
+    cmp word [bx+DRVR_FILE], 0
+    je .next                    ; an empty table row
+    cmp [bx+DRVR_CLASS], dl
+    je .found
+.next:
+    inc dh
+    cmp dh, DRV_MAX
+    jb .row
+    mov ax, DRVE_NOENT
+    stc
+    jmp short .out
+.found:
+    xor ax, ax                  ; CF = 0
+    cmp [bx+DRVR_SEG], ax
+    jne .out                    ; up already: the tick's own first test
+    call cdl_load               ; CF = 1 and [row+DRVR_ERR] on a refusal
+    mov al, [bx+DRVR_ERR]       ; (neither MOV touches CF)
+    mov ah, 0
+.out:
+    pop dx
+    pop bx
+    retf
 
 ; -----------------------------------------------------------------------------
 ; modc_e_onkey - CPE_ONKEY: the Control Panel's W_ONKEY (SPEC.md 31.9.2)
@@ -3818,8 +3872,8 @@ cp_vid_slot:
     inc cl
 .skip:
     inc bl
-    cmp bl, 4                   ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
-    jb .n
+    cmp bl, VID_KIND_MAX + 1    ; VID_VGA / VID_HERC / VID_CGA / VID_EGA, and
+    jb .n                       ; VID_VESA with the external renderer
     pop cx
     pop bx
     stc                         ; fewer rows than the slot asked for
@@ -3845,6 +3899,25 @@ cp_vid_slot:
 cpf_vidok:
     push ax
     call cp_vid_pick
+%ifdef VID_EXT
+    cmp al, VID_VESA            ; the VESA row, with the VESA display running
+    jne .plain                  ; (SPEC.md 120.6): there IS something to do
+    cmp byte [vid_kind], VID_VESA   ; when the class asked for is not the one
+    jne .plain                  ; running - and Auto (0) is never "not": the
+    mov al, [drv_cfg+CFG_VE]    ; driver's pick for Auto IS what runs
+    or al, al
+    jz .same
+    cmp al, [vx_class]
+    je .same
+    pop ax
+    clc
+    ret
+.same:
+    pop ax
+    stc
+    ret
+.plain:
+%endif
     sub al, [vid_kind]          ; 0 = the running adapter...
     cmp al, 1                   ; ...which is CF = 1, and nothing else is
     pop ax                      ; POP does not touch flags
@@ -3862,6 +3935,9 @@ cpf_vidok:
 ; -----------------------------------------------------------------------------
 cp_vid_rows:
     call kentm_si                ; KENT: push ax..si
+%ifdef VID_EXT
+    call cp_vid_vxlabel         ; 'Vesa WxHxB' for the row, from the class
+%endif                          ; chosen or the mode running (SPEC.md 120.6)
     call cp_vid_pick            ; [cp_vsel] now names a row that exists
     xor bl, bl                  ; BL = slot
 .r:
@@ -3897,10 +3973,125 @@ cp_vid_rows:
                                 ; which is a safe prefix action, so it keeps
     call cp_gemit                ; the press (SPEC.md 13.6/13.8.3)
     inc bl
-    cmp bl, 3
+    cmp bl, CPV_NROWS
     jb .r
 .done:
     jmp kretm_si
+
+%ifdef VID_EXT
+; -----------------------------------------------------------------------------
+; cp_vid_vxlabel - the VESA row's label, composed: 'Vesa ' then the class the
+;                  settings file asks for, else the mode running when the
+;                  display is the VESA one, else 'auto' (SPEC.md 120.6)
+; clobbers: ax, bx, cx, dx (flags); DI, the painter's pane left, is kept
+; -----------------------------------------------------------------------------
+cp_vid_vxlabel:
+    push di
+    mov di, cp_vvesa_buf + 5    ; past 'Vesa '
+    mov cl, [drv_cfg+CFG_VE]
+    or cl, cl
+    jnz .class
+    cmp byte [vid_kind], VID_VESA
+    jne .auto
+    mov ax, [vid_tab + VID_VESA * VID_REC + 14]     ; the live cw...
+    mov bx, [vid_tab + VID_VESA * VID_REC + 16]     ; ...ch...
+    mov cx, [vx_bpp]            ; ...and depth
+    jmp short .put
+.class:
+    mov bl, cl                  ; the class byte, decoded as the driver does
+    and bl, VXC_XMASK
+    xor bh, bh
+    mov al, [cs:bx+vxc_x8tab]
+    mov bl, cl
+    and bl, VXC_YMASK
+    shr bl, 1
+    shr bl, 1
+    mov ah, [cs:bx+vxc_y8tab]
+    mov bl, ah
+    xor ah, ah
+    xor bh, bh
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                   ; AX = the width
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                   ; BX = the height
+    test cl, VXC_D16
+    mov cx, 8
+    jz .put
+    mov cx, 16
+.put:
+    call .dec                   ; W
+    mov byte [cs:di], 'x'
+    inc di
+    mov ax, bx
+    call .dec                   ; H
+    mov byte [cs:di], 'x'
+    inc di
+    mov ax, cx
+    call .dec                   ; B
+    jmp short .end
+.auto:
+    mov word [cs:di], 'au'
+    mov word [cs:di+2], 'to'
+    add di, 4
+.end:                           ; ...padded with spaces to the LONGEST label,
+    cmp di, cp_vvesa_buf + 16   ; so a shorter one erases the longer one it
+    jae .nul                    ; replaces on the row (the run draws its
+    mov byte [cs:di], ' '       ; ground under a space; it draws nothing
+    inc di                      ; past its NUL)
+    jmp short .end
+.nul:
+    mov byte [cs:di], 0
+    pop di
+    ret
+; .dec - AX in decimal at CS:DI, no leading zeros; DI past it
+.dec:
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    xor cx, cx
+.d:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .d
+.e:
+    pop ax
+    add al, '0'
+    mov [cs:di], al
+    inc di
+    loop .e
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_vxcall - a verb to VESA.DRV: AL = VXV_*, CL = a class byte
+; out: the verb's (VXV_NEXT: CL, DL/DH/CH; CF); CF = 1 when the image is not
+;      loaded
+; -----------------------------------------------------------------------------
+cp_vid_vxcall:
+    push bx
+    push bp
+    mov bx, vesa_row
+    cmp word [bx+DRVR_SEG], 0
+    je .no
+    mov bp, [bx+DRVR_ENT]
+    call COLD_SEG:drvf_drv_call
+    pop bp
+    pop bx
+    ret
+.no:
+    stc
+    pop bp
+    pop bx
+    ret
+%endif
 
 %ifdef KERN_BIG
 ; -----------------------------------------------------------------------------
@@ -4141,6 +4332,21 @@ cp_vid_click:
     jc .done
 %endif
     mov al, [cp_vsel]
+%ifdef VID_EXT
+    cmp al, VID_VESA
+    jne .sw                     ; the VESA row (SPEC.md 120.6): the driver
+    push ax                     ; chooses the class asked for first...
+    mov cl, [drv_cfg+CFG_VE]
+    mov al, VXV_PICK
+    call cp_vid_vxcall
+    cmp byte [vid_kind], VID_VESA   ; ...and a display already on the VBE
+    jne .swp                    ; leaves and comes back, because vid_switch
+    mov al, VID_VGA             ; onto the kind it is on is a no-op
+    CPXF vid_switch
+.swp:
+    pop ax
+.sw:
+%endif
     CPXF vid_switch             ; IN THIS IMAGE (KSW_SECT, kernel.asm)
     jc .done                    ; refused: the adapter went away under us
     call cp_repost              ; ...remembered on close (SPEC.md 31.8)
@@ -4171,7 +4377,11 @@ cp_vid_click:
     jc .done                    ; its way off the button (SPEC.md 13.8.3)
 %endif
     cmp al, [cp_vsel]
-    je .done                    ; already the pending choice: draw nothing
+%ifdef VID_EXT
+    je .same                    ; already the pending choice: the VESA row
+%else                           ; CYCLES its class (SPEC.md 120.6), any other
+    je .done                    ; draws nothing
+%endif
     mov [cp_vsel], al
     call cp_vid_rows            ; the dots...
     call cp_vid_btn             ; ...and the button, which may have just
@@ -4179,6 +4389,20 @@ cp_vid_click:
                                 ; (SPEC.md 31.10.3), so it is not redrawn
 .done:
     jmp kretm_si
+%ifdef VID_EXT
+.same:
+    cmp al, VID_VESA
+    jne .done
+    mov cl, [drv_cfg+CFG_VE]    ; the next offered class after this one, Auto
+    mov al, VXV_NEXT            ; after the last (the driver's walk)
+    call cp_vid_vxcall
+    jc .done                    ; no image: nothing to walk
+    mov [drv_cfg+CFG_VE], cl
+    call cp_wdset               ; remembered on close (SPEC.md 31.8)
+    call cp_vid_rows            ; the label...
+    call cp_vid_btn             ; ...and the button, live when the class is
+    jmp .done                   ; not the one running
+%endif
 %ifdef KERN_BIG
 .fc:                            ; --- Force Color (SPEC.md 31.10.4, 39.28) ---
     cmp cx, CPV_FCB
@@ -6786,6 +7010,16 @@ cp_drv_click:
 
     cmp word [bx+DRVR_SEG], 0
     je .load
+%ifdef VID_EXT
+    cmp bx, vesa_row            ; VESA.DRV IS THE RENDERER (SPEC.md 120.4): the
+    jne .novx                   ; desktop goes back onto the VGA BEFORE the
+    push ax                     ; image that was drawing it is freed, and this
+    mov al, VID_VGA             ; page is the one caller that can detach it
+    CPXF vid_switch             ; (IN THIS IMAGE, KSW_SECT) - a no-op when the
+    pop ax                      ; display was already the VGA's
+    call cp_repost              ; ...and the whole screen is a new shape
+.novx:
+%endif
     call COLD_SEG:drvf_drv_unload             ; it is up: take it down...
     jmp short .off              ; ...and nothing failed - it was turned off
 .load:
@@ -7105,7 +7339,19 @@ cp_s_vega   equ cp_s_vcga
 ; here rather than beside cp_s_vid because SPEC.md 51.5.3 moved the page's
 ; strings into CTRL.DRV's image; adding it up there would put 14 bytes back
 ; into every machine's resident .text.
+%ifdef VID_EXT
+cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega, cp_vvesa_buf
+cp_vvesa_buf: db 'Vesa '         ; ...and the FIFTH is COMPOSED (SPEC.md 120.6):
+            times 12 db 0        ; 'Vesa 1024x768x16' at the longest, space-
+                                ; padded to that length, written by
+                                ; cp_vid_vxlabel through CS before the rows
+                                ; are drawn
+    VXC_TABLES                  ; vxc_x8tab / vxc_y8tab, the class's four
+                                ; widths and heights (vxabi.inc, one source
+                                ; with the driver)
+%else
 cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga, cp_s_vega
+%endif
 CPS cp_s_vact,  'Set Primary'
 %ifdef KERN_BIG
 CPS cp_s_vfc,   'Force Color'   ; SPEC.md 31.10.4

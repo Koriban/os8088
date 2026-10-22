@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """What WireChat's window COSTS TO DRAW, a gesture at a time (SPEC.md 113.5.1).
 
-    python3 tests/wcdraw.py [--vga|--cga] [--shot DIR] [--json OUT]
+    python3 tests/wcdraw.py [--vga|--cga] [--theme N] [--shot DIR] [--json OUT]
 
 tests/mrdraw.py's instrument (SPEC.md 105.9.4), pointed at WireChat. A redraw
 is priced by the primitive calls it makes (PERFORMANCE.md's first sentence),
@@ -17,7 +17,8 @@ gesture below is then one the user makes, or one the server makes - a
 message arriving, a roster changing.
 
 The default machine is MartyPC's 4.77 MHz 5150 with Hercules; --vga is the
-XT with a VGA (the colour face, SPEC.md 113.5.2), --cga the 5150's CGA. All
+XT with a VGA (the Blue theme, picked from the Theme menu: the default is
+Wired, SPEC.md 113.5.2), --cga the 5150's CGA. All
 three take the 360KB system disk and network360.img, whose root carries
 WIRECHAT.O88.
 
@@ -32,9 +33,13 @@ TWO ASSERTIONS, mrdraw's:
             if drawing through them arrives at the picture a paint from
             nothing does
 
+--theme N picks the Theme menu's item N first (wirechat.asm's TH_*); the VGA
+leg's default is Blue. --vga --theme 0 is Wired on a colour display: its
+LEDs one OSAPI_GFX_BLITP each and its emoticons spans of their own colour,
+under the same ceilings and the same identity.
+
 --shot DIR writes the content (and the whole screen) as PNGs after the
-injection, for the mono pictures' before-and-after (the vga-face skill's
-Step 0) and for looking at the colour face.
+injection, for looking at the theme the machine draws.
 """
 import argparse
 import json
@@ -55,10 +60,16 @@ IMG, APPS, PATH = ("build/os8088-360.img", "build/network360.img",
 MACHINES = {"herc": "os8088_5150_herc_gla", "vga": "os8088_xt_vga",
             "cga": "os8088_5150_cga_gla"}
 LK_NODRV, LK_LIVE = 1, 3
+TH_BLUE = 2                    # wirechat.asm's TH_*: the Theme menu's index
 
 # THE CEILINGS: drawing calls a gesture may make. Each is a few times what the
-# gesture draws through the caches and a fraction of a full paint
-CEIL = {"a message arrives": 50, "a member goes Away": 30,
+# gesture draws through the caches and a fraction of a full paint. The two
+# replies below change a room's unread BADGE, and a badge that comes, goes or
+# changes width moves the tabs' spans, so that band is drawn whole - ~25
+# calls of the terminal layout's (SPEC.md 113.5): an air pair per ground and
+# a run per span, the view's highlight and the badges being grounds of their
+# own. The rest of each gesture is what it was
+CEIL = {"a message arrives": 70, "a member goes Away": 45,
         "a key in the field": 12, "Down: the pane a line": 60,
         "PgUp: the pane a page": 160, "Status > Busy": 20,
         "Notifications: a press": 16, "idle 5 s": 0}
@@ -83,9 +94,9 @@ M 96 0 {d1}1504 Zed A Logitech C7 does. Anything Microsoft-compatible at 1200 ba
 M 97 0 {d1}1520 Daniel I am going to try the FTP server on my XT tonight.
 M 98 0 {d1}1521 Alin Use the NE1000 if you have one. It moves 15 KB a second.
 M 99 0 {d1}1540 Zed WireChat on a Hercules card looks wonderful, all 720 columns.
-M 100 0 {d1}1552 Daniel See you all tomorrow.
+M 100 0 {d1}1552 Daniel See you all tomorrow :) <3
 M 101 0 {d1}1555 RetroAmy Hello from a real IBM XT!
-M 102 0 {d1}1556 George Nice! Which video card?
+M 102 0 {d1}1556 George Nice! Which video card? ^_^
 M 103 0 {d2}0958 RetroAmy A Paradise VGA. It is slow at 4.77 MHz, but it works, and the dither on the wallpaper is lovely.
 M 104 0 {d2}1601 Daniel Just joined from my 8088. @George the new build boots fine here.
 D 105 {d2}1559 Alin George are you around later?
@@ -109,10 +120,14 @@ P George 0 0
 P RetroAmy 0 1
 P Zed 0 2
 """
+# "blit1" is every run of text since the window's own face (SPEC.md
+# 113.5.3): a run is composed and put down by OSAPI_GFX_BLIT1, so a ceiling
+# that did not count it would pass by measuring nothing. Its pen (0x393) is
+# a setting and not a drawing call, and is not here.
 CELLS = {"pixel": 0x20, "hline": 0x28, "vline": 0x30, "fill": 0x38,
          "frame": 0x40, "gray": 0x48, "xor": 0x58, "blit4": 0x182,
-         "text": 0x1E5, "textx": 0x68, "icon": 0x39D, "blitp": 0x3A4,
-         "scroll": 0x19C}
+         "blit1": 0x320, "text": 0x1E5, "textx": 0x68, "icon": 0x39D,
+         "blitp": 0x3A4, "scroll": 0x19C}
 
 SYMS = []
 
@@ -227,6 +242,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--json")
     ap.add_argument("--shot")
+    ap.add_argument("--theme", type=int)
     ap.add_argument("--old", action="store_true",
                     help="inject replies in the format before x=1")
     g = ap.add_mutually_exclusive_group()
@@ -250,6 +266,16 @@ def main():
         M.until(ui.m, lambda _: p.b("wc_link") == LK_LIVE, "live", poll=.2,
                 limit=20)
         M.guest_sleep(ui.m, 2.0)
+        th = a.theme
+        if th is None and kind == "vga":
+            # a colour theme, so the badges, lamps and nicks are each their
+            # own ground and ink (the default, Wired, is black on white)
+            th = TH_BLUE
+        if th is not None:
+            ui.menu_pick("Theme", th)
+            M.until(ui.m, lambda _: p.b("wc_thm") == th, "theme %d" % th,
+                    poll=.2, limit=20)
+            M.guest_sleep(ui.m, 1.0)
         park(mo, ui)
         if a.shot:
             shot(ui, p, a.shot, kind)
