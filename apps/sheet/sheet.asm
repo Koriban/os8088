@@ -147,7 +147,8 @@
     dw 0x0000
     OS88_ICON16_END
 
-; The three sheet formats this app reads and writes, claimed so a document
+; The three sheet formats this app reads and writes - four extensions, .XLS
+; being Normal under Excel's own name (81.15.1) - claimed so a document
 ; opens on a DOUBLE-CLICK rather than only through File > Open (SPEC.md 54.6).
 ; Declaring costs nothing at runtime - the mount's icon harvest already reads
 ; this sector - and it works before Sheet has ever been run, which a runtime
@@ -162,10 +163,11 @@
 ; every other program on this machine can also write. Declaring .DIF or .BIF
 ; there would be a package offering to open a file it has no reader for.
     OS88_ASSOC16
-    db 3
+    db 4
     OS88_ASSOC_EXT 'SLK'
     OS88_ASSOC_EXT 'DIF'
     OS88_ASSOC_EXT 'BIF'
+    OS88_ASSOC_EXT 'XLS'            ; Normal under Excel's own name (81.15.1)
     OS88_ASSOC16_END
 
 ; =============================================================================
@@ -7968,11 +7970,17 @@ sh_drawborders:
     add ax, bx
     dec ax
     mov [sh_by2], ax
+    ; LEFT AND TOP SIT ONE PIXEL IN, mirroring right and bottom (81.17.2).
+    ; A cell's gridlines are its OWN first column and row (sh_drawlines draws
+    ; them at sh_vcx/sh_vry), so an edge drawn there landed on the gridline
+    ; and vanished; one pixel in puts it beside this cell's own gridline, as
+    ; right and bottom sit beside the next cell's.
     test byte [sh_bdrawflags], SH_BORD_LEFT
     jz .noleft
     mov ax, [sh_bx1]
+    inc ax
     mov bx, [sh_by1]
-    mov cx, [sh_bx1]
+    mov cx, ax
     mov dx, [sh_by2]
     call OSAPI_GFX_FILL
 .noleft:
@@ -7988,8 +7996,9 @@ sh_drawborders:
     jz .notop
     mov ax, [sh_bx1]
     mov bx, [sh_by1]
+    inc bx
     mov cx, [sh_bx2]
-    mov dx, [sh_by1]
+    mov dx, bx
     call OSAPI_GFX_FILL
 .notop:
     test byte [sh_bdrawflags], SH_BORD_BOTTOM
@@ -13904,6 +13913,14 @@ sh_fdlg_open:
     push di
     mov si, sh_name
     mov di, sh_s_ext_biff
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .fmtbiff
+    push si                           ; ...and .XLS is Normal too, as the
+    push di                           ; reader and the writer both take it
+    mov si, sh_name                   ; (81.15.1)
+    mov di, sh_s_ext_xls
     SHOUT sh_nameends
     pop di
     pop si
@@ -21587,6 +21604,14 @@ shm_dowrite:
     pop di
     pop si
     jc .biff
+    push si                            ; .XLS is Normal under Excel's own
+    push di                            ; name: the reader takes it as BIFF,
+    mov si, sh_name                    ; so the writer must write it as BIFF
+    mov di, sh_s_ext_xls               ; (81.15.1), not fall through to SYLK
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .biff
     push si
     push di
     mov si, sh_name
@@ -21789,11 +21814,11 @@ sh_wr_r1c1:
 ; all. A formatted cell's C (value) record is followed by a real SYLK F
 ; (formatting) record - "F;X<col>;Y<row>;F<c1><n><c2>[;K]" - using
 ; MultiPlan-era SYLK's actual format codes (stage 1.6): c1 is '$' for
-; Currency or 'G' for everything else (General/Comma/Percent all share
-; 'G' - real SYLK has no comma or percent code of its own; Comma instead
-; sets the separate ;K "commas are set" flag, and Percent has no real
-; equivalent at all so it degrades to General on disk), c2 is the real
-; alignment code (G/L/C/R) matching this app's own alignment 1:1. Real
+; Currency, '%' for Percent - SYLK's own percent code (81.15.1) - or 'G'
+; for everything else (General and Comma share 'G': real SYLK has no comma
+; code of its own, so Comma instead sets the separate ;K "commas are set"
+; flag), c2 is the real alignment code (G/L/C/R) matching this app's own
+; alignment 1:1. Real
 ; SYLK, per the era's own documentation, has no bold/underline concept
 ; whatsoever - MultiPlan predates that - so neither persists here; this is
 ; the same "only persist what the real format actually has" rule DIF
@@ -22069,6 +22094,9 @@ sh_dowrite_sylk:
     shr bl, cl
     mov al, '$'
     cmp bl, SH_FMT_NUM_CURRENCY
+    je .c1ok
+    mov al, '%'                          ; SYLK's own percent code (81.15.1)
+    cmp bl, SH_FMT_NUM_PERCENT
     je .c1ok
     mov al, 'G'
 .c1ok:
@@ -24084,9 +24112,12 @@ sh_biff_workbook:
     call OSAPI_FILE_WRITE
     jc .err
     mov word [sh_msg], sh_m_saved
+    mov byte [sh_modified], 0         ; the whole workbook went out: clean,
+                                      ; as .single's success is (81.118)
     cmp byte [sh_trunc], 0            ; cells dropped for room must not be
     je .out                           ; reported as a plain success
     mov word [sh_msg], sh_m_trunc
+    mov byte [sh_modified], 1         ; ...and a truncated file is not saved
     jmp .out
 .err:
     call sh_setferr
@@ -26215,6 +26246,7 @@ sh_doread_biff:
     pop si                             ; as a typed one would be
     pop es
     pop dx
+    mov cx, [sh_biff_end]              ; CX was the counter: the file end back
     jmp .skip
 
 .isblank:
@@ -26573,6 +26605,37 @@ sh_doread_biff:
     jb .skip
     cmp word [sh_ntbl], SH_TBL_CAP
     jae .skip
+    mov ax, [es:si+SH_T_R2]            ; ...BUT THE FIELDS ARE THE FILE'S, so
+    cmp ax, SH_ROWS                    ; they are checked before the copy:
+    jae .dtbad                         ; R1 <= R2 on the grid, C1 <= C2, and
+    cmp [es:si+SH_T_R1], ax            ; every input cell on it or
+    ja .dtbad                          ; SH_TBL_NONE. An R2 of FFFFH never
+    mov al, [es:si+SH_T_C1]            ; ends sh_tbl_markall's row walk, and a
+    cmp al, [es:si+SH_T_C2]            ; row past the grid packs into another
+    ja .dtbad                          ; sheet's key - sh_biff_rcok's refusal
+    mov bx, SH_T_IR
+.dtin:
+    mov ax, [es:si+bx]                 ; an input cell's row...
+    cmp ax, SH_TBL_NONE
+    je .dtin1
+    cmp ax, SH_ROWS
+    jae .dtbad
+.dtin1:
+    mov ax, [es:si+bx+2]               ; ...and its column
+    cmp ax, SH_TBL_NONE
+    je .dtin2
+    cmp ax, SH_COLS
+    jae .dtbad
+.dtin2:
+    test word [es:si+SH_T_FLAGS], SH_TF_TWOD
+    jz .dtinok                         ; one input: the second pair is the
+    add bx, 4                          ; format's unused one, and is set to
+    cmp bx, SH_T_IR2                   ; SH_TBL_NONE below whatever it held
+    jbe .dtin
+    jmp short .dtinok
+.dtbad:
+    jmp .skip
+.dtinok:
     push ax
     push bx
     push cx
@@ -26930,6 +26993,10 @@ sh_parsenrec:
     mov ax, [sh_nm_col2]
     cmp ax, SH_COLS
     jae .out
+    cmp word [sh_nm_row], SH_ROWS     ; ...and the NEAR corner, which is just
+    jae .out                          ; as much the file's: a row past the
+    cmp word [sh_nm_col], SH_COLS     ; grid carries into the sheet bits of
+    jae .out                          ; the packed key
     mov si, sh_nm_in
     mov ax, [sh_nm_col]
     mov bx, [sh_nm_row]
@@ -27461,18 +27528,23 @@ sh_parsefrec:
 ; sh_sylk_numfmt_from_c1 - in: AL = an F record's c1 formatting-code char;
 ; out: AL = this app's SH_FMT_NUM_* code. Real SYLK's c1 codes are
 ; 0/C/E/F/G/$/* (default/continuous/scientific/fixed/general/currency/
-; bargraph) - only '$' has an equivalent here; everything else (including
-; the codes this app never writes, like scientific or bargraph) falls back
-; to General, which is the honest answer since this app has no comparable
-; format for them either.
+; bargraph), and '%' is percent (81.15.1) - '$' and '%' have equivalents
+; here; everything else (including the codes this app never writes, like
+; scientific or bargraph) falls back to General, which is the honest answer
+; since this app has no comparable format for them either.
 ; -----------------------------------------------------------------------------
 sh_sylk_numfmt_from_c1:
     cmp al, '$'
     je .cur
+    cmp al, '%'                       ; percent, which SYLK does have
+    je .pct
     xor al, al
     ret
 .cur:
     mov al, SH_FMT_NUM_CURRENCY
+    ret
+.pct:
+    mov al, SH_FMT_NUM_PERCENT
     ret
 
 ; -----------------------------------------------------------------------------

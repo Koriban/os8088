@@ -134054,7 +134054,9 @@ any order, as the `C` record's parser does, because another program's SYLK
 writer is not obliged to emit them in ours. `NN` is the one record type in
 this format whose name is *two* letters, so its `;` is at offset 2 — the
 one-letter test above it is exactly why these records were written for a
-release and never read.
+release and never read. **Both corners are checked against the grid** before
+`sh_name_def`: a near corner past it would reach formulas and Go To as a row
+that packs into another sheet's key.
 
 **A load resets the table.** `sh_nnames` joins `sh_ncells`, `sh_txtlen`,
 `sh_nbord` and `sh_nnote` in all three readers and in File > New. DIF carries
@@ -134442,18 +134444,25 @@ other, and `MAX_WIN` is 12.
 The rule above left one door open: the file dialog takes whatever name is
 typed, and the extension is what decides. Picking *Normal* and typing
 `T.XLS` wrote **SYLK** into a file called `T.XLS` — `.XLS` was not one of
-the three extensions, so it fell to the default — and the percent format and
-the borders the user had just set were gone on reopening, because SYLK as
-written then carried neither — and still carries neither here (§81.117).
+the writer's extensions, so it fell to the default — while the reader took
+`.XLS` as BIFF (§81.52), so the workbook could not be opened again in-OS.
 
-Two changes close it. **`.XLS` IS Normal**: `sh_namefmt` maps both `.BIF`
-and `.XLS` to the BIFF writer and reader, since `.XLS` is what every real
-Excel file of the period is called and what a person picking Normal types;
-Sheet also declares it as a fourth association. And **the choice is
-remembered** in `sh_wantfmt`: when the typed name implies a different
-format, `sh_ondlg` rewrites its extension to the chosen one, so `T.TXT` after
-Normal becomes `T.BIF` rather than a SYLK file. `sh_namefmt` is now the one
-rule — the writer, the reader and the dialog's preselection all ask it.
+**`.XLS` IS Normal**, in all three places that ask: `shm_dowrite` sends it
+to the BIFF writer, `shm_doread` to the BIFF reader, and the File Format
+dialog opens on *Normal* for it, since `.XLS` is what every real Excel file
+of the period is called and what a person picking Normal types. Sheet also
+declares it as a fourth association, so a double-click on one opens Sheet.
+Each of the three is its own `sh_nameends` test; `main`'s single
+`sh_namefmt` rule is not in this fork.
+
+**The choice is NOT remembered here.** `main` keeps it in `sh_wantfmt` and
+has `sh_ondlg` rewrite a typed extension that disagrees; this fork has
+neither, so the extension typed into the file dialog is still what decides —
+*Normal* then `T.TXT` writes text.
+
+**Percent survives SYLK**: the `F` record's c1 is SYLK's own `%` code for
+it, and the reader maps `%` back. Borders and notes do not — SYLK as written
+here carries neither (§81.117).
 
 ### 81.16 A formula must not wear the last cell it referenced
 
@@ -134518,18 +134527,17 @@ after the FIRST Format dialog because Number, Alignment and Font are the
 dialogs that walk the block. `SI` is reloaded from `[sh_ownwin]` before the
 repaint.
 
-#### 81.17.2 Border applies to the SELECTION too
+#### 81.17.2 Border applies to the ANCHOR cell — the block walk is `main`'s
 
-Border was the fourth command written before blocks existed: it read and wrote
-the anchor cell alone, so *Outline* on `C4:E6` framed `C4`. `sh_bdlg_walk` does
-both halves over the block. **Each edge box means that side of the BLOCK** —
-Left is the left edge of the cells in its first column, Top the top edge of its
-first row — so Outline, which is all four, draws one frame round the block, and
-Shade means every cell. A cell's *mask* is the bits the dialog governs there
-(Shade, plus each block side it lies on); an inner edge set earlier is outside
-every mask and is kept. The dialog opens on what the block already has: an edge
-box is ticked when every cell on that side carries it. A single cell is a 1x1
-block whose four sides are its own, so the old behaviour is the special case.
+Border was the fourth command written before blocks existed: it reads and
+writes the anchor cell alone, so *Outline* on `C4:E6` frames `C4`. **In this
+fork it still does.** `main`'s `sh_bdlg_walk` does both halves over the block
+— each edge box meaning that side of the BLOCK, Shade every cell, a cell's
+*mask* the bits the dialog governs there, and the dialog opening on what the
+block already has — and the port is written and measured but NOT taken: it is
+141 bytes of packed `CHART.OVL`, and `office360.img` is full to its last
+cluster (§81.117). `sh_bdlg_apbord` writes the edges through `SH_BT_KEEP`, so
+the protection and table bits (§81.46, §81.114.7) are never the dialog's.
 
 **Left and top are drawn one pixel IN.** A cell's gridlines are its own first
 column and row, so a left or top edge drawn there landed on the gridline and
@@ -134537,13 +134545,13 @@ could not be seen — the frame Outline draws showed only its right and bottom
 sides, on one cell as on a block. Right and bottom were always visible because
 their pixel sits beside the *next* cell's gridline; `sh_drawborders` puts left
 and top beside this cell's own, so every edge is the same two-pixel line with
-gridlines on and one pixel with them off.
+gridlines on and one pixel with them off. That half IS taken: it is resident
+and two bytes smaller than what it replaced.
 
-This is Excel's meaning for Outline and not for the four edge boxes — Excel
-draws Left on *every* cell of a block — and that is deliberate: this dialog
+`main`'s block meaning is Excel's for Outline and not for the four edge boxes
+— Excel draws Left on *every* cell of a block — and deliberately: the dialog
 couples Outline to the four boxes (ticking it ticks them), so with Excel's
-meaning Outline on a block would rule every cell. One meaning for both is the
-one the dialog can show.
+meaning Outline on a block would rule every cell.
 
 #### 81.17.3 Percent multiplies by 100
 
@@ -138425,6 +138433,13 @@ write `0FFFFh` as its input cell, and every one read back would claim a
 **row** input cell and substitute along the wrong axis. Both directions
 translate, with the reason written at both.
 
+**A copy is still of the FILE's bytes, so they are checked first**, in
+`sh_biff_rcok`'s shape: the record is skipped unless `R1 <= R2 < SH_ROWS`,
+`C1 <= C2`, and every input cell the table uses (the first pair, and the
+second for a two-dimensional one) is `SH_TBL_NONE` or on the grid. An `R2` of
+`0FFFFh` would never end `sh_tbl_markall`'s row walk, and a row past the grid
+packs into another sheet's key.
+
 ##### Which `FORMULA` record the `DATATABLE` follows
 
 The format says the **first of the range**, and that is usually the user's
@@ -138906,7 +138921,15 @@ whole reason this one exists.
 **THE FIRST OF THEM IS DONE — §81.118.** The 2026-10-20 merge of
 `1e3608d8..eea2d24a` raised `APP_MAX_SIZE` to `0xFE00` (§20.1.1) and the ask
 was the first thing that headroom bought, at 227 bytes of image and 38 of
-bss. The borders-and-notes WRITER is still owed.
+bss. The borders-and-notes WRITER is still owed — for **SYLK**. BIFF's half
+is §81.119's (and its borders were never missing, §81.117.1); Percent rides
+SYLK now (§81.15.1). SYLK's borders and notes are WRITTEN and not taken:
+`main`'s `sh_sylk_extras` and its `;S`/`;A` reader arms, ported into
+`CHART.OVL` beside the writers, measure 52,115 of `CH_OVKB`'s 52,224 bytes and
+**38,341 packed — 38 clusters where `CHART.OVL` has had 37**, on an
+`office360.img` already at 354 of 354. With §81.17.2's block walk the two cost
+about 520 packed bytes against 169 of room. What they wait on is §24.6.1's
+dated decision about that disk, not on code.
 
 **WHY THEY WERE NOT IN THE FIRST MERGE, PLAINLY: SHEET HAD 46 RESIDENT BYTES**
 (§81.115, re-measured 2026-10-18 — image 52,105 + bss 9,289 of 61,440). Both
@@ -138941,6 +138964,11 @@ full) drops it exactly as typing one would. Two adaptations: our note record
 is `SH_NOTE_REC` and our `sh_unpackrow` is a `SHOUT`, and `jcxz` could not
 reach the end of the loop — it is short-only on an 8086, which is the kind of
 thing that only shows up once the body is long enough.
+
+**The reader's arm borrows `CX`**, which is the record walk's file end, as
+its copy counter, so it puts `[sh_biff_end]` back before `.skip` as every
+other borrower does. The first port did not: the walk then ended at the first
+`NOTE` and said *Loaded*, so a second note and every later sheet were gone.
 
 **It cost 268 bytes of `CHART.OVL` (51,106 → 51,374 of 52,224) and NOT ONE
 RESIDENT BYTE**, because both the BIFF writer and the BIFF reader already
@@ -139009,6 +139037,9 @@ of structure rather than a preference:
   one-sheet-only downgrade both live; `.biff` jumps to `sh_dowrite_biff` and
   never reaches it. BIFF writes the whole workbook, so a plain success there
   is clean whatever `sh_sheets_used` would say — and a TRUNCATED one is not.
+  **Both of its paths do it**: the one-sheet stream and §81.10.5's
+  `sh_biff_workbook`, which first did not, so a two-sheet save said *Saved*,
+  stayed dirty, and Save on close could never close.
 
 **Cost: 227 bytes of image and 38 of bss** (`sh_modified`, `sh_pend` and
 `sh_askmsg`'s `OS88UI_AMAX + 2`), leaving 3,235 spare.
