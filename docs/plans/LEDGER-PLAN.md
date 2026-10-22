@@ -154,23 +154,24 @@ compressed, bigger than LEDGER's entire current image.
 
 ---
 
-## 4. Invoicing, Accounts Receivable, Accounts Payable — flagged, not
-## designed, same treatment as Investments
+## 4. Invoicing, Accounts Receivable, Accounts Payable — deferred, same
+## treatment as Investments, confirmed by the owner
 
-**The owner's own itemized list (Register, Write Checks, Reconcile,
-Reports & Graphs, Account List, Budgeting, Investments) never named
-Invoicing, AR or AP.** "A mix of QuickBooks and Quicken" could mean QuickBooks'
-*rigor* (§1's double-entry decision, taken) without QuickBooks' specific
-*small-business workflows* — or it could mean both. This plan takes the
-narrower read as its working assumption, stated here so it is easy to
-correct rather than discovered as a gap three waves in.
+**Confirmed (2026-10-21): deferred, not in scope for waves 1–4.** The
+owner's own itemized list (Register, Write Checks, Reconcile, Reports &
+Graphs, Account List, Budgeting, Investments) never named Invoicing, AR or
+AP, and "a mix of QuickBooks and Quicken" meant QuickBooks' *rigor*
+(§1's double-entry decision) rather than its specific small-business
+workflows too — the narrower read this plan took as a working assumption
+is the one that stands.
 
-**If invoicing/AR/AP IS wanted**, it is costed the same way Investments
-is below: a real subsystem (invoice numbering, customer records, an aging
-schedule for receivables, a bills-to-pay list) that is genuinely larger
-than Register+Write Checks+Reconcile+Budgeting combined, and — unlike
-those four — has **no existing precedent anywhere in this tree** to build
-from. A Chart of Accounts under §1.1 is the correct foundation for it
+**If invoicing/AR/AP is ever wanted**, it is costed the same way
+Investments is below: a real subsystem (invoice numbering, customer
+records, an aging schedule for receivables, a bills-to-pay list) that is
+genuinely larger than Register+Write Checks+Reconcile+Budgeting combined,
+and — unlike those four — has **no existing precedent anywhere in this
+tree** to build from. A Chart of Accounts under §1.1 is the correct
+foundation for it
 either way (Accounts Receivable and Accounts Payable are themselves just
 two more Asset/Liability leaves), so taking §1's decision costs nothing
 toward this even if it turns out to be wanted.
@@ -227,15 +228,15 @@ match.
 Balance Sheet and P&L (§1.2) and cash-flow write SYLK; CHART.O88 is the
 viewer, per §3. No resident chart engine.
 
-### Deferred — Investments, and Invoicing/AR/AP if wanted (§4)
+### Deferred — Investments, and Invoicing/AR/AP (§4, confirmed)
 **Their own plans, not stories in this one.** Lots, cost basis, realized
 vs. unrealized gain, dividends, splits and price history are, honestly, a
 second product's worth of data model — bigger than waves 1–4 combined, and
 blocking wave 1 on designing it would cost months for a feature only two
 of the owner's nine account types even need. The TYPE exists from wave 1
 (so a balance can be tracked, Register-only, no positions/lots); the
-subsystem does not, yet. Invoicing/AR/AP is the same shape if §4's
-narrower read turns out to be wrong.
+subsystem does not, yet. Invoicing/AR/AP is deferred the same way, by the
+owner's own confirmation (§4) rather than this plan's working assumption.
 
 ---
 
@@ -253,11 +254,10 @@ narrower read turns out to be wrong.
 
 ---
 
-## 8. Before wave 1
+## 8. Before wave 1 — resolved
 
-**Confirm §4's narrower reading of "QuickBooks"** — rigor (double-entry,
-real statements) without the specific small-business workflows
-(invoicing, AR, AP), unless told otherwise. Everything in §1.1's Chart of
-Accounts is compatible with either answer, so nothing here is at risk if
-the answer turns out to be the broader one — only §4's own deferred wave
-grows.
+**§4's narrower reading of "QuickBooks" is confirmed (2026-10-21)**: rigor
+(double-entry, real statements), not the specific small-business
+workflows — invoicing/AR/AP deferred alongside Investments. That was the
+last open question this plan was staged against; wave 1 (the Chart of
+Accounts, the posting engine, the Register) has nothing left to confirm.
