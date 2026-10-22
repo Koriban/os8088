@@ -179,6 +179,11 @@ ch_ovshims:
 ; ch_ovneed - make sure CHART.OVL is loaded.
 ; out: CF=0 with [ch_ovseg] holding it; CF=1 and [ch_ovfail] set. Preserves
 ; every register, because it sits under calls whose arguments are in them.
+; A failure is remembered, not retried (sh_m2need's rule): every formula door
+; comes through here, and a repaint must not re-claim 51KB per cell. A file
+; whose stamp (the host's CH_OVSTAMP: CH_OVLEN, then os88_image_end) is not
+; THIS build's is refused the same way - it would read our bss at stale
+; offsets and return through a vector table laid out for another build.
 ;
 ; REFUSAL IS AN ORDINARY PATH (SPEC.md 47): no heap, or a disk without the
 ; file, and the chart simply does not draw. The caller sees CF=1 and says so
@@ -188,6 +193,8 @@ ch_ovshims:
 ch_ovneed:
     cmp word [ch_ovseg], 0
     jne .ok
+    cmp byte [ch_ovfail], 0
+    jne .fail
     push ax
     push bx
     push cx
@@ -214,6 +221,12 @@ ch_ovneed:
     mov si, ch_ovname
     call OSAPI_FILE_READ
     jc .noread
+    mov ax, [es:CH_OVSTAMP]         ; THIS build's module, or none
+    cmp ax, CH_OVLEN
+    jne .noread
+    mov ax, [es:CH_OVSTAMP + 2]
+    cmp ax, os88_image_end
+    jne .noread
     call ch_ovback
     pop es
     pop di
@@ -230,6 +243,7 @@ ch_ovneed:
     call OSAPI_MEM_FREE             ; module is worse than none
     mov word [ch_ovseg], 0
 .nomem:
+    mov byte [ch_ovfail], 1
     call ch_ovback
     pop es
     pop di
@@ -238,6 +252,7 @@ ch_ovneed:
     pop cx
     pop bx
     pop ax
+.fail:
     stc
     ret
 

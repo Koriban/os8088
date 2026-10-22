@@ -1095,6 +1095,9 @@ SHM_TBLRUN equ 59                   ; 81.114.8: re-run every Data > Table
 SHM_TBLADJ equ 60                   ; 81.114.9: ...and shift their rectangles
 SHM_TBLCMD equ 61                   ; 81.114.11: TABLE() - MACRO.OVL's way to
                                      ; the engine, which is CHART.OVL's
+SHM_DFDEL  equ 62                   ; 81.71.5.1: the Form's Delete alert's
+SHM_LWHEEL equ 63                   ; completion and the list's W_ONWH - two
+                                     ; more addresses something else calls
 SHM_DFBTN  equ 57                   ; ...the Data Form's
 SHM_NDBTN  equ 56                   ; ...the Note dialog's
 SHM_LDBTN  equ 55                   ; ...the list dialog's
@@ -1102,12 +1105,15 @@ SHM_IDBTN  equ 54                   ; ...the one-line dialog's
 SHM_FDBTN  equ 52                   ; 81.111: a dialog BUTTON FIRED (on the
                                      ; release, the library's gesture): AL =
                                      ; which, 1-based
-SHM_N      equ 59                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 61                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
 sh_modc0:
-    jmp ch_modc
+    jmp near ch_modc                ; NEAR, so the stamp is at a fixed +3
+sh_modc_stamp:                      ; THE BUILD STAMP ch_ovneed holds a read
+    dw sh_modc_end, os88_image_end  ; file to: this module's length and the
+                                    ; resident image's, crt0.asm's pair (73.14)
 
 ; ch_modc falls through to here for any verb past CHM_MAX (82.16.8).
 sh_modc_ext:
@@ -1147,6 +1153,7 @@ sh_mverb:
     dw sh_m_tblrun                                        ; 81.114.8
     dw sh_m_tbladj                                        ; 81.114.9
     dw sh_m_tblcmd                                        ; 81.114.11
+    dw sh_m_dfdel, sh_m_lwheel                            ; 81.71.5.1
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1163,6 +1170,14 @@ sh_m_tbladj:
     retf
 sh_m_tblcmd:                          ; 81.114.11: CF=1 = not a table shape
     call sh_table_run
+    retf
+sh_m_dfdel:                         ; 81.71.5.1: AL = the alert's button
+    call sh_df_ondel
+    clc
+    retf
+sh_m_lwheel:                        ; AX = the notches, SI = the window
+    call sh_ldlg_onwheel
+    clc
     retf
 sh_m_doread:
     call shm_doread
@@ -1286,6 +1301,8 @@ section .modm vstart=0 align=1 follows=.modc
 sh_modm0:
     jmp short sh_modm_disp
     db 'SHMACRO2'                     ; os88ovl.py's cut mark: exactly once
+sh_modm_stamp:                        ; ...and sh_m2need's build stamp, after
+    dw shm_m2end, os88_image_end      ; the mark so the cut is unaffected
 sh_modm_disp:
     cmp bp, SHM2_N
     jae .bad
@@ -1902,6 +1919,12 @@ sh_m2need:
     call OSAPI_FILE_READ
     pop dx
     jc .noread
+    mov ax, [es:SH_M2STAMP]             ; THIS build's module, or none: one
+    cmp ax, SHM_FTAIL                   ; from another build reads our bss at
+    jne .noread                         ; stale offsets (sh_modm_stamp)
+    mov ax, [es:SH_M2STAMP + 2]
+    cmp ax, os88_image_end
+    jne .noread
     mov word [sh_m2far], 0              ; the dispatcher is at the claim's 0
     mov [sh_m2far + 2], dx
     call ch_ovback
@@ -1930,6 +1953,7 @@ sh_m2need:
     stc
     ret
 sh_m2name: db 'MACRO.OVL', 0
+SH_M2STAMP equ sh_modm_stamp - sh_modm0   ; the stamp's offset in the claim
 
 ; -----------------------------------------------------------------------------
 ; sh_ovbind - fill the vector table: this package's shim offsets and its own
@@ -11391,48 +11415,22 @@ sh_chart_paint:
     mov [ch_bx1], ax                    ; borrow this scratch - safe here,
     mov [ch_by1], dx                    ; ch_bars_draw already finished by
                                          ; the time sh_chart_paint ever runs
-
-    ; THE INTERIOR THE PICTURE DOES NOT COVER (upstream issue #142). The window
-    ; is SH_CHARTWIN_W x SH_CHARTWIN_H and the image is CH_W x CH_H, so there
-    ; is a 20px band down the right and 21px along the bottom - the "little
-    ; margin" SH_CHARTWIN_W's own comment describes. This proc used to be the
-    ; BLIT4 and nothing else, so that band was never painted AT ALL: on a move
-    ; or a raise the frame was redrawn, the picture re-blitted, and whatever
-    ; had been on the glass stayed in between. Fragments of the SHEET window
-    ; underneath were left sitting inside the Chart window.
-    ;
-    ; ONE FILL, not four round the edges: a fill is 756us whatever it covers
-    ; (PERFORMANCE.md), so covering the whole content once is cheaper than
-    ; bounding the band, and the blit that follows lands on top of it.
-    ;
-    ; OSAPI_WM_GEOM, not W_W/W_H. Those are the OUTER frame, and filling to
-    ; them paints over the window's own right and bottom BORDER - a two-pixel
-    ; black line that the first version of this fix erased. The screenshot
-    ; diff against the unfixed build is what caught it: the only thing that
-    ; had changed on a RAISE was that border going white.
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_WM_GEOM                  ; CX/DX = the CONTENT's size, which is
-    jc .nofill                          ; the box WM_CONTENT gave the origin of
-    mov ax, [ch_bx1]
-    mov bx, [ch_by1]
-    add cx, ax
-    dec cx
-    add dx, bx
-    dec dx
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-.nofill:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-
+    call ch_margin                      ; THE INTERIOR THE PICTURE DOES NOT
+                                         ; COVER (SPEC.md 82.1.1, issue #142):
+                                         ; the window is a little larger than
+                                         ; the CH_W x CH_H canvas, and the two
+                                         ; bands that leaves were never written
+                                         ; by anything - so a move redrew the
+                                         ; frame, re-blitted the picture, and
+                                         ; left whatever had been on the glass
+                                         ; in between. BX is still the window
+                                         ; and AX/DX still WM_CONTENT's answer,
+                                         ; which is exactly what it wants.
+                                         ; SHARED with CHART.O88's ct_paint,
+                                         ; because the two windows have the
+                                         ; same margin for the same reason -
+                                         ; and resident under CH_OVERLAY for
+                                         ; this call (os88chart.inc)
     mov es, [sh_chartseg]
     mov si, CH_PXOFF
     mov bp, CH_STRIDE
@@ -18131,6 +18129,12 @@ sh_ldlg_click_r:
     call ch_ovcall
     pop bp
     ret
+sh_ldlg_wheel_r:                       ; W_ONWH: the kernel near-calls it in
+    push bp                            ; THIS segment, so it is a thunk like
+    mov bp, SHM_LWHEEL                 ; the paint's (81.71.5.1)
+    call ch_ovcall
+    pop bp
+    ret
 sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname, sh_s_ld_tnum
 sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname, sh_s_ld_pnum
 sh_s_ld_tnum:  db 'Format Number', 0
@@ -18217,7 +18221,7 @@ sh_ldlg_open:
     jc .out                            ; SI is still the template - and it is
     mov [sh_ldlg_win], bx
     push ax
-    mov ax, sh_ldlg_onwheel            ; the wheel scrolls the list (13.18)
+    mov ax, sh_ldlg_wheel_r            ; the wheel scrolls the list (13.18)
     call OSAPI_WM_ONWHEEL
     pop ax
     call OSAPI_WM_SHOW                 ; created HIDDEN, so the show is not
@@ -20113,6 +20117,12 @@ sh_df_close_r:                         ; ...and the recovery's
     call ch_ovcall
     pop bp
     ret
+sh_df_ondel_r:                         ; Delete's alert completion: os88ui_adone
+    push bp                            ; near-calls it in THIS segment, so a
+    mov bp, SHM_DFDEL                  ; module label would land mid-resident
+    call ch_ovcall
+    pop bp
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_form - Data ▸ Form.... Pins the database rectangle the way
@@ -20920,7 +20930,7 @@ sh_df_askdel:
     mov al, OS88UI_AYESNO
     mov bx, [sh_ownwin]
     mov si, sh_s_df_delq
-    mov di, sh_df_ondel
+    mov di, sh_df_ondel_r              ; resident: adone's `call di` is near
     SHOUT os88ui_ask
 .out:
     pop di
@@ -56347,6 +56357,8 @@ section .text
 %include "os88dec.inc"
 
 %define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
+CH_OVSTAMP equ sh_modc_stamp - sh_modc0  ; ...and the build stamp ch_ovneed
+CH_OVLEN   equ sh_modc_end               ; checks: where it is, and the length
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
 
@@ -56355,12 +56367,15 @@ section .text
 %endif
 
 %include "os88chart.inc"
+section SH_MODSEC                      ; CHART.OVL's last byte + 1, shm_m2end's
+sh_modc_end:                           ; twin: os88chart.inc is the last .modc
+section .text                          ; fragment, so nothing lands after this
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9331                     ; +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9333                     ; +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;

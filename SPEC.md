@@ -140440,7 +140440,8 @@ the macro functions, and a run starting or resuming). The eight bytes
 after that dispatcher's jump are **`SHMACRO2`**, the mark
 `tools/os88ovl.py --second` cuts the file at. The tool refuses unless the
 mark occurs exactly once and follows a short jump, so the boundary lives in
-the image and nowhere else.
+the image and nowhere else. The build stamp (§82.16.5) follows the mark, so
+it moves nothing the cut depends on.
 
 **What stayed in CHART.OVL:**
 
@@ -143437,6 +143438,13 @@ should not have to spend a register saying which one it is. `ch_ovcall`
 passes the registers straight through, so each thunk is a `push bp`, a `mov`
 and a call.
 
+**Nor can any other address something resident near-calls.** `os88ui_adone`
+runs an `os88ui_ask` completion with `call di` in the package's segment, and
+the kernel runs `W_ONWH` the same way, so the Form's Delete alert hands over
+`sh_df_ondel_r` (`SHM_DFDEL`) and the list dialog registers `sh_ldlg_wheel_r`
+(`SHM_LWHEEL`), never the module labels behind them: a module offset taken
+as a resident one lands mid-instruction in unrelated code.
+
 **The invariant that makes this safe**: `ch_ovneed` returns on its first
 compare once `ch_ovseg` is set, so only the *first* call reads the file. The
 menu's own entry point (`sh_docmd_form_r`, `sh_bdlg_open_r`) makes that call
@@ -145300,7 +145308,16 @@ BMP header and palette — are the module's only *data* the resident half reads,
 copied into the chart buffer by SHEET's entry proc long before `CHART.OVL` is
 loaded. They stay in `.text` in both builds. A module-relative address handed
 to resident code copies whatever happens to sit at that offset in the package,
-which is a wrong BMP header and, again, no error anywhere.
+which is a wrong BMP header and, again, no error anywhere. `ch_margin` is
+resident too, for the converse reason: `sh_chart_paint` near-calls it, and it
+names no module data.
+
+**The converse, the module reading its own data.** The module runs with
+`DS` = the package, so a table inside it — `ch_sintab`, `ch_pie_pattab` — is
+read `[cs:...]`, the way the dispatchers read their verb tables. Without the
+override a Pie chart is drawn from the package's code bytes taken as sines and
+hatches. In CHART.O88's resident build `CS` = `DS`, so the override is right
+in both.
 
 #### 82.16.5 Refusal is an ordinary path
 
@@ -145320,6 +145337,19 @@ to tell the two failure modes apart.
 
 The chart simply does not appear. That is the right direction to fail in: a
 spreadsheet whose numbers are all still there.
+
+**A failure is remembered, not retried** (`ch_ovfail`, `sh_m2need`'s rule):
+every formula door reaches `ch_ovneed`, and a repaint must not re-claim 51KB
+and search the disk once per visible cell.
+
+**A module from another build is a failure too.** Both `.OVL`s are separate
+files, so a file copy can pair a new `SHEET.O88` with an old module — which
+reads the package's bss at stale offsets and returns through a vector table
+laid out for another build. Each module carries `crt0.asm`'s pair (§73.14),
+its own length and `os88_image_end`: `CHART.OVL` at +3, after a `jmp near`,
+and `MACRO.OVL` at +10, after its `SHMACRO2` mark. `ch_ovneed` and
+`sh_m2need` free the claim and refuse when either word disagrees with the
+assembled value.
 
 #### 82.16.6 SHEET is full, and the tail is where the room is
 
@@ -145406,7 +145436,8 @@ section .text
 
 Both ends are inside the module, so it is an ordinary near jump, and NASM
 picks `EB xx` — **two bytes**, not three. Everything else may now be bracketed
-wherever it already lives.
+wherever it already lives. (The build stamp of §82.16.5 has since made it a
+`jmp near`, three bytes, so the stamp sits at a fixed +3.)
 
 `ch_modc` grew one hook to go with it: an unknown verb falls through to
 `CH_MODC_EXT` when a host defines one, so a host can continue the numbering
