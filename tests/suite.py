@@ -5105,7 +5105,7 @@ SOAK = [
         "A package's REGION moves and the package keeps working (SPEC.md "
         "66.6.1). 66.6 said since it was written that a region can never move "
         "because its base IS its CS; this is the door open. FOUR PACKAGES and "
-        "each has a job - PAINT takes the ceiling, CALC goes under it and is "
+        "each has a job - PAINT takes the ceiling, NOTEPAD goes under it and is "
         "the one that has to move, FILLER takes the arena down to a few tens "
         "of KB, and closing PAINT leaves the hole. tests/filler is an "
         "instrument with NO assertions of its own, which heapfrag cannot be: "

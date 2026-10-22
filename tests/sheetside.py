@@ -117,10 +117,11 @@ def main():
             def inked(y):
                 return sum(1 for x in range(x1, x2) if not rows[y][x]) > \
                     (x2 - x1) * 3 // 4
-            # each of rows 1-3 as (top, bottom): a top border is drawn on the
-            # cell's first pixel row, its gridline's, and a BOTTOM one on its
-            # last - the row above the next cell's line (sh_drawborders)
-            edges[tag] = [(inked(ys[r]), inked(ys[r + 1] - 1))
+            # each of rows 1-3 as (top, bottom): a top border is drawn one
+            # row IN from the cell's gridline (SPEC.md 81.17.2 - on the line
+            # itself it could not be seen), and a BOTTOM one on its last - the
+            # row above the next cell's line (sh_drawborders)
+            edges[tag] = [(inked(ys[r] + 1), inked(ys[r + 1] - 1))
                           for r in range(3)]
 
         def rowop(item):

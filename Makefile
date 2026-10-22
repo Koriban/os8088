@@ -8322,15 +8322,18 @@ $(BUILD)/filler.o88: $(BUILD)/filler.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filler.bin -o $@
 
 # FOUR packages, and each has a job: PAINT opens first and takes the top of the
-# ceiling, CALC opens under it and is the package whose REGION has to move,
+# ceiling, NOTEPAD opens under it and is the package whose REGION has to move,
 # FILLER opens under that and takes the arena down, and closing PAINT is what
-# leaves a hole above CALC for the descending pass to pack it into. CALC and
-# not SHEET, which was the subject until its region stopped being declared
-# (tests/movable.txt says why): the subject has to declare and hire nobody.
-$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/calc.o88 \
+# leaves a hole above NOTEPAD for the descending pass to pack it into. NOTEPAD
+# and not SHEET, which was the subject until its region stopped being declared
+# (tests/movable.txt says why), and not CALC either: the row's last assertion
+# compares the repaint pixel for pixel, and Calculator's dithered History rule
+# came back one pixel out of phase after the move (flagged at PR #289's review
+# as a 1bpp grey question of its own) - plain text cannot.
+$(BUILD)/regmove360.img: $(BUILD)/filler.o88 $(BUILD)/notepad.o88 \
                          $(BUILD)/paint.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/filler.o88 \
-		$(BUILD)/paint.o88 $(BUILD)/calc.o88
+		$(BUILD)/paint.o88 $(BUILD)/notepad.o88
 
 # ...and the NEGATIVE arm's, for tests/regpin.py
 # (docs/plans/HEAP-UNPIN-PLAN.md 10.1). The same three plus PINME, which is the

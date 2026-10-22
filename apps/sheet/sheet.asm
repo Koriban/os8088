@@ -1930,7 +1930,7 @@ sh_m2need:
     pop dx
     jc .noread
     mov ax, [es:SH_M2STAMP]             ; THIS build's module, or none: one
-    cmp ax, SHM_FTAIL                   ; from another build reads our bss at
+    cmp ax, shm_m2end - sh_modm0        ; from another build reads our bss at
     jne .noread                         ; stale offsets (sh_modm_stamp)
     mov ax, [es:SH_M2STAMP + 2]
     cmp ax, os88_image_end
