@@ -136979,12 +136979,21 @@ a plain store and the second write erased the first.
 #### 81.46.2 Two guards, because there are two funnels — and there were three
 
 `sh_commit` is the one place that decides what a cell becomes, so a guard in
-front of it covers typing, all six paste modes, Fill Right, Fill Down and a
-sort's write-back at once.
+front of it covers typing, all six paste modes, Fill Right and Fill Down at
+once.
 
 It does not cover everything. **Cut clears through `sh_clearcell` directly**,
 and Paste Special's **Formats and Notes write the tables directly** — neither
-goes anywhere near `sh_commit`. Both got their own guard. Insert and Delete
+goes anywhere near `sh_commit`. Both got their own guard. So did three
+commands that write their cells through `sh_setvald`/`sh_settext`/
+`sh_clearcell` themselves, each asked about the cells it **can write** before
+it writes any: **Data ▸ Sort** (the occupied rows it permutes across the
+block's columns, on a protected document only, with `sh_prot_clr` set because
+a sort *drops* a table it touches, §81.114.9 — its key column used to be
+written whole before the carry's own `sh_commit` refused, shearing every row
+under a *sort full* message), **Format ▸ Justify** (the left column, the only
+one it writes) and **Data ▸ Parse** (the column and the fields to its right,
+across the selection's rows). Insert and Delete
 refuse for the *whole document* rather than per cell, because a row that moves
 carries locked cells it never named.
 
@@ -139054,6 +139063,16 @@ of structure rather than a preference:
 **Cost: 227 bytes of image and 38 of bss** (`sh_modified`, `sh_pend` and
 `sh_askmsg`'s `OS88UI_AMAX + 2`), leaving 3,235 spare.
 
+**The macro language's `NEW()` and `OPEN()` replace the document too, and
+they REFUSE while it is modified** — through the macro error path
+(`shm_merr`: the run stops, or `ERROR()` decides), before any action. They
+cannot ask: a running macro cannot answer the Save / Discard / Cancel alert,
+and the document they would discard includes the macro sheet running them.
+`OPEN()` reads through `SHM_READ` from inside the module and so never passes
+the resident `sh_doread`, which is where a successful read's clean mark lives;
+`shm_mopen` makes the same mark itself, or every cell the read made would
+leave the file it had just read dirty.
+
 #### 81.118.1 The gate, and the two mutations
 
 `tests/sheetask.py` (`soak -k sheetask`) reads `[sh_modified]` at four states
@@ -140368,7 +140387,10 @@ W_FLAGS bit 0 across all twelve.
 - **A negative width or height** made a window no click could ever hit
   (`wm_hit` tests `x < W_X + W_W`), so a paused run could only be ended by
   Esc or the close box. A size that is not positive takes the default now,
-  for the dialog and for each item.
+  for the dialog and for each item. **For a height that needs the vertical
+  unit's conversion to be SIGNED**: `shm_db23`'s `* 2 / 3` was an unsigned
+  divide, so -30 came out 21,825 and the sign tests after it never saw a
+  negative. It is `imul`/`idiv` now, and an item's negative y is 0.
 - **A dialog that could not be created** left `sh_macro_wait` at
   `SH_MW_DBOX`, which a later ON.TIME tick would then consume. It clears it.
 
@@ -140755,10 +140777,18 @@ The first part of wave 4 of `docs/plans/SHEET-MACRO-PLAN.md`.
 3" and "one byte" cannot go to the disk as they are asked for. Instead:
 
 1. FOPEN reads the whole file with `OSAPI_FILE_READ`, which also expands a
-   compressed one.
+   compressed one — into a buffer that starts on a PARAGRAPH, since the
+   kernel expands in place only there (§20.14.2): `SHM_FTAIL`, the tail's
+   start, is the image's end rounded up to 16, and every channel's share is
+   a multiple of 16 after it. The channel's size is the byte count the read
+   delivered, not the directory's, which under-reports a packed file whose
+   hint a foreign OS dropped (§20.14.6.3).
 2. Every read and write works on those bytes in memory.
 3. FCLOSE writes the file back whole with `OSAPI_FILE_WRITE`, if it
-   changed. A new file is always written, empty or not.
+   changed. A new file is always written, empty or not. A write the disk
+   refuses — write-protected, full, a refused name — answers `#N/A` and
+   leaves the channel **open and changed**, because the tail is the only copy
+   of what the macro wrote; answering TRUE and freeing it lost that text.
 
 **The memory is the tail of the macro module's own claim** - CHART.OVL's
 when this was built, **MACRO.OVL's since §81.94** - the bytes between the
@@ -140800,6 +140830,7 @@ Six more commands, which close wave 3: 65 of the plan's 68 are built.
   document it runs in (§81.88.2). So **the run ends there**: the cells it
   was running are gone. That is what Excel does when a macro closes its own
   macro sheet. OPEN calls the reader's module body (`shm_doread`) directly.
+  Both are refused while the document is modified (§81.118).
 - **FORMULA.FILL(formula_text, ref)** puts the formula into ref's top-left
   cell, as FORMULA does, then runs Fill Down and then Fill Right over ref.
   Those two already adjust relative references, and in that order they
@@ -142221,9 +142252,18 @@ Undo is a **snapshot**, not a log of changes: before an undoable command runs,
 the cell array, the border table, the note table and the column widths are
 copied into Undo's own claim (`SH_CLAIM_UNDO_KB`, 16 KB), with the text
 arena's **length** — the arena is append-only (only a new or loaded document
-resets it), so cutting it back is all it takes to take back what a command
-added. Formula text results that `sh_str_store` rewrote in place are
+resets it), so the cells it restores point only at bytes that are still
+there. Formula text results that `sh_str_store` rewrote in place are
 recomputed after the restore, as every formula is.
+
+**The swap never cuts the arena back.** The arena is not in the snapshot, so
+the side swapped out still points at whatever it appended; were the live
+length cut back to the restored one, the recompute that follows — a formula
+that now answers text claims a fresh slot — or the next label would be
+written over those bytes, and Redo would bring back cells reading someone
+else's text. `sh_undo_do` therefore keeps the length at the **larger** of the
+live one and the restored one. It costs arena that only a new or loaded
+document gives back, and it cannot alias, in either direction.
 
 **Undo swaps** the live document and the snapshot, through the staging
 claim, so Redo is the same operation again and the label toggles.
@@ -142677,7 +142717,14 @@ step and returns; the dialog's completion carries on — `sh_macro_onalert` for
 the alert, `sh_idlg_after` once the input dialog has **closed** (a run may
 open it again). ALERT resumes at the next cell; INPUT at **the same cell**,
 whose second evaluation answers what was typed — a number if all of it is
-one — or FALSE for Cancel, as Excel's does. One INPUT to a cell.
+one — or FALSE for Cancel, as Excel's does. One INPUT to a cell. **A dialog
+that does not come up stops the run** with the macro error, DIALOG.BOX's rule
+(§81.96): `os88ui_ask` refuses while another alert is up or the window table
+is full, and `sh_idlg_open` while one of its own dialogs is open — and no
+completion would ever come, so a run left paused on it would hold
+`sh_macro_running` for the rest of the session, answering every Macro > Run
+with *A macro is running*. `sh_macro_inputup` answers `CF` for that reason;
+`sh_idlg_open` has no output of its own.
 
 **SELECT repaints; SET.VALUE and FORMULA do not**: the grid catches up at the
 next SELECT or command, a pause, or the end — every change repainted as it
@@ -143463,7 +143510,13 @@ to the next record, which is the Guide's own keyboard table. A field is
 written back to its cell as the focus **leaves** it, where Excel saves a
 record's changes when you leave the *record*. Those are observably the same
 here because `Restore` — the one command that can tell them apart — is not
-implemented.
+implemented. **Only a field that was typed in is written back** (`sh_df_dirty`,
+set by a character, Backspace or Delete and cleared when a field is loaded):
+the editor holds the cell's text as `sh_cell_totext` gives it, ten significant
+digits of a number and a label's raw characters, and committing that again
+would round the number and re-parse a label such as `02134` into one — and
+take an Undo snapshot and mark the document modified for a record the user
+only looked at.
 
 Computed and protected fields are shown without a box and cannot be typed
 into, which is Excel's own rule (*"Fields that are computed or protected
@@ -143714,7 +143767,11 @@ granularity would be visible.
 
 The drag measures from **where the edge was**, not from where the pointer
 landed inside the grab band, so the column does not jump by up to three pixels
-on the first movement.
+on the first movement. The press banks the slot's **leading** edge, which the
+resize never moves, and every packet sets the size to the pointer less that
+edge: a delta added to the size as it *now* stands would be added again on
+every packet once the first step had moved the edge, and the drag would run
+away to `SH_CW_MAXCH` or to hidden.
 
 **Dragging it shut hides it**, which is Excel's behaviour and falls out of
 §81.73 rather than being built: no width *is* what the hidden sentinel means.
@@ -143783,6 +143840,18 @@ reads its `CF`.
 Sort — those are part of a command that took its own Undo snapshot, and
 recording each cell they write would produce a macro that reproduced the
 result rather than the action.
+
+**A recorded line is not an Undo step, and not a repaint.** `sh_rec_emit`
+holds `sh_ud_busy` across its own `sh_commit`, so the line takes no snapshot:
+Undo is one snapshot deep, and a snapshot per recorded line replaced the
+user's own entry's at once, so Undo took back the recorder's last line and
+never the change. It puts `sh_commitdirty` back as it found it when the line
+went onto a sheet other than the one shown, because a `SELECT` is recorded
+*after* `sh_selpaint` has run and would otherwise send every next arrow key
+down the full repaint, about a second each on the target. An edit in progress
+when a line is emitted is **committed first** — the buffer is about to hold
+the line — so it is recorded ahead of the command, in order, rather than
+discarded.
 
 A double quote inside a typed label is **doubled** in the recorded text, which
 is how this app's own parser reads a quote inside a string (§81.18's

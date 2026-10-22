@@ -4052,8 +4052,14 @@ sh_undo_do:
     jc .out                            ; it has outgrown Undo: leave both
     call sh_undo_size                  ; ...measured NOW, before the load
     push ax                            ; changes the counts it is made of
+    push word [sh_txtlen]              ; the live arena's end, because the
     mov ax, [sh_undoseg]               ; the snapshot -> live
     call sh_undo_load
+    pop ax                             ; arena is not in the snapshot: the
+    cmp ax, [sh_txtlen]                ; end stays at the larger of the two,
+    jbe .txtok                         ; so a slot claimed after this cannot
+    mov [sh_txtlen], ax                ; land on bytes the other side holds
+.txtok:
     pop cx                             ; staging -> the snapshot: what live was
     push ds
     push es
@@ -4349,6 +4355,8 @@ sh_onclick:
     call sh_df_close_r                 ; for the rest of the session
 .nodf:
     mov word [sh_msg], 0
+    mov bx, si                         ; the geometry first: a dragged window
+    call sh_geom                       ; is put back with no W_PAINT
     mov byte [sh_rz_on], 0             ; 81.73.2: a press on a heading's own
     call sh_hdrhit                     ; trailing edge is a RESIZE and not a
     jnc .norz                          ; selection, so it is asked first and
@@ -4358,8 +4366,6 @@ sh_onclick:
     mov byte [sh_dragging], 0          ; stage 3.0a: a gesture is only a grid
                                         ; drag if it STARTS on the grid - the
                                         ; menu-bar path below never arms it
-    mov bx, si
-    call sh_geom
     call sh_mbar_hit                   ; stage 2.x: Sheet's own in-window
     cmp al, SH_M_NONE                  ; menu bar (see the SH_MBAR_H section
     je .notmenu                        ; comment) claims a click on its strip
@@ -4959,7 +4965,7 @@ SH_RZ_GRAB   equ 3                   ; pixels either side of the edge
 ; -----------------------------------------------------------------------------
 ; sh_hdrhit - in: CX,DX = a click. out: CF=1 when it grabbed a heading's
 ; trailing edge, with [sh_rz_axis] 0 = column / 1 = row, [sh_rz_idx] = the
-; REAL row or column being resized, and [sh_rz_x0] the edge's own pixel.
+; REAL row or column being resized, and [sh_rz_x0] the slot's LEADING edge.
 ; -----------------------------------------------------------------------------
 sh_hdrhit:
     push ax
@@ -4996,6 +5002,9 @@ sh_hdrhit:
     jmp short .cw
 .gotcol:
     mov ax, bx
+    call sh_vwidth
+    sub dx, ax                         ; DX = this slot's LEADING edge
+    mov ax, bx
     call sh_vreal_col
     mov [sh_rz_idx], ax
     jmp short .yes
@@ -5030,12 +5039,15 @@ sh_hdrhit:
     jmp short .rw
 .gotrow:
     mov ax, bx
+    call sh_vheight
+    sub dx, ax
+    mov ax, bx
     call sh_vreal_row
     mov [sh_rz_idx], ax
 .yes:
-    mov [sh_rz_x0], dx                 ; the edge's own pixel, so the drag
-    pop dx                             ; measures from where the EDGE was and
-    pop bx                             ; not from where the pointer landed
+    mov [sh_rz_x0], dx                 ; the slot's leading edge, which the
+    pop dx                             ; resize never moves: the size is the
+    pop bx                             ; pointer less it, never added again
     pop ax
     stc
     ret
@@ -5060,15 +5072,8 @@ sh_rz_track:
     mov ax, cx                         ; the pointer, in grid pixels...
     sub ax, [sh_ox]
     sub ax, SH_RH_W
-    sub ax, [sh_rz_x0]                 ; ...as a delta from the edge
-    push ax
-    mov ax, [sh_rz_idx]
-    call sh_colwidth
-    mov cl, 3
-    shl ax, cl                         ; its width now, in pixels
-    pop bx
-    add ax, bx                         ; what the pointer is asking for
-    jle .cwzero
+    sub ax, [sh_rz_x0]                 ; ...less the leading edge: what the
+    jle .cwzero                        ; pointer is asking for
     mov cl, 3
     shr ax, cl                         ; ...in whole characters
     or ax, ax
@@ -5104,11 +5109,6 @@ sh_rz_track:
     sub ax, [sh_goy]
     sub ax, SH_FB_H + SH_CH_H
     sub ax, [sh_rz_x0]
-    push ax
-    mov ax, [sh_rz_idx]
-    call sh_rowheight                  ; its height now, in pixels
-    pop bx
-    add ax, bx
     jle .rzero
     cmp ax, SH_RH_MAX
     jbe .rhmin
@@ -11681,6 +11681,10 @@ sh_rec_emit:
     je .ret
     cmp byte [sh_rec_busy], 0
     jne .ret                           ; a recorded write is not itself news
+    cmp byte [sh_editing], 0           ; the user's own edit is committed
+    je .noedit                         ; first: the buffer is about to hold
+    call sh_commit                     ; this line, and the entry is then
+.noedit:                               ; recorded ahead of it, in order
     push ax
     push bx
     push cx
@@ -11731,9 +11735,19 @@ sh_rec_emit:
     mov [sh_selrow], ax
     mov [sh_selrow2], ax
     mov byte [sh_editing], 1
-    call sh_commit
+    mov al, [sh_ud_busy]
+    mov ah, [sh_commitdirty]
+    push ax
+    mov byte [sh_ud_busy], 1           ; a recorded line is not an Undo step:
+    call sh_commit                     ; no snapshot of its own over the user's
+    pop bx
+    mov [sh_ud_busy], bl
     mov al, [sh_rec_svsh]              ; ...and back
     mov [sh_cursheet], al
+    cmp al, [sh_rec_sheet]             ; recorded onto ANOTHER sheet: nothing
+    je .shown                          ; on screen changed, so the next arrow
+    mov [sh_commitdirty], bh           ; key keeps sh_selpaint's cheap path
+.shown:
     mov ax, [sh_rec_svc]
     mov [sh_selcol], ax
     mov ax, [sh_rec_svr]
@@ -12892,6 +12906,34 @@ sh_docmd_sortcol:
     inc bx
     jmp .outer
 .sortdone:
+    cmp byte [sh_protected], 0         ; 81.46: a LOCKED cell refuses the
+    je .wbgo                           ; whole sort before anything is
+    mov cx, [sh_sort_cnt]              ; written - the carry's own guard would
+    jcxz .wbgo                         ; stop it half-way and shear the rows
+    mov es, [sh_stgseg]
+    mov si, cx                         ; the rows it writes are the occupied
+    dec si                             ; ones, rows[0] to rows[cnt-1], across
+    shl si, 1                          ; the block's columns
+    push word [sh_selcol]
+    push word [sh_selrow]
+    push word [sh_selcol2]
+    push word [sh_selrow2]
+    mov ax, [es:0]
+    mov [sh_selrow], ax
+    mov ax, [es:si]
+    mov [sh_selrow2], ax
+    mov ax, [sh_sort_c1]
+    mov [sh_selcol], ax
+    mov ax, [sh_sort_c2]
+    mov [sh_selcol2], ax
+    mov byte [sh_prot_clr], 1          ; the LOCK is the question: a table a
+    SHOUT sh_prot_blocked              ; sort touches is dropped (81.114.9)
+    pop word [sh_selrow2]
+    pop word [sh_selcol2]
+    pop word [sh_selrow]
+    pop word [sh_selcol]
+    jc .wbpaint                        ; refused, and [sh_msg] says why
+.wbgo:
     xor cx, cx
 .wb:
     cmp cx, [sh_sort_cnt]
@@ -13110,6 +13152,15 @@ sh_docmd_justify:
     call sh_ju_block                   ; the ordered block and the width
     call sh_ju_check                   ; ...and every left-column cell is text
     jc .notext
+    push word [sh_selcol]              ; 81.46: the LEFT column is all it
+    push word [sh_selcol2]             ; writes, so that is what is asked
+    mov ax, [sh_ju_c1]
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    SHOUT sh_prot_blocked
+    pop word [sh_selcol2]
+    pop word [sh_selcol]
+    jc .out                            ; refused, and [sh_msg] says why
     ; --- PASS 1: every section, counted and NOTHING written ------------------
     mov ax, [sh_ju_r1]
     mov [sh_ju_a], ax
@@ -19032,6 +19083,21 @@ sh_parse_do:
     call sh_parse_span
     call sh_parse_fields
     jc .nofields
+    push word [sh_selcol]              ; 81.46: every cell it can write - the
+    push word [sh_selcol2]             ; column and the fields to its right,
+    mov ax, [sh_pa_col]                ; across the rows - is asked first
+    mov [sh_selcol], ax
+    add ax, [sh_pa_n]
+    dec ax
+    cmp ax, SH_COLS
+    jb .pacols
+    mov ax, SH_COLS - 1                ; ...as far as the edge sh_parse_row
+.pacols:                               ; stops at
+    mov [sh_selcol2], ax
+    SHOUT sh_prot_blocked
+    pop word [sh_selcol2]
+    pop word [sh_selcol]
+    jc .out                            ; refused, and [sh_msg] says why
     mov al, SH_UL_PARSE
     SHOUT sh_undo_begin
     mov bx, [sh_pa_r1]
@@ -20350,6 +20416,7 @@ sh_df_loadfld:
     mov [sh_df_top], ax
 .onscreen:
     mov byte [sh_df_buf], 0
+    mov byte [sh_df_dirty], 0          ; the cell's own text: nothing typed
     call sh_df_nrec
     or ax, ax
     jz .set
@@ -20401,6 +20468,9 @@ sh_df_savefld:
     mov ax, [sh_df_fld]
     call sh_df_editable
     jnc .out
+    cmp byte [sh_df_dirty], 0          ; nothing typed: the text is the cell's
+    je .out                            ; own, and re-typing it would re-parse
+    mov byte [sh_df_dirty], 0          ; a label '02134' into a number
     mov ax, [sh_selcol]                ; bank the real selection
     mov [sh_df_svc1], ax
     mov ax, [sh_selrow]
@@ -20766,6 +20836,13 @@ sh_df_onkey:
     mov si, sh_df_line
     SHOUT os88line_key
     jc .out                            ; the field did not want it
+    or al, al                          ; a character or a backspace edits;
+    jnz .edited                        ; of the extended keys, only Delete
+    cmp ah, 0x53
+    jne .moved
+.edited:
+    mov byte [sh_df_dirty], 1
+.moved:
     call sh_df_repaint
     jmp .out
 .tab:
@@ -21270,6 +21347,8 @@ sh_new:
     loop .clrsave
     mov word [sh_selcol], 0
     mov word [sh_selrow], 0
+    mov word [sh_selcol2], 0           ; the EXTENT too, or the new sheet
+    mov word [sh_selrow2], 0           ; opens with the old block framed
     mov word [sh_scrollcol], 0
     mov word [sh_scrollrow], 0
     mov word [sh_freezecol], 0         ; 81.70: a new document is unfrozen,
@@ -21284,10 +21363,9 @@ sh_new:
                                        ; sh_new does not clear it, so closing
                                        ; straight after New asks about an
                                        ; empty sheet nobody has touched
-    call sh_repaint
-    pop di
-    pop si
-    pop dx
+    pop di                             ; NO repaint here: the caller repaints
+    pop si                             ; once, through [sh_ownwin], and SI is
+    pop dx                             ; the New dialog's or a macro's own
     pop cx
     pop ax
     ret
@@ -39668,11 +39746,20 @@ sh_macro_gate:
 .pass:
     clc
     ret
-sh_macro_inputup:
+sh_macro_inputup:                    ; CF=1: no dialog came up, because
+    cmp word [sh_idlg_win], 0        ; sh_idlg_open refuses in silence - one
+    jne .none                        ; of its own is up, or the create failed
     push ax
     mov al, SH_ID_INPUT
     call sh_idlg_open_r
     pop ax
+    jc .none
+    cmp word [sh_idlg_win], 0
+    je .none
+    clc
+    ret
+.none:
+    stc
     ret
 sh_macro_beep:                       ; BEEP: 880 Hz for three ticks
     push ax
@@ -44612,8 +44699,12 @@ shm_mfdelete:
 ; WINDOW: SHEET is one document an instance, and a macro lives in the
 ; document it runs in (81.88.2). So the run ENDS here - the cells it was
 ; running are gone - which is what Excel does when a macro closes its own
-; macro sheet. 1 worksheet, 2 chart, 3 macro sheet, as File > New asks
+; macro sheet. 1 worksheet, 2 chart, 3 macro sheet, as File > New asks.
+; A MODIFIED workbook refuses both (81.118): File > New asks Save / Discard /
+; Cancel there, and a running macro cannot answer an alert
 shm_mnew:
+    cmp byte [sh_modified], 0
+    jne .bad
     mov ax, 1
     call shm_intarg1
     jc .bad
@@ -44631,13 +44722,19 @@ shm_mnew:
     jmp shm_merr
 
 shm_mopen:
+    cmp byte [sh_modified], 0
+    jne shm_mopen_bad
     call shm_fname
     jc shm_mopen_bad
     SHOUT sh_skipargs
     call shm_tosh_name
     push si
     CHOUT SHM_READ                   ; sh_doread's own body: we are in the
-    SHOUT sh_undo_drop                ; module already
+    cmp word [sh_msg], sh_m_loaded    ; module already - so its clean mark
+    jne .kept                         ; too, or every addcell of the read
+    mov byte [sh_modified], 0         ; leaves the file just read dirty
+.kept:
+    SHOUT sh_undo_drop
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     pop si
@@ -44840,7 +44937,11 @@ SHM_FCH    equ 2                      ; channels open at once
 SHM_FREC   equ 24                     ; +0 name (13) +13 mode +14 dirty
                                        ; +15 open +16 base (in THIS segment)
                                        ; +18 size +20 position +22 capacity
-SHM_FTAIL  equ (shm_m2end - sh_modm0)  ; where the image ends, and the tail
+SHM_FTAIL  equ ((shm_m2end - sh_modm0) + 15) & 0xFFF0  ; where the image
+                                       ; ends, and the tail - on a PARAGRAPH,
+                                       ; because a packed file expands in
+                                       ; place only into a buffer whose
+                                       ; offset is a multiple of 16 (20.14.2)
 SHM_FEACH  equ ((SH_M2KB * 1024 - SHM_FTAIL) / SHM_FCH) & 0xFFF0
 shm_fch:   times SHM_FCH * SHM_FREC db 0
 
@@ -44943,6 +45044,9 @@ shm_mfopen:
     pop di
     pop es
     jc .na
+    or dx, dx                         ; what the read DELIVERED is the size:
+    jnz .na                           ; FIND's under-reports a packed file
+    mov [cs:di+18], ax                ; whose hint a foreign OS dropped
 .opened:
     mov byte [cs:di+15], 1            ; open
     cmp byte [cs:shm_acc8], 2         ; a NEW file is marked changed, so
@@ -45012,7 +45116,9 @@ shm_fsize0:
     pop bx
     ret
 
-; FCLOSE(channel) - written back if it changed, and the memory given back
+; FCLOSE(channel) - written back if it changed, and the memory given back.
+; A write the disk REFUSES answers #N/A and leaves the channel open and
+; changed: the tail is the only copy of what the macro wrote
 shm_mfclose:
     call shm_fchan
     jc .bad
@@ -45021,14 +45127,19 @@ shm_mfclose:
     cmp byte [cs:di+14], 0
     je .free
     call shm_fflush
+    jc .na
 .free:
     mov byte [cs:di+15], 0
     pop si
     jmp shm_mtrue
+.na:
+    pop si
+    jmp shm_ana
 .bad:
     jmp shm_refbad
 
-; shm_fflush - the channel at DI written to its file, whole
+; shm_fflush - the channel at DI written to its file, whole. CF=1 the write
+; was refused, and the channel stays changed
 shm_fflush:
     push es
     push di
@@ -45049,7 +45160,9 @@ shm_fflush:
     call OSAPI_FILE_WRITE
     pop di
     pop es
+    jc .out
     mov byte [cs:di+14], 0
+.out:
     ret
 
 ; FSIZE(channel) and FPOS(channel[, position]) - positions are 1-based, as
@@ -46592,14 +46705,16 @@ shm_dbslot:
     pop ax
     ret
 
-; shm_db23 - AX = AX * 2 / 3: Excel's vertical dialog unit, in pixels
+; shm_db23 - AX = AX * 2 / 3: Excel's vertical dialog unit, in pixels.
+; SIGNED, because the callers' sign tests come after it: an unsigned divide
+; made -30 into 21,825 and no test below ever saw a negative
 shm_db23:
     push dx
     push bx
-    shl ax, 1
-    xor dx, dx
+    mov bx, 2
+    imul bx                           ; DX:AX, so no shift can overflow
     mov bx, 3
-    div bx
+    idiv bx
     pop bx
     pop dx
     ret
@@ -46794,6 +46909,10 @@ shm_dbparse:
     add ax, 2
     call shm_dbnum
     call shm_db23
+    or ax, ax                         ; a negative y is the top, as a
+    jns .yok                          ; negative size is none
+    xor ax, ax
+.yok:
     mov [cs:di+4], ax
     mov ax, [cs:shm_dbcol]
     add ax, 3
@@ -48438,6 +48557,7 @@ shm_mstep:
     mov byte [sh_macro_wait], SH_MW_STEP
     call shm_mpaint
     SHOUT sh_macro_alertup
+    jc .noask                         ; no alert to wait on: the run stops
     jmp .out
 .exec:
     mov byte [cs:shm_stepgo], 0
@@ -48486,6 +48606,7 @@ shm_mstep:
     cmp byte [sh_macro_wait], SH_MW_ALERT
     jne .notalert
     SHOUT sh_macro_alertup
+    jc .noask
     jmp .out
 .notalert:
     cmp byte [sh_macro_wait], SH_MW_DBOX ; 81.96: DIALOG.BOX's own window
@@ -48508,7 +48629,11 @@ shm_mstep:
 .ask:
     mov byte [sh_macro_ansok], 0
     SHOUT sh_macro_inputup
-    jmp .out
+    jnc .out
+.noask:                               ; ALERT, Step or INPUT could not put its
+    mov byte [sh_macro_wait], 0       ; window up (another alert or dialog,
+    mov word [sh_msg], sh_s_macroerr  ; or a full table), so no answer will
+    jmp .fin                          ; come: DIALOG.BOX's rule, the run stops
 .goto:
     mov ax, [sh_macro_ncol]
     mov [sh_macro_col], ax
@@ -56560,7 +56685,7 @@ section .text                          ; fragment, so nothing lands after this
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9335                     ; +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9337                     ; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -56672,7 +56797,7 @@ sh_vcl_b      equ sh_vcl_a + 2
 sh_rz_on      equ sh_vcl_b + 2       ; 81.73.2: a heading drag is live
 sh_rz_axis    equ sh_rz_on + 1       ; byte: 0 = a column, 1 = a row
 sh_rz_idx     equ sh_rz_axis + 1     ; the REAL row or column being resized
-sh_rz_x0      equ sh_rz_idx + 2      ; the edge's own pixel when it was
+sh_rz_x0      equ sh_rz_idx + 2      ; the slot's leading edge when it was
 sh_rz_px      equ sh_rz_x0 + 2       ; grabbed, and sh_hdrhit's own scratch
 ; 81.74's own: the macro recorder. sh_rec_col/row/sheet is where the next
 ; macro formula goes - Set Recorder's corner, and the SHEET with it, because
@@ -57916,7 +58041,8 @@ sh_df_buf     equ sh_df_line + OS88LINE_SZ   ; SH_EDITMAX+1: what it edits
 ; 81.81: Format > Justify. The line buffer is SH_EDITMAX wide DELIBERATELY -
 ; a justified line is a label, and SH_EDITMAX is what a label can be; a wider
 ; line would be one this app can produce and the user cannot retype.
-sh_ju_c1      equ sh_df_buf + SH_EDITMAX + 1 ; the block, ordered
+sh_df_dirty   equ sh_df_buf + SH_EDITMAX + 1 ; byte: the field was typed in
+sh_ju_c1      equ sh_df_dirty + 2            ; the block, ordered
 sh_ju_c2      equ sh_ju_c1 + 2
 sh_ju_r1      equ sh_ju_c2 + 2
 sh_ju_r2      equ sh_ju_r1 + 2
