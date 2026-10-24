@@ -261,3 +261,187 @@ owner's own confirmation (§4) rather than this plan's working assumption.
 workflows — invoicing/AR/AP deferred alongside Investments. That was the
 last open question this plan was staged against; wave 1 (the Chart of
 Accounts, the posting engine, the Register) has nothing left to confirm.
+
+---
+
+## 9. Register — screen and fields, researched against real period mechanics
+
+**What was actually findable.** No DOS-era Quicken/QuickBooks screenshot or
+manual turned up a confirmed 1990s field layout — every search returned
+either modern Quicken Windows/web documentation or bare product-history
+facts (WinWorld: QuickBooks 2.x DOS, 1993, text UI, 8088 minimum). That is
+recorded here rather than papered over. What DID turn up usable, and is
+what this section is built on, is the **mechanics** that have not changed
+since — the register's field set and the split-transaction rule — plus
+this OS's own grid, which is the actual constraint on the screen design.
+
+**Columns**, over the existing grid (§2):
+
+| column | holds |
+|---|---|
+| Date | transaction date; defaults to today on a new row |
+| Num | check number, or a fixed token for a non-check transaction (`DEP`, `XFR`, `ATM`) |
+| Payee | free text |
+| Category | one Income/Expense leaf (§1.1), or the token `--Split--` when the transaction has more than one |
+| Memo | free text |
+| Payment / Deposit | two columns, exactly one filled per row — this is the single-entry FACE of the posting (§1), the two-sided write happens underneath |
+| Balance | running total, computed, never typed — the one evaluator behaviour that is genuinely new (§2) |
+
+**Split transactions**, confirmed by the Quicken Interchange Format's own
+file layout (the oldest real source that surfaced): a split is a sequence
+of (Category, Memo, Amount) lines, each adjacent, under the one parent
+Payment/Deposit row — QIF's spec states the three must stay adjacent per
+split. The register shows `--Split--` in Category; a second, smaller
+dialog (reusing §2's Form) lists the split lines and must foot to the
+parent amount before it can close — the same "must balance before it is
+allowed to exist" shape as §1's own posting engine, at a smaller scale.
+
+**Entry conventions that are not negotiable, because they are what makes a
+register usable rather than just a grid**: Date auto-fills to today and
+accepts a bare day-of-month as "this month"; Category autocompletes
+against the Chart of Accounts' Income/Expense leaves (§1.1) as the user
+types, so entering a check still never requires typing a full account
+name; Tab/Enter advance field-to-field and a filled Payee can
+autocomplete the LAST category used for that payee — the one piece of
+"memorized transaction" behaviour cheap enough to include in wave 1
+without building a separate memorized-transaction list.
+
+---
+
+## 10. Write Checks — a form over one Register row, not a second ledger
+
+Per §2's reuse question, now answered: Write Checks is SHEET's `Data ▸
+Form` shape (one record, New/Delete/Find, field-by-field) over exactly
+one Register row — not a parallel data store. Saving a check POSTS it
+(§1) the same way a Register row typed directly would.
+
+**Fields**: Pay to the Order of; Amount (numeric); the written-word amount
+line (`One hundred twenty-three and 45/100`) generated FROM the numeric
+amount, never typed — a classic check-writing feature and a pure function
+of the Amount field, so it costs a conversion routine and nothing in the
+data model; Memo; Category or split (§9's same split engine, reused
+rather than rebuilt); a Date; and a "To be printed" flag distinguishing a
+check queued for batch printing from one already handwritten and simply
+being recorded.
+
+**Check printing itself is flagged, not designed, here.** Nothing in this
+tree's package list (`/tmp/app_desc.txt`'s full inventory) names a printer
+driver, and this plan does not assume one exists or costs what it would
+take to add one. The "To be printed" flag and a check-number sequence are
+cheap to carry in wave 2's data model regardless of whether printing ever
+ships; the print mechanism is a separate question for whoever picks that
+up, not assumed away by omission.
+
+---
+
+## 11. Reconcile — the real workflow, confirmed by research rather than guessed
+
+This is the one feature where a search actually returned the live
+mechanics (modern Quicken's own reconcile documentation, and the
+mechanism has no reason to have changed): the user types a **Statement
+Ending Balance** copied off the paper or online statement; the window
+opens already showing the account's **Prior Balance** (the opening
+balance going into this statement period) and starts the running
+**Cleared Balance** at that same figure; the user checks off each
+transaction that appears on the statement, one at a time, in any order;
+each checkmark updates the Cleared Balance LIVE; a **Difference** field —
+`Statement Ending Balance − Cleared Balance` — is always on screen,
+targeting exactly `$0.00`.
+
+**Screen**: §9's own Register grid, reused rather than rebuilt, with one
+added column (a cleared mark, toggled by Space or a click) and a header
+strip showing the four running numbers (Prior Balance, Statement Ending
+Balance — typed once at the start, Cleared Balance, Difference) — the
+same "reuse the grid, add exactly the one new column a feature needs"
+shape as the Register's own Balance column (§2, §9). "Done" is live only
+when Difference reads `$0.00`; finishing marks every checked row
+Reconciled (a stronger, separate state from merely cleared) and that
+state should make the row resist casual editing — reconciled history
+silently drifting is exactly the kind of defect §1.3's standing
+mutation-test rule exists to catch, applied here to a new state machine
+rather than the posting engine.
+
+**Not costed here, flagged for wave 3's own measurement**: real
+Quicken/QuickBooks both allow forcing a reconciliation closed on a small
+stubborn difference via an automatic adjustment entry. That is a genuine
+feature decision (silently accepting drift vs. forcing the user to find
+every cent) and belongs to wave 3's own design, not assumed into this
+plan.
+
+---
+
+## 12. Account List — a plain view over wave 1's own tree, nothing new
+
+The Asset/Liability leaves of §1.1's one tree (the accounts a user
+actually opens, as opposed to the Income/Expense leaves that only ever
+appear inside a Category picker), listed: Name, Type (§5's family tag),
+Current Balance, an optional free-text Memo (account number, institution
+name — never a real credential, this is a label field only). New/Edit/
+Delete reuses §2's Form dialog. There is no new structure behind this
+screen — it is wave 1's claim-backed tree (§3) with a view on it, which is
+exactly why it is staged alongside the Register in wave 1 rather than
+getting its own wave.
+
+---
+
+## 13. Budgeting (envelope style) — the rollover rule is the whole feature
+
+The owner's own word was "envelope style," which names a specific,
+researchable mechanic (the modern term for it comes from YNAB, but the
+mechanic itself — unspent money carries forward as a per-category
+balance rather than resetting to zero each period — is the actual
+distinguishing behaviour, independent of which product popularized the
+name) and is NOT the same as classic Quicken's plain planned-vs-actual
+budget report, which does not roll over at all. The owner asked for the
+rollover, so that is what gets built, named explicitly so it is not
+quietly simplified away during wave 2.
+
+**Mechanic, confirmed by research**: each period (monthly, the standard
+unit), every Expense leaf (§1.1 — Budgeting needs no structure beyond
+categories that already exist from wave 1) carries `Available = prior
+Available + this period's Planned − this period's Actual spent`. A
+positive Available carries forward untouched. A category that goes
+negative (overspent) carries that deficit into the next period rather
+than resetting — covering it (moving money in from another category, or
+from next period's income) is the user's decision, not something the
+software silently fixes, which is the actual mechanical meaning of
+"envelope": a real envelope cannot go negative on its own, so a category
+reading negative is the system faithfully reporting that the user spent
+money that was not yet budgeted anywhere, which is information, not an
+error state to hide.
+
+**Screen**: one period at a time, a grid of categories (rows) by Planned /
+Spent / Available (columns) — reusing §2's grid exactly as Register and
+Reconcile do. A "Move Money" action, transferring Available between two
+categories, is REQUIRED for the envelope mechanic to be usable in
+practice (an overspent category needs somewhere for its cover to come
+from) and is flagged here as part of wave 2's own scope, not an
+afterthought — without it the rollover number is accurate but the user
+has no in-app way to act on it.
+
+---
+
+## 14. Reports & Graphs — what is free, what needs a rule, and what is new work
+
+Per §3's decision (SYLK out, `CHART.O88` as the viewer, no resident chart
+engine), each report below is sorted by what it actually costs to
+produce, not treated as one undifferentiated "Reports" bucket:
+
+| report | source | cost |
+|---|---|---|
+| **Balance Sheet** | §1.2 — sum of Asset leaves minus Liability leaves | free: one tree walk, no date range even |
+| **Profit & Loss** | §1.2 — sum of Income minus Expense leaves, date-ranged | free: the same tree walk with a date filter |
+| **Trial Balance** | every leaf's own balance, no netting | free — the cheapest report of all, no logic beyond listing what §1.1's tree already holds |
+| **Category Summary** / Income & Expense by category | Income/Expense leaves individually, not netted into one figure | free: §1.2's same sum, reported per-leaf instead of per-type |
+| **Net Worth (over time)** | Balance Sheet's own figure, sampled per period | free to compute; the ONLY report that is naturally a graph rather than a grid, and the direct reason `CHART.O88` exists in this plan at all |
+| **General Ledger** / Transaction List | a filtered, sorted dump of ledger rows | cheap, but genuinely NEW: these read individual postings, not tree sums, so they need their own query shape rather than reusing §1.2's walk |
+| **Cash Flow** | Income/Expense sums, but must EXCLUDE transfers | needs one rule, not new data: a transfer is any posting whose BOTH sides are Asset/Liability leaves — it never touches an Income or Expense leaf at all (§1.1), so "is this a transfer" is already fully derivable from the tree structure and costs a filter predicate, not a new flag on every transaction |
+
+**Screen**: a report picker (a menu, not a new widget class) prompts for a
+date range where one applies, then either renders as a grid tab — exactly
+like opening a sheet — for the text reports, or writes the SYLK file and
+hands off to `CHART.O88` for Net Worth and any other report the user asks
+to see as a graph. No report in this list requires inventing a second
+data model; the General Ledger/Transaction List pair is the only new
+QUERY shape, and it is still reading the same one ledger §1 already
+commits to building in wave 1.
