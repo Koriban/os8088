@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>os8088 Feature Catalog</title>
+<style>
+:root {
+  --bg: #f5f1e8;
+  --panel: #ffffff;
+  --ink: #2b2620;
+  --ink-dim: #6b6255;
+  --rule: #ddd4c2;
+  --accent: #8a4b2e;
+  --accent-ink: #ffffff;
+  --mono: "JetBrains Mono", "Courier New", monospace;
+  --sans: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+
+  --done-bg: #e3efe1; --done-ink: #2e6b3e; --done-rule: #b8d9b9;
+  --gap-bg:  #fbeedd; --gap-ink:  #96591a; --gap-rule:  #edc99a;
+  --plan-bg: #eceaf7; --plan-ink: #4b3f8f; --plan-rule: #c9c3ea;
+  --retired-bg: #f2e9e9; --retired-ink: #8a4040; --retired-rule: #ddc2c2;
+  --inst-bg: #e8eef2;  --inst-ink: #3f5c72;  --inst-rule: #c3d3df;
+  --local-bg: #f4f1e0; --local-ink: #7a6a1f; --local-rule: #ddd49a;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1b1812;
+    --panel: #252019;
+    --ink: #ece6d8;
+    --ink-dim: #a79c88;
+    --rule: #413a2e;
+    --accent: #d08a5f;
+    --accent-ink: #1b1812;
+
+    --done-bg: #1e3022; --done-ink: #8fd3a0; --done-rule: #2e4a37;
+    --gap-bg:  #3a2a16; --gap-ink:  #e6b377; --gap-rule:  #54401f;
+    --plan-bg: #262240; --plan-ink: #b8ade6; --plan-rule: #3a3360;
+    --retired-bg: #331f1f; --retired-ink: #d99b9b; --retired-rule: #4a2b2b;
+    --inst-bg: #1c2a33; --inst-ink: #8fb7d3; --inst-rule: #2b4152;
+    --local-bg: #302c16; --local-ink: #d0bf6a; --local-rule: #4a4322;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1b1812; --panel: #252019; --ink: #ece6d8; --ink-dim: #a79c88;
+  --rule: #413a2e; --accent: #d08a5f; --accent-ink: #1b1812;
+  --done-bg: #1e3022; --done-ink: #8fd3a0; --done-rule: #2e4a37;
+  --gap-bg:  #3a2a16; --gap-ink:  #e6b377; --gap-rule:  #54401f;
+  --plan-bg: #262240; --plan-ink: #b8ade6; --plan-rule: #3a3360;
+  --retired-bg: #331f1f; --retired-ink: #d99b9b; --retired-rule: #4a2b2b;
+  --inst-bg: #1c2a33; --inst-ink: #8fb7d3; --inst-rule: #2b4152;
+  --local-bg: #302c16; --local-ink: #d0bf6a; --local-rule: #4a4322;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.5;
+  padding: 0 16px 64px;
+}
+.wrap { max-width: 980px; margin: 0 auto; }
+
+header.top {
+  padding: 40px 0 22px;
+  border-bottom: 3px solid var(--ink);
+}
+header.top h1 {
+  font-family: var(--mono);
+  font-size: 1.9rem;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+header.top .sub {
+  color: var(--ink-dim);
+  font-size: 0.98rem;
+  max-width: 68ch;
+}
+header.top .meta {
+  margin-top: 14px;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--ink-dim);
+}
+
+.callout {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--accent);
+  border-radius: 4px;
+  padding: 14px 18px;
+  margin: 22px 0;
+  font-size: 0.92rem;
+}
+.callout b { color: var(--accent); }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0 8px;
+}
+.badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 3px 9px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.badge.done     { background: var(--done-bg);     color: var(--done-ink);     border-color: var(--done-rule); }
+.badge.gap      { background: var(--gap-bg);      color: var(--gap-ink);      border-color: var(--gap-rule); }
+.badge.plan     { background: var(--plan-bg);     color: var(--plan-ink);     border-color: var(--plan-rule); }
+.badge.retired  { background: var(--retired-bg);  color: var(--retired-ink);  border-color: var(--retired-rule); }
+.badge.inst     { background: var(--inst-bg);     color: var(--inst-ink);     border-color: var(--inst-rule); }
+.badge.local    { background: var(--local-bg);    color: var(--local-ink);    border-color: var(--local-rule); }
+
+.controls {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  padding: 14px 0;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--rule);
+  z-index: 10;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+#search {
+  font-family: var(--mono);
+  font-size: 0.88rem;
+  padding: 8px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  color: var(--ink);
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+#search:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.catbtn {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  padding: 6px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  color: var(--ink-dim);
+  cursor: pointer;
+}
+.catbtn.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.count { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-dim); margin-left: auto; }
+
+nav.toc {
+  margin: 18px 0 0;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: var(--ink-dim);
+}
+nav.toc a { color: var(--ink-dim); text-decoration: none; border-bottom: 1px dotted var(--rule); }
+nav.toc a:hover { color: var(--accent); border-color: var(--accent); }
+
+section.cat {
+  margin-top: 46px;
+  scroll-margin-top: 70px;
+}
+section.cat h2 {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  border-bottom: 2px solid var(--rule);
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+section.cat h2 .n { font-size: 0.7rem; color: var(--ink-dim); font-weight: 400; }
+section.cat > .note {
+  color: var(--ink-dim);
+  font-size: 0.87rem;
+  margin: 6px 0 16px;
+  max-width: 74ch;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin-bottom: 10px;
+}
+.card.hidden { display: none; }
+.card .head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 5px;
+}
+.card .name {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 1.0rem;
+}
+.card .spec {
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  color: var(--ink-dim);
+}
+.card .desc {
+  font-size: 0.91rem;
+  color: var(--ink);
+  margin: 4px 0 0;
+}
+.card .need {
+  font-size: 0.86rem;
+  color: var(--gap-ink);
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rule);
+}
+.card .need b { text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; margin-right: 6px; }
+.card .meas {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-dim);
+  margin-top: 6px;
+}
+
+.bigitem {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--plan-ink);
+  border-radius: 6px;
+  padding: 16px 20px;
+  margin-bottom: 14px;
+}
+.bigitem h3 { margin: 0 0 6px; font-family: var(--mono); font-size: 1.0rem; }
+.bigitem p { margin: 6px 0; font-size: 0.92rem; }
+.bigitem a { color: var(--accent); }
+
+footer {
+  margin-top: 60px;
+  padding-top: 18px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  color: var(--ink-dim);
+}
+a { color: var(--accent); }
+code { font-family: var(--mono); background: var(--rule); padding: 1px 5px; border-radius: 3px; font-size: 0.86em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>os8088 — Feature Catalog</h1>
+  <div class="sub">
+    Every package under <code>apps/</code> and <code>drivers/</code>, what it does, and what — if
+    anything — it is still missing. Pulled from the tree itself: each package's own source header,
+    <code>apps/RETIRED.txt</code>, <code>docs/INDEX.md</code>, SPEC.md, and the open plans under
+    <code>docs/plans/</code>. Sizes shown are measurements taken this session and are stamped
+    "re-measure, don't quote" the way this project's own docs insist on — a later commit can move
+    any of them.
+  </div>
+  <div class="meta">generated 2026-10-21 &middot; tree at <code>577ca26a</code> &middot; forkmain</div>
+</header>
+
+<div class="callout">
+  <b>Reading the badges:</b> <span class="badge done">shipped</span> is on a standard disk image
+  and its own gate passes. <span class="badge gap">gaps noted</span> is shipped and usable, with a
+  specific, named thing left undone. <span class="badge plan">planned</span> has a design document
+  but no code. <span class="badge inst">instrument</span> is a bench/gate, not a product — it never
+  ships on a disk. <span class="badge local">local-only</span> needs assets the owner hasn't
+  committed, or isn't on the standard images by decision. <span class="badge retired">retired</span>
+  was tried and the owner called it — the source stays as the record.
+</div>
+
+<div class="controls">
+  <input id="search" type="text" placeholder="filter by name or text&hellip;" autocomplete="off">
+  <button class="catbtn active" data-cat="all">all</button>
+  <button class="catbtn" data-cat="office">office &amp; spreadsheets</button>
+  <button class="catbtn" data-cat="creative">creative &amp; media</button>
+  <button class="catbtn" data-cat="net">network</button>
+  <button class="catbtn" data-cat="games">games</button>
+  <button class="catbtn" data-cat="emu">emulated platforms</button>
+  <button class="catbtn" data-cat="sys">system &amp; utilities</button>
+  <button class="catbtn" data-cat="weave">the weave family</button>
+  <button class="catbtn" data-cat="drv">drivers</button>
+  <button class="catbtn" data-cat="dead">retired / instruments</button>
+  <span class="count" id="count"></span>
+</div>
+
+<nav class="toc">
+  <a href="#bigpicture">the big gaps</a>
+  <a href="#office">office</a>
+  <a href="#creative">creative</a>
+  <a href="#net">network</a>
+  <a href="#games">games</a>
+  <a href="#emu">emulated platforms</a>
+  <a href="#sys">system</a>
+  <a href="#weave">weave family</a>
+  <a href="#drv">drivers</a>
+  <a href="#dead">retired / instruments</a>
+</nav>
+
+<section class="cat" id="bigpicture">
+  <h2>The big gaps <span class="n">cross-cutting, not one package</span></h2>
+  <div class="note">
+    The things worth knowing before diving into any one app below — each is a real design
+    decision or an open plan, not a bug.
+  </div>
+
+  <div class="bigitem">
+    <h3>A real record database — planned, not built</h3>
+    <p><span class="badge plan">planned</span> SHEET's <code>Data ▸ Form/Find/Extract</code> and
+    the eleven <code>D*</code> functions (<code>SPEC.md §81.65</code>) are a <b>linear scan</b> over
+    a worksheet range — no index, no sorted access path. A true engine — a table with a key, a
+    B-tree index, <code>LOCATE</code>/<code>SEEK</code> instead of a scan — is planned against
+    <b>dBASE III's real <code>.DBF</code> file format and command language</b>, independent
+    implementation (the Frotz precedent: not a port, a from-scratch reader/interpreter that is
+    honest about which part is earned). <code>docs/plans/DBASE3-PLAN.md</code> is the design
+    record; <code>docs/plans/DATABASE-PLAN.md</code> is the superseded first pass, kept for its
+    still-valid kernel findings.</p>
+  </div>
+
+  <div class="bigitem">
+    <h3>An integrated office suite — considered, dropped</h3>
+    <p><span class="badge retired">dropped</span> AppleWorks/Works/Symphony-style "one suite,"
+    costed as architecture C (separate packages + a shared Desktop + a suite-private typed
+    clipboard, since <code>SHEET</code> alone is 61,866 of its 65,024-byte ceiling and one giant
+    binary is arithmetically impossible). The owner dropped the idea in favour of the database
+    engine above. <code>docs/plans/WORKS-PLAN.md</code> is kept as the record.</p>
+  </div>
+
+  <div class="bigitem">
+    <h3>C64: no disk drive at all</h3>
+    <p><span class="badge gap">gaps noted</span> The C64 port loads <code>.PRG</code> files only —
+    <b>no <code>.D64</code>, no 1541/1571/1581</b>. The serial bus is modelled correctly as
+    <i>empty</i> (<code>C64-SPEC §6.2</code>), so <code>LOAD"*",8</code> times out exactly like a
+    real C64 with the drive switched off, rather than hanging. A host-side <code>.D64</code> reader
+    behind KERNAL traps is planned (<code>docs/plans/C64-1541-PLAN.md</code>) — read-only, no drive
+    CPU, no second ROM sidecar. Fastloaders (code uploaded to the drive's own 6502) are the one
+    class that plan's own §6 says it cannot reach without a second CPU context, which is costed
+    there as a follow-on, not refused.</p>
+  </div>
+
+  <div class="bigitem">
+    <h3>Apple II: no Disk II yet, but costed and unblocked</h3>
+    <p><span class="badge plan">planned</span> Read-only Disk II support
+    (<code>.DSK</code>/<code>.DO</code>/<code>.PO</code>) is a pinned follow-up
+    (<code>APPLE2-SPEC §14</code>) — the P5 boot ROM, the controller, the SAMESLOT timing trap and
+    the 6-and-2 nibbliser are all specified down to the byte, so the wave is "a transcription, not
+    a re-design." The size question that was supposed to gate it is <b>answered</b>: the package
+    measures 44,324 of 61,440 resident this session (not the 53,284 the spec's own wave-5 table
+    claims — the two disagree and the gap is recorded, not resolved, in
+    <code>APPLE2-SPEC §14.0</code>), so Disk II's ~1,200 bytes fit with room to spare either way.
+    <code>tools/a2dsk.py</code> (the fixture builder) and its gate are built; the nibbliser itself
+    is not.</p>
+  </div>
+
+  <div class="bigitem">
+    <h3>Printing — deliberately out of scope</h3>
+    <p><span class="badge gap">by decision</span> <b>There is no print backend anywhere in this
+    OS.</b> SHEET's own gap list (<code>SHEET-GAPS-PLAN §4</code>) names six File-menu printing
+    commands and calls them out of scope "by decision" rather than a gap to close. Nothing else
+    with a Print item behaves differently.</p>
+  </div>
+
+  <div class="bigitem">
+    <h3>Networking: real sockets, no TLS on this machine — by design</h3>
+    <p><span class="badge done">shipped, bounded</span> <code>ETHER.DRV</code> is a real NE1000/2000
+    TCP/IP stack; Browser and Telnet speak real sockets through it, not a demo. An
+    <code>https://</code> URL is refused out loud rather than silently downgraded — there is no TLS
+    stack here on purpose, because an RSA-2048 private-key operation is <i>minutes</i> on a
+    4.77&nbsp;MHz 8088. TLS terminates on a host-side proxy instead
+    (<code>docs/plans/completed/PROXY-PLAN.md</code>). Not a gap to close; a boundary the project
+    drew on purpose.</p>
+  </div>
+
+  <div class="bigitem">
+    <h3>The VBE 1024&times;768 driver — built, verified, not yet upstreamed</h3>
+    <p><span class="badge gap">built, PR pending</span> A full VBE 0104h desktop (1024&times;768,
+    16-colour planar, bank-switched) is built, measured on real VESA hardware (a Satellite
+    4025CDT and an 86Box Trident) and passes its own gates — <code>VBEDRV</code> branch, pushed to
+    the fork. It has not been opened as a pull request upstream: the branch collides with a
+    section-numbering change on <code>jggonz/os8088</code>'s <code>main</code> and that renumbering
+    sweep (245 citations on this side) hasn't been done. A separate, unrelated finding this
+    session: VBE mode 0106h (1280&times;1024) can also be made to work by padding its scan line to
+    a bank-clean stride — proven 19/19 on readback — which the VBE work's own SPEC section records
+    but does not yet ship.</p>
+  </div>
+</section>
+
+<section class="cat" id="office">
+<h2>Office &amp; spreadsheets <span class="n">9 packages</span></h2>
+<div class="note">Word processors, the two spreadsheets, a calculator and a standalone chart viewer.</div>
+<div class="card" data-cat="office" data-text="sheet a full excel 2.1d-class spreadsheet: formulas, 111+ functions, four sheets per instance, a macro language (recorder + player), charting (chart.ovl), a real formula bar and status bar, borders, number formats, multi-select, absolute references, insert/delete row/col ref-rewriting, range selection, a data menu with form/find/extract/sort/set database/set criteria/series/table/parse. printing (6 file-menu commands) is out of scope by decision - no print backend anywhere in this os. custom number-format codes aren&#x27;t editable in the dialog yet. no multiple-document interface (by design: neither sheet nor the os has mdi, so links/save workspace/window menu/close are struck, not gaps).">
+<div class="head"><span class="name">SHEET</span><span class="badge gap">gaps noted</span><span class="spec">SPEC.md &sect;81, &sect;82, &sect;84</span></div>
+<p class="desc">A full Excel 2.1d-class spreadsheet: formulas, 111+ functions, four sheets per instance, a macro language (recorder + player), charting (CHART.OVL), a real formula bar and status bar, borders, number formats, multi-select, absolute references, insert/delete row/col ref-rewriting, range selection, a Data menu with Form/Find/Extract/Sort/Set Database/Set Criteria/Series/Table/Parse.</p>
+<p class="need"><b>still needed</b>Printing (6 File-menu commands) is out of scope by decision &mdash; no print backend anywhere in this OS. Custom number-format codes aren't editable in the dialog yet. No multiple-document interface (by design: neither SHEET nor the OS has MDI, so Links/Save Workspace/Window menu/Close are struck, not gaps).</p>
+<p class="meas">resident 61,866 of 65,024 (3,158 spare) &middot; CHART.OVL 51,374B/37,737B packed &middot; MACRO.OVL 18,831B/13,721B packed</p>
+</div>
+<div class="card" data-cat="office" data-text="plan a spreadsheet for machines sheet cannot reach - the small-kernel/low-memory arm. no charts, no macros by design (its own status strings say so plainly). charting and macros are deliberately absent - plan is the floor-machine arm, not a second sheet.">
+<div class="head"><span class="name">PLAN</span><span class="badge gap">gaps noted</span></div>
+<p class="desc">A spreadsheet for machines SHEET cannot reach &mdash; the small-kernel/low-memory arm. No charts, no macros by design (its own status strings say so plainly).</p>
+<p class="need"><b>still needed</b>Charting and macros are deliberately absent &mdash; PLAN is the floor-machine arm, not a second SHEET.</p>
+</div>
+<div class="card" data-cat="office" data-text="chart a standalone bar-chart viewer: file   open reads a real sylk, dif or biff file, dispatched by extension exactly like sheet&#x27;s own readers (which deliberately don&#x27;t share code with it). ">
+<div class="head"><span class="name">CHART</span><span class="badge done">shipped</span></div>
+<p class="desc">A standalone bar-chart viewer: File &gt; Open reads a real SYLK, DIF or BIFF file, dispatched by extension exactly like SHEET's own readers (which deliberately don't share code with it).</p>
+</div>
+<div class="card" data-cat="office" data-text="word microsoft word for windows 1.1a (&quot;opus&quot;), a faithful native reimplementation as an os8088 package - full wysiwyg editing, fonts, styles, the word 1.1a file format. ">
+<div class="head"><span class="name">WORD</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;68</span></div>
+<p class="desc">Microsoft Word for Windows 1.1a (&ldquo;Opus&rdquo;), a faithful native reimplementation as an os8088 package &mdash; full WYSIWYG editing, fonts, styles, the Word 1.1a file format.</p>
+</div>
+<div class="card" data-cat="office" data-text="cword the same word 1.1a, written in the project&#x27;s own c toolchain instead of hand assembly - proof that the c sdk can carry a real application, split overlay/resident per section 73.14. ">
+<div class="head"><span class="name">CWORD</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;73.12</span></div>
+<p class="desc">The same Word 1.1a, written in the project's own C toolchain instead of hand assembly &mdash; proof that the C SDK can carry a real application, split overlay/resident per &sect;73.14.</p>
+<p class="meas">CWORD.OVL 18,116B</p>
+</div>
+<div class="card" data-cat="office" data-text="scribe a second, independent build target over the same word 1.1a source tree - shares nothing with word by section 73.12&#x27;s rule (source, never a copy). ">
+<div class="head"><span class="name">SCRIBE</span><span class="badge done">shipped</span></div>
+<p class="desc">A second, independent build target over the same Word 1.1a source tree &mdash; shares nothing with WORD by &sect;73.12's rule (source, never a copy).</p>
+</div>
+<div class="card" data-cat="office" data-text="texpad black-and-white tex pad: source on the left, a typeset preview on the right, letter default and other page sizes. ">
+<div class="head"><span class="name">TEXPAD</span><span class="badge done">shipped</span></div>
+<p class="desc">Black-and-white TeX pad: source on the left, a typeset preview on the right, Letter default and other page sizes.</p>
+</div>
+<div class="card" data-cat="office" data-text="notepad plain-text editor, moved out of the kernel (it used to be the built-in note pad / kind_note) to reclaim the resident bytes that cost everyone. ">
+<div class="head"><span class="name">NOTEPAD</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;27</span></div>
+<p class="desc">Plain-text editor, moved out of the kernel (it used to be the built-in Note Pad / KIND_NOTE) to reclaim the resident bytes that cost everyone.</p>
+</div>
+<div class="card" data-cat="office" data-text="calc a four-function desk calculator with a foldaway history of recent calculations. ">
+<div class="head"><span class="name">CALC</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;65</span></div>
+<p class="desc">A four-function desk calculator with a foldaway history of recent calculations.</p>
+</div>
+</section>
+<section class="cat" id="creative">
+<h2>Creative &amp; media <span class="n">10 packages</span></h2>
+<div class="note">Drawing, imaging, sound and video &mdash; recording and playback.</div>
+<div class="card" data-cat="creative" data-text="paint a bitmap editor: eight tools, a 4bpp offscreen canvas, one-level undo/redo, an internal clipboard, gif load/save, proportional-text-aware drawing. ">
+<div class="head"><span class="name">PAINT</span><span class="badge done">shipped</span></div>
+<p class="desc">A bitmap editor: eight tools, a 4bpp offscreen canvas, one-level undo/redo, an internal clipboard, GIF load/save, proportional-text-aware drawing.</p>
+</div>
+<div class="card" data-cat="creative" data-text="pixel image viewer and editor - the resident package plus the window and claim machinery; see docs/plans/pixel-plan.md for the design record. ">
+<div class="head"><span class="name">PiXEL</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;106</span></div>
+<p class="desc">Image viewer and editor &mdash; the resident package plus the window and claim machinery; see docs/plans/PIXEL-PLAN.md for the design record.</p>
+</div>
+<div class="card" data-cat="creative" data-text="artful artfultype, a distraction-free markdown writing app - a port of actionretro&#x27;s artfultype. ">
+<div class="head"><span class="name">ARTFUL</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;46</span></div>
+<p class="desc">ArtfulType, a distraction-free Markdown writing app &mdash; a port of ActionRetro's ArtfulType.</p>
+</div>
+<div class="card" data-cat="creative" data-text="fractal five escape-time fractals in q4.12 fixed point, rendered by a background worker task while the ui stays live. ">
+<div class="head"><span class="name">FRACTAL</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;20.6</span></div>
+<p class="desc">Five escape-time fractals in Q4.12 fixed point, rendered by a background worker task while the UI stays live.</p>
+</div>
+<div class="card" data-cat="creative" data-text="piano a colourful playable piano over the tone tier. ">
+<div class="head"><span class="name">PIANO</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;36</span></div>
+<p class="desc">A colourful playable piano over the tone tier.</p>
+</div>
+<div class="card" data-cat="creative" data-text="recorder a sound wave recorder and player over the sound layer. ">
+<div class="head"><span class="name">RECORDER</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;35</span></div>
+<p class="desc">A sound wave recorder and player over the sound layer.</p>
+</div>
+<div class="card" data-cat="creative" data-text="audio lightweight background wav playback (8-bit pcm or ima/dvi4 adpcm) for the xt. ">
+<div class="head"><span class="name">AUDIO</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;86</span></div>
+<p class="desc">Lightweight background WAV playback (8-bit PCM or IMA/DVI4 ADPCM) for the XT.</p>
+</div>
+<div class="card" data-cat="creative" data-text="tracker a fasttracker ii-styled 4-channel protracker  .mod  player with a splash card. ">
+<div class="head"><span class="name">TRACKER</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;45</span></div>
+<p class="desc">A FastTracker II-styled 4-channel ProTracker <code>.MOD</code> player with a splash card.</p>
+</div>
+<div class="card" data-cat="creative" data-text="midirack a standard midi file (type 0/1) player, read whole into one claim. ">
+<div class="head"><span class="name">MIDIRACK</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;105</span></div>
+<p class="desc">A Standard MIDI File (type 0/1) player, read whole into one claim.</p>
+</div>
+<div class="card" data-cat="creative" data-text="video player plays a  .v88  file fullscreen at its own frame rate, decoded inside the timer interrupt; ships with an encoder ( tools/os88venc.py ) and gui tool. ">
+<div class="head"><span class="name">VIDEO PLAYER</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;98</span></div>
+<p class="desc">Plays a <code>.V88</code> file fullscreen at its own frame rate, decoded inside the timer interrupt; ships with an encoder (<code>tools/os88venc.py</code>) and GUI tool.</p>
+</div>
+</section>
+<section class="cat" id="net">
+<h2>Network <span class="n">5 packages</span></h2>
+<div class="note">Real sockets through ETHER.DRV &mdash; a client half and a server half.</div>
+<div class="card" data-cat="net" data-text="browser text-and-table http renderer over real sockets through ether.drv - not a demo. no tls by design (see &quot;the big gaps&quot; above) -  https://  refuses out loud rather than silently downgrading. no javascript, no css layout engine.">
+<div class="head"><span class="name">BROWSER</span><span class="badge gap">gaps noted</span><span class="spec">docs/plans/completed/BROWSER-PLAN.md</span></div>
+<p class="desc">Text-and-table HTTP renderer over real sockets through ETHER.DRV &mdash; not a demo.</p>
+<p class="need"><b>still needed</b>No TLS by design (see &ldquo;the big gaps&rdquo; above) &mdash; <code>https://</code> refuses out loud rather than silently downgrading. No JavaScript, no CSS layout engine.</p>
+</div>
+<div class="card" data-cat="net" data-text="telnet a real terminal client over sockets - usable over a network, not a demonstration of one. ">
+<div class="head"><span class="name">TELNET</span><span class="badge done">shipped</span><span class="spec">docs/plans/completed/NET-STACK-PLAN.md stage C</span></div>
+<p class="desc">A real terminal client over sockets &mdash; usable over a network, not a demonstration of one.</p>
+</div>
+<div class="card" data-cat="net" data-text="ftpd an ftp  server  - the first thing in this system that makes the target machine a server rather than only a client. ">
+<div class="head"><span class="name">FTPD</span><span class="badge done">shipped</span><span class="spec">docs/plans/completed/NET-STACK-PLAN.md stage F</span></div>
+<p class="desc">An FTP <b>server</b> &mdash; the first thing in this system that makes the target machine a server rather than only a client.</p>
+</div>
+<div class="card" data-cat="net" data-text="the wire the online software library/catalog client - the desktop zone that launches other packages fetched over the wire. ">
+<div class="head"><span class="name">THE WIRE</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;92</span></div>
+<p class="desc">The online software library/catalog client &mdash; the desktop zone that launches other packages fetched over the wire.</p>
+</div>
+<div class="card" data-cat="net" data-text="wirechat chat rooms on the wire: four public rooms, private messages, a member list, friends, status. ">
+<div class="head"><span class="name">WIRECHAT</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;113</span></div>
+<p class="desc">Chat rooms on the wire: four public rooms, private messages, a member list, friends, status.</p>
+</div>
+</section>
+<section class="cat" id="games">
+<h2>Games <span class="n">20 packages</span></h2>
+<div class="note">Native ports and original titles, arcade-era classics to this project's own designs.</div>
+<div class="card" data-cat="games" data-text="wirefleet two pcs, two fleets, one winner - a native serial naval-battle game with a colour face and 2400-baud xt support, automatic link negotiation. ">
+<div class="head"><span class="name">WIREFLEET</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;114</span></div>
+<p class="desc">Two PCs, two fleets, one winner &mdash; a native serial naval-battle game with a colour face and 2400-baud XT support, automatic link negotiation.</p>
+</div>
+<div class="card" data-cat="games" data-text="wireball one court, two computers, a null modem - real-time serial pong-descendant with its own link/wheel/rate-hook stack (see claude.md&#x27;s &quot;fast fullscreen vram games&quot; section for the technique). ">
+<div class="head"><span class="name">WIREBALL</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;109</span></div>
+<p class="desc">One court, two computers, a null modem &mdash; real-time serial Pong-descendant with its own link/wheel/rate-hook stack (see CLAUDE.md's &ldquo;Fast fullscreen VRAM games&rdquo; section for the technique).</p>
+</div>
+<div class="card" data-cat="games" data-text="mines minesweeper, the first software package ever built on this sdk. ">
+<div class="head"><span class="name">MINES</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;23</span></div>
+<p class="desc">Minesweeper, the first software package ever built on this SDK.</p>
+</div>
+<div class="card" data-cat="games" data-text="solitaire klondike solitaire. ">
+<div class="head"><span class="name">SOLITAIRE</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;43</span></div>
+<p class="desc">Klondike Solitaire.</p>
+</div>
+<div class="card" data-cat="games" data-text="arkanoid arkanoid, the ninth package. ">
+<div class="head"><span class="name">ARKANOID</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;44</span></div>
+<p class="desc">Arkanoid, the ninth package.</p>
+</div>
+<div class="card" data-cat="games" data-text="missile command a port of atari&#x27;s 1980 arcade original, from the 6502 sources. ">
+<div class="head"><span class="name">MISSILE COMMAND</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;47</span></div>
+<p class="desc">A port of Atari's 1980 arcade original, from the 6502 sources.</p>
+</div>
+<div class="card" data-cat="games" data-text="dot delirium a maze-chase game in the pac-man tradition, with &quot;smiles&quot; as its hero - the maze chaser this project actually ships (see pac-man, retired, below). ">
+<div class="head"><span class="name">DOT DELIRIUM</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;93</span></div>
+<p class="desc">A maze-chase game in the Pac-Man tradition, with &ldquo;Smiles&rdquo; as its hero &mdash; the maze chaser this project actually ships (see PAC-MAN, retired, below).</p>
+</div>
+<div class="card" data-cat="games" data-text="paccman andre weissflog&#x27;s arcade-faithful  pacman.c , built through the c toolchain - the real namco 28x36 field, the rom tables, four ghosts, attract mode. a second, unrelated-source pac-man beside dot delirium. an xt performance claim (&quot;maybe faster on xts&quot;) was tested and found false: 2.18 fps against the native wirefleet-class game&#x27;s figures - recorded, not a defect.">
+<div class="head"><span class="name">PACCMAN</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;91</span></div>
+<p class="desc">Andre Weissflog's arcade-faithful <code>pacman.c</code>, built through the C toolchain &mdash; the real Namco 28&times;36 field, the ROM tables, four ghosts, attract mode. A second, unrelated-source Pac-Man beside Dot Delirium.</p>
+<p class="need"><b>still needed</b>An XT performance claim (&ldquo;maybe faster on XTs&rdquo;) was tested and found false: 2.18 fps against the native WireFleet-class game's figures &mdash; recorded, not a defect.</p>
+</div>
+<div class="card" data-cat="games" data-text="cyclone 88 a tempest 2000 clone - the second vector-ish arcade game after missile command. ">
+<div class="head"><span class="name">CYCLONE 88</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;67</span></div>
+<p class="desc">A Tempest 2000 clone &mdash; the second vector-ish arcade game after Missile Command.</p>
+</div>
+<div class="card" data-cat="games" data-text="tamegram a four-direction, dual-faction containment matrix puzzle. ">
+<div class="head"><span class="name">TAMEGRAM</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;49</span></div>
+<p class="desc">A four-direction, dual-faction containment matrix puzzle.</p>
+</div>
+<div class="card" data-cat="games" data-text="tank attack first-person wireframe tank game, atari 1980 by way of the 1983 ms-dos port. ">
+<div class="head"><span class="name">TANK ATTACK</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;85</span></div>
+<p class="desc">First-person wireframe tank game, Atari 1980 by way of the 1983 MS-DOS port.</p>
+</div>
+<div class="card" data-cat="games" data-text="isotron a light-wall duel on a 45deg cabinet-projected slab - player vs. computer. ">
+<div class="head"><span class="name">isoTron</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;108</span></div>
+<p class="desc">A light-wall duel on a 45&deg; cabinet-projected slab &mdash; player vs. computer.</p>
+</div>
+<div class="card" data-cat="games" data-text="pixelstein 3d a raycast first-person shooter in the shape of the 1992 original, fullscreen. ">
+<div class="head"><span class="name">PIXELSTEIN 3D</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;97</span></div>
+<p class="desc">A raycast first-person shooter in the shape of the 1992 original, fullscreen.</p>
+</div>
+<div class="card" data-cat="games" data-text="1942 a native remake; explicitly no nes cpu interpreter - this is original code, not an emulator. ">
+<div class="head"><span class="name">1942</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;101</span></div>
+<p class="desc">A native remake; explicitly no NES CPU interpreter &mdash; this is original code, not an emulator.</p>
+</div>
+<div class="card" data-cat="games" data-text="drmarco native xt remake with its own contracts and deliberate adaptations. ">
+<div class="head"><span class="name">DrMarco</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;100</span></div>
+<p class="desc">Native XT remake with its own contracts and deliberate adaptations.</p>
+</div>
+<div class="card" data-cat="games" data-text="gorillas adapted from the supplied microsoft qbasic gorillas (1990) - native renderer, fixed-point sim, no basic runtime. ">
+<div class="head"><span class="name">GORILLAS</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;99</span></div>
+<p class="desc">Adapted from the supplied Microsoft QBasic Gorillas (1990) &mdash; native renderer, fixed-point sim, no BASIC runtime.</p>
+</div>
+<div class="card" data-cat="games" data-text="bounce an 8x8 black square bouncing off its own window&#x27;s walls - the minimal demo package. ">
+<div class="head"><span class="name">BOUNCE</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;112</span></div>
+<p class="desc">An 8&times;8 black square bouncing off its own window's walls &mdash; the minimal demo package.</p>
+</div>
+<div class="card" data-cat="games" data-text="clear skies a filled-polygon flight simulator: take off from an airport, fly over paris, land - or crash and get put back on the runway. one segment, no worker task, no kernel change. the package&#x27;s own header carries a standing stop-sign: a size pass is owed before any new feature goes in. it is pinned against a 58,400-byte worlds-overlay ceiling and was last measured at 58,300 - 100 bytes free - after its own diagnostic instruments (csdiag, cshzprobe) had already dropped the map and csprobe the haze just to fit. docs/plans/skies-frame-plan.md is the open, actively-tracked frame-cost backlog: a banked turn costs 1.7x a level one, found by an in-flight profile no pinned bench could see.">
+<div class="head"><span class="name">CLEAR SKIES</span><span class="badge gap">gaps noted</span><span class="spec">SPEC.md &sect;88</span></div>
+<p class="desc">A filled-polygon flight simulator: take off from an airport, fly over Paris, land &mdash; or crash and get put back on the runway. One segment, no worker task, no kernel change.</p>
+<p class="need"><b>still needed</b>The package's own header carries a standing stop-sign: a SIZE PASS is owed before any new feature goes in. It is pinned against a 58,400-byte worlds-overlay ceiling and was last measured at 58,300 &mdash; 100 bytes free &mdash; after its own diagnostic instruments (CSDIAG, CSHZPROBE) had already dropped the map and CSPROBE the haze just to fit. docs/plans/SKIES-FRAME-PLAN.md is the open, actively-tracked frame-cost backlog: a banked turn costs 1.7&times; a level one, found by an in-flight profile no pinned bench could see.</p>
+</div>
+<div class="card" data-cat="games" data-text="excitebike native xt excitebike-style racer with original, committed art and audio. complete, but not on the standard images/live media/allapps floppy until the owner decides to put it there -  make excitebikedisk  builds its own disks.">
+<div class="head"><span class="name">EXCITEBIKE</span><span class="badge local">local-only</span><span class="spec">SPEC.md &sect;102</span></div>
+<p class="desc">Native XT Excitebike-style racer with original, committed art and audio.</p>
+<p class="need"><b>still needed</b>Complete, but not on the standard images/live media/allapps floppy until the owner decides to put it there &mdash; <code>make excitebikedisk</code> builds its own disks.</p>
+</div>
+<div class="card" data-cat="games" data-text="frotz an independent implementation of the z-machine standard 1.1 - windowed, with menus, status line, styles, sound, cover art, a story floppy in drive b:. named in the frotz tradition and says so, exactly as it is not a port of david griffith&#x27;s frotz. ">
+<div class="head"><span class="name">FROTZ</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;61</span></div>
+<p class="desc">An independent implementation of the Z-Machine Standard 1.1 &mdash; windowed, with menus, status line, styles, sound, cover art, a story floppy in drive B:. Named in the Frotz tradition and says so, exactly as it is not a port of David Griffith's Frotz.</p>
+</div>
+</section>
+<section class="cat" id="emu">
+<h2>Emulated platforms <span class="n">3 packages</span></h2>
+<div class="note">Whole other machines, implemented from scratch rather than ported source.</div>
+<div class="card" data-cat="emu" data-text="c64 a commodore 64 reimplemented in c from vice 3.10&#x27;s  x64  model - a 6510 in x86 registers, vic-ii, two cias, kernal/basic/chargen read from a committed rom sidecar. no disk drive (see &quot;the big gaps&quot;), no tape ( .t64 / .tap ), no cartridge port, no monitor, no snapshot format, no autostart/bitmap-sprite composer (wave 4 of the original port plan never landed) - smart attach lands a  .prg  in ram and stops.">
+<div class="head"><span class="name">C64</span><span class="badge gap">gaps noted</span><span class="spec">docs/C64-SPEC.md</span></div>
+<p class="desc">A Commodore 64 reimplemented in C from VICE 3.10's <code>x64</code> model &mdash; a 6510 in x86 registers, VIC-II, two CIAs, KERNAL/BASIC/CHARGEN read from a committed ROM sidecar.</p>
+<p class="need"><b>still needed</b>No disk drive (see &ldquo;the big gaps&rdquo;), no tape (<code>.T64</code>/<code>.TAP</code>), no cartridge port, no monitor, no snapshot format, no autostart/bitmap-sprite composer (wave 4 of the original port plan never landed) &mdash; Smart Attach lands a <code>.PRG</code> in RAM and stops.</p>
+<p class="meas">resident 42,774 of 61,440 (18,666 spare) &middot; C64.OVL 1,940B</p>
+</div>
+<div class="card" data-cat="emu" data-text="apple ii+ an apple ii plus reimplemented in c: 6502 core, video soft switches, the seven-pixel text cell, applesoft/monitor/chargen read from a pinned, fetched rom part. no disk ii yet (see &quot;the big gaps&quot; - fully specified, budget confirmed, not yet coded). measures 0.54% of a real 1.02mhz apple on an xt.">
+<div class="head"><span class="name">APPLE II+</span><span class="badge gap">gaps noted</span><span class="spec">docs/APPLE2-SPEC.md</span></div>
+<p class="desc">An Apple II Plus reimplemented in C: 6502 core, video soft switches, the seven-pixel text cell, Applesoft/Monitor/CHARGEN read from a pinned, fetched ROM part.</p>
+<p class="need"><b>still needed</b>No Disk II yet (see &ldquo;the big gaps&rdquo; &mdash; fully specified, budget confirmed, not yet coded). Measures 0.54% of a real 1.02MHz Apple on an XT.</p>
+<p class="meas">resident 44,324 of 61,440 (17,116 spare, re-measured this session) &middot; APPLE2.OVL 3,403B</p>
+</div>
+<div class="card" data-cat="emu" data-text="runcpm (cp/m 2.2) a windowed cp/m 2.2 emulator (z80 core + runcpm 6.9 in c), with the committed cp/m software collection (ladder, catchum, wordstar, turbo pascal, and more) riding beside the master disk. ">
+<div class="head"><span class="name">RunCPM (CP/M 2.2)</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;74</span></div>
+<p class="desc">A windowed CP/M 2.2 emulator (Z80 core + RunCPM 6.9 in C), with the committed CP/M software collection (LADDER, CATCHUM, WordStar, Turbo Pascal, and more) riding beside the master disk.</p>
+<p class="meas">Z80 core: ZEXDOC-clean</p>
+</div>
+</section>
+<section class="cat" id="sys">
+<h2>System &amp; utilities <span class="n">10 packages</span></h2>
+<div class="note">Desktop tools, Sticky Apps, and the DOS compatibility box.</div>
+<div class="card" data-cat="sys" data-text="font viewer browses  system/fonts/  and renders an editable specimen in the selected face; launched automatically from a double-clicked face. ">
+<div class="head"><span class="name">FONT VIEWER</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;90</span></div>
+<p class="desc">Browses <code>SYSTEM/FONTS/</code> and renders an editable specimen in the selected face; launched automatically from a double-clicked face.</p>
+</div>
+<div class="card" data-cat="sys" data-text="dos box runs a real dos  .com / .exe  program - the handoff, resume, and live-resume machinery for programs that take the whole machine temporarily. ">
+<div class="head"><span class="name">DOS box</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;96</span></div>
+<p class="desc">Runs a real DOS <code>.COM</code>/<code>.EXE</code> program &mdash; the handoff, resume, and live-resume machinery for programs that take the whole machine temporarily.</p>
+</div>
+<div class="card" data-cat="sys" data-text="task manager a live cpu-load gauge with an oscilloscope-sweep history graph, ram readout, and per-instance process list with cpu shares and memory. ">
+<div class="head"><span class="name">TASK MANAGER</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;28</span></div>
+<p class="desc">A live CPU-load gauge with an oscilloscope-sweep history graph, RAM readout, and per-instance process list with CPU shares and memory.</p>
+</div>
+<div class="card" data-cat="sys" data-text="hello the minimal sdk proof package - header macro, window template, paint via the api. ">
+<div class="head"><span class="name">HELLO</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;27</span></div>
+<p class="desc">The minimal SDK proof package &mdash; header macro, window template, paint via the API.</p>
+</div>
+<div class="card" data-cat="sys" data-text="timer a stopwatch: start/stop/reset in a fixed 160x60 window. ">
+<div class="head"><span class="name">TIMER</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;111</span></div>
+<p class="desc">A stopwatch: Start/Stop/Reset in a fixed 160&times;60 window.</p>
+</div>
+<div class="card" data-cat="sys" data-text="desk calendar the first sticky app - a month on the desktop that stays where it&#x27;s put. ">
+<div class="head"><span class="name">DESK CALENDAR</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;110</span></div>
+<p class="desc">The first Sticky App &mdash; a month on the desktop that stays where it's put.</p>
+</div>
+<div class="card" data-cat="sys" data-text="sticky note the second sticky app - notes and checklists kept on the desktop. ">
+<div class="head"><span class="name">STICKY NOTE</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;110</span></div>
+<p class="desc">The second Sticky App &mdash; notes and checklists kept on the desktop.</p>
+</div>
+<div class="card" data-cat="sys" data-text="desk clock the third sticky app - nine clock faces, three dial styles. ">
+<div class="head"><span class="name">DESK CLOCK</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;110</span></div>
+<p class="desc">The third Sticky App &mdash; nine clock faces, three dial styles.</p>
+</div>
+<div class="card" data-cat="sys" data-text="redline native cpu/memory/graphics benchmark, with a tachometer icon and a saved chipset profile. ">
+<div class="head"><span class="name">REDLINE</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;103</span></div>
+<p class="desc">Native CPU/memory/graphics benchmark, with a tachometer icon and a saved chipset profile.</p>
+</div>
+<div class="card" data-cat="sys" data-text="rlapply a windowless helper that puts redline&#x27;s saved chipset setting back at boot. ">
+<div class="head"><span class="name">RLAPPLY</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;103.6.5</span></div>
+<p class="desc">A windowless helper that puts REDLINE's saved chipset setting back at boot.</p>
+</div>
+</section>
+<section class="cat" id="weave">
+<h2>The Weave family <span class="n">2 packages</span></h2>
+<div class="note">A web-style app runtime and its own in-OS IDE.</div>
+<div class="card" data-cat="weave" data-text="weave the runtime for web-style apps compiled to a  .wab  bundle and interpreted natively - markup, script and formulas in one package. ">
+<div class="head"><span class="name">WEAVE</span><span class="badge done">shipped</span><span class="spec">docs/WEAVE-SPEC.md</span></div>
+<p class="desc">The runtime for web-style apps compiled to a <code>.WAB</code> bundle and interpreted natively &mdash; markup, script and formulas in one package.</p>
+</div>
+<div class="card" data-cat="weave" data-text="loom the in-os ide for the weave family - edits a project&#x27;s sources and packs the  .wab  on the machine, byte-identical to the host packer&#x27;s output. ">
+<div class="head"><span class="name">LOOM</span><span class="badge done">shipped</span><span class="spec">docs/WEAVE-SPEC.md</span></div>
+<p class="desc">The in-OS IDE for the Weave family &mdash; edits a project's sources and packs the <code>.WAB</code> on the machine, byte-identical to the host packer's output.</p>
+<p class="meas">LOOM.OVL 34,573B</p>
+</div>
+</section>
+<section class="cat" id="dead">
+<h2>Retired / instruments <span class="n">5 packages</span></h2>
+<div class="note">Dropped by the owner's own call, or benches that were never meant to ship.</div>
+<div class="card" data-cat="dead" data-text="wireframe the bench for draw orders and input latency - not an application; no shipped floppy carries it. ">
+<div class="head"><span class="name">WIREFRAME</span><span class="badge inst">instrument</span><span class="spec">SPEC.md &sect;78.9</span></div>
+<p class="desc">The bench for draw orders and input latency &mdash; not an application; no shipped floppy carries it.</p>
+</div>
+<div class="card" data-cat="dead" data-text="imgtest the picture decoders&#x27; capability gate. ">
+<div class="head"><span class="name">IMGTEST</span><span class="badge inst">instrument</span><span class="spec">SPEC.md &sect;94</span></div>
+<p class="desc">The picture decoders' capability gate.</p>
+</div>
+<div class="card" data-cat="dead" data-text="fptest the floating-point gate - not even built by the default  all  target. ">
+<div class="head"><span class="name">FPTEST</span><span class="badge inst">instrument</span><span class="spec">SPEC.md &sect;64</span></div>
+<p class="desc">The floating-point gate &mdash; not even built by the default <code>all</code> target.</p>
+</div>
+<div class="card" data-cat="dead" data-text="pac-man (native) a native port of roklan&#x27;s 1982 atari disk version. removed from the floppies, then the build, then confirmed gone for good by the owner - superseded by dot delirium. source and spec.md section 89 stay as the record;  make pacman  still builds it.">
+<div class="head"><span class="name">PAC-MAN (native)</span><span class="badge retired">retired</span><span class="spec">SPEC.md &sect;89</span></div>
+<p class="desc">A native port of Roklan's 1982 Atari disk version. Removed from the floppies, then the build, then confirmed gone for good by the owner &mdash; superseded by Dot Delirium.</p>
+<p class="need"><b>still needed</b>Source and SPEC.md &sect;89 stay as the record; <code>make pacman</code> still builds it.</p>
+</div>
+<div class="card" data-cat="dead" data-text="modplug player a port of modplug player v2&#x27;s look and feel. superseded, not failed: tracker&#x27;s windowed face became the same player rebuilt to this tree&#x27;s standards, so two mod players had become one player and one regression surface. ">
+<div class="head"><span class="name">MODPLUG PLAYER</span><span class="badge retired">retired</span><span class="spec">SPEC.md &sect;56</span></div>
+<p class="desc">A port of ModPlug Player V2's look and feel. Superseded, not failed: Tracker's windowed face became the same player rebuilt to this tree's standards, so two MOD players had become one player and one regression surface.</p>
+</div>
+</section>
+
+<section class="cat" id="drv">
+<h2>Drivers <span class="n">12 loadable drivers</span></h2>
+<div class="note">Not shipped software by themselves &mdash; loaded on request by SYSTEM.CFG bits, and (SPEC.md &sect;51.3) nothing loads unless SYSTEM.CFG asks for it.</div>
+<div class="card" data-cat="drv" data-text="sound.drv adlib/opl2 tier plus a sound blaster tier and (per the owner&#x27;s own 4025cdt, confirmed this session) sbpro/mpu-401/wss detection on real hardware. not wanted by default - a system.cfg bit asks for it. ">
+<div class="head"><span class="name">SOUND.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;34, &sect;51.4</span></div>
+<p class="desc">AdLib/OPL2 tier plus a Sound Blaster tier and (per the owner's own 4025CDT, confirmed this session) SBPro/MPU-401/WSS detection on real hardware. Not wanted by default &mdash; a SYSTEM.CFG bit asks for it.</p>
+</div>
+<div class="card" data-cat="drv" data-text="ether.drv ne1000/ne2000 card plus a real tcp/ip stack, answering the same socket verbs a package would use over any transport. ">
+<div class="head"><span class="name">ETHER.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;72</span></div>
+<p class="desc">NE1000/NE2000 card plus a real TCP/IP stack, answering the same socket verbs a package would use over any transport.</p>
+</div>
+<div class="card" data-cat="drv" data-text="hdd.drv the loadable hard-disk driver - mfm through an xt-class controller. ">
+<div class="head"><span class="name">HDD.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;51.8, &sect;52</span></div>
+<p class="desc">The loadable hard-disk driver &mdash; MFM through an XT-class controller.</p>
+</div>
+<div class="card" data-cat="drv" data-text="net.drv a laplink-style parallel cable to a dos machine, presented as a block volume. ">
+<div class="head"><span class="name">NET.DRV</span><span class="badge done">shipped</span></div>
+<p class="desc">A LapLink-style parallel cable to a DOS machine, presented as a block volume.</p>
+</div>
+<div class="card" data-cat="drv" data-text="ramdisk.drv a drvc_file driver - a volume whose contents live in ram. ">
+<div class="head"><span class="name">RAMDISK.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;62.9</span></div>
+<p class="desc">A DRVC_FILE driver &mdash; a volume whose contents live in RAM.</p>
+</div>
+<div class="card" data-cat="drv" data-text="saver.drv the screen saver - four modes: a bouncing cube, a starfield, geometric shapes, and a fish-tank mode. ">
+<div class="head"><span class="name">SAVER.DRV</span><span class="badge done">shipped</span></div>
+<p class="desc">The screen saver &mdash; four modes: a bouncing cube, a starfield, geometric shapes, and a fish-tank mode.</p>
+</div>
+<div class="card" data-cat="drv" data-text="usbmouse.drv a usb mouse on a wch ch375b host controller - the book8088&#x27;s own mouse path. ">
+<div class="head"><span class="name">USBMOUSE.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;9.12</span></div>
+<p class="desc">A USB mouse on a WCH CH375B host controller &mdash; the Book8088's own mouse path.</p>
+</div>
+<div class="card" data-cat="drv" data-text="vbe.drv not a driver in the usual sense - an overlay that gives the kernel vbe mode 0104h (1024x768, 16-colour planar, bank-switched). built and verified on real vesa hardware this session (13/13 and 19/19 readback across every bank boundary, both 0104h and a padded 0106h). not yet upstreamed - see &quot;the big gaps&quot; above.">
+<div class="head"><span class="name">VBE.DRV</span><span class="badge gap">gaps noted</span><span class="spec">SPEC.md &sect;39.29, &sect;41.12</span></div>
+<p class="desc">Not a driver in the usual sense &mdash; an overlay that gives the kernel VBE mode 0104h (1024&times;768, 16-colour planar, bank-switched). Built and verified on real VESA hardware this session (13/13 and 19/19 readback across every bank boundary, both 0104h and a padded 0106h).</p>
+<p class="need"><b>still needed</b>Not yet upstreamed &mdash; see &ldquo;the big gaps&rdquo; above.</p>
+</div>
+<div class="card" data-cat="drv" data-text="vmmouse.drv a grabless absolute pointer under v86/a hypervisor via the vmware backdoor protocol. ">
+<div class="head"><span class="name">VMMOUSE.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;9.11</span></div>
+<p class="desc">A grabless absolute pointer under v86/a hypervisor via the VMware backdoor protocol.</p>
+</div>
+<div class="card" data-cat="drv" data-text="xmem.drv xms extended-memory sizing, a small first-fit allocator, and the one copy routine every caller shares. ">
+<div class="head"><span class="name">XMEM.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;41</span></div>
+<p class="desc">XMS extended-memory sizing, a small first-fit allocator, and the one copy routine every caller shares.</p>
+</div>
+<div class="card" data-cat="drv" data-text="ems.drv lim ems board page-register driver - maps 16kb pages of an expanded-memory board into a 64kb frame below 1mb. not wanted by default: attach writes to i/o ports a machine with no board would have belonging to something else. ">
+<div class="head"><span class="name">EMS.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;107</span></div>
+<p class="desc">LIM EMS board page-register driver &mdash; maps 16KB pages of an expanded-memory board into a 64KB frame below 1MB. Not wanted by default: attach writes to I/O ports a machine with no board would have belonging to something else.</p>
+</div>
+<div class="card" data-cat="drv" data-text="thmpal.drv a palette/theme driver for the windowed look. ">
+<div class="head"><span class="name">THMPAL.DRV</span><span class="badge done">shipped</span><span class="spec">SPEC.md &sect;76.14</span></div>
+<p class="desc">A palette/theme driver for the windowed look.</p>
+</div>
+</section>
+<footer>
+  os8088 &middot; Koriban/os8088 fork, branch <code>forkmain</code> &middot; generated by Claude
+  from the tree at commit <code>577ca26a</code>, 2026-10-21. Numbers and statuses are a snapshot —
+  re-measure rather than quote, the same rule this project holds its own docs to.
+</footer>
+
+</div>
+<script>
+(function () {
+  "use strict";
+  var search = document.getElementById("search");
+  var catBtns = Array.prototype.slice.call(document.querySelectorAll(".catbtn"));
+  var cards = Array.prototype.slice.call(document.querySelectorAll(".card"));
+  var sections = Array.prototype.slice.call(document.querySelectorAll("section.cat"));
+  var countEl = document.getElementById("count");
+  var activeCat = "all";
+
+  function apply() {
+    var q = (search.value || "").trim().toLowerCase();
+    var shown = 0;
+    cards.forEach(function (card) {
+      var cat = card.getAttribute("data-cat");
+      var text = card.getAttribute("data-text") || "";
+      var catOk = activeCat === "all" || cat === activeCat;
+      var textOk = !q || text.indexOf(q) !== -1;
+      var visible = catOk && textOk;
+      card.classList.toggle("hidden", !visible);
+      if (visible) shown++;
+    });
+    sections.forEach(function (sec) {
+      var anyVisible = sec.querySelectorAll(".card:not(.hidden)").length > 0;
+      var isBigPicture = sec.id === "bigpicture";
+      sec.style.display = (isBigPicture && activeCat === "all" && !q) || anyVisible ? "" : "none";
+    });
+    countEl.textContent = shown + " shown";
+  }
+
+  catBtns.forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      catBtns.forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      activeCat = btn.getAttribute("data-cat");
+      apply();
+    });
+  });
+  search.addEventListener("input", apply);
+  apply();
+})();
+</script>
+
+</body>
+</html>
