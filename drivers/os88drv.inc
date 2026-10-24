@@ -117,7 +117,7 @@ DQ_A         equ 2              ; dw: your class's own three words
 DQ_B         equ 4              ; dw
 DQ_C         equ 6              ; dw
 DQ_SIZE      equ 8
-DQ_MAXREC    equ 8              ; ...and the most one call can write
+DQ_MAXREC    equ 10             ; ...and the most one call can write
 
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
@@ -368,6 +368,9 @@ DSV_GEOM     equ DSV_BLK        ; == DSV_BLK: SUB-FUNCTION 2 of it (AL = 2),
                                 ;       ROM's int 13h does not reach (52.1's
                                 ;       rung 1). 0 = never, which is CF = 1
 DSV_SIZE     equ 36
+%if DSV_SIZE > 0x3F
+  %error "os88drv: the +15 byte's DSV length is 6 bits - bits 7 and 6 are OS88_DRV_HIGHOK and OS88_DRV_HICLAIM"
+%endif
 
 ; --- DSV_FS: the file redirector's verbs (SPEC.md 62.9) ----------------------
 ; A DRVC_FILE volume has NO SECTORS - no BPB, no FAT, no directory to walk -
@@ -417,6 +420,17 @@ FSV_APPEND   equ 10             ; the chunked pair (18.4.4), so a copy streams
 ; 62.9.2.1's cache-only pass. Leave it clear and you get exactly the
 ; behaviour every DRVC_FILE driver had before the bit existed.
 FSCAP_LOCAL  equ 1              ; my reads cost what a memcpy costs
+; ...and the SECOND bit (SPEC.md 26.4.2): set it and your volume's desktop
+; zone is YOUR picture, not the kernel's hard-disk icon. desk_pic calls your
+; DSV_PKGCALL with BL = DRV_ICONV and CX/DX = the picture's top-left on the
+; screen, the gfx lock held - draw with OSAPI_ICON_DRAW (16x16 records, so a
+; 32-wide picture is quadrants: drivers/wirezone.inc's shape), 32 rows on
+; VGA/EGA/Hercules and 14 on the CGA (OSAPI_VIDEO says which), keep every
+; register, and answer CF = 0. CF = 1 and the kernel draws its own icon. The
+; draw lands in the cell's band while the cell composes, so the selection
+; inverts your picture like any other (SPEC.md 26.9.9)
+FSCAP_ICON   equ 2              ; my volume draws its own desktop picture
+DRV_ICONV    equ 0x41           ; ...through my door, verb DRV_ICONV
 
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name
@@ -657,6 +671,32 @@ DRV_VER equ 11
                             ; copy is never shipped: tools/os88rom.py diffs
                             ; the pair into the table COLDHMA.SYS relocates
                             ; the loaded image by (docs/plans/HMA-PLAN.md 5)
+; OS88_DRV_HIGHOK - %define it BEFORE OS88_DRIVER / OS88_OVERLAY to say that
+; this image may be placed ABOVE 1MB on kern_mega in protected mode
+; (KERN-MEGA-PLAN item 82): it is copied into an extended-memory block and run
+; through a code/data selector pair, CS the code half and DS the data half
+; (CS + 8). Say it only of a driver that does no PARAGRAPH arithmetic on its
+; own CS or DS (derive DS from CS by the pair rule, as SOUND.DRV's SBL_DSCS
+; does), never hands its own segment to a BIOS call or a DMA engine, and has
+; no code a ROM runs in real mode. Its claims stay conventional. It is bit 7
+; of +15, which every kernel masks or clamps to its own table length, so the
+; bit is invisible to a kernel that does not place drivers high.
+; OS88_DRV_HICLAIM - %define it as well to say that the driver's own claims
+; of 64KB or less (OSAPI_MEM_CLAIM / _CLAIM_HI, never the DMA cells) may be
+; pool SELECTORS above 1MB, as a package's are under OS88_HIGHMEM: no
+; paragraph arithmetic on one, no BIOS call or DMA engine handed one, and a
+; relocation proc on any it declares movable, because the kernel MOVES those
+; up after protected mode is entered (KERN-MEGA-PLAN item 83). Bit 6 of +15.
+%ifdef OS88_DRV_HIGHOK
+ %ifdef OS88_DRV_HICLAIM
+OS88_DRV_HIBIT equ 0xC0
+ %else
+OS88_DRV_HIBIT equ 0x80
+ %endif
+%else
+OS88_DRV_HIBIT equ 0
+%endif
+
 %macro OS88_DRIVER 3-4 DSV_SIZE
     %xdefine OS88_DSV_LEN (%4)
     cpu 8086
@@ -682,7 +722,7 @@ DRV_VER equ 11
     db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
     db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
                             ;     offset with BP = the proc it wants.
-    db OS88_DSV_LEN         ; +15 THE DSV_* TABLE LENGTH THIS DRIVER WAS BUILT
+    db OS88_DSV_LEN | OS88_DRV_HIBIT ; +15 THE DSV_* TABLE LENGTH THIS DRIVER WAS BUILT
                             ;     WITH (SPEC.md 51.2) - the FSV word's rule one
                             ;     level up. drv_publish copies only this many
                             ;     bytes and publishes 0 for the cells past it,
@@ -733,7 +773,7 @@ DRV_VER equ 11
     dw %2                   ; +10 the private ABI version its owner checks
     db 0FFh, 0D5h           ; +12 the dispatcher: `call bp`...
     db 0CBh                 ; +14 ...`retf`
-    db 0
+    db OS88_DRV_HIBIT       ; +15 bit 7: OS88_DRV_HIGHOK, as a driver's
     %strlen %%len %1
     %if %%len > 15
         %error "OS88_OVERLAY: name must be at most 15 characters"

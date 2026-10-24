@@ -182,6 +182,20 @@ summary = "Lets programs play music and sound on an AdLib, Sound Blaster, MPU-40
 short = "Music and sound on any card"
 needs = "An AdLib, Sound Blaster, MPU-401 or Covox"
 
+["CDRACK.O88"]
+title = "CDRack"
+kind = "program"
+summary = "Plays audio CDs in the CD-ROM drive behind the face of an 80s rack CD player: an LCD with the track grid, the transport, volume, repeat, shuffle, a program and the track list, in colour or black and white, with a compact player for small screens. Opens a TRACKnn.CDA file on that track."
+short = "Plays audio CDs"
+needs = "CDROM.DRV and an IDE CD-ROM drive"
+
+["MIXER.O88"]
+title = "Mixer"
+kind = "program"
+summary = "Adjusts a Sound Blaster's source levels, stereo balance and supported tone controls. Open it from the apps disk's APPS folder."
+short = "Sound-card levels and balance"
+needs = "SOUND.DRV and a compatible hardware mixer"
+
 ["HDD.DRV"]
 title = "Hard disk driver"
 kind = "driver"
@@ -217,12 +231,12 @@ summary = "Lets programs use the extra memory on a LIM EMS expanded memory board
 short = "Use expanded memory boards"
 needs = "A LIM EMS memory board"
 
-["VBE.DRV"]
-title = "VESA 1024x768 display"
+["CDROM.DRV"]
+title = "CD-ROM drive"
 kind = "driver"
-summary = "Runs the desktop at 1024x768 on a video card whose VESA BIOS offers that size, instead of 640x480."
-short = "A 1024x768 desktop"
-needs = "A VGA card whose VESA BIOS offers mode 1024x768 in 16 colours"
+summary = "Reads CD-ROM discs in an IDE CD-ROM drive as a drive on the desktop, and plays audio CDs through the drive's own audio output."
+short = "CD-ROM discs and audio CDs"
+needs = "A 286 or better with an IDE (ATAPI) CD-ROM drive"
 
 ["RAMDISK.DRV"]
 title = "RAM disk"
@@ -278,20 +292,20 @@ short = "Word for Windows 1.1a remake"
 ["SHEET.O88"]
 title = "Sheet"
 kind = "program"
-summary = "A spreadsheet in the style of Excel 2.1, with formulas, formats, macros, charts and SYLK, DIF and BIFF files."
+summary = "A spreadsheet in the style of Excel 2.1, with four sheets to a workbook, formulas, formats, a database, macros, charts, and Excel, SYLK, DIF, CSV and dBASE files."
 short = "Excel 2.1-style spreadsheet"
 
 ["CHART.OVL"]
-title = "Sheet's charts"
+title = "Sheet charts and files"
 kind = "data"
-summary = "Sheet's charting, kept in a file of its own and read in when you make a chart from a sheet."
-short = "Sheet's charting, loaded on demand"
+summary = "Part of Sheet, read when Sheet starts: its dialogs, its charts, its file formats and many of its functions. Keep it beside SHEET.O88."
+short = "Sheet's chart and file module"
 
 ["MACRO.OVL"]
-title = "Sheet's macros"
+title = "Sheet macros"
 kind = "data"
-summary = "Sheet's macro language, kept in a file of its own and read in when a macro sheet is run or recorded."
-short = "Sheet's macros, loaded on demand"
+summary = "Part of Sheet that runs its macros, read when Sheet starts. Keep it beside SHEET.O88."
+short = "Sheet's macro module"
 
 ["PLAN.O88"]
 title = "Plan"
@@ -353,11 +367,30 @@ kind = "program"
 summary = "Plays standard MIDI song files with a channel rack, on an FM chip, a Sound Blaster, MIDI out or the PC speaker."
 short = "MIDI song player with rack"
 
+["XTMP3.O88"]
+title = "XTMP3"
+kind = "program"
+summary = "Plays MP3 files behind the face of an 80s stereo component, at the best quality this computer and its sound card can keep up with, and says which quality that is. On a slow PC it decodes the song to a WAV file on the hard disk first, then plays that."
+short = "MP3 player for every PC"
+needs = "A sound card to play while decoding; otherwise a hard disk and the PC speaker or a Covox"
+
 ["VIDEO.O88"]
 title = "Video Player"
 kind = "program"
 summary = "Plays full-motion .V88 videos, in a window or full screen, with sound on a Sound Blaster or the PC speaker."
 short = "Plays .V88 videos"
+
+["INSTALL.O88"]
+title = "Install"
+kind = "program"
+summary = "Puts os8088 on a hard disk, or upgrades the copy already there, one page at a time: switches the hard-disk driver on, finds the drives, lets you pick a partition and keep or erase its files, then copies the system and apps disks."
+short = "Install os8088 on a hard disk"
+
+["SYSCHECK.O88"]
+title = "System Check"
+kind = "program"
+summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove."
+short = "Installed system checker"
 
 ["TASKMGR.O88"]
 title = "Task Manager"
@@ -536,6 +569,13 @@ kind = "program"
 summary = "Place five ships, take alternate shots and chat with a friend over a serial null modem. Reconnect to continue the same match, or save it on each PC and load it later. F toggles fullscreen, including four-color CGA."
 short = "Naval battles between two PCs"
 needs = "Two machines, a null modem cable, and a free COM1 or COM2; Connect may ask for the system disk"
+
+["VESA.DRV"]
+title = "VESA display driver"
+kind = "driver"
+summary = "Puts the desktop on a VGA card's high-resolution screen, up to 1024 by 768 in 256 or 65,536 colours, when the card has a VESA BIOS."
+short = "High-resolution desktop on a VESA card"
+needs = "A VGA card with a VESA BIOS (VBE 1.2 or later) and a 386 or better"
 
 ["SERIAL.DRV"]
 title = "Desktop serial service"
@@ -769,6 +809,24 @@ kind = "music"
 summary = "Mozart's Rondo alla Turca as a MIDI song. Plays in MIDIRack."
 short = "Mozart's Rondo alla Turca"
 
+["NEONDRV.MP3"]
+title = "Neon Drive"
+kind = "music"
+summary = "A ten-second original demo song as an MP3, 44.1 kHz stereo at 56 kbps. Plays in XTMP3."
+short = "XTMP3 demo, CD-rate stereo"
+
+["NIGHTSIG.MP3"]
+title = "Night Signals"
+kind = "music"
+summary = "A ten-second original demo song as an MP3, 22.05 kHz stereo at 40 kbps. Plays in XTMP3."
+short = "XTMP3 demo, half-rate stereo"
+
+["AFTERHRS.MP3"]
+title = "After Hours"
+kind = "music"
+summary = "A ten-second original demo song as an MP3, 11,025 Hz mono at 24 kbps: the song a 4.77 MHz XT is meant for. Plays in XTMP3."
+short = "XTMP3 demo for the XT"
+
 # --- the one-program disks, the everything set and the demo drives ------------
 
 ["1942.O88"]
@@ -789,6 +847,24 @@ title = "Apple II Plus"
 kind = "folder"
 summary = "The Apple II Plus program, its README, its licence and a BASIC program to load."
 short = "Apple II Plus and extras"
+
+["REALDMG.O88"]
+title = "RealDMG"
+kind = "program"
+summary = "A Game Boy in a window or on the whole screen: play your own .GB cartridges, with battery saves, save states and replays."
+short = "Game Boy emulator"
+
+["REALDMG/"]
+title = "RealDMG"
+kind = "folder"
+summary = "The RealDMG Game Boy program, its README and the project's own demo cartridge."
+short = "RealDMG and its demo"
+
+["GBDEMO.GB"]
+title = "RealDMG demo"
+kind = "document"
+summary = "The project's own Game Boy cartridge: a bouncing ball, a clock and a blip on every landing. Double-click it to run it in RealDMG."
+short = "Demo Game Boy cartridge"
 
 ["C64.O88"]
 title = "Commodore 64"
@@ -879,6 +955,24 @@ title = "PaccMan"
 kind = "folder"
 summary = "PaccMan and its README."
 short = "PaccMan and its notes"
+
+["LEMMINGS.O88"]
+title = "Lemmings"
+kind = "program"
+summary = "The 1991 puzzle game, built from the original's own data files: 120 levels, the original's screens and words. Slow on an XT."
+short = "Lemmings, the 1991 game"
+
+["LEMMINGS/"]
+title = "Lemmings"
+kind = "folder"
+summary = "Lemmings, its README, the list of levels this disk carries, and the game's data files."
+short = "Lemmings and its data"
+
+["LEVELS.TXT"]
+title = "Levels on this disk"
+kind = "document"
+summary = "Which of the 120 levels this size of disk carries, level by level, and what the missing ones would cost."
+short = "Which levels this disk carries"
 
 ["REDLINE.O88"]
 title = "REDLINE"

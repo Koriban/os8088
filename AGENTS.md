@@ -42,6 +42,8 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/KERNEL-MEMORY.md](docs/KERNEL-MEMORY.md)** | spending any memory |
 | **[docs/plans/ROM-PLAN.md](docs/plans/ROM-PLAN.md)** | putting part of the system in ROM (§2.10) — what a 5150's five spare sockets hold, why a ROM is cut against ONE kernel, and what `make rom` builds |
 | **[docs/plans/HMA-PLAN.md](docs/plans/HMA-PLAN.md)** | anything above 1MB on a 286 or better (§2.10.7, §2.10.8) — `.cold` run from the HMA, and the drivers loaded into what it leaves |
+| **[docs/BOCHS.md](docs/BOCHS.md)** | running kern_mega (docs/plans/KERN-MEGA-PLAN.md) at all — Bochs is its instrument, because QEMU runs what a real 286 faults on; install, `tools/os88bochs.py`, and its blind spots |
+| **[docs/86BOX.md](docs/86BOX.md)** | anything only a period machine can answer — a 286 or 386 running kern_mega's reset path, an AT BIOS — and how `tools/os88box.py` drives a `vm/` profile headless |
 | **[docs/HERCULES-TESTING.md](docs/HERCULES-TESTING.md)** | testing on Hercules — it *is* automatable, and all three ways of getting it wrong give you a black image rather than an error |
 | **[docs/C-TOOLCHAIN.md](docs/C-TOOLCHAIN.md)** | writing or building a package in C (§73) — how to install the compiler, the four C rules and what each refusal means, and what the language does not have here |
 | **[docs/plans/completed/NET-STACK-PLAN.md](docs/plans/completed/NET-STACK-PLAN.md)** | anything on the wire (§72) — the stack's stages, what each layer refuses, and why TLS is not on this machine |
@@ -53,10 +55,14 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/FIELD-MACHINES.md](docs/FIELD-MACHINES.md)** | asking for a field run — who has the hardware, what is in it, what a run costs them, and the two rules that bind whoever reads a result |
 | **[docs/FIELD-NOTES.md](docs/FIELD-NOTES.md)** | a bug that reproduces on hardware and not here — open, reproduced, unfixed, with what has already been ruled out for each |
 | **[docs/plans/completed/FTP-PERF.md](docs/plans/completed/FTP-PERF.md)** | picking the FTP server's speed back up (§77, §72.15) — what moved it from 7 to 15 KB/s, the four things that did NOT work, where the time goes now (57% of it is ABOVE the driver), and the next five candidates in the order the evidence ranks them |
+| **[docs/FLOPPY-WRITING.md](docs/FLOPPY-WRITING.md)** | answering "which image do I write, and how" for a FLOPPY — which disk a machine wants, the four ways to get it wrong, and `tools/os88flop.py`, which generates the command list out of `build/` rather than carrying one that would go stale. LIVE-MEDIA.md is the same guide for the USB stick and the CD |
 | **[docs/LIVE-MEDIA.md](docs/LIVE-MEDIA.md)** | answering any user-facing "how do I write, burn or boot the live USB/CD" — it is the reader's guide (dd, Rufus, BIOS settings, troubleshooting) and the README links it; §80 stays the design record and this file must follow it, never lead |
 | **[docs/WEAVE-SPEC.md](docs/WEAVE-SPEC.md)** | touching anything in the Weave family (`apps/weave/` and `apps/loom/`, the `.WAB` bundle, WML/WJS/FX) — the binding contract, outside SPEC.md on the C64 precedent, cited as `WEAVE-SPEC §N`; `tools/weavesim.py` is its reference implementation and `tests/unit/t_wab.py` its independent second reader. **Two packages share one document and a lot of source**: WEAVE runs a bundle, LOOM builds one, and what they share they share as SOURCE (`%include`/`#include`), never as a copy — WEAVE-SPEC §1.2 is the rule and `apps/weave/wfxc.c` is the worked example, being LOOM's FX compiler as well as WEAVE's formula bar's |
 | **[docs/WIRE-PLAN.md](docs/WIRE-PLAN.md)** | anything in The Wire (§92, `apps/thewire/`, the desktop zone and `OSAPI_PKG_RUN`) — the design record: the four facts that decided the shape, the catalog and picture formats as they were pinned, and what was deferred with the arithmetic attached. SPEC.md §92 is the contract and this is why it reads that way; its brand table is **fixed by the user and not to be reworded** |
 | **[docs/plans/completed/WEAVE-PLAN.md](docs/plans/completed/WEAVE-PLAN.md)** | re-opening a Weave design decision — why each fork went the way it did, the judged alternatives, and what was deferred with the arithmetic attached |
+| **[docs/plans/SHEET-GAPS-PLAN.md](docs/plans/SHEET-GAPS-PLAN.md)** | picking up SHEET — what is left, in the order to do it. **Its section 4 is the current list** (re-measured 2026-09-22): the macro language is finished (`docs/plans/SHEET-MACRO-PLAN.md`, §81.83-§81.97), the two defects it opened with are closed, and so is the menu's-tail defect (its section 0.1, §81.98). The gaps are grouped by what they cost rather than by menu, under a resident-headroom constraint that is down to 756 bytes, so nearly everything left is module work. **Printing is out of scope in it by decision**, which removes six of the missing menu commands and none of the work. §81.39 is the inventory — re-measure it, never quote it |
+| **[docs/plans/SHEET-PROPORTIONAL-PLAN.md](docs/plans/SHEET-PROPORTIONAL-PLAN.md)** | setting SHEET's cells in Helvetica — a study, nothing built: the OS's `os88type.inc` does it on every adapter, and what stands in the way is SHEET's 8 of 8 claims (resident room is **122 bytes**, re-measured 2026-10-18 — image 52,029 + bss 9,289 of 61,440; it read 1,683 after stage 0's first move, §81.102, and has been stale twice since, so measure it) and a layout that counts characters. Staged path with the layout converted to pixels first, while the 8×8 glass gates can still see it |
+| **[docs/plans/VESA-PLAN.md](docs/plans/VESA-PLAN.md)** | anything in the VESA display (§120, `drivers/vesa/`, `kernel/vidext.inc`'s `VIDEXT` hook, the `DRVC_VIDEO` class) — the story list with what each wave actually shipped, the decisions taken against their judged alternatives (hooks in `kern_big` against a fourth kernel; a 16-colour desktop at any depth; banked window A against the linear framebuffer), and `docs/HOW-VESA-WAS-BUILT.md` is its diary. SPEC.md §120 is the contract and says per story whether it is pinned or shipped |
 
 ## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
 
@@ -249,6 +255,22 @@ make covl       #   covl is the OVERLAY gate (§73.14); cword is the
                 #   application — Word 1.1a again, in C, in two segments
                 #   (§73.12). `make clean` SPARES build/cc
                 #   (clean-cc removes it) — it is a pinned upstream instrument
+make lemmings     # LEMMINGS (§116): Lemmings (DMA Design / Psygnosis, 1991)
+make lemmingsdisk #   as a C package - all 120 levels with Lemmix's ORIG
+make xt-lemmings  #   mechanics, VGA mode 0Dh / CGA / Hercules, the original's
+make 386-lemmings #   preview and postview in a second foreign mode. The 26
+                  #   data files (and the spray's PARTICLES.DAT) are FETCHED
+                  #   (`tools/getlemmings.py`, pinned SHA-256) and NEVER
+                  #   committed: `make lemmings` needs no fetched data - the
+                  #   package reads its bands at run time and its host checks
+                  #   run against the committed synthetic fixture - while
+                  #   `make lemmingsdisk` needs the fetch and writes four
+                  #   geometries (the 360KB
+                  #   one two graphic sets and 53 levels, LEVELS.TXT saying
+                  #   which). `xt-lemmings` is the 640KB VGA XT with the
+                  #   360KB disk in B: and `386-lemmings` the 386DX with the
+                  #   1.44MB one - machines to LOOK at; the XT's frame rate
+                  #   is MartyPC's (`tests/lemplaymarty.py`, §116.7.4)
 make paccman      # PACCMAN (§91), the C toolchain's FOURTH application:
 make paccmandisk  #   Andre Weissflog's arcade-faithful pacman.c (MIT, pinned
 make xt-paccman   #   at 0f5ec5a) as a second Pac-Man beside §89's assembly
@@ -421,6 +443,15 @@ make ethertest  # THE ETHERNET GATE'S DISK (§72.9): a SYSTEM.CFG that already
                 #   all, and tests/ethernet.py asserts behaviour and never
                 #   speed because the machine under it is not an 8088
 make browsertest # ...and the browser's page disk, for tests/br*.py
+make cdromtest  # THE CD-ROM GATE (§119.7): a 1.44MB system disk whose
+                #   SYSTEM.CFG wants CDROM.DRV (bit 8), and build/cdfix.iso,
+                #   written by tools/os88cdiso.py - which is also the
+                #   REFERENCE for the driver's 8.3 names and handles (its
+                #   `list`). `make cdromtest && python3 tests/cdrom.py`.
+                #   QEMU by name: the one emulator here with a 286-class CPU
+                #   AND an ATAPI drive; CD audio it cannot play (§119.7), so
+                #   `--sim` uses build/cdromsim.img (-DCDSIM_AUDIO, fake audio
+                #   tracks) and `make 386-cdrom` is 86Box's audio CD to LOOK at
 make small    # kern_small and its system disks, into build/smallk/ (the
 make smallapps#   128KB floor machine, docs/history/KERN-SPLIT-PLAN.md). `smallapps` is
               #   the APPS half of it: the same floppies with the SMALL BUILD
@@ -496,6 +527,15 @@ make emu      # THE THIRD KERNEL (§9.11.7): kern_emu, into build/emuk/, plus
               #   the one feature it was built for has been given nothing.
               #   Pair it with the SHIPPED build/apps.img: same API table, same
               #   offsets, so there is no emu apps disk and must not be
+make mega     # KERN_MEGA, the 286+ protected-mode kernel
+              #   (docs/plans/KERN-MEGA-PLAN.md), into build/megak/:
+              #   build/mega.img and mega120.img, its system disks, and
+              #   build/megaapps.img and megaapps120.img, the apps disks
+              #   with each package's kern_mega ARM ($(MEGAPKGS), the same
+              #   source built -DPKG_MEGA, SPEC.md 20.18). Pair mega.img
+              #   with megaapps.img, not the shipped apps disk: the shipped
+              #   Video Player refuses under protected mode. `make
+              #   megapkgs` prints each arm against its shipped build
 make rom      # THE KERNEL IN ROM (SPEC.md 2.10, docs/plans/ROM-PLAN.md): an
 make socketrom#   IBM 5150's five spare sockets, U28-U32 at F4000-FDFFF, as
               #   ONE option ROM, written into build/rom/ as the 40KB window
@@ -663,6 +703,8 @@ lands on a floppy:
 | `DRVDIAG=1` | a **diagnostic line** at the top-left of the loading screen, drawn from IRQ0 while the splash is up - for a machine that stops on `Loading Driver n/N`. `Drs cccc:iiii Fffff Mmm Qqqqq Ttttt` is `drv_boot`'s row and `drv_load_row`'s step (1 entry, 2 mounted, 3 found, 4 claimed, 5 read, 6 checked, 8 calling the driver, 9 returned, F done), the CS:IP and FLAGS the tick interrupted, the PIC mask, row 0's segment and the ISR's own count. **One photograph names the step**, says whether the code is in the BIOS, the kernel or the driver image, and - by whether the count still moves - whether IRQ0 is alive. It paints only on the splash, only with `spl_busy` free, and saves the pen; the shipped kernel is byte-identical |
 | `KBDDIAG=1` | record what the KEYBOARD sent and what the ROM made of it (**SPEC.md §9.8.1**), for a machine with no debugger: every IRQ1 with port 64h before the ROM's `int 09h` and 64h and 60h after it, the BIOS buffer's head and tail either side and the word stored, the PIC's ISR, IRR and IMR, and inside an fsx bracket the same state sampled each tick - a 64-record ring drawn under the menu bar. It is for docs/FIELD-NOTES.md 63, a Pentium 4 whose USB-through-PS/2 keyboard types on the desktop and cannot PAUSE MIDIRack's speaker play, and its three possible pictures say which link broke: no `I` rows inside the bracket, `I` rows whose tail never moves, or a tail that moved and a head that never caught up. The only behaviour it changes is that `kbm_isr` CALLS the ROM's `int 09h` instead of jumping to it. `make kbddiag` builds the four system disks; the shipped kernel is byte-identical, and it cannot be built with `MOUDIAG=1`, which draws in the same place |
 | `NOFDMEDIA=1` | take **SPEC.md 38.10**'s `MEDIA` default out of the Standard File chooser: an app whose user has never chosen a folder opens it where the app was **LAUNCHED** from instead of in `MEDIA` at its drive's root. The default is a nicety rather than a contract, so it is the part of the dialog whose bytes are easy to take back - this knob is how, `t_buildmatrix` keeps it assembling, and `tests/fdlgchoose.py` is verified to fail on it |
+| `PICLOSE=1\|2` | kern_mega only: **LOSE INTERRUPT EDGES on purpose** (docs/plans/KERN-MEGA-PLAN.md 14.64). On the way down of every reflected BIOS call, both 8259s are initialised - ICW1 erases every pending edge - after a window that waits for a byte to be sitting in the 8042, and the masks go back as they were. It is what the Victory 286's BIOS is inferred to do on its reset path, and no emulator here loses an edge by itself (Bochs is a 386 with no reset per call; 86Box rebuilds IRR from line levels). `1` keeps `mega_kwd`, the tick's lost-edge watchdog; `2` compiles it out, which is the 343124b2 kernel on that BIOS: move the pointer through a DOS program's live resume and the mouse AND the keyboard are dead. `tests/megapiclose.py` builds both into private trees and is the A/B |
+| `MEGADIAG=1` | kern_mega only: **put its FIELD READINGS back on the menu bar** (docs/plans/KERN-MEGA-PLAN.md 14.65; `make megadiag` builds the disks into `build/megadiag/`). A shipped kern_mega shows the protected-mode toast at boot (`protected, 286 reset` / `protected, 386 CR0`) and the lines a user acts on - a package closed for faulting, its refusals, the hibernate's - and nothing else; this build adds `mega_tell`'s `NMI`, `RST`, `FDC RESET`, `RFL` and `Q` lines, the DOS trip's `DOSP`, the native floppy's `FD BIOS` and *native floppy off* toasts, and the handoff record's hex (`H ssss:oooo ...`) in place of *Not our handoff record*. Those were how the Victory 286 was debugged off photographs, so a field run that needs one is given this disk. It costs the shipped kern_mega nothing: **-280 `.text`, -920 `.mega`, -42 `.bss`** came out of it, kern_big and kern_small are byte-identical either way, and E9's own lines stay on both arms |
 
 All are stamp-tracked, so changing one rebuilds the kernel. Without that, make
 sees an up-to-date `kernel.bin`, boots the previous configuration, and it reads
@@ -679,9 +721,21 @@ song, a module and a WAV for each; an XT cannot read a 1.44MB disk), `xt-midirac
 §105.11: `xt-sound`'s XT plus a standalone MPU-401, and `386-sound`'s 386
 whose SB16 carries one, each sending MIDI to 86Box's FluidSynth with the
 GeneralUser GS soundfont `make midibank` fetches, and each with `make
-midirackdisk`'s floppy - player, wavetable bank, songs - in B:), `xt-wire`,
+midirackdisk`'s floppy - player, wavetable bank, songs - in B:),
+`xt-xtmp3`, `286-xtmp3`, `386-xtmp3`, `486-xtmp3` and `pentium-xtmp3`
+(XTMP3's ladder, SPEC.md §121.11.5: the tree's sound machines booting `make
+xtmp3field`'s disks, whose `\AUTOSTRT` opens the `-DX3REPORT` build on one
+track and writes `X3REPORT.TXT`, which `tools/x3field.py` reads back), `xt-wire`,
 `286`, `286-525`,
-`286-sound`, the eight `286-525-*` application machines (`-z`, `-word`,
+`286-sound`,
+`286-video` (the mr286 with the Video Player's VGA disk on IDE, `make
+videnchd`), `286-victory` (a Packard Bell Victory 286 as near as 86Box
+comes - vm/286's board at 16 MHz, 4MB and a Paradise PVGA1A), `286-realdmg`
+(the mr286 with RealDMG's hard disk, `make realdmghd GBROMS=<dir>`),
+`286-mega` (kern_mega's mr286, `mega.img` with `megaapps.img`),
+`286-mega-cdrom` and `386-mega-cdrom` (kern_mega with an ATAPI CD-ROM
+holding an audio disc, `make megacdtest`'s disks),
+the eight `286-525-*` application machines (`-z`, `-word`,
 `-cword`, `-runcpm`, `-c64`, `-weave`, `-loom`, `-all` — `vm/286-525` with a
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
@@ -692,7 +746,7 @@ controller, so no XT profile can host one),
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
 `xt-weave`, `386-weave`, `xt-weave-256`, `xt-pixelstein`, `xt-pixelstein-herc`,
 `xt-pixel`, `386-pixel`, `xt-isotron`, `xt-isotron-cga`, `xt-isotron-herc`,
-`xt-isotron-ega`;
+`xt-isotron-ega`, `xt-lemmings`, `386-lemmings`;
 plus `marty` (MartyPC). **`386-ps2` is the only machine here with a PS/2
 mouse** — every other config is `mouse_type = msserial`, which is why §9.9
 shipped and went untested on anything but QEMU for months; it is a Packard
@@ -737,7 +791,7 @@ section 4.3.1 made the wall slice a duty-cycle controller), and
 `xt-isotron`/`-cga`/`-herc`/`-ega` isoTron's (§108.15: copies of
 `xt-excitebike`, `xt-pixelstein`, `xt-pixelstein-herc` and `xt-ega` with
 `isotron360.img`; the EGA one is the only place its same-mode EGA bracket
-meets a real EGA) — the twenty-six that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
+meets a real EGA), and `xt-lemmings`/`386-lemmings` LEMMINGS' (§116.9: `vm/xt-weave` with `lemmings360.img`, `vm/386dx` with `lemmings.img`) — the twenty-eight that put a dedicated floppy in B: instead of the apps disk. `xt-weave` takes the **360KB** Weave
 disk rather than a 3.5" one — it fits in 209 of 354 clusters, the whole
 family on one floppy — so it is where that geometry of it is booted at all,
 and **`xt-weave-256` is the same 4.77MHz XT with 256KB** rather than 640,
@@ -816,7 +870,24 @@ and buttons with their captions inside, in MIDIRack's bevelled look or the
 flat one `apps/os88flat.inc` gives (§20.5.3), with the mono faces left as
 they were — is `.claude/skills/vga-face` (`/vga-face <package>`, **manual
 invocation only**), whose `LESSONS.md` is what MIDIRack's (SPEC.md §105.9.4,
-§105.9.5) and WireFleet's (§114.10) learned.
+§105.9.5) and WireFleet's (§114.10) learned. Building an app whose UI is a
+styled piece of **hardware from the user's mockups** — host-generated art and
+fonts, a colour and a black-and-white theme as role tables, every field one
+band and one blit, cached element keys, and full / mid / compact layouts so
+every adapter gets a face — is `.claude/skills/retro-face`
+(`/retro-face <app> [mockups]`), whose `LESSONS.md` is what CDRack (SPEC.md
+§119.6) learned.
+
+## Shared agent skills
+
+The maintained skills live in `.claude/skills/`; `.agents/skills/` links to
+those same directories for Codex discovery. Claude Code uses `/skill-name`,
+Codex CLI/IDE uses `$skill-name`. Read
+[docs/AGENT-SKILLS.md](docs/AGENT-SKILLS.md) when running a skill: it maps the
+host's tools and explains how native agents follow the shared workflow scripts
+when `Workflow` is unavailable. Keep the skill's lessons, independent review
+stages, authorization gates and final test pass on either host. `vga-face`
+remains manual-only, with matching policy in its `agents/openai.yaml`.
 
 ## Building an app or game in waves
 
@@ -887,14 +958,14 @@ user gives a different workflow. The worked example is
   one pass. Transparent text is a **closed list of six cases** (§6.6.2) and
   `tests/textsites.txt` is the ratchet: a new call site fails the build until it
   is registered with a reason, and the count can only go down. **The sweep is
-  finished** (§6.6.5): the registry stood at 66 sites in 22 files, every one
+  finished** (§6.6.5): the registry stands at 90 sites in 23 files, every one
   with a reason, so a new transparent call is now an argument to win rather
   than a queue to join. (It read 59 in 20 here until the 2026-10-14 merge -
   stale on BOTH sides, and it did not conflict because neither side had
   touched it, because `tools/checkdocs.py` counted the registry against
   CLAUDE.md's sentence alone. It counts BOTH files now, which is what caught
-  the 2026-10-20 merges moving it to 65 and then 66.) It is **76 in 23 files**
-  now, 2026-10-21: `apps/ledger/ledger.asm` forked from `apps/plan/plan.asm`
+  the 2026-10-20 merges moving it to 65 and then 66.) It is **90 in 23 files**
+  now, re-counted at the 2026-10-24 upstream merge: `apps/ledger/ledger.asm` forked from `apps/plan/plan.asm`
   (apps/RETIRED.txt's `building` kind) and brought the same ten sites plan.asm
   itself arrived with, one fork further along.
 - **Three adapters, one binary (§39).** `SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are
@@ -1224,13 +1295,13 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**Twelve images, not nine.** The system and apps disks in four geometries
-each, plus FOUR more that exist at 360KB alone. `build/media360.img` —
+**Thirteen images, not nine.** The system and apps disks in four geometries
+each, plus FIVE more that exist at 360KB alone. `build/media360.img` —
 `BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
 clusters before packages were compressed, so at that geometry it rides a disk
 of its own (§24.4). **It is not on `apps360.img` as well any more, and cannot
 be**: lz4-packed it is 42 clusters and that disk had no room for it.
-**And `office360.img`, `network360.img` and `games360.img` (§24.6)**, which
+**And `office360.img`, `network360.img`, `games360.img` and `emu360.img` (§24.6)**, which
 are the same pressure met with a shape that SCALES: 354 clusters is the
 geometry that runs out first and this project keeps making applications, so
 the answer is a disk per SUBJECT — one category of program at the ROOT of the

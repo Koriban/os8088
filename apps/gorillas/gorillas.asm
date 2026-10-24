@@ -2,7 +2,7 @@
 ; Gameplay adapted from the supplied Microsoft QBasic Gorillas (1990).
 ; Native renderer and fixed-point simulation; no BASIC runtime required.
 %include "os88api.inc"
-OS88_HEADER 'GORILLAS', gr_entry, 1, OS88_STACK_256
+OS88_HEADER 'GORILLAS', gr_entry, 1, OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM
 OS88_ICON16
     dw 0,0x0f00,0x1f80,0x1680,0x1f80,0x3fc0,0x7fe0,0xef70
     dw 0xcf30,0xcf30,0x1f80,0x1980,0x3180,0x73c0,0,0
@@ -412,6 +412,10 @@ gr_layout:
     mov [gr_height], dx
     mov bx, [gr_win]
     call OSAPI_WM_DISPLAY
+    cmp dl, VID_VESA            ; a packed display (SPEC.md 120.5) is the VGA
+    jne .told                   ; family at 8 or 16 bits a pixel, and every
+    mov dx, (4 << 8) | VID_VGA  ; table here is 1 / 2 / 4: the desktop is its
+.told:                          ; sixteen colours and gfx_blit4 takes them
     mov [gr_kind], dl
     mov [gr_depth], dh
     jmp short .scale

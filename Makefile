@@ -57,6 +57,7 @@ NASM  := nasm
 VMPORT ?= off
 QEMUMACH := -machine pc,vmport=$(VMPORT)
 QEMU  := qemu-system-i386
+QMP_SOCK ?= build/qmp.sock
 BUILD := build
 # CC_OVLZ, HOISTED. apps/cc/Makefile.inc owns it and is included ~7,800 lines
 # below, but make expands a rule's PREREQUISITES when the rule is READ, so any
@@ -122,8 +123,9 @@ EXAMPLESIMGS := $(BUILD)/examples.img $(BUILD)/examples720.img \
 OFFICEIMG360  := $(BUILD)/office360.img
 NETWORKIMG360 := $(BUILD)/network360.img
 GAMESIMG360   := $(BUILD)/games360.img
+EMUIMG360     := $(BUILD)/emu360.img
 
-# ...and all sixteen in one list (twelve of upstream's plus this fork's own
+# ...and all fourteen in one list (upstream's thirteen plus this fork's own
 # EXAMPLESIMGS), because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
@@ -132,7 +134,7 @@ GAMESIMG360   := $(BUILD)/games360.img
 SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
-            $(EXAMPLESIMGS)
+            $(EXAMPLESIMGS) $(EMUIMG360)
 
 # 86Box, wherever this box keeps it. It was a bare macOS path, so on Linux
 # every one of the targets below silently pointed at a file that is not there -
@@ -198,6 +200,7 @@ VMEGA := $(CURDIR)/vm/xt-ega
 # cards in it, each on its own monitor window.
 VMMULTI := $(CURDIR)/vm/xt-multimon
 VM286 := $(CURDIR)/vm/286
+VM286VIC := $(CURDIR)/vm/286-victory
 # ...and the same 286 with two 1.2MB 5.25" drives instead of two 3.5" ones
 # (SPEC.md 19). It is the only machine here that can boot that geometry at
 # all: every other AT-class profile is `fdd_type = 35_2hd`, and a 5.25" HD
@@ -260,9 +263,13 @@ VMXTCOVOX := $(CURDIR)/vm/xt-covox
 VMXTWIRE := $(CURDIR)/vm/xt-wire
 VM286SND := $(CURDIR)/vm/286-sound
 VM286VID := $(CURDIR)/vm/286-video
+VM286RDG := $(CURDIR)/vm/286-realdmg
 VM386SND := $(CURDIR)/vm/386-sound
+VM386CD  := $(CURDIR)/vm/386-cdrom
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
+VM486V := $(CURDIR)/vm/486-vesa
+VM486VD := $(CURDIR)/vm/486-vesa-desk
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
 VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
@@ -306,6 +313,16 @@ VM386CWORD := $(CURDIR)/vm/386-c-word
 # substitutes a default and rewrites the config on the way out.
 VMXTPACCMAN := $(CURDIR)/vm/xt-paccman
 VM386PACCMAN := $(CURDIR)/vm/386-paccman
+# The LEMMINGS machines (SPEC.md 116.9, 116.7): vm/xt-lemmings is vm/xt-weave -
+# the 640KB VGA XT, 4.77MHz on the ibmxt86 board - with B: =
+# build/lemmings360.img, and vm/386-lemmings is vm/386dx with B: =
+# build/lemmings.img; each the uuid changed and NOTHING else, for the standing
+# reason that 86Box substitutes a default for an unrecognised key and rewrites
+# the config on the way out. The XT is created UNCONDITIONALLY: the port's
+# decision 7 ships it at whatever rate it measures, and that rate is MartyPC's
+# (PERFORMANCE.md Set 161), not this machine's - 86Box is where it is LOOKED at.
+VMXTLEMMINGS := $(CURDIR)/vm/xt-lemmings
+VM386LEMMINGS := $(CURDIR)/vm/386-lemmings
 # The PIXELSTEIN 3D machines (SPEC.md 97): vm/xt-cga and vm/xt-hercules with
 # B: = build/games360.img - the 360KB disk the game ships on (97.9, the plan's
 # fourth decision) - and the uuid changed, and 640KB on the ibmxt86 board;
@@ -384,9 +401,9 @@ VM386WEAVE := $(CURDIR)/vm/386-weave
 # Weave disk in B: instead of the apps disk, because the apps floppy has no
 # room for WEAVE at 360KB and the everything disk is 1.44MB, which this
 # machine's two 360KB drives cannot read. It is MANUAL EVIDENCE and never a
-# gate (docs/TESTING.md: 86Box has no automation socket, so a session can
-# start one and cannot read the result); the ASSERTION of the same refusal is
-# tests/weaveone.py, under MartyPC.
+# gate (no row launches 86Box; `tools/os88box.py` can script the profile,
+# docs/86BOX.md); the ASSERTION of the same refusal is tests/weaveone.py,
+# under MartyPC.
 VMXTWEAVE256 := $(CURDIR)/vm/xt-weave-256
 
 # VIDEO=cga|herc|vga|ega forces the adapter instead of probing for it (SPEC.md
@@ -799,22 +816,6 @@ endif
 # the profile cannot.
 ifneq ($(BOOTMARK),)
 VIDDEF += -DBOOT_MARK
-endif
-
-# VBEDIAG=1 opens a window fourteen seconds after the desktop settles, drags it
-# DOWN across row 512 and back UP, and stops - with no mouse (SPEC.md 39.29.12).
-#
-# It exists because 86Box takes NO scripted input: no QMP, no socket, and its
-# pointer capture warps the cursor back to centre after every motion event, so
-# an XTEST relative move and the warp cancel exactly (tools/os88box.py measured
-# it). STKDIAG and BOOTMARK are here for the same reason.
-#
-# It drives ui_drag's OWN commit - wm_dmg_vacate / wm_dmg_union / wm_paint_dmg -
-# because that is the arm under suspicion: a FULL repaint (a theme swap, the
-# screen saver) clears the ghost and the DAMAGE repaint does not. A
-# reproduction built on wm_paint_all would prove nothing.
-ifneq ($(VBEDIAG),)
-VIDDEF += -DVBE_DIAG $(VBDARGS)
 endif
 
 # NOPS2=1 leaves SPEC.md 9.9's auxiliary-port probe out of the build entirely,
@@ -1280,6 +1281,14 @@ ifneq ($(NOUNAL),)
 VIDDEF += -DNOUNAL
 endif
 
+# NOVIDEXT=1 assembles kern_big WITHOUT the external renderer hook (SPEC.md
+# 120.3): no VID_VESA kind, no VESA.DRV row, no compare at the planar bodies.
+# The A/B the hook's resident cost is measured against, and the only thing
+# keeping the unhooked arms assembling.
+ifneq ($(NOVIDEXT),)
+VIDDEF += -DNOVIDEXT
+endif
+
 # LDDIAG=1 puts back the loader's four failure reasons (disk error, bad
 # package, too large, refused to start) that a shipped kernel folds into one
 # `Load failed` (files.inc's fm_stattab, kernel size pass 4). A diagnostic:
@@ -1471,6 +1480,64 @@ ifneq ($(KERN_EMU),)
 VIDDEF += -DKERN_EMU
 endif
 
+# KERN_MEGA=1 selects kern_mega (docs/plans/KERN-MEGA-PLAN.md): kern_big
+# switched into 286 PROTECTED MODE once it is up. ADDED to KERN_BIG the way
+# KERN_EMU is, for KERN_EMU's reason - every `%ifdef KERN_BIG` still applies.
+# It is a KNOB for now rather than a product: it is in $(KNOBS) and is NOT
+# exempted from -DKERN_KNOB below, so guard 1 does not bind it while it is
+# brought up and guard 2 (the 64KB segment) still does. `make mega` builds it
+# into build/megak/ and nothing under build/ that `all` ships is touched.
+ifneq ($(KERN_MEGA),)
+VIDDEF += -DKERN_MEGA
+endif
+
+# MEGATRAP=1 is kern_mega's TRAP CENSUS (KERN-MEGA-PLAN 10.3, track 4): every
+# #GP writes one line to port E9 - error code, CS:IP, DS, ES and the name of
+# the image CS runs in - before mega_gpfix, mega_gpw or mega_null0 completes
+# it. Those fixups are correct and a fault apiece, so a site in a loop is a
+# slow program that looks like a working one; tools/megatraps.py ranks the
+# lines. Meaningful only with KERN_MEGA (mega_fault is kern_mega's); `make
+# megatrap` builds the disk into build/megatrap/, so build/mega.img is not it.
+ifneq ($(MEGATRAP),)
+VIDDEF += -DMEGA_TRAPLOG
+endif
+
+# PICLOSE=1 makes kern_mega LOSE INTERRUPT EDGES the way the Victory 286's
+# BIOS is inferred to (KERN-MEGA-PLAN 14.63, 14.64): on the way down of every
+# reflected BIOS call it initialises both 8259s - ICW1 erases every pending
+# edge - and puts the masks back as they were, so nothing downstream sees it.
+# No emulator here loses an edge by itself (Bochs is a 386 with no reset per
+# reflection; 86Box's ICW1 re-derives IRR from the line levels), so this is
+# how a byte stranded in the 8042 is made to happen on purpose. PICLOSE=2 is
+# the same with mega_kwd, the tick's lost-edge watchdog, compiled OUT - the
+# A/B that goes red. Meaningful only with KERN_MEGA; a private tree
+# (tools/os88build.py, `tree("PICLOSE=1", targets=("mega.img",))`) is how
+# tests/megapiclose.py builds both.
+# MEGADIAG=1 puts back kern_mega's FIELD READINGS (KERN-MEGA-PLAN 14.65): the
+# menu-bar lines mega_tell drew from interrupt-time notes - NMI, RST (the
+# floppy's BDA bytes across a 286 reset), FDC RESET, RFL (the IRQ reflections'
+# rate and cost) and Q (the PicoMEM's queue) - the DOS trip's DOSP line, the
+# native floppy's first-fallback and switched-off toasts, and the handoff
+# record's hex in place of "Not our handoff record". The shipped kern_mega
+# shows the protected-mode toast at boot and the user-facing lines only. E9's
+# own lines stay on both arms; the copies of the menu-bar lines it carried go
+# with them. `make megadiag` builds the disks into
+# build/megadiag/. Meaningful only with KERN_MEGA, so it is passed only there
+# (kernel.asm refuses it alone): `make megadiag`'s tree builds a kern_big
+# beside its kern_mega, as every mega.img tree does, and that one is plain.
+ifneq ($(MEGADIAG),)
+ifneq ($(KERN_MEGA),)
+VIDDEF += -DMEGA_DIAG
+endif
+endif
+
+ifneq ($(PICLOSE),)
+VIDDEF += -DPIC_LOSE
+ifeq ($(PICLOSE),2)
+VIDDEF += -DNO_KBDWD
+endif
+endif
+
 # REDRAWFULL=1 puts the menu bar, the dock and the Disk window's command
 # path back on their pre-SPEC.md 12.9/30.3/22.13 paths: every bar redraw is a
 # full one (fill, logo, name, every title and the clock), every changed dock
@@ -1526,32 +1593,6 @@ endif
 # the whole of what NOSPLIT got wrong.
 ifneq ($(NOSEAMCUT),)
 VIDDEF += -DNOSEAMCUT
-endif
-
-# NOVBEROW=1 compiles the BANK TEST out of VBROW/VBROWR/VBROWCS (SPEC.md
-# 39.29.10): the row-advance macros go back to a bare `add`, which is what
-# every adapter but VBE 0104h needs. It is the A/B SPEC.md 39.29.3 asks for
-# and says must be MEASURED rather than asserted - and the measurement is
-# PERFORMANCE.md Set 161, which killed the design it was testing: the `jnc`
-# past the bank call is TAKEN 511 times out of 512, a taken Jcc on an 8088 is
-# 16 clocks plus a prefetch flush, and vga_solid_rect walked three of its arms
-# over every row - 22 cycles a row, 11 to 25% on every rect primitive, paid by
-# machines with no VESA card.
-#
-# **SO THE RECT PRIMITIVES DO NOT USE VBROW ANY MORE** (SPEC.md 39.29.10.5,
-# PERFORMANCE.md Set 162): they are CUT at the bank boundary once per
-# primitive and their row advances are bare adds (`VBSTEP`). This knob now
-# A/Bs the SIX sites that are left - gfx_blitp, gfx_save, gfx_restore,
-# font_char, ico_pass and cur_draw, whose output position depends on more than
-# the rect and which therefore cannot be cut (39.29.10.6) - and it is still
-# the only thing keeping the un-banked form of those assembling.
-#
-# A STRADDLE CUT HAS ITS OWN GATE and it is not this knob: tests/vbeident.py
-# pokes [vbe_cutrow] so the cut fires on mode 12h, where it must be
-# pixel-neutral, because no emulator here can enter the banked mode at all.
-# IN $(VIDSTAMP) AND $(KNOBS), on the day it was added - NOSPLIT's lesson.
-ifneq ($(NOVBEROW),)
-VIDDEF += -DNOVBEROW
 endif
 
 # NOFDMEDIA=1 takes SPEC.md 38.10's MEDIA default out of the Standard File
@@ -1800,7 +1841,7 @@ OS88PKGB := python3 tools/os88pkg.py $(if $(PKGZ),--compress-if=$(PKGZBFMT))
 # stamp's name carries a checksum of it, so adding a name rebuilds the set.
 # TAKING ONE OFF does not rebuild that package (its rule no longer names the
 # stamp): `rm build/<pkg>.o88` once, by hand.
-LZBPKGS := artful audio browser calc chart gorillas telnet thewire cyclone dotdel missile sheet solitair \
+LZBPKGS := artful audio browser calc chart gorillas telnet thewire wirechat cyclone dotdel missile sheet solitair \
            tamegram tank texpad wireball wireflet smallapp/calc smallapp/tank
 PKGZBSTAMP := $(BUILD)/.pkgzb$(if $(PKGZ),-$(PKGZ)-$(PKGZBFMT))-$(shell printf '%s' '$(LZBPKGS)' | cksum | cut -d' ' -f1)
 
@@ -2053,13 +2094,13 @@ endif
 # BUILD on api-abi. KERN_SMALL was the sharp one: `make KERN_SMALL=1` is the
 # second build CLAUDE.md asks for after every change, and it exited 1.
 KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
-                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOVBEROW NOFDMEDIA NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
+                             KFZ DIRW1 INSTRO KEEPH STRAD DIRTYRAM HEAPCOMPACT HEAPPARK HEAPPARKLK FDDPROBE FDDABSENT REDRAWFULL NOSPLIT NOSEAMCUT NOFDMEDIA NOSUOCCL SNDSNIFF RAMKB DRAGCACHE FATWNONE FATWGATE \
                              SNAPAUDIT SCROLLROW QUANTUM GFXAUDIT \
                              CURFIX \
                              FONT INSTCHUNK NOPICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
-                             BOOTPROF STKDIAG VBEDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
+                             BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL KERN_EMU FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
+                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -2150,7 +2191,7 @@ endif
 # for and what a knob build has to announce.
 empty :=
 space := $(empty) $(empty)
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOVBEROW),-nvr$(NOVBEROW))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(VBEDIAG),-vbd$(VBEDIAG))$(if $(VBDARGS),-vba$(subst $(space),,$(VBDARGS)))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -2247,18 +2288,18 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
               drivers/thmpal/thmrows.inc
 
-.PHONY: stkdiag kbddiag small emu kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
+.PHONY: stkdiag kbddiag small emu mega kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 286-video 386-sound 486 486-video pentium \
+        286-sound 286-video 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
         stories zdisk ztest zh zhboot zcheck zgfx zpic zgfxpic zscreens xt-z 386-z \
         worddisk wordcheck xt-word 386-word \
         scribe scribedisk \
-        cc-note chello covl pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
+        cc-note chello covl cfsx pkgrun pkgbig pkgfmt cword cworddisk 386-c-word runcpm runcpmdisk \
         paccman paccmandisk pmcbandbench xt-paccman 386-paccman \
         xt-pixelstein xt-pixelstein-herc xt-pixel 386-pixel \
         xt-isotron xt-isotron-cga xt-isotron-herc xt-isotron-ega \
@@ -2267,11 +2308,12 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         allapps usb usb-emu iso live burn rcbandbench \
         paccman paccmandisk pmcbandbench xt-paccman \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
-        apple2 apple2disk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
+        apple2 apple2disk realdmgdisk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
         xt-apple2 286-apple2 \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
+        lemmings lemmingsdisk lemmings-data lembench xt-lemmings 386-lemmings \
         checkdocs test-fast test-full test-soak clean clean-cc clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -2287,7 +2329,7 @@ WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(PLANPKG) $(LEDGERPKG) \
      $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
      $(BUILD)/hello.o88 $(BUILD)/video.o88 \
-     $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 \
+     $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 $(BUILD)/realdmg.o88 \
      $(BUILD)/livepayload.txt \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
      $(BUILD)/doscore.bin \
@@ -3267,14 +3309,6 @@ DRIVERS += $(BUILD)/hddtool.drv
 # because SPEC.md 41.11 took the whole feature out of that kernel and nothing
 # in it can name, read or load the file
 DRIVERS += $(BUILD)/xmem.drv
-# ...and VBE.DRV (SPEC.md 39.29), an overlay for the same reasons and on the
-# same terms: no drv_tab row, no Drivers-page tick, no SYSTEM.CFG bit. Where
-# XMEM's boot sniff decides whether to read the file, this one is read by the
-# ONE page that asks - Control Panel's Display page, which is itself loaded
-# from the system disk - so a machine that never opens it never touches this.
-# kern_small filters it out with the rest ($(SMALLDRIVERS)): it cannot load a
-# .DRV of any kind.
-DRIVERS += $(BUILD)/vbe.drv
 # ...and the animated screen saver (SPEC.md 79), which is an overlay for the
 # same reasons and rides every KERN_BIG disk the same way: no drv_tab row, no
 # Drivers-page tick, no SYSTEM.CFG bit of its own. blank.inc reads it when the
@@ -3305,6 +3339,15 @@ DRIVERS += $(BUILD)/usbmouse.drv
 # so a disk that carries it costs a machine with no board one directory slot
 # and nothing read. kern_big's alone, like every row past the parallel link
 DRIVERS += $(BUILD)/ems.drv
+# ...and SPEC.md 119's CDROM.DRV, an ATAPI CD-ROM: a drv_tab row with
+# SYSTEM.CFG bit 8, not wanted by default (attach selects a device on every IDE
+# channel it probes). kern_big's alone, and refused below a 286 at attach
+DRIVERS += $(BUILD)/cdrom.drv
+# VESA.DRV - the packed-pixel display's renderer (SPEC.md 120). On every
+# kern_big disk for USBMOUSE.DRV's reason: a tick on the Drivers page is how
+# it is wanted, and the tick needs the file to be there. kern_small filters
+# it back out with the rest ($(SMALLDRIVERS)).
+DRIVERS += $(BUILD)/vesa.drv
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -3349,6 +3392,21 @@ ifeq ($(KERN_SMALL),)
 HMAIMG = $(KMODDIR)/coldhma.sys
 DRIVERS += $(HMAIMG)
 endif
+
+# --- ...and the 360KB SYSTEM DISK's, which is that set less CDROM.DRV --------
+# (SPEC.md 119.2, 119.6.7). The driver refuses an XT's 8-bit bus at attach,
+# and the 360KB system disk is the XT's - which is why CDRack is not on it
+# either. It came off when SOUND.DRV's stereo and 16-bit streams (34.5.5)
+# took the disk's last free cluster: 706 of 706, so a Control Panel save of a
+# new SYSTEM.CFG, or any SYSTEM\APPDATA write, had nowhere to go. Its 11
+# clusters are the room. DERIVED, and guarded: a filter-out that matches
+# nothing is silent, so the day CDROM.DRV leaves $(DRIVERS) or is renamed this
+# stops the build rather than quietly putting it back. RECURSIVE for
+# $(DRIVERS)' own reason ($(KMODS) reads $(KMODDIR) at the recipe).
+DRIVERS360 = $(if $(filter $(BUILD)/cdrom.drv,$(DRIVERS)),,$(error \
+    DRIVERS360 filters $(BUILD)/cdrom.drv out of DRIVERS and it is not \
+    there - SPEC.md 119.6.7's omission now matches nothing))$(filter-out \
+    $(BUILD)/cdrom.drv,$(DRIVERS))
 
 # --- ...and what the EMULATOR disks carry on top (SPEC.md 9.11.7) -------------
 # $(DRIVERS) PLUS the absolute pointer, and that direction is the point: this
@@ -3400,6 +3458,18 @@ EMUDIR := $(BUILD)/emuk
 SYSAPPS := $(BUILD)/taskmgr.o88 $(BUILD)/thewire.o88 $(BUILD)/rlapply.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
+# --- ...and INSTALL in the ROOT (SPEC.md 117.6) --------------------------------
+# The setup wizard: the first thing a person looking at a new system disk
+# should see, and on the disk the install copies FROM - so an installed
+# machine carries C:\INSTALL.O88 too, which is how the next release's upgrade
+# is found again. A plain path is the root to os88disk.py. kern_big's system
+# disks only: kern_small has no driver layer and so no HDD.DRV to switch on
+# (SPEC.md 51.0, 24.5) - its recipes never name this variable, and a
+# filter-out of something no list contains would be the no-op SPEC.md 24.5
+# warns about. DEFINED HERE for $(SYSAPPS)'s reason: a prerequisite list is
+# expanded where the rule is read.
+SYSINST := $(BUILD)/install.o88
+
 # --- ...and THE STICKY APPS in STIKAPPS/ (SPEC.md 110) --
 # A widget belongs to the BOOT volume - the desktop configuration that
 # relaunches it is that volume's SYSTEM.CFG, and its row names a path on it -
@@ -3413,6 +3483,17 @@ SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 # the figure after.
 STIKAPPS := $(BUILD)/deskcal.o88 $(BUILD)/stiknote.o88 $(BUILD)/deskclok.o88
 STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
+
+# SYSTEM TOOLS (SPEC.md 118.10): System Check reads the volume the machine
+# booted from and judges it against the release it was BUILT with, so it
+# rides the system disks - the install's system phase writes it into C:\SYSTEM
+# beside the kernel it describes, and every keep-install replaces it - and
+# the live USB image. Threaded explicitly, STIKAPPS' way and for its reason:
+# not into $(SYSAPPSARGS)'s gate disks, not onto an apps disk, and not onto
+# kern_small's or kern_emu's images, neither of which installs to a hard disk
+# (the browser's live image filters it back out, LIVENOTOOLS below).
+SYSTOOLS := $(BUILD)/syscheck.o88
+SYSTOOLSARGS := $(addprefix SYSTEM:,$(SYSTOOLS))
 
 # ...and STICKY NOTE'S NOTES (SPEC.md 110.13.1): a note is a plain .TXT in
 # SYSTEM\APPDATA\NOTES on the boot volume, and the folder SHIPS, pre-sized -
@@ -3903,6 +3984,32 @@ $(BUILD)/rlapply.bin: apps/rlapply/rlapply.asm apps/os88api.inc \
 $(BUILD)/rlapply.o88: $(BUILD)/rlapply.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/rlapply.bin -o $@
 
+# SYSTEM CHECK (SPEC.md 118). Its MANIFEST is the release it judges a volume
+# against: every file the system disk carries in the root, SYSTEM\ and
+# STIKAPPS\ - the kernel, $(DRIVERS360) (modules, BOOTHD.SYS and COLDHMA.SYS
+# among them), $(SYSAPPS), $(STIKAPPS) - sized and summed AS STORED, from the
+# disk's own inputs, since the image depends on SYSCHECK.O88 (SPEC.md 118.2.1).
+# t_sysman holds it to every built system disk. $(DRIVERS360) and not
+# $(DRIVERS): the manifest is what EVERY geometry carries (118.2), and the
+# 360KB disk leaves CDROM.DRV off (SPEC.md 119.6.7).
+$(BUILD)/syscheck_man.inc: $(KERNFILE) $(DRIVERS360) $(SYSAPPS) $(STIKAPPS) \
+                           apps/syscheck/retired.txt tools/os88sysman.py \
+                           tools/os88drv.py tools/os88mod.py tools/os88lz.py | $(BUILD)
+	python3 tools/os88sysman.py --kernel $(KERNFILE) \
+	        --retired apps/syscheck/retired.txt -o $@ \
+	        $(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS)
+
+$(BUILD)/syscheck.bin: apps/syscheck/syscheck.asm apps/syscheck/scan.inc \
+                       apps/syscheck/ui.inc apps/syscheck/out.inc \
+                       apps/syscheck/choose.inc \
+                       apps/os88api.inc apps/os88ui.inc apps/os88dec.inc \
+                       apps/os88rseq.inc $(BUILDINC) $(BUILD)/syscheck_man.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/syscheck/syscheck.asm
+	@echo "syscheck: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/syscheck.o88: $(BUILD)/syscheck.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/syscheck.bin -o $@
+
 $(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
                        apps/os88type.inc apps/os88ui.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fontview/fontview.asm
@@ -3910,6 +4017,22 @@ $(BUILD)/fontview.bin: apps/fontview/fontview.asm apps/os88api.inc \
 
 $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/fontview.bin -o $@
+
+# Mixer ships on the apps disks; the quick slider lives in SOUND.DRV.
+# CDRACK.O88 (SPEC.md 119.6) stays on the roomy system disks and live media,
+# beside CDROM.DRV. The 360KB disk targets the XT's 8-bit bus, which the
+# driver refuses (119.2), and the 720KB apps disk has no room for CDRack.
+SYSOPTIONAL := $(if $(KERN_SMALL),,$(BUILD)/cdrack.o88)
+SYSOPTIONALARGS := $(addprefix SYSTEM:,$(SYSOPTIONAL))
+.PHONY: mixer
+mixer: $(BUILD)/mixer.o88
+$(BUILD)/mixer.bin: apps/mixer/mixer.asm apps/os88mixui.inc apps/os88gfx.inc \
+                    apps/os88dec.inc apps/os88ui.inc apps/os88api.inc \
+                    drivers/sound/sndpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error \
+		-I apps/ -I drivers/sound/ -o $@ apps/mixer/mixer.asm
+$(BUILD)/mixer.o88: $(BUILD)/mixer.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/mixer.bin -o $@
 
 # ...AND A STAMP FILE, for exactly VIDSTAMP's and DSSTAMP's reason. NOPICOMEM,
 # PM_BASE and PM_SB_PORT change the command line and no source, so without
@@ -3920,7 +4043,8 @@ $(BUILD)/fontview.o88: $(BUILD)/fontview.bin tools/os88pkg.py $(PKGZSTAMP)
 SNDSTAMP := $(BUILD)/.sound-$(if $(NOPICOMEM),nopm,pm)$(if $(PM_BASE),-b$(PM_BASE))$(if $(PM_SB_PORT),-s$(PM_SB_PORT))
 
 $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
-                    drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
+                    drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
+                    drivers/sound/volume.inc apps/os88mixui.inc apps/os88gfx.inc apps/os88dec.inc \
                     drivers/os88drv.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(SNDDEF) -I drivers/sound/ -I drivers/ -I apps/ \
 		-o $@ drivers/sound/sound.asm
@@ -3945,16 +4069,15 @@ $(BUILD)/xmem.bin: drivers/xmem/xmem.asm drivers/os88drv.inc apps/os88api.inc ap
 $(BUILD)/xmem.drv: $(BUILD)/xmem.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/xmem.bin -o $@
 
-# VBE mode 0104h, 1024x768x16 planar (SPEC.md 39.29). Same shape as xmem above
-# and loaded the same way - DRVC_OVL, which the kernel deliberately does not
-# know, so nothing can load it but kernel/vbe.inc's own vbe_caps.
-$(BUILD)/vbe.bin: drivers/vbe/vbe.asm drivers/os88drv.inc apps/os88api.inc \
-                  | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/vbe/vbe.asm
-	@echo "vbe:    $(call FILESIZE,$@) bytes"
+# VESA.DRV - the external renderer for a VBE card (SPEC.md 120). kernel/vxabi.inc
+# is SHARED AS SOURCE with kernel/vidext.inc, vmmabi.inc's shape, hence the
+# -I kernel/. An OVERLAY with a drv_tab row, like VMMOUSE.DRV.
+$(BUILD)/vesa.bin: drivers/vesa/vesa.asm drivers/os88drv.inc apps/os88api.inc kernel/vxabi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -I kernel/ -o $@ drivers/vesa/vesa.asm
+	@echo "vesa:   $(call FILESIZE,$@) bytes"
 
-$(BUILD)/vbe.drv: $(BUILD)/vbe.bin tools/os88drv.py $(PKGZSTAMP)
-	$(OS88DRV) $(BUILD)/vbe.bin -o $@
+$(BUILD)/vesa.drv: $(BUILD)/vesa.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/vesa.bin -o $@
 
 # The animated screen saver (SPEC.md 79). An OVERLAY for XMEM.DRV's reason and
 # one of its own: a screen saver is mostly DATA - a sine table, four mode state
@@ -4252,15 +4375,17 @@ $(BUILD)/boothd.bin: boot/boothd.asm kernel/kernel.asm $(KERNFILE) | $(BUILD)
 # just loaded by it and copies it into the HMA, so the shipped .DRV stays the
 # org-0 file it always was and a machine with no HMA reads nothing new. The
 # .hma.bin copies ship nowhere; they exist for the diff.
-DRV_HMA_ORG := 0xE000
+DRV_HMA_ORG := 0xC000
 HMADRV := sound hdd net
+$(addprefix $(BUILD)/,$(addsuffix .hma.bin,$(HMADRV))): Makefile
 $(BUILD)/coldhma.sys: $(KERNFILE) boot/osrom.asm tools/os88rom.py tools/os88romfix.py \
                       $(foreach d,$(HMADRV),$(BUILD)/$(d).bin $(BUILD)/$(d).hma.bin $(BUILD)/$(d).drv)
 	python3 tools/os88rom.py hma --build $(BUILD) --out $(BUILD) "--defines=$(VIDDEF)" \
 		"--drivers=$(HMADRV)" --drv-org=$(DRV_HMA_ORG)
 
 $(BUILD)/sound.hma.bin: drivers/sound/sound.asm drivers/sound/sb.inc drivers/sound/mpu.inc drivers/sound/covox.inc \
-                        drivers/sound/picomem.inc drivers/sound/sndpkg.inc \
+                        drivers/sound/picomem.inc drivers/sound/sndpkg.inc drivers/sound/mixer.inc \
+                    drivers/sound/volume.inc apps/os88mixui.inc apps/os88gfx.inc apps/os88dec.inc \
                         drivers/os88drv.inc apps/os88api.inc $(BUILD)/sound.bin
 	$(NASM) -f bin -w+error $(SNDDEF) -DDRV_ORG=$(DRV_HMA_ORG) -I drivers/sound/ \
 		--before "[map symbols $(BUILD)/sound.hma.map]" \
@@ -4317,7 +4442,7 @@ HDBLOBDEF = $$(python3 -c 'import sys; m = open(sys.argv[1], "rb").read(); asser
 $(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi.inc \
                   drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
                   drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
-                  drivers/hdd/inst.inc drivers/hdd/cppage.inc \
+                  drivers/hdd/inst.inc drivers/hdd/cppage.inc drivers/hdd/ipkg.inc \
                   drivers/os88drv.inc apps/os88api.inc apps/os88rseq.inc \
                   $(BUILD)/mbr.bin | $(BUILD)
 	$(NASM) -f bin -w+error $(DRVDEF) $(HDBLOBDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) \
@@ -4429,6 +4554,29 @@ $(BUILD)/ems.bin: drivers/ems/ems.asm drivers/os88drv.inc apps/os88api.inc | $(B
 
 $(BUILD)/ems.drv: $(BUILD)/ems.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ems.bin -o $@
+
+# CDROM.DRV - an ATAPI CD-ROM: ISO 9660 as a read-only volume, and its audio
+# (SPEC.md 119). cdpkg.inc is the package door, shared with apps/cdrack
+CDROM_SRC := drivers/cdrom/cdrom.asm drivers/cdrom/cdpkg.inc \
+             drivers/cdrom/atapi.inc drivers/cdrom/cddisc.inc \
+             drivers/cdrom/cdiso.inc drivers/cdrom/cdaudio.inc \
+             drivers/cdrom/cdico.inc
+$(BUILD)/cdrom.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
+	@echo "cdrom: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/cdrom.bin -o $@
+
+# ...and the GATE'S build of it, never shipped (usbmouse's CH375SIM shape):
+# -DCDSIM_AUDIO gives QEMU's one-track data disc three audio tracks, so
+# tests/cdrom.py can drive TRACKnn.CDA and CDRack there (SPEC.md 119.7)
+$(BUILD)/cdromsim.bin: $(CDROM_SRC) drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DCDSIM_AUDIO -I drivers/cdrom/ -I drivers/ -I apps/ -o $@ $<
+
+$(BUILD)/cdromsim/CDROM.DRV: $(BUILD)/cdromsim.bin tools/os88drv.py $(PKGZSTAMP)
+	@mkdir -p $(BUILD)/cdromsim
+	$(OS88DRV) $(BUILD)/cdromsim.bin -o $@
 
 # RAMDISK.DRV - a DRVC_FILE volume with no hardware behind it (SPEC.md 62.9),
 # and the FILE REDIRECTOR'S HARNESS: every branch site the redirector added to
@@ -4637,10 +4785,14 @@ $(BUILD)/os88net.com: drivers/net/os88sfx.asm $(BUILD)/os88net.lz \
 	$(NASM) -f bin -w+error -I $(BUILD)/ -o $@ $<
 	@echo "os88net.com: $(call FILESIZE,$@) bytes packed - self-extracting, runs on DOS"
 
-$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+# A package-list edit must repack even when its files predate the image.
+$(IMG) $(IMG120) $(IMG720) $(IMG360) \
+$(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360): Makefile
+
+$(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 720KB 3.5" DD disk (SPEC.md 19). It is the geometry the machines
@@ -4652,10 +4804,10 @@ $(IMG): $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNO
 #
 # Same boot sector as the 360KB disk (see boot360.bin above): 9 spt, 2 heads,
 # 80 cylinders instead of 40, and the boot sector never counts cylinders.
-$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # The 1.2MB 5.25" HD disk (SPEC.md 19). The geometry of the machine the 720KB
@@ -4679,10 +4831,10 @@ $(IMG720): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(
 # Its OWN boot sector, unlike the pair above it: 15 spt is a different track
 # shape, and boot/boot.asm's whole knowledge of a disk is SPT and HEADS. See
 # build/boot120.bin's rule for why that is three sectors and not four.
-$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
+$(IMG120): $(BUILD)/boot120.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSOPTIONAL) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(BUILD)/boot120.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(SYSVIDARGS) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # ETHERTEST - the system disk with a SYSTEM.CFG that already asks for the
@@ -4771,46 +4923,178 @@ $(BUILD)/vmmouse.img: $(KERNEL_SRC) $(KERNEL_INC) $(EMUDRIVERS) $(SYSAPPS) $(SYS
 		$(EMUDRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/vmmcfg/system.cfg
 
-# VBEOS - THE SYSTEM DISK THAT BOOTS STRAIGHT INTO VBE 1024x768 (SPEC.md
-# 39.29.8.2). ethertest's and vmmousetest's shape, one setting along: a
-# SYSTEM.CFG whose VM record already names VID_VBE, so the machine reaches a
-# 1024x768 desktop with no Control Panel click.
-#
-# IT EXISTS BECAUSE 86Box TAKES NO SCRIPTED INPUT. There is no QMP and no
-# socket; the only things this host can do to a running 86Box are start it,
-# wait, and look. So "switch to VBE" cannot be driven - it has to be a
-# property of the disk, exactly as "the NIC is up" is for ethertest.
-#
-# The VM record is `key(2) ver len data` like every other: version 2, three
-# bytes, and the first is a VID_* KIND and not a bitmap (drv_cfg's table,
-# kernel/driver.inc). 4 is VID_VBE; the other two are 39.19's arrangement
-# bytes, left at Single/0. A machine with no VESA BIOS REFUSES this and boots
-# VGA, which is drv_boot's own rule and not something this disk arranges.
-$(BUILD)/vbecfg/system.cfg: | $(BUILD)
-	@mkdir -p $(BUILD)/vbecfg
+# VESATEST - THE PACKED-PIXEL DISPLAY'S GATE DISK (SPEC.md 120.9): ether360.img's
+# shape with a SYSTEM.CFG whose driver word has BIT 9 set, VESA.DRV's
+# (drv_cfgbit in kernel/driver.inc, which is why that file is the
+# prerequisite: the bit moved from 8 when CDROM.DRV took 8, and a cfg
+# with no prerequisite kept asking for the CD-ROM)
+# (drv_cfgbit), so the desktop comes up on the VBE before the first paint and
+# tests/vesa.py reads state and pixels instead of clicking. The SHIPPED kernel
+# and the SHIPPED driver, on a 1.44MB disk because the row drives a 1024x768
+# screen and nothing here depends on the geometry. QEMU by name: its standard
+# VGA carries the VBE BIOS, and MartyPC and the 86Box XTs have none.
+$(BUILD)/vxcfg/system.cfg: kernel/driver.inc | $(BUILD)
+	@mkdir -p $(BUILD)/vxcfg
 	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
-	  (3).to_bytes(2,'little') + b'VM' + bytes([2,3]) + \
-	  bytes([4,0,0]) + b'\0\0')" > $@
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 9).to_bytes(2,'little') + b'\0\0')" > $@
 
-$(BUILD)/vbeos.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vbecfg/system.cfg tools/os88disk.py
+$(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
-		$(BUILD)/vbecfg/system.cfg
+		$(BUILD)/vxcfg/system.cfg
 
-# ...and the machine that boots it. 86Box is the ONLY emulator here that can
-# enter 0104h at all (SPEC.md 39.29.8): QEMU's Bochs BIOS advertises the mode
-# and cannot map the window. tools/os88box.py supplies the display 86Box has
-# no headless mode for, and takes the picture.
-.PHONY: vbebox
-vbebox: $(BUILD)/vbeos.img
-	@test -x "$(BOX)" || { echo "86Box not found - set BOX="; exit 1; }
-	python3 tools/os88box.py vm/vbeos --shot $(BUILD)/vbebox.png
+.PHONY: vesatest
+vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img $(BUILD)/vesablit4.img $(BUILD)/vesafsx.img $(BUILD)/vesapref.img
+	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 120.9);"
+	@echo "          build/vesa8.img the same with a 'VM' class byte asking 800x600x8;"
+	@echo "          build/vesablitd.img the same plus \\AUTOSTRT opening B:CITY.PCX,"
+	@echo "          and build/vxpics.img that B: - PiXEL and the picture (120.7)."
+	@echo "          build/vesablit4.img the same plus \\AUTOSTRT opening WireBall (120.3)."
+	@echo "          build/vesafsx.img opens Gorillas and build/vesapref.img Solitaire (120.5)."
+	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py; vesablit4.py; vesafsx.py; vesapref.py"
 
-.PHONY: vmmousetest
-vmmousetest: $(BUILD)/vmmouse.img
-	@echo "vmmousetest: build/vmmouse.img - VMMOUSE.DRV already wanted."
-	@echo "             Run it with: python3 tests/vmmouse.py"
+# ...and the depth blit's pair (SPEC.md 120.7, 106.27): the vesa.img system
+# disk with one more file, \AUTOSTRT\CITY.LNK - a link to the DOCUMENT
+# CITY.PCX on B: (SPEC.md 26.10: a link to a document starts that document's
+# program) - and a B: of its own with PiXEL and the picture at its root, so
+# the machine boots straight into PiXEL showing a 256-colour PCX on the
+# 1024x768x16 desktop and tests/vesablitd.py reads the canvas back with no
+# UI driven at all
+$(BUILD)/vxbd/CITY.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'CITY.PCX' --vol B
+
+$(BUILD)/vesablitd.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/CITY.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/CITY.LNK
+
+# ...and the 4-bit blit's (SPEC.md 120.3, tests/vesablit4.py): the same disk
+# with \AUTOSTRT\WBALL.LNK, a link to WIREBALL.O88 on the apps disk, whose
+# front page is one 416x104 OSAPI_GFX_BLIT4 of checked-in art
+$(BUILD)/vxbd/WBALL.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'GAMES\WIREBALL.O88' --vol B
+
+$(BUILD)/vesablit4.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/WBALL.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/WBALL.LNK
+
+# ...the fullscreen bracket's (SPEC.md 120.5, tests/vesafsx.py): Gorillas,
+# whose Alt+Enter enters a bracket from any state and which reads
+# OSAPI_FSX_CAPS's DL for the mode it takes; and the window preference's
+# (tests/vesapref.py): Solitaire, whose table is as wide as its OS88_PREFER's
+# VGA row says
+$(BUILD)/vxbd/GORIL.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'GAMES\GORILLAS.O88' --vol B
+
+$(BUILD)/vxbd/SOLIT.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'GAMES\SOLITAIR.O88' --vol B
+
+$(BUILD)/vesafsx.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/GORIL.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/GORIL.LNK
+
+$(BUILD)/vesapref.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/SOLIT.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/SOLIT.LNK
+
+$(BUILD)/vxpics.img: $(BUILD)/pixel.o88 apps/pixel/samples/CITY.PCX tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 apps/pixel/samples/CITY.PCX $(BUILD)/pixel.o88
+
+# VESABENCH (SPEC.md 120.8, the plan's S7): where a packed display's time
+# goes - one BIOS window read, fills, the depth blit against the nibble one,
+# a text row - run and SAVED by the package itself on its first paint, so an
+# 86Box machine with no automation needs nobody to click. The same two-disk
+# shape as the depth gate: vesabench.img is vesa.img plus an \\AUTOSTRT link
+# to VESABNCH.O88 on B: (vesabnc8.img the same with the 800x600x8 class), and
+# vxbench.img is that B:. tests/vesabench.py runs it on QEMU and reads
+# VESABNCH.TXT back off the B: image with mtools; vm/486-vesa is the 86Box
+# 486 with a Cirrus 5428 the numbers are TAKEN on (docs/reports/VESA-BENCH-*)
+$(BUILD)/vesabnch.bin: tests/vesabench/vesabench.asm tests/benchlib.inc apps/os88api.inc tools/benchlint.py | $(BUILD)
+	python3 tools/benchlint.py tests/vesabench/vesabench.asm
+	$(NASM) -f bin -w+error -I apps/ -I tests/ -o $@ tests/vesabench/vesabench.asm
+	@echo "vesabnch: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/vesabnch.o88: $(BUILD)/vesabnch.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vesabnch.bin -o $@
+
+$(BUILD)/vxbd/VESABNCH.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/vxbd
+	python3 tools/os88lnk.py $@ 'VESABNCH.O88' --vol B
+
+$(BUILD)/vesabench.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vxcfg/system.cfg $(BUILD)/vxbd/VESABNCH.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vxcfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/VESABNCH.LNK
+
+$(BUILD)/vesabnc8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vx8cfg/system.cfg $(BUILD)/vxbd/VESABNCH.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vx8cfg/system.cfg AUTOSTRT:$(BUILD)/vxbd/VESABNCH.LNK
+
+$(BUILD)/vxbench.img: $(BUILD)/vesabnch.o88 tools/os88disk.py | $(BUILD)
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vesabnch.o88
+
+.PHONY: vesabench 486-vesa 486-vesa-desk
+vesabench: $(BUILD)/vesabench.img $(BUILD)/vesabnc8.img $(BUILD)/vxbench.img
+	@echo "vesabench: build/vesabench.img (1024x768x16) and build/vesabnc8.img (800x600x8),"
+	@echo "           each opening VESABNCH.O88 off build/vxbench.img at boot (SPEC.md 120.8)."
+	@echo "           python3 tests/vesabench.py runs both on QEMU; make 486-vesa is the 86Box 486"
+
+# ...and the 86Box 486 with a VBE card: vm/486 with a Cirrus Logic CL-GD5428
+# (VLB, 1 MB: 1024x768x8 and 800x600x16 among its modes - its BIOS is VBE
+# 1.2, which is what the driver's probe asks for) in place of the OTI-067,
+# booting the bench's own disks - the B: a SCRATCH COPY, vxbench-86box.img,
+# because the package WRITES its report to it (xt-wire's reason). Look-only:
+# 86Box has no automation socket, and the package saves its own report, so
+# launch, wait a minute, and read that copy's VESABNCH.TXT back with mtools
+486-vesa: $(BUILD)/vesabench.img $(BUILD)/vxbench.img
+	cp $(BUILD)/vxbench.img $(BUILD)/vxbench-86box.img
+	@$(UNPROTECT) $(VM486V)/86box.cfg
+	$(BOX) -P $(VM486V) -N
+
+# ...and the same 486 with the DESKTOP on it, to LOOK at (SPEC.md 120.9): A: is
+# build/vesa.img - the shipped system disk with VESA.DRV already wanted, no
+# autostart - and B: the shipped apps disk, so the desktop comes up at
+# 1024x768x16 and Control Panel -> Display's Vesa row cycles the card's
+# modes. The Display page WRITES SYSTEM.CFG onto A:, which is a build product
+# the next `make` puts back. Nothing here is a gate: 86Box cannot be driven,
+# so this is where a human clicks and tests/vesa*.py is where the rows run
+486-vesa-desk: $(BUILD)/vesa.img $(APPSIMG)
+	@$(UNPROTECT) $(VM486VD)/86box.cfg
+	$(BOX) -P $(VM486VD) -N
+
+# ...and the same disk with a ver-3 'VM' record whose class byte names
+# 800x600x8 (SPEC.md 120.2.3, kernel/vxabi.inc's VXC_*: 0x80 | width 2 |
+# height 2 << 2, depth bit clear = 0x8A), after the VGA and Single, so
+# tests/vesa8.py exercises the 8bpp path and the DAC the driver loads, and the
+# class's round trip from the file to the driver's attach. QEMU's standard VGA
+# offers that mode as 0103h
+$(BUILD)/vx8cfg/system.cfg: kernel/driver.inc | $(BUILD)
+	@mkdir -p $(BUILD)/vx8cfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 9).to_bytes(2,'little') + b'VM' + bytes([3,4,0,0,0,0x8A]) + b'\0\0')" > $@
+
+$(BUILD)/vesa8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vx8cfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vx8cfg/system.cfg
 
 # USBMOUSETEST - SPEC.md 9.12.6's gate disks. No emulator here carries a CH375,
 # so USBMOUSE.DRV is assembled a second time with -DCH375SIM: the same driver
@@ -4882,7 +5166,7 @@ $(BUILD)/emstest.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(C
             $(BUILD)/emscfg/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG360) $(BUILD)/emscfg/system.cfg \
 		$(BUILD)/emstest.o88 $(APPDATAFOLDER)
 
@@ -4890,6 +5174,95 @@ $(BUILD)/emstest.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(C
 emstest: $(BUILD)/emstest.img
 	@echo "emstest: build/emstest.img - EMS.DRV wanted, EMSTEST.O88 at the root"
 	@echo "              Run: python3 tests/ems.py, python3 tests/videms.py"
+
+# CDROMTEST - SPEC.md 119.7's gate: the 1.44MB system disk with a SYSTEM.CFG
+# that wants CDROM.DRV (bit 8), and build/cdfix.iso, the disc tests/cdrom.py
+# puts in QEMU's secondary master. The ISO is tools/os88cdiso.py's, whose
+# `list` is the reference the guest's listing is compared against: folders
+# two deep, a folder of sixty names (a directory longer than a sector, under DSK_NENT), a
+# name that mangles, a lower-case one, a package, and BIG.BIN - generated
+# bytes, over 64 KB and not a whole number of sectors
+CDFIXFILES := $(wildcard tests/cdfix/*.TXT)
+$(BUILD)/cdcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/cdcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 8).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/cdfix.iso: tools/os88cdiso.py $(CDFIXFILES) $(BUILD)/mines.o88
+	python3 tools/os88cdiso.py iso -o $@ --volid CDFIX \
+		--file README.TXT=tests/cdfix/README.TXT \
+		--file lower.txt=tests/cdfix/README.TXT \
+		--file "Long File Name.text=tests/cdfix/LONG.TXT" \
+		--file A.B.C=tests/cdfix/LONG.TXT \
+		--file MINES.O88=$(BUILD)/mines.o88 \
+		--file DOCS/NOTES.TXT=tests/cdfix/NOTES.TXT \
+		--file DOCS/DEEP/BOTTOM.TXT=tests/cdfix/BOTTOM.TXT \
+		$(foreach n,$(shell seq -w 0 59),--file MANY/F0$(n).TXT=tests/cdfix/NOTES.TXT) \
+		--gen BIG.BIN:100001
+
+$(BUILD)/cdromtest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
+            $(SYSOPTIONAL) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+            $(BUILD)/cdcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg $(APPDATAFOLDER)
+
+# ...the same disk with the gate's CDROM.DRV (-DCDSIM_AUDIO) in place of the
+# shipped one: its own SYSTEM.CFG and its own driver, nothing else different
+$(BUILD)/cdromsim.img: $(BUILD)/cdromtest.img $(BUILD)/cdromsim/CDROM.DRV tools/os88fat.py
+	cp $(BUILD)/cdromtest.img $@
+	python3 tools/os88fat.py del $@ CDROM.DRV
+	python3 tools/os88fat.py add $@ $(BUILD)/cdromsim/CDROM.DRV CDROM.DRV
+
+.PHONY: cdromtest
+cdromtest: $(BUILD)/cdromtest.img $(BUILD)/cdromsim.img $(BUILD)/cdfix.iso
+	@echo "cdromtest: build/cdromtest.img - CDROM.DRV wanted; build/cdfix.iso the disc"
+	@echo "              Run: python3 tests/cdrom.py"
+
+# CDAUDIOIMG - SPEC.md 119.7's machine to LOOK at, because 86Box cannot be
+# driven from this host: build/cdaudio.cue is an audio CD of three generated
+# tones (tools/os88cdiso.py audio), and build/cdaudiotest.img is the gate disk
+# with \AUTOSTRT\CDRACK.LNK - a link to the DOCUMENT D:\TRACK02.CDA, so the
+# 386 boots into CDRack playing track 2 through the .CDA association
+# (SPEC.md 119.3.5): the driver's root listing, the player's file read and
+# PLAY AUDIO MSF, with nobody at the machine. A_SYS.LNK opens A:\SYSTEM FIRST
+# because a link's document open does not sweep ASSOC.DAT the way a
+# double-click does (docs/plans/ASSOC-FIND-PLAN.md section 1): listing SYSTEM
+# is what teaches the machine that .CDA is CDRACK.O88's.
+# `make 386-cdrom` boots it; QEMU's drive has no audio commands at all
+$(BUILD)/cdaudio.cue: tools/os88cdiso.py
+	python3 tools/os88cdiso.py audio -o $@ --tone 40:440 --tone 30:660 \
+		--tone 20:880
+
+$(BUILD)/cdlnk/CDRACK.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/cdlnk
+	python3 tools/os88lnk.py $(BUILD)/cdlnk/A_SYS.LNK 'SYSTEM' --kind folder
+	python3 tools/os88lnk.py $@ 'TRACK02.CDA' --vol D --kind document
+
+$(BUILD)/cdaudiotest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(COREAPPS) \
+            $(SYSOPTIONAL) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) \
+            $(BUILD)/cdcfg/system.cfg $(BUILD)/cdlnk/CDRACK.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(COREAPPSARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/cdcfg/system.cfg \
+		AUTOSTRT:$(BUILD)/cdlnk/A_SYS.LNK \
+		AUTOSTRT:$(BUILD)/cdlnk/CDRACK.LNK $(APPDATAFOLDER)
+
+.PHONY: cdaudioimg 386-cdrom
+cdaudioimg: $(BUILD)/cdaudiotest.img $(BUILD)/cdaudio.cue
+	@echo "cdaudioimg: build/cdaudiotest.img boots into CDRack;"
+	@echo "            build/cdaudio.cue is three audio tracks. make 386-cdrom"
+
+# The 386 with an ATAPI CD-ROM on the secondary channel holding the audio CD,
+# a Sound Blaster 16 for its CD input, and the gate disk that autostarts
+# CDRack (SPEC.md 119.7). What a working machine looks like: Play, and the
+# display counts up through track 1 with the tone in the speakers.
+386-cdrom: $(BUILD)/cdaudiotest.img $(BUILD)/cdaudio.cue $(APPSIMG)
+	@$(UNPROTECT) $(VM386CD)/86box.cfg
+	$(BOX) -P $(VM386CD) -N
 
 # THEWIRETEST: the Wire's gate disks (SPEC.md 92.12), ethertest's shape and
 # for ethertest's reason - the driver is asked for by a SYSTEM.CFG that is ON
@@ -4937,7 +5310,7 @@ $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 $(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
@@ -5077,7 +5450,7 @@ $(BUILD)/covoxsys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS)
 $(BUILD)/covoxsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/covoxcfg1/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/covoxcfg1/system.cfg $(APPDATAFOLDER)
 
 .PHONY: covoxtest
@@ -5124,7 +5497,7 @@ $(BUILD)/pmsys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(
 $(BUILD)/pmsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 $(APPDATAFOLDER)
 
 .PHONY: picomemtest
@@ -5152,6 +5525,31 @@ mrwttest: $(BUILD)/mrwt720.img
 	@echo "mrwttest: build/mrwt720.img - MIDIRack and the synthetic bank."
 	@echo "          Run it with: python3 tests/midirack.py --arm wt"
 
+# Hardware volume's integration fixtures: same shipped driver and kernel,
+# SOUND wanted at boot; Mixer launches separately from the apps fixture.
+.PHONY: mixertest
+mixertest: $(BUILD)/mixer360.img $(BUILD)/mixplay.img
+$(BUILD)/mixervcfg/SYSTEM.CFG: kernel/driver.inc Makefile | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 -c "import struct; open('$@','wb').write(b'O88CFG\0\0'+struct.pack('<H',3)+b'DW'+bytes([1,2])+struct.pack('<H',(1 << 9) | 1)+b'\0\0')"
+$(BUILD)/mixervesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+        $(COREAPPS360) $(SYSDOC) $(BUILD)/mixervcfg/SYSTEM.CFG tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixervcfg/SYSTEM.CFG --folder SYSTEM/APPDATA
+$(BUILD)/mixercfg/SYSTEM.CFG: | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 -c "import struct; open('$@','wb').write(b'O88CFG\0\0'+struct.pack('<H',3)+b'DW'+bytes([1,2])+struct.pack('<H',1)+b'\0\0')"
+$(BUILD)/mixer360.img: $(BUILD)/boot360.bin $(KERNFILE) \
+        $(DRIVERS) $(SYSAPPS) $(COREAPPS360) $(SYSDOC) \
+        $(BUILD)/mixercfg/SYSTEM.CFG tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG \
+		--folder SYSTEM/APPDATA
+
 .PHONY: miditest
 miditest: $(BUILD)/midisys720.img $(APPSIMG720)
 	@echo "miditest: build/midisys720.img - SOUND.DRV already wanted, for the"
@@ -5165,7 +5563,7 @@ ethertest: $(BUILD)/ether360.img
 $(BUILD)/ether360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/system.cfg
 
 # FTPDTEST: the FTP SERVER's gate disk (SPEC.md 77, docs/plans/completed/NET-STACK-PLAN.md
@@ -5370,10 +5768,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # is what fails if this flag is lost, and autostart360.img below takes it too
 # because it is this disk plus four files.
 SYS360SPC := --spc 1
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # AUTOSTARTTEST - the LINKS and AUTOSTART gate's disk (SPEC.md 26.10): the
@@ -5401,7 +5799,7 @@ $(BUILD)/astest/.made: tools/os88lnk.py | $(BUILD)
 $(BUILD)/autostart360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(BUILD)/astest/.made
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(FACESARG360) \
 		$(BUILD)/astest/CALC.LNK AUTOSTRT:$(BUILD)/astest/BADVER.LNK \
 		AUTOSTRT:$(BUILD)/astest/NOTES.TXT AUTOSTRT:$(BUILD)/astest/TASKMGR.LNK \
 		$(APPDATAFOLDER)
@@ -5680,6 +6078,19 @@ $(BUILD)/xmtest.img: $(BUILD)/xmtest.o88 tools/os88disk.py
 # (bench360, drvcall360, heapfrag360, editmove360, ...); this was the one that
 # did not, because it was written for the QEMU line above and inherited a
 # MartyPC caller later.
+# VGAPROBE (tests/vgaprobe/vgaprobe.asm): a FIELD instrument for RealDMG's
+# scrolling research - when a real VGA latches the start address and the pel
+# panning, whether its CRTC wraps at 64KB, and the frame's timing. On demand:
+# `make vgaprobe` gives build/vgaprobe.o88 and a 1.44MB floppy with it.
+.PHONY: vgaprobe
+vgaprobe: $(BUILD)/vgaprobe.img
+$(BUILD)/vgaprobe.bin: tests/vgaprobe/vgaprobe.asm apps/os88api.inc apps/os88pit.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/vgaprobe/vgaprobe.asm
+$(BUILD)/vgaprobe.o88: $(BUILD)/vgaprobe.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/vgaprobe.bin -o $@
+$(BUILD)/vgaprobe.img: $(BUILD)/vgaprobe.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/vgaprobe.o88
+
 $(BUILD)/fsxtest.bin: tests/fsxtest/fsxtest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/fsxtest/fsxtest.asm
 	@echo "fsxtest: $(call FILESIZE,$@) bytes"
@@ -5756,6 +6167,53 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
 
+# SNDFMT: SPEC.md 34.5.5's gate - stereo and 16-bit streams, verb 11. Never
+# shipped. It runs itself from a window timer, so the QEMU leg boots a system
+# disk whose \AUTOSTRT links B:\SNDFMT.O88 and needs no mouse; the MartyPC
+# leg (a DSP 2.01, which must refuse) opens it from the 360KB B: by name.
+#   make sndfmttest && python3 tests/sndfmt.py
+.PHONY: sndfmttest
+sndfmttest: $(BUILD)/sndfmtsys.img $(BUILD)/sndfmt.img $(BUILD)/sndfmt360.img \
+            $(BUILD)/mixer360.img
+
+$(BUILD)/sndfmt.bin: tests/sndfmt/sndfmt.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/sndfmt/sndfmt.asm
+	@echo "sndfmt: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sndfmt.o88: $(BUILD)/sndfmt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sndfmt.bin -o $@
+
+$(BUILD)/sndfmt.img: $(BUILD)/sndfmt.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sndfmt.o88
+
+$(BUILD)/sndfmt360.img: $(BUILD)/sndfmt.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/sndfmt.o88
+
+$(BUILD)/sfmtlnk/SNDFMT.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(BUILD)/sfmtlnk
+	python3 tools/os88lnk.py $@ 'SNDFMT.O88' --vol B
+
+# ...with the mixer gate's SYSTEM.CFG, which WANTS the sound driver (every
+# row is not-wanted by default, SPEC.md 51.3); the MartyPC leg boots that
+# gate's own 360KB disk, build/mixer360.img, for the same reason
+$(BUILD)/sndfmtsys.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/mixercfg/SYSTEM.CFG $(BUILD)/sfmtlnk/SNDFMT.LNK tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/sfmtlnk/SNDFMT.LNK \
+		--folder SYSTEM/APPDATA
+
+# The same fixture with 4.8 seconds staged: QMP and floppy activity must
+# leave audio still playing when the volume popup opens. Default SBTEST
+# remains byte-identical; this arm is only the mixer's background-service leg.
+$(BUILD)/mixplay.bin: tests/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DSBTEST_RATE=4000 -DSBTEST_CHUNKS=24 -o $@ $<
+$(BUILD)/mixplay.o88: $(BUILD)/mixplay.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+$(BUILD)/mixplay.img: $(BUILD)/mixplay.o88 $(BUILD)/mixer.o88 tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mixplay.o88 \
+		$(BUILD)/mixer.o88
+
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package
 # links at org 0 and owns a segment, so it is position-independent and there
@@ -5780,6 +6238,90 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/hello.bin -o $@
 
+# REALDMG (docs/REALDMG-SPEC.md): a Game Boy in a window. Its core is
+# GENERATED - apps/realdmg/rdggen.py writes 256 slots of handlers, one 64KB
+# segment - and rides REALDMG.O88 as part 0, LZ4 on the disk; the package
+# image is the window, rdgsys.inc and rdgppu.inc. It ships on the everything set
+# and the live media in a folder of its own, like the other machines, and is
+# in `all` because nothing it needs is fetched.
+$(BUILD)/rdgcore.bin: apps/realdmg/rdggen.py apps/realdmg/rdgdefs.inc | $(BUILD)
+	python3 apps/realdmg/rdggen.py $(BUILD)/rdgcore.asm
+	$(NASM) -f bin -w+error -I apps/realdmg/ -o $@ $(BUILD)/rdgcore.asm
+# ...and its two halves, because one part is at most 65,024 bytes and the core
+# is 65,536: two adjacent rows are one segment in the carve (SPEC.md 20.12.11)
+$(BUILD)/rdgcore0.bin $(BUILD)/rdgcore1.bin: $(BUILD)/rdgcore.bin
+	python3 -c "import sys; d=open(sys.argv[1],'rb').read(); \
+		open(sys.argv[2],'wb').write(d[:32768]); open(sys.argv[3],'wb').write(d[32768:])" \
+		$< $(BUILD)/rdgcore0.bin $(BUILD)/rdgcore1.bin
+
+# ...the recompiler's templates, lifted out of that core, and its offsets
+# (REALDMG-SPEC section 16): apps/realdmg/rdgtmpl.py assembles each handler
+# three ways and finds its operands and fixups by comparing the bytes
+# (one invocation writes both: the os88net.lz idiom above, not `&:`)
+$(BUILD)/rdgtmpl.bin: $(BUILD)/rdgcore.bin apps/realdmg/rdgtmpl.py apps/realdmg/rdggen.py
+	python3 apps/realdmg/rdgtmpl.py $(BUILD)/rdgcore.bin $(BUILD)/rdgtmpl.bin $(BUILD)/rdgcore.inc
+$(BUILD)/rdgcore.inc: $(BUILD)/rdgtmpl.bin ;
+
+$(BUILD)/realdmg.bin: apps/realdmg/realdmg.asm apps/realdmg/rdgdefs.inc \
+                      apps/realdmg/rdgsys.inc apps/realdmg/rdgppu.inc apps/realdmg/rwfsx.inc apps/realdmg/rwkeys.inc \
+                      $(BUILD)/rdgcore.inc \
+                      apps/os88api.inc apps/os88ui.inc apps/os88parts.inc \
+                      apps/os88partsbody.inc apps/os88alt.inc apps/os88pit.inc apps/realdmg/rwlog.inc apps/realdmg/rwbank.inc apps/realdmg/rwstate.inc apps/realdmg/rwreplay.inc \
+                      apps/realdmg/rwfm.inc drivers/sound/sndpkg.inc \
+                      apps/os88data.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/realdmg/ -I drivers/sound/ -I $(BUILD)/ -l $(BUILD)/realdmg.lst \
+		-o $@ apps/realdmg/realdmg.asm
+	@echo "realdmg: $(call FILESIZE,$@) bytes"
+
+# The recompiler is a PART of its own (REALDMG-SPEC section 16.9): its code
+# and templates, read by the package into the recompiler's claim on a 286 and
+# never by an 8088.
+$(BUILD)/rdgjitp.bin: apps/realdmg/rdgjitp.asm apps/realdmg/rdgjit.inc apps/realdmg/rdgdefs.inc \
+                     $(BUILD)/rdgtmpl.bin $(BUILD)/rdgcore.inc
+	$(NASM) -f bin -w+error -I apps/realdmg/ -I $(BUILD)/ -o $@ apps/realdmg/rdgjitp.asm
+
+$(BUILD)/realdmg.o88: $(BUILD)/realdmg.bin $(BUILD)/rdgcore0.bin $(BUILD)/rdgcore1.bin \
+                      $(BUILD)/rdgjitp.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/realdmg.bin -o $@ --part $(BUILD)/rdgcore0.bin \
+		--part $(BUILD)/rdgcore1.bin --part $(BUILD)/rdgjitp.bin --part-compress lz4
+
+# THE REALDMG DISK (docs/REALDMG-SPEC.md section 18, docs/plans/REALDMG-PLAN.md
+# wave 8), ON DEMAND: REALDMG.O88, its README and GBDEMO.GB - the demo written
+# for the 5150, OURS, assembled by tools/gbours.py with tools/gbclock.py's
+# pinned rgbds (fetched and built on first use). The disks take the COMMITTED
+# copy, apps/realdmg/GBDEMO.GB (RDG_DEMO's note, below), so none of them needs
+# rgbds; the rows that build a ROM still build their own here, and `gbship`
+# is what says the two agree. No game ships: a cartridge is the user's. FOUR
+# GEOMETRIES, each --verify'd, in one REALDMG folder. The apps disks and
+# emu360.img carry REALDMG.O88 and the cartridge too, without the README
+# (SPEC.md 24.6).
+$(BUILD)/gbclock/GBDEMO.GB: tools/gbprof/gbdemo.asm tools/gbours.py tools/gbclock.py
+	python3 tools/gbours.py gbdemo
+
+REALDMGDISK := $(BUILD)/realdmg.o88 apps/realdmg/GBDEMO.GB \
+               apps/realdmg/README.TXT tools/os88disk.py
+REALDMGIMG = python3 tools/os88disk.py -o $(1) --size $(2) --folder SYSTEM/APPDATA \
+	     REALDMG:$(BUILD)/realdmg.o88 REALDMG:apps/realdmg/GBDEMO.GB \
+	     REALDMG:apps/realdmg/README.TXT
+realdmgdisk: $(BUILD)/realdmg.img $(BUILD)/realdmg720.img \
+             $(BUILD)/realdmg120.img $(BUILD)/realdmg360.img
+
+$(BUILD)/realdmg.img: $(REALDMGDISK)
+	$(call REALDMGIMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/realdmg720.img: $(REALDMGDISK)
+	$(call REALDMGIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/realdmg120.img: $(REALDMGDISK)
+	$(call REALDMGIMG,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/realdmg360.img: $(REALDMGDISK)
+	$(call REALDMGIMG,$@,360)
+	@python3 tools/os88disk.py --verify $@
+
 # TIMER and BOUNCE (SPEC.md 111, 112): the two kernel KINDS of SPEC.md 14
 # that became packages (14.8) - a stopwatch and a bouncing square, in
 # $(APPS_TOOLS) so they ride every apps disk the way the Builtins menu used
@@ -5791,6 +6333,224 @@ $(BUILD)/timer.bin: apps/timer/timer.asm apps/os88api.inc apps/os88ui.inc \
 
 $(BUILD)/timer.o88: $(BUILD)/timer.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/timer.bin -o $@
+
+# CDRACK (SPEC.md 119.6): an audio CD through CDROM.DRV's door, which it
+# shares as source with the driver (drivers/cdrom/cdpkg.inc, SPEC.md 20.11).
+# Its pictures and both fonts are build/cdart.inc, made by
+# tools/os88cdart.py from definitions in that file - after its --selfcheck,
+# so a picture that broke the converter's own invariants never reaches a disk
+.PHONY: cdrack
+cdrack: $(BUILD)/cdrack.o88
+$(BUILD)/cdart.inc: tools/os88cdart.py | $(BUILD)
+	python3 tools/os88cdart.py --selfcheck
+	python3 tools/os88cdart.py --out $@
+
+$(BUILD)/cdrack.bin: apps/cdrack/cdrack.asm apps/cdrack/crdraw.inc \
+                     apps/cdrack/crface.inc $(BUILD)/cdart.inc \
+                     apps/os88api.inc apps/os88ui.inc \
+                     drivers/cdrom/cdpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/cdrack/ -I drivers/cdrom/ \
+		-I $(BUILD)/ -o $@ apps/cdrack/cdrack.asm
+	@echo "cdrack: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/cdrack.o88: $(BUILD)/cdrack.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/cdrack.bin -o $@
+
+# XTMP3 (SPEC.md 121): the adaptive MP3 player. Its face is the retro-face
+# skill's (CDRack's shape): every picture and font is build/x3art.bin, a PART
+# of XTMP3.O88 (SPEC.md 20.12), and build/x3art.inc its labels' offsets and
+# sizes - both made by tools/os88x3art.py, from definitions in that file and
+# from the committed masters in apps/xtmp3/art/, after its --selfcheck.
+# Where it ships is SPEC.md 121.12: $(APPS_TOOLS) and the notes there
+.PHONY: xtmp3
+xtmp3: $(BUILD)/xtmp3.o88
+XTMP3ART := apps/xtmp3/art/knob.png apps/xtmp3/art/vu.png apps/xtmp3/art/logo.png
+$(BUILD)/x3art.inc: tools/os88x3art.py $(XTMP3ART) | $(BUILD)
+	python3 tools/os88x3art.py --selfcheck
+	python3 tools/os88x3art.py --out $@ --bin $(BUILD)/x3art.bin
+$(BUILD)/x3art.bin: $(BUILD)/x3art.inc
+	@test -f $@ || python3 tools/os88x3art.py --out $(BUILD)/x3art.inc --bin $@
+
+XTMP3_SRC := apps/xtmp3/xtmp3.asm apps/xtmp3/x3draw.inc \
+             apps/xtmp3/x3face.inc apps/xtmp3/x3eng.inc \
+             apps/xtmp3/x3conv.inc apps/xtmp3/x3hook.inc \
+             apps/xtmp3/x3pars.inc apps/xtmp3/x3phdr.inc \
+             apps/xtmp3/x3stub.inc apps/xtmp3/x3gran.inc \
+             apps/xtmp3/x3hold.inc \
+             apps/audio/aplook.inc apps/audio/apspk.inc \
+             apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc \
+             apps/os88rseq.inc apps/os88pit.inc apps/os88dec.inc \
+             apps/os88data.inc apps/os88parts.inc apps/os88partsbody.inc \
+             drivers/sound/sndpkg.inc $(BUILD)/x3ftab.inc \
+             $(BUILD)/x3art.inc apps/os88api.inc apps/os88ui.inc
+X3PARTS := $(BUILD)/x3front.bin $(BUILD)/x3art.bin $(BUILD)/x3stdp.bin \
+           $(BUILD)/x3xt.bin
+X3PARTARGS := --part $(BUILD)/x3front.bin --part $(BUILD)/x3art.bin \
+              --part $(BUILD)/x3stdp.bin --part $(BUILD)/x3xt.bin
+$(BUILD)/xtmp3.bin: $(XTMP3_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/xtmp3.o88: $(BUILD)/xtmp3.bin $(X3PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/xtmp3.bin -o $@ $(X3PARTARGS) --part-compress lz4
+
+# THE ENGINE'S TEST BUILD (docs/xtmp3/ENGINE.md, tests/xtmp3eng.py): the same
+# source with -DX3STUB, carrying the STUB backend (apps/xtmp3/x3stub.asm) as
+# the parts table's row 4, after XT - a tone a granule at a cost X3STUB.CFG
+# sets per rung, answering for both backends, so the ladder's transitions,
+# the conversion and the cache are deterministic on QEMU over the REAL front
+# end. ON DEMAND (`make xtmp3stub`); nothing ships it. On a disk it must be
+# named XTMP3.O88: op_load reads the parts out of the file it came from.
+.PHONY: xtmp3stub
+xtmp3stub: $(BUILD)/xtmp3s.o88
+$(BUILD)/x3stub.bin: apps/xtmp3/x3stub.asm apps/xtmp3/x3gran.inc \
+                     apps/xtmp3/x3stub.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -o $@ apps/xtmp3/x3stub.asm
+$(BUILD)/xtmp3s.bin: $(XTMP3_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -DX3STUB -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (X3STUB):  $(call FILESIZE,$@) bytes"
+$(BUILD)/xtmp3s.o88: $(BUILD)/xtmp3s.bin $(X3PARTS) $(BUILD)/x3stub.bin \
+                     tools/os88pkg.py
+	$(OS88PKG) $(BUILD)/xtmp3s.bin -o $@ $(X3PARTARGS) \
+		--part $(BUILD)/x3stub.bin --part-compress lz4
+
+# XTMP3'S FIELD DISKS (docs/xtmp3/FIELD.md; tools/x3field.py): the selection
+# matrix on 86Box, which has no debug socket and takes no key from this host.
+# build/xtmp3r.o88 is the package with -DX3REPORT (apps/xtmp3/x3rep.inc): it
+# writes SYSTEM\APPDATA\X3REPORT.TXT on its own volume when the ladder has
+# decided and when a stream has played out, and the host reads it back off the
+# image. x3field.img / x3field360.img are system disks that want SOUND.DRV
+# and whose \AUTOSTRT opens B:\XTMP3 (the folder teaches the machine .MP3's
+# association) and then B:\XTMP3\TRACK.MP3; x3fb-c128.img / x3fb-aftr.img and
+# their 360KB twins are that B: - the report build, and TRACK.MP3 being
+# tests/xtmp3/C128.MP3 (44.1 kHz L/R stereo, 128 kbps) or AFTERHRS.MP3
+# (11,025 Hz mono, 24 kbps), stored plain because the probe refuses a packed
+# MP3. ON DEMAND; nothing ships any of it. `make 486-xtmp3` (and xt-, 286-,
+# 386-, pentium-) boots one machine on the C128 disk to LOOK at;
+# `python3 tools/x3field.py` runs the whole matrix and prints the reports.
+.PHONY: xtmp3field
+xtmp3field: $(BUILD)/x3field.img $(BUILD)/x3field360.img \
+            $(BUILD)/x3fb-c128.img $(BUILD)/x3fb-aftr.img \
+            $(BUILD)/x3fb360-c128.img $(BUILD)/x3fb360-aftr.img
+$(BUILD)/xtmp3r.bin: $(XTMP3_SRC) apps/xtmp3/x3rep.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DX3REPORT -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+		-I drivers/sound/ -I $(BUILD)/ -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (X3REPORT):  $(call FILESIZE,$@) bytes"
+$(BUILD)/x3f/XTMP3.O88: $(BUILD)/xtmp3r.bin $(X3PARTS) tools/os88pkg.py
+	@mkdir -p $(dir $@)
+	$(OS88PKG) $(BUILD)/xtmp3r.bin -o $@ $(X3PARTARGS) --part-compress lz4
+$(BUILD)/x3f/c128/TRACK.MP3: tests/xtmp3/C128.MP3
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(BUILD)/x3f/aftr/TRACK.MP3: tests/xtmp3/AFTERHRS.MP3
+	@mkdir -p $(dir $@)
+	cp $< $@
+$(BUILD)/x3f/A_X3.LNK: tools/os88lnk.py | $(BUILD)
+	@mkdir -p $(dir $@)
+	python3 tools/os88lnk.py $@ 'XTMP3' --vol B --kind folder
+	python3 tools/os88lnk.py $(BUILD)/x3f/X3.LNK 'XTMP3\TRACK.MP3' --vol B \
+		--kind document
+$(BUILD)/x3field.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
+        $(COREAPPS360) $(SYSDOC) $(BUILD)/mixercfg/SYSTEM.CFG \
+        $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
+		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
+$(BUILD)/x3field360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
+        $(SYSAPPS) $(COREAPPS360) $(SYSDOC) $(BUILD)/mixercfg/SYSTEM.CFG \
+        $(BUILD)/x3f/A_X3.LNK tools/os88disk.py Makefile
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(COREAPPSARGS360) $(SYSDOC) \
+		$(BUILD)/mixercfg/SYSTEM.CFG AUTOSTRT:$(BUILD)/x3f/A_X3.LNK \
+		AUTOSTRT:$(BUILD)/x3f/X3.LNK --folder SYSTEM/APPDATA
+$(BUILD)/x3fb-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
+        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		XTMP3:$(BUILD)/x3f/XTMP3.O88 XTMP3:$(BUILD)/x3f/$*/TRACK.MP3 \
+		--folder SYSTEM/APPDATA
+$(BUILD)/x3fb360-%.img: $(BUILD)/x3f/XTMP3.O88 $(BUILD)/x3f/%/TRACK.MP3 \
+        tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --spc 1 \
+		XTMP3:$(BUILD)/x3f/XTMP3.O88 XTMP3:$(BUILD)/x3f/$*/TRACK.MP3 \
+		--folder SYSTEM/APPDATA
+
+# --- XTMP3's DECODER (SPEC.md 121.3, 121.4; the STANDARD track) ----------------
+# The STANDARD tables (tools/x3tables.py: x3std.bin and x3std.inc) and the
+# front end's (tools/x3fronttab.py: x3ftab.inc), each after its --selfcheck,
+# and the two parts this track ships: x3front.bin (FRONT, eager: the shared
+# front end) and x3stdp.bin (STANDARD, lazy: the reconstruction). Their gate
+# is tests/x3bench/x3bench.py (the x3stdexact soak row), on QEMU, against
+# tools/x3sim.py's tests/xtmp3/X3SIM.txt.
+$(BUILD)/x3std.inc: tools/x3tables.py tools/x3tab_iso.py | $(BUILD)
+	python3 tools/x3tables.py --selfcheck
+	python3 tools/x3tables.py --out $(BUILD)
+$(BUILD)/x3std.bin: $(BUILD)/x3std.inc
+	@test -f $@ || python3 tools/x3tables.py --out $(BUILD)
+$(BUILD)/x3ftab.inc: tools/x3fronttab.py tools/x3tab_iso.py tools/x3tables.py | $(BUILD)
+	python3 tools/x3fronttab.py --selfcheck
+	python3 tools/x3fronttab.py --out $@
+$(BUILD)/x3sgen.inc: tools/x3stdgen.py tools/x3sim.py tools/x3tables.py \
+                     tools/x3tab_iso.py | $(BUILD)
+	python3 tools/x3stdgen.py --selfcheck
+	python3 tools/x3stdgen.py --out $@
+X3PARTDEP := apps/xtmp3/x3gran.inc apps/xtmp3/x3crc.inc $(BUILD)/x3std.inc \
+             $(BUILD)/x3std.bin $(BUILD)/x3ftab.inc
+$(BUILD)/x3front.bin: apps/xtmp3/x3front.asm apps/xtmp3/x3phdr.inc apps/xtmp3/x3pnext.inc \
+                      $(X3PARTDEP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/x3front.asm
+	@echo "x3front: $(call FILESIZE,$@) bytes"
+$(BUILD)/x3stdp.bin: apps/xtmp3/x3std.asm $(X3PARTDEP) $(BUILD)/x3sgen.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/xtmp3/ -I $(BUILD)/ \
+		-o $@ apps/xtmp3/x3std.asm
+	@echo "x3stdp: $(call FILESIZE,$@) bytes"
+
+# --- XTMP3's XT BACKEND (S7; SPEC.md 121.3, 121.4, 121.10; docs/xtmp3/XT.md):
+# x3xt.asm is a far-called OP_SEG part carrying XTGEN.BIN, its generator
+# input, inside itself (x3gran.inc's OPEN record has no slot for an asset);
+# its OPEN expands the profile's table pack into the segments it is handed
+# (tools/x3xttab.py's recurrences, a Fletcher-32 checked against the
+# generator's).
+# build/x3xtk.inc is what tools/x3xtgen.py assembles for it - the claim's
+# layout, Lee's DCTs, each profile's window pass, the IMDCT row blocks -
+# after x3xttab's and its own --selfcheck; both are standard library only,
+# so numpy stays off the make path. tests/x3xtunit.py and the x3xtexact row
+# hold the part to tools/x3simxt.py byte for byte.
+X3XTGENDEPS := tools/x3xtgen.py tools/x3xttab.py tools/x3tables.py tools/x3tab_iso.py
+$(BUILD)/x3xtk.inc: $(X3XTGENDEPS) | $(BUILD)
+	python3 tools/x3xttab.py --selfcheck
+	python3 tools/x3xtgen.py --selfcheck -o $@
+
+$(BUILD)/XTGEN.BIN: $(X3XTGENDEPS) | $(BUILD)
+	python3 tools/x3xtgen.py --xtgen $@
+
+$(BUILD)/x3xt.bin: apps/xtmp3/x3xt.asm apps/xtmp3/x3gran.inc $(BUILD)/x3xtk.inc \
+                   $(BUILD)/XTGEN.BIN | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/xtmp3/ -I $(BUILD)/ -o $@ apps/xtmp3/x3xt.asm
+	python3 tools/x3xtgen.py --seal $@
+	@echo "x3xt:   $(call FILESIZE,$@) bytes"
+
+.PHONY: x3xt
+x3xt: $(BUILD)/x3xt.bin $(BUILD)/XTGEN.BIN
+xtmp3: x3xt
+
+# INSTALL (SPEC.md 117): the setup wizard, in the root of every kern_big
+# system disk ($(SYSINST)). It installs nothing itself - OSAPI_DRV_USE and
+# HDD.DRV's HDV_TOOL reach the Control Panel's own engine - so its only
+# dependencies are the SDK and the two shared includes.
+$(BUILD)/install.bin: apps/install/install.asm apps/os88api.inc apps/os88ui.inc \
+                      apps/os88dec.inc | $(BUILD)
+	$(NASM) -f bin -w+error --before "[map all $(BUILD)/install.map]" \
+		-I apps/ -o $@ apps/install/install.asm
+	@echo "install: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/install.bin -o $@
 
 $(BUILD)/bounce.bin: apps/bounce/bounce.asm apps/os88api.inc apps/os88ui.inc \
                      | $(BUILD)
@@ -5825,12 +6585,28 @@ $(shell mkdir -p $(BUILD); \
                                       $(BUILD)/video.bin $(BUILD)/video.o88; \
                                 touch $(VPSTAMP); })
 $(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
-                    apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc $(VPSTAMP) | $(BUILD)
+                    apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
+                    apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -o $@ apps/video/video.asm
 	@echo "video:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/video.o88: $(BUILD)/video.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/video.bin -o $@
+# THE BLOCK DECODER (SPEC.md 98.3.23): a version 2 file's blocks, part 0 of
+# VIDEO.O88 - fetched in the entry proc on a colour screen and nowhere else
+$(BUILD)/vblk.bin: apps/video/vblk.asm apps/video/vblk.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/video/vblk.asm
+# ...and part 1, the same source assembled to write nothing through CS: the
+# one a protected-mode kernel fetches instead (SPEC.md 98.3.23.2). IT IS THE
+# kern_mega ARM'S PART ALONE (KERN-MEGA-PLAN 14.66): $(MEGAAPPDIR)/video.o88
+# carries it and the SHIPPED VIDEO.O88 does not - the shipped player refuses
+# on a protected-mode kernel, so 1,798 packed bytes of every apps disk were a
+# part no 8088 could ever fetch. Built here, where the rows that read it
+# (vblkemupm, vidv2) have always found it
+$(BUILD)/vblkpm.bin: apps/video/vblk.asm apps/video/vblk.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DVB_PM -o $@ apps/video/vblk.asm
+VBLKPARTS = --part $(BUILD)/vblk.bin
+
+$(BUILD)/video.o88: $(BUILD)/video.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/video.bin -o $@ $(VBLKPARTS)
 
 # WIREFRAME (SPEC.md 78): a rotating solid drawn with nothing but
 # OSAPI_GFX_LINE, and a frame-rate readout, so 5.6.4.1's walk can be SEEN
@@ -5936,11 +6712,13 @@ $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
 # end at the image size the header already records, leaving the resident half
 # for os88pkg.py and CHART.OVL beside it.
 #
-# NOT COMPRESSED, and deliberately plain os88pkg.py rather than $(OS88PKG):
-# upstream packs every package EXCEPT the two that carry an overlay, WORD and
-# SCRIBE, and SHEET is the third. CHART.OVL itself must stay raw whatever the
-# package does - ch_ovneed reads it with a plain OSAPI_FILE_READ and far-calls
-# its offset 0, so a packed module would be executed as compressed bytes.
+# PACKED, both halves (SPEC.md 20.13.5, 73.14.1, 81.113). The trimmed package
+# goes through $(OS88PKGB) on the last line below, and CHART.OVL and MACRO.OVL
+# ship from $(CC_OVLZ) - CC_OVLZ_RULE further down packs them, as it does
+# SCRIBE.OVL - because ch_ovneed reads with OSAPI_FILE_READ, which expands a
+# packed file into a claim sized from the UNPACKED cut. The raw cuts written
+# here are what the CH_OVKB and SH_M2KB checks below hold, and no disk names
+# them (tests/unit/t_pkgzrules.py).
 #
 # ...AND THE CLAIM IS CHECKED HERE TOO, in upstream's SCRIBE shape. ch_ovneed
 # reads CH_OVKB*1024 bytes into a claim of that size, and a module that
@@ -5967,6 +6745,7 @@ $(BUILD)/sheet.o88: $(BUILD)/sheet.bin tools/os88ovl.py tools/os88pkg.py $(PKGZS
 
 $(BUILD)/CHART.OVL: $(BUILD)/sheet.o88 ;
 $(BUILD)/MACRO.OVL: $(BUILD)/sheet.o88 ;
+
 
 # FPTEST: the self-test for apps/os88fp.inc, the software IEEE-754 double.
 # Deliberately NOT on any disk - it is a developer tool, and the 360KB apps
@@ -6118,7 +6897,22 @@ $(BUILD)/deskclok.o88: $(BUILD)/deskclok.bin tools/os88pkg.py $(PKGZSTAMP)
 # that document is the RENDERER, with no network in the machine - it opens a
 # .HTM through the Standard File dialog. tools/htmsim.py is its reference
 # implementation and tests/htm/ is what both are checked against.
+apps/browser/assets/brdownload_icons.inc: tools/os88bmp1.py \
+                                           apps/browser/assets/server_48x48_1bpp.bmp \
+                                           apps/browser/assets/document_24x28_1bpp.bmp \
+                                           apps/browser/assets/pc_48x48_1bpp.bmp
+	python3 tools/os88bmp1.py --output $@
+
 $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
+                      apps/browser/br15.inc apps/browser/brdownload.inc \
+                      apps/browser/brdownload_bss.inc \
+                      apps/browser/brdownload_const.inc \
+                      apps/browser/brdocmarks.inc \
+                      apps/browser/brdownload_paint.inc \
+                      apps/browser/brcopyselection.inc \
+                      apps/os88parts.inc apps/os88partsbody.inc \
+                      apps/browser/assets/brdownload_icons.inc \
+                      apps/os88data.inc \
                       apps/os88api.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       drivers/net/netpkg.inc $(SBSTAMP) | $(BUILD)
@@ -6145,18 +6939,28 @@ $(BUILD)/telnet.o88: $(BUILD)/telnet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBST
 
 # WIRECHAT (SPEC.md 113) - Telnet's include set for Telnet's reason: netpkg.inc
 # is the driver's ABI header, included by both ends so they cannot drift.
+# Its FACE (SPEC.md 113.5.3) is apps/wirechat/wcface.t88 - the art is the
+# source, as faces/'s are, but it is the package's and not a system face, so
+# it is not in faces/ (FACESRC is a wildcard of that directory and every face
+# in it ships in SYSTEM/FONTS/). --bitmap writes the 950 bytes wctxt.inc
+# incbins; --quiet because its one-pixel stems are the point (113.5.3).
+$(BUILD)/wcface.bin: apps/wirechat/wcface.t88 tools/os88face.py | $(BUILD)
+	python3 tools/os88face.py --quiet $< --bitmap $@
+
 $(BUILD)/wirechat.bin: apps/wirechat/wirechat.asm apps/wirechat/wcnet.inc \
                        apps/wirechat/wcproto.inc apps/wirechat/wcview.inc \
                        apps/wirechat/wcact.inc apps/wirechat/wccfg.inc \
                        apps/wirechat/wctxt.inc apps/wirechat/wcband.inc \
+                       $(BUILD)/wcface.bin \
                        apps/os88api.inc \
                        apps/os88ui.inc apps/os88line.inc apps/os88data.inc \
                        apps/os88sock.inc drivers/net/netpkg.inc | $(BUILD)
-	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -o $@ apps/wirechat/wirechat.asm
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/wirechat/ -I drivers/net/ -I $(BUILD)/ -o $@ apps/wirechat/wirechat.asm
 	@echo "wirechat: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/wirechat.bin -o $@
+# Its three saved clusters keep Mixer on the 720KB apps disk (SPEC.md 20.13.5).
+$(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKGB) $(BUILD)/wirechat.bin -o $@
 
 # THE WIRE (SPEC.md 92) - Telnet's include set for Telnet's reason: netpkg.inc
 # is the DRIVER's own ABI header and both ends include it, so the two cannot
@@ -6202,7 +7006,8 @@ $(BUILD)/dos.o88: $(BUILD)/dos.bin tools/os88pkg.py $(PKGZSTAMP)
 KERNDOS_INC := kerndos/kdlayout.inc kerndos/kdlaunch.inc kerndos/kdshim.inc \
                kerndos/kdback.inc kerndos/kdentry.inc kerndos/kdosgate.inc \
                kerndos/kdmouse.inc kerndos/kdkbd.inc kernel/mouproto.inc \
-               kerndos/kdresume.inc \
+               kerndos/kdresume.inc kerndos/kdxms.inc kerndos/kdpark.inc \
+               kerndos/kdxpack.inc \
                kernel/hbstage.inc kernel/hbstub.inc kernel/hbmark.inc
 
 # KDSTKDIAG=1 fills the gap between `.lowbss` and the stack top with a
@@ -6257,7 +7062,7 @@ endif
 # other knob UNTRACKED, which is the failure the knob table names - make sees
 # an up-to-date kernel, boots the PREVIOUS configuration, and it reads exactly
 # like the feature being broken.
-KDSTAMP := $(BUILD)/.kerndos$(if $(KDSTKDIAG),-sd$(KDSTKDIAG))$(if $(NOKDKBD),-nkb$(NOKDKBD))$(if $(DOSRMARK),-drm$(DOSRMARK))
+KDSTAMP := $(BUILD)/.kerndos$(if $(KERN_MEGA),-mega)$(if $(KDSTKDIAG),-sd$(KDSTKDIAG))$(if $(NOKDKBD),-nkb$(NOKDKBD))$(if $(DOSRMARK),-drm$(DOSRMARK))
 $(shell mkdir -p $(BUILD); \
         [ -f $(KDSTAMP) ] || { rm -f $(BUILD)/.kerndos-* $(BUILD)/.kerndos \
                                      $(BUILD)/kerndos.bin \
@@ -6273,9 +7078,28 @@ $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                       drivers/net/netpkg.inc $(KDSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(KDSTKDIAGDEF) $(KDKBDDEF) -DDOS_EXTCORE \
+	        $(if $(KERN_MEGA),-DKD_MEGA -DDOS_MEGA) \
 	        -I kernel/ -I kerndos/ -I apps/ \
 	        -I apps/dos/ -I drivers/net/ -o $@ kerndos/kdos.asm
 	@echo "kerndos: $(call FILESIZE,$@) bytes"
+
+# ...and kern_mega's SECOND kern_dos (SPEC.md 96.40.9.2): the same build at
+# 0060:0000 instead of in the HMA (-DKD_LOWDOS), run with A20 shut for a
+# program that wants the 1MB wrap. kern_mega's DOS.O88 carries it as part 3
+# and the Memory page's `Load DOS in the HMA` picks; nothing else builds it.
+$(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
+                       apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
+                       apps/dos/dosc.inc apps/dos/dosnetabi.inc \
+                       apps/os88api.inc apps/dos/doscall.inc \
+                       apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
+                       apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
+                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
+                       drivers/net/netpkg.inc $(KDSTAMP) | $(BUILD)
+	$(NASM) -f bin -w+error $(KDSTKDIAGDEF) $(KDKBDDEF) -DDOS_EXTCORE \
+	        -DKD_MEGA -DDOS_MEGA -DKD_LOWDOS \
+	        -I kernel/ -I kerndos/ -I apps/ \
+	        -I apps/dos/ -I drivers/net/ -o $@ kerndos/kdos.asm
+	@echo "kerndosl: $(call FILESIZE,$@) bytes (kern_mega's low kern_dos)"
 
 # ...and the package that carries it. -DDOSKPART is 18 bytes of part table and
 # nothing else: the standard's 800-byte body is NOT emitted, because this part
@@ -6292,6 +7116,7 @@ $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
                    drivers/net/netpkg.inc $(DOSNETSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
 	        -I kerndos/ $(if $(DOSNETCARD),-DDOSNET_CARD) -DDOSKPART -DDOS_EXTCORE \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) \
 	        -o $@ apps/dos/dos.asm
 
 # --- THE CORE, ON ITS OWN (SPEC.md 96.44) -----------------------------------
@@ -6309,7 +7134,7 @@ $(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                       kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
-	        -I kerndos/ -o $@ apps/dos/doscore.asm
+	        -I kerndos/ $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/dos/doscore.asm
 	@echo "doscore: $(call FILESIZE,$@) bytes of INT 21h with no host round it"
 
 # **IT IS WRITTEN AS `DOS.O88` AND THE NAME IS NOT COSMETIC**: os88disk.py
@@ -6324,11 +7149,12 @@ $(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
 # pairing 20.12.7.4 had to unrefuse.
 $(BUILD)/kdos/DOS.O88: $(BUILD)/dosload.bin $(BUILD)/dosp.bin \
                        $(BUILD)/doscore.bin $(BUILD)/kerndos.bin tools/os88pkg.py \
-                       $(PKGZSTAMP)
+                       $(if $(KERN_MEGA),$(BUILD)/kerndosl.bin) $(PKGZSTAMP)
 	@mkdir -p $(BUILD)/kdos
 	$(OS88PKG) $(BUILD)/dosload.bin -o $@ \
 		--part $(BUILD)/dosp.bin --part $(BUILD)/doscore.bin \
-		--part $(BUILD)/kerndos.bin --part-compress lz4
+		--part $(BUILD)/kerndos.bin \
+		$(if $(KERN_MEGA),--part $(BUILD)/kerndosl.bin) --part-compress lz4
 	@echo "kdos: $(call FILESIZE,$@) bytes of DOS.O88 with kern_dos in it"
 
 $(BUILD)/dosload.bin: apps/dos/dosload.asm apps/dos/dosicon.inc \
@@ -6336,7 +7162,7 @@ $(BUILD)/dosload.bin: apps/dos/dosload.asm apps/dos/dosicon.inc \
                       apps/dos/doscents.inc apps/os88parts.inc \
                       apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -DDOS_EXTCORE \
-	        -o $@ apps/dos/dosload.asm
+	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/dos/dosload.asm
 	@echo "dosload: $(call FILESIZE,$@) bytes of parts loader"
 
 # THE GATE DISKS ARE GONE, AND THAT IS THE POINT OF THIS WAVE.
@@ -6367,6 +7193,80 @@ $(BUILD)/dosload.bin: apps/dos/dosload.asm apps/dos/dosicon.inc \
 $(BUILD)/CWDHERE.COM: tests/dostrap/cwdhere.asm | $(BUILD)
 	$(NASM) -f bin -w+error -o $@ tests/dostrap/cwdhere.asm
 
+# --- ...AND kern_mega's XMS DOOR (SPEC.md 96.15.4) ---------------------------
+# XMSPROBE.COM: the round trip, extended to extended, and the negative control
+# (a raw int 15h AH=87h at linear 130000h, which kern_mega's kern_dos refuses).
+# ON DEMAND: nothing in `all` names it, and it is a .COM to put on a disk for
+# the Bochs and Victory runs of KERN-MEGA-DOS-PLAN 10's W3 row.
+$(BUILD)/XMSPROBE.COM: tests/dostrap/xmsprobe.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/xmsprobe.asm
+
+# A20SHUT.COM - W4's probe (docs/plans/KERN-MEGA-DOS-PLAN.md 7): shut A20
+# through port 92h, then INT 21h, which with kern_dos in the HMA only the low
+# trampolines can serve (kerndos/kdhma.inc). On demand, like XMSPROBE.COM.
+$(BUILD)/A20SHUT.COM: tests/dostrap/a20shut.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/a20shut.asm
+
+# XPACK.EXE / XPACKNS.EXE - SPEC.md 96.40.9.1's probe and its control: an
+# .EXE with EXEPACK's SHAPE making EXEPACK's below-zero access to its own
+# first bytes. kern_mega must load the first above 64KB (exit 30h) and the
+# second, whose signature is spoiled, below it (exit FFh). On demand.
+$(BUILD)/XPACK.EXE: tests/dostrap/xpack.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/xpack.asm
+$(BUILD)/XPACKNS.EXE: tests/dostrap/xpack.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DNOSIG -o $@ tests/dostrap/xpack.asm
+
+# XUNP.EXE and its three arms - SPEC.md 96.40.9.1's SECOND probe: a plain
+# 128KB .EXE with relocations in two groups, PACKED into the real EXEPACK
+# layout by tools/os88xpack.py, whose stub only refuses (exit FFh). So the
+# program runs only if the loader unpacked and relocated it (exit 30h).
+# XUNPL is the 18-byte header with a skip of 2; XUNPT and XUNPS spoil the
+# table and the stream, which the loader must refuse and fall back on
+# (kern_mega: 14.23's floor at 1000h, and the stub exits FFh). On demand.
+$(BUILD)/xunp-plain.exe: tests/dostrap/xunp.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/xunp.asm
+$(BUILD)/XUNP.EXE: $(BUILD)/xunp-plain.exe tools/os88xpack.py
+	python3 tools/os88xpack.py $< $@
+$(BUILD)/XUNPL.EXE: $(BUILD)/xunp-plain.exe tools/os88xpack.py
+	python3 tools/os88xpack.py --long 2 $< $@
+$(BUILD)/XUNPT.EXE: $(BUILD)/xunp-plain.exe tools/os88xpack.py
+	python3 tools/os88xpack.py --spoil table $< $@
+$(BUILD)/XUNPS.EXE: $(BUILD)/xunp-plain.exe tools/os88xpack.py
+	python3 tools/os88xpack.py --spoil stream $< $@
+
+# XSWITCH.EXE / XSWITCHN.EXE - SPEC.md 96.40.9.1's SWITCH probe (14.26): an
+# EXEPACK-shaped .EXE `kd_xunp` refuses, which reports by its EXIT CODE which
+# arm ran it - 0x2A (042) the LOW image (A20 shut, arena ~585), 0x20 (032) the
+# floor raise, 0xFE below 64KB with A20 open. NS spoils the signature, so the
+# loader leaves it on the HMA and it exits 0xFE (254). On demand.
+$(BUILD)/XSWITCH.EXE: tests/dostrap/xswitch.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/xswitch.asm
+$(BUILD)/XSWITCHN.EXE: tests/dostrap/xswitch.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DNOSIG -o $@ tests/dostrap/xswitch.asm
+
+# XKIDRUN.COM / XKIDRUNT.COM - SPEC.md 96.40.9.1's CHILD probe (Task B): a
+# parent that EXECs an EXEPACK child with AH=4Bh and exits with the child's
+# code. XKIDRUN runs XUNP.EXE (the HMA host must unpack it, exit 48);
+# XKIDRUNT runs the spoiled XUNPT.EXE (kd_xunp refuses, the child's stub runs,
+# exit 255) - the break-on-purpose. On demand.
+$(BUILD)/XKIDRUN.COM: tests/dostrap/xkidrun.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/xkidrun.asm
+$(BUILD)/XKIDRUNT.COM: tests/dostrap/xkidrun.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DCHILD2 -o $@ tests/dostrap/xkidrun.asm
+
+# ...and the probe disks (360KB, kern_mega's geometry under Bochs/86Box): the
+# switch probe with the XPACK pair beside it, and the child probe with its two
+# EXEPACK children. On demand - no suite row drives them (SPEC.md 96.40.9.1).
+$(BUILD)/xswitch360.img: $(BUILD)/XSWITCH.EXE $(BUILD)/XSWITCHN.EXE \
+                         $(BUILD)/XPACK.EXE $(BUILD)/XPACKNS.EXE tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/XSWITCH.EXE \
+	    $(BUILD)/XSWITCHN.EXE $(BUILD)/XPACK.EXE $(BUILD)/XPACKNS.EXE
+
+$(BUILD)/xkid360.img: $(BUILD)/XKIDRUN.COM $(BUILD)/XKIDRUNT.COM \
+                      $(BUILD)/XUNP.EXE $(BUILD)/XUNPT.EXE tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/XKIDRUN.COM \
+	    $(BUILD)/XKIDRUNT.COM $(BUILD)/XUNP.EXE $(BUILD)/XUNPT.EXE
+
 $(BUILD)/HERE.TXT: | $(BUILD)
 	printf 'this file exists only in SUB\r\n' > $@
 
@@ -6383,6 +7283,17 @@ $(BUILD)/CONDEV.COM: tests/dostrap/condev.asm | $(BUILD)
 
 $(BUILD)/condev360.img: $(BUILD)/CONDEV.COM tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/CONDEV.COM
+
+# --- ...AND CP/M'S WAY IN (KERN-MEGA-DOS-PLAN 10.5 defect 3) ----------------
+# CALL5.COM alone on a 360KB floppy for tests/call5.py: a near `call 5` with
+# the function in CL, on the windowed box and under kern_dos. Run from B:, it
+# exits with function 19h's answer through CALL 5 - 1 - which only a call
+# that dispatched on CL and came back to the program can produce.
+$(BUILD)/CALL5.COM: tests/dostrap/call5.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/call5.asm
+
+$(BUILD)/call5360.img: $(BUILD)/CALL5.COM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/CALL5.COM
 
 # --- ...AND THE ONE THAT WRITES PAST THE END (SPEC.md 96.11.6.3) ------------
 # WRGAP.COM alone on a 360KB floppy, and the disk has to be WRITABLE and
@@ -6478,6 +7389,13 @@ $(BUILD)/DOSGFX.COM: tests/doscom/hello.asm | $(BUILD)
 
 $(BUILD)/DOSPIT.COM: tests/doscom/hello.asm | $(BUILD)
 	$(NASM) -f bin -w+error -DPITFAST -o $@ tests/doscom/hello.asm
+
+# ...and having written one word of `.cold` in the HMA, under kern_dos only
+# (SPEC.md 96.49.9): tests/hmadosret.py's negative control, which the live
+# resume's sum has to refuse. 8000h is inside `.cold` at COLD_VSTART = 6000h,
+# and the row checks that against the kernel it boots.
+$(BUILD)/DOSHMA.COM: tests/doscom/hello.asm | $(BUILD)
+	$(NASM) -f bin -w+error -DHMAPOKE=0x8000 -o $@ tests/doscom/hello.asm
 
 # THE GATE DISK CARRIES THE PROGRAM AND NOT THE HANDLER, deliberately. DOS.O88
 # is on the SYSTEM disk in APPS/, so this is the arrangement a user actually
@@ -6977,8 +7895,24 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
-$(BUILD)/browser.o88: $(BUILD)/browser.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $(BUILD)/browser.bin -o $@
+$(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_part.asm \
+                           apps/browser/brdownload_paint.inc \
+                           apps/browser/brdownload_const.inc \
+                           apps/browser/brdocmarks.inc \
+                           apps/browser/brcopyselection.inc \
+                           tools/brdlsyms.py apps/os88api.inc | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
+	        -o $(BUILD)/brdownload_part_symbols.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ \
+	        -o $@ apps/browser/brdownload_part.asm
+	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/browser.o88: $(BUILD)/browser.bin $(BUILD)/browser.part.bin \
+                      tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKG) $(BUILD)/browser.bin -o $@ \
+	        --part $(BUILD)/browser.part.bin --part-compress lz4
 
 # ...and the REFERENCE build, which letters every history row where the
 # shipped one scrolls the band (SPEC.md 65.4.1). It is the A/B for that
@@ -7054,7 +7988,7 @@ $(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
                       apps/tracker/trkwin.inc apps/tracker/trklist.inc \
                       apps/tracker/trkspk.inc apps/os88spk.inc \
                       apps/os88spkfx.inc apps/os88spkfx_t.inc \
-                      apps/os88api.inc apps/os88alt.inc apps/os88ui.inc | $(BUILD)
+                      apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/tracker/ -o $@ apps/tracker/tracker.asm
 	@echo "tracker: $(call FILESIZE,$@) bytes"
 
@@ -7076,7 +8010,7 @@ TRKVOL_SRC := apps/tracker/tracker.asm apps/tracker/trkplay.inc \
 .PHONY: trkvol
 trkvol: $(BUILD)/trkvol360.img
 
-$(BUILD)/trkvol/trk%.bin: $(TRKVOL_SRC) | $(BUILD)
+$(BUILD)/trkvol/trk%.bin: $(TRKVOL_SRC) apps/os88mega.inc | $(BUILD)
 	@mkdir -p $(BUILD)/trkvol
 	$(NASM) -f bin -w+error -DTRK_VSH=$(if $(filter 33,$*),1,0) -I apps/ \
 	        -I apps/tracker/ -o $@ apps/tracker/tracker.asm
@@ -7098,7 +8032,7 @@ $(BUILD)/trkvol360.img: $(BUILD)/tracker.o88 $(BUILD)/trkvol/TRK33.O88 \
 # decoder keeps a disk read's sch_lock hold from starving the DMA. Seven
 # sources, one binary.
 AUDIO_SRC := apps/audio/audio.asm apps/audio/apengine.inc \
-             apps/audio/apwork.inc apps/audio/apcb.inc \
+             apps/audio/aplook.inc apps/audio/apwork.inc apps/audio/apcb.inc \
              apps/audio/apwav.inc apps/audio/apdec.inc \
              apps/audio/apui.inc apps/audio/aplist.inc \
              apps/audio/apspk.inc apps/os88spk.inc apps/os88spkfx.inc \
@@ -7137,7 +8071,7 @@ MIDIRACK_SRC := apps/midirack/midirack.asm apps/midirack/mrseq.inc \
                 apps/os88pit.inc apps/os88spk.inc apps/os88ui.inc \
                 apps/os88api.inc apps/os88data.inc apps/os88rseq.inc \
                 apps/os88parts.inc apps/os88partsbody.inc \
-                drivers/sound/sndpkg.inc
+                drivers/sound/sndpkg.inc apps/os88mega.inc
 $(BUILD)/midirack.bin: $(MIDIRACK_SRC) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/midirack/ -I drivers/sound/ \
 	    -I drivers/ -o $@ apps/midirack/midirack.asm
@@ -8021,7 +8955,7 @@ $(BUILD)/filler.o88: $(BUILD)/filler.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filler.bin -o $@
 
 # FOUR packages, and each has a job: PAINT opens first and takes the top of the
-# ceiling, SHEET opens under it and is the package whose REGION has to move,
+# ceiling, NOTEPAD opens under it and is the package whose REGION has to move,
 # FILLER opens under that and takes the arena down, and closing PAINT is what
 # leaves a hole above SHEET for the descending pass to pack it into.
 # TEXPAD AND NOT SHEET as the package whose region moves: SHEET does not
@@ -8122,6 +9056,13 @@ $(BUILD)/regpair.bin: tests/regpair/regpair.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/regpair.o88: $(BUILD)/regpair.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/regpair.bin -o $@
 
+# SPEC.md 9.10.1's fixture, for tests/mousess.py: SS:SP moved into a claim with
+# IRQ0 masked and IF on, so the mouse ISR is taken on a stack that is not
+# LOW_SEG - the case SeaBIOS's int 13h makes by a race
+$(BUILD)/msstk.bin: tests/msstk/msstk.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/msstk/msstk.asm
+$(BUILD)/msstk.o88: $(BUILD)/msstk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/msstk.bin -o $@
 # SPEC.md 5.4.1.5's fixture, for tests/b4walk.py: one window, one OSAPI_GFX_BLIT4
 # of a dithered block in its W_PAINT. The row writes its own scratch disk.
 $(BUILD)/b4walk.bin: tests/b4walk/b4walk.asm apps/os88api.inc | $(BUILD)
@@ -8334,14 +9275,14 @@ $(STIKFIX)/DESKPROB.DAT: tools/os88stik.py | $(BUILD)
 $(BUILD)/stikdesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(STIKFIX)/desk/system.cfg $(STIKFIX)/DESKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		STIKAPPS:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(STIKFIX)/DESKPROB.DAT \
 		$(STIKFIX)/desk/system.cfg
 
 $(BUILD)/stik%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/%/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
 		$(STIKFIX)/$*/system.cfg
 
@@ -8439,12 +9380,10 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88dis
 include apps/cc/Makefile.inc
 
 # SHEET'S TWO MODULES, PACKED - and the call sits HERE rather than beside
-# sheet.o88's recipe 2,300 lines above because CC_OVLZ_RULE is defined by the
-# include on the line before this one. A `$(call)` on an undefined macro
-# expands to NOTHING and emits no rule, silently, so the packed copies simply
-# did not exist and t_pkgzrules reported the unpacked cut instead - the make
-# shape of SPEC.md's "a %define placed after the %ifdefs that read it".
-# SCRIBE.OVL's own call is further down for the same reason.
+# sheet.o88's recipe above because CC_OVLZ_RULE is defined by the include on
+# the line before this one. A `$(call)` on an undefined macro expands to
+# NOTHING and emits no rule, silently, so the packed copies would simply not
+# exist and t_pkgzrules would report the unpacked cut instead.
 $(eval $(call CC_OVLZ_RULE,CHART.OVL))
 $(eval $(call CC_OVLZ_RULE,MACRO.OVL))
 
@@ -8573,6 +9512,117 @@ $(BUILD)/covl360.img: $(BUILD)/covl.o88 tools/os88disk.py
 #   make covl                            builds both images
 #   make test TESTAPPS=build/covl.img    boots with it in B:
 covl: $(BUILD)/covl.img $(BUILD)/covl360.img
+
+# THE RASTER'S THREE %includes, DEFINED HERE because the LEMBENCH rule below
+# names them and `make` expands a prerequisite list when it reads the rule: a
+# reference to a variable assigned further down the file expands to nothing and
+# the dependency silently is not one. They are NAMED rather than wildcarded for
+# the reason spelled out at $(BUILD)/lemmings.raw.asm's own comment.
+LEMINC := apps/lemmings/lemmask.inc apps/lemmings/lemblit.inc \
+          apps/lemmings/lemfont.inc apps/lemmings/lemsprite.inc
+
+# --- LEMBENCH, the LEMMINGS raster's BENCH (ON DEMAND: `make lembench`) --------
+# SPEC.md 116.7 and PERFORMANCE.md rule 4: measure before redesigning, and a
+# counter is not a timer. It puts MICROSECONDS on the glass for every primitive
+# apps/lemmings/lemblit.inc, lemmask.inc and lemfont.inc define, on whichever
+# backend the machine it boots on uses.
+#
+# IT %includes THE SHIPPING RASTER rather than carrying a copy, which is why
+# the nasm line below has -I apps/ in it and why those three files are written
+# prerequisites here as well as of build/lemmings.bin: a change to either half
+# must not be able to leave the bench measuring something the package does not
+# do (WEAVE-SPEC 1.2's rule, for the same reason).
+#
+# NOTHING UNDER tests/ SHIPS (CLAUDE.md): no floppy `all` writes carries this.
+$(BUILD)/lembench.raw.asm: tests/lembench/lembench.c $(CC_RUNTIME) \
+                          | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/lembench/lembench.c -o $@
+
+$(BUILD)/lembench.gen.asm: $(BUILD)/lembench.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/lembench.bin: tests/lembench/lembench.asm $(BUILD)/lembench.gen.asm \
+                      $(CC_RUNTIME) $(LEMINC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/lembench/ \
+		-o $@ tests/lembench/lembench.asm
+	@echo "lembench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/lembench.o88: $(BUILD)/lembench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $< -o $@
+
+$(BUILD)/lembench.img: $(BUILD)/lembench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/lembench.o88
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/lembench360.img: $(BUILD)/lembench.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/lembench.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make lembench                            builds both images
+#   make test TESTAPPS=build/lembench.img    boots with it in B:, SPACE runs it
+lembench: $(BUILD)/lembench.img $(BUILD)/lembench360.img
+
+# --- CFSX, the C EXCLUSIVE-BRACKET capability gate (ON DEMAND: `make cfsx`) --
+# SPEC.md 53 from C (SPEC.md 116.5): the OSAPI_FSX_* thunks behind
+# %ifdef CC_HAS_FSX, and the three things nothing in this tree had ever done
+# before LEMMINGS needed them - a CRTC line compare with the panel standing
+# still below it while the top scrolls by pel panning, a MODE CHANGE INSIDE a
+# bracket, and an ovl_* far-called from inside one. Every one of those
+# assembles cleanly and runs wrong, so the gate puts NUMBERS ON THE GLASS -
+# tests/covl's shape and tests/cfsx/cfsx.c says which number proves what.
+#
+# It is the third tests/ C package, so this is where CC_PACKAGE_AT was
+# considered and NOT written: it would want a directory, an extra -I, an
+# overlay name and a disk list, which is the whole of CC_PACKAGE plus four
+# arguments for three call sites that each differ in a different place.
+# Open-coded, like chello and covl above, and the comment stays here so the
+# FOURTH one is a decision somebody takes rather than a fourth copy.
+#
+# The disk carries CFSX.O88 and CFSX.OVL. Delete the second and boot again:
+# the refusal is the other half of the design, and it must NOT toast - a
+# kernel toast paints desktop geometry into a foreign mode (SPEC.md 116.5).
+$(BUILD)/cfsx.raw.asm: tests/cfsx/cfsx.c $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) \
+		tests/cfsx/cfsx.c -o $@
+
+$(BUILD)/cfsx.gen.asm: $(BUILD)/cfsx.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+$(BUILD)/cfsx.bin: tests/cfsx/cfsx.asm $(BUILD)/cfsx.gen.asm $(CC_RUNTIME) \
+                   $(wildcard tests/cfsx/*.inc) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -I tests/cfsx/ \
+		-o $@ tests/cfsx/cfsx.asm
+	@echo "cfsx: $(call FILESIZE,$@) bytes (image + module)"
+
+$(BUILD)/cfsx.o88: $(BUILD)/cfsx.bin tools/os88pkg.py tools/os88ovl.py
+	python3 tools/os88ovl.py $< -o $(BUILD)/CFSX.OVL \
+		--trim $(BUILD)/cfsx.trim.bin
+	python3 tools/os88pkg.py $(BUILD)/cfsx.trim.bin -o $@
+
+$(BUILD)/cfsx.img: $(BUILD)/cfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/cfsx.o88 $(BUILD)/CFSX.OVL
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/cfsx360.img: $(BUILD)/cfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/cfsx.o88 $(BUILD)/CFSX.OVL
+	@python3 tools/os88disk.py --verify $@
+
+# ...and the one with NO module on it, which is the refusal arm and is a
+# SEPARATE IMAGE rather than an instruction to delete a file: a test that asks
+# the operator to modify the disk under it is a test nobody runs twice.
+$(BUILD)/cfsxnoovl.img: $(BUILD)/cfsx.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/cfsx.o88
+	@python3 tools/os88disk.py --verify $@
+
+#   make cfsx                                builds all three images
+#   make test TESTAPPS=build/cfsx.img        boots with it in B:
+#   make test TESTAPPS=build/cfsxnoovl.img   ...and the refusal arm
+cfsx: $(BUILD)/cfsx.img $(BUILD)/cfsx360.img $(BUILD)/cfsxnoovl.img
 
 # --- PKGRUN, OSAPI_PKG_START's gate (ON DEMAND: `make pkgrun`) -----------------
 # SPEC.md 21.5: run a package image that is already in memory. The gate is a
@@ -10108,8 +11158,8 @@ xt-weave: $(IMG360) $(BUILD)/weave360.img
 # Open SHEET.WAB, then open FORM.WAB.
 #
 # WHAT IT IS FOR is looking at that refusal, and 86Box is the right instrument
-# for looking and the wrong one for asserting - it has no automation socket
-# (docs/TESTING.md), so nothing in this tree can rest a gate on it.
+# for looking and, until a row is written against tools/os88box.py
+# (docs/86BOX.md), not one any gate rests on.
 # tests/weaveone.py asserts the same byte on MartyPC's 256KB machine; this
 # target is where a person sees it on a period board.
 xt-weave-256: $(IMG360) $(BUILD)/weave360.img
@@ -10348,6 +11398,313 @@ $(BUILD)/loom360.img: $(LOOMDISK) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA \
 		--dir-slots LOOM=32 $(WEAVEFOLDER) $(LOOMFOLDER)
 	@python3 tools/os88disk.py --verify $@
+
+
+# =============================================================================
+# LEMMINGS (SPEC.md 116) - ON DEMAND: `make lemmings`, `make lemmingsdisk`
+# =============================================================================
+# The C toolchain's fifth application: Lemmings (DMA Design / Psygnosis, 1991,
+# the DOS release) as a windowed launcher plus - from wave 2 - a SPEC.md 53
+# exclusive bracket the game runs inside. `make lemmings` runs the host checks
+# (apps/lemmings/build.sh) and then builds the package; `make lemmingsdisk` the
+# floppy in all four geometries; `make lemmings-data` fetches and converts the
+# data set without making a floppy (it builds the package first: the plan is
+# measured against it, below).
+#
+# NOTHING IN `all` REACHES ANY OF IT, for cworddisk's reason: a C package needs
+# SmallerC, which tools/setup-cc.sh fetches and which is deliberately not in
+# this tree (SPEC.md 73.1). A clone with nasm and python3 builds every SHIPPED
+# floppy.
+#
+# NO ORIGINAL DATA IS COMMITTED (CONTRIBUTING.md 6, SPEC.md 116.2). The 26 DOS
+# files are fetched by tools/getlemmings.py at a pinned URL and SHA-256 into
+# build/lemdata/ behind a stamp, and tools/os88lem.py converts them into the
+# band files the package reads. The stamp gates the DISK target ONLY, never
+# `make lemmings`: apps/runcpm's runcpm-src.stamp is the shape, and the reason
+# it matters here is that the host harness runs against the COMMITTED SYNTHETIC
+# FIXTURE, so a tree that has never fetched anything still builds and still
+# checks itself (SPEC.md 116.12).
+#
+# ---------------------------------------------------------------------------
+# OPEN-CODED RATHER THAN CALLED THROUGH CC_PACKAGE, and the reason is ONE -I,
+# which is the reason `loom` above is open-coded too.
+# ---------------------------------------------------------------------------
+# apps/lemmings/lemmings.c carries `#include "lemstr.h"` - the LEMS_* string ids
+# GENERATED by tools/os88lem.py so that the band and the program cannot drift
+# (a renamed string is then a compile error rather than a wrong sentence on the
+# glass, docs/lemband-format.md). The generated header lands in build/, and
+# CC_PACKAGE's compile line carries -SI/-I for SmallerC's own include tree and
+# -I apps/cc and nothing else.
+#
+# LOOM's comment says the SECOND package to need a generated header is the
+# moment to lift these four rules into a CC_PACKAGE_AT that takes extra include
+# paths. This is that second package - and that lift is NOT taken here, on
+# purpose: it would retarget LOOM's rules, which belong to another package and
+# to another wave, from inside the wave that lands this one. The four rules are
+# written out below, the note is carried forward, and a THIRD such package is
+# where somebody should stop copying and write the macro.
+#
+# A STAMP IN FRONT OF THE HEADER: tools/os88lem.py writes lemstr.h only when
+# its text changed (wave 4's second review - the band conversion re-stamping an
+# identical header after the package made every `make lemmingsdisk` rebuild
+# everything), so the header's own mtime cannot say the script ran. The stamp
+# says that; the header keeps the mtime of its last real change, and only a
+# change rebuilds what includes it.
+$(BUILD)/lemstr.stamp: tools/os88lem.py | $(BUILD)
+	python3 tools/os88lem.py --fixture $(BUILD)/lemfixture \
+		--header $(BUILD)/lemstr.h
+	@touch $@
+
+# ...AND THE HEADER IS RECREATED IF IT IS GONE (wave 4's third review): with a
+# bare `@:` here a deleted build/lemstr.h under a stamp newer than the script
+# was never written again, and lemmings.c and build.sh failed on a missing
+# file. The stamp's own recipe is the one that writes it, so this one runs that
+# command only when the file is absent - an mtime that did not move is still
+# what keeps an unchanged header from rebuilding everything that includes it.
+$(BUILD)/lemstr.h: $(BUILD)/lemstr.stamp
+	@test -f $@ || python3 tools/os88lem.py --fixture $(BUILD)/lemfixture \
+		--header $@
+
+# The 26 DOS files, fetched and NEVER committed - and `--from <dir-or-zip>` is
+# the offline route for a machine that has the set already (tools/getlemmings.py
+# takes it as LEMDATAFROM= here). A stamp rather than a directory, as the story
+# cache is: make cannot depend on twenty-six files, and the script is idempotent
+# and re-verifies every hash for 0.2s and no network. The explosion's particle
+# table is a SECOND pinned file (decision 5, SPEC.md 116.8): it comes from the
+# --from directory when it is there, from LEMPARTFROM= (Lemmix's
+# src/Data/Particles/Particles.dat) when named, or from its own pinned URL.
+LEMDATADIR := $(BUILD)/lemdata
+LEMBANDDIR := $(BUILD)/lemband
+$(BUILD)/lemdata.stamp: tools/getlemmings.py | $(BUILD)
+	python3 tools/getlemmings.py -o $(LEMDATADIR) $(if $(LEMDATAFROM),--from $(LEMDATAFROM)) $(if $(LEMPARTFROM),--particles $(LEMPARTFROM))
+	@touch $@
+
+# ...and the conversion. One stamp for all four geometries, because the
+# converter builds them in one pass and prints the per-geometry manifest in
+# CLUSTERS as well as bytes on every run (SPEC.md 116.3): both small geometries
+# have spc = 2, so every band file rounds up to 1,024 bytes and the byte
+# arithmetic is the wrong currency.
+#
+# THE PACKAGE'S OWN FILES GO IN (--pkg), because every greyed fact says how
+# many of the disk's clusters are "already spent" and the 360KB plan drops
+# levels for room: both are the BUILT image's numbers, measured from the
+# package and README.TXT the image recipe puts beside the bands, never a byte
+# estimate (wave 4 review: the estimate said 340 where the disk used 336, and
+# greyed two levels that fitted). Each image recipe then holds the converter
+# to it with --check-image. So the bands follow the package, and a rebuilt
+# LEMMINGS.O88 that crosses a cluster re-plans every geometry.
+$(BUILD)/lemband.stamp: tools/os88lem.py $(BUILD)/lemdata.stamp \
+                        $(BUILD)/lemmings.o88 apps/lemmings/README.TXT | $(BUILD)
+	python3 tools/os88lem.py -s $(LEMDATADIR) -o $(LEMBANDDIR) \
+		--pkg $(BUILD)/lemmings.o88 --pkg apps/lemmings/README.TXT
+	@touch $@
+
+lemmings-data: $(BUILD)/lemband.stamp
+
+# THE HOST CHECKS RUN FIRST AND STOP THE BUILD (apps/runcpm's pattern, not
+# cword's): a check that fails leaves no stamp, and the compile does not run.
+LEMSRC  := apps/lemmings/lemtab.c apps/lemmings/lemtext.c \
+           apps/lemmings/lemload.c apps/lemmings/lemgame.c \
+           apps/lemmings/lemobj.c apps/lemmings/lemact.c \
+           apps/lemmings/lemui.c apps/lemmings/lemdraw.c \
+           apps/lemmings/lemovl.c
+# ...and hosttest/lemraster.c is NAMED here for the same reason LEMINC names
+# every %include below: lemtest.c #includes it, make cannot see through that,
+# and a stale build/.lemmings-hostchecks means the raster's MODEL still
+# describes the previous version while build.sh never re-runs (LESSONS.md 9).
+LEMHOST := apps/lemmings/build.sh apps/lemmings/hosttest/os88.h \
+           apps/lemmings/icon.inc \
+           apps/lemmings/hosttest/lemtest.c \
+           apps/lemmings/hosttest/lemraster.c tools/os88lem.py \
+           tools/lemsim.py apps/lemmings/hosttest/mech/traces.sha256 \
+           apps/lemmings/hosttest/mech/level0.txt \
+           apps/lemmings/hosttest/mech/level1.txt \
+           apps/lemmings/hosttest/mech/level2.txt \
+           apps/lemmings/hosttest/mech/level2n.txt \
+           apps/lemmings/hosttest/mech/level0p.txt \
+           $(wildcard apps/lemmings/hosttest/fixture/*)
+$(BUILD)/.lemmings-hostchecks: apps/lemmings/lemmings.c $(LEMSRC) $(LEMHOST) \
+                               $(BUILD)/lemstr.h | $(BUILD)
+	apps/lemmings/build.sh
+	@touch $@
+
+# THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): lemmings.c #includes the
+# five parts above, and make cannot see through a #include - without the line
+# below an edit to the launcher leaves build/lemmings.o88 untouched and a stale
+# package reads exactly like the change having done nothing (LESSONS.md 9).
+# ...AND THE SAME FOR EVERY %include, which make cannot see through either.
+# The wildcard would cover them, and they are NAMED anyway: a wildcard silently
+# stops covering a file the day one is renamed, and the whole point of the line
+# is that an edit to the raster cannot leave a stale build/lemmings.o88 reading
+# exactly like a change that did nothing (LESSONS.md 9).
+# WAVE 3 ADDED lemgame.c, lemobj.c and lemact.c to LEMSRC, in the same edit as
+# the files themselves, and lemsprite.inc to LEMINC.
+#
+# LEMINC ITSELF IS DEFINED ABOVE, BESIDE THE LEMBENCH BLOCK, and that is not
+# tidiness: `make` expands a prerequisite list when it READS the rule, so a
+# `$(LEMINC)` in the bench's own rule 1,300 lines above this line expanded to
+# NOTHING and an edit to lemblit.inc left build/lembench.bin untouched - the
+# exact defect this comment block is about, one target along (LESSONS.md 9).
+
+$(BUILD)/lemmings.raw.asm: apps/lemmings/lemmings.c $(LEMSRC) $(CC_RUNTIME) \
+                           $(BUILD)/lemstr.h $(BUILD)/.lemmings-hostchecks \
+                           | $(BUILD) cc-toolchain
+	PATH="$(CURDIR)/$(CC_SC):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(BUILD) \
+		apps/lemmings/lemmings.c -o $@
+
+$(BUILD)/lemmings.gen.asm: $(BUILD)/lemmings.raw.asm tools/cc8086.py
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME)
+
+# icon.inc is the PACKAGE's alone (CC_ICON in lemmings.asm): the bench never
+# includes it, so it is named here and in LEMHOST and not in LEMINC (wave 6's
+# review - an icon edit rebuilt the bench for nothing).
+$(BUILD)/lemmings.bin: apps/lemmings/lemmings.asm $(BUILD)/lemmings.gen.asm \
+                       $(CC_RUNTIME) $(LEMINC) apps/lemmings/icon.inc \
+                       apps/os88ui.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/lemmings/lemmings.asm
+	@echo "lemmings: $(call FILESIZE,$@) bytes (image + module)"
+
+# THE OVERLAY CUT (SPEC.md 73.14, 116.6). Everything from `.modc` on becomes
+# the module: the About card, the greying facts, the preview and postview text,
+# the chrome, the progress file, the level's compose and every once-a-level or
+# once-a-frame routine of the game (lemmings.c's renames say which). os88ovl.py finds the
+# boundary in the image size word the header already carries, and os88pkg.py
+# then refuses a package whose header and file disagree - which is what stops
+# this step being skippable.
+#
+# ...AND THE MODULE IS A PART OF THE PACKAGE SINCE WAVE 3 (SPEC.md 73.14.2,
+# `%define CC_OVL_PART` in the shim, CC_PACKAGE's fifth argument `part` open-
+# coded): the cut module goes back in as the LAST --part, LZ4-packed, and
+# os88pkg.py refuses a --part count that is not the table's file-backed rows,
+# so the shim and this rule cannot drift apart silently. $(BUILD)/LEMMINGS.OVL
+# is still written, plain, because the host readers want the module's bytes;
+# no disk carries it. The part's packing is $(CC_PARTZ), the template's, so
+# `make CCPARTZ=...` - the A/B for that packing (apps/cc/Makefile.inc) -
+# reaches this package as it reaches every CC_PACKAGE one.
+$(BUILD)/lemmings.o88: $(BUILD)/lemmings.bin tools/os88pkg.py tools/os88ovl.py \
+                       $(PKGZSTAMP)
+	python3 tools/os88ovl.py $< -o $(BUILD)/LEMMINGS.OVL \
+		--trim $(BUILD)/lemmings.trim.bin
+	python3 tools/os88pkg.py $(PKGZARG) $(BUILD)/lemmings.trim.bin -o $@ \
+		$(CC_PARTZ) --part $(BUILD)/LEMMINGS.OVL
+
+lemmings: $(BUILD)/lemmings.o88
+
+# ALL FOUR geometries an APPLICATION's own floppy is built in (CLAUDE.md):
+# 1.44MB and 720KB for QEMU, 360KB for an 86Box XT or a real one, and 1.2MB
+# 5.25" HD (SPEC.md 19) for the AT-class machine.
+#
+# ONE FOLDER PER DISK, AND THAT IS A CORRECTNESS REQUIREMENT rather than a
+# layout choice. Every band file the package opens by name is resolved in the
+# LAUNCHING instance's own directory (SPEC.md 19.2.1, 73.14), so the package
+# and the bands are ONE folder on every disk (SPEC.md 116.6) - which is WEAVE's
+# and LOOM's rule for the same reason. The module is no file at all: it is
+# part 0 of LEMMINGS.O88, read by op_load before os88_main() runs (SPEC.md
+# 73.14.2).
+#
+# IT IS A SUBFOLDER AND NOT THE ROOT, and the build refused the other way round
+# before it was: the 1.44MB set is 36 band files plus the package and README.TXT,
+# and os88disk.py stops at "38 listed root entries; the kernel lists at most 32
+# per directory". `--deep-folders` lifts that cap for a SUBFOLDER only - the
+# Disk window then shows the first 31 rows and the file API reaches them all -
+# so LEMMINGS.O88 and README.TXT are passed FIRST and are therefore the first
+# two rows the user sees, which is the whole of what those 31 rows have to
+# carry. The 720KB and 360KB disks are inside the cap anyway; the flag costs
+# them nothing and having one rule shape for all four is worth more than
+# omitting it on two.
+#
+# The band files are globbed IN THE RECIPE rather than by $(wildcard), because
+# wildcard is evaluated when the Makefile is READ and this directory is written
+# by the prerequisite above. The content differs per geometry on purpose: the
+# 720KB disk carries everything except the four VGASPEC pictures and the 360KB
+# one two graphic sets and the levels that use them, each stated in that disk's
+# own LEVELS.TXT and greyed in the chooser with the fact (SPEC.md 116.9).
+#
+# --verify is a standalone structural fsck of what came out and it is in the
+# recipe rather than a separate target because it costs milliseconds and catches
+# the class of defect - a bad FAT chain, a directory entry pointing at nothing -
+# that otherwise arrives as "Disk error" inside the emulator ten minutes later.
+# ...AND README.TXT, which is not decoration: SPEC.md 116.2 and the port's
+# licence posture put the FULL attribution list - the original's own seven
+# credit lines and the Psygnosis copyright - beside the package, because the
+# About card is twelve rows and names the two principals and points HERE. A
+# disk without it is a product whose stated attribution exists nowhere on it.
+# apps/c64/README.TXT + COPYING is the worked precedent.
+LEMPKG  := $(BUILD)/lemmings.o88 apps/lemmings/README.TXT
+LEMHEAD := $(addprefix LEMMINGS:,$(LEMPKG))
+
+# ...AND SYSTEM/APPDATA ON EVERY ONE OF THEM (SPEC.md 19.9), which is the rule
+# stated at APPDATAFOLDER's own definition above - "every disk that carries an
+# application carries it too" - and which the FTPD disk records the cost of
+# breaking (the note above ftpapps.img: the setting worked all session and was
+# gone on the next launch, for a whole run). Here it is worse than invisible:
+# lemovl.c's ovl_data_enter() dives SYSTEM then APPDATA on the LAUNCHING volume,
+# so with no such folder it refuses on EVERY geometry, lem_savable stays 0
+# forever and the Save Progress row greys with LEMS_GREY_SAVE - a sentence about
+# a live CD, in front of a reader with a writable floppy in B: and no CD in the
+# machine. It also falsifies the SECOND greyed fact beside it: LEMS_GREY_CODE
+# says the original's access codes were dropped because progress is kept in
+# SYSTEM/APPDATA/LEMMINGS.SAV instead, which cannot work on a disk with no such
+# folder. One directory cluster a disk; --verify prints what is left.
+#
+# A CHECK THAT REFUSES TAKES THE IMAGE WITH IT: os88disk.py has already
+# written $@ by then and this Makefile has no .DELETE_ON_ERROR, so a refused
+# image left on disk was up to date to the next make and never checked again -
+# and --check-image is the only thing holding LEMMAN offset 20 to the truth
+# (wave 4's second review).
+#
+# IT GOES LAST, and that is argparse rather than taste (the note above APPSARGS):
+# an option that takes a value in the MIDDLE of a positional list stops the list
+# being collected, and the band files are that list.
+$(BUILD)/lemmings.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/1440/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/1440/LEMMAN.LEM || { rm -f $@; exit 1; }
+
+$(BUILD)/lemmings720.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/720/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/720/LEMMAN.LEM || { rm -f $@; exit 1; }
+
+$(BUILD)/lemmings120.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/1200/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/1200/LEMMAN.LEM || { rm -f $@; exit 1; }
+
+$(BUILD)/lemmings360.img: $(LEMPKG) $(BUILD)/lemband.stamp tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --deep-folders $(LEMHEAD) \
+		$$(for f in $(LEMBANDDIR)/360/*; do echo "LEMMINGS:$$f"; done) \
+		$(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@ || { rm -f $@; exit 1; }
+	@python3 tools/os88lem.py --check-image $@ \
+		$(LEMBANDDIR)/360/LEMMAN.LEM || { rm -f $@; exit 1; }
+
+lemmingsdisk: $(BUILD)/lemmings.img $(BUILD)/lemmings720.img \
+              $(BUILD)/lemmings120.img $(BUILD)/lemmings360.img
+
+# THE TWO 86Box MACHINES (SPEC.md 116.9; VMXTLEMMINGS above says what each is a
+# copy of). Both boot the system floppy with the LEMMINGS disk in B: - the
+# 360KB one on the XT, two graphic sets and the levels that use them, and the
+# 1.44MB one on the 386, all 120. Reaching the game is a double-click on
+# B:LEMMINGS/LEMMINGS.O88, which this host cannot send into 86Box: these are
+# machines to LOOK at, and every number about them is MartyPC's.
+xt-lemmings: $(IMG360) $(BUILD)/lemmings360.img
+	@$(UNPROTECT) $(VMXTLEMMINGS)/86box.cfg
+	$(BOX) -P $(VMXTLEMMINGS) -N
+
+386-lemmings: $(IMG) $(BUILD)/lemmings.img
+	@$(UNPROTECT) $(VM386LEMMINGS)/86box.cfg
+	$(BOX) -P $(VM386LEMMINGS) -N
 
 # =============================================================================
 # FROTZ and its story floppy (SPEC.md 61) - ON DEMAND: `make zdisk`
@@ -10893,7 +12250,7 @@ TRKLOGSRC := apps/tracker/tracker.asm apps/tracker/trkplay.inc \
 
 trklog: $(BUILD)/trklog.img $(BUILD)/trklog360.img
 
-$(BUILD)/trklog.bin: $(TRKLOGSRC) apps/os88api.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/trklog.bin: $(TRKLOGSRC) apps/os88api.inc apps/os88alt.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DTRKLOG -I apps/ -I apps/tracker/ -I tests/ \
 		-o $@ apps/tracker/tracker.asm
 	@echo "trklog: $(call FILESIZE,$@) bytes"
@@ -10934,7 +12291,7 @@ TRKSCRLSRC := apps/tracker/tracker.asm apps/tracker/trkplay.inc \
 
 trkscrl: $(BUILD)/trkscrl.img
 
-$(BUILD)/trkscrl.bin: $(TRKSCRLSRC) apps/os88api.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/trkscrl.bin: $(TRKSCRLSRC) apps/os88api.inc apps/os88alt.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DTRKDBG -I apps/ -I apps/tracker/ -I tests/ \
 		-o $@ apps/tracker/tracker.asm
 	@echo "trkscrl: $(call FILESIZE,$@) bytes"
@@ -10991,7 +12348,7 @@ TRKRATED_nfpage := -DTTXQSTAT -DTTXFSANY -DTTXNOFAST -DTTXPAGE
 TRKRATED_nfnodraw := -DTTXQSTAT -DTTXFSANY -DTTXNOFAST -DTTXNODRAW
 TRKRATED_nfnoall := -DTTXQSTAT -DTTXFSANY -DTTXNOFAST -DTTXNOALL
 
-$(BUILD)/trklog-%.bin: $(TRKLOGSRC) apps/os88api.inc apps/os88alt.inc | $(BUILD)
+$(BUILD)/trklog-%.bin: $(TRKLOGSRC) apps/os88api.inc apps/os88alt.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DTRKLOG $(TRKRATED_$*) \
 		-I apps/ -I apps/tracker/ -I tests/ -o $@ apps/tracker/tracker.asm
 	@echo "trklog-$*: $(call FILESIZE,$@) bytes"
@@ -11078,7 +12435,7 @@ $(BUILD)/npbench360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
                          $(SYSAPPS) $(SYSDOC) $(BUILD)/npb/notepad.o88 tools/os88disk.py $(SYSROOT)
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(SYSDOC) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(SYSDOC) \
 		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
 
 # --- ...and the ONE LONG RUN disk, for SPEC.md 27.4.2 ------------------------
@@ -11134,7 +12491,7 @@ $(BUILD)/nprun360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) \
                        tools/os88disk.py $(SYSROOT)
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(BUILD)/nprun/run.txt \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(BUILD)/nprun/run.txt \
 		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
 
 # --- the A/V SYNC disk (ON DEMAND: `make clicktest`) -------------------------
@@ -11343,23 +12700,25 @@ $(BUILD)/kbdfsx.img: $(BUILD)/kbdfsx.o88 tools/os88disk.py
 
 # ...and the bootable one, vbeprobeboot's shape and for its reason: the
 # Satellite has ONE floppy drive, so "boot the system disk, then swap" is not
-# a procedure that machine can follow. THIS ONE CARRIES THE VBE SYSTEM.CFG -
-# the fault is reported on the VBE desktop, so the disk that goes to the field
+# a procedure that machine can follow. THIS ONE CARRIES THE VESA SYSTEM.CFG (SPEC.md 120; it was the fork's own
+# VBE config until that track was retired at the 2026-10-24 merge) -
+# the fault is reported on the high-resolution desktop, so the disk that goes
+# to the field
 # must come up in it without anyone being asked to set it first.
 $(BUILD)/kbdfsxboot.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) \
                          $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) \
-                         $(FACELIC) $(BUILD)/vbecfg/system.cfg \
+                         $(FACELIC) $(BUILD)/vxcfg/system.cfg \
                          $(BUILD)/kbdfsx.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
-		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vbecfg/system.cfg \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vxcfg/system.cfg \
 		$(BUILD)/kbdfsx.o88 $(APPDATAFOLDER)
 
 .PHONY: kbdfsx
 kbdfsx: $(BUILD)/kbdfsx.img $(BUILD)/kbdfsxboot.img
 	@echo "kbdfsx: build/kbdfsxboot.img - ONE bootable floppy for the field"
-	@echo "        machine: the VBE desktop with KBDFSX.O88 at the ROOT of"
+	@echo "        machine: the VESA desktop with KBDFSX.O88 at the ROOT of"
 	@echo "        A:. Open the drive icon, not the desktop."
 	@echo "        build/kbdfsx.img - the B: disk, for"
 	@echo "        \`make test TESTAPPS=build/kbdfsx.img\` under an emulator."
@@ -11769,19 +13128,19 @@ videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
 # `make 486-video` boots it in 86Box.
 VID486_CYLS ?= 250
 VID486CLIPS ?=
-$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc | $(BUILD)
+$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -o $@ apps/video/video.asm
-$(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/videodiag.bin -o $@
+$(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/videodiag.bin -o $@ $(VBLKPARTS)
 # VIDEOR.O88: VIDEOD with the READ LOG (SPEC.md 98.3.22.2) - every chunk the
 # player reads, its file offset, length and sum, and where a damaged
 # super-packet was found, saved in the profile for tools/os88vfit.py --reads
 # to hold against the file. Its room is the layer's and the speaker's info
 # lines, which a card's play of a file with no layer does not draw
-$(BUILD)/videordlog.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc | $(BUILD)
+$(BUILD)/videordlog.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -DVP_RDLOG -o $@ apps/video/video.asm
-$(BUILD)/videordlog.o88: $(BUILD)/videordlog.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/videordlog.bin -o $@
+$(BUILD)/videordlog.o88: $(BUILD)/videordlog.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/videordlog.bin -o $@ $(VBLKPARTS)
 .PHONY: vid486
 vid486: $(VIDENC_BASE) $(BUILD)/videodiag.o88 $(BUILD)/vidbench.o88 \
 	$(BUILD)/viddisk.o88 $(BUILD)/vidsnd.o88 tools/os88hdd.py tools/os88vid.py \
@@ -11890,8 +13249,8 @@ VIDDEMO_IDE := vga
 VIDDEMO_IMGS := $(foreach a,$(VIDDEMO_ADAPTERS),$(BUILD)/VIDDEMO-$(shell echo $(a) | tr a-z A-Z)-$(if $(filter $(a),$(VIDDEMO_IDE)),IDE,ST11R).VHD)
 # (= and $$(APPS) below, not :=: the apps disk's lists are defined further
 # down this file, and an immediate expansion here took them as EMPTY)
-VIDDEMO_INSTALL = $(DRIVERS) $(SYSDOC) \
-	$(sort $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
+VIDDEMO_INSTALL = $(DRIVERS) $(SYSOPTIONAL) $(SYSDOC) \
+	$(sort $(SYSAPPSARGS) $(SYSOPTIONALARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSLOGOARG) \
 	       $(FACESARG) $(SYSVIDARGS) \
 	       $(filter-out --folder SYSTEM/APPDATA,$(APPSARGS)))
 .PHONY: viddemo
@@ -11909,7 +13268,7 @@ $(BUILD)/viddemo/%/00-VIDS.TXT: apps/video/demo/%/00-VIDS.TXT tools/checkreadme.
 
 .SECONDEXPANSION:
 $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
-	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
 	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) \
 	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
 	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
@@ -11925,7 +13284,7 @@ $(BUILD)/VIDDEMO-%-ST11R.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	rm -f $(BUILD)/viddemo/$*.img
 
 $(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
-	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSOPTIONAL) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
 	$(FACES) $(FACELIC) $(LOGOVID) $(BUILD)/video.o88 $$(APPS) \
 	$$(BUILD)/viddemo/$$(shell echo $$* | tr A-Z a-z)/00-VIDS.TXT \
 	$$(wildcard apps/video/demo/$$(shell echo $$* | tr A-Z a-z)/*.V88) \
@@ -11939,6 +13298,41 @@ $(BUILD)/VIDDEMO-%-IDE.VHD: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	python3 tools/os88hdd.py --wrap $(BUILD)/viddemo/$*.img \
 		--cyls 1024 --heads 16 --spt 63 --out $@
 	rm -f $(BUILD)/viddemo/$*.img
+
+# THE REALDMG HARD DISK (docs/REALDMG-SPEC.md section 18), ON DEMAND: the
+# whole install, VIDDEMO_INSTALL's derived list, plus RealDMG's disk in a
+# REALDMG folder and the user's cartridges in GAMEBOY (GAMES is the apps
+# disk's, already in the install) - `make realdmghd
+# GBROMS=<dir>`, the way CPMSW= and BUNDLES= take yours. tools/gbromdir.py
+# names each from its header (8.3) and writes GAMEBOY/ROMS.TXT; no cartridge
+# is ever in the tree, and build/ is never committed. The geometry is the
+# AT drive table's TYPE 3 (615/6/17, 32 MB), which vm/286-realdmg boots - so
+# its MR BIOS needs only "type 3" in setup, where 286-video's 250/15/17 wants
+# a user type typed in - and it is the place a 2MB cartridge, more than any
+# floppy holds, can be opened at all. Rebuilt every time: the ROM directory
+# is not a prerequisite make can see.
+REALDMGHD := $(BUILD)/REALDMG-HD.VHD
+GBROMS ?=
+.PHONY: realdmghd
+realdmghd: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
+	$(DRIVERS) $(SYSDOC) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSLOGO) \
+	$(FACES) $(FACELIC) $(LOGOVID) $$(APPS) $(REALDMGDISK) \
+	tools/gbromdir.py tools/os88hdd.py
+	rm -rf $(BUILD)/realdmghd
+	mkdir -p $(BUILD)/realdmghd/games
+	python3 tools/gbromdir.py "$(GBROMS)" $(BUILD)/realdmghd/games
+	python3 tools/os88disk.py -o $(BUILD)/realdmghd/hd.img --hdd \
+		--geometry 615/6/17 --mbr $(BUILD)/mbr.bin \
+		--boot $(BUILD)/boothd.bin --kernel $(KERNFILE) $(APPDATAFOLDER) \
+		$(VIDDEMO_INSTALL) \
+		REALDMG:$(BUILD)/realdmg.o88 REALDMG:apps/realdmg/GBDEMO.GB \
+		REALDMG:apps/realdmg/README.TXT \
+		$$(for f in $(BUILD)/realdmghd/games/*; do [ -f "$$f" ] && echo "GAMEBOY:$$f"; done)
+	python3 tools/os88disk.py --verify-hdd $(BUILD)/realdmghd/hd.img
+	python3 tools/os88hdd.py --wrap $(BUILD)/realdmghd/hd.img \
+		--cyls 615 --heads 6 --spt 17 --out $(REALDMGHD)
+	rm -f $(BUILD)/realdmghd/hd.img
+	@ls -l $(REALDMGHD)
 
 # THE ENCODER FOR PEOPLE WITH NO os8088 TREE (SPEC.md 98.2.13): the window,
 # every tools/ module it imports or runs (tools/os88vbundle.py COMPUTES the
@@ -12089,7 +13483,8 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) $(FACES) $(FACELIC) tools/os
 #                                         # in a relative link
 #   python3 tests/br14.py                 # ...and Browser 1.4's cell spans,
 #                                         # per-cell alignment and refused
-#                                         # password/file/textarea controls
+#                                         # password/file/textarea controls,
+#                                         # plus literal indentation in <pre>
 #   python3 tests/brnav.py                # Back/Forward/Reload and Save As
 #                                         # (BROWSER-PLAN 5/5.2/5.3). It needs
 #                                         # `make ethertest` too and boots
@@ -12115,13 +13510,39 @@ $(BUILD)/bench360.img: $(BENCHIMGPKGS) $(BENCHDATA) $(FACES) $(FACELIC) tools/os
 # not part of `all`, so the copy goes stale the moment the page is edited and
 # every shipped apps image then fails a freshness check about a disk that is
 # perfectly fresh. Renaming is a reason for a copy; having one is not.
-BRFILES := $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+BRFILES := $(BUILD)/browser.o88 $(BUILD)/ANOTE.O88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
            $(BUILD)/FORMAT.HTM \
            $(BUILD)/TORTURE.HTM \
            $(BUILD)/UTF8.HTM $(BUILD)/FROGFIND.HTM $(BUILD)/FFHOME.HTM \
-           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM
+           $(BUILD)/LINKS.HTM $(BUILD)/PUBZONE.HTM $(BUILD)/FRAMESET.HTM \
+           $(BUILD)/LINARENA.HTM $(BUILD)/DOCWIDE.HTM
 
 browsertest: $(BUILD)/brtest.img $(BUILD)/brtest360.img
+
+# 1.6c user field disk: current Browser package plus interactive HTML fixtures
+# and a 768 KiB visible-content page for conventional-RAM/EMS spill testing.
+.PHONY: browsertestems
+browsertestems: $(BUILD)/br16c-check.img $(BUILD)/br16c-check360.img
+
+.PHONY: brmemorypages
+brmemorypages:
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+
+.PHONY: brsourcecut
+brsourcecut: browsertest $(BUILD)/brmemory/sourcepressure.htm
+	python3 tests/ethernet.py --page $(BUILD)/brmemory/sourcepressure.htm \
+		--allow-source-cutoff --response-chunk-size 512 --response-delay-ms 5
+
+$(BUILD)/LINARENA.HTM: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+	cp $(BUILD)/brmemory/linearena.htm $@
+
+$(BUILD)/DOCWIDE.HTM: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+	cp $(BUILD)/brmemory/docwide.htm $@
+
+$(BUILD)/brmemory/sourcepressure.htm: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
 
 $(BUILD)/DEMO.HTM: tests/htm/demo.htm | $(BUILD)
 	cp $< $@
@@ -12141,12 +13562,42 @@ $(BUILD)/PUBZONE.HTM: tests/htm/pubzone.htm | $(BUILD)
 	cp $< $@
 $(BUILD)/FRAMESET.HTM: tests/htm/frameset.htm | $(BUILD)
 	cp $< $@
+$(BUILD)/BR16C.HTM: tests/htm/br16ccheck.htm | $(BUILD)
+	cp $< $@
+$(BUILD)/brmemory/emsgrowth.htm: tools/brmemory.py | $(BUILD)
+	python3 tools/brmemory.py --out $(BUILD)/brmemory
+$(BUILD)/EMSGROW.HTM: $(BUILD)/brmemory/emsgrowth.htm | $(BUILD)
+	cp $< $@
+
+$(BUILD)/br16c-check.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
+                          $(BUILD)/DEMO.HTM $(BUILD)/FORMAT.HTM \
+                          $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+                          $(BUILD)/BR16C.HTM $(BUILD)/EMSGROW.HTM \
+                          tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA \
+	        $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+	        $(BUILD)/FORMAT.HTM $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+        $(BUILD)/BR16C.HTM $(BUILD)/EMSGROW.HTM
+
+$(BUILD)/br16c-check360.img: $(BUILD)/browser.o88 apps/browser/browser.htm \
+                             $(BUILD)/DEMO.HTM $(BUILD)/FORMAT.HTM \
+                             $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+                             $(BUILD)/BR16C.HTM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA \
+	        $(BUILD)/browser.o88 apps/browser/browser.htm $(BUILD)/DEMO.HTM \
+	        $(BUILD)/FORMAT.HTM $(BUILD)/TORTURE.HTM $(BUILD)/FRAMESET.HTM \
+	        $(BUILD)/BR16C.HTM
 
 $(BUILD)/brtest.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BRFILES)
+	python3 tools/os88disk.py -o $@ --size 1440 --folder SYSTEM/APPDATA $(BRFILES)
 
 $(BUILD)/brtest360.img: $(BRFILES) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BRFILES)
+	python3 tools/os88disk.py -o $@ --size 360 --folder SYSTEM/APPDATA $(BRFILES)
+
+# Browser memory gate: put Note Pad at the top of its test-only disk listing so
+# QEMU can launch the second app without depending on a blind scrollbar walk.
+$(BUILD)/ANOTE.O88: $(BUILD)/notepad.o88
+	cp $< $@
 
 # --- the FIELD disks: one BOOTABLE 360KB floppy per adapter ------------------
 #
@@ -12387,8 +13838,20 @@ budget-check: $(BUILD)/kernel.bin small emu
 SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
              $(BUILD)/thewire.o88 $(BUILD)/wirechat.o88 \
              $(BUILD)/tracker.o88 \
-             $(BUILD)/audio.o88 $(BUILD)/sheet.o88 $(BUILD)/video.o88 \
-             $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88
+             $(BUILD)/audio.o88 $(BUILD)/mixer.o88 $(BUILD)/sheet.o88 $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
+             $(BUILD)/video.o88 \
+             $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 $(BUILD)/rlapply.o88 \
+             $(BUILD)/xtmp3.o88
+# XTMP3 (SPEC.md 121.12) is VIDEO's row and SHEET's at once. It streams:
+# OSAPI_FILE_READ_SEQ plays a track and OSAPI_FILE_WRITE_SEQ writes a decoded
+# one, and kern_small has neither (SPEC.md 18.4.8, 18.4.9), so the queue would
+# list a file it could never play. Its sound is SOUND.DRV's, which kern_small
+# does not load, and the speaker's bracket is FSXF_RATE's, kern_big's alone.
+# And its working set is the 24.5.2 ground: the XT path is up to 400,000 bytes
+# (121.10), three times the floor machine's whole RAM, so there is no state of
+# that machine in which it runs. Its demo songs are not in $(APPS_DATA), so
+# they leave the small disks with it.
+# Mixer requires SOUND.DRV, which kern_small does not load (SPEC.md 34.15).
 # RLAPPLY (SPEC.md 103.6.5) is an omission by SCOPE rather than size: chipset
 # tuning is for AT-class boards (103.6), and the machine kern_small exists for
 # is the 128KB XT, whose bus is the CPU's own and has nothing to set. The
@@ -12435,7 +13898,18 @@ SMALLOMIT := $(BUILD)/browser.o88 $(BUILD)/ftpd.o88 $(BUILD)/telnet.o88 \
 # never applied - $(SMALLGAMES)'s own warning, one list along. BOTH BRANCHES
 # FOUND THIS SEPARATELY; the comment is upstream's, and gorillas.o88 is this
 # fork's omission, kept.
-SMALLOMIT_GAMES = $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 $(DM_SHIP)
+SMALLOMIT_GAMES = $(BUILD)/skies.o88 $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 $(DM_SHIP) \
+                  $(BUILD)/wireflet.o88
+#   wireflet                WIREFLEET (SPEC.md 114.11, 24.5), added at the
+#                           2026-10-24 upstream merge: its missiles and music
+#                           took the package from 26 clusters to 47, and the
+#                           Sound Blaster clips it grew are parts of that one
+#                           file - so it is 24.5's REQUIREMENT case and not a
+#                           size one, kern_small shipping no SOUND.DRV for it
+#                           to reach. small360.img came out 357 of 354 without
+#                           this line; it is 310 with it. Upstream took the
+#                           same package off apps360.img the same way and for
+#                           the same arithmetic (its own note, above).
 #   pxstein                 PIXELSTEIN 3D (SPEC.md 97.9, 24.5): a REQUIREMENT
 #                           the arena cannot meet. Its program part is a
 #                           ~33KB image with two 4KB map layouts and two
@@ -12856,15 +14330,359 @@ $(BUILD)/emu.img: KMODDIR := $(EMUDIR)
 # one feature it was built for has not been given anything. build/vmmcfg is the
 # gate's own SYSTEM.CFG with bit 5 set, which is the absolute mouse's bit and
 # not its row number (drv_cfgbit), and it is reused verbatim rather than copied.
-$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
+$(BUILD)/emu.img: $(EMUDRIVERS) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS) $(SYSDOC) $(SYSLOGO) \
                   $(FACES) $(FACELIC) $(BUILD)/vmmcfg/system.cfg \
                   tools/os88disk.py
 	@$(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 $(EMUDIR)/boot.bin $(EMUDIR)/boothd.sys $(EMUDIR)/coldhma.sys
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(EMUDIR)/boot.bin --kernel $(EMUDIR)/$(KERNNAME) \
-		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) \
+		$(EMUDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(BUILD)/vmmcfg/system.cfg \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
+
+# =============================================================================
+# `make mega` - kern_mega AND ITS SYSTEM DISK (docs/plans/KERN-MEGA-PLAN.md)
+# =============================================================================
+# kern_big, booted in real mode exactly as it is, then switched into 286
+# PROTECTED MODE at the end of kmain (KERN-MEGA-PLAN 10, wave M1). Into
+# build/megak/ for `make emu`'s reason: a kernel that reaches build/ is one
+# somebody boots believing it is the shipped one. ONE GEOMETRY, 1.44MB: a
+# kern_mega machine is an AT, and every AT here takes a 3.5" HD image. Pair it
+# with the SHIPPED build/apps.img - the API table is the same table at the
+# same offsets, which is the whole of KERN-MEGA-PLAN 2.5.
+#
+# M1 IS QEMU'S: QEMU is on docs/TESTING.md's list for 286 and 386 work, and
+# its CPU executes 16-bit protected mode correctly. Run it with
+#   qemu-system-i386 -m 16 -drive file=build/mega.img,format=raw,if=floppy \
+#       -drive file=build/apps.img,format=raw,if=floppy,index=1 -boot a \
+#       -debugcon file:build/megak/e9.log -global isa-debugcon.iobase=0xe9
+# where the debug console is what kern_mega's fault reporter writes to as
+# well as the screen.
+# MEGARUN (tests/megarun): the package tools/os88bochs.py's SWEEP starts from a
+# folder of packages, to find which of them fault under kern_mega on Bochs -
+# the emulator that checks a 286's segments (KERN-MEGA-PLAN 10.1 items 13, 16).
+# A test instrument: on demand, and on no shipped disk.
+$(BUILD)/megarun.bin: tests/megarun/megarun.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarun/megarun.asm
+$(BUILD)/megarun.o88: $(BUILD)/megarun.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarun.bin -o $@
+# MEGAXM (tests/megaxm): the XMEM cells end to end from a package - alloc,
+# copy out, copy in, compare, free - with the verdict on port E9. kern_mega's
+# pool is its reason (KERN-MEGA-PLAN 12.2); any kernel with a store runs it.
+$(BUILD)/megaxm.bin: tests/megaxm/megaxm.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megaxm/megaxm.asm
+$(BUILD)/megaxm.o88: $(BUILD)/megaxm.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megaxm.bin -o $@
+# MEGAI13 (tests/megai13): forty REFLECTED int 13h reads back to back, for the
+# pointer to move through (KERN-MEGA-PLAN 14.1 answer 18, 14.9); and a 1.44MB
+# floppy carrying it, for a B: drive
+$(BUILD)/megai13.bin: tests/megai13/megai13.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megai13/megai13.asm
+$(BUILD)/megai13.o88: $(BUILD)/megai13.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megai13.bin -o $@
+$(BUILD)/megai13.img: $(BUILD)/megai13.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/megai13.o88
+megai13: $(BUILD)/megai13.img
+.PHONY: megai13
+# MEGAHI (tests/megahi): a package that says OS88_HIGH, so kern_mega loads its
+# region ABOVE 1MB, walking the doors a package uses with DS a selector there -
+# a claim from the entry proc, a file into its bss, a window, a timer, a worker
+# - and its teardown giving the pair back (KERN-MEGA-PLAN 13.3 step 4)
+$(BUILD)/megahi.bin: tests/megahi/megahi.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahi/megahi.asm
+$(BUILD)/megahi.o88: $(BUILD)/megahi.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megahi.bin -o $@
+# MEGACSW / MEGACSL (tests/megacsw): `mov [cs:x], ds` and `mov [cs:x], cs`
+# read back, high (OS88_HIGH) and low, and MEGACSL's guard store through the
+# LDT alias of a segment in no claim (KERN-MEGA-PLAN 14.39) - `tools/os88bochs.py
+# sweep build/megacsw.o88 build/megacsl.o88`, the guard ending the boot
+$(BUILD)/megacsw.bin: tests/megacsw/megacsw.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DCSW_HIGH -o $@ tests/megacsw/megacsw.asm
+$(BUILD)/megacsl.bin: tests/megacsw/megacsw.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megacsw/megacsw.asm
+$(BUILD)/megacsw.o88: $(BUILD)/megacsw.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megacsw.bin -o $@
+$(BUILD)/megacsl.o88: $(BUILD)/megacsl.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megacsl.bin -o $@
+# MEGAFLT (tests/megaflt): packages that FAULT on purpose - a callback, a
+# worker, an fsx bracket, held claims and a tone, the entry proc, a wake with
+# the gfx lock - and FLTZ, the control that does not (KERN-MEGA-PLAN 14.42).
+# tests/megaflt.py boots kern_mega under Bochs with all seven; each faulting
+# one must be CLOSED and the machine must carry on
+MEGAFLT_MODES := z:0 a:1 b:2 c:3 d:4 e:5 f:6
+define MEGAFLT_RULE
+$$(BUILD)/flt$(word 1,$(subst :, ,$(1))).bin: tests/megaflt/megaflt.asm apps/os88api.inc | $$(BUILD)
+	$$(NASM) -f bin -w+error -I apps/ -DFLT_MODE=$(word 2,$(subst :, ,$(1))) -o $$@ tests/megaflt/megaflt.asm
+$$(BUILD)/flt$(word 1,$(subst :, ,$(1))).o88: $$(BUILD)/flt$(word 1,$(subst :, ,$(1))).bin tools/os88pkg.py
+	python3 tools/os88pkg.py $$< -o $$@
+endef
+$(foreach m,$(MEGAFLT_MODES),$(eval $(call MEGAFLT_RULE,$(m))))
+# MEGACP (tests/megacp): the pool COMPACTED (KERN-MEGA-PLAN 14.15) - 60KB
+# claims filled, every other one freed, a 64KB claim that only a compaction
+# can place, and every survivor's stamps read back through its own selector.
+# `tools/os88bochs.py sweep build/megacp.o88` with OS88_BOCHS_MEGS=2
+$(BUILD)/megacp.bin: tests/megacp/megacp.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megacp/megacp.asm
+$(BUILD)/megacp.o88: $(BUILD)/megacp.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megacp.bin -o $@
+# MEGAHG (tests/megahg): HUGE claims moved by the compaction and regrown past
+# 64KB (KERN-MEGA-PLAN 14.37) - the pool fragmented by OSAPI_MEM_HUGE claims,
+# every free KB then asked for in ONE claim, and a run regrown to 300, 130,
+# 400KB and every free KB, every byte read back each time.
+# `tools/os88bochs.py sweep build/megahg.o88` with OS88_BOCHS_MEGS=4. Since
+# KERN-MEGA-PLAN 14.49 also the split regrow (U), a claim with windows 32KB
+# apart moved (W) and the block table filled (T)
+$(BUILD)/megahg.bin: tests/megahg/megahg.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahg/megahg.asm
+$(BUILD)/megahg.o88: $(BUILD)/megahg.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megahg.bin -o $@
+# MEGAW32 (tests/megaw32): a claim with a window every 32KB moved by the
+# compaction while an FSXF_RATE hook reads it through its odd windows
+# (KERN-MEGA-PLAN 14.49) - `tools/os88bochs.py sweep build/megaw32.o88`
+$(BUILD)/megaw32.bin: tests/megaw32/megaw32.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megaw32/megaw32.asm
+$(BUILD)/megaw32.o88: $(BUILD)/megaw32.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megaw32.bin -o $@
+# MEGAHIB (tests/megahib): MEGAXM's patterns HELD by a window across a
+# hibernate, and compared on a key - kern_mega's W5 witness
+# (docs/plans/KERN-MEGA-DOS-PLAN.md 8)
+$(BUILD)/megahib.bin: tests/megahib/megahib.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megahib/megahib.asm
+$(BUILD)/megahib.o88: $(BUILD)/megahib.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megahib.bin -o $@
+# MEGAOWN and MEGAHOLE (tests/megaown): a package's OWN region moved by the
+# pool's compaction while that package is the caller (KERN-MEGA-PLAN 14.15's
+# open item, 14.46) - MEGAHOLE holds pool below MEGAOWN and gives it back,
+# then MEGAOWN's 64KB claim compacts across the hole under its region
+$(BUILD)/megaown.bin: tests/megaown/megaown.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megaown/megaown.asm
+$(BUILD)/megaown.o88: $(BUILD)/megaown.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megaown.bin -o $@
+$(BUILD)/megahole.bin: tests/megaown/megaown.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DMO_HOLE -o $@ tests/megaown/megaown.asm
+$(BUILD)/megahole.o88: $(BUILD)/megahole.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megahole.bin -o $@
+# ...and the CONVENTIONAL pair (14.46): MEGALOWH holds a top-down claim at the
+# heap's ceiling and gives it back, MEGALOWB claims everything OSAPI_MEM_AVAIL
+# says a compaction would leave and prints every claim before and after - so a
+# top-down carve under the hole (CWORD's overlay part) is moved up into it
+$(BUILD)/megalowh.bin: tests/megaown/megaown.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DMO_LOWHOLE -o $@ tests/megaown/megaown.asm
+$(BUILD)/megalowh.o88: $(BUILD)/megalowh.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megalowh.bin -o $@
+$(BUILD)/megalowb.bin: tests/megaown/megaown.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DMO_LOWBIG -o $@ tests/megaown/megaown.asm
+$(BUILD)/megalowb.o88: $(BUILD)/megalowb.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megalowb.bin -o $@
+megarun: $(BUILD)/megarun.o88 $(BUILD)/megaxm.o88 $(BUILD)/megahib.o88 $(BUILD)/mega.img
+.PHONY: megarun
+
+# `make megatrap` - kern_mega with MEGATRAP=1, as a whole tree of its own in
+# build/megatrap/ (mega.img, megak/, megarun.o88), so the shipped-shape
+# build/mega.img is never the census kernel by accident. Drive it with
+#   python3 tools/os88bochs.py sweep --build build/megatrap PKG.o88 ...
+#   python3 tools/megatraps.py build/bochs/boot01/e9.out
+megatrap:
+	@$(MAKE) BUILD=$(BUILD)/megatrap MEGATRAP=1 $(BUILD)/megatrap/mega.img $(BUILD)/megatrap/megarun.o88 $(BUILD)/megatrap/mbr.bin
+.PHONY: megatrap
+
+# `make megadiag` - kern_mega with MEGADIAG=1 (KERN-MEGA-PLAN 14.65), its
+# field readings on the menu bar, as a tree of its own in build/megadiag/ for
+# megatrap's reason: build/mega.img is always the shipped shape. A field run
+# that needs a reading takes build/megadiag/mega.img (or mega120.img), and
+# megarun.o88 and mbr.bin are there so that `tools/os88bochs.py --build
+# build/megadiag` boots it
+megadiag:
+	@$(MAKE) BUILD=$(BUILD)/megadiag MEGADIAG=1 $(BUILD)/megadiag/mega.img $(BUILD)/megadiag/mega120.img \
+		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin
+.PHONY: megadiag
+
+MEGADIR := $(BUILD)/megak
+
+# --- THE kern_mega PACKAGE ARMS (docs/plans/KERN-MEGA-PLAN.md 14.66) --------
+# The owner's rule: "mega specific work that more than trivially increases the
+# disk size is gated to mega builds only". A package's kern_mega-only code -
+# the speaker library's protected-mode ISRs (apps/os88spk.inc), the Video
+# Player's in-place reads through selectors, its ring above 1MB and its block
+# decoder's protected-mode PART, what reads a claim that is a selector - is
+# assembled under -DPKG_MEGA and nowhere else (apps/os88mega.inc says how a
+# package does it, and how the shipped build stays correct on kern_mega
+# without it). These are the same sources built WITH it, into
+# $(MEGAAPPDIR), for kern_mega's own disks: build/megaapps.img (1.44MB) and
+# build/megaapps120.img (1.2MB) - the shipped apps disk with these builds
+# substituted, `make smallapps`'s shape (SPEC.md 27.16) - and the system
+# disks' copies (mega.img, mega120.img) through the same substitution.
+#
+# NOT A KNOB and not in $(KNOBS): no top-level make can carry -DPKG_MEGA into
+# build/, which is why tests/unit/t_megapkg.py can hold every shipped build
+# to "no kern_mega marker outside tests/megapkg.txt" and never meet one.
+# IN build/megak/apps/ AND NOT build/megak/: the kern_mega kernel's sub-make
+# builds build/megak/tracker.o88 for its icon pipeline (ICODIR), from the
+# plain recipe, and a mega arm of the same name there would be overwritten.
+MEGAAPPDIR := $(MEGADIR)/apps
+MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
+            $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
+            $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88
+MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
+# ...and the substitution, ONE IDIOM for every list a kern_mega disk names
+# (SMALLSUB's): the mega arm of any package that has one, everything else as
+# it ships. A list that forgets it ships the PLAIN build to kern_mega, which
+# is correct and merely slower or refusing - t_megapkg.py walks the built
+# disks for exactly that, rather than trusting this line
+MEGASUB = $(patsubst $(BUILD)/%,$(MEGAAPPDIR)/%,$(filter $(MEGABASE),$(1))) \
+          $(filter-out $(MEGABASE),$(1))
+# ...the system disks' two lists through it (`make small`'s SMALLSYSAPPS):
+# none of SYSTEM/'s or the core set's packages has an arm today, so these
+# name exactly what $(SYSAPPSARGS) and $(COREAPPSARGS) do - and the day one
+# does, kern_mega's system disk takes it without anybody remembering
+MEGASYSAPPSARGS = $(addprefix SYSTEM:,$(call MEGASUB,$(SYSAPPS)))
+# ...and SYSTEM\'s two optional faces, MIXER.O88 and CDRACK.O88 (SPEC.md
+# 34.15, 119.6), which every roomy system disk carries beside the drivers they
+# need: the merge that brought them put them on kern_big's disks only, and
+# kern_mega is the kernel that runs on machines with a CD-ROM drive in them
+MEGASYSOPTARGS = $(addprefix SYSTEM:,$(call MEGASUB,$(SYSOPTIONAL)))
+MEGACOREARGS = $(addprefix APPS:,$(call MEGASUB,$(CORE_TOOLS))) \
+               $(addprefix GAMES:,$(call MEGASUB,$(CORE_GAMES)))
+
+$(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
+                         apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
+                         apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -DPKG_MEGA -o $@ apps/video/video.asm
+	@echo "video (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/video.o88: $(MEGAAPPDIR)/video.bin $(BUILD)/vblk.bin $(BUILD)/vblkpm.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/video.bin -o $@ --part $(BUILD)/vblk.bin --part $(BUILD)/vblkpm.bin
+
+$(MEGAAPPDIR)/audio.bin: apps/audio/audio.asm $(AUDIO_SRC) apps/os88mega.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/audio/ -DPKG_MEGA -o $@ apps/audio/audio.asm
+	@echo "audio (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/audio.o88: $(MEGAAPPDIR)/audio.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
+	$(OS88PKGB) $(MEGAAPPDIR)/audio.bin -o $@
+
+$(MEGAAPPDIR)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
+                           apps/tracker/trkui.inc apps/tracker/trktxt.inc \
+                           apps/tracker/trkwin.inc apps/tracker/trklist.inc \
+                           apps/tracker/trkspk.inc apps/os88spk.inc \
+                           apps/os88spkfx.inc apps/os88spkfx_t.inc \
+                           apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88mega.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/tracker/ -DPKG_MEGA -o $@ apps/tracker/tracker.asm
+	@echo "tracker (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/tracker.o88: $(MEGAAPPDIR)/tracker.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/tracker.bin -o $@
+
+$(MEGAAPPDIR)/midirack.bin: $(MIDIRACK_SRC) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/midirack/ -I drivers/sound/ \
+	    -I drivers/ -DPKG_MEGA -o $@ apps/midirack/midirack.asm
+	@echo "midirack (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/midirack.o88: $(MEGAAPPDIR)/midirack.bin $(BUILD)/mrfaces.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/midirack.bin -o $@ --part $(BUILD)/mrfaces.bin
+
+# XTMP3's arm (SPEC.md 121): the PC speaker's and the Covox's protected-mode
+# ISR copies, which it carries as the Audio Player's own source
+# (apps/os88spk.inc through apps/audio/apspk.inc, SPEC.md 86.21)
+$(MEGAAPPDIR)/xtmp3.bin: $(XTMP3_SRC) apps/os88mega.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(STKLST) -I apps/ -I apps/xtmp3/ -I apps/audio/ \
+	    -I drivers/sound/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/xtmp3/xtmp3.asm
+	@echo "xtmp3 (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/xtmp3.o88: $(MEGAAPPDIR)/xtmp3.bin $(X3PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/xtmp3.bin -o $@ $(X3PARTARGS) --part-compress lz4
+
+megapkgs: $(MEGAPKGS) $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
+	@python3 tests/unit/t_megapkg.py --sizes
+.PHONY: megapkgs
+# WHAT THE SUB-MAKE BUILDS FROM. The two image rules below reach kern_mega's
+# kernel and its DOS.O88 only through a recursive make into $(MEGADIR), and
+# that make runs only when the IMAGE is out of date - so without these a
+# change to kerndos/ or apps/dos/ alone left `make mega` printing success
+# over the previous kern_dos (SPEC.md 96.40.9.1 was first booted that way).
+MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
+           $(wildcard apps/dos/*.asm apps/dos/*.inc)
+# ...and the RATCHET on kern_mega's kernel segment (docs/plans/KERN-MEGA-
+# SEGMENTS-PLAN.md W0): what kern_mega carries in `.text`+`.bss` beyond
+# kern_big's may not grow past tests/megaseg.txt's figure. Code that runs only
+# in protected mode belongs in `.mega`; the figure is raised, with a reason,
+# only for code that has to run in real mode after the switch. It needs
+# kern_big's map as well as kern_mega's, hence the kernel.bin prerequisite
+mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
+      $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
+	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt
+	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (KERN-MEGA-PLAN 14.66)."
+
+# NO COLDHMA.SYS and no XMEM.DRV: the HMA and everything above it are
+# kern_mega's own (kernel/mega.inc), and xm_sniff never asks for either.
+MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS))
+$(BUILD)/mega.img: KMODDIR := $(MEGADIR)
+#
+# **ITS DOS.O88 IS kern_mega's OWN** (docs/plans/KERN-MEGA-DOS-PLAN.md 12.1
+# item 4): the same sources assembled with -DDOS_MEGA and kern_dos with
+# -DKD_MEGA, into $(MEGADIR)/kdos/, so the shipped $(SYSROOT) stays
+# byte-identical and a copy carried to the other kernel refuses in a sentence.
+$(BUILD)/mega.img: $(MEGADRIVERS) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
+                   $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
+	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot.bin $(MEGADIR)/boothd.sys \
+		$(MEGADIR)/kdos/DOS.O88
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER)
+
+# ...and the 1.2MB 5.25" HD twin (KERN-MEGA-PLAN 14.1 answer 19: kern_mega's
+# system disk is 1.2MB and 1.44MB only - every machine that can run it has an
+# AT's 500 kbps controller, and a 360KB or 720KB disk would leave a protected-
+# mode program no room). The same files; its own boot sector, 15 spt being a
+# different track (build/boot120.bin's rule)
+$(BUILD)/mega120.img: KMODDIR := $(MEGADIR)
+# ORDER-ONLY on the 1.44MB disk: both recipes run a sub-make into the same
+# $(MEGADIR), and two of them at once under -j race on one DOS.O88 (os88pkg
+# reading a file the other is still writing reads it as 0 bytes)
+$(BUILD)/mega120.img: | $(BUILD)/mega.img
+$(BUILD)/mega120.img: $(MEGADRIVERS) $(call MEGASUB,$(SYSAPPS)) $(call MEGASUB,$(SYSOPTIONAL)) $(STIKAPPS) $(call MEGASUB,$(COREAPPS)) $(SYSDOC) $(SYSLOGO) \
+                   $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
+	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot120.bin $(MEGADIR)/boothd.sys \
+		$(MEGADIR)/kdos/DOS.O88
+	python3 tools/os88disk.py -o $@ --size 1200 \
+		--boot $(MEGADIR)/boot120.bin --kernel $(MEGADIR)/$(KERNNAME) \
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER)
+
+# MEGACDTEST - kern_mega's CD-ROM machine disks (SPEC.md 119.7, KERN-MEGA-PLAN
+# 14.68): build/mega.img's files with a SYSTEM.CFG that wants SOUND.DRV (bit
+# 0, the Mixer's card) and CDROM.DRV (bit 8), and cdaudiotest.img's two
+# autostart links, so the machine boots into CDRack playing D:\TRACK02.CDA
+# with nobody at it. build/megacdsim.img is the same disk with the gate's
+# CDROM.DRV (-DCDSIM_AUDIO): Bochs, kern_mega's instrument, holds an ISO and
+# no audio, so the sim's three fake audio tracks are what give CDRack a TOC
+# there (`tools/os88bochs.py boot --a build/megacdsim.img --cd
+# build/cdfix.iso --cfg 0x101 --sb`). vm/286-mega-cdrom boots the first with
+# build/cdaudio.cue in its drive
+$(BUILD)/megacdcfg/system.cfg: | $(BUILD)
+	@mkdir -p $(BUILD)/megacdcfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  ((1 << 8) | 1).to_bytes(2,'little') + b'\0\0')" > $@
+
+$(BUILD)/megacdtest.img: $(BUILD)/mega.img $(BUILD)/megacdcfg/system.cfg $(BUILD)/cdlnk/CDRACK.LNK
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/megacdcfg/system.cfg \
+		AUTOSTRT:$(BUILD)/cdlnk/A_SYS.LNK AUTOSTRT:$(BUILD)/cdlnk/CDRACK.LNK $(APPDATAFOLDER)
+
+$(BUILD)/megacdsim.img: $(BUILD)/megacdtest.img $(BUILD)/cdromsim/CDROM.DRV tools/os88fat.py
+	cp $(BUILD)/megacdtest.img $@
+	python3 tools/os88fat.py del $@ CDROM.DRV
+	python3 tools/os88fat.py add $@ $(BUILD)/cdromsim/CDROM.DRV CDROM.DRV
+
+.PHONY: megacdtest
+megacdtest: $(BUILD)/megacdtest.img $(BUILD)/megacdsim.img $(BUILD)/cdfix.iso $(BUILD)/cdaudio.cue
+	@echo "megacdtest: build/megacdtest.img - kern_mega, SOUND.DRV and CDROM.DRV wanted,"
+	@echo "            CDRack autostarted on D:\\TRACK02.CDA; build/megacdsim.img the"
+	@echo "            gate's CDROM.DRV for Bochs (build/cdfix.iso). 86Box: tools/os88box.py"
+	@echo "            launch 286-mega-cdrom (build/cdaudio.cue in the drive)"
 
 # ONE GEOMETRY, and that is a decision rather than an omission. 360KB exists
 # for real period hardware - a 5.25" drive on an XT or an AT - and no machine
@@ -13088,7 +14906,7 @@ $$(BUILD)/font-$(1)-360.img: fonts/$(1).f8 $$(DRIVERS) $$(SYSAPPS) $(SYSROOT) $$
 	python3 tools/os88disk.py -o $$@ --size 360 \
 		--boot $$(call FONTDIR,$(1))/boot360.bin \
 		--kernel $$(call FONTDIR,$(1))/$(KERNNAME) \
-		$$(DRIVERS) $$(SYSAPPSARGS) $(SYSROOTARG) $$(SYSDOC) $$(MEDIAFOLDER)
+		$$(DRIVERS360) $$(SYSAPPSARGS) $(SYSROOTARG) $$(SYSDOC) $$(MEDIAFOLDER)
 	@echo "font: $$@ - a 360KB system disk set in $(1)"
 
 # its kernel is that face's
@@ -13541,15 +15359,21 @@ $(BUILD)/lptlink144.img: $(BUILD)/llboot144.bin $(BUILD)/lptlink.bin \
 # filter naming something no list contains reads like a decision and is a
 # no-op.
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/browser.o88 $(BUILD)/calc.o88 \
-              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 \
+              $(BUILD)/chart.o88 $(BUILD)/fractal.o88 $(BUILD)/mixer.o88 \
               $(BUILD)/notepad.o88 \
               $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
-              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 $(CC_OVLZ)/CHART.OVL \
-              $(CC_OVLZ)/MACRO.OVL $(BUILD)/telnet.o88 \
+              $(BUILD)/ftpd.o88 $(BUILD)/sheet.o88 \
+              $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL $(BUILD)/telnet.o88 \
               $(BUILD)/wirechat.o88 \
               $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 $(BUILD)/audio.o88 \
               $(BUILD)/video.o88 $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
-              $(BUILD)/timer.o88 $(BUILD)/bounce.o88
+              $(BUILD)/timer.o88 $(BUILD)/bounce.o88 $(BUILD)/xtmp3.o88
+# XTMP3.O88 (SPEC.md 121.12) is in this list, so it reaches the 1.44MB and
+# 1.2MB apps disks, the kern_mega apps disks (its PKG_MEGA arm), the
+# everything set and the live media. Four sites take it OFF again, each with
+# its own ground: APPS_TOOLS_360 and APPSARGS720 (no room; media360.img and
+# `make xtmp3disk` carry it there), $(SMALLOMIT) (a requirement kern_small
+# cannot meet) and $(COMBO_DROP) (not a calibration instrument).
 # TIMER.O88 and BOUNCE.O88 are SPEC.md 14's two kinds as packages (14.8,
 # 111, 112): on every apps disk, every geometry, because the Builtins menu
 # that used to launch them was on every machine's bar.
@@ -13623,28 +15447,14 @@ APPS_GAMES := $(BUILD)/wireball.o88 $(BUILD)/wireflet.o88 $(BUILD)/arkanoid.o88 
 # and the curation is remade every time this geometry runs out - games360.img
 # carries every game, isoTron among them, and is where a 360KB machine finds it.
 #
-# WIREFLEET IS NOT ON apps360.img EITHER (SPEC.md 114, 24.6.1's rule, dated
-# 2026-10-21), and what made the decision is a build that REFUSED rather than
-# a disk that was merely tight. `lzship --fmt lz4` - the arm that proves an
-# LZB package falls back on a kernel carrying only the LZ4 decoder (20.13.5)
-# - could not build this disk at all: `packages need 356 clusters; disk holds
-# 354`. The shipped disk fits, with 21 free, but it fits BECAUSE OF LZB, and
-# a COMPRESS=lz4 field build could not have it.
-#
-# WireFleet is 26 of those clusters in that arm and arrived the day before
-# this line (#278, #282) - so of everything on the disk it is the newest
-# curation to remake, and 24.6.1 is explicit that being there is a decision
-# with a date and never a property of the package. It is also the one game
-# here that CANNOT BE PLAYED on the machine holding the floppy: it wants a
-# second PC and a null modem cable (114.1). games360.img carries it, which is
-# where a 360KB machine finds every game.
-#
-# Packing it LZB won four clusters back on the disks it still rides
-# (d385750a) and is why small360.img stopped failing regrowshed's fixture;
-# it does nothing for the lz4 arm, where everything is LZ4 by construction.
+# WIREFLEET IS NOT ON apps360.img EITHER (SPEC.md 114.11, dated 2026-10-20):
+# that disk was 354 of 354 clusters when WireFleet's missiles and music took
+# it from 26 clusters to 47 - the effect stamps and Sound Blaster clips are
+# parts of the one file. games360.img carries it with the other games.
 APPS_GAMES_360 := $(filter-out $(BUILD)/pxstein.o88 $(BUILD)/gorillas.o88 \
                     $(BUILD)/dotdel.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
-                    $(BUILD)/wireflet.o88,$(APPS_GAMES))
+                    $(BUILD)/wireflet.o88 $(BUILD)/mines.o88 \
+                    $(BUILD)/missile.o88,$(APPS_GAMES))
 
 # The CORE PACKAGES (SPEC.md 24.3) are a SECOND copy on the system disk and
 # never a move, so the two lists above are unchanged and still carry every
@@ -13766,6 +15576,15 @@ OFFICE_DATA := apps/texpad/PAPER.TEX apps/texpad/GUIDE.TEX \
                $(BUILD)/WELCOME.DOC $(BUILD)/SAMPLE.BMP \
                apps/pixel/samples/LAKE.JPG
 NETWORK_DATA := apps/browser/browser.htm
+# REALDMG'S CARTRIDGE (SPEC.md 24.6, docs/REALDMG-SPEC.md 18): GBDEMO.GB,
+# the 5150 demo written for this machine and OURS. It is COMMITTED, the way
+# DrMarco's native art is ($(DM_NATIVE)): tools/gbours.py builds it with a
+# pinned rgbds that is fetched from GitHub and compiled, which a plain `make`
+# must never need, and the build is deterministic, so the committed copy IS
+# the build. `soak -k 'gbship'` rebuilds it and compares, and boots the
+# shipped disk to play the packed one.
+RDG_SHIP := $(BUILD)/realdmg.o88
+RDG_DEMO := apps/realdmg/GBDEMO.GB
 
 # ...UNLESS THE DISK IS COMPRESSED, and this is the single most visible thing
 # compression buys this project (docs/plans/O88-COMPRESSION-PLAN.md 13.4). BEVERLY.MOD
@@ -13822,6 +15641,12 @@ OFFICE_DATA  := $(ZDATA)/PAPER.TEX $(ZDATA)/GUIDE.TEX $(ZDATA)/SALES.SLK \
 # already, cz_wrap would refuse it as unshrinkable, and PiXEL reads it in
 # chunks, which SPEC.md 20.14.3 makes the reason a file must not be wrapped
 NETWORK_DATA := $(ZDATA)/BROWSER.HTM
+# ...and the cartridge: 32,768 bytes to 1,110, being mostly the ROM's 0xFF
+# padding. RealDMG reads a cartridge of up to 256KB in ONE OSAPI_FILE_READ
+# into one claim, which is the transparent read's condition (SPEC.md
+# 20.14.3); only a cartridge in the XMS bank cache is read raw, a bank at a
+# time, and that is a bigger one than this.
+RDG_DEMO := $(ZDATA)/GBDEMO.GB
 endif
 
 # THE EXAMPLES DISK (docs/KODAK-EXAMPLE.md) - this fork's Kodak and Xerox
@@ -13914,6 +15739,39 @@ $(ZDATA)/MIDI/%.MID: apps/midirack/songs/%.MID tools/os88lz.py $(PKGZSTAMP) | $(
 	@mkdir -p $(ZDATA)/MIDI
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
+# XTMP3'S THREE DEMO SONGS (SPEC.md 121.12), in MEDIA/ where the player's
+# Open dialog starts (SPEC.md 38.10). They are the fixture generator's own
+# output (tools/x3fixtures.py), committed ONCE in tests/xtmp3/ with their
+# recipes and SHA-256 in FIXTURES.txt, so a disk names that copy rather than
+# a second one under apps/. NEON DRIVE is 44.1 kHz joint stereo (what a fast
+# machine plays at Original), NIGHT SIGNALS 22.05 kHz joint stereo, AFTER
+# HOURS 11,025 Hz mono at 24 kbps - the track an XT is for.
+#
+# **PLAIN IN BOTH ARMS, AND NEVER UNDER $(ZDATA)**, which is PiXEL's LAKE.JPG
+# reason twice over: MP3 is compressed already, so cz_wrap would shrink it by
+# nothing, and the player STREAMS it - OSAPI_FILE_READ_AT for the queue's
+# probe and READ_SEQ for playback both deliver a packed file raw (SPEC.md
+# 20.14.3), so a wrapped .MP3 is refused by the probe as a file with no
+# frames in it. The guard below makes that a build error rather than a
+# player that cannot open its own demo songs; tests/unit/t_image.py checks
+# every .MP3 on every shipped image for the wrapper's 'CZ' magic as well.
+#
+# WHICH DISK CARRIES WHICH (SPEC.md 121.12 has the arithmetic, 24.6.1's rule,
+# dated 2026-10-22): all three on the 1.44MB apps disk and the live media;
+# NO XTMP3 on the 1.2MB one since 2026-10-23 (APPS120's note; $(XTMP3MP3_120)
+# is kept for the lower-case-name check below); AFTER HOURS alone on
+# media360.img, beside the package. `make xtmp3disk` carries all three in
+# every geometry.
+XTMP3MP3SRC  := tests/xtmp3
+XTMP3MP3     := $(XTMP3MP3SRC)/NEONDRV.MP3 $(XTMP3MP3SRC)/NIGHTSIG.MP3 \
+                $(XTMP3MP3SRC)/AFTERHRS.MP3
+XTMP3MP3_120 := $(XTMP3MP3SRC)/NIGHTSIG.MP3 $(XTMP3MP3SRC)/AFTERHRS.MP3
+XTMP3MP3_360 := $(XTMP3MP3SRC)/AFTERHRS.MP3
+$(if $(filter $(ZDATA)/% %.mp3,$(XTMP3MP3) $(XTMP3MP3_120) $(XTMP3MP3_360)), \
+     $(error an XTMP3 demo song is routed through $$(ZDATA) or has a \
+             lower-case name - an .MP3 ships PLAIN, the player streams it \
+             (SPEC.md 20.14.3, 121.12)))
+
 $(ZDATA)/PAPER.TEX: apps/texpad/PAPER.TEX tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
@@ -13923,6 +15781,10 @@ $(ZDATA)/GUIDE.TEX: apps/texpad/GUIDE.TEX tools/os88lz.py $(PKGZSTAMP) | $(BUILD
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
 $(ZDATA)/BROWSER.HTM: apps/browser/browser.htm tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	@mkdir -p $(ZDATA)
+	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
+
+$(ZDATA)/GBDEMO.GB: apps/realdmg/GBDEMO.GB tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
 	@mkdir -p $(ZDATA)
 	python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $<
 
@@ -14029,7 +15891,7 @@ os88cz: $(BUILD)/os88cz.com
 .PHONY: os88cz
 
 APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA) $(APPS_SYS) $(APPS_DOS) \
-        $(APPS_DOSCZ) $(MIDISONGS)
+        $(APPS_DOSCZ) $(MIDISONGS) $(RDG_SHIP) $(RDG_DEMO)
 # ...and the 360KB disk's list, which is that one less what the media disk
 # carries. Kept as its own variable rather than reusing $(APPS): a rule whose
 # prerequisites name a file that is not on the disk it builds is a dependency
@@ -14182,21 +16044,39 @@ $(LEDGERDIR)/LEDGER.O88: $(LEDGERDIR)/ledger.bin tools/os88pkg.py $(PKGZSTAMP)
 #     dated 2026-10-02): that disk had 12 clusters spare and the player with
 #     its songs is ~50. It rides the MEDIA DISK instead (MEDIAARGS360) - the
 #     floppy whose subject is music already - at its root, songs in MEDIA/MIDI.
-#
-#     AND THE VIDEO PLAYER GOES WITH THEM, 2026-10-05: at this geometry there
-#     is no .V88 for it to open. The sample is 101 clusters and was cut from
-#     the 720KB disk in the same merge, so a 360KB machine would carry 28
-#     clusters of player and nothing to play - which is not curation, it is
-#     waste. If a .V88 ever rides this disk, this line comes out with it.
-#
+# --- 360KB curation remade 2026-10-18: Browser 1.6b's Download Manager adds
+#     five clusters to the full set. Keep the Browser on this disk and move
+#     the small standalone Fractal and Piano packages to the larger app disks;
+#     neither has a data dependency that would strand another package here.
+#     The 720KB, 1.2MB and 1.44MB app disks continue to carry both.
 #     WIRECHAT IS NOT CURATED ONTO IT (SPEC.md 113.11, 24.6.1's rule, dated
 #     2026-10-19): a chat client is the NETWORK disk's subject, and it rides
 #     network360.img beside Telnet and the Browser.
+#     XTMP3 IS NOT CURATED ONTO IT (SPEC.md 121.12, 24.6.1's rule, dated
+#     2026-10-22): that disk had 14 clusters spare and the player is 97. It
+#     rides the MEDIA DISK on MIDIRack's ground - the floppy whose subject is
+#     music already - at its root, with AFTER HOURS in MEDIA/.
+#     Browser 1.6c and the newer app set exceed this geometry by 14 clusters.
+#     Keep the Browser on the 360KB disk; Calc, Mixer, Timer and Bounce move
+#     to roomier apps disks, while Mines and Missile move to games360.img.
+#
+#     AND THE VIDEO PLAYER GOES, re-decided at the 2026-10-24 upstream merge
+#     (SPEC.md 24.6.1's rule, dated as it requires). This branch carries PLAN
+#     here - 26 clusters upstream's curation never priced, because upstream
+#     has no PLAN - and the disk came out 362 of 354. The player is 47 of
+#     those clusters and there is no `.V88` at this geometry for it to open:
+#     the sample rides the 1.44MB disk alone. A 360KB machine would carry 47
+#     clusters of player and nothing to play, which is not curation, it is
+#     waste - this branch's own 2026-10-05 reasoning, restored. If a `.V88`
+#     ever rides this disk, this line comes out with it. Result: 315 of 354.
 APPS_TOOLS_360 := $(filter-out $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
-                               $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
-                               $(BUILD)/midirack.o88 $(BUILD)/video.o88 \
-                               $(BUILD)/pixel.o88 \
-                               $(BUILD)/wirechat.o88,$(APPS_TOOLS))
+                    $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
+                    $(BUILD)/midirack.o88 $(BUILD)/pixel.o88 \
+                    $(BUILD)/fractal.o88 $(BUILD)/piano.o88 \
+                    $(BUILD)/wirechat.o88 $(BUILD)/mixer.o88 \
+                    $(BUILD)/timer.o88 $(BUILD)/bounce.o88 \
+                    $(BUILD)/video.o88 \
+                    $(BUILD)/calc.o88 $(BUILD)/xtmp3.o88,$(APPS_TOOLS))
 APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(APPS_DOS)
 
 # ...and the same list with the folder each package lands in. os88disk.py
@@ -14216,8 +16096,8 @@ APPS360 := $(APPS_TOOLS_360) $(APPS_GAMES_360) $(APPS_DATA_360) $(APPS_SYS) $(AP
 # collected, so os88disk.py answered "unrecognized arguments: SYSTEM/DOS:..."
 # for the packages that followed it.
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
-            $(addprefix GAMES:,$(APPS_GAMES)) \
-            $(addprefix MEDIA:,$(APPS_DATA)) $(LOGOVIDARG) \
+            $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP)) \
+            $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) $(LOGOVIDARG) \
             $(MIDISONGARGS) \
             $(APPSYSARGS) \
             $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
@@ -14239,19 +16119,40 @@ APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
 # after MIDIRack, and elendilon's OS88CZ.COM crossed a cluster on top of it.
 # DrMarco is one file with its three front screens in it, and its own disk
 # (`make drmarcodisk`) and every other geometry's apps disk still carry it.
-APPS720 := $(filter-out $(BUILD)/pixel.o88,$(APPS))
-APPSARGS720 := $(filter-out $(MIDISONGARGS) \
-                 APPS:$(BUILD)/pixel.o88 \
+# ...AND WITHOUT WIREFLEET (SPEC.md 24.6.1's rule, dated 2026-10-21, at the
+# main -> elendilon merge, KERN-MEGA-PLAN 14.67): main built this disk at 710
+# of 713 clusters with WireFleet's 47 on it, and elendilon's kern_mega work
+# had grown six packages by 12 clusters between them (VIDEO.O88 +7 for the
+# version 2 decoder above 1MB), so the union asked for 722. WireFleet is the
+# one that already has a 720KB disk of its own (`make wirefleetdisk`), and its
+# rows boot that disk rather than this one - DrMarco's shape. Every other
+# geometry's apps disk and games360.img still carry it. 14.66's package arms
+# took VIDEO.O88 back down by 3, and the disk is 669 of 713 without it: with
+# it, 716 - still three over.
+# ...SO WIREFLEET IS BACK AND THE DEMO VIDEO IS OFF (the owner's decision of
+# 2026-10-22, KERN-MEGA-PLAN 14.67): OS8088.V88 is 101 clusters, data rather
+# than software, and the Video Player plays any .V88 the user brings. It is
+# meant for a third primary 720KB disk, content not yet decided, which is to
+# carry what the 720KB system and apps disks leave off.
+# ...AND XTMP3 IS NOT ON IT (SPEC.md 121.12, 24.6.1's rule, dated 2026-10-22):
+# the disk had 36 of 713 clusters free and the player is 97 of them before a
+# single song. `make xtmp3disk`'s 720KB floppy carries it with all three demo
+# songs, and it is the obvious candidate for the third 720KB disk above - the
+# owner's call, like that disk's contents.
+APPS720 := $(filter-out $(BUILD)/pixel.o88 $(BUILD)/xtmp3.o88 \
+             $(RDG_SHIP) $(RDG_DEMO),$(APPS))
+APPSARGS720 := $(filter-out $(MIDISONGARGS) $(LOGOVIDARG) \
+                 APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/xtmp3.o88 \
+                 GAMES:$(RDG_SHIP) MEDIA:$(RDG_DEMO) \
                  $(addprefix GAMES:,$(DM_SHIP)),$(APPSARGS))
-# ...AND THE VIDEO SAMPLE, which is 101 of this geometry's 713 clusters - the
-# single largest thing on the disk, bigger than SHEET and CHART.OVL together.
-# The upstream merge of 2026-10-05 brought the Video Player, MIDIRack,
-# Gorillas and DrMarco onto a 720KB disk this branch had already filled with
-# SHEET's two overlays, and it came out 795 of 713. The PLAYER stays and the
-# MOVIE goes, which is SPEC.md 24.4's own shape one geometry up - BEVERLY.MOD
-# rides a media disk of its own at 360KB for exactly this reason - and 24.6.1's
-# rule that being curated onto a disk is a decision WITH A DATE ON IT and never
-# a property of the file. 101 clusters recovered against 82 needed.
+# ...AND THE VIDEO SAMPLE GOES, which is 101 of this geometry's 713 clusters -
+# the single largest thing on the disk, bigger than SHEET and CHART.OVL
+# together. SHEET's two modules put this disk at 714 of 713, and the PLAYER
+# stays while the MOVIE goes: SPEC.md 24.4's own shape one geometry up -
+# BEVERLY.MOD rides a media disk of its own at 360KB for exactly this reason -
+# and 24.6.1's rule that being curated onto a disk is a decision WITH A DATE ON
+# IT (2026-10-20) and never a property of the file. 101 clusters recovered
+# against the 1 needed, which is room for the next thing as well.
 APPSARGS720 := $(filter-out MEDIA:apps/video/os8088.v88,$(APPSARGS720))
 APPSARGS720 := $(filter-out $(APPDATAFOLDER),$(APPSARGS720)) \
                $(MIDISONGARGS720) $(APPDATAFOLDER)
@@ -14283,17 +16184,61 @@ APPSARGS360 := $(addprefix APPS:,$(APPS_TOOLS_360)) APPS:$(PLANPKG) \
 # is in the folder the Open dialog already opens on whichever disk is in the
 # drive (SPEC.md 38.10) - a user who swaps disks should not have to know that
 # this one keeps its module somewhere else.
-MEDIAARGS360 := $(BUILD)/midirack.o88 \
-                $(addprefix MEDIA:,$(MEDIA_DISK_DATA)) $(LOGOVIDARG) \
-                $(MIDISONGARGS)
+MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
+                $(addprefix MEDIA:,$(MEDIA_DISK_DATA) $(XTMP3MP3_360)) \
+                $(LOGOVIDARG) $(MIDISONGARGS)
 
-$(APPSIMG): $(APPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
+# The 1.44MB and 1.2MB apps disks are $(APPSARGS) plus XTMP3's demo songs,
+# which differ between the two (XTMP3MP3's note has the clusters). Spliced in
+# ahead of $(APPDATAFOLDER), $(APPSARGS720)'s way: argparse stops collecting
+# positionals at an option that takes a value, so the folder stays last.
+APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
+               $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
+# ...AND THE 1.2MB DISK LEAVES XTMP3 AND ITS SONGS OFF (SPEC.md 24.6.1's rule,
+# dated 2026-10-23, the 720KB disk's decision of 2026-10-22 one geometry along):
+# Browser 1.6c grew 67 clusters and apps120.img needed 2399 of 2371. The player
+# is 193 of them and the songs ride `make xtmp3disk`'s 1.2MB floppy. The
+# prerequisites ($(APPS120)) and the recipe ($(APPSARGS120)) are filtered
+# together, as the 720KB disk's are.
+APPS120 := $(filter-out $(BUILD)/xtmp3.o88,$(APPS))
+APPSARGS120 := $(filter-out $(APPDATAFOLDER) APPS:$(BUILD)/xtmp3.o88,$(APPSARGS)) \
+               $(APPDATAFOLDER)
+$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS) $(LOGOVID) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS)
+$(APPSIMG120): $(APPS120) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
 
-$(APPSIMG720): $(APPS720) $(LOGOVID) tools/os88disk.py
+# kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
+# kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
+# two geometries kern_mega ships in (14.1 answer 19), on demand through `make
+# mega` and never in `all`. Every other file is the shipped disk's own.
+MEGAAPPSARGS = $(addprefix APPS:,$(call MEGASUB,$(APPS_TOOLS))) \
+               $(addprefix GAMES:,$(call MEGASUB,$(APPS_GAMES) $(RDG_SHIP))) \
+               $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) $(LOGOVIDARG) \
+               $(MIDISONGARGS) \
+               $(addprefix SYSTEM:,$(call MEGASUB,$(APPSYS))) \
+               $(addprefix SYSTEM/DOS:,$(APPS_DOS) $(APPS_DOSCZ)) \
+               $(APPDATAFOLDER)
+MEGAAPPS = $(call MEGASUB,$(APPS))
+# ...and XTMP3's songs as the shipped pair carries them (XTMP3MP3's note),
+# spliced ahead of $(APPDATAFOLDER) for the same argparse reason
+MEGAAPPSARGS144 = $(filter-out $(APPDATAFOLDER),$(MEGAAPPSARGS)) \
+                  $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
+# ...minus XTMP3 on the 1.2MB disk, the shipped 1.2MB disk's own decision
+# (APPS120's note, 2026-10-23): this one asked for 2408 of 2371 clusters
+MEGAAPPS120 = $(filter-out $(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPS))
+MEGAAPPSARGS120 = $(filter-out $(APPDATAFOLDER) APPS:$(MEGAAPPDIR)/xtmp3.o88,$(MEGAAPPSARGS)) \
+                  $(APPDATAFOLDER)
+$(BUILD)/megaapps.img: $(MEGAPKGS) $(MEGAAPPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAAPPSARGS144)
+	@echo "megaapps: $@ - pair it with build/mega.img (\`make mega\`)"
+
+$(BUILD)/megaapps120.img: $(MEGAPKGS) $(MEGAAPPS120) $(LOGOVID) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAAPPSARGS120)
+	@echo "megaapps: $@ - pair it with build/mega120.img (\`make mega\`)"
+
+$(APPSIMG720): $(APPS720) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(APPSARGS720)
 
 $(APPSIMG360): $(APPS360) $(PLANPKG) tools/os88disk.py
@@ -14312,7 +16257,13 @@ $(APPSIMG360): $(APPS360) $(PLANPKG) tools/os88disk.py
 # disk to swap in would be a disk with a file the user already has. The rule
 # is the geometry's, not the disk's: a media disk exists exactly where the
 # apps disk had to drop the module, and 1.2MB is not such a geometry.
+#
+# XTMP3 JOINED IT (SPEC.md 121.12, dated 2026-10-22) on MIDIRack's ground: the
+# disk had 147 of 354 clusters free, the player is 97 and AFTER HOURS 30, which
+# leaves 20. The other two songs (69 and 50) did not fit beside it, and AFTER
+# HOURS is the one a 360KB machine - an XT, which converts first - is for.
 $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
+                $(BUILD)/xtmp3.o88 $(XTMP3MP3_360) \
                 $(MIDISONGS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(MEDIAARGS360) \
 		--folder SYSTEM/APPDATA
@@ -14372,63 +16323,27 @@ $(MEDIAIMG360): $(MEDIA_DISK_DATA) $(LOGOVID) $(BUILD)/midirack.o88 \
 # fourth that is none of them is the row this disk would drop first.
 #
 # PIXEL rides here too (SPEC.md 106.7): the 360KB machine's home for it, off
-# apps360.img by the dated decision at APPS_TOOLS_360, with LAKE.JPG in
-# MEDIA/ as its one sample (24.6.2) - the picture its File dialog opens on,
-# and the gallery's smallest (18KB, greyscale): VACATION.JPG would have been
-# 85 of this disk's 181 free clusters.
+# apps360.img by the dated decision at APPS_TOOLS_360. LAKE.JPG rode MEDIA/
+# beside it as its one sample (24.6.2) - the gallery's smallest, 18KB - until
+# 2026-10-22, when the owner took it OFF THIS DISK ALONE (24.6.1's dated
+# decision): Sheet's two modules had filled the disk to 354 of 354 clusters,
+# so a save to it failed, and the picture was the 18 clusters that gave room
+# back without dropping a program. PIXEL.O88 stays. OFFICE_DATA still names
+# the picture, so MEDIA_EXTRA keeps it on the everything set and the live
+# media, and `make pixeldisk` carries the whole gallery.
 OFFICE_PKGS := $(BUILD)/artful.o88 $(BUILD)/calc.o88 $(BUILD)/chart.o88 \
                $(BUILD)/fontview.o88 $(BUILD)/paint.o88 $(BUILD)/sheet.o88 \
+               $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
                $(BUILD)/texpad.o88 $(BUILD)/word.o88 $(BUILD)/pixel.o88
-# CHART.OVL RIDES THE ROOT BESIDE SHEET.O88 - a package's module is resolved
-# in its LAUNCHED-FROM directory - and this disk had it missing. (WORD.OVL
-# rode here for the same reason until upstream made Word one package with
-# parts, SPEC.md 68.10; the 2026-09-26 merge took it off this list.) The Makefile's other comment on the subject says a
-# SHEET without its module "runs chartless", which was true when the overlay
-# held only the rasterizer (82.16.3) and has not been true for a long time: it
-# has since absorbed every file format (82.16.9), five function families
-# (81.62), the macro engine (81.63), the database commands (81.71) and every
-# dialog engine (81.71.5.1, 81.71.6, 81.74.2). On this floppy SHEET could not
-# open or save a file, and could not open a single dialog.
 #
-# It fits and always did - 184 of 354 clusters used before it, 43 needed.
-# --- ...AND PIXEL COMES OFF THIS ONE (SPEC.md 24.6.1's rule, the 2026-10-14
-#     merge's own dated decision). With everything on it the disk wanted 384
-#     of its 354 clusters, and PiXEL is 135 of them: 111 for the package
-#     alone - nearly a third of a 360KB floppy, the largest single item here -
-#     plus 6 for PIXEL.GFX and 18 for LAKE.JPG. Thirty clusters had to go and
-#     no partial trim reaches thirty without taking the package.
-#
-#     WHAT DECIDES IT IS THE ALTERNATIVE. The other 66 clusters in play are
-#     CHART.OVL (47) and MACRO.OVL (19), and a SHEET without those cannot
-#     open or save a file and cannot open a single dialog on this floppy (see
-#     the paragraph above) - a functional regression, where leaving PiXEL off
-#     is a curation choice with a whole disk of its own behind it (`make
-#     pixeldisk`). Upstream made this same call for this same pressure on the
-#     720KB apps disk (106.7, 2026-10-02).
-#
-#     Filtered from the PREREQUISITES and the RECIPE together, which is the
-#     warning APPSARGS720 carries: filter one and a private-tree build names
-#     a file nothing made.
-#
-# SYSTEM/FONTS RIDES HERE AT 360KB TOO (SPEC.md 24.3.1.5, upstream's
-# 2026-10-18 decision): the 360KB system disk gave the faces up for the Desk
-# Clock, and this is the disk whose programs set type in them. ty_gofonts
-# finds them here because it falls back to the program's own volume when the
-# system disk has no SYSTEM/FONTS.
-#
-# THE TWO DECISIONS ARE THE UNION, and they are not in tension: both answer
-# the same 354-cluster pressure, and PiXEL coming off (above) is what pays
-# for the faces as well as for SHEET's modules. If this ever stops fitting,
-# os88disk.py says so by refusing to build the image, and the ORDER to give
-# things up is the one above - a functional regression last.
-OFF360OFF := $(BUILD)/pixel.o88 $(PXGFX) apps/pixel/samples/LAKE.JPG
-OFFICE360 := $(filter-out $(OFF360OFF),$(OFFICE_PKGS) $(CC_OVLZ)/CHART.OVL \
-             $(CC_OVLZ)/MACRO.OVL $(PXGFX) $(OFFICE_DATA)) $(FACES) $(FACELIC)
-OFFICEARGS360 := $(filter-out $(OFF360OFF) \
-                 $(addprefix MEDIA:,$(OFF360OFF)),\
-                 $(OFFICE_PKGS) $(CC_OVLZ)/CHART.OVL \
-                 $(CC_OVLZ)/MACRO.OVL $(PXGFX) \
-                 $(addprefix MEDIA:,$(OFFICE_DATA))) \
+# SYSTEM/FONTS RIDES HERE AT 360KB (SPEC.md 24.3.1.5): the 360KB system disk
+# gave the faces up for the Desk Clock, and this is the disk whose programs set
+# type in them. ty_gofonts finds them here because it falls back to the
+# program's own volume when the system disk has no SYSTEM/FONTS.
+OFFICE360_DATA := $(filter-out %/LAKE.JPG,$(OFFICE_DATA))
+OFFICE360 := $(OFFICE_PKGS) $(OFFICE360_DATA) $(FACES) $(FACELIC)
+OFFICEARGS360 := $(OFFICE_PKGS) \
+                 $(addprefix MEDIA:,$(OFFICE360_DATA)) \
                  $(FACESARG) \
                  $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -14473,6 +16388,83 @@ $(NETWORKIMG360): $(NETWORK360) tools/os88disk.py
 
 $(GAMESIMG360): $(GAMES360) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(GAMESARGS360)
+
+# --- emu360 ------------------------------------------------------------------
+# THE EMULATORS' DISK (SPEC.md 24.6, the owner's of 2026-10-22). RealDMG at
+# the root and its demo cartridge, GBDEMO.GB, packed in MEDIA/ - where its
+# File dialog opens. The other emulators (C64, APPLE2, RUNCPM) are C
+# packages whose ROMs and disks are fetched, so `all` cannot build them and
+# they ride their own on-demand disks; this one carries what `all` can.
+EMU_PKGS := $(RDG_SHIP)
+EMU_DATA := $(RDG_DEMO)
+EMU360 := $(EMU_PKGS) $(EMU_DATA)
+EMUARGS360 := $(EMU_PKGS) $(addprefix MEDIA:,$(EMU_DATA))
+EMUOPTS360 :=
+
+# ...AND THE OTHER THREE, ON REQUEST (the owner's of 2026-10-22): `make
+# emufull`, or EMUFULL=1 on any make, puts C64, APPLE2 and RUNCPM on the same
+# disk. They are C packages (SPEC.md 73) and APPLE2's ROM is fetched, so a
+# plain `make` must not need them: it builds the RealDMG disk above and says
+# so. A release or anyone who wants the full disk asks for it. Their stamp
+# makes the switch rebuild the image, so a plain `make` after an `emufull`
+# goes back to the plain disk rather than keeping one it did not ask for.
+#
+#   * ONE COPYING FOR BOTH. APPLE2's is C64's GPL-2 text BYTE FOR BYTE with
+#     the MIT notices of the two emulators APPLE2 is also derived from after
+#     it, so it is the licence of both packages; the recipe CHECKS the prefix
+#     rather than assuming it, and refuses the disk if the two ever drift. A
+#     header says which programs it covers and where their source is (the
+#     READMEs do not ship). LZ4-packed: 21,533 bytes to EMUCOPYKB's figure.
+#   * RUNCPM's drive A is a SMALL SET, not the master disk: the CP/M 2.2
+#     tools (PIP, STAT, ED, SUBMIT/XSUB, DDT, ASM, LOAD, DUMP), Microsoft's
+#     MBASIC and the TE editor, beside RunCPM's own MIT LICENSE. They are
+#     PLAIN - RunCPM reads a file into its record model itself and SPEC.md
+#     20.14.3's transparent read is not that read - and A/0 is built with
+#     RUNCPMSLOTS directory slots, the runcpm disks' reason: the kernel does
+#     not grow a directory, and a CP/M save needs a free one.
+#   * WELCOME.BAS rides MEDIA/, where APPLE2's File dialog opens; ASSOC.DAT
+#     gives a double-click on it to APPLE2.
+#   * FROTZ is NOT here: its stories are fetched from the IF Archive and
+#     none is committed.
+EMUCPM := PIP.COM STAT.COM ED.COM SUBMIT.COM XSUB.COM DDT.COM ASM.COM \
+          LOAD.COM DUMP.COM MBASIC.COM TE.COM
+EMUSTAMP := $(BUILD)/.emu360-$(if $(EMUFULL),full,plain)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(EMUSTAMP) ] || { rm -f $(BUILD)/.emu360-* $(EMUIMG360); \
+                                touch $(EMUSTAMP); })
+ifneq ($(EMUFULL),)
+EMUX_PKGS := $(BUILD)/c64.o88 $(BUILD)/apple2.o88 $(BUILD)/runcpm.o88
+EMU360 += $(EMUX_PKGS) $(BUILD)/emu/COPYING $(BUILD)/WELCOME.BAS \
+          $(BUILD)/runcpm-src.stamp
+EMUARGS360 += $(EMUX_PKGS) $(BUILD)/emu/COPYING $(RUNCPMDIR)/LICENSE \
+              MEDIA:$(BUILD)/WELCOME.BAS \
+              $(addprefix A/0:$(RUNCPMDIR)/A/0/,$(EMUCPM))
+EMUOPTS360 := --deep-folders --dir-slots A/0=$(RUNCPMSLOTS)
+endif
+
+.PHONY: emufull
+emufull:
+	$(MAKE) EMUFULL=1 $(EMUIMG360)
+
+$(BUILD)/emu/COPYING: apps/apple2/COPYING apps/c64/COPYING tools/os88lz.py $(PKGZSTAMP) | $(BUILD)
+	@mkdir -p $(BUILD)/emu
+	@cmp -s -n $$(wc -c < apps/c64/COPYING) apps/c64/COPYING apps/apple2/COPYING || \
+	    { echo "emu360: apps/apple2/COPYING no longer begins with apps/c64/COPYING - one licence file cannot stand for both"; exit 1; }
+	@{ printf '%s\n' \
+	    'C64.O88 and APPLE2.O88 on this disk are derived from VICE, Copyright (C)' \
+	    '1996-2025 the VICE team, and are distributed under the GNU General Public' \
+	    'License, version 2 or later, which follows. Their source is apps/c64/ and' \
+	    'apps/apple2/ in the os8088 source tree. The ROM images inside them are' \
+	    "Commodore's and Apple's, and are not GPL. RUNCPM.O88 is MIT: see LICENSE." \
+	    '' '                     ----------------------------------' '' ; \
+	   cat apps/apple2/COPYING; } > $@.plain
+	$(if $(PKGZ),python3 tools/os88lz.py --wrap $@ --fmt $(PKGZ) $@.plain && rm -f $@.plain,mv $@.plain $@)
+
+$(EMUIMG360): $(EMU360) $(EMUSTAMP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(EMUOPTS360) $(EMUARGS360) \
+		$(MEDIAFOLDER) $(APPDATAFOLDER)
+	@python3 tools/os88disk.py --verify $@
+	$(if $(EMUFULL),,@echo "emu360: RealDMG only - C64, APPLE2 and RunCPM join it on request: make emufull")
 
 # =============================================================================
 # A COMPRESSED 360KB SET (ON DEMAND): `make zset ZFMT=lz4` / `ZFMT=lzb`
@@ -14651,6 +16643,7 @@ ALLAPPSFILES := $(BUILD)/redline.o88 $(N1942LIVE) $(APPS) $(CORE_SYSONLY) $(BUIL
                 $(BUILD)/apple2.o88 \
                 $(BUILD)/WELCOME.BAS \
                 apps/apple2/README.TXT apps/apple2/COPYING \
+                $(RDG_SHIP) $(RDG_DEMO) \
                 $(WEAVEDISK) $(WEAVELOOM) $(LOOMSRCS) \
                 $(RUNCPMDISK)
 # These images use the RunCPM master disk, but not the separate CP/M
@@ -14666,8 +16659,8 @@ ALLAPPS := $(ALLAPPSFILES) $(BUILD)/runcpm-src.stamp tools/getruncpm.py
 ALLAPPSARGS := APPS:$(BUILD)/redline.o88 $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                                  $(BUILD)/frotz.o88 \
                                  $(BUILD)/MIDIRACK.BNK) \
-               $(addprefix GAMES:,$(APPS_GAMES) $(N1942LIVE)) \
-               $(addprefix MEDIA:,$(APPS_DATA)) \
+               $(addprefix GAMES:,$(APPS_GAMES) $(RDG_SHIP) $(N1942LIVE)) \
+               $(addprefix MEDIA:,$(APPS_DATA) $(RDG_DEMO)) \
                $(addprefix WORD:,$(BUILD)/word.o88 $(BUILD)/WELCOME.DOC) \
                $(addprefix CWORD:,$(CWORDDISK)) \
                $(addprefix PACCMAN:,$(PACCMANDISK)) \
@@ -14767,7 +16760,7 @@ LIVEISO := $(BUILD)/os8088.iso
 # the two lists, so a second SYSAPPS package lands here the day it lands
 # there and neither list is edited twice.
 LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
-               $(STIKARGS) $(STIKNOTESARG)
+               $(STIKARGS) $(SYSTOOLSARGS) $(STIKNOTESARG)
 # THE FOUR PACKAGES THAT RIDE NO FLOPPY, AND THE DOCUMENTS MEDIA/ LACKED.
 # RECORDER (SPEC.md 35.1), HELLO (27.0), PACMAN (89) and SCRIBE (95) are built
 # by `all` and shipped nowhere, and every one of those decisions is an argument
@@ -14813,11 +16806,17 @@ LIVESYSARGS := $(addprefix SYSTEM:,$(filter-out $(APPSYS),$(SYSAPPS))) \
 # (SPEC.md 19.10.1). Here, for that reason and the four packages', and
 # tests/unit/t_livefull.py now holds the live volume to every file the 1.44MB
 # apps disk ships, folder and all, so the next one cannot drop out this way.
-LIVEPKGDEPS := $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
-               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS)
+#
+# $(XTMP3MP3) IS XTMP3'S THREE DEMO SONGS on that same ground (SPEC.md
+# 121.12): the 1.44MB apps disk carries them in MEDIA/, so t_livefull holds the
+# live volume to them. XTMP3.O88 itself arrives through $(APPS_TOOLS) in
+# $(ALLAPPSARGS); the songs are not there, MIDIRack's songs' reason - the
+# everything-floppy's RunCPM fill would pay for them.
+LIVEPKGDEPS := $(SYSOPTIONAL) $(BUILD)/recorder.o88 $(BUILD)/hello.o88 \
+               $(SCRIBEDISK) $(MEDIA_EXTRA) $(MIDISONGS) $(XTMP3MP3)
 LIVEPKGARGS := $(addprefix APPS:,$(BUILD)/recorder.o88 $(BUILD)/hello.o88) \
                $(addprefix SCRIBE:,$(SCRIBEDISK)) \
-               $(addprefix MEDIA:,$(MEDIA_EXTRA)) \
+               $(addprefix MEDIA:,$(MEDIA_EXTRA) $(XTMP3MP3)) \
                $(MIDISONGARGS)
 $(if $(filter-out $(APPSYS),$(SYSAPPS)),,$(error the SYSAPPS live set is \
      empty - $(SYSAPPS) and $(APPSYS) no longer differ, so THEWIRE.O88 is \
@@ -14858,7 +16857,8 @@ $(BUILD)/zcat/live/CATALOG.TXT: tools/getstories.py
 # in front of the same rest (SPEC.md 80.7): $(LIVEARGS) is still what it was,
 # byte for byte, and build/livepayload.txt still prints it.
 LIVEREST := $(SYSDOC) $(SYSLOGOARG) $(LOGOVIDARG) $(FACESARG) $(ALLAPPSARGS) \
-            $(LIVESYSARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG)
+            $(LIVESYSARGS) $(SYSOPTIONALARGS) $(LIVEPKGARGS) $(LIVESTORYARGS) $(SYSROOTARG) \
+            $(SYSINST)
 LIVEARGS := $(DRIVERS) $(LIVEREST)
 
 # ...and the live volume's own FOLDER COUNT.
@@ -14954,6 +16954,7 @@ $(USBIMG): LIVEDRVS = $(DRIVERS)
 $(USBIMG): LIVESUB :=
 $(EMUUSBIMG): KMODDIR := $(EMUDIR)
 $(EMUUSBIMG): LIVEKDIR := $(EMUDIR)
+$(EMUUSBIMG): LIVENOTOOLS = $(SYSTOOLSARGS)
 $(EMUUSBIMG): LIVEDRVS = $(EMUDRIVERS) $(BUILD)/webcfg/system.cfg
 $(EMUUSBIMG): LIVESUB = $(MAKE) BUILD=$(EMUDIR) KERN_EMU=1 \
                         $(EMUDIR)/mbr.bin $(EMUDIR)/boothd.sys $(EMUDIR)/boot.bin
@@ -14972,7 +16973,7 @@ $(EMUUSBIMG): $(KERNEL_SRC) $(KERNEL_INC) $(BUILD)/vmmouse.drv \
 # which is RUNCPMIMG's order and is here for its reason.
 $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
            $(DRIVERS) $(SYSDOC) $(SYSLOGO) $(LOGOVID) $(FACES) $(FACELIC) \
-           $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
+           $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) $(STIKNOTESTXT) $(SYSROOT) $(LIVEPKGDEPS) $(BUILD)/stories.stamp $(BUILD)/BRONZE.PIX \
            $(BUILD)/zcat/live/CATALOG.TXT $(BUILD)/cpmsw.stamp \
            tools/getcpmsw.py tools/getstories.py \
            $(ALLAPPS) tools/os88disk.py
@@ -14984,14 +16985,14 @@ $(USBIMG) $(EMUUSBIMG): $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) \
 	[ -n "$$gsel" ] || { echo "usb: getcpmsw.py --select hdd chose nothing"; exit 1; }; \
 	zsel="$$(python3 tools/getstories.py -o $(STORYDIR) --disk-args STORIES/)"; \
 	[ -n "$$zsel" ] || { echo "usb: getstories.py --disk-args printed nothing"; exit 1; }; \
-	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(STIKAPPS) | sed 's,^,RUNCPM/A/0:,')"; \
+	sel="$$(python3 tools/getruncpm.py -o $(RUNCPMDIR) --select hdd --dir-slots $(RUNCPMSLOTS) --folders $(LIVEFOLDERS) --reserve-clusters $$gcost --reserve $(ALLAPPSFILES) $(LIVEPKGDEPS) $(SYSAPPS) $(STIKAPPS) $(SYSTOOLS) | sed 's,^,RUNCPM/A/0:,')"; \
 	[ -n "$$sel" ] || { echo "usb: getruncpm.py --select hdd chose nothing"; exit 1; }; \
 	python3 tools/os88disk.py -o $@ --hdd \
 		--mbr $(LIVEKDIR)/mbr.bin --boot $(LIVEKDIR)/boothd.bin \
 		--kernel $(LIVEKDIR)/$(KERNNAME) \
 		--deep-folders --dir-slots RUNCPM/A/0=$(RUNCPMSLOTS) $$gslot \
 		--folder DOCS $(APPDATAFOLDER) $(AUTOFOLDER) $(LIVESTORYDIRS) $(STIKNOTESOPT) \
-		$(LIVEDRVS) $(LIVEREST) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
+		$(LIVEDRVS) $(filter-out $(LIVENOTOOLS),$(LIVEREST)) $$sel $$gsel $$zsel $(CPMSW) $(STORIES)
 	@python3 tools/os88disk.py --verify-hdd $@
 	@$(if $(LIVESUB),true,cp -f $(BUILD)/livepayload.txt $@.payload)
 	@$(if $(LIVESUB),$(LIVENOTE_EMU),$(LIVENOTE_USB))
@@ -15133,7 +17134,16 @@ print-%:
 # list the live image would be built from - which is the whole point: PART A
 # is the half that must fail on the day a package is added, and `make usb`
 # needs the C toolchain and three fetches that a plain clone has none of.
-$(BUILD)/livepayload.txt: Makefile | $(BUILD)
+# THE MAKEFILE IS NOT ITS ONLY INPUT, and that cost a false failure at the
+# 2026-10-24 merge. $(SYSOPTIONAL) is `$(if $(KERN_SMALL),,...)`, so
+# `make KERN_SMALL=1` writes a payload with no CDRACK.O88 in it and the next
+# plain `make` sees an up-to-date file and leaves it there - after which
+# t_livefull reports apps/cdrack/ as a package the live media does not carry,
+# which is a statement about the knob build and not about this tree. A knob
+# build is the second thing CLAUDE.md asks for after every change, so the
+# order that triggers it is the ordinary one. $(VIDSTAMP) already names every
+# knob, which is what the kernel's own rules depend on for this reason.
+$(BUILD)/livepayload.txt: Makefile $(VIDSTAMP) | $(BUILD)
 	@{ printf 'LIVEARGS %s\n' $(LIVEARGS); \
 	   printf 'ALLAPPSARGS %s\n' $(ALLAPPSARGS); \
 	   printf 'LIVESYSARGS %s\n' $(LIVESYSARGS); \
@@ -15280,8 +17290,10 @@ imager:
 #        Tank, Mines, Missile, Solitaire and Tamegram stay, so the disk is
 #        not without games.
 #
-# 342 of 354, twelve to spare. THE "every game" CLAIM IN
-# docs/FIELD-MACHINES.md IS NO LONGER TRUE OF THIS DISK and says so there.
+# 342 of 354 when that cut was made; 333 of 354 at the 2026-10-24 merge, which
+# restored the names above after the resolution dropped them. THE "every game"
+# CLAIM IN docs/FIELD-MACHINES.md IS NO LONGER TRUE OF THIS DISK and says so
+# there.
 #
 # DRMARCO (SPEC.md 100) goes on PIXELSTEIN's ground: ~68 clusters at 360 KB
 # with its three front screens beside it, 48 since they became parts of the
@@ -15293,25 +17305,50 @@ imager:
 #
 # WIRECHAT (SPEC.md 113.11) goes on APPS360's ground, added 2026-10-19: a
 # chat client is the network disk's subject, and network360.img carries it.
+#
+# XTMP3 (SPEC.md 121.12) goes on APPS360's ground too, added 2026-10-22: 97
+# clusters, a player and not a calibration instrument, and media360.img
+# carries it at this geometry. The 720KB combo carries it; THE 1.44MB ONE NO
+# LONGER DOES (COMBO144_DROP below, 2026-10-24) - the same ground, applied
+# there once that disk stopped fitting.
 COMBO_DROP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 \
               $(BUILD)/tracker.o88 \
-              $(BUILD)/sheet.o88 $(BUILD)/chart.o88 $(CC_OVLZ)/CHART.OVL \
-              $(CC_OVLZ)/MACRO.OVL \
-              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/gorillas.o88 \
-              $(BUILD)/isotron.o88 $(BUILD)/wirechat.o88 \
-              $(BUILD)/pixel.o88 $(PXGFX) \
-              $(BUILD)/midirack.o88 $(BUILD)/video.o88 \
+              $(BUILD)/sheet.o88 $(BUILD)/chart.o88 \
+              $(CC_OVLZ)/CHART.OVL $(CC_OVLZ)/MACRO.OVL \
+              $(BUILD)/pxstein.o88 $(DM_SHIP) $(BUILD)/isotron.o88 \
+              $(BUILD)/wirechat.o88 $(BUILD)/xtmp3.o88 \
+              $(BUILD)/gorillas.o88 \
+              $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 $(BUILD)/cyclone.o88 \
+              $(BUILD)/pixel.o88 $(BUILD)/video.o88 \
+              $(BUILD)/wireflet.o88 \
               $(BUILD)/browser.o88 $(BUILD)/telnet.o88 $(BUILD)/ftpd.o88 \
-              $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 $(BUILD)/cyclone.o88
-# PIXEL JOINED THE LIST AT THE 2026-10-14 MERGE (SPEC.md 24.6.1's rule, dated
-# as it requires). t_products caught both combos over - 411 of 354 and 785 of
-# 713 - and PiXEL is 111 clusters, the largest single item on either disk and
-# nearly a third of a 360KB floppy. Nothing else on it exceeds 22, so the 57
-# and 72 that had to go could come from nowhere else without taking four or
-# five programs for one. A one-floppy machine's premise is a working system
-# with software on it, not one large image editor; `make pixeldisk` is PiXEL's
-# own disk, and the 1.44MB combo keeps it. This is also the same call office360
-# took in this merge, and the one upstream took for apps720 (106.7).
+              $(BUILD)/midirack.o88
+# NINE OF THOSE NAMES ARE THIS BRANCH'S AND THE 2026-10-24 MERGE LOST THEM.
+# The resolution took upstream's whole COMBO_DROP, which is this list minus
+# gorillas, skies, dotdel, cyclone, pixel, video, browser, telnet, ftpd and
+# midirack - every one of them a dated decision this branch had already taken
+# (the PiXEL paragraph below is one of them, and it survived while the name it
+# is about did not). `make combo` came out 414 of 354 and the derivation two
+# hundred lines down was left with nothing to subtract: COMBO720_KEEP exists
+# to put skies, dotdel and cyclone BACK on the 720KB disk, so with those three
+# missing from this list that filter was a no-op and the 720KB disk silently
+# carried them. A COMMENT SURVIVING ITS CODE IS WHAT MADE THIS HARD TO SEE -
+# the paragraphs above describe cuts the variable no longer made.
+#
+# ONE NAME IS GENUINELY NEW: WIREFLEET (SPEC.md 114.11), which took the
+# package from 26 clusters to 47 when its missiles and music landed upstream.
+# A game, not a calibration instrument - isoTron's and DrMarco's ground - and
+# games360.img carries it at this geometry.
+#
+# TWO NAMES WERE TRIED HERE AND ARE NOT IN THE LIST, because COMBO_DROP
+# filters APPS_TOOLS and APPS_GAMES and neither is in either: REALDMG is in
+# `all` only, and $(PXGFX) - which this branch's own list named four times
+# and NEVER DEFINED, so it expanded to nothing everywhere it was used - is
+# gone with the upstream text that replaced those references. Both are the
+# silent no-op the MODPLUG paragraph above warns about, and a filter is
+# worthless against a name its list does not hold.
+#
+# Re-measure rather than quoting these figures.
 COMBO_TOOLS := $(filter-out $(COMBO_DROP),$(APPS_TOOLS))
 COMBO_GAMES := $(filter-out $(COMBO_DROP),$(APPS_GAMES))
 
@@ -15383,9 +17420,50 @@ combo: $(BUILD)/combo.img
 # 354-cluster disk's problem and this one has 2,847. Inheriting it would have
 # taken three programs off a disk with room for thirty, silently, on the
 # strength of a variable name.
+# ONE NAME COMES OFF IT at the 2026-10-24 upstream merge, and it is not a
+# COMBO_DROP inheritance (the paragraph above refuses that, and still does).
+# THE PREMISE ABOVE FAILED: the payload came out 2,865 of 2,847, eighteen
+# over, so "the space is there" stopped being true of this geometry and a
+# disk that ships needs a name.
+#
+# XTMP3 IS THAT NAME, ON THE GROUND COMBO_DROP ALREADY WROTE FOR IT - "a
+# player and not a calibration instrument" - which was applied at 360KB and
+# waived here only because this disk had room. It is also the one player on
+# the disk with nothing to play ANYWHERE: `.V88` and `.MID` ship on other
+# geometries, so the Video Player and MIDIRack are curation decisions a
+# roomier disk can reverse, while XTMP3's own media is on-demand field disks
+# that nothing ships (its rules above say so), and 195 clusters is the
+# largest application here by a factor of two. SO THE SENTENCE IN
+# COMBO_DROP's XTMP3 PARAGRAPH - "The 720KB and 1.44MB combos carry it" - IS
+# NOW HALF FALSE and says so there.
+#
+# IT OVERSHOOTS ON PURPOSE: eighteen clusters was the overflow and this is
+# 195, which leaves ~177 spare. That is headroom and not waste, because this
+# break arrived WITH the package - XTMP3 (SPEC.md 121) landed in #304/#308 in
+# the very merge that broke the disk - so the next merge that adds an
+# application will want it. Cutting an 18-cluster name instead would put this
+# disk back on the edge for the next one.
+#
+# BIGFILE.DAT WAS THE OTHER CANDIDATE AND IS REFUSED: 208 clusters, but
+# PERFORMANCE.md Part 9 Set 13's DOS cross-check reads it and SPEC.md
+# 18.95.4's cache-width sweep walks it, so dropping it takes a MEASUREMENT
+# off a calibration disk to keep a program - the wrong way round.
+#
+# REALDMG WAS TRIED FIRST AND IS NOT A CANDIDATE AT ALL: it is in `all` but
+# in neither APPS_TOOLS nor APPS_GAMES, so a filter naming it is exactly the
+# silent no-op SPEC.md 24.5 warns about and the MODPLUG paragraph above
+# names. It was written here, the rebuild reported the same 2,865, and that
+# is how it was caught. Check a name is in the list it filters.
+#
+# WHAT CAUGHT THIS IS tests/unit/t_products.py, which is this branch's and
+# not upstream's - upstream has no gate that builds combo144 at all, so this
+# overflow is in `main` today and nobody there can see it.
+#
+# Re-measure rather than quoting: 2,670 of 2,847 at this writing.
+COMBO144_DROP := $(BUILD)/xtmp3.o88
 COMBO144ARGS := $(COMBOSYS) \
-                $(addprefix APPS:,$(APPS_TOOLS)) \
-                $(addprefix GAMES:,$(APPS_GAMES)) \
+                $(addprefix APPS:,$(filter-out $(COMBO144_DROP),$(APPS_TOOLS))) \
+                $(addprefix GAMES:,$(filter-out $(COMBO144_DROP),$(APPS_GAMES))) \
                 $(COMBOBENCH) $(BUILD)/bigfile.dat \
                 MEDIA:apps/tracker/beverly.mod $(SYSLOGOARG) $(SYSDOC)
 
@@ -15452,7 +17530,11 @@ $(BUILD)/combo144.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) \
 # It keeps the three APPLICATIONS the 360KB disk cannot afford, and the three
 # GAMES it sheds to games360.img. It does NOT keep Browser, Telnet or FTPD:
 # COMBO720SYS drops ETHER.DRV for the same no-NIC reason, so they could not
-# work here either. 651 of 713, sixty-two to spare.
+# work here either. 651 of 713 when that was written; 697 of 713 at the
+# 2026-10-24 merge, sixteen to spare - and this disk is the reason the lost
+# names above had to be restored rather than re-derived: with skies, dotdel
+# and cyclone missing from COMBO_DROP, the KEEP list below had nothing to put
+# back and this geometry carried them whether it wanted them or not.
 COMBO720_KEEP := $(BUILD)/artful.o88 $(BUILD)/texpad.o88 $(BUILD)/tracker.o88 \
                  $(BUILD)/skies.o88 $(BUILD)/dotdel.o88 $(BUILD)/cyclone.o88
 COMBO720_DROP := $(filter-out $(COMBO720_KEEP),$(COMBO_DROP))
@@ -15730,7 +17812,7 @@ endif
 test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 	$(QEMU) $(QEMUMACH) -drive file=$(TESTIMG),format=raw,if=floppy -boot $(TESTBOOT) $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 $(HDDDEV) \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-display none -qmp unix:$(QMP_SOCK),server,nowait -daemonize -pidfile build/qemu.pid \
 		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD) $(ETHERDEV)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
@@ -15740,7 +17822,7 @@ test: $(TESTIMG) $(TESTAPPS) $(HDDIMG)
 test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) $(QEMUMACH) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-display none -qmp unix:$(QMP_SOCK),server,nowait -daemonize -pidfile build/qemu.pid \
 		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd \
 		$(ADLIBDEV) $(SBDEV)
 
@@ -15895,7 +17977,7 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 #
 # All three carry an OTI-067 VGA, a serial Microsoft mouse on COM1 and 1.44MB
 # drives (so they boot the same images QEMU does), and all three are
-# interactive: 86Box has no automation socket.
+# interactive here; tools/os88box.py runs the same profiles headless.
 #
 # The 286 is deliberately NOT `ibmat`: 86Box caps the real 5170 planar at
 # 512KB and clamps mem_size down to it SILENTLY, the same trap `vm/xt640`
@@ -15909,6 +17991,16 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 286: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM286)/86box.cfg
 	$(BOX) -P $(VM286) -N
+
+# The owner's Packard Bell Victory 286 as near as 86Box comes (docs/86BOX.md):
+# vm/286's AMI board at 16 MHz with 4MB and a Paradise PVGA1A. Not the board,
+# but it MATCHED the machine: RealDMG's logs off it (tests/rdgcore/rdgwin.py
+# --log) read like the Victory's own, Kirby walking with no recompiler at
+# 52-62% of real time against the Victory's 59-64%, a scrolling Super Mario
+# Land draw 45 ms on both (REALDMG-SPEC section 14.1).
+286-victory: $(IMG) $(APPSIMG)
+	@$(UNPROTECT) $(VM286VIC)/86box.cfg
+	$(BOX) -P $(VM286VIC) -N
 
 # The 1.2MB 5.25" pair on the machine class it is for (SPEC.md 19): an AMI 286
 # at 12.5MHz with two 525_2hd drives. This is the ONLY 86Box profile in the
@@ -15926,9 +18018,9 @@ xt-multimon: $(IMG360) $(APPSIMG360)
 # floppy - the pairing `xt-z`, `386-word`, `386-c-word`, `386-runcpm`,
 # `386-c64` and `386-weave` already are at their geometries, and the block
 # above VM286525Z says why there is one machine class here and not three.
-# Each is MANUAL EVIDENCE and never a gate: 86Box has no automation socket, so
-# a session can start one of these and cannot read the result
-# (docs/TESTING.md). Every one stops in BIOS setup on its FIRST launch, its
+# Each is MANUAL EVIDENCE and never a gate - these targets launch the 86Box
+# app; tools/os88box.py scripts the same profiles headless (docs/86BOX.md).
+# Every one stops in BIOS setup on its FIRST launch, its
 # CMOS being empty - pick EXIT FOR BOOT once (the note above `286`).
 286-525-z: $(IMG120) $(BUILD)/zork120.img
 	@$(UNPROTECT) $(VM286525Z)/86box.cfg
@@ -16168,6 +18260,15 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 	@$(UNPROTECT) $(VM286VID)/86box.cfg
 	$(BOX) -P $(VM286VID) -N
 
+# ...and that 286 with RealDMG's hard disk (docs/REALDMG-SPEC.md section 18):
+# the whole install, REALDMG/ and your cartridges in GAMEBOY/, booted off the
+# disk - `make realdmghd GBROMS=<dir>` builds it. The SB16 is the FM chip
+# RealDMG plays all four channels on (section 17.1)
+286-realdmg:
+	@test -f $(REALDMGHD) || { echo "286-realdmg: needs $(REALDMGHD) - make realdmghd GBROMS=<dir of .gb/.gbc>"; exit 1; }
+	@$(UNPROTECT) $(VM286RDG)/86box.cfg
+	$(BOX) -P $(VM286RDG) -N
+
 # The 486DX2/66 with `make vid486`'s measurement disk on IDE and its blank
 # results floppy in B: (SPEC.md 98.2.3.1)
 486-video:
@@ -16178,6 +18279,23 @@ xt-wire: $(BUILD)/ether360.img $(BUILD)/wiredata360.img
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# XTMP3'S FIELD MACHINES (docs/xtmp3/FIELD.md): each one of the sound machines
+# above - vm/xt-sound's 4.77 MHz XT with an SB 2.0, vm/286-sound's 12.5 MHz
+# 286, vm/386-sound's 25 MHz 386DX, vm/486's DX2/66 and vm/pentium's P54C/133,
+# the last four with an SB16 - booting `make xtmp3field`'s system disk with
+# the 44.1 kHz stereo fixture in B:, so XTMP3 opens on it by itself and its
+# ladder picks a rung with nobody at the machine. Only the floppies and the
+# uuid differ from the machines they copy. tools/x3field.py runs all five on
+# both fixtures and reads each X3REPORT.TXT back
+.PHONY: xt-xtmp3 286-xtmp3 386-xtmp3 486-xtmp3 pentium-xtmp3
+xt-xtmp3: $(BUILD)/x3field360.img $(BUILD)/x3fb360-c128.img
+	@$(UNPROTECT) $(CURDIR)/vm/xt-xtmp3/86box.cfg
+	$(BOX) -P $(CURDIR)/vm/xt-xtmp3 -N
+286-xtmp3 386-xtmp3 486-xtmp3 pentium-xtmp3: %-xtmp3: $(BUILD)/x3field.img \
+            $(BUILD)/x3fb-c128.img
+	@$(UNPROTECT) $(CURDIR)/vm/$*-xtmp3/86box.cfg
+	$(BOX) -P $(CURDIR)/vm/$*-xtmp3 -N
 
 # The two FROTZ machines (SPEC.md 61.9), both with the Z-machine story floppy
 # in B: instead of the apps disk.
@@ -16488,9 +18606,15 @@ pentium: $(IMG) $(APPSIMG)
 # APPLE2 target need the network to come back. The ROM this tree DERIVES from
 # them - build/apple2-rom/APPLE2.ROM - is an output and goes, so a rebuild
 # still re-checks every SHA-256 and re-assembles the part.
+#
+# ...and build/gbtest and build/rgbds, the Game Boy's, by the same test: the
+# test ROMs tools/getgbtest.py fetches at pinned SHA-256s and the assembler
+# tools/gbclock.py builds from a pinned clone. Thrown away, the rgbds rows
+# would SKIP and the ROM rows fetch again. `clean-gb` is the escape hatch.
 clean:
 	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc ! -name cc \
-		! -name apple2-rom ! -name nasm3 -exec rm -rf {} + 2>/dev/null || true
+		! -name apple2-rom ! -name nasm3 ! -name gbtest ! -name rgbds \
+		-exec rm -rf {} + 2>/dev/null || true
 	@rm -f $(BUILD)/apple2-rom/APPLE2.ROM
 
 clean-marty:
@@ -16504,7 +18628,10 @@ clean-cc:
 clean-nasm3:
 	rm -rf $(BUILD)/nasm3
 
-distclean: clean clean-marty clean-cc clean-nasm3
+clean-gb:
+	rm -rf $(BUILD)/gbtest $(BUILD)/rgbds
+
+distclean: clean clean-marty clean-cc clean-nasm3 clean-gb
 
 # Standalone 1942: committed artwork, compiled into adapter-native banks.
 N1942ART = apps/1942/art/sprites.json apps/1942/art/sea.idx apps/1942/art/reef.idx apps/1942/art/port.idx apps/1942/palette.json
@@ -16950,6 +19077,41 @@ PIXEL_PARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(BUILD)/pxpng.bin \
 $(BUILD)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_PARTS))
 
+# PiXEL's kern_mega ARM (KERN-MEGA-PLAN 14.40, 14.66): the parts that store
+# into their own words, assembled -DPKG_MEGA so each store goes through ES =
+# PXP_SELF instead of CS (apps/pixel/pxpart.inc's PXSW, PXSWON, PXSSP) - 290
+# single stores and 70 runs, ~2.5KB of image. The resident (pixel.bin),
+# pxhelp, pxgif and pixart have no such store and are the shipped ones, so
+# the links in $(BUILD)/pxlink.inc are the same for both. Each depends on its
+# shipped twin, which carries the part's full prerequisite list
+$(MEGAAPPDIR)/pxjpeg.bin: $(BUILD)/pxjpeg.bin apps/pixel/pxjpeg.asm apps/pixel/pxpart.inc apps/pixel/pxhmore.inc $(PIXEL_PLANS) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxjpeg.asm
+$(MEGAAPPDIR)/pxpng.bin: $(BUILD)/pxpng.bin apps/pixel/pxpng.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxpng.asm
+$(MEGAAPPDIR)/pxsimp.bin: $(BUILD)/pxsimp.bin apps/pixel/pxsimp.asm apps/pixel/pxpart.inc $(PIXEL_PLANS) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxsimp.asm
+$(MEGAAPPDIR)/pxfull.bin: $(BUILD)/pxfull.bin apps/pixel/pxfull.asm apps/pixel/pxpart.inc apps/pixel/pxfs.inc apps/pixel/pxrec.inc apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxfull.asm
+$(MEGAAPPDIR)/pxedit.bin: $(BUILD)/pxedit.bin apps/pixel/pxedit.asm apps/pixel/pxpart.inc apps/pixel/pxed.inc apps/pixel/pxrec.inc apps/pixel/pxqtab.inc apps/pixel/pxgam.inc apps/pixel/pxsvc.inc apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxedit.asm
+$(MEGAAPPDIR)/pxwrite.bin: $(BUILD)/pxwrite.bin apps/pixel/pxwrite.asm apps/pixel/pxpart.inc apps/pixel/pxed.inc apps/pixel/pxrec.inc apps/pixel/pxsvc.inc apps/os88lzw.inc apps/os88api.inc $(BUILD)/pxlink.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxwrite.asm
+$(MEGAAPPDIR)/pxextra.bin: $(BUILD)/pxextra.bin apps/pixel/pxextra.asm apps/pixel/pxpart.inc apps/pixel/pxhmore.inc apps/os88lzw.inc $(PIXEL_PLANS) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/pixel/ -I $(BUILD)/ -DPKG_MEGA -o $@ apps/pixel/pxextra.asm
+PIXEL_MEGAPARTS := $(BUILD)/pxhelp.bin $(BUILD)/pxgif.bin $(MEGAAPPDIR)/pxpng.bin \
+                   $(MEGAAPPDIR)/pxjpeg.bin $(MEGAAPPDIR)/pxsimp.bin $(MEGAAPPDIR)/pxfull.bin \
+                   $(MEGAAPPDIR)/pxedit.bin $(MEGAAPPDIR)/pxwrite.bin $(MEGAAPPDIR)/pxextra.bin \
+                   $(BUILD)/pixart.bin
+$(MEGAAPPDIR)/pixel.o88: $(BUILD)/pixel.bin $(PIXEL_MEGAPARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/pixel.bin -o $@ $(addprefix --part ,$(PIXEL_MEGAPARTS))
+
 # THE GALLERY (SPEC.md 106.7). Committed, and pinned by tools/pixsamples.py
 # --check, which also compares these three lists with its own - so a picture
 # added here and not there, or there and not here, fails the build. PLAIN on
@@ -16997,6 +19159,29 @@ xt-pixel: $(IMG360) $(BUILD)/pixel360.img
 	@$(UNPROTECT) $(VM386PIXEL)/86box.cfg
 	$(BOX) -P $(VM386PIXEL) -N
 
+# `make xtmp3disk`: XTMP3 (SPEC.md 121.12) and all three demo songs, in all
+# four geometries, pixeldisk's shape - the package at the root, the songs in
+# MEDIA/ where its Open dialog starts (SPEC.md 38.10), and SYSTEM/APPDATA/
+# made for XTMP3.DAT (SPEC.md 19.9). On demand, like every application
+# floppy. It is the 720KB home the apps disk has no room for (APPSARGS720's
+# note) and the 360KB disk with every song, where media360.img has room for
+# one. The songs are PLAIN, never under $(ZDATA) (XTMP3MP3's note). 360KB:
+# 97 + 69 + 50 + 30 = 246 clusters of files, 250 of 354 with the folders and
+# ASSOC.DAT.
+.PHONY: xtmp3disk
+xtmp3disk: $(BUILD)/xtmp3.img $(BUILD)/xtmp3720.img $(BUILD)/xtmp3120.img \
+           $(BUILD)/xtmp3360.img
+XTMP3DISKARGS = $(BUILD)/xtmp3.o88 $(addprefix MEDIA:,$(XTMP3MP3)) \
+                --folder SYSTEM/APPDATA
+$(BUILD)/xtmp3.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(XTMP3DISKARGS)
+$(BUILD)/xtmp3120.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $(XTMP3DISKARGS)
+$(BUILD)/xtmp3720.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $(XTMP3DISKARGS)
+$(BUILD)/xtmp3360.img: $(BUILD)/xtmp3.o88 $(XTMP3MP3) tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $(XTMP3DISKARGS)
+
 # WireBall: serial null-modem Pong (SPEC.md 109).
 # WireFleet (SPEC.md 114). One embedded-art package; all four disk sizes.
 .PHONY: wirefleet wirefleetdisk wirefleet-pair wirefleettest
@@ -17005,12 +19190,24 @@ wirefleet-pair:
 wirefleettest: wirefleetdisk $(IMG)
 	python3 tests/wirefleetlink.py
 wirefleet: $(BUILD)/wireflet.o88
-$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc | $(BUILD)
+$(BUILD)/wireflet.bin: apps/wirefleet/wirefleet.asm apps/wirefleet/wfmodel.inc apps/wirefleet/wflink.inc apps/wirefleet/wfchat.inc apps/wirefleet/wfsound.inc apps/wirefleet/wfsong.inc apps/wirefleet/wfanim.inc apps/wirefleet/wfsave.inc apps/wirefleet/wffull.inc apps/wirefleet/wfvideo.inc apps/wirefleet/wfcolor.inc apps/wirefleet/art/tiles.inc apps/wirefleet/art/fx.inc apps/os88api.inc apps/os88ui.inc apps/os88line.inc apps/os88alt.inc apps/os88gfx.inc apps/os88flat.inc apps/os88dec.inc apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/wireflet.lst --before "[map all $(BUILD)/wireflet.map]" -o $@ $<
-$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $< -o $@
+# The two lazy parts (SPEC.md 114.11), in WF_P_* row order: the effect
+# stamps, assembled from the committed fx.inc, and the Sound Blaster clips,
+# packed from the committed CC0 WAVs by a standard-library tool.
+WFLETPARTS = $(BUILD)/WFLETFX.GFX $(BUILD)/WFLET.SFX
+$(BUILD)/WFLETFX.GFX: apps/wirefleet/wffxbank.asm apps/wirefleet/art/fx.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ $<
+$(BUILD)/WFLET.SFX: tools/wirefleet_sfx.py apps/wirefleet/sfx/samples.json $(wildcard apps/wirefleet/sfx/*.wav) | $(BUILD)
+	python3 tools/wirefleet_sfx.py -o $@
+$(BUILD)/wireflet.o88: $(BUILD)/wireflet.bin $(WFLETPARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@ $(foreach p,$(WFLETPARTS),--part $(p))
 apps/wirefleet/art/tiles.inc: apps/wirefleet/art/ships-source.png tools/wirefleet_assets.py
 	python3 tools/wirefleet_assets.py
+apps/wirefleet/art/fx.inc: apps/wirefleet/art/fx-source.png tools/wirefleet_fx.py
+	python3 tools/wirefleet_fx.py
+apps/wirefleet/wfsong.inc: tools/wirefleet_song.py
+	python3 tools/wirefleet_song.py
 wirefleetdisk: $(BUILD)/wireflet.img $(BUILD)/wireflet720.img $(BUILD)/wireflet120.img $(BUILD)/wireflet360.img
 $(BUILD)/wireflet.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $< apps/wirefleet/README.TXT

@@ -47,7 +47,6 @@
 1 apps/texpad/texpad.asm  # 6.6.2 case 6 - the bold overstrike, tp_draw's second pass
 1 apps/weave/wdraw.inc  # 6.6.2 case 6 - the bold overstrike, w_draw's second pass. WEAVE-SPEC 6.2 makes BOLD a double-strike one pixel right, and the header above is why it cannot be one call: the second run would repaint the ground and erase the first strike
 1 apps/frotz/zwin.inc  # 6.6.2 case 6 - zw_run's bold strike (FROTZ-PLAN 5.1)
-1 apps/wirechat/wcband.inc  # 6.6.2 case 6 - wc_bbold's second strike: nicks, section titles and the room name (SPEC.md 113.5); one site for every band, both faces
 1 apps/frotz/zwin6.inc  # 6.6.2 case 6 - zw6_line's bold strike, the v6 window's twin of it
 2 apps/cword/cword.c  # 6.6.2 case 6 - the BOLD and ITALIC strikes, in C (73)
 
@@ -87,3 +86,4 @@
 10 apps/ledger/ledger.asm  # MIXED, and the SAME ten: ledger.asm is PLAN's own mechanical fork under a new name (apps/RETIRED.txt's `building` kind) - pl_/PL_/plm_ -> lg_/LG_/lgm_ and nothing else has changed yet, so the line above's reason applies here unchanged too. This count will diverge the moment a money-manager feature actually lands; until then it is the same ratchet one fork further along
 16 apps/sheet/sheet.asm  # MIXED, one line per file. 6.6.2 case 1 is sh_drawcell's label over a SHADED cell (GFX_FILL_GRAY, so the ground is a dither); case 6 is the bold overstrike a line below it, the same 1px-right double strike texpad does; case 2 is the dialog prompts, drawn once onto a body the WM painted. backlog: the formula bar, the status bar and three dialog titles fill and then letter in the SAME pass - TEXT-PLAN 4's shape, in a package the branch that wrote the rule could not see
 2 apps/fptest/fptest.asm  # 6.6.2 case 2 - fpt_row's per-case rows land on a panel ground filled once for the whole run, and the pass that does not draw does not letter either. backlog: fpt_paint's header - one string since the first apps size pass, which took this file 4 -> 2 - is a fill and then a letter
+15 apps/browser/brdownload_paint.inc  # 6.6.2 case 2 - all Download Manager labels and values are drawn on its white interior, established by the WM before the package paints; the timer redraws only the clipped manager body and never fills behind its text

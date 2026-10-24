@@ -114,7 +114,10 @@ AH=87h). The 286 machines in `vm/` are where it can be looked at.
   `.cold`. A program that calls int 15h AH=87h directly, or writes port 92h
   or the keyboard controller, is the case. Nothing in the box hooks that
   today; it is the same class of hazard as a DOS program writing to kernel
-  memory, and the box's own answer to it would be an int 15h hook there.
+  memory. **It cannot reach the resumed session**: the handoff sums `.cold`
+  and the tail's code, `kd_resume` sums them again, and a shut gate or a
+  written byte takes `int 19h`, where XMEM.DRV installs `.cold` afresh
+  (SPEC.md 96.49.9).
 * **Tier 1 on real iron** - section 2's last paragraph.
 * **Hibernate on an HMA machine** is wired by the pad byte: an image
   hibernated with `.cold` in the HMA resumes only onto a boot that put the
@@ -316,3 +319,14 @@ Drivers page (`drv_release`'s ROMF_HDROP, then a fresh placement); and tier
 into it run from the HMA, so a DOS program that closes A20 (section 3) stops
 the sound driver as well as `.cold` - and the BIOS's own AH=87h did exactly
 that until `xm_bios` held the PIC across it (5.4).
+
+## 6. Mixer extension: a 16KB driver address window
+
+SPEC.md §34.15 keeps the quick-volume UI in SOUND.DRV so the loaded driver
+can adjust volume without asking for the system floppy. That exceeds the
+original 8KB driver window. DRV_HMA_ORG moves from E000 to C000, making
+image offsets fit up to 16KB while pool aliases are F400-F9FF, still below
+FBxx's owner tags. The pool itself and the 8KB public buffer limit do not
+grow. Relocation still changes only high bytes and is checked byte for byte
+against a second assembly. A full pool uses the existing heap fallback.
+The figures and E000 examples in section 5 describe its original wave.

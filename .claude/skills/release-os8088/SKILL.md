@@ -5,6 +5,9 @@ description: Build os8088 and publish the floppy images to the os8088.com websit
 
 # Release os8088
 
+Before starting, read the [shared runtime guide](../../../docs/AGENT-SKILLS.md)
+for Claude Code and Codex tool mappings, workflow execution and session state.
+
 Builds the floppy images, publishes them into the website repository next
 door along with the notes for its releases page, opens a pull request there,
 and cuts a GitHub release on this repo.
@@ -220,8 +223,11 @@ make runcpm-src && make runcpmdisk    # runcpm*.img
 make scribedisk paccmandisk           # scribe*.img, paccman*.img
 make 1942disk redlinedisk             # 1942*.img, redline*.img
 make midirackdisk pixeldisk           # midirack*.img, pixel*.img
+make xtmp3disk                        # xtmp3*.img -- XTMP3 and its three songs
 make apple2rom && make apple2disk     # apple2*.img -- apple2rom fetches the
                                       # ROM once; `make clean` spares it
+make realdmgdisk                      # realdmg*.img -- the Game Boy; GBDEMO.GB
+                                      # is committed (apps/realdmg/), no fetch
 make live                             # os8088-usb.img + os8088.iso -- the live
                                       # USB image and the live CD (SPEC.md 80).
                                       # Needs the fetch on the line above and
@@ -672,6 +678,17 @@ the tier and the description are a judgement somebody makes rather than a
 field to fill: check the entry against that program's own SPEC section or its
 Spotlight page, and flag every tier you touched as reviewable in the PR.
 
+**Then check the cell fence (SPEC.md 92.2).** A package that calls an API
+cell an older kernel at the same package format lacks needs
+`"needs_wire": 3` (or the current top level) on its `data/wire.json` entry,
+or an older machine's Wire offers a program that calls past its kernel's
+table. The website's writer cannot see the calls; step 3's `--verify
+--pkgdir` from the OS repo can, and it fails on a missing or stale
+declaration and on a call newer than any level. When it reports a call past
+`WIRE_TABLE_END`, the release adds a level row in `tools/os88wire.py` and
+raises `WIRE_LEVEL` there and in `apps/thewire/wcat.inc` -- an OS change
+that has to merge before the images are built.
+
 **2. The site build packs the catalog.** `tools/wire.py`, called by
 `build.py`, writes `public/wire/catalog.bin` and `public/wire/pic/<STEM>.PIC`
 from `data/wire.json` and `public/wire/pkg/`. It is a build product committed
@@ -776,7 +793,7 @@ inventory that parses and a guide that renders an empty pane read the same in
 
 ```bash
 cd "$WEB_REPO"
-git add -A
+git add <explicit paths changed by this release>
 git commit -m "Release $VERSION"
 git push -u origin "release/$VERSION"
 gh pr create --title "Release $VERSION" --body "<body>"
@@ -803,10 +820,17 @@ list the scenes captured, and name the video it embeds. Mention that the video
 poster only resolves once the Worker is serving the page, so a reviewer reading
 a local build does not file it as a broken image.
 
-End the PR body with:
+When the session calls for an attribution line, name the host that actually
+performed the release. For Claude Code:
 
 ```
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+```
+
+For Codex:
+
+```
+Generated with [Codex](https://developers.openai.com/codex/)
 ```
 
 ### 6. Tag and cut the GitHub release

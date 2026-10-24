@@ -181,6 +181,8 @@ make pixeldisk # PiXEL, the image viewer, with its sample gallery in PICTURES/,
 make xt-pixel # 86Box: the 4.77MHz 640KB VGA XT with the 360KB pixeldisk in
               # B: (double-click PIXEL.O88, or a picture in PICTURES/)
 make 386-pixel # 86Box: the 386DX/25 with the 1.44MB pixeldisk in B:
+make xtmp3disk # XTMP3, the MP3 player, with its three demo songs in MEDIA/,
+              # four disk sizes
 make allapps  # every program on a set of floppies - both word processors,
               # Frotz, RunCPM, the Commodore 64, PaccMan and the Weave
               # family included - apps-all-1.img, -2.img, ... at 1.44MB and
@@ -607,6 +609,21 @@ the whole thing is priced against a 4.77 MHz XT (SPEC.md 106.26 has the
 numbers). `make pixeldisk` builds its floppy with a gallery of original
 sample pictures; `make xt-pixel` / `make 386-pixel` boot it on 86Box.
 
+**XTMP3** is an MP3 player that plays every song at the best quality the
+machine and its sound card can keep up with, and says which quality that is
+(SPEC.md 121, [the design record](docs/plans/XTMP3-PLAN.md), [how it was
+built](docs/HOW-XTMP3-WAS-BUILT.md)). It wears the face of an 80s stereo
+component: an LCD, two VU meters that never show stereo the output does not
+have, a volume knob and a queue. A fast machine plays MPEG-1, 2 and 2.5
+Layer III at the source's rate - 16-bit stereo on an SB16 - through an
+integer decoder bit-exact to its Python model; a slower one steps down to
+half or a quarter of the rate through the same decoder, then to table-driven
+XT approximations. When nothing keeps up, it decodes the whole song to a WAV
+on a hard disk first, finalises and checks it, and plays that, which is how
+a 4.77 MHz 8088 plays MP3. `make xtmp3disk` builds its floppy with three
+original demo songs; the 1.44MB and 1.2MB software disks, the 360KB music
+disk and the live media carry it too.
+
 Programs live on a **FAT12** software floppy (drive B:) — and, once os8088 is
 installed on one, on a hard-disk partition. Either way it is an ordinary
 volume that DOS, Windows, macOS and Linux can all mount, read and write.
@@ -759,7 +776,7 @@ network disk. SPEC.md §113 is the protocol and the contract.
 
 The OS itself is assembly and stays that way. But a **package** can be written
 in C, and several are — the Commodore 64 and the Weave family among them, plus
-the three described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
+the four described here. The first is `apps/cword` — a second reimplementation of **Microsoft Word
 1.1a**, in C this time, with the same nine-menu bar, ribbon, ruler and status
 line as `apps/word` and RTF as its file format. It has both of the product's
 views — Draft, which wraps to the window, and Page, which wraps to the sheet —
@@ -849,6 +866,29 @@ carries two OS ticks of game rather than one, so it runs at 24% of arcade
 speed where the assembly port runs at 23% while drawing twice as often. On
 CGA and Hercules it keeps nothing: the assembly port is at its 18.2 Hz
 deadline there and asleep.
+
+The fourth is `apps/lemmings` — **Lemmings** (DMA Design / Psygnosis, 1991),
+all 120 levels of the DOS original rebuilt from its own data files: the
+eighteen actions and eight skills transliterated from Eric Langedijk's
+[Lemmix](https://github.com/ericlangedijk/Lemmix) ORIG mechanics (bugs and
+glitches included, and held frame by frame against a second reading written
+from [lemmings_3ds](https://github.com/esoteric-programmer/lemmings_3ds)),
+the skill panel, minimap and status line, and the original's 640x350 preview
+and results screens in a second video mode inside the same exclusive bracket.
+VGA plays in mode 0Dh with the terrain scrolled by the CRTC and the panel held
+under a line compare; CGA and Hercules get a shadow backend. The 26 data
+files are **fetched and never committed** (`tools/getlemmings.py`, pinned by
+SHA-256) and `tools/os88lem.py` converts them on the host into band files the
+8088 reads without decoding a bit; `make lemmingsdisk` builds four
+geometries, the 360KB one carrying two graphic sets and 53 levels and a
+`LEVELS.TXT` saying which. It ships on the XT at what the XT measures: about
+four game frames a second on a quiet level and under one with sixty lemmings
+out, every clock in the game slowing with it so no level gets harder
+(SPEC.md §116.7.4). `make xt-lemmings` and `make 386-lemmings` boot it in
+86Box; `apps/lemmings/README.TXT` carries the full credits. **It is a
+developer's build and stays one** (`apps/RETIRED.txt`, kind `local`): the
+data is DMA Design's, so no release image, everything-set floppy or live
+medium redistributes it - build it from your own tree.
 
 The compiler is [SmallerC](https://github.com/alexfru/SmallerC) (2-clause
 BSD), pinned to one commit and **fetched rather than vendored** — it is not in
@@ -1136,9 +1176,10 @@ because a Z-machine story is resident. `xt-word` and `386-word` are the Word
 machines and take the **document floppy** `make worddisk` builds; `xt-word`
 uses a 720KB 3.5" DD drive, `386-word` two 1.44MB drives.
 
-None of them can be scripted — 86Box has no automation socket, so
-these are all interactive, and `make test` over QMP remains the only way to
-drive the system from a script.
+These targets launch the 86Box app and are interactive. The same `vm/`
+profiles CAN be scripted on Linux, headless, through upstream 86Box's
+automation socket: `python3 tools/os88box.py build`, then
+`python3 tools/os88box.py launch 286 --hold` (docs/86BOX.md).
 
 ## Scripted testing
 

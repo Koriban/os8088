@@ -42,6 +42,10 @@
 ; once.
 ; =============================================================================
 
+%define OS88_DRV_HIGHOK          ; kern_mega may run this image above 1MB
+                                ; (KERN-MEGA-PLAN item 82: no paragraph
+                                ; arithmetic on its own segment, no BIOS or
+                                ; DMA buffer in it)
 %include "os88drv.inc"
 %include "sndpkg.inc"           ; the package verbs: the FM chip, whole
                                 ; (SPEC.md 34.12)
@@ -107,7 +111,7 @@ snd_tier:
     je .table                   ; already off
     call sbl_detach             ; cannot fail (SPEC.md 51.2)
     mov word [si+DSV_STREAM], 0
-    and word [si+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q | SND_CAP_EXTBLK)
+    and word [si+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN | SND_CAP_PCM_HI | SND_CAP_ADPCM4Q | SND_CAP_EXTBLK | SND_CAP_STEREO | SND_CAP_PCM16)
     cmp word [si+DSV_TONE], 0
     je .table                   ; no OPL2 either: the name stays as it was
     mov word [si+DSV_NAME], snd_s_opl   ; the card is an AdLib now
@@ -300,6 +304,7 @@ snd_entry:
     jmp short .nosb
 .sbok:
     mov byte [drv_up], 1
+    call mix_probe              ; save/test/restore; no mixer reset (34.15)
     call snd_sb_pub             ; the stream verb, the tick, the caps and the
                                 ; card's name - what DRVV_TIER's "on" also
                                 ; publishes - and then the two cells only an
@@ -401,10 +406,25 @@ snd_sb_pub:
     jb .out
     or word [si+DSV_CAPS], SND_CAP_PCM_HI
     cmp byte [sbl_verhi], 4     ; ...and a DSP 4.xx, whose ADPCM4 is a
-    jb .out                     ; question (SPEC.md 34.5.3.1): a package
-    or word [si+DSV_CAPS], SND_CAP_ADPCM4Q   ; asks the user
+    jb .pro                     ; question (SPEC.md 34.5.3.1): a package
+                                ; asks the user - and which plays stereo
+                                ; through its own mode byte, and 16 bits
+                                ; where a high DMA channel can be programmed
+                                ; (SPEC.md 34.5.5)
+    or word [si+DSV_CAPS], SND_CAP_ADPCM4Q | SND_CAP_STEREO
+    call sbl_hdma_find
+    jc .out
+    or byte [si+DSV_CAPS+1], SND_CAP_PCM16 >> 8
+    ret
+.pro:                           ; an SB Pro's stereo switch is a CT1345 bit,
+    cmp byte [mix_kind], 2      ; so only a mixer that answered (SPEC.md
+    jne .out                    ; 34.15) gives it
+    or byte [si+DSV_CAPS+1], SND_CAP_STEREO >> 8
 .out:
     ret
+%if (SND_CAP_STEREO | SND_CAP_PCM16) & 0x00FF
+  %error "snd_sb_pub sets SND_CAP_STEREO / SND_CAP_PCM16 in DSV_CAPS's high byte"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; snd_detach - silence everything and give the hardware back
@@ -416,6 +436,7 @@ snd_detach:
     push cx
     cmp byte [drv_up], 0
     je .out
+    call mix_detach             ; restore only exposed mixer registers
     call mpu_detach             ; a module that was playing, silenced
     call sbl_detach             ; the Sound Blaster FIRST: it is the tier
                                 ; with an interrupt vector and a worker task
@@ -1073,7 +1094,7 @@ opl_defpat:
 ; out: per verb; CF=1 AX=0 for a verb we do not know
 ; =============================================================================
 snd_pkg:
-    cmp bl, SNDV_DACINFO
+    cmp bl, SNDV_MIXICON_THEME
     ja .bad
     mov bp, bx                  ; a table through BP, which the kernel's
     and bp, 0x00FF              ; OSAPI_DRV_CALL banks: BX comes back as it
@@ -1085,7 +1106,8 @@ snd_pkg:
     ret
 snd_ptab:                       ; by verb number (sndpkg.inc)
     dw snd_ident, snd_pkg_oplw, mpu_v_info, mpu_v_open, mpu_v_write
-    dw mpu_v_close, cvx_v_info
+    dw mpu_v_close, cvx_v_info, mix_info, mix_get, mix_set
+    dw mix_icon_entry, volume_popup, mix_icon_theme_entry
 %if SNDV_IDENT != 0 || SNDV_OPLW != 1 || SNDV_MIDINFO != 2 || SNDV_MIDOPEN != 3 || SNDV_MIDW != 4 || SNDV_MIDCLOSE != 5 || SNDV_DACINFO != 6
   %error "snd_ptab is indexed by the SNDV_* numbers"
 %endif
@@ -1467,6 +1489,8 @@ opl_init:
     pop ax
     ret
 
+%include "volume.inc"           ; the loaded driver's quick-volume popup
+%include "mixer.inc"            ; hardware mixer verbs (SPEC.md 34.15)
 %include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
 %include "mpu.inc"              ; ...and the MPU-401's MIDI out (SPEC.md 34.13)
     OS88_PIN                    ; ...whose port the Ports view may pin
@@ -1506,5 +1530,7 @@ opl_xmode:  db 0                ; the mode it was granted: SND_OPL2 / SND_OPL3
 %endif
 MPU_STATE
 SBL_STATE
+MIX_STATE
+VOLUME_STATE
 
 OS88_DRV_END

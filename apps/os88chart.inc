@@ -1724,7 +1724,13 @@ ch_draw:
 ; in:  BX = window ptr, AX = content x, DX = content y (WM_CONTENT's own
 ;      outputs, so the call site is `call OSAPI_WM_CONTENT` / `call ch_margin`)
 ; out: nothing; preserves every register
+;
+; RESIDENT in both builds, ch_hdrtpl's way: SHEET's W_PAINT near-calls it,
+; and it names no module data - only OSAPI cells and CH_W/CH_H
 ; -----------------------------------------------------------------------------
+%ifdef CH_OVERLAY
+section .text
+%endif
 ch_margin:
     push ax
     push bx
@@ -1784,6 +1790,9 @@ ch_margin:
     pop bx
     pop ax
     ret
+%ifdef CH_OVERLAY
+section .modc
+%endif
 
 ; =============================================================================
 ; TEXT INTO THE CANVAS - the prerequisite for every label.
@@ -2340,7 +2349,7 @@ ch_sin:
 .direct:
     shl bx, 1
     push ax
-    mov ax, [ch_sintab + bx]
+    mov ax, [cs:ch_sintab + bx]       ; [cs:]: module data, DS the package
     mov cx, ax
     pop ax
     cmp al, 2                         ; quadrants 2 and 3 are negative
@@ -2547,7 +2556,7 @@ ch_pie_plot:
     shl ax, cl                        ; four bytes per pattern
     add si, ax
     pop ax
-    mov ch, [ch_pie_pattab + si]
+    mov ch, [cs:ch_pie_pattab + si]   ; [cs:]: module data, DS the package
     and ax, 3                         ; the pattern column
     mov cl, al
     shr ch, cl

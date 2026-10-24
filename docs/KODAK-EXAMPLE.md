@@ -1,121 +1,83 @@
-# Kodak Q3 1982 — a worked example built inside os8088
+# The KODAK example — SHEET's hand-made workbook fixture
 
-*Staged into the tree from the original run of 26 August 2026. The files it
-describes are `apps/sheet/KODAK.BIF`, `apps/scribe/KODAK.DOC`,
-`apps/sheet/KODAKEX1.BMP` / `KODAKEX2.BMP` and the four `screenshots/kodak-*`
-images; the 1.44MB floppy it was produced on is not tracked, because every
-file on it is here.*
+`apps/sheet/` carries four files that are not samples a user is shown. They
+are **evidence**: things SHEET wrote, or was fed, in the emulator, kept so a
+host-side reader has a real artifact to check against rather than only files
+the host wrote itself. No floppy carries any of them. SPEC.md 81.10.9 and
+81.47.7 cite this page; `tools/os88sheetfmt.py --selfcheck` (the `sheetfmt`
+fast row) is what reads `KODAK.BIF`.
 
-*`make` puts them on the **examples disk** — `build/examples.img`, and
-`examples720.img`, `examples120.img` and `examples360.img` for the other
-drives (`make examplesdisk` builds just those). All six files are in `MEDIA/`,
-the folder the Open dialog starts in: this set, and the Xerox Q3 1982 set
-beside it (`XEROXQ3.SLK` for Sheet, `XEROXQ3.RTF` for Scribe). They are on no
-apps disk, so opening one is a disk swap: launch Sheet (for `KODAK.BIF` and
-`XEROXQ3.SLK`) or Scribe (for `KODAK.DOC` and `XEROXQ3.RTF`) from its own disk,
-swap the examples disk into that drive, and File ▸ Open. Both keep their file
-formats in an overlay and both read it at start-up, so neither goes back to
-its own disk for it — Sheet always did (SPEC.md 82.16.3), and Scribe does since SPEC.md 95.8.6.
-Before that, a cold Scribe looked for `SCRIBE.OVL` on the examples disk and
-refused.*
+| file | what it is | what reads it |
+|---|---|---|
+| `KODAK.BIF` | a three-sheet BIFF4 workbook, saved by SHEET | `os88sheetfmt.py --selfcheck` |
+| `KODAKEX1.BMP` | Sheet2's column B, exported by Chart > Export | nothing — a picture of the session |
+| `KODAKEX2.BMP` | Sheet3's column B, exported by Chart > Export | nothing — a picture of the session |
+| `XEROXQ3.SLK` | a one-sheet SYLK test sheet across the function families | nothing yet |
 
-Every byte here was produced **in the emulator, by hand**, driving SHEET.O88,
-CHART.O88 and WORD.O88 through the mouse and keyboard. Nothing was written on
-the host and copied in. It exists as an end-to-end exercise of the three
-packages and the paths between them.
+## `KODAK.BIF` — the workbook
 
-The premise: an internal management report for Eastman Kodak, dated
-**23 October 1982** — a plausible date for a third-quarter review, and the year
-the disc camera shipped.
+Three sheets typed by hand in SHEET and saved in Normal format, which for a
+document using more than one sheet is the BIFF4 workbook (SPEC.md 81.47). The
+rows are labelled as three business segments over 1981 and 1982; the figures
+are the contributor's, and nothing here depends on what they measure.
 
-This is the **second** build of it. The first was made on 26 August 2026 against
-an earlier tree; this one was rebuilt from scratch after error values, the
-chart's decimal exponent and BIFF function tokens landed, and it says below what
-changed as a result — including the bug the rebuild found.
+**Sheet1** — the table, with ten formulas:
 
-## What is here
+|   | A | B | C | D | E |
+|---|---|---|---|---|---|
+| 1 | Segment | 1981 | 1982 | Change | Pct |
+| 2 | Photograph | 1890 | 1955 | `=C2-B2` | `=ROUND(D2/B2*100,1)` |
+| 3 | Commercial | 505 | 545 | `=C3-B3` | `=ROUND(D3/B3*100,1)` |
+| 4 | Chemicals | 250 | 265 | `=C4-B4` | `=ROUND(D4/B4*100,1)` |
+| 5 | Total | `=SUM(B2:B4)` | `=SUM(C2:C4)` | `=SUM(D2:D4)` | `=ROUND(D5/B5*100,1)` |
 
-| file | what it is |
-|---|---|
-| `kodak-disk.img` | the 1.44MB floppy it was produced on. Not tracked here - every file on it is, and `make` builds the examples disk from them |
-| `KODAK.DOC` | the report, written in Word. A real Word-format `.DOC` |
-| `KODAK.BIF` | the figures, saved from Sheet as a **BIFF4 workbook** — three sheets in one file |
-| `KODAKEX1.BMP` / `KODAKEX2.BMP` | the two exhibits, exported from Sheet's chart window. 240x160, 4bpp, as written by the app |
-| 
-| `word-report.png` | the finished report on screen in Word |
-| `sheet-segment-table.png` | the segment table in Sheet, formulas computing |
-| `chart-exhibit1.png` / `chart-exhibit2.png` | the charts in Sheet's chart window, before export |
+**Sheet2** — the 1982 column as values (Photograph 1955, Commercial 545,
+Chemicals 265).
 
-## The documents
+**Sheet3** — three monthly figures, July 1.42, August 1.86, September 2.15.
 
-**Sheet 1** — Q3 segment sales, $ millions, 1982 against 1981. `Change` is
-`=C2-B2`, `Pct` is `=ROUND(D2/B2*100,1)`, and the total row is `=SUM(...)`
-down each column. 2,645 -> 2,765, +120, +4.5%. Column A was widened to 12
-characters through Format > Column Width so the segment names fit — which
-turned out to matter, see below.
+What each part is *for*, which is why the self-check asserts exactly these:
 
-**Sheet 2** — the same three segments without the total row, so the exhibit
-charts the segments rather than a total bar that dwarfs them. This is worth
-knowing when building your own: **a summary row inside the charted column is
-charted with the data.**
+- **Three named sheets of 25, 6 and 6 cells.** The multi-sheet writer had no
+  host-side check of any kind until this file, because `write_sylk` has no
+  notion of a second sheet. A writer bug that put every sheet's borders on the
+  active sheet survived for that reason (SPEC.md 81.47.6). The names matter as
+  well as the counts: reading `SHEETHDR`'s name count one byte late names every
+  sheet `heetN`, and nothing else fails.
+- **Both number records in one stream.** Sheets 1 and 2 are whole numbers and
+  go out as `RK`. Sheet 3's `1.42` cannot be an `RK`, so it is written as an
+  IEEE-754 `NUMBER` and must come back verbatim.
+- **Ten FORMULA records whose tokens SHEET wrote.** `decode_rpn` turns them
+  back into the text above, which makes this file the reference for
+  SPEC.md 81.10.10 (formulas come back as formulas).
 
-**Sheet 3** — disc camera shipments, **millions of units**, July to September:
-1.42, 1.86, 2.15. Deliberately fractional, because that is what the charts
-could not previously carry.
+## The two pictures
 
-**KODAK.DOC** — the narrative, referring to both exhibits, with the letterhead
-and the two section headings bolded from the toolbar. os8088 cannot print yet,
-so the exhibits are exported as BMPs on the assumption they would be printed
-and attached; Word does not embed them.
+`KODAKEX1.BMP` and `KODAKEX2.BMP` are 240x160 exports of the chart window
+(the canvas size, SPEC.md 82.1), and their data are the workbook's:
 
-## What this run demonstrates that the first one could not
+- `KODAKEX1.BMP` charts Sheet2's column B: three columns scaled to 1955, which
+  is the Photograph segment dwarfing the other two.
+- `KODAKEX2.BMP` charts Sheet3's column B: three rising columns scaled to 2.15,
+  the fractional series the `NUMBER` record exists for.
 
-**Every formula travels as a formula.** The first build of this example had to
-say that `=SUM(...)` and `=ROUND(...)` were written out as cached *values*,
-because the BIFF writer would not emit a token for a function call. They are
-real `FORMULA` records now — `SUM` as `42 01 0400` (tFuncVar, 1 argument,
-function 4) and `ROUND` as `41 1b00` (tFunc, function 27) — so the workbook is
-a spreadsheet in the file and not only on the screen. `=C2-B2` was already one:
-`44 01c002  44 01c001  04`.
+They record what the chart looked like for those two series, as the
+contributor saw it, so a later change to the chart can be compared against
+them by eye. No row compares them, and nothing on a disk ships them.
 
-**The chart carries the decimals.** Exhibit 2's scale reads **2.15**. On the
-earlier build the same column charted as bars of 1, 1 and 2 under a scale that
-said `2`, because everything the chart touched was a signed 16-bit integer. The
-series now carries a decimal exponent (SPEC.md §82.13) and only the labels need
-to know about it.
+## `XEROXQ3.SLK`
 
-**Both RK and NUMBER appear in one file.** Sheets 1 and 2 are exact small
-integers and go out as `RK`, byte-identical to what this app has always
-written; sheet 3's 1.42 cannot be, so it goes out as `NUMBER` — an IEEE-754
-double, verbatim.
+A one-sheet SYLK file: four Xerox divisions' July–September figures, row and
+column totals in R1C1 form, and below them one formula from each of several
+function families — `STDEV`, `VAR`, `MAX`, `VLOOKUP`, `UPPER`, `DATE`, `NPV`,
+`PMT`, `LN`. Its `ID` record says `PWXL`, the program name Excel writes, so it
+was written in Excel's dialect and not necessarily by SHEET; where it came from
+is the contributor's to say. Two things about it are worth knowing before
+anyone builds on it:
 
-## The bug this rebuild found
+- **Nothing reads it.** No row, no self-check and no disk uses it.
+- **One label is a row off.** `Sep share` is in A20 and its formula is in B21.
 
-Widening column A to 12 characters is the obvious thing to do when
-`Photographic` does not fit. Doing it, and then charting, **stopped the whole
-machine** — not the app, the machine — and left the chart window showing
-uninitialised memory.
-
-`sh_blank` is the row of spaces a blank cell paints as. It was **11 bytes**:
-the widest of the three column-width *presets* it was written for, plus a NUL.
-The numeric Column Width dialog that replaced those presets accepts 1..40, and
-nothing resized the buffer. A width of 12 writes 13 bytes, and the two that
-fall off the end land on the next word in the bss chain — `sh_chartseg`, the
-segment of the chart canvas. The next chart then cleared 19,200 bytes through a
-poisoned segment.
-
-It was **pre-existing** and nothing to do with the chart work that had just
-landed, which is exactly what made it hard: the symptom pointed at the code
-that had most recently changed. Charting from a bare column, from a labelled
-column, from a second sheet, and after a BIFF save all came back clean; the
-column width typed several minutes earlier was what was left. Fixed in
-`sheet: a column 11 characters wide killed the machine`, SPEC.md §81.21.
-
-## Reproducing it
-
-```sh
-make run RUNAPPS=build/apps.img
-```
-
-Then open `KODAK.DOC` (double-click it — Word claims `.DOC`), or `KODAK.BIF`
-(Sheet claims `.SLK`, `.DIF` and `.BIF`), or either `.BMP` (Paint claims those).
+If it becomes a fixture, it should be the read direction's: a file SHEET did
+not write, opened in SHEET, its cached values compared against a fresh
+recalculation.

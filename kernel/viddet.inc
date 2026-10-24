@@ -82,16 +82,6 @@
 VID_VGA     equ 0
 VID_HERC    equ 1
 VID_CGA     equ 2
-VID_VBE     equ 4              ; VBE 0104h, 1024x768 planar (SPEC.md 39.29).
-                               ; NOT a fourth renderer either, and for VID_EGA's
-                               ; reason one size up: 0104h is mode 12h's
-                               ; framebuffer WIDER, four planes selected by the
-                               ; same Sequencer map mask at the same segment,
-                               ; so [vid_mono] = 0 and vga12.inc is reused.
-                               ; The geometry row below is PATCHED from what the
-                               ; card reports rather than written here, because
-                               ; a BIOS that advertises a mode it mis-programs
-                               ; is a known class (SPEC.md 39.28.2)
 VID_EGA     equ 3              ; VGA's planar path at 640x350 (SPEC.md 39.24,
                                ; docs/plans/completed/EGA-PLAN.md). NOT a fourth renderer:
                                ; mode 10h is mode 12h's framebuffer, shorter -
@@ -117,7 +107,20 @@ VID_H_MIN   equ 200            ; ...and the SHORTEST row of vid_tab, which is
                                ; menu.inc, and vid_tab's CGA row below is
                                ; written from it.
 
-VID_KIND_MAX equ VID_VBE        ; the highest kind there is - vid_avail_test's
+VID_VESA    equ 4              ; A PACKED-PIXEL FRAMEBUFFER DRAWN BY A DRIVER
+                               ; (SPEC.md 120): 8 or 16 bits a pixel in a
+                               ; 64KB window at A000, banked by VESA.DRV. Not
+                               ; a renderer in this kernel at all - every
+                               ; planar body's VIDEXT hands it to the driver.
+                               ; Colour to every kind test ([vid_mono] = 0,
+                               ; `kind-1 >= 2` planar), which is right: it is
+                               ; the same VGA card in another mode
+
+%ifdef VID_EXT
+VID_KIND_MAX equ VID_VESA       ; the highest kind there is - vid_avail_test's
+%else
+VID_KIND_MAX equ VID_EGA        ; the highest kind there is - vid_avail_test's
+%endif
                                 ; whole range check is one compare against it,
                                 ; and a fourth adapter is what raises it.
                                 ; **EGA IS THAT FOURTH ADAPTER**, so this line
@@ -172,30 +175,16 @@ vid_tab equ $ - VID_REC         ; fourth's reason one row up: kern_small's walk
     ;   adapter test, exactly as on VGA (SPEC.md 39.3/39.24). 349*80 = 27,920,
     ;   well inside one 0x8000 plane, so nothing here needs the intra-bank
     ;   assertion the two mono rows do.
-vid_tab_vbe:
-    dw VGA_SEG,     128,    0,     0,    128,       0,      0,1024, 512
-    ; ^ VID_VBE: THE ONLY ROW IN THIS TABLE THAT IS NOT A CONSTANT. vbe_setrow
-    ;   (kernel/vbe.inc) overwrites seg, stride, rowadd, cw AND ch from what
-    ;   AX=4F01h actually reported before anything reads it; the values here
-    ;   are what mode 0104h is supposed to be, so a misread leaves a sane row
-    ;   rather than zeros. bmask/bshift/wrapbit are 0 for the VGA row's reason
-    ;   - this is a LINEAR surface, and the 0x2000 interleave those three
-    ;   encode is the 1bpp cards' and cannot describe a VBE window anyway
-    ;   (SPEC.md 39.29.1).
-    ;
-    ;   THE 512 HERE IS THE FALLBACK, NOT WHAT SHIPS. The live height is the
-    ;   card's own - 768 on the mode this row is for - since stage 2 taught
-    ;   the renderer to cross a bank (SPEC.md 39.29.10): the 16-bit carry out
-    ;   of DI IS the boundary, because 128 divides 65536, so `add di, stride`
-    ;   wraps to zero precisely when row 512 begins and wraps to the RIGHT
-    ;   in-window offset. 512 is what one 64KB window holds and is the only
-    ;   height that is safe without that, which is why it is the literal a
-    ;   card that cannot be asked falls back to.
-    ;
-    ;   This comment read "512 AND NOT 768, and that is the whole of what
-    ;   ships today ... Stage 2 is what makes it 768" for three commits after
-    ;   stage 2 shipped, which is worse than saying nothing: it tells a reader
-    ;   the renderer cannot cross a bank, and VBROW and vbe_bank below do.
+%ifdef VID_EXT
+    dw VGA_SEG,       0,    0,     0,      0,       0,      0,   0, 0
+    ; ^ VID_VESA: WRITTEN BY THE DRIVER at attach (SPEC.md 120.4) - stride
+    ;   and rowadd = the mode's BytesPerScanLine, cw/ch = its geometry - and
+    ;   read by nothing but vid_apply's copy: no body computes a row offset on
+    ;   this kind, every one of them being hooked, and a 16-bit offset means
+    ;   nothing above the window anyway. Zero until the driver speaks, so a
+    ;   switch that somehow preceded it would publish a 0x0 display and draw
+    ;   nothing rather than something
+%endif
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -343,11 +332,28 @@ vid_desk_zx dw SCREEN_W-DESK_ZXOFF ; the desktop grid's cell 0: its left
 vid_kind    db VID_VGA          ; VID_VGA / VID_HERC / VID_CGA / VID_EGA
 vid_mono    db 0                ; 1bpp adapter? This is what routes every
                                 ; draw through the software renderer (32/39.5)
-vid_planes  db 4                ; 4 or 1
+vid_planes  db 4                ; 4 or 1 - or the DEPTH, 8 or 16, on VID_VESA
+                                ; (SPEC.md 120.4): the three save-under sizers
+                                ; multiply by it, and that formula gives the
+                                ; packed byte count unchanged
 %ifdef GFX_VGA
 vid_planes_w dw 4               ; the same, where a word is wanted. A planar
 %endif                          ; kernel's alone (kernel size pass 13: see
                                 ; vid_depth_set)
+%ifdef VID_EXT
+vid_ext     db 0                ; 1 = [vid_kind] is VID_VESA and every planar
+                                ; body far-calls the driver (SPEC.md 120.3).
+                                ; Derived from the kind in vid_depth_set, as
+                                ; [vid_mono] is, so a per-display swap carries
+                                ; it. .text, initialised, splash-resident with
+                                ; the rest of this block - and AFTER the _w
+                                ; twin, which must follow its byte
+            db 0                ; PARITY: kmain's five-byte call to vx_boot_x
+                                ; plus this file's hooks are odd, and this
+                                ; puts gfx_blit4 and everything after it back
+                                ; on the entry parity tests/unit/t_hotpar.py
+                                ; pins
+%endif
 
 ; Hercules has no BIOS mode, so vid_setmode programs the 6845 itself.
 ; R0..R11 for 720x348: 45 char clocks of 16 px across, 87 rows of 4 scan
@@ -441,35 +447,6 @@ VID_ROWTAB  equ 128
 ; and the table is whatever the last boot left in that RAM. This zero is the
 ; only thing between that and a progress bar drawn at a random offset.
 vid_rowmax  dw 0
-
-%ifdef GFX_VGA
- %ifdef OS88_DRIVERS
-; THE CUT'S TWO WORDS LIVE HERE AND NOT IN vbe.inc, which is where the rest of
-; the VBE state is: kernel.asm includes vbe.inc AFTER vga12.inc, so a macro
-; expanded in the renderer would carry a FORWARD data reference - and nasm
-; sized the result differently on its two passes, failing the build with
-; `label kbld_blob changed during code generation` and three errors naming
-; kernel_text_end rather than anything about VBE. viddet.inc is included
-; before the renderer, so from here both words are backward references.
-vbe_cutrow: dw 0xFFFF       ; THE FIRST ROW OF BANK 1, or 0xFFFF when the live
-                            ; mode is not banked - which is every mode but
-                            ; 0104h, so this word alone is the whole of what a
-                            ; mode 12h machine tests (SPEC.md 39.29.10.5).
-                            ; Written by vid_apply, the one funnel every mode
-                            ; application goes through
-vbe_cutfn:  dw 0            ; ...and the body vbe_cut_run is re-entering.
-                            ; Module scratch, gfx_dfn's shape and for its
-                            ; reason: the bodies preserve every register and
-                            ; this only ever runs under the gfx lock. It is
-                            ; NOT saved across the call, and that is
-                            ; CHECKED rather than hoped: the three bodies
-                            ; under a cut call gfx_rect_setup, vga_gc_reset,
-                            ; gfx_pat_stage and gfx_fill_pat_raw's own .col
-                            ; and nothing else, so a cut cannot nest inside a
-                            ; cut. A body that grew a call to another rect
-                            ; primitive would need this word banked
- %endif
-%endif
 
 section .lowbss                 ; LOW_SEG (SPEC.md 2.1), and not .bss - 696
 vid_rowtab  resw VID_ROWTAB     ; bytes in the image rung would cross a step
@@ -655,20 +632,31 @@ vid_depth_set:
                                 ; the tight one). Two bytes could be had by
                                 ; dropping this pair; they are a contract
                                 ; change and are not taken.
+%ifdef VID_EXT
+    cmp al, VID_VESA            ; SPEC.md 120.4: colour ([vid_mono] = 0), the
+    jne .notext                 ; DEPTH for a plane count, and the hook armed
+    mov ah, [vx_bpp]
+    xor al, al
+    mov [vid_mono], ax          ; one word store, as below
+    mov byte [vid_ext], 1
+    mov al, ah
+    cbw
+    mov [vid_planes_w], ax
+    pop ax
+    ret
+.notext:
+    mov byte [vid_ext], 0       ; every other kind: the planar bodies run
+%endif
 %ifdef GFX_VGA                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
     cmp al, VID_VGA             ; `jne` BELOW**. WITHOUT A VGA RENDERER THERE
     je .colour                  ; IS NO QUESTION AT ALL: kern_small's kind is a
     cmp al, VID_EGA             ; CGA or a Hercules on every machine (SPEC.md
-    je .colour                  ; 39.27.1), and its first compare could only
-    cmp al, VID_VBE             ; ever answer "1bpp" - so the whole test and
+                                ; 39.27.1), and its first compare could only
+                                ; ever answer "1bpp" - so the whole test and
                                 ; its `jne` are a planar kernel's, and AL is
                                 ; not read there (kernel size pass 13). EGA is
-                                ; the same four-plane 16-colour depth as VGA -
-                                ; mode 10h - and VBE 0104h is the same four
-                                ; planes again one size up (SPEC.md 39.29), so
-                                ; each joins the set rather than needing an
-                                ; arm of its own; EGA's `je` is what lets VBE's
-.colour:                        ; compare be the one ZF carries out
+                                ; the same four-plane
+.colour:                        ; 16-colour depth as VGA - mode 10h, just
                                 ; shorter (SPEC.md 39.24) - so `colour` is
                                 ; `al == VID_VGA || al == VID_EGA`, and the
                                 ; two `mov`s between here and the test set no
@@ -707,8 +695,8 @@ vid_apply:
     push di
     push es
 
-    push cs                     ; rep movsw writes through ES, and we may be
-    pop es                      ; called from the splash, where ES is the
+    KES                         ; rep movsw writes through ES, and we may be
+                                ; called from the splash, where ES is the
                                 ; boot sector's
 
     mov al, [vid_kind]          ; AL * 18 -> the record. AH is 0 after the
@@ -771,40 +759,6 @@ vid_apply:
                                 ; dead across the copy above and reloaded
                                 ; immediately below, so the accumulator pair
                                 ; is a byte cheaper than `mov word [m], 0`
-
-%ifdef GFX_VGA
- %ifdef OS88_DRIVERS
-    ; --- WHERE THE 64KB WINDOW ENDS (SPEC.md 39.29.10.5), published here
-    ; because this is the one funnel every mode application goes through -
-    ; vid_switch, vid_setmode's recovery arm and vid_ctx_act all arrive here,
-    ; and the row's live stride has already been copied above.
-    ;
-    ; 0xFFFF for every mode but 0104h, which is what makes the rect
-    ; primitives' own test one unsigned compare with no kind in it: a rect can
-    ; never reach row 65,535, so "does not straddle" and "is not banked" are
-    ; the same answer.
-    mov ax, 0xFFFF
-    cmp byte [vid_kind], VID_VBE
-    jne .cutrow
-    mov cx, [vid_stride]        ; 65536 / stride, which for the 128-byte row
-    xor dx, dx                  ; of 0104h is exactly 512 - and it is exact or
-    mov ax, dx                  ; nothing: SPEC.md 39.29.1 takes this mode
-    inc dx                      ; BECAUSE 128 divides 65536, so a boundary
-    cmp cx, 1                   ; falls BETWEEN two rows. A stride that did not
-    jbe .cutrow                 ; divide it would put a row across the window
-    div cx                      ; and no cut could express that; 1 and 0 are
-                                ; guarded because the divide would overflow
-    or dx, dx
-    jz .cutrow
-    mov ax, 0xFFFF              ; ...and a remainder means no clean boundary:
-                                ; refuse to cut rather than cut in the wrong
-                                ; place. A mode that got here is already
-                                ; unrenderable (39.29.1) and this is not where
-                                ; that is reported
-.cutrow:
-    mov [vbe_cutrow], ax
- %endif
-%endif
 
     mov ax, [vid_h]             ; --- the heights that are NOT the display's
     sub ax, TITLE_H
@@ -982,18 +936,6 @@ vid_apply:
                                 ; push/pop pairs that protected nothing
     jne .homed                  ; ...and NOT FROM THE SPLASH'S FIRST TICK
                                 ; EITHER, which is the same test (see below)
-%ifdef GFX_VGA
-    cmp byte [vid_kind], VID_VBE    ; THE TABLE IS BANK-0 OFFSETS AND SELECTS
-    je .homed                       ; NO WINDOW, so in a banked mode it would
-                                    ; hand back an address in whichever bank
-                                    ; happened to be mapped (SPEC.md 39.29.10).
-                                    ; [vid_rowmax] stays 0 and every row goes
-                                    ; through gfx_rowbase_calc, which does
-                                    ; select one - vid_ctx_act already switches
-                                    ; the table off for a display of another
-                                    ; kind, so both the mechanism and what it
-                                    ; costs are known (39.12)
-%endif
     mov si, vid_rowtab
     xor di, di                  ; DI = rowbase(0), which is 0 on every adapter
     mov cx, VID_ROWTAB          ; ...and CX may be the counter now: it is
@@ -1148,16 +1090,18 @@ vid_setmode:
                                 ; It is a COUNTER because this nests - spl_tick
                                 ; reaches here through spl_chrome
     mov al, [vid_kind]          ; ONE load answers all three questions below:
+%ifdef VID_EXT
+    cmp al, VID_VESA            ; SPEC.md 120.4: the driver sets its VBE mode
+    jne .notvx                  ; and loads the DAC's first sixteen; the
+    call vx_call                ; caller owes the repaint as on every kind.
+    db VX_SETMODE               ; vx_call COMES BACK HERE - the eight pushes
+    jmp .done                   ; and the spl_busy count above are still ours
+    db 0                        ; to undo, at .done. PARITY, never executed:
+.notvx:                         ; the arm is twelve bytes with it
+%endif                          ; (tests/unit/t_hotpar.py)
     cmp al, VID_HERC            ; AL is idle until `mov ax, 0x0010`, and
     je .herc                    ; `cmp reg,imm8` is 2 bytes where
 %ifdef GFX_VGA                  ; `cmp byte [mem],imm8` is 5
-    cmp al, VID_VBE             ; VBE 0104h is set by the OVERLAY and not by an
-    je .vbe                     ; int 10h from here (SPEC.md 39.29.2): the mode
-                                ; set, the palette and the first window all
-                                ; belong to the file, which vbe_avail has
-                                ; already loaded - no disk is touched here, and
-                                ; could not be, since this runs under the gfx
-                                ; lock inside the splash's resident window
     cmp al, VID_EGA             ; A build with no VGA renderer never detects
     jne .colorbios              ; an EGA either (2.4: the gated probes fall
     mov ax, 0x0010             ; through to the equipment word), so the arm
@@ -1168,28 +1112,6 @@ vid_setmode:
                               ; CGA-equipment quirk (see below), and an EGA
                               ; BIOS is not equipment-driven that way; it
                               ; sets mode 10h whatever 40:10 says.
-.vbe:
-    mov al, VBV_SET             ; it clears the framebuffer itself, both banks,
-    call vbe_call               ; which is why no vid_wipe follows - ours is one
-    pushf
-    call vbe_bank_reset         ; the mode set moved the window, so what the
-    popf                        ; kernel believes is mapped is now a guess
-    jnc .done                   ; rep stosw from offset 0 and 98,304 bytes do
-                                ; not fit one (SPEC.md 39.29.1)
-
-    ; A REFUSAL IS RECOVERED FROM HERE AND NOT REPORTED UPWARDS, because by the
-    ; time this runs vid_switch has ALREADY published the 1024-wide geometry -
-    ; so returning a failure would leave every primitive addressing a mode the
-    ; card is not in, which is a dark screen with no way back rather than an
-    ; error. The overlay has put mode 12h on the card; this makes the kernel
-    ; agree with it again. The one machine class that takes this path is a BIOS
-    ; that lists 0104h and cannot map its window (SPEC.md 39.28.2.1).
-    mov byte [vid_kind], VID_VGA
-    call vid_apply              ; BACKWARDS in this file, so the splash's
-                                ; resident-window rule is satisfied
-    jmp .done                   ; the card is already in mode 12h: the caller
-                                ; owes the repaint, exactly as it does on the
-                                ; path that worked
 .colorbios:
 %endif
     call vid_cga_equip          ; EITHER COLOUR CARD, NOT JUST THE CGA (SPEC.md
@@ -1253,7 +1175,11 @@ vid_setmode:
     jne .nocga                  ; be VID_HERC or VID_CGA and the mono arm
 %endif                          ; branched away above, so .bios IS the CGA
     xor ax, ax                  ; there and the test is dead weight.
+%ifdef KERN_MEGA
+    MEGA_SEG0 es                  ; segment 0 is the NULL selector
+%else
     mov es, ax                  ; NO PUSH: this routine banks ES at entry and
+%endif
     mov al, [es:0x0465]         ; nothing below reads it - the planar arms and
                                 ; (0000:0465 = 0040:0065, segment 0 being a byte
                                 ; cheaper to load - size pass 9)
@@ -1479,7 +1405,11 @@ vid_cga_equip:
     push ax
     push ds
     xor ax, ax                  ; the BIOS data area, by segment 0 and the
+%ifdef KERN_MEGA
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
+%else
     mov ds, ax                  ; LINEAR offset (0040:0010 = 0000:0410, a byte
+%endif
     mov al, [0x0410]            ; cheaper than mov ax, 40h - size pass 9):
     and al, 0x30                ; equipment flag, bits 5:4 = the display
     cmp al, 0x30                ; 11b = monochrome at B000
@@ -1609,159 +1539,6 @@ vid_text:
                                 ; push list is vid_setmode's. See vid_pop8.
 
 ; -----------------------------------------------------------------------------
-; VBROW - advance a framebuffer pointer one row, crossing a bank if it must
-;
-;   VBROW di                    ; the step is [vid_stride]
-;   VBROWR di, dx               ; ...or already in a register
-;
-; THE CARRY IS THE BANK CROSSING and nothing else has to detect it (SPEC.md
-; 39.29.10). 1024 pixels is 128 bytes a row and 128 divides 65536, so the add
-; wraps out of 16 bits precisely when row 512 begins - and wraps to the right
-; offset inside the new bank, being the same arithmetic. On every other mode
-; this machine drives, the carry can never happen: the largest DI mode 12h can
-; reach is 479*80 = 38,320. So ONE body is correct on all of them, and what it
-; costs an XT is two bytes and a jump that is never taken.
-;
-; A `call` and not an inline body because the taken path is one row in 512 and
-; the fall-through is the hot one.
-; -----------------------------------------------------------------------------
-%macro VBROW 1
-    add %1, [vid_stride]
-  %ifdef GFX_VGA
-   %ifdef OS88_DRIVERS
-    %ifndef NOVBEROW
-    jnc %%same
-    call vbe_bank_next
-%%same:
-    %endif
-   %endif
-  %endif
-%endmacro
-
-%macro VBROWR 2
-    add %1, %2
-  %ifdef GFX_VGA
-   %ifdef OS88_DRIVERS
-    %ifndef NOVBEROW
-    jnc %%same
-    call vbe_bank_next
-%%same:
-    %endif
-   %endif
-  %endif
-%endmacro
-
-; ...and the same thing where the stride must be read CS-relative, because the
-; caller has pointed DS at the framebuffer or at a save-under claim.
-%macro VBROWCS 1
-    add %1, [cs:vid_stride]
-  %ifdef GFX_VGA
-   %ifdef OS88_DRIVERS
-    %ifndef NOVBEROW
-    jnc %%same
-    call vbe_bank_next
-%%same:
-    %endif
-   %endif
-  %endif
-%endmacro
-
-; -----------------------------------------------------------------------------
-; VBSTEP / VBSTEPR - a row advance inside a rect THE CUT HAS ALREADY CONFINED
-;                    to one bank (SPEC.md 39.29.10.5)
-;
-; A bare add, and the macro exists so that it cannot quietly become one. Every
-; site below sits in a body entered through VBCUT, so its rect is wholly
-; inside one 64KB window and `add di, [vid_stride]` cannot carry - which is
-; why there is no test here and why putting one back would cost 22 cycles a
-; row for nothing (PERFORMANCE.md Set 161). A body that LOSES its VBCUT must
-; change these back to VBROW in the same edit, and the name is what makes that
-; findable: `grep VBSTEP` lists everything the cut is load-bearing for.
-; -----------------------------------------------------------------------------
-%macro VBSTEP 1
-    add %1, [vid_stride]
-%endmacro
-
-%macro VBSTEPR 2
-    add %1, %2
-%endmacro
-
-; -----------------------------------------------------------------------------
-; VBCUT / VBCUT_ARM - cut a rect primitive at the bank boundary and run its
-;                     body once per piece (SPEC.md 39.29.10.5)
-;
-;       VBCUT_ARM vga_sr            ; the RARE arm, ABOVE the entry
-;   vga_solid_rect:
-;       VBCUT vga_sr                ; ...and the test, which falls through
-;       push ax                     ; vga_sr_vbody: is where a piece re-enters
-;
-; THE ARM GOES ABOVE AND THE TEST FALLS THROUGH, which is GFXCLIP_ARM's
-; arrangement in vga12.inc and is here for the reason kernel size pass 9
-; adopted it there: the common path must not take a branch. That is the whole
-; lesson of PERFORMANCE.md Set 161 - the per-row test this replaces cost 22
-; cycles rather than the estimated 9 precisely because its `jnc` was the
-; TAKEN direction, and a taken Jcc on an 8088 flushes the prefetch queue.
-;
-; So a mode 12h machine pays `cmp dx, [vbe_cutrow]` and a not-taken `jae`,
-; ONCE PER PRIMITIVE - about 17 clocks against gfx_fill's 2,405-cycle floor -
-; and no machine pays anything per row. [vbe_cutrow] is 0xFFFF on every mode
-; but 0104h, so the compare answers for "this surface is not banked" and
-; "this rect does not straddle" at once, with no kind test.
-;
-; DS IS OURS AT THESE SITES and that is worth stating, because the macro it
-; replaces needed `cs:` overrides (SPEC.md 39.29.10.1): VBROW is reached from
-; inside row loops that have given DS away, and this sits at a primitive's
-; ENTRY, where DS is still KERNEL_SEG.
-; -----------------------------------------------------------------------------
-; **THE RE-ENTRY LABEL IS `.vbody` AND IT HAS TO BE A LOCAL ONE.** The first
-; version emitted `<name>_vbody:` - an ordinary global - in the middle of
-; vga_solid_rect, and NASM's previous-non-local-label is what every `.arm`,
-; `.lcol`, `.rcol` and `.done` in that routine hangs off: they all silently
-; became `<name>_vbody.arm` and so on, and the build failed with
-; `symbol vga_solid_rect.arm not defined` followed by thirty
-; `label changed during code generation` errors naming kernel_text_end and the
-; blob. NONE of them points here, which is why it is written down: a label
-; emitted into the middle of a routine by a macro must begin with a period, or
-; it renames the routine's whole local namespace from that line down.
-%macro VBCUT 1
-  %ifdef GFX_VGA
-   %ifdef OS88_DRIVERS
-    cmp dx, [vbe_cutrow]
-    jae %1 %+ _vbc
-   %endif
-  %endif
-.vbody:
-%endmacro
-
-; ...and the arm it jumps to, placed ABOVE the entry so the common path falls
-; through (GFXCLIP_ARM's arrangement in vga12.inc, and Set 161's lesson about
-; which direction a branch may be taken in). `%1 %+ .vbody` is a REFERENCE to
-; the local label above, which is allowed and does not disturb the namespace -
-; only a DEFINITION sets the prefix. The `ret` is the primitive's own: this arm
-; is entered before the body has pushed anything.
-%macro VBCUT_ARM 1
-  %ifdef GFX_VGA
-   %ifdef OS88_DRIVERS
-%1 %+ _vbc:
-    mov word [vbe_cutfn], %1 %+ .vbody
-    call vbe_cut_run
-    ret
-   %endif
-  %endif
-%endmacro
-
-; ...and VBHOME, for a primitive about to walk the SAME rect again. VBROW steps
-; the window forward across row 512; a second walk restarts at [gfx_roff], which
-; is a bank-0 offset, so the window has to come back first. See vbe_home.
-%macro VBHOME 0
-  %ifdef GFX_VGA
-   %ifdef OS88_DRIVERS
-    call vbe_home
-   %endif
-  %endif
-%endmacro
-
-; -----------------------------------------------------------------------------
 ; gfx_rowbase - byte offset of the first byte of a scan line (SPEC.md 39.3)
 ;
 ; in:       AX = y
@@ -1803,37 +1580,7 @@ gfx_rowbase_calc:
     and bx, [cs:vid_bmask]      ; BX = bank number
     mov cl, [cs:vid_bshift]
     shr ax, cl                  ; AX = row within the bank
-    mul word [cs:vid_stride]    ; DX:AX. DX is 0 on every adapter whose whole
-                                ; surface fits one 64KB window - 86*90 at
-                                ; worst on the two mono rows - and on VBE it
-                                ; is THE BANK NUMBER, with AX the offset
-                                ; inside it (SPEC.md 39.29.10). The multiply
-                                ; that was already here computes both; what
-                                ; this adds is noticing.
-%ifdef GFX_VGA
-    ; THE BANK IS SELECTED WHENEVER THE MODE HAS ONE, INCLUDING BANK 0. The
-    ; first version gated on `or dx, dx / jz`, reading "bank 0" as "nothing to
-    ; do" - and nothing to do leaves whatever window the LAST primitive
-    ; finished with. A desktop fill spans rows 0..767 and ends with bank 1
-    ; mapped, so the menu bar then asked for row 0, skipped the select, and
-    ; drew into bank 1: the whole chrome appeared 512 rows down the panel,
-    ; which is what the Satellite showed.
-    ;
-    ; So the test is "is this mode banked", not "is this row in bank 0", and
-    ; vbe_bank's own compare is what makes it cheap - it returns immediately
-    ; when the window is already the right one, which is nearly every call.
-    cmp byte [cs:vid_kind], VID_VBE
-    jne .nobank
-    mov [cs:vbe_hbank], dl      ; ...and REMEMBER it: a primitive that walks
-                                ; this rect a second time restarts its pointer
-                                ; at a bank-0 offset and needs the window put
-                                ; back here first (vbe_home, SPEC.md 39.29.10.2)
-    push ax
-    mov al, dl
-    call vbe_bank               ; preserves every register and the flags
-    pop ax
-.nobank:
-%endif
+    mul word [cs:vid_stride]    ; DX:AX; DX is always 0 (86*90 at worst)
     mov cl, 3                   ; ...and BX = bank * 0x2000. `ror` BY 3 IS
     ror bx, cl                  ; `shl` BY 13 for any value that fits in three
     add ax, bx                  ; bits, which the bank does - [vid_bmask] is

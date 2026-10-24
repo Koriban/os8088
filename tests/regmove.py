@@ -37,19 +37,19 @@ pass at all.
 THE ASSERTION THAT MATTERS IS THE LAST ONE. A region that moved with a stale
 `W_SEG` does not fault - the next repaint far-calls a dispatcher in freed
 memory - and a stale `I_SPTR` or `MC_OWN` is invisible until the package
-closes and the kernel frees somebody else's claims. So the row uses SHEET
+closes and the kernel frees somebody else's claims. So the row uses NOTEPAD
 afterwards: it raises the window, which repaints THROUGH `W_SEG`, and reads
-the cell store back through the fixed-up segment words.
+the image back through the fixed-up segment words.
 
 FIVE ASSERTIONS:
 
-  1. SHEET's region is declared movable at all - MC_RLOC out of the kernel's
+  1. NOTEPAD's region is declared movable at all - MC_RLOC out of the kernel's
      own table, because a declaration `mem_movable` refused looks identical
      from inside the package (SPEC.md 66.5.6.2).
   2. IT MOVED. Without this the rest is vacuous and the row says so.
   3. EVERY KERNEL WORD FOLLOWED: the window's `W_SEG`, the instance's
-     `I_SPTR`, and the owner word of every claim SHEET holds.
-  4. Its CONTENTS survived - the typed cell, hashed either side.
+     `I_SPTR`, and the owner word of every claim NOTEPAD holds.
+  4. Its CONTENTS survived - the image, hashed either side.
   5. IT STILL DRAWS: the repaint after the move is the same picture as before
      it, which is the only thing that exercises `W_SEG` and `W_DISP`.
 """
@@ -131,7 +131,7 @@ def main():
         pt_seg, pt_win = pkg_seg(m, S, "Paint")
         print("paint region %04x at %s" % (pt_seg, (pt_win.x, pt_win.y)))
 
-        # --- SHEET under it: the one that has to move -----------------------
+        # --- NOTEPAD under it: the one that has to move ---------------------
         raise_disk()
         dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="CALC.O88")
         opened(m, "Calculator")
@@ -140,7 +140,7 @@ def main():
         if sh_seg is None:
             print("FAIL: Calculator never opened a window")
             return 1
-        mo.drag(sh_win.x + 60, sh_win.y + 9, sh_win.x + 60, sh_win.y + 9 + 25)
+        mo.drag(ca_win.x + 60, ca_win.y + 9, ca_win.x + 60, ca_win.y + 9 + 25)
         os88marty.settle(m)
         sh_seg, sh_win = pkg_seg(m, S, "Calculator")
         print("calc   region %04x at %s"
@@ -148,10 +148,10 @@ def main():
         if sh_seg > pt_seg:
             print("FAIL: Calculator's region %04x is ABOVE Paint's %04x, so "
                   "closing Paint leaves no hole above it and the descending "
-                  "pass would have nothing to do" % (sh_seg, pt_seg))
+                  "pass would have nothing to do" % (ca_seg, pt_seg))
             return 1
 
-        reg = [c for c in claims(m, S) if c[0] == sh_seg]
+        reg = [c for c in claims(m, S) if c[0] == ca_seg]
         if not reg:
             print("FAIL: no claim in mem_tab starts at Calculator's segment %04x"
                   % sh_seg)
@@ -169,18 +169,18 @@ def main():
         os88marty.settle(m)
         m.key("Enter")
         os88marty.settle(m)
-        cx0, cy0, cx1, cy1 = sh_win.content
+        cx0, cy0, cx1, cy1 = ca_win.content
         park(mo, m)
         shot0 = m.vram("cga")
         # THE FIRST 2KB AND NOT THE WHOLE REGION. A region is code AND the
-        # package's live bss, and SHEET is running: its counters, its paint
+        # package's live bss, and NOTEPAD is running: its counters, its paint
         # state and its formatter buffer all change between the two captures,
         # so hashing the whole of it compares a program with itself a few
         # seconds later and always differs. The header and the code at the
         # front of the image are what a move must carry unchanged.
         h0 = hashlib.md5(m.read(rbase * 16, 2048)).hexdigest()
 
-        # --- close PAINT: the hole above Sheet's region ---------------------
+        # --- close PAINT: the hole above Note Pad's region ----------------------
         pt = uncovered(m, S, pt_win, prefer_title=True)
         if pt is None:
             print("FAIL: Paint is wholly covered; cannot raise it")
@@ -191,7 +191,7 @@ def main():
         os88marty.settle(m)
         if any(w.i == pt_win.i and w.visible
                for w in os88geom.windows(m, S)):
-            print("FAIL: Paint did not close, so no hole opened above Sheet")
+            print("FAIL: Paint did not close, so no hole opened above Note Pad")
             return 1
 
         def dump(tag):
@@ -212,12 +212,12 @@ def main():
 
         # --- FILLER LAST, and that ordering is the experiment ---------------
         # Its REGION is claimed top-down, so it lands at the top of the hole
-        # Paint left and the rest of that hole is then sealed ABOVE Sheet's
+        # Paint left and the rest of that hole is then sealed ABOVE Note Pad's
         # region by a pinned barrier - which is exactly the shape the
         # descending pass exists for. Its FILL is claimed bottom-up and takes
         # the low arena down to FL_LEAVE, so the largest single run left is
         # smaller than the two runs merged. Opened any earlier, its fill lands
-        # low, Sheet's claims pack down past it and leave a hole bigger than
+        # low, Note Pad's region packs down past it and leaves a hole bigger than
         # anything a merge could produce - and the ascending pass answers every
         # ask on its own.
         raise_disk()
@@ -264,16 +264,16 @@ def main():
             # as line noise and the window is no longer findable by name.
             # Verified: with mem_region_reloc's body replaced by `ret`, this
             # is what the row sees.
-            print("  2 the region moved         the Sheet window is GONE or "
+            print("  2 the region moved         the Note Pad window is GONE or "
                   "its title is unreadable - which is what a W_SEG the move "
                   "did not fix looks like from out here")
             print("      windows: %s"
                   % [w.title for w in os88geom.windows(m, S) if w.visible])
             print("VERDICT: 1 PROBLEM(S)")
             return 1
-        moved = sh_now != sh_seg
+        moved = ca_now != ca_seg
         print("  2 the region moved         %s"
-              % ("%04x -> %04x" % (sh_seg, sh_now) if moved
+              % ("%04x -> %04x" % (ca_seg, ca_now) if moved
                  else "NO  <-- the run proves nothing"))
         bad += not moved
 
@@ -281,8 +281,8 @@ def main():
         inst = m.read(S("inst_tab"), 12 * 32)
         sptrs = [u16(inst, i * 32 + 6) for i in range(12)]
         owners = sorted(set(c[2] for c in claims(m, S)))
-        ok3 = (sh_now in sptrs) and (sh_seg not in sptrs) \
-            and (sh_seg not in owners)
+        ok3 = (ca_now in sptrs) and (ca_seg not in sptrs) \
+            and (ca_seg not in owners)
         print("  3 kernel words followed    %s"
               % ("OK" if ok3 else
                  "STALE: I_SPTR %s, claim owners %s"
@@ -291,16 +291,16 @@ def main():
         bad += not ok3
 
         if moved:
-            h1 = hashlib.md5(m.read(sh_now * 16, 2048)).hexdigest()
+            h1 = hashlib.md5(m.read(ca_now * 16, 2048)).hexdigest()
             ok4 = h1 == h0
             print("  4 contents survived        %s  (%s)"
                   % ("OK" if ok4 else "CORRUPT", h1[:12]))
             bad += not ok4
 
         # 5: it still DRAWS - the repaint goes through W_SEG and W_DISP
-        pt = uncovered(m, S, sh_win2, prefer_title=True)
+        pt = uncovered(m, S, ca_win2, prefer_title=True)
         if pt is None:
-            print("FAIL: Sheet's title bar is wholly covered; cannot raise it")
+            print("FAIL: Note Pad's title bar is wholly covered; cannot raise it")
             return 1
         mo.click(*pt)
         os88marty.settle(m)

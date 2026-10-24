@@ -28,11 +28,9 @@ VID_A_HERC  equ 1 << VID_HERC
 VID_A_CGA   equ 1 << VID_CGA
 VID_A_EGA   equ 1 << VID_EGA     ; bit 3. An EGA machine is EGA + CGA (mode 6),
                                  ; never part of an extended desktop (39.24)
-VID_A_VBE   equ 1 << VID_VBE     ; bit 4, and THE ONLY BIT IN THIS BYTE THAT IS
-                                 ; NOT WRITTEN BY vid_probe_avail: answering it
-                                 ; means reading a file, so vbe_avail lights it
-                                 ; the first time the Display page asks
-                                 ; (SPEC.md 39.29.2)
+VID_A_VESA  equ 1 << VID_VESA    ; bit 4. Lit by vx_boot_x when VESA.DRV
+                                 ; attaches, and by nothing a probe can find:
+                                 ; the probe IS the driver (SPEC.md 120.2)
 
 ; SPEC.md 39.19.2's placements. TWO and not four, because the primary is
 ; always at the virtual origin, so "which monitor is on the left" is answered
@@ -453,7 +451,11 @@ VSW_AVAIL vid
     mov bl, 0x30                ; 11b = monochrome at B000
 .go:
     xor ax, ax                  ; the BIOS data area, by segment 0 and the
+%ifdef KERN_MEGA
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
+%else
     mov ds, ax                  ; LINEAR offset 0x410 = 0040:0010 (a byte
+%endif
     mov al, [0x0410]            ; shorter than mov ax, 40h - size pass 9)
     and al, 0xCF
     or al, bl
@@ -1012,26 +1014,19 @@ section .text
 ; mono card", the mono kinds are a SET, and a set of one is the only thing a
 ; single bit can ever encode.
 ; -----------------------------------------------------------------------------
-; VID_VBE WAS THE FIFTH KIND AND IT NEEDED NO ARM, which is worth recording
-; because the guard below used to say it would. Each predicate was checked
-; against it rather than assumed (SPEC.md 39.29.2):
-;
-;   vid_blank      only ever asks "is this one the MONO card", by comparing
-;                  against VID_HERC by name. VBE is not, and neither is the
-;                  kind it is entered from, so this answers "one card in two
-;                  modes" and darks nothing - which is correct, because that
-;                  is exactly what it is (SPEC.md 39.11.1).
-;   thm_set        `dec ah / cmp ah, 2 / jae` maps VGA->FF, HERC->0, CGA->1,
-;                  EGA->2, VBE->3. Colour. Correct, because 0104h is four
-;                  planes like the other two.
-;   vid_avail_test `cmp al, VID_KIND_MAX + 1` follows the constant itself, so
-;                  raising it widens the range with no edit.
-;
-; So the warning holds for a kind that is NOT planar-and-colour, and that is
-; what the sentence now says. A SIXTH kind gets the same treatment: check the
-; three, and give it an arm only where the answer comes out wrong.
-%if VID_KIND_MAX != VID_VBE
-  %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC BY NAME and then treating `kind-1 >= 2` as PLANAR and everything else as the CGA (SPEC.md 39.18.1), vga12.inc's thm_set spells the same `kind-1 >= 2` for `is the primary a colour adapter` (SPEC.md 76.12.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A kind that is NOT four-plane colour is silently PLANAR to the dispatch and to the theme, and silently a CGA to vid_blank. Check all three against it and give it an arm wherever the answer is wrong, before raising VID_KIND_MAX"
+%ifdef VID_EXT
+ %define VID_KIND_OK (VID_KIND_MAX == VID_VESA)
+%else
+ %define VID_KIND_OK (VID_KIND_MAX == VID_EGA)
+%endif
+; ...AND VID_VESA (4) IS ADMITTED ON THE STRENGTH OF EXACTLY THAT TEST
+; (SPEC.md 120.5): `dec` maps it to 3, so it is PLANAR to vid_bk - which
+; blanks through the Attribute Controller, the right thing for what is the
+; same VGA card in another mode - and COLOUR to thm_set, which it is. Neither
+; routine needed an arm; vid_disp_planes did (below), because a plane count is
+; the one answer that differs.
+%if !VID_KIND_OK
+  %error "vid_blank, vid_blank_kind and vid_unblank_kind decide WHICH CARD by comparing against VID_HERC BY NAME and then treating `kind-1 >= 2` as PLANAR and everything else as the CGA (SPEC.md 39.18.1), vga12.inc's thm_set spells the same `kind-1 >= 2` for `is the primary a colour adapter` (SPEC.md 76.12.1), and vid_avail_test's `cmp al, VID_KIND_MAX` is the range that rests on it. A FIFTH kind is silently PLANAR to the dispatch and to the theme, and silently a CGA to vid_blank. Give it an arm in each of them before raising VID_KIND_MAX"
 %endif
 ; VSW_SWITCH %1, %2, %3 - %1_blank and %1_switch, written once (KSW_SECT,
 ; kernel.asm): %1 the prefix (`vid` in CTRL.DRV, `bvs` in the boot blob), %2
@@ -1575,7 +1570,7 @@ vid_ctx_ptr:
 ; boundary assembles and runs wrong, and both callers are here.
 ; -----------------------------------------------------------------------------
 vid_ctx_pre:
-    mov cx, KERNEL_SEG          ; both ends are ours; the caller's ES is not
+    KDATAR cx                   ; both ends are ours; the caller's ES is not
     mov ds, cx
     mov es, cx
     call vid_ctx_ptr            ; DI = the record. It reads no memory, so
@@ -1865,6 +1860,11 @@ vid_disp_planes:
     jb .out                     ; unsigned. VID_EGA IS PLANAR (SPEC.md 39.24):
     mov cl, 4                   ; counted as one plane, its cache kept plane 0
                                 ; and a reveal broadcast it to all four
+%ifdef VID_EXT
+    cmp al, 3                   ; ...and VID_VESA -> 3: the DEPTH, 8 or 16
+    jne .out                    ; (SPEC.md 120.4), so a save-under over it is
+    mov cx, [vx_bpp]            ; sized in packed bytes
+%endif
 .out:
     pop di
     pop ax
@@ -1967,11 +1967,6 @@ vid_pt_clamp:
 ; and since size pass 9 it asks vid_disp_other above the branch too, so AL
 ; (the other display's kind) must survive this as well.
 vid_dual_ok:
-    cmp byte [vid_kind], VID_VBE    ; VBE is single-display for EGA's reason and
-    je .no                          ; one of its own: the per-display context is
-                                    ; not in scope, and vid_ctx_act switches the
-                                    ; row table off per display while 39.29
-                                    ; needs it off ALWAYS (SPEC.md 39.29.10)
     cmp byte [vid_kind], VID_EGA    ; EGA is a single-display adapter here
     je .no                          ; (SPEC.md 39.24: the per-display context
                                     ; is not in scope for it). A machine that
@@ -2132,14 +2127,6 @@ vid_dual_ok:
     ; and has no byte to spare. vid_desk_union runs too and is idempotent
     ; here: one display at the origin, so it writes back the vid_w/vid_h that
     ; vid_apply has just set from vid_cw/vid_ch.
-    ;
-    ; THIS FORK FOUND IT THROUGH A FIFTH READER and the sharper symptom:
-    ; it is only visible when the new mode is BIGGER than the old, which is
-    ; why it survived every adapter this project had - 640x480 -> 640x200
-    ; leaves a context too LARGE, which clamps nothing. VBE 1024x768
-    ; (SPEC.md 39.29.11) is the first mode wider and taller than the boot
-    ; mode, and a context stuck at 640x480 made wm_dmg_bands clamp every
-    ; damage band to row 479, so a window moved below it was never erased.
 .paired:
     cmp byte [vid_dmode], 0
     jne .extend

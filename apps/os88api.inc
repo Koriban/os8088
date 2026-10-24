@@ -60,6 +60,14 @@
 ; the window record OSAPI_WM_CREATE returned, and the file dialog's name
 ; buffer. Read them with an `es:` override; clobber ES freely afterwards.
 ;
+; SS = LOW_SEG IS A REQUIREMENT OF EVERY OSAPI CALL, not only a fact about
+; where you start: the kernel reaches tables of its own in LOW_SEG THROUGH SS
+; - the claim map, the screen's row table, and on kern_mega font_run's
+; unaligned-run state - so a call made on a stack of your own reads and
+; writes whatever segment that stack is in. A package that switches SS for
+; its own reasons (the DOS box, around a DOS program) switches back before
+; it calls the kernel, as the DOS box does (docs/plans/KERN-MEGA-PLAN.md 14.39).
+;
 ; Your image is linked at org 0 and loaded at a paragraph boundary, so it is
 ; position-independent: there are no relocations, and two instances of one
 ; package differ only in the segment they run in.
@@ -81,6 +89,12 @@ KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
 ;   2. Never draw from a screen origin, and never from a rect you cached on an
 ;      earlier pass. A rect in bss is valid until the next thing that can move
 ;      the window, which is any moment your code is not running.
+;
+; **A STANDARD BUTTON'S RECTS ARE THE ONE EXCEPTION, and the library makes
+; it one**: os88ui_btninit's record banks where its rects were last right and
+; moves them with the window before every draw and hit test (§20.5.1.3.5).
+; Every other rect - a radio group, a list, a scroll bar, a text field - is
+; still yours to re-place.
 ;
 ; **ASSUME IT ALWAYS HAPPENS.** §11.96.13 snaps a drop's x onto a multiple of
 ; 8 before the cache is taken - it exists because the byte-phase refusal below
@@ -601,6 +615,12 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; 34.5.3.1)
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
                                  ; (SPEC.md 34.5.3)
+SND_CAP_MIXER    equ 0200h       ; readable hardware mixer (SPEC.md 34.15)
+SND_CAP_STEREO   equ 0400h       ; verb 11 takes SND_FMT_STEREO: an SB Pro
+                                 ; (DSP 3.xx, 4,000..22,050 Hz a channel) or
+                                 ; an SB16 (SPEC.md 34.5.5)
+SND_CAP_PCM16    equ 0800h       ; verb 11 takes SND_FMT_16: an SB16 with a
+                                 ; 16-bit DMA channel (SPEC.md 34.5.5)
 SND_CAP_LPTDAC   equ 0100h       ; a COVOX on a parallel port (SPEC.md 34.14):
                                  ; the user picked the Covox tier on the Sound
                                  ; page and a port answered. Not a streaming
@@ -620,6 +640,18 @@ SND_V_PPOS       equ 9
 ; DSP halted mid-block, and verb 1 with the total resumes it as it resumes an
 ; underrun (SPEC.md 34.5.4). AX = 7 for any other stream
 SND_V_PAUSE      equ 10
+
+; verb 11 sets the FORMAT of this instance's NEXT verb 0 (SPEC.md 34.5.5), in
+; the same UI callback right before it: AH = SND_FMT_* bits (0 = 8-bit mono,
+; and drops a format held). Out AX = 0 held / 2 the card cannot play it here
+; (test SND_CAP_STEREO / SND_CAP_PCM16 first) / 7 a bad bit - and 7 from a
+; driver older than the verb. Verb 0 then takes a RING only (else 7), every
+; count stays in BYTES (frames = bytes >> 0/1/2), a 16-bit ring's physical
+; base must be even (else 7), and the SB16's half is 4,096 at any rate
+SND_V_FMT        equ 11
+SND_FMT_STEREO   equ 1           ; left, right interleaved, left first
+SND_FMT_16       equ 2           ; signed 16-bit little-endian (silence 0);
+                                 ; clear = unsigned 8-bit (silence 80h)
 
 ; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
 SND_ST_PLAYING   equ 0
@@ -724,7 +756,14 @@ SND_EXT_TAB      equ 16          ; os88spk.inc's PWM table, written by its
                                  ; CLOSE - the vector, channel 0 and channel 2
                                  ; put back; harmless with nothing open, AX
                                  ; and the flags spent - and the bracket's end
-                                 ; closes it. OPEN's CF=1: AX = SPK_E_*
+                                 ; closes it. OPEN's CF=1: AX = SPK_E_*.
+                                 ; AL = 2 OPEN WITH THE GATE (kern_mega in
+                                 ; protected mode only, SPEC.md 34.11.1.1,
+                                 ; where AL = 0 refuses): AL = 0's inputs plus
+                                 ; SI = your ISR's offset - the kernel points
+                                 ; IRQ0's GATE at BX:SI and answers AX = K and
+                                 ; CX:DX = the chain; you program channel 0.
+                                 ; Your ISR must write nothing through CS
 SPK_E_NOTRATE    equ 1           ; not in a FSXF_RATE bracket (and always,
                                  ; on kern_small)
 SPK_E_BUSY       equ 3           ; open already, or a clip plays
@@ -1097,8 +1136,14 @@ FDLG_SAVE  equ 1                 ; coming back
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
                                  ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA /
-                                 ; 3 EGA, DH = bits per pixel, 4 or 1. Callable
-                                 ; from any context, lock held or not.
+                                 ; 3 EGA / 4 VESA, DH = bits per pixel: 4 or 1,
+                                 ; and 8 or 16 on a VESA display (SPEC.md 120),
+                                 ; whose desktop is still the sixteen colours
+                                 ; - OSAPI_GFX_BLITD is the one way past them.
+                                 ; COLOUR IS DH >= 4 AND NEVER DH == 4 (120.5):
+                                 ; seven packages had it the other way and drew
+                                 ; mono, or sized a save-under at a sixteenth.
+                                 ; Callable from any context, lock held or not.
                                  ;
                                  ; DON'T switch on DL as a fourth case: EGA is
                                  ; VGA's planar path at 640x350 (DH = 4). The
@@ -1109,6 +1154,10 @@ VID_VGA    equ 0                 ; the DL values
 VID_HERC   equ 1
 VID_CGA    equ 2
 VID_EGA    equ 3                 ; 640x350x16 - a VGA-path adapter (SPEC.md 39.24)
+VID_VESA  equ 4             ; a packed VESA display (SPEC.md 120): square
+                            ; pixels, 8 or 16 bits each; the desktop is
+                            ; still sixteen colours and OSAPI_GFX_BLITD is
+                            ; the way to the rest
 ;
 ; On a 1bpp adapter every colour you pass is reduced to black, white or a
 ; 50% dither (SPEC.md 39.4): 0..6 go black, 12/14/15 go white, and 7..11
@@ -1554,6 +1603,11 @@ OSAPI_STIK_MARK equ 'D'         ; +3 of a Sticky App row: a remembered WIDGET
 ; mem_can_move refuses an MC_DMA claim whatever you declare.
 %define OSAPI_MEM_CLAIM_HI  KERNEL_SEG:0x03AC   ; AX = KB; out CF, DX = segment
 %define OSAPI_MEM_CLAIM_DMA_HI KERNEL_SEG:0x03B2 ; ...and CX = the page-safe HEAD
+; ...ON KERN_MEGA A CLAIM HERE WITH A HEAD (CX not 0) COMES FROM THE BOTTOM
+; (SPEC.md 50.3.2, 34.5.3): a head is a chip's page, so it is a DMA ring held
+; while it plays, and a ring is claimed low there with the same page
+; guarantee. CX = 0 - no page asked, a carve or an overlay that is a CS - is
+; still top-down on every kernel. Nothing to change in a caller
 
 %define OSAPI_MEM_FREE      KERNEL_SEG:0x01AA   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
@@ -1784,6 +1838,13 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ;
 ;   bytes = planes * (y2-y1+1) * ((x2>>3) - (x1>>3) + 1)
 ;
+; ...with planes = DH AS IT COMES: 4 on VGA and EGA, 1 on a 1bpp card, and 8
+; or 16 on a packed VESA display (SPEC.md 120.5), where the save is the pixels
+; themselves and DH is the BYTES a column. Never fold it to 4-or-1: a package
+; that did sized a 16bpp save at a sixteenth, and the kernel wrote the rest
+; over whatever followed the claim. The product passes 64KB on a 1024-wide
+; display, so keep DX.
+;
 ; x1 is rounded DOWN to a byte column and x2 UP, which the formula already
 ; carries. The layout is plane-major: all of plane 0's rows, then plane 1,
 ; then 2, then 3 - one plane only on a 1bpp adapter.
@@ -1834,6 +1895,29 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region.
+; --- a block at the DISPLAY'S DEPTH (SPEC.md 120.7) ------------------------
+; The desktop is sixteen colours on every adapter, and OSAPI_GFX_BLIT4 is how
+; a block of them is drawn. On a VESA display (OSAPI_VIDEO's DL = 4, DH = 8
+; or 16) the card has more, and this cell is the one way a package reaches
+; them: the pixels are handed over AS THE MODE PACKS THEM - a byte an index
+; at 8bpp, an RGB565 word at 16 - and the driver puts them where they go,
+; clipped to the display in both axes and to nothing else: no clip region,
+; no window, so draw inside your own content rect on a window you know to be
+; in front. At 8bpp the bytes are DAC indices, and entries 16..255 are yours
+; to load through the PALETTE FORM: CX = 0, ES:SI = DX triples (a byte a
+; gun, 0..255), AX = the first entry (16 or more; AX + DX at most 256).
+; Entries 0..15 stay the desktop's.
+;
+; **CF = 1 IS A REFUSAL AND YOU MUST READ IT**: a display that is not VESA, a
+; kernel without the hook, a palette form at 16bpp or out of range - and
+; nothing was drawn. Test OSAPI_VIDEO's DH FIRST and keep the sixteen-colour
+; path you already have (PiXEL: SPEC.md 106.27). ES is yours here, as in
+; OSAPI_GFX_BLIT4 - a plain cell, no stub.
+%define OSAPI_GFX_BLITD     KERNEL_SEG:0x04AB   ; ES:SI = pixels at the depth,
+                                 ; BP = source stride in BYTES, AX/BX = x/y
+                                 ; (signed), CX/DX = width/height in pixels;
+                                 ; CX = 0: the palette form above. out CF = 1
+                                 ; refused, nothing drawn
 %define OSAPI_GFX_BLIT1     KERNEL_SEG:0x0320   ; ES:SI = a 1bpp BAND in the
                                  ; framebuffer's own bit order (row-major, bit
                                  ; 7 leftmost, 1 = a LIT pixel), BP = its
@@ -1938,6 +2022,108 @@ CPU_F_X87           equ 0x08     ; an 8087/287/387 IS IN THE SOCKET, probed
                                  ; `cpu 8086` already, so rule 1 stands with
                                  ; no exception and the gate here is a
                                  ; RUN-TIME one (SPEC.md 1 rule 1, 84.6).
+CPU_F_PM            equ 0x10     ; SEGMENTS ARE SELECTORS: kern_mega is in
+                                 ; 286 protected mode (docs/plans/
+                                 ; KERN-MEGA-PLAN.md 12.1). Never set on any
+                                 ; other kernel, so a binary built before the
+                                 ; bit reads 0 and keeps the real-mode
+                                 ; behaviour it always had. When it is set:
+                                 ; segment arithmetic must stay on the
+                                 ; 8-paragraph grid (a value that is not a
+                                 ; multiple of 8 is not a valid selector), and
+                                 ; LOADALL, unreal mode and int 15h AH=87h are
+                                 ; refused by the CPU - a feature with no
+                                 ; protected-mode route greys itself with the
+                                 ; reason rather than faulting
+;
+; --- reaching CODE in a claim: the selector to far call it through ----------
+; (docs/plans/KERN-MEGA-PLAN.md 2.4, 3.2, M4.) A heap claim is 512-aligned, so
+; its segment S is TWO selectors under CPU_F_PM: S itself, a writable DATA
+; segment (the identity map), and (S >> 2) | 4, an exact CODE alias in the LDT.
+; A far call, far jump or retf THROUGH S loads a data selector into CS, which
+; is #GP: kern_mega completes it (mega_gpfix) and it works, at the price of a
+; fault per transfer. A package that far-calls code it put in a claim - an
+; overlay, an OP_SEG part, a code buffer - converts the segment ONCE, where it
+; builds the vector, with this:
+;
+;     call OSAPI_CPU_INFO          ; once, at entry: bank AH somewhere
+;     mov [my_cpuf], ah
+;     ...
+;     mov ax, <the claim's segment>
+;     OS88_CODESEL ax, byte [my_cpuf]
+;     mov [my_vec+2], ax           ; far call [my_vec] is now fault-free
+;
+; %1 is the 16-bit general register holding the segment, converted in place;
+; %2 is a byte operand holding OSAPI_CPU_INFO's AH (memory, or AH/BL/... ).
+; Without CPU_F_PM it is the segment unchanged, so ONE BINARY IS RIGHT ON EVERY
+; KERNEL. Two things it is NOT: it is not for DATA - read and write a claim
+; through the segment itself, always, because the alias is read-only - and it
+; is not for a segment off the 512-byte grid, for which no alias exists (an
+; image's own CS is already its alias, so `mov ax, cs` needs nothing). It does
+; not touch 0, so a refused 0 should be tested before it rather than after:
+; 0 converts to 4.
+;
+; THE MACRO IS THE FAST PATH; THE SLOT BELOW IS THE ANSWER. The arithmetic is
+; right for a claim BELOW 1MB on the identity map, which is every claim a
+; package holds today. A claim the kernel may one day place above 1MB is named
+; by an LDT selector the shift cannot convert, so code that cannot know where
+; its claim is - or that takes a selector from somewhere else - asks
+; OSAPI_MEM_CODESEL instead, which is right for both.
+%define OSAPI_MEM_CODESEL   KERNEL_SEG:0x04B9   ; DX = the segment (or
+                                 ; selector) a claim of yours is named by; out
+                                 ; CF=0 and AX = the selector to FAR CALL code
+                                 ; in it: DX itself on a real-mode kernel, its
+                                 ; LDT code alias under CPU_F_PM (and a pair's
+                                 ; code half above 1MB). CF=1 none: DX = 0, or
+                                 ; under CPU_F_PM a segment off the 512-byte
+                                 ; grid or a selector that is data only (an
+                                 ; OSAPI_XMEM_SEL window). Any context.
+%macro OS88_CODESEL 2
+    test %2, CPU_F_PM
+    jz %%real
+    shr %1, 1
+    shr %1, 1
+    or %1, 4
+%%real:
+%endmacro
+;
+; OS88_HUGE_INCR - the selector step between consecutive 64KB of ONE claim
+; (docs/plans/KERN-MEGA-PLAN.md 3.2, Windows' __AHINCR). In conventional memory
+; it is 0x1000 on every kernel, kern_mega's identity map included, which is why
+; nothing built before it needs it. Write `add seg, OS88_HUGE_INCR` where code
+; walks a claim past 64KB rather than the bare 0x1000, so the walk is findable.
+; A claim above 1MB is a run of consecutive LDT selectors and its step is 8:
+; that claim comes only from OSAPI_MEM_HUGE, which ANSWERS the step in CX -
+; so this constant keeps meaning exactly what it meant for every claim
+; OSAPI_MEM_CLAIM makes, and a program that wants more walks by CX.
+OS88_HUGE_INCR      equ 0x1000
+;
+; OSAPI_MEM_SUBSEG - "my segment + N" for a program that may run ABOVE 1MB.
+; An OS88_HIGH program's DS is a selector there (KERN-MEGA-PLAN 13.3, 14.44),
+; and a selector names a BASE: adding paragraphs to it names some other
+; descriptor. Ask this cell instead, and on CF = 1 do the sum yourself -
+; which is every kernel but kern_mega, and kern_mega whenever your region is
+; in conventional memory, so the fallback is the code you had.
+%define OSAPI_MEM_SUBSEG    KERNEL_SEG:0x04D1   ; AX = a PARAGRAPH offset into
+                                 ; your OWN region (from your DS, which must
+                                 ; be your region's), BL bit 0 = you will FAR
+                                 ; CALL code there, BL bit 1 = CX is the
+                                 ; window's length in paragraphs (0 = to the
+                                 ; end). out CF=0 and DX = a DATA
+                                 ; selector whose base is that paragraph and
+                                 ; whose limit runs to your region's end or
+                                 ; 64KB, whichever is first (or the length) -
+                                 ; its CODE twin at DX - 8 when bit 0 asked.
+                                 ; The same window asked again answers the
+                                 ; same selector, so you use one LDT entry
+                                 ; (two for code) per distinct window - ask
+                                 ; for the code first and the data ask reuses
+                                 ; its twin. A selector as long as its PART
+                                 ; lets a region over 64KB move a part at a
+                                 ; time (KERN-MEGA-PLAN 14.48); all are freed with your
+                                 ; region and MOVE with it (the selector does
+                                 ; not change). CF=1 and EVERY register kept:
+                                 ; use your segment + AX. Any context.
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE
@@ -2283,6 +2469,9 @@ MEM_P_VIEW_N equ 5              ; RANGE, 0x10..0x14 with the window's fm_pool
                                 ; simply matches nothing
 MEM_P_FLIST equ MEM_PG_MED<<8 | 0x30    ; the Disk window's multi-file clipboard (22.27), kern_big only
 MEM_P_DIRW  equ MEM_PG_HIGH<<8 | 0x02   ; the directory read-ahead window (18.95)
+MEM_P_RAHB  equ MEM_PG_HIGH<<8 | 0x03   ; kern_mega's read-ahead LANDING: the
+                                 ; conventional bounce under the store above
+                                 ; 1MB (docs/plans/KERN-MEGA-PLAN.md item 32)
 
 ; --- OSAPI_SYS_KB's buffer, all in KB ----------------------------------------
 ; THERE IS NO `SK_DSK` (SPEC.md 20.9). It was the mount's own buffers, and
@@ -2337,7 +2526,8 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; CPU_286 / CPU_386, AH = feature bits (the
                                  ; CPU_F_* below): bit 0 A20 verified open,
                                  ; bit 1 HMA claimed, bit 2 unreal mode armed,
-                                 ; bit 3 an x87 is in the socket. Preserves
+                                 ; bit 3 an x87 is in the socket, bit 4
+                                 ; protected mode (kern_mega only). Preserves
                                  ; every register but AX. Any context - it
                                  ; reads two bytes.
 %define OSAPI_XMEM_CAPS     KERNEL_SEG:0x015A   ; no inputs; out AX = extended-
@@ -2365,6 +2555,117 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; from extended. out CF=0 done; CF=1 and AX =
                                  ; 1 no store / 2 the range is not inside a
                                  ; block you own / 3 bad length. ES is restored.
+%define OSAPI_XMEM_WALK     KERNEL_SEG:0x04BF   ; ES:DI = room for CX records
+                                 ; of XMW_SIZE bytes; out CF=0 and AX = the
+                                 ; extended pool's blocks written, each
+                                 ; XMW_OFF (KB from the pool's base, which
+                                 ; XMEM_CAPS answers in DX:CX), XMW_KB,
+                                 ; XMW_OWN (an instance slot; 80h | slot for
+                                 ; a package's region placed above 1MB; 0A0h
+                                 ; | slot for its OS88_HIGHMEM claims; FDh a
+                                 ; driver's image; FEh the kernel's own; FFh
+                                 ; none). kern_mega in
+                                 ; protected mode, and kern_big with a store
+                                 ; (XMEM.DRV's table: a slot or FFh, SPEC.md
+                                 ; 28.4.8); CF=1, AX = 1 with no pool
+                                 ; (KERN-MEGA-PLAN 13.6). ON kern_mega, TWO
+                                 ; MORE THINGS (KERN-MEGA-PLAN 14.70.2): a
+                                 ; driver's block (FDh, or 0C0h | row) carries
+                                 ; its DRVC_* class at XMW_CLS, 0 when its row
+                                 ; is not drv_tab's; and BX = XMW_FIXED asks
+                                 ; for the fixed areas between 1MB and the
+                                 ; pool too, as records IN FRONT of the blocks
+                                 ; owned XMW_HMA..XMW_PAD, their XMW_OFF
+                                 ; NEGATIVE (below the base) - they tile the
+                                 ; span exactly. Every other kernel ignores BX
+                                 ; and writes 0 at XMW_CLS
+%define OSAPI_MEM_HUGE      KERNEL_SEG:0x04C5   ; A CLAIM OF ANY SIZE, walked
+                                 ; by a STEP (KERN-MEGA-PLAN 14.1 answers 6,
+                                 ; 7): AX = KB (1..65535); out CF=0, DX = its
+                                 ; first segment or selector and CX = the step
+                                 ; to its next 64KB - add CX to DX per 64KB,
+                                 ; never a constant. CX = 1000h for a claim in
+                                 ; conventional memory, on every kernel; CX = 8
+                                 ; on kern_mega in protected mode for an
+                                 ; OS88_HIGHMEM package, whose claim is ONE
+                                 ; block above 1MB under a run of selectors,
+                                 ; each a 64KB window (the last its claim's
+                                 ; end) - a megabyte and more where the
+                                 ; machine has it. CF=1 refused - above 1MB
+                                 ; only when the pool's FREE KB are short: the
+                                 ; kernel compacts it, this claim included,
+                                 ; before it refuses (KERN-MEGA-PLAN 14.37).
+                                 ; Free it with OSAPI_MEM_FREE and the DX it
+                                 ; gave; the kernel frees it at your teardown
+                                 ; too. OSAPI_MEM_REGROW takes one above 1MB
+                                 ; to ANY size and keeps it there: DX is its
+                                 ; first selector NOW (the run may move), the
+                                 ; step stays 8; CF=1 changed nothing.
+                                 ; BX = 8000h asks for a WINDOW EVERY 32KB
+                                 ; instead (KERN-MEGA-PLAN 14.41): selector k
+                                 ; is the 64KB window from 32KB x k, cut at
+                                 ; the claim's end - OSAPI_XMEM_RUN's shape on
+                                 ; a claim that moves, so ANY 32KB of it is
+                                 ; whole in the window at (offset >> 15), at
+                                 ; (offset & 7FFFh). Answered BX = 0 when that
+                                 ; is what you got; BX kept otherwise (a claim
+                                 ; in conventional memory, CX = 1000h, or a
+                                 ; kernel that has no such run). Such a claim
+                                 ; does not REGROW (CF=1, nothing changed),
+                                 ; and the kernel moves it 64KB at a time
+                                 ; with your FSXF_RATE hook held off until
+                                 ; the last piece (KERN-MEGA-PLAN 14.49): no
+                                 ; code of yours runs while a window is half
+                                 ; moved, unless a sample ISR is open - then
+                                 ; in one step with interrupts off
+XMW_OFF     equ 0
+XMW_KB      equ 2
+XMW_OWN     equ 4
+XMW_CLS     equ 5               ; db: a driver's block's DRVC_* class
+XMW_SIZE    equ 6
+XMW_FIXED   equ 0x4658          ; BX: name the fixed areas ('XF')
+XMW_HMA     equ 0xF0            ; ...the HMA, kept for the DOS trip
+XMW_GDT     equ 0xF1            ; ...the GDT
+XMW_LDT     equ 0xF2            ; ...the LDT and the IDT
+XMW_KCODE   equ 0xF3            ; ...`.cold` and `.mega`
+XMW_PAD     equ 0xF4            ; ...and the padding up to the pool's base
+%define OSAPI_XMEM_SEL      KERNEL_SEG:0x04B3   ; DX:AX = an address inside a
+                                 ; block YOU own, CX = bytes (0 = 64KB); out
+                                 ; CF=0 and AX = a DATA SELECTOR whose segment
+                                 ; covers exactly that window - load it into
+                                 ; DS or ES and address the block IN PLACE.
+                                 ; ONE PER BLOCK: a second call re-aims it (a
+                                 ; segment register already holding it keeps
+                                 ; the old window until reloaded), and it is
+                                 ; freed with the block. CF=1 and AX = 1 not
+                                 ; available (every kernel but kern_mega in
+                                 ; protected mode - CPU_F_PM below is the test,
+                                 ; and the route without it is os88la.inc or
+                                 ; os88ub.inc) or none free / 2 not inside a
+                                 ; block you own. UI-task context, like the
+                                 ; four above (KERN-MEGA-PLAN 12.2).
+%define OSAPI_XMEM_RUN      KERNEL_SEG:0x04CB   ; DX:AX = the TOKEN of a block
+                                 ; YOU own (OSAPI_XMEM_ALLOC's answer, its
+                                 ; base); out CF=0, DX = the first of a RUN of
+                                 ; DATA SELECTORS and CX = the step between
+                                 ; them (8): selector k is the 64 KB window
+                                 ; from 32 KB x k into the block, cut at its
+                                 ; end - so ANY 32 KB of the block lies wholly
+                                 ; in the window at (offset >> 15), at (offset
+                                 ; & 7FFFh). A store of records of 32 KB or
+                                 ; less is read IN PLACE through it, from any
+                                 ; context once made, where OSAPI_XMEM_SEL's
+                                 ; one window would be re-aimed per read and
+                                 ; OSAPI_MEM_HUGE's 64 KB windows cut a record
+                                 ; that straddles one. Freed with the block.
+                                 ; CF=1, AX = 1 not available (every kernel
+                                 ; but kern_mega in protected mode) or no run
+                                 ; of LDT entries free, 2 not the base of a
+                                 ; block you own, or one that has a selector
+                                 ; already (OSAPI_XMEM_SEL's or a run): one
+                                 ; view a block. UI-task context, as above
+                                 ; (KERN-MEGA-PLAN 14.16; the Video Player's
+                                 ; hold and bank, SPEC.md 98.3.18.16).
 ;
 ; CONTEXT, BINDING: these five are UI-task context - the entry proc, a window
 ; callback, a menu handler or a file-dialog completion proc. THE GFX LOCK MAY
@@ -2607,10 +2908,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 8                 ; the most records one call can write, so
+DQ_MAXREC  equ 10                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 6, 5 or 4 depending on the
+                                 ; which is 10, 9 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
@@ -2780,6 +3081,73 @@ HDV_DISARM   equ 2              ; ES:DI = 8 bytes: bit n set = sector n of the
                                 ; buffer is in XMS and NOT in the buffer. Copy
                                 ; up the rest: a sector the kernel's cache
                                 ; served, or a disk on rung 0, is clear
+HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): CL = an HDI_*
+                                ; below, ES = yours, the rest per verb. CALL
+                                ; IT THROUGH OSAPI_DRV_USE's DRVU_CALL, never
+                                ; OSAPI_DRV_CALL: the install runs the
+                                ; machine's file walk, and through the plain
+                                ; door every name it writes resolves in YOUR
+                                ; folder instead (SPEC.md 51.2.3). It is
+                                ; HDDTOOL.DRV's own engine - the Control
+                                ; Panel's Install window's - read off the
+                                ; system volume on first use. CF=1 = the tool
+                                ; could not be reached (no system disk, no
+                                ; heap, another vintage) or the verb is not
+                                ; one it knows; CF=0 = it ran, answer in AL.
+                                ; Every register but AX preserved. UI task,
+                                ; from a callback: the install verbs copy
+                                ; whole floppies under the frozen interface
+HDI_DEVS     equ 0              ; ES:DI = 4 * HDIV_SIZE. out AL = devices
+HDI_SLOTS    equ 1              ; DL = a device, ES:DI = 4 * HDIS_SIZE. out
+                                ; AL = the slot the Install window would
+                                ; select, 0FFh none would do, 0FEh no such
+                                ; device or its geometry is unknown
+HDI_GO       equ 2              ; DL = device, DH = slot, CH = 1 erase / 0 keep
+                                ; the files; ES:DI = an HDIB_* block. out AL =
+                                ; an HDG_* and the engine's caption at HDIB_CAP.
+                                ; The Install window's two clicks in one
+HDI_APPS     equ 3              ; ES:DI = an HDIB_* block: the apps phase, once
+                                ; HDI_GO answered HDG_APPS. out as HDI_GO
+HDI_QUIT     equ 4              ; abandon a run waiting on its apps disk (its
+                                ; system part has committed and stays)
+HDI_CAPSZ    equ 48
+HDIB_CAP     equ 0              ; HDI_CAPSZ: the caption, out
+HDIB_LOG     equ 48             ; dw: a LOG PROC in the caller's segment, or 0
+                                ; (SPEC.md 117.4.1): called once per step,
+                                ; from inside the verb, as a package callback
+                                ; - DS = yours, ES = KERNEL_SEG, SI = the line
+                                ; at HDIB_LINE, gfx lock held. It may draw and
+                                ; clobber anything; it may NOT touch a file
+HDIB_LINE    equ 50             ; HDI_LINESZ: where each line is put
+HDI_LINESZ   equ 41             ; 40 characters and the NUL
+HDIB_SIZE    equ 91
+HDIV_KIND    equ 0              ; db: 1 = int 13h, 2 = the IDE task file
+HDIV_GEOM    equ 1              ; db: 1 = its geometry is known (installable)
+HDIV_UNIT    equ 2              ; db: the int 13h drive, or the IDE unit
+HDIV_BIOS    equ 3              ; db: the int 13h drive the ROM knows it as,
+                                ; IDE rows included (SPEC.md 52.1.1), or 0
+HDIV_SECS    equ 4              ; dd: cylinders x heads x sectors
+HDIV_SIZE    equ 8
+HDIS_STATE   equ 0              ; db: an HDS_* - may an install take it
+HDIS_VOL     equ 1              ; db: 1 = a FAT volume an install may KEEP
+HDIS_LET     equ 2              ; db: the letter it is mounted as, or 0
+HDIS_TYPE    equ 3              ; db: the partition table's type byte
+HDIS_SECS    equ 4              ; dd: its length (a free slot: what an install
+                                ; would make of it)
+HDIS_TEXT    equ 8              ; 26 bytes: the Install window's State column,
+                                ; NUL-ended ('C: FAT16', 'Unpartitioned', ...)
+HDIS_TEXTSZ  equ 26
+HDIS_SIZE    equ 34
+HDS_OK       equ 0              ; an install may take it
+HDS_SMALL    equ 1              ; under 2MB
+HDS_ALIEN    equ 2              ; somebody else's, or unreadable, or too big
+HDS_NONE     equ 3              ; free, and no room on the disk for it
+HDS_LIVE     equ 4              ; the volume this machine BOOTED from: keep
+                                ; only, never erase (SPEC.md 52.10.4.1)
+HDG_FAIL     equ 0              ; it stopped; the caption says where
+HDG_APPS     equ 2              ; the system part is on and the disk boots:
+                                ; insert the apps disk, then HDI_APPS
+HDG_DONE     equ 3              ; installed
                                 ; 3 was the serial monitor's and is RETIRED,
                                 ; not free: a class number is ABI, and a driver
                                 ; built against the old header would attach as
@@ -2799,6 +3167,10 @@ DRVC_POINT   equ 6              ; a pointing device the kernel does not
 DRVC_FILE2   equ 8              ; the SECOND file-redirector class (SPEC.md
                                 ; 62.9.19): RAMDISK.DRV's, so it and the
                                 ; cable (DRVC_FILE) can be attached at once
+DRVC_CD      equ 9              ; the THIRD file class: CDROM.DRV, an ATAPI
+                                ; CD-ROM (SPEC.md 119). Its volume is ISO 9660
+                                ; answered as FSV_* verbs; its package door is
+                                ; drivers/cdrom/cdpkg.inc - CD audio
 DRVC_EMS     equ 7              ; EXPANDED MEMORY - a LIM EMS board's page
                                 ; registers, EMS.DRV (SPEC.md 107). Pages are
                                 ; MAPPED into a 64 KB frame below 1 MB, never
@@ -3418,6 +3790,56 @@ OS88_STACK_384     equ 4        ; the largest, asked for on purpose: a deep
                                 ; interpreter, or anything that talks to
                                 ; ETHER.DRV, whose socket verbs cost ~126
                                 ; bytes on YOUR stack (SPEC.md 72)
+; OS88_HIGH - OR it into the class above (`OS88_STACK_192 | OS88_HIGH`) to say
+; this package MAY RUN ABOVE 1MB (docs/plans/KERN-MEGA-PLAN.md 13.3 step 4).
+; Under CPU_F_PM kern_mega then loads its region into a code/data pair in
+; extended memory, and DS is a SELECTOR whose base is past the megabyte. Say
+; it only of a package that does NO arithmetic on its own CS or DS (`mov ax,
+; ds / add ax, n`, OS88_CODESEL of its own DS, a far pointer it builds out of
+; its own segment and stores for real mode), stamps no IRQ vector with its
+; own CS. Its file I/O may go to any volume: a buffer up there reaches a
+; redirected one - a RAM disk, a cable share - 512 bytes a call through a
+; bounce in conventional memory (KERN-MEGA-PLAN 10.3 item 81). Every other
+; kernel ignores the bit: a kernel built before it reads an unknown class and
+; gives the largest stack, and nothing worse.
+; A RE-HOMED PROGRAM (OSAPI_PKG_REHOME, SPEC.md 20.12.10.9) says it in its
+; OWN header - the program part's - and not in its loader's: the loader is
+; freed the moment it re-homes, so its placement buys nothing. On kern_mega
+; the program's KEEP (the KEEP form: the program and every part it reads)
+; then moves above 1MB as one pool block before the program runs - one pair
+; over it all up to 65,520 bytes, and over a larger keep a pair over the
+; program's own image + bss alone (KERN-MEGA-PLAN 14.48); the bytes form runs
+; low as before. Ask OSAPI_MEM_SUBSEG for a selector at any paragraph inside
+; it, and for a part past the pair, one as long as the part.
+OS88_HIGH          equ 0x80
+; OS88_HIGHMEM - OR it into the class byte as well (`OS88_STACK_192 |
+; OS88_HIGH | OS88_HIGHMEM`) to say that this package's CLAIMS may be above
+; 1MB too: under CPU_F_PM, OSAPI_MEM_CLAIM and OSAPI_MEM_CLAIM_HI of 1..64KB
+; answer DX = a DATA SELECTOR over exactly the KB asked for, in extended
+; memory (KERN-MEGA-PLAN 13.6). Say it only of a package that does NO
+; arithmetic on a claim's segment (no `add ax, 1000h`, no offset >> 4 folded
+; in, no OS88_HUGE_INCR, no comparing it with a number), never far-calls code
+; in one, hands one to no DMA and no BIOS call of its own (the DMA cells are
+; not affected and stay conventional), and never OSAPI_PKG_REHOMEs into one.
+; The kernel's own services take one wherever they take a segment - the file
+; layer (a redirected volume 512 bytes a call), OSAPI_XMEM_COPY, OSAPI_DECOMP
+; (64KB of output at most, as the claim is), the clipboard, every drawing
+; slot. OSAPI_MEM_REGROW keeps DX while the new size is 64KB or less and the
+; pool has room, and otherwise MOVES the claim down to conventional memory
+; and answers its new segment, exactly as a conventional regrow does - so take
+; DX from it as you always had to. OSAPI_MEM_MOVABLE refuses one (CF = 1): a
+; pool claim MAY move (the pool is compacted when a claim finds no run,
+; KERN-MEGA-PLAN 14.15), but its SELECTOR never changes, so there is nothing
+; to tell you - a segment register holding it picks up the new place at its
+; next load, and every register you pushed is one. A claim over 64KB,
+; or one the pool cannot hold, is conventional exactly as before, so the
+; package must still treat every claim as an opaque segment.
+; BOTH BITS ARE OPT-IN AND BOTH ARE OWED (KERN-MEGA-PLAN 14.51, 14.52): every
+; package under apps/ declares OS88_HIGH and OS88_HIGHMEM, or carries a line
+; in tests/megahigh.txt saying what in its code breaks above 1MB.
+; tests/unit/t_megahigh.py (the full tier) fails the build otherwise, and the
+; list only turns one way. A C package says both in CC_STACK_CLASS.
+OS88_HIGHMEM       equ 0x40
 
 ; THE FORMAT BYTE IS THE API TABLE'S (SPEC.md 20.2.0). Pass 4 moved 158 of
 ; the cells above and a package built for the old table does not fault, it
@@ -3625,6 +4047,7 @@ STKL_D_CLOSE    equ 56
 STKL_D_WAKE     equ 58
 STKL_XCP        equ 60           ; dd the package's trampoline: offset, and
                                  ; the segment the library writes from DS
+                                 ; (OSAPI_MEM_CODESEL's code selector for it)
 STKL_FW         equ 64           ; dw the face's width now (born the widest)
 STKL_DSYS       equ 66           ; 'SYSTEM', 0
 STKL_DAPP       equ 73           ; 'APPDATA', 0
@@ -4226,6 +4649,9 @@ OS88__AFIT  equ OS88__AF%[OS88__AN]
                                 ; 20.5.1.3.4)
     dw 0                        ; OS88UI_BT_ONCLK, your click proc - btninit
     dw 0                        ; OS88UI_BT_NEXT, THE LIBRARY'S list link
+    dw 0, 0, 0, 0               ; OS88UI_BT_OX/OY/FX/FY, THE LIBRARY'S: where
+                                ; the rects were last right (SPEC.md
+                                ; 20.5.1.3.5)
 %endmacro
 
 %macro OS88_BSS 1
@@ -5771,9 +6197,10 @@ WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
                                  ; window. Out: AX = width, BX = height, CX =
                                  ; the first row the dock owns, SI = the first
                                  ; row the desktop band has, DL = 0 VGA / 1
-                                 ; Hercules / 2 CGA / 3 EGA (the VID_* kinds),
-                                 ; DH = bits per pixel. DI preserved; no lock
-                                 ; needed, any context.
+                                 ; Hercules / 2 CGA / 3 EGA / 4 VESA (the VID_*
+                                 ; kinds), DH = bits per pixel - 4, 1, or 8
+                                 ; or 16 on a VESA display (SPEC.md 120). DI
+                                 ; preserved; no lock needed, any context.
                                  ;
                                  ; **OSAPI_VIDEO ANSWERS ABOUT THE PRIMARY**
                                  ; (SPEC.md 39.2.1) and is right to - but on a
@@ -6015,6 +6442,37 @@ FSIF_BANKED equ 4
                                  ; 4 absent, 5 bad buffer/caller, 6 empty,
                                  ; 7 TX full, 8 module unavailable.
 SER_BUFFER_SIZE equ 517
+
+%define OSAPI_DRV_USE KERNEL_SEG:0x04A5 ; THE DRIVERS PAGE'S TICK, AS A DOOR
+                                 ; (SPEC.md 117.3). AL = a DRVC_* class, AH =
+                                 ; DRVU_UP: load and attach that class's
+                                 ; driver with the Control Panel's own code,
+                                 ; reading it (and CTRL.DRV) off the system
+                                 ; disk - out CF=0 it is up (or was), CF=1 AX
+                                 ; = the DRVE_* its row banked: 1 no system
+                                 ; disk, 2 not on it, 3 not a driver, 4 no
+                                 ; memory, 5 no hardware, 6 busy, 7 attached
+                                 ; twice, 8 nothing to mount; AX = 0 no driver
+                                 ; layer (kern_small). It RECORDS NOTHING: no
+                                 ; SYSTEM.CFG answer is written for a user who
+                                 ; never answered the Drivers page. AH =
+                                 ; DRVU_DONE: you have finished with that
+                                 ; driver's page tools - it is sent
+                                 ; DSV_CPCLOSE (HDD.DRV gives HDDTOOL.DRV
+                                 ; back) unless a Control Panel is open.
+                                 ; AH = DRVU_CALL: OSAPI_DRV_CALL_AT (BH =
+                                 ; class, BL = its verb, ES = yours, CX DX SI
+                                 ; DI its arguments) ASKED AS THE MACHINE -
+                                 ; the driver's file names resolve where the
+                                 ; machine stands and not in your folder, as
+                                 ; when the kernel calls it (SPEC.md 51.2.3).
+                                 ; For a verb that runs the system's own
+                                 ; machinery on your behalf: HDD.DRV's
+                                 ; HDV_TOOL. Every register but AX kept. UI
+                                 ; task, from a callback; a worker may not
+DRVU_UP      equ 0
+DRVU_DONE    equ 1
+DRVU_CALL    equ 2
 
 %define OSAPI_THM_SET        KERNEL_SEG:0x046D   ; AL = THM_BRIGHT(0)/DARK(1)/
                                  ; COLOR(2)/WIN(3): adopts it as the system

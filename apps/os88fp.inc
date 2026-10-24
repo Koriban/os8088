@@ -86,6 +86,9 @@
 ;
 ; The last two are called by the first three, so dropping one while keeping
 ; a caller is refused here by name rather than as an undefined symbol.
+; FP_NO_POW drops fp_pow, which nothing else here calls. With OS88FP_NOTRANS
+; as well, fp_c_one goes too and nothing names fp_e0..fp_e3 or fp_ek, so the
+; package may drop that scratch (SPEC.md 84.8).
 ; =============================================================================
 
 %ifdef FP_NO_I2X
@@ -1038,15 +1041,25 @@ fps_div:
 ; A GUARDED SHARED INCLUDE OWES A BYTE-IDENTITY PROOF, which is os88ui.inc's
 ; own precedent (OS88UI_SBDRAG): SHEET, CHART and fptest must assemble to the
 ; bytes they did before this line existed - so the guards below are placed to
-; keep every surviving item AT THE OFFSET IT HAD, which is why fp_c_one and
-; fp_c_half are not simply hoisted above the three the logarithm uses.
+; keep every surviving item AT THE OFFSET IT HAD, which is why fp_c_one is
+; not simply hoisted above the three the logarithm uses.
+;
+; FP_NO_POW drops fp_pow as well (SPEC.md 84.8), and with OS88FP_NOTRANS it
+; takes fp_c_one, which nothing else names. CHART and FPTEST set both, and
+; FPTEST then assembles to the bytes it did before this layer existed: it
+; has no case for it (SPEC.md 84.4).
 %ifndef OS88FP_NOTRANS
 fp_c_ln2:    dq 0.69314718055994530942
 fp_c_invln2: dq 1.44269504088896340736
 fp_c_rhalf:  dq 0.70710678118654752440
+  %define FP_USE_ONE
 %endif
+%ifndef FP_NO_POW
+  %define FP_USE_ONE
+%endif
+%ifdef FP_USE_ONE
 fp_c_one:    dq 1.0
-fp_c_half:   dq 0.5
+%endif
 
 %ifndef OS88FP_NOTRANS
 ; -----------------------------------------------------------------------------
@@ -1195,10 +1208,15 @@ fp_exp:
     mov si, fp_c_invln2               ; k = round(x / ln2)
     call fp_unpack_b
     call fp_mul
-    call fp_round
+    xor cx, cx                        ; to WHOLE units: fp_round's CX is its
+    call fp_round                     ; decimal places, never the caller's
     call fp_a2i
     jc .big                           ; past what a word holds is past what a
-    mov [fp_ek], ax                   ; double holds, either way
+    cmp ax, 2200                      ; double holds, either way - and so is
+    jg .big                           ; |k| > 2200, which added to fp_ae below
+    cmp ax, -2200                     ; would wrap fp_pack_a's signed exponent
+    jl .big                           ; test into a flush
+    mov [fp_ek], ax
     call fp_i2a                       ; r = x - k*ln2
     mov si, fp_c_ln2
     call fp_unpack_b
@@ -1249,10 +1267,14 @@ fp_exp:
     call fp_norm
     jmp short .out
 .big:
-    call fp_azero                     ; a magnitude this large is 0 or the
-    cmp byte [fp_e0+7], 0             ; largest finite double; the sign of x
-    jns .out                          ; decides which, and its top byte is
+    cmp byte [fp_e0+7], 0             ; a magnitude this large is 0 or the
+    jns .clamp                        ; largest finite double; the sign of x
+    call fp_azero                     ; decides which, and its top byte is
     jmp short .out                    ; where that sign lives
+.clamp:
+    mov word [fp_ae], 0x1000          ; A is still k, positive and non-zero:
+                                      ; fp_scale10's saturate - an exponent
+                                      ; this size is what fp_pack_a clamps
 .out:
     pop di
     pop si
@@ -1272,6 +1294,7 @@ fp_exp:
 ; -----------------------------------------------------------------------------
 %endif                               ; OS88FP_NOTRANS
 
+%ifndef FP_NO_POW
 fp_pow:
     push bx
     push cx
@@ -1378,6 +1401,7 @@ fp_pow:
     pop cx
     pop bx
     ret
+%endif ; FP_NO_POW
 
 ; -----------------------------------------------------------------------------
 ; fp_sin / fp_cos / fp_tan / fp_atan (SPEC.md 84.11)
@@ -1406,6 +1430,8 @@ fp_cos:
 ; ACCURACY LIMIT and not the series: pi/2 is a double, so a very large x is
 ; reduced against a pi/2 that is itself rounded, and the answer degrades as x
 ; grows. Excel has the same limit and for the same reason.
+; out: CF=1 and A zero past a word of quadrants (|x| > 32767*pi/2), so a cell
+;      names an error instead of storing 0; CF=0 otherwise. fp_cos likewise.
 fp_sin:
     push bx
     push cx
@@ -1416,6 +1442,7 @@ fp_sin:
     mov si, fp_c_2opi
     call fp_unpack_b
     call fp_mul
+    xor cx, cx                        ; k to WHOLE quadrants (see fp_exp)
     call fp_round
     call fp_a2i
     jc .huge                          ; past a word of quadrants: no digits of
@@ -1440,11 +1467,14 @@ fp_sin:
     call fp_sinser
 .signit:
     cmp cx, 2                         ; quadrants 2 and 3 are negative
-    jb .out
+    jb .ok
     xor byte [fp_as], 1
+.ok:
+    clc
     jmp short .out
 .huge:
-    call fp_azero
+    call fp_azero                     ; ...so it is REFUSED, CF=1, rather
+    stc                               ; than a plausible 0
 .out:
     pop di
     pop si

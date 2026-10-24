@@ -77,9 +77,9 @@
   "sources": [
    "apps/audio"
   ],
-  "stamped": "d511fdd4",
-  "strings": "c66ee02557046ce8",
-  "why": "Open while paused keeps the paused song (added, not selected); the bar empties with the clock at End of playlist and Stop"
+  "stamped": "55a051b4",
+  "strings": "e12e9e2c75e19803",
+  "why": "Unchanged: XTMP3's track split the look-ahead out of apengine.inc into aplook.inc (35efae82). AUDIO.O88 assembles byte-identical and no user-visible string changed. Only the file a string lives in moved."
  },
  "AUTOSTRT": {
   "sources": [],
@@ -137,9 +137,9 @@
   "sources": [
    "apps/browser"
   ],
-  "stamped": "9deeee7d",
-  "strings": "955cbc3c9a274645",
-  "why": "a typed https address says Https is not supported, as a clicked one does; with no link driver the page being read stays live under the refusal"
+  "stamped": "3ef633c9",
+  "strings": "4d794c0f80cf14d9",
+  "why": "Checked against Browser 1.5-1.6c source: added the Ctrl keys and Keyboard Shortcuts, bookmarks (BROWSE.DAT, eight), the right-button menu and View Source, the Downloads window, password fields, and the new page/link/form limits."
  },
  "C64": {
   "sources": [],
@@ -181,6 +181,22 @@
   "strings": null,
   "why": "Paint's refusal of a GIF over 64KB is named: the toast GIF larger than 64KB"
  },
+ "CDRACK_O88": {
+  "sources": [
+   "apps/cdrack"
+  ],
+  "stamped": "ca9acbde",
+  "strings": "4d867d0ae6645bc7",
+  "why": "CDRack replaces the CD Player: rewritten for the three layouts, the two themes, the toggles, the volume and the keys"
+ },
+ "CDROM_DRV": {
+  "sources": [
+   "drivers/cdrom"
+  ],
+  "stamped": "dda3902c",
+  "strings": "c3a141853e1e7543",
+  "why": "Which system disks carry it: the 360KB one leaves it out (SPEC.md 119.6.7)"
+ },
  "CHARTER_F88": {
   "sources": [],
   "stamped": "e4576a70",
@@ -191,9 +207,9 @@
   "sources": [
    "apps/chart"
   ],
-  "stamped": "3f41ce08",
+  "stamped": "6d53446d",
   "strings": "865c1b184df0f478",
-  "why": "checked against the fork's apps/chart after the 2026-10-20 merge: the menus, the gallery, the BMP export and the file formats are all still as the page describes them. One line added - the Data menu lists Sheet's NAMED RANGES in place of the column letters when the file has any (SPEC.md 82.15), which is the only user-visible difference."
+  "why": "checked against apps/chart/chart.asm: Data menu offers a file's named ranges (SYLK and BIFF), first sheet of a workbook, .XLS not read, Sheet's save formats named; no capture run"
  },
  "CITY_PCX": {
   "sources": [],
@@ -231,9 +247,9 @@
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "d511fdd4",
-  "strings": "3ba5d1a1f6727cae",
-  "why": "Drivers page: ticking a row no longer wipes the scroll-down arrow; page text unchanged"
+  "stamped": "603832f2",
+  "strings": "2d063e04ea0308f5",
+  "why": "the Display page's Vesa row: named for the screen, clicked again to step through the card's screens, Set Primary applies (SPEC.md 120.6); the rest of the page reads as before"
  },
  "CWORD": {
   "sources": [],
@@ -319,9 +335,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "9deeee7d",
-  "strings": "7e5f0adda8303591",
-  "why": "CD walks a whole path (CD \\SYSTEM\\DOS) and a failed CD stays put; a missing program says Bad command or file name with or without a tail; HELP's last line says only NUL is a redirect target"
+  "stamped": "af4ae8f5",
+  "strings": "28df7ede37a080f4",
+  "why": "kern_mega's Memory page: the park arm and the Save the session to disk box (14.43) described; the mouse box's kern_mega greying is below the page's detail"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -460,6 +476,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "GBDEMO_GB": {
+  "sources": [
+   "tools/gbprof/gbdemo.asm"
+  ],
+  "stamped": "206eb5be",
+  "strings": "3a06a69ef09259e4",
+  "why": "new file page for the demo cartridge"
+ },
  "GORILLAS_O88": {
   "sources": [
    "apps/gorillas"
@@ -478,17 +502,17 @@
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "d0d605c1",
-  "strings": "3b0c6f26290d2442",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "ddaef50f",
+  "strings": "caf4859056bcb91b",
+  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
  },
  "HDD_DRV": {
   "sources": [
    "drivers/hdd"
   ],
-  "stamped": "d0d605c1",
-  "strings": "3b0c6f26290d2442",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "ddaef50f",
+  "strings": "caf4859056bcb91b",
+  "why": "The engine gained INSTALL's log hook (SPEC.md 117.4.1); the Control Panel's Install window and the pages' words are unchanged"
  },
  "HELV_F88": {
   "sources": [],
@@ -500,9 +524,9 @@
   "sources": [
    "kernel/hiber.inc"
   ],
-  "stamped": "dc7a4142",
-  "strings": "22e67d0f6c954f23",
-  "why": "Document disconnecting a desktop serial lease before hibernate"
+  "stamped": "f596e80c",
+  "strings": "b73fd87b7d70d417",
+  "why": "PR #299 review: kern_mega's 'Disk clusters too small' refusal and main's 'Hibernate (VESA)' greying added; the arm-3 'Unmount the image first' refusal is on DOS.O88's page, where the choice is; the 62-run cap reads 'Hibernate failed', already on the page"
  },
  "HOUSE_PNG": {
   "sources": [],
@@ -515,6 +539,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "INSTALL_O88": {
+  "sources": [
+   "apps/install"
+  ],
+  "stamped": "ddaef50f",
+  "strings": "1dc0fc6f30c645db",
+  "why": "Copying section describes the Installing page's log and its click-Next ending (SPEC.md 117.4.1)"
  },
  "INTRO_MID": {
   "sources": [],
@@ -553,6 +585,14 @@
   "stamped": "e4576a70",
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "LEMMINGS_O88": {
+  "sources": [
+   "apps/lemmings"
+  ],
+  "stamped": "b63b5892",
+  "strings": "2fd010e1297a645f",
+  "why": "first page: written from README.TXT and the launcher, play and results screens of the shipped build"
  },
  "LICENSE": {
   "sources": [],
@@ -602,9 +642,9 @@
   "sources": [
    "apps/midirack"
   ],
-  "stamped": "d511fdd4",
-  "strings": "2d8a5451be064e81",
-  "why": "Settings' radios are the shared round ring now (SPEC.md 13.17.1); greyed rows' labels grey on VGA"
+  "stamped": "a6a3ab5a",
+  "strings": "d1bd34a96a4616f4",
+  "why": "the refused Play when the card's or the speaker's ring cannot be claimed (KERN-MEGA-PLAN 14.55, 14.59) described; the grant-ring fallback is below the page's detail"
  },
  "MINES_O88": {
   "sources": [
@@ -621,6 +661,16 @@
   "stamped": "e4576a70",
   "strings": "518a0d82ecee0138",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "MIXER_O88": {
+  "sources": [
+   "apps/mixer",
+   "apps/os88mixui.inc",
+   "drivers/sound/sndpkg.inc"
+  ],
+  "stamped": "32e6dce5",
+  "strings": "ed45625209cc733e",
+  "why": "Document smooth requested positions, one-percent keys and hardware readback updates"
  },
  "MOUNTAIN_BMP": {
   "sources": [],
@@ -802,6 +852,14 @@
   "strings": null,
   "why": "PaccMan's disk carries a README.TXT now; listed with the other program read-mes"
  },
+ "REALDMG_O88": {
+  "sources": [
+   "apps/realdmg"
+  ],
+  "stamped": "206eb5be",
+  "strings": "08e5749fb6393b85",
+  "why": "new manual, checked against realdmg.asm's menus, keys and strings"
+ },
  "REDLINE_O88": {
   "sources": [
    "apps/redline"
@@ -890,9 +948,9 @@
   "sources": [
    "apps/sheet"
   ],
-  "stamped": "7831e3db",
-  "strings": "1f721eb0ad46d895",
-  "why": "81.119 added the NOTE writer and reader (notes now survive a Normal save, which the page's Files section already describes as a Sheet document's contents and needs no new words) and SH_VER put 'Version 2.1' on the About card's empty third line - one line here, since the card is something the reader can open"
+  "stamped": "6d53446d",
+  "strings": "854ef1a2afd44837",
+  "why": "rewritten for Sheet 2.1 against apps/sheet/sheet.asm: menus, shortcut table, Undo/Redo, Paste Special/Link, Data database commands, Series, Table, Parse, Justify, Options Display/Workspace/Freeze/Protect, per-row/column sizes, recorder, six file formats, CHART.OVL/MACRO.OVL; no capture run"
  },
  "SHEET_WAB": {
   "sources": [],
@@ -938,9 +996,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "e4576a70",
-  "strings": "61d798f4ae5a6f01",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "ce84b635",
+  "strings": "84884b633231227c",
+  "why": "Digital sound refused when an XT's hard disk owns IRQ 5 (SPEC.md 34.5.6): the toast, the fall back to speaker or Covox, FM and MIDI unaffected, the jumper as the cure. The volume panel and mixer text already matched the driver; 'Volume needs memory' is a rare refusal and stays unwritten. Page and lock entry arrived byte-identical from upstream, stale there too."
  },
  "SPACEJAM_MID": {
   "sources": [],
@@ -969,6 +1027,14 @@
   "stamped": "d0d605c1",
   "strings": "c5eb21b124ad2c07",
   "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+ },
+ "SYSCHECK_O88": {
+  "sources": [
+   "apps/syscheck"
+  ],
+  "stamped": "b4d46a82",
+  "strings": "6c7bfd7a870376d8",
+  "why": "Section renumber 116 to 118 in source comments only; the page already describes the drive chooser and cites no section"
  },
  "SYSTEM": {
   "sources": [],
@@ -1008,9 +1074,9 @@
   "sources": [
    "apps/taskmgr"
   ],
-  "stamped": "8a6a203d",
-  "strings": "1473638a0dbc623b",
-  "why": "the IVT+Pad row (02aae095): described on both pages, folded into System on a short screen"
+  "stamped": "f596e80c",
+  "strings": "3227cc1b27be84bd",
+  "why": "the memory page and the heap page are one page now (SPEC.md 28.4.10): two pages, collapsible owner groups, the PROGRAMS/SYSTEM and +ALL/-ALL switches, AVAIL/MAX RUN; the third page and its heap shot removed; checked against taskmgr.asm's strings and SPEC.md 28.4.10"
  },
  "TELNET_O88": {
   "sources": [
@@ -1088,9 +1154,9 @@
    "tools/os88venc.py",
    "tools/os88vencgui.py"
   ],
-  "stamped": "2622ee65",
-  "strings": "3a72b4164e7def7a",
-  "why": "--ladder-at (By time) and --scene-join (Scene join): the page names both"
+  "stamped": "e4b13e8c",
+  "strings": "1b990c96f4c98207",
+  "why": "Blocks (version 2) described under Good to know: the option, what it trades, what plays it, what it is greyed against"
  },
  "TRACKER_O88": {
   "sources": [
@@ -1120,21 +1186,23 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
- "VBE_DRV": {
+ "VESA_DRV": {
   "sources": [
-   "drivers/vbe"
+   "drivers/vesa/vesa.asm",
+   "kernel/vidext.inc",
+   "kernel/ctrl.inc"
   ],
-  "stamped": "e780591d",
-  "strings": "310cb7c7361bc78e",
-  "why": "new page for the VESA 1024x768 overlay (SPEC.md 39.29), written from drivers/vbe/vbe.asm and the Control Panel's own Display list"
+  "stamped": "603832f2",
+  "strings": "85e31060566354fb",
+  "why": "new page for VESA.DRV (SPEC.md 120): what it does, how it is loaded, choosing a screen, what it does not offer"
  },
  "VIDEO_O88": {
   "sources": [
    "apps/video"
   ],
-  "stamped": "d511fdd4",
-  "strings": "52e0d90cf0b17d66",
-  "why": "a paused Live play: the card says Paused at m:ss, and the box shows the frame even when paused before the first pass"
+  "stamped": "7feb6f7f",
+  "strings": "e12854274eb7881d",
+  "why": "merge of protected-mode into elendilon: both sides' strings (version 2's Needs the block decoder, the XMS-in-place-under-protected-mode card lines) checked against the page; the block decoder's second assembly for protected mode adds no string and is below the page's level; unchanged"
  },
  "VMMOUSE_DRV": {
   "sources": [
@@ -1204,17 +1272,17 @@
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "2edd2c29",
-  "strings": "9f00405fd48854f1",
-  "why": "dates and day dividers, @mentions and Tab completion, the colour face and its lamps (SPEC.md 113.2.4, 113.5.1, 113.5.2)"
+  "stamped": "99a078b7",
+  "strings": "46102694697221e1",
+  "why": "Wired default (LEDs, colour on a colour screen), Mono-Dark, header without the display words, Find highlights the input box: Themes, Searching and the window table rewritten"
  },
  "WIREFLET_O88": {
   "sources": [
    "apps/wirefleet"
   ],
-  "stamped": "e3e1efbf",
-  "strings": "24bef22c86f73ff1",
-  "why": "2400 baud and Link > Statistics described"
+  "stamped": "3f9bc879",
+  "strings": "4f7d7f10c65ff1a8",
+  "why": "missiles, impacts, music and the Music U item added to Connect and deploy and Display and sound (SPEC 114.11)"
  },
  "WORD": {
   "sources": [],
@@ -1243,5 +1311,13 @@
   "stamped": "e4576a70",
   "strings": "9b380de63648dbc5",
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+ },
+ "XTMP3_O88": {
+  "sources": [
+   "apps/xtmp3"
+  ],
+  "stamped": "74fd2859",
+  "strings": "e290cfe92f1bcc9d",
+  "why": "round 7: Loading - the whole song read into memory before it plays when there is room, playback then reads no disk"
  }
 }

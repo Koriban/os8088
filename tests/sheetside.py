@@ -45,12 +45,12 @@ import sheetfmt as SF                                        # noqa: E402
 import sheetxl2 as X2                                        # noqa: E402
 import glass                                                 # noqa: E402
 
-WORK = "build/sheetside"                # this row's own paths (WRITING-TESTS 5.5)
 # RESOLVED AT THE DEFINITION, which fixes every use below at once
 # (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
 # its artefact, so `wants=` cannot help - make has no rule for it -
 # and writing it into the shared build/ while os88marty reads the
 # run's frozen tree is a soak-only FileNotFoundError.
+WORK = os88build.at("build/sheetside")                # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetside.img")
 EDIT = (123, 45)
 OPTIONS = (371, 45)
@@ -123,10 +123,11 @@ def main():
             def inked(y):
                 return sum(1 for x in range(x1, x2) if not rows[y][x]) > \
                     (x2 - x1) * 3 // 4
-            # each of rows 1-3 as (top, bottom): a top border is drawn on the
-            # cell's first pixel row, its gridline's, and a BOTTOM one on its
-            # last - the row above the next cell's line (sh_drawborders)
-            edges[tag] = [(inked(ys[r]), inked(ys[r + 1] - 1))
+            # each of rows 1-3 as (top, bottom): a top border is drawn one
+            # row IN from the cell's gridline (SPEC.md 81.17.2 - on the line
+            # itself it could not be seen), and a BOTTOM one on its last - the
+            # row above the next cell's line (sh_drawborders)
+            edges[tag] = [(inked(ys[r] + 1), inked(ys[r + 1] - 1))
                           for r in range(3)]
 
         def rowop(item):

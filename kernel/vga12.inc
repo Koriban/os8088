@@ -1241,7 +1241,7 @@ gfx_ls_zero dw 0                ; .text with a real initialiser: -f bin zeroes
                                 ; call - and since .pass resolves the FIRST
                                 ; point's box itself, not even that
 %else
-    mov ax, cs                  ; gfx_ls_box reads the clip table through DS,
+    KSEGR ax                    ; gfx_ls_box reads the clip table through DS,
     mov ds, ax                  ; so put the kernel's back - by RELOAD, and
     call gfx_ls_box             ; through no wrapper, because a wrapper is two
     mov ds, [gfx_pt_cseg]       ; more words of the caller's slice. AX is dead
@@ -1281,7 +1281,7 @@ gfx_ls_zero dw 0                ; .text with a real initialiser: -f bin zeroes
 ; it replaces, at a point the slice-class gate (t_stkclass) still walks.
 ; -----------------------------------------------------------------------------
 gfx_pt_miss:
-    mov ax, cs
+    KSEGR ax
     mov ds, ax
     call gfx_ls_box
     mov ds, [gfx_pt_cseg]
@@ -1498,7 +1498,7 @@ gfx_points:
     GFXPT_LOOP 2
 %endif
 .done:
-    mov ax, cs                  ; DS back, by reload rather than by pop: kernel
+    KSEGR ax                    ; DS back, by reload rather than by pop: kernel
     mov ds, ax                  ; code always runs DS = CS = KERNEL_SEG, so
     mov es, [gfx_pt_cseg]       ; there is nothing to remember - and ES back to
     pop cx                      ; the ARRAY, which a second pass re-reads
@@ -1525,7 +1525,7 @@ gfx_points:
     jmp .hook
 %endif
 .out:
-    mov ax, cs                  ; DS back, by reload rather than by pop: kernel
+    KSEGR ax                    ; DS back, by reload rather than by pop: kernel
     mov ds, ax                  ; code always runs DS = CS = KERNEL_SEG, so
     jmp kret_es                 ; there is nothing to remember. THE LEAVE IS
                                 ; NOT HERE - `.done` owns it, because only a
@@ -1823,6 +1823,27 @@ vga_b4out:
 ; none of it costs anything at all, because the gate short-circuits on
 ; [vid_ndisp] two instructions in.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; gfx_blitd - OSAPI_GFX_BLITD (SPEC.md 120.7): a package's block AT THE
+;             DISPLAY'S DEPTH, or its DAC entries - the driver's whole, and
+;             nothing of the kernel's but the cursor hide. ES:SI = pixels, BP
+;             = the stride, AX/BX = x/y, CX/DX = w/h; CX = 0 is the palette
+;             form. out CF = 1 refused: a display that is not packed, a
+;             kernel without the hook, or the driver's own refusal
+; -----------------------------------------------------------------------------
+gfx_blitd:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 1
+    jne .no
+    call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
+    call vx_call
+    db VX_BLITD
+    ret
+.no:
+%endif
+    stc
+    ret
+
 gfx_blit4:
     KFZ 25                      ; a packed-4bpp block (SPEC.md 5.4)
     call cur_unlazy              ; off the clip list (SPEC.md 11.3): 7.1.4
@@ -1986,6 +2007,11 @@ gfx_blit4:
                                 ; GFXDISP (SPEC.md 39.14.7)
 .dsp1:
 %endif
+    VIDEXTC VX_BLIT4, .out      ; a packed display (SPEC.md 120.3): the block
+                                ; is the driver's whole - the gfx_blit_* cells
+                                ; are set, ES:SI and BP are the source - and
+                                ; .out tears down nothing ([gfx_blit_fst] is
+                                ; still 0) but the hook, if one was taken
 %ifdef GFX_VGA
     cmp byte [vid_mono], 0
     je .vga                     ; (no test at all without a VGA in the build:
@@ -2778,6 +2804,12 @@ gfx_blitp:
     stc                         ; the same reason: the guard is INSIDE the
 .exit:                          ; geometry's own push and one is outstanding
     jmp .out
+%ifdef VID_EXT
+    db 0                        ; PARITY, never executed (between a jmp and a
+                                ; jump target): VIDEXTR's seven bytes above
+                                ; are even with it, and font_run keeps its
+                                ; entry parity (tests/unit/t_hotpar.py)
+%endif
 .clipok:
     test al, 7
     jz .xal                     ; x off the byte grid - refused, but for a
@@ -2834,6 +2866,10 @@ gfx_blitp:
     ; stops being true.
     cmp byte [vid_mono], 0
     jne .no
+    VIDEXTR .no                 ; ...and a packed display refuses too (SPEC.md
+                                ; 120.3.1): the source is a plane layout this
+                                ; display does not have, and Paint keeps its
+                                ; gfx_blit4 fallback for exactly this answer
     ; --- the geometry, once for the whole block. (The first version of this
     ; shifted with `mov cl, 3` and then popped x into CX - a count destroyed by
     ; the value it was going to shift, which made the block one byte too wide
@@ -2904,21 +2940,6 @@ gfx_blitp:
     jbe .row                    ; borrow, when y is off it either way...
     cmp ax, dx
     jb .row                     ; ...and fewer than the block: .row skips them
-    ; ...AND NOT ACROSS A BANK BOUNDARY (SPEC.md 39.29.10.5). The fast path's
-    ; own account above says why it cannot be: it holds the block's first
-    ; framebuffer byte and steps by [vid_stride], "every planar surface being
-    ; ONE bank". A straddling block goes to .row, which calls gfx_rowbase for
-    ; EVERY row and so homes the window for every row - the general path the
-    ; plan always intended for this, and what 39.29.10 already does for
-    ; gfx_scroll. Two compares and an add, once a blit, both falling through
-    ; on every mode but 0104h because [vbe_cutrow] is 0xFFFF there and no
-    ; block can reach row 65,535.
-    cmp bx, [vbe_cutrow]
-    jae .row                    ; starts at or past a boundary
-    mov ax, bx
-    add ax, dx
-    cmp ax, [vbe_cutrow]
-    ja .row                     ; ...or ends past one
     mov ax, bx
     mov bx, dx                  ; BX = the rows, again for every plane
     push cx                     ; gfx_rowbase's calc path writes CL and DX
@@ -2935,11 +2956,7 @@ gfx_blitp:
     mov ah, 1                   ; this plane's Map Mask bit
 .fpl:
     pop di
-    push di                     ; every plane restarts at the block's first
-                                ; byte - and needs no vbe_home with it, the
-                                ; test above having confined this block to one
-                                ; bank, so the window has not moved since
-                                ; gfx_rowbase homed it (SPEC.md 39.29.10.5)
+    push di
     push si
     push ax
     mov dx, VGA_SEQ
@@ -2952,7 +2969,7 @@ gfx_blitp:
     mov cx, [ss:vga_pr_n]
     rep movsb
     add si, ax
-    VBSTEPR di, bp              ; no bank test: one bank, by the test above
+    add di, bp
     dec dx
     jnz .frow
     pop ax
@@ -2962,8 +2979,8 @@ gfx_blitp:
     cmp ah, 0x10
     jb .fpl
     pop di
-    push cs
-    pop ds                      ; the kernel's again, for the teardown
+    KDS
+                                ; the kernel's again, for the teardown
     jmp short .rowsdone
 .row:
     cmp bx, [vid_ch]
@@ -3193,9 +3210,6 @@ vga_sr_xor:
     jmp short vga_solid_rect.arm
 vga_sr_dq:
     jmp vga_solid_rect.done
-    VBCUT_ARM vga_solid_rect    ; ...and the THIRD rare arm: a rect straddling
-                                ; a VBE bank boundary, cut into one rect per
-                                ; bank and run once each (SPEC.md 39.29.10.5)
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -3243,18 +3257,9 @@ gfx_fill_raw:
 ; The 1bpp arm pays nothing.
 ; -----------------------------------------------------------------------------
 vga_solid_rect:
-    VBCUT vga_solid_rect        ; one unsigned compare and a not-taken branch,
-                                ; here at the ENTRY rather than once a row
-                                ; inside three walks (PERFORMANCE.md Set 161).
-                                ; THE HOOK IS ON THIS ROUTINE AND NOT ON THE
-                                ; FOUR `_raw` ENTRIES ABOVE IT, because this
-                                ; is where all three routes meet:
-                                ; gfx_fill_raw falls in, gfx_xor_fill_raw
-                                ; arrives through vga_xor_fill_vram, and
-                                ; menu.inc enters vga_xor_fill_vram directly.
-                                ; One hook covers the lot; four would have
-                                ; left that third route uncut and this
-                                ; routine's VBSTEPs unsafe
+    VIDEXT VX_FILL              ; a packed display (SPEC.md 120.3): the driver
+                                ; fills - or XORs, [vga_xorm] being set by
+                                ; both callers above - and returns to OURS
     push ax
     push bx
     push cx
@@ -3285,13 +3290,7 @@ vga_solid_rect:
                                 ; instruction: Set/Reset supplies all four
                                 ; planes, so the byte written (AL's old value)
                                 ; is don't-care - font.inc's idiom
-    VBSTEP di                   ; the LIVE stride, and NO bank test: VBCUT
-                                ; above has confined this rect to one 64KB
-                                ; window, so the add cannot carry (SPEC.md
-                                ; 39.29.10.5). `add di, ROW_BYTES` is still
-                                ; wrong - 80 is the VGA REFERENCE stride and
-                                ; 1024 wide is 128 - which is what the macro
-                                ; is for
+    add di, ROW_BYTES
     dec si
     jnz .lcol
     mov bx, [gfx_rspan]
@@ -3304,7 +3303,7 @@ vga_solid_rect:
     mov si, [gfx_rrows]
 .rcol:
     xchg [es:di], al            ; latch load and masked write in ONE instruction
-    VBSTEP di                    ; ...banked, as .lcol above
+    add di, ROW_BYTES
     dec si
     jnz .rcol
     dec bx                      ; interior bytes per row
@@ -3314,14 +3313,14 @@ vga_solid_rect:
     mov di, [gfx_roff]
     inc di
     mov si, [gfx_rrows]
-    mov dx, [vid_stride]        ; DX = the row step LESS what the rep advances
+    mov dx, ROW_BYTES           ; DX = the row step LESS what the rep advances
     sub dx, bx                  ; DI by, so one add ends the row (SPEC.md 5.7.1)
     cmp byte [vga_xorm], 0
     jne .xrow
 .irow:
     mov cx, bx
     rep stosb
-    VBSTEPR di, dx
+    add di, dx
     dec si
     jnz .irow
     jmp short .reset
@@ -3331,7 +3330,7 @@ vga_solid_rect:
     mov al, [es:di]
     stosb
     loop .xbyte
-    VBSTEPR di, dx
+    add di, dx
     dec si
     jnz .xrow
 .reset:
@@ -3442,6 +3441,15 @@ gfx_spans:
     mov [gfx_sp_n], bx
 .rows:
     mov [gfx_sp_y], ax
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 120.3.1): AX is the
+    jz .vxplanar                ; first row, clipped, and the gfx_sp_* cells
+    CURUNLAZY                   ; the list - the hide is owed as below
+    call vx_call
+    db VX_SPANS
+    jmp .done
+.vxplanar:
+%endif
     call gfx_rowbase            ; the ONE row base this call computes
     mov [gfx_sp_row], ax
     CURUNLAZY                   ; unclipped, so this may write any pixel on
@@ -3593,7 +3601,6 @@ gfx_sp_next:
 ; every package and on every C package through os88thunk.asm. Do not re-derive
 ; it: docs/plans/LAST-DROP-BYTES.md 7.6 carries the numbers and the flip condition.
 ; -----------------------------------------------------------------------------
-    VBCUT_ARM gfx_fill_gray_raw ; the bank-straddle arm, above the entry
     GFXCLIP_ARM gfx_fill_gray
     GFXCLIP gfx_fill_gray
 gfx_fill_gray_d:
@@ -3604,9 +3611,7 @@ gfx_fill_gray_d:
 gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_gray
-    VBCUT gfx_fill_gray_raw     ; ...and BELOW the 1bpp jump, so a mono
-                                ; machine still pays nothing (SPEC.md
-                                ; 39.29.10.5)
+    VIDEXT VX_GRAY              ; ...and a packed display's (SPEC.md 120.3)
     push ax
     push bx
     push cx
@@ -3633,7 +3638,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, bh                  ; the dither byte, then ONE xchg: the read
     xchg [es:di], al            ; loads the latches, the write is masked
     not bh                      ; AA <-> 55 each row
-    VBSTEP di
+    add di, ROW_BYTES
     dec si
     jnz .lcol
     mov cx, [gfx_rspan]
@@ -3649,7 +3654,7 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov al, bh
     xchg [es:di], al            ; latch load, then the dither byte
     not bh
-    VBSTEP di
+    add di, ROW_BYTES
     dec si
     jnz .rcol
     dec cx                      ; interior bytes per row
@@ -3661,13 +3666,13 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
     mov si, [gfx_rrows]
     mov ah, bl                  ; the row pattern moves to AH so BX can carry
     mov bx, cx                  ; the count the rep destroys, and DX the row
-    mov dx, [vid_stride]        ; step less that count (SPEC.md 5.7.1)
+    mov dx, ROW_BYTES           ; step less that count (SPEC.md 5.7.1)
     sub dx, bx
 .irow:
     mov al, ah
     mov cx, bx
     rep stosb
-    VBSTEPR di, dx
+    add di, dx
     not ah
     dec si
     jnz .irow
@@ -3722,7 +3727,6 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
 ; pointer and always was; giving it a segment would put one on every kernel
 ; caller of a primitive that is drawn per fragment.
 ; -----------------------------------------------------------------------------
-    VBCUT_ARM gfx_fill_pat_raw  ; the bank-straddle arm, above the entry
     GFXCLIP_ARM gfx_fill_pat    ; gfx_fill_pat's clipped arm sits HERE, above
                                 ; the slot that falls into the entry, because
                                 ; nothing may sit between the two
@@ -3762,7 +3766,8 @@ gfx_fill_pat_d:
 gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     cmp byte [vid_mono], 0      ; 1bpp? then the software renderer IS
     jne sw_fill_pat
-    VBCUT gfx_fill_pat_raw      ; ...and BELOW the 1bpp jump, as gfx_fill_gray
+    VIDEXT VX_PAT               ; ...and a packed display's (SPEC.md 120.3):
+                                ; the eight bytes at [gfx_pat], unstaged
     push ax
     push bx
     push cx
@@ -3803,7 +3808,7 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     mov cx, dx
     rep stosb
     sub di, dx
-    VBSTEP di
+    add di, ROW_BYTES
     inc bx
     and bx, 7
     dec si
@@ -3828,9 +3833,9 @@ gfx_fill_pat_raw:                              ; only renderer gfx_fill_pat has
     xchg [es:di], ah            ; follow the latch load immediately
     inc bx
     and bx, 7
-    VBSTEP di                   ; not `add di, ROW_BYTES`: 80 is the VGA
-    dec si                      ; REFERENCE stride and this walks the LIVE one.
-    jnz .crow                   ; No bank test - VBCUT owns that (39.29.10.5)
+    add di, ROW_BYTES
+    dec si
+    jnz .crow
     ret
 %endif
 
@@ -4104,6 +4109,8 @@ vga_save_vram:                              ; only renderer gfx_save has
     cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
     jne sw_save                 ; on mono the framebuffer IS the renderer's
                                 ; target, so one "plane" of sw_xfer is it
+    VIDEXT VX_SAVE              ; ...and a packed display's save is the
+                                ; driver's, in [vga_pn]'s terms (SPEC.md 120.4)
     push ax
     push bx
     push cx
@@ -4115,12 +4122,6 @@ vga_save_vram:                              ; only renderer gfx_save has
     mov bl, [vga_pn]            ; BL = the planes the caller armed, BH = this
     xor bh, bh                  ; one: a register pair where a .bss byte was
 .plane:                         ; three memory operands a plane (size pass 9)
-    VBHOME                      ; the NEXT plane restarts here, and the last one
-                                ; left where ITS last row ended (39.29.10.2).
-                                ; BEFORE the GC4 arm below and not after: it
-                                ; far-calls the BIOS, which may leave GC4 and
-                                ; SEQ2 as it pleases (39.29.10.1). BX is safe
-                                ; across it - vbe_bank pushes all eight
     mov dx, VGA_GC
     mov ah, bh
     mov al, 4                   ; GC4: Read Map Select
@@ -4135,16 +4136,8 @@ vga_save_vram:                              ; only renderer gfx_save has
 .row:
     mov cx, bp
     rep movsb                   ; buffer DI advances contiguously
-    sub si, bp                  ; BACK TO THE ROW'S OWN BASE **BEFORE** THE
-                                ; STEP, or the carry is computed on
-                                ; start+bp+stride and the true crossing is at
-                                ; start+stride - so the bank advances up to BP
-                                ; bytes early (SPEC.md 39.29.10.4)
-    VBROWCS si                  ; CS: IS MANDATORY - DS is VGA_SEG in here for
-                                ; the movsb, so a DS-relative read of the
-                                ; stride fetches PIXELS. That is what it did:
-                                ; the cursor, every menu and every window
-                                ; save-under came back as garbage trails
+    add si, ROW_BYTES
+    sub si, bp
     dec dx
     jnz .row
     pop ds
@@ -4374,6 +4367,7 @@ gfx_restore:
 vga_restore_vram:                              ; only renderer gfx_restore has
     cmp byte [vid_mono], 0      ; see vga_save_vram
     jne sw_restore
+    VIDEXT VX_RESTORE           ; ...and the driver's, [gfx_sub_*] honoured
     push ax
     push bx
     push cx
@@ -4390,8 +4384,6 @@ vga_restore_vram:                              ; only renderer gfx_restore has
                                 ; In BL, which nothing below touches, and not
                                 ; in a .bss byte (size pass 9)
 .plane:
-    VBHOME                      ; the NEXT plane restarts here, and the last one
-                                ; left where ITS last row ended (SPEC.md 39.29.10.2)
     mov dx, VGA_SEQ
     mov ah, bl
     mov al, 2                   ; SEQ2: Map Mask = this plane only
@@ -4410,10 +4402,8 @@ vga_restore_vram:                              ; only renderer gfx_restore has
     mov cx, bp
     rep movsb
     add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
-    sub di, bp                  ; ...and the row's own base BEFORE the step,
-                                ; for vga_save_vram's reason (39.29.10.4)
-    VBROWCS di                  ; ...and so is this one, for the same reason -
-                                ; the line above was already saying so
+    add di, ROW_BYTES
+    sub di, bp
     dec dx
     jnz .row
     pop es
@@ -4912,21 +4902,6 @@ gfx_scroll:
                                 ; left - and the two edge tests below then
                                 ; REFUSE a rect that reaches past that display,
                                 ; which is 39.14.2's straddle rule for free
-%ifdef GFX_VGA
-    cmp byte [vid_kind], VID_VBE    ; A BANKED SURFACE CANNOT BE SCROLLED
-    je .no                          ; THROUGH THE LATCHES (SPEC.md 39.29.10).
-                                    ; vgas_lincopy moves the region with source
-                                    ; and destination BOTH in VRAM, stepping by
-                                    ; the stride - and across a bank boundary
-                                    ; the two ends want different windows at
-                                    ; the same instant, which one window cannot
-                                    ; express. Its own comment already says it
-                                    ; assumes one bank. This is a REFUSAL the
-                                    ; contract above already has, and every
-                                    ; caller answers it with a full repaint;
-                                    ; VBE's window B is the eventual answer and
-                                    ; is not pass 1
-%endif
     test al, 7                  ; byte-column granularity on every adapter
     jnz .no                     ; (the LOW byte is all the test reads, and the
     mov di, cx                  ; 8-bit form is a byte shorter - size pass 9)
@@ -4982,6 +4957,8 @@ gfx_scroll:
     mov [vgas_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
     mov word [vgas_step], -1     ; bottom-up (source above destination)
 .disp:
+    VIDEXTC VX_SCROLL, .ok      ; a packed display (SPEC.md 120.3.1): the six
+                                ; vgas_* cells say what moves where
 %ifdef GFX_VGA
     cmp byte [vid_planes], 1
     je .mono
@@ -5012,8 +4989,7 @@ gfx_scroll:
     pop ds                      ; DS = ES = the target for the movs
     cld
     rep movsb
-    push cs
-    pop ds
+    KDS
     add bx, [vgas_step]
     dec word [vgas_rows]
     jnz .lr
@@ -5051,8 +5027,7 @@ gfx_scroll:
     push es
     pop ds                      ; DS = ES = the target for the movs
     rep movsb
-    push cs
-    pop ds
+    KDS
     add di, bx
     dec word [vgas_rows]
     jnz .lr
@@ -5114,8 +5089,7 @@ vgas_bankcopy:                  ; (no DS bank, for the linear copy's reason)
     push es
     pop ds
     rep movsb
-    push cs
-    pop ds
+    KDS
     sub di, [vgas_nb]           ; back to the row's own byte: rep movsb left DI
                                 ; nb past it, and the advance below is
                                 ; column-preserving, so it has to start from
@@ -5142,8 +5116,7 @@ vgas_bankcopy:                  ; (no DS bank, for the linear copy's reason)
     pop ds
     cld
     rep movsb
-    push cs
-    pop ds
+    KDS
     add bx, [vgas_step]
     dec word [vgas_rows]
     jnz .r
@@ -5648,6 +5621,17 @@ gfx_blit1_x:
     mov dx, [vid_ch]
     sub dx, bx
 .ybot:
+%ifdef VID_EXT
+    cmp byte [vid_ext], 0       ; a packed display (SPEC.md 120.3.1): the band
+    jz .vxplanar                ; is clipped and local, the pen and the head
+    call KERNEL_SEG:vx_callf1   ; mask are in the cells, and the driver puts
+    jmp .done                   ; it down. BEFORE .pen, whose port program
+                                ; would be wrong for a packed mode; .done tears
+                                ; down nothing ([gfx_b1act] is 0). The hook is
+                                ; 5 + 2 + 5 + 3 = 15 bytes...
+    nop                         ; ...and this PARITY pad, never executed, is
+.vxplanar:                      ; the sixteenth, so .cold's dsk_* keep their
+%endif                          ; entry parity (tests/unit/t_hotpar.py)
 
 %ifdef GFX_VGA                  ; SPEC.md 5.4.2.5: no VGA in this build, so no PEN
     call .pen                   ; SPEC.md 5.4.2.4: THE PEN, now that there IS a

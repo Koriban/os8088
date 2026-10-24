@@ -160,6 +160,9 @@ ch_ovdir       equ ch_ovfar + 4      ; word } the folder this package was
 ch_ovdrv       equ ch_ovdir + 2      ; byte } LAUNCHED from, banked at entry
 ch_ovwdr       equ ch_ovdrv + 1      ; byte } ...and where the USER had the
 ch_ovwas       equ ch_ovwdr + 1      ; word } volume, put back after the load
+ch_ovfail      equ ch_ovwas + 2      ; byte: the load failed - not retried
+                                     ; (a word's room, so what follows keeps
+                                     ; its parity)
 
-CH_BSS_END     equ ch_ovwas + 2      ; where the caller's own chain resumes
+CH_BSS_END     equ ch_ovfail + 2     ; where the caller's own chain resumes
 CH_BSS_SIZE    equ CH_BSS_END - CH_BSS_BASE

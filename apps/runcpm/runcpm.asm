@@ -40,7 +40,7 @@
                                     ; os88_menu_set() patches the trampoline in
 %define CC_HAS_WORKER               ; void os88_worker(void *) - hired only
 
-%define CC_STACK_CLASS OS88_STACK_256 ; ...AND HOW MUCH STACK IT WANTS
+%define CC_STACK_CLASS OS88_STACK_256 | OS88_HIGH | OS88_HIGHMEM ; ...AND HOW MUCH STACK IT WANTS
                                     ; (SPEC.md 8.7). Declared rather
                                     ; than defaulted:
                                     ; the same shape as CWORD's: os88_worker() sleeps four ticks a pass
@@ -73,8 +73,10 @@
                                     ; DIR or .COM load is an F_OPEN/F_SFIRST.
                                     ; Lazy would only move the read a quarter
                                     ; of a second later. The CCP rides in it
-                                    ; (below), so it is the only part, and the
-                                    ; carve is movable (crt0's cc_ovcarve)
+                                    ; (below), so it is the only part. The
+                                    ; carve is PINNED since SPEC.md 73.14.2.1
+                                    ; (114.6): crt0 declares no eager carve
+                                    ; movable any more
 %define CC_ICON "runcpm/icon.inc"   ; RunCPM.ico, 16x16 at 1bpp (SPEC.md 20.2,
                                     ; 74.5) - crt0 puts it at file offset 32
                                     ; and checks the length

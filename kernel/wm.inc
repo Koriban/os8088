@@ -355,8 +355,7 @@ WMIN_H     equ 64               ; (SPEC.md 11.1; mirrored in apps/os88api.inc)
 ; the OWNER's segment. One place decides which that is.
 ; -----------------------------------------------------------------------------
 wm_strseg:
-    push cs
-    pop es
+    KES
     cmp word [di+W_SEG], 0
     je .out
     mov es, [di+W_SEG]
@@ -419,8 +418,8 @@ wm_pkgcall:
 %endif
     push ds
     push es
-    push cs
-    pop es                      ; ES = KERNEL_SEG: the record lives here and
+    KES
+                                ; ES = KERNEL_SEG: the record lives here and
                                 ; the callback may read it
 %ifdef SNAPAUDIT
     mov [snap_cur], si          ; SPEC.md 11.94.2: everything drawn from here
@@ -442,14 +441,28 @@ wm_pkgcall:
     cmp word [es:si+W_SEG], 0   ; (the cmp sets the flags the branch reads, so
     je .near                    ; the `and` above cannot reach it)
     mov ds, [es:si+W_SEG]       ; DS = the package's own segment...
+%ifdef KERN_MEGA
+    call COLD_SEG:mega_pcin_x   ; ...and the bracket below, plus kern_mega's
+%else                           ; CATCH for a fault in it (KERN-MEGA-PLAN 14.42)
     call COLD_SEG:wm_nest_pushd_x   ; ...WHICH A FRAME IS ABOUT TO REFER TO
+%endif
                                 ; (SPEC.md 66.6.1), and the push reads it from
                                 ; DS, so the segment costs no register here at
                                 ; all - AX and BX are the CALLBACK's
+%ifdef KERN_MEGA
+    MEGA_PCALL [es:si+W_DISP], [es:si+W_SEG]               ; ...and off to its dispatcher: W_SEG is DATA,
+..@mega_pcret_w:                   ; (a fault in the callback is UNWOUND to here,
+                                ; CF = 1: KERN-MEGA-PLAN 14.42, mega_fkill)
+%else                           ; the call wants its code alias (mega.inc)
     call far [es:si+W_DISP]     ; ...and off to its dispatcher
-    push cs                     ; DS IS THE PACKAGE'S at the return, and `.out`
-    pop ds                      ; below restores the caller's, so borrowing it
+%endif
+    KDS                         ; DS IS THE PACKAGE'S at the return, and `.out`
+                                ; below restores the caller's, so borrowing it
+%ifdef KERN_MEGA
+    call COLD_SEG:mega_pcout_x  ; (the catch comes off with the bracket)
+%else
     call COLD_SEG:wm_nest_pop_x ; for two instructions costs nothing. ES is no
+%endif
                                 ; safer - a callback may clobber it (SPEC.md
                                 ; 13). A CALLBACK ANSWERS IN THE FLAGS (an
                                 ; entry proc's CF, W_ONSIZE's), so the pop
@@ -1382,7 +1395,12 @@ wm_create:
 %endif                              ; dispatcher's fixed offset, and the
     mov ax, cs                      ; segment the caller called us in. Ours
     cmp si, ax                      ; means a KERNEL window, which is what
+%ifdef KERN_MEGA
+    je .kwin                        ; (kern_mega: the kernel's DS is its DATA
+    cmp si, MEGA_SEL_KDATA          ; alias, not CS - mega.inc)
+%endif
     jne .pkgseg                     ; W_SEG = 0 says (SPEC.md 20.1)
+.kwin:
     xor si, si
 .pkgseg:
 %ifdef HMA_DRV
@@ -1669,29 +1687,18 @@ wm_pref_take:
     push es
 %ifdef GFX_VGA                  ; no EGA on a build with no VGA renderer
     cmp al, VID_EGA             ; the per-window PREF table has THREE entries,
-    je .asvga                   ; VID_VGA / VID_HERC / VID_CGA, and the kind
-    cmp al, VID_VBE             ; indexes it (kind*4) below - so an unclamped
-    jne .kindok                 ; EGA reads si+12 and an unclamped VBE reads
-.asvga:                         ; si+16, OFF THE END of a table in the
-    mov al, VID_VGA             ; PACKAGE's own segment. Both take VGA's row -
-.kindok:                        ; each is VGA's planar path at another size -
+    jb .kindok                  ; VID_VGA / VID_HERC / VID_CGA, and the kind
+    mov al, VID_VGA             ; indexes it (kind*4) below - so an unclamped
+.kindok:                        ; EGA reads si+12, off the end of a table in
 %endif
-                                ; and a package cannot supply a fourth or
-                                ; fifth pair without an ABI break (SPEC.md
-                                ; 39.8, 39.24, 39.29).
-                                ;
-                                ; VBE WAS THE ONE THAT SHIPPED BROKEN. The
-                                ; field photographed a Task Manager whose
-                                ; TITLE BAR ran the full width of a 1024x768
-                                ; desktop, over the window beside it, with its
-                                ; caption centred on the SCREEN: wm_bar_span
-                                ; reads W_X and W_W and nothing else, so the
-                                ; record itself held whatever four bytes
-                                ; followed that package's three-entry table.
-                                ; Stage 1 found four kernel tables indexed by
-                                ; [vid_kind] with no bound (SPEC.md 39.29.4)
-                                ; and missed this one, because the table it
-                                ; runs off is not the kernel's.
+                                ; the PACKAGE's own segment. An EGA machine
+                                ; takes VGA's row - it is VGA's planar path,
+                                ; and a package cannot supply a fourth pair
+                                ; without an ABI break (SPEC.md 39.8, 39.24).
+                                ; **AND SO DOES A VESA ONE** (kind 4, SPEC.md
+                                ; 120.5): `jb`, not `jne`, because the `jne`
+                                ; let kind 4 read si+16 and nine packages
+                                ; opened at the sizes it found there
     test byte [bx+W_FLAGS+1], WF_USRSZ >> 8
     jnz .no                     ; A USER OUTRANKS AN APPLICATION (SPEC.md
                                 ; 11.100.5): once somebody has sized this window
@@ -1838,18 +1845,18 @@ wm_display:
     mov si, MBAR_H
     mov dl, [vid_kind]
 .bpp:
+%ifdef VID_EXT
+    cmp dl, VID_VESA
+    jne .nvx
+    mov dh, [vx_bpp]            ; a packed display: 8 or 16 (SPEC.md 120.4)
+    ret
+.nvx:
+%endif
     mov dh, 4
     or dl, dl
     jz .r                       ; VID_VGA -> 4 planes
     cmp dl, VID_EGA
     je .r                       ; VID_EGA -> 4 planes too, mode 10h (39.24)
-    cmp dl, VID_VBE
-    je .r                       ; ...and VID_VBE, which is the same four planes
-                                ; at 1024 wide (SPEC.md 39.29). THIS ONE WAS
-                                ; NOT A RANGE ERROR BUT A WRONG ANSWER: without
-                                ; it a VBE machine fell to the 1bpp arm below
-                                ; and every save-under wm_fit sized was a
-                                ; quarter of the bytes it needed
     mov dh, 1                    ; HERC / CGA / a secondary's mono kind (39.4)
 .r:
 %endif
@@ -9857,6 +9864,11 @@ wm_su_drop_all:
     pop bx
     popf
     ret
+%ifdef KERN_MEGA
+wm_su_drop_allf:                ; ...for a FAR caller: mem_hicaches_f, which
+    call wm_su_drop_all         ; drops the boot's caches so the next raise
+    retf                        ; re-takes each above 1MB (KERN-MEGA-PLAN 84)
+%endif
 %ifdef KERN_SMALL
 section .text
 %endif

@@ -147,7 +147,8 @@
     dw 0x0000
     OS88_ICON16_END
 
-; The three sheet formats this app reads and writes, claimed so a document
+; The three sheet formats this app reads and writes - four extensions, .XLS
+; being Normal under Excel's own name (81.15.1) - claimed so a document
 ; opens on a DOUBLE-CLICK rather than only through File > Open (SPEC.md 54.6).
 ; Declaring costs nothing at runtime - the mount's icon harvest already reads
 ; this sector - and it works before Sheet has ever been run, which a runtime
@@ -162,10 +163,11 @@
 ; every other program on this machine can also write. Declaring .DIF or .BIF
 ; there would be a package offering to open a file it has no reader for.
     OS88_ASSOC16
-    db 3
+    db 4
     OS88_ASSOC_EXT 'SLK'
     OS88_ASSOC_EXT 'DIF'
     OS88_ASSOC_EXT 'BIF'
+    OS88_ASSOC_EXT 'XLS'            ; Normal under Excel's own name (81.15.1)
     OS88_ASSOC16_END
 
 ; =============================================================================
@@ -603,10 +605,18 @@ SH_PNEST_MAX equ 12                  ; the parser's own nesting budget (81.3):
                                       ; charged by sh_pnest_enter. 12 is what
                                       ; the deepest SH_EVAL_MAXDEPTH chain of
                                       ; folds needs (one call + one depth per
-                                      ; level); each level holds tens of bytes
-                                      ; of task 0's 512-byte stack, so the
-                                      ; cap is sized to that stack, not to the
-                                      ; grammar
+                                      ; level). It is the GRAMMAR's cap: a
+                                      ; level is 2 to 106 bytes of task 0's
+                                      ; 512-byte stack, so the stack has a
+                                      ; test of its own, in bytes, below
+SH_PSTK_MAX  equ 206                 ; 81.3: the bytes a parse may take below
+                                      ; [sh_pstk0], which sits 118 below task
+                                      ; 0's top on a 5150. Measured there: a
+                                      ; check at 118 + 206 = 324, plus the
+                                      ; deepest one-function tail after it
+                                      ; (PROPER, 132; 140 allowed), plus
+                                      ; IRQ0's 48 on whatever stack it lands,
+                                      ; is 512
 
 ; --- stage 1.6: per-cell text formatting -----------------------------------
 ; Packed into the cell record's byte at +5 (previously unused padding, see
@@ -778,7 +788,7 @@ SH_MINH      equ SH_MBAR_H + SH_FB_H + SH_CH_H + SH_HSB_H + SH_SB_H \
 SH_MI_H      equ 12                  ; a dropdown item's row height
 SH_MPAD      equ 8                   ; left/right pixel pad per title/item
 SH_MKGAP     equ 24                  ; 81.101: label to shortcut caption
-SH_MCHKX     equ 2                   ; SPEC.md 81.30: the check mark, a solid
+SH_MCHKX     equ 2                   ; SPEC.md 81.64: the check mark, a solid
 SH_MCHKY     equ 4                   ; square centred in the 8px check column
 SH_MCHKS     equ 5                   ; and on the row's 8px glyph line
 SH_MCHKW     equ 8                   ; stage 3.0c: the DROPDOWN's extra left
@@ -1095,6 +1105,9 @@ SHM_TBLRUN equ 59                   ; 81.114.8: re-run every Data > Table
 SHM_TBLADJ equ 60                   ; 81.114.9: ...and shift their rectangles
 SHM_TBLCMD equ 61                   ; 81.114.11: TABLE() - MACRO.OVL's way to
                                      ; the engine, which is CHART.OVL's
+SHM_DFDEL  equ 62                   ; 81.71.5.1: the Form's Delete alert's
+SHM_LWHEEL equ 63                   ; completion and the list's W_ONWH - two
+                                     ; more addresses something else calls
 SHM_DFBTN  equ 57                   ; ...the Data Form's
 SHM_NDBTN  equ 56                   ; ...the Note dialog's
 SHM_LDBTN  equ 55                   ; ...the list dialog's
@@ -1102,12 +1115,15 @@ SHM_IDBTN  equ 54                   ; ...the one-line dialog's
 SHM_FDBTN  equ 52                   ; 81.111: a dialog BUTTON FIRED (on the
                                      ; release, the library's gesture): AL =
                                      ; which, 1-based
-SHM_N      equ 59                   ; a COUNT, not a max: sh_modc_ext does
+SHM_N      equ 61                   ; a COUNT, not a max: sh_modc_ext does
                                      ; `sub bp, SHM_READ` then `cmp bp, SHM_N`
 
 section .modc vstart=0 align=1
 sh_modc0:
-    jmp ch_modc
+    jmp near ch_modc                ; NEAR, so the stamp is at a fixed +3
+sh_modc_stamp:                      ; THE BUILD STAMP ch_ovneed holds a read
+    dw sh_modc_end, os88_image_end  ; file to: this module's length and the
+                                    ; resident image's, crt0.asm's pair (73.14)
 
 ; ch_modc falls through to here for any verb past CHM_MAX (82.16.8).
 sh_modc_ext:
@@ -1147,6 +1163,7 @@ sh_mverb:
     dw sh_m_tblrun                                        ; 81.114.8
     dw sh_m_tbladj                                        ; 81.114.9
     dw sh_m_tblcmd                                        ; 81.114.11
+    dw sh_m_dfdel, sh_m_lwheel                            ; 81.71.5.1
 sh_mverb_end:
     ; TIMES AND NOT %if (81.83.3.3): a verb added without raising SHM_N
     ; answers CF=1, which every caller reports as "there is no module"; a
@@ -1163,6 +1180,14 @@ sh_m_tbladj:
     retf
 sh_m_tblcmd:                          ; 81.114.11: CF=1 = not a table shape
     call sh_table_run
+    retf
+sh_m_dfdel:                         ; 81.71.5.1: AL = the alert's button
+    call sh_df_ondel
+    clc
+    retf
+sh_m_lwheel:                        ; AX = the notches, SI = the window
+    call sh_ldlg_onwheel
+    clc
     retf
 sh_m_doread:
     call shm_doread
@@ -1286,6 +1311,8 @@ section .modm vstart=0 align=1 follows=.modc
 sh_modm0:
     jmp short sh_modm_disp
     db 'SHMACRO2'                     ; os88ovl.py's cut mark: exactly once
+sh_modm_stamp:                        ; ...and sh_m2need's build stamp, after
+    dw shm_m2end, os88_image_end      ; the mark so the cut is unaffected
 sh_modm_disp:
     cmp bp, SHM2_N
     jae .bad
@@ -1902,6 +1929,12 @@ sh_m2need:
     call OSAPI_FILE_READ
     pop dx
     jc .noread
+    mov ax, [es:SH_M2STAMP]             ; THIS build's module, or none: one
+    cmp ax, shm_m2end - sh_modm0        ; from another build reads our bss at
+    jne .noread                         ; stale offsets (sh_modm_stamp)
+    mov ax, [es:SH_M2STAMP + 2]
+    cmp ax, os88_image_end
+    jne .noread
     mov word [sh_m2far], 0              ; the dispatcher is at the claim's 0
     mov [sh_m2far + 2], dx
     call ch_ovback
@@ -1930,6 +1963,7 @@ sh_m2need:
     stc
     ret
 sh_m2name: db 'MACRO.OVL', 0
+SH_M2STAMP equ sh_modm_stamp - sh_modm0   ; the stamp's offset in the claim
 
 ; -----------------------------------------------------------------------------
 ; sh_ovbind - fill the vector table: this package's shim offsets and its own
@@ -4018,8 +4052,14 @@ sh_undo_do:
     jc .out                            ; it has outgrown Undo: leave both
     call sh_undo_size                  ; ...measured NOW, before the load
     push ax                            ; changes the counts it is made of
+    push word [sh_txtlen]              ; the live arena's end, because the
     mov ax, [sh_undoseg]               ; the snapshot -> live
     call sh_undo_load
+    pop ax                             ; arena is not in the snapshot: the
+    cmp ax, [sh_txtlen]                ; end stays at the larger of the two,
+    jbe .txtok                         ; so a slot claimed after this cannot
+    mov [sh_txtlen], ax                ; land on bytes the other side holds
+.txtok:
     pop cx                             ; staging -> the snapshot: what live was
     push ds
     push es
@@ -4315,6 +4355,8 @@ sh_onclick:
     call sh_df_close_r                 ; for the rest of the session
 .nodf:
     mov word [sh_msg], 0
+    mov bx, si                         ; the geometry first: a dragged window
+    call sh_geom                       ; is put back with no W_PAINT
     mov byte [sh_rz_on], 0             ; 81.73.2: a press on a heading's own
     call sh_hdrhit                     ; trailing edge is a RESIZE and not a
     jnc .norz                          ; selection, so it is asked first and
@@ -4324,8 +4366,6 @@ sh_onclick:
     mov byte [sh_dragging], 0          ; stage 3.0a: a gesture is only a grid
                                         ; drag if it STARTS on the grid - the
                                         ; menu-bar path below never arms it
-    mov bx, si
-    call sh_geom
     call sh_mbar_hit                   ; stage 2.x: Sheet's own in-window
     cmp al, SH_M_NONE                  ; menu bar (see the SH_MBAR_H section
     je .notmenu                        ; comment) claims a click on its strip
@@ -4925,7 +4965,7 @@ SH_RZ_GRAB   equ 3                   ; pixels either side of the edge
 ; -----------------------------------------------------------------------------
 ; sh_hdrhit - in: CX,DX = a click. out: CF=1 when it grabbed a heading's
 ; trailing edge, with [sh_rz_axis] 0 = column / 1 = row, [sh_rz_idx] = the
-; REAL row or column being resized, and [sh_rz_x0] the edge's own pixel.
+; REAL row or column being resized, and [sh_rz_x0] the slot's LEADING edge.
 ; -----------------------------------------------------------------------------
 sh_hdrhit:
     push ax
@@ -4962,6 +5002,9 @@ sh_hdrhit:
     jmp short .cw
 .gotcol:
     mov ax, bx
+    call sh_vwidth
+    sub dx, ax                         ; DX = this slot's LEADING edge
+    mov ax, bx
     call sh_vreal_col
     mov [sh_rz_idx], ax
     jmp short .yes
@@ -4996,12 +5039,15 @@ sh_hdrhit:
     jmp short .rw
 .gotrow:
     mov ax, bx
+    call sh_vheight
+    sub dx, ax
+    mov ax, bx
     call sh_vreal_row
     mov [sh_rz_idx], ax
 .yes:
-    mov [sh_rz_x0], dx                 ; the edge's own pixel, so the drag
-    pop dx                             ; measures from where the EDGE was and
-    pop bx                             ; not from where the pointer landed
+    mov [sh_rz_x0], dx                 ; the slot's leading edge, which the
+    pop dx                             ; resize never moves: the size is the
+    pop bx                             ; pointer less it, never added again
     pop ax
     stc
     ret
@@ -5026,15 +5072,8 @@ sh_rz_track:
     mov ax, cx                         ; the pointer, in grid pixels...
     sub ax, [sh_ox]
     sub ax, SH_RH_W
-    sub ax, [sh_rz_x0]                 ; ...as a delta from the edge
-    push ax
-    mov ax, [sh_rz_idx]
-    call sh_colwidth
-    mov cl, 3
-    shl ax, cl                         ; its width now, in pixels
-    pop bx
-    add ax, bx                         ; what the pointer is asking for
-    jle .cwzero
+    sub ax, [sh_rz_x0]                 ; ...less the leading edge: what the
+    jle .cwzero                        ; pointer is asking for
     mov cl, 3
     shr ax, cl                         ; ...in whole characters
     or ax, ax
@@ -5070,11 +5109,6 @@ sh_rz_track:
     sub ax, [sh_goy]
     sub ax, SH_FB_H + SH_CH_H
     sub ax, [sh_rz_x0]
-    push ax
-    mov ax, [sh_rz_idx]
-    call sh_rowheight                  ; its height now, in pixels
-    pop bx
-    add ax, bx
     jle .rzero
     cmp ax, SH_RH_MAX
     jbe .rhmin
@@ -7936,11 +7970,17 @@ sh_drawborders:
     add ax, bx
     dec ax
     mov [sh_by2], ax
+    ; LEFT AND TOP SIT ONE PIXEL IN, mirroring right and bottom (81.17.2).
+    ; A cell's gridlines are its OWN first column and row (sh_drawlines draws
+    ; them at sh_vcx/sh_vry), so an edge drawn there landed on the gridline
+    ; and vanished; one pixel in puts it beside this cell's own gridline, as
+    ; right and bottom sit beside the next cell's.
     test byte [sh_bdrawflags], SH_BORD_LEFT
     jz .noleft
     mov ax, [sh_bx1]
+    inc ax
     mov bx, [sh_by1]
-    mov cx, [sh_bx1]
+    mov cx, ax
     mov dx, [sh_by2]
     call OSAPI_GFX_FILL
 .noleft:
@@ -7956,8 +7996,9 @@ sh_drawborders:
     jz .notop
     mov ax, [sh_bx1]
     mov bx, [sh_by1]
+    inc bx
     mov cx, [sh_bx2]
-    mov dx, [sh_by1]
+    mov dx, bx
     call OSAPI_GFX_FILL
 .notop:
     test byte [sh_bdrawflags], SH_BORD_BOTTOM
@@ -8527,7 +8568,7 @@ sh_mdrop_draw:
     cmp byte [sh_mchk], 0
     je .nochk
     push ax                           ; the check: A SOLID SQUARE and not a
-    push bx                           ; tick (SPEC.md 81.30), because a thin
+    push bx                           ; tick (SPEC.md 81.64), because a thin
     push cx                           ; diagonal reads as scattered pixels on
     push dx                           ; the two 1bpp adapters (SPEC.md 39.4) -
     mov ax, [sh_mrx1]                 ; os88ui_chk's own mark and its own
@@ -8756,8 +8797,10 @@ sh_mclose:
 
 ; -----------------------------------------------------------------------------
 ; sh_mbank - 81.98: save what the dropdown is about to cover, in the staging
-; claim - which holds nothing between commands (Copy and Paste stage through
-; it and the clipboard is the OS's), and no command runs while a menu is up.
+; claim - which holds nothing a command reads back without rebuilding it
+; (Copy and Paste stage through it and the clipboard is the OS's; the
+; chart's staged series are there too, so Chart Gallery rescans rather than
+; re-rendering them), and no command runs while a menu is up.
 ; [sh_mbanked] = 1 with the rect's bottom, clamped to the display, in
 ; [sh_mbky2]; or 0 when anything refused, and sh_mclose repaints as before.
 ; The size is SPEC.md 13.16.4's: planes * rows * byte columns, the plane
@@ -8796,11 +8839,12 @@ sh_mbank:
     mul bx                            ; DX:AX = one plane
     pop bx                            ; BH = bits per pixel
     cmp bh, 4
-    jne .one
-    shl ax, 1                         ; four planes
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
+    jb .one                           ; 4 planes - or 8 or 16 BYTES a column
+    or dx, dx                         ; on a packed display (SPEC.md 120.5):
+    jnz .out                          ; DH AS IT COMES, never == 4
+    mov cl, bh
+    xor ch, ch
+    mul cx                            ; DX:AX = planes * one plane
 .one:
     or dx, dx
     jnz .out
@@ -9981,12 +10025,17 @@ sh_ps_valtext:
     mov di, sh_editbuf
     mov es, [sh_txtseg]
 .acopy:
+    cmp di, sh_editbuf + SH_EDITMAX   ; sh_editbuf's 63 and the NUL: a label
+    jae .acut                         ; another reader stored can be longer
     mov al, [es:si]
     mov [di], al
     inc si
     inc di
     or al, al
     jnz .acopy
+    jmp short .valdone
+.acut:
+    mov byte [di], 0
 .valdone:
     call sh_ps_mysheet                ; EVERY path leaves it, not just the
 .count:                               ; empty one - the caller commits to the
@@ -11386,53 +11435,33 @@ sh_chart_paint:
     push di
     push bp
     push es
+    cmp byte [sh_chartdirty], 0         ; sh_repaint's hook leaves the byte SET
+    je .clean                           ; while this window is obscured, so a
+    call sh_chart_scan                  ; raise is the first paint that can
+    call sh_chart_render                ; show the change - Chart Gallery's
+    mov byte [sh_chartdirty], 0         ; type, or a cell edited meanwhile -
+.clean:                                 ; and it re-reads before it blits
     mov bx, si
     call OSAPI_WM_CONTENT               ; ax=content x, dx=content y
     mov [ch_bx1], ax                    ; borrow this scratch - safe here,
     mov [ch_by1], dx                    ; ch_bars_draw already finished by
                                          ; the time sh_chart_paint ever runs
-
-    ; THE INTERIOR THE PICTURE DOES NOT COVER (upstream issue #142). The window
-    ; is SH_CHARTWIN_W x SH_CHARTWIN_H and the image is CH_W x CH_H, so there
-    ; is a 20px band down the right and 21px along the bottom - the "little
-    ; margin" SH_CHARTWIN_W's own comment describes. This proc used to be the
-    ; BLIT4 and nothing else, so that band was never painted AT ALL: on a move
-    ; or a raise the frame was redrawn, the picture re-blitted, and whatever
-    ; had been on the glass stayed in between. Fragments of the SHEET window
-    ; underneath were left sitting inside the Chart window.
-    ;
-    ; ONE FILL, not four round the edges: a fill is 756us whatever it covers
-    ; (PERFORMANCE.md), so covering the whole content once is cheaper than
-    ; bounding the band, and the blit that follows lands on top of it.
-    ;
-    ; OSAPI_WM_GEOM, not W_W/W_H. Those are the OUTER frame, and filling to
-    ; them paints over the window's own right and bottom BORDER - a two-pixel
-    ; black line that the first version of this fix erased. The screenshot
-    ; diff against the unfixed build is what caught it: the only thing that
-    ; had changed on a RAISE was that border going white.
-    push ax
-    push bx
-    push cx
-    push dx
-    call OSAPI_WM_GEOM                  ; CX/DX = the CONTENT's size, which is
-    jc .nofill                          ; the box WM_CONTENT gave the origin of
-    mov ax, [ch_bx1]
-    mov bx, [ch_by1]
-    add cx, ax
-    dec cx
-    add dx, bx
-    dec dx
-    push ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop ax
-    call OSAPI_GFX_FILL
-.nofill:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-
+    call ch_margin                      ; THE INTERIOR THE PICTURE DOES NOT
+                                         ; COVER (SPEC.md 82.1.1, issue #142):
+                                         ; the window is a little larger than
+                                         ; the CH_W x CH_H canvas, and the two
+                                         ; bands that leaves were never written
+                                         ; by anything - so a move redrew the
+                                         ; frame, re-blitted the picture, and
+                                         ; left whatever had been on the glass
+                                         ; in between. BX is still the window
+                                         ; and AX/DX still WM_CONTENT's answer,
+                                         ; which is exactly what it wants.
+                                         ; SHARED with CHART.O88's ct_paint,
+                                         ; because the two windows have the
+                                         ; same margin for the same reason -
+                                         ; and resident under CH_OVERLAY for
+                                         ; this call (os88chart.inc)
     mov es, [sh_chartseg]
     mov si, CH_PXOFF
     mov bp, CH_STRIDE
@@ -11658,6 +11687,10 @@ sh_rec_emit:
     je .ret
     cmp byte [sh_rec_busy], 0
     jne .ret                           ; a recorded write is not itself news
+    cmp byte [sh_editing], 0           ; the user's own edit is committed
+    je .noedit                         ; first: the buffer is about to hold
+    call sh_commit                     ; this line, and the entry is then
+.noedit:                               ; recorded ahead of it, in order
     push ax
     push bx
     push cx
@@ -11708,9 +11741,19 @@ sh_rec_emit:
     mov [sh_selrow], ax
     mov [sh_selrow2], ax
     mov byte [sh_editing], 1
-    call sh_commit
+    mov al, [sh_ud_busy]
+    mov ah, [sh_commitdirty]
+    push ax
+    mov byte [sh_ud_busy], 1           ; a recorded line is not an Undo step:
+    call sh_commit                     ; no snapshot of its own over the user's
+    pop bx
+    mov [sh_ud_busy], bl
     mov al, [sh_rec_svsh]              ; ...and back
     mov [sh_cursheet], al
+    cmp al, [sh_rec_sheet]             ; recorded onto ANOTHER sheet: nothing
+    je .shown                          ; on screen changed, so the next arrow
+    mov [sh_commitdirty], bh           ; key keeps sh_selpaint's cheap path
+.shown:
     mov ax, [sh_rec_svc]
     mov [sh_selcol], ax
     mov ax, [sh_rec_svr]
@@ -12869,6 +12912,34 @@ sh_docmd_sortcol:
     inc bx
     jmp .outer
 .sortdone:
+    cmp byte [sh_protected], 0         ; 81.46: a LOCKED cell refuses the
+    je .wbgo                           ; whole sort before anything is
+    mov cx, [sh_sort_cnt]              ; written - the carry's own guard would
+    jcxz .wbgo                         ; stop it half-way and shear the rows
+    mov es, [sh_stgseg]
+    mov si, cx                         ; the rows it writes are the occupied
+    dec si                             ; ones, rows[0] to rows[cnt-1], across
+    shl si, 1                          ; the block's columns
+    push word [sh_selcol]
+    push word [sh_selrow]
+    push word [sh_selcol2]
+    push word [sh_selrow2]
+    mov ax, [es:0]
+    mov [sh_selrow], ax
+    mov ax, [es:si]
+    mov [sh_selrow2], ax
+    mov ax, [sh_sort_c1]
+    mov [sh_selcol], ax
+    mov ax, [sh_sort_c2]
+    mov [sh_selcol2], ax
+    mov byte [sh_prot_clr], 1          ; the LOCK is the question: a table a
+    SHOUT sh_prot_blocked              ; sort touches is dropped (81.114.9)
+    pop word [sh_selrow2]
+    pop word [sh_selcol2]
+    pop word [sh_selrow]
+    pop word [sh_selcol]
+    jc .wbpaint                        ; refused, and [sh_msg] says why
+.wbgo:
     xor cx, cx
 .wb:
     cmp cx, [sh_sort_cnt]
@@ -13087,6 +13158,15 @@ sh_docmd_justify:
     call sh_ju_block                   ; the ordered block and the width
     call sh_ju_check                   ; ...and every left-column cell is text
     jc .notext
+    push word [sh_selcol]              ; 81.46: the LEFT column is all it
+    push word [sh_selcol2]             ; writes, so that is what is asked
+    mov ax, [sh_ju_c1]
+    mov [sh_selcol], ax
+    mov [sh_selcol2], ax
+    SHOUT sh_prot_blocked
+    pop word [sh_selcol2]
+    pop word [sh_selcol]
+    jc .out                            ; refused, and [sh_msg] says why
     ; --- PASS 1: every section, counted and NOTHING written ------------------
     mov ax, [sh_ju_r1]
     mov [sh_ju_a], ax
@@ -13894,6 +13974,14 @@ sh_fdlg_open:
     pop di
     pop si
     jc .fmtbiff
+    push si                           ; ...and .XLS is Normal too, as the
+    push di                           ; reader and the writer both take it
+    mov si, sh_name                   ; (81.15.1)
+    mov di, sh_s_ext_xls
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .fmtbiff
     mov word [sh_fdlg_sel], 1         ; anything else is SYLK, which is what
     jmp .noprefill                    ; sh_dowrite itself falls through to
 .fmtdif:
@@ -14648,10 +14736,11 @@ sh_fdlg_apply0:
     mov [ch_type], ax
     cmp word [sh_chartwin], 0         ; no chart window yet: the type is still
     je .galdone                       ; remembered, and the next Chart Column
-    SHOUT sh_chart_render              ; uses it
-    mov si, [sh_chartwin]
-    SHOUT sh_chart_paint
-.galdone:
+    mov byte [sh_chartdirty], 1       ; uses it. A RESCAN, not a re-render:
+.galdone:                             ; the pulldown that opened this dialog
+                                      ; banked its pixels over the staged
+                                      ; values (sh_mbank), so sh_repaint's
+                                      ; hook re-reads them, renders, paints
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     jmp .out
@@ -14898,9 +14987,10 @@ sh_bdlg_close_r:                       ; the gate-lock recovery's own door
 section SH_MODSEC                      ; 81.71.5.1: the Border dialog
 
 ; -----------------------------------------------------------------------------
-; sh_bdlg_open - preselect from the selected cell's stored border byte
-; (sh_bt_get); a cell with no border record at all reads back as 0, same
-; "dialog still opens, OK on it is just a no-op" scope as sh_fdlg_open's.
+; sh_bdlg_open - preselect from what the SELECTION already has (sh_bdlg_walk's
+; GATHER, 81.17.2: a single cell is its stored byte); a cell with no border
+; record at all reads back as 0, same "dialog still opens, OK on it is just a
+; no-op" scope as sh_fdlg_open's.
 ; -----------------------------------------------------------------------------
 sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     push ax
@@ -14927,9 +15017,8 @@ sh_bdlg_open:                          ; AL = SH_BK_* (81.106)
     je .display
     cmp byte [sh_bdlg_kind], SH_BK_WORKSPACE
     je .workspace
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_get                     ; al = stored border byte
+    xor al, al                          ; GATHER over the selection: AL =
+    call sh_bdlg_walk                   ; the bits every cell's mask holds
     mov ah, al
     and ah, 0x1F
     mov bl, ah
@@ -15237,49 +15326,126 @@ sh_bdlg_label:
     ret
 sh_bdlg_apbord:
     push ax
-    push bx
-    push dx
-    push di                             ; DI is this table's record cursor and
-                                         ; two of the three paths below set it
-    mov al, [sh_bdlg_sel]
-    shr al, 1
-    and al, 0x1F
-    mov dl, al
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    or dl, dl
-    jz .clearit
-    SHOUT sh_bt_addcell
-    jc .out                             ; table full: silent no-op, same
-                                         ; scope limit as the main array's
-    push es
-    mov es, [sh_bordseg]
-    mov al, [es:di+4]
-    and al, SH_BT_KEEP                  ; THE PROTECTION BITS ARE NOT THIS
-    or al, dl                           ; DIALOG'S TO WRITE. This was a plain
-    mov [es:di+4], al                   ; store of the border bits, which was
-    pop es                              ; right while it owned the whole byte
-    jmp .out
-.clearit:
-    SHOUT sh_bt_findcell                 ; ...and clearing every border must not
-    jnc .out                            ; take the record away with them if the
-    push es                             ; cell is also unlocked or hidden
-    mov es, [sh_bordseg]
-    and byte [es:di+4], SH_BT_KEEP
-    mov ax, [es:di+4]                   ; the number format too (81.55)
-    pop es
-    or ax, ax
-    jnz .out                            ; something is still stored here
-    mov ax, [sh_selcol]
-    mov bx, [sh_selrow]
-    SHOUT sh_bt_removecell
-.out:
+    mov ah, [sh_bdlg_sel]
+    shr ah, 1
+    and ah, 0x1F                        ; AH = the edges and Shade wanted
+    mov al, 1                           ; APPLY, over the whole selection
+    call sh_bdlg_walk                   ; (81.17.2)
     mov si, [sh_ownwin]
     SHOUT sh_repaint
-    pop di
-    pop dx
-    pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_bdlg_walk - Format > Border over the SELECTION (SPEC.md 81.17.2), main's
+; walk in this table's shape. Each edge box means that side of the BLOCK:
+; Left is the left edge of the cells in its first column, Top the top edge of
+; its first row, and so on, so Outline - all four - frames the block. Shade
+; means every cell. A single cell is a 1x1 block whose four sides are its own.
+;
+; A cell's MASK is the bits the dialog governs there (Shade, plus each block
+; side it lies on); bits outside it - an inner edge set earlier, and
+; SH_BT_KEEP's protection and table bits, which no mask holds - are kept.
+; in: AL = 0 GATHER: out AL = the bits set on EVERY cell whose mask holds
+;          them (what the dialog should open showing)
+;     AL = 1 APPLY: AH = the bits to write through every cell's mask, adding
+;          or removing border records; a record goes only when nothing at
+;          all is left in it (81.55's number format included), and a full
+;          table stops adding, silently, as the single-cell version did
+; The bounds live in a frame on the stack, so the walk costs no bss.
+; Preserves every register but AL.
+; -----------------------------------------------------------------------------
+sh_bdlg_walk:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    or al, al
+    jnz .ap
+    mov ah, 0x1F                        ; GATHER's accumulator starts full
+.ap:
+    mov cx, [sh_selcol]
+    mov dx, [sh_selcol2]
+    cmp cx, dx
+    jbe .cok
+    xchg cx, dx
+.cok:
+    mov si, [sh_selrow]
+    mov di, [sh_selrow2]
+    cmp si, di
+    jbe .rok
+    xchg si, di
+.rok:
+    mov bp, sp                          ; [bp-2] c1 [bp-4] c2 [bp-6] r1
+    push cx                             ; [bp-8] r2, then [bp-10] the mode
+    push dx                             ; and [bp-9] the bits - SS, which is
+    push si                             ; where a [bp] operand points
+    push di
+    push ax
+.row:
+    mov cx, [bp-2]
+.col:
+    mov ax, cx
+    mov bx, si
+    mov dl, SH_BORD_SHADE               ; DL = this cell's mask
+    cmp cx, [bp-2]
+    jne .m1
+    or dl, SH_BORD_LEFT
+.m1:
+    cmp cx, [bp-4]
+    jne .m2
+    or dl, SH_BORD_RIGHT
+.m2:
+    cmp si, [bp-6]
+    jne .m3
+    or dl, SH_BORD_TOP
+.m3:
+    cmp si, [bp-8]
+    jne .m4
+    or dl, SH_BORD_BOTTOM
+.m4:
+    SHOUT sh_bt_get                     ; AL = what the cell has now
+    mov dh, al
+    cmp byte [bp-10], 0
+    jne .apply
+    mov al, dl                          ; a bit outside the mask cannot veto,
+    not al                              ; so it reads as set
+    or al, dh
+    and [bp-9], al
+    jmp short .next
+.apply:
+    mov al, [bp-9]
+    xor al, dh
+    and al, dl                          ; AL = the governed bits that change
+    jz .next
+    xor dh, al                          ; DH = the cell's new byte
+    mov ax, cx
+    SHOUT sh_bt_addcell                 ; finds the record, or makes one
+    jc .next                            ; table full
+    mov es, [sh_bordseg]
+    mov [es:di+4], dh
+    cmp word [es:di+4], 0               ; no border, no protection, no number
+    jne .next                           ; format: the record is the default
+    SHOUT sh_bt_removecell
+.next:
+    inc cx
+    cmp cx, [bp-4]
+    jbe .col
+    inc si
+    cmp si, [bp-8]
+    jbe .row
+    mov al, [bp-9]                      ; GATHER's answer
+    add sp, 10                          ; the frame's five words
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -17362,6 +17528,10 @@ sh_idlg_apply:
     je .tblrnext
     SHOUT sh_pcellref                  ; CF=1 = AX col, BX row
     jnc .tblrnext
+    cmp ax, SH_COLS                    ; ON the sheet, as .gotoref asks: 'A0'
+    jae .tblbad                        ; parses as row FFFFh, SH_TBL_NONE
+    cmp bx, SH_ROWS                    ; itself, and a row past SH_ROWS packs
+    jae .tblbad                        ; into the NEXT sheet's key
     mov [sh_tbl_ic], ax
     mov [sh_tbl_ir], bx
 .tblrnext:
@@ -17392,6 +17562,10 @@ sh_idlg_apply:
     je .tblgo
     SHOUT sh_pcellref
     jnc .tblgo
+    cmp ax, SH_COLS                    ; ...and the same for this one
+    jae .tblbad
+    cmp bx, SH_ROWS
+    jae .tblbad
     mov [sh_tbl_ic2], ax
     mov [sh_tbl_ir2], bx
 .tblgo:
@@ -18131,6 +18305,12 @@ sh_ldlg_click_r:
     call ch_ovcall
     pop bp
     ret
+sh_ldlg_wheel_r:                       ; W_ONWH: the kernel near-calls it in
+    push bp                            ; THIS segment, so it is a thunk like
+    mov bp, SHM_LWHEEL                 ; the paint's (81.71.5.1)
+    call ch_ovcall
+    pop bp
+    ret
 sh_ld_titles:  dw sh_s_ld_tfunc, sh_s_ld_tname, sh_s_ld_tnum
 sh_ld_prompts: dw sh_s_ld_pfunc, sh_s_ld_pname, sh_s_ld_pnum
 sh_s_ld_tnum:  db 'Format Number', 0
@@ -18217,7 +18397,7 @@ sh_ldlg_open:
     jc .out                            ; SI is still the template - and it is
     mov [sh_ldlg_win], bx
     push ax
-    mov ax, sh_ldlg_onwheel            ; the wheel scrolls the list (13.18)
+    mov ax, sh_ldlg_wheel_r            ; the wheel scrolls the list (13.18)
     call OSAPI_WM_ONWHEEL
     pop ax
     call OSAPI_WM_SHOW                 ; created HIDDEN, so the show is not
@@ -18986,6 +19166,21 @@ sh_parse_do:
     call sh_parse_span
     call sh_parse_fields
     jc .nofields
+    push word [sh_selcol]              ; 81.46: every cell it can write - the
+    push word [sh_selcol2]             ; column and the fields to its right,
+    mov ax, [sh_pa_col]                ; across the rows - is asked first
+    mov [sh_selcol], ax
+    add ax, [sh_pa_n]
+    dec ax
+    cmp ax, SH_COLS
+    jb .pacols
+    mov ax, SH_COLS - 1                ; ...as far as the edge sh_parse_row
+.pacols:                               ; stops at
+    mov [sh_selcol2], ax
+    SHOUT sh_prot_blocked
+    pop word [sh_selcol2]
+    pop word [sh_selcol]
+    jc .out                            ; refused, and [sh_msg] says why
     mov al, SH_UL_PARSE
     SHOUT sh_undo_begin
     mov bx, [sh_pa_r1]
@@ -20113,6 +20308,12 @@ sh_df_close_r:                         ; ...and the recovery's
     call ch_ovcall
     pop bp
     ret
+sh_df_ondel_r:                         ; Delete's alert completion: os88ui_adone
+    push bp                            ; near-calls it in THIS segment, so a
+    mov bp, SHM_DFDEL                  ; module label would land mid-resident
+    call ch_ovcall
+    pop bp
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sh_docmd_form - Data ▸ Form.... Pins the database rectangle the way
@@ -20298,6 +20499,7 @@ sh_df_loadfld:
     mov [sh_df_top], ax
 .onscreen:
     mov byte [sh_df_buf], 0
+    mov byte [sh_df_dirty], 0          ; the cell's own text: nothing typed
     call sh_df_nrec
     or ax, ax
     jz .set
@@ -20349,6 +20551,9 @@ sh_df_savefld:
     mov ax, [sh_df_fld]
     call sh_df_editable
     jnc .out
+    cmp byte [sh_df_dirty], 0          ; nothing typed: the text is the cell's
+    je .out                            ; own, and re-typing it would re-parse
+    mov byte [sh_df_dirty], 0          ; a label '02134' into a number
     mov ax, [sh_selcol]                ; bank the real selection
     mov [sh_df_svc1], ax
     mov ax, [sh_selrow]
@@ -20714,6 +20919,13 @@ sh_df_onkey:
     mov si, sh_df_line
     SHOUT os88line_key
     jc .out                            ; the field did not want it
+    or al, al                          ; a character or a backspace edits;
+    jnz .edited                        ; of the extended keys, only Delete
+    cmp ah, 0x53
+    jne .moved
+.edited:
+    mov byte [sh_df_dirty], 1
+.moved:
     call sh_df_repaint
     jmp .out
 .tab:
@@ -20920,7 +21132,7 @@ sh_df_askdel:
     mov al, OS88UI_AYESNO
     mov bx, [sh_ownwin]
     mov si, sh_s_df_delq
-    mov di, sh_df_ondel
+    mov di, sh_df_ondel_r              ; resident: adone's `call di` is near
     SHOUT os88ui_ask
 .out:
     pop di
@@ -21218,6 +21430,8 @@ sh_new:
     loop .clrsave
     mov word [sh_selcol], 0
     mov word [sh_selrow], 0
+    mov word [sh_selcol2], 0           ; the EXTENT too, or the new sheet
+    mov word [sh_selrow2], 0           ; opens with the old block framed
     mov word [sh_scrollcol], 0
     mov word [sh_scrollrow], 0
     mov word [sh_freezecol], 0         ; 81.70: a new document is unfrozen,
@@ -21232,10 +21446,9 @@ sh_new:
                                        ; sh_new does not clear it, so closing
                                        ; straight after New asks about an
                                        ; empty sheet nobody has touched
-    call sh_repaint
-    pop di
-    pop si
-    pop dx
+    pop di                             ; NO repaint here: the caller repaints
+    pop si                             ; once, through [sh_ownwin], and SI is
+    pop dx                             ; the New dialog's or a macro's own
     pop cx
     pop ax
     ret
@@ -21560,6 +21773,14 @@ shm_dowrite:
     pop di
     pop si
     jc .biff
+    push si                            ; .XLS is Normal under Excel's own
+    push di                            ; name: the reader takes it as BIFF,
+    mov si, sh_name                    ; so the writer must write it as BIFF
+    mov di, sh_s_ext_xls               ; (81.15.1), not fall through to SYLK
+    SHOUT sh_nameends
+    pop di
+    pop si
+    jc .biff
     push si
     push di
     mov si, sh_name
@@ -21762,11 +21983,12 @@ sh_wr_r1c1:
 ; all. A formatted cell's C (value) record is followed by a real SYLK F
 ; (formatting) record - "F;X<col>;Y<row>;F<c1><n><c2>[;K]" - using
 ; MultiPlan-era SYLK's actual format codes (stage 1.6): c1 is '$' for
-; Currency or 'G' for everything else (General/Comma/Percent all share
-; 'G' - real SYLK has no comma or percent code of its own; Comma instead
-; sets the separate ;K "commas are set" flag, and Percent has no real
-; equivalent at all so it degrades to General on disk), c2 is the real
-; alignment code (G/L/C/R) matching this app's own alignment 1:1. Real
+; Currency, '%' for Percent - SYLK's own percent code (81.119.2) - or 'G'
+; for everything else (General and Comma share 'G': real SYLK has no comma
+; code of its own, so Comma instead sets the separate ;K "commas are set"
+; flag), c2 is the real alignment code (G/L/C/R) matching this app's own
+; alignment 1:1. Borders and notes follow the sheet's cells, from
+; sh_sylk_extras (81.119.2). Real
 ; SYLK, per the era's own documentation, has no bold/underline concept
 ; whatsoever - MultiPlan predates that - so neither persists here; this is
 ; the same "only persist what the real format actually has" rule DIF
@@ -22043,6 +22265,9 @@ sh_dowrite_sylk:
     mov al, '$'
     cmp bl, SH_FMT_NUM_CURRENCY
     je .c1ok
+    mov al, '%'                          ; SYLK's own percent code (81.119.2)
+    cmp bl, SH_FMT_NUM_PERCENT
+    je .c1ok
     mov al, 'G'
 .c1ok:
     call sh_stgputb                      ; c1
@@ -22088,6 +22313,10 @@ sh_dowrite_sylk:
     mov [sh_wrow], ax
     jmp .rec
 .footer:
+    cmp byte [sh_trunc], 0
+    jne .nomore
+    call sh_sylk_extras               ; borders and notes (81.119.2)
+.nomore:
     mov si, sh_s_end
     call sh_stgput
     mov [sh_stagelen], di
@@ -22110,6 +22339,169 @@ sh_dowrite_sylk:
 .wdone:
     pop es
     pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sylk_xy - "X<col+1>;Y<row+1>" for [sh_wrec_col]/[sh_wrec_row] at ES:DI.
+; -----------------------------------------------------------------------------
+sh_sylk_xy:
+    push ax
+    push si
+    mov ax, [sh_wrec_col]
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    mov si, sh_s_y
+    call sh_stgput
+    mov ax, [sh_wrec_row]
+    inc ax
+    SHOUT sh_itoa
+    mov si, sh_numbuf
+    call sh_stgput
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sh_sylk_extras - the current sheet's borders and notes, after its cells, at
+; ES:DI (81.119.2), main's writer in this file's tables. A border is an F
+; record of its own with SYLK's style field, ";S" and a letter an edge -
+; L R T B - and S for shaded:
+;     F;X3;Y4;SLT
+; A border-table record holding only protection or a number format (81.46,
+; 81.55) has no style to write and is passed over. A note is a C record
+; carrying only SYLK's comment field, ";A", so it neither needs a value nor
+; disturbs one: a ';' in the text is doubled, as every SYLK field's is, and a
+; line break is ESC " :", which is what Excel writes.
+; Sets [sh_trunc] if the buffer fills. Preserves everything but DI.
+; -----------------------------------------------------------------------------
+sh_sylk_extras:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor si, si
+    mov cx, [sh_nbord]
+    jcxz .notes
+.b:
+    push cx
+    push es
+    mov es, [sh_bordseg]
+    mov ax, [es:si]
+    mov cx, [es:si+2]
+    mov dl, [es:si+4]
+    pop es
+    and dl, 0x1F                       ; the edges and Shade alone
+    jz .bnext
+    SHOUT sh_unpackrow                 ; -> AX = row, BX = its sheet
+    cmp bx, [sh_cursheet]
+    jne .bnext
+    mov [sh_wrec_row], ax
+    mov [sh_wrec_col], cx
+    mov ax, di
+    add ax, 40
+    cmp ax, SH_STAGE_MAX
+    ja .full
+    push si
+    mov si, sh_s_sylk_fx               ; "F;X"
+    call sh_stgput
+    call sh_sylk_xy
+    mov si, sh_s_sylk_fs               ; ";S"
+    call sh_stgput
+    mov si, sh_sylk_bordch             ; one letter per bit, in bit order
+    mov ah, dl
+.bl:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .bldone
+    shr ah, 1
+    jnc .bl
+    call sh_stgputb
+    jmp short .bl
+.bldone:
+    mov si, sh_s_crlf
+    call sh_stgput
+    pop si
+.bnext:
+    pop cx
+    add si, SH_BT_SZ
+    loop .b
+.notes:
+    xor si, si
+    mov cx, [sh_nnote]
+    or cx, cx
+    jnz .n
+    jmp .out
+.n:
+    push cx
+    push es
+    mov es, [sh_noteseg]
+    mov ax, [es:si]
+    mov cx, [es:si+2]
+    mov dx, [es:si+4]                  ; the text's arena offset
+    pop es
+    SHOUT sh_unpackrow
+    cmp bx, [sh_cursheet]
+    jne .nnext
+    mov [sh_wrec_row], ax
+    mov [sh_wrec_col], cx
+    mov ax, di
+    add ax, 3 * SH_NOTEMAX + 30        ; every character could be a break
+    cmp ax, SH_STAGE_MAX
+    ja .full
+    push si
+    mov si, sh_s_c                     ; "C;X"
+    call sh_stgput
+    call sh_sylk_xy
+    mov si, sh_s_sylk_fa               ; ";A"
+    call sh_stgput
+    mov si, dx
+    mov cx, SH_NOTEMAX
+.nt:
+    push es
+    mov es, [sh_txtseg]
+    mov al, [es:si]
+    pop es
+    or al, al
+    jz .ntdone
+    inc si
+    cmp al, 10
+    jne .ntsemi
+    mov al, 27                         ; ESC " :" - a line break
+    call sh_stgputb
+    mov al, ' '
+    call sh_stgputb
+    mov al, ':'
+    jmp short .ntput
+.ntsemi:
+    cmp al, ';'
+    jne .ntput
+    call sh_stgputb                    ; doubled
+.ntput:
+    call sh_stgputb
+    loop .nt
+.ntdone:
+    mov si, sh_s_crlf
+    call sh_stgput
+    pop si
+.nnext:
+    pop cx
+    add si, SH_NOTE_REC
+    dec cx
+    jz .out
+    jmp .n
+.full:
+    mov byte [sh_trunc], 1
+    pop cx
+.out:
     pop si
     pop dx
     pop cx
@@ -23981,6 +24373,13 @@ sh_biff_workbook:
     jz .next
     cmp byte [sh_trunc], 0
     jne .next
+    mov ax, di                        ; SHEETHDR 15, BOF 10, this sheet's
+    add ax, 15 + 10 + 4 + 4           ; EOF and the workbook's: none of them
+    cmp ax, SH_STAGE_MAX              ; is checked as it goes out
+    jbe .shroom
+    mov byte [sh_trunc], 1            ; no room for this sheet: say so
+    jmp .next
+.shroom:
 
     mov ax, 0x008F                    ; SHEETHDR
     call sh_biffw
@@ -24050,9 +24449,12 @@ sh_biff_workbook:
     call OSAPI_FILE_WRITE
     jc .err
     mov word [sh_msg], sh_m_saved
+    mov byte [sh_modified], 0         ; the whole workbook went out: clean,
+                                      ; as .single's success is (81.118)
     cmp byte [sh_trunc], 0            ; cells dropped for room must not be
     je .out                           ; reported as a plain success
     mov word [sh_msg], sh_m_trunc
+    mov byte [sh_modified], 1         ; ...and a truncated file is not saved
     jmp .out
 .err:
     call sh_setferr
@@ -24081,8 +24483,9 @@ sh_biff_cells:
     ; cells, in 1/256ths of a character. The sheet is sh_wsheet's, which
     ; sh_colwidth reads through sh_cursheet - impersonated, as sh_biff_ixfe
     ; does for the border table
-    push word [sh_cursheet]
-    mov ax, [sh_wsheet]
+    mov byte [sh_trunc], 0           ; here, not after the ROWs: a COLWIDTH
+    push word [sh_cursheet]          ; refused for room must survive to the
+    mov ax, [sh_wsheet]              ; caller's message
     mov [sh_cursheet], ax
     xor bx, bx
 .cw:
@@ -24090,6 +24493,12 @@ sh_biff_cells:
     SHOUT sh_colwidth
     cmp ax, [sh_defch]
     je .cwn
+    push ax
+    mov ax, di                       ; 8 of COLWIDTH and 4 of this sheet's
+    add ax, 8 + 4                    ; EOF: up to 256 of them is 2 KB, and
+    cmp ax, SH_STAGE_MAX             ; staging is the whole 32 KB claim
+    pop ax
+    ja .cwfull
     push ax
     mov ax, 0x0024                   ; COLWIDTH: first, last, width
     call sh_biffw
@@ -24106,6 +24515,10 @@ sh_biff_cells:
     inc bx
     cmp bx, 256
     jb .cw
+    jmp short .cwdone
+.cwfull:
+    mov byte [sh_trunc], 1
+.cwdone:
     pop word [sh_cursheet]
     ; ...and a ROW for every row of it not the standard height (81.60): the
     ; row, its first and one-past-last cell column (none are claimed), the
@@ -24159,7 +24572,6 @@ sh_biff_cells:
     dec cx
     jmp short .rh
 .rhd:
-    mov byte [sh_trunc], 0
     mov word [sh_wrow], 0            ; reused here as the record index
 .rec:
     mov bx, [sh_wrow]
@@ -24448,7 +24860,10 @@ sh_biff_cells:
     mov ax, di
     add ax, 10                        ; BLANK is 4 of header and 6 of body
     cmp ax, SH_STAGE_MAX
-    ja .btdone                        ; out of staging: stop, as the cells do
+    jbe .btroom                       ; out of staging: stop, as the cells do,
+    mov byte [sh_trunc], 1            ; and SAY so, as they do - a dropped
+    jmp .btdone                       ; formatted cell is not a plain Saved
+.btroom:
     push cx
     push si
     mov es, [sh_bordseg]
@@ -26168,6 +26583,7 @@ sh_doread_biff:
     pop si                             ; as a typed one would be
     pop es
     pop dx
+    mov cx, [sh_biff_end]              ; CX was the counter: the file end back
     jmp .skip
 
 .isblank:
@@ -26526,6 +26942,37 @@ sh_doread_biff:
     jb .skip
     cmp word [sh_ntbl], SH_TBL_CAP
     jae .skip
+    mov ax, [es:si+SH_T_R2]            ; ...BUT THE FIELDS ARE THE FILE'S, so
+    cmp ax, SH_ROWS                    ; they are checked before the copy:
+    jae .dtbad                         ; R1 <= R2 on the grid, C1 <= C2, and
+    cmp [es:si+SH_T_R1], ax            ; every input cell on it or
+    ja .dtbad                          ; SH_TBL_NONE. An R2 of FFFFH never
+    mov al, [es:si+SH_T_C1]            ; ends sh_tbl_markall's row walk, and a
+    cmp al, [es:si+SH_T_C2]            ; row past the grid packs into another
+    ja .dtbad                          ; sheet's key - sh_biff_rcok's refusal
+    mov bx, SH_T_IR
+.dtin:
+    mov ax, [es:si+bx]                 ; an input cell's row...
+    cmp ax, SH_TBL_NONE
+    je .dtin1
+    cmp ax, SH_ROWS
+    jae .dtbad
+.dtin1:
+    mov ax, [es:si+bx+2]               ; ...and its column
+    cmp ax, SH_TBL_NONE
+    je .dtin2
+    cmp ax, SH_COLS
+    jae .dtbad
+.dtin2:
+    test word [es:si+SH_T_FLAGS], SH_TF_TWOD
+    jz .dtinok                         ; one input: the second pair is the
+    add bx, 4                          ; format's unused one, and is set to
+    cmp bx, SH_T_IR2                   ; SH_TBL_NONE below whatever it held
+    jbe .dtin
+    jmp short .dtinok
+.dtbad:
+    jmp .skip
+.dtinok:
     push ax
     push bx
     push cx
@@ -26883,6 +27330,10 @@ sh_parsenrec:
     mov ax, [sh_nm_col2]
     cmp ax, SH_COLS
     jae .out
+    cmp word [sh_nm_row], SH_ROWS     ; ...and the NEAR corner, which is just
+    jae .out                          ; as much the file's: a row past the
+    cmp word [sh_nm_col], SH_COLS     ; grid carries into the sheet bits of
+    jae .out                          ; the packed key
     mov si, sh_nm_in
     mov ax, [sh_nm_col]
     mov bx, [sh_nm_row]
@@ -26965,6 +27416,10 @@ sh_parsecrec:
     mov word [SH_TDVAL+4], 0
     mov word [SH_TDVAL+6], 0
     mov byte [SH_THAVE], 0
+    mov byte [sh_notetext], 0          ; no ;A field yet (81.119.2): the note
+                                       ; dialog's own buffer, as the BIFF
+                                       ; reader's .isnote uses it - no dialog
+                                       ; is open during a read
 .tok:
     cmp si, bx
     jae .apply
@@ -26979,6 +27434,8 @@ sh_parsecrec:
     je .isk
     cmp al, 'E'
     je .ise
+    cmp al, 'A'
+    je .isa
 .scan:
     cmp si, bx
     jae .apply
@@ -27157,9 +27614,58 @@ sh_parsecrec:
     pop di
     mov byte [SH_THASE], 1
     jmp .tok
+.isa:                                 ; ;A<text> - the cell's comment, which is
+    inc si                            ; its NOTE (81.119.2). It runs to a single
+    push di                           ; ';' or the line's end; ';;' is one ';'
+    push cx                           ; and ESC " :" a line break. The whole
+    mov di, sh_notetext               ; field is consumed and the first
+    mov cx, SH_NOTEMAX - 1            ; SH_NOTEMAX - 1 bytes kept, so a long
+.ac:                                  ; one cannot leave its tail to be read
+    cmp si, bx                        ; as fields
+    jae .acend
+    mov al, [es:si]
+    inc si
+    cmp al, ';'
+    jne .anotsemi
+    cmp si, bx
+    jae .acend
+    cmp byte [es:si], ';'
+    jne .acback                       ; a single ';' ends the field
+    inc si
+    jmp short .akeep
+.anotsemi:
+    cmp al, 27
+    jne .akeep
+    mov ax, si
+    add ax, 2
+    cmp ax, bx
+    ja .akeep27
+    cmp word [es:si], ' ' | (':' << 8)
+    jne .akeep27
+    add si, 2
+    mov al, 10
+    jmp short .akeep
+.akeep27:
+    mov al, 27
+.akeep:
+    jcxz .ac
+    mov [di], al
+    inc di
+    dec cx
+    jmp short .ac
+.acback:
+    dec si                            ; leave the ';' for the field scan
+.acend:
+    mov byte [di], 0
+    pop cx
+    pop di
+    jmp .tok
 .apply:
     cmp byte [SH_THAVE], 0
-    je .out
+    jne .applyok
+    cmp byte [sh_notetext], 0         ; a note alone is still worth the
+    je .out                           ; coordinates
+.applyok:
     mov ax, [SH_TCOL]
     cmp ax, 1
     jb .out
@@ -27173,6 +27679,15 @@ sh_parsecrec:
     dec ax
     dec cx
     mov bx, cx
+    cmp byte [sh_notetext], 0         ; the note first: it stands whether or
+    je .nonote                        ; not the record also carries a value
+    push si
+    mov si, sh_notetext
+    SHOUT sh_nt_set                    ; CF = 1 table or arena full: dropped,
+    pop si                            ; as a typed one would be
+.nonote:
+    cmp byte [SH_THAVE], 0
+    je .out
     cmp byte [SH_THASE], 0            ; a ;E field wins over ;K: the value is
     je .notformula_c                  ; only the cached result of it, and
     push ax                           ; storing that instead would flatten the
@@ -27248,6 +27763,7 @@ sh_parsefrec:
     push ax
     push bx
     push cx
+    push dx
     push si
     push di                           ; sh_findcell below is called for its
                                        ; side effect on DI, but sh_parseslk's
@@ -27259,6 +27775,10 @@ sh_parsefrec:
     mov byte [SH_TALIGN], 0
     mov byte [SH_TNUMFMT], 0
     mov byte [SH_TCOMMA], 0
+    xor dx, dx                        ; DL = ;S's border bits, DH = 1 once a
+                                       ; ;F or ;K says something about the
+                                       ; format (81.119.2) - registers, as
+                                       ; nothing this calls touches DX
 .tok:
     cmp si, bx
     jae .apply
@@ -27275,6 +27795,8 @@ sh_parsefrec:
     je .isk
     cmp al, 'W'
     je .isw
+    cmp al, 'S'
+    je .iss
 .scan:
     cmp si, bx
     jae .apply
@@ -27299,7 +27821,33 @@ sh_parsefrec:
 .isk:
     inc si
     mov byte [SH_TCOMMA], 1
+    mov dh, 1
     jmp .tok
+.iss:                                  ; ;S<letters> - the style field. L R T
+    inc si                             ; B are the edges and S is shaded
+.sl:                                   ; (81.119.2); D, I, M and any digits
+    cmp si, bx                         ; are Excel's bold, italic and font,
+    jae .tok                           ; and are passed over
+    mov al, [es:si]
+    cmp al, ';'
+    je .tok
+    inc si
+    push si
+    mov si, sh_sylk_bordch
+    mov ah, 1
+.sfind:
+    cmp byte [si], 0
+    je .snone
+    cmp al, [si]
+    je .shit
+    inc si
+    shl ah, 1
+    jmp short .sfind
+.shit:
+    or dl, ah
+.snone:
+    pop si
+    jmp short .sl
 .isw:                                  ; ;W<first> <last> <width>: column
     inc si                             ; widths, Walden's F-record field (7)
     SHOUT sh_pint                      ; (81.56). 1-based, spaces between
@@ -27330,6 +27878,7 @@ sh_parsefrec:
                                         ; internally, so it's parsed as its
                                         ; own little grammar before control
                                         ; returns to the outer ;-scan loop
+    mov dh, 1
     inc si
     cmp si, bx
     jae .tok
@@ -27380,6 +27929,17 @@ sh_parsefrec:
     dec ax
     dec cx
     mov bx, cx
+    or dl, dl                         ; a border needs no cell (81.119.2), and
+    jz .nobord                        ; it is ORed into the border bits, so
+    SHOUT sh_bt_addcell                ; SH_BT_KEEP's protection and table bits
+    jc .nobord                        ; are never written; table full:
+    push es                           ; dropped, as a typed one would be
+    mov es, [sh_bordseg]
+    or [es:di+4], dl
+    pop es
+.nobord:
+    or dh, dh                         ; a style-only record says nothing
+    jz .out                           ; about the format: leave it alone
     SHOUT sh_findcell
     jnc .out                          ; no prior C record for this cell:
                                        ; nothing to attach the format to
@@ -27405,6 +27965,7 @@ sh_parsefrec:
 .out:
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -27413,19 +27974,24 @@ sh_parsefrec:
 ; -----------------------------------------------------------------------------
 ; sh_sylk_numfmt_from_c1 - in: AL = an F record's c1 formatting-code char;
 ; out: AL = this app's SH_FMT_NUM_* code. Real SYLK's c1 codes are
-; 0/C/E/F/G/$/* (default/continuous/scientific/fixed/general/currency/
-; bargraph) - only '$' has an equivalent here; everything else (including
-; the codes this app never writes, like scientific or bargraph) falls back
-; to General, which is the honest answer since this app has no comparable
-; format for them either.
+; 0/C/E/F/G/$/*/% (default/continuous/scientific/fixed/general/currency/
+; bargraph/percent) - '$' and '%' have equivalents here; everything else
+; (including the codes this app never writes, like scientific or bargraph)
+; falls back to General, which is the honest answer since this app has no
+; comparable format for them either.
 ; -----------------------------------------------------------------------------
 sh_sylk_numfmt_from_c1:
     cmp al, '$'
     je .cur
+    cmp al, '%'                       ; percent, which SYLK does have (81.119.2)
+    je .pct
     xor al, al
     ret
 .cur:
     mov al, SH_FMT_NUM_CURRENCY
+    ret
+.pct:
+    mov al, SH_FMT_NUM_PERCENT
     ret
 
 ; -----------------------------------------------------------------------------
@@ -28834,6 +29400,20 @@ sh_reidx_cellpart:
     jb .notref
     cmp al, '9'
     ja .notref
+    mov bx, si                         ; 81.35: letters, digits, then '(' is
+.fndig:                                ; a FUNCTION (LOG10, ATAN2), not a
+    inc bx                             ; reference - the parser's own rule,
+    mov al, [bx]                       ; so a shift never rewrites the name
+    cmp al, '0'
+    jb .fnend
+    cmp al, '9'
+    jbe .fndig
+.fnend:
+    cmp al, '('
+    jne .isref
+    mov si, bx                         ; the whole name goes out verbatim
+    jmp .notref
+.isref:
     call sh_identcol                   ; ax = 0-based col (from sh_ident)
     mov [sh_rw_refcol], ax
     mov bx, si
@@ -29624,6 +30204,20 @@ sh_copy_cellpart:
     jb .notref
     cmp al, '9'
     ja .notref
+    mov bx, si                         ; 81.35: letters, digits, then '(' is
+.fndig:                                ; a function - see sh_reidx_cellpart
+    inc bx
+    mov al, [bx]
+    cmp al, '0'
+    jb .fnend
+    cmp al, '9'
+    jbe .fndig
+.fnend:
+    cmp al, '('
+    jne .isref
+    mov si, bx
+    jmp .notref
+.isref:
     call sh_identcol                   ; ax = 0-based col (from sh_ident)
     cmp byte [sh_cp_absc], 0           ; a pinned column does not follow the
     jne .colpinned                     ; paste's own displacement
@@ -31738,12 +32332,20 @@ sh_eval_cell:
     cmp word [sh_evaldepth], SH_EVAL_MAXDEPTH
     jae .toodeep
     cmp word [sh_evaldepth], 0        ; a FRESH evaluation starts clean; a
-    jne .depthok                      ; nested one must not, or a referenced
+    jne .nested                       ; nested one must not, or a referenced
     mov byte [sh_evalerr], 0          ; cell's error would be wiped on the way
     mov word [sh_sstk_sp], 0          ; back up. The string bank is reset with
-.depthok:                             ; it, so an error path that returned
-                                       ; early cannot leak a level into the
-                                       ; next formula
+    cmp sp, [sh_pstk0]                ; it, so an error path that returned
+    jbe .depthok                      ; early cannot leak a level into the
+    mov [sh_pstk0], sp                ; next formula. The SHALLOWEST fresh
+    jmp short .depthok                ; evaluation is the stack's anchor
+.nested:
+    mov ax, [sh_pstk0]                ; 81.3: and a nested one is tested in
+    sub ax, sp                        ; BYTES - a cold cell is 51 to 90 of
+    jb .depthok                       ; them, and five SUMs deep ran task 0
+    cmp ax, SH_PSTK_MAX               ; into its canary inside SH_PNEST_MAX
+    ja .toodeep
+.depthok:
     mov bx, [sh_evaldepth]
     inc word [sh_evaldepth]
     push bx                           ; this recursion level's buffer slot
@@ -32239,12 +32841,21 @@ sh_ppowcont:
 ; into .lowbss - silent corruption that fails later, somewhere unrelated.
 ; One counter charges every recursion point, with the cell depth folded in;
 ; over SH_PNEST_MAX the parse refuses with #VALUE! - the same refusal shape
-; sh_eval_cell's .toodeep already has.
+; sh_eval_cell's .toodeep already has. A LEVEL IS NOT A SIZE, though: a '('
+; is 12 bytes and a CHART.OVL door call 72, and a pending operator charges
+; nothing, so the stack itself is the first test - SP against [sh_pstk0],
+; SH_PSTK_MAX bytes down, as the kernel's LNK_SPMIN reads it (26.10).
 ; out: CF=1 refused (sh_evalerr raised, NOTHING charged - do not leave),
 ;      CF=0 charged - pair with exactly one sh_pnest_leave
 ; -----------------------------------------------------------------------------
 sh_pnest_enter:
     push ax
+    mov ax, [sh_pstk0]                ; the BYTES first: below the anchor
+    sub ax, sp                        ; sh_eval_cell keeps, past SH_PSTK_MAX
+    jb .room                          ; is past task 0's stack, whatever the
+    cmp ax, SH_PSTK_MAX               ; levels say (a door call alone is 72)
+    ja .full
+.room:
     mov ax, [sh_pnest]
     inc ax
     add ax, [sh_evaldepth]
@@ -34303,7 +34914,7 @@ shm_pfin:
                                        ; a pointer to sh_fnt (81.37)           ; sh_fnarg[] is forty bytes and a task
     je .free                          ; stack is 384 (20.6 rule 6), so it is
     mov byte [sh_evalerr], SH_ERR_VALUE  ; not banked per nesting level and a
-    jmp .zero                         ; financial function inside another's
+    jmp .refused                      ; financial function inside another's
 .free:                                ; arguments refuses instead (47)
     mov byte [sh_fnbusy], 1
     cmp word [sh_fnid], 104           ; IRR and MIRR open with a RANGE, so
@@ -35158,12 +35769,21 @@ shm_pfin:
     inc si
 .out:
     mov byte [sh_fnbusy], 0
+.rout:
     xor ax, ax
     pop di
     pop dx
     pop cx
     pop bx
     ret
+.refused:                             ; the NESTED call's own exit. SI is its
+    SHOUT fp_azero                    ; position, just past its '(', while
+    SHOUT sh_acc_store                ; sh_trsi and sh_fnbusy are the OUTER
+    SHOUT sh_skipargs                 ; call's: .zero resumed the parse at a
+    cmp byte [si], ')'                ; stale sh_trsi and cleared the flag,
+    jne .rout                         ; so the next nested call ran and wiped
+    inc si                            ; sh_fnarg[] under the outer one
+    jmp short .rout
 
 ; -----------------------------------------------------------------------------
 ; sh_irwalk - walk the banked range in row-major order, summing each value
@@ -35589,12 +36209,14 @@ shm_ptrans:
 .trig:
     cmp di, 86
     jne .t1
-    SHOUT fp_sin
+    SHOUT fp_sin                      ; CF: an argument past a word of
+    jc .domain                        ; quadrants is #NUM!, not a stored 0
     jmp .store
 .t1:
     cmp di, 87
     jne .t2
     SHOUT fp_cos
+    jc .domain
     jmp .store
 .t2:
     cmp di, 88
@@ -36552,7 +37174,8 @@ section .text
 ; -----------------------------------------------------------------------------
 ; sh_ins_at - in: DI = where in sh_numbuf to insert, AL = the byte. Everything
 ; from DI to the NUL moves right one, the NUL included. The building block
-; both the thousands grouping and TEXT's leading zeros are made of.
+; both the thousands grouping and TEXT's leading zeros are made of. A string
+; already SH_NUMBUF_MAX long takes nothing: the byte is dropped.
 ; -----------------------------------------------------------------------------
 sh_ins_at:
     push ax
@@ -36569,10 +37192,12 @@ sh_ins_at:
     inc si
     jmp .flen
 .found:
-    mov di, si
-    inc di
-.shift:
-    mov al, [si]
+    cmp si, sh_numbuf + SH_NUMBUF_MAX ; full: the NUL is at the last byte,
+    jae .out                          ; and past it are the claims' segment
+    mov di, si                        ; words. Every caller inserts into
+    inc di                            ; sh_numbuf, so this one test bounds
+.shift:                               ; them all - TEXT's leading zeros cut
+    mov al, [si]                      ; at its 40, as sh_nf_putc's do
     mov [di], al
     cmp si, cx
     je .place
@@ -36582,6 +37207,7 @@ sh_ins_at:
 .place:
     mov di, cx
     mov [di], bl
+.out:
     pop di
     pop si
     pop cx
@@ -39481,11 +40107,20 @@ sh_macro_gate:
 .pass:
     clc
     ret
-sh_macro_inputup:
+sh_macro_inputup:                    ; CF=1: no dialog came up, because
+    cmp word [sh_idlg_win], 0        ; sh_idlg_open refuses in silence - one
+    jne .none                        ; of its own is up, or the create failed
     push ax
     mov al, SH_ID_INPUT
     call sh_idlg_open_r
     pop ax
+    jc .none
+    cmp word [sh_idlg_win], 0
+    je .none
+    clc
+    ret
+.none:
+    stc
     ret
 sh_macro_beep:                       ; BEEP: 880 Hz for three ticks
     push ax
@@ -44425,8 +45060,12 @@ shm_mfdelete:
 ; WINDOW: SHEET is one document an instance, and a macro lives in the
 ; document it runs in (81.88.2). So the run ENDS here - the cells it was
 ; running are gone - which is what Excel does when a macro closes its own
-; macro sheet. 1 worksheet, 2 chart, 3 macro sheet, as File > New asks
+; macro sheet. 1 worksheet, 2 chart, 3 macro sheet, as File > New asks.
+; A MODIFIED workbook refuses both (81.118): File > New asks Save / Discard /
+; Cancel there, and a running macro cannot answer an alert
 shm_mnew:
+    cmp byte [sh_modified], 0
+    jne .bad
     mov ax, 1
     call shm_intarg1
     jc .bad
@@ -44444,13 +45083,19 @@ shm_mnew:
     jmp shm_merr
 
 shm_mopen:
+    cmp byte [sh_modified], 0
+    jne shm_mopen_bad
     call shm_fname
     jc shm_mopen_bad
     SHOUT sh_skipargs
     call shm_tosh_name
     push si
     CHOUT SHM_READ                   ; sh_doread's own body: we are in the
-    SHOUT sh_undo_drop                ; module already
+    cmp word [sh_msg], sh_m_loaded    ; module already - so its clean mark
+    jne .kept                         ; too, or every addcell of the read
+    mov byte [sh_modified], 0         ; leaves the file just read dirty
+.kept:
+    SHOUT sh_undo_drop
     mov si, [sh_ownwin]
     SHOUT sh_repaint
     pop si
@@ -44653,7 +45298,11 @@ SHM_FCH    equ 2                      ; channels open at once
 SHM_FREC   equ 24                     ; +0 name (13) +13 mode +14 dirty
                                        ; +15 open +16 base (in THIS segment)
                                        ; +18 size +20 position +22 capacity
-SHM_FTAIL  equ (shm_m2end - sh_modm0)  ; where the image ends, and the tail
+SHM_FTAIL  equ ((shm_m2end - sh_modm0) + 15) & 0xFFF0  ; where the image
+                                       ; ends, and the tail - on a PARAGRAPH,
+                                       ; because a packed file expands in
+                                       ; place only into a buffer whose
+                                       ; offset is a multiple of 16 (20.14.2)
 SHM_FEACH  equ ((SH_M2KB * 1024 - SHM_FTAIL) / SHM_FCH) & 0xFFF0
 shm_fch:   times SHM_FCH * SHM_FREC db 0
 
@@ -44756,6 +45405,9 @@ shm_mfopen:
     pop di
     pop es
     jc .na
+    or dx, dx                         ; what the read DELIVERED is the size:
+    jnz .na                           ; FIND's under-reports a packed file
+    mov [cs:di+18], ax                ; whose hint a foreign OS dropped
 .opened:
     mov byte [cs:di+15], 1            ; open
     cmp byte [cs:shm_acc8], 2         ; a NEW file is marked changed, so
@@ -44825,7 +45477,9 @@ shm_fsize0:
     pop bx
     ret
 
-; FCLOSE(channel) - written back if it changed, and the memory given back
+; FCLOSE(channel) - written back if it changed, and the memory given back.
+; A write the disk REFUSES answers #N/A and leaves the channel open and
+; changed: the tail is the only copy of what the macro wrote
 shm_mfclose:
     call shm_fchan
     jc .bad
@@ -44834,14 +45488,19 @@ shm_mfclose:
     cmp byte [cs:di+14], 0
     je .free
     call shm_fflush
+    jc .na
 .free:
     mov byte [cs:di+15], 0
     pop si
     jmp shm_mtrue
+.na:
+    pop si
+    jmp shm_ana
 .bad:
     jmp shm_refbad
 
-; shm_fflush - the channel at DI written to its file, whole
+; shm_fflush - the channel at DI written to its file, whole. CF=1 the write
+; was refused, and the channel stays changed
 shm_fflush:
     push es
     push di
@@ -44862,7 +45521,9 @@ shm_fflush:
     call OSAPI_FILE_WRITE
     pop di
     pop es
+    jc .out
     mov byte [cs:di+14], 0
+.out:
     ret
 
 ; FSIZE(channel) and FPOS(channel[, position]) - positions are 1-based, as
@@ -46405,14 +47066,16 @@ shm_dbslot:
     pop ax
     ret
 
-; shm_db23 - AX = AX * 2 / 3: Excel's vertical dialog unit, in pixels
+; shm_db23 - AX = AX * 2 / 3: Excel's vertical dialog unit, in pixels.
+; SIGNED, because the callers' sign tests come after it: an unsigned divide
+; made -30 into 21,825 and no test below ever saw a negative
 shm_db23:
     push dx
     push bx
-    shl ax, 1
-    xor dx, dx
+    mov bx, 2
+    imul bx                           ; DX:AX, so no shift can overflow
     mov bx, 3
-    div bx
+    idiv bx
     pop bx
     pop dx
     ret
@@ -46607,6 +47270,10 @@ shm_dbparse:
     add ax, 2
     call shm_dbnum
     call shm_db23
+    or ax, ax                         ; a negative y is the top, as a
+    jns .yok                          ; negative size is none
+    xor ax, ax
+.yok:
     mov [cs:di+4], ax
     mov ax, [cs:shm_dbcol]
     add ax, 3
@@ -48251,6 +48918,7 @@ shm_mstep:
     mov byte [sh_macro_wait], SH_MW_STEP
     call shm_mpaint
     SHOUT sh_macro_alertup
+    jc .noask                         ; no alert to wait on: the run stops
     jmp .out
 .exec:
     mov byte [cs:shm_stepgo], 0
@@ -48299,6 +48967,7 @@ shm_mstep:
     cmp byte [sh_macro_wait], SH_MW_ALERT
     jne .notalert
     SHOUT sh_macro_alertup
+    jc .noask
     jmp .out
 .notalert:
     cmp byte [sh_macro_wait], SH_MW_DBOX ; 81.96: DIALOG.BOX's own window
@@ -48321,7 +48990,11 @@ shm_mstep:
 .ask:
     mov byte [sh_macro_ansok], 0
     SHOUT sh_macro_inputup
-    jmp .out
+    jnc .out
+.noask:                               ; ALERT, Step or INPUT could not put its
+    mov byte [sh_macro_wait], 0       ; window up (another alert or dialog,
+    mov word [sh_msg], sh_s_macroerr  ; or a full table), so no answer will
+    jmp .fin                          ; come: DIALOG.BOX's rule, the run stops
 .goto:
     mov ax, [sh_macro_ncol]
     mov [sh_macro_col], ax
@@ -50510,8 +51183,12 @@ shm_pcell:
 .format:
     mov ax, [sh_ci_col]
     mov bx, [sh_ci_row]
-    SHOUT sh_bt_getw                   ; AH = the number-format index, 0
-    mov bl, ah                         ; (General) when no record
+    SHOUT sh_cell_nfid                 ; AL = the id as Format > Number has
+    cmp al, SH_NF_N                    ; it: the table's id+1 less one, else
+    jb .fmtid                          ; the format byte's, else General - and
+    xor al, al                         ; never an index past the table
+.fmtid:
+    mov bl, al
     xor bh, bh
     shl bx, 1
     push si                            ; SI is the FORMULA position (past the
@@ -51934,14 +52611,16 @@ shm_pmatrix:
     xor ax, ax
     SHOUT sh_acc_int
     mov byte [sh_curtype], SH_T_NUM
-    jmp .out
+    jmp .done_clean                    ; THIS call set sh_mx_busy, so it
+                                       ; clears it - a bad argument list left
+                                       ; every array function refused after it
 .refused:
     SHOUT sh_skipargs
     mov byte [sh_evalerr], SH_ERR_VALUE
     xor ax, ax
     SHOUT sh_acc_int
     mov byte [sh_curtype], SH_T_NUM
-    jmp .out
+    jmp .out                           ; the OUTER call owns the flag
 .done_clean:
     mov byte [sh_mx_busy], 0
 .out:
@@ -54820,6 +55499,9 @@ sh_s_k:        db ';K', 0                  ; also the "commas are set" flag
 sh_s_sylk_fw:  db 'F;W', 0                 ; F;W<first> <last> <width> (81.56)
 sh_s_sylk_fx:  db 'F;X', 0                 ; an F (formatting) record -
 sh_s_sylk_ff:  db ';F', 0                  ; stage 1.6's real SYLK support
+sh_s_sylk_fs:  db ';S', 0                  ; the style field: borders, shade
+sh_s_sylk_fa:  db ';A', 0                  ; a C record's comment: the note
+sh_sylk_bordch: db 'LRTBS', 0              ; SH_BORD_* bit order (81.119.2)
 sh_s_crlf:     db 13, 10, 0
 sh_s_nn:       db 'NN;N', 0           ; SYLK's defined-name record (81.29.1)
 sh_s_nne:      db ';E', 0
@@ -55310,8 +55992,8 @@ sh_dbf_cellstr:
 .text:
     mov si, [sh_curtoff]
     mov di, sh_numbuf
-    mov cx, 254
-    mov es, [sh_txtseg]
+    mov cx, SH_NUMBUF_MAX             ; sh_numbuf's room, never the field's:
+    mov es, [sh_txtseg]               ; past it are the claims' segment words
 .tc:
     mov al, [es:si]
     or al, al
@@ -55786,7 +56468,9 @@ sh_dbf_getfield:
     jnz .lead
 .copy:
     jcxz .trail
-    mov al, [es:si]
+    cmp di, sh_rwsrc + SH_EDITMAX     ; the file says the width, up to 255;
+    jae .trail                        ; sh_rwsrc holds 63 and the NUL, and SI
+    mov al, [es:si]                   ; is re-derived from the width below
     inc si
     mov [di], al
     inc di
@@ -56347,6 +57031,8 @@ section .text
 %include "os88dec.inc"
 
 %define CH_MODC_EXT sh_modc_ext     ; 82.16.8's hook, before ch_modc is emitted
+CH_OVSTAMP equ sh_modc_stamp - sh_modc0  ; ...and the build stamp ch_ovneed
+CH_OVLEN   equ sh_modc_end               ; checks: where it is, and the length
 %include "os88chartovl.inc"   ; the resident half of the shared
                               ; chart module: loader, shims, verbs (82.16)
 
@@ -56355,12 +57041,15 @@ section .text
 %endif
 
 %include "os88chart.inc"
+section SH_MODSEC                      ; CHART.OVL's last byte + 1, shm_m2end's
+sh_modc_end:                           ; twin: os88chart.inc is the last .modc
+section .text                          ; fragment, so nothing lands after this
 
 ; =============================================================================
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 9331                     ; +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
+    OS88_BSS 9337                     ; +2 for sh_df_dirty, the Data Form's typed-in flag (81.71.5); +2 for sh_pstk0, the parser's stack anchor (81.3); +2 for ch_ovfail, CHART.OVL's failure latch (82.16.5); +38 for 81.118's ask-before-discard (sh_modified, sh_pend and sh_askmsg's OS88UI_AMAX+2); +4 at the 2026-10-20 merge for 13.18's sh_v_os88ui_sbwheel (the Paste list's wheel is in CHART.OVL, so it reaches the resident bar library through a shim); +9 for 81.114.10 (sh_tbl_isres, sh_tbl_idx and the 7-byte DATATABLE-written bitmap); +1 for 81.114.8's re-entrancy guard; +30 for 81.114.7 (the table list, the selection and table rectangles sh_tbl_overlap compares, and sh_prot_blocked's two bytes); +67 for 81.114 Data > Table; +8 at the 2026-10-14 merge for ch_v_dec_s16/ch_v_dec_u16, os88dec.inc being resident here now (20.5.2); 81.111: Find left the vectors, sh_btfix joined; +24 for 81.108's Reference scratch;
                                        ; +1 for 81.107's own-RETURN byte;
                                        ; +1 for 81.106's check-box kind;
                                        ; +21 for 81.103's window caption;
@@ -56472,7 +57161,7 @@ sh_vcl_b      equ sh_vcl_a + 2
 sh_rz_on      equ sh_vcl_b + 2       ; 81.73.2: a heading drag is live
 sh_rz_axis    equ sh_rz_on + 1       ; byte: 0 = a column, 1 = a row
 sh_rz_idx     equ sh_rz_axis + 1     ; the REAL row or column being resized
-sh_rz_x0      equ sh_rz_idx + 2      ; the edge's own pixel when it was
+sh_rz_x0      equ sh_rz_idx + 2      ; the slot's leading edge when it was
 sh_rz_px      equ sh_rz_x0 + 2       ; grabbed, and sh_hdrhit's own scratch
 ; 81.74's own: the macro recorder. sh_rec_col/row/sheet is where the next
 ; macro formula goes - Set Recorder's corner, and the SHEET with it, because
@@ -56572,7 +57261,10 @@ sh_evaldepth  equ sh_evalerr + 2             ; sh_eval_cell's recursion depth
 sh_pnest      equ sh_evaldepth + 2           ; live parser recursion points -
                                              ; sh_pnest_enter's counter (81.3),
                                              ; balanced so it needs no reset
-sh_fbuf       equ sh_pnest + 2              ; SH_EVAL_MAXDEPTH * 64: one
+sh_pstk0      equ sh_pnest + 2              ; SP at the SHALLOWEST fresh
+                                             ; sh_eval_cell: the stack anchor
+                                             ; SH_PSTK_MAX is measured from
+sh_fbuf       equ sh_pstk0 + 2              ; SH_EVAL_MAXDEPTH * 64: one
                                              ; formula-text copy per
                                              ; recursion level (see
                                              ; sh_eval_cell), copied out of
@@ -57713,7 +58405,8 @@ sh_df_buf     equ sh_df_line + OS88LINE_SZ   ; SH_EDITMAX+1: what it edits
 ; 81.81: Format > Justify. The line buffer is SH_EDITMAX wide DELIBERATELY -
 ; a justified line is a label, and SH_EDITMAX is what a label can be; a wider
 ; line would be one this app can produce and the user cannot retype.
-sh_ju_c1      equ sh_df_buf + SH_EDITMAX + 1 ; the block, ordered
+sh_df_dirty   equ sh_df_buf + SH_EDITMAX + 1 ; byte: the field was typed in
+sh_ju_c1      equ sh_df_dirty + 2            ; the block, ordered
 sh_ju_c2      equ sh_ju_c1 + 2
 sh_ju_r1      equ sh_ju_c2 + 2
 sh_ju_r2      equ sh_ju_r1 + 2

@@ -41,8 +41,16 @@
 ; happens.
 ; =============================================================================
 
+%ifdef VID_EXT
+DRV_VX      equ 1               ; ...plus VESA.DRV's row, LAST on both big
+%else                           ; builds (SPEC.md 120.1): a DRVC_OVL row like
+DRV_VX      equ 0               ; the absolute mouse's, with a SYSTEM.CFG bit
+%endif                          ; (drv_cfgbit's 9) and a Drivers-page tick.
+                                ; An `equ` and not a %define, so that
+                                ; tests/unit/t_drvmem.py's expression reader
+                                ; can evaluate DRV_MAX
 %ifdef KERN_EMU
-DRV_MAX     equ 8               ; rows in drv_tab. The FIFTH is SPEC.md 72's
+DRV_MAX     equ 9 + DRV_VX      ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; Ethernet card and the SIXTH is SPEC.md
                                 ; 9.11's absolute mouse - the one DRVC_OVL row
                                 ; in the table, which takes no publication
@@ -55,9 +63,12 @@ DRV_MAX     equ 8               ; rows in drv_tab. The FIFTH is SPEC.md 72's
                                 ; (SPEC.md 9.12) - after the absolute mouse
                                 ; here so that row keeps index 5. The EIGHTH
                                 ; is kern_big's seventh, EMS.DRV (SPEC.md 107)
+                                ; and the NINTH its eighth, CDROM.DRV (SPEC.md
+                                ; 119)
 %elifdef KERN_BIG
-DRV_MAX     equ 7               ; ...and kern_big stops at EMS.DRV (SPEC.md
-                                ; 107), after the CH375 USB mouse (SPEC.md
+DRV_MAX     equ 8 + DRV_VX      ; ...and kern_big stops at CDROM.DRV (SPEC.md
+                                ; 119), after EMS.DRV (SPEC.md 107), after the
+                                ; CH375 USB mouse (SPEC.md
                                 ; 9.12), appended after the parallel link so
                                 ; rows 0-4 keep their indices.
                                 ; The absolute mouse's row was HERE until
@@ -177,11 +188,17 @@ DRVC_FILE2  equ 8               ; a SECOND file-redirector class (SPEC.md
                                 ; table, unlike the two classes before it, so
                                 ; drv_cls_svc_x and drv_pkg_call_x each step
                                 ; over POINT and EMS to reach its slot
+DRVC_CD     equ 9               ; the THIRD file-redirector class (SPEC.md
+                                ; 119.1): CDROM.DRV's, an ATAPI CD-ROM's
+                                ; ISO 9660 volume answered as FSV_* verbs and
+                                ; its audio as a package door. Appended after
+                                ; DRVC_FILE2 because a class number is ABI; it
+                                ; KEEPS A COPY of its table, like class 8
 EMSV_GONE   equ 8               ; ...and the one EMS verb the kernel sends:
                                 ; an instance is torn down (SPEC.md 107.1,
                                 ; xm_release_rec). Mirrored from os88api.inc
 %ifdef OS88_DRIVERS
-DRVC_MAX    equ 8               ; classes, and so publication slots
+DRVC_MAX    equ 9               ; classes, and so publication slots
 %else
 DRVC_MAX    equ 5               ; ...and FIVE where there is no driver layer at
                                 ; all (SPEC.md 51.0), because the only thing
@@ -271,6 +288,11 @@ DRVE_NOVOL  equ 8               ; DRVV_READY's answer, never attach's: the
                                 ; the Drivers page; a row the MACHINE chose
                                 ; is taken down again by drv_boot (51.3.2)
 DRVE_NERR   equ 9               ; how many strings drv_errstr has
+
+; OSAPI_DRV_USE's verbs in AH (SPEC.md 117.3), MIRRORED in apps/os88api.inc
+DRVU_UP     equ 0               ; bring a class's driver up: the tick's load
+DRVU_DONE   equ 1               ; the panel close's notifier, with no panel
+DRVU_CALL   equ 2               ; OSAPI_DRV_CALL_AT, asked as the machine
 
 ; --- .drv header: the .o88 header's shape with a different version -----------
 DRV_H_MAGIC equ 0               ; word: 0x384F ('O','8')
@@ -369,7 +391,7 @@ DQ_A        equ 2               ; dw: the CLASS's own three words - for
 DQ_B        equ 4               ; dw: DRVC_SOUND, the DSP base port, then
 DQ_C        equ 6               ; dw: (IRQ | DMA<<8), then the DSP version
 DQ_SIZE     equ 8
-DQ_MAXREC   equ 8               ; the most records one call can write. It is
+DQ_MAXREC   equ 10              ; the most records one call can write. It is
 %if DRV_MAX > DQ_MAXREC         ; MIRRORED in apps/os88api.inc, so a caller can
 %error "DRV_MAX exceeds DQ_MAXREC - widen it here AND in apps/os88api.inc"
 %endif                          ; size a buffer without mirroring DRV_MAX - and
@@ -489,6 +511,9 @@ DSV_GEOM    equ DSV_BLK         ; == DSV_BLK: the transport facts are that
                                 ; driver has been detached and speaks CHS
 DSV_SIZE    equ 36              ; ...and it must stay EVEN: drv_publish copies
                                 ; the table DSV_SIZE/2 WORDS at a time
+%if DSV_SIZE > 0x3F
+  %error "driver: DRV_H_DSV's length is 6 bits - bits 7 and 6 are OS88_DRV_HIGHOK and OS88_DRV_HICLAIM - and drv_publish masks it with 3Fh"
+%endif
 DSV_TAB0    equ 28              ; ...and the length every driver that carries 0
                                 ; at DRV_H_DSV has: the table stood at 28 until
                                 ; the four cells above landed, and HDD.DRV's
@@ -539,6 +564,13 @@ FSV_APPEND  equ 10              ; the chunked pair (SPEC.md 18.4.4)
 ; motor. Nothing else in the kernel branches on it, and a driver that leaves
 ; it clear gets exactly the behaviour every DRVC_FILE driver had before it.
 FSCAP_LOCAL equ 1               ; ...my reads cost what a memcpy costs
+FSCAP_ICON  equ 2               ; ...and my VOLUME DRAWS ITS OWN desktop
+                                ; picture (SPEC.md 26.4.2): desk_pic asks my
+                                ; door's DRV_ICONV at the picture's origin
+                                ; instead of drawing the hard-disk icon
+DRV_ICONV   equ 0x41            ; that verb - clear of every door's own
+                                ; verbs, and of WZV_PAINT (0x40). Mirrored in
+                                ; drivers/os88drv.inc
 
 FSV_READAT  equ 12              ; AX = a handle, DX:BX = buffer, CX = capacity,
                                 ; DI:SI = the 32-bit offset. out DX:AX =
@@ -663,21 +695,38 @@ CFG_VID     equ 6               ; db: the display adapter (SPEC.md 39.11.3) -
                                 ; booting this one to a dead monitor
 CFG_VDM     equ 7               ; db: [vid_dmode], Single or Extend (39.19)
 CFG_VDL     equ 8               ; db: [vid_dlay], where display 1 sits. Both
+CFG_VEL     equ 1 * DRV_VX      ; ...AND THE PACKED DISPLAY'S MODE CLASS RIDES
+                                ; THE 'VM' RECORD (SPEC.md 120.2.3): ONE byte
+                                ; after the arrangement (vxabi.inc's VXC_*, 0
+                                ; = Auto) on a build with the external
+                                ; renderer, none without. 'VM' is ver 3 for
+                                ; it, as it went to 2 when the arrangement
+                                ; joined (39.11.3): an old record stops
+                                ; matching and the defaults stand ONCE. A key
+                                ; of its own was written first and refused by
+                                ; the blob, which had two bytes left; then four
+                                ; bytes here, refused by the same blob - the
+                                ; file buffer ovc_buf is blob bytes, and ONE
+                                ; was what it had (docs/plans/VESA-PLAN.md)
+CFG_VE      equ 9               ; db (none without VID_EXT): CFG_VGC's shape -
+                                ; no kernel byte holds it, the Display page
+                                ; edits it here, vx_boot_x hands it to the
+                                ; driver at attach
                                 ; range-checked before they are stored, on
                                 ; CFG_SCH's terms: a byte from a future
                                 ; version leaves the default alone rather
                                 ; than selecting nonsense
-CFG_THM     equ 9               ; db: [thm_kind], the theme (SPEC.md 76). A
+CFG_THM     equ 9 + CFG_VEL               ; db: [thm_kind], the theme (SPEC.md 76). A
                                 ; plain store like CFG_RT, but the unpack
                                 ; re-resolves the two chrome pens from it
-CFG_ANIM    equ 10              ; db: [wm_animon], SPEC.md 11.99's zoom
+CFG_ANIM    equ 10 + CFG_VEL              ; db: [wm_animon], SPEC.md 11.99's zoom
                                 ; (SPEC.md 76.11). Carried in EVERY build,
                                 ; including one with no animation in it, so a
                                 ; kernel swap does not silently turn it back on
-CFG_SSM     equ 11              ; db: [ss_modes], which screen-saver modes the
+CFG_SSM     equ 11 + CFG_VEL              ; db: [ss_modes], which screen-saver modes the
                                 ; picker may choose from (SPEC.md 79.4)
-CFG_SSS     equ 12              ; db: [ss_secs], seconds one of them runs
-CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
+CFG_SSS     equ 12 + CFG_VEL              ; db: [ss_secs], seconds one of them runs
+CFG_SSN     equ 13 + CFG_VEL              ; db: [ss_mins], minutes of idle before any of
                                 ; it starts, 0 = never. ALL THREE ARE CARRIED
                                 ; IN EVERY BUILD, CFG_ANIM's rule one setting
                                 ; over: kern_small has no SAVER.DRV and still
@@ -685,13 +734,13 @@ CFG_SSN     equ 13              ; db: [ss_mins], minutes of idle before any of
                                 ; between the two kernels must not come back
                                 ; with the modes silently re-ticked
 %ifdef DOCK_OPT
-CFG_DOCK    equ 14              ; db: [dock_cfg], where the dock stands and
+CFG_DOCK    equ 14 + CFG_VEL              ; db: [dock_cfg], where the dock stands and
                                 ; whether it hides (SPEC.md 30.5). A plain
                                 ; store, and the unpack re-derives the
                                 ; geometry from it, because that is not one
-CFG_DBLOB   equ 15              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 15 + CFG_VEL              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
 %else
-CFG_DBLOB   equ 14              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_DBLOB   equ 14 + CFG_VEL              ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
 %endif
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
@@ -844,7 +893,14 @@ DRV_CFG_MAPN equ 8
     dw 'SM'                     ; Scheduler Mode
     db 1, 1, CFG_SCH
     dw 'VM'                     ; Video Mode - which adapter, then SPEC.md
+%ifdef VID_EXT
+    db 3, 4, CFG_VID            ; 39.19's two arrangement bytes, then the
+                                ; packed display's mode class (SPEC.md
+                                ; 120.2.3, CFG_VE) - ver 3 for the widening,
+                                ; the ver-2 story below used once more
+%else
     db 2, 3, CFG_VID            ; 39.19's two arrangement bytes. ver 2 because
+%endif
                                 ; it WAS one byte: an old record's VM stops
                                 ; matching and the defaults stand, which is
                                 ; this table's whole compatibility story used
@@ -944,14 +1000,23 @@ CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 ; the kernel at the image's offset.
 %1 %+ _bit:
 %ifdef KERN_EMU
-    db 0, 1, 4, 2, 3, 5, 6, 7   ; sound, hdd, ether, ramdisk, net, vmmouse,
-                                ; usbmouse, ems
+    db 0, 1, 4, 2, 3, 5, 6, 7, 8 ; sound, hdd, ether, ramdisk, net, vmmouse,
+                                ; usbmouse, ems, cd-rom
+%ifdef VID_EXT
+    db 9                        ; ...and VESA.DRV: BIT 9 ON BOTH BUILDS (8 is
+%endif
+                                ; the CD-ROM's, SPEC.md 119.1)
 %elifdef KERN_BIG
-    db 0, 1, 4, 2, 3, 6, 7      ; sound, hdd, ether, ramdisk, net, usbmouse,
-                                ; ems - BIT 6 ON BOTH BUILDS, row 5 here and
+    db 0, 1, 4, 2, 3, 6, 7, 8   ; sound, hdd, ether, ramdisk, net, usbmouse,
+                                ; ems, cd-rom (bit 8 on both: SPEC.md 119.1)
+                                ; - BIT 6 ON BOTH BUILDS, row 5 here and
                                 ; row 6 there: bit 5 is the absolute mouse's
                                 ; even on a build that has no such row (SPEC.md
                                 ; 9.12). And EMS is bit 7 on both (SPEC.md 107)
+%ifdef VID_EXT
+    db 9                        ; ...and VESA.DRV, bit 9 (SPEC.md 120.1): 8
+                                ; is the CD-ROM's
+%endif
 %else
     db 0, 1, 3, 2               ; sound, hdd, ether, net
 %endif
@@ -1057,8 +1122,14 @@ drv_t_vmm:   db 'Absolute mouse', 0  ; ALONE (SPEC.md 9.11.7) - 27 bytes that
                                 ; mechanism and has no use for this driver
 %endif
 %ifdef KERN_BIG
+%ifdef VID_EXT
+drv_f_vesa:  db 'VESA.DRV', 0    ; SPEC.md 120's packed-pixel display: kern_big's
+drv_t_vesa:  db 'VESA Display', 0 ; and kern_emu's, never kern_small's
+%endif
 drv_f_ems:   db 'EMS.DRV', 0     ; SPEC.md 107's expanded memory: kern_big's
 drv_t_ems:   db 'EMS', 0         ; for the reason the USB mouse's line gives
+drv_f_cd:    db 'CDROM.DRV', 0   ; SPEC.md 119's CD-ROM, kern_big's for the
+drv_t_cd:    db 'CD-ROM', 0      ; same reason
 drv_f_usbm:  db 'USBMOUSE.DRV', 0 ; SPEC.md 9.12's CH375 mouse. kern_big's and
 drv_t_usbm:  db 'USB Mouse', 0  ; not kern_small's: the whole driver mechanism
                                 ; is OS88_DRIVERS already, and a 128KB machine
@@ -1120,16 +1191,19 @@ drv_fseg7:   dw 0               ; 107) has no copied table, so drv_publish
 %ifdef OS88_DRIVERS
 drv_fptr8:   dw PKG_DISP        ; class 8 (DRVC_FILE2, SPEC.md 62.9.19) -
 drv_fseg8:   dw 0               ; kern_big's, the build with a ninth row
+drv_fptr9:   dw PKG_DISP        ; class 9 (DRVC_CD, SPEC.md 119.1)
+drv_fseg9:   dw 0
 
 ; drv_svcix - per class, from class 1: which drv_svc copy is its, as
 ; slot * DSV_SIZE/2 + 1, and 0 = it keeps none (drv_cls_svc_x). Class 3 is
 ; RETIRED and reads class 4's slot, which is what the compaction it replaced
 ; answered; nothing publishes class 3 (SPEC.md 58). Classes 6 and 7 keep no
-; copy, and class 8 is the one copied class past them (SPEC.md 62.9.19)
+; copy, and classes 8 and 9 are the copied classes past them (SPEC.md
+; 62.9.19, 119.1)
 DRV_SVCH    equ DSV_SIZE / 2
 drv_svcix:   db 0*DRV_SVCH+1, 1*DRV_SVCH+1, 2*DRV_SVCH+1, 2*DRV_SVCH+1
-             db 3*DRV_SVCH+1, 0, 0, 4*DRV_SVCH+1
-%if $ - drv_svcix != DRVC_MAX || 4*DRV_SVCH+1 > 0x7F || DSV_SIZE & 1
+             db 3*DRV_SVCH+1, 0, 0, 4*DRV_SVCH+1, 5*DRV_SVCH+1
+%if $ - drv_svcix != DRVC_MAX || 5*DRV_SVCH+1 > 0x7F || DSV_SIZE & 1
   %error "driver: drv_svcix is one byte per class, cbw-able, and DSV_SIZE is even"
 %endif
 %endif
@@ -1326,6 +1400,29 @@ usbm_row:                       ; ...a label for tests/usbmouse.py, which finds
                                 ; ports, and 260h is the CH375's on a Book8088
     db DRVE_OK
     db 0
+    dw PKG_DISP, 0              ; row 7 (row 8 on kern_emu): CDROM.DRV, an
+    dw drv_f_cd, drv_t_cd       ; ATAPI CD-ROM (SPEC.md 119)
+    dw 0, 0
+    db DRVC_CD
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): attach
+                                ; selects a device on every IDE channel it
+                                ; probes
+    db DRVE_OK
+    db 0
+%ifdef VID_EXT
+vesa_row:                       ; ...a label for vx_boot_x (vidext.inc) and
+    dw PKG_DISP, 0              ; tests/vesa.py. Row 8 (9 on kern_emu):
+    dw drv_f_vesa, drv_t_vesa   ; VESA.DRV, the packed-pixel display's renderer
+    dw 0, 0                     ; (SPEC.md 120). DRVC_OVL WITH A ROW, the
+    db DRVC_OVL                 ; absolute mouse's shape and for its reason:
+                                ; the kernel is its only caller (vx_ep) so no
+                                ; class is needed, and the tick is the user's
+                                ; decision to put the desktop on the VBE
+    db 0                        ; NOT wanted by default (SPEC.md 51.3): the
+                                ; probe is an int 10h on every boot otherwise
+    db DRVE_OK
+    db 0
+%endif
 %if $ - drv_tab != DRV_MAX * DRVR_SIZE
   %error "driver: thmv_row must follow drv_tab's last row (drv_call's bound)"
 %endif
@@ -1383,7 +1480,7 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; RD_MAXKB is 16,384 - a column showing that
                                 ; would be arithmetic rather than advice
 
-DRVM_IMG_SND equ 8              ; ceil(build/sound.drv   / 1024) - t_drvmem
+DRVM_IMG_SND equ 12             ; ceil(build/sound.drv   / 1024) - t_drvmem
 DRVM_IMG_HDD equ 4              ; ceil(build/hdd.drv     / 1024)   checks
 DRVM_IMG_ETH equ 17             ; ceil(build/ether.drv   / 1024)   every one
 DRVM_IMG_RAM equ 6              ; ceil(build/ramdisk.drv / 1024)   of these
@@ -1394,6 +1491,8 @@ DRVM_IMG_NET equ 5              ; ceil(build/net.drv     / 1024) - FIVE
 DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
 DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
 DRVM_IMG_EMS equ 1              ; ceil(build/ems.drv / 1024)
+DRVM_IMG_CD  equ 9              ; ceil(build/cdrom.drv / 1024)
+DRVM_IMG_VESA equ 8             ; ceil(build/vesa.drv / 1024)
 
 DRVM_SND     equ DRVM_IMG_SND + 16        ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -1429,8 +1528,14 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 7 + 8) | DRVM_PLUS
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
+DRVM_VESA    equ DRVM_IMG_VESA  ; VESA.DRV claims nothing: its probe buffers,
+                                ; its mode table and the arrow's save-under
+                                ; are bss, inside the image
 DRVM_EMS     equ DRVM_IMG_EMS   ; EMS.DRV claims nothing: its tables are its
                                 ; bss, and the board's memory is not the heap's
+DRVM_CD      equ DRVM_IMG_CD    ; CDROM.DRV claims nothing: its sector
+                                ; buffer, TOC and handle cache are its bss
+                                ; (SPEC.md 119.3.4)
 DRVM_USBM    equ DRVM_IMG_USBM  ; the USB mouse claims nothing: its one
                                 ; buffer is the 64-byte descriptor, in the
                                 ; image. Its worker's stack is SCH_DRV_STK of
@@ -1454,8 +1559,12 @@ drv_memk:                       ; one word per drv_tab row, in the same order
     dw DRVM_VMM                 ; row 5: the absolute mouse (kern_emu alone)
 %endif
 %ifdef KERN_BIG
-    dw DRVM_USBM                ; the CH375 USB mouse, and
-    dw DRVM_EMS                 ; EMS.DRV, last on both big builds
+    dw DRVM_USBM                ; the CH375 USB mouse,
+    dw DRVM_EMS                 ; EMS.DRV, and
+    dw DRVM_CD                  ; CDROM.DRV, last on both big builds...
+%ifdef VID_EXT
+    dw DRVM_VESA                ; ...until VESA.DRV (SPEC.md 120)
+%endif
 %endif
 %if ($ - drv_memk) / 2 != DRV_MAX
   %error "drv_memk has drifted from drv_tab: one word per row, same order"
@@ -1852,6 +1961,81 @@ osapi_drv_classk_x:
     retf
 
 ; -----------------------------------------------------------------------------
+; osapi_drv_use_x - OSAPI_DRV_USE (SPEC.md 117.3): the Drivers page's tick, as
+; a door a package can open
+; in:  AL = a DRVC_* class, AH = DRVU_UP (0) / DRVU_DONE (1); the UI task, in
+;      a callback (gfx lock HELD)
+; out: UP - CF = 0 the class's driver is up (or was); CF = 1, AX = the DRVE_*
+;      its row banked. DONE - CF = 0. Every register but AX preserved
+;
+; UP IS THE TICK'S CODE AND NOT A COPY OF IT. The attach half of a load lives
+; in the images that load drivers (kernel size pass 13), so the cell brings
+; CTRL.DRV in and calls its CPE_DRVUP, which is cdl_load - the very routine
+; cp_drv_click runs - and then gives CTRL.DRV back unless a Control Panel is
+; open: cpf_shutdown's three lines. It loads and RECORDS NOTHING: no want, no
+; answer, no SYSTEM.CFG staged, because the user never answered the Drivers
+; page and a door that wrote an answer for them is the kernel guessing (51.3).
+;
+; DONE is the Control Panel's close, sent when there IS no Control Panel:
+; drv_cp_closed_x itself, so every loaded driver hears DSV_CPCLOSE exactly as
+; it would at a close - for HDD.DRV that is hd_tool_reap, HDDTOOL.DRV's ~19KB
+; back. With a panel open it is skipped: that panel's own close will send it,
+; and until then "the panel has closed" would be untrue.
+; -----------------------------------------------------------------------------
+osapi_drv_use_x:
+    call kentc_bp               ; KENT: push ax..bp - and the answer is
+    cmp ah, DRVU_DONE           ; written over the banked AX at .out
+    je .done
+    ja .call
+    call cpf_need               ; CTRL.DRV resident, or CF = 1 because it
+    jnc .up                     ; could not be read
+    mov ax, DRVE_DISK
+    jmp short .out
+.up:
+    call far [CPFP + CPE_DRVUP*4]   ; CF, AX = the row's DRVE_*
+    pushf
+    push ax
+    call drv_use_panel
+    jnc .kept                   ; an open panel still owns CTRL.DRV
+    mov al, MOD_CTRL
+    call mod_drop
+.kept:
+    pop ax
+    popf
+    jmp short .out
+.done:
+    call drv_use_panel
+    jnc .ok
+    call drv_cp_closed          ; the panel close's own notifier, near
+.ok:
+    xor ax, ax                  ; (CF = 0)
+    jmp short .out
+.call:                          ; CALL: OSAPI_DRV_CALL_AT ASKED AS THE MACHINE
+    mov ax, [snd_inst]          ; (SPEC.md 51.2.3) - drv_call's bracket, which
+    push ax                     ; the package door does not take: a door verb
+    cmp ah, [sch_cur]           ; of SOUND.DRV's or the sockets' may answer
+    jne .asis                   ; FOR the caller, so the door stays as it is
+    call drv_nostamp            ; and the caller who wants a driver to act as
+.asis:                          ; the machine - file names, the system volume -
+    call KERNEL_SEG:apic_drv_call_at    ; asks here. Only the task that SET the
+    pop word [snd_inst]         ; stamp clears it: a worker's inst_caller
+                                ; already answers its own instance, and
+                                ; clearing a callback's stamp under it is a
+                                ; race (snd_disp_set's own reason). BX, CX,
+                                ; DX, SI, DI and ES reach the driver as the
+                                ; caller left them; `pop` writes no flag
+.out:
+    mov bp, sp                  ; THE ANSWER OVER THE BANKED AX - KENT's frame
+    mov [bp+12], ax             ; is [bp][di][si][dx][cx][bx][ax] - and the
+    jmp kretfc_bp               ; ladder pops it back with CF untouched
+
+; drv_use_panel - CF = 0 a Control Panel is open. Spends AL and DI
+drv_use_panel:
+    mov al, KIND_CTRL
+    call KERNEL_SEG:cw_inst_find_kind
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_row - row index to row pointer (module internal)
 ; in:  AL = row index
 ; out: BX = drv_tab + index*DRVR_SIZE
@@ -1962,8 +2146,10 @@ drv_call:
                                 ; the kernel executing zeros because of it
 .stray:
 %ifdef KERN_BIG
+ %ifndef KERN_MEGA              ; (kern_mega has no xm_row: its pool is its own)
     cmp bx, xm_row              ; **...AND drv_tab IS NOT THE WHOLE LIST OF
     je .row                     ; LEGITIMATE ROWS** (SPEC.md 41.12.5). xm_row
+ %endif
     cmp bx, ss_row              ; ...and ss_row is the SECOND (SPEC.md 79.2),
     je .row                     ; which is why this is a list and not a pair of
 %endif                          ; compares somebody has to remember to widen.
@@ -2091,7 +2277,11 @@ drv_svc_call_x:
     pop es                      ; ES = KERNEL_SEG: what the driver reads the
     mov ds, [es:drv_fseg]       ; things it was handed through
     call wm_nest_pushd          ; SPEC.md 66.6.3
+%ifdef KERN_MEGA
+    MEGA_PCALL [es:drv_fptr], [es:drv_fseg] ; the CODE alias (kernel/mega.inc)
+%else
     call far [es:drv_fptr]
+%endif
     pop es
     pop ds                      ; ...and DS names the kernel again, which is
     call wm_nest_pop            ; the segment the pop reads
@@ -2146,7 +2336,11 @@ drv_blk_call_x:
     pop es
     mov ds, [es:drv_blkseg]
     call wm_nest_pushd          ; SPEC.md 66.6.3
+%ifdef KERN_MEGA
+    MEGA_PCALL [es:drv_blkfp], [es:drv_blkseg] ; the CODE alias (mega.inc)
+%else
     call far [es:drv_blkfp]
+%endif
     pop es
     pop ds                      ; ...and DS names the kernel again, which is
     jmp wm_nest_pop             ; the segment the pop reads
@@ -2208,7 +2402,177 @@ drv_svc_none:
 ; ARGUMENT to the verbs that move bytes, and DX:BX rather than ES:BX is only
 ; the BUFFER's half of that rule (SPEC.md 51.8).
 ; -----------------------------------------------------------------------------
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; drv_fs_hi - drv_fs_call for a transfer verb whose buffer DX:BX is a POOL
+; selector (kern_mega, KERN-MEGA-PLAN 13.6): the bytes go 512 at a time
+; through LOW_SEG's dsk_secbuf, where a redirector's paragraph arithmetic is
+; right. The verbs are reduced to the two chunkable ones: READ and READAT
+; become READATs from the offset (0 for READ), WRITE becomes one WRITE of the
+; first piece - so an empty file is still made - and APPENDs of the rest,
+; APPEND becomes APPENDs. A driver missing the verb it reduces to refuses, as
+; it would have for that verb. out: as the verb's own - CF and AX, and DX:AX
+; the bytes for the two reads. The file layer is the UI task's (SPEC.md 20.6
+; rule 7), so the state is one copy in .bss
+; -----------------------------------------------------------------------------
+drv_fs_hi:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    mov [dfh_verb], bp
+    mov [dfh_sel], dx
+    mov [dfh_buf], bx
+    mov [dfh_h], ax
+    mov [dfh_name], si
+    xor ax, ax
+    mov [dfh_done], ax
+    mov [dfh_done+2], ax
+    mov [dfh_off], ax           ; READ: from 0
+    mov [dfh_off+2], ax
+    mov byte [dfh_first], 1
+    cmp bp, FSV_APPEND
+    jb .r32                     ; READ / WRITE: DI:CX bytes
+    cmp bp, FSV_READAT
+    jne .r16
+    mov [dfh_off], si           ; READAT's offset is DI:SI...
+    mov [dfh_off+2], di
+.r16:
+    xor di, di                  ; ...and APPEND / READAT count CX bytes
+.r32:
+    mov [dfh_rem], cx
+    mov [dfh_rem+2], di
+.loop:
+    mov cx, 512
+    cmp word [dfh_rem+2], 0
+    jne .n
+    cmp [dfh_rem], cx
+    jae .n
+    mov cx, [dfh_rem]
+.n:
+    or cx, cx
+    jnz .go
+    cmp word [dfh_verb], FSV_WRITE
+    jne .done                   ; nothing left - except a WRITE's first call,
+    cmp byte [dfh_first], 0     ; which makes the file even when it is empty
+    je .done
+.go:
+    mov [dfh_n], cx
+    mov bp, [dfh_verb]
+    cmp bp, FSV_WRITE
+    je .out
+    cmp bp, FSV_APPEND
+    jne .in
+.out:                           ; a write: the piece into the scratch first
+    push ds
+    push es
+    mov si, [dfh_buf]
+    push ss
+    pop es
+    mov di, dsk_secbuf
+    mov ds, [dfh_sel]
+    cld
+    rep movsb
+    pop es
+    pop ds
+    mov cx, [dfh_n]
+    mov si, [dfh_name]
+    xor di, di                  ; (WRITE's DI:CX)
+    cmp byte [dfh_first], 0
+    jne .call                   ; WRITE's first piece is a WRITE...
+    mov bp, FSV_APPEND          ; ...and every later one an APPEND
+    jmp short .call
+.in:
+    mov bp, FSV_READAT
+    mov ax, [dfh_h]
+    mov si, [dfh_off]
+    mov di, [dfh_off+2]
+.call:
+    mov dx, ss
+    mov bx, dsk_secbuf
+    call drv_fs_call            ; (a LOW buffer: no recursion past this)
+    jc .fail
+    mov byte [dfh_first], 0
+    mov cx, [dfh_n]
+    cmp word [dfh_verb], FSV_WRITE
+    je .adv
+    cmp word [dfh_verb], FSV_APPEND
+    je .adv
+    mov cx, ax                  ; a read: what it delivered (512 at most)
+    jcxz .done
+    push ds
+    push es
+    mov di, [dfh_buf]
+    mov es, [dfh_sel]
+    push ss
+    pop ds
+    mov si, dsk_secbuf
+    cld
+    rep movsb
+    pop es
+    pop ds
+    mov cx, ax
+.adv:
+    add [dfh_buf], cx
+    add [dfh_off], cx
+    adc word [dfh_off+2], 0
+    add [dfh_done], cx
+    adc word [dfh_done+2], 0
+    sub [dfh_rem], cx
+    sbb word [dfh_rem+2], 0
+    cmp cx, [dfh_n]
+    jae .loop                   ; a short read is the file's end
+.done:
+    mov ax, [dfh_done]          ; the reads' DX:AX, and a write's own DX
+    mov dx, [dfh_done+2]        ; is what it was
+    cmp word [dfh_verb], FSV_WRITE
+    je .wdone
+    cmp word [dfh_verb], FSV_APPEND
+    jne .ok
+.wdone:
+    xor ax, ax
+    mov dx, [dfh_sel]
+.ok:
+    clc
+    jmp short .ret
+.fail:
+    mov dx, [dfh_sel]
+.ret:
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+section .bss
+dfh_verb    resw 1
+dfh_sel     resw 1
+dfh_buf     resw 1
+dfh_h       resw 1
+dfh_name    resw 1
+dfh_n       resw 1
+dfh_off     resw 2
+dfh_rem     resw 2
+dfh_done    resw 2
+dfh_first   resb 1
+section .cold
+%endif
+
 drv_fs_call:
+%ifdef KERN_MEGA
+    cmp bp, FSV_READ            ; kern_mega: a TRANSFER verb (6 to 12: READ,
+    jb .lowbuf                  ; WRITE, APPEND, READAT) whose buffer is a
+    cmp bp, FSV_READAT          ; POOL selector - an OS88_HIGH package's own
+    ja .lowbuf                  ; segment, an OS88_HIGHMEM claim, an
+    test dl, 4                  ; OSAPI_XMEM_SEL window - is above 1MB, and
+    jz .lowbuf                  ; a redirector does PARAGRAPH arithmetic on
+    cmp dx, MEGA_LDT_FREE0 * 8  ; DX (RAMDISK.DRV, NET.DRV). drv_fs_hi moves
+    jb .lowbuf                  ; it 512 bytes a call through dsk_secbuf
+    jmp drv_fs_hi
+.lowbuf:
+%endif
     call drv_fs_has             ; the MOUNTED volume's driver, resolved per
     jc drv_svc_none             ; call (drv_fs_seg, SPEC.md 62.9.19), and this
                                 ; verb in its table - asked FIRST since 62.9.19,
@@ -2415,7 +2779,10 @@ drv_cp_call_x:
 ; cp_flush_close is reached: drv_shutdown detaches every driver a few
 ; instructions later, and a detach frees strictly more than this does.
 ; -----------------------------------------------------------------------------
-drv_cp_closed_x:
+drv_cp_closed_x:                ; the FAR entry, for instance.inc's teardown
+    call drv_cp_closed          ; ...and the near body, which OSAPI_DRV_USE's
+    retf                        ; DONE calls from .cold (SPEC.md 117.3)
+drv_cp_closed:
     call kentc_bp               ; KENT: push ax..bp
 
 
@@ -2454,7 +2821,7 @@ drv_cp_closed_x:
     call drv_call_ent
     call drv_release
 %endif
-    jmp kretfc_bp
+    jmp kretc_bp
 
 ; -----------------------------------------------------------------------------
 ; osapi_drv_cfg - a driver's own settings, in the kernel's file (SPEC.md 51.9)
@@ -3014,6 +3381,9 @@ drv_load_at:
                                 ; construction is gone, so a header claiming
                                 ; more bss than the claim holds is turned away
                                 ; here rather than writing past it
+%ifdef KERN_MEGA
+    call drv_hi                 ; ...and ABOVE 1MB if it says it may (item 82):
+%endif                          ; nothing of it has run, so nothing names it
 
 %ifdef KERN_BIG
     cmp byte [bx+DRVR_CLASS], DRVC_OVL
@@ -3495,7 +3865,10 @@ section .modc                   ; IMAGE CODE (see VGC_FORCE's banner below):
 %else
     mov cl, [es:DRV_H_DSV]      ; ...then AS FAR AS THE DRIVER'S TABLE REACHES
 %endif
-    or cl, cl                   ; (SPEC.md 51.2), which is DRV_H_FSV's test one
+    and cl, 0x3F                ; (bits 7 and 6 are OS88_DRV_HIGHOK and
+                                ; OS88_DRV_HICLAIM, not a length; the AND sets
+                                ; ZF, so it is the zero test too)
+                                ; (SPEC.md 51.2), which is DRV_H_FSV's test one
     jnz .len                    ; level up: the header says how long a table it
     mov cl, DSV_TAB0            ; was built with; 0 is a driver written before
 .len:                           ; the byte existed and means DSV_TAB0. EXACTLY
@@ -3651,6 +4024,16 @@ drv_release:
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .out
+%ifdef KERN_MEGA
+    push bx                     ; ITS CLAIMS ABOVE 1MB (OS88_DRV_HICLAIM,
+    mov bx, dx                  ; item 83), owned 0C0h | row in the pool's
+    call drv_row_ix_of          ; table and not in mem_tab, go back with it
+    jc .nohc
+    or al, 0xC0
+    call KERNEL_SEG:mx_relallf
+.nohc:
+    pop bx
+%endif
     mov al, [bx+DRVR_CLASS]     ; disarm DISPATCH before a byte is freed:
     call drv_cls_idx            ; snd_tick far-calls through drv_fseg inside
     jc .novol                   ; IRQ0, and a tick landing between the free
@@ -3721,6 +4104,17 @@ drv_release:
                                 ; (HMA-PLAN 5): its buffers, and its image if
                                 ; that is where it ran - CF = 0 then, which
                                 ; leaves no claim to free
+%ifdef KERN_MEGA
+    test dl, 4                  ; an image ABOVE 1MB (drv_hi): its pool block
+    jz .lowimg                  ; and its selector pair go back, there being
+    cmp dx, MEGA_LDT_FREE0 * 8  ; no claim
+    jb .lowimg
+    xchg ax, dx
+    call MEGA_SEL_CODE:mega_drvhifree
+    xchg ax, dx
+    jmp short .hma
+.lowimg:
+%endif
     mov bx, MEM_K_DRV
     call mem_free_x
 .hma:
@@ -3731,6 +4125,134 @@ drv_release:
     pop bx
     pop ax
     ret
+
+%ifdef KERN_MEGA
+; -----------------------------------------------------------------------------
+; drv_hi - a just-loaded driver ABOVE 1MB (kern_mega, KERN-MEGA-PLAN item 82)
+; in:  BX = the row, ES = its image: checked, bss zeroed, nothing of it run
+; out: nothing; ES = the image wherever it now is. Either the row names a
+;      selector pair over a copy in the extended pool and the claim is gone,
+;      or nothing changed. Only in protected mode, and only for an image whose
+;      header says OS88_DRV_HIGHOK (bit 7 of DRV_H_DSV)
+; -----------------------------------------------------------------------------
+drv_hi:
+    cmp byte [mega_on], 0
+    je .out
+    test byte [es:DRV_H_DSV], 0x80
+    jz .out
+    call drv_hi_move
+.out:
+    ret
+
+; drv_hi_move - BX = a row whose image (at ES, a conventional claim) may move
+; now -> copied into a pool block owned MX_KDRV under a code/data pair, every
+; word that named it re-pointed at the DATA half by mem_region_reloc - the
+; compactor's own walk, so drv_tab, the class fast paths, ss_row, the claim
+; owners and the IRQ vectors (and through them the IDT) all follow - and the
+; claim freed. Or, with no room or no entry, nothing changed. ES = the image
+; after. Clobbers nothing else
+drv_hi_move:
+    push ax
+    push cx
+    push dx
+    mov al, [es:DRV_H_BSSP]
+    xor ah, ah
+    mov cl, 4
+    shl ax, cl
+    add ax, [es:DRV_H_IMG]
+    xchg ax, cx                 ; CX = image + bss, the bytes it runs in
+    mov ax, es
+    push bx
+    mov bl, MX_KDRV             ; (moved by the compactor, 14.37)
+    call MEGA_SEL_CODE:mega_imghif ; AX = the pair's DATA selector
+    pop bx
+    jc .out
+    push bx
+    push bp
+    mov dx, ax
+    mov bx, es                  ; every holder: the old segment -> the pair
+    mov bp, mem_region_reloc
+    call KERNEL_SEG:cw_mem_disp
+    pop bp
+    mov dx, bx                  ; ...and the claim it was read into, which
+    mov bx, MEM_K_DRV           ; nothing names now
+    call mem_free_x
+    pop bx
+    mov word [bx+DRVR_KB], 0    ; no heap held
+    mov es, [bx+DRVR_SEG]
+    call MEGA_SEL_CODE:mega_drvsayf
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_hiboot_f - FAR, once, right after mega_enter: the drivers SYSTEM.CFG
+; loaded in real mode, above 1MB now that there is a pool (item 82). Each
+; loaded row whose image is a conventional claim saying OS88_DRV_HIGHOK, and
+; which the compactor's own predicate would let move (mem_can_move: no frame
+; in it, no service task running), is moved with interrupts off for the copy
+; and the re-pointing, so neither its ISR nor a tick sees half of it.
+; Clobbers nothing
+; -----------------------------------------------------------------------------
+; drv_row_ixf - drv_row_ix_of for a FAR caller (mega.inc's claim arm)
+drv_row_ixf:
+    call drv_row_ix_of
+    retf
+
+drv_hiboot_f:
+    cmp byte [mega_on], 0
+    je .ret
+    push ax
+    push bx
+    push dx
+    push si
+    push es
+    mov bx, drv_tab
+.l:
+    mov dx, [bx+DRVR_SEG]
+    or dx, dx
+    jz .n
+    test dl, 4
+    jnz .n                      ; already above 1MB
+    cmp word [bx+DRVR_KB], 0
+    je .n                       ; not a heap claim
+    mov es, dx
+    test byte [es:DRV_H_DSV], 0x80
+    jz .n
+    push bx
+    mov bx, MEM_K_DRV
+    call mem_find_own           ; SI = the image's record
+    pop bx
+    jc .n
+    call mem_can_move
+    jc .n
+    pushf
+    cli
+    call drv_hi_move
+    popf
+.n:
+    mov dx, [bx+DRVR_SEG]       ; ...AND ITS CLAIMS (OS88_DRV_HICLAIM, item
+    or dx, dx                   ; 83), which attach made in real mode: each
+    jz .n2                      ; movable, non-DMA one of 64KB or less is
+    mov es, dx                  ; copied into the pool and its holder told
+    test byte [es:DRV_H_DSV], 0x40
+    jz .n2
+    call mem_hiclaims
+.n2:
+    add bx, DRVR_SIZE
+    cmp bx, drv_tab + DRV_MAX * DRVR_SIZE
+    jb .l
+    call mod_hiboot             ; ...and the boot's MODULES (KERN-MEGA-PLAN
+    pop es                      ; 14.47): here and not in kmain, whose five
+    pop si                      ; bytes would be the kernel segment's
+    pop dx
+    pop bx
+    pop ax
+.ret:
+    retf
+%endif
 
 ; -----------------------------------------------------------------------------
 ; drv_task - a driver's worker task, spawned and ended (SPEC.md 51.7)
@@ -3932,7 +4454,11 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     cmp al, 0x1A
     jne %%out
     xor ax, ax                  ; DS = 0: the BIOS's records at 0:487h..489h
+%ifdef KERN_MEGA
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
+%else
     mov ds, ax                  ; need no prefix, and nothing below reads the
+%endif
     pushf                       ; kernel's own (kernel size pass 12)
     cli
     and byte [0x487], 0xFD      ; EGA info: not a monochrome monitor
@@ -4356,7 +4882,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     push si                     ; and its size high word coming back (18.4.1)
     push di
     push es
-    push cs
+    PUSH_CSDATA
     pop es                      ; the file buffer is the IMAGE's (51.5.3) and
     mov bx, %1 %+ _buf          ; the read takes ES:BX, which is what makes
     mov cx, CFG_FBUF            ; that free rather than awkward
@@ -4429,7 +4955,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     push si
     push di
     push es
-    push cs
+    PUSH_CSDATA
     pop es
     cld
     mov si, %1 %+ _sig
@@ -4526,7 +5052,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     call %1 %+ _ser             ; small and a partial one is a bug waiting for
                                 ; the next format change. CX = its length
 
-    push cs
+    PUSH_CSDATA
     pop es                      ; the buffer is the image's, and this is where
     mov bx, %1 %+ _buf          ; dskw_write_sys reads it from
 %ifdef OS88_SHORTCUTS
@@ -4996,37 +5522,14 @@ drv_boot_x:
     call COLD_SEG:drvf_drv_mounted
     jc .nodisk
 %ifdef KERN_BIG
+ %ifndef KERN_MEGA              ; (kern_mega: the store is mega_xminit's)
     BLOBCALL xm_boot_x          ; THE STORE ABOVE 1MB FIRST, before any driver
                                 ; (SPEC.md 41.12): it is what puts `.cold` in
                                 ; the HMA, and a driver loaded after it may go
                                 ; up there too (docs/plans/HMA-PLAN.md 5). It
                                 ; needs the mount just made and nothing else;
                                 ; every register is kept
-
-    ; IS 1024x768 PLANAR AVAILABLE? (SPEC.md 39.29.2) ABOVE the settings read
-    ; and not below it, because the `jc .load` on the next line is taken on
-    ; every disk that has no SYSTEM.CFG - which is every shipped floppy but
-    ; kern_emu's. Put inside that block this ran on no stock machine at all,
-    ; and the only symptom was a Display page with one row fewer and nothing
-    ; anywhere saying why; [vbe_known] read 0 out of the guest, which is what
-    ; said so.
-    ;
-    ; It reads a file, so it cannot be asked from a PAINT path either: the
-    ; first version put it in cp_vid_slot, which resolves a row while the
-    ; Control Panel is drawing and therefore under the gfx lock - and the
-    ; progress widget every sector lights (SPEC.md 7.4) cannot draw while the
-    ; lock is held by us. That deadlocked, with the page blank and the disk
-    ; light stuck on. Here the volume is mounted, the splash owns the screen,
-    ; and reading a driver image is what this routine is about to do anyway.
-    ;
-    ; THE TIER GATE IS ABOUT USEFULNESS AND NOT CAPABILITY, which is where it
-    ; differs from xm_sniff's (SPEC.md 41.12.1). An 8088 CAN execute
-    ; int 10h AX=4F00h and an ISA VESA card in an XT will answer it - but
-    ; 1024x768 is 2.56x the pixels of a mode whose primitives already cost
-    ; ~756us there, so the honest cost on the machine this project is
-    ; calibrated against is one compare and no read.
-    call KERNEL_SEG:cw_vbe_avail    ; ...and the CPU_8086 gate is inside it now,
-                                    ; where it costs .text and not the blob
+ %endif
 %endif
     call ovl_cfg_load       ; CF = 1: no file, so every default stands -
     jc .load                    ; and every default is now "not wanted", so
@@ -5041,13 +5544,15 @@ drv_boot_x:
                                 ; banks the flags, which swallows this answer
                                 ; whole (SPEC.md 2.9.5.4)
 %ifdef KERN_BIG
-    test byte [drv_cfg+CFG_VGC], 1  ; Force Color (SPEC.md 39.28), BEFORE the
-    jz .novgc                   ; adapter switch below, so a switch onto the
-    call COLD_SEG:vgcf_boot     ; VGA finds the BIOS's record colour already.
-.novgc:                         ; The TEST is here, in the blob that is given
-%endif                          ; back, and vgcf_boot keeps every register but
-                                ; AX - CH is the loop's, and AL is reloaded on
-                                ; the next line (kernel size pass 12)
+    call COLD_SEG:vgcf_boot     ; Force Color (SPEC.md 39.28), BEFORE the
+                                ; adapter switch below, so a switch onto the
+                                ; VGA finds the BIOS's record colour already.
+                                ; THE TEST IS INSIDE IT NOW (SPEC.md 120.4:
+                                ; the blob gave up its seven bytes to the
+                                ; 'VM' record's class byte); it keeps every
+                                ; register but AX - CH is the loop's, and AL
+                                ; is reloaded on the next line
+%endif
 
     ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
     ; Before the driver loads, at the bottom of
@@ -5358,8 +5863,8 @@ drv_dlg_name: resb 14           ; the caller's default name, staged out of its
 %endif
 drv_owner:  resw DRVC_MAX       ; per class: the row whose services are
                                 ; published, or 0. Class 1 is index 0
-%if DRVC_FILE2 != DRVC_MAX || DRVC_EMS + 1 != DRVC_FILE2 || DRVC_POINT + 1 != DRVC_EMS
-%error "driver: the two classes with no copy are 6 and 7, and DRVC_FILE2 (8) is the one copied class past them - drv_svcix says so, one byte a class"
+%if DRVC_CD != DRVC_MAX || DRVC_FILE2 + 1 != DRVC_CD || DRVC_EMS + 1 != DRVC_FILE2 || DRVC_POINT + 1 != DRVC_EMS
+%error "driver: the two classes with no copy are 6 and 7, and DRVC_FILE2 (8) and DRVC_CD (9) are the copied classes past them - drv_svcix says so, one byte a class"
 %endif
 drv_svc:    resb DSV_SIZE*(DRVC_MAX-3) ; ...and a copy of each one's table -
                                 ; one per class but 3 (retired), 6 and 7 - so
@@ -5596,7 +6101,7 @@ cpc_fdtest:
     jne .no                     ; it answered by falling back: no crossing
     mov es, dx                  ; ES:0 = the track buffer
     mov cx, [disk_spt]
-    mov byte [cs:cp_fdn], 2
+    CSDO mov byte [CSEG cp_fdn], 2
 .trk:
     call COLD_SEG:dskf_disk_read    ; LBA AX, one track, track-bounded
     jc .done
@@ -5618,12 +6123,12 @@ cpc_fdtest:
     jne .no
     add ax, cx                  ; the next track's LBA
     add di, bp                  ; ...and the cylinder run's next half
-    dec byte [cs:cp_fdn]
+    CSDO dec byte [CSEG cp_fdn]
     jnz .trk
     jmp short .done
 .no:
     mov byte [drv_cfg+CFG_FDR], 0   ; Auto - and cpc_fdbs then writes byte 509
-    mov byte [cs:cp_fdno], 1        ; as 0, which is what Auto means there
+    CSDO mov byte [CSEG cp_fdno], 1 ; as 0, which is what Auto means there
 .done:
     dec byte [dsk_rah_busy]
     mov dx, si
@@ -5815,15 +6320,15 @@ drv_pkg_call_x:
                                 ; writes word [di+2], 0, both the segment half
                                 ; and nothing else (see drv_fptr's declaration)
     push es                     ; SPEC.md 66.6.3, AND THE ONE SITE WHERE ES IS
-    push cs                     ; NOT ALREADY THE KERNEL'S: this cell is an X
-    pop es                      ; stub, so ES is the CALLING PACKAGE's and the
+    KES                         ; NOT ALREADY THE KERNEL'S: this cell is an X
+                                ; stub, so ES is the CALLING PACKAGE's and the
     call COLD_SEG:wm_nest_pushd_x   ; driver reads its buffer through it - the
     pop es                      ; push is ES-relative, so it is borrowed for
                                 ; three instructions and handed straight back.
                                 ; .text, so the far entry (SPEC.md 2.6.1)
     call KERNEL_SEG:drv_pkg_disp
-    push cs                     ; DS IS THE DRIVER'S at the return and the pop
-    pop ds                      ; below restores the caller's, so borrowing it
+    KDS                         ; DS IS THE DRIVER'S at the return and the pop
+                                ; below restores the caller's, so borrowing it
     call COLD_SEG:wm_nest_pop_x ; costs nothing; the pair writes no flag, which
                                 ; is what keeps the driver's CF the answer
 .done:
@@ -5888,6 +6393,9 @@ drv_pkg_disp:
 drv_hmadisp: dw DRV_HMA_ORG + PKG_DISP
 %else
     push ds                     ; the TARGET segment: DS is the driver's
+ %ifdef KERN_MEGA
+    MEGA_CSELTOP                ; ...as its CODE alias (kernel/mega.inc)
+ %endif
     push word [cs:drv_fptr]     ; ...and PKG_DISP, which nothing writes
     retf
 %endif
@@ -6000,6 +6508,8 @@ osapi_mem_hma_x:                ; door, whose driver arm is gone with them and
 ; refusal states it rather than leaving the caller's register looking like a
 ; figure - and it is the only one now, the count having gone (51.12.3).
 osapi_drv_classk_x:
+osapi_drv_use_x:                ; ...and OSAPI_DRV_USE: no driver layer to
+                                ; bring anything up in (SPEC.md 117.3)
 %ifndef OS88_REDIR
 osapi_fs_ent_x:                 ; ...and OSAPI_FS_ENT, legal only inside an
 %endif                          ; FSV_LIST that cannot happen here: AX = 0, CF

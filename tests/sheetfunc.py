@@ -36,12 +36,12 @@ import os88sym                                              # noqa: E402
 from harness import check, done                              # noqa: E402
 import sheetfmt as SF                                        # noqa: E402
 
-WORK = "build/sheetfunc"                # this row's own paths (WRITING-TESTS 5.5)
 # RESOLVED AT THE DEFINITION, which fixes every use below at once
 # (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
 # its artefact, so `wants=` cannot help - make has no rule for it -
 # and writing it into the shared build/ while os88marty reads the
 # run's frozen tree is a soak-only FileNotFoundError.
+WORK = os88build.at("build/sheetfunc")                # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetfunc.img")
 NAME = "FUNC.SLK"
 WRONG = -999.0

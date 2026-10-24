@@ -27,7 +27,7 @@ Every byte below is marked by how it was confirmed:
 **One disagreement was caught this way and is worth recording**, because it
 is exactly the failure mode the method exists to catch: fileformat.info's
 "corion-dbase-iii" page labels header offsets 1/2/3 as Month/Day/Year. The
-real bytes (§1.1 below) and two independent sources (dbase.com, Wikipedia)
+real bytes (DBASE3-SPEC §1 below) and two independent sources (dbase.com, Wikipedia)
 agree the order is Year/Month/Day — and the real bytes alone are decisive,
 since a Month byte of `0x72` (114) is not a legal month. The real-byte
 evidence is what should settle a disagreement like this, not a vote among
@@ -136,8 +136,7 @@ ASCII string in genuine old dBASE III/FoxBase (field length > 4) versus a
 binary `uint32` in later variants (field length == 4) — the field length
 itself is what tells a reader which shape it is reading.
 
-**None of this is confirmed against a real file.** Per §1.2's own staging in
-`DBASE3-PLAN.md`, memo support is not required for wave 1 (`.DBF` read/write
+**None of this is confirmed against a real file.** Per DBASE3-PLAN.md §1.2's own staging, memo support is not required for wave 1 (`.DBF` read/write
 with no language, no index); when it is picked up, get a real `.DBF`+`.DBT`
 pair that is confirmed genuine dBASE III (version byte `0x83`, not `0x30`)
 before trusting this section.

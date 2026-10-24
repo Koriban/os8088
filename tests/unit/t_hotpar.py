@@ -52,21 +52,31 @@ import os88sym  # noqa: E402
 # symbol -> the parity of its entry (0 = even, 1 = odd), per kernel. Set at
 # kernel size pass 13's close, every one at an even SHIFT against that pass's
 # base (aedadd25), which is where its loops were measured.
-# RE-MEASURED AT THE 2026-10-20 UPSTREAM MERGE (#268). A merge moves the whole
-# kernel, so every one of these addresses moved and the table had to be taken
-# again rather than defended. It is a TRADE and it is recorded rather than
-# quietly accepted: seven of the eleven that moved landed EVEN and are now
-# cheaper - cur_move_1, font_run, font_run_cell, font_run_x, kbm_isr, sch_isr,
-# sch_switch - and FOUR landed ODD and are now dearer on a 16-bit bus:
-# cur_move, mou_isr, mou_isr_body and mou_p2_isr, which is the mouse path.
-# Recovering those four is a padding pass (`grep -n PARITY kernel/*.inc`) and
-# its own piece of work; nothing here was padded for the merge.
+# RE-MEASURED AT THE 2026-10-24 UPSTREAM MERGE (25 commits). The 2026-10-20
+# note below it said the same thing and the reason has not changed: a merge
+# moves the whole kernel, so these addresses move and the table is taken
+# again rather than defended. ELEVEN of kern_big's eighteen moved; kern_small
+# did not move at all.
+#
+# THE TRADE, recorded rather than quietly accepted. FOUR landed EVEN and are
+# now cheaper - cur_move, mou_isr, mou_isr_body and mou_p2_isr - and that is
+# the WHOLE MOUSE PATH, which is exactly the four the 2026-10-20 merge listed
+# as having landed odd and owed a padding pass. The pass was never done and
+# this merge has paid it by accident; it is luck, not work, and the next
+# merge can take it back again. SEVEN landed ODD and are now dearer on a
+# 16-bit bus: font_run, font_run_x and font_run_cell (the text renderer's
+# three), cur_move_1, kbm_isr, and sch_isr and sch_switch (the scheduler's
+# pair). Recovering those seven is a padding pass (`grep -n PARITY
+# kernel/*.inc`) and its own piece of work; nothing here was padded for the
+# merge, which is the same call 2026-10-20 made - a pad inserted to chase one
+# symbol shifts every symbol behind it, so it is a measured pass or nothing.
+#
 HOT = {
     "big": {
-        "gfx_blit1_x": 0, "gfx_blit4": 1, "font_run": 0, "font_run_x": 0,
-        "font_run_cell": 0, "mou_isr": 1, "mou_isr_body": 1,
-        "mou_p2_isr": 1, "kbm_isr": 0, "cur_move": 1, "cur_move_1": 0,
-        "sch_isr": 0, "sch_switch": 0, "ui_task": 0, "dsk_xfer": 1,
+        "gfx_blit1_x": 0, "gfx_blit4": 1, "font_run": 1, "font_run_x": 1,
+        "font_run_cell": 1, "mou_isr": 0, "mou_isr_body": 0,
+        "mou_p2_isr": 0, "kbm_isr": 1, "cur_move": 0, "cur_move_1": 1,
+        "sch_isr": 1, "sch_switch": 1, "ui_task": 0, "dsk_xfer": 1,
         "dsk_runcap": 1, "dsk_next_clus_x": 0, "wm_paint_all": 1,
     },
     "small": {

@@ -22,6 +22,8 @@
 ; =============================================================================
 
 %define CC_PKG_NAME 'C64'           ; <= 15 chars; the Disk window's label
+%define CC_STACK_CLASS OS88_HIGH | OS88_HIGHMEM    ; kern_mega may load it above 1MB (KERN-MEGA-PLAN
+                                    ; item 87); the class itself unsaid
 
 %define CC_HAS_ONKEY                ; void os88_onkey(int, int, void *) - the
                                     ; level keyboard's make half (C64-SPEC 7.2)
@@ -107,8 +109,8 @@
 ; PART 1: the overlay (CC_OVL_ROW - an OP_SEG|OP_COMP row, LAST because
 ; CC_PACKAGE appends the cut module as the last --part). LZ4 takes it 2,018
 ; -> ~1,530. THE CARVE STAYS PINNED, as it always was: c64_m.romseg banks
-; os88_part_seg(0), and crt0 declares an eager carve movable only when the
-; overlay is its only part (SPEC.md 73.14.2.1). It is claimed top-down
+; os88_part_seg(0), and crt0 never declares an eager carve movable (SPEC.md
+; 73.14.2.1). It is claimed top-down
 ; (SPEC.md 20.12.10.8), so the ~2KB of module that used to sit in a movable
 ; claim of its own now sits beside the ROM at the ceiling, not mid-arena.
     CC_PARTS_BEGIN 2

@@ -538,10 +538,17 @@ sc_rclick_x:
 ; grey, exactly as it would with the box clear.
 ; -----------------------------------------------------------------------------
 vgcf_boot:
+    test byte [drv_cfg+CFG_VGC], 1  ; THE BOX'S TEST IS HERE AGAIN (SPEC.md
+    jz .out                     ; 120.4): seven bytes the blob could not hold
+                                ; once the packed display's class joined the
+                                ; 'VM' record - kernel size pass 12 put them
+                                ; at the call site when the blob had room, and
+                                ; the blob is the scarcer of the two now
     mov ax, (SC_OP_VGC << 8) | MOD_SETS ; AL the module, AH the operation:
     call mod_need               ; every register kept. Its CF is NOT TESTED:
     call far [SETFP]            ; a core that could not be read leaves this
     call mod_drop               ; slot on mod_gone (`stc / retf`, nothing
+.out:
     retf                        ; done) and its row empty, which mod_drop
                                 ; passes over - so a refusal costs nothing
                                 ; here and needs no branch (kernel size pass
@@ -673,7 +680,7 @@ sc_m_new:
     call sc_m_row               ; AL = a free zone - and CX/DX survive it:
     jc sc_m_ret                     ; sc_m_off, sc_m_kb and the toasts all bank
                                     ; them. ...and the user has been told why not
-    mov [cs:sc_mz], al
+    CSDO mov [CSEG sc_mz], al
     mov bl, 0xFF                ; no row to leave out of the search
     call sc_m_cell              ; [cs:sc_bc] = the nearest free cell
     jc .noroom
@@ -823,12 +830,12 @@ sc_m_add:
     jc .new
     call sc_m_same
     je .ret                     ; the same place: its zone, nothing written
-    mov [cs:sc_mz], al          ; somewhere new: over that row, in place
+    CSDO mov [CSEG sc_mz], al    ; somewhere new: over that row, in place
     jmp short .copy
 .new:
     call sc_m_row               ; AL = a free zone, the claim grown if need be
     jc .no                      ; (DX:CX survives it, as sc_m_new says) - and
-    mov [cs:sc_mz], al          ; the user has been told why not
+    CSDO mov [CSEG sc_mz], al    ; the user has been told why not
 .copy:
     mov si, cx
     call sc_m_off               ; ES:DI = the row
@@ -1015,8 +1022,8 @@ sc_m_lnk:
     stosw
     xor al, al
     stosb
-    push cs                     ; ...and the RECORD in the image, ES = CS from
-    pop es                      ; here to the write
+    PUSH_CSDATA                 ; ...and the RECORD in the image, ES = CS from
+    pop es                      ; here to the write (its DATA segment)
     lea di, [cs:cpc_buf + LNK_PATH] ; the path, sc_m_new's: dsk_path's leading
     call sc_m_wpath             ; `\` lands on the kind byte, written after it
     jc .nopath
@@ -1290,10 +1297,10 @@ sc_m_row:
 ; the way, it packs round whatever lands next to it.
 ; -----------------------------------------------------------------------------
 sc_m_cell:
-    mov [cs:sc_px], cx
-    mov [cs:sc_py], dx
-    mov [cs:sc_ex], bl
-    mov word [cs:sc_best], 0xFFFF
+    CSDO mov [CSEG sc_px], cx
+    CSDO mov [CSEG sc_py], dx
+    CSDO mov [CSEG sc_ex], bl
+    CSDO mov word [CSEG sc_best], 0xFFFF
     xor bx, bx                  ; BL = the cell
 .cell:
     cmp bl, [desk_ncell]
@@ -1324,12 +1331,12 @@ sc_m_cell:
     add ax, dx
     cmp ax, [cs:sc_best]
     jae .next
-    mov [cs:sc_best], ax
-    mov [cs:sc_bc], bl
+    CSDO mov [CSEG sc_best], ax
+    CSDO mov [CSEG sc_bc], bl
 .next:
     inc bx
-    jmp short .cell
-.end:
+    jmp .cell                   ; (short where it reaches: kern_mega's CSDO
+.end:                           ; is longer)
     cmp word [cs:sc_best], 0xFFFF
     je .none
     clc
@@ -1347,7 +1354,7 @@ sc_m_cell:
 ; the pointer - its own cell counting as free, so a short drag stays put.
 ; -----------------------------------------------------------------------------
 sc_m_move:
-    mov [cs:sc_mz], al
+    CSDO mov [CSEG sc_mz], al
     mov bp, fm_dgmove
     call sc_m_cold
     call sc_m_xor    ; the outline is up from here on
@@ -1521,7 +1528,7 @@ sc_m_del:
 ; moved by a compaction the write itself triggers. sc_m_serx gives it back.
 ; -----------------------------------------------------------------------------
 sc_m_ser:
-    mov word [cs:sc_tseg], 0
+    CSDO mov word [CSEG sc_tseg], 0
     push ax
     push dx
     push si
@@ -1549,7 +1556,7 @@ sc_m_ser:
     jnz .c
 .none:
     pop es
-    mov [cs:sc_tcnt], dl
+    CSDO mov [CSEG sc_tcnt], dl
     or dl, dl
     jnz .go
     push cx                     ; no shortcut - but a PLACED drive is kept
@@ -1583,7 +1590,7 @@ sc_m_ser:
     call sc_m_mem            ; DX = the claim
     pop cx
     jc .out                     ; CF = 1: the caller refuses the write
-    mov [cs:sc_tseg], dx
+    CSDO mov [CSEG sc_tseg], dx
     push ds
     push es
     pop ds                      ; DS = the settings' segment

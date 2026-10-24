@@ -31,12 +31,12 @@ import sheetfmt as SF                                        # noqa: E402
 
 
 
-WORK = "build/sheetmcmd2"                # this row's own paths (WRITING-TESTS 5.5)
 # RESOLVED AT THE DEFINITION, which fixes every use below at once
 # (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
 # its artefact, so `wants=` cannot help - make has no rule for it -
 # and writing it into the shared build/ while os88marty reads the
 # run's frozen tree is a soak-only FileNotFoundError.
+WORK = os88build.at("build/sheetmcmd2")                # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetmcmd2.img")
 NAME = "CMD2.SLK"
 MACRO = (435, 45)

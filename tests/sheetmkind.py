@@ -48,12 +48,12 @@ import sheetfmt as SF                                        # noqa: E402
 from os88geom import WIN_SIZE, W_SEG                            # noqa: E402
 from paintmove import pkg_syms                                  # noqa: E402
 
-WORK = "build/sheetmkind"               # this row's own paths (WRITING-TESTS 5.5)
 # RESOLVED AT THE DEFINITION, which fixes every use below at once
 # (tests/unit/t_artpath.py's own recommended shape). This row BUILDS
 # its artefact, so `wants=` cannot help - make has no rule for it -
 # and writing it into the shared build/ while os88marty reads the
 # run's frozen tree is a soak-only FileNotFoundError.
+WORK = os88build.at("build/sheetmkind")               # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetmkind.img")
 OPEN_ITEM = (SF.FILE_MENU[0] + 15, 59 + 11)     # sheetxl2's own
 OPTIONS = (370, 45)                             # its menu: Formulas is a

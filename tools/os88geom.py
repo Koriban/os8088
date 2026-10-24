@@ -379,6 +379,11 @@ _MIRROR = {
     "VID_CTX_CW": ("kernel/vidsel.inc", {"big": 14}),
     "VID_CTX_CH": ("kernel/vidsel.inc", {"big": 16}),
     "VID_NDISP_MAX": ("kernel/vidsel.inc", {"big": 2}),
+    # kernel/viddet.inc - the packed display's kind (SPEC.md 120), kern_big
+    # only: VESA.DRV's renderer is assembled out of kern_small, so the enum
+    # stops at EGA there. The three VESA rows (tests/vesa.py, vesa8.py,
+    # vesacp.py) wait on [vid_kind] reaching it
+    "VID_VESA": ("kernel/viddet.inc", {"big": 4}),
 
     # --- found by the unmirrored() audit, not by anyone noticing -------------
     #
@@ -439,7 +444,7 @@ _MIRROR = {
     # HMA (SPEC.md 2.10.8): a drv_tab row naming a segment at or above
     # DRV_HMA_SEG has its header at SEG:DRV_HMA_ORG, never SEG:0. A harness
     # that reads a driver's variables wants drv_base() below, not seg << 4
-    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xE000),
+    "DRV_HMA_ORG": ("kernel/kernel.asm", 0xC000),
     "DRV_HMA_SEG": ("kernel/kernel.asm", 0xF000),
 }
 

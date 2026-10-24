@@ -492,6 +492,10 @@ ico_core:
 %else                           ; is, and it returns straight to the wrapper
     cmp byte [vid_mono], 0      ; 1bpp? (SPEC.md 39.5) - the software
     jne ico_core_bb             ; twin returns straight to the wrapper
+    VIDEXT VX_ICON              ; ...and a packed display's is the driver's
+                                ; (SPEC.md 120.3): the ico_* cells are set,
+                                ; the clip is done, and it returns to the
+                                ; wrapper exactly as the twin does
 
     mov ax, VGA_SEG
     mov es, ax
@@ -642,7 +646,7 @@ ico_pass:
     add word [ico_col], 2
     dec word [ico_wleft]
     jnz .word
-    VBROWR di, [ico_rowadv]     ; next scanline (stride - 2*wwords)
+    add di, [ico_rowadv]        ; next scanline (80 - 2*wwords)
     dec bp
     jnz .row
 .done:
