@@ -241,7 +241,7 @@ this kernel is blamed for a keyboard that stops (note 68).
 | CPU | **Pentium II, 300 MHz** - the owner's figure; this table said 233 |
 | RAM | 64 MB |
 | era | its hardware-support target is **Windows 98**, which is what dates the BIOS |
-| video | **NeoMagic**, VGA — and a **VBE 2.0** BIOS with 2 MB (§39.28.1) |
+| video | **Chips & Technologies 65555**, VGA — and a **VBE 2.0** BIOS with 2 MB (§39.28.1) |
 | floppy | **one 1.44 MB 3.5" drive**, and only one: a disk that needs a separate boot floppy cannot be run here |
 | pointer | **PS/2 trackpad** |
 | storage | an 8 GB **CompactFlash** card on the IDE bus |

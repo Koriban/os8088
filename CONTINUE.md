@@ -532,7 +532,7 @@ enters 0104h.
   otherwise).
 - Still open: §39.29.9's bank-select mutation (no window to move on mode 12h,
   so it needs 86Box or the Satellite); the Satellite itself (Trident vs
-  NeoMagic, §39.29.8.2); the PR split.
+  C&T 65555, §39.29.8.2); the PR split.
 
 ## 2026-10-18 — §39.29.9's bank-select mutation, done (SPEC §39.29.9.2)
 
@@ -558,7 +558,7 @@ VBE figure taken here would be vacuous. §39.28.2.2's defect class.
   cannot draw, and only 86Box and the Satellite can run it. The two lines are
   in SPEC so the experiment is repeated rather than re-derived.
 - §39.29.9 now reads MET on both bullets. What is left on the VBE track: the
-  Satellite (Trident here, NeoMagic there — §39.29.8.2), and the PR split.
+  Satellite (Trident here, C&T 65555 there — §39.29.8.2), and the PR split.
 
 ## 2026-10-18 — PR #272 opened; the VBE split DEFERRED with reasons
 

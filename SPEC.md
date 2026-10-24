@@ -76307,7 +76307,7 @@ establishes only that the probe reads a VBE correctly.
 
 #### 39.28.1 The answer from the Satellite 4025CDT — `0104h` is there
 
-Run on the machine the question was about (NeoMagic, 2026-10-03), photographed
+Run on the machine the question was about (Chips & Technologies 65555, 2026-10-03), photographed
 off the screen — `docs/photos/vbeprobe-satellite-4025cdt.jpg`, which is the
 provenance docs/FIELD-MACHINES.md asks every field result to carry. **VBE 2.0,
 2MB, 31 report lines of 31 — the list is complete and nothing was truncated.**
@@ -76327,7 +76327,7 @@ window — the simple banking case, not the 4KB one.
 **And its attributes are better than the emulator's, which is the part a
 QEMU-only run would have got wrong.** `001F` against QEMU's `003B` differs in
 bit 5, and bit 5 is *VGA compatible* inverted: QEMU's std VGA says `0104h` is
-NOT VGA-compatible, the NeoMagic says it is. Bit 6 is clear on both, so the
+NOT VGA-compatible, the 65555 says it is. Bit 6 is clear on both, so the
 VGA-compatible *windowed* memory mode is available. Together that means the
 ordinary VGA registers — the Sequencer map mask the renderer already drives
 (§39.3) — are the interface in this mode, rather than a VBE-specific path.
@@ -76465,7 +76465,7 @@ chrome" (§81.98) one layer down.
 
 #### 39.28.2.3 The answer from the Satellite — it sets, and it draws
 
-Run on the NeoMagic, 2026-10-03. Photographs in `docs/photos/`:
+Run on the 65555, 2026-10-03. Photographs in `docs/photos/`:
 `vbeset-satellite-0104h.jpg` and `vbeset-satellite-control-12h.jpg`.
 
 **`AX=4F02h` set `0104h`, and the pattern came out at 1024x768.** The whole
@@ -76866,9 +76866,9 @@ Oak SVGA whose ROMs contain **no VESA BIOS at all**, which is why this never
 came up before.
 
 **86Box models real cards with their real ROMs**, and a Trident TGUI9440
-answers exactly as the Satellite's NeoMagic does — measured, not assumed:
+answers exactly as the Satellite's 65555 does — measured, not assumed:
 
-| | Satellite (NeoMagic) | 86Box `tgui9440_vlb` | QEMU (Bochs) |
+| | Satellite (C&T 65555) | 86Box `tgui9440_vlb` | QEMU (Bochs) |
 |---|---|---|---|
 | `attr` | `001F` | **`001F`** | `003B` |
 | VGA compatible | yes | **yes** | **NO** |
@@ -76899,7 +76899,7 @@ work and each cost a wrong answer first:
 
 #### 39.29.8.1 Stage 1 confirmed on the Satellite, and what it cost to get there
 
-**A 1024x512 desktop draws correctly on the NeoMagic** (2026-10-04): menu bar
+**A 1024x512 desktop draws correctly on the 65555** (2026-10-04): menu bar
 across the full width, window chrome, text, the dock, the drive icon, and the
 unused rows below 512 dark - with no corruption as the pointer, menus and
 windows move. `VBE.DRV`, the fifth adapter kind, the patched `vid_tab` row and
@@ -77094,7 +77094,7 @@ booting straight into the mode has no window open, so `vga_save_vram` never
 runs and the defect cannot appear. `make vbebox` (§39.29.8.2) boots *into* the
 mode by `SYSTEM.CFG`, so it rendered a correct desktop on the broken build. The
 cards differ too — 86Box's Trident keeps its bank register at `3C4` index
-`0x0E`, where the field machine is a NeoMagic — so a register this one leaves
+`0x0E`, where the field machine is a C&T 65555 — so a register this one leaves
 alone is not a register that one leaves alone.
 
 **`vbe_bank` also preserves `SI`, `DI`, `ES` and `DS` across the BIOS call**
@@ -77333,7 +77333,7 @@ a correct 1024×768 desktop, and it is the reason that stopped being a guess.
 It did **not** reproduce §39.29.10.3's black screen, and the two reasons are
 worth keeping: this boots *into* the mode, where no window exists and so
 `vga_save_vram` never runs; and 86Box's card is a **Trident**, whose bank
-register is at `3C4` index `0x0E`, while the field machine is a **NeoMagic**.
+register is at `3C4` index `0x0E`, while the field machine is a **C&T 65555**.
 A gate that passes here is necessary and not sufficient — the Satellite is
 still the authority on anything touching the card's own BIOS.
 
@@ -77411,7 +77411,7 @@ because that is the arm already known to work.
 
 **It runs on the field machine too**, and that is not incidental: 86Box's
 Trident has shown a clean 1024×768 desktop through every build in which the
-Satellite's NeoMagic was broken. The same floppy asks the same question of the
+Satellite's 65555 was broken. The same floppy asks the same question of the
 card that actually shows the defect.
 
 It draws no numbers. Where the window **is**, and whether a second copy of it
@@ -77495,7 +77495,7 @@ Three readings, and the third is the one that carries:
    and no residue anywhere else, at whole-screen resolution.
 
 **What it still does not answer** is §39.29.8.2's standing limit, unchanged:
-86Box's card is a **Trident** and the field machine a **NeoMagic**, whose bank
+86Box's card is a **Trident** and the field machine a **C&T 65555**, whose bank
 register is elsewhere, so anything touching the card's own BIOS is the
 Satellite's to confirm. This boots INTO the mode, so `vga_save_vram` — which
 keeps its per-row test (§39.29.10.6) — runs only for the menu drop and the
