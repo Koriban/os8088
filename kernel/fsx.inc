@@ -141,10 +141,17 @@ fsx_caps:
     ret
 
 fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3,
-                                ; VBE 4) - A ROW PER KIND AND NOT ONE FEWER:
-                                ; fsx_caps indexes this with [vid_kind] and
-                                ; nothing bounds it, so a kind without a row
-                                ; reads whatever follows the table
+                                ; VESA 4) - A ROW PER KIND AND NOT ONE FEWER,
+                                ; AND NOT ONE MORE: fsx_caps indexes this with
+                                ; [vid_kind] and nothing bounds it, so a kind
+                                ; without a row reads whatever follows the
+                                ; table - and an EXTRA row is just as wrong,
+                                ; silently shifting every kind above it. The
+                                ; 2026-10-24 merge left the retired VBE track's
+                                ; row here beside the VESA one that replaced
+                                ; it, so kind 4 read the dead row and the live
+                                ; one at index 5 was unreachable. Both held
+                                ; 0x01EF, which is exactly why nothing saw it.
     dw 0x01EF                   ; VGA:  0,1,2,3 + 5,6,7,8
     dw 0x0011                   ; HERC: 0 (mode 7 text) + 4 (its own graphics)
     dw 0x000F                   ; CGA:  0,1,2,3
@@ -154,12 +161,6 @@ fsx_capstab:                    ; indexed by VID_* (VGA 0, HERC 1, CGA 2, EGA 3,
                                ; has no FSXM id, and mode 0Dh (native, planar)
                                ; is a safe later addition, not pass 1
                                ; (SPEC.md 39.24, docs/plans/completed/EGA-PLAN.md 7)
-    dw 0x01EF                   ; VBE: the VGA's row exactly. The card IS a
-                               ; VGA - 0104h is a mode on it, not another
-                               ; adapter - so every FSXM id it can set from
-                               ; 640x480 it can set from 1024x768, and
-                               ; fsx_mode's exit restores the desktop's mode
-                               ; through vid_setmode either way (SPEC.md 39.29)
 %endif
 %ifdef VID_EXT
     dw 0x01EF                   ; VESA: VGA's row (SPEC.md 120.5) - it is the

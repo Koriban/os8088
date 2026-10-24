@@ -174,14 +174,13 @@ KNOBS = [
     ("diskcnt",     ["DISKCNT=1"]),
     ("diskal",      ["DISKAL=1"], "boot360.bin"),
     ("dirtyram",    ["DIRTYRAM=1"]),
-    # 39.29's TWO, and they were in no row until the first whole-tier
-    # soak: NOVBEROW is the A/B the per-row bank test's removal was
-    # measured against (39.29.10.5) and VBEDIAG is the kernel driving
-    # its own window (39.29.12, kernel/vbediag.inc). Nothing assembled
-    # either arm, and VBEDIAG's include had meanwhile broken
-    # kernsize.py's whole measurement pass without a gate noticing.
-    ("novberow",    ["NOVBEROW=1"]),
-    ("vbediag",     ["VBEDIAG=1"]),
+    # 39.29's TWO (NOVBEROW, VBEDIAG) WERE HERE AND ARE GONE with the VBE
+    # track they A/B'd, retired at the 2026-10-24 upstream merge in favour of
+    # SPEC.md 120's VESA. They are not replaced here: this file asserts only
+    # that a knob's arm ASSEMBLES, and a row naming a knob the Makefile no
+    # longer defines builds the DEFAULT kernel and passes having tested
+    # nothing - which is the very rot these two were added to prevent.
+    # VESA's own A/B is the `novidext` row below.
     ("fsnostamp",   ["FSNOSTAMP=1"]),
     ("redrawfull",  ["REDRAWFULL=1"]),
     ("heapcompact", ["HEAPCOMPACT=0"]),

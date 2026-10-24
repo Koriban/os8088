@@ -77697,6 +77697,28 @@ The `0104h` reading from the Satellite is outstanding.
 
 ### 39.29 VBE 1024x768x16 — `VBE.DRV` and the banked planar geometry
 
+> **RETIRED at the 2026-10-24 upstream merge. NOTHING IN THIS SECTION SHIPS.**
+> `VBE.DRV`, `kernel/vbe.inc`, `kernel/vbediag.inc`, the `VBROW`/`VBROWR`/
+> `VBROWCS` row macros, `VID_VBE`, the `NOVBEROW` and `VBEDIAG` knobs,
+> `make vbebox` and the `vbeos.img` disk are all deleted; the high-resolution
+> desktop is **§120's `VESA.DRV`**, and `VID_VESA` = 4 is the kind this
+> section's `VID_VBE` used to be. The two differ in kind and not only in
+> name: this track drove **4bpp PLANAR** `0104h` through the VGA's own
+> register paths, while §120.2.2 offers **packed-pixel only** — 8bpp memory
+> model 4, or 15/16bpp model 6 — so none of the register arithmetic below
+> describes what the kernel now does.
+>
+> **It is kept, rather than deleted, for the measurements.** §39.29.1's
+> stride/bank arithmetic, §39.29.3's cost to a machine that cannot use the
+> mode, §39.29.8.1's confirmation on a Toshiba Satellite 4025CDT (readback
+> 13 of 13), §39.29.10.5's finding that a per-row bank test loses more than
+> it buys, and §39.29.10.6's list of what a straddle cut cannot cover are
+> facts about this hardware that no later work should have to re-measure.
+> **Read it as a record, never as a contract**, and cite §120 for anything
+> that ships. `tests/vbeprobe` and `tests/vbeset` (§39.28) DO still exist
+> and still answer what modes a real BIOS offers — which is how to find out
+> whether a given card gives `VESA.DRV` a mode it can take.
+
 §39.28 asked whether a bigger PLANAR mode exists, and §39.28.2.3 answered it on
 the iron: mode `0104h` sets, draws, and os8088's own three register paths —
 Set/Reset, the Bit Mask and the XOR ALU — behave in it exactly as in mode 12h,

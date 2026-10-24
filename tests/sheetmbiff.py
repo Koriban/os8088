@@ -56,8 +56,17 @@ WORK = os88build.at("build/sheetmbiff")               # this row's own paths (WR
 DISK = os88build.at("build/sheetmbiff.img")
 NAME = "SHIN.SLK"
 OUT = "SHIN.BIF"
-XLREF = "build/sheetxl2/A0.XLS"         # Excel 2.1d's own macro sheet, expanded
-                                         # by sheetxl2 from KWWHAT.CPM
+XLREF = os88build.at("build/sheetxl2/A0.XLS")   # Excel 2.1d's own macro sheet,
+                                         # expanded by sheetxl2 from KWWHAT.CPM.
+                                         # at() LIKE THE PRODUCER'S: sheetxl2.py
+                                         # writes it through os88build.at, so a
+                                         # bare path here reads the shared
+                                         # build/ while the file is written
+                                         # under $OS88_TREE - and the absent
+                                         # case below is a printed SKIP, not a
+                                         # failure, so the one check that real
+                                         # Excel bytes can fail would have been
+                                         # skipped in every soak run in silence
 
 PTG_CE, PTG_FN = 0x58, 0x42             # the two tFuncVar forms (81.83)
 PTG_F1 = 0x41                           # ...and tFunc, for a FIXED-arity one,

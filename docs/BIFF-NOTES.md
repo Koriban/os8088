@@ -117,12 +117,17 @@ format indices at 0 and 1, which is why the reader has one XF body path for
 both opcodes.
 
 **Border `XF`s** (SPEC.md 81.117 — READ here, never written by this fork): after the 64, one more per distinct
-(format byte, border byte) pair the border table holds, at most 64, numbered
-from 64 in the order `sh_bxf_collect` finds them. The body is the format
+distinct **(format byte, border byte, number format) TRIPLE** the writer
+finds, at most `SH_XFP_CAP` = 64, numbered from 64 in the order
+`sh_xfp_scan` walks the cells in. The triple rather than a (format, border)
+pair is what SPEC.md 81.55 needed: a pair cannot carry a number format, so
+two cells differing only in theirs would share an XF. The body is the format
 byte's, plus `XF_AREA_34` = 4A02H for Shade (pattern 2, the 50% grey,
 colour 8 on colour 9) and `XF_BORDER_34`'s four bytes - top, left, bottom,
 right - each 41H for a set edge (line style 1 thin, colour 8). A bordered
-cell's record carries its pair's `ixfe`.
+cell's record carries its triple's `ixfe`, which `sh_biff_ixfe` looks up;
+past the cap a bordered cell keeps its format and loses its border, never
+someone else's XF.
 
 **`BLANK`** (6, 0201H): the head alone, for a bordered cell with no value -
 the only way its XF reaches the file.

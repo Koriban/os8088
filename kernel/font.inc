@@ -599,13 +599,16 @@ font_char:
     and cl, 7                   ; then took from CL anyway. Four `mov r16,r16`
                                 ; fewer - 6 bytes and ~34.7 clocks by the
                                 ; prefetch floor, better on both terms
-    mov ax, [vid_stride]        ; ...and the ONE open-coded row base in the
-                                ; kernel, which bypasses gfx_rowbase
-    mul dx                      ; DX:AX = y * stride. "DX clobbered, product
-                                ; fits" was true while a planar surface was
-                                ; 480 rows of 80; at 768 of 128 the product is
-                                ; 98,176 and DX IS THE BANK (SPEC.md 39.29.10)
-    add di, ax                  ; DI = rowbase + x / 8. CH is x's high byte
+    mov ax, ROW_BYTES           ; A CONSTANT, and it agrees with the row STEP
+                                ; this loop uses below - the pair has to. Every
+                                ; kind that reaches here is 80 bytes a row: the
+                                ; 1bpp cards went to font_char_bb above and a
+                                ; VESA cell left through VIDEXTC before this.
+                                ; It read [vid_stride] for the retired 1024-wide
+                                ; VBE mode, which left the base live and the
+                                ; step constant - two settings for one number
+    mul dx                      ; AX = y * 80 (DX clobbered, product fits) -
+    add di, ax                  ; DI = y * 80 + x / 8. CH is x's high byte
                                 ; here and is loaded with [wm_clip_rn] three
                                 ; instructions down, before anything reads it
 

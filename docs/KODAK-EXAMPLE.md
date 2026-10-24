@@ -3,9 +3,15 @@
 `apps/sheet/` carries four files that are not samples a user is shown. They
 are **evidence**: things SHEET wrote, or was fed, in the emulator, kept so a
 host-side reader has a real artifact to check against rather than only files
-the host wrote itself. No floppy carries any of them. SPEC.md 81.10.9 and
-81.47.7 cite this page; `tools/os88sheetfmt.py --selfcheck` (the `sheetfmt`
-fast row) is what reads `KODAK.BIF`.
+the host wrote itself. **No SHIPPING floppy carries any of them** — not the
+system, apps or category disks — but this fork builds an **examples disk**
+that does: `build/examples.img` and its 720KB, 1.2MB and 360KB geometries
+(`EXAMPLES` in the Makefile, which cites this page; `make examplesdisk`).
+`KODAK.BIF`, `KODAK.DOC`, `KODAKEX1.BMP` and `KODAKEX2.BMP` ride there in
+`MEDIA/` beside the Xerox Q3 1982 pair, so opening one is a disk swap rather
+than a tree copy. SPEC.md 81.10.9 and 81.47.7 cite this page;
+`tools/os88sheetfmt.py --selfcheck` (the `sheetfmt` fast row) is what reads
+`KODAK.BIF`.
 
 | file | what it is | what reads it |
 |---|---|---|
