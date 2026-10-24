@@ -7,6 +7,22 @@ interactive dot prompt and `.PRG` programs — compiled to this machine's
 own bytecode. Supersedes `DATABASE-PLAN.md`'s file-format decision;
 `WORKS-PLAN.md` stays dropped. Nothing is built.
 
+**§1.1/§6's blocker is cleared (2026-10-23): `docs/DBASE3-SPEC.md` pins the
+`.DBF` header, field descriptor and record format against three real,
+authentic dBASE III files, hex-dumped by hand, cross-checked against five
+published sources** — and one of those sources (fileformat.info's own byte
+order for the last-update date) turned out to be wrong, caught only because
+the real bytes disagreed with it. Still open there: a real sample with a
+Logical (`L`) field, and a *confirmed-genuine* dBASE III `.DBF`+`.DBT` pair
+for the memo format (the one memo sample found was Visual FoxPro, not
+dBASE III — see `DBASE3-SPEC.md` §0). Neither blocks wave 1, which needs no
+memo and no Logical field to prove `.DBF` read/write. The language reference
+(§1.3) is separately covered: 20 period dBASE III/III PLUS/IV books are at
+`~/Documents/_LIBRARY/books/programming_-_reference/dbase/`, confirmed by
+direct text search to carry real `.PRG` program listings and command syntax
+— sufficient to start wave 3/4 when the time comes, though no individual
+command's edge-case behaviour has been pinned from them yet.
+
 ---
 
 ## 0. What "target dBASE III" means here, stated the way FROTZ-PLAN states it
