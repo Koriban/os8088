@@ -4953,7 +4953,7 @@ vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/v
 	@echo "          and build/vxpics.img that B: - PiXEL and the picture (120.7)."
 	@echo "          build/vesablit4.img the same plus \\AUTOSTRT opening WireBall (120.3)."
 	@echo "          build/vesafsx.img opens Gorillas and build/vesapref.img Solitaire (120.5)."
-	@echo "          build/vesa1024.img pins 1024x768x8 (class 0x8F) for a 1MB card;"
+	@echo "          build/vesa1024.img pins 1024x768x8 (class 0x8F), the Satellite's mode;"
 	@echo "          it is built here so it cannot rot - no row drives it (\`make vesa1024\`)."
 	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py; vesablit4.py; vesafsx.py; vesapref.py"
 
@@ -5103,13 +5103,32 @@ $(BUILD)/vesa8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROO
 # 3 << 2 (768), depth bit CLEAR = 8bpp = 0x8F (SPEC.md 120.2.3,
 # kernel/vxabi.inc's VXC_*). QEMU's standard VGA offers it as 0105h.
 #
-# WHY IT IS PINNED AND NOT LEFT ON AUTO, which is the whole point of the
-# disk: Auto ranks by (X x Y, then bpp) and takes the largest, so on a card
-# with VRAM to spare it lands on 1024x768x**16** - 1024 x 768 x 2 = 1.5MB of
-# framebuffer. A 1MB card cannot offer that mode at all, Auto never sees it,
-# and the best remaining is a SMALLER GEOMETRY. 1024x768x8 is 768KB and fits,
-# so naming the class is what gets the resolution rather than the depth.
-# The owner's Toshiba Satellite 4025CDT is that machine (docs/FIELD-MACHINES.md).
+# WHY 8bpp AND NOT 16, which is the whole question this disk answers:
+# 1024x768 at 8bpp is the ONLY 1024x768 mode VESA.DRV can take on the one
+# machine here that has been probed. SPEC.md 39.28.1 is the table, read off
+# a Toshiba Satellite 4025CDT (Chips & Technologies 65555, VBE 2.0, 2MB,
+# docs/FIELD-MACHINES.md) - 31 report lines of 31, nothing truncated:
+#
+#   0104  1024x768   4bpp  model 3  attr 001F   PLANAR, and 120.2.2 offers
+#                                               only models 4 and 6
+#   0105  1024x768   8bpp  model 4  attr 009F   supported - this one
+#   0106  1280x1024  4bpp  model 3              X > 1024, refused by 120.2.2
+#   0118  1024x768  24bpp  model 6  attr 009A   bit 0 CLEAR: the BIOS LISTS it
+#                                               and the card does not support
+#                                               it, which is why the attach
+#                                               tests bit 0 and not presence
+#
+# No supported 15/16bpp mode at this geometry appears in that list, so 0x9F
+# would find nothing to match and fall back to Auto. **VRAM is not the
+# constraint on that machine** - 2MB holds a 1.5MB framebuffer easily; the
+# constraint is what the BIOS actually offers.
+#
+# AUTO LANDS HERE TOO, by arithmetic rather than luck: it ranks the OFFERED
+# modes by (X x Y, then bpp), 0105h is the only 1024x768 survivor of
+# 120.2.2's filters, and 1024 x 768 beats every smaller geometry whatever
+# its depth. The pin is therefore a GUARANTEE rather than a correction - it
+# says the geometry out loud so a card whose list differs cannot quietly
+# seat the desktop somewhere smaller.
 #
 # AND IT IS A DISK because a period machine cannot be driven: 86Box takes no
 # scripted input and real hardware takes none either, so "switch to 1024x768"
@@ -5135,8 +5154,8 @@ $(BUILD)/vesa1024.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYS
 .PHONY: vesa1024
 vesa1024: $(BUILD)/vesa1024.img
 	@echo "vesa1024: $< - boots straight to a 1024x768x8 desktop (VXC class"
-	@echo "          0x8F). For a 1MB card, where Auto's 1024x768x16 does not"
-	@echo "          fit and Auto therefore picks a smaller geometry."
+	@echo "          0x8F). 8bpp because 0105h is the only 1024x768 mode the"
+	@echo "          probed card offers that VESA.DRV can take (SPEC.md 39.28.1)."
 	@echo "          QEMU:  qemu-system-i386 -vga std -drive file=$<,format=raw,if=floppy -boot a"
 	@echo "          Real machine: write it to a 1.44MB floppy and boot it."
 
