@@ -4946,13 +4946,15 @@ $(BUILD)/vesa.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT
 		$(BUILD)/vxcfg/system.cfg
 
 .PHONY: vesatest
-vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img $(BUILD)/vesablit4.img $(BUILD)/vesafsx.img $(BUILD)/vesapref.img
+vesatest: $(BUILD)/vesa.img $(BUILD)/vesa8.img $(BUILD)/vesablitd.img $(BUILD)/vxpics.img $(BUILD)/vesablit4.img $(BUILD)/vesafsx.img $(BUILD)/vesapref.img $(BUILD)/vesa1024.img
 	@echo "vesatest: build/vesa.img - VESA.DRV already wanted (SPEC.md 120.9);"
 	@echo "          build/vesa8.img the same with a 'VM' class byte asking 800x600x8;"
 	@echo "          build/vesablitd.img the same plus \\AUTOSTRT opening B:CITY.PCX,"
 	@echo "          and build/vxpics.img that B: - PiXEL and the picture (120.7)."
 	@echo "          build/vesablit4.img the same plus \\AUTOSTRT opening WireBall (120.3)."
 	@echo "          build/vesafsx.img opens Gorillas and build/vesapref.img Solitaire (120.5)."
+	@echo "          build/vesa1024.img pins 1024x768x8 (class 0x8F) for a 1MB card;"
+	@echo "          it is built here so it cannot rot - no row drives it (\`make vesa1024\`)."
 	@echo "          Run them with: python3 tests/vesa.py; vesa8.py; vesacp.py; vesablitd.py; vesablit4.py; vesafsx.py; vesapref.py"
 
 # ...and the depth blit's pair (SPEC.md 120.7, 106.27): the vesa.img system
@@ -5095,6 +5097,48 @@ $(BUILD)/vesa8.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROO
 		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/vx8cfg/system.cfg
+
+# VESA1024 - THE DISK THAT COMES UP AT 1024x768 ON A 1MB CARD. vesa8.img's
+# shape with the class byte one step along: 0x80 | width 3 (1024) | height
+# 3 << 2 (768), depth bit CLEAR = 8bpp = 0x8F (SPEC.md 120.2.3,
+# kernel/vxabi.inc's VXC_*). QEMU's standard VGA offers it as 0105h.
+#
+# WHY IT IS PINNED AND NOT LEFT ON AUTO, which is the whole point of the
+# disk: Auto ranks by (X x Y, then bpp) and takes the largest, so on a card
+# with VRAM to spare it lands on 1024x768x**16** - 1024 x 768 x 2 = 1.5MB of
+# framebuffer. A 1MB card cannot offer that mode at all, Auto never sees it,
+# and the best remaining is a SMALLER GEOMETRY. 1024x768x8 is 768KB and fits,
+# so naming the class is what gets the resolution rather than the depth.
+# The owner's Toshiba Satellite 4025CDT is that machine (docs/FIELD-MACHINES.md).
+#
+# AND IT IS A DISK because a period machine cannot be driven: 86Box takes no
+# scripted input and real hardware takes none either, so "switch to 1024x768"
+# has to be a property of the floppy, exactly as "the NIC is up" is for
+# ethertest. It is the replacement for the retired VBE track's vbeos.img
+# (SPEC.md 39.29's banner), one adapter kind along.
+#
+# A card that does not offer the mode is NOT refused: the attach falls back
+# to Auto and takes the best that card has (120.2.3), so this disk boots
+# anywhere and simply gets what it can.
+$(BUILD)/vx1024cfg/system.cfg: kernel/driver.inc | $(BUILD)
+	@mkdir -p $(BUILD)/vx1024cfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << 9).to_bytes(2,'little') + b'VM' + bytes([3,4,0,0,0,0x8F]) + b'\0\0')" > $@
+
+$(BUILD)/vesa1024.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/vx1024cfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/vx1024cfg/system.cfg
+
+.PHONY: vesa1024
+vesa1024: $(BUILD)/vesa1024.img
+	@echo "vesa1024: $< - boots straight to a 1024x768x8 desktop (VXC class"
+	@echo "          0x8F). For a 1MB card, where Auto's 1024x768x16 does not"
+	@echo "          fit and Auto therefore picks a smaller geometry."
+	@echo "          QEMU:  qemu-system-i386 -vga std -drive file=$<,format=raw,if=floppy -boot a"
+	@echo "          Real machine: write it to a 1.44MB floppy and boot it."
 
 # USBMOUSETEST - SPEC.md 9.12.6's gate disks. No emulator here carries a CH375,
 # so USBMOUSE.DRV is assembled a second time with -DCH375SIM: the same driver
