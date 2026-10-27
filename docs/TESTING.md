@@ -596,10 +596,14 @@ so `tools/mouse.py --screen 1024x768` (or `800x600`) must match the mode the
 disk asked for.
 
 ```sh
-make vesatest                       # four disks: vesa.img (Auto: 1024x768x16),
+make vesatest                       # vesa.img (Auto: 1024x768x16),
                                     # vesa8.img (the 'VM' class byte: 800x600x8),
+                                    # vesa1024.img (the class byte again: the
+                                    #   Satellite's 1024x768x8, no row drives it),
                                     # vesablitd.img + vxpics.img (PiXEL opened by
-                                    # an AUTOSTRT link, for the depth blit)
+                                    #   an AUTOSTRT link, for the depth blit),
+                                    # vesablit4.img (WireBall), vesafsx.img
+                                    #   (Gorillas), vesapref.img (Solitaire)
 python3 tests/vesa.py --png /tmp/v.png     # boot state and the first paint, a
                                            # menu, a Disk window
 python3 tests/vesa8.py                     # the 8bpp path and the DAC
@@ -1225,23 +1229,31 @@ target now strips).
   script reads as `can't open file`.
 
 **A CODE PATH ONLY ONE MACHINE CAN ENTER CAN STILL BE GATED HERE, by poking
-the state that selects it.** No emulator in this tree can enter VBE 0104h
-(SPEC.md 39.29.8: QEMU's Bochs BIOS advertises the mode and cannot map the
-window; MartyPC and 86Box have no VESA BIOS that answers at all), so the bank
-straddle cut would have been exercised on the owner's Satellite and nowhere
-else. `tests/vbeident.py --cutrow 200` pokes `[vbe_cutrow]` - the word that
-says where the 64KB window ends - so the cut fires on **mode 12h**, where a
-correct cut must be PIXEL-NEUTRAL: running a rect primitive twice over two
-halves of its own rect has to draw what running it once draws. It compares a
-cut boot against a plain boot of the same build, needs no stored capture, and
-the 0 is not vacuous - skipping one row at the boundary reddens it with a
-bounding box of exactly the poked row. **Look for this shape whenever a
-feature's own hardware is unavailable: the question is often not "can I enter
-that mode" but "what does that mode change, and can I set it by hand".**
+the state that selects it.** The lesson stands; **its worked example is
+retired**, so read it as a shape rather than as a recipe you can run.
 
-`--save`/`--ref` are the same file's before/after compare for a change that
-puts one body in front of two modes, and `--mutate` (one bit of `gfx_lmtab[0]`)
-is its proof that the captures reach `gfx_rect_setup` at all.
+The example was VBE `0104h`, 1024x768 PLANAR, which no emulator in this tree
+can enter - QEMU's Bochs BIOS advertises the mode and cannot map the window,
+MartyPC and 86Box have no BIOS that answers it - so the bank straddle cut
+could be exercised on the owner's Satellite and nowhere else.
+`tests/vbeident.py --cutrow 200` poked `[vbe_cutrow]`, the word saying where
+the 64KB window ends, so the cut fired on **mode 12h**, where a correct cut
+must be PIXEL-NEUTRAL: running a rect primitive twice over two halves of its
+own rect has to draw what running it once draws. It compared a cut boot
+against a plain boot of the same build, needed no stored capture, and the 0
+was not vacuous - skipping one row at the boundary reddened it with a bounding
+box of exactly the poked row. That test, that word and `VBE.DRV` all went with
+the fork's VBE track at the 2026-10-24 merge (SPEC.md 39.29's banner).
+
+**Do not read the first sentence of that paragraph as "high resolution is
+untestable here".** It is a statement about ONE 4bpp planar mode. SPEC.md
+120's `VESA.DRV` is packed-pixel and QEMU's standard VGA runs it directly -
+the VESA section above is the live fixture, with ten rows and an 86Box
+profile - so the modern question is answered by booting, not by poking.
+
+**Take from this the shape, which has not retired: when a feature's own
+hardware is unavailable, the question is often not "can I enter that mode" but
+"what does that mode change, and can I set it by hand".**
 
 **For `gfxbench` all four steps are written**: `python3
 tools/gfxbenchread.py` boots the bench disk, picks Run off the Bench menu,

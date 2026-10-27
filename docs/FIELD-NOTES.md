@@ -4297,6 +4297,27 @@ unknown. If the pointer is ever dead after a play again, reopen this entry.
 
 ## 68. Satellite 4025CDT, VBE desktop: the keyboard stops after a full-screen app, the mouse does not (OPEN — NOT REPRODUCIBLE on current code, and the reporting build no longer exists)
 
+**THE DESKTOP THIS WAS REPORTED ON NO LONGER EXISTS.** The fork's VBE track -
+`VBE.DRV`, `kernel/vbe.inc` and the 1024x768x16 PLANAR mode `0104h` - was
+retired at the 2026-10-24 upstream merge in favour of SPEC.md 120's
+`VESA.DRV`, and SPEC.md 39.29 is kept as a record rather than a contract. So
+every sentence below describing what the kernel did on the way out of a
+full-screen bracket describes **deleted code**, and the note is history from
+here down. It is kept whole because its value was never the fix: it is six
+eliminations on transcripts, and those are about the 8042, the PIC, the BIOS
+buffer and the machine's era, none of which the display change touches.
+
+**WHETHER IT REPRODUCES ON THE VESA DESKTOP IS UNKNOWN AND UNTESTED.** Nobody
+has exited a full-screen app on a VESA desktop on this machine. The two paths
+are not the same - that one restored the mode through `VBE.DRV`'s own planar
+geometry, this one leaves through `vid_setmode`'s VESA arm (120.4) - so a
+recurrence would be a NEW report rather than this one continuing, and a
+silence is not a fix. **The instrument survives and is the way to ask**:
+`tests/kbdfsx` still builds, and `make kbdfsx`'s bootable disk now carries the
+VESA SYSTEM.CFG, so it comes up on the high-resolution desktop with
+`KBDFSX.O88` at the root of A: exactly as it used to. `make vesa1024` is the
+disk that pins 1024x768 on this card (SPEC.md 39.28.1's probe: `0105h`, 8bpp).
+
 Reported off the owner's **Toshiba Satellite 4025CDT** (docs/FIELD-MACHINES.md)
 running the **VBE 1024x768 desktop** (SPEC.md 39.29): after exiting a
 full-screen game, or ARTFUL, the **keyboard stops responding and the mouse does

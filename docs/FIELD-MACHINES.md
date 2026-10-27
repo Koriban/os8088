@@ -259,13 +259,28 @@ What it has been worth so far:
   the bank boundary measures at 66.6-67.4% of the picture against a predicted
   66.7%, and the readback is **13 of 13** against the control arm's 10 of 10
   (SPEC.md §39.28.2.3). The mode is verified, not merely demonstrated.
-- **And os8088 now runs a desktop in it.** 1024x512 draws correctly here -
-  chrome, text, dock, pointer, menus and windows, with no corruption
-  (SPEC.md §39.29.8.1). It took four round trips and found three defects that
-  **no gate in the tree could see**, because QEMU cannot enter the mode at all:
-  a misdiagnosis, eighteen sites carrying the stride as a compile-time
-  constant, and that constant's replacement being read through the wrong
-  segment. This machine is the only instrument for that class.
+- **And os8088 ran a desktop in it** - 1024x512, chrome, text, dock, pointer,
+  menus and windows, with no corruption (SPEC.md §39.29.8.1). **Past tense:
+  that was the fork's VBE track, retired at the 2026-10-24 upstream merge**,
+  so the code that drew it is gone and §39.29 is a record rather than a
+  contract. The finding that outlives it is the one about gates: it took four
+  round trips and found three defects **no gate in the tree could see** - a
+  misdiagnosis, eighteen sites carrying the stride as a compile-time constant,
+  and that constant's replacement read through the wrong segment. This machine
+  is still the only instrument for that class.
+
+- **What the high-resolution desktop is NOW, and what has not been checked.**
+  SPEC.md §120's `VESA.DRV` replaces it and is PACKED-PIXEL only - 8bpp
+  memory model 4, or 15/16bpp model 6 - so it will never set `0104h`, the
+  4bpp PLANAR mode this machine is famous here for. §39.28.1's own probe of
+  this card says what it CAN take: **`0105h`, 1024x768x8**, the only 1024x768
+  mode on it that §120.2.2's filters accept (`0106h` is 1280x1024 and over
+  the width ceiling; `0118h` comes back with attribute bit 0 clear - listed by
+  the BIOS, unsupported by the card). `make vesa1024` is the disk that names
+  that mode rather than trusting Auto. **None of it has been run on this
+  machine yet**: the geometry is inferred from a probe taken for a different
+  question, and a 2 MB card holding a 1.5 MB framebuffer is not the
+  constraint - what the BIOS offers is.
 - **The PS/2 pointer path works on iron.** `sysbench` drove the trackpad, which
   is the first confirmation of §9.9 off a real machine rather than an
   emulated one.
