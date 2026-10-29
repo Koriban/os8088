@@ -4,8 +4,11 @@ Two things requested together: (1) what `apps/os88ui.inc` (+ `os88line.inc`,
 `os88text.inc`, and the kernel's own dialogs) actually offers, set against
 Windows 1–4, Mac OS 6–X, GTK 2–4, Qt 2–5, OPEN LOOK and GNUstep/NeXTSTEP —
 plus Motif/CDE, since a dock redesign question below needs it — with the
-real gaps named; and (2) CDE's Front Panel and OS/2 Warp 3's LaunchPad,
-researched properly, for a possible dock redesign.
+real gaps named; and (2) a dock and launcher-strip survey for a
+possible dock redesign - CDE's Front Panel and OS/2 Warp 3's LaunchPad
+first, then six more on 2026-10-29: the Windows 95 taskbar, the NeXTSTEP
+Dock, Window Maker's Dock and Clip, the Mac OS X Dock, the RISC OS icon bar
+and Tandy's DeskMate.
 
 **Sourcing.** Part 1's os8088 column is read directly from this session's
 build (`apps/os88ui.inc`, `apps/os88line.inc`, `apps/os88text.inc`,
@@ -257,7 +260,11 @@ knowledge the rest of the matrix does.
 
 ---
 
-## Part 2: CDE's Front Panel, OS/2 Warp 3's LaunchPad, and the dock
+## Part 2: eight docks and launcher strips, read against ours
+
+CDE's Front Panel and OS/2 Warp 3's LaunchPad were the original pair
+(2026-10-21); six more were surveyed on 2026-10-29, and the read-across at
+the end covers all eight.
 
 ### How CDE's Front Panel actually works
 
@@ -300,9 +307,130 @@ Sourced from [EDM2's "LaunchPad Revisited"](https://www.edm2.com/index.php/Launc
   mid-90s-and-later idea CDE/OS2's *contemporaries* (Mac OS 7.5) already
   had but these two launchers did not.
 
-### What the two have in common, read against os8088's dock today
+### Six more strips, surveyed 2026-10-29
 
-Both are the same shape under different names: **a fixed strip of
+Added on request, to set CDE and the LaunchPad against the rest of the
+family. **Sourcing is weaker here than above and the difference matters**:
+the CDE and OS/2 sections cite vendor documentation, while most of what
+follows came back as secondary material - Wikipedia, O'Reilly chapters,
+project docs and forum threads. Vendor primary sources for the NeXTSTEP Dock
+and Apple's Dock HIG were looked for and **not found** in this pass. Treat
+the mechanisms below as well-attested and the wording as not quotable.
+
+Two of the pages fetched carried text instructing the reader to change
+subject. Ignored, and noted here because the next person doing this should
+expect it.
+
+**Windows 95's taskbar** ([Raymond Chen's *The Old New Thing*, ch.4](https://www.oreilly.com/library/view/the-old-new/0321440307/ch04.html),
+[Microsoft's reviewer's guide](https://www.tech-insider.org/windows/research/acrobat/950331/CHAP03.pdf)).
+The pure window-list, and the one os8088's dock already is. Its launcher half
+is **not** in the strip at all - it is the Start button, a menu. The
+reviewer's guide calls the taskbar the "home base" where a novice discovers
+launching, task switching and finding a file; usability testing on Program
+Manager's hierarchy is what produced the Start button. The strip's known
+weakness is scale: tiles shrink as windows multiply, and neither scrolling
+nor growing the bar was considered acceptable. **For us:** this is the
+design we have, including the failure mode - our tiles are fixed-width on a
+640 or 720 pixel strip, so the ceiling arrives sooner than it did there.
+
+**The NeXTSTEP Dock** ([OpenStep-era patent US6336146](https://patents.google.com/patent/US6336146),
+[osnews' NeXTSTEP walkthrough](https://www.osnews.com/story/18941/pt-vi-the-dock/2/)).
+The pure launcher, and the mirror image of the taskbar. Apps are added by
+dragging an icon into the strip ("docking") and removed by dragging out; the
+Dock stores each one's path so it can find the executable later. Running
+state is a mark on the launcher rather than a tile of its own - **an
+ellipsis under the icon means NOT running**. Workspace Manager and Recycler
+are permanent. **The lesson is the limitation**: it did not resize or scroll
+when full, so a full Dock meant removing something. A fixed strip with no
+overflow story is a strip with a hard item limit.
+
+**Window Maker's Dock and Clip** ([the Dock](https://windowmaker.org/docs/guidedtour/dock.html),
+[the Clip](https://windowmaker.org/docs/guidedtour/clip.html),
+[dockapps](https://en.wikipedia.org/wiki/Dockapps)). NeXT's Dock reimplemented,
+plus two ideas we do not have. The **Clip** is a second, *per-workspace* dock
+- icons attached to it appear only on their own workspace - which doubles as
+the workspace pager. And a **dockapp** is not a launcher at all: it is a
+program whose whole output is drawn in its own tile in the strip, detected
+by a withdrawn `WM_HINTS` state or a `WM_CLASS` of `DockApp`. **For us this
+is the interesting one**: a strip-resident tile that *renders* rather than
+launches is a thing this tree already has a home for - Sticky Apps
+(SPEC.md 110) - so "a live tile in the dock" needs no new concept here, only
+a placement.
+
+**Mac OS X's Dock** ([Wikipedia](https://en.wikipedia.org/wiki/Dock_(macOS)),
+[O'Reilly's macOS guide ch.4](https://www.oreilly.com/library/view/macos-catalina-the/9781492075059/ch04.html)).
+Both ideas in one strip, and **the mechanism that makes that legible is a
+divider line**: applications left of it, files, folders, disks and minimized
+windows right of it, with the Mac refusing an application dropped on the
+right. Running apps carry an indicator - triangle, then dot, then bar, then
+dot again across versions, and switchable off since 10.7. A folder on the
+right fans its contents out as a stack. **For us:** the divider is the cheap
+part. One strip with two zones and a rule about what may be dropped in each
+adds a zone without adding a mode, and it is the smallest version of "do
+both" anybody shipped.
+
+**RISC OS's icon bar** ([RISC OS Open's quick guide](https://riscosopen.org:8443/wiki/documentation/show/Quick%20Guide:%201.%20Apps%20Folder),
+[its GUI comparison](https://www.riscosopen.org/wiki/documentation/source/GUI%20comparison:%20RISC%20OS%20vs%20Windows%20and%20macOS),
+[Wikipedia on the style guide](https://en.wikipedia.org/wiki/Icon_bar)).
+A second, independent precedent for a split strip - and it splits by **kind**
+rather than by state: the style guide puts filing systems and physical
+devices at the left-hand end and everything else at the right, with the Task
+Manager pinned at the extreme right. Worth knowing that the convention is
+not airtight in practice: a forum thread records the bundled battery manager
+sitting on the right in the user guide while the style guide's wording would
+put it left, because "device" is underdefined. **For us:** this is the
+closest published analogue to a dock that shows *drives* as well as
+programs, which is a question this tree can actually ask - the Disk window
+already owns volumes.
+
+**Tandy's DeskMate** ([Wikipedia](https://en.wikipedia.org/wiki/DeskMate),
+[the DeskMate 3 manual](https://colorcomputerarchive.com/files/Documents/Manuals/Applications/Deskmate%203%20(Tandy).pdf),
+[toastytech's 3.05 walkthrough](https://toastytech.com/guis/pdm.html)).
+**The period-correct one, and the only machine class in this survey that is
+ours**: an 8086-era PC shell. Its answer is not a dock at all. There is a
+Main Menu, and accessories - Spell Checker, Calculator, Phone List,
+Corkboard, Alarm, To Do List, Clipboard in 3.05 - are reached from **F10**
+and open *on top of* whatever is running. **For us:** this is a reminder
+that the strip is not the only place the launcher half can live. The kernel
+already has a menu bar, and DeskMate's generation put the accessory list
+behind a key rather than spending screen rows on it.
+
+### Where the eight land
+
+| | what it shows | second tier | configurable from the strip |
+|---|---|---|---|
+| CDE Front Panel | launchers | subpanels (slide up) | config file |
+| OS/2 LaunchPad | launchers | drawers (pop open) | drag and drop |
+| Windows 95 taskbar | **running windows** | none (Start is a menu) | no |
+| NeXTSTEP Dock | launchers + run mark | none | drag in / drag out |
+| Window Maker Dock | launchers + **live tiles** | Clip = per-workspace strip | drag in / drag out |
+| Mac OS X Dock | **both, split by a divider** | stacks (folder fans out) | drag, side-enforced |
+| RISC OS icon bar | **both, split by kind** | none | no (style guide) |
+| DeskMate | neither - F10 accessories | menu | no |
+| **os8088 today** | **running instances** | none | no |
+
+Read down the "what it shows" column and the finding from the two-system
+version holds with six more: **os8088 is in the Windows 95 column, and the
+launcher half is a separate idea rather than a missing feature.** What the
+wider set adds is three cheap mechanisms and one warning:
+
+- **A divider is enough.** Mac OS X and RISC OS both do "one strip, two
+  jobs" with a line and a placement rule - no modes, no second window. That
+  is the smallest buildable version of the redesign.
+- **Split by KIND is as valid as split by STATE.** RISC OS puts devices one
+  end and programs the other. This tree has volumes to show.
+- **A tile can render.** Window Maker's dockapps are the precedent, and
+  Sticky Apps (SPEC.md 110) are already the mechanism here.
+- **The warning is NeXT's**: a fixed strip with no overflow story has a hard
+  item limit, and ours is 640 or 720 pixels wide. Windows 95 shrank its
+  tiles and was criticised for it; NeXT simply filled up. Whatever is added
+  to our strip has to say what happens when it is full - and that question
+  is **unanswered for the current dock too**, which is worth settling before
+  anything is added beside the tiles rather than after.
+
+### What they have in common, read against os8088's dock today
+
+CDE and the LaunchPad are the same shape under different names: **a fixed strip of
 always-visible items, where some items have a nested, temporarily-visible
 second tier** (CDE: subpanel, slides up, config-file defined; OS/2: drawer,
 pops open, built by drag-and-drop). Neither is a taskbar in the Windows 95
