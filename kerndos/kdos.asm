@@ -79,7 +79,7 @@ kd_lbsz: dw KDL_SIZE                ; KD_H_LBSZ
 ; runtime on a machine with no operating system left to say so.
 
 ; --- AND THE HOLE THE CORE GOES IN (SPEC.md 96.44.5) ------------------------
-; The same reservation the box makes, for the same reason and at the same
+; The same reservation DOS.O88 makes, for the same reason and at the same
 ; addresses: the core is a PART both hosts join, so its jump table is at
 ; CORE_ORG in this segment too and `kern_dos`'s own code begins above the
 ; budget and the bss block. The stub reads this part first and the core's over
@@ -111,7 +111,7 @@ with the stub (kdlayout.inc) and cannot move, so CORE_ORG has to rise"
 %include "kdxms.inc"                ; ...and kern_mega's XMS door: the arena,
                                     ; the int 15h filter (SPEC.md 96.15.4)
 %include "kdpark.inc"               ; ...and the way back to its park
-                                    ; (docs/plans/KERN-MEGA-DOS-PLAN.md 2.3)
+                                    ; (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 2.3)
 %endif
 %ifdef KD_HMA
 %include "kdhma.inc"                ; ...and the HMA arm's low half (W4)

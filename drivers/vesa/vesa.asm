@@ -98,6 +98,12 @@ VX_YMIN     equ 400
 VX_BPSLMAX  equ 4096
 
 VX_WSEG     equ 0xA000          ; window A, and the only segment it will take
+VX_KCODE    equ 0x0060          ; the kernel's code segment - KERNEL_SEG, and on
+                                ; kern_mega the same value as a CODE selector -
+                                ; where the detach points the hook (vx_null)
+VX_DISPI_IX equ 0x01CE          ; the Bochs/QEMU VBE's index port...
+VX_DISPI_ID equ 0               ; ...its ID register (B0C0h-B0CFh)...
+VX_DISPI_BANK equ 5             ; ...and its bank, in 64KB units
 
 CUR_GW      equ 8               ; the arrow's cell (kernel/mouse.inc's)
 CUR_GH      equ 12
@@ -117,6 +123,8 @@ vx_entry:
     je vx_pick
     cmp al, VXV_NEXT
     je vx_next_x
+    cmp al, VXV_PM
+    je vx_pm
     cmp ax, (VX_ABI_VER << 8) | DRVV_ATTACH
     je vx_attach                ; ATTACH from a kernel of this vintage (AH),
     stc                         ; everything else - a newer kernel's verb, or
@@ -125,19 +133,24 @@ vx_entry:
 ; -----------------------------------------------------------------------------
 ; vx_detach - DRVV_DETACH: disarm the kernel's pointer and the availability bit.
 ;             Cannot fail (SPEC.md 51.2). The caller has already put the
-;             desktop back on the VGA (SPEC.md 120.4); if it has not, vx_go's
-;             guard draws nothing rather than calling a freed image.
+;             desktop back on the VGA (SPEC.md 120.4); if it has not (the
+;             shutdown's drv_shutdown_x), the hook reaches the kernel's
+;             vx_null, which draws nothing, rather than a freed image.
 ; -----------------------------------------------------------------------------
 vx_detach:
     cmp word [vx_kseg], 0
     je .out                     ; never initialised: nothing was armed
     push es
     push bx
+    push ax
     mov es, [vx_kseg]
     mov bx, [vx_p_ep]
-    mov word [es:bx+2], 0       ; the far pointer's segment half: vx_go's guard
+    mov ax, [vx_p_null]         ; the far pointer, to the kernel's vx_null:
+    mov [es:bx], ax             ; a hook that fires after this draws nothing
+    mov word [es:bx+2], VX_KCODE ; and goes back the way this image would have
     mov bx, [vx_p_avail]
     and byte [es:bx], ~VXA_BIT
+    pop ax
     pop bx
     pop es
 .out:
@@ -166,7 +179,7 @@ vx_attach:
     mov word [vx_vbe+2], 'E2'   ; with the 512-byte form
     mov ax, VBE_INFO
     mov di, vx_vbe
-    int 0x10
+    call vx_int10               ; on our own stack (vx_int10)
     cmp ax, VBE_OK
     jne .nohw
     cmp word [vx_vbe+VI_SIG], 'VE'
@@ -206,7 +219,7 @@ vx_attach:
     push si
     mov ax, VBE_MINFO
     mov di, vx_minfo
-    int 0x10
+    call vx_int10
     pop si
     cmp ax, VBE_OK
     jne .mode
@@ -216,6 +229,16 @@ vx_attach:
 
     ; --- the class asked for, else Auto (SPEC.md 120.2.3) ------------------------
 .chosen:
+    mov word [vx_stktop], vx_vbe + 512 ; the probe's buffers are dead now:
+    push es                     ; every later BIOS call (4F02h, 4F05h) runs
+    push ds                     ; on them instead of on the scroll's bounce,
+    pop es                      ; zeroed so a watermark can be read off them
+    mov di, vx_minfo            ; (tests/megavesa.py)
+    mov cx, (256 + 512) / 2
+    xor ax, ax
+    cld
+    rep stosw
+    pop es
     cmp byte [vx_nmodes], 0
     je .nohw
     call vx_select              ; [vx_cur] = the record
@@ -591,27 +614,33 @@ vx_mkpal:
     ret
 
 ; -----------------------------------------------------------------------------
-; vx_init - VXV_INIT: SI = the kernel's block (ES = KERNEL_SEG). Bank the
-;           kernel's segment and every pointer, and fill vid_tab row VID_VESA.
+; vx_init - VXV_INIT: DX:SI = the kernel's block, which lives in its boot blob
+;           (ES = KERNEL_SEG). Bank the kernel's segment and every pointer -
+;           the block is gone once the boot ends - and fill vid_tab row
+;           VID_VESA.
 ; out: CF = 0; CF = 1 = a block of another vintage, nothing banked
 ; -----------------------------------------------------------------------------
 vx_init:
-    cmp word [es:si+VXB_VER], VX_ABI_VER
+    push ds
+    mov ds, dx                  ; DS:SI = the block, in the kernel's boot blob
+    cmp word [si+VXB_VER], VX_ABI_VER
     jne .bad
+    pop ds
     mov [vx_kseg], es
     push si
+    push es
+    push ds
+    push ds
+    pop es                      ; ES = ours (DS still is): the bank
+    mov ds, dx
     mov di, vx_p_tabrow         ; the pointer words, in VXB_* order from +2
     inc si
     inc si
     mov cx, (VXB_SIZE - 2) / 2
-.p:
-    mov ax, [es:si]
-    mov [di], ax
-    inc si
-    inc si
-    inc di
-    inc di
-    loop .p
+    cld
+    rep movsw
+    pop ds
+    pop es
     pop si
     call vx_geom
     mov word [vx_win], 0xFFFF   ; no window is current until a mode set
@@ -619,7 +648,46 @@ vx_init:
     clc
     ret
 .bad:
+    pop ds
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; vx_pm - VXV_PM (KERN-MEGA-PLAN 14.115, SPEC.md 120.3.4): kern_mega's switch
+;         into protected mode. DX = 0 is the boot's QUESTION, asked in real
+;         mode right after INIT: CF = 0 says this image draws in protected
+;         mode (an image that predates the verb refuses it, and the kernel
+;         keeps the VGA). DX != 0 ARMS it, at mega_enter: DX = a data
+;         selector over window A, ES = the kernel's data selector, DS = ours
+;         as a selector. A Bochs/QEMU VBE (its 'dispi' ID register answers
+;         B0C0h-B0CFh) has its bank register written directly from then on,
+;         in the window units 4F05h takes; every other card's window goes through
+;         4F05h, reflected - a CPU reset each on a 286
+; out: CF = 0
+; -----------------------------------------------------------------------------
+vx_pm:
+    or dx, dx
+    jz .ok                      ; the question: yes
+    mov [vx_kseg], es           ; the kernel, as its data selector...
+    mov [vx_wsel], dx           ; ...window A as one, and the bank: the
+    push ax                     ; dispi register takes 4F05h's DX as it is,
+                                ; in the granularity the BIOS reported (Bochs
+                                ; 2.7's is 32KB, vx_wsh 1)
+    push dx
+    mov dx, VX_DISPI_IX
+    mov ax, VX_DISPI_ID
+    out dx, ax
+    inc dx
+    in ax, dx
+    and al, 0xF0
+    cmp ax, 0xB0C0              ; B0C0h..B0CFh: a dispi interface
+    jne .nod
+    mov byte [vx_dispi], 1
+.nod:
+    pop dx
+    pop ax
+.ok:
+    clc
     ret
 
 ; vx_geom - vid_tab row VID_VESA (SPEC.md 39.2's nine words) and the kernel's
@@ -628,7 +696,8 @@ vx_init:
 vx_geom:
     mov es, [vx_kseg]
     mov di, [vx_p_tabrow]
-    mov word [es:di], VX_WSEG   ; seg
+    mov ax, [vx_wsel]           ; seg: A000h, or kern_mega's selector over
+    mov [es:di], ax             ; it once VXV_PM has run
     mov ax, [vx_bpsl]
     mov [es:di+2], ax           ; stride
     xor ax, ax
@@ -746,17 +815,22 @@ vx_next:
 ; =============================================================================
 ; THE PRIMITIVE ENTRY (SPEC.md 120.3.1)
 ;
-; Far-called by the kernel's vx_go / vx_call / vx_goc with, on the stack above
-; the far return, a FAR POINTER to the selector byte. Every register is saved
-; into a frame BP addresses (SS), the selector is read through that pointer,
-; DS becomes ours, and the body runs with the caller's registers intact. On
-; the way out every register comes back from the frame, so a body may clobber
-; anything and a body that owes an output writes the frame.
+; Far-called by the kernel's hook itself, `call far [vx_ep]` with the selector
+; byte after it, so the FAR RETURN IS THE SELECTOR'S ADDRESS. Every register is
+; saved into a frame BP addresses (SS), the selector is read through the
+; return, DS becomes ours, and the body runs with the caller's registers
+; intact. Before the body runs, the return is pointed where the kernel goes
+; on: past the byte for a VX_CONT selector, and to VXB_KRET's kernel `ret`
+; otherwise - which pops the hooked body's own return, so a VIDEXT body
+; returns to its caller. Nothing after the body touches a flag but the pops,
+; so its CF is the answer. On the way out every register comes back from the
+; frame, so a body may clobber anything and a body that owes an output writes
+; the frame.
 ;
 ;   [bp+0]  caller's BP     [bp-2]  DS   [bp-4]  ES   [bp-6]  AX   [bp-8]  BX
-;   [bp+2]  ret off         [bp-10] CX   [bp-12] DX   [bp-14] SI   [bp-16] DI
+;   [bp+2]  ret off = the   [bp-10] CX   [bp-12] DX   [bp-14] SI   [bp-16] DI
+;           selector's
 ;   [bp+4]  ret seg
-;   [bp+6]  selector off    [bp+8] selector seg
 ; =============================================================================
 F_DS    equ -2
 F_ES    equ -4
@@ -778,10 +852,22 @@ vx_prim:
     push dx
     push si
     push di
-    lds bx, [bp+6]              ; DS:BX = the selector pointer
+    lds bx, [bp+2]              ; DS:BX = the selector: the far return
     mov al, [bx]
-    push cs
-    pop ds                      ; DS = ours from here
+    mov bx, cs                  ; DS = ours from here: CS in real mode (an
+    test bl, 4                  ; image's base is 512-aligned, so bit 2 of
+    jz .rm                      ; its segment is clear), and on kern_mega in
+    add bx, 8                   ; protected mode CS's DATA twin, the LDT entry
+.rm:                            ; after the code alias (KERN-MEGA-PLAN 14.115)
+    mov ds, bx
+    mov [vx_dsel], ds           ; ...banked for a body whose DS is elsewhere
+    inc word [bp+2]             ; a VX_CONT hook goes on past the byte...
+    test al, VX_CONT
+    jnz .on
+    mov bx, [vx_p_kret]         ; ...any other to the kernel's `ret`, which
+    mov [bp+2], bx              ; pops the hooked body's own return
+.on:
+    and al, VX_SELM
     mov [vx_sel], al
     mov ax, [bp+F_AX]           ; the two registers the read spent, back
     mov bx, [bp+F_BX]
@@ -851,14 +937,82 @@ vx_setwin:
     push ax
     push bx
     push dx
-    mov [cs:vx_win], dx
+    push ds
+    mov ds, [cs:vx_dsel]        ; (DS may be VRAM: CS is read-only on kern_mega)
+    mov [vx_win], dx
+    cmp byte [vx_dispi], 0
+    jne .port
     mov ax, VBE_WIN
     xor bx, bx                  ; BH = 0 set, BL = 0 window A
-    int 0x10
+    call vx_int10
+.done:
+    pop ds
     pop dx
     pop bx
     pop ax
 .out:
+    ret
+.port:                          ; kern_mega on a dispi VBE (vx_pm): the bank
+    mov bx, dx                  ; register itself, no reflection
+    mov dx, VX_DISPI_IX
+    mov ax, VX_DISPI_BANK
+    out dx, ax
+    inc dx
+    mov ax, bx
+    out dx, ax
+    jmp short .done
+
+; -----------------------------------------------------------------------------
+; vx_int10 - int 10h, ON THIS IMAGE'S OWN STACK (KERN-MEGA-PLAN 14.115)
+; in/out: int 10h's; DS = ours (every caller has it: attach, vx_setwin,
+;         VX_SETMODE). Clobbers what int 10h does and nothing more
+;
+; A VBE BIOS IS A DEEP CALL. Bochs's vgabios - compiled C - took 4F01h ~650
+; bytes below the kernel's frame at boot, and task 0's stack is 512 bytes
+; with mem_tab's tail and the menu bar's cells under it in `.lowbss`: the
+; probe overwrote the last five heap records, the next compaction called a
+; "relocation proc" at a segment that was a pushed register, and kern_mega's
+; boot ran zeros to EIP 10000h - a #GP the ROM's int 0Dh answered as IRQ5,
+; forever (17GB of log in a minute). The kernel was never the one to fix:
+; QEMU's SeaVGABIOS hops to a stack of its own for exactly this reason, and
+; nothing promises a real card does. So this image hops: SS:SP onto the top
+; of a buffer of its own - the scroll's 2KB bounce while attach probes (it is
+; unused until a mode is set), and the 768 bytes of the probe's two buffers
+; after it (dead from then on) - and back. The kernel already treats a
+; foreign SS as a ROM's (sch_switch does not switch, the mouse and chain ISRs
+; load their own SS). NOT NESTED: an ISR's hook that lands here while a call
+; is out on this stack goes through on the stack it has. NOT IN PROTECTED
+; MODE: kern_mega reflects int 10h onto the reflection's own stack, and a
+; dispi card is never asked at all (vx_setwin)
+; -----------------------------------------------------------------------------
+vx_int10:
+    cmp byte [cs:vx_onstk], 0
+    jne .direct                 ; a hook inside a hop: the stack it has
+    cmp word [cs:vx_wsel], VX_WSEG
+    jne .direct                 ; kern_mega, protected: reflected
+    pushf
+    pop word [vx_ofl]           ; the caller's IF, for the call and after it
+    cli
+    mov [vx_oss], ss
+    mov [vx_osp], sp
+    inc byte [vx_onstk]
+    push ds
+    pop ss                      ; (`pop ss` holds off an interrupt one
+    mov sp, [vx_stktop]         ; instruction, and IF is clear anyway)
+    push word [vx_ofl]
+    popf
+    int 0x10                    ; (a BIOS keeps DS)
+    cli
+    mov ss, [vx_oss]
+    mov sp, [vx_osp]
+    dec byte [vx_onstk]
+    push word [vx_ofl]
+    popf
+    ret
+.direct:
+    push bp                     ; (kern_mega's reflection of it hands BP back
+    int 0x10                    ; changed - measured, 916Dh - and every body
+    pop bp                      ; reads its frame through BP)
     ret
 
 ; vx_nextwin - the window after the current one (a run crossed its edge)
@@ -895,8 +1049,7 @@ vx_addr:
     shl dx, cl
     mov di, ax
     call vx_setwin
-    mov ax, VX_WSEG
-    mov es, ax
+    mov es, [cs:vx_wsel]        ; window A: A000h, or kern_mega's selector
     pop bx
     pop cx
     ret
@@ -1208,13 +1361,13 @@ vxp_pat:
     jc .out
     push cx                     ; x2: the copy's count spends CX, and a width
     push ds                     ; cut from the leftover 0 was -103 pixels, which
-    mov ds, [vx_kseg]           ; the row loop drew as 65,433 across the desktop
-    mov si, [cs:vx_p_pat]
+    push es                     ; the row loop drew as 65,433 across the desktop
+    push ds
+    pop es                      ; ES = ours, the copy's destination
+    mov si, [vx_p_pat]
+    mov ds, [vx_kseg]
     mov si, [si]                ; SI = the kernel's eight bytes
     mov di, vx_patbuf
-    push es
-    push cs
-    pop es
     mov cx, 4
     cld
     rep movsw                   ; copied, so the row loop reads them through CS
@@ -1526,27 +1679,27 @@ vxp_fontchar:
 ;           right edge (SPEC.md 25). y is already clipped by the kernel
 ; -----------------------------------------------------------------------------
 vxp_icon:
-    push ds
-    mov ds, [vx_kseg]
-    mov si, [cs:vx_p_icog]
-    mov ax, [si]                ; ico_ww
-    mov [cs:vx_iww], ax
-    mov ax, [si+4]              ; ico_rows
-    mov [cs:vx_irows], ax
-    mov si, [cs:vx_p_icoxy]
-    mov ax, [si]                ; ico_x
-    mov [cs:vx_ix], ax
-    mov ax, [si+2]              ; ico_y
-    mov [cs:vx_iy], ax
-    mov si, [cs:vx_p_icop]
-    mov ax, [si]                ; ico_maskp
-    mov [cs:vx_ip], ax
-    mov ax, [si+2]              ; ico_datap
-    mov [cs:vx_ip2], ax
-    mov si, [cs:vx_p_icoc]
-    mov ax, [si]                ; c1, c2
-    mov [cs:vx_ink], ax
-    pop ds
+    push es                     ; the kernel's cells through ES, so DS stays
+    mov es, [vx_kseg]           ; ours for the stores
+    mov si, [vx_p_icog]
+    mov ax, [es:si]             ; ico_ww
+    mov [vx_iww], ax
+    mov ax, [es:si+4]           ; ico_rows
+    mov [vx_irows], ax
+    mov si, [vx_p_icoxy]
+    mov ax, [es:si]             ; ico_x
+    mov [vx_ix], ax
+    mov ax, [es:si+2]           ; ico_y
+    mov [vx_iy], ax
+    mov si, [vx_p_icop]
+    mov ax, [es:si]             ; ico_maskp
+    mov [vx_ip], ax
+    mov ax, [es:si+2]           ; ico_datap
+    mov [vx_ip2], ax
+    mov si, [vx_p_icoc]
+    mov ax, [es:si]             ; c1, c2
+    mov [vx_ink], ax
+    pop es
     cmp word [vx_irows], 0
     je .out
     mov al, [vx_ink]
@@ -1704,10 +1857,9 @@ vx_cursave:
     push ds
     mov ax, es
     mov ds, ax                  ; DS:SI = VRAM
-    push cs
-    pop es
-    mov di, [cs:vx_buf]         ; ES:DI = our buffer
-    mov cx, [cs:vx_cw]
+    mov es, [cs:vx_dsel]
+    mov di, [es:vx_buf]         ; ES:DI = our buffer
+    mov cx, [es:vx_cw]
     cmp byte [cs:vx_bpp], 8
     jne .w
 .b:
@@ -1720,7 +1872,7 @@ vx_cursave:
     VXWS
     loop .w
 .d:
-    mov [cs:vx_buf], di
+    mov [es:vx_buf], di
     pop ds
     pop dx
     pop bx
@@ -1820,7 +1972,7 @@ vx_curdraw:
 vxp_setmode:
     mov ax, VBE_SET
     mov bx, [vx_tab+VXS_MODE]
-    int 0x10
+    call vx_int10
     mov word [vx_win], 0xFFFF
     mov byte [vx_cursaved], 0
     cmp byte [vx_depth], 8
@@ -2071,15 +2223,15 @@ vxp_blitd:
 ;            and only the mask's set positions are drawn - SPEC.md 5.4.2.8)
 ; -----------------------------------------------------------------------------
 vxp_blit1:
-    push ds
-    mov ds, [vx_kseg]
-    mov di, [cs:vx_p_b1]
-    mov di, [di]                ; DL = ink, DH = paper... in DI for a moment
-    mov [cs:vx_ink], di
-    mov di, [cs:vx_p_b1hm]
-    mov di, [di]
-    mov [cs:vx_b1hm], di        ; (the low byte)
-    pop ds
+    push es
+    mov es, [vx_kseg]
+    mov di, [vx_p_b1]
+    mov di, [es:di]             ; DL = ink, DH = paper... in DI for a moment
+    mov [vx_ink], di
+    mov di, [vx_p_b1hm]
+    mov di, [es:di]
+    mov [vx_b1hm], di           ; (the low byte)
+    pop es
     mov ax, [bp+F_AX]
     mov [vx_bx0], ax            ; x
     mov [vx_rows], dx
@@ -2186,10 +2338,11 @@ vxp_scroll:
     mov [vx_sstep], di
     mov [vx_rows], si
     mov [vx_sdy], dx
-    mov cl, 3
-    shl ax, cl                  ; x = col * 8
-    mov [vx_bx0], ax
-    mov ax, cx
+    mov dx, cx                  ; DX = nb, out of CX before CL is the shift:
+    mov cl, 3                   ; reading nb back out of CX after this took
+    shl ax, cl                  ; its low byte as 3, so every row moved 24
+    mov [vx_bx0], ax            ; pixels and the rest of the band stayed put
+    mov ax, dx
     shl ax, cl                  ; pixels a row = nb * 8
     mov [vx_w], ax
     cmp word [vx_rows], 0
@@ -2203,8 +2356,7 @@ vxp_scroll:
     push ds
     mov ax, es
     mov ds, ax                  ; DS:SI = VRAM
-    push cs
-    pop es
+    mov es, [cs:vx_dsel]
     mov di, vx_rowbuf           ; ES:DI = the bounce
     mov cx, [cs:vx_w]
     cmp byte [cs:vx_bpp], 8
@@ -2275,8 +2427,8 @@ vxp_spans:
     mov cx, ax                  ; x1
     lodsw
     mov dx, ax                  ; x2
-    mov [cs:vx_bsrc], si
     pop ds
+    mov [vx_bsrc], si
     cmp cx, dx
     jg .next                    ; empty
     or cx, cx
@@ -2317,19 +2469,19 @@ vxp_spans:
 ;              "pen spent"
 ; -----------------------------------------------------------------------------
 vxp_fontrun:
-    push ds
-    mov ds, [vx_kseg]
-    mov di, [cs:vx_p_fontfg]
-    mov ax, [di]                ; AL = fg, AH = bg
-    mov [cs:vx_ink], ax
-    mov di, [cs:vx_p_color]
-    mov [di], al                ; the pen, spent
-    mov di, [cs:vx_p_font]
-    mov ax, [di]                ; font_seg
-    mov [cs:vx_fseg], ax
-    mov ax, [di+2]              ; font_base
-    mov [cs:vx_fbase], ax
-    pop ds
+    push es                     ; the string's ES is the frame's, F_ES
+    mov es, [vx_kseg]
+    mov di, [vx_p_fontfg]
+    mov ax, [es:di]             ; AL = fg, AH = bg
+    mov [vx_ink], ax
+    mov di, [vx_p_color]
+    mov [es:di], al             ; the pen, spent
+    mov di, [vx_p_font]
+    mov ax, [es:di]             ; font_seg
+    mov [vx_fseg], ax
+    mov ax, [es:di+2]           ; font_base
+    mov [vx_fbase], ax
+    pop es
     mov ax, [vx_y]
     sub ax, 8
     cmp dx, ax
@@ -2343,8 +2495,8 @@ vxp_fontrun:
     mov ds, [bp+F_ES]
     mov si, [cs:vx_bsrc]
     lodsb
-    mov [cs:vx_bsrc], si
     pop ds
+    mov [vx_bsrc], si
     or al, al
     jz .out
     mov ah, al
@@ -2431,8 +2583,20 @@ vx_bpp      db 8                ; what the kernel is told: 8 or 16
 vx_depth    db 8                ; the mode's own: 8, 15 or 16
 vx_wsh      db 0                ; the window shift
 vx_sel      db 0
+vx_wsel     dw VX_WSEG          ; window A as the CPU loads it: A000h, or the
+                                ; selector kern_mega hands VXV_PM
+vx_dispi    db 0                ; 1: banked through the dispi port (vx_pm)
+vx_onstk    db 0                ; 1: an int 10h is out on our stack (vx_int10)
+vx_stktop   dw vx_rowbuf + 2048 ; ...whose top: the bounce while attach
+                                ; probes, the probe's buffers after it
 
     OS88_STATE
+vx_oss      dw 0                ; vx_int10's banked SS:SP and FLAGS
+vx_osp      dw 0
+vx_ofl      dw 0
+vx_dsel     dw 0                ; OUR data segment, banked by vx_prim on every
+                                ; entry: a body whose DS is the window or the
+                                ; kernel stores through it, never through CS
 vx_kseg     dw 0                ; the kernel's segment, from VXV_INIT
 ; the kernel's pointers, in VXB_* order from VXB_TABROW (vx_init copies them)
 vx_p_tabrow dw 0
@@ -2461,6 +2625,8 @@ vx_p_scroll dw 0
 vx_p_spans  dw 0
 vx_p_fontfg dw 0
 vx_p_cfgve  dw 0
+vx_p_kret   dw 0                ; a kernel `ret`: where a tail hook goes back
+vx_p_null   dw 0                ; ...and the kernel's draw-nothing entry
 %if $ - vx_p_tabrow != VXB_SIZE - 2
   %error "the pointer bank has drifted from vxabi.inc's VXB_* layout"
 %endif

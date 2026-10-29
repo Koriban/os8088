@@ -109,28 +109,42 @@ def claims(m, S):
         seg = struct.unpack_from("<H", r, MC_SEG)[0]
         if seg:
             out.append((seg, struct.unpack_from("<H", r, MC_OWN)[0]))
+    if getattr(m, "bochs", False):
+        # kern_mega: a claim may be a POOL block above 1MB with no mem_tab
+        # record at all, so the pool's own table is part of "the claims"
+        # (kernel/mega.inc's mx_tab: MX_OFF, MX_KB, MX_OWN; 96 x 10 bytes)
+        mx = m.read(S("mx_tab"), 96 * 10)
+        out += [("pool", mx[k] | mx[k + 1] << 8, mx[k + 2] | mx[k + 3] << 8,
+                 mx[k + 4]) for k in range(0, len(mx), 10)
+                if mx[k + 2] | mx[k + 3] << 8]
     return out
+
+
+def lin(m, seg, off=0):
+    """SEG:OFF's linear address - an LDT selector's base on kern_mega
+    (OS88_MEGA, docs/BOCHS.md), `seg << 4` everywhere else."""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
 
 
 def word(m, seg, name):
     return struct.unpack_from(
-        "<H", m.read((seg << 4) + msegsym.sym(name), 2), 0)[0]
+        "<H", m.read(lin(m, seg, msegsym.sym(name)), 2), 0)[0]
 
 
 def byte(m, seg, name):
-    return m.read((seg << 4) + msegsym.sym(name), 1)[0]
+    return m.read(lin(m, seg, msegsym.sym(name)), 1)[0]
 
 
 def part_seg(m, seg, i):
     """op_seg's answer for part i, out of MSEG's own banked copy."""
     return struct.unpack_from(
-        "<H", m.read((seg << 4) + msegsym.sym("ms_seg") + i * 2, 2), 0)[0]
+        "<H", m.read(lin(m, seg, msegsym.sym("ms_seg") + i * 2), 2), 0)[0]
 
 
 def title_of(m, S, seg, rec):
     import os88geom
     toff = struct.unpack_from("<H", rec, os88geom.W_TITLE)[0]
-    return m.read((seg << 4) + toff, 24).split(b"\0")[0].decode(
+    return m.read(lin(m, seg, toff), 24).split(b"\0")[0].decode(
         "ascii", "replace")
 
 
@@ -171,12 +185,19 @@ def run():
     say("part %d: sector %d, %d bytes, %d sectors"
         % (LAZY, row["off"], row["len"], lazy_secs))
 
-    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+    # Every read below is guest state (the window list, MSEG's bss, the
+    # claim table, the sector count): the boot gates on the kernel's desktop
+    # state and every wait is `ui_done`, never a picture settle.
+    done = lambda mm, **k: os88marty.ui_done(mm)
+    with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, done, "B")
         wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "MSEG.O88")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, done, wx, wy, "MSEG.O88")
+        os88marty.ui_done(m)
 
         slots = dispcp.win_list(m, S)
         seg = 0
@@ -189,11 +210,21 @@ def run():
             raise SystemExit("mseglazy: MSEG did not launch - nothing below "
                              "can be asked. `python3 tests/multiseg.py` is "
                              "the row that says why.")
-        secs = S("dsk_dbg_sec")
+        if MEGA:
+            # NO KNOB KERNEL ON kern_mega: Bochs's controller names every
+            # sector it moves (the shim's xfers()), so the count is B:'s reads
+            def count():
+                return sum(1 for d, _, w in m.xfers() if d == 1 and w == "r")
+        else:
+            secs = S("dsk_dbg_sec")
+
+            def count():
+                return struct.unpack_from("<H", m.read(secs, 2), 0)[0]
 
         def moved(before):
-            return (struct.unpack_from("<H", m.read(secs, 2), 0)[0]
-                    - before) & 0xFFFF
+            if MEGA:
+                return count()      # (xfers() is since the last call)
+            return (count() - before) & 0xFFFF
 
         # --- 1. it is not here, and MSEG agrees that is correct ------------
         t = title_of(m, S, seg, wrec)
@@ -242,9 +273,9 @@ def run():
         before = claims(m, S)
 
         # --- 3. the key, and the disk goes HERE ---------------------------
-        c0 = struct.unpack_from("<H", m.read(secs, 2), 0)[0]
-        m.key("KeyL")
-        os88marty.settle(m)
+        c0 = count()
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         fetch_secs = moved(c0)
         ps = part_seg(m, seg, LAZY)
         lz = chr(byte(m, seg, "ms_lazy"))
@@ -281,8 +312,8 @@ def run():
                 % (t, want, bad()))
 
         # --- 4. ...and the second key gives it back ------------------------
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         ps = part_seg(m, seg, LAZY)
         lz = chr(byte(m, seg, "ms_lazy"))
         after = claims(m, S)
@@ -305,8 +336,8 @@ def run():
                 "of the instance" % (before, after))
 
         # --- 5. and again ---------------------------------------------------
-        m.key("KeyL")
-        os88marty.settle(m)
+        os88marty.key_taken(m, "KeyL")
+        os88marty.ui_done(m)
         ps = part_seg(m, seg, LAZY)
         t = title_of(m, S, seg, wrec)
         say("and again: op_seg(%d) = %04X, %r" % (LAZY, ps, t))
@@ -320,8 +351,12 @@ def run():
                 "cannot start from" % (ps, t))
 
 
+MEGA = bool(os.environ.get("OS88_MEGA"))     # kern_mega under Bochs
+
+
 def main():
-    build_counted()
+    if not MEGA:                # (kern_mega counts through Bochs's FDC log)
+        build_counted()
     run()
     if fails:
         print("\nmseglazy: FAIL")

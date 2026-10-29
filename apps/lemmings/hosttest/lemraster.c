@@ -124,8 +124,26 @@ static unsigned char *h_ptr(unsigned seg, unsigned off)
 }
 
 unsigned os88_mem_claim(int kb)      { return h_claim(kb); }
+int os88_mem_movable(unsigned seg, int on) { (void)seg; (void)on; return 0; }
 unsigned os88_mem_largest_kb(void)   { return (unsigned)(H_MEM_KB - h_mem_kb_used); }
 unsigned os88_mem_total_kb(void)     { return H_MEM_KB; }
+
+/* OSAPI_SEG's SEG_SUB as a REAL-MODE kernel answers it - the sum - which is
+ * what this model's segments are. It must land inside the live claim it was
+ * asked about, and inside the length it was given, or the program asked the
+ * kernel for a window its own arithmetic does not reach */
+unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len)
+{
+    int i = h_claim_index(seg);
+
+    if (i < 0 || i >= H_CLAIMS || !h_claim_live[i] ||
+        (seg - H_CLAIMBASE) % H_CLAIMPARAS + para + len >
+            (unsigned)h_claim_kb[i] * 64u) {
+        fail("os88_seg_sub past the end of a live claim");
+        return 0;
+    }
+    return seg + para;
+}
 
 int os88_mem_free(unsigned seg)
 {
@@ -464,7 +482,6 @@ static unsigned h_wp0, h_wp3, h_tseg;
 
 void lem_r_wsetup(unsigned p0, unsigned p3) { h_wp0 = p0; h_wp3 = p3; }
 void lem_r_tsetup(unsigned t) { h_tseg = t; }
-
 /* THE VGA COMPOSE (lemsprite.inc lem_r_cband): between lem_r_cband and
  * lem_r_cend the machine draws into a VRAM SCRATCH a band of the world's rows
  * high, and copies each rectangle on in one latch pass (lem_r_clatch). So the

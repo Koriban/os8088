@@ -40,6 +40,7 @@ sys.path.insert(0, HERE)
 import os88build                                             # noqa: E402
 import os88pkg                                               # noqa: E402
 import os88marty                                             # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88mouse                                             # noqa: E402
 import os88sym                                               # noqa: E402
 import os88geom as geom                                      # noqa: E402
@@ -159,11 +160,14 @@ class Pkg:
             seg = int.from_bytes(t[b + geom.W_SEG:b + geom.W_SEG + 2], "little")
             if not seg:
                 continue
-            hdr = m.read(seg << 4, 32)
+            # seg << 4 - or, on kern_mega (tests/megaport.txt), where a
+            # package's region is an LDT selector, its descriptor's base
+            base = m.lin(seg) if getattr(m, "bochs", False) else seg << 4
+            hdr = m.read(base, 32)
             if hdr[:3] == b"O8" + bytes([PKG_FMT]) and \
                     hdr[16:32].split(b"\0")[0] == self.name:
                 self.slot, self.seg = i, seg
-                self.bss = (seg << 4) + self.img_size()
+                self.bss = base + self.img_size()
                 return True
         return False
 
@@ -200,8 +204,13 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_5150_cga_gla")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default=None,
+                    help="default: apps360.img plus TIMER.O88, BOUNCE.O88 (SPEC.md 24.6.1 "
+                    "took it off), on a disk of this run's own")
     a = ap.parse_args(argv)
+    if a.apps is None:
+        a.apps = os88fixture.apps360_plus(
+            "APPS:build/timer.o88", "APPS:build/bounce.o88", tag="timerbounce")
     os.chdir(ROOT)
     tm, bn = Pkg(*TIMER), Pkg(*BOUNCE)
 

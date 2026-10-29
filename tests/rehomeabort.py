@@ -52,19 +52,39 @@ def claims(m, S):
     return heapmap.Map(m, {n: S(n) for n in
                            ("mem_base", "mem_top", "spl_live", "mem_tab")})
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+def pool(m, S):
+    """kern_mega's pool blocks (mx_tab: MX_OFF, MX_KB, MX_OWN, 96 x 10
+    bytes), or None on a kernel with no pool: a claim above 1MB has no
+    mem_tab record, so on kern_mega 'the heap comes back' asks both."""
+    if not getattr(m, "bochs", False):
+        return None
+    mx = m.read(S("mx_tab"), 96 * 10)
+    return sorted((mx[k] | mx[k + 1] << 8, mx[k + 2] | mx[k + 3] << 8,
+                   mx[k + 4]) for k in range(0, len(mx), 10)
+                  if mx[k + 2] | mx[k + 3] << 8)
+
+
+def UD(m, **_):            # every read below is guest memory
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     S = m.sym
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, UD, "B")
     disk = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
 
     before = claims(m, S)
+    pool0 = pool(m, S)
     wins_before = dispcp.win_list(m, S)
     try:
-        dispcp.open_named(m, mo, S, os88marty.settle, *disk, name="REHOMEX.O88")
+        dispcp.open_named(m, mo, S, UD, *disk, name="REHOMEX.O88")
     except Exception as e:
         say("open refused (expected): %s" % str(e).splitlines()[-1].strip())
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
     # --- 1. the refusal was taken -------------------------------------------
     status = m.read(S("ld_status"), 1)[0]
@@ -91,7 +111,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
             live.append((i, struct.unpack_from("<H", r, os88geom.I_SPTR)[0]))
     say("live package instances: %r" % ([(i, "%04X" % s) for i, s in live],))
     for i, s in live:
-        if m.read((s << 4) + 16, 8).split(b"\0")[0] == b"REHOMED":
+        at = m.lin(s, 16) if getattr(m, "bochs", False) else (s << 4) + 16
+        if m.read(at, 8).split(b"\0")[0] == b"REHOMED":
             fails.append(
                 "instance slot %d is still live at %04X and calls itself "
                 "REHOMED. The record was never published (step 9 is past the "
@@ -116,6 +137,14 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
                 for c in leaked]))
     else:
         say("free runs identical to before the launch: %r" % (after.runs(),))
+    pool1 = pool(m, S)
+    if pool1 != pool0:
+        fails.append(
+            "kern_mega's POOL did not come back: its blocks were %r before "
+            "the launch and are %r after the refusal - a region, a carve or a "
+            "claim above 1MB the unwind did not free" % (pool0, pool1))
+    elif pool0 is not None:
+        say("the pool's blocks identical to before the launch: %d" % len(pool0))
 
 if fails:
     print("\nrehomeabort: FAIL")

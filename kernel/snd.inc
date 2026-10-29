@@ -52,6 +52,9 @@ SNDV_MIXICON    equ 10         ; sndpkg.inc, held equal by t_mirror
 SNDV_MIXPOP     equ 11         ; kernel-private mixer UI verbs (34.15)
 SNDV_MIXICON_THEME equ 12      ; themed icon, legacy verb 10 remains available
 SND_CAP_MIXER    equ 0200h      ; physical mixer, independent of sound tier
+%if SND_CAP_MIXER & 0FFh
+  %error "menu_sound (menu.inc) takes DL - this bit's low byte - as a zero"
+%endif
 SND_CAP_LPTDAC   equ 0100h      ; a Covox, announced by the user's tier -
                                 ; the driver's bit, read by the Sound page's
                                 ; dot (ctrl.inc) and nothing resident (34.14)
@@ -797,13 +800,20 @@ osapi_snd_stream:
 .have:
 %ifdef KERN_MEGA
     test al, ~4 & 0xFF          ; kern_mega: an EXTERNAL ring (verb 0 or 4)
-    jnz .ringok                 ; in a POOL selector - an OS88_HIGHMEM claim -
-    test ah, 2                  ; is above 1MB, where no 8237 reaches. The
-    jz .ringok                  ; DMA claim cells stay conventional, so only
-    test di, 4                  ; a plain claim can arrive here
-    jz .ringok                  ; (SND_OPENF_EXT = 2)
-    cmp di, MEGA_LDT_FREE0 * 8
-    jb .ringok
+    jnz .ringok                 ; in a POOL block - an OS88_HIGHMEM claim -
+    test ah, 2                  ; is above 1MB and refused there, as it
+    jz .ringok                  ; always was. The DMA claim cells stay
+    cmp byte [mega_on], 0       ; conventional, so only a plain claim can
+    je .ringok                  ; arrive there (SND_OPENF_EXT = 2). ASKED
+    push ax                     ; OF THE DESCRIPTOR'S BASE, not of DI's TI
+    push dx                     ; bit: since KERN-MEGA-MEMORY-PLAN MC7.4
+    mov ax, di                  ; EVERY claim is an LDT selector, so the bit
+    xor dx, dx                  ; test refused the conventional DMA ring
+    call MEGA_SEL_CODE:mega_selbasef ; MIDIRack hands over, with 2 (DX:AX =
+    cmp dx, 0x0F                ; the base; no descriptor leaves DX = 0 and
+    pop dx                      ; the driver judges the ring). In real mode
+    pop ax                      ; DI is a paragraph and nothing is asked
+    jbe .ringok
     mov ax, 2
     stc
     ret

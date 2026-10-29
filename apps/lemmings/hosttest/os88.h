@@ -164,10 +164,14 @@ int  os88_fsx_key(int wait);
 /* memory beyond the region, and the two far accessors (SPEC.md 50.3) */
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);
+int      os88_mem_movable(unsigned seg, int on);
 unsigned os88_mem_largest_kb(void);
 unsigned os88_mem_total_kb(void);
 int      os88_peek(unsigned seg, unsigned off);
 void     os88_poke(unsigned seg, unsigned off, int value);
+/* "seg + para" as every kernel answers it (OSAPI_SEG, SPEC.md 50.6.11): the
+ * harness models a real-mode one, where it is the sum */
+unsigned os88_seg_sub(unsigned seg, unsigned para, unsigned len);
 
 /* input, and the fullscreen latch a bracket is stacked on (SPEC.md 11.2) */
 void os88_mouse(struct os88_mouse *m);

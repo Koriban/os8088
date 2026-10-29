@@ -1099,10 +1099,11 @@ pa_job:
     mov [pg_sw], ax
     mov ax, [es:px_cur + PXR_MH]
     mov [pg_sh], ax
-    mov ax, [es:px_wbase]           ; the work claim: the LZW's tables, then
-    mov [pg_dseg], ax               ; the row
-    add ax, LZW_KB * 64
-    mov [pg_rseg], ax
+    mov dx, [es:px_wbase]           ; the work claim: the LZW's tables, then
+    mov [pg_dseg], dx               ; the row - a SEG_SUB past them (MC7:
+    mov ax, LZW_KB * 64             ; the sum on a real-mode kernel)
+    PXSUB
+    mov [pg_rseg], dx
     mov byte [pg_scl], 0
     mov byte [pg_anim], 1
     test byte [es:px_anflg], ANF_GREAD
@@ -1398,16 +1399,14 @@ pa_rows:
     mul word [pg_sw]
     add ax, [pa_t]
     adc dx, 0
-    mov di, ax
-    and di, 127                     ; on kern_mega's 8-paragraph grid
-    mov cl, 4                       ; (px_mrow's, KERN-MEGA-PLAN 14.40)
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
+    mov di, ax                      ; ...through the master's 32KB windows
+    and di, 0x7FFF                  ; (pxrec.inc, MC7: px_mrow's), current
+    shl ax, 1                       ; for the job (px_wjob) and re-based by
+    rcl dx, 1                       ; a real-mode move (px_mreloc)
+    mov si, dx
+    shl si, 1
     mov es, [pg_pkg]
-    add ax, [es:px_cur + PXR_MSEG]  ; (re-read: it moves only at a park)
+    mov ax, [es:px_mwc + MWT_WIN + si]
     mov cx, [pa_t + 4]
     sub cx, [pa_t]
     inc cx
@@ -1442,6 +1441,9 @@ pa_rows:
     jmp short .r
 .x:
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pa_union - the rect at CS:SI (x1 FFFFh: none) into what changes on the
 ; glass, [px_anrect]. Preserves all but AX
@@ -1771,19 +1773,14 @@ pa_comp:
     mul word [pg_sw]                ; the master row's left: y w + left
     add ax, bx
     adc dx, 0
-    mov di, ax
-    and di, 127                     ; on kern_mega's 8-paragraph grid
-    push cx                         ; (px_mrow's, KERN-MEGA-PLAN 14.40)
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or ax, dx
-    and al, 0xF8                    ; a segment kern_mega can load
-    pop cx
+    mov di, ax                      ; ...through the master's 32KB windows
+    and di, 0x7FFF                  ; (pa_rows's)
+    shl ax, 1
+    rcl dx, 1
+    mov si, dx
+    shl si, 1
     mov es, [pg_pkg]
-    add ax, [es:px_cur + PXR_MSEG]
-    mov es, ax                      ; ES:DI = the master
+    mov es, [es:px_mwc + MWT_WIN + si]  ; ES:DI = the master
     mov si, bx                      ; DS:SI = the row buffer's columns
     mov ah, [pg_trans]
     mov dl, [pg_tidx]
@@ -1813,6 +1810,9 @@ pa_comp:
     pop bx
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed (MC7's
+                                    ; odd count above: the routines below
+                                    ; keep their measured even shift)
 
 ; pa_rec - the frame is drawn: what its successor needs - its disposal (frame
 ; 0's 3 a fill of the background), its rect, its delay - where the next one
@@ -2061,6 +2061,8 @@ av_start:
     xor ax, ax
     rep stosw
     pop es
+    mov ax, [px_mrelp]              ; IT MOVES between passes (px_mreloc;
+    call OSAPI_MEM_MOVABLE          ; pinned for each one, below)
 .have:
     PSV SV_RINGCL
     jc .nomem
@@ -2086,6 +2088,10 @@ av_start:
     PSV SV_PUMPINIT
     PSV SV_SPAWN
     jc .nwork
+    mov dx, [px_anseg]              ; PINNED FOR THE PASS: the worker reads
+    xor ax, ax                      ; the global table into it with ES held
+    call OSAPI_MEM_MOVABLE          ; across a ring wait (pa_job), and parks
+                                    ; there; av_wake lets it go
     xor ax, ax
     mov [px_abort], al
     mov [px_ango], al
@@ -2139,6 +2145,9 @@ av_wake:
     jz .w0
     call OSAPI_MEM_FREE
 .w0:
+    mov dx, [px_anseg]              ; THE PASS IS OVER: the animation's claim
+    mov ax, [px_mrelp]              ; may move again until the next one
+    call OSAPI_MEM_MOVABLE
     xor ax, ax
     mov [px_wbase], ax
     mov [px_wseg], ax
@@ -2187,6 +2196,8 @@ av_wake:
     call OSAPI_MEM_FREE
     pop dx
     mov [px_anseg], dx
+    mov ax, [px_mrelp]              ; (the bigger claim moves as the first
+    call OSAPI_MEM_MOVABLE          ; did, between the passes)
     mov ax, [px_anneed]
     mov [px_ankb], ax
     jmp short .x

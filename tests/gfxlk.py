@@ -135,11 +135,20 @@ def main():
     # plain kernel back - two builds, and in between the shared tree held a
     # kernel nobody else had asked for, which is what made this row
     # `builds=True` and unable to share the box.
-    t = os88build.tree("GFXAUDIT=1").apply()
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega under Bochs (tests/megaport.txt): the same knob on
+        # kern_mega, in a tree of its own, and os88sym reads THAT map
+        t = os88build.tree("GFXAUDIT=1", targets=("mega",))
+        os.environ["OS88_MEGA_BUILD"] = t.dir
+        img, apps = t.img("mega.img"), t.img("megaapps.img")
+    else:
+        t = os88build.tree("GFXAUDIT=1").apply()
+        img, apps = t.img("os8088-360.img"), t.img("apps360.img")
     settle = os88marty.settle
-    with os88marty.launch(t.img("os8088-360.img"),
-                          apps=t.img("apps360.img"),
-                          machine="os8088_xt_vga") as m:
+    with os88marty.launch(img, apps=apps,
+                          machine="os8088_xt_vga", boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the first act is open_drive
         mo = os88mouse.Mouse(marty=m)
 
         dispcp.open_drive(m, mo, S, settle, "B")        # a mount and a walk
@@ -233,21 +242,29 @@ def main():
         # moves, both of scroll_to's loops give up on their own time budget,
         # and it ends on `scrolled PAST entry 2 - the list moved under us`
         # about a list that did not move at all. One click on the title.
+        #
+        # UNCONDITIONAL, where upstream guards it with `m.bochs`: that arm is
+        # right about WHERE it bites - kern_mega's apps disk is the 1.44MB
+        # one, whose GAMES does not fit the window, and the 360KB disk never
+        # scrolls - but raising a window that is already front costs a click
+        # and nothing else, so one form covers both machines and neither
+        # reader has to know which disk this row got.
         mo.click(wx + ww // 2, wy + 9)
         settle(m)
         entry = dispcp.row_of(m, S, "CYCLONE.O88")
         row = dispcp.scroll_to(m, mo, S, settle, wx, wy, entry)
         rx, ry = dispcp.row_xy(wx, wy, row)
         mo.dblclick(rx, ry)                 # once, to learn where it lands
-        m.advance(frames=300)
-        m.run()
+        os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                      if w != disk], "the window",
+                        poll=0.05, guest=20.0)
+        os88marty.ui_done(m, lock=False, cap=6.75)   # (was advance 300)
         opened = [w for w in dispcp.win_list(m, S) if w != disk]
         if not opened:
             sys.exit("gfxlk: CYCLONE did not open")
         nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
         mo.click(nx + 8, ny + 9)            # its close box
-        m.advance(frames=90)
-        m.run()
+        os88marty.ui_done(m, cap=2.0)       # (was advance 90)
         px, py = max(rx, nx + 12), max(min(ry, ny + nh - 12), ny + 12)
         rect = (wx + 2, wy + TITLE_H + 20, wx + ww - 4, wy + wh - 24)
 
@@ -256,15 +273,16 @@ def main():
         mo.to(px, py)                       # ...and park ON the landing site
         settle(m)
         m.key("Enter")                      # fm_onkey opens it, and the
-        m.advance(frames=300)               # hand never moves again
-        m.run()
+        os88marty.until(m, lambda _: [w for w in dispcp.win_list(m, S)
+                                      if w != disk], "the window",
+                        poll=0.05, guest=20.0)
+        os88marty.ui_done(m, lock=False, cap=6.75)   # (was advance 300)
         opened = [w for w in dispcp.win_list(m, S) if w != disk]
         if not opened:
             sys.exit("gfxlk: Enter opened nothing")
         nx, ny, nw, nh = dispcp.win_rect(m, S, opened[-1])
         mo.click(nx + 8, ny + 9)
-        m.advance(frames=90)
-        m.run()
+        os88marty.ui_done(m, cap=2.0)       # (was advance 90)
         mo.to(*PARK)
         settle(m)
         before, dim = crop(m, rect)

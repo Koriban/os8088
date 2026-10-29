@@ -32,7 +32,7 @@ arm's canary inert.
 
 KSIG_OFF IS A MEMORY OFFSET AND THIS IS A QUESTION ABOUT A SECTOR.  Since
 SPEC.md 2.9 put stage 2 in front of the image, the two are BOOT2_SECS apart:
-the Makefile's KSIGDEF2 reads the signature word out of the file at
+the Makefile's KSIGDEF2 sums the signature sector out of the file at
 KSIG_OFF + BOOT2_SECS*512, so that is the sector the probe actually lands in
 and the one this row has to ask about.  Asking about KSIG_OFF/512 instead
 validated a sector nothing reads - which is the same failure the file opens
@@ -49,7 +49,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BUILD = ROOT / "build"
 IMAGES = ["os8088-360.img", "os8088-720.img", "os8088-120.img",
-          "os8088.img"]
+          "os8088.img",
+          # the 128KB machine's (SPEC.md 24.5.7): kern_small's KERNEL.SYS
+          # starts at LBA 12 on both, and the band is about the SECTOR, so
+          # they join the same intersection. small.img (1.44MB, on demand)
+          # does NOT cross there and is why it is not shipped as it stands
+          "small360.img", "small720.img"]
 
 
 def ksig_off():
@@ -126,7 +131,7 @@ def main():
     if not kern.exists():
         sys.exit("t_canary: no build/kernel.sys - run make first")
     k = kern.read_bytes()
-    if len(k) < fileoff + 2:
+    if len(k) < fileoff + 512:
         sys.exit(f"t_canary: KERNEL.SYS is {len(k)} bytes, shorter than the "
                  f"canary's file offset {fileoff}")
     if off + 2 > 65536:
@@ -157,18 +162,39 @@ def main():
             f"is for (SPEC.md 18.93.1)"
         )
 
-    # ...and it has to be tellable from its neighbours, or a shifted read matches
-    w = lambda o: int.from_bytes(k[o:o + 2], "little")
-    for step in (-512, 512):
-        if 0 <= fileoff + step < len(k) - 1 and w(fileoff) == w(fileoff + step):
-            sys.exit(
-                f"t_canary: the word at {fileoff} equals the one at {fileoff + step}, "
-                f"so a read shifted by a sector still matches (SPEC.md 18.93.1)"
-            )
+    # ...and it has to be tellable from its neighbours, or a shifted read
+    # matches - in EVERY kernel's file that boots off a floppy, the small
+    # one's and kern_mega's too. The signature is the SECTOR'S SUM (the
+    # Makefile's KSIGDEF2): kern_mega's first WORD there was 0, and so was the
+    # first word of the wrong sector a 286 ROM delivered in its place, which
+    # is how that sector passed the canary (SPEC.md 18.93.1). A neighbour
+    # check cannot see that case - the sum is what closes it - but kern_mega
+    # boots off a floppy too, so its file is asked the neighbour question
+    def ssum(kk, o):
+        return sum(int.from_bytes(kk[i:i + 2], "little")
+                   for i in range(o, o + 512, 2)) & 0xFFFF
+    w = lambda o: ssum(k, o)
+    for kf in (kern, BUILD / "smallk" / "kernel.sys",
+               BUILD / "megak" / "kernel.sys"):
+        if not kf.exists():
+            if kf.parent.name == "megak":
+                continue            # `make mega` is on demand: `all` never
+                                    # builds it, so a fresh tree has none
+            sys.exit(f"t_canary: no {kf.relative_to(ROOT)} - run make first")
+        kk = kf.read_bytes()
+        for step in (-512, 512):
+            if 0 <= fileoff + step and fileoff + step + 512 <= len(kk) \
+                    and ssum(kk, fileoff) == ssum(kk, fileoff + step):
+                sys.exit(
+                    f"t_canary: {kf.name} under {kf.parent.name}/: the sector "
+                    f"at {fileoff} sums the same as the one at "
+                    f"{fileoff + step}, so a read shifted by a sector still "
+                    f"matches (SPEC.md 18.93.1)"
+                )
     print(f"canary: memory offset {off}, file sector {fileoff // 512}, crosses a "
           f"head on {len([n for n in IMAGES if (BUILD / n).exists()])} geometries "
           f"and {len(lengths)} blob length{'' if len(lengths) == 1 else 's'} "
-          f"{lengths}, word 0x{w(fileoff):04X} distinct from both neighbours")
+          f"{lengths}, sum 0x{w(fileoff):04X} distinct from both neighbours")
 
 
 main()

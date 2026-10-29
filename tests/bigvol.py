@@ -53,7 +53,7 @@ import os88marty as M                                       # noqa: E402
 import os88ui                                               # noqa: E402
 import hdboot as HB                                         # noqa: E402
 import instdeep as ID                                       # noqa: E402
-import instrest as IR                                       # noqa: E402
+import glyphread as IR                                      # noqa: E402
 
 SECTOR = 512
 C, H, S = 654, 16, 63               # at_formats.rs: 321MB, XT-IDE accepts it
@@ -134,7 +134,8 @@ def check(vhd, fsha):
         bad.append("FILLER.BIN was not kept")
     if v.read("USER.TXT") != USER_TXT:
         bad.append("USER.TXT was not kept")
-    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    src = ID.Vol(open(M.system_disk(os88build.at("build/os8088-360.img")),
+                      "rb").read())     # (mega.img on kern_mega)
     # A TYPEFACE ONLY WHERE THE FLOPPY HAS ONE (SPEC.md 24.3.1.5: the 360KB
     # system disk gave SYSTEM/FONTS to office360.img)
     fonts = any(q.startswith("SYSTEM/FONTS/") for q in src.tree())
@@ -241,8 +242,7 @@ def main():
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
                   machine=ID.MACHINE, run_dir=run_dir) as m:
         M.settle(m)
-        mo, ix, iy = ID.open_installer(m)
-        ID.run_install(m, mo, ix, iy)           # KEEP: the box's default
+        ID.run_install(m, ID.open_installer(m))           # KEEP: the box's default
     bad = check(vhd, fsha)
     if bad:
         sys.exit("bigvol: " + "; ".join(bad))

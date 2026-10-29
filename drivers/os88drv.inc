@@ -58,6 +58,24 @@
 ; into it exactly as wm_pkgcall calls a package (SPEC.md 52.11).
 PKG_DISP     equ 12
 
+; THE HEADER WORD AN ATTACH MAY WRITE TO GIVE THE KERNEL ITS TAIL BACK
+; (SPEC.md 51.1.3). It is the link word at +4, which the loader requires to be
+; 0 and never reads again, so a driver built before it leaves it 0 and keeps
+; its whole claim. A driver whose attach found that the end of its image can
+; run again on THIS machine - SOUND.DRV's probes, which run once, and with no
+; mixer its volume popup too - writes the byte offset where what it still
+; needs ENDS:
+;
+;     mov word [DRV_H_KEEP], my_keep    ; my_keep: everything past it is dead
+;
+; and the kernel shrinks the image's claim to that offset rounded up to a KB,
+; right after the attach and before any other verb is sent. So put what may be
+; dropped LAST, its zeroed state after its code, and never reach it again:
+; the bytes are gone from under you, and a test of a byte BEFORE the offset is
+; what guards every way in. Ignored by a kernel that does not know it, and by
+; one whose image is not a heap claim (the HMA, kern_mega above 1MB).
+DRV_H_KEEP   equ 4
+
 ; --- driver classes ----------------------------------------------------------
 ; DRVC_* IS IN apps/os88api.inc, which this file includes above, and it is
 ; there rather than here because a PACKAGE names one too: OSAPI_DRV_CALL takes
@@ -109,6 +127,25 @@ SND_RT_LPT   equ 4              ; Covox on LPT1 (+1 LPT2, +2 LPT3) - FM, no
                                 ; above SND_RT_SB in the ladder: test for the
                                 ; three BEFORE any `>= SND_RT_SB`
 
+; --- OSAPI_MEM_HMA's keep form (SPEC.md 51.1.3.1) -----------------------------
+MEMHMA_KEEP     equ 8000h       ; AX = MEMHMA_KEEP | bytes: a driver running
+                                ; from the HMA's pool cuts its OWN image to
+                                ; that many bytes - DRV_H_KEEP's figure, which
+                                ; the kernel applies to a heap claim and
+                                ; cannot to a pool block. CF = 1 when the
+                                ; image is not in the pool (or an older tail):
+                                ; nothing to do, the kernel's shrink has it
+
+; OS88_DRV_FOOT - say that this driver CUTS ITS OWN BLOCK in the HMA's pool at
+; attach (MEMHMA_KEEP), so the tail places it at the pool's FOOT, lowest-first,
+; where every other block goes highest-first: the cut is then the bottom of
+; the one free run, and a reload - a hibernate's sweep, the Drivers page -
+; finds the driver's whole length where it was (SPEC.md 51.1.3.1). No byte:
+; a symbol tools/os88rom.py reads off the driver's org-DRV_HMA_ORG map
+%macro OS88_DRV_FOOT 0
+os88_drv_foot equ 1
+%endmacro
+
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
 ; --- the record OSAPI_DRV_SUSPEND fills from DRVV_HWINFO (SPEC.md 51.11.2) ---
 DQ_CLASS     equ 0              ; db: the DRVC_* this record is about
@@ -117,7 +154,7 @@ DQ_A         equ 2              ; dw: your class's own three words
 DQ_B         equ 4              ; dw
 DQ_C         equ 6              ; dw
 DQ_SIZE      equ 8
-DQ_MAXREC    equ 10             ; ...and the most one call can write
+DQ_MAXREC    equ 11             ; ...and the most one call can write
 
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
@@ -431,6 +468,14 @@ FSCAP_LOCAL  equ 1              ; my reads cost what a memcpy costs
 ; inverts your picture like any other (SPEC.md 26.9.9)
 FSCAP_ICON   equ 2              ; my volume draws its own desktop picture
 DRV_ICONV    equ 0x41           ; ...through my door, verb DRV_ICONV
+; ...and the THIRD (SPEC.md 62.9.2.4): set it when your FSV_READ, _WRITE,
+; _APPEND and _READAT do NO paragraph arithmetic on the buffer's DX - it is
+; loaded into a segment register as it is and only the offset walks - and
+; kern_mega hands you a buffer above 1MB as its pool selector instead of
+; splitting the call into 512-byte pieces through a low buffer. The pieces
+; are each a call of yours: on a wire, each is a round trip. No other kernel
+; reads it, a real-mode segment being anything you like to do arithmetic on
+FSCAP_SEL    equ 4              ; my transfer verbs take a selector as it is
 
 FSV_READAT   equ 12             ; ...and its read half
 FSV_DELETE   equ 14             ; SI = name
@@ -678,7 +723,9 @@ DRV_VER equ 11
 ; (CS + 8). Say it only of a driver that does no PARAGRAPH arithmetic on its
 ; own CS or DS (derive DS from CS by the pair rule, as SOUND.DRV's SBL_DSCS
 ; does), never hands its own segment to a BIOS call or a DMA engine, and has
-; no code a ROM runs in real mode. Its claims stay conventional. It is bit 7
+; no code a ROM runs in real mode. Its claims stay conventional - and are
+; selectors under protected mode all the same, as every claim is there
+; (KERN-MEGA-MEMORY-PLAN MC7): no driver does arithmetic on one. It is bit 7
 ; of +15, which every kernel masks or clamps to its own table length, so the
 ; bit is invisible to a kernel that does not place drivers high.
 ; OS88_DRV_HICLAIM - %define it as well to say that the driver's own claims

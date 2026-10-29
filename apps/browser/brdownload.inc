@@ -624,6 +624,12 @@ br_dl_split:
     push dx
     push si
     push di
+    push es                         ; ES = OURS for the stosb stores below:
+    push ds                         ; br_dl_saved is a FILE_DLG callback, and
+    pop es                          ; ES = KERNEL_SEG on entry to every callback
+                                    ; (SPEC.md 20) - so these stores used to land
+                                    ; at KERNEL_SEG:br_dl_host, inside the
+                                    ; kernel's .vga drawing code
     mov si, br_dl_url
     mov bx, br_s_scheme
     call br_dl_prefix
@@ -732,6 +738,7 @@ br_dl_split:
 .bad:
     stc
 .out:
+    pop es
     pop di
     pop si
     pop dx
@@ -781,9 +788,12 @@ br_dl_claim:
     call br_dl_memroom
     jc .bad
     mov ax, [br_dl_needkb]
-    call OSAPI_MEM_CLAIM
+    call br_claim
     jc .bad
     mov [br_dl_bufseg], dx
+    call br_movable                 ; it MOVES (NO-PINNING A3): br_reloc names
+                                    ; [br_dl_bufseg], and its file writes pin
+                                    ; it for the call (br_dl_pinbuf)
     clc
     jmp .out
 .bad:
@@ -990,23 +1000,27 @@ br_dl_partload:
     mov al, 0
     call op_fetch
     jc .bad
-    mov al, 0                    ; op_fetch may clobber AL; op_seg takes index here
-    call op_seg
-    or ax, ax
+    mov al, 0                    ; op_fetch may clobber AL; op_cseg takes index here
+    call op_cseg                 ; THE VECTORS' SEGMENT IS THE CODE SELECTOR:
+    or ax, ax                    ; under kern_mega a far call through the data
+    jz .bad                      ; one is a #GP the kernel completes per call
+    mov [br_dl_partpaint+2], ax  ; (KERN-MEGA-MEMORY-PLAN MC7); every
+    mov [br_dl_partdoc+2], ax    ; real-mode kernel answers the same word
+    mov [br_dl_partlive+2], ax   ; op_seg does
+    mov [br_dl_partcopy+2], ax
+    mov al, 0
+    call op_seg                  ; ...and the entry table is READ through
+    or ax, ax                    ; the data one
     jz .bad
     mov es, ax
     mov ax, [es:0]
     mov [br_dl_partpaint], ax
-    mov [br_dl_partpaint+2], es
     mov ax, [es:2]
     mov [br_dl_partdoc], ax
-    mov [br_dl_partdoc+2], es
     mov ax, [es:4]
     mov [br_dl_partlive], ax
-    mov [br_dl_partlive+2], es
     mov ax, [es:6]
     mov [br_dl_partcopy], ax
-    mov [br_dl_partcopy+2], es
     clc
     jmp short .out
 .bad:
@@ -1096,12 +1110,40 @@ br_dl_paint_live:
     call far [br_dl_partlive]
     ret
 
+; br_dl_btplace - OS88UI_BT_PLACE (SPEC.md 20.5.1.3.5): the manager dragged by
+; its title is replayed and not painted, so the one button's rect is laid out
+; again from where the window IS before every hit test - br_dl_button's own
+; arithmetic, and the origin it reads. BX = the record, SI = the window.
+; Draws nothing, keeps every register
+br_dl_btplace:
+    push ax
+    push bx
+    push dx
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    mov [br_dl_x], ax
+    mov [br_dl_y], dx
+    add ax, [br_dl_w]
+    sub ax, 64
+    mov [br_dl_btnrects], ax
+    add ax, 56
+    mov [br_dl_btnrects+4], ax
+    add dx, [br_dl_ybutton]
+    mov [br_dl_btnrects+2], dx
+    add dx, 12
+    mov [br_dl_btnrects+6], dx
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 br_dl_button:
     push ax
     push bx
     push cx
     push dx
     mov word [br_dl_btncount], 1
+    mov word [br_dl_btrec+OS88UI_BT_N], 1
     mov ax, [br_dl_x]
     add ax, [br_dl_w]
     sub ax, 64
@@ -1124,6 +1166,7 @@ br_dl_button:
     ; Network transfer is over, but the last staged disk write is still
     ; pending. Do not offer Exit until the file is fully committed.
     mov word [br_dl_btncount], 0
+    mov word [br_dl_btrec+OS88UI_BT_N], 0
     jmp short .draw
 .cancel:
     ; While active, offer only cancellation. The terminal state replaces it
@@ -1421,9 +1464,11 @@ br_dl_onwake:
     mov cx, [br_dl_fill]
     cmp byte [br_dl_seq], 2
     je .append
-    mov al, 0
-    mov di, [br_dl_token]
-    call OSAPI_FILE_WRITE_SEQ
+    xor ax, ax                      ; ES:BX is the buffer and the kernel may
+    call br_pagepin                 ; claim before its transfer pin applies
+    mov di, [br_dl_token]           ; (SPEC.md 66.3 rule 5): pinned for the
+    call OSAPI_FILE_WRITE_SEQ       ; call, AL = 0 being the verb as well
+    call br_pageunpin               ; ...and free to move again, CF kept
     jnc .seqok
     cmp ax, FERR_NAME
     jne .writefail
@@ -1435,7 +1480,10 @@ br_dl_onwake:
     mov es, [br_dl_bufseg]
     xor bx, bx
     mov cx, [br_dl_fill]
+    xor ax, ax
+    call br_pagepin                 ; pinned for the call, as above
     call OSAPI_FILE_APPEND
+    call br_pageunpin
     jc .writefail
     jmp .wrote
 .seqok:
@@ -2501,4 +2549,7 @@ br_dl_title: db 'Download Manager', 0
 br_dl_btnlabels: dw 0
 br_dl_btnrects: times 4 dw 0
 br_dl_btncount: dw 1
-OS88UI_BTNREC br_dl_btrec, br_dl_btnrects, br_dl_btnlabels, 0, br_dl_btncount
+OS88UI_BTNREC br_dl_btrec, br_dl_btnrects, br_dl_btnlabels, 0, 1, br_dl_btplace
+                                ; (the LIVE COUNT is the record's word, written
+                                ; with br_dl_btncount by br_dl_button: the
+                                ; label's ADDRESS here was a count of ~40,000)

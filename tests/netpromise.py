@@ -83,7 +83,8 @@ def cache(m, i):
 
 
 def bss(m, seg, app, name):
-    return (seg << 4) + dispapps.img_size(app) + dispapps.bss_off(app, name)
+    lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)   # kern_mega:
+    return lin(seg, dispapps.img_size(app) + dispapps.bss_off(app, name))
 
 
 def raise_win(m, mo, x, y, i, what):
@@ -263,7 +264,10 @@ def owe_telnet(m, seg):
 
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=MACHINE) as m:
+                      machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)          # the boot gate on STATE
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     os88marty.no_saver(m)
     # THE LAYOUT NEEDS A TALL SCREEN, and saying so beats failing at the drag.

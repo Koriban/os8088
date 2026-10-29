@@ -2,7 +2,7 @@
 """Can a DOS program be given ARGUMENTS? (SPEC.md 96.19)
 
 Half the DOS software worth running is configured by its command line, and
-until this wave the box wrote an EMPTY tail and every program got its
+until this wave DOS wrote an EMPTY tail and every program got its
 defaults.  Creative's own card test prints "run this program again and select
 the other options manually" and there was no way to say `/M`.
 
@@ -76,7 +76,7 @@ def u16(m, at):
 
 def ztext(m, pseg, dm, name, n=96):
     """A NUL-terminated string out of the live instance, by name."""
-    return m.read((pseg << 4) + dm[name], n).split(b"\0")[0].decode("latin-1")
+    return m.read(dosmap.lin(m, pseg, dm[name]), n).split(b"\0")[0].decode("latin-1")
 
 
 def pkg_base(m):
@@ -88,8 +88,8 @@ def pkg_base(m):
         if not seg:
             continue
         ttl = u16(m, wp + os88geom.W_TITLE)
-        if ttl and m.read(seg * 16 + ttl, 4).startswith(b"DOS\0"):
-            return seg * 16 + u16(m, seg * 16 + 8)
+        if ttl and m.read(dosmap.lin(m, seg, ttl), 4).startswith(b"DOS\0"):
+            return dosmap.lin(m, seg, u16(m, dosmap.lin(m, seg, 8)))
     fail("the DOS window is not in the table")
 
 
@@ -112,7 +112,7 @@ def field(text, name):
 
 def zbuf(m, pseg, dm, name, n=128):
     """A NUL-terminated buffer out of the package's own segment."""
-    b = m.read((pseg << 4) + dm[name], n)
+    b = m.read(dosmap.lin(m, pseg, dm[name]), n)
     return b.split(b"\x00")[0].decode("latin-1")
 
 
@@ -218,7 +218,8 @@ def main():
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
 
-    with os88ui.boot(SYS, apps=ARGS, machine="os8088_5150_herc_gla") as ui:
+    with os88ui.boot(SYS, apps=ARGS, machine="os8088_5150_herc_gla",
+                     quick=True) as ui:
         m = ui.m
 
         # --- 1: no arguments -------------------------------------------------
@@ -321,7 +322,7 @@ def main():
         # not call the paint callback** - the window manager carries the
         # pixels - so every screen-coordinate rect this package caches stays
         # at the old position until something paints or clicks. dos_click and
-        # dos_key both call dos_place first, so the box itself is never wrong;
+        # dos_key both call dos_place first, so DOS itself is never wrong;
         # a reader that takes the rects out of bss and then clicks them is.
         w = ui.window("DOS")
 
@@ -359,8 +360,8 @@ def main():
         # and costs ~18ms a key on the target machine (PERFORMANCE.md prices a
         # glyph cell at ~900us). dos.asm counts the cells os88line_edit says it
         # drew; a whole-field repaint of this text would be 1+2+...+8 = 36.
-        cells = u16(m, (pseg << 4) + dm["dos_ncell"])
-        keys = u16(m, (pseg << 4) + dm["dos_nkey"])
+        cells = u16(m, dosmap.lin(m, pseg, dm["dos_ncell"]))
+        keys = u16(m, dosmap.lin(m, pseg, dm["dos_nkey"]))
         print("dosargs: %d keystrokes redrew %d glyph cells" % (keys, cells))
         if keys != len(TYPED):
             fail("%d keystrokes were counted for %d typed - the field did not "

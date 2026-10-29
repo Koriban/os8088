@@ -11,7 +11,7 @@ prints back names the drive the open actually landed on.
   - **THE FIXED DISK WAS NOT THERE.** `kern_dos` carried a static `dsk_vtab`
     - A: and B: as BIOS units 0 and 1, every other row free - while os8088
     BUILDS its table at boot and SPEC.md 18.7.1 pins the boot partition at
-    ROW 2, which that initialiser has FREE. So the box handed over a volume
+    ROW 2, which that initialiser has FREE. So DOS handed over a volume
     index `kern_dos` read as no volume, and a program on C: could not start.
     `tests/kdreturn.py` said so in its own fixture comment and ran its
     program off a floppy to avoid it.
@@ -46,7 +46,10 @@ import os88ui                                                  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = "build/martypc/run/media/hdds/default_xtide.vhd"
-KERNEL = "build/kernel.sys"
+# kern_mega (tests/megaport.txt) boots ITS kernel, boot record, modules and
+# DOS.O88 off the fixed disk - megak/'s, the Makefile's $(MEGADIR)
+KB = "build/megak" if os.environ.get("OS88_MEGA") else "build"
+KERNEL = KB + "/kernel.sys"
 MACHINE = "os8088_xt_hdd"        # kdreturn's machine, for its reason
 VHD = os.path.abspath("build/kdhdd-%d.vhd" % os.getpid())
 FLOPPY = os.path.abspath("build/kdhdd-%d.img" % os.getpid())
@@ -73,7 +76,7 @@ def rows(m):
 
 
 def fixture():
-    for p in (TEMPLATE, KERNEL, "build/kdos/DOS.O88"):
+    for p in (TEMPLATE, KERNEL, KB + "/kdos/DOS.O88"):
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the DOS pieces and "
                  "`make marty` the template" % p)
@@ -101,12 +104,12 @@ def fixture():
         open(p, "w").write(mark + "\n")
     subprocess.check_call(
         ["python3", "tools/os88hdd.py", "--template", TEMPLATE, "--out", VHD,
-         "--kernel", KERNEL, "--vbr", "build/boothd.bin",
+         "--kernel", KERNEL, "--vbr", KB + "/boothd.bin",
          "--mbr", "build/mbr.bin",
-         "--file", "HIBER.DRV=build/hiber.drv",
-         "--file", "CTRL.DRV=build/ctrl.drv",
+         "--file", "HIBER.DRV=" + KB + "/hiber.drv",
+         "--file", "CTRL.DRV=" + KB + "/ctrl.drv",
          "--file", "HDD.DRV=build/hdd.drv",
-         "--file", "DOS.O88=build/kdos/DOS.O88",
+         "--file", "DOS.O88=" + KB + "/kdos/DOS.O88",
          "--file", "%s=%s" % (PROG, prog),
          "--file", "KDDATA.TXT=" + dc], cwd=ROOT)
     subprocess.check_call(
@@ -167,11 +170,11 @@ def wait_text(m, want, secs, what):
     return rows(m)
 
 
-def box_state(m):
+def dos_state(m):
     """[dos_state], with the INSTANCE SEGMENT RESOLVED ON EVERY READ.
 
     **A BANKED `pseg` IS A STALE ONE HERE, and it read as an intermittent.**
-    The DOS box declares its region movable (SPEC.md 66.6.1.1) and the
+    DOS declares its region movable (SPEC.md 66.6.1.1) and the
     windowed launch this waits on CLAIMS THE ARENA - so `mem_claim` may
     compact and move the region while the wait is running. A base taken
     before `ui.path` returned then names whatever moved into that segment, and
@@ -182,7 +185,7 @@ def box_state(m):
     Resolving each time costs one read of the window table.
     """
     dm = dosmap.package()                   # cached after the first call
-    return m.read((dosmap.instance(m) << 4) + dm["dos_state"], 1)[0]
+    return m.read(dosmap.lin(m, dosmap.instance(m), dm["dos_state"]), 1)[0]
 
 
 def marker(rs):
@@ -217,12 +220,12 @@ def arm3_run(m, mo):
     here is to read the SCREEN and leave the card alone.
     """
     dm = dosmap.package()
-    pseg = dosmap.instance(m)   # ...RESOLVED HERE, for box_state's reason: a
+    pseg = dosmap.instance(m)   # ...RESOLVED HERE, for dos_state's reason: a
                                 # windowed run has just claimed the arena and
-                                # the box's region is movable, so a segment
+                                # DOS's region is movable, so a segment
                                 # banked before it is a segment the compaction
                                 # may have moved
-    m.write((pseg << 4) + dm["dos_keepc"], bytes([1, 0]))
+    m.write(dosmap.lin(m, pseg, dm["dos_keepc"]), bytes([1, 0]))
     pt = dosmap.centre(m, pseg, dm, "dos_rrect")
     # THE SCREEN AS IT WAS, because "anything on the text screen" is already
     # TRUE: in graphics mode `screen` decodes the B800 bytes under the
@@ -246,10 +249,12 @@ def arm3_run(m, mo):
 def main():
     fixture()
     m = M.launch(None, apps=FLOPPY, machine=MACHINE,
-                 extra=["--mount", "hd:0:" + VHD])
+                 extra=["--mount", "hd:0:" + VHD], boot=False)
     try:
         ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        m.run()                    # a quick boot: the next act is a
+        ui.up(limit=240)            # verb or a read, so STATE is the gate
+        M.no_saver(m)
         mo = os88mouse.Mouse(marty=m)
         print("kdhdd: booted off the fixed disk")
 
@@ -257,7 +262,7 @@ def main():
         if not ui.path("C:/" + PROG):
             fail("double-clicking %s on the fixed disk opened no window" % PROG)
         # **THE WINDOWED RUN IS DIAGNOSTIC AND NOT ASSERTED**, and that is a
-        # correction: the box runs a console program in an fsx bracket that
+        # correction: DOS runs a console program in an fsx bracket that
         # RETURNS TO THE DESKTOP the moment it exits (SPEC.md 96.14), so the
         # text is up for as long as the program takes and no longer - a race
         # this row lost once against a build that could not have changed it.
@@ -266,7 +271,7 @@ def main():
         #
         # **IT IS NO LONGER A RACE, THOUGH, AND THAT IS WHY IT IS READ AT
         # ALL**: with `-DKDHOLD` the program waits, so this reads the same
-        # marker the arm below reads, off the same disk, through the box's own
+        # marker the arm below reads, off the same disk, through DOS's own
         # back end instead of `kern_dos`'s. Printed rather than asserted,
         # because a windowed defect is `tests/kdos.py`'s subject and a row
         # that fails for somebody else's is a row nobody trusts - but having
@@ -275,10 +280,10 @@ def main():
         got = marker(wait_text(m, "KDHELLO done", 150, "the windowed run"))
         print("kdhdd: windowed off C:, the file says %r" % got)
         # ...AND THE KEY THAT RELEASES IT, which is not tidiness: the fsx
-        # bracket is still up and the box is still DST_READY, so a click on
+        # bracket is still up and DOS is still DST_READY, so a click on
         # 'Run' underneath it would be a press the desktop never sees.
         m.type_text("x")
-        M.until(m, lambda mm: box_state(mm) == DST_RAN,
+        M.until(m, lambda mm: dos_state(mm) == DST_RAN,
                 "the windowed run to finish and the desktop to come back",
                 guest=60.0, poll=0.25)
 

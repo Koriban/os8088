@@ -55,16 +55,18 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        mo = os88mouse.Mouse(marty=m)
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        os88marty.kernel_up(m)          # the boot gate on STATE: every act
+        mo = os88mouse.Mouse(marty=m)   # below is a guest read or a click
+
+        def uset(mm, **k):              # dispcp's settle: each verb confirms
+            return os88marty.ui_done(mm)    # off guest reads (technique 4)
+        dispcp.open_drive(m, mo, S, uset, "B")
         disk = dispcp.win_list(m, S)[-1]
         bx, by = dispcp.win_rect(m, S, disk)[:2]
-        dispcp.open_named(m, mo, S, os88marty.settle, bx, by, "APPS")
-        os88marty.settle(m)
+        dispcp.open_named(m, mo, S, uset, bx, by, "APPS")
         bx, by = dispcp.win_rect(m, S, disk)[:2]
         rx, ry = dispcp.row_xy(bx, by,
-                               dispcp.scroll_to(m, mo, S, os88marty.settle,
+                               dispcp.scroll_to(m, mo, S, uset,
                                                 bx, by,
                                                 dispcp.row_of(m, S,
                                                               "GFXBENCH.O88")))
@@ -75,7 +77,7 @@ def main():
                             "GFXBENCH's window", poll=0.3, limit=120)
         except os88marty.MartyError:
             pass                    # the breakpoint below says what it means
-        os88marty.settle(m)
+        os88marty.ui_done(m, "GFXBENCH's first paint")
 
         m.bp_exec("gfx_blitp")
         m.key("KeyR")
@@ -89,8 +91,10 @@ def main():
         if x % 8:
             sys.exit("blitp: the bench handed it an unaligned x - it will "
                      "have REFUSED, and this row would prove nothing")
-        src = m.read((r["es"] << 4) + r["si"], pstep * 4)
-        ret = u16(m.read((r["ss"] << 4) + r["sp"], 2))
+        # ES and SS are SELECTORS on kern_mega (docs/BOCHS.md): m.lin
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)
+        src = m.read(lin(r["es"], r["si"]), pstep * 4)
+        ret = u16(m.read(lin(r["ss"], r["sp"]), 2))
         m.bp_exec(KBASE + ret)
         m.run()
         if not m.wait_stop(limit=600.0):

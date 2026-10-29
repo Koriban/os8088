@@ -33,9 +33,12 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "tools"))
-import os88marty   # noqa: E402
+import os88marty
+import os88sym   # noqa: E402
 import os88ui      # noqa: E402
 import os88stik    # noqa: E402
+import megafix     # noqa: E402
+import struct
 
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 BDIR = os.path.join(ROOT, os.environ.get("OS88_BUILD", "build"))
@@ -66,14 +69,59 @@ def main():
         ["python3", os.path.join(ROOT, "tools/os88hdd.py"), "--template",
          TEMPLATE, "--out", vhd, "--noboot", "--file", "HIBERNAT.PTR=" + ptr])
     floppy = os.path.join(tmp, "stikhiber360.img")
-    shutil.copy(os.path.join(BDIR, "stikhiber360.img"), floppy)
+    shutil.copy(megafix.system_disk(os.path.join(BDIR, "stikhiber360.img")),
+                floppy)
+    extra = ["--mount", "hd:0:" + vhd]
+    if os.environ.get("OS88_MEGA"):
+        # kern_mega under Bochs: C: is the shim's own ATA disk, and the
+        # pointer file goes on it by name (os88megabochs's --put)
+        pf = os.path.join(tmp, "HIBERNAT.PTR")
+        shutil.copy(ptr, pf)
+        extra = ["--put", pf]
 
     with os88marty.launch(floppy, machine="os8088_xt_hdd", boot=False,
-                          extra=["--mount", "hd:0:" + vhd]) as m:
+                          extra=extra) as m:
         print("A: stik_boot meets the posted question")
-        m.bp_exec("stik_boot")
+        # `.cold` MAY SLIDE AT BOOT (docs/plans/MOVABLE-COLD-PLAN.md 2): on a
+        # machine with neither a VGA nor an EGA kmain_o moves it down by
+        # VGA_PARA before stik_boot runs, and m.sym() can only follow that
+        # once [api_coldseg] says so - which, armed before the boot, it does
+        # not yet. So both addresses are armed and a stop counts only where
+        # m.sym() (now reading the live segment) puts stik_boot: once the
+        # rung slid, the unslid address is some OTHER `.cold` routine's
+        home = os88sym.linear("stik_boot")
+        eq = os88sym.equates()
+        arms = [home]
+        if "VGA_PARA" in eq:
+            arms.append(home - eq["VGA_PARA"] * 16)
+        if getattr(m, "bochs", False):
+            # kern_mega relaunches the widgets AFTER mega_enter (KERN-MEGA-
+            # PLAN 14.78), where `.cold` runs above 1MB at an address only
+            # the GDT knows (tests/stiknodesk.py's way): to mega_enter's
+            # return first, and stik_boot is asked for there
+            m.bp_exec("mega_enter")
+            m.run()
+            if m.wait_stop(120) == "breakpoint":
+                r = m.regs()
+                m.bp_exec(m.lin(r["cs"], struct.unpack("<H", bytes(m.read(
+                    m.lin(r["ss"], r["sp"]), 2)))[0]))
+                m.run()
+                m.wait_stop(120)
+            arms = [m.sym("stik_boot")]
+        m.bp_exec(*arms)
         m.run()
-        hit = m.wait_stop(120)
+        hit = None
+        for _ in range(64):
+            hit = m.wait_stop(120)
+            if hit != "breakpoint":
+                break
+            st = m.status()
+            if st.get("flat_ip", (st["cs"] << 4) + st["ip"]) \
+                    == m.sym("stik_boot"):
+                break
+            m.run()
+        else:
+            hit = None
         check(hit == "breakpoint", "stik_boot was entered (%r)" % hit)
         q = m.read(m.sym("ui_rebootq"), 1)[0]
         check(q == UI_RBQ_ASK, "[ui_rebootq] = UI_RBQ_ASK when it ran (%d)" % q)
@@ -90,7 +138,8 @@ def main():
         check("StikProbe" not in ui.titles(),
               "no StikProbe window (%r)" % ui.titles())
         seg = ui._word("sc_seg")
-        r = os88stik.parse_row(m.read(seg << 4, os88stik.SC_REC)) if seg else {}
+        lin = getattr(m, "lin", lambda s, o=0: (s << 4) + o)  # kern_mega
+        r = os88stik.parse_row(m.read(lin(seg), os88stik.SC_REC)) if seg else {}
         check(r.get("stik") and m.read(ui._S("desk_zslot") + DESK_SC0, 1)[0]
               == 0xFF, "its row still carries the mark, with no cell: kept "
               "for the next boot (%r)" % (r,))

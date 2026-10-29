@@ -45,7 +45,7 @@ REST = "0f00"               # ink CWHITE, paper CBLACK
 def boot():
     return os88ui.boot(os.path.join(BDIR, "os8088-360.img"),
                        apps=os.path.join(BDIR, "apps360.img"),
-                       machine=MACHINE)
+                       machine=MACHINE, quick=True)
 
 
 def leg_desk():
@@ -99,10 +99,16 @@ def leg_callback():
         m.write(pen, POKE)
         m.bp_exec()
         at = None
+        # kern_mega: W_SEG is the region's DATA selector and the package
+        # runs through a CODE alias of it, so "its segment" is the same
+        # linear base (os88megabochs's m.lin reads either)
+        here = (lambda cs: m.lin(cs)) if getattr(m, "bochs", False) \
+            else (lambda cs: cs)
+        want = here(pseg)
         for _ in range(400):                    # step to the package's own
             m.step(1)                           # dispatcher: the first
             st = m.status()                     # instruction in its segment
-            if st["cs"] == pseg:
+            if here(st["cs"]) == want:
                 at = (st["cs"], st["ip"])
                 break
         got = m.read(pen, 2).hex()

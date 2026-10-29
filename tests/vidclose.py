@@ -41,9 +41,119 @@ from cycweb import pkg_syms                                   # noqa: E402
 from vidxms import Q, u16                                     # noqa: E402
 
 ROUNDS = 3
+# kern_mega (OS88_MEGA, tests/megaport.txt): the same three rounds through the
+# Marty API that tools/os88megabochs.py answers out of Bochs. The player is
+# the ARM (build/megak/apps, -DPKG_MEGA), the hold is kern_mega's own XMS - a
+# POOL block above 1MB, instance-owned - so "no XMS block still owned" is the
+# pool holding exactly what it held before the first open (heapmap.pool);
+# the region is read after the close at the LINEAR base it had, and Bochs's
+# floppy, at its real-time rate, is the slow disk
+MEGA = bool(os.environ.get("OS88_MEGA"))
+
+
+def main_mega():
+    import heapmap
+    import os88marty
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), ("PKG_MEGA",))
+    rnd = random.Random(7)
+    tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
+    bad = []
+    try:
+        v88 = vidbank.clip(tmp, sound=True)
+        disk = os.path.join(tmp, "d.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
+                        "--size", "1440", v88,
+                        os88build.at("build/megak/apps/video.o88")],
+                       check=True, capture_output=True)
+        with os88ui.boot(os88build.at("build/os8088.img"), apps=disk,
+                         quick=True) as ui:
+            m = ui.m
+
+            def pool():
+                """the pool blocks a PACKAGE owns (kernel/mega.inc's
+                mx_tab: MX_OWN a slot, 80h|slot its region, A0h|slot its
+                claim; C0h and up are the kernel's own - the disk layer's
+                caches come and go there and are not this row's)"""
+                raw = m.read(m.sym("mx_tab"), heapmap.MX_NBLK * heapmap.MX_BLKSZ)
+                out = []
+                for k in range(heapmap.MX_NBLK):
+                    r = raw[k * heapmap.MX_BLKSZ:(k + 1) * heapmap.MX_BLKSZ]
+                    kb, own = u16(r, 2), r[4]
+                    if kb and (own < 0x80 or own & 0xE0 in (0x80, 0xA0)):
+                        out.append((u16(r, 0), kb, own))
+                return sorted(out)
+            before = pool()
+            for it in range(ROUNDS):
+                p = ui.path("B:/CLIP.V88")
+                rec = m.read(ui._S("wm_wins") + p.i * geom.WIN_SIZE,
+                             geom.WIN_SIZE)
+                base = m.lin(u16(rec, geom.W_SEG))  # (kept for the read
+                                                    # AFTER the free)
+
+                def rb(n):
+                    return m.read(base + syms[n], 1)[0]
+
+                def rw(n):
+                    return u16(m.read(base + syms[n], 2))
+
+                def wait(cond, what, secs):
+                    try:
+                        os88marty.until(m, lambda _: cond(), what,
+                                        poll=0.05, guest=secs)
+                        return True
+                    except os88marty.MartyError:
+                        return False
+                wait(lambda: rb("vp_loaded") == 1, "the file loaded", 30)
+                os88marty.ui_done(m, cap=0.5)
+                m.type_text("p")
+                if not wait(lambda: rb("vp_ready") == 1, "the play", 60):
+                    bad.append("round %d: the play never started" % it)
+                    break
+                nfr = rnd.randrange(20, 120)
+                wait(lambda: rw("vp_done") >= nfr, "frame %d" % nfr, 30)
+                m.key("Escape")
+                if not wait(lambda: rb("vp_ready") == 0, "the bracket's end",
+                            20):
+                    bad.append("round %d: Esc did not end the bracket" % it)
+                    break
+                os88marty.ui_done(m, cap=0.3)
+                sess, xon, xfull = rb("vp_sess"), rb("vp_xon"), rb("vp_xfull")
+                have = u16(m.read(base + syms["vp_xhave"], 2)) | \
+                    u16(m.read(base + syms["vp_xhave"] + 2, 2)) << 16
+                print("   round %d: Esc at frame %d (drawn %d); session %d, "
+                      "hold %d, %d KB of it loaded%s"
+                      % (it, nfr, rw("vp_done"), sess, xon, have // 1024,
+                         ", whole" if xfull else ""))
+                if not xon or xfull:
+                    bad.append("round %d: the close does not land on a hold "
+                               "still loading - this tests nothing" % it)
+                ui.close([o for o in ui.windows() if o.i == p.i][0])
+                s2, x2 = rb("vp_sess"), rb("vp_xon")
+                left = [b for b in pool() if b not in before]
+                t0 = m.read(0x46C, 2)
+                alive = wait(lambda: m.read(0x46C, 2) != t0, "a tick", 5)
+                print("   ...closed: the freed region's session %d, hold %d; "
+                      "%d package pool block(s) more than before the first open; "
+                      "ticking %s" % (s2, x2, len(left), alive))
+                if s2 or x2:
+                    bad.append("round %d: the region was freed with a play "
+                               "or a hold alive (vp_sess %d, vp_xon %d): no "
+                               "negotiator stopped it" % (it, s2, x2))
+                if left:
+                    bad.append("round %d: %d pool block(s) still held: %r"
+                               % (it, len(left), left))
+                if not alive:
+                    bad.append("round %d: the machine stopped ticking" % it)
+                    break
+                os88marty.ui_done(m, cap=0.5)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return report(bad)
 
 
 def main():
+    if MEGA:
+        return main_mega()
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
     rnd = random.Random(7)
     tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
@@ -59,7 +169,7 @@ def main():
                         os88build.at("build/video.o88")],
                        check=True, capture_output=True)
         # a SLOW disk, so the bank is still filling when the close lands
-        q = Q(tmp, sysimg, disk, 4, bps=65536)
+        q = Q(tmp, sysimg, disk, 4, bps=65536, keep=True)
         os88qemu.acted(q, lambda: os.path.exists(q.sock), secs=30,
                        what="the QMP socket")
         xmcheck.wait_desktop(q.sock, "vidclose")
@@ -67,7 +177,8 @@ def main():
         xbase = xmcheck.table_base(q.sock)
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
         x, y = geom.drive_pt(q, "B", S)
-        xmcheck.dblclick(q.sock, x, y)
+        dbl = lambda x, y: os88qemu.mouse_dblclick(q, S, q.hmp, x, y)  # noqa
+        dbl(x, y)
         box = {}
 
         def diskwin():
@@ -79,12 +190,12 @@ def main():
         if not os88qemu.acted(q, diskwin, secs=30, what="Disk B"):
             bad.append("Disk B never opened")
             return report(bad)
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1)       # (the listing: read in the pass)
         for it in range(ROUNDS):
             w = box["w"]
             i, _ = ui.entry("CLIP.V88", w)
             before = set(o.i for o in ui.windows())
-            xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+            dbl(*ui.row_xy(w, i - ui.scroll(w)))
 
             def player():
                 for o in ui.windows():
@@ -106,7 +217,7 @@ def main():
                 return u16(q.read(base + syms[n], 2))
             os88qemu.acted(q, lambda: rb("vp_loaded") == 1, secs=30,
                            what="the file loaded")
-            os88qemu.pace(q, 0.5)
+            os88qemu.ui_done(q, S, cap=0.5)
             q.hmp("sendkey p")
             if not os88qemu.acted(q, lambda: rb("vp_ready") == 1, secs=60,
                                   what="the play"):
@@ -120,7 +231,7 @@ def main():
                                   what="the bracket's end"):
                 bad.append("round %d: Esc did not end the bracket" % it)
                 break
-            os88qemu.pace(q, 0.3)
+            os88qemu.ui_done(q, S, cap=0.3)
             sess, xon, xfull = rb("vp_sess"), rb("vp_xon"), rb("vp_xfull")
             have = u16(q.read(base + syms["vp_xhave"], 4)) | \
                 u16(q.read(base + syms["vp_xhave"] + 2, 2)) << 16
@@ -132,7 +243,7 @@ def main():
                 bad.append("round %d: the close does not land on a hold "
                            "still loading - this tests nothing" % it)
             pw = [o for o in ui.windows() if o.i == p.i][0]
-            xmcheck.click(q.sock, *geom.close_xy(pw.x, pw.y))
+            os88qemu.mouse_click(q, S, q.hmp, *geom.close_xy(pw.x, pw.y))
             if not os88qemu.acted(
                     q, lambda: all(o.i != p.i for o in ui.windows()),
                     secs=20, what="the close"):
@@ -157,7 +268,7 @@ def main():
             if not alive:
                 bad.append("round %d: the machine stopped ticking" % it)
                 break
-            os88qemu.pace(q, 0.5)
+            os88qemu.ui_done(q, S, cap=0.5)
     finally:
         if q is not None:
             q.close()

@@ -190,7 +190,11 @@ def steer(rig, tx, ty, btn=0):
 
 
 def leg_sim(fail):
-    with os88marty.launch(SIM_IMG, apps=APPS, machine=MACHINE) as m:
+    with os88marty.launch(SIM_IMG, apps=APPS, machine=MACHINE,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         os88marty.no_saver(m)
         rig = Rig(m)
         r = rig.rowbytes()
@@ -350,11 +354,23 @@ def leg_sim(fail):
 
         # --- detach, by way of a Restart -------------------------------------
         resets0 = rig.mb(MB_RESETS)
-        m.bp_exec(S("dsk_rb_go"))
+        # m.sym() and NOT S(): dsk_rb_go is `.cold`, and MACHINE is a CGA,
+        # where kmain_o slid `.cold` down by VGA_PARA at boot - os88sym's
+        # address is 0x7F0 bytes above the live routine, in some other code
+        # (tests/fddpark.py was the case that found it). The CS:IP check
+        # makes a wrong address a named failure instead of a reading taken
+        # wherever that other code happened to run.
+        go = m.sym("dsk_rb_go")
+        m.bp_exec(go)
         m.write(S("ui_rebootq"), bytes([UI_RBQ_NOFLUSH]))
         m.run()
         if not m.wait_stop(60.0):
             fail.append("detach: the Restart never reached dsk_rb_go")
+            return
+        r = m.regs()
+        if (r["cs"] << 4) + r["ip"] != go:
+            fail.append("detach: stopped at %04X:%04X, not at dsk_rb_go "
+                        "(%05X)" % (r["cs"], r["ip"], go))
             return
         img = m.read(rig.seg * 16, 8192)
         off = img.find(b"CH375SIM")
@@ -373,7 +389,11 @@ def leg_sim(fail):
 
 
 def leg_busy(fail):
-    with os88marty.launch(BUSY_IMG, apps=APPS, machine=MACHINE) as m:
+    with os88marty.launch(BUSY_IMG, apps=APPS, machine=MACHINE,
+            boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+        os88marty.no_saver(m)
         r = m.read(S("usbm_row"), 16)
         seg = int.from_bytes(r[DRVR_SEG:DRVR_SEG + 2], "little")
         say("busy     row error %d, segment %04X" % (r[DRVR_ERR], seg))

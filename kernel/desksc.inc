@@ -320,7 +320,7 @@ lnk_is:
 ; out: CF = 0 it was OURS and is dealt with: what it names is opened as its
 ;      Disk window would open it, or `Shortcut not found (B:)`, or - a newer
 ;      version, a volume no row has, a chain too deep - nothing, silently.
-;      CF = 1 it is NOT ours: no file this size, or not 'LK' - the DOS box's
+;      CF = 1 it is NOT ours: no file this size, or not 'LK' - DOS's
 ;      shortcuts are .LNK too, in Microsoft's format (SPEC.md 96.21), and the
 ;      caller carries on to the association that opens those
 ; clobbers: AX..DI, ES, flags
@@ -352,6 +352,9 @@ lnk_open:
                                 ; tail is stack bytes that can only fail to
                                 ; name anything (5 bytes, kept out). SS:BP =
                                 ; the record, which needs no segment prefix
+    sub cx, ax                  ; CX = 0: the whole record was read (the read
+                                ; clobbers AX/DX alone) - and only then is
+                                ; there a parameter to arm, below
     cmp word [bp+LNK_SIG], 'LK'
     jne .notours
     cmp byte [bp+LNK_VER], LNK_V
@@ -365,7 +368,28 @@ lnk_open:
     jae .pop                    ; the file is hostile: no row has that index
     lea di, [bp+LNK_PATH]       ; ABOVE SP: sc_walk reads it through SS
     mov byte [bp+LNK_PATH+SC_PATHMAX-1], 0  ; ...terminated, whatever it said
+    cmp ah, 1                   ; A PROGRAM'S LINK MAY CARRY A PARAMETER
+    jne .walk                   ; (SPEC.md 26.10.7): the text after the
+    push ax                     ; path's NUL, armed for OSAPI_ARG_TEXT. It
+    push di                     ; stays where it is - this record outlives
+                                ; the launch - and a link to a document
+                                ; carries none to whichever program its
+                                ; extension names. ES is still SS: the read
+                                ; above was handed ES:BX and keeps ES
+    or cx, cx                   ; A SHORT FILE carries none: its tail is the
+    jnz .noarg                  ; stack's bytes, not the file's
+    xor al, al
+    mov cx, SC_PATHMAX - 1
+    repne scasb                 ; past the path's NUL - or onto the forced
+    cmp [es:di], al             ; one, a path of 44 having no room for any
+    je .noarg
+    mov [lnk_argo], di
+.noarg:
+    pop di
+    pop ax
+.walk:
     call sc_walk
+    mov word [lnk_argo], 0      ; SPENT OR NOT, it dies with the launch
 .pop:
     add sp, LNK_SIZE
 .done:
@@ -375,6 +399,23 @@ lnk_open:
     add sp, LNK_SIZE
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; osapi_arg_text - a link's parameter for the program it started (0x04DD,
+;                  SPEC.md 26.10.7). api_rsc's far body: DS = KDATA
+; in:  nothing
+; out: CF=1 none - every launch but a link's; CF=0 with DX:SI -> the NUL text,
+;      in the link's record on task 0's stack, alive until the entry returns
+; clobbers: DX, SI
+;
+; READ-AND-CLEAR, OSAPI_ARG_FILE's shape: the first proc to ask spends it
+; -----------------------------------------------------------------------------
+osapi_arg_text_x:
+    xor si, si
+    xchg si, [lnk_argo]
+    cmp si, 1                   ; CF = 1: it was 0, nothing armed
+    mov dx, ss                  ; the stack's segment - a selector on kern_mega
+    retf
 
 ; -----------------------------------------------------------------------------
 ; sc_modcall - run one of CTRL.DRV's desktop operations (SPEC.md 26.8.7)
@@ -519,42 +560,8 @@ sc_rclick_x:
     stc
     retf
 
-; -----------------------------------------------------------------------------
-; vgcf_boot - Force Color at boot (SPEC.md 39.28), from drv_boot_x
-; in:  the box is ticked (drv_boot_x tests [drv_cfg+CFG_VGC]); the system
-;      volume mounted
-; out: nothing; AX clobbered (drv_boot_x reloads it on the next line), every
-;      other register preserved
-;
-; THE BOX'S TEST IS AT THE CALL SITE, which is the boot BLOB and is given
-; back once the machine is up, and AX is not banked - so what stays resident
-; is only the part that has to be reached far (kernel size pass 12: 28 -> 14
-; bytes; it was here when the call site was the full boot overlay, SPEC.md
-; 39.28).
-;
-; FAR, for the blob, and NOT sc_modcall: that one's refusal is `Needs Sys
-; Disk A:` as a toast, and there is no desktop yet to say it on. A core that
-; cannot be read here leaves the BIOS's palette as it was - the machine boots
-; grey, exactly as it would with the box clear.
-; -----------------------------------------------------------------------------
-vgcf_boot:
-    test byte [drv_cfg+CFG_VGC], 1  ; THE BOX'S TEST IS HERE AGAIN (SPEC.md
-    jz .out                     ; 120.4): seven bytes the blob could not hold
-                                ; once the packed display's class joined the
-                                ; 'VM' record - kernel size pass 12 put them
-                                ; at the call site when the blob had room, and
-                                ; the blob is the scarcer of the two now
-    mov ax, (SC_OP_VGC << 8) | MOD_SETS ; AL the module, AH the operation:
-    call mod_need               ; every register kept. Its CF is NOT TESTED:
-    call far [SETFP]            ; a core that could not be read leaves this
-    call mod_drop               ; slot on mod_gone (`stc / retf`, nothing
-.out:
-    retf                        ; done) and its row empty, which mod_drop
-                                ; passes over - so a refusal costs nothing
-                                ; here and needs no branch (kernel size pass
-                                ; 12). CPE_SC's SC_OP_VGC keeps AL: modc_e_sc
-                                ; counts AH down and cp_vgc_force banks AX, so
-                                ; AL is still MOD_SETS for the drop
+; (vgcf_boot - Force Color at boot - is drv_boot_x's own lines in the blob
+; since kernel size pass 14: the blob was its one caller, driver.inc)
 
 ; =============================================================================
 section .text
@@ -594,6 +601,9 @@ section .bss
 ; =============================================================================
 sc_seg      resw 1              ; the table's claim, 0 = no shortcuts
 sc_nrows    resb 1              ; rows the claim holds, 0..SC_MAX
+lnk_argo    resw 1              ; a link's parameter for OSAPI_ARG_TEXT: an
+                                ; offset into its record on task 0's stack,
+                                ; 0 = none (SPEC.md 26.10.7)
 
 ; =============================================================================
 section .modc                   ; CTRL.DRV (SPEC.md 26.8.7): CS = the image,
@@ -619,7 +629,7 @@ modc_e_sc:                      ; CPE_SC (SPEC.md 2.8.7): AH = the operation
     call sc_m_lnk               ; SC_OP_LNK (SPEC.md 26.10.4)
     jmp short .out
 .vgc:
-    call cp_vgc_force           ; SC_OP_VGC (SPEC.md 39.28)
+    call cp_vgc_force           ; SC_OP_VGC (SPEC.md 39.30)
     jmp short .out
 .add:
     call sc_m_add
@@ -1024,8 +1034,13 @@ sc_m_lnk:
     stosb
     PUSH_CSDATA                 ; ...and the RECORD in the image, ES = CS from
     pop es                      ; here to the write (its DATA segment)
-    lea di, [cs:cpc_buf + LNK_PATH] ; the path, sc_m_new's: dsk_path's leading
-    call sc_m_wpath             ; `\` lands on the kind byte, written after it
+    lea di, [cs:cpc_buf + LNK_PATH] ; the field ZEROED first, AL still 0: the
+    mov cx, SC_PATHMAX          ; buffer is the settings file's and never
+    rep stosb                   ; cleared, and a byte after the path's NUL is
+    sub di, SC_PATHMAX          ; a PARAMETER (SPEC.md 26.10.7), which this
+                                ; writes none of
+    call sc_m_wpath             ; the path, sc_m_new's: dsk_path's leading
+                                ; `\` lands on the kind byte, written after it
     jc .nopath
     lea di, [cs:cpc_buf]        ; (`lea` with `cs:` - the pointer is the
                                 ; IMAGE's, ES = CS, and os88ovlchk is told so)
@@ -1860,25 +1875,47 @@ ovl_sc_load:
 ;   an empty folder  that, and its first directory sector
 ;   a link           opened AS A DOUBLE-CLICK WOULD: assoc_run_x with nothing
 ;                    posted, standing in the folder, so a link of ours is
-;                    followed and the DOS box's (SPEC.md 96.21) goes to the
+;                    followed and DOS's (SPEC.md 96.21) goes to the
 ;                    program that reads it. Anything not *.LNK is not started
 ;
 ; EITHER SHIFT, HELD AT THE FIRST LINK, SKIPS THE LOT and says so - read off
 ; the BIOS's own shift byte at that instruction, after the whole boot, so a
 ; key held through the loading screen is a key held here; and only at a link,
 ; so a folder with nothing in it says nothing whatever is held.
+;
+; ON kern_mega IT RUNS AFTER mega_enter, from `.cold` (KERN-MEGA-MEMORY-PLAN
+; MC8, KERN-MEGA-PLAN 14.69). Walked from the blob it ran in REAL mode, so
+; every package it started was loaded into conventional memory whatever its
+; header said - an autostarted CDRack at 9640h, the same package started by
+; hand at 140000h - and one with a worker made mega_tasks_ok refuse protected
+; mode for the whole session. kmain calls it last, after the switch (or the
+; refusal), so a link opens exactly as a double-click would.
+;
+; SO THE WALK IS ONE BODY ASSEMBLED TWICE: `as_boot` in the blob for every
+; other kernel, `as_bootc` in `.cold` for kern_mega - and it is written in the
+; idioms both allow. It holds NO DATA (`.cold` may not, SPEC.md 2.6 rule 1:
+; the folder's name and the toast are built by immediate stores) and NO CS
+; idiom (`.cold` is code there, rule 2): the find's answer is a frame on the
+; STACK, popped as soon as its name is copied out - so it is gone again
+; before the open, which is what the 320 bytes of LNK_SPMIN are for.
 ; =============================================================================
-section .boot2
-
-as_boot:
+%macro AS_WALK 0
     xor bx, bx
     call .go                    ; the boot volume's ROOT
     jc .out
+%ifdef KERN_MEGA
+    mov word [assoc_doc], 'AU'  ; the folder's name, into the locator (a name
+    mov word [assoc_doc+2], 'TO' ; dskw_stat reads goes through DS): stored,
+    mov word [assoc_doc+4], 'ST' ; since `.cold` holds no string to copy
+    mov word [assoc_doc+6], 'RT'
+    mov byte [assoc_doc+8], 0
+%else
     push cs
     pop es
     mov si, as_s_dir            ; a name dskw_stat reads goes through DS, so
     mov cx, as_s_dirn           ; the blob's own is staged
     call .cp
+%endif
     mov si, assoc_doc
     call COLD_SEG:dwf_dskw_stat ; AL = its attribute, BX = its first cluster
     jc .out
@@ -1891,6 +1928,22 @@ as_boot:
     mov bx, dx                  ; stand there again: the open before this one
     call .go                    ; went wherever its link pointed
     jc .root
+%ifdef KERN_MEGA
+    sub sp, DSK_FIND_SZ         ; ES:DI = the answer's room: a frame on the
+    mov di, sp                  ; stack, popped as soon as the name is out -
+    push ss                     ; before anything opens, which is what the
+    pop es                      ; 320 bytes of LNK_SPMIN are for
+    xor al, al                  ; no hidden or system entries
+    call COLD_SEG:dsk_find_x    ; CX = the next ordinal; CF = the end
+    jc .endf
+    mov si, di                  ; its 8.3 name, NUL, into the document locator
+    push cx                     ; every open reads (SPEC.md 21.5)
+    mov cx, 13
+    call .cp
+    pop cx
+    add sp, DSK_FIND_SZ
+    push cx
+%else
     push cs                     ; ES:DI = the answer's room, in the blob and
     pop es                      ; not on task 0's stack: a link that names a
     mov di, as_find             ; link is followed only while 320 bytes of it
@@ -1902,6 +1955,7 @@ as_boot:
     mov si, di                  ; its 8.3 name, NUL, into the document locator
     mov cx, 13                  ; every open reads (SPEC.md 21.5)
     call .cp
+%endif
     mov bp, lnk_is
     call COLD_SEG:wm_cbd        ; ZF = 1: a .LNK - anything else there is
     jne .nl                     ; not started
@@ -1917,11 +1971,41 @@ as_boot:
     jmp short .next
 .skip:
     pop cx
+%ifdef KERN_MEGA
+    mov ax, 'd'                 ; 'Autostart skipped', NUL: 18 bytes pushed
+    push ax                     ; last word first, so they read forwards from
+    mov ax, 'pe'                ; SP - COPIED by the toast, so a frame is as
+    push ax                     ; good a home as the blob's string was
+    mov ax, 'ip'
+    push ax
+    mov ax, 'sk'
+    push ax
+    mov ax, 't '
+    push ax
+    mov ax, 'ar'
+    push ax
+    mov ax, 'st'
+    push ax
+    mov ax, 'to'
+    push ax
+    mov ax, 'Au'
+    push ax
+    mov si, sp
+    push ss
+    pop es
+    xor cx, cx
+    call KERNEL_SEG:cw_toast_show
+    add sp, 18
+    jmp short .root
+.endf:
+    add sp, DSK_FIND_SZ         ; (the end of the folder: the frame back)
+%else
     push cs
     pop es
     mov si, as_s_skip
     xor cx, cx
     call KERNEL_SEG:cw_toast_show   ; COPIED, so a blob string outlives it
+%endif
 .root:
     xor bx, bx                  ; ...and the boot volume's root again, where
     call .go                    ; the boot left it
@@ -1940,11 +2024,34 @@ as_boot:
     inc di
     loop .c
     ret
+%endmacro
+
+%ifndef KERN_MEGA
+section .boot2
+as_boot:                        ; (BLOBCALL from kmain_o)
+    AS_WALK
 
 as_s_dir:   db 'AUTOSTRT', 0
 as_s_dirn   equ $ - as_s_dir
 as_s_skip:  db 'Autostart skipped', 0
 as_find:    times DSK_FIND_SZ db 0
+%else
+section .cold
+as_bootc:                       ; (call COLD_SEG: from kmain, after mega_enter)
+    AS_WALK
+
+; stik_bootf - stik_boot, FAR, for kern_mega's kmain AFTER mega_enter
+; (KERN-MEGA-PLAN 14.78). In drv_notice_x it ran in REAL mode, so a widget
+; bound DESK.DRV's library by a real PARAGRAPH (os88stikc.inc's stik_load
+; writes OSAPI_WM_DESK's DX into every far pointer of its own block) that
+; the switch never translates - the first thunk called after it far-jumped
+; to a paragraph that is no selector, and the package was closed for a #GP.
+; Launched here, it binds in the mode it runs in, as AUTOSTART does (MC8),
+; and no widget's worker can make mega_enter decline either.
+stik_bootf:
+    call stik_boot
+    retf
+%endif
 
 section .modc                   ; ...and the image's own scratch, IN the
 sc_mz       db 0                ; image: a module may write its own bytes

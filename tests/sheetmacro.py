@@ -61,8 +61,8 @@ import sheetdec as SD                                        # noqa: E402
 WORK = os88build.at("build/sheetmacro")               # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetmacro.img")
 NAME = "MAC.SLK"
-MACRO = (435, 45)
-RUN = (MACRO[0] + 17, 57 + 12 + 2)      # Macro's SECOND item: 81.74's
+MACRO = SF.mega_y((435, 45), SF.SHEET_DY)    # (kern_mega's VGA: sheetfmt)
+RUN = SF.mega_y((MACRO[0] + 17, 57 + 12 + 2), SF.SHEET_DY)  # Macro's SECOND item: 81.74's
                                          # recorder put Record... above it
 COUNT = [
     'FOR(H1,1,5)',
@@ -121,7 +121,7 @@ def build_disk():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write('\r\n'.join(body).encode('latin-1'))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

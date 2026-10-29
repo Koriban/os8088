@@ -123,8 +123,12 @@ class Probe:
     def __init__(self, ui, sym):
         self.ui, self.m, self.sym = ui, ui.m, sym
         w = ui.window("REDLINE")
-        self.base = struct.unpack("<H", self.m.read(self.m.sym("wm_wins") +
-                                 w.i * G.WIN_SIZE + G.W_SEG, 2))[0] << 4
+        self.seg = struct.unpack("<H", self.m.read(self.m.sym("wm_wins") +
+                                 w.i * G.WIN_SIZE + G.W_SEG, 2))[0]
+        # kern_mega: W_SEG is an LDT selector, so its base is the
+        # descriptor's (os88megacommon.lin); MartyPC's is the paragraph
+        self.base = (self.m.lin(self.seg) if hasattr(self.m, "lin")
+                     else self.seg << 4)
 
     def addr(self, name):
         return self.base + self.sym[name]
@@ -152,10 +156,20 @@ def key(ui, name):
 def wait(ui, predicate, message, seconds=600):
     # Position by guest frames, bounded by guest time; host load cannot change
     # how far the guest runs.  Never sleep to guess when a benchmark is done.
-    for _ in range(seconds * 12):
+    # The step grows 5 -> 30 frames after the first second: a wait that is
+    # still going then is a benchmark run, and 5-frame steps spent a round
+    # trip and the predicate's reads every 83 guest ms of it (SOAK-SPEED).
+    left = seconds * 60
+    n = 0
+    while left > 0:
         if predicate():
             return
-        ui.m.advance(frames=5)
+        step = 5 if n < 12 else 30
+        ui.m.advance(frames=step)
+        left -= step
+        n += 1
+    if predicate():
+        return
     raise AssertionError(message)
 
 

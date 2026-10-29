@@ -63,6 +63,7 @@ MACHINE = "os8088_xt_hdd"
 CP_I0Y, CP_IROWH, CP_RX = 6, 14, 96     # ctrl.inc: the item list, the pane
 CP_DBY1, CP_DROWH = 20, 26              # ...the Drivers page's hit bands
 CP_IDRV = 2                             # SPEC.md 31.3
+CP_LVIS, CP_LAY, CP_LAH, CP_LAX1 = 8, 118, 12, 52   # ...a scrolling list
 DRVR_SZ, DRVR_SEG = 16, 2               # driver.inc's row: 0 = not loaded
 HDD_ROW, RD_ROW = 1, 3                  # drv_tab rows (SPEC.md 31.1's order)
 MEM_P_DIRW = 0xFE02                     # memory.inc: the read-ahead's tag
@@ -125,8 +126,11 @@ def main():
     # HDD.DRV at boot here, and the user's sequence this row replays starts
     # by ticking it
     import hdoff
-    with M.launch(hdoff.image(a.image), apps=a.apps, machine=a.machine) as m:
-        M.settle(m)
+    with M.launch(hdoff.image(a.image), apps=a.apps, machine=a.machine,
+                  boot=False) as m:
+        m.run()
+        M.kernel_up(m)                  # the boot gate on STATE: the first
+        M.no_saver(m)                   # act is the chip menu
         q, mo = Q(m), Mouse(marty=m)
 
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
@@ -138,6 +142,19 @@ def main():
         x0, y0 = cp[1] + 1, cp[2] + 18
 
         def item(n):
+            if getattr(m, "bochs", False):
+                # KERN_MEGA'S LIST SCROLLS: eight static pages (cp_nst) and
+                # the two driver pages are past the CP_LALL rows the pane
+                # shows, so the item is brought into the CP_LVIS rows by the
+                # list's own down arrow first (ctrl.inc CP_LAY, CP_LAX1)
+                top = lambda: m.read(m.sym("cp_ltop"), 1)[0]  # noqa: E731
+                while n >= top() + CP_LVIS:
+                    t0 = top()
+                    mo.click(x0 + CP_LAX1 + 6, y0 + CP_LAY + CP_LAH // 2)
+                    quiet(m)
+                    if top() == t0:
+                        break                   # ...no arrow to scroll with
+                n -= top()
             mo.click(x0 + 40, y0 + CP_I0Y + n * CP_IROWH + 7)
             quiet(m)
 

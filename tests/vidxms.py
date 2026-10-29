@@ -74,7 +74,9 @@ and after the same swap the same Right arrow FAILS. That is what says the
 swap bites, so that arm xms passing means something.
 
 VERIFIED TO FAIL: with `call vp_xput` taken out of vp_fill, arm xms reports
-the hold short when the play returns; with `call vp_xrdat` taken out of
+the hold short when the play returns - and so does `call vp_xlag` taken out
+of the bracket's loop, because the stream starts past key 0, beyond the one
+chunk held at Play, so vp_xput alone finds a gap before every chunk; with `call vp_xrdat` taken out of
 vp_rdat, step 4's key is refused.
 """
 import argparse
@@ -199,7 +201,8 @@ def live_clip(tmp, loop=None):
 class Q(object):
     """One private QEMU: its own socket, pidfile and copies of both disks."""
 
-    def __init__(self, tmp, sysimg, apps, mem, extra=(), bps=None):
+    def __init__(self, tmp, sysimg, apps, mem, extra=(), bps=None,
+                 keep=False):
         self.sock = os.path.join(tmp, "qmp.sock")
         self.pid = os.path.join(tmp, "qemu.pid")
         self.pidn = None
@@ -221,10 +224,31 @@ class Q(object):
         # leaves the emulator running (three were, the first day)
         atexit.register(self.close)
         signal.signal(signal.SIGTERM, lambda n, f: sys.exit(128 + n))
-        subprocess.run(cmd, check=True)
+        self.srv = None
+        if os88qemu.MEGA:       # kern_mega: this socket answered by a Bochs
+            import os88qmpmega  # (tests/os88qmpmega.py) on mega.img; its
+            import re           # pool IS the memory above 1MB. Of `extra`,
+            nic = [re.search(r"iobase=(0x[0-9a-fA-F]+)", x)  # an NE2000 and
+                   for x in extra if "ne2k_isa" in x]        # its port; any
+            if any("isa-debugcon" in x for x in extra):      # other device
+                raise SystemExit("vidxms.Q: no isa-debugcon under kern_mega "
+                                 "(Bochs has no such device)")
+            self.srv = os88qmpmega.Server(
+                self.sock, self.pid, sysimg, apps, ne2k=bool(nic),
+                ne2k_io=int(nic[0].group(1), 16) if nic and nic[0] else None,
+                megs=mem if mem < 16 else None)
+            if keep:
+                xmcheck.keep(self.sock)
+            return
+        os88qemu.start(cmd, check=True)
         self.pidn = int(open(self.pid).read().strip())
+        if keep:                # one QMP connection for the run (xmcheck.keep)
+            xmcheck.keep(self.sock)
 
     def close(self):
+        xmcheck.keep(self.sock, False)
+        if getattr(self, "srv", None) is not None:
+            self.srv.close()
         if self.pidn:
             try:
                 os.kill(self.pidn, signal.SIGTERM)
@@ -240,7 +264,12 @@ class Q(object):
         return bytes(xmcheck.read_bytes(self.sock, linear, n))
 
     def readseg(self, seg, off, n):
-        return self.read((seg << 4) + off, n)
+        return self.read(os88qemu.lin(seg, off), n)
+
+    def lin(self, seg, off=0):
+        """SEG:OFF's linear address (os88qemu.lin: a selector's base under
+        kern_mega) - tests/dispcp.py and os88ui read through it"""
+        return os88qemu.lin(seg, off)
 
 
 def force_bios(tmp, sysimg):
@@ -304,6 +333,7 @@ def main():
         xmcheck.wait_desktop(q.sock, "vidxms")
         S = xmcheck.sym
         ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
+        mo = os88qemu.Mouse(q, S, q.hmp, after=0)   # SOAK-SPEED 15
         if a.arm == "bios":
             # THE ARM'S PREMISE, read and not assumed: XMEM.DRV attached at
             # tier 1, so no unreal mode was armed (CPU_F_UNREAL, 0x04) and
@@ -322,7 +352,7 @@ def main():
 
         # --- open B: and double-click the clip
         x, y = geom.drive_pt(q, "B", S)
-        xmcheck.dblclick(q.sock, x, y)
+        mo.dblclick(x, y)
         box = {}
 
         def diskwin():
@@ -332,11 +362,11 @@ def main():
                     return True
             return False
         wait(diskwin, "drive B's window", 30)
-        os88qemu.pace(q, 1)
+        os88qemu.ui_done(q, S, cap=1.0)     # (was pace(1): the listing)
         w = box["w"]
         i, _ = ui.entry("CLIP.V88", w)
         before = set(o.i for o in ui.windows())
-        xmcheck.dblclick(q.sock, *ui.row_xy(w, i - ui.scroll(w)))
+        mo.dblclick(*ui.row_xy(w, i - ui.scroll(w)))
 
         def player():
             for o in ui.windows():
@@ -424,10 +454,25 @@ def main():
             key that cannot be read leaves [vp_sel] where it was and says
             so (vp_seekto's .fail)"""
             s0 = rw("vp_sel")
+            t0 = q.read(0x41C, 2)                   # the BIOS ring's tail
+
+            def handled():
+                # the key went into the ring, the UI task took it and has
+                # finished with it - a refusal is that pass's own answer
+                kb = q.read(0x41A, 4)
+                return kb[2:4] != t0 and kb[0:2] == kb[2:4] and \
+                    os88qemu.ui_idle(q, S)
             q.hmp("sendkey right")
-            ok = os88qemu.acted(q, lambda: rw("vp_sel") != s0, secs=10,
-                                what="the next key", poll=0.05)
-            return ok and rw("vp_kload") == rw("vp_sel")
+            # NOT a 10-guest-s wait for a change that must not come (the
+            # refusing arms paid all of it): the change, or the key handled
+            # and the UI idle across two ticks, then a guest second's tail
+            os88qemu.acted(q, lambda: rw("vp_sel") != s0 or handled(),
+                           secs=10, what="the next key", poll=0.05)
+            if rw("vp_sel") == s0:
+                os88qemu.ui_done(q, S, cap=2.0)
+                os88qemu.acted(q, lambda: rw("vp_sel") != s0, secs=1.0,
+                               what="the next key", poll=0.05)
+            return rw("vp_sel") != s0 and rw("vp_kload") == rw("vp_sel")
 
         if a.arm == "livenox":
             # --- no pool: the streamed Live file plays in the window
@@ -440,8 +485,13 @@ def main():
                            "the worker would have read the disk")
             q.hmp("sendkey esc")
         elif a.arm in ("live", "liverep", "livevga4"):
-            # --- the hold whole, B: blank, and Play is LIVE
-            if rb("vp_xon") != 1:
+            # --- the hold whole, B: blank, and Play is LIVE. [vp_loaded] is
+            # stored BEFORE vp_xopen opens the hold, so the hold is waited
+            # for as arm xms waits for it below - read at once, a loaded
+            # soak box caught xon 0 in between and reported xon=1 in the
+            # same breath
+            if not os88qemu.acted(q, lambda: rb("vp_xon") == 1, secs=5,
+                                  what="the hold", poll=0.05):
                 sys.exit("vidxms: no hold was taken: %s" % state())
             wait(lambda: rb("vp_xfull") == 1, "the loader to finish", 120)
             q.hmp("change floppy1 %s raw" % blank)
@@ -533,7 +583,11 @@ def main():
             else:
                 print("   B: blank, no hold: the next key refused, as it must be")
         else:
-            # --- 1: the hold, and its first chunk
+            # --- 1: the hold, and its first chunk. [vp_loaded] is stored
+            # before the hold is opened, so a fast harness can read xon 0
+            # in between: wait for it (a guest second or two, not a race)
+            os88qemu.acted(q, lambda: rb("vp_xon") == 1, secs=5,
+                           what="the hold", poll=0.05)
             cap = rd("vp_xcap")
             print("   the hold: on=%d, %d bytes for a file of %d"
                   % (rb("vp_xon"), cap, size))

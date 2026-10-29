@@ -32,6 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88build                                            # noqa: E402
 import os88marty                                            # noqa: E402
+import os88fixture                                          # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88pkg
 import os88parts                                              # noqa: E402
@@ -51,6 +52,22 @@ PN_KB_Y1, PN_KB_Y2_FULL = 88, 155   # apps/piano's own constants
 _MAPS = {}
 
 
+def mega_arm(app):
+    """True when a kern_mega row (OS88_MEGA, docs/BOCHS.md) is reading the
+    package's kern_mega ARM rather than its shipped build: the arm is what
+    build/mega.img and build/megaapps.img carry (SPEC.md 20.18, $(MEGAPKGS) -
+    the Task Manager in SYSTEM/, Audio, Tracker, ...), assembled -DPKG_MEGA
+    into build/megak/apps/, and its bss is a different layout. A row that
+    boots a SCRATCH disk carrying the shipped build of an armed package
+    names it in $OS88_MEGA_SHIPPED (comma separated)."""
+    if not os.environ.get("OS88_MEGA"):
+        return False
+    if app in os.environ.get("OS88_MEGA_SHIPPED", "").split(","):
+        return False
+    return os.path.exists(os.path.join(ROOT, "build", "megak", "apps",
+                                       app + ".o88"))
+
+
 def _map(app, defines=()):
     """Every equate in a package, from nasm's own `[map]` on a temp copy.
 
@@ -60,6 +77,8 @@ def _map(app, defines=()):
     skipped the two games would be a gate that passes because it tested
     nothing. The map is also what tools/os88sym.py uses, for the same reason.
     """
+    if mega_arm(app) and "-DAPP_SMALL" not in defines:
+        defines = tuple(defines) + ("-DPKG_MEGA",)
     key = (app, tuple(defines))
     if key in _MAPS:
         return _MAPS[key]
@@ -94,6 +113,10 @@ def _map(app, defines=()):
                                         # too. Harmless for every other app -
                                         # nasm only reaches a -I when an
                                         # %include misses
+           "-I", os.path.join(ROOT, "drivers", "sound") + os.sep,
+                                        # ...and apps/realdmg sndpkg.inc from
+                                        # SOUND.DRV, on the same argument
+                                        # (tests/rdgmove.py maps its bss)
            "-I", os.path.join(ROOT, "build") + os.sep]
                                         # A C PACKAGE'S SHIM %includes THE
                                         # COMPILED C out of build/ (SPEC.md
@@ -172,7 +195,8 @@ def _map(app, defines=()):
     # and under the 8.3 name it ships as. Spelt as a table of one rather than
     # a rule, because the rule is "build/<app>.o88" and this is the exception
     # to it, not a second rule.
-    sub = os.path.join("build", "smallapp") if defines else "build"
+    sub = (os.path.join("build", "megak", "apps") if "-DPKG_MEGA" in defines
+           else os.path.join("build", "smallapp") if defines else "build")
     if app == "plan" and not defines:
         o88 = os88build.at(os.path.join("build", "planapp", "PLAN.O88"))
     else:
@@ -181,6 +205,8 @@ def _map(app, defines=()):
                                     "wirefleet": "wireflet"}.get(app, app)))
     if not os.path.isabs(o88):
         o88 = os.path.join(ROOT, o88)
+    if "-DPKG_MEGA" in defines:
+        o88 = _mega(app)            # the kern_mega arm (`_mega` above)
     #
     # ...AND A PART IS NOT THE IMAGE EITHER (SPEC.md 88.10.4). Clear Skies'
     # image is a LOADER now: it reads the parts and hands its identity to
@@ -335,6 +361,24 @@ def colour_gif(src="build/OS8088.GIF", dst=tempfile.gettempdir() + "/OS88COL.GIF
     return dst
 
 
+def _mega(app, small=False):
+    """The kern_mega ARM of APP, when the row runs on kern_mega
+    (OS88_MEGA, tests/megaport.txt) and APP has one ($(MEGAPKGS), built
+    -DPKG_MEGA into build/megak/apps/) - the image build/megaapps.img
+    carries. ITS LAYOUT IS NOT THE SHIPPED BUILD'S: the Task Manager's
+    `tm_cx` read 0x3B03 off the shipped map (dmgcull)."""
+    if small or not os.environ.get("OS88_MEGA"):
+        return None
+    bld = os88build.mega_build()        # the run's tree under a soak
+    p = os.path.join(bld, "megak", "apps", "%s.o88" % app)
+    return p if os.path.exists(p) else None
+
+
+def _defs(app, small):
+    return (("-DAPP_SMALL",) if small else
+            ("-DPKG_MEGA",) if _mega(app) else ())
+
+
 def bss_off(app, name, small=False):
     """The offset of a bss word from the start of the package's bss.
 
@@ -345,7 +389,7 @@ def bss_off(app, name, small=False):
     a 0x258-wide canvas with a stride of 0 and a claim "1.8 KB" out of a Paint
     holding 15.
     """
-    m = _map(app, ("-DAPP_SMALL",) if small else ())
+    m = _map(app, _defs(app, small))
     if name not in m:
         sys.exit("dispapps: %s has no symbol %s%s"
                  % (app, name, " in the APP_SMALL build" if small else ""))
@@ -363,7 +407,7 @@ def sym(app, name, small=False):
 
     `small=True` maps the `-DAPP_SMALL` build, WHICH IS A DIFFERENT LAYOUT.
     """
-    m = _map(app, ("-DAPP_SMALL",) if small else ())
+    m = _map(app, _defs(app, small))
     if name not in m:
         sys.exit("dispapps: %s has no symbol %s%s"
                  % (app, name, " in the APP_SMALL build" if small else ""))
@@ -380,11 +424,13 @@ def img_size(app, small=False):
     something: a header whose +8 disagrees with the bytes it describes is a
     layout that has moved. It just has to be told what the bytes are first.
     """
-    sub = os.path.join("build", "smallapp") if small else "build"
+    sub = os.path.join("build", "smallapp") if small else (
+        os.path.join("build", "megak", "apps") if mega_arm(app) else "build")
     p = os88build.at("%s/%s.o88" % (sub.replace(os.sep, "/"),
                                     {"solitaire": "solitair"}.get(app, app)))
     if not os.path.isabs(p):
         p = os.path.join(ROOT, p)
+    p = _mega(app, small) or p
     raw = open(p, "rb").read()
     if raw[:2] != b"O8":
         sys.exit("dispapps: %s is not a package image" % p)
@@ -397,7 +443,16 @@ def img_size(app, small=False):
 
 
 def pkg_seg(m, want):
-    """The segment of a visible PACKAGE window, newest last."""
+    """(slot, seg) of a visible PACKAGE window, newest last - or None.
+
+    `seg` is an os88marty.LiveSeg: an int with the value W_SEG held when this
+    was asked, which also carries the kernel word it came from. words() and
+    dosmap.rect() read THROUGH that word in one compactor-safe snapshot
+    (os88marty.seg_snap), so a seg banked here and read after a compaction
+    reads the region where it is now. Doing `seg << 4` yourself gets the old
+    snapshot and the torn pair with it - read through a helper, or through
+    os88marty.pkg_read(m, slot, off, n).
+    """
     b = m.read(S("wm_wins"), os88geom.MAX_WIN * os88geom.WIN_SIZE)
     out = []
     for i in range(os88geom.MAX_WIN):
@@ -405,7 +460,8 @@ def pkg_seg(m, want):
         fl = int.from_bytes(b[o + os88geom.W_FLAGS:o + os88geom.W_FLAGS + 2], "little")
         seg = int.from_bytes(b[o + os88geom.W_SEG:o + os88geom.W_SEG + 2], "little")
         if fl & 3 == 3 and seg:
-            out.append((i, seg))
+            out.append((i, os88marty.LiveSeg(
+                seg, m, S("wm_wins") + o + os88geom.W_SEG)))
     return out[want] if len(out) > want else None
 
 
@@ -417,25 +473,34 @@ BYTES = set(["mc_mono", "mc_ecoarse", "mc_expfr", "ark_bpp", "sol_bpp",
 
 
 def words(m, seg, app, names):
+    """{name: value} of the package's bss words (or BYTES), all from ONE
+    snapshot - re-resolved through the window record when `seg` is
+    pkg_seg's LiveSeg (os88marty.live_reads)."""
     base = img_size(app)
-    out = {}
-    for n in names:
-        n_b = 1 if n in BYTES else 2
-        out[n] = int.from_bytes(
-            m.read((seg << 4) + base + bss_off(app, n), n_b), "little")
-    return out
+    spans = [(base + bss_off(app, n), 1 if n in BYTES else 2) for n in names]
+    raw = os88marty.live_reads(m, seg, spans)
+    return {n: int.from_bytes(r, "little") for n, r in zip(names, raw)}
 
 
 def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--machine", default="os8088_xt_vga")
     ap.add_argument("--image", default="build/os8088-360.img")
-    ap.add_argument("--apps", default="build/apps360.img")
+    ap.add_argument("--apps", default=None,
+                    help="default: apps360.img plus PIANO.O88, MISSILE.O88 (SPEC.md 24.6.1 "
+                    "took it off), on a disk of this run's own")
     a = ap.parse_args(argv)
+    if a.apps is None:
+        a.apps = os88fixture.apps360_plus(
+            "APPS:build/piano.o88", "GAMES:build/missile.o88", tag="dispapps")
 
     fail = []
     say = lambda s: print("  " + s)
-    settle = os88marty.settle
+    # EVERY ASSERTION IS A PACKAGE'S BSS OR A WINDOW RECORD, with three games
+    # drawing on their own clocks the whole time - so the wait after an
+    # action is ui_task's pass ending, lock not asked (ui_done lock=False),
+    # and the facts a switch changes are QUIESCED where they are read.
+    settle = lambda m, card=None, gate=None: os88marty.ui_done(m, lock=False)
     watch = {"taskmgr": ["tm_cols", "tm_colrows", "tm_col2rows", "tm_maxrow"],
              "arkanoid": ["ark_bw", "ark_bh", "ark_rows", "ark_pw0",
                           "ark_bpp"],
@@ -443,7 +508,10 @@ def main(argv):
                            "sol_bpp"],
              "missile": ["mc_mono", "mc_ecoarse", "mc_expfr", "mc_caps"],
              "piano": ["pn_kby2", "pn_bky2"]}
-    with os88marty.launch(a.image, apps=a.apps, machine=a.machine) as m:
+    with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
+                          boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # the first act is a click
         mo = os88mouse.Mouse(marty=m)
         if dispfit.kind(m) != VID_VGA:
             sys.exit("dispapps: %s did not come up on the VGA" % a.machine)
@@ -525,6 +593,8 @@ def main(argv):
 
         dispcp.open_panel(m, mo, S, settle)
         dispfit.switch_to(m, mo, settle, 1, VID_CGA)
+        allw = lambda: [words(m, segs[a], a, watch[a]) for a in sorted(segs)]
+        os88marty.quiesce(m, allw, guest=0.5, what="the packages' facts")
         after = dict((a, words(m, segs[a], a, watch[a])) for a in segs)
         for a in sorted(after):
             say("CGA  %-10s %r" % (a, after[a]))
@@ -571,6 +641,7 @@ def main(argv):
                         % (before["piano"]["pn_kby2"], PN_KB_Y2_FULL))
 
         dispfit.switch_to(m, mo, settle, 0, VID_VGA)
+        os88marty.quiesce(m, allw, guest=0.5, what="the packages' facts")
         back = dict((a, words(m, segs[a], a, watch[a])) for a in segs)
         for a in sorted(back):
             say("VGA  %-10s %r" % (a, back[a]))

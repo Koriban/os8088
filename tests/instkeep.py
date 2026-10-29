@@ -101,8 +101,10 @@ def check(vhd):
     # A TYPEFACE ONLY WHERE THE FLOPPY HAS ONE: the 360KB system disk gave
     # SYSTEM/FONTS to office360.img (SPEC.md 24.3.1.5), so an install off it
     # has none to copy - which that section says in as many words
+    # (the floppy is mega.img on kern_mega: os88marty.system_disk)
+    floppy = M.system_disk(os88build.at("build/os8088-360.img"))
     fonts = any(q.startswith("SYSTEM/FONTS/") for q in ID.Vol(open(
-        os88build.at("build/os8088-360.img"), "rb").read()).tree())
+        floppy, "rb").read()).tree())
     for p in ("COMMAND.COM", "IO.SYS", "SYSTEM/TASKMGR.O88", "APPS") + (
             ("SYSTEM/FONTS/TALLX.F88",) if fonts else ()):
         if p not in tree:
@@ -110,7 +112,7 @@ def check(vhd):
     if "KPAD.TMP" in tree:
         bad.append("the allocator's pad KPAD.TMP was left behind")
 
-    src = ID.Vol(open(os88build.at("build/os8088-360.img"), "rb").read())
+    src = ID.Vol(open(floppy, "rb").read())
     want = src.read("KERNEL.SYS")
     got = v.read("KERNEL.SYS")
     if got != want:
@@ -160,10 +162,9 @@ def main():
 
     # 1. FROM THE FLOPPY, onto the DOS partition, keeping it.
     with M.launch("build/os8088-360.img", apps="build/apps360.img",
-                  machine=ID.MACHINE, run_dir=run_dir) as m:
-        M.settle(m)
-        mo, ix, iy = ID.open_installer(m)
-        ID.run_install(m, mo, ix, iy)           # the box as it defaults: KEEP
+                  machine=ID.MACHINE, run_dir=run_dir, boot=False) as m:
+        m.run(); M.kernel_up(m)       # a state gate: every act is a click
+        ID.run_install(m, ID.open_installer(m))           # the box as it defaults: KEEP
     bad = check(vhd)
     if bad:
         sys.exit("instkeep: " + "; ".join(bad))
@@ -186,8 +187,7 @@ def main():
         boot_c(m, "after the kept install")
         m.run()                                 # advance() left it paused
         M.settle(m)
-        mo, ix, iy = ID.open_installer(m)
-        ID.run_install(m, mo, ix, iy)
+        ID.run_install(m, ID.open_installer(m))
     if open(vhd, "rb").read(512)[400] != 0:
         sys.exit("instkeep: the in-place upgrade never committed its MBR")
     bad = check(vhd)

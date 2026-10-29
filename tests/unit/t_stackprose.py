@@ -134,7 +134,8 @@ def kernel_constants(arm="big"):
 # space-only pattern walked straight past it.
 WORKER = [
     re.compile(r'(\d[\d,]*)[-\s]+byte(?:s)?\s+(?:task|worker)[-\s]+(?:stack|slice)', re.I),
-    re.compile(r"(?<!UI )(?:task|worker)(?:'s)?(?:\s+[\w']+){0,2}[-\s]+(?:stack|slice)\s+is\s+(?:\*\*)?(\d[\d,]*)(?:\*\*)?\s+bytes", re.I),
+    # `(?!\s+0\b)`: "task 0's stack is 512 bytes" is TASK0's, not a worker's
+    re.compile(r"(?<!UI )(?:task|worker)(?!\s+0\b)(?:'s)?(?:\s+[\w']+){0,2}[-\s]+(?:stack|slice)\s+is\s+(?:\*\*)?(\d[\d,]*)(?:\*\*)?\s+bytes", re.I),
     re.compile(r'worker\s+(?:gets|owns|has)\s+(?:\*\*)?(\d[\d,]*)(?:\*\*)?[-\s]*(?:bytes|BYTES)', re.I),
     re.compile(r'(?:task|worker)(?:\'s)?[-\s]+stacks?\s+(?:are|is)\s+(\d[\d,]*)\s+bytes', re.I),
     re.compile(r'(?:worker|task)[^.\n]{0,40}?has\s+(\d[\d,]*)\s+bytes of stack', re.I),
@@ -144,6 +145,7 @@ WORKER = [
 # bug: a package's window callbacks run on 1,024 bytes, its worker on 384.
 TASK0 = [
     re.compile(r'task 0\'s\s+(\d[\d,]*)[-\s]+byte\s+stack', re.I),
+    re.compile(r'task 0\'s\s+stack\s+is\s+(\d[\d,]*)\s+bytes', re.I),
     re.compile(r'UI task\'s\s+stack\s+is\s+(\d[\d,]*)[-\s]*byte', re.I),
     re.compile(r'UI task\'s\s+stack\s+is\s+(\d[\d,]*)\s+bytes', re.I),
     re.compile(r'package\'s\s+stack\s+is\s+(\d[\d,]*)\s+bytes', re.I),
@@ -205,6 +207,15 @@ def scan():
             # verbatim runs and collapses each line leader to one space;
             # `segs` records where each run started in both texts, so a match
             # offset is turned into a line by two bisects rather than a scan.
+            # The flat text alone is one C-speed `sub` (it is exactly what the
+            # loop below joins); the map back to lines is built only for a
+            # file in which some pattern matched - most match nothing.
+            text = leader.sub(" ", raw)
+            found = [(kind, m) for kind, pats in (("task0", TASK0),
+                                                  ("worker", WORKER))
+                     for pat in pats for m in pat.finditer(text)]
+            if not found:
+                continue
             parts, segs, flat_len, pos = [], [], 0, 0
             for m in leader.finditer(raw):
                 chunk = raw[pos:m.start()]
@@ -217,7 +228,7 @@ def scan():
                 pos = m.end()
             segs.append((flat_len, pos))
             parts.append(raw[pos:])
-            text = "".join(parts)
+            assert "".join(parts) == text
 
             nl = [m.start() for m in _NL.finditer(raw)]
             fstarts = [f for f, _ in segs]
@@ -229,19 +240,17 @@ def scan():
 
             srclines = raw.split("\n")
             seen = set()
-            for kind, pats in (("task0", TASK0), ("worker", WORKER)):
-                for pat in pats:
-                    for m in pat.finditer(text):
-                        no = lineof(m.start())
-                        val = int(m.group(1).replace(",", ""))
-                        if (no, val) in seen:
-                            continue
-                        seen.add((no, val))
-                        # the SOURCE line, not the matched fragment: HISTORY
-                        # registers a snippet of the line a reader sees, and
-                        # after normalisation m.group(0) is neither.
-                        src = srclines[no - 1] if no <= len(srclines) else ""
-                        hits.append((rel, no, val, kind, src.strip()))
+            for kind, m in found:
+                no = lineof(m.start())
+                val = int(m.group(1).replace(",", ""))
+                if (no, val) in seen:
+                    continue
+                seen.add((no, val))
+                # the SOURCE line, not the matched fragment: HISTORY
+                # registers a snippet of the line a reader sees, and
+                # after normalisation m.group(0) is neither.
+                src = srclines[no - 1] if no <= len(srclines) else ""
+                hits.append((rel, no, val, kind, src.strip()))
     return hits
 
 

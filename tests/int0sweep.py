@@ -27,7 +27,8 @@ def frame(mm, rec):
     to happen here, which is what `on_hit` is for.
     """
     r = rec["regs"]
-    stk = mm.read((r["ss"] << 4) + r["sp"], 12)
+    lin = getattr(mm, "lin", lambda s_, o=0: (s_ << 4) + o)  # kern_mega:
+    stk = mm.read(lin(r["ss"], r["sp"]), 12)                  # a selector
     hits.append(([stk[j] | stk[j+1] << 8 for j in range(0, 12, 2)], r["bx"]))
     return None
 def check(m, where):
@@ -50,7 +51,11 @@ def check(m, where):
     return False
 
 with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
-                      machine=os88marty.machine("os8088_5150_cga")) as m:
+                      machine=os88marty.machine("os8088_5150_cga"),
+        boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     mo = os88mouse.Mouse(marty=m)
     # THE WHOLE SWEEP RUNS INSIDE THE TRACE, and it has to: every step below
     # drives the UI through os88ui/os88mouse verbs that confirm against

@@ -46,8 +46,10 @@ import glass                                                 # noqa: E402
 WORK = os88build.at("build/sheetundo")                # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetundo.img")
 CELLS = {(0, 0): 1.0, (1, 0): 2.0, (0, 1): 'x'}
-EDIT = (123, 45)
-ITEM = lambda i: (140, 57 + 12 * i + 2)     # the Edit menu's rows, measured
+# CGA points; on kern_mega's VGA (tests/megaport.txt) SHEET opens SHEET_DY
+# lower and every point in it moves with it (sheetfmt.mega_y)
+EDIT = SF.mega_y((123, 45), SF.SHEET_DY)
+ITEM = lambda i: SF.mega_y((140, 57 + 12 * i + 2), SF.SHEET_DY)  # measured
 UNDO, COPY, PASTE, CLEAR, INSERT = 0, 2, 3, 4, 8
 
 
@@ -56,8 +58,7 @@ def build_disk():
     src = os.path.join(WORK, "SHIN.SLK")
     open(src, "wb").write(F.write_sylk(CELLS))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK,
-                    "--size", "360", "APPS:build/sheet.o88",
-                    "APPS:build/CHART.OVL", "APPS:build/MACRO.OVL", "APPS:" + src],
+                    "--size", "360", "APPS:build/sheet.o88", "APPS:" + src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

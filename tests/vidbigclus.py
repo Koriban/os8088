@@ -131,10 +131,14 @@ def main():
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", bimg,
                         "--size", "360", "APPS:" + os88build.at("build/video.o88")],
                        check=True, capture_output=True)
+        # ...and upstream's `boot=False` comes with it: the body below calls
+        # m.run() itself, so letting launch boot as well would boot twice.
         with M.launch(sysimg, apps=bimg,
-                      machine=MACHINE, run_dir=run_dir) as m:
+                      machine=MACHINE, run_dir=run_dir, boot=False) as m:
             ui = os88ui.UI(m)
-            ui.ready(limit=300)
+            m.run()                 # a quick boot: STATE is the gate
+            ui.up(limit=300)
+            M.no_saver(m)
             w = ui.path("C:/MEDIA/OS8088.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)

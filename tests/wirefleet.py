@@ -7,6 +7,7 @@ The negative cases require a successful placement first, so a routine that
 refuses everything cannot pass. Additional delivery waves extend this file.
 """
 import argparse
+import os
 from collections import Counter
 from pathlib import Path
 import subprocess
@@ -82,23 +83,26 @@ def effects():
 def deployment():
     from PIL import Image
     sy = dispapps._map('wirefleet')
-    for adapter, machine in (('vga', 'os8088_xt_vga'),
-                             ('cga', 'os8088_5150_cga'),
-                             ('herc', 'os8088_5150_herc')):
+    legs = (('vga', 'os8088_xt_vga'),
+            ('cga', 'os8088_5150_cga'),
+            ('herc', 'os8088_5150_herc'))
+    if os.environ.get('OS88_MEGA'):     # kern_mega's Bochs is a VGA alone
+        legs = legs[:1]                 # (tests/megaport.txt)
+    for adapter, machine in legs:
         with os88ui.boot(artifact('os8088-360.img'), apps=artifact('wireflet360.img'),
-                         machine=machine, settle=False) as ui:
+                         machine=machine, settle=False, quick=True) as ui:
             ui.open_drive('B')
             w = ui.open('WIREFLET.O88')
-            ui.settle()
+            ui.still()
             m = ui.m
             seg = dispapps.pkg_seg(m, 0)[1]
             def val(name, n=1):
                 return int.from_bytes(m.readseg(seg, sy['wf_' + name], n), 'little')
             def fleet():
                 return m.readseg(seg, sy['wf_board'], 100)
-            def key(name):
+            def key(name):          # (every read after is memory: still, not settle)
                 m.key(name)
-                ui.settle()
+                ui.still()
             def square(x, y, right=False):
                 px = val('ox', 2) + val('gx0', 2) + x*24 + 12   # 114.10 moves it
                 py = val('oy', 2) + val('gridy', 2) + y*val('cellh', 2) + val('cellh', 2)//2
@@ -107,7 +111,7 @@ def deployment():
                     ui.mo.to(px, py, r=False)
                 else:
                     ui.mo.click(px, py)
-                ui.settle()
+                ui.still()
             assert val('placed') == 0 and fleet() == bytes(100)
             assert val('colour') == (adapter == 'vga'), 'colour face on the wrong adapter (114.10)'
             assert val('controlsy', 2) + 26 <= val('h', 2), 'CGA controls/footer clipped'
@@ -143,14 +147,14 @@ def deployment():
             assert fleet() == before, 'Clear fired on press'
             ui.mo.to(val('ox',2)+290, val('oy',2)+12, l=True)
             ui.mo.to(val('ox',2)+290, val('oy',2)+12, l=False)
-            ui.settle()
+            ui.still()
             assert fleet() == before, 'cancelled Clear fired'
             key('KeyY')
             assert val('ready') == 1
             key('KeyC')
             assert fleet() == before and val('ready') == 1, 'Ready fleet remained editable'
             ui.menu_pick('WireFleet', 'About WireFleet')
-            ui.settle()
+            ui.still()
             assert val('abon') == 1
             key('Escape')
             assert val('abon') == 0

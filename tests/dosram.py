@@ -58,7 +58,11 @@ import os88mouse                                               # noqa: E402
 import os88ui                                                  # noqa: E402
 
 TEMPLATE = os.path.join(ROOT, "build/martypc/run/media/hdds/default_xtide.vhd")
-KERNEL = os.path.join(ROOT, "build", "kernel.sys")
+# kern_mega (tests/megaport.txt) boots ITS kernel, boot record, modules and
+# DOS.O88 off the fixed disk - megak/'s, the Makefile's $(MEGADIR)
+KB = os.path.join(ROOT, "build", "megak") if os.environ.get("OS88_MEGA") \
+    else os.path.join(ROOT, "build")
+KERNEL = os.path.join(KB, "kernel.sys")
 VHD = os.path.join(ROOT, "build", "dosram.vhd")
 FLOPPY = os.path.join(ROOT, "build", "dosram360.img")
 PROG = "DOSHELLO.COM"
@@ -86,19 +90,19 @@ def fail(msg):
 
 
 def fixture():
-    for p in (TEMPLATE, KERNEL, os.path.join(ROOT, "build/kdos/DOS.O88")):
+    for p in (TEMPLATE, KERNEL, os.path.join(KB, "kdos/DOS.O88")):
         if not os.path.exists(p):
             fail("%s is missing - `make kdostest` builds the DOS pieces and "
                  "`make marty` the template" % p)
     prog = os.path.join(ROOT, "build", PROG)
     subprocess.check_call(
         ["python3", "tools/os88hdd.py", "--template", TEMPLATE, "--out", VHD,
-         "--kernel", KERNEL, "--vbr", "build/boothd.bin",
+         "--kernel", KERNEL, "--vbr", os.path.join(KB, "boothd.bin"),
          "--mbr", "build/mbr.bin",
-         "--file", "HIBER.DRV=build/hiber.drv",
-         "--file", "CTRL.DRV=build/ctrl.drv",
+         "--file", "HIBER.DRV=" + os.path.join(KB, "hiber.drv"),
+         "--file", "CTRL.DRV=" + os.path.join(KB, "ctrl.drv"),
          "--file", "HDD.DRV=build/hdd.drv",
-         "--file", "DOS.O88=build/kdos/DOS.O88",
+         "--file", "DOS.O88=" + os.path.join(KB, "kdos/DOS.O88"),
          "--file", "%s=%s" % (PROG, prog),
          "--file", "SYSTEM.CFG=" + syscfg()], cwd=ROOT)
     subprocess.check_call(
@@ -134,24 +138,29 @@ def main():
     fixture()
 
     m = M.launch(None, apps=FLOPPY, machine=a.machine,
-                 extra=["--mount", "hd:0:" + VHD])
+                 extra=["--mount", "hd:0:" + VHD], boot=False)
     try:
-        ui = os88ui.UI(m)
-        ui.ready(limit=240)
+        m.run()                         # the boot gate on STATE: every read
+        ui = os88ui.UI(m)               # in this row is the DOS package's
+        ui.up(limit=240)                # bss or the text screen, so every
+        M.no_saver(m)                   # wait after an input is ui_done
+        M.ui_done(m)
         mo = os88mouse.Mouse(marty=m)
-        # **OPEN THE PROGRAM, NOT THE BOX** (SPEC.md 54): a double click on a
+        # **OPEN THE PROGRAM, NOT DOS** (SPEC.md 54): a double click on a
         # .COM opens a DOS window already pointed at it, which is what every
         # kd* row does - typing a path into the arguments field opens nothing
         # and the Run below then has no program.
         if not ui.path("C:/" + PROG):
             fail("double-clicking %s on the fixed disk opened no window"
                  % PROG)
-        M.settle(m)
+        # (no wait here: the open RUNS the program, inside its own fsx
+        # bracket, so the UI does not idle until the key below - the
+        # `inbr` until is the wait)
         dm = dosmap.package()
         ps = dosmap.instance(m)
 
-        def pb():
-            return dosmap.instance(m) << 4
+        def pb():                       # (a selector on kern_mega)
+            return dosmap.lin(m, dosmap.instance(m))
 
         def byte(n):
             return m.read(pb() + dm[n], 1)[0]
@@ -172,11 +181,14 @@ def main():
                 fail("the arena row reads %r and should be digits and a KB - "
                      "the page has never been painted (SPEC.md 96.36.3)" % raw)
 
-        # **AN ASSOCIATION OPEN OF A `.COM` RUNS IT** (SPEC.md 54), so the box
+        if getattr(m, "bochs", False):
+            return mega(m, ui, mo, ps, dm, pb, byte, arena)
+
+        # **AN ASSOCIATION OPEN OF A `.COM` RUNS IT** (SPEC.md 54), so DOS
         # arrives inside its own fsx bracket with the program's output on the
-        # screen - no window, no page, and every read below would be of a box
+        # screen - no window, no page, and every read below would be of a DOS
         # that has not painted one.  DOSHELLO waits on AH=08h so its screen
-        # can be read; a key dismisses it and leaves the box with the program
+        # can be read; a key dismisses it and leaves DOS with the program
         # still NAMED, which is exactly the state arm 3 wants.
         def inbr(_=None):
             return m.read(pb() + dm["dos_inbr"], 1)[0]
@@ -184,10 +196,10 @@ def main():
         M.until(m, inbr, "%s to be running" % PROG, limit=120.0, guest=240.0)
         m.type_text(" ")
         M.until(m, lambda _=None: not inbr(), "%s to exit" % PROG, limit=120.0)
-        M.settle(m)
+        M.ui_done(m)
 
         mo.click(*dosmap.centre(m, ps, dm, "dos_erect"))
-        M.settle(m)
+        M.ui_done(m)
         if byte("dos_page") != dm["DOS_PAGE_SET"]:
             fail("the bar's button left [dos_page] = %d and Setup is %d"
                  % (byte("dos_page"), dm["DOS_PAGE_SET"]))
@@ -208,7 +220,7 @@ def main():
         before = arena()
         r = rect("dos_mhdd")
         mo.click(r[0] + 4, r[1] + 5)
-        M.settle(m)
+        M.ui_done(m)
         if m.read(pb() + dm["dos_mhdd"] + CK_ON, 1)[0]:
             fail("a press inside the Hard drives box did not clear it - the "
                  "box is live on this machine (SPEC.md 96.36.7)")
@@ -221,7 +233,7 @@ def main():
         print("dosram: clearing the box moved the row %d -> %d, exactly its "
               "own %d K" % (before, after, hdkb))
         mo.click(r[0] + 4, r[1] + 5)            # ...and back
-        M.settle(m)
+        M.ui_done(m)
         if arena() != before:
             fail("re-ticking the box left the arena at %d and it was %d"
                  % (arena(), before))
@@ -301,10 +313,10 @@ def main():
         lim = before - 11
         fr = rect("dos_mln")
         mo.click((fr[0] + fr[2]) // 2, (fr[1] + fr[3]) // 2)
-        M.settle(m)
+        M.ui_done(m)
         for ch in str(lim):
             m.type_text(ch)
-        M.settle(m)
+        M.ui_done(m)
         if word("dos_memkb") != lim:
             fail("typing %d into the limit field left [dos_memkb] = %d - the "
                  "keystroke never reached dos_mem_parse (SPEC.md 96.36.10)"
@@ -319,20 +331,20 @@ def main():
               % (lim, before, arena()))
         for _ in str(lim):
             m.type_text("\b")
-        M.settle(m)
+        M.ui_done(m)
         if word("dos_memkb") or arena() != before:
             fail("clearing the limit left [dos_memkb] = %d and the row at %d, "
                  "where an empty field means NO cap and the row should be "
                  "back at %d" % (word("dos_memkb"), arena(), before))
         for ch in str(lim):                     # ...and set again, STANDING,
             m.type_text(ch)                     # for 2a below
-        M.settle(m)
+        M.ui_done(m)
 
         # --- 2: ARM 1's estimate, against what the machine really hands over --
         rr = rect("dos_mrad")
         pitch = int.from_bytes(m.read(pb() + dm["dos_mrad"] + 14, 2), "little")
         mo.click((rr[0] + rr[2]) // 2, rr[1] + pitch + pitch // 2)
-        M.settle(m)
+        M.ui_done(m)
         if byte("dos_keepc") != 1:
             fail("clicking the Shut down the OS arm left the pick at %d"
                  % byte("dos_keepc"))
@@ -363,7 +375,7 @@ def main():
         # ...and a press on it belongs to the ARM under it, not to the field
         fr = rect("dos_mln")
         mo.click((fr[0] + fr[2]) // 2, (fr[1] + fr[3]) // 2)
-        M.settle(m)
+        M.ui_done(m)
         if m.read(pb() + dm["dos_mln"] + LN_FOCUS, 1)[0]:
             fail("a press on the greyed limit field took the caret - a greyed "
                  "control says nothing more, and the press belongs to the arm "
@@ -374,7 +386,7 @@ def main():
                  "the way a press on a greyed check box does (SPEC.md 96.36.4)"
                  % byte("dos_keepc"))
         mo.click((rr[0] + rr[2]) // 2, rr[1] + pitch + pitch // 2)   # back
-        M.settle(m)
+        M.ui_done(m)
         if byte("dos_keepc") != 1:
             fail("could not get back to arm 1 after the fall-through test")
         print("dosram: the limit greys with its arm, keeps no caret, and "
@@ -384,7 +396,7 @@ def main():
         print("dosram: the page promises ~%d K on arm 1" % promised)
 
         mo.click(*dosmap.centre(m, ps, dm, "dos_trect"))         # Return
-        M.settle(m)
+        M.ui_done(m)
         mo.click(*dosmap.centre(m, ps, dm, "dos_rrect"))         # ...and Run
 
         # The handoff tears the whole machine down and `kern_dos` boots in its
@@ -428,6 +440,69 @@ def main():
                                         # holding the screen
     finally:
         m.close()
+    return 0
+
+
+def handed(m, limit=300.0):
+    """What DOSHELLO says `int 21h AH=4Ah` gave it, off the text screen."""
+    want = "Memory to top of block:"
+
+    def said(_=None):
+        try:
+            return any(want in r for r in (m.screen() or []))
+        except Exception:                                      # noqa: BLE001
+            return False                                       # mid-teardown
+    M.until(m, said, "the program to run under kern_dos", limit=limit,
+            guest=900.0)
+    for r in (m.screen() or []):
+        if want in r:
+            return int(r.split(want, 1)[1].strip().split()[0])
+    return None
+
+
+def mega(m, ui, mo, ps, dm, pb, byte, arena):
+    """kern_mega (tests/megaport.txt): ONE ARM. A protected-mode kernel cannot
+    run a DOS program inside itself, so every launch is the whole machine -
+    the kernel parked above 1MB, kern_dos in the HMA - and the page draws no
+    radio and no arm-0 controls at all (apps/dos/dos.asm's dos_mem_fix,
+    KERN-MEGA-DOS-PLAN 12.1 item 1). Legs 1, 1b, 1c and 2a are arm 0's and
+    have nothing to read here by design; leg 2 is the trip's own and is the
+    same question: the figure the page PROMISES is the figure kern_dos
+    HANDS the program, within the same slack."""
+    first = handed(m)               # the association open RAN it, on a trip
+    print("dosram: on kern_mega the open ran the program on a trip: %s K"
+          % first)
+    m.type_text(" ")                # DOSHELLO waits on AH=08h; the trip ends
+    M.until(m, lambda _=None: [w for w in ui.windows()
+                               if w.title.startswith("DOS")],
+            "the desktop and DOS's window back after the trip", guest=120.0)
+    M.ui_done(m)
+    mo.click(*dosmap.centre(m, dosmap.instance(m), dm, "dos_erect"))
+    M.ui_done(m)
+    if byte("dos_page") != dm["DOS_PAGE_SET"]:
+        fail("the bar's button left [dos_page] = %d and Setup is %d"
+             % (byte("dos_page"), dm["DOS_PAGE_SET"]))
+    if byte("dos_keepc") != 1:
+        fail("kern_mega's one arm is the whole machine (DOS_MEM_WHOLE, "
+             "dos_mem_fix) and [dos_keepc] reads %d" % byte("dos_keepc"))
+    promised = arena()
+    print("dosram: the page promises ~%d K on the trip" % promised)
+    mo.click(*dosmap.centre(m, dosmap.instance(m), dm, "dos_trect"))
+    M.ui_done(m)
+    mo.click(*dosmap.centre(m, dosmap.instance(m), dm, "dos_rrect"))
+    got = handed(m)
+    print("dosram: the machine handed the program %d K" % got)
+    if not got:
+        fail("the program reports an arena of 0 - kern_dos never got as far "
+             "as dos_build_psp, so there is nothing here about memory")
+    if abs(got - promised) > SLACK:
+        fail("the page promised ~%d K on kern_mega's trip and the machine "
+             "handed out %d K, a drift of %d against a slack of %d "
+             "(SPEC.md 96.36.3: the estimate's terms are DOS_MEGA's)"
+             % (promised, got, got - promised, SLACK))
+    print("dosram: ok - promised ~%d K, got %d K (slack %d)"
+          % (promised, got, SLACK))
+    m.type_text(" ")
     return 0
 
 

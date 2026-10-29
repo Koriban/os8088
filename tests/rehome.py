@@ -114,10 +114,17 @@ def claims(m, S):
     return heapmap.Map(m, {n: S(n) for n in
                            ("mem_base", "mem_top", "spl_live", "mem_tab")})
 
-with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
+def UD(m, **_):            # every read below is guest memory
+    return os88marty.ui_done(m)
+
+
+with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
+    m.run()
+    os88marty.kernel_up(m)      # the boot gate on STATE (SOAK-SPEED 4)
+    os88marty.no_saver(m)
     S = m.sym
     mo = os88mouse.Mouse(marty=m)
-    dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+    dispcp.open_drive(m, mo, S, UD, "B")
     wx, wy = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])[:2]
     rows = dispcp.listing(m, S)
     if not any(n.upper() == "REHOME.O88" for n, _ in rows):
@@ -126,8 +133,8 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
 
     before = claims(m, S)
     wins_before = dispcp.win_list(m, S)
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "REHOME.O88")
-    os88marty.settle(m)
+    dispcp.open_named(m, mo, S, UD, wx, wy, "REHOME.O88")
+    os88marty.ui_done(m)
     status = m.read(S("ld_status"), 1)[0]
     after = dispcp.win_list(m, S)
     say("ld_status = %d, windows %r -> %r" % (status, wins_before, after))
@@ -141,6 +148,17 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     slot = after[-1]
     rec = m.read(S("wm_wins") + slot * dispcp.WIN_SIZE, dispcp.WIN_SIZE)
     wseg = struct.unpack_from("<H", rec, os88geom.W_SEG)[0]
+    # ON kern_mega (tests/megaport.txt) W_SEG and I_SPTR are an LDT SELECTOR,
+    # and every assertion below that does arithmetic on the segment means
+    # the PARAGRAPH it names - mem_tab's MC_SEG is a real paragraph there too
+    # (its selectors are mem_sel, beside it). So `wsel` is the name the
+    # kernel keeps and `wseg` the paragraph; they are the same number on
+    # every other kernel. A region above 1MB would be a pool block mem_tab
+    # never sees, and the checks below would say so.
+    wsel = wseg
+    para = (lambda sg: m.lin(sg) >> 4) if getattr(m, "bochs", False) \
+        else (lambda sg: sg)
+    wseg = para(wsel)
     toff = struct.unpack_from("<H", rec, os88geom.W_TITLE)[0]
     title = m.read((wseg << 4) + toff, 24).split(b"\0")[0].decode(
         "ascii", "replace")
@@ -179,7 +197,14 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     # and no claim may start there any more.
     now = claims(m, S)
     at_base = wseg in [c.seg for c in now.claims]
-    rp_carve = struct.unpack_from("<H", m.read((wseg << 4) + P0_IMG + 4, 2))[0]
+    rp_raw = struct.unpack_from("<H", m.read((wseg << 4) + P0_IMG + 4, 2))[0]
+    rp_carve = para(rp_raw)
+    if rp_raw == wsel != wseg:
+        # kern_mega: the loader recorded its carve's SELECTOR, and the trim
+        # RE-BASES that same selector onto the program (mem_reown_x keeps a
+        # claim's name) - so it names the program now and the carve's old
+        # base is the head slack below it, which the FILE says (_slack)
+        rp_carve = wseg - _slack // 16
     say("the program is %s the carve's base; the loader recorded the carve at "
         "%04X (head slack %d paragraphs)"
         % ("AT" if at_base else "INSIDE", rp_carve, wseg - rp_carve))
@@ -215,9 +240,9 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     for i in range(heapmap.INST_MAX):
         r = m.read(S("inst_tab") + i * os88geom.I_RECSZ, os88geom.I_RECSZ)
         if r[os88geom.I_STATE] and (r[os88geom.I_KIND] & KIND_PKG) \
-                and struct.unpack_from("<H", r, os88geom.I_SPTR)[0] == wseg:
+                and struct.unpack_from("<H", r, os88geom.I_SPTR)[0] == wsel:
             inst = i
-    say("instance slot %r has I_SPTR = %04X" % (inst, wseg))
+    say("instance slot %r has I_SPTR = %04X" % (inst, wsel))
     if inst is not None:
         rec = m.read(S("inst_tab") + inst * os88geom.I_RECSZ, os88geom.I_RECSZ)
         isize = struct.unpack_from("<H", rec, os88geom.I_SIZE)[0]
@@ -237,7 +262,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
         fails.append(
             "no live KIND_PKG instance has I_SPTR = %04X, so step 9 published "
             "the loader's segment and not the program's - [ld_base] was not "
-            "moved before .call8 (SPEC.md 20.12.10.1)" % wseg)
+            "moved before .call8 (SPEC.md 20.12.10.1)" % wsel)
 
     grew = len(now.claims) - len(before.claims)
     say("claims %d -> %d (+%d): %s"
@@ -347,7 +372,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE) as m:
     import os88ui
     ui = os88ui.UI(m, mouse=mo, sym=S)
     ui.menu_pick("REHOMED", "Close")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     end = claims(m, S)
     say("free runs before %r, after close %r"
         % ([(b, p) for b, p in before.runs()], [(b, p) for b, p in end.runs()]))

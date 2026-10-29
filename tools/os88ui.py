@@ -122,6 +122,8 @@ class _Booted(object):
     def __enter__(self):
         m = self._cm.__enter__()
         try:
+            if self._kw.get("quick"):   # (launched PAUSED: `up` is the gate)
+                m.run()
             ui = UI(m, card=self._kw.get("card"),
                     verbose=self._kw.get("verbose", True))
             limit = self._kw.get("limit", 180.0)
@@ -133,6 +135,8 @@ class _Booted(object):
             # healthy boot and fails on a slow one, which is the worst
             # available split.
             ui.up(limit=limit)
+            if hasattr(m, "toast_out"):     # kern_mega's boot toast (Bochs)
+                m.toast_out()
             if not self._kw.get("saver", False):
                 os88marty.no_saver(m)
             if self._kw.get("settle", True):
@@ -148,7 +152,7 @@ class _Booted(object):
 
 def boot(image, apps=None, machine="os8088_5150_cga", card=None,
          saver=False, why_ibm=None, verbose=True, limit=180.0, settle=True,
-         **kw):
+         quick=False, **kw):
     """Launch, boot to a settled desktop, turn the saver off, hand back a UI.
 
     THE THREE LINES 175 SCRIPTS OPEN WITH, and the two things most of them
@@ -173,14 +177,23 @@ def boot(image, apps=None, machine="os8088_5150_cga", card=None,
         step is confirmed off guest state - every os88ui verb is - does not
         need the screen to stop moving first, and the settle was the one
         long input-free wait such a row had.
+      * `quick=True` goes further and skips `launch`'s OWN boot settle too
+        (it implies `settle=False`): the machine is launched paused, run, and
+        `up` - the kernel's desktop STATE, [spl_live] = 0 - is the whole
+        gate. Measured on the VGA XT, 360KB: `up` at 15 guest seconds against
+        launch's picture settle at ~30. Only for a row whose first act is an
+        os88ui verb or a guest read, never a framebuffer compare.
 
     Everything else is `os88marty.launch`'s, passed straight through.
     """
+    if quick:
+        settle = False
+        kw.setdefault("boot", False)
     cm = os88marty.launch(image, apps=apps,
                           machine=os88marty.machine(machine, why_ibm),
                           card=card, **kw)
     return _Booted(cm, card=card, saver=saver, verbose=verbose, limit=limit,
-                   settle=settle)
+                   settle=settle, quick=quick and not kw.get("boot"))
 
 
 # =============================================================================
@@ -218,6 +231,13 @@ class UI:
 
     def _byte(self, name):
         return self.m.read(self._S(name), 1)[0]
+
+    def _has(self, name):
+        try:
+            self._S(name)
+            return True
+        except (Exception, SystemExit):                     # noqa: BLE001
+            return False
 
     def _say(self, msg):
         if self.verbose:
@@ -259,6 +279,27 @@ class UI:
         kw.setdefault("card", self.card)
         return os88marty.settle(self.m, **kw)
 
+    def still(self, frames=0.05):
+        """The UI has FINISHED DRAWING and the card has shown it - the cheap
+        `settle` for a read that follows an input this machine is handling.
+
+        `os88marty.ui_done` (ui_task asleep, nothing queued, the lock free,
+        for a tick: every repaint is inside a pass, under the lock), then
+        `frames` guest seconds - three frames by default - because `fbuf` is
+        the RENDERED glass and lags the framebuffer by up to one. No 2-host-
+        second floor. NOT for a worker that draws on its own clock (a game, a
+        Task Manager graph): ui_done cannot see that, `settle` can.
+        """
+        if (not hasattr(self.m, "status")   # NOT A MARTY whose UI brings its
+                and type(self).settle is not UI.settle):   # own settle - a
+            self.settle()                   # state wait (wirefleetlink.py).
+            return self                     # Otherwise ui_done reads any
+                                            # machine with read() (rdxms.py)
+        os88marty.ui_done(self.m, "the desktop to finish drawing")
+        if frames:
+            os88marty.guest_sleep(self.m, frames)
+        return self
+
     # --- the desktop --------------------------------------------------------
     def up(self, limit=180.0):
         """Wait until the kernel's DESKTOP STATE exists - the first half of
@@ -286,9 +327,45 @@ class UI:
         set"). `spl_finish` is kmain_o's last act, after the settings, so
         both words live and the splash done is the end of the boot.
         """
-        self._wait(lambda: self._word("desk_rows") and self._word("menu_nbar")
-                   and not self._byte("spl_live"),
-                   "the kernel to reach the desktop", limit)
+        # **AND THE KERNEL'S TICK MOVING ACROSS IT.** Between the kernel
+        # image landing and kmain clearing its .bss, those three words are
+        # whatever the loader left there - on an XT-IDE boot, desk_rows 42227,
+        # menu_nbar 56073 and spl_live 0 for half a guest second - and a
+        # quick boot polled straight into it, so its first mouse packet
+        # landed in the middle of the mouse probe and the pointer never moved
+        # again. [ticks] does not move until THIS kernel's IRQ0 is in, so the
+        # gate must hold on two reads with the tick different between them
+        # (one tick, 55 ms; it also refuses a warm reboot's stale bytes).
+        # **AND THE BOOT'S LAST COMPACTION OVER.** kmain zeroes [spl_fseg]
+        # and calls mem_unblob on the line AFTER spl_finish, and that packs
+        # the heap - moving claims, driver images among them, whose rows are
+        # put right by the relocation procs only once the bytes are copied.
+        # A row that read the heap or a driver row in that window saw the
+        # table at the new base and drv_tab at the old one: covoxdrv read
+        # SOUND.DRV's port out of the copy left behind (9451, not 378h) and
+        # dosest found "nothing owned by it or based there". [mem_cp_busy] is
+        # up for the whole pass; both words hold across the tick below, so a
+        # poll landing between the zeroing and the compactor's own flag is
+        # caught on the second read. A kernel with no compactor has neither
+        # word, and asks nothing
+        cp = [n for n in ("spl_fseg", "mem_cp_busy") if self._has(n)]
+        seen = [None]
+
+        def ok():
+            if not (self._word("desk_rows") and self._word("menu_nbar")
+                    and not self._byte("spl_live")
+                    and not any(self._word(n) if n == "spl_fseg"
+                                else self._byte(n) for n in cp)):
+                seen[0] = None
+                return False
+            t = os88marty._ktick(self.m)
+            if seen[0] is None:
+                seen[0] = t
+                return False
+            return t != seen[0]
+        self._wait(ok, "the kernel to reach the desktop", limit)
+        if getattr(self.m, "boot_toast", None):     # kern_mega under Bochs:
+            self.m.boot_toast()                     # its boot toast gone
         return self
 
     def ready(self, limit=180.0, saver=False):
@@ -630,12 +707,14 @@ class UI:
                               "(stik=(STIK_BSS, STIK_PAYLEN))" % w.title)
             stik = tuple(getattr(os88stik, v) if isinstance(v, str) else v
                         for v in k)
-        rec = self._S("wm_wins") + w.i * geom.WIN_SIZE
-        seg = struct.unpack("<H", bytes(self.m.read(rec + geom.W_SEG, 2)))[0]
-        img = struct.unpack("<H", bytes(self.m.readseg(seg, 8, 2)))[0]
+        # Through os88marty.pkg_read, never W_SEG and then a readseg: a
+        # widget's region moves under the compactor, and the pair can tear
+        # between the copy and the record update (SPEC.md 66). The image size
+        # is the package's own header word and does not move with it.
+        img = _u16(os88marty.pkg_read(self.m, w, 8, 2, self._S))
         lib = bool(stik[2]) if len(stik) > 2 else False
         off = os88stik.state_off(lib, stik[0], stik[1], img)[name]
-        return self.m.readseg(seg, img + off, 1)[0]
+        return os88marty.pkg_read(self.m, w, img + off, 1, self._S)[0]
 
     def _above(self, w):
         """The windows over `w` - every visible ordinary window, for a desk
@@ -762,6 +841,14 @@ class UI:
         for attempt in range(tries):
             if prep is not None:
                 prep()
+            # SEPARATED FROM THE LAST PRESS ON THE GUEST'S CLOCK, as every
+            # other press in os88mouse is: move_window's raise click and its
+            # grab are two presses on one title bar, and move_window's note
+            # counts on `_sep` to keep them from being a double-click (a
+            # ZOOM). This was the one press that skipped it - latent where
+            # the guest outruns the host (MartyPC), a zoom every time on
+            # kern_mega's Bochs, whose guest runs at host speed (deskzoom)
+            self.mo._sep()
             self.mo._edge(True)
             try:
                 return self._wait(cond, what,
@@ -1139,17 +1226,23 @@ class UI:
             base = (geom.KERNEL_SEG << 4) + vp if vp else None
         if base is not None:
             n = _u16(self.m.read(base + geom.FS_N, 2))
-            vseg = _u16(self.m.read(base + geom.FS_VSEG, 2))
+            # the listing cache is a purgeable claim that MOVES (its reloc
+            # rewrites FS_VSEG): its base and its bytes in one snapshot
+            vseg, got = (os88marty.seg_snap(
+                self.m, base + geom.FS_VSEG, [(0, n * geom.DSK_DE_STRIDE)],
+                what="the Disk window's listing", sym=self._S, step=False)
+                if n else (0, None))
             if n and vseg:
-                return _decode(self.m.read(vseg << 4,
-                                           n * geom.DSK_DE_STRIDE), n)
+                return _decode(got[0], n)
         n = self._word("disk_nfiles")
         if not n:
             return []
-        seg = self._word("dsk_dseg")
         off = self._word("dsk_doff")
-        return _decode(self.m.read((seg << 4) + off,
-                                   n * geom.DSK_DE_STRIDE), n)
+        seg, got = os88marty.seg_snap(          # dsk_dseg moves too (its
+            self.m, self._S("dsk_dseg"),        # claim's reloc, SPEC.md 66)
+            [(off, n * geom.DSK_DE_STRIDE)], what="the mount snapshot",
+            sym=self._S, step=False)
+        return _decode(got[0], n) if seg else []
 
     def entry(self, name, win=None):
         """(index, type) of `name` in `win` (or the acting window), or raise
@@ -1456,8 +1549,10 @@ class UI:
                    snapshot=self.titles)
         # ...and VISIBLE IS NOT PAINTED: wm_show sets the flag and then
         # paints, and the paint's own fm_layout is what arms the Save form's
-        # box and draws the button column (SPEC.md 38.3, 38.5)
-        self.settle()
+        # box and draws the button column (SPEC.md 38.3, 38.5) - all inside
+        # the UI pass that showed it, so `still` (ui_done + 3 frames) sees it
+        # finished without settle's 2-host-second floor
+        self.still()
         return box["w"]
 
     def chooser_gone(self, limit=T_NAV):
@@ -1606,19 +1701,34 @@ class UI:
         System menu answers to both.
         """
         n = self._word("menu_nbar")
-        raw = self.m.read(self._S("menu_bar"), max(n, 1) * geom.MB_ENTSZ)
-        out = []
-        for i in range(n):
-            b = i * geom.MB_ENTSZ
-            tp = _u16(raw, b + geom.MB_TITLE)
-            ip = _u16(raw, b + geom.MB_ITEMS)
-            ni = _u16(raw, b + geom.MB_NITEM)
-            x0 = _u16(raw, b + geom.MB_XL)
-            x1 = _u16(raw, b + geom.MB_XR)
-            seg = _u16(raw, b + geom.MB_SEG) or geom.KERNEL_SEG
-            title = "Apple" if not tp else self._str(seg, tp)
-            out.append((title, x0, x1, self._items(seg, ip, ni)))
-        return out
+        size = max(n, 1) * geom.MB_ENTSZ
+
+        def segs(raw):
+            return [_u16(raw, i * geom.MB_ENTSZ + geom.MB_SEG)
+                    for i in range(n)]
+
+        def take(mm, raw):
+            out = []
+            for i in range(n):
+                b = i * geom.MB_ENTSZ
+                tp = _u16(raw, b + geom.MB_TITLE)
+                ip = _u16(raw, b + geom.MB_ITEMS)
+                ni = _u16(raw, b + geom.MB_NITEM)
+                x0 = _u16(raw, b + geom.MB_XL)
+                x1 = _u16(raw, b + geom.MB_XR)
+                seg = _u16(raw, b + geom.MB_SEG) or geom.KERNEL_SEG
+                title = "Apple" if not tp else self._str(seg, tp)
+                out.append((title, x0, x1, self._items(seg, ip, ni)))
+            return out
+        # A package's menu strings are in ITS segment, which the compactor
+        # moves - so the bar is read and then checked again with the
+        # compactor idle, or taken off a paused guest (os88marty.table_snap).
+        raw = self.m.read(self._S("menu_bar"), size)
+        if not any(segs(raw)):          # the kernel's own menus only
+            return take(self.m, raw)
+        return os88marty.table_snap(self.m, self._S("menu_bar"), size, take,
+                                    segs, "the menu bar's strings",
+                                    first=raw, sym=self._S, step=False)
 
     def _str(self, seg, off, n=40):
         return bytes(self.m.readseg(seg, off, n)).split(b"\0")[0] \
@@ -1641,6 +1751,36 @@ class UI:
             else:
                 out.append((s, True))
         return out
+
+    def _bar_has(self, menu, item, limit=10.0):
+        """KERN_MEGA'S SHIMS ONLY (tools/os88megabochs.py, and
+        os88mega86box.py, whose 286 shows a Disk window on a 1.2MB A: before
+        its bar - tests/wimgtrip.py): wait, in host seconds, for the bar to
+        carry `menu` -> `item` before menu_pick reads it once.
+
+        A package's window is VISIBLE - which is all `open`/`path` confirm -
+        before its entry proc has run OSAPI_MENU_SET, and between the two
+        the bar is the previous window's cells plus the new one's About
+        cell (`Calc` holding only `About Calc`). MartyPC runs the guest ~4x
+        faster than real time, so its launch is over before the next read;
+        Bochs runs it AT real time and a pick straight after a launch read
+        the half-built bar (tests/toastfpg.py). A name that never arrives
+        falls through to menu_pick's own refusal, which prints the bar."""
+        if isinstance(menu, int) or isinstance(item, int):
+            return
+        mw, iw = menu.upper(), item.upper()
+        end = time.time() + limit
+        while time.time() < end:
+            try:
+                cells = self.menus()
+            except Exception:                       # noqa: BLE001
+                cells = []
+            for t, _x0, _x1, items in cells:
+                if t.upper().startswith(mw) and any(
+                        s.upper().lstrip(" *").startswith(iw)
+                        for s, _ in items):
+                    return
+            time.sleep(0.2)
 
     def menu_pick(self, menu, item, limit=T_MENU):
         """Press a menu title, highlight an item BY NAME, release.
@@ -1665,6 +1805,9 @@ class UI:
         printed: `menu_hover` will not stop on one, so the drag would end
         parked on a neighbour and release there.
         """
+        if getattr(self.m, "bochs", False) or getattr(self.m, "box86",
+                                                      False):
+            self._bar_has(menu, item)
         cells = self.menus()
         # AN INT IS A POSITION, a string is a name. Names are what a test
         # should say - they survive a menu gaining an item - but a row whose

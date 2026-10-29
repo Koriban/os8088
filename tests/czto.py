@@ -177,10 +177,14 @@ def main():
             fails.append("%s: %s" % (tag, msg))
 
     with os88ui.boot(os88build.at("build/os8088.img"), apps=dx,
-                     machine=MACHINE, verbose=False) as ui:
+                     machine=MACHINE, verbose=False, quick=True) as ui:
         m = ui.m
         S = ui._S
         fl = os88flush.Flush(marty=m)
+        # a real segment, or kern_mega's selector (tools/os88megabochs.py):
+        # the clone's claim is one, and a stop's CS in .cold is COLD_SEG's
+        # descriptor based above 1MB, where ui._S puts the breakpoints
+        lin = getattr(m, "lin", lambda sg, off=0: (sg << 4) + off)
 
         def w16(sym):
             return int.from_bytes(m.read(S(sym), 2), "little")
@@ -195,7 +199,7 @@ def main():
             seg = w16("clo_seg")
             if not seg:
                 return None
-            h = m.read(seg << 4, 32)
+            h = m.read(lin(seg), 32)
             return h[CL_STEP], int.from_bytes(h[HDR_K:HDR_K + 2], "little")
 
         def select(name):
@@ -204,7 +208,7 @@ def main():
             row = ui.scroll_to(idx, win=win)
             x, y = ui.row_xy(win, row)
             ui.mo.click(x, y)
-            ui.settle()
+            os88marty.ui_done(m)
 
         def unto(name):
             """select `name`, File > Uncompress To..., take the Save box's
@@ -213,8 +217,8 @@ def main():
             m.write(S("toast_buf"), b"\0")
             ui.menu_pick("File", "Uncompress To...")
             os88marty.until(m, lambda mm: w16("fdlg_win") != 0,
-                            "the Save box to open", poll=0.1, guest=30.0)
-            ui.settle()
+                            "the Save box to open", poll=0.05, guest=30.0)
+            os88marty.ui_done(m)
             m.key("Enter")
 
         last_why = [None]
@@ -242,6 +246,21 @@ def main():
                 # land inside the join's own toast-then-free window and call
                 # it still. The reading has to hold for STILL guest seconds
                 # (what two polls span on an idle box), whatever the box does
+                #
+                # AND THE VERDICT IS THE STAGED TEXT, NOT A LIT STRIP. A toast
+                # is up for TOAST_TICKS (3 guest s) from the moment it is
+                # said, and a still reading needs two polls STILL apart - so
+                # on kern_mega under Bochs on a loaded box, where a poll's
+                # debugger stops spaced the looks 1-2 GUEST seconds apart,
+                # the strip was said, seen once and gone before the second
+                # look: the join HAD finished ('Uncompressed' staged, the
+                # claim freed, the result on A:) and this waited 120 guest
+                # seconds for a lit strip that was never coming back
+                # (mega-czto, two whole soaks, at whichever swap leg lost the
+                # draw). Every wait here starts from a toast_buf that key()
+                # or unto() emptied, so what is in it now was said AFTER the
+                # key, lit or not - `on` is left in the reading only so its
+                # going out is a change like any other
                 now = (claim(), mode(), ui.toast())
                 cyc = int(m.status()["cycles"])
                 if box.get("last") != now:
@@ -262,19 +281,19 @@ def main():
                     # still up too, and is the "said" arm's once it is freed
                     t, on = ui.toast()
                     if (was is None or c[1] != was
-                            or (on and t.startswith("Missing"))):
+                            or t.startswith("Missing")):
                         box["r"] = ("asked", c[1])
                         box["why"] = (t, on, c, mode(),
                                       int(m.status()["cycles"]))
                         return True
                     return False
                 t, on = ui.toast()
-                if on and t and not c and w16("fdlg_win") == 0:
+                if t and not c and w16("fdlg_win") == 0:
                     box["r"] = ("said", t)
                     return True
                 return False
             os88marty.until(m, got, "the join to finish or to ask",
-                            poll=0.2, guest=limit)
+                            poll=0.05, guest=limit)
             if box.get("odd"):
                 say("   (transient: %d reads of the prompt with no part in "
                     "its header yet, first %r)" % (len(box["odd"]),
@@ -282,7 +301,7 @@ def main():
             last_why[0] = box.get("why")
             if os.environ.get("CZTO_WHY"):
                 say("   (outcome %r because %r)" % (box["r"], box.get("why")))
-            ui.settle()
+            os88marty.ui_done(m)
             return box["r"]
 
         def key(k):
@@ -292,7 +311,7 @@ def main():
         def motor_off():
             """a swap is noticed once the motor has stopped (SPEC.md 18.9.1)"""
             os88marty.until(m, lambda mm: m.read(0x43F, 1)[0] & 0x0F == 0,
-                            "the floppy motors to stop", poll=0.2, guest=10.0)
+                            "the floppy motors to stop", poll=0.05, guest=10.0)
 
         def a_files():
             return {e.name.upper(): e for e in fl.volume(0).walk()}
@@ -317,8 +336,8 @@ def main():
             % (r,))
         key("Escape")
         os88marty.until(m, lambda mm: claim() is None and mode() == 0,
-                        "Esc to end the join", poll=0.2, guest=30.0)
-        ui.settle()
+                        "Esc to end the join", poll=0.05, guest=30.0)
+        os88marty.ui_done(m)
         af = a_files()
         leg("esc", "ESC.DAT" not in af and "CMPRESS~.TMP" not in af,
             "A: holds %s" % sorted(n for n in af if n.startswith(("ESC",
@@ -347,7 +366,7 @@ def main():
                 if m.wait_stop(limit=10.0) != "breakpoint":
                     break
                 rg = m.regs()
-                here = (rg["cs"] << 4) + rg["ip"]
+                here = lin(rg["cs"], rg["ip"])
                 seen[here] = (rg["cx"], rg["di"])
                 m.run()
                 if back in seen:
@@ -358,8 +377,8 @@ def main():
         m.mouse()
         try:
             os88marty.until(m, lambda mm: claim() is None and mode() == 0,
-                            "the click to end the join", poll=0.2, guest=30.0)
-            ui.settle()
+                            "the click to end the join", poll=0.05, guest=30.0)
+            os88marty.ui_done(m)
         except Exception as e:          # the defect wrecks the machine here
             seen["dead"] = str(e)
         af = a_files()
@@ -438,11 +457,12 @@ def main():
                 for _ in range(20000):
                     if m.wait_stop(limit=0.3) != "breakpoint":
                         if claim() is None and mode() == 0:
-                            t, on = ui.toast()
-                            return (t if on else None), hits, hops
+                            t, on = ui.toast()      # staged since the key
+                            return (t or None), hits, hops  # (outcome's
+                                                            # reason)
                         continue
                     rg = m.regs()
-                    here = (rg["cs"] << 4) + rg["ip"]
+                    here = lin(rg["cs"], rg["ip"])
                     if here == gto:
                         seenhops.append(rg["ax"] & 0xFF)
                         if failhop and hits and rg["ax"] & 0xFF == 0:
@@ -491,11 +511,11 @@ def main():
         if r[0] == "asked":
             key("Escape")               # ...and give the machine back
             os88marty.until(m, lambda mm: claim() is None and mode() == 0,
-                            "Esc to end the join", poll=0.2, guest=30.0)
+                            "Esc to end the join", poll=0.05, guest=30.0)
         motor_off()
         m.mount(1, dz)
         ui.menu_pick("Nav", "Refresh")  # the third disk's root
-        ui.settle()
+        os88marty.ui_done(m)
 
         # ioerr: BAD.001 on the third disk, BAD.002 on the second - which is
         # the marginal one. The prompt, the swap, then its reads fail
@@ -505,7 +525,14 @@ def main():
         motor_off()
         m.mount(1, dy)
         key("Enter")
-        r = marginal(2, False, stays=True)
+        # TWO good reads are the mount's boot sector and its FAT, so the
+        # ROOT DIRECTORY's is the first to fail. kern_mega's mount reads the
+        # FAT in TWO transfers (sector 2 alone, then sectors 3-11 - the
+        # trace of its int 13h calls, where kern_big's is one 9-sector
+        # call), so the same read is its fourth: failing the third fails
+        # the FAT, the mount refuses and the verdict is `No disk`
+        r = marginal(3 if getattr(m, "bochs", False) else 2, False,
+                     stays=True)
         af = a_files()
         leg("ioerr", r[0] == "Disk error" and mode() == 0
             and claim() is None and "BAD.DAT" not in af
@@ -521,7 +548,7 @@ def main():
             "after the verdict: %d failed reads, pointer (level, x) %r"
             % (len(after), after[:6]))
         ui.menu_pick("Nav", "Refresh")  # the disk reads again: list it
-        ui.settle()
+        os88marty.ui_done(m)
 
         # hopfail: HOP.001 and HOP.002 both on the second disk, still in B:.
         # B: fails part-way, and the error path's own hop back to A: - to

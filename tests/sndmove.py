@@ -94,13 +94,27 @@ def main():
     with M.launch("build/os8088-360.img", apps=DISK,
                   machine=a.machine, boot=False) as m:
         m.run()
-        M.settle(m, gate=M.desktop_up)
+        M.kernel_up(m)                  # SOAK-SPEED technique 12
         M.no_saver(m)
         mo = Mouse(marty=m)
+        mega = getattr(m, "bochs", False)
+
+        def key(v):
+            """A segment WORD as the claim map keys its block. On kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) drv_tab, the owner words and an
+            IVT cell the driver stamped with its CS hold an LDT SELECTOR -
+            the data half, or the code half 8 below it - that a move
+            REBASES and never changes, so "it moved" and "names the old
+            image" are asked of the PARAGRAPH under it. Anything else (a
+            real segment, a slot, a tag, 0) is itself"""
+            if mega and v and v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
 
         def seg(r):
-            return u16(m.read(S("drv_tab") + r * heaphi.DRVR_SZ
-                              + heaphi.DRVR_SEG, 2))
+            return key(u16(m.read(S("drv_tab") + r * heaphi.DRVR_SZ
+                                  + heaphi.DRVR_SEG, 2)))
 
         # THE HARDWARE IRQ SLOTS AND NOT ALL 256, because that is exactly what
         # the kernel promises to patch (SPEC.md 66.6.3.1) and the difference
@@ -110,10 +124,14 @@ def main():
         # left the machine with no hard disk. A test that scanned all 256 here
         # would be asserting a promise the kernel must not make.
         IRQVEC = list(range(0x08, 0x10)) + list(range(0x70, 0x78))
+        if mega:                # ...and on kern_mega IVT 20h-27h, where an
+            IRQVEC += list(range(0x20, 0x28))   # IRQ lands in REAL mode -
+            # the PIC stays at 20h across a reflected BIOS call, and
+            # mega_ivt_sync keeps these a copy of 08h-0Fh for it
 
         def ivt_names(want):
             t = m.read(0, 1024)
-            return [v for v in IRQVEC if u16(t, v * 4 + 2) == want]
+            return [v for v in IRQVEC if key(u16(t, v * 4 + 2)) == want]
 
         # The sound driver is ALREADY UP on a machine with a card - measured:
         # drv_tab[0] reads 0x9E80 at the first desktop frame - so the first
@@ -144,7 +162,7 @@ def main():
         # SBTEST fits, and it is on the disk anyway to hook the vector.
         def panel():
             mo.menu(8, 8, 8, 40)                # chip menu -> Control Panel
-            heaphi.quiet(m)
+            M.ui_done(m)
             cps = [w for w in heaphi.wins(m) if w[3] >= 280 and w[4] >= 100]
             if not cps:
                 print("FAIL: no Control Panel")
@@ -153,7 +171,7 @@ def main():
             x0, y0 = cp[1] + 1, cp[2] + 18
             mo.click(x0 + 40,
                      y0 + heaphi.CP_I0Y + heaphi.CP_IDRV * heaphi.CP_IROWH + 7)
-            heaphi.quiet(m)
+            M.ui_done(m)
             return cp, x0, y0
 
         def drvrow(r):
@@ -165,10 +183,10 @@ def main():
             try:                                # a load is a floppy read,
                 M.until(m, lambda _: seg(r) != was,     # which a screen
                         "driver row %d to (un)mount" % r,   # settle takes
-                        poll=0.25, limit=60)                # for "done"
+                        limit=60)                # for "done"
             except M.MartyError:
                 pass                            # ...judged by the caller
-            heaphi.quiet(m)
+            M.ui_done(m)
             try:
                 mo.click(cp[1] + 8, cp[2] + 9)  # close the panel: CTRL.DRV is
             except M.MartyError:                # a module and would be a wall
@@ -186,7 +204,7 @@ def main():
                          m.read(S("mouse_btn"), 1)[0], M._ktick(m),
                          mo.where(), seg(r)), flush=True)
                 raise
-            heaphi.quiet(m)
+            M.ui_done(m)
 
         drvrow(SND_ROW)                         # unmount sound
         if seg(SND_ROW):
@@ -194,23 +212,24 @@ def main():
             return 1
 
         # --- SBTEST into the ceiling -----------------------------------------
-        dispcp.open_drive(m, mo, S, M.settle, "B")
+        done = lambda m, **k: M.ui_done(m)     # noqa: E731 - every read is memory
+        dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
         mo.drag(wx + 60, wy + 9, wx + 60 + 215, wy + 9)
-        M.settle(m)
+        M.ui_done(m)
         disk = dispcp.win_rect(m, S, dslot)[:2]
 
         def open_named(name, secs):
             before = set(w.i for w in os88geom.windows(m, S) if w.visible)
-            dispcp.open_named(m, mo, S, M.settle, *disk, name=name)
+            dispcp.open_named(m, mo, S, done, *disk, name=name)
             try:
                 M.until(m, lambda _: any(w.visible and w.i not in before
                                          for w in os88geom.windows(m, S)),
-                        "%s's window" % name, poll=0.25, limit=secs * 10)
+                        "%s's window" % name, limit=secs * 10)
             except M.MartyError:
                 pass                            # ...reported just below
-            M.settle(m)
+            M.ui_done(m)
             new = [w for w in os88geom.windows(m, S)
                    if w.visible and w.i not in before]
             if not new:
@@ -238,7 +257,7 @@ def main():
             raw = m.read(S("mem_tab"), MEM_MAX * MC_SIZE)
             return [i for i in range(MEM_MAX)
                     if u16(raw, i * MC_SIZE) and
-                    u16(raw, i * MC_SIZE + 4) == seg(SND_ROW)]
+                    key(u16(raw, i * MC_SIZE + 4)) == seg(SND_ROW)]
 
         mo.click(sbw.x + sbw.w // 2, sbw.y + sbw.h - 20)     # open the stream
         try:        # the open hooks the card's vector (sbl_f_irqdisc)...
@@ -256,7 +275,7 @@ def main():
         except M.MartyError:
             pass
         mo.click(sbw.x + 8, sbw.y + 9)                       # ...and the app:
-        M.settle(m)                                          # the hole opens
+        M.ui_done(m)                                          # the hole opens
         sndseg = seg(SND_ROW)                   # a claim of sbtest's could
         if not sndseg:                          # have moved the image already
             print("FAIL: the sound driver is gone after SBTEST")
@@ -281,6 +300,18 @@ def main():
         print("a stream has been opened and closed: %d vector(s) into %04x"
               % (len(vec0), sndseg))
 
+        def gates():
+            """kern_mega: where each hooked IRQ's IDT GATE lands, as a linear
+            address. In protected mode the CPU takes an IRQ through the IDT
+            (IRQ0-7 at 20h-27h, IRQ8-15 at 70h-77h) and not the IVT, and the
+            gate names the image's CODE selector, which a move rebases"""
+            return {v: m._vector(v - 8 + 0x20 if v < 0x10 else v)
+                    for v in vec0 if not 0x20 <= v < 0x28}
+        if mega:
+            g0 = gates()
+            print("  IDT gates: %s" % ", ".join("%02x -> %06x" % kv
+                                               for kv in sorted(g0.items())))
+
         bad = 0
         # --- 1: AN IDLE CARD HOLDS NOTHING BUT ITS IMAGE (SPEC.md 34.5.2) ----
         # This assertion used to be "the ring is there": an 8KB MC_DMA claim
@@ -294,7 +325,7 @@ def main():
         held = []
         for i in range(MEM_MAX):
             r = raw[i * MC_SIZE:(i + 1) * MC_SIZE]
-            base, para, own = u16(r, 0), u16(r, 2), u16(r, 4)
+            base, para, own = u16(r, 0), u16(r, 2), key(u16(r, 4))
             if base and own == sndseg:
                 held.append((base, para))
         print("  1 idle, nothing held       %s"
@@ -330,7 +361,7 @@ def main():
             print("FAIL: the filler's title bar is wholly covered")
             return 1
         mo.click(*pt)
-        M.settle(m)
+        M.ui_done(m)
 
         def dump(tag):
             base = u16(m.read(S("mem_base"), 2))
@@ -366,11 +397,11 @@ def main():
             m.key("KeyS")
             try:
                 M.until(m, lambda _: seg(SND_ROW) not in (sndseg, 0),
-                        "the sound image to move", poll=0.25,
+                        "the sound image to move",
                         guest=6 * M.GUEST_PACE)
             except M.MartyError:
                 pass                            # ...ask again
-            M.settle(m)
+            M.ui_done(m)
             if seg(SND_ROW) not in (sndseg, 0):
                 break
         dump("after")
@@ -401,6 +432,24 @@ def main():
                  + ("  <-- nothing pointed into the image, so this proves "
                     "nothing" if not vec0 else "")))
         bad += not ok5b
+
+        if mega and imoved:
+            # --- 5c: ...AND THE IDT, which is what a protected-mode IRQ takes.
+            # Its gate names the image's CODE selector, which mega_mpmovef
+            # rebased: the handler is where it was, moved by the image's own
+            # distance. (5b is the REAL-mode half - the IVT a reflected BIOS
+            # call and a DOS trip read, which only the rows patch: KERN-MEGA-
+            # PLAN 14.90.)
+            g1 = gates()
+            d = (img - sndseg) * 16
+            ok5c = bool(g0) and all(g1[v] == g0[v] + d for v in g0)
+            print("  5c the IDT gates followed  %s"
+                  % ("OK (%s)" % ", ".join("%02x -> %06x" % kv
+                                          for kv in sorted(g1.items()))
+                     if ok5c else
+                     "NO: before %s, after %s, the image moved %+d bytes"
+                     % (g0, g1, d)))
+            bad += not ok5c
 
         alive = True
         try:

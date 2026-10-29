@@ -79,7 +79,7 @@ ROOT = os.path.abspath(ROOT)
 # machine (`make small` boots and `make smallapps` goes in B:), and the one
 # defect the pairing has already produced - the 1.44MB half built differently
 # from the 360KB one - is exactly what a per-image list would hide again.
-IMGS = ["build/small360.img", "build/small.img",
+IMGS = ["build/small360.img", "build/small720.img", "build/small.img",
         "build/smallapps360.img", "build/smallapps.img"]
 
 # The ONLY .DRV files legal on a small floppy: `$(SMALLDRIVERS)` is `$(KMODS)`
@@ -137,6 +137,8 @@ FORBIDDEN = {
     "TRACKER.O88":  "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "AUDIO.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34)",
     "MIXER.O88":    "SOUND.DRV is in no small driver set (SPEC.md 24.5, 34.15)",
+    "WAVERACK.O88": "SOUND.DRV is in no small driver set (SPEC.md 24.5, "
+                    "123.2)",
     "MIDIRACK.O88": "SOUND.DRV is in no small driver set, and its speaker "
                     "synth is an FSXF_RATE bracket (SPEC.md 24.5, 105)",
     # 24.5 - a claim the floor machine cannot fund, made where it cannot refuse

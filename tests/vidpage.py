@@ -91,6 +91,19 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import os88marty, os88ui, os88build, os88vid as vid, os88geom as geom  # noqa: E402
 from cycweb import pkg_syms                                   # noqa: E402
 
+# kern_mega (tests/megaport.txt): the shipped player refuses under protected
+# mode, so the row plays the ARM - build/megak/apps/, assembled -DPKG_MEGA -
+# and reads the arm's symbols; a segment the player holds is an LDT selector
+# there, read through its descriptor (tests/vidvga4.py's port)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+MEGA_DEFS = ("PKG_MEGA",) if MEGA else ()
+VIDEO_O88 = "build/megak/apps/video.o88" if MEGA else "build/video.o88"
+
+
+def lin(m, seg, off=0):
+    """seg << 4 - or the base in a kern_mega selector's descriptor"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
 NF, FPS = 60, 15.0
 FLIPS = (20, 45)
 STOPS = (18, 19, 20, 21, 22, 44, 45, 46, NF)
@@ -455,14 +468,16 @@ def fclip(tmp, layout, pages, screen, loop=None, name="PAGE.V88",
     return out, cvs, W, H, pal
 
 
-def hostile(tmp, layout, mk=None):
+def hostile(tmp, layout, mk=None, base=None):
     """PAGELOOP.V88 is page-ahead and LOOPED - its seam was copied into a
     keep page-ahead never claims, segment 0, and the player must refuse it
     (the options audit, 2026-10-14) - and PAGENK.V88 is page-ahead with NO
     KEYS, so no key 0 to preload the hidden page from: it must PLAY"""
     mk = mk or (lambda **k: clip(tmp, layout, **k))
     lp = mk(loop=10, name="PAGELOOP.V88")[0]
-    d = bytearray(open(mk(name="PAGENK.V88")[0], "rb").read())
+    # (the main clip's own bytes when it was made with mk's defaults: the
+    # name is only where it is written, so a second write is the same file)
+    d = bytearray(open(base or mk(name="PAGENK.V88")[0], "rb").read())
     struct.pack_into("<HH", d, 192 + 12, 0, 0xFFFF)  # (the slot's key count
                                                      # and poster, video.asm
                                                      # R_NKEYS and R_POSTER)
@@ -528,8 +543,8 @@ def main():
         global STOPS
         STOPS = tuple(sorted(set(n for F, p in mflips(a.pages)
                                  for n in (F - 1, F, F + 1)) | {NF}))
-    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",))
-    pkg = os88build.at("build/video.o88")
+    syms, _ = pkg_syms("apps/video/video.asm", ("apps/",), MEGA_DEFS)
+    pkg = os88build.at(VIDEO_O88)
     bad = []
     with tempfile.TemporaryDirectory(dir=os.path.join(ROOT, "build")) as tmp:
         if a.bench:                     # (every kind of bench record inside
@@ -630,25 +645,27 @@ def main():
         else:
             ty0, tx0 = (SH - H) // 2, ((SW - W) // 16) * 8
         disk = os.path.join(tmp, "vidpage.img")
-        lp, nk = hostile(tmp, lay, mk)
+        lp, nk = hostile(tmp, lay, mk, base=v88 if a.fpage or a.pages > 2
+                         or (not a.layer and not a.bench
+                             and a.kpart == vid.KEY_PART) else None)
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                         "--size", "360", pkg, v88, lp, nk], check=True,
                        capture_output=True)
         with os88ui.boot(os88build.at("build/os8088-360.img"), apps=disk,
-                         machine=a.machine) as ui:
+                         machine=a.machine, quick=True) as ui:
             m = ui.m
             # --- 0: THE ONE THE PLAYER MUST REFUSE, at its open
             for fn, want in (("PAGELOOP.V88", "vp_s_bad"),):
                 wh = ui.path("B:/" + fn)
                 rh = m.read(ui._S("wm_wins") + wh.i * geom.WIN_SIZE,
                             geom.WIN_SIZE)
-                bh = u16(rh, geom.W_SEG) << 4
+                bh = lin(m, u16(rh, geom.W_SEG))
                 # (DONE - loaded, or the card opened - as vidpal's hostile
                 # leg waits: vp_parse says "damaged" while it runs)
                 os88marty.until(
                     m, lambda mm: m.read(bh + syms["vp_loaded"], 1)[0] == 1
                     or m.read(bh + syms["vp_card"], 1)[0] == 1,
-                    "%s's open" % fn, poll=0.3, limit=300.0, guest=60.0)
+                    "%s's open" % fn, poll=0.05, limit=300.0, guest=60.0)
                 okh = m.read(bh + syms["vp_ok"], 1)[0]
                 msg = u16(m.read(bh + syms["vp_msg"], 2))
                 said = next((k for k in ("vp_s_bad",)
@@ -660,7 +677,7 @@ def main():
             w = ui.path("B:/PAGE.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            base = lin(m, u16(rec, geom.W_SEG))
 
             def rw(n):
                 return u16(m.read(base + syms[n], 2))
@@ -672,7 +689,7 @@ def main():
                 m.write(base + syms[n], struct.pack("<H", v))
 
             def until(cond, what, guest=90.0):
-                os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                os88marty.until(m, cond, what, poll=0.05, limit=600.0,
                                 guest=guest)
 
             until(lambda mm: rb("vp_loaded") == 1 or rb("vp_card") == 1,
@@ -801,7 +818,10 @@ def main():
                           rw("vp_done") == n, "hold before frame %d" % n,
                           240.0)
                     glass(n, what)
-                    if not herc and not si:     # THE SCREEN'S TIMING
+                    # (kern_mega's Bochs has no port reads for a row -
+                    # tools/os88megabochs.py refuses inb/outb - so the CRTC
+                    # half is MartyPC's; the glass above is read either way)
+                    if not herc and not si and not MEGA:  # THE SCREEN'S TIMING
                         m.pause()           # and ROW, off the CRTC: MartyPC
                         ix = m.inb(0x3D4)   # scans Mode X's 480 lines into
                         m.outb(0x3D4, 0x12)     # 400, so the glass's first
@@ -816,7 +836,7 @@ def main():
                         if off != want:
                             bad.append("%s: CR13 %02Xh, not %02Xh - the "
                                        "screen's row" % (what, off, want))
-                    if modex and not si:
+                    if modex and not si and not MEGA:
                         want = 0x8F if scr == vid.SCR_320X200 else 0xDF
                         print("   %s: the vertical display end, CR12, %02Xh"
                               % (what, vde))
@@ -902,7 +922,7 @@ def main():
             w = ui.path("B:/PAGENK.V88")
             rec = m.read(ui._S("wm_wins") + w.i * geom.WIN_SIZE,
                          geom.WIN_SIZE)
-            base = u16(rec, geom.W_SEG) << 4
+            base = lin(m, u16(rec, geom.W_SEG))
             until(lambda mm: rb("vp_loaded") == 1 or rb("vp_card") == 1,
                   "PAGENK.V88's open", 60.0)
             print("   PAGENK.V88: ok %d, %d keys" % (rb("vp_ok"),

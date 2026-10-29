@@ -5,14 +5,14 @@ THE FOUND COLUMN IS THE ROW.  A search of another drive that comes back with
 THIS drive's directory reports `AX=0000 CF=1`-free success - it is
 indistinguishable, from the program's side and from every other instrument
 here, from a search that worked.  That is how it shipped: standing on B:, this
-box answered `A:*.*` with B:'s own directory and answered `C:*.*` on a machine
+DOS answered `A:*.*` with B:'s own directory and answered `C:*.*` on a machine
 with no hard disk, both of them successfully.  So the assertion is WHICH FILE,
 checked against what is really on each floppy rather than against a literal.
 
 THE `CUR` COLUMN IS THE SECOND HALF, and without it the row is passable by a
 wrong fix: a letter must not MOVE the program.  Under DOS it selects which
 drive's current directory the name is resolved against and `AH=0Eh` alone
-changes drives, so a box that got the search right by leaving the program on
+changes drives, so a DOS that got the search right by leaving the program on
 A: would satisfy every other assertion here.
 
 THE HANDLE ROWS ARE THE THIRD, and are what a pattern cannot reach.  A handle
@@ -26,6 +26,8 @@ the only way to exercise the steal across volumes.
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
@@ -60,7 +62,27 @@ def names(img):
     return out
 
 
+def mega_sys():
+    """kern_mega (OS88_MEGA=1, tools/os88megabochs.py): A: is build/mega.img
+    and not the 360KB system disk, so the A:-only file goes onto a COPY of
+    it, which the shim is told to boot ($OS88_MEGA_A). The MartyPC arm never
+    calls this."""
+    src = os.path.join(os.environ.get("OS88_MEGA_BUILD") or "build",
+                       "mega.img")
+    dst = "build/dosdrv/dosdrvmega.img"
+    shutil.copy(src, dst)
+    subprocess.run([sys.executable, os.path.join(os.path.dirname(__file__),
+                    "..", "tools", "os88fat.py"), "add", dst,
+                    "build/dosdrv/AONLY.TXT"], check=True,
+                   stdout=subprocess.DEVNULL)
+    os.environ["OS88_MEGA_A"] = os.path.abspath(dst)
+    return dst
+
+
 def main():
+    global SYS
+    if os.environ.get("OS88_MEGA"):
+        SYS = mega_sys()
     for p in (SYS, GATE):
         if not os.path.exists(p):
             fail("%s is missing - `make doscom` builds the gate disks" % p)
@@ -71,7 +93,7 @@ def main():
         fail("the two floppies must each carry a name the other has not: "
              "A: has %r, B: has %r" % (sorted(a_only)[:4], sorted(b_only)[:4]))
 
-    with os88ui.boot(SYS, apps=GATE) as ui:
+    with os88ui.boot(SYS, apps=GATE, quick=True) as ui:
         m = ui.m
         if not ui.path("B:/DRVNAME.COM"):
             fail("double-clicking DRVNAME.COM opened no window")
@@ -82,7 +104,7 @@ def main():
             rows[:] = mm.screen() or []
             return any("DRVNAME READY" in r for r in rows)
         try:
-            os88marty.until(m, ready, "DRVNAME READY", poll=0.3, limit=180.0)
+            os88marty.until(m, ready, "DRVNAME READY", poll=0.05, limit=180.0)
         except os88marty.MartyError:
             fail("the program never finished; the last text screen was %r"
                  % ([r.rstrip() for r in rows if r.strip()][:14],))

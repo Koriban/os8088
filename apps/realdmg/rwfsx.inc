@@ -29,6 +29,9 @@
 
 RW_FSDIV        equ 19977           ; 1,193,182 / 59.7275: a period a frame
 RW_FSSKIP       equ 4               ; frames run undrawn at most, behind
+RW_PKMAX        equ 6               ; Steady: a draw every 6th frame at most
+RW_PDOWN        equ 4               ; ...one fewer after this many cadence
+                                    ;   draws in a row with a frame's room
 RW_FSX          equ 0               ; the picture's byte column and first row:
 RW_FSY          equ 0               ;   the top left of the CRTC's window
 RW_FSTXT        equ 146             ; the speed line's row, inside the window
@@ -49,8 +52,8 @@ RW_FSBUD86      equ 1400            ;   to serve, so only IRQ0 bounds it - one
 
 ; rw_mgrey - every menu item made to say what it is now: the choices
 ; marked, the settings' text, and greyed what cannot be had - Full Screen
-; with no game or no mode we have a writer for, the recompiler's items on an
-; 8088 ("(286+)"), the states and replays with no game. Any context.
+; with no game or no mode we have a writer for, the states and replays with
+; no game. Any context.
 rw_mgrey:
     push ax
     push bx
@@ -87,15 +90,28 @@ rw_mgrey:
     shl bx, 1
     mov si, [rw_ilit + bx]
     inc si
-    mov [rw_i_mach + 2 * RW_MIL], si
-    ; CPU: the three modes marked by the one chosen - the recompiler's two
-    ; greyed on an 8088, Interpreter its mode - and Profile for Static and
-    ; the cache likewise; the speed chosen marked
+    mov [rw_i_scr + 2 * RW_SIL], si ; SCREEN: Interlace says what it is,
+%ifdef RDG_LOSSY                    ;   Two Shades marked, Scroll
+    mov al, [rdg_lossy]
+    and al, RDG_LBW
+    mov si, rw_it_bw
+    call rw_mark
+    mov bl, [rdg_lossy]             ;   says its step
+    and bx, RDG_LCOARSE             ;   (the level, x 2 = the word)
+    mov si, [rw_coit + bx]
+    inc si
+    mov [rw_i_scr + 2 * RW_SCO], si
+%endif
+    ; CPU: the three modes marked by the one chosen, Profile for Static
+    ; and the cache likewise; the speed chosen marked
+%ifdef RDG_AOT
+    mov al, 1                       ; (a precompiled cartridge's one mode)
+    mov si, rw_it_jaot
+    call rw_mark
+    mov di, rw_i_cpu + 2 * RW_CSPD
+    jmp short .cspd
+%endif
     mov cl, [rw_jitmode]
-    cmp byte [rw_286], 0
-    jne .m
-    mov cl, 2                       ; (an 8088: the interpreter, and only)
-.m:
     mov di, rw_i_cpu
     mov si, rw_it_jon
     mov al, 1
@@ -106,14 +122,6 @@ rw_mgrey:
     mov si, rw_it_joff
     mov al, 2
     call rw_mitem
-    cmp byte [rw_286], 0
-    jne .c286
-    mov word [rw_i_cpu + 2 * RW_CJON], rw_it_jon8
-    mov word [rw_i_cpu + 2 * RW_CJST], rw_it_jst8
-    mov word [rw_i_cpu + 2 * RW_CPRF], rw_it_prf8
-    mov word [rw_i_cpu + 2 * RW_CBIG], rw_it_big8
-    jmp short .spd
-.c286:
     mov al, [rw_prfon]
     mov si, rw_it_prf
     call rw_mark
@@ -124,8 +132,8 @@ rw_mgrey:
     call rw_mark
     inc si
     mov [rw_i_cpu + 2 * RW_CBIG], si
-.spd:
     mov di, rw_i_cpu + 2 * RW_CSPD  ; Speed's four, the one chosen marked
+.cspd:
     mov cl, [rw_speed]
     xor bx, bx
 .sp:
@@ -345,6 +353,8 @@ rw_fsmain:
     mov word [rw_fowed], 0
     mov byte [rw_fsfrac], 0
     mov byte [rw_fsrun], 0
+    mov byte [rw_pk], 1             ; (Steady starts at every frame)
+    mov word [rw_pidl], 0
     call OSAPI_GET_TICKS
     mov [rw_last], ax
     mov byte [rw_infsx], 1          ; (rw_clk: the bracket's clock now)
@@ -357,14 +367,17 @@ rw_fsmain:
     call rw_fsowed                  ; AX = frames owed now (taken)
     or ax, ax
     jnz .run
+    cmp byte [rw_pace], 0           ; (Steady: off the cadence it waits)
+    jne .wt
     cmp byte [rw_undrawn], 0        ; caught up: what has not been drawn,
     jne .idle                       ;   rather than wait (the window's .idle)
+.wt:
     mov al, FSXW_FRAME
     cmp byte [rw_fsrate], 0
     jne .w
     mov al, FSXW_TICK
 .w:
-    call OSAPI_FSX_WAIT
+    call rw_pwait
     jmp short .loop
 .run:
     cmp ax, RW_BEHIND               ; behind by more than that: run on
@@ -383,8 +396,15 @@ rw_fsmain:
     inc byte [rw_fsrun]
     xor bx, bx
     dec word [rw_fsleft]
-    jz .due                         ; caught up: draw this one, when due
-    cmp byte [rw_fsrun], RW_FSSKIP  ; (rw_drawdue, as the window's)...
+    cmp byte [rw_pace], 0
+    jne .stdy
+    cmp word [rw_fsleft], 1         ; caught up, or ONE frame behind (a draw
+    jbe .due                        ;   that ran past a period): draw this
+                                    ;   one, when due (rw_drawdue, as the
+                                    ;   window's) - Link's Awakening skipped
+                                    ;   a draw in four for that with a fifth
+                                    ;   of the machine idle
+    cmp byte [rw_fsrun], RW_FSSKIP  ; ...
     jb .f
     mov bx, [rw_fsleft]             ; ...or behind (rw_drawdue), by more
     call rw_behind                  ;   the further behind
@@ -395,6 +415,16 @@ rw_fsmain:
     cmp word [rw_fsleft], 0
     jne .f
     jmp .loop
+.stdy:                              ; STEADY: every k-th frame drawn and
+    mov al, [rw_fsrun]              ;   none between, k from what the
+    cmp al, [rw_pk]                 ;   cycles measure (rw_padapt) - an
+    jae .sdue                       ;   even cadence where Free's draws
+    cmp word [rw_fsleft], 0         ;   land wherever there was room, and
+    jne .f                          ;   the game's pace with them
+    jmp .loop
+.sdue:
+    call rw_padapt
+    jmp short .draw
 .idle:
     mov word [rw_fsleft], 0         ; (none to run after it)
 .draw:
@@ -410,6 +440,91 @@ rw_fsmain:
     pop word [rw_budget]
     mov byte [rw_infsx], 0
 .r:
+    ret
+
+; rw_pwait - OSAPI_FSX_WAIT for AL, its length added to [rw_pidl] (counts
+; / 4): the room Steady's cycle had (rw_padapt)
+rw_pwait:
+    push dx
+    push ax
+    call rw_clk
+    mov [rw_pt0], ax
+    pop ax
+    call OSAPI_FSX_WAIT
+    call rw_clk
+    sub ax, [rw_pt0]
+    shr ax, 1
+    shr ax, 1
+    add [rw_pidl], ax
+    jnc .r
+    mov word [rw_pidl], 0FFFFh
+.r:
+    pop dx
+    ret
+
+; rw_padapt - at a Steady cadence draw: k one more after two cycles in a row
+; that ended behind - the next frame owed before this draw began - and one
+; fewer after RW_PDOWN in a row whose waits would have held a cycle a frame
+; shorter. With k frames of R a period P, a draw D and the waits I, kP = kR
+; + D + I; a cycle of k - 1 fits when I >= P - R, taken with an eighth of P
+; to spare. D is the last draw's ([rw_dlast]); all in counts / 4, P at
+; Speed 100% (slower, the room is under-read: k stays up, never too low)
+rw_padapt:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [rw_fsleft]             ; behind: owed past this frame
+    or ax, [rw_fowed]
+    jz .ok
+    mov byte [rw_pdn], 0
+    inc byte [rw_pup]
+    cmp byte [rw_pup], 2
+    jb .r
+    mov byte [rw_pup], 0
+    cmp byte [rw_pk], RW_PKMAX
+    jae .r
+    inc byte [rw_pk]
+    jmp short .r
+.ok:
+    mov byte [rw_pup], 0
+    mov cl, [rw_pk]
+    cmp cl, 1
+    jbe .no                         ; (nothing below every frame)
+    xor ch, ch
+    mov ax, RW_FSDIV / 4
+    mul cx                          ; AX = kP
+    mov bx, [rw_dlast]
+    mov dx, [rw_dlast + 2]
+    shr dx, 1
+    rcr bx, 1
+    shr dx, 1
+    rcr bx, 1
+    or dx, dx
+    jnz .no                         ; (a draw past 220 ms)
+    sub ax, bx                      ; kR + I
+    jb .no
+    sub ax, [rw_pidl]               ; kR
+    jb .no
+    xor dx, dx
+    div cx                          ; AX = R
+    mov bx, RW_FSDIV / 4 + RW_FSDIV / 32
+    sub bx, ax                      ; P - R + P/8
+    jb .no
+    cmp [rw_pidl], bx
+    jb .no
+    inc byte [rw_pdn]
+    cmp byte [rw_pdn], RW_PDOWN
+    jb .r
+    dec byte [rw_pk]
+.no:
+    mov byte [rw_pdn], 0
+.r:
+    mov word [rw_pidl], 0
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; rw_fsowed - AX = the frames owed since the last call, and none left owed

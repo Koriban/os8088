@@ -193,7 +193,7 @@ kd_entry:
 %endif
     mov [kd_floor], ax
     mov [dos_arena], ax
-    mov bx, [si+KDL_CAP]        ; KB, the BDA's own figure banked by the box
+    mov bx, [si+KDL_CAP]        ; KB, the BDA's own figure banked by DOS.O88
     cmp bx, KD_CAP_MAX
     jbe .cap
     mov bx, KD_CAP_MAX          ; a cap over the 640KB an 8086 can address at
@@ -327,11 +327,14 @@ kd_entry:
     call kd_mou_start
     mov word [dos_hkv + DHK_MOUSE], kd_mou_read
     mov word [dos_hkv + DHK_TXT],  kd_mou_txt
+    mov word [dos_hkv + DHK_TSET], kd_tset   ; AH=2Dh's step (KERN-MEGA-PLAN
+                                ; 14.114): nothing here restores 0040:006C, so
+                                ; the handover count moves with it
                                 ; **THE CURSOR IS THIS HOST'S AND ONLY THIS
                                 ; HOST'S** (SPEC.md 96.10.5.1). A DOS mouse
                                 ; driver draws its own pointer and nothing
                                 ; else will; here the program owns every
-                                ; pixel, so it can be drawn. The windowed box
+                                ; pixel, so it can be drawn. The windowed DOS
                                 ; leaves this cell at zero and the core
                                 ; refuses at its second instruction, because
                                 ; there B800 is the kernel's
@@ -341,7 +344,15 @@ kd_entry:
                                 ; A20 open, so AH=4Bh's child gets the same
                                 ; in-place unpack the top-level program did.
                                 ; Only this host fills it; the low image (A20
-                                ; shut) and the box leave it zero
+                                ; shut) and DOS.O88 leave it zero
+%endif
+%ifdef KD_MEGA
+    mov word [dos_hkv + DHK_SNAP], kd_snap   ; **AND THE PROGRAM'S LAST
+                                ; SCREEN** (KERN-MEGA-PLAN 14.106): DOS.O88's
+                                ; own dos_snap cannot reach its console from a
+                                ; trip, so this host writes it - through the
+                                ; linear the kernel staged, by int 15h AH=87h.
+                                ; Both kern_mega images, HMA and low
 %endif
 %ifndef KD_NO_KBGUARD
     call kd_kbd_start           ; ...and the key buffer's guard, BEFORE the
@@ -351,6 +362,10 @@ kd_entry:
     call kdx_init               ; ...and kern_mega's XMS arena with its int
                                 ; 15h filter, BEFORE the bank for the same
                                 ; reason again (SPEC.md 96.15.4)
+    call kd_snseed              ; ...and DOS.O88's console onto the program's
+                                ; screen, `Starting` and the cursor under it
+                                ; (96.34.4 on a trip, KERN-MEGA-PLAN 14.106):
+                                ; kdx_87 is ready now, and nothing has drawn
 %ifndef KD_HMA
     call kd_a20shut             ; ...and the LOW image's A20, SHUT for the
                                 ; program (SPEC.md 96.40.9.2): kern_mega left
@@ -421,7 +436,7 @@ kd_entry:
     jmp short .say                  ; program that was never there came home as
 .noroom:                            ; `ended, exit code 255` - a sentence about
     mov si, kd_s_noroom             ; a run that did not happen. The reason is
-    mov al, KDC_FAIL | DER_MEM      ; the BOX's own DER_*, which this build can
+    mov al, KDC_FAIL | DER_MEM      ; DOS.O88's own DER_*, which this build can
     jmp short .say                  ; see because dos.asm defines them ungated
 .nomount:
     ; --- **AND IT SAYS WHICH ONE** (SPEC.md 96.40.4) ------------------------
@@ -472,7 +487,7 @@ kd_entry:
 .noload:
     mov si, kd_s_noload
     mov al, KDC_FAIL | DER_READ     ; ...and THE ONE THE FIELD REPORTED: a name
-                                    ; that resolves and does not open. The box
+                                    ; that resolves and does not open. DOS.O88
                                     ; already says `It could not be read.`
 .say:
     mov [kd_code+1], al             ; BEFORE kd_puts, which spends AL on the
@@ -498,7 +513,7 @@ kd_entry:
 ; -----------------------------------------------------------------------------
 ; **AND THE TWO SIDES OF `Auto` ARE MIRRORED**, which is checked HERE because
 ; this is the one file that sees both: `apps/dos/dos.asm` prints what Auto is
-; worth in KB and `kerndos/kdshim.inc` decides what it really is, and the box's
+; worth in KB and `kerndos/kdshim.inc` decides what it really is, and DOS.O88's
 ; own build cannot see the second name at all (`doscore.asm` is KD_BACKEND
 ; without kdshim.inc). A drift is a figure on the glass the launch disagrees
 ; with, which is exactly the class of defect no gate catches.
@@ -510,7 +525,7 @@ kd_giveback:
     push cx
     mov cx, KD_RAH_KEEP         ; **AND THE CALLER DOES WANT A FIGURE NOW**
     push si
-    mov si, [kd_lbp]            ; (SPEC.md 96.36.6): the box carries the width
+    mov si, [kd_lbp]            ; (SPEC.md 96.36.6): DOS.O88 carries the width
     mov ax, [si+KDL_FLAGS]      ; the user picked, and `[kd_lbp]` is the one
     pop si                      ; thing that knows WHICH block is live
     and ax, KDLF_RAHM           ; as runs + 1 in the flags word, where 0 is
@@ -561,7 +576,7 @@ kd_arena:
     mov dx, [kd_top]
     sub dx, [dos_arena]
     jbe .no                     ; DX = the arena BEFORE the window, which is
-                                ; what `dos_akb` is in the windowed box too
+                                ; what `dos_akb` is in the windowed DOS too
     mov ax, [dos_wbytes]        ; 0 before dos_fh_setup has placed one
     mov cl, 4
     shr ax, cl                  ; bytes -> paragraphs; a window is a cluster
@@ -768,7 +783,7 @@ kd_leave:
     ; **INTERRUPTS BACK ON, BECAUSE THE PROGRAM'S EXIT CAME THROUGH A GATE.**
     ; AH=4Ch arrives on an `int 21h`, which clears IF, and `dos_terminate`
     ; restores SS:SP and JUMPS rather than `iret`-ing - so the flags the gate
-    ; pushed are never popped and we are back here with IF = 0. In the box
+    ; pushed are never popped and we are back here with IF = 0. In DOS.O88
     ; that is invisible; here the very next thing is the ROM, and a BIOS disk
     ; read waits on IRQ6. `int 19h` ran, its read timed out with AH=01, and it
     ; RETURNED - so the machine printed "Press any key to restart" and then sat
@@ -817,7 +832,7 @@ kd_leave:
     call kd_bda                 ; the exit code, where a boot can find it
     ; --- ...AND WHO IT IS FOR (SPEC.md 96.41.2) -----------------------------
     ; With `KDLF_HIBER` set there is a session on the disk and the code has
-    ; just been posted to it, so the number will be on the glass in the box's
+    ; just been posted to it, so the number will be on the glass in DOS.O88's
     ; own console a few seconds from now - and a *"Press any key"* in front of
     ; it is a machine that stops, in the middle of coming back, for an answer
     ; it does not use. **The line still says why the screen is about to go**,
@@ -941,7 +956,7 @@ kd_bda:
 ; in:  SI = the block; DS = ES = KD_SEG
 ; out: everything clobbered but SI
 ;
-; The table is kdlaunch.inc's and the box emits the identical one, so this is
+; The table is kdlaunch.inc's and DOS.O88 emits the identical one, so this is
 ; the same walk in the other direction. One segment throughout: the stub put
 ; the block in OUR image (§7 step 7), which is what makes it a plain `movsb`
 ; and not a segment argument.
@@ -1082,6 +1097,20 @@ section .text
 ; here so the call need not be far - is WRONG, because near or far is a
 ; property of the BODY and not of the distance: `dkf_dsk_vol_fixed` ends in
 ; `retf` whatever segment it is in. kdback.inc's header has the rest of it.
+; --- kd_tset - DHK_TSET: a DOS program set the time (KERN-MEGA-PLAN 14.114) --
+; in:  DX:AX = the new tick count less the old, signed; clobbers BX
+;
+; The way home measures the program's run as 0040:006C less the count the
+; launch block banked at the handover (KDL_TICK, SPEC.md 96.49.5), and AH=2Dh
+; writes 0040:006C. Moving the banked count by the same step keeps the
+; difference the run: a clock set BACK made it negative, which the wake reads
+; as a midnight crossed - the session came home a day on.
+kd_tset:
+    mov bx, [kd_lbp]
+    add [bx + KDL_TICK], ax
+    adc [bx + KDL_TICK + 2], dx
+    ret
+
 section .text
 dsk_vol_fixed:
     call COLD_SEG:dkf_dsk_vol_fixed

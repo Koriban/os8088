@@ -138,7 +138,9 @@ def leg(defines, label, image=None, apps=None):
     S = (lambda n: os88sym.linear(n, defines))
     say("\n=== %s ===" % label)
     with os88marty.launch(image or IMAGE, apps=apps or APPS,
-                          machine=MACHINE) as m:
+                          machine=MACHINE, boot=False) as m:
+        m.run()
+        os88marty.kernel_up(m)          # every act after is a read or a click
         mo = os88mouse.Mouse(marty=m)
         os88marty.no_saver(m)
 
@@ -151,27 +153,47 @@ def leg(defines, label, image=None, apps=None):
         # opened inside it, both read through dsk_* and int 13h. A host-driven
         # SEEK would be a shorter route to the same cylinder and would prove
         # less - the claim is about what a SESSION leaves behind.
-        dispcp.open_drive(m, mo, S, os88marty.settle, "B")
+        dispcp.open_drive(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), "B")
         win = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, win)
-        dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, "APPS")
+        dispcp.open_named(m, mo, S, lambda m, card=None, gate=None: os88marty.ui_done(m), wx, wy, "APPS")
         m.pause()
         dirty = show("after a Disk window read B:", st3(m))
 
         # THE RESTART. The BYTE and not the menu: ui_reboot_post's whole job is
-        # to set it (SPEC.md 20.10), the installer's Restart sets it to exactly
+        # to set it (SPEC.md 20.10), the install wizard's Restart sets it to exactly
         # this value, and ui_task spends it at the top of its next pass with
-        # nothing held. tests/instrest.py owns the click; this row owns the
-        # tail, and driving it from the byte keeps a menu's item order out of
-        # an FDC test.
+        # nothing held. tests/netinst.py presses the wizard's Restart; this
+        # row owns the tail, and driving it from the byte keeps a menu's item
+        # order out of an FDC test.
         # 18.100's park now ENDS in the int 19h, so on the default arm the
         # GUI's last instruction is dsk_rb_go in .cold; NOFDDPARK=1 keeps
         # ui_rb_go in .text.
-        m.bp_exec(S("ui_rb_go" if "NO_FDDPARK" in defines else "dsk_rb_go"))
+        #
+        # **THE ADDRESS COMES FROM m.sym() AND NOT FROM S()**, and this row was
+        # the case that proved it: MACHINE is a CGA, so kmain_o SLIDES `.cold`
+        # down by VGA_PARA at boot (docs/plans/MOVABLE-COLD-PLAN.md 2), and
+        # os88sym.linear's address for a `.cold` label is then 0x7F0 bytes
+        # above the code it names. That address held dskw_norm.hi, so the
+        # "park" stop was taken inside the SECOND boot's first by-name read -
+        # after int 19h, on a machine every emulator here starts parked - and
+        # the row passed vacuously, or missed when that boot did not reach
+        # the branch inside 60 guest seconds. m.sym() reads [api_coldseg] and
+        # follows the slide; the CS:IP check below makes any repeat of it a
+        # named failure rather than a reading taken somewhere else.
+        go = m.sym("ui_rb_go" if "NO_FDDPARK" in defines else "dsk_rb_go",
+                   defines)
+        m.bp_exec(go)
         m.write(S("ui_rebootq"), bytes([UI_RBQ_NOFLUSH]))
         m.run()
         if not m.wait_stop(60.0):
             say("  !! ui_rb_go was never reached")
+            return {"fresh": fresh, "dirty": dirty, "parked": None, "eqp": eqp}
+        r = m.regs()
+        at = (r["cs"] << 4) + r["ip"]
+        if at != go:
+            say("  !! stopped at %04X:%04X, not at the int 19h (%05X)"
+                % (r["cs"], r["ip"], go))
             return {"fresh": fresh, "dirty": dirty, "parked": None, "eqp": eqp}
         parked = show("at ui_rb_go, one instruction from int 19h", st3(m))
         return {"fresh": fresh, "dirty": dirty, "parked": parked, "eqp": eqp}

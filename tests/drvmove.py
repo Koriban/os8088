@@ -77,13 +77,27 @@ def main():
     # HDD.DRV at boot here, and this row ticks it in itself
     import hdoff
     with M.launch(hdoff.image(), apps=a.apps,
-                  machine=a.machine) as m:
-        M.settle(m)
+                  machine=a.machine, boot=False) as m:
+        m.run()                                 # SOAK-SPEED technique 12:
+        M.kernel_up(m)                          # a state gate, not a settle
         M.no_saver(m)
         mo = Mouse(marty=m)
+        mega = getattr(m, "bochs", False)
+
+        def key(v):
+            """A segment WORD as the claim map keys its block. On kern_mega
+            (KERN-MEGA-MEMORY-PLAN MC7.4) drv_tab, the class fast paths and
+            the owner words hold an LDT SELECTOR that a move REBASES and
+            never changes, so "it moved" and "still holds the old one" are
+            asked of the PARAGRAPH under it. Anything else (a slot, a tag,
+            0) is itself"""
+            if mega and v and v < 0xA000 and v & 4:
+                b = m.selector(v)
+                return b[0] >> 4 if b else v
+            return v
 
         mo.menu(8, 8, 8, 40)                    # chip menu -> Control Panel
-        heaphi.quiet(m)
+        M.ui_done(m)
         cp = [w for w in heaphi.wins(m) if w[3] >= 280 and w[4] >= 100]
         if not cp:
             sys.exit("no Control Panel - nothing below could mean anything")
@@ -92,10 +106,10 @@ def main():
 
         def item(n):
             mo.click(x0 + 40, y0 + CP_I0Y + n * CP_IROWH + 7)
-            heaphi.quiet(m)
+            M.ui_done(m)
 
         def seg(r):
-            return u16(m.read(S("drv_tab") + r * DRVR_SZ + DRVR_SEG, 2))
+            return key(u16(m.read(S("drv_tab") + r * DRVR_SZ + DRVR_SEG, 2)))
 
         # A load is a floppy read, which freezes the UI and so fools a screen
         # settle: wait for the row's segment to change, mount or unmount.
@@ -105,10 +119,10 @@ def main():
                      y0 + CP_DBY1 + r * CP_DROWH + CP_DROWH // 2)
             try:
                 M.until(m, lambda _: seg(r) != was,
-                        "driver row %d to (un)mount" % r, poll=0.25, limit=60)
+                        "driver row %d to (un)mount" % r, limit=60)
             except M.MartyError:
                 pass                            # ...judged by the caller
-            heaphi.quiet(m)
+            M.ui_done(m)
 
         item(CP_IDRV)
         drvrow(HDD_ROW)
@@ -142,28 +156,37 @@ def main():
         # row was there the move left it on rd0, the copy the compactor had
         # just vacated: the card's next report ran there and its feed was
         # refused (docs/FIELD-NOTES.md 67)
+        #
+        # ON KERN_MEGA THE VECTOR IS PLANTED AS A PARAGRAPH, which is what
+        # the IVT holds there: its rows stay REAL - a reflected BIOS call and
+        # a DOS trip read them - and a protected-mode move is a rebase that
+        # tells nobody, so the rows are the one holder that must be walked
+        # (mem_ivt_relocf, KERN-MEGA-PLAN 14.90), and seg() answers one
         V33 = 0x33 * 4
         old33 = m.read(V33, 4)
         m.write(V33, struct.pack("<HH", 0x0123, rd0))
 
         # --- force ------------------------------------------------------------
         mo.click(cp[1] + 8, cp[2] + 9)          # close the panel
-        heaphi.quiet(m)
-        dispcp.open_drive(m, mo, S, M.settle, "B")
+        M.ui_done(m)
+        # every read below is guest MEMORY, so the UI finishing is the wait
+        # (SOAK-SPEED technique 4); the last assertion keeps its settle
+        done = lambda m, **k: M.ui_done(m)     # noqa: E731
+        dispcp.open_drive(m, mo, S, done, "B")
         dslot = dispcp.win_list(m, S)[-1]
         wx, wy, _, _ = dispcp.win_rect(m, S, dslot)
         mo.drag(wx + 60, wy + 9, wx + 60 + 215, wy + 9)
-        M.settle(m)
+        M.ui_done(m)
         disk = dispcp.win_rect(m, S, dslot)[:2]
         before = set(w.i for w in os88geom.windows(m, S) if w.visible)
-        dispcp.open_named(m, mo, S, M.settle, *disk, name="FILLER.O88")
+        dispcp.open_named(m, mo, S, done, *disk, name="FILLER.O88")
         try:
             M.until(m, lambda _: any(w.visible and w.i not in before
                                      for w in os88geom.windows(m, S)),
-                    "the filler's window", poll=0.25, limit=60)
+                    "the filler's window", limit=60)
         except M.MartyError:
             pass                                # ...reported just below
-        M.settle(m)
+        M.ui_done(m)
         new = [w for w in os88geom.windows(m, S)
                if w.visible and w.i not in before]
         if not new:
@@ -173,16 +196,16 @@ def main():
         if pt is None:
             sys.exit("the filler's title bar is wholly covered")
         mo.click(*pt)
-        M.settle(m)
+        M.ui_done(m)
         for _ in range(6):
             m.key("KeyA")
             try:                                # the claim, and the move it
                 M.until(m, lambda _: seg(RD_ROW) not in (rd0, 0),   # forces
-                        "the RAM disk image to move", poll=0.25,
+                        "the RAM disk image to move",
                         guest=6 * M.GUEST_PACE)
             except M.MartyError:
                 pass                            # ...press again
-            M.settle(m)
+            M.ui_done(m)
             if seg(RD_ROW) not in (rd0, 0):
                 break
 
@@ -202,10 +225,10 @@ def main():
                  "drv_fseg4": 0, "drv_fseg5": 0, "drv_fseg6": 0,
                  "drv_fseg7": 0, "drv_fseg8": 0, "drv_blkseg": 0}
         for n in words:
-            words[n] = u16(m.read(S(n), 2))
+            words[n] = key(u16(m.read(S(n), 2)))
         rows = {"drv_tab[%d]" % r: seg(r) for r in range(7)}
         owners = {"claim owner %04x" % o: o
-                  for o in set(c[2] for c in claims(m, S))}
+                  for o in set(key(c[2]) for c in claims(m, S))}
         stale = sorted(k for k, v in
                        list(words.items()) + list(rows.items())
                        + list(owners.items()) if v == rd0)

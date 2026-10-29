@@ -58,6 +58,15 @@ ZXE_COUNT   equ 7
 
 ZX_BURST    equ 64                  ; instructions per lock hold - see the banner
 
+; --- [zx_rsm]: which handler's wait a RESTART resumes (zx_restart) -----------
+; Each names one row of zx_rsmtab, in this order. 0 is "no wait in flight".
+ZXR_READ    equ 1                   ; @read          zi_readline
+ZXR_CHAR    equ 2                   ; @read_char     zi_readchar
+ZXR_SAVE    equ 3                   ; @save (0OP and EXT:0)     zi_request
+ZXR_REST    equ 4                   ; @restore (0OP and EXT:1)  zi_restore
+ZXR_RESTART equ 5                   ; @restart       zi_request
+ZXR_VERIFY  equ 6                   ; @verify        re-run from the start
+
 ; The Z-stack claim. zio.inc makes it at load time; this is the size zexec
 ; will not write past, and the two have to agree (16KB = 8192 words, well
 ; over the Standard's 1024-word minimum in 6.3.3 and enough for the modern
@@ -69,7 +78,8 @@ ZX_STKBYTES equ ZI_STKKB * 1024
 %define zx_raw     (os88_image_end + ZEXEC_SLACK + 78)   ; byte: the opcode BYTE,
                                     ; and +79 is never written: zx_report reads
                                     ; the pair as a word
-%define zx_seglim  (os88_image_end + ZEXEC_SLACK + 80)   ; word: last valid ES
+                                    ; zf_pglim (+80, word: the PC's last
+                                    ; legal page x2) is defined in zbss.inc
 
 ; --- call frame layout, in the [zf_stkseg] claim ------------------------------
 ; One frame, then its locals, then its evaluation stack. Standard 6.3.1/6.3.2:
@@ -78,15 +88,27 @@ ZX_STKBYTES equ ZI_STKKB * 1024
 ZXF_PREV    equ 0                   ; word: the caller's frame base (0xFFFF = none)
 ZXF_PCL     equ 2                   ; word: return address, low 16 bits
 ZXF_PCH     equ 4                   ; word: ...and high 4
-ZXF_STORE   equ 6                   ; byte: where the result goes (0xFF = discard)
-ZXF_NLOC    equ 7                   ; byte: locals in this frame
+ZXF_NLOC    equ 6                   ; byte: locals in this frame
+ZXF_STORE   equ 7                   ; byte: where the result goes (0xFF = discard)
+                                    ; - IN THIS ORDER, zio.inc's ZI_FR_NLOC and
+                                    ; ZI_FR_STORE. They were the other way round
+                                    ; here from the day Frotz shipped, and Stks
+                                    ; reads the pair as ONE WORD ("AL = nlocals,
+                                    ; AH = store"), so every save took a frame's
+                                    ; store byte for its locals count - 0xFF for
+                                    ; the dummy frame - walked an evaluation
+                                    ; stack of -255 words, wrapped DI through
+                                    ; the staging claim and wrote a file of
+                                    ; zeros that @restore then refused as "Not a
+                                    ; Quetzal saved game" (tests/zrestart.py)
 ZXF_ARGC    equ 8                   ; word: arguments supplied (@check_arg_count)
 ZXF_LOC     equ 10                  ; the locals start here
 
 ; --- private bss, out of ZEXEC_SLACK (84 bytes, all used: +76 is zf_sdelta, ---
-; --- +78/+80 zx_raw/zx_seglim above, +82 ZXTRACE's zxt_n) --------------------
+; --- +78/+80 zx_raw/zf_pglim above, +82 ZXTRACE's zxt_n) ---------------------
 %define zx_op       (os88_image_end + ZEXEC_SLACK + 0)   ; byte: opcode number
-                                                         ; +1: free
+%define zx_rsm      (os88_image_end + ZEXEC_SLACK + 1)   ; byte: ZXR_*, the wait
+                                    ; a restart resumes (zx_restart), 0 = none
 %define zx_seen     (os88_image_end + ZEXEC_SLACK + 2)   ; byte: last [zf_state]
                                                          ; +4: free
 %define zx_ra_l     (os88_image_end + ZEXEC_SLACK + 6)   ; word: routine address
@@ -97,9 +119,66 @@ ZXF_LOC     equ 10                  ; the locals start here
 %define zx_tmp1     (os88_image_end + ZEXEC_SLACK + 16)  ;       owned, never
 %define zx_tmp2     (os88_image_end + ZEXEC_SLACK + 18)  ;       live across a
 %define zx_tmp3     (os88_image_end + ZEXEC_SLACK + 20)  ;       call out
-%define zx_sum      (os88_image_end + ZEXEC_SLACK + 22)  ; word: @verify total
+%define zx_vpg      (os88_image_end + ZEXEC_SLACK + 22)  ; word: @verify's page x2
 %define zx_encbuf   (os88_image_end + ZEXEC_SLACK + 24)  ; 40: @encode_text in
 %define zx_encout   (os88_image_end + ZEXEC_SLACK + 64)  ; 12: ...and out
+
+; =============================================================================
+; zx_restart - the worker's RESTART POINT (SPEC.md 66.6.2, 66.5.9.3)
+; in:  zx_worker's own: DX = our instance index, DS = CS = our segment - the
+;      NEW one, after the kernel moved this region - ES = KERNEL_SEG, every
+;      other register zero, a fresh stack, the gfx lock NOT held
+; out: never returns
+;
+; zf_hire declares this with OS88_WORKER_RESTARTABLE, which tells the kernel
+; it may throw the worker's stack away and re-enter it HERE whenever it is
+; parked - and Frotz never declares OSAPI_MEM_PARKSAFE (66.5.9.1), so the only
+; place it parks is inside OSAPI_TASK_ALIVE: at zx_worker's loop top, or in
+; zi_yield inside one of the waits below. So there are two cases and only two.
+;
+;  - [zx_rsm] = 0: between instructions. The PC is already spilled (zx_run
+;    leaves it in [zf_pcseg]/[zf_pcoff], and zf_reloc keeps the segment
+;    current), so this IS zx_worker: fall into it.
+;  - [zx_rsm] = ZXR_*: an opcode was waiting - for a line, a key, a dialog's
+;    answer - and its stack frames are gone. RE-EXECUTING IT IS LOSSY: its
+;    operand decode pops the Z-stack for a variable-0 operand, the PC already
+;    stands at its store/branch byte, and what it printed (@read's echo, the
+;    save prompt) is already on the glass. So the WAIT is resumed instead,
+;    from state that was never on the stack: zi_readline's line is in bss,
+;    a request's [zf_req]/[zf_reqres] are read as they stand - answered or
+;    not, nothing is posted twice - and then the handler's own post-wait
+;    tail runs, exactly as if its frames had survived. @verify is the one
+;    that re-runs from the start, being pure.
+;
+; Each row of zx_rsmtab is (the wait's resume entry, the handler's .post).
+; The resume entry rebuilds the frame its routine pops and jumps into its
+; wait loop; the handler's .post re-takes the lock, clears [zx_rsm] and
+; reloads the PC from bss; and its last `ret` lands on zx_rsmret, which is
+; what zx_run does after an instruction - spill the PC, drop the lock - and
+; then the loop top, the burst it was in being forfeit.
+;
+; [MORE] is the one wait that is NOT resumable (zw_morewait): the text
+; decoder's place is on the stack under it. It withdraws the declaration for
+; the length of its wait instead, so the region is pinned while the prompt
+; is up - a missed move, never a lost one.
+; =============================================================================
+zx_restart:
+    ; STKBALANCE-OK: never called - the kernel enters it on a fresh stack, and
+    ; it pushes the TWO return addresses the frames it replaces would hold
+    cld                             ; zi_restore's tail assumes it
+    mov bl, [zx_rsm]
+    or bl, bl
+    jz zx_worker                    ; between instructions: nothing to resume
+    mov bh, 0
+    shl bx, 1
+    shl bx, 1                       ; BX = 4 * ZXR_*
+    mov ax, zx_rsmret
+    push ax                         ; where the handler's own `ret` goes...
+    push word [bx + zx_rsmtab - 4 + 2]  ; ...where the wait's `ret` goes...
+    jmp word [bx + zx_rsmtab - 4]   ; ...and into the wait
+zx_rsmret:                          ; zx_run's post-instruction, then the top:
+    call zx_unlock                  ; the PC is in ES:SI, the lock is held
+    call zx_spill
 
 ; =============================================================================
 ; zx_worker - the VM task entry (SPEC.md 20.6)
@@ -186,20 +265,18 @@ zx_boot:
     mov [es:bx+ZXF_ARGC], ax
     pop es
 
-    ; The highest segment the PC may legally hold: base + (length >> 4). A word
-    ; may start at the last byte, so the limit is inclusive and generous by a
-    ; paragraph - this is a sanity net, not a bounds check on reads (zmem does
-    ; those).
+    ; The highest PAGE the PC may legally be in: the one holding the story's
+    ; last byte, x2 as [zf_pcpg] is. zm_norm refuses to step past it - a
+    ; sanity net, not a bounds check on reads (zmem does those). A page and
+    ; not a segment: on kern_mega a segment is a selector and has no order.
     mov ax, [zf_slen_l]
     mov dx, [zf_slen_h]
-    mov cl, 4
-    shr ax, cl
-    mov bx, dx
-    mov cl, 12
-    shl bx, cl
-    or ax, bx
-    add ax, [zf_sseg]
-    mov [zx_seglim], ax
+    sub ax, 1
+    sbb dx, 0
+    shl ax, 1
+    rcl dx, 1                       ; DX = (length - 1) >> 15
+    shl dx, 1
+    mov [zf_pglim], dx
 
     xor ax, ax
     mov [zf_fp], ax
@@ -331,6 +408,32 @@ zx_unlock:
     ret
 
 ; -----------------------------------------------------------------------------
+; zx_park / zx_relock - either side of an opcode's RESUMABLE wait (zx_restart)
+; zx_park   in:  DL = ZXR_*, ES:SI = the PC, the lock held
+;           out: [zx_rsm] = DL, the PC spilled, the lock dropped
+; zx_relock in:  the lock not held
+;           out: the lock held, [zx_rsm] = 0; preserves AX, DX and the FLAGS
+;                (every caller carries its wait's answer in one of them)
+;
+; [zx_rsm] is written BEFORE the lock goes and cleared only AFTER it is back,
+; so at every point the worker can park, it names the wait it is in.
+; -----------------------------------------------------------------------------
+zx_park:
+    mov [zx_rsm], dl
+    call zx_spill
+    jmp short zx_unlock
+zx_relock:
+    pushf
+    push ax
+    push dx
+    call zx_lock
+    pop dx
+    pop ax
+    popf
+    mov byte [zx_rsm], 0
+    ret
+
+; -----------------------------------------------------------------------------
 ; zx_spill / zx_load - move the PC between ES:SI and the bss
 ; in/out: as named; preserve every other register
 ; -----------------------------------------------------------------------------
@@ -366,14 +469,20 @@ zx_step:
     ; hundreds of instructions later somewhere unrelated. One compare catches
     ; it at the instruction after the one that did it, and the halt names that
     ; opcode. It cost about 20 bytes and it found two bugs.
+    ;
+    ; The PC is a PAGE and an offset (zmem.inc), so the test is that ES is
+    ; the PC's page's segment: an EQUALITY against the table, never an order
+    ; compare - on kern_mega ES is a selector, and selectors have no order.
+    ; A mover that sends the PC out of the story leaves [zf_pcseg] 0 (zx_jrel)
+    ; or refuses outright (zm_norm), and either lands here.
     mov ax, es
-    cmp ax, [zf_sseg]
-    jb zx_lost
-    cmp ax, [zx_seglim]
-    ja zx_lost
+    mov bx, [zf_pcpg]
+    cmp ax, [zf_stab + bx]
+    jne zx_lost
     cmp si, 0x8000
     jb .norm
     call zm_norm                    ; once per 32KB of straight-line code
+    jc zx_lost                      ; ...and walked off the story's end
 .norm:
     mov byte [zf_opn], 0
     mov byte [zf_store], 0xFF
@@ -924,25 +1033,25 @@ zx_branch:
 ; in:  BX = the signed delta, ES:SI = the PC
 ; out: ES:SI moved; preserves all registers
 ;
-; SI is only ever in 0..0x8015 at this point (zx_step renormalises at 0x8000
-; and no instruction is longer than 21 bytes), and a branch offset is at most
-; +/-8191, so exactly one case needs a segment adjustment: a backwards move
-; that goes below zero. `add si, bx` with BX negative clears CF precisely when
-; that happened, and 0x1000 paragraphs is the 65536 bytes SI wrapped by.
+; SI is only ever in 0..0x8015 at this point (zx_step moves to the next page
+; at 0x8000 and no instruction is longer than 21 bytes), and a move is at most
+; +/-8191 for a branch and +/-32767 for @jump, so exactly one case needs the
+; page to change: a backwards move that goes below zero. `add si, bx` with BX
+; negative clears CF precisely when that happened.
 ;
-; THE WHOLE OFFSET IS THEN FOLDED BACK INTO THE SEGMENT, and that is not
-; tidiness. `sub es, 0x1000` alone leaves ES:SI addressing the right BYTE with
-; SI up near 0xFFFF and ES a full 64KB below where the story starts - a legal
-; alias of a legal address that nothing downstream accepts. zx_step's guard
-; compares ES against [zf_sseg] and calls it a lost PC; zm_pcaddr subtracts
-; [zf_sseg] and reports an address a megabyte out, so the return address a
-; @call banks is wrong and the matching @ret fails zm_inimg. It bit whenever
-; the PC was in the story's first 64KB and a backwards branch reached further
-; back than SI had walked - which is every loop whose body contains a call,
-; because @ret comes through zm_seek and zm_seek leaves SI in 0..15. That is
-; the halt docs/plans/completed/FROTZ-PLAN.md 10.1 describes: the guard was right that
-; something had gone wrong and wrong about what, because the PC in front of it
-; was correct and merely unnormalised.
+; THE PC MOVES BACK BY ITS PAGE INDEX, and that is not tidiness. A move that
+; leaves SI near 0xFFFF in a segment 64KB below the right one addresses the
+; right BYTE in real mode and nothing downstream accepts it: zx_step's guard
+; calls it a lost PC and zm_pcaddr reports an address a megabyte out, so the
+; return address a @call banks is wrong and the matching @ret fails zm_inimg.
+; It bit whenever a backwards branch reached further back than SI had walked -
+; which is every loop whose body contains a call, because @ret comes through
+; zm_seek. That is the halt docs/plans/completed/FROTZ-PLAN.md 10.1 describes:
+; the guard was right that something had gone wrong and wrong about what,
+; because the PC in front of it was correct and merely unnormalised. With the
+; PC a page and an offset (zmem.inc) the fold is one page back and SI less
+; 0x8000, and on kern_mega - where a segment is a selector and cannot be
+; offset at all - it is the only form there is (KERN-MEGA-MEMORY-PLAN MC7).
 ; -----------------------------------------------------------------------------
 zx_jrel:
     or bx, bx
@@ -952,23 +1061,25 @@ zx_jrel:
 .neg:
     add si, bx
     jc .ok                          ; no borrow: SI stayed above zero
-    push ax
-    push cx
-    mov ax, si                      ; SI is now the true offset MINUS 0x10000,
-    mov cl, 7                       ; so its top 9 bits are GRANULES the
-    shr ax, cl                      ; segment is owed (zm_map's unit)
-    mov cl, 3
-    shl ax, cl
-    and si, 127
-    mov cx, es
-    sub cx, 0x1000                  ; ...less the 64KB SI wrapped by
-    add ax, cx
-    mov es, ax
-    mov [zf_pcseg], ax              ; a PC mover; see zm_seek in zmem.inc
+    ; SI is now the true offset PLUS 0x10000: in [0x10000 - 0x8000, 0xFFFF]
+    ; for any move this file makes (SI was under 0x8000 + an instruction, BX
+    ; is at least -0x8000), which is the PREVIOUS page at SI - 0x8000. One
+    ; page back, by index; never a sum on the segment.
+    sub si, 0x8000
+    push bx
+    mov bx, [zf_pcpg]
+    sub bx, 2
+    jb .under                       ; before the story's first byte
+    mov [zf_pcpg], bx
+    mov es, [zf_stab + bx]
+    mov [zf_pcseg], es              ; a PC mover; see zm_seek in zmem.inc
     mov [zf_pcoff], si
-    pop cx
-    pop ax
+    pop bx
 .ok:
+    ret
+.under:
+    mov word [zf_pcseg], 0          ; no page's segment: zx_step's guard
+    pop bx                          ; halts on it at the next instruction
     ret
 
 ; =============================================================================
@@ -1849,75 +1960,68 @@ zxo_nop:                            ; 0OP:180
 
 zxo_save0:                          ; 0OP:181 save - three different opcodes
     ; v1-3 branch on success, v4 stores 0/1, and from v5 the slot is illegal
-    ; because @save moved to EXT:0 with its own operands. The answer is banked
-    ; in DL before anything else touches the flags: a `cmp` for the version
-    ; would otherwise eat the CF that IS the result.
+    ; because @save moved to EXT:0 with its own operands - which jumps to .go
+    ; below, past the version test, and shares everything after it: EXT:0
+    ; stores 0/1 exactly as v4 does, so one body and one resume serve both
+    ; (zx_svtail tells them apart by version).
     cmp byte [zf_ver], 5
     jae zx_bad
-    call zx_spill                   ; Quetzal stores the PC of the store/branch
-    call zx_unlock                  ; data, which is exactly where it stands
-    call zi_save                    ; now (zio waits on the UI task, so the
-    mov dl, 0                       ; lock cannot be held across it)
-    jnc .ok
-    mov dl, 1
-.ok:
-    push dx
-    call zx_lock
-    pop dx
-    cmp byte [zf_ver], 4
-    je .v4
-    or dl, dl
-    jz zx_bt
-    jmp zx_bf
-.v4:
-    mov bx, 1
-    or dl, dl
-    jz .st
-    xor bx, bx
-.st:
-    jmp zx_storeres
+.go:
+    mov dl, ZXR_SAVE                ; a RESUMABLE wait (zx_park): Quetzal
+    call zx_park                    ; stores the PC of the store/branch data,
+    call zi_save                    ; which is exactly where it stands now
+.post:                              ; (zio waits on the UI task, so the lock
+    call zx_relock                  ; cannot be held across it); CF = failed
+    call zx_load                    ; THE PC FROM BSS, NOT FROM zi_save's
+    mov bx, 1                       ; FRAME: the story can move across the
+    jmp short zx_svtail             ; wait and that frame's ES does not follow
 
 zxo_restore0:                       ; 0OP:182 restore - the mirror of the above
-    cmp byte [zf_ver], 5
+    cmp byte [zf_ver], 5            ; (EXT:1 joins at .go, as EXT:0 does save)
     jae zx_bad
-    call zx_spill                   ; our own PC is the fallback if the file
-    call zx_unlock                  ; refuses; on success zio has replaced it
+.go:
+    mov dl, ZXR_REST                ; our own PC is the fallback if the file
+    call zx_park                    ; refuses; on success zio has replaced it
     call zi_restore
-    mov dl, 0
-    jnc .ok
-    mov dl, 1
-.ok:
-    push dx
-    call zx_lock
-    pop dx
+.post:
+    call zx_relock
     call zx_load                    ; ES:SI = whichever PC now stands
-    cmp byte [zf_ver], 4
-    je .v4
-    or dl, dl
-    jz zx_bt
-    jmp zx_bf
-.v4:
     mov bx, 2                       ; 2 = "the game has just been restored"
-    or dl, dl
-    jz .st
+
+; zx_svtail - the answer @save/@restore owe the story, in every form
+; in:  CF = 1 failed, BX = the success value (1 save, 2 restore); ES:SI = the
+;      PC at the store/branch data
+; v1-3 branch on success; v4 and EXT:0/EXT:1 (v5+) store BX, or 0 on failure.
+zx_svtail:
+    jnc .ok
     xor bx, bx
+.ok:
+    cmp byte [zf_ver], 4
+    jae .st
+    or bx, bx                       ; CF = 0: the branch on failure...
+    jz .br
+    stc                             ; ...and CF = 1 on success
+.br:
+    jmp zx_branch
 .st:
     jmp zx_storeres
 
 zxo_restart:                        ; 0OP:183 restart
     ; There is no resident pristine copy of the story (FROTZ-PLAN 3), so a
     ; restart is a re-read off the floppy and therefore UI-task work: zio owns
-    ; the handshake and we only re-boot the machine once it answers.
-    call zx_unlock
+    ; the handshake and we only re-boot the machine once it answers. zx_park
+    ; spills the PC as well, which this used to skip - harmless while the wait
+    ; always came back through this frame, and needed now that a refusal can
+    ; arrive through zx_restart, which has no ES:SI of ours to hand back.
+    mov dl, ZXR_RESTART
+    call zx_park
     call zi_restart
-    pushf
-    call zx_lock
-    popf
+.post:
+    call zx_relock
     jc .no
     call zx_boot
-    call zx_load
 .no:
-    ret
+    jmp zx_load
 
 zxo_ret_popped:                     ; 0OP:184 ret_popped
     call zx_pop
@@ -1966,10 +2070,18 @@ zxo_verify:                         ; 0OP:189 verify ?(label)
     ; move leaves pointing at the claim's OLD home. It used to come back as
     ; exactly that, and the branch byte below was then read out of memory the
     ; story no longer owned. None of the three touches the flags.
-    call zx_spill
+    mov byte [zx_rsm], ZXR_VERIFY   ; resumable: but by RE-RUNNING, it being
+    call zx_spill                   ; pure (zx_restart -> zx_verify_rsm)
     call zx_verify
+.post:                              ; the lock is held again here
+    mov byte [zx_rsm], 0
     call zx_load
     jmp zx_branch
+
+; The resume: zx_verify is entered with the lock HELD and drops it per chunk.
+zx_verify_rsm:
+    call zx_lock
+    jmp zx_verify
 
 zxo_piracy:                         ; 0OP:191 piracy ?(label)
     ; Standard 15: "interpreters are asked to branch on true". This copy is
@@ -1991,15 +2103,19 @@ zxo_piracy:                         ; 0OP:191 piracy ?(label)
 ; lock every 4KB, which is ~16ms of work, well inside one 55ms tick, and calls
 ; zi_yield there so the desktop and the clock keep running through it.
 ;
-; ES:SI walks the story itself and is renormalised after every chunk, so SI
-; never passes $9000; DX:AX counts down what is left. zi_yield repairs the ES
-; it is handed if the compactor slid the story meanwhile (zio.inc), which is
-; why nothing here is re-derived from an address after a yield.
+; ES:SI walks the story itself, a PAGE at a time (zmem.inc): after each chunk
+; an SI past 0x8000 moves [zx_vpg] on by one and drops 0x8000, so SI never
+; passes $9000; DX:AX counts down what is left. ES is re-read from the page
+; table after every yield rather than carried across it, so a story the
+; compactor slid meanwhile (zf_reloc keeps the table) is followed for free,
+; and on kern_mega - where ES is a selector that a move REBASES - it is the
+; same load.
 ; -----------------------------------------------------------------------------
 zx_verify:
     mov ax, 0x40
     xor dx, dx
-    call zm_addr                    ; ES:SI = story + $40
+    call zm_page                    ; ES:SI = story + $40, BX = its page
+    mov [zx_vpg], bx
     mov ax, [zf_slen_l]
     mov dx, [zf_slen_h]
     sub ax, 0x40
@@ -2023,23 +2139,20 @@ zx_verify:
     inc si
     add di, bx
     loop .byte
-    test byte [zf_sseg], 4          ; a selector: SI walks the whole story
-    jnz .walked                     ; (zm_map), and never wraps inside it
-    push ax
-    mov ax, si                      ; move SI's whole GRANULES into ES (8
-    mov cl, 7                       ; paragraphs each: zm_map's unit)
-    shr ax, cl
-    mov cl, 3
-    shl ax, cl
-    mov cx, es
-    add ax, cx
-    mov es, ax
-    and si, 127
-    pop ax
+    cmp si, 0x8000
+    jb .walked
+    sub si, 0x8000                  ; the next page (a page's segment reaches
+    add word [zx_vpg], 2            ; 64KB, so the chunk that crossed 0x8000
+                                    ; read on in this one)
 .walked:
     call zx_unlock
     call zi_yield                   ; OSAPI_TASK_ALIVE + a yield, lock free
     call zx_lock
+    push bx
+    mov bx, [zx_vpg]
+    and bx, 0x1E                    ; a header length is at most 512KB
+    mov es, [zf_stab + bx]
+    pop bx
     jmp short .chunk
 .done:
     mov ax, 0x1C                    ; header word 9: the file's own checksum
@@ -2129,12 +2242,11 @@ zxo_read:                           ; VAR:228 sread (v1-4) / aread (v5+)
     mov cx, ax
     mov ax, [zf_ops]
     mov bx, [zf_ops+2]
-    call zx_spill
-    call zx_unlock                  ; a worker that waits under the lock is a
-    call zi_readline                ; hung machine (SPEC.md 20.6 rule 3)
-    push ax
-    call zx_lock
-    pop ax
+    mov dl, ZXR_READ                ; a worker that waits under the lock is a
+    call zx_park                    ; hung machine (SPEC.md 20.6 rule 3)
+    call zi_readline
+.post:
+    call zx_relock
     call zx_load                    ; zio may have restored a game under us
     cmp byte [zf_ver], 5
     jb .done
@@ -2367,12 +2479,11 @@ zxo_sound_effect:                   ; VAR:245 sound_effect number effect volume
     ret
 
 zxo_read_char:                      ; VAR:246 read_char 1 time routine -> (result)
-    call zx_spill
-    call zx_unlock
+    mov dl, ZXR_CHAR
+    call zx_park
     call zi_readchar                ; out AL = the character
-    push ax
-    call zx_lock
-    pop ax
+.post:
+    call zx_relock
     call zx_load
     xor ah, ah
     jmp zx_storeax
@@ -2657,48 +2768,16 @@ zxe_save:                           ; EXT:0  save table bytes name -> (result)
     ; game state and nothing else: an auxiliary-file save is a second file
     ; format for a feature no shipped story uses, and answering 0 is the
     ; Standard's own "this did not happen" (SPEC.md 47 - refuse, do not fake).
+    ; The game-state form IS v4's 0OP:181 - a 0/1 store - so it is that body.
     cmp byte [zf_opn], 0
-    ja .aux
-    call zx_spill
-    call zx_unlock
-    call zi_save
-    mov dl, 0
-    jnc .ok
-    mov dl, 1
-.ok:
-    push dx
-    call zx_lock
-    pop dx
-    mov bx, 1
-    or dl, dl
-    jz .st
-    xor bx, bx
-.st:
-    jmp zx_storeres
-.aux:
-    jmp zx_store0
+    ja zxe_aux
+    jmp zxo_save0.go
 
 zxe_restore:                        ; EXT:1  restore table bytes name -> (result)
-    cmp byte [zf_opn], 0
-    ja .aux
-    call zx_spill
-    call zx_unlock
-    call zi_restore
-    mov dl, 0
-    jnc .ok
-    mov dl, 1
-.ok:
-    push dx
-    call zx_lock
-    pop dx
-    call zx_load                    ; on success this is the SAVED PC, which
-    mov bx, 2                       ; points back at this same store byte
-    or dl, dl
-    jz .st
-    xor bx, bx
-.st:
-    jmp zx_storeres
-.aux:
+    cmp byte [zf_opn], 0            ; ...and v4's 0OP:182, whose PC on
+    ja zxe_aux                      ; success is the SAVED one, pointing back
+    jmp zxo_restore0.go             ; at this same store byte
+zxe_aux:
     jmp zx_store0
 
 zxe_log_shift:                      ; EXT:2  log_shift number places -> (result)
@@ -3117,6 +3196,17 @@ zx_text:
     dw zxe_scroll_window, zxe_pop_stack, zxe_read_mouse, zxe_mouse_window
     dw zxe_push_stack, zxe_put_wind_prop, zxe_print_form, zxe_make_menu
     dw zxe_picture_table, zxe_buffer_screen, zx_bad, zx_bad
+
+; zx_restart's rows, in ZXR_* order: (the wait's resume entry, the handler's
+; .post). Every resume entry rebuilds exactly the frame its routine pops.
+zx_rsmtab:
+    dw zi_readline_rsm, zxo_read.post       ; ZXR_READ
+    dw zi_readchar_rsm, zxo_read_char.post  ; ZXR_CHAR
+    dw zi_request_rsm,  zxo_save0.post      ; ZXR_SAVE - zi_save's own tail
+                                            ;   after the wait is its pops
+    dw zi_restore_rsm,  zxo_restore0.post   ; ZXR_REST
+    dw zi_request_rsm,  zxo_restart.post    ; ZXR_RESTART - zi_restart's too
+    dw zx_verify_rsm,   zxo_verify.post     ; ZXR_VERIFY
 
 %ifdef ZXTRACE
 ; =============================================================================

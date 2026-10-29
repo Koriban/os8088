@@ -659,7 +659,7 @@ op_claim:
     ; CS-based claims, and this is one - it is code you far-call, and on a
     ; re-home it becomes the region itself. Claimed bottom-up it landed at the
     ; FLOOR, left the loader's freed region as a hole beneath it that no single
-    ; contiguous claim can use, and cost the DOS box 6 KB of the arena it hands
+    ; contiguous claim can use, and cost DOS 6 KB of the arena it hands
     ; its program. Measured there: 437 -> 431 KB, 5,120 of hole and 1,024 of
     ; carve head slack. The hole SURVIVED a posted compaction, which is an
     ; open question and not this routine's - SPEC.md 20.12.10.8.1 has the
@@ -668,9 +668,9 @@ op_claim:
     call OSAPI_MEM_CLAIM_DMA_HI ; 14.12): the same top-down claim on every
     jc .no                      ; kernel, and on kern_mega a CONVENTIONAL one
     mov [op_base], dx           ; for an OS88_HIGHMEM package too - every part's
-                                ; segment below is arithmetic on this base
-    add dx, [op_rpara]          ; ...and R paragraphs up is where op_read fills
-    mov [op_rdseg], dx
+                                ; place below is PARAGRAPHS from this base
+    mov ax, [op_rpara]          ; ...and R paragraphs up is where op_read fills
+    mov [op_rdseg], ax
     clc
     ret
 .no:
@@ -715,10 +715,10 @@ op_claim:
 op_read:
     push bp
     mov di, [op_cap]            ; DI = bytes still to move
-    mov bp, [op_rdseg]          ; BP = where the next chunk lands - which is
-                                ; the claim's base until a part is COMPRESSED,
-                                ; and R paragraphs above it when one is
-                                ; (SPEC.md 20.12.7). Every caller sets it
+    mov bp, [op_rdseg]          ; BP = where the next chunk lands, in
+                                ; PARAGRAPHS past [op_base] - 0 until a part
+                                ; is COMPRESSED, and R when one is (SPEC.md
+                                ; 20.12.7). Every caller sets it
 .chunk:
     or di, di                   ; DI = PARAGRAPHS still to move, which is what
     jz .done                    ; lets a run pass 64KB
@@ -731,7 +731,9 @@ op_read:
     mov cl, 4
     shl ax, cl
     mov cx, ax                  ; ...and this chunk in bytes, for the read
-    mov es, bp
+    mov ax, bp
+    call op_atb
+    mov es, ax                  ; ES = BP paragraphs up the claim
     xor bx, bx
     mov si, op_name
     mov ax, [op_off]
@@ -786,6 +788,46 @@ op_read:
     pop bp
     stc
     ret
+
+; -----------------------------------------------------------------------------
+; op_at - a segment for AX paragraphs into the claim at DX, for NOW
+; in:  AX = paragraphs, DX = the claim's segment or selector, BX -> op_wa or
+;      op_wb, the window to aim; out: AX = the segment. DX and flags
+;      clobbered, every other register kept. op_ata is op_at through op_wa,
+;      and op_atb that over the carve ([op_base]); both clobber BX too
+;
+; THE SUM the walks below always did, asked of the kernel first
+; (KERN-MEGA-MEMORY-PLAN MC7): under kern_mega's protected mode DX is a
+; selector and DX + AX names some other descriptor, so OSAPI_SEG's SEG_AT
+; aims the window at [BX] there instead - 64KB of reach, good until the same
+; window is aimed again. Every real-mode kernel REFUSES that verb with every
+; register kept, and then the sum is the answer: one far call on a load path
+; whose every step is a disk read. Two windows because two walks hold two
+; pointers at once, op_unpack's landing and its stream. A window is aimed at
+; RAM and not tied to the claim, which is safe because every claim this
+; walks is PINNED while it runs: op_movable comes after the load, and a
+; fetch's claim is its own until the fetch returns. No LDT entry free is the
+; null selector, which the load through it refuses with a fault rather than
+; writing anywhere at all.
+; -----------------------------------------------------------------------------
+op_atb:
+    mov dx, [op_base]
+op_ata:
+    mov bx, op_wa
+op_at:
+    push cx
+    mov cx, [bx]                ; the window to re-aim, 0 = a new one
+    push bx
+    mov bl, SEG_AT
+    call OSAPI_SEG              ; DX = the window...
+    pop bx
+    jnc .made
+    add dx, ax                  ; ...or, refused, the sum: a real-mode kernel
+.made:
+    mov [bx], dx
+    xchg ax, dx
+    pop cx
+    ret
 %endif                              ; OP_HAS_READ
 %if OP_HAS_COMP && OP_HAS_CARVE
 ; GATED (SPEC.md 20.12.9): op_unpack - only a table with an OP_COMP row IN THE CARVE can reach it (a lazy one is op_fetch's)
@@ -820,11 +862,9 @@ op_unpack:
     mov ax, [op_slack]
     mov cl, 4
     shr ax, cl                  ; the slack is a multiple of 512 (20.12.2)
-    mov dx, [op_base]
-    add dx, ax
-    mov bp, dx                  ; BP = where the next row LANDS
-    add dx, [op_rpara]
-    mov [op_zsrc], dx           ; ...and DX = where its bytes are NOW
+    mov bp, ax                  ; BP = where the next row LANDS, and
+    add ax, [op_rpara]          ; [op_zsrc] where its bytes are NOW - both
+    mov [op_zsrc], ax           ; PARAGRAPHS past [op_base], op_at's to load
 
     mov si, op_table + OP_T_ROWS
     mov cl, [op_t_n]
@@ -848,6 +888,7 @@ op_unpack:
     test byte [si+OP_R_FLAG], OP_COMP
     jz .plain
 
+    call op_unpto               ; ES = the landing, BX = the stream
     mov cx, [si+OP_R_ZKB]       ; --- expand it ------------------------------
     mov dx, [si+OP_R_LEN]
     push ds
@@ -860,8 +901,6 @@ op_unpack:
                                     ; which refused every stream: `A part will
                                     ; not unpack` on a package whose bytes,
                                     ; lengths and pointers were all correct
-    mov es, bp
-    mov bx, [op_zsrc]
     mov ds, bx
     xor si, si                  ; DS:SI is the stream, at the base of where the
     xor di, di                  ; read put it - **and DI = 0**, which is the
@@ -877,11 +916,10 @@ op_unpack:
     mov ax, [si+OP_R_ZKB]       ; the READ pointer moves by the PACKED length
     jmp short .step
 .plain:                         ; --- or move it down, which is the same walk -
+    call op_unpto               ; ES = the landing, BX = the stream
     mov cx, [si+OP_R_LEN]
     push ds
-    mov ax, [op_zsrc]
-    mov es, bp
-    mov ds, ax
+    mov ds, bx
     xor si, si
     xor di, di
     cld
@@ -920,6 +958,19 @@ op_unpack:
     pop bp
     mov si, op_s_zbad
     jmp op_say
+
+; op_unpto - ES = op_unpack's landing (BP) and BX = its stream ([op_zsrc]),
+; each through a window of its own. Clobbers AX, BX, DX, flags
+op_unpto:
+    mov ax, bp
+    call op_atb
+    mov es, ax
+    mov ax, [op_zsrc]
+    mov dx, [op_base]
+    mov bx, op_wb
+    call op_at
+    mov bx, ax
+    ret
 %endif                              ; OP_HAS_COMP
 %if OP_HAS_XMS
 ; GATED (SPEC.md 20.12.9): op_xload and op_lin - only a table with an OP_XMS row can reach them
@@ -1064,12 +1115,20 @@ op_xload:
     jmp .chunk
 
 .fin:
+    push ds                     ; ES OFF THE BUFFER FIRST: the loop above left
+    pop es                      ; it there, and an X cell RESTORES the
+                                ; caller's ES on the way out - under kern_mega
+                                ; a selector the free just released, so every
+                                ; climb cost a #GP fixup (tests/pxsmega.py's
+                                ; launch, 0060:0513 = api_x.done's pop es)
     mov dx, [op_xstg]           ; the buffer was always transient: it exists
     call OSAPI_MEM_FREE         ; for the length of one span's climb
 .none:
     clc
     ret
 .drop:
+    push ds                     ; (the same: ES is still the buffer)
+    pop es
     mov dx, [op_xstg]
     call OSAPI_MEM_FREE
 .free:
@@ -1087,9 +1146,12 @@ op_xload:
     ret
 
 ; -----------------------------------------------------------------------------
-; op_lin - the 32-bit LINEAR base of part AL, when it went above 1MB
+; op_lin - the OSAPI_XMEM_ALLOC TOKEN of part AL, when it went above 1MB:
+;      the block's token plus the part's offset, for OSAPI_XMEM_COPY. It is
+;      the part's linear base on a real-mode kernel and NOT on kern_mega in
+;      protected mode, where the block moves (SPEC.md 50.6.10)
 ; in:  AL = the part index
-; out: DX:AX = its linear base, 0:0 = it is not up there (which is every
+; out: DX:AX = its token, 0:0 = it is not up there (which is every
 ;      tier-0 machine, and then op_seg answers instead)
 ; clobbers: AX, DX (the outputs), flags
 ; -----------------------------------------------------------------------------
@@ -1198,7 +1260,7 @@ op_seg:
     mov cl, 4
     shr dx, cl                  ; the head slack in paragraphs - exact, because
     add ax, dx                  ; it is a multiple of 512 (SPEC.md 20.12.2)
-    add ax, [op_base]
+    call op_sub                 ; ...and AX paragraphs into the carve
     jmp .out
 
 %if OP_HAS_COMP
@@ -1247,7 +1309,7 @@ op_seg:
 .zfound:
     pop ax
     mov ax, dx
-    add ax, [op_base]
+    call op_sub
     jmp short .out
 %endif
 
@@ -1292,7 +1354,7 @@ op_seg:
     mov ax, dx
     mov cl, 6
     shl ax, cl                  ; KB -> paragraphs (1KB = 64 of them)
-    add ax, [op_base]
+    call op_sub
     jmp short .out
 %endif                          ; OP_HAS_ZERO - the scratch area
 %endif                          ; OP_HAS_CARVE
@@ -1304,6 +1366,43 @@ op_seg:
     pop cx
     pop bx
     ret
+
+%if OP_HAS_CARVE
+; -----------------------------------------------------------------------------
+; op_sub - AX paragraphs into the carve, as op_seg answers them ([op_subv])
+; in:  AX = paragraphs past [op_base]; out: AX = the answer; flags clobbered
+;
+; THE SUM, asked of the kernel (OSAPI_SEG's SEG_SUB, or SEG_SUBC for
+; op_cseg's pair): every real-mode kernel answers [op_base] + AX, and
+; kern_mega's protected mode, where the carve is a selector and adding
+; paragraphs to one names some other descriptor (KERN-MEGA-MEMORY-PLAN MC7),
+; bases a SUB selector at that paragraph - the same one every time it is
+; asked, moving with the carve and freed with it. A refusal (no LDT entry) is
+; 0, op_seg's "not there".
+; -----------------------------------------------------------------------------
+op_sub:
+    test byte [op_subv], OP_SUBV_RAW
+    jz .seg
+    inc ax                      ; paragraphs + 1: 0 is still "not there"
+    ret
+.seg:
+    push bx
+    push cx
+    push dx
+    mov dx, [op_base]
+    mov bl, SEG_SUB
+    add bl, [op_subv]
+    xor cx, cx                  ; to the carve's end, 64KB at most
+    call OSAPI_SEG
+    xchg ax, dx
+    jnc .ok
+    xor ax, ax
+.ok:
+    pop dx
+    pop cx
+    pop bx
+    ret
+%endif
 
 %ifdef OP_WANT_CSEG
 ; -----------------------------------------------------------------------------
@@ -1326,7 +1425,9 @@ op_seg:
 ; package that never far-calls a part assembles to the byte it did.
 ; -----------------------------------------------------------------------------
 op_cseg:
-    call op_seg
+    mov byte [op_subv], OP_SUBV_C ; a part in the carve: a code/data PAIR
+    call op_seg                 ; under CPU_F_PM (SEG_SUBC), so the code half
+    mov byte [op_subv], 0       ; below is DX - 8 as for any claim
     or ax, ax
     jz .out                     ; not there: 0, never the alias of 0
     push bx
@@ -1615,8 +1716,16 @@ op_fetch:
     jb .nomem
     mov ax, bx
     xor cx, cx                  ; (op_claim's door: conventional on kern_mega
-    call OSAPI_MEM_CLAIM_DMA    ; whatever the header says, the fetch below
-    jc .nomem                   ; adding paragraphs to the base)
+%ifdef OP_WANT_ASSETHI          ; whatever the header says, the fetch below
+    cmp byte [si+OP_R_KIND], OP_ASSET   ; adding paragraphs to the base)
+    jne .lodoor                 ; A LAZY ASSET FROM THE CEILING, when the
+    call OSAPI_MEM_CLAIM_DMA_HI ; package asks (SPEC.md 20.12.4.1): CX = 0, so
+    jmp short .claimed          ; top-down on every kernel
+.lodoor:
+%endif
+    call OSAPI_MEM_CLAIM_DMA
+.claimed:
+    jc .nomem
     push dx                     ; ...banked across everything below
 
     mov ax, [si+OP_R_OFF]       ; --- where the read starts, and its slack ---
@@ -1672,7 +1781,7 @@ op_fetch:
     push word [op_base]
     push word [op_rdseg]
     mov [op_base], dx
-    mov [op_rdseg], dx
+    mov word [op_rdseg], 0      ; (paragraphs past the base: op_read's unit)
 %if OP_HAS_ZLAZY
     OP_JPLAIN .plainrd
     call op_zrpara              ; AX = R, in paragraphs
@@ -1693,9 +1802,8 @@ op_fetch:
 %if OP_HAS_ZLAZY
     OP_JPLAIN .plain
     mov ax, bx                  ; the part's READ sits past the slack - op_seg's
-    mov cl, 4                   ; arithmetic, one part at a time
-    shr ax, cl
-    add ax, dx
+    mov cl, 4                   ; arithmetic, one part at a time, in
+    shr ax, cl                  ; PARAGRAPHS past the claim
     ; --- EXPAND IT ONTO ITS OWN CLAIM'S BASE (SPEC.md 20.12.7.4) -----------
     ; op_unpack's walk with one row in it: the stream is R paragraphs up and
     ; the output starts BELOW it, so the write pointer chases the read pointer
@@ -1716,6 +1824,9 @@ op_fetch:
     call op_zrpara              ; AX = R in paragraphs; SI preserved
     pop di
     add di, ax                  ; DI = where the stream's own bytes were read
+    mov ax, di                  ; (DX is still the claim: op_at's block, and
+    call op_ata                 ; op_read has finished with op_wa)
+    mov di, ax                  ; ...as a segment, through a window
     mov cx, [si+OP_R_ZKB]       ; CX = the PACKED length, while it is still
     mov ax, [si+OP_R_LEN]       ; there - one more store and it is a segment
     mov dx, ax                  ; BX:DX = the 32-bit expected output, and a
@@ -1762,12 +1873,14 @@ op_fetch:
     mov cl, 4
     shr ax, cl                  ; AX = the slack in paragraphs
     jz .keep                    ; ...none: the part is at the base already
+    mov es, dx                  ; ES:DI the claim's base...
+    push dx
+    call op_ata                 ; AX = the slack's paragraphs up the claim
+    pop dx
     mov cx, [si+OP_R_LEN]       ; read BEFORE DS moves
     push ds
     push si
-    add ax, dx
-    mov ds, ax                  ; DS:SI the part where the read left it...
-    mov es, dx                  ; ...ES:DI the claim's base
+    mov ds, ax                  ; ...DS:SI the part where the read left it
     xor si, si
     xor di, di
     cld
@@ -1862,25 +1975,29 @@ op_hilift:
     rcr ax, 1
     mov cl, 9
     shr ax, cl                  ; AX = the part's KB, the shrink's figure
-    call OSAPI_MEM_CLAIM        ; DX = a claim, and is it a SELECTOR?
+    call OSAPI_MEM_CLAIM        ; DX = a claim, and is it ABOVE 1MB? Every
+    pop ax                      ; claim is a selector there (MC7), so its
+    jc .out                     ; linear base says
+    push ax
+    push dx
+    mov bl, SEG_LIN
+    call OSAPI_SEG              ; DX:AX = its base
+    cmp dx, 0x10
+    pop dx
     pop ax
-    jc .out
-    test dl, 4                  ; an LDT selector: above 1MB (a conventional
-    jz .back                    ; claim is an identity segment, TI clear)
+    jb .back
     push si
     push ds
-    push es
     mov cx, [si+OP_R_LEN]       ; read BEFORE DS moves
-    mov es, dx
-    mov ds, ax
-    xor si, si
-    xor di, di
-    cld
-    shr cx, 1
-    rep movsw
+    mov es, dx                  ; ES STAYS ON THE NEW CLAIM (op_fetch clobbers
+    mov ds, ax                  ; it): restoring it put it back on the OLD
+    xor si, si                  ; one, which the free below releases - and an
+    xor di, di                  ; X cell restores the caller's ES on the way
+    cld                         ; out, so under kern_mega every lift cost a
+    shr cx, 1                   ; #GP fixup (tests/pxsmega.py's launch,
+    rep movsw                   ; 0060:0513 = api_x.done's pop es)
     adc cx, cx
     rep movsb
-    pop es
     pop ds
     pop si
     xchg ax, dx                 ; AX = the new claim, DX = the old one...
@@ -1991,6 +2108,110 @@ op_row:
     pop ax
     ret
 
+%ifdef OP_ONMOVE
+; -----------------------------------------------------------------------------
+; op_movable / op_pin - THE PARTS' CLAIMS MAY MOVE (SPEC.md 20.12.12,
+;                       docs/plans/NO-PINNING-PLAN.md A8). OPT-IN: assembled
+;                       only for a package that says `%define OP_ONMOVE
+;                       <hook>` before os88parts.inc, so every other package
+;                       is byte for byte what it was
+; in:  AL = a part whose claim is HERE - a FETCHED OP_LAZY row, which is a
+;      claim of its own - or OP_CARVE for the carve every eager part is
+;      arithmetic on
+; out: OSAPI_MEM_MOVABLE's CF; CF=1 too when AL names no claim (an unfetched
+;      or eager row, an empty carve)
+; clobbers: DX, flags
+;
+; op_movable declares that claim with the standard's own proc and op_pin pins
+; it again (OSAPI_MEM_MOVABLE AX = 0), for a stretch in which the package
+; holds one of its segments across something that can claim - a file call
+; into it, an fsx bracket (SPEC.md 66.2's HLock). The proc does the
+; standard's half - [op_base] for the carve, the row's banked segment for a
+; lazy part, so op_seg answers the new place at once - and then jumps to the
+; package's OP_ONMOVE hook with BX = was and DX = now, under a relocation
+; proc's own rules (SPEC.md 66.3): every segment the package BANKED from an
+; op_seg answer is the hook's to put right, by asking op_seg again. A hook
+; with nothing banked is a bare `ret`.
+;
+; WHAT THE PACKAGE ASSERTS BY CALLING IT, and nothing here can check it: no
+; copy of the claim's segment survives a call that can claim, except in the
+; words its hook re-reads - which for an OP_SEG part includes a CS on a
+; stack, so code you far-call is declared only if no claim is ever made
+; under that far call. Declare AFTER the part is in place and its segment
+; banked (SPEC.md 66.3 rule 5's ordering): op_fetch does not declare for you.
+; -----------------------------------------------------------------------------
+OP_CARVE    equ 0FFh
+op_pin:
+    push ax
+    push bx
+    xor bx, bx                  ; the proc: none, which is the pin
+    jmp short op_decl
+op_movable:
+    push ax
+    push bx
+    mov bx, op_lazymv
+%if OP_HAS_CARVE
+    cmp al, OP_CARVE
+    jne op_decl
+    mov bx, op_carvemv
+%endif
+op_decl:
+    push si
+%if OP_HAS_CARVE
+    mov dx, [op_base]           ; the carve: every eager part's segment is
+    cmp al, OP_CARVE            ; arithmetic on this base
+    je .have
+%endif
+    xor ah, ah
+    cmp al, [op_t_n]
+    jae .no
+    call op_row                 ; SI -> the row
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .no                      ; not here (or not lazy: never set there)
+    mov dx, [si+OP_R_ZKB]       ; a fetched row's word IS its claim's base
+.have:
+    or dx, dx
+    jz .no                      ; no carve: op_load made none
+    xchg ax, bx                 ; AX = the proc, or 0
+    call OSAPI_MEM_MOVABLE
+    jmp short .out
+.no:
+    stc
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; op_lazymv - a FETCHED lazy part's relocation proc: the row whose banked
+; segment is the one that moved takes the new one, then the package's hook.
+; OP_FETCHED is set on lazy rows alone, and no two fetched rows share a base
+; (each is a claim of its own), so exactly one row matches
+op_lazymv:
+    mov si, op_table + OP_T_ROWS
+    mov cl, [op_t_n]
+.row:
+    test byte [si+OP_R_FLAG], OP_FETCHED
+    jz .next
+    cmp [si+OP_R_ZKB], bx
+    jne .next
+    mov [si+OP_R_ZKB], dx
+.next:
+    add si, OP_ROW
+    dec cl
+    jnz .row
+    jmp OP_ONMOVE
+%if OP_HAS_CARVE
+; op_carvemv - the carve's relocation proc: op_seg derives every eager part
+; from [op_base] (the head slack and R are offsets from it, not segments), so
+; one store is the standard's whole half. [op_rdseg] is live only inside
+; op_load and op_fetch, which a declared carve is past
+op_carvemv:
+    mov [op_base], dx
+    jmp OP_ONMOVE
+%endif
+%endif                              ; OP_ONMOVE
+
 %if OP_HAS_ZLAZY
 ; GATED (SPEC.md 20.12.9): only a table with an OP_COMP|OP_LAZY row the standard fetches reaches it
 
@@ -2062,11 +2283,15 @@ op_scrub:
     mov cx, [si+OP_R_ZKB]
     jcxz .next
     mov ax, bx
-    call op_seg                 ; AX = where it landed, 0 = it was refused
+    mov byte [op_subv], OP_SUBV_RAW
+    call op_seg                 ; AX = where it landed, as paragraphs into the
+    mov byte [op_subv], 0       ; carve plus one; 0 = it was refused
     or ax, ax
     jz .next
+    dec ax
     push bx
-    mov es, ax
+    push bp
+    mov bp, ax                  ; BP = the paragraph being zeroed
     mov dx, cx                  ; DX = KB still to zero
 .fill:
     or dx, dx
@@ -2078,6 +2303,11 @@ op_scrub:
 .take:
     sub dx, cx
     push dx
+    push cx
+    mov ax, bp
+    call op_atb
+    mov es, ax                  ; ES = BP, through a window
+    pop cx
     mov ax, cx                  ; CX KB -> words, THROUGH AX: the count and
     mov cl, 9                   ; the operand cannot be the same register, and
     shl ax, cl                  ; `mov cl, 9` would overwrite the low half of
@@ -2087,11 +2317,10 @@ op_scrub:
     cld
     rep stosw
     pop dx
-    mov ax, es
-    add ax, 0x800               ; ...and on by 32KB of paragraphs
-    mov es, ax
+    add bp, 0x800               ; ...and on by 32KB of paragraphs
     jmp short .fill
 .filled:
+    pop bp
     pop bx
 .next:
     inc bx

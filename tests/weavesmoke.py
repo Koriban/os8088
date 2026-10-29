@@ -99,6 +99,7 @@ outright by an IndexError on an empty window list. The limit on each is 20
 guest-budgeted seconds, ~20x a package load here.
 """
 import argparse
+import contextlib
 import os
 import re
 import subprocess
@@ -116,6 +117,7 @@ import os88marty                                            # noqa: E402
 import os88mouse                                            # noqa: E402
 import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
+import os88ui                                               # noqa: E402
 from harness import check, done                             # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -128,6 +130,25 @@ MACHINES = [
     ("os8088_5150_cga_gla",  "cga",  640, 200),
     ("os8088_5150_herc_gla", "herc", 720, 348),
 ]
+# kern_mega (OS88_MEGA, tests/megaport.txt) runs under Bochs, which has a VGA
+# and nothing else - so its one row is weavesim's vga adapter, read off the
+# glass (vram() below)
+MEGA = bool(os.environ.get("OS88_MEGA"))
+if MEGA:
+    MACHINES = [("os8088_xt_vga", "vga", 640, 480)]
+
+
+def vram(m, card):
+    """`m.vram(card)`: one byte a pixel, 1 lit. On kern_mega's Bochs there
+    is no 1bpp card to read, so the VGA GLASS is thresholded instead - lit is
+    a LIGHT pixel, which is what a 1bpp white is on the window's chrome and
+    its content (the desktop's colours are never what a check here reads)."""
+    if not getattr(m, "bochs", False):
+        return m.vram(card)
+    w, h, d = m.fbuf()
+    return w, h, [[1 if d[i] + d[i + 1] + d[i + 2] >= 384 else 0
+                   for i in range((y * w) * 3, (y * w + w) * 3, 3)]
+                  for y in range(h)]
 
 # The 360KB geometry, because the 5150 machines above have 360KB drives. It is
 # also the tightest of the three, which is the one worth booting.
@@ -230,7 +251,8 @@ def _pkg_name(m, seg):
     window": a Disk window, an alert and any other package all satisfy the
     first.
     """
-    raw = m.read((seg << 4) + 16, 16)
+    raw = (m.readseg(seg, 16, 16) if getattr(m, "bochs", False)
+           else m.read((seg << 4) + 16, 16))       # (a selector there)
     return raw.split(b"\0", 1)[0].decode("latin-1")
 
 
@@ -356,8 +378,8 @@ def _smoke(machine, card, want_w, want_h, S, t0, png_dir=None):
     # The launch is OUTSIDE the try below on purpose: a MartyError from here is
     # the boot gate and smoke() names it as such, while one from anywhere after
     # it is the session breaking off on a healthy machine (see smoke()).
-    with os88marty.launch(SYSIMG, apps=DISK,
-                          machine=machine) as m:
+    with booted(SYSIMG, apps=DISK,
+                machine=machine) as m:
         try:
             _drive(machine, card, want_w, want_h, S, t0, png_dir, m)
         except os88marty.MartyError as e:
@@ -367,6 +389,18 @@ def _smoke(machine, card, want_w, want_h, S, t0, png_dir=None):
                   "not reach a coordinate, or two presses the guest saw as two "
                   "first clicks because the host was busy between them",
                   got=str(e)[:200], want="a driven session")
+
+
+@contextlib.contextmanager
+def booted(image, apps, machine):
+    """A QUICK boot for every Weave row: launched paused, run, and the
+    kernel's desktop STATE ([spl_live] = 0, os88ui.boot(quick=True)) is the
+    whole gate, the saver off. Every caller's first act is `_open_bundle` (or
+    an os88ui verb), which confirms off guest state, and the pixel reads come
+    after its own settle - so the boot's picture settle bought nothing."""
+    with os88ui.boot(image, apps=apps, machine=machine, quick=True,
+                     verbose=False) as ui:
+        yield ui.m
 
 
 def _open_bundle(m, mo, S, machine):
@@ -382,60 +416,41 @@ def _open_bundle(m, mo, S, machine):
     UART's and the ISR's and is the same on any box - and a retry that no
     longer covers anything could only hide a mouse path that broke.
     """
-    # WAIT FOR THE DISK WINDOW THE SAME WAY, and for the same reason
-    # as the bundle's below. `open_drive`'s settle is two identical
-    # frames a second apart, and opening a Disk window READS THE
-    # DIRECTORY - int 13h, during which nothing is drawn - so a settle
-    # can return before the window exists. `win_list(...)[-1]` was
-    # then an IndexError on an empty list. Waiting on the window turns
-    # it into a bounded wait that names what it waited for.
-    desk = set(dispcp.win_list(m, S))
-    wx, wy = dispcp.open_drive(m, mo, S, os88marty.settle, "B")
-    os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - desk,
-                    "drive B's Disk window to open", limit=20.0)
-    disk = sorted(set(dispcp.win_list(m, S)) - desk)[-1]
-    wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    # INTO THE FOLDER FIRST (the module docstring's second block). A
-    # Disk window navigates in place: the slot is the same one, the
-    # rect is re-read because a listing that changes length can move
-    # it, and open_named's settle has already waited out the
-    # directory read. A window already inside the folder (the bundle
-    # listed, the folder not) skips the step; one standing somewhere
-    # else goes up by ".." first.
-    if FOLDER:
-        names = [r[0].upper() for r in dispcp.listing(m, S)]
-        if BUNDLE.upper() in names and FOLDER.upper() not in names:
-            pass                        # already inside it
-        else:
-            if FOLDER.upper() not in names and ".." in names:
-                dispcp.open_named(m, mo, S, os88marty.settle,
-                                  wx, wy, "..")
-                wx, wy = dispcp.win_rect(m, S, disk)[:2]
-            dispcp.open_named(m, mo, S, os88marty.settle,
-                              wx, wy, FOLDER)
-            wx, wy = dispcp.win_rect(m, S, disk)[:2]
-    # BEFORE is taken with the Disk window already open, not at the
-    # desktop: taken earlier it counts the Disk window's own arrival
-    # as the bundle's, and the gate then passes on a machine where
-    # nothing launched at all.
-    before = set(dispcp.win_list(m, S))
-    dispcp.open_named(m, mo, S, os88marty.settle, wx, wy, BUNDLE)
-    # WAIT ON THE WINDOW, NOT ON THE PICTURE. `open_named`'s settle is
-    # two identical frames a second apart, and a package LOAD draws
-    # nothing while it runs - so on a busy host the settle sees
-    # perfect stillness partway through the load and returns, and the
-    # window list read straight after it is empty. That is
-    # os88marty.until's own documented case ("the screen is MORE still
-    # while it is busy"), and it cost this gate a run reported as "the
-    # bundle did not launch" on a machine that was loading it. The
-    # settle is still wanted afterwards, because the assertions below
-    # are aimed at pixels.
-    # 20s: a package load is a handful of int 13h calls and has never
-    # taken more than a second here, so this is ~20x margin on the thing
-    # being waited for - and a launch that never happens fails here,
-    # naming the bundle, rather than after a minute.
-    os88marty.until(m, lambda mm: set(dispcp.win_list(mm, S)) - before,
-                    "%s's window to open" % BUNDLE, limit=20.0)
+    # BY NAME, THROUGH tools/os88ui.py: every verb CONFIRMS off guest state
+    # (the Disk window's record, the listing, the mount's int 13h going
+    # quiet, the package's window record), so nothing here waits on the
+    # picture. That is what the settles this used to carry were standing in
+    # for - and a package LOAD draws nothing while it runs, so a settle could
+    # see stillness partway through one. `ui.open` reads ld_status when no
+    # window arrives and says which refusal happened.
+    ui = os88ui.UI(m, mouse=mo, verbose=False)
+    try:
+        ui.open_drive("B")
+        # INTO THE FOLDER FIRST (the module docstring's second block). A
+        # window already inside the folder (the bundle listed, the folder
+        # not) skips the step; one standing somewhere else goes up by ".."
+        # first.
+        if FOLDER:
+            names = [r[0].upper() for r in ui.listing()]
+            if not (BUNDLE.upper() in names
+                    and FOLDER.upper() not in names):
+                if FOLDER.upper() not in names and ".." in names:
+                    ui.open("..", expect="nav")
+                ui.open(FOLDER, expect="nav")
+        # BEFORE is taken with the Disk window already open, not at the
+        # desktop: taken earlier it counts the Disk window's own arrival
+        # as the bundle's, and the gate then passes on a machine where
+        # nothing launched at all.
+        before = set(dispcp.win_list(m, S))
+        ui.open(BUNDLE, expect="window", limit=30.0)
+    except os88ui.UIError as e:
+        # The callers' "could not reach BUNDLE" sentence: the disk is not
+        # what this expects, or the launch did not happen (the message
+        # carries ld_status).
+        raise RuntimeError(str(e))
+    # The UI task finished with the launch (the first paint is inside a
+    # pass), then the glass: the assertions below are aimed at pixels.
+    os88marty.ui_done(m, "%s's first paint" % BUNDLE)
     os88marty.settle(m)
     return before, set(dispcp.win_list(m, S))
 
@@ -469,7 +484,7 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
 
     # ONE CAPTURE. Everything from here to assertion 6 is about THIS
     # frame; the record is re-read afterwards and must not have moved.
-    vw, vh, rows = m.vram(card)
+    vw, vh, rows = vram(m, card)
     check((vw, vh) == (want_w, want_h), "%s: geometry" % machine,
           "the adapter came up in a mode nobody expects",
           got=(vw, vh), want=(want_w, want_h))
@@ -713,6 +728,9 @@ def main():
         try:
             t = os88build.tree(targets=("weave360.img", "os8088-360.img"))
             DISK, SYSIMG = t.img("weave360.img"), t.img("os8088-360.img")
+            if MEGA:                # build/'s, which the shim swaps for
+                SYSIMG = "build/os8088-360.img"     # mega.img; the tree's
+                                                    # would boot kern_big
             r = None
         except RuntimeError as e:
             r = e

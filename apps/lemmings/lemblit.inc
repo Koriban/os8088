@@ -606,17 +606,18 @@ _lem_r_clearworld:
     ; 3 is the mask's, cleared by lem_m_clear and copied over by lem_r_tmask)
 .tonly:
     cld
-    mov bx, [lb_t]
-    cmp bx, 0
+    cmp word [lb_t], 0
     je .out
+    mov bx, _lem_tpl                ; the planes BY INDEX (LEM_TPLANE's note)
     mov dx, 3
 .tp:
-    mov es, bx
+    mov es, [bx]
     xor di, di
     xor ax, ax
     mov cx, (LEM_MSTRIDE * LEM_MROWS) / 2
     rep stosw
-    add bx, LEM_TPLANE
+    inc bx
+    inc bx
     dec dx
     jnz .tp
 .out:
@@ -666,8 +667,16 @@ _lem_r_clearworld:
 ; -----------------------------------------------------------------------------
 
 ; void lem_r_wsetup(unsigned p0, unsigned p3) - where lem_r_wpiece writes.
-; p0 = plane 0 of the T claim, planes 1 and 2 following at +LEM_TPLANE
-; paragraphs each, or 0 = no colour planes; p3 = plane 3, the solid mask.
+; p0 = plane 0 of the T claim, or 0 = no colour planes; p3 = plane 3, the
+; solid mask. Planes 1 and 2 are T's, read out of _lem_tpl.
+;
+; T'S PLANES ARE A TABLE, NOT A SUM (KERN-MEGA-MEMORY-PLAN MC7): _lem_tpl
+; (lemload.c) holds all four, made once at the claim by os88_seg_sub. On a
+; real-mode kernel they are T + k x LEM_TPLANE, the sum this file used to
+; form; under kern_mega's protected mode T is an LDT selector, where that sum
+; names another descriptor, and each plane is a selector of its own. Every
+; walk across the planes indexes the table - `mov es, [_lem_tpl+2]` is one
+; instruction where `add bx, LEM_TPLANE` / `mov es, bx` was two, and no slower.
 LEM_TPLANE    equ 2000              ; 32,000 bytes = one world plane, paragraphs
 
 _lem_r_wsetup:
@@ -681,7 +690,8 @@ _lem_r_wsetup:
     ret
 
 ; void lem_r_tsetup(unsigned t) - the T claim for the backends that keep one
-; (VGA): four planes of 32,000 bytes at t, t+2000, t+4000, t+6000. 0 = none.
+; (VGA): four planes of 32,000 bytes, reached through _lem_tpl (above). 0 =
+; none, and lb_t is the test every T path makes first.
 _lem_r_tsetup:
     push bp
     mov bp, sp
@@ -689,6 +699,79 @@ _lem_r_tsetup:
     mov [lb_t], ax
     pop bp
     ret
+
+; void os88_onmove(unsigned was, unsigned now) - THE HEAP COMPACTOR MOVED ONE
+; OF THE LEVEL'S CLAIMS from `was` to `now` (SPEC.md 116.6.2; lemgame.c's
+; "THE CLAIMS MOVE" is the why). It is the C SDK's relocation callback
+; (CC_HAS_ONMOVE, apps/cc/crt0.asm cc_onmove), written HERE because seven of
+; the words it has to put right are the raster's, and one table naming all
+; eighteen is the whole of it:
+;
+;   1. which claim moved: the first seven entries are lem_cl_*, in
+;      _lem_cl_kb's order, and the one equal to `was` gives the block's size,
+;      so `end` = was + KB * 64 paragraphs. None of them = not ours, nothing;
+;   2. every word in the table lying in [was, end) moves by now - was: the
+;      claim's own word, the C's segments derived from it (_lem_anseg,
+;      _lem_mkseg, _lem_ptseg inside lem_cl_main; _lem_far_seg), and the
+;      raster's (each written by a *_setup and read by every draw). A word
+;      holding another claim's segment, or 0, is outside the range.
+;
+; A per-call word (lbp_seg, lp_fseg) needs no entry: no draw spans a point
+; where a compaction can run. It runs INSIDE the compaction (SPEC.md 66.3 rule
+; 3) with DS = CS = ours: it reads and writes these words and nothing else.
+; cc_onmove preserves every register around it; SI and BP are the C's.
+_os88_onmove:
+    push bp
+    mov bp, sp
+    push si
+    mov si, lb_rlist
+    mov ax, [bp+4]                  ; AX = was
+    mov cx, 7
+.find:
+    mov bx, [cs:si]
+    cmp ax, [bx]
+    je .found
+    inc si
+    inc si
+    loop .find
+    jmp .done                       ; not one of the seven
+.found:
+    sub si, lb_rlist                ; SI = 2 * the claim's index
+    mov dx, [si+_lem_cl_kb]
+    mov cl, 6
+    shl dx, cl
+    add dx, ax                      ; DX = end, in paragraphs
+    mov cx, [bp+6]
+    sub cx, ax                      ; CX = now - was
+    mov si, lb_rlist
+.next:
+    mov bx, [cs:si]
+    or bx, bx
+    jz .done
+    inc si
+    inc si
+    mov ax, [bx]
+    cmp ax, [bp+4]
+    jb .next
+    cmp ax, dx
+    jae .next
+    add ax, cx
+    mov [bx], ax
+    jmp .next
+.done:
+    pop si
+    pop bp
+    ret
+lb_rlist:   dw _lem_cl_mask, _lem_cl_bank, _lem_cl_main, _lem_cl_world
+            dw _lem_cl_shadow, _lem_cl_rec, _lem_cl_t   ; the claims, first
+            dw _lem_anseg, _lem_mkseg, _lem_ptseg, _lem_far_seg
+            dw lb_world, lb_shadow, lb_t, lb_wp0, lb_wp3, lm_seg, lo_seg
+            dw _lem_bwin, _lem_bwin+2, _lem_bwin+4      ; ovl_far's windows and
+            dw _lem_tpl, _lem_tpl+2, _lem_tpl+4, _lem_tpl+6 ; T's planes: on a
+            dw 0                    ; real-mode kernel each is a segment INSIDE
+                                    ; its claim (os88_seg_sub's sum); under
+                                    ; kern_mega's protected mode nothing calls
+                                    ; this - a move is a rebase there
 
 ; -----------------------------------------------------------------------------
 ; void lem_r_wpiece(unsigned seg, unsigned off, int x, int y, int w, int h,
@@ -859,14 +942,9 @@ _lem_r_wpiece:
     mov ax, [lb_wp3]
     jmp .pseg
 .pcol:
-    mov bx, ax
-    mov ax, [lb_wp0]
-    cmp bx, 0
-    je .pseg
-    add ax, LEM_TPLANE
-    cmp bx, 1
-    je .pseg
-    add ax, LEM_TPLANE
+    mov bx, ax                      ; T's plane 0..2, by index (LEM_TPLANE's
+    shl bx, 1                       ; note): lb_wp0 is non-zero only on a VGA,
+    mov ax, [_lem_tpl+bx]           ; where it is T
 .pseg:
     mov es, ax
     mov di, [bp-16]
@@ -1014,9 +1092,9 @@ _lem_r_tload:
     push ds
     cmp word [lb_kind], LEM_KIND_VGA
     jne .out
-    mov bx, [lb_t]
-    cmp bx, 0
+    cmp word [lb_t], 0
     je .out
+    mov bx, _lem_tpl                ; the planes BY INDEX (LEM_TPLANE's note)
     mov dx, 1                       ; the Map Mask bit
 .pl:
     push dx
@@ -1030,13 +1108,14 @@ _lem_r_tload:
     mov es, ax
     mov di, LEM_VTERR
     xor si, si
-    mov ds, bx
+    mov ds, [bx]                    ; (read through DS = ours, then loaded)
     mov cx, (LEM_MSTRIDE * LEM_MROWS) / 2
     cld
     rep movsw
     push cs
     pop ds
-    add bx, LEM_TPLANE
+    inc bx
+    inc bx
     shl dl, 1
     cmp dl, 16
     jb .pl
@@ -1064,11 +1143,9 @@ _lem_r_tmask:
     push ds
     cmp word [lb_kind], LEM_KIND_VGA
     jne .out
-    mov ax, [lb_t]
-    cmp ax, 0
+    cmp word [lb_t], 0
     je .out
-    add ax, 3 * LEM_TPLANE
-    mov es, ax
+    mov es, [_lem_tpl+6]            ; plane 3, by index (LEM_TPLANE's note)
     xor di, di
     xor si, si
     mov ax, [lm_seg]

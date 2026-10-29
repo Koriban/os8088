@@ -298,11 +298,14 @@ mod_row:
 ;      WHICH flags carry the answer. `cmp word [bx+MODR_SEG], 1` sets CF iff
 ;      the word is below 1 unsigned, and for a 16-bit word that is exactly
 ;      "is zero" - the question this routine asks. ZF/SF/OF now differ on the
-;      resident arm; both callers (ctrl.inc's cpf_cp_onup and cpf_cp_ondrag,
-;      the complete set) read CF alone, and the contract never named the rest.
+;      resident arm; its callers (hiber.inc's hbf_onup and desksc.inc's
+;      sc_modcall, the complete set - ctrl.inc's two edges ask the slot's own
+;      mod_gone now, kernel size pass 14) read CF alone, and the contract
+;      never named the rest.
 ;
 ; mod_need without the loading. The callers are the ones that can only ever
-; follow a gesture the module itself took - a W_ONMOUSEUP or a W_ONDRAG after
+; follow a gesture the module itself took - a W_ONMOUSEUP (or, once, a
+; W_ONDRAG) after
 ; a W_ONCLICK that loaded it (SPEC.md 13.8.3) - where "not resident" means the
 ; arm is stale and there is nothing to fire. Loading the Control Panel off a
 ; FLOPPY to answer a mouse movement would be absurd, and on the drag path
@@ -468,22 +471,30 @@ mod_need:
 %ifdef KERN_MEGA
     call mod_hi                 ; ...and above 1MB, if it may go (13.5)
 %endif
-%ifdef ROM_ADOPT
+%ifdef COLD_SLIDE
+    ; A MODULE WHOSE `.cold` HAS MOVED (MOVABLE-COLD-PLAN 4) - into a ROM, the
+    ; HMA, or down over a dropped VGA rung - far-calls `.cold` at COLD_SEG,
+    ; the segment it was assembled against. mod_cfix re-points those words
+    ; itself, from the bytes alone: the ROM and the HMA image used to carry
+    ; every module's list and a door to apply it (ROMF_FIX), and a kernel
+    ; that moved `.cold` by itself would have needed both resident. BX is the
+    ; ROW, BP the bytes the claim holds (the settings core reads a PART, and
+    ; a word past BP is not in this claim). AX, CX, DX, DI and ES are dead
+    ; here (mod_check clobbers them, kentc_bp/kretc_es banked and restore
+    ; them). kern_small keeps the ROM's door below instead: it has no slide,
+    ; and SPEC.md 39.27.4 spends nothing there
+    call mod_cfix
+%elifdef ROM_ADOPT
     ; A MODULE ON A ROM MACHINE (docs/plans/ROM-PLAN.md 3.4.4) far-calls
     ; `.cold` at COLD_RAM, the segment it was assembled against, and `.cold`
     ; runs at the ROM's. The ROM carries each module's list of those words and
     ; re-points them; it checks every one names COLD_RAM first, so a module
-    ; it was not cut against is refused here rather than run. BX is the ROW -
-    ; NOT DI's id, which mod_check has just clobbered (it is documented to,
-    ; and the first kernel ROM was handed 8C58 as a module number) - and the
-    ; ROM knows mod_tab, so it derives the id itself. BP is the bytes the read
-    ; brought in (the settings core reads a PART) - and the door takes BX and
-    ; BP as they stand, loading the claim out of the row itself (kernel size
-    ; pass 12). On a kernel whose `.cold` is in RAM rom_none answers FIX with
-    ; CF = 0 and nothing touched: there is nothing to re-point. ES and AX are
-    ; dead here (mod_check clobbers both, kretc_es restores ES)
-    mov al, ROMF_FIX            ; ...whichever source the bytes came from: the
-    call far [rom_mfp]          ; ROM keeps its copies as the build cut them
+    ; it was not cut against is refused here rather than run. BX is the ROW,
+    ; BP the bytes the read brought in (the settings core reads a PART). On a
+    ; kernel whose `.cold` is in RAM rom_none answers FIX with CF = 0 and
+    ; nothing touched. ES and AX are dead here
+    mov al, ROMF_FIX
+    call far [rom_mfp]
     jc .freefail
 %endif
 
@@ -537,6 +548,57 @@ mod_need:
                                 ; leaned on rather than stronger
 .out:
     jmp kretc_es
+
+;
+%ifdef COLD_SLIDE
+; -----------------------------------------------------------------------------
+; mod_cfix - re-point a just-loaded module's far calls into `.cold`
+; (MOVABLE-COLD-PLAN 4; module internal)
+; in:  BX = the ROW ([bx+MODR_SEG] is the claim), BP = the bytes it holds
+; out: nothing. clobbers: AX, CX, DX, DI, ES and the flags
+;
+; NO TABLE. A module names `.cold` only as the SEGMENT HALF OF A FAR CALL OR
+; JMP IMMEDIATE (9A/EA ofs seg) - tools/os88rom.py proves that for every image
+; on every build, running this very scan against the two-assembly diff for
+; each segment `.cold` can be moved to and failing on any word it would miss
+; or invent. So the low byte of COLD_HOME is searched for, the high byte and
+; the opcode three bytes back confirm it, and the word gets [api_coldseg].
+; A hit's high byte is stepped over, so a segment just written can never be
+; read back as the start of another. Home, it costs a compare.
+; COLD_HOME, never COLD_SEG: this is `.cold`, which names no segment of its
+; own (SPEC.md 2.10.2), and COLD_HOME is the built value under the name
+; tools/os88romfix.py never moves.
+; -----------------------------------------------------------------------------
+mod_cfix:
+    mov dx, [api_coldseg]
+    cmp dx, COLD_HOME
+    je .ret                     ; `.cold` is where the module was built for
+    mov es, [bx+MODR_SEG]
+    mov di, 3                   ; a site's opcode is 3 bytes before it...
+    mov cx, bp
+    sub cx, 4                   ; ...and its word ends inside the claim: the
+    jbe .ret                    ; positions 3..BP-2
+    cld
+.scan:
+    mov al, COLD_HOME & 0xFF
+    repne scasb
+    jne .ret                    ; (ZF from the last compare: no more)
+    cmp byte [es:di], COLD_HOME >> 8
+    jne .next
+    mov al, [es:di-4]           ; the opcode: 9A (call far) or EA (jmp far)
+    or al, 0x70                 ; differ in bits 4-6 alone, so both - and six
+    cmp al, 0xFA                ; opcodes no module puts there, which the
+    jne .next                   ; build's proof models exactly - read FA
+    mov [es:di-1], dx
+    jcxz .ret
+    inc di                      ; ...past the high byte just written
+    dec cx
+.next:
+    inc cx                      ; LOOP's test is CX != 0 AFTER its decrement,
+    loop .scan                  ; so this is "CX was not 0" in three bytes
+.ret:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; mod_check - validate a loaded image and arm its entry slots (module internal)
@@ -617,13 +679,13 @@ mod_check:
     mov [di], ax                ; offset...
 %ifdef KERN_MEGA
     push ax                     ; kern_mega: the slot is a FAR CALL's, so it
-    mov ax, es                  ; holds the image's CODE alias (mega.inc) -
-    cmp byte [ss:mega_pm], 0    ; safe to store rather than derive at every
-    je .rmseg                   ; call, because a module image never moves
-    shr ax, 1                   ; (memory.inc pins MEM_K_MOD). In REAL MODE
-    shr ax, 1                   ; the segment, and mega_enter converts what
-    or al, 4                    ; the boot armed (mega_mods_fix)
-.rmseg:
+    mov ax, es                  ; holds the image's CODE half - its pair's
+    cmp byte [ss:mega_pm], 0    ; data selector less 8 (KERN-MEGA-MEMORY-PLAN
+    je .rmseg                   ; MC7.4) - safe to store rather than derive at
+    sub ax, 8                   ; every call, because a module image never
+.rmseg:                         ; moves (memory.inc pins MEM_K_MOD). In REAL
+                                ; MODE the segment, and mega_enter converts
+                                ; what the boot armed (mega_mods_fix)
     mov [di+2], ax
     pop ax
 %else
@@ -710,13 +772,11 @@ mod_hi:
     mov ax, [bx+MODR_SEG]
     push ax
     call MEGA_SEL_CODE:mega_modhif ; AX = the pair's code selector
-    pop dx                      ; DX = the conventional segment
+    pop dx                      ; DX = the conventional pair's data half
     jc .out
     push dx
     push ax
-    shr dx, 1
-    shr dx, 1
-    or dl, 4                    ; DX = the alias mod_check armed with
+    sub dx, 8                   ; DX = the code half mod_check armed with
     call mod_fpr                ; DI = the slot block, CX = its count
     pop ax
     jcxz .free
@@ -728,7 +788,7 @@ mod_hi:
     add di, 4
     loop .slot
 .free:
-    pop dx                      ; the conventional segment
+    pop dx                      ; the conventional claim's selector
     mov [bx+MODR_SEG], ax       ; MODR_SEG = the selector
     push si
     mov si, [bx+MODR_FILE]      ; ...and where it went, to the debug port
@@ -768,9 +828,9 @@ mod_hiboot:
     mov ax, [bx+MODR_SEG]
     or ax, ax
     jz .n
-    test al, 4
-    jnz .n                      ; a selector: already above 1MB
-    mov es, ax                  ; (512-aligned, so a GDT identity selector)
+    MEGA_ISHI ax
+    jnc .n                      ; already above 1MB
+    mov es, ax                  ; (its conventional pair's data half)
     mov bp, [es:MOD_H_IMG]      ; ...the image's bytes, as the read had them
     push ax
     call mod_hi
@@ -778,9 +838,7 @@ mod_hiboot:
     mov dx, [bx+MODR_SEG]
     cmp dx, ax
     je .n                       ; refused: it stays low, hooks and all
-    shr ax, 1
-    shr ax, 1
-    or al, 4                    ; AX = the alias the tables hold
+    sub ax, 8                   ; AX = the code half the tables hold
     call MEGA_SEL_CODE:mega_modvfixf
 .n:
     add bx, MODR_SIZE
@@ -810,10 +868,10 @@ mod_disarm:
     call .slot                  ; task far-calls a slot with no lock held
     popf                        ; (cur_shape_pass's DKD_HOVER), and mod_gone's
     ret                         ; offset in the IMAGE's segment is garbage
-    nop                         ; PARITY PAD, never executed: dsk_xfer,
-                                ; dsk_runcap, dsk_next_clus_x are hot below
+                                ; (its parity pad cancelled memory.inc's at
+                                ; mem_bytes_kb_x, kernel size pass 14)
 .slot:                          ; a CALLED loop, not a fall-through:
-    mov word [di], mod_gone     ; mod_init_x enters here with its own DI/CX
+    mov word [di], mod_gone     ; (kmain_o's blob loop is this, written out)
     COLDSEG_TO word [di+2]      ; mod_gone is .cold's own (ROM-PLAN 3.2)
     add di, 4
     loop .slot
@@ -839,17 +897,30 @@ mod_free_row:
     xor dx, dx                  ; forming the id, and READ-AND-CLEAR is one
     xchg dx, [bx+MODR_SEG]      ; instruction on the 8086 - DX comes out the
 %ifdef KERN_MEGA
-    test dl, 4                  ; ABOVE 1MB (mod_hi): a selector, whose
-    jz .conv                    ; block and pair go back to the pool - and
+    MEGA_ISHI dx                ; ABOVE 1MB (mod_hi): a selector, whose
+    jc .conv                    ; block and pair go back to the pool - and
     xchg ax, dx                 ; DESK.DRV's library selector with them
     call MEGA_SEL_CODE:mega_hifreef
 %ifdef KERN_BIG
     cmp bx, mod_tab + MOD_DESK * MODR_SIZE
-    jne .out
+    jne .hiok
     call KERNEL_SEG:mega_dklibfree
+.hiok:
 %endif
-    ret
+    clc                         ; CF = 0, mem_free_x's answer on the other
+    ret                         ; path: mod_drop's flags ARE its callers'
+                                ; (fm_cldrop's success CF, which Disk >
+                                ; Unmount Image reads) - and this path left
+                                ; the `cmp` above in them, CF = 1 for every
+                                ; module whose row is under DESK.DRV's
+                                ; (KERN-MEGA-PLAN 14.82)
 .conv:
+%ifdef KERN_BIG
+    cmp bx, mod_tab + MOD_DESK * MODR_SIZE
+    jne .cvl                    ; ...and below 1MB too, where the library is a
+    call KERNEL_SEG:mega_dklibfree ; descriptor of its own as well (MC7.4)
+.cvl:
+%endif
 %endif
     mov bx, MEM_K_MOD           ; old segment and the word is left 0. NO bank
     call mem_free_x             ; round BX either: neither caller reads it
@@ -901,22 +972,8 @@ mod_drop:
 ; 0. mod_need cannot be trusted to be the only door, because a thunk with the
 ; test written the wrong way round still assembles.
 ; -----------------------------------------------------------------------------
-%ifndef KERN_SMALL              ; (kern_small writes it out in the blob, kmain_o)
-mod_init_x:
-    mov di, mod_fp              ; ONE PASS over the whole array. The row walk
-    mov cx, MOD_NSLOT           ; existed only to reach mod_fp - mod_disarm
-    call mod_disarm.slot        ; turned each row straight back into
-    retf                        ; &mod_fp[id] through mod_fpr - and the three
-                                ; blocks are contiguous by construction.
-                                ;
-                                ; ...and NO `mov word [bx+MODR_SEG], 0`: that
-                                ; wrote zero over zero. mod_tab is in .text
-                                ; (see its declaration) as a real `dw 0`
-                                ; initialiser, re-read out of KERNEL.SYS on
-                                ; every boot, and this routine's ONE caller is
-                                ; kmain - Chip > Restart being `int 19h`, the
-                                ; BIOS bootstrap, which re-loads the image.
-%endif
+; (mod_init_x is gone: kmain_o writes its loop out in the blob on every
+; kernel - kernel size pass 13 on kern_small, pass 14 on kern_big)
 
 section .cold                   ; the far entry, for kmain
 

@@ -101,8 +101,7 @@ def main():
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
-        slot, seg, base = open_game(m)
+        slot, seg, base = open_game(m)      # (its `up` is the boot gate)
         r = Bss(m, seg, base)
         mp = dispapps._map("skies")
         # HOW MANY, off the guest's own layout: cs_apnames is one WORD per
@@ -133,7 +132,8 @@ def main():
             # record carries state the renderer writes (a LOD's hysteresis
             # bit, 88.5.4), so the overlay a moment into a flight is not the
             # world as it arrived and a compare there fails on content
-            m.bp_exec(seg * 16 + mp["cs_cmd_fly.picked"])
+            # seg * 16, or the selector's base on kern_mega (megaport.txt)
+            m.bp_exec(getattr(m, "lin", lambda s_, o_=0: (s_ << 4) + o_)(seg, mp["cs_cmd_fly.picked"]))
             m.run()
             m.type_text("f")
             have = None

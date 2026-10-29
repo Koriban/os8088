@@ -50,6 +50,9 @@ import os88sym                                              # noqa: E402
 import dispcp                                               # noqa: E402
 
 S = os88sym.linear
+# NOTHING HERE READS THE GLASS: `frame` is `m.vram`, guest memory, so the
+# wait after an input is the UI task finishing (ui_done), dispcp's included.
+_done = lambda m, card=None, gate=None: os88marty.ui_done(m)
 TITLE_H, MBAR_H = 18, 20
 CP_RX = 96
 CPK_R0Y, CPK_ROWH, CPK_AY = 18, 16, 74      # ctrl.inc's Dock page
@@ -86,6 +89,8 @@ def mbase(m):
     these two helpers exist."""
     seg = word(m, "mod_r_dock")
     assert seg, "DOCK.DRV is not mounted - nothing to read"
+    if getattr(m, "bochs", False):      # kern_mega: a driver image's
+        return m.lin(seg)               # segment is an LDT selector
     return seg * 16
 
 
@@ -117,7 +122,7 @@ def full_repaint(m):
                         "[cp_dirty] to drain", poll=0.05, limit=20)
     except os88marty.MartyError:
         raise RuntimeError("ui_task never drained [cp_dirty]")
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
 
 def diff(a, b, w, clk):
@@ -134,7 +139,7 @@ def pane(m):
 def click_row(m, mo, y):
     px, py = pane(m)
     mo.click(px + 4 + 6, py + y + 6, settle=0)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
 
 
 def expect(pw, ph, cfg):
@@ -184,6 +189,26 @@ def setting(m, mo, kind, cfg, want_cfg=None):
         row = tab[off:off + eq["MC_SIZE"]]
         claims[u16(row[eq["MC_SEG"]:])] = (
             u16(row[eq["MC_PARA"]:]), u16(row[eq["MC_OWN"]:]))
+    if getattr(m, "bochs", False) and seg:
+        # kern_mega: a module's claim (mem_claim_hi_x) is an XMEM POOL block
+        # above 1MB (kernel/mega.inc's mx_tab: MX_OFF/MX_KB in KB from
+        # MEGA_XPOOL), and its name is an LDT selector whose base is that
+        # block - so the claim is found by its LINEAR base, and mem_tab never
+        # sees it. The same two questions: exactly the rounded size, and
+        # the kernel's (an mx_tab owner of C0h and up, mega_ownerf)
+        m.pause()
+        try:
+            raw = m.read(m.sym("mx_tab"), eq["MX_NBLK"] * eq["MX_BLKSZ"])
+            at = m.lin(seg)
+        finally:
+            m.run()
+        for i in range(0, len(raw), eq["MX_BLKSZ"]):
+            kb = u16(raw[i + eq["MX_KB"]:])
+            if kb and eq["MEGA_XPOOL"] + \
+                    u16(raw[i + eq["MX_OFF"]:]) * 1024 == at:
+                claims[seg] = (kb * 64, eq["MEM_K_MOD"]
+                               if raw[i + eq["MX_OWN"]] >= 0xC0
+                               else raw[i + eq["MX_OWN"]])
     if seg:
         paras = ((eq["MODK_SIZE"] + 1023) // 1024) * 64
         check(claims.get(seg) == (paras, eq["MEM_K_MOD"]),
@@ -199,9 +224,9 @@ def setting(m, mo, kind, cfg, want_cfg=None):
          word(m, "vid_dock_y0"), hidden(m))
     check(g == e, "cfg %d: band x0/xe, dock_y0, hidden = %s (want %s)"
           % (want, g, e))
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     mo.to(pw // 2, ph - 60)
-    os88marty.settle(m)
+    os88marty.ui_done(m)
     w, h, px = frame(m, kind)
     check(strip_ok(px, w, h, want), "cfg %d: the rule / line is on its edge"
           % want)
@@ -228,13 +253,13 @@ def herc(a):
     with os88marty.launch(a.image, apps=a.apps, machine=a.machine,
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         os88marty.no_saver(m)
         check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=dispcp.CP_IDOCK)
+        dispcp.open_panel(m, mo, S, _done, page=dispcp.CP_IDOCK)
         wx, wy = dispcp._cp_win(m, S)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         print("   panel at (%d,%d), on the Dock page" % (wx, wy))
 
         for cfg in (P_LEFT, P_RIGHT, P_BOTTOM, P_LEFT | F_AUTO,
@@ -258,7 +283,7 @@ def herc(a):
               "wanted past %d of %d)"
               % (panel.x, panel.w, panel.x + panel.w, pw - DOCK_SW, pw))
         mo.to(pw // 2, ph - 60)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         w, h, before = frame(m, kind)
         mo.to(pw - 1, ph // 2)
         opened = wait_for(m, "dock_up", 1, 30.0)
@@ -299,7 +324,7 @@ def herc(a):
                   "...%d ticks after it left (the 0.75 s linger is %d)"
                   % (gone & 0xFFFF, DOCK_LEAVE_T))
             mo.to(pw // 2, ph - 60)
-            os88marty.settle(m)
+            os88marty.ui_done(m)
             _, _, after = frame(m, kind)
             d = diff(before, after, w, word(m, "vid_clk_hx"))
             check(not d, "closed, the screen is what it was (%d px)" % len(d))
@@ -310,7 +335,7 @@ def herc(a):
                 px, py = pane(m)
                 mo.click(px + 10, py + CPK_R0Y + 6, settle=0)
                 wait_for(m, "dock_up", 0, 30.0)
-                os88marty.settle(m)
+                os88marty.ui_done(m)
                 check(byte(m, "dock_cfg") == (P_BOTTOM | F_AUTO),
                       "a press outside the open strip reaches the page")
             else:
@@ -323,13 +348,13 @@ def cga(a):
     with os88marty.launch(a.image, apps=a.apps, machine=os88marty.machine("os8088_5150_cga"),
                           boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)
         os88marty.no_saver(m)
         check(word(m, "mod_r_dock") == 0, "basic Dock boots without a module")
         mo = os88mouse.Mouse(marty=m)
-        dispcp.open_panel(m, mo, S, os88marty.settle, page=dispcp.CP_IDOCK)
+        dispcp.open_panel(m, mo, S, _done, page=dispcp.CP_IDOCK)
         wx, wy = dispcp._cp_win(m, S)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
         click_row(m, mo, CPK_R0Y + CPK_ROWH)            # Left
         check(byte(m, "dock_cfg") == P_LEFT, "CGA: Left is accepted")
         check(byte(m, "dock_side") == P_LEFT and

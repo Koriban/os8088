@@ -77,7 +77,7 @@ def closed(ui):
     for w in list(ui.windows()):
         if w.visible:
             ui.close(w)
-    os88marty.settle(ui.m)
+    os88marty.ui_done(ui.m)
 
 
 def unfreeze(m):
@@ -87,7 +87,7 @@ def unfreeze(m):
 
 
 def main():
-    with os88ui.boot(IMG, apps=APPS) as ui:
+    with os88ui.boot(IMG, apps=APPS, quick=True) as ui:
         m = ui.m
         mo = Mouse(marty=m)
 
@@ -125,7 +125,7 @@ def main():
             check(took < A_LIMIT,
                   "it fails FAST: %.1fs (332.1s before the guard)" % took)
         unfreeze(m)
-        os88marty.settle(m)
+        os88marty.ui_done(m)
 
         # --- 2. arm B: the same symbols, pumped ------------------------------
         print("\n2. the same breakpoints inside bp_trace, driving os88ui")
@@ -149,7 +149,7 @@ def main():
         check(tr.error is None, "the pump did not die")
         if tm:                              # ...and close it again: its
             ui.close(tm)                    # worker animates the CPU meter,
-        os88marty.settle(m)                 # so no settle below could ever
+        os88marty.ui_done(m)              # so no settle below could ever
                                             # converge with it on the screen
 
         # --- 3. the invariants the pump is built on --------------------------
@@ -237,6 +237,10 @@ def main():
         closed(ui)
         with os88marty.bp_trace(m, "gfx_fill", cap=1) as tr4:
             ui.open_drive("B")
+            # ...AND ITS PAINT, inside the block: open_drive confirms on the
+            # window RECORD, which the paint follows (section 1), so the
+            # block could close before the window's fills were drawn
+            os88marty.ui_done(m)
         check(len(tr4.hits) <= 1, "the cap held: %d kept" % len(tr4.hits))
         check(tr4.overflowed == (tr4.n > 1),
               "overflowed agrees with n (n=%d, overflowed=%s)"

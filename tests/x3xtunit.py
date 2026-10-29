@@ -16,6 +16,11 @@ model (tools/x3simxt.py), in Unicorn's x86 core (SPEC.md 121.4).
                plans, to reach the split path no LAME fixture takes
   (none)       all three: four fixtures, 30 synthetic granules a profile
 
+The part's one kernel call is OSAPI_SEG (OPEN asks it for XTGEN.BIN's
+segment, KERN-MEGA-MEMORY-PLAN MC7), answered at its cell in KERNEL_SEG the
+way a real-mode kernel answers it: tests/x3xtbench/x3rmseg.inc, which the
+exactness row's harness copies to the same place.
+
 Every call is checked against x3gran.inc's contract: the registers kept
 but AX and the outputs, DF clear, IF untouched, at most 64 bytes of stack.
 
@@ -27,6 +32,7 @@ thing on the emulated machine.
 import argparse
 import os
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -72,7 +78,30 @@ X3E = {1: 'PROFILE', 2: 'DIV', 3: 'CHAN', 4: 'FMT', 5: 'MEM', 6: 'TABLE', 7: 'RE
        8: 'NOTOPEN', 9: 'ABI'}
 
 
+KSEG = 0x0060                    # apps/os88api.inc's KERNEL_SEG
+RMSEG = None                     # OSAPI_SEG's real-mode arm, assembled (build)
+
+
+def rmseg(d):
+    """(the cell's offset, its bytes): tests/x3xtbench/x3rmseg.inc - kernel/
+    kernel.asm's osapi_seg as every real-mode kernel answers it - for the
+    XT part's OPEN, which asks OSAPI_SEG for XTGEN.BIN's segment
+    (KERN-MEGA-MEMORY-PLAN MC7). Without it the far call lands in unmapped
+    nothing and OPEN refuses with whatever it read back"""
+    with open(os.path.join(ROOT, 'apps', 'os88api.inc')) as f:
+        m = re.search(r'%define\s+OSAPI_SEG\s+KERNEL_SEG:(0x[0-9A-Fa-f]+)', f.read())
+    assert m, 'no OSAPI_SEG in apps/os88api.inc'
+    src, out = os.path.join(d, 'x3rmseg.asm'), os.path.join(d, 'x3rmseg.bin')
+    with open(src, 'w') as f:
+        f.write('cpu 8086\nbits 16\norg 0\n%include "x3rmseg.inc"\n')
+    subprocess.run(['nasm', '-f', 'bin', '-w+error', '-I', os.path.join(ROOT, 'tests', 'x3xtbench') + '/',
+                    '-o', out, src], check=True)
+    return int(m.group(1), 16), open(out, 'rb').read()
+
+
 def build(out):
+    global RMSEG
+    RMSEG = rmseg(os.path.dirname(out))
     inc = os.path.join(os.path.dirname(out), 'x3xtk.inc')
     G.emit(inc)
     G.xtgen(os.path.join(os.path.dirname(out), 'XTGEN.BIN'))
@@ -91,6 +120,7 @@ class Part:
         self.uc = Uc(UC_ARCH_X86, UC_MODE_16)
         self.uc.mem_map(0, 1 << 20)
         self.uc.mem_write(PART_SEG * 16, image)
+        self.uc.mem_write(KSEG * 16 + RMSEG[0], RMSEG[1])  # OSAPI_SEG (rmseg)
         self.image = image
         self.segs = []
         self.low = 0x10000
@@ -170,7 +200,7 @@ class Part:
         if not r['cf'] and self.clobber:
             # OPEN's half is only OPEN's: GRANULE must run with it gone (the
             # engine may shrink the claim to X3C_PARTKB), so overwrite it
-            tail, end = struct.unpack_from('<HH', self.image, 18)
+            tail, end = struct.unpack_from('<HH', self.image, 20)   # the seal (x3xtgen.py)
             self.write(PART_SEG, tail, bytes([0xCC]) * (end - tail))
         return r
 
@@ -239,8 +269,18 @@ def check_expand(image, verbose):
     fails += refused(part.call(0, ax=PNUM['std'] | (2 << 8), cx=1, es=ARG_SEG, di=0), 'DIV', 'CAPS std at 2')
     fails += refused(part.call(0, ax=7 | (1 << 8), cx=1, es=ARG_SEG, di=0), 'PROFILE', 'CAPS profile 7')
     fails += refused(part.call(0, ax=PNUM['std'] | (1 << 8), cx=2, es=ARG_SEG, di=0), 'CHAN', 'CAPS stereo')
-    fails += refused(part.open('speech', 2, ver=1, sri=0), 'DIV', 'speech on MPEG-1')
-    fails += refused(part.open('speech', 4, ver=25, sri=0), 'DIV', 'speech 4:1 on MPEG-2.5')
+    # the SPEECH tables take 2 or 4 and nothing else - on ANY version, since
+    # XT Standard divided by its source runs on them too (x3x_opentail's
+    # rule, SPEC.md 121.4). So a divisor is refused for being 1 or 3, never
+    # for the stream it would run on
+    fails += refused(part.open('speech', 1, ver=1, sri=0), 'DIV', 'speech at 1')
+    fails += refused(part.open('speech', 3, ver=25, sri=0), 'DIV', 'speech at 3')
+    for div, ver, what in ((2, 1, 'speech 2:1 on MPEG-1'), (4, 25, 'speech 4:1 on MPEG-2.5')):
+        r = Part(image).open('speech', div, ver=ver, sri=0)   # (an accepted
+        if r['cf']:                                          # OPEN spends the
+            print('x3xtunit: %s refused (%s), want accepted'  # part's tail)
+                  % (what, X3E.get(r['ax'], r['ax'])))
+            fails += 1
     fails += refused(part.open('std', 1, ver=3, sri=0), 'RECORD', 'version 3')
     fails += refused(part.open('std', 1, ver=1, sri=3), 'RECORD', 'rate index 3')
     fails += refused(part.open('std', 1, fmt=2), 'FMT', 'format 2')

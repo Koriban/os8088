@@ -51,9 +51,11 @@ import glass                                                 # noqa: E402
 WORK = os88build.at("build/sheetsort")                # this row's own paths (WRITING-TESTS 5.5)
 DISK = os88build.at("build/sheetsort.img")
 NAME = "SHIN.SLK"
-EDIT = (123, 45)
-DATA = (311, 45)
-ITEM = lambda x, i: (x + 17, 57 + 12 * i + 2)
+# CGA points; on kern_mega's VGA (tests/megaport.txt) SHEET opens SHEET_DY
+# lower and every point in it moves with it (sheetfmt.mega_y)
+EDIT = SF.mega_y((123, 45), SF.SHEET_DY)
+DATA = SF.mega_y((311, 45), SF.SHEET_DY)
+ITEM = lambda x, i: SF.mega_y((x + 17, 57 + 12 * i + 2), SF.SHEET_DY)
 COPY, PASTE, FILLR = 2, 3, 9
 SORT = 6                                # 81.71 put the Data menu in Excel's
                                          # own order, which moved Sort down
@@ -89,7 +91,7 @@ def build_disk():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk(cells))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL", "build/MACRO.OVL", src],
+                    "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 

@@ -70,6 +70,7 @@ import os88marty as M                                   # noqa: E402
 import os88pkg                                          # noqa: E402
 import os88sym                                          # noqa: E402
 from os88mouse import Mouse                             # noqa: E402
+import dispapps                                         # noqa: E402
 import dispcp                                           # noqa: E402
 import heaphi                                           # noqa: E402
 
@@ -128,6 +129,11 @@ def u32(b, i=0):
     return int.from_bytes(b[i:i + 4], "little")
 
 
+def lin(m, seg, off=0):
+    """SEG:OFF linear: an LDT selector's base on kern_mega (docs/BOCHS.md)"""
+    return m.lin(seg, off) if getattr(m, "bochs", False) else (seg << 4) + off
+
+
 def tick(m, frames):
     """Let the guest run for `frames` and leave it running.
 
@@ -150,9 +156,12 @@ def sym(name):
         tmp = tempfile.mktemp(suffix=".asm")
         mp = tempfile.mktemp(suffix=".map")
         open(tmp, "w").write(open(src).read() + "\n[map all %s]\n" % mp)
+        # kern_mega's Task Manager is its ARM (build/megak/apps/, SPEC.md
+        # 20.18), -DPKG_MEGA, whose bss is laid out differently
+        arm = ["-DPKG_MEGA"] if dispapps.mega_arm(APP) else []
         r = subprocess.run(["nasm", "-f", "bin", "-w+error",
-                            "-I", os.path.join(ROOT, "apps") + os.sep,
-                            "-o", tmp + ".bin", tmp],
+                            "-I", os.path.join(ROOT, "apps") + os.sep]
+                           + arm + ["-o", tmp + ".bin", tmp],
                            capture_output=True, text=True)
         if r.returncode:
             sys.exit("heapdrv: could not map %s:\n%s" % (APP, r.stderr[:400]))
@@ -173,7 +182,8 @@ def sym(name):
 
 def img_size():
     """The package's image size - THE FILE IS NOT THE IMAGE (SPEC.md 20.13.5)."""
-    raw = open(os88build.at("build/%s.o88" % APP), "rb").read()
+    raw = open(os88build.at("build/%s%s.o88" % (
+        "megak/apps/" if dispapps.mega_arm(APP) else "", APP)), "rb").read()
     return len(os88pkg.image_unwrap(raw))
 
 
@@ -182,7 +192,7 @@ class Tm:
 
     def __init__(self, m, slot, seg):
         self.m, self.slot, self.seg = m, slot, seg
-        self.bss = (seg << 4) + img_size()
+        self.bss = lin(m, seg) + img_size()
 
     def _at(self, name, off=0):
         return self.bss + sym(name) - sym("os88_image_end") + off
@@ -205,7 +215,7 @@ def pkg_slot(m, name):
         if u16(t, b + geom.W_FLAGS) & 3 != 3:
             continue
         seg = u16(t, b + geom.W_SEG)
-        if seg and m.read((seg << 4) + 16, len(name)) == name:
+        if seg and m.read(lin(m, seg, 16), len(name)) == name:
             return i, seg
     return None
 
@@ -226,7 +236,7 @@ def guest_font(m):
     """
     seg = int.from_bytes(m.read(S("font_seg"), 2), "little")
     off = int.from_bytes(m.read(S("font_base"), 2), "little")
-    raw = m.read(seg * 16 + off, FONT_BYTES)
+    raw = m.read(lin(m, seg, off), FONT_BYTES)
     return {FONT_FIRST + i: list(raw[i * 8:i * 8 + 8])
             for i in range(FONT_BYTES // 8)}
 
@@ -270,7 +280,8 @@ def main():
     with M.launch("build/os8088-360.img", apps=DISK,
                   machine=a.machine, boot=False) as m:
         m.run()
-        M.settle(m, gate=M.desktop_up)
+        M.kernel_up(m)          # the boot gate on STATE
+        M.no_saver(m)
         M.no_saver(m)
         mo = Mouse(marty=m)
 
@@ -330,10 +341,11 @@ def main():
             % (slot, wx, wy, ww, wh, seg))
 
         # The memory page (the heap page merged into it, SPEC.md 28.4.10):
-        # one click cycles 0 -> 1. Then its SYSTEM view, where each driver is
-        # a group of its own, and +ALL, so the driver's group is open and its
-        # claims are rows - both switches are on the header, off the page's
-        # own origin and rise.
+        # one click cycles 0 -> 1. Then +ALL, so System and the driver's group
+        # nested in it are open and its claims are rows - the switch is on
+        # the header, off the page's own origin and rise. (The PROGRAMS /
+        # SYSTEM switch this pressed first is gone, KERN-MEGA-PLAN 14.70.3:
+        # every driver is a group inside System in the one tree.)
         cx, cy = wx + 40, wy + 36            # the captions, above the list
         for _ in range(2):
             if tm.byte("tm_view") == 1:
@@ -345,19 +357,13 @@ def main():
                      "the click cycles 0 -> 1 -> 0"):
             return report()
         hy = tm.word("tm_cy") + TMM_HDR_Y - tm.word("tm_xoff") + 4
-        if tm.byte("tm_mview") != 1:
-            mo.click(tm.word("tm_cx") + TM_PEN + 12, hy)        # SYSTEM
-            tick(m, 40)
         if u32(tm.blob("tm_exp", 4)) != 0xFFFFFFFF:
             mo.click(tm.word("tm_cx") + TM_PEN + 22 * 8 + 4, hy)  # +ALL
             tick(m, 40)
         tick(m, SLOW_FRAMES)        # one unattended walk of the open list
-        if not check(tm.byte("tm_mview") == 1
-                     and u32(tm.blob("tm_exp", 4)) == 0xFFFFFFFF,
-                     "the header's switches give the SYSTEM view, every group "
-                     "open",
-                     got="view %d, groups %08X" % (tm.byte("tm_mview"),
-                                                   u32(tm.blob("tm_exp", 4)))):
+        if not check(u32(tm.blob("tm_exp", 4)) == 0xFFFFFFFF,
+                     "the header's +ALL opens every group",
+                     got="groups %08X" % u32(tm.blob("tm_exp", 4))):
             return report()
 
         # --- 2: every live record is in a group, the driver's in ITS group --

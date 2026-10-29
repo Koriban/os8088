@@ -209,6 +209,17 @@ def requirements():
                 "                   refused by the proxy, git is not - and "
                 "prints the PATH line)"))
 
+    req.append(("qemuvt", bool(os88build.qemuvt()),
+                "xtmp3rate: under -icount stock QEMU moves the Sound Blaster's "
+                "DMA in HOST time, so a loaded box stops the card "
+                "(os88build.qemuvt()); tools/qemu9/'s patch puts it on the "
+                "guest's clock.",
+                "tools/setup-qemu9.sh\n"
+                "                  (applies tools/qemu9/*.patch and rebuilds "
+                "build/qemu9 - a\n"
+                "                   QEMU 9 built before them is rebuilt, "
+                "about ten minutes)"))
+
     marty = B("martypc", "run", "martypc_headless")
     req.append(("martypc", os.path.exists(marty),
                 "the default instrument. Without it EVERY emulator row skips, "
@@ -234,28 +245,16 @@ def requirements():
                 "python3 -m pip install unicorn"))
 
     req.append(("bochs", os88build.have_bochs(),
-                "megatrap0, kern_mega's #GP census held at zero: Bochs is the "
-                "one emulator here that checks a 286's segment rules "
-                "(docs/BOCHS.md).",
+                "the kern_mega rows (megatrap0's #GP census and the other mega*): "
+                "Bochs is the one emulator here that checks a 286's segment "
+                "rules (docs/BOCHS.md) - and it runs under a clock preload "
+                "built with the host's C compiler (tools/bochs/bxclock.c).",
                 "apt-get install -y bochs bochsbios vgabios bochs-x xvfb "
-                "xdotool x11-apps imagemagick"))
-
-    req.append(("xdc", os88build.have_xdc(),
-                "vidbench, which decodes the owner's four XDC streams and has "
-                "nothing else to decode (docs/plans/VIDEO-PLAN.md 13).",
-                "export OS88_XDC_SAMPLES=<a directory holding %s>\n"
-                "                  (copyrighted: they are the owner's and "
-                "never in the tree)" % ", ".join(os88build.XDC_STREAMS)))
-
-    req.append(("gbroms", os88build.have_gbroms(),
-                "rdgspeed286, which times RealDMG on the owner's two Game Boy "
-                "cartridges (docs/plans/REALDMG-PLAN.md wave 4).",
-                "export OS88_GB_ROMS=<a directory holding %s>\n"
-                "                  (copyrighted: they are the owner's and "
-                "never in the tree)" % ", ".join(os88build.GB_ROMS)))
+                "xdotool x11-apps imagemagick gcc"))
 
     req.append(("86box", os88build.have_86box(),
-                "rdgspeed286, which needs the automation-enabled 86Box's 286.",
+                "gbreplay, gbbank, gbhifreq and megacdrom, which need the "
+                "automation-enabled 86Box (docs/86BOX.md).",
                 "python3 tools/os88box.py build      (three minutes)"))
 
     req.append(("rgbds", os88build.have_rgbds(),
@@ -275,6 +274,12 @@ def requirements():
                 "instkeep, which plants a user's files on the fixture "
                 "partition before a kept install (SPEC.md 52.10.15).",
                 "apt-get install -y mtools"))
+
+    req.append(("unshare", sys.platform.startswith("linux")
+                and bool(shutil.which("unshare")) and os.geteuid() == 0,
+                "httpmountname, which binds its own /etc/resolv.conf in a "
+                "private mount namespace (SPEC.md 72.5.1).",
+                "run the soak as root on Linux (the container is)"))
 
     req.append(("dosbox", bool(shutil.which("dosbox")),
                 "czdos, which runs OS88CZ.COM under a real DOS (SPEC.md "
@@ -772,6 +777,28 @@ def widths(cores, mj=None, hj=None):
             hj if hj else max(2, cores))
 
 
+def _bpc(a):
+    """Bochs rows per emulator-lane core (docs/plans/SOAK-PARALLEL.md 19).
+
+    A Bochs guest is capped at real time by `sync=slowdown` and the clock
+    preload, so a Bochs row spends ~0.15 of a core where a MartyPC row spends
+    one; tools/os88test.py's lane weighs it `1/bpc` of a lane. The number is
+    os88test's BOCHS_PER_CORE unless `--bochs-per-core` or
+    `$OS88_BOCHS_PER_CORE` says otherwise, and it is passed through
+    explicitly so the run's meta.json records what it ran at."""
+    if getattr(a, "bpc", None):
+        return max(1, a.bpc)
+    env = os.environ.get("OS88_BOCHS_PER_CORE")
+    if env:
+        try:
+            return max(1, int(env))
+        except ValueError:
+            pass
+    sys.path.insert(0, os.path.join(ROOT, "tools"))
+    import importlib
+    return importlib.import_module("os88test").BOCHS_PER_CORE
+
+
 def _declared(a):
     """Every `wants=` artefact of the rows THIS invocation selected.
 
@@ -886,7 +913,8 @@ def _frozen_targets(a):
         imgs = ("os8088.img", "os8088-120.img", "os8088-720.img",
                 "os8088-360.img", "apps.img", "apps120.img", "apps720.img",
                 "apps360.img", "media360.img", "office360.img",
-                "network360.img", "games360.img", "emu360.img")
+                "network360.img", "games360.img", "emu360.img", "util360.img",
+                "more720.img", "small360.img", "small720.img")
     shipped = imgs + ("wire.o88",)
     return shipped + tuple(a[len("build/"):] for a in arts
                            if a.startswith("build/"))
@@ -955,7 +983,9 @@ def start(a):
     mj, hj = widths(cores, a.marty_jobs, a.j)
 
     blocking, advisory = preflight()
-    print("os88soak: %d core(s); emulator lane %d, host lane %d" % (cores, mj, hj))
+    bpc = _bpc(a)
+    print("os88soak: %d core(s); emulator lane %d (Bochs rows %d a core), "
+          "host lane %d" % (cores, mj, bpc, hj))
     if advisory:
         skips = would_skip()
         print()
@@ -1067,7 +1097,8 @@ def start(a):
               "while it runs will break rows%s" % (YELLOW, OFF))
 
     cmd = ["python3", os.path.join("tools", "os88test.py"), a.tier,
-           "--marty-jobs", str(mj), "-j", str(hj)]
+           "--marty-jobs", str(mj), "-j", str(hj),
+           "--bochs-per-core", str(bpc)]
     if a.user_asked:
         cmd.append("--user-asked")
     for g in a.k:
@@ -1082,6 +1113,7 @@ def start(a):
     log = os.path.join(d, "run.log")
     meta = {"started": time.time(), "cmd": cmd, "cores": cores,
             "marty_jobs": mj, "host_jobs": hj, "tier": a.tier,
+            "bochs_per_core": bpc,
             "resumed": len(skip), "root": ROOT,
             # The denominator, fixed at the first start and carried through
             # every resume - see _selected().
@@ -1248,10 +1280,11 @@ def status(a):
     skp = [n for v, n, _ in seen if v == "SKIP"]
     el = time.time() - meta["started"]
 
-    print("os88soak: %s  %s  (%s, lane %d)"
+    print("os88soak: %s  %s  (%s, lane %d, Bochs %d a core)"
           % (os.path.basename(d),
              "%sRUNNING%s" % (GREEN, OFF) if alive else "%sfinished%s" % (DIM, OFF),
-             meta.get("tier", "soak"), meta.get("marty_jobs", 1)))
+             meta.get("tier", "soak"), meta.get("marty_jobs", 1),
+             meta.get("bochs_per_core", 1)))
     print("  elapsed  %s" % _hms(el))
     print("  reported %d%s   ok %d   FAIL %d   SKIP %d"
           % (len(seen), "/%d" % total if total else "", len(ok), len(bad), len(skp)))
@@ -1346,7 +1379,8 @@ def check(a):
     blocking, advisory = preflight()
     cores = _cores()
     mj, hj = widths(cores, a.marty_jobs, a.j)
-    print("os88soak: %d core(s) -> emulator lane %d, host lane %d" % (cores, mj, hj))
+    print("os88soak: %d core(s) -> emulator lane %d (Bochs rows %d a core), "
+          "host lane %d" % (cores, mj, _bpc(a), hj))
     print()
     for name, ok, why, fix in requirements():
         print("%s %-14s %s" % ("%s ok %s" % (GREEN, OFF) if ok
@@ -1393,6 +1427,10 @@ def main():
     ap.add_argument("--marty-jobs", type=int, default=None, dest="marty_jobs",
                     help="emulator lane width (default: one per core, "
                          "see widths())")
+    ap.add_argument("--bochs-per-core", type=int, default=None, dest="bpc",
+                    help="Bochs-only rows per emulator-lane core (default: "
+                         "$OS88_BOCHS_PER_CORE, else os88test.BOCHS_PER_CORE; "
+                         "1 is the old one-row-a-lane). See _bpc()")
     ap.add_argument("-j", type=int, default=None, help="host-side lane width")
     ap.add_argument("--resume", action="store_true",
                     help="continue the last run, excluding rows it reported")

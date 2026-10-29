@@ -118,11 +118,13 @@ def main():
             return 1
         name = G.short83(v88)
         m = M.launch(None, machine=a.machine,
-                     extra=["--mount", "hd:0:" + img])
+                     extra=["--mount", "hd:0:" + img], boot=False)
         try:
             ui = os88ui.UI(m)
             try:
-                ui.ready(limit=300)
+                m.run()             # a quick boot: STATE is the gate
+                ui.up(limit=300)
+                M.no_saver(m)
                 print("   1: the desktop is up, off the hard disk")
             except Exception as e:
                 bad.append("1: no desktop off the disk: %s"
@@ -164,11 +166,16 @@ def main():
         subprocess.run([sys.executable, "tools/os88disk.py", "-o", bimg,
                         "--size", "360", "APPS:" + os88build.at("build/video.o88")],
                        check=True, capture_output=True)
+        # ...and upstream's `boot=False` comes with it: the body below calls
+        # m.run() itself, so letting launch boot as well would boot twice.
         m = M.launch(sysimg, apps=bimg,
-                     machine=a.machine, extra=["--mount", "hd:0:" + img])
+                     machine=a.machine, extra=["--mount", "hd:0:" + img],
+                     boot=False)
         try:
             ui = os88ui.UI(m)
-            ui.ready(limit=300)
+            m.run()                 # a quick boot: STATE is the gate
+            ui.up(limit=300)
+            M.no_saver(m)
             play(ui, m, syms, name, "3", bad)
         except Exception:
             pass

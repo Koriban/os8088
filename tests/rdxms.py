@@ -149,11 +149,23 @@ class Machine(Q):
             n -= k
         return bytes(out)
 
-    def mouse(self, *args):
-        subprocess.run([sys.executable, os.path.join(ROOT, "tools",
-                                                     "mouse.py"), self.sock]
-                       + [str(a) for a in args], check=True,
-                       capture_output=True, cwd=ROOT)
+    def mouse(self, verb, *xy):
+        """tools/mouse.py's verbs, CLOSED-LOOP (os88qemu.mouse_to): the
+        pointer is read back off mouse_x/mouse_y and each button edge off
+        mouse_btn, where mouse.py pinned, walked and slept - 88 of this
+        row's 111 host seconds were its clicks."""
+        hmp = self.hmp
+        if xy:
+            os88qemu.mouse_to(self, S, hmp, *xy,
+                              btn=os88qemu.mouse_where(self, S)[2])
+        if verb == "click":
+            os88qemu.mouse_click(self, S, hmp, *xy)
+        elif verb == "down":
+            os88qemu.mouse_button(self, S, hmp, 1)
+        elif verb == "up":
+            os88qemu.mouse_button(self, S, hmp, 0)
+        elif verb != "to":
+            raise ValueError(verb)
 
     def done(self, cap=2.0):
         os88qemu.ui_done(self, S, cap=cap)
@@ -256,6 +268,7 @@ def main():
         if not os.path.exists(os88build.at(p)):
             sys.exit("rdxms: no %s - run `make`" % p)
     R = rp.drv_syms(a.src)
+    P = rp.page_syms(a.src)
     data = rp.payload()
     work = tempfile.mkdtemp(prefix="rdxms-")    # short: a QMP socket path
     try:                                        # has a ~107-byte limit
@@ -268,7 +281,7 @@ def main():
                 break
             time.sleep(0.2)             # the socket appearing is a HOST event
         xmcheck.wait_desktop(q.sock, "rdxms")
-        session(q, a, R, data, bimg)
+        session(q, a, R, P, data, bimg)
         q.close()
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -278,7 +291,19 @@ def main():
     return 1 if fails else 0
 
 
-def session(q, a, R, data, bimg):
+def lin(seg, off=0):
+    """SEG:OFF as a linear address - os88qemu.lin: under kern_mega a driver's
+    segment and its claims are LDT selectors, whose base it looks up"""
+    return os88qemu.lin(seg, off)
+
+
+def mega():
+    """The kern_mega Bochs behind this row's socket (tests/os88qmpmega.py)"""
+    import os88qmpmega
+    return os88qmpmega.live().m
+
+
+def session(q, a, R, P, data, bimg):
     ui = os88ui.UI(q, mouse=object(), sym=S, verbose=False)
     xm_kb, tier = u16(q.read(S("xm_kb"), 2)), q.read(S("cpu_tier"), 1)[0]
     say("rdxms: QEMU -m %d, xm_kb %d, cpu_tier %d, a %dKB store, %d bytes of "
@@ -287,20 +312,26 @@ def session(q, a, R, data, bimg):
         raise SystemExit("rdxms: the machine reports %dKB above 1MB - there "
                          "is no extended store to test (needs -m >= 2)"
                          % xm_kb)
-    xtab = xmcheck.table_base(q.sock)
+    # kern_mega serves memory above 1MB ITSELF - its pool, mx_tab
+    # (kernel/mega.inc), with no XMEM.DRV - so the block table read there
+    # is the pool's (tools/heapmap.py `pool`)
+    xtab = None if os88qemu.MEGA else xmcheck.table_base(q.sock)
 
     def rd_seg():
         return u16(q.read(S("drv_tab") + rp.RD_ROW * rp.DRVR_SZ
                           + rp.DRVR_SEG, 2))
 
     def dw(n):                      # a driver word, at the driver's segment
-        return u16(q.read(rd_seg() * 16 + R[n], 2))     # AS IT IS NOW
+        return u16(q.read(lin(rd_seg(), R[n]), 2))      # AS IT IS NOW
 
     def dd(n):
-        return struct.unpack("<I", q.read(rd_seg() * 16 + R[n], 4))[0]
+        return struct.unpack("<I", q.read(lin(rd_seg(), R[n]), 4))[0]
 
     def db(n):
-        return q.read(rd_seg() * 16 + R[n], 1)[0]
+        return q.read(lin(rd_seg(), R[n]), 1)[0]
+
+    def pb(n):                      # a byte of the page, RAMPAGE.DRV, at
+        return q.read(lin(dw("rd_pseg"), P[n]), 1)[0]   # rd_pseg AS IT IS
 
     def fdlg_up():
         return u16(q.read(S("fdlg_win"), 2)) not in (0, 0xFFFF)
@@ -315,7 +346,17 @@ def session(q, a, R, data, bimg):
         return next((o for o in ui.windows() if o.i == i), None)
 
     def store_blocks():
-        """XMEM.DRV's live blocks the size of this store or bigger."""
+        """XMEM.DRV's live blocks the size of this store or bigger - as
+        (index, kb-offset, kb, owner) - or under kern_mega the POOL's, its
+        owner XM_OWN_KERN when the kernel's tag says no instance holds it
+        (heapmap.pool: FFxxh, the driver's claim outside any instance's
+        stamp, as on XMEM.DRV)"""
+        if xtab is None:
+            import heapmap
+            return [(i, c.seg - 0x10000, c.para // 64,
+                     XM_OWN_KERN if c.own >= 0xFF00 else c.own)
+                    for i, c in enumerate(heapmap.pool(mega()))
+                    if c.para // 64 >= a.kb]
         return [b for b in xmcheck.blocks(q.sock, xtab) if b[2] >= a.kb]
 
     def raise_win(w):
@@ -419,7 +460,7 @@ def session(q, a, R, data, bimg):
         return q.read(dd("rd_xbase"), dw("rd_kb") * 1024)
 
     def ctab():
-        return q.read(dw("rd_dtab") * 16 + RD_DIRB, dw("rd_next") * 2)
+        return q.read(lin(dw("rd_dtab"), RD_DIRB), dw("rd_next") * 2)
 
     # --- 1: Xms, the size, Mount ---------------------------------------------
     cp, px, py = open_page(True)
@@ -428,10 +469,22 @@ def session(q, a, R, data, bimg):
     check("X", db("rd_loc") == RDL_XMS, "the Store radio selected Xms",
           "[rd_loc] = %d - the radio is greyed, or the click missed"
           % db("rd_loc"))
+    # THE CARET FIRST, THEN THE KEYS. ui_task takes the BIOS key ring AHEAD
+    # of the event queue in a pass, and rp_key drops a key the box has no
+    # caret for, so keys sent while the click is still queued are typed at
+    # nobody - which is what a loaded box did when `done`'s cap ran out
+    # before the click was handled ([rd_kb] stayed 64). So each step waits
+    # on the page's own state: the caret (`rp_edit`), every digit landing
+    # in `rp_elen`, and the commit (`rp_edit` cleared, [rd_kb] the size).
     press(px, py, rp.R_SBOX)
-    for c in str(a.kb):
+    q.need(lambda: pb("rp_edit") == 1, "the size box's caret", 15)
+    for i, c in enumerate(str(a.kb)):
         q.key(c)
+        q.need(lambda: pb("rp_elen") == i + 1, "digit %d in the box" % (i + 1),
+               10)
     q.key("ret")
+    q.wait(lambda: pb("rp_edit") == 0 and dw("rd_kb") == a.kb,
+           "the size to commit", 15)
     q.done(4.0)
     check("K", dw("rd_kb") == a.kb, "the size box took %dKB" % a.kb,
           "[rd_kb] = %d" % dw("rd_kb"))

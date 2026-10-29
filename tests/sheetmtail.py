@@ -74,8 +74,7 @@ def build_disk():
     src = os.path.join(WORK, NAME)
     open(src, "wb").write(F.write_sylk({(0, 0): 1.0, (1, 0): 'tail'}))
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", DISK, "--size",
-                    "360", "build/sheet.o88", "build/CHART.OVL",
-                    "build/MACRO.OVL", src],
+                    "360", "build/sheet.o88", src],
                    check=True, stdout=subprocess.DEVNULL)
 
 
@@ -154,7 +153,8 @@ def main_card(card):
             os88marty.write_png_rgb(os.path.join(WORK, "%s-%s-held.png"
                                                  % (card, tag)), *m.fbuf())
             if refuse:                          # what a refused save leaves
-                m.write(seg() * 16 + sym["sh_mbanked"], b"\x00")
+                m.write((m.lin(seg()) if getattr(m, "bochs", False)
+                         else seg() * 16) + sym["sh_mbanked"], b"\x00")
             mo.to(*park, l=True)                # button down: off the panel
             mo._edge(False)
             M.settle(m, limit=120)

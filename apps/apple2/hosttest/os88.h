@@ -163,6 +163,8 @@ int  os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap);
 
 unsigned os88_mem_claim(int kb);
 int      os88_mem_free(unsigned seg);
+int      os88_mem_movable(unsigned seg, int on);
+void     os88_onmove(unsigned was, unsigned now);
 unsigned os88_mem_largest_kb(void);
 int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);
@@ -184,4 +186,5 @@ unsigned os88_strlen(const char *s);
 void os88_strcpy(char *dst, const char *src, unsigned cap);
 char *os88_utoa(unsigned v, char *dst6);
 
+unsigned os88_seg_para(unsigned seg);
 #endif

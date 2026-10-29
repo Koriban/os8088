@@ -16,10 +16,10 @@ under it is not a 4.77 MHz 8088, and the pixels are what is asserted.
 WHAT IT ASSERTS, after [vid_kind] settles on VID_VESA (4):
 
   vid_kind    4            vx_boot_x attached the image and bvs_switch took it
-  vid_ext     1            every planar body far-calls the driver (120.3)
   vid_cw/ch   1024 x 768   the mode Auto chose on this card (120.2.3)
   vid_planes  16           the DEPTH, which is what the save-under sizers
-                           multiply by (120.4)
+                           multiply by (120.4) - and what every planar
+                           body's hook tests, above 4 (120.3.1)
   vesa_row    DRVR_SEG != 0, DRVR_ERR == 0
 
 then a 1024 x 768 screendump: the menu bar's band at the top is not black
@@ -42,6 +42,13 @@ be the dither afterwards. The driver's pattern body spent CX on the tile
 copy before it cut the width from it, and the three chevron rows went
 65,433 pixels each across the desktop (found on the 86Box 486 by eye, then
 here).
+
+Last, that window SCROLLS: one click on its down arrow is gfx_scroll's blit
+through the driver's VX_SCROLL, and every pixel of the list band must then
+be the pixel 16 rows below it before the click. The driver set `cl, 3` for
+its shifts and then read the row width back out of CX, so every row moved
+24 pixels - the icons - and the names stayed where they were, the exposed
+row alone lettered right (reported on a VESA desktop; 1,973 pixels here).
 """
 import os
 import signal
@@ -61,10 +68,22 @@ import os88qemu                                             # noqa: E402
 import shot                                                 # noqa: E402
 from os88geom import VID_VESA                               # noqa: E402
 
-SOCK = os.path.join(ROOT, "build", "vesa.sock")
-PIDFILE = os.path.join(ROOT, "build", "vesa.pid")
+# THIS PROCESS'S pair (tests/os88qemu.py RUNDIR) - and so every vesa* row's,
+# each of which drives vesa.SOCK - never a fixed file under build/, so the
+# family shares the soak's emulator lane (docs/plans/SOAK-PARALLEL.md 17).
+# The images are booted snapshot=on below for the same reason: two rows on
+# build/apps.img at once used to be a `Failed to get "write" lock`.
+SOCK, PIDFILE = os88qemu.paths("vesa")
 
 WANT_W, WANT_H, WANT_BPP = 1024, 768, 16
+if os88qemu.MEGA:
+    # BOCHS'S vgabios lists nothing above 800 x 600 (0100h-0115h and four
+    # 014xh modes; read off the image's vx_list, KERN-MEGA-PLAN 14.115), so
+    # Auto's answer there is 800 x 600 at 16bpp, mode 0114h - the same
+    # choice SPEC.md 120.2.3 makes on any card whose best is that
+    WANT_W, WANT_H = 800, 600
+# the A: and B: icons: desk zone 0, at the desktop's right edge
+ICON_X = WANT_W - 49
 
 
 def kill_stale():
@@ -79,14 +98,26 @@ def kill_stale():
             os.unlink(f)
 
 
-def launch():
-    """The standard VGA (QEMU's default, spelled out) and the gate disk."""
-    os88fixture.need("build/vesa.img", "build/apps.img")
+def launch(img="build/vesa.img", b="build/apps.img", sock=None, pidfile=None):
+    """The standard VGA (QEMU's default, spelled out) and the gate disk.
+
+    UNDER $OS88_MEGA it is kern_mega's (KERN-MEGA-PLAN 14.115): this socket
+    answered by a Bochs (tests/os88qmpmega.py) whose VGA carries Bochs's VBE
+    (`vga: extension=vbe`, tools/os88bochs.py) - the gate disk rebuilt on
+    mega.img with its SYSTEM.CFG (mega_twin), the shipped apps disk as
+    megaapps.img. The desktop comes up on the VBE in real mode exactly as on
+    kern_big, and mega_enter then hands VESA.DRV its selectors"""
+    os88fixture.need(img, b)
+    if os88qemu.MEGA:       # (and every vesa* row's, through `img`/`b`)
+        import os88qmpmega
+        launch.srv = os88qmpmega.Server(sock or SOCK, pidfile or PIDFILE,
+                                        _B.at(img), _B.at(b), ne2k=False)
+        return
     em = "qemu" + "-system-i386"     # never whole on a command line: kill_stale
-    subprocess.run(
+    os88qemu.start(
         em + " -machine pc,vmport=off -vga std"
-        " -drive file=%s,format=raw,if=floppy -boot a"
-        " -drive file=%s,format=raw,if=floppy,index=1"
+        " -drive file=%s,format=raw,if=floppy,snapshot=on -boot a"
+        " -drive file=%s,format=raw,if=floppy,index=1,snapshot=on"
         " -serial msmouse"
         " -display none -qmp unix:%s,server,nowait -daemonize -pidfile %s"
         % (_B.at("build/vesa.img"), _B.at("build/apps.img"), SOCK, PIDFILE),
@@ -103,8 +134,46 @@ def word(q, sym, off=0):
     return b[0] | (b[1] << 8)
 
 
+def desk_up(q, fails, cap=12.0, autostart=True):
+    """The VESA desktop UP, on the GUEST's clock - and, for a gate disk
+    whose AUTOSTRT opens a package, that package's instance LIVE and the UI
+    finished with its first paint (os88qemu.ui_done, capped at `cap` guest
+    seconds, which is the fixed pause it replaces). False, with the reason
+    in `fails`, when the desktop never came.
+
+    It was a 60 s HOST deadline around vid_kind and then `pace(q, 12.0)`
+    "for the autostart's load and first paint" - a pause something was
+    assumed to have finished inside, which on QEMU buys a starved guest less
+    of the machine (docs/plans/SOAK-PARALLEL.md 17.5). vesafsx's Alt+Enter
+    landed with Gorillas' bracket not taken in the 2026-10-25 soak. And
+    vid_kind is `.bss`: read before kmain has expanded the kernel it is
+    the packed stream, so the desktop is gated first (kernel_up)."""
+    if not os88qemu.kernel_up(q, os88sym.linear, secs=120.0,
+                              what="the VESA desktop"):
+        fails.append("the desktop never came up")
+        return False
+    if not os88qemu.acted(q, lambda: byte(q, "vid_kind") == VID_VESA,
+                          secs=20.0, what="vid_kind = VID_VESA", poll=0.25):
+        fails.append("the desktop never reached VID_VESA")
+        return False
+    if autostart:
+        import os88geom
+        if not os88qemu.acted(q, lambda: bool(os88geom.instances(
+                q, os88sym.linear)), secs=60.0,
+                what="the autostart's instance", poll=0.25):
+            fails.append("the AUTOSTRT link opened no instance")
+            return False
+        os88qemu.ui_done(q, os88sym.linear, cap=cap,
+                         what="the autostart's first paint")
+    return True
+
+
 def screendump(q, path):
-    ppm = os.path.abspath(path + ".ppm")
+    # THIS PROCESS'S file, whatever `path` says: every vesa* row passed the
+    # same build/vesa-shot, and two of them in the emulator lane's two slots
+    # each unlinked the other's dump or read the other machine's screen. The
+    # name is kept for the caller; the directory is os88qemu's RUNDIR
+    ppm = os.path.join(os88qemu.RUNDIR, os.path.basename(path) + ".ppm")
     q.hmp('screendump "%s"' % ppm)
     w, h, pix = shot.read_ppm(ppm)
     os.unlink(ppm)
@@ -167,6 +236,13 @@ def white_share(pix, w, x0, y0, x1, y1):
 
 def px(pix, w, x, y):
     i = (y * w + x) * 3
+    if os88qemu.MEGA:
+        # Bochs's X display widens RGB565 by filling the low bits with ones -
+        # the driver's white 0FFFFh is (251, 255, 251) - where QEMU, and
+        # vesablit4's q565, replicate the high bits. Re-expanded QEMU's way
+        # here, so every row compares a 565 pixel the same on both
+        r, g, b = pix[i] >> 3, pix[i + 1] >> 2, pix[i + 2] >> 3
+        return (r << 3 | r >> 2), (g << 2 | g >> 4), (b << 3 | b >> 2)
     return pix[i], pix[i + 1], pix[i + 2]
 
 
@@ -209,13 +285,10 @@ def main():
                          % (kind, VID_VESA, seg, err))
             raise SystemExit("\n".join(fails))
 
-        ext = byte(q, "vid_ext")
-        if ext != 1:
-            fails.append("vid_ext %d, want 1" % ext)
         w, h = word(q, "vid_cw"), word(q, "vid_ch")
         if (w, h) != (WANT_W, WANT_H):
-            fails.append("vid_cw x vid_ch %d x %d, want %d x %d (Auto on QEMU's "
-                         "standard VGA, SPEC.md 120.2.3)" % (w, h, WANT_W, WANT_H))
+            fails.append("vid_cw x vid_ch %d x %d, want %d x %d (Auto on this "
+                         "card, SPEC.md 120.2.3)" % (w, h, WANT_W, WANT_H))
         bpp = byte(q, "vid_planes")
         if bpp != WANT_BPP:
             fails.append("vid_planes %d, want %d: the depth is the plane count "
@@ -277,7 +350,7 @@ def main():
                              "come back whole (the restore)")
             # the A: icon at the desktop's right edge (desk zone 0): a Disk
             # window opens on a double-click
-            m.dblclick(975, 45)
+            m.dblclick(ICON_X, 45)
             os88qemu.pace(q, 4.0)
             sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
             if out_png:
@@ -303,7 +376,7 @@ def main():
             # window, so this one draws the chevron band (a pattern fill);
             # the desktop's left margin must be the dither still, every
             # block of it - the runaway covered 64 whole rows
-            m.dblclick(975, 100)
+            m.dblclick(ICON_X, 100)
             os88qemu.pace(q, 5.0)
             sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
             if out_png:
@@ -323,16 +396,42 @@ def main():
             # the transfers that opened two windows (SPEC.md 12.8, 120.5:
             # on a 1024-wide bar the widget sits past the composer's cells
             # and fpg_finish has to erase its band rows itself)
-            left = [(x, y) for y in range(1, 18) for x in range(600, 860, 2)
+            left = [(x, y) for y in range(1, 18) for x in range(WANT_W - 424, WANT_W - 164, 2)
                     if px(pix, sw, x, y) != (255, 255, 255)]
             if left:
                 fails.append("the disk widget's chrome is still on the bar after "
-                             "the transfers: %d non-white pixels between x=600 "
-                             "and 860, first at %r" % (len(left), left[0]))
+                             "the transfers: %d non-white pixels in the widget's band "
+                             "(first at %r)" % (len(left), left[0]))
             if bad:
                 fails.append("B:\\APPS open: the desktop's left margin is not "
                              "the dither on %d row pairs (first at y=%d) - a "
                              "fill ran past its rect" % (len(bad), bad[0]))
+            # ...and it SCROLLS: one click on the list's down arrow is
+            # fm_scrollpaint's blit (gfx_scroll, the driver's VX_SCROLL) of
+            # every row up FM_ROW_H = 16 and one row lettered at the bottom.
+            # The driver cut the row width from CX after `mov cl, 3`, so
+            # every row moved 24 pixels - the icons - and the names stayed
+            # where they were (reported on a VESA desktop, then here). The
+            # pointer is parked off the window for both dumps
+            m.run("to", "600", "400")
+            os88qemu.pace(q, 0.5)
+            sw, sh, before = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            m.click(432, 269)
+            m.run("to", "600", "400")
+            os88qemu.pace(q, 1.5)
+            sw, sh, pix = screendump(q, os.path.join(ROOT, "build", "vesa-shot"))
+            if out_png:
+                shot.png(out_png.replace(".png", "-scroll.png"), sw, sh, pix)
+            moved = sum(1 for y in range(140, 240) for x in range(128, 420)
+                        if px(pix, sw, x, y) != px(before, sw, x, y + 16))
+            if moved:
+                fails.append("B:\\APPS scrolled one row: %d pixels of the list "
+                             "band are not the band 16 rows below them before "
+                             "the click (the scroll blit did not move the "
+                             "rows)" % moved)
+            elif before == pix:
+                fails.append("B:\\APPS: the down arrow changed nothing - the "
+                             "click missed, so the scroll was not tested")
     finally:
         pass
     if fails:

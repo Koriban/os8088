@@ -148,6 +148,10 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 section .cold                   ; a bare restate, and it stays: this file
                                 ; toggles section three more times below and
                                 ; the discipline is per-block, not per-file
+; ld_slot_rec: the same, with the `mov di, [ld_rec]` its callers
+; spelt at the call (kernel size pass 14: it falls into the body)
+ld_slot_rec:
+    mov di, [ld_rec]
 ld_slot:
     push cx                     ; ...and no AX save: the arithmetic is done in
     mov bx, di                  ; BX, which is the answer's own register.
@@ -251,8 +255,8 @@ ld_unreserve:
     jz .out
     call mem_free_owner_x
 %ifdef KERN_MEGA
-    test byte [ld_base], 4      ; a region placed ABOVE 1MB (ld_hi): its
-    jz .lo                      ; pair and pool block
+    MEGA_ISHI [ld_base]         ; a region placed ABOVE 1MB (ld_hi): its
+    jc .lo                      ; pair and pool block
     push ax
     push dx
     call ld_slot
@@ -803,9 +807,9 @@ ld_res_name:
 ;      CF=1 with AL = LD_EBAD / LD_EBIG
 ; -----------------------------------------------------------------------------
 ld_take:
-    cmp dx, PKG_FILE_HI
+    cmp dh, PKG_FILE_HI >> 8    ; (DH: disk.inc's three bytes, its reason)
     jae .big                    ; past what the mount will type at all: a file
-                                ; up to 1MB is a package now (SPEC.md 19.1),
+                                ; under 32MB is a package now (SPEC.md 19.1),
                                 ; so a 70KB one arrives with a LOW word of
                                 ; 4,608 - a plausible small package - and
                                 ; reading it without this is the wrap SPEC.md
@@ -1029,6 +1033,11 @@ ld_run_body_x:
     mov ax, bx
     shr ax, cl                  ; the prefix in PARAGRAPHS...
     mov cx, es
+%ifdef KERN_MEGA
+    xchg ax, cx                 ; (the region is its pair's DATA selector in
+    call KERNEL_SEG:mega_s2segf ; protected mode, KERN-MEGA-MEMORY-PLAN MC7.4:
+    xchg ax, cx                 ; its real segment, a conventional claim's)
+%endif
     add ax, cx                  ; ...is where the body's segment starts
 %ifdef KERN_MEGA
     call KERNEL_SEG:mega_oddsegf ; off the identity grid: a selector for it
@@ -1106,8 +1115,8 @@ ld_hisi:
     je .out
     test byte [es:LD_H_CLASS], 0x80     ; OS88_HIGH
     jz .out
-    mov di, [ld_rec]            ; ld_slot answers off DI, the RECORD - which
-    call ld_slot                ; it is not at ld_start's head; step 7 sets DI
+    call ld_slot_rec            ; ld_slot answers off DI, the RECORD - which
+                                ; it is not at ld_start's head; step 7 sets DI
                                 ; itself. BX = the slot
     mov dl, bl
     mov ax, [ld_base]
@@ -1504,8 +1513,8 @@ ld_start:
     ; ld_say_status to record the verdict without saying it. A toast raised
     ; by anybody else during the launch is not ours and is overwritten as
     ; before.
-    mov di, [ld_rec]            ; BL = the reserved slot's index. ld_slot is
-    call ld_slot                ; that arithmetic, near and `.cold` like this
+    call ld_slot_rec            ; BL = the reserved slot's index. ld_slot is
+                                ; that arithmetic, near and `.cold` like this
                                 ; - inst_idx is the same body in `.text` and a
                                 ; shim to it would cost 5 of those; a third
                                 ; inline copy costs 3 bytes more than the call
@@ -1671,6 +1680,9 @@ ld_start:
                                 ; where the carve's base goes (below) - and,
                                 ; on kern_big, CX what of it the program
                                 ; KEEPS, which is where its tail goes
+%ifdef KERN_MEGA
+    mov ax, [mega_rhval]        ; (kern_mega: the claim's own selector, the
+%endif                          ; caller's being a SUB inside it, MC7)
 
     ; --- and the LOADER'S OWN REGION, freed ---------------------------------
     xchg bx, dx                 ; ...AND BOTH WORDS ARE ALREADY IN HAND, the
@@ -1687,8 +1699,8 @@ ld_start:
                                 ; and must not go with it. AX is still
                                 ; [ld_rehome]: both calls preserve it
 %ifdef KERN_MEGA
-    test dl, 4                  ; A LOADER PLACED ABOVE 1MB (ld_hi) is a pool
-    jz .rhlo                    ; block and a code/data pair, not a mem_tab
+    MEGA_ISHI dx                ; A LOADER PLACED ABOVE 1MB (ld_hi) is a pool
+    jc .rhlo                    ; block and a code/data pair, not a mem_tab
     push ax                     ; record: mem_free_x would find nothing, the
     mov ax, dx                  ; carry was never read, and the block and two
     mov dl, bl                  ; LDT entries leaked on every launch until
@@ -1920,9 +1932,9 @@ ld_pkg_start_x:
 ; **BOTH NAMES ARRIVE UPPER CASE AND THIS ARM DOES NOT FOLD** (21.5.3.2): the
 ; association tables are uppercase-exact because they are built from FAT
 ; names, and folding here was 44 resident bytes of every machine spent on
-; behalf of ONE caller, which is ours. The DOS box folds in dos_pgname - the
+; behalf of ONE caller, which is ours. DOS folds in dos_pgname - the
 ; copy that fills both launch cells, and which was three copies - so it costs
-; the box nothing it was not already walking; tests/dosopen.py is the gate and
+; DOS.O88 nothing it was not already walking; tests/dosopen.py is the gate and
 ; types three lower- and mixed-case spellings.
 ;
 ; **A DOCUMENT TAKES THE ASSOCIATION ROUTE AND NOT ld_run_name's.** That is
@@ -1968,8 +1980,7 @@ ld_pkg_byname:
                                 ; routine had written out again, pad loop and
                                 ; `.` stop and all. It answers DI =
                                 ; assoc_stemb and leaves SI alone
-    mov si, di
-    call assoc_app_of
+    call assoc_app_di
     jmp short .have
 .byext:
     mov si, assoc_doc           ; ...or none was: the double-click's own
@@ -2175,8 +2186,8 @@ osapi_pkg_rehome_x:
     or dx, dx                   ; a segment of 0 is the heap's own "no claim"
     jz .no                      ; and can never be a part's base
 %ifdef KERN_MEGA
-    test dl, 4                  ; kern_mega: a pool selector (an OS88_HIGHMEM
-    jnz .no                     ; claim) has no code half and no heap record,
+    MEGA_ISHI dx                ; kern_mega: a pool selector (an OS88_HIGHMEM
+    jnc .no                     ; claim) has no code half and no heap record,
 %endif                          ; and the re-home runs code at its base
     mov [ld_rehome], dx
     mov [ld_rehsz], ax          ; 0 = the KEEP form, and then...
@@ -2188,7 +2199,7 @@ osapi_pkg_rehome_x:
     retf
 %else
 ; No re-homing loader ships on kern_small: the only two callers of the slot -
-; the DOS box (SPEC.md 18.4.7.4) and Skies ($(SMALLOMIT_GAMES)) - are both off
+; DOS.O88 (SPEC.md 18.4.7.4) and Skies ($(SMALLOMIT_GAMES)) - are both off
 ; the small disks, and no small package hands its identity to one of its parts
 ; (SPEC.md 20.12.10). So step 8a is not assembled here at all - its test, its
 ; arm, mem_reown_x and the words they read (SPEC.md 20.12.10.7) - and CF=1 is

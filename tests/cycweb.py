@@ -89,9 +89,12 @@ class Pkg:
     """Read and write the running package's own variables."""
     def __init__(self, m, seg, syms):
         self.m, self.seg, self.s = m, seg, syms
+        # the segment's linear base: seg * 16, or on kern_mega (Bochs) the
+        # base in its LDT descriptor, read once (tests/megaport.txt)
+        self.base = m.lin(seg) if hasattr(m, "lin") else seg * 16
 
     def addr(self, name):
-        return self.seg * 16 + self.s[name]
+        return self.base + self.s[name]
 
     def rw(self, name):
         return u16(self.m.read(self.addr(name), 2))
@@ -218,7 +221,7 @@ def main():
     with os88marty.launch("build/os8088-360.img", apps=a.apps,
                           machine=a.machine, boot=False) as m:
         m.run()
-        os88marty.settle(m, gate=os88marty.desktop_up)
+        os88marty.kernel_up(m)          # the boot gate on STATE (SOAK-SPEED 4)
         mo = os88mouse.Mouse(marty=m)
         dispcp.open_drive(m, mo, S, os88marty.settle, "B")
         wx, wy, _, _ = dispcp.win_rect(m, S, dispcp.win_list(m, S)[-1])

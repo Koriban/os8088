@@ -148,14 +148,15 @@ def break_canary(src, dst):
     """A copy of `src` whose boot sector expects a KSIG the kernel does not
     carry, so 18.93.1's canary compares UNEQUAL after the first load and the
     loader loads again at the track bound - a failed canary, on a 5150 whose
-    FDC crosses heads perfectly well. KSIG is the word at KSIG_OFF +
-    BOOT2_PAD of KERNEL.SYS (the Makefile's KSIGDEF2) and boot.asm loads it
-    with one `mov di, imm16`, so the patch is that immediate and nothing else."""
+    FDC crosses heads perfectly well. KSIG is the 16-bit sum of the sector at
+    KSIG_OFF + BOOT2_PAD of KERNEL.SYS (the Makefile's KSIGDEF2) and boot.asm
+    loads it with one `mov di, imm16`, so the patch is that immediate and
+    nothing else."""
     shutil.copyfile(src, dst)
     eq = os88sym.equates()
     k = bytes(os88fat.Fat12(dst).read("KERNEL.SYS"))
     o = eq["KSIG_OFF"] + eq["BOOT2_SECS"] * 512
-    ksig = k[o] | (k[o + 1] << 8)
+    ksig = sum(k[i] | (k[i + 1] << 8) for i in range(o, o + 512, 2)) & 0xFFFF
     with open(dst, "r+b") as f:
         bs = bytearray(f.read(512))
         at = [i for i in range(510 - 2)
@@ -174,11 +175,10 @@ def qemu_boot(img, apps):
     QEMU because its CPU is a 286 and up: the one machine here on which
     18.93.2's gate leaves the canary unrun."""
     os88qemu.kill()
-    os88qemu.own()
-    r = subprocess.run(["make", "test", "TESTIMG=" + img, "TESTAPPS=" + apps],
-                       capture_output=True, text=True)
-    if r.returncode:
-        sys.exit("fddpage: make test failed:\n" + r.stdout + r.stderr)
+    # a PRIVATE machine (os88qemu.make_test): its own socket and pidfile and
+    # copies of both floppies - `make test` was the shared build/qmp.sock,
+    # which kept the row in the one-at-a-time lane (SOAK-PARALLEL.md 17)
+    os88qemu.make_test("TESTIMG=" + img, "TESTAPPS=" + apps)
     from ethernet import Qemu
     q = Qemu()
     entry = S("cold_entry")

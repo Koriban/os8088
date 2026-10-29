@@ -225,8 +225,8 @@ rw_dscanhk:
     push ax
     push dx
     push ds
-    push cs
-    pop ds
+    mov ds, [cs:rw_dsel]            ; (not CS: a write through it is
+                                    ;   kern_mega's #GP, REALDMG-SPEC 16.2.4)
     call rw_clk
     mov [rw_tscan], ax
     mov [rw_tscan + 2], dx
@@ -368,12 +368,14 @@ rw_logtoggle:
     cmp byte [rw_logon], 0
     jne .off
     mov ax, RW_LOGRKB
-    call OSAPI_MEM_CLAIM            ; DX = the records' segment (pinned:
-    jc .room                        ;   [rw_logseg] names it)
+    call rw_mclaim                  ; DX = the records' segment ([rw_logseg]
+    jc .room                        ;   names it, and it moves: rwmove.inc;
+                                    ;   a slot lent for it, 10.3.3)
     xor ax, ax
     mov [rw_logn], ax
     mov [rw_ltick], ax
     mov [rw_logseg], dx
+    call rw_mfree
     mov byte [rw_logon], 1
     call rw_mgrey                   ; the item says what it is now
     mov si, rw_s_logon
@@ -399,12 +401,13 @@ rw_logflush:
     mov byte [rw_logon], 0
     call rw_logwrite
     mov ax, RW_LOGRKB
-    call OSAPI_MEM_CLAIM
+    call rw_mclaim
     jc .off
     xor ax, ax
     mov [rw_logn], ax
     mov [rw_ltick], ax
     mov [rw_logseg], dx
+    call rw_mfree
     mov byte [rw_logon], 1
 .off:
     jmp rw_mgrey
@@ -412,16 +415,19 @@ rw_logflush:
 ; rw_logwrite - the records as text beside REALDMG.O88, on the UI task,
 ; under the first name free of GAMEnn.LOG. Nothing recorded, nothing written.
 rw_logwrite:
-    xor ax, ax                      ; the records' claim: no copy lands in
-    xchg ax, [rw_logseg]            ;   it after this (rw_logsec)
-    or ax, ax
+    call rw_mpin                    ; the records held still: they are read
+    xor ax, ax                      ;   through AX and [rw_lring] below, and
+    xchg ax, [rw_logseg]            ;   no copy lands in them after this
+    or ax, ax                       ;   (rw_logsec)
     jz .r0
     push ax
     call .w
     pop dx
-    call OSAPI_MEM_FREE
-.r0:
-    ret
+    call rw_mrel                    ; (freed, or a lent slot's let go:
+.r0:                                ;   10.3.3)
+    jmp rw_mfree                    ; (the rest free again)
+    nop                             ; (PARITY: what follows at its old
+                                    ;   alignment - os88rdiff's --hot)
 .w:
     mov [rw_lring], ax
     mov cx, [rw_logn]               ; CX = the lines: the latest RW_LOGN...
@@ -437,7 +443,7 @@ rw_logwrite:
     adc dx, 0
     mov bx, 1024
     div bx
-    call OSAPI_MEM_CLAIM            ; DX = the text's segment
+    call rw_mclaim                  ; DX = the text's segment
     pop cx
     jnc .got
     shr cx, 1                       ; ...and with no room, the latest half
@@ -500,7 +506,7 @@ rw_logwrite:
     pop dx
     pushf
     push ax                         ; (AX = the FERR_*, refused)
-    call OSAPI_MEM_FREE
+    call rw_mrel                    ; (the text: freed, or let go)
     pop ax
     popf
     jc .fail
@@ -807,7 +813,7 @@ rw_lline:
     jz .e2
     mov al, ' '
     stosb
-    mov al, 'I'                     ; Machine > Interlace on
+    mov al, 'I'                     ; Screen > Interlace on
     stosb
 .e2:
     mov dx, [bx + RL_EVT]           ; what the user did, by name

@@ -21,6 +21,15 @@ mega_null0 fixup for every word of the first 64KB - 32,512 of them, two
 exceptions each, every hibernate. hbm_xwconv takes only the first CLUSTER
 through segment 0 now (1,024 at this C:'s 2KB), so the row allows LIMIT.
 
+`--full` (the row `megahibfull`) is KERN-MEGA-MEMORY-PLAN MC4.1 (b)'s case:
+a 2MB machine, and before the hibernate every free KB of the pool is covered
+by PINNED mx_tab records written through the debugger (megashed's shape) -
+a machine whose extended memory is all in use. The resume used to stage the
+whole file in one free block beside the image's runs and so REFUSED here
+(hbm_xplan at the write, and the menu greyed it); it streams now, every run
+straight to its place, so the same assertions hold: `kern_mega: resumed`,
+MEGAHIB's 64KB back, and every filler record standing where it was.
+
 THE FAILING CASE (docs/WRITING-TESTS.md 1): put hbm_wrimg's one
 dwf_dskw_write from segment 0 back in place of `call hbm_xwconv` (with
 hbm_xlow at 0xFFFF around it, as it was) and the hibernate takes 32,512
@@ -28,6 +37,7 @@ traps - red on the census.
 """
 import os
 import shutil
+import struct
 import sys
 import time
 
@@ -40,8 +50,47 @@ import os88build  # noqa: E402
 LIMIT = 2048                    # trap lines a hibernate may take
 
 
+MX_BLKSZ, MX_NBLK = 10, 96          # kernel/mega.inc
+FULL = "--full" in sys.argv
+
+
 def traps(lines):
     return [l for l in lines if l.startswith("T ")]
+
+
+def pool(box):
+    """[(entry, off, kb, own)] of mx_tab and the pool's KB"""
+    X, K = box.reads([("mx_tab", MX_BLKSZ * MX_NBLK), ("xm_kb", 2)])
+    rows = [(k,) + struct.unpack_from("<HHB", X, k * MX_BLKSZ)
+            for k in range(MX_NBLK)]
+    return rows, struct.unpack_from("<H", K, 0)[0]
+
+
+def fill(box):
+    """every free KB of the pool under a PINNED record (owner FEh, MX_FPIN):
+    -> the records written, as [(entry, off, kb)]"""
+    rows, xkb = pool(box)
+    used = sorted((o, o + kb) for _, o, kb, _ in rows if kb)
+    gaps, at = [], 0
+    for a, b in used:
+        if a > at:
+            gaps.append((at, a - at))
+        at = max(at, b)
+    if at < xkb:
+        gaps.append((at, xkb - at))
+    free = [k for k, _, kb, _ in rows if not kb]
+    base = box.sym("mx_tab")
+    made, cmds = [], []
+    for (o, kb), k in zip(gaps, free):
+        e = base + k * MX_BLKSZ
+        cmds += ["setpmem 0x%x 2 0x%x" % (e, o),
+                 "setpmem 0x%x 2 0x08FE" % (e + 4),
+                 "setpmem 0x%x 2 0" % (e + 6),
+                 "setpmem 0x%x 2 0" % (e + 8),
+                 "setpmem 0x%x 2 0x%x" % (e + 2, kb)]
+        made.append((k, o, kb))
+    box.dbg(cmds, timeout=60)
+    return made, xkb
 
 
 def main():
@@ -54,48 +103,57 @@ def main():
     t0 = time.time()
     fails = []
     # --- 1. hibernate -----------------------------------------------------
+    megs = 2 if FULL else None
+    made = []
     box = ob.Box(out, [t.img("megahib.o88"), t.img("mines.o88")],
-                 build=t.dir, bootc=True, noa=True, csys=True)
+                 build=t.dir, bootc=True, noa=True, csys=True, megs=megs)
     try:
         if not box.wait_for("kern_mega: protected mode", 300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
-        time.sleep(20)
+        # every wait below is on the guest's state (os88bochs.Box) where
+        # 20 + 10 + 8 + 20 + 3 + 20 + 10 s were slept, and the hibernate's
+        # end is the sentence it puts on the TEXT screen, not 30 s of E9
+        # silence
+        box.up()
         box.capture()
-        ob.dbl(591, 160)                # C:
-        time.sleep(10)
-        ob.dbl(150, 123)                # RUN
-        time.sleep(8)
-        ob.dbl(160, 155)                # MEGAHIB
+        box.dbl(591, 160, "C:'s Disk window")
+        box.dbl(150, 123, "RUN's listing")
+        box.goto(160, 155)              # MEGAHIB
+        box.dblclick()
         if not box.wait_for("MEGAHIB: held", 60):
             fails.append("MEGAHIB never held its block")
-        time.sleep(20)
-        ob.goto(300, 84)                # RUN's title: the front window
-        ob.xd("click", 1)
-        time.sleep(3)
-        ob.dbl(160, 171)                # Mines
-        time.sleep(20)
+        box.ui_done("MEGAHIB's window")
+        if FULL:
+            made, xkb = fill(box)
+            print("megahiber: the pool's %dK, %d free run(s) filled: %s"
+                  % (xkb, len(made), made))
+            if not made:
+                fails.append("--full: nothing to fill")
+        box.click(300, 84, "RUN to the front")  # RUN's title
+        box.dbl(160, 171, "Mines' window")      # Mines
         before = len(traps(box.lines()))
-        ob.goto(10, 5)                  # System menu > Hibernate...
-        ob.xd("mousedown", 1)
+        box.goto(10, 5)                 # System menu > Hibernate...
+        box.xd("mousedown", 1)
         for _ in range(5):              # 83 guest pixels, two X pixels each
-            ob.rel(0, 30)
-        ob.rel(0, 16)
+            box.xd("mousemove_relative", "--", 0, 30)
+            time.sleep(0.04)
+        box.xd("mousemove_relative", "--", 0, 16)
         time.sleep(0.5)
-        ob.xd("mouseup", 1)
-        time.sleep(10)
-        ob.goto(225, 225)               # Hibernate
-        ob.xd("click", 1)
-        end = time.time() + 400         # the off screen has no E9 line of
-        last, lt = None, time.time()    # its own: the trap lines stop
-        while time.time() < end:
-            n = len(box.lines())
-            if n != last:
-                last, lt = n, time.time()
-            elif time.time() - lt > 30:
-                break
-            time.sleep(2)
-        ob.shot(os.path.join(out, "hibernated.png"))
+        box.xd("mouseup", 1)
+        box.ui_done("the Hibernate dialog")
+        box.goto(225, 225)              # Hibernate
+        box.xd("click", 1)
+
+        def off():
+            t = box.read(0xB8000, 160 * 6)[0::2].decode("latin-1")
+            return "hibernated" in t
+        try:
+            box.until(off, "the hibernate's `os8088 has hibernated`", 400,
+                      poll=1.0)
+        except RuntimeError as e:
+            fails.append(str(e))
+        box.shot(os.path.join(out, "hibernated.png"))
         lines = box.lines()
     finally:
         box.stop()
@@ -111,26 +169,32 @@ def main():
                      "(tools/megatraps.py %s)" % (hib, LIMIT, box.e9))
     shutil.copy(box.e9, os.path.join(out, "e9-hibernate.out"))
     # --- 2. resume --------------------------------------------------------
-    box = ob.Box(out, [], build=t.dir, cmode="keep", bootc=True, noa=True)
+    box = ob.Box(out, [], build=t.dir, cmode="keep", bootc=True, noa=True,
+                 megs=megs)
     try:
         if not box.wait_for("kern_mega: protected mode", 300):
             fails.append("the second boot never reached protected mode")
         else:
-            time.sleep(20)
+            box.up()                    # the desktop and its Resume card
             box.capture()
-            ob.goto(225, 225)           # Resume
-            ob.xd("click", 1)
+            box.goto(225, 225)          # Resume
+            box.xd("click", 1)
             if not box.wait_for("kern_mega: resumed", 120):
                 fails.append("no `kern_mega: resumed`")
-            time.sleep(20)
-            ob.shot(os.path.join(out, "resumed.png"))
-            ob.goto(140, 330)           # MEGAHIB's window, and a key
-            ob.xd("click", 1)
-            time.sleep(2)
-            ob.xd("key", "a")
+            box.ui_done("the resumed desktop")
+            box.shot(os.path.join(out, "resumed.png"))
+            box.click(140, 330, "MEGAHIB to the front")  # ...and a key
+            box.xd("key", "a")
             if not box.wait_for("MEGAHIB: ok", 30):
                 fails.append("MEGAHIB did not read its 64KB back: %s" % [
                     l for l in box.lines() if l.startswith("MEGAHIB")])
+            if made:
+                rows, _ = pool(box)
+                gone = [(k, o, kb) for k, o, kb in made
+                        if (rows[k][1], rows[k][2]) != (o, kb)]
+                if gone:
+                    fails.append("--full: filler records not back as they "
+                                 "were: %s" % gone)
         lines = box.lines()
     finally:
         box.stop()

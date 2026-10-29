@@ -4,7 +4,7 @@
 
     make && python3 tests/altenter.py
 
-tests/dosaltenter.py is the same key on the DOS box and covers the kernel
+tests/dosaltenter.py is the same key on DOS and covers the kernel
 half - the latch, the typematic guard, the claim, the fsx_restore drop. This
 row is about the APP half, and it exists because SPEC.md 11.2.1.1 binds the
 chord across two mechanisms that share nothing:
@@ -36,7 +36,7 @@ because the mechanisms are two:
 FSXM_* mode a bracket set, and Paint's is a SAME-MODE bracket (SPEC.md 53.7):
 it takes the screen exclusively and sets no mode at all, so `[fsx_cur]` stays
 0xFF throughout and reads exactly like a feature that does not work. Missile
-Command, Tank and Clear Skies are the same shape. Only the DOS box and Telnet
+Command, Tank and Clear Skies are the same shape. Only DOS and Telnet
 set a mode, which is why tests/dosaltenter.py can use it and this cannot.
 
 **THE HOLD IS THE TEST, not padding**, on every leg that leaves a bracket.
@@ -71,6 +71,18 @@ HOLD = 0.5                      # a human keystroke, in host seconds - and
                                 # is wall-clock. What has to be guest time is
                                 # every WAIT below (see State.wait)
 GUEST_HZ = getattr(os88marty, "GUEST_HZ", 4772727.0)
+
+
+
+def IN_HOLD(m):
+    """How long the press that ENTERS a bracket is held. A bare press on
+    MartyPC: an 8088 reaches the bracket's first poll long after a finger
+    has lifted. ON kern_mega (Bochs, tests/megaport.txt) A HUMAN'S PRESS,
+    because a 286 or better reaches that poll WHILE IT IS STILL DOWN - which
+    is the case OS88_ALTENTER_SEED exists for, and Tracker shipped without
+    it: the bracket opened and shut in one keystroke 2 times in 3 at this
+    hold (KERN-MEGA-PLAN 14.79)."""
+    return 0.15 if getattr(m, "bochs", False) else 0.0
 
 
 def _fail(msg):
@@ -145,7 +157,9 @@ def seed_spent(ui, st):
 
     def dn():
         b = ui.m.read(at, 2)            # re-read: the region is movable
-        return ui.m.read(((b[0] | b[1] << 8) << 4) + off, 1)[0]
+        seg = b[0] | b[1] << 8          # a kern_mega region is a selector
+        lin = getattr(ui.m, "lin", lambda s, o=0: (s << 4) + o)
+        return ui.m.read(lin(seg, off), 1)[0]
     if st.wait(dn, lambda v: v == 0) != 0:
         return _fail("bracket: the poll never saw Alt+Enter released after "
                      "the bracket opened - os88alt_dn is still set, so "
@@ -191,7 +205,7 @@ def leg_bracket(ui, st):
     if st.bracket() != NO_BRACKET:
         return _fail("bracket: one was already up before any key")
 
-    ui.m.alt("Enter")
+    ui.m.alt("Enter", hold=IN_HOLD(ui.m))
     got = st.wait(st.bracket, lambda v: v != NO_BRACKET)
     if got == NO_BRACKET:
         # WHICH of the three it was: the key is latched in [kbd_ae] and spent
@@ -239,7 +253,7 @@ def leg_bracket(ui, st):
     # seed's store of 1 landed on a byte that behaves like `[pt_fs]` left set
     # (SPEC.md 11.2.1.1). One round trip cannot see that class of bug at all.
     if st.bracket() == NO_BRACKET:
-        ui.m.alt("Enter")
+        ui.m.alt("Enter", hold=IN_HOLD(ui.m))
         if st.wait(st.bracket, lambda v: v != NO_BRACKET) == NO_BRACKET:
             ok = _fail("bracket: a SECOND Alt+Enter did not enter. One cycle "
                        "is not evidence: apps/paint passes the first and "
@@ -260,7 +274,9 @@ def leg_bracket(ui, st):
 
 def main():
     with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
-                     machine=MACHINE) as ui:
+                     machine=MACHINE,
+                     quick=True) as ui:
+        ui.still(0)     # booted on STATE; the first paint done (SOAK-SPEED 4)
         st = State(ui.m)
         ok = leg_latch(ui, st)
         ok = leg_bracket(ui, st) and ok

@@ -16599,7 +16599,7 @@ lg_s_ext_txt:  db '.TXT', 0
 ; bss (loader-zeroed, SPEC.md 21 step 5) - small now: the grid itself lives
 ; in claimed heap segments, not here.
 ; =============================================================================
-    OS88_BSS 3215                     ; 81.75, PLAN's own and already far from
+    OS88_BSS 3203                     ; 81.75, PLAN's own and already far from
                                        ; SHEET's: -191 for the ch_* working
                                        ; set, -568 for the vector table that a
                                        ; one-file build has no use for, -4

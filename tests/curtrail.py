@@ -68,7 +68,12 @@ def kill_stale():
 
 def launch():
     em = "qemu" + "-system-i386"        # never whole on a command line
-    subprocess.run(
+    # os88qemu.start AND NOT subprocess.run (tests/unit/t_qemuown.py, which is
+    # what caught this row at the 2026-10-29 merge): a daemonised QEMU that
+    # refuses to start - an image another lane holds writable - exits 0.3s in
+    # and reaches the row as a bare `exit 1`. start() raises QEMU's own words
+    # and names the process holding the file.
+    os88qemu.start(
         em + " -machine pc,vmport=off"
         " -drive file=%s,format=raw,if=floppy -boot a"
         " -chardev msmouse,id=m0 -serial chardev:m0"

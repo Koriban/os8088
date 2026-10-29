@@ -33,7 +33,7 @@
 ; ABOVE both hosts, on a measurement that they were within 600 bytes of each
 ; other - and W8 then cut 14,622 bytes out of one of them. They differ by
 ; 4,628 now and always will: `kern_dos` carries the disk layer and no window,
-; the box carries the window and no disk layer. Core-above turns that
+; DOS.O88 carries the window and no disk layer. Core-above turns that
 ; difference into a HOLE in `kern_dos`'s address space, which is 4.7 KB off
 ; `KD_IMG_KB` and so 4.7 KB off the DOS program - the one quantity the whole
 ; plan is a budget for. Core-LOW has no hole at all: each host's own code
@@ -49,7 +49,7 @@
 ; `tests/unit/t_kdapi.py` scans both images for the opcode rather than
 ; reserving address space against it.
 ;
-; What is left to clear is the BOX's own low bytes - the package header at
+; What is left to clear is DOS.O88's own low bytes - the package header at
 ; 0x00, the 16x16 icon at 0x20, the association block at 0x60, which
 ; `OS88_ASSOC16_END` pads to 112, and the document glyph at 0x70, which
 ; `OS88_DOCGLYPH8_END` pads to **128** (SPEC.md 54.3.2) - and `kern_dos`'s
@@ -63,7 +63,7 @@ CORE_ORG    equ 0x0080
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
 %ifndef DOS_MEGA
-CORE_MAX    equ 15392            ; +512 for SPEC.md 96.7.2's stack swap and
+CORE_MAX    equ 15408            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -123,9 +123,9 @@ CORE_MAX    equ 16064            ; SPEC.md 96.15.4's extended-to-extended
 ; core cell is spent out of.
 %ifndef CORE_BSS_SIZE               ; `-DCORE_BSS_SIZE=n` is how the budget is
  %ifndef DOS_MEGA                   ; probed: bisect on it and the assertion
-CORE_BSS_SIZE equ 3507              ; below names the exact figure
+CORE_BSS_SIZE equ 3509              ; below names the exact figure
  %else                              ; kern_mega's +2 is `dos_hslot`, the HMA
-CORE_BSS_SIZE equ 3511              ; host's slot maker (KERN-MEGA-DOS-PLAN
+CORE_BSS_SIZE equ 3513              ; host's slot maker (KERN-MEGA-DOS-PLAN
                                     ; 10.5 defect 4), and +2 again for
                                     ; DHK_XUNP, the child's EXEPACK hook
                                     ; (SPEC.md 96.40.9.1) - DHK_NENT 7 -> 8
@@ -159,7 +159,7 @@ CORE_BSS_AT equ CORE_ORG + CORE_MAX
 
 ; --- A `DBSS` ROW'S SIZE IS PART OF THE LAYOUT (SPEC.md 96.44.2.1) ----------
 ; `DOS_B_DVCWD` is a word per drive and was written `2 * DVOL_MAX` - which is
-; the box's per-drive REACH, and that one is `%ifndef KD_BACKEND` so a host
+; DOS.O88's per-drive REACH, and that one is `%ifndef KD_BACKEND` so a host
 ; bringing its own disk layer keeps that layer's number (96.38).  The window
 ; said 6, the core said 8, and every core cell after the table was then FOUR
 ; BYTES APART in the two halves - the exact failure 96.44.2's rule is about,

@@ -65,8 +65,8 @@
 ; - the claim map, the screen's row table, and on kern_mega font_run's
 ; unaligned-run state - so a call made on a stack of your own reads and
 ; writes whatever segment that stack is in. A package that switches SS for
-; its own reasons (the DOS box, around a DOS program) switches back before
-; it calls the kernel, as the DOS box does (docs/plans/KERN-MEGA-PLAN.md 14.39).
+; its own reasons (DOS, around a DOS program) switches back before
+; it calls the kernel, as DOS does (docs/plans/KERN-MEGA-PLAN.md 14.39).
 ;
 ; Your image is linked at org 0 and loaded at a paragraph boundary, so it is
 ; position-independent: there are no relocations, and two instances of one
@@ -90,11 +90,11 @@ KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
 ;      earlier pass. A rect in bss is valid until the next thing that can move
 ;      the window, which is any moment your code is not running.
 ;
-; **A STANDARD BUTTON'S RECTS ARE THE ONE EXCEPTION, and the library makes
-; it one**: os88ui_btninit's record banks where its rects were last right and
-; moves them with the window before every draw and hit test (§20.5.1.3.5).
-; Every other rect - a radio group, a list, a scroll bar, a text field - is
-; still yours to re-place.
+; **A STANDARD BUTTON'S PRESS IS THE LIBRARY'S**, so it cannot follow rule
+; 1 by itself: give the record an OS88UI_BT_PLACE proc that lays its rects
+; out from OSAPI_WM_CONTENT, and the library runs it before every press,
+; drag and release it tests (§20.5.1.3.5). Every other rect - a radio group,
+; a drop-down, a list, a scroll bar, a text field - you re-place yourself.
 ;
 ; **ASSUME IT ALWAYS HAPPENS.** §11.96.13 snaps a drop's x onto a multiple of
 ; 8 before the cache is taken - it exists because the byte-phase refusal below
@@ -614,7 +614,8 @@ SND_CAP_ADPCM4Q  equ 40h         ; the DSP answers 4.xx, where Creative DROPPED
                                  ; silence and let the user choose (SPEC.md
                                  ; 34.5.3.1)
 SND_CAP_EXTBLK   equ 80h         ; verb 0 honours SND_OPENF_BLKSH
-                                 ; (SPEC.md 34.5.3)
+                                 ; (SPEC.md 34.5.3), and so does verb 4's
+                                 ; external ring where it has one (34.6.4)
 SND_CAP_MIXER    equ 0200h       ; readable hardware mixer (SPEC.md 34.15)
 SND_CAP_STEREO   equ 0400h       ; verb 11 takes SND_FMT_STEREO: an SB Pro
                                  ; (DSP 3.xx, 4,000..22,050 Hz a channel) or
@@ -697,7 +698,25 @@ SND_OPENF_EXT    equ 2           ; ...an EXTERNAL ring (SPEC.md 34.5.3), with
                                  ; consumed count to [...+SND_EXT_CONS], both
                                  ; free-running mod 65536, so you feed without
                                  ; a call; verb 1 is only needed to RESUME an
-                                 ; underrun, and verb 9 still answers exactly
+                                 ; underrun, and verb 9 still answers exactly.
+                                 ; VERB 4 TAKES IT TOO (SPEC.md 34.6.4): a
+                                 ; RECORD ring at DI:SI, the same claim, RL
+                                 ; and block codes (RING is implied; CX and
+                                 ; the grant are not read - pass CX = 0, which
+                                 ; a driver without it refuses with 7). The
+                                 ; card captures into it in place, and each
+                                 ; block IRQ writes the count of bytes
+                                 ; captured, free-running, to [...+
+                                 ; SND_EXT_CONS], zeroed at the open. No
+                                 ; drain, no grant, NO OVERRUN PAUSE: you
+                                 ; judge your own lag. 7 on a single-cycle
+                                 ; DSP or a ring across a 64KB page
+                                 ; KEEP THAT CLAIM STILL while the card
+                                 ; is armed on it: undeclared, or pinned with
+                                 ; OSAPI_MEM_MOVABLE AX = 0 from verb 0 until
+                                 ; the stream is CLOSED - a pause (verb 10)
+                                 ; keeps it armed. The kernel no longer pins
+                                 ; MC_DMA claims for you (SPEC.md 66.6.4)
 SND_OPENF_ADPCM4 equ 4           ; ...the bytes are Creative 4-bit ADPCM, the
                                  ; card decoding them (DSP 7Dh, auto-init with
                                  ; a reference byte: stream byte 0). DX is the
@@ -1022,7 +1041,7 @@ OSAPI_LZ_BIG equ 0x80            ; ...OR'd in: AH:CX is the length (20.13.3)
                                  ; the engine cannot claim its buffer - which
                                  ; a MOVE on one volume never needs, so that
                                  ; one works with no free heap at all (the
-                                 ; DOS box's shell-out is the case, SPEC.md
+                                 ; DOS's shell-out is the case, SPEC.md
                                  ; 96.30.6).
                                  ; WHERE YOU WERE STANDING is put back by the
                                  ; next file call (SPEC.md 19.2.1), and the
@@ -1090,7 +1109,7 @@ OSAPI_FCP_MOVE equ 1
                                  ; with AX = FERR_NODISK. Clobbers all four.
                                  ;
                                  ; DOS AH=36h's own register shape, because
-                                 ; the DOS box is what asks. What
+                                 ; DOS.O88 is what asks. What
                                  ; OSAPI_FILE_DFREE does not say is the
                                  ; volume's SIZE, and this is where it lives.
                                  ; The free count is the same FAT walk DFREE
@@ -1681,7 +1700,11 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
                                  ; and DX*16+AX is its 24-bit physical address
                                  ; for a DMA controller (one 64KB page: the
                                  ; HMA crosses none). AX = 0, DX = a block's
-                                 ; segment: give it back. CF=1: no HMA here,
+                                 ; segment: give it back. AX = MEMHMA_KEEP |
+                                 ; bytes (drivers/os88drv.inc): your OWN
+                                 ; image in the pool cut to them - what your
+                                 ; DRV_H_KEEP says, where the kernel's shrink
+                                 ; has no claim to cut. CF=1: no HMA here,
                                  ; none left, or you are not a LOADED DRIVER -
                                  ; the only callers it serves. Not movable,
                                  ; not purgeable, not in a hibernate's image:
@@ -1979,6 +2002,11 @@ MEMC_POST   equ 1                ; AH: post - BX = a window of YOURS, AL = the
 ; 98.3.18.14). Those two includes are the whole of the exception, each behind
 ; a check against OSAPI_XMEM_COPY, and os88ub.inc's `cpu 386` island is the
 ; one a package may assemble (SPEC.md 1 rule 1). Everything else still copies.
+; ON kern_mega IN PROTECTED MODE THE TOKEN IS NOT AN ADDRESS AT ALL (SPEC.md
+; 50.6.10): the block MOVES, and every cell finds it by the token and goes to
+; where it is now. Token + an offset inside the block, handed back to a cell,
+; is all a token is for there - both readers above are real-mode techniques
+; and are gated off under CPU_F_PM.
 ;
 ; BRANCH ON THE CAPS, NEVER ON THE TIER. OSAPI_XMEM_CAPS returning 0 KB is the
 ; only answer that means "do not try", and it is the answer on a 386 whose A20
@@ -2028,23 +2056,26 @@ CPU_F_PM            equ 0x10     ; SEGMENTS ARE SELECTORS: kern_mega is in
                                  ; other kernel, so a binary built before the
                                  ; bit reads 0 and keeps the real-mode
                                  ; behaviour it always had. When it is set:
-                                 ; segment arithmetic must stay on the
-                                 ; 8-paragraph grid (a value that is not a
-                                 ; multiple of 8 is not a valid selector), and
+                                 ; EVERY segment is a selector - a claim, a
+                                 ; region, a frame - so NO arithmetic on one:
+                                 ; ask OSAPI_SEG (SEG_SUB, SEG_AT, SEG_LIN) or
+                                 ; walk an OSAPI_MEM_HUGE claim by the step it
+                                 ; answers (KERN-MEGA-MEMORY-PLAN MC7), and
                                  ; LOADALL, unreal mode and int 15h AH=87h are
                                  ; refused by the CPU - a feature with no
                                  ; protected-mode route greys itself with the
                                  ; reason rather than faulting
 ;
 ; --- reaching CODE in a claim: the selector to far call it through ----------
-; (docs/plans/KERN-MEGA-PLAN.md 2.4, 3.2, M4.) A heap claim is 512-aligned, so
-; its segment S is TWO selectors under CPU_F_PM: S itself, a writable DATA
-; segment (the identity map), and (S >> 2) | 4, an exact CODE alias in the LDT.
-; A far call, far jump or retf THROUGH S loads a data selector into CS, which
-; is #GP: kern_mega completes it (mega_gpfix) and it works, at the price of a
-; fault per transfer. A package that far-calls code it put in a claim - an
-; overlay, an OP_SEG part, a code buffer - converts the segment ONCE, where it
-; builds the vector, with this:
+; (docs/plans/KERN-MEGA-PLAN.md 2.4, 3.2, M4; KERN-MEGA-MEMORY-PLAN MC7.4.)
+; Under CPU_F_PM every claim is a PAIR of LDT selectors: the value the kernel
+; hands back is the DATA half, writable, and the entry below it - that value
+; less 8 - is a CODE selector over the same bytes. A far call, far jump or
+; retf THROUGH the data half loads a data selector into CS, which is #GP:
+; kern_mega completes it (mega_gpfix) and it works, at the price of a fault
+; per transfer. A package that far-calls code it put in a claim - an overlay,
+; an OP_SEG part, a code buffer - converts the value ONCE, where it builds
+; the vector, with this:
 ;
 ;     call OSAPI_CPU_INFO          ; once, at entry: bank AH somewhere
 ;     mov [my_cpuf], ah
@@ -2053,57 +2084,54 @@ CPU_F_PM            equ 0x10     ; SEGMENTS ARE SELECTORS: kern_mega is in
 ;     OS88_CODESEL ax, byte [my_cpuf]
 ;     mov [my_vec+2], ax           ; far call [my_vec] is now fault-free
 ;
-; %1 is the 16-bit general register holding the segment, converted in place;
+; %1 is the 16-bit general register holding the value, converted in place;
 ; %2 is a byte operand holding OSAPI_CPU_INFO's AH (memory, or AH/BL/... ).
 ; Without CPU_F_PM it is the segment unchanged, so ONE BINARY IS RIGHT ON EVERY
 ; KERNEL. Two things it is NOT: it is not for DATA - read and write a claim
-; through the segment itself, always, because the alias is read-only - and it
-; is not for a segment off the 512-byte grid, for which no alias exists (an
-; image's own CS is already its alias, so `mov ax, cs` needs nothing). It does
-; not touch 0, so a refused 0 should be tested before it rather than after:
-; 0 converts to 4.
+; through the value itself, always, because the code half is read-only - and
+; it is not for an OSAPI_MEM_SUBSEG answer or a window, which are data alone
+; (OSAPI_MEM_SUBSEG's BL bit 0 asks for a code twin there). An image's own CS
+; is already its code half, so `mov ax, cs` needs nothing. It does not test
+; 0, so a refused 0 should be tested before it rather than after.
 ;
-; THE MACRO IS THE FAST PATH; THE SLOT BELOW IS THE ANSWER. The arithmetic is
-; right for a claim BELOW 1MB on the identity map, which is every claim a
-; package holds today. A claim the kernel may one day place above 1MB is named
-; by an LDT selector the shift cannot convert, so code that cannot know where
-; its claim is - or that takes a selector from somewhere else - asks
-; OSAPI_MEM_CODESEL instead, which is right for both.
+; THE MACRO IS THE FAST PATH; THE SLOT BELOW IS THE ANSWER for a value whose
+; kind the code cannot know (a selector from somewhere else): OSAPI_MEM_CODESEL
+; refuses what has no code view rather than guessing. Until KERN-MEGA-MEMORY-
+; PLAN MC7 the macro was `(S >> 2) | 4`, a static LDT alias of an identity
+; segment; the aliases and the identity map above `.cold` are gone.
 %define OSAPI_MEM_CODESEL   KERNEL_SEG:0x04B9   ; DX = the segment (or
                                  ; selector) a claim of yours is named by; out
                                  ; CF=0 and AX = the selector to FAR CALL code
                                  ; in it: DX itself on a real-mode kernel, its
-                                 ; LDT code alias under CPU_F_PM (and a pair's
-                                 ; code half above 1MB). CF=1 none: DX = 0, or
-                                 ; under CPU_F_PM a segment off the 512-byte
-                                 ; grid or a selector that is data only (an
-                                 ; OSAPI_XMEM_SEL window). Any context.
+                                 ; pair's code half under CPU_F_PM. CF=1 none:
+                                 ; DX = 0, or under CPU_F_PM anything that is
+                                 ; not a claim's (a selector that is data
+                                 ; only, an OSAPI_XMEM_SEL window). Any
+                                 ; context.
 %macro OS88_CODESEL 2
     test %2, CPU_F_PM
     jz %%real
-    shr %1, 1
-    shr %1, 1
-    or %1, 4
+    sub %1, 8
 %%real:
 %endmacro
 ;
 ; OS88_HUGE_INCR - the selector step between consecutive 64KB of ONE claim
-; (docs/plans/KERN-MEGA-PLAN.md 3.2, Windows' __AHINCR). In conventional memory
-; it is 0x1000 on every kernel, kern_mega's identity map included, which is why
-; nothing built before it needs it. Write `add seg, OS88_HUGE_INCR` where code
-; walks a claim past 64KB rather than the bare 0x1000, so the walk is findable.
-; A claim above 1MB is a run of consecutive LDT selectors and its step is 8:
-; that claim comes only from OSAPI_MEM_HUGE, which ANSWERS the step in CX -
-; so this constant keeps meaning exactly what it meant for every claim
-; OSAPI_MEM_CLAIM makes, and a program that wants more walks by CX.
+; (docs/plans/KERN-MEGA-PLAN.md 3.2, Windows' __AHINCR). It is 0x1000 on every
+; REAL-MODE kernel. Under kern_mega's protected mode EVERY claim is a selector
+; (KERN-MEGA-MEMORY-PLAN MC7), conventional ones included, and only an
+; OSAPI_MEM_HUGE claim is a run that can be stepped at all - by the CX it
+; ANSWERS (8 there). So walk a claim past 64KB by that CX, never by this
+; constant; it names the real-mode step and nothing more, kept so the old walks
+; are findable.
 OS88_HUGE_INCR      equ 0x1000
 ;
 ; OSAPI_MEM_SUBSEG - "my segment + N" for a program that may run ABOVE 1MB.
 ; An OS88_HIGH program's DS is a selector there (KERN-MEGA-PLAN 13.3, 14.44),
 ; and a selector names a BASE: adding paragraphs to it names some other
 ; descriptor. Ask this cell instead, and on CF = 1 do the sum yourself -
-; which is every kernel but kern_mega, and kern_mega whenever your region is
-; in conventional memory, so the fallback is the code you had.
+; which is every kernel but kern_mega, and kern_mega in real mode, so the
+; fallback is the code you had. In protected mode a region in conventional
+; memory is a selector too and is answered (KERN-MEGA-MEMORY-PLAN MC7.4).
 %define OSAPI_MEM_SUBSEG    KERNEL_SEG:0x04D1   ; AX = a PARAGRAPH offset into
                                  ; your OWN region (from your DS, which must
                                  ; be your region's), BL bit 0 = you will FAR
@@ -2124,6 +2152,115 @@ OS88_HUGE_INCR      equ 0x1000
                                  ; region and MOVE with it (the selector does
                                  ; not change). CF=1 and EVERY register kept:
                                  ; use your segment + AX. Any context.
+
+; OSAPI_SEG - SEGMENTS AND SELECTORS, without arithmetic (SPEC.md 50.6.11,
+; KERN-MEGA-MEMORY-PLAN MC7). On kern_mega in protected mode a segment value is
+; a SELECTOR: adding paragraphs to it, shifting it into a linear address or
+; writing it into hardware all go wrong. Ask this cell instead. Every
+; real-mode kernel answers exactly what your own arithmetic was - DX x 16, DX,
+; DX + AX - so the same code runs everywhere with no CPU_F_PM test.
+%define OSAPI_SEG           KERNEL_SEG:0x04E3   ; BL = the verb:
+                                 ; SEG_LIN  DX = a segment or selector ->
+                                 ;          DX:AX = its LINEAR base (for the
+                                 ;          8237, a DMA page check, anything
+                                 ;          physical)
+                                 ; SEG_REAL DX = a segment or selector ->
+                                 ;          DX = a REAL-MODE segment with the
+                                 ;          same base, for a vector or a ROM
+                                 ;          that runs in real mode; CF=1
+                                 ;          there is none (above 1MB, or not
+                                 ;          on a paragraph)
+                                 ; SEG_WIN  DX = a physical PARAGRAPH (a ROM,
+                                 ;          a frame buffer, an EMS frame),
+                                 ;          CX = bytes (0 = 64KB), AX = a
+                                 ;          window of yours to re-aim, or 0
+                                 ;          for a new one -> DX = a DATA
+                                 ;          selector over it. Yours until
+                                 ;          SEG_FREE or your instance ends; a
+                                 ;          segment register holding a
+                                 ;          re-aimed one keeps the old window
+                                 ;          until it is reloaded
+                                 ; SEG_SUB  DX = a segment or selector of
+                                 ;          yours (a claim, your region),
+                                 ;          AX = a PARAGRAPH offset into it,
+                                 ;          CX = paragraphs (0 = to its end,
+                                 ;          64KB at most) -> DX = a DATA
+                                 ;          selector based there - "my
+                                 ;          segment + AX". The same window
+                                 ;          asked again answers the same
+                                 ;          selector; it moves with the claim
+                                 ;          and goes with it
+                                 ; SEG_FREE DX = a window or a SEG_SUB
+                                 ;          selector -> given back early
+                                 ; SEG_SUBC as SEG_SUB, but a CODE/DATA
+                                 ;          PAIR: DX = the data half, the
+                                 ;          code half at DX - 8, so code past
+                                 ;          a claim's first 64KB has a CS.
+                                 ;          Inside a claim or a pool block
+                                 ;          only; it moves and goes with it
+                                 ; SEG_BWIN DX = a selector of yours based in
+                                 ;          a claim or a pool block -> DX = a
+                                 ;          new BOUND WINDOW over that block,
+                                 ;          aimed at that base. Yours until
+                                 ;          SEG_FREE or your end; it moves
+                                 ;          and goes with the block
+                                 ; SEG_AIM  DX = a bound window, CX:AX = a
+                                 ;          BYTE offset into its block (32
+                                 ;          bits) -> DX = the same window
+                                 ;          re-aimed there, AX = 0: 64KB of
+                                 ;          reach, or to the block's end.
+                                 ;          CF=1 on a real-mode kernel, where
+                                 ;          your own sum is the answer. THE
+                                 ;          ONE VERB LEGAL IN AN FSXF_RATE
+                                 ;          HOOK: no lock, no wait, IF never
+                                 ;          set, ~40 bytes of stack with the
+                                 ;          cell's frame
+                                 ; SEG_AT   DX = a segment or selector, AX =
+                                 ;          a PARAGRAPH offset, CX = a window
+                                 ;          of yours to re-aim or 0 -> CF=0,
+                                 ;          DX = that window over DX's base
+                                 ;          + AX paragraphs, 64KB, re-aimed
+                                 ;          per use rather than tied to the
+                                 ;          block - DX = 0 when no LDT entry
+                                 ;          is free. CF=1 ON EVERY REAL-MODE
+                                 ;          KERNEL, every register kept: your
+                                 ;          sum DX + AX is the answer there.
+                                 ;          For a walk over a PINNED claim
+                                 ;          (os88partsbody.inc's op_at)
+                                 ; out CF=0 and the answer; CF=1 refused (no
+                                 ; LDT entry free, or SEG_REAL's none),
+                                 ; AX = the reason: 1 no LDT entry or window
+                                 ; row, 2 the null selector, 3 in no block,
+                                 ; 4 not a bound window of yours, 5 past the
+                                 ; block's end. Every other register kept.
+                                 ; UI-task or worker context, and SEG_AIM
+                                 ; from a rate hook too; not from an ISR
+SEG_LIN     equ 0
+SEG_REAL    equ 1
+SEG_WIN     equ 2
+SEG_SUB     equ 3
+SEG_FREE    equ 4
+SEG_SUBC    equ 5
+SEG_BWIN    equ 6
+SEG_AIM     equ 7
+SEG_AT      equ 8
+
+; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).
+; A class names a driver only when it has one, and a module's header names
+; nothing, so the Task Manager could list a `DrvImg` or a `ModImg` and not say
+; whose. The names are the kernel's own tables'.
+%define OSAPI_IMG_NAME      KERNEL_SEG:0x04D7   ; AX = the segment an image is
+                                 ; loaded at - the base of a MEM_K_DRV or
+                                 ; MEM_K_MOD claim - with BX = 0; or BX = 1
+                                 ; and AX = a block's XMW_OFF in the pool above
+                                 ; 1MB (OSAPI_XMEM_WALK), where kern_mega puts
+                                 ; both. ES:DI = 13 bytes. out CF=0, the 8.3
+                                 ; file name at ES:DI, NUL-terminated, AL = 0
+                                 ; a driver / 1 a module; CF=1 none of the
+                                 ; kernel's is there (a driver a module loaded
+                                 ; on a record of its own, such as THMPAL.DRV,
+                                 ; and every image on kern_small, which
+                                 ; refuses). Every other register kept
 ;
 ; --- volumes (SPEC.md 18.7/51.8) --------------------------------------------
 ; A DRVC_DISK DRIVER's slots, not an application's: the four that CHANGE
@@ -2422,6 +2559,7 @@ MEM_K_FDLG  equ 0xFF0F          ; RESERVED: the old dialog's listing; no claim c
 MEM_K_FONT  equ 0xFF10          ; the 8x8 glyph table copied out of an option ROM (SPEC.md 6.0.1)
 MEM_K_SC    equ 0xFF11          ; the desktop shortcuts' table (SPEC.md 26.8)
 MEM_K_IMG   equ 0xFF12          ; a mounted image's run table (SPEC.md 18.101)
+MEM_K_MTBL  equ 0xFF13          ; kern_mega's descriptor tables in conventional memory (KERN-MEGA-PLAN 14.1)
 
 MEM_PG_TRIV equ 0xFB            ; the purge tiers (SPEC.md 50.6.4), low to
 MEM_PG_LOW  equ 0xFC            ; high: what LOSING the block costs, which is
@@ -2534,11 +2672,17 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; memory KB the pool can still hand out (0 =
                                  ; none, and the three below will all refuse),
                                  ; DX:CX = the pool's 32-bit linear base, BL =
-                                 ; free block-table entries. Any context.
+                                 ; free block-table entries. A kernel cache in
+                                 ; the pool counts as free in AX and BL: a
+                                 ; claim sheds it (SPEC.md 41.8). Any context.
 %define OSAPI_XMEM_ALLOC    KERNEL_SEG:0x0160   ; DX:AX = bytes wanted, rounded
                                  ; up to 1KB; out CF=0 and DX:AX = the block's
-                                 ; 32-bit linear base (opaque - hand it back to
-                                 ; COPY and FREE, never dereference it), else
+                                 ; TOKEN, never 0 (opaque - hand it, plus an
+                                 ; offset inside the block, back to COPY, SEL,
+                                 ; RUN and FREE, never dereference it; it is
+                                 ; the linear base on every real-mode kernel
+                                 ; and NOT on kern_mega in protected mode,
+                                 ; where the block moves, SPEC.md 50.6.10), else
                                  ; CF=1 and AX = 0 no store / 1 no free table
                                  ; entry / 2 no contiguous run that big. The
                                  ; block is stamped with YOUR instance and
@@ -2572,23 +2716,48 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; MORE THINGS (KERN-MEGA-PLAN 14.70.2): a
                                  ; driver's block (FDh, or 0C0h | row) carries
                                  ; its DRVC_* class at XMW_CLS, 0 when its row
-                                 ; is not drv_tab's; and BX = XMW_FIXED asks
-                                 ; for the fixed areas between 1MB and the
-                                 ; pool too, as records IN FRONT of the blocks
-                                 ; owned XMW_HMA..XMW_PAD, their XMW_OFF
-                                 ; NEGATIVE (below the base) - they tile the
-                                 ; span exactly. Every other kernel ignores BX
-                                 ; and writes 0 at XMW_CLS
+                                 ; is not drv_tab's, and a kernel CACHE (FEh)
+                                 ; its purge level FBh-FEh there (SPEC.md
+                                 ; 50.6.8); and BX = XMW_FIXED asks
+                                 ; for kern_mega's fixed areas too, as
+                                 ; records IN FRONT of the blocks owned
+                                 ; XMW_GDT..XMW_KCODE, at the TOP of RAM:
+                                 ; XMW_OFF POSITIVE, past the pool's KB
+                                 ; (SPEC.md 50.6.9; the HMA is the pool's
+                                 ; first block, owner XMW_HMA, and XMW_PAD
+                                 ; is not written). ON kern_big with the HMA's
+                                 ; tail installed, BX = XMW_FIXED puts the
+                                 ; HMA's contents in front instead (SPEC.md
+                                 ; 28.4.13): XMW_HMAK for `.cold` and the
+                                 ; tail (XMW_OFF FFFFh), then one record per
+                                 ; pool block, XMW_OFF the SEGMENT it runs at,
+                                 ; XMW_KB rounded up, XMW_HMAI a driver's
+                                 ; image or XMW_HMAB its buffer, XMW_CLS the
+                                 ; driver's class - all inside the span
+                                 ; between 1MB and the pool, never on top of
+                                 ; it. Every other kernel ignores BX and
+                                 ; writes 0 at XMW_CLS. BX = XMW_LONG asks
+                                 ; for LONG records (KERN-MEGA-PLAN 14.92):
+                                 ; XMW_FIXED's records, each XMW_LSIZE = 8
+                                 ; bytes - the six above, then XMW_TAG, a
+                                 ; kernel cache's whole MEM_P_* tag (its low
+                                 ; byte the window slot, volume or owner the
+                                 ; cache serves), 0 for every other record.
+                                 ; kern_mega answers it; kern_big's XMEM.DRV
+                                 ; refuses it, CF=1 AX=2, nothing written -
+                                 ; never six-byte records read as eight
 %define OSAPI_MEM_HUGE      KERNEL_SEG:0x04C5   ; A CLAIM OF ANY SIZE, walked
                                  ; by a STEP (KERN-MEGA-PLAN 14.1 answers 6,
                                  ; 7): AX = KB (1..65535); out CF=0, DX = its
                                  ; first segment or selector and CX = the step
                                  ; to its next 64KB - add CX to DX per 64KB,
                                  ; never a constant. CX = 1000h for a claim in
-                                 ; conventional memory, on every kernel; CX = 8
-                                 ; on kern_mega in protected mode for an
-                                 ; OS88_HIGHMEM package, whose claim is ONE
-                                 ; block above 1MB under a run of selectors,
+                                 ; conventional memory on a real-mode kernel;
+                                 ; CX = 8 on kern_mega in protected mode -
+                                 ; below 1MB too (KERN-MEGA-MEMORY-PLAN MC7.4),
+                                 ; and for an OS88_HIGHMEM package a claim
+                                 ; that is ONE block above 1MB under a run of
+                                 ; selectors,
                                  ; each a 64KB window (the last its claim's
                                  ; end) - a megabyte and more where the
                                  ; machine has it. CF=1 refused - above 1MB
@@ -2607,28 +2776,52 @@ KIND_PKG   equ 0x80             ; SSI_KIND bit 7: this instance is a package
                                  ; the claim's end - OSAPI_XMEM_RUN's shape on
                                  ; a claim that moves, so ANY 32KB of it is
                                  ; whole in the window at (offset >> 15), at
-                                 ; (offset & 7FFFh). Answered BX = 0 when that
-                                 ; is what you got; BX kept otherwise (a claim
-                                 ; in conventional memory, CX = 1000h, or a
-                                 ; kernel that has no such run). Such a claim
+                                 ; (offset & 7FFFh). BX = 4000h asks for a
+                                 ; window every 16KB, the same way. Answered
+                                 ; BX = 0 when that is what you got; BX kept
+                                 ; otherwise (CX = 1000h, or a kernel that has
+                                 ; no such run). Such a claim
                                  ; does not REGROW (CF=1, nothing changed),
                                  ; and the kernel moves it 64KB at a time
                                  ; with your FSXF_RATE hook held off until
                                  ; the last piece (KERN-MEGA-PLAN 14.49): no
                                  ; code of yours runs while a window is half
                                  ; moved, unless a sample ISR is open - then
-                                 ; in one step with interrupts off
+                                 ; in one step with interrupts off.
+                                 ; AX = 0 ASKS rather than claims (KERN-MEGA-
+                                 ; MEMORY-PLAN MC5): out CF=0, AX = the most
+                                 ; KB one claim of this cell can be given now,
+                                 ; nothing claimed - claim exactly that and it
+                                 ; is had. kern_big and kern_small answer
+                                 ; CF=1 (a 0KB claim, refused): ask
+                                 ; OSAPI_MEM_AVAIL there.
+                                 ; On kern_mega in protected mode the answer
+                                 ; may be a BRIDGE - the pool's best run in
+                                 ; whole 64KB windows, then conventional
+                                 ; memory, under ONE run stepped by 8 - which
+                                 ; a 64KB step's claim gets when neither the
+                                 ; pool nor the heap alone holds it. A bridge
+                                 ; always leaves the heap 64KB, does not
+                                 ; REGROW (CF=1), moves piece by piece like
+                                 ; any claim, and OSAPI_MEM_FREE of its DX
+                                 ; frees both pieces
 XMW_OFF     equ 0
 XMW_KB      equ 2
 XMW_OWN     equ 4
 XMW_CLS     equ 5               ; db: a driver's block's DRVC_* class
 XMW_SIZE    equ 6
+XMW_TAG     equ 6               ; dw, LONG records only: a cache's MEM_P_* tag
+XMW_LSIZE   equ 8               ; a LONG record (BX = XMW_LONG)
 XMW_FIXED   equ 0x4658          ; BX: name the fixed areas ('XF')
+XMW_LONG    equ 0x4C58          ; BX: ...and LONG records, XMW_TAG ('XL')
 XMW_HMA     equ 0xF0            ; ...the HMA, kept for the DOS trip
 XMW_GDT     equ 0xF1            ; ...the GDT
 XMW_LDT     equ 0xF2            ; ...the LDT and the IDT
 XMW_KCODE   equ 0xF3            ; ...`.cold` and `.mega`
 XMW_PAD     equ 0xF4            ; ...and the padding up to the pool's base
+XMW_HMAK    equ 0xF5            ; kern_big: `.cold` and the tail in the HMA
+XMW_HMAI    equ 0xF6            ; ...a driver's image in the HMA's pool
+XMW_HMAB    equ 0xF7            ; ...and a buffer a driver took there
 %define OSAPI_XMEM_SEL      KERNEL_SEG:0x04B3   ; DX:AX = an address inside a
                                  ; block YOU own, CX = bytes (0 = 64KB); out
                                  ; CF=0 and AX = a DATA SELECTOR whose segment
@@ -2908,10 +3101,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 10                ; the most records one call can write, so
+DQ_MAXREC  equ 11                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 10, 9 or 4 depending on the
+                                 ; which is 11, 10, 9 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
@@ -3088,8 +3281,8 @@ HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): CL = an HDI_*
                                 ; machine's file walk, and through the plain
                                 ; door every name it writes resolves in YOUR
                                 ; folder instead (SPEC.md 51.2.3). It is
-                                ; HDDTOOL.DRV's own engine - the Control
-                                ; Panel's Install window's - read off the
+                                ; HDDTOOL.DRV's own engine - the only
+                                ; installer there is - read off the
                                 ; system volume on first use. CF=1 = the tool
                                 ; could not be reached (no system disk, no
                                 ; heap, another vintage) or the verb is not
@@ -3099,13 +3292,20 @@ HDV_TOOL     equ 3              ; THE INSTALLER (SPEC.md 117.4): CL = an HDI_*
                                 ; whole floppies under the frozen interface
 HDI_DEVS     equ 0              ; ES:DI = 4 * HDIV_SIZE. out AL = devices
 HDI_SLOTS    equ 1              ; DL = a device, ES:DI = 4 * HDIS_SIZE. out
-                                ; AL = the slot the Install window would
-                                ; select, 0FFh none would do, 0FEh no such
-                                ; device or its geometry is unknown
-HDI_GO       equ 2              ; DL = device, DH = slot, CH = 1 erase / 0 keep
-                                ; the files; ES:DI = an HDIB_* block. out AL =
+                                ; AL = the slot the engine would pick,
+                                ; 0FFh none would do, 0FEh no such
+                                ; device or its geometry is unknown - and
+                                ; 0FDh from a tool built before SPEC.md
+                                ; 52.10.4 lost its Install window, while
+                                ; that window is open
+HDI_GO       equ 2              ; DL = device, DH = slot, CH = bit 0 1 erase /
+                                ; 0 keep the files, bits 7..1 the SOURCE volume
+                                ; + 1 (0 = the engine's own: the bank, then the
+                                ; floppies), and a named one is taken to carry
+                                ; the apps (SPEC.md 117.10.5); ES:DI = an
+                                ; HDIB_* block. out AL =
                                 ; an HDG_* and the engine's caption at HDIB_CAP.
-                                ; The Install window's two clicks in one
+                                ; The arm and the go in one
 HDI_APPS     equ 3              ; ES:DI = an HDIB_* block: the apps phase, once
                                 ; HDI_GO answered HDG_APPS. out as HDI_GO
 HDI_QUIT     equ 4              ; abandon a run waiting on its apps disk (its
@@ -3134,7 +3334,7 @@ HDIS_LET     equ 2              ; db: the letter it is mounted as, or 0
 HDIS_TYPE    equ 3              ; db: the partition table's type byte
 HDIS_SECS    equ 4              ; dd: its length (a free slot: what an install
                                 ; would make of it)
-HDIS_TEXT    equ 8              ; 26 bytes: the Install window's State column,
+HDIS_TEXT    equ 8              ; 26 bytes: the engine's State column,
                                 ; NUL-ended ('C: FAT16', 'Unpartitioned', ...)
 HDIS_TEXTSZ  equ 26
 HDIS_SIZE    equ 34
@@ -3171,6 +3371,9 @@ DRVC_CD      equ 9              ; the THIRD file class: CDROM.DRV, an ATAPI
                                 ; CD-ROM (SPEC.md 119). Its volume is ISO 9660
                                 ; answered as FSV_* verbs; its package door is
                                 ; drivers/cdrom/cdpkg.inc - CD audio
+DRVC_HTTP    equ 10             ; the FOURTH file class: HTTPFS.DRV, a
+                                ; read-only drive over HTTP (SPEC.md 122). Its
+                                ; package door is drivers/httpfs/hfpkg.inc
 DRVC_EMS     equ 7              ; EXPANDED MEMORY - a LIM EMS board's page
                                 ; registers, EMS.DRV (SPEC.md 107). Pages are
                                 ; MAPPED into a 64 KB frame below 1 MB, never
@@ -3939,7 +4142,7 @@ OS88_HDR_FLAGS equ 0
 ;
 ; Without this block the kernel REDUCES your 16x16 icon to 8x8 by majority of
 ; each 2x2 block (SPEC.md 54.3), which keeps a silhouette and loses every
-; one-pixel stroke. Ship one when your icon is a line drawing - the DOS box's
+; one-pixel stroke. Ship one when your icon is a line drawing - DOS's
 ; CRT reduced to an empty square, which is what this exists for.
 ; -----------------------------------------------------------------------------
 %macro OS88_DOCGLYPH8 0
@@ -4614,7 +4817,7 @@ OS88__AFIT  equ OS88__AF%[OS88__AN]
 ;
 ;   * a record aimed in the CLICK path was not aimed on the PAINT path, so a
 ;     plain repaint drew with a live count of 0 and the buttons were absent
-;     (the DOS box);
+;     (DOS.O88);
 ;   * a count written AFTER the draws meant every paint used the previous one
 ;     and the first used zero (ArtfulType, twice - its modal and its splash
 ;     were separate callers);
@@ -4633,7 +4836,7 @@ OS88__AFIT  equ OS88__AF%[OS88__AN]
 ; its top and os88ui.inc near its bottom. The OS88UI_BT_* offsets are `equ`s
 ; and forward-resolve, which is why they can stay with the control.
 ; -----------------------------------------------------------------------------
-%macro OS88UI_BTNREC 5
+%macro OS88UI_BTNREC 5-6 0
 %1:
     dw %2                       ; OS88UI_BT_RECTS
     dw %3                       ; OS88UI_BT_LABELS
@@ -4649,8 +4852,8 @@ OS88__AFIT  equ OS88__AF%[OS88__AN]
                                 ; 20.5.1.3.4)
     dw 0                        ; OS88UI_BT_ONCLK, your click proc - btninit
     dw 0                        ; OS88UI_BT_NEXT, THE LIBRARY'S list link
-    dw 0, 0, 0, 0               ; OS88UI_BT_OX/OY/FX/FY, THE LIBRARY'S: where
-                                ; the rects were last right (SPEC.md
+    dw %6                       ; OS88UI_BT_PLACE, your layout proc or 0:
+                                ; run before every hit test (SPEC.md
                                 ; 20.5.1.3.5)
 %endmacro
 
@@ -4995,6 +5198,15 @@ OS88_BSS_SIZE equ 0
                                  ; READ-AND-CLEAR - the first proc to ask
                                  ; gets it, so a second instance launched
                                  ; later can never inherit a document
+%define OSAPI_ARG_TEXT      KERNEL_SEG:0x04DD   ; a LINK's parameter (SPEC.md
+                                 ; 26.10.7): the text a .LNK naming this
+                                 ; program carried after its path. No inputs;
+                                 ; out CF=1 = none, every launch but such a
+                                 ; link's; CF=0 with DX:SI -> the NUL text,
+                                 ; VALID IN THE ENTRY PROC ONLY - copy it out.
+                                 ; Clobbers DX and SI either way.
+                                 ; READ-AND-CLEAR, as OSAPI_ARG_FILE is.
+                                 ; kern_small refuses (it has no links)
 %define OSAPI_ASSOC_FLUSH   KERNEL_SEG:0x0493   ; DL = a volume, AL = the
                                  ; ASSOC_FL_* bits below (0 = incremental):
                                  ; bring that volume's
@@ -5473,7 +5685,7 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
 ; Disk window's LISTING (SPEC.md 19.5), which is a different structure.
 ;
 ; Three packages each built a descent stack for want of this - ftpd's 16-level
-; FD_CDMAX, the DOS box's self-maintained `AH=47h` string, and Tank Attack's
+; FD_CDMAX, DOS's self-maintained `AH=47h` string, and Tank Attack's
 ; walk to SYSTEM\APPDATA. If you are about to write a fourth, this is it.
 ;
 ; **IT COSTS ONE MOUNT AND THEN NOTHING.** The kernel walks with the directory
@@ -6264,7 +6476,7 @@ WHEEL_STEPS equ 3                ; LINES of text one wheel notch scrolls
 ; with nothing held. So the record must live in your IMAGE or your BSS and not
 ; on a stack, and it must still be there when you return.
 ;
-; This is the DOS box's verb and nothing else in the tree uses it. It had a
+; This is DOS's verb and nothing else in the tree uses it. It had a
 ; cell of its own for one cycle (0x05A0, withdrawn - SPEC.md 51.11.3) and is a
 ; verb of the door the drivers leave through now, because the two are one
 ; family: "get out of my way", and how far. The layout is published rather
@@ -6281,17 +6493,17 @@ KDH_PLEN    equ 23              ; dd its packed bytes
 KDH_ULEN    equ 27              ; dd ...and its unpacked bytes
 KDH_LB      equ 31              ; db[512] the launch block, verbatim
 KDH_WIN     equ 543             ; dw the window to wake on the way back - the
-                                ; box's, because only the box knows it
+                                ; DOS.O88's, because only DOS.O88 knows it
 KDH_CODE    equ 545             ; dw the program's exit code, poked in by the
                                 ; RESTORED kernel, KDH_NOCODE until then
 KDH_COFF    equ 547             ; dw the CORE part's first file SECTOR - the
 KDH_CPLEN   equ 549             ; dd its packed bytes, and its unpacked ones.
 KDH_CULEN   equ 553             ; kern_dos's image has a HOLE where the core
                                 ; goes, so the stub reads TWO parts (SPEC.md
-                                ; 96.44.5.4) and only the box knows where
+                                ; 96.44.5.4) and only DOS.O88 knows where
                                 ; either sits in the file
 KDH_CORG    equ 557             ; dw where the core sits in kern_dos's
-                                ; segment - CORE_ORG, which only the box knows
+                                ; segment - CORE_ORG, which only DOS.O88 knows
 KDH_AKB     equ 559             ; dw the ARENA the program was given, in KB.
                                 ; The restored kernel pokes it in beside
                                 ; KDH_CODE (SPEC.md 96.41.1) - the figure is
@@ -6430,7 +6642,9 @@ FSIF_BANKED equ 4
 
 ; --- THE THEME (SPEC.md 76, 76.14.14) --------------------------------------
 ; --- Desktop serial lease (SPEC.md 115), UI-task context -------------------
-%define OSAPI_SERIAL KERNEL_SEG:0x049F ; AL=0 Open (BL=COM1/2, SI=517-byte
+%define OSAPI_SERIAL KERNEL_SEG:0x049F ; AL=0 Open (BL=COM1/2, +80h when
+                                 ; the USER named the port: taken before the
+                                 ; mouse settles, 115.1.1; SI=517-byte
                                  ; pinned-region buffer, BH=the 8250 divisor
                                  ; of 115200: 0 or 12 = 9600, 48 = 2400 -
                                  ; SPEC.md 115.1), 1 Close, 2 Read
@@ -6440,7 +6654,9 @@ FSIF_BANKED equ 4
                                  ; from the system disk. CF=1 AX=1 busy,
                                  ; 2 move mouse to settle, 3 mouse port,
                                  ; 4 absent, 5 bad buffer/caller, 6 empty,
-                                 ; 7 TX full, 8 module unavailable.
+                                 ; 7 TX full, 8 module unavailable, 9 a
+                                 ; UART no BIOS COM slot lists (4 is "the
+                                 ; boot probe found none there").
 SER_BUFFER_SIZE equ 517
 
 %define OSAPI_DRV_USE KERNEL_SEG:0x04A5 ; THE DRIVERS PAGE'S TICK, AS A DOOR

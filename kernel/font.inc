@@ -225,6 +225,19 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     ret
 %endmacro
 
+; FONT_F000 reg - the planar ROM's segment: F000h itself, and on kern_mega
+; [k_vsf], which is F000h too until the switch and the selector over it after
+; (mega_vfixall) - so the body is right at boot and in HIBER.DRV's resume,
+; which runs in protected mode (KERN-MEGA-MEMORY-PLAN MC7: the GDT maps no
+; segment to itself past the kernel's own)
+%macro FONT_F000 1
+%ifdef KERN_MEGA
+    mov %1, [k_vsf]
+%else
+    mov %1, 0xF000
+%endif
+%endmacro
+
 %macro FONT_PICK 1
     xor ax, ax                  ; zero the answer first: on a pre-EGA BIOS
     mov es, ax                  ; AH=11h is not implemented and returns with
@@ -236,7 +249,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     add bp, FONT_FIRST * 8
     or dx, dx                   ; a table is never in segment 0: no answer
     jnz %%timea
-    mov dx, 0xF000              ; no answer: the planar ROM's own set
+    FONT_F000 dx                ; no answer: the planar ROM's own set
     mov bp, FONT_PLANAR
 %%timea:
     mov ax, dx                  ; BX = the answer's count
@@ -246,18 +259,24 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     pop dx
     xchg bx, ax
     push bx                     ; ...kept for the ICA
+%ifdef KERN_MEGA
+    FONT_F000 ax                ; (through DS: before it changes)
+    mov es, ax
+%endif
     push ds                     ; is the planar set the SAME glyphs?
     mov ds, dx
     mov si, bp
+%ifndef KERN_MEGA
     mov ax, 0xF000
     mov es, ax
+%endif
     mov di, FONT_PLANAR
     mov cx, FONT_BYTES
     repe cmpsb
     pop ds
     jne %%ram                   ; a different face: the card's, the only one
     push dx
-    mov ax, es                  ; AX = 0xF000
+    mov ax, es                  ; AX = 0xF000 (FONT_F000)
     mov si, FONT_PLANAR
     call %1_time
     pop dx
@@ -269,7 +288,7 @@ FONT_ICA    equ 0x00F8                      ; 0040:00F8: 'FP', best, RAM, BIOS.
     cmp ax, si
     ja %%ram
     xchg bx, ax                 ; take the planar ROM
-    mov dx, 0xF000
+    FONT_F000 dx
     mov bp, FONT_PLANAR
 %%ram:
     push dx
@@ -580,7 +599,11 @@ font_char:
     add dx, ax                  ; ...and at the screen row it belongs on
 
 
-%ifdef GFX_VGA
+%ifdef VID_EXT
+    cmp byte [vid_planes], 4    ; 1bpp? the software renderer IS the direct
+    jae .vram                   ; path there (SPEC.md 39.5) - and .vram's `je`
+                                ; reads these flags: planar, or packed
+%elifdef GFX_VGA
     cmp byte [vid_mono], 0      ; 1bpp? the software renderer IS the direct
     je .vram                    ; path there (SPEC.md 39.5). Without a VGA in
 %endif                          ; the build there is nothing to ask: the call
@@ -590,8 +613,15 @@ font_char:
 %ifdef GFX_VGA                  ; on the framebuffer. With no VGA in the build
     jmp .done                   ; `.done` is the NEXT instruction, and nasm
 .vram:                          ; spends two bytes on `jmp short $+2`
-    VIDEXTC VX_FONTCHAR, .done  ; SPEC.md 120.3: the cell is the driver's,
-                                ; and the frame above is still ours to pop
+%ifdef VID_EXT
+    je .vplanar                 ; (ENTERED BY THE ONE `jae` above.) SPEC.md
+    VXCALL VX_FONTCHAR          ; 120.3: a packed display's cell is the
+    jmp .done                   ; driver's, and the frame above is still ours
+%if ($ - .vram) & 1             ; to pop
+    db 0                        ; PARITY, never executed
+%endif
+.vplanar:
+%endif
     mov di, cx                  ; x/8 goes STRAIGHT into DI and x&7 stays in
     shr di, 1                   ; CL: the old spelling hopped x through BX and
     shr di, 1                   ; back (`mov bx,cx` ... `mov ax,bx` ...
@@ -623,7 +653,7 @@ font_char:
 
     mov ch, [wm_clip_rn]        ; row counter: the rows the region allows,
                                 ; 8 whenever it is not cutting this cell
-    mov ax, VGA_SEG             ; ...and DS = the FRAMEBUFFER for the loop, so
+    VSEG ax, VGA_SEG            ; ...and DS = the FRAMEBUFFER for the loop, so
     mov ds, ax                  ; its four latch accesses carry no override:
                                 ; nothing below reads a kernel word but the
                                 ; column mask, through CS
@@ -1214,7 +1244,10 @@ font_run_x:
                                 ; the tighter of the two by design, and 6.1.11
                                 ; is +262 bytes of .text
 %endif
-%ifdef KERN_BIG
+%ifdef VID_EXT
+    cmp byte [vid_planes], 4    ; 4 planes or a packed depth: .planar, whose
+    jae .planar                 ; `je` reads these flags (SPEC.md 120.3.1)
+%elifdef KERN_BIG
     cmp byte [vid_mono], 0
     je .planar                  ; SPEC.md 6.1.10: mode 12h has a single-store
 %endif                          ; prologue of its own. kern_small does not
@@ -1568,8 +1601,8 @@ font_run_x:
 ; environment note) and not this routine's alone: gfx_rowbase's row table and
 ; the claim map are reached through SS on every kernel. Every caller keeps
 ; it (KERN-MEGA-PLAN 14.39): no shipped package calls the kernel on a stack
-; of its own - the DOS box switches SS only around a DOS program and back
-; before it calls in, and on kern_mega the box is the whole-machine handoff
+; of its own - DOS switches SS only around a DOS program and back
+; before it calls in, and on kern_mega DOS is the whole-machine handoff
 ; anyway - and the mouse ISR, the one kernel path that ran on a ROM's stack
 ; (SeaBIOS's int 13h), sets SS itself now (SPEC.md 9.10.1).
 %ifdef KERN_MEGA
@@ -1728,15 +1761,15 @@ font_run_x:
 ; a routine.
 .planar:
 %ifdef VID_EXT
-.vxp0:
-    cmp byte [vid_ext], 0       ; SPEC.md 120.3: a packed display's run is the
-    jz .plok                    ; driver's ONE PASS - unless a region is armed
+.vxp0:                          ; (ENTERED BY THE ONE `jae` above, whose
+    je .plok                    ; compare this reads.) SPEC.md 120.3: a packed
+                                ; display's run is the driver's ONE PASS -
+                                ; unless a region is armed
     CLIPQ                       ; (the per-cell test is the kernel's) or the
     jne .vxslow                 ; text is disabled (the stipple is font_ink's):
     cmp byte [gfx_dis], 0       ; both take the pair, gfx_fill and font_str,
     jne .vxslow                 ; which the driver draws cell by cell
-    call vx_call
-    db VX_FONTRUN
+    VXCALL VX_FONTRUN
     jmp .out
 .vxslow:
     jmp .slow
