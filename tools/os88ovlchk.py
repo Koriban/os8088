@@ -1948,43 +1948,27 @@ def check_pkgs():
         sys.exit("os88ovlchk: %d package call(s) cross a section boundary near "
                  "- SPEC.md 68.10 rule 1" % len(bad))
     print("os88ovlchk: %d package(s) keep every overlay call far" % len(PKGS))
-    check_claims()
 
 
-# A module is read into a claim of a size named in the SOURCE, and nothing
-# compares that against the FILE. ch_ovneed reads CH_OVKB*1024 bytes into it,
-# so a tail that outgrows its claim is not an error - it is a module truncated
-# at a byte boundary, which fails later and somewhere else (82.16.9).
-# SCRIBE LEFT THIS LIST in the 2026-10-20 upstream merge: #268 made its
-# sidecar a PART of the package (SPEC.md 95.8.8), so there is no SC_OVKB to
-# compare a file against any more - upstream dropped the constant and the row
-# together, and the fork kept the row alone, which fails as "no SC_OVKB in
-# apps/scribe/scribe.asm" and reads as a missing constant rather than a
-# retired one.
-CLAIMS = [('build/CHART.OVL',  'apps/os88chartovl.inc', 'CH_OVKB'),
-          ('build/MACRO.OVL',  'apps/sheet/sheet.asm',  'SH_M2KB')]
-
-
-def check_claims():
-    bad = []
-    for ovl, src, const in CLAIMS:
-        if not os.path.exists(ovl):
-            continue
-        m = re.search(r'^%s\s+equ\s+(\d+)' % const, open(src).read(), re.M)
-        if not m:
-            sys.exit('os88ovlchk: no %s in %s' % (const, src))
-        kb, size = int(m.group(1)), os.path.getsize(ovl)
-        if size > kb * 1024:
-            bad.append('%s is %d bytes and %s claims only %d (%d KB)'
-                       % (ovl, size, const, kb * 1024, kb))
-        else:
-            print('os88ovlchk: %-18s %6d of %s = %d bytes (%d spare)'
-                  % (ovl, size, const, kb * 1024, kb * 1024 - size))
-    if bad:
-        for b in bad:
-            print('os88ovlchk: ' + b, file=sys.stderr)
-        sys.exit('os88ovlchk: an overlay does not fit the claim it is read '
-                 'into - raise the constant, and see 82.16.9')
+# THE OVERLAY-CLAIM CHECK IS RETIRED, and this note is here so the next merge
+# does not bring it back. It compared an .OVL FILE against the KB constant the
+# source reads it into, which only means something while a module is a file
+# beside its package. SPEC.md 82.16.12 made SHEET's chart and macro modules
+# PARTS 0 and 1 of SHEET.O88, so nothing builds build/CHART.OVL any more and
+# there is no CH_OVKB to compare against - upstream deleted the table, the
+# function and the call together.
+#
+# THIS TREE KEPT THEM at the 2026-10-29 merge and the row then fired on any
+# checkout that still had a STALE build/CHART.OVL lying about - `sys.exit`
+# printing "no CH_OVKB in apps/os88chartovl.inc", which reads as a missing
+# constant rather than a retired one, and which a fresh clone never sees
+# because the file it tests for does not exist there.
+#
+# THAT IS THE SECOND TIME: the same thing happened to SCRIBE at the 2026-10-20
+# merge, when #268 made its sidecar a part (SPEC.md 95.8.8) and the fork kept
+# the row after upstream dropped it. It was written down then as a comment
+# about SCRIBE instead of as a rule, so CHART repeated it. The rule: when a
+# module stops being a FILE, the claim row goes with the constant.
 
 
 if __name__ == '__main__':
