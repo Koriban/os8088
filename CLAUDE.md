@@ -63,6 +63,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/plans/SHEET-GAPS-PLAN.md](docs/plans/SHEET-GAPS-PLAN.md)** | picking up SHEET — what is left, in the order to do it. **Its section 4 is the current list** (re-measured 2026-09-22): the macro language is finished (`docs/plans/SHEET-MACRO-PLAN.md`, §81.83-§81.97), the two defects it opened with are closed, and so is the menu's-tail defect (its section 0.1, §81.98). The gaps are grouped by what they cost rather than by menu, under a resident-headroom constraint that is down to 756 bytes, so nearly everything left is module work. **Printing is out of scope in it by decision**, which removes six of the missing menu commands and none of the work. §81.39 is the inventory — re-measure it, never quote it |
 | **[docs/plans/SHEET-PROPORTIONAL-PLAN.md](docs/plans/SHEET-PROPORTIONAL-PLAN.md)** | setting SHEET's cells in Helvetica — a study, nothing built: the OS's `os88type.inc` does it on every adapter, and what stands in the way is SHEET's 8 of 8 claims (resident room is **122 bytes**, re-measured 2026-10-18 — image 52,029 + bss 9,289 of 61,440; it read 1,683 after stage 0's first move, §81.102, and has been stale twice since, so measure it) and a layout that counts characters. Staged path with the layout converted to pixels first, while the 8×8 glass gates can still see it |
 | **[docs/plans/VESA-PLAN.md](docs/plans/VESA-PLAN.md)** | anything in the VESA display (§120, `drivers/vesa/`, `kernel/vidext.inc`'s `VIDEXT` hook, the `DRVC_VIDEO` class) — the story list with what each wave actually shipped, the decisions taken against their judged alternatives (hooks in `kern_big` against a fourth kernel; a 16-colour desktop at any depth; banked window A against the linear framebuffer), and `docs/HOW-VESA-WAS-BUILT.md` is its diary. SPEC.md §120 is the contract and says per story whether it is pinned or shipped |
+| **[docs/plans/WIN16-PLAN.md](docs/plans/WIN16-PLAN.md)** | anything in the Windows 3.x layer (§124, `apps/win16/`, `WIN16.O88`) — the user stories, the owner decisions with their judged alternatives (a coroutine on the UI task against a worker; every segment fixed; a V20 floor checked by a CPU census at load; each adapter's Windows System font), and the Wine and winevdm commits it takes code and data from, which make `apps/win16/` **GPL-2.0-or-later** as `apps/apple2` is. **No Microsoft binary is ever committed**: the user supplies them with `WIN3X=<dir>`. `docs/HOW-WIN16-WAS-BUILT.md` is its diary |
 
 ## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
 
@@ -634,6 +635,19 @@ make live     #   plus the allapps payload on one FAT16 partition that the
               #   floppy paying for a package out of RunCPM's drive A) is
               #   WITHDRAWN by the set; the lists stand until the owner
               #   decides
+make win16census WIN3X=<dir>  # WIN16 (SPEC.md 124): what each Windows 3.x
+              #   program in <dir> imports, holds and needs from the CPU, by
+              #   recursive descent (tools/os88ne.py). `make win16fixtures`
+              #   builds the Win16 TEST programs with Open Watcom
+              #   (tools/setup-watcom.sh fetches it). Both on demand.
+              #   `make win16` is the layer itself, in `all`: a WIN16\
+              #   folder on the 1.44MB/1.2MB apps disks, more720, the
+              #   everything set and the live media, and at emu360's root
+              #   (SPEC.md 124.18.1); the shipped DOS.O88 hands it an NE on
+              #   kern_big and kern_emu. `make win16disk WIN3X=<dir>` puts
+              #   YOUR Windows programs on build/w16prog*.img in all four
+              #   geometries, and `make win16test` is the gate floppy -
+              #   boot it with TESTAPPS=build/win16test.img
 make burn     # the macOS guide onto REAL media (§80.4, tools/os88burn.py):
               #   lists the attached USB flash drives (USB + external +
               #   never the boot disk), typed-identifier confirmation,
@@ -900,6 +914,12 @@ band and one blit, cached element keys, and full / mid / compact layouts so
 every adapter gets a face — is `.claude/skills/retro-face`
 (`/retro-face <app> [mockups]`), whose `LESSONS.md` is what CDRack (SPEC.md
 §119.6) learned.
+The real Windows 3.0 and 3.1 that SPEC.md §124's layer is held to - MS-DOS
+6.22 and a from-scratch install of each under QEMU, built from archive.org
+floppies into the git-ignored `win16ref/`, with the sample programs and
+reference screenshots - is `.claude/skills/win16-reference`
+(`/win16-reference`); its script recreates the lot and its traps are what
+getting Windows to boot here cost.
 
 ## Shared agent skills
 
