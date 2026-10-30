@@ -6815,13 +6815,14 @@ wd_worker:
     mov byte [wd_sowed], 0          ; (SPEC.md 27.7.8). Cleared FIRST: a repaint
                                     ; that faults must not leave the debt to be
                                     ; paid again forever
-    mov bx, [wd_win]                ; ...and ASKED, like the three draws below
-    call OSAPI_WM_OBSCURED          ; it. This one drew unconditionally: covered,
-    jc .nosowed                     ; it painted over the window on top of it
-                                    ; (SPEC.md 11.3), and it was the one path
-    mov si, [wd_win]                ; that changed this window's pixels without
-    call wd_redraw                  ; telling the kernel - which is what the
-                                    ; raise cache's promise rests on (11.96)
+    mov si, [wd_win]                ; THE VETO IS GONE AND THE REGION REPLACED
+    call wd_redraw                  ; IT (SPEC.md 68.16): wd_redraw arms
+                                    ; OSAPI_WM_CLIP_SET itself now, so a Word
+                                    ; with one corner covered draws the part
+                                    ; that SHOWS where OSAPI_WM_OBSCURED
+                                    ; vetoed the whole frame and left the
+                                    ; scroll's repaint undone. Wholly covered
+                                    ; still draws nothing, by the arm's CF
 .nosowed:
     call wd_uclose                  ; half a second without an edit is what a
                                     ; user means by ONE edit, and this is the
@@ -11097,6 +11098,17 @@ wd_append:
 
 wd_redraw:
     call wd_sv4
+    mov bx, si
+    call OSAPI_WM_CLIP_SET          ; IT ARMS ITS OWN REGION (SPEC.md 68.16,
+    jc wd_rdcba                     ; upstream issue #152). 31 callers and
+                                    ; almost none is a W_PAINT, so they arrive
+                                    ; with none armed (11.3). CF = 1 - not one
+                                    ; pixel visible - returns through the
+                                    ; shared epilogue exactly as the
+                                    ; OSAPI_WM_OBSCURED veto below used to,
+                                    ; and leaves the one-shots pending, which
+                                    ; is right: a redraw that drew nothing
+                                    ; still owes the edit they describe
     call wd_bounds
     call wd_curhide                 ; THE OVERLAY COMES DOWN BEFORE ANYTHING
                                     ; DRAWS (SPEC.md 27.18) and goes back up at
@@ -11802,7 +11814,9 @@ wd_redraw:
 .shownow:
     call wd_curshow                 ; ...and LAST, so everything this redraw
                                     ; drew is already down (SPEC.md 27.18)
-    jmp wd_rdcba
+    call OSAPI_WM_CLIP_CLEAR        ; our content is down. NOT in wd_rdcba:
+    jmp wd_rdcba                    ; that epilogue is shared with routines
+                                    ; that never armed anything
 
 ; -----------------------------------------------------------------------------
 ; wd_new - empty the note (File > New)

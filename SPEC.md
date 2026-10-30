@@ -121191,6 +121191,48 @@ walks from the top of the note to its last row without stalling. With the
 reload taken out, E reads the paragraph as rows 790..814 and F stalls at
 index 790 on row 12 of 31.
 
+### 68.16 `wd_redraw` arms its own clip region
+
+Issue #152's sweep, third and last package (§42.27, §90.13). Word was **not
+overpainting** - and finding out why is what this section is for.
+
+`wd_redraw` is Word's whole-content repaint, 31 call sites, and it arms
+nothing. Most callers are a key, a click or a dialog apply, where the window
+manager raised Word before the event arrived. `wd_onwake` looks like the
+exception and is not: it is the kernel's LAUNCH wake, posted as the window
+goes on the glass, so Word is frontmost there.
+
+**The worker is the one real off-paint caller, and it was already guarded.**
+`wd_worker` deliberately runs when Word is NOT frontmost - that is its
+`.idle` test - and before its `wd_redraw` it asks `OSAPI_WM_OBSCURED`, with
+the defect written in its own comment: *"This one drew unconditionally:
+covered, it painted over the window on top of it (SPEC.md 11.3), and it was
+the one path that changed this window's pixels without telling the kernel."*
+Two attempts to photograph an overpaint here came back clean, which is that
+guard working.
+
+**So this is not a bug fix. It is the veto traded for the region**, which is
+what the SDK says to do: `OSAPI_WM_CLIP_SET` is *"what replaced the
+wm_obscured veto for background painters ... a window with one corner buried
+keeps drawing the rest instead of skipping the frame"*, and
+`OSAPI_WM_OBSCURED` *"is still there and still correct, but it vetoes the
+whole frame"* for a single covered pixel. Word's worker therefore drops a
+scroll's repaint entirely whenever any corner of Word is covered, and the
+content stays stale until something else repaints it.
+
+One arm in `wd_redraw` fixes both halves: the partially covered case now
+draws the part that shows, and the 32nd caller cannot forget the guard the
+way a per-site veto must be remembered. `CF = 1` - not one pixel visible -
+returns through `wd_rdcba` exactly as the veto's `jc` did, so the wholly
+covered case is unchanged.
+
+**Two details of this routine shaped the edit.** It ends in a tail jump to
+`wd_rdcba`, a register epilogue SHARED with other routines, so the clear
+sits before that jump and not in it. And it consumes one-shot state
+(`wd_fast`, `wd_cmok`) before it draws: the early-out leaves those pending,
+which is correct, because a redraw that drew nothing still owes the edit
+they describe.
+
 ## 69. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 
 A two-pane editor for a small, paper-oriented subset of TeX: the source on the
