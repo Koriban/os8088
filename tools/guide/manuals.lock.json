@@ -584,9 +584,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "dccaad5b6",
-  "strings": "5dfa863f9bc6c17e",
-  "why": "checked against #313's network install, the startup check and the slot list's Empty, No Room; the page covers them"
+  "stamped": "3c5856f7",
+  "strings": "2b391919e4c9218d",
+  "why": "upstream's release 20261030 bumped apps/install/OS88VER.TXT's version line and its five release bullets and nothing else in apps/install. The page does not mention the version, the bullets or OS88VER.TXT at all - it describes what the installer DOES - so a first-time writer reading today's program would have written it unchanged. Below the page's level of detail; stamped unchanged."
  },
  "INTRO_MID": {
   "sources": [],
