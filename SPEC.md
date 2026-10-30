@@ -84150,6 +84150,32 @@ Making that button say what §47 wants it to say is a look question for
 whoever takes it, and the gate will fail on the day they do — which is the
 right way round.
 
+#### 42.27 `pt_repaint` arms its own clip region
+
+The same sweep as §90.13, and the same shape. `pt_repaint` is Paint's
+self-initiated whole-content repaint; **no `W_PAINT` reaches it** (`pt_paint`
+does not), so all five callers arrive with no region (§11.3) - among them
+**`pt_onwake`**, where no click has raised the window first.
+
+It arms on its own window and clears at the exit. Everything between is
+Paint's own content: the beds, the palette, the tool strip, the divider, the
+canvas blit, the marquee, the About card - and the grow box, which
+`OSAPI_WM_GROW` draws INSIDE the content (§11.1's white-fill idiom is what
+ate it), so the region covers it rather than clipping it away.
+
+**WORD IS THE THIRD AND IS NOT DONE HERE.** `wd_redraw` has the same defect
+and 31 call sites, two of which (`wd_onwake`, `wd_worker`) take no raise. It
+is not fixed in this pass for the reason issue #152 gives about `sh_repaint`
+itself - every edit goes through it, so it wants its own change and its own
+before/after rather than a rider. Two details shape that work: `wd_redraw`
+ends in a tail jump to `wd_rdcba`, a register epilogue SHARED with other
+routines, so the clear cannot live there; and it performs one-shot
+bookkeeping (`wd_fast`, `wd_ekind`, the row shadows) before it draws, so a
+"covered, draw nothing" early-out must not skip that or the next redraw
+inherits stale state. Word's dialog applies are already correct - they call
+`wd_dgclose` before `wd_redraw` - which is the per-call-site discipline
+§81.105 argues cannot survive a new caller.
+
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
 Klondike over the published package ABI. Prefix `sol_`, embedded two-card
@@ -166369,6 +166395,29 @@ sets `OS88TY_NOGRAY` (§6.5.5): `ty_gray` and the greying arm go, and the call
 site is `ty_flushlive` with no `clc` in front of it. Image 4,261 -> 4,199,
 `FONTVIEW.O88` **3,456 -> 3,400 bytes**, 4 clusters either way on the system
 disk and the office disk.
+
+### 90.13 `fv_redraw` arms its own clip region
+
+Upstream issue #152's wider point, swept: *"any package whose own commands
+repaint outside `W_PAINT` has the same exposure."* FONT VIEWER is one.
+
+`fv_redraw` is the whole-content repaint and **none of its three callers is a
+`W_PAINT`** - `fv_paint` does not reach it. They arrive with no region armed
+(§11.3), so the wipe and both panes landed on the glass wherever they fell.
+The caller that matters is **`fv_onwake`**: a wake is not a click, so the
+window manager has not raised the window, and anything above it is painted
+over. §11.96's raise cache then banks the damage.
+
+The SDK already required this (`apps/os88api.inc`, the `OSAPI_GFX_LOCK`
+rules): *"under the lock, re-check that your window is still visible and then
+call `OSAPI_WM_CLIP_SET` before drawing ... without one of these two answers
+you paint over whatever is on top of you."*
+
+**One arm in the painter, not one per call site** (§81.105's shape):
+`fv_redraw` arms on its own window, answers CF = 1 by drawing nothing, and
+clears as its content goes down. Everything it draws is its own content - the
+two panes and the divider - so the clear sits at the exit rather than early
+as SHEET's does.
 
 ## 91. PACCMAN — pacman.c, written in C (`apps/paccman/`)
 

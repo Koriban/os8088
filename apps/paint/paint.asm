@@ -13021,6 +13021,12 @@ pt_repaint:
     push bx
     push cx
     push dx
+    mov bx, [pt_win]
+    call OSAPI_WM_CLIP_SET          ; IT ARMS ITS OWN REGION (SPEC.md 42.27,
+    jc .covered                     ; upstream issue #152): no W_PAINT reaches
+                                    ; here, so every caller arrives with none
+                                    ; armed (11.3) - and pt_onwake takes no
+                                    ; raise. CF = 1: nothing visible, draw none
     mov byte [pt_dall], 1           ; A FULL repaint, so it must not inherit the
                                     ; last W_PAINT's damage rect - which would
                                     ; skip whichever parts that one owed and
@@ -13056,7 +13062,11 @@ pt_repaint:
 %endif
     call pt_growbox                 ; the white-fill idiom ate it (SPEC.md
                                     ; 11.1) - put it back, unless this screen
-                                    ; has none (pt_growbox)
+                                    ; has none (pt_growbox). OSAPI_WM_GROW
+                                    ; draws it INSIDE the content, so the
+                                    ; region covers it rather than cutting it
+    call OSAPI_WM_CLIP_CLEAR        ; everything above is Paint's own content,
+.covered:                           ; so the clear sits here and not early
     pop dx
     pop cx
     pop bx

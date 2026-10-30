@@ -409,9 +409,21 @@ fv_paint:
 ; Full self-repaint, FALLING INTO fv_draw.  Caller holds the gfx lock.
 fv_redraw:
     mov bx, [fv_win]
+    call OSAPI_WM_CLIP_SET          ; IT ARMS ITS OWN REGION (SPEC.md 90.13,
+    jc .covered                     ; upstream issue #152): none of our three
+                                    ; callers is a W_PAINT, so none arrives
+                                    ; with a region (11.3) - and fv_onwake is
+                                    ; not a click, so nothing raised us and
+                                    ; whatever is above was being painted over.
+                                    ; CF = 1: not one pixel visible, draw none
     call fv_origin
     xor ax, ax
     call fv_wipe
+    call fv_draw                    ; ...a CALL now rather than the fall-
+                                    ; through, so the clear below is reached
+    call OSAPI_WM_CLIP_CLEAR        ; our content is down; a region lives to
+.covered:                           ; the next UNLOCK and is not ours to keep
+    ret
 
 ; Both panes and the divider. Preserves SI; clobbers AX-DX and DI.
 fv_draw:
