@@ -19,7 +19,7 @@ Two rules the entries exist to serve:
   audio report sat here for months as a 5150 report and had come off PCem;
   the 5150 has no sound card.
 
-**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 43, 61, 63, 64, 66, 68, and one residual
+**Still open:** 3 (mechanism D), 10, 14, 19, 24.2, 28, 32, 61, 63, 64, 68, and one residual
 each in 33 and 37.
 
 ---
