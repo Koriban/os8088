@@ -35,12 +35,25 @@ org 0
 %include "rdgdefs.inc"
 
 ; --- the entries: Python enters at these offsets ----------------------------
-    jmp near h_init                     ; 0
-    jmp near h_preload                  ; 3
-    jmp near h_round                    ; 6
-    jmp near h_frame                    ; 9
-    jmp near h_cont                     ; 12
+;
+; STRICT, and it is load-bearing: `near` alone is a HINT and nasm 3.01 shrinks
+; a resolved near jump to the two-byte form anyway. h_init is close enough to
+; shrink, which left the table at 0, 2, 5, 8, 11 while tools/gbaot.py's
+; E_INIT..E_CONT (its line 229) still entered at 0, 3, 6, 9, 12 - so four of
+; the five entries jumped into the middle of an instruction (offset 3 ran the
+; `A6` of `E9 A6 01`, a cmpsb). `times 16-($-$$) nop` HID IT by absorbing the
+; lost byte, so the parameter block below stayed at 10h and nothing complained.
+; apps/dos/doscall.inc's header carries the same instruction for the same
+; reason, as do kerndos/kdos.asm's fixed header and the kernel's API cells.
+    jmp strict near h_init              ; 0
+    jmp strict near h_preload           ; 3
+    jmp strict near h_round             ; 6
+    jmp strict near h_frame             ; 9
+    jmp strict near h_cont              ; 12
     times 16-($-$$) nop
+%if ($$ + 16) != $
+  %error "aothost: the entry table must be five 3-byte jumps and pad to 16"
+%endif
 
 ; --- the parameter block, at 10h (tools/gbaot.py's P_*) ---------------------
 p_view      dw 0                        ; 10h  the view's segment
