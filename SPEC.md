@@ -84152,10 +84152,15 @@ right way round.
 
 #### 42.27 `pt_repaint` arms its own clip region
 
-The same sweep as §90.13, and the same shape. `pt_repaint` is Paint's
-self-initiated whole-content repaint; **no `W_PAINT` reaches it** (`pt_paint`
-does not), so all five callers arrive with no region (§11.3) - among them
-**`pt_onwake`**, where no click has raised the window first.
+The same sweep as §90.13, the same shape, and the same honest limit.
+`pt_repaint` is Paint's self-initiated whole-content repaint; **no `W_PAINT`
+reaches it** (`pt_paint` does not), so all five callers arrive with no region
+(§11.3). They are a size apply, the return from full screen, an About
+dismissal, a chooser's completion and `pt_onwake` - and `pt_onwake` is the
+KERNEL'S own launch wake, posted as the window goes on the glass, so it is
+frontmost there and is NOT the exposure an earlier draft of this section
+claimed. No overpaint was photographed for Paint either. The arm rests on
+the SDK rule quoted in §90.13.
 
 It arms on its own window and clears at the exit. Everything between is
 Paint's own content: the beds, the palette, the tool strip, the divider, the
@@ -166403,10 +166408,26 @@ repaint outside `W_PAINT` has the same exposure."* FONT VIEWER is one.
 
 `fv_redraw` is the whole-content repaint and **none of its three callers is a
 `W_PAINT`** - `fv_paint` does not reach it. They arrive with no region armed
-(§11.3), so the wipe and both panes landed on the glass wherever they fell.
-The caller that matters is **`fv_onwake`**: a wake is not a click, so the
-window manager has not raised the window, and anything above it is painted
-over. §11.96's raise cache then banks the damage.
+(§11.3), so the wipe and both panes land on the glass wherever they fall.
+
+**THE SYMPTOM WAS NOT REPRODUCED, and this section says so rather than
+implying otherwise.** The first reading of this called `fv_onwake` the
+exposure, on the ground that a wake is not a click so nothing raised the
+window. That is WRONG and the registration says so: this is the wake the
+kernel posts *once, as the window goes on the glass*, so the window is new
+and frontmost and nothing can be above it. Two attempts to photograph the
+overpaint in WORD - the same shape, a document opened over a raised Disk
+window - produced a second instance opening legitimately in front, and then
+an intact Disk window. The remaining callers are an About dismissal and a
+chooser's completion, where the app was frontmost when the user acted.
+
+**What justifies the arm is the RULE, not a photograph.** `apps/os88api.inc`'s
+gfx-lock rules: *"under the lock, re-check that your window is still visible
+and then call `OSAPI_WM_CLIP_SET` before drawing ... without one of these two
+answers you paint over whatever is on top of you."* A dialog or chooser
+round-trip is exactly the sleep that rule is about, and §11.96's raise cache
+banks whatever damage does occur. The arm costs one call and makes the
+question moot.
 
 The SDK already required this (`apps/os88api.inc`, the `OSAPI_GFX_LOCK`
 rules): *"under the lock, re-check that your window is still visible and then
