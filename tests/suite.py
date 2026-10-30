@@ -12073,6 +12073,19 @@ SOAK = [
         "and the wd_mrepair fallback against one reference.",
         needs=("marty",), serial=True,
         wants=("build/word.o88", "build/WELCOME.DOC")),
+    Row("wdclip", "soak", py("tests/wdclip.py"), 120.0,
+        "SPEC.md 68.16 (upstream issue #152): wd_redraw arms its OWN clip "
+        "region. wd_worker draws deliberately when Word is NOT frontmost, so "
+        "the Disk window is dragged bodily inside Word's rect and the repaint "
+        "is poked off - [wd_sowed] for the dropped scroll, [wd_hdirty] so the "
+        "worker wakes, and [wd_sigok] = 0 so wd_sigsame sends it down .full. "
+        "TWO FIXTURE GUARDS, and the row was vacuous without either: the "
+        "worker clears [wd_sowed] on the way in, so a 0 proves the path ran, "
+        "and the covering window must have INK under Word - over its empty "
+        "white BODY the unarmed mutant changed 21 pixels on the whole screen "
+        "and all of them were the clock. Red at 10,550 of 64,400.",
+        needs=("marty",), serial=True,
+        wants=("build/word.o88",)),
     Row("pkgthumb-tp", "soak", py("tests/pkgthumb.py", "texpad"), 40.0,
         "SPEC.md 13.10.7.2: ...and TexPad, whose TWO bars share one gesture"
         "record. --bar=1 drives the preview pane's.",

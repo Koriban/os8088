@@ -84168,18 +84168,21 @@ canvas blit, the marquee, the About card - and the grow box, which
 `OSAPI_WM_GROW` draws INSIDE the content (§11.1's white-fill idiom is what
 ate it), so the region covers it rather than clipping it away.
 
-**WORD IS THE THIRD AND IS NOT DONE HERE.** `wd_redraw` has the same defect
-and 31 call sites, two of which (`wd_onwake`, `wd_worker`) take no raise. It
-is not fixed in this pass for the reason issue #152 gives about `sh_repaint`
-itself - every edit goes through it, so it wants its own change and its own
-before/after rather than a rider. Two details shape that work: `wd_redraw`
-ends in a tail jump to `wd_rdcba`, a register epilogue SHARED with other
-routines, so the clear cannot live there; and it performs one-shot
-bookkeeping (`wd_fast`, `wd_ekind`, the row shadows) before it draws, so a
-"covered, draw nothing" early-out must not skip that or the next redraw
-inherits stale state. Word's dialog applies are already correct - they call
-`wd_dgclose` before `wd_redraw` - which is the per-call-site discipline
-§81.105 argues cannot survive a new caller.
+**WORD WAS THE THIRD AND IS DONE NOW** (§68.16), with the two details that
+shaped it exactly as predicted here: `wd_redraw` ends in a tail jump to
+`wd_rdcba`, a register epilogue SHARED with other routines, so the clear sits
+before that jump rather than in it; and it consumes one-shot state
+(`wd_fast`, `wd_cmok`) before it draws, so the "covered, draw nothing"
+early-out leaves those pending. Word's dialog applies were already correct -
+they call `wd_dgclose` before `wd_redraw` - which is the per-call-site
+discipline §81.105 argues cannot survive a new caller.
+
+**AND WORD IS THE ONE OF THE THREE THAT COULD BE GATED** (§68.16.1).
+`wd_worker` draws DELIBERATELY while Word is not frontmost, which is a path a
+test can reach; Paint has no such caller, and the honest limit above is
+therefore also the limit on what a row could assert here. A `pt_repaint`
+gate would have to manufacture the exposure this section says was never
+photographed.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
@@ -121232,6 +121235,56 @@ sits before that jump and not in it. And it consumes one-shot state
 (`wd_fast`, `wd_cmok`) before it draws: the early-out leaves those pending,
 which is correct, because a redraw that drew nothing still owes the edit
 they describe.
+
+#### 68.16.1 The gate, and the two shapes of it that were vacuous
+
+`tests/wdclip.py`. **The overpaint this section says could not be
+photographed HAS been**, by setting the state instead of arranging it: the
+unarmed build destroys **10,550 of the 64,400 pixels** of the window on top
+of Word, and the shipped one changes **none**.
+
+The arrangement is two drags, because Word opens 602x435 on a 640x480 screen
+and buries the Disk window whole - there is no exposed title bar to click, so
+Word is dragged down and right first (its **x is clamped by `wm_fit`**, so the
+row reads the rect back rather than computing where it put it), the Disk
+window is raised by the title bar that exposes, and then dragged BODILY
+INSIDE Word's rect.
+
+Then three bytes of Word's own bss, and each one is a state a user reaches:
+
+| poke | what it is |
+|---|---|
+| `[wd_hdirty] = 1` | there is work, so the worker wakes at all |
+| `[wd_sowed] = 1` | a scroll whose repaint was dropped because another click was right behind it (§27.7.8) - the worker's one route into `wd_redraw` |
+| `[wd_sigok] = 0` | the content rect is not the saved one, which is what a RESIZE leaves |
+
+**THE ROW WAS VACUOUS TWICE AND EACH CURE IS NOW AN ASSERTION IN IT.**
+
+**White on white.** The first shape put Word over the Disk window's empty
+lower BODY and the unarmed mutant PASSED: Word's page is white and so is
+that, so the whole screen moved **21 pixels** and every one of them was the
+menu bar's CLOCK (§37). Hence the drag that puts the Disk window wholly
+inside Word, and the `was > 800` check on black pixels under Word - it reads
+**10,239**, being the frame, the title bar, the icons, the names and the
+scroll bar. §81.105's gate learned the same thing about the Chart's FRAME: a
+content-only check passes the unfixed build.
+
+**An idempotent repaint.** With the ink in place the mutant passed AGAIN,
+still at 0 pixels, because `wd_redraw` is incremental - `.normal` asks
+`wd_sigsame`, and with the content rect unchanged it walks the rows that
+moved, which for an untouched document is none. `[wd_sigok] = 0` is the third
+poke and sends it down `.full`. A repaint that runs and writes nothing is
+invisible to a before/after diff of Word's own area, which is exactly why it
+survived the first guard.
+
+**And the trigger is checked back.** `wd_worker` clears `[wd_sowed]` on its
+way in, past all four of its `.unlock` tests, so a **0 afterwards is the
+proof the path ran**. Without it the row would pass just as well on a worker
+that never woke - and it would have, both times above.
+
+**It is the only one of issue #152's three arms with a gate, and §42.27 says
+why**: Paint and FontView have no caller that draws while covered, so there
+is no state to poke.
 
 ## 69. TeXPad — the TeX pad (`apps/texpad/texpad.asm`)
 
