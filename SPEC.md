@@ -66916,9 +66916,19 @@ state goes there, not beside the user's documents). It is NOT in `SYSTEM.CFG`:
 that file's `DK` key is one byte and full (§30.5), and a list of links is not
 a setting.
 
-An item is the link, an icon, and one byte of flags of which bit 0 says it has
-a drawer. **A package carries its own icon**; an item whose package has none
-draws the generic program icon the Disk window already uses for one.
+An item is the link, **the icon's own bits**, and one byte of flags of which
+bit 0 says it has a drawer.
+
+**THE ICON IS STORED IN THE FILE, NOT READ FROM THE PACKAGE.** A package
+carries its own icon, and fetching it at paint time would be disk I/O inside
+`DKI_PAINT` - which §30.5 forbids outright: *"Painting, hit testing and UI
+ticks never perform disk I/O."* So the icon is copied into `LAUNCHPAD.DAT`
+when the item is dropped and read once when the list loads. An item whose
+package has no icon stores the generic program icon the Disk window already
+uses for one.
+
+The cost of that is a stale icon if the package is replaced, which is the
+right trade: the alternative is a strip that touches the disk every repaint.
 
 #### 30.7.3 Drawers
 
@@ -66952,14 +66962,20 @@ This is a deliberate departure and is recorded as one.
 
 #### 30.7.5 The push buttons
 
-Warp 3's four are Lockup, Find, Window List and Shut Down. **Window List is
-required and ships first**, because with no tiles it is the only route to a
-window that is hidden rather than iconized - and §29.6 already calls
-`OSAPI_WM_HIDE` a trap for leaving an instance with no handle. §28's Task
-Manager is most of the list already.
+Warp 3's four are Lockup, Find, Window List and Shut Down. **They are not
+four equal items of work**, and this section says which is which rather than
+leaving it to be discovered:
 
-The other three map onto what exists or honestly do not. **A button with
-nothing behind it greys itself with the reason (§47) and is not drawn dead.**
+| button | what is behind it here |
+|---|---|
+| **Window List** | §28's Task Manager is most of the list already. **Required, and ships first**: with no tiles it is the only route to a window that is hidden rather than iconized, and §29.6 already calls `OSAPI_WM_HIDE` a trap for leaving an instance with no handle |
+| **Shut Down** | §12.3.2's confirmed shutdown exists; the button is a second way to reach it |
+| **Find** | **nothing system-wide exists.** §27.10 is Note Pad's Find and Replace and §81.71 is SHEET's; §54.4.2's volume sweep finds a PROGRAM for the loader and is not a user-facing search. A Find button is a new feature, not a button |
+| **Lockup** | **nothing exists at all** - no screen lock, no password store, no idle timeout. Warp 3's Lockup is all three. This is the largest of the four by a distance and is out of scope until somebody asks for it |
+
+**A button with nothing behind it greys itself with the reason (§47, "grey a
+fact, never a guess") and is not drawn dead.** On the evidence above that is
+Find and Lockup on the day the strip first ships.
 
 #### 30.7.6 A window iconizes to the Desktop
 
