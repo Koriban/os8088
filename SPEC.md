@@ -66869,6 +66869,137 @@ selection XOR under an open right-hand strip inverts the strip's pixels, and
 the next XOR puts them back; zones under the strip cannot be clicked while it
 is open, so only a selection cleared from elsewhere reaches it.
 
+### 30.7 The LaunchPad — the strip as a launcher
+
+**Status: PINNED, nothing shipped.** The plan is `docs/plans/LAUNCHPAD-PLAN.md`
+and this section is the contract its wave 0 writes. Every sentence below
+describes what the strip WILL do; §30.1 to §30.6.1 describe what it does
+today and remain in force until a wave says otherwise.
+
+The design is **OS/2 Warp 3's LaunchPad**, read from IBM's *User's Guide to
+OS/2 Warp Version 3* (S83G-8300-00, First Edition October 1994), Part 2.
+Where this section says Warp 3 does something, that manual says it.
+
+**The LaunchPad launches and holds no running state.** That is the owner's
+decision of 2026-10-30 and it is also Warp 3's: Part 3 gives a window two
+minimize destinations, chosen per object in Settings -> Window tab ->
+Minimize button, and the one taken here is *"Minimize window to desktop"*.
+
+#### 30.7.1 The strip's composition
+
+Left to right on a bottom strip, and top to bottom on a side one (§30.5):
+
+| | |
+|---|---|
+| **push buttons** | a fixed set, §30.7.5 |
+| **launchers** | the Front Panel - the user's own items, each a link, some with a drawer |
+| **nothing else** | no tile, no running-instance mark. §30.4's toggle goes with them |
+
+The geometry is the strip's own and does not move: `DOCK_H` 24, `DOCK_TILE_W`
+24, `DOCK_TILE_H` 20, `DOCK_STEP` 28 on the bottom edge; `DOCK_SW` 32,
+`DOCK_SX` 4, `DOCK_SSTEP` 24 on a side. **640 pixels is the budget** - the
+strip already fits `8 + 12*28 = 344` - so a bottom strip holds roughly ten
+launchers and a side strip fewer, and §30.5.1's rule applies unchanged: a
+strip that cannot hold every item holds fewer rather than resizing.
+
+#### 30.7.2 An item is a LINK, and the list is a file
+
+**A LaunchPad item is a link (§26.10, `apps/os88link.inc`)** and not a second
+kind of reference. A link already names a package and carries a parameter
+(§26.10.7), `\AUTOSTRT` already uses one, and Warp 3's own word for what sits
+on its LaunchPad is a *shadow* - "linked to the original … when you make a
+change to the shadow, the change also occurs in the original", which is true
+of a link because there is only ever one original.
+
+The list lives in **`SYSTEM/APPDATA/LAUNCHPAD.DAT`** (§19.9: an application's
+state goes there, not beside the user's documents). It is NOT in `SYSTEM.CFG`:
+that file's `DK` key is one byte and full (§30.5), and a list of links is not
+a setting.
+
+An item is the link, an icon, and one byte of flags of which bit 0 says it has
+a drawer. **A package carries its own icon**; an item whose package has none
+draws the generic program icon the Disk window already uses for one.
+
+#### 30.7.3 Drawers
+
+A launcher may own a **drawer**: a second tier of items that is not on the
+glass until it is asked for. Warp 3's rule, and ours: **one click opens the
+drawer, one more launches what is inside.**
+
+**An open drawer is a HOLE in the clip region, and that is §30.6.1 with a
+second caller** - the same `DKI_HOLE_ARM` / `DKI_HOLE_SUB` / `DKI_HOLE_WIN`
+slots the auto-hiding strip already uses, arming the same way and dropped by
+the same four events. Nothing new is invented for it.
+
+**Its pixels are a save-under**, §11.96's shape, and it needs no window slot:
+`MAX_WIN` is 12, a drawer opens and closes constantly, and a window per drawer
+would spend the budget this system has already been bitten by.
+
+Hover and linger are the strip's own, already tuned: `DOCK_HOVER_T` 5 ticks
+(0.27 s) and `DOCK_LEAVE_T` 14 (0.77 s).
+
+#### 30.7.4 Adding an item: the drop and the insertion bar
+
+A file dropped on the strip (`DKI_DROP`) becomes a launcher. While the pointer
+is over the strip with something in hand, **a single solid black bar** is drawn
+between the two items it would land between - Warp 3's own marker, and one
+`gfx_fill` wide.
+
+**Warp 3 uses mouse button 2 for this and os8088 cannot**, because button 2 on
+the strip is already the context menu (§30.2). The drop is **button 1**, and
+the context menu keeps button 2; a right-click on a launcher offers Remove.
+This is a deliberate departure and is recorded as one.
+
+#### 30.7.5 The push buttons
+
+Warp 3's four are Lockup, Find, Window List and Shut Down. **Window List is
+required and ships first**, because with no tiles it is the only route to a
+window that is hidden rather than iconized - and §29.6 already calls
+`OSAPI_WM_HIDE` a trap for leaving an instance with no handle. §28's Task
+Manager is most of the list already.
+
+The other three map onto what exists or honestly do not. **A button with
+nothing behind it greys itself with the reason (§47) and is not drawn dead.**
+
+#### 30.7.6 A window iconizes to the Desktop
+
+`OSAPI_WM_MINIMIZE` keeps its signature - slot 0x0413, `BX` = a window of
+yours, the gfx lock held - so **this is not an ABI change** and no package is
+recompiled. What moves is where it lands: the window hides and an icon appears
+in a free desktop cell; a click on the icon brings it back.
+
+`kernel/desk.inc` already does the placement: `desk_free` answers the first
+free cell, `desk_owner` what is shown in one, `desk_reflow` re-packs them,
+`desk_zone_rect` gives the pixels, and **`desk_cmark` posts a repaint without
+drawing**, which is what this path needs because §29.6 runs with the lock
+HELD. The icon is `DESK_ZSTEP_S`'s 14-row size (§26.4), not the 32-row one.
+
+**When `desk_free` finds no cell**, the minimize must not silently do nothing.
+Warp 3's own answer is the **Minimized Window Viewer**, which Part 3 documents
+as the default destination with the Desktop as the per-object alternative; the
+Window List button is most of one. Which of the two ships is wave 1's
+decision and is not pinned here.
+
+§29.6 and §30.4 are rewritten by the wave that moves this, not before.
+
+#### 30.7.7 What it costs, and what it does not reach
+
+**It is a module and adds no resident site.** It changes what `dkv`'s fourteen
+slots do, not who calls them: a module takes the whole table at `mod_fp` entry
+0 (`dkx_hook`) and hands it back at entry 1, which §30.5 already specifies and
+which the kernel's 18 call sites already funnel through. The measured
+mechanism is 42 guest cycles. **Any resident growth is a design error**, not a
+budget request.
+
+**`kern_small` gets none of it**, and that needs no new argument: §30.5 already
+makes the placement feature `kern_big`'s alone, every site `%ifdef DOCK_OPT`,
+with a fixed bottom strip and no `DOCK.DRV` to load on the 128KB floor machine.
+
+**Look at it on a 1bpp adapter before calling it done** (§39.4, §47): grey
+rounds to black there, so the drawer's panel, the insertion bar, a greyed push
+button and the minimized icon's caption are each their own decision on CGA and
+Hercules.
+
 ## 31. ctrl.inc — the Control Panel window
 
 Built-in singleton app kind (KIND_CTRL = 5, cap 1), window "Control Panel",

@@ -1,7 +1,7 @@
 # PLAN — a LaunchPad for the dock strip (OS/2 Warp 3's shape)
 
-**Status: a plan, nothing built.** Written 2026-10-30 against the dock as it
-stands at `321eae08`.
+**Status: wave 0 DONE (the contract, SPEC.md §30.7); waves 1-6 not built.**
+Written 2026-10-30 against the dock as it stands at `321eae08`.
 
 ## The authority
 
@@ -174,23 +174,32 @@ drawing tiles, minimize has nowhere to land - so the Desktop destination is
 built and shipped BEFORE the tiles go, not after. Every wave boundary here is
 a working system.
 
-### Wave 0 — the contract
-A new SPEC.md **section 30.7** - the number is free, 30.6.1 being the last.
-It is written as a PROPOSAL here and is deliberately never written in the
-section-sign form, because the doc gate resolves every such citation against
-a real heading - including one inside backticks - and a plan that cites its
-own unwritten section fails `make`. This one did. Pin: the strip's composition,
-the item record (a link plus an icon plus an optional drawer), where the list
-is stored, the push buttons, the drawer's open/close rules, the drop protocol
-and the insertion bar.
+### Wave 0 — the contract — **DONE, 2026-10-31**
+**SPEC.md §30.7 is written**, marked `Status: PINNED, nothing shipped`, in
+eight subsections: the strip's composition (§30.7.1), the item record and its
+file (§30.7.2), drawers (§30.7.3), the drop and the insertion bar (§30.7.4),
+the push buttons (§30.7.5), iconizing to the Desktop (§30.7.6) and the cost
+(§30.7.7).
 
-**And rewrite what the decision moved**: §29.6's destination, §30.4's
-withdrawal, §46.5.3's worked example, and the Control Panel's Dock page
-(§31.13). Nothing is built until this is written.
+Three questions this plan left open were **decided** in it:
 
-**The storage question belongs here**: `SYSTEM/APPDATA/` (§19.9) is where an
-application's state goes, and `SYSTEM.CFG`'s `DK` key is one byte and full.
-A `LAUNCHPAD.DAT` of links beside `ASSOC.DAT` is the shape to argue first.
+- **Storage is `SYSTEM/APPDATA/LAUNCHPAD.DAT`** (§19.9), not `SYSTEM.CFG` -
+  that file's `DK` key is one byte and full, and a list of links is not a
+  setting.
+- **The drop is button 1, not Warp 3's button 2**, because button 2 on the
+  strip is already §30.2's context menu. Recorded in §30.7.4 as a deliberate
+  departure; a right-click on a launcher offers Remove.
+- **A drawer takes no window slot** - save-under, §11.96's shape - because
+  `MAX_WIN` is 12 and a drawer opens and closes constantly.
+
+Still open and left to wave 1 on purpose: **what happens when `desk_free`
+finds no cell.** §30.7.6 names the Minimized Window Viewer as Warp 3's own
+answer and does not pin it.
+
+**§29.6 and §30.4 are NOT rewritten yet**, deliberately: they describe what
+the shipped kernel does, and rewriting them now would make SPEC lie until
+wave 1 lands. §30.7.6 says so in place. The same goes for §46.5.3's worked
+example and the Control Panel's Dock page (§31.13).
 
 ### Wave 1 — iconize to the Desktop, with the strip untouched
 `OSAPI_WM_MINIMIZE` takes a free cell (`desk_free`), draws the instance's own
