@@ -70,37 +70,51 @@ The census's open question — *"is the basic dock's window-manager wiring
 cleanly detachable"* — is **answered yes**, and that is what makes this plan
 cheap.
 
-## The design decision: faithful, or hybrid
+## The decision: the LaunchPad launches, the Desktop holds what is minimized
 
-Warp 3's LaunchPad launches and does not list. os8088's dock lists and does not
-launch. A literal replacement therefore **removes** at-a-glance running state,
-and takes two shipped behaviours with it: §29.6 `OSAPI_WM_MINIMIZE` (a package
-sends its own window to the dock) and §30.4 (the tile is a toggle — clicking
-the front window's tile minimizes it) are both wired to tiles.
+**Settled by the owner, 2026-10-30: a window iconizes to the DESKTOP, not to
+the LaunchPad.** The LaunchPad is a launcher and holds no running state. An
+earlier draft of this plan recommended the opposite - a hybrid strip carrying
+launchers *and* the running tiles - and that recommendation is withdrawn.
 
-| | A — faithful | B — hybrid Front Panel (**recommended**) |
-|---|---|---|
-| strip | four push buttons, then launcher objects with drawers | push buttons, launchers with drawers, **then the running tiles** |
-| what's running | behind the Window List button, on demand | still on the glass, as now |
-| §29.6 / §30.4 | must be re-homed or withdrawn | unchanged |
-| fidelity | exact | the layout Windows 98 and every modern dock converged on |
-| risk | a shipped behaviour removed for fidelity to a different OS | the strip gets busier; 640px is the budget |
+**It is also what Warp 3 does**, which the draft had not checked. Part 3,
+"Cleaning Up Your Desktop", gives a window two minimize destinations, chosen
+per object in Settings -> Window tab -> Minimize button:
 
-**Take B.** The census already made this argument — "adding a second idea next
-to the existing one, not replacing it" — and the manual does not contradict it:
-Warp 3 could afford a pure launcher because OS/2 had a Window List *and* a
-desktop full of objects. os8088 has neither. B also keeps §29.6 and §30.4
-working, so no shipped contract is withdrawn to buy a look.
+> **Minimizing an Object to the Desktop** - "Some frequently used objects
+> might be easier to re-access if they are minimized to the desktop instead
+> of the Minimized Window Viewer."
+>
+> **Minimizing an Object to the Minimized Window Viewer** - "Most objects by
+> default are set up to minimize to the Minimized Window Viewer."
 
-A stays reachable: the strip's composition is the module's, so a later
-`[dock_cfg]` bit could offer the pure Front Panel to whoever wants it.
+So the destination is a real OS/2 setting and the Desktop arm is the one being
+taken. Nothing here is a departure from the source design.
 
-**640 pixels is the constraint that decides the counts.** `DOCK_STEP` is 28 and
-the strip already fits `8 + 12*28 = 344` — so the launcher half has roughly
-**ten slots at the bottom edge** before the tiles are squeezed, and a side
-strip (`DOCK_SW` 32, `DOCK_SSTEP` 24) has fewer. §30.5.1 already says a side
-strip that cannot hold every tile holds fewer; the launcher half inherits that
-rule rather than inventing one.
+### What that costs, named
+
+| today | under the LaunchPad |
+|---|---|
+| §29.6 `OSAPI_WM_MINIMIZE`: "the tile inverts, the window hides, and a click on the tile brings it back" | the window hides and an icon appears in a free desktop cell; a click on the icon brings it back |
+| §30.4 the tile is a toggle - clicking the front window's tile minimizes it | **withdrawn with the tiles** |
+| the strip is the at-a-glance list of what is running | the Desktop is, and the **Window List push button** is the complete list |
+
+**The slot's signature does not move**, so this is not an ABI change under
+§20.2.0.1: 0x0413 still takes `BX` = a window of yours with the gfx lock held,
+and still means "minimize me". What moves is where it lands. §29.6's prose,
+§30.4 and §46.5.3's worked example are all rewritten in wave 0, and so is
+every package comment that says "to the dock".
+
+**The Window List button stops being optional.** With no tiles, it is the only
+route to a window that is hidden rather than iconized - and the manual's own
+note is that the Window List legitimately holds more titles than the viewer
+does, "because hidden windows are also displayed in the Window List". It moves
+from wave 4 to wave 1.
+
+**`OSAPI_WM_HIDE` stays the trap §29.6 already calls it**, and more so: with
+no tile to draw, a plain hide now leaves an instance with *no* on-screen
+handle at all. The Window List is what keeps that recoverable, which is the
+second reason it moves early.
 
 ## What is reused rather than invented
 
@@ -118,6 +132,15 @@ times, and each is most of a wave:
 - **The drawer's pixels are a save-under.** §11.96's raise cache and the menu
   bar's own save-under (`MENU_BCMAX`) are the precedent; a drawer is a menu
   that opens upward.
+- **A free desktop cell is already allocated for you.** `kernel/desk.inc` has
+  the whole placement problem solved: `desk_free` answers the first free cell,
+  `desk_owner` says what is shown in one, `desk_reflow` re-packs them,
+  `desk_zone_rect`/`desk_cell_rect` give the pixels, and **`desk_cmark` posts
+  a repaint without drawing** - which is exactly what an iconize needs,
+  because §29.6 runs with the gfx lock HELD. The geometry is `DESK_ZSTEP` 60
+  for the 32-row icon and **`DESK_ZSTEP_S` 34 for §26.4's 14-row one**, which
+  is the size a minimized window probably wants; columns flow leftwards at
+  `DESK_COLW` 44.
 - **Hover and linger are already tuned** — `DOCK_HOVER_T` 5 ticks (0.27 s),
   `DOCK_LEAVE_T` 14 (0.77 s). A drawer that closes itself after a pick (CDE
   does; Warp 3's needs a click) can take these rather than guess.
@@ -146,6 +169,10 @@ load. The LaunchPad inherits that boundary unchanged.
 ## Staging
 
 Each wave is useful alone and gated by a measurement, per CLAUDE.md's waves.
+**The order is forced by the decision above**: the moment the strip stops
+drawing tiles, minimize has nowhere to land - so the Desktop destination is
+built and shipped BEFORE the tiles go, not after. Every wave boundary here is
+a working system.
 
 ### Wave 0 — the contract
 A new SPEC.md **section 30.7** - the number is free, 30.6.1 being the last.
@@ -155,52 +182,70 @@ a real heading - including one inside backticks - and a plan that cites its
 own unwritten section fails `make`. This one did. Pin: the strip's composition,
 the item record (a link plus an icon plus an optional drawer), where the list
 is stored, the push buttons, the drawer's open/close rules, the drop protocol
-and the insertion bar. Nothing is built until this is written — the project's
-rule, and the one that `/port-to-os8088`'s LESSONS keeps re-learning.
+and the insertion bar.
+
+**And rewrite what the decision moved**: §29.6's destination, §30.4's
+withdrawal, §46.5.3's worked example, and the Control Panel's Dock page
+(§31.13). Nothing is built until this is written.
 
 **The storage question belongs here**: `SYSTEM/APPDATA/` (§19.9) is where an
 application's state goes, and `SYSTEM.CFG`'s `DK` key is one byte and full.
 A `LAUNCHPAD.DAT` of links beside `ASSOC.DAT` is the shape to argue first.
 
-### Wave 1 — the Front Panel, no drawers
-`dkx_hook` takes the table; the strip draws push buttons + launchers + the
-existing tiles; clicking a launcher runs its link through `OSAPI_PKG_RUN`.
-Drawers refused. **Gate:** `dockmodule` and `dockpos` still pass (the module
-swap is the thing they already test), plus a new row for a launcher that
-starts a package.
+### Wave 1 — iconize to the Desktop, with the strip untouched
+`OSAPI_WM_MINIMIZE` takes a free cell (`desk_free`), draws the instance's own
+icon there, marks it with `desk_cmark` rather than drawing under the held
+lock, and a click on the cell restores. **The dock still draws its tiles** -
+this wave changes only where a minimize LANDS, so the machine is usable
+throughout and the change is reviewable on its own.
 
-### Wave 2 — drawers
+**Gate:** a new row - minimize, assert the cell is owned and the window
+hidden, click, assert restored - mutation-proven by removing the restore arm.
+`dockmark` must still pass, because the tiles are still there.
+
+### Wave 2 — the Front Panel takes the table
+`dkx_hook`; the strip draws push buttons + launchers; clicking a launcher runs
+its link through `OSAPI_PKG_RUN`. **The tiles go here, and §30.4 goes with
+them** - safe only because wave 1 already moved minimize. **The Window List
+push button ships in this wave, not later**: with no tiles it is the only
+route to a hidden window.
+**Gate:** `dockmodule` and `dockpos` still pass (the module swap is what they
+already test), plus a launcher that starts a package, plus the Window List
+reaching a hidden instance.
+
+### Wave 3 — drawers
 `DKI_HOLE_*` reused for the open drawer, save-under for its pixels, one click
-opens and one more launches. **Gate:** the open drawer is a hole — a window
-under it is not clipped away — which is §30.6.1's own assertion pointed at a
+opens and one more launches. **Gate:** the open drawer is a hole - a window
+under it is not clipped away - which is §30.6.1's own assertion pointed at a
 second caller. **Measure:** the open and the close in primitive calls, against
 Part 5 of PERFORMANCE.md, because a drawer that repaints the strip is a
 regression against a documented number.
 
-### Wave 3 — adding and removing
+### Wave 4 — adding and removing
 Drag with button 2, the single solid black insertion bar, `DKI_DROP`.
 **Gate:** a dropped item survives a restart (it is a link in a file), and the
 bar lands where the drop does.
 
-### Wave 4 — the push buttons
-Window List first — it is the one that pays for itself under option B, and
-§28's Task Manager already is the list. Find, Lockup and Shut Down map onto
-things that exist or honestly do not; **a button with nothing behind it must
-grey itself with the reason (§47, "grey a fact, never a guess")**, not be
-drawn dead.
+### Wave 5 — the remaining push buttons
+Find, Lockup and Shut Down map onto things that exist or honestly do not;
+**a button with nothing behind it must grey itself with the reason (§47,
+"grey a fact, never a guess")**, not be drawn dead.
 
-### Wave 5 — the look, on all three adapters
+### Wave 6 — the look, on all three adapters
 **Not optional and not last by accident.** §39.4 and §47: grey rounds to black
-on 1bpp, so the drawer's panel, the insertion bar and a greyed push button are
-each a separate decision on CGA and Hercules. `make test VIDEO=cga` / `herc`,
-and look — the project's standing rule is that a drawing change is not done
-until it has been seen on a 1bpp adapter.
+on 1bpp, so the drawer's panel, the insertion bar, a greyed push button and
+**the minimized icon's caption** are each a separate decision on CGA and
+Hercules. `make test VIDEO=cga` / `herc`, and look - the project's standing
+rule is that a drawing change is not done until it has been seen on a 1bpp
+adapter.
 
 ## Files
 
 - `kernel/dockmod.inc` — the module; the fourteen landing pads
 - `kernel/dock.inc` — expected to change **only** if a basic body's contract
   moves. A diff here is the review's first question.
+- `kernel/desk.inc` — the cell a minimized window takes, and its restore
+- `kernel/inst.inc` — `inst_minimize`, whose destination moves (§29.6)
 - `kernel/ctrl.inc` — the Dock page (§31.13) grows the LaunchPad's setting
 - `SPEC.md` — a new section 30.7, and §30.5 (the module's ownership sentence
   widens)
@@ -239,4 +284,23 @@ until it has been seen on a 1bpp adapter.
    save-under route avoids a slot entirely and is the one to cost first.
 4. **Button 2 for the drop.** Warp 3 uses mouse button 2 to make a shadow;
    os8088 uses button 2 for context menus (§30.2's tile menu is a right-click).
-   These collide on the strip. Decide in wave 3, and say so in the new section.
+   These collide on the strip. Decide in wave 4, and say so in the new section.
+5. **What happens when the Desktop has no free cell?** `desk_free` can fail,
+   and a minimize that silently does nothing is the worst outcome. §30.5.1's
+   precedent for the strip is "a side strip that cannot hold every tile holds
+   fewer", which does not transfer. **OS/2's own answer is the Minimized
+   Window Viewer**, and Part 3 documents it as the DEFAULT destination with
+   the Desktop as the per-object alternative - so a Viewer is both the
+   authentic and the cheap fallback, and the Window List button is most of
+   one already. Decide in wave 1; it is that wave's only real design risk.
+6. **Where on the Desktop.** Cells flow LEFTWARDS from the top right
+   (`DESK_ZY0` 32, `DESK_COLW` 44) and the drive icons are already there,
+   while the strip sits at the bottom. "Under the LaunchPad" reads naturally
+   as *under the LaunchPad design* rather than spatially below the strip -
+   which is as well, since below a bottom strip is off-screen. **If a
+   dedicated band is wanted** (minimized windows in their own row rather than
+   sharing the drive icons' pool) that is a layout decision for wave 1 and
+   changes `desk_free`'s caller, not `desk_free`.
+7. **Which icon?** A package carries one (`OS88_HEADER ... icon=yes`), so the
+   instance's own icon is the obvious answer; what a package with no icon
+   gets is not.
