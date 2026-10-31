@@ -4295,7 +4295,7 @@ out and green with it.
 that is this fix, or whether the condition simply has not come up again, is
 unknown. If the pointer is ever dead after a play again, reopen this entry.
 
-## 68. Satellite 4025CDT, VBE desktop: the keyboard stops after a full-screen app, the mouse does not (OPEN — NOT REPRODUCIBLE on current code, and the reporting build no longer exists)
+## 68. Satellite 4025CDT, VBE desktop: the keyboard stops after a full-screen app, the mouse does not (OPEN — not reproduced on the tree of 2026-10-21, and THE REPORTING BUILD IS RECONSTRUCTIBLE)
 
 **THE DESKTOP THIS WAS REPORTED ON NO LONGER EXISTS.** The fork's VBE track -
 `VBE.DRV`, `kernel/vbe.inc` and the 1024x768x16 PLANAR mode `0104h` - was
@@ -4400,10 +4400,52 @@ predated an upstream merge cycle; the test card was built from the tree after
 it. The economical explanation is that the defect is already fixed and these
 four runs are chasing something that is no longer in the code.
 
-**That cannot now be tested: the original card no longer exists.** So there is
-no next step of the usual kind, and this entry is here for the eliminations
-rather than for a plan - six of them, on transcripts, so that the next person
-to meet this symptom does not spend the day re-deriving them.
+**AND IT CAN BE TESTED. This entry said it could not, and that was wrong** -
+it confused a physical card that no longer exists with a build that cannot be
+reproduced. The card is an artefact; git has the tree. Corrected 2026-10-30 at
+the owner's prompting.
+
+The window is bounded at both ends by commits in this repository:
+
+| | commit | date | |
+|---|---|---|---|
+| after | `06529839` | 2026-10-04 | "VBE: stage 1 confirmed on the Satellite - a 1024x512 desktop, no corruption" - the desktop demonstrably worked |
+| and | `7faff68a` | 2026-10-07 | `make cfimg` lands, so a CF card can be laid from here on |
+| before | `3f41ce08`..`7cf7ba99` | 2026-10-20 | three upstream merges in one day - the "merge cycle" the reporting install predated |
+| report | `f951e578` | 2026-10-21 | this entry, and `1c4df341` the instrument, both after the merges |
+
+**`c2752529` (2026-10-19) is the candidate**: the last commit before the
+2026-10-20 merge cluster, and so the newest tree the reporting install can
+have been built from. It carries `kernel/vbe.inc`, `drivers/vbe/vbe.asm` and
+the six `cfimg` rules.
+
+**It builds today, and this was checked rather than assumed** (2026-10-30, on
+nasm 3.01 and current host tooling, in a detached worktree): `make` exits 0,
+and `make build/vbeos.img` lays the 1.44MB VBE desktop system disk -
+1,474,560 bytes carrying `VBE.DRV` and the `SYSTEM.CFG` whose VM record is
+`[4,0,0]`, `VID_VBE`, which is how that desktop comes up on a machine 86Box
+and this host cannot type into.
+
+So the next step is:
+
+```sh
+git worktree add --detach /tmp/kbd68 c2752529
+cd /tmp/kbd68 && make && make build/vbeos.img
+```
+
+...write it, reproduce the stall, and **bisect forward** to whichever of the
+2026-10-20 merges makes it stop. `tests/kbdfsx` did not exist until the day
+after, so cherry-pick `1c4df341` onto the candidate to get the same columns
+the four runs above produced; without it the reproduction is still worth
+having, because **a fault that reproduces at all turns six eliminations from
+a dead end into a bisect**.
+
+**And if it does NOT reproduce there**, the cause was never in this
+repository's code, and the remaining candidates below are the whole list.
+
+The eliminations stay valuable either way - six of them, on transcripts, so
+that the next person to meet this symptom does not spend the day re-deriving
+them.
 
 If it recurs, the sequence is: reproduce, launch `KBDFSX.O88` **with the
 mouse** (its `start` row samples the machine the instant it opens, so it does
