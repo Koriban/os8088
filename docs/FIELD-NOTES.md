@@ -4415,17 +4415,43 @@ keyboard DEVICE having stopped scanning, or the one below, and nothing here
 has yet looked at any of the three.
 
 **THE MACHINE'S ERA IS A CANDIDATE IN ITS OWN RIGHT, and it is the one to try
-first.** The Satellite is a **Pentium II whose hardware-support target is
-Windows 98** (docs/FIELD-MACHINES.md) - new enough for a BIOS carrying **USB
-legacy keyboard support**, whose SMM handler traps ports 60h and 64h even for
-a PS/2 keyboard. That is note 63's prime suspect on a machine of the same
-generation, and it would be invisible to every column this instrument reads:
-an SMI services the port behind the kernel's back, so IRQ1 stays unmasked, the
-command byte stays `0047`, both vectors stay the kernel's, and the BIOS buffer
-simply never fills - which is EXACTLY the shape all four runs show when the
-keyboard is not delivering. **Disable USB legacy support in the BIOS setup and
-re-run** before any more of this kernel is suspected. Note 63's own next step
-is the same sentence, and it has never been taken on either machine.
+first - AND IT HAS NOW BEEN ELIMINATED.** The Satellite is a **Pentium II
+whose hardware-support target is Windows 98** (docs/FIELD-MACHINES.md), new
+enough for a BIOS carrying **USB legacy keyboard support**, whose SMM handler
+traps ports 60h and 64h even for a PS/2 keyboard. That is note 63's prime
+suspect on a machine of the same generation, and it would have been invisible
+to every column this instrument reads: an SMI services the port behind the
+kernel's back, so IRQ1 stays unmasked, the command byte stays `0047`, both
+vectors stay the kernel's, and the BIOS buffer simply never fills - which is
+EXACTLY the shape all four runs show when the keyboard is not delivering.
+
+**The owner reports (2026-10-30) that USB legacy support is DISABLED BY
+DEFAULT in this machine's BIOS and is not on.** So the theory is dead on this
+machine: there was no SMM handler on the ports during any of the four runs,
+and the explanation for a keyboard that stops has to be found somewhere else.
+
+In hindsight it was the weaker fit of the two anyway, and the reason is worth
+writing down: **the Satellite is a LAPTOP and its keyboard is internal**,
+wired to the 8042 directly. USB legacy emulation exists to make an external
+USB keyboard look like that one. Note 63's machine is the opposite case - a
+desktop with a genuinely USB keyboard through a PS/2 converter - which is
+where the theory belongs and where it still stands.
+
+**This does not touch note 63.** Different machine, different attachment, and
+its own evidence is positive rather than circumstantial: the 8042's status
+changes to `34` within one tick of the speaker starting and back the moment
+the bracket ends, with bit 3 saying the last write the controller saw was to
+port 60h, which nothing in this kernel makes. That next step is still untaken
+*there*.
+
+**What the elimination leaves** is the three candidates named above -
+the kernel's own key path above `kbm_isr`, the keyboard DEVICE having stopped
+scanning, and the link below it - none of which has been looked at, plus one
+this machine's shape now suggests: **on a laptop the 8042 is usually the
+embedded controller**, which also serves power management, the Fn keys and
+thermal, and an SMI taken for *those* reasons is not switched off by the USB
+legacy setting. That is a hypothesis with nothing behind it yet and is
+recorded as one, not as a finding.
 
 ### 68.4 What the report found anyway
 

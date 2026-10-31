@@ -232,8 +232,11 @@ attach WRITES to 260h..26Ch and 288h — has nothing to find here and should
 stay unwanted in its SYSTEM.CFG. And its BIOS is new enough to carry **USB
 legacy keyboard support**, whose SMM handler traps ports 60h and 64h even for
 a PS/2 keyboard: that is docs/FIELD-NOTES.md 63's prime suspect on a machine
-of the same generation, and it is worth ruling in or out before anything in
-this kernel is blamed for a keyboard that stops (note 68).
+of the same generation. **On THIS machine it is ruled out** - the owner
+reports it is disabled by default in the BIOS and is not on (2026-10-30), so
+note 68's keyboard stall has to be explained some other way. Its keyboard is
+internal and wired to the 8042 anyway, which is the case USB legacy emulation
+exists to imitate rather than one it applies to.
 
 | | |
 |---|---|
