@@ -4426,19 +4426,32 @@ and `make build/vbeos.img` lays the 1.44MB VBE desktop system disk -
 `[4,0,0]`, `VID_VBE`, which is how that desktop comes up on a machine 86Box
 and this host cannot type into.
 
-So the next step is:
+**AND THE CARD IS BUILT.** It is kept outside any `build/` tree, because a
+`make clean` would take it and it cannot be rebuilt by a plain build:
 
-```sh
-git worktree add --detach /tmp/kbd68 c2752529
-cd /tmp/kbd68 && make && make build/vbeos.img
-```
+| | |
+|---|---|
+| image | `~/Src/Prj_8086/kbd68-card/kbd68-cf-c2752529.img`, 7,650,304 bytes |
+| sha256 | `21e1e905fce5befa5482251252d45d9b5a55e4bd7879f07d03d8c211485f46e5` |
+| branch that rebuilds it | `kbd68-repro` (`6bf5d06e`), `c2752529` plus `1c4df341` |
+| kernel / VBE driver in it | md5 `281fd05e…` / `79869bdf…` |
 
-...write it, reproduce the stall, and **bisect forward** to whichever of the
-2026-10-20 merges makes it stop. `tests/kbdfsx` did not exist until the day
-after, so cherry-pick `1c4df341` onto the candidate to get the same columns
-the four runs above produced; without it the reproduction is still worth
-having, because **a fault that reproduces at all turns six eliminations from
-a dead end into a bisect**.
+`README.md` beside it carries the provenance, the `dd` line, the geometry
+(`CFGEOM=194/255/63`, `CFSECTORS=12500000`) and the rebuild recipe. It holds
+`KERNEL.SYS`, `VBE.DRV`, a `SYSTEM.CFG` whose `VM` record is `[4,0,0]`
+(`VID_VBE`, so it boots to the high-resolution desktop with no keystroke),
+ARTFUL and CYCLONE, and **`KBDFSX.O88` at the root** where a mouse can reach
+it. `--verify-hdd`: 174 files, FATs agree, no loops, no cross-links.
+
+**The instrument cannot have changed the answer**, which was checked rather
+than asserted: the cherry-pick touches only the Makefile and
+`tests/kbdfsx/kbdfsx.asm`, `git diff c2752529 -- kernel/ drivers/ boot/
+apps/` is empty, and the two hashes above were identical before and after it.
+
+So the next step is to write that card, reproduce the stall, and **bisect
+forward** to whichever of the 2026-10-20 merges makes it stop - three merges
+is a narrow target. **A fault that reproduces at all turns six eliminations
+from a dead end into a bisect.**
 
 **And if it does NOT reproduce there**, the cause was never in this
 repository's code, and the remaining candidates below are the whole list.
