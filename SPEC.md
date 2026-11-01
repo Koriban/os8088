@@ -228057,3 +228057,156 @@ shipped and carries no `DOS.O88`, so the forward is the system disk's.
 `win16hiber` (MartyPC's XT-IDE, every hibernate row's machine): a program
 started through the shipped forward off the hard disk, hibernated and
 resumed at the same segment, then played on and closed.
+
+## 125. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
+
+**Status: PINNED, nothing built.** The plan is
+`docs/plans/SHELL-REPLACE-PLAN.md` and this chapter is the contract its wave
+0 writes. §30 and §26 describe the shells that ship; this describes how
+another one takes their place.
+
+**Two shells, two slots, replaced independently at startup.** Not one
+abstraction over both: the dock and the desk get their own tables, so either
+can be swapped while the other stays stock.
+
+### 125.1 The model, and the boundary it sets
+
+Windows 3.1 carried one line in `SYSTEM.INI`:
+
+```
+[boot]
+shell=progman.exe
+```
+
+Point it elsewhere and you got **Calmira**, **Central Point Desktop** or
+**MS Bob**; Windows NT and XP kept the idea as the registry's
+`Shell=explorer.exe`, which is what **GeoShell** replaced.
+
+**What those replaced is the boundary this chapter takes.** Calmira replaced
+Program Manager and File Manager. It did not replace `USER.EXE`: the window
+manager, the menus, the drawing and the file system stayed Windows'. A shell
+owned the **furniture** — what launches things, what shows what is running,
+what sits on the background — and nothing else.
+
+Here the furniture is the dock (§30) and the desk (§26), and `kernel/wm.inc`
+is `USER.EXE`. **A shell may not replace** the window manager, the menu bar,
+the clip region and damage machinery, the loader or the file system.
+
+### 125.2 The `SH` record
+
+`SYSTEM.CFG` is already key / ver / len / data with a **length byte**
+(§51.5), so a record carries a filename and the container generation does
+not move.
+
+```
+'SH'  ver 1  len n   <dock shell name>,0 <desk shell name>,0
+```
+
+**THREE STATES, and the third is the one that matters:**
+
+| `SH` | result |
+|---|---|
+| absent, or the name empty | the **built-in** dock / desk |
+| names a shell that loads | **that shell** |
+| names a shell that will **not** load | the **built-in**, and a toast naming the file |
+
+**Every disk ever written stays valid.** An absent `SH` is indistinguishable
+from the system before this chapter, and a kernel that does not know the key
+skips it (§51.5 rule 1).
+
+The two names replace the literals in `kernel/mod.inc` — `mod_f_dock: db
+'DOCK.DRV', 0` and its desk twin become buffers the boot fills. `mod_tab`'s
+row already holds a POINTER to the name rather than inlining it, so the row
+shape does not change; only whether anything may write through that pointer.
+
+### 125.3 `dkv` — the dock's table, which already exists
+
+§30.5 and §30.7.7: fourteen far slots, `jmp far [dkv + x]`, a slot at rest
+holding `KERNEL_SEG:<basic body>`, the whole table taken at `mod_fp` entry 0
+(`dkx_hook`) and handed back at entry 1. **42 guest cycles**, audited
+complete against every dock symbol the kernel names.
+
+**The dock needs nothing from this chapter but the name.**
+
+### 125.4 `dsv` — the desk's table, derived
+
+The desk layer is three files — `desk.inc` (zones, cells, drive icons),
+`desksc.inc` (§26.8's shortcuts) and `deskmod.inc` (`DESK.DRV`, §11.103.10's
+Sticky App desk layer) — and a shell replaces all three, because a different
+background owns all of it.
+
+**Its external surface was counted rather than estimated** (2026-11-01,
+comments stripped, the three desk files treated as one): **thirteen
+operations, one lifetime entry and five published state words.** That is the
+dock's shape almost exactly, and the first count — "84 symbols, far more
+entangled" — was wrong, inflated by comment text and by treating the desk's
+own files as consumers.
+
+| slot | called from | what it is |
+|---|---|---|
+| `DSI_PAINT` | `wm.inc` | paint the desk |
+| `DSI_PAINT_MASK` | `wm.inc` | ...with a mask |
+| `DSI_ZONES_PAINT` | `ui.inc` | the zones' deferred paint |
+| `DSI_ZONES_R` | `wm.inc` | the zones' rect |
+| `DSI_DMG_ZONES` | `wm.inc` | damage over the zones |
+| `DSI_CLICK` | `ui.inc` | a click |
+| `DSI_KEY` | `ui.inc` | a key |
+| `DSI_UNSEL` | `menu.inc` | clear the selection |
+| `DSI_DROP` | `instance.inc`, `loader.inc`, `mega.inc` | something dropped on the desk |
+| `DSI_ROWCALC` | `ctrl.inc`, `dock.inc`, `kernel.asm`, `vidsel.inc` | the row/grid geometry |
+| `DSI_REFLOW` | `disk.inc` | re-pack the cells |
+| `DSI_LEARN` | `disk.inc` | a volume arrived or left |
+| `DSI_NEED` | `loader.inc` | the desk's claim question |
+
+`desk_init` is **lifetime, not a slot**, exactly as `dock_init` is.
+
+**THE SHELL OWES THE STATE WORDS, and no table can say so.** Five are read
+directly by the kernel and a shell that leaves them stale is wrong with
+nothing to catch it: `desk_ready`, `desk_zdirty`, and `desk_svc_file` /
+`desk_svc_name` / `desk_svc_seg` (the service block `ui.inc`,
+`stikmenu.inc` and `memory.inc` read). Publishing them is as much the
+contract as the thirteen slots are.
+
+### 125.5 The fallback, which is the safety property
+
+**A named shell that will not load does not brick the machine.** Windows
+3.1's failure is `shell=` pointing at something broken: a bare screen, and
+the only way back is booting DOS to edit `SYSTEM.INI`.
+
+Here **the hook is attempted and the built-in stands if it fails** — absent
+file, bad header, a refused `dkx_hook`/`dsx_hook` — each leaving the basic
+bodies in their table and raising a toast naming the file. A machine whose
+shell is missing boots stock and says why.
+
+**The built-ins never leave the kernel.** They are what a slot holds at rest,
+so "no shell" is not a degraded mode: it is byte-identical to the system
+before this chapter, which is the gate the first wave is held to.
+
+The recovery procedure exists as well, and is §79.11's: `SYSTEM.CFG` is
+readable from any other machine.
+
+### 125.6 What it costs, and on which kernel
+
+| | |
+|---|---|
+| dock | the name buffer and the `SH` reader; it has the table |
+| desk | `dsv` and its hook — of the order of the dock's measured **112 bytes**, which wave 1 measures rather than assumes |
+| the two `cw_` doors | §30.7.7.1's `cw_ss_start` and `cw_desk_zone_rect`, about eight bytes |
+| the `SH` reader | `.cold`, read once at boot, plus the two name buffers |
+
+Against `kern_big`'s spare, which `tools/kernsize.py` prints and this chapter
+does not quote (docs/KERNEL-MEMORY.md: measure, never quote).
+
+**`kern_small` gets none of it.** §30.5 already makes the dock's module
+`kern_big`'s alone — a fixed bottom strip, no `DOCK.DRV` to load — and the
+desk's follows it, as `OS88_SHORTCUTS` and `DESK.DRV` already do.
+
+### 125.7 An abstraction with one implementation is a guess
+
+`dsv`'s shape is not proven by the built-in answering it: the built-in is
+what the table was traced from. **It is proven by a second implementation**,
+which is why the plan's wave 4 is a desk shell and not a nicety. The dock has
+its second already — §30.7's LaunchPad, which under this chapter is a dock
+SHELL rather than a replacement for §30's strip, so the stock dock stays and
+clearing one record goes back to it.
+

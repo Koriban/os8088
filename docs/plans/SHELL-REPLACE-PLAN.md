@@ -1,6 +1,7 @@
 # PLAN — replaceable DOCK and DESK shells
 
-**Status: a plan, nothing built.** Written 2026-11-01 at the owner's request.
+**Status: wave 0 DONE — the contract is SPEC.md §125. Waves 1-5 not built.**
+Written 2026-11-01 at the owner's request.
 
 **Two independent shells, each named in `SYSTEM.CFG`, each replaceable at
 startup.** Not one abstraction over both — the dock and the desktop get their
@@ -132,10 +133,21 @@ is justified by a shell the owner intends to run.
 
 ## 6. Staging
 
-### Wave 0 — the contract
-A SPEC chapter: the `SH` record, both tables, the fallback rule, the boundary
-of what a shell may not replace. **Derive `DSI_*` from the real surface** —
-the grouping in §3.2 is a sketch and wave 0 turns it into a list.
+### Wave 0 — the contract — **DONE, 2026-11-01**
+**SPEC.md §125**, in seven sections: the model and its boundary (§125.1), the
+`SH` record and its three states (§125.2), `dkv` (§125.3), `dsv` with the
+slot list DERIVED (§125.4), the fallback (§125.5), the cost (§125.6), and
+why a second implementation is what proves the table (§125.7).
+
+**The derivation corrected §2 of this plan.** Counting the desk's external
+surface properly — comments stripped, and the three desk files (`desk.inc`,
+`desksc.inc`, `deskmod.inc`) treated as ONE layer rather than as consumers of
+each other — gives **thirteen operations, one lifetime entry and five state
+words**. That is the dock's shape almost exactly. A first pass had said 84
+symbols and "far more entangled than the dock", and it was wrong on both
+counts: inflated by comment text naming routines that no longer exist (a
+`.text` thunk removed in a size pass is still named in the comment recording
+its removal), and by counting `desksc.inc`'s use of `desk.inc` as external.
 
 ### Wave 1 — `dsv`, with no shell to load
 The desk's table, its basic bodies, `dsx_hook`/`dsx_unhook`, hooked by
