@@ -66970,12 +66970,15 @@ leaving it to be discovered:
 |---|---|
 | **Window List** | §28's Task Manager is most of the list already. **Required, and ships first**: with no tiles it is the only route to a window that is hidden rather than iconized, and §29.6 already calls `OSAPI_WM_HIDE` a trap for leaving an instance with no handle |
 | **Shut Down** | §12.3.2's confirmed shutdown exists; the button is a second way to reach it |
-| **Find** | **nothing system-wide exists.** §27.10 is Note Pad's Find and Replace and §81.71 is SHEET's; §54.4.2's volume sweep finds a PROGRAM for the loader and is not a user-facing search. A Find button is a new feature, not a button |
+| **Find** | **nothing system-wide exists** - §27.10 is Note Pad's Find and Replace and §81.71 is SHEET's, and §54.4.2's volume sweep finds a PROGRAM for the loader and is not a user-facing search. So a Find button is a new feature and **it is planned as one**: `docs/plans/FIND-PLAN.md`, a stateless `FIND.O88` that sweeps live and stores nothing. The button launches it; it is not a button's worth of work and is not pretended to be |
 | **Lockup** | **nothing exists at all** - no screen lock, no password store, no idle timeout. Warp 3's Lockup is all three. This is the largest of the four by a distance and is out of scope until somebody asks for it |
 
 **A button with nothing behind it greys itself with the reason (§47, "grey a
 fact, never a guess") and is not drawn dead.** On the evidence above that is
-Find and Lockup on the day the strip first ships.
+Find until `FIND.O88` ships, and Lockup until somebody decides they want it.
+
+**Two of the four are real today, one is planned, and one is undecided.** That
+is the honest count and the strip ships on it rather than waiting for four.
 
 #### 30.7.6 A window iconizes to the Desktop
 
