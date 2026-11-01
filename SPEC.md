@@ -66971,14 +66971,43 @@ leaving it to be discovered:
 | **Window List** | §28's Task Manager is most of the list already. **Required, and ships first**: with no tiles it is the only route to a window that is hidden rather than iconized, and §29.6 already calls `OSAPI_WM_HIDE` a trap for leaving an instance with no handle |
 | **Shut Down** | §12.3.2's confirmed shutdown exists; the button is a second way to reach it |
 | **Find** | **nothing system-wide exists** - §27.10 is Note Pad's Find and Replace and §81.71 is SHEET's, and §54.4.2's volume sweep finds a PROGRAM for the loader and is not a user-facing search. So a Find button is a new feature and **it is planned as one**: `docs/plans/FIND-PLAN.md`, a stateless `FIND.O88` that sweeps live and stores nothing. The button launches it; it is not a button's worth of work and is not pretended to be |
-| **Lockup** | **nothing exists at all** - no screen lock, no password store, no idle timeout. Warp 3's Lockup is all three. This is the largest of the four by a distance and is out of scope until somebody asks for it |
+| **Lockup** | **it starts the SCREEN SAVER, and nothing else** - owner's decision, 2026-11-01. Warp 3's Lockup is a password store, a lock screen and an idle timeout; ours is none of those. See §30.7.5.1 |
 
 **A button with nothing behind it greys itself with the reason (§47, "grey a
 fact, never a guess") and is not drawn dead.** On the evidence above that is
-Find until `FIND.O88` ships, and Lockup until somebody decides they want it.
+Find alone, until `FIND.O88` ships.
 
-**Two of the four are real today, one is planned, and one is undecided.** That
-is the honest count and the strip ships on it rather than waiting for four.
+**Three of the four are real or nearly so, and one is planned.** That is the
+honest count and the strip ships on it rather than waiting for four.
+
+##### 30.7.5.1 Lockup starts the saver, and does not lock
+
+**It does not lock anything, and this section says so in the place somebody
+would look for the opposite.** There is no password store on this machine,
+no lock screen and no credential of any kind; §77.15 is FTPD's own password
+and §81.46.3 is SHEET recording that it has none. A button called Lockup
+that only blanks the screen is a **naming hazard**, not a security feature,
+and nothing in the system should be described as if it were one.
+
+What it does: calls `ss_start_x` (`kernel/blank.inc`), which is the same
+entry the idle timer trips. The saver owns the glass, and any input ends it -
+exactly as a timed session ends.
+
+**It costs four resident bytes and they are a deliberate exception to
+§30.7.7.** The saver has no published API slot and no `cw_` door, so the
+module needs one: `cw_ss_start: call ss_start_x` + `retf`, the shape
+`kernel/kernel.asm`'s thirteen other wrappers already use, and the same
+`call … / retf` shim `blank.inc` itself uses for `blk_relit`. Where an API
+cell exists the door is free (`cw_X equ apic_X`, "THE CELL IS THE DOOR");
+here none does. Four bytes for the whole button is the smallest kernel change
+that makes it real, and it is recorded rather than spent quietly.
+
+**Two refusals, and only one is greyable.** `ss_start_x` refuses when
+`[ss_modes]` is 0 - the user has ticked no saver mode - and that is a fact
+the button can read, so it greys with the reason (§47). It also refuses for a
+window holding `WF_QUIET` (§79.10, FTPD while it serves) and blanks instead
+of running a mode; that is the saver's own rule, decided at the press, and not
+the button's business to predict.
 
 #### 30.7.6 A window iconizes to the Desktop
 
