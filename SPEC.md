@@ -67039,12 +67039,49 @@ decision and is not pinned here.
 
 #### 30.7.7 What it costs, and what it does not reach
 
-**It is a module and adds no resident site.** It changes what `dkv`'s fourteen
-slots do, not who calls them: a module takes the whole table at `mod_fp` entry
-0 (`dkx_hook`) and hands it back at entry 1, which §30.5 already specifies and
-which the kernel's 18 call sites already funnel through. The measured
-mechanism is 42 guest cycles. **Any resident growth is a design error**, not a
-budget request.
+**It is a module and adds no resident CALL SITE.** It changes what `dkv`'s
+fourteen slots do, not who calls them: a module takes the whole table at
+`mod_fp` entry 0 (`dkx_hook`) and hands it back at entry 1, which §30.5
+already specifies and which the kernel's 18 call sites already funnel
+through. The measured mechanism is 42 guest cycles.
+
+**The table was AUDITED against every dock symbol the kernel names, 2026-11-01**,
+and it covers the strip completely — including the one that looks like a
+bypass: `inst_tile_rect` (`kernel/instance.inc`) near-jumps to
+`dock_slot_rect`, and that is itself `DKCALL DKI_SLOT_RECT` on `kern_big`.
+Three groups sit outside the table and none of them refuses a different
+strip:
+
+| group | symbols | why it is safe |
+|---|---|---|
+| **state the module publishes** | `dock_cfg`, `dock_side`, `dock_thk`, `dock_px1`/`dock_px2`, `dock_up` | an edge, a thickness, a damage span, an open flag. Shape-agnostic |
+| **kernel helpers over that state** | `dock_live_hit` (the live rect block), `dock_px_rect` (the damage span) | they read the words above and test a RECT; a strip of any content has one |
+| **lifetime, not drawing** | `dock_apply`, `dock_reflow`, `dock_init` | `CTRL.DRV`'s and the boot's |
+
+**THE MODULE OWES THOSE WORDS, and the table cannot say so.** A LaunchPad
+that leaves `[dock_px1]`/`[dock_px2]` stale gets its damage span wrong in
+`wm.inc` with nothing to catch it. Publishing them is as much the contract as
+the fourteen slots are.
+
+#### 30.7.7.1 Two far doors, and they are the whole resident cost
+
+An earlier draft said "any resident growth is a design error". That was
+written before the audit and is **wrong**: the feature needs **two `cw_`
+doors, about eight bytes**, and both are named here rather than discovered in
+a later wave.
+
+- **`cw_ss_start`** — Lockup, §30.7.5.1. The saver has no API slot.
+- **`cw_desk_zone_rect`** — the zoom animation. `inst_tile_rect` answers
+  *"where is this instance's tile?"* for §11.99's minimize/restore zoom, and
+  under the LaunchPad **there is no tile**: the window goes to a desktop cell
+  (§30.7.6), so the module answers `DKI_SLOT_RECT` with the CELL's rect. It
+  needs a door onto `kernel/desk.inc` and **none exists** — `DOCK.DRV`'s
+  thirteen doors are all onto graphics, instances and windows.
+
+Each is `call X` + `retf`, the shape `kernel.asm`'s other wrappers use; where
+an API cell already exists the door is free (`cw_X equ apic_X`), and for
+these two none does. **Eight bytes is the floor, not a budget**: anything
+beyond these two doors is still a design error.
 
 **`kern_small` gets none of it**, and that needs no new argument: §30.5 already
 makes the placement feature `kern_big`'s alone, every site `%ifdef DOCK_OPT`,

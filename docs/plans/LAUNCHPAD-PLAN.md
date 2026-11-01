@@ -280,11 +280,26 @@ adapter.
 
 ## Open questions, named rather than assumed
 
-1. **Does `dkx_hook` really permit a strip of a different SHAPE**, or do the
-   kernel's 18 call sites assume tile geometry anywhere outside the table?
-   `DKI_SLOT_RECT` and `DKI_PX_HIT` suggest not, but this is the one claim
-   this plan rests on that was read rather than tested. **Answer it in wave 1
-   before building waves 2–5.**
+1. ~~**Does `dkx_hook` really permit a strip of a different SHAPE?**~~
+   **ANSWERED 2026-11-01, yes — audited, and it cost the plan a claim.**
+   Every dock symbol the kernel names outside `dock.inc`/`dockmod.inc` was
+   checked. The fourteen slots cover the strip completely, including the one
+   that looks like a bypass: `inst_tile_rect` near-jumps to `dock_slot_rect`,
+   which is itself `DKCALL DKI_SLOT_RECT` on `kern_big`. What sits outside
+   the table is state the module publishes (`dock_cfg`, `dock_side`,
+   `dock_thk`, `dock_px1`/`px2`, `dock_up`), two kernel helpers that read it
+   (`dock_live_hit`, `dock_px_rect`), and three lifetime entries
+   (`dock_apply`, `dock_reflow`, `dock_init`) — all shape-agnostic. SPEC.md
+   §30.7.7 carries the table.
+
+   **But "zero resident delta" was wrong and is withdrawn.** The audit found
+   `inst_tile_rect` changes MEANING rather than implementation: it answers
+   where an instance's TILE is, for §11.99's zoom, and under the LaunchPad
+   the window goes to a desktop cell instead. The module answers
+   `DKI_SLOT_RECT` with the cell's rect — and needs a door onto
+   `kernel/desk.inc` that does not exist. With Lockup's saver door that is
+   **two `cw_` wrappers, about eight bytes**, now named in §30.7.7.1 instead
+   of being discovered in wave 2.
 2. **Where the list lives** (wave 0's storage question) — `LAUNCHPAD.DAT` is a
    proposal, not a decision.
 3. **Does the drawer need its own window slot?** `MAX_WIN` is 12 and
