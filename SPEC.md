@@ -138326,18 +138326,83 @@ starfield wants a different starfield, and the place for that is the source.
 
 **No password on waking — and THIS ONE IS NOT A REFUSAL.** Every other entry
 above is something decided against; this is the one that is INTENDED and not
-built yet (owner, 2026-11-01). A saver session ends on any input, and there is
-no credential anywhere on the machine to ask for: §77.15 is FTPD's own
-password and §81.46.3 is SHEET recording that it has none.
+built yet. **§79.11 is its contract**, pinned 2026-11-01: a password field in
+the saver's own settings, not deferred to multiuser, which is far off.
 
-**So do not invent a single-user password store near this.** Multiuser is
-intended later, which means the store, and whatever `SYSTEM/APPDATA` (§19.9)
-means when there is more than one user, are the same decision and belong to
-that work rather than to the saver. A one-off password byte added here would
-have to be undone.
+Until it is built, §30.7.5.1's Lockup button starts a session and locks
+nothing, and says so where somebody would look for the opposite.
 
-Until then, §30.7.5.1's Lockup button starts a session and locks nothing, and
-says so where somebody would look for the opposite.
+### 79.11 The password field (PINNED, not built)
+
+**Owner's decision, 2026-11-01: the saver gets a password config field, and
+true multiuser does not gate it.** An earlier draft of §79.9 argued the store
+belonged to multiuser; that is withdrawn. Multiuser is far enough off that
+waiting for it would mean shipping Lockup (§30.7.5.1) with nothing behind it
+indefinitely.
+
+**Where it rides.** `SYSTEM.CFG`'s `'TH'` record, which already carries the
+saver's settings (§79.4), with its `ver` going 3 → 4. No new key and no new
+record header — nine bytes of an image rung — for a setting that belongs to
+the same question the record already answers.
+
+**And NOT a `SAVER.CFG`, which is the obvious alternative and is wrong here.**
+The tree's pattern is real — `HTTPDRV.CFG`, `FTPD.CFG`, `REDLINE.CFG`,
+`REALDMG.CFG`, `WIRE.CFG`, `X3STUB.CFG` — but it is for settings a package or
+driver OWNS. **The saver's settings are not `SAVER.DRV`'s**: §79.4's five
+bytes live in the kernel's `.text` in `blank.inc`, and the driver is only the
+animation overlay (§79.2), handed a pointer to four of them. The blanker
+works with no driver present at all, and on `kern_small` there is no
+`SAVER.DRV` to read a file. A credential the kernel must know before any
+driver loads belongs in the file the kernel already reads at boot.
+
+It buys no privacy either: there are no filesystem permissions, so a separate
+file is exactly as readable as `SYSTEM.CFG` — it would cost a file open and a
+read to hide nothing.
+
+**STORE A HASH, NOT THE PASSWORD**, for two separate reasons and either would
+be enough:
+
+- **`SYSTEM.CFG` is readable by anything.** There are no filesystem
+  permissions on this machine, so a plaintext password is visible to every
+  program, to a file manager, and to anyone who puts the disk in another
+  computer. A hash is not secrecy against an attacker with the file, but it
+  stops the password being *read off the screen* by the next person to open
+  the config.
+- **Resident bytes.** A 15-character buffer is 15 bytes of a `KERN_BUDGET`
+  with 3,584 spare (§30.7.7's discipline applies here too); a hash is two or
+  four.
+
+**Length: 1 to 15 characters**, which is Warp 3's own bound (Part 2: *"Your
+password can be from 1 to 15 characters long"*) and needs no independent
+justification.
+
+**THE OFFSET TRAP IS ALREADY WRITTEN DOWN, in §79.4, and this is the change
+that springs it.** The saver's settings are five bytes whose published offset
+`SS_P_IDLE` = 4 is *"a fact about the order of the declarations in
+`blank.inc` and nothing else"*, asserted at build time because *"a byte
+inserted between `[ss_post]` and it would leave `SAVER.DRV` writing its Test
+into whatever landed at +4."* A password field added into that block is
+exactly that byte. **Append it after the published four, and keep the
+assertion.**
+
+**Where it is set and where it is asked.** Set in §79.7's settings window,
+beside the modes and the minutes. Asked on the wake path (§79.6), which is
+the only place a session ends. **An empty field means no prompt**, the same
+shape as `[ss_mins]`'s zero disabling the feature — a setting, not a
+degenerate value.
+
+**What it is not, and the UI must not say otherwise.** It stops a passerby
+from using the machine. It is not security against software, against someone
+who can read the disk, or against a reboot — the kernel is on a floppy that
+boots without asking anything, and that is by design. §30.7.5.1's rule stands
+after this ships: nothing describes it as security beyond what it does.
+
+**And there is an escape, which a machine with no recovery needs.** A
+forgotten password must not cost the user their desktop: the record lives in
+`SYSTEM.CFG` on a readable volume, so deleting or editing it from any other
+machine — or booting another system disk — clears it. That is the documented
+way out and it is a consequence of the storage choice rather than a hole in
+it.
 
 ### 79.10 A program at work may ask for the BLANKER — `OSAPI_WM_QUIET`
 
