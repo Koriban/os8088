@@ -66982,12 +66982,19 @@ honest count and the strip ships on it rather than waiting for four.
 
 ##### 30.7.5.1 Lockup starts the saver, and does not lock
 
-**It does not lock anything, and this section says so in the place somebody
-would look for the opposite.** There is no password store on this machine,
-no lock screen and no credential of any kind; §77.15 is FTPD's own password
-and §81.46.3 is SHEET recording that it has none. A button called Lockup
-that only blanks the screen is a **naming hazard**, not a security feature,
-and nothing in the system should be described as if it were one.
+**The name is Lockup and it stays** (owner, 2026-11-01): passwords are coming
+to the screen saver, and multiuser after that, so the button is named for what
+it will do rather than renamed twice. §79.9 carries that intent on the saver's
+own side.
+
+**Today it does not lock anything, and this section says so in the place
+somebody would look for the opposite.** There is no password store on this
+machine, no lock screen and no credential of any kind; §77.15 is FTPD's own
+password and §81.46.3 is SHEET recording that it has none. **So the gap is
+temporary and known, not hidden** - but it is a real gap while it lasts, and
+a user who walks away from the machine on the strength of the word "Lockup"
+is not protected by it. Nothing in the UI, the manual or the About text may
+describe it as security until there is a credential behind it.
 
 What it does: calls `ss_start_x` (`kernel/blank.inc`), which is the same
 entry the idle timer trips. The saver owns the glass, and any input ends it -
@@ -138316,6 +138323,21 @@ zero that turns the feature off.
 **No per-mode settings.** Speeds, star counts and figure sizes are constants
 chosen against the 4.77 MHz frame budget (§79.5). A user who wants a slower
 starfield wants a different starfield, and the place for that is the source.
+
+**No password on waking — and THIS ONE IS NOT A REFUSAL.** Every other entry
+above is something decided against; this is the one that is INTENDED and not
+built yet (owner, 2026-11-01). A saver session ends on any input, and there is
+no credential anywhere on the machine to ask for: §77.15 is FTPD's own
+password and §81.46.3 is SHEET recording that it has none.
+
+**So do not invent a single-user password store near this.** Multiuser is
+intended later, which means the store, and whatever `SYSTEM/APPDATA` (§19.9)
+means when there is more than one user, are the same decision and belong to
+that work rather than to the saver. A one-off password byte added here would
+have to be undone.
+
+Until then, §30.7.5.1's Lockup button starts a session and locks nothing, and
+says so where somebody would look for the opposite.
 
 ### 79.10 A program at work may ask for the BLANKER — `OSAPI_WM_QUIET`
 
