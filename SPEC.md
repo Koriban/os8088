@@ -138376,6 +138376,42 @@ be enough:
 password can be from 1 to 15 characters long"*) and needs no independent
 justification.
 
+#### 79.11.1 What the hash costs on an 8088, and why a FAST one is right
+
+**No FPU is involved and none is wanted.** A hash is integer and bitwise
+work — shift, test, XOR — so the 8087, and `os88fp.inc`'s software doubles,
+have nothing to do with it. The question is only clocks.
+
+**It is under a millisecond.** A table-less CRC-16 over the longest legal
+password, 15 characters, at 4.77 MHz:
+
+| | clocks | at 4.77 MHz |
+|---|---:|---:|
+| optimistic, ~18 clocks a bit | 2,160 | **453 µs** |
+| fetch-bound, ~35 clocks a bit (the 8088's `max(clocks, 4.34 × bytes)` floor) | 4,200 | **881 µs** |
+
+Against PERFORMANCE.md's own figures that is **less than one `gfx_*` call**
+(756 µs fixed) and about **one 8×8 glyph cell** (900 µs). It is paid at most
+twice in a session: once when the password is set, once when a session is
+woken. Arithmetic, not a measurement — confirm it on MartyPC when it is
+built, per this tree's standing rule.
+
+**Table-less, and that is a size decision.** A 256-entry byte table is 512
+bytes against a `KERN_BUDGET` with 3,584 spare, which is not worth 4× on a
+sub-millisecond path. If it ever must be faster, the pattern is already in
+the tree: `apps/redline/csrows.inc`'s `cs_crctab` is a **16-entry nibble
+table**, 32 bytes, for the same CRC-16-CCITT polynomial `0x1021`.
+
+**And a FAST hash is the right answer here, which is worth saying because it
+is the opposite of modern practice.** A password hash is normally made
+deliberately slow to resist offline brute force. **There is no offline attack
+to resist**: anyone holding the disk does not guess the password, they delete
+the record — that is §79.11's documented escape and it cannot be closed
+without taking the user's own way back in with it. The threat is a passerby
+at the keyboard, who gets one guess at a time against a machine that is
+sitting there. Slowing the hash would buy nothing and spend it on the wake
+path, where the user is waiting.
+
 **THE OFFSET TRAP IS ALREADY WRITTEN DOWN, in §79.4, and this is the change
 that springs it.** The saver's settings are five bytes whose published offset
 `SS_P_IDLE` = 4 is *"a fact about the order of the declarations in
