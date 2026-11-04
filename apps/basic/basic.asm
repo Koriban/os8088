@@ -50,7 +50,7 @@ BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
 BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
-BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX  ; ours, ahead of the console's
+BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX + 10 + BAS_OPS_MAX + BAS_STK_MAX*2 + 8
 
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
@@ -271,15 +271,18 @@ bas_oncmd:
     jmp bas_about                   ; tail call: the card's ret is ours
 .run:
     ; --- Run: wave 0 has no interpreter, and says so rather than pretending --
-    push si
-    mov si, bas_s_norun
     or al, al
-    jz .sayit
+    jnz .stop                       ; item 1 = Stop
+    push si                         ; item 0 = Run: compile and run the text
+    mov byte [bas_bad], 0           ; in the editor, for real
+    call bas_run
+    pop si
+    jmp .redraw
+.stop:
+    push si
     mov si, bas_s_stop
-.sayit:
-    call con_say                    ; con_write's LF scrolls and CR does not
-    pop si                          ; move the row - the ROM's teletype, not
-                                    ; ANSI's NEL - so every line here ends 13,10
+    call con_say
+    pop si
 .redraw:
     call bas_abdismiss              ; CF=1: the card came down, and that
     jnc bas_repaint                 ; repaint drew the new status already
@@ -469,6 +472,10 @@ bas_ab4:        db 'the seam', 0
 %define CON_BSS_AT (os88_image_end + BAS_BSS_OWN)
 %include "os88con.inc"
 
+; The language itself (SPEC.md 126.5). After os88con.inc, because every one of
+; its outputs goes through con_say.
+%include "basic/baslang.inc"
+
     OS88_BSS BAS_BSS_OWN + CON_BSS
     OS88_IMAGE_END
 
@@ -489,3 +496,12 @@ bas_tx          equ os88_image_end + 2   ; the editor's block (SPEC.md 83)
 bas_prog        equ bas_tx + OS88TEXT_SZ ; ...and the program text it edits,
                                          ; NUL-terminated, lines separated by
                                          ; a single LF
+; --- the language's own state (baslang.inc) ---------------------------------
+bas_src         equ bas_prog + BAS_PROG_MAX  ; word: the scanner's cursor
+bas_line        equ bas_src + 2          ; word: the line it is on, for errors
+bas_opn         equ bas_line + 2         ; word: bytes emitted so far
+bas_bad         equ bas_opn + 2          ; byte: a refusal has been reported
+                                         ; +1 spare, to keep the rest even
+bas_ops         equ bas_bad + 2          ; the compiled op stream
+bas_stk         equ bas_ops + BAS_OPS_MAX ; the evaluation stack, in words
+bas_numbuf      equ bas_stk + BAS_STK_MAX*2   ; 8 bytes: ' -32768', 0

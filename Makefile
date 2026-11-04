@@ -6500,7 +6500,7 @@ $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 # editor and a console in one 63.5KB segment, and that arithmetic is worth
 # nothing until the empty frame has been measured.
 $(BUILD)/basic.bin: apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
-                    apps/os88con.inc apps/os88cp437.inc apps/os88text.inc \
+                    apps/os88con.inc apps/os88cp437.inc apps/os88text.inc apps/basic/baslang.inc \
                     | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/basic/basic.asm
 	@echo "basic:  $(call FILESIZE,$@) bytes"
@@ -7167,7 +7167,7 @@ $(DOSNETSTAMP): | $(BUILD)
 # presents as a fix that did not work, on a binary that never contained it.
 # Four other rules had the same hole and were fixed with this one.
 $(BUILD)/sheet.bin: apps/sheet/sheet.asm apps/os88api.inc \
-                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc \
+                    apps/os88ui.inc apps/os88line.inc apps/os88text.inc apps/basic/baslang.inc \
                     apps/os88chart.inc apps/os88chartbss.inc \
                     apps/os88chartovl.inc apps/os88fp.inc apps/os88dec.inc \
                     apps/os88parts.inc apps/os88partsbody.inc | $(BUILD)
@@ -7385,7 +7385,7 @@ $(BUILD)/browser.bin: apps/browser/browser.asm apps/browser/brnet.inc \
 $(BUILD)/telnet.bin: apps/telnet/telnet.asm apps/telnet/tetxt.inc \
                      apps/telnet/teansi.inc apps/telnet/tezm.inc \
                      apps/os88m83.inc apps/os88dec.inc \
-                     apps/os88con.inc apps/os88cp437.inc apps/os88text.inc \
+                     apps/os88con.inc apps/os88cp437.inc apps/os88text.inc apps/basic/baslang.inc \
                      apps/os88api.inc \
                      apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                      apps/os88alt.inc \
@@ -7596,7 +7596,7 @@ $(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
                       apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
-                      apps/os88con.inc apps/os88cp437.inc apps/os88text.inc \
+                      apps/os88con.inc apps/os88cp437.inc apps/os88text.inc apps/basic/baslang.inc \
                       apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                       kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \

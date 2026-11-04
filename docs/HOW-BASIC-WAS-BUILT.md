@@ -220,8 +220,69 @@ everything a keystroke touches — and that looks like 25–30KB. The parser, th
 compiler, the double formatter, `PRINT USING` and the built-in library go to
 `BASIC.OVL`, which gets a segment of its own.
 
+## Wave 1a — it is a language now
+
+Scanner, compiler and interpreter, in `apps/basic/baslang.inc`: `PRINT` of an
+integer expression with `+ - *` and `\`, parentheses, unary minus, `REM`, `'`
+and `END`. The compiler emits **postfix into a flat op stream** and the
+interpreter is a stack machine, which is §126.5's shape and the reason for it —
+on an 8086 the inner loop is one dispatch where a tree walk would be a
+recursive descent through far pointers at run time.
+
+**Cost: 1,386 bytes of image** over wave 0c. Running total **14,701 of 65,024,
+22.6%**.
+
+**`/` is refused by name and `\` is not.** BASIC's `/` is floating-point
+division even between two integers, so an integer `/` here would be a wrong
+answer wearing a right one's clothes. `\` is integer division in every BASIC
+of this line and is exactly what this wave can do.
+
+### The oracle earned its keep before the thing ever booted
+
+Running the test program through the reference implementation first gave two
+corrections that would otherwise have shipped:
+
+- **`PRINT 1000*1000` is `1000000`.** The reference widens past 16 bits, where
+  a 16-bit multiply would have silently answered 16960. So overflow is
+  **refused by name** — `imul` sets `OF` exactly when the upper half is not the
+  sign extension, so the test is free — and the message says the wider
+  arithmetic arrives in wave 1c.
+- **A number prints with a trailing space as well as a leading one.**
+  QuickBASIC separates numbers that way; ` 42 ` is what the reference emits,
+  trailing space and all.
+
+### And two defects that only running it found
+
+**`.mul` fell through into `.idiv`.** Adding the overflow check replaced a
+block that had ended `jmp .store`, and the replacement dropped it. So
+`2+3*4` computed `3*4 = 12`, fell into the divide and made it `12\4 = 3`, and
+answered **5**. It assembled; it ran; only the number was wrong. This is the
+repository's own recorded lesson about cutting an instruction and leaving the
+fall-through, met from the other side.
+
+**The op stream was never terminated.** `bas_opn` resets per statement but
+`bas_ops` keeps its bytes, so execution ran on into whatever the previous line
+had left — invisible while the array was still zeroed bss, and then an
+underflow blamed on the wrong line as soon as a second statement was shorter
+than the first. Both symptoms, one missing `OP_END`.
+
+**How it was found** is worth keeping: staring at the source produced three
+wrong theories. One temporary line — printing the compiled op *count* beside
+the answer — gave `13 | 5`, which says the compiler emitted all thirteen bytes
+correctly and the interpreter is at fault, and that halved the search in one
+run. It is behind `%ifdef BAS_DIAG` now.
+
+**Verified against the oracle**, on the glass:
+
+| | guest | reference |
+|---|---|---|
+| `print 2+3*4` | ` 14 ` | ` 14 ` |
+| `print 7\2` | ` 3 ` | ` 3 ` |
+| `print -5` | `-5 ` | `-5 ` |
+| `print 1000*1000` | refused, line 4 | ` 1000000 ` |
+
 ## Next
 
-Wave 1: expressions, `PRINT`, and **tier C** — the `OSAPI` gateway, which is
+Wave 1b: **tier C** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
