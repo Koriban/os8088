@@ -40,6 +40,10 @@ keyword count, is the thing to copy:
 | **B. named system bindings** | `WIND_CREATE WIND_OPEN WIND_GET WIND_SET FORM_DO FORM_ALERT OBJC_DRAW RSRC_LOAD EVNT_MULTI GRAF_RUBBERBOX SHEL_* SCRP_* V_OPNVWK …` — one BASIC word per AES/VDI call | one BASIC word per kernel slot, named after it. 194 slots, so this tier is generated, not hand-written |
 | **C. the raw gateway** | `GEMSYS`, `VDISYS`, `BIOS`, `XBIOS`, `GEMDOS`, `LINE-A`, with `CONTRL GINTIN GINTOUT ADDRIN ADDROUT` as the parameter arrays | one `OSAPI` verb taking a slot number and registers. The escape hatch that stops tier B from ever being a blocker |
 
+**Tiers B and C are designed in `docs/plans/BASIC-BINDINGS-PLAN.md`** — what
+each GEM construct was *for* and what answers that need here, the `OSAPI`
+gateway, the generated binding table and its gate, and the dialog gap.
+
 Tier C is what made GFA-BASIC usable for real work in 1986: anything the
 language had not wrapped yet, you could still reach. **Build tier C first**,
 because from that day on every missing feature is an inconvenience rather than
