@@ -83,6 +83,67 @@ directives. Positions, to be revisited rather than assumed:
   (the OS composites differently), `LINE-A` (no analogue).
 - **decide**: `INLINE`. It is §126.7's question wearing different clothes.
 
+### 0.4 GFA's tiers B and C are GEM-shaped; what they map to here
+
+`GEMSYS`, `VDISYS`, `XBIOS`, `BIOS`, `GEMDOS` and `LINE-A` are not general
+concepts — each is one of GEM/TOS's six trap interfaces, and the seven arrays
+`CONTRL GINTIN GINTOUT ADDRIN ADDROUT PTSIN PTSOUT` exist because filling
+arrays and trapping **is** the AES/VDI calling convention. None of that
+survives the move, and the news is good: this OS passes arguments in registers
+with CF for failure, over **one flat space of 194 slots** with no AES/VDI
+split.
+
+So the whole of GFA's tier C collapses:
+
+| GFA | here |
+| --- | --- |
+| `GEMSYS n`, `VDISYS n`, `GCONTRL`, `XBIOS`, `BIOS`, `GEMDOS`, `LINE-A` | **one** verb — a slot number and register values |
+| `CONTRL`, `GINTIN`, `GINTOUT`, `ADDRIN`, `ADDROUT`, `PTSIN`, `PTSOUT`, `WORK_OUT` | nothing. Registers replace all eight |
+
+Tier B maps closely, because the window manager was built from the same ideas:
+
+| GFA / GEM | here |
+| --- | --- |
+| `WIND_CREATE` `WIND_OPEN` `WIND_CLOSE` `WIND_DELETE` `WIND_SET` `WIND_GET` | `OSAPI_WM_CREATE` 0x0076, `WM_SHOW` 0x007C, `WM_HIDE` 0x0082, `WM_DESTROY` 0x02BC, `WM_TITLE` 0x01D3, `WM_GEOM` 0x0174, and ~25 more `WM_*` |
+| `WIND_UPDATE`, clipping | `WM_CLIP_SET` 0x013D, `CLIP_CLEAR` 0x0145, `CLIP_TEST` 0x014D |
+| `MENU_BAR`, `MENU_ICHECK`, `MENU_IENABLE`, `MENU_TEXT` | `OSAPI_MENU_SET` 0x011E, `MENU_OWNER` 0x0229 |
+| `SCRP_READ` / `SCRP_WRITE` | `OSAPI_CLIP_GET` 0x026E / `CLIP_PUT` 0x0268 / `CLIP_SIZE` 0x0274 |
+| `GRAF_MKSTATE`, `GRAF_MOUSE` | the mouse and cursor slots, `WM_CURSOR` 0x02E5 |
+| `SHEL_READ` / `SHEL_WRITE` / `SHEL_FIND` | the loader slots |
+| `V_OPNWK` `V_OPNVWK` `V_CLSVWK` `V_CLRWK` `V_UPDWK` | **nothing, and nothing needed.** There is no workstation to open: a window has a surface. About ten keywords simply vanish |
+
+**The one real gap is dialogs.** GEM's are declarative object trees loaded from
+a `.RSC` file, and roughly forty of GFA's keywords serve that model —
+`RSRC_LOAD` `RSRC_GADDR` `RSRC_OBFIX`, `FORM_DO` `FORM_CENTER` `FORM_DIAL`
+`FORM_BUTTON` `FORM_KEYBD`, `OBJC_DRAW` `OBJC_FIND` `OBJC_ADD` `OBJC_EDIT`
+`OBJC_CHANGE`, `OB_*`, `TEDINFO`, `ICONBLK`, `BITBLK`, `APPLBLK`, `PARMBLK`.
+Here there is no resource file and no object tree: `apps/os88ui.inc` (§13, §75)
+provides buttons, check boxes, radio dots, scroll bars, group boxes, a standard
+alert, an About card and a drop-down, each **built in code and opted into with
+a `%define`**. So this is the one place where tier A must be *designed* rather
+than mapped — BASIC verbs that construct a dialog by calls. `ALERT` and
+`FILESELECT` come free (the alert and the chooser both exist); `FORM_DO` has no
+counterpart and should not acquire a fake one.
+
+**And one place where this OS is tighter than GEM.** `OSAPI_MENU_SET` caps the
+bar at five menus, which both SHEET and Word outgrew and answered with their
+own in-window bars. Tier A's `MENU` therefore either accepts that cap or
+replicates that pattern, and which is a wave 4 decision rather than an
+implementation detail.
+
+### 0.5 Tier C needs addresses, which settles §9's second question
+
+Many slots take a far pointer: `OSAPI_FILE_READ` wants `ES:BX = buffer`,
+`OSAPI_FILE_PATH` wants `ES:DI` and a size. A BASIC string is a handle into a
+claim that can move, so a program cannot pass one to a kernel call without a
+way to say *where my buffer is* — GFA's `VARPTR` and `ARRPTR`, and `V:`/`VAR`
+for passing by reference.
+
+That means the system-access question in §9 is **not separable from tier C**:
+the gateway cannot work without handing out an address, and an address is the
+first half of `PEEK`. The argument for *allowed, but declared* is therefore one
+of necessity rather than taste — tier C is wave 1, and it needs this.
+
 ## 1. The decision that shapes everything: assembly, not C
 
 §73 allows a package written in C, *"slower and larger in exchange for being
