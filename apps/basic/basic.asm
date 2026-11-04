@@ -41,6 +41,15 @@ BAS_ED_H    equ 200                         ; the editor pane's height
 BAS_GAP     equ 8                           ; ...and the gutter below it
 BAS_CON_Y   equ BAS_ED_H + BAS_GAP          ; the console pane's top, 208
 BAS_CON_H   equ BAS_CONT_H - BAS_CON_Y      ; ...and what is left for it, 73
+BAS_CON_PAD equ 2                           ; the console text inset inside
+                                            ; its frame
+; How much of the fixed 80x25 is on view - DERIVED from the pane, never a
+; second set of numbers that could disagree with it (SPEC.md 70.8: the screen
+; is fixed and a resize changes only how much is VISIBLE).
+BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
+BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
+
+BAS_BSS_OWN equ 2                           ; our bss, ahead of the console's
 
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
@@ -64,9 +73,39 @@ bas_entry:
     call OSAPI_MENU_SET
     mov si, bas_about
     call OSAPI_ABOUT_SET
+
+    ; --- the console (SPEC.md 70.8) ------------------------------------------
+    ; con_open and not con_clear: it sets the attribute, calls con_font AND
+    ; clears. The face is the trap os88con.inc's own header warns about -
+    ; until con_font runs, ASCII 32..127 is a blank hole, so a console whose
+    ; carrier forgot it holds all the right characters and draws every letter
+    ; as nothing. The buffer reads perfectly and the screen is empty.
+    call bas_conreset
 .out:
     pop si
     ret
+
+; -----------------------------------------------------------------------------
+; bas_conreset - a fresh console, with the cursor where the user can see it
+; in:  nothing; out: nothing; clobbers AX/SI like any internal call
+;
+; con_open clears the 25-row buffer and parks the cursor at (0,0). This pane
+; shows the LAST BAS_CON_ROWS of those twenty-five (SPEC.md 70.8: a short
+; window is a viewport onto a fixed buffer, and con_row's only bound is
+; [con_vtop]) - so a console opened and written to immediately puts its first
+; lines on rows nobody is looking at, and the pane stays black until eighteen
+; lines have scrolled past.
+;
+; So the cursor starts on the FIRST VISIBLE ROW. Everything after that is the
+; teletype's own business: con_write's LF scrolls the buffer at row 24 and the
+; viewport keeps showing the bottom of it, which is what a terminal does.
+; -----------------------------------------------------------------------------
+bas_conreset:
+    call con_open
+    mov word [con_cy], CON_ROWS - BAS_CON_ROWS
+    mov word [con_cx], 0
+    mov si, bas_s_banner
+    jmp con_say                     ; tail call: con_say's ret is ours
 
 ; -----------------------------------------------------------------------------
 ; bas_paint - W_PAINT: the two panes and what is in them
@@ -146,30 +185,43 @@ bas_paint:
     add dx, BAS_CON_Y + BAS_CON_H - 1
     call OSAPI_GFX_FRAME
 
-    mov cx, di
-    add cx, 6
-    mov dx, si
-    add dx, BAS_CON_Y + 6
+    ; --- the console's geometry, and it is owed EVERY paint ------------------
+    ; os88con.inc's header is emphatic about this: a window can be resized,
+    ; dragged across an extended desktop's seam or land on an adapter of a
+    ; different size, and a MOVED window does not call this proc at all
+    ; (SPEC.md 11.96.12) - so a geometry computed once at launch describes
+    ; where the window USED to be.
+    mov ax, di
+    add ax, BAS_CON_PAD
+    add ax, 7                       ; the text pen must be a MULTIPLE OF 8:
+    and ax, ~7                      ; con_emit hands it to OSAPI_GFX_BLIT1
+    mov [con_px], ax
+    mov [con_oy], si                ; the content top...
+    mov word [con_topy], BAS_CON_Y + BAS_CON_PAD   ; ...and the first text row
+    mov word [con_vcols], BAS_CON_COLS             ; how much of the fixed
+    mov word [con_vrows], BAS_CON_ROWS             ; 80x25 is on view
+    ; [con_vtop] is NOT zero, and this is the contract's one real trap.
+    ; con_row tests `cmp bx, [con_vtop] / jb .done` and has NO lower bound, so
+    ; a vtop of 0 draws all twenty-five rows whatever [con_vrows] says - over
+    ; the pane, over the window's own bottom edge and onto the desktop, which
+    ; is exactly what it did. A short window shows the BOTTOM of the buffer,
+    ; which is what a teletype wants: telnet.asm's `CON_ROWS - vrows`.
+    mov word [con_vtop], CON_ROWS - BAS_CON_ROWS
+    ; [con_mono] is a fact about the screen THIS window is on, and a window
+    ; can be dragged onto another one - so it is re-derived here with the
+    ; rest, telnet.asm's idiom. OSAPI_VIDEO answers in SI as well as DH, and
+    ; SI is our content top, so the call is bracketed.
     push si
-    mov si, bas_s_con
-    mov ax, (CWHITE << 8) | CBLACK
-    call OSAPI_FONT_RUN
+    call OSAPI_VIDEO                ; DH = bits per pixel, 4 or 1
+    cmp dh, 2                       ; CF = 1bpp...
+    sbb dh, dh
+    neg dh                          ; ...as the 0/1 [con_mono] is, branch-free
+    mov [con_mono], dh
     pop si
 
-    ; --- the status line, which is what Run writes ---------------------------
-    mov cx, di
-    add cx, 6
-    mov dx, si
-    add dx, BAS_CON_Y + 22
-    push si
-    mov si, [bas_status]            ; bas_oncmd is its only writer...
-    or si, si                       ; ...and the LOADER is the first one: bss
-    jnz .havestatus                 ; arrives zeroed (SPEC.md 21 step 5), and a
-    mov si, bas_s_ready             ; zero is not a string. The window is shown
-.havestatus:                        ; before any command runs, so without this
-    mov ax, (CWHITE << 8) | CBLACK  ; the first paint draws through a null
-    call OSAPI_FONT_RUN
-    pop si
+    call con_markall                ; a W_PAINT owes the WHOLE pane: the dirty
+    call con_rows_owed              ; bitmap is for the incremental case, and
+                                    ; this is not one
 
     ; --- and the About card LAST, over the panes (SPEC.md 20.5.1) ------------
     cmp byte [bas_abon], 0
@@ -204,17 +256,22 @@ bas_oncmd:
     ; --- File ----------------------------------------------------------------
     or al, al
     jnz .about                      ; item 1 = About
-    mov word [bas_status], bas_s_new ; item 0 = New
-    jmp .redraw
+    call bas_conreset               ; item 0 = New: back to what a fresh
+    jmp .redraw                     ; launch shows
 .about:
     mov bx, si
     jmp bas_about                   ; tail call: the card's ret is ours
 .run:
     ; --- Run: wave 0 has no interpreter, and says so rather than pretending --
-    mov word [bas_status], bas_s_norun
+    push si
+    mov si, bas_s_norun
     or al, al
-    jz .redraw
-    mov word [bas_status], bas_s_stop
+    jz .sayit
+    mov si, bas_s_stop
+.sayit:
+    call con_say                    ; con_write's LF scrolls and CR does not
+    pop si                          ; move the row - the ROM's teletype, not
+                                    ; ANSI's NEL - so every line here ends 13,10
 .redraw:
     call bas_abdismiss              ; CF=1: the card came down, and that
     jnc bas_repaint                 ; repaint drew the new status already
@@ -300,11 +357,11 @@ bas_it_run:     db 'Run', 0
 bas_it_stop:    db 'Stop', 0
 
 bas_s_edit:     db 'Program', 0
-bas_s_con:      db 'Output', 0
-bas_s_ready:    db 'Ready', 0
-bas_s_new:      db 'New program', 0
-bas_s_norun:    db 'No interpreter yet - wave 0 is the seam (SPEC.md 126)', 0
-bas_s_stop:     db 'Nothing to stop', 0
+bas_s_banner:   db 'BASIC for os8088 - SPEC.md 126', 13, 10
+                db 'Wave 0b: the console pane is real.', 13, 10
+                db 'Ready', 13, 10, 0
+bas_s_norun:    db 'No interpreter yet - wave 0 is the seam.', 13, 10, 0
+bas_s_stop:     db 'Nothing to stop.', 13, 10, 0
 
 ; --- the standard About card's lines (SPEC.md 20.5.1) ------------------------
 bas_ablines:
@@ -320,7 +377,19 @@ bas_ab4:        db 'the seam', 0
 %define OS88UI_ABDISMISS
 %include "os88ui.inc"
 
-    OS88_BSS 4
+; --- the console (SPEC.md 70.8) ----------------------------------------------
+; CON_TTY is the teletype half - con_write, con_say, con_open - which is what
+; PRINT is going to be. The full-screen half (CON_FSX) is not wanted: a BASIC
+; program's output belongs in its window.
+;
+; Its bss follows OURS rather than starting at os88_image_end, so the two do
+; not overlap; CON_BSS is defined by the include, which is why OS88_BSS comes
+; after it.
+%define CON_TTY
+%define CON_BSS_AT (os88_image_end + BAS_BSS_OWN)
+%include "os88con.inc"
+
+    OS88_BSS BAS_BSS_OWN + CON_BSS
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -----------------------------------
@@ -331,4 +400,8 @@ bas_ab4:        db 'the seam', 0
 ; entry proc is a line that can be deleted while the paint still looks right
 ; on every path a test takes.
 bas_abon        equ os88_image_end + 0   ; byte: the About card is up
-bas_status      equ os88_image_end + 2   ; word: near ptr to the status string
+                                         ; +1 is spare, and deliberately: it
+                                         ; keeps BAS_BSS_OWN even, so the
+                                         ; console's cell buffer - words of
+                                         ; (character, attribute) - starts on
+                                         ; an even address

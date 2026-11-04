@@ -110,8 +110,57 @@ instead, which `t_retired.py` immediately failed — correctly. That file's own
 comment says the registry is reached *through* `apps/RETIRED.txt` rather than
 through a second copy of the list, and two lists is exactly what I had made.
 
+## Wave 0b — the console pane is real
+
+`apps/os88con.inc` (§70.8) became the output pane. It is an 80x25 buffer of
+(character, IBM attribute) pairs in text VRAM's own layout, with a dirty-row
+bitmap and a composer that writes eight bytes a cell and calls nothing, and
+`%define CON_TTY` adds the teletype half — `con_write`, `con_say`, `con_open` —
+whose LF scrolls and whose CR does not move the row, because that is the ROM's
+behaviour and not ANSI's NEL. That teletype is what `PRINT` is going to be.
+
+**Measured: 4,638 bytes of image and 4,817 of bss**, against wave 0a's 804 and
+4. So the console costs about 3.8KB of code and 4.8KB of storage — the 4,000
+of it is the cell buffer, which is fixed and does not reflow. Running total:
+**9,455 of 65,024, or 14.5% of the budget**, with no language in it yet.
+
+**The include's own header pre-announced the trap I would otherwise have hit.**
+Until `con_font` runs, the glyph table's ASCII 32..127 is a blank hole, so a
+console whose carrier forgot it *holds all the right characters and draws every
+letter as nothing* — the buffer reads perfectly and the screen is empty. The
+file says so, in capitals, and says that a carrier calling `con_open` gets the
+face for free and cannot forget. I called `con_open`.
+
+Two defects it did not pre-announce, both found by looking.
+
+**`con_vtop` is not zero, and that is the contract's one real trap.** `con_row`
+tests `cmp bx, [con_vtop] / jb .done` and has **no lower bound at all**, so
+`[con_vrows]` does not bound the drawing — a `con_vtop` of 0 draws all
+twenty-five rows whatever the pane is, over the frame, over the window's own
+bottom edge and onto the desktop. Which is exactly what it did. The answer is
+in `telnet.asm`: `con_vtop = CON_ROWS - vrows`, so a short window is a viewport
+onto the **bottom** of the buffer, which is what a teletype wants.
+
+**And fixing it made the pane go blank, which was the fix working.** With the
+viewport on rows 17..24 and `con_open` parking the cursor at (0,0), a fresh
+console writes its first lines where nobody is looking, and the pane stays
+black until eighteen lines have scrolled past. So `bas_conreset` opens the
+console and then puts the cursor on the first *visible* row. Everything after
+that is the teletype's own business.
+
+**What it looks like.** Three banner lines on open, and each Run or Stop
+appends one more, scrolling:
+
+```
+BASIC for os8088 - SPEC.md 126
+Wave 0b: the console pane is real.
+Ready
+No interpreter yet - wave 0 is the seam.
+Nothing to stop.
+No interpreter yet - wave 0 is the seam.
+```
+
 ## Next
 
-Wave 0b is `os88con.inc` as the output pane and 0c `os88text.inc` as the
-editor, each measured as it lands, because the three numbers together are what
-§126.6's overlay seam is cut against.
+Wave 0c is `os88text.inc` (§83) as the editor, measured as it lands, because
+the three numbers together are what §126.6's overlay seam is cut against.
