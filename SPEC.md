@@ -228365,18 +228365,51 @@ defend nothing this OS lacks — including `INKEY$`, whose stated reason is that
 a key cannot be polled without blocking a pane that does not exist here, and
 which `OSAPI_KEY_DOWN` answers in one call.
 
-### 126.8 A program is a loop, and this is a cooperative OS
+### 126.8 How a program reaches the OS, and where it yields
 
-Unresolved, and it decides the shape of every statement that waits, so it is
-to be settled before the first statement is built rather than after.
+The target is **GFA-BASIC on the Atari ST**: not a BASIC that runs, but a BASIC
+that OS/8088 applications are written in, GUI or text. That target decides this
+section, and this section is the reason the chapter exists.
 
-A BASIC program runs until it ends; a package here must return. Either the
-interpreter executes a bounded number of ops per idle event — which makes the
-window responsive, makes `SLEEP` and `INPUT` natural yield points, and costs a
-saved interpreter state — or it owns the machine until `END`, which is simpler
-and makes every long `FOR` loop a freeze. The op stream of §126.5 makes the
-first cheap, and the first is almost certainly right; what it is not yet is
-specified.
+GFA exposed the machine in **three tiers**, and the tiers matter more than the
+keyword count:
+
+| | |
+| --- | --- |
+| **A, BASIC verbs** | `OPENW`, `MENU`, `ALERT`, `FILESELECT`, `ON MENU`, the drawing set. Short, memorable, and all most programs ever touch |
+| **B, named bindings** | one BASIC word per system call, named after it. GFA had `WIND_CREATE`, `FORM_DO`, `OBJC_DRAW`; here it is one word per kernel slot, and at 194 slots the tier is **generated from the same source `tools/os88index.py` reads**, so it cannot drift from the kernel |
+| **C, the raw gateway** | GFA's `GEMSYS`/`VDISYS`/`XBIOS`. Here, one verb taking a slot number and register values |
+
+**Tier C is built first.** It is a couple of hundred bytes, and from the day it
+exists every unwrapped facility is an inconvenience rather than a wall; tiers A
+and B become conveniences over something already complete. That ordering is
+what made GFA usable for real work in 1986, and inverting it is the standard way
+a language binding project stalls.
+
+**The yield is `ON MENU`, and the programmer writes it.** GFA's idiom:
+
+```
+GOSUB build_menu_bar
+ON MENU GOSUB menu_handler
+DO
+  ON MENU
+LOOP
+```
+
+`ON MENU` pumps one round of events and dispatches to the registered handlers.
+This answers what would otherwise be this chapter's hardest question. A package
+here must return, while a BASIC program runs until it ends; the alternative was
+an invisible yield every N ops, with a saved interpreter state and a rule
+nobody can see in the program text. Instead the yield is **a statement, in
+plain sight, inside a loop the program owns**. A GUI program yields once per
+pass of its own main loop. A text-mode program that never calls `ON MENU` never
+yields, and does not need to.
+
+The consequence for the window model is worth stating: `OPENW` creates a
+**real OS window owned by the BASIC instance**, not a region drawn inside the
+interpreter's own. A BASIC program is therefore a package that happens to be
+interpreted, and the editor's console is only the default output surface, not
+the boundary of what a program may own.
 
 ### 126.9 The finish line is already in the repository
 
@@ -228389,3 +228422,40 @@ groups have been closed.
 It is worth stating plainly, because it is the argument for this chapter: that
 file sits in the same repository as a native port of itself, and the refusal
 set this package inherits would today reject it a hundred and six times.
+
+### 126.10 What is not yet decided
+
+Three things, recorded because the chapter would otherwise read as though they
+were settled.
+
+**`PEEK`, `POKE` and `INLINE`.** §126.7 refuses the memory and port group
+permanently, on the grounds that a cooperative kernel on a machine with no MMU
+cannot hand a user program arbitrary writes. GFA-BASIC had all of it, because
+on a single-tasking ST the programmer did own the machine. The tension is real
+and it is not resolved by restating either half.
+
+What makes it decidable is that **an assembly package can already poke
+anything**. There is no protection to lose, so refusing these in BASIC protects
+the BASIC programmer from an accident rather than the OS from harm — a weaker
+claim than §126.7 makes, and one that ordinary system programming in this
+language would run into immediately.
+
+The likely answer is therefore **allowed, but declared**: a program states at
+its head that it wants system access, and without that declaration `POKE` is
+refused by name with the reason that the program has not asked for it. GFA had
+`$`-prefixed directives for exactly this class of decision. That keeps §126.7's
+real property — refused by name, with a reason, never as a syntax error — while
+leaving the capability reachable on purpose and unreachable by accident. **Not
+yet decided.**
+
+**Whether a BASIC program can become a package.** GFA shipped a compiler that
+emitted a standalone `.PRG`. The equivalent here emits a `.O88`, which is code
+generation rather than interpretation and a substantially larger project than
+this chapter describes. Out of scope until the interpreter hosts real GUI
+applications, which is a prerequisite either way.
+
+**How much of GFA's larger language to follow.** GFA has eight numeric types to
+the reference's four, a matrix sublanguage, sprites, timers and inline
+assembly. `BYTE` and `WORD` are needed by tier B and are in. The matrix
+sublanguage is a library rather than a language and is out. The rest is
+`docs/plans/BASIC-PLAN.md` §0.3's to argue.

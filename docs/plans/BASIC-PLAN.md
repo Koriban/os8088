@@ -12,6 +12,77 @@ language here, where the machine is not sealed.
 Read `basicnw/notes/REFUSAL-AUDIT.md` first. It is the reason this is tractable:
 of the 43 spellings BASIC/nw refuses, 26 refuse nothing this OS lacks.
 
+## 0. The target: GFA-BASIC on the Atari ST
+
+**The goal is not a BASIC that runs. It is a BASIC you can write OS/8088
+applications in** — GUI or text — which is what GFA-BASIC was on the ST.
+
+That target is specific enough to measure against, and the measuring stick is
+the GFA-BASIC 3 manual's own alphabetical command index (tho-otto.de's
+hypertext of *The GFA-Basic Compendium* v2.98). Read it; do not quote this
+summary of it. What it shows is a language with roughly 900 entries, of which
+the GUI surface divides into **three tiers** — and that division, not the
+keyword count, is the thing to copy:
+
+| tier | GFA | here |
+| --- | --- | --- |
+| **A. BASIC-native verbs** | `OPENW CLOSEW CLEARW FULLW TOPW TITLEW INFOW`, `MENU`, `ALERT`, `FILESELECT`, `ON MENU …`, `MOUSE MOUSEX MOUSEY MOUSEK`, and the whole drawing set (`PLOT DRAW LINE BOX PBOX RBOX PRBOX CIRCLE PCIRCLE ELLIPSE PELLIPSE CURVE POLYLINE POLYFILL FILL TEXT GET PUT`) | the layer to build. Short, memorable, and the only layer most programs ever touch |
+| **B. named system bindings** | `WIND_CREATE WIND_OPEN WIND_GET WIND_SET FORM_DO FORM_ALERT OBJC_DRAW RSRC_LOAD EVNT_MULTI GRAF_RUBBERBOX SHEL_* SCRP_* V_OPNVWK …` — one BASIC word per AES/VDI call | one BASIC word per kernel slot, named after it. 194 slots, so this tier is generated, not hand-written |
+| **C. the raw gateway** | `GEMSYS`, `VDISYS`, `BIOS`, `XBIOS`, `GEMDOS`, `LINE-A`, with `CONTRL GINTIN GINTOUT ADDRIN ADDROUT` as the parameter arrays | one `OSAPI` verb taking a slot number and registers. The escape hatch that stops tier B from ever being a blocker |
+
+Tier C is what made GFA-BASIC usable for real work in 1986: anything the
+language had not wrapped yet, you could still reach. **Build tier C first**,
+because from that day on every missing feature is an inconvenience rather than
+a wall, and tiers A and B become conveniences layered over something already
+complete.
+
+### 0.1 The event loop is the answer to the hard question
+
+GFA's idiom is this, and it is the whole design:
+
+```
+GOSUB build_menu_bar
+ON MENU GOSUB menu_handler
+DO
+  ON MENU
+LOOP
+```
+
+`ON MENU` pumps one round of events and dispatches to the handlers the program
+registered. Without it in a loop, no handler ever runs.
+
+This settles what the SPEC chapter left open. A cooperative OS needs the
+interpreter to yield, and the question was whether that happens invisibly every
+N ops or not at all. GFA answers: **it happens at `ON MENU`, and the programmer
+writes it.** The yield is a language feature, in plain sight, in the program
+text. A text-mode program that never calls `ON MENU` never yields and does not
+need to; a GUI program yields every pass of its own main loop.
+
+### 0.2 What this adds that a port does not
+
+BASIC/nw has **none** of tiers A, B or C — it was a sealed language by design.
+So this project is a port *and* an addition, and the addition is the larger
+half. What comes from the reference is the language: the lexer, the five
+stages, the operator set, the control flow, the 64 built-ins, and 370 tests
+that say what all of it means. What does not exist anywhere yet is every line
+that connects BASIC to this operating system.
+
+### 0.3 Where GFA is a bigger language, and whether to follow
+
+GFA has eight numeric types to BASIC/nw's four (`BIT BYTE WORD INT LONG
+SINGLE DOUBLE FLOAT`, with `CARD` for unsigned), a matrix sublanguage
+(`MAT MUL`, `MAT INV`, `MAT DET`, twenty more), inline assembly (`INLINE`),
+timers (`AFTER`, `EVERY`), `ON BREAK`, sprites, and `$`-prefixed compiler
+directives. Positions, to be revisited rather than assumed:
+
+- **follow**: `BYTE` and `WORD` (an API binding needs them), `AFTER`/`EVERY`
+  (the OS has a tick), `ON BREAK`, `TRIM$`, `UPPER$`, `RINSTR`, `INC`/`DEC`,
+  `SUCC`/`PRED`, `DIV`/`MOD` as words, `@proc` and `~func` call syntax,
+  `REPEAT`/`UNTIL`, `SWITCH`, `EXIT IF`, `LOCAL`.
+- **decline**: the `MAT` sublanguage (a library, not a language), `SPRITE`
+  (the OS composites differently), `LINE-A` (no analogue).
+- **decide**: `INLINE`. It is §126.7's question wearing different clothes.
+
 ## 1. The decision that shapes everything: assembly, not C
 
 §73 allows a package written in C, *"slower and larger in exchange for being
@@ -145,52 +216,68 @@ error and never as a type mismatch blamed on the author.
 
 ## 7. Waves
 
-**Wave 0 — the seam.** §126 written; `BASIC.O88` is a window with a
-menu bar, an `os88text.inc` editor pane and an `os88con.inc` output pane, and a
-`RUN` that does nothing. Proves the UI, the overlay seam and the size budget
-before any language work. Exit: it builds, opens, types, and `make` reports the
-image+bss figure.
+Reordered for the §0 target. The old order built a language and reached the OS
+at the end; this one reaches the OS in wave 1 and is a usable tool from wave 4.
 
-**Wave 1 — expressions and `PRINT`.** Lexer, the expression half of the
-parser, the op stream, `%` and `#` arithmetic on `os88fp.inc`, `PRINT` to the
-console, `LET`. Gap 1 (double↔text) lands here because `PRINT 1.5` needs it.
-Exit: the differential oracle (§8) agrees with the TypeScript on a set of
-expression programs.
+**Wave 0 — the seam.** §126 written. `BASIC.O88` is a window with a menu bar,
+an `os88text.inc` editor, an `os88con.inc` output pane and a `RUN` that does
+nothing. Proves the UI, the overlay seam and the size budget before any
+language work. Exit: it builds, opens, types, and `make` reports image+bss.
 
-**Wave 2 — control flow and procedures.** `IF`/`ELSEIF`, `SELECT CASE` with
-lists, `TO` ranges and `IS`, `FOR`/`NEXT` with `STEP`, `WHILE`/`WEND`,
-`DO`/`LOOP` both ends, `EXIT`, `GOTO`/`GOSUB`, `DEF PROC`/`DEF FUN` with
-`SHARED` and `STATIC`, recursion.
+**Wave 1 — expressions, `PRINT`, and tier C.** Lexer, the expression parser,
+the op stream, `%` and `#` arithmetic on `os88fp.inc`, `PRINT` to the console,
+`LET`. Gap 1 (double↔text) lands here. **And `OSAPI`** — the raw gateway, which
+is perhaps two hundred bytes and from which every other OS facility becomes
+reachable by hand. A BASIC program that can evaluate an expression and call a
+kernel slot is already more useful than one that can do the whole language and
+nothing else.
 
-**Wave 3 — strings and arrays.** Gap 3 (the heap). `DIM` including
-`a TO b` and `OPTION BASE`, `REDIM`, `ERASE`, `SWAP`, `LSET`/`RSET`,
-`TYPE`/records, dotted names, the string built-ins.
+**Wave 2 — control flow and procedures.** `IF`/`ELSEIF`, `SELECT CASE`,
+`FOR`/`NEXT`, `WHILE`/`WEND`, `DO`/`LOOP` both ends, `REPEAT`/`UNTIL`,
+`EXIT IF`, `GOTO`/`GOSUB`, `PROCEDURE`/`FUNCTION` with `LOCAL` and `STATIC`,
+recursion, `@proc` and `~func`.
 
-**Wave 4 — the built-in library, in the overlay.** All 64. Gap 2 (32-bit
-mul/div) lands here for `CLNG`/`MKL$`/`CVL`. `PRINT USING`.
+**Wave 3 — strings and arrays.** Gap 3 (the string heap). `DIM` with `a TO b`
+and `OPTION BASE`, `REDIM`, `ERASE`, `SWAP`, `LSET`/`RSET`, `TYPE` records,
+dotted names, the string built-ins, `BYTE` and `WORD`.
 
-**Wave 5 — files, honestly.** Channels on `FILE_READ_AT`/`WRITE_AT` from the
-start, never a whole-file string: `OPEN`/`CLOSE`, the four channel keywords
-(`EMIT` `STORE` `FETCH` `FETCH LINE`) and the `#` forms, `FOR RANDOM` with
-`FIELD`/`GET`/`PUT`, `EOF` `LOF` `INPUT$`, and then the five file surfaces the
-audit calls SCOPE: `OPEN FOR BINARY`, `BLOAD`, `BSAVE`, `NAME`, `FILES`.
+**Wave 4 — the event loop and tier A windows.** The wave that makes it GFA.
+`OPENW`/`CLOSEW`/`CLEARW`/`TITLEW`/`TOPW`/`FULLW`, `MENU` from a string array,
+`ALERT`, `FILESELECT` on the existing chooser, `MOUSE`/`MOUSEX`/`MOUSEY`/
+`MOUSEK`, and `ON MENU` with `ON MENU GOSUB`/`BUTTON`/`KEY`/`MESSAGE`. A BASIC
+program now owns real OS windows and dispatches real events. **Exit: a GUI
+application written in BASIC, with a menu bar, that responds to clicks.**
 
-**Wave 6 — errors and the rest of the console.** `ON ERROR GOTO`, `RESUME`
-in its three forms, `ERROR n`, `ERR`/`ERL`, the error table from `errors.md`.
+**Wave 5 — the built-in library, in the overlay.** All 64 of the reference's,
+plus `PRINT USING`. Gap 2 (32-bit mul/div) lands here for `CLNG`/`MKL$`/`CVL`.
+
+**Wave 6 — graphics, tier A.** `PLOT`, `DRAW`, `LINE`, `BOX`, `PBOX`, `RBOX`,
+`CIRCLE`, `PCIRCLE`, `ELLIPSE`, `POLYLINE`, `POLYFILL`, `FILL`, `TEXT`,
+`GET`/`PUT`, `GRAPHMODE`, `DEFLINE`, `DEFFILL`, `DEFTEXT`, `CLIP`. The audit's
+point stands — decide what a drawing surface *is* here before writing `PSET`,
+since a BASIC window already has one and there are no mode numbers to set.
+
+**Wave 7 — files, honestly.** Channels on `FILE_READ_AT`/`WRITE_AT`, never a
+whole-file string: `OPEN`/`CLOSE`, the four channel keywords and the `#` forms,
+`FOR RANDOM` with `FIELD`/`GET`/`PUT`, `EOF`/`LOF`/`INPUT$`, then the five
+file surfaces the audit calls SCOPE.
+
+**Wave 8 — errors, input, and the rest of the console.** `ON ERROR GOSUB`,
+`RESUME` in three forms, `ERROR n`, `ERR`/`ERL`/`ERR$`, the error table.
 `INPUT`/`LINE INPUT`, `INKEY$` on `KEY_DOWN`, `DATA`/`READ`/`RESTORE`,
-`SOUND` on `SND_TONE`.
+`SOUND` on `SND_TONE`, `AFTER`/`EVERY` on the tick, `ON BREAK`.
 
-**Wave 7 — graphics, as one decision.** The audit's point: `SCREEN` is the
-question and the other twelve surfaces follow from how it is answered. A BASIC
-window already has a surface, so there are no mode numbers to set; decide what
-`SCREEN n` *means* here before implementing `PSET`.
+**Wave 9 — tier B, generated.** One BASIC word per kernel slot, emitted from
+the same source `tools/os88index.py` already reads, so the binding table cannot
+drift from the kernel. 194 slots; the generator is the deliverable, not the
+table.
 
-**The end state is in the tree already.** `reference/gorillas/gorilla.bas` is
-1,135 lines of real QuickBASIC that the Gorillas app was hand-ported from, and
-it uses 106 graphics, sound and memory statements. Running it is the honest
-finish line for wave 7 — and it is worth noticing that today's refusal set
-would reject that file 106 times while sitting in the same repository as the
-native port of it.
+**The finish line is in the tree already.** `reference/gorillas/gorilla.bas` is
+1,135 lines of real QuickBASIC that the Gorillas package was hand-ported from,
+using 106 graphics, sound and memory statements. Running it unmodified is the
+honest end state — and it is worth noticing that today's refusal set would
+reject that file 106 times while sitting in the same repository as the native
+port of it.
 
 ## 8. Testing: a differential oracle, not a golden file
 
@@ -217,15 +304,30 @@ buffer and read it back off a BMP export.
 
 ## 9. Open questions
 
-1. **Does `RUN` block?** A BASIC program is a loop; this is a cooperative OS.
-   Either the interpreter runs N ops per `W_IDLE` (responsive, and `SLEEP`/
-   `INPUT` become natural yields) or it owns the machine until `END`. The op
-   stream makes the first cheap, and it is almost certainly right — but it
-   decides the shape of every statement that waits.
-2. **`!` as a narrowed double** — stated above as a simplification. Worth
+1. ~~**Does `RUN` block?**~~ **Answered by §0.1:** the yield is `ON MENU`,
+   written by the programmer. A GUI program pumps its own loop; a text program
+   that never calls it never yields and does not need to.
+2. **`PEEK`, `POKE` and `INLINE` — the one real conflict with the target.**
+   §126.7 refuses the memory and port group on principle, and GFA-BASIC had
+   all of it, because on a single-tasking ST the programmer owned the machine.
+   Here they do not. But an assembly package can already poke anything, so
+   refusing it in BASIC protects the *BASIC programmer from an accident*, not
+   the OS from harm. Recommendation: **allow it, declared.** A program says so
+   at the top — GFA had `$`-prefixed directives for exactly this class of
+   decision — and without the declaration `POKE` is refused by name with
+   "this program has not declared system access", which keeps §126.7's best
+   property while unblocking system programming. **Needs a decision.**
+3. **Do BASIC programs become standalone packages?** GFA had a compiler
+   emitting a `.PRG` that ran without the interpreter. The equivalent here is
+   a `.O88`, which means code generation rather than interpretation — a much
+   larger project. Assumed out of scope until the interpreter hosts real GUI
+   apps, since that is a prerequisite either way; worth confirming that
+   "create apps" means *runs under BASIC.O88* for now.
+4. **`!` as a narrowed double** — stated above as a simplification. Worth
    confirming against §84.2 before wave 1 rather than after.
-3. **One window or two?** Editor and output as panes of one window, or a
+5. **One window or two?** Editor and output as panes of one window, or a
    separate output window that a `RUN` raises. QuickBASIC used one screen and
-   F5; two windows is more this OS's idiom.
-4. **Does the editor want `os88text.inc` as-is?** No selection and no undo is
+   F5; two windows is more this OS's idiom — and once wave 4 lands, a program
+   opens its own windows anyway, so this is only about the default console.
+6. **Does the editor want `os88text.inc` as-is?** No selection and no undo is
    thin for a program editor. Decide whether wave 0 accepts that or grows §83.
