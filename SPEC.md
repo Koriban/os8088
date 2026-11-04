@@ -228666,3 +228666,78 @@ boxes, and `OS88UI_DROP` for one pick from a short list. Scroll bars
 `ALERT` and `FILESELECT` are **not** `DLG` verbs: each is one existing facility
 — `OS88UI_ALERT`'s standard alert and the chooser — and keeps its own GFA
 spelling.
+
+### 126.13 `VAR name AS type` — declaring, said properly
+
+`DIM` means *dimension*, and it acquired five other jobs. §126.4's four ways to
+give a name a type all run through it or through a suffix, and the one that
+states a type outright reads wrongly:
+
+```basic
+DIM count AS INTEGER        ' "dimension" a scalar
+```
+
+**`VAR` is added as the declaration keyword**, in the sense Pascal and every
+language since have used it, and `AS` is **required**:
+
+```basic
+VAR count AS INTEGER
+VAR label AS STRING * 8
+VAR rate AS DOUBLE, who AS STRING
+VAR p AS Part                       ' a record
+VAR SHARED tally AS INTEGER         ' and visible inside procedures
+```
+
+`VAR` without `AS` is an error, with the reason: stating the type is the whole
+point of the word, and a name whose type comes from a suffix, a `DEFINT`-family
+range or the default needs no declaration at all. That makes `VAR` the **strict**
+form — read a `VAR` line and you know the type without looking anywhere else.
+
+**The division of labour.** `VAR` declares scalars and records. **Arrays stay
+`DIM`'s**, because an array is the thing that actually has dimensions:
+
+| | |
+| --- | --- |
+| `VAR name AS type` | one or more scalars or records, type stated |
+| `DIM name(bounds)` | arrays, including `a TO b`, several dimensions, and `AS type` for an array of records |
+
+`DIM` keeps everything it does today, suffix-typed names keep working, and
+`VAR rows(1 TO 5) AS INTEGER` is refused by name pointing at `DIM`. Each word
+then means one thing.
+
+#### 126.13.1 This is an addition, not a divergence
+
+The distinction matters and §126.4 is the cautionary case. Narrowing `!`
+differently would have **changed what an existing program prints** — a
+divergence, which the differential test in `BASIC-PLAN.md` §8 exists to catch.
+Adding a keyword changes no existing program's meaning: every BASIC/nw program
+still means exactly what the reference says it means, so the oracle stays valid
+for the whole language it covers.
+
+What the oracle cannot check is a program that *uses* `VAR`, there being
+nothing to compare against. **Additions therefore carry their own tests**, and
+the rule is worth stating once: the reference settles the common language, and
+anything this chapter adds on top is this project's to prove.
+
+#### 126.13.2 What it costs: `var` stops being a name
+
+A suffix cannot follow a reserved word here — `name$` and `line$` are not
+variables because `NAME` and `LINE` are keywords — so reserving `VAR` makes
+`var`, `var%` and `var$` illegal. That is a real, if small, break.
+
+It was checked rather than assumed: the reference implementation uses `var` as
+an identifier in **none** of its manual pages or tests, so nothing in the
+oracle moves.
+
+#### 126.13.3 And GFA's `VAR` is therefore refused
+
+GFA-BASIC uses `VAR` for something unrelated — a by-reference marker in a
+parameter list, sticky over everything after it. That spelling is now taken, and
+the two cannot share a word: one is a statement and the other sits inside a
+parameter list, so a parser could tell them apart, but a reader could not.
+
+**A `VAR` in a parameter list is refused by name**, with the fix: mark the
+parameters before it `BYVAL` and delete the `VAR`. BASIC/nw passes by reference
+by default, so the capability GFA's `VAR` provides is already the default here
+and only the *marking* has to change. `docs/plans/BASIC-PORTING-NOTES.md` §2
+carries the rule and the worked example.

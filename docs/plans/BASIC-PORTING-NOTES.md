@@ -79,19 +79,21 @@ One thing BASIC/nw can express that GFA cannot: the marking is **per
 parameter**, not a sticky tail, so `DEF PROC p(BYVAL a, b, BYVAL c, d)` is
 legal and means exactly what it reads.
 
-### 2.1 `VAR` itself
+### 2.1 `VAR` is taken, and means something else here
 
-`VAR` is **not** a reserved word in BASIC/nw — `var%` and `var$` are legal
-variable names there, and the reference never uses them. So the name is free,
-and the recommendation is to **reserve it and give it GFA's meaning**: in a
-parameter list, everything before `VAR` is by value and everything from it on
-is by reference. A GFA header then ports **verbatim**.
+`VAR` is **not** a reserved word in BASIC/nw, and the name has been claimed for
+BASIC.O88's **declaration** keyword — `VAR count AS INTEGER`, SPEC §126.13 —
+which is the sense Pascal and most languages since have used it in, and which
+reads better than `DIM`-ing a scalar.
 
-The alternative — accepting `VAR` as a no-op meaning "by reference", which it
-already is — is worse than refusing it, because `(a, b, VAR c)` would then
-give three by-reference parameters where GFA meant one, silently. If `VAR` is
-*not* implemented, it must be **refused by name** with the fix ("mark the
-parameters before it `BYVAL` and delete the `VAR`"), never ignored.
+So GFA's parameter `VAR` cannot share the word. A parser could tell them apart,
+one being a statement and the other sitting inside a parameter list, but a
+reader could not, and that is reason enough.
+
+**A `VAR` in a parameter list is refused by name**, with the fix: mark the
+parameters before it `BYVAL` and delete the `VAR`. Nothing is lost in the
+translation, because by-reference is already the default here — only the
+*marking* changes, per §2's table and worked example.
 
 ## 3. Procedure syntax
 
@@ -169,7 +171,10 @@ menu silently, so `MENU` counts and refuses it first.
    → `%`; `|` → `%`. Everything else depends on the program having the right
    types.
 2. **Procedure headers and closers** (§2, §3). `BYVAL` on every parameter
-   before a `VAR`; procedure-closing `RETURN` → `END PROC`.
+   before a `VAR`, then delete the `VAR` — which the compiler will demand of
+   you, since `VAR` in a parameter list is refused by name (§2.1). The
+   procedure-closing `RETURN` → `END PROC` change is the one that fails
+   quietly, so do it by inspection rather than by waiting for an error.
 3. **Menus** (§7). Delete `m$(3)`–`m$(8)`; check the menu count and item
    widths.
 4. **GEM calls** (§6). `WIND_*`/`SCRP_*` to their `WM_*`/`CLIP_*` equivalents,
