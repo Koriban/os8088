@@ -160,7 +160,68 @@ Nothing to stop.
 No interpreter yet - wave 0 is the seam.
 ```
 
+## Wave 0c — the editor, and the number wave 0 existed for
+
+`apps/os88text.inc` (§83) is the program pane: a multi-line box with a caret
+that moves between lines, a vertical scroll, and deliberately **no word wrap,
+no selection and no undo** — its header is explicit that it is a cell note or
+a comment field and *not* Note Pad. For a BASIC listing that is the right
+trade: lines are short, and the one thing it must not do is reflow them.
+
+Unlike the console it **declares no storage at all** — every routine takes
+`SI` = a block the caller owns, so a window may have two. The block's rect is
+`TX_X1..TX_Y2`, inclusive and in **screen** coordinates, which is `gfx_frame`'s
+convention, "so the drawn control and the clickable control read the same four
+words and cannot drift". Set every paint, for the console's reason.
+
+**The dispatch contract is where the work was**, and `os88ui.inc` states it
+plainly in a comment about something else entirely:
+
+> entered with SI = BX = the window and a clip region ARMED over it
+> (**nothing armed one for a click, a key or a menu pick**, §11.3)
+
+So `W_PAINT` arrives with a clip and the other three do not. A key handler
+that draws arms its own — and does not undo it, because the region dies at the
+kernel's own `gfx_unlock`.
+
+And `W_ONCLICK` carries a second rule in capitals: **give SI back as you got
+it.** `ui_task` arms the mouse release to whatever `SI` holds *after* the
+handler returns (§13.7), so a handler that comes back with `SI` pointing at a
+text block has named that as the window. `bas_onclick` keeps the window in
+`BP` across its body for exactly that reason.
+
+**It works**: typing `print 42`, Enter, `end` puts two lines in the box with
+the caret after the second, Enter being consumed as a newline — which is the
+one place this control differs from `os88line.inc`, where Enter is the
+caller's submit.
+
+### The three numbers
+
+This is what wave 0 was for. `APP_MAX_SIZE` is `0xFE00` = **65,024** bytes of
+image plus bss in one segment.
+
+| | image | bss | total | of budget |
+|---|---:|---:|---:|---:|
+| 0a the frame | 804 | 4 | 808 | 1.2% |
+| 0b + the console | 4,638 | 4,817 | 9,455 | 14.5% |
+| 0c + the editor | 5,868 | 6,885 | **12,753** | **19.6%** |
+
+**The shell of the thing costs a fifth of the segment, and 52,271 bytes are
+left for the language.** Out of that the numerics still have to come —
+`os88fp.inc` is pay-as-you-go but SHEET measured a double at about 2,800 bytes
+of code — so call it **~49KB for the lexer, the parser, the compiler, the op
+interpreter, the string heap and sixty-four built-ins**.
+
+That is the arithmetic §126.6's overlay split was asserted on before anyone had
+measured it, and it holds: it does not fit, and the split is not optional. What
+the numbers add is *where* to cut. The resident side has to carry the window,
+the editor, the console, the lexer and the op interpreter — the inner loop and
+everything a keystroke touches — and that looks like 25–30KB. The parser, the
+compiler, the double formatter, `PRINT USING` and the built-in library go to
+`BASIC.OVL`, which gets a segment of its own.
+
 ## Next
 
-Wave 0c is `os88text.inc` (§83) as the editor, measured as it lands, because
-the three numbers together are what §126.6's overlay seam is cut against.
+Wave 1: expressions, `PRINT`, and **tier C** — the `OSAPI` gateway, which is
+perhaps two hundred bytes and from which every kernel facility becomes
+reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.

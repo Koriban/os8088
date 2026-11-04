@@ -49,7 +49,8 @@ BAS_CON_PAD equ 2                           ; the console text inset inside
 BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
-BAS_BSS_OWN equ 2                           ; our bss, ahead of the console's
+BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
+BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX  ; ours, ahead of the console's
 
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
@@ -73,6 +74,16 @@ bas_entry:
     call OSAPI_MENU_SET
     mov si, bas_about
     call OSAPI_ABOUT_SET
+
+    ; --- the editor (SPEC.md 83) ---------------------------------------------
+    ; The BLOCK's non-geometry fields, once: where the buffer is and how big.
+    ; The RECT is geometry and belongs in the paint (bas_paint), because a
+    ; window moves and these are SCREEN coordinates.
+    mov word [bas_tx + TX_BUF], bas_prog
+    mov word [bas_tx + TX_MAX], BAS_PROG_MAX
+    mov byte [bas_tx + TX_FOCUS], 1 ; the caret is in the program pane from the
+                                    ; start: there is nowhere else for a key to
+                                    ; go in wave 0c
 
     ; --- the console (SPEC.md 70.8) ------------------------------------------
     ; con_open and not con_clear: it sets the attribute, calls con_font AND
@@ -145,35 +156,32 @@ bas_paint:
                                      ; Within one paint the gfx lock is held,
                                      ; so nothing can move it
 
-    ; --- the editor pane ------------------------------------------------------
-    ; The ink first. OSAPI_GFX_FRAME draws in [gfx_color], which is GLOBAL
-    ; state and not an argument, and bas_repaint has just set it to CWHITE for
-    ; its fill - so without this the frames are drawn white on white, which
-    ; assembles, runs, and shows a window with its captions and no panes. It
-    ; did exactly that on the first boot; nothing but looking would have said
-    ; so, which is PERFORMANCE.md's point about chrome.
+    ; --- the ink ---------------------------------------------------------------
+    ; OSAPI_GFX_FRAME draws in [gfx_color], which is GLOBAL state and not an
+    ; argument, and bas_repaint has just set it to CWHITE for its fill - so
+    ; without this the console's frame is drawn white on white. It did exactly
+    ; that on the first boot: a window with its captions and no panes, which
+    ; assembles, runs, and only LOOKING says otherwise.
     mov al, CBLACK
     call OSAPI_SET_COLOR
 
+    ; --- the editor (SPEC.md 83) ----------------------------------------------
+    ; The rect is SCREEN coordinates and INCLUSIVE - gfx_frame's convention, so
+    ; the drawn control and the clickable one read the same four words and
+    ; cannot drift. Set EVERY paint, for the console's reason: a window moves,
+    ; and a moved window does not call this proc at all (SPEC.md 11.96.12).
+    mov [bas_tx + TX_X1], di
+    mov [bas_tx + TX_Y1], si
     mov ax, di
-    mov bx, si
-    mov cx, di
-    add cx, BAS_CONT_W - 1
-    mov dx, si
-    add dx, BAS_ED_H - 1
-    call OSAPI_GFX_FRAME
-
-    mov cx, di
-    add cx, 6
-    mov dx, si
-    add dx, 6
+    add ax, BAS_CONT_W - 1
+    mov [bas_tx + TX_X2], ax
+    mov ax, si
+    add ax, BAS_ED_H - 1
+    mov [bas_tx + TX_Y2], ax
     push si
-    mov si, bas_s_edit
-    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = ground: W_PAINT arrives
-    call OSAPI_FONT_RUN             ; white-filled, and font_run draws the
-    pop si                          ; ground and the glyphs in ONE pass, which
-                                    ; is CLAUDE.md's hard rule - a gfx_fill
-                                    ; then a font_str writes every pixel twice
+    mov si, bas_tx
+    call os88text_draw              ; the box, its lines and the caret
+    pop si
 
     ; --- the console pane -----------------------------------------------------
     mov ax, di
@@ -278,6 +286,77 @@ bas_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
+; bas_onkey - W_ONKEY: AL = ascii, AH = scan, SI = our window
+; out: nothing; preserves every register
+;
+; The gfx lock is held but NO CLIP REGION IS ARMED - os88ui.inc's own contract
+; says it plainly: "nothing armed one for a click, a key or a menu pick"
+; (SPEC.md 11.3). So a handler that draws arms its own, and does not undo it:
+; the region dies at the kernel's gfx_unlock.
+;
+; CF=1 from os88text_key means the box did not want that keystroke, and in
+; wave 0c nothing else does either - Escape, Tab and the function keys fall
+; through to the kernel, which is what the control is for.
+; -----------------------------------------------------------------------------
+bas_onkey:
+    push ax
+    push bx
+    push si
+    mov bx, si                      ; BX = our window, for the clip
+    mov si, bas_tx
+    call os88text_key               ; AL/AH is the keystroke, SI the block
+    jc .out                         ; CF=1: not ours
+    call OSAPI_WM_CLIP_SET          ; BX is still our window: os88text_key
+    jc .out                         ; preserves it, and CF=1 here means not one
+    mov si, bas_tx                  ; pixel of us is visible. wm_clip_set has
+    call os88text_draw              ; SI of its own, so the block is reloaded
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bas_onclick - W_ONCLICK: CX = x, DX = y, SI = our window
+; out: nothing; preserves every register
+;
+; **SI GOES BACK AS IT CAME.** apps/os88api.inc is emphatic: ui_task arms the
+; release to the SI it finds AFTER this returns (SPEC.md 13.7), so a handler
+; that comes back with SI pointing elsewhere has named that as the window and
+; the release goes through it. BP holds the window across the body instead.
+;
+; The About card first - a card the user cannot click away is not a card - and
+; the editor only if the click was not spent on it.
+; -----------------------------------------------------------------------------
+bas_onclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push bp
+    mov bp, si                      ; BP = our window, held (a plain register
+                                    ; hold, not an address: SS != DS here)
+    call bas_abdismiss              ; SI = the window, as it wants
+    jc .out                         ; CF=1: the click was spent on the card
+    mov si, bas_tx
+    call os88text_click             ; CX/DX = the click
+    jc .out                         ; CF=1: outside the box
+    mov bx, bp
+    call OSAPI_WM_CLIP_SET
+    jc .out
+    mov si, bas_tx
+    call os88text_draw
+.out:
+    pop bp
+    pop si                          ; ...and SI is the window again
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; bas_about - the OSAPI_ABOUT_SET handler (slot 0x018A)
 ; in:  SI = our window ptr; UI task, gfx lock HELD
 ; out: nothing; clobbers BX/SI, which any window callback may
@@ -332,8 +411,7 @@ bas_repaint:
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) -------------------------
 bas_tpl:
     dw 80, 40, BAS_W, BAS_H
-    dw bas_ttl, bas_paint, 0, bas_abdismiss   ; no onkey in wave 0: the editor
-                                              ; arrives in 0c and takes it
+    dw bas_ttl, bas_paint, bas_onkey, bas_onclick
 
 ; --- the app menu set (SPEC.md 12.2) -----------------------------------------
 ; TWO menus of MENU_APPMAX's five. OS88_MENUSET_END asserts the cap, which is
@@ -356,7 +434,6 @@ bas_i_run:      dw bas_it_run, bas_it_stop
 bas_it_run:     db 'Run', 0
 bas_it_stop:    db 'Stop', 0
 
-bas_s_edit:     db 'Program', 0
 bas_s_banner:   db 'BASIC for os8088 - SPEC.md 126', 13, 10
                 db 'Wave 0b: the console pane is real.', 13, 10
                 db 'Ready', 13, 10, 0
@@ -385,6 +462,9 @@ bas_ab4:        db 'the seam', 0
 ; Its bss follows OURS rather than starting at os88_image_end, so the two do
 ; not overlap; CON_BSS is defined by the include, which is why OS88_BSS comes
 ; after it.
+; os88text.inc needs os88ui.inc's UI_* macros, so it comes after it.
+%include "os88text.inc"
+
 %define CON_TTY
 %define CON_BSS_AT (os88_image_end + BAS_BSS_OWN)
 %include "os88con.inc"
@@ -401,7 +481,11 @@ bas_ab4:        db 'the seam', 0
 ; on every path a test takes.
 bas_abon        equ os88_image_end + 0   ; byte: the About card is up
                                          ; +1 is spare, and deliberately: it
-                                         ; keeps BAS_BSS_OWN even, so the
+                                         ; keeps the two below even, so the
                                          ; console's cell buffer - words of
                                          ; (character, attribute) - starts on
                                          ; an even address
+bas_tx          equ os88_image_end + 2   ; the editor's block (SPEC.md 83)
+bas_prog        equ bas_tx + OS88TEXT_SZ ; ...and the program text it edits,
+                                         ; NUL-terminated, lines separated by
+                                         ; a single LF

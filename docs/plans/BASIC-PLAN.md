@@ -1,6 +1,7 @@
 # BASIC.O88 — BASIC/nw as a native package
 
-**Status: wave 0 built 2026-11-04.** Branch `basic-o88`. The diary is
+**Status: wave 0 complete 2026-11-04 (0a frame, 0b console, 0c editor);
+12,753 of 65,024 bytes, 19.6%.** Branch `basic-o88`. The diary is
 `docs/HOW-BASIC-WAS-BUILT.md`; SPEC.md §126 is the contract.
 
 BASIC/nw is a QuickBASIC 4.5-line structured BASIC with a complete
