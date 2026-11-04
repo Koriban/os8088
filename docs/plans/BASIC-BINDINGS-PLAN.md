@@ -145,9 +145,11 @@ month. `make checkdocs` already enforces exactly this shape of invariant for
 
 ## 5. Tier A — the verbs people actually write
 
-Hand-written, over tier B, and short enough to memorise. The window, menu and
-alert verbs map onto `WM_*`, `MENU_SET` and the standard alert almost directly;
-`BASIC-PLAN.md` §0.4 has that correspondence and §7 wave 4 has the order.
+Hand-written, over tier B, and short enough to memorise. **The keyword set,
+the event model and the paint discipline are designed in
+`docs/plans/BASIC-GUI-PLAN.md`** — this section only states where tier A sits.
+The window, menu and alert verbs map onto `WM_*`, `MENU_SET` and the standard
+alert almost directly; `BASIC-PLAN.md` §0.4 has that correspondence.
 
 Two things in tier A are **not** mappings and must be designed:
 
