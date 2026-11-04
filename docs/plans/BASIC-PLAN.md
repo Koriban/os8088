@@ -145,7 +145,7 @@ error and never as a type mismatch blamed on the author.
 
 ## 7. Waves
 
-**Wave 0 — the seam.** The SPEC chapter written (it takes the next free number, 126); `BASIC.O88` is a window with a
+**Wave 0 — the seam.** §126 written; `BASIC.O88` is a window with a
 menu bar, an `os88text.inc` editor pane and an `os88con.inc` output pane, and a
 `RUN` that does nothing. Proves the UI, the overlay seam and the size budget
 before any language work. Exit: it builds, opens, types, and `make` reports the

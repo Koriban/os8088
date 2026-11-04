@@ -228210,3 +228210,182 @@ its second already — §30.7's LaunchPad, which under this chapter is a dock
 SHELL rather than a replacement for §30's strip, so the stock dock stays and
 clearing one record goes back to it.
 
+
+## 126. BASIC — the language as a package (`apps/basic/`)
+
+A QuickBASIC 4.5-line structured BASIC, running as an ordinary package. It is
+a port: the language has a complete implementation in TypeScript, and that
+implementation is the reference this chapter is written against rather than a
+sketch to be improved on while translating.
+
+**Nothing of this is built yet.** The chapter exists first because what it
+fixes — the type widths, the refusal line, the overlay seam — is expensive to
+change after the second wave, and because a plan that is not in SPEC cannot be
+merged. `docs/plans/BASIC-PLAN.md` says what to build in what order; this says
+what must be true of the result.
+
+### 126.1 The language is a port, and the port has an oracle
+
+BASIC/nw was written as a plot device for a game: the player wrote BASIC inside
+the fiction of a sealed machine, and the implementation is shaped by that. The
+shape is mostly an advantage here — the interpreter holds no capability of its
+own, yielding an effect for a host to answer, which is exactly what a
+retarget wants — and partly a liability, because 43 real QuickBASIC spellings
+are refused with reasons that describe the fiction's sealed world rather than
+any machine.
+
+The reference implementation is five stages: lexer, parser, analyser, compiler
+and interpreter. **The port keeps all five.** Not out of deference: a stage
+boundary is where a differential test can be taken, and a port whose stages
+match the reference can be checked one stage at a time against something that
+already works. A rewrite that collapsed them would have to be trusted whole.
+
+The audit of the 43 refusals is `basicnw/notes/REFUSAL-AUDIT.md` in that
+project. Its finding is the premise of §126.7.
+
+### 126.2 Assembly, because C cannot hold it
+
+§73 allows a package written in C, slower and larger in exchange for being
+writable, and a ten-thousand-line interpreter is exactly the kind of program
+that argument was made for. It is closed here for reasons that are measured,
+not stylistic:
+
+- **No `long`, no `float`, no `double`.** Three of BASIC's five types are
+  these. §73 does not merely lack them: a `float` global assembles to `resb 2`,
+  so `os88.h` defines the word to an identifier that cannot compile, on
+  purpose.
+- **One translation unit.** `nasm -f bin` refuses an external reference, so
+  there is no linker and no second file.
+- **A ceiling of roughly nine thousand seven hundred lines**, after which
+  SmallerC stops with `Identifier table exhausted`, naming no file and no line.
+
+So the interpreter is 8086 assembly, and its arithmetic is `apps/os88fp.inc`.
+
+### 126.3 What it is built on, and what it must not duplicate
+
+The package is small because most of it already exists, and the dependencies
+below are normative: a second console, a second editor or a second double
+formatter is a defect, not an option.
+
+| | |
+| --- | --- |
+| `apps/os88con.inc` (§70.8) | the 80×25 console. `PRINT`, `CLS`, `LOCATE`, `COLOR`, `POS`, `CSRLIN` are its cells and its IBM attributes, not new code |
+| `apps/os88text.inc` (§83) | the program editor |
+| `apps/os88fp.inc` (§84) | every `!` and `#` operation, `SQR`, `LOG`, `EXP`, the three trigonometric functions, `ATN` and `^`, with the coprocessor path §84.6 already gates |
+
+Three things no file in the tree provides, each of which the package must add
+and **two of which it must add for everyone**:
+
+1. **double ↔ text.** §84 has no parser and no formatter; the only pair in the
+   tree is private to `apps/sheet/sheet.asm`. BASIC needs both, in four places.
+   It is to be **extracted into a shared include**, not written a second time:
+   two formatters that disagree is a class of defect this project has already
+   paid for in other subsystems.
+2. **32-bit integer multiply and divide**, for `&`. The 8086 multiplies and
+   divides at sixteen bits; nothing in the tree bridges it.
+3. **A string heap**, for `$`, inside the package's own claim. The claim can
+   move, so **a string is a handle and never a far pointer held across a call
+   that may compact.**
+
+### 126.4 The five types, and the one stated simplification
+
+| | width | held as |
+| --- | --- | --- |
+| `%` INTEGER | 2 | native |
+| `&` LONG | 4 | `dx:ax`, over §126.3's second gap |
+| `!` SINGLE | 4 | **a double in arithmetic, four bytes in storage** |
+| `#` DOUBLE | 8 | `os88fp.inc`'s A/B registers |
+| `$` STRING | a handle | §126.3's third gap |
+
+`!` is the simplification, declared here in §84.2's tradition rather than
+discovered later. QuickBASIC's `!` is a 32-bit float; `os88fp.inc` is 64-bit
+only. Arithmetic therefore widens to a double and `CSNG` rounds on store,
+which is observable: a `!` expression can be more accurate here than it was in
+1988. **`MKS$` and `CVS` are exempt and must emit and read a true four-byte
+IEEE single**, because their whole purpose is a byte-exact round trip through a
+record field.
+
+Half-to-even rounding is the reference's and QuickBASIC's: `CINT(2.5)` is 2 and
+`CINT(3.5)` is 4.
+
+### 126.5 One op is one step
+
+The compiler emits a flat array of operations rather than handing the
+interpreter a tree. In the reference this was done so a budget could count
+steps; the budget does not survive the fiction, but the flat array does, for a
+better reason: on an 8086 a linear op stream makes the inner loop a single
+indexed jump, where a tree walk would be a recursive descent through far
+pointers.
+
+### 126.6 The seam
+
+`APP_MAX_SIZE` is `0xFE00` — image plus bss — and a module is one segment, so
+65,536 is a wall and not a setting. The interpreter does not fit beside
+sixty-four built-in functions, an editor and a console, so it splits:
+
+| | |
+| --- | --- |
+| `BASIC.O88`, resident | the window and its menus, the editor, the console, the lexer, the op interpreter, the string heap |
+| `BASIC.OVL` | the built-in library, `PRINT USING`, the double formatter, the parser and the compiler |
+
+The split follows the frequency: what the inner loop touches stays, what a
+`RUN` touches once goes out. `CHART.OVL` and `MACRO.OVL` under §81 are the
+precedent, and their two traps — a dispatcher that clobbers an argument
+register, and a `%define` placed after the `%ifdef`s that read it — are
+properties of the pattern rather than of those modules.
+
+### 126.7 Where a refusal is principled, and where it was only fiction
+
+A refused spelling is reported **by name and with a reason**, never as a syntax
+error and never as a type error blamed on the author. That property is the
+reference's best, and it is kept.
+
+What changes is the reason. The reference refuses on the grounds that the
+machine has no ports, no memory, no devices and no host. Here it has all four,
+so that line cannot be held and a narrower one replaces it:
+
+> Not *the machine cannot*, but **a user program may not, because the kernel
+> owns it.**
+
+That line is permanent for exactly seven spellings — `POKE`, `PEEK`,
+`VARPTR`, `DEF SEG`, `OUT`, `INP`, `WAIT`. An 8086 has no MMU, so a
+cooperative kernel that hands a user program arbitrary writes to memory or to
+a port has no invariants left to keep. The refusal is stronger here than it was
+in the fiction, and it is the only group where that is so.
+
+A second group is refused **while the statement remains true**, and each names
+what would change it: `LPRINT` has no printer API yet; `LOCK` has nothing to
+lock against on a single-user system; `ENVIRON` and `ENVIRON$` have no
+environment to read, `SYSTEM.CFG` being configuration and not one; `STRIG` and
+`PEN` have no hardware; `PALETTE` is real on VGA and EGA and meaningless on
+Hercules, so it is to be refused **per adapter** rather than always.
+
+Everything else is to be implemented. Of the reference's 43 refusals, 26
+defend nothing this OS lacks — including `INKEY$`, whose stated reason is that
+a key cannot be polled without blocking a pane that does not exist here, and
+which `OSAPI_KEY_DOWN` answers in one call.
+
+### 126.8 A program is a loop, and this is a cooperative OS
+
+Unresolved, and it decides the shape of every statement that waits, so it is
+to be settled before the first statement is built rather than after.
+
+A BASIC program runs until it ends; a package here must return. Either the
+interpreter executes a bounded number of ops per idle event — which makes the
+window responsive, makes `SLEEP` and `INPUT` natural yield points, and costs a
+saved interpreter state — or it owns the machine until `END`, which is simpler
+and makes every long `FOR` loop a freeze. The op stream of §126.5 makes the
+first cheap, and the first is almost certainly right; what it is not yet is
+specified.
+
+### 126.9 The finish line is already in the repository
+
+`reference/gorillas/gorilla.bas` is 1,135 lines of real QuickBASIC, the source
+the Gorillas package was hand-ported from, and it uses 106 graphics, sound and
+memory statements. Running it unmodified is the honest end state, and the
+distance to it is a fair measure of how much of §126.7's second and third
+groups have been closed.
+
+It is worth stating plainly, because it is the argument for this chapter: that
+file sits in the same repository as a native port of itself, and the refusal
+set this package inherits would today reject it a hundred and six times.
