@@ -1,4 +1,7 @@
-# BASIC.O88 — BASIC/nw as a native package
+# BASIC/8088 — BASIC/nw as a native package
+
+**The language is BASIC/8088**; `BASIC.O88` is the package file that carries
+it and `BASIC/nw` is the TypeScript reference it is measured against.
 
 **Status: wave 0 complete 2026-11-04 (0a frame, 0b console, 0c editor);
 12,753 of 65,024 bytes, 19.6%.** Branch `basic-o88`. The diary is
@@ -155,7 +158,26 @@ project: `REPEAT`, `EXIT IF`, `LOCAL`, `DEC`, `PRED`, `ROUND`, `RINSTR`,
 `UPPER$`, `ON BREAK`, `QSORT`, `TRON`/`TRACE$`, `PRINT USING`, `DIR`,
 `MKDIR`, `EXIST`, `SEEK`.
 
-**The shared 57 are the dangerous ones, not the missing 218.** A shared
+**The shared spellings are the dangerous ones, not the missing 218 — and the
+sweep is done.** `basicnw/notes/GFA-CONFLICTS.md` reads all 55 against their
+GFA pages: **12 are a different construct entirely, 15 differ in detail, 28
+agree.** Nine of the twelve were not previously recorded, and two of those
+outrank everything in `BASIC-PORTING-NOTES.md`:
+
+- **`TYPE`** is a *function* in GFA (returns a variable's type code) and a
+  *record declaration* here. One parser cannot have both; §126 should say
+  which wins, and it is almost certainly the record, since `FIELD` and random
+  access depend on it.
+- **`STORE`** is GFA's "write a string array to a channel" — and BASIC/nw
+  **invented** its own `STORE` as one of the four channel keywords. The clash
+  is on a word this language chose, and it cannot be withdrawn without giving
+  up the four-keyword design.
+
+Also worth acting on: **`INP` is a channel read in GFA and a hardware port
+here**, so §126.7's refusal should name the port explicitly or a GFA
+programmer will read it as refusing their file I/O.
+
+The older framing, kept because it is still true: A shared
 spelling is not a shared meaning and a conflict is silent: three are known and
 in `BASIC-PORTING-NOTES.md` — `VAR`, `RETURN`, and `GET`/`PUT` — and **the
 other 54 are unchecked.** Each needs its GFA page read against

@@ -228211,7 +228211,14 @@ SHELL rather than a replacement for §30's strip, so the stock dock stays and
 clearing one record goes back to it.
 
 
-## 126. BASIC — the language as a package (`apps/basic/`)
+## 126. BASIC/8088 — the language as a package (`apps/basic/`)
+
+**The language is called BASIC/8088**, after the machine it is for and in the
+shape its parent's name already had. BASIC/nw is the reference implementation
+and stays that; BASIC/8088 is what runs here, and where the two differ this
+chapter says so and says why. The package file is `BASIC.O88` and the window
+says `BASIC`, because a user opening it does not need the dialect's full name
+to know what it is.
 
 A QuickBASIC 4.5-line structured BASIC, running as an ordinary package. It is
 a port: the language has a complete implementation in TypeScript, and that

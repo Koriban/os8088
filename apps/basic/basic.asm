@@ -437,7 +437,7 @@ bas_i_run:      dw bas_it_run, bas_it_stop
 bas_it_run:     db 'Run', 0
 bas_it_stop:    db 'Stop', 0
 
-bas_s_banner:   db 'BASIC for os8088 - SPEC.md 126', 13, 10
+bas_s_banner:   db 'BASIC/8088 - SPEC.md 126', 13, 10
                 db 'Wave 0b: the console pane is real.', 13, 10
                 db 'Ready', 13, 10, 0
 bas_s_norun:    db 'No interpreter yet - wave 0 is the seam.', 13, 10, 0
@@ -446,7 +446,7 @@ bas_s_stop:     db 'Nothing to stop.', 13, 10, 0
 ; --- the standard About card's lines (SPEC.md 20.5.1) ------------------------
 bas_ablines:
     dw bas_ab1, bas_ab2, bas_ab3, bas_ab4, 0
-bas_ab1:        db 'BASIC for os8088', 0
+bas_ab1:        db 'BASIC/8088', 0
 bas_ab2:        db 0
 bas_ab3:        db 'SPEC.md 126 - wave 0,', 0
 bas_ab4:        db 'the seam', 0
