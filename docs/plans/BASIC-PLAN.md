@@ -383,12 +383,21 @@ the same source `tools/os88index.py` already reads, so the binding table cannot
 drift from the kernel. 194 slots; the generator is the deliverable, not the
 table.
 
-**The finish line is in the tree already.** `reference/gorillas/gorilla.bas` is
-1,135 lines of real QuickBASIC that the Gorillas package was hand-ported from,
-using 106 graphics, sound and memory statements. Running it unmodified is the
-honest end state — and it is worth noticing that today's refusal set would
-reject that file 106 times while sitting in the same repository as the native
-port of it.
+**What finished means.** Not `gorilla.bas`. BASIC/nw is in the QuickBASIC 4.5
+*line* and departs from it on purpose — the four channel keywords,
+`DEF PROC`/`DEF FUN`, fixed `RND`/`TIMER`, IEEE-754 `MKS$`, no immediate mode —
+so accepting QuickBASIC source is a courtesy and **no QuickBASIC program is a
+specification for this language** (SPEC §126.9).
+
+`reference/gorillas/gorilla.bas` is a **sample**, and a useful one: 1,135 lines
+of real-world QuickBASIC is good evidence about what programs of this kind
+actually reach for, which is how §9's second question used it. It is evidence,
+not a bar.
+
+The bar is a **GUI or text application written in this language**, exercising
+tier A: a window, a menu bar, a repaint, a dialog, with the lock and clip
+discipline held by the interpreter and none of it visible in the program.
+`docs/plans/BASIC-GUI-PLAN.md` §7 is that program.
 
 ## 8. Testing: a differential oracle, not a golden file
 
@@ -432,10 +441,10 @@ buffer and read it back off a BMP export.
    opaque handles cover every pointer need, and tier C needs none of these
    three. There is no necessity argument.
 
-   Second, **the finish line barely wants them.** `reference/gorillas/
-   gorilla.bas` is this plan's end state, 1,135 lines of real QuickBASIC, and
-   its entire low-level footprint is **7 lines in two blocks**, both doing one
-   cosmetic thing: `DEF SEG = 0`, `PEEK(1047)`, `POKE 1047, KeyFlags OR 32` to
+   Second, **real QuickBASIC barely uses them.** `reference/gorillas/
+   gorilla.bas` is a sample and not a target (§7), but as evidence about
+   ordinary practice it is worth having: 1,135 lines, and its entire low-level
+   footprint is **7 lines in two blocks**, both doing one cosmetic thing: `DEF SEG = 0`, `PEEK(1047)`, `POKE 1047, KeyFlags OR 32` to
    force NumLock on at startup, and the same to restore it at exit. No
    `BLOAD`, no `BSAVE`, no `CALL ABSOLUTE`, no `SHELL`. The five `INKEY$` calls
    are a separate refusal that `OSAPI_KEY_DOWN` answers in one call, and the

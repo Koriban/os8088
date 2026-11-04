@@ -228297,6 +228297,20 @@ and **two of which it must add for everyone**:
 | `#` DOUBLE | 8 | `os88fp.inc`'s A/B registers |
 | `$` STRING | a handle | §126.3's third gap |
 
+**A sigil is one of four ways a name gets its type, and not the authoritative
+one.** The table above names the five types by their suffixes, but the suffix
+is only the shortest spelling. A name's type comes from, in order of
+specificity: a `DIM ... AS` declaration (`DIM count AS INTEGER` — no suffix at
+all), a record field's declared type (`p.count`), a suffix, a `DEFINT`/`DEFLNG`
+/`DEFSNG`/`DEFDBL`/`DEFSTR` letter range in effect (`DEFINT I-N` makes a bare
+`k` an integer), or the default for an undeclared bare name. All five paths are
+live in the reference implementation; they were run to check, not assumed.
+
+And **the suffixed forms of one base name are distinct variables**: `a%`, `a$`
+and `a#` coexist and hold three unrelated values. That is QuickBASIC's rule and
+it is kept, and it is the reason §126.11 takes a name as a *spelling* rather
+than as an identifier.
+
 `!` is the simplification, declared here in §84.2's tradition rather than
 discovered later. QuickBASIC's `!` is a 32-bit float; `os88fp.inc` is 64-bit
 only. Arithmetic therefore widens to a double and `CSNG` rounds on store,
@@ -228347,11 +228361,19 @@ so that line cannot be held and a narrower one replaces it:
 > Not *the machine cannot*, but **a user program may not, because the kernel
 > owns it.**
 
-That line is permanent for exactly seven spellings — `POKE`, `PEEK`,
-`VARPTR`, `DEF SEG`, `OUT`, `INP`, `WAIT`. An 8086 has no MMU, so a
-cooperative kernel that hands a user program arbitrary writes to memory or to
-a port has no invariants left to keep. The refusal is stronger here than it was
-in the fiction, and it is the only group where that is so.
+That line is permanent for **six** spellings — `POKE`, `VARPTR`, `DEF SEG`,
+`OUT`, `INP`, `WAIT`. An 8086 has no MMU, so a cooperative kernel that hands a
+user program arbitrary writes to memory or to a port has no invariants left to
+keep. The refusal is stronger here than it was in the fiction, and it is the
+only group where that is so.
+
+`POKE`'s **name stays reserved** and is refused by name with its reason, as
+every refusal here is. It is not freed for use as a variable, and it is not
+quietly absent: a program that writes `POKE` is told why, once, at the place it
+wrote it.
+
+`PEEK` was the seventh and is no longer a refusal at all. It keeps its name and
+is given a different job — §126.11.
 
 A second group is refused **while the statement remains true**, and each names
 what would change it: `LPRINT` has no printer API yet; `LOCK` has nothing to
@@ -228411,42 +228433,61 @@ interpreter's own. A BASIC program is therefore a package that happens to be
 interpreted, and the editor's console is only the default output surface, not
 the boundary of what a program may own.
 
-### 126.9 The finish line is already in the repository
+### 126.9 What finished means, and what `gorilla.bas` is not
 
-`reference/gorillas/gorilla.bas` is 1,135 lines of real QuickBASIC, the source
-the Gorillas package was hand-ported from, and it uses 106 graphics, sound and
-memory statements. Running it unmodified is the honest end state, and the
-distance to it is a fair measure of how much of §126.7's second and third
-groups have been closed.
+**It is not a conformance target.** BASIC/nw is in the QuickBASIC 4.5 *line*
+and deliberately departs from it: channel I/O has its own four keywords,
+procedures are `DEF PROC` and `DEF FUN`, `RND`, `TIMER`, `DATE$` and `TIME$`
+are fixed rather than real, `COMMAND$` is not uppercased, `MKS$` and `MKD$`
+pack IEEE 754 rather than Microsoft Binary Format, and there is no immediate
+mode. Much QuickBASIC source is accepted as a convenience — the `#` I/O forms
+parse, and `SUB` and `FUNCTION` mean what they mean — but **accepting it is a
+courtesy, not an obligation, and no QuickBASIC program is a specification for
+this language.**
 
-It is worth stating plainly, because it is the argument for this chapter: that
-file sits in the same repository as a native port of itself, and the refusal
-set this package inherits would today reject it a hundred and six times.
+So `reference/gorillas/gorilla.bas` is a **sample, not a bar**. What it is good
+for is evidence: 1,135 lines of real-world QuickBASIC is a fair answer to "what
+do programs of this kind actually reach for", which is exactly how §126.10 uses
+it — and the answer there, seven lines of memory poking for a keyboard LED,
+only carries weight *as* evidence about ordinary practice. It would carry none
+as an obligation, because there is no obligation.
+
+**Finished is measured in this language, not in QuickBASIC.** The bar is a GUI
+or text application written in BASIC/nw that exercises tier A — a window, a
+menu bar, a repaint and a dialog, with the lock and clip discipline held by the
+interpreter and none of it visible in the program.
+`docs/plans/BASIC-GUI-PLAN.md` §7 is that program, and it is the thing to make
+run.
 
 ### 126.10 What is not yet decided
 
 Three things, recorded because the chapter would otherwise read as though they
 were settled.
 
-**`PEEK`, `POKE` and `INLINE`.** §126.7 refuses the memory and port group
-permanently, on the grounds that a cooperative kernel on a machine with no MMU
-cannot hand a user program arbitrary writes. GFA-BASIC had all of it, because
-on a single-tasking ST the programmer did own the machine. The tension is real
-and it is not resolved by restating either half.
+**`PEEK` and `POKE` — decided.** `POKE` is dropped and its name kept reserved
+(§126.7); `PEEK` keeps its name and becomes introspection (§126.11). No system-
+access declaration is introduced, and nothing in this chapter hands a user
+program an address.
 
-What makes it decidable is that **an assembly package can already poke
-anything**. There is no protection to lose, so refusing these in BASIC protects
-the BASIC programmer from an accident rather than the OS from harm — a weaker
-claim than §126.7 makes, and one that ordinary system programming in this
-language would run into immediately.
+The reasoning, recorded because it reversed twice. These looked necessary,
+because 34 slots take a buffer; they are not, because `@` hands the address to
+the *kernel* inside one call and the program never sees it, while the
+`MK*`/`CV*` pair reads and writes bytes in a program's own buffers. They then
+looked worth having for parity, because GFA had them; measured against a sample of real
+QuickBASIC — `reference/gorillas/gorilla.bas`, which §126.9 is careful to say
+is evidence and not an obligation — they are used on **seven lines of 1,135**,
+in two blocks, both forcing the BIOS NumLock flag on and back. That is
+precisely a thing a cooperative system should refuse, being one application
+reaching past its window to change what every other application shares.
 
-The likely answer is therefore **allowed, but declared**: a program states at
-its head that it wants system access, and without that declaration `POKE` is
-refused by name with the reason that the program has not asked for it. GFA had
-`$`-prefixed directives for exactly this class of decision. That keeps §126.7's
-real property — refused by name, with a reason, never as a syntax error — while
-leaving the capability reachable on purpose and unreachable by accident. **Not
-yet decided.**
+**The extension path is better than the hole.** A BASIC program that genuinely
+needs something out of kernel memory wants a slot that exposes it safely, and
+tier C can call any slot the day it exists. Adding a slot is a reviewable
+change to a published contract; allowing `POKE` is a permanent hole in one.
+
+**`INLINE` is a separate question.** Inline assembly is about wanting a fast
+inner loop, not about reaching foreign memory, and it is neither decided nor
+refused here.
 
 **Whether a BASIC program can become a package.** GFA shipped a compiler that
 emitted a standalone `.PRG`. The equivalent here emits a `.O88`, which is code
@@ -228459,3 +228500,74 @@ the reference's four, a matrix sublanguage, sprites, timers and inline
 assembly. `BYTE` and `WORD` are needed by tier B and are in. The matrix
 sublanguage is a library rather than a language and is out. The rest is
 `docs/plans/BASIC-PLAN.md` §0.3's to argue.
+
+### 126.11 `PEEK` looks at the program, not at the machine
+
+QuickBASIC's `PEEK(n)` reads the byte at address `n`. That is gone with the rest
+of §126.7's group. The name is kept and pointed at something this language
+actually wants: **reading a named thing in the running program** — a variable,
+a constant, an array element, a record field — and getting its value.
+
+```basic
+PEEK$(name$)     ' the value, rendered as text. Total: every type has one
+PEEK(name$)      ' the value as a number, widened to a double
+PEEK?(name$)     ' does that name exist and is it in scope
+```
+
+`PEEK$` is the one that always works, because a text rendering exists for all
+five types and for an array element or a record field alike. `PEEK` answers for
+`%`, `&`, `!` and `#`, and a `$` name is refused by name pointing at `PEEK$` —
+the same courtesy the channel keywords already extend when used without a `#`.
+`PEEK?` follows GFA's own `?` suffix, as in `DIM?` and `VAL?`.
+
+The argument is a **string computed at run time**, which is the whole point: a
+literal name needs no `PEEK`, since the program could simply mention the
+variable. `PEEK$("rows%(" + STR$(i%) + ")")` is the shape that earns the
+feature, and `PEEK$("p.label")` reaches a record field.
+
+**What the string holds is a source spelling, resolved exactly as the compiler
+would resolve it at that point in the program** — which is more than looking
+for a suffix, by §126.4. `PEEK$("count")` must answer for
+`DIM count AS INTEGER` even though nothing in the string says so, a bare name
+must be read through whatever `DEFINT`-family range is in effect, and
+`PEEK$("a")` and `PEEK$("a%")` are **two different variables** and must not be
+confused. The three functions therefore share the compiler's own name
+resolution rather than carrying a second, simpler one — a second resolver would
+disagree with the first on exactly these cases, which is the defect class
+`BASIC-BINDINGS-PLAN.md` §8 names.
+
+It is also why `PEEK?` is not a nicety: given a base name, a program cannot
+know which spellings of it exist.
+
+**It reads and never writes.** With `POKE` dropped there is no paired verb, and
+that asymmetry is deliberate rather than an omission: introspection that cannot
+modify is safe to allow everywhere, and a program that wants to change a
+variable can name it.
+
+**Scope is the caller's own.** Inside a procedure, `PEEK` sees that procedure's
+locals, its `SHARED` names and the module's `COMMON` — what the code at that
+point could have named for itself, and nothing more. It is a mirror, not a
+window into other frames.
+
+**A numeric argument is refused by name.** `PEEK(1047)` is the old meaning, and
+it appears in real QuickBASIC — `gorilla.bas` has it. It must not be read as a
+name, and it must not silently return something: it is refused with the reason,
+pointing at §126.7. A ported program is told exactly what changed, at the line
+that changed.
+
+#### 126.11.1 What it costs, and what else it buys
+
+A compiler resolves names to slots and has no further use for them. An
+introspection function taking a name at run time means **the names have to
+survive into the running program**, which is bytes in a machine that counts
+them.
+
+So the table is **emitted only when the program uses one of the three
+functions**, which the compiler can see for itself. A program that does not
+introspect carries no symbol table and pays nothing, and that conditional is
+the whole of the cost control.
+
+The table is also what an editor's **variable watch** needs — the feature any
+environment of this class is expected to have, and the reason this is better
+value than it first looks: one table, two features, and the second is the one a
+programmer debugging a BASIC program actually reaches for.
