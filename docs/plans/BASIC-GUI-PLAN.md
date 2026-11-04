@@ -203,9 +203,44 @@ in-window-bar pattern is the escape hatch if BASIC programs need more.
 **`MENU_MAXCH` is 24 glyphs** of item text, derived from `MENU_MAXW` 208px.
 Longer items need truncating somewhere, and silently is the wrong somewhere.
 
-**`m$(3)`–`m$(8)` are GEM's desk-accessory slots** and have nothing behind them
-here. Decide loudly: keep them as dead space so GFA source ports, or document
-`MENU` as taking the array without them.
+**`m$(3)`–`m$(8)` are GEM's desk-accessory slots.** What they do there, from
+the User Manual: a Desk Accessory is a resident program loaded at boot which
+calls `MENU_REGISTER(ap_id, m_text$)` to insert its name **into the first menu
+of every application's bar** — "provided that this does not carry the number of
+Accessories beyond six (they are numbered 0 to 5)", returning the slot 0..5 or
+−1 when full, and usable "only ... with a Desk Accessory, not a compiled
+program". The application's job is purely to leave the room: the six strings
+"need only be a single character long, as their contents are ignored", the AES
+overwrites the ones in use and does not print the rest, and the application
+never handles the selection — GEM sends `MENU(1) = 40` to *the accessory*,
+which checks `MENU(5)` to see whether it was the one meant, and `41` when it is
+closed.
+
+So it is a system-wide extension point that every application is obliged to
+provide, by reserving holes in its own menu for the system to fill.
+
+**This OS has the same extension point and inverts it.** The kernel owns that
+part of the bar and an application *registers a handler* rather than leaving a
+hole: `OSAPI_ABOUT_SET` 0x018A takes `BX = win ptr, SI = your About handler's
+offset`. Nothing is reserved, nothing is overwritten, and there is no
+accessory to name.
+
+**So drop them, and say so when a program still has them.** Keeping six dead
+strings would be keeping GEM's mechanism without GEM's purpose, which is the
+thing `BASIC-BINDINGS-PLAN.md` §8 forbids; but silently reading them as menu
+items would turn a ported program's placeholders into six garbage entries. The
+first menu is therefore read like every other one — items until an empty string
+— and `MENU m$()` **recognises the GEM shape** (a run of one-character strings
+at 3..8 closed by an empty string at 9) and **refuses it by name**, with the
+reason and the fix: delete `m$(3)` to `m$(8)`. One mechanical edit when porting,
+a diagnostic rather than a surprise, and no GEM concept embedded in the
+language for good.
+
+**And the kernel drops a sixth menu silently.** `MENU_APPMAX equ 5`, with
+"extras ... silently dropped by the kernel's layout pass" — so `MENU m$()` has
+to count the menus itself and refuse the sixth by name. A silent drop is the one
+outcome a BASIC programmer cannot debug, since the bar simply renders without
+it.
 
 ## 6. Dialogs
 
