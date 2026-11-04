@@ -50,7 +50,7 @@ BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
 BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
-BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX + 10 + BAS_OPS_MAX + BAS_STK_MAX*2 + 8
+BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX + 10 + BAS_OPS_MAX + BAS_STK_MAX*2 + 8 + R_N*2 + 4
 
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
@@ -505,3 +505,6 @@ bas_bad         equ bas_opn + 2          ; byte: a refusal has been reported
 bas_ops         equ bas_bad + 2          ; the compiled op stream
 bas_stk         equ bas_ops + BAS_OPS_MAX ; the evaluation stack, in words
 bas_numbuf      equ bas_stk + BAS_STK_MAX*2   ; 8 bytes: ' -32768', 0
+bas_reg         equ bas_numbuf + 8       ; the tier C register file, R_N words
+bas_fp          equ bas_reg + R_N*2      ; dword: the far pointer a dynamic
+                                         ; OSAPI call is made through

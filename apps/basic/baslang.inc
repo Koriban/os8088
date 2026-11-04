@@ -37,6 +37,28 @@ OP_IDIV     equ 5                   ; `\`, integer division
 OP_NEG      equ 6
 OP_PRINT    equ 7                   ; pop and print it
 OP_NEWL     equ 8                   ; end the print line
+OP_OSAPI    equ 9                   ; + a count byte: the tier C gateway
+OP_REG      equ 10                  ; pop an index, push that register
+
+; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
+; GFA needed six trap verbs and eight parameter arrays because that IS the
+; AES/VDI calling convention. This OS passes in REGISTERS over one flat space
+; of 194 slots, so the whole of tier C is one verb and one small array.
+R_AX equ 0
+R_BX equ 1
+R_CX equ 2
+R_DX equ 3
+R_SI equ 4
+R_DI equ 5
+R_ES equ 6                          ; read-only in wave 1b: a buffer argument
+                                    ; needs the string heap (wave 3) and the
+                                    ; pin-and-pass operator with it
+R_CF equ 7                          ; THE CARRY FLAG, and the reason this
+                                    ; array exists at all: failure on this OS
+                                    ; is CF, uniformly, and a binding layer
+                                    ; that dropped it would turn every refused
+                                    ; call into a silently wrong answer
+R_N  equ 8
 
 BAS_OPS_MAX equ 512                 ; the compiled program
 BAS_STK_MAX equ 16                  ; the evaluation stack, in WORDS
@@ -101,6 +123,9 @@ bas_c_stmt:
     mov si, bas_kw_end
     call bas_wordis
     je .end
+    mov si, bas_kw_osapi
+    call bas_wordis
+    je .osapi
     mov si, bas_e_stmt
     jmp bas_err
 .nokw:
@@ -116,6 +141,37 @@ bas_c_stmt:
 .end:
     mov al, OP_END
     jmp bas_emit
+.osapi:
+    ; OSAPI slot [,ax [,bx [,cx [,dx [,si [,di]]]]]]
+    ; The slot and up to six register values, left to right. Anything not
+    ; given keeps whatever the last call left in it, which is what makes a
+    ; sequence of related calls short.
+    xor cx, cx                      ; CX = how many values pushed
+.oarg:
+    call bas_c_expr
+    cmp byte [bas_bad], 0
+    jne .x
+    inc cx
+    cmp cx, 7
+    ja .otoomany
+    call bas_skipsp
+    push cx
+    mov si, [bas_src]
+    cmp byte [si], ','
+    pop cx
+    jne .odone
+    inc word [bas_src]
+    jmp .oarg
+.odone:
+    mov al, OP_OSAPI
+    push cx
+    call bas_emit
+    pop cx
+    mov al, cl
+    jmp bas_emit                    ; the count rides with the op
+.otoomany:
+    mov si, bas_e_oargs
+    jmp bas_err
 .print:
     call bas_skipsp
     mov si, [bas_src]
@@ -225,6 +281,37 @@ bas_c_fact:
     je .neg
     cmp al, '('
     je .paren
+    cmp al, 'A'                     ; a word here is a function call, and in
+    jb .notword                     ; wave 1b there is exactly one
+    cmp al, 'z'
+    ja .notword
+    call bas_word
+    jc .bad
+    mov si, bas_kw_reg
+    call bas_wordis
+    jne .nofn
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '('
+    jne .noopen
+    inc word [bas_src]
+    call bas_c_expr
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], ')'
+    jne .noclose
+    inc word [bas_src]
+    mov al, OP_REG
+    jmp bas_emit
+.nofn:
+    mov si, bas_e_fn
+    jmp bas_err
+.noopen:
+    mov si, bas_e_paren
+    jmp bas_err
+.notword:
     cmp al, '0'
     jb .bad
     cmp al, '9'
@@ -284,6 +371,10 @@ bas_exec:
     je .newl
     cmp al, OP_NEG
     je .neg
+    cmp al, OP_OSAPI
+    je .osapi
+    cmp al, OP_REG
+    je .reg
     ; --- the binaries: pop B into BX, leave A on the stack to be replaced ----
     cmp di, bas_stk + 4
     jb .under
@@ -372,6 +463,81 @@ bas_exec:
     jmp .next
 .done:
     ret
+
+; --- OP_REG: pop an index, push that register -------------------------------
+.reg:
+    cmp di, bas_stk + 2
+    jb .under
+    mov bx, [di-2]
+    cmp bx, R_N
+    jae .badreg
+    shl bx, 1
+    mov bx, [bas_reg + bx]
+    mov [di-2], bx
+    jmp .next
+.badreg:
+    mov si, bas_e_reg
+    jmp bas_err
+
+; --- OP_OSAPI: the gateway (SPEC.md 126, BASIC-BINDINGS-PLAN 3) -------------
+; The values were pushed left to right - slot, then AX, BX, CX, DX, SI, DI -
+; so they come off in reverse. SI and DI are THIS INTERPRETER'S op pointer and
+; stack pointer, so both are saved across the call; the API cell preserves
+; everything it does not document, DS included, but it cannot preserve what
+; we hand it on purpose.
+.osapi:
+    mov cl, [si]                    ; the count
+    inc si
+    xor ch, ch
+    push si                         ; the op stream's cursor
+    mov bx, cx
+    shl bx, 1
+    cmp di, bas_stk
+    jb .ounder
+    sub di, bx                      ; DI = the first of the run
+    cmp di, bas_stk
+    jb .ounder
+    mov si, di                      ; walk it forwards: slot first
+    mov ax, [si]
+    mov [bas_fp], ax                ; the slot is the OFFSET; KERNEL_SEG is
+    mov word [bas_fp + 2], KERNEL_SEG   ; fixed at build time (apps/os88api.inc)
+    dec cx
+    jz .ogo
+    mov bx, 0                       ; then AX, BX, CX, DX, SI, DI in order
+.ofill:
+    add si, 2
+    mov ax, [si]
+    mov [bas_reg + bx], ax
+    add bx, 2
+    dec cx
+    jnz .ofill
+.ogo:
+    push di                         ; the value stack's pointer
+    mov ax, [bas_reg + R_AX*2]
+    mov bx, [bas_reg + R_BX*2]
+    mov cx, [bas_reg + R_CX*2]
+    mov dx, [bas_reg + R_DX*2]
+    mov si, [bas_reg + R_SI*2]
+    mov di, [bas_reg + R_DI*2]
+    call far [bas_fp]
+    pushf                           ; CF FIRST, before anything can disturb it
+    mov [bas_reg + R_AX*2], ax
+    mov [bas_reg + R_BX*2], bx
+    mov [bas_reg + R_CX*2], cx
+    mov [bas_reg + R_DX*2], dx
+    mov [bas_reg + R_SI*2], si
+    mov [bas_reg + R_DI*2], di
+    pop ax
+    and ax, 1                       ; ...and published as 0 or 1, because a
+    mov [bas_reg + R_CF*2], ax      ; refused call reporting success is the
+    pop di                          ; worst defect this layer can have
+    pop si
+    jmp .next
+.ounder:
+    pop si
+    mov si, bas_e_stk
+    jmp bas_err
+
 .divzero:
     mov si, bas_e_div0
     jmp bas_err
@@ -671,6 +837,8 @@ bas_err:
 bas_kw_print:   db 'PRINT', 0
 bas_kw_rem:     db 'REM', 0
 bas_kw_end:     db 'END', 0
+bas_kw_osapi:   db 'OSAPI', 0
+bas_kw_reg:     db 'REG', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -686,5 +854,8 @@ bas_e_div0:     db 'division by zero', 0
 bas_e_stk:      db 'expression went wrong', 0
 bas_e_deep:     db 'expression too deep', 0
 bas_e_long:     db 'line too long to compile', 0
+bas_e_oargs:    db 'OSAPI takes a slot and at most six registers', 0
+bas_e_reg:      db 'REG() index is 0..7 - AX BX CX DX SI DI ES CF', 0
+bas_e_fn:       db 'not a function this wave knows', 0
 bas_e_wide:     db 'result is wider than an INTEGER - wave 1c brings the rest', 0
 bas_e_slash:    db "'/' is floating point and arrives in wave 1c - use '\\'", 0

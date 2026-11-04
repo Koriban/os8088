@@ -281,8 +281,60 @@ run. It is behind `%ifdef BAS_DIAG` now.
 | `print -5` | `-5 ` | `-5 ` |
 | `print 1000*1000` | refused, line 4 | ` 1000000 ` |
 
+## Wave 1b — a BASIC program calls the operating system
+
+Tier C, the whole of it: one verb and one small array.
+
+```basic
+OSAPI slot [, ax [, bx [, cx [, dx [, si [, di]]]]]]
+REG(0..7)        ' AX BX CX DX SI DI ES CF, after the call
+```
+
+GFA needed six trap verbs and eight parameter arrays because filling arrays
+and trapping *is* the AES/VDI calling convention. This OS passes in registers
+over one flat space of 194 slots, so the whole thing collapses to this — which
+is `BASIC-BINDINGS-PLAN.md` §2's claim, now built and measured.
+
+**The enabling fact** is that `KERNEL_SEG equ 0x0060` is fixed at build time,
+so a *dynamic* slot number is reachable by an indirect far call through a
+constructed pointer. That is one instruction, and it is the one instruction
+worth checking rather than trusting: `call far [bas_fp]` assembles to
+`FF 1E ...`, whose ModRM reg field is 3 — `FF /3`, a far indirect call. Had
+NASM taken it as `FF /2` it would have been a *near* call to a kernel offset
+inside our own segment, which assembles cleanly and crashes.
+
+**`REG(7)` is the carry flag and it is why the array exists.** Failure on this
+OS is CF, uniformly, so it is captured with `pushf` as the very first
+instruction after the call — before anything can disturb it — and published as
+0 or 1. A binding layer that dropped it would turn every refused call into a
+silently wrong answer.
+
+**`SI` and `DI` are the interpreter's own** op-stream cursor and value-stack
+pointer, so both are saved across the call. The API cell preserves everything
+it does not document, but it cannot preserve what we hand it on purpose.
+
+**Measured: 480 bytes of image.** The plan guessed "perhaps two hundred", so
+it is more than twice the estimate — the difference is `REG()` and the
+variadic argument parsing, neither of which the guess accounted for. Running
+total **15,201 of 65,024, 23.4%**.
+
+**Proved on the glass, three ways**, because one reading proves nothing:
+
+```
+ 2424     GET_TICKS - a LATER tick than an earlier run's 1252, so the call
+ 2424     reaches the kernel's counter rather than returning a constant
+ 0        CF, clear
+13267     SRAND 1234, then RAND
+12584     RAND again - DIFFERENT, so each call really executes
+```
+
+The seed reaching the kernel proves inputs travel; two different draws prove
+the second call is not a cached first; and a tick count that advances between
+runs proves the whole thing is not a constant. Any one of those alone would
+have been consistent with a gateway that never fired.
+
 ## Next
 
-Wave 1b: **tier C** — the `OSAPI` gateway, which is
+Wave 1c: **the numerics** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
