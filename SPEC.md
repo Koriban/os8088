@@ -228741,3 +228741,75 @@ parameters before it `BYVAL` and delete the `VAR`. BASIC/nw passes by reference
 by default, so the capability GFA's `VAR` provides is already the default here
 and only the *marking* has to change. `docs/plans/BASIC-PORTING-NOTES.md` §2
 carries the rule and the worked example.
+
+### 126.14 Writing without type suffixes
+
+Three different things hide behind "drop the suffixes", and they have three
+different answers.
+
+**Stop using them on your own names — already possible, no change needed.**
+§126.4's other three paths all type a name with no suffix, and §126.13's `VAR`
+makes it the obvious way to write. This runs today, on the reference
+implementation:
+
+```basic
+VAR total AS DOUBLE
+VAR runs AS INTEGER
+LET runs = 3
+FOR i = 1 TO runs
+    LET total = total + i
+NEXT i
+PRINT total
+```
+
+**Make them illegal — no.** Every program the reference's 370 tests cover uses
+them, so forbidding the spelling would discard the oracle for nothing. They
+stay legal.
+
+**Drop `$` from the built-in library — no, and the reason is arithmetic.**
+Twenty-three built-ins carry it, and five collide with an existing reserved
+word the moment it is removed: `STRING$` would become `STRING`, which is the
+type name in `AS STRING`; `INPUT$` would become `INPUT`, which is a statement;
+and `ENVIRON$`, `IOCTL$` and `PLAY$` would land on their own statement
+spellings. Renaming five library functions to lose a character is a poor trade,
+and `LEFT$`, `MID$` and `CHR$` are what every reader of BASIC already knows.
+
+So suffixes remain part of the language, and suffix-free is a **style the
+language supports rather than a dialect that replaces it**.
+
+#### 126.14.1 `OPTION EXPLICIT`, which the style requires
+
+Writing suffix-free without this would be a mistake, and it is worth being
+exact about why.
+
+A bare undeclared name is a SINGLE by §126.4, so in suffix-free code a
+misspelling is not an error — it is a **new variable holding zero**. Run on the
+reference:
+
+```basic
+VAR total AS DOUBLE
+...
+LET tottal = total + 100     ' no error, no warning
+```
+
+`total` keeps its value, `tottal` quietly exists, and the program reports
+something wrong with a clean exit.
+
+The compiler's `-Wsigil` cannot help here. It exists for exactly this class of
+bug in the *other* notation — `total` and `total%` being different variables,
+BASIC's oldest trap — and it works by comparing two spellings of one name.
+Suffix-free code gives it nothing to compare.
+
+**`OPTION EXPLICIT` is therefore part of the answer, not an extra**: with every
+name required to be declared before use, a misspelling is a compile error
+naming the line. Suffix-free code is then **strictly safer** than suffixed
+code, because the trap `-Wsigil` can only warn about becomes one the compiler
+refuses. Without it, dropping suffixes trades a loud trap for a silent one.
+
+`OPTION NOSUFFIX` may follow, refusing a suffix on a *user* name while leaving
+the library alone, so a codebase can hold the house style. It is a convenience
+over `OPTION EXPLICIT`, not a substitute: the typo is the danger, and the
+suffix is only a habit.
+
+Both are additions by §126.13.1's rule — no existing program changes meaning,
+and both carry their own tests.
