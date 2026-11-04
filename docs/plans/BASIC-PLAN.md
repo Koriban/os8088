@@ -423,10 +423,40 @@ buffer and read it back off a BMP export.
    all of it, because on a single-tasking ST the programmer owned the machine.
    Here they do not. But an assembly package can already poke anything, so
    refusing it in BASIC protects the *BASIC programmer from an accident*, not
-   the OS from harm. Recommendation: **allow it, declared.** A program says so
-   at the top, and without the declaration `POKE` is refused by name with
-   "this program has not declared system access", which keeps §126.7's best
-   property while unblocking system programming. **Needs a decision.**
+   the OS from harm.
+
+   **Recommendation, after measuring: refuse them, and keep §126.7 as it
+   stands.** Two findings moved this, and the second is decisive.
+
+   First, they are not the pointer tools — §0.5. `@`, the `MK*`/`CV*` pair and
+   opaque handles cover every pointer need, and tier C needs none of these
+   three. There is no necessity argument.
+
+   Second, **the finish line barely wants them.** `reference/gorillas/
+   gorilla.bas` is this plan's end state, 1,135 lines of real QuickBASIC, and
+   its entire low-level footprint is **7 lines in two blocks**, both doing one
+   cosmetic thing: `DEF SEG = 0`, `PEEK(1047)`, `POKE 1047, KeyFlags OR 32` to
+   force NumLock on at startup, and the same to restore it at exit. No
+   `BLOAD`, no `BSAVE`, no `CALL ABSOLUTE`, no `SHELL`. The five `INKEY$` calls
+   are a separate refusal that `OSAPI_KEY_DOWN` answers in one call, and the
+   six `CALL`s are its own procedures.
+
+   And forcing the machine's global NumLock state is a thing a cooperative
+   multitasking OS arguably *should* refuse: it is one application reaching
+   past its window to change something every other application shares. So the
+   measured cost of refusing the whole group is that the target program loses
+   a keyboard LED, and the correct fix for even that is a kernel slot rather
+   than a poke.
+
+   **The extension path is already better than `POKE`.** If a BASIC program
+   ever genuinely needs something out of kernel memory, the answer is a slot
+   that exposes it safely — and tier C can call any slot the day it exists.
+   "Add a slot" is a reviewable change to a published contract; "allow `POKE`"
+   is a permanent hole.
+
+   **`INLINE` is a separate question and should not be decided here.** Inline
+   assembly is about wanting a fast inner loop, not about touching foreign
+   memory, and it has its own answer (or refusal) independent of this group.
 
    **And it is a weaker case than §0.5 first claimed.** `PEEK` and `POKE` are
    not the pointer tools — `@`, the `MK*`/`CV*` pair and opaque handles are,
