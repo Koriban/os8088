@@ -228762,20 +228762,40 @@ NEXT i
 PRINT total
 ```
 
-**Make them illegal — no.** Every program the reference's 370 tests cover uses
-them, so forbidding the spelling would discard the oracle for nothing. They
-stay legal.
+**Make them illegal — not now, and the reason is not the one to reach for
+first.** The obvious objection is that the reference's 370 tests use them
+everywhere, so forbidding the spelling would cost the oracle. **That objection
+is wrong**, and it is worth recording why: rewriting a program to declare its
+names and drop their suffixes produces source the *reference still runs*, so a
+rewritten corpus is still a differential corpus. Checked, on the unmodified
+reference — every user name declared and suffix-free, while `LEFT$`, `MID$`,
+`UCASE$`, `RTRIM$`, `STR$`, `CHR$`, `STRING$`, `MKI$`, `DATE$` and `TIME$` all
+work in the same program. The oracle survives a rewrite.
 
-**Drop `$` from the built-in library — no, and the reason is arithmetic.**
-Twenty-three built-ins carry it, and five collide with an existing reserved
-word the moment it is removed: `STRING$` would become `STRING`, which is the
-type name in `AS STRING`; `INPUT$` would become `INPUT`, which is a statement;
-and `ENVIRON$`, `IOCTL$` and `PLAY$` would land on their own statement
-spellings. Renaming five library functions to lose a character is a poor trade,
-and `LEFT$`, `MID$` and `CHR$` are what every reader of BASIC already knows.
+**The real blocker is that a suffix is how a function declares its return
+type.** There is no other syntax for it:
+
+```basic
+DEF FUN dbl(BYVAL n AS INTEGER) AS INTEGER   ' 'AS' cannot start a statement
+DEF FUN nm$(BYVAL n AS INTEGER)              ' works: the $ IS the return type
+DEF FUN plain(BYVAL n AS INTEGER)            ' returns a SINGLE, by default
+```
+
+So removing suffixes from user names would first require adding
+`DEF FUN name(...) AS type`, and until that exists a suffix-free program cannot
+write a function that returns a string. **Suffixes stay**, and if this is
+revisited, the return-type syntax is the prerequisite to build first.
+
+**`$` inside a built-in's name is not a type suffix and is not affected.**
+`LEFT$`, `MID$` and `STRING$` are names that happen to contain the character,
+`STRING$` and `STRING` coexist as two distinct names, and the twenty-three
+library functions that carry it keep it. The suffix question is about user
+names only.
 
 So suffixes remain part of the language, and suffix-free is a **style the
-language supports rather than a dialect that replaces it**.
+language supports rather than a dialect that replaces it** — which is the
+decision, taken 2026-11-04: keep them, write without them where you like, and
+revisit only behind a function return-type syntax.
 
 #### 126.14.1 `OPTION EXPLICIT`, which the style requires
 
