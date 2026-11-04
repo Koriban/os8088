@@ -228613,7 +228613,7 @@ after it, which is the shape this language already uses for `MENU KILL` and
 DLG NEW    "Preferences", 240, 130      ' caption, outer width and height
 DLG TEXT    1,  16,  10, "Name:"
 DLG EDIT    2,  64,   8, 20, name$      ' id, x, y, width in characters, var
-DLG CHECK   3,  16,  34, "Word wrap", wrap!
+DLG CHECK   3,  16,  34, "Word wrap", wrap%
 DLG RADIO   4,  16,  54, "Left",  align%, 0
 DLG RADIO   5,  16,  72, "Right", align%, 1
 DLG DROP    6, 120,  34, kind%, "Draft,Normal,Final"

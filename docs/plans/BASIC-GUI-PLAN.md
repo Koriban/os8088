@@ -76,7 +76,7 @@ knows:
 ```basic
 DO
   ON MENU           ' pump one round of events; dispatch to the hooks above
-LOOP UNTIL quit!
+LOOP UNTIL quit%
 ```
 
 `ON MENU [t]` keeps GFA's optional timeout. A text-mode program that never
@@ -293,7 +293,7 @@ ON CLOSE     GOSUB bye
 
 DO
   ON MENU
-LOOP UNTIL done!
+LOOP UNTIL done%
 CLOSEW 1
 END
 
@@ -308,13 +308,13 @@ PROCEDURE poke_at
 RETURN
 
 PROCEDURE picked
-  IF MENUITEM$ = " Quit" THEN done! = TRUE
+  IF MENUITEM$ = " Quit" THEN done% = TRUE
   IF MENUITEM$ = " About..." THEN ALERT 1, "Spindle 1.0", 1, "OK", c%
   MENU OFF
 RETURN
 
 PROCEDURE bye
-  done! = TRUE
+  done% = TRUE
 RETURN
 ```
 
