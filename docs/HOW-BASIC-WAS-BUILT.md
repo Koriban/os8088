@@ -528,13 +528,47 @@ looked like a divergence from a gateway that far-calls a raw offset, until
 §20.1 settled it: *a slot is a pinned address*, and this project calls
 `0x0068` a slot number. The code matches the contract.
 
-### What the audit could not lean on
+### What the audit could not lean on, and the half of it now closed
 
-**BASIC has no test rows.** It is `building` in `apps/RETIRED.txt`, which
-exempts it from the registry gate, so nothing in `tests/suite.py` runs a
-BASIC program and compares the answer. The stack defect is exactly what one
-row would have caught, and the A/B above is that row written by hand and
-thrown away. It should be a registered row before wave 2 adds control flow.
+**BASIC had no test rows at all.** It is `building` in `apps/RETIRED.txt`,
+which exempts it from the registry gate, so nothing in `tests/suite.py`
+touched it. The stack defect is exactly what one row would have caught, and
+the A/B above was that row written by hand and thrown away.
+
+**`fpscratch` is the first one** (`tests/unit/t_fpscratch.py`, fast tier,
+0.2s). It holds the layout half — the part that was actually wrong — and it
+turned out to be worth more than BASIC alone. `os88fp.inc` declares no
+storage (SPEC.md 84.3) and **four** packages write its `fp_*` scratch chain
+out by hand: SHEET, CHART, FPTEST and BASIC/8088. Nothing compared the four
+hands. A carrier that sizes a field short is silent — every name resolves,
+nasm is happy, and the include writes past the field into whatever that
+carrier put next, which is precisely the route the stack defect took.
+
+So the gate is **agreement, not a table copied into the test**, which would
+only be a fifth hand to go stale: for every field two carriers both declare,
+the size must match, while a carrier may still omit what 84.8 lets it drop
+(CHART drops eleven). It found one deviation immediately — BASIC gave
+`fp_hw` two bytes where the include's own "the caller owes" block says `db`
+and the other three give it one. Harmless over-allocation, one byte back,
+but it was the only place in the tree where a carrier disagreed. Beside that
+it holds BASIC's own chain: the stack reserving whole slots, `BAS_BSS_OWN`
+still derived from the chain top, `bas_exec`'s bound named in symbols rather
+than a literal, and no two fields sharing an address.
+
+**It is mutation-tested, and two of the mutations are this chapter.** Putting
+`BAS_STK_MAX*2` back reports the stack 96 bytes short; sizing `fp_hw` at two
+again reports the carriers disagreeing; replacing the bound with `128`
+reports it unnamed. The row also caught *itself*: its first version read each
+carrier alone, so `BAS_STK_MAX` and `BAS_SLOT` — which live in other files —
+resolved to zero and the stack check read `0 == 0`, fifty green checks
+testing nothing. Every constant a comparison depends on is now asserted
+non-zero first, and removing the include-gathering is the fourth mutation.
+
+**The other half is still owed and is currently blocked.** Running a BASIC
+program and comparing the answer needs the emulator, which needs a system
+disk, which cannot be built while upstream's `doswtail` gate is red (see the
+merge of 1a146f1d). That row — the one that would have printed 36 against
+-2.668453E+307 without a human driving QEMU — comes with wave 2.
 
 ### Sizes
 

@@ -571,7 +571,7 @@ BAS_B_fp_sq      equ BAS_B_fp_sgn + 2
 BAS_B_fp_g       equ BAS_B_fp_sq + 8
 BAS_B_fp_tv      equ BAS_B_fp_g + 8
 BAS_B_fp_hw      equ BAS_B_fp_tv + 8
-BAS_B_fp_x1      equ BAS_B_fp_hw + 2
+BAS_B_fp_x1      equ BAS_B_fp_hw + 1
 BAS_B_fp_x2      equ BAS_B_fp_x1 + 10
 BAS_B_fp_sw      equ BAS_B_fp_x2 + 10
 BAS_B_fp_e0      equ BAS_B_fp_sw + 2

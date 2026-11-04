@@ -255,6 +255,22 @@ FAST = [
         "repo', and was tests/kerndos.py's `-l /dev/null` on every soak, with "
         "eleven more sites one failed assembly away. The argument is gated "
         "and not the device, so it is caught at the edit"),
+    Row("fpscratch", "fast", py("tests/unit/t_fpscratch.py"), 0.3,
+        "os88fp.inc DECLARES NO STORAGE (SPEC.md 84.3) and its four carriers "
+        "- SHEET, CHART, FPTEST and BASIC/8088 - each write the fp_* scratch "
+        "chain out BY HAND. Nothing compared the four hands, and a carrier "
+        "that sizes a field short is silent: every name resolves, nasm is "
+        "happy, and the include writes past the field into whatever that "
+        "carrier put next. The gate is AGREEMENT rather than a size table "
+        "copied here, which would be a fifth hand to go stale: for every "
+        "field two carriers both declare, its size must match, while a "
+        "carrier may still OMIT what 84.8 lets it drop. It also holds "
+        "BASIC/8088's own chain - the value stack reserving BAS_STK_MAX "
+        "whole BAS_SLOT slots (it paid for WORDS for four waves after a slot "
+        "became a double, and `1+(2+(3+(4+(5+(6+(7+8))))))` printed "
+        "-2.668453E+307 for 36), BAS_BSS_OWN still DERIVED from the chain's "
+        "top, bas_exec's bound named in symbols, and no two fields sharing "
+        "an address"),
     Row("partoff", "fast", py("tests/unit/t_partoff.py"), 0.4,
         "NO PART OFFSET IS CONVERTED WITH A SECTOR SHIFT OUTSIDE THE "
         "STANDARD. A part starts on a 16-byte PARAGRAPH (SPEC.md 20.12.2; it "
