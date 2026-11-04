@@ -315,6 +315,11 @@ KNOBS = [
     # (hbm_d1why is hiber.inc's), so both are built.
     ("megadiag",    ["KERN_MEGA=1", "MEGADIAG=1"]),
     ("megadiag-hb", ["KERN_MEGA=1", "MEGADIAG=1"], "hiber.drv"),
+    # `MEGAFDMASK=1` is kern_mega's A/B for the empty-drive freeze (KERN-
+    # MEGA-PLAN 14.125; `make megafdmask` builds its disks): the native
+    # floppy call with the option ROMs' IRQ lines masked. Nothing else
+    # assembles that arm.
+    ("megafdmask",  ["KERN_MEGA=1", "MEGAFDMASK=1"]),
     # The LOOK/measurement knobs, which nothing else builds at all. Each
     # switches a whole path in or out - and BAND is now the only thing that
     # assembles the COMPOSED title bar at all, because SPEC.md 5.9.6 sent it
@@ -408,6 +413,7 @@ KNOBS = [
     # hook, no VID_VESA kind and no VESA.DRV row - the kernel the hook's
     # resident cost is measured against, and the only build of its arms
     ("novidext",    ["NOVIDEXT=1"]),
+    ("memgran256",  ["MEMGRAN=16"]),    # SPEC.md 50.2.1.1's DISK class
     ("lddiag",      ["LDDIAG=1"]),
     ("drvdiag",     ["DRVDIAG=1"]),
     # The three this PR added and nothing else names: NOFLUSHR is SPEC.md

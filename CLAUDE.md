@@ -31,6 +31,9 @@ overlapping windows, serial mouse, a bottom dock, and loadable software
 packages that run as closable, multi-instance apps. One binary drives VGA,
 Hercules or CGA, picked at boot.
 
+os8088's DOS (`apps/dos/`, `kerndos/`) is a reimplementation, not an
+emulator: call it "DOS", never "the DOS box" - DOSBox is unrelated.
+
 This file is a map. Each document below is the authority on its subject and
 nothing here duplicates it — a second copy is a copy that goes stale.
 
@@ -63,7 +66,7 @@ nothing here duplicates it — a second copy is a copy that goes stale.
 | **[docs/plans/SHEET-GAPS-PLAN.md](docs/plans/SHEET-GAPS-PLAN.md)** | picking up SHEET — what is left, in the order to do it. **Its section 4 is the current list** (re-measured 2026-09-22): the macro language is finished (`docs/plans/SHEET-MACRO-PLAN.md`, §81.83-§81.97), the two defects it opened with are closed, and so is the menu's-tail defect (its section 0.1, §81.98). The gaps are grouped by what they cost rather than by menu, under a resident-headroom constraint that is down to 756 bytes, so nearly everything left is module work. **Printing is out of scope in it by decision**, which removes six of the missing menu commands and none of the work. §81.39 is the inventory — re-measure it, never quote it |
 | **[docs/plans/SHEET-PROPORTIONAL-PLAN.md](docs/plans/SHEET-PROPORTIONAL-PLAN.md)** | setting SHEET's cells in Helvetica — a study, nothing built: the OS's `os88type.inc` does it on every adapter, and what stands in the way is SHEET's 8 of 8 claims (resident room is **122 bytes**, re-measured 2026-10-18 — image 52,029 + bss 9,289 of 61,440; it read 1,683 after stage 0's first move, §81.102, and has been stale twice since, so measure it) and a layout that counts characters. Staged path with the layout converted to pixels first, while the 8×8 glass gates can still see it |
 | **[docs/plans/VESA-PLAN.md](docs/plans/VESA-PLAN.md)** | anything in the VESA display (§120, `drivers/vesa/`, `kernel/vidext.inc`'s `VIDEXT` hook, the `DRVC_VIDEO` class) — the story list with what each wave actually shipped, the decisions taken against their judged alternatives (hooks in `kern_big` against a fourth kernel; a 16-colour desktop at any depth; banked window A against the linear framebuffer), and `docs/HOW-VESA-WAS-BUILT.md` is its diary. SPEC.md §120 is the contract and says per story whether it is pinned or shipped |
-| **[docs/plans/WIN16-PLAN.md](docs/plans/WIN16-PLAN.md)** | anything in the Windows 3.x layer (§124, `apps/win16/`, `WIN16.O88`) — the user stories, the owner decisions with their judged alternatives (a coroutine on the UI task against a worker; every segment fixed; a V20 floor checked by a CPU census at load; each adapter's Windows System font), and the Wine and winevdm commits it takes code and data from, which make `apps/win16/` **GPL-2.0-or-later** as `apps/apple2` is. **No Microsoft binary is ever committed**: the user supplies them with `WIN3X=<dir>`. `docs/HOW-WIN16-WAS-BUILT.md` is its diary |
+| **[docs/plans/WIN16-PLAN.md](docs/plans/WIN16-PLAN.md)** | anything in the Windows 3.x layer (§124, `apps/win16/`, `WIN16.O88`) — the user stories, the owner decisions with their judged alternatives (a coroutine on the UI task against a worker; every segment fixed; a V20 floor checked by a CPU census at load; each adapter's Windows System font), and the Wine and winevdm commits it takes code and data from, which make `apps/win16/` **GPL-2.0-or-later** as `apps/apple2` is. **No Microsoft binary is ever committed**: the user supplies them with `WIN3X=<dir>`. `docs/HOW-WIN16-WAS-BUILT.md` is its diary, and **[docs/plans/WIN16-ANY-PLAN.md](docs/plans/WIN16-ANY-PLAN.md)** the road from S13 to any Win16 program (stories S14–S25, owner decisions O1–O6, not yet authorised), measured by `tools/w16reach.py` |
 
 ## Fast fullscreen VRAM games (SPEC.md §53, §109.5)
 
@@ -641,7 +644,7 @@ make win16census WIN3X=<dir>  # WIN16 (SPEC.md 124): what each Windows 3.x
               #   builds the Win16 TEST programs with Open Watcom
               #   (tools/setup-watcom.sh fetches it). Both on demand.
               #   `make win16` is the layer itself, in `all`: a WIN16\
-              #   folder on the 1.44MB/1.2MB apps disks, more720, the
+              #   folder on its OWN disk in four geometries (win16*.img), the
               #   everything set and the live media, and at emu360's root
               #   (SPEC.md 124.18.1); the shipped DOS.O88 hands it an NE on
               #   kern_big and kern_emu. `make win16disk WIN3X=<dir>` puts
@@ -710,6 +713,7 @@ lands on a floppy:
 | `NOUNAL=1` | send an **unaligned** `font_run` back to `gfx_fill` + `font_str`, which is what it did before SPEC.md §6.1.11. The A/B for "one pass draws the pair's pixels" |
 | `NOPLANE=1` | take SPEC.md §5.4.1.3's **planar row decoder** out of `gfx_blit4`, so every run of a VGA blit goes back to `vga_blit_span`. A VGA run costs **~1,797 cycles whatever it covers**, so `OS8088.GIF` — whose ground is §63's 50% dither — is 18,978 of them and **7,146 ms** of one canvas on a 4.77 MHz 8088; the decoder is priced per PIXEL at 106.9 of them and draws the identical picture in **1,148**. `BAND=1`'s shape and there for the same two reasons: it is the A/B those numbers come off (PERFORMANCE.md Set 107, `tests/blitplane.py`), and it is the only thing keeping the run-only path assembling — which still matters, because that path is what a **flat** row, a clipped blit and a block hanging off the screen edge all take |
 | `NOBLITCUT=1` | put a **straddling** `gfx_blit4` back on the whole-virtual path of SPEC.md §39.14.7 — the destination stays virtual and every coalesced run splits itself through `gfx_fill`'s own `GFXDISP`. `NOPLANE`'s shape and there for the same two reasons. §39.14.7.1's gate is BINARY: a block that fits one display keeps §5.4.1's fast path and a straddling one gives it up **entirely**, on all of its pixels and not only on the ones near the seam. §39.14.7.2 cuts the block at the seam instead — displays are edge to edge, so there is exactly ONE — and runs the routine once per half, each hooked to its own display. What it buys, measured on a VGA+MDA XT with `OS8088.GIF` straddling: **625 ms against 27,859**, **44.6x** (PERFORMANCE.md Set 112, `tests/blitcut.py`). What makes it possible is that the seam is the primary's own width — 640 or 720 — and a window's content origin is a multiple of 8 (§11.94), so the second half's source starts an EVEN number of pixels along and the nibble phase does not move; an odd cut is refused and takes this knob's path anyway. It cost **199 bytes** |
+| `MEMGRAN=16` | build the heap on a **256-byte granule** instead of the shipped 512 (SPEC.md 50.2.1.1). Below 512 a base is no longer aligned by construction, so a claim says which it needs: the DISK class (`MC_DISK`, `kernel/memory.inc`'s `MEM_ALIGN_CLASS`) keeps every base an `int 13h` may land on 512-aligned, and only an `OSAPI_MEM_P` claim marked `MEMP_CPU` may take any 256. **A MEASUREMENT build, not a shipped one**: what 256 bytes is worth depends on how often a small CPU claim fills the holes a DISK claim leaves, which is a question for a running machine (docs/plans/HEAP-GRANULARITY-PLAN.md section 2.6). Its known gap is that `mem_avail`'s compaction plan does not model the alignment bump, so on this build it may over-report by up to 256 bytes a DISK claim. `t_buildmatrix`'s `memgran256` row is the only thing that assembles it |
 | `NOSEAMCUT=1` | put the one cell a display SEAM crosses back on SPEC.md 39.14.2's whole-cell **drop** — `font_char` enters on the display holding the cell's top-left, and a cell hanging past that display's edge draws nothing at all. The field reported it as *"drag a window into a straddle and unaligned text like the title bar loses a character"*, and exactly one is right: the seam is the primary's own width and so a multiple of 8, so an ALIGNED pen puts every cell boundary on the seam's own grid and an unaligned one puts **exactly one cell across it**. 39.14.11 cuts that cell instead, and the multiple-of-8 seam is what makes it nearly free — the cell's two byte-columns fall one wholly each side, which is where both renderers already split, so what is cut is the **glyph** (into two scratch cells beside `font_zero`) and neither renderer gains an instruction. **The whole thing hangs off the `ja` that was already there**, so a cell that fits pays nothing on either kernel; this knob assembles **byte for byte identical** to the kernel before it. `tests/dispseam.py` is the A/B and needs it: **0 differing pixels straddling against 18 lost**, on a CGA primary (seam 640) and a Hercules one (seam 720) alike. It is also the row's own guard against a null — §11.94 snaps a window's origin, so a caption's pen phase is fixed by the window's WIDTH and the title's LENGTH and *no drag can change it*: the Disk window's opens ON the grid, nothing straddles, and both kernels draw the identical picture. The gate grows the window by 8 first |
 | `NOUIBLOCK=1` | put `ui_task` back on the **spin** it ran on before SPEC.md §8.1.2 - `.idle` becomes `task_yield` again instead of `task_sleep(1)`. The A/B for the whole idle design, and the only thing keeping the spinning path assembling. What the default buys: an idle desktop goes from **100% `ui_task` to 2.7%, with 96.9% HALTED**, and the loop from 1,134.6 passes a second to 17.7. **The pointer is untouched** - `mou_apply` calls `cur_move` in the ISR, so the arrow is ISR-paced and not pass-paced (112 draws against 113 over the same sweep) - and the scheduler's own share of input latency is **better blocking than spinning on every statistic**: 5.18 ms median against 5.31, worst 5.90 against 6.57, 40 samples each. Only IRQ0 falls into `sch_switch`, so the wake byte alone buys nothing and the idle task's `task_yield` after its `hlt` is what makes a wake immediate; and `sch_uiwake` is the lost-wakeup guard, which the first build did not have and paid for at **one mouse event in fourteen waiting a whole tick** |
 | `SPLSTARS=1` | swap the loading screen's ANIMATION (SPEC.md §15.3.7): the "8088" stands **still** and six **stars** twinkle around it instead — a crossed pair of lines that grows and shrinks, with rings of single-pixel clumps appearing at the peak. A **look** question, so it is a knob until somebody has looked, and the default is the spinner that ships. **Both arms take their time from §15.3.6's wall clock and are drawn by IRQ0** (§15.3.8) — an `int 13h` runs with interrupts enabled, so a frame lands in the gap the machine was going to spend idle, and every phase is drawn on time in both arms. A star is a **table, not a drawing** — five shapes of 22 bytes, blitted opaquely, so the dark one erases the last frame and nothing is written twice (§15.3.7.1). It used to be the one configuration that **grew the blob** — 4,193 bytes of a 4,096-byte blob, over by 97 *wherever* `OVL_AT` fell, so it alone took `BOOT2_SECS_STARS` = 9 and an `OVL_AT` of its own — and **it is not any more** (§15.3.8.5.1) — but the packed kernel took the room back, so it needed `NOKZIP=1` for a while (§15.3.8.5.2) - the twinkle and the decoder were 2,748 bytes of a 2,624-byte loader share - until §2.9.14 made the blob one section, and a knob's 11-sector blob holds the lot. The splash's size pass took its `.boot2` from 2,768 to **2,568** and the blob to **3,989 of 4,096**, so both arms are 8 sectors at one `OVL_AT` of 2,624, and the second constant, the second split and the Makefile's second `sed` are all deleted. What that bought is not the sector: `KSIG_OFF` had to name a head-crossing sector on four geometries **and both blob lengths**, an intersection four sectors wide at the very top of `.text`, which is why §18.93.1's canary had 431 bytes of headroom and a Makefile comment in capitals forbidding `.text` to fall below 50,178. One blob length widens the band to memory 6,656 and the floor to **6,658**. |
@@ -731,7 +735,8 @@ lands on a floppy:
 | `KBDDIAG=1` | record what the KEYBOARD sent and what the ROM made of it (**SPEC.md §9.8.1**), for a machine with no debugger: every IRQ1 with port 64h before the ROM's `int 09h` and 64h and 60h after it, the BIOS buffer's head and tail either side and the word stored, the PIC's ISR, IRR and IMR, and inside an fsx bracket the same state sampled each tick - a 64-record ring drawn under the menu bar. It is for docs/FIELD-NOTES.md 63, a Pentium 4 whose USB-through-PS/2 keyboard types on the desktop and cannot PAUSE MIDIRack's speaker play, and its three possible pictures say which link broke: no `I` rows inside the bracket, `I` rows whose tail never moves, or a tail that moved and a head that never caught up. The only behaviour it changes is that `kbm_isr` CALLS the ROM's `int 09h` instead of jumping to it. `make kbddiag` builds the four system disks; the shipped kernel is byte-identical, and it cannot be built with `MOUDIAG=1`, which draws in the same place |
 | `NOFDMEDIA=1` | take **SPEC.md 38.10**'s `MEDIA` default out of the Standard File chooser: an app whose user has never chosen a folder opens it where the app was **LAUNCHED** from instead of in `MEDIA` at its drive's root. The default is a nicety rather than a contract, so it is the part of the dialog whose bytes are easy to take back - this knob is how, `t_buildmatrix` keeps it assembling, and `tests/fdlgchoose.py` is verified to fail on it |
 | `PICLOSE=1\|2` | kern_mega only: **LOSE INTERRUPT EDGES on purpose** (docs/plans/KERN-MEGA-PLAN.md 14.64). On the way down of every reflected BIOS call, both 8259s are initialised - ICW1 erases every pending edge - after a window that waits for a byte to be sitting in the 8042, and the masks go back as they were. It is what the Victory 286's BIOS is inferred to do on its reset path, and no emulator here loses an edge by itself (Bochs is a 386 with no reset per call; 86Box rebuilds IRR from line levels). `1` keeps `mega_kwd`, the tick's lost-edge watchdog; `2` compiles it out, which is the 343124b2 kernel on that BIOS: move the pointer through a DOS program's live resume and the mouse AND the keyboard are dead. `tests/megapiclose.py` builds both into private trees and is the A/B |
-| `MEGADIAG=1` | kern_mega only: **put its FIELD READINGS back on the menu bar** (docs/plans/KERN-MEGA-PLAN.md 14.65; `make megadiag` builds the disks into `build/megadiag/`). A shipped kern_mega shows the protected-mode toast at boot (`Entered protected mode`) and the lines a user acts on - a package closed for faulting, its refusals, the hibernate's - and nothing else; this build names the route in that toast instead (`protected, 286 reset` / `protected, 386 CR0`) and adds `mega_tell`'s `NMI`, `RST`, `FDC RESET`, `RFL` and `Q` lines, the DOS trip's `DOSP`, the native floppy's `FD BIOS` and *native floppy off* toasts, and the handoff record's hex (`H ssss:oooo ...`) in place of *Not our handoff record*. Those were how the Victory 286 was debugged off photographs, so a field run that needs one is given this disk. It costs the shipped kern_mega nothing: **-280 `.text`, -920 `.mega`, -42 `.bss`** came out of it, kern_big and kern_small are byte-identical either way, and E9's own lines stay on both arms |
+| `MEGADIAG=1` | kern_mega only: **put its FIELD READINGS back on the menu bar** (docs/plans/KERN-MEGA-PLAN.md 14.65; `make megadiag` builds the disks into `build/megadiag/`). A shipped kern_mega shows the protected-mode toast at boot (`Entered protected mode`) and the lines a user acts on - a package closed for faulting, its refusals, the hibernate's - and nothing else; this build names the route in that toast instead (`protected, 286 reset` / `protected, 386 CR0`) and adds `mega_tell`'s `NMI`, `RST`, `FDC RESET`, `RFL` and `Q` lines, the DOS trip's `DOSP`, the native floppy's `FD BIOS` and *native floppy off* toasts, and the handoff record's hex (`H ssss:oooo ...`) in place of *Not our handoff record*. Those were how the Victory 286 was debugged off photographs, so a field run that needs one is given this disk. It costs the shipped kern_mega nothing: **-280 `.text`, -920 `.mega`, -42 `.bss`** came out of it, kern_big and kern_small are byte-identical either way. **It is also the only build whose KERNEL writes to the debug port** (port E9h, Bochs's `e9.out`; `MEGATRAP=1` does too): the switch, a fault's dump, a package closed, a park and its return, a resume, a module above 1MB, the native floppy's verdicts (KERN-MEGA-PLAN 14.127). The shipped kern_mega writes nothing there - **-1,072 `.mega` (with its scratch), -72 `.text`, -34 `.cold`** more - and a row reads the same facts out of guest state (`tools/os88bochs.py`'s `wait_pm`, `fault`/`faults`, `wait_trip`, `wait_resumed`, `mod_base`; docs/BOCHS.md) |
+| `MEGAFDMASK=1` | kern_mega only: the A/B for the **empty-drive freeze** (docs/plans/KERN-MEGA-PLAN.md 14.125; `make megafdmask` builds its disks into `build/megafdmask/`). The native floppy call masks every IRQ line whose gate reflects to an option ROM - a PicoMEM's multiplexer - for its length, so no reflection, on a 286 a CPU reset through the BIOS, lands in the second-long motor spin-up it waits in with IF on. A reflected BIOS `int 13h` never has one: that IRQ runs inside the BIOS call, already in real mode. The 8259 latches an edge while masked, so the IRQ is late and not lost. The shipped kern_mega is byte-identical; `MEGADIAG=1`'s floppy strip counts the reflections it would have prevented (`j`, `v`) |
 | `NOVIDEXT=1` | assemble kern_big WITHOUT SPEC.md 120.3's external renderer hook - no `VID_VESA` kind, no `VESA.DRV` row, no compare at the planar bodies. The A/B the hook's resident cost is measured against (**382 bytes** on the tree of 2026-10-26: `.text` 317, `.bss` 39, `.cold` 26, and 200 of the boot blob), and the only thing keeping the unhooked arms assembling. `t_buildmatrix`'s `novidext` row builds it |
 | `MEGATRAP=1` | kern_mega only: its **TRAP CENSUS** (docs/plans/KERN-MEGA-PLAN.md 10.3) - every #GP writes one line to port E9 (error code, CS:IP, DS, ES and the image CS runs in) before `mega_gpfix`, `mega_gpw` or `mega_null0` completes it. Those fixups are correct and cost a fault apiece, so a site in a loop is a slow program that looks like a working one; `tools/megatraps.py` ranks the lines. `make megatrap` builds its disk into `build/megatrap/`, so `build/mega.img` is never it |
 | `EMUFULL=1` | put C64, APPLE2 and RUNCPM on `build/emu360.img` beside RealDMG (SPEC.md 24.6) - `make emufull` is the same thing. They are C packages and APPLE2's ROM is fetched, so a plain `make` must not need them and ships the RealDMG disk alone. The disk's own stamp makes the switch rebuild the image, so a plain `make` after an `emufull` goes back to the plain disk rather than keeping the full one |
@@ -777,7 +782,7 @@ the eight `286-525-*` application machines (`-z`, `-word`,
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
-`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
+`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6), `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
@@ -920,6 +925,13 @@ floppies into the git-ignored `win16ref/`, with the sample programs and
 reference screenshots - is `.claude/skills/win16-reference`
 (`/win16-reference`); its script recreates the lot and its traps are what
 getting Windows to boot here cost.
+Building out a feature's **user stories or open items in parallel** - each
+independent item to a sub-agent of its own in its own worktree on a cheaper
+model, one shared brief, a Monitor armed on every long-running agent, each
+finished branch verified and improved by an Opus reviewer before it is
+integrated into the feature's PR, and the final pass run once - is
+`.claude/skills/story-fanout` (`/story-fanout <plan or PR>`), whose
+`LESSONS.md` is what the WIN16 Phase B/C and WIN16-NEXT rounds learned.
 
 ## Shared agent skills
 
@@ -1024,11 +1036,16 @@ user gives a different workflow. The worked example is
 - **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
   straddling a 64KB physical boundary with error 09h, and only starting
   512-aligned prevents it. The symptom is "Disk error" on a large save.
-- **Memory is two guards, not one** (docs/KERNEL-MEMORY.md): `KERN_BUDGET` is
-  the kernel's whole RAM footprint, `KERN_CODE_MAX` is `.text` + `.bss` inside
-  one 64KB window because offsets are 16 bits. They are relieved by different
-  mechanisms. **Raising either is a decision to take with whoever asked for the
-  feature, not a build fix.**
+- **Memory is two guards: `kern_big` resides in 100KB, `kern_small` in 64KB,
+  `kern_mega` in 68KB of conventional memory** (`KERN_BUDGET`,
+  docs/KERNEL-MEMORY.md; kern_mega's is `KERN_MEGA_RESIDENT_KB`, held against
+  `MEGA_RESIDENT` - its size less the `.cold` and `.mega` rungs it moves above
+  1MB). `kern_big` and `kern_small` boot on 128KB and `kern_mega` on a 1MB
+  machine's 640KB (`MEGA_BOOT_KB`), and `.text` + `.bss` stay inside one 64KB
+  window (`KERN_CODE_MAX`). Development may run 2KB over a budget
+  (`KERN_GRACE`); `make budget-check` holds all three exactly before a PR or
+  release. **Raising any of them is a decision to take with whoever asked for
+  the feature, not a build fix.**
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,
@@ -1060,6 +1077,9 @@ user gives a different workflow. The worked example is
   run (a cell moved or re-contracted, a header grew), then
   `python3 tools/abilock.py --update "why"`; if it still runs (a cell added at
   the end, a contract clarified), the same command without the bump.
+- **A heap claim is paragraphs, rounded to 512 bytes** (§50.2.1), not whole
+  KB. `OSAPI_MEM_P` (§50.3.7) takes a byte-sized request; the KB doors still
+  work. Ask for what you need, not the next KB.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
@@ -1083,6 +1103,9 @@ user gives a different workflow. The worked example is
   heap claim is read out of the package's own image instead — which reads as
   memory corruption rather than as a wrong segment register, because the bytes
   really are ours (§77.10).
+- **A file operation of several transfers is ONE progress bar** (§12.8.8-
+  §12.8.10): open it with `OSAPI_FS_OP` and the total bytes, close it with 0.
+  Without it every transfer rescales the bar from zero.
 - **A worker may not touch a file** (§20.6 rule 7), so a package that is
   socket-to-file by definition is shaped around `OSAPI_WM_ONWAKE`: the worker
   stages, the UI task commits, and a single byte written last by the producer
@@ -1346,9 +1369,11 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**Seventeen images, not nine.** The system and apps disks in four geometries
-each, SIX more at 360KB alone, `more720.img` (§24.7) and kern_small's
-`small360.img`/`small720.img` (§24.5.7). `build/media360.img` —
+**Twenty-one images, not nine.** The system and apps disks in four geometries
+each, SIX more at 360KB alone, `more720.img` (§24.7), kern_small's
+`small360.img`/`small720.img` (§24.5.7) and WIN16's own disk in four
+geometries, `win16*.img` (§124.18.1), which left the apps disks when it
+outgrew them. `build/media360.img` —
 `BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
 clusters before packages were compressed, so at that geometry it rides a disk
 of its own (§24.4). **It is not on `apps360.img` as well any more, and cannot

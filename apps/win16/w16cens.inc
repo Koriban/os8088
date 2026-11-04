@@ -87,6 +87,7 @@ w16_census:
     shr dx, cl
     inc dx
     add ax, dx
+    jc .big                         ; bitmaps past 64KB: refused, not wrapped
 .nextsz:
     add di, 8
     inc bx
@@ -96,14 +97,18 @@ w16_census:
     cmp dx, [w16_nseg]
     jb .size
     add ax, 15
+    jc .big
     and ax, 0xFFF0
     mov [w16c_obase], ax
-    add ax, W16C_END + 1023
-    rcr ax, 1                       ; (the carry is bit 16: a census of 64KB
-    mov cl, 9                       ; of code still sizes right)
-    shr ax, cl                      ; AX = KB
-    call OSAPI_MEM_CLAIM            ; DX = the block
+    add ax, W16C_END + 15           ; the lists too must be inside one 64KB
+    jc .big                         ;   segment, the offsets being 16 bits
+    mov cl, 4
+    shr ax, cl                      ; AX = PARAGRAPHS (SPEC.md 50.3.7)
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; DX = the block
     jnc .claimed
+.big:
     mov si, w16_r_mem
     jmp .refuse
 .claimed:
@@ -338,7 +343,7 @@ w16c_walk:
     xor al, al
     call w16c_bits
     jc .end
-    mov es, [w16c_cs]
+    W16SEG es, [w16c_cs]
     call w16c_dec                   ; CX = length, SI = the opcode, DH = modrm
     jc .end                         ; bytes that are not an instruction
     xor al, al
@@ -426,7 +431,8 @@ w16c_walk:
     jmp .ins
 
 section .text
-w16c_jt:
+w16c_jt:    ; XSEC-OK: the census in part 5 reads it through DS and jumps
+            ; to each entry in its own CS - the entries are part 5's labels
     dw w16c_walk.fall               ; NEXT
     dw w16c_walk.t186               ; T186
     dw w16c_walk.t286               ; T286
@@ -804,23 +810,18 @@ w16c_far:
     clc
     jmp short .out
 .import:
-    sub ax, w16_stubs               ; the stub's row
+    sub ax, w16_stubs               ; the stub's bind slot (SPEC.md 124.19.1)
     jb .ret
     xor dx, dx
-    mov cx, 6
+    mov cx, W16_STUBSZ
     div cx
-    cmp ax, W16NX
+    cmp ax, W16_NBIND
     jae .ret
-    mov cx, W16X_SIZE
-    mul cx
     mov bx, ax
-    cmp byte [w16_exports + bx + W16X_MOD], W16M_KERNEL
-    jne .ret
-    mov ax, [w16_exports + bx + W16X_ORD]
-    cmp ax, 1
-    je .noret
-    cmp ax, 137
-    je .noret
+    shl bx, 1
+    shl bx, 1
+    test byte [w16_bind + bx + W16B_PART], W16B_NORET
+    jnz .noret                      ; FatalExit, FatalAppExit
 .ret:
     clc
     jmp short .out
@@ -934,7 +935,7 @@ w16c_tables:
     xor al, al
     call w16c_bits
     jc .walk                        ; p is code already
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     mov ax, [es:di]                 ; e
     cmp ax, [w16_clast + bx]
     ja .walk
@@ -956,7 +957,7 @@ w16c_tables:
     jmp short .entry
 .walk:
     call w16c_run
-    jmp short .next
+    jmp .next
 .done:
     pop es
     pop bp
@@ -1007,7 +1008,7 @@ w16c_prologs:
     xor al, al
     call w16c_bits
     jc .step
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     mov si, w16c_pro                ; each pattern: its length, its bytes
 .pat:
     xor cx, cx

@@ -24,10 +24,8 @@ ECM_MAN     equ 1
 eth_base:   dw 0                ; the card's I/O base, 0 = none
 eth_up:     db 0                ; ne_init has run
 eth_word:   db 0                ; 1 = a 16-bit card (NE2000), read 8-bit anyway
-eth_txpg:   db NE_TXPAGE        ; the ring, as ne_init picked it
-eth_pstart: db NE_PSTART
-eth_pstop:  db NE_PSTOP
-eth_next:   db NE_PSTART + 1    ; the page WE will read next
+    NIC_STATE                   ; the backend's own words (nicne2k.inc: the
+                                ; 8390's ring, as ne_init picked it)
 eth_mac:    times 6 db 0
 eth_bcmac:                      ; ...and the one every broadcast goes to,
 ip_bcast:   times 6 db 0xFF     ; whose first four bytes are also the IP
@@ -169,7 +167,8 @@ sk_txoff:   dw SK_RXCAP0 + SK_NLEAN * SK_LEANRX  ; where the TX rings start: it 
                                 ; with the RX size, so it is computed once at
                                 ; the claim and not derived at each call
 sk_want:    dw 0                ; the RX size the user ASKED for, 0 = auto
-sk_lrun:    dw 0                ; the largest free run in KB at the claim:
+sk_lrun:    dw 0                ; the largest free run at the claim, in
+                                ; PARAGRAPHS (OSAPI_MEM_P's MEMP_AVAIL):
                                 ; no rung bigger than it is tried (sk_try)
 
 %ifndef ETH_NOEMIT
@@ -180,7 +179,7 @@ eth_cslot:  db 0xFF             ; the slot inside the current verb, which
                                 ; sk_alloc stamps on a new socket
 sk_tab:     times NET_SOCKS * SK_SZ db 0
 eth_rxh:    times 4 db 0        ; the card's own four-byte receive header
-eth_rxb:    times NE_FRAME + 4 db 0
-eth_txb:    times NE_FRAME + 4 db 0
+eth_rxb:    times NIC_FRAME + 4 db 0
+eth_txb:    times NIC_FRAME + 4 db 0
 %endif
 

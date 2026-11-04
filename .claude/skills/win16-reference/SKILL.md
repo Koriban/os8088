@@ -88,10 +88,11 @@ python3 $S run w31 "win /s calc"        # Windows 3.1 has no real mode; standard
 ```
 
 The WIN16 rows that run Microsoft's programs (`win16mines`, `win16calc`,
-`win16cpu` and their XT legs) read them from `build/win16/`, never from this
-tree. `samples` puts them there, renamed where two versions share a name:
-CALC, CLOCK and REVERSI from Windows 3.0, `W31CALC.EXE` and `W31MINE.EXE`
-from 3.1, and WinMine 2.9 as `WINMINE.EXE`. `make clean` removes them, so
+`win16cpu`, `win16pbrush` and their XT legs) read them from `build/win16/`,
+never from this tree. `samples` puts them there, renamed where two versions
+share a name: CALC, CLOCK, Paintbrush (`PBRUSH.EXE` with its `PBRUSH.DLL`),
+REVERSI and WRITE from Windows 3.0, `W31CALC.EXE`, `W31MINE.EXE` and
+`W31NOTE.EXE` (Notepad 3.1, on COMMDLG, for `win16cdlg`) from 3.1, and WinMine 2.9 as `WINMINE.EXE`. `make clean` removes them, so
 run it again after one:
 
 ```sh
@@ -118,6 +119,28 @@ that adapter is 86Box's: `vm/xt-hercules`. Each adapter's system font is on
 disk 2 (`CGASYS`/`EGASYS`/`VGASYS.FON`, SZDD-compressed). Hercules shares
 EGA's font: `SETUP.INF` gives it EGA's resolution class `133,96,72`.
 
+## The O3 titles: a CD-ROM title and two installers
+
+`docs/plans/WIN16-ANY-PLAN.md` section 3.1 chose the programs phase B and
+C are held to: *Microsoft Multimedia Mozart* (a mixed-mode CD whose Visual
+Basic 3.0 program runs from the disc), *Microsoft Arcade* 1.0 (the Microsoft
+Setup Toolkit on one floppy) and *Sir Hangman* 1.0 (InstallShield 3.0,
+ASP shareware). They are pinned like everything else here and land in
+`win16ref/titles/`:
+
+```sh
+python3 $S titles      # ~850 MB: Mozart's whole disc as .bin/.cue, its data
+                       # track as .iso, Arcade's .img, Sir Hangman's zip
+```
+
+`titles` also unpacks every program into `titles/<name>/x/` and prints the
+`tools/w16reach.py` line that reads them. The toolkits compress:
+`w16unpack.py` (beside the script) expands the Setup Toolkit's SZDD files,
+InstallShield 3's `_INST16.EX_` (a 255-byte header, then PKWARE DCL
+"implode") and its `.LIB` archives (magic `13 5D 65 8C`), and lists or
+copies out of an ISO 9660 or High Sierra image. QEMU takes
+`MSMOZART.iso` as `-cdrom`; 86Box takes the `.cue` and so plays the audio.
+
 ## Traps, each one already paid for
 
 - **QEMU's `fat:rw:` directory drive pauses the VM on Windows' first write.**
@@ -141,6 +164,10 @@ EGA's font: `SETUP.INF` gives it EGA's resolution class `133,96,72`.
   and it answers 403 without a browser User-Agent and Referer.
 - **The WinMine zips are IMPLODED** (zip method 6). Python's `zipfile` cannot
   read them; `unzip(1)` can.
+- **archive.org answers 500 to a request for a large file now and then**,
+  then 206 to the same URL a minute later. `titles` resumes (`curl -C -`);
+  run it again. Never run two fetches of one file at once: both write the
+  same name and the hash is of neither.
 - **Windows 3.x setup files are SZDD** ("COMPRESS"): the 4-byte magic
   `SZDD`, then LZSS with a 4 KB window that starts at 4096-16. Expand them
   before parsing a `.FON` or `.DRV`.

@@ -358,8 +358,8 @@ while one records.
 ## The RealDMG menu
 
 The menu beside the System menu has **About RealDMG**, which names the
-program and reminds you where the keys are, and **Close**, which closes the
-window.
+program and who made it and reminds you where the keys are, and **Close**,
+which closes the window.
 
 ## Files
 
@@ -392,8 +392,9 @@ that is not write-protected and has some room.
   GB ROM** for a file that is not a Game Boy game, **REALDMG: needs GB
   Color** for a game for the Game Boy Color alone, **REALDMG: MBC 22h
   unknown** (or another number) for a cartridge chip it does not have, and
-  **REALDMG: over 256K wants XMS** for a big game with no memory above 1MB
-  to keep it in.
+  **REALDMG: needs more XMS** for a game over 256K when there is not enough
+  memory above 1MB to keep it in - none at all, or, on the kern_mega disks,
+  less than the game's size.
 - **REALDMG: no room for ROM** or **no room for RAM** means the system does
   not have the memory free. Close other programs, or choose CPU >
   Interpreter to give the recompiler's memory back, and load the game

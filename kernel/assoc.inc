@@ -233,9 +233,7 @@ assoc_stage:
 ; the answer survives the unwind.
 ; -----------------------------------------------------------------------------
 asc_inkck:
-    push ax
-    push cx
-    push si
+    call kentc_di               ; (kernel size pass 16: the frame is the ladder's)
     xor ax, ax
 .w:
     or ax, [es:si]
@@ -243,10 +241,7 @@ asc_inkck:
     inc si
     loop .w
     or ax, ax
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; assoc_glyph_di - where an app slot's 8x8 glyph lives (SPEC.md 54.3)
@@ -561,10 +556,7 @@ assoc_reduce:
 ; resolved would un-resolve it (54.7.3's rule).
 ; -----------------------------------------------------------------------------
 assoc_glyph_take:
-    push ax
-    push cx
-    push si
-    push di
+    call kentc_di
     mov cx, 4                   ; NEITHER LOOP IS THIS ROUTINE'S OWN: the
     call asc_inkck              ; blank test is asc_inkck above and the copy
     stc                         ; is SPEC.md 20.2's staging idiom, which is
@@ -573,11 +565,7 @@ assoc_glyph_take:
                                 ; Both advance SI and this routine banks it
     clc                         ; anyway
 .out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; assoc_img_glyph - a slot's glyph out of a package IMAGE (SPEC.md 54.3.2)
@@ -619,12 +607,8 @@ assoc_img_glyph:
 ; placeholder - the SPEC.md 50 degradation rule, applied to an icon.
 ; -----------------------------------------------------------------------------
 assoc_compose:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
+    call kentc_bp               ; the ladder's frame, and kretc_es its end
+    push es                     ; (kernel size pass 16)
     push ds
     pop es                      ; ES = DS = KERNEL_SEG for the frame copy
     mov bl, al                  ; bank the slot: the .inset loop below spends AX
@@ -657,10 +641,7 @@ assoc_compose:
     scasw                       ; rewrites those)
     dec bh
     jnz .inset
-    pop es
-    pop di
-    pop si
-    jmp kretc_cx
+    jmp kretc_es
 
 ; assoc_docicon - a document icon for one directory entry (SPEC.md 54.3) - is
 ; written in disk.inc's dsk_docpass, its one caller, since kernel size pass 14;
@@ -976,7 +957,7 @@ assoc_tryfold:
                                 ; own frame rather than kept in a spare
                                 ; register, because there is not one
     call assoc_try              ; ...and its CF is this routine's answer too
-    jmp short .out
+    SKIPDL1                     ; over the stc, DL being popped (pass 16)
 .no:
     stc
 .out:
@@ -1143,13 +1124,12 @@ assoc_sweep:
 ; by name - which is what frees .found to spend it on the hint.
 ; -----------------------------------------------------------------------------
 assoc_locate:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bl, al                  ; assoc_fname, inlined: assoc_fnb =
-    xor bh, bh                  ; '<STEM>.O88', the stem space-padded to 8 so
+    call kentc_di               ; AX is a clobber, so the ladder may restore it
+    cbw                         ; assoc_fname, inlined: assoc_fnb =
+    xchg bx, ax                 ; '<STEM>.O88', the stem space-padded to 8 so
+                                ; (BX = the slot, < ASSOC_NAPP: nothing reads
+                                ; AX again before assoc_try_ix loads it -
+                                ; kernel size pass 17, -2)
     call assoc_glyph_di         ; the copy stops at the first space. The stem
     lea si, [di + assoc_stem - assoc_glyph] ; table has the glyph table's
     mov di, assoc_fnb           ; stride, 8 a slot, so the glyph's address is
@@ -1224,15 +1204,10 @@ assoc_locate:
                                 ; on purpose, so a stale cached cluster for
                                 ; THIS program loses to where it really is
     clc                         ; explicit, not inherited: the helper's last
+.out:
+    jmp kretc_di
                                 ; store leaves CF as the `shl` left it, which
                                 ; is an accident of the table's size
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
 
 ; -----------------------------------------------------------------------------
 ; assoc_run - open the pending document (SPEC.md 54.4)
@@ -1269,7 +1244,9 @@ assoc_run_x:
 .doc:
 
     mov di, [assoc_pwin]
-    or di, di
+    inc di                      ; ASSOC_PWBANK: OSAPI_PKG_START's document,
+    jz .banked                  ;   whose locator is banked already
+    dec di
     jz .curvol
     call fmv_here               ; the poster's OWN folder, read straight off
                                 ; its state block. This was a fmv_sync - a
@@ -1281,8 +1258,13 @@ assoc_run_x:
                                 ; assoc_back comes back to what is banked
                                 ; here, and files_refresh paints from the
                                 ; WINDOW's cache (SPEC.md 22.1)
+.banked:                        ; A PROGRAM'S OWN REQUEST (21.5.3.3): the
+    mov [assoc_pwin], di        ;   locator it handed over says where, and
+    mov dx, [assoc_dclus]       ;   no window posted it (DI = 0). A POSTED
+    mov al, [assoc_ddrv]        ;   one (21.5.4) runs after the caller has
+    jmp short .located          ;   unwound, standing anywhere by then
 .curvol:
-    mov dx, [dsk_cwd]           ; no poster - a package's own request - so the
+    mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
 .located:
     cbw                         ; ...banked once, whichever rung answered,
@@ -1322,6 +1304,14 @@ assoc_run_x:
                                 ; on, so no listing and no index (21.4)
     mov byte [assoc_argp], 0    ; a package launched later, by any route, must
                                 ; never inherit this document
+    cmp byte [assoc_dapp], ASSOC_FLUSH ; THE ENTRY PROC POSTED ANOTHER
+    jb .fwd                     ; PROGRAM for this document (SPEC.md 21.5.4)
+                                ; and refused: a hand-on, not a failure - no
+                                ; toast, and no repaint, the posted launch
+                                ; being the next thing on the glass. A slot
+                                ; or ASSOC_FIND is below ASSOC_FLUSH; the
+                                ; flush assoc_locate's .learn posts is not a
+                                ; hand-on, and must not cost the handover
     call ld_say_status          ; record the verdict and SAY it (SPEC.md
                                 ; 59/22.9) - loader.inc's, `.cold` like this,
                                 ; so the call is near, and it preserves every
@@ -1349,6 +1339,9 @@ assoc_run_x:
 .lnk:                           ; package may now spend the document it was
     jmp short .out              ; handed - and a LINK's way out (SPEC.md
                                 ; 26.10.3), its slot word the one .out pops
+.fwd:                           ; the hand-on (21.5.4): the user's volume
+    call assoc_back             ; back, and nothing said. The post stands in
+    jmp short .out              ; [assoc_dapp] for ui_task's next pass
 .noassoc:
     push ax                     ; the word .out pops
     call assoc_back             ; no volume knows it: the package route's own
@@ -1368,6 +1361,8 @@ assoc_run_x:
     ; ASSOC.DAT. Bit 7 of [assoc_dead] is the once: volumes are 0..5 there
     test byte [assoc_dead], 0x80
     jnz .needs
+    call assoc_ownex            ; ONLY FOR THE EXTENSION'S OWN PROGRAM
+    jc .needs                   ; (54.4.2.4)
     or byte [assoc_dead], 0x80
     pop ax                      ; the slot the extension named...
     push ax
@@ -1454,6 +1449,30 @@ assoc_run_x:
 ; -----------------------------------------------------------------------------
 ; (THE CODE IS assoc_run_x's .handover since size pass 9, its one caller.)
 
+; assoc_ownex - CF=0 when the extension of assoc_doc names the slot its
+; caller banked on top of its stack (assoc_run_x's .nofile, which pops it
+; later). One OSAPI_PKG_START NAMED (21.5.3) is not the extension's to
+; replace: DOS names WIN16 for an .EXE, the sweep answered DOS, and DOS
+; forwarded again, a DOS a round on the UI stack until it overflowed
+; (SPEC.md 54.4.2.4). Out of line so the short jumps across .nofile stay
+; short - inline, two of them became five-byte pairs. Clobbers AX, BX, SI
+assoc_ownex:
+    mov si, assoc_doc
+    call assoc_slot_of          ; AL = the extension's slot
+    jc .r
+    mov bx, sp
+    cmp al, [ss:bx+2]           ; ...against the caller's banked one
+    je .r                       ; (equal: CF = 0)
+    stc
+.r:
+    ret
+    nop                         ; PARITY PAD, never executed: dsk_xfer and
+                                ; its hot neighbours behind it in .cold keep
+                                ; their parity (t_hotpar)
+%ifndef KERN_SMALL
+    nop                         ; ...and on kern_big since ASSOC_PWBANK's
+%endif                          ;   .banked arm (SPEC.md 54.9.1)
+
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
 ; shut, which is survivable and is exactly ui_tm_back's contract.
@@ -1525,6 +1544,7 @@ assoc_dead:  resb 1             ; volumes whose mount failed in this locate,
 %if assoc_dead - assoc_ddrv != 1
   %error "assoc_run_x stores assoc_ddrv and clears assoc_dead as one word"
 %endif
+ASSOC_PWBANK equ 0xFFFF         ; [assoc_pwin]: no window, the locator banked
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is
@@ -1804,11 +1824,15 @@ ASC_ROWCLUS  equ 10             ; the DIRECTORY the program lives in (0 = root),
                                 ; reserved - so SPEC.md 54.7.1's seeding costs
                                 ; the file not one byte
 ASC_ROWICO   equ 16             ; ...the icon's offset inside a row
-ASC_NAPP     equ 55             ; was 32 (and 16 before that), and apps720
-ASC_NEXT     equ 64             ; held exactly 32 packages while the 1.44MB
-ASC_KB       equ 5              ; apps disk held 34: 55*88 + 16 + 64*4 =
-                                ; 5,112 bytes, the most that fits 5KB with
-                                ; room for 64 extensions (SPEC.md 54.7.1)
+ASC_NAPP     equ 90             ; was 55 (32, and 16 before that): an
+ASC_NEXT     equ 64             ; install of everything not retired put ~64
+ASC_KB       equ 8              ; packages on ONE hard-disk volume. 90*88 +
+                                ; 16 + 64*4 = 8,192 bytes, the most that fits
+                                ; 8KB with room for 64 extensions. ASC_KB is
+                                ; now the LARGEST file and not every reader's
+                                ; claim: asc_use claims the file's own size
+                                ; (SPEC.md 54.7.7); the flush's work claim
+                                ; (ascw.inc) is the one still sized from it
 ; ...and that sum is now checked rather than kept up to date by hand. The ext
 ; rows are FOUR bytes, not ASC_ROW: asc_merge_ext walks them with `add di, 4`,
 ; which is the one number here that a reader is likely to get wrong, ASC_ROW
@@ -1862,25 +1886,12 @@ asc_use_x:
 .load:
     mov [asc_vol], al
     xor ax, ax
-    mov [asc_n], ax             ; ...and it holds nothing until proven
-    mov ax, ASC_KB              ; ALWAYS a fresh claim, and the `cmp [asc_seg],
-    mov bx, MEM_K_ASC           ; 0 / jne .haveseg` that used to stand here has
-    call mem_claim_x            ; gone with the session-long buffer it guarded:
-    jc asc_use_out              ; every exit below runs asc_drop (SPEC.md
-    mov [asc_seg], dx           ; 54.7.4), so this word is 0 whenever anything
-                                ; reaches here. A refusal is tier 2 - every
-                                ; lookup misses and the harvest reads sectors
-    mov ax, asc_reloc           ; ...and MOVABLE (SPEC.md 66.5.6), which is now
-    call mem_movable_x          ; a WITHIN-CALL requirement rather than the
-                                ; session-long one docs/HEAP-CLAIMS.md measured
-                                ; acting as a BARRIER: dsk_read_chain reaches
-                                ; the sector cache's own claims and those can
-                                ; compact (SPEC.md 18.95), so the block can
-                                ; move between the claim and the free even
-                                ; though nothing outside this routine will
-                                ; ever see it again. BX is still MEM_K_ASC,
-                                ; mem_claim preserving it, and AX is spent -
-                                ; asc_root_find answers in it
+    mov [asc_n], ax             ; ...and it holds nothing until proven.
+                                ; NO CLAIM YET: it is sized from the file
+                                ; (SPEC.md 54.7.7), so the root walk comes
+                                ; first. [asc_seg] is 0 here - every exit
+                                ; below frees it - so a refusal before the
+                                ; claim leaves .out nothing to give back
     ; --- ASSOC.DAT in the volume's ROOT: AX = its first cluster and DX =
     ; its size in sectors, or .out. This was asc_root_find (its notes are
     ; below), whose one caller this is - inline since size pass 9, and
@@ -1931,18 +1942,38 @@ asc_use_x:
     jmp short .rfsec
 .rffound:
     cmp dx, ASC_KB*2            ; ...and it must FIT (SPEC.md 54.7.1). Every
-    ja .out                     ; byte off a disk is hostile (SPEC.md 18.2)
-                                ; and dsk_read_chain reads the whole file into
-                                ; a fixed claim - so a bigger ASSOC.DAT than
-                                ; this build knows about is a heap overwrite,
-                                ; not a bad cache. It was unbounded until the
-                                ; row grew a cluster and made it worth asking
-    push dx                     ; the sectors dsk_read_chain is about to fill:
-                                ; the ONLY bound on what the rows below may say
-    mov es, [asc_seg]
-    xor bx, bx
+    ja .out                     ; byte off a disk is hostile (SPEC.md 18.2):
+                                ; ASC_KB is the LARGEST file this build
+                                ; writes, and anything past it is refused
+                                ; rather than read
+    xchg ax, si                 ; SI = the first cluster
+    mov ax, dx                  ; THE CLAIM IS THE FILE'S SIZE (SPEC.md
+    mov cl, 5                   ; 54.7.7), not the largest a file may be: a
+    shl ax, cl                  ; disk of a few programs reads a 1KB cache
+                                ; into 1KB - in PARAGRAPHS now, the sectors
+                                ; exactly, where a KB door paid 512 bytes for
+                                ; an odd count (SPEC.md 50.2.1). DX <=
+                                ; ASC_KB*2, so AX >= 32
+    mov cx, dx                  ; CX = the sectors dsk_read_chain is about to
+                                ; fill - the ONLY bound on what the rows below
+                                ; may say. HELD IN REGISTERS, not pushed:
+                                ; mem_claim keeps every register but DX,
+                                ; mem_movable all of them, so a refusal needs
+                                ; no frame to unwind (kernel size pass 15)
+    mov bx, MEM_K_ASC
+    call mem_claimp_x
+    jc .rfno                    ; refused: tier 2, every lookup misses
+    mov [asc_seg], dx
+    mov es, dx                  ; ES:BX = the claim for the read
+    mov ax, asc_reloc           ; ...and MOVABLE (SPEC.md 66.5.6), a
+    call mem_movable_x          ; WITHIN-CALL requirement: dsk_read_chain
+                                ; reaches the sector cache's own claims and
+                                ; those can compact (SPEC.md 18.95). BX is
+                                ; still MEM_K_ASC, mem_claim preserving it
+    xchg ax, si                 ; the cluster back for the read...
+    mov dx, cx                  ; ...and the sectors, which dsk_read_chain
+    xor bx, bx                  ; keeps (it clobbers AL alone)
     call dsk_read_chain_x         ; ES:BX = the claim
-    pop dx                      ; (pop leaves CF alone)
     jc .out
     mov es, [asc_seg]
     mov si, asc_s_magic         ; 'OS88AC' AND THE VERSION BYTE - the
@@ -1979,15 +2010,15 @@ asc_use_x:
                                 ; byte a disk merely implied)
     mov bl, ah                  ; the extension rows, four bytes each...
     mov cl, ASC_ROW
-    mul cl                      ; AX = the app rows' bytes: napp <= 32, so
-                                ; <= 2,816, and the 8-bit multiply cannot
+    mul cl                      ; AX = the app rows' bytes: napp <= ASC_NAPP, so
+                                ; <= 7,920, and the 8-bit multiply cannot
                                 ; touch DX
     xor bh, bh
     shl bx, 1
     shl bx, 1
     add bx, ax                  ; BX = what the header says the file contains,
     mov ax, dx                  ; less its header. DX = sectors, and at most
-    mov cl, 9                   ; ASC_KB*2 = 10 of them, so this cannot
+    mov cl, 9                   ; ASC_KB*2 = 16 of them, so this cannot
     shl ax, cl                  ; overflow: AX = what the file actually is
     sub ax, ASC_HDR
     cmp bx, ax
@@ -2084,8 +2115,8 @@ asc_seed:
     push di                     ; wanted in DI (assoc_app_of clobbers SI)
     call assoc_app_of           ; AL = the slot, CF=1 = this program has no
     jc .next                    ; association, so there is nothing to point
-    mov bl, al
-    xor bh, bh
+    cbw                         ; BX = the slot (< ASSOC_NAPP); AX is loaded
+    xchg bx, ax                 ; below (kernel size pass 17, -2)
     mov dl, [disk_drive]
     mov [assoc_drv+bx], dl
     mov ax, [es:di+ASC_ROWCLUS]
@@ -2269,10 +2300,7 @@ asc_stem_in:
 ; would DOWNGRADE a slot the seed had already resolved.
 ; -----------------------------------------------------------------------------
 asc_gly_pair:
-    push ax
-    push cx
-    push si
-    push di
+    call kentc_di
     call assoc_glyph_di         ; DI -> the slot's glyph
     add si, ASC_ROWGLY - ASC_ROWICO
     call assoc_glyph_take
@@ -2290,11 +2318,7 @@ asc_gly_pair:
     jz .out                     ; leave the glyph alone rather than blanking
     call assoc_reduce           ; one another volume resolved
 .out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; asc_take - spend a store hit: the program's location and its glyph
@@ -2321,13 +2345,9 @@ asc_gly_pair:
 ; per package for a body it already had.
 ; -----------------------------------------------------------------------------
 asc_take_x:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
+    call kentc_bp
     push es
-    push ax                     ; the store row: assoc_stem_of answers in DI
+    push ax
     call assoc_stem_of          ; and assoc_app_of in AL, so it cannot stay
     call assoc_app_di           ; where it is
                                 ; AL = the slot, CF=1 = no association, so
@@ -2342,8 +2362,8 @@ asc_take_x:
                                 ; package already has its slot: asc_merge_ext
                                 ; made it, or assoc_note_app did on a miss
     jc .done
-    mov bl, al
-    xor bh, bh
+    cbw                         ; BX = the slot (< ASSOC_NAPP); AX is
+    xchg bx, ax                 ; assoc_hint_here's to clobber (pass 17, -2)
     call assoc_hint_here        ; ...it is HERE (SPEC.md 54.4.2 rung 1)
     mov al, cl
     call ico_body               ; ES:DI -> the 64-byte body, with the eight
@@ -2351,10 +2371,7 @@ asc_take_x:
     mov si, di                  ; ROW IS THE CACHE ROW'S LAYOUT, so the shipped
     call asc_gly_pair           ; glyph and its reduce fallback are one walker
 .done:                          ; (SPEC.md 54.3.2) and not a second copy here
-    pop es
-    pop di
-    pop si
-    jmp kretc_cx
+    jmp kretc_es
 
 ; -----------------------------------------------------------------------------
 ; asc_post - post a flush of volume AL's ASSOC.DAT (SPEC.md 54.7.6.3)
@@ -2414,7 +2431,9 @@ asc_learn:
     mov es, [ico_seg]           ; live: ico_put has just answered a row
     mov ah, ICO_CAP_RSZ
     mul ah                      ; AL < ICO_CAP_MAX: the record's offset
-    add ax, ICO_CAP
+                                ; ...and the capture HEADS the claim
+                                ; (ICO_CAP = 0, SPEC.md 25.9.6), so it is the
+                                ; offset with nothing added
     xchg di, ax
     mov al, bl
     stosb                       ; the row, then its block
@@ -2469,7 +2488,8 @@ asc_reloc:
 asc_reloc   equ mem_rr_none
 %endif
 
-asc_seg:  dw 0                  ; the claim, 0 = none (refused, or not yet)
+                                ; (asc_seg, the claim, is memory.inc's
+                                ; mem_rr_lone: kernel size pass 15)
 asc_n:    dw 0                  ; app rows in it, 0 = no usable cache
 asc_ne:   dw 0                  ; ...and association rows
 asc_vol:  db 0xFF               ; whose cache it holds, 0xFF = nobody's

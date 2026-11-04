@@ -139,9 +139,17 @@ MOREIMG720    := $(BUILD)/more720.img
 # stays on demand - the release carries the 128KB machine at 360KB and 720KB
 SMALLIMG360   := $(BUILD)/small360.img
 SMALLIMG720   := $(BUILD)/small720.img
+# ...and WIN16's own disk in all four geometries (SPEC.md 124.18.1), since
+# S17 batch 4 (2026-10-31, the owner's decision): WIN16.O88 grew past what the
+# 1.44MB apps disk and more720.img had left, and it grows with every story to
+# S25, so it left the apps disks rather than evict something each time
+WIN16IMG      := $(BUILD)/win16.img
+WIN16IMG120   := $(BUILD)/win16-120.img
+WIN16IMG720   := $(BUILD)/win16-720.img
+WIN16IMG360   := $(BUILD)/win16-360.img
 
-# ...and all fourteen in one list (upstream's thirteen plus this fork's own
-# EXAMPLESIMGS), because it appeared in FOUR places (`all`
+# ...and all twenty-two in one list (upstream's twenty-one plus this fork's
+# own EXAMPLESIMGS), because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
 # tiers is one no gate ever reads, which is the failure this prevents rather
@@ -150,7 +158,8 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
             $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) $(EXAMPLESIMGS) \
-            $(SMALLIMG360) $(SMALLIMG720)
+            $(SMALLIMG360) $(SMALLIMG720) \
+            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360)
 
 # ...and each of them SIGNS IN A SLOT OF ITS OWN (SPEC.md 18.8.2.2): os88disk.py
 # reads this list (tools/os88ship.py) and steers every member's boot-sector
@@ -304,6 +313,7 @@ VM486VD := $(CURDIR)/vm/486-vesa-desk
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
 VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
+VMPENTPCI := $(CURDIR)/vm/pentium-pciether
 # The two Frotz machines (SPEC.md 61.9). Both carry a sound card, because
 # @sound_effect is part of what is being tested, and both have the FULL 640KB:
 # a Z-machine story is RESIDENT (SPEC.md 61.4) and 256KB does not hold the
@@ -1483,6 +1493,14 @@ endif
 # 39.14.7's mechanism and gives up 5.4.1's fast path on all of the block's
 # pixels rather than only on the seam. The A/B the cut is measured by, and
 # the only thing keeping the whole-virtual path assembling.
+# MEMGRAN=16 builds the heap on a 256-byte GRANULE (SPEC.md 50.2.1.1): the
+# DISK class (kernel/memory.inc MEM_ALIGN_CLASS) keeps every int 13h base
+# 512-aligned while a CPU-only claim (OSAPI_MEM_P's MEMP_CPU) may land on any
+# 256. A MEASUREMENT build - what the holes cost is the question it answers -
+# and t_buildmatrix's memgran256 row is what keeps it assembling
+ifneq ($(MEMGRAN),)
+VIDDEF += -DMEM_GRAN=$(MEMGRAN)
+endif
 ifneq ($(NOBLITCUT),)
 VIDDEF += -DNOBLITCUT
 endif
@@ -1518,10 +1536,16 @@ endif
 # KERN_MEGA=1 selects kern_mega (docs/plans/KERN-MEGA-PLAN.md): kern_big
 # switched into 286 PROTECTED MODE once it is up. ADDED to KERN_BIG the way
 # KERN_EMU is, for KERN_EMU's reason - every `%ifdef KERN_BIG` still applies.
-# It is a KNOB for now rather than a product: it is in $(KNOBS) and is NOT
-# exempted from -DKERN_KNOB below, so guard 1 does not bind it while it is
-# brought up and guard 2 (the 64KB segment) still does. `make mega` builds it
-# into build/megak/ and nothing under build/ that `all` ships is touched.
+# It is a NORMAL BUILD WITH A BUDGET OF ITS OWN since kern_mega size pass 1
+# (the owner's decision; docs/plans/completed/msp1/megabudget.md): it is in
+# $(KNOBS) for the stamp and the matrix, and it is EXEMPTED from -DKERN_KNOB
+# below with KERN_SMALL and KERN_EMU, so guard 1 binds it - on what it keeps
+# in CONVENTIONAL memory after the switch, KERN_MEGA_RESIDENT_KB (kernel.asm
+# rule 4) - and `make budget-check` measures it. Its own knobs (MEGATRAP,
+# MEGADIAG, MEGAFDMASK, PICLOSE) are NOT exempted and stay KERN_KNOB builds.
+# Built is not RELEASED: no release zip and no release skill carries its
+# disks yet. `make mega` builds it into build/megak/ and nothing under build/
+# that `all` ships is touched.
 ifneq ($(KERN_MEGA),)
 VIDDEF += -DKERN_MEGA
 endif
@@ -1563,6 +1587,17 @@ endif
 ifneq ($(MEGADIAG),)
 ifneq ($(KERN_MEGA),)
 VIDDEF += -DMEGA_DIAG
+endif
+endif
+
+# MEGAFDMASK=1 is kern_mega's A/B for the EMPTY-DRIVE FREEZE (KERN-MEGA-PLAN
+# 14.125): the native floppy path masks every IRQ line whose gate reflects to
+# an option ROM (a PicoMEM's multiplexer) for the length of its call, so no
+# reflection - on a 286 a CPU reset - lands in the middle of driving the 765.
+# `make megafdmask` builds its disks into build/megafdmask/. kern_mega only
+ifneq ($(MEGAFDMASK),)
+ifneq ($(KERN_MEGA),)
+VIDDEF += -DMEGA_FDMASK
 endif
 endif
 
@@ -1820,12 +1855,11 @@ SBSTAMP := $(BUILD)/.sbpkg$(if $(SBDRAGOFF),-off$(SBDRAGOFF))$(if $(SBRATE),-r$(
 # **LZ4 IS THE DEFAULT AND SHIPS** (SPEC.md 20.13.5). It was a knob for one
 # cycle, tested in the field on the 360KB set, and it is now what every
 # shipped floppy carries - so `make` alone builds the compressed disks and
-# `make PKGZ=` builds the uncompressed ones. LZB is NOT shipped: it is ten
-# points better on ratio and four times slower to expand, and until somebody
-# has that trade measured on a 5150 the machine takes the fast one. Its knob
-# stays, on both sides (`make PKGZ=lzb COMPRESS=lzb`, or `zset ZFMT=lzb`),
-# because the whole point of a second format is that it can be added on top
-# later without the disk layout moving.
+# `make PKGZ=` builds the uncompressed ones. LZ4 is the DEFAULT format; LZB
+# (ten points better on ratio, four times slower to expand) ships too, for the
+# twenty package builds `LZBPKGS` names (SPEC.md 20.13.5), so the kernel keeps
+# both decoders. `make PKGZ=lzb COMPRESS=lzb` (or `zset ZFMT=lzb`) packs
+# everything with it.
 #
 # THE KERNEL HAS TO CARRY THE FORMAT, so pair it: `make PKGZ=lzb COMPRESS=lzb`.
 # PKGZ alone with the default kernel gives an apps disk of packages that will
@@ -1876,8 +1910,8 @@ OS88PKGB := python3 tools/os88pkg.py $(if $(PKGZ),--compress-if=$(PKGZBFMT))
 # stamp's name carries a checksum of it, so adding a name rebuilds the set.
 # TAKING ONE OFF does not rebuild that package (its rule no longer names the
 # stamp): `rm build/<pkg>.o88` once, by hand.
-LZBPKGS := artful audio browser calc chart gorillas telnet thewire wirechat cyclone dotdel missile sheet solitair \
-           tamegram tank texpad wireball wireflet smallapp/calc smallapp/tank
+LZBPKGS := artful audio browser calc chart gorillas telnet thewire wirechat cyclone dotdel missile sheet \
+           tank texpad wireball wireflet smallapp/calc smallapp/tank
 PKGZBSTAMP := $(BUILD)/.pkgzb$(if $(PKGZ),-$(PKGZ)-$(PKGZBFMT))-$(shell printf '%s' '$(LZBPKGS)' | cksum | cut -d' ' -f1)
 
 # ...AND A STAMP, for exactly SBSTAMP's reason one paragraph up: none of the
@@ -2135,7 +2169,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              FONT INSTCHUNK NOPICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG HFDIAG HFTRACE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
+                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG MEGAFDMASK FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT MEMGRAN LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG HFDIAG HFTRACE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -2161,7 +2195,11 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # kern_emu carrying -DKERN_KNOB would SKIP guard 1 (the KERN_BUDGET footprint
 # check), so the one build that adds a feature would be the one build nothing
 # measured.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+# ...and KERN_MEGA joins them (kern_mega size pass 1): it was a knob while it
+# was brought up, and is a build with a budget of its own now (kernel.asm
+# rule 4). A kern_mega WITH a knob - MEGATRAP=1, MEGADIAG=1 and the rest -
+# still has that knob in this list, so it is still -DKERN_KNOB.
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% KERN_MEGA=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 BOOT2_XSEC := 1
 endif
@@ -2177,7 +2215,13 @@ endif
 # into the blob (ksp14/reach.md): kern_big's thirteen hold them with 61 bytes
 # to spare, and vmm_boot_x is the ~100 more that kern_emu carries. Only an
 # emulator boots it.
+# ...and kern_mega keeps the knob's sector it took while it WAS one (kern_mega
+# size pass 1): only a 286 or better boots it, so the sector costs no 8088
+# anything, and the kernel stays byte-identical to the knob build it was.
 ifneq ($(KERN_EMU),)
+BOOT2_XSEC := 1
+endif
+ifneq ($(KERN_MEGA),)
 BOOT2_XSEC := 1
 endif
 ifneq ($(BOOT2_XSEC),)
@@ -2231,7 +2275,7 @@ endif
 # for and what a knob build has to announce.
 empty :=
 space := $(empty) $(empty)
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(MEGAFDMASK),-mfm$(MEGAFDMASK))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(MEMGRAN),-mg$(MEMGRAN))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -2326,13 +2370,13 @@ KERNEL_SRC := kernel/kernel.asm
 # perfectly, never reached the disk, and the only symptom was os88sym refusing
 # a map that described "a DIFFERENT kernel".
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
-              drivers/thmpal/thmrows.inc
+              drivers/thmpal/thmrows.inc apps/os88la.inc apps/os88ub.inc
 
 .PHONY: stkdiag kbddiag small emu mega kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 286-video viddemo-vga viddemo-cga viddemo-herc viddemozip 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium \
+        286-sound 286-video viddemo-vga viddemo-cga viddemo-herc viddemozip 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium pentium-pciether \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -2667,6 +2711,14 @@ else
 BIGMODS = $(KMODDIR)/hiber.drv $(KMODDIR)/dock.drv $(KMODDIR)/extd.drv \
           $(KMODDIR)/win95.drv $(KMODDIR)/desk.drv $(KMODDIR)/stikmenu.drv
 endif
+# FSCHECK.DRV (SPEC.md 118.14.1) is cut beside them and is NOT in $(DRIVERS):
+# it is no mod_tab row and the kernel never loads it - System Check does, from
+# the folder SYSCHECK.O88 sits in - so it ships where $(SYSTOOLS) does and on
+# util360's root beside it, and never on the 360KB system disk, which has no
+# room for it. It is kern_big's alone, as System Check is - and only
+# kern_big's kernel build cuts it (-m 10 below), so a KERN_SMALL=1 tree has
+# none to put on a disk.
+FSCKMOD = $(if $(KERN_SMALL),,$(BUILD)/fscheck.drv)
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/diskops.drv
 # ...and kern_small's FIFTH and SIXTH, Cut/Copy/Paste (SPEC.md 22.3, MOD_FCP)
@@ -2688,7 +2740,8 @@ KMODARGS += -m 5=$(BUILD)/serial.drv
 else
 KMODARGS += -m 3=$(BUILD)/hiber.drv -m 4=$(BUILD)/dock.drv -m 5=$(BUILD)/extd.drv \
             -m 6=$(BUILD)/win95.drv -m 7=$(BUILD)/desk.drv \
-            -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv
+            -m 8=$(BUILD)/stikmenu.drv -m 9=$(BUILD)/serial.drv \
+            -m 10=$(BUILD)/fscheck.drv
 endif
 # ...AND THE MODULES ARE 'CZ' FILES ON THE DISK (SPEC.md 2.8, 20.13.5), by
 # the route a driver took: mod_need sizes its claim from the directory hint
@@ -2888,8 +2941,11 @@ endif
 # KERN_SMALL ALONE raises no alarm: it is the SHIPPED small-machine kernel
 # (SPEC.md 24.5.7), which `all` builds in its own sub-make, so the banner's
 # "rebuild with a plain make before cutting a release" would be wrong on every
-# plain `make`. Any other knob beside it still names both.
-ifneq ($(filter-out KERN_SMALL=%,$(KNOBS)),)
+# plain `make`. Any other knob beside it still names both. KERN_MEGA ALONE
+# is the same since it stopped being a knob build (KERN-MEGA-PLAN 14.126):
+# `make mega` is a normal build with a budget of its own, and the banner
+# fired on every one.
+ifneq ($(filter-out KERN_SMALL=% KERN_MEGA=%,$(KNOBS)),)
 	@echo "  *** BUILT WITH A KNOB: $(KNOBS)"
 	@echo "  *** It boots that way on every machine. Rebuild with a plain   ***"
 	@echo "  *** \`make\` before testing detection or cutting a release.      ***"
@@ -2902,7 +2958,7 @@ endif
 # a second recipe would run os88mod.py a second time, and GNU make would run
 # it once PER TARGET for a multi-target rule, which is the classic way to get
 # a file written twice and a race with -j.
-$(KMODS) $(BIGMODS): $(BUILD)/kernel.bin ;
+$(KMODS) $(BIGMODS) $(FSCKMOD): $(BUILD)/kernel.bin ;
 
 # The boot sector needs to know how many sectors to read, so we measure the
 # kernel at build time and assemble the count in. Reading exactly what exists
@@ -3550,7 +3606,7 @@ STIKARGS := $(addprefix STIKAPPS:,$(STIKAPPS))
 # not into $(SYSAPPSARGS)'s gate disks, not onto an apps disk, and not onto
 # kern_small's or kern_emu's images, neither of which installs to a hard disk
 # (the browser's live image filters it back out, LIVENOTOOLS below).
-SYSTOOLS := $(BUILD)/syscheck.o88
+SYSTOOLS := $(BUILD)/syscheck.o88 $(FSCKMOD)
 SYSTOOLSARGS := $(addprefix SYSTEM:,$(SYSTOOLS))
 # ...EXCEPT THE 360KB SYSTEM DISK (SPEC.md 24.3.1.7, the owner's of
 # 2026-10-22): there it rides util360.img, and an install from the 360KB pair
@@ -3627,6 +3683,8 @@ $(STIKNOTESTXT): apps/stiknote/welcome.txt | $(BUILD)
 # icon and the association block cannot drift.
 SYSROOT := $(BUILD)/kdos/DOS.O88
 SYSROOTARG := APPS:$(BUILD)/kdos/DOS.O88
+SYSROOT360 := $(BUILD)/kdos360/DOS.O88
+SYSROOTARG360 := APPS:$(BUILD)/kdos360/DOS.O88
 # ...and the SUBSET an APPS disk carries: the Task Manager alone, for the
 # single-floppy machine above. THEWIRE.O88 is on NO apps disk (CLAUDE.md,
 # SPEC.md 92.11): the desktop zone launches it out of the BOOT volume's
@@ -4091,7 +4149,7 @@ $(BUILD)/syscheck_man.inc: $(KERNFILE) $(DRIVERS360) $(SYS360OMITDRV) $(SYSAPPS)
 
 $(BUILD)/syscheck.bin: apps/syscheck/syscheck.asm apps/syscheck/scan.inc \
                        apps/syscheck/ui.inc apps/syscheck/out.inc \
-                       apps/syscheck/choose.inc \
+                       apps/syscheck/choose.inc apps/syscheck/disk.inc \
                        apps/os88api.inc apps/os88ui.inc apps/os88dec.inc \
                        apps/os88rseq.inc $(BUILDINC) $(BUILD)/syscheck_man.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ -o $@ apps/syscheck/syscheck.asm
@@ -4488,7 +4546,7 @@ $(BUILD)/hdd.hma.bin: drivers/hdd/hdd.asm apps/os88ui.inc drivers/hdd/hddabi.inc
 	$(NASM) -f bin -w+error $(DRVDEF) -DDRV_ORG=$(DRV_HMA_ORG) -I drivers/hdd/ \
 		--before "[map symbols $(BUILD)/hdd.hma.map]" \
 		-I drivers/ -I apps/ -I $(BUILD) \
-		-DHDTOOL_KB=$$(( ( $(call FILESIZE,$(BUILD)/hddtool.bin) + 1023 ) / 1024 )) \
+		-DHDTOOL_PARA=$$(( ( $(call FILESIZE,$(BUILD)/hddtool.bin) + 15 ) / 16 )) \
 		-o $@ drivers/hdd/hdd.asm
 	@touch $(BUILD)/hdd.hma.map     # (the same: sound.hma.bin's note)
 $(BUILD)/net.hma.bin: drivers/net/net.asm drivers/net/netui.inc \
@@ -4560,8 +4618,9 @@ $(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm apps/os88ui.inc drivers/hdd/hddabi
 $(BUILD)/hddtool.drv: $(BUILD)/hddtool.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/hddtool.bin -o $@
 
-# -DHDTOOL_KB is the claim HDD.DRV makes for the tool, and it is injected the
-# way boot.asm is told KERNEL_SECTORS: there is no file-size slot in the API,
+# -DHDTOOL_PARA is the claim HDD.DRV makes for the tool, in PARAGRAPHS
+# (SPEC.md 50.3.7, so the granule and not a whole KB is what rounds it), and
+# it is injected the way boot.asm is told KERNEL_SECTORS: there is no file-size slot in the API,
 # so a driver cannot ask how big a file is before it reads one. It is a
 # CEILING - a bigger tool on the disk is refused by OSAPI_FILE_READ before any
 # data moves, and a smaller one leaves the tail unread.
@@ -4571,7 +4630,7 @@ $(BUILD)/hdd.bin: drivers/hdd/hdd.asm apps/os88ui.inc drivers/hdd/hddabi.inc dri
                   drivers/os88drv.inc apps/os88api.inc \
                   $(BUILD)/hddtool.bin | $(BUILD)
 	$(NASM) -f bin -w+error $(DRVDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) \
-		-DHDTOOL_KB=$$(( ( $(call FILESIZE,$(BUILD)/hddtool.bin) + 1023 ) / 1024 )) \
+		-DHDTOOL_PARA=$$(( ( $(call FILESIZE,$(BUILD)/hddtool.bin) + 15 ) / 16 )) \
 		-o $@ $<
 	@echo "hdd:    $(call FILESIZE,$@) bytes"
 
@@ -4661,13 +4720,13 @@ $(BUILD)/cdrom.drv: $(BUILD)/cdrom.bin tools/os88drv.py $(PKGZSTAMP)
 # HTTPFS.DRV - SPEC.md 122: a read-only volume served over HTTP, through the
 # socket verbs ETHER.DRV and the cable answer (drivers/net/netpkg.inc).
 # Its Control Panel page is HTTPPAGE.DRV, RAMPAGE.DRV's shape (SPEC.md 122.5):
-# built FIRST, because -DHFPAGE_KB is the claim HTTPFS.DRV makes for it, off
+# built FIRST, because -DHFPAGE_PARA is the claim HTTPFS.DRV makes for it, off
 # the IMAGE - a ceiling, the transparent read expanding the 'CZ' file into it.
 #
 # HFDIAG=1 builds BOTH images with the read log (SPEC.md 122.2.1,
 # drivers/httpfs/hfdiag.inc): the last four reads, drawn on the page where
 # the status lines were - the instrument for a server this tree cannot reach.
-# Both, because the page is what draws it and -DHFPAGE_KB is cut from that
+# Both, because the page is what draws it and -DHFPAGE_PARA is cut from that
 # page. HFTRACE=1 is the verb ring (httpfs.asm), the driver alone. Neither
 # reaches a kernel byte, so they carry the drive's own stamp and are exempt
 # from -DKERN_KNOB - VPDIAG's shape: flipping either rebuilds these four files
@@ -4701,7 +4760,7 @@ $(BUILD)/httppage.drv: $(BUILD)/httppage.bin tools/os88drv.py $(PKGZSTAMP)
 $(BUILD)/httpfs.bin: $(HTTPFS_SRC) drivers/os88drv.inc apps/os88api.inc \
                      drivers/httpfs/hfdiag.inc $(BUILD)/httppage.bin | $(BUILD)
 	$(NASM) -f bin -w+error $(HFDEF) -I drivers/httpfs/ -I drivers/net/ -I drivers/ -I apps/ \
-	        -DHFPAGE_KB=$$(( ( $(call FILESIZE,$(BUILD)/httppage.bin) + 1023 ) / 1024 )) \
+	        -DHFPAGE_PARA=$$(( ( $(call FILESIZE,$(BUILD)/httppage.bin) + 15 ) / 16 )) \
 	        -o $@ $<
 	@echo "httpfs: $(call FILESIZE,$@) bytes"
 
@@ -4743,8 +4802,8 @@ $(shell mkdir -p $(BUILD); \
                                touch $(RDSTAMP); })
 
 # RAMPAGE.DRV is the RAM disk's OTHER half (SPEC.md 62.9.9), and it is built
-# FIRST for hddtool.bin's reason: -DRAMPAGE_KB is the claim RAMDISK.DRV makes
-# for it, injected the way boot.asm is told KERNEL_SECTORS, because there is no
+# FIRST for hddtool.bin's reason: -DRAMPAGE_PARA is the claim RAMDISK.DRV
+# makes for it, in paragraphs (SPEC.md 50.3.7), injected the way boot.asm is told KERNEL_SECTORS, because there is no
 # file-size slot in the API and a driver cannot ask how big a file is before it
 # reads one. It is a CEILING - a bigger page on the disk is refused by
 # OSAPI_FILE_READ before any data moves, and a smaller one leaves the tail
@@ -4784,7 +4843,7 @@ $(BUILD)/rampage.bin: drivers/ramdisk/rampage.asm drivers/ramdisk/rdabi.inc \
 # Since SPEC.md 20.13.3.1 a compressed driver IS a 'CZ' file and
 # OSAPI_FILE_READ is the transparent read (20.14.3): the page arrives
 # EXPANDED into a claim the ramdisk.bin rule below cuts from the IMAGE
-# (-DRAMPAGE_KB off rampage.bin), and rd_page_check runs against the image.
+# (-DRAMPAGE_PARA off rampage.bin), and rd_page_check runs against the image.
 # HDDTOOL.DRV is the same class and went the same way (20.13.5.1);
 # tests/unit/t_drvovl.py is the rule for the class, read off the drivers'
 # own source, and tests/rdup.py drives the page.
@@ -4800,7 +4859,7 @@ $(BUILD)/ramdisk.bin: drivers/ramdisk/ramdisk.asm drivers/ramdisk/rdabi.inc \
                       $(BUILD)/rampage.bin | $(BUILD)
 	$(NASM) -f bin -w+error $(RDSEEDDEF) -I drivers/ramdisk/ -I drivers/ \
 	        -I apps/ -I $(BUILD)/ \
-	        -DRAMPAGE_KB=$$(( ( $(call FILESIZE,$(BUILD)/rampage.bin) + 1023 ) / 1024 )) \
+	        -DRAMPAGE_PARA=$$(( ( $(call FILESIZE,$(BUILD)/rampage.bin) + 15 ) / 16 )) \
 	        -o $@ $<
 	@echo "ramdisk: $(call FILESIZE,$@) bytes"
 
@@ -4867,6 +4926,7 @@ $(shell mkdir -p $(BUILD); \
 # did nothing; the profiler's own symbol reader is what caught it, because it
 # re-assembles the source and refuses a build/ether.bin that does not match.
 $(BUILD)/ether.bin: drivers/ether/ether.asm drivers/ether/ne2000.inc \
+                    drivers/ether/ethdrv.inc drivers/ether/nicne2k.inc \
                     drivers/ether/inet.inc drivers/ether/tcp.inc \
                     drivers/ether/dns.inc drivers/ether/etherui.inc \
                     drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \
@@ -4884,6 +4944,33 @@ $(BUILD)/ether.bin: $(ETHSTAMP)
 
 $(BUILD)/ether.drv: $(BUILD)/ether.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ether.bin -o $@
+
+# PCIETHER.DRV (SPEC.md 125): the PCI half of the above, kern_mega only. It is
+# ether.asm's body (ethdrv.inc) and the stack's includes SHARED AS SOURCE over
+# a PCI backend, so every file the stack is made of is a prerequisite, and
+# ETHER.DRV's knobs (ETHDEF: a baked-in base or address, the stage timers) are
+# NOT passed - none of them means anything on a PCI bus. It is in `all` so it
+# keeps assembling; it is on NO disk here (kern_mega's recipes add it, 125.6).
+$(BUILD)/pciether.bin: drivers/pciether/pciether.asm drivers/pciether/pcifamily.inc \
+                       drivers/pciether/pci.inc drivers/pciether/rtl8139.inc \
+                       drivers/ether/ethdrv.inc \
+                       drivers/ether/inet.inc drivers/ether/tcp.inc \
+                       drivers/ether/dns.inc drivers/ether/etherui.inc \
+                       drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \
+                       drivers/ether/ethstate.inc drivers/ether/ethsock.inc \
+                       drivers/ether/ethusr.inc \
+                       drivers/net/netpkg.inc drivers/os88drv.inc \
+                       drivers/wirezone.inc \
+                       apps/os88api.inc apps/os88ui.inc apps/os88line.inc \
+                       | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/pciether/ -I drivers/ether/ \
+	        -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+	@echo "pciether: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pciether.drv: $(BUILD)/pciether.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pciether.bin -o $@
+
+all: $(BUILD)/pciether.drv
 
 # IT CARRIES THE WHOLE TCP/IP STACK NOW (SPEC.md 62.11.1): /N serves sockets,
 # and the stack it serves them with is drivers/ether's own, over a packet
@@ -5511,10 +5598,10 @@ $(BUILD)/wirecfg/WIRE.CFG: | $(BUILD)
 # volume wants the second. This rule arrived from `main`, where they are the
 # same bytes, and merged with no conflict - so the disk booted to a BLACK
 # 720x400 text screen and every row on it reported the feature broken.
-$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
+$(BUILD)/thewire360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/wirecfg/SYSTEM.CFG $(BUILD)/wirecfg/WIRE.CFG tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/wirecfg/SYSTEM.CFG SYSTEM/APPDATA:$(BUILD)/wirecfg/WIRE.CFG
 
 # THE DATA DISK IS SCRATCH AND CARRIES NO PACKAGE. It used to hold a second
@@ -5651,10 +5738,10 @@ $(BUILD)/covoxsys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS)
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/covoxcfg2/system.cfg $(APPDATAFOLDER)
 
-$(BUILD)/covoxsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/covoxcfg1/system.cfg tools/os88disk.py
+$(BUILD)/covoxsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/covoxcfg1/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/covoxcfg1/system.cfg $(APPDATAFOLDER)
 
 .PHONY: covoxtest
@@ -5698,11 +5785,37 @@ $(BUILD)/pmsys720.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
 		$(BUILD)/pmcfg720/system.cfg $(BUILD)/pmdma.o88 $(PMSYS720ARGS) $(APPDATAFOLDER)
 
-$(BUILD)/pmsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 tools/os88disk.py
+$(BUILD)/pmsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 $(APPDATAFOLDER)
+
+# PMBOXTEST - the B: disk for the PicoMEM UNDER 86Box (tools/picomem,
+# vm/xt-picomem1, docs/plans/completed/PICOMEM-EMU-PLAN.md), beside pmsys360.img in A:
+# (SOUND/ETHER/USBMOUSE wanted at boot): PMDMA, and SBTEST - 2 s of a 1 kHz
+# square at 8,000 Hz, mono 8-bit, the one thing a DSP 2.x plays, for a row to
+# hear through the card's own DAC (OS88_PMWAV). tests/pmbox.py is the row.
+$(BUILD)/pmboxb360.img: $(BUILD)/pmdma.o88 $(BUILD)/sbtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/pmdma.o88 $(BUILD)/sbtest.o88
+
+# ...and the hard disk the card serves as 80h off its microSD: os8088 booted
+# from a PicoMEM-hosted image, the field machine's own setup (SPEC.md
+# 52.10.16), with A: empty - the card's BIOS int 13h and the kernel's hard-disk
+# loader, every sector through the card's PC-command channel.
+$(BUILD)/pmhd.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) $(DRIVERS) \
+                   $(BUILD)/pmcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --hdd \
+	    --mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+	    --kernel $(KERNFILE) \
+	    $(DRIVERS) $(BUILD)/pmcfg/system.cfg --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify-hdd $@
+
+.PHONY: pmboxtest
+pmboxtest: $(BUILD)/pmsys360.img $(BUILD)/pmboxb360.img $(BUILD)/pmhd.img
+ifneq ($(NOPICOMEM),)
+	$(error pmboxtest is meaningless with NOPICOMEM=1: SOUND.DRV would not ask the card for anything)
+endif
 
 .PHONY: picomemtest
 picomemtest: $(BUILD)/pmsys720.img $(BUILD)/pmsys360.img
@@ -5796,10 +5909,10 @@ ethertest: $(BUILD)/ether360.img
 	@echo "ethertest: build/ether360.img - the Ethernet driver already wanted."
 	@echo "           Run it with: python3 tests/ethernet.py"
 
-$(BUILD)/ether360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
+$(BUILD)/ether360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/system.cfg tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/system.cfg
 
 # FTPDTEST: the FTP SERVER's gate disk (SPEC.md 77, docs/plans/completed/NET-STACK-PLAN.md
@@ -6004,10 +6117,10 @@ $(BUILD)/ftpapps.img: $(FTPDFILES) tools/os88disk.py
 # is what fails if this flag is lost, and autostart360.img below takes it too
 # because it is this disk plus four files.
 SYS360SPC := --spc 1
-$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS360) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT) $(SYSINST) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
+$(IMG360): $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS360) $(SYSAPPS) $(STIKAPPS) $(STIKNOTESTXT) $(SYSROOT360) $(SYSINST) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG) $(SYSINST) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(STIKNOTESARG) $(SYSROOTARG360) $(SYSINST) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # AUTOSTARTTEST - the LINKS and AUTOSTART gate's disk (SPEC.md 26.10): the
@@ -6032,10 +6145,10 @@ $(BUILD)/astest/.made: tools/os88lnk.py | $(BUILD)
 	echo 'Not a link: autostart opens only *.LNK' > $(BUILD)/astest/NOTES.TXT
 	touch $@
 
-$(BUILD)/autostart360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(BUILD)/astest/.made
+$(BUILD)/autostart360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(STIKAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(BUILD)/astest/.made
 	python3 tools/os88disk.py -o $@ --size 360 $(SYS360SPC) \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(FACESARG360) \
 		$(BUILD)/astest/CALC.LNK AUTOSTRT:$(BUILD)/astest/BADVER.LNK \
 		AUTOSTRT:$(BUILD)/astest/NOTES.TXT AUTOSTRT:$(BUILD)/astest/TASKMGR.LNK \
 		$(APPDATAFOLDER)
@@ -6089,10 +6202,10 @@ $(LZDDIR)/ramdisk.drv: $(BUILD)/ramdisk.bin tools/os88drv.py tools/os88lz.py
 
 $(BUILD)/lzdrv360.img: $(BUILD)/boot360.bin $(KERNFILE) \
                        $(LZDRIVERS) $(SYSAPPS) $(STIKAPPS) $(COREAPPS360) $(SYSDOC) \
-                       $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(SYSROOT)
+                       $(SYSLOGO) $(FACES360) $(FACELIC) tools/os88disk.py $(SYSROOT360)
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(LZDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) \
+		$(LZDRIVERS) $(SYSAPPSARGS) $(STIKARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG360) $(APPDATAFOLDER)
 
 .PHONY: lzdrvtest
@@ -6958,9 +7071,11 @@ $(BUILD)/install-gate.o88: $(BUILD)/install-gate.bin tools/os88pkg.py $(PKGZSTAM
 
 # THE PUBLISHED TREES (SPEC.md 117.10.2): per kernel, the 1.44MB system and
 # apps disks as one tree, OS88VER.TXT and its OS88.IDX - build/nettree/big/
-# from os8088.img + apps.img, build/nettree/mega/ from mega.img +
-# megaapps.img, build/nettree/emu/ from emu.img + the SHIPPED apps.img (there
-# is no emu apps disk, `make emu`). On demand; the release publishes
+# from os8088.img + apps.img + win16.img, build/nettree/mega/ from mega.img +
+# megaapps.img (no WIN16: it refuses there, SPEC.md 124.1), build/nettree/emu/
+# from emu.img + the SHIPPED apps.img (there is no emu apps disk, `make emu`)
+# + win16.img. WIN16 left the apps disk for its own (SPEC.md 124.18.1), and
+# an installed machine still gets it. On demand; the release publishes
 # build/nettree/ whole under $(INURLBASE) (117.10.2's store), so each lands
 # where its own INSTALL looks.
 .PHONY: nettree nettree-big nettree-mega nettree-emu
@@ -6968,18 +7083,18 @@ nettree: nettree-big nettree-mega nettree-emu
 nettree-big: $(BUILD)/nettree/big/OS88.IDX
 nettree-mega: $(BUILD)/nettree/mega/OS88.IDX
 nettree-emu: $(BUILD)/nettree/emu/OS88.IDX
-$(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
+$(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) $(WIN16IMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
-	python3 tools/os88nettree.py $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
-		$(BUILD)/nettree/big
+	python3 tools/os88nettree.py $(IMG) $(APPSIMG) $(WIN16IMG) \
+		apps/install/OS88VER.TXT $(BUILD)/nettree/big
 $(BUILD)/nettree/mega/OS88.IDX: $(BUILD)/mega.img $(BUILD)/megaapps.img \
                                 apps/install/OS88VER.TXT \
                                 tools/os88nettree.py tools/os88httpdrv.py
 	python3 tools/os88nettree.py $(BUILD)/mega.img $(BUILD)/megaapps.img \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/mega
-$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) apps/install/OS88VER.TXT \
+$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) $(WIN16IMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
-	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) \
+	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) $(WIN16IMG) \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/emu
 
 $(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)
@@ -7026,12 +7141,23 @@ endif
 ifneq ($(VPDIAG),)
 VPDEF += -DVP_DIAG
 endif
-VPSTAMP := $(BUILD)/.vplayer-$(if $(NOLIVESND),nolivesnd,livesnd)$(if $(VPDIAG),-diag)
+# VPDIAG=time adds the TIMED READ LOG (VP_RDTIME, SPEC.md 98.3.22.4): every
+# read's length and how far the picture was behind the card when it began,
+# which `tools/os88vfit.py FILE.V88 VPPROFn.DAT --reads` prints
+ifeq ($(VPDIAG),time)
+VPDEF += -DVP_RDTIME
+endif
+# ...and the kern_mega ARM's diag build leaves out the speaker SHAPER
+# (VP_NOSPKFX, 2,367 bytes): the arm plus the card is over APP_MAX_SIZE by
+# ~1.2 KB, and a card-made clip on the speaker is the one play it drops
+# (silent). A file made for the speaker plays as ever; the shipped builds
+# never define it
+VPSTAMP := $(BUILD)/.vplayer-$(if $(NOLIVESND),nolivesnd,livesnd)$(if $(VPDIAG),-diag$(filter time,$(VPDIAG)))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VPSTAMP) ] || { rm -f $(BUILD)/.vplayer-* \
                                       $(BUILD)/video.bin $(BUILD)/video.o88; \
                                 touch $(VPSTAMP); })
-$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
+$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
                     apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
                     apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -o $@ apps/video/video.asm
@@ -7051,6 +7177,11 @@ $(BUILD)/vblk.bin: apps/video/vblk.asm apps/video/vblk.inc | $(BUILD)
 $(BUILD)/vblkpm.bin: apps/video/vblk.asm apps/video/vblk.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVB_PM -o $@ apps/video/vblk.asm
 VBLKPARTS = --part $(BUILD)/vblk.bin
+# ...and the kern_mega arm's part 2, the SPEAKER SHAPER (SPEC.md 98.3.15.2):
+# apps/os88spkfx.inc assembled alone, because the arm outgrew APP_MAX_SIZE
+# and the shaper is its one subsystem with a three-call interface. The
+# shipped VIDEO.O88 includes os88spkfx.inc as it always did. Assembled
+# -DPKG_MEGA into $(MEGAAPPDIR), the arm's own (KERN-MEGA-PLAN 14.66)
 
 $(BUILD)/video.o88: $(BUILD)/video.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/video.bin -o $@ $(VBLKPARTS)
@@ -7435,8 +7566,8 @@ $(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP) $(PKG
 # alone - the granule RDPV_MOUNT rounds a size up to, which the refusal
 # strings have to name.
 # --- DOS (SPEC.md 96) --------------------------------------------------------
-$(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                  apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+$(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                  apps/dos/doshelp.asm apps/dos/dosc.inc apps/dos/dosw.inc apps/dos/doswm.inc apps/dos/doswabi.inc apps/dos/doswr.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/win16/w16jgive.inc apps/dos/dosset.inc apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/dos/dospkt.inc \
                   apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                   apps/os88line.inc apps/os88sock.inc \
@@ -7529,8 +7660,8 @@ $(shell mkdir -p $(BUILD); \
                                touch $(KDSTAMP); })
 
 $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
-                      apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                      apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                      apps/dos/dosc.inc apps/dos/dosw.inc apps/dos/doswm.inc apps/dos/doswabi.inc apps/dos/doswr.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/win16/w16jgive.inc apps/dos/dosset.inc apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/dos/dospkt.inc \
                       apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                       apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7547,8 +7678,8 @@ $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 # program that wants the 1MB wrap. kern_mega's DOS.O88 carries it as part 3
 # and the Memory page's `Load DOS in the HMA` picks; nothing else builds it.
 $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
-                       apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                       apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                       apps/dos/dosc.inc apps/dos/dosw.inc apps/dos/doswm.inc apps/dos/doswabi.inc apps/dos/doswr.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/win16/w16jgive.inc apps/dos/dosset.inc apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/dos/dospkt.inc \
                        apps/os88api.inc apps/dos/doscall.inc \
                        apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                        apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7561,29 +7692,93 @@ $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 	@echo "kerndosl: $(call FILESIZE,$@) bytes (kern_mega's low kern_dos)"
 
 # A Windows program double-clicked hands itself to WIN16.O88 (SPEC.md
-# 124.18.1, apps/dos/dosw16.inc) on the two kernels whose disks carry WIN16:
-# kern_small has no OSAPI_WM_TIMER and kern_mega refuses it (124.1), so
-# their DOS.O88 stays without the forward. Each builds into a tree of its
+# 124.18.1, apps/dos/dosw16.inc) on the three kernels with a WIN16 disk -
+# kern_big, kern_emu, and kern_mega since its arm (124.31.1): kern_small has
+# no OSAPI_WM_TIMER, so its DOS.O88 stays without the forward. Each builds into a tree of its
 # own, so the arm needs no stamp.
-DOSW16DEF := $(if $(KERN_MEGA)$(KERN_SMALL),,-DDOS_WIN16)
+DOSW16DEF := $(if $(KERN_SMALL),,-DDOS_WIN16)
 
 # ...and the package that carries it. -DDOSKPART is 18 bytes of part table and
 # nothing else: the standard's 800-byte body is NOT emitted, because this part
 # is never read by op_load - the handoff walks its bytes into extents and the
 # stub reads them with int 13h (docs/plans/KERN-DOS-PLAN.md §4.1.1).
-$(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+$(BUILD)/dospw.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                   apps/dos/doshelp.asm apps/os88pself.inc apps/dos/dosset.inc \
+                   apps/dos/dosc.inc apps/dos/dosw.inc apps/dos/doswm.inc apps/dos/doswabi.inc apps/dos/doswr.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/win16/w16jgive.inc apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/dos/dospkt.inc \
                    apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                    apps/os88line.inc apps/os88sock.inc \
                    apps/os88con.inc apps/os88cp437.inc \
                    apps/os88parts.inc apps/os88partsbody.inc apps/os88rseq.inc \
                    kerndos/kdlaunch.inc \
+                   apps/dos/doswcell.inc tools/os88dvwexp.py \
                    drivers/net/netpkg.inc $(DOSNETSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
 	        -I kerndos/ $(if $(DOSNETCARD),-DDOSNET_CARD) -DDOSKPART -DDOS_EXTCORE \
-	        $(if $(KERN_MEGA),-DDOS_MEGA) $(DOSW16DEF) \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) $(DOSW16DEF) -DDOSP_MAP=$(BUILD)/dosp.map \
 	        -o $@ apps/dos/dos.asm
+	$(if $(KERN_MEGA),,python3 tools/os88dvwexp.py check $(BUILD)/dosp.map)
+
+# ...cut into PART 0, the resident host - and on kern_mega, whose host has no
+# tail, the assembly IS part 0
+$(BUILD)/dosp.bin: $(BUILD)/dospw.bin tools/doswtail.py
+	$(if $(KERN_MEGA),cp $(BUILD)/dospw.bin $@,python3 tools/doswtail.py cut \
+	        $(BUILD)/dospw.bin $(BUILD)/dosp.map $@ $(BUILD)/doswin.bin)
+
+# ...THE WINDOW, as PART 1 of DOS.O88 (SPEC.md 96.44.19): the same assembly's
+# tail, cut off at `.wtext`'s first byte by the recipe above. Part 0 is the
+# resident host to the end of its bss and this follows it in the carve, so it
+# lands at CS:roundup16(part 0's length) - the offset it was assembled at -
+# and every call between the two stays near. kern_mega's host has no tail.
+$(BUILD)/doswin.bin: $(BUILD)/dosp.bin ;
+
+# ...and the WINDOW'S TAIL, CHECKED (docs/plans/DOS-HEADLESS-PLAN.md 4.4,
+# SPEC.md 96.44.19): this host puts everything that only SHOWS the window in a
+# section after the resident host, and tools/doswtail.py assembles it a second
+# time with that section moved up DOS_WSHIFT bytes - so any byte of the
+# resident host that moved with it is a reference into the tail, and outside a
+# WIN_ONLY bracket it FAILS the build. kern_mega's host has no tail.
+DOSPFLAGS = -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ \
+            $(if $(DOSNETCARD),-DDOSNET_CARD) -DDOSKPART -DDOS_EXTCORE \
+            $(if $(KERN_MEGA),-DDOS_MEGA) $(DOSW16DEF)
+$(BUILD)/doswtail.stamp: $(BUILD)/dosp.bin tools/doswtail.py
+	$(NASM) $(DOSPFLAGS) -DDOS_WSHIFT=0x110 -o $(BUILD)/doswts.bin apps/dos/dos.asm
+	python3 tools/doswtail.py check $(BUILD)/dospw.bin $(BUILD)/dosp.map \
+	        $(BUILD)/doswts.bin
+	@rm -f $(BUILD)/doswts.bin
+	@touch $@
+
+# ...and the WINDOWED LAYER as a part (SPEC.md 96.54.9), the SECOND pass of a
+# two-pass build: the host above writes its map, the checker refuses any
+# reference the boundary's macros do not cover (apps/dos/doswabi.inc), `exp`
+# names the host's symbols for the part, and the part assembles against them.
+# kern_mega's DOS.O88 carries none (it has no windowed layer at all).
+$(BUILD)/doswexp.inc: $(BUILD)/dosp.bin tools/os88dvwexp.py apps/dos/doswp.asm
+	python3 tools/os88dvwexp.py exp $(BUILD)/dosp.map $@
+
+$(BUILD)/doswp.bin: apps/dos/doswp.asm apps/dos/dosw.inc apps/dos/doswm.inc \
+                    apps/dos/doswabi.inc apps/dos/doswcell.inc \
+                    $(BUILD)/doswexp.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I $(BUILD)/ \
+	        -o $@ apps/dos/doswp.asm
+	@echo "doswp: $(call FILESIZE,$@) bytes of DOS's windowed part"
+
+# ...and the SETUP PAGE as a part (SPEC.md 96.32.2.3): the same assembly with
+# -DDOS_SETEMIT, which appends apps/dos/dosset.inc after every byte of the
+# host in a section of its own. tools/dossetchk.py checks that the host half
+# IS $(BUILD)/dospw.bin (both parts), that no near branch leaves the part (nasm resolves one
+# into the host silently), and cuts the part off. kern_mega's DOS.O88 keeps the
+# page inline, so this is not built into it.
+$(BUILD)/dossetp.bin: $(BUILD)/dosp.bin tools/dossetchk.py apps/dos/dos.asm \
+                      apps/dos/dosset.inc apps/dos/doscall.inc \
+                      apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/win16/w16join.inc apps/win16/w16jgive.inc \
+                      apps/os88api.inc apps/os88cp437.inc \
+                      apps/os88partsbody.inc drivers/net/netpkg.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
+	        -I kerndos/ $(if $(DOSNETCARD),-DDOSNET_CARD) -DDOSKPART -DDOS_EXTCORE \
+	        $(DOSW16DEF) -DDOS_SETEMIT -o $(BUILD)/dossetx.bin apps/dos/dos.asm
+	python3 tools/dossetchk.py $(BUILD)/dossetx.bin $(BUILD)/dospw.bin $@
+	@rm -f $(BUILD)/dossetx.bin
 
 # --- THE CORE, ON ITS OWN (SPEC.md 96.44) -----------------------------------
 # Nothing consumes this yet and that is the point: it is what CHECKS the core's
@@ -7591,9 +7786,9 @@ $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
 # or a core routine that still names a host symbol, fails here and in no other
 # build - the two hosts each carry the other half and would never notice.
 # `all` builds it, because a check nobody runs is a check that rots.
-$(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \
-                      apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
+$(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc apps/dos/doshelp.asm \
+                      apps/dos/dosc.inc apps/dos/dosw.inc apps/dos/doswm.inc apps/dos/doswabi.inc apps/dos/doswr.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/win16/w16jgive.inc apps/dos/dosset.inc apps/dos/dosnet.inc \
+                      apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/dos/dospkt.inc apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
                       apps/os88con.inc apps/os88cp437.inc apps/os88text.inc apps/basic/baslang.inc apps/os88fp.inc \
@@ -7613,22 +7808,55 @@ $(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
 # itself was it. The loader is 1,812 bytes and the two heavy pieces are parts,
 # both compressed: the windowed DOS as OP_SEG|OP_COMP and kern_dos as
 # OP_ASSET|OP_COMP|OP_LAZY, the pairing 20.12.7.4 had to unrefuse.
-$(BUILD)/kdos/DOS.O88: $(BUILD)/dosload.bin $(BUILD)/dosp.bin \
-                       $(BUILD)/doscore.bin $(BUILD)/kerndos.bin tools/os88pkg.py \
-                       $(if $(KERN_MEGA),$(BUILD)/kerndosl.bin) $(PKGZSTAMP)
+DOSPARTBINS = $(BUILD)/dosp.bin $(if $(KERN_MEGA),,$(BUILD)/doswin.bin) \
+              $(BUILD)/doscore.bin $(BUILD)/kerndos.bin \
+              $(if $(KERN_MEGA),$(BUILD)/kerndosl.bin) $(BUILD)/doshelp.bin \
+              $(if $(KERN_MEGA),,$(BUILD)/dosnetp.bin $(BUILD)/dossetp.bin $(BUILD)/doswp.bin)
+$(BUILD)/kdos/DOS.O88: $(BUILD)/dosload.bin $(DOSPARTBINS) tools/os88pkg.py $(PKGZSTAMP) \
+                      $(if $(KERN_MEGA),,$(BUILD)/doswtail.stamp)
 	@mkdir -p $(BUILD)/kdos
-	$(OS88PKG) $(BUILD)/dosload.bin -o $@ \
-		--part $(BUILD)/dosp.bin --part $(BUILD)/doscore.bin \
-		--part $(BUILD)/kerndos.bin \
-		$(if $(KERN_MEGA),--part $(BUILD)/kerndosl.bin) --part-compress lz4
+	$(OS88PKG) $(BUILD)/dosload.bin -o $@ $(addprefix --part ,$(DOSPARTBINS)) \
+		--part-compress lz4
 	@echo "kdos: $(call FILESIZE,$@) bytes of DOS.O88 with kern_dos in it"
 
+# ...AND THE 360KB SYSTEM DISK'S COPY, PACKED LZB (the owner, 2026-11-02;
+# SPEC.md 96.44.18): the same seven parts, ~6 KB smaller (52,971 -> 46,965
+# measured, 52 -> 46 clusters) for an estimated ~0.85 s more decode per
+# launch on a 4.77 MHz 8088. 360KB only, because that is the geometry that
+# runs out; an install made from it carries the LZB copy onto the hard disk,
+# which the owner accepted. Every other disk keeps the lz4 one above.
+$(BUILD)/kdos360/DOS.O88: $(BUILD)/dosload.bin $(DOSPARTBINS) tools/os88pkg.py $(PKGZSTAMP)
+	@mkdir -p $(BUILD)/kdos360
+	$(OS88PKG) $(BUILD)/dosload.bin -o $@ $(addprefix --part ,$(DOSPARTBINS)) \
+		--part-compress lzb
+	@echo "kdos360: $(call FILESIZE,$@) bytes of the 360KB disk's LZB DOS.O88"
+
+# HELP's text as a part of its own (docs/plans/DOS-PARTS-PLAN.md 1.1): the
+# re-homed host reads it with op_self (apps/os88pself.inc) when HELP is typed,
+# so not one of its bytes is resident in a DOS window that never asks
+$(BUILD)/doshelp.bin: apps/dos/doshelp.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ apps/dos/doshelp.asm
+
+# ...and the NETWORK as a part (SPEC.md 96.23.11): the packet driver and the
+# cable translation, read by the host's op_self into the head of the network
+# claim only when a run will publish a packet driver - so a DOS window that
+# never runs a program on a wire never holds a byte of them. kern_mega's
+# DOS.O88 carries none (every launch there is the whole machine), so the part
+# is not built into it.
+$(BUILD)/dosnetp.bin: apps/dos/dosnetp.asm apps/dos/dospkt.inc apps/dos/dosnet.inc \
+                      apps/dos/dospktabi.inc apps/dos/dosnetabi.inc \
+                      apps/os88api.inc drivers/net/netpkg.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
+	        -o $@ apps/dos/dosnetp.asm
+	@echo "dosnetp: $(call FILESIZE,$@) bytes of DOS's network part"
+
 $(BUILD)/dosload.bin: apps/dos/dosload.asm apps/dos/dosicon.inc \
+                      apps/win16/w16join.inc apps/win16/w16jgive.inc \
                       apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88parts.inc \
                       apps/os88partsbody.inc apps/os88rseq.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -DDOS_EXTCORE \
-	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/dos/dosload.asm
+	        $(if $(KERN_MEGA),-DDOS_MEGA) $(DOSW16DEF) -o $@ apps/dos/dosload.asm
 	@echo "dosload: $(call FILESIZE,$@) bytes of parts loader"
 
 # THE GATE DISKS ARE GONE, AND THAT IS THE POINT OF THIS WAVE.
@@ -8105,6 +8333,25 @@ $(BUILD)/PARSEFCB.COM: tests/dostrap/parsefcb.asm | $(BUILD)
 $(BUILD)/dosfcb360.img: $(BUILD)/PARSEFCB.COM tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/PARSEFCB.COM
 
+# ...and AH=62h's (SPEC.md 96.55): does DOS tell a program its OWN PSP,
+# parent and EXEC'd child alike? A .COM's PSP is its CS, so the probe needs no
+# fixture and nothing on the disk but itself.
+$(BUILD)/GETPSP.COM: tests/dostrap/getpsp.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/getpsp.asm
+
+$(BUILD)/dospsp360.img: $(BUILD)/GETPSP.COM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/GETPSP.COM
+
+# ...and the FCB file calls' (SPEC.md 96.56): WordPerfect 4.1's AH=33h, 37h and
+# 0Fh 10h 11h 13h 16h 27h 28h. The probe makes, writes, reads back, finds and
+# deletes its own files, so the disk holds nothing but itself - and must be
+# writable, which a built image in build/ is.
+$(BUILD)/FCBIO.COM: tests/dostrap/fcbio.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/fcbio.asm
+
+$(BUILD)/dosfcbio360.img: $(BUILD)/FCBIO.COM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/FCBIO.COM
+
 # ...and the DRIVE-LETTER gate's PAIR (SPEC.md 96.6.2). It is a pair because
 # the question is cross-DRIVE: a letter in a name has to reach the other
 # floppy, so there has to be a file on each that is not on the other. The A:
@@ -8128,6 +8375,15 @@ $(BUILD)/dosdrvsys.img: $(BUILD)/os8088-360.img $(BUILD)/dosdrv/BONLY1.TXT \
     tools/os88fat.py
 	cp $(BUILD)/os8088-360.img $@
 	python3 tools/os88fat.py add $@ $(BUILD)/dosdrv/AONLY.TXT
+
+# ...and AH=36h after a SELECT (SPEC.md 96.27.2): the probe alone on a 360KB
+# floppy in B:, so its free count is nothing like the system disk's in A: and
+# an answer about the wrong drive cannot pass for the right one.
+$(BUILD)/DFSEL.COM: tests/dostrap/dfsel.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ tests/dostrap/dfsel.asm
+
+$(BUILD)/dosdfsel360.img: $(BUILD)/DFSEL.COM tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/DFSEL.COM
 
 # ...and the EXEC gate's PAIR (SPEC.md 96.14): a parent that shrinks itself
 # and runs the child, and a child that proves it was really loaded - it prints
@@ -8312,7 +8568,9 @@ doscom: $(BUILD)/dostype360.img $(BUILD)/doscom360.img $(BUILD)/dosexe360.img $(
         $(BUILD)/dosirq360.img $(BUILD)/pathtest360.img \
         $(BUILD)/dosargs360.img $(BUILD)/doslnk360.img \
         $(BUILD)/dosdrv360.img $(BUILD)/dosdrvsys.img \
+        $(BUILD)/dosdfsel360.img \
         $(BUILD)/dosfcb360.img $(BUILD)/dosren360.img $(BUILD)/dossh360.img \
+        $(BUILD)/dospsp360.img $(BUILD)/dosfcbio360.img \
         $(BUILD)/dosshrink360.img $(BUILD)/doslong360.img \
         $(BUILD)/dosrange360.img $(BUILD)/irqgrab360.img
 
@@ -8748,8 +9006,8 @@ $(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
 	@echo "solitaire: $(call FILESIZE,$@) bytes"
 
 
-$(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $(BUILD)/solitair.bin -o $@
+$(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/solitair.bin -o $@
 
 # Arkanoid, the ninth shipped package (SPEC.md 44): a brick-breaker whose game
 # loop is a WORKER TASK (SPEC.md 20.6) rather than a callback, because a ball
@@ -9206,8 +9464,8 @@ $(BUILD)/tamegram.bin: apps/tamegram/tamegram.asm apps/os88api.inc apps/os88ui.i
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ -o $@ apps/tamegram/tamegram.asm
 	@echo "tamegram: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/tamegram.o88: $(BUILD)/tamegram.bin tools/os88pkg.py $(PKGZSTAMP) $(PKGZBSTAMP)
-	$(OS88PKGB) $(BUILD)/tamegram.bin -o $@
+$(BUILD)/tamegram.o88: $(BUILD)/tamegram.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/tamegram.bin -o $@
 
 # FILETEST, the file-API gate package (SPEC.md 18.4/18.4.1): drives the file
 # slots end to end (write, read-back, replace, rename, delete, dfree and the
@@ -9237,6 +9495,18 @@ $(BUILD)/heapfrag.o88: $(BUILD)/heapfrag.bin tools/os88pkg.py
 
 $(BUILD)/heapfrag.img: $(BUILD)/heapfrag.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/heapfrag.o88
+
+# MEMP, the heap granule's gate package (SPEC.md 50.2.1, 50.3.7): every verb of
+# OSAPI_MEM_P, and the KB door at 4KB and 16KB, from its entry proc, with the
+# verdicts in its bss for tests/memp.py. On its own 360KB image, at the root.
+$(BUILD)/memp.bin: tests/memp/memp.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/memp/memp.asm
+
+$(BUILD)/memp.o88: $(BUILD)/memp.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/memp.bin -o $@
+
+$(BUILD)/memp360.img: $(BUILD)/memp.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/memp.o88
 
 # ...and the 360KB twin, which is the one that gets used: every 5150 machine
 # config in tools/martypc has 360KB drives, and a 1.44MB image mounted in one
@@ -9801,17 +10071,17 @@ $(STIKFIX)/DESKPROB.DAT: tools/os88stik.py | $(BUILD)
 	@mkdir -p $(STIKFIX)
 	python3 tools/os88stik.py dat -o $@ --x 376 --y 184 --screen 640x480 --cont
 
-$(BUILD)/stikdesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(STIKFIX)/desk/system.cfg $(STIKFIX)/DESKPROB.DAT tools/os88disk.py
+$(BUILD)/stikdesk360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/deskprob.o88 $(STIKFIX)/desk/system.cfg $(STIKFIX)/DESKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		STIKAPPS:$(BUILD)/deskprob.o88 SYSTEM/APPDATA:$(STIKFIX)/DESKPROB.DAT \
 		$(STIKFIX)/desk/system.cfg
 
-$(BUILD)/stik%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/%/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
+$(BUILD)/stik%360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT360) $(COREAPPS360) $(SYSDOC) $(SYSLOGO) $(FACES360) $(FACELIC) $(BUILD)/stikprob.o88 $(STIKFIX)/%/system.cfg $(STIKFIX)/STIKPROB.DAT tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(KERNFILE) \
-		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
+		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG360) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		STIKAPPS:$(BUILD)/stikprob.o88 SYSTEM/APPDATA:$(STIKFIX)/STIKPROB.DAT \
 		$(STIKFIX)/$*/system.cfg
 
@@ -13722,7 +13992,7 @@ videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
 # `make 486-video` boots it in 86Box.
 VID486_CYLS ?= 250
 VID486CLIPS ?=
-$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
+$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -o $@ apps/video/video.asm
 $(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/videodiag.bin -o $@ $(VBLKPARTS)
@@ -13731,7 +14001,7 @@ $(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin $(BUILD)/vblk.bin tools/os88pkg.p
 # super-packet was found, saved in the profile for tools/os88vfit.py --reads
 # to hold against the file. Its room is the layer's and the speaker's info
 # lines, which a card's play of a file with no layer does not draw
-$(BUILD)/videordlog.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
+$(BUILD)/videordlog.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -DVP_RDLOG -o $@ apps/video/video.asm
 $(BUILD)/videordlog.o88: $(BUILD)/videordlog.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/videordlog.bin -o $@ $(VBLKPARTS)
@@ -14417,17 +14687,21 @@ small: $(BUILD)/small360.img $(BUILD)/small720.img $(BUILD)/small.img
 	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
 
 # THE BUDGETS AT AN UPSTREAM MERGE OR A RELEASE (kernel/kernel.asm, at
-# KERN_BUDGET). The build itself lets either kernel run KERN_GRACE over its
+# KERN_BUDGET). The build itself lets any kernel run KERN_GRACE over its
 # budget, because branch and integration work lands a feature whole and
-# size-passes it after; this is where that grace ends. It measures both
-# SHIPPED kernels (kern_emu is kern_big's budget) - a knob kernel has no
-# budget - and fails naming the one that is over, which is then a size pass or a conversation with the owner,
-# never a raise. .claude/skills/release-os8088 and docs/UPSTREAM.md run it.
+# size-passes it after; this is where that grace ends. It measures every
+# BUDGETED kernel (kern_emu is kern_big's budget; kern_mega's is its own, on
+# what it keeps in conventional memory after the switch, kernel.asm rule 4) -
+# a knob kernel has no budget - and fails naming the one that is over, which
+# is then a size pass or a conversation with the owner, never a raise.
+# .claude/skills/release-os8088 and docs/UPSTREAM.md run it. kern_mega being
+# measured here does not make it RELEASED: no release artefact carries it.
 .PHONY: budget-check
-budget-check: $(BUILD)/kernel.bin small emu
+budget-check: $(BUILD)/kernel.bin small emu mega
 	@python3 tools/kernsize.py --release --build $(BUILD) --ico $(ICODIR)
 	@python3 tools/kernsize.py --release --build $(SMALLDIR) --ico $(SMALLDIR) -DKERN_SMALL
 	@python3 tools/kernsize.py --release --build $(EMUDIR) --ico $(EMUDIR) -DKERN_BIG -DKERN_EMU
+	@python3 tools/kernsize.py --release --build $(MEGADIR) --ico $(MEGADIR) -DKERN_BIG -DKERN_MEGA
 
 # its kernel is $(SMALLDIR)'s, so its modules are too
 # --- WHAT THE SMALL DISKS DO NOT CARRY (SPEC.md 24.5) -------------------------
@@ -15049,6 +15323,54 @@ $(BUILD)/megaxm.bin: tests/megaxm/megaxm.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megaxm/megaxm.asm
 $(BUILD)/megaxm.o88: $(BUILD)/megaxm.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megaxm.bin -o $@
+# MEGARMB (tests/megarmb): kern_mega's REAL-MODE BRACKET from a package
+# (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W1) - OS88_HIGH, so its region is
+# above 1MB and the bracket runs a copy; MEGARMBL is the same source with a
+# conventional region. tests/megarmb.py (Bochs) and megarmb286.py (86Box)
+$(BUILD)/megarmb.bin: tests/megarmb/megarmb.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmb.asm
+$(BUILD)/megarmb.o88: $(BUILD)/megarmb.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmb.bin -o $@
+$(BUILD)/megarmbl.bin: tests/megarmb/megarmb.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DMB_LOW -o $@ tests/megarmb/megarmb.asm
+$(BUILD)/megarmbl.o88: $(BUILD)/megarmbl.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbl.bin -o $@
+# MEGARMBF (tests/megarmb/megarmbf.asm): the real-mode bracket's FALLBACK and
+# its TABLE (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W2) - tests/megarmbref.py
+$(BUILD)/megarmbf.bin: tests/megarmb/megarmbf.asm apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbf.asm
+$(BUILD)/megarmbf.o88: $(BUILD)/megarmbf.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbf.bin -o $@
+# MEGARMBD (tests/megarmb/megarmbd.asm): a real-mode bracket on an EXTENDED
+# DESKTOP, a mode set on either display (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-
+# PLAN W7) - tests/megarmbext.py, on 86Box's two-card vm/286-mega-multimon
+$(BUILD)/megarmbd.bin: tests/megarmb/megarmbd.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbd.asm
+$(BUILD)/megarmbd.o88: $(BUILD)/megarmbd.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbd.bin -o $@
+# MEGARMBX (tests/megarmb/megarmbx.asm): what a real-mode bracket READS - the
+# extent list's OSAPI_FILE_READ_SEQ, the XMEM_COPY twin, OSAPI_DRV_CALL into a
+# low HDD.DRV (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W3) - tests/vidrmb.py
+$(BUILD)/megarmbx.bin: tests/megarmb/megarmbx.asm apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbx.asm
+$(BUILD)/megarmbx.o88: $(BUILD)/megarmbx.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbx.bin -o $@
+# MEGARMBS (tests/megarmb/megarmbs.asm): the SOUND side of a real-mode
+# bracket - SOUND.DRV low, a stream through the OSAPI_SND_STREAM twin carried
+# across the bracket both ways, the watchdog DSV_TICK fires, the speaker
+# door's twin (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W4) - tests/vidrmbsnd.py
+$(BUILD)/megarmbs.bin: tests/megarmb/megarmbs.asm apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbs.asm
+$(BUILD)/megarmbs.o88: $(BUILD)/megarmbs.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbs.bin -o $@
+# MEGARMBE (tests/megarmb/megarmbe.asm): EMS.DRV through a real-mode bracket -
+# allocated and mapped on both sides of it, the frame written and read in real
+# mode, the driver's state across the copy down and back up (SPEC.md 53.2.3,
+# 107; MEGA-VIDEO-REALMODE-PLAN W3) - tests/vidrmbems.py on vm/286-mega-ems
+$(BUILD)/megarmbe.bin: tests/megarmb/megarmbe.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbe.asm
+$(BUILD)/megarmbe.o88: $(BUILD)/megarmbe.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbe.bin -o $@
 # MEGAHUGE (tests/megahuge): ONE CLAIM FOR ALL OF IT (KERN-MEGA-MEMORY-PLAN
 # MC5) - OSAPI_MEM_HUGE's query, a claim of its answer bridged across the
 # pool and the heap, a pattern through every window, the free, the query again
@@ -15169,7 +15491,10 @@ $(BUILD)/megalowb.bin: tests/megaown/megaown.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DMO_LOWBIG -o $@ tests/megaown/megaown.asm
 $(BUILD)/megalowb.o88: $(BUILD)/megalowb.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megalowb.bin -o $@
-megarun: $(BUILD)/megarun.o88 $(BUILD)/megaxm.o88 $(BUILD)/megahib.o88 $(BUILD)/mega.img
+megarun: $(BUILD)/megarun.o88 $(BUILD)/megaxm.o88 $(BUILD)/megahib.o88 $(BUILD)/megarmb.o88 \
+        $(BUILD)/megarmbl.o88 $(BUILD)/megarmbf.o88 $(BUILD)/megarmbx.o88 $(BUILD)/megarmbs.o88 \
+        $(BUILD)/megarmbe.o88 $(BUILD)/megarmbd.o88 \
+        $(BUILD)/mega.img
 .PHONY: megarun
 
 # `make megatrap` - kern_mega with MEGATRAP=1, as a whole tree of its own in
@@ -15191,6 +15516,13 @@ megadiag:
 	@$(MAKE) BUILD=$(BUILD)/megadiag MEGADIAG=1 $(BUILD)/megadiag/mega.img $(BUILD)/megadiag/mega120.img \
 		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin
 .PHONY: megadiag
+
+# `make megafdmask` - kern_mega with MEGAFDMASK=1 (KERN-MEGA-PLAN 14.125), the
+# empty-drive freeze's A/B, as a tree of its own in build/megafdmask/
+megafdmask:
+	@$(MAKE) BUILD=$(BUILD)/megafdmask MEGAFDMASK=1 $(BUILD)/megafdmask/mega.img $(BUILD)/megafdmask/mega120.img \
+		$(BUILD)/megafdmask/megarun.o88 $(BUILD)/megafdmask/mbr.bin
+.PHONY: megafdmask
 
 MEGADIR := $(BUILD)/megak
 
@@ -15218,7 +15550,8 @@ MEGAAPPDIR := $(MEGADIR)/apps
 MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
-            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88
+            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
+            $(MEGAAPPDIR)/win16.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15242,14 +15575,25 @@ MEGASYSOPTARGS = $(addprefix SYSTEM:,$(call MEGASUB,$(SYSOPTIONAL)))
 MEGACOREARGS = $(addprefix APPS:,$(call MEGASUB,$(CORE_TOOLS))) \
                $(addprefix GAMES:,$(call MEGASUB,$(CORE_GAMES)))
 
-$(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
+$(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
                          apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
                          apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -DPKG_MEGA -o $@ apps/video/video.asm
 	@echo "video (PKG_MEGA): $(call FILESIZE,$@) bytes"
-$(MEGAAPPDIR)/video.o88: $(MEGAAPPDIR)/video.bin $(BUILD)/vblk.bin $(BUILD)/vblkpm.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(MEGAAPPDIR)/video.bin -o $@ --part $(BUILD)/vblk.bin --part $(BUILD)/vblkpm.bin
+$(MEGAAPPDIR)/vfx.bin: apps/video/vfx.asm apps/video/vfx.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DPKG_MEGA -o $@ apps/video/vfx.asm
+# THE COLD PART (SPEC.md 98.3.24.1): part 3, LINKED to the player it ships in -
+# tools/os88plink.py reads the names it takes out of the map the player's own
+# assembly wrote ($(STKLST)), so it is rebuilt with the player and with its
+# defines ($(VPDEF): a diag player's part carries the profile)
+$(MEGAAPPDIR)/vclink.inc: $(MEGAAPPDIR)/video.bin apps/video/vcold.asm tools/os88plink.py
+	python3 tools/os88plink.py $(MEGAAPPDIR)/video.bin $(MEGAAPPDIR)/video.map apps/video/vcold.asm $(VPDEF) -o $@
+$(MEGAAPPDIR)/vcold.bin: apps/video/vcold.asm apps/video/vcold.inc apps/video/vprof.inc $(MEGAAPPDIR)/vclink.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(MEGAAPPDIR)/ $(VPDEF) -DPKG_MEGA -o $@ apps/video/vcold.asm
+$(MEGAAPPDIR)/video.o88: $(MEGAAPPDIR)/video.bin $(BUILD)/vblk.bin $(BUILD)/vblkpm.bin $(MEGAAPPDIR)/vfx.bin $(MEGAAPPDIR)/vcold.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/video.bin -o $@ --part $(BUILD)/vblk.bin --part $(BUILD)/vblkpm.bin --part $(MEGAAPPDIR)/vfx.bin --part $(MEGAAPPDIR)/vcold.bin
 
 $(MEGAAPPDIR)/audio.bin: apps/audio/audio.asm $(AUDIO_SRC) apps/os88mega.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
@@ -15354,13 +15698,32 @@ MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
 # only for code that has to run in real mode after the switch. It needs
 # kern_big's map as well as kern_mega's, hence the kernel.bin prerequisite
 mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
+      $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img \
       $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt
 	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (KERN-MEGA-PLAN 14.66)."
 
+# SYSTEM CHECK, AND kern_mega's OWN FSCHECK.DRV BESIDE IT (SPEC.md 118.14.8):
+# the package is the shipped one - it carries no kern_mega code, the kernel's
+# stub finds the claim's code selector - but the engine is cut out of THIS
+# kernel's assembly, as every module is, and a kern_big copy is refused here
+# by its layout stamp. Recipe-only, like $(MEGADRIVERS)' module half: the
+# sub-make in the recipe is what cuts it, and SYSCHECK.O88 is made by a sub-make
+# of its own with KMODDIR put back - as a prerequisite it would inherit the
+# target's KMODDIR and build its manifest from kern_mega's modules
+MEGATOOLSARGS = SYSTEM:$(BUILD)/syscheck.o88 SYSTEM:$(MEGADIR)/fscheck.drv
+
 # NO COLDHMA.SYS and no XMEM.DRV: the HMA and everything above it are
 # kern_mega's own (kernel/mega.inc), and xm_sniff never asks for either.
-MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS))
+#
+# PCIETHER.DRV (SPEC.md 125.1, 125.6) is kern_mega's alone: it is appended HERE
+# and not to $(DRIVERS), so no other system disk, no apps disk and no live
+# payload ever names it. Its rule ($(BUILD)/pciether.drv) is the driver's own,
+# beside ether.drv's; until that branch is merged `make mega` stops with
+# make's "No rule to make target 'build/pciether.drv'", on purpose - a mega
+# disk that silently shipped without the driver the owner asked for would
+# be a disk that passes every check and has no PCI card in it.
+MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS)) $(BUILD)/pciether.drv
 $(BUILD)/mega.img: KMODDIR := $(MEGADIR)
 #
 # **ITS DOS.O88 IS kern_mega's OWN** (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 12.1
@@ -15371,9 +15734,10 @@ $(BUILD)/mega.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(call 
                    $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
 	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot.bin $(MEGADIR)/boothd.sys \
 		$(MEGADIR)/kdos/DOS.O88
+	@$(MAKE) KMODDIR=$(BUILD) $(BUILD)/syscheck.o88
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
-		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(MEGADRIVERS) $(MEGATOOLSARGS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # ...and the 1.2MB 5.25" HD twin (KERN-MEGA-PLAN 14.1 answer 19: kern_mega's
@@ -15390,9 +15754,10 @@ $(BUILD)/mega120.img: $(MEGADRIVERS) $(MEGAINST) $(call MEGASUB,$(SYSAPPS)) $(ca
                    $(FACES) $(FACELIC) tools/os88disk.py $(MEGASRC)
 	@$(MAKE) BUILD=$(MEGADIR) KERN_MEGA=1 $(if $(NOKZIP),NOKZIP=1) $(MEGADIR)/boot120.bin $(MEGADIR)/boothd.sys \
 		$(MEGADIR)/kdos/DOS.O88
+	@$(MAKE) KMODDIR=$(BUILD) $(BUILD)/syscheck.o88
 	python3 tools/os88disk.py -o $@ --size 1200 \
 		--boot $(MEGADIR)/boot120.bin --kernel $(MEGADIR)/$(KERNNAME) \
-		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(MEGADRIVERS) $(MEGATOOLSARGS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(STIKNOTESARG) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
 		$(SYSLOGOARG) $(FACESARG) $(APPDATAFOLDER) $(AUTOFOLDER) $(STIKNOTESOPT)
 
 # MEGACDTEST - kern_mega's CD-ROM machine disks (SPEC.md 119.7, KERN-MEGA-PLAN
@@ -15411,6 +15776,8 @@ $(BUILD)/megacdcfg/system.cfg: | $(BUILD)
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
 	  ((1 << 8) | 1).to_bytes(2,'little') + b'\0\0')" > $@
 
+# KMODDIR: pciethertest.img's reason, below - kern_mega's own modules
+$(BUILD)/megacdtest.img: KMODDIR := $(MEGADIR)
 $(BUILD)/megacdtest.img: $(BUILD)/mega.img $(BUILD)/megacdcfg/system.cfg $(BUILD)/cdlnk/CDRACK.LNK
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
@@ -15429,6 +15796,62 @@ megacdtest: $(BUILD)/megacdtest.img $(BUILD)/megacdsim.img $(BUILD)/cdfix.iso $(
 	@echo "            CDRack autostarted on D:\\TRACK02.CDA; build/megacdsim.img the"
 	@echo "            gate's CDROM.DRV for Bochs (build/cdfix.iso). 86Box: tools/os88box.py"
 	@echo "            launch 286-mega-cdrom (build/cdaudio.cue in the drive)"
+
+# PCIETHERTEST - kern_mega's PCI Ethernet gate disk (SPEC.md 125.6), ethertest's
+# shape on kern_mega: build/mega.img's files with a SYSTEM.CFG that already
+# wants PCIETHER.DRV, so the card is up and DHCP has run before the first paint
+# and tests/pciether.py reads state instead of clicking. **THE BIT IS THE
+# KERNEL'S AND NOT THIS FILE'S**: kernel/driver.inc's drv_cfgbit assigns it
+# (SPEC.md 125.5, 125.8 item 2), and PCIETHER_CFGBIT is the one place this tree
+# names it for a disk - 11 being the first bit after HTTPFS.DRV's 10. It is a
+# variable so that the kernel agent's choice is one edit; `make pciethertest
+# PCIETHER_CFGBIT=<n>` overrides it, and the disk is rebuilt when it changes.
+# Boot it on QEMU with an RTL8139 (`make run-pciether`, tests/pciether.py):
+# Bochs has no 8139 and MartyPC no NIC at all (docs/TESTING.md).
+PCIETHER_CFGBIT ?= 11
+PCIETHERSTAMP := $(BUILD)/.pciether-cfgbit-$(PCIETHER_CFGBIT)
+$(PCIETHERSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.pciether-cfgbit-*
+	@touch $@
+
+$(BUILD)/pciethercfg/system.cfg: $(PCIETHERSTAMP) | $(BUILD)
+	@mkdir -p $(BUILD)/pciethercfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << $(PCIETHER_CFGBIT)).to_bytes(2,'little') + b'\0\0')" > $@
+
+# KMODDIR IS mega.img's: $(MEGADRIVERS) carries the on-demand kernel modules
+# (CTRL.DRV, DISKOPS.DRV, ...) through $(DRIVERS), and those are cut per
+# kernel and refused by their layout stamp on any other one. Without this
+# line the disk carried kern_big's copies beside kern_mega's KERNEL.SYS
+$(BUILD)/pciethertest.img: KMODDIR := $(MEGADIR)
+$(BUILD)/pciethertest.img: $(BUILD)/mega.img $(BUILD)/pciethercfg/system.cfg
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/pciethercfg/system.cfg $(APPDATAFOLDER)
+
+.PHONY: pciethertest
+pciethertest: $(BUILD)/pciethertest.img
+	@echo "pciethertest: build/pciethertest.img - kern_mega, PCIETHER.DRV already wanted"
+	@echo "              (SYSTEM.CFG bit $(PCIETHER_CFGBIT)). Pair it with build/megaapps.img."
+	@echo "              Run it with: python3 tests/pciether.py"
+	@echo "              Look at it: make run-pciether (QEMU, an RTL8139 on slirp);"
+	@echo "              86Box: tools/os88box.py launch pentium-pciether"
+
+# RUN-PCIETHER - the interactive form of the gate's machine: kern_mega with a
+# PCI RTL8139 (`-device rtl8139`, the 10EC:8139 card PCIETHER.DRV drives) on
+# QEMU's user network instead of the ISA NE2000 that `make run ETHER=1`
+# carries. 16MB because kern_mega's protected mode wants memory above 1MB.
+# $(QMP_SOCK) is `make test`'s knob (line 60); the machine is a window, not
+# daemonized, and is not `make test`'s, so it is NOT stamped and builds nothing.
+.PHONY: run-pciether
+run-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
+	$(QEMU) -m 16 $(QEMUMACH) \
+		-drive file=$(BUILD)/pciethertest.img,format=raw,if=floppy \
+		-drive file=$(BUILD)/megaapps.img,format=raw,if=floppy,index=1 -boot a $(MOUSE) \
+		-netdev user,id=n0 -device rtl8139,netdev=n0 \
+		-qmp unix:$(QMP_SOCK),server,nowait
 
 # ONE GEOMETRY, and that is a decision rather than an omission. 360KB exists
 # for real period hardware - a 5.25" drive on an XT or an AT - and no machine
@@ -16638,7 +17061,7 @@ APPS_DOS := $(BUILD)/os88net.com
 # one: that disk is at 352 of 354 clusters and this is five. Its decoder is
 # kernel/lz.inc, included as it is - one decoder, three hosts.
 APPS_DOSCZ := $(BUILD)/os88cz.com
-$(BUILD)/os88cz.com: dostools/os88cz.asm kernel/lz.inc | $(BUILD)
+$(BUILD)/os88cz.com: dostools/os88cz.asm kernel/lz.inc kernel/lzfilt.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I kernel/ -o $@ $<
 	@echo "os88cz.com:  $(call FILESIZE,$@) bytes - the split set on DOS"
 os88cz: $(BUILD)/os88cz.com
@@ -16956,10 +17379,12 @@ MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
 # WIN16 (SPEC.md 124.18.1): a WIN16\ folder - the package, its GPL-2 COPYING
 # and its README.TXT, apps/apple2's footing - and SYSTEM\APPDATA\WIN16, the
 # Windows directory a program's WIN.INI and .INI files are kept in (124.14),
-# BUILT because WIN16 never makes it. On the 1.44MB and 1.2MB apps disks,
-# more720 (the 720KB machine's second), emu360 (programs of another system,
-# at its root, 24.6's rule), the everything set and the live media. NOT in $(APPSARGS) itself: that list
-# feeds kern_mega's apps disks, where WIN16 refuses (124.1).
+# BUILT because WIN16 never makes it. On WIN16's own disk in all four
+# geometries ($(WIN16IMG) and its three, below), emu360 (programs of another
+# system, at its root, 24.6's rule), the everything set and the live media.
+# Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and more720; it
+# outgrew them. NOT in $(APPSARGS): that list feeds kern_mega's apps disks,
+# where WIN16 refuses (124.1).
 # The two documents ride as WIN16.TXT and COPYING.W16, the names The Wire
 # gives APPLE2's (APPLE2.TXT, COPYING.A2): emu360 is a category disk with its
 # programs at the ROOT (24.6), where a README.TXT is the system's and a
@@ -16979,8 +17404,7 @@ $(BUILD)/win16/COPYING.W16: apps/win16/COPYING
 # ahead of $(APPDATAFOLDER), $(APPSARGS720)'s way: argparse stops collecting
 # positionals at an option that takes a value, so the folder stays last.
 APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
-               $(addprefix MEDIA:,$(XTMP3MP3)) $(WIN16ARGS) \
-               $(APPDATAFOLDER) $(WIN16FOLDER)
+               $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
 # ...AND THE 1.2MB DISK LEAVES XTMP3 AND ITS SONGS OFF (SPEC.md 24.6.1's rule,
 # dated 2026-10-23, the 720KB disk's decision of 2026-10-22 one geometry along):
 # Browser 1.6c grew 67 clusters and apps120.img needed 2399 of 2371. The player
@@ -16988,13 +17412,26 @@ APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
 # prerequisites ($(APPS120)) and the recipe ($(APPSARGS120)) are filtered
 # together, as the 720KB disk's are.
 APPS120 := $(filter-out $(BUILD)/xtmp3.o88,$(APPS))
-APPSARGS120 := $(filter-out $(APPDATAFOLDER) APPS:$(BUILD)/xtmp3.o88,$(APPSARGS)) \
-               $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
-$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) $(WIN16SHIP) tools/os88disk.py
+APPSARGS120 := $(filter-out APPS:$(BUILD)/xtmp3.o88,$(APPSARGS))
+$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS120) $(LOGOVID) $(WIN16SHIP) tools/os88disk.py
+$(APPSIMG120): $(APPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
+
+# WIN16's own disk (SPEC.md 124.18.1): WIN16\ and SYSTEM\APPDATA\WIN16, the
+# same in every geometry, and the rest of the floppy for the Windows programs
+# a user copies onto it. `make win16disk WIN3X=<dir>` is this disk with them
+# already on it.
+WIN16DISKARGS := $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
+$(WIN16IMG): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(WIN16DISKARGS)
+$(WIN16IMG120): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(WIN16DISKARGS)
+$(WIN16IMG720): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(WIN16DISKARGS)
+$(WIN16IMG360): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(WIN16DISKARGS)
 
 # kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
 # kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
@@ -17048,8 +17485,8 @@ MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
                $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \
-               $(PX_GALLERY_360) $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
-$(MOREIMG720): $(MORE720) $(WIN16SHIP) tools/os88disk.py
+               $(PX_GALLERY_360) $(APPDATAFOLDER)
+$(MOREIMG720): $(MORE720) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(MOREARGS720)
 
 $(APPSIMG360): $(APPS360) $(PLANPKG) tools/os88disk.py
@@ -17211,9 +17648,10 @@ $(GAMESIMG360): $(GAMES360) tools/os88disk.py
 # double-click on a machine it is not for. OS88NET.COM left apps360.img for
 # this disk; OS88CZ.COM had never fitted that one.
 UTIL_PKGS := $(BUILD)/syscheck.o88 $(BUILD)/redline.o88 $(BUILD)/taskmgr.o88
+UTIL_FSCK := $(FSCKMOD)
 UTIL_DOS := $(APPS_DOS) $(APPS_DOSCZ)
-UTIL360 := $(UTIL_PKGS) $(UTIL_DOS)
-UTILARGS360 := $(UTIL_PKGS) \
+UTIL360 := $(UTIL_PKGS) $(UTIL_FSCK) $(UTIL_DOS)
+UTILARGS360 := $(UTIL_PKGS) $(UTIL_FSCK) \
                $(addprefix SYSTEM/DOS:,$(UTIL_DOS)) \
                $(MEDIAFOLDER) $(APPDATAFOLDER)
 
@@ -19445,6 +19883,18 @@ pentium: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VMPENT)/86box.cfg
 	$(BOX) -P $(VMPENT) -N
 
+# PCIETHER.DRV's machine (SPEC.md 125.6, docs/plans/PCIETHER-PLAN.md S9): a
+# Pentium on a PCI board (vm/pentium's p54tp4xe) with 86Box's Realtek
+# RTL8139C+ (`rtl8139c+`) on SLiRP, booting kern_mega's `make pciethertest`
+# disk with its apps disk in B: - to LOOK at the driver on a period PCI BIOS
+# rather than SeaBIOS (the Drivers page's PCI Ethernet row, the Ethernet
+# page naming RTL8139, The Wire or the Browser reaching the host's network).
+# 86Box cannot be keyed or asserted against (docs/86BOX.md); tests/pciether.py
+# is the gate and runs under QEMU. Interactive, like every 86Box target.
+pentium-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
+	@$(UNPROTECT) $(VMPENTPCI)/86box.cfg
+	$(BOX) -P $(VMPENTPCI) -N
+
 # NOTHING IN build/ IS TRACKED, and that is a decision rather than an accident.
 #
 # For most of this tree's life the opposite held: build/ was gitignored but 41
@@ -19563,8 +20013,14 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # fixture with a tests/win16/<name>.wlk is linked by wlink with those options
 # (FPX's 16KB local heap: signal() brings stdio in, and Windows 3.0 refused
 # it with the default 1KB - "Not enough memory to allocate file structures").
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER
-WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk) \
+# A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
+# model, so its sixteen code_seg functions are far (SPEC.md 124.20).
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST
+# ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
+# their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
+# by the import lines in its own .wlk, so it links without them.
+WIN16DLLFIX := W16DLL W16DLL2
+WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
 win16census:
@@ -19584,41 +20040,66 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 	@cd $(@D) && eval "$$($(CURDIR)/tools/setup-watcom.sh --build-dir $(abspath $(BUILD)) --env)" && \
 	for p in $(WIN16FIX); do \
 	  l=$$(echo $$p | tr A-Z a-z); \
+	  o=$$(cat $(CURDIR)/tests/win16/$$l.wcl 2>/dev/null); \
 	  if [ -f $(CURDIR)/tests/win16/$$l.wlk ]; then \
-	    wcl -q -c -0 -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	    wcl -q -c -0 $$o -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
 	        $(CURDIR)/tests/win16/$$l.c >/dev/null && \
 	    wlink op q system windows $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
 	        file $$l.obj name $$p.EXE >/dev/null || exit 1; \
 	  else \
-	    wcl -q -0 -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	    wcl -q -0 $$o -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
 	        -fe=$$p.EXE $(CURDIR)/tests/win16/$$l.c >/dev/null || exit 1; \
 	  fi; \
 	  if [ -f $(CURDIR)/tests/win16/$$l.rc ]; then \
 	    wrc -q -bt=windows -30 -r -i=$(CURDIR)/tests/win16 -i=. -fo=$$l.res \
 	        $(CURDIR)/tests/win16/$$l.rc && wrc -q -bt=windows -30 $$l.res $$p.EXE || exit 1; \
 	  fi; \
+	done; \
+	for p in $(WIN16DLLFIX); do \
+	  l=$$(echo $$p | tr A-Z a-z); \
+	  wcl -q -c -0 -bd -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	      $(CURDIR)/tests/win16/$$l.c >/dev/null && \
+	  wlink op q system windows_dll $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
+	      file $$l.obj name $$p.DLL >/dev/null || exit 1; \
 	done
 	@touch $@
-	@echo "win16fixtures: TINY16 $(WIN16FIX) built into $(BUILD)/win16/"
+	@echo "win16fixtures: TINY16 $(WIN16FIX) $(WIN16DLLFIX) built into $(BUILD)/win16/"
 
 # `make win16` builds the layer itself, apps/win16/ (SPEC.md 124.2): a
 # `local` package in apps/RETIRED.txt until S12 decides its payload, so no
 # shipped image carries it yet and `all` does not build it.
-WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
+WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc) drivers/cdrom/cdpkg.inc drivers/sound/sndpkg.inc
+
+# W16DEFS="-DW16_CODEKB=40" builds WIN16 with a TEST define: SPEC.md
+# 124.26.6's code budget, W16_TRACE (124.17.4), W16_X87_EMU (124.5) - what a
+# row that needs one builds into a tree of its own (BUILD=). Stamped, so a
+# change rebuilds WIN16 and nothing else; a plain `make` is the shipped one.
+W16STAMP := $(BUILD)/.win16-$(or $(shell printf '%s' '$(W16DEFS)' | tr -c 'A-Za-z0-9' '_'),plain)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(W16STAMP) ] || { rm -f $(BUILD)/.win16-* $(BUILD)/win16.bin \
+                                      $(BUILD)/win16.o88; touch $(W16STAMP); })
 
 $(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
-                    apps/os88ui.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -o $@ apps/win16/win16.asm
+                    apps/os88ui.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        --before "[map all $(@:.bin=.map)]" \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) $(W16DEFS) -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
 
 # The System font, one part a display (SPEC.md 124.7.1): tools/w16font.py
 # builds each face from its committed art in apps/win16/fonts/, and they ride
 # in WIN16.O88 as lazy compressed parts in W16P_* order.
+# Each also carries the DIALOG FACE of its display after it (SPEC.md
+# 124.22.17, Wine's MS Sans Serif emboldened): dlg13 with VGA's, dlg10 with
+# EGA and Hercules', dlg08 with CGA's - one part and one claim for both.
 W16FACES := $(BUILD)/win16/sys16.bin $(BUILD)/win16/sys12.bin $(BUILD)/win16/sys08.bin
 
+$(BUILD)/win16/sys16.bin: apps/win16/fonts/dlg13.txt
+$(BUILD)/win16/sys12.bin: apps/win16/fonts/dlg10.txt
+$(BUILD)/win16/sys08.bin: apps/win16/fonts/dlg08.txt
 $(BUILD)/win16/sys%.bin: apps/win16/fonts/sys%.txt tools/w16font.py
 	@mkdir -p $(@D)
-	python3 tools/w16font.py build $< $@
+	python3 tools/w16font.py build $< $@ $(filter apps/win16/fonts/dlg%,$^)
 
 # ...and part 3 is the dialog manager and the controls (SPEC.md 124.13):
 # win16.asm assembles them after the image in `section .w16dlg vstart=0`, and
@@ -19634,20 +20115,112 @@ $(BUILD)/win16/icons.bin: $(wildcard apps/win16/icons/*.txt) tools/w16icon.py
 	@mkdir -p $(@D)
 	python3 tools/w16icon.py build $@
 
+# Parts 7 and 8 are WIN16's DOS (SPEC.md 124.21.1): the DOS core DOS.O88
+# ships, the same build/doscore.bin, and the host part that sits above it in
+# one claim - DOS.O88's own back end (apps/dos/dosbe.inc) and an init. The
+# core's int 21h gate is not on its jump table, so tools/w16dcmap.py reads
+# its address off a map of the same assembly and refuses a different one.
+$(BUILD)/win16/w16dcore.inc: $(BUILD)/doscore.bin tools/w16dcmap.py
+	@mkdir -p $(@D)
+	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA)
+
+$(BUILD)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc \
+                            $(BUILD)/win16/w16dcore.inc apps/dos/dosbe.inc \
+                            apps/dos/dos.asm apps/dos/doscall.inc \
+                            apps/dos/doscents.inc apps/os88api.inc \
+                            apps/os88rseq.inc apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/win16/w16join.inc apps/win16/w16jgive.inc \
+                            apps/os88cp437.inc apps/os88partsbody.inc \
+                            drivers/net/netpkg.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
+	        -I $(BUILD)/win16/ -I drivers/net/ -I kerndos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/win16/w16dosh.asm
+	@echo "w16dosh: $(call FILESIZE,$@) bytes of DOS host"
+
 $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
+                    $(BUILD)/doscore.bin $(BUILD)/win16/w16dosh.bin \
                     tools/os88pkg.py tools/os88ovl.py \
                     $(PKGZSTAMP)
 	@mkdir -p $(BUILD)/win16
 	python3 tools/os88ovl.py $(BUILD)/win16.bin -o $(BUILD)/win16/w16dlg.bin \
 		--trim $(BUILD)/win16/win16.trim.bin \
 		--second $(BUILD)/win16/w16fp.bin --mark W16X87EM \
-		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR
+		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR \
+		--second $(BUILD)/win16/w16sys.bin --mark W16SYSLB \
+		--second $(BUILD)/win16/w16tsk.bin --mark W16TSKPT
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part $(BUILD)/win16/w16fp.bin --part $(BUILD)/win16/w16ld.bin \
-		--part $(BUILD)/win16/icons.bin --part-compress lz4
+		--part $(BUILD)/win16/icons.bin --part $(BUILD)/doscore.bin \
+		--part $(BUILD)/win16/w16dosh.bin --part $(BUILD)/win16/w16sys.bin \
+		--part $(BUILD)/win16/w16tsk.bin \
+		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
+
+# THE kern_mega ARM (SPEC.md 124.31.1, 20.18): the same sources assembled
+# again with -DPKG_MEGA into $(MEGAAPPDIR), every part of it that is code -
+# the image and its cut parts, the DOS host - and kern_mega's own DOS core
+# (-DDOS_MEGA) as its DOS part; the fonts and the icons are the shipped
+# build's. On kern_mega's WIN16 disks only, never on a shipped one.
+$(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
+                         apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        --before "[map all $(@:.bin=.map)]" \
+	        -DDOS_MEGA -DPKG_MEGA $(W16DEFS) -o $@ apps/win16/win16.asm
+	@echo "win16 (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \
+                           apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/win16/w16jgive.inc apps/dos/dosnet.inc \
+                           apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/os88api.inc apps/dos/doscall.inc \
+                           apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
+                           apps/os88con.inc apps/os88cp437.inc apps/os88parts.inc \
+                           apps/os88partsbody.inc apps/os88rseq.inc \
+                           kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
+	        -I kerndos/ -DDOS_MEGA -o $@ apps/dos/doscore.asm
+$(MEGAAPPDIR)/win16/w16dcore.inc: $(MEGAAPPDIR)/doscore.bin tools/w16dcmap.py
+	@mkdir -p $(@D)
+	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ -DDOS_MEGA
+$(MEGAAPPDIR)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc $(MEGAAPPDIR)/win16/w16dcore.inc \
+                        apps/dos/dosbe.inc apps/dos/dos.asm apps/dos/doscall.inc \
+                        apps/dos/doscents.inc apps/os88api.inc apps/os88rseq.inc \
+                        apps/dos/dosnetabi.inc apps/dos/dospktabi.inc apps/win16/w16join.inc \
+                        apps/win16/w16jgive.inc apps/os88cp437.inc \
+                        apps/os88partsbody.inc drivers/net/netpkg.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
+	        -I $(MEGAAPPDIR)/win16/ -I drivers/net/ -I kerndos/ \
+	        -DDOS_MEGA -DPKG_MEGA -o $@ apps/win16/w16dosh.asm
+$(MEGAAPPDIR)/win16.o88: $(MEGAAPPDIR)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
+                         $(MEGAAPPDIR)/doscore.bin $(MEGAAPPDIR)/win16/w16dosh.bin \
+                         tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
+	@mkdir -p $(MEGAAPPDIR)/win16
+	python3 tools/os88ovl.py $(MEGAAPPDIR)/win16.bin -o $(MEGAAPPDIR)/win16/w16dlg.bin \
+		--trim $(MEGAAPPDIR)/win16/win16.trim.bin \
+		--second $(MEGAAPPDIR)/win16/w16fp.bin --mark W16X87EM \
+		--second $(MEGAAPPDIR)/win16/w16ld.bin --mark W16LOADR \
+		--second $(MEGAAPPDIR)/win16/w16sys.bin --mark W16SYSLB \
+		--second $(MEGAAPPDIR)/win16/w16tsk.bin --mark W16TSKPT
+	$(OS88PKG) $(MEGAAPPDIR)/win16/win16.trim.bin -o $@ \
+		$(addprefix --part ,$(W16FACES)) --part $(MEGAAPPDIR)/win16/w16dlg.bin \
+		--part $(MEGAAPPDIR)/win16/w16fp.bin --part $(MEGAAPPDIR)/win16/w16ld.bin \
+		--part $(BUILD)/win16/icons.bin --part $(MEGAAPPDIR)/doscore.bin \
+		--part $(MEGAAPPDIR)/win16/w16dosh.bin --part $(MEGAAPPDIR)/win16/w16sys.bin \
+		--part $(MEGAAPPDIR)/win16/w16tsk.bin \
+		--part-compress lz4
+
+# ...and kern_mega's WIN16 DISKS: $(WIN16IMG)'s shape - WIN16\,
+# SYSTEM\APPDATA\WIN16 and the rest of the floppy for the user's programs -
+# in kern_mega's two geometries, the arm in place of the shipped build
+MEGAW16ARGS = WIN16:$(MEGAAPPDIR)/win16.o88 WIN16:$(BUILD)/win16/WIN16.TXT \
+              WIN16:$(BUILD)/win16/COPYING.W16 $(APPDATAFOLDER) $(WIN16FOLDER)
+$(BUILD)/megawin16.img: $(MEGAAPPDIR)/win16.o88 $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAW16ARGS)
+$(BUILD)/megawin16-120.img: $(MEGAAPPDIR)/win16.o88 $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAW16ARGS)
 
 # `make win16test` is S2's gate disk (WIN16-PLAN.md S2): a 1.44MB B: with
 # WIN16.O88, the TINY16 variants, whatever `make win16fixtures` has built,
@@ -20022,11 +20595,17 @@ xt-isotron-ega: $(IMG360) $(BUILD)/isotron360.img
 # REDLINE native CPU/graphics performance lab (SPEC.md 103).
 .PHONY: redline redlinedisk redline-profile
 redline: $(BUILD)/redline.o88
-$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/workloads.inc apps/redline/ui.inc apps/redline/csrows.inc apps/redline/csfe.inc apps/redline/csknob.inc apps/redline/csapply.inc apps/redline/csweep.inc apps/redline/chipset.inc apps/os88data.inc apps/os88link.inc apps/redline/baseline.inc apps/redline/baseline-herc.inc apps/redline/baseline-vga.inc apps/os88api.inc apps/os88ui.inc tests/benchlib.inc | $(BUILD)
+$(BUILD)/redline.bin: apps/redline/redline.asm apps/redline/detect.inc apps/redline/workloads.inc apps/redline/ui.inc apps/redline/csrows.inc apps/redline/csfe.inc apps/redline/csknob.inc apps/redline/csapply.inc apps/redline/csweep.inc apps/redline/chipset.inc apps/redline/inspect.inc apps/redline/inspmod.inc apps/os88wseq.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc apps/os88link.inc apps/redline/baseline.inc apps/redline/baseline-herc.inc apps/redline/baseline-vga.inc apps/os88api.inc apps/os88ui.inc tests/benchlib.inc | $(BUILD)
 	python3 tools/benchlint.py apps/redline/redline.asm
 	$(NASM) -f bin -w+error -I apps/ -I tests/ -l $(BUILD)/redline.lst -o $@ apps/redline/redline.asm
-$(BUILD)/redline.o88: $(BUILD)/redline.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $< -o $@
+# REDLINE.O88 IS A PARTED PACKAGE (SPEC.md 103.7.2): os88ovl.py cuts .modi -
+# the Inspect tab's module - off the end at the image size the header
+# records, Sheet's way, and it rides as the package's part 0, lazy and
+# compressed
+$(BUILD)/redline.o88: $(BUILD)/redline.bin tools/os88ovl.py tools/os88pkg.py $(PKGZSTAMP)
+	python3 tools/os88ovl.py $(BUILD)/redline.bin -o $(BUILD)/redline.insp.bin \
+		--trim $(BUILD)/redline.trim.bin
+	$(OS88PKG) $(BUILD)/redline.trim.bin -o $@ --part $(BUILD)/redline.insp.bin
 redlinedisk: $(BUILD)/redline.img $(BUILD)/redline720.img $(BUILD)/redline120.img $(BUILD)/redline360.img
 $(BUILD)/redline.img: $(BUILD)/redline.o88 apps/redline/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $< apps/redline/README.TXT

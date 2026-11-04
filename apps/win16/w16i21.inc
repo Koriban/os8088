@@ -18,6 +18,23 @@
 
 W16_IRET_FL equ 6               ; FLAGS in the iret frame, above the pushed BP
 
+; -----------------------------------------------------------------------------
+; w16_i2f - THE MULTIPLEX INTERRUPT while the program runs (SPEC.md 124.2.1).
+; Nothing here is a TSR, so every function answers as DOS's int 2Fh does when
+; nobody claims it: every register as it came, so an installation check
+; (AL = 0) reads "not installed" - APPEND (B700h), MSCDEX (1500h), XMS
+; (4300h), Windows' own (1600h). On the arm, 1686h answers AX = 0: the
+; program runs in protected mode with int 31h's DPMI (124.31.6).
+; -----------------------------------------------------------------------------
+w16_i2f:
+%ifdef PKG_MEGA
+    cmp ax, 0x1686
+    jne .no
+    xor ax, ax
+.no:
+%endif
+    iret
+
 w16_i21:
     ; STKBALANCE-OK: an interrupt handler on the PROGRAM's stack; every arm
     ; but AH=4Ch leaves by iret, and that one by w16_i21_exit's switch home
@@ -29,7 +46,12 @@ w16_i21:
     push bx
     push ax
     mov bx, [cs:w16_trn]
-    and bx, 127
+%ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
+    cmp bx, W16_TRN - 1             ;   taking every call after them
+    jb short $+5
+    mov bx, W16_TRN - 1
+%endif
+    and bx, W16_TRN - 1
     shl bx, 1
     mov al, ah
     mov ah, 0x80
@@ -51,11 +73,36 @@ w16_i21:
     je .close
     cmp ah, 0x44
     je .ioctl
+    cmp ah, 0x59
+    je .xerr
+    cmp ax, 0x5701                  ; set a file's date: done, and nothing
+    je .done                        ;   changes (SPEC.md 124.21.2)
     cmp ah, 0x2A
-    jb .bad
+    jb .file
     cmp ah, 0x2C
-    ja .bad
+    ja .file
     jmp w16_i21clk                  ; 2Ah, 2Ch (and 2Bh, refused there)
+.xerr:                              ; the extended error: the last DOS call
+    mov ax, [cs:w16_xerr]           ;   that failed, its own or a KERNEL file
+    mov bx, 0x0D03                  ;   call's (SPEC.md 124.21.2). Class
+    cmp ax, 2                       ;   unknown, or "not found" for 2 and 3;
+    jb .xe                          ;   ask the user; a block device
+    cmp ax, 3
+    ja .xe
+    mov bh, 8
+.xe:
+    mov ch, 2
+    jmp short .done
+.file:                              ; the file calls are the DOS's (SPEC.md
+    push si                         ;   124.21.2)
+    mov si, w16_i21fwd
+.scan:
+    cmp ah, [cs:si]
+    je .fwd
+    inc si
+    cmp si, w16_i21fwd + W16_NI21FWD
+    jb .scan
+    pop si
 .bad:
     mov ax, 1                       ; invalid function
 .err:
@@ -86,9 +133,12 @@ w16_i21:
     jne .bad
     mov dx, 0x80D3
     jmp short .done
-.badh:
-    mov ax, 6                       ; invalid handle
-    jmp short .err
+.badh:                              ; a handle above the devices: a file,
+    push si                         ;   which is the DOS's
+.fwd:
+    pop si
+    pop bp
+    jmp w16_i21dos
 
 ; AH=25h/35h keep the program's vectors in a table of our own and never touch
 ; the machine's: the program sets int 0 (divide error) and the x87 vectors
@@ -98,8 +148,7 @@ w16_i21:
     push bx
     push si
     mov bx, ds                      ; the handler's segment is the caller's DS
-    push cs
-    pop ds
+    W16CSEG ds
     call w16_vecslot                ; SI = the row (DS = ours)
     jc .vfull
     mov [si], al
@@ -118,8 +167,7 @@ w16_i21:
 .getv:                              ; AL = the vector; out ES:BX
     push ds
     push si
-    push cs
-    pop ds
+    W16CSEG ds
     call w16_vecslot
     jc .real
     cmp word [si + 3], 0            ; a free row: not one the program set
@@ -132,6 +180,12 @@ w16_i21:
 .real:
     pop si
     pop ds
+%ifdef PKG_MEGA
+    push cs                         ; the machine's is a real-mode address,
+    pop es                          ;   which no selector names: an iret of
+    mov bx, w16_ivret               ;   ours stands in (SPEC.md 124.31.3)
+    jmp .done
+%else
     push ax                         ; not one of the program's: the machine's
     xor ah, ah
     shl ax, 1
@@ -142,6 +196,12 @@ w16_i21:
     les bx, [es:bx]
     pop ax
     jmp .done
+%endif
+
+%ifdef PKG_MEGA
+w16_ivret:
+    iret
+%endif
 
 ; w16_vecslot - SI -> AL's row in [w16_vecs], else the first free row (its
 ; number byte 0 and its pointer word 0); CF=1 = full. DS = ours.
@@ -178,8 +238,7 @@ w16_vecslot:
 w16_i21_exit:
     ; STKBALANCE-OK: AH=4Ch abandons the program's stack for the host's and
     ; returns from w16_resume through w16_tohost
-    push cs
-    pop ds
+    W16CSEG ds
     mov [w16_exit], al
     mov byte [w16_state], W16S_ENDED
     call w16_i21_off                ; IF = 0 (the int cleared it)
@@ -204,12 +263,12 @@ w16_i21clk:
     push bx                         ;   DL hundredths
     push si
     push ds
-    mov si, cs
-    mov ds, si
-    call OSAPI_CLK_GET              ; BX = hour:minute, AH = the second
+    W16CSDS si                      ; the data half in the arm: .anchor
+    mov ds, si                      ;   WRITES through DS (a code selector's
+    call OSAPI_CLK_GET              ;   store is #GP on a real 286 or 386)
+                                    ; BX = hour:minute, AH = the second
     push es
-    xor si, si
-    mov es, si
+    W16SEG0 si, es
     mov si, [es:0x46C]              ; SI = the BIOS's tick, which IRQ 0 moves
     pop es
     cmp bx, [w16_ckhm]              ; the kernel's fields are the UI task's,

@@ -11,8 +11,8 @@ question before they attach, and none of them can answer it about a machine
 whose card is absent), and it is also exactly the shape that goes quietly
 wrong.  Both of its terms drift on their own:
 
-  * THE IMAGE.  A driver's image is a heap claim like any other (`DRVR_KB` is
-    `ceil(file size / 1024)`), and it is the biggest single term on the row a
+  * THE IMAGE.  A driver's image is a heap claim like any other (`DRVR_PARA` is
+    the file size to the heap's 512-byte granule, in paragraphs), and it is the biggest single term on the row a
     256KB machine most needs to be right about - ETHER.DRV is 16KB of the 52
     its row claims.  A commit that adds a feature to a driver moves that
     number and touches nothing in the kernel.  There is no linker here
@@ -61,6 +61,16 @@ SOURCES = [
     "drivers/net/netpkg.inc",
     "drivers/ramdisk/rdabi.inc",
     "drivers/httpfs/hfidx.inc",
+    "kernel/memory.inc",            # MEM_GRAN, for a claim in paragraphs
+]
+
+# ...and PCIETHER.DRV's, which only exist where its driver does: the row is
+# kern_mega's (SPEC.md 125.5) and its claim terms live in its own sources. A
+# tree WITHOUT drivers/pciether/ (the kernel row landed before the driver)
+# skips that one row's claim check and says so; a tree with it must resolve.
+PCIETH_SOURCES = [
+    "drivers/pciether/rtl8139.inc",     # RT_RING, RT_CLAIM: rt_claim's claim
+    "drivers/pciether/pciether.asm",    # NIC_RINGSZ, SK_RINGSLK: sk_cardcap's
 ]
 
 # row -> (the DRVM_ constant, the DRVM_IMG_ term, the built image). The ORDER
@@ -88,12 +98,16 @@ ROWS = [
     # SPEC.md 120's VESA.DRV: the second DRVC_OVL row, LAST on both big
     # builds, with a SYSTEM.CFG bit (8) and a Drivers-page price like the rest
     ("VESA Display", "DRVM_VESA", "DRVM_IMG_VESA", "vesa.drv"),
+    # SPEC.md 125's PCIETHER.DRV: DRVC_NET like ETHER.DRV, LAST and on
+    # kern_mega ALONE (the rest of this table is kern_big's superset, which the
+    # %ifdef-blind regexes above read whole), SYSTEM.CFG bit 11
+    ("PCI Ethernet", "DRVM_PCIETH", "DRVM_IMG_PCIETH", "pciether.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
 
 
-def symbols():
+def symbols(sources=None, known=None):
     """Every `NAME equ EXPR` in SOURCES, resolved to an int where it is one.
 
     NASM's expressions here are arithmetic over other equs, so they are
@@ -101,11 +115,11 @@ def symbols():
     1024` and reading it as a literal would read it as nothing.
     """
     raw = {}
-    for rel in SOURCES:
+    for rel in SOURCES if sources is None else sources:
         with open(os.path.join(ROOT, rel), errors="replace") as f:
             for name, expr in EQU.findall(f.read()):
                 raw.setdefault(name, expr)          # first spelling wins
-    out, pending = {}, True
+    out, pending = dict(known or {}), True
     while pending:
         pending = False
         for name, expr in raw.items():
@@ -137,8 +151,9 @@ def evaluate(expr, known):
 
 
 def kb(n):
-    """Bytes -> whole KB, the way drv_load rounds a driver image up."""
-    return int(math.ceil(n / 1024.0))
+    """Bytes -> HALF-KB, the way drv_load rounds a driver image up (SPEC.md
+    50.2.1: an image is claimed to 512 bytes, and drv_memk counts halves)."""
+    return int(math.ceil(n / 512.0))
 
 
 def main():
@@ -206,13 +221,13 @@ def main():
                % title, "os88drv.py takes only whole paragraphs of trailing "
                "zeros; anything else and drv_bss restores the wrong bytes")
         want = kb(len(blob) + blob[31] * 16)
-        eq(s.get(img), want, "%s: %s is ceil((%s + its bss) / 1024)"
+        eq(s.get(img), want, "%s: %s is ceil((%s + its bss) / 512)"
            % (title, img, drv),
-           "a driver's image IS a heap claim (drv_load rounds the file up to KB "
+           "a driver's image IS a heap claim (drv_load rounds the file up to 512 "
            "and claims that), so the column is wrong by the difference the "
            "moment the driver grows - and nothing else in the tree compares "
            "these two numbers")
-        check(want <= s.get("DRV_MAX_KB", 40),
+        check(want <= 2 * s.get("DRV_MAX_KB", 40),
               "%s: %s fits DRV_MAX_KB" % (title, drv),
               "drv_load refuses an image over DRV_MAX_KB, so this driver no "
               "longer loads at all - the column is the least of it",
@@ -224,10 +239,18 @@ def main():
     # --- 3. ...and every claim term is the driver's own constant ------------
     # Each expression is re-derived from the source that TAKES the claim, so a
     # pool that doubles or a ring that grows fails here rather than on screen.
-    ceil_kb = lambda n: (n + 1023) // 1024
+    # A claim whose size is a BYTE count is taken in PARAGRAPHS (OSAPI_MEM_P,
+    # SPEC.md 50.3.7), which the heap rounds to its granule and not to a KB:
+    # n bytes, granted to MEM_GRAN paragraphs, in halves rounded up (a 256-
+    # byte granule's odd quarter is still a half the column has to show). It
+    # was ceil(n / 1024) * 2 while those claims went through a KB door, and
+    # that read the Ethernet pool's 16,896 bytes as 34 halves where the heap
+    # grants 33
+    gran = 16 * s["MEM_GRAN"]
+    ceil_gran = lambda n: (((n + gran - 1) // gran) * gran + 511) // 512
     want = {
         "DRVM_SND": s["DRVM_IMG_SND"]                       # its image...
-                    + s["SBL_PLAYKB"],                      # ...and the ring a
+                    + 2 * s["SBL_PLAYKB"],                  # ...and the ring a
                                                             # player's pool is
         # NO CLAIM AT ALL. This was `+ HD_MAXVOL * HDD_LISTKB`, a 6KB listing
         # buffer per mounted volume, and SPEC.md 22.6 retired the donation -
@@ -242,12 +265,12 @@ def main():
         # handles cost 18KB. NET_SOCKS must NOT appear here - if it comes back,
         # the weld is back.
         "DRVM_ETH": s["DRVM_IMG_ETH"]
-                    + ceil_kb(s["SK_RXMAX"] + s["SK_TXMAX"]          # the bulk pair
+                    + ceil_gran(s["SK_RXMAX"] + s["SK_TXMAX"]        # the bulk pair
                               + s["SK_NLEAN"] * (s["SK_LEANRX"]      # ...and the lean
                                                  + s["SK_LEANTX"])), # ones beside it
         "DRVM_RAM": (s["DRVM_IMG_RAM"]
-                     + s["RD_TABMAXKB"]                     # the chain table
-                     + s["RD_EXTMAXKB"]) | plus,            # ...and the bounce
+                     + ceil_gran(s["RD_TABMAXB"])           # the chain table
+                     + 2 * s["RD_EXTMAXKB"]) | plus,        # ...and the bounce
         "DRVM_NET": s["DRVM_IMG_NET"],                      # no heap claim at all
         # ...and nor does the absolute mouse: it hooks no vector, owns no port
         # and keeps no buffer, so the image IS the whole footprint
@@ -270,12 +293,43 @@ def main():
         "DRVM_CD": s["DRVM_IMG_CD"],
         # HTTPFS.DRV (SPEC.md 122): its image, and the index it holds while
         # a drive is mounted - the largest HF_MAXREC allows, one claim
-        "DRVM_HTTP": s["DRVM_IMG_HTTP"] + s["HF_IDXKB"],
+        "DRVM_HTTP": s["DRVM_IMG_HTTP"] + 2 * s["HF_IDXKB"],
         # ...nor does VESA.DRV (SPEC.md 120): its probe buffers, mode table
         # and the arrow's save-under are bss, inside the image
         "DRVM_VESA": s["DRVM_IMG_VESA"],
     }
+    # PCIETHER.DRV (SPEC.md 125.4, 125.5) shares ETHER.DRV's stack as source,
+    # and claims TWO things: rt_claim's ring + transmit buffer, from attach to
+    # detach, and the socket pool - at the largest rung sk_cardcap lets the
+    # card's ring hold (NIC_RINGSZ - SK_RINGSLK), which on the RTL8139's 8KB
+    # ring is NOT the pool's top. Pricing it at SK_RXMAX, as ETHER.DRV's row
+    # is, both counts a rung the card never takes and leaves out the ring.
+    pcieth = os.path.isdir(os.path.join(ROOT, "drivers/pciether"))
+    if pcieth:
+        p = symbols(PCIETH_SOURCES, s)
+        cap = p["NIC_RINGSZ"] - p["SK_RINGSLK"]
+        rung = [rx for rx in (s["SK_RXMAX"], s["SK_RXMID"], s["SK_RXCAP0"])
+                if rx <= cap]
+        check(bool(rung), "PCIETHER.DRV's ring holds at least the floor rung",
+              "sk_cardcap refuses every rung, so the pool is never claimed")
+        rx = rung[0] if rung else s["SK_RXCAP0"]
+        want["DRVM_RT_PCIETH"] = ceil_gran(p["RT_CLAIM"])
+        want["DRVM_SK_PCIETH"] = ceil_gran(rx + rx // 2
+                                           + s["SK_NLEAN"] * (s["SK_LEANRX"]
+                                                              + s["SK_LEANTX"]))
+        want["DRVM_PCIETH"] = (s["DRVM_IMG_PCIETH"] + want["DRVM_RT_PCIETH"]
+                               + want["DRVM_SK_PCIETH"])
+        for n in ("DRVM_RT_PCIETH", "DRVM_SK_PCIETH"):
+            eq(s.get(n), want[n], "PCI Ethernet: %s is the driver's own claim" % n,
+               "kernel/driver.inc copies drivers/pciether/'s arithmetic "
+               "(SPEC.md 31.6.2, 125.5): the ring is RT_CLAIM at the heap's "
+               "granule and the pool is the rung sk_cardcap allows")
+    else:
+        print("t_drvmem: no drivers/pciether/ in this tree - PCI Ethernet's "
+              "claim terms are not re-derived")
     for title, total, _img, _drv in ROWS:
+        if total not in want:
+            continue
         eq(s.get(total), want[total],
            "%s: %s is its image plus the claims it works with" % (title, total),
            "the kernel cannot %include a driver's source - they are separate "
@@ -286,7 +340,7 @@ def main():
     for title, total, _img, _drv in ROWS:
         v = s.get(total, 0)
         check(0 < (v & ~plus) < 10000,
-              "%s: %s is a plausible number of KB" % (title, total),
+              "%s: %s is a plausible number of half-KB" % (title, total),
               "the figure is drawn as decimal digits with the top bit masked "
               "off (cp_drv_memstr); a five-digit one runs the column into the "
               "scroll arrows and a zero one draws nothing at all",
@@ -339,12 +393,27 @@ def main():
        "row silently left out of it")
     api = os.path.join(ROOT, "apps/os88api.inc")
     asrc = open(api, errors="replace").read()
-    for want_cls, width, ceil in (("DRVC_DISK", 2, "DRVM_CEIL_DISK"),
-                                  ("DRVC_NET", 2, "DRVM_CEIL_NET")):
+    # The rows only kern_mega has (SPEC.md 125.5), and a ceiling PER KERNEL
+    # (the owner's decision, 2026-11-04): DOS.O88 is assembled for kern_mega
+    # with -DDOS_MEGA and quotes DRVM_CEIL_NET_MEGA, every other DOS.O88 the
+    # plain DRVM_CEIL_NET - so each is held to the rows ITS kernel has.
+    # ETHER.DRV and PCIETHER.DRV are ALTERNATIVES in one publication slot
+    # (drv_load_at refuses whichever attaches second, DRVE_CLASS), so on
+    # kern_mega DRVC_NET's ceiling is the LARGER of the two, not their sum.
+    mega_only = {"DRVM_PCIETH"}
+    for want_cls, width, ceil, mega in (("DRVC_DISK", 2, "DRVM_CEIL_DISK", False),
+                                        ("DRVC_NET", 2, "DRVM_CEIL_NET", False),
+                                        ("DRVC_NET", 2, "DRVM_CEIL_NET_MEGA", True)):
         total = 0
         for (title, memk, _img, _drv), cls in zip(ROWS, klass):
-            if cls == want_cls:
+            if cls != want_cls or (memk in mega_only and not mega):
+                continue
+            if mega and want_cls == "DRVC_NET":
+                total = max(total, s.get(memk, 0) & ~plus)
+            else:
                 total += s.get(memk, 0) & ~plus
+        total = (total + 1) // 2        # drv_memk is half-KB; a ceiling is
+                                        # KB, rounded UP
         for where, src in (("kernel/driver.inc", dsrc),
                            ("apps/os88api.inc", asrc)):
             m = re.search(r"^%s\s+equ\s+(\d+)" % ceil, src, re.M)

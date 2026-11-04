@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""win16nedos - a Windows program double-clicked never shows DOS
+(SPEC.md 124.3.1, 21.5.4; docs/plans/DOS-PARTS-PLAN.md 4).
+
+    make build/win16/TINY16.EXE build/win16/DOS.O88 build/DOSHELLO.EXE \\
+        && python3 tests/win16nedos.py
+
+On a 4.77MHz 5150 (CGA, MartyPC), off a 360KB B: carrying WIN16.O88, the
+shipped DOS.O88, TINY16.EXE (tests/win16/tiny16.asm, an NE assembled here -
+no Microsoft binary and no Watcom) and DOSHELLO.EXE (a plain MZ):
+
+  A  TINY16.EXE double-clicked: the machine is STEPPED ONE FRAME AT A TIME
+     from the click to WIN16's window, and on no frame is a window called
+     DOS visible, and no package claim the size of DOS's carve (the host
+     part's image + bss) is ever in mem_tab - the loader decided before
+     op_load. No toast is up afterwards: the refusal the loader returns is a
+     hand-on, and `Load failed` over it would be the failure. WIN16's window
+     opens (on an 8088 it is WIN16's own refusal, `Needs a V20...`, which is
+     still WIN16's window and is what this row is about).
+  B  DOSHELLO.EXE double-clicked: DOS's window opens, as it always did - the
+     loader read the header and handed the document on.
+  C  TINY16.EXE TYPED at that window's prompt: WIN16's window opens - the
+     host's own arm (`dos_w16_try`), which the loader never sees and which
+     no other row drove. "WIN16's window" is the instance window titled with
+     the program OR the program's MessageBox (W16TITLES): since WIN16 phase A
+     the first is up only through the load, and a typed TINY16 that joins the
+     instance leg A left running (SPEC.md 124.28.12) shows only the second.
+
+  D  TINY16.EXE opened by a LINK on another volume: a second boot, its A:
+     the 360KB system disk with an \\AUTOSTRT link to B:\\TINY16.EXE. The
+     loader POSTS the document to WIN16 (SPEC.md 21.5.4), and the post is
+     spent a pass later, after the link's walk has put the machine back on
+     A:. WIN16 must be handed B:'s TINY16.EXE - w16_vol 1, w16_name
+     TINY16.EXE, and not "This is not a Windows program."
+
+BROKEN ON PURPOSE: the same probe on c714ec45 (the tree before the loader
+arm) sees DOS's window from frame 257 and a 55,328-byte carve, so leg A goes
+red; dropping $(DOSW16DEF) from the dosload rule does the same. Leg D is
+expected red on the parent of 220c98353 (ASSOC_PWBANK, #328's defect, which
+Mozart's setup off its CD showed): the posted launch re-banked the locator
+from where the machine stood, so WIN16 would be handed the boot volume's
+TINY16.EXE, which is not there.
+"""
+import os
+import struct
+import subprocess
+import sys
+import tempfile
+import shutil
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path[:0] = [os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")]
+os.chdir(ROOT)
+import os88build                                              # noqa: E402
+import os88geom as geom                                       # noqa: E402
+import os88marty                                              # noqa: E402
+import os88ui                                                 # noqa: E402
+
+XT = "os8088_5150_cga_gla"
+NE, MZ = "TINY16.EXE", "DOSHELLO.EXE"
+# WIN16'S WINDOWS for TINY16: its instance window is titled with the program
+# while it loads, and TINY16 has no window of its own - its MessageBox is
+# captioned this (tests/win16/tiny16.asm). Since WIN16 phase A (SPEC.md
+# 124.28) the instance window is up only through the load, so a poll can
+# miss it and find the box; and a second TINY16 that JOINS the instance the
+# first left running (124.28.12) shows only its box. Either is WIN16's.
+T16BOX = "os8088 WIN16"
+W16TITLES = (NE, T16BOX)
+FRAMES = 1500                   # 25 guest seconds at 60Hz: the launch is ~6
+
+
+def b(name):
+    return os88build.at(os.path.join("build", name))
+
+
+def carve():
+    """DOS's host part as op_load claims it: image + bss, to the paragraph"""
+    raw = open(b("dosp.bin"), "rb").read(12)
+    img, bss = struct.unpack_from("<HH", raw, 8)
+    return (img + bss + 15) & ~15
+
+
+def claims(ui):
+    raw = bytes(ui.m.read(ui.sym("mem_tab"), 32 * geom.MC_SIZE))
+    out = []
+    for i in range(32):
+        seg, para, own = struct.unpack_from("<HHH", raw, i * geom.MC_SIZE)
+        if para and own < 0xFF00:
+            out.append(para * 16)
+    return out
+
+
+def win16_vars(ui):
+    """WIN16's (w16_vol, w16_name, w16_l1) out of its instance's bss,
+    through the package's own map (win16fpu.pkg_syms); None when WIN16 is
+    not running. The instance is the package whose w16_name is the NE: its
+    I_NAME is the program's (TINY16), not WIN16's, once it runs"""
+    import win16fpu
+    S = win16fpu.pkg_syms()
+    raw = bytes(ui.m.read(ui.sym("inst_tab"), geom.INST_MAX * geom.I_RECSZ))
+    for i in range(geom.INST_MAX):
+        r = raw[i * geom.I_RECSZ:(i + 1) * geom.I_RECSZ]
+        if r[geom.I_STATE] != 1 or not r[geom.I_KIND] & geom.KIND_PKG:
+            continue
+        base = struct.unpack_from("<H", r, geom.I_SPTR)[0] << 4
+
+        def text(n):
+            return bytes(ui.m.read(base + S[n], 48)).split(b"\0")[0] \
+                .decode("latin-1")
+        if text("w16_name").upper() != NE:
+            continue
+        return (bytes(ui.m.read(base + S["w16_vol"], 1))[0], text("w16_name"),
+                text("w16_l1"))
+    return None
+
+
+def leg_d(work, bimg, bad):
+    """D: an \\AUTOSTRT link on A: to B:\\TINY16.EXE"""
+    aimg = os.path.join(work, "a360.img")
+    shutil.copy(b("os8088-360.img"), aimg)
+    lnk = os.path.join(work, "T16.LNK")
+    subprocess.run([sys.executable, "tools/os88lnk.py", lnk, NE, "--vol", "B",
+                    "--kind", "document"], check=True, capture_output=True)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+    subprocess.run(["mmd", "-i", aimg, "::AUTOSTRT"], env=env,
+                   capture_output=True)
+    subprocess.run(["mcopy", "-i", aimg, lnk, "::AUTOSTRT/T16.LNK"], env=env,
+                   check=True, capture_output=True)
+    # quick: launch's own picture settle runs before os88ui turns the saver
+    # off, and with the link's MessageBox up and no input the saver came on
+    # inside it (seen: sea life at 90 guest seconds, and "the desktop never
+    # appeared" in N3's re-run soak); every look below is a guest read
+    with os88ui.boot(aimg, apps=bimg, machine=XT, verbose=False,
+                     quick=True) as ui:
+        got = {}
+
+        def w16():
+            for w in ui.windows():
+                if w.visible and w.title in W16TITLES:
+                    v = win16_vars(ui)
+                    if v:
+                        got["v"] = v
+                        return True
+            return False
+        try:
+            ui._wait(w16, "WIN16's window for the link's %s" % NE, 120)
+        except os88ui.UIError as e:
+            bad.append("D: %s" % e)
+            return
+        vol, name, l1 = got["v"]
+        print("D. a link on A: to B:\\%s: WIN16 has vol %d, %s: %r"
+              % (NE, vol, name, l1))
+        if vol != 1 or name.upper() != NE or "not a Windows" in l1:
+            bad.append("D: WIN16 was handed vol %d %s (%r), not B:'s %s"
+                       % (vol, name, l1, NE))
+
+
+def dblclick(ui, dw, name):
+    i, _ = ui.entry(name, dw)
+    x, y = ui.row_xy(dw, i - ui.scroll(dw))
+    ui.mo.dblclick(x, y, settle=0)
+
+
+def main():
+    for f in ("win16.o88", "win16/DOS.O88", "win16/" + NE, MZ, "dosp.bin",
+              "os8088-360.img"):
+        if not os.path.exists(b(f)):
+            print("win16nedos: SKIP - no build/%s (make it first)" % f)
+            return 77
+    bad = []
+    work = tempfile.mkdtemp(prefix="w16nd-", dir=os.path.join(ROOT, "build"))
+    try:
+        bimg = os.path.join(work, "b360.img")
+        subprocess.run([sys.executable, "tools/os88disk.py", "-o", bimg,
+                        "--size", "360", b("win16.o88"), b("win16/DOS.O88"),
+                        b("win16/" + NE), b(MZ), "--folder", "SYSTEM/APPDATA",
+                        "--folder", "SYSTEM/APPDATA/WIN16"],
+                       check=True, capture_output=True)
+        lo = carve()
+        with os88ui.boot(b("os8088-360.img"), apps=bimg, machine=XT,
+                         verbose=False) as ui:
+            dw = ui.open_drive("B")
+            os88marty.ui_done(ui.m, limit=30)
+            before = set(w.i for w in ui.windows() if w.visible)
+            # --- A ---------------------------------------------------------
+            dblclick(ui, dw, NE)
+            ui.m.pause()
+            dosf, big, up = None, [], None
+            for f in range(FRAMES):
+                ui.m.advance(frames=1)
+                for w in ui.windows():
+                    if not w.visible or w.i in before:
+                        continue
+                    if w.title == "DOS" and dosf is None:
+                        dosf = f
+                    if w.title in W16TITLES and up is None:
+                        up = f
+                big += [c for c in claims(ui) if lo <= c < lo + 2048]
+                if up is not None and f > up + 30:
+                    break
+            ui.m.go()
+            print("A. %s: WIN16's window at frame %s; DOS's window %s; "
+                  "carve-sized claims %s" % (NE, up, "never" if dosf is None
+                                             else "at frame %d" % dosf,
+                                             sorted(set(big)) or "none"))
+            if up is None:
+                bad.append("A: no window for %s in %d frames" % (NE, FRAMES))
+            if dosf is not None:
+                bad.append("A: DOS's window was on the glass at frame %d"
+                           % dosf)
+            if big:
+                bad.append("A: a %d-byte claim - DOS's carve (%d) - was taken"
+                           % (big[0], lo))
+            os88marty.ui_done(ui.m, limit=30)
+            text, on = ui.toast()
+            if on:
+                bad.append("A: a toast is up after the hand-on: %r" % text)
+            # --- B ---------------------------------------------------------
+            for w in ui.windows():              # WIN16's window is over B:'s
+                if w.visible and w.title in W16TITLES:
+                    ui.close(w)
+            ui.raise_window(dw)
+            before = set(w.i for w in ui.windows() if w.visible)
+            dblclick(ui, dw, MZ)
+            box = {}
+
+            def dos():
+                for w in ui.windows():
+                    if w.visible and w.i not in before and w.title == "DOS":
+                        box["w"] = w
+                        return True
+                return False
+            try:
+                ui._wait(dos, "DOS's window for %s" % MZ, 60)
+                print("B. %s: DOS's window opened" % MZ)
+            except os88ui.UIError as e:
+                bad.append("B: %s" % e)
+            # --- C ---------------------------------------------------------
+            if "w" in box:
+                os88marty.pace(ui.m, 8.0)     # DOSHELLO runs, and waits
+                ui.m.key("Enter")             # for a key before it ends
+                os88marty.pace(ui.m, 4.0)
+                before = set(w.i for w in ui.windows() if w.visible)
+                ui.m.type_text(NE + "\n")
+
+                def w16():
+                    return any(w.visible and w.i not in before and
+                               w.title in W16TITLES for w in ui.windows())
+                try:
+                    ui._wait(w16, "WIN16's window for a typed %s" % NE, 60)
+                    print("C. %s typed at the prompt: WIN16's window opened"
+                          % NE)
+                except os88ui.UIError as e:
+                    bad.append("C: %s" % e)
+                    if os.environ.get("W16ND_SHOT"):
+                        w_, h_, d_ = ui.m.fbuf(0)
+                        os88marty.write_png_rgb(os.environ["W16ND_SHOT"],
+                                                w_, h_, d_)
+        # --- D -------------------------------------------------------------
+        leg_d(work, bimg, bad)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    for f in bad:
+        print("FAIL: " + f)
+    if not bad:
+        print("win16nedos: an NE double-clicked never showed DOS, a plain "
+              ".EXE still opens it, a typed NE still goes to WIN16, and a "
+              "link to it on another volume hands WIN16 the right file")
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

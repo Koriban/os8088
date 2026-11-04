@@ -146,18 +146,24 @@ SK_TXMAX    equ 4096            ; at this rung is 16,896 bytes; the
 
 SK_RXMID    equ 4096            ; the middle rung, and the one the arithmetic
 SK_TXMID    equ 2048            ; says is the sweet spot: ~29 KB/s predicted.
+%if SK_TXCAP0 * 2 != SK_RXCAP0 || SK_TXMID * 2 != SK_RXMID || SK_TXMAX * 2 != SK_RXMAX
+  %error "sk_try derives a rung's TX size as half its RX: keep them so or put the compares back"
+%endif
                                 ; The TX sizes are the SEND window's ceiling
                                 ; (SPEC.md 72.4.3): four and two segments of
                                 ; TCP_MSS, and at least two is what makes the
                                 ; peer ACK at once instead of on its timer
 
-; What the two MEASURED rungs cost, in KB. Derived from the sizes above and
-; from NET_SOCKS rather than written down beside them, because a number
-; written twice is a number that disagrees with itself later. The floor has no
-; entry here on purpose: it is not measured against anything (see sk_claim).
-SK_POOLKB   equ SK_NLEAN * (SK_LEANRX + SK_LEANTX)
-SK_KBMAX    equ (SK_RXMAX + SK_TXMAX + SK_POOLKB + 1023) / 1024
-SK_KBMID    equ (SK_RXMID + SK_TXMID + SK_POOLKB + 1023) / 1024
+; What the two MEASURED rungs cost, in PARAGRAPHS (SPEC.md 50.3.7). Derived
+; from the sizes above and from NET_SOCKS rather than written down beside
+; them, because a number written twice is a number that disagrees with itself
+; later. The floor has no entry here on purpose: it is not measured against
+; anything (see sk_claim). They were KB, and the pool is not a whole number
+; of them: 16,896 bytes at the top rung is 16.5KB, which a KB door claimed
+; as 17, and 10,752 at the middle is 10.5 claimed as 11.
+SK_LEANB    equ SK_NLEAN * (SK_LEANRX + SK_LEANTX)  ; the lean rings, bytes
+SK_PMAX     equ (SK_RXMAX + SK_TXMAX + SK_LEANB + 15) / 16
+SK_PMID     equ (SK_RXMID + SK_TXMID + SK_LEANB + 15) / 16
 SK_SHARESH  equ 2               ; ...and a rung the user did not ASK for may
                                 ; take at most a 1/(1<<2) - a QUARTER - of the
                                 ; free heap. It is a SHIFT and not a divisor
@@ -202,11 +208,11 @@ TCP_MSS     equ 1024            ; the largest segment we send. It was SK_TXMAX
 ; --- TCP_RMSS - what we ANNOUNCE, and it is not TCP_MSS (SPEC.md 72.4.1) ----
 ; TCP_MSS above bounds what we SEND. The option in a SYN means the largest
 ; segment we are willing to RECEIVE, which is a different number: one whole
-; Ethernet frame's payload, because eth_rxb is NE_FRAME + 4 wide and really
+; Ethernet frame's payload, because eth_rxb is NIC_FRAME + 4 wide and really
 ; can take one. tcp_out clamps it to [sk_rxcap] as well - at the floor rung
 ; the ring is 1024, and a peer told 1460 would have every segment half-refused
 ; by sk_rxput and retransmitted, which is worse than the 536 it replaces.
-TCP_RMSS    equ NE_FRAME - IP_PAY - TC_HLEN
+TCP_RMSS    equ NIC_FRAME - IP_PAY - TC_HLEN
 
 ; =============================================================================
 ; THE RING POOL (SPEC.md 72.21)
@@ -601,8 +607,9 @@ sk_claim:
     push dx
     cmp word [sk_seg], 0
     jne .have                       ; a second attach must not claim twice
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, which bounds
-    mov [sk_lrun], ax               ; every rung below (sk_try)
+    mov bl, MEMP_AVAIL              ; AX = the largest free run, which bounds
+    call OSAPI_MEM_P                ; every rung below (sk_try) - in
+    mov [sk_lrun], ax               ; PARAGRAPHS, the unit sk_try asks in
     mov bx, [sk_want]               ; the user's rung, if there is one
     or bx, bx
     jz .auto
@@ -617,20 +624,21 @@ sk_claim:
     call sk_try
     jnc .done
 .auto:
-    call OSAPI_MEM_AVAIL        ; **AX = the largest run, BX = the TOTAL free**
-    mov ax, bx                  ; (SPEC.md 50.3), and it is the total this
+    mov bl, MEMP_AVAIL          ; **AX = the largest run, BX = the TOTAL free**
+    call OSAPI_MEM_P            ; (SPEC.md 50.3.7, paragraphs: SK_PMAX's unit)
+    mov ax, bx                  ; - and it is the total this
     mov cl, SK_SHARESH          ; measures against: the largest run is what the
     shr ax, cl                  ; claim itself will test, and a card that fits
                                 ; in the biggest hole on a machine with no
                                 ; other memory left has still taken the machine
-    mov bx, SK_RXMAX            ; AX = a quarter of the free heap, in KB
-    cmp ax, SK_KBMAX
-    jb  .mid
+    mov bx, SK_RXMAX            ; AX = a quarter of the free heap, in
+    cmp ax, SK_PMAX             ; paragraphs (a 640KB heap is 40,960 of them,
+    jb  .mid                    ; so a word holds the total)
     call sk_try
     jnc .done
 .mid:
     mov bx, SK_RXMID
-    cmp ax, SK_KBMID
+    cmp ax, SK_PMID
     jb  .floor
     call sk_try
     jnc .done
@@ -907,28 +915,16 @@ sk_reclaim:
 ; (ether.asm), so the card is known by the time this is asked. It cannot read
 ; [eth_pstart]/[eth_pstop] - ne_init sets those, and it runs after.
 ; -----------------------------------------------------------------------------
-NE_RINGSZ   equ (NE_PSTOP - NE_PSTART) * 256
-NE1_RINGSZ  equ (NE1_PSTOP - NE1_PSTART) * 256
-SK_RINGSLK  equ 1536            ; one 1514-byte frame, rounded up to 6 pages
-
-; --- and the rungs have to LAND somewhere, which is a build-time fact --------
-; Without these the clamp is silent: a card whose ring stopped fitting even
-; the middle rung would fall to the floor and read as "the network got slow".
-%if SK_RXMAX > NE_RINGSZ - SK_RINGSLK
-    %error "SK_RXMAX no longer fits an NE2000's receive ring"
-%endif
-%if SK_RXMID > NE1_RINGSZ - SK_RINGSLK
-    %error "SK_RXMID no longer fits an NE1000's receive ring"
-%endif
-%if SK_RXCAP0 > NE1_RINGSZ - SK_RINGSLK
-    %error "even the floor rung no longer fits an NE1000's receive ring"
-%endif
+    NIC_RING_CONSTS             ; the backend's: NIC_RINGSZ, NIC1_RINGSZ and
+                                ; SK_RINGSLK, and the build-time proof that
+                                ; the rungs it offers fit its ring
+                                ; (nicne2k.inc, pciether.asm)
 
 sk_cardcap:
-    mov ax, NE_RINGSZ
+    mov ax, NIC_RINGSZ
     cmp byte [eth_word], 0
     jne .got
-    mov ax, NE1_RINGSZ
+    mov ax, NIC1_RINGSZ
 .got:
     sub ax, SK_RINGSLK
     ret
@@ -939,6 +935,7 @@ sk_cardcap:
 ; receive window is not the one to economise on the send buffer.
 sk_try:
     push ax
+    push bx                         ; (BL becomes the door's verb)
     push cx
     push dx
     call sk_cardcap                 ; **THE CARD FIRST** (SPEC.md 72.13.3): a
@@ -946,18 +943,20 @@ sk_try:
     ja  .no                         ; is invited to overflow, and this clamps
                                     ; [sk_want] as well - it is a correctness
                                     ; bound, not a preference
-    mov cx, SK_TXCAP0               ; the rung's TX size
-    cmp bx, SK_RXMAX
-    jne .nmax
-    mov cx, SK_TXMAX
-    jmp short .got
-.nmax:
-    cmp bx, SK_RXMID
-    jne .got
-    mov cx, SK_TXMID
-.got:
+    mov cx, bx                      ; the rung's TX size is HALF its RX, on
+    shr cx, 1                       ; every rung (the %if below holds it to
+                                    ; that): one shift where a compare per
+                                    ; rung was nineteen bytes more, and BX is
+                                    ; only ever one of the three rungs -
+                                    ; ec_buf_take refuses any other [sk_want]
     mov [sk_rxcap], bx
     mov [sk_txcap], cx
+    lea ax, [bx+SK_NLEAN * SK_LEANRX] ; TX starts above ALL the RX rings:
+    mov [sk_txoff], ax              ; the bulk one and then the lean ones.
+                                    ; Stored BEFORE the claim, as the two caps
+                                    ; are: nothing reads any of the three
+                                    ; while [sk_seg] is 0, and it frees BX for
+                                    ; the door's verb
     ; --- KB wanted: NET_SOCKS * (rx + tx), rounded up ----------------------
     mov ax, bx                      ; **THE POOL, NOT THE TABLE** (72.21): one
     add ax, cx                      ; bulk pair plus SK_NLEAN lean ones, and
@@ -965,10 +964,9 @@ sk_try:
                                     ; decouples how many sockets exist from
                                     ; what they cost - 16,896 bytes at the top
                                     ; rung where a pair per slot was 36,864
-    add ax, SK_NLEAN * (SK_LEANRX + SK_LEANTX)
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; AX = KB
+    add ax, SK_LEANB + 15           ; AX = PARAGRAPHS (SPEC.md 50.3.7): the
+    mov cl, 4                       ; pool is a BYTE count, 16,896 at the top
+    shr ax, cl                      ; rung, and a KB door claimed 17KB of it
     cmp ax, [sk_lrun]               ; **NEVER MORE THAN CAN BE SERVED**
     ja  .no                         ; (SPEC.md 72.13.4): a claim the heap
                                     ; cannot serve compacts and sheds every
@@ -978,7 +976,11 @@ sk_try:
                                     ; that run is the one a compaction and a
                                     ; shed would leave, so a rung under it can
                                     ; still move the heap inside this verb
-    call OSAPI_MEM_CLAIM_HI         ; out DX = the base segment. FROM THE TOP
+    xor cx, cx                      ; no DMA head: the CPU moves every byte
+    mov bl, MEMP_CLAIM_HI           ; (and no MEMP_CPU: nothing is gained by
+    call OSAPI_MEM_P                ; it at a 512 granule, and the class is
+                                    ; the safe default for a heap buffer)
+                                    ; out DX = the base segment. FROM THE TOP
                                     ; (SPEC.md 50.3.2), because it is long-lived
                                     ; and driver-owned and belongs at the same
                                     ; end of the heap as a driver image - not in
@@ -1032,18 +1034,17 @@ sk_try:
                                     ; the wrong one: what is wanted is for it
                                     ; to pack UP with the rest of the ceiling,
                                     ; and only that pass does that
-    lea ax, [bx+SK_NLEAN * SK_LEANRX] ; TX starts above ALL the RX rings:
-                                    ; the bulk one and then the lean ones
-    mov [sk_txoff], ax
     call sk_ring_reset              ; ...and nothing holds a ring yet
     pop dx
     pop cx
+    pop bx
     pop ax
     clc
     ret
 .no:
     pop dx
     pop cx
+    pop bx
     pop ax
     stc
     ret

@@ -1,6 +1,6 @@
 # PLAN — replaceable DOCK and DESK shells
 
-**Status: wave 0 DONE — the contract is SPEC.md §125. Waves 1-5 not built.**
+**Status: wave 0 DONE — the contract is SPEC.md §127. Waves 1-5 not built.**
 Written 2026-11-01 at the owner's request.
 
 **Two independent shells, each named in `SYSTEM.CFG`, each replaceable at
@@ -134,10 +134,10 @@ is justified by a shell the owner intends to run.
 ## 6. Staging
 
 ### Wave 0 — the contract — **DONE, 2026-11-01**
-**SPEC.md §125**, in seven sections: the model and its boundary (§125.1), the
-`SH` record and its three states (§125.2), `dkv` (§125.3), `dsv` with the
-slot list DERIVED (§125.4), the fallback (§125.5), the cost (§125.6), and
-why a second implementation is what proves the table (§125.7).
+**SPEC.md §127**, in seven sections: the model and its boundary (§127.1), the
+`SH` record and its three states (§127.2), `dkv` (§127.3), `dsv` with the
+slot list DERIVED (§127.4), the fallback (§127.5), the cost (§127.6), and
+why a second implementation is what proves the table (§127.7).
 
 **The derivation corrected §2 of this plan.** Counting the desk's external
 surface properly — comments stripped, and the three desk files (`desk.inc`,

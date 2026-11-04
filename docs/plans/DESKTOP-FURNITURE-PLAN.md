@@ -2,7 +2,7 @@
 
 **Status: a plan, nothing built.** Written 2026-11-02.
 
-Two features under SPEC.md §125's roof — "a shell owns the **furniture**" —
+Two features under SPEC.md §127's roof — "a shell owns the **furniture**" —
 and they are separable: either can ship without the other. Part B is nearly
 free and Part A is not.
 
@@ -29,13 +29,13 @@ both**. The dock is 910 bytes of *hot* `.text` — unlike the desk, which is 23
 bytes of `.text` and 2,000 of `.cold` and therefore already cheap where it
 matters.
 
-## A.2 This reopens §125.7's question 4, and the owner is right
+## A.2 This reopens §127.7's question 4, and the owner is right
 
 That question asked whether the stock dock should stay in the kernel, and
 this plan's own answer was *"keep it resident until something argues
 otherwise."* The argument is now made, and nothing about the measurement
 changed — the 969 bytes were always there. **What changed is the
-consistency**: once a dock is a thing you name in `SYSTEM.CFG` (§125.2), the
+consistency**: once a dock is a thing you name in `SYSTEM.CFG` (§127.2), the
 stock dock being the one that cannot be a file is an exception with no
 reason behind it.
 
@@ -45,7 +45,7 @@ reason behind it.
 |---|---|
 | **(a) `DOCK.DRV` always loaded** — the basic bodies move into the module, which is loaded at boot rather than on a settings change | **recommended** |
 | (b) the dock becomes a `.O88` **package** | refused, below |
-| (c) status quo — resident basic bodies, replaceable per §125 | the fallback if A.4 cannot be answered |
+| (c) status quo — resident basic bodies, replaceable per §127 | the fallback if A.4 cannot be answered |
 
 **(b) is refused on load order, not on taste.** A package is a task with a
 window and a heap claim, launched by the loader; the dock is chrome *outside*
@@ -58,7 +58,7 @@ does with the one already built.
 
 ## A.4 THE TENSION, and it is the whole of Part A
 
-§125.5 says, in terms:
+§127.5 says, in terms:
 
 > **The built-ins never leave the kernel.** They are what a slot holds at
 > rest, so "no shell" is not a degraded mode: it is byte-identical to the
@@ -206,7 +206,7 @@ synthetic is a new kind of window and belongs in its own plan.
 
 ## B.5 Who places them, and when
 
-**The desk shell's business, per §125.** The stock desk places a default set;
+**The desk shell's business, per §127.** The stock desk places a default set;
 a replacement shell places whatever it likes. Two candidate moments:
 
 1. **The installer** (§52.10), which already builds the volume's own
@@ -240,7 +240,7 @@ that may not exist. A first-boot placer cannot tell the difference between
 Part B adds **no resident byte**: it is records in a file and an installer
 that writes them, using a slot that already exists. Part A moves 969 bytes
 out of the kernel and changes what happens when a file is missing. They are
-in one plan because §125 made them both "furniture", not because they are
+in one plan because §127 made them both "furniture", not because they are
 one piece of work.
 
 ---
