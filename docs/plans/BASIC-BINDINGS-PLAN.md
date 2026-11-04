@@ -195,12 +195,16 @@ cannot shortcut:
 3. **A resource format.** The heaviest, and it buys a thing nobody has asked
    for: dialogs editable without the program.
 
-The recommendation is **1 for wave 4 and keep 2 on the table**, because a
-dialog built by calls can be wrapped in a `DIALOG` block later without changing
-the widgets underneath, whereas starting at 2 means designing a layout engine
-before anything can show a button. **`FORM_DO` must not acquire a counterpart
-that pretends to be it** — a verb that looks like `FORM_DO` and takes a tree
-this OS cannot represent would be worse than its absence.
+**Decided: 1, with 2 kept possible.** A dialog built by calls can be wrapped
+in a `DIALOG` block later without changing the widgets underneath, whereas
+starting at 2 means designing a layout engine before anything can show a
+button. `DIALOG` is reserved from the start and means nothing yet, so the block
+can arrive without breaking a program; the call API is `DLG` with the verb
+after it. SPEC §126.12 is the contract and `BASIC-GUI-PLAN.md` §6 the summary.
+
+**`FORM_DO` must not acquire a counterpart that pretends to be it** — a verb
+that looks like `FORM_DO` and takes a tree this OS cannot represent would be
+worse than its absence.
 
 ## 7. Waves
 

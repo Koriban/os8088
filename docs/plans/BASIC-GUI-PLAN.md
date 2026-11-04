@@ -242,13 +242,33 @@ to count the menus itself and refuse the sixth by name. A silent drop is the one
 outcome a BASIC programmer cannot debug, since the bar simply renders without
 it.
 
-## 6. Dialogs
+## 6. Dialogs — decided: by calls
 
-Unchanged from `BASIC-BINDINGS-PLAN.md` §6, which is where the three options
-and the recommendation live. In short: GEM's dialogs are data in a `.RSC` run
-by `FORM_DO`; `apps/os88ui.inc`'s widgets are code opted into with `%define`,
-which a BASIC program cannot do. Recommendation is dialogs-as-calls for the
-first wave, with a `DIALOG` block kept possible later, and no fake `FORM_DO`.
+**Settled, and specified in SPEC §126.12.** GEM's dialogs are data in a `.RSC`
+run by `FORM_DO`; `os88ui.inc`'s widgets are code opted into with `%define`,
+which a BASIC program cannot do. So a dialog is built by calling, and the
+`DIALOG` block is kept for later — a dialog built by calls can be wrapped in a
+block without changing the widgets underneath, while starting from the block
+means a layout engine before anything can show a button.
+
+`DIALOG` is **reserved from the start and means nothing yet**, held for that
+block exactly as `POKE`'s name is held: reserving a word early costs nothing,
+and taking one away later breaks programs. The call API is `DLG` with the verb
+after it — `NEW` `TEXT` `EDIT` `CHECK` `RADIO` `DROP` `GROUP` `BUTTON` `RUN`
+`FREE` — in the shape `MENU KILL` already uses.
+
+Controls bind to variables rather than being read back: the variable supplies
+the initial state and receives the result, nothing is written on cancel, and
+`DLG RUN` returns the id that dismissed the dialog or **0 for the close box**.
+
+Four things §126.12.1 fixes, each for a reason this repository already paid
+for: the dialog is **modal** (a non-modal one here can be orphaned by a stray
+click or the close box and gate-lock the application); `DLG FREE` **destroys**
+rather than hides (`MAX_WIN` is 12, and 6 on `kern_small`); coordinates are
+**content-relative** with the height derived, so **no BASIC program contains
+the number 18**; and the widget set is **fixed when the interpreter is built**,
+since the opt-ins are assembly-time `%define`s. The engine lives in
+`BASIC.OVL`. `ALERT` and `FILESELECT` stay their own verbs. No fake `FORM_DO`.
 
 ## 7. What it should look like finished
 

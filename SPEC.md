@@ -228571,3 +228571,81 @@ The table is also what an editor's **variable watch** needs — the feature any
 environment of this class is expected to have, and the reason this is better
 value than it first looks: one table, two features, and the second is the one a
 programmer debugging a BASIC program actually reaches for.
+
+### 126.12 Dialogs are built by calls, and `DIALOG` is reserved for later
+
+A GEM dialog is data: an object tree in a `.RSC`, loaded and run by `FORM_DO`.
+This OS has no resource file and no tree — `apps/os88ui.inc` (§13, §75) has the
+widgets, each opted into with a `%define`, which is a compile-time choice a
+BASIC program cannot make. Two ways out were considered: build a dialog by
+calling, or declare it as data in a block the compiler turns into a table.
+
+**Decided: by calls now, with the block kept possible.** A dialog built by
+calls can later be wrapped in a block without changing the widgets underneath,
+whereas starting from the block means designing a layout engine before anything
+can show a button.
+
+**`DIALOG` is therefore a reserved word from the start and means nothing yet.**
+It is held for the block form, exactly as `POKE`'s name is held in §126.7: a
+word reserved before it is needed costs nothing, and a word that has to be
+taken away later breaks programs. The call API is spelled `DLG`, with the verb
+after it, which is the shape this language already uses for `MENU KILL` and
+`MENU OFF`.
+
+```basic
+DLG NEW    "Preferences", 240, 130      ' caption, outer width and height
+DLG TEXT    1,  16,  10, "Name:"
+DLG EDIT    2,  64,   8, 20, name$      ' id, x, y, width in characters, var
+DLG CHECK   3,  16,  34, "Word wrap", wrap!
+DLG RADIO   4,  16,  54, "Left",  align%, 0
+DLG RADIO   5,  16,  72, "Right", align%, 1
+DLG DROP    6, 120,  34, kind%, "Draft,Normal,Final"
+DLG GROUP   7,  10,  26, 100,  70, "Alignment"
+DLG BUTTON  8, 140,  98, "OK"
+DLG BUTTON  9, 190,  98, "Cancel"
+LET hit% = DLG RUN(8, 9)                ' default id, cancel id; returns an id
+DLG FREE
+```
+
+**A control is bound to a variable, not read back by hand.** `DLG CHECK`,
+`DLG RADIO`, `DLG EDIT` and `DLG DROP` each name a variable: it supplies the
+control's initial state when the dialog opens, and receives the result when the
+dialog is accepted. On cancel, nothing is written. This is the same idea as
+`FIELD` binding a record buffer, and it means a dialog needs no getter verbs.
+
+`DLG RUN` is a function returning the id of the control that ended the dialog,
+or **0 for the close box**, which a program must handle as a cancel.
+
+#### 126.12.1 Four properties that are not negotiable
+
+**Modal.** `DLG RUN` does not return until the dialog is dismissed. This is not
+a simplification, it is the lesson of a recorded incident: a non-modal
+application dialog here can be orphaned by a stray click *or* by the close box,
+after which the application is gate-locked and the user cannot reach either
+window. A modal dialog cannot reach that state. A non-modal form may be
+designed later; it is not this.
+
+**`DLG FREE` destroys.** A dialog is a window, so §126.12 inherits the hide/
+destroy trap: hiding leaves the slot used, and `MAX_WIN` is 12 on `kern_big`
+and 6 on `kern_small`. A program that opens and cancels a dialog a few times
+would otherwise exhaust the window table and every later dialog would silently
+fail to appear. `DLG FREE` frees the record, and `DLG RUN` calls it on the
+program's behalf if the program forgets.
+
+**Coordinates are content-relative and the height is derived.** §11 fixes the
+content box at `x+1 .. x+w-2`, `y+TITLE_H .. y+h-2` with `TITLE_H` 18, so a
+control's `x, y` is measured from the inside of the dialog and the interpreter
+does that arithmetic. **No BASIC program should contain the number 18**, and a
+dialog's usable height is `h - TITLE_H - 1` derived rather than quoted.
+
+**The widget set is fixed when the interpreter is built**, because the opt-ins
+are `%define`s resolved at assembly time. The set is therefore a decision made
+once, for every program: buttons, `OS88UI_CHK` check boxes, `OS88UI_RAD` radio
+dots, static text, a single-line edit over `apps/os88line.inc` (§83), group
+boxes, and `OS88UI_DROP` for one pick from a short list. Scroll bars
+(`OS88UI_SCROLL`) are not in a dialog's set. The `DLG` engine lives in
+`BASIC.OVL` by §126.6's rule, a dialog being rare next to the inner loop.
+
+`ALERT` and `FILESELECT` are **not** `DLG` verbs: each is one existing facility
+— `OS88UI_ALERT`'s standard alert and the chooser — and keeps its own GFA
+spelling.
