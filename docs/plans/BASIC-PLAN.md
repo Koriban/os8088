@@ -90,7 +90,54 @@ stages, the operator set, the control flow, the 64 built-ins, and 370 tests
 that say what all of it means. What does not exist anywhere yet is every line
 that connects BASIC to this operating system.
 
-### 0.3 Where GFA is a bigger language, and whether to follow
+### 0.3 The keyword gap, measured
+
+**The two keyword lists are reconciled by a generator, not by hand** —
+`basicnw/notes/gen-keyword-reconcile.py`, output
+`basicnw/notes/KEYWORD-RECONCILE.md`. This is
+`docs/plans/SHEET-MACRO-PLAN.md`'s shape for Excel 2.0's macro language and
+for its reason: a count taken by hand goes stale the first time either side
+moves, and "GFA parity" means nothing until it can be counted.
+
+| | |
+| --- | ---: |
+| BASIC/nw reserved words | 134 |
+| BASIC/nw built-ins | 64 |
+| **BASIC/nw names in all** | **193** |
+| GFA keyword-shaped nodes in the mirror | 275 |
+| in both | 57 |
+| **GFA only** | **218** |
+| BASIC/nw only | 136 |
+
+A floor rather than a census: the mirror carries one node per *documented*
+command, so a keyword documented inside another's page is not counted.
+
+**The 218 divide, and most of them are already answered:**
+
+| | | |
+| --- | ---: | --- |
+| GEM bindings | 76 | no counterpart — one `OSAPI` verb replaces the lot (§0.4) |
+| graphics | 33 | tier A, `BASIC-GUI-PLAN.md` wave G6 |
+| windows, menus, events | 21 | tier A, waves G1–G4 |
+| TOS and hardware | 12 | refused, SPEC §126.7 |
+| the `MAT` sublanguage | 6 | declined — a library, not a language |
+| **language-level** | **70** | **the real work, and the only group needing a decision each** |
+
+So the answer to "must the lists be reconciled" is **yes, and it is already
+two thirds done by decisions taken elsewhere in this plan.** What is left is
+seventy names, and reading that list is a short afternoon rather than a
+project: `REPEAT`, `EXIT IF`, `LOCAL`, `DEC`, `PRED`, `ROUND`, `RINSTR`,
+`UPPER$`, `ON BREAK`, `QSORT`, `TRON`/`TRACE$`, `PRINT USING`, `DIR`,
+`MKDIR`, `EXIST`, `SEEK`.
+
+**The shared 57 are the dangerous ones, not the missing 218.** A shared
+spelling is not a shared meaning and a conflict is silent: three are known and
+in `BASIC-PORTING-NOTES.md` — `VAR`, `RETURN`, and `GET`/`PUT` — and **the
+other 54 are unchecked.** Each needs its GFA page read against
+`statements.md` before it can be called compatible, and that, not the missing
+names, is what the reconciliation is actually for.
+
+### 0.3.1 Where GFA is a bigger language, and whether to follow
 
 GFA has eight numeric types to BASIC/nw's four (`BIT BYTE WORD INT LONG
 SINGLE DOUBLE FLOAT`, with `CARD` for unsigned), a matrix sublanguage
