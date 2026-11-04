@@ -112,7 +112,32 @@ moves, and "GFA parity" means nothing until it can be counted.
 A floor rather than a census: the mirror carries one node per *documented*
 command, so a keyword documented inside another's page is not counted.
 
-**The 218 divide, and most of them are already answered:**
+**And GFA is no longer the only comparison.** Five dialects' manuals are held
+in `_LIBRARY/languages/basic/` and their keyword lists extracted into one
+corpus by `basicnw/notes/gen-keyword-corpus.py`
+(`keywords.tsv`, summarised in `KEYWORD-CORPUS.md`):
+
+| | names | shares with BASIC/nw |
+| --- | ---: | ---: |
+| BASIC/nw | 187 | — |
+| QuickBASIC 4.5 | 221 | **178** |
+| GFA-BASIC 3 | 275 | 55 |
+| BBC BASIC V | 168 | 69 |
+| AMOS Professional | 745 | 90 |
+| STOS | 125 | 30 |
+
+**178 of QuickBASIC's 221 are shared, and the nine BASIC/nw has that it lacks
+are exactly the documented divergences** — `EMIT`/`FETCH`/`STORE`,
+`PROC`/`PROCEDURE`/`FUN`/`DEFINE`, `VIEWPRINT`. That is the strongest evidence
+available that this language is where `quickbasic.md` says it is, and it is
+measured rather than asserted.
+
+AMOS is the outlier and the useful one: 745 names, **419 instructions against
+211 functions**, plus two embedded sub-languages (47 `Interface Instruction`s,
+10 `AMAL Instruction`s). Nothing of that shape belongs in §126, but it is the
+richest catalogue in the set of *what a BASIC can be asked to do*.
+
+**The 218 GFA-only names divide, and most are already answered:**
 
 | | | |
 | --- | ---: | --- |
