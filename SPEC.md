@@ -228293,7 +228293,7 @@ and **two of which it must add for everyone**:
 | --- | --- | --- |
 | `%` INTEGER | 2 | native |
 | `&` LONG | 4 | `dx:ax`, over §126.3's second gap |
-| `!` SINGLE | 4 | **a double in arithmetic, four bytes in storage** |
+| `!` SINGLE | 4 | computed as a double, **narrowed to 32 bits on every store** |
 | `#` DOUBLE | 8 | `os88fp.inc`'s A/B registers |
 | `$` STRING | a handle | §126.3's third gap |
 
@@ -228311,13 +228311,30 @@ and `a#` coexist and hold three unrelated values. That is QuickBASIC's rule and
 it is kept, and it is the reason §126.11 takes a name as a *spelling* rather
 than as an identifier.
 
-`!` is the simplification, declared here in §84.2's tradition rather than
-discovered later. QuickBASIC's `!` is a 32-bit float; `os88fp.inc` is 64-bit
-only. Arithmetic therefore widens to a double and `CSNG` rounds on store,
-which is observable: a `!` expression can be more accurate here than it was in
-1988. **`MKS$` and `CVS` are exempt and must emit and read a true four-byte
-IEEE single**, because their whole purpose is a byte-exact round trip through a
-record field.
+`!` is where an implementation will be tempted to diverge, so the requirement
+is stated sharply: **`os88fp.inc` is 64-bit only, and `!` must still lose the
+precision a 32-bit float loses.** Arithmetic may be carried out in a double —
+there is nothing else to carry it out in — but every store to a `!` name, and
+`CSNG`, must round to nearest 32-bit float first.
+
+This is not a style preference, it is conformance. The reference implementation
+narrows, and it was run to check rather than assumed:
+
+```
+LET s2! = 16777217.0   ' prints 1.677722e+7  -- 2^24+1 does not fit a single
+LET d2# = 16777217.0   ' prints 16777217
+```
+
+An implementation that left `!` as a double would print `16777217` for the
+first line and be **more accurate than the language**, which is a divergence
+the differential test in `BASIC-PLAN.md` §8 would catch and should catch. The
+same goes for a bare name with no suffix, which is a SINGLE by §126.4's table
+and narrows identically.
+
+**`MKS$` and `CVS` must emit and read a true four-byte IEEE single**, because
+their whole purpose is a byte-exact round trip through a record field — and the
+reference agrees, `CVS(MKS$(16777217))` coming back `1.677722e+7` rather than
+exact.
 
 Half-to-even rounding is the reference's and QuickBASIC's: `CINT(2.5)` is 2 and
 `CINT(3.5)` is 4.
