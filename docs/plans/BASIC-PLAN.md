@@ -18,10 +18,16 @@ of the 43 spellings BASIC/nw refuses, 26 refuse nothing this OS lacks.
 applications in** — GUI or text — which is what GFA-BASIC was on the ST.
 
 That target is specific enough to measure against, and the measuring stick is
-the GFA-BASIC 3 manual's own alphabetical command index (tho-otto.de's
-hypertext of *The GFA-Basic Compendium* v2.98). Read it; do not quote this
-summary of it. What it shows is a language with roughly 900 entries, of which
-the GUI surface divides into **three tiers** — and that division, not the
+the GFA-BASIC 3 manual itself, **held locally** at
+`_LIBRARY/languages/basic/gfa-basic/` — *The GFA-Basic Compendium* v2.98, all
+542 command nodes, as `gfabasic.txt` (grep-able) and `gfabasic.html` (one
+offline page, linked). Read the node for a command before building it; do not
+quote this summary of it, and do not go back to the website — its `robots.txt`
+asks automated clients to leave the viewer alone, which is why the mirror was
+made from the `.hyp` container instead.
+
+What it shows is a language of some 900 index entries, whose GUI surface
+divides into **three tiers** — and that division, not the
 keyword count, is the thing to copy:
 
 | tier | GFA | here |
