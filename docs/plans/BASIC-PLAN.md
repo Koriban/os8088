@@ -22,6 +22,14 @@ of the 43 spellings BASIC/nw refuses, 26 refuse nothing this OS lacks.
 **The goal is not a BASIC that runs. It is a BASIC you can write OS/8088
 applications in** — GUI or text — which is what GFA-BASIC was on the ST.
 
+**It is GFA's SHAPE that is wanted, not its substance** (SPEC §126). What is
+being copied is that a BASIC can be an operating system's application
+language: three tiers of reach with the raw one first, and an event loop the
+programmer pumps in plain sight. What is not being copied is its keywords, its
+type widths or its source — **if those were the goal, porting GFA itself would
+be the honest course.** The substance is BASIC/nw's, and where the two
+disagree BASIC/nw wins with no appeal to parity.
+
 That target is specific enough to measure against, and the measuring stick is
 the GFA-BASIC 3 manual itself, **held locally** at
 `_LIBRARY/languages/basic/gfa-basic/` — *The GFA-Basic Compendium* v2.98, all
@@ -45,10 +53,10 @@ keyword count, is the thing to copy:
 | **B. named system bindings** | `WIND_CREATE WIND_OPEN WIND_GET WIND_SET FORM_DO FORM_ALERT OBJC_DRAW RSRC_LOAD EVNT_MULTI GRAF_RUBBERBOX SHEL_* SCRP_* V_OPNVWK …` — one BASIC word per AES/VDI call | one BASIC word per kernel slot, named after it. 194 slots, so this tier is generated, not hand-written |
 | **C. the raw gateway** | `GEMSYS`, `VDISYS`, `BIOS`, `XBIOS`, `GEMDOS`, `LINE-A`, with `CONTRL GINTIN GINTOUT ADDRIN ADDROUT` as the parameter arrays | one `OSAPI` verb taking a slot number and registers. The escape hatch that stops tier B from ever being a blocker |
 
-**GFA source does not port unchanged, and
-`docs/plans/BASIC-PORTING-NOTES.md` says what to change** — chiefly that GFA's
-`%` is a 4-byte integer and this one is 2 bytes, which is loud, and that its
-`!` is a Boolean where this is a float, which is not.
+`docs/plans/BASIC-PORTING-NOTES.md` records how the two differ — chiefly that
+GFA's `%` is a 4-byte integer where this one is 2, and its `!` a Boolean where
+this is a float. **It is reference and not a requirement**: nothing here owes
+a GFA listing a clean port.
 
 **Tier A — the keyword set a GUI or text application is actually written in —
 is designed in `docs/plans/BASIC-GUI-PLAN.md`.** Tiers B and C are designed in
@@ -100,7 +108,8 @@ that connects BASIC to this operating system.
 `basicnw/notes/KEYWORD-RECONCILE.md`. This is
 `docs/plans/SHEET-MACRO-PLAN.md`'s shape for Excel 2.0's macro language and
 for its reason: a count taken by hand goes stale the first time either side
-moves, and "GFA parity" means nothing until it can be counted.
+moves. The count is for knowing the shape of the family, not for closing a
+gap: the 218 names GFA has and this does not are **a menu, not a backlog**.
 
 | | |
 | --- | ---: |
@@ -257,9 +266,11 @@ its entries, then an empty string, with one more empty string ending the bar.
 An entry starting with a minus sign is shown greyed and unselectable, and
 `MENU x,y` sets a tick or greys an item by that same index. **There are no
 desk accessories here**, so slots 3-8 have nothing behind them: either tier A
-keeps them as dead space for source compatibility, or `MENU` here is
-documented as taking the array without them. A wave 4 decision, and the first
-place where GFA source will not port unchanged.
+keeps them as dead space, or `MENU` here simply takes the array without them.
+**With source compatibility not a requirement, this stops being a decision:
+they go.** Six reserved strings exist to let an operating system fill them,
+this one fills nothing there, and carrying them would be carrying GEM's
+mechanism without GEM's purpose.
 
 ### 0.5 The pointer tools are not `PEEK` and `POKE`
 
@@ -284,8 +295,10 @@ needs neither `PEEK` nor `POKE` nor even `VARPTR`.
 
 What is left for `PEEK` and `POKE` is therefore exactly **memory that is not
 yours** — video RAM, kernel records, hardware — which is precisely the group
-§126.7 refuses on principle. The case for allowing them rests on GFA parity
-and on wanting to write system software in BASIC. It does not rest on
+§126.7 refuses on principle. The case for allowing them rested on GFA parity
+and on wanting to write system software in BASIC — and **the parity half is
+now worth nothing**, parity having been ruled out as a requirement, so only
+the second reason is left standing. It does not rest on
 necessity, and §9's second question should be decided on that weaker footing.
 
 The kernel's own warning in `apps/os88api.inc` is the reason to keep the line
@@ -571,8 +584,10 @@ buffer and read it back off a BMP export.
    **And it is a weaker case than §0.5 first claimed.** `PEEK` and `POKE` are
    not the pointer tools — `@`, the `MK*`/`CV*` pair and opaque handles are,
    and tier C needs none of these three. So this is not a capability the
-   bindings require; it is one that GFA parity and system programming in BASIC
-   would like. Declining it costs those two things and nothing else.
+   bindings require; it is one that system programming in BASIC would like.
+   (It used to read "GFA parity and system programming"; parity is not a
+   requirement, so that half of the case is withdrawn.) Declining it costs
+   that one thing and nothing else.
 
    I had proposed copying GFA's `$`-prefixed directives for this, GFA having
    used them for exactly this class of choice. **The manual says not to.**

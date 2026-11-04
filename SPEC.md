@@ -228220,6 +228220,23 @@ chapter says so and says why. The package file is `BASIC.O88` and the window
 says `BASIC`, because a user opening it does not need the dialect's full name
 to know what it is.
 
+**GFA-BASIC is the SHAPE and not the substance, and compatibility with it is
+not a requirement.** What is wanted from GFA is the thing it proved: that a
+BASIC can be the language an operating system's applications are written in,
+reaching the machine through three tiers with the raw one built first, and
+pumping its own event loop in plain sight. What is *not* wanted is its keyword
+set, its type widths or its source — **if those were the goal, the honest
+course would be to port GFA itself**, and this chapter would not exist.
+
+The substance is BASIC/nw's. Where the two disagree, BASIC/nw wins and no
+argument from GFA parity is admissible: a GFA program is not expected to run
+here, a GFA keyword is not owed a counterpart, and a difference between the
+two is a fact to record rather than a defect to fix. The catalogue of those
+differences (`basicnw/notes/GFA-CONFLICTS.md`) is **reference, not a work
+list** — its one live use is to stop a *newly invented* verb in this language
+from taking a GFA word and giving it a third meaning, which would confuse the
+only people who would notice.
+
 A QuickBASIC 4.5-line structured BASIC, running as an ordinary package. It is
 a port: the language has a complete implementation in TypeScript, and that
 implementation is the reference this chapter is written against rather than a

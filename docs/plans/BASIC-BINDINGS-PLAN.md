@@ -155,11 +155,11 @@ Two things in tier A are **not** mappings and must be designed:
 
 **The menu array.** `MENU m$()` assigns meaning by position, and positions 3
 through 8 are six reserved slots for *desk accessories* — a GEM concept with
-nothing behind it here. Either they stay as dead space so GFA source ports
-unchanged, or `MENU` here is documented as taking the array without them. The
-first costs nothing and buys source compatibility; the second is honest. It is
-the first place GFA source will not port unchanged either way, so it should be
-decided loudly rather than discovered.
+nothing behind it here, and **with GFA source compatibility ruled out as a
+requirement (SPEC §126) this is no longer a decision: they go.** Six reserved
+strings exist so that an operating system can fill them; this one fills
+nothing there, and keeping them would be keeping GEM's mechanism without GEM's
+purpose — which is what §8 below forbids.
 
 **`OSAPI_MENU_SET` caps the bar at five menus**, which SHEET and Word both
 outgrew by drawing their own in-window bars. Tier A's `MENU` either accepts the

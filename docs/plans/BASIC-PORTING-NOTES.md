@@ -1,10 +1,18 @@
 # Porting GFA-BASIC source to BASIC.O88
 
-**Status: notes, 2026-11-04.** Branch `basic-o88`. Companion to
-`BASIC-PLAN.md` (the language), `BASIC-GUI-PLAN.md` (tier A) and SPEC §126
-(the contract). Nothing is built yet; these are the differences to handle when
-it is, and they are the reason "GFA-BASIC parity" does not mean "GFA source
-runs".
+**Status: reference, 2026-11-04. NOT a requirement.** Branch `basic-o88`.
+
+**GFA compatibility is not a goal** (SPEC §126): what is wanted from GFA is
+its shape — a BASIC that an operating system's applications are written in —
+and not its substance. If its substance were the goal, porting GFA itself
+would be the honest course.
+
+So this file is **what to expect if you ever hand-port a GFA listing**, and
+nothing in it obliges BASIC/8088 to do anything. Its real value is the second
+one: it is the clearest statement anywhere of how far the two languages
+actually are apart, which is worth knowing before borrowing an idea from one
+into the other. Companion to `BASIC-PLAN.md`, `BASIC-GUI-PLAN.md` and SPEC
+§126.
 
 Everything below was checked against the manuals in
 `_LIBRARY/languages/basic/gfa-basic/` and, where it concerns BASIC/nw, by
