@@ -160,18 +160,39 @@ keeps them as dead space for source compatibility, or `MENU` here is
 documented as taking the array without them. A wave 4 decision, and the first
 place where GFA source will not port unchanged.
 
-### 0.5 Tier C needs addresses, which settles §9's second question
+### 0.5 The pointer tools are not `PEEK` and `POKE`
 
 Many slots take a far pointer: `OSAPI_FILE_READ` wants `ES:BX = buffer`,
-`OSAPI_FILE_PATH` wants `ES:DI` and a size. A BASIC string is a handle into a
-claim that can move, so a program cannot pass one to a kernel call without a
-way to say *where my buffer is* — GFA's `VARPTR` and `ARRPTR`, and `V:`/`VAR`
-for passing by reference.
+`OSAPI_FILE_PATH` wants `ES:DI` and a size, and `OSAPI_FILE_FIND_RAW` fills a
+directory entry in which `+18` is a size field. A BASIC string is a handle into
+a claim that can move, so none of this can work by holding an address in a
+variable. Three different needs hide behind the word *pointer*, and separating
+them is what keeps the language safe:
 
-That means the system-access question in §9 is **not separable from tier C**:
-the gateway cannot work without handing out an address, and an address is the
-first half of `PEEK`. The argument for *allowed, but declared* is therefore one
-of necessity rather than taste — tier C is wave 1, and it needs this.
+| the need | the tool | |
+| --- | --- | --- |
+| give the kernel a buffer | **`@obj`** | pin-and-pass: the interpreter computes the address, pins the object, makes the call, unpins. The **program never sees a number** |
+| get data out of, or into, your own buffer | **`CVI` `CVL` `CVS` `CVD` / `MKI$` `MKL$` `MKS$` `MKD$`**, and `FIELD` for named fields | already in the language, for random-access records — which is the *identical* problem. `CVL(MID$(ent$, 19, 4))` reads that `+18` size field |
+| refer to a kernel object | **an opaque integer handle** | `OPENW 1` and tier B's `BX = win ptr` are handles to pass back, never to dereference |
+
+**So I was wrong to call this an argument from necessity.** An earlier draft of
+this section said tier C could not work without handing out an address, and
+that an address is the first half of `PEEK`. It is not: `@` hands the address
+to the *kernel*, inside one call, and the program is never given it. Tier C
+needs neither `PEEK` nor `POKE` nor even `VARPTR`.
+
+What is left for `PEEK` and `POKE` is therefore exactly **memory that is not
+yours** — video RAM, kernel records, hardware — which is precisely the group
+§126.7 refuses on principle. The case for allowing them rests on GFA parity
+and on wanting to write system software in BASIC. It does not rest on
+necessity, and §9's second question should be decided on that weaker footing.
+
+The kernel's own warning in `apps/os88api.inc` is the reason to keep the line
+sharp: *"never draw from a rect you cached on an earlier pass. A rect in bss is
+valid until the next thing that can move the window, which is any moment your
+code is not running."* A language whose pointer story is `PEEK` invites exactly
+the cached address that sentence forbids; a language whose pointer story is
+`@` cannot express it.
 
 ## 1. The decision that shapes everything: assembly, not C
 
@@ -406,6 +427,12 @@ buffer and read it back off a BMP export.
    at the top, and without the declaration `POKE` is refused by name with
    "this program has not declared system access", which keeps §126.7's best
    property while unblocking system programming. **Needs a decision.**
+
+   **And it is a weaker case than §0.5 first claimed.** `PEEK` and `POKE` are
+   not the pointer tools — `@`, the `MK*`/`CV*` pair and opaque handles are,
+   and tier C needs none of these three. So this is not a capability the
+   bindings require; it is one that GFA parity and system programming in BASIC
+   would like. Declining it costs those two things and nothing else.
 
    I had proposed copying GFA's `$`-prefixed directives for this, GFA having
    used them for exactly this class of choice. **The manual says not to.**
