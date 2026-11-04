@@ -228402,11 +228402,21 @@ so that line cannot be held and a narrower one replaces it:
 > Not *the machine cannot*, but **a user program may not, because the kernel
 > owns it.**
 
-That line is permanent for **six** spellings — `POKE`, `VARPTR`, `DEF SEG`,
-`OUT`, `INP`, `WAIT`. An 8086 has no MMU, so a cooperative kernel that hands a
-user program arbitrary writes to memory or to a port has no invariants left to
+That line is permanent for **five** spellings — `POKE`, `VARPTR`, `DEF SEG`,
+`OUT`, `INP`. An 8086 has no MMU, so a cooperative kernel that hands a user
+program arbitrary writes to memory or to a port has no invariants left to
 keep. The refusal is stronger here than it was in the fiction, and it is the
 only group where that is so.
+
+**`INP` and `OUT` keep their names reserved and cost nothing by being
+refused**, because the thing a programmer reaches for them to do is already
+spelled otherwise here. GFA used them for *channels*, not ports — and its own
+manual gives the equivalence: "`a%=INP%(#1)` can replace
+`a%=CVL(INPUT$(4,#1))`", both halves of which this language has. The refusal
+message must therefore name `INPUT$` as well as the port, or a reader who
+meant the channel is told the wrong thing.
+
+`WAIT` was the sixth and is no longer a refusal — §126.15.
 
 `POKE`'s **name stays reserved** and is refused by name with its reason, as
 every refusal here is. It is not freed for use as a variable, and it is not
@@ -228857,3 +228867,107 @@ suffix is only a habit.
 
 Both are additions by §126.13.1's rule — no existing program changes meaning,
 and both carry their own tests.
+
+### 126.15 `WAIT` waits for the machine; `SLEEP` waits for time
+
+QuickBASIC's `WAIT port, and[, xor]` spins on a hardware port until its bits
+match. The port half goes with §126.7's group, and the **name is kept and
+pointed at the ordinary meaning of the word**, as `PEEK`'s was in §126.11.
+
+```basic
+WAIT            ' give the machine a moment: one yield, then carry on
+WAIT KEY        ' ...and do not come back until a keystroke is waiting
+```
+
+**`SLEEP` already waits for time** — `SLEEP [secs]`, a duration, defaulting to
+one second — so `WAIT` deliberately takes no duration. The pair divides on a
+line worth saying once: **`SLEEP` waits for time, `WAIT` waits for the
+machine.** A program that wants half a second says `SLEEP 0.5`; a program that
+wants to stop hogging says `WAIT`.
+
+#### 126.15.1 It answers the hole §126.8 leaves
+
+§126.8 settles the yield for a **GUI** program: `ON MENU`, inside a loop the
+programmer writes. A **text-mode** program has no such loop, and on a
+cooperative system that is a real gap — a `FOR` loop counting to a million
+never returns to the kernel, and the desktop stops until it finishes.
+
+`WAIT` is that program's yield point, and it is one `OSAPI_TASK_YIELD` —
+measured at 693 µs, so a loop can afford one every few thousand iterations and
+notice nothing. It is **not required**: a program that never yields is a
+program that hogs, which is the programmer's business here exactly as it was
+on the ST. What matters is that the language now *has* a word for it, and that
+the word is the one a reader would guess.
+
+#### 126.15.2 `WAIT KEY`
+
+Blocks until a keystroke is available, leaving it in the queue for `INKEY$`,
+`INPUT` or `INPUT$` to take. It is the half of QuickBASIC's `SLEEP` that
+BASIC/nw's does not have — QuickBASIC's bare `SLEEP` waits for a key, and this
+language's `SLEEP` always waits a duration — so the behaviour is not lost, it
+is spelled where a reader will look for it.
+
+A bare `WAIT` with no keyword yields once and returns; `WAIT KEY` yields until
+there is something to read. Both go through the same `OSAPI_TASK_YIELD`, and
+the only difference is the condition for coming back.
+
+### 126.16 `FIELD` takes a buffer as well as a channel; `SEG` is held
+
+A kernel call that answers in a structure answers **into your buffer**:
+`OSAPI_FILE_FIND_RAW` fills a directory entry in which `+18` is a four-byte
+size, and §126.11's rule says a program reads that with the `CV*` pair rather
+than with an address. Which works, and reads like this:
+
+```basic
+LET occupies& = CVL(MID$(ent$, 19, 4))
+```
+
+**19 is 18 counted from one, and a number like that in a program is a defect
+waiting for the structure to change.** The language already has the cure and
+has had it since random-access files: `FIELD` divides a fixed buffer into
+named pieces, and `LSET`/`RSET` assign through them. It is only bound to a
+channel by habit.
+
+**So `FIELD` takes a buffer where a channel goes**, and means exactly what it
+already meant:
+
+```basic
+FIELD #1,   12 AS lab$, 2 AS cnt$      ' the channel form, unchanged
+FIELD ent,  13 AS nm$, 5 AS attr$, 4 AS sz$    ' the same thing, on a buffer
+```
+
+- the **buffer must be a fixed-length string** (`DIM ent AS STRING * 32`),
+  because `FIELD` divides a buffer of known size and a variable-length string
+  has none. A variable-length one is refused by name, saying so;
+- the fields are **views**, not copies, exactly as on a channel: assign to the
+  buffer and they see the new contents, which is what makes the idiom work
+  after a kernel call has filled it;
+- fields wider than the buffer are refused by name, as `LEN =` already is;
+- **`GET` and `PUT` apply to the channel form only.** There is no file behind
+  a string, and a verb that silently did nothing would be worse than one that
+  refuses.
+
+The tier C idiom then reads as it should:
+
+```basic
+DIM ent AS STRING * 32
+FIELD ent, 13 AS nm$, 5 AS attr$, 4 AS sz$
+OSAPI OSAPI_FILE_FIND_RAW, @ent
+PRINT RTRIM$(nm$); CVL(sz$)
+```
+
+**This is an extension, not a divergence** (§126.13.1): no existing program
+changes meaning, every `FIELD #n` still means what it meant, and the addition
+carries its own tests.
+
+#### 126.16.1 `SEG` is reserved and means nothing yet
+
+`SEG` is held, as `DIALOG` is (§126.12) and `POKE`'s name is (§126.7). It was
+the obvious candidate for the buffer-overlay above — GFA spends it on a
+memory segment, and the spelling was free here once `DEF SEG` was refused —
+and it lost to `FIELD` on one argument: **the operation is the one `FIELD`
+already performs**, so a second word for it would give the language three
+mechanisms for named fields where two suffice.
+
+Reserving it costs nothing and un-reserving one later breaks programs, so it
+stays reserved against a use that has not arrived.

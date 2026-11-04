@@ -284,7 +284,7 @@ them is what keeps the language safe:
 | the need | the tool | |
 | --- | --- | --- |
 | give the kernel a buffer | **`@obj`** | pin-and-pass: the interpreter computes the address, pins the object, makes the call, unpins. The **program never sees a number** |
-| get data out of, or into, your own buffer | **`CVI` `CVL` `CVS` `CVD` / `MKI$` `MKL$` `MKS$` `MKD$`**, and `FIELD` for named fields | already in the language, for random-access records — which is the *identical* problem. `CVL(MID$(ent$, 19, 4))` reads that `+18` size field |
+| get data out of, or into, your own buffer | **`FIELD buf, n AS f$, …`**, then the `CV*`/`MK*` pair | `FIELD` takes a buffer as well as a channel now (SPEC §126.16), so a kernel structure is read by **name** — `CVL(sz$)` rather than `CVL(MID$(ent$, 19, 4))`, and 19 is the kind of number that outlives the structure it describes |
 | refer to a kernel object | **an opaque integer handle** | `OPENW 1` and tier B's `BX = win ptr` are handles to pass back, never to dereference |
 
 **So I was wrong to call this an argument from necessity.** An earlier draft of
@@ -428,10 +428,17 @@ From the audit, unchanged in substance: **a user program may not, because the
 kernel owns it** — not *the machine cannot*.
 
 - **Refuse, permanently, with the new reason**: `POKE` `VARPTR` `DEF SEG`
-  `OUT` `INP` `WAIT`. An 8086 has no MMU; a cooperative kernel cannot hand out
-  arbitrary writes and keep its invariants. **Six** surfaces, and the only six
-  where refusing is principled here. `POKE`'s name stays reserved.
-- **Kept, and pointed elsewhere**: `PEEK`. It was the seventh of that group
+  `OUT` `INP`. An 8086 has no MMU; a cooperative kernel cannot hand out
+  arbitrary writes and keep its invariants. **Five** surfaces, and the only
+  five where refusing is principled here. Every name stays reserved, and
+  `INP`/`OUT` cost nothing by being refused — GFA used them for *channels*,
+  which this language spells `INPUT$`/`CV*` and `EMIT`/`MK*` already, so the
+  refusal message names `INPUT$` as well as the port.
+- **Kept, and pointed elsewhere**: `PEEK` and `WAIT`. `WAIT` was the sixth of
+  the group until §126.15 gave it the ordinary meaning of the word — `WAIT`
+  yields once, `WAIT KEY` yields until a keystroke is waiting — which also
+  answers the hole §126.8 leaves, a text-mode program having no `ON MENU` loop
+  to yield in. **`SLEEP` waits for time, `WAIT` waits for the machine.** It was the seventh of that group
   until SPEC §126.11 gave the spelling a different job — reading the running
   program's own variables rather than an address. `PEEK(1047)` is still
   refused by name; `PEEK$("total")` is the language.
