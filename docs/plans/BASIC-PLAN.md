@@ -293,13 +293,15 @@ that an address is the first half of `PEEK`. It is not: `@` hands the address
 to the *kernel*, inside one call, and the program is never given it. Tier C
 needs neither `PEEK` nor `POKE` nor even `VARPTR`.
 
-What is left for `PEEK` and `POKE` is therefore exactly **memory that is not
-yours** — video RAM, kernel records, hardware — which is precisely the group
-§126.7 refuses on principle. The case for allowing them rested on GFA parity
-and on wanting to write system software in BASIC — and **the parity half is
-now worth nothing**, parity having been ruled out as a requirement, so only
-the second reason is left standing. It does not rest on
-necessity, and §9's second question should be decided on that weaker footing.
+What would be left for an **address-taking** `PEEK` and `POKE` is therefore
+exactly **memory that is not yours** — video RAM, kernel records, hardware.
+
+**That question is closed, and not in the way this section first framed it**
+(SPEC §126.7, §126.11). `POKE` is dropped with its name kept reserved. `PEEK`
+is **kept**, and points somewhere else entirely: it reads the *running
+program* rather than an address, so it is not in this group at all and never
+was a pointer tool. Neither of the two takes an address, which is why the
+three rows above are the whole of the pointer story.
 
 The kernel's own warning in `apps/os88api.inc` is the reason to keep the line
 sharp: *"never draw from a rect you cached on an earlier pass. A rect in bss is
@@ -425,10 +427,14 @@ here inherits that hazard on day one.
 From the audit, unchanged in substance: **a user program may not, because the
 kernel owns it** — not *the machine cannot*.
 
-- **Refuse, permanently, with the new reason**: `POKE` `PEEK` `VARPTR`
-  `DEF SEG` `OUT` `INP` `WAIT`. An 8086 has no MMU; a cooperative kernel
-  cannot hand out arbitrary writes and keep its invariants. Seven surfaces,
-  and the only seven where refusing is principled here.
+- **Refuse, permanently, with the new reason**: `POKE` `VARPTR` `DEF SEG`
+  `OUT` `INP` `WAIT`. An 8086 has no MMU; a cooperative kernel cannot hand out
+  arbitrary writes and keep its invariants. **Six** surfaces, and the only six
+  where refusing is principled here. `POKE`'s name stays reserved.
+- **Kept, and pointed elsewhere**: `PEEK`. It was the seventh of that group
+  until SPEC §126.11 gave the spelling a different job — reading the running
+  program's own variables rather than an address. `PEEK(1047)` is still
+  refused by name; `PEEK$("total")` is the language.
 - **Refuse while true, revisit by name**: `LPRINT` (until PRINT-PLAN lands),
   `LOCK` (until multiuser), `ENVIRON`/`ENVIRON$` (no env API exists),
   `STRIG` `PEN` (no hardware), `PALETTE` (per adapter — real on VGA/EGA,
@@ -541,66 +547,36 @@ buffer and read it back off a BMP export.
 1. ~~**Does `RUN` block?**~~ **Answered by §0.1:** the yield is `ON MENU`,
    written by the programmer. A GUI program pumps its own loop; a text program
    that never calls it never yields and does not need to.
-2. **`PEEK`, `POKE` and `INLINE` — the one real conflict with the target.**
-   §126.7 refuses the memory and port group on principle, and GFA-BASIC had
-   all of it, because on a single-tasking ST the programmer owned the machine.
-   Here they do not. But an assembly package can already poke anything, so
-   refusing it in BASIC protects the *BASIC programmer from an accident*, not
-   the OS from harm.
+2. ~~**`PEEK`, `POKE` and `INLINE`**~~ — **decided, except `INLINE`.**
 
-   **Recommendation, after measuring: refuse them, and keep §126.7 as it
-   stands.** Two findings moved this, and the second is decisive.
+   **`POKE` is dropped, its name kept reserved** (SPEC §126.7): refused by
+   name with its reason, not freed as a variable and not quietly absent.
+   §126.7's permanent group is **six** now — `POKE`, `VARPTR`, `DEF SEG`,
+   `OUT`, `INP`, `WAIT`.
 
-   First, they are not the pointer tools — §0.5. `@`, the `MK*`/`CV*` pair and
-   opaque handles cover every pointer need, and tier C needs none of these
-   three. There is no necessity argument.
+   **`PEEK` is kept and points somewhere else** (SPEC §126.11). It no longer
+   reads an address; it reads the *running program* — a variable, a constant,
+   an array element, a record field — and gives back the value.
+   `PEEK$(name$)` renders any type as text, `PEEK(name$)` answers for the
+   four numeric ones, `PEEK?(name$)` says whether a name exists and is in
+   scope. It reads and never writes, which with `POKE` gone is a deliberate
+   asymmetry rather than an omission, and `PEEK(1047)` — the old meaning,
+   which real QuickBASIC contains — is refused by name so ported code is told
+   what changed at the line that changed. It costs a symbol table in the
+   running program, emitted **only** when one of the three is used; the same
+   table is what an editor's variable watch needs.
 
-   Second, **real QuickBASIC barely uses them.** `reference/gorillas/
-   gorilla.bas` is a sample and not a target (§7), but as evidence about
-   ordinary practice it is worth having: 1,135 lines, and its entire low-level
-   footprint is **7 lines in two blocks**, both doing one cosmetic thing: `DEF SEG = 0`, `PEEK(1047)`, `POKE 1047, KeyFlags OR 32` to
-   force NumLock on at startup, and the same to restore it at exit. No
-   `BLOAD`, no `BSAVE`, no `CALL ABSOLUTE`, no `SHELL`. The five `INKEY$` calls
-   are a separate refusal that `OSAPI_KEY_DOWN` answers in one call, and the
-   six `CALL`s are its own procedures.
+   The reasoning is kept because it reversed twice before landing. They were
+   never the pointer tools (§0.5), so there was no necessity argument; and
+   measured against real QuickBASIC, `gorilla.bas` uses them on **seven lines
+   of 1,135**, both blocks forcing the BIOS NumLock flag on and back — which
+   is precisely what a cooperative system should refuse, one application
+   reaching past its window to change what every other application shares.
 
-   And forcing the machine's global NumLock state is a thing a cooperative
-   multitasking OS arguably *should* refuse: it is one application reaching
-   past its window to change something every other application shares. So the
-   measured cost of refusing the whole group is that the target program loses
-   a keyboard LED, and the correct fix for even that is a kernel slot rather
-   than a poke.
+   **`INLINE` is the part still open.** Inline assembly is about wanting a
+   fast inner loop, not about reaching foreign memory, and it has its own
+   answer independent of this group.
 
-   **The extension path is already better than `POKE`.** If a BASIC program
-   ever genuinely needs something out of kernel memory, the answer is a slot
-   that exposes it safely — and tier C can call any slot the day it exists.
-   "Add a slot" is a reviewable change to a published contract; "allow `POKE`"
-   is a permanent hole.
-
-   **`INLINE` is a separate question and should not be decided here.** Inline
-   assembly is about wanting a fast inner loop, not about touching foreign
-   memory, and it has its own answer (or refusal) independent of this group.
-
-   **And it is a weaker case than §0.5 first claimed.** `PEEK` and `POKE` are
-   not the pointer tools — `@`, the `MK*`/`CV*` pair and opaque handles are,
-   and tier C needs none of these three. So this is not a capability the
-   bindings require; it is one that system programming in BASIC would like.
-   (It used to read "GFA parity and system programming"; parity is not a
-   requirement, so that half of the case is withdrawn.) Declining it costs
-   that one thing and nothing else.
-
-   I had proposed copying GFA's `$`-prefixed directives for this, GFA having
-   used them for exactly this class of choice. **The manual says not to.**
-   `$` there "is treated by the Interpreter like a REM" — it is a *compiler*
-   instruction the interpreter ignores — and the manual states plainly that
-   "any incorrect compiler commands will be silently ignored. There is no easy
-   way to detect incorrect compiler commands." Both halves are wrong here: the
-   declaration has to take effect *under interpretation*, which is the only
-   place this language runs, and a misspelled `$SYS` silently ignored would
-   surface as a refusal on the first `POKE` — a diagnostic pointing at the
-   wrong line, which is the exact failure §126.7 exists to prevent. So: a real
-   statement the interpreter acts on, and an unknown directive is an error,
-   not a comment.
 3. **Do BASIC programs become standalone packages?** GFA had a compiler
    emitting a `.PRG` that ran without the interpreter. The equivalent here is
    a `.O88`, which means code generation rather than interpretation — a much
