@@ -1,28 +1,28 @@
 ; =============================================================================
 ; os8088 - apps/basic/basic.asm
 ;
-; BASIC (SPEC.md 126), wave 0: THE SEAM.
-;
-; Nothing of the language is here. What this wave proves is the frame the
-; language will be built in - the package skeleton, the two panes, the menu
-; bar and the command path - and, above all, THE SIZE. SPEC.md 126.6 splits
-; the interpreter across BASIC.O88 and BASIC.OVL on the arithmetic that it
-; cannot fit beside sixty-four built-ins, an editor and a console in one
-; 63.5KB segment, and that arithmetic is worth nothing until the empty frame
-; has been measured. So this is the baseline the overlay decision is taken
-; against, and `make basic` prints it.
+; BASIC/8088 (SPEC.md 126) - THE PACKAGE: the window, the two panes and the
+; command path. The LANGUAGE is basic/baslang.inc, included below.
 ;
 ; TWO PANES, one window: the editor above and the console below, which is
 ; SPEC.md 126's shape for both halves of the target - a GUI program and a
-; text one are the same program with a different surface (126.8). Wave 0
-; draws their frames and captions and owns no text widget yet: os88text.inc
-; (SPEC.md 83) becomes the editor in wave 0c and os88con.inc (70.8) the
-; console in 0b, each measured as it lands.
+; text one are the same program with a different surface (126.8). The editor
+; is os88text.inc (SPEC.md 83) over bas_prog; the console is os88con.inc's
+; teletype half (70.8), and every output a program makes goes through
+; con_say. Run compiles the editor's text and runs it (bas_run).
 ;
-; Run does nothing, deliberately and visibly. It writes one line into the
-; console pane saying so, which is the smallest thing that proves the whole
-; path - a menu pick reaching a handler reaching a repaint - without
-; pretending to be an interpreter.
+; THE SIZE IS THE THING THIS FILE WATCHES. SPEC.md 126.6 plans a split
+; across BASIC.O88 and BASIC.OVL on the arithmetic that an interpreter
+; cannot fit beside sixty-four built-ins, an editor and a console in one
+; 63.5KB segment. Nothing is split yet and the wall is not in sight;
+; `make basic` prints where it stands, and that number is to be MEASURED
+; rather than quoted from a comment like this one.
+;
+; (This header described wave 0 - "nothing of the language is here", "owns
+; no text widget yet", "Run does nothing, deliberately and visibly" - for
+; four waves after each stopped being true. SPEC.md 126's own discipline is
+; that a refusal is stated by name; a stale description is the same defect
+; pointed at the reader.)
 ; =============================================================================
 
 %include "os88api.inc"
@@ -50,8 +50,6 @@ BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
 BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
-BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX + 10 + BAS_OPS_MAX + BAS_STK_MAX*2 + 8 + R_N*2 + 4 + 170 + 32
-
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
 ; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
@@ -83,7 +81,8 @@ bas_entry:
     mov word [bas_tx + TX_MAX], BAS_PROG_MAX
     mov byte [bas_tx + TX_FOCUS], 1 ; the caret is in the program pane from the
                                     ; start: there is nowhere else for a key to
-                                    ; go in wave 0c
+                                    ; go but the About card, which takes
+                                    ; one keystroke to dismiss itself
 
     ; --- the numerics (SPEC.md 84) -------------------------------------------
     ; fp_init probes for a coprocessor and sets [fp_hw]; every dispatcher
@@ -276,7 +275,7 @@ bas_oncmd:
     mov bx, si
     jmp bas_about                   ; tail call: the card's ret is ours
 .run:
-    ; --- Run: wave 0 has no interpreter, and says so rather than pretending --
+    ; --- Run: compile the editor's text and run it (baslang.inc) ------------
     or al, al
     jnz .stop                       ; item 1 = Stop
     push si                         ; item 0 = Run: compile and run the text
@@ -303,14 +302,26 @@ bas_oncmd:
 ; (SPEC.md 11.3). So a handler that draws arms its own, and does not undo it:
 ; the region dies at the kernel's gfx_unlock.
 ;
-; CF=1 from os88text_key means the box did not want that keystroke, and in
-; wave 0c nothing else does either - Escape, Tab and the function keys fall
-; through to the kernel, which is what the control is for.
+; CF=1 from os88text_key means the box did not want that keystroke, and
+; nothing else here does either - Escape, Tab and the function keys fall
+; through to the kernel, which is what the control is for. The About card is
+; the one thing taken before the box sees it.
 ; -----------------------------------------------------------------------------
 bas_onkey:
     push ax
     push bx
     push si
+    ; THE CARD TAKES THE KEYSTROKE, exactly as bas_onclick lets it take a
+    ; click. This handler draws the EDITOR, and the card is drawn over the
+    ; same content by bas_paint - so without this a keystroke with the card up
+    ; letters the program text across it and leaves it in pieces until
+    ; something else repaints. One key puts the card away and does nothing
+    ; else; os88ui_abdismiss repaints, so the editor is drawn by that.
+    cmp byte [bas_abon], 0
+    je .edit
+    call bas_abdismiss              ; SI = the window, as it wants
+    jmp .out
+.edit:
     mov bx, si                      ; BX = our window, for the clip
     mov si, bas_tx
     call os88text_key               ; AL/AH is the keystroke, SI the block
@@ -379,7 +390,8 @@ bas_about:
 
 ; -----------------------------------------------------------------------------
 ; bas_abdismiss - take the card down if it is up; also the W_ONCLICK
-; in:  SI = window ptr; gfx lock held (CX/DX = the click, unused in wave 0)
+; in:  SI = window ptr; gfx lock held (CX/DX = the click, unused: any click
+;      anywhere on the card dismisses it)
 ; out: CF = 1 if the click was spent on it; clobbers AX and BX
 ; -----------------------------------------------------------------------------
 bas_abdismiss:
@@ -393,8 +405,9 @@ bas_abdismiss:
 ; in:  SI = window ptr; caller holds the gfx lock
 ; out: nothing; preserves all registers
 ;
-; The window is not resizable in wave 0, so the content rect is the derived
-; constant above from the wm_content origin and no OSAPI_WM_GROW is owed.
+; The window is not resizable, so the content rect is the derived constant
+; above from the wm_content origin and no OSAPI_WM_GROW is owed. A resize
+; (SPEC.md 11.96) would make that false and is owed with the GUI verbs.
 ; -----------------------------------------------------------------------------
 bas_repaint:
     push ax
@@ -444,9 +457,7 @@ bas_it_run:     db 'Run', 0
 bas_it_stop:    db 'Stop', 0
 
 bas_s_banner:   db 'BASIC/8088 - SPEC.md 126', 13, 10
-                db 'Wave 0b: the console pane is real.', 13, 10
                 db 'Ready', 13, 10, 0
-bas_s_norun:    db 'No interpreter yet - wave 0 is the seam.', 13, 10, 0
 bas_s_stop:     db 'Nothing to stop.', 13, 10, 0
 
 ; --- the standard About card's lines (SPEC.md 20.5.1) ------------------------
@@ -454,8 +465,8 @@ bas_ablines:
     dw bas_ab1, bas_ab2, bas_ab3, bas_ab4, 0
 bas_ab1:        db 'BASIC/8088', 0
 bas_ab2:        db 0
-bas_ab3:        db 'SPEC.md 126 - wave 0,', 0
-bas_ab4:        db 'the seam', 0
+bas_ab3:        db 'A BASIC for OS/8088,', 0
+bas_ab4:        db 'SPEC.md 126', 0
 
 ; --- the shared controls (SPEC.md 20.5.1) ------------------------------------
 %define OS88UI_ABOUT
@@ -490,78 +501,168 @@ bas_ab4:        db 'the seam', 0
 ; its outputs goes through con_say.
 %include "basic/baslang.inc"
 
+; --- the bss this package declares for itself, as OFFSETS ------------------
+; The chain is laid out TWICE and that is the point. Here it is pure
+; constants, so BAS_BSS_OWN - the number OS88_BSS reserves and the base
+; os88con.inc's own bss is placed above (CON_BSS_AT) - is DERIVED from the
+; fields rather than hand-summed beside them. Below OS88_IMAGE_END the same
+; chain is laid again as LABELS, each one `os88_image_end + its offset here`,
+; because the label the fields hang off does not exist until the image is
+; closed and the size has to be known before it is.
+;
+; It was one hand-written sum until the audit: `BAS_STK_MAX*2` paid for a
+; value stack of WORDS, wave 1c widened a slot to 8 bytes to hold a double,
+; and the sum kept paying the old price - so bas_numbuf, bas_reg, bas_fp and
+; os88fp.inc's register-A scratch all sat 96 bytes inside the stack, with
+; bas_exec's bound check permitting all 16 slots because IT counted in slots.
+; Four slots fitted; the FIFTH landed on bas_numbuf. It takes a RIGHT-NESTED
+; expression to get there - `1+(2+(3+(4+5)))` holds five operands at once,
+; where `1+2*3*4` reaches only three, because + and * are left-associative
+; and the interpreter folds each pair as soon as it has both.
+;
+; A DERIVED TOTAL CANNOT DRIFT; an assertion only reports that it has. The
+; two `times` lines of the house idiom for an unchecked OS88_BSS literal DO
+; work here - they were written, they fired on this very shortfall, and they
+; assemble clean against the chain below - but with the total derived there
+; is nothing left for them to check, so they are not carried.
+;
+; Placement is free: every term this names (OS88TEXT_SZ, BAS_OPS_MAX,
+; BAS_STK_MAX, BAS_SLOT, R_N) comes from an include above, and the chain
+; assembles equally well beside BAS_PROG_MAX, where the old literal was. It
+; sits here so the fields read in the same order as the labels below it.
+; (Both of those were claimed the other way round in this comment for an
+; afternoon, on a build that was really failing for one undefined symbol.)
+BAS_B_bas_abon   equ 0
+BAS_B_bas_tx     equ 2
+BAS_B_bas_prog   equ BAS_B_bas_tx + OS88TEXT_SZ
+BAS_B_bas_src    equ BAS_B_bas_prog + BAS_PROG_MAX
+BAS_B_bas_line   equ BAS_B_bas_src + 2
+BAS_B_bas_opn    equ BAS_B_bas_line + 2
+BAS_B_bas_bad    equ BAS_B_bas_opn + 2
+BAS_B_bas_ops    equ BAS_B_bas_bad + 2
+BAS_B_bas_stk    equ BAS_B_bas_ops + BAS_OPS_MAX
+BAS_B_bas_numbuf equ BAS_B_bas_stk + BAS_STK_MAX*BAS_SLOT
+BAS_B_bas_reg    equ BAS_B_bas_numbuf + 8
+BAS_B_bas_fp     equ BAS_B_bas_reg + R_N*2
+BAS_B_fp_as      equ BAS_B_bas_fp + 4
+BAS_B_fp_bs      equ BAS_B_fp_as + 1
+BAS_B_fp_ae      equ BAS_B_fp_bs + 1
+BAS_B_fp_be      equ BAS_B_fp_ae + 2
+BAS_B_fp_am0     equ BAS_B_fp_be + 2
+BAS_B_fp_am1     equ BAS_B_fp_am0 + 2
+BAS_B_fp_am2     equ BAS_B_fp_am1 + 2
+BAS_B_fp_am3     equ BAS_B_fp_am2 + 2
+BAS_B_fp_bm0     equ BAS_B_fp_am3 + 2
+BAS_B_fp_bm1     equ BAS_B_fp_bm0 + 2
+BAS_B_fp_bm2     equ BAS_B_fp_bm1 + 2
+BAS_B_fp_bm3     equ BAS_B_fp_bm2 + 2
+BAS_B_fp_t0      equ BAS_B_fp_bm3 + 2
+BAS_B_fp_t1      equ BAS_B_fp_t0 + 2
+BAS_B_fp_t2      equ BAS_B_fp_t1 + 2
+BAS_B_fp_t3      equ BAS_B_fp_t2 + 2
+BAS_B_fp_p0      equ BAS_B_fp_t3 + 2
+BAS_B_fp_sticky  equ BAS_B_fp_p0 + 16
+BAS_B_fp_tmp     equ BAS_B_fp_sticky + 2
+BAS_B_fp_dig     equ BAS_B_fp_tmp + 2
+BAS_B_fp_d10     equ BAS_B_fp_dig + 24
+BAS_B_fp_nd      equ BAS_B_fp_d10 + 2
+BAS_B_fp_sgn     equ BAS_B_fp_nd + 2
+BAS_B_fp_sq      equ BAS_B_fp_sgn + 2
+BAS_B_fp_g       equ BAS_B_fp_sq + 8
+BAS_B_fp_tv      equ BAS_B_fp_g + 8
+BAS_B_fp_hw      equ BAS_B_fp_tv + 8
+BAS_B_fp_x1      equ BAS_B_fp_hw + 2
+BAS_B_fp_x2      equ BAS_B_fp_x1 + 10
+BAS_B_fp_sw      equ BAS_B_fp_x2 + 10
+BAS_B_fp_e0      equ BAS_B_fp_sw + 2
+BAS_B_fp_e1      equ BAS_B_fp_e0 + 8
+BAS_B_fp_e2      equ BAS_B_fp_e1 + 8
+BAS_B_fp_e3      equ BAS_B_fp_e2 + 8
+BAS_B_fp_ek      equ BAS_B_fp_e3 + 8
+BAS_B_bas_fpend  equ BAS_B_fp_ek + 2
+BAS_B_bas_fpbuf  equ BAS_B_bas_fpend
+
+BAS_BSS_OWN equ BAS_B_bas_fpbuf + 32    ; ...the whole of it, DERIVED
+
     OS88_BSS BAS_BSS_OWN + CON_BSS
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -----------------------------------
-; [bas_status] is a POINTER and the loader zeroes it (SPEC.md 21 step 5), so
-; the first paint - which happens when the loader shows the window, before any
-; command can run - would draw through a null. bas_paint reads a zero as
-; "Ready" rather than bas_entry storing it, because an initialiser in the
-; entry proc is a line that can be deleted while the paint still looks right
-; on every path a test takes.
-bas_abon        equ os88_image_end + 0   ; byte: the About card is up
+; The loader zeroes all of it, which is what [bas_abon] and [bas_bad] rely on:
+; the first paint happens when the loader shows the window, before any command
+; can run, and it reads both. Neither is initialised in bas_entry, because an
+; initialiser in the entry proc is a line that can be deleted while the paint
+; still looks right on every path a test takes.
+;
+; (This comment described a [bas_status] pointer until the audit. There has
+; never been one - the status line is con_say's, on the console pane - and
+; nothing but the comment said otherwise, which is how it survived.)
+bas_abon        equ os88_image_end + BAS_B_bas_abon   ; byte: the About card is up
                                          ; +1 is spare, and deliberately: it
                                          ; keeps the two below even, so the
                                          ; console's cell buffer - words of
                                          ; (character, attribute) - starts on
                                          ; an even address
-bas_tx          equ os88_image_end + 2   ; the editor's block (SPEC.md 83)
-bas_prog        equ bas_tx + OS88TEXT_SZ ; ...and the program text it edits,
+bas_tx          equ os88_image_end + BAS_B_bas_tx   ; the editor's block (SPEC.md 83)
+bas_prog        equ os88_image_end + BAS_B_bas_prog   ; ...and the program text it edits,
                                          ; NUL-terminated, lines separated by
                                          ; a single LF
 ; --- the language's own state (baslang.inc) ---------------------------------
-bas_src         equ bas_prog + BAS_PROG_MAX  ; word: the scanner's cursor
-bas_line        equ bas_src + 2          ; word: the line it is on, for errors
-bas_opn         equ bas_line + 2         ; word: bytes emitted so far
-bas_bad         equ bas_opn + 2          ; byte: a refusal has been reported
+bas_src         equ os88_image_end + BAS_B_bas_src   ; word: the scanner's cursor
+bas_line        equ os88_image_end + BAS_B_bas_line   ; word: the line it is on, for errors
+bas_opn         equ os88_image_end + BAS_B_bas_opn   ; word: bytes emitted so far
+bas_bad         equ os88_image_end + BAS_B_bas_bad   ; byte: a refusal has been reported
                                          ; +1 spare, to keep the rest even
-bas_ops         equ bas_bad + 2          ; the compiled op stream
-bas_stk         equ bas_ops + BAS_OPS_MAX ; the evaluation stack, in words
-bas_numbuf      equ bas_stk + BAS_STK_MAX*2   ; 8 bytes: ' -32768', 0
-bas_reg         equ bas_numbuf + 8       ; the tier C register file, R_N words
-bas_fp          equ bas_reg + R_N*2      ; dword: the far pointer a dynamic
+bas_ops         equ os88_image_end + BAS_B_bas_ops   ; the compiled op stream
+bas_stk         equ os88_image_end + BAS_B_bas_stk   ; the evaluation stack, BAS_STK_MAX
+                                         ; slots of BAS_SLOT bytes - NOT words
+                                         ; (wave 1c widened a slot to hold a
+                                         ; double, and bas_exec's bound check
+                                         ; counts in slots)
+bas_numbuf      equ os88_image_end + BAS_B_bas_numbuf   ; 8 bytes: ' -32768', 0
+bas_reg         equ os88_image_end + BAS_B_bas_reg   ; the tier C register file, R_N words
+bas_fp          equ os88_image_end + BAS_B_bas_fp   ; dword: the far pointer a dynamic
                                          ; OSAPI call is made through
 
 ; --- os88fp.inc's scratch (SPEC.md 84.3: the include declares no storage) ----
-fp_as       equ bas_fp + 4
-fp_bs       equ fp_as + 1
-fp_ae       equ fp_bs + 1
-fp_be       equ fp_ae + 2
-fp_am0      equ fp_be + 2
-fp_am1      equ fp_am0 + 2
-fp_am2      equ fp_am1 + 2
-fp_am3      equ fp_am2 + 2
-fp_bm0      equ fp_am3 + 2
-fp_bm1      equ fp_bm0 + 2
-fp_bm2      equ fp_bm1 + 2
-fp_bm3      equ fp_bm2 + 2
-fp_t0       equ fp_bm3 + 2
-fp_t1       equ fp_t0 + 2
-fp_t2       equ fp_t1 + 2
-fp_t3       equ fp_t2 + 2
-fp_p0       equ fp_t3 + 2            ; 8 words: the 128-bit product
-fp_sticky   equ fp_p0 + 16
-fp_tmp      equ fp_sticky + 2
-fp_dig      equ fp_tmp + 2           ; 24: the digit string fp_ftoa builds
-fp_d10      equ fp_dig + 24
-fp_nd       equ fp_d10 + 2
-fp_sgn      equ fp_nd + 2
-fp_sq       equ fp_sgn + 2           ; 8: fp_sqrt's input (dropped, but the
-fp_g        equ fp_sq + 8            ; layout is the published one)
-fp_tv       equ fp_g + 8
-fp_hw       equ fp_tv + 8            ; the coprocessor path's flag
-fp_x1       equ fp_hw + 2            ; 10: A in 80-bit form
-fp_x2       equ fp_x1 + 10
-fp_sw       equ fp_x2 + 10
-fp_e0       equ fp_sw + 2
-fp_e1       equ fp_e0 + 8
-fp_e2       equ fp_e1 + 8
-fp_e3       equ fp_e2 + 8
-fp_ek       equ fp_e3 + 8
-bas_fpend   equ fp_ek + 2
+fp_as           equ os88_image_end + BAS_B_fp_as
+fp_bs           equ os88_image_end + BAS_B_fp_bs
+fp_ae           equ os88_image_end + BAS_B_fp_ae
+fp_be           equ os88_image_end + BAS_B_fp_be
+fp_am0          equ os88_image_end + BAS_B_fp_am0
+fp_am1          equ os88_image_end + BAS_B_fp_am1
+fp_am2          equ os88_image_end + BAS_B_fp_am2
+fp_am3          equ os88_image_end + BAS_B_fp_am3
+fp_bm0          equ os88_image_end + BAS_B_fp_bm0
+fp_bm1          equ os88_image_end + BAS_B_fp_bm1
+fp_bm2          equ os88_image_end + BAS_B_fp_bm2
+fp_bm3          equ os88_image_end + BAS_B_fp_bm3
+fp_t0           equ os88_image_end + BAS_B_fp_t0
+fp_t1           equ os88_image_end + BAS_B_fp_t1
+fp_t2           equ os88_image_end + BAS_B_fp_t2
+fp_t3           equ os88_image_end + BAS_B_fp_t3
+fp_p0           equ os88_image_end + BAS_B_fp_p0   ; 8 words: the 128-bit product
+fp_sticky       equ os88_image_end + BAS_B_fp_sticky
+fp_tmp          equ os88_image_end + BAS_B_fp_tmp
+fp_dig          equ os88_image_end + BAS_B_fp_dig   ; 24: the digit string fp_ftoa builds
+fp_d10          equ os88_image_end + BAS_B_fp_d10
+fp_nd           equ os88_image_end + BAS_B_fp_nd
+fp_sgn          equ os88_image_end + BAS_B_fp_sgn
+fp_sq           equ os88_image_end + BAS_B_fp_sq   ; 8: fp_sqrt's input (dropped, but the
+fp_g            equ os88_image_end + BAS_B_fp_g   ; layout is the published one)
+fp_tv           equ os88_image_end + BAS_B_fp_tv
+fp_hw           equ os88_image_end + BAS_B_fp_hw   ; the coprocessor path's flag
+fp_x1           equ os88_image_end + BAS_B_fp_x1   ; 10: A in 80-bit form
+fp_x2           equ os88_image_end + BAS_B_fp_x2
+fp_sw           equ os88_image_end + BAS_B_fp_sw
+fp_e0           equ os88_image_end + BAS_B_fp_e0
+fp_e1           equ os88_image_end + BAS_B_fp_e1
+fp_e2           equ os88_image_end + BAS_B_fp_e2
+fp_e3           equ os88_image_end + BAS_B_fp_e3
+fp_ek           equ os88_image_end + BAS_B_fp_ek
+bas_fpend       equ os88_image_end + BAS_B_bas_fpend
 
 ; bas_sayfp's OWN output buffer. fp_ftoa's string may be 17 significant
 ; digits, a sign, a point and an exponent, so 32 is generous and the cost of
 ; being wrong here is the defect above.
-bas_fpbuf   equ bas_fpend
+bas_fpbuf       equ os88_image_end + BAS_B_bas_fpbuf

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/basic/baslang.inc
 ;
-; THE LANGUAGE (SPEC.md 126), wave 1a: the three stages, with integers.
+; THE LANGUAGE (SPEC.md 126): the three stages, over IEEE-754 doubles.
 ;
 ; SPEC.md 126.1 keeps the reference implementation's stage boundaries, and not
 ; out of deference: a stage boundary is where a differential test can be
@@ -10,21 +10,31 @@
 ; scanner, compiler, interpreter - with the smallest language that exercises
 ; all three end to end.
 ;
-; WHAT IS HERE: PRINT of an INTEGER expression, with + - * and \, parentheses,
-; unary minus, REM and '. One statement a line. That is all, and the gaps say
-; so by name rather than guessing.
+; WHAT IS HERE: PRINT of a numeric expression, with + - * / and \,
+; parentheses, unary minus, REM and '. One statement a line. That is all, and
+; the gaps say so by name rather than guessing.
 ;
 ; THE OP STREAM (SPEC.md 126.5) is the shape everything later plugs into. The
 ; compiler emits postfix, so the interpreter is a stack machine and its inner
-; loop is one dispatch - which is the whole reason 126.5 chose a flat array
-; over a tree for an 8086: a tree walk is a recursive descent through far
-; pointers at run time, and this is `jmp [table + bx]`.
+; loop is one dispatch on one byte - which is the whole reason 126.5 chose a
+; flat array over a tree for an 8086: a tree walk is a recursive descent
+; through far pointers at run time.
 ;
-; `/` IS REFUSED BY NAME and `\` is not. BASIC's `/` is floating-point
-; division even between two integers, so an integer `/` here would be a wrong
-; answer that looks like a right one - the one thing SPEC.md 126.7's whole
-; discipline exists to prevent. `\` is integer division in every BASIC of this
-; line and is exactly what this wave can do, so it is the one that works.
+; THAT DISPATCH IS A COMPARE CHAIN and this comment claimed `jmp [table + bx]`
+; for three waves while bas_exec never did it. Twelve ops, a run of
+; `cmp al, OP_x` / `je`, with the five binary ones grouped behind the
+; operand-unpack prologue they share - which is also what makes a table
+; awkward rather than obvious. It is honest at twelve; OP_ADD and OP_MUL are
+; at the BACK of it behind seven compares, and SPEC.md 126.5 now owes the
+; table to wave 2, where the op count stops making a chain defensible.
+;
+; `/` AND `\` ARE DIFFERENT OPERATORS and both work. `/` is real division -
+; BASIC's `/` is floating point even between two integers, so `7/2` is 3.5 -
+; and `\` is integer division, which truncates both operands to a signed
+; 16-bit INTEGER first, as every BASIC of this line does. Wave 1a shipped `/`
+; REFUSED BY NAME rather than answering 3, because a wrong answer that looks
+; like a right one is the one thing SPEC.md 126.7's discipline exists to
+; prevent; wave 1c brought the numerics and the refusal went.
 ; =============================================================================
 
 ; --- the op codes -------------------------------------------------------------
@@ -370,9 +380,6 @@ bas_c_fact:
 .noclose:
     mov si, bas_e_paren
     jmp bas_err
-.over:
-    mov si, bas_e_over
-    jmp bas_err
 .bad:
     mov si, bas_e_expr
     jmp bas_err
@@ -693,48 +700,6 @@ bas_eol:
     pop si
     ret
 
-; --- bas_number - AX = the value at the cursor; CF=1 on overflow -------------
-; A 16-bit INTEGER is what SPEC.md 126.4 says a bare number is here, so a
-; literal that will not fit is refused rather than wrapped - BASIC/nw's own
-; `LET a% = 100000` is error 6, and a silent wrap would be the wrong answer.
-bas_number:
-    push bx
-    push cx
-    push dx
-    push si
-    xor ax, ax
-    mov bx, 10
-    mov si, [bas_src]
-.l:
-    mov cl, [si]
-    cmp cl, '0'
-    jb .done
-    cmp cl, '9'
-    ja .done
-    mul bx                          ; DX:AX
-    or dx, dx
-    jnz .over
-    sub cl, '0'
-    xor ch, ch
-    add ax, cx
-    jc .over
-    cmp ax, 32767
-    ja .over
-    inc si
-    jmp .l
-.done:
-    mov [bas_src], si
-    clc
-.x:
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
-.over:
-    stc
-    jmp .x
-
 ; --- bas_word - DI = the word at the cursor, CX = its length; CF=1 if none ---
 bas_word:
     push ax
@@ -825,21 +790,6 @@ bas_emit:
     cmp bx, BAS_OPS_MAX - 3
     jae .full
     mov [bas_ops + bx], al
-    inc word [bas_opn]
-    pop bx
-    ret
-.full:
-    pop bx
-    mov si, bas_e_long
-    jmp bas_err
-
-bas_emitw:
-    push bx
-    mov bx, [bas_opn]
-    cmp bx, BAS_OPS_MAX - 3
-    jae .full
-    mov [bas_ops + bx], ax
-    inc word [bas_opn]
     inc word [bas_opn]
     pop bx
     ret
@@ -980,7 +930,6 @@ bas_s_colon:    db ': ', 0
 bas_e_stmt:     db 'not a statement this wave knows', 0
 bas_e_expr:     db 'expected a number', 0
 bas_e_paren:    db 'expected )', 0
-bas_e_over:     db 'number too big for an INTEGER', 0
 bas_e_div0:     db 'division by zero', 0
 bas_e_stk:      db 'expression went wrong', 0
 bas_e_deep:     db 'expression too deep', 0
@@ -988,5 +937,4 @@ bas_e_long:     db 'line too long to compile', 0
 bas_e_oargs:    db 'OSAPI takes a slot and at most six registers', 0
 bas_e_reg:      db 'REG() index is 0..7 - AX BX CX DX SI DI ES CF', 0
 bas_e_fn:       db 'not a function this wave knows', 0
-bas_e_wide:     db 'result is wider than an INTEGER - wave 1c brings the rest', 0
-bas_e_slash:    db "'/' is floating point and arrives in wave 1c - use '\\'", 0
+bas_e_wide:     db "'\\' truncates to an INTEGER and this is outside it", 0

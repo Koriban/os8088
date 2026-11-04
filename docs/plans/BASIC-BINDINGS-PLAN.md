@@ -45,9 +45,25 @@ the SPEC word match:
 
 ```
 OSAPI slot                       ' registers taken from and left in REG()
-OSAPI slot, a [, b [, c [, d]]]  ' convenience: fills the slot's own registers
+OSAPI slot, a [, b [, c [, d]]]  ' convenience: AX, BX, CX, DX in that order
 x% = OSAPI(slot [, a ...])       ' function form; the result is AX
 ```
+
+**The convenience form is POSITIONAL over a fixed order** - `AX, BX, CX, DX,
+SI, DI`, six at most, and anything not given keeps what the last call left in
+it. It is NOT "the slot's own registers", which is what this section said
+until the audit, and the difference is a trap rather than a nicety:
+`OSAPI_GFX_HLINE` takes `AX=x1, BX=x2, DX=y`, so
+`OSAPI OSAPI_GFX_HLINE, x1, x2, y` puts `y` in **CX** and draws at whatever
+`DX` happened to hold. A slot whose inputs are `AX, BX, CX, DX` in order is
+served correctly and every other slot is not, which is the shape of defect
+that looks like it works.
+
+Filling a slot's own registers needs a per-slot register list, and the
+measurement below means the data exists - `tools/os88index.py` already reads
+the arity. Until that list is generated, the honest rule is: use the
+positional form for the slots it fits, and `REG()` for the rest. The
+generated form belongs with tier B, which is where the table is owed.
 
 and a register file as an array, which is the one piece of GFA's design worth
 keeping, because it is what makes the gateway total rather than merely

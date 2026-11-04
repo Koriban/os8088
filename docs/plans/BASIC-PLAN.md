@@ -396,7 +396,13 @@ source text
 `compile.ts`'s own comment says the flat op array *"gives the K-line budget a
 natural unit (one op = one step)"*. The budget is fiction and goes, but the flat
 array stays: a linear op stream is far friendlier to 8086 assembly than a tree
-walk, and it means the inner loop is one `jmp [table + bx]`.
+walk, and it makes the inner loop a dispatch on one byte.
+
+That dispatch is a **compare chain** in `bas_exec` and not the `jmp [table +
+bx]` this paragraph promised for three waves - twelve ops, with the binary
+ones grouped behind the operand-unpack prologue they share, which is what
+makes the table awkward rather than obvious. SPEC.md 126.5 now owes the table
+to wave 2, where the op count stops making a chain defensible.
 
 **The split.** `APP_MAX_SIZE equ 0xFE00` — 65,024 bytes of image + bss, and a
 module is one segment, so 65,536 is a wall and not a setting (SHEET learned

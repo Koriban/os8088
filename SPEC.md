@@ -228371,9 +228371,20 @@ Half-to-even rounding is the reference's and QuickBASIC's: `CINT(2.5)` is 2 and
 The compiler emits a flat array of operations rather than handing the
 interpreter a tree. In the reference this was done so a budget could count
 steps; the budget does not survive the fiction, but the flat array does, for a
-better reason: on an 8086 a linear op stream makes the inner loop a single
-indexed jump, where a tree walk would be a recursive descent through far
-pointers.
+better reason: on an 8086 a tree walk is a recursive descent through far
+pointers at run time, and a linear op stream is a dispatch on one byte.
+
+**The dispatch is a COMPARE CHAIN, not yet an indexed jump.** This section
+said `jmp [table + bx]` for three waves and `bas_exec` has never done it: the
+twelve ops are a run of `cmp al, OP_x` / `je`, with the five binary ones
+grouped behind the operand-unpack prologue they share. At twelve ops that is
+defensible - and the grouping is what makes the table non-trivial, since a
+table would either duplicate that prologue twelve times or jump into a second
+test - but it is not what was written down, and `OP_ADD` and `OP_MUL`, which
+every expression runs, sit at the BACK of the chain behind seven compares.
+The indexed jump is owed when the op count grows: wave 2's control flow and
+procedures are where a chain stops being defensible, and the table should
+arrive with them rather than after a measurement nobody took.
 
 ### 126.6 The seam
 
@@ -228391,6 +228402,13 @@ The split follows the frequency: what the inner loop touches stays, what a
 precedent, and their two traps — a dispatcher that clobbers an argument
 register, and a `%define` placed after the `%ifdef`s that read it — are
 properties of the pattern rather than of those modules.
+
+**Nothing is split yet, and the table above is the plan.** There is no
+`BASIC.OVL`: the package measures 11,528 of image and 7,755 of bss, 19,283 of
+`APP_MAX_SIZE`'s 65,024, so the wall is not in sight and a seam built before
+it is needed is a dispatcher and two traps bought for nothing. What this
+section fixes is WHERE the cut goes when it is wanted, so that the resident
+half is not accidentally filled with what belongs outside it.
 
 ### 126.7 Where a refusal is principled, and where it was only fiction
 

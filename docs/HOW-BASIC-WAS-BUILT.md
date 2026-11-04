@@ -345,7 +345,13 @@ bytes ride in the op stream. Keeping the text and converting on every
 execution would have put a decimal parse inside every `FOR` loop.
 
 **Cost: 4,050 bytes of image**, in line with SHEET's measured ~2,800 for a
-double plus `fp_ftoa`'s 454. Running total **19,421 of 65,024, 29.9%**.
+double plus `fp_ftoa`'s 454. Running total **19,453 of 65,024, 29.9%**
+(11,784 image + 7,669 bss).
+
+This line read **19,421** until the audit below re-measured it: the bss half
+was hand-summed as 7,637 and `bas_fpbuf`'s 32 bytes were left out of it. The
+figure to quote is `os88pkg`'s own, off the built `.o88`, which is where
+every number above came from and where this one did not.
 
 ### Gap 1 did not exist
 
@@ -401,8 +407,144 @@ every store**. There is no store yet — wave 1c has no variables — so the two
 agree on every value a program can currently produce. The narrowing is owed
 when `!` variables arrive.
 
+## The audit, 2026-11-04
+
+Before wave 2, a read of everything written so far. The headline is one
+defect that produced **silently wrong numbers**, and the reason it survived
+four waves is worth more than the fix.
+
+### The value stack was paying for words after it held doubles
+
+`BAS_BSS_OWN` — the number `OS88_BSS` reserves — was a hand-written sum, one
+term per field of a chain laid out thirty lines below it. One term read
+`BAS_STK_MAX*2`. Wave 1c widened an evaluation-stack slot from a word to the
+eight bytes a double needs, moved `BAS_SLOT` to 8, and changed `bas_exec`'s
+own bound check to `BAS_STK_MAX*BAS_SLOT` — and did not change the sum or the
+`bas_numbuf equ bas_stk + BAS_STK_MAX*2` beneath it. So the stack **reserved
+four slots and the interpreter permitted sixteen**, because the check counted
+in slots and the reservation counted in words.
+
+The fifth slot was `bas_numbuf`, the sixth `bas_reg`, the seventh `bas_fp`
+and os88fp.inc's register-A scratch — `fp_as`, `fp_ae`, the mantissa words
+that every arithmetic op reads.
+
+**It takes a right-nested expression to reach them.** `1+2*3*4` holds only
+three operands: `+` and `*` are left-associative here and the interpreter
+folds each pair the moment it has both. `1+(2+(3+(4+5)))` holds five, and
+`1+(2+(3+(4+(5+(6+(7+8))))))` holds eight. The A/B, same kernel, same disk
+layout, the same thirty-three keystrokes typed into the editor:
+
+| build | `PRINT 1+(2+(3+(4+(5+(6+(7+8))))))` |
+| --- | --- |
+| with the fix | ` 36` |
+| the layout as it shipped | `-2.668453E+307` |
+
+A wrong answer that looks like an answer, which is the one thing §126.7's
+discipline exists to prevent, in the layer that discipline is about.
+
+**The fix is not the `*BAS_SLOT`.** The chain is laid out twice now: once as
+pure constants (`BAS_B_*`) from which `BAS_BSS_OWN` is **derived**, and once
+as the labels, each `os88_image_end + its constant`. A derived total cannot
+drift from the fields it pays for, where an assertion only reports that it
+has — and the old sum was *also* 10 bytes too **large** in two other terms,
+which is exactly the slack that let a 96-byte shortfall assemble and run.
+
+### A false premise I nearly left in the fix
+
+The house idiom for an unchecked `OS88_BSS` literal is two `times` lines that
+go negative on a mismatch. I wrote them, and they fired on this very
+shortfall. Then the build broke with `label changed during code generation`
+against innocent labels at the end of another file, five bytes adrift. I
+concluded the idiom could not be used here, because `os88_image_end` is a
+label that moves between nasm's passes; and then that the constants chain had
+to sit after the includes rather than beside `BAS_PROG_MAX`, because a
+49-deep chain of forward `equ`s needs a nasm pass per level. Both were
+plausible, both went into the source comment as fact, and **both are false** —
+tested afterwards, the `times` pair assembles clean and the chain assembles
+in either position.
+
+The real cause was one line of my own. The cut that removed `bas_number` was
+bounded by the next *comment header* instead of the next proc, and took the
+live `bas_word` with it. nasm said so plainly — `error: symbol 'bas_word' not
+defined` — in the **first** line of its output, under 105 convergence
+warnings, and I was reading `tail -6`. An undefined symbol makes nasm size
+the call differently per pass, which is what the convergence complaint had
+been reporting all along.
+
+Two lessons, and the second is the one that cost the round. Bound a deletion
+by the thing that follows it, not by the next header that looks like a
+boundary. And when a build emits a hundred warnings, `tail` is the wrong end
+of it: the error that matters is usually the first. Writing a cause into a
+comment before testing it is how this file got `[bas_status]`.
+
+### A keystroke drew the editor over the About card
+
+`bas_onclick` lets the card take a click. `bas_onkey` had no such test and
+drew the text box straight over it. The card now takes the keystroke too.
+
+### What was dead, and what was a lie
+
+`bas_number` (42 lines, superseded by `fp_atof` at wave 1c), `bas_emitw`,
+`bas_e_slash`, `bas_e_over` with the `.over` label that was its only caller,
+and `bas_s_norun` — **256 bytes of image**, none of it reachable.
+
+The text was worse than the code. The **About card** still read *"SPEC.md 126
+— wave 0, the seam"* and the **startup banner** *"Wave 0b: the console pane
+is real"*, four waves after both stopped being true, on the two surfaces a
+user actually reads. `baslang.inc`'s header stated *"`/` IS REFUSED BY NAME"*
+beside an `OP_DIV` that implements it, and *"PRINT of an INTEGER
+expression"* over a file that had held doubles since 1c. `bas_oncmd`'s `.run`
+was commented *"wave 0 has no interpreter, and says so rather than
+pretending"* directly above `call bas_run`. And a comment on the bss chain
+explained how `[bas_status]` is zeroed by the loader and read by `bas_paint`:
+**there has never been a `bas_status`**, in any wave. Nothing but the comment
+said there was, which is how it lasted.
+
+The banner's wave line was deleted rather than corrected. It is a line that
+has to be edited every wave, and it was not.
+
+### Three claims the documents made and the code did not
+
+- **The indexed jump.** §126.5, `BASIC-PLAN.md` and `baslang.inc`'s own
+  header all promised `jmp [table + bx]`. `bas_exec` has always been a
+  compare chain — twelve ops, the five binary ones grouped behind the
+  operand-unpack prologue they share, which is also what makes the table
+  awkward rather than obvious. Honest at twelve, and `OP_ADD`/`OP_MUL`, which
+  every expression runs, sit at the back behind seven compares. All three now
+  say so, and §126.5 owes the table to wave 2.
+- **`BASIC.OVL`.** §126.6 described the split in the present tense. There is
+  no overlay; the package is 19,283 of 65,024 and the wall is not in sight.
+  The section now says what it fixes is *where* the cut goes.
+- **"Fills the slot's own registers."** `BASIC-BINDINGS-PLAN.md` §3 said the
+  convenience form of `OSAPI` does that. It fills `AX, BX, CX, DX, SI, DI`
+  positionally — `bas_c_stmt`'s own comment says so correctly — so
+  `OSAPI_GFX_HLINE`, which takes `AX, BX, **DX**`, gets `y` in CX and draws
+  at whatever `DX` held. Served correctly for slots that use the registers in
+  order, wrong for the rest: the shape of defect that looks like it works.
+  The plan now documents the real rule and owes the per-slot list to tier B.
+
+One finding was **retracted**. §126.8's *"one verb taking a slot number"*
+looked like a divergence from a gateway that far-calls a raw offset, until
+§20.1 settled it: *a slot is a pinned address*, and this project calls
+`0x0068` a slot number. The code matches the contract.
+
+### What the audit could not lean on
+
+**BASIC has no test rows.** It is `building` in `apps/RETIRED.txt`, which
+exempts it from the registry gate, so nothing in `tests/suite.py` runs a
+BASIC program and compares the answer. The stack defect is exactly what one
+row would have caught, and the A/B above is that row written by hand and
+thrown away. It should be a registered row before wave 2 adds control flow.
+
+### Sizes
+
+Measured, not quoted: **11,528 image + 7,755 bss = 19,283 of 65,024,
+29.7%**, from 11,784 + 7,669 = 19,453. The dead code paid for the stack:
+−256 image, +86 bss, −170 net.
+
 ## Next
 
 Wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
+A registered test row comes with it.
