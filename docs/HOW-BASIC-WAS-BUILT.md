@@ -333,8 +333,76 @@ the second call is not a cached first; and a tick count that advances between
 runs proves the whole thing is not a constant. Any one of those alone would
 have been consistent with a gateway that never fired.
 
+## Wave 1c — the numerics, and a gap that was never there
+
+The value stack holds **doubles** now, not 16-bit words, on `apps/os88fp.inc`
+(§84). `/` works, `3.14159` is a literal, and wave 1a's two refusals — `/`
+itself and the integer-overflow one — are gone because the thing they stood in
+for has arrived.
+
+A literal is converted **once, by `fp_atof` at compile time**, and the eight
+bytes ride in the op stream. Keeping the text and converting on every
+execution would have put a decimal parse inside every `FOR` loop.
+
+**Cost: 4,050 bytes of image**, in line with SHEET's measured ~2,800 for a
+double plus `fp_ftoa`'s 454. Running total **19,421 of 65,024, 29.9%**.
+
+### Gap 1 did not exist
+
+`BASIC-PLAN.md` listed "double ↔ text" as one of three real gaps, said the
+only pair in the tree was private to `apps/sheet/sheet.asm`, and planned a
+wave around extracting it. **That was wrong.** `fp_atof` and `fp_ftoa` are in
+`apps/os88fp.inc` itself, at lines 2004 and 2223, with better contracts than
+anything that extraction would have produced — `fp_atof` accumulates digits
+into a 64-bit integer and converts once, so `0.1` comes back as the nearest
+double to 0.1 rather than the nearest double to nine rounded multiplications.
+
+What SHEET holds is `sh_x_fp_atof` and `sh_x_fp_ftoa`: two overlay *thunks*.
+The grep behind the original claim searched for
+`fp_fmt|fp_tostr|fp_str|fp_parse|fp_fromstr`, matched SHEET's thunk names and
+nothing in the include — because the routines are called **ftoa** and **atof**.
+*A name you did not think of reads as a thing that is not there.* The plan and
+§126 are corrected.
+
+### Two defects, one caught by reading and one by running
+
+**`rep movsb` would have written into the kernel.** Pushing a literal copies
+eight bytes from the op stream to the value stack, and the obvious instruction
+is a string move — which writes to **ES:DI**, and `ES` is `KERNEL_SEG` on
+entry to any callback. Four `mov`s by hand instead, both halves DS-relative.
+Caught before running, by the one rule in `apps/os88api.inc` worth keeping in
+the front of your mind.
+
+**The formatter overwrote its own scratch.** `bas_sayfp` passed `DI = fp_dig`
+as `fp_ftoa`'s output buffer — and `fp_dig` is `fp_ftoa`'s *internal* digit
+string, which `apps/fptest` labels in as many words. The integer part came out
+right and every fractional digit came out as a full stop: `3.5` printed as
+`3..` and `3.14159` as `3......`. §84.3 says the caller declares the scratch,
+and I declared it correctly and then also used one of its fields as mine.
+
+### Matched against the oracle, on the glass
+
+| | guest | reference |
+|---|---|---|
+| `print 7/2` | ` 3.5 ` | ` 3.5 ` |
+| `print 1/3` | ` .3333333 ` | ` .3333333 ` |
+| `print 2+3*4` | ` 14 ` | ` 14 ` |
+| `print 1000*1000` | ` 1000000 ` | ` 1000000 ` |
+| `print 3.14159` | ` 3.14159 ` | ` 3.14159 ` |
+
+Two formatting rules came from reading the reference rather than guessing:
+**seven significant digits**, because a bare literal is a SINGLE and SINGLE
+arithmetic stays SINGLE; and **no leading zero** — BASIC prints `.3333333`,
+not `0.3333333`, which `fp_ftoa` does not know and `bas_sayfp` trims.
+
+One simplification stated rather than hidden: this computes in double and
+prints seven digits, where §126.4 requires a SINGLE to **narrow to 32 bits on
+every store**. There is no store yet — wave 1c has no variables — so the two
+agree on every value a program can currently produce. The narrowing is owed
+when `!` variables arrive.
+
 ## Next
 
-Wave 1c: **the numerics** — the `OSAPI` gateway, which is
+Wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.

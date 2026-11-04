@@ -29,11 +29,23 @@
 
 ; --- the op codes -------------------------------------------------------------
 OP_END      equ 0                   ; stop
-OP_PUSHI    equ 1                   ; + a word: push it
+OP_PUSHN    equ 1                   ; + EIGHT bytes: a packed double, pushed
+
+; --- the value stack holds DOUBLES (SPEC.md 126.4) --------------------------
+; Not 16-bit words. The reference implementation answers PRINT 1000*1000 with
+; 1000000 and PRINT 7/2 with 3.5, so an integer stack would have had to refuse
+; both - which wave 1a did, by name, saying the numerics were coming. They are
+; here, and the refusals go.
+;
+; A literal is converted ONCE, by fp_atof at COMPILE time, and the eight bytes
+; ride in the op stream. The alternative - keeping the text and converting on
+; every execution - would put a decimal parse inside a FOR loop.
+BAS_SLOT    equ 8
 OP_ADD      equ 2
 OP_SUB      equ 3
 OP_MUL      equ 4
 OP_IDIV     equ 5                   ; `\`, integer division
+OP_DIV      equ 11                  ; `/`, real division
 OP_NEG      equ 6
 OP_PRINT    equ 7                   ; pop and print it
 OP_NEWL     equ 8                   ; end the print line
@@ -61,7 +73,7 @@ R_CF equ 7                          ; THE CARRY FLAG, and the reason this
 R_N  equ 8
 
 BAS_OPS_MAX equ 512                 ; the compiled program
-BAS_STK_MAX equ 16                  ; the evaluation stack, in WORDS
+BAS_STK_MAX equ 16                  ; the evaluation stack, in SLOTS
 
 ; -----------------------------------------------------------------------------
 ; bas_run - compile the editor's text and run it
@@ -261,12 +273,13 @@ bas_c_term:
     call bas_emit
     jmp .more
 .slash:
-    ; REFUSED BY NAME, with the reason and the thing that does work. `/` is
-    ; floating-point division in this language even between two integers
-    ; (SPEC.md 126.4), so answering it with an integer divide would be a wrong
-    ; answer wearing a right one's clothes.
-    mov si, bas_e_slash
-    jmp bas_err
+    inc word [bas_src]
+    call bas_c_fact
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_DIV
+    call bas_emit
+    jmp .more
 .x:
     ret
 
@@ -316,13 +329,25 @@ bas_c_fact:
     jb .bad
     cmp al, '9'
     ja .bad
-    call bas_number                 ; AX = the value
-    jc .over
-    push ax
-    mov al, OP_PUSHI
+    ; fp_atof reads the number out of the source and leaves it in A; SI is
+    ; advanced past what it consumed, which is exactly the scanner's job too,
+    ; so the two agree by construction rather than by two sets of rules.
+    mov si, [bas_src]
+    call fp_atof
+    jc .bad
+    mov [bas_src], si
+    mov al, OP_PUSHN
     call bas_emit
-    pop ax
-    jmp bas_emitw
+    cmp byte [bas_bad], 0
+    jne .x
+    mov di, bas_ops
+    add di, [bas_opn]
+    call fp_pack_a                  ; the eight bytes, into the op stream
+    add word [bas_opn], 8
+    cmp word [bas_opn], BAS_OPS_MAX - 10
+    jb .x
+    mov si, bas_e_long
+    jmp bas_err
 .neg:
     inc word [bas_src]
     call bas_c_fact
@@ -363,8 +388,8 @@ bas_exec:
     inc si
     cmp al, OP_END
     je .done
-    cmp al, OP_PUSHI
-    je .pushi
+    cmp al, OP_PUSHN
+    je .pushn
     cmp al, OP_PRINT
     je .print
     cmp al, OP_NEWL
@@ -375,81 +400,114 @@ bas_exec:
     je .osapi
     cmp al, OP_REG
     je .reg
-    ; --- the binaries: pop B into BX, leave A on the stack to be replaced ----
-    cmp di, bas_stk + 4
+    ; --- the binaries: A is the slot below the top, B is the top ------------
+    cmp di, bas_stk + 2*BAS_SLOT
     jb .under
-    sub di, 2
-    mov bx, [di]                    ; B
-    mov dx, [di-2]                  ; A
+    push si
+    push ax
+    mov si, di
+    sub si, 2*BAS_SLOT
+    call fp_unpack_a                ; A = the left operand
+    add si, BAS_SLOT
+    call fp_unpack_b                ; B = the right
+    pop ax
     cmp al, OP_ADD
     je .add
     cmp al, OP_SUB
     je .sub
     cmp al, OP_MUL
     je .mul
+    cmp al, OP_DIV
+    je .div
     cmp al, OP_IDIV
     je .idiv
+    pop si
     jmp .done                       ; an op nothing emits
 .add:
-    add dx, bx
-    jo .wide
+    call fp_add
     jmp .store
 .sub:
-    sub dx, bx
-    jo .wide
+    call fp_sub
     jmp .store
 .mul:
-    mov ax, dx
-    imul bx                         ; DX:AX - and OF is set exactly when the
-    jo .wide                        ; upper half is not AX's sign extension,
-    mov dx, ax                      ; which is the test we want, for free
-    jmp .store                      ; **AND NOT A FALL-THROUGH INTO .idiv.**
-                                    ; Leaving this out made 2+3*4 answer 5:
-                                    ; the multiply gave 12, fell into the
-                                    ; divide and made it 12\4 = 3, and 2+3 is
-                                    ; 5. It assembled, it ran, and only the
-                                    ; number was wrong
+    call fp_mul
+    jmp .store
+.div:
+    call fp_div                     ; CF=1 and A=0 when B is zero, which is
+    jc .divzero                     ; the one failure this layer reports
+    jmp .store
 .idiv:
+    ; `\` is INTEGER division and truncates both operands first, which is
+    ; what it means in every BASIC of this line. fp_a2i/fp_i2a carry the
+    ; conversion, so the 16-bit range is the limit and a value outside it is
+    ; refused rather than wrapped.
+    call fp_b2i_bas
+    jc .wide
+    mov bx, ax
     or bx, bx
     jz .divzero
-    ; -32768 \ -1 is +32768, which does not fit, and an 8086 answers that
-    ; with INT 0 - a TRAP, not a wrong answer. A refusal is better than
-    ; either, so it is tested for rather than discovered.
+    call fp_a2i
+    jc .wide
     cmp bx, 0xFFFF
-    jne .divok
-    cmp dx, 0x8000
-    je .divover
-.divok:
-    mov ax, dx
-    cwd                             ; sign-extend AX into DX:AX for idiv
+    jne .idok
+    cmp ax, 0x8000
+    je .wide
+.idok:
+    cwd
     idiv bx
-    mov dx, ax
+    call fp_i2a
 .store:
-    mov [di-2], dx
+    pop si                          ; the op cursor
+    sub di, BAS_SLOT                ; one operand consumed
+    push di
+    sub di, BAS_SLOT                ; ...and the result replaces the other
+    call fp_pack_a
+    pop di
     jmp .next
-.pushi:
-    cmp di, bas_stk + BAS_STK_MAX*2
+.pushn:
+    cmp di, bas_stk + BAS_STK_MAX*BAS_SLOT
     jae .over
-    mov ax, [si]
-    inc si
-    inc si
-    mov [di], ax
-    inc di
-    inc di
+    ; FOUR WORDS, BY HAND, AND NOT `rep movsb`. movsb writes to ES:DI, and
+    ; ES is the KERNEL'S segment on entry to any callback (apps/os88api.inc) -
+    ; so the string move would have copied the literal into the kernel. Both
+    ; halves here are DS-relative, which is the only thing that is true.
+    push bx
+    mov bx, 0
+.pn:
+    mov ax, [si + bx]
+    mov [di + bx], ax
+    add bx, 2
+    cmp bx, BAS_SLOT
+    jb .pn
+    pop bx
+    add si, BAS_SLOT                ; past the literal in the op stream
+    add di, BAS_SLOT                ; ...and the stack has grown by one slot
     jmp .next
 .neg:
-    cmp di, bas_stk + 2
+    cmp di, bas_stk + BAS_SLOT
     jb .under
-    neg word [di-2]
+    push si
+    mov si, di
+    sub si, BAS_SLOT
+    call fp_unpack_b                ; B = the value...
+    xor ax, ax
+    call fp_i2a                     ; ...A = 0, and 0 - B negates it without
+    call fp_sub                     ; this file knowing how a sign is stored
+    push di
+    sub di, BAS_SLOT
+    call fp_pack_a
+    pop di
+    pop si
     jmp .next
 .print:
-    cmp di, bas_stk + 2
+    cmp di, bas_stk + BAS_SLOT
     jb .under
-    sub di, 2
-    mov ax, [di]
+    sub di, BAS_SLOT
     push si
     push di
-    call bas_sayint
+    mov si, di
+    call fp_unpack_a
+    call bas_sayfp
     pop di
     pop si
     jmp .next
@@ -466,53 +524,67 @@ bas_exec:
 
 ; --- OP_REG: pop an index, push that register -------------------------------
 .reg:
-    cmp di, bas_stk + 2
+    cmp di, bas_stk + BAS_SLOT
     jb .under
-    mov bx, [di-2]
-    cmp bx, R_N
+    push si
+    mov si, di
+    sub si, BAS_SLOT
+    call fp_unpack_a
+    call fp_a2i                     ; AX = the index
+    pop si
+    jc .badreg
+    cmp ax, R_N
     jae .badreg
+    mov bx, ax
     shl bx, 1
-    mov bx, [bas_reg + bx]
-    mov [di-2], bx
+    mov ax, [bas_reg + bx]
+    push si
+    push di
+    sub di, BAS_SLOT
+    call fp_i2a
+    call fp_pack_a
+    pop di
+    pop si
     jmp .next
 .badreg:
     mov si, bas_e_reg
     jmp bas_err
 
-; --- OP_OSAPI: the gateway (SPEC.md 126, BASIC-BINDINGS-PLAN 3) -------------
-; The values were pushed left to right - slot, then AX, BX, CX, DX, SI, DI -
-; so they come off in reverse. SI and DI are THIS INTERPRETER'S op pointer and
-; stack pointer, so both are saved across the call; the API cell preserves
-; everything it does not document, DS included, but it cannot preserve what
-; we hand it on purpose.
+; --- OP_OSAPI: the gateway (BASIC-BINDINGS-PLAN 3) --------------------------
 .osapi:
-    mov cl, [si]                    ; the count
+    mov cl, [si]
     inc si
     xor ch, ch
-    push si                         ; the op stream's cursor
+    push si
     mov bx, cx
-    shl bx, 1
+    mov ax, BAS_SLOT
+    mul bx
+    mov bx, ax                      ; BX = count * 8
+    sub di, bx
     cmp di, bas_stk
     jb .ounder
-    sub di, bx                      ; DI = the first of the run
-    cmp di, bas_stk
-    jb .ounder
-    mov si, di                      ; walk it forwards: slot first
-    mov ax, [si]
-    mov [bas_fp], ax                ; the slot is the OFFSET; KERNEL_SEG is
-    mov word [bas_fp + 2], KERNEL_SEG   ; fixed at build time (apps/os88api.inc)
+    push di
+    mov si, di
+    call fp_unpack_a                ; the slot
+    call fp_a2i
+    mov [bas_fp], ax
+    mov word [bas_fp + 2], KERNEL_SEG
     dec cx
     jz .ogo
-    mov bx, 0                       ; then AX, BX, CX, DX, SI, DI in order
+    xor bx, bx
 .ofill:
-    add si, 2
-    mov ax, [si]
+    add si, BAS_SLOT
+    push bx
+    push cx
+    call fp_unpack_a
+    call fp_a2i
+    pop cx
+    pop bx
     mov [bas_reg + bx], ax
     add bx, 2
     dec cx
     jnz .ofill
 .ogo:
-    push di                         ; the value stack's pointer
     mov ax, [bas_reg + R_AX*2]
     mov bx, [bas_reg + R_BX*2]
     mov cx, [bas_reg + R_CX*2]
@@ -520,7 +592,7 @@ bas_exec:
     mov si, [bas_reg + R_SI*2]
     mov di, [bas_reg + R_DI*2]
     call far [bas_fp]
-    pushf                           ; CF FIRST, before anything can disturb it
+    pushf                           ; CF FIRST, before anything disturbs it
     mov [bas_reg + R_AX*2], ax
     mov [bas_reg + R_BX*2], bx
     mov [bas_reg + R_CX*2], cx
@@ -528,29 +600,21 @@ bas_exec:
     mov [bas_reg + R_SI*2], si
     mov [bas_reg + R_DI*2], di
     pop ax
-    and ax, 1                       ; ...and published as 0 or 1, because a
-    mov [bas_reg + R_CF*2], ax      ; refused call reporting success is the
-    pop di                          ; worst defect this layer can have
+    and ax, 1
+    mov [bas_reg + R_CF*2], ax
+    pop di
     pop si
     jmp .next
 .ounder:
     pop si
     mov si, bas_e_stk
     jmp bas_err
-
 .divzero:
+    pop si
     mov si, bas_e_div0
     jmp bas_err
-.divover:
-    mov si, bas_e_over
-    jmp bas_err
 .wide:
-    ; A RESULT THAT DOES NOT FIT IS REFUSED, NOT WRAPPED. The reference
-    ; implementation answers PRINT 1000*1000 with 1000000, widening past the
-    ; 16 bits this wave has; wrapping would make it 16960 - a wrong answer
-    ; that looks like a right one, which is the single thing SPEC.md 126.7's
-    ; discipline exists to stop. The wider arithmetic arrives with the
-    ; numerics in wave 1c; until then this says so.
+    pop si
     mov si, bas_e_wide
     jmp bas_err
 .under:
@@ -559,6 +623,19 @@ bas_exec:
 .over:
     mov si, bas_e_deep
     jmp bas_err
+
+; -----------------------------------------------------------------------------
+; fp_b2i_bas - B as a signed 16-bit integer in AX. CF=1 if it will not fit.
+; os88fp.inc has fp_a2i and no fp_b2i, so B goes through A and is put back.
+; -----------------------------------------------------------------------------
+fp_b2i_bas:
+    call fp_push_a
+    call fp_b_to_a
+    call fp_a2i
+    pushf
+    call fp_pop_a
+    popf
+    ret
 
 ; =============================================================================
 ; the scanner
@@ -771,6 +848,59 @@ bas_emitw:
     mov si, bas_e_long
     jmp bas_err
 
+; -----------------------------------------------------------------------------
+; bas_sayfp - A, onto the console, the way this language prints a number
+; in:  A = the value; out: nothing; clobbers AX/BX/CX/DX/SI/DI
+;
+; SEVEN significant digits, which is what the reference prints and therefore
+; what this must: a bare literal is a SINGLE (SPEC.md 126.4), SINGLE arithmetic
+; stays SINGLE, and seven digits is what a SINGLE is worth. Checked against it
+; rather than chosen - `PRINT 1/3` is ` .3333333 ` there, not sixteen digits.
+;
+; **The leading zero goes.** BASIC prints .3333333 and not 0.3333333, which
+; fp_ftoa does not know, so it is trimmed here. And the sign's place and the
+; trailing separator are QuickBASIC's, as bas_sayint already does them.
+;
+; This computes in DOUBLE and prints seven digits, where SPEC.md 126.4 says a
+; SINGLE must also NARROW to 32 bits on every store. There is no store yet -
+; wave 1c has no variables - so the two agree on every value a program can
+; currently produce. The narrowing is owed when `!` variables arrive.
+; -----------------------------------------------------------------------------
+bas_sayfp:
+    push bx
+    ; **NOT fp_dig.** That is fp_ftoa's OWN internal digit scratch
+    ; (apps/fptest declares it as "24: the digit string fp_ftoa builds"), so
+    ; handing it in as the DESTINATION makes the routine overwrite its working
+    ; buffer as it converts. It printed 3.5 as `3..` and 3.14159 as `3......`
+    ; - the integer part right and every fractional digit a full stop.
+    mov di, bas_fpbuf
+    mov ax, 7
+    call fp_ftoa                    ; A -> a NUL string at DS:DI
+    mov si, bas_fpbuf
+    cmp byte [si], '-'
+    jne .nosign
+    mov si, bas_s_minus
+    call con_say
+    inc di                          ; ...and print the rest without it
+    mov si, di
+    jmp .lead
+.nosign:
+    mov si, bas_s_sp                ; the sign's place, as QuickBASIC leaves it
+    call con_say
+    mov si, di
+.lead:
+    cmp byte [si], '0'              ; 0.5 prints as .5
+    jne .go
+    cmp byte [si + 1], '.'
+    jne .go
+    inc si
+.go:
+    call con_say
+    mov si, bas_s_sp                ; and the separator after it
+    call con_say
+    pop bx
+    ret
+
 ; --- bas_sayint - AX = a signed 16-bit value, onto the console ---------------
 ; QuickBASIC's PRINT puts a space where the sign would be on a positive
 ; number, and this language keeps that (`STR$` does too - library.md says so
@@ -842,6 +972,7 @@ bas_kw_reg:     db 'REG', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
+bas_s_minus:    db '-', 0
 bas_s_bar:      db '| ', 0
 bas_s_errat:    db 'Error at line', 0
 bas_s_colon:    db ': ', 0

@@ -50,7 +50,7 @@ BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
 BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
-BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX + 10 + BAS_OPS_MAX + BAS_STK_MAX*2 + 8 + R_N*2 + 4
+BAS_BSS_OWN equ 2 + OS88TEXT_SZ + BAS_PROG_MAX + 10 + BAS_OPS_MAX + BAS_STK_MAX*2 + 8 + R_N*2 + 4 + 170 + 32
 
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
@@ -84,6 +84,12 @@ bas_entry:
     mov byte [bas_tx + TX_FOCUS], 1 ; the caret is in the program pane from the
                                     ; start: there is nowhere else for a key to
                                     ; go in wave 0c
+
+    ; --- the numerics (SPEC.md 84) -------------------------------------------
+    ; fp_init probes for a coprocessor and sets [fp_hw]; every dispatcher
+    ; gates on it (84.6), so without this call the software path runs on a
+    ; machine that has an 8087 - correct, and slower than it needs to be.
+    call fp_init
 
     ; --- the console (SPEC.md 70.8) ------------------------------------------
     ; con_open and not con_clear: it sets the attribute, calls con_font AND
@@ -468,6 +474,14 @@ bas_ab4:        db 'the seam', 0
 ; os88text.inc needs os88ui.inc's UI_* macros, so it comes after it.
 %include "os88text.inc"
 
+; --- software floating point (SPEC.md 84) ------------------------------------
+; Opt-OUT gates: what a package does not call it need not carry (84.8). The
+; transcendentals, sqrt and pow arrive with the built-in library in wave 5.
+%define OS88FP_NOTRANS
+%define FP_NO_SQRT
+%define FP_NO_POW
+%include "os88fp.inc"
+
 %define CON_TTY
 %define CON_BSS_AT (os88_image_end + BAS_BSS_OWN)
 %include "os88con.inc"
@@ -508,3 +522,46 @@ bas_numbuf      equ bas_stk + BAS_STK_MAX*2   ; 8 bytes: ' -32768', 0
 bas_reg         equ bas_numbuf + 8       ; the tier C register file, R_N words
 bas_fp          equ bas_reg + R_N*2      ; dword: the far pointer a dynamic
                                          ; OSAPI call is made through
+
+; --- os88fp.inc's scratch (SPEC.md 84.3: the include declares no storage) ----
+fp_as       equ bas_fp + 4
+fp_bs       equ fp_as + 1
+fp_ae       equ fp_bs + 1
+fp_be       equ fp_ae + 2
+fp_am0      equ fp_be + 2
+fp_am1      equ fp_am0 + 2
+fp_am2      equ fp_am1 + 2
+fp_am3      equ fp_am2 + 2
+fp_bm0      equ fp_am3 + 2
+fp_bm1      equ fp_bm0 + 2
+fp_bm2      equ fp_bm1 + 2
+fp_bm3      equ fp_bm2 + 2
+fp_t0       equ fp_bm3 + 2
+fp_t1       equ fp_t0 + 2
+fp_t2       equ fp_t1 + 2
+fp_t3       equ fp_t2 + 2
+fp_p0       equ fp_t3 + 2            ; 8 words: the 128-bit product
+fp_sticky   equ fp_p0 + 16
+fp_tmp      equ fp_sticky + 2
+fp_dig      equ fp_tmp + 2           ; 24: the digit string fp_ftoa builds
+fp_d10      equ fp_dig + 24
+fp_nd       equ fp_d10 + 2
+fp_sgn      equ fp_nd + 2
+fp_sq       equ fp_sgn + 2           ; 8: fp_sqrt's input (dropped, but the
+fp_g        equ fp_sq + 8            ; layout is the published one)
+fp_tv       equ fp_g + 8
+fp_hw       equ fp_tv + 8            ; the coprocessor path's flag
+fp_x1       equ fp_hw + 2            ; 10: A in 80-bit form
+fp_x2       equ fp_x1 + 10
+fp_sw       equ fp_x2 + 10
+fp_e0       equ fp_sw + 2
+fp_e1       equ fp_e0 + 8
+fp_e2       equ fp_e1 + 8
+fp_e3       equ fp_e2 + 8
+fp_ek       equ fp_e3 + 8
+bas_fpend   equ fp_ek + 2
+
+; bas_sayfp's OWN output buffer. fp_ftoa's string may be 17 significant
+; digits, a sign, a point and an exponent, so 32 is generous and the cost of
+; being wrong here is the defect above.
+bas_fpbuf   equ bas_fpend

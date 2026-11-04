@@ -228300,11 +228300,14 @@ formatter is a defect, not an option.
 Three things no file in the tree provides, each of which the package must add
 and **two of which it must add for everyone**:
 
-1. **double ↔ text.** §84 has no parser and no formatter; the only pair in the
-   tree is private to `apps/sheet/sheet.asm`. BASIC needs both, in four places.
-   It is to be **extracted into a shared include**, not written a second time:
-   two formatters that disagree is a class of defect this project has already
-   paid for in other subsystems.
+1. ~~**double ↔ text.**~~ **NOT A GAP, and this entry was wrong.** `fp_atof`
+   (text → A) and `fp_ftoa` (A → a NUL string, `%g` shape, trailing zeros
+   trimmed) are in **§84's own file**, and always were. What
+   `apps/sheet/sheet.asm` carries is two overlay *thunks* to them,
+   `sh_x_fp_atof` and `sh_x_fp_ftoa`, which is what the search behind the
+   original claim found: it looked for `fp_fmt`, `fp_str`, `fp_parse` and
+   their kin, and the routines are called **ftoa** and **atof**. Wave 1c used
+   them unchanged and extracted nothing.
 2. **32-bit integer multiply and divide**, for `&`. The 8086 multiplies and
    divides at sixteen bits; nothing in the tree bridges it.
 3. **A string heap**, for `$`, inside the package's own claim. The claim can

@@ -357,12 +357,19 @@ attributes, which is what `COLOR` sets.
 
 Nothing above covers these, and each is a wave of its own.
 
-1. **double ↔ text.** `os88fp.inc` has no parser and no formatter; the only
-   ones in the tree are inside `apps/sheet/sheet.asm`. BASIC needs both in
-   four places (`VAL`, `STR$`, a numeric literal, and `PRINT` of a non-integer)
-   and `PRINT USING` needs a third mode. **Extract SHEET's pair into a shared
-   include rather than writing a second one** — two formatters that disagree
-   about `1e16` is a defect this project has met before, in other clothes.
+1. ~~**double ↔ text.**~~ **THIS GAP DOES NOT EXIST**, and saying it did was
+   an error in this plan. `fp_atof` (text → A, `SI` advanced, `CF=1` if there
+   was no number) and `fp_ftoa` (A → a NUL string at `DS:DI`, `AX` significant
+   digits, `%g` shape with trailing zeros trimmed) are both **in
+   `apps/os88fp.inc`**, the shared include, at lines 2004 and 2223. What
+   `apps/sheet/sheet.asm` holds is a pair of overlay *thunks* to them —
+   `sh_x_fp_atof`, `sh_x_fp_ftoa` — which is what the grep behind the original
+   claim actually found. Wave 1c used them as they are and extracted nothing.
+
+   The lesson is the cheaper one: the grep that produced this gap searched for
+   `fp_fmt|fp_tostr|fp_str|fp_parse|fp_fromstr` and the routines are called
+   `ftoa` and `atof`. **A name you did not think of reads as a thing that is
+   not there.**
 2. **32-bit integer multiply and divide**, for `&`. No helper exists; the 8086
    has `mul`/`div` at 16 bits only. Needed by `CLNG`, `&` arithmetic, `MKL$`,
    and array indexing past 65,535 elements (which `DIM` can ask for).
