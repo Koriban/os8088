@@ -2368,7 +2368,7 @@ WEAVEDEMOS := apps/weave/demos
 WEAVEWABS  := $(BUILD)/FORM.WAB $(BUILD)/SHEET.WAB $(BUILD)/PONG.WAB
 all: checkdocs $(SHIPIMGS) $(PLANPKG) $(LEDGERPKG) \
      $(BUILD)/wire.o88 $(BUILD)/recorder.o88 $(BUILD)/fptest.o88 \
-     $(BUILD)/hello.o88 $(BUILD)/video.o88 \
+     $(BUILD)/hello.o88 $(BUILD)/basic.o88 $(BUILD)/video.o88 \
      $(BUILD)/imgtest.o88 $(BUILD)/chart.o88 $(BUILD)/scribe.o88 $(BUILD)/realdmg.o88 \
      $(BUILD)/livepayload.txt \
      $(WEAVEWABS) $(BUILD)/.weave-hostchecks \
@@ -6493,6 +6493,24 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/hello.bin -o $@
 
+# BASIC (SPEC.md 126): the language as a package. WAVE 0 is the SEAM - the
+# window, the two panes, the menu bar and the command path, and no language at
+# all. The size this prints is the baseline SPEC.md 126.6's overlay split is
+# decided against: the interpreter has to fit beside sixty-four built-ins, an
+# editor and a console in one 63.5KB segment, and that arithmetic is worth
+# nothing until the empty frame has been measured.
+$(BUILD)/basic.bin: apps/basic/basic.asm apps/os88api.inc apps/os88ui.inc \
+                    | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/basic/basic.asm
+	@echo "basic:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/basic.o88: $(BUILD)/basic.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/basic.bin -o $@
+
+.PHONY: basic basicdisk
+basic: $(BUILD)/basic.o88
+	@python3 tools/os88pkgsize.py $(BUILD)/basic.o88 2>/dev/null || true
+
 # REALDMG (docs/REALDMG-SPEC.md): a Game Boy in a window. Its core is
 # GENERATED - apps/realdmg/rdggen.py writes 256 slots of handlers, one 64KB
 # segment - and rides REALDMG.O88 as part 0, LZ4 on the disk; the package
@@ -7069,6 +7087,21 @@ $(BUILD)/wire.img: $(BUILD)/wire.o88 tools/os88disk.py
 
 $(BUILD)/wire360.img: $(BUILD)/wire.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 APPS:$(BUILD)/wire.o88
+
+# --- BASIC's disk (SPEC.md 126) ----------------------------------------------
+# WIREFRAME's shape above and for the same reason: BASIC does not ship yet
+# (apps/RETIRED.txt's `building` line), so no shipped floppy carries it and
+# there has to be somewhere to LOOK at it.
+#
+#   make basicdisk
+#   make test TESTAPPS=build/basic.img
+basicdisk: $(BUILD)/basic.img $(BUILD)/basic360.img
+
+$(BUILD)/basic.img: $(BUILD)/basic.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 APPS:$(BUILD)/basic.o88
+
+$(BUILD)/basic360.img: $(BUILD)/basic.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 APPS:$(BUILD)/basic.o88
 
 # --- The WEAVE demo bundles (docs/WEAVE-SPEC.md) -----------------------------
 # The contract, the host reference implementation and these three bundles
