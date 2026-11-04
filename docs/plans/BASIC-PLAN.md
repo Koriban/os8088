@@ -21,7 +21,11 @@ That target is specific enough to measure against, and the measuring stick is
 the GFA-BASIC 3 manual itself, **held locally** at
 `_LIBRARY/languages/basic/gfa-basic/` — *The GFA-Basic Compendium* v2.98, all
 542 command nodes, as `gfabasic.txt` (grep-able) and `gfabasic.html` (one
-offline page, linked). Read the node for a command before building it; do not
+offline page, linked), **and `manuals/`, ten scanned manuals** of which seven
+have `text/` sidecars. The primary English authority among them is the 558-page
+*V3 Interpreter User Manual* (OCR). Use the Compendium for a signature and the
+User Manual for everything it states without explaining. Read the node and the
+page for a command before building it; do not
 quote this summary of it, and do not go back to the website — its `robots.txt`
 asks automated clients to leave the viewer alone, which is why the mirror was
 made from the `.hyp` container instead.
@@ -136,6 +140,19 @@ bar at five menus, which both SHEET and Word outgrew and answered with their
 own in-window bars. Tier A's `MENU` therefore either accepts that cap or
 replicates that pattern, and which is a wave 4 decision rather than an
 implementation detail.
+
+`MENU m$()`'s array layout is in the User Manual's chapter 9, and it carries
+one thing that does not port. Position, not any separator, assigns meaning:
+`m$(0)` is the first menu's heading, `m$(1)` its first entry, `m$(2)` a line
+of minus signs, **`m$(3)`-`m$(8)` six reserved slots for desk accessories**,
+and `m$(9)` an empty string ending that menu; every later menu is a heading,
+its entries, then an empty string, with one more empty string ending the bar.
+An entry starting with a minus sign is shown greyed and unselectable, and
+`MENU x,y` sets a tick or greys an item by that same index. **There are no
+desk accessories here**, so slots 3-8 have nothing behind them: either tier A
+keeps them as dead space for source compatibility, or `MENU` here is
+documented as taking the array without them. A wave 4 decision, and the first
+place where GFA source will not port unchanged.
 
 ### 0.5 Tier C needs addresses, which settles §9's second question
 
@@ -380,10 +397,22 @@ buffer and read it back off a BMP export.
    Here they do not. But an assembly package can already poke anything, so
    refusing it in BASIC protects the *BASIC programmer from an accident*, not
    the OS from harm. Recommendation: **allow it, declared.** A program says so
-   at the top — GFA had `$`-prefixed directives for exactly this class of
-   decision — and without the declaration `POKE` is refused by name with
+   at the top, and without the declaration `POKE` is refused by name with
    "this program has not declared system access", which keeps §126.7's best
    property while unblocking system programming. **Needs a decision.**
+
+   I had proposed copying GFA's `$`-prefixed directives for this, GFA having
+   used them for exactly this class of choice. **The manual says not to.**
+   `$` there "is treated by the Interpreter like a REM" — it is a *compiler*
+   instruction the interpreter ignores — and the manual states plainly that
+   "any incorrect compiler commands will be silently ignored. There is no easy
+   way to detect incorrect compiler commands." Both halves are wrong here: the
+   declaration has to take effect *under interpretation*, which is the only
+   place this language runs, and a misspelled `$SYS` silently ignored would
+   surface as a refusal on the first `POKE` — a diagnostic pointing at the
+   wrong line, which is the exact failure §126.7 exists to prevent. So: a real
+   statement the interpreter acts on, and an unknown directive is an error,
+   not a comment.
 3. **Do BASIC programs become standalone packages?** GFA had a compiler
    emitting a `.PRG` that ran without the interpreter. The equivalent here is
    a `.O88`, which means code generation rather than interpretation — a much
