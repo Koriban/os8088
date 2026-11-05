@@ -869,11 +869,38 @@ running zero times, 0 where it owes 4.
 **13,877 image + 11,610 bss = 25,487 of 65,024, 39.2%** — the op stream's
 4KB is most of the bss growth. The row is 158s over two parts.
 
+## Wave 2d, second half — the block `IF` and the bottom-tested loops
+
+The block `IF` is what 2d's architectural change was actually for, and it
+cost almost nothing once that was done: it shares everything with the
+one-line form up to the forward jump, and differs only in who closes it. A
+statement after `THEN` closes it on the line; an empty rest of line hands
+that job to `ELSE` or `ENDIF`, lines later. Before whole-program
+compilation there was no later line to hand anything to.
+
+`REPEAT`/`UNTIL` and `DO`/`LOOP [UNTIL]` are **one loop with two
+spellings** — the first is this line's, the second QuickBASIC's — and they
+share every instruction. Only the keyword that may close them differs, so a
+`DO` cannot be closed by a bare `UNTIL`. Both test at the bottom, which is
+the whole of what distinguishes them from `WHILE`, and the row says so
+directly: `f = 7 / REPEAT / f = f + 1 / UNTIL f > 0` leaves `f` at 8,
+because the condition was already true and the body ran anyway. Neither
+opens a forward jump, so neither has anything to patch — `UNTIL` jumps back
+on FALSE, which is `OP_JF`'s own sense and needs no negation.
+
+All of it passed on the first run, as 2d's first half did. Mutated:
+stopping `ENDIF` from patching its forward jump kills the run immediately
+after part three's sentinel, the unpatched jump landing at offset 0.
+
+The row grew a **third part** rather than evicting older coverage — the
+console holds 24 answers and wave 2a's would otherwise have had to go.
+
+**14,201 image + 11,610 bss = 25,811 of 65,024, 39.7%.**
+
 ## Next
 
-The rest of the control flow: the **block `IF`** (now possible, and the
-reason 2d's architectural change was made), `DO`/`LOOP`, `REPEAT`/`UNTIL`,
-`EXIT IF`, and then `GOSUB` and **procedures** — the `OSAPI` gateway, which is
+`EXIT IF` to leave a loop early, then `GOTO`/`GOSUB` and **procedures** with
+`LOCAL`/`STATIC` and recursion, which close wave 2 — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.

@@ -124,6 +124,8 @@ BK_IF    equ 1
 BK_ELSE  equ 2
 BK_WHILE equ 3
 BK_FOR   equ 4
+BK_DO    equ 5
+BK_REPEAT equ 6
 
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
@@ -267,6 +269,24 @@ bas_c_stmt:
     mov si, bas_kw_next
     call bas_wordis
     je .next
+    mov si, bas_kw_else
+    call bas_wordis
+    je .selse
+    mov si, bas_kw_endif
+    call bas_wordis
+    je .sendif
+    mov si, bas_kw_do
+    call bas_wordis
+    je .do
+    mov si, bas_kw_loop
+    call bas_wordis
+    je .loop
+    mov si, bas_kw_repeat
+    call bas_wordis
+    je .repeat
+    mov si, bas_kw_until
+    call bas_wordis
+    je .until
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -327,7 +347,20 @@ bas_c_stmt:
     call bas_emitw                  ; ...a placeholder for now
     cmp byte [bas_bad], 0
     jne .ifpop
-    call bas_c_stmt                 ; the THEN arm
+    ; **NOTHING AFTER THEN MEANS THE BLOCK FORM.** The two share everything
+    ; up to here - condition, THEN, the forward jump - and differ only in
+    ; who closes it: a statement on this line closes it here, and an empty
+    ; rest of line hands that job to ELSE or ENDIF, lines later. The block
+    ; form is what wave 2d's whole-program compilation bought (SPEC.md
+    ; 126.19); before it there was no later line to hand anything to.
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    or al, al
+    jz .ifblock
+    cmp al, 10
+    je .ifblock
+    call bas_c_stmt                 ; the THEN arm, on this line
     cmp byte [bas_bad], 0
     jne .ifpop
     call bas_skipsp                 ; ...ELSE?
@@ -368,11 +401,121 @@ bas_c_stmt:
     pop bx
     mov ax, [bas_opn]
     jmp bas_patch
+.ifblock:
+    pop cx                          ; the JF's slot goes on the block stack
+    xor bx, bx
+    mov ax, BK_IF
+    jmp bas_blkpush
 .ifpop2:
     pop bx
 .ifpop:
     pop bx
     ret
+
+; --- ELSE and ENDIF, as STATEMENTS (the block form) -------------------------
+; The one-line form reads its own ELSE inside .if above and never reaches
+; these; here ELSE begins a line, so it is a statement like any other.
+.selse:
+    call bas_blkpop                 ; AX = kind, BX = top, CX = the patch
+    jc .x
+    cmp ax, BK_IF
+    jne .wrongblk
+    push cx                         ; the IF's JF
+    mov al, OP_JMP                  ; ...the THEN arm steps over the ELSE
+    call bas_emit
+    mov cx, [bas_opn]
+    push cx
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .selsepop2
+    pop cx                          ; CX = the JMP's slot, the new patch
+    pop bx                          ; BX = the IF's JF slot
+    push cx
+    mov ax, [bas_opn]
+    call bas_patch                  ; ...which lands on the ELSE arm
+    pop cx
+    xor bx, bx
+    mov ax, BK_ELSE
+    jmp bas_blkpush
+.selsepop2:
+    pop bx
+    pop bx
+    ret
+; --- DO ... LOOP [UNTIL c] and REPEAT ... UNTIL c (SPEC.md 126) ------------
+; BOTH TEST AT THE BOTTOM, which is what distinguishes them from WHILE: the
+; body always runs at least once. They are the same loop with two spellings
+; - REPEAT/UNTIL is this line's, DO/LOOP is QuickBASIC's - and they share
+; every instruction below; only the keyword that may close them differs, so
+; a DO cannot be closed by an UNTIL and the refusal says which.
+;
+; Neither opens a FORWARD jump, so there is nothing to patch: the block
+; carries only where the top is, and the closing test jumps back to it.
+.do:
+    mov bx, [bas_opn]
+    xor cx, cx
+    mov ax, BK_DO
+    jmp bas_blkpush
+.repeat:
+    mov bx, [bas_opn]
+    xor cx, cx
+    mov ax, BK_REPEAT
+    jmp bas_blkpush
+.loop:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_DO
+    jne .wrongblk
+    push bx
+    call bas_skipsp                 ; LOOP, or LOOP UNTIL <cond>
+    call bas_word
+    jc .loopback
+    mov si, bas_kw_until
+    call bas_wordis
+    je .loopuntil
+    mov [bas_src], di               ; a word that is not UNTIL: not ours
+.loopback:
+    pop bx                          ; a bare LOOP goes round for ever, which
+    mov al, OP_JMP                  ; is what a program asking for one means
+    call bas_emit
+    mov ax, bx
+    jmp bas_emitw
+.loopuntil:
+    pop bx
+    jmp .bottom
+.until:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_REPEAT
+    jne .wrongblk
+    ; fall through: UNTIL closes a REPEAT exactly as LOOP UNTIL closes a DO
+.bottom:
+    ; <cond> ; JF -> top.  The test is at the BOTTOM, and UNTIL means
+    ; "go round again while it is FALSE" - so the jump back is taken on
+    ; false, which is OP_JF's own sense and needs no negation.
+    push bx
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .btmpop
+    mov al, OP_JF
+    call bas_emit
+    pop ax
+    jmp bas_emitw
+.btmpop:
+    pop bx
+    ret
+
+.sendif:
+    call bas_blkpop
+    jc .x
+    cmp ax, BK_IF                   ; an IF with no ELSE...
+    je .endifok
+    cmp ax, BK_ELSE                 ; ...or the ELSE that followed one
+    jne .wrongblk
+.endifok:
+    mov bx, cx
+    mov ax, [bas_opn]
+    jmp bas_patch
 .cls:
     mov al, OP_CLS
     jmp bas_emit
@@ -1958,6 +2101,11 @@ bas_kw_for:     db 'FOR', 0
 bas_kw_to:      db 'TO', 0
 bas_kw_step:    db 'STEP', 0
 bas_kw_next:    db 'NEXT', 0
+bas_kw_endif:   db 'ENDIF', 0
+bas_kw_do:      db 'DO', 0
+bas_kw_loop:    db 'LOOP', 0
+bas_kw_repeat:  db 'REPEAT', 0
+bas_kw_until:   db 'UNTIL', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0

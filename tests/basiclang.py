@@ -51,6 +51,9 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
     97 above are values no correct run prints, which is what they are for.
   * wave 2d: testing a NEGATIVE `STEP` with `<=` instead of `>=` reports
     the `STEP -3` loop running zero times - 0 where it owes 4.
+  * the block IF: stopping ENDIF from patching its forward jump reports the
+    run dying immediately after part three's sentinel - the unpatched jump
+    lands at offset 0.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -178,7 +181,50 @@ PART2 = [
     ("PRINT e",                          "0"),       # ...so the body is skipped
 ]
 
-PARTS = (PART1, PART2)
+# Part three: the block IF, and the two bottom-tested loops. Its own CLS and
+# sentinel, like the others - the buffer holds 24 answers and this wave
+# would otherwise have had to evict wave 2a's.
+PART3 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),
+    # --- the block IF, which is what 2d's whole-program change was for ----
+    ("a = 3",                            None),
+    ("IF a > 2 THEN",                    None),      # nothing after THEN
+    ("PRINT 21",                         "21"),
+    ("PRINT 22",                         "22"),      # ...more than one line
+    ("ENDIF",                            None),
+    ("IF a > 9 THEN",                    None),
+    ("PRINT 91",                         None),      # skipped entirely
+    ("ENDIF",                            None),
+    ("IF a > 9 THEN",                    None),
+    ("PRINT 92",                         None),
+    ("ELSE",                             None),
+    ("PRINT 23",                         "23"),      # ...the ELSE arm
+    ("ENDIF",                            None),
+    ("IF a > 2 THEN",                    None),
+    ("PRINT 24",                         "24"),
+    ("ELSE",                             None),
+    ("PRINT 93",                         None),      # ...and not the ELSE
+    ("ENDIF",                            None),
+    # --- bottom-tested: the body always runs once -------------------------
+    ("c = 0",                            None),
+    ("REPEAT",                           None),
+    ("c = c + 1",                        None),
+    ("UNTIL c >= 3",                     None),
+    ("PRINT c",                          "3"),
+    ("f = 7",                            None),
+    ("REPEAT",                           None),
+    ("f = f + 1",                        None),
+    ("UNTIL f > 0",                      None),      # true at once...
+    ("PRINT f",                          "8"),       # ...but it ran once
+    ("g = 0",                            None),
+    ("DO",                               None),
+    ("g = g + 2",                        None),
+    ("LOOP UNTIL g >= 6",                None),
+    ("PRINT g",                          "6"),
+]
+
+PARTS = (PART1, PART2, PART3)
 
 QCHAR = {" ": "spc", "=": "equal", "+": "shift-equal", "-": "minus",
          "*": "shift-8", "/": "slash", "\\": "backslash",

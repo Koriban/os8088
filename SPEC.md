@@ -240934,6 +240934,22 @@ that block opened.
 
 **`CLS`** empties the console without the banner, which `File > New` prints.
 
+**`IF <cond> THEN` with nothing after `THEN`** is the BLOCK form, closed by
+`ENDIF` and optionally split by `ELSE`. It shares everything with the
+one-line form up to the forward jump and differs only in who closes it: a
+statement on the line closes it there, an empty rest of line hands that job
+to a later line. This is what §126.19's whole-program compilation bought —
+before it there was no later line to hand anything to. `ENDIF` is one word,
+GFA's spelling, not QuickBASIC's `END IF`.
+
+**`REPEAT` … `UNTIL <cond>`** and **`DO` … `LOOP [UNTIL <cond>]`** test at
+the BOTTOM, so the body always runs at least once — which is the whole of
+what distinguishes them from `WHILE`. They are one loop with two spellings
+and share every instruction; only the keyword that may close them differs,
+so a `DO` cannot be closed by a bare `UNTIL` and the refusal says so. A bare
+`LOOP` goes round for ever, which is what a program that writes one means.
+Neither opens a forward jump, so neither has anything to patch.
+
 Blocks nest eight deep, and a ninth, an unclosed one at the end of the
 program, or a `WEND` that closes a `FOR` are each refused by name.
 
