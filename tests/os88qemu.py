@@ -460,7 +460,12 @@ _QCHAR = {".": ("dot", 0), ":": ("semicolon", 1), "-": ("minus", 0),
           "/": ("slash", 0), "_": ("minus", 1), "~": ("grave_accent", 1),
           "?": ("slash", 1), "=": ("equal", 0), "&": ("7", 1),
           " ": ("spc", 0), ",": ("comma", 0), "!": ("1", 1),
-          "@": ("2", 1), "\n": ("ret", 0)}
+          "@": ("2", 1), "\n": ("ret", 0),
+          # the arithmetic set, for any row that types an EXPRESSION rather
+          # than a path or a URL (tests/basiclang.py types BASIC programs).
+          # US layout, which is what the kernel's own table is.
+          "+": ("equal", 1), "*": ("8", 1), "(": ("9", 1), ")": ("0", 1),
+          "\\": ("backslash", 0)}
 
 
 class _Sock(object):

@@ -19983,6 +19983,24 @@ SOAK = [
         wants=("build/os8088.img", "build/coldhma.sys", "build/recorder.o88",
                "build/mbr.bin", "build/boothd.bin", "build/kernel.sys",
                "build/sound.hma.bin", "build/xmem.bin")),
+    Row("basiclang", "soak", py("tests/basiclang.py"), 70.0,
+        "SPEC.md 126: BASIC/8088 RUNS A PROGRAM and the answers are right - "
+        "the first row that executes the language at all. Everything before "
+        "it checked the package's layout or its size, and the cost of that "
+        "was five defects the build could not see: a value stack that "
+        "reserved four slots while bas_exec permitted sixteen, a variable "
+        "table that outlived the program text its entries point into, a "
+        "`\\` that had never once been executed and refused as 'outside an "
+        "INTEGER' from wave 1c to 2b, a File > New that repainted through a "
+        "clobbered SI, and a console that blanked on its first scroll. One "
+        "program covers all of them. It reads the console BUFFER and not "
+        "the pixels - the answers are cells in the package's own bss, found "
+        "by the banner and bounded by the attribute byte every console cell "
+        "shares, so no kernel symbol and no package map is needed - and it "
+        "presses F5 rather than picking Run off a pulldown whose dy drifts. "
+        "One pixel assertion stands beside the text and its own docstring "
+        "says what it does NOT cover.",
+        needs=("qemu",), wants=("build/basic.img",)),
     Row("ethernet", "soak", py("tests/ethernet.py"), 40.0,
         "SPEC.md 72.9: ETHER.DRV up before the first paint off a SYSTEM.CFG "
         "that asks for it, DHCP bound to slirp's address, and the browser "

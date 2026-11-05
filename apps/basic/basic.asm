@@ -50,6 +50,13 @@ BAS_CON_COLS equ (BAS_CONT_W - 2*BAS_CON_PAD) / 8
 BAS_CON_ROWS equ (BAS_CON_H  - 2*BAS_CON_PAD) / 8
 
 BAS_PROG_MAX equ 2048                       ; the program buffer, NUL included
+
+; F5 = Run. W_ONKEY is handed AL = ascii, AH = the scancode (SPEC.md 9.7.1),
+; and a function key has no ascii - so this is scancode 0x3F with AL = 0, the
+; same shape as the KEY_ALTENTER the SDK names. Every BASIC of this line runs
+; on F5, and it is also what lets a gate drive the language with no mouse at
+; all: `tests/basiclang.py` types a program and presses it.
+BAS_KEY_RUN equ 0x3F00
 ; -----------------------------------------------------------------------------
 ; bas_entry - package entry point (SPEC.md 20.2)
 ; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
@@ -371,6 +378,8 @@ bas_onkey:
     call bas_abdismiss              ; SI = the window, as it wants
     jmp .out
 .edit:
+    cmp ax, BAS_KEY_RUN             ; **F5 RUNS IT**, which is QuickBASIC's
+    je .run                         ; key and the one a BASIC is reached for
     mov bx, si                      ; BX = our window, for the clip
     mov si, bas_tx
     call os88text_key               ; AL/AH is the keystroke, SI the block
@@ -379,6 +388,29 @@ bas_onkey:
     jc .out                         ; preserves it, and CF=1 here means not one
     mov si, bas_tx                  ; pixel of us is visible. wm_clip_set has
     call os88text_draw              ; SI of its own, so the block is reloaded
+    jmp short .out                  ; **AND NOT INTO .run BELOW.** A label put
+                                    ; in front of `.out` is reached by every
+                                    ; path that falls to it: without this the
+                                    ; edit path ran the program on EVERY
+                                    ; keystroke the box accepted, which read
+                                    ; on the console as each answer printed
+                                    ; twice with the half-typed line's error
+                                    ; between them (7, 7, expected a number,
+                                    ; expected a number, 42, 42)
+.run:
+    ; THE MENU ITEM'S OWN PATH, not a second copy of it: bas_oncmd takes
+    ; AH = the menu and AL = the item, so F5 is Run/Run spelled in registers.
+    ; A copy here would be a second place to keep the repaint and the
+    ; [bas_bad] reset in step, and this proc owes its caller every register,
+    ; so the three bas_oncmd clobbers that are not already banked are.
+    push cx
+    push dx
+    push di
+    mov ax, 0x0100                  ; AH = 1 (Run), AL = 0 (its first item)
+    call bas_oncmd                  ; SI is still the window, which is what
+    pop di                          ; it wants; it keeps SI across the run
+    pop dx
+    pop cx
 .out:
     pop si
     pop bx
