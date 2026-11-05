@@ -483,10 +483,21 @@ reachable by hand. A BASIC program that can evaluate an expression and call a
 kernel slot is already more useful than one that can do the whole language and
 nothing else.
 
-**Wave 2 — control flow and procedures.** `IF`/`ELSEIF`, `SELECT CASE`,
-`FOR`/`NEXT`, `WHILE`/`WEND`, `DO`/`LOOP` both ends, `REPEAT`/`UNTIL`,
-`EXIT IF`, `GOTO`/`GOSUB`, `PROCEDURE`/`FUNCTION` with `LOCAL` and `STATIC`,
-recursion, `@proc` and `~func`.
+**Wave 2 — control flow and procedures. DONE.** `IF`/`ELSEIF`, `SELECT`
+with ranges and lists, `FOR`/`NEXT`, `WHILE`/`WEND`, `DO`/`LOOP` both ends,
+`REPEAT`/`UNTIL`, `EXIT IF`, labels and `GOTO`, `PROCEDURE`/`FUNCTION` with
+`LOCAL`, recursion, values by value and **by reference** (`VAR`), `@proc`
+and `~func`/`VOID`. SPEC.md §126.19-§126.27 are the contract and
+`docs/HOW-BASIC-WAS-BUILT.md` the account; `basiclang` and `basiclang2` are
+the rows.
+
+Two corrections to this list, both from reading the oracle rather than
+guessing. **`SELECT CASE` is QuickBASIC's spelling and not GFA's** — entry
+228 is `SELECT x` / `CASE`/`DEFAULT`/`ENDSELECT`, with `SWITCH`,
+`OTHERWISE` and `ENDSWITCH` as its own synonyms. And **`STATIC` is not
+GFA's at all**: entry 239 has only `LOCAL`, the pairing here came from the
+wider dialect survey, and its effect is this language's default anyway
+(§126.26).
 
 **Wave 3 — strings and arrays.** Gap 3 (the string heap). `DIM` with `a TO b`
 and `OPTION BASE`, `REDIM`, `ERASE`, `SWAP`, `LSET`/`RSET`, `TYPE` records,
