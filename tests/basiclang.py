@@ -49,6 +49,8 @@ VERIFIED TO FAIL - and what is NOT verified, which matters more:
   * wave 2c: giving `OP_LT` the mask that means "greater" reports
     `PRINT 1 < 2` answering 0, and every IF arm inverting - the 99, 98 and
     97 above are values no correct run prints, which is what they are for.
+  * wave 2d: testing a NEGATIVE `STEP` with `<=` instead of `>=` reports
+    the `STEP -3` loop running zero times - 0 where it owes 4.
   * NOT shown to fail: deleting the cursor restore in `.ifnoelse`. It is
     unreachable in this grammar (see the comment there) and the row says so
     rather than covering it by accident.
@@ -88,7 +90,13 @@ BANNER = "BASIC/8088"                   # bas_s_banner's first word
 # line that prints nothing - an assignment, which is most of what a program
 # is. SPEC.md 126.4's PRINT puts a space where the sign would be and another
 # after the number, so the text is compared STRIPPED.
-PROGRAM = [
+PART1 = [
+    # CLS FIRST, and it is not decoration: the buffer is 25 rows and this
+    # program's answers very nearly fill it, so the banner and `Ready` would
+    # push the first of them off the top before they could be read. They did
+    # - the row lost `42` and `7` the moment WHILE's cases were added.
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),   # the anchor; see SEED
     ("x = 7",                            None),
     ("y = x * 6",                        None),
     ("PRINT y",                          "42"),      # variables at all
@@ -104,13 +112,23 @@ PROGRAM = [
     # correct, with x quietly gone. Measured: the mutation PASSED this row
     # until this line existed.
     ("PRINT x",                          "7"),
-    ("PRINT 10-3",                       "7"),
     ("PRINT 10/4",                       "2.5"),     # `/` is REAL division
     ("PRINT 10\\3",                      "3"),       # `\` is integer division
     ("PRINT -10",                        "-10"),     # unary minus
     ("PRINT n",                          "0"),       # never assigned reads 0
     ("N = 3",                            None),
     ("PRINT n + N",                      "6"),       # ...and names fold case
+]
+
+# **TWO RUNS, NOT ONE.** The console buffer is 25 rows and the cursor takes
+# one of them, so 24 answers is the ceiling - and a wave that adds cases
+# would otherwise have to delete older ones to make room, which is exactly
+# the coverage a growing language must not trade away. Each part CLSes and
+# is self-contained (RUN clears the variables, SPEC.md 126.17), so they are
+# read one after the other and the answers concatenated.
+PART2 = [
+    ("CLS",                              None),
+    ("PRINT 31415",                      "31415"),   # ...and part two's
     # --- wave 2c: the comparisons, and IF ---------------------------------
     ("PRINT 1 < 2",                      "-1"),      # TRUE is -1, a NUMBER
     ("PRINT 2 < 1",                      "0"),       # ...and false is 0
@@ -128,7 +146,39 @@ PROGRAM = [
     ("q = 5",                            None),
     ("IF q > 4 THEN q = 6",              None),      # an arm that ASSIGNS
     ("PRINT q",                          "6"),
+    # --- wave 2d: the whole program is compiled first, so a loop can jump --
+    ("s = 0",                            None),
+    ("i = 1",                            None),
+    ("WHILE i <= 5",                     None),
+    ("s = s + i",                        None),
+    ("i = i + 1",                        None),
+    ("WEND",                             None),
+    ("PRINT s",                          "15"),      # 1+2+3+4+5
+    ("PRINT i",                          "6"),       # ...and it ran out
+    ("z = 9",                            None),
+    ("WHILE z < 0",                      None),      # false at the top:
+    ("z = 1",                            None),      # the body runs NO times
+    ("WEND",                             None),
+    ("PRINT z",                          "9"),
+    # --- FOR/NEXT -----------------------------------------------------
+    ("t = 0",                            None),
+    ("FOR k = 1 TO 4",                   None),
+    ("t = t + k",                        None),
+    ("NEXT k",                           None),      # ...and NEXT may name it
+    ("PRINT t",                          "10"),      # 1+2+3+4
+    ("d = 0",                            None),
+    ("FOR k = 10 TO 1 STEP -3",          None),      # a NEGATIVE literal step
+    ("d = d + 1",                        None),
+    ("NEXT",                             None),      # ...and NEXT need not
+    ("PRINT d",                          "4"),       # 10, 7, 4, 1
+    ("e = 0",                            None),
+    ("FOR k = 5 TO 1",                   None),      # never true at the top
+    ("e = 9",                            None),
+    ("NEXT",                             None),
+    ("PRINT e",                          "0"),       # ...so the body is skipped
 ]
+
+PARTS = (PART1, PART2)
 
 QCHAR = {" ": "spc", "=": "equal", "+": "shift-equal", "-": "minus",
          "*": "shift-8", "/": "slash", "\\": "backslash",
@@ -300,48 +350,54 @@ def typ(m, text):
     os88qemu.type_text(m.path, text)
 
 
+SEED = "31415"          # ...printed first by every part; see console_lines
+
+
 def console_lines(m):
     """Every non-blank line of the console BUFFER, in order.
 
-    **FOUND BY ITS SHAPE, NOT BY ITS CONTENT.** The first version anchored on
-    BASIC's banner as cells - which works until the program prints more than
-    the 25-row buffer holds and the banner scrolls off the top, and wave 2c's
-    program does exactly that. A console buffer is 25 rows of 80 (character,
-    attribute) pairs with ONE attribute throughout, so the region is found by
-    that: every odd byte equal, non-zero, over at least CON_ROWS rows, and
-    the characters overwhelmingly printable. Nothing else in the megabyte
-    looks like that, and nothing the program prints can take it away.
+    **ANCHORED ON A SENTINEL THE PROGRAM ITSELF PRINTS.** Two earlier
+    anchors did not survive the language growing. BASIC's banner as cells
+    works until a program prints more than the 25-row buffer holds and the
+    banner scrolls off - wave 2c's did. "One attribute byte across 25 rows"
+    then looked structural enough to be safe, and is not: after CLS no such
+    region was in the dump at all, and the row could only report that it
+    could not find one.
+
+    So each part prints SEED as its first line. It is a number no answer
+    is, it is at the TOP of a freshly cleared buffer so nothing can scroll
+    it away, and it is written by the very console being looked for. From
+    it the region is bounded by the attribute byte its own cells carry -
+    whatever that turns out to be - rather than by a guess about it.
     """
     img = m.read(0, 0x100000)
-    best = None
-    i = 0
-    n = len(img)
-    while i < n - ROW:
-        attr = img[i + 1]
-        if attr == 0 or attr == 0xFF:
-            i += 1
-            continue
-        # how many whole rows from here share this attribute in every cell?
-        rows = 0
-        base = i
-        while base + ROW <= n and all(img[base + 2 * c + 1] == attr
-                                      for c in range(CON_COLS)):
-            rows += 1
-            base += ROW
-        if rows >= CON_ROWS:
-            span = img[i:i + rows * ROW]
-            chars = [span[2 * k] for k in range(len(span) // 2)]
-            good = sum(1 for c in chars if 32 <= c < 127)
-            if good >= 0.95 * len(chars):
-                if best is None or rows > best[1]:
-                    best = (i, rows)
-        i += max(1, rows * ROW) if rows else 1
-    if best is None:
+    pat = SEED.encode()
+    at = -1
+    for i in range(len(img) - 2 * len(pat)):
+        if img[i] == pat[0] and all(img[i + 2 * k] == pat[k]
+                                    for k in range(len(pat))):
+            at = i
+            break
+    if at < 0:
+        print("      no buffer: the sentinel %s is not in memory as cells"
+              % SEED)
         return None
-    lo, rows = best
-    print("      console buffer: 0x%X, %d rows" % (lo, rows))
+    attr = img[at + 1]
+    # back up to the row this sits on, then to the first row sharing its
+    # attribute - SEED is at column 1 (PRINT's sign space is column 0)
+    start = at - 2
+    while start - ROW >= 0 and all(img[start - ROW + 2 * c + 1] == attr
+                                   for c in range(CON_COLS)):
+        start -= ROW
+    rows = 0
+    while (start + (rows + 1) * ROW <= len(img) and rows < CON_ROWS
+           and all(img[start + rows * ROW + 2 * c + 1] == attr
+                   for c in range(CON_COLS))):
+        rows += 1
+    print("      console buffer: 0x%X, %d rows, attr 0x%02X"
+          % (start, rows, attr))
     out = []
-    for base in range(lo, lo + rows * ROW, ROW):
+    for base in range(start, start + rows * ROW, ROW):
         txt = "".join(chr(img[base + 2 * c])
                       if 32 <= img[base + 2 * c] < 127 else " "
                       for c in range(CON_COLS)).strip()
@@ -424,23 +480,39 @@ def main():
     dispcp.open_named(m, mo, S, settle, wx, wy, "APPS")
     dispcp.open_named(m, mo, S, settle, wx, wy, "BASIC.O88")
 
-    t0 = time.time()
-    for line, _ in PROGRAM:
-        typ(m, line + "\n")
-    print("      typed %d lines in %.1fs" % (len(PROGRAM), time.time() - t0))
-    os88qemu.sendkey(m.path, "f5")      # the Run key, confirmed
-    os88qemu.pace(m, 6.0)
+    answers, want = [], []
+    for pn, part in enumerate(PARTS):
+        if pn:
+            # A FRESH EDITOR, THROUGH File > New. Backspacing the previous
+            # part out was 900 confirmed keys and the BIOS buffer cannot
+            # take them that fast: `the ROM had not stored the press after
+            # 10 guest seconds`, once per key, for minutes. New clears the
+            # program, the console and the variable table in one gesture
+            # (SPEC.md 126.17), and is the only menu this row touches.
+            mo.menu(112, 8, 112, 30)
+            os88qemu.pace(m, 2.0)
+        t0 = time.time()
+        for line, _ in part:
+            typ(m, line + "\n")
+        print("      part %d: %d lines in %.1fs"
+              % (pn + 1, len(part), time.time() - t0))
+        os88qemu.sendkey(m.path, "f5")          # the Run key, confirmed
+        os88qemu.pace(m, 6.0)
+        got = console_lines(m)
+        if got is None:
+            check(False, "the console buffer is found by its shape",
+                  why="no run can be read without it")
+            return 1
+        answers += got
+        want += [e for _, e in part if e is not None]
+    check(True, "the console buffer is found by its shape")
 
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "shot.py"),
                     m.path, os.path.join(m.tmp, "end.png")],
                    capture_output=True, cwd=ROOT)
     print("      screen: %s" % os.path.join(m.tmp, "end.png"))
-    got = console_lines(m)
-    if not check(got is not None, "the console buffer is found by its shape",
-                 why="no run can be read without it"):
-        return 1
-    want = [e for _, e in PROGRAM if e is not None]
-    answers = [g for g in got if g not in (BANNER + " - SPEC.md 126", "Ready")]
+    answers = [g for g in answers if g not in (BANNER + " - SPEC.md 126",
+                                               "Ready")]
     check(answers == want,
           "every line of the program answers what SPEC.md 126 says it does",
           why="the language is what this row is for; an answer that is merely "

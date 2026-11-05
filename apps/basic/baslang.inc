@@ -69,6 +69,10 @@ OP_LOAD     equ 7                   ; + an index byte: push that variable
 OP_STORE    equ 8                   ; + an index byte: pop into that variable
 OP_JF       equ 9                   ; + a word: pop, and jump there if FALSE
 OP_JMP      equ 10                  ; + a word: jump there
+OP_CLS      equ 23                  ; clear the console
+OP_LINE     equ 22                  ; + a word: the line now running, for a
+                                    ; refusal's message (it is LAST because
+                                    ; the binaries must stay contiguous)
 ; --- the binaries, contiguous and last --------------------------------------
 OP_ADD      equ 11
 OP_SUB      equ 12
@@ -85,7 +89,7 @@ OP_LT       equ 18
 OP_GT       equ 19
 OP_LE       equ 20
 OP_GE       equ 21
-OP_N        equ 22                  ; how many there are, table included
+OP_N        equ 24                  ; how many there are, table included
 OP_BIN_N    equ 11                  ; ...and how many of them are binaries
 
 ; --- the scalar variables (SPEC.md 126.4, wave 2) ---------------------------
@@ -104,6 +108,22 @@ BAS_VAR_SRC equ 0                   ; word: where the name is in bas_prog
 BAS_VAR_LEN equ 2                   ; word: how long it is
 BAS_VAR_VAL equ 4                   ; 8:    the value, packed (SPEC.md 84)
 BAS_VAR_SZ  equ 12
+
+; --- the OPEN BLOCKS, at compile time only (SPEC.md 126) --------------------
+; WHILE..WEND, FOR..NEXT and the block IF all need two things remembered
+; while their body is compiled: where to jump BACK to, and which forward
+; word to patch once the end is known. One entry each, a stack because they
+; nest, and the whole of it is gone by the time the program runs.
+BAS_BLK_MAX  equ 8                  ; ...and a ninth is refused BY NAME
+BAS_BLK_KIND equ 0                  ; word: BK_* below
+BAS_BLK_TOP  equ 2                  ; word: the op offset to jump back to
+BAS_BLK_PAT  equ 4                  ; word: the forward word to patch
+BAS_BLK_V    equ 6                  ; word: FOR's loop variable, else unused
+BAS_BLK_SZ   equ 8
+BK_IF    equ 1
+BK_ELSE  equ 2
+BK_WHILE equ 3
+BK_FOR   equ 4
 
 ; --- the register file (SPEC.md 126, BASIC-BINDINGS-PLAN 3) ------------------
 ; GFA needed six trap verbs and eight parameter arrays because that IS the
@@ -125,7 +145,11 @@ R_CF equ 7                          ; THE CARRY FLAG, and the reason this
                                     ; call into a silently wrong answer
 R_N  equ 8
 
-BAS_OPS_MAX equ 512                 ; the compiled program
+; The compiled program, WHOLE (bas_run): an op stream holds the lot now, not
+; one statement. A literal is 9 bytes for as little as one source character,
+; so the worst case is far past this - which is why the refusal exists and
+; says so by name rather than this being sized for a program nobody writes.
+BAS_OPS_MAX equ 4096
 BAS_STK_MAX equ 16                  ; the evaluation stack, in SLOTS
 
 ; -----------------------------------------------------------------------------
@@ -134,8 +158,21 @@ BAS_STK_MAX equ 16                  ; the evaluation stack, in SLOTS
 ; out: nothing; clobbers AX/BX/CX/DX/SI/DI
 ; -----------------------------------------------------------------------------
 bas_run:
+    ; **THE WHOLE PROGRAM IS COMPILED, THEN RUN.** It was compiled and run one
+    ; STATEMENT at a time, with bas_opn reset per line - which works right up
+    ; to the first construct whose arms are other LINES. A loop jumps
+    ; backwards over statements that no longer exist by the time it wants
+    ; them, so WHILE, FOR and the block IF are all impossible against a
+    ; stream that holds one line. This is wave 2d's first change and every
+    ; construct in it depends on this paragraph.
+    ;
+    ; The cost is that the op stream must now hold the whole program at once
+    ; (BAS_OPS_MAX), and a program too big for it is refused BY NAME rather
+    ; than wrapping.
     mov word [bas_src], bas_prog    ; the scanner's cursor
     mov word [bas_line], 1
+    mov word [bas_opn], 0
+    mov word [bas_nblk], 0          ; ...and no block is open yet
     mov word [bas_nvar], 0          ; **AND THE VARIABLES GO.** An entry keys
                                     ; on WHERE its name is in bas_prog, not on
                                     ; a copy of it, so an entry that outlives
@@ -145,42 +182,46 @@ bas_run:
                                     ; program as `PRINT n / N = 3 / ...`, and
                                     ; y's entry - offset 6, one character -
                                     ; spells `n` in the new text: `PRINT n`
-                                    ; answered 42. The comment on bas_varfind
-                                    ; said this line was here before it was.
+                                    ; answered 42.
 .stmt:
     call bas_skipsp
     mov si, [bas_src]
     mov al, [si]
     or al, al
-    jz .done                        ; end of the program text
+    jz .fin                         ; end of the program text
     cmp al, 10
     je .blank
-    ; --- compile one line into a fresh op stream and run it ------------------
-    mov word [bas_opn], 0
-    call bas_c_stmt
+    ; **THE LINE NUMBER RIDES IN THE STREAM.** Compiling everything first
+    ; means [bas_line] at RUN time is the last line COMPILED, so a division
+    ; by zero on line 3 of a 30-line program would be reported against line
+    ; 30. OP_LINE puts it back: three bytes a statement, and SPEC.md 126.7's
+    ; rule that a refusal names its line keeps meaning what it says.
+    mov al, OP_LINE
+    call bas_emit
+    mov ax, [bas_line]
+    call bas_emitw
     cmp byte [bas_bad], 0
     jne .done
-    mov al, OP_END                  ; TERMINATE IT. bas_opn is reset per
-    call bas_emit                   ; statement but bas_ops keeps the bytes,
-                                    ; so without this the interpreter runs on
-                                    ; into whatever the PREVIOUS line left -
-                                    ; zeroed bss hides it until the second
-                                    ; statement is shorter than the first
-    cmp byte [bas_bad], 0
-    jne .done                       ; the error is already on the console
-%ifdef BAS_DIAG
-    mov ax, [bas_opn]               ; TEMPORARY: how many op bytes this line
-    call bas_sayint                 ; compiled to, so a wrong answer can be
-    mov si, bas_s_bar               ; blamed on the compiler or the
-    call con_say                    ; interpreter rather than guessed at
-%endif
-    call bas_exec
+    call bas_c_stmt
     cmp byte [bas_bad], 0
     jne .done
 .blank:
     call bas_eol                    ; step over the line's terminator
     cmp byte [bas_bad], 0
     je .stmt
+    jmp short .done
+.fin:
+    cmp word [bas_nblk], 0          ; ...and nothing may still be open
+    jne .unclosed
+    mov al, OP_END
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .done
+    call bas_exec
+    jmp short .done
+.unclosed:
+    mov si, bas_e_open
+    jmp bas_err
 .done:
     ret
 
@@ -211,6 +252,21 @@ bas_c_stmt:
     mov si, bas_kw_if
     call bas_wordis
     je .if
+    mov si, bas_kw_while
+    call bas_wordis
+    je .while
+    mov si, bas_kw_wend
+    call bas_wordis
+    je .wend
+    mov si, bas_kw_cls
+    call bas_wordis
+    je .cls
+    mov si, bas_kw_for
+    call bas_wordis
+    je .for
+    mov si, bas_kw_next
+    call bas_wordis
+    je .next
     ; --- not a keyword, so `name = expr` (SPEC.md 126.4, wave 2) ------------
     ; THE '=' IS TESTED BEFORE THE NAME IS INTERNED. bas_varfind CREATES on a
     ; miss, so looking the name up first would make a variable out of every
@@ -317,8 +373,203 @@ bas_c_stmt:
 .ifpop:
     pop bx
     ret
+.cls:
+    mov al, OP_CLS
+    jmp bas_emit
+
+; --- FOR v = a TO b [STEP n] ... NEXT [v] (SPEC.md 126) ---------------------
+; THE INCREMENT IS EMITTED BEFORE THE TEST and jumped over on the way in:
+;
+;       v = a ; limit = b
+;       JMP test
+;   inc:  v = v + step          <- FOR emits this, so the step literal is
+;   test: JF after  (v <= limit)   code and nothing has to remember it
+;       ...body...
+;       JMP inc                 <- all NEXT emits
+;   after:
+;
+; which is why NEXT is four instructions: the only thing it needs from the
+; header is where `inc` is, and that is the block's TOP.
+;
+; THE LIMIT IS EVALUATED ONCE, into a variable no program can name
+; (bas_varhidden) - re-testing `b` every time round would differ from every
+; BASIC of this line the moment the body assigns to something `b` mentions.
+;
+; **STEP TAKES A SIGNED LITERAL**, a stated simplification: the test is `<=`
+; for a positive step and `>=` for a negative one, so the DIRECTION must be
+; known while the loop compiles. An expression there needs the test chosen at
+; run time, and is refused by name until something wants it.
+.for:
+    call bas_skipsp
+    call bas_word                   ; the loop variable
+    jc .fornov
+    call bas_varfind
+    jc .x
+    mov [bas_blkv], ax              ; parked: bas_blkpush carries it along
+    call bas_skipsp
+    mov si, [bas_src]
+    cmp byte [si], '='
+    jne .forneq
+    inc word [bas_src]
+    call bas_c_rel                  ; v = a
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_STORE
+    call bas_emit
+    mov ax, [bas_blkv]
+    call bas_emit
+    call bas_skipsp                 ; TO
+    call bas_word
+    jc .fornoto
+    mov si, bas_kw_to
+    call bas_wordis
+    jne .fornoto
+    call bas_c_rel                  ; limit = b, ONCE
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_varhidden
+    jc .x
+    mov [bas_forlim], ax
+    mov al, OP_STORE
+    call bas_emit
+    mov ax, [bas_forlim]
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .x
+    mov al, OP_JMP                  ; ...over the increment, on the way in
+    call bas_emit
+    mov ax, [bas_opn]
+    mov [bas_forjin], ax
+    xor ax, ax
+    call bas_emitw
+    mov ax, [bas_opn]               ; `inc` starts here
+    mov [bas_fortop], ax
+    mov al, OP_LOAD                 ; v = v + step
+    call bas_emit
+    mov ax, [bas_blkv]
+    call bas_emit
+    call bas_for_step               ; the literal, and CL = OP_LE / OP_GE
+    cmp byte [bas_bad], 0
+    jne .x
+    mov [bas_forcmp], cx
+    mov al, OP_ADD
+    call bas_emit
+    mov al, OP_STORE
+    call bas_emit
+    mov ax, [bas_blkv]
+    call bas_emit
+    mov bx, [bas_forjin]            ; ...and the entry jump lands HERE
+    mov ax, [bas_opn]
+    call bas_patch
+    mov al, OP_LOAD                 ; test: v  <=/>=  limit
+    call bas_emit
+    mov ax, [bas_blkv]
+    call bas_emit
+    mov al, OP_LOAD
+    call bas_emit
+    mov ax, [bas_forlim]
+    call bas_emit
+    mov ax, [bas_forcmp]
+    call bas_emit
+    mov al, OP_JF
+    call bas_emit
+    mov cx, [bas_opn]
+    xor ax, ax
+    call bas_emitw
+    cmp byte [bas_bad], 0
+    jne .x
+    mov bx, [bas_fortop]            ; TOP is `inc`, which NEXT jumps to
+    mov ax, BK_FOR
+    call bas_blkpush
+    ret
+.next:
+    call bas_blkpop                 ; AX = kind, BX = top, CX = the patch
+    jc .x
+    cmp ax, BK_FOR
+    jne .wrongblk
+    push cx
+    mov al, OP_JMP
+    call bas_emit
+    mov ax, bx
+    call bas_emitw
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    call bas_skipsp                 ; `NEXT v` may name it, and then it must
+    push bx                         ; be the one this block opened
+    call bas_word
+    pop bx
+    jc .nextdone
+    push bx
+    call bas_varfind
+    pop bx
+    jc .x
+    cmp ax, [bas_blkv]
+    jne .nextvar
+.nextdone:
+    mov ax, [bas_opn]
+    jmp bas_patch
+.nextvar:
+    mov si, bas_e_nextvar
+    jmp bas_err
+.fornov:
+    mov si, bas_e_forvar
+    jmp bas_err
+.forneq:
+    mov si, bas_e_foreq
+    jmp bas_err
+.fornoto:
+    mov si, bas_e_forto
+    jmp bas_err
 .nothen:
     mov si, bas_e_then
+    jmp bas_err
+
+; --- WHILE <cond> ... WEND (SPEC.md 126) ------------------------------------
+; The shape every loop here takes: the condition is re-tested at the TOP, so
+; a WHILE whose condition is false at the start runs its body NO times, which
+; is what distinguishes it from REPEAT. The jump back is emitted by WEND,
+; which is also what patches the forward one - the two halves are a stack
+; entry apart and neither is written twice.
+.while:
+    mov bx, [bas_opn]               ; the top: BEFORE the condition, because
+    push bx                         ; the condition is part of the loop
+    call bas_c_rel
+    cmp byte [bas_bad], 0
+    jne .wpop
+    mov al, OP_JF
+    call bas_emit
+    mov cx, [bas_opn]               ; ...and the forward word to patch
+    push cx
+    xor ax, ax
+    call bas_emitw
+    pop cx
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, BK_WHILE
+    call bas_blkpush
+    ret
+.wpop:
+    pop bx
+    ret
+.wend:
+    call bas_blkpop                 ; AX = kind, BX = top, CX = the patch
+    jc .x                           ; (bas_blkpop says so itself)
+    cmp ax, BK_WHILE
+    jne .wrongblk
+    push cx
+    mov al, OP_JMP
+    call bas_emit
+    mov ax, bx                      ; ...back to the condition
+    call bas_emitw
+    pop bx
+    cmp byte [bas_bad], 0
+    jne .x
+    mov ax, [bas_opn]               ; ...and the WHILE's JF lands here
+    jmp bas_patch
+.wrongblk:
+    mov si, bas_e_wrongblk
     jmp bas_err
 .nokw:
     mov si, [bas_src]
@@ -730,6 +981,177 @@ bas_varfind:
     stc
     jmp .out
 
+; --- the open-block stack (compile time) ------------------------------------
+; bas_blkat  - SI = entry BX.  BAS_BLK_SZ is 6, so (i*4) + (i*2), no `mul`
+; bas_blkpush- AX = kind, BX = top, CX = patch slot; CF=1 = too deep, said
+; bas_blkpop - AX = kind, BX = top, CX = patch slot; CF=1 = none open, said
+bas_blkat:
+    push ax
+    mov ax, bx
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                       ; i*8 - BAS_BLK_SZ, and a shift not a mul
+    mov si, ax
+    add si, bas_blk
+    pop ax
+    ret
+
+bas_blkpush:
+    push bx
+    push si
+    push dx
+    mov dx, bx                      ; DX = top, while BX indexes
+    mov bx, [bas_nblk]
+    cmp bx, BAS_BLK_MAX
+    jae .full
+    call bas_blkat
+    mov [si + BAS_BLK_KIND], ax
+    mov [si + BAS_BLK_TOP], dx
+    mov [si + BAS_BLK_PAT], cx
+    mov ax, [bas_blkv]              ; FOR's loop variable, parked by the
+    mov [si + BAS_BLK_V], ax        ; caller; anything else leaves it alone
+    inc word [bas_nblk]
+    clc
+.out:
+    pop dx
+    pop si
+    pop bx
+    ret
+.full:
+    mov si, bas_e_deepblk
+    call bas_err
+    stc
+    jmp .out
+
+bas_blkpop:
+    push si
+    mov bx, [bas_nblk]
+    or bx, bx
+    jz .none
+    dec bx
+    mov [bas_nblk], bx
+    call bas_blkat
+    mov ax, [si + BAS_BLK_V]
+    mov [bas_blkv], ax
+    mov ax, [si + BAS_BLK_KIND]
+    mov cx, [si + BAS_BLK_PAT]
+    mov bx, [si + BAS_BLK_TOP]
+    clc
+    pop si
+    ret
+.none:
+    mov si, bas_e_noblk
+    call bas_err
+    stc
+    pop si
+    ret
+
+; --- bas_for_step - emit FOR's step as a literal; CL = which test ----------
+; out: CX = OP_LE (counting up) or OP_GE (counting down); the PUSHN is
+;      emitted here. No STEP means 1.
+bas_for_step:
+    push ax
+    push bx
+    push si
+    call bas_skipsp
+    mov si, [bas_src]
+    mov al, [si]
+    cmp al, 'S'
+    je .maybe
+    cmp al, 's'
+    je .maybe
+.one:
+    mov ax, 1                       ; no STEP: up by one
+    call fp_i2a
+    jmp .emit
+.maybe:
+    call bas_word
+    mov si, bas_kw_step
+    call bas_wordis
+    jne .notstep
+    call bas_skipsp
+    mov si, [bas_src]
+    xor bx, bx                      ; BX = 1 if it is negative
+    cmp byte [si], '-'
+    jne .nonneg
+    inc bx
+    inc word [bas_src]
+.nonneg:
+    mov si, [bas_src]
+    call fp_atof                    ; A = the magnitude
+    jc .notlit
+    mov [bas_src], si
+    or bx, bx
+    jz .emit
+    mov byte [fp_as], 1             ; ...negative, which is A's sign byte
+.emit:
+    mov al, OP_PUSHN
+    call bas_emit
+    cmp byte [bas_bad], 0
+    jne .sout
+    mov di, bas_ops
+    add di, [bas_opn]
+    call fp_pack_a
+    add word [bas_opn], 8
+    mov cx, OP_LE
+    cmp byte [fp_as], 0
+    je .sout
+    mov cx, OP_GE                   ; counting DOWN tests the other way
+.sout:
+    pop si
+    pop bx
+    pop ax
+    ret
+.notstep:
+    mov [bas_src], di               ; a word that was not STEP: put it back
+    jmp .one
+.notlit:
+    mov si, bas_e_forstep
+    call bas_err
+    jmp .sout
+
+; --- bas_varhidden - a variable NO PROGRAM CAN NAME ------------------------
+; out: AX = its index, CF=1 if the table is full (said by name)
+;
+; FOR evaluates its limit ONCE, at the top, and needs somewhere to keep it;
+; re-evaluating `b` every iteration would differ from every BASIC of this
+; line the moment the body assigns to something `b` mentions. An entry with
+; LENGTH 0 is unreachable from source, because bas_word never returns a word
+; of no characters - so the table needs no second kind of entry and
+; bas_varfind needs no change.
+bas_varhidden:
+    push bx
+    push cx
+    push dx
+    push si
+    mov dx, [bas_nvar]
+    cmp dx, BAS_VAR_MAX
+    jae .hfull
+    mov bx, dx
+    call bas_varat
+    xor ax, ax
+    mov [si + BAS_VAR_SRC], ax
+    mov [si + BAS_VAR_LEN], ax
+    mov [si + BAS_VAR_VAL], ax
+    mov [si + BAS_VAR_VAL + 2], ax
+    mov [si + BAS_VAR_VAL + 4], ax
+    mov [si + BAS_VAR_VAL + 6], ax
+    mov ax, dx
+    inc dx
+    mov [bas_nvar], dx
+    clc
+.hout:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+.hfull:
+    mov si, bas_e_vars
+    call bas_err
+    stc
+    jmp .hout
+
 ; --- bas_varat - SI = the address of entry BX --------------------------------
 ; BAS_VAR_SZ is 12, so this is (i*4) + (i*8) and no `mul`: the one caller that
 ; wanted mul needed DX, and the interpreter's two want BX and CX kept too.
@@ -915,6 +1337,22 @@ bas_exec:
 .badreg:
     mov si, bas_e_reg
     jmp bas_err
+
+; --- OP_CLS: the console, emptied -------------------------------------------
+.cls:
+    push si
+    push di
+    call bas_clshome
+    pop di
+    pop si
+    jmp .next
+
+; --- OP_LINE: which line is running, for a refusal's message ----------------
+.line:
+    mov ax, [si]
+    mov [bas_line], ax
+    add si, 2
+    jmp .next
 
 ; --- OP_JF / OP_JMP: the branch (SPEC.md 126) -------------------------------
 ; The operand is a word - an offset into bas_ops - and a FORWARD one is
@@ -1134,7 +1572,9 @@ bas_optab:
     dw bas_exec.binary              ; OP_LT
     dw bas_exec.binary              ; OP_GT
     dw bas_exec.binary              ; OP_LE
-    dw bas_exec.binary              ; OP_GE     (NO TRAILING BACKSLASH IN A
+    dw bas_exec.binary              ; OP_GE
+    dw bas_exec.line                ; OP_LINE
+    dw bas_exec.cls                 ; OP_CLS    (NO TRAILING BACKSLASH IN A
                                     ; COMMENT: nasm continues the line on one
                                     ; even there, and an ASCII brace drawn up
                                     ; the right margin silently merged two of
@@ -1511,6 +1951,13 @@ bas_kw_reg:     db 'REG', 0
 bas_kw_if:      db 'IF', 0
 bas_kw_then:    db 'THEN', 0
 bas_kw_else:    db 'ELSE', 0
+bas_kw_while:   db 'WHILE', 0
+bas_kw_wend:    db 'WEND', 0
+bas_kw_cls:     db 'CLS', 0
+bas_kw_for:     db 'FOR', 0
+bas_kw_to:      db 'TO', 0
+bas_kw_step:    db 'STEP', 0
+bas_kw_next:    db 'NEXT', 0
 
 bas_s_crlf:     db 13, 10, 0
 bas_s_sp:       db ' ', 0
@@ -1525,9 +1972,18 @@ bas_e_paren:    db 'expected )', 0
 bas_e_div0:     db 'division by zero', 0
 bas_e_stk:      db 'expression went wrong', 0
 bas_e_deep:     db 'expression too deep', 0
-bas_e_long:     db 'line too long to compile', 0
+bas_e_long:     db 'program too long to compile', 0
 bas_e_oargs:    db 'OSAPI takes a slot and at most six registers', 0
 bas_e_reg:      db 'REG() index is 0..7 - AX BX CX DX SI DI ES CF', 0
 bas_e_vars:     db 'too many variables - this wave holds 16', 0
 bas_e_then:     db 'IF wants THEN on the same line', 0
+bas_e_open:     db 'a block is still open at the end of the program', 0
+bas_e_deepblk:  db 'blocks nested deeper than eight', 0
+bas_e_noblk:    db 'this closes a block that was never opened', 0
+bas_e_wrongblk: db 'this is not what the open block was opened with', 0
+bas_e_forvar:   db 'FOR wants a variable', 0
+bas_e_foreq:    db "FOR wants '=' after its variable", 0
+bas_e_forto:    db 'FOR wants TO', 0
+bas_e_forstep:  db 'STEP takes a plain number here, not an expression', 0
+bas_e_nextvar:  db 'NEXT names a different variable from its FOR', 0
 bas_e_wide:     db "'\' truncates to an INTEGER and this is outside it", 0

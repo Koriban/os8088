@@ -240899,6 +240899,44 @@ code.
 accumulator, never `fp_a2i`: truncating first would make `IF 0.5 THEN`
 false, a number that is not zero answering as though it were.
 
+### 126.19 The whole program is compiled, then run — and the loops
+
+**Until wave 2d the interpreter compiled and ran one STATEMENT at a time**,
+resetting the op stream per line. That is impossible to loop over: a jump
+backwards wants statements that no longer exist. So the whole program is
+compiled into one stream and then run, which is what every construct whose
+arms are other LINES depends on.
+
+Two consequences are contract, not detail:
+
+- **the op stream must hold the program at once.** A literal is nine bytes
+  for as little as one source character, so a program can exceed it, and one
+  that does is refused BY NAME rather than wrapping;
+- **the line number rides in the stream** (`OP_LINE`, three bytes a
+  statement). Without it `[bas_line]` at run time is the last line
+  *compiled*, so a division by zero on line 3 of a thirty-line program would
+  be reported against line 30, and §126.7's rule that a refusal names its
+  line would quietly stop being true.
+
+**`WHILE <cond>` … `WEND`** tests at the top, so a condition false on entry
+runs the body no times.
+
+**`FOR v = a TO b [STEP n]` … `NEXT [v]`.** The limit is evaluated **once**,
+into a variable no program can name — re-testing `b` each time round would
+differ from every BASIC of this line the moment the body assigns to
+something `b` mentions. The increment is emitted BEFORE the test and jumped
+over on entry, so the step is code and nothing has to remember it, and
+`NEXT` is four instructions. **`STEP` takes a signed literal**, a stated
+simplification: the test is `<=` counting up and `>=` counting down, so the
+direction has to be known while the loop compiles; an expression there is
+refused by name. `NEXT` may name its variable, and then it must be the one
+that block opened.
+
+**`CLS`** empties the console without the banner, which `File > New` prints.
+
+Blocks nest eight deep, and a ninth, an unclosed one at the end of the
+program, or a `WEND` that closes a `FOR` are each refused by name.
+
 ## 127. Replaceable DOCK and DESK shells (`SYSTEM.CFG`'s `SH` record)
 
 **Status: PINNED, nothing built.** The plan is

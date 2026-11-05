@@ -143,11 +143,19 @@ bas_new:
 ; viewport keeps showing the bottom of it, which is what a terminal does.
 ; -----------------------------------------------------------------------------
 bas_conreset:
+    call bas_clshome
+    mov si, bas_s_banner
+    jmp con_say                     ; tail call: con_say's ret is ours
+
+; --- bas_clshome - an empty console with the cursor where it can be seen ----
+; bas_conreset's first half, on its own because CLS wants it WITHOUT the
+; banner: a program that clears the screen and prints has not asked to be
+; told what it is running on.
+bas_clshome:
     call con_open
     mov word [con_cy], CON_ROWS - BAS_CON_ROWS
     mov word [con_cx], 0
-    mov si, bas_s_banner
-    jmp con_say                     ; tail call: con_say's ret is ours
+    ret
 
 ; -----------------------------------------------------------------------------
 ; bas_paint - W_PAINT: the two panes and what is in them
@@ -626,7 +634,14 @@ BAS_B_bas_numbuf equ BAS_B_bas_stk + BAS_STK_MAX*BAS_SLOT
 BAS_B_bas_reg    equ BAS_B_bas_numbuf + 8
 BAS_B_bas_nvar   equ BAS_B_bas_reg + R_N*2
 BAS_B_bas_vars   equ BAS_B_bas_nvar + 2
-BAS_B_bas_fp     equ BAS_B_bas_vars + BAS_VAR_MAX*BAS_VAR_SZ
+BAS_B_bas_nblk   equ BAS_B_bas_vars + BAS_VAR_MAX*BAS_VAR_SZ
+BAS_B_bas_blkv   equ BAS_B_bas_nblk + 2
+BAS_B_bas_forlim equ BAS_B_bas_blkv + 2
+BAS_B_bas_forjin equ BAS_B_bas_forlim + 2
+BAS_B_bas_fortop equ BAS_B_bas_forjin + 2
+BAS_B_bas_forcmp equ BAS_B_bas_fortop + 2
+BAS_B_bas_blk    equ BAS_B_bas_forcmp + 2
+BAS_B_bas_fp     equ BAS_B_bas_blk + BAS_BLK_MAX*BAS_BLK_SZ
 BAS_B_fp_as      equ BAS_B_bas_fp + 4
 BAS_B_fp_bs      equ BAS_B_fp_as + 1
 BAS_B_fp_ae      equ BAS_B_fp_bs + 1
@@ -716,6 +731,22 @@ bas_vars        equ os88_image_end + BAS_B_bas_vars   ; the scalar variables
                                          ; text is stable for the whole of a
                                          ; run, which is the only window the
                                          ; table lives in
+bas_nblk        equ os88_image_end + BAS_B_bas_nblk   ; word: open blocks
+bas_blkv        equ os88_image_end + BAS_B_bas_blkv   ; word: the loop
+                                         ; variable a FOR is pushing, or
+                                         ; the one a NEXT just popped
+bas_forlim      equ os88_image_end + BAS_B_bas_forlim  ; FOR's four
+bas_forjin      equ os88_image_end + BAS_B_bas_forjin  ; scratch words, used
+bas_fortop      equ os88_image_end + BAS_B_bas_fortop  ; only while ONE header
+bas_forcmp      equ os88_image_end + BAS_B_bas_forcmp  ; is being compiled -
+                                         ; a nested FOR's header is finished
+                                         ; before the outer one's NEXT, so
+                                         ; one set serves any nesting
+bas_blk         equ os88_image_end + BAS_B_bas_blk    ; ...and the stack of
+                                         ; them, COMPILE TIME ONLY: a loop
+                                         ; remembers where to jump back to and
+                                         ; which forward word to patch, and
+                                         ; none of it survives into the run
 bas_fp          equ os88_image_end + BAS_B_bas_fp   ; dword: the far pointer a dynamic
                                          ; OSAPI call is made through
 

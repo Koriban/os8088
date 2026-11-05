@@ -810,11 +810,70 @@ cells, which nothing the program prints can take away.
 
 **12,612 image + 7,950 bss = 20,562 of 65,024, 31.6%.**
 
+## Wave 2d — the whole program is compiled, and the first loops
+
+The change the loops needed, and the reason they could not exist before:
+**the interpreter compiled and ran one STATEMENT at a time**, resetting the
+op stream per line. Nothing can jump backwards over statements that no
+longer exist. So `bas_run` compiles the lot and then runs it, and `WHILE`,
+`FOR` and eventually the block `IF` all follow from that one paragraph
+(SPEC.md 126.19).
+
+Two things came with it that are contract rather than detail. The op stream
+must now hold the whole program (4KB, and one too big is refused by name).
+And **the line number has to ride in the stream** — `OP_LINE`, three bytes a
+statement — because `[bas_line]` at run time is otherwise the last line
+*compiled*: a division by zero on line 3 of a thirty-line program would have
+been reported against line 30, and 126.7's rule that a refusal names its
+line would have quietly stopped being true.
+
+`WHILE`/`WEND` tests at the top. `FOR`/`NEXT` evaluates its limit **once**,
+into a variable no program can name (an entry of length zero, which
+`bas_word` can never produce), because re-testing `b` each time round
+differs from every BASIC of this line the moment the body assigns to
+something `b` mentions. The increment is emitted BEFORE the test and jumped
+over on entry — so the step is code, nothing has to remember it, and `NEXT`
+is four instructions. `STEP` takes a signed literal and that is stated, not
+overlooked: the test is `<=` up and `>=` down, so the direction must be
+known while the loop compiles.
+
+`CLS` arrived as a side effect worth having on its own. The row's program
+had grown past the 25-row console buffer and the first answers were
+scrolling away before they could be read — every BASIC has `CLS`, and it is
+`bas_conreset` without the banner.
+
+### What the row cost, and what it caught
+
+Nothing in 2d failed on the glass the first time, which is a first for this
+chapter — `FOR` printed 10, 4 and 0 on its first run. The work went into the
+row instead, and that is the honest story of this wave:
+
+- **the anchor broke twice.** It found the console by BASIC's banner as
+  cells; 2c's answers scrolled the banner off. "One attribute byte across 25
+  rows" looked structural enough to be safe and was not — after `CLS` no
+  such region was in the dump at all, and the row could only say it had not
+  found one. It now prints a **sentinel** as its first line: a number no
+  answer is, at the top of a freshly cleared buffer, written by the very
+  console being looked for.
+- **the buffer is 25 rows and the cursor takes one**, so 24 answers is the
+  ceiling. Rather than delete older coverage every time a wave adds cases,
+  the program runs in **two self-contained parts** with a read between.
+- **clearing between parts by backspacing was 900 confirmed keys**, and the
+  BIOS buffer cannot take them: `the ROM had not stored the press after 10
+  guest seconds`, once per key, for minutes. `File > New` does it in one
+  gesture.
+
+Mutated: testing a negative `STEP` with `<=` reports the `STEP -3` loop
+running zero times, 0 where it owes 4.
+
+**13,877 image + 11,610 bss = 25,487 of 65,024, 39.2%** — the op stream's
+4KB is most of the bss growth. The row is 158s over two parts.
+
 ## Next
 
-The rest of wave 2: **loops** (`FOR`/`NEXT`, `WHILE`/`WEND`, `DO`/`LOOP`,
-`REPEAT`/`UNTIL`, `EXIT IF`), which need the whole program compiled before
-it runs, and then **procedures** — the `OSAPI` gateway, which is
+The rest of the control flow: the **block `IF`** (now possible, and the
+reason 2d's architectural change was made), `DO`/`LOOP`, `REPEAT`/`UNTIL`,
+`EXIT IF`, and then `GOSUB` and **procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.
