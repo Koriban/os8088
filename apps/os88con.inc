@@ -64,6 +64,7 @@
 ;                                            drops the last)
 ;   con_mark / con_markall / con_markcur     the dirty-ROW bitmap
 ;   con_rows_owed                            draw what is owed, and clear it
+;                                            - BUT SEE THE SCROLL DEBT BELOW
 ;   con_rowspan / con_compose / con_emit     one row's span: buffer ->
 ;                                            band -> glass
 ;   con_font                                 the 256 CP437 glyphs, once
@@ -73,6 +74,29 @@
 ; over it), and `%define CON_FSX` the FULL-SCREEN one (con_tx_*, the same
 ; buffer onto real text VRAM). os88ui.inc's rule and for its reason: a package
 ; that does not use a capability pays nothing for it.
+;
+; --- THE SCROLL DEBT IS THE CARRIER'S TO SETTLE ------------------------------
+; A scroll moves the BUFFER and leaves the glass owing a blit, counted in
+; [con_scrl] (SPEC.md 96.54.14). **con_rows_owed draws NOTHING while that
+; debt stands** - it opens `cmp word [con_scrl], 0 / jne`, because a mark
+; names a buffer row and with a blit outstanding that row is not the row of
+; glass it used to be. So every carrier owes one of two calls BEFORE it:
+;
+;   con_scrollpaint   the incremental path - SPEND the debt, moving the pane's
+;                     pixels up by N, then con_rows_owed draws only the rows
+;                     the scroll vacated
+;   con_takescroll    the full-repaint path - DROP it, because every row is
+;                     about to be drawn from the buffer anyway. Spending it
+;                     here is not harmless: con_scrollpaint marks only the N
+;                     rows it vacated and leaves the rest showing the pre-blit
+;                     picture
+;
+; apps/telnet/telnet.asm carries both, at te_paint and in its worker.
+; A CARRIER THAT CALLS NEITHER WORKS PERFECTLY UNTIL ITS FIRST SCROLL and
+; never draws again: [con_scrl] goes non-zero and stays, so every later
+; repaint clears the pane and puts nothing back. BASIC/8088 shipped that way
+; for three waves - six PRINTs in one program was the whole repro - and the
+; buffer was right the entire time, which is what made it look like data loss.
 ;
 ; THE SCREEN IS FIXED AND DOES NOT REFLOW. A terminal that reflows on a resize
 ; is a terminal whose host has the wrong idea of how wide it is; a resize

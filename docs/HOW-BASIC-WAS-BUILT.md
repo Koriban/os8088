@@ -698,28 +698,64 @@ Verified on the glass across the whole operator set: `13`, `7`, `30`,
 `3.333333`, `3`, `-10` for `a+b`, `a-b`, `a*b`, `a/b`, `a\b` and `-a` with
 `a=10, b=3`.
 
-### Found, not fixed: the console blanks when it scrolls
+### Fixed: the console blanked when it scrolled
 
 Running six `PRINT`s in one program overflows the eight-row pane, and the
 console goes **empty** — and stays empty through a full `W_PAINT`, so it is
 the buffer and not the pixels. It reproduces with nothing but `PRINT -10`
 run ten times, so it is not about variables, the table or `\`.
 
-**It is pre-existing**: the same ten runs blank the console on the previous
-commit's build too, and the merge did not touch `con_scrollup` or
-`con_scroll1`. BASIC is a VIEWPORT user — `con_vtop` is 17 of 25 rows
-(SPEC.md 70.8) and `bas_conreset` parks the cursor there by poking
-`con_cy` — and that is the part of os88con.inc this is most likely to be
-about. It is the next thing to chase, and it wants its own A/B against a
-full-height carrier like Telnet before anything is changed in a shared
-include.
+**It was pre-existing**: the same ten runs blank the console on the previous
+commit's build too, and the merge touched neither `con_scrollup` nor
+`con_scroll1`.
+
+**And the viewport was a red herring.** I had it half-reasoned that BASIC
+being a viewport user — `con_vtop` 17 of 25 — was the likely cause, which
+would have sent me editing a shared include on a guess. A **memory dump**
+settled it in one step instead: `pmemsave` the guest's low megabyte, find
+the banner as (character, attribute) cells, and walk the rows. All ten lines
+were in the buffer, at rows 12..23, with the viewport on 17..24 — **seven of
+them squarely inside it.** The buffer was perfect. Nothing was being drawn.
+
+The cause is one line of contract BASIC never kept. `con_rows_owed` opens
+
+    cmp word [con_scrl], 0
+    jne .owed                   ; ...and draws NOTHING
+
+because a scroll leaves the glass owing a blit, and while that debt stands a
+mark names a buffer row that is no longer the row of glass it used to be
+(SPEC.md 96.54.14). Every carrier therefore owes one of two calls before it:
+`con_scrollpaint` to SPEND the debt on the incremental path, or
+`con_takescroll` to DROP it when a full repaint is about to draw every row
+from the buffer anyway. Telnet carries both. **BASIC called neither**, so the
+first time output passed the bottom of the eight-row pane `[con_scrl]` went
+non-zero and stayed there, and from that moment every repaint filled the
+pane white and put nothing back.
+
+`bas_paint` now does `con_takescroll` first — telnet.asm's own wording at
+the same call is that *the debt is dropped, not spent*, because spending it
+would blit the pane up N and mark only the N rows it vacated.
+
+| ten runs of `PRINT -10` | the pane |
+| --- | --- |
+| before | blank from the sixth run on |
+| after | the last seven lines, scrolling |
+
+and the program that found it now reads ` 13`, ` 7`, ` 30`, ` 3.333333`,
+` 3`, `-10` with the console scrolled.
+
+**The shared include gained the rule, not the fix.** os88con.inc's header
+advertised `con_rows_owed` as "draw what is owed, and clear it" and said
+nothing about the debt; it now carries the two-call contract, names both
+paths and says what the failure looks like — *a carrier that calls neither
+works perfectly until its first scroll and never draws again*. That is the
+whole of what a future carrier needs, and no shared code changed.
 
 **12,109 image + 7,950 bss = 20,059 of 65,024, 30.8%.**
 
 ## Next
 
-The console-scroll defect above, then the rest of wave 2: **control flow and
-procedures** — the `OSAPI` gateway, which is
+The rest of wave 2: **control flow and procedures** — the `OSAPI` gateway, which is
 perhaps two hundred bytes and from which every kernel facility becomes
 reachable by hand. `BASIC-BINDINGS-PLAN.md` §7 is the order and the reason.
 A registered test row comes with it.

@@ -251,9 +251,26 @@ bas_paint:
     mov [con_mono], dh
     pop si
 
-    call con_markall                ; a W_PAINT owes the WHOLE pane: the dirty
-    call con_rows_owed              ; bitmap is for the incremental case, and
-                                    ; this is not one
+    ; **THE SCROLL DEBT FIRST, OR NOTHING DRAWS AT ALL.** con_rows_owed
+    ; begins `cmp word [con_scrl], 0 / jne .owed` and returns having drawn
+    ; NOTHING while a scroll stands (SPEC.md 96.54.14): a mark names a BUFFER
+    ; row, and with the glass owing a blit it does not name the glass. BASIC
+    ; never spent the debt, so the FIRST time output passed the bottom of the
+    ; eight-row pane [con_scrl] went non-zero and stayed there - and from
+    ; that moment every repaint filled the pane white and drew nothing back.
+    ; Six PRINTs in one program were enough. The buffer was never the
+    ; problem: a memory dump had all ten lines of it sitting in rows 12..23
+    ; with the viewport on 17..24.
+    ;
+    ; THE DEBT IS DROPPED, NOT SPENT, which is telnet.asm's own wording at
+    ; the same call: every row is about to be drawn from the buffer, so a
+    ; pending "blit the pixels up by N" is not owed - and spending it is not
+    ; harmless, because con_scrollpaint moves the pane up N and marks only
+    ; the N rows it vacated.
+    call con_takescroll             ; the debt FIRST...
+    call con_markall                ; ...then the WHOLE pane: the dirty bitmap
+    call con_rows_owed              ; is for the incremental case, and a
+                                    ; W_PAINT is not one
 
     ; --- and the About card LAST, over the panes (SPEC.md 20.5.1) ------------
     cmp byte [bas_abon], 0
